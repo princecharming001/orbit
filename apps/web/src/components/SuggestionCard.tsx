@@ -1,7 +1,8 @@
 import type { Person, Suggestion } from '@orbit/core';
+import { draftWarmUpComment } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Check, ChevronDown, ChevronUp, ExternalLink, Sparkles } from 'lucide-react';
-import { useState } from 'react';
+import { Check, ChevronDown, ChevronUp, Copy, ExternalLink, Sparkles } from 'lucide-react';
+import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { feedback } from '../db/repo';
 import { db } from '../db/schema';
@@ -30,6 +31,7 @@ export const KIND_LABEL: Record<
   congratulate: { label: 'Congratulate', tone: 'good' },
   ask_referral: { label: 'Referral ask', tone: 'accent' },
   intro_request: { label: 'Intro ask', tone: 'accent' },
+  report_back: { label: 'Close the loop', tone: 'good' },
   confirm_stage: { label: 'Confirm', tone: 'neutral' },
   confirm_merge: { label: 'Same person?', tone: 'neutral' },
   confirm_note_match: { label: 'Match note', tone: 'neutral' },
@@ -42,6 +44,8 @@ export function SuggestionCard({ s, compact }: { s: Suggestion; compact?: boolea
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [dismissing, setDismissing] = useState(false);
+  const [postClaim, setPostClaim] = useState('');
+  const [ownExperience, setOwnExperience] = useState('');
   const person = useLiveQuery(() => (s.personId ? db.people.get(s.personId) : undefined), [s.personId]);
   const draft = useLiveQuery(
     () => (s.outboundMessageId ? db.outbound.get(s.outboundMessageId) : undefined),
@@ -49,6 +53,17 @@ export function SuggestionCard({ s, compact }: { s: Suggestion; compact?: boolea
   );
   const chat = useLiveQuery(() => (s.chatId ? db.chats.get(s.chatId) : undefined), [s.chatId]);
   const other = useOther(s.payload.otherPersonId as string | undefined);
+  const warmAction = chat?.warmUp?.actions.find((a) => a.id === (s.payload.actionId as string));
+  const comment = useMemo(
+    () =>
+      warmAction?.kind === 'comment_post' && postClaim.trim().length >= 8
+        ? draftWarmUpComment(postClaim, {
+            seed: `${s.id}:${postClaim.length}`,
+            ownExperience: ownExperience || undefined,
+          })
+        : undefined,
+    [warmAction?.kind, postClaim, ownExperience, s.id],
+  );
   if (!user) return null;
   const meta = KIND_LABEL[s.kind];
   const approve = async (body: string, subject?: string) => {
@@ -95,8 +110,29 @@ export function SuggestionCard({ s, compact }: { s: Suggestion; compact?: boolea
   };
   const warmDone = async (done: boolean) => {
     if (!s.chatId) return;
-    await markWarmUpAction(user.id, s.chatId, s.payload.actionId as string, done);
-    toast.push({ text: done ? 'Nice. Logged the warm-up.' : 'Skipped.' });
+    await markWarmUpAction(
+      user.id,
+      s.chatId,
+      s.payload.actionId as string,
+      done,
+      done ? postClaim : undefined,
+    );
+    toast.push({
+      text: done
+        ? postClaim.trim()
+          ? 'Logged. Your outreach will mention the post.'
+          : 'Nice. Logged the warm-up.'
+        : 'Skipped.',
+    });
+  };
+  const copyComment = async () => {
+    if (!comment) return;
+    try {
+      await navigator.clipboard.writeText(comment.text);
+      toast.push({ text: 'Copied. Paste it under their post.', tone: 'good' });
+    } catch {
+      toast.push({ text: 'Select the comment and copy it.', tone: 'neutral' });
+    }
   };
   return (
     <div
@@ -142,6 +178,48 @@ export function SuggestionCard({ s, compact }: { s: Suggestion; compact?: boolea
           {draft && open && (
             <div className="mt-3">
               <DraftEditor draft={draft} onApprove={approve} busy={busy} onCancel={() => setOpen(false)} />
+            </div>
+          )}
+          {s.kind === 'warm_up_engage' && warmAction && warmAction.kind !== 'view_profile' && (
+            <div className="mt-3 rounded-lg bg-canvas-2 p-3 text-[13px]" data-testid="warmup-helper">
+              <div className="font-medium">
+                {warmAction.kind === 'comment_post'
+                  ? 'What is the post about?'
+                  : 'Which post did you react to?'}
+              </div>
+              <div className="text-ink-3 text-[12px] mb-1.5">
+                One claim from it, in your words. Orbit turns it into a comment that asks or adds, never
+                praises, and uses it as the hook in your message.
+              </div>
+              <input
+                className="w-full h-9 rounded-lg border border-line bg-canvas px-3 text-[13px]"
+                value={postClaim}
+                onChange={(e) => setPostClaim(e.target.value)}
+                placeholder="e.g. junior engineers should own a metric in their first quarter"
+                aria-label="Post topic"
+              />
+              {warmAction.kind === 'comment_post' && (
+                <input
+                  className="w-full h-9 mt-2 rounded-lg border border-line bg-canvas px-3 text-[13px]"
+                  value={ownExperience}
+                  onChange={(e) => setOwnExperience(e.target.value)}
+                  placeholder="Optional: your own experience with it, one clause"
+                  aria-label="Your experience"
+                />
+              )}
+              {comment && (
+                <div className="mt-2 flex items-start gap-2">
+                  <p
+                    className="flex-1 rounded-md bg-canvas px-3 py-2 text-ink-2"
+                    data-testid="warmup-comment"
+                  >
+                    {comment.text}
+                  </p>
+                  <Button size="sm" onClick={copyComment} aria-label="Copy comment">
+                    <Copy size={14} /> Copy
+                  </Button>
+                </div>
+              )}
             </div>
           )}
           {s.kind === 'warm_up_engage' && (

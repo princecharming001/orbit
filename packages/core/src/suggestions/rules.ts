@@ -1,3 +1,4 @@
+import { maxBumpsFor, sectorOf } from '../drafts/sector';
 import type {
   ActionItem,
   CalendarEvent,
@@ -47,16 +48,17 @@ export interface Candidate {
 }
 
 const DAY = 86_400_000;
+/** Playbook: a nurture note every 4 to 6 weeks while the cycle is live; closer ties a little sooner. */
 const CADENCE: Record<RelationshipType, number> = {
-  mentor: 45,
-  alumni: 45,
-  recruiter: 30,
-  peer: 60,
-  colleague: 60,
-  professor: 90,
-  family_friend: 90,
-  unknown: 75,
-  other: 75,
+  mentor: 28,
+  alumni: 35,
+  recruiter: 42,
+  peer: 42,
+  colleague: 42,
+  professor: 42,
+  family_friend: 42,
+  unknown: 42,
+  other: 42,
 };
 
 function businessDaysBetween(a: Date, b: Date): number {
@@ -129,9 +131,13 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
       const since = new Date(chat.lastOutboundAt);
       const bdays = businessDaysBetween(since, now);
       const threshold = chat.outreachChannel === 'linkedin' ? 10 : 5;
+      const maxBumps = maxBumpsFor(
+        sectorOf({ title: person.currentTitle, org: person.currentOrganizationRaw }),
+        inp.settings.maxBumps,
+      );
       if (
         bdays >= threshold &&
-        chat.bumpCount < inp.settings.maxBumps &&
+        chat.bumpCount < maxBumps &&
         (!chat.lastInboundAt || new Date(chat.lastInboundAt) < since)
       ) {
         out.push({
@@ -139,7 +145,10 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
           personId: chat.personId,
           chatId: chat.id,
           dedupeKey: `bump:${chat.id}:${chat.bumpCount + 1}`,
-          reasonText: `No reply in ${bdays} business days`,
+          reasonText:
+            chat.bumpCount === 0
+              ? `No reply in ${bdays} business days; one short bump in case it got buried`
+              : `Still quiet after ${bdays} business days; a graceful last word, then let it rest`,
           signals: { businessDays: bdays, bumpCount: chat.bumpCount },
           payload: {},
           urgency: Math.min(0.9, 0.7 + 0.1 * (bdays - threshold)),
@@ -283,6 +292,46 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
         });
       }
     }
+  }
+  // report back to whoever made the intro, once the chat with the target resolved
+  for (const chat of inp.chats) {
+    if (!chat.referrerPersonId) continue;
+    const referrer = inp.people.get(chat.referrerPersonId);
+    const target = inp.people.get(chat.personId);
+    if (!referrer || !target || referrer.hiddenAt) continue;
+    const outcome =
+      chat.stage === 'completed' || chat.stage === 'followed_up' || chat.stage === 'nurturing'
+        ? 'spoke'
+        : chat.stage === 'declined'
+          ? 'declined'
+          : chat.stage === 'no_response'
+            ? 'no_reply'
+            : undefined;
+    if (!outcome) continue;
+    const at = outcome === 'spoke' ? chat.completedAt : chat.stageEnteredAt;
+    if (!at || now.getTime() - new Date(at).getTime() > 21 * DAY) continue;
+    out.push({
+      kind: 'report_back',
+      personId: referrer.id,
+      chatId: chat.id,
+      dedupeKey: `report:${chat.id}`,
+      reasonText:
+        outcome === 'spoke'
+          ? `You spoke with ${target.firstName}; close the loop with ${referrer.firstName}, who made the intro`
+          : `${target.firstName} ${outcome === 'declined' ? 'passed' : 'never replied'}; let ${referrer.firstName} know so the intro doesn't dangle`,
+      signals: { outcome, at },
+      payload: {
+        reportBack: {
+          targetName: target.displayName,
+          outcome,
+          when: relTime(at, now),
+        },
+        channel: referrer.primaryEmail ? 'gmail' : 'linkedin',
+      },
+      urgency: outcome === 'spoke' ? 0.7 : 0.45,
+      goalRelevance: goalRel(referrer.id),
+      confidence: 1,
+    });
   }
   // prep briefs
   for (const e of inp.events) {

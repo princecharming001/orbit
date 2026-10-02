@@ -83,10 +83,12 @@ export type FactType =
   | 'hook'
   | 'preference'
   | 'ask_made'
-  | 'contact_info';
+  | 'contact_info'
+  | 'connection';
 export type SuggestionKind =
   | 'new_outreach'
   | 'warm_up_engage'
+  | 'report_back'
   | 'follow_up_bump'
   | 'schedule_propose'
   | 'schedule_confirm'
@@ -121,7 +123,10 @@ export type MessageKind =
   | 'congratulate'
   | 'referral_ask'
   | 'intro_request'
-  | 'reply';
+  | 'reply'
+  | 'report_back';
+export type Sector = 'finance' | 'consulting' | 'tech' | 'general';
+export type Seniority = 'junior' | 'mid' | 'senior' | 'exec';
 export type EmailCategory =
   | 'networking'
   | 'recruiting_process'
@@ -415,6 +420,9 @@ export interface CoffeeChat {
   followedUpAt?: string;
   threadId?: ID;
   warmUp?: WarmUpPlan;
+  /** who introduced or pointed the student to this person (for the opener and the report-back) */
+  referrerPersonId?: ID;
+  referrerName?: string;
   priority: 1 | 2 | 3;
   archivedAt?: string;
   createdAt: string;
@@ -445,6 +453,7 @@ export interface WarmUpAction {
   dueAt: string;
   doneAt?: string;
   skippedAt?: string;
+  note?: string; // what the student engaged with (post topic / their comment), used as the warm-up hook in outreach
 }
 
 export interface WarmUpPlan {
@@ -535,6 +544,8 @@ export interface OutboundMessage {
   error?: string;
   generatedBy: 'template' | 'llm';
   claims?: DraftClaim[];
+  needsInput?: ('connection' | 'update' | 'post')[];
+  opening?: string;
   createdAt: string;
 }
 

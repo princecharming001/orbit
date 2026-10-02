@@ -8,6 +8,7 @@ import type {
   ResumeFacet,
   TriageResult,
 } from '@orbit/core';
+import { LINKEDIN_NOTE_MAX, MAX_WORDS } from '@orbit/core';
 import { z } from 'zod';
 import { readPrefs } from './prefs';
 
@@ -232,24 +233,50 @@ export async function llmDraft(ctx: DraftContext, template: DraftOutput): Promis
     proposedWindows: ctx.proposedWindows,
     thread: ctx.thread,
     target: ctx.target,
-    reason: ctx.reason,
-    warmUpContext: ctx.warmUpContext,
+    connection: ctx.connection,
+    chat: ctx.chat,
+    update: ctx.update,
     newAffiliation: ctx.newAffiliation,
     targetCompany: ctx.targetCompany,
+    reportBack: ctx.reportBack,
+    recentOpenings: ctx.recentOpenings,
+    limits: { maxWords: MAX_WORDS[ctx.kind], linkedinNoteMaxChars: LINKEDIN_NOTE_MAX },
   };
   const r = await runParse(
-    `You write short, specific, honest networking messages on behalf of a college student, in the student's own voice (follow the style card: greeting, sign-off, formality, sentence length, contractions). Rules: use only the facts provided (cite fact ids in claims); never invent a mutual connection or anything you were not given; no generic praise; no "I hope this email finds you well", "reach out", "pick your brain", "leverage"; one clear ask; keep it under the word limit for the kind (outreach 120, bump 60, schedule 80, thank_you 100, nurture 90, congratulate 50, referral_ask 110, intro_request 110, reply 120). For LinkedIn outreach also return a body_short under 300 characters. A template draft is provided as a floor for structure; improve specificity and voice, do not add claims.`,
+    [
+      "You write short, specific networking messages on behalf of a college student, in the student's own voice (follow the style card for greeting, sign-off, formality, contractions).",
+      'Follow the playbook exactly:',
+      '1. The connection comes first: the opening sentence states how the student knows of the person (referral, event, alumni, their post, their career move, a shared employer) using only the facts and the `connection` provided. Never invent a link, a mutual contact, or a compliment.',
+      '2. One line that is only true of this recipient, drawn from the facts (cite fact ids in claims). Praise is not specific; a question about something they did is.',
+      '3. Ask for insight, not a job. One bounded ask with a number of minutes (15 cold, 20 alumni), phrased as a question, with an easy out.',
+      `4. Stay under ${MAX_WORDS[ctx.kind]} words between greeting and sign-off. Finance and consulting readers get five sentences or fewer and a sign-off with the student's full name, school and class year.`,
+      '5. Banned: "I hope this email finds you well", "reach out", "pick your brain", "leverage", "passionate about", "impressed by your background", "any advice you have", exclamation marks beyond one, and any em dash or en dash (use a comma or a period).',
+      '6. Bumps are two sentences: "in case it got buried" plus one pointer. Thank-yous name where the memory lives (when, what they said), one specific thing the student is doing with it, and a permission line to follow up. Nurture notes carry an update or a question about something they mentioned and end with "no reply needed". Referral asks make it a two-minute task.',
+      '7. Do not repeat any sentence in `recentOpenings`. For LinkedIn outreach also return body_short under 300 characters that still carries the connection and the ask.',
+      'A template draft is provided as the floor: keep its structure and every claim, improve specificity and voice, add nothing that is not in the context pack.',
+    ].join('\n'),
     `Context pack (trusted, from the student's own data):\n${JSON.stringify(packed, null, 1)}\n\nTemplate draft:\n${JSON.stringify(template)}`,
     schema,
     'high',
     2048,
   );
   if (!r) return undefined;
+  const body = r.body.replace(/[—–]/g, ',').replace(/\s+,/g, ',');
+  const opening =
+    body
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l && !/^(hi|hey|hello|dear)\b/i.test(l))[0]
+      ?.split(/(?<=[.!?])\s+/)[0] ?? template.opening;
   return {
     subject: r.subject ?? undefined,
-    body: r.body,
+    body,
     bodyShort: r.body_short ?? undefined,
     claims: r.claims.map((c) => ({ text: c.text, factId: c.fact_id ?? undefined, kind: c.kind })),
+    needsInput: [],
+    opening,
+    sector: template.sector,
+    register: template.register,
   };
 }
 

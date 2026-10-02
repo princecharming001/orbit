@@ -1,4 +1,5 @@
 export * from './demo/seed';
+export * from './drafts/sector';
 export * from './drafts/templates';
 export * from './drafts/validate';
 export * from './email/triage';

@@ -705,10 +705,13 @@ function Limits() {
         <Input
           type="number"
           min={0}
-          max={4}
+          max={2}
           value={settings.maxBumps}
-          onChange={(e) => upd({ maxBumps: Number(e.target.value) })}
+          onChange={(e) => upd({ maxBumps: Math.max(0, Math.min(2, Number(e.target.value))) })}
         />
+        <p className="text-[12px] text-ink-3 mt-1">
+          One bump for most people; a second, graceful last word only in finance and consulting.
+        </p>
       </div>
       <div className="sm:col-span-2 border-t border-line pt-4">
         <label className="flex items-start gap-2 text-[13.5px]">

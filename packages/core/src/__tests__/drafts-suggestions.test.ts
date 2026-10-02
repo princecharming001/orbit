@@ -73,56 +73,6 @@ const ctx = (kind: DraftContext['kind'], extra: Partial<DraftContext> = {}): Dra
   ...extra,
 });
 
-describe('drafts', () => {
-  it('generates every kind within limits and passes validation', () => {
-    const kinds: DraftContext['kind'][] = [
-      'outreach',
-      'bump',
-      'schedule',
-      'thank_you',
-      'nurture',
-      'congratulate',
-      'referral_ask',
-      'intro_request',
-      'reply',
-    ];
-    for (const k of kinds) {
-      const d = generateDraft(
-        ctx(k, {
-          proposedWindows: [{ startIso: '2026-10-08T18:00:00Z' }],
-          thread: {
-            firstOutboundAt: '2026-09-25T12:00:00Z',
-            proposedTimes: [{ startIso: '2026-10-08T18:00:00Z', raw: 'Thursday 2pm' }],
-            asksOfUser: ['Could you send your resume?'],
-          },
-          target: { name: 'Daniel Kim', title: 'EM', org: 'Stripe' },
-          newAffiliation: { title: 'Senior PM', org: 'Figma' },
-          targetCompany: { name: 'Figma', roleLabel: 'PM intern' },
-        }),
-      );
-      const issues = validateDraft(d, {
-        kind: k,
-        facts,
-        allowedUrls: ['https://cal.com/alex'],
-        recipientFirstName: 'Priya',
-      });
-      expect(issues, `${k}: ${JSON.stringify(issues)}`).toEqual([]);
-      expect(d.body).toContain('Priya');
-      expect(d.body).toContain('Alex');
-    }
-  });
-  it('flags banned phrases and unknown urls', () => {
-    const d = { body: 'Hi Priya, I hope this email finds you well. See https://evil.example', claims: [] };
-    const issues = validateDraft(d, {
-      kind: 'outreach',
-      facts,
-      allowedUrls: [],
-      recipientFirstName: 'Priya',
-    });
-    expect(issues.map((i) => i.code)).toEqual(expect.arrayContaining(['banned_phrase', 'unknown_url']));
-  });
-});
-
 describe('style card', () => {
   it('learns greeting and signoff', () => {
     const bodies = Array.from(

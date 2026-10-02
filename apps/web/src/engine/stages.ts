@@ -1,5 +1,12 @@
 import type { Actor, ChatStage, CoffeeChat, StageTrigger } from '@orbit/core';
-import { canTransition, decideTransition, newId, PROPOSE_THRESHOLD } from '@orbit/core';
+import {
+  canTransition,
+  decideTransition,
+  maxBumpsFor,
+  newId,
+  PROPOSE_THRESHOLD,
+  sectorOf,
+} from '@orbit/core';
 import { feedback } from '../db/repo';
 import { db } from '../db/schema';
 
@@ -99,9 +106,18 @@ export async function decideProposedStage(
 }
 
 /** Timed rules: followed_up → nurturing after 14 days; outreach_sent → no_response after max bumps + 14 days. */
-export async function runTimedStageRules(userId: string, maxBumps: number, now = new Date()): Promise<void> {
+export async function runTimedStageRules(
+  userId: string,
+  settingsMaxBumps: number,
+  now = new Date(),
+): Promise<void> {
   const chats = await db.chats.where('userId').equals(userId).toArray();
   for (const c of chats) {
+    const person = await db.people.get(c.personId);
+    const maxBumps = maxBumpsFor(
+      sectorOf({ title: person?.currentTitle, org: person?.currentOrganizationRaw }),
+      settingsMaxBumps,
+    );
     if (
       c.stage === 'followed_up' &&
       c.followedUpAt &&

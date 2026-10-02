@@ -1,5 +1,5 @@
 import type { OutboundMessage, Suggestion, User } from '@orbit/core';
-import { linkedinMessageUrl, sha256Hex } from '@orbit/core';
+import { linkedinMessageUrl, maxBumpsFor, sectorOf, sha256Hex } from '@orbit/core';
 import { addTouchpoint, audit, feedback, notify, recomputePersonStrength } from '../db/repo';
 import { db } from '../db/schema';
 import { gmailSend } from '../integrations/google';
@@ -68,8 +68,15 @@ export async function checkSendAllowed(
       .equals(personId)
       .filter((c) => c.stage === 'outreach_sent')
       .first();
-    if (active && active.bumpCount >= (settings?.maxBumps ?? 2))
-      return { allowed: false, reason: 'Maximum follow-ups already sent.' };
+    const cap = maxBumpsFor(
+      sectorOf({ title: person.currentTitle, org: person.currentOrganizationRaw }),
+      settings?.maxBumps ?? 2,
+    );
+    if (active && active.bumpCount >= cap)
+      return {
+        allowed: false,
+        reason: `You've already followed up ${cap === 1 ? 'once' : `${cap} times`}; the playbook says let it rest and try someone else on the team.`,
+      };
   }
   return { allowed: true };
 }

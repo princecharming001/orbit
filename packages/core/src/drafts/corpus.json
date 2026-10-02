@@ -1,0 +1,641 @@
+[
+  {
+    "kind": "outreach",
+    "sector": "general",
+    "relationship": "alumni",
+    "subject": "{school} student seeking your advice",
+    "body": "Dear Mr. {first},\n\nMy name is {me}, and I'm a first-year {school} MBA student who found your information in the {school} alumni database. May I have 15 minutes of your time to ask you about your experience with {org}? I'm trying to learn more about marketing careers at technology companies and your insights would be very helpful.\n\nBest,\n{me}",
+    "source": "Steve Dalton five-point email, Notre Dame GBP Career Services (verbatim, placeholders only)",
+    "notes": "63 words; connection in subject and sentence one, question-form ask with a number, interest defined narrowly and broadly, nothing about the sender beyond one clause."
+  },
+  {
+    "kind": "outreach",
+    "sector": "general",
+    "relationship": "alumni",
+    "subject": "Fellow {school} alum, your path to science policy",
+    "body": "Dear {first},\n\nI'm {me}, a trainee at NCI. I got your contact information from the {school} alumni database. I'm trying to learn more about science policy as a career path and your insights would be greatly appreciated. Do you have 15-20 minutes to chat with me about your experience?\n\nBest regards,\n{me}",
+    "source": "Dalton six-point email as published by NIH OITE (verbatim, placeholders only; subject added)",
+    "notes": "58 words, under the 75-word ceiling; first-name salutation for an informal field; the only fact about the sender is their affiliation."
+  },
+  {
+    "kind": "outreach",
+    "sector": "tech",
+    "relationship": "alumni",
+    "subject": "Your product management experience at {org}",
+    "body": "Hi {first},\n\nI'm {me}, a fellow {school} alum. May I chat with you for a few minutes about your product management experience at {org}? I'm trying to learn more about product management in the North Carolina tech space, so your insights would be greatly appreciated.\n\nThanks,\n{me}",
+    "source": "Duke Career Hub, Make an Outreach Request examples (verbatim, placeholders only)",
+    "notes": "Subject is about them, not the sender; 'fellow alum' is the whole intro; narrow plus broad interest in under 55 words. Engine should swap 'a few minutes' for '15 minutes'."
+  },
+  {
+    "kind": "outreach",
+    "sector": "general",
+    "relationship": "alumni",
+    "subject": "{school} student, informational interview request",
+    "body": "Dear Ms. {first},\n\nI'm a sophomore majoring in economics at {school} and found your contact information through the {school} alumni group on LinkedIn. I was glad to see an alum working in the publishing industry because I hope to learn about the field, and what skills I should build during my last two years at {school}.\n\nWould you be open to a quick 20-minute phone call to share your experience? Please let me know what times would be most convenient for your schedule.\n\nBest,\n{me}",
+    "source": "University of Michigan Career Center sample alumni email (near-verbatim; blanks filled)",
+    "notes": "Pure four-move structure: how found, why them, question-form ask with a number, scheduling handed to the alum. 'What skills I should build' is a sophomore-appropriate, non-job ask."
+  },
+  {
+    "kind": "outreach",
+    "sector": "general",
+    "relationship": "alumni",
+    "subject": "{school} senior, big biotech vs start-up",
+    "body": "Dear Ms. {first},\n\nI'm a biology major graduating from {school} in May, and I'm hoping to work at a biotech firm in Boston after graduation. Right now I'm trying to work out which kind of environment fits me. You've worked at both a large biotech and a small start-up, so I'd value hearing how those two actually differed day to day.\n\nI'm from the Boston area and will be home March 7 through 19 for spring break. Would you be willing to meet for coffee for 20 minutes during that window? Whatever day suits you.\n\nThank you for considering it,\n{me}",
+    "source": "Yale OCS sample email #2, tightened (near-verbatim)",
+    "notes": "The 'why you' is a contrast only this alum can answer; a date range rather than specific slots keeps the alum in control; contractions keep it human."
+  },
+  {
+    "kind": "outreach",
+    "sector": "general",
+    "relationship": "alumni",
+    "subject": "Fellow {school} grad, quick question about your work at {org}",
+    "body": "Hi {first},\n\nI'm {me}, a '24 grad from {school} (I know you were a few years ahead of me), and I came across your name on our alumni site. Would you have 15 minutes to tell me how you chose {org} and what the first year there was actually like? I'd especially like to hear how you made your choices right after graduating.\n\nThanks either way,\n{me}",
+    "source": "Ramit Sethi alumni script via 80,000 Hours, rewritten to remove 'pick your brain' and add a time box",
+    "notes": "Keeps the nine-word subject shape and the human aside about class years; replaces the vague ask with a bounded question."
+  },
+  {
+    "kind": "outreach",
+    "sector": "general",
+    "relationship": "warm",
+    "subject": "Catherine Pattanayak suggested I write to you",
+    "body": "Dear Ms. {first},\n\nCatherine Pattanayak at {school} suggested I contact you and asked me to pass along her regards. I understand you specialize in fair housing cases, and I'm particularly interested in your work in the South Boston neighborhoods. I hope to pursue housing litigation after I graduate next spring.\n\nWould you have 20 minutes in the next few weeks to talk about your work at {org}? I'll work around whatever time suits you.\n\nThank you,\n{me}",
+    "source": "Harvard Law School OPIA sample networking email, closing supplied and job-ask clause removed",
+    "notes": "Referrer in sentence one with 'pass along her regards'; two specific facts about the recipient before anything about the sender. Swap the referrer's name for the real one."
+  },
+  {
+    "kind": "outreach",
+    "sector": "general",
+    "relationship": "cold",
+    "subject": "Quick question about moving from teaching into tech",
+    "body": "Hi {first},\n\nMy name is {me}, and I came across your profile while looking for people who moved from classroom teaching into product roles. Your path stood out because you did it without going back to school, which is the route I'm trying to figure out.\n\nI'd like to learn how you made that first move. Would you have 15 minutes sometime in the next couple of weeks? I know you're busy, so whatever time works for you works for me.\n\nThanks,\n{me}",
+    "source": "Alumni Association of the University of Michigan approach-email template, angle filled in and ask bounded",
+    "notes": "Forces a 'stood out because' reason; the ask is now a question with a number instead of 'a few minutes to chat'."
+  },
+  {
+    "kind": "outreach",
+    "sector": "finance",
+    "relationship": "alumni",
+    "subject": "{school} '27, quick question on {org} healthcare",
+    "body": "Hi {first},\n\nI'm a sophomore at {school} studying economics, and I came across your profile through our alumni network. You went from the investing club to {org}'s healthcare group in two years, which is the path I'm trying to understand before recruiting opens.\n\nWould you have 15 minutes for a quick call sometime in the next two weeks? I'd like to hear how you made that move and what you'd do differently.\n\nCompletely understand if you're slammed. Either way, thanks for being one of the {school} people on the Street.\n\nBest,\n{me}",
+    "source": "Wall Street Playbook IB alumni template, generic 'exactly the trajectory' line replaced with a specific detail",
+    "notes": "Connection in sentence one, one concrete observation, a yes/no 15-minute ask, an out; fits a phone screen. Analysts get 'Hi {first}', never 'Mr.'."
+  },
+  {
+    "kind": "outreach",
+    "sector": "finance",
+    "relationship": "cold",
+    "subject": "{school} architecture sophomore, quick question about your path to {org}",
+    "body": "Hi {first},\n\nI'm an architecture major at {school} just starting to learn how students break into banking. I saw you studied engineering before moving into a group that works with software companies, and I wanted to ask how you explained a non-finance background in recruiting.\n\nWould 15 minutes by phone next week work? I'll fit whatever time you have.\n\nThanks,\n{me}",
+    "source": "Alma careers counter-example to the AI 'passionate about finance' draft (near-verbatim)",
+    "notes": "Clear background, a verifiable common ground (their actual career move), and one question only this person can answer. Reads like a 20-year-old, not a press release."
+  },
+  {
+    "kind": "outreach",
+    "sector": "finance",
+    "relationship": "cold",
+    "subject": "{school} junior, 15 minutes on your path to {org}?",
+    "body": "Hi {first},\n\nI'm a junior at {school} studying finance and came across your profile while researching {org}'s industrials team. You spent two years in corporate development before moving to the sell side, and that sequence is the one I'm trying to understand.\n\nWould you have 15 minutes in the next two weeks to tell me how it compared? Happy to work around your calendar.\n\nThanks either way,\n{me}",
+    "source": "Wall Street Mastermind cold-email opening, completed per their stated structure",
+    "notes": "'Came across your profile while researching {org}'s team' is the accepted way to say 'found you on LinkedIn'; the subject states school, year, ask length and firm."
+  },
+  {
+    "kind": "outreach",
+    "sector": "finance",
+    "relationship": "cold",
+    "subject": "{org}: summer internship for a {school} junior",
+    "body": "Mr. {first},\n\nI'm writing to ask whether {org} might take on a summer intern this year, starting in early June. I'm a junior at {school} studying accounting, and I spent last summer building three-statement models at a regional valuation shop. I'm interested in {org} specifically because of your work on lower-middle-market industrial deals, which is where I'd like to start.\n\nWould you have ten minutes for a brief call to discuss? Resume attached.\n\nRegards,\n{me}",
+    "source": "Mergers & Inquisitions boutique internship cold-email structure, completed",
+    "notes": "The one case where the first email asks about the job directly: boutiques with no HR pipeline. Formal salutation for a senior recipient; resume attached because there is relevant experience."
+  },
+  {
+    "kind": "outreach",
+    "sector": "finance",
+    "relationship": "cold",
+    "subject": "Quick question from a {school} sophomore",
+    "body": "Hi {first},\n\nMy name is {me}. I worked at a community bank this summer and I'm trying to move toward {target}. I was wondering whether you'd be willing to take 15 minutes to talk about your experience in the field. I'd appreciate the advice and I'll work around whatever time you have.\n\nThanks,\n{me}",
+    "source": "WSO non-target cold-contacting guide register, capitalised and bounded",
+    "notes": "Shows how little formality analysts actually need: who, what you did, what you're trying to do, ask about their experience. The plainness is the point."
+  },
+  {
+    "kind": "outreach",
+    "sector": "consulting",
+    "relationship": "alumni",
+    "subject": "{school} alum, interested in your path to {org}'s Chicago office",
+    "body": "Hi {first},\n\nI'm a junior at {school} recruiting for consulting this fall and found you on the {school} alumni page while looking at {org}'s Chicago office. You went there after two years in hospital operations, and I'm trying to work out whether an industry stint first is the better route.\n\nWould you have 15 minutes in the next couple of weeks to tell me how you decided and what you wish you'd known earlier? Whatever time suits you.\n\nThanks,\n{me}",
+    "source": "Road to Offer alumni cold-email template, completed with a specific detail",
+    "notes": "Subject names the hook and the office; the question is one only this person can answer; asks for perspective, not a referral."
+  },
+  {
+    "kind": "outreach",
+    "sector": "consulting",
+    "relationship": "cold",
+    "subject": "{school} student, 15 min on your {org} experience",
+    "body": "Hi {first},\n\nI'm a junior at {school} studying industrial engineering. I came across your profile while reading about {org}'s supply chain practice and saw you joined it straight from a manufacturing rotation, which is close to what I'm doing this summer.\n\nI'm weighing consulting against staying in operations. Would you have 15 minutes for a quick call? I'm flexible and happy to work around your schedule.\n\nThanks,\n{me}",
+    "source": "Offerloop Deloitte Digital coffee-chat template, personalised sentence filled in",
+    "notes": "Subject states who, exact time cost and their group; names the practice rather than the firm; asks for exactly 15 minutes."
+  },
+  {
+    "kind": "outreach",
+    "sector": "consulting",
+    "relationship": "warm",
+    "subject": "From your talk at {school} on Tuesday, one follow-up",
+    "body": "Hi {first},\n\nThank you for coming to {school} on Tuesday. Your point that the best first-years ask \"what would make this slide unnecessary\" has stuck with me, and I've been using it in case practice all week. I'd like to ask one follow-up about how you decide which engagements to staff juniors on.\n\nWould you have 15 minutes sometime in the next few weeks? I'll take whatever slot is easiest.\n\nBest,\n{me}",
+    "source": "PrepLounge expert sketch for a post-event partner email, completed",
+    "notes": "The only acceptable cold-to-partner message: thank-you first, two concrete references to what they said, one small ask."
+  },
+  {
+    "kind": "outreach",
+    "sector": "consulting",
+    "relationship": "recruiter",
+    "subject": "{role} application from {me}, {school}",
+    "body": "Dear {first},\n\nMy name is {me} and I'm a junior at {school} studying economics. I'm planning to apply for the {role} at {org}'s Boston office in the fall cycle.\n\nI wanted to ask whether {org} is holding any events for {school} students this semester, and whether the application deadline for Boston is the same as the general one. I've spoken with two consultants in the office, Priya Shah and Daniel Okafor, who've been generous with their time.\n\nBest regards,\n{me}\n{school} '27 | (555) 012-3456 | linkedin.com/in/{me}",
+    "source": "Hacking the Case Interview email-to-recruiter structure, completed",
+    "notes": "Recruiters get logistics, not a coffee chat: role and cycle named, one answerable question, evidence of practitioner conversations, formal sign-off and full contact block."
+  },
+  {
+    "kind": "outreach",
+    "sector": "tech",
+    "relationship": "cold",
+    "subject": "Backend intern application, built a rate limiter on your API",
+    "body": "Hi {first},\n\nI'm a third year CS student and I've been using {org} for a side project since March. Last month I built a rate limiter on top of your API, which cut my failed requests by about 80 percent. Link: github.com/{me}/ratelimit\n\nI saw you're hiring backend interns and I'd rather send this to you directly than into the portal. Resume attached.\n\nThanks either way,\n{me}",
+    "source": "spsokhi/off-campus-job-hunting cold-email example (near-verbatim; result filled in)",
+    "notes": "Subject says exactly what it is; five sentences; the proof is a link, not an adjective; 'thanks either way' closes without pressure. Author reports about 1 in 10 replied."
+  },
+  {
+    "kind": "outreach",
+    "sector": "tech",
+    "relationship": "warm",
+    "subject": "Chicago tech scene, 15 minutes next Wednesday?",
+    "body": "Hi {first},\n\nI'm in the back end program at {school}. I'm originally from Chicago and hope to move back there after I graduate. I'd like to ask about the tech scene there and any advice you have for my job search.\n\nI saw on the mentor schedule that you're available Wednesdays at 5pm. Are you free next Wednesday the 28th? If that doesn't work, let me know a time that's better for you.\n\nThanks,\n{me}",
+    "source": "Turing School Cold Outreach I, student example #1 (near-verbatim)",
+    "notes": "Four sentences; the reason for picking this person (Chicago) is in sentence two; the ask is one topic plus a specific slot taken from their own stated availability."
+  },
+  {
+    "kind": "outreach",
+    "sector": "tech",
+    "relationship": "cold",
+    "subject": "Quick question about life at {org}",
+    "body": "Hi {first},\n\nI'm a developer in Denver about to finish the back end program at {school}. I found you while looking into education-focused startups here, and {org}'s work on reading assessment caught my attention because I taught third and fourth grade in Denver Public Schools before switching to software.\n\nCould we get on the phone for 15 minutes this week or next? How does Wednesday at 4pm sound, or any time that suits you?\n\nThanks,\n{me}",
+    "source": "Turing School cold-email skeleton, filled-in teacher-to-edtech example (near-verbatim)",
+    "notes": "Who / how found / what I want, one line of background that explains the fit, a day and time proposed with a fallback."
+  },
+  {
+    "kind": "outreach",
+    "sector": "tech",
+    "relationship": "alumni",
+    "subject": "{school} CS junior, your move from support into PM at {org}",
+    "body": "Hi {first},\n\nI'm a CS junior at {school}, same department as you, and I found you on the alumni page. You moved from support engineering into product at {org}, which is the route I'm weighing instead of a straight SWE path.\n\nWould you have 15 minutes in the next couple of weeks to tell me how that transition actually happened? Happy to do email instead if that's easier.\n\nThanks either way,\n{me}",
+    "source": "Composite of Turing message components and spsokhi 'alumni first' guidance",
+    "notes": "Shared department in the first clause; the specific move is the hook; offers email as a lower-friction channel; no referral ask on first contact."
+  },
+  {
+    "kind": "linkedin_note",
+    "sector": "finance",
+    "relationship": "alumni",
+    "subject": null,
+    "body": "Hi {first}, {school} junior here. Saw you went from the debate team to {org}'s TMT group, which is the path I'm trying to understand. Would you be open to 15 minutes on how you made that jump? Happy to work around your schedule. {me}",
+    "source": "IB networking guide LinkedIn note, trimmed under 300 characters and personalised",
+    "notes": "Who plus connection, their specific group, a bounded ask; about 230 characters, well under the cap."
+  },
+  {
+    "kind": "linkedin_note",
+    "sector": "tech",
+    "relationship": "cold",
+    "subject": null,
+    "body": "Hi {first}, I'm a CS junior at {school}. Read your post on migrating off the monolith; I'm doing a smaller version for a class project. Two quick questions by email, or 15 minutes if easier? Thanks either way, {me}",
+    "source": "Composite of Turing message components and Satakshi Garg's rule against bare 'Hi' messages",
+    "notes": "Carries the ask so no second message is needed; names the artifact that proves it isn't a blast; offers email as the lower-friction channel."
+  },
+  {
+    "kind": "linkedin_note",
+    "sector": "general",
+    "relationship": "alumni",
+    "subject": null,
+    "body": "Hi {first}, I'm a {school} junior exploring marketing careers in tech. Would you be open to a 20-minute chat so I can learn about your path at {org}? Thanks, {me}",
+    "source": "UC Berkeley Career Engagement 5-Point Message LinkedIn example (verbatim, placeholders only)",
+    "notes": "The floor for a LinkedIn note: connection, interest, bounded question. Berkeley pairs it with stating you'll follow up in a week if no reply."
+  },
+  {
+    "kind": "linkedin_note",
+    "sector": "consulting",
+    "relationship": "alumni",
+    "subject": null,
+    "body": "Hi {first}, {school} junior here; found you through the {school} alumni page at {org}'s Chicago office. Recruiting for consulting this fall and would value 15 min on how you picked the office. Happy to work around your schedule. {me}",
+    "source": "Structure from Hacking the Case Interview LinkedIn-message guidance and PrepLounge expert answers",
+    "notes": "About 230 characters; discovery path, one credential line, exact time ask, their specific choice to ask about."
+  },
+  {
+    "kind": "linkedin_note",
+    "sector": "finance",
+    "relationship": "cold",
+    "subject": null,
+    "body": "Hi {first}, I'm a first-year at {school} starting to learn how people get into {target}. Your post on what first-year analysts actually do all day was the clearest thing I've read on it. Would be glad to connect. {me}",
+    "source": "Peak Frameworks accepted-note pattern, hook swapped from 'your videos' to a specific post",
+    "notes": "Peak's rule: concise, straightforward, and the more specific the comment the better. A connect-only note is fine when a warm-up is in progress."
+  },
+  {
+    "kind": "linkedin_message",
+    "sector": "tech",
+    "relationship": "cold",
+    "subject": null,
+    "body": "Hi {first}, thanks for connecting. I'm a junior at {school} exploring product roles, and the way you moved from support into PM at {org} is the route I'm weighing. Would you have 15 minutes in the next couple of weeks? Email is fine too if that's easier than a call.\n\nThanks,\n{me}",
+    "source": "Composite of Turing components and Hacking the Case Interview LinkedIn-message structure",
+    "notes": "Leads with the thing that got the connection accepted; same four moves as outreach without a subject line; offers the lower-friction channel."
+  },
+  {
+    "kind": "linkedin_message",
+    "sector": "consulting",
+    "relationship": "warm",
+    "subject": null,
+    "body": "Hi {first}, I'm {me} from the {school} MIM. Daniel Okafor mentioned you work on the energy team at the Madrid office. I'm preparing my candidacy for this season and would like to learn from your experience. Would you have 15 minutes in the coming weeks?",
+    "source": "NextEP MBB networking example (near-verbatim; referrer and team filled in)",
+    "notes": "Four sentences; the mutual contact in sentence two establishes legitimacy; names team and office so it cannot be mass-sent."
+  },
+  {
+    "kind": "linkedin_message",
+    "sector": "finance",
+    "relationship": "alumni",
+    "subject": null,
+    "body": "Hi {first}, thanks for accepting. I'm a sophomore at {school} and saw you went from the investing club to {org}'s consumer group. Would you have 15 minutes in the next two weeks to tell me how recruiting went from a non-finance major? If email is easier, mine is in my profile.\n\nThanks,\n{me}",
+    "source": "Composite of WSO analyst guidance (connection first, ask about them, offer email for juniors)",
+    "notes": "The question is specific to their background; the student doesn't ask for their email, just offers their own."
+  },
+  {
+    "kind": "bump",
+    "sector": "general",
+    "relationship": "alumni",
+    "subject": null,
+    "body": "Hi {first},\n\nI'm following up on my note below. I know this is a busy time of year, and I'm grateful for any time or advice you can offer. If it's too much to ask, I understand. Either way, have a good week.\n\nBest,\n{me}",
+    "source": "Alumni Association of the University of Michigan follow-up template (near-verbatim)",
+    "notes": "Three ideas in 45 words: following up, I know you're busy, no hard feelings. Sent in thread after five business days."
+  },
+  {
+    "kind": "bump",
+    "sector": "finance",
+    "relationship": "cold",
+    "subject": null,
+    "body": "Hi {first},\n\nJust wanted to surface my note from last week in case it got buried. Totally understand if the timing isn't right; I'd still appreciate even a 15-minute call whenever it's convenient for you.\n\nThanks,\n{me}",
+    "source": "IB coaching-site conversational bump (near-verbatim)",
+    "notes": "'In case it got buried' names the real reason, restates the tiny ask, gives an out. Never adds new information or attachments."
+  },
+  {
+    "kind": "bump",
+    "sector": "general",
+    "relationship": "cold",
+    "subject": null,
+    "body": "Hi {first},\n\nFloating this back up in case it got buried. I'd still love 15 minutes whenever it's convenient, and if someone else on your team would be a better person to ask, I'd be grateful for a pointer.\n\nThanks,\n{me}",
+    "source": "Stanford Career Education follow-up guidance (15 minutes or a referral to someone else)",
+    "notes": "Offers the recipient a zero-cost way to help (a pointer), which is the Stanford addition that lifts bump replies."
+  },
+  {
+    "kind": "bump",
+    "sector": "consulting",
+    "relationship": "cold",
+    "subject": null,
+    "body": "Hi {first},\n\nFollowing up on my note from last week in case it got buried. I wanted to ask you specifically because you moved from hospital operations into {org}'s Chicago office, which is the path I'm weighing. Even 15 minutes in the next couple of weeks would help; completely understand if now isn't a good time.\n\nThanks,\n{me}",
+    "source": "PrepLounge expert phrasing ('I really wanted to talk with you specifically because of X'), completed",
+    "notes": "Restates the person-specific reason; the expert's test is that if there is no specific reason for this person, don't bump, move on."
+  },
+  {
+    "kind": "bump",
+    "sector": "tech",
+    "relationship": "cold",
+    "subject": null,
+    "body": "Hi {first},\n\nStill interested in 15 minutes on how your team approaches on-call for new grads if it's useful to you. Would next Tuesday or Thursday afternoon work? If not, I'll take any time you've got.\n\nThanks,\n{me}",
+    "source": "Turing cold-outreach guidelines (one follow-up restating interest and suggesting a new time)",
+    "notes": "Restates the topic in one clause, proposes a new slot, nothing else. After this, move on."
+  },
+  {
+    "kind": "bump",
+    "sector": "finance",
+    "relationship": "cold",
+    "subject": null,
+    "body": "Hi {first},\n\nLast note from me, I promise. If the next few weeks are too busy, no problem at all. If a 15-minute call ever does fit, I'll make the time work.\n\nThanks,\n{me}",
+    "source": "Banking at Michigan 'maximum two follow-ups, then move on' guidance",
+    "notes": "Bump 2, finance only, about a week after bump 1. The graceful last word; no new pitch."
+  },
+  {
+    "kind": "schedule",
+    "sector": "general",
+    "relationship": "warm",
+    "subject": null,
+    "body": "Hi {first},\n\nThat's great, thank you. Would either of these work? Tuesday at 10am or Thursday at 2pm (ET). If neither does, send me a time and I'll make it fit.\n\nBest,\n{me}",
+    "source": "Forbes (Whitler) rule against five-email scheduling; Turing guidance to propose a specific slot",
+    "notes": "Two concrete windows with the time zone and a fallback; the student does the scheduling work."
+  },
+  {
+    "kind": "schedule",
+    "sector": "general",
+    "relationship": "warm",
+    "subject": null,
+    "body": "Thursday at 2pm ET works. I'll send a calendar invite with a Zoom link now; if you'd rather do phone, say so and I'll call your cell. Looking forward to it.\n\n{me}",
+    "source": "Peak Frameworks guidance to confirm with a calendar invite",
+    "notes": "Confirms slot, time zone, format and who calls whom in three sentences, then sends the invite."
+  },
+  {
+    "kind": "schedule",
+    "sector": "general",
+    "relationship": "warm",
+    "subject": null,
+    "body": "Hi {first},\n\nSomething came up on my end on Thursday and I'm sorry to move this. Would Friday at 2pm or Monday at 10am work instead? If not, I'll take whatever is easiest for you.\n\n{me}",
+    "source": "Composite of scheduling guidance; apologise once, offer two replacements",
+    "notes": "One apology, two replacements, the burden stays on the student. Reschedule once at most."
+  },
+  {
+    "kind": "schedule",
+    "sector": "finance",
+    "relationship": "cold",
+    "subject": null,
+    "body": "Hi {first},\n\nThank you, that would be great. I'm free Tuesday or Wednesday morning before 11am ET, or any time Thursday. If none of those work, tell me what does and I'll move things around.\n\nBest,\n{me}",
+    "source": "Mergers & Inquisitions guidance: offer concrete slots only once they reply",
+    "notes": "Windows rather than exact minutes, mornings matched to when bankers answer, full flexibility stated."
+  },
+  {
+    "kind": "reply",
+    "sector": "tech",
+    "relationship": "cold",
+    "subject": null,
+    "body": "Totally understand. Would the week of the 14th be better? I'm free Tuesday afternoon or Thursday morning, but I'll work around whatever you've got, and even 15 minutes is plenty.\n\n{me}",
+    "source": "Turing cold-outreach guidelines on handling a 'too busy this week' reply",
+    "notes": "A 'swamped' reply is a yes with a scheduling problem; answering fast with two windows and a shorter floor converts it."
+  },
+  {
+    "kind": "reply",
+    "sector": "finance",
+    "relationship": "alumni",
+    "subject": null,
+    "body": "Hi {first},\n\nThursday at 9am ET is perfect. On the resume, yes, attached. And to answer your question, I'm leaning toward healthcare because of a summer at a device company, but I'm open on groups.\n\nSee you Thursday,\n{me}",
+    "source": "Stanford GSB guidance: answer every ask in the reply, within two business days, in thread",
+    "notes": "Accepts the slot, answers both asks in the inbound, no filler."
+  },
+  {
+    "kind": "reply",
+    "sector": "consulting",
+    "relationship": "cold",
+    "subject": null,
+    "body": "Hi {first},\n\nThanks for pointing me to Maya. I'll write to her today and mention you suggested it. If anything changes on your end and a quick call becomes possible, I'd still be glad to take it.\n\nBest,\n{me}",
+    "source": "Composite: PrepLounge guidance to ask for a pointer rather than a second chat",
+    "notes": "When the reply is a redirect, thank them, act on it the same day, and leave the door open without pushing."
+  },
+  {
+    "kind": "thank_you",
+    "sector": "finance",
+    "relationship": "alumni",
+    "subject": "Thank you for this morning",
+    "body": "Hi {first},\n\nThank you for making time this morning. Your point that first-years who ask for feedback after every deck get staffed on better deals is something I hadn't heard before, and I've already started doing it on my club project. I also read the restructuring piece you mentioned last night.\n\nI'll let you know how recruiting goes. Would it be alright to send a question your way if one comes up?\n\nBest,\n{me}",
+    "source": "UVA Economics coffee-chat thank-you ('would it be alright if I sent follow-ups?') plus Banking at Michigan specific-callback rule",
+    "notes": "One specific thing they said, one action taken, permission for future contact. Never the same text to two analysts at one firm."
+  },
+  {
+    "kind": "thank_you",
+    "sector": "finance",
+    "relationship": "cold",
+    "subject": "Thank you, {org} coffee chats at {school}",
+    "body": "Hi {first},\n\nWe met Wednesday afternoon at the {org} coffee chats at {school}. Thank you for walking me through how staffing works in your group. I enjoyed hearing about your interest in media and the Harbor deal you got to work on; the stories about the first-year desk gave me a much better sense of the place than any info session.\n\nI'll stay in touch as recruiting goes on. Thanks again for the time.\n\nBest,\n{me}",
+    "source": "Banking at Michigan coffee-chat thank-you (near-verbatim; deal name and gaps filled)",
+    "notes": "Opens by locating the memory, then two concrete callbacks (sector interest, a named deal). The model for 'remember something and include it'."
+  },
+  {
+    "kind": "thank_you",
+    "sector": "consulting",
+    "relationship": "cold",
+    "subject": "Great meeting you, {me}",
+    "body": "Hi {first},\n\nThanks for taking the time to grab coffee earlier. Your advice on how to approach the case prep process was very helpful, and I appreciate you being so candid. I checked out the operations practice page you mentioned and signed up for the Boston office session next month.\n\nI'll keep you updated on my progress. Hope to cross paths again.\n\nBest,\n{me}",
+    "source": "Hacking the Case Interview coffee-chat thank-you (near-verbatim) with Road to Offer's 'one action taken' line added",
+    "notes": "Under 70 words, one specific thing they said, one action taken, a promised update that creates the next touchpoint, no ask."
+  },
+  {
+    "kind": "thank_you",
+    "sector": "tech",
+    "relationship": "warm",
+    "subject": null,
+    "body": "Hi {first}, good to meet you at the {school} fintech panel yesterday. I kept thinking about what you said about reading the 10-K before the pitch deck. I did that for the company I'm presenting on Friday and it changed my whole second section. Thanks again for the time.\n\n{me}",
+    "source": "aniarya82 'Getting a Guide' and Turing same-day thank-you guidance",
+    "notes": "The specific-thing-they-said line proves the student listened; the follow-through line gives them a reason to reply."
+  },
+  {
+    "kind": "thank_you",
+    "sector": "tech",
+    "relationship": "warm",
+    "subject": "Update on the {role} req",
+    "body": "Hi {first}, quick update on the {role} req you referred me for: I made it to the final round last week but they went with someone else. The interviews were genuinely useful, especially the system design round on queue backpressure. Thanks again for putting your name on it; I'll let you know where I land.\n\n{me}",
+    "source": "spsokhi/off-campus-job-hunting: report outcomes to referrers, including rejections",
+    "notes": "Closes the loop the referrer almost never gets; no ask attached. Author reports two people re-referred him at their next company."
+  },
+  {
+    "kind": "thank_you",
+    "sector": "general",
+    "relationship": "warm",
+    "subject": null,
+    "body": "Hi {first},\n\nThank you for the call today. The distinction you drew between roles where you own a number and roles where you own a process is the clearest frame I've heard for choosing a first job, and I'm going to use it to rank my list this week.\n\nI'll send a note when I've decided. Thanks again.\n\nBest,\n{me}",
+    "source": "Stanford GSB and Columbia CCE thank-you guidance; composite",
+    "notes": "Quotes their idea in their own words and says exactly what the student will do with it."
+  },
+  {
+    "kind": "nurture",
+    "sector": "finance",
+    "relationship": "alumni",
+    "subject": null,
+    "body": "Hi {first},\n\nQuick update since we talked in March: I took your advice and switched my summer to the ops role, and your line about learning to read a P&L before anything else has been the single most useful part of it. Hope the move to the new team is going well.\n\nNo reply needed, just wanted to say thanks.\n{me}",
+    "source": "Wall Street Mastermind nurture cadence (update every four to six weeks)",
+    "notes": "One real update tied to something they said, one line about them, no ask."
+  },
+  {
+    "kind": "nurture",
+    "sector": "finance",
+    "relationship": "warm",
+    "subject": null,
+    "body": "Saw {org} closed the Veritas deal this week, congratulations. Would love to hear what the last two weeks of that were like whenever you have a moment.\n\n{me}",
+    "source": "WSO 'Some Thoughts on Networking' (congratulate on a public transaction); near-verbatim coaching-site line",
+    "notes": "Two sentences; adds attention rather than extracting it. Only use public deal news."
+  },
+  {
+    "kind": "nurture",
+    "sector": "consulting",
+    "relationship": "warm",
+    "subject": null,
+    "body": "Hi {first},\n\nJust letting you know I'm planning to submit my application for the Boston office on October 14. Thank you again for offering to refer me. Let me know if there's anything else you need from my side.\n\nBest,\n{me}",
+    "source": "StrategyCase pre-submission note (near-verbatim)",
+    "notes": "Gives the referrer the one thing they need (the date), re-confirms the offer without re-asking."
+  },
+  {
+    "kind": "nurture",
+    "sector": "tech",
+    "relationship": "warm",
+    "subject": null,
+    "body": "Hi {first}, how are things going at {org}? On my end, I shipped the scheduling tool we talked about and it's at about 300 users now. Your suggestion to cut the onboarding to one screen was most of the difference. No need to reply, just wanted you to know it worked.\n\n{me}",
+    "source": "aniarya82 'how are you doing' check-in and spsokhi loop-closing guidance",
+    "notes": "A measurable update they contributed to; 'no need to reply' removes the obligation."
+  },
+  {
+    "kind": "nurture",
+    "sector": "general",
+    "relationship": "alumni",
+    "subject": null,
+    "body": "Hi {first},\n\nI read the piece you posted on hiring for curiosity over credentials and it changed one of my interview answers, in a good way. Nothing to ask, just wanted to say it landed. Hope the semester of travel is treating you well.\n\n{me}",
+    "source": "PrepLounge 'How to maintain a connection' (gratitude, occasional check-ins)",
+    "notes": "Tied to something they published, states what the student did with it, no ask."
+  },
+  {
+    "kind": "congratulate",
+    "sector": "general",
+    "relationship": "warm",
+    "subject": null,
+    "body": "Hi {first}, just saw you moved to {org}. Congratulations, that fits everything you said about wanting to sit closer to the product. Hope the first weeks are going well.\n\n{me}",
+    "source": "Composite; ties the news to something they told the student",
+    "notes": "One line on what happened, one tying it to the conversation, one wish. No ask, no self-update."
+  },
+  {
+    "kind": "congratulate",
+    "sector": "finance",
+    "relationship": "alumni",
+    "subject": null,
+    "body": "Hi {first}, congratulations on the promotion to associate. You said in March the hardest part of the jump would be learning to delegate the model; curious whether that's turned out to be true. No need to reply, just glad to see it.\n\n{me}",
+    "source": "Composite; WSO guidance that bankers notice who remembers what they said",
+    "notes": "Calls back a specific prediction they made; the question is optional and the out is explicit."
+  },
+  {
+    "kind": "congratulate",
+    "sector": "tech",
+    "relationship": "cold",
+    "subject": null,
+    "body": "Hi {first}, saw the launch post for the new billing API this morning. Congratulations, the idempotency keys section answered a question I'd had for weeks. Hope the launch week is calm.\n\n{me}",
+    "source": "Turing guidance on tying a message to something top of mind (a launch)",
+    "notes": "Specific to a public artifact; no ask; a plausible first touch from a stranger that costs them nothing."
+  },
+  {
+    "kind": "referral_ask",
+    "sector": "finance",
+    "relationship": "warm",
+    "subject": "Quick update + applied to {org} {role}, {me}",
+    "body": "Hi {first},\n\nI submitted my application for the {role} at {org} this morning (job ID 4412, link below). Our conversation about how the LA office staffs first-years is a big part of why I applied here first. If you'd be comfortable flagging my name to the recruiting team, I'd be grateful; resume attached. Completely fine if not.\n\nThanks again,\n{me}",
+    "source": "Wall Street Mastermind subject line (verbatim) with body per M&I 'ask to be plugged into the process' guidance",
+    "notes": "Subject states the fact; body recalls the conversation in one clause, makes the ask conditional, gives an out. Only after at least one real conversation."
+  },
+  {
+    "kind": "referral_ask",
+    "sector": "tech",
+    "relationship": "alumni",
+    "subject": "SDE-1 req 4412, referral?",
+    "body": "Hi {first},\n\nI'm a final year CS student at {school}, same department as you. I saw the SDE-1 opening on the {org} careers page (req 4412) and I think I'm a reasonable fit for it. I've been writing Go and Postgres for about a year, and I built a queue-backed job runner that handles about 2,000 jobs an hour for a campus club.\n\nWould you be open to referring me? Resume is attached, and I'm happy to send anything else that helps. Completely fine if you'd rather not, I know a referral has your name on it.\n\ngithub.com/{me}/jobrunner",
+    "source": "spsokhi/off-campus-job-hunting referral ask (near-verbatim; project filled in)",
+    "notes": "Affiliation first, exact req so they can paste it into the internal tool, one checkable claim, one-sentence ask, explicit easy out. Author reports about 1 in 4 referred applications got a first call."
+  },
+  {
+    "kind": "referral_ask",
+    "sector": "tech",
+    "relationship": "warm",
+    "subject": null,
+    "body": "Hi {first}, I'm applying for the {role} internship at {org}, req 7731 (link below). Most relevant thing I've done: built the backend for a campus app with about a thousand users in Go and Postgres. Would you be willing to refer me for that req? Resume is at the link. Totally understand if you'd rather not, and thanks either way.\n\n{me}",
+    "source": "Composite of Blind EM thread, Roman Taylor and Exponent referral guidance",
+    "notes": "Everything the referrer needs in one message; never asks them to review the resume or find roles."
+  },
+  {
+    "kind": "referral_ask",
+    "sector": "consulting",
+    "relationship": "warm",
+    "subject": null,
+    "body": "Hi {first},\n\nThanks again for the chat today. If you feel comfortable, would you be open to referring me for the {role} (job ID 2291)? I've attached my one-page resume and the posting link. Totally okay if not; I appreciate any guidance either way.\n\nBest,\n{me}",
+    "source": "Thethinksters forum member's same-day ask (near-verbatim; capitalisation fixed)",
+    "notes": "Role, job ID, resume and link in one message; conditional phrasing; an out plus a fallback that keeps the relationship."
+  },
+  {
+    "kind": "referral_ask",
+    "sector": "consulting",
+    "relationship": "warm",
+    "subject": null,
+    "body": "Hi {first},\n\nI'm applying to the Chicago office this fall, with the deadline on October 20. Would you be comfortable flagging my application internally when I submit? I've attached my resume so you have it; happy to send anything else the form needs. No problem at all if it isn't something you do.\n\nThanks,\n{me}",
+    "source": "Road to Offer referral sentence (verbatim) wrapped in a short email",
+    "notes": "'Flagging internally' is how MBB referrals actually work; 'comfortable' gives the out; the deadline tells them when."
+  },
+  {
+    "kind": "referral_ask",
+    "sector": "consulting",
+    "relationship": "warm",
+    "subject": null,
+    "body": "Hi {first},\n\nOne question as I get my application together: are referrals common at {org}? I'm planning to apply in October for the Boston office and want to make sure I follow the right process.\n\nThanks,\n{me}",
+    "source": "StrategyCase rung-one indirect ask (verbatim)",
+    "notes": "Lowest-pressure rung for a thin relationship; a convinced consultant will volunteer the referral."
+  },
+  {
+    "kind": "referral_ask",
+    "sector": "general",
+    "relationship": "warm",
+    "subject": null,
+    "body": "Hi {first},\n\nThanks so much for talking with me today. I'm genuinely excited about the {role}, and based on our conversation I think it's a strong fit. If you'd feel comfortable referring me, I'd be grateful; if not, would you suggest applying directly, or is there a better way to get my profile looked at?\n\nBest,\n{me}",
+    "source": "PrepLounge expert's direct ask plus their softer alternative (near-verbatim)",
+    "notes": "Gratitude, a reason tied to the conversation, conditional ask, and a fallback question that keeps the thread alive if the answer is no."
+  },
+  {
+    "kind": "intro_request",
+    "sector": "tech",
+    "relationship": "warm",
+    "subject": "Small ask: intro to {target}?",
+    "body": "Hi {first},\n\nSmall ask. I'm trying to learn how {target} thinks about PM hiring at {org}, and I noticed you two worked together at Stripe. If you'd be comfortable making a short intro, here's something you could forward:\n\n\"{me} is a junior at {school} studying CS and recruiting for product internships. She built a scheduling tool that 300 students at {school} use, and would love 15 minutes to hear how {target} approaches new-grad PM hiring.\"\n\nAnd if it's not a good fit to ask, no worries at all.\n\nThanks,\n{me}",
+    "source": "Composite; forwardable-blurb pattern from Turing and spsokhi 'make it a two-minute task'",
+    "notes": "Target named with the reason; a quoted third-person blurb the connector can forward unedited; an out."
+  },
+  {
+    "kind": "intro_request",
+    "sector": "finance",
+    "relationship": "warm",
+    "subject": null,
+    "body": "Hi {first},\n\nWhen we spoke you mentioned {target} in your group had recruited from a non-target too. Would you be comfortable introducing us? Here's a line you could paste:\n\n\"{me} is a junior at {school} who's recruiting for {target} this cycle; I spoke with her last month and she's sharp and prepared. She'd value 15 minutes on how you handled the non-target path.\"\n\nIf it's awkward to ask, no problem at all, and thanks again for the call.\n\nBest,\n{me}",
+    "source": "Composite; Rocketblocks 'ask for one more person' and WSO referral-in-sentence-one guidance",
+    "notes": "Ties the ask to something the connector themselves offered; the blurb vouches in the connector's voice so they can send it as is."
+  },
+  {
+    "kind": "intro_request",
+    "sector": "general",
+    "relationship": "warm",
+    "subject": "Shauna Williams suggested I write to you",
+    "body": "Hi {first},\n\nMy name is {me}, a back end student at {school}. I recently talked with Shauna Williams about {org}, and she recommended I write to you about your work there. I'm interested in starting at a startup like {org} and would value any advice as I begin as a junior developer.\n\nWould you have 15 minutes next week? I'm free Tuesday afternoon and could meet at Dazbog on Curtis and 18th, or whatever is easiest.\n\nThanks,\n{me}",
+    "source": "Turing School Cold Outreach I, student example #3, trimmed (near-verbatim)",
+    "notes": "Mutual contact named in sentence two; a concrete day and place; the hiring question was cut because the ask should be one thing."
+  },
+  {
+    "kind": "intro_request",
+    "sector": "consulting",
+    "relationship": "warm",
+    "subject": null,
+    "body": "Hi {first},\n\nThanks again for the call last week. You mentioned {target} runs the healthcare cases out of Chicago; would you be comfortable passing my name along? Something you could forward:\n\n\"{me} is a {school} junior recruiting for consulting this fall. We spoke last week and she asked good questions about how juniors get staffed. She'd value 15 minutes on the healthcare practice if you have it.\"\n\nNo worries at all if that's not an easy ask.\n\nBest,\n{me}",
+    "source": "Composite; PrepLounge 'ask for a pointer to one more person' guidance",
+    "notes": "Second-contact request made through the first contact, with the blurb written so the connector can send it without editing."
+  },
+  {
+    "kind": "warmup_comment",
+    "sector": "finance",
+    "relationship": "cold",
+    "subject": null,
+    "body": "The point about writing the memo before the model is new to me. Did you find the memo changed the model's structure, or mostly the inputs?",
+    "source": "Orbit warm-up specification (13 §4): one specific, non-flattering comment, a question or an added point",
+    "notes": "References a specific claim in the post and asks a real question; could not sit under any other post."
+  },
+  {
+    "kind": "warmup_comment",
+    "sector": "tech",
+    "relationship": "cold",
+    "subject": null,
+    "body": "We hit the same thing migrating a class project off a monolith: the hard part wasn't the services, it was the shared test fixtures. Curious whether you split those first or last.",
+    "source": "Orbit warm-up specification (13 §4); Turing guidance on tying to what's top of mind",
+    "notes": "Adds a small point from the student's own experience and asks one question; no praise."
+  },
+  {
+    "kind": "warmup_comment",
+    "sector": "consulting",
+    "relationship": "cold",
+    "subject": null,
+    "body": "The 'answer first, then the three reasons' framing matches what our case club teaches, but we never talk about what to do when the client disagrees with the answer in the first minute. How do you handle that?",
+    "source": "Orbit warm-up specification (13 §4); PrepLounge guidance that specific questions get replies",
+    "notes": "Connects the post to the student's situation and asks a question the author will want to answer."
+  },
+  {
+    "kind": "warmup_comment",
+    "sector": "general",
+    "relationship": "cold",
+    "subject": null,
+    "body": "The stat that half of referred hires came from people the referrer had worked with under a year surprised me. Is that because newer colleagues are more active on LinkedIn, or something else?",
+    "source": "Orbit warm-up specification (13 §4)",
+    "notes": "Quotes one specific number from the post and asks about the mechanism; short and non-flattering."
+  }
+]
