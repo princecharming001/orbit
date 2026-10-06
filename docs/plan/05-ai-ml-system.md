@@ -122,7 +122,7 @@ messages.get (full) → strip quotes/signatures (code) → prefilter (code; 04 �
                                                  → touchpoints (email_in/out) with full weight → person_facts from extraction
 ```
 
-Quote stripping: `talon`-style heuristics ported to TS (`packages/core/src/text/quotes.ts`): cut at `On … wrote:`, `From: … Sent:`, `-----Original Message-----`, lines starting with `>`; signature detection: last ≤ 8 lines containing a phone/URL/title pattern or `--`.
+Quote stripping: `talon`-style heuristics in TS (`packages/core/src/text/email.ts`): cut at `On … wrote:` (also when Gmail hard-wraps it over two or three lines, and the German, Spanish, Dutch, Portuguese and French forms), `From: … Sent:`, `-----Original Message-----`, lines starting with `>`, and trailing `Sent from my iPhone`/`Get Outlook for iOS` footers. HTML-only mail is converted with `htmlToText`, which drops the Gmail/Outlook/Yahoo quote containers and keeps link targets (`here (https://calendly.com/x)`). Signature detection: a `--` line, else the last closer line (`Best,`, `Best regards,`, `Thanks so much,`, `Talk soon,` ...) when every line after it looks like a signature (short, not a sentence or question), else a name line followed by a title or contact line. A line with a Calendly, Zoom, Meet or Teams link, or a sentence that mentions a phone number or meeting ID, is body text and is never cut.
 
 ### 5.2 `ThreadTriage` (T3)
 
@@ -140,7 +140,7 @@ Prompt facts: the user's own addresses; the definition of networking (advice, co
 
 ### 5.3 Linking threads to chats
 
-A networking thread with counterpart person P: if P has an active chat → link; else create `coffee_chats (source detected, stage by inference)`. Threads with 2+ counterparts link to each person's chat (group threads are rare; the first counterpart gets the thread id).
+A networking thread with counterpart person P (the person the student first wrote to, else the first sender): if P has an active chat → link; else create `coffee_chats (source detected, stage by inference)`. Threads with up to three people are read: a thread that began 1:1 keeps moving P's chat when P later copies someone in, and a thread that began as a group only moves a chat already bound to it. When P's message is an `intro_offer` and puts someone on To/Cc (sent in the last 30 days), that person gets an `identified` chat on the same thread with `referrerPersonId = P`; their replies then move their own chat, and the student's reply moves the chats of the people it is addressed to. Larger group threads only produce touchpoints and co-thread edges.
 
 ### 5.4 `MessageSignal` (T4)
 
@@ -156,7 +156,11 @@ z.object({
   sentiment: z.enum(['warm','neutral','cool']),
 })
 ```
-Outbound messages (the student's own) are classified too (`signal` ∈ `thank_you | scheduling_proposal | other`) so that thank-yous sent outside Orbit still advance the stage.
+Outbound messages (the student's own) are classified too (`signal` ∈ `thank_you | scheduling_proposal | other`) so that thank-yous sent outside Orbit still advance the stage. Any note with thanks sent within 7 days after a chat reached `completed` counts as the thank-you.
+
+Heuristic fallback (no API key, or the call fails): `heuristicSignal` in `packages/core/src/email/triage.ts`, run on the quote- and signature-stripped body with the student's timezone. Inbound order: out of office (unless the message offers a time; the return date is kept as `extraction.returnDate`) → a redirect to a colleague (`intro_offer`, never a decline) → reschedule or counter-proposal (with a new time it is a `scheduling_proposal`, so the confirm card appears; without one a `reschedule`) → confirmation (invite sent or accepted, "see you then", "talk Thursday", a meeting link) → proposal (concrete times, a booking link, "does X work") → hard decline → referral and intro offers ("I'll pass your resume along", "looping in Sam (cc'd)") → soft decline ("slammed this quarter, maybe in the new year", "no longer at Google") → thank-you after a conversation (never "thanks for reaching out") → positive / question / neutral. A scheduling prompt ("let me know what works") is not stored as an ask of the student. `heuristicTriage` counts cues instead of testing for one word: networking vocabulary on both sides plus the student's outreach phrasing ("junior at", "would you be open to", "your perspective"), recruiting-process vocabulary, and phrase-level transactional cues ("your order", "verification code", not "order" or "payment"). Recruiting wins only with at least two recruiting cues (or one and a recruiter sender) that outnumber the networking ones, and never on a thread the student opened with a networking ask; networking confidence is `0.55 + 0.1 × min(cues, 3)` plus 0.1 for a two-way thread.
+
+Proposed times (heuristic): a small tokenizer (`packages/core/src/email/when.ts`) reads weekday, date (`10/8`, `Oct 8`, `the 8th`), `today`/`tomorrow`, clock time (`2pm`, `2:30`, `noon`), ranges (`2-3pm`, `from 2 to 4`, `between 10 and noon`), modifiers (`at`, `around`, `after`, `before`), part of day and zone (`ET`, `PST`, `Pacific`, IANA names) in either order (`2pm Thursday`). A bare hour needs a cue (`at 3`, a range, `in the afternoon`); words that only start like a weekday (`Monaco`, `month`) and past references (`last Friday at 5`) are ignored. Times resolve with Intl in the zone stated next to them, else a zone stated for the whole message ("all times Eastern", "I'm on Pacific time"), else the student's `user.timezone`; a stated zone is returned on the result as `timeZone`. Times already past at the message date are dropped.
 
 ---
 
@@ -181,7 +185,7 @@ Implemented in `packages/core/src/pipeline/transitions.ts` and mirrored in `appl
 | `nurturing|no_response|declined` | user starts new outreach | `outreach_sent` (new chat row) | 1.0 |
 | any | user drag/select | target | 1.0 (actor user) |
 
-`out_of_office` never transitions; `reschedule` from `scheduled` → `scheduling`. Illegal transitions are rejected and logged.
+`out_of_office` never transitions; when the auto-reply states a return date it is stored on the chat (`outOfOfficeUntil`) and the bump waits until the day after. `reschedule` from `scheduled` → `scheduling`. Illegal transitions are rejected and logged.
 
 ---
 

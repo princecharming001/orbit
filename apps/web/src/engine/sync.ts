@@ -1,5 +1,5 @@
 import type { User } from '@orbit/core';
-import { buildStyleCard } from '@orbit/core';
+import { buildStyleCard, parseAddressList } from '@orbit/core';
 import { notify, recomputeAllStrengths } from '../db/repo';
 import { db } from '../db/schema';
 import {
@@ -13,6 +13,13 @@ import {
 import { generateBrief, recommendationsRefresh } from './brief';
 import { recomputeEdges } from './graph';
 import { ingestEmails, ingestEvents, type RawEmail, type RawEvent } from './ingest';
+
+function sentAtOf(internalDate: string | undefined, dateHeader: string | undefined): string {
+  if (internalDate && Number.isFinite(Number(internalDate)))
+    return new Date(Number(internalDate)).toISOString();
+  const d = dateHeader ? new Date(dateHeader) : undefined;
+  return d && !Number.isNaN(d.getTime()) ? d.toISOString() : new Date().toISOString();
+}
 
 export interface SyncProgress {
   phase: string;
@@ -58,18 +65,11 @@ export async function syncGoogle(
           externalMessageId: m.id,
           externalThreadId: m.threadId,
           from: h.from ?? '',
-          to: (h.to ?? '')
-            .split(',')
-            .map((s) => s.trim())
-            .filter(Boolean),
-          cc: (h.cc ?? '')
-            .split(',')
-            .map((s) => s.trim())
-            .filter(Boolean),
+          // quoted display names may contain commas ("Doe, Jane" <jane@x.com>)
+          to: parseAddressList(h.to),
+          cc: parseAddressList(h.cc),
           subject: h.subject,
-          sentAt: m.internalDate
-            ? new Date(Number(m.internalDate)).toISOString()
-            : new Date(h.date ?? Date.now()).toISOString(),
+          sentAt: sentAtOf(m.internalDate, h.date),
           bodyText: text || m.snippet || '',
           headers: h,
           labels: m.labelIds,

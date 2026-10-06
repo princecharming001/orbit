@@ -1,0 +1,255 @@
+import type { User } from '@orbit/core';
+import { buildDemoDataset } from '@orbit/core';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { db, wipeDatabase } from '../db/schema';
+import { ingestEmails, type RawEmail } from './ingest';
+
+// Monday 5 October 2026, 9:00 AM Pacific
+const NOW = new Date('2026-10-05T16:00:00Z');
+let user: User;
+let seq = 0;
+
+function raw(p: Partial<RawEmail> & { from: string; bodyText: string; sentAt: string }): RawEmail {
+  seq++;
+  return {
+    externalMessageId: `m${seq}`,
+    externalThreadId: 't1',
+    to: [],
+    cc: [],
+    subject: 'Cornell junior, quick question',
+    headers: {},
+    ...p,
+  };
+}
+const ALEX = 'Alex Rivera <alex@cornell.edu>';
+const OUTREACH =
+  "Hi there,\n\nI'm a junior at Cornell studying CS. Would you be open to a brief chat in the next few weeks? I'd really value your perspective.\n\nBest,\nAlex";
+
+async function chatFor(email: string) {
+  const person = await db.people.filter((p) => p.emails.includes(email)).first();
+  const chat = person ? await db.chats.where('personId').equals(person.id).first() : undefined;
+  return { person, chat };
+}
+
+beforeEach(async () => {
+  await wipeDatabase();
+  const ds = buildDemoDataset({ now: NOW });
+  user = {
+    ...ds.user,
+    email: 'alex@cornell.edu',
+    fullName: 'Alex Rivera',
+    firstName: 'Alex',
+    lastName: 'Rivera',
+    school: 'Cornell University',
+    schoolDomain: 'cornell.edu',
+    timezone: 'America/Los_Angeles',
+  };
+  await db.users.put(user);
+  await db.settings.put({ ...ds.settings, userId: user.id });
+  await db.goals.put({ ...ds.goals, userId: user.id });
+});
+
+describe('ingest: email understanding', () => {
+  it('treats a person at a big bulk-mail employer as human and reads an explicit timezone', async () => {
+    await ingestEmails(
+      user,
+      [
+        raw({
+          from: ALEX,
+          to: ['Sarah Chen <sarah.chen@capitalone.com>'],
+          bodyText: OUTREACH,
+          sentAt: '2026-10-01T15:00:00Z',
+        }),
+        raw({
+          from: 'Sarah Chen <sarah.chen@capitalone.com>',
+          to: [ALEX],
+          bodyText: 'Happy to chat! Does Thursday at 2pm ET work for you?\n\nSarah',
+          sentAt: '2026-10-02T15:00:00Z',
+        }),
+      ],
+      { useLlm: false, now: NOW },
+    );
+    const { person, chat } = await chatFor('sarah.chen@capitalone.com');
+    expect(person?.isHuman).toBe(true);
+    expect(chat?.stage).toBe('scheduling');
+    const reply = await db.messages.where('externalMessageId').equals(`m${seq}`).first();
+    expect(reply?.isAutomated).toBe(false);
+    expect(reply?.signal).toBe('scheduling_proposal');
+    // 2pm Eastern on Thursday 8 October is 18:00 UTC (11 AM for a Pacific student), not 2pm Pacific
+    expect(reply?.extraction?.proposedTimes[0]?.startIso).toBe('2026-10-08T18:00:00.000Z');
+    expect(reply?.extraction?.proposedTimes[0]?.timeZone).toBe('America/New_York');
+  });
+
+  it('treats mail from a send-as alias as the student’s own', async () => {
+    await ingestEmails(
+      user,
+      [
+        raw({
+          from: 'Alex Rivera <ar123@cornell.edu>',
+          to: ['Tom Baker <tom@figma.com>'],
+          bodyText: OUTREACH,
+          sentAt: '2026-10-01T15:00:00Z',
+          labels: ['SENT'],
+        }),
+        raw({
+          from: 'Tom Baker <tom@figma.com>',
+          to: ['Alex Rivera <ar123@cornell.edu>'],
+          bodyText: 'Sure, happy to chat. Does Friday at 11am work?',
+          sentAt: '2026-10-02T15:00:00Z',
+        }),
+      ],
+      { useLlm: false, now: NOW },
+    );
+    const msgs = await db.messages.orderBy('sentAt').toArray();
+    expect(msgs.map((m) => m.direction)).toEqual(['outbound', 'inbound']);
+    expect(await db.people.filter((p) => p.emails.includes('ar123@cornell.edu')).count()).toBe(0);
+    const { chat } = await chatFor('tom@figma.com');
+    expect(chat?.stage).toBe('scheduling');
+  });
+
+  it('recognises a school-domain alias by the student’s own name without a SENT label', async () => {
+    await ingestEmails(
+      user,
+      [
+        raw({
+          from: '"Rivera, Alex" <ar123@cornell.edu>',
+          to: ['"Baker, Tom" <tom@figma.com>'],
+          bodyText: OUTREACH,
+          sentAt: '2026-10-01T15:00:00Z',
+        }),
+      ],
+      { useLlm: false, now: NOW },
+    );
+    const m = await db.messages.toCollection().first();
+    expect(m?.direction).toBe('outbound');
+    expect(m?.toEmails).toEqual(['tom@figma.com']);
+  });
+
+  it('records an out-of-office auto-reply with its return date and holds the bump', async () => {
+    await ingestEmails(
+      user,
+      [
+        raw({ from: ALEX, to: ['nina@google.com'], bodyText: OUTREACH, sentAt: '2026-09-21T15:00:00Z' }),
+        raw({
+          from: 'Nina Patel <nina@google.com>',
+          to: [ALEX],
+          subject: 'Automatic reply: Cornell junior, quick question',
+          headers: { 'auto-submitted': 'auto-replied' },
+          bodyText:
+            'Thank you for your email. I am out of the office until Monday, October 19 with limited access to email.',
+          sentAt: '2026-09-21T15:01:00Z',
+        }),
+      ],
+      { useLlm: false, now: NOW },
+    );
+    const { chat } = await chatFor('nina@google.com');
+    expect(chat?.stage).toBe('outreach_sent');
+    expect(chat?.outOfOfficeUntil).toBe('2026-10-19');
+    const ooo = await db.messages.where('externalMessageId').equals(`m${seq}`).first();
+    expect(ooo?.isAutomated).toBe(true);
+    expect(ooo?.signal).toBe('out_of_office');
+    expect(ooo?.extraction?.returnDate).toBe('2026-10-19');
+    const bumps = await db.suggestions.filter((s) => s.kind === 'follow_up_bump').count();
+    expect(bumps).toBe(0);
+  });
+
+  it('reads an intro with the new person on CC and opens a chat for them credited to the introducer', async () => {
+    await ingestEmails(
+      user,
+      [
+        raw({
+          from: ALEX,
+          to: ['Dana Ortiz <dana@figma.com>'],
+          bodyText: OUTREACH,
+          sentAt: '2026-10-01T15:00:00Z',
+        }),
+        raw({
+          from: 'Dana Ortiz <dana@figma.com>',
+          to: [ALEX],
+          cc: ['Sam Cho <sam@figma.com>'],
+          bodyText:
+            "Of course! Looping in Sam (cc'd) who leads growth. Sam, Alex is a Cornell junior who would love 15 minutes.",
+          sentAt: '2026-10-02T15:00:00Z',
+        }),
+      ],
+      { useLlm: false, now: NOW },
+    );
+    const thread = await db.threads.toCollection().first();
+    expect(thread?.isNetworking).toBe(true);
+    const dana = await chatFor('dana@figma.com');
+    expect(dana.chat?.stage).toBe('replied');
+    const sam = await chatFor('sam@figma.com');
+    expect(sam.chat?.stage).toBe('identified');
+    expect(sam.chat?.referrerPersonId).toBe(dana.person?.id);
+    const intro = await db.messages.where('externalMessageId').equals(`m${seq}`).first();
+    expect(intro?.signal).toBe('intro_offer');
+  });
+
+  it('skips a Google Calendar invitation from a human organizer', async () => {
+    await ingestEmails(
+      user,
+      [
+        raw({ from: ALEX, to: ['rae@figma.com'], bodyText: OUTREACH, sentAt: '2026-10-01T15:00:00Z' }),
+        raw({
+          from: 'Rae Kim <rae@figma.com>',
+          to: [ALEX],
+          subject: 'Invitation: Coffee chat @ Thu Oct 8, 2pm - 2:30pm (PDT)',
+          headers: { sender: 'Google Calendar <calendar-notification@google.com>' },
+          bodyText:
+            'You have been invited to the following event.\n\nJoin with Google Meet\nInvitation from Google Calendar',
+          sentAt: '2026-10-02T15:00:00Z',
+        }),
+      ],
+      { useLlm: false, now: NOW },
+    );
+    const invite = await db.messages.where('externalMessageId').equals(`m${seq}`).first();
+    expect(invite?.isAutomated).toBe(true);
+    expect(invite?.signal).toBeUndefined();
+    expect(await db.suggestions.filter((s) => s.kind === 'schedule_propose').count()).toBe(0);
+  });
+
+  it('moves a completed chat to followed_up on a natural thank-you note', async () => {
+    await ingestEmails(
+      user,
+      [raw({ from: ALEX, to: ['priya@figma.com'], bodyText: OUTREACH, sentAt: '2026-09-20T15:00:00Z' })],
+      { useLlm: false, now: NOW },
+    );
+    const { chat } = await chatFor('priya@figma.com');
+    await db.chats.update(chat!.id, { stage: 'completed', completedAt: '2026-10-02T18:00:00Z' });
+    await ingestEmails(
+      user,
+      [
+        raw({
+          from: ALEX,
+          to: ['priya@figma.com'],
+          bodyText:
+            'Hi Priya,\n\nThank you again for the great conversation yesterday. Your point about owning one project end-to-end really stuck with me.\n\nBest,\nAlex',
+          sentAt: '2026-10-03T15:00:00Z',
+        }),
+      ],
+      { useLlm: false, now: NOW },
+    );
+    expect((await db.chats.get(chat!.id))?.stage).toBe('followed_up');
+  });
+
+  it('keeps the Calendly link in the stored body and drops the wrapped Gmail quote header', async () => {
+    await ingestEmails(
+      user,
+      [
+        raw({ from: ALEX, to: ['priya@figma.com'], bodyText: OUTREACH, sentAt: '2026-10-01T15:00:00Z' }),
+        raw({
+          from: 'Priya Sharma <priya@figma.com>',
+          to: [ALEX],
+          bodyText:
+            'Hi Alex,\n\nHappy to chat. Grab any slot here: https://calendly.com/priya/20min\n\nBest,\nPriya\n\nOn Thu, Oct 1, 2026 at 8:00 AM Alexander Rivera <\nalex@cornell.edu> wrote:\n\n> Hi there,\n> Would you be open to a brief chat?',
+          sentAt: '2026-10-02T15:00:00Z',
+        }),
+      ],
+      { useLlm: false, now: NOW },
+    );
+    const reply = await db.messages.where('externalMessageId').equals(`m${seq}`).first();
+    expect(reply?.bodyText).toContain('https://calendly.com/priya/20min');
+    expect(reply?.bodyText).not.toMatch(/wrote:|alex@cornell\.edu/);
+    expect(reply?.signal).toBe('scheduling_proposal');
+  });
+});

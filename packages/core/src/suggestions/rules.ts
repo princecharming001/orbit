@@ -138,7 +138,12 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
       if (
         bdays >= threshold &&
         chat.bumpCount < maxBumps &&
-        (!chat.lastInboundAt || new Date(chat.lastInboundAt) < since)
+        (!chat.lastInboundAt || new Date(chat.lastInboundAt) < since) &&
+        // an out-of-office reply holds the bump until the day after they are back
+        !(
+          chat.outOfOfficeUntil &&
+          now.getTime() < new Date(`${chat.outOfOfficeUntil}T00:00:00Z`).getTime() + 2 * DAY
+        )
       ) {
         out.push({
           kind: 'follow_up_bump',
