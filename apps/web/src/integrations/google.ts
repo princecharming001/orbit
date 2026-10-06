@@ -1,11 +1,17 @@
 // Client-side Google: Google Identity Services token flow, Gmail and Calendar REST.
-// Tokens live in memory + sessionStorage (1 hour); the user re-consents when expired.
+// Tokens live in memory + sessionStorage (1 hour). After the first full grant, reconnecting does not show the consent
+// screen again; Google only asks when a permission is missing.
 import { envGoogleClientId, readPrefs } from './prefs';
 
+export const GMAIL_READ_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
+export const GMAIL_SEND_SCOPE = 'https://www.googleapis.com/auth/gmail.send';
+/** Orbit only reads calendar events, so it asks for read-only access. */
+export const CALENDAR_READ_SCOPE = 'https://www.googleapis.com/auth/calendar.events.readonly';
+
 export const GOOGLE_SCOPES = [
-  'https://www.googleapis.com/auth/gmail.readonly',
-  'https://www.googleapis.com/auth/gmail.send',
-  'https://www.googleapis.com/auth/calendar.events',
+  GMAIL_READ_SCOPE,
+  GMAIL_SEND_SCOPE,
+  CALENDAR_READ_SCOPE,
   'openid',
   'email',
   'profile',
@@ -15,8 +21,53 @@ interface TokenState {
   accessToken: string;
   expiresAt: number;
   email?: string;
+  /** the scopes Google actually granted (the student can untick some on the consent screen) */
+  scopes?: string[];
 }
 const TOKEN_KEY = 'orbit.google.token';
+const GRANTED_KEY = 'orbit.google.granted';
+
+/** Parse the space-separated `scope` string of a GIS token response. */
+export function parseGrantedScopes(scope: string | undefined): string[] | undefined {
+  const list = (scope ?? '').split(/\s+/).filter(Boolean);
+  return list.length ? list : undefined;
+}
+
+/**
+ * What the student cannot do with the permissions they granted, in plain words, or undefined when everything Orbit
+ * needs was granted. An unknown grant (older connections stored no scopes) is treated as complete.
+ */
+export function googleScopeWarning(scopes: string[] | undefined): string | undefined {
+  if (!scopes?.length) return undefined;
+  const has = (s: string) => scopes.includes(s);
+  const missing: string[] = [];
+  if (!has(GMAIL_READ_SCOPE)) missing.push('read your email, so Orbit cannot sync your conversations');
+  if (!has(GMAIL_SEND_SCOPE))
+    missing.push('send email, so approved emails will open in your mail app instead');
+  if (!has(CALENDAR_READ_SCOPE) && !has('https://www.googleapis.com/auth/calendar.readonly'))
+    missing.push('read your calendar, so Orbit cannot see your coffee chats');
+  if (!missing.length) return undefined;
+  return `Google did not give Orbit permission to ${missing.join(', or to ')}. Reconnect and allow every permission to fix this.`;
+}
+
+/** True when the grant allows sending; an unknown grant (no scopes stored) counts as allowed. */
+export function canSendWith(scopes: string[] | undefined): boolean {
+  return !scopes?.length || scopes.includes(GMAIL_SEND_SCOPE);
+}
+
+function grantedBefore(): boolean {
+  try {
+    return localStorage.getItem(GRANTED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+function setGrantedBefore(v: boolean) {
+  try {
+    if (v) localStorage.setItem(GRANTED_KEY, '1');
+    else localStorage.removeItem(GRANTED_KEY);
+  } catch {}
+}
 
 declare global {
   interface Window {
@@ -30,6 +81,7 @@ declare global {
             callback: (r: {
               access_token?: string;
               expires_in?: number;
+              scope?: string;
               error?: string;
               error_description?: string;
             }) => void;
@@ -79,6 +131,10 @@ export function loadGis(): Promise<void> {
   return gisPromise;
 }
 
+/**
+ * Ask Google for a token. The first connection shows the consent screen; later reconnects (the token lasts an hour)
+ * pass an empty prompt so Google skips it unless a permission is still missing.
+ */
 export async function connectGoogle(opts: { prompt?: 'consent' | '' } = {}): Promise<TokenState> {
   const clientId = googleClientId();
   if (!clientId) throw new Error('No Google OAuth client ID configured. Add it in Settings → Integrations.');
@@ -93,7 +149,10 @@ export async function connectGoogle(opts: { prompt?: 'consent' | '' } = {}): Pro
         const state: TokenState = {
           accessToken: r.access_token,
           expiresAt: Date.now() + (r.expires_in ?? 3600) * 1000,
+          scopes: parseGrantedScopes(r.scope),
         };
+        // skip the consent screen next time only when everything was granted
+        setGrantedBefore(!googleScopeWarning(state.scopes));
         try {
           const me = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
             headers: { Authorization: `Bearer ${state.accessToken}` },
@@ -105,7 +164,7 @@ export async function connectGoogle(opts: { prompt?: 'consent' | '' } = {}): Pro
       },
       error_callback: (e) => reject(new Error(e.message ?? e.type)),
     });
-    tc.requestAccessToken({ prompt: opts.prompt ?? 'consent' });
+    tc.requestAccessToken({ prompt: opts.prompt ?? (grantedBefore() ? '' : 'consent') });
   });
 }
 
@@ -113,6 +172,8 @@ export function disconnectGoogle(): void {
   const t = loadToken();
   if (t && window.google?.accounts?.oauth2) window.google.accounts.oauth2.revoke(t.accessToken);
   saveToken(undefined);
+  // the grant was revoked, so the next connection must show the consent screen
+  setGrantedBefore(false);
 }
 
 /** Retry policy for Google API calls; tests shorten the delays. */
@@ -134,6 +195,21 @@ function retryDelayMs(res: Response, attempt: number): number {
   }
   const exp = gfetchRetry.baseDelayMs * 2 ** attempt;
   return Math.min(exp + Math.random() * gfetchRetry.baseDelayMs, gfetchRetry.maxDelayMs);
+}
+
+async function isScope403(res: Response): Promise<boolean> {
+  try {
+    const j = (await res.clone().json()) as {
+      error?: { errors?: { reason?: string }[]; message?: string; details?: { reason?: string }[] };
+    };
+    return (
+      (j.error?.errors ?? []).some((e) => e.reason === 'insufficientPermissions') ||
+      (j.error?.details ?? []).some((d) => d.reason === 'ACCESS_TOKEN_SCOPE_INSUFFICIENT') ||
+      /insufficient authentication scopes/i.test(j.error?.message ?? '')
+    );
+  } catch {
+    return false;
+  }
 }
 
 async function isRateLimited403(res: Response): Promise<boolean> {
@@ -175,6 +251,10 @@ async function gfetch<T>(url: string, init: RequestInit = {}): Promise<T> {
     }
     if (retryable && (res.status === 429 || res.status === 403))
       throw new Error('Google is rate limiting Orbit right now. Try again in a few minutes.');
+    if (res.status === 403 && (await isScope403(res)))
+      throw new Error(
+        'Google did not give Orbit permission for this. Reconnect Google in Settings and allow every permission.',
+      );
     if (!res.ok) throw new Error(`Google API ${res.status}: ${(await res.text()).slice(0, 200)}`);
     return (await res.json()) as T;
   }

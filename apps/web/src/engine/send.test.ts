@@ -1,8 +1,21 @@
 import type { OutboundMessage, Suggestion, User } from '@orbit/core';
 import { newId } from '@orbit/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { openHandoff, runApproval } from '../components/approve';
 import { db } from '../db/schema';
-import { buildMimeMessage, gfetchRetry, gmailListIds } from '../integrations/google';
+import {
+  buildMimeMessage,
+  CALENDAR_READ_SCOPE,
+  connectGoogle as connectGoogleOAuth,
+  disconnectGoogle,
+  GMAIL_READ_SCOPE,
+  GMAIL_SEND_SCOPE,
+  GOOGLE_SCOPES,
+  gfetchRetry,
+  gmailListIds,
+  googleScopeWarning,
+} from '../integrations/google';
+import { writePrefs } from '../integrations/prefs';
 import { draftForSuggestion, draftMessage, startWarmUpOrOutreach } from './brief';
 import { loadDemo } from './demo';
 import { ingestEmails } from './ingest';
@@ -10,6 +23,7 @@ import {
   approveAndSend,
   checkSendAllowed,
   confirmHandoff,
+  handoffLink,
   revertHandoff,
   reviewDraft,
   sendDueQueued,
@@ -652,5 +666,170 @@ describe('gfetch retries (IS-6)', () => {
     const r = await approveAndSend(user, d.id, d.bodyDraft, undefined, new Date(), { undoWindowMs: 0 });
     expect(r.ok).toBe(false);
     expect(fail500).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('LinkedIn and mail hand-off in the browser (IS-5)', () => {
+  const fakeToast = () => {
+    const pushed: { text: string; action?: { label: string; onClick: () => void } }[] = [];
+    return { pushed, toast: { push: (t: (typeof pushed)[number]) => pushed.push(t) } as never };
+  };
+
+  it('says "Copied" only when the clipboard write worked, and offers an Open button when the tab was blocked', async () => {
+    const cold = await freshPerson(user, { email: false, linkedin: true, connected: true });
+    const d = await draftMessage(user, cold.id, 'nurture', 'linkedin');
+    const body = `Hi ${cold.firstName}, quick update from me on the internship search.`;
+    // clipboard refused and popup blocked
+    vi.stubGlobal('navigator', {
+      ...navigator,
+      clipboard: { writeText: () => Promise.reject(new Error('denied')) },
+    });
+    const open = vi.fn(() => null);
+    vi.stubGlobal('open', open);
+    const a = fakeToast();
+    expect(await runApproval(user, d, body, undefined, a.toast, cold.firstName)).toBeUndefined();
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(a.pushed[0]!.text).not.toMatch(/Copied/);
+    expect(a.pushed[0]!.text).toMatch(/blocked/);
+    expect(a.pushed[0]!.action?.label).toBe('Open LinkedIn');
+    expect((await db.outbound.get(d.id))!.status).toBe('handed_off');
+    // the Open button retries inside its own click
+    const win = { opener: {} as unknown };
+    open.mockReturnValueOnce(win as never);
+    a.pushed[0]!.action!.onClick();
+    expect(open).toHaveBeenLastCalledWith(expect.stringMatching(/linkedin\.com/), '_blank');
+    expect(win.opener).toBeNull();
+    // "Open again" resolves the same link while the message waits for confirmation
+    expect((await handoffLink(user, d.id))?.via).toBe('linkedin_compose');
+
+    // clipboard works and the tab opens
+    await revertHandoff(user, d.id);
+    const writes: string[] = [];
+    vi.stubGlobal('navigator', {
+      ...navigator,
+      clipboard: { writeText: async (t: string) => void writes.push(t) },
+    });
+    vi.stubGlobal(
+      'open',
+      vi.fn(() => ({ opener: null })),
+    );
+    const b = fakeToast();
+    await runApproval(user, (await db.outbound.get(d.id))!, body, undefined, b.toast, cold.firstName);
+    expect(writes).toEqual([body]);
+    expect(b.pushed[0]!.text).toMatch(/^Copied\./);
+    expect(b.pushed[0]!.action).toBeUndefined();
+    await confirmHandoff(user, d.id);
+    expect(await handoffLink(user, d.id)).toBeUndefined();
+  });
+
+  it('a mail hand-off opens through a link click, not a popup window', () => {
+    const open = vi.fn(() => null);
+    vi.stubGlobal('open', open);
+    const clicked: string[] = [];
+    const spy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      clicked.push(this.href);
+    });
+    expect(openHandoff('mailto:a%40b.com?subject=Re%3A%20Hi&body=x')).toBe(true);
+    expect(clicked[0]).toMatch(/^mailto:/);
+    expect(open).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+});
+
+describe('Google permissions (IS-10)', () => {
+  it('asks for read-only calendar access and explains any permission the student did not grant', () => {
+    expect(GOOGLE_SCOPES).toContain(CALENDAR_READ_SCOPE);
+    expect(GOOGLE_SCOPES).not.toContain('https://www.googleapis.com/auth/calendar.events');
+    expect(googleScopeWarning(GOOGLE_SCOPES)).toBeUndefined();
+    expect(googleScopeWarning(undefined)).toBeUndefined();
+    const noSend = googleScopeWarning([GMAIL_READ_SCOPE, CALENDAR_READ_SCOPE, 'openid']);
+    expect(noSend).toMatch(/send email, so approved emails will open in your mail app/);
+    expect(noSend).not.toMatch(/[\u2013\u2014!]/);
+  });
+
+  it('without the send permission an approved email hands off to the mail app instead of failing at send time', async () => {
+    await connectGoogle(user);
+    await db.integrations.update('int_google', { scopes: [GMAIL_READ_SCOPE, CALENDAR_READ_SCOPE] });
+    const { d } = await pendingDraft(user, 'thank_you');
+    const r = await approveAndSend(user, d.id, d.bodyDraft);
+    expect(r.ok && r.status === 'handed_off' && r.via).toBe('mailto');
+    expect(fetchMock).not.toHaveBeenCalled();
+    // a token whose grant lacks gmail.send is also respected (older rows stored no scopes)
+    await revertHandoff(user, d.id);
+    await db.integrations.update('int_google', { scopes: [] });
+    sessionStorage.setItem(
+      'orbit.google.token',
+      JSON.stringify({ accessToken: 't', expiresAt: Date.now() + 3_600_000, scopes: [GMAIL_READ_SCOPE] }),
+    );
+    const r2 = await approveAndSend(user, d.id, d.bodyDraft);
+    expect(r2.ok && r2.status === 'handed_off').toBe(true);
+    // with the permission it queues for the Gmail API
+    await revertHandoff(user, d.id);
+    await db.integrations.update('int_google', { scopes: GOOGLE_SCOPES });
+    sessionStorage.setItem(
+      'orbit.google.token',
+      JSON.stringify({ accessToken: 't', expiresAt: Date.now() + 3_600_000, scopes: GOOGLE_SCOPES }),
+    );
+    const r3 = await approveAndSend(user, d.id, d.bodyDraft);
+    expect(r3.ok && r3.status).toBe('queued');
+  });
+
+  it('a 403 for a missing permission says so in plain words', async () => {
+    await connectGoogle(user);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        Response.json(
+          {
+            error: {
+              message: 'Request had insufficient authentication scopes.',
+              errors: [{ reason: 'insufficientPermissions' }],
+            },
+          },
+          { status: 403 },
+        ),
+      ),
+    );
+    await expect(gmailListIds('in:sent')).rejects.toThrow(/did not give Orbit permission/);
+  });
+
+  it('shows the consent screen on the first connection only, records the granted scopes, and again after disconnect', async () => {
+    localStorage.clear();
+    writePrefs({ googleClientId: 'test-client.apps.googleusercontent.com' });
+    const prompts: (string | undefined)[] = [];
+    let granted = GOOGLE_SCOPES.join(' ');
+    let requested = '';
+    vi.stubGlobal('google', {
+      accounts: {
+        oauth2: {
+          initTokenClient: (cfg: { scope: string; callback: (r: object) => void }) => ({
+            requestAccessToken: (o?: { prompt?: string }) => {
+              prompts.push(o?.prompt);
+              requested = cfg.scope;
+              cfg.callback({ access_token: 'tok', expires_in: 3600, scope: granted });
+            },
+          }),
+          revoke: () => {},
+        },
+      },
+    });
+    const first = await connectGoogleOAuth();
+    expect(requested).toContain('calendar.events.readonly');
+    expect(first.scopes).toEqual(GOOGLE_SCOPES);
+    await connectGoogleOAuth();
+    expect(prompts).toEqual(['consent', '']);
+    // a partial grant keeps asking with the consent screen until everything is allowed
+    granted = [GMAIL_READ_SCOPE, CALENDAR_READ_SCOPE].join(' ');
+    const partial = await connectGoogleOAuth();
+    expect(partial.scopes).not.toContain(GMAIL_SEND_SCOPE);
+    await connectGoogleOAuth();
+    expect(prompts.at(-1)).toBe('consent');
+    granted = GOOGLE_SCOPES.join(' ');
+    await connectGoogleOAuth();
+    disconnectGoogle();
+    await connectGoogleOAuth();
+    expect(prompts.at(-1)).toBe('consent');
   });
 });

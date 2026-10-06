@@ -20,7 +20,14 @@ import {
 } from '@orbit/core';
 import { addTouchpoint, audit, feedback, notify, recomputePersonStrength } from '../db/repo';
 import { db } from '../db/schema';
-import { gmailGet, gmailHeaders, gmailSend, messageIdTokens } from '../integrations/google';
+import {
+  canSendWith,
+  currentGoogleToken,
+  gmailGet,
+  gmailHeaders,
+  gmailSend,
+  messageIdTokens,
+} from '../integrations/google';
 import { evaluateImmediateSuggestions, findReferrerFor } from './brief';
 import { evaluateTrigger } from './stages';
 
@@ -338,12 +345,18 @@ export type ApproveResult =
   | { ok: true; status: 'handed_off'; handoffUrl: string; via: HandoffVia; threaded: boolean }
   | { ok: false; error: string; issues?: DraftIssue[] };
 
+/**
+ * True when approved email goes out through the Gmail API: Google is connected and the student granted the send
+ * permission (they can untick it on the consent screen). Otherwise approval hands off to the mail app.
+ */
 export async function googleSendActive(userId: string): Promise<boolean> {
-  return !!(await db.integrations
+  const g = await db.integrations
     .where('userId')
     .equals(userId)
     .filter((i) => i.provider === 'google' && i.status === 'active')
-    .first());
+    .first();
+  if (!g) return false;
+  return canSendWith(g.scopes) && canSendWith(currentGoogleToken()?.scopes);
 }
 
 /** Atomically move a message from one of `from` to `changes.status`; undefined when it was not in `from`. */
@@ -503,6 +516,19 @@ export async function revertHandoff(user: User, messageId: string): Promise<bool
   });
   if (m) await audit(user.id, 'message.handoff_reverted', { objectTable: 'outbound', objectId: messageId });
   return !!m;
+}
+
+/** Where a handed-off message opens again (the mail app or LinkedIn), for the "Open again" button. */
+export async function handoffLink(
+  user: User,
+  messageId: string,
+): Promise<{ url: string; via: HandoffVia } | undefined> {
+  const m = await db.outbound.get(messageId);
+  if (!m || m.userId !== user.id || m.status !== 'handed_off') return undefined;
+  const person = await db.people.get(m.personId);
+  if (!person) return undefined;
+  const h = handoffFor(m, person, m.bodyFinal ?? m.bodyDraft, await envelopeFor(m, m.subject));
+  return 'error' in h ? undefined : h;
 }
 
 /** The student confirms they sent the hand-off: record it as sent, with the touchpoint and stage change. */

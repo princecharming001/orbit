@@ -9,7 +9,13 @@ import { importConnectionsCsv } from '../engine/linkedin';
 import { saveResume } from '../engine/resume';
 import { syncGoogle } from '../engine/sync';
 import { hasLlm, testApiKey } from '../integrations/anthropic';
-import { connectGoogle, currentGoogleToken, disconnectGoogle, googleClientId } from '../integrations/google';
+import {
+  connectGoogle,
+  currentGoogleToken,
+  disconnectGoogle,
+  googleClientId,
+  googleScopeWarning,
+} from '../integrations/google';
 import { readPrefs, writePrefs } from '../integrations/prefs';
 import { useSession } from '../state/session';
 import { Button, Card, cx, Input, Label, PageHeader, Select, Spinner, Textarea, useToast } from '../ui';
@@ -350,14 +356,17 @@ function Integrations() {
         provider: 'google',
         externalAccountId: t.email,
         status: 'active',
-        scopes: [],
+        scopes: t.scopes ?? [],
         syncState: google?.syncState ?? {},
         connectedAt: google?.connectedAt ?? new Date().toISOString(),
       });
       await syncGoogle(user, {
         onProgress: (p) => setBusy(`${p.phase} ${p.total > 1 ? `${p.done}/${p.total}` : ''}`),
       });
-      toast.push({ text: 'Google synced.', tone: 'good' });
+      const missing = googleScopeWarning(t.scopes);
+      toast.push(
+        missing ? { text: missing, tone: 'bad', ttl: 10_000 } : { text: 'Google synced.', tone: 'good' },
+      );
     } catch (e) {
       toast.push({ text: String((e as Error).message ?? e), tone: 'bad', ttl: 7000 });
       if (google)

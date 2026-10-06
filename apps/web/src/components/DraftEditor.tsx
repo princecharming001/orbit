@@ -9,6 +9,7 @@ import {
   confirmHandoff,
   type DraftIssue,
   draftEnvelope,
+  handoffLink,
   isConnectionNote,
   revertHandoff,
   reviewDraft,
@@ -16,7 +17,7 @@ import {
 } from '../engine/send';
 import { useSession } from '../state/session';
 import { Button, cx, Input, relDate, Textarea, useToast } from '../ui';
-import { copyText } from './approve';
+import { copyText, openHandoff } from './approve';
 
 const INPUT_PROMPT: Record<
   'connection' | 'update' | 'post',
@@ -249,6 +250,11 @@ export function OutboxStatus({ draft, onClose }: { draft: OutboundMessage; onClo
   const { user } = useSession();
   const toast = useToast();
   const person = useLiveQuery(() => db.people.get(draft.personId), [draft.personId]);
+  // resolved ahead of the click, so "Open again" opens inside the click and is not treated as a popup
+  const link = useLiveQuery(
+    async () => (user && draft.status === 'handed_off' ? handoffLink(user, draft.id) : undefined),
+    [user?.id, draft.id, draft.status, draft.bodyFinal],
+  );
   const [now, setNow] = useState(() => Date.now());
   const [working, setWorking] = useState(false);
   useEffect(() => {
@@ -314,6 +320,20 @@ export function OutboxStatus({ draft, onClose }: { draft: OutboundMessage; onClo
         >
           I sent it
         </Button>
+        {link && (
+          <Button
+            size="sm"
+            disabled={working}
+            onClick={() => {
+              if (!openHandoff(link.url))
+                toast.push({
+                  text: 'Your browser blocked the new tab. Allow pop-ups for Orbit and try again.',
+                });
+            }}
+          >
+            {link.via === 'mailto' ? 'Open mail app again' : 'Open LinkedIn again'}
+          </Button>
+        )}
         {draft.channel === 'linkedin' && (
           <Button
             size="sm"

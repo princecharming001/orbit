@@ -15,6 +15,28 @@ export async function copyText(text: string): Promise<boolean> {
   }
 }
 
+/**
+ * Open a hand-off. A mailto link goes through an anchor click (no blank tab, and it is not a popup); LinkedIn opens in
+ * a new tab. Returns false when the browser blocked the tab, so the caller can offer a button that opens it inside a
+ * fresh click.
+ */
+export function openHandoff(url: string): boolean {
+  if (url.startsWith('mailto:')) {
+    const a = document.createElement('a');
+    a.href = url;
+    a.rel = 'noopener';
+    a.click();
+    return true;
+  }
+  // no 'noopener' feature here: with it window.open always returns null and a blocked tab cannot be detected
+  const w = window.open(url, '_blank');
+  if (!w) return false;
+  try {
+    w.opener = null;
+  } catch {}
+  return true;
+}
+
 export function handoffToast(via: HandoffVia, copied: boolean, threaded: boolean): string {
   if (via === 'mailto')
     return threaded
@@ -31,8 +53,9 @@ export function handoffToast(via: HandoffVia, copied: boolean, threaded: boolean
 
 /**
  * Approve from an editor. The LinkedIn copy starts inside the click (browsers drop clipboard access after long async
- * gaps), the hand-off opens only after approval succeeded, and the toast says exactly what happened. Returns the
- * error to show inline in the editor, if any.
+ * gaps), the hand-off opens only after approval succeeded, and the toast says exactly what happened: "Copied" only
+ * when the clipboard write succeeded, and an Open button when the browser blocked the tab. Returns the error to show
+ * inline in the editor, if any.
  */
 export async function runApproval(
   user: User,
@@ -48,8 +71,17 @@ export async function runApproval(
   if (!r.ok) return r.error;
   const name = firstName ?? 'them';
   if (r.status === 'handed_off') {
-    window.open(r.handoffUrl, '_blank', 'noopener');
-    toast.push({ text: handoffToast(r.via, copied, r.threaded), tone: 'good', ttl: 8000 });
+    const url = r.handoffUrl;
+    if (openHandoff(url))
+      toast.push({ text: handoffToast(r.via, copied, r.threaded), tone: 'good', ttl: 8000 });
+    else
+      toast.push({
+        text: copied
+          ? 'Copied. Your browser blocked the LinkedIn tab, so open it here.'
+          : 'Your browser blocked the LinkedIn tab, so open it here and copy the message from the card.',
+        ttl: 15_000,
+        action: { label: 'Open LinkedIn', onClick: () => openHandoff(url) },
+      });
   } else if (r.status === 'queued') {
     toast.push({
       text: `Sending to ${name} in ${Math.round(UNDO_WINDOW_MS / 1000)} seconds.`,

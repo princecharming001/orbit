@@ -9,7 +9,7 @@ import { generateBrief, recommendationsRefresh } from '../engine/brief';
 import { importConnectionsCsv } from '../engine/linkedin';
 import { saveResume } from '../engine/resume';
 import { syncGoogle } from '../engine/sync';
-import { connectGoogle, googleClientId } from '../integrations/google';
+import { connectGoogle, googleClientId, googleScopeWarning } from '../integrations/google';
 import { readPrefs, writePrefs } from '../integrations/prefs';
 import { useSession } from '../state/session';
 import { Button, Card, cx, Input, Label, Select, Spinner, Textarea, useToast } from '../ui';
@@ -558,7 +558,7 @@ function StepGoogle({ onNext, onBack }: { onNext: () => void; onBack: () => void
         provider: 'google',
         externalAccountId: t.email,
         status: 'active',
-        scopes: [],
+        scopes: t.scopes ?? [],
         syncState: {},
         connectedAt: new Date().toISOString(),
       });
@@ -568,6 +568,7 @@ function StepGoogle({ onNext, onBack }: { onNext: () => void; onBack: () => void
         onProgress: (p) => setBusy(`${p.phase} ${p.total > 1 ? `${p.done}/${p.total}` : ''}`),
       });
       setBusy(undefined);
+      setError(googleScopeWarning(t.scopes));
     } catch (e) {
       setBusy(undefined);
       setError(String((e as Error).message ?? e));
