@@ -3,7 +3,7 @@ import { heuristicNoteExtraction, newId, normalizeEmail, parseGranolaText, parse
 import { addTouchpoint, notify, recomputePersonStrength } from '../db/repo';
 import { db } from '../db/schema';
 import { hasLlm, llmNoteExtraction } from '../integrations/anthropic';
-import { evaluateImmediateSuggestions, refreshPersonSummary } from './brief';
+import { evaluateImmediateSuggestions, refreshPersonSummary, surfaceLlmFailure } from './brief';
 import { upsertPerson } from './people';
 import { evaluateTrigger } from './stages';
 
@@ -124,7 +124,9 @@ export async function processNote(user: User, note: MeetingNote, now = new Date(
   const primary = note.personIds[0] ? await db.people.get(note.personIds[0]) : undefined;
   const ext =
     (hasLlm()
-      ? await llmNoteExtraction(note.rawText, primary?.displayName, user.fullName).catch(() => undefined)
+      ? await llmNoteExtraction(note.rawText, primary?.displayName, user.fullName).catch((e) =>
+          surfaceLlmFailure(user.id, e),
+        )
       : undefined) ?? heuristicNoteExtraction(note.rawSummary ?? note.rawText, primary?.firstName);
   await db.notes.update(note.id, { extraction: ext, summary: ext.summary, processedAt: now.toISOString() });
   if (!primary) return;
