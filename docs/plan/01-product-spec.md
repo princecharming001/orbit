@@ -320,7 +320,7 @@ Events are listed in `11-testing-evals-observability.md` section 5.
 The drafting system (`05` section 7) is told, for every message:
 
 - Audience: a professional the student does not know well; keep under 120 words for first outreach, under 80 for bumps, under 100 for thank-yous. [DEFAULT]
-- Structure for outreach: one line of connection (shared school, mutual contact, specific interest), one line of context (who the student is, one specific thing), one ask (a 15 to 20 minute call, with 2 time windows or the scheduling link), a short sign-off.
+- Structure for outreach: one line of connection (shared school, mutual contact, specific interest), one line of context (who the student is, one specific thing), one ask (a 15 to 20 minute call, scheduling deferred to them; no slot grid or calendar link to a stranger), a short sign-off. Concrete windows come once they say yes (`schedule`): two real free slots from the student's calendar on different days and times, dated, in the student's timezone, with the scheduling link only as the fallback when no free slot is known.
 - Voice: the student's style card (greeting, sign-off, formality, sentence length, use of contractions, emoji policy) learned from their sent mail; never more formal than the student's own writing.
 - Specificity: at least one concrete, fact-backed detail about the recipient; never generic praise.
 - Never: fabricate a mutual connection, claim to have read something not in the facts, mention the student's GPA unless they put it in the goals, or apologise for writing.

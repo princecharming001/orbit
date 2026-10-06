@@ -25,7 +25,11 @@ export function sectorOf(
       person.industry ?? '',
     )
   ) {
-    if (TECH_TITLE.test(t) && !/analyst|associate|vice president|managing director/i.test(t)) return 'tech';
+    // "Associate Product Manager" is a PM; "Associate, M&A" is a banker.
+    const bankingTitle =
+      /\b(analyst|vice president|managing director)\b/i.test(t) ||
+      /\bassociate\b(?!\s+(product|software|design|data|engineer|program))/i.test(t);
+    if (TECH_TITLE.test(t) && !bankingTitle) return 'tech';
     return 'finance';
   }
   if (CONSULTING_ORG.test(o) || /\bconsulting\b/i.test(person.industry ?? '')) return 'consulting';

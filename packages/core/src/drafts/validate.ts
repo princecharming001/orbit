@@ -31,7 +31,9 @@ export interface ValidationIssue {
     | 'exclamations'
     | 'i_heavy'
     | 'long_sentences'
-    | 'referral_without_conversation';
+    | 'referral_without_conversation'
+    | 'unsupported_detail'
+    | 'needs_input';
   detail: string;
   blocking: boolean;
 }
@@ -46,6 +48,93 @@ export interface ValidateOptions {
   recentOpenings?: string[];
   hadConversation?: boolean;
   channel?: 'gmail' | 'linkedin' | 'clipboard';
+  /**
+   * Everything the draft may mention (see `contextText`). When given, any name, company, post, event, mutual
+   * connection or number in the body that is not in it is flagged, whether or not the draft cites claims.
+   */
+  context?: string;
+}
+
+const NEED_DETAIL: Record<string, string> = {
+  news: 'Say what you are congratulating them on.',
+  target: 'Name the person you would like to be introduced to.',
+  answer: 'Answer their question in your own words.',
+  role: 'Name the role and company you are applying to.',
+};
+
+/** Capitalised words that are fine anywhere without appearing in the context. */
+const COMMON_CAPS = new Set(
+  `i i'm i'd i'll i've hi hey hello dear thanks thank best kind regards cheers warmly sincerely ps re fwd
+  monday tuesday wednesday thursday friday saturday sunday mon tue wed thu fri sat sun
+  january february march april may june july august september october november december jan feb mar apr jun jul aug sep sept oct nov dec
+  et pt ct mt est edt pst pdt cst cdt mst mdt utc gmt am pm zoom google meet linkedin email ok
+  would could can will should do does did is are was were have has had may might must
+  what which why how when where who whatever whenever however
+  quick small just also and but so or if as at in on for to of from by with about after before since though
+  the a an this that these those there here it its my your our their his her we you they he she
+  no yes not completely totally absolutely happy glad sorry hope hoping looking last one two few next
+  any anything anyone someone something all some most many much more still even only really
+  saw read found noticed met came floating following followed surfacing congratulations congrats well
+  speaking also especially again either neither both each every other another
+  resume cv`.split(/\s+/),
+);
+const PHRASE_CHECKS: { re: RegExp; anchor: RegExp; what: string }[] = [
+  {
+    re: /\b(mutual (connection|friend|contact)s?|we('ve| have)? (both )?(know|known)|our (mutual|shared) (friend|contact|connection)|(friend|colleague) of yours)\b/i,
+    anchor: /\b(referr|mutual|introduc|suggested I write)/i,
+    what: 'a mutual connection',
+  },
+  {
+    re: /\byour (recent |latest |last )?(post|article|blog|podcast|piece|newsletter|video|essay|op-ed|interview)\b/i,
+    anchor: /\b(post|article|blog|podcast|piece|newsletter|video|essay|interview|warmUpNote)\b/i,
+    what: 'a post or article',
+  },
+  {
+    re: /\b(we met|met you|when we met|you spoke at|your talk|your panel|in the audience)\b/i,
+    anchor: /\b(met|panel|spoke|talk|event|session|conference|workshop|fireside|completedAt|meetingAt)\b/i,
+    what: 'a meeting or event',
+  },
+  { re: /\bGPA\b/i, anchor: /\bGPA\b/i, what: 'a GPA' },
+];
+
+/** Names, companies, posts, mutual connections and figures in `body` that are not in `context`. */
+export function unsupportedDetails(body: string, context: string): string[] {
+  const ctx = context.toLowerCase();
+  const has = (w: string) => {
+    const l = w.toLowerCase();
+    return new RegExp(`(^|[^a-z0-9])${l.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^a-z0-9]|$)`).test(ctx);
+  };
+  const out: string[] = [];
+  const re = /[A-Z][A-Za-z&'.-]*(?:\s+(?:&\s+)?[A-Z][A-Za-z&'.-]*)*/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(body))) {
+    const before = body.slice(0, m.index);
+    if (/[A-Za-z0-9'@./-]$/.test(before)) continue; // inside a word, URL or email
+    const sentenceStart = /(^|[.!?:;"]\s+|\n\s*|\(\s*)$/.test(before);
+    const phrase = m[0].replace(/'s$/, '').replace(/[.'-]+$/, '');
+    if (!phrase || has(phrase)) continue;
+    const words = phrase.split(/\s+/);
+    const unknown = words.filter((w, i) => {
+      const bare = w.replace(/'s$/, '').replace(/[.'-]+$/, '');
+      if (!bare || COMMON_CAPS.has(bare.toLowerCase()) || has(bare)) return false;
+      // a single capitalised word opening a sentence is usually just English
+      if (i === 0 && sentenceStart && words.length === 1 && /^[A-Z][a-z]+$/.test(bare)) return false;
+      return true;
+    });
+    if (unknown.length) out.push(phrase);
+  }
+  for (const p of PHRASE_CHECKS) {
+    const hit = body.match(p.re);
+    if (hit && !p.anchor.test(context)) out.push(`${p.what} ("${hit[0]}")`);
+  }
+  // figures: percentages, decimals, money and large numbers must come from the data
+  for (const f of body.match(/\$?\d[\d,]*(\.\d+)?%?/g) ?? []) {
+    const plain = f.replace(/[$,%]/g, '');
+    const interesting = /[%$.]/.test(f) || Number(plain) >= 100;
+    if (!interesting || /^(19|20)\d\d$/.test(plain)) continue;
+    if (!ctx.includes(plain) && !ctx.includes(f.toLowerCase())) out.push(f);
+  }
+  return [...new Set(out)];
 }
 
 export function validateDraft(
@@ -82,10 +171,16 @@ export function validateDraft(
         detail: `Add one line only true of ${opts.recipientFirstName}: how you found them, what you share, or what of theirs you read.`,
         blocking: true,
       });
-    if (n === 'update')
+    else if (n === 'update')
       issues.push({
         code: 'needs_update',
         detail: 'Add one real update since you last spoke.',
+        blocking: true,
+      });
+    else if (n !== 'post')
+      issues.push({
+        code: 'needs_input',
+        detail: NEED_DETAIL[n] ?? 'Fill in the bracketed line.',
         blocking: true,
       });
   }
@@ -170,7 +265,18 @@ export function validateDraft(
       detail: `${long.length} sentence${long.length > 1 ? 's' : ''} over 32 words`,
       blocking: false,
     });
-  if (opts.kind === 'referral_ask' && opts.hadConversation === false)
+  if (opts.context !== undefined)
+    for (const u of unsupportedDetails(`${d.subject ?? ''}\n${body}\n${d.bodyShort ?? ''}`, opts.context))
+      issues.push({
+        code: 'unsupported_detail',
+        detail: `${u} is not in anything Orbit knows about this person`,
+        blocking: true,
+      });
+  if (
+    opts.kind === 'referral_ask' &&
+    opts.hadConversation === false &&
+    /\b(refer me|flag(ging)? my (name|application)|submit my name|put in a word)\b/i.test(body)
+  )
     issues.push({
       code: 'referral_without_conversation',
       detail: 'ask for a referral only after a real conversation',

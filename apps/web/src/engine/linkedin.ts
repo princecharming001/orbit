@@ -39,6 +39,28 @@ export async function importConnectionsCsv(
         .equals(person.id)
         .filter((a) => a.kind === 'employment' && a.isCurrent)
         .first();
+      // a re-import that shows a new company or title is a job change: close the old role, open the new one
+      // dated today (drafting reads it as the news for a congratulate note)
+      const changed =
+        !!existing &&
+        (existing.nameRaw.toLowerCase() !== r.company.toLowerCase() ||
+          (!!existing.title && !!r.position && existing.title !== r.position));
+      if (changed) {
+        const today = new Date().toISOString().slice(0, 10);
+        await db.affiliations.update(existing!.id, { isCurrent: false, endDate: today });
+        await db.affiliations.add({
+          id: newId('aff'),
+          userId: user.id,
+          personId: person.id,
+          kind: 'employment',
+          organizationId: person.currentOrganizationId,
+          nameRaw: r.company,
+          title: r.position,
+          startDate: today,
+          isCurrent: true,
+          source: 'linkedin_csv',
+        });
+      }
       if (!existing)
         await db.affiliations.add({
           id: newId('aff'),

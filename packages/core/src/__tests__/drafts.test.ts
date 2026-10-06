@@ -2,15 +2,22 @@ import { describe, expect, it } from 'vitest';
 import { sectorOf, seniorityOf, yearLabel } from '../drafts/sector';
 import {
   BANNED_PHRASES,
+  clause,
+  contextText,
   type DraftContext,
   deriveConnection,
   draftWarmUpComment,
+  fitNote,
   generateDraft,
   LINKEDIN_NOTE_MAX,
   MAX_WORDS,
+  overlapsBusy,
+  proposeWindows,
+  schoolShort,
+  targetLabel,
   wordsIn,
 } from '../drafts/templates';
-import { isBlocked, validateDraft } from '../drafts/validate';
+import { isBlocked, unsupportedDetails, validateDraft } from '../drafts/validate';
 import { defaultStyleCard } from '../style/card';
 import type { PersonFact } from '../types';
 
@@ -75,6 +82,7 @@ const check = (ctx: DraftContext, extra: Partial<Parameters<typeof validateDraft
     recipientFirstName: ctx.person.firstName,
     recipientFullName: ctx.person.fullName,
     channel: ctx.channel,
+    context: contextText(ctx),
     ...extra,
   });
   return { d, issues, blocking: issues.filter((i) => i.blocking) };
@@ -97,7 +105,11 @@ describe('sector and seniority', () => {
 });
 
 describe('connection derivation', () => {
-  it('prefers referral, then event, alumni, warm-up, transition, shared employer, hook', () => {
+  it('prefers referral, then event, warm-up, alumni, shared employer, transition, hook', () => {
+    // a completed warm-up (a post the student engaged with) beats a shared school
+    expect(
+      deriveConnection(base({ chat: { warmUpNote: 'migrating off a monolith', warmUpDone: 3 } }))!.kind,
+    ).toBe('warmup');
     expect(deriveConnection(base({ chat: { referrerName: 'Mei Chen' } }))!.kind).toBe('referral');
     expect(
       deriveConnection(
@@ -152,7 +164,9 @@ describe('outreach', () => {
     const r = check(base());
     expect(r.blocking, JSON.stringify(r.issues)).toEqual([]);
     expect(r.d.subject!.length).toBeLessThanOrEqual(60);
-    expect(r.d.body).toMatch(/Cornell University/);
+    // students say "Cornell", not "Cornell University" (DQ-05)
+    expect(r.d.body).toMatch(/\bCornell\b/);
+    expect(r.d.body).not.toMatch(/Cornell University/);
     expect(r.d.body).toMatch(/20 minutes|20-minute/);
     expect(r.d.body).toMatch(/\?/);
     expect(wordsIn(r.d.body)).toBeLessThanOrEqual(MAX_WORDS.outreach);
@@ -177,8 +191,9 @@ describe('outreach', () => {
     );
     expect(r.blocking).toEqual([]);
     expect(r.d.sector).toBe('finance');
-    expect(r.d.body).toMatch(/Best,\nAlex Rivera\nCornell University '28$/);
-    expect(r.d.subject).toMatch(/Cornell University '28, quick question on Goldman Sachs healthcare/);
+    expect(r.d.body).toMatch(/Best,\nAlex Rivera\nCornell '28$/);
+    expect(r.d.register).toBe('formal');
+    expect(r.d.subject).toMatch(/Cornell '28, quick question on Goldman Sachs healthcare/);
     const sentences = r.d.body
       .split('\n')
       .slice(1)
@@ -255,11 +270,25 @@ describe('outreach', () => {
   it('LinkedIn note stays under 300 characters and carries the ask; connected person gets a message instead', () => {
     const n = check(base({ channel: 'linkedin' }));
     expect(n.d.bodyShort!.length).toBeLessThanOrEqual(LINKEDIN_NOTE_MAX);
-    expect(n.d.bodyShort).toMatch(/Hi Priya, Cornell University junior here/);
+    expect(n.d.bodyShort).toMatch(/Hi Priya, Cornell junior here/);
+    expect(n.d.bodyShort).not.toMatch(/fellow|Cornell University/i);
     expect(n.d.bodyShort).toMatch(/20 minutes/);
     expect(n.d.subject).toBeUndefined();
-    const m = check(base({ channel: 'linkedin', person: { ...base().person, linkedinConnected: true } }));
+    const m = check(
+      base({
+        channel: 'linkedin',
+        person: { ...base().person, linkedinConnected: true, linkedinConnectedAt: '2026-10-01' },
+      }),
+    );
     expect(m.d.body).toMatch(/^Hi Priya, thanks for connecting\./);
+    // a connection from two years ago is not thanked for connecting
+    const old = check(
+      base({
+        channel: 'linkedin',
+        person: { ...base().person, linkedinConnected: true, linkedinConnectedAt: '2024-09-01' },
+      }),
+    );
+    expect(old.d.body).not.toMatch(/thanks for connecting/);
     expect(wordsIn(m.d.body)).toBeLessThanOrEqual(90);
   });
   it('varies openings by seed and avoids a recent opening to the same company', () => {
@@ -390,6 +419,7 @@ describe('outreach', () => {
             const blockers = r.blocking.filter(
               (i) =>
                 !(kind === 'outreach' && i.code === 'needs_connection') &&
+                !(kind === 'reply' && i.code === 'needs_input') &&
                 i.code !== 'placeholder' &&
                 i.code !== 'no_specific_line',
             );
@@ -409,7 +439,11 @@ describe('outreach', () => {
 describe('other kinds', () => {
   it('bump 1 says buried and offers a pointer; bump 2 is the graceful last word', () => {
     const b1 = generateDraft(
-      base({ kind: 'bump', bumpNumber: 1, thread: { firstOutboundAt: '2026-09-29T12:00:00Z' } }),
+      base({
+        kind: 'bump',
+        bumpNumber: 1,
+        thread: { firstOutboundAt: '2026-09-29T12:00:00Z', inThread: true },
+      }),
     );
     expect(b1.body).toMatch(/buried|lost/);
     expect(b1.subject).toBeUndefined();
@@ -425,7 +459,7 @@ describe('other kinds', () => {
         proposedWindows: [{ startIso: '2026-10-08T14:00:00Z' }, { startIso: '2026-10-09T18:30:00Z' }],
       }),
     );
-    expect(s.body).toMatch(/Thursday at 10am or Friday at 2:30pm \(EDT\)/);
+    expect(s.body).toMatch(/Thursday, Oct 8 at 10am or Friday, Oct 9 at 2:30pm \(EDT\)/);
     expect(s.body).toMatch(/send me a time/);
     const r = generateDraft(
       base({
@@ -436,17 +470,17 @@ describe('other kinds', () => {
         },
       }),
     );
-    expect(r.body).toMatch(/Thursday at 2pm EDT works perfectly/);
+    expect(r.body).toMatch(/Thursday, Oct 8 at 2pm EDT works/);
     expect(r.body).toMatch(/calendar invite/);
-    expect(r.body).toMatch(/On the resume: attached/);
+    expect(r.body).toMatch(/I'll send it over today/);
   });
   it('thank-you locates the memory, quotes advice, mentions the offer, asks permission', () => {
     const t = generateDraft(
       base({ kind: 'thank_you', facts: FACTS, chat: { completedAt: '2026-10-05T19:00:00Z' } }),
     );
     expect(t.body).toMatch(/Thank you for making time yesterday/);
-    expect(t.body).toMatch(/handled ambiguity/);
-    expect(t.body).toMatch(/your offer to refer me/);
+    expect(t.body).toMatch(/your point that the key is showing how I handled ambiguity/i);
+    expect(t.body).toMatch(/Thanks also for offering to refer me when the posting goes up/);
     expect(t.body).toMatch(/\?/);
     expect(t.claims.filter((c) => c.factId).length).toBe(2);
   });
@@ -456,7 +490,8 @@ describe('other kinds', () => {
     const n = generateDraft(
       base({ kind: 'nurture', facts: [FACTS[2]!], chat: { completedAt: '2026-08-10T00:00:00Z' } }),
     );
-    expect(n.body).toMatch(/You mentioned (they are )?hiring interns in January\.? How did that go\?/i);
+    // "hiring in January", asked in October, is still ahead (DQ-08)
+    expect(n.body).toMatch(/You mentioned you're hiring interns in January\. How is that shaping up\?/);
     expect(n.body).toMatch(/No reply needed/);
   });
   it('referral ask in tech asks before the portal and makes it a two-minute task', () => {
@@ -496,7 +531,8 @@ describe('other kinds', () => {
         connection: { kind: 'shared_employer', text: '', sharedOrg: 'Stripe' },
       }),
     );
-    expect(i.body).toMatch(/"Alex Rivera is a junior at Cornell University studying computer science/);
+    expect(i.body).toMatch(/"Alex Rivera is a junior at Cornell studying computer science/);
+    expect(i.body).toMatch(/hear about Lucas's path to engineering manager at Ramp/);
     expect(i.body).toMatch(/built a campus marketplace used by 800 students/);
     expect(i.body).toMatch(/worked together at Stripe/);
     expect(i.subject).toBe('Small ask: intro to Lucas Fischer?');
@@ -509,9 +545,9 @@ describe('other kinds', () => {
         newAffiliation: { title: 'Senior PM', org: 'Figma' },
       }),
     );
-    expect(c.body).toMatch(
-      /Congratulations, that fits what you said about wanted to sit closer to the product/,
-    );
+    // the old expectation pinned an ungrammatical splice ("what you said about wanted to ..."), see DQ-01
+    expect(c.body).toMatch(/Just saw the news about your move to Figma as a senior PM\. Congratulations\./);
+    expect(c.body).toMatch(/I remember you saying you wanted to sit closer to the product/);
     const rb = generateDraft(
       base({
         kind: 'report_back',
@@ -532,5 +568,450 @@ describe('other kinds', () => {
     const c = draftWarmUpComment('writing the memo before the model saves a week', { seed: 'x' });
     expect(c.text).toMatch(/\?$/);
     expect(c.text.toLowerCase()).not.toMatch(/great post|thanks for sharing|insightful/);
+  });
+});
+
+describe('audit round 1 regressions', () => {
+  const ALINA = {
+    firstName: 'Alina',
+    lastName: 'Rossi',
+    fullName: 'Alina Rossi',
+    title: 'Software Engineer II',
+    org: 'Jane Street',
+    isAlumni: true,
+    relationshipType: 'alumni',
+    strength: 0.5,
+  };
+  const NOTE_FACTS = [
+    fact(
+      'n1',
+      'advice',
+      'They recommended focusing on one concrete project story for interviews and said the key is showing how you handled ambiguity.',
+    ),
+    fact('n2', 'offer', 'Alina offered to refer me when the posting goes up.'),
+    fact('n3', 'role_detail', 'Alina leads a small team on payments onboarding at Jane Street.'),
+    fact('n4', 'hook', 'They are hiring interns in January for the platform team.'),
+    fact('n5', 'personal', 'They ran a marathon in April and grew up in Chicago.'),
+  ];
+
+  it('clause() turns stored note sentences into grammatical second person, or refuses (DQ-01, UI-04)', () => {
+    const p = { firstName: 'Alina', fullName: 'Alina Rossi' };
+    expect(clause('Alina offered to refer me when the posting goes up.', p)?.text).toBe(
+      'you offered to refer me when the posting goes up',
+    );
+    expect(clause('Alina leads a small team on payments onboarding at Jane Street.', p)?.text).toBe(
+      'you lead a small team on payments onboarding at Jane Street',
+    );
+    expect(clause('She is hiring interns in January.', p)?.text).toBe("you're hiring interns in January");
+    expect(clause('Happy to intro me to their PM lead.', p)?.text).toBe(
+      "you said you'd be happy to intro me to your PM lead",
+    );
+    expect(clause('Recommended reading "Working Backwards".', p)?.text).toBe(
+      'you recommended reading "Working Backwards"',
+    );
+    expect(clause("Alina's team is hiring in January", p)?.text).toBe('your team is hiring in January');
+    expect(clause('The team is launching a new product in November', p)?.text).toBe(
+      'your team is launching a new product in November',
+    );
+    // a third party, a question, or a fact about the student cannot be addressed to the person
+    expect(clause('Mei said the team is great', p)).toBeUndefined();
+    expect(clause('What should I read next?', p)).toBeUndefined();
+    expect(clause('I will send my resume by Friday', p)).toBeUndefined();
+  });
+
+  it('thank-you and nurture never splice raw note sentences (DQ-01, UI-04)', () => {
+    const t = generateDraft(
+      base({
+        kind: 'thank_you',
+        person: ALINA,
+        facts: NOTE_FACTS,
+        chat: { meetingAt: '2026-10-05T19:00:00Z' },
+      }),
+    );
+    expect(t.body).toMatch(/What you said about focusing on one concrete project story for interviews/);
+    expect(t.body).toMatch(/Thanks also for offering to refer me when the posting goes up/);
+    expect(t.body).not.toMatch(/Alina offered|point that recommended|follow up on alina/i);
+    const n = generateDraft(base({ kind: 'nurture', person: ALINA, facts: NOTE_FACTS }));
+    expect(n.body).toMatch(/You mentioned you're hiring interns in January for the platform team\./);
+    expect(n.body).not.toMatch(/mentioned (Alina|they)|offered to refer me/i);
+    expect(n.body).not.toMatch(/It's been a little while/);
+  });
+
+  it('facts are picked by type priority, and claims list only facts used in the body (DQ-14)', () => {
+    const facts = [
+      {
+        ...fact('b', 'background', 'They previously worked at McKinsey for three years.'),
+        occurredAt: '2026-10-04T00:00:00Z',
+      },
+      fact('a', 'advice', 'They recommended practicing paper LBOs before superdays.'),
+    ];
+    const t = generateDraft(base({ kind: 'thank_you', facts, chat: { meetingAt: '2026-10-05T19:00:00Z' } }));
+    expect(t.body).toMatch(/practicing paper LBOs/);
+    expect(t.claims.map((c) => c.factId).filter(Boolean)).toEqual(['a']);
+    for (const c of t.claims.filter((x) => x.factId)) {
+      const used = facts.find((f) => f.id === c.factId)!;
+      expect(t.body.toLowerCase()).toContain(
+        clause(used.text)!.rest!.split(' ').slice(0, 3).join(' ').toLowerCase(),
+      );
+    }
+    // outreach to an alum with facts on file cites the alumni link, not a fact it never mentions
+    const o = generateDraft(base({ facts: NOTE_FACTS, person: ALINA }));
+    expect(o.claims.filter((c) => c.factId)).toEqual([]);
+    // a hook connection prefers a hook over background
+    const hookFirst = generateDraft(
+      base({
+        person: { ...ALINA, isAlumni: false },
+        facts: [
+          { ...fact('bg', 'background', 'She studied physics at MIT.'), occurredAt: '2026-10-05T00:00:00Z' },
+          fact('hk', 'hook', 'Her team is hiring interns in January.'),
+        ],
+      }),
+    );
+    expect(hookFirst.body).toMatch(/your team is hiring interns in January/);
+    expect(hookFirst.claims.some((c) => c.factId === 'hk')).toBe(true);
+    expect(hookFirst.claims.some((c) => c.factId === 'bg')).toBe(false);
+  });
+
+  it('reply never answers a question for the student, keeps paragraphs, and fills in their answer (DQ-02)', () => {
+    const q = generateDraft(
+      base({ kind: 'reply', thread: { asksOfUser: ['What area of PM are you most interested in?'] } }),
+    );
+    expect(q.body).not.toMatch(/send that over today/);
+    expect(q.body).toMatch(/\[Your answer to: What area of PM are you most interested in\?\]/);
+    expect(q.needsInput).toEqual(['answer']);
+    expect(q.body).toMatch(/^Hi Priya,\n\n.+\n\nThanks,\nAlex$/s); // paragraphs survive
+    const a = generateDraft(
+      base({
+        kind: 'reply',
+        thread: { asksOfUser: ['What area of PM are you most interested in?'] },
+        answer: 'Mostly growth and onboarding, since that is what I worked on at Brex',
+      }),
+    );
+    expect(a.needsInput).toEqual([]);
+    expect(a.body).toMatch(/Mostly growth and onboarding, since that is what I worked on at Brex\./);
+    // nothing to answer and no time: it moves scheduling forward instead of saying nothing
+    const empty = generateDraft(
+      base({
+        kind: 'reply',
+        proposedWindows: [{ startIso: '2026-10-08T14:00:00Z' }, { startIso: '2026-10-12T18:00:00Z' }],
+      }),
+    );
+    expect(empty.body).toMatch(
+      /Would either of these work for a quick call\? Thursday, Oct 8 at 10am or Monday, Oct 12 at 2pm \(EDT\)/,
+    );
+  });
+
+  it('outreach differs by sector and relationship and makes no unsupported claim (DQ-05)', () => {
+    const ib = generateDraft(
+      base({
+        person: {
+          firstName: 'Daniel',
+          fullName: 'Daniel Kim',
+          title: 'Investment Banking Analyst',
+          org: 'Goldman Sachs',
+          isAlumni: true,
+          relationshipType: 'alumni',
+          strength: 0,
+        },
+        user: { ...base().user, targetFunctions: ['ib'], majors: ['Economics'] },
+      }),
+    );
+    const pm = generateDraft(base());
+    expect(ib.body).not.toBe(pm.body);
+    for (const d of [ib, pm]) {
+      expect(d.body).not.toMatch(/I've been following|the kind of route I'd love to understand/);
+      expect(d.body).not.toMatch(/Cornell University/);
+    }
+    const bg = generateDraft(
+      base({
+        person: { ...base().person, isAlumni: false, title: undefined, org: undefined },
+        facts: [fact('m', 'background', 'She previously worked at McKinsey for three years.')],
+      }),
+    );
+    expect(bg.body).toMatch(/I saw that you previously worked at McKinsey for three years/);
+    expect(bg.body).not.toMatch(/I noticed She|I read that/);
+  });
+
+  it('picks the function that matches the recipient and gives recruiters a logistics note (DQ-06)', () => {
+    const user = { ...base().user, targetFunctions: ['swe', 'pm'] };
+    expect(targetLabel({ user, person: { title: 'Associate Product Manager' } })).toBe('product management');
+    expect(targetLabel({ user, person: { title: 'Software Engineer' } })).toBe('software engineering');
+    expect(targetLabel({ user: { ...user, targetFunctions: ['early_career'] } })).toBe('early career');
+    const r = generateDraft(
+      base({
+        user,
+        person: {
+          firstName: 'Nina',
+          fullName: 'Nina Park',
+          title: 'University Recruiter',
+          org: 'Notion',
+          relationshipType: 'recruiter',
+          strength: 0,
+        },
+        sameOrgContacts: ['Grace'],
+      }),
+    );
+    expect(r.body).toMatch(/^Dear Nina,/);
+    expect(r.body).toMatch(/planning to apply for software engineering internships at Notion/);
+    expect(r.body).toMatch(/helpful conversations with Grace on the team/);
+    expect(r.body).not.toMatch(/your path|minutes/);
+  });
+
+  it('thank-you locates the memory by its real date and never says "this cycle recruiting" (DQ-07)', () => {
+    const at = (iso: string, cycleLabel = 'Summer 2027 internship') =>
+      generateDraft(
+        base({ kind: 'thank_you', user: { ...base().user, cycleLabel }, chat: { meetingAt: iso } }),
+      ).body;
+    expect(at('2026-10-06T13:00:00Z')).toMatch(/making time this morning/);
+    expect(at('2026-10-05T20:00:00Z')).toMatch(/making time yesterday/);
+    expect(at('2026-10-02T15:00:00Z')).toMatch(/making time on Friday/);
+    expect(at('2026-09-28T15:00:00Z')).toMatch(/making time last week/);
+    expect(at('2026-09-01T15:00:00Z')).toMatch(/making time on September 1/);
+    const blank = at('2026-10-05T20:00:00Z', 'This cycle');
+    expect(blank).not.toMatch(/this cycle (search|recruiting)|the this/i);
+    expect(blank).toMatch(/how recruiting goes/);
+  });
+
+  it('nurture needs a real update or a hook; offers are never "how did that go" (DQ-08)', () => {
+    expect(generateDraft(base({ kind: 'nurture', facts: [] })).needsInput).toEqual(['update']);
+    const offerOnly = generateDraft(base({ kind: 'nurture', facts: [NOTE_FACTS[1]!] }));
+    expect(offerOnly.needsInput).toEqual(['update']);
+    expect(offerOnly.body).not.toMatch(/offered/);
+    const noAdvice = generateDraft(
+      base({ kind: 'nurture', facts: [], update: 'I had a first round at Ramp last week' }),
+    );
+    expect(noAdvice.body).not.toMatch(/your advice/i);
+    expect(noAdvice.body).toMatch(/Quick update: I had a first round at Ramp last week\./);
+    const past = generateDraft(
+      base({
+        kind: 'nurture',
+        facts: [fact('h', 'hook', 'They were launching the new dashboard in August.')],
+      }),
+    );
+    expect(past.body).toMatch(/How did it go\?/);
+  });
+
+  it('proposes real free windows on different days and times, dated, in the user zone (DQ-09)', () => {
+    const now = new Date('2026-10-05T14:00:00Z'); // Monday 10am in New York
+    const busy = [{ startIso: '2026-10-06T14:00:00Z', endIso: '2026-10-06T15:00:00Z' }];
+    const w = proposeWindows(busy, now, 'America/New_York', { seed: 'x' });
+    expect(w).toHaveLength(2);
+    const local = w.map((x) =>
+      new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/New_York',
+        weekday: 'short',
+        hour: 'numeric',
+        minute: '2-digit',
+      }).format(new Date(x.startIso)),
+    );
+    expect(new Set(local.map((l) => l.split(' ')[0])).size).toBe(2); // different days
+    expect(new Set(local.map((l) => l.split(' ').slice(1).join(' '))).size).toBe(2); // different times
+    for (const x of w) {
+      expect(new Date(x.startIso).getTime()).toBeGreaterThan(now.getTime());
+      expect(overlapsBusy(x.startIso, 30, busy)).toBe(false);
+    }
+    expect(local.some((l) => /AM/.test(l)) && local.some((l) => /PM/.test(l))).toBe(true);
+    // the zone label follows the window's own date (EST after Nov 1)
+    const s = generateDraft(
+      base({
+        kind: 'schedule',
+        now: new Date('2026-10-30T14:00:00Z'),
+        proposedWindows: [{ startIso: '2026-11-03T15:00:00Z' }],
+      }),
+    );
+    expect(s.body).toMatch(/Tuesday, Nov 3 at 10am \(EST\)/);
+    expect(s.body).toMatch(/If not, send me a time/);
+    // the calendar link is the fallback only when there are no windows, and windows in the past are dropped
+    const link = generateDraft(
+      base({
+        kind: 'schedule',
+        user: { ...base().user, schedulingLink: 'https://cal.com/alex' },
+        proposedWindows: [{ startIso: '2026-10-01T14:00:00Z' }],
+      }),
+    );
+    expect(link.body).toMatch(/https:\/\/cal\.com\/alex\n/);
+    expect(link.body).not.toMatch(/If neither works|Oct 1/);
+    const withBoth = generateDraft(
+      base({
+        kind: 'schedule',
+        user: { ...base().user, schedulingLink: 'https://cal.com/alex' },
+        proposedWindows: [{ startIso: '2026-10-08T14:00:00Z' }],
+      }),
+    );
+    expect(withBoth.body).not.toMatch(/cal\.com/);
+    // a time they proposed that clashes with the calendar gets a counter-proposal, not "works perfectly"
+    const clash = generateDraft(
+      base({
+        kind: 'reply',
+        busy: [{ startIso: '2026-10-08T18:00:00Z', endIso: '2026-10-08T19:00:00Z' }],
+        proposedWindows: [{ startIso: '2026-10-09T14:00:00Z' }, { startIso: '2026-10-13T19:00:00Z' }],
+        thread: { proposedTimes: [{ startIso: '2026-10-08T18:00:00Z', raw: 'Thursday at 2pm' }] },
+      }),
+    );
+    expect(clash.body).toMatch(
+      /Thursday, Oct 8 at 2pm is tight for me, sorry\. Could you do Friday, Oct 9 at 10am or Tuesday, Oct 13 at 3pm \(EDT\) instead\?/,
+    );
+    // outreach never carries a calendar link or a slot grid to a stranger
+    const o = generateDraft(base({ user: { ...base().user, schedulingLink: 'https://cal.com/alex' } }));
+    expect(o.body).not.toMatch(/cal\.com/);
+  });
+
+  it('LinkedIn note uses the short school name and is never cut mid-word (DQ-10)', () => {
+    const long = generateDraft(
+      base({
+        channel: 'linkedin',
+        user: {
+          ...base().user,
+          oneLiner:
+            'a junior at Cornell studying computer science and economics, interested in payments infrastructure, developer tools and market structure',
+        },
+        person: {
+          ...base().person,
+          isAlumni: false,
+          title: 'Vice President, Leveraged Finance Capital Markets',
+          org: 'Morgan Stanley & Co. International plc',
+          previousOrg: 'Credit Suisse First Boston Securities',
+          previousTitle: 'Associate',
+        },
+      }),
+    );
+    expect(long.bodyShort!.length).toBeLessThanOrEqual(LINKEDIN_NOTE_MAX);
+    expect(long.bodyShort).toMatch(/[.?!a-z]$/);
+    const words = long.bodyShort!.split(/\s+/);
+    expect(long.bodyShort!.replace(/[.,?!]/g, ' ')).toContain(words.at(-1)!.replace(/[.,?!]/g, ''));
+    expect(fitNote('one two three four five six', 12)).toBe('one two');
+    const alum = generateDraft(base({ channel: 'linkedin' }));
+    expect(alum.bodyShort).toMatch(/Cornell/);
+    expect(alum.bodyShort).not.toMatch(/fellow Cornell University|Cornell University/i);
+  });
+
+  it('intro request needs a target and names them; the blurb has no self-praise (DQ-11)', () => {
+    const none = generateDraft(base({ kind: 'intro_request' }));
+    expect(none.needsInput).toEqual(['target']);
+    expect(none.body).not.toMatch(/\bthem thinks|reach someone/);
+    const i = generateDraft(
+      base({
+        kind: 'intro_request',
+        target: {
+          name: 'Daniel Kim',
+          title: 'Engineering Manager',
+          org: 'Stripe',
+          why: 'their work at Stripe',
+        },
+      }),
+    );
+    expect(i.body).toMatch(
+      /I'm hoping to talk with Daniel Kim \(Engineering Manager at Stripe\) about Daniel's work at Stripe\./,
+    );
+    expect(i.body).not.toMatch(/thoughtful|will come prepared|They'd love/);
+  });
+
+  it('bump: dated or "last week", second bump differs, formal style is applied (DQ-12)', () => {
+    const b = generateDraft(base({ kind: 'bump', seed: 'zz1', thread: { inThread: true } }));
+    expect(b.body).not.toMatch(/wrote on last week/);
+    const b1 = generateDraft(base({ kind: 'bump', bumpNumber: 1, thread: { inThread: true } }));
+    const b2 = generateDraft(base({ kind: 'bump', bumpNumber: 2, thread: { inThread: true } }));
+    expect(b1.body).not.toBe(b2.body);
+    const formal = generateDraft(
+      base({
+        kind: 'bump',
+        styleCard: defaultStyleCard('formal', 'Alex'),
+        thread: { inThread: true, firstOutboundAt: '2026-09-24T14:00:00Z' },
+      }),
+    );
+    expect(formal.body).toMatch(/^Dear Priya,/);
+    expect(formal.body).not.toMatch(/Floating|buried|Totally|\b\w+'(m|ll|d|ve|re|s)\b/);
+    expect(formal.body).toMatch(/I wanted to follow up on my note from last week/);
+    expect(formal.body).toMatch(/Kind regards,\nAlex$/);
+  });
+
+  it('congratulate needs the news; with a job change on record it names it (DQ-13)', () => {
+    const none = generateDraft(base({ kind: 'congratulate' }));
+    expect(none.needsInput).toEqual(['news']);
+    expect(none.body).not.toMatch(/new role|the news/);
+    const typed = generateDraft(base({ kind: 'congratulate', news: 'your promotion to senior PM' }));
+    expect(typed.body).toMatch(
+      /Just saw the news about your promotion to senior PM\. Congratulations, well deserved\./,
+    );
+    const move = generateDraft(
+      base({
+        kind: 'congratulate',
+        newAffiliation: { title: 'Senior Product Manager', org: 'Figma', since: '2026-09-20' },
+      }),
+    );
+    expect(move.body).toMatch(/your move to Figma as a senior product manager/);
+    expect(move.body).toMatch(/Hope the first few weeks are going well/);
+    expect(move.subject).toBe('Congratulations on Figma');
+  });
+
+  it('subjects fit the kind; no "Quick question" on a check-in (DQ-15)', () => {
+    const n = generateDraft(
+      base({ kind: 'nurture', facts: [NOTE_FACTS[3]!], chat: { meetingAt: '2026-08-10T15:00:00Z' } }),
+    );
+    expect(n.subject).toBe('Quick update since August');
+    const t = generateDraft(base({ kind: 'thank_you', chat: { meetingAt: '2026-10-05T19:00:00Z' } }));
+    expect(t.subject).toBe('Thank you for yesterday');
+    const o = generateDraft(base());
+    expect(o.subject).toMatch(/^Cornell junior, quick question on Figma$/);
+    for (const k of ['nurture', 'thank_you', 'congratulate', 'report_back', 'bump', 'schedule'] as const)
+      expect(generateDraft(base({ kind: k, news: 'the launch' })).subject ?? '').not.toMatch(
+        /^quick question$/i,
+      );
+  });
+
+  it('referral ask: needs a company, mentions a conversation only if there was one, handles another company (DQ-16)', () => {
+    const none = generateDraft(base({ kind: 'referral_ask', person: { ...base().person, org: undefined } }));
+    expect(none.needsInput).toEqual(['role']);
+    expect(none.body).not.toMatch(/your company/);
+    const cold = generateDraft(
+      base({ kind: 'referral_ask', targetCompany: { name: 'Figma', roleLabel: 'PM Intern' } }),
+    );
+    expect(cold.body).not.toMatch(/after our conversation|Thanks again for the conversation/);
+    const other = generateDraft(
+      base({
+        kind: 'referral_ask',
+        chat: { completedAt: '2026-09-20T15:00:00Z' },
+        targetCompany: { name: 'Notion', roleLabel: 'PM Intern' },
+      }),
+    );
+    expect(other.body).toMatch(/I know you're at Figma, but if you know anyone at Notion/);
+  });
+
+  it('outreach "who I am" comes from structured fields (UI-03)', () => {
+    const d = generateDraft(
+      base({ user: { ...base().user, school: 'University of Michigan', gradYear: 2027 } }),
+    );
+    expect(d.body).toMatch(/I'm a senior at Michigan studying computer science/);
+    expect(schoolShort('Massachusetts Institute of Technology')).toBe('MIT');
+    expect(schoolShort('University of California, Los Angeles')).toBe('UCLA');
+    expect(schoolShort('University of California, San Diego')).toBe('UC San Diego');
+    expect(schoolShort('Duke University')).toBe('Duke');
+  });
+
+  it('validator flags names, posts, mutual connections and figures not in the context even with no claims (EG-17)', () => {
+    const ctx = base();
+    const llm = {
+      body: 'Hi Priya,\n\nOur mutual connection Mei Chen suggested I write. I loved your recent post on pricing, and with a 3.9 GPA I think I could add a lot at Figma. Would you have 15 minutes?\n\nThanks,\nAlex',
+      claims: [],
+    };
+    const issues = validateDraft(llm, {
+      kind: 'outreach',
+      facts: [],
+      allowedUrls: [],
+      recipientFirstName: 'Priya',
+      context: contextText(ctx),
+    });
+    const details = issues
+      .filter((i) => i.code === 'unsupported_detail')
+      .map((i) => i.detail)
+      .join(' | ');
+    expect(details).toMatch(/Mei Chen/);
+    expect(details).toMatch(/mutual connection/);
+    expect(details).toMatch(/post or article/);
+    expect(details).toMatch(/3\.9/);
+    expect(isBlocked(issues)).toBe(true);
+    // the template itself is always grounded
+    const t = generateDraft(ctx);
+    expect(unsupportedDetails(`${t.subject}\n${t.body}`, contextText(ctx))).toEqual([]);
   });
 });

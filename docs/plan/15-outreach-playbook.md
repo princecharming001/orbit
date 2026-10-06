@@ -309,6 +309,17 @@ Caps are enforced in code at send time (rule 4), not by the prompt.
 
 ---
 
+## 9. How the engine applies this
+
+- **Never fabricate, ask instead.** When a draft is missing the one thing only the student knows, `generateDraft` returns `needsInput` and a bracketed line, and the editor asks for it: `connection` (cold outreach with no checkable link), `update` (nurture with neither an update nor a hook), `news` (congratulate with no job change on record), `target` (intro request with nobody named), `answer` (a question in their reply; Orbit never answers for the student), `role` (referral ask with no company). The student's line is used verbatim; a connection line is also stored as a `connection` fact for later drafts.
+- **Facts are spliced only as grammatical clauses.** Stored facts are third person ("They recommended ...", "Alina offered ..."); `clause()` turns them into second person with verb agreement ("you recommended ...", "you offered ..."), and a fact that cannot be made grammatical (a third party as subject, a question, a fact about the student) is not used. Facts are chosen by type priority, newest first within a type, and `claims` lists exactly the facts the body uses.
+- **Register.** Finance, consulting, recruiters and a formal style card get the formal register (full name, short school name and class year in the sign-off; no contractions when the style card says so). LinkedIn messages sign with the first name. Schools are named the way students say them ("Cornell", "Michigan", "MIT").
+- **Time.** Windows are real free slots from the student's calendar, on different days, one morning and one afternoon, at least 12 hours out, with a buffer around events, shown with weekday, date, time and the zone for that date. A time the other person proposed is accepted only if it is in the future and free; otherwise Orbit counter-proposes. A thank-you locates the meeting by its real date ("yesterday", "on Tuesday", "last week").
+- **New threads.** Outreach, intro requests and referral asks open a new thread with their own subject; every other kind replies in the existing thread, and without one it carries a subject written for its kind.
+- **Referral ladder.** With no conversation on record, a referral ask is the first rung of the ladder in §2.11 (a process question), not a request.
+
+---
+
 ## 8. Sources
 
 Career centers and official guides:

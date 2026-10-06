@@ -14,11 +14,13 @@ import type {
 import {
   buildWarmUpPlan,
   type Candidate,
+  contextText,
   defaultStyleCard,
   generateCandidates,
   generateDraft,
   isBlocked,
   newId,
+  proposeWindows,
   selectForBrief,
   suggestionFromCandidate,
   todayKey,
@@ -213,12 +215,35 @@ const DRAFT_KIND: Partial<Record<SuggestionKind, MessageKind>> = {
   report_back: 'report_back',
 };
 
+/** Kinds that open a new email thread with their own subject instead of replying in the chat's thread. */
+const NEW_THREAD_KINDS = new Set<MessageKind>(['outreach', 'intro_request', 'referral_ask']);
+
 /** Extra, user-supplied inputs for a draft (from the needs-input prompt in the editor). */
 export interface DraftInputs {
   /** one line only true of the recipient: how the student found them, what they share, what of theirs they read */
   connection?: string;
   /** one real update since the last conversation (nurture) */
   update?: string;
+  /** what the student is congratulating them on (congratulate, when no job change is on record) */
+  news?: string;
+  /** who the student wants an intro to: "Lucas Fischer, Engineering Manager at Ramp" (intro request) */
+  target?: string;
+  /** the student's answer to a question in the thread (reply) */
+  answer?: string;
+  /** the role and company for a referral ask: "PM Intern at Notion" */
+  role?: string;
+}
+
+/** "Lucas Fischer, Engineering Manager at Ramp" -> name, title, org. */
+function parseTargetLine(line: string): { name: string; title?: string; org?: string } {
+  const t = line.replace(/\s+/g, ' ').trim();
+  const [name, ...restParts] = t.split(/\s*[,(]\s*|\s+-\s+/);
+  const rest = restParts.join(', ').replace(/\)$/, '');
+  const m = rest.match(/^(.*?)\s+(?:at|@)\s+(.+)$/);
+  if (m) return { name: name!.trim(), title: m[1]!.trim() || undefined, org: m[2]!.trim() };
+  const only = t.match(/^(.+?)\s+(?:at|@)\s+(.+)$/);
+  if (!rest && only) return { name: only[1]!.trim(), org: only[2]!.trim() };
+  return { name: name!.trim(), title: rest || undefined };
 }
 
 /** The person who introduced or pointed the student to `person`, if an intro request to them was sent. */
@@ -252,10 +277,15 @@ function credibilityLine(
   const cands = facets
     .filter((f) => f.kind === 'project' || f.kind === 'experience')
     .map((f) => {
-      const first = f.text.split(/(?<=[.!?])\s+/)[0] ?? f.text;
-      const line = first.replace(/\s+/g, ' ').trim().replace(/\.$/, '');
+      // one clause: the first sentence, cut at a semicolon ("Built X in Go; reduced Y by 30%" -> "Built X in Go")
+      const first = (f.text.split(/(?<=[.!?])\s+/)[0] ?? f.text).split(/;\s*/)[0]!;
+      const line = first.replace(/\s+/g, ' ').trim().replace(/[.,]$/, '');
       return { line, score: score(line) + (f.kind === 'project' ? 0.5 : 0), len: line.length };
     })
+    // it is spliced after the student's name ("Alex built ..."), so it must open with a past-tense verb
+    .filter((c) =>
+      /^[A-Za-z]+ed\b|^(built|led|ran|won|grew|wrote|made|shipped|taught|drove|began)\b/i.test(c.line),
+    )
     .filter((c) => c.len >= 20 && c.len <= 110)
     .sort((a, b) => b.score - a.score || a.len - b.len);
   return cands[0]?.line;
@@ -271,34 +301,38 @@ export async function buildDraftContext(
   chatOverride?: CoffeeChat,
 ): Promise<DraftContext> {
   const now = new Date();
-  const [goals, settings, style, facts, resumeFacets, chatFound, affiliations, org] = await Promise.all([
-    db.goals.get(user.id),
-    db.settings.get(user.id),
-    db.styles.get(user.id),
-    db.facts
-      .where('personId')
-      .equals(person.id)
-      .filter((f) => !f.deletedAt)
-      .toArray(),
-    db.resumeFacets.toArray(),
-    chatOverride
-      ? Promise.resolve(chatOverride)
-      : s?.chatId
-        ? db.chats.get(s.chatId)
-        : db.chats
-            .where('personId')
-            .equals(person.id)
-            .filter((c) => !['archived'].includes(c.stage))
-            .first(),
-    db.affiliations.where('personId').equals(person.id).toArray(),
-    person.currentOrganizationId ? db.organizations.get(person.currentOrganizationId) : undefined,
-  ]);
+  const [goals, settings, style, facts, resumeFacets, chatFound, affiliations, org, events] =
+    await Promise.all([
+      db.goals.get(user.id),
+      db.settings.get(user.id),
+      db.styles.get(user.id),
+      db.facts
+        .where('personId')
+        .equals(person.id)
+        .filter((f) => !f.deletedAt)
+        .toArray(),
+      db.resumeFacets.toArray(),
+      chatOverride
+        ? Promise.resolve(chatOverride)
+        : s?.chatId
+          ? db.chats.get(s.chatId)
+          : db.chats
+              .where('personId')
+              .equals(person.id)
+              .filter((c) => !['archived'].includes(c.stage))
+              .first(),
+      db.affiliations.where('personId').equals(person.id).toArray(),
+      person.currentOrganizationId ? db.organizations.get(person.currentOrganizationId) : undefined,
+      db.events.where('userId').equals(user.id).toArray(),
+    ]);
   // a report-back is addressed to the referrer; the chat on the suggestion is the target's chat
   const chat = kind === 'report_back' ? undefined : chatFound;
-  const summary = resumeFacets.find((f) => f.kind === 'summary')?.text;
   let thread: DraftContext['thread'];
   if (chat?.threadId) {
-    const msgs = await db.messages.where('threadId').equals(chat.threadId).sortBy('sentAt');
+    const [msgs, th] = await Promise.all([
+      db.messages.where('threadId').equals(chat.threadId).sortBy('sentAt'),
+      db.threads.get(chat.threadId),
+    ]);
     const lastIn = [...msgs].reverse().find((m) => m.direction === 'inbound');
     const firstOut = msgs.find((m) => m.direction === 'outbound');
     thread = {
@@ -308,10 +342,12 @@ export async function buildDraftContext(
       asksOfUser: lastIn?.extraction?.asksOfUser,
       proposedTimes: lastIn?.extraction?.proposedTimes.map((t) => ({ startIso: t.startIso, raw: t.raw })),
       lastSignal: lastIn?.signal,
+      inThread: !NEW_THREAD_KINDS.has(kind) && !!th?.externalThreadId,
+      subject: th?.subject,
     };
   } else if (chat?.firstOutreachAt) thread = { firstOutboundAt: chat.firstOutreachAt };
   const tcId = s?.payload.targetCompanyId as string | undefined;
-  const tc = tcId
+  let tc = tcId
     ? await db.targetCompanies.get(tcId)
     : person.currentOrganizationRaw
       ? await db.targetCompanies
@@ -324,25 +360,65 @@ export async function buildDraftContext(
           )
           .first()
       : undefined;
-  const target = s?.payload.target as DraftContext['target'] | undefined;
-  if (target && !target.firstName) target.firstName = target.name.split(' ')[0];
-  const windows = (s?.payload.windows as string[] | undefined)?.map((w) => ({ startIso: w }));
+  // the student said which role (referral ask): "PM Intern at Notion"
+  let roleInput: { name: string; roleLabel?: string } | undefined;
+  if (inputs.role?.trim()) {
+    const m = inputs.role.trim().match(/^(.*?)\s+(?:at|@)\s+(.+)$/);
+    roleInput = m ? { roleLabel: m[1]!.trim(), name: m[2]!.trim() } : { name: inputs.role.trim() };
+    const known = await db.targetCompanies
+      .where('userId')
+      .equals(user.id)
+      .filter((t) => t.nameRaw.toLowerCase() === roleInput!.name.toLowerCase())
+      .first();
+    if (known) tc = known;
+  }
+  let target = s?.payload.target as DraftContext['target'] | undefined;
+  if (!target && inputs.target?.trim()) {
+    const parsed = parseTargetLine(inputs.target);
+    const known = (await db.people.where('userId').equals(user.id).toArray()).find(
+      (p) => p.displayName.toLowerCase() === parsed.name.toLowerCase(),
+    );
+    target = known
+      ? { name: known.displayName, title: known.currentTitle, org: known.currentOrganizationRaw }
+      : parsed;
+  }
+  if (target && !target.firstName) target = { ...target, firstName: target.name.split(' ')[0] };
+  // real free windows from the student's calendar, in their timezone, on different days and times
+  const busy = events.map((e) => ({ startIso: e.startAt, endIso: e.endAt, status: e.status }));
+  const windows =
+    kind === 'schedule' || kind === 'reply'
+      ? proposeWindows(busy, now, user.timezone, { seed: person.id })
+      : undefined;
   const warm = chat?.warmUp ? warmUpProgress(chat.warmUp, now) : undefined;
   const warmUpNote = chat?.warmUp?.actions.find((a) => a.doneAt && a.note)?.note;
+  // when the conversation happened: the calendar event if there is one, otherwise when the chat was completed
+  const meetingEvent = chat?.scheduledEventId
+    ? events.find((e) => e.id === chat.scheduledEventId)
+    : undefined;
+  const meetingAt =
+    meetingEvent && new Date(meetingEvent.startAt) <= now ? meetingEvent.startAt : chat?.completedAt;
   // previous employer: the most recent non-current employment affiliation
-  const previous = affiliations
-    .filter(
-      (a) =>
-        a.kind === 'employment' && !a.isCurrent && a.nameRaw && a.nameRaw !== person.currentOrganizationRaw,
-    )
+  const employment = affiliations.filter((a) => a.kind === 'employment');
+  const previous = employment
+    .filter((a) => !a.isCurrent && a.nameRaw && a.nameRaw !== person.currentOrganizationRaw)
     .sort((a, b) => (b.endDate ?? b.startDate ?? '').localeCompare(a.endDate ?? a.startDate ?? ''))[0];
+  // a job change on record: a current role that started in the last 120 days (a LinkedIn re-import that saw a new
+  // company or title records exactly that)
+  const latest = employment
+    .filter((a) => a.isCurrent && a.startDate)
+    .sort((a, b) => (b.startDate ?? '').localeCompare(a.startDate ?? ''))[0];
+  const newAffiliation =
+    latest?.startDate && now.getTime() - new Date(latest.startDate).getTime() <= 120 * DAY
+      ? { title: latest.title, org: latest.nameRaw, since: latest.startDate }
+      : undefined;
   // referrer: on the chat, or the person who received an intro request for this person
   let referrerName = chat?.referrerName;
   if (!referrerName && chat?.referrerPersonId)
     referrerName = (await db.people.get(chat.referrerPersonId))?.firstName;
   if (!referrerName && kind === 'outreach')
     referrerName = (await findReferrerFor(user.id, person))?.firstName;
-  // openings used for the same company in the last 30 days (avoid repeating ourselves across a team)
+  // openings used for the same company in the last 30 days (avoid repeating ourselves across a team), and the
+  // people there the student has already spoken with (a recruiter email names them)
   const sameOrg = person.currentOrganizationRaw
     ? (await db.people.where('userId').equals(user.id).toArray()).filter(
         (p) =>
@@ -351,11 +427,18 @@ export async function buildDraftContext(
       )
     : [];
   const recentOpenings: string[] = [];
+  const sameOrgContacts: string[] = [];
   for (const p of sameOrg) {
     const rows = await db.outbound.where('personId').equals(p.id).toArray();
     for (const r of rows)
       if (r.opening && now.getTime() - new Date(r.sentAt ?? r.createdAt).getTime() < 30 * DAY)
         recentOpenings.push(r.opening);
+    const spoke = await db.chats
+      .where('personId')
+      .equals(p.id)
+      .filter((c) => !!c.completedAt)
+      .first();
+    if (spoke) sameOrgContacts.push(p.firstName);
   }
   const pastOrgs = resumeFacets
     .filter((f) => f.kind === 'experience' && f.organizationName)
@@ -366,7 +449,7 @@ export async function buildDraftContext(
   const factList: PersonFact[] = facts
     .sort((a, b) => (b.occurredAt ?? '').localeCompare(a.occurredAt ?? ''))
     .slice(0, 15);
-  if (userConnection)
+  if (userConnection && !factList.some((f) => f.type === 'connection' && f.text === userConnection))
     factList.unshift({
       id: `input-connection`,
       userId: user.id,
@@ -387,14 +470,10 @@ export async function buildDraftContext(
       gradYear: user.graduationYear,
       degree: user.degree,
       majors: user.majors,
-      cycleLabel: goals?.cycleLabel ?? 'this recruiting cycle',
+      cycleLabel: goals?.cycleLabel ?? '',
       targetFunctions: goals?.targetFunctions ?? [],
-      oneLiner: summary
-        ? summary
-            .replace(/^.*? is /, `${user.firstName} is `)
-            .replace(/\.$/, '')
-            .replace(new RegExp(`^${user.firstName} is `), '')
-        : undefined,
+      // the "who I am" clause is composed from structured fields (year, school, major); a free-text resume
+      // summary is never spliced in, since heuristic parses put the contact header there
       credibility: credibilityLine(resumeFacets),
       schedulingLink: settings?.schedulingLink,
       timezone: user.timezone,
@@ -412,6 +491,7 @@ export async function buildDraftContext(
       relationshipType: person.relationshipType,
       strength: person.strength,
       linkedinConnected: !!person.linkedinConnectedOn,
+      linkedinConnectedAt: person.linkedinConnectedOn,
       previousOrg: previous?.nameRaw,
       previousTitle: previous?.title,
     },
@@ -420,11 +500,13 @@ export async function buildDraftContext(
     channel,
     bumpNumber: (chat?.bumpCount ?? 0) + 1,
     proposedWindows: windows,
+    busy,
     thread,
     target,
     chat: chat
       ? {
           completedAt: chat.completedAt,
+          meetingAt,
           stage: chat.stage,
           referrerName,
           warmUpNote,
@@ -434,21 +516,31 @@ export async function buildDraftContext(
         ? { referrerName }
         : undefined,
     update: inputs.update?.trim() || undefined,
+    news: inputs.news?.trim() || undefined,
+    answer: inputs.answer?.trim() || undefined,
+    newAffiliation,
     targetCompany: tc
       ? {
           name: tc.nameRaw,
-          roleLabel: goals?.targetRoles[0],
+          roleLabel: roleInput?.roleLabel ?? goals?.targetRoles[0],
           applied: tc.status === 'applied' || tc.status === 'interviewing',
         }
-      : undefined,
+      : roleInput
+        ? { name: roleInput.name, roleLabel: roleInput.roleLabel }
+        : undefined,
     reportBack,
+    sameOrgContacts,
     recentOpenings,
     seed: person.id,
     now,
   };
 }
 
-/** Template first; the LLM may improve voice and specificity only if its result passes the same validator. */
+/**
+ * Template first; the LLM may improve voice and specificity only if its result passes the same validator,
+ * including the check that it mentions nothing (no name, company, post, mutual connection or figure) that is not in
+ * the context pack or the template.
+ */
 async function materializeDraft(
   user: User,
   person: Person,
@@ -466,20 +558,23 @@ async function materializeDraft(
   const template = generateDraft(ctx);
   let out = template;
   let generatedBy: OutboundMessage['generatedBy'] = 'template';
+  const opts = (context: string) => ({
+    kind,
+    facts: ctx.facts,
+    allowedUrls: [ctx.user.schedulingLink ?? '', user.linkedinUrl ?? ''].filter(Boolean),
+    recipientEmail: person.primaryEmail,
+    recipientFirstName: person.firstName,
+    recipientFullName: person.displayName,
+    recentOpenings: ctx.recentOpenings,
+    hadConversation: kind === 'referral_ask' ? !!(ctx.chat?.completedAt || ctx.chat?.meetingAt) : undefined,
+    channel,
+    context,
+  });
   if (hasLlm() && !template.needsInput.length) {
     const llm = await llmDraft(ctx, template).catch(() => undefined);
     if (llm) {
-      const issues = validateDraft(llm, {
-        kind,
-        facts: ctx.facts,
-        allowedUrls: [ctx.user.schedulingLink ?? '', user.linkedinUrl ?? ''].filter(Boolean),
-        recipientEmail: person.primaryEmail,
-        recipientFirstName: person.firstName,
-        recipientFullName: person.displayName,
-        recentOpenings: ctx.recentOpenings,
-        hadConversation: kind === 'referral_ask' ? !!ctx.chat?.completedAt : undefined,
-        channel,
-      });
+      const grounded = `${contextText(ctx)}\n${template.subject ?? ''}\n${template.body}\n${template.bodyShort ?? ''}`;
+      const issues = validateDraft(llm, opts(grounded));
       if (!isBlocked(issues)) {
         out = { ...llm, needsInput: [], sector: template.sector, register: template.register };
         generatedBy = 'llm';
@@ -515,7 +610,7 @@ export async function draftForSuggestion(
   const chat = s.chatId && kind !== 'report_back' ? await db.chats.get(s.chatId) : undefined;
   let externalThreadId: string | undefined;
   let inReplyTo: string | undefined;
-  if (chat?.threadId && kind !== 'outreach') {
+  if (chat?.threadId && !NEW_THREAD_KINDS.has(kind)) {
     const th = await db.threads.get(chat.threadId);
     externalThreadId = th?.externalThreadId;
     const last = (await db.messages.where('threadId').equals(chat.threadId).sortBy('sentAt')).pop();
@@ -533,7 +628,9 @@ export async function draftForSuggestion(
     inReplyToMessageId: inReplyTo,
     toEmail: person.primaryEmail,
     toLinkedinUrl: person.linkedinUrl,
-    subject: out.subject ?? (externalThreadId ? undefined : `Quick question`),
+    // a reply in an existing thread keeps the thread's subject; anything else carries the subject the template
+    // wrote for its kind (never a generic "Quick question" on a check-in or a thank-you)
+    subject: externalThreadId ? undefined : out.subject,
     bodyDraft: bodyFor(out, channel, kind, !!person.linkedinConnectedOn),
     status: 'draft',
     generatedBy,
@@ -572,7 +669,7 @@ export async function draftMessage(
     chatId: chat?.id,
     channel,
     kind,
-    externalThreadId: kind === 'outreach' ? undefined : th?.externalThreadId,
+    externalThreadId: NEW_THREAD_KINDS.has(kind) ? undefined : th?.externalThreadId,
     toEmail: person.primaryEmail,
     toLinkedinUrl: person.linkedinUrl,
     subject: out.subject,

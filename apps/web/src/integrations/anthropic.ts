@@ -8,7 +8,7 @@ import type {
   ResumeFacet,
   TriageResult,
 } from '@orbit/core';
-import { LINKEDIN_NOTE_MAX, MAX_WORDS } from '@orbit/core';
+import { fmtWindow, LINKEDIN_NOTE_MAX, MAX_WORDS, tzAbbr } from '@orbit/core';
 import { z } from 'zod';
 import { readPrefs } from './prefs';
 
@@ -230,7 +230,10 @@ export async function llmDraft(ctx: DraftContext, template: DraftOutput): Promis
     facts: ctx.facts.map((f) => ({ id: f.id, type: f.type, text: f.text, when: f.occurredAt })),
     kind: ctx.kind,
     channel: ctx.channel,
-    proposedWindows: ctx.proposedWindows,
+    proposedWindows: ctx.proposedWindows?.map((w) => ({
+      ...w,
+      label: `${fmtWindow(w, ctx.user.timezone)} ${tzAbbr(ctx.user.timezone, new Date(w.startIso))}`,
+    })),
     thread: ctx.thread,
     target: ctx.target,
     connection: ctx.connection,
@@ -253,7 +256,9 @@ export async function llmDraft(ctx: DraftContext, template: DraftOutput): Promis
       '5. Banned: "I hope this email finds you well", "reach out", "pick your brain", "leverage", "passionate about", "impressed by your background", "any advice you have", exclamation marks beyond one, and any em dash or en dash (use a comma or a period).',
       '6. Bumps are two sentences: "in case it got buried" plus one pointer. Thank-yous name where the memory lives (when, what they said), one specific thing the student is doing with it, and a permission line to follow up. Nurture notes carry an update or a question about something they mentioned and end with "no reply needed". Referral asks make it a two-minute task.',
       '7. Do not repeat any sentence in `recentOpenings`. For LinkedIn outreach also return body_short under 300 characters that still carries the connection and the ask.',
-      'A template draft is provided as the floor: keep its structure and every claim, improve specificity and voice, add nothing that is not in the context pack.',
+      '8. Never mention a person, company, school, post, article, event, mutual connection, number, grade or achievement that does not appear in the context pack or the template. Do not say you read their post or met them unless the connection says so. Times must be exactly the windows in the template.',
+      '9. Facts are stored in the third person from the student\'s notes ("They recommended ..."). Rewrite them to address the recipient ("you recommended ...") and keep them grammatical; never paste a fact sentence verbatim.',
+      'A template draft is provided as the floor: keep its structure and every claim, improve specificity and voice, add nothing that is not in the context pack. Drafts that mention anything not in the pack are discarded automatically.',
     ].join('\n'),
     `Context pack (trusted, from the student's own data):\n${JSON.stringify(packed, null, 1)}\n\nTemplate draft:\n${JSON.stringify(template)}`,
     schema,
