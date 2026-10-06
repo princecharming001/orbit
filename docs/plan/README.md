@@ -2,7 +2,7 @@
 
 Orbit (working name) is a networking copilot for college students who are recruiting: it connects to their Gmail, Google Calendar and LinkedIn data, learns what they are recruiting for, finds the right people for coffee chats, drafts outreach in their own voice, tracks every conversation through an inferred pipeline, remembers everything about each person (including meeting notes from Granola and voice capture), shows the network as an orbit map with paths to any target, and delivers a morning brief of one-tap suggestions. Nothing is sent without the student's approval.
 
-**Status:** the static v1 is built (`apps/web`, `packages/core`) and deploys to GitHub Pages from `main`; see 14 for what is in it. This directory is the complete 0→1 plan. It is written to be executed in order, phase by phase, by an engineer with no other context. It lives beside the unrelated Rooster spec in this repository (`docs/build/`, `HANDOFF.md`); the two share nothing but the confidence legend.
+**Status:** the static v1 is built (`apps/web`, `packages/core`) and deploys to GitHub Pages from `main`; see 14 for what is in it. This directory is the complete 0→1 plan. It is written to be executed in order, phase by phase, by an engineer with no other context. (It was first drafted next to an unrelated spec in another repository; this repository holds only Orbit.)
 
 ## Reading order
 
@@ -21,7 +21,8 @@ Orbit (working name) is a networking copilot for college students who are recrui
 | 11 | [Testing, evals, observability](11-testing-evals-observability.md) | test layers, per-task eval datasets and thresholds, budgets, analytics events, cost alerts |
 | 12 | [Roadmap and execution](12-roadmap-and-execution.md) | founder tasks, Phases 0–7 with acceptance criteria, decision log, open gaps, costs, launch checklist, runbook |
 | 13 | [LinkedIn warm-up](13-linkedin-warm-up.md) | engage with a cold target's posts before messaging: stage, plan, cards, stance on automation |
-| 14 | [Static v1 as built](14-static-v1-architecture.md) | what shipped on GitHub Pages, how it maps to the hosted plan, tests, migration steps |
+| 14 | [Static v1 as built](14-static-v1-architecture.md) | what shipped on GitHub Pages, how it maps to the hosted plan, the demo, tests, migration steps |
+| 15 | [Outreach playbook](15-outreach-playbook.md) | what every drafted message must say and must never say: limits per kind, sector notes, subject lines, cadence, anti-patterns (amends 05 §7) |
 
 Precedence when documents disagree: 02 (names) > 03 (schema) > 01 (behaviour) > the subsystem document. File a fix against the lower one.
 

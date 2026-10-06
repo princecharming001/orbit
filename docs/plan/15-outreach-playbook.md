@@ -1,6 +1,6 @@
 # 15. Outreach playbook
 
-Status: editorial specification for the drafting engine (`packages/core/src/drafts`) and for any human reviewing a draft. Distilled from twelve research lenses (career-center guides, practitioner forums, student-written guides, prep vendors). Amends 05 §5 (drafting and validation) and sets the exemplar corpus at `packages/core/src/drafts/corpus.json`. Confidence tags follow the legend in `README.md`.
+Status: editorial specification for the drafting engine (`packages/core/src/drafts`) and for any human reviewing a draft. Distilled from twelve research lenses (career-center guides, practitioner forums, student-written guides, prep vendors). Amends 05 §7 (drafting and validation) and sets the exemplar corpus at `packages/core/src/drafts/corpus.json`. Confidence tags follow the legend in `README.md`.
 
 The bar: a message Orbit drafts should be indistinguishable from one written by a senior who has done this a hundred times, got replies, and knows which of their emails worked. Not "good for AI." Good.
 

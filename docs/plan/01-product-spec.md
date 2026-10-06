@@ -167,7 +167,7 @@ Layout top to bottom:
 - Generated nightly for each user at `brief_time_local - 60 min` (default 06:00 local), delivered at `brief_time_local` by email (Resend) and in-app; push notifications are v1.5. The email mirrors the cards with deep links; approvals happen in the web app (one tap on mobile web), never from the email itself (no magic-link sends). [DECIDED]
 - Minimum 0 cards (then the email is not sent and the Today page says "Nothing to do today, your network is in good shape"), maximum 7. [DEFAULT]
 - Suggestion kinds, triggers, ranking and guardrails are specified in `07-nurture-and-morning-brief.md`.
-- "Approve & send" opens a 60-second undo toast; the send is queued with a 60 s delay and cancelled on undo. [DEFAULT]
+- "Approve & send" opens a 60-second undo toast; the send is queued with a 60 s delay and cancelled on undo. [DEFAULT] (Hosted plan; the static v1 sends at once, see 14 §1.)
 - A suggestion not acted on by the next brief is carried over at most once, then expires with a feedback event `expired`.
 
 ### 6.3 Approvals centre (`/inbox`)

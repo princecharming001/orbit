@@ -1,6 +1,9 @@
 import { expect, type Page, test } from '@playwright/test';
 
 async function prep(page: Page) {
+  // The demo is laid out on business days relative to "now" (a Monday chat is not "tomorrow" on a Friday), so pin
+  // the browser to a Tuesday morning; the clock keeps running from there.
+  await page.clock.install({ time: new Date('2026-10-06T10:00:00') });
   await page.addInitScript(() => {
     // headless Chromium closes pages on mailto: popups; the app only uses window.open for hand-offs
     window.open = () => null;
@@ -26,6 +29,10 @@ test.describe('Orbit demo flow', () => {
     await expect(page.getByTestId('suggestion-thank_you').first()).toBeVisible();
     await expect(page.getByTestId('suggestion-prep_brief').first()).toBeVisible();
     await expect(page.getByTestId('suggestion-warm_up_engage').first()).toBeVisible();
+    // the season's later stages are exercised too: a referral ask or a nurture check-in
+    await expect(
+      page.getByTestId('suggestion-ask_referral').or(page.getByTestId('suggestion-nurture_checkin')).first(),
+    ).toBeVisible();
     await expect(page.getByText(/upcoming/i)).toBeVisible();
   });
 
