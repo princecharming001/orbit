@@ -341,7 +341,10 @@ describe('nurture check-in (PS-13)', () => {
         lastConversationByPerson: new Map([['sofia', ago(50 * D)]]),
       }),
     );
-    expect(cands.some((x) => x.kind === 'nurture_checkin')).toBe(false);
+    // the stale hook is not used; 50 days of silence with a mentor still earns a plain update note (EG-19)
+    const n = cands.find((x) => x.kind === 'nurture_checkin');
+    expect(n?.signals.hookId).toBeUndefined();
+    expect(n?.reasonText).not.toMatch(/hook/);
   });
   it('counts days from the last real conversation, not a LinkedIn connection', () => {
     const cands = generateCandidates(

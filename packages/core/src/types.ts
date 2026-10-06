@@ -207,6 +207,8 @@ export interface TargetCompany {
   nameRaw: string;
   priority: 1 | 2 | 3;
   status: 'researching' | 'applied' | 'interviewing' | 'offer' | 'closed';
+  /** when the student last changed `status` (drives the applied, interviewing and offer updates) */
+  statusChangedAt?: string;
   deadline?: string;
   notes?: string;
 }
@@ -415,6 +417,8 @@ export interface CoffeeChat {
   lastOutboundAt?: string;
   lastInboundAt?: string;
   bumpCount: number;
+  /** an out-of-office reply pushed the next bump back: not before this time (return date plus two business days) */
+  bumpNotBefore?: string;
   scheduledEventId?: ID;
   completedAt?: string;
   followedUpAt?: string;

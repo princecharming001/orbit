@@ -24,13 +24,16 @@ Cold LinkedIn messages from a stranger get ignored. The same message after the r
 day 0   view_profile   "View their profile and follow them"
 day ⌊n/2⌋  react_post  "React to one recent post that you genuinely find useful"
 day n−1 comment_post   "Leave one specific, non-flattering comment (a question or an added point)"
-ready   day n, 09:00   outreach suggested once ready AND at least one action is done; or earlier once every action is done or skipped
+ready   day n, 09:00   outreach suggested once ready AND at least one action is done; once every action is resolved
+                       with at least one done, from the start of day 2 (or day n if sooner), so the activity is never
+                       one ten-minute burst; when every action is skipped, right away, worded as a choice
+                       ("You skipped the warm-up. Message Dana without it?")
 ```
 Stored on `coffee_chats.warmUp` (`WarmUpPlan`: `startedAt`, `readyAt`, `actions[] {id, kind, label, url, dueAt, doneAt?, skippedAt?}`).
 
 ## 5. Suggestions and brief
 
-- `warm_up_engage`: one card per pending action, with **Open on LinkedIn**, **Done**, **Skip this one**; urgency 0.55 (0.65 when overdue by a day). At most two per brief. Marking done writes a `linkedin_engaged` touchpoint (weight 0.15) and a `warmup_done` feedback event.
+- `warm_up_engage`: one card per pending action, with **Open on LinkedIn**, **Done**, **Skip this one**; urgency 0.55 (0.65 when overdue by a day). At most two per brief. Marking done writes a `linkedin_engaged` touchpoint (weight 0.15, deduplicated per action) and a `warmup_done` feedback event; marking an action that is already done again changes nothing.
 - When the plan is ready, the rule emits `new_outreach` with `signals.warmUpDone`, which the selector treats as hard-urgent so it is never crowded out by generic recommendations. The outreach draft gets `warmUpContext` ("I've enjoyed your recent posts.") only when at least two actions were done, so the message never claims engagement that did not happen.
 - Stage: `warming → outreach_sent` on send; `warming → replied` if they write first; `warming → identified` if the user cancels the plan.
 

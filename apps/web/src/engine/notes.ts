@@ -1,4 +1,4 @@
-import type { MeetingNote, NoteSource, User } from '@orbit/core';
+import type { MeetingNote, NoteSource, SuggestionKind, User } from '@orbit/core';
 import { heuristicNoteExtraction, newId, normalizeEmail, parseGranolaText, parseName } from '@orbit/core';
 import { addTouchpoint, notify, recomputePersonStrength } from '../db/repo';
 import { db } from '../db/schema';
@@ -225,11 +225,12 @@ export async function processNote(user: User, note: MeetingNote, now = new Date(
     ext.suggestedNextStep,
     `/people/${primary.id}`,
   );
-  // thank-yous drafted before these notes existed (calendar end, earlier sync) are re-drafted with the new facts
+  // drafts that lean on what was said (thank-you, check-in, referral ask) and were written before these notes
+  // existed are re-drafted with the new facts; an edited draft is left alone
   const drafted = await db.suggestions
     .where('personId')
     .equals(primary.id)
-    .filter((s) => s.kind === 'thank_you' && s.status === 'pending' && !!s.outboundMessageId)
+    .filter((s) => FACT_DRAFT_KINDS.has(s.kind) && s.status === 'pending' && !!s.outboundMessageId)
     .toArray();
   await evaluateImmediateSuggestions(user.id, { personId: primary.id, chatId: chat?.id }, now);
   for (const s of drafted) {
@@ -237,6 +238,8 @@ export async function processNote(user: User, note: MeetingNote, now = new Date(
     if (fresh?.status === 'pending') await refreshUntouchedDraft(user.id, fresh);
   }
 }
+
+const FACT_DRAFT_KINDS = new Set<SuggestionKind>(['thank_you', 'nurture_checkin', 'ask_referral']);
 
 export function parseDueHint(hint: string | undefined, from: Date): Date {
   const d = new Date(from);

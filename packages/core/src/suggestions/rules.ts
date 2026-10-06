@@ -17,6 +17,9 @@ import type {
 } from '../types';
 import { todayKey } from '../util/ids';
 import { warmUpProgress } from '../warmup/rules';
+import { addBusinessDays, businessDaysBetween, isBusinessDay, localWeekday } from './calendar';
+
+export * from './calendar';
 
 export interface RuleInput {
   userId: string;
@@ -75,15 +78,22 @@ export const THANK_YOU_WINDOW_DAYS = 3;
 /** A proposed time has to be at least this far away to be worth confirming. */
 const CONFIRM_LEAD_HOURS = 2;
 
-export function businessDaysBetween(a: Date, b: Date): number {
-  let n = 0;
-  const d = new Date(a);
-  while (d < b) {
-    d.setDate(d.getDate() + 1);
-    if (d.getDay() !== 0 && d.getDay() !== 6) n++;
-  }
-  return n;
-}
+/** Business days of silence before the first bump, and before the second (graceful last) one, by channel. */
+export const BUMP_AFTER_BUSINESS_DAYS = { gmail: [5, 8], linkedin: [10, 12] } as const;
+/** Business days of silence after the last allowed bump before the chat is closed as no response. */
+export const NO_RESPONSE_AFTER_LAST_BUMP_BUSINESS_DAYS = 10;
+/** An offered intro that has not happened after this many days gets a gentle follow-up. */
+const INTRO_FOLLOWUP_AFTER_DAYS = 7;
+const INTRO_FOLLOWUP_MAX_DAYS = 60;
+/** A live company: this many open threads there already and new cold outreach to it waits. */
+const LIVE_THREADS_PER_COMPANY = 2;
+const LIVE_STAGES: ChatStage[] = ['outreach_sent', 'replied', 'scheduling', 'scheduled'];
+/** An offer to make an introduction, as opposed to an offer to refer or to forward a resume. */
+export const INTRO_OFFER = /\b(intro(duce|duction)?|connect (you|me)|put (you|me) in touch)\b/i;
+const REFERRAL_OFFER =
+  /\b(refer|referral|put in a (good )?word|forward (your|my) resume|pass (your|my) resume)\b/i;
+/** The status change of a target company is news worth sharing for this long. */
+const STATUS_NEWS_DAYS = 21;
 /** Local date of the Monday that starts the outreach week containing `d` (weeks run Monday to Sunday). */
 export function weekMondayKey(d: Date): string {
   const m = new Date(d);
@@ -143,8 +153,10 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
           personId: chat.personId,
           chatId: chat.id,
           dedupeKey: `new:${chat.personId}:${chat.id}`,
-          reasonText: `Warm-up done (${prog.done} of ${prog.total}); ready to message ${person.firstName}`,
-          signals: { warmUpDone: prog.done },
+          reasonText: prog.skippedAll
+            ? `You skipped the warm-up. Message ${person.firstName} without it?`
+            : `Warm-up done (${prog.done} of ${prog.total}); ready to message ${person.firstName}`,
+          signals: { warmUpDone: prog.done, warmUpSkipped: prog.skippedAll || undefined },
           payload: { channel: 'linkedin' },
           urgency: 0.6,
           goalRelevance: rel,
@@ -167,30 +179,21 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
       continue;
     }
     if (chat.stage === 'outreach_sent' && chat.lastOutboundAt) {
-      const since = new Date(chat.lastOutboundAt);
-      const bdays = businessDaysBetween(since, now);
-      const threshold = chat.outreachChannel === 'linkedin' ? 10 : 5;
-      const maxBumps = maxBumpsFor(
-        sectorOf({ title: person.currentTitle, org: person.currentOrganizationRaw }),
-        inp.settings.maxBumps,
-      );
-      if (
-        bdays >= threshold &&
-        chat.bumpCount < maxBumps &&
-        (!chat.lastInboundAt || new Date(chat.lastInboundAt) < since)
-      ) {
+      const due = bumpDue(chat, person, inp);
+      if (due) {
         out.push({
           kind: 'follow_up_bump',
           personId: chat.personId,
           chatId: chat.id,
           dedupeKey: `bump:${chat.id}:${chat.bumpCount + 1}`,
-          reasonText:
-            chat.bumpCount === 0
-              ? `No reply in ${bdays} business days; one short bump in case it got buried`
-              : `Still quiet after ${bdays} business days; a graceful last word, then let it rest`,
-          signals: { businessDays: bdays, bumpCount: chat.bumpCount },
-          payload: {},
-          urgency: Math.min(0.9, 0.7 + 0.1 * (bdays - threshold)),
+          reasonText: due.backFromOoo
+            ? `${person.firstName} was out of office and should be back now; a short bump so your note is not lost`
+            : chat.bumpCount === 0
+              ? `No reply in ${due.bdays} business days; one short bump in case it got buried`
+              : `Still quiet after ${due.bdays} business days; a graceful last word, then let it rest`,
+          signals: { businessDays: due.bdays, bumpCount: chat.bumpCount, bumpNumber: chat.bumpCount + 1 },
+          payload: { bumpNumber: chat.bumpCount + 1 },
+          urgency: Math.min(0.9, 0.7 + 0.1 * (due.bdays - due.threshold)),
           goalRelevance: liveRel,
           confidence: 1,
         });
@@ -303,6 +306,50 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
         confidence: 1,
       });
     }
+    const facts = (inp.factsByPerson.get(person.id) ?? []).filter((f) => !f.deletedAt);
+    const factTime = (f: PersonFact) => new Date(f.occurredAt ?? f.createdAt).getTime();
+    const settled = chat.stage === 'nurturing' || chat.stage === 'followed_up';
+    // an intro they offered and that has not happened yet: a gentle follow-up with a blurb they can forward
+    const introOffer = settled
+      ? facts
+          .filter((f) => f.type === 'offer' && INTRO_OFFER.test(f.text) && !REFERRAL_OFFER.test(f.text))
+          .filter((f) => {
+            const age = (now.getTime() - factTime(f)) / DAY;
+            return age >= INTRO_FOLLOWUP_AFTER_DAYS && age <= INTRO_FOLLOWUP_MAX_DAYS;
+          })
+          .sort((a, b) => factTime(b) - factTime(a))[0]
+      : undefined;
+    const introHappened =
+      !!introOffer &&
+      inp.chats.some(
+        (c) => c.referrerPersonId === person.id && new Date(c.createdAt).getTime() >= factTime(introOffer),
+      );
+    const quietSince = (days: number) =>
+      !chat.lastOutboundAt || now.getTime() - new Date(chat.lastOutboundAt).getTime() >= days * DAY;
+    if (introOffer && !introHappened && quietSince(5)) {
+      const target = introTarget(introOffer.text);
+      const age = Math.round((now.getTime() - factTime(introOffer)) / DAY);
+      out.push({
+        kind: 'intro_request',
+        personId: person.id,
+        chatId: chat.id,
+        dedupeKey: `introfu:${introOffer.id}`,
+        reasonText: `${person.firstName} offered to introduce you to ${target.phrase} ${age} days ago; follow up with a blurb they can forward`,
+        signals: { offerId: introOffer.id, offeredAt: introOffer.occurredAt ?? introOffer.createdAt },
+        payload: {
+          offerId: introOffer.id,
+          target: {
+            name: target.name,
+            firstName: target.name,
+            org: person.currentOrganizationRaw,
+            offered: true,
+          },
+        },
+        urgency: 0.6,
+        goalRelevance: liveRel,
+        confidence: 1,
+      });
+    }
     if (
       chat.stage === 'nurturing' ||
       (chat.stage === 'followed_up' &&
@@ -313,58 +360,104 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
       const last = lastIso ? new Date(lastIso) : undefined;
       const days = last ? (now.getTime() - last.getTime()) / DAY : 999;
       const cadence = CADENCE[person.relationshipType];
-      const facts = inp.factsByPerson.get(person.id) ?? [];
+      // an offered intro gets its own follow-up; "how did that go?" is not a question about an offer
       const hook = facts
-        .filter((f) => (f.type === 'hook' || f.type === 'offer') && !f.deletedAt)
-        .filter(
-          (f) => now.getTime() - new Date(f.occurredAt ?? f.createdAt).getTime() <= HOOK_MAX_AGE_DAYS * DAY,
-        )
-        .sort((a, b) => (b.occurredAt ?? b.createdAt).localeCompare(a.occurredAt ?? a.createdAt))[0];
-      if (days >= cadence && !inp.recentlyContacted.has(person.id) && hook) {
+        .filter((f) => f.type === 'hook' || (f.type === 'offer' && !INTRO_OFFER.test(f.text)))
+        .filter((f) => now.getTime() - factTime(f) <= HOOK_MAX_AGE_DAYS * DAY)
+        .sort((a, b) => factTime(b) - factTime(a))[0];
+      // with no hook, a plain "quick update" note is still worth sending every six to eight weeks; the draft asks
+      // the student for the update instead of inventing one
+      const updateDue = days >= cadence + 14;
+      if (days >= cadence && !inp.recentlyContacted.has(person.id) && (hook || updateDue)) {
         out.push({
           kind: 'nurture_checkin',
           personId: chat.personId,
           chatId: chat.id,
           dedupeKey: `nurture:${person.id}:${monthKey(now)}`,
-          reasonText: `${Math.round(days)} days since your last conversation; you have a hook: "${hook.text.slice(0, 60)}"`,
-          signals: { days, cadence, hookId: hook.id },
-          payload: { hookId: hook.id },
+          reasonText: hook
+            ? `${Math.round(days)} days since your last conversation; you have a hook: "${clip(hook.text, 60)}"`
+            : `${Math.round(days)} days since your last conversation; a short update on your search keeps it warm`,
+          signals: { days, cadence, hookId: hook?.id },
+          payload: hook ? { hookId: hook.id } : { needsUpdate: true },
           urgency: 0.4,
           goalRelevance: rel,
           confidence: 1,
         });
       }
     }
-    if (['followed_up', 'nurturing'].includes(chat.stage)) {
-      const facts = inp.factsByPerson.get(person.id) ?? [];
-      const offer = facts.find(
-        (f) => f.type === 'offer' && /refer|word|forward/i.test(f.text) && !f.deletedAt,
-      );
-      const orgRaw = (person.currentOrganizationRaw ?? '').toLowerCase();
-      const tc = inp.targetCompanies.find(
-        (t) =>
-          ((person.currentOrganizationId && t.organizationId === person.currentOrganizationId) ||
-            t.nameRaw.toLowerCase() === orgRaw) &&
-          (t.status === 'applied' ||
-            (t.deadline && new Date(t.deadline).getTime() - now.getTime() < 21 * DAY)),
-      );
-      if (tc && (offer || person.strength >= 0.5) && !inp.recentlyContacted.has(person.id)) {
-        const soon = tc.deadline && new Date(tc.deadline).getTime() - now.getTime() < 7 * DAY;
+    if (settled) {
+      const offer = facts.find((f) => f.type === 'offer' && REFERRAL_OFFER.test(f.text));
+      const tc = targetCompanyOf(person, inp.targetCompanies);
+      const deadlineDays = tc?.deadline ? (new Date(tc.deadline).getTime() - now.getTime()) / DAY : undefined;
+      // a referral only helps before or right with the application: ask while researching once the deadline is
+      // within a month (or they offered), and right away once applied
+      const timely =
+        !!tc &&
+        (tc.status === 'applied' ||
+          (tc.status === 'researching' &&
+            (!!offer || (deadlineDays !== undefined && deadlineDays >= 0 && deadlineDays <= 30))));
+      if (tc && timely && (offer || person.strength >= 0.5) && !inp.recentlyContacted.has(person.id)) {
+        const soon = deadlineDays !== undefined && deadlineDays < 7;
         out.push({
           kind: 'ask_referral',
           personId: person.id,
           chatId: chat.id,
           dedupeKey: `ref:${person.id}:${tc.id}`,
           reasonText: offer
-            ? `${person.firstName} offered to refer you and ${tc.nameRaw} is ${tc.status === 'applied' ? 'in progress' : 'closing soon'}`
-            : `${tc.nameRaw} deadline is near and you're close with ${person.firstName}`,
-          signals: { offerId: offer?.id, deadline: tc.deadline },
+            ? tc.status === 'applied'
+              ? `${person.firstName} offered to refer you and your ${tc.nameRaw} application is in`
+              : `${person.firstName} offered to refer you; ask before you apply to ${tc.nameRaw}`
+            : tc.status === 'applied'
+              ? `You applied to ${tc.nameRaw} and you're close with ${person.firstName}; a referral can still help`
+              : `${tc.nameRaw} closes ${deadlineDays !== undefined && deadlineDays < 1.5 ? 'very soon' : `in ${Math.ceil(deadlineDays ?? 0)} days`}; ask ${person.firstName} for a referral before you apply`,
+          signals: { offerId: offer?.id, deadline: tc.deadline, status: tc.status },
           payload: { targetCompanyId: tc.id, offerId: offer?.id },
           urgency: 0.65 + (soon ? 0.2 : 0),
           goalRelevance: 1,
           confidence: 1,
         });
       }
+    }
+  }
+  // status news: applied, interviewing or an offer at a target company goes to the people who helped there
+  // (and, for an offer, to mentors), one card per person; the brief's one-check-in limit spreads them over days
+  for (const tc of inp.targetCompanies) {
+    if (!['applied', 'interviewing', 'offer'].includes(tc.status) || !tc.statusChangedAt) continue;
+    const changed = new Date(tc.statusChangedAt).getTime();
+    if (now.getTime() - changed > STATUS_NEWS_DAYS * DAY || changed > now.getTime()) continue;
+    for (const chat of inp.chats) {
+      if (chat.stage !== 'followed_up' && chat.stage !== 'nurturing') continue;
+      const p = inp.people.get(chat.personId);
+      if (!p?.isHuman || p.hiddenAt) continue;
+      const atCompany = targetCompanyOf(p, [tc]) === tc;
+      const mentor = p.relationshipType === 'mentor' && tc.status === 'offer';
+      if (!atCompany && !mentor) continue;
+      // they already know if you talked after the change
+      const lastTalk = inp.lastConversationByPerson?.get(p.id);
+      if (lastTalk && new Date(lastTalk).getTime() > changed) continue;
+      const update =
+        tc.status === 'offer'
+          ? `I received an offer from ${tc.nameRaw}, and I wanted to thank you for your help along the way`
+          : tc.status === 'interviewing'
+            ? `I'm now interviewing with ${tc.nameRaw}`
+            : `I submitted my application to ${tc.nameRaw}`;
+      out.push({
+        kind: 'nurture_checkin',
+        personId: p.id,
+        chatId: chat.id,
+        dedupeKey: `status:${tc.id}:${tc.status}:${p.id}`,
+        reasonText:
+          tc.status === 'offer'
+            ? `You have an offer from ${tc.nameRaw}; thank ${p.firstName} and share the news`
+            : tc.status === 'interviewing'
+              ? `You're interviewing at ${tc.nameRaw}; tell ${p.firstName}, who helped you get there`
+              : `You applied to ${tc.nameRaw}; let ${p.firstName} know, since you talked with them`,
+        signals: { targetCompanyId: tc.id, status: tc.status, statusChangedAt: tc.statusChangedAt },
+        payload: { targetCompanyId: tc.id, statusUpdate: tc.status, update },
+        urgency: tc.status === 'offer' ? 0.6 : 0.5,
+        goalRelevance: atCompany ? 1 : 0.6,
+        confidence: 1,
+      });
     }
   }
   // report back to whoever made the intro, once the chat with the target resolved
@@ -444,11 +537,12 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
         personId: a.personId,
         chatId: a.chatId,
         dedupeKey: `ai:${a.id}`,
-        reasonText: `${overdue ? 'Overdue' : 'Due today'}: ${a.text.slice(0, 80)}${p ? ` (for ${p.firstName})` : ''}`,
+        reasonText: `${overdue ? 'Overdue' : 'Due today'}: ${clip(a.text, 80)}${p ? ` (for ${p.firstName})` : ''}`,
         signals: { dueAt: a.dueAt, overdue },
         payload: { actionItemId: a.id },
         urgency: 0.7 + (overdue ? 0.15 : 0),
-        goalRelevance: goalRel(a.personId),
+        // a promise made to someone is the student's word: it outranks any company fit score
+        goalRelevance: 1,
         confidence: 1,
       });
     }
@@ -488,6 +582,16 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
   const weekdayIndex = (now.getDay() + 6) % 7; // Monday = 0 ... Sunday = 6
   const behind = weekdayIndex >= 2 && remaining > inp.settings.weeklyOutreachTarget / 2;
   let added = 0;
+  // companies where the student already has live threads: a third cold note there waits until one resolves, so
+  // contacts do not compare near-identical emails
+  const orgKey = (p?: Person) =>
+    p ? (p.currentOrganizationId ?? p.currentOrganizationRaw?.toLowerCase() ?? undefined) : undefined;
+  const liveByOrg = new Map<string, number>();
+  for (const c of inp.chats) {
+    if (!LIVE_STAGES.includes(c.stage)) continue;
+    const k = orgKey(inp.people.get(c.personId));
+    if (k) liveByOrg.set(k, (liveByOrg.get(k) ?? 0) + 1);
+  }
   for (const r of inp.recommendations
     .filter((r) => r.status === 'new' || r.status === 'saved')
     .sort((a, b) => (b.status === 'saved' ? 1 : 0) - (a.status === 'saved' ? 1 : 0) || b.score - a.score)) {
@@ -495,6 +599,8 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
     if (inp.chats.some((c) => c.personId === r.personId && c.stage !== 'archived')) continue;
     const p = inp.people.get(r.personId);
     if (!p) continue;
+    const k = orgKey(p);
+    if (k && (liveByOrg.get(k) ?? 0) >= LIVE_THREADS_PER_COMPANY) continue;
     out.push({
       kind: 'new_outreach',
       personId: r.personId,
@@ -515,6 +621,74 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
   return out;
 }
 
+/** The target company a person works at, matched by organization id or by name. */
+export function targetCompanyOf(
+  p: Pick<Person, 'currentOrganizationId' | 'currentOrganizationRaw'>,
+  tcs: TargetCompany[],
+): TargetCompany | undefined {
+  const orgRaw = (p.currentOrganizationRaw ?? '').toLowerCase();
+  return tcs.find(
+    (t) =>
+      (!!p.currentOrganizationId && t.organizationId === p.currentOrganizationId) ||
+      (!!orgRaw && t.nameRaw.toLowerCase() === orgRaw),
+  );
+}
+
+/**
+ * Who an offered intro is to, from the offer as the note or the email phrased it ("Happy to intro me to their PM
+ * lead", "offered to connect me with Priya on the growth team"). `phrase` is for the card ("their PM lead"),
+ * `name` is how the student says it back to the person who offered ("your PM lead").
+ */
+export function introTarget(offer: string): { phrase: string; name: string } {
+  const m =
+    /\b(?:intro(?:duce)?|connect|put)\b(?: (?:me|you|him|her|them))?(?: in touch)? (?:to|with) (.+?)(?:[.;!?]|,| if | when | once |$)/i.exec(
+      offer,
+    );
+  const raw = (m?.[1] ?? '').trim().replace(/\s+/g, ' ');
+  if (!raw || raw.length > 60) return { phrase: 'someone they know', name: 'the person you mentioned' };
+  const phrase = raw.replace(/^(his|her)\b/i, 'their');
+  const name = phrase.replace(/^their\b/i, 'your').replace(/^(a|an) /i, 'a ');
+  return { phrase, name };
+}
+
+/**
+ * Whether a follow-up bump is due on an unanswered thread: enough business days of silence since the last message
+ * (5 then 8 for email, 10 then 12 for LinkedIn; holidays and the winter freeze do not count), bumps left under the
+ * sector cap, and any out-of-office return date (plus two business days) behind us.
+ */
+export function bumpDue(
+  chat: Pick<
+    CoffeeChat,
+    'stage' | 'lastOutboundAt' | 'lastInboundAt' | 'bumpCount' | 'outreachChannel' | 'bumpNotBefore'
+  >,
+  person: Pick<Person, 'currentTitle' | 'currentOrganizationRaw'>,
+  inp: Pick<RuleInput, 'now' | 'settings' | 'timezone'>,
+): { bdays: number; threshold: number; backFromOoo: boolean } | undefined {
+  if (chat.stage !== 'outreach_sent' || !chat.lastOutboundAt) return undefined;
+  const since = new Date(chat.lastOutboundAt);
+  if (chat.lastInboundAt && new Date(chat.lastInboundAt) >= since) return undefined;
+  const maxBumps = maxBumpsFor(
+    sectorOf({ title: person.currentTitle, org: person.currentOrganizationRaw }),
+    inp.settings.maxBumps,
+  );
+  if (chat.bumpCount >= maxBumps) return undefined;
+  const steps = BUMP_AFTER_BUSINESS_DAYS[chat.outreachChannel === 'linkedin' ? 'linkedin' : 'gmail'];
+  const threshold = steps[Math.min(chat.bumpCount, steps.length - 1)]!;
+  const bdays = businessDaysBetween(since, inp.now, inp.timezone);
+  if (bdays < threshold) return undefined;
+  const notBefore = chat.bumpNotBefore ? new Date(chat.bumpNotBefore) : undefined;
+  if (notBefore && inp.now < notBefore) return undefined;
+  // the out-of-office reply is what held the bump back if, without it, the bump would have been due earlier
+  const backFromOoo =
+    !!notBefore && addBusinessDays(since, threshold, inp.timezone).getTime() < notBefore.getTime();
+  return { bdays, threshold, backFromOoo };
+}
+
+/** On a quiet day (the student's own, a weekend or a holiday) only time-bound items make the brief. */
+export function isQuietDay(now: Date, settings: Pick<UserSettings, 'quietDays'>, tz?: string): boolean {
+  return settings.quietDays.includes(localWeekday(now, tz)) || !isBusinessDay(now, tz);
+}
+
 /** A thank-you is due while the conversation is fresh and nothing has gone out since it ended. */
 export function thankYouDue(chat: Pick<CoffeeChat, 'completedAt' | 'lastOutboundAt'>, now: Date): boolean {
   if (!chat.completedAt) return false;
@@ -522,6 +696,15 @@ export function thankYouDue(chat: Pick<CoffeeChat, 'completedAt' | 'lastOutbound
   if (now.getTime() - completed >= THANK_YOU_WINDOW_DAYS * DAY) return false;
   if (chat.lastOutboundAt && new Date(chat.lastOutboundAt).getTime() > completed) return false;
   return true;
+}
+
+/** Shorten to at most `max` characters on a word boundary, with "..." when something was cut. */
+export function clip(text: string, max: number): string {
+  const t = text.trim().replace(/\s+/g, ' ');
+  if (t.length <= max) return t.replace(/[.\s]+$/, '');
+  const cut = t.slice(0, max - 3);
+  const at = cut.lastIndexOf(' ');
+  return `${(at > max / 2 ? cut.slice(0, at) : cut).replace(/[,;:.\s]+$/, '')}...`;
 }
 
 const plural = (n: number, unit: string) => `${n} ${unit}${n === 1 ? '' : 's'}`;
@@ -546,6 +729,78 @@ export function relTime(iso: string, now: Date, tz?: string): string {
   if (hours < 6 || days === 0) return future ? `in ${plural(hours, 'hour')}` : `${plural(hours, 'hour')} ago`;
   if (days === 1) return future ? 'tomorrow' : 'yesterday';
   return future ? `in ${days} days` : `${days} days ago`;
+}
+
+const MONTH_NAMES = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+];
+
+/**
+ * A month in words relative to now: "this month", "last month", "in March", "last September" (within a year),
+ * "in September 2024" (older).
+ */
+export function monthPhrase(iso: string, now: Date, tz?: string): string {
+  const k = todayKey(new Date(iso), tz);
+  const n = todayKey(now, tz);
+  const [y, m] = [Number(k.slice(0, 4)), Number(k.slice(5, 7))];
+  const [ny, nm] = [Number(n.slice(0, 4)), Number(n.slice(5, 7))];
+  const months = (ny - y) * 12 + (nm - m);
+  const name = MONTH_NAMES[m - 1]!;
+  if (months <= 0) return 'this month';
+  if (months === 1) return 'last month';
+  if (y === ny) return `in ${name}`;
+  if (months < 12) return `last ${name}`;
+  return `in ${name} ${y}`;
+}
+
+const TOUCH_WORDS: Record<string, string> = {
+  meeting: 'met',
+  note: 'met',
+  email_in: 'emailed',
+  email_out: 'emailed',
+  linkedin_in: 'messaged on LinkedIn',
+  linkedin_out: 'messaged on LinkedIn',
+  linkedin_connected: 'connected on LinkedIn',
+  linkedin_engaged: 'engaged on LinkedIn',
+  manual_log: 'were in touch',
+  email_cc: 'were on the same email thread',
+  intro_observed: 'were in touch',
+};
+
+/**
+ * One plain sentence about the history with a person for their summary: "You have 3 interactions in the last
+ * 90 days, most recently 2 days ago." or, when nothing is recent, "You last met last September." Only touches
+ * within 90 days are called recent.
+ */
+export function lastContactPhrase(
+  tps: { kind: string; occurredAt: string }[],
+  now: Date,
+  tz?: string,
+): string {
+  if (!tps.length) return 'No interactions yet.';
+  const sorted = [...tps].sort((a, b) => b.occurredAt.localeCompare(a.occurredAt));
+  const latest = sorted[0]!;
+  const recent = sorted.filter((t) => now.getTime() - new Date(t.occurredAt).getTime() <= 90 * DAY);
+  if (recent.length) {
+    const when = relTime(latest.occurredAt, now, tz);
+    return recent.length === 1
+      ? `You were last in touch ${when}.`
+      : `You have ${recent.length} interactions in the last 90 days, most recently ${when}.`;
+  }
+  const verb = TOUCH_WORDS[latest.kind] ?? 'were in touch';
+  const when = monthPhrase(latest.occurredAt, now, tz);
+  return verb.startsWith('were ') ? `You were last ${verb.slice(5)} ${when}.` : `You last ${verb} ${when}.`;
 }
 
 export function scoreCandidate(c: Candidate, dismissCounts: Map<string, number>): number {
@@ -582,11 +837,23 @@ export const MESSAGE_KINDS: SuggestionKind[] = [
 /** At most this many non-urgent messages to the same company in one brief. */
 export const PER_COMPANY_CAP = 2;
 
+/** Kinds that may still go out on a quiet day: answers inside a live exchange and time-bound items. */
+const QUIET_DAY_KINDS: SuggestionKind[] = [
+  ...HARD_URGENT,
+  'schedule_propose',
+  'action_item_reminder',
+  'warm_up_engage',
+];
+
 export function selectForBrief(
   cands: Candidate[],
   dismissCounts: Map<string, number>,
   max = 7,
-  opts: { orgOf?: (personId: string) => string | undefined } = {},
+  opts: {
+    orgOf?: (personId: string) => string | undefined;
+    /** a quiet day (see isQuietDay): cold and optional messages wait for the next working day */
+    quiet?: boolean;
+  } = {},
 ): (Candidate & { priorityScore: number })[] {
   const scored = cands
     .map((c) => ({ ...c, priorityScore: scoreCandidate(c, dismissCounts) }))
@@ -601,11 +868,15 @@ export function selectForBrief(
     nurture_checkin: 1,
     warm_up_engage: 2,
   };
+  // promises due today or overdue are never crowded out
   const isHard = (c: Candidate) =>
-    HARD_URGENT.includes(c.kind) || (c.kind === 'new_outreach' && !!c.signals.warmUpDone);
+    HARD_URGENT.includes(c.kind) ||
+    c.kind === 'action_item_reminder' ||
+    (c.kind === 'new_outreach' && !!c.signals.warmUpDone);
   const isMessage = (c: Candidate) => MESSAGE_KINDS.includes(c.kind);
   const take = (c: Candidate & { priorityScore: number }) => {
     if (chosen.length >= max) return;
+    if (opts.quiet && !QUIET_DAY_KINDS.includes(c.kind)) return;
     const message = isMessage(c);
     const hard = isHard(c);
     if (message && !hard && c.personId && perPerson.has(c.personId)) return;
@@ -665,6 +936,14 @@ export const RULE_KINDS: SuggestionKind[] = [
   'reconnect',
   'ask_referral',
 ];
+
+/** Rule-made cards whose kind can also be made by hand (an intro asked from the Reach panel is the student's). */
+const RULE_KEY_PREFIXES = ['introfu:'];
+
+/** Whether a suggestion row came from generateCandidates, so the validity pass may retire it. */
+export function isRuleSuggestion(s: Pick<Suggestion, 'kind' | 'dedupeKey'>): boolean {
+  return RULE_KINDS.includes(s.kind) || RULE_KEY_PREFIXES.some((p) => s.dedupeKey.startsWith(p));
+}
 
 /** Stages in which a suggestion of this kind can still be true for its chat. Kinds not listed do not depend on the stage. */
 export const KIND_STAGES: Partial<Record<SuggestionKind, ChatStage[]>> = {

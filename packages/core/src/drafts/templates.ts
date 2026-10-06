@@ -77,7 +77,15 @@ export interface DraftContext {
     proposedTimes?: { startIso: string; raw: string }[];
     lastSignal?: string;
   };
-  target?: { name: string; firstName?: string; title?: string; org?: string; why?: string };
+  target?: {
+    name: string;
+    firstName?: string;
+    title?: string;
+    org?: string;
+    why?: string;
+    /** the recipient offered this intro earlier; the message follows up on the offer instead of asking cold */
+    offered?: boolean;
+  };
   chat?: {
     completedAt?: string;
     stage?: string;
@@ -973,6 +981,12 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       body = `${G}\n\nSmall ask. I'm trying to learn ${why}, and I'd love to talk with ${tName}${t?.title ? ` (${t.title}${t.org ? ` at ${t.org}` : ''})` : t?.org ? ` at ${t.org}` : ''}.${link} If you'd be comfortable making a short intro, here's something you could forward:\n\n${blurb}\n\nAnd if it's not a good fit to ask, no worries at all.\n\n${S}`;
       claims.push({ text: `target: ${tName}`, kind: 'logistics' });
       subject = `Small ask: intro to ${tName}?`;
+      if (t?.offered) {
+        // following up on an intro they offered: name the offer, make forwarding a two-second task
+        const offerBlurb = `"${ctx.user.fullName} is ${me}, recruiting for ${targetLabel(ctx)} ${/intern/i.test(ctx.user.cycleLabel) ? 'internships' : 'roles'}.${cred} would love 15 minutes to hear about your work${t.org ? ` at ${t.org}` : ''}."`;
+        body = `${G}\n\nWhen we spoke, you kindly offered to introduce me to ${tName}. If that's still easy, here's a short note you could forward so it takes no time:\n\n${offerBlurb}\n\nAnd if the timing isn't right anymore, no worries at all. Thanks again for offering.\n\n${S}`;
+        subject = ctx.thread ? undefined : `Intro to ${tName}`;
+      }
       break;
     }
     case 'report_back': {

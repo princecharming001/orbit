@@ -290,7 +290,12 @@ function Goals() {
                 <td>
                   <Select
                     value={t.status}
-                    onChange={(e) => db.targetCompanies.update(t.id, { status: e.target.value as never })}
+                    onChange={(e) =>
+                      db.targetCompanies.update(t.id, {
+                        status: e.target.value as never,
+                        statusChangedAt: new Date().toISOString(),
+                      })
+                    }
                     className="h-7 text-[12px]"
                   >
                     {['researching', 'applied', 'interviewing', 'offer', 'closed'].map((s) => (

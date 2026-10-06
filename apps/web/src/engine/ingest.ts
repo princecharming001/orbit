@@ -1,12 +1,15 @@
 import type { CalendarEvent, CoffeeChat, EmailMessage, EmailThread, Person, User } from '@orbit/core';
 import {
+  addBusinessDays,
   emailDomain,
   heuristicSignal,
   heuristicTriage,
   isAutomatedSender,
   newId,
   normalizeEmail,
+  OUT_OF_OFFICE,
   parseName,
+  parseReturnDate,
   splitSignature,
   stripQuotedReply,
 } from '@orbit/core';
@@ -297,7 +300,12 @@ async function processNetworkingThread(
   }
   if (!thread.chatId) await db.threads.update(thread.id, { chatId: chat.id });
   for (const m of newMessages.sort((a, b) => a.sentAt.localeCompare(b.sentAt))) {
-    if (m.isAutomated) continue;
+    if (m.isAutomated) {
+      // an auto-reply is not an answer, but an out-of-office one says when a bump is worth sending
+      if (m.direction === 'inbound' && OUT_OF_OFFICE.test(m.bodyText))
+        await holdBumpForOutOfOffice(chat, m, user.timezone, now);
+      continue;
+    }
     const context = all
       .filter((x) => x.sentAt < m.sentAt)
       .slice(-3)
@@ -332,7 +340,10 @@ async function processNetworkingThread(
     });
     m.signal = signal;
     m.extraction = extraction;
-    if (m.direction === 'inbound' && m.fromPersonId === counterpartId) {
+    if (m.direction === 'inbound' && signal === 'out_of_office') {
+      // not a reply: the thread is still waiting on them, and the bump waits until they are back
+      await holdBumpForOutOfOffice(chat, m, user.timezone, now);
+    } else if (m.direction === 'inbound' && m.fromPersonId === counterpartId) {
       for (const f of extraction.factsAboutSender)
         await db.facts.add({
           id: newId('f'),
@@ -407,6 +418,24 @@ async function processNetworkingThread(
     }
   }
   await evaluateImmediateSuggestions(user.id, { chatId: chat.id, personId: counterpartId }, now);
+}
+
+/**
+ * An out-of-office reply holds the next bump until two business days after the return date it names, or five
+ * business days after the reply when it names none.
+ */
+async function holdBumpForOutOfOffice(
+  chat: CoffeeChat,
+  m: EmailMessage,
+  tz: string | undefined,
+  now: Date,
+): Promise<void> {
+  const sent = new Date(m.sentAt);
+  const back = parseReturnDate(m.bodyText, sent, tz);
+  const notBefore = (back ? addBusinessDays(back, 2, tz) : addBusinessDays(sent, 5, tz)).toISOString();
+  if (chat.bumpNotBefore && chat.bumpNotBefore >= notBefore) return;
+  await db.chats.update(chat.id, { bumpNotBefore: notBefore, updatedAt: now.toISOString() });
+  chat.bumpNotBefore = notBefore;
 }
 
 /**
@@ -600,11 +629,18 @@ export async function ingestEvents(
         );
       await recomputePersonStrength(pid, now);
     } else {
+      // the invite has no creation time here; the last message in the thread is the closest evidence of when
+      // the time was agreed
+      const agreedAt = [chat.lastInboundAt, chat.lastOutboundAt]
+        .filter((x): x is string => !!x)
+        .sort()
+        .pop();
       await evaluateTrigger(
         chat,
         { type: 'event_scheduled', confidence },
         { table: 'events', id: ev.id },
         now,
+        agreedAt ? new Date(agreedAt) : undefined,
       );
     }
     await evaluateImmediateSuggestions(user.id, { chatId: chat.id, personId: pid }, now);

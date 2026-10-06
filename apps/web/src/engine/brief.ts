@@ -18,8 +18,10 @@ import {
   generateCandidates,
   generateDraft,
   isBlocked,
+  isQuietDay,
+  isRuleSuggestion,
+  lastContactPhrase,
   newId,
-  RULE_KINDS,
   scoreCandidate,
   selectForBrief,
   staleReason,
@@ -28,7 +30,7 @@ import {
   validateDraft,
   warmUpProgress,
 } from '@orbit/core';
-import { feedback, notify, recomputeAllStrengths } from '../db/repo';
+import { addTouchpoint, feedback, notify, recomputeAllStrengths } from '../db/repo';
 import { db } from '../db/schema';
 import { hasLlm, llmDraft, llmSummary } from '../integrations/anthropic';
 import { bestPathStrength, buildReachGraph } from './graph';
@@ -81,7 +83,8 @@ async function ruleInput(userId: string, now: Date, scope?: { chatId?: string; p
     if (!c.threadId) continue;
     const msgs = await db.messages.where('threadId').equals(c.threadId).toArray();
     const last = msgs
-      .filter((m) => m.direction === 'inbound' && !m.isAutomated)
+      // an auto-reply or an out-of-office note is not the person answering
+      .filter((m) => m.direction === 'inbound' && !m.isAutomated && m.signal !== 'out_of_office')
       .sort((a, b) => b.sentAt.localeCompare(a.sentAt))[0];
     if (last) lastInboundByChat.set(c.id, last);
   }
@@ -281,7 +284,7 @@ export async function revalidateSuggestions(
   const rows = await db.suggestions
     .where('userId')
     .equals(userId)
-    .filter((s) => (s.status === 'pending' || s.status === 'snoozed') && RULE_KINDS.includes(s.kind))
+    .filter((s) => (s.status === 'pending' || s.status === 'snoozed') && isRuleSuggestion(s))
     .toArray();
   let retired = 0;
   for (const s of rows) {
@@ -564,7 +567,8 @@ export async function buildDraftContext(
       : referrerName
         ? { referrerName }
         : undefined,
-    update: inputs.update?.trim() || undefined,
+    // a status-news card carries the update itself (applied, interviewing, offer); the student's own text wins
+    update: inputs.update?.trim() || (s?.payload.update as string | undefined) || undefined,
     targetCompany: tc
       ? {
           name: tc.nameRaw,
@@ -953,6 +957,7 @@ export async function generateBrief(user: User, kind: Brief['kind'], now = new D
       const p = people.get(pid);
       return p?.currentOrganizationId ?? p?.currentOrganizationRaw;
     },
+    quiet: isQuietDay(now, inp.settings, user.timezone),
   });
   const briefId = existing?.id ?? newId('b');
   const sugg = await upsertSuggestions(user.id, selected, now, briefId);
@@ -1050,8 +1055,8 @@ export async function refreshPersonSummary(user: User, personId: string): Promis
     const adv = facts.find((f) => f.type === 'advice');
     const off = facts.find((f) => f.type === 'offer');
     const hook = facts.find((f) => f.type === 'hook');
-    const n = tps.length;
-    summary = `${person.firstName} is ${role}${person.isAlumni ? ` and a ${user.school} alum` : ''}. ${n ? `You have ${n} recent interaction${n === 1 ? '' : 's'}, most recently ${tps[0]!.occurredAt.slice(0, 10)}.` : 'No interactions yet.'}${adv ? ` Advice: ${adv.text.replace(/\.$/, '')}.` : ''}${off ? ` They offered: ${off.text.replace(/\.$/, '')}.` : ''}`;
+    const history = lastContactPhrase(tps, new Date(), user.timezone);
+    summary = `${person.firstName} is ${role}${person.isAlumni ? ` and a ${user.school} alum` : ''}. ${history}${adv ? ` Advice: ${adv.text.replace(/\.$/, '')}.` : ''}${off ? ` They offered: ${off.text.replace(/\.$/, '')}.` : ''}`;
     talkingPoints = [
       hook ? `Ask about: ${hook.text}` : undefined,
       off ? `Follow up on their offer: ${off.text}` : undefined,
@@ -1136,6 +1141,10 @@ export async function markWarmUpAction(
 ): Promise<void> {
   const chat = await db.chats.get(chatId);
   if (!chat?.warmUp) return;
+  const current = chat.warmUp.actions.find((a) => a.id === actionId);
+  if (!current) return;
+  // a second click on Done (or Skip) changes nothing: no duplicate touchpoint, no second feedback row
+  if (done ? !!current.doneAt : !!current.skippedAt || !!current.doneAt) return;
   const now = new Date().toISOString();
   const actions = chat.warmUp.actions.map((a) =>
     a.id === actionId
@@ -1149,8 +1158,7 @@ export async function markWarmUpAction(
   );
   await db.chats.update(chatId, { warmUp: { ...chat.warmUp, actions }, updatedAt: now });
   if (done) {
-    await db.touchpoints.add({
-      id: newId('tp'),
+    await addTouchpoint({
       userId,
       personId: chat.personId,
       kind: 'linkedin_engaged',

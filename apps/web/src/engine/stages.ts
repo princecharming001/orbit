@@ -1,10 +1,12 @@
 import type { Actor, ChatStage, CoffeeChat, StageTrigger, Suggestion } from '@orbit/core';
 import {
+  addBusinessDays,
+  businessDaysBetween,
   canTransition,
   decideTransition,
   kindAllowedInStage,
   maxBumpsFor,
-  NO_RESPONSE_AFTER_BUMPS_DAYS,
+  NO_RESPONSE_AFTER_BUMPS_BUSINESS_DAYS,
   NO_RESPONSE_SILENT_DAYS,
   newId,
   PROPOSE_THRESHOLD,
@@ -228,9 +230,11 @@ export async function recordAlreadyDone(s: Suggestion, now = new Date()): Promis
 }
 
 /**
- * Timed rules: followed_up → nurturing after 14 days; outreach_sent → no_response after max bumps + 14 days of
- * silence, or 21 days of silence however many bumps went out. A thread with a reply after the last message is not
- * silent. The new stage is dated when the timer ran out, not when Orbit noticed.
+ * Timed rules: followed_up → nurturing after 14 days; completed → nurturing 14 days after a chat whose thank-you
+ * never got recorded; outreach_sent → no_response after max bumps + 10 business days of silence, or 21 days of
+ * silence however many bumps went out. A thread with a reply after the last message is not silent, and an
+ * out-of-office return date restarts the clock. The new stage is dated when the timer ran out, not when Orbit
+ * noticed.
  */
 export async function runTimedStageRules(
   userId: string,
@@ -238,6 +242,7 @@ export async function runTimedStageRules(
   now = new Date(),
 ): Promise<void> {
   const chats = await db.chats.where('userId').equals(userId).toArray();
+  const tz = (await db.users.get(userId))?.timezone;
   for (const c of chats) {
     const person = await db.people.get(c.personId);
     const maxBumps = maxBumpsFor(
@@ -257,21 +262,45 @@ export async function runTimedStageRules(
         new Date(new Date(c.followedUpAt).getTime() + 14 * 86_400_000),
       );
     if (
+      c.stage === 'completed' &&
+      c.completedAt &&
+      now.getTime() - new Date(c.completedAt).getTime() >= 14 * 86_400_000
+    )
+      await evaluateTrigger(
+        c,
+        { type: 'timer_completed_14d' },
+        undefined,
+        now,
+        new Date(new Date(c.completedAt).getTime() + 14 * 86_400_000),
+      );
+    if (
       c.stage === 'outreach_sent' &&
       c.lastOutboundAt &&
       !(c.lastInboundAt && c.lastInboundAt > c.lastOutboundAt)
     ) {
-      const daysSilent = (now.getTime() - new Date(c.lastOutboundAt).getTime()) / 86_400_000;
+      // silence counts from the last message, or from when an out-of-office person is back
+      const fromIso =
+        c.bumpNotBefore && c.bumpNotBefore > c.lastOutboundAt ? c.bumpNotBefore : c.lastOutboundAt;
+      const from = new Date(fromIso);
+      if (from.getTime() > now.getTime()) continue;
+      const daysSilent = (now.getTime() - from.getTime()) / 86_400_000;
+      const businessDaysSilent = businessDaysBetween(from, now, tz);
       const exhausted = c.bumpCount >= maxBumps;
-      const after = exhausted
-        ? Math.min(NO_RESPONSE_AFTER_BUMPS_DAYS, NO_RESPONSE_SILENT_DAYS)
-        : NO_RESPONSE_SILENT_DAYS;
+      const silentAt = new Date(from.getTime() + NO_RESPONSE_SILENT_DAYS * 86_400_000);
+      const doneAt = exhausted
+        ? new Date(
+            Math.min(
+              silentAt.getTime(),
+              addBusinessDays(from, NO_RESPONSE_AFTER_BUMPS_BUSINESS_DAYS, tz).getTime(),
+            ),
+          )
+        : silentAt;
       await evaluateTrigger(
         c,
-        { type: 'timer_no_response', bumps: c.bumpCount, maxBumps, daysSilent },
+        { type: 'timer_no_response', bumps: c.bumpCount, maxBumps, daysSilent, businessDaysSilent },
         undefined,
         now,
-        new Date(new Date(c.lastOutboundAt).getTime() + after * 86_400_000),
+        doneAt,
       );
     }
   }

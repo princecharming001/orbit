@@ -48,17 +48,50 @@ export function buildWarmUpPlan(slug: string, startedAt: Date, warmUpDays = 4): 
   return { startedAt: startedAt.toISOString(), readyAt: day(warmUpDays, 9), actions };
 }
 
+/**
+ * Visible activity needs some spread: even with every action done, the message waits until this many calendar
+ * days after the warm-up started (or the planned ready date, if sooner).
+ */
+export const WARMUP_MIN_SPREAD_DAYS = 2;
+
 export function warmUpProgress(
   plan: WarmUpPlan,
   now: Date,
-): { done: number; total: number; ready: boolean; nextAction?: WarmUpAction; overdue: boolean } {
+): {
+  done: number;
+  skipped: number;
+  total: number;
+  ready: boolean;
+  /** the student skipped every action: the message goes out cold, by their choice */
+  skippedAll: boolean;
+  /** when the outreach becomes due, once every action is resolved (or at the planned date) */
+  readyFrom: string;
+  nextAction?: WarmUpAction;
+  overdue: boolean;
+} {
   const done = plan.actions.filter((a) => a.doneAt).length;
-  const skipped = plan.actions.filter((a) => a.skippedAt).length;
+  const skipped = plan.actions.filter((a) => a.skippedAt && !a.doneAt).length;
   const next = plan.actions.find((a) => !a.doneAt && !a.skippedAt);
-  const ready =
-    now.getTime() >= new Date(plan.readyAt).getTime() && done >= 1
-      ? true
-      : done + skipped === plan.actions.length;
+  const resolved = done + skipped === plan.actions.length;
+  const skippedAll = resolved && done === 0;
+  const plannedReady = new Date(plan.readyAt).getTime();
+  // the spread is counted in days: from the start of the day two days after the warm-up began
+  const spreadDay = new Date(plan.startedAt);
+  spreadDay.setDate(spreadDay.getDate() + WARMUP_MIN_SPREAD_DAYS);
+  spreadDay.setHours(0, 0, 0, 0);
+  const spread = spreadDay.getTime();
+  // three actions in ten minutes is not a warm-up: done early still waits for the spread (or the planned date)
+  const readyFromMs = skippedAll ? now.getTime() : resolved ? Math.min(plannedReady, spread) : plannedReady;
+  const ready = skippedAll || (now.getTime() >= readyFromMs && done >= 1);
   const overdue = !!next && new Date(next.dueAt).getTime() < now.getTime() - 86_400_000;
-  return { done, total: plan.actions.length, ready, nextAction: next, overdue };
+  return {
+    done,
+    skipped,
+    total: plan.actions.length,
+    ready,
+    skippedAll,
+    readyFrom: new Date(readyFromMs).toISOString(),
+    nextAction: next,
+    overdue,
+  };
 }

@@ -100,6 +100,7 @@ describe('demo pipeline', () => {
       .equals(user.id)
       .filter((c) => c.stage === 'warming')
       .first())!;
+    const notYetDone = chat.warmUp!.actions.filter((a) => !a.doneAt).length;
     for (const a of chat.warmUp!.actions) await markWarmUpAction(user.id, chat.id, a.id, true);
     const fresh = (await db.chats.get(chat.id))!;
     expect(fresh.warmUp!.actions.every((a) => a.doneAt)).toBe(true);
@@ -115,7 +116,8 @@ describe('demo pipeline', () => {
       .equals(chat.personId)
       .filter((t) => t.kind === 'linkedin_engaged')
       .count();
-    expect(tps).toBe(3);
+    // one touchpoint per action marked done here; the seeded action that was already done adds nothing (SND-19)
+    expect(tps).toBe(notYetDone);
   });
   it('starts a warm-up for a cold LinkedIn-only person and outreach for a known one', async () => {
     const chatted = new Set(

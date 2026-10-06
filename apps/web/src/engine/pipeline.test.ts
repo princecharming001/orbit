@@ -372,3 +372,160 @@ describe('notes after the calendar (EG-02 hook)', () => {
     expect(after.bodyDraft).not.toBe(before.bodyDraft);
   });
 });
+
+describe('out of office is not a reply (EG-12)', () => {
+  it('holds the bump until two business days after the return date, then brings it back', async () => {
+    const who = { name: 'Odile Marsh', email: 'odile.marsh@brex.com' };
+    const back = new Date(now.getTime() + 10 * D);
+    const backText = back.toLocaleDateString('en-US', {
+      weekday: 'long',
+      month: 'long',
+      day: 'numeric',
+      timeZone: user.timezone,
+    });
+    await ingestEmails(
+      user,
+      [
+        mail(who, 'out', ago(9 * D), OUTREACH('Odile'), 'odile'),
+        mail(
+          who,
+          'in',
+          ago(9 * D - 5 * 60_000),
+          `Thank you for your email. I am out of the office until ${backText} with limited access to email.`,
+          'odile',
+        ),
+      ],
+      { useLlm: false, now },
+    );
+    const p = await personByEmail(who.email);
+    const chat = await chatOf(p.id);
+    expect(chat.stage).toBe('outreach_sent');
+    expect(chat.lastInboundAt).toBeUndefined();
+    expect(chat.bumpNotBefore).toBeDefined();
+    expect(new Date(chat.bumpNotBefore!).getTime()).toBeGreaterThan(back.getTime());
+    expect(
+      (await cardsOf(p.id)).some((s) => s.kind === 'confirm_stage' || s.kind === 'schedule_propose'),
+    ).toBe(false);
+    await generateBrief(user, 'daily', now);
+    expect((await cardsOf(p.id)).some((s) => s.kind === 'follow_up_bump' && s.status === 'pending')).toBe(
+      false,
+    );
+    await generateBrief(user, 'daily', new Date(new Date(chat.bumpNotBefore!).getTime() + H));
+    const bump = (await cardsOf(p.id)).find((s) => s.kind === 'follow_up_bump' && s.status === 'pending');
+    expect(bump?.reasonText).toMatch(/out of office/);
+    // and the thread is not closed as no response while they were away
+    expect((await chatOf(p.id)).stage).toBe('outreach_sent');
+  });
+});
+
+describe('warm-up actions (SND-19)', () => {
+  it('marking the same action done twice adds one touchpoint', async () => {
+    const { startWarmUpOrOutreach, markWarmUpAction } = await import('./brief');
+    const p = (await db.people
+      .where('userId')
+      .equals(user.id)
+      .filter((x) => !x.primaryEmail && !!x.linkedinSlug && x.strength < 0.2)
+      .toArray()
+      .then(async (all) => {
+        for (const x of all) {
+          const c = await db.chats.where('personId').equals(x.id).first();
+          if (!c) return x;
+        }
+        return undefined;
+      }))!;
+    expect(p).toBeDefined();
+    const { chat } = await startWarmUpOrOutreach(user, p.id, 'linkedin');
+    expect(chat.stage).toBe('warming');
+    await markWarmUpAction(user.id, chat.id, 'w1', true);
+    await markWarmUpAction(user.id, chat.id, 'w1', true);
+    const tps = await db.touchpoints
+      .where('personId')
+      .equals(p.id)
+      .filter((t) => t.kind === 'linkedin_engaged')
+      .count();
+    expect(tps).toBe(1);
+  });
+});
+
+describe('the demo, after the fixes (DR-01, DR-03, EG-08, EG-19)', () => {
+  it('the mentor met weeks ago is nurturing, gets no thank-you, and gets a follow-up on the intro she offered', async () => {
+    const fresh = await loadDemo({ reset: true });
+    user = fresh;
+    const sofia = (await db.people
+      .where('userId')
+      .equals(user.id)
+      .filter((p) => p.displayName === 'Sofia Bennett')
+      .first())!;
+    const chat = await chatOf(sofia.id);
+    expect(chat.stage).toBe('nurturing');
+    const cards = await cardsOf(sofia.id);
+    expect(cards.some((s) => s.kind === 'thank_you')).toBe(false);
+    const intro = cards.find((s) => s.kind === 'intro_request' && s.status === 'pending');
+    expect(intro?.reasonText).toMatch(/offered to introduce you to their PM lead/);
+    const draft = intro?.outboundMessageId ? await db.outbound.get(intro.outboundMessageId) : undefined;
+    expect(draft?.bodyDraft).toMatch(/you kindly offered to introduce me to your PM lead/);
+    // no pending card proposes or confirms times for a chat that is already on the calendar or done
+    const pending = await db.suggestions
+      .where('userId')
+      .equals(user.id)
+      .filter(
+        (s) => s.status === 'pending' && (s.kind === 'schedule_propose' || s.kind === 'schedule_confirm'),
+      )
+      .toArray();
+    for (const s of pending) {
+      const c = await db.chats.get(s.chatId!);
+      expect(['replied', 'scheduling']).toContain(c?.stage);
+    }
+    // a scheduled chat entered its stage when the time was agreed, not when the demo loaded
+    const scheduled = await db.chats
+      .where('userId')
+      .equals(user.id)
+      .filter((c) => c.stage === 'scheduled')
+      .toArray();
+    for (const c of scheduled) expect(new Date(c.stageEnteredAt).getTime()).toBeLessThan(Date.now() - H);
+  }, 60_000);
+
+  it('person summaries call only the last 90 days recent and never print a raw date', async () => {
+    const { refreshPersonSummary } = await import('./brief');
+    const people = await db.people.where('userId').equals(user.id).limit(40).toArray();
+    for (const p of people) {
+      await refreshPersonSummary(user, p.id);
+      const s = (await db.people.get(p.id))!.summary ?? '';
+      expect(s).not.toMatch(/\d{4}-\d{2}-\d{2}/);
+      expect(s).not.toMatch(/recent interaction/);
+    }
+  }, 60_000);
+});
+
+describe('status news (EG-09)', () => {
+  it('an application status change drafts an update to the person who helped there', async () => {
+    const sofia = (await db.people
+      .where('userId')
+      .equals(user.id)
+      .filter((p) => p.displayName === 'Sofia Bennett')
+      .first())!;
+    const org = sofia.currentOrganizationRaw!;
+    const existing = await db.targetCompanies
+      .where('userId')
+      .equals(user.id)
+      .filter((t) => t.nameRaw.toLowerCase() === org.toLowerCase())
+      .first();
+    const id = existing?.id ?? 'tc_status_test';
+    await db.targetCompanies.put({
+      ...(existing ?? { id, userId: user.id, nameRaw: org, priority: 1 as const }),
+      status: 'interviewing',
+      statusChangedAt: new Date(now.getTime() - D).toISOString(),
+    });
+    await generateBrief(user, 'daily', now);
+    const card = (await cardsOf(sofia.id)).find(
+      (s) => s.dedupeKey === `status:${id}:interviewing:${sofia.id}`,
+    );
+    expect(card?.status).toBe('pending');
+    const { ensureDrafts } = await import('./brief');
+    await ensureDrafts(user, [card!.id]);
+    const row = (await db.suggestions.get(card!.id))!;
+    const draft = (await db.outbound.get(row.outboundMessageId!))!;
+    expect(draft.bodyDraft).toMatch(new RegExp(`interviewing with ${org}`));
+    expect(draft.needsInput ?? []).toEqual([]);
+  }, 60_000);
+});

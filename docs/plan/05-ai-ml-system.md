@@ -177,11 +177,12 @@ Implemented in `packages/core/src/pipeline/transitions.ts` and mirrored in `appl
 | `scheduled` | event cancelled | `scheduling` | 1.0 |
 | `completed` | any outbound sent after the meeting (any source, any wording; it is the thank-you) | `followed_up` | 1.0 |
 | `followed_up` | 14 days elapsed | `nurturing` | 1.0 |
-| `outreach_sent` | no inbound since the last outbound and either `bump_count ≥ max_bumps` with 14 days since it, or 21 days since it with any bump count | `no_response` | 1.0 |
+| `completed` | 14 days since the meeting with no thank-you on record | `nurturing` | 1.0 |
+| `outreach_sent` | no human inbound since the last outbound (or since an out-of-office person's return) and either `bump_count ≥ max_bumps` with 10 business days since it, or 21 days since it with any bump count | `no_response` | 1.0 |
 | `nurturing|no_response|declined` | user starts new outreach | `outreach_sent` (new chat row) | 1.0 |
 | any | user drag/select | target | 1.0 (actor user) |
 
-`out_of_office` never transitions; `reschedule` from `scheduled` → `scheduling`. Illegal transitions are rejected and logged.
+`out_of_office` never transitions and does not count as a reply (it does not set `last_inbound_at`); the return date it names ("back on Monday, October 12", "out until 10/12") plus two business days becomes `bump_not_before`. `reschedule` from `scheduled` → `scheduling`. Illegal transitions are rejected and logged.
 
 Stage dates follow the evidence: `stage_entered_at`, `completed_at` and `followed_up_at` are the time of the message, the event end or the note, never the time Orbit synced it (a historical backfill shows real days in stage and old chats never look "just finished"). An outbound the student sends from their own mail into a silent `outreach_sent` thread counts as a bump. When a chat changes stage, its older `proposed` events are rejected as superseded and cards that no longer fit the new stage are retired.
 
