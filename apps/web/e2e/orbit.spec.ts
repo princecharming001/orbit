@@ -41,7 +41,10 @@ test.describe('Orbit demo flow', () => {
     await expect(textarea).toBeVisible();
     await textarea.fill(`${await textarea.inputValue()}\n\nPS edited in e2e`);
     await card.getByRole('button', { name: /approve & send/i }).click();
-    await expect(page.getByText(/opened in your mail app|sent to/i)).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText(/opened in your mail app/i).first()).toBeVisible({ timeout: 15_000 });
+    // a mail-app hand-off is not "sent" until the student says so
+    await card.getByRole('button', { name: /i sent it/i }).click();
+    await expect(page.getByText(/logged as sent to/i)).toBeVisible();
     await page.goto('inbox?tab=sent');
     await page.getByRole('tab', { name: /sent/i }).click();
     await expect(page.getByText('PS edited in e2e')).toBeVisible();

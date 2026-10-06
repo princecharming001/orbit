@@ -4,11 +4,11 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { ExternalLink, Linkedin, Mail, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { runApproval } from '../components/approve';
 import { DraftEditor } from '../components/DraftEditor';
 import { feedback } from '../db/repo';
 import { db } from '../db/schema';
 import { draftMessage, refreshPersonSummary, startWarmUpOrOutreach } from '../engine/brief';
-import { approveAndSend } from '../engine/send';
 import { applyStage } from '../engine/stages';
 import { useSession } from '../state/session';
 import { Avatar, Button, Card, Chip, cx, relDate, Select, Tabs, useToast } from '../ui';
@@ -131,20 +131,12 @@ export function PersonPage() {
   const send = async (body: string, subject?: string) => {
     if (!draft) return;
     setBusy(true);
-    const r = await approveAndSend(user, draft.id, body, subject);
-    setBusy(false);
-    if (!r.ok) return toast.push({ text: r.error, tone: 'bad', ttl: 6000 });
-    if (r.handoffUrl) window.open(r.handoffUrl, '_blank', 'noopener');
-    toast.push({
-      text: r.handoffUrl
-        ? draft.channel === 'linkedin'
-          ? 'Copied. Paste into LinkedIn.'
-          : 'Opened your mail app.'
-        : 'Sent.',
-      tone: 'good',
-    });
-    setComposing(undefined);
-    setDraftId(undefined);
+    try {
+      // the composer stays open: it shows the undo window, the hand-off confirmation, or why it was not sent
+      return await runApproval(user, draft, body, subject, toast, person.firstName);
+    } finally {
+      setBusy(false);
+    }
   };
   const timeline = [
     ...tps.map((t) => ({

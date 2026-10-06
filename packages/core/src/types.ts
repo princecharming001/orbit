@@ -113,7 +113,19 @@ export type SuggestionStatus =
   | 'expired'
   | 'done';
 export type Channel = 'gmail' | 'linkedin' | 'clipboard';
-export type OutboundStatus = 'draft' | 'approved' | 'queued' | 'sending' | 'sent' | 'failed' | 'cancelled';
+/**
+ * `queued`: approved for a provider send, waiting out the undo window until `sendAt`.
+ * `handed_off`: opened in the student's mail app or LinkedIn; not `sent` until the student confirms they sent it.
+ */
+export type OutboundStatus =
+  | 'draft'
+  | 'approved'
+  | 'queued'
+  | 'sending'
+  | 'handed_off'
+  | 'sent'
+  | 'failed'
+  | 'cancelled';
 export type MessageKind =
   | 'outreach'
   | 'bump'
@@ -539,6 +551,8 @@ export interface OutboundMessage {
   status: OutboundStatus;
   approvedAt?: string;
   queuedAt?: string;
+  /** end of the undo window for a queued provider send */
+  sendAt?: string;
   sentAt?: string;
   providerMessageId?: string;
   error?: string;

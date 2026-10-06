@@ -7,6 +7,7 @@ import { dailyMaintenance } from '../engine/sync';
 import { useSession } from '../state/session';
 import { Avatar, cx, Kbd } from '../ui';
 import { CommandPalette } from './CommandPalette';
+import { OutboxScheduler } from './OutboxScheduler';
 
 const NAV = [
   { to: '/today', label: 'Today', icon: Sun },
@@ -48,6 +49,7 @@ export function AppShell() {
   }, [user?.id, user?.onboardingCompletedAt]);
   return (
     <div className="h-full flex">
+      <OutboxScheduler />
       <aside className="w-[232px] shrink-0 border-r border-line bg-canvas-2/60 hidden md:flex flex-col">
         <div className="h-14 px-4 flex items-center gap-2">
           <Logo />

@@ -115,23 +115,69 @@ export function disconnectGoogle(): void {
   saveToken(undefined);
 }
 
+/** Retry policy for Google API calls; tests shorten the delays. */
+export const gfetchRetry = {
+  maxRetries: 4,
+  baseDelayMs: 1000,
+  maxDelayMs: 32_000,
+  sleep: (ms: number) => new Promise<void>((r) => setTimeout(r, ms)),
+};
+
+const RATE_LIMIT_REASONS = new Set(['rateLimitExceeded', 'userRateLimitExceeded', 'quotaExceeded']);
+
+function retryDelayMs(res: Response, attempt: number): number {
+  const ra = res.headers.get('retry-after');
+  if (ra) {
+    const secs = Number(ra);
+    const at = Number.isFinite(secs) ? secs * 1000 : new Date(ra).getTime() - Date.now();
+    if (Number.isFinite(at) && at >= 0) return Math.min(at, gfetchRetry.maxDelayMs);
+  }
+  const exp = gfetchRetry.baseDelayMs * 2 ** attempt;
+  return Math.min(exp + Math.random() * gfetchRetry.baseDelayMs, gfetchRetry.maxDelayMs);
+}
+
+async function isRateLimited403(res: Response): Promise<boolean> {
+  try {
+    const j = (await res.clone().json()) as { error?: { errors?: { reason?: string }[]; status?: string } };
+    return (
+      j.error?.status === 'RESOURCE_EXHAUSTED' ||
+      (j.error?.errors ?? []).some((e) => !!e.reason && RATE_LIMIT_REASONS.has(e.reason))
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Authorised fetch with bounded retries: 429 and Gmail's 403 rate-limit responses back off exponentially (honouring
+ * Retry-After); 5xx is retried only for idempotent GETs so a send is never duplicated.
+ */
 async function gfetch<T>(url: string, init: RequestInit = {}): Promise<T> {
-  const t = loadToken();
-  if (!t) throw new Error('Google is not connected (token expired). Reconnect in Settings → Integrations.');
-  const res = await fetch(url, {
-    ...init,
-    headers: { ...(init.headers ?? {}), Authorization: `Bearer ${t.accessToken}` },
-  });
-  if (res.status === 401) {
-    saveToken(undefined);
-    throw new Error('Google session expired. Reconnect in Settings → Integrations.');
+  const method = (init.method ?? 'GET').toUpperCase();
+  for (let attempt = 0; ; attempt++) {
+    const t = loadToken();
+    if (!t) throw new Error('Google is not connected (token expired). Reconnect in Settings → Integrations.');
+    const res = await fetch(url, {
+      ...init,
+      headers: { ...(init.headers ?? {}), Authorization: `Bearer ${t.accessToken}` },
+    });
+    if (res.status === 401) {
+      saveToken(undefined);
+      throw new Error('Google session expired. Reconnect in Settings → Integrations.');
+    }
+    const retryable =
+      res.status === 429 ||
+      (res.status === 403 && (await isRateLimited403(res))) ||
+      (method === 'GET' && res.status >= 500);
+    if (retryable && attempt < gfetchRetry.maxRetries) {
+      await gfetchRetry.sleep(retryDelayMs(res, attempt));
+      continue;
+    }
+    if (retryable && (res.status === 429 || res.status === 403))
+      throw new Error('Google is rate limiting Orbit right now. Try again in a few minutes.');
+    if (!res.ok) throw new Error(`Google API ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    return (await res.json()) as T;
   }
-  if (res.status === 429) {
-    await new Promise((r) => setTimeout(r, 2000));
-    return gfetch(url, init);
-  }
-  if (!res.ok) throw new Error(`Google API ${res.status}: ${(await res.text()).slice(0, 200)}`);
-  return (await res.json()) as T;
 }
 
 export interface GmailHeader {
@@ -227,32 +273,128 @@ export function gmailHeaders(msg: GmailMessageRaw): Record<string, string> {
   return out;
 }
 
-export async function gmailSend(opts: {
+// ---------- outgoing MIME ----------
+
+/** Header values never carry CR/LF: a newline in a subject would otherwise start a new header. */
+export function sanitizeHeaderValue(v: string): string {
+  const noControls = Array.from(v.replace(/[\r\n]+/g, ' '))
+    .filter((ch) => {
+      const c = ch.charCodeAt(0);
+      return c === 9 || (c >= 32 && c !== 127);
+    })
+    .join('');
+  return noControls.replace(/\s{2,}/g, ' ').trim();
+}
+
+function utf8Base64(s: string): string {
+  const bytes = new TextEncoder().encode(s);
+  let bin = '';
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin);
+}
+
+const isPrintableAscii = (s: string) => /^[\x20-\x7e]*$/.test(s);
+
+/** RFC 2047 encoded words (UTF-8, base64), each at most 64 characters, never splitting a character. */
+export function encodeWords(text: string): string[] {
+  const words: string[] = [];
+  let chunk = '';
+  let chunkBytes = 0;
+  for (const ch of text) {
+    const n = new TextEncoder().encode(ch).length;
+    // 39 source bytes -> 52 base64 chars + 12 for =?UTF-8?B??= = 64, so even "Subject: " + a word fits in 78
+    if (chunkBytes + n > 39) {
+      words.push(`=?UTF-8?B?${utf8Base64(chunk)}?=`);
+      chunk = '';
+      chunkBytes = 0;
+    }
+    chunk += ch;
+    chunkBytes += n;
+  }
+  if (chunk) words.push(`=?UTF-8?B?${utf8Base64(chunk)}?=`);
+  return words;
+}
+
+/** Fold a header at whitespace so no line exceeds 78 characters (RFC 5322 2.2.3). */
+export function foldHeader(name: string, tokens: string[]): string {
+  const lines: string[] = [];
+  let line = `${name}:`;
+  for (const tok of tokens) {
+    if (line.length + 1 + tok.length > 78 && line.length > name.length + 1) {
+      lines.push(line);
+      line = ` ${tok}`;
+    } else line += ` ${tok}`;
+  }
+  lines.push(line);
+  return lines.join('\r\n');
+}
+
+function unstructuredHeader(name: string, value: string): string {
+  const v = sanitizeHeaderValue(value);
+  return foldHeader(name, isPrintableAscii(v) ? v.split(' ').filter(Boolean) : encodeWords(v));
+}
+
+function addressHeader(name: string, email: string, displayName?: string): string {
+  const addr = sanitizeHeaderValue(email);
+  if (!/^[^\s<>(),;:"@]+@[^\s<>(),;:"@]+$/.test(addr)) throw new Error(`Invalid email address: ${addr}`);
+  const dn = displayName ? sanitizeHeaderValue(displayName) : '';
+  if (!dn) return `${name}: ${addr}`;
+  const phrase = isPrintableAscii(dn)
+    ? /^[A-Za-z0-9!#$%&'*+\-/=?^_`{|}~ ]+$/.test(dn)
+      ? [dn]
+      : [`"${dn.replace(/(["\\])/g, '\\$1')}"`]
+    : encodeWords(dn);
+  return foldHeader(name, [...phrase, `<${addr}>`]);
+}
+
+/** Message-ID tokens (`<...>`) from a header value, deduplicated, in order. */
+export function messageIdTokens(...values: (string | undefined)[]): string[] {
+  const out: string[] = [];
+  for (const v of values)
+    for (const m of sanitizeHeaderValue(v ?? '').match(/<[^<>\s]+>/g) ?? [])
+      if (!out.includes(m)) out.push(m);
+  return out;
+}
+
+export interface MimeOptions {
   to: string;
   subject: string;
   body: string;
   fromName?: string;
   fromEmail: string;
-  threadId?: string;
   inReplyTo?: string;
+  /** full References chain of the message being answered (its References plus its Message-ID) */
   references?: string;
   orbitId: string;
-}): Promise<{ id: string; threadId: string }> {
+}
+
+/** Build an RFC 5322 message: encoded and folded headers, CR/LF neutralised, base64 UTF-8 body. */
+export function buildMimeMessage(opts: MimeOptions): string {
+  const subject = sanitizeHeaderValue(opts.subject);
+  if (!subject) throw new Error('This email has no subject.');
   const lines = [
-    `From: ${opts.fromName ? `${opts.fromName} <${opts.fromEmail}>` : opts.fromEmail}`,
-    `To: ${opts.to}`,
-    `Subject: ${opts.subject}`,
+    addressHeader('From', opts.fromEmail, opts.fromName),
+    addressHeader('To', opts.to),
+    unstructuredHeader('Subject', subject),
     'MIME-Version: 1.0',
     'Content-Type: text/plain; charset="UTF-8"',
-    `X-Orbit-Message-Id: ${opts.orbitId}`,
+    'Content-Transfer-Encoding: base64',
+    `X-Orbit-Message-Id: ${sanitizeHeaderValue(opts.orbitId).replace(/[^\w.-]/g, '')}`,
   ];
-  if (opts.inReplyTo) lines.push(`In-Reply-To: ${opts.inReplyTo}`);
-  if (opts.references) lines.push(`References: ${opts.references}`);
-  const raw = `${lines.join('\r\n')}\r\n\r\n${opts.body}`;
-  const bytes = new TextEncoder().encode(raw);
-  let bin = '';
-  for (const b of bytes) bin += String.fromCharCode(b);
-  const b64 = btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const inReplyTo = messageIdTokens(opts.inReplyTo)[0];
+  if (inReplyTo) lines.push(`In-Reply-To: ${inReplyTo}`);
+  const refs = messageIdTokens(opts.references, inReplyTo);
+  if (refs.length) lines.push(foldHeader('References', refs));
+  const body = opts.body.replace(/\r?\n/g, '\r\n');
+  const b64 = utf8Base64(body).replace(/.{76}(?=.)/g, '$&\r\n');
+  return `${lines.join('\r\n')}\r\n\r\n${b64}\r\n`;
+}
+
+export async function gmailSend(
+  opts: MimeOptions & { threadId?: string },
+): Promise<{ id: string; threadId: string }> {
+  const raw = buildMimeMessage(opts);
+  const b64 = utf8Base64(raw).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   return gfetch<{ id: string; threadId: string }>(
     'https://gmail.googleapis.com/gmail/v1/users/me/messages/send',
     {

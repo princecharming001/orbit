@@ -8,11 +8,12 @@ import { feedback } from '../db/repo';
 import { db } from '../db/schema';
 import { markWarmUpAction } from '../engine/brief';
 import { mergePeople } from '../engine/people';
-import { approveAndSend, dismissSuggestion, snoozeSuggestion } from '../engine/send';
+import { dismissSuggestion, snoozeSuggestion } from '../engine/send';
 import { decideProposedStage } from '../engine/stages';
 import { useSession } from '../state/session';
 import { Avatar, Button, Chip, cx, useToast } from '../ui';
-import { DraftEditor } from './DraftEditor';
+import { runApproval } from './approve';
+import { DraftEditor, OutboxStatus } from './DraftEditor';
 
 export const KIND_LABEL: Record<
   Suggestion['kind'],
@@ -69,20 +70,14 @@ export function SuggestionCard({ s, compact }: { s: Suggestion; compact?: boolea
   const approve = async (body: string, subject?: string) => {
     if (!draft) return;
     setBusy(true);
-    const r = await approveAndSend(user, draft.id, body, subject);
-    setBusy(false);
-    if (!r.ok) return toast.push({ text: r.error, tone: 'bad', ttl: 6000 });
-    if (r.handoffUrl) {
-      window.open(r.handoffUrl, '_blank', 'noopener');
-      toast.push({
-        text:
-          draft.channel === 'linkedin'
-            ? 'Copied. Paste it into LinkedIn and send.'
-            : 'Opened in your mail app.',
-        tone: 'good',
-      });
-    } else toast.push({ text: `Sent to ${person?.firstName ?? 'them'}.`, tone: 'good' });
+    try {
+      // a blocked or failed send leaves the card and its draft in place, with the reason shown in the editor
+      return await runApproval(user, draft, body, subject, toast, person?.firstName);
+    } finally {
+      setBusy(false);
+    }
   };
+  const inFlight = !!draft && ['queued', 'sending', 'handed_off'].includes(draft.status);
   const dismiss = async (reason: string) => {
     await dismissSuggestion(user.id, s, reason);
     setDismissing(false);
@@ -167,7 +162,12 @@ export function SuggestionCard({ s, compact }: { s: Suggestion; compact?: boolea
             )}
           </div>
           <p className="text-[13.5px] text-ink-2 mt-1">{s.reasonText}</p>
-          {draft && !open && (
+          {draft && inFlight && (
+            <div className="mt-3">
+              <OutboxStatus draft={draft} />
+            </div>
+          )}
+          {draft && !inFlight && !open && (
             <button
               onClick={() => setOpen(true)}
               className="mt-2 text-left w-full rounded-lg bg-canvas-2 px-3 py-2 text-[13px] text-ink-2 line-clamp-2 hover:bg-line-2"
@@ -175,7 +175,7 @@ export function SuggestionCard({ s, compact }: { s: Suggestion; compact?: boolea
               {draft.bodyFinal ?? draft.bodyDraft}
             </button>
           )}
-          {draft && open && (
+          {draft && !inFlight && open && (
             <div className="mt-3">
               <DraftEditor draft={draft} onApprove={approve} busy={busy} onCancel={() => setOpen(false)} />
             </div>
@@ -319,7 +319,7 @@ export function SuggestionCard({ s, compact }: { s: Suggestion; compact?: boolea
             </div>
           )}
         </div>
-        {draft && (
+        {draft && !inFlight && (
           <button
             onClick={() => setOpen((o) => !o)}
             className="p-1.5 rounded-md text-ink-3 hover:bg-canvas-2"

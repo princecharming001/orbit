@@ -6,7 +6,7 @@ import { loadDemo } from './demo';
 import { reachCompany, reachPerson } from './graph';
 import { importConnectionsCsv } from './linkedin';
 import { ingestNote } from './notes';
-import { approveAndSend, checkSendAllowed } from './send';
+import { approveAndSend, checkSendAllowed, confirmHandoff } from './send';
 
 let user: User;
 beforeAll(async () => {
@@ -70,6 +70,9 @@ describe('demo pipeline', () => {
     const body = `${d.bodyDraft}\n\nPS: edited`;
     const r = await approveAndSend(user, d.id, body);
     expect(r.ok).toBe(true);
+    // no Gmail connected: the mail app opens; it only counts as sent once the student confirms
+    expect((await db.outbound.get(d.id))!.status).toBe('handed_off');
+    expect((await confirmHandoff(user, d.id)).ok).toBe(true);
     const sent = (await db.outbound.get(d.id))!;
     expect(sent.status).toBe('sent');
     expect(sent.bodyFinal).toBe(body);
@@ -85,14 +88,20 @@ describe('demo pipeline', () => {
     const audit = await db.audit.where('userId').equals(user.id).toArray();
     expect(audit.some((a) => a.action === 'message.sent')).toBe(true);
   });
-  it('enforces the per-person cooldown', async () => {
+  it('enforces the per-person cooldown on unanswered asks, not on the thank-you just sent', async () => {
     const sent = (await db.outbound
       .where('userId')
       .equals(user.id)
       .filter((o) => o.status === 'sent')
       .first())!;
-    const r = await checkSendAllowed(user.id, sent.personId, 'gmail', 'nurture');
+    // the chat is followed_up (they answered), so even a bump is not held back by the cooldown
+    expect((await checkSendAllowed(user.id, sent.personId, 'gmail', 'thank_you')).allowed).toBe(true);
+    const chat = (await db.chats.get(sent.chatId!))!;
+    await db.chats.update(chat.id, { stage: 'outreach_sent', stageEnteredAt: '2020-01-01T00:00:00.000Z' });
+    const r = await checkSendAllowed(user.id, sent.personId, 'gmail', 'bump');
     expect(r.allowed).toBe(false);
+    expect(r.reason).toMatch(/just now and they have not replied yet/);
+    await db.chats.update(chat.id, { stage: chat.stage, stageEnteredAt: chat.stageEnteredAt });
   });
   it('warm-up: marking actions done leads to an outreach suggestion', async () => {
     const chat = (await db.chats
