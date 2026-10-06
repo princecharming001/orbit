@@ -136,3 +136,20 @@ Client subscribes (Supabase JS, anon key + session) to `postgres_changes` on `no
 - All approval actions reachable by keyboard; focus order follows card order; live region announces "Sent" / "Snoozed".
 - Mobile (≥ 360 px): Today and Approvals are single-column; the board becomes a stage picker + list; the map renders with 0.55× radii, no rotation, tap = select, long-press = recentre.
 - Colour contrast AA; stage colours also carry text labels.
+
+Static build (as shipped): dialogs (`Modal`, `Drawer` in `apps/web/src/ui`) close on Escape, trap Tab inside and return focus to the opener; every pipeline board card is one tab stop (the name link covers the card) and carries a "Move to…" stage menu, so drag and drop is never the only way to change a stage; icon-only buttons have an accessible name; hover-only controls (the fact delete button) also appear on keyboard focus. On phones the top bar carries Search, Add note and Settings next to the six-item bottom nav; headers, cards and action rows wrap instead of clipping, and wide tables scroll inside their card. Unknown person or company ids render a "can't find" state with a link back; unknown settings sections and onboarding steps redirect to a real one. The landing page never wipes an existing profile silently: an onboarded user sees "Open Orbit", a user mid-setup sees "Continue setup", and loading the demo over real data asks first (`demoResetPrompt`).
+
+## 8. Terminology
+
+One word per concept, everywhere in the UI. Internal codes (`swe`, `thank_you`, `gmail`, `family_friend`, `long_shot`) never reach the screen; they are mapped through `packages/core/src/labels.ts` (functions, message kinds, channels, relationship types, target-company statuses, reach bands, fact types, note sources, touchpoint kinds) and `STAGE_LABELS` in `pipeline/transitions.ts`.
+
+| Concept | Word used | Not |
+|---|---|---|
+| How well the student knows someone (0 to 100) | Closeness, "Close ties" filter | strength, strong ties |
+| How well two other people know each other | Tie strength | closeness |
+| A tracked conversation with one person | coffee chat on first mention on a page, "chat" after | meeting, call |
+| The queue of drafts and cards waiting on the student (route `/inbox`) | Approvals | Inbox, inbox zero |
+| Ranked people to meet on Discover | recommendations | suggestions |
+| A card on Today or in Approvals | suggestion or card | recommendation |
+| The first message to someone new | First message (outreach in code) | outreach, cold email |
+| A message sent by Gmail or handed to LinkedIn | Email / LinkedIn | gmail, via gmail |

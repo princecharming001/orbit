@@ -10,7 +10,7 @@ import { Avatar, Button, Chip, cx, EmptyState, Input, PageHeader, useToast } fro
 import { StrengthDots } from './Pipeline';
 
 export function Discover() {
-  const { user, userId } = useSession();
+  const { user, userId, goals } = useSession();
   const nav = useNavigate();
   const toast = useToast();
   const [busy, setBusy] = useState(false);
@@ -30,6 +30,9 @@ export function Discover() {
   const people =
     useLiveQuery(() => (userId ? db.people.where('userId').equals(userId).toArray() : []), [userId]) ?? [];
   const byId = useMemo(() => new Map(people.map((p) => [p.id, p])), [people]);
+  const tcCount =
+    useLiveQuery(() => (userId ? db.targetCompanies.where('userId').equals(userId).count() : 0), [userId]) ??
+    0;
   const list = recs.sort(
     (a, b) => (b.status === 'saved' ? 1 : 0) - (a.status === 'saved' ? 1 : 0) || b.score - a.score,
   );
@@ -48,11 +51,31 @@ export function Discover() {
       .slice(0, 12);
   }, [q, people]);
   if (!user) return null;
+  // Tell the student what is actually missing instead of a generic checklist.
+  const missing = {
+    people: people.filter((p) => p.isHuman && !p.hiddenAt).length === 0,
+    goals: !goals?.targetFunctions.length && !tcCount,
+  };
+  const emptyHint = missing.people
+    ? 'Orbit recommends people from your own network, and it is empty. Import your LinkedIn connections or connect Google, then generate recommendations.'
+    : missing.goals
+      ? 'Tell Orbit which functions and companies you are recruiting for, then generate recommendations.'
+      : 'Nobody in your network matches your goals yet. Import more connections or add target companies, then try again.';
   const refresh = async () => {
     setBusy(true);
-    const n = await recommendationsRefresh(user);
+    await recommendationsRefresh(user);
+    // Count what the page will actually show (new and saved), not what the ranker produced this run.
+    const shown = await db.recommendations
+      .where('userId')
+      .equals(user.id)
+      .filter((r) => r.status === 'new' || r.status === 'saved')
+      .count();
     setBusy(false);
-    toast.push({ text: `${n} suggestions refreshed.` });
+    toast.push({
+      text: shown
+        ? `${shown} recommendation${shown === 1 ? '' : 's'} ready.`
+        : 'No new recommendations yet. See the note below for what would help.',
+    });
   };
   const start = async (personId: string) => {
     const p = byId.get(personId);
@@ -83,12 +106,13 @@ export function Discover() {
           </Button>
         }
       />
-      <div className="mb-4 flex gap-2">
+      <div className="mb-4 flex flex-wrap gap-2">
         <Input
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder="Search your network: name, company, title"
-          className="w-80"
+          aria-label="Search your network"
+          className="w-full sm:w-80"
         />
         <Link to="/map?reach=1">
           <Button variant="secondary">Find a path to someone</Button>
@@ -118,15 +142,27 @@ export function Discover() {
       {list.length === 0 ? (
         <EmptyState
           title="No recommendations yet"
-          body="Add target companies and functions in Settings, import LinkedIn connections, then refresh."
+          body={emptyHint}
           action={
-            <Button variant="primary" onClick={refresh}>
-              Generate recommendations
-            </Button>
+            <div className="flex flex-wrap justify-center gap-2">
+              {missing.people && (
+                <Link to="/settings/integrations">
+                  <Button variant="primary">Import connections</Button>
+                </Link>
+              )}
+              {missing.goals && (
+                <Link to="/settings/goals">
+                  <Button variant={missing.people ? 'secondary' : 'primary'}>Set your goals</Button>
+                </Link>
+              )}
+              <Button variant={missing.people || missing.goals ? 'secondary' : 'primary'} onClick={refresh}>
+                Generate recommendations
+              </Button>
+            </div>
           }
         />
       ) : (
-        <div className="grid md:grid-cols-2 gap-3">
+        <div className="grid md:grid-cols-2 gap-3 [&>*]:min-w-0">
           {list.map((r) => {
             const p = byId.get(r.personId);
             if (!p) return null;
@@ -166,7 +202,7 @@ export function Discover() {
                     </ul>
                     <div className="mt-2 flex items-center gap-3 text-[12px] text-ink-3">
                       <span className="inline-flex items-center gap-1">
-                        Reach <StrengthDots v={r.reachScore} />
+                        Reach <StrengthDots v={r.reachScore} label="Reach" />
                       </span>
                       <span>Fit {Math.round(r.fitScore * 100)}</span>
                       {cold && (
@@ -177,7 +213,7 @@ export function Discover() {
                     </div>
                   </div>
                 </div>
-                <div className="mt-3 flex items-center gap-2">
+                <div className="mt-3 flex flex-wrap items-center gap-2">
                   <Button variant="primary" size="sm" onClick={() => start(p.id)} data-testid="rec-start">
                     {cold ? 'Start warm-up' : 'Start outreach'}
                   </Button>
@@ -186,7 +222,11 @@ export function Discover() {
                       Save
                     </Button>
                   )}
-                  <div className="ml-auto flex gap-1 text-[12px]">
+                  <div
+                    className="sm:ml-auto flex flex-wrap gap-1 text-[12px]"
+                    role="group"
+                    aria-label="Not a fit? Tell Orbit why"
+                  >
                     {[
                       ['wrong_role', 'Wrong role'],
                       ['wrong_company', 'Wrong company'],

@@ -1,16 +1,18 @@
+import { REACH_BAND_LABELS, TARGET_STATUS_LABELS } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { db } from '../db/schema';
 import { type CompanyReach, reachCompany } from '../engine/graph';
 import { useSession } from '../state/session';
-import { Avatar, Card, Chip, PageHeader, Spinner } from '../ui';
+import { Avatar, Card, Chip, NotFound, PageHeader, Spinner } from '../ui';
 import { StrengthDots } from './Pipeline';
 
 export function CompanyPage() {
   const { id } = useParams();
   const { userId } = useSession();
-  const org = useLiveQuery(() => (id ? db.organizations.get(id) : undefined), [id]);
+  // null means "looked it up and it is not there", undefined means "still loading".
+  const org = useLiveQuery(async () => (id ? ((await db.organizations.get(id)) ?? null) : null), [id]);
   const tc = useLiveQuery(
     () =>
       userId && id
@@ -26,7 +28,21 @@ export function CompanyPage() {
   useEffect(() => {
     if (userId && org) reachCompany(userId, org.name).then(setReach);
   }, [userId, org?.id]);
-  if (!org) return null;
+  if (org === undefined)
+    return (
+      <div className="py-20 flex justify-center">
+        <Spinner />
+      </div>
+    );
+  if (org === null)
+    return (
+      <NotFound
+        title="We can't find that company"
+        body="It may have been merged with another record, or the link is out of date."
+        to="/pipeline?view=companies"
+        linkLabel="Back to companies"
+      />
+    );
   return (
     <div>
       <PageHeader
@@ -34,7 +50,9 @@ export function CompanyPage() {
         subtitle={[org.industry, org.sizeBucket ? `${org.sizeBucket} people` : undefined, org.domains[0]]
           .filter(Boolean)
           .join(' · ')}
-        actions={tc ? <Chip tone="accent">Target · {tc.status}</Chip> : undefined}
+        actions={
+          tc ? <Chip tone="accent">Target company · {TARGET_STATUS_LABELS[tc.status]}</Chip> : undefined
+        }
       />
       {!reach ? (
         <Spinner />
@@ -68,7 +86,7 @@ export function CompanyPage() {
                     {t.target.displayName}
                   </Link>
                   <div className="text-ink-3">
-                    {t.path.hops.map((h) => h.text).join(' → ')} · {t.path.band.replace('_', ' ')}
+                    {t.path.hops.map((h) => h.text).join(' → ')} · {REACH_BAND_LABELS[t.path.band]}
                   </div>
                 </li>
               ))}

@@ -139,5 +139,7 @@ export function toReachPath(g: WeightedGraph, path: string[]): ReachPath {
     hops.push({ fromId: path[i]!, toId: path[i + 1]!, weight: e.weight, type: e.type, text: e.text });
     score *= e.weight;
   }
-  return { hops, score, band: score >= 0.4 ? 'strong' : score >= 0.15 ? 'possible' : 'long_shot' };
+  const band = score >= 0.4 ? 'strong' : score >= 0.15 ? 'possible' : 'long_shot';
+  // A one-hop route is a person the student is already connected to: writing to them directly is never a long shot.
+  return { hops, score, band: hops.length === 1 && band === 'long_shot' ? 'possible' : band };
 }

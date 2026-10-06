@@ -1,4 +1,4 @@
-import { STAGE_LABELS } from '@orbit/core';
+import { RELATIONSHIP_LABELS, STAGE_LABELS } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -68,25 +68,30 @@ export function People() {
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder="Search name, company, title"
-          className="w-64"
+          aria-label="Search people"
+          className="w-full sm:w-64"
         />
-        <Select value={filter} onChange={(e) => setFilter(e.target.value as never)}>
+        <Select
+          value={filter}
+          onChange={(e) => setFilter(e.target.value as never)}
+          aria-label="Filter people"
+        >
           <option value="all">Everyone</option>
           <option value="alumni">Alumni</option>
-          <option value="strong">Strong ties</option>
+          <option value="strong">Close ties</option>
           <option value="chats">With a chat</option>
           <option value="targets">At target companies</option>
           <option value="hidden">Hidden</option>
         </Select>
-        <Select value={sort} onChange={(e) => setSort(e.target.value as never)}>
+        <Select value={sort} onChange={(e) => setSort(e.target.value as never)} aria-label="Sort people">
           <option value="strength">By closeness</option>
           <option value="recent">Most recent</option>
           <option value="name">By name</option>
         </Select>
       </div>
       {list.length ? (
-        <div className="border border-line rounded-[var(--radius-card)] overflow-hidden">
-          <table className="w-full text-[13.5px]">
+        <div className="border border-line rounded-[var(--radius-card)] overflow-x-auto">
+          <table className="w-full text-[13.5px] min-w-[640px]">
             <thead className="bg-canvas-2 text-ink-3 text-[12px] uppercase tracking-wide">
               <tr>
                 {['Name', 'Title · Company', 'Relationship', 'Closeness', 'Last touch', 'Stage'].map((h) => (
@@ -118,7 +123,9 @@ export function People() {
                     <td className="px-3 text-ink-2 truncate max-w-[280px]">
                       {[p.currentTitle, p.currentOrganizationRaw].filter(Boolean).join(' · ') || '—'}
                     </td>
-                    <td className="px-3 text-ink-2 capitalize">{p.relationshipType.replace('_', ' ')}</td>
+                    <td className="px-3 text-ink-2">
+                      {p.relationshipType === 'unknown' ? '—' : RELATIONSHIP_LABELS[p.relationshipType]}
+                    </td>
                     <td className="px-3">
                       <StrengthDots v={p.strength} />
                     </td>

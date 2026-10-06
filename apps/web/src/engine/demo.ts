@@ -7,6 +7,22 @@ import { recomputeEdges } from './graph';
 import { ingestEmails, ingestEvents, type RawEmail, type RawEvent } from './ingest';
 import { ingestNote } from './notes';
 
+export const DEMO_USER_ID = 'demo-user';
+
+/**
+ * The confirmation to show before loading the demo would wipe this browser's data, or undefined when nothing would be
+ * lost (no user yet, or the current user is already the demo). Every entry point that resets to the demo goes through it.
+ */
+export function demoResetPrompt(
+  user: Pick<User, 'id' | 'fullName' | 'onboardingCompletedAt'> | undefined,
+): string | undefined {
+  if (!user || user.id === DEMO_USER_ID) return undefined;
+  const name = user.fullName.trim();
+  if (!user.onboardingCompletedAt)
+    return `Loading the demo discards the setup you started${name ? ` for ${name}` : ''}. Continue?`;
+  return `Loading the demo deletes ${name ? `${name}'s` : 'your'} people, chats, notes and drafts from this browser. This cannot be undone. Continue?`;
+}
+
 export async function loadDemo(
   opts: { reset?: boolean; onProgress?: (msg: string) => void } = {},
 ): Promise<User> {

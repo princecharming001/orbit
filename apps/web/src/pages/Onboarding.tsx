@@ -2,17 +2,18 @@ import { newId } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Check, Upload } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Navigate, useNavigate, useParams } from 'react-router-dom';
 import { Logo } from '../components/AppShell';
 import { db } from '../db/schema';
 import { generateBrief, recommendationsRefresh } from '../engine/brief';
 import { importConnectionsCsv } from '../engine/linkedin';
 import { saveResume } from '../engine/resume';
 import { syncGoogle } from '../engine/sync';
+import { addTargetCompany } from '../engine/targets';
 import { connectGoogle, googleClientId } from '../integrations/google';
 import { readPrefs, writePrefs } from '../integrations/prefs';
 import { useSession } from '../state/session';
-import { Button, Card, cx, Input, Label, Select, Spinner, Textarea, useToast } from '../ui';
+import { Button, Card, cx, FunctionPicker, Input, Label, Select, Spinner, Textarea, useToast } from '../ui';
 
 const STEPS = [2, 3, 4, 5, 6, 7, 8] as const;
 const TITLES: Record<number, string> = {
@@ -24,19 +25,6 @@ const TITLES: Record<number, string> = {
   7: 'Meeting notes',
   8: 'Preferences',
 };
-const FUNCTIONS = [
-  ['swe', 'Software engineering'],
-  ['pm', 'Product'],
-  ['ib', 'Investment banking'],
-  ['consulting', 'Consulting'],
-  ['data', 'Data / ML'],
-  ['design', 'Design'],
-  ['finance', 'Finance'],
-  ['marketing', 'Marketing'],
-  ['research', 'Research'],
-  ['vc', 'Venture'],
-  ['ops', 'Operations'],
-] as const;
 
 export function Onboarding() {
   const { step: stepParam } = useParams();
@@ -46,6 +34,18 @@ export function Onboarding() {
   const toast = useToast();
   if (!user) return null;
   const idx = STEPS.indexOf(step as (typeof STEPS)[number]);
+  // An unknown step (an old link, a typo) goes back to where the user actually is.
+  if (idx === -1)
+    return (
+      <Navigate
+        to={
+          user.onboardingCompletedAt
+            ? '/today'
+            : `/onboarding/${Math.min(8, Math.max(2, user.onboardingStep))}`
+        }
+        replace
+      />
+    );
   const go = async (next: number) => {
     await db.users.update(user.id, { onboardingStep: Math.max(user.onboardingStep, next) });
     nav(`/onboarding/${next}`);
@@ -289,17 +289,12 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
       });
     else setF((x) => ({ ...x, cycleLabel: `Summer ${new Date().getFullYear() + 1} internship` }));
   }, [goals]);
+  const [companyNote, setCompanyNote] = useState('');
   const addCompany = async () => {
-    const name = company.trim();
-    if (!name) return;
-    await db.targetCompanies.add({
-      id: newId('tc'),
-      userId: user.id,
-      nameRaw: name,
-      priority: 2,
-      status: 'researching',
-    });
-    setCompany('');
+    const r = await addTargetCompany(user.id, company);
+    if (r === 'duplicate') return setCompanyNote(`${company.trim()} is already on your list.`);
+    setCompanyNote('');
+    if (r === 'added') setCompany('');
   };
   const save = async () => {
     await db.goals.put({
@@ -336,31 +331,11 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
       </div>
       <div>
         <Label>Functions</Label>
-        <div className="flex flex-wrap gap-2">
-          {FUNCTIONS.map(([k, l]) => (
-            <button
-              key={k}
-              type="button"
-              onClick={() =>
-                setF({
-                  ...f,
-                  targetFunctions: f.targetFunctions.includes(k)
-                    ? f.targetFunctions.filter((x) => x !== k)
-                    : [...f.targetFunctions, k],
-                })
-              }
-              className={cx(
-                'h-8 px-3 rounded-full border text-[13px]',
-                f.targetFunctions.includes(k)
-                  ? 'bg-ink text-white border-ink'
-                  : 'border-line text-ink-2 hover:bg-canvas-2',
-              )}
-              data-testid={`ob-fn-${k}`}
-            >
-              {l}
-            </button>
-          ))}
-        </div>
+        <FunctionPicker
+          value={f.targetFunctions}
+          onChange={(targetFunctions) => setF({ ...f, targetFunctions })}
+          testIdPrefix="ob-fn"
+        />
       </div>
       <div className="grid sm:grid-cols-2 gap-4">
         <div>
@@ -412,6 +387,11 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
           />
           <Button onClick={addCompany}>Add</Button>
         </div>
+        {companyNote && (
+          <p className="text-[12px] text-ink-3 mt-1" role="status">
+            {companyNote}
+          </p>
+        )}
         <div className="flex flex-wrap gap-2 mt-2">
           {tcs.map((t) => (
             <span
@@ -420,7 +400,13 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
             >
               <button
                 className={cx('text-[11px] font-semibold', t.priority === 1 ? 'text-accent' : 'text-ink-3')}
-                title="Toggle priority"
+                title={
+                  t.priority === 1 ? 'Top priority. Click to make it a normal target' : 'Mark as top priority'
+                }
+                aria-label={
+                  t.priority === 1 ? `Make ${t.nameRaw} a normal target` : `Mark ${t.nameRaw} as top priority`
+                }
+                aria-pressed={t.priority === 1}
                 onClick={() => db.targetCompanies.update(t.id, { priority: t.priority === 1 ? 2 : 1 })}
               >
                 {t.priority === 1 ? '★' : '☆'}
@@ -429,7 +415,8 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
               <button
                 className="text-ink-3 hover:text-ink"
                 onClick={() => db.targetCompanies.delete(t.id)}
-                aria-label="Remove"
+                aria-label={`Remove ${t.nameRaw}`}
+                title={`Remove ${t.nameRaw}`}
               >
                 ×
               </button>
@@ -503,7 +490,7 @@ function StepResume({ onNext, onBack }: { onNext: () => void; onBack: () => void
       {facets.length > 0 && (
         <div className="mt-4">
           <Label hint="uncheck anything that's wrong">
-            Extracted ({resume?.parseSource === 'llm' ? 'with Claude' : 'heuristic'})
+            Extracted ({resume?.parseSource === 'llm' ? 'with Claude' : 'built-in parser'})
           </Label>
           <ul className="space-y-2 max-h-72 overflow-y-auto scroll-thin pr-1">
             {facets.map((f) => (

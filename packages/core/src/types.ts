@@ -423,6 +423,8 @@ export interface CoffeeChat {
   /** who introduced or pointed the student to this person (for the opener and the report-back) */
   referrerPersonId?: ID;
   referrerName?: string;
+  /** questions the student picked on the Prep tab for the next conversation */
+  prepQuestions?: string[];
   priority: 1 | 2 | 3;
   archivedAt?: string;
   createdAt: string;

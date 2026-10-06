@@ -137,7 +137,7 @@ export function SuggestionCard({ s, compact }: { s: Suggestion; compact?: boolea
   return (
     <div
       className={cx(
-        'bg-canvas border border-line rounded-[var(--radius-card)] p-4 fade-up',
+        'bg-canvas border border-line rounded-[var(--radius-card)] p-4 fade-up min-w-0 max-w-full break-words',
         !compact && 'shadow-[var(--shadow-card)]',
       )}
       data-testid={`suggestion-${s.kind}`}
@@ -161,7 +161,7 @@ export function SuggestionCard({ s, compact }: { s: Suggestion; compact?: boolea
               </Link>
             )}
             {person && (person.currentTitle || person.currentOrganizationRaw) && (
-              <span className="text-ink-3 text-[13px] truncate">
+              <span className="text-ink-3 text-[13px] truncate min-w-0 max-w-full">
                 {[person.currentTitle, person.currentOrganizationRaw].filter(Boolean).join(' · ')}
               </span>
             )}
@@ -208,7 +208,7 @@ export function SuggestionCard({ s, compact }: { s: Suggestion; compact?: boolea
                 />
               )}
               {comment && (
-                <div className="mt-2 flex items-start gap-2">
+                <div className="mt-2 flex flex-wrap items-start gap-2">
                   <p
                     className="flex-1 rounded-md bg-canvas px-3 py-2 text-ink-2"
                     data-testid="warmup-comment"
@@ -280,7 +280,7 @@ export function SuggestionCard({ s, compact }: { s: Suggestion; compact?: boolea
             </div>
           )}
           {s.kind === 'confirm_stage' && (
-            <div className="mt-3 flex gap-2">
+            <div className="mt-3 flex flex-wrap gap-2">
               <Button variant="primary" onClick={() => confirmStage(true)}>
                 Yes, move it
               </Button>
@@ -322,38 +322,46 @@ export function SuggestionCard({ s, compact }: { s: Suggestion; compact?: boolea
         {draft && (
           <button
             onClick={() => setOpen((o) => !o)}
-            className="p-1.5 rounded-md text-ink-3 hover:bg-canvas-2"
-            aria-label={open ? 'Collapse' : 'Expand'}
+            className="p-1.5 rounded-md text-ink-3 hover:bg-canvas-2 shrink-0"
+            aria-label={open ? 'Collapse the draft' : 'Open the draft'}
+            aria-expanded={open}
           >
             {open ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
           </button>
         )}
       </div>
       {!['confirm_stage', 'confirm_merge'].includes(s.kind) && (
-        <div className="mt-3 pt-3 border-t border-line-2 flex items-center gap-1 text-[12px]">
+        <div className="mt-3 pt-3 border-t border-line-2 flex flex-wrap items-center gap-1 text-[12px]">
           {!dismissing ? (
             <>
               <button
                 className="px-2 h-7 rounded-md text-ink-3 hover:bg-canvas-2 hover:text-ink"
                 onClick={() => snooze(1)}
+                aria-label="Snooze for 1 day"
+                title="Snooze for 1 day"
               >
                 Snooze 1d
               </button>
               <button
                 className="px-2 h-7 rounded-md text-ink-3 hover:bg-canvas-2 hover:text-ink"
                 onClick={() => snooze(3)}
+                aria-label="Snooze for 3 days"
+                title="Snooze for 3 days"
               >
                 3d
               </button>
               <button
                 className="px-2 h-7 rounded-md text-ink-3 hover:bg-canvas-2 hover:text-ink"
                 onClick={() => snooze(7)}
+                aria-label="Snooze for 1 week"
+                title="Snooze for 1 week"
               >
                 1w
               </button>
               <button
                 className="ml-auto px-2 h-7 rounded-md text-ink-3 hover:bg-canvas-2 hover:text-ink"
                 onClick={() => setDismissing(true)}
+                title="Remove this card and tell Orbit why"
               >
                 Dismiss
               </button>

@@ -1,10 +1,18 @@
 import type { OutboundMessage, Suggestion, User } from '@orbit/core';
-import { linkedinMessageUrl, maxBumpsFor, sectorOf, sha256Hex } from '@orbit/core';
+import { linkedinMessageUrl, MESSAGE_KIND_LABELS, maxBumpsFor, sectorOf, sha256Hex } from '@orbit/core';
 import { addTouchpoint, audit, feedback, notify, recomputePersonStrength } from '../db/repo';
 import { db } from '../db/schema';
 import { gmailSend } from '../integrations/google';
 import { evaluateImmediateSuggestions } from './brief';
 import { evaluateTrigger } from './stages';
+
+/** "less than an hour ago", "1 hour ago", "5 hours ago", "2 days ago" for the cooldown message. */
+export function hoursAgo(ms: number): string {
+  const h = Math.floor(ms / 3_600_000);
+  if (h < 1) return 'less than an hour ago';
+  if (h < 48) return `${h} hour${h === 1 ? '' : 's'} ago`;
+  return `${Math.floor(h / 24)} days ago`;
+}
 
 export async function checkSendAllowed(
   userId: string,
@@ -49,7 +57,7 @@ export async function checkSendAllowed(
     if (!repliedSince && kind !== 'reply')
       return {
         allowed: false,
-        reason: `You wrote to ${person.firstName} ${Math.round((now.getTime() - new Date(last.sentAt).getTime()) / 3_600_000)} hours ago and they haven't replied yet.`,
+        reason: `You wrote to ${person.firstName} ${hoursAgo(now.getTime() - new Date(last.sentAt).getTime())} and they haven't replied yet.`,
       };
   }
   const chat = await db.chats
@@ -180,7 +188,7 @@ export async function approveAndSend(
     occurredAt: now.toISOString(),
     refTable: 'outbound',
     refId: msg.id,
-    summary: `${msg.channel === 'linkedin' ? 'LinkedIn message' : 'Email'}: ${fresh.subject ?? msg.kind.replace('_', ' ')}`,
+    summary: `${msg.channel === 'linkedin' ? 'LinkedIn message' : 'Email'}: ${fresh.subject ?? MESSAGE_KIND_LABELS[msg.kind]}`,
     weight: msg.channel === 'linkedin' ? 0.5 : 0.6,
   });
   const chat = msg.chatId

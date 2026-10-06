@@ -1,18 +1,32 @@
-import { buildStyleCard, defaultStyleCard, newId } from '@orbit/core';
+import { buildStyleCard, defaultStyleCard, newId, TARGET_STATUS_LABELS } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Check, Download, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { NavLink, useNavigate, useParams } from 'react-router-dom';
+import { Navigate, NavLink, useNavigate, useParams } from 'react-router-dom';
 import { db, wipeDatabase } from '../db/schema';
-import { loadDemo } from '../engine/demo';
+import { demoResetPrompt, loadDemo } from '../engine/demo';
 import { importConnectionsCsv } from '../engine/linkedin';
 import { saveResume } from '../engine/resume';
 import { syncGoogle } from '../engine/sync';
+import { addTargetCompany } from '../engine/targets';
 import { hasLlm, testApiKey } from '../integrations/anthropic';
 import { connectGoogle, currentGoogleToken, disconnectGoogle, googleClientId } from '../integrations/google';
 import { readPrefs, writePrefs } from '../integrations/prefs';
 import { useSession } from '../state/session';
-import { Button, Card, cx, Input, Label, PageHeader, Select, Spinner, Textarea, useToast } from '../ui';
+import {
+  Button,
+  Card,
+  cx,
+  FunctionPicker,
+  Input,
+  Label,
+  PageHeader,
+  relDate,
+  Select,
+  Spinner,
+  Textarea,
+  useToast,
+} from '../ui';
 
 const SECTIONS = [
   ['profile', 'Profile'],
@@ -25,11 +39,12 @@ const SECTIONS = [
 
 export function SettingsPage() {
   const { section = 'profile' } = useParams();
+  if (!SECTIONS.some(([k]) => k === section)) return <Navigate to="/settings/profile" replace />;
   return (
     <div>
       <PageHeader title="Settings" />
-      <div className="grid md:grid-cols-[200px_1fr] gap-6 items-start">
-        <nav className="flex md:flex-col gap-0.5 overflow-x-auto">
+      <div className="grid md:grid-cols-[200px_minmax(0,1fr)] gap-6 items-start">
+        <nav className="flex md:flex-col gap-0.5 overflow-x-auto min-w-0" aria-label="Settings sections">
           {SECTIONS.map(([k, l]) => (
             <NavLink
               key={k}
@@ -74,11 +89,23 @@ function Profile() {
     timezone: user.timezone,
   });
   const toast = useToast();
+  const nameMissing = !f.fullName.trim();
   return (
     <Card className="grid sm:grid-cols-2 gap-4">
       <div className="sm:col-span-2">
         <Label>Full name</Label>
-        <Input value={f.fullName} onChange={(e) => setF({ ...f, fullName: e.target.value })} />
+        <Input
+          value={f.fullName}
+          onChange={(e) => setF({ ...f, fullName: e.target.value })}
+          aria-invalid={nameMissing}
+          aria-describedby={nameMissing ? 'profile-name-error' : undefined}
+          data-testid="profile-name"
+        />
+        {nameMissing && (
+          <p id="profile-name-error" className="text-[12px] text-bad mt-1">
+            Your name is used to sign every message. Add it to save.
+          </p>
+        )}
       </div>
       <div>
         <Label>Email</Label>
@@ -119,10 +146,13 @@ function Profile() {
       <div className="sm:col-span-2">
         <Button
           variant="primary"
+          disabled={nameMissing}
           onClick={async () => {
+            if (nameMissing) return;
             const [first, ...rest] = f.fullName.trim().split(/\s+/);
             await db.users.update(user.id, {
               ...f,
+              fullName: f.fullName.trim(),
               firstName: first ?? '',
               lastName: rest.join(' '),
               majors: f.majors
@@ -150,19 +180,24 @@ function Goals() {
   const [f, setF] = useState({
     cycleLabel: '',
     targetRoles: '',
-    targetFunctions: '',
+    targetFunctions: [] as string[],
     targetIndustries: '',
     targetLocations: '',
     freeText: '',
   });
   const [company, setCompany] = useState('');
   const toast = useToast();
+  const addCompany = async () => {
+    const r = await addTargetCompany(user.id, company);
+    if (r === 'duplicate') toast.push({ text: `${company.trim()} is already on your list.` });
+    if (r === 'added') setCompany('');
+  };
   useEffect(() => {
     if (goals)
       setF({
         cycleLabel: goals.cycleLabel,
         targetRoles: goals.targetRoles.join(', '),
-        targetFunctions: goals.targetFunctions.join(', '),
+        targetFunctions: goals.targetFunctions,
         targetIndustries: goals.targetIndustries.join(', '),
         targetLocations: goals.targetLocations.join(', '),
         freeText: goals.freeText ?? '',
@@ -180,13 +215,12 @@ function Goals() {
           <Label>Cycle</Label>
           <Input value={f.cycleLabel} onChange={(e) => setF({ ...f, cycleLabel: e.target.value })} />
         </div>
-        <div>
-          <Label hint="swe, pm, ib, consulting, data, design, finance, marketing, research, vc, ops">
-            Functions
-          </Label>
-          <Input
+        <div className="sm:col-span-2">
+          <Label>Functions</Label>
+          <FunctionPicker
             value={f.targetFunctions}
-            onChange={(e) => setF({ ...f, targetFunctions: e.target.value })}
+            onChange={(targetFunctions) => setF({ ...f, targetFunctions })}
+            testIdPrefix="settings-fn"
           />
         </div>
         <div>
@@ -219,7 +253,7 @@ function Goals() {
                 userId: user.id,
                 cycleLabel: f.cycleLabel,
                 targetRoles: split(f.targetRoles),
-                targetFunctions: split(f.targetFunctions).map((x) => x.toLowerCase()),
+                targetFunctions: f.targetFunctions,
                 targetIndustries: split(f.targetIndustries),
                 targetLocations: split(f.targetLocations),
                 freeText: f.freeText,
@@ -239,89 +273,59 @@ function Goals() {
             value={company}
             onChange={(e) => setCompany(e.target.value)}
             placeholder="Add a company"
-            onKeyDown={async (e) => {
-              if (e.key === 'Enter' && company.trim()) {
-                await db.targetCompanies.add({
-                  id: newId('tc'),
-                  userId: user.id,
-                  nameRaw: company.trim(),
-                  priority: 2,
-                  status: 'researching',
-                });
-                setCompany('');
-              }
+            aria-label="Add a target company"
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') addCompany();
             }}
           />
-          <Button
-            onClick={async () => {
-              if (company.trim()) {
-                await db.targetCompanies.add({
-                  id: newId('tc'),
-                  userId: user.id,
-                  nameRaw: company.trim(),
-                  priority: 2,
-                  status: 'researching',
-                });
-                setCompany('');
-              }
-            }}
-          >
-            Add
-          </Button>
+          <Button onClick={addCompany}>Add</Button>
         </div>
-        <table className="w-full text-[13.5px]">
-          <tbody className="divide-y divide-line">
-            {tcs.map((t) => (
-              <tr key={t.id}>
-                <td className="py-2 font-medium">{t.nameRaw}</td>
-                <td>
-                  <Select
-                    value={t.priority}
-                    onChange={(e) =>
-                      db.targetCompanies.update(t.id, { priority: Number(e.target.value) as 1 | 2 | 3 })
-                    }
-                    className="h-7 text-[12px]"
-                  >
-                    <option value={1}>Top priority</option>
-                    <option value={2}>Normal</option>
-                    <option value={3}>Low</option>
-                  </Select>
-                </td>
-                <td>
-                  <Select
-                    value={t.status}
-                    onChange={(e) => db.targetCompanies.update(t.id, { status: e.target.value as never })}
-                    className="h-7 text-[12px]"
-                  >
-                    {['researching', 'applied', 'interviewing', 'offer', 'closed'].map((s) => (
-                      <option key={s} value={s}>
-                        {s}
-                      </option>
-                    ))}
-                  </Select>
-                </td>
-                <td>
-                  <Input
-                    type="date"
-                    value={t.deadline ?? ''}
-                    onChange={(e) =>
-                      db.targetCompanies.update(t.id, { deadline: e.target.value || undefined })
-                    }
-                    className="h-7 text-[12px] w-36"
-                  />
-                </td>
-                <td className="text-right">
-                  <button
-                    className="text-ink-3 hover:text-bad"
-                    onClick={() => db.targetCompanies.delete(t.id)}
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <ul className="divide-y divide-line text-[13.5px]">
+          {tcs.map((t) => (
+            <li key={t.id} className="py-2 flex flex-wrap items-center gap-2">
+              <span className="font-medium min-w-0 flex-1 basis-32 truncate">{t.nameRaw}</span>
+              <Select
+                value={t.priority}
+                onChange={(e) =>
+                  db.targetCompanies.update(t.id, { priority: Number(e.target.value) as 1 | 2 | 3 })
+                }
+                className="h-7 text-[12px]"
+                aria-label={`Priority for ${t.nameRaw}`}
+              >
+                <option value={1}>Top priority</option>
+                <option value={2}>Normal</option>
+                <option value={3}>Low</option>
+              </Select>
+              <Select
+                value={t.status}
+                onChange={(e) => db.targetCompanies.update(t.id, { status: e.target.value as never })}
+                className="h-7 text-[12px]"
+                aria-label={`Application status for ${t.nameRaw}`}
+              >
+                {Object.entries(TARGET_STATUS_LABELS).map(([k, l]) => (
+                  <option key={k} value={k}>
+                    {l}
+                  </option>
+                ))}
+              </Select>
+              <Input
+                type="date"
+                value={t.deadline ?? ''}
+                onChange={(e) => db.targetCompanies.update(t.id, { deadline: e.target.value || undefined })}
+                className="h-7 text-[12px] w-36"
+                aria-label={`Application deadline for ${t.nameRaw}`}
+              />
+              <button
+                className="text-ink-3 hover:text-bad p-1 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                onClick={() => db.targetCompanies.delete(t.id)}
+                aria-label={`Remove ${t.nameRaw}`}
+                title={`Remove ${t.nameRaw} from your targets`}
+              >
+                <Trash2 size={14} />
+              </button>
+            </li>
+          ))}
+        </ul>
       </Card>
     </div>
   );
@@ -434,7 +438,7 @@ function Integrations() {
         {li && (
           <p className="text-[12px] mt-1 text-good inline-flex items-center gap-1">
             <Check size={13} /> {String((li.syncState as { rows?: number }).rows ?? 0)} connections ·{' '}
-            {li.lastSyncedAt ? new Date(li.lastSyncedAt).toLocaleDateString() : ''}
+            {li.lastSyncedAt ? `imported ${relDate(li.lastSyncedAt)}` : ''}
           </p>
         )}
         <label className="mt-3 inline-flex">
@@ -552,7 +556,10 @@ function Integrations() {
           className="mt-3"
           variant="danger"
           onClick={async () => {
-            if (!confirm('This wipes your current data and loads the demo. Continue?')) return;
+            const prompt =
+              demoResetPrompt(user) ??
+              'Reload the demo from scratch? Changes you made to the demo data are lost.';
+            if (!confirm(prompt)) return;
             setBusy('Loading demo…');
             await loadDemo({ reset: true });
             setBusy(undefined);
