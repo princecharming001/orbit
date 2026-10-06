@@ -3,7 +3,7 @@ import { heuristicNoteExtraction, newId, normalizeEmail, parseGranolaText, parse
 import { addTouchpoint, notify, recomputePersonStrength } from '../db/repo';
 import { db } from '../db/schema';
 import { hasLlm, llmNoteExtraction } from '../integrations/anthropic';
-import { evaluateImmediateSuggestions, refreshPersonSummary } from './brief';
+import { evaluateImmediateSuggestions, refreshPersonSummary, refreshUntouchedDraft } from './brief';
 import { upsertPerson } from './people';
 import { evaluateTrigger } from './stages';
 
@@ -212,6 +212,7 @@ export async function processNote(user: User, note: MeetingNote, now = new Date(
       { type: 'note_ingested', confidence: note.matchConfidence ?? 0.8 },
       { table: 'notes', id: note.id },
       now,
+      new Date(note.occurredAt),
     );
     if (!chat.completedAt) await db.chats.update(chat.id, { completedAt: note.occurredAt });
   }
@@ -224,7 +225,17 @@ export async function processNote(user: User, note: MeetingNote, now = new Date(
     ext.suggestedNextStep,
     `/people/${primary.id}`,
   );
+  // thank-yous drafted before these notes existed (calendar end, earlier sync) are re-drafted with the new facts
+  const drafted = await db.suggestions
+    .where('personId')
+    .equals(primary.id)
+    .filter((s) => s.kind === 'thank_you' && s.status === 'pending' && !!s.outboundMessageId)
+    .toArray();
   await evaluateImmediateSuggestions(user.id, { personId: primary.id, chatId: chat?.id }, now);
+  for (const s of drafted) {
+    const fresh = await db.suggestions.get(s.id);
+    if (fresh?.status === 'pending') await refreshUntouchedDraft(user.id, fresh);
+  }
 }
 
 export function parseDueHint(hint: string | undefined, from: Date): Date {

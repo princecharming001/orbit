@@ -28,7 +28,7 @@ export function AppShell() {
           ? db.suggestions
               .where('userId')
               .equals(userId)
-              .filter((s) => s.status === 'pending')
+              .filter((s) => s.status === 'pending' && !s.deferred)
               .count()
           : 0,
       [userId],

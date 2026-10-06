@@ -4,7 +4,7 @@ import { addTouchpoint, audit, feedback, notify, recomputePersonStrength } from 
 import { db } from '../db/schema';
 import { gmailSend } from '../integrations/google';
 import { evaluateImmediateSuggestions } from './brief';
-import { evaluateTrigger } from './stages';
+import { evaluateTrigger, recordAlreadyDone } from './stages';
 
 export async function checkSendAllowed(
   userId: string,
@@ -227,6 +227,7 @@ export async function dismissSuggestion(userId: string, s: Suggestion, reason: s
     reason: `${reason}|${s.kind}:${s.personId ?? ''}`,
   });
   if (s.outboundMessageId) await db.outbound.update(s.outboundMessageId, { status: 'cancelled' });
+  if (reason === 'already_did') await recordAlreadyDone(s);
 }
 
 export async function snoozeSuggestion(userId: string, s: Suggestion, days: number): Promise<void> {

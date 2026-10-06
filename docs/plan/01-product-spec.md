@@ -126,7 +126,7 @@ A **coffee chat** is one relationship-in-progress with one person, at one point 
 | `followed_up` | a thank-you or follow-up was sent after completion | send pipeline |
 | `nurturing` | long-term relationship mode; cadence rules apply | automatic 14 days after `followed_up`, or user action |
 | `declined` | the person said no, or asked not to be contacted | inbound classifier (`reply_decline`) with confirmation card, or user |
-| `no_response` | 2 bumps sent and 14 days silent since the last | nightly rule |
+| `no_response` | the sector's bump limit reached and 14 days silent since the last, or 21 days silent however many bumps went out (a dismissed or unsent bump never strands the chat); a reply after the last message stops the timer | nightly rule |
 | `archived` | user removed it from view | user |
 
 Transitions are recorded in `coffee_chat_stage_events` with `evidence_ref` and `confidence`. Any transition with `confidence < 0.8` is recorded as `proposed` and surfaces as a confirmation card ("Looks like Priya replied and suggested Thursday. Move to Scheduling?"). The user confirms or corrects; corrections are feedback events. [DEFAULT threshold]
@@ -168,7 +168,7 @@ Layout top to bottom:
 - Minimum 0 cards (then the email is not sent and the Today page says "Nothing to do today, your network is in good shape"), maximum 7. [DEFAULT]
 - Suggestion kinds, triggers, ranking and guardrails are specified in `07-nurture-and-morning-brief.md`.
 - "Approve & send" opens a 60-second undo toast; the send is queued with a 60 s delay and cancelled on undo. [DEFAULT]
-- A suggestion not acted on by the next brief is carried over at most once, then expires with a feedback event `expired`.
+- A suggestion not acted on stays pending while it is still true and competes again in the next brief; cards that miss the cut are kept under "N more suggestions". A suggestion expires (feedback event `expired`, with a reason) only when its trigger is gone: the chat moved on, the time passed, the person replied. Dismissing with "already did this" records the action: a bump counts toward the bump limit, a thank-you moves the chat to followed up.
 
 ### 6.3 Approvals centre (`/inbox`)
 

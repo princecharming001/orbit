@@ -141,13 +141,21 @@ export function decideTransition(from: ChatStage, trig: StageTrigger): StageDeci
         : undefined;
     case 'timer_followed_up_14d':
       return from === 'followed_up' ? d('nurturing', 1, 'timer:followed_up_14d') : undefined;
-    case 'timer_no_response':
-      return from === 'outreach_sent' && trig.bumps >= trig.maxBumps && trig.daysSilent >= 14
-        ? d('no_response', 1, 'timer:no_response')
+    case 'timer_no_response': {
+      // bumps exhausted and two more weeks of silence, or three weeks of silence whether or not a bump went out
+      const exhausted = trig.bumps >= trig.maxBumps && trig.daysSilent >= NO_RESPONSE_AFTER_BUMPS_DAYS;
+      const stale = trig.daysSilent >= NO_RESPONSE_SILENT_DAYS;
+      return from === 'outreach_sent' && (exhausted || stale)
+        ? d('no_response', 1, exhausted ? 'timer:no_response' : 'timer:no_response_silent')
         : undefined;
+    }
     case 'warmup_ready':
       return undefined; // warm-up readiness produces a suggestion, not a transition
   }
 }
 
 export const PROPOSE_THRESHOLD = 0.8;
+/** outreach_sent -> no_response: this many days of silence after the last allowed bump ... */
+export const NO_RESPONSE_AFTER_BUMPS_DAYS = 14;
+/** ... or this many days of silence with no bump sent at all (a dismissed or never-sent bump must not strand the chat) */
+export const NO_RESPONSE_SILENT_DAYS = 21;

@@ -6,7 +6,7 @@ import { parseConnectionsCsv } from '../linkedin/csv';
 import { recommendPeople } from '../recommend/score';
 import { heuristicResumeParse } from '../resume/parse';
 import { buildStyleCard, defaultStyleCard } from '../style/card';
-import { generateCandidates, selectForBrief } from '../suggestions/rules';
+import { generateCandidates, HARD_URGENT, MESSAGE_KINDS, selectForBrief } from '../suggestions/rules';
 import type { PersonFact } from '../types';
 
 const facts: PersonFact[] = [
@@ -169,7 +169,10 @@ describe('suggestions over the demo dataset', () => {
         .slice(0, 3)
         .every((s) => ['schedule_confirm', 'thank_you', 'prep_brief', 'confirm_stage'].includes(s.kind)),
     ).toBe(true);
-    const ids = sel.filter((s) => s.personId).map((s) => s.personId);
+    // one message-bearing card per person; a reminder or prep card may sit next to it (a promise is never dropped)
+    const ids = sel
+      .filter((s) => s.personId && MESSAGE_KINDS.includes(s.kind) && !HARD_URGENT.includes(s.kind))
+      .map((s) => s.personId);
     expect(new Set(ids).size).toBe(ids.length);
   });
 });

@@ -573,6 +573,10 @@ export interface Suggestion {
   carriedOver: number;
   expiresAt: string;
   decidedAt?: string;
+  /** why the system retired it (status `expired`): the trigger went away, the chat moved on, the time passed */
+  expiredReason?: string;
+  /** still true but did not make today's brief; kept (without a draft) for the next brief and listed under "more" */
+  deferred?: boolean;
   createdAt: string;
 }
 

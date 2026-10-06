@@ -366,6 +366,7 @@ async function processNetworkingThread(
         { type: 'inbound_signal', signal, confidence },
         { table: 'messages', id: m.id },
         now,
+        new Date(m.sentAt),
       );
       if (now.getTime() - new Date(m.sentAt).getTime() < 3 * 86_400_000)
         await notify(
@@ -376,25 +377,57 @@ async function processNetworkingThread(
           `/people/${person.id}`,
         );
     } else if (m.direction === 'outbound') {
-      const kind =
-        signal === 'thank_you'
-          ? 'thank_you'
-          : signal === 'scheduling_proposal'
-            ? 'schedule'
-            : chat.stage === 'identified' || chat.stage === 'warming'
-              ? 'outreach'
-              : 'other';
-      await db.chats.update(chat.id, {
-        lastOutboundAt: m.sentAt,
+      // a message Orbit sent itself already moved the chat (and counted the bump) in the send path
+      const sentByOrbit =
+        Object.keys(m.headers ?? {}).some((k) => k.toLowerCase() === 'x-orbit-message-id') ||
+        !!(await db.outbound
+          .where('chatId')
+          .equals(chat.id)
+          .filter((o) => !!o.providerMessageId && o.providerMessageId === m.externalMessageId)
+          .first());
+      const kind = outboundKind(chat, signal);
+      const changes: Partial<CoffeeChat> = {
+        lastOutboundAt:
+          chat.lastOutboundAt && chat.lastOutboundAt > m.sentAt ? chat.lastOutboundAt : m.sentAt,
         firstOutreachAt: chat.firstOutreachAt ?? m.sentAt,
         updatedAt: now.toISOString(),
-      });
-      chat.lastOutboundAt = m.sentAt;
-      chat.firstOutreachAt = chat.firstOutreachAt ?? m.sentAt;
-      await evaluateTrigger(chat, { type: 'outbound_sent', kind }, { table: 'messages', id: m.id }, now);
+      };
+      // a follow-up the student sent from their own mail still counts toward the bump limit
+      if (kind === 'bump' && !sentByOrbit) changes.bumpCount = chat.bumpCount + 1;
+      await db.chats.update(chat.id, changes);
+      Object.assign(chat, changes);
+      if (!sentByOrbit)
+        await evaluateTrigger(
+          chat,
+          { type: 'outbound_sent', kind },
+          { table: 'messages', id: m.id },
+          now,
+          new Date(m.sentAt),
+        );
     }
   }
   await evaluateImmediateSuggestions(user.id, { chatId: chat.id, personId: counterpartId }, now);
+}
+
+/**
+ * What an outbound message in a networking thread is, from where the chat stands: anything sent after the
+ * conversation is the thank-you (whatever the wording), and a second message into silence is a bump.
+ */
+export function outboundKind(
+  chat: Pick<CoffeeChat, 'stage' | 'lastOutboundAt' | 'lastInboundAt'>,
+  signal: string | undefined,
+): 'outreach' | 'bump' | 'schedule' | 'thank_you' | 'other' {
+  if (chat.stage === 'completed') return 'thank_you';
+  if (signal === 'thank_you') return 'thank_you';
+  if (signal === 'scheduling_proposal') return 'schedule';
+  if (chat.stage === 'identified' || chat.stage === 'warming') return 'outreach';
+  if (
+    chat.stage === 'outreach_sent' &&
+    chat.lastOutboundAt &&
+    (!chat.lastInboundAt || chat.lastInboundAt < chat.lastOutboundAt)
+  )
+    return 'bump';
+  return 'other';
 }
 
 export interface RawEvent {
@@ -543,15 +576,28 @@ export async function ingestEvents(
           chat,
           { type: 'event_scheduled', confidence },
           { table: 'events', id: ev.id },
+          now,
           new Date(r.startAt),
         );
+      // the chat was completed when the meeting ended, not when Orbit noticed
       await evaluateTrigger(
         chat,
         { type: 'event_ended', confidence: confidence >= 0.9 ? 0.95 : 0.7 },
         { table: 'events', id: ev.id },
         now,
+        new Date(r.endAt),
       );
       await db.chats.update(chat.id, { completedAt: chat.completedAt ?? r.endAt });
+      chat.completedAt = chat.completedAt ?? r.endAt;
+      // mail is often synced before the calendar: a message already sent after the meeting is the thank-you
+      if (chat.stage === 'completed' && chat.lastOutboundAt && chat.lastOutboundAt > r.endAt)
+        await evaluateTrigger(
+          chat,
+          { type: 'outbound_sent', kind: 'thank_you' },
+          { table: 'events', id: ev.id },
+          now,
+          new Date(chat.lastOutboundAt),
+        );
       await recomputePersonStrength(pid, now);
     } else {
       await evaluateTrigger(

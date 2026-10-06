@@ -2,10 +2,12 @@ import { maxBumpsFor, sectorOf } from '../drafts/sector';
 import type {
   ActionItem,
   CalendarEvent,
+  ChatStage,
   CoffeeChat,
   EmailMessage,
   Person,
   PersonFact,
+  ProposedTime,
   Recommendation,
   RelationshipType,
   Suggestion,
@@ -13,6 +15,7 @@ import type {
   TargetCompany,
   UserSettings,
 } from '../types';
+import { todayKey } from '../util/ids';
 import { warmUpProgress } from '../warmup/rules';
 
 export interface RuleInput {
@@ -32,6 +35,10 @@ export interface RuleInput {
   freeSlotsIso: string[]; // from calendar free/busy
   recentlyContacted: Set<string>; // personIds contacted in last 30d
   recentBriefDate?: string;
+  /** the student's IANA timezone; calendar-day comparisons (due today, overdue) use it */
+  timezone?: string;
+  /** personId -> ISO time of the last real conversation (meeting, note, email or LinkedIn message, either way) */
+  lastConversationByPerson?: Map<string, string>;
 }
 
 export interface Candidate {
@@ -48,6 +55,7 @@ export interface Candidate {
 }
 
 const DAY = 86_400_000;
+const HOUR = 3_600_000;
 /** Playbook: a nurture note every 4 to 6 weeks while the cycle is live; closer ties a little sooner. */
 const CADENCE: Record<RelationshipType, number> = {
   mentor: 28,
@@ -60,8 +68,14 @@ const CADENCE: Record<RelationshipType, number> = {
   unknown: 42,
   other: 42,
 };
+/** A hook older than this is stale news; the check-in would reference something that already happened. */
+const HOOK_MAX_AGE_DAYS = 90;
+/** A thank-you is only natural within this window after the conversation. */
+export const THANK_YOU_WINDOW_DAYS = 3;
+/** A proposed time has to be at least this far away to be worth confirming. */
+const CONFIRM_LEAD_HOURS = 2;
 
-function businessDaysBetween(a: Date, b: Date): number {
+export function businessDaysBetween(a: Date, b: Date): number {
   let n = 0;
   const d = new Date(a);
   while (d < b) {
@@ -70,10 +84,33 @@ function businessDaysBetween(a: Date, b: Date): number {
   }
   return n;
 }
-const isoWeek = (d: Date) =>
-  `${d.getFullYear()}-w${Math.ceil((d.getDate() + 6 - d.getDay()) / 7)}-${d.getMonth()}`;
+/** Local date of the Monday that starts the outreach week containing `d` (weeks run Monday to Sunday). */
+export function weekMondayKey(d: Date): string {
+  const m = new Date(d);
+  m.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+  m.setHours(0, 0, 0, 0);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${m.getFullYear()}-${pad(m.getMonth() + 1)}-${pad(m.getDate())}`;
+}
 const monthKey = (d: Date) => `${d.getFullYear()}-${d.getMonth()}`;
 const quarterKey = (d: Date) => `${d.getFullYear()}-q${Math.floor(d.getMonth() / 3)}`;
+const dayKey = (iso: string, tz?: string) => todayKey(new Date(iso), tz);
+
+/** A proposed time is usable when it is still ahead (with some lead) and the student is free then. */
+export function usableProposedTime(
+  t: ProposedTime,
+  events: Pick<CalendarEvent, 'startAt' | 'endAt' | 'status'>[],
+  now: Date,
+): 'ok' | 'passed' | 'busy' {
+  const start = new Date(t.startIso).getTime();
+  if (Number.isNaN(start) || start < now.getTime() + CONFIRM_LEAD_HOURS * HOUR) return 'passed';
+  const end = t.endIso ? new Date(t.endIso).getTime() : start + 30 * 60_000;
+  const busy = events.some(
+    (e) =>
+      e.status !== 'cancelled' && new Date(e.startAt).getTime() < end && new Date(e.endAt).getTime() > start,
+  );
+  return busy ? 'busy' : 'ok';
+}
 
 export function generateCandidates(inp: RuleInput): Candidate[] {
   const out: Candidate[] = [];
@@ -95,6 +132,8 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
     const person = inp.people.get(chat.personId);
     if (!person || !person.isHuman || person.hiddenAt) continue;
     const rel = goalRel(chat.personId);
+    // a live conversation is worth more than its company alone: never let a cold lead outrank it
+    const liveRel = Math.max(rel, 0.6);
     // warm-up
     if (chat.stage === 'warming' && chat.warmUp) {
       const prog = warmUpProgress(chat.warmUp, now);
@@ -104,7 +143,7 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
           personId: chat.personId,
           chatId: chat.id,
           dedupeKey: `new:${chat.personId}:${chat.id}`,
-          reasonText: `Warm-up done (${prog.done} of ${prog.total}) — ready to message ${person.firstName}`,
+          reasonText: `Warm-up done (${prog.done} of ${prog.total}); ready to message ${person.firstName}`,
           signals: { warmUpDone: prog.done },
           payload: { channel: 'linkedin' },
           urgency: 0.6,
@@ -117,7 +156,7 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
           personId: chat.personId,
           chatId: chat.id,
           dedupeKey: `warm:${chat.id}:${prog.nextAction.id}`,
-          reasonText: `${prog.nextAction.label} — warming up before you message ${person.firstName}`,
+          reasonText: `${prog.nextAction.label}; warming up before you message ${person.firstName}`,
           signals: { actionId: prog.nextAction.id, overdue: prog.overdue },
           payload: { actionId: prog.nextAction.id, url: prog.nextAction.url, label: prog.nextAction.label },
           urgency: prog.overdue ? 0.65 : 0.55,
@@ -152,56 +191,89 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
           signals: { businessDays: bdays, bumpCount: chat.bumpCount },
           payload: {},
           urgency: Math.min(0.9, 0.7 + 0.1 * (bdays - threshold)),
-          goalRelevance: rel,
+          goalRelevance: liveRel,
           confidence: 1,
         });
       }
     }
     const lastIn = inp.lastInboundByChat.get(chat.id);
+    const awaitingReply =
+      !!lastIn &&
+      (!chat.lastOutboundAt || new Date(chat.lastOutboundAt) < new Date(lastIn.sentAt)) &&
+      // a chat already on the calendar needs no times proposed or confirmed
+      !inp.events.some(
+        (e) =>
+          e.chatId === chat.id && e.status !== 'cancelled' && new Date(e.endAt).getTime() > now.getTime(),
+      );
     if (
       chat.stage === 'replied' &&
       lastIn &&
+      awaitingReply &&
       ['reply_positive', 'question', 'reply_neutral', 'intro_offer', 'referral_offer'].includes(
         lastIn.signal ?? '',
-      ) &&
-      (!chat.lastOutboundAt || new Date(chat.lastOutboundAt) < new Date(lastIn.sentAt))
+      )
     ) {
       out.push({
         kind: 'schedule_propose',
         personId: chat.personId,
         chatId: chat.id,
         dedupeKey: `sched:${chat.id}:${lastIn.id}`,
-        reasonText: `${person.firstName} replied — propose times`,
+        reasonText: `${person.firstName} replied; propose times`,
         signals: { signal: lastIn.signal },
         payload: { inReplyTo: lastIn.id, windows: inp.freeSlotsIso.slice(0, 2) },
         urgency: 0.9,
-        goalRelevance: rel,
+        goalRelevance: liveRel,
         confidence: lastIn.signalConfidence ?? 0.7,
       });
     }
+    const proposedTimes =
+      lastIn?.signal === 'scheduling_proposal' ? (lastIn.extraction?.proposedTimes ?? []) : [];
     if (
       (chat.stage === 'scheduling' || chat.stage === 'replied') &&
-      lastIn?.signal === 'scheduling_proposal' &&
-      (lastIn.extraction?.proposedTimes.length ?? 0) > 0 &&
-      (!chat.lastOutboundAt || new Date(chat.lastOutboundAt) < new Date(lastIn.sentAt))
+      lastIn &&
+      awaitingReply &&
+      proposedTimes.length
     ) {
-      const t = lastIn.extraction!.proposedTimes[0]!;
-      out.push({
-        kind: 'schedule_confirm',
-        personId: chat.personId,
-        chatId: chat.id,
-        dedupeKey: `confirm:${chat.id}:${lastIn.id}`,
-        reasonText: `${person.firstName} suggested ${t.raw} — confirm it`,
-        signals: { proposed: t },
-        payload: { inReplyTo: lastIn.id, time: t },
-        urgency: 1,
-        goalRelevance: rel,
-        confidence: lastIn.signalConfidence ?? 0.7,
-      });
+      const checked = proposedTimes.map((t) => ({ t, verdict: usableProposedTime(t, inp.events, now) }));
+      const usable = checked.find((c) => c.verdict === 'ok')?.t;
+      if (usable) {
+        out.push({
+          kind: 'schedule_confirm',
+          personId: chat.personId,
+          chatId: chat.id,
+          dedupeKey: `confirm:${chat.id}:${lastIn.id}`,
+          reasonText: `${person.firstName} suggested ${usable.raw}; confirm it`,
+          signals: { proposed: usable },
+          payload: { inReplyTo: lastIn.id, time: usable },
+          urgency: 1,
+          goalRelevance: liveRel,
+          confidence: lastIn.signalConfidence ?? 0.7,
+        });
+      } else {
+        // every suggested time has passed or clashes with the calendar: answer with new times instead
+        const first = checked[0]!;
+        const why = first.verdict === 'busy' ? 'you are busy then' : 'that time has passed';
+        out.push({
+          kind: 'schedule_propose',
+          personId: chat.personId,
+          chatId: chat.id,
+          dedupeKey: `sched:${chat.id}:${lastIn.id}`,
+          reasonText: `${person.firstName} suggested ${first.t.raw}, but ${why}; propose new times`,
+          signals: { signal: lastIn.signal, missedProposal: first.t.raw, missedReason: first.verdict },
+          payload: {
+            inReplyTo: lastIn.id,
+            windows: inp.freeSlotsIso.slice(0, 2),
+            missedProposal: { raw: first.t.raw, startIso: first.t.startIso, reason: first.verdict },
+          },
+          urgency: 0.95,
+          goalRelevance: liveRel,
+          confidence: lastIn.signalConfidence ?? 0.7,
+        });
+      }
     } else if (
       chat.stage === 'scheduling' &&
       lastIn &&
-      (!chat.lastOutboundAt || new Date(chat.lastOutboundAt) < new Date(lastIn.sentAt)) &&
+      awaitingReply &&
       lastIn.signal !== 'scheduling_confirmation'
     ) {
       out.push({
@@ -213,25 +285,21 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
         signals: { signal: lastIn.signal },
         payload: { inReplyTo: lastIn.id, windows: inp.freeSlotsIso.slice(0, 2) },
         urgency: 0.9,
-        goalRelevance: rel,
+        goalRelevance: liveRel,
         confidence: 0.8,
       });
     }
-    if (
-      chat.stage === 'completed' &&
-      chat.completedAt &&
-      now.getTime() - new Date(chat.completedAt).getTime() < 3 * DAY
-    ) {
+    if (chat.stage === 'completed' && chat.completedAt && thankYouDue(chat, now)) {
       out.push({
         kind: 'thank_you',
         personId: chat.personId,
         chatId: chat.id,
         dedupeKey: `thank:${chat.id}`,
-        reasonText: `You spoke ${relTime(chat.completedAt, now)} — send a thank-you`,
+        reasonText: `You spoke ${relTime(chat.completedAt, now, inp.timezone)}. Send a thank-you while it is fresh.`,
         signals: { completedAt: chat.completedAt },
         payload: {},
         urgency: 0.95,
-        goalRelevance: rel,
+        goalRelevance: liveRel,
         confidence: 1,
       });
     }
@@ -241,18 +309,24 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
         chat.followedUpAt &&
         now.getTime() - new Date(chat.followedUpAt).getTime() > 14 * DAY)
     ) {
-      const last = person.lastInteractionAt ? new Date(person.lastInteractionAt) : undefined;
+      const lastIso = inp.lastConversationByPerson?.get(person.id) ?? person.lastInteractionAt;
+      const last = lastIso ? new Date(lastIso) : undefined;
       const days = last ? (now.getTime() - last.getTime()) / DAY : 999;
       const cadence = CADENCE[person.relationshipType];
       const facts = inp.factsByPerson.get(person.id) ?? [];
-      const hook = facts.find((f) => (f.type === 'hook' || f.type === 'offer') && !f.deletedAt);
+      const hook = facts
+        .filter((f) => (f.type === 'hook' || f.type === 'offer') && !f.deletedAt)
+        .filter(
+          (f) => now.getTime() - new Date(f.occurredAt ?? f.createdAt).getTime() <= HOOK_MAX_AGE_DAYS * DAY,
+        )
+        .sort((a, b) => (b.occurredAt ?? b.createdAt).localeCompare(a.occurredAt ?? a.createdAt))[0];
       if (days >= cadence && !inp.recentlyContacted.has(person.id) && hook) {
         out.push({
           kind: 'nurture_checkin',
           personId: chat.personId,
           chatId: chat.id,
           dedupeKey: `nurture:${person.id}:${monthKey(now)}`,
-          reasonText: `${Math.round(days)} days since you last spoke; you have a hook: "${hook.text.slice(0, 60)}"`,
+          reasonText: `${Math.round(days)} days since your last conversation; you have a hook: "${hook.text.slice(0, 60)}"`,
           signals: { days, cadence, hookId: hook.id },
           payload: { hookId: hook.id },
           urgency: 0.4,
@@ -324,7 +398,7 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
         reportBack: {
           targetName: target.displayName,
           outcome,
-          when: relTime(at, now),
+          when: relTime(at, now, inp.timezone),
         },
         channel: referrer.primaryEmail ? 'gmail' : 'linkedin',
       },
@@ -333,21 +407,22 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
       confidence: 1,
     });
   }
-  // prep briefs
+  // prep briefs: from 30 hours before the chat until it starts
   for (const e of inp.events) {
     if (e.status === 'cancelled' || !e.attendeePersonIds.length) continue;
     const start = new Date(e.startAt).getTime();
-    const hours = (start - now.getTime()) / 3_600_000;
-    if (hours > -1 && hours <= 30 && (e.isCoffeeChat ?? false)) {
+    const hours = (start - now.getTime()) / HOUR;
+    if (hours > 0 && hours <= 30 && (e.isCoffeeChat ?? false)) {
       const pid = e.attendeePersonIds[0]!;
       const p = inp.people.get(pid);
       if (!p) continue;
+      const rel = relTime(e.startAt, now, inp.timezone);
       out.push({
         kind: 'prep_brief',
         personId: pid,
         chatId: e.chatId,
         dedupeKey: `prep:${e.id}`,
-        reasonText: `Chat with ${p.firstName} ${relTime(e.startAt, now)} — prep in 2 minutes`,
+        reasonText: `Chat with ${p.firstName} ${rel === 'tomorrow' ? 'is tomorrow' : `starts ${rel}`}. Prep takes two minutes.`,
         signals: { startAt: e.startAt },
         payload: { eventId: e.id },
         urgency: 0.95,
@@ -356,12 +431,13 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
       });
     }
   }
-  // action items
+  // action items: due today or overdue, by calendar day in the student's timezone
+  const today = todayKey(now, inp.timezone);
   for (const a of inp.actionItems) {
     if (a.status !== 'open' || !a.dueAt) continue;
-    const due = new Date(a.dueAt).getTime();
-    if (due <= now.getTime() + DAY) {
-      const overdue = due < now.getTime() - DAY;
+    const dueDay = dayKey(a.dueAt, inp.timezone);
+    if (dueDay <= today) {
+      const overdue = dueDay < today;
       const p = a.personId ? inp.people.get(a.personId) : undefined;
       out.push({
         kind: 'action_item_reminder',
@@ -407,9 +483,10 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
       });
     }
   }
-  // new outreach from recommendations (weekly pacing)
+  // new outreach from recommendations (weekly pacing; the week runs Monday to Sunday)
   const remaining = Math.max(0, inp.settings.weeklyOutreachTarget - inp.outreachSentThisWeek);
-  const behind = now.getDay() >= 3 && remaining > inp.settings.weeklyOutreachTarget / 2;
+  const weekdayIndex = (now.getDay() + 6) % 7; // Monday = 0 ... Sunday = 6
+  const behind = weekdayIndex >= 2 && remaining > inp.settings.weeklyOutreachTarget / 2;
   let added = 0;
   for (const r of inp.recommendations
     .filter((r) => r.status === 'new' || r.status === 'saved')
@@ -421,7 +498,7 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
     out.push({
       kind: 'new_outreach',
       personId: r.personId,
-      dedupeKey: `new:${r.personId}:${isoWeek(now)}`,
+      dedupeKey: `new:${r.personId}:${weekMondayKey(now)}`,
       reasonText:
         r.reasons
           .map((x) => x.text)
@@ -438,13 +515,37 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
   return out;
 }
 
-export function relTime(iso: string, now: Date): string {
-  const diff = new Date(iso).getTime() - now.getTime();
-  const h = Math.round(Math.abs(diff) / 3_600_000);
-  const d = Math.round(Math.abs(diff) / DAY);
-  if (diff > 0)
-    return h < 36 ? (h <= 1 ? 'in about an hour' : h < 24 ? `in ${h} hours` : 'tomorrow') : `in ${d} days`;
-  return h < 1 ? 'just now' : h < 24 ? `${h} hours ago` : d === 1 ? 'yesterday' : `${d} days ago`;
+/** A thank-you is due while the conversation is fresh and nothing has gone out since it ended. */
+export function thankYouDue(chat: Pick<CoffeeChat, 'completedAt' | 'lastOutboundAt'>, now: Date): boolean {
+  if (!chat.completedAt) return false;
+  const completed = new Date(chat.completedAt).getTime();
+  if (now.getTime() - completed >= THANK_YOU_WINDOW_DAYS * DAY) return false;
+  if (chat.lastOutboundAt && new Date(chat.lastOutboundAt).getTime() > completed) return false;
+  return true;
+}
+
+const plural = (n: number, unit: string) => `${n} ${unit}${n === 1 ? '' : 's'}`;
+
+const dayNumber = (d: Date, tz?: string) => Math.round(Date.parse(`${todayKey(d, tz)}T00:00:00Z`) / DAY);
+
+/**
+ * Plain English for how far `iso` is from `now`, in both directions. Close times read in minutes or hours; further
+ * out, calendar days in the student's timezone decide between "tomorrow", "yesterday" and "in N days".
+ */
+export function relTime(iso: string, now: Date, tz?: string): string {
+  const at = new Date(iso);
+  const diff = at.getTime() - now.getTime();
+  const abs = Math.abs(diff);
+  const minutes = Math.round(abs / 60_000);
+  const hours = Math.round(abs / HOUR);
+  const future = diff >= 0;
+  if (minutes < 1) return future ? 'right now' : 'just now';
+  if (minutes < 50) return future ? `in ${plural(minutes, 'minute')}` : `${plural(minutes, 'minute')} ago`;
+  if (minutes < 90) return future ? 'in about an hour' : 'about an hour ago';
+  const days = Math.abs(dayNumber(at, tz) - dayNumber(now, tz));
+  if (hours < 6 || days === 0) return future ? `in ${plural(hours, 'hour')}` : `${plural(hours, 'hour')} ago`;
+  if (days === 1) return future ? 'tomorrow' : 'yesterday';
+  return future ? `in ${days} days` : `${days} days ago`;
 }
 
 export function scoreCandidate(c: Candidate, dismissCounts: Map<string, number>): number {
@@ -454,12 +555,38 @@ export function scoreCandidate(c: Candidate, dismissCounts: Map<string, number>)
   return c.urgency * value * c.confidence * fatigue;
 }
 
-const HARD_URGENT: SuggestionKind[] = ['schedule_confirm', 'thank_you', 'prep_brief', 'confirm_stage'];
+/** Always shown when true: a time to confirm, a thank-you, a chat to prep, a stage to confirm. */
+export const HARD_URGENT: SuggestionKind[] = ['schedule_confirm', 'thank_you', 'prep_brief', 'confirm_stage'];
+/** Commitments inside live threads: taken before any cold outreach, however the scores land. */
+export const OBLIGATION_KINDS: SuggestionKind[] = [
+  'follow_up_bump',
+  'schedule_propose',
+  'action_item_reminder',
+  'ask_referral',
+  'report_back',
+];
+/** Kinds that carry a message to the person; the one-per-person and per-company rules apply to these only. */
+export const MESSAGE_KINDS: SuggestionKind[] = [
+  'new_outreach',
+  'follow_up_bump',
+  'schedule_propose',
+  'schedule_confirm',
+  'thank_you',
+  'nurture_checkin',
+  'reconnect',
+  'congratulate',
+  'ask_referral',
+  'intro_request',
+  'report_back',
+];
+/** At most this many non-urgent messages to the same company in one brief. */
+export const PER_COMPANY_CAP = 2;
 
 export function selectForBrief(
   cands: Candidate[],
   dismissCounts: Map<string, number>,
   max = 7,
+  opts: { orgOf?: (personId: string) => string | undefined } = {},
 ): (Candidate & { priorityScore: number })[] {
   const scored = cands
     .map((c) => ({ ...c, priorityScore: scoreCandidate(c, dismissCounts) }))
@@ -467,24 +594,32 @@ export function selectForBrief(
   const chosen: (Candidate & { priorityScore: number })[] = [];
   const perPerson = new Set<string>();
   const perKind = new Map<SuggestionKind, number>();
+  const perOrg = new Map<string, number>();
   const limits: Partial<Record<SuggestionKind, number>> = {
     new_outreach: 2,
     reconnect: 1,
     nurture_checkin: 1,
     warm_up_engage: 2,
   };
-  const take = (c: Candidate & { priorityScore: number }) => {
-    if (chosen.length >= max) return;
-    if (c.personId && perPerson.has(c.personId) && !isHard(c)) return;
-    const n = perKind.get(c.kind) ?? 0;
-    if (limits[c.kind] !== undefined && n >= limits[c.kind]!) return;
-    chosen.push(c);
-    if (c.personId) perPerson.add(c.personId);
-    perKind.set(c.kind, n + 1);
-  };
   const isHard = (c: Candidate) =>
     HARD_URGENT.includes(c.kind) || (c.kind === 'new_outreach' && !!c.signals.warmUpDone);
+  const isMessage = (c: Candidate) => MESSAGE_KINDS.includes(c.kind);
+  const take = (c: Candidate & { priorityScore: number }) => {
+    if (chosen.length >= max) return;
+    const message = isMessage(c);
+    const hard = isHard(c);
+    if (message && !hard && c.personId && perPerson.has(c.personId)) return;
+    const n = perKind.get(c.kind) ?? 0;
+    if (limits[c.kind] !== undefined && n >= limits[c.kind]!) return;
+    const org = message && !hard && c.personId ? opts.orgOf?.(c.personId)?.toLowerCase() : undefined;
+    if (org && (perOrg.get(org) ?? 0) >= PER_COMPANY_CAP) return;
+    chosen.push(c);
+    if (message && c.personId) perPerson.add(c.personId);
+    perKind.set(c.kind, n + 1);
+    if (org) perOrg.set(org, (perOrg.get(org) ?? 0) + 1);
+  };
   for (const c of scored) if (isHard(c) && chosen.length < 5) take(c);
+  for (const c of scored) if (!chosen.includes(c) && OBLIGATION_KINDS.includes(c.kind)) take(c);
   for (const c of scored) if (!chosen.includes(c)) take(c);
   return chosen;
 }
@@ -513,4 +648,90 @@ export function suggestionFromCandidate(
     expiresAt: expires.toISOString(),
     createdAt: now.toISOString(),
   };
+}
+
+/** Kinds that generateCandidates produces; a pending row of one of these is only true while its rule still fires. */
+export const RULE_KINDS: SuggestionKind[] = [
+  'new_outreach',
+  'warm_up_engage',
+  'report_back',
+  'follow_up_bump',
+  'schedule_propose',
+  'schedule_confirm',
+  'prep_brief',
+  'thank_you',
+  'action_item_reminder',
+  'nurture_checkin',
+  'reconnect',
+  'ask_referral',
+];
+
+/** Stages in which a suggestion of this kind can still be true for its chat. Kinds not listed do not depend on the stage. */
+export const KIND_STAGES: Partial<Record<SuggestionKind, ChatStage[]>> = {
+  thank_you: ['completed'],
+  schedule_propose: ['replied', 'scheduling'],
+  schedule_confirm: ['replied', 'scheduling'],
+  follow_up_bump: ['outreach_sent'],
+  warm_up_engage: ['warming'],
+  new_outreach: ['identified', 'warming'],
+  nurture_checkin: ['nurturing', 'followed_up'],
+  ask_referral: ['followed_up', 'nurturing'],
+  prep_brief: ['identified', 'warming', 'outreach_sent', 'replied', 'scheduling', 'scheduled'],
+  report_back: ['completed', 'followed_up', 'nurturing', 'declined', 'no_response'],
+};
+
+export function kindAllowedInStage(kind: SuggestionKind, stage: ChatStage): boolean {
+  const stages = KIND_STAGES[kind];
+  return !stages || stages.includes(stage);
+}
+
+/**
+ * Why a pending suggestion is no longer true, or undefined while it still is. `stillCandidate` says whether the
+ * rules produced the same dedupeKey just now; the rest only names the reason for the record.
+ */
+export function staleReason(
+  s: Pick<Suggestion, 'kind' | 'payload' | 'createdAt' | 'chatId' | 'dedupeKey'>,
+  ctx: { chat?: CoffeeChat; actionItem?: ActionItem; now: Date; stillCandidate: boolean },
+): string | undefined {
+  if (ctx.stillCandidate) return undefined;
+  const chat = ctx.chat;
+  if (s.chatId && chat && !kindAllowedInStage(s.kind, chat.stage)) return `stage:${chat.stage}`;
+  switch (s.kind) {
+    case 'schedule_confirm': {
+      const t = (s.payload.time as { startIso?: string } | undefined)?.startIso;
+      if (t && new Date(t).getTime() <= ctx.now.getTime()) return 'time_passed';
+      if (chat?.lastInboundAt && new Date(chat.lastInboundAt) > new Date(s.createdAt)) return 'newer_inbound';
+      return 'superseded';
+    }
+    case 'schedule_propose':
+      if (chat?.lastInboundAt && new Date(chat.lastInboundAt) > new Date(s.createdAt)) return 'newer_inbound';
+      if (chat?.lastOutboundAt && new Date(chat.lastOutboundAt) > new Date(s.createdAt))
+        return 'already_sent';
+      return 'superseded';
+    case 'follow_up_bump':
+      if (
+        chat?.lastInboundAt &&
+        chat.lastOutboundAt &&
+        new Date(chat.lastInboundAt) > new Date(chat.lastOutboundAt)
+      )
+        return 'replied';
+      if (chat && s.dedupeKey !== `bump:${chat.id}:${chat.bumpCount + 1}`) return 'bumped';
+      if (chat?.lastOutboundAt && new Date(chat.lastOutboundAt) > new Date(s.createdAt))
+        return 'already_sent';
+      return 'superseded';
+    case 'thank_you':
+      if (
+        chat?.lastOutboundAt &&
+        chat.completedAt &&
+        new Date(chat.lastOutboundAt) > new Date(chat.completedAt)
+      )
+        return 'thanked';
+      return 'window_passed';
+    case 'prep_brief':
+      return 'event_passed';
+    case 'action_item_reminder':
+      return ctx.actionItem && ctx.actionItem.status !== 'open' ? 'action_item_closed' : 'not_due';
+    default:
+      return 'superseded';
+  }
 }
