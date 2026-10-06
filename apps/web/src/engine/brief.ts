@@ -890,11 +890,13 @@ export async function refreshPersonSummary(user: User, personId: string): Promis
     const off = facts.find((f) => f.type === 'offer');
     const hook = facts.find((f) => f.type === 'hook');
     const n = tps.length;
-    summary = `${person.firstName} is ${role}${person.isAlumni ? ` and a ${user.school} alum` : ''}. ${n ? `You have ${n} recent interaction${n === 1 ? '' : 's'}, most recently ${tps[0]!.occurredAt.slice(0, 10)}.` : 'No interactions yet.'}${adv ? ` Advice: ${adv.text.replace(/\.$/, '')}.` : ''}${off ? ` They offered: ${off.text.replace(/\.$/, '')}.` : ''}`;
+    // fact text is a clause addressed to the person ("you offered to ..."); the student reads the source sentence
+    const said = (f: { text: string; evidence?: string }) => (f.evidence ?? f.text).replace(/\.$/, '');
+    summary = `${person.firstName} is ${role}${person.isAlumni ? ` and a ${user.school} alum` : ''}. ${n ? `You have ${n} recent interaction${n === 1 ? '' : 's'}, most recently ${tps[0]!.occurredAt.slice(0, 10)}.` : 'No interactions yet.'}${adv ? ` ${said(adv)}.` : ''}${off ? ` ${said(off)}.` : ''}`;
     talkingPoints = [
-      hook ? `Ask about: ${hook.text}` : undefined,
-      off ? `Follow up on their offer: ${off.text}` : undefined,
-      adv ? `Report back on their advice: ${adv.text}` : undefined,
+      hook ? `Ask about: ${said(hook)}` : undefined,
+      off ? `Follow up on their offer: ${said(off)}` : undefined,
+      adv ? `Report back on their advice: ${said(adv)}` : undefined,
       person.currentOrganizationRaw
         ? `What's changed at ${person.currentOrganizationRaw} recently`
         : undefined,

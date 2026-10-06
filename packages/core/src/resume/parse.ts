@@ -1,10 +1,32 @@
 import type { ResumeFacet } from '../types';
 
-const SECTION =
-  /^(experience|work experience|professional experience|employment|education|projects?|skills|technical skills|interests|activities|leadership|summary|objective|awards|publications|certifications)\b[:\s]*$/i;
-const SKILL_SPLIT = /[,;•|]/;
-const DATE_RANGE =
-  /((?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+\d{4}|\d{1,2}\/\d{4}|\d{4})\s*(?:-|–|—|to)\s*((?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+\d{4}|\d{1,2}\/\d{4}|\d{4}|present|current)/i;
+const SKILL_SPLIT = /[,;•|·]/;
+const MONTH = '(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\\.?';
+const SEASON = '(?:spring|summer|fall|autumn|winter)';
+const DATE_TOKEN = `(?:${MONTH}\\s*'?\\d{2,4}|${SEASON}\\s+\\d{4}|\\d{1,2}\\/\\d{2,4}|\\d{4})`;
+const DATE_RANGE = new RegExp(
+  `(${DATE_TOKEN})\\s*(?:-|–|—|to|until)\\s*(${DATE_TOKEN}|present|current|now|ongoing)`,
+  'i',
+);
+/** A single date ("May 2027", "Expected May 2027", "Summer 2025") standing in for a range. */
+const DATE_SINGLE = new RegExp(
+  `(?:expected\\s+|anticipated\\s+|graduat\\w*\\s+)?(${MONTH}\\s+\\d{4}|${SEASON}\\s+\\d{4})`,
+  'i',
+);
+const US_STATE =
+  'AL|AK|AZ|AR|CA|CO|CT|DE|DC|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY';
+/** "San Francisco, CA", "London, UK", "Remote" at the end of a header line */
+const LOCATION_TAIL = new RegExp(
+  `(?:^|[,|–—-]\\s*|\\s{2,})((?:[A-Z][A-Za-z.'’]+(?:\\s[A-Z][A-Za-z.'’]+){0,2}),\\s*(?:${US_STATE}|USA|U\\.S\\.|UK|United Kingdom|Canada|India|China|Singapore|Germany|France|Japan|Remote)|Remote|Hybrid)\\s*$`,
+);
+const CONTACT =
+  /@|\b(?:linkedin\.com|github\.com|https?:\/\/|www\.)|\(?\b\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b|\+\d[\d\s().-]{7,}/i;
+const TITLE_WORDS =
+  /\b(intern(ship)?|analyst|engineer(ing)?|developer|associate|president|vice president|vp|founder|co-founder|cofounder|manager|director|consultant|assistant|researcher|research|teaching|ta|fellow|member|lead|leader|chair|chairperson|officer|treasurer|secretary|captain|coordinator|designer|scientist|specialist|representative|tutor|mentor|volunteer|head|owner|contractor|trader|banker|advisor|ambassador|organizer|editor|writer|counselor|instructor)\b/i;
+const SCHOOL_WORDS = /\b(university|college|institute|school|academy|polytechnic|conservatory)\b/i;
+const DEGREE_WORDS =
+  /(^|\s)(b\.?\s?s\.?(e\.?)?|b\.?\s?a\.?|a\.?\s?b\.?|s\.?\s?b\.?|b\.?\s?sc\.?|b\.?\s?eng\.?|b\.?\s?f\.?\s?a\.?|bba|bsba|m\.?\s?s\.?|m\.?\s?a\.?|m\.?\s?eng\.?|mba|mfa|ph\.?\s?d\.?|bachelor|master|minor|major|degree|concentration|candidate)(?=\s|,|$)/i;
+
 const STOP = new Set([
   'the',
   'and',
@@ -66,116 +88,422 @@ export function extractKeywords(text: string, max = 12): string[] {
 
 function toIsoMonth(s: string): string | undefined {
   const t = s.toLowerCase();
-  if (/present|current/.test(t)) return undefined;
-  const m = t.match(/([a-z]{3})[a-z]*\.?\s+(\d{4})/);
+  if (/present|current|now|ongoing/.test(t)) return undefined;
+  const months = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+  const seasons: Record<string, string> = { spr: '03', sum: '06', fal: '09', aut: '09', win: '12' };
+  const m = t.match(/([a-z]{3})[a-z]*\.?\s*'?(\d{4}|\d{2})\b/);
   if (m) {
-    const months = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+    const year = m[2]!.length === 2 ? `20${m[2]}` : m[2]!;
     const mo = months.indexOf(m[1]!);
-    return mo >= 0 ? `${m[2]}-${String(mo + 1).padStart(2, '0')}-01` : `${m[2]}-01-01`;
+    if (mo >= 0) return `${year}-${String(mo + 1).padStart(2, '0')}-01`;
+    if (seasons[m[1]!]) return `${year}-${seasons[m[1]!]}-01`;
+    return `${year}-01-01`;
   }
+  const mm = t.match(/(\d{1,2})\/(\d{2,4})/);
+  if (mm) return `${mm[2]!.length === 2 ? `20${mm[2]}` : mm[2]}-${mm[1]!.padStart(2, '0')}-01`;
   const y = t.match(/(\d{4})/);
   return y ? `${y[1]}-01-01` : undefined;
 }
 
-/** Heuristic resume parser over plain text. Good enough to seed facets the student then confirms. */
-export function heuristicResumeParse(text: string, resumeId: string): ResumeFacet[] {
-  const lines = text
-    .replace(/\r/g, '')
-    .split('\n')
-    .map((l) => l.trim());
-  let section = 'summary';
+const HEADING_WORDS = new Set(
+  (
+    'experience experiences employment work history internship internships leadership activities involvement ' +
+    'extracurricular extracurriculars volunteer volunteering service organizations organization education academic ' +
+    'academics projects project portfolio skills skill technologies technical tools languages competencies interests ' +
+    'hobbies summary objective profile about me honors honor awards award achievements certifications certification ' +
+    'publications coursework additional information references scholarships patents presentations relevant ' +
+    'professional research selected other related industry teaching consulting campus community key core computer ' +
+    'programming software personal career qualifications and of the for in & a'
+  ).split(' '),
+);
+const STRONG_HEADING =
+  /\b(experience|education|projects?|skills|leadership|activities|involvement|honors|awards|summary|objective|interests|certifications?|publications|coursework)\b/;
+
+type Section =
+  | 'header'
+  | 'summary'
+  | 'experience'
+  | 'education'
+  | 'project'
+  | 'skills'
+  | 'interests'
+  | 'other';
+
+/**
+ * Recognise a section heading, including headings with extra words ("RELEVANT EXPERIENCE",
+ * "LEADERSHIP & ACTIVITIES", "EDUCATION & HONORS"). Honors, awards, certifications, coursework and
+ * "additional information" map to 'other', whose lines are not turned into facets.
+ */
+export function resumeSectionOf(rawLine: string): Section | undefined {
+  const line = rawLine.replace(/^#+\s*/, '').trim();
+  if (!line || /^[-•*▪◦●]/.test(line)) return undefined;
+  const bare = line.replace(/[:\s]+$/, '');
+  // "Languages: Go, Python" is a labelled line inside a section, not a heading
+  if (bare.includes(':')) return undefined;
+  if (bare.length > 45 || /\d/.test(bare) || /[.!?]$/.test(bare)) return undefined;
+  if (/\s{3,}|\t/.test(bare)) return undefined;
+  const words = bare.split(/\s+/);
+  if (words.length > 5) return undefined;
+  const letters = bare.replace(/[^A-Za-z]/g, '');
+  const upper = letters.length > 0 && letters === letters.toUpperCase();
+  const titled = words.every((w) => /^[A-Z&/,]|^(and|of|the|for|in)$/.test(w));
+  if (!upper && !titled && !line.endsWith(':')) return undefined;
+  const l = bare.toLowerCase();
+  // every word must be heading vocabulary ("Relevant Experience"), so "Dell Technologies" is not a heading;
+  // a line in capitals may carry up to two other words when it has a strong section keyword
+  const unknown = l.split(/[\s&/,]+/).filter((w) => w && !HEADING_WORDS.has(w)).length;
+  if (unknown > (upper && STRONG_HEADING.test(l) ? 2 : 0)) return undefined;
+  if (/\b(projects?|portfolio)\b/.test(l)) return 'project';
+  if (/\b(education|academics?)\b/.test(l)) return 'education';
+  if (
+    /\b(experience|employment|work history|internships?|leadership|activities|involvement|extracurriculars?|volunteer(ing)?|service|organizations)\b/.test(
+      l,
+    )
+  )
+    return 'experience';
+  if (/\b(skills|technologies|technical|tools|languages|competencies)\b/.test(l)) return 'skills';
+  if (/\b(interests|hobbies)\b/.test(l)) return 'interests';
+  if (/\b(summary|objective|profile|about me|about)\b/.test(l)) return 'summary';
+  if (
+    /\b(honors|awards|achievements|certifications?|publications|coursework|additional|information|references|scholarships|patents|presentations)\b/.test(
+      l,
+    )
+  )
+    return 'other';
+  return undefined;
+}
+
+const BULLET = /^[-•*▪◦●➢►–]\s*/;
+const stripBullet = (l: string) => l.replace(BULLET, '').trim();
+const isRule = (l: string) => /^[\W_]+$/.test(l);
+
+/** Title-case words typed in capitals ("GOLDMAN SACHS" -> "Goldman Sachs"), keeping short acronyms (BU, IBM). */
+function fixCaps(s: string): string {
+  const letters = s.replace(/[^A-Za-z]/g, '');
+  if (!letters || letters !== letters.toUpperCase()) return s;
+  return s.replace(/[A-Za-z][A-Za-z'’]*/g, (w) => (w.length <= 3 ? w : w[0]! + w.slice(1).toLowerCase()));
+}
+
+interface Entry {
+  section: Section;
+  headers: number;
+  title?: string;
+  org?: string;
+  location?: string;
+  range?: RegExpMatchArray;
+  single?: string;
+  details: string[];
+  /** header parts that are neither role nor employer (a project's stack) */
+  extra: string[];
+  body: string[];
+  /** the entry opened with a role line and no employer (a second role under the same employer) */
+  titleOnlyFirst: boolean;
+}
+
+const newEntry = (section: Section): Entry => ({
+  section,
+  headers: 0,
+  details: [],
+  extra: [],
+  body: [],
+  titleOnlyFirst: false,
+});
+
+/** A line that only carries dates and/or a location belongs to the entry above it. */
+function isMetaLine(line: string): boolean {
+  const rest = line.replace(DATE_RANGE, '').replace(DATE_SINGLE, '').trim();
+  if (!rest.replace(/[\s,|–—-]+/g, '')) return true;
+  if (/\s{3,}|\t/.test(rest)) return false;
+  return new RegExp(`^${LOCATION_TAIL.source}`).test(rest) || /^(remote|hybrid)$/i.test(rest);
+}
+
+/** Pull dates and a trailing location off a header line; return what is left, split into parts. */
+function headerParts(line: string, e: Entry): string[] {
+  let s = line.replace(/\t/g, '   ');
+  const dr = s.match(DATE_RANGE);
+  if (dr) {
+    e.range ??= dr;
+    s = s.replace(DATE_RANGE, '   ');
+  } else {
+    const ds = s.match(DATE_SINGLE);
+    if (ds) {
+      e.single ??= ds[1];
+      s = s.replace(ds[0], '   ');
+    }
+  }
+  s = s.replace(/[\s,|–—-]+$/, '').replace(/^[\s,|–—-]+/, '');
+  const loc = s.match(LOCATION_TAIL);
+  if (loc && loc.index !== undefined) {
+    e.location ??= loc[1];
+    s = s.slice(0, loc.index);
+  }
+  return s
+    .split(/\s{3,}|\s+[|–—@]\s+|\s+-\s+|,\s+/)
+    .map((p) =>
+      p
+        .replace(/^[\s,|–—-]+|[\s,|–—-]+$/g, '')
+        .replace(/\s+/g, ' ')
+        .trim(),
+    )
+    .filter((p) => p.length > 1 && !/^(present|current)$/i.test(p));
+}
+
+function assignParts(parts: string[], e: Entry): void {
+  for (const raw of parts) {
+    const p = fixCaps(raw);
+    if (e.section === 'education') {
+      const degree = DEGREE_WORDS.test(p);
+      if (SCHOOL_WORDS.test(p) && !e.org && !degree) e.org = p;
+      else if (degree && (!e.title || !DEGREE_WORDS.test(e.title))) e.title = p;
+      // "University of California, Berkeley" / "Boston University, Questrom School of Business"
+      else if (e.org && !e.title && !degree) e.org = `${e.org}, ${p}`;
+      else if (!e.title) e.title = p;
+      else if (!e.org) e.org = p;
+      continue;
+    }
+    if (e.section === 'project') {
+      // "Campus Marketplace | React, Node": the name, then the stack
+      if (!e.title) e.title = p;
+      else e.extra.push(p);
+      continue;
+    }
+    const isTitle = TITLE_WORDS.test(p) && !SCHOOL_WORDS.test(p);
+    if (isTitle && !e.title) e.title = p;
+    else if (!e.org) e.org = p;
+    else if (!e.title) e.title = p;
+    // "Product Management Intern, Payments Onboarding": the team stays with the role
+    else if (e.title.length + p.length < 70) e.title = `${e.title}, ${p}`;
+  }
+}
+
+const PUFFERY =
+  /^((highly|very|extremely|self-motivated|motivated|detail-oriented|driven|dedicated|hard-?working|enthusiastic|ambitious|dynamic|goal-oriented|passionate|creative|energetic|diligent|organized)[,\s]+(and\s+)?)+/i;
+
+/** First sentence of a resume summary, rewritten as "<Name> is ..." so it can describe the student, or undefined. */
+export function summarySentence(text: string, name?: string): string | undefined {
+  let s = (
+    text
+      .replace(/\s+/g, ' ')
+      .trim()
+      .split(/(?<=[.!?])\s+/)[0] ?? ''
+  )
+    .replace(/[.!?]+$/, '')
+    .trim();
+  if (!s || CONTACT.test(s) || /[|·•]/.test(s)) return undefined;
+  const subject = name?.trim() || 'The candidate';
+  s = s
+    .replace(/\bpassionate about\b/gi, 'interested in')
+    .replace(/\bleverag(e|ing)\b/gi, (_, x: string) => (x === 'e' ? 'use' : 'using'))
+    .replace(/\bresults[- ]driven\b,?\s*/gi, '');
+  const first = (s.split(/\s+/)[0] ?? '').toLowerCase();
+  let rest: string;
+  const iam = s.match(/^(?:i am|i'm)\s+(.*)$/i);
+  if (iam) rest = iam[1]!;
+  else if (/^to\s+(obtain|secure|gain|find|land|pursue)\s+/i.test(s))
+    rest = `seeking ${s.replace(/^to\s+(obtain|secure|gain|find|land|pursue)\s+/i, '')}`;
+  else if (/^(seeking|pursuing|looking|aspiring|interested|currently|studying)$/.test(first))
+    rest = s[0]!.toLowerCase() + s.slice(1);
+  else if (/^(a|an)$/.test(first)) rest = s[0]!.toLowerCase() + s.slice(1);
+  else if (/^(i|my|we|our)$/.test(first)) return undefined;
+  else {
+    // "Motivated, detail-oriented junior studying ..." -> "a junior studying ..."
+    const np = s.replace(PUFFERY, '');
+    if (!np) return undefined;
+    const lowered =
+      /^[A-Z][a-z]+\b/.test(np) && !/^[A-Z][a-z]+\s+[A-Z]/.test(np) ? np[0]!.toLowerCase() + np.slice(1) : np;
+    rest = `${/^[aeiou]/i.test(lowered) ? 'an' : 'a'} ${lowered}`;
+  }
+  // the student is the subject now: drop a trailing clause written in the first person ("where I can ...")
+  const firstPerson = rest.search(/\b(I|my|me|I'm|I've)\b/);
+  if (firstPerson >= 0) {
+    const head = rest.slice(0, firstPerson);
+    const cut = Math.max(
+      ...[/,\s/g, /\swhere\s/g, /\swhich\s/g, /\sthat\s/g, /\sso\s/g, /\sto\s/g, /\sand\s/g].map((re) => {
+        let last = -1;
+        for (const m of head.matchAll(re)) last = m.index ?? last;
+        return last;
+      }),
+    );
+    if (cut <= 0) return undefined;
+    rest = rest.slice(0, cut).trim();
+  }
+  const words = rest.split(/\s+/).length;
+  if (words < 3 || words > 32) return undefined;
+  return `${subject} is ${rest}.`;
+}
+
+/**
+ * Heuristic resume parser over plain text. Good enough to seed facets the student then confirms.
+ * - The contact header (name, email, phone, links, address) never becomes a facet.
+ * - A summary facet comes only from a SUMMARY/OBJECTIVE/PROFILE section (or prose in the header) and is
+ *   phrased "<Name> is ..."; otherwise there is none.
+ * - Employer, role, dates and location are gathered across the header lines of an entry, so the
+ *   chronological ("Stripe   San Francisco, CA" / "PM Intern   Jun 2025 – Aug 2025"), two-column
+ *   ("Role" / "Company" / "Dates") and pipe ("Google | SWE Intern | May 2024 – Aug 2024") layouts all
+ *   give one facet with both title and organization.
+ */
+export function heuristicResumeParse(
+  text: string,
+  resumeId: string,
+  opts: { name?: string } = {},
+): ResumeFacet[] {
+  const lines = text.replace(/\r/g, '').replace(/ /g, ' ').split('\n');
+  let section: Section = 'header';
   const facets: ResumeFacet[] = [];
-  let current: { header: string; body: string[] } | undefined;
   let id = 0;
-  const push = () => {
-    if (!current) return;
-    const header = current.header;
-    const body = current.body.join(' ').trim();
-    const dr = header.match(DATE_RANGE) ?? body.match(DATE_RANGE);
-    const kind: ResumeFacet['kind'] = section.startsWith('edu')
-      ? 'education'
-      : section.startsWith('project')
-        ? 'project'
-        : section.startsWith('lead') || section.startsWith('activ')
-          ? 'experience'
-          : 'experience';
-    const [title, org] = header.split(/\s+[-–—|@]\s+|,\s+/).map((s) => s.replace(DATE_RANGE, '').trim());
+  let name = opts.name;
+  const summaryLines: string[] = [];
+  const headerProse: string[] = [];
+  let e: Entry | undefined;
+  let lastOrg: string | undefined;
+
+  const finish = () => {
+    if (!e) return;
+    const cur = e;
+    e = undefined;
+    if (!cur.title && !cur.org && !cur.body.length) return;
+    // a role line straight after another role's bullets, with no employer of its own: same employer
+    if (!cur.org && cur.title && cur.titleOnlyFirst && cur.section === 'experience' && lastOrg)
+      cur.org = lastOrg;
+    if (cur.org && cur.section === 'experience') lastOrg = cur.org;
+    const kind: ResumeFacet['kind'] =
+      cur.section === 'education' ? 'education' : cur.section === 'project' ? 'project' : 'experience';
+    const sentence = (b: string) => (/[.!?]$/.test(b) ? b : `${b}.`);
+    const head = [cur.title, cur.org].filter(Boolean).join(', ');
+    const when = cur.range ? cur.range[0] : cur.single;
+    // bullets describe the work; entries without bullets (education) read as their header plus details
+    const body = cur.body.length
+      ? [...cur.body, ...cur.details].map(sentence).join(' ')
+      : cur.details.length
+        ? [`${head}${when ? ` (${when})` : ''}`, ...cur.details].map(sentence).join(' ')
+        : '';
     facets.push({
       id: `${resumeId}-f${id++}`,
       resumeId,
       kind,
-      title: title || undefined,
-      organizationName: org || undefined,
-      startDate: dr ? toIsoMonth(dr[1]!) : undefined,
-      endDate: dr ? toIsoMonth(dr[2]!) : undefined,
-      text: `${header}. ${body}`.slice(0, 1200),
-      keywords: extractKeywords(`${header} ${body}`),
+      title: cur.title,
+      organizationName: cur.org,
+      startDate: cur.range ? toIsoMonth(cur.range[1]!) : undefined,
+      endDate: cur.range ? toIsoMonth(cur.range[2]!) : cur.single ? toIsoMonth(cur.single) : undefined,
+      text: (body || `${head}${when ? ` (${when})` : ''}.`).slice(0, 1200),
+      keywords: extractKeywords(`${head} ${cur.extra.join(' ')} ${body}`),
       confirmed: false,
     });
-    current = undefined;
   };
-  for (const line of lines) {
-    if (!line) continue;
-    if (SECTION.test(line)) {
-      push();
-      section = line.toLowerCase();
+
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line || isRule(line)) continue;
+    const sec = resumeSectionOf(line);
+    if (sec) {
+      finish();
+      section = sec;
+      lastOrg = undefined;
       continue;
     }
-    if (section.includes('skill')) {
-      const items = line
+    if (section === 'header') {
+      if (CONTACT.test(line) || /[|·•]/.test(line)) continue;
+      const words = line.split(/\s+/);
+      if (
+        !name &&
+        words.length >= 2 &&
+        words.length <= 4 &&
+        !/\d/.test(line) &&
+        words.every((w) => /^\p{Lu}[\p{L}'’.-]*$/u.test(w))
+      ) {
+        name = fixCaps(line);
+        continue;
+      }
+      if (words.length >= 8) headerProse.push(line);
+      continue;
+    }
+    if (section === 'other') continue;
+    if (section === 'summary') {
+      if (!CONTACT.test(line)) summaryLines.push(stripBullet(line));
+      continue;
+    }
+    if (section === 'skills' || section === 'interests') {
+      const content = stripBullet(line);
+      const label = content.match(/^([A-Za-z &/]+):\s*/)?.[1]?.toLowerCase() ?? '';
+      const items = content.replace(/^[A-Za-z &/]+:\s*/, '');
+      if (section === 'interests' || /\b(interests|hobbies|activities)\b/.test(label)) {
+        facets.push({
+          id: `${resumeId}-f${id++}`,
+          resumeId,
+          kind: 'interest',
+          text: items,
+          keywords: extractKeywords(items, 6),
+          confirmed: false,
+        });
+        continue;
+      }
+      const list = items
         .split(SKILL_SPLIT)
-        .map((s) => s.replace(/^[a-z ]+:/i, '').trim())
-        .filter((s) => s.length > 1 && s.length < 40);
-      if (items.length)
+        .map((s) => s.replace(/\(.*?\)/g, '').trim())
+        .filter((s) => s.length > 1 && s.length < 40 && !isRule(s));
+      if (list.length)
         facets.push({
           id: `${resumeId}-f${id++}`,
           resumeId,
           kind: 'skill_group',
-          text: items.join(', '),
-          keywords: items.map((i) => i.toLowerCase()),
+          text: list.join(', '),
+          keywords: list.map((i) => i.toLowerCase()),
           confirmed: false,
         });
       continue;
     }
-    if (section.includes('interest')) {
-      facets.push({
-        id: `${resumeId}-f${id++}`,
-        resumeId,
-        kind: 'interest',
-        text: line,
-        keywords: extractKeywords(line, 6),
-        confirmed: false,
-      });
+    // experience / education / projects
+    if (BULLET.test(line)) {
+      e ??= newEntry(section);
+      e.body.push(stripBullet(line));
       continue;
     }
-    if (section === 'summary' || section.includes('objective')) {
-      const last = facets.find((f) => f.kind === 'summary');
-      if (last) last.text = `${last.text} ${line}`.slice(0, 600);
-      else
-        facets.push({
-          id: `${resumeId}-f${id++}`,
-          resumeId,
-          kind: 'summary',
-          text: line,
-          keywords: extractKeywords(line, 8),
-          confirmed: false,
-        });
+    if (e?.body.length && /^[a-z(&]/.test(line)) {
+      // a wrapped bullet continues in lowercase
+      e.body[e.body.length - 1] = `${e.body[e.body.length - 1]} ${line}`;
       continue;
     }
-    const isBullet = /^[-•*▪◦]/.test(line);
-    const looksHeader =
-      !isBullet &&
-      (DATE_RANGE.test(line) ||
-        (line.length < 90 &&
-          /[A-Z]/.test(line[0] ?? '') &&
-          !/[.!?]$/.test(line) &&
-          (current === undefined || current.body.length > 0)));
-    if (looksHeader) {
-      push();
-      current = { header: line.replace(/^[-•*▪◦]\s*/, ''), body: [] };
-    } else if (current) current.body.push(line.replace(/^[-•*▪◦]\s*/, ''));
-    else current = { header: line, body: [] };
+    if (e && (e.title || e.org) && /[.!?]$/.test(line) && line.split(/\s+/).length >= 6) {
+      // prose without bullet glyphs (some PDF exports drop them)
+      e.body.push(line);
+      continue;
+    }
+    if (e && !e.body.length && isMetaLine(line)) {
+      headerParts(line, e);
+      continue;
+    }
+    if (
+      e &&
+      section === 'education' &&
+      e.org &&
+      !e.body.length &&
+      /\b(gpa|coursework|honors|dean|minor|thesis)\b/i.test(line)
+    ) {
+      e.details.push(line);
+      continue;
+    }
+    const complete = !!e && !!e.title && !!e.org && (!!e.range || !!e.single);
+    if (!e || e.body.length > 0 || e.details.length > 0 || complete) {
+      finish();
+      e = newEntry(section);
+    }
+    const cur: Entry = e;
+    const parts = headerParts(line, cur);
+    if (!cur.headers) cur.titleOnlyFirst = parts.length === 1 && TITLE_WORDS.test(parts[0]!);
+    cur.headers++;
+    assignParts(parts, cur);
   }
-  push();
+  finish();
+  const summarySource = summaryLines.length ? summaryLines.join(' ') : headerProse.join(' ');
+  const sentence = summarySource ? summarySentence(summarySource, name) : undefined;
+  if (sentence)
+    facets.unshift({
+      id: `${resumeId}-f${id++}`,
+      resumeId,
+      kind: 'summary',
+      text: sentence,
+      keywords: extractKeywords(sentence.replace(/^.*? is /, ''), 8),
+      confirmed: false,
+    });
   return facets.filter((f) => f.text.length > 8);
 }

@@ -246,6 +246,14 @@ export interface Organization {
   logoUrl?: string;
 }
 
+export type PersonField =
+  | 'displayName'
+  | 'currentTitle'
+  | 'currentOrganizationId'
+  | 'headline'
+  | 'location'
+  | 'school';
+
 export interface Person {
   id: ID;
   userId: ID;
@@ -274,6 +282,10 @@ export interface Person {
   sources: PersonSource[];
   linkedinConnectedOn?: string;
   isHuman: boolean;
+  /** displayName is only a stand-in derived from the email address; the first real name replaces it */
+  namePlaceholder?: boolean;
+  /** which source last wrote each profile field, for source precedence (manual > enrichment > CSV > ... ) */
+  fieldSources?: Partial<Record<PersonField, PersonSource>>;
   hiddenAt?: string;
   summary?: string;
   summaryUpdatedAt?: string;
@@ -485,8 +497,13 @@ export interface MeetingNote {
 
 export interface NoteExtraction {
   summary: string;
-  facts: { about: string; type: FactType; text: string; confidence: number }[];
-  actionItems: { owner: 'user' | 'counterpart'; text: string; dueHint?: string }[];
+  /**
+   * `about` is the person the fact is about (a person id from the heuristic path, a name from the LLM);
+   * `text` is a clause addressed to them ("you lead a small team on payments"); `evidence` is the sentence
+   * it came from.
+   */
+  facts: { about: string; type: FactType; text: string; confidence: number; evidence?: string }[];
+  actionItems: { owner: 'user' | 'counterpart'; text: string; dueHint?: string; about?: string }[];
   offers: string[];
   hooks: string[];
   warmth: 'warm' | 'neutral' | 'cool';
@@ -503,6 +520,8 @@ export interface PersonFact {
   sourceId: ID;
   occurredAt?: string;
   confidence: number;
+  /** the raw sentence the fact was extracted from (the fact text itself is a cleaned clause) */
+  evidence?: string;
   deletedAt?: string;
   createdAt: string;
 }

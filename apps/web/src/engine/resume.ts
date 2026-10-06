@@ -48,7 +48,7 @@ export async function saveResume(user: User, file: File): Promise<{ resume: Resu
   await db.resumes.add(resume);
   let facets = hasLlm() ? await llmResumeParse(text, resume.id).catch(() => undefined) : undefined;
   const source: Resume['parseSource'] = facets ? 'llm' : 'heuristic';
-  facets = facets ?? heuristicResumeParse(text, resume.id);
+  facets = facets ?? heuristicResumeParse(text, resume.id, { name: user.fullName || undefined });
   await db.resumeFacets.bulkAdd(facets);
   await db.resumes.update(resume.id, { parsedAt: now, parseSource: source });
   return { resume: { ...resume, parsedAt: now, parseSource: source }, facets };

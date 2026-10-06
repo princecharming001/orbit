@@ -19,7 +19,10 @@ export async function importConnectionsCsv(
     const { person, created } = await upsertPerson(
       {
         userId: user.id,
-        displayName: `${r.firstName} ${r.lastName}`,
+        // first and last stay separate so "Lee, Jr." is read as a suffix, not as "Last, First"
+        displayName: `${r.firstName} ${r.lastName}`.trim(),
+        firstName: r.firstName,
+        lastName: r.lastName,
         email: r.email,
         linkedinUrl: r.url,
         companyRaw: r.company,
