@@ -935,7 +935,11 @@ describe('email introductions and suggested names (EG-08)', () => {
       { name: 'Priya Shah', org: 'Stripe' },
       { name: 'Tom Lee', org: 'Ramp' },
     ]);
-    expect(readSuggestedNames('Definitely Tom')).toEqual({ names: [], skipped: ['Definitely Tom'] });
+    expect(readSuggestedNames('Definitely Tom')).toEqual({
+      names: [],
+      confirm: [],
+      skipped: ['Definitely Tom'],
+    });
     expect(readSuggestedNames('Tom at Stripe').names).toEqual([{ name: 'Tom', org: 'Stripe' }]);
     const sofia = (await db.people
       .where('userId')
@@ -964,17 +968,21 @@ describe('email introductions and suggested names (EG-08)', () => {
       'check linkedin',
     ])
       expect(readSuggestedNames(answer).names, answer).toEqual([]);
+    // a clause about the person before it is not a separate answer: it names the company
     expect(readSuggestedNames('Mark Chen, he runs sales at Ramp')).toEqual({
-      names: [{ name: 'Mark Chen' }],
-      skipped: ['he runs sales'],
+      names: [{ name: 'Mark Chen', org: 'Ramp' }],
+      confirm: [],
+      skipped: [],
     });
     // a second company is not a person, and a lone first name is not part of the company
     expect(readSuggestedNames('Priya Shah at Goldman Sachs and Morgan Stanley')).toEqual({
       names: [{ name: 'Priya Shah', org: 'Goldman Sachs' }],
+      confirm: [],
       skipped: ['Morgan Stanley'],
     });
     expect(readSuggestedNames('Priya Shah at Stripe and Tom')).toEqual({
       names: [{ name: 'Priya Shah', org: 'Stripe' }],
+      confirm: [],
       skipped: ['Tom'],
     });
     expect(readSuggestedNames('Priya Shah at Stripe and Tom Lee').names).toEqual([
@@ -984,8 +992,12 @@ describe('email introductions and suggested names (EG-08)', () => {
     expect(readSuggestedNames('Priya Shah at Ernst and Young').names).toEqual([
       { name: 'Priya Shah', org: 'Ernst and Young' },
     ]);
-    // a name that is also a word counts when typed as a name
-    expect(readSuggestedNames('Will Park, may chen').names).toEqual([{ name: 'Will Park' }]);
+    // a name that is also a word counts when typed as a name, and is only offered for confirmation in lowercase
+    expect(readSuggestedNames('Will Park, may chen')).toEqual({
+      names: [{ name: 'Will Park' }],
+      confirm: [{ name: 'May Chen' }],
+      skipped: [],
+    });
     const sofia = (await db.people
       .where('userId')
       .equals(user.id)
@@ -1006,6 +1018,47 @@ describe('email introductions and suggested names (EG-08)', () => {
       .filter((p) => ['Not Sure', 'Morgan Stanley', 'He Runs Sales'].includes(p.displayName))
       .count();
     expect(invented).toBe(0);
+  }, 60_000);
+
+  it('prep-tab roles, offices and groups are never saved as people; unsure names wait for a yes (L12, NP)', async () => {
+    const { addSuggestedContacts, readSuggestedNames, saveSuggestedContacts } = await import(
+      './introductions'
+    );
+    const sofia = (await db.people
+      .where('userId')
+      .equals(user.id)
+      .filter((p) => p.displayName === 'Sofia Bennett')
+      .first())!;
+    const before = await db.people.where('userId').equals(user.id).count();
+    for (const answer of [
+      'ask career services',
+      'several alumni',
+      'alumni office',
+      'career center',
+      'data science club',
+      'office hours',
+      'alumni network',
+      'stripe alumni',
+      'industry mentors',
+      'hr department',
+      'investment banking',
+      'big tech',
+      'VP Engineering at Stripe',
+      'Big Four firms',
+    ]) {
+      expect(readSuggestedNames(answer), answer).toMatchObject({ names: [], confirm: [] });
+      expect(await addSuggestedContacts(user.id, sofia.id, answer, now), answer).toEqual([]);
+    }
+    expect(await db.people.where('userId').equals(user.id).count()).toBe(before);
+    // a lowercase name that is not clearly a name is not saved by the answer itself; the student confirms it
+    const unsure = readSuggestedNames('xiomara quispe at ramp');
+    expect(unsure.names).toEqual([]);
+    expect(unsure.confirm).toEqual([{ name: 'Xiomara Quispe', org: 'Ramp' }]);
+    expect(await addSuggestedContacts(user.id, sofia.id, 'xiomara quispe at ramp', now)).toEqual([]);
+    const [xiomara] = await saveSuggestedContacts(user.id, sofia.id, unsure.confirm, now);
+    expect(xiomara?.displayName).toBe('Xiomara Quispe');
+    const rec = await db.recommendations.where('personId').equals(xiomara!.id).first();
+    expect(rec?.reasons[0]?.text).toBe('Suggested by Sofia');
   }, 60_000);
 
   it('a missed proposed time is owned up to in the new-times draft', async () => {

@@ -29,7 +29,7 @@ import { DraftEditor } from '../components/DraftEditor';
 import { feedback } from '../db/repo';
 import { db } from '../db/schema';
 import { draftMessage, needsWarmUp, refreshPersonSummary, startWarmUpOrOutreach } from '../engine/brief';
-import { addSuggestedContacts, readSuggestedNames } from '../engine/introductions';
+import { readSuggestedNames, type SuggestedName, saveSuggestedContacts } from '../engine/introductions';
 import { buildPrep, personSummary } from '../engine/prep';
 import { applyStage } from '../engine/stages';
 import { useSession } from '../state/session';
@@ -812,7 +812,14 @@ function Prep({
   const [suggested, setSuggested] = useState('');
   const [added, setAdded] = useState<string[]>([]);
   const [notSaved, setNotSaved] = useState<string[]>([]);
+  // names the reader is not sure are people ("will park", "Dr. Patel"): nothing is saved until the student says so
+  const [unsure, setUnsure] = useState<SuggestedName[]>([]);
   const { user, goals } = useSession();
+  const keep = async (list: SuggestedName[]) => {
+    const people = await saveSuggestedContacts(userId, person.id, list);
+    if (people.length) setAdded((a) => [...a, ...people.map((p) => p.displayName)]);
+  };
+  const label = (s: SuggestedName) => (s.org ? `${s.name} at ${s.org}` : s.name);
   const plan = useMemo(
     () =>
       user
@@ -978,14 +985,53 @@ function Prep({
           className="mt-1 w-full h-8 rounded-lg border border-line px-2.5 text-[13px]"
           onKeyDown={async (e) => {
             if (e.key !== 'Enter' || !suggested.trim()) return;
-            // what could not be read as a name stays in the field, with a note, instead of vanishing
-            const { skipped } = readSuggestedNames(suggested);
-            const people = await addSuggestedContacts(userId, person.id, suggested);
-            if (people.length) setAdded((a) => [...a, ...people.map((p) => p.displayName)]);
+            // clear names are saved; unsure ones wait for a yes; what is not a name stays in the field with a note
+            const { names, confirm, skipped } = readSuggestedNames(suggested);
+            await keep(names);
+            setUnsure((u) => [
+              ...u,
+              ...confirm.filter((c) => !u.some((x) => x.name.toLowerCase() === c.name.toLowerCase())),
+            ]);
             setNotSaved(skipped);
             setSuggested(skipped.join(', '));
           }}
         />
+        {unsure.length > 0 && (
+          <div className="mt-2 rounded-lg border border-line p-2.5" data-testid="prep-suggested-confirm">
+            <p className="text-ink-2">
+              Are these people {person.firstName} suggested? Nothing is saved until you say yes.
+            </p>
+            <ul className="mt-1.5 space-y-1.5">
+              {unsure.map((s) => (
+                <li
+                  key={label(s)}
+                  className="flex flex-wrap items-center gap-2"
+                  data-testid="prep-confirm-row"
+                >
+                  <span className="flex-1 min-w-0 font-medium">{label(s)}</span>
+                  <Button
+                    size="sm"
+                    data-testid="prep-confirm-save"
+                    onClick={async () => {
+                      setUnsure((u) => u.filter((x) => x !== s));
+                      await keep([s]);
+                    }}
+                  >
+                    Save
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    data-testid="prep-confirm-skip"
+                    onClick={() => setUnsure((u) => u.filter((x) => x !== s))}
+                  >
+                    Not a person
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         {notSaved.length > 0 && (
           <p className="mt-1.5 text-ink-2" data-testid="prep-suggested-skipped">
             Not saved: {notSaved.join(', ')}. Write each as a full name, like Priya Shah at Stripe or Tom Lee.
