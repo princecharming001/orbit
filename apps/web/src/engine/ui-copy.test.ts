@@ -197,6 +197,54 @@ describe('prep (EG-13)', () => {
     expect(p.introMissing).toMatch(/Add your resume/);
     expect(p.intro).not.toMatch(/Most recently/);
   });
+  it('asks for the target function and cycle instead of saying placeholder text out loud', () => {
+    const p = buildPrep({
+      ...base,
+      user: { ...user, graduationYear: undefined, degree: 'MBA', majors: [] },
+      goals: { cycleLabel: '', targetFunctions: [] },
+      person: person({ currentTitle: 'Product Designer', currentOrganizationRaw: 'Figma' }),
+    });
+    expect(p.intro).not.toMatch(/target field|\(\)|\binternship\b/);
+    expect(p.intro).toMatch(/^I'm Sam, an MBA student at University of Michigan\./);
+    expect(p.introMissing).toMatch(/roles you're recruiting for/);
+    expect(p.goal).toBe(
+      'Understand what the work at Figma is really like and whether a role there fits your search.',
+    );
+    for (const t of [p.goal, p.intro ?? '', p.introMissing ?? '']) expect(t).not.toMatch(BANNED);
+    expect(withArticle('MBA student')).toBe('an MBA student');
+    expect(withArticle('PhD student')).toBe('a PhD student');
+  });
+  it('only mentions their advice when there is advice on record', () => {
+    const args = {
+      ...base,
+      chats: [{ stage: 'nurturing' as const, completedAt: '2026-09-01T00:00:00Z' }],
+      person: person({ firstName: 'Ana', currentTitle: 'Product Designer', currentOrganizationRaw: 'Figma' }),
+    };
+    expect(buildPrep(args).goal).toBe(
+      'Catch Ana up on your Summer 2027 internship search since you last spoke, and get their read on your next step.',
+    );
+    expect(
+      buildPrep({ ...args, facts: [{ type: 'advice', text: 'Ship one project end to end.' }] }).goal,
+    ).toBe('Tell Ana what you did with their advice, and get their read on your next step.');
+  });
+  it('does not give consulting case questions to an Engagement Manager at a fintech', () => {
+    const p = buildPrep({
+      ...base,
+      person: person({
+        firstName: 'Marcus',
+        currentTitle: 'Engagement Manager',
+        currentOrganizationRaw: 'Ramp',
+      }),
+    });
+    expect(p.fn).toBe('general');
+    expect(p.questions.join(' ')).not.toMatch(/case|summer associates|staffed/i);
+    expect(p.goal).not.toMatch(/consulting/);
+    const mck = buildPrep({
+      ...base,
+      person: person({ currentTitle: 'Engagement Manager', currentOrganizationRaw: 'McKinsey & Company' }),
+    });
+    expect(mck.fn).toBe('consulting');
+  });
   it('never splices raw hook sentences into a question', () => {
     const p = buildPrep({
       ...base,

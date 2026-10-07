@@ -470,8 +470,8 @@ function StepResume({ onNext, onBack }: { onNext: () => void; onBack: () => void
   return (
     <div className="mt-4">
       <p className="text-ink-2 text-[14px]">
-        Orbit uses your resume to find people with overlapping experience and to describe you in outreach.
-        PDF, DOCX text, or TXT.
+        Orbit uses your resume to find people with overlapping experience and to describe you in first
+        messages. PDF, DOCX text, or TXT.
       </p>
       <label className="mt-4 flex items-center justify-center gap-2 border border-dashed border-line rounded-[12px] h-28 cursor-pointer hover:bg-canvas-2">
         <input

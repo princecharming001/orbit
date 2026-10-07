@@ -1,7 +1,10 @@
+import type { User } from '@orbit/core';
+import { useLiveQuery } from 'dexie-react-hooks';
 import { ArrowRight, CalendarCheck, Mail, Map as MapIcon, Sparkles, Sun } from 'lucide-react';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Logo } from '../components/AppShell';
+import { db } from '../db/schema';
 import { createLocalUser } from '../engine/account';
 import { DEMO_USER_ID, demoResetPrompt, loadDemo } from '../engine/demo';
 import { useSession } from '../state/session';
@@ -9,12 +12,21 @@ import { Button, Spinner } from '../ui';
 
 export function Landing() {
   const nav = useNavigate();
-  const { userId, user, setUserId } = useSession();
+  const { loading, userId, setUserId } = useSession();
+  // undefined while the stored profile is still being read, null when there is none. Until it is known the page
+  // shows no buttons: a click in that window would load the demo over real data without asking.
+  const stored = useLiveQuery<User | null>(
+    async () => (userId ? ((await db.users.get(userId)) ?? null) : null),
+    [userId],
+  );
+  const resolving = loading || stored === undefined;
+  const user = stored ?? undefined;
   const [busy, setBusy] = useState<string | undefined>();
   const onboarded = !!(userId && user?.onboardingCompletedAt);
   const midSetup = !!(userId && user && !user.onboardingCompletedAt);
   const isDemo = user?.id === DEMO_USER_ID;
   const demo = async () => {
+    if (resolving) return;
     if (isDemo && onboarded) return nav('/today');
     // Never wipe what someone has already set up without saying so.
     const prompt = demoResetPrompt(user);
@@ -25,6 +37,7 @@ export function Landing() {
     nav('/today');
   };
   const start = async () => {
+    if (resolving) return;
     // An existing user continues where they are; only a first visit creates a new local profile.
     if (onboarded) return nav('/today');
     if (midSetup && user) return nav(`/onboarding/${Math.max(2, user.onboardingStep)}`);
@@ -50,8 +63,8 @@ export function Landing() {
             Docs
           </a>
         </nav>
-        <div className="ml-auto sm:ml-4 flex items-center gap-2">
-          {onboarded ? (
+        <div className="ml-auto sm:ml-4 flex items-center gap-2" data-testid="landing-actions">
+          {resolving ? null : onboarded ? (
             <Button variant="primary" onClick={() => nav('/today')}>
               Open Orbit
             </Button>
@@ -84,11 +97,15 @@ export function Landing() {
             right people, drafts in your voice, and hands you a morning brief of one-tap follow-ups. Nothing
             is ever sent without you.
           </p>
-          <div className="mt-7 flex flex-wrap items-center gap-3">
-            <Button size="lg" variant="primary" onClick={start} disabled={!!busy}>
-              {startLabel} <ArrowRight size={16} />
-            </Button>
-            {!onboarded && (
+          <div className="mt-7 flex flex-wrap items-center gap-3 min-h-11">
+            {resolving ? (
+              <Spinner />
+            ) : (
+              <Button size="lg" variant="primary" onClick={start} disabled={!!busy}>
+                {startLabel} <ArrowRight size={16} />
+              </Button>
+            )}
+            {!onboarded && !resolving && (
               <Button size="lg" variant="secondary" onClick={demo} disabled={!!busy}>
                 {busy ? (
                   <>
@@ -153,7 +170,7 @@ export function Landing() {
               {
                 icon: CalendarCheck,
                 title: 'A pipeline that fills itself',
-                body: 'Stages are inferred from email and calendar: outreach sent, replied, scheduling, scheduled, completed, followed up, nurturing.',
+                body: 'Stages are inferred from email and calendar: first message sent, replied, scheduling, scheduled, completed, followed up, nurturing.',
               },
               {
                 icon: MapIcon,
@@ -211,11 +228,13 @@ export function Landing() {
               <span className="font-medium text-ink">3.</span> Open your first brief.
             </li>
           </ol>
-          <div className="mt-5 flex gap-2">
-            <Button variant="primary" onClick={start} disabled={!!busy}>
-              {startLabel}
-            </Button>
-            {!onboarded && !midSetup && (
+          <div className="mt-5 flex gap-2 min-h-9">
+            {!resolving && (
+              <Button variant="primary" onClick={start} disabled={!!busy}>
+                {startLabel}
+              </Button>
+            )}
+            {!resolving && !onboarded && !midSetup && (
               <Button onClick={demo} disabled={!!busy}>
                 Try the demo
               </Button>

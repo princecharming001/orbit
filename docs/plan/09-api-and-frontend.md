@@ -151,5 +151,5 @@ One word per concept, everywhere in the UI. Internal codes (`swe`, `thank_you`, 
 | The queue of drafts and cards waiting on the student (route `/inbox`) | Approvals | Inbox, inbox zero |
 | Ranked people to meet on Discover | recommendations | suggestions |
 | A card on Today or in Approvals | suggestion or card | recommendation |
-| The first message to someone new | First message (outreach in code) | outreach, cold email |
+| The first message to someone new | First message (`outreach` in code; stage "First message sent", card chip "First message", Discover button "Write first message") | outreach, cold email |
 | A message sent by Gmail or handed to LinkedIn | Email / LinkedIn | gmail, via gmail |

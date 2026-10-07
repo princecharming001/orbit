@@ -280,8 +280,8 @@ export function MapPage() {
               <Card padded>
                 <div className="font-medium text-[13px] mb-2">Legend</div>
                 <ul className="text-[12px] text-ink-2 space-y-1">
-                  <li>Inner ring: strong ties (closeness ≥ 60)</li>
-                  <li>Middle: 30–60</li>
+                  <li>Inner ring: close ties (closeness 60 and up)</li>
+                  <li>Middle ring: closeness 30 to 60</li>
                   <li>Outer: new or cold</li>
                 </ul>
               </Card>

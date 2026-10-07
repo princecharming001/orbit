@@ -661,7 +661,7 @@ function Limits() {
   return (
     <Card className="grid sm:grid-cols-2 gap-4">
       <div>
-        <Label>Weekly outreach target</Label>
+        <Label>First messages per week</Label>
         <Input
           type="number"
           min={0}
@@ -729,7 +729,7 @@ function Limits() {
             onChange={(e) => upd({ warmUpEnabled: e.target.checked })}
           />
           <span>
-            <strong className="font-medium">LinkedIn warm-up before cold outreach.</strong>{' '}
+            <strong className="font-medium">LinkedIn warm-up before a first message to a stranger.</strong>{' '}
             <span className="text-ink-2">
               A few days of viewing, reacting and one real comment, done by you via deep links. Orbit never
               automates LinkedIn.

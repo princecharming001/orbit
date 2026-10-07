@@ -18,7 +18,7 @@ export const KIND_LABEL: Record<
   Suggestion['kind'],
   { label: string; tone: 'neutral' | 'accent' | 'good' | 'warn' | 'bad' }
 > = {
-  new_outreach: { label: 'New outreach', tone: 'accent' },
+  new_outreach: { label: 'First message', tone: 'accent' },
   warm_up_engage: { label: 'LinkedIn warm-up', tone: 'neutral' },
   follow_up_bump: { label: 'Follow up', tone: 'warn' },
   schedule_propose: { label: 'Propose times', tone: 'accent' },
@@ -120,7 +120,7 @@ export function SuggestionCard({ s, compact }: { s: Suggestion; compact?: boolea
     toast.push({
       text: done
         ? postClaim.trim()
-          ? 'Logged. Your outreach will mention the post.'
+          ? 'Logged. Your first message will mention the post.'
           : 'Nice. Logged the warm-up.'
         : 'Skipped.',
     });
@@ -241,7 +241,7 @@ export function SuggestionCard({ s, compact }: { s: Suggestion; compact?: boolea
               {chat?.warmUp && (
                 <span className="text-[12px] text-ink-3 ml-1">
                   {chat.warmUp.actions.filter((a) => a.doneAt).length} of {chat.warmUp.actions.length} done ·
-                  outreach suggested after{' '}
+                  first message suggested after{' '}
                   {new Date(chat.warmUp.readyAt).toLocaleDateString('en-US', {
                     weekday: 'short',
                     month: 'short',

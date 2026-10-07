@@ -99,6 +99,8 @@ export async function loadDemo(
     status: e.status,
     attendees: e.attendees,
     conferenceUrl: e.conferenceUrl,
+    // The seed knows when each chat was really scheduled; the invite dates from then, not from the demo load.
+    createdAt: ds.chats.find((c) => c.scheduledEventId === e.id && c.stage === 'scheduled')?.stageEnteredAt,
   }));
   await ingestEvents(ds.user, events, now);
   // The demo's warm-up chat is seeded directly (it has no email history).

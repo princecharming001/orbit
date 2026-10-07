@@ -276,13 +276,26 @@ test.describe('Keyboard, dead ends and plain words', () => {
 
   test('no internal codes on screen', async ({ page }) => {
     await loadDemo(page);
-    for (const path of ['today', 'pipeline?view=table', 'discover', 'people', 'inbox', 'settings/goals']) {
+    for (const path of [
+      'today',
+      'pipeline?view=table',
+      'discover',
+      'people',
+      'inbox',
+      'settings/goals',
+      'map',
+    ]) {
       await page.goto(path);
       await page.waitForLoadState('networkidle');
       const text = await page.locator('main').innerText();
       expect(text, path).not.toMatch(
         /\b(swe|warm_up_engage|via gmail|thank_you|family friend|long_shot|confirm stage|schedule confirm)\b|_/,
       );
+      // One word per concept (docs/plan/09 section 8).
+      expect(text, path).not.toMatch(/strong ties|\boutreach\b|inbox zero/i);
+      // Sentences, not dashes: card reasons and recommendation copy (a dash in an empty stat cell is fine).
+      const cards = page.locator('[data-testid^="suggestion-"], [data-testid="rec-card"]');
+      for (const t of await cards.allInnerTexts()) expect(t, path).not.toMatch(/[—–]/);
     }
   });
 

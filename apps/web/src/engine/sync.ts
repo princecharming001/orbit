@@ -102,6 +102,7 @@ export async function syncGoogle(
         self: a.self,
       })),
       conferenceUrl: e.hangoutLink ?? e.conferenceData?.entryPoints?.[0]?.uri,
+      createdAt: e.created,
     }));
   const ev = await ingestEvents(user, rawEvents);
   progress('Calendar', 1, 1);

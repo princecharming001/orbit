@@ -215,7 +215,7 @@ export function Discover() {
                 </div>
                 <div className="mt-3 flex flex-wrap items-center gap-2">
                   <Button variant="primary" size="sm" onClick={() => start(p.id)} data-testid="rec-start">
-                    {cold ? 'Start warm-up' : 'Start outreach'}
+                    {cold ? 'Start warm-up' : 'Write first message'}
                   </Button>
                   {r.status !== 'saved' && (
                     <Button size="sm" onClick={() => db.recommendations.update(r.id, { status: 'saved' })}>

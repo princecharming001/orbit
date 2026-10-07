@@ -27,7 +27,10 @@ export function withArticle(title: string): string {
   const t = title.trim();
   if (/^(head|chief|vp\b|vice president|co-?founder|founder|managing director|general partner)/i.test(t))
     return t;
-  return `${/^[aeiou]/i.test(t) && !/^(uni|eu|one)/i.test(t) ? 'an' : 'a'} ${t}`;
+  // Acronyms are read letter by letter: "an MBA student", "an SDE", "a PhD student".
+  const acronym = /^[A-Z]{2,}\b/.test(t);
+  const vowelSound = acronym ? /^[AEFHILMNORSX]/.test(t) : /^[aeiou]/i.test(t) && !/^(uni|eu|one)/i.test(t);
+  return `${vowelSound ? 'an' : 'a'} ${t}`;
 }
 
 /** Split "Consultant, Private Equity Practice" into the title and the team. */
@@ -165,10 +168,16 @@ export function personFunction(
   if (/design|\bux\b|\bui\b/i.test(t)) return 'design';
   if (/data scien|machine learning|\bml\b|analytics|research scientist/i.test(t)) return 'data';
   if (/engineer|developer|\bswe\b|\bsde\b|programmer/i.test(t)) return 'swe';
-  const sector = sectorOf({ title: t, org: person.currentOrganizationRaw });
+  const org = person.currentOrganizationRaw?.trim();
+  const sector = sectorOf({ title: t, org });
+  const orgSector = org ? sectorOf({ org }) : 'general';
   if (/venture|\bvc\b|investor/i.test(t)) return 'vc';
+  // A banking or consulting title at a tech company ("Engagement Manager" at Ramp, "Vice President" at Google) is
+  // not a banker or a consultant: their case and deal questions would be visibly wrong.
+  if (orgSector === 'tech') return 'general';
   if (sector === 'finance') return 'ib';
-  if (sector === 'consulting') return 'consulting';
+  // Generic titles ("Engagement Manager", "Principal") only mean consulting at a consulting firm.
+  if (sector === 'consulting' && (orgSector === 'consulting' || /consult/i.test(t))) return 'consulting';
   return 'general';
 }
 
@@ -318,8 +327,11 @@ export function buildPrep(args: {
   const tz = user.timezone || 'UTC';
   const first = person.firstName || person.displayName;
   const org = person.currentOrganizationRaw?.trim() || 'their company';
-  const cycle = goals?.cycleLabel?.trim() || 'internship';
-  const myFn = functionPhrase(goals?.targetFunctions?.[0]) || 'my target field';
+  // Only what the student told Orbit: no placeholder when the cycle or the target function is missing.
+  const cycleRaw = goals?.cycleLabel?.trim() ?? '';
+  const cycle = /^(this cycle)?$/i.test(cycleRaw) ? '' : cycleRaw;
+  const search = cycle ? `${cycle} search` : 'search';
+  const myFn = goals?.targetFunctions?.[0] ? functionPhrase(goals.targetFunctions[0]) : '';
   const recruiter = isRecruiter(person.currentTitle);
   const seniority = seniorityOf(person.currentTitle);
   const audience: Audience = recruiter
@@ -331,6 +343,7 @@ export function buildPrep(args: {
         : 'mid';
   const fn = personFunction(person);
   const metBefore = args.chats.some((c) => !!c.completedAt);
+  const hadAdvice = facts.some((f) => f.type === 'advice');
 
   // Questions: one about their path, one alum question, then the function bank for their seniority.
   const qs: string[] = [];
@@ -348,11 +361,13 @@ export function buildPrep(args: {
   const questions = [...new Set(qs)].slice(0, 5);
 
   const goal = recruiter
-    ? `Leave with ${org}'s timeline for your ${cycle} search and one concrete next step.`
+    ? `Leave with ${org}'s timeline for your ${search} and one concrete next step.`
     : metBefore
-      ? `Tell ${first} what you did with their last advice, and get their read on your next step.`
-      : sameField(fn, goals?.targetFunctions?.[0])
-        ? `Understand what the work at ${org} is really like and whether ${myFn} there fits your ${cycle} search.`
+      ? hadAdvice
+        ? `Tell ${first} what you did with their advice, and get their read on your next step.`
+        : `Catch ${first} up on your ${search} since you last spoke, and get their read on your next step.`
+      : sameField(fn, goals?.targetFunctions?.[0]) || !myFn
+        ? `Understand what the work at ${org} is really like and whether ${myFn ? `${myFn} there` : 'a role there'} fits your ${search}.`
         : `Learn how ${org} works from someone in ${fn === 'general' ? 'another part of the company' : functionPhrase(fn)}, and who on the ${myFn} side you should meet next.`;
   const ask = recruiter
     ? 'Which deadline or event matters most for you, and who to follow up with.'
@@ -379,8 +394,20 @@ export function buildPrep(args: {
         `${current ? "Right now I'm" : 'Most recently I was'} ${withArticle(exp.title!)} at ${exp.organizationName}.`,
       );
     } else if (project) bits.push(`Lately I've been working on ${project.title}.`);
-    else introMissing = 'Add your resume in Settings so Orbit can add one line about your experience.';
-    bits.push(`I'm recruiting for ${myFn} roles (${cycle}), and I'd love to hear how you got where you are.`);
+    const missing: string[] = [];
+    if (!exp && !project)
+      missing.push('Add your resume in Settings so Orbit can add one line about your experience.');
+    if (myFn)
+      bits.push(
+        `I'm recruiting for ${myFn} roles${cycle ? ` (${cycle})` : ''}, and I'd love to hear how you got where you are.`,
+      );
+    else {
+      bits.push("I'd love to hear how you got where you are.");
+      missing.push(
+        "Add the roles you're recruiting for in Settings, under Goals, so your intro says what you want.",
+      );
+    }
+    if (missing.length) introMissing = missing.join(' ');
     intro = bits.join(' ');
   } else introMissing = 'Add your name and school in Settings so Orbit can draft your intro.';
 
@@ -426,7 +453,7 @@ export function buildPrep(args: {
       });
     else
       research.push({
-        label: `Check ${org}'s careers page for ${cycle} deadlines`,
+        label: `Check ${org}'s careers page for ${cycle ? `${cycle} ` : ''}deadlines`,
         url: `https://www.google.com/search?q=${encodeURIComponent(`${org} careers internship`)}`,
       });
   }

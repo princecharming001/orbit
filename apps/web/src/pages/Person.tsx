@@ -664,7 +664,7 @@ export function PersonPage() {
                 ))}
               </ul>
               <p className="text-[12px] text-ink-3 mt-2">
-                Outreach suggested after{' '}
+                First message suggested after{' '}
                 {new Date(chat.warmUp.readyAt).toLocaleDateString('en-US', {
                   weekday: 'short',
                   month: 'short',

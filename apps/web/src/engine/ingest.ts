@@ -364,7 +364,7 @@ async function processNetworkingThread(
       await evaluateTrigger(
         chat,
         { type: 'inbound_signal', signal, confidence },
-        { table: 'messages', id: m.id },
+        { table: 'messages', id: m.id, at: m.sentAt },
         now,
       );
       if (now.getTime() - new Date(m.sentAt).getTime() < 3 * 86_400_000)
@@ -391,7 +391,12 @@ async function processNetworkingThread(
       });
       chat.lastOutboundAt = m.sentAt;
       chat.firstOutreachAt = chat.firstOutreachAt ?? m.sentAt;
-      await evaluateTrigger(chat, { type: 'outbound_sent', kind }, { table: 'messages', id: m.id }, now);
+      await evaluateTrigger(
+        chat,
+        { type: 'outbound_sent', kind },
+        { table: 'messages', id: m.id, at: m.sentAt },
+        now,
+      );
     }
   }
   await evaluateImmediateSuggestions(user.id, { chatId: chat.id, personId: counterpartId }, now);
@@ -407,6 +412,8 @@ export interface RawEvent {
   status: 'confirmed' | 'tentative' | 'cancelled';
   attendees: { email: string; displayName?: string; responseStatus?: string; self?: boolean }[];
   conferenceUrl?: string;
+  /** When the invite was created; a future chat counts as scheduled from then. */
+  createdAt?: string;
 }
 
 const NOT_CHAT =
@@ -542,13 +549,13 @@ export async function ingestEvents(
         await evaluateTrigger(
           chat,
           { type: 'event_scheduled', confidence },
-          { table: 'events', id: ev.id },
+          { table: 'events', id: ev.id, at: r.startAt },
           new Date(r.startAt),
         );
       await evaluateTrigger(
         chat,
         { type: 'event_ended', confidence: confidence >= 0.9 ? 0.95 : 0.7 },
-        { table: 'events', id: ev.id },
+        { table: 'events', id: ev.id, at: r.endAt },
         now,
       );
       await db.chats.update(chat.id, { completedAt: chat.completedAt ?? r.endAt });
@@ -557,7 +564,7 @@ export async function ingestEvents(
       await evaluateTrigger(
         chat,
         { type: 'event_scheduled', confidence },
-        { table: 'events', id: ev.id },
+        { table: 'events', id: ev.id, at: r.createdAt },
         now,
       );
     }

@@ -631,12 +631,16 @@ export function buildDemoDataset(
       stageEnteredAt: isoDaysAgo(now, 3),
     });
   }
-  // 4: scheduled tomorrow -> prep brief
+  // 4: scheduled at the next 11:30 that is at least two hours away (today or tomorrow) -> prep brief.
+  // Always inside the 30-hour prep window, whatever the time of day the demo is loaded.
   {
     const p = pick(3);
     const start = new Date(now);
-    start.setDate(start.getDate() + 1);
     start.setHours(11, 30, 0, 0);
+    if (start.getTime() - now.getTime() < 2 * 3_600_000) start.setDate(start.getDate() + 1);
+    const day = start.toLocaleDateString('en-US', { weekday: 'long' });
+    // The invite went out exactly a week before the chat, so "next <weekday>" is true from the reply's date.
+    const repliedDaysAgo = 7 - (start.getDate() === new Date(now).getDate() ? 0 : 1);
     const end = new Date(start.getTime() + 30 * 60_000);
     const th = addThread(p, 'Chat next week', [
       {
@@ -647,8 +651,8 @@ export function buildDemoDataset(
       },
       {
         dir: 'inbound',
-        daysAgo: 7,
-        body: 'Happy to. Sent you an invite for tomorrow 11:30. Looking forward to it!',
+        daysAgo: repliedDaysAgo,
+        body: `Happy to. Sent you an invite for next ${day} at 11:30. Looking forward to it.`,
         signal: 'scheduling_confirmation',
       },
     ]);
@@ -675,8 +679,8 @@ export function buildDemoDataset(
       scheduledEventId: ev.id,
       firstOutreachAt: isoDaysAgo(now, 9),
       lastOutboundAt: isoDaysAgo(now, 9),
-      lastInboundAt: isoDaysAgo(now, 7),
-      stageEnteredAt: isoDaysAgo(now, 7),
+      lastInboundAt: isoDaysAgo(now, repliedDaysAgo),
+      stageEnteredAt: isoDaysAgo(now, repliedDaysAgo),
     });
     ev.chatId = c.id;
   }
@@ -881,7 +885,7 @@ export function buildDemoDataset(
         daysAgo: 20 + Math.floor(rnd() * 300) - k,
         body:
           k % 2 === 0
-            ? `Hi ${p.firstName}, hope you're well — quick question about ${p.currentOrganizationRaw}.`
+            ? `Hi ${p.firstName}, hope you're well. Quick question about ${p.currentOrganizationRaw}.`
             : `Hi ${un.first}, happy to help. Let me know what you'd like to cover.`,
         signal: k % 2 === 0 ? 'other' : 'reply_positive',
       });

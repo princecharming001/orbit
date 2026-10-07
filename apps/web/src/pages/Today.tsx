@@ -220,7 +220,7 @@ export function Today() {
             <div className="font-medium mb-3">This week</div>
             <div className="grid grid-cols-2 gap-4">
               <Stat
-                label="Outreach"
+                label="First messages"
                 value={
                   <span>
                     {sentThisWeek}
