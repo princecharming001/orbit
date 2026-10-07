@@ -44,9 +44,10 @@ Graph size: typically 300–2,000 person nodes, 1–5k edges. Loaded in one quer
 ```
 raw(t)    = Σ_i  w_i · exp(−ln2 · (t − t_i) / H)        over touchpoints i with t_i ≤ t, H = 90 days
 recency   = exp(−ln2 · days_since_last / 45)
-strength  = 1 − exp(−raw / 2)                            // saturates: 2 fresh meetings ≈ 0.63, 5 ≈ 0.92
+strength  = 1 − exp(−raw / 1.6)                          // saturates: 2 fresh meetings ≈ 0.71, 5 ≈ 0.96
 strength  = clamp(0.15·recency + 0.85·strength, 0, 1)    // a single old touch cannot exceed ~0.15 after a year
 ```
+A touchpoint dated up to 24 hours ahead (clock skew, a meeting later today) is treated as happening now; anything further ahead is ignored until it happens. The constants are tuned to the canonical cases (tested in `strength-graph.test.ts`): two meetings anywhere in the last month is strong (0.63 for meetings 30 and 31 days ago), one coffee chat yesterday is medium (0.54), two meetings two months ago are medium, and one meeting 200 days ago is weak.
 Reciprocity (implemented in `computeStrength`): touchpoints split into two-way evidence (`meeting`, `email_in`, `linkedin_in`, `manual_log`, `intro_observed`), one-way evidence (`email_out`, `linkedin_out`, `linkedin_engaged`, `note`) and ambient evidence (`email_cc`, `linkedin_connected`).
 
 - Until the person has ever replied, met the student or been introduced, one-way evidence adds at most 0.35 decayed raw, the recency term is halved (0.075) and strength is capped at 0.29, so unanswered outreach plus bumps stays a weak tie however many emails were sent.

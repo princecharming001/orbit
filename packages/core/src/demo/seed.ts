@@ -637,6 +637,8 @@ export function buildDemoDataset(
     const start = new Date(now);
     start.setDate(start.getDate() + 1);
     start.setHours(11, 30, 0, 0);
+    // keep the chat inside the 30-hour prep window whatever time the demo loads (after midnight it is today)
+    if (start.getTime() - now.getTime() > 28 * 3_600_000) start.setDate(start.getDate() - 1);
     const end = new Date(start.getTime() + 30 * 60_000);
     const th = addThread(p, 'Chat next week', [
       {

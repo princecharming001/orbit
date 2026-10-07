@@ -35,6 +35,22 @@ interface LabelSlot {
 const LABEL_GAP = 14;
 const LABEL_FONT_PX = 11;
 
+const COARSE_QUERY = '(hover: none) and (pointer: coarse)';
+/** True on phones and tablets: no hover, a finger instead of a mouse. Follows changes (a tablet with a mouse). */
+export function useCoarsePointer(): boolean {
+  const [coarse, setCoarse] = useState(
+    () => typeof window !== 'undefined' && !!window.matchMedia?.(COARSE_QUERY).matches,
+  );
+  useEffect(() => {
+    const mq = window.matchMedia?.(COARSE_QUERY);
+    if (!mq) return;
+    const on = () => setCoarse(mq.matches);
+    mq.addEventListener?.('change', on);
+    return () => mq.removeEventListener?.('change', on);
+  }, []);
+  return coarse;
+}
+
 /** Fit the orbit (dots plus labels) inside the canvas: labels above and below need room, sides are clamped. */
 export function orbitScale(w: number, h: number, extent: number): number {
   const side = w < 600 ? 10 : 60;
@@ -67,6 +83,8 @@ export function OrbitMap({
   const lastTouch = useRef(0);
   const reduced =
     typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  // On touch screens the orbit holds still: a moving dot is hard to tap and its name card would drift away.
+  const coarse = useCoarsePointer();
   // The canvas is absolutely positioned, so the wrapper's size comes from the page layout, never from the canvas.
   useLayoutEffect(() => {
     const el = wrapRef.current;
@@ -122,7 +140,8 @@ export function OrbitMap({
     let raf = 0;
     let lastDraw = 0;
     dirtyRef.current = true;
-    const moving = rotate && !paused && !reduced && !highlightPath;
+    const moving = rotate && !coarse && !paused && !reduced && !highlightPath;
+    canvas.dataset.moving = String(moving);
     const animating = moving || pending.size > 0;
     const draw = (now: number) => {
       raf = requestAnimationFrame(draw);
@@ -187,6 +206,9 @@ export function OrbitMap({
         pos.push({ id: n.id, x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r, r: (n.size * scale) / 2 });
       }
       posRef.current = pos;
+      // test hook: where the strongest person's dot is, in CSS px from the canvas's top left
+      const first = pos.find((q) => nodeById.get(q.id)?.person);
+      if (first) canvas.dataset.firstDot = `${Math.round(first.x)},${Math.round(first.y)}`;
       const byId = new Map(pos.map((p) => [p.id, p]));
       // path lines
       if (highlightPath) {
@@ -325,6 +347,7 @@ export function OrbitMap({
     hover,
     paused,
     rotate,
+    coarse,
     reduced,
     highlightPath,
     highlightIds,

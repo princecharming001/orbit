@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { buildDemoDataset } from '../demo/seed';
 import {
   CONNECTORS_PER_LARGE_GROUP,
   describePairHop,
@@ -224,6 +225,33 @@ describe('computeStrength: reciprocity (GRL-01, GRL-02)', () => {
   it('two recent meetings still make a strong tie', () => {
     const two = computeStrength([at('meeting', 1, 1), at('meeting', 3, 1)], NOW).strength;
     expect(strengthTier(two)).toBe('strong');
+  });
+});
+
+describe('computeStrength: canonical tiers (GRL-17)', () => {
+  const tier = (tps: Touchpoint[]) => strengthTier(computeStrength(tps, NOW).strength);
+  it('two meetings in the last month make a strong tie, wherever in the month they fell', () => {
+    expect(tier([at('meeting', 20, 1), at('meeting', 30, 1, 1)])).toBe('strong');
+    expect(tier([at('meeting', 10, 1), at('meeting', 25, 1, 1)])).toBe('strong');
+    expect(tier([at('meeting', 30, 1), at('meeting', 31, 1, 1)])).toBe('strong');
+  });
+  it('one coffee chat is a medium tie, and old meetings drift back to medium', () => {
+    expect(tier([at('meeting', 1, 1)])).toBe('medium');
+    expect(tier([at('meeting', 60, 1), at('meeting', 62, 1, 1)])).toBe('medium');
+    expect(tier([at('meeting', 200, 1)])).toBe('weak');
+  });
+  it('a single old touch stays near zero', () => {
+    expect(computeStrength([at('email_in', 365, 0.7)], NOW).strength).toBeLessThan(0.15);
+  });
+  it('treats a touch a few hours ahead as happening now, and ignores ones further out', () => {
+    const later = new Date(NOW.getTime() + 6 * 3_600_000).toISOString();
+    const soon = computeStrength([{ ...at('meeting', 0, 1), occurredAt: later }], NOW);
+    const now = computeStrength([at('meeting', 0, 1)], NOW);
+    expect(soon.strength).toBeCloseTo(now.strength, 10);
+    expect(soon.breakdown.recency).toBeLessThanOrEqual(1);
+    expect(soon.breakdown.lastInteractionAt).toBe(NOW.toISOString());
+    const nextWeek = new Date(NOW.getTime() + 7 * 86_400_000).toISOString();
+    expect(computeStrength([{ ...at('meeting', 0, 1), occurredAt: nextWeek }], NOW).strength).toBe(0);
   });
 });
 
@@ -543,8 +571,34 @@ describe('orbitLayout at scale (GRL-05, GRL-07)', () => {
     ];
     expect(orbitLayout(people, new Map()).groups.length).toBe(2);
   });
+  it('keys wedges by organization or normalised name, and labels a dangling org id by the raw name (GRL-18)', () => {
+    const orgs = new Map<string, Organization>([
+      ['o1', { id: 'o1', name: 'Stripe', nameNormalized: 'stripe', domains: [] } as unknown as Organization],
+    ]);
+    const people = [
+      { ...person('a', 'Stripe'), currentOrganizationId: 'o1' },
+      person('b', 'Stripe'),
+      person('c', 'Stripe, Inc.'),
+      { ...person('d', 'Figma'), currentOrganizationId: 'missing' },
+    ];
+    const groups = orbitLayout(people, orgs).groups;
+    expect(groups.length).toBe(2);
+    expect(groups.map((g) => g.label).sort()).toEqual(['Figma', 'Stripe']);
+  });
   it('rotates every ring together so wedges stay aligned', () => {
     for (const t of [0, 10_000, 60_000, 400_000])
       expect(new Set([0, 1, 2].map((r) => ringRotation(r as 0 | 1 | 2, t))).size).toBe(1);
+  });
+});
+
+describe('demo seed: the upcoming chat is always inside the prep window', () => {
+  it('at any hour of the day the demo has a chat to prep for in the next 30 hours', () => {
+    for (const hour of [0, 1, 5, 7, 9, 12, 18, 23]) {
+      const now = new Date(2026, 9, 7, hour, 22);
+      const ev = buildDemoDataset({ now }).events.find((e) => e.id === 'ev_tomorrow')!;
+      const hours = (new Date(ev.startAt).getTime() - now.getTime()) / 3_600_000;
+      expect(hours, `loaded at ${hour}:22`).toBeGreaterThan(0);
+      expect(hours, `loaded at ${hour}:22`).toBeLessThanOrEqual(30);
+    }
   });
 });

@@ -223,6 +223,11 @@ async function checkMap(page: Page, info: TestInfo, name: string) {
   await expect(finder).toBeInViewport();
   const fb = (await finder.boundingBox())!;
   expect(fb.x + fb.width).toBeLessThanOrEqual(vp.width + 1);
+  // the whole panel (legend, instructions, path finder) is on screen horizontally, never cut off (UI-07)
+  const panel = (await page.getByTestId('map-panel').boundingBox())!;
+  expect(panel.x).toBeGreaterThanOrEqual(0);
+  expect(panel.x + panel.width).toBeLessThanOrEqual(vp.width + 1);
+  expect(panel.height).toBeGreaterThan(150);
   await info.attach(`map-${name}-${vp.width}x${vp.height}`, {
     body: await page.screenshot({ fullPage: false }),
     contentType: 'image/png',
@@ -293,6 +298,70 @@ test.describe('Map readability', () => {
     await page.getByTestId('reach-input').fill('stripe inc');
     await page.getByTestId('reach-input').press('Enter');
     await expect(page.getByText(/people there now/i)).toBeVisible();
+  });
+});
+
+test.describe('Map on a touch phone (UI-18)', () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+
+  test('a tap names the person without leaving the map, and the reach routes are on screen', async ({
+    page,
+  }, info) => {
+    await loadDemo(page);
+    await page.goto('map');
+    const canvas = page.getByTestId('orbit-canvas');
+    await expect
+      .poll(async () => await canvas.getAttribute('data-first-dot'), { timeout: 10_000 })
+      .toBeTruthy();
+    // the orbit holds still on touch screens, and the copy talks about taps, not hovering
+    await expect(canvas).toHaveAttribute('data-moving', 'false');
+    await expect(page.getByText(/tap a person to see who they are/i)).toBeVisible();
+    await expect(page.getByText(/hover/i)).toHaveCount(0);
+    const [x, y] = (await canvas.getAttribute('data-first-dot'))!.split(',').map(Number) as [number, number];
+    const box = (await canvas.boundingBox())!;
+    await page.touchscreen.tap(box.x + x, box.y + y);
+    const card = page.getByTestId('map-tooltip');
+    await expect(card).toBeVisible();
+    await expect(page).toHaveURL(/\/map$/);
+    await expect(card.getByTestId('map-open-person')).toBeVisible();
+    const name = (await card.locator('.font-medium').first().innerText()).trim();
+    expect(name.length).toBeGreaterThan(1);
+    await info.attach('map-touch-tooltip-390x844', {
+      body: await page.screenshot({ fullPage: false }),
+      contentType: 'image/png',
+    });
+    // a second tap on the same dot opens the profile
+    await page.touchscreen.tap(box.x + x, box.y + y);
+    await expect(page).toHaveURL(/\/people\//);
+
+    // reach on a phone: the first route shows without scrolling, the next step is reachable
+    const targetId: string = await page.evaluate(async () => {
+      const open = indexedDB.open('orbit');
+      const idb: IDBDatabase = await new Promise((res, rej) => {
+        open.onsuccess = () => res(open.result);
+        open.onerror = () => rej(open.error);
+      });
+      const all: { id: string; strength: number; isHuman: boolean }[] = await new Promise((res) => {
+        const r = idb.transaction('people').objectStore('people').getAll();
+        r.onsuccess = () => res(r.result);
+      });
+      idb.close();
+      return all.filter((p) => p.isHuman && p.strength < 0.3).sort((a, b) => a.id.localeCompare(b.id))[0]!.id;
+    });
+    await page.goto(`map?reach=${targetId}`);
+    const route = page.getByTestId('reach-path').first();
+    await expect(route).toBeVisible({ timeout: 15_000 });
+    await expect(route).toBeInViewport();
+    const next = page.getByRole('button', { name: /^(ask .+ for an intro|write to .+ directly)$/i });
+    await next.scrollIntoViewIfNeeded();
+    await expect(next).toBeInViewport();
+    const nb = (await next.boundingBox())!;
+    expect(nb.x + nb.width).toBeLessThanOrEqual(391);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+    await info.attach('map-touch-reach-390x844', {
+      body: await page.screenshot({ fullPage: false }),
+      contentType: 'image/png',
+    });
   });
 });
 

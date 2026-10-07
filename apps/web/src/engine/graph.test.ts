@@ -10,6 +10,7 @@ import {
   reachCompany,
   reachGraphFrom,
   reachPerson,
+  targetCompanyMatcher,
 } from './graph';
 import { ingestEmails, type RawEmail } from './ingest';
 
@@ -35,6 +36,26 @@ const person = (id: string, extra: Partial<Person> = {}): Person => ({
 });
 const org = (id: string, name: string, nameNormalized: string): Organization =>
   ({ id, name, nameNormalized, domains: [] }) as unknown as Organization;
+
+describe('map "Target companies" filter (GRL-18)', () => {
+  const orgs = new Map([['o1', org('o1', 'Stripe', 'stripe')]]);
+  it('matches by organization id or by normalised name on both sides', () => {
+    const isTarget = targetCompanyMatcher([{ nameRaw: 'Stripe' }], orgs);
+    expect(isTarget({ currentOrganizationId: 'o1' })).toBe(true);
+    expect(isTarget({ currentOrganizationRaw: 'Stripe, Inc.' })).toBe(true);
+    expect(isTarget({ currentOrganizationRaw: 'STRIPE' })).toBe(true);
+    expect(isTarget({ currentOrganizationRaw: 'Stripe Partners Fund' })).toBe(false);
+    expect(isTarget({ currentOrganizationRaw: 'Figma' })).toBe(false);
+    expect(isTarget({})).toBe(false);
+  });
+  it('matches a target saved with an organization id whatever its spelling', () => {
+    const isTarget = targetCompanyMatcher([{ organizationId: 'o1', nameRaw: 'stripe inc' }], orgs);
+    expect(isTarget({ currentOrganizationId: 'o1' })).toBe(true);
+    expect(isTarget({ currentOrganizationRaw: 'Stripe' })).toBe(true);
+    // an id that points to a missing org falls back to the raw name
+    expect(isTarget({ currentOrganizationId: 'gone', currentOrganizationRaw: 'Stripe, Inc.' })).toBe(true);
+  });
+});
 
 describe('reach search ranking (GRL-14)', () => {
   const orgs = [

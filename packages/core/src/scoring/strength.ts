@@ -16,6 +16,12 @@ export const TOUCHPOINT_WEIGHTS: Record<TouchpointKind, number> = {
 
 export const HALF_LIFE_DAYS = 90;
 export const RECENCY_HALF_LIFE_DAYS = 45;
+/**
+ * Raw evidence at which the saturating curve reaches 63%. Chosen so the canonical cases land where a student
+ * would put them: two meetings in the last month is a strong tie (inner ring), one coffee chat yesterday is
+ * medium, and the same two meetings six weeks or more ago drift back to medium.
+ */
+export const SATURATION_RAW = 1.6;
 const LN2 = Math.LN2;
 const DAY = 86_400_000;
 
@@ -50,9 +56,11 @@ export function computeStrength(
   const counts: Partial<Record<TouchpointKind, number>> = {};
   const t = now.getTime();
   for (const tp of touchpoints) {
-    const ti = new Date(tp.occurredAt).getTime();
-    if (Number.isNaN(ti) || ti > t + DAY) continue;
-    const ageDays = Math.max(0, (t - ti) / DAY);
+    const at = new Date(tp.occurredAt).getTime();
+    if (Number.isNaN(at) || at > t + DAY) continue;
+    // a touch a few hours "in the future" (clock skew, a meeting later today) counts as happening now
+    const ti = Math.min(at, t);
+    const ageDays = (t - ti) / DAY;
     const decayed = tp.weight * Math.exp((-LN2 * ageDays) / HALF_LIFE_DAYS);
     if (TWO_WAY.has(tp.kind)) twoWay += decayed;
     else if (tp.kind === 'email_cc') cc += decayed;
@@ -67,9 +75,9 @@ export function computeStrength(
   const raw =
     twoWay + (reciprocal ? oneWay : Math.min(oneWay, ONE_WAY_RAW_CAP)) + Math.min(cc, CC_RAW_CAP) + connected;
   // "We talked yesterday" only counts for real touches: a CC yesterday says nothing about the tie.
-  const daysSinceLast = Math.max(0, (t - (lastActive ?? last)) / DAY);
+  const daysSinceLast = (t - (lastActive ?? last)) / DAY;
   const recency = Math.exp((-LN2 * daysSinceLast) / RECENCY_HALF_LIFE_DAYS);
-  const saturated = 1 - Math.exp(-raw / 2);
+  const saturated = 1 - Math.exp(-raw / SATURATION_RAW);
   const recencyWeight = reciprocal ? 0.15 : lastActive === undefined ? 0.05 : 0.075;
   let strength = Math.min(1, Math.max(0, recencyWeight * recency + 0.85 * saturated));
   if (!reciprocal) strength = Math.min(strength, UNRECIPROCATED_CEILING);
@@ -92,8 +100,12 @@ export function isReciprocal(counts: Partial<Record<TouchpointKind, number>> | u
   return false;
 }
 
+/** Tier thresholds (inner ring, middle ring); the product spec's defaults. */
+export const STRONG_TIE = 0.6;
+export const MEDIUM_TIE = 0.3;
+
 export function strengthTier(strength: number): 'strong' | 'medium' | 'weak' {
-  if (strength >= 0.6) return 'strong';
-  if (strength >= 0.3) return 'medium';
+  if (strength >= STRONG_TIE) return 'strong';
+  if (strength >= MEDIUM_TIE) return 'medium';
   return 'weak';
 }

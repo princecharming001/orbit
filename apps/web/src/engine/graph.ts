@@ -1,4 +1,4 @@
-import type { Affiliation, Edge, Organization, Person, ReachPath } from '@orbit/core';
+import type { Affiliation, Edge, Organization, Person, ReachPath, TargetCompany } from '@orbit/core';
 import {
   addEdge,
   bestPathsFrom,
@@ -14,6 +14,41 @@ import {
   type WeightedGraph,
 } from '@orbit/core';
 import { db } from '../db/schema';
+
+/** The normalised company key for a person: their organization's normalised name, else their raw company. */
+function companyKey(
+  orgId: string | undefined,
+  raw: string | undefined,
+  orgs: Map<string, Organization>,
+): string {
+  const org = orgId ? orgs.get(orgId) : undefined;
+  return org?.nameNormalized || normalizeCompany(org?.name || raw);
+}
+
+/**
+ * Builds the map's "Target companies" filter. A person matches a target company by organization id, or by
+ * normalised name on both sides, so "Stripe, Inc." in an import matches the target "Stripe".
+ */
+export function targetCompanyMatcher(
+  targets: Pick<TargetCompany, 'organizationId' | 'nameRaw'>[],
+  orgs: Map<string, Organization>,
+): (p: Pick<Person, 'currentOrganizationId' | 'currentOrganizationRaw'>) => boolean {
+  const ids = new Set<string>();
+  const names = new Set<string>();
+  for (const t of targets) {
+    if (t.organizationId) ids.add(t.organizationId);
+    for (const n of [normalizeCompany(t.nameRaw), companyKey(t.organizationId, undefined, orgs)])
+      if (n) names.add(n);
+  }
+  return (p) => {
+    if (p.currentOrganizationId && ids.has(p.currentOrganizationId)) return true;
+    const key = companyKey(p.currentOrganizationId, p.currentOrganizationRaw, orgs);
+    if (key && names.has(key)) return true;
+    // an org record may be named differently from what the person's profile says
+    const raw = normalizeCompany(p.currentOrganizationRaw);
+    return !!raw && names.has(raw);
+  };
+}
 
 export async function recomputeEdges(userId: string): Promise<number> {
   const [people, affiliations, orgs, threads, events] = await Promise.all([

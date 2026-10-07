@@ -4,7 +4,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { Search, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { OrbitMap } from '../components/OrbitMap';
+import { OrbitMap, useCoarsePointer } from '../components/OrbitMap';
 import { db } from '../db/schema';
 import { draftMessage } from '../engine/brief';
 import {
@@ -14,6 +14,7 @@ import {
   rankReachTargets,
   reachCompany,
   reachPerson,
+  targetCompanyMatcher,
 } from '../engine/graph';
 import { useSession } from '../state/session';
 import { Avatar, Button, Card, Chip, cx, Input, useToast } from '../ui';
@@ -25,6 +26,7 @@ export function MapPage() {
   const nav = useNavigate();
   const toast = useToast();
   const reachParam = params.get('reach');
+  const touch = useCoarsePointer();
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<'all' | 'targets' | 'alumni' | 'chats' | 'recent'>('all');
   // undefined while routes are being computed, so the panel never claims "no route" before it knows
@@ -67,11 +69,7 @@ export function MapPage() {
     [chats],
   );
   const pendingIds = useMemo(() => new Set(pending.map((s) => s.personId!)), [pending]);
-  const targetOrgIds = useMemo(
-    () => new Set(tcs.map((t) => t.organizationId).filter((x): x is string => !!x)),
-    [tcs],
-  );
-  const targetNames = useMemo(() => new Set(tcs.map((t) => normalizeCompany(t.nameRaw))), [tcs]);
+  const isTarget = useMemo(() => targetCompanyMatcher(tcs, orgMap), [tcs, orgMap]);
   const visible = useMemo(() => people.filter((p) => p.isHuman && !p.hiddenAt), [people]);
   const highlightIds = useMemo(() => {
     if (filter === 'all') return undefined;
@@ -80,13 +78,7 @@ export function MapPage() {
       visible
         .filter((p) =>
           filter === 'targets'
-            ? (!!p.currentOrganizationId && targetOrgIds.has(p.currentOrganizationId)) ||
-              targetNames.has(
-                normalizeCompany(
-                  (p.currentOrganizationId && orgMap.get(p.currentOrganizationId)?.name) ||
-                    p.currentOrganizationRaw,
-                ),
-              )
+            ? isTarget(p)
             : filter === 'alumni'
               ? p.isAlumni
               : filter === 'chats'
@@ -95,7 +87,7 @@ export function MapPage() {
         )
         .map((p) => p.id),
     );
-  }, [filter, visible, targetNames, targetOrgIds, orgMap, stages]);
+  }, [filter, visible, isTarget, stages]);
   const reachMode = !!reachParam;
   // resolve reach param (person id or '1' = open search)
   useEffect(() => {
@@ -294,7 +286,11 @@ export function MapPage() {
       </div>
       <div className="lg:flex-1 lg:min-h-0 grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_340px]">
         <div
-          className="relative min-w-0 overflow-hidden h-[min(72vh,560px)] min-h-[340px] lg:h-auto lg:min-h-[420px] bg-[radial-gradient(circle_at_center,_#fff_0%,_#fafafc_70%)]"
+          className={cx(
+            'relative min-w-0 overflow-hidden lg:h-auto lg:min-h-[420px] bg-[radial-gradient(circle_at_center,_#fff_0%,_#fafafc_70%)]',
+            // on phones the routes sit under the canvas, so in reach mode the canvas leaves room for them
+            reachMode ? 'h-[min(48vh,420px)] min-h-[280px]' : 'h-[min(72vh,560px)] min-h-[340px]',
+          )}
           data-testid="orbit-stage"
         >
           <OrbitMap
@@ -310,7 +306,10 @@ export function MapPage() {
             focusId={target?.id}
           />
           {hovered && !reachMode && (
-            <div className="absolute left-3 right-3 sm:right-auto bottom-3 bg-canvas border border-line rounded-[12px] p-3 shadow-[var(--shadow-card)] sm:w-[260px] fade-up">
+            <div
+              className="absolute left-3 right-3 sm:right-auto bottom-3 bg-canvas border border-line rounded-[12px] p-3 shadow-[var(--shadow-card)] sm:w-[260px] fade-up"
+              data-testid="map-tooltip"
+            >
               <div className="flex items-center gap-2">
                 <Avatar name={hovered.displayName} src={hovered.photoUrl} id={hovered.id} size={32} />
                 <div className="min-w-0 flex-1">
@@ -321,7 +320,7 @@ export function MapPage() {
                 </div>
                 <Link
                   to={`/people/${hovered.id}`}
-                  className="sm:hidden text-[12px] text-accent shrink-0"
+                  className={cx('text-[12px] text-accent shrink-0', touch ? '' : 'sm:hidden')}
                   data-testid="map-open-person"
                 >
                   Open
@@ -334,13 +333,18 @@ export function MapPage() {
             </div>
           )}
         </div>
-        <aside className="min-w-0 border-t lg:border-t-0 lg:border-l border-line bg-canvas lg:overflow-y-auto scroll-thin p-4 space-y-3">
+        <aside
+          className="min-w-0 border-t lg:border-t-0 lg:border-l border-line bg-canvas lg:overflow-y-auto scroll-thin p-4 space-y-3"
+          data-testid="map-panel"
+        >
           {!reachMode && (
             <>
               <div className="text-[13px] text-ink-2">
-                Hover or tap a person for their name; click to open their profile. Companies read as wedges;
-                the thin coloured ring is pipeline stage; a pulse means a pending suggestion. A grey dot with
-                a number stands for more people at that company.
+                {touch
+                  ? 'Tap a person to see who they are, and tap again to open their profile.'
+                  : 'Hover over a person to see who they are, and click to open their profile.'}{' '}
+                Companies read as wedges. The thin coloured ring is pipeline stage, and a pulse means a
+                pending suggestion. A grey dot with a number stands for more people at that company.
               </div>
               <Card padded>
                 <div className="font-medium text-[13px] mb-2">Legend</div>
