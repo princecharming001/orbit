@@ -104,6 +104,46 @@ describe('proper nouns in a dictated note (L20)', () => {
   });
 });
 
+describe('employer recasing leaves everyday words alone (L20)', () => {
+  const people = [{ key: 'r', first: 'Rae', last: 'Lin' }];
+  const textOf = (r: ReturnType<typeof heuristicNoteExtraction>) =>
+    [...r.facts.flatMap((f) => [f.text, f.evidence ?? '']), r.summary].join(' | ');
+  it('does not recase a firm named after a verb or noun where the word is used as one', () => {
+    const r = heuristicNoteExtraction(
+      'call with rae. she said it took her two months to ramp up and she grew up in boulder. she said to target the fall and that i am back to square one. she told me to block time',
+      { people, organizations: ['Ramp', 'Target', 'Square', 'Block'] },
+    );
+    const all = textOf(r);
+    expect(all).toMatch(/\bto ramp up\b/);
+    expect(all).toMatch(/\bto target the fall\b/);
+    expect(all).toMatch(/\bto block time\b/);
+    expect(all).not.toMatch(/\b(Ramp|Target|Square|Block)\b/);
+    expect(all).toMatch(/\bBoulder\b/);
+  });
+  it('still recases the employer where it names the firm', () => {
+    const r = heuristicNoteExtraction(
+      'call with rae. she works at ramp and joined ramp from square, she left bain last year',
+      {
+        people,
+        organizations: ['Ramp', 'Square', 'Bain & Company'],
+      },
+    );
+    const all = textOf(r);
+    expect(all).toMatch(/works at Ramp and joined Ramp from Square/);
+    expect(all).toMatch(/left Bain\b/);
+  });
+  it('keeps the modal "may" after this, next or last', () => {
+    const r = heuristicNoteExtraction(
+      'call with rae. she said this may take a few weeks. she started there last may and she moves teams next may.',
+      { people },
+    );
+    const all = textOf(r);
+    expect(all).toMatch(/\bthis may take\b/);
+    expect(all).toMatch(/\blast May\b/);
+    expect(all).toMatch(/\bnext May\b/);
+  });
+});
+
 describe('NRC-14: advice is not a promise', () => {
   it('keeps "she recommended I apply" as advice without a made-up due date', () => {
     const r = heuristicNoteExtraction('She recommended I apply to the APM program.', 'Maya');

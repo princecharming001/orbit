@@ -172,6 +172,13 @@ const PROPER_BY_KEY = new Map(PROPER_NOUNS.map((n) => [n.toLowerCase().replace(/
 const MONTH_RE = new RegExp(`\\b(${MONTHS})\\b`, 'gi');
 const WEEKDAY_RE = new RegExp(`\\b(${WEEKDAYS})\\b`, 'gi');
 
+/**
+ * What may follow the month in "this may" / "next may" / "last may": the end of the clause, a date, or a word that
+ * cannot follow the modal ("this may i'm in nyc", "last may and june"). "this may take a few weeks" stays a modal.
+ */
+const AFTER_MONTH_MAY =
+  /^(?:\s*$|\s*[,.;:!?)'’]|\s+\d|\s+(?:and|or|but|so|then|when|while|if|because|is|was|will|would|too|as|i|i'm|she|he|we|they|you|at|in|on|for|to|from|through|until|graduation|break|deadline|cycle)\b)/i;
+
 /** Capitalise months, weekdays and well-known places; "may" only where it is the month ("in may", "may 3"). */
 function capitalizeProper(s: string): string {
   return s
@@ -180,9 +187,10 @@ function capitalizeProper(s: string): string {
         const before = all.slice(0, at);
         const after = all.slice(at + m.length);
         const isMonth =
-          /\b(in|by|since|until|till|before|after|early|mid|late|of|this|next|last|end of|through)\s+$/i.test(
-            before,
-          ) || /^\s+\d/.test(after);
+          /\b(in|by|since|until|till|before|after|early|mid|late|of|end of|through)\s+$/i.test(before) ||
+          /^\s+\d/.test(after) ||
+          // "this", "next" and "last" also come before the modal ("this may take a while")
+          (/\b(this|next|last)\s+$/i.test(before) && AFTER_MONTH_MAY.test(after));
         if (!isMonth) return m;
       }
       return m[0]!.toUpperCase() + m.slice(1).toLowerCase();
@@ -784,20 +792,28 @@ export function heuristicNoteExtraction(
   const reportedOffer = new RegExp(`\\b(?:${subjAlt}) (?:said|says|mentioned) (?:she|he|they)['’]?d\\b`, 'i');
 
   const nameOf = (key: string) => people.find((p) => p.key === key)?.first;
-  // an employer name is only recased where it reads as one ("from figma", "at bain"), so a firm named after an
-  // everyday word ("Target", "Ramp") does not recase "my target role"
+  // an employer name is only recased where it reads as one ("from figma", "at bain", "works for ramp"), so a firm
+  // named after an everyday word ("Target", "Ramp", "Square") keeps "my target role", "to ramp up", "back to square
+  // one" and "to block time" as written: bare "to", "for", "with" and "of" come before verbs and nouns, so they only
+  // count after a word about a job, and a following particle or object ("ramp up", "target the fall") rules it out
   const orgNames = [
     ...new Set(
       (opts.organizations ?? []).flatMap((o) => {
         const full = o.trim();
-        const head = full.split(/\s+(?:&|and|inc\.?|llc|co\.?|corp\.?|company|group)\b/i)[0]!.trim();
+        const head = full.split(/\s+(?:&|(?:and|inc|llc|co|corp|company|group)\b)/i)[0]!.trim();
         return [full, head].filter((n) => n.length >= 2);
       }),
     ),
   ].sort((a, b) => b.length - a.length);
+  const orgCue =
+    'at|from|joined|joining|join|left|leaving|' +
+    '(?:work|works|worked|working|intern|interns|interned|interning|internship|job|role|offer|position|team|' +
+    'interview|interviews|interviewed|interviewing|recruiter|recruiting|moved|moving|move|switched|switching|' +
+    'switch|transferred|transferring|returned|returning|return|went)\\s+(?:at|for|with|to)|' +
+    '(?:head|founder|cofounder|co-founder|ceo|cto|coo|cfo|vp|director|president|alum|alumni|alumna|alumnus)\\s+of';
   const orgRe = orgNames.length
     ? new RegExp(
-        `\\b(at|from|for|with|joined|joining|join|to|left|leaving|of)\\s+(${orgNames.map(escapeRe).join('|')})\\b`,
+        `\\b(${orgCue})\\s+(${orgNames.map(escapeRe).join('|')})\\b(?!\\s+(?:up|down|out|off|over|back|away|one|the|a|an|my|your|his|her|their|our|its|it|them|him|me|us|this|that|these|those)\\b)`,
         'gi',
       )
     : undefined;
