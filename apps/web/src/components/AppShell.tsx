@@ -55,6 +55,7 @@ export function AppShell() {
         </div>
         <button
           onClick={() => setPalette(true)}
+          aria-label="Search (Ctrl or Command K)"
           className="mx-3 mb-3 h-9 rounded-lg border border-line bg-canvas flex items-center gap-2 px-3 text-ink-3 text-[13px] hover:bg-canvas-2"
         >
           <Search size={14} /> Search{' '}
@@ -63,7 +64,7 @@ export function AppShell() {
             <Kbd>K</Kbd>
           </span>
         </button>
-        <nav className="px-2 flex flex-col gap-0.5">
+        <nav className="px-2 flex flex-col gap-0.5" aria-label="Main">
           {NAV.map(({ to, label, icon: Icon }) => (
             <NavLink
               key={to}
@@ -116,30 +117,59 @@ export function AppShell() {
         </div>
       </aside>
       <div className="flex-1 min-w-0 flex flex-col">
-        <header className="md:hidden h-12 border-b border-line flex items-center gap-2 px-3">
-          <Logo /> <span className="font-semibold">Orbit</span>
-          <button onClick={() => setPalette(true)} className="ml-auto p-2" aria-label="Search">
+        <header className="md:hidden h-12 border-b border-line flex items-center gap-1 px-3">
+          <Logo /> <span className="font-semibold ml-1">Orbit</span>
+          <button
+            onClick={() => setPalette(true)}
+            className="ml-auto p-2 rounded-md hover:bg-canvas-2"
+            aria-label="Search"
+            title="Search people and actions"
+          >
             <Search size={18} />
           </button>
+          <NavLink
+            to="/notes/new"
+            className="p-2 rounded-md hover:bg-canvas-2"
+            aria-label="Add note"
+            title="Add a note about a conversation"
+            data-testid="mobile-add-note"
+          >
+            <Plus size={18} />
+          </NavLink>
+          <NavLink
+            to="/settings"
+            className={({ isActive }) => cx('p-2 rounded-md hover:bg-canvas-2', isActive && 'text-accent')}
+            aria-label="Settings"
+            title="Settings"
+            data-testid="mobile-settings"
+          >
+            <Settings size={18} />
+          </NavLink>
         </header>
         <main className="flex-1 min-h-0 overflow-y-auto scroll-thin">
           <div className="max-w-[1120px] mx-auto px-4 md:px-8 py-6 pb-24 md:pb-8">
             <Outlet />
           </div>
         </main>
-        <nav className="md:hidden border-t border-line bg-canvas grid grid-cols-6 h-14">
+        <nav className="md:hidden border-t border-line bg-canvas grid grid-cols-6 h-14" aria-label="Main">
           {NAV.map(({ to, label, icon: Icon }) => (
             <NavLink
               key={to}
               to={to}
               className={({ isActive }) =>
                 cx(
-                  'flex flex-col items-center justify-center gap-0.5 text-[10px]',
+                  'relative min-w-0 flex flex-col items-center justify-center gap-0.5 text-[10px]',
                   isActive ? 'text-accent' : 'text-ink-3',
                 )
               }
             >
-              <Icon size={18} /> {label}
+              <Icon size={18} aria-hidden />
+              <span className="truncate max-w-full px-0.5">{label}</span>
+              {label === 'Approvals' && pending > 0 && (
+                <span className="absolute top-1.5 left-1/2 ml-2 min-w-4 h-4 px-1 rounded-full bg-accent text-white text-[9px] inline-flex items-center justify-center tabular">
+                  {pending}
+                </span>
+              )}
             </NavLink>
           ))}
         </nav>

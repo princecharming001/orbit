@@ -183,6 +183,8 @@ Implemented in `packages/core/src/pipeline/transitions.ts` and mirrored in `appl
 
 `out_of_office` never transitions; `reschedule` from `scheduled` → `scheduling`. Illegal transitions are rejected and logged.
 
+A chat enters a stage when its evidence happened, not when Orbit read it: `stageEnteredAt` (and `completedAt`, `followedUpAt`) take the message's `sentAt`, the event's end, or the invite's creation time (`created` from Google Calendar), capped at now. A first sync of months of history therefore shows real days in stage, and a chat that ended yesterday says so on its thank-you card.
+
 ---
 
 ## 7. Drafting system (T8)
@@ -307,6 +309,8 @@ Matching the note to people (code): attendee emails → identities; else names i
 `PersonSummary = { summary: string(≤ 600), talking_points: string[](3..5), cites: fact_id[] }`. Regenerated at most hourly per person; cached in `people.summary`.
 
 `PrepBrief = { who: string, why_this_chat_matters: string, what_you_discussed_before: string[], their_recent_changes: string[], questions: string[](5..7), things_to_avoid: string[], follow_through_from_last_time: string[] }`, stored in `suggestions.payload` for the `prep_brief` card and rendered at `/people/[id]/prep`.
+
+Static build (`apps/web/src/engine/prep.ts`). Without an API key the summary is a template written the way a student would write their own notes: "{first} works at {org} as a {title}", the shared school if any, the last real interaction with its kind and a human date in the user's timezone ("You last met on Aug 13", "You last wrote to Jose in Feb 2023"), the number of touches only when it is 2 or more in the last 90 days, and advice/offer facts quoted as whole sentences. Talking points come only from stored facts; there is no generic filler. The Prep tab (`/people/:id?tab=prep`) is built by `buildPrep`: the student's goal for the chat and one ask (a pointer to one more person for a first chat; an application flag after a prior chat, whose goal mentions their advice only when an advice fact is on record; logistics only for recruiters), the calendar slot in the user's timezone with the join link, a research checklist with deep links (their LinkedIn activity, company news, the team page), the student's 30-second intro built only from profile, goals and resume facets (it asks for the resume, or for the roles they are recruiting for, instead of inventing a line or saying placeholder text), five questions from a bank chosen by the person's function (software, product, design, data, banking, consulting, venture, general; a banking or consulting title only counts at a firm in that sector, so an Engagement Manager at a fintech gets the general bank), seniority and recruiter status, and the fixed closing question "Is there anyone else you'd suggest I talk to?". The student ticks the questions they want to lead with; the picks are stored on the chat (`CoffeeChat.prepQuestions`).
 
 ---
 

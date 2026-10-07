@@ -1,4 +1,4 @@
-import { initials } from '@orbit/core';
+import { FUNCTION_LABELS, initials } from '@orbit/core';
 import { X } from 'lucide-react';
 import {
   type ButtonHTMLAttributes,
@@ -14,6 +14,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { Link } from 'react-router-dom';
 
 export function cx(...parts: (string | false | null | undefined)[]): string {
   return parts.filter(Boolean).join(' ');
@@ -196,6 +197,36 @@ export function EmptyState({ title, body, action }: { title: string; body?: stri
   );
 }
 
+/** A dead-end route (a merged person, an old link): say what happened and offer the way back. */
+export function NotFound({
+  title,
+  body,
+  to,
+  linkLabel,
+}: {
+  title: string;
+  body: string;
+  to: string;
+  linkLabel: string;
+}) {
+  return (
+    <div className="py-10" data-testid="not-found">
+      <EmptyState
+        title={title}
+        body={body}
+        action={
+          <Link
+            to={to}
+            className="inline-flex items-center h-9 px-3.5 rounded-lg bg-accent text-white text-[14px] font-medium hover:bg-accent-2"
+          >
+            {linkLabel}
+          </Link>
+        }
+      />
+    </div>
+  );
+}
+
 export function Spinner({ className }: { className?: string }) {
   return (
     <span
@@ -219,7 +250,10 @@ export function Tabs<T extends string>({
   items: { value: T; label: string; count?: number }[];
 }) {
   return (
-    <div className="flex items-center gap-1 border-b border-line mb-4" role="tablist">
+    <div
+      className="flex items-center gap-1 border-b border-line mb-4 overflow-x-auto scroll-thin"
+      role="tablist"
+    >
       {items.map((it) => (
         <button
           key={it.value}
@@ -227,7 +261,7 @@ export function Tabs<T extends string>({
           aria-selected={value === it.value}
           onClick={() => onChange(it.value)}
           className={cx(
-            'px-3 h-9 text-[14px] -mb-px border-b-2 transition-colors',
+            'px-3 h-9 text-[14px] border-b-2 transition-colors shrink-0 whitespace-nowrap',
             value === it.value
               ? 'border-ink text-ink font-medium'
               : 'border-transparent text-ink-3 hover:text-ink',
@@ -243,6 +277,51 @@ export function Tabs<T extends string>({
   );
 }
 
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/** Dialog keyboard behaviour: Escape closes, Tab stays inside, focus moves in on open and back out on close. */
+export function useDialog(open: boolean, onClose: () => void) {
+  const ref = useRef<HTMLDivElement>(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  useEffect(() => {
+    if (!open) return;
+    const previous = document.activeElement as HTMLElement | null;
+    const node = ref.current;
+    const items = () => (node ? [...node.querySelectorAll<HTMLElement>(FOCUSABLE)] : []);
+    // Prefer a field the dialog autofocuses (the palette input); otherwise the first control after the close button.
+    const auto = node?.querySelector<HTMLElement>('[autofocus], [data-autofocus]');
+    (auto ?? items()[1] ?? items()[0] ?? node)?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeRef.current();
+        return;
+      }
+      if (e.key !== 'Tab' || !node) return;
+      const list = items();
+      if (!list.length) return e.preventDefault();
+      const first = list[0]!;
+      const last = list[list.length - 1]!;
+      const active = document.activeElement;
+      if (e.shiftKey && (active === first || !node.contains(active))) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && (active === last || !node.contains(active))) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      if (previous && document.contains(previous)) previous.focus();
+    };
+  }, [open]);
+  return ref;
+}
+
 export function Drawer({
   open,
   onClose,
@@ -256,21 +335,19 @@ export function Drawer({
   children: ReactNode;
   width?: number;
 }) {
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
+  const ref = useDialog(open, onClose);
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-40">
       <div className="absolute inset-0 bg-ink/20" onClick={onClose} />
       <aside
-        className="absolute right-0 top-0 h-full bg-canvas border-l border-line shadow-xl overflow-y-auto scroll-thin fade-up"
+        ref={ref}
+        tabIndex={-1}
+        className="absolute right-0 top-0 h-full bg-canvas border-l border-line shadow-xl overflow-y-auto scroll-thin fade-up focus:outline-none"
         style={{ width: `min(${width}px, 100vw)` }}
         role="dialog"
         aria-modal="true"
+        aria-label={typeof title === 'string' ? title : undefined}
       >
         <div className="sticky top-0 bg-canvas/95 backdrop-blur border-b border-line px-5 h-14 flex items-center justify-between">
           <div className="font-medium truncate">{title}</div>
@@ -297,15 +374,19 @@ export function Modal({
   children: ReactNode;
   width?: number;
 }) {
+  const ref = useDialog(open, onClose);
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-ink/30" onClick={onClose} />
       <div
-        className="relative bg-canvas rounded-[var(--radius-card)] border border-line shadow-xl w-full fade-up"
+        ref={ref}
+        tabIndex={-1}
+        className="relative bg-canvas rounded-[var(--radius-card)] border border-line shadow-xl w-full fade-up focus:outline-none"
         style={{ maxWidth: width }}
         role="dialog"
         aria-modal="true"
+        aria-label={typeof title === 'string' ? title : undefined}
       >
         <div className="px-5 h-14 flex items-center justify-between border-b border-line">
           <div className="font-medium">{title}</div>
@@ -422,4 +503,39 @@ export function relDate(iso: string | undefined, now = new Date()): string {
     day: 'numeric',
     year: d.getFullYear() === now.getFullYear() ? undefined : 'numeric',
   });
+}
+
+/** Chip picker for recruiting functions; stores codes, shows words. Used by onboarding and Settings. */
+export function FunctionPicker({
+  value,
+  onChange,
+  testIdPrefix = 'fn',
+}: {
+  value: string[];
+  onChange: (next: string[]) => void;
+  testIdPrefix?: string;
+}) {
+  const extra = value.filter((v) => !FUNCTION_LABELS[v]);
+  return (
+    <div className="flex flex-wrap gap-2" role="group" aria-label="Functions">
+      {[...Object.entries(FUNCTION_LABELS), ...extra.map((x) => [x, x] as const)].map(([k, l]) => {
+        const on = value.includes(k);
+        return (
+          <button
+            key={k}
+            type="button"
+            aria-pressed={on}
+            onClick={() => onChange(on ? value.filter((x) => x !== k) : [...value, k])}
+            className={cx(
+              'h-8 px-3 rounded-full border text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+              on ? 'bg-ink text-white border-ink' : 'border-line text-ink-2 hover:bg-canvas-2',
+            )}
+            data-testid={`${testIdPrefix}-${k}`}
+          >
+            {l}
+          </button>
+        );
+      })}
+    </div>
+  );
 }

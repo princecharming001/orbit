@@ -1,5 +1,5 @@
 import type { Person, ReachPath } from '@orbit/core';
-import { newId } from '@orbit/core';
+import { newId, REACH_BAND_LABELS, STAGE_LABELS } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Search, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
@@ -211,7 +211,11 @@ export function MapPage() {
           )}
         </div>
         {!reachMode && (
-          <div className="w-full flex gap-1.5 mt-1">
+          <div
+            className="w-full flex gap-1.5 mt-1 overflow-x-auto scroll-thin"
+            role="group"
+            aria-label="Show"
+          >
             {(
               [
                 ['all', 'Everyone'],
@@ -225,7 +229,7 @@ export function MapPage() {
                 key={k}
                 onClick={() => setFilter(k)}
                 className={cx(
-                  'h-7 px-2.5 rounded-full border text-[12px]',
+                  'h-7 px-2.5 rounded-full border text-[12px] shrink-0 whitespace-nowrap',
                   filter === k ? 'bg-ink text-white border-ink' : 'border-line text-ink-2 hover:bg-canvas-2',
                 )}
               >
@@ -261,7 +265,7 @@ export function MapPage() {
               </div>
               <div className="mt-2 flex items-center gap-2 text-[12px] text-ink-3">
                 <StrengthDots v={hovered.strength} />{' '}
-                {stages.get(hovered.id) ? <Chip>{stages.get(hovered.id)!.replace('_', ' ')}</Chip> : null}
+                {stages.get(hovered.id) ? <Chip>{STAGE_LABELS[stages.get(hovered.id)!]}</Chip> : null}
               </div>
             </div>
           )}
@@ -276,8 +280,8 @@ export function MapPage() {
               <Card padded>
                 <div className="font-medium text-[13px] mb-2">Legend</div>
                 <ul className="text-[12px] text-ink-2 space-y-1">
-                  <li>Inner ring: strong ties (closeness ≥ 60)</li>
-                  <li>Middle: 30–60</li>
+                  <li>Inner ring: close ties (closeness 60 and up)</li>
+                  <li>Middle ring: closeness 30 to 60</li>
                   <li>Outer: new or cold</li>
                 </ul>
               </Card>
@@ -328,7 +332,7 @@ export function MapPage() {
                       Route {i + 1} · {p.hops.length} hop{p.hops.length > 1 ? 's' : ''}
                     </span>
                     <Chip tone={p.band === 'strong' ? 'good' : p.band === 'possible' ? 'warn' : 'neutral'}>
-                      {p.band.replace('_', ' ')}
+                      {REACH_BAND_LABELS[p.band]}
                     </Chip>
                   </div>
                   <ol className="mt-2 space-y-1.5 text-[13px]">

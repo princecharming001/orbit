@@ -7,6 +7,7 @@ export * from './entity/resolve';
 export * from './graph/edges';
 export * from './graph/layout';
 export * from './graph/paths';
+export * from './labels';
 export * from './linkedin/csv';
 export * from './notes/extract';
 export * from './pipeline/transitions';

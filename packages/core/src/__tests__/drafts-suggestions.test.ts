@@ -2,11 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { buildDemoDataset } from '../demo/seed';
 import { type DraftContext, generateDraft } from '../drafts/templates';
 import { validateDraft } from '../drafts/validate';
+import { extractProposedTimes } from '../email/triage';
 import { parseConnectionsCsv } from '../linkedin/csv';
 import { recommendPeople } from '../recommend/score';
 import { heuristicResumeParse } from '../resume/parse';
 import { buildStyleCard, defaultStyleCard } from '../style/card';
-import { generateCandidates, selectForBrief } from '../suggestions/rules';
+import { endOfNextBusinessDay, generateCandidates, selectForBrief } from '../suggestions/rules';
 import type { PersonFact } from '../types';
 
 const facts: PersonFact[] = [
@@ -161,6 +162,9 @@ describe('suggestions over the demo dataset', () => {
     expect(kinds).toContain('warm_up_engage');
     expect(kinds).toContain('nurture_checkin');
   });
+  it('writes reasons a person would write: no dashes, no exclamation marks, no internal codes', () => {
+    for (const c of cands) expect(c.reasonText).not.toMatch(/[—–!]|_|\b(swe|ib)\b/);
+  });
   it('selects at most 7 with hard-urgent first and one per person', () => {
     const sel = selectForBrief(cands, new Map());
     expect(sel.length).toBeLessThanOrEqual(7);
@@ -171,6 +175,47 @@ describe('suggestions over the demo dataset', () => {
     ).toBe(true);
     const ids = sel.filter((s) => s.personId).map((s) => s.personId);
     expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
+describe('demo dataset at any time of day', () => {
+  // Loaded at 00:40 the old seed put the "tomorrow 11:30" chat 35 hours out, past the prep window. The demo's chat is
+  // now on the next business day, which the prep rule always covers.
+  it('keeps the scheduled chat inside the prep window and its confirmation email true', () => {
+    for (let h = 0; h < 24; h++) {
+      const now = new Date(2026, 9, 7, h, 40);
+      const ds = buildDemoDataset({ now });
+      const ev = ds.events.find((e) => e.id === 'ev_next')!;
+      const hours = (new Date(ev.startAt).getTime() - now.getTime()) / 3_600_000;
+      expect(hours, `loaded at ${h}:40`).toBeGreaterThanOrEqual(2);
+      expect(new Date(ev.startAt).getTime(), `loaded at ${h}:40`).toBeLessThanOrEqual(
+        endOfNextBusinessDay(now),
+      );
+      const chat = ds.chats.find((c) => c.scheduledEventId === ev.id)!;
+      // the latest inbound message (the move) is the one that names the chat's current time
+      const inbound = ds.messages.filter((m) => m.threadId === chat.threadId && m.direction === 'inbound');
+      const reply = inbound[inbound.length - 1]!;
+      const said = extractProposedTimes(reply.bodyText, new Date(reply.sentAt));
+      expect(said[0]?.startIso).toBe(ev.startAt);
+      const kinds = generateCandidates({
+        userId: ds.user.id,
+        now,
+        settings: ds.settings,
+        people: new Map(ds.people.map((p) => [p.id, p])),
+        chats: ds.chats,
+        lastInboundByChat: new Map(),
+        events: ds.events,
+        actionItems: [],
+        factsByPerson: new Map(),
+        targetCompanies: ds.targetCompanies,
+        recommendations: [],
+        dismissCounts: new Map(),
+        outreachSentThisWeek: 0,
+        freeSlotsIso: [],
+        recentlyContacted: new Set(),
+      }).map((c) => c.kind);
+      expect(kinds, `loaded at ${h}:40`).toContain('prep_brief');
+    }
   });
 });
 

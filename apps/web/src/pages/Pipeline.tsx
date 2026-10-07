@@ -3,6 +3,7 @@ import { ACTIVE_STAGES, CLOSED_STAGES, STAGE_LABELS } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { KIND_LABEL } from '../components/SuggestionCard';
 import { db } from '../db/schema';
 import { applyStage } from '../engine/stages';
 import { useSession } from '../state/session';
@@ -98,12 +99,13 @@ export function Pipeline() {
             { value: 'companies', label: 'Companies' },
           ]}
         />
-        <div className="ml-auto flex items-center gap-2 -mt-4">
+        <div className="sm:ml-auto flex flex-wrap items-center gap-2 sm:-mt-4 w-full sm:w-auto">
           <Input
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder="Search name or company"
-            className="w-56"
+            aria-label="Search chats by name or company"
+            className="w-full sm:w-56"
           />
           <label className="text-[13px] inline-flex items-center gap-1.5">
             <input type="checkbox" checked={onlyTargets} onChange={(e) => setOnlyTargets(e.target.checked)} />{' '}
@@ -111,7 +113,7 @@ export function Pipeline() {
           </label>
           <label className="text-[13px] inline-flex items-center gap-1.5">
             <input type="checkbox" checked={showClosed} onChange={(e) => setShowClosed(e.target.checked)} />{' '}
-            Closed
+            Show closed
           </label>
         </div>
       </div>
@@ -143,14 +145,19 @@ export function Pipeline() {
                         key={chat.id}
                         draggable
                         onDragStart={(e) => e.dataTransfer.setData('text/chat', chat.id)}
-                        onClick={() => nav(`/people/${person.id}`)}
-                        className="bg-canvas border border-line rounded-[10px] p-3 cursor-pointer hover:shadow-[var(--shadow-card)] transition-shadow"
+                        className="relative bg-canvas border border-line rounded-[10px] p-3 hover:shadow-[var(--shadow-card)] focus-within:ring-2 focus-within:ring-accent/40 transition-shadow"
                         data-testid={`chat-card-${stage}`}
                       >
                         <div className="flex items-center gap-2">
                           <Avatar name={person.displayName} src={person.photoUrl} id={person.id} size={28} />
                           <div className="min-w-0">
-                            <div className="text-[13.5px] font-medium truncate">{person.displayName}</div>
+                            {/* The name link stretches over the whole card, so the card is one tab stop and opens on Enter. */}
+                            <Link
+                              to={`/people/${person.id}`}
+                              className="block text-[13.5px] font-medium truncate focus:outline-none after:absolute after:inset-0 after:content-['']"
+                            >
+                              {person.displayName}
+                            </Link>
                             <div className="text-[12px] text-ink-3 truncate">
                               {[person.currentTitle, person.currentOrganizationRaw]
                                 .filter(Boolean)
@@ -158,27 +165,11 @@ export function Pipeline() {
                             </div>
                           </div>
                         </div>
-                        <div className="mt-2 flex items-center justify-between text-[12px] text-ink-3">
-                          <span>
-                            {Math.max(
-                              0,
-                              Math.floor((Date.now() - new Date(chat.stageEnteredAt).getTime()) / 86_400_000),
-                            )}
-                            d in stage
-                          </span>
+                        <div className="mt-2 flex items-center justify-between gap-2 text-[12px] text-ink-3">
+                          <span>{daysLabel(chat.stageEnteredAt)} in stage</span>
                           {next && (
                             <Chip tone="accent" className="h-5">
-                              {next.kind === 'warm_up_engage'
-                                ? 'Warm up'
-                                : next.kind === 'follow_up_bump'
-                                  ? 'Bump'
-                                  : next.kind === 'thank_you'
-                                    ? 'Thank'
-                                    : next.kind === 'prep_brief'
-                                      ? 'Prep'
-                                      : next.kind.includes('schedule')
-                                        ? 'Schedule'
-                                        : 'Act'}
+                              {KIND_LABEL[next.kind].label}
                             </Chip>
                           )}
                         </div>
@@ -192,6 +183,24 @@ export function Pipeline() {
                             />
                           </div>
                         )}
+                        <select
+                          value=""
+                          onChange={(e) => e.target.value && move(chat, e.target.value as ChatStage)}
+                          className="relative z-10 mt-2 h-7 w-full rounded-md border border-line bg-canvas px-1.5 text-[12px] text-ink-2 focus:outline-none focus:ring-2 focus:ring-accent/40"
+                          aria-label={`Move ${person.displayName} to another stage`}
+                          data-testid="chat-card-move"
+                        >
+                          <option value="" disabled>
+                            Move to…
+                          </option>
+                          {[...ACTIVE_STAGES, ...CLOSED_STAGES]
+                            .filter((s) => s !== chat.stage)
+                            .map((s) => (
+                              <option key={s} value={s}>
+                                {STAGE_LABELS[s]}
+                              </option>
+                            ))}
+                        </select>
                       </div>
                     );
                   })}
@@ -203,17 +212,24 @@ export function Pipeline() {
       )}
       {view === 'table' &&
         (rows.length ? (
-          <div className="border border-line rounded-[var(--radius-card)] overflow-hidden">
-            <table className="w-full text-[13.5px]">
+          <div className="border border-line rounded-[var(--radius-card)] overflow-x-auto">
+            <table className="w-full text-[13.5px] min-w-[760px]">
               <thead className="bg-canvas-2 text-ink-3 text-[12px] uppercase tracking-wide">
                 <tr>
-                  {['Person', 'Company', 'Stage', 'Days', 'Last out', 'Last in', 'Next', 'Strength'].map(
-                    (h) => (
-                      <th key={h} className="text-left font-medium px-3 h-9">
-                        {h}
-                      </th>
-                    ),
-                  )}
+                  {[
+                    'Person',
+                    'Company',
+                    'Stage',
+                    'In stage',
+                    'Last sent',
+                    'Last reply',
+                    'Next',
+                    'Closeness',
+                  ].map((h) => (
+                    <th key={h} className="text-left font-medium px-3 h-9">
+                      {h}
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody className="divide-y divide-line">
@@ -230,7 +246,13 @@ export function Pipeline() {
                         <td className="px-3 h-11">
                           <span className="inline-flex items-center gap-2">
                             <Avatar name={person.displayName} id={person.id} size={24} />{' '}
-                            <span className="font-medium">{person.displayName}</span>
+                            <Link
+                              to={`/people/${person.id}`}
+                              className="font-medium hover:underline"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              {person.displayName}
+                            </Link>
                           </span>
                         </td>
                         <td className="px-3 text-ink-2">{person.currentOrganizationRaw ?? '—'}</td>
@@ -239,6 +261,7 @@ export function Pipeline() {
                             value={chat.stage}
                             onChange={(e) => move(chat, e.target.value as ChatStage)}
                             className="h-7 text-[12px]"
+                            aria-label={`Stage for ${person.displayName}`}
                           >
                             {[...ACTIVE_STAGES, ...CLOSED_STAGES].map((s) => (
                               <option key={s} value={s}>
@@ -247,14 +270,14 @@ export function Pipeline() {
                             ))}
                           </Select>
                         </td>
-                        <td className="px-3 tabular text-ink-2">
-                          {Math.floor((Date.now() - new Date(chat.stageEnteredAt).getTime()) / 86_400_000)}
+                        <td className="px-3 tabular text-ink-2 whitespace-nowrap">
+                          {daysLabel(chat.stageEnteredAt)}
                         </td>
                         <td className="px-3 text-ink-2">{relDate(chat.lastOutboundAt)}</td>
                         <td className="px-3 text-ink-2">{relDate(chat.lastInboundAt)}</td>
                         <td className="px-3">
                           {next ? (
-                            <Chip tone="accent">{next.kind.replace(/_/g, ' ')}</Chip>
+                            <Chip tone="accent">{KIND_LABEL[next.kind].label}</Chip>
                           ) : (
                             <span className="text-ink-3">—</span>
                           )}
@@ -288,10 +311,16 @@ export function Pipeline() {
   );
 }
 
-export function StrengthDots({ v }: { v: number }) {
+function daysLabel(since: string): string {
+  const d = Math.max(0, Math.floor((Date.now() - new Date(since).getTime()) / 86_400_000));
+  return d === 0 ? 'Under a day' : d === 1 ? '1 day' : `${d} days`;
+}
+
+export function StrengthDots({ v, label = 'Closeness' }: { v: number; label?: string }) {
   const n = v >= 0.6 ? 4 : v >= 0.4 ? 3 : v >= 0.2 ? 2 : v > 0.02 ? 1 : 0;
+  const text = `${label} ${Math.round(v * 100)} of 100`;
   return (
-    <span className="inline-flex gap-0.5" title={`Strength ${Math.round(v * 100)}`}>
+    <span className="inline-flex gap-0.5" title={text} role="img" aria-label={text}>
       {[0, 1, 2, 3].map((i) => (
         <span key={i} className={cx('w-1.5 h-1.5 rounded-full', i < n ? 'bg-accent' : 'bg-line')} />
       ))}
@@ -327,8 +356,8 @@ function CompaniesView({
   const list = [...groups.values()].sort((a, b) => b.people.size - a.people.size);
   if (!list.length) return <EmptyState title="No companies yet" />;
   return (
-    <div className="border border-line rounded-[var(--radius-card)] overflow-hidden">
-      <table className="w-full text-[13.5px]">
+    <div className="border border-line rounded-[var(--radius-card)] overflow-x-auto">
+      <table className="w-full text-[13.5px] min-w-[560px]">
         <thead className="bg-canvas-2 text-ink-3 text-[12px] uppercase tracking-wide">
           <tr>
             {['Company', 'People', 'Stages', 'Target', 'Last activity'].map((h) => (

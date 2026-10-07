@@ -15,7 +15,14 @@ export async function applyStage(
   to: ChatStage,
   actor: Actor,
   reason: string,
-  opts: { confidence?: number; evidenceTable?: string; evidenceId?: string; now?: Date } = {},
+  opts: {
+    confidence?: number;
+    evidenceTable?: string;
+    evidenceId?: string;
+    now?: Date;
+    /** When the evidence happened (a message's sentAt, an event's end). The stage is entered then, not at ingest. */
+    at?: string;
+  } = {},
 ): Promise<'applied' | 'proposed' | 'rejected'> {
   const now = opts.now ?? new Date();
   if (chat.stage === to) return 'rejected';
@@ -46,13 +53,14 @@ export async function applyStage(
     decidedAt: status === 'applied' ? now.toISOString() : undefined,
   });
   if (status === 'applied') {
+    const enteredAt = evidenceTime(opts.at, now);
     const changes: Partial<CoffeeChat> = {
       stage: to,
-      stageEnteredAt: now.toISOString(),
+      stageEnteredAt: enteredAt,
       updatedAt: now.toISOString(),
     };
-    if (to === 'completed' && !chat.completedAt) changes.completedAt = now.toISOString();
-    if (to === 'followed_up' && !chat.followedUpAt) changes.followedUpAt = now.toISOString();
+    if (to === 'completed' && !chat.completedAt) changes.completedAt = enteredAt;
+    if (to === 'followed_up' && !chat.followedUpAt) changes.followedUpAt = enteredAt;
     if (to === 'archived') changes.archivedAt = now.toISOString();
     await db.chats.update(chat.id, changes);
     Object.assign(chat, changes);
@@ -60,10 +68,16 @@ export async function applyStage(
   return status;
 }
 
+/** The evidence timestamp when it is valid and not in the future, else now. */
+function evidenceTime(at: string | undefined, now: Date): string {
+  const t = at ? new Date(at).getTime() : Number.NaN;
+  return Number.isFinite(t) && t <= now.getTime() ? new Date(t).toISOString() : now.toISOString();
+}
+
 export async function evaluateTrigger(
   chat: CoffeeChat,
   trig: StageTrigger,
-  evidence?: { table: string; id: string },
+  evidence?: { table: string; id: string; at?: string },
   now = new Date(),
 ): Promise<'applied' | 'proposed' | 'rejected' | 'none'> {
   const d = decideTransition(chat.stage, trig);
@@ -73,6 +87,7 @@ export async function evaluateTrigger(
     evidenceTable: evidence?.table,
     evidenceId: evidence?.id,
     now,
+    at: evidence?.at,
   });
 }
 

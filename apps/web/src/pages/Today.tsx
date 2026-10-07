@@ -8,6 +8,16 @@ import { generateBrief } from '../engine/brief';
 import { useSession } from '../state/session';
 import { Avatar, Button, Card, EmptyState, relDate, Spinner, Stat } from '../ui';
 
+const PROVIDER_LABELS: Record<string, string> = {
+  google: 'Google',
+  linkedin_csv: 'LinkedIn import',
+  granola: 'Granola',
+  fathom: 'Fathom',
+  wispr_export: 'Wispr Flow',
+  tracker_import: 'Tracker import',
+  demo: 'Demo data',
+};
+
 export function Today() {
   const { user, userId } = useSession();
   const [busy, setBusy] = useState(false);
@@ -95,6 +105,7 @@ export function Today() {
     ),
   ).length;
   const completed = (chats ?? []).filter((c) => c.completedAt).length;
+  const visiblePeople = people.filter((p) => p.isHuman && !p.hiddenAt).length;
   const problems = (integrations ?? []).filter((i) => i.status === 'needs_reauth' || i.status === 'error');
   const regenerate = async () => {
     setBusy(true);
@@ -106,7 +117,7 @@ export function Today() {
   return (
     <div>
       <div className="flex items-start justify-between gap-4 mb-5">
-        <div>
+        <div className="min-w-0">
           <div className="text-ink-3 text-[13px]">
             {now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
           </div>
@@ -115,7 +126,12 @@ export function Today() {
           </h1>
           <p className="text-ink-2 mt-1">{latest?.summaryText ?? 'Your first brief will appear here.'}</p>
         </div>
-        <Button onClick={regenerate} disabled={busy} title="Re-run the rules now">
+        <Button
+          onClick={regenerate}
+          disabled={busy}
+          title="Rebuild today's brief from your latest email, calendar and notes"
+          className="shrink-0"
+        >
           <RefreshCw size={14} className={busy ? 'animate-spin' : ''} /> Refresh
         </Button>
       </div>
@@ -124,7 +140,7 @@ export function Today() {
           {problems.map((p) => (
             <div key={p.id} className="flex items-center justify-between gap-3 text-[13.5px]">
               <span>
-                <strong className="font-medium">{p.provider === 'google' ? 'Google' : p.provider}</strong>{' '}
+                <strong className="font-medium">{PROVIDER_LABELS[p.provider] ?? 'An integration'}</strong>{' '}
                 needs attention{p.lastError ? `: ${p.lastError}` : ''}.
               </span>
               <Link to="/settings/integrations" className="text-accent font-medium">
@@ -134,24 +150,40 @@ export function Today() {
           ))}
         </Card>
       )}
-      <div className="grid lg:grid-cols-[1fr_300px] gap-6 items-start">
-        <div className="space-y-3">
-          {cards.length === 0 && (
-            <EmptyState
-              title="Nothing to do right now"
-              body="Your network is in good shape. New replies, meetings and notes will add cards here as they come in."
-              action={
-                <Link to="/discover">
-                  <Button variant="primary">Find people to meet</Button>
-                </Link>
-              }
-            />
-          )}
+      <div className="grid lg:grid-cols-[minmax(0,1fr)_300px] gap-6 items-start">
+        <div className="space-y-3 min-w-0">
+          {cards.length === 0 &&
+            (visiblePeople === 0 ? (
+              <EmptyState
+                title="Orbit has nobody to work with yet"
+                body="Connect Google so Orbit can read who you email and meet, or upload your LinkedIn connections export. Your first suggestions appear here a minute later."
+                action={
+                  <div className="flex flex-wrap justify-center gap-2">
+                    <Link to="/settings/integrations">
+                      <Button variant="primary">Connect Google</Button>
+                    </Link>
+                    <Link to="/settings/integrations">
+                      <Button>Upload LinkedIn connections</Button>
+                    </Link>
+                  </div>
+                }
+              />
+            ) : (
+              <EmptyState
+                title="Nothing needs you right now"
+                body="New replies, meetings and notes add cards here as they come in. In the meantime, pick someone new to talk to."
+                action={
+                  <Link to="/discover">
+                    <Button variant="primary">Find people to meet</Button>
+                  </Link>
+                }
+              />
+            ))}
           {cards.map((s) => (
             <SuggestionCard key={s.id} s={s} />
           ))}
         </div>
-        <div className="space-y-4">
+        <div className="space-y-4 min-w-0">
           <Card>
             <div className="font-medium mb-3">Upcoming</div>
             {!events?.length && <p className="text-[13px] text-ink-3">No chats in the next 7 days.</p>}
@@ -188,7 +220,7 @@ export function Today() {
             <div className="font-medium mb-3">This week</div>
             <div className="grid grid-cols-2 gap-4">
               <Stat
-                label="Outreach"
+                label="First messages"
                 value={
                   <span>
                     {sentThisWeek}
@@ -206,11 +238,7 @@ export function Today() {
                 hint="last 30 days"
               />
               <Stat label="Chats done" value={completed} hint="this season" />
-              <Stat
-                label="People"
-                value={people.filter((p) => p.isHuman && !p.hiddenAt).length}
-                hint="in your orbit"
-              />
+              <Stat label="People" value={visiblePeople} hint="in your orbit" />
             </div>
           </Card>
         </div>

@@ -1,3 +1,4 @@
+import { functionPhrase } from '../labels';
 import { normalizeCompany } from '../text/normalize';
 import type {
   CoffeeChat,
@@ -27,6 +28,12 @@ export function functionMatch(title: string | undefined, functions: string[]): n
   if (!title) return 0;
   for (const f of functions) if (FUNCTION_TITLE[f]?.test(title)) return 1;
   return 0;
+}
+
+/** The first of the student's target functions that the title matches, for the "Works in ..." reason. */
+export function matchedFunction(title: string | undefined, functions: string[]): string | undefined {
+  if (!title) return undefined;
+  return functions.find((f) => FUNCTION_TITLE[f]?.test(title));
 }
 
 export function keywordOverlap(a: string[], b: string[]): number {
@@ -122,7 +129,7 @@ export function recommendPeople(inp: RecommendInput): Recommendation[] {
     if (fnMatch)
       reasons.push({
         code: 'function_match',
-        text: `Works in ${inp.goals.targetFunctions[0] ?? 'your target function'}${p.currentTitle ? ` (${p.currentTitle})` : ''}`,
+        text: `Works in ${functionPhrase(matchedFunction(`${p.currentTitle ?? ''} ${p.headline ?? ''}`, inp.goals.targetFunctions)) || 'your target function'}${p.currentTitle ? ` (${p.currentTitle})` : ''}`,
       });
     if (kw >= 0.2) reasons.push({ code: 'resume_overlap', text: 'Overlaps with your experience' });
     if (p.strength >= 0.3) reasons.push({ code: 'warm', text: 'You already know each other a little' });

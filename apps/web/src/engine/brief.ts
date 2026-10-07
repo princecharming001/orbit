@@ -19,6 +19,7 @@ import {
   generateDraft,
   isBlocked,
   newId,
+  STAGE_LABELS,
   selectForBrief,
   suggestionFromCandidate,
   todayKey,
@@ -29,6 +30,7 @@ import { feedback, notify, recomputeAllStrengths } from '../db/repo';
 import { db } from '../db/schema';
 import { hasLlm, llmDraft, llmSummary } from '../integrations/anthropic';
 import { bestPathStrength, buildReachGraph } from './graph';
+import { personSummary } from './prep';
 import { runTimedStageRules } from './stages';
 
 const DAY = 86_400_000;
@@ -697,7 +699,7 @@ async function addConfirmationCards(userId: string, now: Date): Promise<void> {
           personId: person.id,
           chatId: chat.id,
           dedupeKey: `stage:${e.id}`,
-          reasonText: `Looks like ${person.firstName} ${describeStage(e.toStage)}. Move to ${e.toStage.replace('_', ' ')}?`,
+          reasonText: `Looks like ${person.firstName} ${describeStage(e.toStage)}. Mark this chat as ${STAGE_LABELS[e.toStage].toLowerCase()}?`,
           signals: { confidence: e.confidence },
           payload: { stageEventId: e.id, toStage: e.toStage },
           urgency: 0.85,
@@ -775,6 +777,37 @@ function describeStage(stage: string): string {
   );
 }
 
+const BRIEF_LABELS: Record<SuggestionKind, (n: number) => string> = {
+  follow_up_bump: (n) => `${n} follow-up${n > 1 ? 's' : ''}`,
+  thank_you: (n) => `${n} thank-you${n > 1 ? 's' : ''}`,
+  schedule_propose: (n) => `${n} to schedule`,
+  schedule_confirm: (n) => `${n} time${n > 1 ? 's' : ''} to confirm`,
+  prep_brief: (n) => `${n} chat${n > 1 ? 's' : ''} to prep`,
+  warm_up_engage: (n) => `${n} LinkedIn warm-up${n > 1 ? 's' : ''}`,
+  new_outreach: (n) => `${n} new ${n > 1 ? 'people' : 'person'} to message`,
+  nurture_checkin: (n) => `${n} check-in${n > 1 ? 's' : ''}`,
+  reconnect: (n) => `${n} to reconnect with`,
+  congratulate: (n) => `${n} to congratulate`,
+  ask_referral: (n) => `${n} referral ask${n > 1 ? 's' : ''}`,
+  action_item_reminder: (n) => `${n} promise${n > 1 ? 's' : ''} to keep`,
+  intro_request: (n) => `${n} intro ask${n > 1 ? 's' : ''}`,
+  report_back: (n) => `${n} loop${n > 1 ? 's' : ''} to close`,
+  confirm_stage: (n) => `${n} update${n > 1 ? 's' : ''} to confirm`,
+  confirm_merge: (n) => `${n} possible duplicate${n > 1 ? 's' : ''}`,
+  confirm_note_match: (n) => `${n} note${n > 1 ? 's' : ''} to match`,
+};
+
+/** The one-line summary at the top of Today. It always names a real next step, never "all good" on an empty network. */
+export function briefSummaryText(counts: Map<string, number>, upcoming: number, peopleCount: number): string {
+  const parts = [...counts].map(([k, n]) => BRIEF_LABELS[k as SuggestionKind]?.(n) ?? `${n} to review`);
+  const coming = upcoming ? `${upcoming} chat${upcoming > 1 ? 's' : ''} coming up this week` : '';
+  if (parts.length) return `${parts.join(', ')}${coming ? `; ${coming}` : ''}.`;
+  if (coming) return `Nothing to send today. ${coming[0]!.toUpperCase()}${coming.slice(1)}.`;
+  if (peopleCount === 0)
+    return 'Orbit has nobody to work with yet. Connect Google or upload your LinkedIn connections to get your first suggestions.';
+  return 'Nothing needs you today. Pick someone from Discover to start a new conversation.';
+}
+
 export async function generateBrief(user: User, kind: Brief['kind'], now = new Date()): Promise<Brief> {
   const briefDate = todayKey(now, user.timezone);
   const existing = await db.briefs
@@ -813,30 +846,8 @@ export async function generateBrief(user: User, kind: Brief['kind'], now = new D
   );
   const counts = new Map<string, number>();
   for (const s of sugg) counts.set(s.kind, (counts.get(s.kind) ?? 0) + 1);
-  const parts: string[] = [];
-  const label = (k: string, n: number) =>
-    ({
-      follow_up_bump: `${n} follow-up${n > 1 ? 's' : ''}`,
-      thank_you: `${n} thank-you${n > 1 ? 's' : ''}`,
-      schedule_propose: `${n} to schedule`,
-      schedule_confirm: `${n} time to confirm`,
-      prep_brief: `${n} chat to prep`,
-      warm_up_engage: `${n} LinkedIn warm-up${n > 1 ? 's' : ''}`,
-      new_outreach: `${n} new ${n > 1 ? 'people' : 'person'} to message`,
-      nurture_checkin: `${n} check-in`,
-      reconnect: `${n} reconnect`,
-      ask_referral: `${n} referral ask`,
-      action_item_reminder: `${n} promise to keep`,
-      intro_request: `${n} intro ask`,
-      report_back: `${n} loop to close`,
-      confirm_stage: `${n} to confirm`,
-    })[k] ?? `${n} ${k.replace(/_/g, ' ')}`;
-  for (const [k, n] of counts) parts.push(label(k, n));
-  const summaryText = sugg.length
-    ? `${parts.join(', ')}${upcoming.length ? `; ${upcoming.length} chat${upcoming.length > 1 ? 's' : ''} coming up this week` : ''}.`
-    : upcoming.length
-      ? `Nothing to send today. ${upcoming.length} chat${upcoming.length > 1 ? 's' : ''} coming up this week.`
-      : 'Nothing to do today — your network is in good shape.';
+  const peopleCount = [...inp.people.values()].filter((p) => p.isHuman && !p.hiddenAt).length;
+  const summaryText = briefSummaryText(counts, upcoming.length, peopleCount);
   const brief: Brief = {
     id: briefId,
     userId: user.id,
@@ -863,9 +874,10 @@ export async function refreshPersonSummary(user: User, personId: string): Promis
   const person = await db.people.get(personId);
   if (!person) return;
   const facts = (await db.facts.where('personId').equals(personId).toArray()).filter((f) => !f.deletedAt);
-  const tps = (await db.touchpoints.where('personId').equals(personId).toArray())
-    .sort((a, b) => b.occurredAt.localeCompare(a.occurredAt))
-    .slice(0, 10);
+  const allTps = (await db.touchpoints.where('personId').equals(personId).toArray()).sort((a, b) =>
+    b.occurredAt.localeCompare(a.occurredAt),
+  );
+  const tps = allTps.slice(0, 10);
   const goals = await db.goals.get(user.id);
   let summary: string | undefined;
   let talkingPoints: string[] | undefined;
@@ -882,27 +894,20 @@ export async function refreshPersonSummary(user: User, personId: string): Promis
     }
   }
   if (!summary) {
-    const role =
-      person.currentTitle && person.currentOrganizationRaw
-        ? `${person.currentTitle} at ${person.currentOrganizationRaw}`
-        : (person.headline ?? 'a contact');
-    const adv = facts.find((f) => f.type === 'advice');
-    const off = facts.find((f) => f.type === 'offer');
-    const hook = facts.find((f) => f.type === 'hook');
-    const n = tps.length;
-    summary = `${person.firstName} is ${role}${person.isAlumni ? ` and a ${user.school} alum` : ''}. ${n ? `You have ${n} recent interaction${n === 1 ? '' : 's'}, most recently ${tps[0]!.occurredAt.slice(0, 10)}.` : 'No interactions yet.'}${adv ? ` Advice: ${adv.text.replace(/\.$/, '')}.` : ''}${off ? ` They offered: ${off.text.replace(/\.$/, '')}.` : ''}`;
-    talkingPoints = [
-      hook ? `Ask about: ${hook.text}` : undefined,
-      off ? `Follow up on their offer: ${off.text}` : undefined,
-      adv ? `Report back on their advice: ${adv.text}` : undefined,
-      person.currentOrganizationRaw
-        ? `What's changed at ${person.currentOrganizationRaw} recently`
-        : undefined,
-    ]
-      .filter((x): x is string => !!x)
-      .slice(0, 5);
+    const t = personSummary({ user, person, facts, touchpoints: allTps, now: new Date() });
+    summary = t.summary;
+    talkingPoints = t.talkingPoints;
   }
   await db.people.update(personId, { summary, summaryUpdatedAt: new Date().toISOString(), talkingPoints });
+}
+
+/** A cold LinkedIn-only contact gets a few days of light engagement before the first message (13-linkedin-warm-up). */
+export function needsWarmUp(
+  person: Pick<Person, 'strength' | 'linkedinSlug'>,
+  channel: 'gmail' | 'linkedin',
+  warmUpEnabled: boolean,
+): boolean {
+  return person.strength < 0.2 && channel === 'linkedin' && !!person.linkedinSlug && warmUpEnabled;
 }
 
 export async function startWarmUpOrOutreach(
@@ -910,6 +915,7 @@ export async function startWarmUpOrOutreach(
   personId: string,
   channel: 'gmail' | 'linkedin',
   source: CoffeeChat['source'] = 'manual',
+  opts: { skipWarmUp?: boolean } = {},
 ): Promise<{ chat: CoffeeChat; draft?: OutboundMessage }> {
   const settings = await db.settings.get(user.id);
   const person = (await db.people.get(personId))!;
@@ -919,11 +925,7 @@ export async function startWarmUpOrOutreach(
     .equals(personId)
     .filter((c) => !['declined', 'no_response', 'archived'].includes(c.stage))
     .first();
-  const cold =
-    person.strength < 0.2 &&
-    channel === 'linkedin' &&
-    !!person.linkedinSlug &&
-    (settings?.warmUpEnabled ?? true);
+  const cold = !opts.skipWarmUp && needsWarmUp(person, channel, settings?.warmUpEnabled ?? true);
   if (!chat) {
     const referrer = await findReferrerFor(user.id, person);
     chat = {
@@ -958,7 +960,7 @@ export async function startWarmUpOrOutreach(
     });
   }
   await db.recommendations.where('personId').equals(personId).modify({ status: 'converted' });
-  if (chat.stage === 'warming') {
+  if (chat.stage === 'warming' && !opts.skipWarmUp) {
     await evaluateImmediateSuggestions(user.id, { chatId: chat.id, personId }, now);
     return { chat };
   }

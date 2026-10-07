@@ -17,7 +17,7 @@ export const STAGE_ORDER: ChatStage[] = [...ACTIVE_STAGES, ...CLOSED_STAGES];
 export const STAGE_LABELS: Record<ChatStage, string> = {
   identified: 'Identified',
   warming: 'Warming up',
-  outreach_sent: 'Outreach sent',
+  outreach_sent: 'First message sent',
   replied: 'Replied',
   scheduling: 'Scheduling',
   scheduled: 'Scheduled',

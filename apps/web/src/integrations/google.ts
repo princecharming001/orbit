@@ -280,6 +280,8 @@ export interface GcalEventRaw {
   }[];
   hangoutLink?: string;
   conferenceData?: { entryPoints?: { uri?: string }[] };
+  /** When the invite was created (RFC 3339). */
+  created?: string;
 }
 
 export async function gcalList(timeMin: Date, timeMax: Date): Promise<GcalEventRaw[]> {
