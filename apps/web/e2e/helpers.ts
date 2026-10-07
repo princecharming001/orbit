@@ -158,28 +158,6 @@ export async function nextRender(page: Page) {
   );
 }
 
-/** Records every value an attribute of the map canvas takes, from now on (to catch short-lived phases). */
-export async function recordAttr(page: Page, attr: string) {
-  await page.evaluate((attr) => {
-    const w = window as unknown as { __seen?: Record<string, string[]> };
-    w.__seen ??= {};
-    const seen: string[] = [];
-    w.__seen[attr] = seen;
-    const el = document.querySelector('[data-testid="orbit-canvas"]')!;
-    const push = () => {
-      const v = el.getAttribute(attr) ?? '';
-      if (seen[seen.length - 1] !== v) seen.push(v);
-    };
-    push();
-    new MutationObserver(push).observe(el, { attributes: true, attributeFilter: [attr] });
-  }, attr);
-  return () =>
-    page.evaluate(
-      (attr) => (window as unknown as { __seen: Record<string, string[]> }).__seen[attr] ?? [],
-      attr,
-    );
-}
-
 /** Angle of a dot around the orbit's centre ("You"), in degrees: -90 is twelve o'clock. */
 export function angleFromCentre(dot: Dot, centre: { x: number; y: number }): number {
   return (Math.atan2(dot.y - centre.y, dot.x - centre.x) * 180) / Math.PI;
