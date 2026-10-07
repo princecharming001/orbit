@@ -1526,11 +1526,41 @@ describe('audit round 2 regressions', () => {
       /your point that my resume needs a projects section/,
     );
     expect(ty('I loved the story about Stripe')).toBe(
-      'Thank you for making time on September 24. I loved the story about Stripe.',
+      'Thank you for making time on September 24, and especially for everything you shared. I loved the story about Stripe.',
     );
     expect(ty("I can't stop thinking about the Stripe story")).not.toMatch(/your (point|advice) that/);
     // the forms that already worked are unchanged
     expect(ty('to lead with a project')).toMatch(/your advice to lead with a project/);
+  });
+
+  it('a typed takeaway turns only pronouns that can mean the recipient into "you" (L38)', () => {
+    const ty = (takeaway: string) =>
+      generateDraft(
+        base({ kind: 'thank_you', takeaway, chat: { meetingAt: '2026-09-24T19:00:00Z' } }),
+      ).body.split('\n\n')[1]!;
+    // a third party named before the pronoun owns it: the student's words are kept
+    const jenna = ty('I should email Jenna and ask about her team');
+    expect(jenna).toMatch(/your advice that I should email Jenna and ask about her team\./);
+    expect(jenna).not.toMatch(/your team/);
+    expect(ty('I should ask my roommate about his internship')).toMatch(/about his internship/);
+    expect(ty('I loved the story about Sam and his startup')).toMatch(/Sam and his startup/);
+    expect(ty('I should ask if she is hiring and email her')).toMatch(/she is hiring and email her\./);
+    // with nobody else in the sentence the pronoun is the recipient
+    expect(ty('I should talk to her manager Sam')).toMatch(/talk to your manager Sam/);
+    expect(ty('I should email her about the role')).toMatch(/I should email you about the role\./);
+    expect(ty('I should ask her about Priya')).not.toMatch(/ask your\b/);
+    expect(ty('I should follow up with him next month')).toMatch(/follow up with you next month/);
+  });
+
+  it("a first-person takeaway thank-you is long enough for Orbit's own length check (L38)", () => {
+    for (const takeaway of ['I loved the story about Stripe', "I'm going to apply to Figma"])
+      for (const seed of ['priya', 'x1', 'k7', 'z9', 'm3']) {
+        const { d, issues } = check(
+          base({ kind: 'thank_you', seed, takeaway, chat: { meetingAt: '2026-09-24T19:00:00Z' } }),
+        );
+        expect(d.body).toContain(`${takeaway}.`);
+        expect(issues.map((i) => i.code)).not.toContain('too_short');
+      }
   });
 
   it('a time-limited decline gives a re-engagement date; the second try quotes only what they said (EG-20)', () => {

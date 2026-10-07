@@ -1528,8 +1528,57 @@ function pointLine(thanks: string, phrase: string, seed: string): string {
   );
 }
 
-/** "her team" in the student's own words is "your team" in a note addressed to her ("she has" is left alone). */
-const toSecondPerson = (s: string) => s.replace(/\b(her|his)\b/gi, 'your').replace(/\bhim\b/gi, 'you');
+/** Words that name someone other than the recipient: a pronoun after one of them may be theirs. */
+const OTHER_PERSON =
+  /^(mom|mother|dad|father|parents?|sister|brother|siblings?|cousin|aunt|uncle|wife|husband|partner|boyfriend|girlfriend|friends?|roommates?|classmates?|professors?|prof|teachers?|managers?|boss|recruiters?|coworkers?|co-workers?|colleagues?|mentors?|advisors?|advisers?|founders?|ceo|cto|director|analysts?|associates?|engineers?|interns?|interviewers?|someone|somebody|anyone|anybody|everyone|person|people|alums?|alumni|alumnus|alumna)$/i;
+const NOT_A_NAME =
+  /^(I|I'm|I've|I'll|I'd|January|February|March|April|May|June|July|August|September|October|November|December|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)$/;
+/** After an object "her" ("email her about ..."), not a possessive one ("her team"). */
+const AFTER_OBJECT =
+  /^(about|to|for|with|if|whether|that|and|or|but|when|before|after|at|on|in|by|from|again|directly|a|an|the|my|some|any|this|these|those|how|what|why|where|who|so|back|up|out|once|soon|later|next|today|tomorrow|know)$/i;
+
+/**
+ * "her team" in the student's own words is "your team" in a note addressed to her, but only while nobody else is in
+ * the sentence: in "email Jenna and ask about her team" the team is Jenna's, so the student's words are kept. A
+ * sentence with "she" or "he" in it keeps its pronouns too, since turning half of them would mix the two people.
+ */
+function toSecondPerson(s: string, person: DraftContext['person']): string {
+  if (/\b(she|he)(?:'[a-z]+)?\b/i.test(s)) return s;
+  const own = new Set(
+    [
+      person.firstName,
+      person.lastName,
+      ...(person.fullName ?? '').split(/\s+/),
+      ...(person.org ?? '').split(/\s+/),
+    ]
+      .filter(Boolean)
+      .map((w) => w!.toLowerCase()),
+  );
+  const tokens = s.split(/(\s+)/);
+  let other = false;
+  return tokens
+    .map((tok, i) => {
+      if (other || /^\s*$/.test(tok)) return tok;
+      const m = tok.match(/^([^A-Za-z']*)([A-Za-z][A-Za-z'-]*)(.*)$/);
+      if (!m) return tok;
+      const [, pre, word, post] = m as unknown as [string, string, string, string];
+      const lower = word.toLowerCase();
+      const bare = lower.replace(/'s$/, '');
+      if (lower === 'his') return `${pre}your${post}`;
+      if (lower === 'him') return `${pre}you${post}`;
+      if (lower === 'hers') return `${pre}yours${post}`;
+      if (lower === 'himself' || lower === 'herself') return `${pre}yourself${post}`;
+      if (lower === 'her') {
+        const next = tokens[i + 2]?.match(/[A-Za-z][A-Za-z'-]*/)?.[0];
+        const object = !next || /[.,;:!?)]/.test(post) || AFTER_OBJECT.test(next);
+        return `${pre}${object ? 'you' : 'your'}${post}`;
+      }
+      if (OTHER_PERSON.test(bare)) other = true;
+      else if (i > 0 && /^[A-Z]/.test(word) && !NOT_A_NAME.test(word) && !own.has(bare)) other = true;
+      return tok;
+    })
+    .join('');
+}
 
 /**
  * The thank-you's opening from the student's own takeaway, typed in the editor. Their words are addressed to the
@@ -1550,10 +1599,13 @@ function takeawayLine(thanks: string, raw: string, person: DraftContext['person'
   );
   if (advice) {
     const noun = /^(could|can|might)$/i.test(advice[2]!) ? 'point' : 'advice';
-    return pointLine(thanks, `your ${noun} that I ${toSecondPerson(advice[1]!)}`, seed);
+    return pointLine(thanks, `your ${noun} that I ${toSecondPerson(advice[1]!, person)}`, seed);
   }
-  if (/^(my|our)\s/i.test(t)) return pointLine(thanks, `your point that ${toSecondPerson(lower1(t))}`, seed);
-  if (/^(I|I'm|I've|I'll|I'd|me|we|we're)\b/i.test(t)) return `${thanks}. ${cap1(toSecondPerson(t))}.`;
+  if (/^(my|our)\s/i.test(t))
+    return pointLine(thanks, `your point that ${toSecondPerson(lower1(t), person)}`, seed);
+  // the student's own sentence follows the same thanks the other forms open with, so the note is not shorter
+  if (/^(I|I'm|I've|I'll|I'd|me|we|we're)\b/i.test(t))
+    return `${pointLine(thanks, 'everything you shared', seed)} ${cap1(toSecondPerson(t, person))}.`;
   return pointLine(thanks, takeawayPhrase(t, person, /^that\s/i.test(typed)), seed);
 }
 

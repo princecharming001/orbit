@@ -242,9 +242,11 @@ export async function upsertSuggestions(
         continue;
       const revived = existing.status === 'expired';
       let outboundMessageId = existing.outboundMessageId;
+      // a cancelled draft (the card was retired) is replaced; one in the student's hands (queued, handed off to
+      // the mail app, failed with its error) stays on the card, or "I sent it" and "Undo" would vanish under them
       if (outboundMessageId) {
         const draft = await db.outbound.get(outboundMessageId);
-        if (!draft || draft.status !== 'draft') outboundMessageId = undefined;
+        if (!draft || draft.status === 'cancelled' || draft.status === 'sent') outboundMessageId = undefined;
       }
       const payload = { ...existing.payload, ...c.payload };
       const changes: Partial<Suggestion> = {
@@ -1093,7 +1095,14 @@ export async function regenerateDraft(
     needsInput: out.needsInput.length ? out.needsInput : undefined,
     opening: out.opening,
   };
-  await db.outbound.update(messageId, changes);
+  // drafting takes a while: if the student approved it in the meantime, the approved text is theirs to keep
+  const applied = await db.transaction('rw', db.outbound, async () => {
+    const cur = await db.outbound.get(messageId);
+    if (!cur || cur.status !== 'draft' || cur.bodyFinal !== msg.bodyFinal) return false;
+    await db.outbound.update(messageId, changes);
+    return true;
+  });
+  if (!applied) return undefined;
   await feedback(user.id, 'edit', {
     outboundMessageId: messageId,
     reason: `input:${Object.keys(inputs).join(',')}`,

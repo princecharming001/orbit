@@ -16,7 +16,13 @@ import {
   googleScopeWarning,
 } from '../integrations/google';
 import { writePrefs } from '../integrations/prefs';
-import { draftForSuggestion, draftMessage, generateBrief, startWarmUpOrOutreach } from './brief';
+import {
+  draftForSuggestion,
+  draftMessage,
+  evaluateImmediateSuggestions,
+  generateBrief,
+  startWarmUpOrOutreach,
+} from './brief';
 import { loadDemo } from './demo';
 import { ingestEmails } from './ingest';
 import {
@@ -616,6 +622,21 @@ describe('a time-limited decline (L35, L36)', () => {
 });
 
 describe('hand-offs (SND-07, SND-12, SND-14, UI-09)', () => {
+  it('a rule re-run keeps a handed-off draft on its card, so "I sent it" stays (e2e flake)', async () => {
+    const { s, d } = await pendingDraft(user, 'thank_you');
+    const r = await approveAndSend(user, d.id, `${d.bodyDraft}\n\nPS kept`);
+    expect(r.ok && r.status).toBe('handed_off');
+    // the same card comes back from the rules (a brief, an immediate pass) while the student is in the mail app
+    await evaluateImmediateSuggestions(user.id, { chatId: s.chatId, personId: s.personId });
+    await generateBrief(user, 'daily');
+    const after = (await db.suggestions.get(s.id))!;
+    expect(after.outboundMessageId).toBe(d.id);
+    const o = (await db.outbound.get(d.id))!;
+    expect(o.status).toBe('handed_off');
+    expect(o.bodyFinal).toMatch(/PS kept$/);
+    expect((await confirmHandoff(user, d.id)).ok).toBe(true);
+  });
+
   it('mailto is handed_off, not sent, until the student confirms; "Not sent" reverts to draft', async () => {
     const { s, d } = await pendingDraft(user, 'thank_you');
     const r = await approveAndSend(user, d.id, d.bodyDraft);
