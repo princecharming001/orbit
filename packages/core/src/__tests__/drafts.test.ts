@@ -208,7 +208,7 @@ describe('outreach', () => {
       .filter((s) => s.length > 3 && !/^(Best|Alex|Cornell)/.test(s));
     expect(sentences.length).toBeLessThanOrEqual(7);
   });
-  it('exec at a bank gets Dear Full Name; an engineer gets Hi', () => {
+  it('exec at a bank gets Dear and the first name (never a mail-merge full name); an engineer gets Hi', () => {
     const r = check(
       base({
         person: {
@@ -222,7 +222,9 @@ describe('outreach', () => {
         },
       }),
     );
-    expect(r.d.body.startsWith('Dear Sofia Rossi,')).toBe(true);
+    // panel review: "Dear Sofia Rossi," reads as a mail merge; "Dear" letters are written without contractions
+    expect(r.d.body.startsWith('Dear Sofia,')).toBe(true);
+    expect(r.d.body).not.toMatch(/\b(I'm|I'd|I've|I'll|you'd|it's|don't)\b/);
     const t = check(
       base({
         person: {
@@ -287,7 +289,7 @@ describe('outreach', () => {
       base({ person: { ...base().person, isAlumni: false }, chat: { referrerName: 'Mei Chen' } }),
     );
     expect(ref.d.body).toMatch(
-      /^Hi Priya,\n\nMei Chen (suggested I write to you|mentioned you'd be the right person)/,
+      /^Hi Priya,\n\nMei Chen suggested I (write to you|get in touch with you)\. I'm/,
     );
     expect(ref.d.subject).toBe('Mei Chen suggested I write to you');
   });
@@ -516,8 +518,10 @@ describe('other kinds', () => {
     const n = generateDraft(
       base({ kind: 'nurture', facts: [FACTS[2]!], chat: { completedAt: '2026-08-10T00:00:00Z' } }),
     );
-    // "hiring in January", asked in October, is still ahead (DQ-08)
-    expect(n.body).toMatch(/You mentioned you're hiring interns in January\. How is that shaping up\?/);
+    // "hiring in January", asked in October, is still ahead (DQ-08); a note that says "No reply needed" never ends
+    // its line about them in a question (panel review)
+    expect(n.body).toMatch(/You mentioned you're hiring interns in January\. Hope that's shaping up well\./);
+    expect(n.body).not.toMatch(/\?/);
     expect(n.body).toMatch(/No reply needed/);
   });
   it('referral ask in tech asks before the portal and makes it a two-minute task', () => {
@@ -682,9 +686,12 @@ describe('audit round 1 regressions', () => {
         clause(used.text)!.rest!.split(' ').slice(0, 3).join(' ').toLowerCase(),
       );
     }
-    // outreach to an alum with facts on file cites the alumni link, not a fact it never mentions
+    // outreach to an alum with facts on file cites the alumni link, and a fact only when the body uses it
     const o = generateDraft(base({ facts: NOTE_FACTS, person: ALINA }));
-    expect(o.claims.filter((c) => c.factId)).toEqual([]);
+    for (const c of o.claims.filter((x) => x.factId)) {
+      const used = NOTE_FACTS.find((f) => f.id === c.factId)!;
+      expect(o.body).toContain(clause(used.text, ALINA)!.text);
+    }
     // a hook connection prefers a hook over background
     const hookFirst = generateDraft(
       base({
@@ -816,7 +823,7 @@ describe('audit round 1 regressions', () => {
         facts: [fact('h', 'hook', 'They were launching the new dashboard in August.')],
       }),
     );
-    expect(past.body).toMatch(/How did it go\?/);
+    expect(past.body).toMatch(/Hope it went well\./);
   });
 
   it('proposes real free windows on different days and times, dated, in the user zone (DQ-09)', () => {
@@ -928,9 +935,12 @@ describe('audit round 1 regressions', () => {
         },
       }),
     );
+    // the note says "their", the forwardable blurb names him once (panel review: "Lucas's path ... Lucas's path")
     expect(i.body).toMatch(
-      /I'm hoping to talk with Daniel Kim \(Engineering Manager at Stripe\) about Daniel's work at Stripe\./,
+      /I'm hoping to talk with Daniel Kim \(Engineering Manager at Stripe\) about their work at Stripe\./,
     );
+    expect(i.body).toMatch(/hear about Daniel's work at Stripe\."/);
+    expect(i.body.match(/Daniel's/g)).toHaveLength(1);
     expect(i.body).not.toMatch(/thoughtful|will come prepared|They'd love/);
   });
 
@@ -1164,7 +1174,7 @@ describe('audit round 1, expert gaps (EG, SND, UI-10)', () => {
       }),
     );
     expect(recruiter.body).toMatch(
-      /^Dear Diego,\n\nThanks again for your note a few weeks ago, and sorry it took me a while to follow up\. As a quick reminder, I'm a junior at Cornell/,
+      /^Dear Diego,\n\nThanks again for your note a few weeks ago, and sorry it took me a while to follow up\. As a quick reminder, I am a junior at Cornell/,
     );
     expect(recruiter.subject).toBe('Re: Catching up');
     const peer = generateDraft(
@@ -1498,7 +1508,8 @@ describe('audit round 2 regressions', () => {
         newAffiliation: { title: 'Staff Engineer', org: 'Stripe', previousOrg: 'Figma', since: '2026-09-20' },
       }),
     );
-    expect(moved.body).toMatch(/your move to Stripe/);
+    // the employer they left is on record, so the line is about them (panel review)
+    expect(moved.body).toMatch(/your move from Figma to Stripe/);
     expect(moved.body).toMatch(/first few weeks/);
   });
 
@@ -1518,7 +1529,7 @@ describe('audit round 2 regressions', () => {
         newAffiliation: { title: 'VP, Analytics', org: 'Stripe', previousOrg: 'Figma' },
       }),
     );
-    expect(vp.body).toMatch(/your move to Stripe as a VP of analytics\./);
+    expect(vp.body).toMatch(/your move from Figma to Stripe as a VP of analytics\./);
     expect(roleNoun('Jr. Data Analyst')).toBe('junior data analyst');
     expect(roleNoun('Software Engineer, Payments')).toBe('software engineer');
     expect(roleNoun('Vice President, Finance')).toBe('vice president of finance');

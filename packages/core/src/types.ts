@@ -630,7 +630,16 @@ export interface OutboundMessage {
 }
 
 /** What a draft is missing that only the student can supply (the needs-input prompt in the editor). */
-export type DraftNeed = 'connection' | 'update' | 'post' | 'news' | 'target' | 'answer' | 'role' | 'takeaway';
+export type DraftNeed =
+  | 'connection'
+  | 'update'
+  | 'post'
+  | 'news'
+  | 'target'
+  | 'answer'
+  | 'role'
+  | 'takeaway'
+  | 'posting';
 
 export interface DraftClaim {
   text: string;

@@ -107,7 +107,7 @@ export function proposeWindows(
   busy: { startIso: string; endIso?: string; status?: string }[],
   now: Date,
   tz: string,
-  opts: { count?: number; minutes?: number; seed?: string } = {},
+  opts: { count?: number; minutes?: number; seed?: string; notBefore?: Date } = {},
 ): Required<Window>[] {
   const zone = safeTz(tz);
   const count = opts.count ?? 2;
@@ -147,6 +147,7 @@ export function proposeWindows(
       const s = zonedTime(day.getUTCFullYear(), day.getUTCMonth() + 1, day.getUTCDate(), h, mi, zone);
       const st = s.getTime();
       if (st < now.getTime() + 12 * 3_600_000) continue;
+      if (opts.notBefore && st < opts.notBefore.getTime()) continue;
       const clash = blocks.some(([bs, be]) => bs < st + len + 15 * 60_000 && be > st - 15 * 60_000);
       if (clash) continue;
       out.push({ startIso: s.toISOString(), endIso: new Date(st + len).toISOString() });
@@ -156,6 +157,20 @@ export function proposeWindows(
     }
   }
   return out;
+}
+
+/**
+ * The earliest a reply may propose when they named a week: "next week" means from the Monday after the week they
+ * wrote in (as seen in `tz`), never tomorrow. Undefined when the text names no week.
+ */
+export function earliestFor(text: string | undefined, writtenAt: Date, tz: string): Date | undefined {
+  if (!text || !/\bnext week\b/i.test(text)) return undefined;
+  const zone = safeTz(tz);
+  const p = partsIn(writtenAt, zone);
+  const day = new Date(Date.UTC(p.y, p.m - 1, p.d));
+  const toMonday = (8 - day.getUTCDay()) % 7 || 7;
+  const monday = new Date(day.getTime() + toMonday * 86_400_000);
+  return zonedTime(monday.getUTCFullYear(), monday.getUTCMonth() + 1, monday.getUTCDate(), 0, 0, zone);
 }
 
 /** Calendar days between two instants, as seen on the wall clock in `tz`. */

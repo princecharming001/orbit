@@ -16,6 +16,7 @@ import {
   type Candidate,
   contextText,
   defaultStyleCard,
+  earliestFor,
   generateCandidates,
   generateDraft,
   isBlocked,
@@ -435,6 +436,8 @@ export interface DraftInputs {
   role?: string;
   /** one thing they said that stuck with the student (thank-you, when no notes exist yet) */
   takeaway?: string;
+  /** the link to the posting, for a referral ask to someone who asked for it */
+  posting?: string;
 }
 
 /** "Lucas Fischer, Engineering Manager at Ramp" -> name, title, org. */
@@ -641,6 +644,16 @@ export async function buildDraftContext(
       .first();
     if (known) tc = known;
   }
+  // the posting link the student pasted (a referral ask to someone who asked for it), or one in the role line
+  const postingLink = (inputs.posting ?? inputs.role ?? '')
+    .match(/https?:\/\/\S+/)?.[0]
+    ?.replace(/[).,]+$/, '');
+  if (roleInput && postingLink)
+    roleInput = {
+      ...roleInput,
+      roleLabel: roleInput.roleLabel?.replace(postingLink, '').trim() || undefined,
+      name: roleInput.name.replace(postingLink, '').trim(),
+    };
   let target = s?.payload.target as DraftContext['target'] | undefined;
   if (!target && inputs.target?.trim()) {
     const parsed = parseTargetLine(inputs.target);
@@ -668,9 +681,15 @@ export async function buildDraftContext(
         new Date(e.startAt).getTime() > now.getTime(),
     )
     .sort((a, b) => a.startAt.localeCompare(b.startAt))[0]?.startAt;
+  // "send me a couple of times next week" is answered with times next week, not tomorrow
+  const notBefore = earliestFor(
+    thread?.lastInboundBody,
+    thread?.lastInboundAt ? new Date(thread.lastInboundAt) : now,
+    user.timezone,
+  );
   const windows =
     kind === 'schedule' || kind === 'reply'
-      ? proposeWindows(busy, now, user.timezone, { seed: person.id })
+      ? proposeWindows(busy, now, user.timezone, { seed: person.id, notBefore })
       : undefined;
   const warm = chat?.warmUp ? warmUpProgress(chat.warmUp, now, user.timezone) : undefined;
   const warmUpNote = chat?.warmUp?.actions.find((a) => a.doneAt && a.note)?.note;
@@ -728,8 +747,14 @@ export async function buildDraftContext(
   const sameOrgContacts: string[] = [];
   for (const p of sameOrg) {
     const rows = await db.outbound.where('personId').equals(p.id).toArray();
+    // only sentences the student actually wrote: never a bracketed prompt or a bare sign-off
     for (const r of rows)
-      if (r.opening && now.getTime() - new Date(r.sentAt ?? r.createdAt).getTime() < 30 * DAY)
+      if (
+        r.opening &&
+        !/\[|\]/.test(r.opening) &&
+        r.opening.split(/\s+/).length >= 3 &&
+        now.getTime() - new Date(r.sentAt ?? r.createdAt).getTime() < 30 * DAY
+      )
         recentOpenings.push(r.opening);
     const spoke = await db.chats
       .where('personId')
@@ -830,9 +855,10 @@ export async function buildDraftContext(
           name: tc.nameRaw,
           roleLabel: roleInput?.roleLabel ?? goals?.targetRoles[0],
           applied: tc.status === 'applied' || tc.status === 'interviewing',
+          link: postingLink,
         }
       : roleInput
-        ? { name: roleInput.name, roleLabel: roleInput.roleLabel }
+        ? { name: roleInput.name, roleLabel: roleInput.roleLabel, link: postingLink }
         : undefined,
     reportBack,
     sameOrgContacts,

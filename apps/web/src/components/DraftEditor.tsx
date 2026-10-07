@@ -53,6 +53,11 @@ const INPUT_PROMPT: Record<PromptNeed, { label: string; hint: string; placeholde
     hint: 'The role and the company, so the ask is a two-minute task for them.',
     placeholder: 'e.g. PM Intern at Notion',
   },
+  posting: {
+    label: 'Link to the posting',
+    hint: 'They asked for the posting, so the ask goes out with it. Paste the link to the role.',
+    placeholder: 'e.g. https://stripe.com/jobs/listing/software-engineer-intern/1234',
+  },
   takeaway: {
     label: 'One thing they said that stuck with you',
     hint: 'A thank-you without it reads like a form letter. Their advice, a story, a point they made, in a few words.',

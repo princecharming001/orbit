@@ -2,6 +2,7 @@ import type { CoffeeChat, MessageKind, OutboundMessage, Person, Suggestion, User
 import {
   composeKindFor,
   contextText,
+  earliestFor,
   fmtWindows,
   generateDraft,
   newId,
@@ -12,6 +13,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { db } from '../db/schema';
 import {
   buildDraftContext,
+  type DraftInputs,
   draftForSuggestion,
   draftMessage,
   evaluateImmediateSuggestions,
@@ -30,9 +32,10 @@ beforeAll(async () => {
 }, 60_000);
 
 /** Validate a stored draft exactly as the app would, against everything Orbit knows about the person. */
-async function validateStored(d: OutboundMessage, s?: Suggestion) {
+async function validateStored(d: OutboundMessage, s?: Suggestion, inputs: DraftInputs = {}) {
   const p = (await db.people.get(d.personId))!;
-  const ctx = await buildDraftContext(user, p, d.kind, d.channel as 'gmail' | 'linkedin', s);
+  // what the student typed (a posting link, a role) is part of what the draft may mention, as in materializeDraft
+  const ctx = await buildDraftContext(user, p, d.kind, d.channel as 'gmail' | 'linkedin', s, inputs);
   return validateDraft(
     {
       body: d.bodyDraft,
@@ -64,6 +67,7 @@ const SAMPLE_INPUTS = {
   news: 'your promotion to team lead',
   target: 'Lucas Fischer, Engineering Manager at Ramp',
   role: 'Software Engineering Intern at Ramp',
+  posting: 'https://ramp.com/careers/software-engineering-intern',
 };
 
 async function people(filter: (p: Person) => boolean): Promise<Person[]> {
@@ -144,6 +148,7 @@ describe('drafting against the demo data', () => {
     const NEED_CODES = ['needs_connection', 'needs_update', 'needs_input', 'placeholder', 'no_specific_line'];
     for (const s of pending) {
       let d = (await db.outbound.get(s.outboundMessageId!))!;
+      let typed: DraftInputs = {};
       if (d.needsInput?.length) {
         // a draft that asks the student for something is gated by exactly that, and passes once it is given
         const gated = (await validateStored(d, s)).filter((i) => i.blocking);
@@ -154,8 +159,9 @@ describe('drafting against the demo data', () => {
         ).toEqual([]);
         d = (await regenerateDraft(user, d.id, SAMPLE_INPUTS))!;
         expect(d.needsInput, d.bodyDraft).toBeUndefined();
+        typed = SAMPLE_INPUTS;
       }
-      const issues = await validateStored(d, s);
+      const issues = await validateStored(d, s, typed);
       expect(
         issues.filter((i) => i.blocking),
         `${s.kind} -> ${d.kind}: ${d.bodyDraft}`,
@@ -403,7 +409,8 @@ describe('drafting against the demo data', () => {
     expect(d.bodyDraft).toMatch(
       /^Dear Chloe,\n\nWe traded emails [^,]+, and I wanted to pick that conversation back up\./,
     );
-    expect(d.bodyDraft).toMatch(/As a quick reminder, I'm a junior at Cornell/);
+    // a "Dear" letter to a recruiter is written without contractions throughout (panel review)
+    expect(d.bodyDraft).toMatch(/As a quick reminder, I am a junior at Cornell/);
     expect((await validateStored(d)).filter((i) => i.blocking)).toEqual([]);
     // on LinkedIn: no subject, and a short note (not the letter) when they are not connected yet
     const li = await draftMessage(user, chloe.id, 'outreach', 'linkedin');
@@ -607,5 +614,60 @@ describe('the "who I am" clause (resume one-liner)', () => {
     const withContact = (await buildDraftContext(noYear, someone, 'outreach', 'gmail')).user.oneLiner;
     expect(withContact ?? '').not.toMatch(/@|\d{3}/);
     await db.resumeFacets.update(summary.id, { text: summary.text });
+  });
+});
+
+describe('drafts review, round 2 (web)', () => {
+  it('a reply asking for times "next week" gets windows from next Monday, never tomorrow', async () => {
+    const hannah = (await people((p) => p.displayName === 'Hannah Brooks'))[0]!;
+    const ctx = await buildDraftContext(user, hannah, 'schedule', 'gmail');
+    expect(ctx.thread?.lastInboundBody).toMatch(/next week/);
+    const from = earliestFor(
+      ctx.thread!.lastInboundBody,
+      new Date(ctx.thread!.lastInboundAt!),
+      user.timezone,
+    )!;
+    expect(ctx.proposedWindows!.length).toBeGreaterThan(0);
+    for (const w of ctx.proposedWindows!)
+      expect(new Date(w.startIso).getTime()).toBeGreaterThanOrEqual(from.getTime());
+  });
+
+  it('a placeholder or a bare sign-off never enters the same-company opening check', async () => {
+    const [a, b] = (await people((p) => (p.currentOrganizationRaw ?? '') === 'Figma')).slice(0, 2);
+    const now = new Date().toISOString();
+    for (const opening of [
+      '[One real update since you last spoke with Jonah]',
+      'Thanks,',
+      'I read your post on the design system.',
+    ])
+      await db.outbound.add({
+        id: newId('out'),
+        userId: user.id,
+        personId: a!.id,
+        channel: 'gmail',
+        kind: 'outreach',
+        bodyDraft: opening,
+        status: 'draft',
+        generatedBy: 'template',
+        claims: [],
+        opening,
+        createdAt: now,
+      });
+    const ctx = await buildDraftContext(user, b!, 'outreach', 'gmail');
+    expect(ctx.recentOpenings).toContain('I read your post on the design system.');
+    expect(ctx.recentOpenings!.some((o) => /\[|^Thanks,$/.test(o))).toBe(false);
+  });
+
+  it('a posting link the student pastes goes into the referral ask', async () => {
+    const maya = (await people((p) => p.displayName === 'Maya Chen'))[0]!;
+    // Maya wrote "send me the posting": the ask goes out with it, or the student is asked for it
+    const d = await draftMessage(user, maya.id, 'referral_ask', 'gmail');
+    expect(d.needsInput).toEqual(['posting']);
+    const re = (await regenerateDraft(user, d.id, {
+      posting: 'https://stripe.com/jobs/listing/intern/123',
+    }))!;
+    expect(re.needsInput).toBeUndefined();
+    expect(re.bodyDraft).toMatch(/https:\/\/stripe\.com\/jobs\/listing\/intern\/123/);
+    expect(re.bodyDraft).not.toMatch(/\[/);
   });
 });

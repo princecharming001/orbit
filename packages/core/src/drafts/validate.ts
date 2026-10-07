@@ -64,6 +64,7 @@ const NEED_DETAIL: Record<string, string> = {
   answer: 'Answer their question in your own words.',
   role: 'Name the role and company you are applying to.',
   takeaway: 'Add one thing they said that stuck with you.',
+  posting: 'Add the link to the posting they asked for.',
 };
 
 /** Capitalised words that are fine anywhere without appearing in the context. */
@@ -79,7 +80,7 @@ const COMMON_CAPS = new Set(
   no yes not completely totally absolutely happy glad sorry hope hoping looking last one two few next
   any anything anyone someone something all some most many much more still even only really
   saw read found noticed met came floating following followed surfacing congratulations congrats well
-  speaking also especially again either neither both each every other another
+  speaking also especially again either neither both each every other another mostly for context
   resume cv`.split(/\s+/),
 );
 const PHRASE_CHECKS: { re: RegExp; anchor: RegExp; what: string }[] = [
@@ -171,9 +172,18 @@ export function validateDraft(
   if (wc > max + 25) issues.push({ code: 'too_long', detail: `${wc} words, aim for ${max}`, blocking: true });
   else if (wc > max)
     issues.push({ code: 'too_long', detail: `${wc} words, aim for ${max}`, blocking: false });
-  if (wc < MIN_WORDS[limitKind]) issues.push({ code: 'too_short', detail: `${wc} words`, blocking: false });
+  // a LinkedIn connection note is capped near 200 to 300 characters: short is right, only a near-empty one is not
+  const note = opts.channel === 'linkedin' && opts.kind === 'outreach' && body.length <= LINKEDIN_NOTE_MAX;
+  if (note ? body.length < 100 : wc < MIN_WORDS[limitKind])
+    issues.push({
+      code: 'too_short',
+      detail: note ? `${body.length} characters` : `${wc} words`,
+      blocking: false,
+    });
+  // a group's or a product's name is not the phrase ("Leveraged Finance", "leveraged buyouts", "LevFin")
+  const phraseText = lower.replace(/\bleveraged (finance|loans?|buyouts?|lending|credit)\b/g, ' ');
   for (const p of BANNED_PHRASES)
-    if (lower.includes(p)) issues.push({ code: 'banned_phrase', detail: p, blocking: true });
+    if (phraseText.includes(p)) issues.push({ code: 'banned_phrase', detail: p, blocking: true });
   if (/[—–]/.test(body))
     issues.push({
       code: 'em_dash',
@@ -203,8 +213,9 @@ export function validateDraft(
       });
   }
   const urls = body.match(/https?:\/\/[^\s)>"]+/g) ?? [];
+  // a link Orbit has on record (the student's posting link, their calendar) is theirs, not made up
   for (const u of urls)
-    if (!opts.allowedUrls.some((a) => a && u.startsWith(a)))
+    if (!opts.allowedUrls.some((a) => a && u.startsWith(a)) && !opts.context?.includes(u))
       issues.push({ code: 'unknown_url', detail: u, blocking: true });
   const emails = body.match(/[\w.+-]+@[\w-]+\.[\w.]+/g) ?? [];
   for (const e of emails)
@@ -233,8 +244,11 @@ export function validateDraft(
       detail: 'nothing in this message is only true of the recipient',
       blocking: opts.kind === 'outreach',
     });
+  // a recruiter gets a logistics question, which has no call length in it
+  const logistics = d.claims.some((c) => c.kind === 'logistics' && c.text === 'logistics question');
   if (
     ['outreach', 'bump', 'intro_request'].includes(opts.kind) &&
+    !logistics &&
     !/\b(15|20|30|fifteen|twenty)[- ]?min/i.test(body) &&
     !/\b(15|20)\b/.test(body)
   )
@@ -284,7 +298,11 @@ export function validateDraft(
       blocking: false,
     });
   if (opts.context !== undefined)
-    for (const u of unsupportedDetails(`${d.subject ?? ''}\n${body}\n${d.bodyShort ?? ''}`, opts.context))
+    // a bracketed prompt for the student is not a claim (it is blocked as a placeholder anyway)
+    for (const u of unsupportedDetails(
+      `${d.subject ?? ''}\n${body}\n${d.bodyShort ?? ''}`.replace(/\[[^\]]*\]/g, ' '),
+      opts.context,
+    ))
       issues.push({
         code: 'unsupported_detail',
         detail: `${u} is not in anything Orbit knows about this person`,

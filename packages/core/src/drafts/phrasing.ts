@@ -339,8 +339,60 @@ export function firstPart(s: string): string {
     .trim();
 }
 
+/**
+ * Their own words in the student's note ("the key is knowing one deal on our coverage list"): "our" and "we" were the
+ * speaker's, so in a note back to them they are "your" and "you" ("on your coverage list").
+ */
+export function theirWords(s: string): string {
+  return s
+    .replace(/\bwe're\b/g, "you're")
+    .replace(/\bwe've\b/g, "you've")
+    .replace(/\bourselves\b/g, 'yourselves')
+    .replace(/\bours\b/g, 'yours')
+    .replace(/\bour\b/g, 'your')
+    .replace(/\bwe\b/g, 'you');
+}
+
+/**
+ * A note the student wrote at the time, retold afterwards: "refer me once I have picked a team" reads "refer me once
+ * I'd picked a team" in "When we spoke, you offered to ...".
+ */
+export function reported(s: string): string {
+  return s.replace(/\b(once|when|after|as soon as|until|if) I (?:have|'ve)\b/gi, "$1 I'd");
+}
+
+/** "Goldman Sachs'" and "J.P. Morgan's". */
+export function possessive(name: string): string {
+  return /s$/i.test(name.trim()) ? `${name.trim()}'` : `${name.trim()}'s`;
+}
+
+const GROUP_NOUN =
+  /\b(office|team|group|practice|desk|division|department|unit|labs?|org|organization|studio|platform|fund|program)$/i;
+/** A group as stored ("TMT", "Boston office", "fintech team") with the noun it needs: "TMT group", "Boston office". */
+export function groupNoun(group: string, sector: string): string {
+  const g = group.replace(/\s+/g, ' ').trim();
+  if (GROUP_NOUN.test(g)) return g;
+  return `${g} ${sector === 'finance' ? 'group' : sector === 'consulting' ? 'practice' : 'team'}`;
+}
+/**
+ * The group as the object of "chose": a banker's group by its name ("how you chose TMT", "Leveraged Finance"), anything
+ * that carries its own noun with an article ("the Boston office", "the fintech team").
+ */
+export function chosenGroup(group: string): string {
+  const g = group.replace(/\s+/g, ' ').trim();
+  return GROUP_NOUN.test(g) || /^[a-z]/.test(g) ? `the ${g}` : g;
+}
+/** "Goldman Sachs' TMT group", "Bain & Company's Boston office", "Meta's Ads Infrastructure team". */
+export function orgGroup(org: string, group: string | undefined, sector: string): string {
+  return group?.trim() ? `${possessive(org)} ${groupNoun(group, sector)}` : org;
+}
+
 /** "what you said about focusing on X" / "your point that the key is Y" / "your advice to apply early". */
 export function pointPhrase(c: FactClause | undefined): string | undefined {
+  const p = pointPhraseRaw(c);
+  return p && theirWords(p);
+}
+function pointPhraseRaw(c: FactClause | undefined): string | undefined {
   if (!c) return undefined;
   if (!c.you) return `your point that ${firstPart(c.text)}`;
   const v = c.verb?.toLowerCase() ?? '';
