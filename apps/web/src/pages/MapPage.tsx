@@ -668,13 +668,6 @@ export function MapPage() {
                 Each line runs from the person who introduced you to the person they introduced you to. A
                 dashed line is someone you already knew, and each colour is one chain.
               </div>
-              {litSentence && (
-                <Card padded className="border-accent/40 bg-accent-soft/30">
-                  <p className="text-[13px]" data-testid="map-chain-sentence">
-                    {litSentence}
-                  </p>
-                </Card>
-              )}
               <Card padded>
                 <div className="font-medium text-[13px] mb-2">Your introductions</div>
                 {stories.length === 0 && (
@@ -705,6 +698,15 @@ export function MapPage() {
                   ))}
                 </ul>
               </Card>
+              {/* a chain lit from the map, said in words (a chain hovered in the list already says it); below the list,
+                  so nothing under the pointer moves when it appears */}
+              {litSentence && !storyHover && (
+                <Card padded className="border-accent/40 bg-accent-soft/30">
+                  <p className="text-[13px]" data-testid="map-chain-sentence">
+                    {litSentence}
+                  </p>
+                </Card>
+              )}
             </>
           )}
           {reachMode && !target && !company && !choices && (

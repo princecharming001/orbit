@@ -430,10 +430,15 @@ test.describe('Map motion', () => {
     await expect
       .poll(async () => new Set((await mapSnapshot(page)).webLit))
       .toEqual(new Set(Object.values(ids)));
+    // hovering Aisha on the map lights the same chain and says it in words under the list
+    const box = (await mapCanvas(page).boundingBox())!;
+    const aishaDot = (await mapDots(page, [ids['Aisha Volkov']]))[ids['Aisha Volkov']]!;
+    await page.mouse.move(box.x + aishaDot.x, box.y + aishaDot.y);
     await expect(page.getByTestId('map-chain-sentence')).toHaveText(
       'Elena introduced you to Tomas, who introduced you to Aisha.',
     );
     await page.mouse.move(5, 5);
+    await expect(page.getByTestId('map-chain-sentence')).toHaveCount(0);
     // the search box searches the web and turns the orbit to the match
     await search(page, 'Aisha');
     await expect.poll(async () => (await mapSnapshot(page)).focus).toBe(`web:${ids['Aisha Volkov']}`);
