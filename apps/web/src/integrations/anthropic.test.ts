@@ -1,8 +1,10 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { DraftContext, DraftOutput } from '@orbit/core';
 import { defaultStyleCard } from '@orbit/core';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  describeLlmFailure,
+  fmtFailureTime,
   LlmError,
   llmDraft,
   llmEnabled,
@@ -10,8 +12,9 @@ import {
   neutralizeTags,
   setLlmClientFactoryForTests,
   testApiKey,
+  toLlmError,
 } from './anthropic';
-import { clearPrefs, readPrefs, todaysLlmUsage, writePrefs } from './prefs';
+import { clearPrefs, flushPrefs, readPrefs, todaysLlmUsage, writePrefs } from './prefs';
 
 interface Call {
   system: string;
@@ -294,5 +297,68 @@ describe('daily budget and failures', () => {
     fakeClient(() => ({ parsed_output: NETWORKING }), calls);
     await llmTriage('a', [{ fromEmail: 'a@b.com', direction: 'inbound', body: 'x' }], 'me@x.edu');
     expect(JSON.stringify(calls[0]!.params)).not.toContain('cache_control');
+  });
+});
+
+describe('failure copy', () => {
+  it('maps an SDK structured-output parse error to bad_output and keeps the raw text out of the copy', async () => {
+    writePrefs({ llmFeatures: { emailTriage: true } });
+    fakeClient(
+      () =>
+        new Anthropic.AnthropicError(
+          'Failed to parse structured output as JSON: Unexpected token } in JSON at position 41',
+        ),
+      [],
+    );
+    const p = llmTriage('a', [{ fromEmail: 'a@b.com', direction: 'inbound', body: 'x' }], 'me@x.edu');
+    await expect(p).rejects.toMatchObject({ reason: 'bad_output' });
+    const stored = readPrefs().lastLlmError!;
+    expect(stored.reason).toBe('bad_output');
+    expect(stored.message).not.toMatch(/parse|JSON|token/i);
+    const copy = describeLlmFailure(toLlmError(await p.catch((e) => e)));
+    expect(`${copy.title} ${copy.body}`).not.toMatch(/parse|JSON|Unexpected/i);
+  });
+
+  it('never shows raw API or JavaScript error text', () => {
+    const api = toLlmError(
+      new Anthropic.BadRequestError(
+        400,
+        undefined,
+        'messages.0.content: invalid_request_error',
+        new Headers(),
+      ),
+    );
+    const js = toLlmError(new TypeError("Cannot read properties of undefined (reading 'content')"));
+    for (const e of [api, js]) {
+      const { title, body } = describeLlmFailure(e);
+      expect(`${title} ${body}`).not.toMatch(/invalid_request|Cannot read|\(\d{3}\)|undefined/);
+      expect(e.detail).toBeTruthy();
+    }
+  });
+
+  it("shows when the last problem happened in the student's timezone, with the weekday", () => {
+    // 00:48 UTC on Thursday is still Wednesday evening in New York
+    expect(fmtFailureTime('2026-10-08T00:48:00.000Z', 'America/New_York')).toBe('Wed, Oct 7, 8:48 PM');
+    expect(fmtFailureTime('2026-10-08T00:48:00.000Z', 'Not/AZone')).toMatch(/^(Wed|Thu), Oct/);
+  });
+});
+
+describe('another tab', () => {
+  it('stops sending email to Anthropic as soon as another tab removes the key', async () => {
+    writePrefs({ llmFeatures: { emailTriage: true } });
+    await flushPrefs();
+    const calls: Call[] = [];
+    fakeClient(() => ({ parsed_output: NETWORKING }), calls);
+    vi.resetModules();
+    const otherTab = await import('./prefs');
+    await otherTab.loadPrefs();
+    otherTab.writePrefs({ anthropicApiKey: undefined });
+    await otherTab.flushPrefs();
+    expect(
+      await llmTriage('a', [{ fromEmail: 'a@b.com', direction: 'inbound', body: 'x' }], 'me@x.edu'),
+    ).toBeUndefined();
+    expect(calls).toHaveLength(0);
+    await flushPrefs();
+    expect(readPrefs().anthropicApiKey).toBeUndefined();
   });
 });

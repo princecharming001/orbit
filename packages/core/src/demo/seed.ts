@@ -631,12 +631,14 @@ export function buildDemoDataset(
       stageEnteredAt: isoDaysAgo(now, 3),
     });
   }
-  // 4: scheduled tomorrow -> prep brief
+  // 4: scheduled within the next day -> prep brief. The prep rule looks 30 hours ahead, so take the
+  // next 11:30 that is at least two hours away (today if it is early, otherwise tomorrow); a fixed
+  // "tomorrow 11:30" fell outside the window whenever the demo loaded before 05:30.
   {
     const p = pick(3);
     const start = new Date(now);
-    start.setDate(start.getDate() + 1);
     start.setHours(11, 30, 0, 0);
+    if (start.getTime() - now.getTime() < 2 * 3_600_000) start.setDate(start.getDate() + 1);
     const end = new Date(start.getTime() + 30 * 60_000);
     const th = addThread(p, 'Chat next week', [
       {

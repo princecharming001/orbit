@@ -17,7 +17,9 @@ import {
   type LlmFeature,
   llmFeatures,
   readPrefs,
+  refreshPrefs,
   todaysLlmUsage,
+  updatePrefs,
   writePrefs,
 } from './prefs';
 
@@ -64,28 +66,47 @@ export type LlmFailureReason =
 export class LlmError extends Error {
   constructor(
     readonly reason: LlmFailureReason,
+    /** Plain-language explanation, safe to show to the student. */
     message: string,
+    /** The underlying technical error, for the console only; never shown in the UI. */
+    readonly detail?: string,
   ) {
     super(message);
     this.name = 'LlmError';
   }
 }
 
+/** The SDK throws a plain AnthropicError when structured output is not valid JSON or does not match the schema. */
+function isParseFailure(e: unknown): boolean {
+  return (
+    e instanceof Anthropic.AnthropicError &&
+    !(e instanceof Anthropic.APIError) &&
+    /structured output|parse/i.test(e.message)
+  );
+}
+
 export function toLlmError(e: unknown): LlmError {
   if (e instanceof LlmError) return e;
+  const detail = e instanceof Error ? e.message : String(e);
   if (e instanceof Anthropic.AuthenticationError)
-    return new LlmError('auth', 'Anthropic rejected the API key.');
+    return new LlmError('auth', 'Anthropic rejected the API key.', detail);
   if (e instanceof Anthropic.PermissionDeniedError)
-    return new LlmError('permission', 'The API key does not have access to this model.');
+    return new LlmError('permission', 'The API key does not have access to this model.', detail);
   if (e instanceof Anthropic.RateLimitError)
-    return new LlmError('rate_limit', 'Anthropic is rate limiting this key.');
+    return new LlmError('rate_limit', 'Anthropic is rate limiting this key.', detail);
   if (e instanceof Anthropic.APIConnectionError)
-    return new LlmError('network', 'Could not reach the Anthropic API (offline, blocked or timed out).');
+    return new LlmError(
+      'network',
+      'Could not reach Anthropic. The connection may be offline, blocked or too slow.',
+      detail,
+    );
   if (e instanceof Anthropic.APIError)
     return (e.status ?? 0) >= 500
-      ? new LlmError('server', `Anthropic returned an error (${e.status}).`)
-      : new LlmError('other', `Anthropic returned an error (${e.status}): ${e.message}`);
-  return new LlmError('other', e instanceof Error ? e.message : String(e));
+      ? new LlmError('server', 'Anthropic had a temporary problem on its side.', detail)
+      : new LlmError('other', 'Anthropic could not complete the request.', detail);
+  if (isParseFailure(e))
+    return new LlmError('bad_output', 'Claude returned an answer Orbit could not read.', detail);
+  return new LlmError('other', 'Something went wrong while asking Claude.', detail);
 }
 
 /** Notification copy for a failure: what happened and what Orbit does instead. */
@@ -134,6 +155,23 @@ export function describeLlmFailure(e: LlmError): { title: string; body: string }
   }
 }
 
+/** When a failure happened, in the student's timezone with the weekday, e.g. "Wed, Oct 7, 9:41 AM". */
+export function fmtFailureTime(iso: string, tz: string | undefined): string {
+  const opts: Intl.DateTimeFormatOptions = {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  };
+  try {
+    return new Date(iso).toLocaleString('en-US', { ...opts, timeZone: tz });
+  } catch {
+    // unknown timezone name: fall back to the device's own
+    return new Date(iso).toLocaleString('en-US', opts);
+  }
+}
+
 function recordFailure(e: LlmError): void {
   writePrefs({ lastLlmError: { reason: e.reason, message: e.message, at: new Date().toISOString() } });
 }
@@ -152,22 +190,28 @@ function reserveRequest(): void {
       'cap',
       `Orbit has used ${(usage.inputTokens + usage.outputTokens).toLocaleString('en-US')} Claude tokens today, your daily limit.`,
     );
-  writePrefs({ llmUsage: { ...usage, requests: usage.requests + 1 } });
+  // Counted against the stored row, so requests from several open tabs add up to one daily total.
+  updatePrefs((cur) => {
+    const u = todaysLlmUsage(cur);
+    return { ...cur, llmUsage: { ...u, requests: u.requests + 1 } };
+  });
 }
 
 function recordTokens(u: Partial<Anthropic.Usage> | undefined): void {
   if (!u) return;
-  const usage = todaysLlmUsage();
-  writePrefs({
-    llmUsage: {
-      ...usage,
-      inputTokens:
-        usage.inputTokens +
-        (u.input_tokens ?? 0) +
-        (u.cache_creation_input_tokens ?? 0) +
-        (u.cache_read_input_tokens ?? 0),
-      outputTokens: usage.outputTokens + (u.output_tokens ?? 0),
-    },
+  const input =
+    (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
+  const output = u.output_tokens ?? 0;
+  updatePrefs((cur) => {
+    const usage = todaysLlmUsage(cur);
+    return {
+      ...cur,
+      llmUsage: {
+        ...usage,
+        inputTokens: usage.inputTokens + input,
+        outputTokens: usage.outputTokens + output,
+      },
+    };
   });
 }
 
@@ -216,6 +260,8 @@ async function runParse<T extends z.ZodTypeAny>(
   effort: 'low' | 'medium' | 'high',
   maxTokens: number,
 ): Promise<z.infer<T> | undefined> {
+  // Another tab may have removed the key, turned this feature off or used up today's budget.
+  await refreshPrefs();
   if (!llmEnabled(feature)) return undefined;
   const c = client();
   if (!c) return undefined;

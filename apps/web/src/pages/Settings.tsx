@@ -8,7 +8,7 @@ import { loadDemo } from '../engine/demo';
 import { importConnectionsCsv } from '../engine/linkedin';
 import { saveResume } from '../engine/resume';
 import { syncGoogle } from '../engine/sync';
-import { hasLlm, MODEL, testApiKey } from '../integrations/anthropic';
+import { fmtFailureTime, hasLlm, MODEL, testApiKey } from '../integrations/anthropic';
 import { connectGoogle, currentGoogleToken, disconnectGoogle, googleClientId } from '../integrations/google';
 import {
   clearPrefs,
@@ -17,7 +17,9 @@ import {
   type LlmFeature,
   llmFeatures,
   readPrefs,
+  subscribePrefs,
   todaysLlmUsage,
+  updatePrefs,
   writePrefs,
 } from '../integrations/prefs';
 import { useSession } from '../state/session';
@@ -568,9 +570,12 @@ const AI_FEATURES: { key: LlmFeature; label: string; sends: string }[] = [
 ];
 
 function ClaudeCard() {
+  const tz = useSession().user?.timezone;
   const [prefs, setPrefs] = useState(readPrefs);
   const [apiKey, setApiKey] = useState(prefs.anthropicApiKey ?? '');
   const [keyStatus, setKeyStatus] = useState<string>();
+  // Stay in step with changes made by Claude calls and by Orbit open in another tab.
+  useEffect(() => subscribePrefs(setPrefs), []);
   const update = (p: Parameters<typeof writePrefs>[0]) => setPrefs(writePrefs(p));
   const features = llmFeatures(prefs);
   const usage = todaysLlmUsage(prefs);
@@ -629,7 +634,13 @@ function ClaudeCard() {
               className="mt-1"
               data-testid={`ai-feature-${f.key}`}
               checked={features[f.key]}
-              onChange={(e) => update({ llmFeatures: { ...features, [f.key]: e.target.checked } })}
+              onChange={(e) => {
+                const on = e.target.checked;
+                // only this one switch changes; the others keep whatever is stored, even if set in another tab
+                setPrefs(
+                  updatePrefs((cur) => ({ ...cur, llmFeatures: { ...llmFeatures(cur), [f.key]: on } })),
+                );
+              }}
             />
             <span>
               <strong className="font-medium">{f.label}.</strong>{' '}
@@ -671,8 +682,8 @@ function ClaudeCard() {
       </p>
       {prefs.lastLlmError && (
         <p className="text-[12px] text-bad mt-1" data-testid="ai-last-error">
-          Last problem, {new Date(prefs.lastLlmError.at).toLocaleString()}: {prefs.lastLlmError.message} Orbit
-          used its templates instead.
+          Last problem, {fmtFailureTime(prefs.lastLlmError.at, tz)}: {prefs.lastLlmError.message} Orbit used
+          its templates instead.
         </p>
       )}
     </Card>
