@@ -451,8 +451,8 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
           reasonText: hook
             ? days === undefined
               ? `You have a reason to check in with ${person.firstName}: "${clip(hook.text, 60)}"`
-              : `${Math.round(days)} days ${since}; you have a hook: "${clip(hook.text, 60)}"`
-            : `${Math.round(days ?? 0)} days ${since}; a short update on your search keeps it warm`,
+              : `${Math.round(days)} days ${since}; something to ask about: "${clip(hook.text, 60)}"`
+            : `${Math.round(days ?? 0)} days ${since}; a short update on your search keeps you in touch`,
           signals: { days, cadence, hookId: hook?.id },
           payload: hook ? { hookId: hook.id } : { needsUpdate: true },
           urgency: 0.4,

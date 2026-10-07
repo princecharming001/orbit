@@ -115,11 +115,11 @@ export const FACT_TYPE_LABELS: Record<FactType, string> = {
   advice: 'Advice',
   personal: 'Personal',
   offer: 'Offers',
-  hook: 'Things to ask about',
+  hook: 'Worth bringing up',
   preference: 'Preferences',
   ask_made: 'Your asks',
   contact_info: 'Contact info',
-  connection: 'Connections',
+  connection: 'How you are linked',
 };
 
 export const NOTE_SOURCE_LABELS: Record<NoteSource, string> = {

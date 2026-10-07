@@ -117,7 +117,7 @@ export function Discover() {
     <div>
       <PageHeader
         title="Discover"
-        subtitle="People from your network worth a coffee chat, best first: how well they match your goals, how easy they are to reach, and how likely they are to reply."
+        subtitle="People from your network worth a coffee chat. Saved people come first, then the best mix of how well they match your goals and how easy they are to reach."
         actions={
           <Button onClick={refresh} disabled={busy}>
             <RefreshCw size={14} className={busy ? 'animate-spin' : ''} /> Refresh
@@ -132,9 +132,14 @@ export function Discover() {
           aria-label="Search your network"
           className="w-full sm:w-80"
         />
-        <Link to="/map?reach=1">
-          <Button variant="secondary">Find someone who can introduce you</Button>
-        </Link>
+        {people.filter((p) => p.isHuman && !p.hiddenAt).length > 1 && (
+          <Link
+            to="/map?reach=1"
+            title="Opens the Map, where you pick a person and see who could introduce you"
+          >
+            <Button variant="secondary">Find an intro on the Map</Button>
+          </Link>
+        )}
       </div>
       {searchHits.length > 0 && (
         <div className="mb-6 border border-line rounded-[var(--radius-card)] divide-y divide-line">
@@ -163,15 +168,16 @@ export function Discover() {
           body={emptyHint}
           action={
             <div className="flex flex-wrap justify-center gap-2">
-              {missing.people && <AddPersonButton variant="primary" />}
-              {missing.people && <LinkedInImportButton />}
+              {/* the two things the message suggests, right here, whatever is missing */}
+              <AddPersonButton variant={missing.people || !missing.goals ? 'primary' : 'secondary'} />
+              <LinkedInImportButton />
               {missing.goals && (
                 <Link to="/settings/goals">
                   <Button variant={missing.people ? 'secondary' : 'primary'}>Set your goals</Button>
                 </Link>
               )}
-              {!missing.people && (
-                <Button variant={missing.goals ? 'secondary' : 'primary'} onClick={refresh}>
+              {!missing.people && missing.goals && (
+                <Button variant="secondary" onClick={refresh}>
                   Generate recommendations
                 </Button>
               )}
@@ -181,8 +187,8 @@ export function Discover() {
       ) : (
         <>
           <p className="text-[12px] text-ink-3 mb-3" data-testid="discover-legend">
-            Match is how well their role and company fit your goals, out of 100. The dots show how easy they
-            are to reach: through people you know, a shared school, or a past conversation.
+            Match is how well their role and company fit your goals, out of 100. Reach is how easy they are to
+            get to: through people you know, a shared school, or a past conversation. The order weighs both.
           </p>
           <div className="grid md:grid-cols-2 gap-3 [&>*]:min-w-0">
             {list.map((r) => {
@@ -226,8 +232,8 @@ export function Discover() {
                         <span title="How well their role and company fit your goals, out of 100">
                           Match {Math.round(r.fitScore * 100)}
                         </span>
-                        <span className="inline-flex items-center gap-1">
-                          Reachable <StrengthDots v={r.reachScore} label="How easy to reach" />
+                        <span title="How easy they are to reach, out of 100">
+                          Reach {Math.round(r.reachScore * 100)}
                         </span>
                       </div>
                       {cold && (
@@ -248,11 +254,11 @@ export function Discover() {
                         onClick={async () => {
                           await db.recommendations.update(r.id, { status: 'saved' });
                           toast.push({
-                            text: `Saved ${p.firstName}. Saved people stay at the top of this list.`,
+                            text: `Saved ${p.firstName}. Saved people stay at the top of Discover until you write to them.`,
                           });
                         }}
                       >
-                        Save
+                        Save for later
                       </Button>
                     )}
                     <div
@@ -260,7 +266,7 @@ export function Discover() {
                       role="group"
                       aria-label="Not a fit? Tell Orbit why"
                     >
-                      <span className="text-ink-3 self-center mr-0.5">Not a fit:</span>
+                      <span className="text-ink-3 self-center mr-0.5">Not a fit?</span>
                       {[
                         ['wrong_role', 'Wrong role'],
                         ['wrong_company', 'Wrong company'],

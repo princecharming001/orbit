@@ -163,7 +163,7 @@ export async function loadDemo(
   const ds = buildDemoDataset({ now });
   const user = ds.user;
   user.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || user.timezone; // seeded times are in the browser's clock
-  log('Creating your demo profile');
+  log('Setting up a made-up student, Alex');
   await db.users.put(user);
   await db.settings.put(ds.settings);
   await db.goals.put(ds.goals);
@@ -193,7 +193,7 @@ export async function loadDemo(
     lastSyncedAt: user.createdAt,
   });
   await setCurrentUserId(user.id);
-  log('Importing LinkedIn connections');
+  log('Adding sample LinkedIn connections');
   await db.people.bulkPut(ds.people);
   await db.affiliations.bulkPut(ds.affiliations);
   for (const p of connected)
@@ -211,7 +211,7 @@ export async function loadDemo(
   // The warm-up has no mail behind it yet, so it is the one chat seeded directly.
   for (const c of ds.chats.filter((x) => x.stage === 'warming')) await db.chats.put(c);
 
-  log('Reading your mailbox and calendar (demo)');
+  log('Playing back a sample season of emails and chats');
   const seen = new Set(await db.notifications.toCollection().primaryKeys());
   // what the engine notified about before the previous business day is not news today (on a Monday, Friday's is)
   const newsSince = businessDay(now, -1, 0).getTime();
@@ -227,13 +227,13 @@ export async function loadDemo(
   await db.outbound.bulkDelete(replayed.map((s) => s.outboundMessageId).filter((id): id is string => !!id));
   await db.suggestions.bulkDelete(replayed.map((s) => s.id));
 
-  log('Building your map');
+  log('Drawing the sample network');
   await recomputeAllStrengths(user.id, now);
   await recomputeEdges(user.id);
   log('Finding people to meet');
   await recommendationsRefresh(user, now);
   for (const c of ds.chats) await refreshPersonSummary(user, c.personId);
-  log('Writing your first brief');
+  log("Writing today's list");
   await generateBrief(user, 'welcome', now);
   return user;
 }

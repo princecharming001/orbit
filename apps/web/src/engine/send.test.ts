@@ -918,6 +918,15 @@ describe('re-validation at approval (SND-17) and stage mapping (SND-21)', () => 
     expect(warn.find((i) => i.code === 'unknown_url')?.blocking).toBe(false);
   });
 
+  it("the student's own ordinary words ('reach out') are a suggestion, not a block", async () => {
+    const { d } = await pendingDraft(user, 'thank_you');
+    const body = d.bodyDraft.replace(/\n\n/, '\n\nAisha Johnson suggested I reach out. ');
+    const issues = await reviewDraft(user, d, body);
+    const phrase = issues.find((i) => i.code === 'banned_phrase');
+    expect(phrase?.blocking).toBe(false);
+    expect(phrase?.text).toMatch(/fine to keep/i);
+  });
+
   it("a plain 'reply' (not a time confirmation) does not move the chat to scheduling", async () => {
     const d = await bumpDraft(user);
     const chat = (await db.chats.get(d.chatId!))!;

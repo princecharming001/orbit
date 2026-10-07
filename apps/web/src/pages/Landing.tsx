@@ -1,11 +1,11 @@
 import type { User } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { ArrowRight, CalendarCheck, Mail, Map as MapIcon, Sparkles, Sun } from 'lucide-react';
+import { ArrowRight, LayoutGrid, Mail, Map as MapIcon, NotebookPen, Sparkles, Sun } from 'lucide-react';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Logo } from '../components/AppShell';
 import { db } from '../db/schema';
-import { createLocalUser } from '../engine/account';
+import { createLocalUser, leaveDemoForOwnSetup } from '../engine/account';
 import { DEMO_USER_ID, demoResetPrompt, loadDemo } from '../engine/demo';
 import { useSession } from '../state/session';
 import { Button, Spinner } from '../ui';
@@ -41,6 +41,14 @@ export function Landing() {
   };
   const start = async () => {
     if (resolving) return;
+    // the demo holds nothing of the student's: their own setup replaces it
+    if (isDemo) {
+      setBusy('Clearing the demo…');
+      const u = await leaveDemoForOwnSetup();
+      await setUserId(u.id);
+      nav(onboardingPath(2));
+      return;
+    }
     // An existing user continues where they are; only a first visit creates a new local profile.
     if (onboarded) return nav('/today');
     if (midSetup && user) return nav(onboardingPath(user.onboardingStep));
@@ -49,7 +57,13 @@ export function Landing() {
     await setUserId(u.id);
     nav(onboardingPath(2));
   };
-  const startLabel = onboarded ? 'Open Orbit' : midSetup ? 'Continue setup' : 'Get started';
+  const startLabel = isDemo
+    ? 'Set up Orbit for me'
+    : onboarded
+      ? 'Open Orbit'
+      : midSetup
+        ? 'Continue setup'
+        : 'Get started';
   return (
     <div className="min-h-full bg-canvas">
       {busy && (
@@ -70,7 +84,19 @@ export function Landing() {
           <a href="#privacy">Privacy</a>
         </nav>
         <div className="ml-auto sm:ml-4 flex items-center gap-2" data-testid="landing-actions">
-          {resolving ? null : onboarded ? (
+          {resolving ? null : isDemo && onboarded ? (
+            <>
+              {/* on a phone the hero below has this button too; the header keeps only the next step */}
+              <span className="hidden sm:inline">
+                <Button variant="ghost" onClick={() => nav('/today')}>
+                  Back to the demo
+                </Button>
+              </span>
+              <Button variant="primary" onClick={start} disabled={!!busy}>
+                Set up Orbit for me
+              </Button>
+            </>
+          ) : onboarded ? (
             <Button variant="primary" onClick={() => nav('/today')}>
               Open Orbit
             </Button>
@@ -111,6 +137,11 @@ export function Landing() {
                 {startLabel} <ArrowRight size={16} />
               </Button>
             )}
+            {isDemo && onboarded && !resolving && (
+              <Button size="lg" variant="secondary" onClick={() => nav('/today')}>
+                Back to the demo
+              </Button>
+            )}
             {!onboarded && !resolving && (
               <Button size="lg" variant="secondary" onClick={demo} disabled={!!busy}>
                 {/* the full progress message is in the status pill at the bottom; the button stays its own width */}
@@ -119,11 +150,16 @@ export function Landing() {
                     <Spinner /> Loading…
                   </>
                 ) : (
-                  'Try it with demo data'
+                  'Try the demo'
                 )}
               </Button>
             )}
           </div>
+          {isDemo && onboarded && (
+            <p className="mt-3 text-[13px] text-ink-2">
+              You are in the demo, with a made-up student's data. Setting up your own clears it.
+            </p>
+          )}
           {onboarded && !isDemo && (
             <p className="mt-3 text-[13px] text-ink-2">
               Your data on this browser belongs to {user?.fullName || 'your profile'}. To try the demo
@@ -150,16 +186,16 @@ export function Landing() {
             {[
               {
                 icon: Sun,
-                title: 'Morning brief',
-                body: 'Five to seven things worth doing today: follow up, say thank you, confirm a time, prep for a chat, reconnect. Each with a ready draft and the reason it is there.',
+                title: 'A short list for today',
+                body: 'The few things worth doing today: follow up, say thank you, confirm a time, prep for a chat, reconnect. Each with a ready draft and the reason it is there. The rest waits until you want it.',
               },
               {
                 icon: Mail,
                 title: 'Drafts in your voice',
-                body: 'Every line comes from something you actually know about the person. You edit, approve or skip. Connect Gmail and Orbit learns how you write.',
+                body: 'Every line comes from something you actually know about the person. You edit it, send it yourself, or skip it.',
               },
               {
-                icon: CalendarCheck,
+                icon: LayoutGrid,
                 title: 'Every chat in one place',
                 body: 'See where each conversation stands, from first message to scheduled to thanked, and who has gone quiet.',
               },
@@ -174,7 +210,7 @@ export function Landing() {
                 body: 'For someone you only know from LinkedIn, Orbit suggests a few small steps first, like reacting to a post, so your name is familiar when you write.',
               },
               {
-                icon: CalendarCheck,
+                icon: NotebookPen,
                 title: 'Remembers every chat',
                 body: 'Type, dictate or paste notes after a chat. What they said, what they offered and what you promised land on their profile.',
               },
@@ -199,7 +235,7 @@ export function Landing() {
             device.
           </p>
           <ul className="mt-5 space-y-2 text-[14px] text-ink-2">
-            <li>• Nothing is sent without your tap. Approval binds the exact text.</li>
+            <li>• Nothing is sent without you. What goes out is exactly the text you read.</li>
             <li>• No scraping. LinkedIn comes from your own data export.</li>
             <li>• Export or wipe everything from Settings, any time.</li>
           </ul>
@@ -257,7 +293,7 @@ function HeroMock() {
       tone: 'bg-good-soft text-good',
     },
     {
-      kind: 'Follow up',
+      kind: 'Follow-up',
       who: 'Priya Patel · Engineering Manager at Ramp',
       reason: 'No reply in 6 business days',
       tone: 'bg-warn-soft text-warn',
@@ -297,14 +333,14 @@ function HeroMock() {
                   <div className="text-[13px] font-medium truncate">{c.who}</div>
                   <div className="text-[12px] text-ink-3 truncate">{c.reason}</div>
                 </div>
-                <span className="text-[12px] text-accent font-medium shrink-0">Review</span>
+                <span className="text-[12px] text-ink-3 shrink-0">Draft ready</span>
               </div>
             ))}
           </div>
         </div>
       </div>
       {/* sits behind the preview card, so it never covers the names on it */}
-      <div className="absolute -bottom-10 -right-8 z-0 hidden md:block" aria-hidden>
+      <div className="absolute -bottom-12 -right-4 z-0 hidden lg:block opacity-60" aria-hidden>
         <OrbitMini />
       </div>
     </div>

@@ -1,7 +1,7 @@
 import { RELATIONSHIP_LABELS, STAGE_LABELS } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { AddPersonButton } from '../components/AddPerson';
 import { LinkedInImportButton } from '../components/LinkedInImport';
 import { db } from '../db/schema';
@@ -11,6 +11,7 @@ import { StrengthDots } from './Pipeline';
 
 export function People() {
   const { userId } = useSession();
+  const nav = useNavigate();
   const [q, setQ] = useState('');
   const [filter, setFilter] = useState<'all' | 'alumni' | 'strong' | 'chats' | 'targets' | 'hidden'>('all');
   const [sort, setSort] = useState<'strength' | 'recent' | 'name'>('strength');
@@ -73,10 +74,10 @@ export function People() {
         title="People"
         subtitle={
           filter === 'hidden'
-            ? `${list.length} hidden ${list.length === 1 ? 'person' : 'people'}. Open one and choose Unhide to bring them back.`
+            ? `${list.length} hidden ${list.length === 1 ? 'person' : 'people'}. Open one and choose Show again to bring them back.`
             : filtered
               ? `${list.length} of ${total} people`
-              : `${total} people in your orbit`
+              : `${total} ${total === 1 ? 'person' : 'people'} in your orbit`
         }
         actions={<AddPersonButton />}
       />
@@ -132,7 +133,9 @@ export function People() {
                         {[p.currentTitle, p.currentOrganizationRaw].filter(Boolean).join(' at ') || '—'}
                       </span>
                       <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-ink-3">
-                        <StrengthDots v={p.strength} showValue />
+                        <span className="inline-flex items-center gap-1">
+                          Closeness <StrengthDots v={p.strength} />
+                        </span>
                         {role(p) && <span>{role(p)}</span>}
                         {c && <Chip className="h-5">{STAGE_LABELS[c.stage]}</Chip>}
                       </span>
@@ -159,7 +162,14 @@ export function People() {
                 {list.slice(0, 300).map((p) => {
                   const c = activeChat.get(p.id);
                   return (
-                    <tr key={p.id} className="hover:bg-canvas-2/60">
+                    // the whole row opens the person, like it looks; the name stays the link for keyboard and screen readers
+                    <tr
+                      key={p.id}
+                      className="hover:bg-canvas-2/60 cursor-pointer"
+                      onClick={(e) => {
+                        if (!(e.target as HTMLElement).closest('a,button')) nav(`/people/${p.id}`);
+                      }}
+                    >
                       <td className="px-3 h-12">
                         <Link
                           to={`/people/${p.id}`}
@@ -174,12 +184,12 @@ export function People() {
                           )}
                         </Link>
                       </td>
-                      <td className="px-3 text-ink-2 truncate max-w-[220px]">
+                      <td className="px-3 text-ink-2 min-w-[220px]">
                         {[p.currentTitle, p.currentOrganizationRaw].filter(Boolean).join(' · ') || '—'}
                       </td>
                       <td className="px-3 text-ink-2 whitespace-nowrap">{role(p) ?? '—'}</td>
                       <td className="px-3">
-                        <StrengthDots v={p.strength} showValue />
+                        <StrengthDots v={p.strength} />
                       </td>
                       <td className="px-3 text-ink-2 whitespace-nowrap">{relDate(p.lastInteractionAt)}</td>
                       <td className="px-3">

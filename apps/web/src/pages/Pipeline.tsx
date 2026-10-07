@@ -5,8 +5,10 @@ import { ArrowDown, ArrowUp, ChevronRight } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { AddPersonButton } from '../components/AddPerson';
+import { ScheduleChatDialog } from '../components/ScheduleChat';
 import { KIND_LABEL } from '../components/SuggestionCard';
 import { db } from '../db/schema';
+import { moveChat, upcomingMeeting } from '../engine/move';
 import { applyStage } from '../engine/stages';
 import { useHints } from '../state/hints';
 import { useSession } from '../state/session';
@@ -62,7 +64,9 @@ export function Pipeline() {
   const [showClosed, setShowClosed] = useState(false);
   const [onlyTargets, setOnlyTargets] = useState(false);
   const [onlyQuiet, setOnlyQuiet] = useState(params.get('quiet') === '1');
-  const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: 'lastSent', dir: 1 });
+  // active chats first, in pipeline order; the newest activity first within a stage
+  const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: 'stage', dir: 1 });
+  const [asking, setAsking] = useState<CoffeeChat>();
   const nav = useNavigate();
   const toast = useToast();
   const hints = useHints();
@@ -115,12 +119,31 @@ export function Pipeline() {
   const nextFor = (chatId: string, personId: string) =>
     suggestions.find((s) => s.chatId === chatId || (s.personId === personId && !s.chatId));
   const move = async (chat: CoffeeChat, to: ChatStage) => {
-    if (chat.stage === to) return;
+    if (chat.stage === to || !user) return;
     const from = chat.stage;
-    await applyStage(chat, to, 'user', 'user:drag');
+    await moveChat(user, chat, to, 'user:drag');
     const name = byId.get(chat.personId)?.firstName ?? 'This chat';
+    // booked: ask when, unless a calendar already says so
+    if (to === 'scheduled' && !(await upcomingMeeting(chat))) {
+      const fresh = await db.chats.get(chat.id);
+      if (fresh) setAsking(fresh);
+    }
+    const thanks =
+      to === 'completed'
+        ? await db.suggestions
+            .where('chatId')
+            .equals(chat.id)
+            .filter((x) => x.kind === 'thank_you' && x.status === 'pending')
+            .first()
+        : undefined;
     toast.push({
-      text: `Moved ${name} to ${STAGE_LABELS[to]}.`,
+      text: `Moved ${name} to ${STAGE_LABELS[to]}.${
+        to === 'completed'
+          ? thanks
+            ? ' Your thank-you draft is on Today.'
+            : ' Add a note about the chat and Orbit drafts your thank-you from it.'
+          : ''
+      }`,
       action: {
         label: 'Undo',
         onClick: async () => {
@@ -132,6 +155,8 @@ export function Pipeline() {
     });
   };
   const stages: ChatStage[] = showClosed ? [...ACTIVE_STAGES, ...CLOSED_STAGES] : ACTIVE_STAGES;
+  const filtering = !!q.trim() || onlyTargets || onlyQuiet;
+  const narrow = useNarrow();
   const sortVal = (r: { chat: CoffeeChat; person: Person }): string | number => {
     switch (sort.key) {
       case 'person':
@@ -156,7 +181,7 @@ export function Pipeline() {
     .sort((a, b) => {
       const x = sortVal(a);
       const y = sortVal(b);
-      return (x < y ? -1 : x > y ? 1 : 0) * sort.dir;
+      return (x < y ? -1 : x > y ? 1 : 0) * sort.dir || b.chat.updatedAt.localeCompare(a.chat.updatedAt);
     });
   const header = (key: SortKey, label: string) => (
     <th
@@ -184,11 +209,11 @@ export function Pipeline() {
       <FirstRunHint
         id="pipeline"
         title="Reading the board"
-        dismissed={hints.seen('pipeline') || chats.length === 0}
+        dismissed={hints.seen('pipeline') || chats.length === 0 || view !== 'board'}
         onDismiss={hints.dismiss}
       >
-        Each column is a stage, left to right from first message to staying in touch. Drag a card or use its
-        Move to menu to change the stage. The chip on a card is the next thing to do; it opens that card on
+        The stages run in order, from people to contact to staying in touch. Drag a card or use its Move to
+        menu to change the stage. When a card has a chip, that is the next thing to do; it opens that card on
         Today.
       </FirstRunHint>
       <details className="mb-4 text-[13px]" data-testid="stage-legend">
@@ -259,14 +284,24 @@ export function Pipeline() {
           }
         />
       )}
-      {view === 'board' && chats.length > 0 && (
+      {view === 'board' && chats.length > 0 && narrow && !filtering && (
+        <p className="text-[12px] text-ink-3 mb-2" data-testid="board-empty-stages">
+          {(() => {
+            const empty = stages.filter((st) => !rows.some((r) => r.chat.stage === st));
+            return empty.length ? `Nobody in: ${empty.map((st) => STAGE_LABELS[st]).join(', ')}.` : '';
+          })()}
+        </p>
+      )}
+      {view === 'board' && chats.length > 0 && rows.length > 0 && (
         <Board count={stages.length}>
           {stages.map((stage) => {
             const items = rows.filter((r) => r.chat.stage === stage);
+            // with a filter on, only the stages that hold a match; on a phone, empty stages are listed in one line
+            if (!items.length && (filtering || narrow)) return null;
             return (
               <div
                 key={stage}
-                className="w-[228px] shrink-0"
+                className="w-full md:w-[228px] shrink-0"
                 data-stage={stage}
                 onDragOver={(e) => e.preventDefault()}
                 onDrop={(e) => {
@@ -322,7 +357,13 @@ export function Pipeline() {
                           {next && <NextLink s={next} />}
                         </div>
                         {chat.warmUp && stage === 'warming' && (
-                          <div className="mt-2 h-1 rounded bg-line">
+                          <div className="mt-2 text-[11px] text-ink-3">
+                            Warm-up: {chat.warmUp.actions.filter((a) => a.doneAt || a.skippedAt).length} of{' '}
+                            {chat.warmUp.actions.length} steps
+                          </div>
+                        )}
+                        {chat.warmUp && stage === 'warming' && (
+                          <div className="mt-1 h-1 rounded bg-line" aria-hidden>
                             <div
                               className="h-1 rounded bg-warn"
                               style={{
@@ -366,8 +407,8 @@ export function Pipeline() {
               <thead className="bg-canvas-2 text-ink-3 text-[12px] uppercase tracking-wide">
                 <tr>
                   {header('person', 'Person')}
-                  {header('company', 'Company')}
                   {header('stage', 'Stage')}
+                  {header('company', 'Company')}
                   {header('inStage', 'In stage')}
                   {header('lastSent', 'Last sent')}
                   {header('lastReply', 'Last reply')}
@@ -396,9 +437,6 @@ export function Pipeline() {
                           </Link>
                         </span>
                       </td>
-                      <td className="px-3 text-ink-2 whitespace-nowrap">
-                        {person.currentOrganizationRaw ?? '—'}
-                      </td>
                       <td className="px-3" onClick={(e) => e.stopPropagation()}>
                         <Select
                           value={chat.stage}
@@ -412,6 +450,9 @@ export function Pipeline() {
                             </option>
                           ))}
                         </Select>
+                      </td>
+                      <td className="px-3 text-ink-2 whitespace-nowrap">
+                        {person.currentOrganizationRaw ?? '—'}
                       </td>
                       <td className="px-3 tabular text-ink-2 whitespace-nowrap">
                         {daysLabel(chat.stageEnteredAt)}
@@ -438,16 +479,21 @@ export function Pipeline() {
             title={onlyQuiet ? 'Nobody has gone quiet' : 'No chats yet'}
             body={
               onlyQuiet
-                ? `Every chat waiting on a reply heard back within ${QUIET_DAYS} days.`
+                ? `No one has been waiting more than ${QUIET_DAYS} days for a reply to your last message.`
                 : 'A chat starts when you write to someone. Add a person, or pick someone from Discover.'
             }
           />
         ))}
       {view === 'companies' && chats.length > 0 && <CompaniesView rows={rows} targetNames={targetNames} />}
+      <ScheduleChatDialog
+        chat={asking}
+        firstName={(asking && byId.get(asking.personId)?.firstName) ?? 'them'}
+        onClose={() => setAsking(undefined)}
+      />
       {user && rows.length === 0 && chats.length > 0 && view === 'board' && (
         <p className="text-[13px] text-ink-3 mt-2">
           {onlyQuiet
-            ? `Nobody has gone quiet: every chat waiting on a reply heard back within ${QUIET_DAYS} days.`
+            ? `Nobody has gone quiet: no one has been waiting more than ${QUIET_DAYS} days for a reply to your last message.`
             : 'No chats match these filters.'}
         </p>
       )}
@@ -473,26 +519,29 @@ function Board({ children, count }: { children: React.ReactNode; count: number }
   });
   return (
     <div className="relative">
+      {/* above the columns, never on top of a card; on a phone the stages stack, so there is nothing to scroll to */}
+      <div className="hidden md:flex justify-end h-8 -mt-2 mb-1">
+        {more > 0 && (
+          <button
+            onClick={() => ref.current?.scrollBy({ left: 480, behavior: 'smooth' })}
+            className="h-8 pl-3 pr-2 rounded-full border border-line bg-canvas text-[12px] text-ink-2 shadow-sm inline-flex items-center gap-0.5 hover:text-ink"
+            data-testid="board-more"
+          >
+            {more} more stage{more === 1 ? '' : 's'} <ChevronRight size={14} />
+          </button>
+        )}
+      </div>
       <div
         ref={ref}
         onScroll={measure}
-        className="flex gap-3 overflow-x-auto pb-4 scroll-thin -mx-4 px-4 md:mx-0 md:px-0"
+        className="flex flex-col md:flex-row gap-4 md:gap-3 md:overflow-x-auto pb-4 scroll-thin md:items-start"
         role="region"
         aria-label={`Pipeline board, ${count} stages`}
       >
         {children}
       </div>
       {more > 0 && (
-        <>
-          <div className="pointer-events-none absolute top-0 right-0 bottom-4 w-16 bg-gradient-to-l from-canvas to-transparent" />
-          <button
-            onClick={() => ref.current?.scrollBy({ left: 480, behavior: 'smooth' })}
-            className="absolute top-9 right-1 h-8 pl-3 pr-2 rounded-full border border-line bg-canvas text-[12px] text-ink-2 shadow-md inline-flex items-center gap-0.5 hover:text-ink"
-            data-testid="board-more"
-          >
-            {more} more stage{more === 1 ? '' : 's'} <ChevronRight size={14} />
-          </button>
-        </>
+        <div className="hidden md:block pointer-events-none absolute top-9 right-0 bottom-4 w-16 bg-gradient-to-l from-canvas to-transparent" />
       )}
     </div>
   );
@@ -510,6 +559,20 @@ function NextLink({ s }: { s: Suggestion }) {
       {KIND_LABEL[s.kind].label}
     </Link>
   );
+}
+
+/** True below the md breakpoint, where the board's stages stack instead of scrolling sideways. */
+function useNarrow(): boolean {
+  const q = '(max-width: 767px)';
+  const [narrow, setNarrow] = useState(() => typeof window !== 'undefined' && window.matchMedia?.(q).matches);
+  useEffect(() => {
+    const m = window.matchMedia?.(q);
+    if (!m) return;
+    const on = () => setNarrow(m.matches);
+    m.addEventListener('change', on);
+    return () => m.removeEventListener('change', on);
+  }, []);
+  return !!narrow;
 }
 
 function daysLabel(since: string): string {

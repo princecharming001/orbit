@@ -27,7 +27,7 @@ export const KIND_LABEL: Record<
 > = {
   new_outreach: { label: 'First message', tone: 'accent' },
   warm_up_engage: { label: 'LinkedIn warm-up', tone: 'neutral' },
-  follow_up_bump: { label: 'Follow up', tone: 'warn' },
+  follow_up_bump: { label: 'Follow-up', tone: 'warn' },
   schedule_propose: { label: 'Propose times', tone: 'accent' },
   schedule_confirm: { label: 'Confirm time', tone: 'accent' },
   prep_brief: { label: 'Prep', tone: 'good' },
@@ -60,6 +60,24 @@ export function mergeEvidence(a: Person, b: Person): { same: string[]; differ: s
   if (eq(a.school, b.school)) same.push('the same school');
   if (eq(a.linkedinSlug, b.linkedinSlug)) same.push('the same LinkedIn profile');
   return { same, differ };
+}
+
+/** The "no" to a stage Orbit read from an email, in plain words rather than the stage's name. */
+function stageNoLabel(to: string | undefined, first: string): string {
+  switch (to) {
+    case 'declined':
+      return `No, ${first} hasn't said no`;
+    case 'replied':
+      return `No, ${first} hasn't replied`;
+    case 'scheduled':
+      return 'No, nothing is booked yet';
+    case 'scheduling':
+      return 'No, not scheduling yet';
+    case 'completed':
+      return "No, we haven't talked yet";
+    default:
+      return 'No, leave it as it is';
+  }
 }
 
 function sentenceList(xs: string[]): string {
@@ -307,6 +325,12 @@ export function SuggestionCard({
                 aria-label={`Open the draft to ${first} to edit it`}
                 data-testid="draft-preview"
               >
+                {/* a draft still missing the student's line says so first, instead of reading like a broken message */}
+                {gapLabel(draft.bodyFinal ?? draft.bodyDraft) && (
+                  <span className="block text-warn font-medium mb-0.5" data-testid="draft-preview-gap">
+                    Needs one line from you: {gapLabel(draft.bodyFinal ?? draft.bodyDraft)}
+                  </span>
+                )}
                 {/* the clamp sits on the text, not the padded button, so no half line shows under it */}
                 <span className="line-clamp-2">{withGaps(draft.bodyFinal ?? draft.bodyDraft)}</span>
               </button>
@@ -337,17 +361,13 @@ export function SuggestionCard({
                     Review draft
                   </Button>
                   <span className="text-[12px] text-ink-3">
-                    Edit it if you like. Nothing is sent until you approve it.
+                    Edit it if you like. Nothing goes out until you send it yourself.
                   </span>
                 </div>
               )}
             </>
           )}
-          {draft && !inFlight && open && (
-            <div className="mt-3">
-              <DraftEditor draft={draft} onApprove={approve} busy={busy} onCancel={() => setOpen(false)} />
-            </div>
-          )}
+
           {s.kind === 'warm_up_engage' && (
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <a
@@ -358,23 +378,23 @@ export function SuggestionCard({
               >
                 Open on LinkedIn <ExternalLink size={14} />
               </a>
-              {chat?.warmUp && (
-                <span className="text-[12px] text-ink-3">
-                  Step{' '}
-                  {Math.min(
-                    chat.warmUp.actions.length,
-                    chat.warmUp.actions.filter((a) => a.doneAt || a.skippedAt).length + 1,
-                  )}{' '}
-                  of {chat.warmUp.actions.length}. Orbit suggests the first message after{' '}
-                  {new Date(chat.warmUp.readyAt).toLocaleDateString('en-US', {
-                    weekday: 'short',
-                    month: 'short',
-                    day: 'numeric',
-                  })}
-                  .
-                </span>
-              )}
             </div>
+          )}
+          {s.kind === 'warm_up_engage' && chat?.warmUp && (
+            // every step with its day, so "step 2 of 3" and the dates in the toasts add up
+            <ol className="mt-3 text-[12px] text-ink-3 space-y-0.5" data-testid="warmup-steps">
+              {chat.warmUp.actions.map((a, i) => {
+                const current = a.id === (s.payload.actionId as string);
+                return (
+                  <li key={a.id} className={cx(current && 'text-ink font-medium')}>
+                    {i + 1}. {WARM_STEP[a.kind] ?? a.label}
+                    {' · '}
+                    {a.doneAt ? 'done' : a.skippedAt ? 'skipped' : current ? 'now' : shortDay(a.dueAt)}
+                  </li>
+                );
+              })}
+              <li>Then your first message, from {shortDay(chat.warmUp.readyAt)}.</li>
+            </ol>
           )}
           {s.kind === 'warm_up_engage' && warmAction && warmAction.kind !== 'view_profile' && (
             <div className="mt-3 rounded-lg bg-canvas-2 p-3 text-[13px]" data-testid="warmup-helper">
@@ -394,7 +414,7 @@ export function SuggestionCard({
                 className="w-full h-9 rounded-lg border border-line bg-canvas px-3 text-[13px]"
                 value={postClaim}
                 onChange={(e) => setPostClaim(e.target.value)}
-                placeholder="e.g. interns should ship in week one"
+                placeholder="e.g. ship something in week one"
               />
               {warmAction.kind === 'comment_post' && (
                 <input
@@ -432,6 +452,9 @@ export function SuggestionCard({
               >
                 Skip this step
               </Button>
+              <span className="basis-full text-[12px] text-ink-3">
+                Either way, the next step shows up here on its day.
+              </span>
             </div>
           )}
           {s.kind === 'prep_brief' && person && (
@@ -485,9 +508,7 @@ export function SuggestionCard({
                 <Button variant="primary" onClick={() => confirmStage(true)}>
                   Yes, mark as {toStage ? STAGE_LABELS[toStage].toLowerCase() : 'changed'}
                 </Button>
-                <Button onClick={() => confirmStage(false)}>
-                  No, keep it {chat ? `as ${STAGE_LABELS[chat.stage].toLowerCase()}` : 'as is'}
-                </Button>
+                <Button onClick={() => confirmStage(false)}>{stageNoLabel(toStage, first)}</Button>
               </div>
             </>
           )}
@@ -527,6 +548,12 @@ export function SuggestionCard({
           </button>
         )}
       </div>
+      {/* the open draft uses the card's full width, not the column next to the avatar (a phone needs every pixel) */}
+      {draft && !inFlight && open && (
+        <div className="mt-3">
+          <DraftEditor draft={draft} onApprove={approve} busy={busy} onCancel={() => setOpen(false)} />
+        </div>
+      )}
       {!['confirm_stage', 'confirm_merge'].includes(s.kind) && !inFlight && (
         <div className="mt-3 pt-3 border-t border-line-2 flex flex-wrap items-center gap-1 text-[12px]">
           {!dismissing ? (
@@ -537,7 +564,7 @@ export function SuggestionCard({
                 aria-label="Snooze for 1 day"
                 title="Snooze for 1 day"
               >
-                Snooze 1d
+                Snooze: 1 day
               </button>
               <button
                 className="px-2 h-10 sm:h-8 rounded-md text-ink-3 hover:bg-canvas-2 hover:text-ink"
@@ -545,7 +572,7 @@ export function SuggestionCard({
                 aria-label="Snooze for 3 days"
                 title="Snooze for 3 days"
               >
-                3d
+                3 days
               </button>
               <button
                 className="px-2 h-10 sm:h-8 rounded-md text-ink-3 hover:bg-canvas-2 hover:text-ink"
@@ -553,7 +580,7 @@ export function SuggestionCard({
                 aria-label="Snooze for 1 week"
                 title="Snooze for 1 week"
               >
-                1w
+                1 week
               </button>
               <button
                 className="ml-auto px-2 h-10 sm:h-8 rounded-md text-ink-3 hover:bg-canvas-2 hover:text-ink"
@@ -565,12 +592,13 @@ export function SuggestionCard({
             </>
           ) : (
             <>
-              <span className="text-ink-3 mr-1">Why?</span>
+              <span className="text-ink-3 mr-1">Why remove it?</span>
               {[
                 ['already_did', 'Already did this'],
                 ['not_now', 'Not now'],
                 ['wrong_person', 'Wrong person'],
-                ['bad_draft', 'Bad draft'],
+                // only a card with a message can have a bad draft
+                ...(draft ? [['bad_draft', 'Bad draft']] : []),
               ].map(([k, l]) => (
                 <button
                   key={k}
@@ -591,6 +619,24 @@ export function SuggestionCard({
   );
 }
 
+const WARM_STEP: Record<string, string> = {
+  view_profile: 'Look at their profile',
+  react_post: 'React to one of their posts',
+  comment_post: 'Comment on one of their posts',
+};
+const shortDay = (iso: string) =>
+  new Date(iso).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+
+/** The first missing line of a draft, as a short label ("One real update since you last spoke"), if any. */
+function gapLabel(text: string): string | undefined {
+  const m = text.match(/\[([^\]]{3,})\]/);
+  if (!m) return undefined;
+  return m[1]!
+    .split(':')[0]!
+    .replace(/\s+(with|to)\s+\p{Lu}[\p{L}'-]*$/u, '')
+    .trim();
+}
+
 /**
  * A draft preview with each "[Your link to Priya: how you found them ...]" gap shown as a short highlighted label
  * ("Your link to Priya"), so the card says a line is missing instead of showing the raw instruction.
@@ -599,7 +645,7 @@ function withGaps(text: string): ReactNode[] {
   return text.split(/(\[[^\]]{3,}\])/).map((part, i) =>
     /^\[[^\]]+\]$/.test(part) ? (
       <mark key={i} className="rounded bg-warn-soft px-1 text-warn not-italic">
-        {part.slice(1, -1).split(':')[0]}
+        [your line]
       </mark>
     ) : (
       part

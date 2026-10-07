@@ -271,7 +271,8 @@ export function Tabs<T extends string>({
 }) {
   return (
     <div
-      className="flex items-center gap-1 border-b border-line mb-4 overflow-x-auto scroll-thin"
+      // tabs wrap on a narrow screen instead of hiding the last one off the edge
+      className="flex flex-wrap items-center gap-x-1 border-b border-line mb-4"
       role="tablist"
     >
       {items.map((it) => (
@@ -281,7 +282,7 @@ export function Tabs<T extends string>({
           aria-selected={value === it.value}
           onClick={() => onChange(it.value)}
           className={cx(
-            'px-3 h-9 text-[14px] border-b-2 transition-colors shrink-0 whitespace-nowrap',
+            'px-2.5 sm:px-3 h-9 text-[14px] border-b-2 -mb-px transition-colors shrink-0 whitespace-nowrap',
             value === it.value
               ? 'border-ink text-ink font-medium'
               : 'border-transparent text-ink-3 hover:text-ink',
@@ -434,8 +435,8 @@ const ToastCtx = createContext<{
   push: (t: Omit<ToastItem, 'id' | 'at'>) => number;
   dismiss: (id: number) => void;
 }>({ push: () => 0, dismiss: () => {} });
-/** At most this many toasts at once; a new one pushes the oldest out instead of stacking over the page. */
-const MAX_TOASTS = 2;
+/** One toast at a time: a new one replaces the last instead of stacking over the page. */
+const MAX_TOASTS = 1;
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<ToastItem[]>([]);
   const counter = useRef(0);
@@ -445,7 +446,8 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     (t: Omit<ToastItem, 'id' | 'at'>) => {
       const id = ++counter.current;
       setItems((xs) => [...xs, { ...t, id, at: Date.now() }].slice(-MAX_TOASTS));
-      setTimeout(() => dismiss(id), t.ttl ?? 4000);
+      // short, so it does not sit over the page: only a toast with a button (Undo, Open) may stay longer
+      setTimeout(() => dismiss(id), t.action ? (t.ttl ?? 6000) : Math.min(t.ttl ?? 4000, 5000));
       return id;
     },
     [dismiss],
@@ -461,7 +463,8 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     <ToastCtx.Provider value={value}>
       {children}
       <div
-        className="fixed bottom-20 md:bottom-4 inset-x-4 md:inset-x-auto md:left-1/2 md:-translate-x-1/2 z-[60] flex flex-col gap-2 items-center pointer-events-none"
+        // on a phone the toast sits under the top bar, clear of the cards' buttons and the bottom tabs
+        className="fixed top-14 md:top-auto md:bottom-4 inset-x-4 md:inset-x-auto md:left-1/2 md:-translate-x-1/2 z-[60] flex flex-col gap-2 items-center pointer-events-none"
         aria-live="polite"
         data-testid="toasts"
       >

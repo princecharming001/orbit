@@ -15,15 +15,20 @@ import { envGoogleClientId, readPrefs, writePrefs } from '../integrations/prefs'
 import { useSession } from '../state/session';
 import { Button, Card, cx, FunctionPicker, Input, Label, Select, Spinner, Textarea } from '../ui';
 
-/** Internal step numbers (stored in `user.onboardingStep`); the address shows them as 1 to 7. */
-const STEPS = [2, 3, 4, 5, 6, 7, 8] as const;
+/**
+ * Internal step numbers (stored in `user.onboardingStep`); the address shows the number minus one. Step 7 (a page
+ * about meeting notes with nothing to set up) is now a tip on the last step, and Connect Google is only a step on a
+ * copy of Orbit where Google sign-in is set up: a step that can only say "not available" is not shown.
+ */
+function visibleSteps(): number[] {
+  return googleClientId() ? [2, 3, 4, 5, 6, 8] : [2, 3, 4, 6, 8];
+}
 const TITLES: Record<number, string> = {
   2: 'About you',
   3: "What you're recruiting for",
   4: 'Resume',
   5: 'Connect Google',
   6: 'LinkedIn',
-  7: 'Meeting notes',
   8: 'Preferences',
 };
 /** Steps the student may skip; the stepper marks a skipped one as skipped, never as done. */
@@ -52,6 +57,7 @@ export function Onboarding() {
       6: ints.some((i) => i.provider === 'linkedin_csv'),
     } as Record<number, boolean>;
   }, [user?.id]);
+  const STEPS = visibleSteps();
   const stepperRef = useRef<HTMLOListElement>(null);
   useEffect(() => {
     // each step opens at its title, not scrolled down to where the last step's Continue button was
@@ -62,12 +68,18 @@ export function Onboarding() {
       ?.scrollIntoView({ block: 'nearest', inline: 'center' });
   }, [step]);
   if (!user) return null;
-  const idx = STEPS.indexOf(step as (typeof STEPS)[number]);
+  const idx = STEPS.indexOf(step);
+  // a step that is not shown here (Meeting notes, Google without sign-in) moves on to the next one that is
+  const hiddenNext = idx === -1 && step >= 2 && step <= 8 ? STEPS.find((x) => x > step) : undefined;
+  if (idx === -1 && hiddenNext && !user.onboardingCompletedAt)
+    return <Navigate to={onboardingPath(hiddenNext)} replace />;
   // An unknown step (an old link, a typo) goes back to where the user actually is.
   if (idx === -1)
     return (
       <Navigate to={user.onboardingCompletedAt ? '/today' : onboardingPath(user.onboardingStep)} replace />
     );
+  const after = (s: number) => STEPS.find((x) => x > s) ?? 8;
+  const before = (s: number) => [...STEPS].reverse().find((x) => x < s) ?? 2;
   const go = async (next: number) => {
     await db.users.update(user.id, { onboardingStep: Math.max(user.onboardingStep, next) });
     nav(onboardingPath(next));
@@ -96,7 +108,12 @@ export function Onboarding() {
             Step {idx + 1} of {STEPS.length}
             {OPTIONAL.has(step) ? <span className="text-ink-3"> · optional</span> : null}
           </p>
-          <ol ref={stepperRef} className="mt-2 grid grid-cols-7 gap-1.5" aria-label="Setup steps">
+          <ol
+            ref={stepperRef}
+            className="mt-2 grid gap-1.5"
+            style={{ gridTemplateColumns: `repeat(${STEPS.length}, minmax(0, 1fr))` }}
+            aria-label="Setup steps"
+          >
             {STEPS.map((s, i) => {
               const st = status(s, i);
               return (
@@ -138,19 +155,18 @@ export function Onboarding() {
           </ol>
           {STEPS.some((s, i) => status(s, i) === 'skipped') && (
             <p className="mt-2 text-[12px] text-ink-3">
-              Skipped steps stay open: you can do them any time from Settings.
+              Skipped steps stay open: add a resume or your LinkedIn connections any time in Settings.
             </p>
           )}
         </div>
         <Card className="p-5 sm:p-6">
           <h1 className="text-[20px] font-semibold mb-1">{TITLES[step]}</h1>
-          {step === 2 && <StepAbout onNext={() => go(3)} />}
-          {step === 3 && <StepGoals onNext={() => go(4)} onBack={() => back(2)} />}
-          {step === 4 && <StepResume onNext={() => go(5)} onBack={() => back(3)} />}
-          {step === 5 && <StepGoogle onNext={() => go(6)} onBack={() => back(4)} />}
-          {step === 6 && <StepLinkedIn onNext={() => go(7)} onBack={() => back(5)} />}
-          {step === 7 && <StepNotes onNext={() => go(8)} onBack={() => back(6)} />}
-          {step === 8 && <StepPrefs onNext={finish} onBack={() => back(7)} />}
+          {step === 2 && <StepAbout onNext={() => go(after(2))} />}
+          {step === 3 && <StepGoals onNext={() => go(after(3))} onBack={() => back(before(3))} />}
+          {step === 4 && <StepResume onNext={() => go(after(4))} onBack={() => back(before(4))} />}
+          {step === 5 && <StepGoogle onNext={() => go(after(5))} onBack={() => back(before(5))} />}
+          {step === 6 && <StepLinkedIn onNext={() => go(after(6))} onBack={() => back(before(6))} />}
+          {step === 8 && <StepPrefs onNext={finish} onBack={() => back(before(8))} />}
         </Card>
       </div>
     </div>
@@ -197,6 +213,11 @@ function Nav({
   );
 }
 
+/** The school domain an email implies ("umich.edu" for jpark@umich.edu), or '' for a non-school address. */
+function autoDomain(email: string): string {
+  return /@([\w.-]+\.edu)$/i.exec(email.trim())?.[1]?.toLowerCase() ?? '';
+}
+
 function StepAbout({ onNext }: { onNext: () => void }) {
   const user = useSession().user!;
   const [f, setF] = useState({
@@ -240,7 +261,10 @@ function StepAbout({ onNext }: { onNext: () => void }) {
   ].filter(Boolean) as string[];
   const now = new Date();
   const firstYear = now.getMonth() >= 7 ? now.getFullYear() + 1 : now.getFullYear();
-  const years = Array.from({ length: 6 }, (_, i) => firstYear + i);
+  // the years someone in a program now can graduate in: four for a bachelor's, more for a PhD
+  const grad = /\b(MBA|MS|MENG|PHD)\b/i.test(f.degree);
+  const span = /PHD/i.test(f.degree) ? 6 : grad ? 2 : 4;
+  const years = Array.from({ length: span }, (_, i) => firstYear + i);
   // a year saved earlier stays selectable, even one outside this list
   if (f.graduationYear && !years.includes(Number(f.graduationYear))) years.unshift(Number(f.graduationYear));
   return (
@@ -269,7 +293,13 @@ function StepAbout({ onNext }: { onNext: () => void }) {
           id="ob-email"
           type="email"
           value={f.email}
-          onChange={(e) => setF({ ...f, email: e.target.value })}
+          onChange={(e) => {
+            const email = e.target.value;
+            // a school address fills in the school's domain, unless the student typed one of their own
+            const domain = /@([\w.-]+\.edu)$/i.exec(email.trim())?.[1]?.toLowerCase() ?? '';
+            const auto = !f.schoolDomain || f.schoolDomain === autoDomain(f.email);
+            setF({ ...f, email, schoolDomain: auto ? domain : f.schoolDomain });
+          }}
           placeholder="e.g. alex@cornell.edu"
           autoComplete="email"
           data-testid="ob-email"
@@ -329,7 +359,9 @@ function StepAbout({ onNext }: { onNext: () => void }) {
         </Select>
       </div>
       <div>
-        <Label htmlFor="ob-degree">Degree</Label>
+        <Label htmlFor="ob-degree" optional hint="decides how Orbit names your year">
+          Degree
+        </Label>
         <Select
           id="ob-degree"
           value={f.degree}
@@ -378,7 +410,7 @@ function StepAbout({ onNext }: { onNext: () => void }) {
 const GOAL_EXAMPLES: Record<string, { roles: string; industries: string; company: string; free: string }> = {
   ib: {
     roles: 'e.g. Summer analyst',
-    industries: 'e.g. M&A, Restructuring',
+    industries: 'e.g. Healthcare, Tech, Industrials',
     company: 'e.g. Evercore',
     free: 'e.g. I want a group with a strong deal flow and good mentorship.',
   },
@@ -483,7 +515,7 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
       </div>
       <div>
         <Label required hint="pick one or more">
-          Functions
+          What kind of work
         </Label>
         <FunctionPicker
           value={f.targetFunctions}
@@ -527,16 +559,16 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
           />
         </div>
         <div>
-          <Label htmlFor="ob-ambition">How hard are you going?</Label>
+          <Label htmlFor="ob-ambition">First messages a week</Label>
           <Select
             id="ob-ambition"
             value={f.ambition}
             onChange={(e) => setF({ ...f, ambition: Number(e.target.value) as 1 | 2 | 3 })}
             className="w-full"
           >
-            <option value={1}>Steady · 2 new people a week</option>
-            <option value={2}>Focused · 4 a week</option>
-            <option value={3}>All in · 7 a week</option>
+            <option value={1}>2 a week (steady)</option>
+            <option value={2}>4 a week (focused)</option>
+            <option value={3}>7 a week (all in)</option>
           </Select>
         </div>
       </div>
@@ -620,7 +652,7 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
           onNext();
         }}
         disabled={!f.targetFunctions.length}
-        disabledHint="Pick at least one function to continue."
+        disabledHint="Pick at least one kind of work to continue."
       />
     </div>
   );
@@ -912,32 +944,6 @@ function StepLinkedIn({ onNext, onBack }: { onNext: () => void; onBack: () => vo
   );
 }
 
-function StepNotes({ onNext, onBack }: { onNext: () => void; onBack: () => void }) {
-  return (
-    <div className="mt-4 space-y-3 text-[14px] text-ink-2">
-      <p>
-        After each coffee chat, add a quick note: what you learned, what they offered, what you promised.
-        Orbit turns it into a specific thank-you and remembers it for next time. Nothing to set up now.
-      </p>
-      <ul className="space-y-2 list-disc pl-5">
-        <li>
-          <strong className="font-medium text-ink">Type or dictate</strong> into Add note. Your phone's or
-          computer's dictation works.
-        </li>
-        <li>
-          <strong className="font-medium text-ink">Paste</strong> notes from an app that took them for you, or
-          upload a .txt file.
-        </li>
-      </ul>
-      <p className="text-[13px] text-ink-3">
-        Orbit picks out advice, offers (like "happy to refer you"), things to mention later and anything you
-        promised, and reminds you to follow up.
-      </p>
-      <Nav onBack={onBack} onNext={onNext} />
-    </div>
-  );
-}
-
 function StepPrefs({ onNext, onBack }: { onNext: () => void; onBack: () => void }) {
   const user = useSession().user!;
   const settings = useLiveQuery(() => db.settings.get(user.id), [user.id]);
@@ -976,17 +982,6 @@ function StepPrefs({ onNext, onBack }: { onNext: () => void; onBack: () => void 
       <p className="sm:col-span-2 text-[13px] text-ink-2 -mt-1">
         All of these can be changed later in Settings.
       </p>
-      <div>
-        <Label htmlFor="ob-brief" hint="when today's cards are ready">
-          Daily brief time
-        </Label>
-        <Input
-          id="ob-brief"
-          type="time"
-          value={f.briefTimeLocal}
-          onChange={(e) => setF({ ...f, briefTimeLocal: e.target.value })}
-        />
-      </div>
       <div>
         <Label htmlFor="ob-tone" hint="how your drafts sound">
           Writing style
@@ -1030,12 +1025,15 @@ function StepPrefs({ onNext, onBack }: { onNext: () => void; onBack: () => void 
         </span>
       </label>
       <details className="sm:col-span-2 text-[13.5px]">
-        <summary className="cursor-pointer text-ink-2">Optional: let Claude write your drafts</summary>
+        <summary className="cursor-pointer text-ink-2">
+          Optional, not needed: drafts written by an AI model
+        </summary>
         <div className="mt-2">
           <p className="text-[12.5px] text-ink-3 mb-2">
-            Orbit writes drafts on its own. If you have an Anthropic account, paste your API key and Claude
-            writes them instead, billed to your account. The key stays in this browser. Reading your email,
-            notes or resume with Claude stays off until you turn it on in Settings.
+            You can skip this. Orbit writes every draft on its own, for free. If you already pay for an
+            Anthropic account (the company behind the Claude AI model), you can paste its API key and Claude
+            writes the drafts instead; Anthropic bills that account. The key stays in this browser. Reading
+            your email, notes or resume with Claude stays off until you turn it on in Settings.
           </p>
           <Label htmlFor="ob-key" optional>
             Anthropic API key
@@ -1049,6 +1047,14 @@ function StepPrefs({ onNext, onBack }: { onNext: () => void; onBack: () => void 
           />
         </div>
       </details>
+      <p
+        className="sm:col-span-2 text-[13px] text-ink-2 rounded-lg bg-canvas-2 p-3"
+        data-testid="ob-notes-tip"
+      >
+        <strong className="font-medium text-ink">After each chat, add a note.</strong> Type, dictate or paste
+        what you learned, what they offered and what you promised. Orbit drafts your thank-you from it and
+        remembers it for next time. Add note is at the top of every page.
+      </p>
       <div className="sm:col-span-2">
         <Nav onBack={onBack} onNext={save} nextLabel={busy ? 'Finishing…' : 'Finish setup'} disabled={busy} />
       </div>

@@ -30,7 +30,10 @@ async function prep(page: Page) {
 async function loadDemo(page: Page) {
   await prep(page);
   await page.goto('');
-  await page.getByRole('button', { name: /try it with demo data/i }).click();
+  await page
+    .getByRole('button', { name: /^try the demo$/i })
+    .first()
+    .click();
   await expect(page).toHaveURL(/\/today$/, { timeout: 90_000 });
 }
 

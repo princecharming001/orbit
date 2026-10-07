@@ -2,6 +2,7 @@ import type { Candidate, MeetingNote, NoteSource, Person, PersonFact, User } fro
 import {
   heuristicNoteExtraction,
   isPlaceholderName,
+  looksLikeNotetakerText,
   newId,
   normalizeEmail,
   parseGranolaText,
@@ -90,6 +91,44 @@ export function mentionedPeople(
   return { full, byFirstName, ambiguous };
 }
 
+/**
+ * Who Orbit will file a note with when the student leaves "Let Orbit figure it out", shown under the picker before
+ * saving. It follows ingestNote's order: people the title line names, then full names in the text, then first names
+ * only one person has, then the chat on the calendar that just ended.
+ */
+export type NoteMatchPreview =
+  | { kind: 'person'; person: Person; why: 'named' | 'calendar' }
+  | { kind: 'several'; people: Person[] }
+  | { kind: 'none' };
+export function previewNoteMatch(
+  text: string,
+  people: Person[],
+  user: Pick<User, 'firstName' | 'fullName'>,
+  calendarPerson?: Person,
+): NoteMatchPreview {
+  const self = parseName(user.fullName || user.firstName || '').normalized;
+  const fromTitle = looksLikeNotetakerText(text)
+    ? (parseGranolaText(text).attendees ?? [])
+        .map((a) => parseName(a.name).normalized)
+        .filter((n) => n && n !== self)
+        .map((n) => people.filter((p) => p.nameNormalized === n && p.isHuman && !p.hiddenAt))
+        .filter((hits) => hits.length === 1)
+        .map((hits) => hits[0]!)
+    : [];
+  if (fromTitle.length === 1) return { kind: 'person', person: fromTitle[0]!, why: 'named' };
+  if (fromTitle.length > 1) return { kind: 'several', people: fromTitle };
+  const m = mentionedPeople(text, people, user.firstName);
+  if (m.full.length === 1 && !m.byFirstName.length && !m.ambiguous.length)
+    return { kind: 'person', person: m.full[0]!, why: 'named' };
+  const named = [...m.full, ...m.byFirstName, ...m.ambiguous];
+  if (named.length) {
+    if (calendarPerson && named.some((p) => p.id === calendarPerson.id))
+      return { kind: 'person', person: calendarPerson, why: 'calendar' };
+    return { kind: 'several', people: named };
+  }
+  return calendarPerson ? { kind: 'person', person: calendarPerson, why: 'calendar' } : { kind: 'none' };
+}
+
 /** "Tue, Oct 6" in the student's time zone. */
 function dayLabel(iso: string, timeZone: string): string {
   try {
@@ -106,7 +145,7 @@ function dayLabel(iso: string, timeZone: string): string {
 
 export async function ingestNote(user: User, inp: CaptureInput, now = new Date()): Promise<MeetingNote> {
   const parsed =
-    inp.source.startsWith('granola') || /^(summary|transcript)/im.test(inp.text)
+    inp.source.startsWith('granola') || looksLikeNotetakerText(inp.text)
       ? parseGranolaText(inp.text)
       : undefined;
   const occurredAt = inp.occurredAt ?? now.toISOString();
@@ -153,7 +192,16 @@ export async function ingestNote(user: User, inp: CaptureInput, now = new Date()
       (e) => Math.abs(new Date(e.startAt).getTime() - t) < 3 * 3_600_000 && e.attendeePersonIds.length > 0,
     )
     .toArray();
-  if (nearby.length) {
+  // a note that names someone in full who was not at the nearby meeting is about them, not the meeting
+  const namedInText =
+    !personIds.size && nearby.length
+      ? mentionedPeople(inp.text, await db.people.where('userId').equals(user.id).toArray(), user.firstName)
+          .full
+      : [];
+  if (
+    nearby.length &&
+    !(namedInText.length && !nearby.some((e) => namedInText.some((p) => e.attendeePersonIds.includes(p.id))))
+  ) {
     const ev = nearby.sort(
       (a, b) => Math.abs(new Date(a.startAt).getTime() - t) - Math.abs(new Date(b.startAt).getTime() - t),
     )[0]!;
@@ -581,13 +629,51 @@ export async function processNote(user: User, note: MeetingNote, now = new Date(
     if (ext.facts.some((f) => f.type === 'offer' && norm(f.text) === norm(o))) continue;
     await addFact(primary.id, 'offer', o, 0.75);
   }
+  // the same promise written down twice (the notetaker's summary and the student's own note) is kept once
+  const STOP = new Set([
+    'i',
+    'my',
+    'me',
+    'her',
+    'him',
+    'them',
+    'the',
+    'a',
+    'an',
+    'to',
+    'and',
+    'by',
+    'of',
+    'over',
+    'send',
+  ]);
+  const words = (t: string) =>
+    new Set(
+      norm(t)
+        .split(/\s+/)
+        .filter((w) => w.length > 2 && !STOP.has(w)),
+    );
+  const samePromise = (x: string, y: string) => {
+    const a = words(x);
+    const b = words(y);
+    if (!a.size || !b.size) return false;
+    const shared = [...a].filter((w) => b.has(w)).length;
+    return shared / Math.min(a.size, b.size) >= 0.6;
+  };
   for (const a of ext.actionItems) {
     if (a.owner !== 'user') continue;
+    const pid = personFor(a.about).id;
+    const open = await db.actionItems
+      .where('personId')
+      .equals(pid)
+      .filter((x) => x.status === 'open')
+      .toArray();
+    if (open.some((x) => samePromise(x.text, a.text))) continue;
     const due = parseDueHint(a.dueHint, new Date(note.occurredAt), user.timezone);
     await db.actionItems.add({
       id: newId('ai'),
       userId: user.id,
-      personId: personFor(a.about).id,
+      personId: pid,
       chatId: note.chatId,
       text: a.text,
       dueAt: due.toISOString(),

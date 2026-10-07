@@ -1,6 +1,6 @@
 import type { User, UserSettings } from '@orbit/core';
 import { newId } from '@orbit/core';
-import { db } from '../db/schema';
+import { db, wipeDatabase } from '../db/schema';
 
 export async function createLocalUser(partial: Partial<User> = {}): Promise<User> {
   const now = new Date().toISOString();
@@ -35,4 +35,13 @@ export async function createLocalUser(partial: Partial<User> = {}): Promise<User
   await db.users.put(user);
   await db.settings.put(settings);
   return user;
+}
+
+/**
+ * Leave the demo for the student's own setup: the sample data is cleared from this browser and a new, empty profile
+ * starts onboarding. Only the demo's data goes; the demo holds nothing of the student's.
+ */
+export async function leaveDemoForOwnSetup(): Promise<User> {
+  await wipeDatabase();
+  return createLocalUser();
 }

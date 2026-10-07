@@ -134,7 +134,7 @@ export function AddPersonDialog({
           Add an email or a LinkedIn link, or both, so Orbit has a way to reach them.
         </p>
         <div>
-          <Label htmlFor="ap-email" hint="Orbit drafts an email">
+          <Label htmlFor="ap-email" hint="this or LinkedIn">
             Email
           </Label>
           <Input
@@ -142,14 +142,20 @@ export function AddPersonDialog({
             type="email"
             value={f.email}
             onChange={(e) => setF({ ...f, email: e.target.value })}
-            placeholder="e.g. priya.shah@evercore.com"
+            placeholder={`e.g. priya.shah@${
+              f.company
+                .trim()
+                .toLowerCase()
+                .replace(/[^a-z0-9]+/g, '')
+                .slice(0, 20) || 'evercore'
+            }.com`}
             aria-invalid={emailBad}
             data-testid="add-person-email"
           />
           {emailBad && <p className="text-[12px] text-bad mt-1">That does not look like an email address.</p>}
         </div>
         <div>
-          <Label htmlFor="ap-li" hint="Orbit drafts a LinkedIn message">
+          <Label htmlFor="ap-li" hint="this or an email">
             LinkedIn profile link
           </Label>
           <Input
@@ -161,6 +167,11 @@ export function AddPersonDialog({
           />
         </div>
         {error && <p className="text-[13px] text-bad">{error}</p>}
+        {!reachable && f.name.trim() && !error && (
+          <p className="text-[12px] text-ink-3 text-right" data-testid="add-person-missing">
+            Add an email or a LinkedIn link to add {f.name.trim().split(/\s+/)[0]}.
+          </p>
+        )}
         <div className="flex justify-end gap-2 pt-1">
           <Button type="button" variant="ghost" onClick={onClose}>
             Cancel

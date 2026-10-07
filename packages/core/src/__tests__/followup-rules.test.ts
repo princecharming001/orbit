@@ -494,7 +494,7 @@ describe('nurture without a stored hook (EG-19)', () => {
     );
     const n = cands.find((x) => x.kind === 'nurture_checkin')!;
     expect(n.reasonText).toBe(
-      '97 days since your last conversation; a short update on your search keeps it warm',
+      '97 days since your last conversation; a short update on your search keeps you in touch',
     );
     expect(n.payload.needsUpdate).toBe(true);
   });

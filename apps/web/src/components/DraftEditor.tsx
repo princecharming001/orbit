@@ -23,9 +23,10 @@ import { copyText, openHandoff } from './approve';
 type PromptNeed = Exclude<DraftNeed, 'post'>;
 const INPUT_PROMPT: Record<PromptNeed, { label: string; hint: string; placeholder: string }> = {
   connection: {
-    label: 'One line only true of them',
-    hint: 'You have not talked yet, so the message needs one line that shows why you are writing to them: how you found them, what you share, or something of theirs you read. Orbit will not send a first message without it.',
-    placeholder: 'e.g. Read your post on pricing experiments at Ramp; we both interned at Brex',
+    label: 'Why you are writing to them',
+    hint: 'You have not talked yet, so the message needs one line that only fits them: how you found them, what you share, or something of theirs you read. Orbit will not send a first message without it.',
+    placeholder:
+      'e.g. We are both in the same campus club; I read your post about your first year at the firm',
   },
   update: {
     label: 'One real update since you last spoke',
@@ -74,6 +75,7 @@ export function DraftEditor({
   approveLabel?: string;
 }) {
   const { user } = useSession();
+  const toast = useToast();
   const [body, setBody] = useState(draft.bodyFinal ?? draft.bodyDraft);
   const bodyId = useId();
   // the box grows with the message, so the whole draft (sign-off included) is visible without scrolling inside it,
@@ -106,10 +108,30 @@ export function DraftEditor({
     () => db.chats.where('personId').equals(draft.personId).toArray(),
     [draft.personId],
   );
+  // a new draft (or a redraft) replaces the text; the student's own saved edits do not reset what they are typing
   useEffect(() => {
     setBody(draft.bodyFinal ?? draft.bodyDraft);
     setSubject(draft.subject ?? '');
-  }, [draft.id, draft.bodyDraft, draft.bodyFinal, draft.subject]);
+  }, [draft.id, draft.bodyDraft]);
+  // edits are kept as they are typed, so leaving the page (to check LinkedIn) and coming back loses nothing
+  useEffect(() => {
+    if (draft.status !== 'draft') return;
+    const t = setTimeout(() => {
+      const changedBody = body !== (draft.bodyFinal ?? draft.bodyDraft);
+      const changedSubject = subject !== (draft.subject ?? '');
+      if (!changedBody && !changedSubject) return;
+      db.outbound
+        .where('id')
+        .equals(draft.id)
+        .filter((m) => m.status === 'draft')
+        .modify({
+          bodyFinal: body.trim() === draft.bodyDraft.trim() ? undefined : body,
+          ...(changedSubject ? { subject: subject || undefined } : {}),
+        })
+        .catch(() => undefined);
+    }, 600);
+    return () => clearTimeout(t);
+  }, [body, subject, draft.id, draft.status, draft.bodyDraft, draft.bodyFinal, draft.subject]);
   useEffect(() => {
     let live = true;
     draftEnvelope(draft).then((e) => live && setEnvelope(e));
@@ -154,6 +176,14 @@ export function DraftEditor({
   if (['queued', 'sending', 'handed_off', 'sent'].includes(draft.status))
     return <OutboxStatus draft={draft} onClose={onCancel} />;
   const first = person?.firstName ?? 'them';
+  const copyAll = async () => {
+    const all = `${!isLinkedIn && subject && !envelope.threaded ? `Subject: ${subject}\n\n` : ''}${body}`;
+    toast.push({
+      text: (await copyText(all))
+        ? `Copied. Paste it into Gmail or any mail app, addressed to ${person?.primaryEmail ?? first}.`
+        : 'Select the text and copy it.',
+    });
+  };
   const defaultLabel = isLinkedIn
     ? connectionNote
       ? 'Copy note & open LinkedIn'
@@ -225,7 +255,9 @@ export function DraftEditor({
       )}
       {!isLinkedIn && envelope.threaded && (
         <div className="text-[12px] text-ink-3 mb-2" data-testid="draft-thread-subject">
-          Goes as a reply in your email thread{envelope.subject ? ` “${envelope.subject}”` : ''}.
+          {direct
+            ? `Goes as a reply in your email thread${envelope.subject ? ` “${envelope.subject}”` : ''}.`
+            : `Opens as a new email${envelope.subject ? ` with the subject “${envelope.subject}”` : ''}, so ${first} sees which conversation it follows.`}
         </div>
       )}
       {isLinkedIn && (
@@ -267,6 +299,16 @@ export function DraftEditor({
               Cancel
             </Button>
           )}
+          {!isLinkedIn && !direct && !approveLabel && (
+            <Button
+              size="sm"
+              onClick={copyAll}
+              title="Copy the message to paste into Gmail in your browser"
+              data-testid="draft-copy"
+            >
+              Copy text
+            </Button>
+          )}
           <Button
             variant="primary"
             size="sm"
@@ -288,7 +330,8 @@ export function DraftEditor({
       </div>
       {!isLinkedIn && direct === false && !approveLabel && (
         <p className="mt-1.5 text-[12px] text-ink-3 text-right" data-testid="draft-mail-hint">
-          Orbit opens this in your mail app, addressed to {first}. You send it from there.
+          Orbit opens this in your mail app, addressed to {first}. You send it from there. Use Gmail in the
+          browser? Copy the text instead.
         </p>
       )}
       {blocked &&
@@ -296,7 +339,7 @@ export function DraftEditor({
         !notAllowed &&
         !issues.some((i) => i.blocking || i.code === 'placeholder') && (
           <p className="mt-1.5 text-[12px] text-warn" data-testid="draft-blocked-hint">
-            Add the missing line above, or replace the text in brackets, to approve this.
+            Add the missing line above, or replace the text in brackets, to send this.
           </p>
         )}
       {(shownError || notAllowed || issues.length > 0) && (
@@ -376,8 +419,8 @@ export function OutboxStatus({ draft, onClose }: { draft: OutboundMessage; onClo
     line =
       draft.channel === 'gmail'
         ? draft.externalThreadId
-          ? `Opened in your mail app, addressed to ${name}. Send it there as a reply in your original thread if you can, then press I sent it.`
-          : `Opened in your mail app, addressed to ${name}. Send it there, then press I sent it.`
+          ? `Opened in your mail app as a new email to ${name}. Send it there, then press I sent it. Nothing opened? Copy the text into Gmail.`
+          : `Opened in your mail app, addressed to ${name}. Send it there, then press I sent it. Nothing opened? Copy the text into Gmail.`
         : link?.via === 'linkedin_connect'
           ? `On ${name}'s LinkedIn profile, click Connect, then Add a note, and paste the note. Press I sent it once the request is out.`
           : `Paste the message into LinkedIn and send it to ${name}, then press I sent it.`;
@@ -412,19 +455,24 @@ export function OutboxStatus({ draft, onClose }: { draft: OutboundMessage; onClo
             {link.via === 'mailto' ? 'Open mail app again' : 'Open LinkedIn again'}
           </Button>
         )}
-        {draft.channel === 'linkedin' && (
-          <Button
-            size="sm"
-            disabled={working}
-            onClick={async () =>
-              toast.push({
-                text: (await copyText(text)) ? 'Copied.' : 'Select the text and copy it.',
-              })
-            }
-          >
-            Copy again
-          </Button>
-        )}
+        <Button
+          size="sm"
+          disabled={working}
+          onClick={async () =>
+            toast.push({
+              text: (await copyText(
+                draft.channel === 'gmail' && draft.subject ? `Subject: ${draft.subject}\n\n${text}` : text,
+              ))
+                ? draft.channel === 'gmail'
+                  ? `Copied. Paste it into a new email to ${person?.primaryEmail ?? name}.`
+                  : 'Copied.'
+                : 'Select the text and copy it.',
+            })
+          }
+          data-testid="handoff-copy"
+        >
+          {draft.channel === 'linkedin' ? 'Copy again' : 'Copy text'}
+        </Button>
         <Button
           size="sm"
           variant="ghost"

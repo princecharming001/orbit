@@ -67,7 +67,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
     nav(to);
   };
   return (
-    <Modal open={open} onClose={onClose} title="Search people, companies, actions" width={560}>
+    <Modal open={open} onClose={onClose} title="Search people and actions" width={560}>
       <input
         ref={ref}
         value={q}
@@ -86,7 +86,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
           }
           if (e.key === 'Enter' && results[idx]) go(results[idx]!.to);
         }}
-        placeholder="Type a name, company, or action…"
+        placeholder="Type a name, a company they work at, or an action…"
         className="w-full h-10 rounded-lg border border-line px-3 text-[14px] focus:outline-none focus:ring-2 focus:ring-accent/30"
       />
       <ul className="mt-3 max-h-[360px] overflow-y-auto scroll-thin -mx-2">

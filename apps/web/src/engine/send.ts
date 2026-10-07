@@ -283,12 +283,31 @@ const SOFT_FOR_EDITS = new Set([
   'i_heavy',
 ]);
 
+/**
+ * Phrases Orbit never writes itself but that are ordinary speech when the student types them ("Aisha suggested I
+ * reach out"): in the student's own words they are a suggestion, not a block. Form-letter openers still block.
+ */
+const PLAIN_SPEECH = new Set([
+  'reach out',
+  'reaching out',
+  'touch base',
+  'circle back',
+  'leverage',
+  'add value',
+  'quick learner',
+  'passionate about',
+  'grab coffee sometime',
+  'any advice you have',
+]);
+
 function issueText(code: string, detail: string, person: Person): string {
   switch (code) {
     case 'missing_name':
       return `The message never uses ${person.firstName}'s name. Check it is addressed to the right person.`;
     case 'banned_phrase':
-      return `"${detail}" reads like a template. Say it in your own words.`;
+      return PLAIN_SPEECH.has(detail.toLowerCase())
+        ? `"${detail}" shows up in a lot of form emails. Fine to keep if it is how you talk.`
+        : `"${detail}" reads like a template. Say it in your own words.`;
     case 'em_dash':
       return 'Swap the long dash for a comma or a period. Dashes read as machine-written.';
     case 'placeholder':
@@ -389,7 +408,11 @@ export async function reviewDraft(
   const issues: DraftIssue[] = check(body, subject ?? msg.subject).map((i) => ({
     code: i.code,
     text: issueText(i.code, i.detail, person),
-    blocking: i.blocking && !original.has(i.key) && !SOFT_FOR_EDITS.has(i.code),
+    blocking:
+      i.blocking &&
+      !original.has(i.key) &&
+      !SOFT_FOR_EDITS.has(i.code) &&
+      !(i.code === 'banned_phrase' && PLAIN_SPEECH.has(i.detail.toLowerCase())),
   }));
   if ((await connectionNoteFor(msg, person)) && body.length > LINKEDIN_NOTE_MAX)
     issues.unshift({

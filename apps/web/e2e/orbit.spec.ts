@@ -17,7 +17,10 @@ async function prep(page: Page) {
 async function loadDemo(page: Page) {
   await prep(page);
   await page.goto('');
-  await page.getByRole('button', { name: /try it with demo data/i }).click();
+  await page
+    .getByRole('button', { name: /^try the demo$/i })
+    .first()
+    .click();
   await expect(page).toHaveURL(/\/today$/, { timeout: 90_000 });
   await expect(page.getByText(/good (morning|afternoon|evening)/i)).toBeVisible();
 }
@@ -60,7 +63,7 @@ test.describe('Orbit demo flow', () => {
     await expect(
       page.getByTestId('suggestion-ask_referral').or(page.getByTestId('suggestion-nurture_checkin')).first(),
     ).toBeVisible();
-    await expect(page.getByText(/upcoming/i)).toBeVisible();
+    await expect(page.getByText('Coming up', { exact: true })).toBeVisible();
     // the line under the greeting counts the cards on screen, including stage updates raised after the brief
     const summary = page.getByTestId('today-summary');
     await expect(summary).toContainText(/coming up this week/);
@@ -90,7 +93,7 @@ test.describe('Orbit demo flow', () => {
     await card.getByRole('button', { name: /i sent it/i }).click();
     await expect(page.getByText(/logged as sent to/i)).toBeVisible();
     await page.goto('inbox?tab=sent');
-    await page.getByRole('tab', { name: /sent/i }).click();
+    await page.getByRole('tab', { name: /^sent/i }).click();
     await expect(page.getByText('PS edited in e2e')).toBeVisible();
     await expect(page.getByRole('link', { name })).toBeVisible();
     // minutes after the thank-you, "Write to" does not draft a check-in
@@ -262,7 +265,8 @@ test.describe('Orbit demo flow', () => {
     await page.getByTestId('capture-save').click();
     await expect(page).toHaveURL(/\/people\//, { timeout: 15_000 });
     await page.getByRole('tab', { name: /facts/i }).click();
-    await expect(page.getByText(/offered to refer me/i).first()).toBeVisible();
+    // the fact is stored as written ("offered to refer me") and shown to the student as "you"
+    await expect(page.getByText(/offered to refer you/i).first()).toBeVisible();
     await expect(page.getByText(/you promised/i).first()).toBeVisible();
   });
 
@@ -280,7 +284,7 @@ test.describe('Orbit demo flow', () => {
     await loadDemo(page);
     await page.goto('settings/privacy');
     const dl = page.waitForEvent('download');
-    await page.getByRole('button', { name: /export everything/i }).click();
+    await page.getByRole('button', { name: /download all my data/i }).click();
     expect((await dl).suggestedFilename()).toMatch(/orbit-export/);
     page.on('dialog', (d) => d.accept());
     await page.getByRole('button', { name: /delete all data/i }).click();
@@ -529,8 +533,7 @@ test.describe('Manual onboarding', () => {
     await page.getByRole('button', { name: /continue/i }).click();
     await expect(page).toHaveURL(/\/onboarding\/3$/);
     await page.getByRole('button', { name: /skip for now/i }).click();
-    await page.getByRole('button', { name: /skip for now/i }).click(); // google
-    // linkedin: upload a tiny CSV
+    // linkedin (no Google step: Google sign-in is not set up on this build): upload a tiny CSV
     const csv =
       'First Name,Last Name,URL,Email Address,Company,Position,Connected On\nPriya,Patel,https://www.linkedin.com/in/priya-patel,priya@figma.com,Figma,Product Manager,12 Mar 2025\nDaniel,Kim,https://www.linkedin.com/in/daniel-kim,,Stripe,Software Engineer,03 Jan 2024\n';
     await page
@@ -538,7 +541,8 @@ test.describe('Manual onboarding', () => {
       .setInputFiles({ name: 'Connections.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) });
     await expect(page.getByText(/2 people added/i)).toBeVisible();
     await page.getByRole('button', { name: /continue/i }).click();
-    await page.getByRole('button', { name: /continue/i }).click(); // notes
+    // meeting notes are a tip on the last step, not a step of their own
+    await expect(page.getByTestId('ob-notes-tip')).toBeVisible();
     await page.getByRole('button', { name: /finish setup/i }).click();
     await expect(page).toHaveURL(/\/today$/, { timeout: 30_000 });
     await page.goto('people');
@@ -581,7 +585,10 @@ test.describe('Manual onboarding', () => {
       dialogs.push(d.message());
       d.dismiss();
     });
-    await page.getByRole('button', { name: /try it with demo data/i }).click();
+    await page
+      .getByRole('button', { name: /^try the demo$/i })
+      .first()
+      .click();
     await expect.poll(() => dialogs.length).toBe(1);
     expect(dialogs[0]).toMatch(/discards the setup you started for Real Person/);
     await page
@@ -736,7 +743,7 @@ test.describe('First-run guidance and plain next steps', () => {
     await loadDemo(page);
     const hint = page.getByTestId('hint-today');
     await expect(hint).toBeVisible();
-    await expect(hint).toContainText(/nothing is sent until you approve it/i);
+    await expect(hint).toContainText(/nothing goes out until you send it yourself/i);
     await page.getByTestId('hint-today-dismiss').click();
     await expect(hint).toHaveCount(0);
     await page.reload();
@@ -757,6 +764,8 @@ test.describe('First-run guidance and plain next steps', () => {
     page,
   }) => {
     await loadDemo(page);
+    // a duplicate guess with little behind it (different first names) waits behind "can wait"
+    await page.getByTestId('today-more').click();
     const merge = page.getByTestId('suggestion-confirm_merge').first();
     await expect(merge.getByTestId('merge-choice')).toContainText(/both have/i);
     await merge.getByTestId('merge-ask').click();
@@ -776,13 +785,74 @@ test.describe('First-run guidance and plain next steps', () => {
     await expect(page.getByTestId('suggestion-thank_you').filter({ hasText: who })).toBeVisible();
   });
 
-  test('the Approvals badge counts exactly the messages on the Approvals page', async ({ page }) => {
+  test('the Drafts badge counts exactly the drafts ready to send today, and an opened draft is counted once', async ({
+    page,
+  }) => {
     await loadDemo(page);
     const badge = Number(await page.getByTestId('approvals-badge').first().innerText());
+    // the same drafts as Today's cards, not Today plus everything that can wait
+    const todays = await page
+      .locator('[data-testid^="suggestion-"]')
+      .filter({ has: page.getByTestId('draft-review') })
+      .count();
+    expect(badge).toBe(todays);
     await page.goto('inbox');
-    await expect(page.getByRole('tab', { name: /to approve/i })).toContainText(String(badge));
+    await expect(page.getByRole('heading', { name: 'Drafts' })).toBeVisible();
+    await expect(page.getByRole('tab', { name: /ready to send/i })).toContainText(String(badge));
     await expect(page.locator('[data-testid^="suggestion-"]')).toHaveCount(badge);
     await expect(page.getByTestId('suggestion-prep_brief')).toHaveCount(0);
+    // opened in the mail app: it moves to "Not sent yet" and is no longer counted as ready
+    const card = page.getByTestId('suggestion-follow_up_bump').first();
+    await card.getByTestId('draft-review').click();
+    await card.getByRole('button', { name: /^open in mail app$/i }).click();
+    await expect(page.getByRole('tab', { name: /ready to send/i })).toContainText(String(badge - 1));
+    await expect(page.getByRole('tab', { name: /not sent yet/i })).toContainText('1');
+    await expect(page.getByTestId('approvals-badge').first()).toHaveText(String(badge - 1));
+    // leaving and coming back keeps the "I sent it" step: the page opens on what is waiting, and Today shows it
+    await page.goto('today');
+    await page.goto('inbox');
+    await expect(page.getByRole('tab', { name: /not sent yet/i })).toHaveAttribute('aria-selected', 'true');
+    await expect(page.getByRole('button', { name: /i sent it/i })).toBeVisible();
+    await expect(page.getByTestId('handoff-copy')).toBeVisible();
+  });
+
+  test('Add note never picks the person behind your back, and files a notetaker summary with the person it names', async ({
+    page,
+  }) => {
+    await loadDemo(page);
+    await page.goto('notes/new');
+    const select = page.getByTestId('capture-person');
+    await expect.poll(() => select.locator('option').count(), { timeout: 15_000 }).toBeGreaterThan(3);
+    await expect(select).toHaveValue('');
+    // choosing someone and then "Let Orbit figure it out" again sticks
+    await select.selectOption({ index: 3 });
+    await select.selectOption({ label: 'Let Orbit figure it out' });
+    await page.waitForTimeout(500);
+    await expect(select).toHaveValue('');
+    await page
+      .getByTestId('capture-text')
+      .fill(
+        "Meeting summary - Hannah Brooks (Figma) / Alex Rivera\nAction items:\n- Alex to send portfolio link by Monday\nKey points:\n- Hannah recommended taking HCI course\n- Figma APM applications open in January\n- Hannah offered to review Alex's resume",
+      );
+    await expect(page.getByTestId('capture-match-preview')).toContainText(/file this with Hannah Brooks/);
+    await page.getByTestId('capture-save').click();
+    await expect(page).toHaveURL(/\/people\//, { timeout: 15_000 });
+    await expect(page.getByRole('heading', { name: 'Hannah Brooks' })).toBeVisible();
+    await expect(page.getByTestId('toasts')).toContainText(/1 promise you made/);
+    // the thank-you is right on the page she lands on
+    await expect(page.getByTestId('person-waiting').getByTestId('suggestion-thank_you')).toBeVisible();
+  });
+
+  test('the demo says it is demo data and leads to your own setup', async ({ page }) => {
+    await loadDemo(page);
+    await expect(page.getByTestId('demo-banner')).toContainText(/made-up student/);
+    await page.goto('');
+    await expect(page.getByRole('button', { name: /set up orbit for me/i }).first()).toBeVisible();
+    await page.goto('today');
+    await page.getByTestId('demo-start-own').click();
+    await page.getByTestId('demo-start-confirm').click();
+    await expect(page).toHaveURL(/\/onboarding\/1$/, { timeout: 15_000 });
+    await expect(page.getByTestId('ob-name')).toHaveValue('');
   });
 
   test('Pipeline explains its stages and finds who went quiet; the next-step chip opens that card on Today', async ({
@@ -825,7 +895,7 @@ test.describe('Setup without Google', () => {
       .getByRole('button', { name: /^get started/i })
       .first()
       .click();
-    await expect(page.getByTestId('ob-progress')).toHaveText(/step 1 of 7/i);
+    await expect(page.getByTestId('ob-progress')).toHaveText(/step 1 of 5/i);
     // Continue says what is missing while it is disabled
     await expect(page.getByTestId('ob-missing')).toContainText(
       /your name, your email, your school and your graduation year/i,
@@ -848,15 +918,13 @@ test.describe('Setup without Google', () => {
     await expect(page.getByRole('button', { name: /remove evercore/i })).toBeVisible();
     await page.getByRole('button', { name: /continue/i }).click();
     await page.getByRole('button', { name: /skip for now/i }).click(); // resume
-    // without a Google sign-in set up for this copy, the step says so in plain words, no client ID to paste
-    await expect(page.getByTestId('ob-google-unavailable')).toBeVisible();
-    await expect(page.getByLabel('OAuth client ID')).toBeHidden();
-    await page.getByRole('button', { name: /skip for now/i }).click(); // google
+    // without a Google sign-in set up on this build there is no Google step that could only say "not available"
+    await expect(page.getByTestId('ob-google-unavailable')).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: 'LinkedIn' })).toBeVisible();
     await expect(page.getByTestId('ob-step-3')).toHaveAttribute('data-status', 'skipped');
-    await expect(page.getByTestId('ob-step-4')).toHaveAttribute('data-status', 'skipped');
     await expect(page.getByTestId('ob-step-2')).toHaveAttribute('data-status', 'done');
     await page.getByRole('button', { name: /skip for now/i }).click(); // linkedin
-    await page.getByRole('button', { name: /continue/i }).click(); // notes
+    await expect(page.getByTestId('ob-step-4')).toHaveAttribute('data-status', 'skipped');
     await page.getByRole('button', { name: /finish setup/i }).click();
     await expect(page).toHaveURL(/\/today$/, { timeout: 30_000 });
     const empty = page.getByTestId('today-empty-network');
@@ -894,8 +962,10 @@ test.describe('Setup without Google', () => {
     await page.getByTestId('ob-fn-ib').click();
     await page.getByTestId('ob-company').fill('Goldman Sachs');
     await page.getByRole('button', { name: /continue/i }).click();
-    for (let i = 0; i < 3; i++) await page.getByRole('button', { name: /skip for now/i }).click();
-    await page.getByRole('button', { name: /continue/i }).click();
+    // resume and LinkedIn (no Google step on this build, and meeting notes are a tip on the last step)
+    await page.getByRole('button', { name: /skip for now/i }).click();
+    await expect(page.getByRole('heading', { name: 'LinkedIn' })).toBeVisible();
+    await page.getByRole('button', { name: /skip for now/i }).click();
     await page.getByRole('button', { name: /finish setup/i }).click();
     await expect(page).toHaveURL(/\/today$/, { timeout: 30_000 });
     // the upload is a real control: the keyboard reaches it, and it opens the picker right here

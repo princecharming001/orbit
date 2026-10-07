@@ -182,7 +182,7 @@ function Profile() {
         <Input id="profile-email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} />
       </div>
       <div>
-        <Label htmlFor="profile-linkedin">LinkedIn URL</Label>
+        <Label htmlFor="profile-linkedin">LinkedIn profile link</Label>
         <Input
           id="profile-linkedin"
           value={f.linkedinUrl}
@@ -240,11 +240,23 @@ function Profile() {
           onChange={(e) => setF({ ...f, timezone: e.target.value })}
           className="w-full"
         >
-          {zones.map((z) => (
-            <option key={z} value={z}>
-              {z.replace(/_/g, ' ')}
-            </option>
-          ))}
+          {/* the zones most students are in first, by the name people use; every other zone below */}
+          <optgroup label="United States">
+            {COMMON_ZONES.map(([z, l]) => (
+              <option key={z} value={z}>
+                {l}
+              </option>
+            ))}
+          </optgroup>
+          <optgroup label="All time zones">
+            {zones
+              .filter((z) => !COMMON_ZONES.some(([c]) => c === z))
+              .map((z) => (
+                <option key={z} value={z}>
+                  {z.replace(/_/g, ' ')}
+                </option>
+              ))}
+          </optgroup>
         </Select>
       </div>
       <div className="sm:col-span-2">
@@ -279,6 +291,16 @@ function Profile() {
 }
 
 /** Every time zone the browser knows, with the current one first if it is not in the list (an old "UTC"). */
+const COMMON_ZONES: [string, string][] = [
+  ['America/New_York', 'Eastern time (New York)'],
+  ['America/Chicago', 'Central time (Chicago)'],
+  ['America/Denver', 'Mountain time (Denver)'],
+  ['America/Phoenix', 'Arizona (Phoenix)'],
+  ['America/Los_Angeles', 'Pacific time (Los Angeles)'],
+  ['America/Anchorage', 'Alaska (Anchorage)'],
+  ['Pacific/Honolulu', 'Hawaii (Honolulu)'],
+];
+
 function timeZones(current: string): string[] {
   let all: string[] = [];
   try {
@@ -550,8 +572,8 @@ function Integrations() {
         )}
         {!builtIn && !google && (
           <p className="text-[13px] mt-2 rounded-lg bg-canvas-2 p-3" data-testid="google-unavailable">
-            Google sign-in is not set up on this copy of Orbit. You can still add people by hand and import
-            LinkedIn, and approved emails open in your mail app.
+            Google sign-in is not available in this version of Orbit. You can still add people by hand and
+            import LinkedIn, and the emails you write open in your mail app or copy into Gmail.
           </p>
         )}
         {(builtIn || google) && (
@@ -736,8 +758,9 @@ function ClaudeCard() {
     <Card>
       <div className="font-medium">Claude (optional)</div>
       <p className="text-[13px] text-ink-2 mt-0.5">
-        Orbit writes drafts on its own. If you have an Anthropic account, add your API key and Claude can
-        write them instead, billed to your account. You choose what Claude may read.
+        You do not need this: Orbit writes every draft on its own, for free. If you already pay for an
+        Anthropic account (the company behind the Claude AI model), add its API key and Claude can write
+        drafts instead; Anthropic bills that account. You choose what Claude may read.
       </p>
       <div className="mt-3 flex gap-2">
         <Input
@@ -861,6 +884,16 @@ function Style() {
   const card = style?.card ?? defaultStyleCard(settings?.tonePreset ?? 'warm', user.firstName);
   const learned = card.builtFromCount > 0;
   const example = (g: string) => g.replace(/\{first\}/g, 'Sarah');
+  // learning needs sent mail, which only Google can provide: without it the button is not offered at all
+  const google = useLiveQuery(
+    () =>
+      db.integrations
+        .where('userId')
+        .equals(user.id)
+        .filter((i) => i.provider === 'google')
+        .first(),
+    [user.id],
+  );
   return (
     <div className="space-y-4">
       <Card>
@@ -868,7 +901,9 @@ function Style() {
         <p className="text-[13px] text-ink-2 mt-0.5">
           {learned
             ? `Learned from ${card.builtFromCount} emails you sent.`
-            : 'Set by the style you pick below. With Google connected, Orbit can learn it from emails you sent instead.'}
+            : google
+              ? 'Set by the style you pick below, or learned from emails you sent.'
+              : 'Set by the style you pick below.'}
         </p>
         <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-6 gap-y-2 text-[13.5px] mt-3">
           <dt className="text-ink-3">Greeting</dt>
@@ -895,37 +930,41 @@ function Style() {
             <Select
               value={settings?.tonePreset ?? 'warm'}
               onChange={(e) => db.settings.update(user.id, { tonePreset: e.target.value as never })}
+              disabled={learned}
+              title={learned ? 'Drafts follow the style learned from your sent mail' : undefined}
             >
               <option value="warm">Warm</option>
               <option value="direct">Direct</option>
               <option value="formal">Formal</option>
             </Select>
           </label>
-          <Button
-            onClick={async () => {
-              const sent = await db.messages
-                .where('userId')
-                .equals(user.id)
-                .filter((m) => m.direction === 'outbound' && !m.isAutomated)
-                .toArray();
-              if (sent.length < 5)
-                return toast.push({
-                  text: 'Orbit needs at least 5 emails you sent to learn from. Connect Google first.',
+          {google && (
+            <Button
+              onClick={async () => {
+                const sent = await db.messages
+                  .where('userId')
+                  .equals(user.id)
+                  .filter((m) => m.direction === 'outbound' && !m.isAutomated)
+                  .toArray();
+                if (sent.length < 5)
+                  return toast.push({
+                    text: 'Orbit needs at least 5 emails you sent to learn from. Sync Google again later.',
+                  });
+                await db.styles.put({
+                  userId: user.id,
+                  card: buildStyleCard(
+                    sent.map((m) => m.bodyText),
+                    user.firstName,
+                    settings?.tonePreset,
+                  ),
+                  updatedAt: new Date().toISOString(),
                 });
-              await db.styles.put({
-                userId: user.id,
-                card: buildStyleCard(
-                  sent.map((m) => m.bodyText),
-                  user.firstName,
-                  settings?.tonePreset,
-                ),
-                updatedAt: new Date().toISOString(),
-              });
-              toast.push({ text: 'Learned from your sent mail.', tone: 'good' });
-            }}
-          >
-            Learn from my sent mail
-          </Button>
+                toast.push({ text: 'Learned from your sent mail.', tone: 'good' });
+              }}
+            >
+              Learn from my sent mail
+            </Button>
+          )}
           {style && (
             <Button variant="ghost" onClick={() => db.styles.delete(user.id)}>
               Use the picked style instead
@@ -955,107 +994,115 @@ function Limits() {
       <Card className="grid sm:grid-cols-2 gap-4 items-start">
         <div className="sm:col-span-2 font-medium -mb-1">Sending limits</div>
         <div>
-          <Label htmlFor="lim-week">First messages per week</Label>
+          <Label htmlFor="lim-week">First messages a week</Label>
           <Input
             id="lim-week"
             type="number"
-            min={0}
+            min={1}
             max={30}
             value={settings.weeklyOutreachTarget}
-            onChange={(e) => upd({ weeklyOutreachTarget: Number(e.target.value) })}
+            onChange={(e) =>
+              upd({
+                weeklyOutreachTarget: Math.max(1, Math.min(30, Math.round(Number(e.target.value) || 1))),
+              })
+            }
           />
           <p className="text-[12px] text-ink-3 mt-1">Your goal for new people each week, shown on Today.</p>
         </div>
-        <div>
-          <Label htmlFor="lim-cool">Hours between messages to the same person</Label>
-          <Input
-            id="lim-cool"
-            type="number"
-            min={0}
-            value={settings.perPersonCooldownHours}
-            onChange={(e) => upd({ perPersonCooldownHours: Number(e.target.value) })}
-          />
-        </div>
-        <div>
-          <Label htmlFor="lim-gmail">Emails per day, at most</Label>
-          <Input
-            id="lim-gmail"
-            type="number"
-            min={1}
-            max={50}
-            value={settings.dailySendCapGmail}
-            onChange={(e) => upd({ dailySendCapGmail: Number(e.target.value) })}
-          />
-        </div>
-        <div>
-          <Label htmlFor="lim-li">LinkedIn messages per day, at most</Label>
-          <Input
-            id="lim-li"
-            type="number"
-            min={1}
-            max={30}
-            value={settings.dailySendCapLinkedin}
-            onChange={(e) => upd({ dailySendCapLinkedin: Number(e.target.value) })}
-          />
-        </div>
-        <div className="sm:col-span-2">
-          <Label htmlFor="lim-bumps">Follow-ups when someone has not replied</Label>
-          <Input
-            id="lim-bumps"
-            type="number"
-            min={0}
-            max={2}
-            value={settings.maxBumps}
-            onChange={(e) => upd({ maxBumps: Math.max(0, Math.min(2, Number(e.target.value))) })}
-            className="max-w-[120px]"
-          />
-          <p className="text-[12px] text-ink-3 mt-1">
-            1 suits most people. With 2, Orbit may suggest a short, polite last note, which is normal in
-            finance and consulting.
+        <details className="sm:col-span-2 text-[13px]" data-testid="limits-advanced">
+          <summary className="cursor-pointer text-ink-2 w-fit">
+            Advanced: how often Orbit lets you write (most students never change these)
+          </summary>
+          <p className="text-[12px] text-ink-3 mt-1 mb-3">
+            They keep you from writing to someone twice in a row too soon, and from sending more in a day than
+            reads as a mass email.
           </p>
-        </div>
-        <div className="sm:col-span-2 border-t border-line pt-4">
-          <label className="flex items-start gap-2 text-[13.5px]">
-            <input
-              type="checkbox"
-              className="mt-1"
-              checked={settings.warmUpEnabled}
-              onChange={(e) => upd({ warmUpEnabled: e.target.checked })}
-            />
-            <span>
-              <strong className="font-medium">Warm up before messaging strangers on LinkedIn.</strong>{' '}
-              <span className="text-ink-2">
-                A few small steps over a few days, like viewing their profile and reacting to a post. You do
-                each one yourself; Orbit opens the right page and never acts on LinkedIn for you.
-              </span>
-            </span>
-          </label>
-          <div className="mt-3 max-w-xs">
-            <Label htmlFor="lim-wdays">Warm-up length in days</Label>
-            <Input
-              id="lim-wdays"
-              type="number"
-              min={2}
-              max={10}
-              value={settings.warmUpDays}
-              onChange={(e) => upd({ warmUpDays: Number(e.target.value) })}
-            />
+          <div className="grid sm:grid-cols-2 gap-4 items-start">
+            <div>
+              <Label htmlFor="lim-cool">Hours between messages to the same person</Label>
+              <Input
+                id="lim-cool"
+                type="number"
+                min={0}
+                value={settings.perPersonCooldownHours}
+                onChange={(e) => upd({ perPersonCooldownHours: Number(e.target.value) })}
+              />
+            </div>
+            <div>
+              <Label htmlFor="lim-gmail">Emails per day, at most</Label>
+              <Input
+                id="lim-gmail"
+                type="number"
+                min={1}
+                max={50}
+                value={settings.dailySendCapGmail}
+                onChange={(e) => upd({ dailySendCapGmail: Number(e.target.value) })}
+              />
+            </div>
+            <div>
+              <Label htmlFor="lim-li">LinkedIn messages per day, at most</Label>
+              <Input
+                id="lim-li"
+                type="number"
+                min={1}
+                max={30}
+                value={settings.dailySendCapLinkedin}
+                onChange={(e) => upd({ dailySendCapLinkedin: Number(e.target.value) })}
+              />
+            </div>
+            <div className="sm:col-span-2">
+              <Label htmlFor="lim-bumps">Follow-ups when someone has not replied</Label>
+              <Input
+                id="lim-bumps"
+                type="number"
+                min={0}
+                max={2}
+                value={settings.maxBumps}
+                onChange={(e) => upd({ maxBumps: Math.max(0, Math.min(2, Number(e.target.value))) })}
+                className="max-w-[120px]"
+              />
+              <p className="text-[12px] text-ink-3 mt-1">
+                1 suits most people. With 2, Orbit may suggest a short, polite last note, which is normal in
+                finance and consulting.
+              </p>
+            </div>
+            <div className="sm:col-span-2 border-t border-line pt-4">
+              <label className="flex items-start gap-2 text-[13.5px]">
+                <input
+                  type="checkbox"
+                  className="mt-1"
+                  checked={settings.warmUpEnabled}
+                  onChange={(e) => upd({ warmUpEnabled: e.target.checked })}
+                />
+                <span>
+                  <strong className="font-medium">Warm up before messaging strangers on LinkedIn.</strong>{' '}
+                  <span className="text-ink-2">
+                    A few small steps over a few days, like viewing their profile and reacting to a post. You
+                    do each one yourself; Orbit opens the right page and never acts on LinkedIn for you.
+                  </span>
+                </span>
+              </label>
+              <div className="mt-3 max-w-xs">
+                <Label htmlFor="lim-wdays">Warm-up length in days</Label>
+                <Input
+                  id="lim-wdays"
+                  type="number"
+                  min={2}
+                  max={10}
+                  value={settings.warmUpDays}
+                  onChange={(e) => upd({ warmUpDays: Number(e.target.value) })}
+                />
+              </div>
+            </div>
           </div>
-        </div>
+        </details>
       </Card>
       <Card className="grid sm:grid-cols-2 gap-4 items-start">
         <div className="sm:col-span-2 font-medium -mb-1">Your schedule</div>
-        <div>
-          <Label htmlFor="lim-brief" hint="when today's cards are ready">
-            Daily brief time
-          </Label>
-          <Input
-            id="lim-brief"
-            type="time"
-            value={settings.briefTimeLocal}
-            onChange={(e) => upd({ briefTimeLocal: e.target.value })}
-          />
-        </div>
+        <p className="sm:col-span-2 text-[13px] text-ink-2">
+          Today's list is rebuilt the first time you open Orbit each day. Orbit runs in your browser, so it
+          does not send reminders when it is closed.
+        </p>
         <div className="sm:col-span-2">
           <Label htmlFor="lim-sched" optional hint="Calendly, Cal.com or a Google booking page">
             Scheduling link
@@ -1100,19 +1147,19 @@ function Privacy() {
       <Card>
         <div className="font-medium">What Orbit stores (in this browser only)</div>
         <ul className="text-[13px] text-ink-2 mt-2 list-disc pl-5 space-y-1">
-          <li>Your profile, goals, resume text and extracted facets.</li>
+          <li>Your profile, goals, and your resume with what Orbit read from it.</li>
           <li>
             Email threads with people (bodies with quotes stripped), calendar events, LinkedIn connections,
             meeting notes.
           </li>
           <li>
-            Derived data: people, closeness scores, inferred connections, stages, facts, suggestions, drafts,
-            the audit trail of what was sent.
+            What Orbit works out from those: the people you know and how well, who knows whom, where each chat
+            stands, what you know about each person, today's cards, your drafts, and a record of what you
+            sent.
           </li>
           <li>
-            Optional secrets, kept apart from your data: your Anthropic API key, Google OAuth client ID and
-            Claude settings. Any script running on this page could read them; Orbit's security policy only
-            lets its own code and Google's sign-in script run here.
+            If you added them: your Anthropic API key and Claude settings, kept apart from the rest. Only
+            Orbit's own code and Google's sign-in can run on this page, so no other site can read them.
           </li>
         </ul>
         <p className="text-[13px] text-ink-2 mt-2">
@@ -1123,13 +1170,13 @@ function Privacy() {
       </Card>
       <Card>
         <p className="text-[13px] text-ink-2" data-testid="export-contents">
-          The export is one JSON file with everything Orbit stores about your network: full email text and
-          headers, calendar events, notes, people, facts, drafts and the audit trail. Treat it like your
-          inbox. It does not include your Anthropic key or Google client ID.
+          The download is one file with everything Orbit stores about your network: full email text and
+          headers, calendar events, notes, people, facts, drafts and what you sent. Keep it as private as your
+          inbox. It does not include your Anthropic key.
         </p>
         <div className="mt-3 flex flex-wrap gap-2 items-center">
           <Button onClick={exportAll}>
-            <Download size={14} /> Export everything (JSON)
+            <Download size={14} /> Download all my data
           </Button>
           <Button
             variant="danger"

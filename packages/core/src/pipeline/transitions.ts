@@ -38,7 +38,7 @@ export const STAGE_LABELS: Record<ChatStage, string> = {
   scheduling: 'Scheduling',
   scheduled: 'Scheduled',
   completed: 'Completed',
-  followed_up: 'Followed up',
+  followed_up: 'Thanked',
   nurturing: 'Staying in touch',
   declined: 'Declined',
   no_response: 'No response',

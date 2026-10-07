@@ -379,12 +379,16 @@ function signoff(ctx: DraftContext, sector: Sector, recruiter: boolean): string 
   if (learned) return learned;
   if (ctx.channel === 'linkedin') return `Thanks,\n${ctx.user.firstName}`; // a chat message, not a letter
   const formal = isFormalStyle(ctx.styleCard);
-  if (sector === 'finance' || sector === 'consulting' || recruiter) {
+  // the full name with school and class year is for someone who does not know the student yet; a thank-you or a
+  // check-in to someone they have talked to signs with the first name, like any other note between them
+  const firstContact = ctx.kind === 'outreach' || ctx.kind === 'bump' || ctx.kind === 'schedule';
+  if (recruiter || ((sector === 'finance' || sector === 'consulting') && firstContact)) {
     const cy = classYear(ctx.user.gradYear);
     const school = schoolShort(ctx.user.school);
     return `${formal || recruiter ? 'Best regards' : 'Best'},\n${ctx.user.fullName}${school ? `\n${school}${cy ? ` ${cy}` : ''}` : ''}`;
   }
   if (formal) return `Kind regards,\n${ctx.user.firstName}`;
+  if (sector === 'finance' || sector === 'consulting') return `Best,\n${ctx.user.firstName}`;
   return `Thanks,\n${ctx.user.firstName}`;
 }
 

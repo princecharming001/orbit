@@ -95,7 +95,7 @@ describe('person summary (UI-17)', () => {
     expect(r.summary).toBe(
       "Sofia works at Jane Street as an Associate Product Manager. Like you, Sofia went to University of Michigan. You last met on Aug 13. You've been in touch 3 times in the last three months. From your notes: They recommended practicing product sense questions.",
     );
-    expect(r.talkingPoints[0]).toBe('Ask them about this: She is training for the Chicago marathon.');
+    expect(r.talkingPoints[0]).toBe('Worth bringing up: She is training for the Chicago marathon.');
     for (const t of [r.summary, ...r.talkingPoints]) expect(t).not.toMatch(BANNED);
   });
   it('describes the meeting, not the note logged about it at the same time', () => {

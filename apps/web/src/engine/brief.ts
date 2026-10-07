@@ -1268,6 +1268,12 @@ async function addConfirmationCards(userId: string, now: Date): Promise<void> {
   for (const m of merges) {
     const [a, b] = await Promise.all([db.people.get(m.personAId), db.people.get(m.personBId)]);
     if (!a || !b) continue;
+    // a guess with little behind it (different first names, no shared address) waits behind "can wait"; it does not
+    // take one of the few spots on Today
+    const lower = (x?: string) => (x ?? '').trim().toLowerCase();
+    const emails = new Set([a.primaryEmail, ...a.emails].filter(Boolean).map((e) => lower(e)));
+    const sharedEmail = [b.primaryEmail, ...b.emails].some((e) => e && emails.has(lower(e)));
+    const weak = !sharedEmail && lower(a.firstName) !== lower(b.firstName);
     await upsertSuggestions(
       userId,
       [
@@ -1285,6 +1291,8 @@ async function addConfirmationCards(userId: string, now: Date): Promise<void> {
         },
       ],
       now,
+      undefined,
+      { deferred: weak },
     );
   }
   const unmatched = await db.notes

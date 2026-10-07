@@ -1,9 +1,10 @@
+import { STAGE_LABELS } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { AddPersonDialog } from '../components/AddPerson';
 import { db } from '../db/schema';
-import { ingestNote, rematchNote } from '../engine/notes';
+import { ingestNote, previewNoteMatch, rematchNote } from '../engine/notes';
 import { useSession } from '../state/session';
 import { Avatar, Button, Card, Input, Label, PageHeader, Select, Textarea, useToast } from '../ui';
 
@@ -66,11 +67,9 @@ export function NotesNew() {
         : undefined,
     [userId],
   );
-  useEffect(() => {
-    if (noteId) return;
-    if (!presetPerson && recentEvent?.attendeePersonIds[0] && !personId)
-      setPersonId(recentEvent.attendeePersonIds[0]);
-  }, [recentEvent, presetPerson, personId, noteId]);
+  // the picker is never filled in behind the student's back: "Let Orbit figure it out" stays chosen, and the line
+  // under it says who Orbit will file the note with (a name in the note, or the chat on the calendar that just ended)
+  const calendarPerson = people.find((p) => p.id === recentEvent?.attendeePersonIds[0]);
   // matching a saved note: start from Orbit's guess, if it made one
   useEffect(() => {
     if (existing && existing.personIds.length === 1 && !presetPerson) setPersonId(existing.personIds[0]!);
@@ -79,10 +78,25 @@ export function NotesNew() {
     const t = setTimeout(() => localStorage.setItem(DRAFT_KEY, text), 500);
     return () => clearTimeout(t);
   }, [text]);
-  const sorted = useMemo(() => people.slice().sort((a, b) => b.strength - a.strength), [people]);
+  const [filter, setFilter] = useState('');
+  const sorted = useMemo(
+    () => people.slice().sort((a, b) => a.displayName.localeCompare(b.displayName)),
+    [people],
+  );
   const mentioned = sorted.filter((p) => candidateIds.includes(p.id));
-  const rest = sorted.filter((p) => !candidateIds.includes(p.id));
+  const q = filter.trim().toLowerCase();
+  const rest = sorted.filter(
+    (p) =>
+      !candidateIds.includes(p.id) &&
+      (!q ||
+        p.id === personId ||
+        `${p.displayName} ${p.currentOrganizationRaw ?? ''}`.toLowerCase().includes(q)),
+  );
   const person = people.find((p) => p.id === personId);
+  const preview = useMemo(
+    () => (!existing && !personId && user ? previewNoteMatch(text, people, user, calendarPerson) : undefined),
+    [existing, personId, user, text, people, calendarPerson],
+  );
   if (!user) return null;
   const save = async () => {
     setBusy(true);
@@ -93,6 +107,14 @@ export function NotesNew() {
         nav(personId ? `/people/${personId}` : '/today');
         return;
       }
+      const stageOf = async (pid?: string) =>
+        pid
+          ? (await db.chats.where('personId').equals(pid).toArray()).sort((a, b) =>
+              b.updatedAt.localeCompare(a.updatedAt),
+            )[0]?.stage
+          : undefined;
+      const guessed = personId || (preview?.kind === 'person' ? preview.person.id : undefined);
+      const before = await stageOf(guessed);
       const n = await ingestNote(user, {
         text,
         source,
@@ -133,15 +155,17 @@ export function NotesNew() {
         facts ? `${facts} thing${facts === 1 ? '' : 's'} to remember` : '',
         promises ? `${promises} promise${promises === 1 ? '' : 's'} you made` : '',
       ].filter(Boolean);
+      const who = people.find((p) => p.id === n.personIds[0]);
+      const after = await stageOf(n.personIds[0]);
+      const moved =
+        after && after !== before && who ? ` Moved ${who.firstName} to ${STAGE_LABELS[after]}.` : '';
       toast.push({
-        text: `Saved.${found.length ? ` Orbit noted ${found.join(' and ')}.` : ''}${thanks ? ' Your thank-you draft is ready.' : ''}`,
+        text: `Saved${who ? ` for ${who.displayName}` : ''}.${found.length ? ` Orbit noted ${found.join(' and ')}.` : ''}${moved}${thanks ? ' Your thank-you draft is at the top of the page.' : ''}`,
         tone: 'good',
         ttl: 8000,
-        action: thanks
-          ? { label: 'Open thank-you', onClick: () => nav(`/today?card=${thanks.id}`) }
-          : undefined,
       });
-      nav(n.personIds[0] ? `/people/${n.personIds[0]}${facts ? '?tab=facts' : ''}` : '/today');
+      // the person page shows the thank-you draft at its top, so the student lands on it
+      nav(n.personIds[0] ? `/people/${n.personIds[0]}${facts && !thanks ? '?tab=facts' : ''}` : '/today');
     } finally {
       setBusy(false);
     }
@@ -195,6 +219,16 @@ export function NotesNew() {
         <div className="grid sm:grid-cols-3 gap-3">
           <div className="sm:col-span-2">
             <Label htmlFor="capture-person">Who was this with?</Label>
+            {people.length > 12 && (
+              <Input
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+                placeholder="Type a name to narrow the list"
+                aria-label="Narrow the list of people"
+                className="w-full mb-1.5"
+                data-testid="capture-person-filter"
+              />
+            )}
             <Select
               id="capture-person"
               value={personId}
@@ -220,6 +254,38 @@ export function NotesNew() {
                 </option>
               ))}
             </Select>
+            {preview && (
+              <p
+                className="mt-1.5 text-[12px] text-ink-2"
+                data-testid="capture-match-preview"
+                aria-live="polite"
+              >
+                {preview.kind === 'person' ? (
+                  <>
+                    Orbit will file this with{' '}
+                    <strong className="font-medium">{preview.person.displayName}</strong>
+                    {preview.why === 'calendar'
+                      ? ', from the chat on your calendar that just ended.'
+                      : ', who the note names.'}{' '}
+                    <button
+                      type="button"
+                      className="underline underline-offset-2"
+                      onClick={() => setPersonId(preview.person.id)}
+                    >
+                      Pick {preview.person.firstName}
+                    </button>{' '}
+                    to be sure, or choose someone else above.
+                  </>
+                ) : preview.kind === 'several' ? (
+                  <>
+                    The note names {preview.people.map((p) => p.firstName).join(', ')}. Pick who it was with,
+                    or Orbit asks you after you save.
+                  </>
+                ) : text.trim() ? (
+                  'No name in the note yet. Orbit asks you who it was with after you save.'
+                ) : null}
+              </p>
+            )}
             <button
               type="button"
               className="mt-1.5 text-[12px] text-ink-3 underline underline-offset-2 hover:text-ink"
@@ -245,7 +311,6 @@ export function NotesNew() {
             className="flex flex-wrap items-center gap-2 text-[13px]"
             role="group"
             aria-label="How you took this note"
-            title="Helps Orbit read it: dictated notes and notetaker summaries are laid out differently from typed ones"
           >
             <span className="text-ink-3">How you took it</span>
             {(
@@ -264,6 +329,13 @@ export function NotesNew() {
                 {l}
               </button>
             ))}
+            <span className="basis-full text-[12px] text-ink-3">
+              {source === 'wispr_capture'
+                ? "Use your phone's or computer's dictation in the box above. This only tells Orbit the note has no punctuation."
+                : source === 'granola_email'
+                  ? 'Paste the summary your notetaker app wrote. Orbit reads its title line and sections.'
+                  : 'This only helps Orbit read the note. Nothing else changes.'}
+            </span>
           </div>
         )}
         <div className="flex items-center gap-3">

@@ -2,7 +2,7 @@ import type { User } from '@orbit/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { db, wipeDatabase } from '../db/schema';
 import { draftMessage, evaluateImmediateSuggestions } from './brief';
-import { ingestNote, parseDueHint, rematchNote } from './notes';
+import { ingestNote, parseDueHint, previewNoteMatch, rematchNote } from './notes';
 import { upsertPerson } from './people';
 
 const user: User = {
@@ -514,5 +514,80 @@ describe('parseDueHint', () => {
     expect(at('in January')).toBe('2027-01-31T22:00:00.000Z');
     expect(at('end of the month')).toBe('2026-10-31T21:00:00.000Z');
     expect(at('this week')).toBe('2026-10-02T21:00:00.000Z');
+  });
+});
+
+describe('usability round 2: who a note is filed with', () => {
+  const meetingWith = async (personId: string, endAt: Date) => {
+    await db.events.put({
+      id: 'ev_recent',
+      userId: user.id,
+      externalEventId: 'g1',
+      title: 'Coffee chat',
+      startAt: new Date(endAt.getTime() - 30 * 60_000).toISOString(),
+      endAt: endAt.toISOString(),
+      status: 'confirmed',
+      attendees: [],
+      attendeePersonIds: [personId],
+      isCoffeeChat: true,
+    });
+  };
+  const summary = `Meeting summary - Hannah Brooks (Figma) / Ravi Jain
+Action items:
+- Ravi to send portfolio link by Monday
+Key points:
+- Hannah recommended taking HCI course
+- Figma APM applications open in January
+- Hannah offered to review Ravi's resume`;
+
+  it('a notetaker summary naming someone else is not filed with the chat that just ended', async () => {
+    const lena = await person('Lena Novak', 'lena@ramp.com', 'Ramp');
+    const hannah = await person('Hannah Brooks', 'hannah@figma.com', 'Figma');
+    await meetingWith(lena.id, new Date(NOW.getTime() - 3_600_000));
+    const n = await ingestNote(user, { source: 'manual', text: summary, occurredAt: NOW.toISOString() }, NOW);
+    expect(n.personIds).toEqual([hannah.id]);
+    expect(await db.facts.where('personId').equals(lena.id).count()).toBe(0);
+    // the key points are what Hannah said, not promises; the one promise is the student's own line
+    const items = await db.actionItems.where('userId').equals(user.id).toArray();
+    expect(items.map((i) => i.text)).toEqual(['Send portfolio link by Monday']);
+    const facts = (await db.facts.where('personId').equals(hannah.id).toArray()).map((f) => f.text);
+    expect(facts).toContain('Hannah offered to review my resume');
+  });
+
+  it('the picker preview says who Orbit will file the note with, and why', async () => {
+    const lena = await person('Lena Novak', 'lena@ramp.com', 'Ramp');
+    const hannah = await person('Hannah Brooks', 'hannah@figma.com', 'Figma');
+    const people = await db.people.toArray();
+    const named = previewNoteMatch(summary, people, user, lena);
+    expect(named).toMatchObject({ kind: 'person', why: 'named' });
+    expect(named.kind === 'person' && named.person.id).toBe(hannah.id);
+    // nothing named: the calendar's chat, said as such
+    const cal = previewNoteMatch('Great chat about recruiting timelines.', people, user, lena);
+    expect(cal).toMatchObject({ kind: 'person', why: 'calendar' });
+    expect(previewNoteMatch('Great chat about recruiting timelines.', people, user)).toEqual({
+      kind: 'none',
+    });
+  });
+});
+
+describe('usability round 2: the same promise in two notes', () => {
+  it('is kept once', async () => {
+    const lena = await person('Lena Novak', 'lena@ramp.com', 'Ramp');
+    await ingestNote(
+      user,
+      { source: 'manual', personIds: [lena.id], text: 'I promised to send her my resume by Friday.' },
+      NOW,
+    );
+    await ingestNote(
+      user,
+      {
+        source: 'manual',
+        personIds: [lena.id],
+        text: 'I promised to send her my resume by Friday and to share my side project link.',
+      },
+      NOW,
+    );
+    const items = await db.actionItems.where('personId').equals(lena.id).toArray();
+    expect(items).toHaveLength(1);
   });
 });

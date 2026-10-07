@@ -165,7 +165,7 @@ export function personSummary(args: {
   const hook = facts.find((f) => f.type === 'hook');
   const talkingPoints = [
     // a hook is anything worth asking about (a project, a plan, a race they are training for)
-    hook ? `Ask them about this: ${sentence(toYou(hook.text))}` : undefined,
+    hook ? `Worth bringing up: ${sentence(toYou(hook.text))}` : undefined,
     // facts are third-person sentences ("She offered to refer you ..."), so the label does not repeat the offer
     off ? `Follow up: ${sentence(toYou(off.text))}` : undefined,
     adv ? `Tell them what you did with their advice: ${sentence(toYou(adv.text))}` : undefined,

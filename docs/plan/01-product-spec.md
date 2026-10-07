@@ -171,9 +171,9 @@ Layout top to bottom:
 - A suggestion not acted on stays pending while it is still true and competes again in the next brief; cards that miss the cut are kept under "N more suggestions". A suggestion expires (feedback event `expired`, with a reason) only when its trigger is gone: the chat moved on, the time passed, the person replied. Dismissing with "already did this" records the action: a bump counts toward the bump limit, a thank-you moves the chat to followed up.
 - A suggestion that describes the state of a chat (`thank_you`, `schedule_propose`, `schedule_confirm`, `prep_brief`, `follow_up_bump`) is retired (`expired`) as soon as the rules no longer produce it: a "confirm Thursday at 2pm" card once the meeting is on the calendar, a thank-you once one was sent. Untouched drafts on pending cards are redrafted when what they were drafted from changes (notes with new facts, a calendar change under proposed windows).
 
-### 6.3 Approvals centre (`/inbox`)
+### 6.3 Drafts (`/inbox`)
 
-All pending suggestions and drafts across days (not only today's), plus a **Sent** tab (every message Orbit sent, with provider id and reply status) and a **Snoozed** tab.
+Every drafted message across days, split like Today: **Ready to send** (the drafts that are cards on Today, which is what the nav badge counts) with the rest behind "Show N that can wait"; **Not sent yet** (opened in the mail app or LinkedIn and not confirmed with "I sent it", or failed); a **Snoozed** tab; and a **Sent** tab (every message Orbit sent, with provider id and reply status).
 
 ---
 
