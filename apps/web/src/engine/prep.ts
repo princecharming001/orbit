@@ -11,6 +11,7 @@ import type {
   User,
 } from '@orbit/core';
 import {
+  financeFirmKind,
   functionPhrase,
   isRecruiter,
   linkedinActivityUrl,
@@ -180,12 +181,30 @@ const FUNCTION_SECTOR: Record<PersonFunction, string | undefined> = {
   general: undefined,
 };
 
+/** Titles that are investment banking wherever the person sits ("Analyst, M&A", "Capital Markets Associate"). */
+const BANKING_TITLE =
+  /\b(investment bank\w*|banking|m&a|capital markets|leveraged finance|restructuring|coverage|ecm|dcm)\b/i;
+
 /**
  * Could the person's company have the function the student is recruiting for? Only what the data shows counts: the
- * person's own function, or the company's sector. An Engagement Manager at Ramp says nothing about banking at Ramp.
+ * person's own function, or the company's sector. An Engagement Manager at Ramp says nothing about banking at Ramp,
+ * and a Partner at Sequoia says nothing about banking at Sequoia.
  */
-function companyHasTarget(fn: PersonFunction, org: string | undefined, target: string | undefined): boolean {
+function companyHasTarget(
+  fn: PersonFunction,
+  title: string | undefined,
+  org: string | undefined,
+  target: string | undefined,
+): boolean {
   if (!target) return false;
+  // Research means different work at every company (academic, equity, quant, user research); only the person's own
+  // field shows it is there.
+  if (target === 'research') return fn === 'data' || /\bresearch/i.test(title ?? '');
+  const kind = financeFirmKind(org);
+  // Venture, buyout and trading firms are "finance" but have no banking team; a bank does. At a firm we do not know,
+  // only a banking title says so.
+  if (target === 'ib') return kind ? kind === 'bank' : fn === 'ib' && BANKING_TITLE.test(title ?? '');
+  if (target === 'vc' && kind) return kind === 'vc';
   const want = TARGET_SECTOR[target];
   if (!want) return true;
   if (FUNCTION_SECTOR[fn] === want) return true;
@@ -207,7 +226,8 @@ export function personFunction(
   const org = person.currentOrganizationRaw?.trim();
   const sector = sectorOf({ title: t, org });
   const orgSector = org ? sectorOf({ org }) : 'general';
-  if (/venture|\bvc\b|investor/i.test(t)) return 'vc';
+  // People at a venture firm are investors, whatever their title says ("Partner" at Sequoia is not a banker).
+  if (/venture|\bvc\b|investor/i.test(t) || financeFirmKind(org) === 'vc') return 'vc';
   // A banking or consulting title at a tech company ("Engagement Manager" at Ramp, "Vice President" at Google) is
   // not a banker or a consultant: their case and deal questions would be visibly wrong.
   if (orgSector === 'tech') return 'general';
@@ -403,7 +423,7 @@ export function buildPrep(args: {
       ? hadAdvice
         ? `Tell ${first} what you did with their advice, and get their read on your next step.`
         : `Catch ${first} up on your ${search} since you last spoke, and get their read on your next step.`
-      : !myFn || !companyHasTarget(fn, person.currentOrganizationRaw, target)
+      : !myFn || !companyHasTarget(fn, person.currentTitle, person.currentOrganizationRaw, target)
         ? `Understand what the work at ${org} is really like and whether a role there fits your ${search}.`
         : sameField(fn, target)
           ? `Understand what the work at ${org} is really like and whether ${myFn} there fits your ${search}.`

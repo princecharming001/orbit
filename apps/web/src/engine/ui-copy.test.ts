@@ -266,6 +266,29 @@ describe('prep (EG-13)', () => {
     // functions nearly every company has are still named
     expect(goal('Chief of Staff', 'Acme', 'marketing')).toMatch(/whether marketing there fits/);
   });
+  it('does not name banking at venture, buyout or trading firms, or research at any company', () => {
+    const prep = (title: string, org: string, target: string) =>
+      buildPrep({
+        ...base,
+        goals: { cycleLabel: 'Summer 2027 internship', targetFunctions: [target] },
+        person: person({ currentTitle: title, currentOrganizationRaw: org }),
+      });
+    const goal = (title: string, org: string, target: string) => prep(title, org, target).goal;
+    expect(goal('Partner', 'Sequoia Capital', 'ib')).toBe(
+      'Understand what the work at Sequoia Capital is really like and whether a role there fits your Summer 2027 internship search.',
+    );
+    expect(goal('Chief of Staff', 'Citadel', 'ib')).toMatch(/whether a role there fits/);
+    expect(goal('Portfolio Manager', 'Citadel', 'ib')).toMatch(/whether a role there fits/);
+    expect(goal('Vice President', 'Blackstone', 'ib')).toMatch(/whether a role there fits/);
+    expect(goal('Engagement Manager', 'Ramp', 'research')).toMatch(/whether a role there fits/);
+    expect(goal('Senior Associate', 'Stripe', 'research')).toMatch(/whether a role there fits/);
+    // what the data does show is still named
+    expect(goal('Analyst', 'Morgan Stanley', 'ib')).toMatch(/whether investment banking there fits/);
+    expect(goal('Analyst, M&A', 'Qatalyst Partners', 'ib')).toMatch(/whether investment banking there fits/);
+    expect(goal('Research Scientist', 'Anthropic', 'research')).toMatch(/whether research there fits/);
+    expect(prep('Partner', 'Sequoia Capital', 'vc').fn).toBe('vc');
+    expect(goal('Partner', 'Sequoia Capital', 'vc')).toMatch(/whether venture capital there fits/);
+  });
   it('never splices raw hook sentences into a question', () => {
     const p = buildPrep({
       ...base,

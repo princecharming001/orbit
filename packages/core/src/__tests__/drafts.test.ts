@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { sectorOf, seniorityOf, yearLabel } from '../drafts/sector';
+import { financeFirmKind, sectorOf, seniorityOf, yearLabel } from '../drafts/sector';
 import {
   BANNED_PHRASES,
   bookingLinkIn,
@@ -1503,5 +1503,18 @@ describe('audit round 2 regressions', () => {
     expect(d.body).toMatch(/you mentioned last quarter wasn't a good time, so I wanted to try once more/);
     expect(d.body).toMatch(/\b20 minutes/); // an alum: 20
     expect(d.body).not.toMatch(/\[|No reply needed/);
+  });
+});
+
+describe('financeFirmKind', () => {
+  it('tells banks apart from venture, buyout and trading firms', () => {
+    expect(financeFirmKind('Goldman Sachs')).toBe('bank');
+    expect(financeFirmKind('Sequoia Capital')).toBe('vc');
+    expect(financeFirmKind('Blackstone')).toBe('pe');
+    expect(financeFirmKind('Bain Capital')).toBe('pe');
+    expect(financeFirmKind('Citadel')).toBe('trading');
+    expect(financeFirmKind('Citi')).toBe('bank');
+    expect(financeFirmKind('Ramp')).toBeUndefined();
+    expect(financeFirmKind(undefined)).toBeUndefined();
   });
 });
