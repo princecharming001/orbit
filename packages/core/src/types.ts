@@ -425,6 +425,8 @@ export interface MessageExtraction {
   prefersEmail?: boolean;
   /** an intro or redirect that hands the student to someone else (named, cc'd): the next step is with them */
   handoff?: boolean;
+  /** on a decline: "hard" is a no; "soft" is a not now, a wrong person, or a bare "best of luck" to a pending ask */
+  decline?: 'hard' | 'soft';
 }
 
 export interface CalendarEvent {

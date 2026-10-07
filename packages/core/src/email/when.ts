@@ -744,6 +744,8 @@ function interpretChunk(
           t.ish ||
           Boolean(mod) ||
           rangeOpen ||
+          // "Thursday at 10 or 11": a bare number offered as the alternative to a time is a time too
+          (prev?.k === 'or' && d.times.length > 0) ||
           (nextTok?.k === 'range' && chunk[i + 2]?.k === 'time') ||
           nextTok?.k === 'part' ||
           prev?.k === 'part' ||
@@ -786,9 +788,13 @@ const NEGATING = /\b(not|can'?t|cannot|busy|class|meeting|conflict|except|unless
  */
 const CLAUSE_BREAK =
   /[.!?;\n,]|\b(?:but|however|though|although|instead|otherwise|whereas|while|so|how about|what about)\b/gi;
-/** A clause that says the time is taken ("I'm in class Monday at 10", "Monday at 10 doesn't work", "I'm out Monday"). */
+/**
+ * A clause that says the time is taken ("I'm in class Monday at 10", "Monday at 10 doesn't work", "I'm out Monday").
+ * Only an adverb may stand between "I'm" and "out" ("I'm also out Monday"): "I'm based out of SF" and "I'm working
+ * out of our Boston office" say where they are, not that they are away.
+ */
 const BUSY_CLAUSE =
-  /\b(?:not|no|never|cannot|busy|booked|in class|have class|in a meeting|in meetings|conflict|unavailable|tied up|out of (?:the )?office|traveling|travelling|away|blocked)\b|n['’]t\b|\b(?:i['’]?m|i am|i['’]?ll be|i will be|we['’]?re|we are|we['’]?ll be)\s+(?:\w+\s+)?(?:out|off)\b(?!\s+work)/i;
+  /\b(?:not|no|never|cannot|busy|booked|in class|have class|teach(?:ing)? (?:a |my )?class(?:es)?|in a meeting|in meetings|conflict|unavailable|tied up|out of (?:the )?office|traveling|travelling|away|blocked)\b|n['’]t\b|\b(?:i['’]?m|i am|i['’]?ll be|i will be|we['’]?re|we are|we['’]?ll be)\s+(?:(?:also|all|totally|completely|mostly|just|actually|unfortunately|still|both|then)\s+)?(?:out|off)\b(?!\s+work)/i;
 /**
  * A negative question that suggests a time ("Why don't we do Tuesday at 2pm?", "Can't we just do Tuesday at 2pm?",
  * "Wouldn't it be easier to do Tuesday at 2pm?"): at the start of the clause, followed by its subject.
