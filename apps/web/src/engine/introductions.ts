@@ -1,5 +1,5 @@
 import type { CoffeeChat, EmailMessage, EmailThread, Person, User } from '@orbit/core';
-import { detectIntroduction, newId } from '@orbit/core';
+import { detectIntroduction, knownSizeBucket, newId } from '@orbit/core';
 import { addTouchpoint } from '../db/repo';
 import { db } from '../db/schema';
 import { evaluateImmediateSuggestions } from './brief';
@@ -24,6 +24,11 @@ export async function processIntroductions(
   const people = (await db.people.bulkGet(thread.participantPersonIds)).filter((p): p is Person => !!p);
   let opened = 0;
   for (const m of [...newMessages].sort((a, b) => a.sentAt.localeCompare(b.sentAt))) {
+    // in a thread that already holds an introduction, the answers of the people it introduced ("Thanks Lena for
+    // the intro. Alex, happy to chat") are replies, not introductions of the introducer
+    const prior = thread.introduction;
+    if (prior && prior.messageId !== m.id && m.fromPersonId && prior.introducedIds.includes(m.fromPersonId))
+      continue;
     const intro = detectIntroduction(m, people, userEmails);
     if (!intro) continue;
     if (!thread.introduction) {
@@ -137,12 +142,31 @@ const PARTICLES = new Set([
   'el',
   'y',
 ]);
-/** Words that make a phrase a description, not a name ("someone in sales", "her manager"). */
+/**
+ * Words that make a phrase a description or an answer, not a name: "someone in sales", "her manager", and the usual
+ * non-answers ("not sure", "no one", "not really", "I don't know", "he runs sales"). A name typed in lowercase is
+ * accepted, so these must never be title-cased into a person.
+ */
 const NOT_NAME = new Set(
-  'someone somebody anyone anybody everyone people person team teams guy guys folks recruiter recruiters manager managers colleague colleagues coworker coworkers boss friend friends in on the a an of for with who that this there here her his their my your our to is was or and at from maybe definitely probably perhaps possibly also too'.split(
-    ' ',
-  ),
+  [
+    'someone somebody anyone anybody everyone noone nobody none nothing people person team teams guy guys folks',
+    'recruiter recruiters manager managers colleague colleagues coworker coworkers boss friend friends',
+    'in on the a an of for with who whom what which that this these those there here to or and at from by about',
+    'i me my mine you your yours he him his she her hers it its we us our they them their',
+    'no not nope nah none yes yeah yep ok okay sure unsure really idk dunno know knows knew think thought',
+    'is are was were be been am do does did done have has had can could would should will might may must',
+    'runs run works work worked leads lead manages said says say told tell ask asked mentioned suggested',
+    'maybe definitely probably perhaps possibly also too just only still yet else other others more any all some',
+    'one ones later soon sometime next time week thanks thank sorry tbd na hmm lol',
+    'good great fine sounds question check look search find linkedin google email call text',
+  ]
+    .join(' ')
+    .split(' '),
 );
+/** Words on that list that are also first names, when typed with a capital ("Will Park", "May Chen"). */
+const ALSO_FIRST_NAME = new Set(['will', 'may']);
+/** "don't", "she'll", "they're": a contraction is never part of a name ("O'Neil" and "D'Souza" are). */
+const CONTRACTION = /(?:n't|'(?:s|re|ve|ll|d|m))$/i;
 /** Hedges and lead-ins people type before a name: "definitely Tom Lee", "maybe Priya", "she said to talk to Ana". */
 const LEAD_IN =
   /^(?:(?:definitely|maybe|probably|perhaps|possibly|also|especially|and|or|plus|try|ask|contact|email|ping|talk(?:ing)? (?:to|with)|reach out to|speak (?:to|with)|(?:she|he|they) (?:said|mentioned|suggested)(?: to (?:talk|speak) (?:to|with))?|you should (?:talk|speak) (?:to|with))\s+)+/i;
@@ -172,7 +196,12 @@ function cleanName(raw: string, hasOrg: boolean): string | undefined {
   if (PARTICLES.has(words[0]!.toLowerCase()) || PARTICLES.has(words[words.length - 1]!.toLowerCase()))
     return undefined;
   if (words.some((w) => !WORD.test(w))) return undefined;
-  if (core.some((w) => NOT_NAME.has(w.toLowerCase().replace(/\.$/, '')))) return undefined;
+  const notName = (w: string) => {
+    const lower = w.toLowerCase().replace(/\.$/, '');
+    // "Will Park" or "May Chen" typed with a capital is a name; "will" or "may" is a word
+    return NOT_NAME.has(lower) && !(ALSO_FIRST_NAME.has(lower) && w[0] !== w[0]!.toLowerCase());
+  };
+  if (core.some((w) => notName(w) || CONTRACTION.test(w))) return undefined;
   return words
     .map((w, i) => (i > 0 && PARTICLES.has(w.toLowerCase()) ? w.toLowerCase() : titleWord(w)))
     .join(' ');
@@ -206,18 +235,22 @@ export function readSuggestedNames(text: string): {
     if (at && !org) {
       people = part.slice(0, at.index).split(/\s+(?:and|&)\s+/i);
       // "at Stripe and Tom Lee": another person after the company only when it reads as a full name (or has its own
-      // "at"), taken from the end; "at Procter and Gamble" or "at Ernst and Young" stays one company
+      // "at"), taken from the end. A company with "and" in its name stays whole ("at Procter and Gamble"); a second
+      // company ("at Goldman Sachs and Morgan Stanley") or a lone first name after a company ("at Stripe and Tom") is
+      // neither part of the company nor a person, so it is reported as not saved
       let rest = part.slice(at.index + at[0].length);
       const tail: string[] = [];
+      const notPeople: string[] = [];
       for (;;) {
         const m = /^(.+)\s+(?:and|&)\s+(.+?)$/i.exec(rest);
-        if (!m) break;
-        const after = m[2]!;
+        if (!m || knownSizeBucket(rest)) break;
+        const [, head, after] = m as unknown as [string, string, string];
         const afterAt = ORG_AT.exec(after);
         const afterName = afterAt ? after.slice(0, afterAt.index) : after;
-        if (!(afterAt || (cleanName(afterName, false) && afterName.trim().split(/\s+/).length >= 2))) break;
-        tail.push(after);
-        rest = m[1]!;
+        if (afterAt || (!knownSizeBucket(after) && cleanName(afterName, false))) tail.push(after);
+        else if (knownSizeBucket(after) || knownSizeBucket(head)) notPeople.push(after);
+        else break;
+        rest = head;
       }
       org = rest.trim();
       for (const name of people) {
@@ -225,6 +258,7 @@ export function readSuggestedNames(text: string): {
         if (n && org) names.push({ name: n, org });
         else skipped.push(name.trim());
       }
+      skipped.push(...notPeople.reverse());
       for (const t of tail.reverse()) {
         const r = readSuggestedNames(t);
         names.push(...r.names);

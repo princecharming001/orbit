@@ -178,7 +178,7 @@ Implemented in `packages/core/src/pipeline/transitions.ts` and mirrored in `appl
 | From | Event | To | Confidence |
 |---|---|---|---|
 | `identified` | outbound `outreach` sent | `outreach_sent` | 1.0 |
-| `identified` | inbound message from P (thread detected after the fact) | `replied` | T4 confidence |
+| `identified|warming` | inbound message from P (thread detected after the fact, or P answering an email introduction first), including one that proposes or confirms a time; the confirm card then reads the time | `replied` | T4 confidence |
 | `outreach_sent` | inbound `reply_positive|reply_neutral|question|referral_offer|intro_offer` | `replied` | T4 |
 | `outreach_sent|replied|scheduling|scheduled|nurturing` | inbound `reply_decline` | `declined` | T4 but always `proposed` (needs confirmation) |
 | `outreach_sent|replied|scheduling` | inbound `scheduling_proposal` or outbound `schedule` | `scheduling` | T4 / 1.0 |

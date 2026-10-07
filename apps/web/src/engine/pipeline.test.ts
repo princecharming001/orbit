@@ -727,6 +727,94 @@ describe('email introductions and suggested names (EG-08)', () => {
     expect(cards.some((s) => s.dedupeKey.startsWith('introreply:') && s.status === 'pending')).toBe(false);
   }, 60_000);
 
+  for (const shape of ['one-sided', 'two-person'] as const)
+    it(`the person introduced answers first by reply-all with a time, in a later sync (L9, ${shape} intro)`, async () => {
+      const n = seq++;
+      const t = `pt_intro_l9b_${n}`;
+      const both = shape === 'two-person';
+      // distinct full names per case, so the two runs never resolve to the same person
+      const [lenaLast, samLast] = both ? ['Halvorsen', 'Whitlock'] : ['Marsh', 'Brightwater'];
+      const lenaEmail = `lena.${lenaLast.toLowerCase()}@contoso.com`;
+      const samEmail = `sam.${samLast.toLowerCase()}@northwind.com`;
+      const lena = `Lena ${lenaLast} <${lenaEmail}>`;
+      const sam = `Sam ${samLast} <${samEmail}>`;
+      const ruiEmail = 'rui.kestrel@northwind.com';
+      const rui = `Rui Kestrel <${ruiEmail}>`;
+      const intro = both
+        ? `Introducing you to Sam and Rui: Sam leads analytics at Northwind and Rui runs the data team there. ${user.firstName} is a junior I mentor.\n\nLena`
+        : `${user.firstName}, meet Sam. Sam leads analytics at Northwind and offered to talk about his path.\n\nLena`;
+      await ingestEmails(
+        user,
+        [
+          {
+            externalThreadId: t,
+            subject: `Intro: ${user.firstName} <> Sam`,
+            externalMessageId: `${t}_1`,
+            from: lena,
+            to: [user.email],
+            cc: both ? [sam, rui] : [sam],
+            sentAt: ago(2 * D),
+            bodyText: intro,
+            headers: { 'message-id': `<${t}_1@test>` },
+          },
+        ],
+        { useLlm: false, now },
+      );
+      const s = await personByEmail(samEmail);
+      expect((await chatOf(s.id)).stage).toBe('identified');
+      const day = new Date(now.getTime() + 6 * D);
+      const when = new Intl.DateTimeFormat('en-US', {
+        timeZone: user.timezone,
+        weekday: 'long',
+        month: 'long',
+        day: 'numeric',
+      }).format(day);
+      await ingestEmails(
+        user,
+        [
+          {
+            externalThreadId: t,
+            subject: `Re: Intro: ${user.firstName} <> Sam`,
+            externalMessageId: `${t}_2`,
+            from: sam,
+            to: [user.email],
+            cc: both ? [lena, rui] : [lena],
+            sentAt: ago(3 * H),
+            // ("great intro" names the introducer next to intro wording: still a reply, not a new introduction)
+            bodyText: both
+              ? `Lena, great intro, thank you. ${user.firstName}, happy to chat. Would ${when} at 2pm work?\n\nSam`
+              : `Thanks Lena. ${user.firstName}, happy to chat. Would ${when} at 2pm work?\n\nSam`,
+            headers: { 'message-id': `<${t}_2@test>`, 'in-reply-to': `<${t}_1@test>` },
+          },
+        ],
+        { useLlm: false, now },
+      );
+      await revalidatePending(user.id, now);
+      const after = await chatOf(s.id);
+      expect(after.lastInboundAt).toBe(ago(3 * H));
+      expect(after.stage).toBe('replied');
+      const cards = await cardsOf(s.id);
+      expect(cards.some((c) => c.dedupeKey.startsWith('introreply:') && c.status === 'pending')).toBe(false);
+      const confirm = cards.find((c) => c.kind === 'schedule_confirm' && c.status === 'pending');
+      expect(confirm?.reasonText).toMatch(/^Sam suggested .*2pm; confirm it$/);
+      // the reply-all is not a new introduction of Lena by Sam
+      const l = await personByEmail(lenaEmail);
+      const lenaChats = await db.chats.where('personId').equals(l.id).toArray();
+      expect(lenaChats.some((c) => c.referrerPersonId === s.id)).toBe(false);
+      expect((await cardsOf(l.id)).some((c) => c.dedupeKey.startsWith('introreply:'))).toBe(false);
+      const thread = (await db.threads.where('externalThreadId').equals(t).first())!;
+      if (!both) expect(thread.introduction?.introducedIds).toEqual([s.id]);
+      else {
+        // Rui has not answered: his chat and his reply card stay as they were
+        const r = await personByEmail(ruiEmail);
+        expect(thread.introduction?.introducedIds).toEqual([s.id, r.id]);
+        expect((await chatOf(r.id)).stage).toBe('identified');
+        expect(
+          (await cardsOf(r.id)).some((c) => c.dedupeKey.startsWith('introreply:') && c.status === 'pending'),
+        ).toBe(true);
+      }
+    }, 60_000);
+
   it('a group email that only says "meet with you" opens no introduction card (L10)', async () => {
     const t = `pt_meet_l10_${seq++}`;
     await ingestEmails(
@@ -803,6 +891,61 @@ describe('email introductions and suggested names (EG-08)', () => {
       .count();
     expect(gamble).toBe(0);
     expect(await addSuggestedContacts(user.id, sofia.id, 'Definitely Tom', now)).toEqual([]);
+  }, 60_000);
+
+  it('prep-tab non-answers and company lists never become people (L12)', async () => {
+    const { addSuggestedContacts, readSuggestedNames } = await import('./introductions');
+    for (const answer of [
+      'not sure',
+      'no one',
+      'not really',
+      "I don't know",
+      'nobody comes to mind',
+      'check linkedin',
+    ])
+      expect(readSuggestedNames(answer).names, answer).toEqual([]);
+    expect(readSuggestedNames('Mark Chen, he runs sales at Ramp')).toEqual({
+      names: [{ name: 'Mark Chen' }],
+      skipped: ['he runs sales'],
+    });
+    // a second company is not a person, and a lone first name is not part of the company
+    expect(readSuggestedNames('Priya Shah at Goldman Sachs and Morgan Stanley')).toEqual({
+      names: [{ name: 'Priya Shah', org: 'Goldman Sachs' }],
+      skipped: ['Morgan Stanley'],
+    });
+    expect(readSuggestedNames('Priya Shah at Stripe and Tom')).toEqual({
+      names: [{ name: 'Priya Shah', org: 'Stripe' }],
+      skipped: ['Tom'],
+    });
+    expect(readSuggestedNames('Priya Shah at Stripe and Tom Lee').names).toEqual([
+      { name: 'Priya Shah', org: 'Stripe' },
+      { name: 'Tom Lee' },
+    ]);
+    expect(readSuggestedNames('Priya Shah at Ernst and Young').names).toEqual([
+      { name: 'Priya Shah', org: 'Ernst and Young' },
+    ]);
+    // a name that is also a word counts when typed as a name
+    expect(readSuggestedNames('Will Park, may chen').names).toEqual([{ name: 'Will Park' }]);
+    const sofia = (await db.people
+      .where('userId')
+      .equals(user.id)
+      .filter((p) => p.displayName === 'Sofia Bennett')
+      .first())!;
+    expect(await addSuggestedContacts(user.id, sofia.id, 'not sure', now)).toEqual([]);
+    expect(await addSuggestedContacts(user.id, sofia.id, 'he runs sales at Ramp', now)).toEqual([]);
+    const saved = await addSuggestedContacts(
+      user.id,
+      sofia.id,
+      'Priya Shah at Goldman Sachs and Morgan Stanley',
+      now,
+    );
+    expect(saved.map((p) => p.displayName)).toEqual(['Priya Shah']);
+    const invented = await db.people
+      .where('userId')
+      .equals(user.id)
+      .filter((p) => ['Not Sure', 'Morgan Stanley', 'He Runs Sales'].includes(p.displayName))
+      .count();
+    expect(invented).toBe(0);
   }, 60_000);
 
   it('a missed proposed time is owned up to in the new-times draft', async () => {

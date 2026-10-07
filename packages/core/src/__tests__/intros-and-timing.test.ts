@@ -293,6 +293,12 @@ describe('out-of-office ranges and the winter freeze (EG-12 follow-up)', () => {
     expect(day(parseReturnDate('Out of office from Oct 5-Oct 12.', sent, TZ))).toBe('2026-10-13');
     expect(day(parseReturnDate('Away from 10/5-10/9 with no email.', sent, TZ))).toBe('2026-10-10');
     expect(day(parseReturnDate('Out from Oct 5 until Oct 12.', sent, TZ))).toBe('2026-10-12');
+    expect(day(parseReturnDate('Out of office from Oct 5 - Oct 12.', sent, TZ))).toBe('2026-10-13');
+    // the hyphen inside a word is not a range: "until" still names the day they are back
+    expect(
+      day(parseReturnDate("I'm away from the office with no e-mail access until Oct 12.", sent, TZ)),
+    ).toBe('2026-10-12');
+    expect(day(parseReturnDate('Away from my desk and e-mail until Oct 12.', sent, TZ))).toBe('2026-10-12');
   });
 
   it('lets the second bump come due before a freeze-spanning silence closes the thread', () => {
@@ -381,6 +387,14 @@ describe('email introductions (EG-08)', () => {
     none('Can we meet Thursday? Sana will send an invite.');
     none('Thanks for introducing yourselves at the fair, Sana and Jordan.');
     none('Sana will send the invite for our intro call on Thursday.', 'Intro call');
+    // "introduc*" that is not aimed at people, and "meet" that is not pointed at the person
+    none('Sana and I will send you an introduction to the program soon.');
+    none('We introduced a new program this year. Sana will send an invite.');
+    none('Did you get to meet Sana at the fair?');
+    // an answer in an intro thread: the subject is the thread's, and thanking for the intro is not making one
+    none('Thanks Sana. Jordan, happy to chat. Would Thursday at 2pm work?', 'Re: Intro: Jordan <> Sana');
+    none('Thanks Sana for the intro. Jordan, happy to chat.', 'Re: Intro: Jordan <> Sana');
+    none('Thank you for making the introduction, Sana.', 'Re: Hello');
     // the real thing, in its usual shapes
     const some = (bodyText: string, subject = 'Hello') =>
       expect(
@@ -393,6 +407,9 @@ describe('email introductions (EG-08)', () => {
     some('Happy to connect you with Sana; she knows the team well.');
     some('Sana leads design at Figma and you two should talk.');
     some('Sana leads design at Figma.', 'Intro: Jordan <> Sana');
+    some('Meet Sana, who leads design at Figma.');
+    some("I'd like to introduce Sana, who leads design at Figma.");
+    some('Making the introduction here: Sana leads design at Figma.', 'Re: Design roles');
   });
 
   it('turns a recorded introduction into an introduced_by edge', () => {

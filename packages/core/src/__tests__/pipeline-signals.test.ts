@@ -25,6 +25,22 @@ import {
 import { buildWarmUpPlan, warmUpProgress } from '../warmup/rules';
 
 describe('transitions', () => {
+  it('reads a time proposed before the student wrote (an intro answered first) as their reply (L9)', () => {
+    for (const from of ['identified', 'warming'] as const)
+      for (const signal of ['scheduling_proposal', 'scheduling_confirmation'])
+        expect(decideTransition(from, { type: 'inbound_signal', signal, confidence: 0.85 })).toMatchObject({
+          to: 'replied',
+          reason: `inbound_signal:${signal}`,
+        });
+    expect(
+      decideTransition('outreach_sent', {
+        type: 'inbound_signal',
+        signal: 'scheduling_proposal',
+        confidence: 0.85,
+      }),
+    ).toMatchObject({ to: 'scheduling' });
+  });
+
   it('follows the table', () => {
     expect(decideTransition('identified', { type: 'outbound_sent', kind: 'outreach' })).toMatchObject({
       to: 'outreach_sent',

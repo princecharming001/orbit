@@ -144,13 +144,18 @@ const monthIndex = (name: string) => MONTHS.findIndex((x) => x.startsWith(name.s
 export function parseReturnDate(text: string, sentAt: Date, tz?: string): Date | undefined {
   const t = text.toLowerCase().replace(/\s+/g, ' ');
   // "from Oct 5 to Oct 12", "between 10/5 and 10/12": the end of the range is the last day away
-  // ("Oct 5-Oct 12" with a bare hyphen too); "until" names the day they are back, the others the last day away
+  // ("Oct 5-Oct 12", "Monday - Friday" with a bare hyphen too, but never the hyphen inside a word like "e-mail");
+  // "until" names the day they are back, the others the last day away
   const range =
-    /\b(?:from|between) [^.;\n]{1,30}?(?: (to|until|till|through|thru|and) |\s*([-\u2013])\s*)([^.;\n]{0,40})/.exec(
+    /\b(?:from|between) [^.;\n]{1,30}?(?: (to|until|till|through|thru|and) |(?<=\d|day)\s*[-\u2013]\s*|\s+[-\u2013]\s+)([^.;\n]{0,40})/.exec(
       t,
     );
   if (range) {
-    const end = datePhrase(range[3]!, sentAt, tz, range[1] === 'until' || range[1] === 'till' ? 0 : DAY);
+    // "away from my desk and e-mail until Oct 12": an "until" after the range word still names the day they are back
+    const back = /\b(?:until|till) ([^.;\n]*)$/.exec(range[2]!);
+    const end = back
+      ? datePhrase(back[1]!, sentAt, tz, 0)
+      : datePhrase(range[2]!, sentAt, tz, range[1] === 'until' || range[1] === 'till' ? 0 : DAY);
     if (end) return end;
   }
   const cue =

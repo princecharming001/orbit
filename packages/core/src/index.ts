@@ -6,6 +6,7 @@ export * from './email/triage';
 export * from './entity/resolve';
 export * from './graph/edges';
 export * from './graph/layout';
+export { knownSizeBucket } from './graph/orgSize';
 export * from './graph/paths';
 export * from './labels';
 export * from './linkedin/csv';
