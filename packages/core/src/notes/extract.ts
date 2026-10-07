@@ -25,6 +25,8 @@ export interface NoteExtractionOptions {
   people?: NotePerson[];
   /** the student's own names, to recognise their speaker label */
   userNames?: string[];
+  /** employers of the people in the note, written as the student stored them ("Figma", "Bain & Company") */
+  organizations?: string[];
 }
 
 type Speaker = 'user' | 'counterpart' | undefined;
@@ -116,13 +118,93 @@ const SPEAKER =
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-/** Strip filler words and spoken tics, fix the student's lowercase "i". */
-function clean(s: string): string {
+/**
+ * Places, countries and languages a dictated note writes in lower case ("she's from houston originally").
+ * Words that are also everyday words (mobile, reading, buffalo, nice, turkey) are left out.
+ */
+const PROPER_NOUNS = [
+  // states
+  ...(
+    'Alabama|Alaska|Arizona|Arkansas|California|Colorado|Connecticut|Delaware|Florida|Georgia|Hawaii|' +
+    'Idaho|Illinois|Indiana|Iowa|Kansas|Kentucky|Louisiana|Maine|Maryland|Massachusetts|Michigan|' +
+    'Minnesota|Mississippi|Missouri|Montana|Nebraska|Nevada|New Hampshire|New Jersey|New Mexico|' +
+    'New York|North Carolina|North Dakota|Ohio|Oklahoma|Oregon|Pennsylvania|Rhode Island|' +
+    'South Carolina|South Dakota|Tennessee|Texas|Utah|Vermont|Virginia|West Virginia|Washington|' +
+    'Wisconsin|Wyoming'
+  ).split('|'),
+  // cities and regions
+  ...(
+    'Ann Arbor|Atlanta|Austin|Baltimore|Bay Area|Berkeley|Boston|Boulder|Brooklyn|Charlotte|Chicago|' +
+    'Cincinnati|Cleveland|Columbus|Dallas|Denver|Detroit|Durham|Evanston|Honolulu|Houston|' +
+    'Indianapolis|Ithaca|Las Vegas|Los Angeles|Manhattan|Menlo Park|Miami|Milwaukee|Minneapolis|' +
+    'Mountain View|Nashville|New Haven|New Orleans|Oakland|Orlando|Palo Alto|Philadelphia|Phoenix|' +
+    'Pittsburgh|Portland|Princeton|Raleigh|Sacramento|Salt Lake City|San Antonio|San Diego|' +
+    'San Francisco|San Jose|Santa Monica|Seattle|Silicon Valley|St. Louis|Tampa|Toronto|Vancouver|' +
+    'Montreal|London|Paris|Berlin|Munich|Dublin|Amsterdam|Zurich|Madrid|Barcelona|Rome|Tokyo|Seoul|' +
+    'Beijing|Shanghai|Hong Kong|Singapore|Mumbai|Bangalore|Delhi|New Delhi|Hyderabad|Sydney|' +
+    'Melbourne|Tel Aviv|Dubai|Lagos|Nairobi|Sao Paulo|Mexico City|DC|NYC'
+  ).split('|'),
+  // countries
+  ...(
+    'America|Australia|Brazil|Canada|China|Colombia|Egypt|England|France|Germany|Ghana|India|' +
+    'Indonesia|Ireland|Israel|Italy|Japan|Kenya|Korea|Mexico|Netherlands|Nigeria|Pakistan|Peru|' +
+    'Philippines|Portugal|Scotland|Spain|Sweden|Switzerland|Taiwan|Thailand|Vietnam'
+  ).split('|'),
+  // nationalities and languages
+  ...(
+    'American|Brazilian|British|Canadian|Chinese|English|French|German|Indian|Italian|Japanese|' +
+    'Korean|Mandarin|Cantonese|Mexican|Nigerian|Spanish|Vietnamese'
+  ).split('|'),
+];
+const PROPER_NOUN_RE = new RegExp(
+  `\\b(${[...PROPER_NOUNS]
+    .sort((a, b) => b.length - a.length)
+    .map((n) =>
+      n
+        .split(/[.\s]+/)
+        .map(escapeRe)
+        .join('\\.?\\s+'),
+    )
+    .join('|')})\\b`,
+  'gi',
+);
+const PROPER_BY_KEY = new Map(PROPER_NOUNS.map((n) => [n.toLowerCase().replace(/[.\s]+/g, ' '), n]));
+const MONTH_RE = new RegExp(`\\b(${MONTHS})\\b`, 'gi');
+const WEEKDAY_RE = new RegExp(`\\b(${WEEKDAYS})\\b`, 'gi');
+
+/**
+ * What may follow the month in "this may" / "next may" / "last may": the end of the clause, a date, or a word that
+ * cannot follow the modal ("this may i'm in nyc", "last may and june"). "this may take a few weeks" stays a modal.
+ */
+const AFTER_MONTH_MAY =
+  /^(?:\s*$|\s*[,.;:!?)'’]|\s+\d|\s+(?:and|or|but|so|then|when|while|if|because|is|was|will|would|too|as|i|i'm|she|he|we|they|you|at|in|on|for|to|from|through|until|graduation|break|deadline|cycle)\b)/i;
+
+/** Capitalise months, weekdays and well-known places; "may" only where it is the month ("in may", "may 3"). */
+function capitalizeProper(s: string): string {
   return s
+    .replace(MONTH_RE, (m, _w: string, at: number, all: string) => {
+      if (m.toLowerCase() === 'may') {
+        const before = all.slice(0, at);
+        const after = all.slice(at + m.length);
+        const isMonth =
+          /\b(in|by|since|until|till|before|after|early|mid|late|of|end of|through)\s+$/i.test(before) ||
+          /^\s+\d/.test(after) ||
+          // "this", "next" and "last" also come before the modal ("this may take a while")
+          (/\b(this|next|last)\s+$/i.test(before) && AFTER_MONTH_MAY.test(after));
+        if (!isMonth) return m;
+      }
+      return m[0]!.toUpperCase() + m.slice(1).toLowerCase();
+    })
+    .replace(WEEKDAY_RE, (m) => m[0]!.toUpperCase() + m.slice(1).toLowerCase())
+    .replace(PROPER_NOUN_RE, (m) => PROPER_BY_KEY.get(m.toLowerCase().replace(/[.\s]+/g, ' ')) ?? m);
+}
+
+/** Strip filler words and spoken tics, fix the student's lowercase "i", capitalise months, days and places. */
+function clean(s: string): string {
+  const out = s
     .replace(/\b(?:um+|uh+|erm|hmm+|mhm)\b[,.]?\s*/gi, '')
     .replace(/\b(?:you know|i mean)\b,?\s*/gi, '')
     .replace(/\b(?:honestly|basically|literally|totally|actually)\b,?\s*/gi, '')
-    .replace(new RegExp(`\\b(${MONTHS})\\b`, 'g'), (m) => m[0]!.toUpperCase() + m.slice(1))
     .replace(/\b(in|by|around|about|at|for|was|is|are|it's|just|said|and|so|like)\s+like\s+(?!to\b)/gi, '$1 ')
     .replace(/(^|,\s*)like\s+/gi, '$1')
     .replace(/\bi\b/g, 'I')
@@ -130,6 +212,8 @@ function clean(s: string): string {
     .replace(/\s+([,.;!?])/g, '$1')
     .replace(/\s+/g, ' ')
     .trim();
+  // casing last, once the filler around "in like may" is gone
+  return capitalizeProper(out);
 }
 
 const CONNECTOR =
@@ -708,8 +792,41 @@ export function heuristicNoteExtraction(
   const reportedOffer = new RegExp(`\\b(?:${subjAlt}) (?:said|says|mentioned) (?:she|he|they)['’]?d\\b`, 'i');
 
   const nameOf = (key: string) => people.find((p) => p.key === key)?.first;
-  const capitalizeNames = (x: string) =>
-    allNames.reduce((acc, n) => acc.replace(new RegExp(`\\b${escapeRe(n)}\\b`, 'gi'), n), x);
+  // an employer name is only recased where it reads as one ("from figma", "at bain", "works for ramp"), so a firm
+  // named after an everyday word ("Target", "Ramp", "Square") keeps "my target role", "to ramp up", "back to square
+  // one" and "to block time" as written: bare "to", "for", "with" and "of" come before verbs and nouns, so they only
+  // count after a word about a job, and a following particle or object ("ramp up", "target the fall") rules it out
+  const orgNames = [
+    ...new Set(
+      (opts.organizations ?? []).flatMap((o) => {
+        const full = o.trim();
+        const head = full.split(/\s+(?:&|(?:and|inc|llc|co|corp|company|group)\b)/i)[0]!.trim();
+        return [full, head].filter((n) => n.length >= 2);
+      }),
+    ),
+  ].sort((a, b) => b.length - a.length);
+  const orgCue =
+    'at|from|joined|joining|join|left|leaving|' +
+    '(?:work|works|worked|working|intern|interns|interned|interning|internship|job|role|offer|position|team|' +
+    'interview|interviews|interviewed|interviewing|recruiter|recruiting|moved|moving|move|switched|switching|' +
+    'switch|transferred|transferring|returned|returning|return|went)\\s+(?:at|for|with|to)|' +
+    '(?:head|founder|cofounder|co-founder|ceo|cto|coo|cfo|vp|director|president|alum|alumni|alumna|alumnus)\\s+of';
+  const orgRe = orgNames.length
+    ? new RegExp(
+        `\\b(${orgCue})\\s+(${orgNames.map(escapeRe).join('|')})\\b(?!\\s+(?:up|down|out|off|over|back|away|one|the|a|an|my|your|his|her|their|our|its|it|them|him|me|us|this|that|these|those)\\b)`,
+        'gi',
+      )
+    : undefined;
+  const capitalizeNames = (x: string) => {
+    const named = allNames.reduce((acc, n) => acc.replace(new RegExp(`\\b${escapeRe(n)}\\b`, 'gi'), n), x);
+    return orgRe
+      ? named.replace(
+          orgRe,
+          (_, w: string, o: string) =>
+            `${w} ${orgNames.find((n) => n.toLowerCase() === o.toLowerCase()) ?? o}`,
+        )
+      : named;
+  };
   /** Who a sentence is about: the speaker, the first attendee named, or (for a pronoun) the last subject. */
   const aboutOf = (s: string, line: Line): string => {
     if (line.speaker === 'counterpart') return line.speakerKey ?? lastSubject;

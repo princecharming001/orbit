@@ -17,11 +17,12 @@ import {
   refreshIfFactsNewer,
   refreshPendingDrafts,
   refreshPersonSummary,
+  regenerateDraft,
   surfaceLlmFailure,
   upsertSuggestions,
 } from './brief';
 import { upsertPerson } from './people';
-import { evaluateTrigger } from './stages';
+import { evaluateTrigger, retireSuggestions } from './stages';
 
 export interface CaptureInput {
   text: string;
@@ -328,6 +329,9 @@ async function retireNoteEffects(note: MeetingNote, now: Date): Promise<void> {
   const noteId = note.id;
   const fromNote = (x: { sourceTable?: string; sourceId?: string }) =>
     x.sourceTable === 'notes' && x.sourceId === noteId;
+  const factIds = new Set(
+    (await db.facts.where('personId').anyOf(previous).filter(fromNote).toArray()).map((f) => f.id),
+  );
   await db.facts.where('personId').anyOf(previous).filter(fromNote).delete();
   await db.actionItems.where('personId').anyOf(previous).filter(fromNote).delete();
   await db.touchpoints
@@ -388,6 +392,7 @@ async function retireNoteEffects(note: MeetingNote, now: Date): Promise<void> {
           .modify({ status: 'cancelled' });
     }
   }
+  await settleDraftsCiting(note.userId, previous, factIds, now);
   const body = note.extraction?.suggestedNextStep;
   await db.notifications
     .where('userId')
@@ -399,6 +404,32 @@ async function retireNoteEffects(note: MeetingNote, now: Date): Promise<void> {
         x.body === body,
     )
     .delete();
+}
+
+/**
+ * Drafts that quote a fact the note had put on someone now cite something that person never said. An untouched
+ * draft is written again from what is still known; one the student already edited cannot be rewritten, so it is
+ * cancelled and its card retired.
+ */
+async function settleDraftsCiting(
+  userId: string,
+  personIds: string[],
+  factIds: Set<string>,
+  now: Date,
+): Promise<void> {
+  if (!factIds.size || !personIds.length) return;
+  const drafts = await db.outbound
+    .where('personId')
+    .anyOf(personIds)
+    .filter((m) => m.status === 'draft' && (m.claims ?? []).some((c) => !!c.factId && factIds.has(c.factId)))
+    .toArray();
+  const user = drafts.length ? await db.users.get(userId) : undefined;
+  for (const d of drafts) {
+    if (user && d.bodyFinal === undefined && (await regenerateDraft(user, d.id, {}, now))) continue;
+    await db.outbound.update(d.id, { status: 'cancelled' });
+    const s = d.suggestionId ? await db.suggestions.get(d.suggestionId) : undefined;
+    if (s) await retireSuggestions([{ ...s, outboundMessageId: undefined }], 'note_moved', now);
+  }
 }
 
 export async function processNote(user: User, note: MeetingNote, now = new Date()): Promise<void> {
@@ -413,6 +444,7 @@ export async function processNote(user: User, note: MeetingNote, now = new Date(
     heuristicNoteExtraction(note.rawSummary ?? note.rawText, {
       people: notePeople.map((p) => ({ key: p.id, first: p.firstName, last: p.lastName || undefined })),
       userNames: [user.fullName, user.firstName].filter(Boolean),
+      organizations: notePeople.map((p) => p.currentOrganizationRaw).filter((o): o is string => !!o),
     });
   await db.notes.update(note.id, { extraction: ext, summary: ext.summary, processedAt: now.toISOString() });
   note.extraction = ext;

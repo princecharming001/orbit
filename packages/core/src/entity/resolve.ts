@@ -100,6 +100,15 @@ export function incomingName(inc: IncomingIdentity): NameParts {
 
 const fold = (s: string) => stripDiacritics(s).toLowerCase();
 
+/** True when one first name is a bare initial ("P." or "P") and the other is a full name starting with it. */
+export function initialMatches(a: string, b: string): boolean {
+  const x = fold(a).replace(/\.$/, '');
+  const y = fold(b).replace(/\.$/, '');
+  if (!x || !y || x.length === y.length) return false;
+  const [initial, full] = x.length < y.length ? [x, y] : [y, x];
+  return initial.length === 1 && /^[a-z]$/.test(initial) && full.length > 1 && full.startsWith(initial);
+}
+
 /**
  * True when a stored person's name is only a stand-in derived from their email address ("erodriguez"),
  * so it must not count as name evidence and should be replaced by the first real name we see.
@@ -190,6 +199,8 @@ export function computeFeatures(inc: IncomingIdentity, cand: Person, ctx: Resolv
       incName.last && candName.last ? rescale(jaroWinkler(fold(incName.last), fold(candName.last))) : 0;
     // a shared short form (Alex: Alexander or Alexandra) is a weaker match than a real nickname
     if (rel === 'ambiguous') nameSim = Math.min(0.8, Math.max(nameSim, lastSim === 1 ? 0.8 : 0));
+    // "P. Patel" and "Priya Patel": a matching initial with the same surname is a partial name match
+    if (lastSim === 1 && initialMatches(incName.first, candName.first)) nameSim = Math.max(nameSim, 0.6);
   }
   const incOrg = normalizeCompany(inc.companyRaw);
   const candOrg = normalizeCompany(cand.currentOrganizationRaw);
@@ -265,11 +276,42 @@ function addressOnlyScore(f: ResolveFeatures): number {
  * differ in writing (Bill/William, Alex/Alexandra) it must come from the address or the school, because a
  * shared employer is not enough to tell two colleagues apart.
  */
-function corroborated(f: ResolveFeatures, rel: ReturnType<typeof firstNameRelation>): boolean {
-  const independent = f.email_name_sim >= 0.7 || f.domain_org_match > 0 || f.school_match > 0;
+function corroborated(
+  f: ResolveFeatures,
+  rel: ReturnType<typeof firstNameRelation>,
+  incomingAddressFitsName: number,
+): boolean {
+  // Only the incoming address can say something new: the stored person's own address fitting the incoming
+  // name repeats the name match, so it never corroborates on its own.
+  const independent = incomingAddressFitsName >= 0.7 || f.domain_org_match > 0 || f.school_match > 0;
   if (rel !== 'same') return independent;
   // only the very same employer counts: "Bain" and "Bain Capital" look alike but are different firms
   return independent || f.org_match >= 1;
+}
+
+/**
+ * Whether the incoming record names a different employer than the stored person: another or only look-alike
+ * firm name ("Bain Capital" for "Bain & Company"), or a work address that is not at the stored employer
+ * (jnunez@baincapital.com). An address at the stored employer's own domain settles it the other way.
+ */
+function employerConflict(
+  inc: IncomingIdentity,
+  cand: Person,
+  ctx: ResolveContext,
+  f: ResolveFeatures,
+): boolean {
+  const candOrg = normalizeCompany(cand.currentOrganizationRaw);
+  if (!candOrg) return false;
+  const email = inc.email ? normalizeEmail(inc.email) : '';
+  const dom = email.includes('@') ? emailDomain(email) : '';
+  const work = !!dom && !PERSONAL_EMAIL_DOMAINS.has(dom);
+  if (work) {
+    const known = cand.currentOrganizationId ? (ctx.orgDomains?.get(cand.currentOrganizationId) ?? []) : [];
+    const root = dom.split('.').slice(-2, -1)[0] ?? '';
+    if (known.includes(dom) || root === candOrg.replace(/[\s&]+/g, '')) return false;
+  }
+  if (inc.companyRaw && normalizeCompany(inc.companyRaw) && f.org_match < 1) return true;
+  return work;
 }
 
 export function scorePair(
@@ -286,8 +328,17 @@ export function scorePair(
   let score = scoreFeatures(scored);
   // the names have to agree before anything else counts (Priya Patel and Arjun Patel at Figma are two people)
   if (f.name_sim < 0.5) score = Math.min(score, SUGGEST_THRESHOLD - 0.01);
-  const rel = firstNameRelation(incName.first, parseName(cand.displayName).first);
-  if (score >= AUTO_MERGE_THRESHOLD && !corroborated(f, rel)) score = AUTO_MERGE_THRESHOLD - 0.01;
+  const candName = parseName(cand.displayName);
+  const rel = firstNameRelation(incName.first, candName.first);
+  const incomingAddressFitsName = inc.email ? emailEvidence(inc.email, candName, '', [], true).nameSim : 0;
+  if (
+    score >= AUTO_MERGE_THRESHOLD &&
+    // a bare initial fits many colleagues (Priya and Pooja Patel), and a look-alike employer is another firm
+    (!corroborated(f, rel, incomingAddressFitsName) ||
+      initialMatches(incName.first, candName.first) ||
+      employerConflict(inc, cand, ctx, f))
+  )
+    score = AUTO_MERGE_THRESHOLD - 0.01;
   return { score, features: f };
 }
 

@@ -325,3 +325,86 @@ describe('the incremental resolver applies the same guards as findDuplicatePairs
     expect(titled.kind).toBe('suggest');
   });
 });
+
+describe('look-alike employers never auto-merge on name evidence alone (prev-6)', () => {
+  const jose = base({
+    id: 'j',
+    displayName: 'José Núñez',
+    firstName: 'José',
+    lastName: 'Núñez',
+    nameNormalized: 'jose nunez',
+    primaryEmail: 'jose.nunez@bain.com',
+    emails: ['jose.nunez@bain.com'],
+    currentOrganizationRaw: 'Bain & Company',
+    currentOrganizationId: 'o1',
+  });
+  const ctx = { people: [jose], orgDomains: new Map([['o1', ['bain.com']]]) };
+  const resolve = (inc: Omit<Parameters<typeof resolveIdentity>[0], 'source'>) =>
+    resolveIdentity({ ...inc, source: 'gmail' }, ctx);
+  it('only suggests a Bain Capital sender, whatever the address', () => {
+    for (const inc of [
+      { displayName: 'Jose Nunez', email: 'jnunez@baincapital.com', companyRaw: 'Bain Capital' },
+      { displayName: 'Jose Nunez', email: 'jose.nunez@gmail.com', companyRaw: 'Bain Capital' },
+      { displayName: 'Jose Nunez', email: 'jose.nunez@baincapital.com' },
+      { displayName: 'Jose Nunez', companyRaw: 'Bain Capital' },
+      { displayName: 'Jose Nunez', email: 'jose.nunez@gmail.com' },
+    ])
+      expect({ inc, kind: resolve(inc).kind }).toEqual({ inc, kind: 'suggest' });
+  });
+  it('still merges an address at the stored employer', () => {
+    expect(resolve({ displayName: 'Jose Nunez', email: 'jnunez@bain.com' })).toMatchObject({
+      kind: 'probable',
+      personId: 'j',
+    });
+  });
+  it('only suggests Goldman Sachs Asset Management for a Goldman Sachs contact', () => {
+    const sam = base({
+      id: 's',
+      displayName: 'Sam Lee',
+      firstName: 'Sam',
+      lastName: 'Lee',
+      nameNormalized: 'sam lee',
+      primaryEmail: 'sam.lee@gs.com',
+      emails: ['sam.lee@gs.com'],
+      currentOrganizationRaw: 'Goldman Sachs',
+      currentOrganizationId: 'g',
+    });
+    const d = resolveIdentity(
+      {
+        displayName: 'Sam Lee',
+        email: 'sam.lee@gmail.com',
+        companyRaw: 'Goldman Sachs Asset Management',
+        source: 'gmail',
+      },
+      { people: [sam], orgDomains: new Map([['g', ['gs.com']]]) },
+    );
+    expect(d.kind).toBe('suggest');
+  });
+});
+
+describe('an initial plus the surname (L22)', () => {
+  const priya = base({
+    id: 'p',
+    primaryEmail: 'priya@figma.com',
+    emails: ['priya@figma.com'],
+    currentOrganizationRaw: 'Figma',
+  });
+  it('suggests a merge for P. Patel at the same firm but never merges it silently', () => {
+    for (const inc of [
+      { displayName: 'P. Patel', email: 'p.patel@figma.com', companyRaw: 'Figma' },
+      { displayName: 'P Patel', companyRaw: 'Figma' },
+    ])
+      expect(resolveIdentity({ ...inc, source: 'gmail' }, { people: [priya] })).toMatchObject({
+        kind: 'suggest',
+        personId: 'p',
+      });
+  });
+  it('keeps a different initial apart', () => {
+    expect(
+      resolveIdentity(
+        { displayName: 'A. Patel', email: 'a.patel@figma.com', companyRaw: 'Figma', source: 'gmail' },
+        { people: [priya] },
+      ).kind,
+    ).toBe('new');
+  });
+});

@@ -76,18 +76,39 @@ export async function loadPeopleCache(userId: string): Promise<PeopleCache> {
 }
 
 /**
- * True when a display name is an address handle rather than a name: one token joined by dots, dashes or
- * underscores ("priya.patel"), or the address's local part typed in lower case ("erodriguez" for
- * erodriguez@bain.com).
+ * True when a display name is an address handle rather than a name: one token joined by dots or
+ * underscores in any case ("priya.patel", "Priya.Patel", "priya_patel"), or by dashes in lower case, or a
+ * lower-case form of the address ("erodriguez" for erodriguez@bain.com, "jdoe" or "john" for john.doe@).
  */
 export function isHandleName(displayName: string | undefined, email: string | undefined): boolean {
   const t = (displayName ?? '').trim();
   if (!t || /\s/.test(t)) return false;
+  // a capitalised single token joined by a dash is a real name ("Mary-Jane"); a dot or underscore is not
+  if (/^[\p{L}\d]+(?:[._][\p{L}\d]+)+$/u.test(t)) return true;
+  if (t !== t.toLowerCase()) return false;
   if (/^[\p{Ll}\d]+(?:[._-][\p{Ll}\d]+)+$/u.test(t)) return true;
-  const addr = (email?.match(/<([^>]+)>/)?.[1] ?? email ?? '').trim();
-  const local = addr.includes('@') ? addr.slice(0, addr.lastIndexOf('@')).replace(/\+.*$/, '') : '';
+  const local = localPart(email);
+  if (!local) return false;
   const squash = (x: string) => x.toLowerCase().replace(/[._+-]/g, '');
-  return !!local && t === t.toLowerCase() && squash(t) === squash(local);
+  if (squash(t) === squash(local)) return true;
+  // the short forms of the name the address spells out
+  const parts = nameFromEmailLocal(local).toLowerCase().split(' ');
+  if (parts.length < 2) return false;
+  const f = parts[0]!;
+  const l = parts[parts.length - 1]!;
+  return [f, `${f}${l}`, `${f[0]}${l}`, `${l}${f}`, `${f}${l[0]}`].includes(squash(t));
+}
+
+function localPart(email: string | undefined): string {
+  const addr = (email?.match(/<([^>]+)>/)?.[1] ?? email ?? '').trim();
+  return addr.includes('@') ? addr.slice(0, addr.lastIndexOf('@')).replace(/\+.*$/, '') : '';
+}
+
+/** The name a handle spells out ("priya_patel" -> "Priya Patel"), or undefined when it does not split into one. */
+export function nameFromHandle(handle: string | undefined): string | undefined {
+  if (!handle) return undefined;
+  const n = nameFromEmailLocal(handle.trim().toLowerCase());
+  return n.includes(' ') ? n : undefined;
 }
 
 /** Resolve an incoming identity against the user's people and create/update a Person. Returns the person and whether it was created. */
@@ -96,7 +117,9 @@ export async function upsertPerson(
   cache?: PeopleCache,
 ): Promise<{ person: Person; created: boolean; merged?: boolean }> {
   // a header "name" that is only the address handle ("priya.patel", "erodriguez") is no name at all
-  const inp = isHandleName(raw.displayName, raw.email) ? { ...raw, displayName: undefined } : raw;
+  // (it is not name evidence for matching, but the name it spells out can stand in until a real one arrives)
+  const handle = isHandleName(raw.displayName, raw.email) ? raw.displayName : undefined;
+  const inp = handle ? { ...raw, displayName: undefined } : raw;
   const c = cache ?? (await loadPeopleCache(inp.userId));
   const people = c.people;
   const orgDomains = c.orgDomains;
@@ -217,7 +240,14 @@ export async function upsertPerson(
     const placeholder = !name.full;
     // the raw address keeps the dots that gmail normalisation drops ("tom.wu" -> "Tom Wu")
     const rawAddr = (inp.email?.match(/<([^>]+)>/)?.[1] ?? inp.email ?? '').trim().toLowerCase();
-    const display = name.full || (email ? nameFromEmailLocal(rawAddr || email) : 'Unknown');
+    // a stand-in name: the one the address spells out, else the one the handle spells out, else the address
+    const fromAddress = email ? nameFromEmailLocal(rawAddr || email) : undefined;
+    const display =
+      name.full ||
+      (fromAddress?.includes(' ') ? fromAddress : undefined) ||
+      nameFromHandle(handle) ||
+      fromAddress ||
+      'Unknown';
     const n = name.full ? name : parseName(display);
     const fieldSources: Partial<Record<PersonField, PersonSource>> = {};
     if (!placeholder) fieldSources.displayName = inp.source;

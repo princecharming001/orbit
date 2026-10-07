@@ -80,6 +80,9 @@ Priya Patel: No guarantee of course, the process is pretty competitive, but I'll
     expect(facts.find((f) => f.type === 'offer')?.text).toBe(
       'She offered to forward my resume to her recruiter if I send it over',
     );
+    // L20: places and the employer are capitalised, on the Person page and in the note summary
+    expect(facts.map((f) => f.text)).toContain("She's from Houston originally");
+    expect((await db.notes.toArray())[0]!.summary).toMatch(/\bMaya from Figma\b/);
     const [item] = await db.actionItems.where('personId').equals(maya.id).toArray();
     expect(item!.text).toBe('Send my resume to Maya by tomorrow');
     expect(item!.dueAt).toBe('2026-10-03T21:00:00.000Z'); // Saturday 5 pm in New York
@@ -161,14 +164,21 @@ describe('note facts in drafts and on the person', () => {
       'She offered to refer me to the APM program',
       'She recommended I apply early',
     ]);
-    const ask = await draftMessage(user, priya.id, 'referral_ask', 'gmail');
-    expect(ask.bodyDraft).toMatch(/offer(ed|ing) to refer me to the APM program/);
-    for (const kind of ['referral_ask', 'thank_you', 'nurture'] as const) {
-      const d = await draftMessage(user, priya.id, kind, 'gmail');
-      expect(d.bodyDraft).not.toMatch(
-        /\b(to|on|mentioned) (you|she) offered\b|\bwas I should\b|\bi should\b/,
-      );
-    }
+    // the facts are spliced in the second person and as grammatical clauses, never pasted after a frame
+    // ("was recommended I apply", "your advice about recommended", "you mentioned offered to")
+    const spliceErrors =
+      /\b(to|on|about|was|mentioned|that) (you |she )?(offered|recommended|suggested)\b|\b(she|he) (offered|recommended)\b|\bI should\b/i;
+    const ask = (await draftMessage(user, priya.id, 'referral_ask', 'gmail')).bodyDraft;
+    expect(ask).toMatch(/\byou (kindly )?offered to refer me to the APM program\b/);
+    expect(ask).not.toMatch(spliceErrors);
+    const thanks = (await draftMessage(user, priya.id, 'thank_you', 'gmail')).bodyDraft;
+    expect(thanks).toMatch(/\b(your advice (that I|to)|you (recommended|suggested) I) apply early\b/);
+    expect(thanks).toMatch(/\boffering to refer me to the APM program\b/);
+    expect(thanks).not.toMatch(spliceErrors);
+    // a check-in only quotes a fact it can phrase; otherwise it asks the student for an update
+    const nurture = (await draftMessage(user, priya.id, 'nurture', 'gmail')).bodyDraft;
+    expect(nurture).not.toMatch(spliceErrors);
+    expect(nurture).not.toMatch(/\brecommended I apply\b|\boffered to refer\b/);
     const p = (await db.people.get(priya.id))!;
     expect(p.summary).toMatch(
       /She recommended I apply early\. She offered to refer me to the APM program\.$/,
@@ -372,6 +382,53 @@ describe('an unconfirmed guess and a corrected match leave no stale pipeline sta
     expect(
       (await db.stageEvents.where('chatId').equals(c1).toArray()).every((e) => e.status === 'rejected'),
     ).toBe(true);
+  });
+
+  it('L18: a thank-you drafted from the note stops quoting a fact that moved to someone else', async () => {
+    await db.users.update(user.id, { onboardingCompletedAt: '2026-09-01T00:00:00.000Z' });
+    const u = (await db.users.get(user.id))!;
+    const maya = await person('Maya Wu', 'maya@figma.com', 'Figma');
+    const mia = await person('Mia Lopez', 'mia@ramp.com', 'Ramp');
+    const at = '2026-10-02T15:00:00.000Z';
+    // the calendar already completed the chat, so correcting the note does not revert it
+    await db.chats.add({
+      id: 'c-done',
+      userId: user.id,
+      personId: maya.id,
+      stage: 'completed',
+      stageEnteredAt: at,
+      completedAt: at,
+      source: 'manual',
+      goalTags: [],
+      bumpCount: 0,
+      priority: 2,
+      createdAt: '2026-09-20T12:00:00.000Z',
+      updatedAt: at,
+    });
+    const text = `Coffee with Maya Wu. ${NOTE}`;
+    const thanks = async () => (await db.suggestions.where('dedupeKey').equals('thank:c-done').first())!;
+    const draftOf = async () => (await db.outbound.get((await thanks()).outboundMessageId!))!;
+
+    const n = await ingestNote(u, { source: 'manual', occurredAt: at, text }, NOW);
+    expect(n.matchStatus).toBe('auto');
+    await evaluateImmediateSuggestions(user.id, {}, NOW);
+    expect((await draftOf()).bodyDraft).toMatch(/refer me to the design engineering role/);
+    await rematchNote(u, n.id, mia.id, NOW);
+    const redrafted = await draftOf();
+    expect((await thanks()).status).toBe('pending');
+    expect(redrafted.status).toBe('draft');
+    expect(redrafted.bodyDraft).not.toMatch(/refer/);
+    expect(redrafted.claims ?? []).toEqual([]);
+
+    // a draft the student already edited cannot be rewritten: it is cancelled and the card retired
+    await rematchNote(u, n.id, maya.id, NOW);
+    await evaluateImmediateSuggestions(user.id, {}, NOW);
+    const again = await draftOf();
+    expect(again.bodyDraft).toMatch(/refer me to the design engineering role/);
+    await db.outbound.update(again.id, { bodyFinal: `${again.bodyDraft}\nSee you soon.` });
+    await rematchNote(u, n.id, mia.id, NOW);
+    expect((await db.outbound.get(again.id))!.status).toBe('cancelled');
+    expect(await thanks()).toMatchObject({ status: 'expired', expiredReason: 'note_moved' });
   });
 
   it('a full name two people share is not attached; the card tells them apart by company', async () => {
