@@ -1,5 +1,5 @@
 import type { User } from '@orbit/core';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { db } from '../db/schema';
 import { generateBrief, markWarmUpAction, startWarmUpOrOutreach } from './brief';
 import { loadDemo } from './demo';
@@ -10,8 +10,14 @@ import { approveAndSend, checkSendAllowed, confirmHandoff } from './send';
 
 let user: User;
 beforeAll(async () => {
+  // the demo is laid out on business days; pin a Tuesday so every card it promises exists whatever day CI runs
+  vi.useFakeTimers({ toFake: ['Date'], shouldAdvanceTime: true });
+  vi.setSystemTime(new Date('2026-10-06T14:00:00'));
   user = await loadDemo({ reset: true });
 }, 60_000);
+afterAll(() => {
+  vi.useRealTimers();
+});
 
 describe('demo pipeline', () => {
   it('derives stages from the mailbox and calendar', async () => {

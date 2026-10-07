@@ -115,8 +115,31 @@ async function pendingDraft(user: User, kind: Suggestion['kind']) {
   return { s, d: (await db.outbound.get(s.outboundMessageId!))! };
 }
 
+/**
+ * A bump on the demo's oldest unanswered email outreach, drafted explicitly: whether the day's brief holds a pending
+ * follow_up_bump depends on the weekday and the hour, and these tests must not.
+ */
+async function bumpDraft(user: User): Promise<OutboundMessage> {
+  const chats = (
+    await db.chats
+      .where('userId')
+      .equals(user.id)
+      .filter((c) => c.stage === 'outreach_sent' && !!c.threadId)
+      .toArray()
+  ).sort((a, b) => (a.lastOutboundAt ?? '').localeCompare(b.lastOutboundAt ?? ''));
+  for (const c of chats) {
+    const p = await db.people.get(c.personId);
+    if (p?.primaryEmail) return draftMessage(user, p.id, 'bump', 'gmail', c.id);
+  }
+  throw new Error('the demo has no unanswered email outreach');
+}
+
 async function freshPerson(user: User, opts: { email?: boolean; linkedin?: boolean; connected?: boolean }) {
-  const chatted = new Set((await db.chats.where('userId').equals(user.id).toArray()).map((c) => c.personId));
+  // nobody Orbit has a chat with or a message for, so two calls in one test never return the same person
+  const chatted = new Set([
+    ...(await db.chats.where('userId').equals(user.id).toArray()).map((c) => c.personId),
+    ...(await db.outbound.where('userId').equals(user.id).toArray()).map((o) => o.personId),
+  ]);
   const p = (await db.people
     .where('userId')
     .equals(user.id)
@@ -137,6 +160,9 @@ async function freshPerson(user: User, opts: { email?: boolean; linkedin?: boole
 let user: User;
 let fetchMock: ReturnType<typeof fakeGmail>;
 beforeEach(async () => {
+  // the demo is laid out on business days around "now"; pin a Tuesday afternoon so its cards exist whenever this runs
+  vi.useFakeTimers({ toFake: ['Date'], shouldAdvanceTime: true });
+  vi.setSystemTime(new Date('2026-10-06T14:00:00'));
   user = await loadDemo({ reset: true });
   sent = [];
   failSends = 0;
@@ -147,6 +173,7 @@ beforeEach(async () => {
 }, 60_000);
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 describe('threading (SND-01, IS-1, SND-18)', () => {
@@ -171,8 +198,8 @@ describe('threading (SND-01, IS-1, SND-18)', () => {
 
   it('a bump drafted from the profile (no In-Reply-To stored) still replies to the last message', async () => {
     await connectGoogle(user);
-    const { d } = await pendingDraft(user, 'follow_up_bump');
-    const bump = await draftMessage(user, d.personId, 'bump', 'gmail', d.chatId);
+    const bump = await bumpDraft(user);
+    expect(bump.externalThreadId).toBeTruthy();
     expect(bump.inReplyToMessageId).toBeUndefined();
     const r = await approveAndSend(user, bump.id, bump.bodyDraft, undefined, new Date(), { undoWindowMs: 0 });
     expect(r.ok).toBe(true);
@@ -225,7 +252,7 @@ describe('threading (SND-01, IS-1, SND-18)', () => {
   });
 
   it('the mail-app hand-off for a threaded draft prefills Re: <thread subject> (SND-16)', async () => {
-    const { d } = await pendingDraft(user, 'follow_up_bump');
+    const d = await bumpDraft(user);
     const thread = (await db.threads.where('externalThreadId').equals(d.externalThreadId!).first())!;
     const r = await approveAndSend(user, d.id, d.bodyDraft);
     expect(r.ok && r.status === 'handed_off' && r.threaded).toBe(true);
@@ -419,7 +446,7 @@ describe('approval ordering and idempotency (SND-04, SND-06)', () => {
 
   it('two overlapping approvals send once', async () => {
     await connectGoogle(user);
-    const { d } = await pendingDraft(user, 'follow_up_bump');
+    const d = await bumpDraft(user);
     const chatBefore = (await db.chats.get(d.chatId!))!;
     const rs = await Promise.all([
       approveAndSend(user, d.id, d.bodyDraft, undefined, new Date(), { undoWindowMs: 0 }),
@@ -447,7 +474,7 @@ describe('cooldown and declined rules (SND-05, SND-13)', () => {
     return { p, chat };
   }
 
-  it('applies only to new outreach and bumps, and says how long ago in plain words', async () => {
+  it('holds back every unanswered ask but never replies, scheduling, thank-yous or congratulations', async () => {
     const { p } = await sentOutreach(0.5);
     const bump = await checkSendAllowed(user.id, p.id, 'gmail', 'bump');
     expect(bump.allowed).toBe(false);
@@ -455,6 +482,9 @@ describe('cooldown and declined rules (SND-05, SND-13)', () => {
     expect((await checkSendAllowed(user.id, p.id, 'gmail', 'outreach')).allowed).toBe(false);
     for (const kind of ['reply', 'thank_you', 'schedule', 'congratulate'] as const)
       expect((await checkSendAllowed(user.id, p.id, 'gmail', kind)).allowed).toBe(true);
+    // every other ask waits too: a referral or intro ask, a check-in or an update minutes after a cold email
+    for (const kind of ['referral_ask', 'intro_request', 'nurture', 'report_back'] as const)
+      expect((await checkSendAllowed(user.id, p.id, 'gmail', kind)).allowed).toBe(false);
     const later = await checkSendAllowed(
       user.id,
       p.id,
@@ -543,6 +573,60 @@ describe('hand-offs (SND-07, SND-12, SND-14, UI-09)', () => {
     expect(r.ok && r.status === 'handed_off' && r.handoffUrl).toMatch(/messaging\/compose/);
   });
 
+  it('LinkedIn: someone who answered a chat that started with a connection note gets a message, not Connect', async () => {
+    const p = await freshPerson(user, { email: false, linkedin: true, connected: false });
+    const note = await draftMessage(user, p.id, 'outreach', 'linkedin');
+    const short = `Hi ${p.firstName}, I'm a junior at Michigan recruiting for product roles. Could I ask you 3 questions about your team in 20 minutes? Thanks, Sam`;
+    expect((await approveAndSend(user, note.id, short)).ok).toBe(true);
+    expect((await confirmHandoff(user, note.id)).ok).toBe(true);
+    const chat = (await db.chats.where('personId').equals(p.id).first())!;
+    expect(chat.outreachChannel).toBe('linkedin');
+    // before they answer, anything else still goes with the request and is capped at 300 characters
+    const early = await draftMessage(user, p.id, 'nurture', 'linkedin', chat.id);
+    const long = `Hi ${p.firstName}, ${'A short update from me on the internship search and what I learned. '.repeat(6)}`;
+    const capped = await reviewDraft(user, early, long);
+    expect(capped.find((i) => i.code === 'linkedin_note_too_long')?.blocking).toBe(true);
+    // they accepted and we had the chat
+    await db.chats.update(chat.id, { stage: 'completed', stageEnteredAt: new Date().toISOString() });
+    const ty = await draftMessage(user, p.id, 'thank_you', 'linkedin', chat.id);
+    expect(
+      (await reviewDraft(user, ty, long)).find((i) => i.code === 'linkedin_note_too_long'),
+    ).toBeUndefined();
+    const r = await approveAndSend(user, ty.id, `Hi ${p.firstName}, thanks again for the time today. Sam`);
+    expect(r.ok && r.status === 'handed_off' && r.via).toBe('linkedin_compose');
+    expect(r.ok && r.status === 'handed_off' && r.handoffUrl).toMatch(/messaging\/compose/);
+    expect((await handoffLink(user, ty.id))?.via).toBe('linkedin_compose');
+  });
+
+  it('hand-offs count toward the daily cap from the moment they open', async () => {
+    await db.settings.update(user.id, { dailySendCapLinkedin: 1 });
+    const a = await freshPerson(user, { email: false, linkedin: true, connected: false });
+    const d1 = await draftMessage(user, a.id, 'outreach', 'linkedin');
+    expect(
+      (await approveAndSend(user, d1.id, `Hi ${a.firstName}, could I ask you 3 questions? Sam`)).ok,
+    ).toBe(true);
+    const b = await freshPerson(user, { email: false, linkedin: true, connected: false });
+    const d2 = await draftMessage(user, b.id, 'outreach', 'linkedin');
+    const r = await approveAndSend(user, d2.id, `Hi ${b.firstName}, could I ask you 3 questions? Sam`);
+    expect(r.ok).toBe(false);
+    expect(!r.ok && r.error).toMatch(/Daily limit reached: 1 LinkedIn messages today/);
+    expect((await db.outbound.get(d2.id))!.status).toBe('draft');
+  });
+
+  it('a confirmation that fails half way is still recorded as sent, never stuck in sending', async () => {
+    const { d } = await pendingDraft(user, 'thank_you');
+    expect((await approveAndSend(user, d.id, d.bodyDraft)).ok).toBe(true);
+    const spy = vi.spyOn(db.touchpoints, 'add').mockRejectedValueOnce(new Error('QuotaExceededError'));
+    const r = await confirmHandoff(user, d.id);
+    spy.mockRestore();
+    expect(r.ok).toBe(false);
+    expect(!r.ok && r.error).toMatch(/Logged as sent/);
+    const o = (await db.outbound.get(d.id))!;
+    expect(o.status).toBe('sent');
+    expect(o.sentAt).toBeTruthy();
+    expect((await confirmHandoff(user, d.id)).ok).toBe(false);
+  });
+
   it('a person with no email and no LinkedIn profile gets an error, never "sent"', async () => {
     const p = await freshPerson(user, { email: false, linkedin: true });
     await db.people.update(p.id, { linkedinUrl: undefined, linkedinSlug: undefined });
@@ -614,7 +698,7 @@ describe('re-validation at approval (SND-17) and stage mapping (SND-21)', () => 
   });
 
   it("a plain 'reply' (not a time confirmation) does not move the chat to scheduling", async () => {
-    const { d } = await pendingDraft(user, 'follow_up_bump');
+    const d = await bumpDraft(user);
     const chat = (await db.chats.get(d.chatId!))!;
     await db.chats.update(chat.id, { stage: 'replied', stageEnteredAt: new Date().toISOString() });
     const reply: OutboundMessage = {

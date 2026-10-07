@@ -1,6 +1,9 @@
 import { expect, type Page, test } from '@playwright/test';
 
 async function prep(page: Page) {
+  // The demo is laid out on business days relative to "now" (a Monday chat is not "tomorrow" on a Friday), so pin
+  // the browser to a Tuesday morning; the clock keeps running from there.
+  await page.clock.install({ time: new Date('2026-10-06T10:00:00') });
   await page.addInitScript(() => {
     // headless Chromium closes pages on mailto: popups; the app only uses window.open for hand-offs
     window.open = () => null;

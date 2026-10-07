@@ -37,8 +37,11 @@ export const UNDO_WINDOW_MS = 60_000;
 const STALE_QUEUE_MS = 10 * 60_000;
 
 const HOUR = 3_600_000;
-/** Kinds the per-person cooldown applies to: unanswered asks. Replies, thank-yous, scheduling and congratulations are never held back. */
-const COOLDOWN_KINDS: OutboundMessage['kind'][] = ['outreach', 'bump'];
+/**
+ * Kinds the per-person cooldown never holds back: answers to them, scheduling, thank-yous and congratulations. Every
+ * other message (outreach, bumps, check-ins, updates, referral and intro asks) waits until they answer the last one.
+ */
+const COOLDOWN_EXEMPT: OutboundMessage['kind'][] = ['reply', 'schedule', 'thank_you', 'congratulate'];
 /** Chat stages that mean the person has answered at least once. */
 const ANSWERED_STAGES: CoffeeChat['stage'][] = [
   'replied',
@@ -48,8 +51,8 @@ const ANSWERED_STAGES: CoffeeChat['stage'][] = [
   'followed_up',
 ];
 const INACTIVE_STAGES: CoffeeChat['stage'][] = ['declined', 'no_response', 'archived'];
-/** Statuses that count as "already written" for caps and cooldowns. */
-const COMMITTED: OutboundStatus[] = ['sent', 'queued', 'sending'];
+/** Statuses that count as "already written" for caps and cooldowns; a hand-off counts from the moment it opened. */
+const COMMITTED: OutboundStatus[] = ['sent', 'queued', 'sending', 'handed_off'];
 
 function committedAt(o: OutboundMessage): string | undefined {
   return o.status === 'sent' ? o.sentAt : o.queuedAt;
@@ -122,7 +125,7 @@ export async function checkSendAllowed(
       allowed: false,
       reason: `${person.firstName} declined earlier. Move the chat out of Declined first if that changed.`,
     };
-  if (COOLDOWN_KINDS.includes(kind)) {
+  if (!COOLDOWN_EXEMPT.includes(kind)) {
     const cooldownHours = settings?.perPersonCooldownHours ?? 72;
     const prior = (
       await db.outbound
@@ -281,9 +284,23 @@ function issueText(code: string, detail: string, person: Person): string {
   }
 }
 
-/** Is this LinkedIn message a connection note (the person is not a connection yet)? */
-export function isConnectionNote(msg: Pick<OutboundMessage, 'channel' | 'kind'>, person?: Person): boolean {
-  return msg.channel === 'linkedin' && msg.kind === 'outreach' && !person?.linkedinConnectedOn;
+/**
+ * Is this LinkedIn message a connection note? It is unless they are a connection: in the imported connections, or they
+ * answered a chat that started on LinkedIn (they accepted the request, so LinkedIn lets the student message them).
+ * A note goes with Connect, Add a note, and LinkedIn caps it at 300 characters, whatever kind of message it is.
+ */
+export function isConnectionNote(
+  msg: Pick<OutboundMessage, 'channel'>,
+  person?: Pick<Person, 'linkedinConnectedOn'>,
+  chats: Pick<CoffeeChat, 'stage' | 'outreachChannel'>[] = [],
+): boolean {
+  if (msg.channel !== 'linkedin' || person?.linkedinConnectedOn) return false;
+  return !chats.some((c) => c.outreachChannel === 'linkedin' && ANSWERED_STAGES.includes(c.stage));
+}
+
+async function connectionNoteFor(msg: OutboundMessage, person: Person): Promise<boolean> {
+  if (msg.channel !== 'linkedin' || person.linkedinConnectedOn) return false;
+  return isConnectionNote(msg, person, await db.chats.where('personId').equals(person.id).toArray());
 }
 
 /**
@@ -324,7 +341,7 @@ export async function reviewDraft(
     text: issueText(i.code, i.detail, person),
     blocking: i.blocking && !original.has(i.key) && !SOFT_FOR_EDITS.has(i.code),
   }));
-  if (isConnectionNote(msg, person) && body.length > LINKEDIN_NOTE_MAX)
+  if ((await connectionNoteFor(msg, person)) && body.length > LINKEDIN_NOTE_MAX)
     issues.unshift({
       code: 'linkedin_note_too_long',
       text: `LinkedIn caps a connection note at ${LINKEDIN_NOTE_MAX} characters and this one is ${body.length}. Trim it before sending.`,
@@ -379,6 +396,7 @@ function handoffFor(
   person: Person,
   body: string,
   env: Envelope,
+  connectionNote: boolean,
 ): { url: string; via: HandoffVia } | { error: string } {
   if (msg.channel === 'gmail') {
     if (!msg.toEmail) return { error: `There is no email address for ${person.firstName}.` };
@@ -393,9 +411,8 @@ function handoffFor(
     return {
       error: `Orbit has no LinkedIn profile for ${person.firstName}, so there is nowhere to send this.`,
     };
-  if (person.linkedinConnectedOn)
-    return { url: slug ? linkedinMessageUrl(slug) : profile, via: 'linkedin_compose' };
-  return { url: profile, via: 'linkedin_connect' };
+  if (connectionNote) return { url: profile, via: 'linkedin_connect' };
+  return { url: slug ? linkedinMessageUrl(slug) : profile, via: 'linkedin_compose' };
 }
 
 function alreadyText(status?: OutboundStatus): string {
@@ -478,7 +495,7 @@ export async function approveAndSend(
     const r = await deliver(user, claimed, now);
     return r.ok ? { ok: true, status: 'sent' } : r;
   }
-  const h = handoffFor(msg, person, bodyFinal, env);
+  const h = handoffFor(msg, person, bodyFinal, env, await connectionNoteFor(msg, person));
   if ('error' in h) return { ok: false, error: h.error };
   const claimed = await transition(msg.id, ['draft', 'failed', 'cancelled'], {
     ...approval,
@@ -527,19 +544,40 @@ export async function handoffLink(
   if (!m || m.userId !== user.id || m.status !== 'handed_off') return undefined;
   const person = await db.people.get(m.personId);
   if (!person) return undefined;
-  const h = handoffFor(m, person, m.bodyFinal ?? m.bodyDraft, await envelopeFor(m, m.subject));
+  const h = handoffFor(
+    m,
+    person,
+    m.bodyFinal ?? m.bodyDraft,
+    await envelopeFor(m, m.subject),
+    await connectionNoteFor(m, person),
+  );
   return 'error' in h ? undefined : h;
 }
 
-/** The student confirms they sent the hand-off: record it as sent, with the touchpoint and stage change. */
+/**
+ * The student confirms they sent the hand-off: record it as sent, with the touchpoint and stage change. The move to
+ * `sent` is the atomic claim (a second click finds nothing to confirm), so a failure in the bookkeeping after it can
+ * never leave the message stuck in between; the student is told to check the chat instead.
+ */
 export async function confirmHandoff(
   user: User,
   messageId: string,
   now = new Date(),
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  const m = await transition(messageId, ['handed_off'], { status: 'sending' });
+  const m = await transition(messageId, ['handed_off'], {
+    status: 'sent',
+    sentAt: now.toISOString(),
+    sendAt: undefined,
+  });
   if (!m) return { ok: false, error: 'This message is not waiting for confirmation.' };
-  await finalizeSent(user, m, {}, now);
+  try {
+    await finalizeSent(user, m, {}, now);
+  } catch {
+    return {
+      ok: false,
+      error: 'Logged as sent, but Orbit could not update the chat. Check its stage on their page.',
+    };
+  }
   return { ok: true };
 }
 
@@ -636,12 +674,31 @@ async function deliver(
   } catch (e) {
     return fail(String((e as Error).message ?? e));
   }
-  await finalizeSent(
-    user,
-    { ...msg, subject: env.subject },
-    { providerMessageId: r.id, providerThreadId: r.threadId },
-    now,
-  );
+  try {
+    await finalizeSent(
+      user,
+      { ...msg, subject: env.subject },
+      { providerMessageId: r.id, providerThreadId: r.threadId },
+      now,
+    );
+  } catch {
+    // it went out: record that much, never leave it in `sending`
+    try {
+      await db.outbound.update(msg.id, {
+        status: 'sent',
+        sentAt: now.toISOString(),
+        sendAt: undefined,
+        providerMessageId: r.id,
+        externalThreadId: r.threadId,
+      });
+      await notify(
+        user.id,
+        'system',
+        'Sent',
+        'Orbit sent it but could not update the chat. Check its stage.',
+      );
+    } catch {}
+  }
   return { ok: true };
 }
 

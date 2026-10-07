@@ -66,6 +66,10 @@ export function DraftEditor({
     threaded: !!draft.externalThreadId,
   });
   const person = useLiveQuery(() => db.people.get(draft.personId), [draft.personId]);
+  const chats = useLiveQuery(
+    () => db.chats.where('personId').equals(draft.personId).toArray(),
+    [draft.personId],
+  );
   useEffect(() => {
     setBody(draft.bodyFinal ?? draft.bodyDraft);
     setSubject(draft.subject ?? '');
@@ -105,7 +109,7 @@ export function DraftEditor({
   const max = MAX_WORDS[draft.kind];
   const edited = body.trim() !== draft.bodyDraft.trim();
   const isLinkedIn = draft.channel === 'linkedin';
-  const connectionNote = isConnectionNote(draft, person ?? undefined);
+  const connectionNote = isConnectionNote(draft, person ?? undefined, chats ?? []);
   const needs = (draft.needsInput ?? []).filter((n) => n === 'connection' || n === 'update');
   const hasPlaceholder = /\[[^\]]{3,}\]/.test(body);
   const blocked =
@@ -300,9 +304,9 @@ export function OutboxStatus({ draft, onClose }: { draft: OutboundMessage; onClo
         ? draft.externalThreadId
           ? 'Opened in your mail app. Reply in the original thread if you can, then mark it as sent.'
           : 'Opened in your mail app. Mark as sent when you have sent it.'
-        : person?.linkedinConnectedOn
-          ? `Paste the message into LinkedIn and send it to ${name}, then mark it as sent.`
-          : `On ${name}'s LinkedIn profile, click Connect, then Add a note, and paste the note. Mark it as sent once the request is out.`;
+        : link?.via === 'linkedin_connect'
+          ? `On ${name}'s LinkedIn profile, click Connect, then Add a note, and paste the note. Mark it as sent once the request is out.`
+          : `Paste the message into LinkedIn and send it to ${name}, then mark it as sent.`;
     actions = (
       <>
         <Button
