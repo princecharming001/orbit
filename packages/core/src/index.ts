@@ -5,6 +5,7 @@ export * from './drafts/validate';
 export * from './email/triage';
 export * from './entity/resolve';
 export * from './graph/edges';
+export * from './graph/introWeb';
 export * from './graph/layout';
 export * from './graph/paths';
 export * from './labels';

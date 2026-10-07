@@ -2370,6 +2370,7 @@ export function buildDemoDataset(
       close: (a: Person) => `I'll tell ${a.firstName} how much I appreciated the intro.`,
     },
   ];
+  const introduced: { b: Person; thanks: Date }[] = [];
   others.slice(6, 8).forEach(({ p: b, topic }, k) => {
     const a = regulars[k]?.p;
     const aThanks = a && thankedAt.get(a.id);
@@ -2426,6 +2427,135 @@ export function buildDemoDataset(
       invitedAt: addMinutes(reply, 45),
     });
     pastChat(b, th, ev, addMinutes(reply, 40), thanks, { out: thanks, in: reply });
+    introduced.push({ b, thanks });
+  });
+  // Both of the people met through those intros later passed the student on again, so the introductions reach a
+  // third generation. Each sends the student to someone at a firm they worked at, else in their own line of work,
+  // and every loop is closed: the intro, a call, and a thank-you that promises to tell the introducer.
+  const SECOND = [
+    {
+      body: (a: Person, c: Person, standing: string) =>
+        `Hi ${meFirst} and ${c.firstName},\n\n${meFirst}, meet ${c.firstName}. ${c.firstName} is a ${c.currentTitle} at ${c.currentOrganizationRaw}, and the first person I'd ask about what the work there looks like today. ${c.firstName}, ${meFirst} is the ${schoolShort} ${standing} I mentioned who is weighing product against engineering. Over to the two of you.\n\n${a.firstName}`,
+      ack: (a: Person, c: Person) =>
+        `Thanks, ${a.firstName}, and I'll move you to bcc.\n\n${c.firstName}, it's good to meet you. Could we find 15 minutes sometime soon? I'd like to hear how a new engineer at ${c.currentOrganizationRaw} decides what to work on.\n\n${meFirst}`,
+      subject: (a: Person) => `${a.firstName} thought we should talk`,
+      propose: (a: Person, when: string) =>
+        `Glad ${a.firstName} put us in touch. Does ${when} work for a call?`,
+      accept: (when: string) => `${when} is great, thank you. I'll be there.`,
+      thanks: (when: string) => `Thank you for your help ${when}.`,
+      advice:
+        'Your point that a small team feels every slow build made me rethink how I set up my own projects.',
+      close: (a: Person) => `I'll make sure ${a.firstName} hears how useful it was.`,
+    },
+    {
+      body: (a: Person, c: Person, standing: string) =>
+        `Hi ${meFirst} and ${c.firstName},\n\n${meFirst}, meet ${c.firstName}. ${c.firstName} is a ${c.currentTitle} at ${c.currentOrganizationRaw} and the right person for your questions about the trading side of finance. ${c.firstName}, ${meFirst} is a ${schoolShort} ${standing} who asked me sharp questions about how finance works. I'll let you take it from here.\n\n${a.firstName}`,
+      ack: (a: Person, c: Person) =>
+        `Thank you, ${a.firstName}, moving you to bcc so your inbox stays quiet.\n\n${c.firstName}, thanks for being open to a call. Would 15 minutes sometime soon be possible? I'm curious what engineering looks like at a trading firm.\n\n${meFirst}`,
+      subject: (a: Person) => `Following ${a.firstName}'s note`,
+      propose: (a: Person, when: string) => `Any friend of ${a.firstName}'s is welcome. How about ${when}?`,
+      accept: (when: string, c: Person) => `${when} suits me well. Thank you, ${c.firstName}.`,
+      thanks: (_: string, slot: Date) => `Thanks a lot for the perspective ${partOfDay(slot)}.`,
+      advice:
+        'Hearing how closely engineers and traders work together made the job far more concrete for me.',
+      close: (a: Person) => `I'll let ${a.firstName} know the intro was worth it.`,
+    },
+  ];
+  const RELATED: Record<string, string[]> = {
+    'Investment banking': ['Trading', 'Consulting', 'Fintech'],
+    Consulting: ['Investment banking', 'Fintech'],
+    Trading: ['Investment banking', 'Fintech'],
+    Fintech: ['Software', 'Trading'],
+    Software: ['AI', 'Fintech'],
+    AI: ['Software'],
+  };
+  const talkedTo = () => {
+    const ids = new Set(threads.flatMap((t) => t.participantPersonIds));
+    return people.filter((p) => ids.has(p.id));
+  };
+  /** Someone the introducer could vouch for: at a firm they worked at, then their own, then a neighbouring field. */
+  const vouchFor = (a: Person): Person | undefined => {
+    const talked = talkedTo();
+    const firsts = new Set(talked.map((p) => p.firstName));
+    const lasts = new Set(talked.map((p) => p.lastName));
+    const vouchable = (p: Person) =>
+      !!p.primaryEmail &&
+      !talked.includes(p) &&
+      !firsts.has(p.firstName) &&
+      !lasts.has(p.lastName) &&
+      // the Stripe referral runs through Maya
+      p.currentOrganizationId !== 'org_stripe' &&
+      ['swe', 'trading', 'data', 'pm'].includes(fnOf.get(p.id) ?? '');
+    const past = affiliations
+      .filter((x) => x.personId === a.id && x.kind === 'employment' && !x.isCurrent)
+      .map((x) => x.organizationId);
+    const industry = DEMO_ORGS.find((o) => `org_${o.slug}` === a.currentOrganizationId)?.industry ?? '';
+    const near = DEMO_ORGS.filter((o) => (RELATED[industry] ?? []).includes(o.industry))
+      .sort(
+        (x, y) =>
+          (RELATED[industry] ?? []).indexOf(x.industry) - (RELATED[industry] ?? []).indexOf(y.industry),
+      )
+      .map((o) => `org_${o.slug}`);
+    for (const orgId of [...past, a.currentOrganizationId, ...near]) {
+      const c = people.find((p) => p.currentOrganizationId === orgId && vouchable(p));
+      if (c) return c;
+    }
+    return undefined;
+  };
+  introduced.forEach(({ b: a, thanks: aThanks }, k) => {
+    const c = vouchFor(a);
+    const x = SECOND[k];
+    if (!c || !x) return;
+    const intro = businessDay(aThanks, 3, 10, 5 + k * 13);
+    addThread([a, c], `Intro: ${meFirst} <> ${c.firstName}`, [
+      {
+        dir: 'in',
+        from: a,
+        cc: [c],
+        at: intro,
+        body: x.body(a, c, standingAt(intro)),
+        signal: 'intro_offer',
+      },
+      {
+        dir: 'out',
+        to: [c],
+        at: addMinutes(intro, 95),
+        body: x.ack(a, c),
+        signal: 'other',
+      },
+    ]);
+    const reply = businessDay(intro, 1, 12, 20);
+    const slot = businessDay(intro, 4, 16);
+    const thanks = businessDay(slot, 0, 18, 25);
+    const when = `${weekday(slot)} at 4pm`;
+    const th = addThread([c], x.subject(a), [
+      {
+        dir: 'in',
+        at: reply,
+        body: `Hi ${meFirst},\n\n${x.propose(a, when)}\n\n${c.firstName}`,
+        signal: 'scheduling_proposal',
+        times: proposal(slot, when),
+      },
+      {
+        dir: 'out',
+        at: addMinutes(reply, 35),
+        body: `${x.accept(when, c)}\n\n${meFirst}`,
+        signal: 'scheduling_proposal',
+      },
+      {
+        dir: 'out',
+        at: thanks,
+        body: `Hi ${c.firstName},\n\n${x.thanks(dayRef(slot, thanks), slot)} ${x.advice} ${x.close(a)}\n\n${meFirst}`,
+        signal: 'thank_you',
+      },
+    ]);
+    const ev = addEvent(c, {
+      id: `ev_intro2_${c.id}`,
+      title: `${meFirst} / ${c.firstName}`,
+      start: slot,
+      invitedAt: addMinutes(reply, 40),
+    });
+    pastChat(c, th, ev, addMinutes(reply, 35), thanks, { out: thanks, in: reply });
   });
   return {
     user,

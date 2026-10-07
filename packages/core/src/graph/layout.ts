@@ -637,10 +637,12 @@ export function countOverlaps(nodes: Pick<OrbitNode, 'angle' | 'radius' | 'size'
   return n;
 }
 
+/** One revolution of the orbit's slow turn. */
+export const ORBIT_PERIOD_MS = 12 * 60_000;
+
 /** One slow rotation shared by every ring (one revolution in 12 minutes), so company wedges stay aligned. */
 export function orbitRotation(elapsedMs: number): number {
-  const period = 12 * 60_000;
-  return ((elapsedMs % period) / period) * Math.PI * 2;
+  return ((elapsedMs % ORBIT_PERIOD_MS) / ORBIT_PERIOD_MS) * Math.PI * 2;
 }
 
 /** Rings no longer turn at different speeds (that broke the wedges); every ring uses orbitRotation. */
