@@ -58,7 +58,16 @@ export type StageTrigger =
   | { type: 'event_cancelled' }
   | { type: 'note_ingested'; confidence: number }
   | { type: 'timer_followed_up_14d' }
-  | { type: 'timer_no_response'; bumps: number; maxBumps: number; daysSilent: number }
+  /** a chat that ended two weeks ago with no thank-you on record: it is a nurture relationship now */
+  | { type: 'timer_completed_14d' }
+  | {
+      type: 'timer_no_response';
+      bumps: number;
+      maxBumps: number;
+      daysSilent: number;
+      /** business days of silence (holidays and the winter freeze excluded); preferred over daysSilent when set */
+      businessDaysSilent?: number;
+    }
   | { type: 'warmup_ready' };
 
 export interface StageDecision {
@@ -141,13 +150,37 @@ export function decideTransition(from: ChatStage, trig: StageTrigger): StageDeci
         : undefined;
     case 'timer_followed_up_14d':
       return from === 'followed_up' ? d('nurturing', 1, 'timer:followed_up_14d') : undefined;
-    case 'timer_no_response':
-      return from === 'outreach_sent' && trig.bumps >= trig.maxBumps && trig.daysSilent >= 14
-        ? d('no_response', 1, 'timer:no_response')
+    case 'timer_completed_14d':
+      return from === 'completed' ? d('nurturing', 1, 'timer:completed_14d') : undefined;
+    case 'timer_no_response': {
+      // bumps exhausted and ten more business days of silence, or three weeks (15 business days) of silence whether
+      // or not a bump went out
+      const exhausted =
+        trig.bumps >= trig.maxBumps &&
+        (trig.businessDaysSilent !== undefined
+          ? trig.businessDaysSilent >= NO_RESPONSE_AFTER_BUMPS_BUSINESS_DAYS
+          : trig.daysSilent >= NO_RESPONSE_AFTER_BUMPS_DAYS);
+      // in business days when known, so a holiday stretch or the winter freeze cannot close a thread before the
+      // next bump was even due
+      const stale =
+        trig.businessDaysSilent !== undefined
+          ? trig.businessDaysSilent >= NO_RESPONSE_SILENT_BUSINESS_DAYS
+          : trig.daysSilent >= NO_RESPONSE_SILENT_DAYS;
+      return from === 'outreach_sent' && (exhausted || stale)
+        ? d('no_response', 1, exhausted ? 'timer:no_response' : 'timer:no_response_silent')
         : undefined;
+    }
     case 'warmup_ready':
       return undefined; // warm-up readiness produces a suggestion, not a transition
   }
 }
 
 export const PROPOSE_THRESHOLD = 0.8;
+/** outreach_sent -> no_response: this many days of silence after the last allowed bump ... */
+export const NO_RESPONSE_AFTER_BUMPS_DAYS = 14;
+/** ... measured in business days when the caller knows them (the sector's bump cap, then ten business days) */
+export const NO_RESPONSE_AFTER_BUMPS_BUSINESS_DAYS = 10;
+/** ... or this many days of silence with no bump sent at all (a dismissed or never-sent bump must not strand the chat) */
+export const NO_RESPONSE_SILENT_DAYS = 21;
+/** ... the same three weeks in business days (holidays and the winter freeze do not count); always past the last bump */
+export const NO_RESPONSE_SILENT_BUSINESS_DAYS = 15;

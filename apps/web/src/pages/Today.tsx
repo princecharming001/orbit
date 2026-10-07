@@ -1,10 +1,11 @@
+import type { Suggestion } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { RefreshCw } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { SuggestionCard } from '../components/SuggestionCard';
 import { db } from '../db/schema';
-import { generateBrief } from '../engine/brief';
+import { ensureDrafts, generateBrief, revalidatePending } from '../engine/brief';
 import { useSession } from '../state/session';
 import { Avatar, Button, Card, EmptyState, relDate, Spinner, Stat } from '../ui';
 
@@ -21,7 +22,12 @@ const PROVIDER_LABELS: Record<string, string> = {
 export function Today() {
   const { user, userId } = useSession();
   const [busy, setBusy] = useState(false);
+  const [showMore, setShowMore] = useState(false);
   const now = new Date();
+  // before showing the brief, retire anything that stopped being true since it was made
+  useEffect(() => {
+    if (userId) revalidatePending(userId).catch(() => undefined);
+  }, [userId]);
   const briefs = useLiveQuery(
     () => (userId ? db.briefs.where('userId').equals(userId).toArray() : []),
     [userId],
@@ -83,9 +89,20 @@ export function Today() {
       </div>
     );
   const byId = new Map(people.map((p) => [p.id, p]));
-  const inBrief = latest ? suggestions.filter((s) => latest.suggestionIds.includes(s.id)) : [];
-  const rest = suggestions.filter((s) => !latest || !latest.suggestionIds.includes(s.id));
+  const live = suggestions.filter((s) => stillTrue(s, now));
+  const inBrief = latest ? live.filter((s) => latest.suggestionIds.includes(s.id)) : [];
+  const rest = live.filter((s) => !s.deferred && (!latest || !latest.suggestionIds.includes(s.id)));
   const cards = [...inBrief, ...rest].sort((a, b) => b.priorityScore - a.priorityScore);
+  const more = live
+    .filter((s) => s.deferred && !latest?.suggestionIds.includes(s.id))
+    .sort((a, b) => b.priorityScore - a.priorityScore);
+  const openMore = async () => {
+    setShowMore(true);
+    await ensureDrafts(
+      user,
+      more.map((s) => s.id),
+    );
+  };
   const weekStart = new Date(now);
   weekStart.setDate(now.getDate() - ((now.getDay() + 6) % 7));
   weekStart.setHours(0, 0, 0, 0);
@@ -182,6 +199,12 @@ export function Today() {
           {cards.map((s) => (
             <SuggestionCard key={s.id} s={s} />
           ))}
+          {more.length > 0 && !showMore && (
+            <Button onClick={openMore} data-testid="today-more">
+              {more.length} more suggestion{more.length === 1 ? '' : 's'}
+            </Button>
+          )}
+          {showMore && more.map((s) => <SuggestionCard key={s.id} s={s} />)}
         </div>
         <div className="space-y-4 min-w-0">
           <Card>
@@ -245,4 +268,17 @@ export function Today() {
       </div>
     </div>
   );
+}
+
+/** Cards whose moment has passed are hidden at once, even before the engine retires them. */
+function stillTrue(s: Suggestion, now: Date): boolean {
+  if (s.kind === 'schedule_confirm') {
+    const start = (s.payload.time as { startIso?: string } | undefined)?.startIso;
+    if (start && new Date(start) <= now) return false;
+  }
+  if (s.kind === 'prep_brief') {
+    const start = s.signals.startAt as string | undefined;
+    if (start && new Date(start) <= now) return false;
+  }
+  return true;
 }

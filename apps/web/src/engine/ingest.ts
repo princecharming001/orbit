@@ -1,8 +1,8 @@
 import type { CalendarEvent, CoffeeChat, EmailMessage, EmailThread, Person, User } from '@orbit/core';
 import {
+  addBusinessDays,
   detectOutOfOffice,
   emailDomain,
-  GRATITUDE,
   heuristicSignal,
   heuristicTriage,
   isAutomatedSender,
@@ -14,6 +14,7 @@ import {
   normalizeEmail,
   parseAddress,
   parseName,
+  parseReturnDate,
   splitSignature,
   stripDiacritics,
   stripQuotedReply,
@@ -22,6 +23,7 @@ import { addTouchpoint, notify, recomputePersonStrength } from '../db/repo';
 import { db } from '../db/schema';
 import { llmEnabled, llmSignal, llmTriage } from '../integrations/anthropic';
 import { evaluateImmediateSuggestions, surfaceLlmFailure } from './brief';
+import { processIntroductions } from './introductions';
 import { loadPeopleCache, upsertPerson } from './people';
 import { evaluateTrigger } from './stages';
 
@@ -350,6 +352,10 @@ export async function ingestEmails(
         thread.participantPersonIds.length <= 3
       )
         await processNetworkingThread(user, thread, newMessages, all, useLlm, now);
+      // a group email that introduces the student to someone opens a card for that person (a small intro thread
+      // read above may already have opened it; this records the intro and fills in only what is missing)
+      if (thread.participantPersonIds.length > 1)
+        await processIntroductions(user, thread, newMessages, [...userEmails], now);
       for (const pid of thread.participantPersonIds) await recomputePersonStrength(pid, now);
     }
     done++;
@@ -403,8 +409,6 @@ async function retireSchedulingCards(
 const ACTIVE = (c: CoffeeChat) => !['declined', 'no_response', 'archived'].includes(c.stage);
 /** An intro older than this is history, not a to-do: no new chat is created for the person introduced. */
 const INTRO_CHAT_WINDOW_MS = 30 * 86_400_000;
-/** A note with thanks sent this soon after a completed chat is the thank-you, whatever else it says. */
-const THANK_YOU_WINDOW_MS = 7 * 86_400_000;
 
 async function processNetworkingThread(
   user: User,
@@ -507,6 +511,7 @@ async function processNetworkingThread(
         c.outOfOfficeUntil = ooo.returnDate;
         await db.chats.update(c.id, { outOfOfficeUntil: ooo.returnDate, updatedAt: now.toISOString() });
       }
+      await holdBumpForOutOfOffice(c, m, user.timezone, now, ooo.returnDate);
       touched.add(counterpartId);
       continue;
     }
@@ -564,6 +569,8 @@ async function processNetworkingThread(
         c.outOfOfficeUntil = back;
         await db.chats.update(c.id, { outOfOfficeUntil: back, updatedAt: now.toISOString() });
       }
+      // not a reply: the thread is still waiting on them, and the bump waits until they are back
+      if (c) await holdBumpForOutOfOffice(c, m, user.timezone, now, back);
       if (m.fromPersonId) touched.add(m.fromPersonId);
       continue;
     }
@@ -605,6 +612,7 @@ async function processNetworkingThread(
         { type: 'inbound_signal', signal, confidence },
         { table: 'messages', id: m.id, at: m.sentAt },
         now,
+        new Date(m.sentAt),
       );
       touched.add(sender.id);
       // an intro: the people the sender put on the thread become chats the student can open, credited to the sender
@@ -633,6 +641,7 @@ async function processNetworkingThread(
               threadId: thread.id,
               referrerPersonId: sender.id,
               referrerName: sender.displayName,
+              introducedAt: m.sentAt,
               createdAt: m.sentAt,
               updatedAt: now.toISOString(),
             };
@@ -650,44 +659,34 @@ async function processNetworkingThread(
           m.bodyText.slice(0, 120),
           `/people/${sender.id}`,
         );
-    } else if (!(await orbitOutboundId(user.id, m))) {
-      // a message Orbit sent through Gmail was counted when it was sent; otherwise the student's message moves the chats of the people it was addressed to
+    } else {
+      // the student's message moves the chats of the people it was addressed to; a message Orbit sent itself
+      // already moved its chat (and counted the bump) in the send path
+      const sentByOrbit =
+        Object.keys(m.headers ?? {}).some((k) => k.toLowerCase() === 'x-orbit-message-id') ||
+        !!(await orbitOutboundId(user.id, m));
       const targets = [...chats.entries()].filter(
         ([pid]) => chats.size === 1 || m.toEmails.some((e) => byEmail(e)?.id === pid),
       );
       for (const [pid, c] of targets) {
-        let kind: 'thank_you' | 'schedule' | 'outreach' | 'other' =
-          signal === 'thank_you'
-            ? 'thank_you'
-            : signal === 'scheduling_proposal'
-              ? 'schedule'
-              : c.stage === 'identified' || c.stage === 'warming'
-                ? 'outreach'
-                : 'other';
-        const sinceDone = c.completedAt
-          ? new Date(m.sentAt).getTime() - new Date(c.completedAt).getTime()
-          : -1;
-        if (
-          kind !== 'thank_you' &&
-          c.stage === 'completed' &&
-          sinceDone >= 0 &&
-          sinceDone < THANK_YOU_WINDOW_MS &&
-          GRATITUDE.test(m.bodyText)
-        )
-          kind = 'thank_you';
-        await db.chats.update(c.id, {
-          lastOutboundAt: m.sentAt,
+        // anything sent after the conversation is the thank-you, whatever the wording
+        const kind = outboundKind(c, signal);
+        const changes: Partial<CoffeeChat> = {
+          lastOutboundAt: c.lastOutboundAt && c.lastOutboundAt > m.sentAt ? c.lastOutboundAt : m.sentAt,
           firstOutreachAt: c.firstOutreachAt ?? m.sentAt,
           updatedAt: now.toISOString(),
-        });
-        c.lastOutboundAt = m.sentAt;
-        c.firstOutreachAt = c.firstOutreachAt ?? m.sentAt;
-        await evaluateTrigger(
-          c,
-          { type: 'outbound_sent', kind },
-          { table: 'messages', id: m.id, at: m.sentAt },
-          now,
-        );
+        };
+        // a follow-up the student sent from their own mail still counts toward the bump limit
+        if (kind === 'bump' && !sentByOrbit) changes.bumpCount = c.bumpCount + 1;
+        await db.chats.update(c.id, changes);
+        Object.assign(c, changes);
+        if (!sentByOrbit)
+          await evaluateTrigger(
+            c,
+            { type: 'outbound_sent', kind },
+            { table: 'messages', id: m.id, at: m.sentAt },
+            now,
+          );
         touched.add(pid);
       }
     }
@@ -697,6 +696,47 @@ async function processNetworkingThread(
     const c = chats.get(pid);
     if (c) await evaluateImmediateSuggestions(user.id, { chatId: c.id, personId: pid }, now);
   }
+}
+
+/**
+ * An out-of-office reply holds the next bump until two business days after the return date it names, or five
+ * business days after the reply when it names none. `returnDate` (YYYY-MM-DD) is the date the email reader already
+ * found, when it found one.
+ */
+async function holdBumpForOutOfOffice(
+  chat: CoffeeChat,
+  m: EmailMessage,
+  tz: string | undefined,
+  now: Date,
+  returnDate?: string,
+): Promise<void> {
+  const sent = new Date(m.sentAt);
+  const back = returnDate ? new Date(`${returnDate}T12:00:00Z`) : parseReturnDate(m.bodyText, sent, tz);
+  const notBefore = (back ? addBusinessDays(back, 2, tz) : addBusinessDays(sent, 5, tz)).toISOString();
+  if (chat.bumpNotBefore && chat.bumpNotBefore >= notBefore) return;
+  await db.chats.update(chat.id, { bumpNotBefore: notBefore, updatedAt: now.toISOString() });
+  chat.bumpNotBefore = notBefore;
+}
+
+/**
+ * What an outbound message in a networking thread is, from where the chat stands: anything sent after the
+ * conversation is the thank-you (whatever the wording), and a second message into silence is a bump.
+ */
+export function outboundKind(
+  chat: Pick<CoffeeChat, 'stage' | 'lastOutboundAt' | 'lastInboundAt'>,
+  signal: string | undefined,
+): 'outreach' | 'bump' | 'schedule' | 'thank_you' | 'other' {
+  if (chat.stage === 'completed') return 'thank_you';
+  if (signal === 'thank_you') return 'thank_you';
+  if (signal === 'scheduling_proposal') return 'schedule';
+  if (chat.stage === 'identified' || chat.stage === 'warming') return 'outreach';
+  if (
+    chat.stage === 'outreach_sent' &&
+    chat.lastOutboundAt &&
+    (!chat.lastInboundAt || chat.lastInboundAt < chat.lastOutboundAt)
+  )
+    return 'bump';
+  return 'other';
 }
 
 export interface RawEvent {
@@ -847,22 +887,43 @@ export async function ingestEvents(
           chat,
           { type: 'event_scheduled', confidence },
           { table: 'events', id: ev.id, at: r.startAt },
+          now,
           new Date(r.startAt),
         );
+      // the chat was completed when the meeting ended, not when Orbit noticed
       await evaluateTrigger(
         chat,
         { type: 'event_ended', confidence: confidence >= 0.9 ? 0.95 : 0.7 },
         { table: 'events', id: ev.id, at: r.endAt },
         now,
+        new Date(r.endAt),
       );
       await db.chats.update(chat.id, { completedAt: chat.completedAt ?? r.endAt });
+      chat.completedAt = chat.completedAt ?? r.endAt;
+      // mail is often synced before the calendar: a message already sent after the meeting is the thank-you
+      if (chat.stage === 'completed' && chat.lastOutboundAt && chat.lastOutboundAt > r.endAt)
+        await evaluateTrigger(
+          chat,
+          { type: 'outbound_sent', kind: 'thank_you' },
+          { table: 'events', id: ev.id },
+          now,
+          new Date(chat.lastOutboundAt),
+        );
       await recomputePersonStrength(pid, now);
     } else {
+      // the invite's creation time when the calendar gives it; otherwise the last message in the thread is the
+      // closest evidence of when the time was agreed
+      const agreedAt = [chat.lastInboundAt, chat.lastOutboundAt]
+        .filter((x): x is string => !!x)
+        .sort()
+        .pop();
+      const scheduledAt = r.createdAt ?? agreedAt;
       await evaluateTrigger(
         chat,
         { type: 'event_scheduled', confidence },
         { table: 'events', id: ev.id, at: r.createdAt },
         now,
+        scheduledAt ? new Date(scheduledAt) : undefined,
       );
     }
     await evaluateImmediateSuggestions(user.id, { chatId: chat.id, personId: pid }, now);

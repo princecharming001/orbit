@@ -30,7 +30,7 @@ import {
   messageIdTokens,
 } from '../integrations/google';
 import { evaluateImmediateSuggestions, findReferrerFor } from './brief';
-import { evaluateTrigger } from './stages';
+import { evaluateTrigger, recordAlreadyDone } from './stages';
 
 /** Provider sends wait this long in `queued` so the student can undo (01 §6, 07 §5, 14 §7). */
 export const UNDO_WINDOW_MS = 60_000;
@@ -925,6 +925,7 @@ export async function dismissSuggestion(userId: string, s: Suggestion, reason: s
     await transition(s.outboundMessageId, ['draft', 'failed', 'queued', 'handed_off'], {
       status: 'cancelled',
     });
+  if (reason === 'already_did') await recordAlreadyDone(s);
 }
 
 export async function snoozeSuggestion(userId: string, s: Suggestion, days: number): Promise<void> {

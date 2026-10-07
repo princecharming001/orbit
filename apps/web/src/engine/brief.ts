@@ -18,20 +18,24 @@ import {
   generateCandidates,
   generateDraft,
   isBlocked,
+  isQuietDay,
+  isRuleSuggestion,
   newId,
   STAGE_LABELS,
+  scoreCandidate,
   selectForBrief,
+  staleReason,
   suggestionFromCandidate,
   todayKey,
   validateDraft,
   warmUpProgress,
 } from '@orbit/core';
-import { feedback, notify, recomputeAllStrengths } from '../db/repo';
+import { addTouchpoint, feedback, notify, recomputeAllStrengths } from '../db/repo';
 import { db } from '../db/schema';
 import { describeLlmFailure, hasLlm, llmDraft, llmSummary, toLlmError } from '../integrations/anthropic';
 import { bestPathStrength, buildReachGraph } from './graph';
 import { personSummary } from './prep';
-import { runTimedStageRules } from './stages';
+import { retireSuggestions, runTimedStageRules } from './stages';
 
 const DAY = 86_400_000;
 
@@ -65,6 +69,7 @@ export async function surfaceLlmFailure(userId: string, e: unknown): Promise<und
 
 async function ruleInput(userId: string, now: Date, scope?: { chatId?: string; personId?: string }) {
   const [
+    user,
     settings,
     people,
     allChats,
@@ -75,7 +80,9 @@ async function ruleInput(userId: string, now: Date, scope?: { chatId?: string; p
     recommendations,
     outbound,
     feedbackRows,
+    touchpoints,
   ] = await Promise.all([
+    db.users.get(userId),
     db.settings.get(userId),
     db.people.where('userId').equals(userId).toArray(),
     db.chats.where('userId').equals(userId).toArray(),
@@ -86,7 +93,15 @@ async function ruleInput(userId: string, now: Date, scope?: { chatId?: string; p
     db.recommendations.where('userId').equals(userId).toArray(),
     db.outbound.where('userId').equals(userId).toArray(),
     db.feedback.where('userId').equals(userId).toArray(),
+    db.touchpoints.where('userId').equals(userId).toArray(),
   ]);
+  // the last real conversation per person (not a CC, a connection or a like)
+  const lastConversationByPerson = new Map<string, string>();
+  for (const t of touchpoints) {
+    if (!CONVERSATION_TOUCHPOINTS.has(t.kind)) continue;
+    const prev = lastConversationByPerson.get(t.personId);
+    if (!prev || prev < t.occurredAt) lastConversationByPerson.set(t.personId, t.occurredAt);
+  }
   const chats = scope?.chatId
     ? allChats.filter((c) => c.id === scope.chatId)
     : scope?.personId
@@ -97,7 +112,8 @@ async function ruleInput(userId: string, now: Date, scope?: { chatId?: string; p
     if (!c.threadId) continue;
     const msgs = await db.messages.where('threadId').equals(c.threadId).toArray();
     const last = msgs
-      .filter((m) => m.direction === 'inbound' && !m.isAutomated)
+      // an auto-reply or an out-of-office note is not the person answering
+      .filter((m) => m.direction === 'inbound' && !m.isAutomated && m.signal !== 'out_of_office')
       .sort((a, b) => b.sentAt.localeCompare(a.sentAt))[0];
     if (last) lastInboundByChat.set(c.id, last);
   }
@@ -160,8 +176,19 @@ async function ruleInput(userId: string, now: Date, scope?: { chatId?: string; p
     outreachSentThisWeek,
     freeSlotsIso: freeSlots(events, now),
     recentlyContacted,
+    timezone: user?.timezone,
+    lastConversationByPerson,
   };
 }
+
+const CONVERSATION_TOUCHPOINTS = new Set([
+  'meeting',
+  'email_in',
+  'email_out',
+  'linkedin_in',
+  'linkedin_out',
+  'note',
+]);
 
 /** Two free 30-minute windows in the next 5 working days, 10:00–17:00 local, avoiding existing events. */
 export function freeSlots(events: { startAt: string; endAt: string; status: string }[], now: Date): string[] {
@@ -195,38 +222,158 @@ export async function upsertSuggestions(
   cands: (Candidate & { priorityScore: number })[],
   now: Date,
   briefId?: string,
+  opts: { deferred?: boolean } = {},
 ): Promise<Suggestion[]> {
   const out: Suggestion[] = [];
+  const deferred = opts.deferred ? true : undefined;
   for (const c of cands) {
     const existing = await db.suggestions.where('dedupeKey').equals(c.dedupeKey).first();
     if (existing) {
-      if (['pending', 'snoozed'].includes(existing.status)) {
-        if (existing.status === 'snoozed' && existing.snoozedUntil && new Date(existing.snoozedUntil) > now)
-          continue;
-        await db.suggestions.update(existing.id, {
-          status: 'pending',
-          priorityScore: c.priorityScore,
-          reasonText: c.reasonText,
-          signals: c.signals,
-          payload: { ...existing.payload, ...c.payload },
-          briefId: briefId ?? existing.briefId,
-          expiresAt: new Date(now.getTime() + 2 * DAY).toISOString(),
-        });
-        out.push({
-          ...existing,
-          status: 'pending',
-          priorityScore: c.priorityScore,
-          briefId: briefId ?? existing.briefId,
-        });
+      // a user decision (dismissed, sent, done, approved, edited) is final; a system expiry is not: the trigger is
+      // true again, so the card comes back
+      if (!['pending', 'snoozed', 'expired'].includes(existing.status)) continue;
+      if (existing.status === 'snoozed' && existing.snoozedUntil && new Date(existing.snoozedUntil) > now)
+        continue;
+      const revived = existing.status === 'expired';
+      let outboundMessageId = existing.outboundMessageId;
+      if (outboundMessageId) {
+        const draft = await db.outbound.get(outboundMessageId);
+        if (!draft || draft.status !== 'draft') outboundMessageId = undefined;
       }
-      continue; // decided ones are never recreated
+      const payload = { ...existing.payload, ...c.payload };
+      const changes: Partial<Suggestion> = {
+        status: 'pending',
+        priorityScore: c.priorityScore,
+        reasonText: c.reasonText,
+        signals: c.signals,
+        payload,
+        briefId: deferred ? existing.briefId : (briefId ?? existing.briefId),
+        deferred,
+        outboundMessageId,
+        expiredReason: undefined,
+        snoozedUntil: undefined,
+        decidedAt: undefined,
+        carriedOver:
+          briefId && !deferred && existing.briefId && existing.briefId !== briefId
+            ? existing.carriedOver + 1
+            : existing.carriedOver,
+        expiresAt: new Date(now.getTime() + 2 * DAY).toISOString(),
+      };
+      if (revived) changes.createdAt = now.toISOString();
+      await db.suggestions.update(existing.id, changes);
+      const row = { ...existing, ...changes } as Suggestion;
+      // proposed times moved on (windows rolled forward, a different slot): an untouched draft must follow
+      if (
+        outboundMessageId &&
+        TIME_KINDS.has(c.kind) &&
+        JSON.stringify(timesOf(existing.payload)) !== JSON.stringify(timesOf(payload))
+      )
+        await refreshUntouchedDraft(userId, row);
+      // something new is known about them (notes, a reply, a fact typed in): a thank-you or check-in written
+      // before that must use it
+      else if (outboundMessageId) await refreshIfFactsNewer(userId, row);
+      out.push(row);
+      continue;
     }
     const s = suggestionFromCandidate(c, userId, now, newId('s'));
-    s.briefId = briefId;
+    s.briefId = deferred ? undefined : briefId;
+    s.deferred = deferred;
     await db.suggestions.add(s);
     out.push(s);
   }
   return out;
+}
+
+const TIME_KINDS = new Set<SuggestionKind>(['schedule_propose', 'schedule_confirm']);
+const timesOf = (p: Record<string, unknown>) => [p.windows ?? null, p.time ?? null];
+
+/**
+ * Re-draft a suggestion's message when what it rests on changed (times rolled forward, notes from the chat came
+ * in), as long as the student has not touched it: an approved, edited or sent message is never rewritten.
+ */
+export async function refreshUntouchedDraft(userId: string, s: Suggestion): Promise<boolean> {
+  if (!s.outboundMessageId) return false;
+  const draft = await db.outbound.get(s.outboundMessageId);
+  if (!draft || draft.status !== 'draft' || draft.bodyFinal) return false;
+  const user = await db.users.get(userId);
+  if (!user) return false;
+  return !!(await regenerateDraft(user, draft.id, {}));
+}
+
+/**
+ * The validity pass: every pending or snoozed rule card is checked against what is true now. A card whose rule no
+ * longer fires (the chat moved on, the time passed, a newer reply arrived, the item was done) is retired as
+ * `expired` with a reason. With a scope, only that chat's (or person's) cards are checked, because the rules
+ * only ran for them.
+ */
+export async function revalidateSuggestions(
+  userId: string,
+  cands: Candidate[],
+  now: Date,
+  scope?: { chatId?: string; personId?: string },
+): Promise<number> {
+  const keys = new Set(cands.map((c) => c.dedupeKey));
+  const rows = await db.suggestions
+    .where('userId')
+    .equals(userId)
+    .filter((s) => (s.status === 'pending' || s.status === 'snoozed') && isRuleSuggestion(s))
+    .toArray();
+  let retired = 0;
+  for (const s of rows) {
+    if (keys.has(s.dedupeKey)) continue;
+    if (scope) {
+      if (SCOPE_GLOBAL_KINDS.has(s.kind)) continue;
+      const inScope = scope.chatId
+        ? s.chatId === scope.chatId
+        : !!scope.personId && !!s.chatId && s.personId === scope.personId;
+      if (!inScope) continue;
+    }
+    const chat = s.chatId ? await db.chats.get(s.chatId) : undefined;
+    const actionItem =
+      s.kind === 'action_item_reminder' && s.payload.actionItemId
+        ? await db.actionItems.get(s.payload.actionItemId as string)
+        : undefined;
+    const reason = staleReason(s, { chat, actionItem, now, stillCandidate: false }) ?? 'superseded';
+    await retireSuggestions([s], reason, now);
+    retired++;
+  }
+  return retired;
+}
+
+/** Kinds whose rules read the whole network (weekly pacing, cadences); a scoped run cannot judge them. */
+const SCOPE_GLOBAL_KINDS = new Set<SuggestionKind>([
+  'new_outreach',
+  'nurture_checkin',
+  'reconnect',
+  'action_item_reminder',
+]);
+
+/** Re-check everything pending against the current data without building a new brief (Today runs this on open). */
+export async function revalidatePending(userId: string, now = new Date()): Promise<number> {
+  const inp = await ruleInput(userId, now);
+  const retired = await revalidateSuggestions(userId, generateCandidates(inp), now);
+  await retireMovedOnConfirmations(userId, now);
+  await refreshFactDrafts(userId);
+  return retired;
+}
+
+/** Bring every pending, untouched fact-led draft up to date with what is now known about the person. */
+async function refreshFactDrafts(userId: string): Promise<void> {
+  const pending = await db.suggestions
+    .where('userId')
+    .equals(userId)
+    .filter((s) => s.status === 'pending' && !!s.outboundMessageId && FACT_DRAFT_KINDS.has(s.kind))
+    .toArray();
+  for (const s of pending) await refreshIfFactsNewer(userId, s);
+}
+
+/** Draft the message for cards that were kept without one (deferred), when the student opens them. */
+export async function ensureDrafts(user: User, ids: string[], now = new Date()): Promise<void> {
+  for (const id of ids) {
+    const s = await db.suggestions.get(id);
+    if (s && s.status === 'pending' && !s.outboundMessageId && DRAFT_KIND[s.kind])
+      await draftForSuggestion(user, s, now);
+  }
 }
 
 const DRAFT_KIND: Partial<Record<SuggestionKind, MessageKind>> = {
@@ -251,7 +398,7 @@ export interface DraftInputs {
   update?: string;
 }
 
-/** The person who introduced or pointed the student to `person`, if an intro request to them was sent. */
+/** The person who introduced or pointed the student to `person`: an intro request sent to them, or a suggestion from a chat. */
 export async function findReferrerFor(
   userId: string,
   person: Pick<Person, 'id' | 'displayName'>,
@@ -268,8 +415,14 @@ export async function findReferrerFor(
       )
       .toArray()
   ).sort((a, b) => (b.decidedAt ?? b.createdAt).localeCompare(a.decidedAt ?? a.createdAt))[0];
-  if (!intro?.personId) return undefined;
-  return db.people.get(intro.personId);
+  if (intro?.personId) return db.people.get(intro.personId);
+  // someone the student met suggested this person (captured on the prep tab)
+  const suggested = await db.facts
+    .where('personId')
+    .equals(person.id)
+    .filter((x) => x.type === 'connection' && x.sourceTable === 'suggested_by' && !x.deletedAt)
+    .last();
+  return suggested ? db.people.get(suggested.sourceId) : undefined;
 }
 
 /** One concrete thing the student has done, from the resume: the strongest project or experience line. */
@@ -450,6 +603,7 @@ export async function buildDraftContext(
     channel,
     bumpNumber: (chat?.bumpCount ?? 0) + 1,
     proposedWindows: windows,
+    missedProposal: s?.payload.missedProposal as DraftContext['missedProposal'],
     thread,
     target,
     chat: chat
@@ -457,13 +611,15 @@ export async function buildDraftContext(
           completedAt: chat.completedAt,
           stage: chat.stage,
           referrerName,
+          introducedAt: chat.introducedAt,
           warmUpNote,
           warmUpDone: warm?.done,
         }
       : referrerName
         ? { referrerName }
         : undefined,
-    update: inputs.update?.trim() || undefined,
+    // a status-news card carries the update itself (applied, interviewing, offer); the student's own text wins
+    update: inputs.update?.trim() || (s?.payload.update as string | undefined) || undefined,
     targetCompany: tc
       ? {
           name: tc.nameRaw,
@@ -618,6 +774,42 @@ export async function draftMessage(
   return msg;
 }
 
+/** Kinds whose draft leans on what the student knows about the person (what was said, their news). */
+export const FACT_DRAFT_KINDS = new Set<SuggestionKind>(['thank_you', 'nurture_checkin', 'ask_referral']);
+
+/**
+ * Re-draft an untouched thank-you, check-in or referral ask when the person has facts newer than the draft (the
+ * notes landed after the calendar event ended, the student typed a fact in). The newest fact seen is stored on the
+ * suggestion (`payload.factsAsOf`), so the same facts never cause a second re-draft. Facts the drafting itself
+ * stored (a connection line, source `outbound`) do not count.
+ */
+export async function refreshIfFactsNewer(
+  userId: string,
+  s: Suggestion,
+  opts: { factsJustAdded?: boolean } = {},
+): Promise<boolean> {
+  if (!s.personId || !s.outboundMessageId || !FACT_DRAFT_KINDS.has(s.kind)) return false;
+  const draft = await db.outbound.get(s.outboundMessageId);
+  if (!draft || draft.status !== 'draft' || draft.bodyFinal) return false;
+  const facts = await db.facts
+    .where('personId')
+    .equals(s.personId)
+    .filter((f) => !f.deletedAt && f.sourceTable !== 'outbound')
+    .toArray();
+  const newest = facts.reduce((m, f) => (f.createdAt > m ? f.createdAt : m), '');
+  // a caller that just wrote facts knows they are new even when the clock has not moved since the draft
+  const seen =
+    typeof s.payload?.factsAsOf === 'string'
+      ? s.payload.factsAsOf
+      : opts.factsJustAdded
+        ? ''
+        : draft.createdAt;
+  if (!newest || newest <= seen) return false;
+  const changed = await refreshUntouchedDraft(userId, s);
+  await db.suggestions.update(s.id, { payload: { ...s.payload, factsAsOf: newest } });
+  return changed;
+}
+
 /**
  * Re-draft an existing message with what the student supplied (a connection line, an update). The connection line
  * is kept as a fact on the person so later drafts (bumps, LinkedIn note) can reuse it.
@@ -691,7 +883,10 @@ export async function evaluateImmediateSuggestions(
   const user = await db.users.get(userId);
   if (!user || !user.onboardingCompletedAt) return;
   const inp = await ruleInput(userId, now, scope);
-  const cands = generateCandidates(inp).filter(
+  const all = generateCandidates(inp);
+  // whatever this chat's rules no longer produce is no longer true
+  await revalidateSuggestions(userId, all, now, scope);
+  const cands = all.filter(
     (c) =>
       [
         'thank_you',
@@ -702,8 +897,8 @@ export async function evaluateImmediateSuggestions(
         'ask_referral',
         'report_back',
       ].includes(c.kind) ||
-      // an intro that just landed is answered while it is fresh, not at the next brief
-      (c.kind === 'new_outreach' && !!c.signals.introducedBy),
+      // the reply to an email introduction is due now, not in the next morning's batch
+      !!c.signals.introducedBy,
   );
   const scored = selectForBrief(cands, inp.dismissCounts, 5);
   const created = await upsertSuggestions(userId, scored, now);
@@ -712,7 +907,32 @@ export async function evaluateImmediateSuggestions(
   await addConfirmationCards(userId, now);
 }
 
+/** A proposed stage change is only a question while the chat is still where it was when Orbit proposed it. */
+async function retireMovedOnConfirmations(userId: string, now: Date): Promise<void> {
+  const proposed = await db.stageEvents
+    .where('userId')
+    .equals(userId)
+    .filter((e) => e.status === 'proposed')
+    .toArray();
+  for (const e of proposed) {
+    const chat = await db.chats.get(e.chatId);
+    if (chat && (!e.fromStage || chat.stage === e.fromStage) && chat.stage !== e.toStage) continue;
+    const reason = `superseded:${chat?.stage ?? 'gone'}`;
+    await db.stageEvents.update(e.id, {
+      status: 'rejected',
+      reason: `${e.reason}|${reason}`,
+      decidedAt: now.toISOString(),
+    });
+    await retireSuggestions(
+      await db.suggestions.where('dedupeKey').equals(`stage:${e.id}`).toArray(),
+      reason,
+      now,
+    );
+  }
+}
+
 async function addConfirmationCards(userId: string, now: Date): Promise<void> {
+  await retireMovedOnConfirmations(userId, now);
   const proposed = await db.stageEvents
     .where('userId')
     .equals(userId)
@@ -850,24 +1070,27 @@ export async function generateBrief(user: User, kind: Brief['kind'], now = new D
   await recomputeAllStrengths(user.id, now);
   const inp = await ruleInput(user.id, now);
   const cands = generateCandidates(inp);
-  const selected = selectForBrief(cands, inp.dismissCounts, 7);
+  // validity pass first: nothing stale survives into (or next to) the new brief
+  await revalidateSuggestions(user.id, cands, now);
+  const people = inp.people;
+  const selected = selectForBrief(cands, inp.dismissCounts, 7, {
+    orgOf: (pid) => {
+      const p = people.get(pid);
+      return p?.currentOrganizationId ?? p?.currentOrganizationRaw;
+    },
+    quiet: isQuietDay(now, inp.settings, user.timezone),
+  });
   const briefId = existing?.id ?? newId('b');
   const sugg = await upsertSuggestions(user.id, selected, now, briefId);
+  // everything still true that did not make the cut is kept for the next brief instead of being lost
+  const chosen = new Set(selected.map((c) => c.dedupeKey));
+  const rest = cands
+    .filter((c) => !chosen.has(c.dedupeKey))
+    .map((c) => ({ ...c, priorityScore: scoreCandidate(c, inp.dismissCounts) }));
+  await upsertSuggestions(user.id, rest, now, briefId, { deferred: true });
   await addConfirmationCards(user.id, now);
   for (const s of sugg)
     if (!s.outboundMessageId && DRAFT_KIND[s.kind]) await draftForSuggestion(user, s, now);
-  // carry-over / expiry of older pending suggestions
-  const pending = await db.suggestions
-    .where('userId')
-    .equals(user.id)
-    .filter((s) => s.status === 'pending' && s.briefId !== briefId && !!s.briefId)
-    .toArray();
-  for (const s of pending) {
-    if (s.carriedOver >= 1) {
-      await db.suggestions.update(s.id, { status: 'expired', decidedAt: now.toISOString() });
-      await feedback(user.id, 'expire', { suggestionId: s.id });
-    } else await db.suggestions.update(s.id, { carriedOver: s.carriedOver + 1 });
-  }
   const upcoming = inp.events.filter(
     (e) =>
       e.status !== 'cancelled' &&
@@ -971,7 +1194,9 @@ export async function startWarmUpOrOutreach(
       outreachChannel: channel,
       bumpCount: 0,
       priority: 2,
-      warmUp: cold ? buildWarmUpPlan(person.linkedinSlug!, now, settings?.warmUpDays ?? 4) : undefined,
+      warmUp: cold
+        ? buildWarmUpPlan(person.linkedinSlug!, now, settings?.warmUpDays ?? 4, user.timezone)
+        : undefined,
       referrerPersonId: referrer?.id,
       referrerName: referrer?.firstName,
       createdAt: now.toISOString(),
@@ -1008,6 +1233,10 @@ export async function markWarmUpAction(
 ): Promise<void> {
   const chat = await db.chats.get(chatId);
   if (!chat?.warmUp) return;
+  const current = chat.warmUp.actions.find((a) => a.id === actionId);
+  if (!current) return;
+  // a second click on Done (or Skip) changes nothing: no duplicate touchpoint, no second feedback row
+  if (done ? !!current.doneAt : !!current.skippedAt || !!current.doneAt) return;
   const now = new Date().toISOString();
   const actions = chat.warmUp.actions.map((a) =>
     a.id === actionId
@@ -1021,8 +1250,7 @@ export async function markWarmUpAction(
   );
   await db.chats.update(chatId, { warmUp: { ...chat.warmUp, actions }, updatedAt: now });
   if (done) {
-    await db.touchpoints.add({
-      id: newId('tp'),
+    await addTouchpoint({
       userId,
       personId: chat.personId,
       kind: 'linkedin_engaged',

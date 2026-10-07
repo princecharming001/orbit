@@ -219,6 +219,8 @@ export interface TargetCompany {
   nameRaw: string;
   priority: 1 | 2 | 3;
   status: 'researching' | 'applied' | 'interviewing' | 'offer' | 'closed';
+  /** when the student last changed `status` (drives the applied, interviewing and offer updates) */
+  statusChangedAt?: string;
   deadline?: string;
   notes?: string;
 }
@@ -358,6 +360,8 @@ export interface EmailThread {
   chatId?: ID;
   classifiedAt?: string;
   classifiedBy?: 'heuristic' | 'llm';
+  /** set when a message in the thread introduced the student to someone (see detectIntroduction) */
+  introduction?: { introducerId: ID; introducedIds: ID[]; messageId: ID; at: string };
 }
 
 export interface EmailMessage {
@@ -439,6 +443,8 @@ export interface CoffeeChat {
   bumpCount: number;
   /** the person's out-of-office return date (YYYY-MM-DD); bumps wait until the day after */
   outOfOfficeUntil?: string;
+  /** an out-of-office reply pushed the next bump back: not before this time (return date plus two business days) */
+  bumpNotBefore?: string;
   scheduledEventId?: ID;
   completedAt?: string;
   followedUpAt?: string;
@@ -449,6 +455,8 @@ export interface CoffeeChat {
   referrerName?: string;
   /** questions the student picked on the Prep tab for the next conversation */
   prepQuestions?: string[];
+  /** when the referrer introduced the student to this person by email (the chat was opened from that intro) */
+  introducedAt?: string;
   priority: 1 | 2 | 3;
   archivedAt?: string;
   createdAt: string;
@@ -601,6 +609,10 @@ export interface Suggestion {
   carriedOver: number;
   expiresAt: string;
   decidedAt?: string;
+  /** why the system retired it (status `expired`): the trigger went away, the chat moved on, the time passed */
+  expiredReason?: string;
+  /** still true but did not make today's brief; kept (without a draft) for the next brief and listed under "more" */
+  deferred?: boolean;
   createdAt: string;
 }
 

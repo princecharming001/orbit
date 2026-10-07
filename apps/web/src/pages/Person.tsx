@@ -27,6 +27,7 @@ import { DraftEditor } from '../components/DraftEditor';
 import { feedback } from '../db/repo';
 import { db } from '../db/schema';
 import { draftMessage, needsWarmUp, refreshPersonSummary, startWarmUpOrOutreach } from '../engine/brief';
+import { addSuggestedContacts } from '../engine/introductions';
 import { buildPrep, personSummary } from '../engine/prep';
 import { applyStage } from '../engine/stages';
 import { useSession } from '../state/session';
@@ -594,6 +595,7 @@ export function PersonPage() {
               chats={chats}
               event={nextEvent}
               resumeFacets={resumeFacets}
+              userId={user.id}
             />
           )}
         </div>
@@ -797,6 +799,7 @@ function Prep({
   chats,
   event,
   resumeFacets,
+  userId,
 }: {
   person: Person;
   facts: { type: string; text: string }[];
@@ -806,7 +809,10 @@ function Prep({
   chats: CoffeeChat[];
   event?: CalendarEvent;
   resumeFacets: ResumeFacet[];
+  userId: string;
 }) {
+  const [suggested, setSuggested] = useState('');
+  const [added, setAdded] = useState<string[]>([]);
   const { user, goals } = useSession();
   const plan = useMemo(
     () =>
@@ -959,6 +965,30 @@ function Prep({
         {picked.length > 0 && (
           <p className="text-[12px] text-ink-3 mt-2" data-testid="prep-picked">
             {picked.length} picked for this chat.
+          </p>
+        )}
+        <label className="block mt-3 text-ink-2" htmlFor="prep-suggested">
+          Who did {person.firstName} suggest you talk to?
+        </label>
+        <input
+          id="prep-suggested"
+          data-testid="prep-suggested"
+          value={suggested}
+          onChange={(e) => setSuggested(e.target.value)}
+          placeholder="Priya Shah at Stripe, Tom Lee"
+          className="mt-1 w-full h-8 rounded-lg border border-line px-2.5 text-[13px]"
+          onKeyDown={async (e) => {
+            if (e.key !== 'Enter' || !suggested.trim()) return;
+            const people = await addSuggestedContacts(userId, person.id, suggested);
+            if (people.length) {
+              setAdded((a) => [...a, ...people.map((p) => p.displayName)]);
+              setSuggested('');
+            }
+          }}
+        />
+        {added.length > 0 && (
+          <p className="mt-1.5 text-ink-3">
+            Saved to Discover as suggested by {person.firstName}: {added.join(', ')}
           </p>
         )}
       </Card>

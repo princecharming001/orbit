@@ -177,6 +177,23 @@ export function inferEdges(input: EdgeInput): Edge[] {
       text: n === 1 ? 'On the same email thread with you' : `On ${n} email threads with you`,
     });
   }
+  // introductions: the introducer knows the person well enough to vouch for the student, the strongest thread edge
+  const byId = new Map(people.map((p) => [p.id, p]));
+  for (const t of input.threads) {
+    const intro = t.introduction;
+    if (!intro) continue;
+    const from = byId.get(intro.introducerId);
+    if (!from) continue;
+    for (const id of intro.introducedIds) {
+      const to = byId.get(id);
+      if (!to) continue;
+      put(from.id, to.id, 'introduced_by', 0.85, {
+        introducerId: from.id,
+        at: intro.at,
+        text: `${from.firstName} introduced you to ${to.firstName}`,
+      });
+    }
+  }
   const eventCount = new Map<string, number>();
   for (const e of input.events) {
     const ids = e.attendeePersonIds.filter((id) => peopleIds.has(id));

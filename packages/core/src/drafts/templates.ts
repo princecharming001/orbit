@@ -25,6 +25,8 @@ export interface Connection {
   text: string;
   factId?: string;
   referrerName?: string;
+  /** the referrer introduced the two of them by email, so the person already knows who the student is */
+  introduced?: boolean;
   eventName?: string;
   sharedOrg?: string;
   previous?: string; // previous org or title for transitions
@@ -69,6 +71,8 @@ export interface DraftContext {
   connection?: Connection;
   bumpNumber?: number; // 1 or 2
   proposedWindows?: { startIso: string; endIso?: string; raw?: string }[];
+  /** a time the person proposed that can no longer be accepted (it has passed, or the student is busy then) */
+  missedProposal?: { raw: string; startIso?: string; reason: 'passed' | 'busy' };
   thread?: {
     lastInboundBody?: string;
     lastInboundAt?: string;
@@ -77,11 +81,21 @@ export interface DraftContext {
     proposedTimes?: { startIso: string; raw: string }[];
     lastSignal?: string;
   };
-  target?: { name: string; firstName?: string; title?: string; org?: string; why?: string };
+  target?: {
+    name: string;
+    firstName?: string;
+    title?: string;
+    org?: string;
+    why?: string;
+    /** the recipient offered this intro earlier; the message follows up on the offer instead of asking cold */
+    offered?: boolean;
+  };
   chat?: {
     completedAt?: string;
     stage?: string;
     referrerName?: string;
+    /** set when the referrer introduced the student to this person by email */
+    introducedAt?: string;
     warmUpNote?: string;
     warmUpDone?: number;
   };
@@ -437,6 +451,23 @@ function opener(
   switch (c.kind) {
     case 'referral': {
       const r = c.referrerName ?? 'A mutual contact';
+      if (c.introduced) {
+        // they were on the intro email: thank the introducer and pick it up, no need to explain who you are twice
+        claims.push({ text: `${r} introduced the student to ${first} by email`, kind: 'shared' });
+        return {
+          text: pick(
+            [
+              `${r} was kind enough to introduce us, and it's great to meet you. I'm ${me}.`,
+              `I wanted to follow up on ${r}'s introduction. It's great to meet you. I'm ${me}.`,
+            ],
+            seed,
+            'op-intro',
+            avoid,
+          ),
+          claims,
+          saidSituation: true,
+        };
+      }
       claims.push({ text: `${r} suggested writing to ${first}`, factId: c.factId, kind: 'shared' });
       return {
         text: pick(
@@ -577,6 +608,7 @@ export function deriveConnection(ctx: DraftContext): Connection | undefined {
       kind: 'referral',
       text: ctx.person.org ? `${ctx.person.org}` : 'your work',
       referrerName: ctx.chat.referrerName,
+      introduced: !!ctx.chat.introducedAt || undefined,
     };
   const event = facts.find((x) =>
     /\b(panel|spoke at|talk at|event|info session|conference|workshop|presented)\b/i.test(x.text),
@@ -694,7 +726,11 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       const c = ctx.connection;
       const subjectCandidates: string[] = [];
       if (c?.kind === 'referral' && c.referrerName)
-        subjectCandidates.push(`${c.referrerName} suggested I write to you`);
+        subjectCandidates.push(
+          c.introduced
+            ? `Following up on ${c.referrerName}'s introduction`
+            : `${c.referrerName} suggested I write to you`,
+        );
       if (c?.kind === 'event' && c.eventName) subjectCandidates.push(`From ${c.eventName}, one follow-up`);
       if (c?.kind === 'transition' && c.previous)
         subjectCandidates.push(`Your move from ${c.previous} to ${org ?? 'your role'}`);
@@ -769,6 +805,25 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       const last = ctx.thread?.lastSignal;
       if (last === 'reschedule') {
         body = `${G}\n\nNo problem at all. Would ${windows.length === 2 ? `${windows[0]} or ${windows[1]} (${tz})` : windows[0] ? `${windows[0]} (${tz})` : 'another time next week'} work instead? If not, I'll take whatever is easiest for you.\n\n${S}`;
+      } else if (ctx.missedProposal) {
+        // they offered a time the student can no longer take: say so plainly before offering new ones
+        const m = ctx.missedProposal;
+        const when = m.startIso ? fmtWindow({ startIso: m.startIso }, ctx.user.timezone) : m.raw;
+        const opener =
+          m.reason === 'busy'
+            ? `Thank you for suggesting ${when}. Unfortunately I have a conflict then.`
+            : `I'm sorry I didn't get back to you in time for ${when}.`;
+        const offer =
+          windows.length === 2
+            ? `Would either of these work instead? ${windows[0]} or ${windows[1]} (${tz}).`
+            : windows.length === 1
+              ? `Would ${windows[0]} (${tz}) work instead?`
+              : 'Would another time next week work?';
+        const alt = ctx.user.schedulingLink
+          ? `If not, here's my calendar: ${ctx.user.schedulingLink}, or just send me a time and I'll make it fit.`
+          : "If not, send me a time and I'll make it fit.";
+        body = `${G}\n\n${opener} ${offer} ${alt}\n\n${S}`;
+        claims.push({ text: `missed proposed time: ${when}`, kind: 'logistics' });
       } else {
         const offer =
           windows.length === 2
@@ -973,6 +1028,12 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       body = `${G}\n\nSmall ask. I'm trying to learn ${why}, and I'd love to talk with ${tName}${t?.title ? ` (${t.title}${t.org ? ` at ${t.org}` : ''})` : t?.org ? ` at ${t.org}` : ''}.${link} If you'd be comfortable making a short intro, here's something you could forward:\n\n${blurb}\n\nAnd if it's not a good fit to ask, no worries at all.\n\n${S}`;
       claims.push({ text: `target: ${tName}`, kind: 'logistics' });
       subject = `Small ask: intro to ${tName}?`;
+      if (t?.offered) {
+        // following up on an intro they offered: name the offer, make forwarding a two-second task
+        const offerBlurb = `"${ctx.user.fullName} is ${me}, recruiting for ${targetLabel(ctx)} ${/intern/i.test(ctx.user.cycleLabel) ? 'internships' : 'roles'}.${cred} would love 15 minutes to hear about your work${t.org ? ` at ${t.org}` : ''}."`;
+        body = `${G}\n\nWhen we spoke, you kindly offered to introduce me to ${tName}. If that's still easy, here's a short note you could forward so it takes no time:\n\n${offerBlurb}\n\nAnd if the timing isn't right anymore, no worries at all. Thanks again for offering.\n\n${S}`;
+        subject = ctx.thread ? undefined : `Intro to ${tName}`;
+      }
       break;
     }
     case 'report_back': {
@@ -1015,7 +1076,9 @@ function shortConnection(ctx: DraftContext, c: Connection, sector: Sector, seed:
   const org = ctx.person.org;
   switch (c.kind) {
     case 'referral':
-      return `${c.referrerName ?? 'A mutual contact'} suggested I write to you.`;
+      return c.introduced
+        ? `Following up on ${c.referrerName ?? 'our mutual contact'}'s introduction.`
+        : `${c.referrerName ?? 'A mutual contact'} suggested I write to you.`;
     case 'event':
       return `We met at ${c.eventName ?? 'the event'}.`;
     case 'alumni':

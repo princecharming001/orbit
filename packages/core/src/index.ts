@@ -10,6 +10,7 @@ export * from './graph/paths';
 export * from './labels';
 export * from './linkedin/csv';
 export * from './notes/extract';
+export * from './pipeline/introductions';
 export * from './pipeline/transitions';
 export * from './recommend/score';
 export * from './resume/parse';

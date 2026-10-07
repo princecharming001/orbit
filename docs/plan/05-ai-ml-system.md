@@ -179,15 +179,16 @@ Implemented in `packages/core/src/pipeline/transitions.ts` and mirrored in `appl
 | `scheduled` | event end + 15 min, not cancelled | `completed` | 0.95 (0.7 if the event's coffee-chat confidence was < 0.9 → proposed) |
 | `scheduling|replied|outreach_sent` | note ingested matched to P | `completed` | note match confidence |
 | `scheduled` | event cancelled | `scheduling` | 1.0 |
-| `completed` | outbound `thank_you` sent (any source) | `followed_up` | 1.0 |
+| `completed` | any outbound sent after the meeting (any source, any wording; it is the thank-you) | `followed_up` | 1.0 |
 | `followed_up` | 14 days elapsed | `nurturing` | 1.0 |
-| `outreach_sent` | `bump_count ≥ max_bumps` and 14 days since last outbound, no inbound | `no_response` | 1.0 |
+| `completed` | 14 days since the meeting with no thank-you on record | `nurturing` | 1.0 |
+| `outreach_sent` | no human inbound since the last outbound (or since an out-of-office person's return) and either `bump_count ≥ max_bumps` with 10 business days since it, or 15 business days since it (holidays and the winter freeze excluded) with any bump count | `no_response` | 1.0 |
 | `nurturing|no_response|declined` | user starts new outreach | `outreach_sent` (new chat row) | 1.0 |
 | any | user drag/select | target | 1.0 (actor user) |
 
-`out_of_office` never transitions and never counts as a reply (it does not set `lastInboundAt`, so the bump and the reply rate are unaffected); when it states a return date it is stored on the chat (`outOfOfficeUntil`) and the bump waits until the day after. `reschedule` from `scheduled` → `scheduling`. Illegal transitions are rejected and logged.
+`out_of_office` never transitions and never counts as a reply (it does not set `lastInboundAt`, so the bump and the reply rate are unaffected). The return date it names ("back on Monday, October 12", "out until 10/12", "back in the office on the 12th", or the end of a range such as "out from Oct 5 to Oct 12", which means back the day after) is stored on the chat (`outOfOfficeUntil`), and the return date plus two business days becomes `bumpNotBefore` (five business days after the reply when it names no date); the bump waits until both have passed. `reschedule` from `scheduled` → `scheduling`. Illegal transitions are rejected and logged.
 
-A chat enters a stage when its evidence happened, not when Orbit read it: `stageEnteredAt` (and `completedAt`, `followedUpAt`) take the message's `sentAt`, the event's end, or the invite's creation time (`created` from Google Calendar), capped at now. A first sync of months of history therefore shows real days in stage, and a chat that ended yesterday says so on its thank-you card.
+A chat enters a stage when its evidence happened, not when Orbit read it: `stageEnteredAt` (and `completedAt`, `followedUpAt`) take the message's `sentAt`, the event's end, the note's time, or the invite's creation time (`created` from Google Calendar, else the last message in the thread), capped at now and never before the previous stage change. A first sync of months of history therefore shows real days in stage, and a chat that ended yesterday says so on its thank-you card. An outbound the student sends from their own mail into a silent `outreach_sent` thread counts as a bump. When a chat changes stage, its older `proposed` events are rejected as superseded and cards that no longer fit the new stage are retired.
 
 ---
 

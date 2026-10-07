@@ -503,6 +503,8 @@ export async function llmDraft(ctx: DraftContext, template: DraftOutput): Promis
     thread: ctx.thread,
     target: ctx.target,
     chat: ctx.chat,
+    // the time they suggested that has passed or clashes, in their words
+    missedProposal: ctx.missedProposal,
     newAffiliation: ctx.newAffiliation,
     targetCompany: ctx.targetCompany,
     reportBack: ctx.reportBack,

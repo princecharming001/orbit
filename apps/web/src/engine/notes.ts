@@ -3,7 +3,13 @@ import { heuristicNoteExtraction, newId, normalizeEmail, parseGranolaText, parse
 import { addTouchpoint, notify, recomputePersonStrength } from '../db/repo';
 import { db } from '../db/schema';
 import { hasLlm, llmNoteExtraction } from '../integrations/anthropic';
-import { evaluateImmediateSuggestions, refreshPersonSummary, surfaceLlmFailure } from './brief';
+import {
+  evaluateImmediateSuggestions,
+  FACT_DRAFT_KINDS,
+  refreshIfFactsNewer,
+  refreshPersonSummary,
+  surfaceLlmFailure,
+} from './brief';
 import { upsertPerson } from './people';
 import { evaluateTrigger } from './stages';
 
@@ -214,6 +220,7 @@ export async function processNote(user: User, note: MeetingNote, now = new Date(
       { type: 'note_ingested', confidence: note.matchConfidence ?? 0.8 },
       { table: 'notes', id: note.id },
       now,
+      new Date(note.occurredAt),
     );
     if (!chat.completedAt) await db.chats.update(chat.id, { completedAt: note.occurredAt });
   }
@@ -226,7 +233,18 @@ export async function processNote(user: User, note: MeetingNote, now = new Date(
     ext.suggestedNextStep,
     `/people/${primary.id}`,
   );
+  // drafts that lean on what was said (thank-you, check-in, referral ask) and were written before these notes
+  // existed are re-drafted with the new facts; an edited draft is left alone
+  const drafted = await db.suggestions
+    .where('personId')
+    .equals(primary.id)
+    .filter((s) => FACT_DRAFT_KINDS.has(s.kind) && s.status === 'pending' && !!s.outboundMessageId)
+    .toArray();
   await evaluateImmediateSuggestions(user.id, { personId: primary.id, chatId: chat?.id }, now);
+  for (const s of drafted) {
+    const fresh = await db.suggestions.get(s.id);
+    if (fresh?.status === 'pending') await refreshIfFactsNewer(user.id, fresh, { factsJustAdded: true });
+  }
 }
 
 export function parseDueHint(hint: string | undefined, from: Date): Date {
