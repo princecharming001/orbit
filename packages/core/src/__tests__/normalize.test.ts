@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseConnectionsCsv } from '../linkedin/csv';
+import { parseConnectedOn, parseConnectionsCsv } from '../linkedin/csv';
 import { isAutomatedSender, splitSignature, stripQuotedReply } from '../text/email';
 import { jaroWinkler } from '../text/jaro';
 import {
@@ -185,5 +185,16 @@ describe('normalizeCompany variants', () => {
     expect(normalizeCompany('Goldman Sachs & Co. LLC')).toBe('goldman sachs');
     expect(normalizeCompany('Stripe')).not.toBe(normalizeCompany('Square'));
     expect(normalizeCompany('Group')).toBe('group');
+  });
+});
+
+describe('parseConnectedOn (NRC-22)', () => {
+  it('reads the formats LinkedIn and spreadsheets write, and refuses dates that do not exist', () => {
+    expect(parseConnectedOn('07 Oct 2026')).toBe('2026-10-07');
+    expect(parseConnectedOn('Oct 7, 2026')).toBe('2026-10-07');
+    expect(parseConnectedOn('2026-10-07')).toBe('2026-10-07');
+    expect(parseConnectedOn('29 Feb 2024')).toBe('2024-02-29');
+    expect(parseConnectedOn('31 Feb 2025')).toBeUndefined();
+    expect(parseConnectedOn('2025-02-30')).toBeUndefined();
   });
 });

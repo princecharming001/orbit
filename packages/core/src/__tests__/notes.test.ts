@@ -89,3 +89,13 @@ describe('NRC-14: advice is not a promise', () => {
     expect(extractDueHint('see you next week')).toBe('next week');
   });
 });
+
+describe('NRC-22: numbers at the start of a sentence', () => {
+  it('only a list marker is stripped, never a year or a count', () => {
+    const x = heuristicNoteExtraction(
+      '3. 2024 was a big year for them. 2 of her teammates left for Ramp.',
+      'Maya',
+    );
+    expect(x.summary).toBe('2024 was a big year for them. 2 of her teammates left for Ramp.');
+  });
+});

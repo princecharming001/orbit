@@ -222,6 +222,8 @@ export interface ResumeFacet {
   text: string;
   keywords: string[];
   confirmed: boolean;
+  /** The student unchecked it when reviewing the parse: it is never used for matching or in messages. */
+  excluded?: boolean;
 }
 
 export interface Resume {

@@ -14,7 +14,7 @@ import { addTouchpoint, notify, recomputePersonStrength } from '../db/repo';
 import { db } from '../db/schema';
 import { hasLlm, llmSignal, llmTriage } from '../integrations/anthropic';
 import { evaluateImmediateSuggestions } from './brief';
-import { loadPeopleCache, upsertPerson } from './people';
+import { loadPeopleCache, suggestDuplicateMerges, upsertPerson } from './people';
 import { evaluateTrigger } from './stages';
 
 export interface RawEmail {
@@ -250,6 +250,7 @@ export async function ingestEmails(
     done++;
     opts.onProgress?.(done, byThread.size);
   }
+  await suggestDuplicateMerges(user.id, now);
   return stats;
 }
 

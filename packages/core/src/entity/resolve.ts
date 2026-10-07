@@ -110,6 +110,9 @@ export function isPlaceholderName(
   if (p.namePlaceholder) return true;
   if (!p.displayName || p.displayName.includes('@') || p.displayName === 'Unknown') return true;
   if (!p.primaryEmail) return false;
+  // a stand-in from older records is the address's local part as typed ("erodriguez", "tom wu"); a name
+  // written with capitals ("Priya Patel" for priya.patel@) is a real name that happens to fit the address
+  if (p.displayName !== p.displayName.toLowerCase()) return false;
   const squash = (x: string) => fold(x).replace(/[\s._+-]/g, '');
   const local = p.primaryEmail.slice(0, p.primaryEmail.lastIndexOf('@')).replace(/\+.*$/, '');
   return squash(p.displayName) === squash(local);
@@ -339,39 +342,92 @@ export function resolveIdentity(inc: IncomingIdentity, ctx: ResolveContext): Res
   return { kind: 'new' };
 }
 
-/** Pairwise duplicate detection across an existing people list (used after imports). */
+/**
+ * Pairwise duplicate detection across an existing people list (run after imports). Only pairs whose names
+ * agree (or that share an address or profile) are scored, so colleagues who share a surname and an employer
+ * are not mistaken for one person; each pair is scored in both directions and the stronger reading wins.
+ */
 export function findDuplicatePairs(
   people: Person[],
   ctx: Omit<ResolveContext, 'people'> = {},
 ): { a: Person; b: Person; score: number; features: ResolveFeatures }[] {
   const out: { a: Person; b: Person; score: number; features: ResolveFeatures }[] = [];
-  const byLast = new Map<string, Person[]>();
+  // blocking: same folded surname, or a shared address
+  const blocks = new Map<string, Person[]>();
+  const add = (key: string, p: Person) => {
+    const arr = blocks.get(key) ?? [];
+    if (!arr.includes(p)) arr.push(p);
+    blocks.set(key, arr);
+  };
   for (const p of people) {
-    const l = parseName(p.displayName).last.toLowerCase();
-    if (!l) continue;
-    const arr = byLast.get(l) ?? [];
-    arr.push(p);
-    byLast.set(l, arr);
+    if (!p.isHuman) continue;
+    const l = fold(parseName(p.displayName).last);
+    if (l && !isPlaceholderName(p)) add(`last:${l}`, p);
+    for (const e of new Set([p.primaryEmail, ...p.emails].filter(Boolean)))
+      add(`email:${normalizeEmail(e!)}`, p);
+    if (isPlaceholderName(p) && p.primaryEmail) {
+      // a bare address can only be linked through its domain
+      const dom = emailDomain(normalizeEmail(p.primaryEmail));
+      if (!PERSONAL_EMAIL_DOMAINS.has(dom)) add(`domain:${dom}`, p);
+    }
   }
-  for (const group of byLast.values()) {
+  for (const p of people) {
+    if (!p.isHuman || isPlaceholderName(p)) continue;
+    const doms = new Set(
+      [p.primaryEmail, ...p.emails].filter(Boolean).map((e) => emailDomain(normalizeEmail(e!))),
+    );
+    const org = normalizeCompany(p.currentOrganizationRaw).replace(/[\s&]+/g, '');
+    for (const key of blocks.keys()) {
+      if (!key.startsWith('domain:')) continue;
+      const d = key.slice(7);
+      const root = d.split('.').slice(-2, -1)[0] ?? '';
+      if (doms.has(d) || (org && root.length >= 3 && org.includes(root))) add(key, p);
+    }
+  }
+  const seen = new Set<string>();
+  const asIncoming = (p: Person): IncomingIdentity => ({
+    displayName: isPlaceholderName(p) ? undefined : p.displayName,
+    email: p.primaryEmail,
+    linkedinUrl: p.linkedinUrl,
+    companyRaw: p.currentOrganizationRaw,
+    title: p.currentTitle,
+    school: p.school,
+    source: 'manual',
+  });
+  const full = { people, ...ctx };
+  for (const group of blocks.values()) {
     for (let i = 0; i < group.length; i++) {
       for (let j = i + 1; j < group.length; j++) {
         const a = group[i]!;
         const b = group[j]!;
-        const f = computeFeatures(
-          {
-            displayName: a.displayName,
-            email: a.primaryEmail,
-            companyRaw: a.currentOrganizationRaw,
-            title: a.currentTitle,
-            school: a.school,
-            source: 'manual',
-          },
-          b,
-          { people, ...ctx },
-        );
-        const score = scoreFeatures(f);
-        if (score >= SUGGEST_THRESHOLD) out.push({ a, b, score, features: f });
+        const key = a.id < b.id ? `${a.id}|${b.id}` : `${b.id}|${a.id}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const emailsA = new Set([a.primaryEmail, ...a.emails].filter(Boolean).map((e) => normalizeEmail(e!)));
+        const sharedAddress = [b.primaryEmail, ...b.emails].some((e) => e && emailsA.has(normalizeEmail(e)));
+        const sharedProfile = !!a.linkedinSlug && a.linkedinSlug === b.linkedinSlug;
+        if (sharedAddress || sharedProfile) {
+          out.push({ a, b, score: 1, features: computeFeatures(asIncoming(a), b, full) });
+          continue;
+        }
+        let best: { score: number; features: ResolveFeatures } | undefined;
+        for (const [x, y] of [
+          [a, b],
+          [b, a],
+        ] as const) {
+          const r = scorePair(asIncoming(x), y, full);
+          const named = !isPlaceholderName(x) && !isPlaceholderName(y);
+          // the names have to agree before anything else counts
+          if (named && r.features.name_sim < 0.5) continue;
+          let { score, features } = r;
+          // an address at the employer both already list says nothing about whether they are one person
+          if (named && features.org_match > 0 && features.domain_org_match > 0) {
+            features = { ...features, domain_org_match: 0 };
+            score = Math.min(score, scoreFeatures(features));
+          }
+          if (!best || score > best.score) best = { score, features };
+        }
+        if (best && best.score >= SUGGEST_THRESHOLD) out.push({ a, b, ...best });
       }
     }
   }

@@ -484,7 +484,7 @@ function StepResume({ onNext, onBack }: { onNext: () => void; onBack: () => void
     <div className="mt-4">
       <p className="text-ink-2 text-[14px]">
         Orbit uses your resume to find people with overlapping experience and to describe you in outreach.
-        PDF, DOCX text, or TXT.
+        PDF, Word (.docx) or plain text, up to 10 MB.
       </p>
       <label className="mt-4 flex items-center justify-center gap-2 border border-dashed border-line rounded-[12px] h-28 cursor-pointer hover:bg-canvas-2">
         <input
@@ -502,17 +502,26 @@ function StepResume({ onNext, onBack }: { onNext: () => void; onBack: () => void
       {error && <p className="text-bad text-[13px] mt-2">{error}</p>}
       {facets.length > 0 && (
         <div className="mt-4">
-          <Label hint="uncheck anything that's wrong">
-            Extracted ({resume?.parseSource === 'llm' ? 'with Claude' : 'heuristic'})
+          <Label hint="uncheck anything that's wrong and Orbit won't use it">
+            {resume?.parseSource === 'llm'
+              ? 'What Claude read from your resume'
+              : 'What Orbit read from your resume'}
           </Label>
           <ul className="space-y-2 max-h-72 overflow-y-auto scroll-thin pr-1">
             {facets.map((f) => (
-              <li key={f.id} className="flex items-start gap-2 text-[13px]">
+              <li
+                key={f.id}
+                className={`flex items-start gap-2 text-[13px] ${f.excluded ? 'opacity-50' : ''}`}
+              >
                 <input
                   type="checkbox"
                   className="mt-1"
-                  checked={f.confirmed || f.confirmed === false}
-                  onChange={(e) => db.resumeFacets.update(f.id, { confirmed: e.target.checked })}
+                  checked={!f.excluded}
+                  aria-label={`Use ${f.title ?? f.kind.replace('_', ' ')}`}
+                  data-testid="ob-facet-toggle"
+                  onChange={(e) =>
+                    db.resumeFacets.update(f.id, { excluded: !e.target.checked, confirmed: e.target.checked })
+                  }
                 />
                 <span>
                   <span className="text-ink-3 uppercase text-[10px] tracking-wide mr-1.5">

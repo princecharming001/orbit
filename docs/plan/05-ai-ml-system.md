@@ -107,6 +107,10 @@ A person is `is_human = false` if created only from senders failing the prefilte
 
 `manual (user edit) > enrichment (fresh ≤ 90 d) > linkedin_csv/unipile > note extraction > email signature > calendar display name > email display name`. Each field on `people` stores its winning source in `people.fieldSources` (`displayName`, `currentTitle`, `currentOrganizationId`, `headline`, `location`, `school`) so a later lower-precedence source does not overwrite; people stored before the map existed are treated as written by their most trusted source. A placeholder name derived from an address is always replaced by the first real name.
 
+### 4.5b Duplicate detection after imports
+
+After every Gmail ingest and LinkedIn CSV import, `findDuplicatePairs` runs over the visible people and each pair at or above `SUGGEST_THRESHOLD` that the student has not already decided on becomes a pending `merge_suggestions` row (a `confirm_merge` card). Pairs are blocked by folded surname, shared address, or (for an address-only person) the employer domain. A shared address or LinkedIn profile scores 1. Otherwise the names have to agree (`name_sim >= 0.5`) before anything else counts, and an address at the employer both people already list is not evidence that they are one person, so colleagues who share a surname and an employer are never paired.
+
 ### 4.6 Merge mechanics
 
 `merge_people()` (03 section 4) repoints every child row; edges with both endpoints collapsing are deleted; duplicate touchpoints collapse on the unique key; strength is recomputed. Undo is available for 30 days from the profile's history panel.
@@ -208,7 +212,7 @@ Implemented in `packages/core/src/pipeline/transitions.ts` and mirrored in `appl
 
 ```ts
 {
-  user: { firstName, school, gradYear, majors, cycleLabel, targetFunctions, oneLiner /* from resume_facets.summary */, schedulingLink?, timezone },
+  user: { firstName, school, gradYear, majors, cycleLabel, targetFunctions, oneLiner /* from the kept resume summary facet: only a short 'a/an ...' clause with no contact details, else the template composes one from school, year and major */, schedulingLink?, timezone },
   styleCard, exemplars: [3 outbound emails of the same kind if available, else closest],
   person: { name, firstName, title, org, location, school, relationshipType, isAlumni, strength, affiliations: [...last 3] },
   facts: PersonFact[] /* type, text, occurred_at, source */ (max 15, newest first, ranked by relevance to kind),
@@ -301,7 +305,7 @@ Rules: facts about the counterpart become `person_facts` (source `meeting_notes`
 
 Heuristic path (no API key, `packages/core/src/notes/extract.ts`): title, attendee/date lines and section headings are dropped; a Summary section wins over a Transcript; speaker labels (`Priya Patel:`, `[00:01:12] Maya Wu:`, `Me:`/`Them:`) are stripped and remembered, the student's own lines only yield action items, and the counterpart's first person is turned into the student's frame ("I can refer you" → "you can refer me"). The student's promises ("I'll send my resume by Friday") are action items, never offers; advice reported as "she recommended I apply …" is advice, and becomes an action item only with an explicit deadline. Unpunctuated dictation is segmented at discourse markers (um, also, so, but, "and she …", a new name or pronoun) and fillers are removed. The attribution for a sentence is its speaker, else the first attendee named in it, else (for he/she) the attendee that pronoun last referred to, else the previous subject. The note summary is the first three cleaned sentences, cut at a word boundary. Dedupe: a new fact whose embedding cosine ≥ 0.92 with an existing non-deleted fact of the same type for the same person supersedes it (`superseded_by`) if newer, else is dropped. Personal facts (type `personal`) are limited to what the person volunteered in a professional context; the prompt forbids inferring protected characteristics, health, politics or religion.
 
-Matching the note to people (code): attendee emails → identities; else names in `participants` → entity resolution against the user's people; calendar event within ±3 h with matching attendees; `calendar_event_id` when present. Confidence rules: email match 0.98; event match 0.9; name-only unique match 0.8; ambiguous → `confirm_note_match` card.
+Matching the note to people (code, `apps/web/src/engine/notes.ts`): attendee emails → identities; else names in `participants` → entity resolution against the user's people; calendar event within ±3 h with matching attendees; `calendar_event_id` when present; else names in the text: a full name ("Maya Wu") one person has, or a capitalised first name alone ("call with Maya") that exactly one tracked person has (first names that are everyday words or months, like Will or May, only count in full). Confidence rules: email match 0.98; event match 0.9; a single full-name match 0.8 (matched, titled "Chat with <name>"). A first-name-only match or a note naming several people is attached with confidence 0.7 and stays `unmatched`; a first name several people share attaches nobody. Every note that is not matched for sure raises its `confirm_note_match` card as soon as it is saved ("Was your note from Fri, Oct 2 with Maya Wu?", or "Who was your note from Fri, Oct 2 with? It could be Maya Wu or Maya Chen."), is titled "Note from <weekday, date>", and the capture page opens on it so the student can pick the person right away, with the people it mentions listed first. Picking someone else removes the facts, action items and touchpoints the guess wrote and processes the note for the chosen person.
 
 ---
 

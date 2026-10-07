@@ -1,5 +1,6 @@
 import type { IncomingIdentity, Organization, Person, PersonField, PersonSource } from '@orbit/core';
 import {
+  findDuplicatePairs,
   incomingName,
   isPlaceholderName,
   linkedInSlug,
@@ -10,6 +11,7 @@ import {
   normalizeLinkedInUrl,
   parseName,
   resolveIdentity,
+  SUGGEST_THRESHOLD,
 } from '@orbit/core';
 import { db } from '../db/schema';
 
@@ -333,4 +335,41 @@ export async function mergePeople(userId: string, survivorId: string, mergedId: 
       await db.people.delete(mergedId);
     },
   );
+}
+
+/**
+ * Look for people who are probably the same person across the whole list (run after every import) and
+ * record a merge suggestion for each pair the student has not already decided on. Returns how many were added.
+ */
+export async function suggestDuplicateMerges(userId: string, now = new Date()): Promise<number> {
+  const { people, orgDomains } = await loadPeopleCache(userId);
+  const visible = people.filter((p) => !p.hiddenAt);
+  const pairs = findDuplicatePairs(visible, { orgDomains });
+  if (!pairs.length) return 0;
+  const known = new Set(
+    (await db.merges.where('userId').equals(userId).toArray()).map((m) =>
+      [m.personAId, m.personBId].sort().join('|'),
+    ),
+  );
+  let added = 0;
+  for (const { a, b, score, features } of pairs) {
+    if (score < SUGGEST_THRESHOLD) continue;
+    const key = [a.id, b.id].sort().join('|');
+    if (known.has(key)) continue;
+    known.add(key);
+    // the older record survives a merge, so it is shown first
+    const [first, second] = a.createdAt <= b.createdAt ? [a, b] : [b, a];
+    await db.merges.add({
+      id: newId('mrg'),
+      userId,
+      personAId: first.id,
+      personBId: second.id,
+      score,
+      features: features as unknown as Record<string, number>,
+      status: 'pending',
+      createdAt: now.toISOString(),
+    });
+    added++;
+  }
+  return added;
 }

@@ -234,3 +234,58 @@ describe('job changes and free mailboxes (NRC-15)', () => {
     expect(r.kind).toBe('new');
   });
 });
+
+describe('findDuplicatePairs (NRC-20)', () => {
+  const list = [
+    person('figma', 'Priya Patel', {
+      primaryEmail: 'priya@figma.com',
+      emails: ['priya@figma.com'],
+      currentOrganizationRaw: 'Figma',
+    }),
+    person('stripe', 'Priya Patel', { currentOrganizationRaw: 'Stripe' }),
+    person('arjun', 'Arjun Patel', { currentOrganizationRaw: 'Figma' }),
+    person('gmail', 'Priya Patel', {
+      primaryEmail: 'priya.patel@gmail.com',
+      emails: ['priya.patel@gmail.com'],
+    }),
+    person('dan', 'Daniel Kim', { currentOrganizationRaw: 'Stripe' }),
+    person('dan2', 'Dan Kim', {
+      primaryEmail: 'dkim@stripe.com',
+      emails: ['dkim@stripe.com'],
+      currentOrganizationRaw: 'Stripe, Inc.',
+    }),
+  ];
+  const pairs = findDuplicatePairs(list);
+  const key = (p: { a: Person; b: Person }) => [p.a.id, p.b.id].sort().join('|');
+  it('never pairs colleagues who only share a surname and an employer', () => {
+    expect(pairs.map(key)).not.toContain('arjun|figma');
+    expect(pairs.some((p) => p.a.id === 'arjun' || p.b.id === 'arjun')).toBe(false);
+  });
+  it('ranks the real duplicates first', () => {
+    expect(pairs.map(key)).toEqual(expect.arrayContaining(['figma|gmail', 'dan|dan2']));
+    expect(pairs[0]!.score).toBeGreaterThan(0.6);
+    expect(['figma|gmail', 'dan|dan2', 'gmail|stripe', 'figma|stripe']).toContain(key(pairs[0]!));
+  });
+  it('treats a capitalised name that fits the address as a real name', () => {
+    const f = pairs.find((p) => key(p) === 'figma|gmail')!;
+    expect(f.features.name_sim).toBe(1);
+  });
+  it('pairs people that share an address with full confidence', () => {
+    const r = findDuplicatePairs([
+      person('x', 'Sam Lee', { primaryEmail: 'sam@acme.com', emails: ['sam@acme.com'] }),
+      person('y', 'Samuel Lee', { emails: ['sam@acme.com'] }),
+    ]);
+    expect(r[0]).toMatchObject({ score: 1 });
+  });
+  it('links a bare address to the named person at that employer', () => {
+    const r = findDuplicatePairs([
+      person('named', 'Elena Rodriguez', { currentOrganizationRaw: 'Deloitte' }),
+      person('bare', 'erodriguez', {
+        primaryEmail: 'erodriguez@deloitte.com',
+        emails: ['erodriguez@deloitte.com'],
+        namePlaceholder: true,
+      }),
+    ]);
+    expect(r.map(key)).toContain('bare|named');
+  });
+});

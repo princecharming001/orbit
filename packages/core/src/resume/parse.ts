@@ -72,11 +72,35 @@ const STOP = new Set([
   'school',
   'college',
   'student',
+  // dates are not skills
+  'january',
+  'february',
+  'march',
+  'april',
+  'june',
+  'july',
+  'august',
+  'september',
+  'sept',
+  'october',
+  'november',
+  'december',
+  'present',
+  'current',
+  'ongoing',
+  'spring',
+  'summer',
+  'fall',
+  'autumn',
+  'winter',
+  'expected',
 ]);
 
 export function extractKeywords(text: string, max = 12): string[] {
   const counts = new Map<string, number>();
-  for (const w of text.toLowerCase().match(/[a-z][a-z+#.]{2,}/g) ?? []) {
+  for (const raw of text.toLowerCase().match(/[a-z][a-z+#.]{2,}/g) ?? []) {
+    // "acquisition." ends a sentence; "node.js" keeps its inner dot
+    const w = raw.replace(/\.+$/, '');
     if (STOP.has(w) || w.length < 4) continue;
     counts.set(w, (counts.get(w) ?? 0) + 1);
   }
@@ -290,6 +314,12 @@ export function summarySentence(text: string, name?: string): string | undefined
     .replace(/[.!?]+$/, '')
     .trim();
   if (!s || CONTACT.test(s) || /[|·•]/.test(s)) return undefined;
+  // "Objective: To obtain ..." / "Summary - ..."
+  s = s.replace(
+    /^(?:professional\s+)?(?:summary|objective|profile|about me|career objective)\s*[:\-–—]\s*/i,
+    '',
+  );
+  if (!s) return undefined;
   const subject = name?.trim() || 'The candidate';
   s = s
     .replace(/\bpassionate about\b/gi, 'interested in')
@@ -298,7 +328,18 @@ export function summarySentence(text: string, name?: string): string | undefined
   const first = (s.split(/\s+/)[0] ?? '').toLowerCase();
   let rest: string;
   const iam = s.match(/^(?:i am|i'm)\s+(.*)$/i);
+  // already in the third person (a summary written by a model, or "This candidate is ...")
+  const generic = s.match(/^(?:this|the)\s+(?:candidate|student|applicant|individual)\s+is\s+(.*)$/i);
+  const pronoun = s.match(/^(?:he|she|they)\s+(?:is|are)\s+(.*)$/i);
+  const named = s.match(/^((?:[A-Z][\p{L}'’.-]+\s+){1,3})is\s+(.*)$/u);
+  // "A junior at Cornell studying CS, Alex Rivera is interested in payments"
+  const appositive = s.match(/^((?:[Aa]|[Aa]n)\s+[^,]{3,90}),\s+(?:[A-Z][\p{L}'’.-]+\s+){1,3}is\s+(.*)$/u);
   if (iam) rest = iam[1]!;
+  else if (generic) rest = generic[1]!;
+  else if (pronoun) rest = pronoun[1]!;
+  else if (appositive)
+    rest = `${appositive[1]![0]!.toLowerCase()}${appositive[1]!.slice(1)} who is ${appositive[2]}`;
+  else if (named && !/^(I|My|We|Our)\s/.test(named[1]!)) rest = named[2]!;
   else if (/^to\s+(obtain|secure|gain|find|land|pursue)\s+/i.test(s))
     rest = `seeking ${s.replace(/^to\s+(obtain|secure|gain|find|land|pursue)\s+/i, '')}`;
   else if (/^(seeking|pursuing|looking|aspiring|interested|currently|studying)$/.test(first))
@@ -313,8 +354,21 @@ export function summarySentence(text: string, name?: string): string | undefined
       /^[A-Z][a-z]+\b/.test(np) && !/^[A-Z][a-z]+\s+[A-Z]/.test(np) ? np[0]!.toLowerCase() + np.slice(1) : np;
     rest = `${/^[aeiou]/i.test(lowered) ? 'an' : 'a'} ${lowered}`;
   }
+  rest = rest
+    .replace(PUFFERY, '')
+    .replace(
+      /^(a|an)\s+(?:(?:highly|very)\s+)?(?:self-motivated|motivated|detail-oriented|driven|dedicated|hard-?working|enthusiastic|ambitious|dynamic|goal-oriented|creative|energetic|diligent)[,\s]+(?:and\s+)?/i,
+      (_, a: string) => `${a} `,
+    )
+    .trim();
+  // "an motivated junior" after the puffery is gone: fix the article
+  rest = rest.replace(
+    /^(a|an)\s+(\S)/i,
+    (_, _a: string, c: string) => `${/[aeiou]/i.test(c) ? 'an' : 'a'} ${c}`,
+  );
   // the student is the subject now: drop a trailing clause written in the first person ("where I can ...")
-  const firstPerson = rest.search(/\b(I|my|me|I'm|I've)\b/);
+  // or one that switches to a pronoun ("and he is interested in ...")
+  const firstPerson = rest.search(/\b(I|my|me|I'm|I've|he|she|his|her|him|they|their)\b/);
   if (firstPerson >= 0) {
     const head = rest.slice(0, firstPerson);
     const cut = Math.max(
@@ -330,6 +384,23 @@ export function summarySentence(text: string, name?: string): string | undefined
   const words = rest.split(/\s+/).length;
   if (words < 3 || words > 32) return undefined;
   return `${subject} is ${rest}.`;
+}
+
+/**
+ * The clause that completes "I'm ..." in an opener, from a summary facet ("Ravi Jain is a junior at
+ * Michigan studying CS." -> "a junior at Michigan studying CS"), or undefined when the summary does not
+ * describe the student as "a/an ..." in one short sentence. Contact details never pass.
+ */
+export function resumeOneLiner(summary: string | undefined): string | undefined {
+  if (!summary) return undefined;
+  const sentence = summarySentence(summary, 'Student');
+  if (!sentence) return undefined;
+  const m = sentence.match(/^Student is ((?:a|an)\s.+?)\.?$/);
+  if (!m) return undefined;
+  const clause = m[1]!.trim();
+  if (CONTACT.test(clause) || /[|·•@]/.test(clause)) return undefined;
+  if (clause.split(/\s+/).length > 18) return undefined;
+  return clause;
 }
 
 /**

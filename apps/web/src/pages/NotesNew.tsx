@@ -3,7 +3,7 @@ import { Mic } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { db } from '../db/schema';
-import { ingestNote, processNote } from '../engine/notes';
+import { ingestNote, rematchNote } from '../engine/notes';
 import { useSession } from '../state/session';
 import { Avatar, Button, Card, Input, Label, PageHeader, Select, Textarea, useToast } from '../ui';
 
@@ -36,6 +36,20 @@ export function NotesNew() {
       [userId],
     ) ?? [];
   const existing = useLiveQuery(() => (noteId ? db.notes.get(noteId) : undefined), [noteId]);
+  // people the note mentions, from the match card: offered first
+  const matchCard = useLiveQuery(
+    () => (noteId ? db.suggestions.where('dedupeKey').equals(`note:${noteId}`).first() : undefined),
+    [noteId],
+  );
+  const candidateIds = useMemo(
+    () => [
+      ...new Set([
+        ...(existing?.personIds ?? []),
+        ...((matchCard?.payload.candidatePersonIds as string[] | undefined) ?? []),
+      ]),
+    ],
+    [existing, matchCard],
+  );
   const recentEvent = useLiveQuery(
     () =>
       userId
@@ -52,38 +66,29 @@ export function NotesNew() {
     [userId],
   );
   useEffect(() => {
+    if (noteId) return;
     if (!presetPerson && recentEvent?.attendeePersonIds[0] && !personId)
       setPersonId(recentEvent.attendeePersonIds[0]);
-  }, [recentEvent, presetPerson, personId]);
+  }, [recentEvent, presetPerson, personId, noteId]);
+  // matching a saved note: start from Orbit's guess, if it made one
+  useEffect(() => {
+    if (existing && existing.personIds.length === 1 && !presetPerson) setPersonId(existing.personIds[0]!);
+  }, [existing, presetPerson]);
   useEffect(() => {
     const t = setTimeout(() => localStorage.setItem(DRAFT_KEY, text), 500);
     return () => clearTimeout(t);
   }, [text]);
   const sorted = useMemo(() => people.slice().sort((a, b) => b.strength - a.strength), [people]);
+  const mentioned = sorted.filter((p) => candidateIds.includes(p.id));
+  const rest = sorted.filter((p) => !candidateIds.includes(p.id));
   const person = people.find((p) => p.id === personId);
   if (!user) return null;
   const save = async () => {
     setBusy(true);
     try {
       if (existing) {
-        await db.notes.update(existing.id, {
-          personIds: personId ? [personId] : [],
-          matchStatus: personId ? 'confirmed' : 'rejected',
-          matchConfidence: 1,
-          chatId: personId
-            ? (
-                await db.chats
-                  .where('personId')
-                  .equals(personId)
-                  .filter((c) => c.stage !== 'archived')
-                  .first()
-              )?.id
-            : undefined,
-        });
-        const fresh = (await db.notes.get(existing.id))!;
-        if (personId) await processNote(user, fresh);
-        await db.suggestions.where('dedupeKey').equals(`note:${existing.id}`).modify({ status: 'done' });
-        toast.push({ text: 'Note matched.', tone: 'good' });
+        await rematchNote(user, existing.id, personId || undefined);
+        toast.push({ text: personId ? 'Note matched.' : 'Saved without a person.', tone: 'good' });
         nav(personId ? `/people/${personId}` : '/today');
         return;
       }
@@ -94,12 +99,16 @@ export function NotesNew() {
         occurredAt: new Date(when).toISOString(),
       });
       localStorage.removeItem(DRAFT_KEY);
-      toast.push({
-        text: n.personIds.length
-          ? 'Saved. Facts and follow-ups extracted.'
-          : 'Saved. Tell us who it was with when you can.',
-        tone: 'good',
-      });
+      if (n.matchStatus === 'unmatched') {
+        // Orbit is not sure who it was with: ask now, on the note itself
+        toast.push({
+          text: n.personIds.length ? 'Saved. Check who this was with.' : 'Saved. Who was this with?',
+          tone: 'good',
+        });
+        nav(`/notes/new?note=${n.id}`);
+        return;
+      }
+      toast.push({ text: 'Saved. Facts and follow-ups extracted.', tone: 'good' });
       nav(n.personIds[0] ? `/people/${n.personIds[0]}` : '/today');
     } finally {
       setBusy(false);
@@ -162,8 +171,18 @@ export function NotesNew() {
               className="w-full"
               data-testid="capture-person"
             >
-              <option value="">Let Orbit figure it out</option>
-              {sorted.map((p) => (
+              <option value="">{existing ? 'Nobody I track' : 'Let Orbit figure it out'}</option>
+              {mentioned.length > 0 && (
+                <optgroup label="Mentioned in the note">
+                  {mentioned.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.displayName}
+                      {p.currentOrganizationRaw ? ` · ${p.currentOrganizationRaw}` : ''}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+              {rest.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.displayName}
                   {p.currentOrganizationRaw ? ` · ${p.currentOrganizationRaw}` : ''}

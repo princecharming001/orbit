@@ -3,7 +3,7 @@ import { newId, parseConnectionsCsv } from '@orbit/core';
 import { addTouchpoint, recomputeAllStrengths } from '../db/repo';
 import { db } from '../db/schema';
 import { recomputeEdges } from './graph';
-import { loadPeopleCache, upsertPerson } from './people';
+import { loadPeopleCache, suggestDuplicateMerges, upsertPerson } from './people';
 
 export async function importConnectionsCsv(
   user: User,
@@ -71,5 +71,6 @@ export async function importConnectionsCsv(
   }
   await recomputeAllStrengths(user.id);
   await recomputeEdges(user.id);
+  await suggestDuplicateMerges(user.id);
   return { imported, updated, skipped };
 }

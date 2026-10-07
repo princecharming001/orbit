@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { generateDraft } from '../drafts/templates';
-import { heuristicResumeParse, resumeSectionOf, summarySentence } from '../resume/parse';
+import {
+  extractKeywords,
+  heuristicResumeParse,
+  resumeOneLiner,
+  resumeSectionOf,
+  summarySentence,
+} from '../resume/parse';
 import { defaultStyleCard } from '../style/card';
 import { RESUMES } from './fixtures/resumes';
 
@@ -85,13 +91,54 @@ describe('resume summary sentence (NRC-01)', () => {
   });
 });
 
+describe('resume one-liner (DQ-04)', () => {
+  it('rewrites third-person and model-written summaries into one clean clause', () => {
+    const cases: [string, string | undefined][] = [
+      [
+        'Alex Rivera is a junior at Cornell University studying Computer Science. He has interned at Brex, where he built a reconciliation service in Go, and he is interested in payments.',
+        'a junior at Cornell University studying Computer Science',
+      ],
+      [
+        'Alex Rivera is a junior at Cornell studying CS and he is interested in payments.',
+        'a junior at Cornell studying CS',
+      ],
+      [
+        'A junior at Cornell studying CS, Alex Rivera is interested in payments and developer tools.',
+        'a junior at Cornell studying CS who is interested in payments and developer tools',
+      ],
+      [
+        'This candidate is a motivated Cornell CS junior who is passionate about payments.',
+        'a Cornell CS junior who is interested in payments',
+      ],
+      [
+        'Motivated, detail-oriented junior studying economics at Michigan.',
+        'a junior studying economics at Michigan',
+      ],
+      ['Alex Rivera alex.rivera@cornell.edu | (607) 555-0199 | linkedin.com/in/alexrivera', undefined],
+      // not an "a/an ..." description: the template composes the clause from school, year and major instead
+      [
+        'Objective: To obtain a summer 2027 software engineering internship where I can apply my skills.',
+        undefined,
+      ],
+      [
+        'Alex Rivera is a junior at Cornell University studying Computer Science with a minor in Information Science and a deep interest in payments infrastructure.',
+        undefined,
+      ],
+    ];
+    for (const [input, want] of cases) expect(resumeOneLiner(input)).toBe(want);
+    expect(summarySentence('Objective: To obtain a PM internship.', 'Alex')).toBe(
+      'Alex is seeking a PM internship.',
+    );
+  });
+});
+
 describe('resume summary in outreach (NRC-01)', () => {
   it('never puts contact details into a draft', () => {
     for (const r of RESUMES) {
       const facets = heuristicResumeParse(r.text, 'r');
       const summary = facets.find((f) => f.kind === 'summary')?.text;
       // the same transform apps/web/src/engine/brief.ts applies to build user.oneLiner
-      const oneLiner = summary?.replace(/^.*? is /, '').replace(/\.$/, '');
+      const oneLiner = resumeOneLiner(summary);
       const d = generateDraft({
         user: {
           firstName: 'Ravi',
@@ -125,5 +172,15 @@ describe('resume summary in outreach (NRC-01)', () => {
       expect(d.body).not.toMatch(/@|\d{3}[-.)\s]\s?\d{3}[-.\s]\d{4}|linkedin\.com|github\.com|\|/);
       expect(d.body).not.toMatch(/EXPERIENCE|EDUCATION|SKILLS/);
     }
+  });
+});
+
+describe('resume keywords (NRC-22)', () => {
+  it('dates and sentence punctuation are not keywords', () => {
+    const k = extractKeywords(
+      'June 2024 - August 2024. Present. Led acquisition. Built node.js services. Worked on acquisition models.',
+    );
+    for (const w of ['june', 'august', 'present', 'acquisition.', 'services.']) expect(k).not.toContain(w);
+    expect(k).toEqual(expect.arrayContaining(['acquisition', 'node.js', 'services']));
   });
 });

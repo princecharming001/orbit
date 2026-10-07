@@ -24,7 +24,7 @@ Every rule runs in code over stored rows at brief time (and some on events, mark
 | `new_outreach` | weekly batch: top recommendations not yet acted on; limited by weekly target minus outreach already sent this week | `outreach` | `new:{candidate_key}` |
 | `confirm_stage` ⚡ | `coffee_chat_stage_events.status = proposed` | — | `stage:{event}` |
 | `confirm_merge` | `merge_suggestions.status = pending` and score ≥ 0.6 | — | `merge:{suggestion}` |
-| `confirm_note_match` ⚡ | note `match_status = unmatched` with ≥ 1 candidate person | — | `note:{note}` |
+| `confirm_note_match` ⚡ | note `match_status = unmatched` (raised when the note is saved; names the guessed or candidate people when there are any) | — | `note:{note}` |
 
 Guard conditions applied to every message-bearing kind before it is kept: `check_send_allowed` would allow it now; the person is human and not hidden; the chat is not `declined`; no other pending message-bearing suggestion for the same person today (one per person per brief); not snoozed (`snoozed_until > now`); the kind is enabled in `notification_prefs`.
 

@@ -1,9 +1,17 @@
-import type { MeetingNote, NoteSource, Person, PersonFact, User } from '@orbit/core';
-import { heuristicNoteExtraction, newId, normalizeEmail, parseGranolaText, parseName } from '@orbit/core';
+import type { Candidate, MeetingNote, NoteSource, Person, PersonFact, User } from '@orbit/core';
+import {
+  heuristicNoteExtraction,
+  isPlaceholderName,
+  newId,
+  normalizeEmail,
+  parseGranolaText,
+  parseName,
+  stripDiacritics,
+} from '@orbit/core';
 import { addTouchpoint, notify, recomputePersonStrength } from '../db/repo';
 import { db } from '../db/schema';
 import { hasLlm, llmNoteExtraction } from '../integrations/anthropic';
-import { evaluateImmediateSuggestions, refreshPersonSummary } from './brief';
+import { evaluateImmediateSuggestions, refreshPersonSummary, upsertSuggestions } from './brief';
 import { upsertPerson } from './people';
 import { evaluateTrigger } from './stages';
 
@@ -17,6 +25,66 @@ export interface CaptureInput {
   attendees?: { name?: string; email?: string }[];
 }
 
+/** First names that are also everyday words or months: only a full-name mention counts for them. */
+const WORD_NAMES = new Set(
+  (
+    'may june april august summer autumn winter will bill mark grace hope faith joy chase max ray rich frank ' +
+    'sunny dawn rose art page hunter rocky sky river angel honey cash miles lane drew brook'
+  ).split(' '),
+);
+const escapeRe = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * People a note names: full names ("Maya Wu"), and first names alone ("call with Maya") when exactly one
+ * person has that first name. A first name shared by several people comes back as `ambiguous`.
+ */
+export function mentionedPeople(
+  text: string,
+  people: Person[],
+  userFirstName?: string,
+): { full: Person[]; byFirstName: Person[]; ambiguous: Person[] } {
+  const folded = stripDiacritics(text);
+  const humans = people.filter((p) => p.isHuman && !p.hiddenAt && !isPlaceholderName(p));
+  const fullHit = (name: string) =>
+    new RegExp(`(?:^|[^\\p{L}])${escapeRe(stripDiacritics(name))}(?![\\p{L}])`, 'iu').test(folded);
+  const full = humans.filter((p) => p.displayName.includes(' ') && fullHit(p.displayName));
+  // capitalised words in the note: "Maya", "Mary-Kate" (a first name written in lower case is too risky)
+  const words = new Set(folded.match(/\p{Lu}[\p{L}-]*\p{L}/gu) ?? []);
+  const self = stripDiacritics(userFirstName ?? '').toLowerCase();
+  const byFirst = new Map<string, Person[]>();
+  for (const p of humans) {
+    const first = stripDiacritics(p.firstName);
+    const key = first.toLowerCase();
+    if (first.length < 3 || key === self || WORD_NAMES.has(key)) continue;
+    const cap = first[0]!.toUpperCase() + first.slice(1);
+    if (!words.has(first) && !words.has(cap)) continue;
+    byFirst.set(key, [...(byFirst.get(key) ?? []), p]);
+  }
+  const named = new Set(full.map((p) => stripDiacritics(p.firstName).toLowerCase()));
+  const byFirstName: Person[] = [];
+  const ambiguous: Person[] = [];
+  for (const [key, list] of byFirst) {
+    if (named.has(key)) continue; // "Maya Wu ... Maya said" is the person already named in full
+    if (list.length === 1) byFirstName.push(list[0]!);
+    else ambiguous.push(...list);
+  }
+  return { full, byFirstName, ambiguous };
+}
+
+/** "Tue, Oct 6" in the student's time zone. */
+function dayLabel(iso: string, timeZone: string): string {
+  try {
+    return new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+    }).format(new Date(iso));
+  } catch {
+    return iso.slice(0, 10);
+  }
+}
+
 export async function ingestNote(user: User, inp: CaptureInput, now = new Date()): Promise<MeetingNote> {
   const parsed =
     inp.source.startsWith('granola') || /^(summary|transcript)/im.test(inp.text)
@@ -27,8 +95,10 @@ export async function ingestNote(user: User, inp: CaptureInput, now = new Date()
     ...(inp.attendees ?? []),
     ...(parsed?.attendees ?? []),
   ];
-  // match people: explicit ids > attendee emails > names > calendar window
+  // match people: explicit ids > attendee emails > names > calendar window > names in the text
   const personIds = new Set(inp.personIds ?? []);
+  // people the note could be with when Orbit cannot tell on its own; the match card offers them first
+  const candidates = new Set<string>();
   let confidence = personIds.size ? 1 : 0;
   for (const a of attendees) {
     if (a.email && normalizeEmail(a.email) !== normalizeEmail(user.email)) {
@@ -43,6 +113,7 @@ export async function ingestNote(user: User, inp: CaptureInput, now = new Date()
       confidence = Math.max(confidence, 0.98);
     } else if (a.name) {
       const n = parseName(a.name);
+      if (n.normalized === parseName(user.fullName).normalized) continue;
       const hit = await db.people
         .where('userId')
         .equals(user.id)
@@ -51,7 +122,7 @@ export async function ingestNote(user: User, inp: CaptureInput, now = new Date()
       if (hit.length === 1) {
         personIds.add(hit[0]!.id);
         confidence = Math.max(confidence, 0.8);
-      }
+      } else for (const h of hit) candidates.add(h.id);
     }
   }
   let calendarEventId: string | undefined;
@@ -74,16 +145,18 @@ export async function ingestNote(user: User, inp: CaptureInput, now = new Date()
     }
   }
   if (!personIds.size) {
-    // scan text for known names
+    // scan the text for people the student knows: full names, then first names that only one person has
     const people = await db.people.where('userId').equals(user.id).toArray();
-    const lower = inp.text.toLowerCase();
-    const hits = people.filter(
-      (p) => p.isHuman && p.displayName.length > 4 && lower.includes(p.displayName.toLowerCase()),
-    );
-    if (hits.length === 1) {
-      personIds.add(hits[0]!.id);
+    const m = mentionedPeople(inp.text, people, user.firstName);
+    if (m.full.length === 1 && !m.byFirstName.length && !m.ambiguous.length) {
+      personIds.add(m.full[0]!.id);
       confidence = 0.8;
+    } else if (m.full.length || m.byFirstName.length) {
+      // a likely match: attach it, and ask the student to confirm
+      for (const p of [...m.full, ...m.byFirstName]) personIds.add(p.id);
+      confidence = 0.7;
     }
+    for (const p of m.ambiguous) candidates.add(p.id);
   }
   const ids = [...personIds];
   const primary = ids[0] ? await db.people.get(ids[0]) : undefined;
@@ -94,12 +167,18 @@ export async function ingestNote(user: User, inp: CaptureInput, now = new Date()
         .filter((c) => !['declined', 'no_response', 'archived'].includes(c.stage))
         .first()
     : undefined;
+  const sure = ids.length > 0 && confidence >= 0.8;
   const note: MeetingNote = {
     id: newId('n'),
     userId: user.id,
     source: inp.source,
     externalId: inp.externalId,
-    title: inp.title ?? parsed?.title ?? (primary ? `Chat with ${primary.displayName}` : 'Note'),
+    title:
+      inp.title ??
+      parsed?.title ??
+      (primary && sure
+        ? `Chat with ${primary.displayName}`
+        : `Note from ${dayLabel(occurredAt, user.timezone || 'UTC')}`),
     occurredAt,
     rawText: inp.text,
     rawSummary: parsed?.summary,
@@ -107,7 +186,7 @@ export async function ingestNote(user: User, inp: CaptureInput, now = new Date()
     personIds: ids,
     chatId: chat?.id,
     calendarEventId,
-    matchStatus: ids.length ? (confidence >= 0.8 ? 'auto' : 'unmatched') : 'unmatched',
+    matchStatus: sure ? 'auto' : 'unmatched',
     matchConfidence: confidence,
     createdAt: now.toISOString(),
   };
@@ -117,7 +196,114 @@ export async function ingestNote(user: User, inp: CaptureInput, now = new Date()
   }
   await db.notes.add(note);
   await processNote(user, note, now);
+  if (note.matchStatus === 'unmatched')
+    await upsertSuggestions(user.id, [await noteMatchCandidate(user, note, [...candidates])], now);
   return note;
+}
+
+/**
+ * The "who was this note with?" card for a note Orbit could not match for sure: it names the person Orbit
+ * guessed, or the people the note could be about. Raised as soon as the note is saved (so it is on Today
+ * right away, not after the next brief) and refreshed by the brief with the same wording.
+ */
+export async function noteMatchCandidate(
+  user: Pick<User, 'id' | 'timezone'>,
+  note: MeetingNote,
+  candidates?: string[],
+): Promise<Candidate & { priorityScore: number }> {
+  const dedupeKey = `note:${note.id}`;
+  const known =
+    candidates ??
+    ((await db.suggestions.where('dedupeKey').equals(dedupeKey).first())?.payload.candidatePersonIds as
+      | string[]
+      | undefined) ??
+    [];
+  const guessed = (await db.people.bulkGet(note.personIds)).filter((p): p is Person => !!p);
+  const others = (await db.people.bulkGet(known.filter((id) => !note.personIds.includes(id)))).filter(
+    (p): p is Person => !!p && !p.hiddenAt,
+  );
+  const day = dayLabel(note.occurredAt, user.timezone || 'UTC');
+  const names = (ps: Person[], joiner: string) =>
+    ps.length <= 2
+      ? ps.map((p) => p.displayName).join(` ${joiner} `)
+      : `${ps
+          .slice(0, -1)
+          .map((p) => p.displayName)
+          .join(', ')}, ${joiner} ${ps[ps.length - 1]!.displayName}`;
+  const reasonText =
+    guessed.length === 1
+      ? `Was your note from ${day} with ${guessed[0]!.displayName}?`
+      : guessed.length > 1
+        ? `Who was your note from ${day} with? It mentions ${names(guessed, 'and')}.`
+        : others.length
+          ? `Who was your note from ${day} with? It could be ${names(others, 'or')}.`
+          : `Who was your note from ${day} with?`;
+  return {
+    kind: 'confirm_note_match',
+    dedupeKey,
+    reasonText,
+    signals: {},
+    payload: { noteId: note.id, candidatePersonIds: [...guessed, ...others].map((p) => p.id) },
+    urgency: 0.5,
+    goalRelevance: 0.3,
+    confidence: 1,
+    priorityScore: 0.3,
+  };
+}
+
+/**
+ * The student says who a note was with (or that it was with nobody they track). Whatever an earlier
+ * guess wrote from this note is removed first, then the note is processed for the chosen person.
+ */
+export async function rematchNote(
+  user: User,
+  noteId: string,
+  personId: string | undefined,
+  now = new Date(),
+): Promise<void> {
+  const note = await db.notes.get(noteId);
+  if (!note) return;
+  await db.suggestions.where('dedupeKey').equals(`note:${noteId}`).modify({ status: 'done' });
+  const previous = note.personIds;
+  if (personId && previous.length === 1 && previous[0] === personId && note.processedAt) {
+    await db.notes.update(noteId, { matchStatus: 'confirmed', matchConfidence: 1 });
+    return;
+  }
+  if (previous.length) {
+    const fromNote = (x: { sourceTable?: string; sourceId?: string }) =>
+      x.sourceTable === 'notes' && x.sourceId === noteId;
+    await db.facts.where('personId').anyOf(previous).filter(fromNote).delete();
+    await db.actionItems.where('personId').anyOf(previous).filter(fromNote).delete();
+    await db.touchpoints
+      .where('personId')
+      .anyOf(previous)
+      .filter((tp) => tp.refTable === 'notes' && (tp.refId === noteId || tp.refId === `${noteId}:meeting`))
+      .delete();
+  }
+  const chatId = personId
+    ? (
+        await db.chats
+          .where('personId')
+          .equals(personId)
+          .filter((c) => !['declined', 'no_response', 'archived'].includes(c.stage))
+          .first()
+      )?.id
+    : undefined;
+  const person = personId ? await db.people.get(personId) : undefined;
+  await db.notes.update(noteId, {
+    personIds: personId ? [personId] : [],
+    matchStatus: personId ? 'confirmed' : 'rejected',
+    matchConfidence: 1,
+    chatId,
+    title: person && /^Note from /.test(note.title ?? '') ? `Chat with ${person.displayName}` : note.title,
+  });
+  const fresh = (await db.notes.get(noteId))!;
+  if (personId) await processNote(user, fresh, now);
+  for (const id of previous)
+    if (id !== personId) {
+      await recomputePersonStrength(id, now);
+      await refreshPersonSummary(user, id);
+    }
 }
 
 export async function processNote(user: User, note: MeetingNote, now = new Date()): Promise<void> {

@@ -19,6 +19,7 @@ import {
   generateDraft,
   isBlocked,
   newId,
+  resumeOneLiner,
   selectForBrief,
   suggestionFromCandidate,
   todayKey,
@@ -29,6 +30,8 @@ import { feedback, notify, recomputeAllStrengths } from '../db/repo';
 import { db } from '../db/schema';
 import { hasLlm, llmDraft, llmSummary } from '../integrations/anthropic';
 import { bestPathStrength, buildReachGraph } from './graph';
+import { noteMatchCandidate } from './notes';
+import { currentResumeFacets } from './resume';
 import { runTimedStageRules } from './stages';
 
 const DAY = 86_400_000;
@@ -280,7 +283,7 @@ export async function buildDraftContext(
       .equals(person.id)
       .filter((f) => !f.deletedAt)
       .toArray(),
-    db.resumeFacets.toArray(),
+    currentResumeFacets(user.id),
     chatOverride
       ? Promise.resolve(chatOverride)
       : s?.chatId
@@ -389,12 +392,8 @@ export async function buildDraftContext(
       majors: user.majors,
       cycleLabel: goals?.cycleLabel ?? 'this recruiting cycle',
       targetFunctions: goals?.targetFunctions ?? [],
-      oneLiner: summary
-        ? summary
-            .replace(/^.*? is /, `${user.firstName} is `)
-            .replace(/\.$/, '')
-            .replace(new RegExp(`^${user.firstName} is `), '')
-        : undefined,
+      // only a short "a/an ..." clause; otherwise the template composes one from school, year and major
+      oneLiner: resumeOneLiner(summary),
       credibility: credibilityLine(resumeFacets),
       schedulingLink: settings?.schedulingLink,
       timezone: user.timezone,
@@ -741,24 +740,14 @@ async function addConfirmationCards(userId: string, now: Date): Promise<void> {
     .equals(userId)
     .filter((n) => n.matchStatus === 'unmatched')
     .toArray();
-  for (const n of unmatched) {
-    await upsertSuggestions(
-      userId,
-      [
-        {
-          kind: 'confirm_note_match',
-          dedupeKey: `note:${n.id}`,
-          reasonText: `Who was "${n.title ?? 'this note'}" with?`,
-          signals: {},
-          payload: { noteId: n.id },
-          urgency: 0.5,
-          goalRelevance: 0.3,
-          confidence: 1,
-          priorityScore: 0.3,
-        },
-      ],
-      now,
-    );
+  if (unmatched.length) {
+    const user = await db.users.get(userId);
+    for (const n of unmatched)
+      await upsertSuggestions(
+        userId,
+        [await noteMatchCandidate({ id: userId, timezone: user?.timezone ?? 'UTC' }, n)],
+        now,
+      );
   }
 }
 
@@ -1022,7 +1011,7 @@ export async function recommendationsRefresh(user: User, now = new Date()): Prom
   const [goals, targetCompanies, resumeFacets, people, chats, existing] = await Promise.all([
     db.goals.get(user.id),
     db.targetCompanies.where('userId').equals(user.id).toArray(),
-    db.resumeFacets.toArray(),
+    currentResumeFacets(user.id),
     db.people.where('userId').equals(user.id).toArray(),
     db.chats.where('userId').equals(user.id).toArray(),
     db.recommendations.where('userId').equals(user.id).toArray(),

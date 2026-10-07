@@ -1,7 +1,8 @@
 import type { User } from '@orbit/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { db, wipeDatabase } from '../db/schema';
-import { ingestNote, parseDueHint } from './notes';
+import { evaluateImmediateSuggestions } from './brief';
+import { ingestNote, parseDueHint, rematchNote } from './notes';
 import { upsertPerson } from './people';
 
 const user: User = {
@@ -135,6 +136,132 @@ Attendees: Elena Rodriguez, Tom Wu`,
     expect(await db.actionItems.count()).toBe(0);
     const [f] = await db.facts.where('personId').equals(maya.id).toArray();
     expect(f).toMatchObject({ type: 'advice', text: 'I should apply to the APM program' });
+  });
+});
+
+describe('matching a note to a person (NRC-19, UI-12)', () => {
+  const card = (noteId: string) => db.suggestions.where('dedupeKey').equals(`note:${noteId}`).first();
+  const MAYA_NOTE =
+    'Quick call with Maya today. She recommended I apply to the design engineering role and offered to refer me.';
+
+  it('a first name only one person has is a likely match, attached and confirmed with a card', async () => {
+    const maya = await person('Maya Wu', 'maya@figma.com', 'Figma');
+    await person('Tom Wu', 'tom.wu@bain.com', 'Bain & Company');
+    const n = await ingestNote(
+      user,
+      { source: 'manual', occurredAt: NOW.toISOString(), text: MAYA_NOTE },
+      NOW,
+    );
+    expect(n).toMatchObject({ personIds: [maya.id], matchStatus: 'unmatched', matchConfidence: 0.7 });
+    expect(n.title).toBe('Note from Fri, Oct 2');
+    const offers = await db.facts
+      .where('personId')
+      .equals(maya.id)
+      .filter((f) => f.type === 'offer')
+      .toArray();
+    expect(offers).toHaveLength(1);
+    const c = (await card(n.id))!;
+    expect(c).toMatchObject({ kind: 'confirm_note_match', status: 'pending' });
+    expect(c.reasonText).toBe('Was your note from Fri, Oct 2 with Maya Wu?');
+    expect(c.payload.candidatePersonIds).toEqual([maya.id]);
+  });
+
+  it('a first name several people share is not guessed; the card names them', async () => {
+    await person('Maya Wu', 'maya@figma.com', 'Figma');
+    await person('Maya Chen', 'mchen@stripe.com', 'Stripe');
+    const n = await ingestNote(
+      user,
+      { source: 'manual', occurredAt: NOW.toISOString(), text: MAYA_NOTE },
+      NOW,
+    );
+    expect(n.personIds).toEqual([]);
+    const c = (await card(n.id))!;
+    expect(c.reasonText).toMatch(
+      /^Who was your note from Fri, Oct 2 with\? It could be Maya (Wu|Chen) or Maya (Wu|Chen)\.$/,
+    );
+    expect(c.payload.candidatePersonIds).toHaveLength(2);
+  });
+
+  it('a full name still matches with confidence, and everyday words are not names', async () => {
+    const maya = await person('Maya Wu', 'maya@figma.com', 'Figma');
+    await person('May Chen', 'may@stripe.com', 'Stripe');
+    await person('Will Ortiz', 'will@ramp.com', 'Ramp');
+    const n = await ingestNote(
+      user,
+      {
+        source: 'manual',
+        occurredAt: NOW.toISOString(),
+        text: 'Coffee with Maya Wu. Will follow up in May. Maya said the team is hiring.',
+      },
+      NOW,
+    );
+    expect(n).toMatchObject({ personIds: [maya.id], matchStatus: 'auto', title: 'Chat with Maya Wu' });
+    expect(await card(n.id)).toBeUndefined();
+  });
+
+  it('the brief refreshes the match card without losing its wording or the people it names', async () => {
+    await db.users.update(user.id, { onboardingCompletedAt: '2026-09-01T00:00:00.000Z' });
+    await person('Maya Wu', 'maya@figma.com', 'Figma');
+    await person('Maya Chen', 'mchen@stripe.com', 'Stripe');
+    const n = await ingestNote(
+      user,
+      { source: 'manual', occurredAt: NOW.toISOString(), text: MAYA_NOTE },
+      NOW,
+    );
+    const before = (await card(n.id))!;
+    await evaluateImmediateSuggestions(user.id, {}, NOW);
+    const after = (await card(n.id))!;
+    expect(after.reasonText).toBe(before.reasonText);
+    expect(after.reasonText).not.toMatch(/"/);
+    expect(after.payload.candidatePersonIds).toEqual(before.payload.candidatePersonIds);
+  });
+
+  it('a note with no match has its card on Today right away, with a dated title', async () => {
+    const n = await ingestNote(
+      user,
+      { source: 'manual', occurredAt: NOW.toISOString(), text: 'Talked to a recruiter at the career fair.' },
+      NOW,
+    );
+    expect(n).toMatchObject({ personIds: [], matchStatus: 'unmatched', title: 'Note from Fri, Oct 2' });
+    expect((await card(n.id))!).toMatchObject({
+      status: 'pending',
+      reasonText: 'Who was your note from Fri, Oct 2 with?',
+    });
+  });
+
+  it('choosing another person moves what the guess wrote; confirming the guess writes nothing twice', async () => {
+    const maya = await person('Maya Wu', 'maya@figma.com', 'Figma');
+    const tom = await person('Tom Wu', 'tom.wu@bain.com', 'Bain & Company');
+    const n = await ingestNote(
+      user,
+      {
+        source: 'manual',
+        occurredAt: NOW.toISOString(),
+        text: `${MAYA_NOTE} I'll send my portfolio by Monday.`,
+      },
+      NOW,
+    );
+    expect(await db.actionItems.where('personId').equals(maya.id).count()).toBe(1);
+    await rematchNote(user, n.id, tom.id, NOW);
+    expect(await db.facts.where('personId').equals(maya.id).count()).toBe(0);
+    expect(await db.actionItems.where('personId').equals(maya.id).count()).toBe(0);
+    expect(
+      await db.touchpoints
+        .where('personId')
+        .equals(maya.id)
+        .filter((t) => t.refTable === 'notes')
+        .count(),
+    ).toBe(0);
+    expect(await db.facts.where('personId').equals(tom.id).count()).toBeGreaterThan(0);
+    expect(await db.actionItems.where('personId').equals(tom.id).count()).toBe(1);
+    expect((await db.notes.get(n.id))!).toMatchObject({
+      personIds: [tom.id],
+      matchStatus: 'confirmed',
+      title: 'Chat with Tom Wu',
+    });
+    expect((await card(n.id))!.status).toBe('done');
+    await rematchNote(user, n.id, tom.id, NOW);
+    expect(await db.actionItems.where('personId').equals(tom.id).count()).toBe(1);
   });
 });
 

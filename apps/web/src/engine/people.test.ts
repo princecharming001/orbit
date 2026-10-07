@@ -2,7 +2,7 @@ import type { User } from '@orbit/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { db, wipeDatabase } from '../db/schema';
 import { importConnectionsCsv } from './linkedin';
-import { upsertPerson } from './people';
+import { suggestDuplicateMerges, upsertPerson } from './people';
 
 const user: User = {
   id: 'u1',
@@ -162,5 +162,53 @@ describe('people resolution across sources', () => {
     });
     expect(r.created).toBe(true);
     expect(await db.people.count()).toBe(2);
+  });
+});
+
+describe('duplicate detection after imports (NRC-20)', () => {
+  const stored = (id: string, displayName: string, over: Record<string, unknown> = {}) => {
+    const [firstName = '', ...rest] = displayName.split(' ');
+    return db.people.add({
+      id,
+      userId: user.id,
+      displayName,
+      firstName,
+      lastName: rest.join(' '),
+      nameNormalized: displayName.toLowerCase(),
+      emails: [],
+      relationshipType: 'unknown',
+      strength: 0,
+      interactionCount: 0,
+      sources: ['gmail'],
+      isHuman: true,
+      tags: [],
+      createdAt: `2026-01-0${id.length}T00:00:00.000Z`,
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      ...over,
+    });
+  };
+  it('a CSV import raises merge cards for true duplicates and never for colleagues', async () => {
+    await stored('pf', 'Priya Patel', {
+      primaryEmail: 'priya@figma.com',
+      emails: ['priya@figma.com'],
+      currentOrganizationRaw: 'Figma',
+    });
+    await stored('pgm', 'Priya Patel', {
+      primaryEmail: 'priya.patel@gmail.com',
+      emails: ['priya.patel@gmail.com'],
+    });
+    await stored('arj', 'Arjun Patel', { currentOrganizationRaw: 'Figma' });
+    await importConnectionsCsv(
+      user,
+      `${HDR}Maya,Wu,https://www.linkedin.com/in/maya-wu,,Datadog,Engineer,12 Mar 2025\n`,
+    );
+    const merges = await db.merges.toArray();
+    const keys = merges.map((m) => [m.personAId, m.personBId].sort().join('|'));
+    expect(keys).toEqual(['pf|pgm']);
+    expect(merges[0]).toMatchObject({ status: 'pending' });
+    // running it again, or after the student decided, adds nothing
+    expect(await suggestDuplicateMerges(user.id)).toBe(0);
+    await db.merges.update(merges[0]!.id, { status: 'rejected' });
+    expect(await suggestDuplicateMerges(user.id)).toBe(0);
   });
 });
