@@ -28,7 +28,7 @@ Every rule runs in code over stored rows at brief time (and some on events, mark
 | `new_outreach` | weekly batch: top recommendations not yet acted on, saved ones first (a name the student captures on the prep tab's fixed closing question, "Is there anyone else you'd suggest I talk to?", is saved as "Suggested by {person}" and that person becomes the chat's referrer); limited by weekly target minus outreach already sent this week; skipped for a company where the student already has 2 live threads (`outreach_sent|replied|scheduling|scheduled`) | `outreach` | `new:{person}:{monday_of_week}` |
 | `confirm_stage` ⚡ | `coffee_chat_stage_events.status = proposed` | — | `stage:{event}` |
 | `confirm_merge` | `merge_suggestions.status = pending` and score ≥ 0.6 | — | `merge:{suggestion}` |
-| `confirm_note_match` ⚡ | note `match_status = unmatched` with ≥ 1 candidate person | — | `note:{note}` |
+| `confirm_note_match` ⚡ | note `match_status = unmatched` (raised when the note is saved; names the guessed or candidate people when there are any) | — | `note:{note}` |
 
 Guard conditions applied to every message-bearing kind before it is kept: `check_send_allowed` would allow it now; the person is human and not hidden; the chat is not `declined`; no other pending message-bearing suggestion for the same person today (one per person per brief; reminders, prep cards and the hard-urgent kinds are exempt, so a promise due today is never dropped next to a thank-you); not snoozed (`snoozed_until > now`); the kind is enabled in `notification_prefs`.
 

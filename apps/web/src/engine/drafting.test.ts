@@ -584,3 +584,28 @@ describe('drafting against the demo data', () => {
     expect(cb.bodyDraft).not.toMatch(/your move to|first few weeks/);
   });
 });
+
+describe('the "who I am" clause (resume one-liner)', () => {
+  it('is composed from school, year and major, and a resume summary only fills in when those are missing', async () => {
+    const someone = (await people((p) => !!p.primaryEmail && !p.hiddenAt))[0]!;
+    const summary = (await db.resumeFacets.toArray()).find((f) => f.kind === 'summary')!;
+    // with the structured fields set, the summary never reaches the draft
+    const ctx = await buildDraftContext(user, someone, 'outreach', 'gmail');
+    expect(ctx.user.oneLiner).toBeUndefined();
+    const noYear = { ...user, graduationYear: undefined } as unknown as User;
+    await db.resumeFacets.update(summary.id, {
+      text: 'Alex Rivera is a junior studying Computer Science at Cornell University, interested in payments infrastructure.',
+    });
+    // a clean clause: cut at the first comma, the school's short name
+    expect((await buildDraftContext(noYear, someone, 'outreach', 'gmail')).user.oneLiner).toBe(
+      'a junior studying Computer Science at Cornell',
+    );
+    // contact details never pass
+    await db.resumeFacets.update(summary.id, {
+      text: 'Alex Rivera is a junior at Cornell. alex.rivera@cornell.edu | (607) 555-0100',
+    });
+    const withContact = (await buildDraftContext(noYear, someone, 'outreach', 'gmail')).user.oneLiner;
+    expect(withContact ?? '').not.toMatch(/@|\d{3}/);
+    await db.resumeFacets.update(summary.id, { text: summary.text });
+  });
+});

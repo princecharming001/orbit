@@ -57,15 +57,32 @@ const MONTHS: Record<string, number> = {
   dec: 11,
 };
 
+/** YYYY-MM-DD for a real calendar date, undefined for one like 31 Feb that Date.UTC would roll over. */
+function isoDay(y: number, mo: number, d: number): string | undefined {
+  const t = new Date(Date.UTC(y, mo, d));
+  if (t.getUTCFullYear() !== y || t.getUTCMonth() !== mo || t.getUTCDate() !== d) return undefined;
+  return t.toISOString().slice(0, 10);
+}
+
 export function parseConnectedOn(raw: string | undefined): string | undefined {
   if (!raw) return undefined;
-  const m = raw.trim().match(/^(\d{1,2})\s+([A-Za-z]{3})[a-z]*\s+(\d{4})$/);
-  if (m) {
-    const mo = MONTHS[m[2]!.toLowerCase()];
-    if (mo !== undefined)
-      return new Date(Date.UTC(Number(m[3]), mo, Number(m[1]))).toISOString().slice(0, 10);
+  const s = raw.trim();
+  // LinkedIn's own format: "07 Oct 2026"
+  const dmy = s.match(/^(\d{1,2})\s+([A-Za-z]{3})[a-z]*\.?,?\s+(\d{4})$/);
+  if (dmy) {
+    const mo = MONTHS[dmy[2]!.toLowerCase()];
+    return mo === undefined ? undefined : isoDay(Number(dmy[3]), mo, Number(dmy[1]));
   }
-  const d = new Date(raw);
+  const mdy = s.match(/^([A-Za-z]{3})[a-z]*\.?\s+(\d{1,2}),?\s+(\d{4})$/);
+  if (mdy) {
+    const mo = MONTHS[mdy[1]!.toLowerCase()];
+    return mo === undefined ? undefined : isoDay(Number(mdy[3]), mo, Number(mdy[2]));
+  }
+  const ymd = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:$|T)/);
+  if (ymd) return isoDay(Number(ymd[1]), Number(ymd[2]) - 1, Number(ymd[3]));
+  const us = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (us) return isoDay(Number(us[3]), Number(us[1]) - 1, Number(us[2]));
+  const d = new Date(s);
   return Number.isNaN(d.getTime()) ? undefined : d.toISOString().slice(0, 10);
 }
 
@@ -75,7 +92,7 @@ export function parseConnectionsCsv(text: string): { rows: LinkedInConnectionRow
   const headerIdx = all.findIndex((r) => r.some((c) => /^first name$/i.test(c.trim())));
   if (headerIdx < 0) return { rows: [], skipped: all.length };
   const header = all[headerIdx]!.map((h) => h.trim().toLowerCase());
-  const col = (name: string) => header.findIndex((h) => h === name);
+  const col = (name: string) => header.indexOf(name);
   const iFirst = col('first name');
   const iLast = col('last name');
   const iUrl = col('url');

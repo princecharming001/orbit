@@ -24,7 +24,7 @@ import { db } from '../db/schema';
 import { llmEnabled, llmSignal, llmTriage } from '../integrations/anthropic';
 import { evaluateImmediateSuggestions, refreshPendingDrafts, surfaceLlmFailure } from './brief';
 import { processIntroductions } from './introductions';
-import { loadPeopleCache, upsertPerson } from './people';
+import { loadPeopleCache, suggestDuplicateMerges, upsertPerson } from './people';
 import { evaluateTrigger } from './stages';
 
 export interface RawEmail {
@@ -362,6 +362,7 @@ export async function ingestEmails(
     opts.onProgress?.(done, byThread.size);
   }
   for (const inv of invites) await retireSchedulingCards(user.id, inv.emails, inv.sentAt, userEmails, now);
+  await suggestDuplicateMerges(user.id, now);
   return stats;
 }
 

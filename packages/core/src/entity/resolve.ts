@@ -3,10 +3,14 @@ import {
   canonicalFirstName,
   emailDomain,
   emailLocalPart,
+  firstNameRelation,
   linkedInSlug,
+  type NameParts,
+  nameFromParts,
   normalizeCompany,
   normalizeEmail,
   parseName,
+  stripDiacritics,
 } from '../text/normalize';
 import type { Affiliation, Person, PersonSource } from '../types';
 
@@ -14,6 +18,9 @@ export interface IncomingIdentity {
   email?: string;
   linkedinUrl?: string;
   displayName?: string;
+  /** Separate name fields when the source has them (LinkedIn CSV); they win over `displayName`. */
+  firstName?: string;
+  lastName?: string;
   companyRaw?: string;
   title?: string;
   school?: string;
@@ -56,66 +63,166 @@ export interface ResolveContext {
   orgDomains?: Map<string, string[]>; // organizationId -> domains
 }
 
+/** Free mailbox providers: the address says nothing about the employer and a name in it is weak evidence. */
+export const PERSONAL_EMAIL_DOMAINS = new Set([
+  'gmail.com',
+  'googlemail.com',
+  'outlook.com',
+  'hotmail.com',
+  'live.com',
+  'msn.com',
+  'yahoo.com',
+  'ymail.com',
+  'icloud.com',
+  'me.com',
+  'mac.com',
+  'aol.com',
+  'proton.me',
+  'protonmail.com',
+  'pm.me',
+  'gmx.com',
+  'fastmail.com',
+  'hey.com',
+  'qq.com',
+  '163.com',
+]);
+
 function sigmoid(x: number): number {
   return 1 / (1 + Math.exp(-x));
 }
 
+/** The incoming name, from separate first/last fields when present, otherwise the display name. */
+export function incomingName(inc: IncomingIdentity): NameParts {
+  return inc.firstName || inc.lastName
+    ? nameFromParts(inc.firstName, inc.lastName)
+    : parseName(inc.displayName);
+}
+
+const fold = (s: string) => stripDiacritics(s).toLowerCase();
+
+/**
+ * True when a stored person's name is only a stand-in derived from their email address ("erodriguez"),
+ * so it must not count as name evidence and should be replaced by the first real name we see.
+ */
+export function isPlaceholderName(
+  p: Pick<Person, 'displayName' | 'primaryEmail' | 'namePlaceholder'>,
+): boolean {
+  if (p.namePlaceholder) return true;
+  if (!p.displayName || p.displayName.includes('@') || p.displayName === 'Unknown') return true;
+  if (!p.primaryEmail) return false;
+  // a stand-in from older records is the address's local part as typed ("erodriguez", "tom wu"); a name
+  // written with capitals ("Priya Patel" for priya.patel@) is a real name that happens to fit the address
+  if (p.displayName !== p.displayName.toLowerCase()) return false;
+  const squash = (x: string) => fold(x).replace(/[\s._+-]/g, '');
+  const local = p.primaryEmail.slice(0, p.primaryEmail.lastIndexOf('@')).replace(/\+.*$/, '');
+  return squash(p.displayName) === squash(local);
+}
+
+/** How well an email address fits a person's name and employer. */
+function emailEvidence(
+  rawEmail: string,
+  name: NameParts,
+  org: string,
+  orgDomains: string[],
+  fuzzy = true,
+): { nameSim: number; domainOrg: number } {
+  const email = normalizeEmail(rawEmail);
+  if (!email.includes('@')) return { nameSim: 0, domainOrg: 0 };
+  const dom = emailDomain(email);
+  const personal = PERSONAL_EMAIL_DOMAINS.has(dom);
+  let nameSim = 0;
+  if (name.first && name.last) {
+    const local = emailLocalPart(email)
+      .replace(/\+.*$/, '')
+      .replace(/[\d._-]+/g, ' ')
+      .trim();
+    const compact = local.replace(/\s+/g, '');
+    const first = fold(name.first).replace(/[^a-z]/g, '');
+    const canon = canonicalFirstName(name.first).replace(/[^a-z]/g, '');
+    const last = fold(name.last).replace(/[^a-z]/g, '');
+    const forms = new Set<string>();
+    for (const f of [first, canon]) {
+      forms.add(`${f}${last}`);
+      forms.add(`${f[0] ?? ''}${last}`);
+      forms.add(`${last}${f}`);
+      forms.add(`${f}${last[0] ?? ''}`);
+    }
+    if (compact && forms.has(compact)) nameSim = 1;
+    else if (compact && last.length >= 4 && compact.includes(last)) nameSim = 0.7;
+    else if (compact && fuzzy)
+      nameSim =
+        Math.max(jaroWinkler(compact, `${first}${last}`), jaroWinkler(compact, `${first[0] ?? ''}${last}`)) *
+        0.6;
+    // a name inside a free mailbox address is weak, often self-chosen, and common names collide
+    if (personal) nameSim *= 0.5;
+  }
+  let domainOrg = 0;
+  if (!personal) {
+    if (orgDomains.includes(dom)) domainOrg = 1;
+    else {
+      const root = dom.split('.').slice(-2, -1)[0] ?? dom.split('.')[0] ?? '';
+      const orgCompact = org.replace(/[\s&]+/g, '');
+      if (
+        org &&
+        root.length >= 2 &&
+        (orgCompact.includes(root) || (root.length >= 4 && root.includes(orgCompact)))
+      )
+        domainOrg = 0.8;
+    }
+  }
+  return { nameSim, domainOrg };
+}
+
 export function computeFeatures(inc: IncomingIdentity, cand: Person, ctx: ResolveContext): ResolveFeatures {
-  const incName = parseName(inc.displayName);
+  const incName = incomingName(inc);
   const candName = parseName(cand.displayName);
-  const incFirst = canonicalFirstName(incName.first);
-  const candFirst = canonicalFirstName(candName.first);
+  const candPlaceholder = isPlaceholderName(cand);
   // Jaro-Winkler is generous (two different names often score 0.7); rescale so only near-identical names count.
   const rescale = (jw: number) => Math.max(0, (jw - 0.75) / 0.25);
-  const nameSim =
-    incName.full && candName.full
-      ? rescale(
-          jaroWinkler(
-            `${incFirst} ${incName.last}`.toLowerCase(),
-            `${candFirst} ${candName.last}`.toLowerCase(),
-          ),
-        )
-      : 0;
-  const lastSim =
-    incName.last && candName.last
-      ? rescale(jaroWinkler(incName.last.toLowerCase(), candName.last.toLowerCase()))
-      : 0;
+  const rel = firstNameRelation(incName.first, candName.first);
+  let nameSim = 0;
+  let lastSim = 0;
+  if (incName.full && candName.full && !candPlaceholder) {
+    const a = rel === 'nickname' ? canonicalFirstName(incName.first) : fold(incName.first);
+    const b = rel === 'nickname' ? canonicalFirstName(candName.first) : fold(candName.first);
+    nameSim = rescale(jaroWinkler(`${a} ${fold(incName.last)}`, `${b} ${fold(candName.last)}`));
+    lastSim =
+      incName.last && candName.last ? rescale(jaroWinkler(fold(incName.last), fold(candName.last))) : 0;
+    // a shared short form (Alex: Alexander or Alexandra) is a weaker match than a real nickname
+    if (rel === 'ambiguous') nameSim = Math.min(0.8, Math.max(nameSim, lastSim === 1 ? 0.8 : 0));
+  }
   const incOrg = normalizeCompany(inc.companyRaw);
   const candOrg = normalizeCompany(cand.currentOrganizationRaw);
   let orgMatch = 0;
   if (incOrg && candOrg) {
+    const [short, long] = incOrg.length <= candOrg.length ? [incOrg, candOrg] : [candOrg, incOrg];
     if (incOrg === candOrg) orgMatch = 1;
+    else if (short.length >= 4 && long.startsWith(`${short} `)) orgMatch = 0.8;
     else if (jaroWinkler(incOrg, candOrg) >= 0.9) orgMatch = 0.5;
-    else orgMatch = -0.5;
+    // An identical full name at another employer is most often the same person after a job change:
+    // keep it in the suggestion band instead of ruling it out.
+    else orgMatch = nameSim === 1 && lastSim === 1 && rel === 'same' ? -0.25 : -0.5;
   }
   const titleSim = inc.title && cand.currentTitle ? tokenJaccard(inc.title, cand.currentTitle) : 0;
+  // email evidence in both directions: incoming address vs the stored person, and stored addresses vs the incoming name
   let emailNameSim = 0;
   let domainOrgMatch = 0;
-  const email = inc.email ? normalizeEmail(inc.email) : undefined;
-  if (email) {
-    const local = emailLocalPart(email)
-      .replace(/[\d._-]+/g, ' ')
-      .trim();
-    if (candName.full) {
-      const fl = `${candFirst}${candName.last}`.toLowerCase();
-      const fil = `${candFirst[0] ?? ''}${candName.last}`.toLowerCase();
-      const compact = local.replace(/\s+/g, '');
-      if (
-        compact &&
-        (compact === fl || compact === fil || compact === `${candName.last}${candFirst}`.toLowerCase())
-      )
-        emailNameSim = 1;
-      else if (compact && compact.includes(candName.last.toLowerCase()) && candName.last.length >= 4)
-        emailNameSim = 0.7;
-      else emailNameSim = Math.max(jaroWinkler(compact, fl), jaroWinkler(compact, fil)) * 0.6;
-    }
-    const dom = emailDomain(email);
-    const candDomains = cand.currentOrganizationId
-      ? (ctx.orgDomains?.get(cand.currentOrganizationId) ?? [])
-      : [];
-    if (candDomains.includes(dom)) domainOrgMatch = 1;
-    else if (candOrg && dom.split('.')[0] && candOrg.replace(/\s+/g, '').includes(dom.split('.')[0]!))
-      domainOrgMatch = 0.8;
+  const candDomains = cand.currentOrganizationId
+    ? (ctx.orgDomains?.get(cand.currentOrganizationId) ?? [])
+    : [];
+  const candNameForEmail = candPlaceholder ? { first: '', last: '', full: '', normalized: '' } : candName;
+  if (inc.email) {
+    const e = emailEvidence(inc.email, candNameForEmail, candOrg, candDomains);
+    emailNameSim = Math.max(emailNameSim, e.nameSim);
+    domainOrgMatch = Math.max(domainOrgMatch, e.domainOrg);
+  }
+  const candEmails = new Set([...(cand.primaryEmail ? [cand.primaryEmail] : []), ...cand.emails]);
+  for (const ce of candEmails) {
+    // only clear address patterns count in this direction; a bare first name in the address proves little
+    const e = emailEvidence(ce, incName, incOrg, [], false);
+    emailNameSim = Math.max(emailNameSim, e.nameSim);
+    // the stored address stands in for the employer only when the stored person has none (else org_match covers it)
+    if (!candOrg) domainOrgMatch = Math.max(domainOrgMatch, e.domainOrg);
   }
   const schoolMatch =
     inc.school && cand.school && normalizeCompany(inc.school) === normalizeCompany(cand.school) ? 1 : 0;
@@ -143,6 +250,47 @@ export function scoreFeatures(f: ResolveFeatures, w = RESOLVE_WEIGHTS): number {
   return sigmoid(z);
 }
 
+/**
+ * Score a pair where one side has no real name (a bare address): only the address pattern and the
+ * employer can link them, so require both.
+ */
+function addressOnlyScore(f: ResolveFeatures): number {
+  if (f.email_name_sim >= 1 && f.domain_org_match >= 0.8) return 0.93;
+  if (f.email_name_sim >= 0.7 && f.domain_org_match >= 0.8) return 0.75;
+  return 0;
+}
+
+/**
+ * Evidence that does not come from the name itself. Auto-merging always needs some; when the first names
+ * differ in writing (Bill/William, Alex/Alexandra) it must come from the address or the school, because a
+ * shared employer is not enough to tell two colleagues apart.
+ */
+function corroborated(f: ResolveFeatures, rel: ReturnType<typeof firstNameRelation>): boolean {
+  const independent = f.email_name_sim >= 0.7 || f.domain_org_match > 0 || f.school_match > 0;
+  if (rel !== 'same') return independent;
+  // only the very same employer counts: "Bain" and "Bain Capital" look alike but are different firms
+  return independent || f.org_match >= 1;
+}
+
+export function scorePair(
+  inc: IncomingIdentity,
+  cand: Person,
+  ctx: ResolveContext,
+): { score: number; features: ResolveFeatures } {
+  const f = computeFeatures(inc, cand, ctx);
+  const incName = incomingName(inc);
+  if (!incName.full || isPlaceholderName(cand)) return { score: addressOnlyScore(f), features: f };
+  // an address at the employer both already list is the employer again, not a second piece of evidence:
+  // colleagues share it
+  const scored = f.org_match > 0 && f.domain_org_match > 0 ? { ...f, domain_org_match: 0 } : f;
+  let score = scoreFeatures(scored);
+  // the names have to agree before anything else counts (Priya Patel and Arjun Patel at Figma are two people)
+  if (f.name_sim < 0.5) score = Math.min(score, SUGGEST_THRESHOLD - 0.01);
+  const rel = firstNameRelation(incName.first, parseName(cand.displayName).first);
+  if (score >= AUTO_MERGE_THRESHOLD && !corroborated(f, rel)) score = AUTO_MERGE_THRESHOLD - 0.01;
+  return { score, features: f };
+}
+
 export function resolveIdentity(inc: IncomingIdentity, ctx: ResolveContext): ResolveDecision {
   const email = inc.email ? normalizeEmail(inc.email) : undefined;
   const slug = linkedInSlug(inc.linkedinUrl);
@@ -154,41 +302,43 @@ export function resolveIdentity(inc: IncomingIdentity, ctx: ResolveContext): Res
   if (slug)
     for (const p of ctx.people)
       if (p.linkedinSlug === slug) return { kind: 'match', personId: p.id, via: 'linkedin' };
-  const incName = parseName(inc.displayName);
+  const incName = incomingName(inc);
   const incOrg = normalizeCompany(inc.companyRaw);
   if (incName.normalized && incOrg) {
     for (const p of ctx.people) {
-      if (p.nameNormalized === incName.normalized && normalizeCompany(p.currentOrganizationRaw) === incOrg)
+      if (isPlaceholderName(p)) continue;
+      if (
+        parseName(p.displayName).normalized === incName.normalized &&
+        normalizeCompany(p.currentOrganizationRaw) === incOrg
+      )
         return { kind: 'match', personId: p.id, via: 'name_org' };
     }
   }
-  if (!incName.full) return { kind: 'new' };
-  // blocking
-  const lastLower = incName.last.toLowerCase();
-  const firstCanon = canonicalFirstName(incName.first);
+  if (!incName.full && !email) return { kind: 'new' };
+  // blocking: only score people who could plausibly be the same
+  const lastFold = fold(incName.last);
+  const incDomain = email ? emailDomain(email) : undefined;
   const candidates = ctx.people.filter((p) => {
+    const placeholder = isPlaceholderName(p);
+    const pDomains = [...new Set([p.primaryEmail, ...p.emails].filter(Boolean).map((e) => emailDomain(e!)))];
+    if (!incName.full || placeholder) {
+      // address-only on one side: same domain, or an address that fits the other side's name
+      if (incDomain && pDomains.includes(incDomain)) return true;
+      if (incDomain && !PERSONAL_EMAIL_DOMAINS.has(incDomain)) return true;
+      return placeholder && !!incName.full && pDomains.length > 0;
+    }
     const pn = parseName(p.displayName);
-    if (lastLower && pn.last.toLowerCase() === lastLower) return true;
-    if (
-      firstCanon &&
-      canonicalFirstName(pn.first) === firstCanon &&
-      (incOrg ? normalizeCompany(p.currentOrganizationRaw) === incOrg : true)
-    )
+    if (lastFold && fold(pn.last) === lastFold) return true;
+    const rel = firstNameRelation(incName.first, pn.first);
+    if (rel !== 'different' && (incOrg ? normalizeCompany(p.currentOrganizationRaw) === incOrg : true))
       return true;
-    if (
-      email &&
-      p.primaryEmail &&
-      emailDomain(p.primaryEmail) === emailDomain(email) &&
-      canonicalFirstName(pn.first) === firstCanon
-    )
-      return true;
+    if (incDomain && pDomains.includes(incDomain) && rel !== 'different') return true;
     return jaroWinkler(pn.normalized, incName.normalized) >= 0.85;
   });
   let best: { p: Person; score: number; f: ResolveFeatures } | undefined;
   for (const p of candidates) {
-    const f = computeFeatures(inc, p, ctx);
-    const score = scoreFeatures(f);
-    if (!best || score > best.score) best = { p, score, f };
+    const { score, features } = scorePair(inc, p, ctx);
+    if (!best || score > best.score) best = { p, score, f: features };
   }
   if (!best) return { kind: 'new' };
   if (best.score >= AUTO_MERGE_THRESHOLD)
@@ -198,39 +348,84 @@ export function resolveIdentity(inc: IncomingIdentity, ctx: ResolveContext): Res
   return { kind: 'new' };
 }
 
-/** Pairwise duplicate detection across an existing people list (used after imports). */
+/**
+ * Pairwise duplicate detection across an existing people list (run after imports). Only pairs whose names
+ * agree (or that share an address or profile) are scored, so colleagues who share a surname and an employer
+ * are not mistaken for one person; each pair is scored in both directions and the stronger reading wins.
+ */
 export function findDuplicatePairs(
   people: Person[],
   ctx: Omit<ResolveContext, 'people'> = {},
 ): { a: Person; b: Person; score: number; features: ResolveFeatures }[] {
   const out: { a: Person; b: Person; score: number; features: ResolveFeatures }[] = [];
-  const byLast = new Map<string, Person[]>();
+  // blocking: same folded surname, or a shared address
+  const blocks = new Map<string, Person[]>();
+  const add = (key: string, p: Person) => {
+    const arr = blocks.get(key) ?? [];
+    if (!arr.includes(p)) arr.push(p);
+    blocks.set(key, arr);
+  };
   for (const p of people) {
-    const l = parseName(p.displayName).last.toLowerCase();
-    if (!l) continue;
-    const arr = byLast.get(l) ?? [];
-    arr.push(p);
-    byLast.set(l, arr);
+    if (!p.isHuman) continue;
+    const l = fold(parseName(p.displayName).last);
+    if (l && !isPlaceholderName(p)) add(`last:${l}`, p);
+    for (const e of new Set([p.primaryEmail, ...p.emails].filter(Boolean)))
+      add(`email:${normalizeEmail(e!)}`, p);
+    if (isPlaceholderName(p) && p.primaryEmail) {
+      // a bare address can only be linked through its domain
+      const dom = emailDomain(normalizeEmail(p.primaryEmail));
+      if (!PERSONAL_EMAIL_DOMAINS.has(dom)) add(`domain:${dom}`, p);
+    }
   }
-  for (const group of byLast.values()) {
+  for (const p of people) {
+    if (!p.isHuman || isPlaceholderName(p)) continue;
+    const doms = new Set(
+      [p.primaryEmail, ...p.emails].filter(Boolean).map((e) => emailDomain(normalizeEmail(e!))),
+    );
+    const org = normalizeCompany(p.currentOrganizationRaw).replace(/[\s&]+/g, '');
+    for (const key of blocks.keys()) {
+      if (!key.startsWith('domain:')) continue;
+      const d = key.slice(7);
+      const root = d.split('.').slice(-2, -1)[0] ?? '';
+      if (doms.has(d) || (org && root.length >= 3 && org.includes(root))) add(key, p);
+    }
+  }
+  const seen = new Set<string>();
+  const asIncoming = (p: Person): IncomingIdentity => ({
+    displayName: isPlaceholderName(p) ? undefined : p.displayName,
+    email: p.primaryEmail,
+    linkedinUrl: p.linkedinUrl,
+    companyRaw: p.currentOrganizationRaw,
+    title: p.currentTitle,
+    school: p.school,
+    source: 'manual',
+  });
+  const full = { people, ...ctx };
+  for (const group of blocks.values()) {
     for (let i = 0; i < group.length; i++) {
       for (let j = i + 1; j < group.length; j++) {
         const a = group[i]!;
         const b = group[j]!;
-        const f = computeFeatures(
-          {
-            displayName: a.displayName,
-            email: a.primaryEmail,
-            companyRaw: a.currentOrganizationRaw,
-            title: a.currentTitle,
-            school: a.school,
-            source: 'manual',
-          },
-          b,
-          { people, ...ctx },
-        );
-        const score = scoreFeatures(f);
-        if (score >= SUGGEST_THRESHOLD) out.push({ a, b, score, features: f });
+        const key = a.id < b.id ? `${a.id}|${b.id}` : `${b.id}|${a.id}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const emailsA = new Set([a.primaryEmail, ...a.emails].filter(Boolean).map((e) => normalizeEmail(e!)));
+        const sharedAddress = [b.primaryEmail, ...b.emails].some((e) => e && emailsA.has(normalizeEmail(e)));
+        const sharedProfile = !!a.linkedinSlug && a.linkedinSlug === b.linkedinSlug;
+        if (sharedAddress || sharedProfile) {
+          out.push({ a, b, score: 1, features: computeFeatures(asIncoming(a), b, full) });
+          continue;
+        }
+        let best: { score: number; features: ResolveFeatures } | undefined;
+        for (const [x, y] of [
+          [a, b],
+          [b, a],
+        ] as const) {
+          // scorePair requires agreeing names and counts a shared employer once
+          const { score, features } = scorePair(asIncoming(x), y, full);
+          if (!best || score > best.score) best = { score, features };
+        }
+        if (best && best.score >= SUGGEST_THRESHOLD) out.push({ a, b, ...best });
       }
     }
   }

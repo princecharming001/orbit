@@ -23,7 +23,9 @@ import {
   isRuleSuggestion,
   newId,
   proposeWindows,
+  resumeOneLiner,
   STAGE_LABELS,
+  schoolShort,
   scoreCandidate,
   selectForBrief,
   staleReason,
@@ -36,7 +38,9 @@ import { addTouchpoint, feedback, notify, recomputeAllStrengths } from '../db/re
 import { db } from '../db/schema';
 import { describeLlmFailure, hasLlm, llmDraft, llmSummary, toLlmError } from '../integrations/anthropic';
 import { bestPathStrength, buildReachGraph } from './graph';
+import { noteMatchCandidate } from './notes';
 import { personSummary } from './prep';
+import { currentResumeFacets } from './resume';
 import { retireSuggestions, runTimedStageRules } from './stages';
 
 const DAY = 86_400_000;
@@ -480,6 +484,19 @@ function credibilityLine(
   return cands[0]?.line;
 }
 
+/**
+ * The "who I am" clause override. The template composes the clean clause from structured fields ("a junior at
+ * Cornell studying computer science"), so a resume summary is used only when those fields are missing, and then
+ * only as a short "a/an ..." clause (`resumeOneLiner`: no contact details), cut at its first comma so interests and
+ * asides stay out, with the school's short name.
+ */
+function oneLinerFor(user: User, summary: string | undefined): string | undefined {
+  if (user.school && user.graduationYear) return undefined;
+  const clause = resumeOneLiner(summary)?.split(/,\s*/)[0]?.trim();
+  if (!clause) return undefined;
+  return user.school ? clause.replace(user.school, schoolShort(user.school)) : clause;
+}
+
 export async function buildDraftContext(
   user: User,
   person: Person,
@@ -501,7 +518,8 @@ export async function buildDraftContext(
         .equals(person.id)
         .filter((f) => !f.deletedAt)
         .toArray(),
-      db.resumeFacets.toArray(),
+      // only the current resume's facets the student kept
+      currentResumeFacets(user.id),
       chatOverride
         ? Promise.resolve(chatOverride)
         : s?.chatId
@@ -515,6 +533,7 @@ export async function buildDraftContext(
       person.currentOrganizationId ? db.organizations.get(person.currentOrganizationId) : undefined,
       db.events.where('userId').equals(user.id).toArray(),
     ]);
+  const summary = resumeFacets.find((f) => f.kind === 'summary')?.text;
   // a report-back is addressed to the referrer; the chat on the suggestion is the target's chat
   const chat = kind === 'report_back' ? undefined : chatFound;
   let thread: DraftContext['thread'];
@@ -735,8 +754,7 @@ export async function buildDraftContext(
       majors: user.majors,
       cycleLabel: goals?.cycleLabel ?? '',
       targetFunctions: goals?.targetFunctions ?? [],
-      // the "who I am" clause is composed from structured fields (year, school, major); a free-text resume
-      // summary is never spliced in, since heuristic parses put the contact header there
+      oneLiner: oneLinerFor(user, summary),
       credibility: credibilityLine(resumeFacets),
       schedulingLink: settings?.schedulingLink,
       timezone: user.timezone,
@@ -1297,24 +1315,14 @@ async function addConfirmationCards(userId: string, now: Date): Promise<void> {
     .equals(userId)
     .filter((n) => n.matchStatus === 'unmatched')
     .toArray();
-  for (const n of unmatched) {
-    await upsertSuggestions(
-      userId,
-      [
-        {
-          kind: 'confirm_note_match',
-          dedupeKey: `note:${n.id}`,
-          reasonText: `Who was "${n.title ?? 'this note'}" with?`,
-          signals: {},
-          payload: { noteId: n.id },
-          urgency: 0.5,
-          goalRelevance: 0.3,
-          confidence: 1,
-          priorityScore: 0.3,
-        },
-      ],
-      now,
-    );
+  if (unmatched.length) {
+    const user = await db.users.get(userId);
+    for (const n of unmatched)
+      await upsertSuggestions(
+        userId,
+        [await noteMatchCandidate({ id: userId, timezone: user?.timezone ?? 'UTC' }, n)],
+        now,
+      );
   }
 }
 
@@ -1585,7 +1593,7 @@ export async function recommendationsRefresh(user: User, now = new Date()): Prom
   const [goals, targetCompanies, resumeFacets, people, chats, existing] = await Promise.all([
     db.goals.get(user.id),
     db.targetCompanies.where('userId').equals(user.id).toArray(),
-    db.resumeFacets.toArray(),
+    currentResumeFacets(user.id),
     db.people.where('userId').equals(user.id).toArray(),
     db.chats.where('userId').equals(user.id).toArray(),
     db.recommendations.where('userId').equals(user.id).toArray(),

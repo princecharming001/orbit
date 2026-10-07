@@ -3,7 +3,7 @@ import { newId, normalizeCompany, parseConnectionsCsv } from '@orbit/core';
 import { addTouchpoint, recomputeAllStrengths } from '../db/repo';
 import { db } from '../db/schema';
 import { recomputeEdges } from './graph';
-import { loadPeopleCache, upsertPerson } from './people';
+import { loadPeopleCache, suggestDuplicateMerges, upsertPerson } from './people';
 
 export async function importConnectionsCsv(
   user: User,
@@ -19,7 +19,10 @@ export async function importConnectionsCsv(
     const { person, created } = await upsertPerson(
       {
         userId: user.id,
-        displayName: `${r.firstName} ${r.lastName}`,
+        // first and last stay separate so "Lee, Jr." is read as a suffix, not as "Last, First"
+        displayName: `${r.firstName} ${r.lastName}`.trim(),
+        firstName: r.firstName,
+        lastName: r.lastName,
         email: r.email,
         linkedinUrl: r.url,
         companyRaw: r.company,
@@ -91,6 +94,7 @@ export async function importConnectionsCsv(
   }
   await recomputeAllStrengths(user.id);
   await recomputeEdges(user.id);
+  await suggestDuplicateMerges(user.id);
   return { imported, updated, skipped };
 }
 

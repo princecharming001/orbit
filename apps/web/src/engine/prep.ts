@@ -142,7 +142,8 @@ export function personSummary(args: {
   const hook = facts.find((f) => f.type === 'hook');
   const talkingPoints = [
     hook ? `Ask how this is going: ${sentence(hook.text)}` : undefined,
-    off ? `Follow up on their offer: ${sentence(off.text)}` : undefined,
+    // facts are third-person sentences ("She offered to refer me ..."), so the label does not repeat the offer
+    off ? `Follow up: ${sentence(off.text)}` : undefined,
     adv ? `Tell them what you did with their advice: ${sentence(adv.text)}` : undefined,
   ].filter((x): x is string => !!x);
   return { summary: parts.join(' '), talkingPoints };
