@@ -89,6 +89,11 @@ const FUNCTION_WORDS = new Set(
     .join(' ')
     .split(' '),
 );
+/**
+ * Short function words that are also a part of a name: "Li Na", "Jing He", "Kim So". Typed with a capital after a
+ * name in a phrase typed all with capitals, they are part of the name; anywhere else they are what they say.
+ */
+const NAMELIKE_SHORT = new Set(['he', 'na', 'so', 'do', 'an']);
 /** Roles, teams, places, groups, events and industries: "career services", "VP Engineering", "Big Four firms". */
 const DESCRIPTORS = new Set(
   [
@@ -214,6 +219,8 @@ const NAMELIKE_COMPANIES = new Set([
   'moelis',
   'guggenheim',
 ]);
+/** Last words that make "the X" a part of a company rather than the company: "the Stripe team", "the NYC office". */
+const TEAMISH = new Set('team teams office offices desk department dept side division unit squad'.split(' '));
 /** Last words that make a capitalised phrase a company or institution: "Mayo Clinic", "Bain Capital". */
 const ORG_SUFFIX = new Set(
   [
@@ -274,6 +281,28 @@ const ORG_AT = /\s+(?:at|from|@|-|–|—|on the .+? team at)\s+/i;
 const DESCRIBES_LAST =
   /^(?:who|he|she|they|he's|she's|they're|tho|though|but|since|because|bc|if|might|probably)\b/i;
 
+/** A former employer: "ex-Goldman", "formerly at Google", "used to be at Bain", "previously Meta". */
+const FORMER =
+  /^(?:ex-|ex\s+|formerly\b|former\b|previously\b|prev\.?\s|used to (?:be|work)\b|until recently\b|was\b)/i;
+/** A current employer after a former one: "now at Blackstone", "currently KKR". */
+const CURRENT = /^(?:now|currently|these days|today)\s+(?:(?:at|@|with|works at|working at)\s+)?/i;
+
+/**
+ * The company a bracket names: the current one when it lists a former one ("ex-Goldman, now at Blackstone" is
+ * Blackstone), none when it only names a former one ("ex-Meta").
+ */
+function bracketOrg(inside: string): string | undefined {
+  for (const seg of inside.split(/[,;]/)) {
+    const t = seg.trim();
+    if (!t || FORMER.test(t)) continue;
+    const cur = t.replace(CURRENT, '');
+    const at = /\b(?:at|@)\s+(.+)$/i.exec(cur);
+    const org = readOrg(at ? at[1] : cur);
+    if (org) return org;
+  }
+  return undefined;
+}
+
 /** "and", "&" or "or" between people: "Priya Shah & Tom Lee", "maybe Nora Kim or Ben Tal". */
 const JOIN = /\s+(?:and|&|or)\s+/i;
 /** Articles and possessives that may sit before a role: "the hiring manager", "her recruiter". */
@@ -330,9 +359,26 @@ function readOrg(raw: string | undefined): string | undefined {
     words = words.slice(0, cut);
     org = words.join(' ');
   }
+  // "at the World Bank", "the Carlyle Group", "the Fed": a name typed with capitals after "the" is the company
+  // without it; "the data team", "the Data Team", "the Stripe team" and "the bank" stay descriptions
+  let proper = false;
+  if (words.length > 1 && lower(words[0]!) === 'the') {
+    const after = words.slice(1);
+    const joiner = (w: string) => ['of', 'and', '&', 'for'].includes(lower(w));
+    const content = after.filter((w) => !joiner(w));
+    if (
+      after.every((w) => typedCapital(w) || joiner(w)) &&
+      content.some((w) => !DESCRIPTORS.has(lower(w)) && !FUNCTION_WORDS.has(lower(w))) &&
+      !TEAMISH.has(lower(after[after.length - 1]!))
+    ) {
+      words = after;
+      org = words.join(' ');
+      proper = true;
+    }
+  }
   if (!words.length || words.length > 5) return undefined;
   const plain = words.map(lower);
-  if (!isCompany(org) && !isInstitution(words)) {
+  if (!proper && !isCompany(org) && !isInstitution(words)) {
     if (plain.some((w) => FUNCTION_WORDS.has(w) && w !== 'and' && w !== 'of' && w !== 'the'))
       return undefined;
     if (['the', 'a', 'an'].includes(plain[0]!)) return undefined;
@@ -387,6 +433,24 @@ function isRole(text: string): boolean {
   return words.some((w) => DESCRIPTORS.has(w)) && words.every((w) => DESCRIPTORS.has(w) || ROLE_LEAD.has(w));
 }
 
+/**
+ * The text without the clause after the name ("who leads growth", "is the hiring manager"). A last word that only
+ * looks like a clause start is kept when it is a capitalised part of the name: "Zhou He".
+ */
+function cutClause(text: string): string {
+  const m = CLAUSE.exec(text);
+  if (!m) return text;
+  const tail = m[0].trim();
+  const before = text.slice(0, m.index).trim().split(/\s+/);
+  if (
+    /^\p{Lu}\p{Ll}*$/u.test(tail) &&
+    NAMELIKE_SHORT.has(tail.toLowerCase()) &&
+    before.every((w) => typedCapital(w))
+  )
+    return text;
+  return text.slice(0, m.index);
+}
+
 /** Steps 3 to 5 for one piece's name part. */
 function judgeName(raw: string, hasOrg: boolean): Verdict {
   const text = raw
@@ -396,10 +460,8 @@ function judgeName(raw: string, hasOrg: boolean): Verdict {
     .trim()
     .replace(INTERJECTION, '')
     .replace(LEAD_IN, '')
-    .replace(TRAIL, '')
-    .replace(CLAUSE, '')
-    .trim();
-  let words = text.split(/\s+/).filter(Boolean);
+    .replace(TRAIL, '');
+  let words = cutClause(text).trim().split(/\s+/).filter(Boolean);
   if (!words.length) return { kind: 'skip' };
   if (words.some((w) => !WORD.test(w) || CONTRACTION.test(w))) return { kind: 'skip' };
   // a title: "Dr. Priya Patel" is Priya Patel; "Dr. Patel" is a person without a full name
@@ -415,12 +477,14 @@ function judgeName(raw: string, hasOrg: boolean): Verdict {
   if (j > 0 && j < words.length && (typedCapital(words[j]!) || isGivenName(words[j]!)))
     words = words.slice(j);
   const first = lower(words[0]!);
+  const allCapitals = words.every((w) => typedCapital(w) || PARTICLES.has(lower(w)));
   const wordlikeFirst = WORDLIKE_GIVEN.has(first);
   const bad = (w: string, i: number) => {
     const l = lower(w);
     // "Will Park", "may chen": a given name that is also a word is judged by the rest of the phrase
     if (i === 0 && wordlikeFirst && words.length > 1) return DESCRIPTORS.has(l);
     if (PLURAL_ACRONYM.test(w)) return true;
+    if (i > 0 && NAMELIKE_SHORT.has(l) && allCapitals) return false;
     // "Second-year", "co-op": a hyphenated word with a role or function word in it ("Mary-Kate" is a name)
     const parts = l.split('-');
     return parts.some((p) => FUNCTION_WORDS.has(p) || DESCRIPTORS.has(p) || FIELD_WORDS.has(p));
@@ -502,6 +566,8 @@ function readAnswer(text: string): SuggestedNames {
   };
 
   const chunks = text
+    // a comma or semicolon inside a bracket stays with it: "Olu Adeyemi (ex-Goldman, now at Blackstone)"
+    .replace(/\([^()]*\)/g, (m) => m.replace(/,/g, '\ue000').replace(/;/g, '\ue001'))
     // text pasted from LinkedIn or a phone carries invisible characters inside names ("Yuki Sato\u200b")
     .replace(/[\u200b-\u200d\u2060\ufeff\u00ad]/g, '')
     .replace(/’/g, "'")
@@ -511,7 +577,13 @@ function readAnswer(text: string): SuggestedNames {
     .replace(/\s\d+[.)]\s+/g, '\n')
     .split(/[,;\n]|[!?]+\s*|(?<!\b(?:dr|mr|mrs|ms|mx|prof|st|\p{L}))\.\s+/iu);
   for (const chunk of chunks) {
-    let part = (chunk ?? '').trim().replace(/[.]+$/, '').trim().replace(INTERJECTION, '');
+    let part = (chunk ?? '')
+      .replace(/\ue000/g, ',')
+      .replace(/\ue001/g, ';')
+      .trim()
+      .replace(/[.]+$/, '')
+      .trim()
+      .replace(INTERJECTION, '');
     if (!part) continue;
     const before = lone;
     lone = undefined;
@@ -527,6 +599,17 @@ function readAnswer(text: string): SuggestedNames {
       }
       open = undefined;
       continue;
+    }
+    // "Ana Ruiz, ex-Goldman, now at Blackstone": a former employer says nothing about where the person is now, and a
+    // current one completes the person before it
+    if (open && FORMER.test(part)) continue;
+    if (open && CURRENT.test(part)) {
+      const org = readOrg(part.replace(CURRENT, ''));
+      if (org) {
+        open.org = org;
+        open = undefined;
+        continue;
+      }
     }
     // "Tom Lee, Stripe": a company on its own completes the person before it
     if (open && onlyOrg(part)) {
@@ -549,8 +632,7 @@ function readAnswer(text: string): SuggestedNames {
     if (paren) {
       part = `${paren[1]!.trim()} ${paren[3]!.trim()}`.trim();
       const inside = paren[2]!.trim();
-      const at = /\b(?:at|@)\s+(.+)$/i.exec(inside);
-      org = readOrg(at ? at[1] : inside);
+      org = bracketOrg(inside);
       orgOfLastOnly = !/^(?:both|all|each|they|they're)\b/i.test(inside);
     }
     const at = ORG_AT.exec(part);

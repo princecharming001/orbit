@@ -410,14 +410,78 @@ export const ROUND_FIVE_CASES: (NameCase & { holdout?: true })[] = [
   { text: 'Ms. Rosa Diaz at Kaiser', save: ['Rosa Diaz | Kaiser'], holdout: true },
 ];
 
+/**
+ * Round six: the sixth blind round's misses and variants of each family (tuning), and a fresh set written before the
+ * fix and scored once blind (held out, never tuned on). The families: a name whose part is also a short English word
+ * ("Li Na", "Jing He"), a short or West African given name typed in lowercase ("sam okafor", "tobi adebayo"), a
+ * bracket with a former and a current employer ("ex-Goldman, now at Blackstone"), and "at the World Bank".
+ */
+export const ROUND_SIX_CASES: (NameCase & { holdout?: true })[] = [
+  // blind misses
+  { text: 'Wei Zhang and Li Na at Tencent', save: ['Wei Zhang | Tencent', 'Li Na | Tencent'] },
+  { text: 'sam okafor & priya shah', save: ['Sam Okafor', 'Priya Shah'] },
+  { text: 'Olu Adeyemi (ex-Goldman, now at Blackstone)', save: ['Olu Adeyemi | Blackstone'] },
+  { text: 'Nina Petrova at the World Bank', save: ['Nina Petrova | World Bank'] },
+  // variants: a short word inside a name
+  { text: 'Li Na', save: ['Li Na'] },
+  { text: 'Xu Ming and Zhou He at Alibaba', save: ['Xu Ming | Alibaba', 'Zhou He | Alibaba'] },
+  { text: 'Kim So at Coupang', save: ['Kim So | Coupang'] },
+  { text: 'na' },
+  { text: 'na, sorry' },
+  { text: 'He Is Great' },
+  // variants: short and West African given names in lowercase
+  { text: 'jen walsh and ed park', save: ['Jen Walsh', 'Ed Park'] },
+  { text: "meg o'brien", save: ["Meg O'Brien"] },
+  { text: 'yemi at Paystack', save: ['Yemi | Paystack'] },
+  { text: 'femi' },
+  { text: 'dan reyes, nico bauer', save: ['Dan Reyes', 'Nico Bauer'] },
+  // variants: former and current employers
+  { text: 'Ravi Menon (ex-McKinsey; now at Stripe)', save: ['Ravi Menon | Stripe'] },
+  { text: 'Grace Obi (formerly at Google)', save: ['Grace Obi'] },
+  { text: 'Tom Lee (used to be at Bain, now KKR)', save: ['Tom Lee | KKR'] },
+  { text: 'Ana Ruiz, ex-Goldman, now at Blackstone', save: ['Ana Ruiz | Blackstone'] },
+  { text: 'Dina Haddad (previously Meta)', save: ['Dina Haddad'] },
+  // variants: "at the" before a name or a description
+  { text: 'Leo Park at the Carlyle Group', save: ['Leo Park | Carlyle Group'] },
+  { text: 'Sara Lim at the New York Times', save: ['Sara Lim | New York Times'] },
+  { text: 'Omar Haddad at the IMF', save: ['Omar Haddad | IMF'] },
+  { text: 'Ben Ito at the bank', save: ['Ben Ito'] },
+  { text: 'Ana Ruiz at the Data Team', save: ['Ana Ruiz'] },
+  { text: 'someone at the World Bank' },
+  // fresh answers written before the fix and held out: 1 of 12 right blind, 11 of 12 after the fix (written against
+  // the tuning half above; "An Nguyen", a short word first in a name, is still not saved)
+  {
+    text: 'Jing He and Bo Li at ByteDance',
+    save: ['Jing He | ByteDance', 'Bo Li | ByteDance'],
+    holdout: true,
+  },
+  { text: 'An Nguyen at Deloitte', save: ['An Nguyen | Deloitte'], holdout: true },
+  { text: 'tobi adebayo & kemi bello', save: ['Tobi Adebayo', 'Kemi Bello'], holdout: true },
+  { text: 'nico ferrari', save: ['Nico Ferrari'], holdout: true },
+  { text: 'Ade Ogun (formerly Citi, now at Lazard)', save: ['Ade Ogun | Lazard'], holdout: true },
+  { text: 'Hannah Cole (ex-Meta)', save: ['Hannah Cole'], holdout: true },
+  { text: 'Tariq Aziz at the Gates Foundation', save: ['Tariq Aziz | Gates Foundation'], holdout: true },
+  { text: 'Joy Park at the Fed', save: ['Joy Park | Fed'], holdout: true },
+  { text: 'Ben Moss at the data team', save: ['Ben Moss'], holdout: true },
+  {
+    text: 'Mei Chen, Min So, and Ravi Rao at Ramp',
+    save: ['Mei Chen', 'Min So', 'Ravi Rao | Ramp'],
+    holdout: true,
+  },
+  { text: 'priya at the World Bank', save: ['Priya | World Bank'], holdout: true },
+  { text: 'dan ortiz', save: ['Dan Ortiz'], holdout: true },
+];
+
 /** The 80% the reader was tuned on, and the 20% it was not. */
 export const TRAIN_CASES = [
   ...NAME_CASES.filter((_, i) => i % 5 !== 4),
   ...BLIND_CASES.filter((c) => !c.holdout),
   ...ROUND_FIVE_CASES.filter((c) => !c.holdout),
+  ...ROUND_SIX_CASES.filter((c) => !c.holdout),
 ];
 export const HOLDOUT_CASES = [
   ...NAME_CASES.filter((_, i) => i % 5 === 4),
   ...BLIND_CASES.filter((c) => c.holdout),
   ...ROUND_FIVE_CASES.filter((c) => c.holdout),
+  ...ROUND_SIX_CASES.filter((c) => c.holdout),
 ];

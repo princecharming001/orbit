@@ -580,4 +580,93 @@ export const HOLDOUT: SignalExample[] = [
     label: 'neutral',
     body: "Noted, I'll keep an eye out for your application.",
   },
+  // Round six hold-out: fresh replies in the families the sixth blind round missed (a hand-typed away note that defers
+  // the reply, an intro offered as a question or as "happy to make the connection", a thank-you after a meeting that
+  // says "a pleasure" or "enjoyed meeting you", a time in another city's clock accepted with "works for me"). Written
+  // before the fix and scored once blind at 9 of 16, never tuned on; 15 of 16 after the fix, which was written against
+  // the tuning part's misses and variants ("What a sweet note, thank you!" is still read as neutral).
+  {
+    id: 'r6h-ooo-patchy-signal',
+    label: 'ooo',
+    body: "Hey! I'm on a work trip with patchy signal this week. Will get back to you properly once I'm home.",
+  },
+  {
+    id: 'r6h-ooo-abroad-wifi',
+    label: 'ooo',
+    body: "Quick note from abroad, the wifi here is unreliable. I'll respond in full when I'm back on the 19th.",
+  },
+  {
+    id: 'r6h-ooo-camping',
+    label: 'ooo',
+    body: 'Camping till Sunday with no service, will answer when I get back!',
+  },
+  {
+    id: 'r6h-pos-was-traveling',
+    label: 'positive',
+    body: 'Sorry for the slow reply, I was traveling with spotty wifi. Happy to chat, send me a few times.',
+  },
+  {
+    id: 'r6h-intro-want-me',
+    label: 'intro',
+    body: 'Want me to connect you with a friend who recruits for Bain? Glad to do it.',
+  },
+  {
+    id: 'r6h-intro-should-i',
+    label: 'intro',
+    body: 'Should I put you in touch with my old manager at Deloitte? She hires analysts every year.',
+  },
+  {
+    id: 'r6h-intro-would-it-help',
+    label: 'intro',
+    body: 'Would it help if I introduced you to someone on the PM team at Google? Happy to make an introduction.',
+  },
+  {
+    id: 'r6h-intro-interested',
+    label: 'intro',
+    body: 'Would you be interested in an intro to our head of design? Just say the word.',
+  },
+  {
+    id: 'r6h-q-who-introduced',
+    label: 'question',
+    body: 'Who introduced you to me again? I want to thank them.',
+  },
+  {
+    id: 'r6h-ty-pleasure-meeting',
+    label: 'thank_you',
+    body: 'It was a real pleasure meeting you yesterday. Thanks for the thoughtful questions.',
+  },
+  {
+    id: 'r6h-ty-stopping-by',
+    label: 'thank_you',
+    body: 'Thanks for stopping by the booth today, really enjoyed talking with you.',
+  },
+  {
+    id: 'r6h-ty-sweet-note',
+    label: 'thank_you',
+    body: 'What a sweet note, thank you! Loved hearing about your first week.',
+  },
+  {
+    id: 'r6h-ty-enjoyed-meeting-team',
+    label: 'thank_you',
+    body: 'Thanks for coming in to meet the team. We all enjoyed meeting you.',
+  },
+  {
+    id: 'r6h-pos-pleasure-happy',
+    label: 'positive',
+    body: 'Pleasure meeting you at the fair! Happy to chat more next week, send me a couple of times.',
+  },
+  {
+    id: 'r6h-conf-new-york-time',
+    label: 'confirmation',
+    body: 'Friday at 10 New York time works for me.',
+    times: ['Fri 10/9 10:00'],
+    zone: 'America/New_York',
+  },
+  {
+    id: 'r6h-prop-london-instead',
+    label: 'proposal',
+    body: 'Could we do Thursday at 4 London time instead?',
+    times: ['Thu 10/8 16:00'],
+    zone: 'Europe/London',
+  },
 ];

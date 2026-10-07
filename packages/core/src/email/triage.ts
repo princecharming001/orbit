@@ -147,7 +147,12 @@ function anyOf(res: RegExp[], text: string): boolean {
 // ---- lexicons --------------------------------------------------------------------------------------------------
 
 const OOO =
-  /\b(out of (the )?office|on (vacation|leave|pto|parental leave|maternity leave|paternity leave|holiday|sabbatical)|away (until|from|through)|auto(-| )?reply|automatic reply|(limited|intermittent|no|minimal) (access to )?(my )?e-?mail|currently (traveling|travelling|away|out)|(will|i'?ll) (get back to you|respond|reply)( to (you|your (e-?mail|message|note)))?( as soon as possible)? (when|once|upon|after) (i|my) return|back in the office|ooo)\b/i;
+  /\b(out of (the )?office|on (vacation|leave|pto|parental leave|maternity leave|paternity leave|holiday|sabbatical)|away (until|from|through)|auto(-| )?reply|automatic reply|(limited|intermittent|no|minimal) (access to )?(my )?e-?mail|currently (traveling|travelling|away|out)|(will|i'?ll) (get back to you|respond|reply)( to (you|your (e-?mail|message|note)))?( as soon as possible)? (when|once|upon|after) (i|my) return|back in the office|ooo|(will|i'?ll) (get back to you|respond|reply|write back|answer|follow up)( to (you|this|your (e-?mail|message|note)))?( properly| in full| in detail| fully| at length| for real)? (when|once|after) (i'?m|i am|i get|i'?m) (back|home)|more (when|once) (i'?m|i am|i get) (back|home))\b/i;
+/*
+ * The last OOO alternatives are a hand-typed away note that puts the reply off until the sender is back ("traveling
+ * this week with spotty wifi, will reply properly when I'm back", "more when I get back"); a note that also offers a
+ * time or a contrast ("but happy to chat next week") is read further, see step 1 of heuristicSignal.
+ */
 /** How a vacation responder opens: the first line reads like a template, not like a person answering. */
 const AUTO_REPLY_OPENER =
   /^(?:(?:hi|hello|dear)[^\n]{0,30}\n+)?\s*(thank(s| you) for your (e-?mail|message|note|inquiry)|i am (currently )?(out of the office|away from (the|my) (office|desk)|on (annual |parental |maternity |paternity )?leave|ooo\b)|i will be (out of the office|away from)|automatic reply|this is an automat)/i;
@@ -392,9 +397,13 @@ const OFFER_REFER = new RegExp(
   `\\b(${OFFERER}(refer|put in (a|an|my) (\\w+ )?referral|put (a|an|my) (\\w+ )?referral in|${PASS_ALONG}|pass (it|this|that|these|them|your \\w+) (on )?to|put in a (good )?word|forward (your|it|this|them)|send (it|your resume)|pass (your|it along|along)|flag (you|your)|submit (you|your|a referral|(a|an|my) (\\w+ )?referral)|put (your name|your resume|your application) (in|forward|through|up)|put you forward|pass this along)|i (passed|forwarded|sent|submitted) your (resume|info|name|application)|forwarded your (resume|info|application)|(just )?submitted (a|my) referral|referred you|put in a (good )?word|${PASS_ALONG})\\b`,
   'i',
 );
-/** An intro offered for later ("I can introduce you", "let me know if you'd like an intro"). */
+/**
+ * An intro offered for later ("I can introduce you", "let me know if you'd like an intro"), also as a question ("Would
+ * you like me to introduce you to someone at McKinsey?", "Would it help if I introduced you?") or as making the
+ * connection ("Happy to make the connection").
+ */
 const OFFER_INTRO = new RegExp(
-  `\\b(${OFFERER}(intro|introduce|connect you|put you in touch|make (an|that|the|a few|some) intros?|do an intro)|(want|like|need) an? intro|intro(duction)? to (anyone|someone|my|our|a few)|connect you (with|two)|put you in touch)\\b`,
+  `\\b(${OFFERER}(intro|introduce|connect you|put you in touch|make (an|that|the|a few|some) intros?|do an intro|make (the|a|an|that) (connection|introduction))|(want|like|need) an? intro|intro(duction)? to (anyone|someone|my|our|a few)|connect you (with|two)|put you in touch|(would you like|do you want|did you want|want|would it help( if)?|should|shall|can|could|may) (me to|i) (intro|introduce|introduced|connect|put) you|(interested in|open to) an? intro(duction)?)\\b`,
   'i',
 );
 /** A question about the student or the past ("which Sarah referred you?"), where an offer word is not an offer. */
@@ -445,9 +454,18 @@ const CHECK_QUESTION =
 const ASK_OF_USER =
   /\b(could you|can you|please send|send (me|over)|would you mind|let me know (which|what|your)|what (teams|roles|areas)|share your resume)\b/i;
 const INBOUND_THANKS =
-  /\b(thank(s| you)( so much| again| a lot)? for (your time|the (great |lovely |nice |helpful )?(chat|call|conversation|time)|taking the time|making (the )?time|chatting|talking|meeting|speaking)|(really |truly )?appreciated (our|the) (great |lovely |nice |helpful )?(chat|call|conversation|coffee)|(really |truly )?appreciated (chatting|talking|speaking|meeting)|(great|nice|lovely|good) (chatting|talking|speaking|meeting|to (meet|chat|talk|connect)) (with )?you|(a )?pleasure (meeting|chatting|talking|speaking)( with)? you|(really )?enjoyed (our|the) (chat|conversation|call|coffee)|thank(s| you)( so much| again| a lot)? for (the|your) (follow[- ]up|thank[- ]you|thank you) (note|message|email|e-mail))\b/i;
+  /\b(thank(s| you)( so much| again| a lot)? for (your time|the (great |lovely |nice |helpful )?(chat|call|conversation|time)|taking the time|making (the )?time|chatting|talking|meeting|speaking)|(really |truly )?appreciated (our|the) (great |lovely |nice |helpful )?(chat|call|conversation|coffee)|(really |truly )?appreciated (chatting|talking|speaking|meeting)|(great|nice|lovely|good) (chatting|talking|speaking|meeting|to (meet|chat|talk|connect)) (with )?you|(a |such a |what a |real )?pleasure (meeting|chatting|talking|speaking|to (meet|chat|talk|speak))( with)?( you)?|(really |truly |so |all )?enjoyed (our|the) (chat|conversation|call|coffee)|(really |truly |so |all )?enjoyed (meeting|chatting with|talking (with|to)|speaking with|getting to know|hosting) you|thank(s| you)( so much| again| a lot)? for (coming|stopping|dropping|swinging) (by|in|over)|thank(s| you)( so much| again| a lot)? for (visiting|coming to (the|our)|joining us)|thank(s| you)( so much| again| a lot)? for (the|your) (follow[- ]up|thank[- ]you|thank you) (note|message|email|e-mail))\b/i;
 const OUTBOUND_THANKS =
   /\b(thank(s| you)( so much| again| a lot| a ton)*( for| for the| for your)? ?(great |wonderful |helpful |thoughtful |lovely )?(time|chat|call|conversation|advice|insights?|meeting|talking|chatting|speaking|help|perspective|coffee|lunch)|thank(s| you)( so much| again)* for (taking the time|making time|meeting with me|hopping on)|(great|wonderful|lovely|nice) (chatting|talking|speaking|to (meet|chat|talk)) with you|really (enjoyed|appreciated?) (our|the|your|you) ?(chat|conversation|call|time|advice|insights?|sharing|taking)|i really enjoyed (our|the) (chat|conversation|call))\b/i;
+/**
+ * Thanks for a kind note ("Thank you for the lovely note!"): the answer to a thank-you, unless the chat is still
+ * waiting on an answer to the student's ask, where it opens a reply that says nothing yet.
+ */
+const THANKS_FOR_NOTE =
+  /\bthank(s| you)( so much| again| a lot)? for (the|your) (lovely|kind|sweet) (note|message|words|e-?mail)\b/i;
+/** A refusal next to thanks: the thanks only opens it. */
+const REFUSAL =
+  /\bunfortunately\b|\bregret(tably)?\b|(\bnot|n't) (hiring|able to|taking|accepting|moving forward)\b|\bno (openings?|open roles|roles|positions|spots)\b/i;
 /** A gratitude word anywhere; used by ingest for a note sent right after a completed chat. */
 export const GRATITUDE = /\b(thank(s| you)|grateful|appreciate[ds]?)\b/i;
 
@@ -808,7 +826,11 @@ export function heuristicSignal(
       !anyOf(SCHED_ASK, s.text),
   );
   const asksQuestion = sentences.some((s) => s.question);
-  if (!notNow && INBOUND_THANKS.test(body) && !yes && !asksQuestion) return warm('thank_you', 0.7);
+  // "Thanks for joining us at the info session. We're not hiring interns this cycle" is not a thank-you after a chat
+  const thanks =
+    (INBOUND_THANKS.test(body) || (THANKS_FOR_NOTE.test(body) && opts.awaitingAnswer !== true)) &&
+    !REFUSAL.test(body);
+  if (!notNow && thanks && !yes && !asksQuestion) return warm('thank_you', 0.7);
 
   // 11. not now; a bare "best of luck" closes the door only on an ask still waiting for an answer, or next to a no
   const partingNo =

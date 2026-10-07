@@ -1379,4 +1379,132 @@ export const TRAIN: SignalExample[] = [
     label: 'question',
     body: 'Did you get my note on Monday?',
   },
+  // Sixth blind round: its misses and variants of each family. "Thursday at 3 London time works for me" was labelled a
+  // proposal by the tester, who then agreed that "works for me" accepts the time; it is a confirmation here, as
+  // "Thursday at 2pm works for me" is in the older corpus.
+  {
+    id: 'b6-conf-london-works',
+    label: 'confirmation',
+    body: 'Thursday at 3 London time works for me.',
+    times: ['Thu 10/8 15:00'],
+    zone: 'Europe/London',
+  },
+  {
+    id: 'b6v-conf-paris-works',
+    label: 'confirmation',
+    body: 'Great, Wednesday at 5 Paris time works for me.',
+    times: ['Wed 10/7 17:00'],
+    zone: 'Europe/Paris',
+  },
+  {
+    id: 'b6-ooo-spotty-wifi',
+    label: 'ooo',
+    body: "Hi Alex — traveling this week with spotty wifi, will reply properly when I'm back!",
+  },
+  {
+    id: 'b6v-ooo-bad-reception',
+    label: 'ooo',
+    body: "On the road until Friday with bad reception. I'll respond properly when I'm back.",
+  },
+  {
+    id: 'b6v-ooo-family-trip',
+    label: 'ooo',
+    body: "Away on a family trip, I'll reply once I'm home.",
+  },
+  {
+    id: 'b6v-ooo-more-when-back',
+    label: 'ooo',
+    body: 'Typing from my phone at a conference with limited wifi. More when I get back next week!',
+  },
+  {
+    id: 'b6v-pos-traveling-but-happy',
+    label: 'positive',
+    body: "I'm traveling with spotty wifi this week, but happy to chat next week. Send me a couple of times.",
+  },
+  {
+    id: 'b6v-pos-was-away',
+    label: 'positive',
+    body: 'Sorry, I was away with no wifi last week. Of course, happy to chat. What works for you?',
+  },
+  {
+    id: 'b6-intro-would-you-like',
+    label: 'intro',
+    body: 'Would you like me to introduce you to someone at McKinsey? Happy to make the connection.',
+  },
+  {
+    id: 'b6v-intro-want-me-to',
+    label: 'intro',
+    body: 'Do you want me to introduce you to a couple of people on the strategy team?',
+  },
+  {
+    id: 'b6v-intro-shall-i',
+    label: 'intro',
+    body: 'Shall I connect you with our campus lead? She knows the program inside out.',
+  },
+  {
+    id: 'b6v-intro-make-connection',
+    label: 'intro',
+    body: 'My cousin is a PM at Spotify. Glad to make the connection if useful.',
+  },
+  {
+    id: 'b6v-intro-could-intro',
+    label: 'intro',
+    body: 'I could intro you to a former teammate at Stripe if that helps.',
+  },
+  {
+    id: 'b6v-q-did-someone-introduce',
+    label: 'question',
+    body: 'Did someone introduce you to me, or did you find me on LinkedIn?',
+  },
+  {
+    id: 'b6v-q-should-i-connect-recruiter',
+    label: 'question',
+    body: 'Should I connect with your recruiter directly, or wait for you?',
+  },
+  {
+    id: 'b6-ty-lovely-note-pleasure',
+    label: 'thank_you',
+    body: 'Thank you for the lovely note! It was a pleasure chatting.',
+  },
+  {
+    id: 'b6-ty-coming-by-office',
+    label: 'thank_you',
+    body: 'Thanks again for coming by the office — really enjoyed meeting you.',
+  },
+  {
+    id: 'b6v-ty-pleasure-to-meet',
+    label: 'thank_you',
+    body: 'It was a pleasure to meet you today. Best of luck with the rest of recruiting.',
+  },
+  {
+    id: 'b6v-ty-kind-note',
+    label: 'thank_you',
+    body: 'Thanks so much for the kind note, it made my day.',
+  },
+  {
+    id: 'b6v-ty-enjoyed-getting-to-know',
+    label: 'thank_you',
+    body: 'Thanks for visiting the lab on Friday. I enjoyed getting to know you.',
+  },
+  {
+    id: 'b6v-pos-enjoyed-meeting-happy',
+    label: 'positive',
+    body: 'Really enjoyed meeting you at the info session. Happy to chat more, what works for you?',
+  },
+  {
+    id: 'b6v-q-pleasure-question',
+    label: 'question',
+    body: 'Pleasure chatting earlier. Which office are you applying to?',
+  },
+  {
+    id: 'b6v-neutral-thanks-note-awaiting',
+    label: 'neutral',
+    awaiting: true,
+    body: 'Thanks for the kind note.',
+  },
+  {
+    id: 'b6v-neutral-visit-not-hiring',
+    label: 'neutral',
+    body: "Thanks for coming by the office. We aren't hiring interns this cycle.",
+  },
 ];

@@ -5,6 +5,7 @@ import {
   NAME_CASES,
   type NameCase,
   ROUND_FIVE_CASES,
+  ROUND_SIX_CASES,
   TRAIN_CASES,
 } from './fixtures/suggested-names';
 import { readSuggestedNames, type SuggestedName } from './suggested-names';
@@ -72,7 +73,7 @@ function summary(title: string, s: Score): string {
 
 describe('suggested-name corpus', () => {
   it('is large enough and holds out at least 20%', () => {
-    const all = [...NAME_CASES, ...BLIND_CASES, ...ROUND_FIVE_CASES];
+    const all = [...NAME_CASES, ...BLIND_CASES, ...ROUND_FIVE_CASES, ...ROUND_SIX_CASES];
     expect(all.length).toBeGreaterThanOrEqual(120);
     expect(TRAIN_CASES.length + HOLDOUT_CASES.length).toBe(all.length);
     expect(HOLDOUT_CASES.length).toBeGreaterThanOrEqual(Math.floor(all.length / 5));
@@ -81,6 +82,8 @@ describe('suggested-name corpus', () => {
     expect(blind).toBeGreaterThanOrEqual(9);
     // the fifth round's fresh answers, written before its fix, are all held out
     expect(ROUND_FIVE_CASES.filter((c) => c.holdout).length).toBeGreaterThanOrEqual(20);
+    // and so are the sixth round's
+    expect(ROUND_SIX_CASES.filter((c) => c.holdout).length).toBeGreaterThanOrEqual(12);
     expect(new Set(all.map((c) => c.text)).size).toBe(all.length);
   });
 

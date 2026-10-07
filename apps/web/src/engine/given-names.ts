@@ -38,6 +38,8 @@ const LIST = [
   'tiffany tim timothy tina toby todd tom tommy tony tracy travis trevor tristan troy tyler valerie vanessa',
   'veronica victor victoria vincent violet virginia walter wayne wendy wesley whitney will william willow wyatt',
   'zach zachary zack zoe zoey',
+  // short forms people type for each other
+  'abby becca dan doug ed eddie fred jen liz meg mikey nina ollie pete rick ricky sam stevie tess val vic vince',
   // Spanish and Portuguese
   'adriana agustin alberto alejandra alejandro alfonso alvaro ana andres angel antonia antonio arturo beatriz',
   'camila carlos carmen catalina cesar cristina daniela diego dolores eduardo elena emilio enrique esteban fernanda',
@@ -45,7 +47,7 @@ const LIST = [
   'jorge jose josefina juan juana julieta julio leonardo lorena lorenzo lucia luciana luis manuel marcela marco',
   'mariana marisol mateo mercedes miguel natalia nicolas pablo paloma pedro pilar rafael ramon raul renata ricardo',
   'rodrigo rosa ruben santiago sebastian sergio sofia tomas valentina valeria ximena yesenia joao thiago gabriel',
-  'beatriz goncalo rafaela leticia vitoria',
+  'beatriz goncalo rafaela leticia vitoria tiago nuno caio rafa iker gio nico enzo bruno lola',
   // South Asian
   'aarav abhishek aditi aditya aishwarya ajay akash alok amit amrita anand ananya anil anita anjali ankit ankita',
   'anushka aparna archana arjun arun aryan ashok ashwin avani ayush bhavna chitra deepa deepak dev devika dhruv',
@@ -64,18 +66,19 @@ const LIST = [
   'minjun min-jun jiwoo ji-woo seoyeon seo-yeon jimin ji-min hyun hyunwoo hyun-woo sungmin sung-min jisoo ji-soo',
   'yuna eunji eun-ji minji min-ji jihoon ji-hoon soyeon so-yeon taeyang hana jaehyun jae-hyun seojun seo-jun',
   'haruto yuto sota yuki hiro hiroshi takeshi kenji satoshi daiki ryo kenta akira yuko yumi aiko emi sakura yui',
-  'mio rin keiko naoko mai saki kaori haruka takumi riku shota',
+  'mio rin keiko naoko mai saki kaori haruka takumi riku shota sora ren jae ji soo eun seo min',
   'anh bao duc hai hieu hoa hung huong khanh lan linh long mai minh ngoc phuong quang tam thanh thao trang trung',
   'tuan van vy',
   // Arabic, Persian, Turkish
   'ahmad ahmed aisha ali amina amir ayman bilal dina farah faisal fatima hamza hana hassan hiba huda hussein',
   'ibrahim karim khalid layla leila lina mariam maryam mohamed mohammad mohammed muhammad nabil noor nour omar',
   'rami rania reem salma samir sara tariq yasmin yasmine youssef yusuf zainab ziad arash darius dariush kian',
-  'leyla mehdi nasrin parisa reza roya shirin emre elif zeynep mehmet ayse can',
+  'leyla mehdi nasrin parisa reza roya shirin emre elif zeynep mehmet ayse can idris dara navid yara',
   // West, East and Southern African
   'abena ada adaeze adebayo ade akua ama amara amani baraka chidi chinedu chioma chinonso emeka femi folake imani',
   'jabari kofi kwame kwesi lerato ngozi nneka obinna oluwaseun segun sipho thabo thandiwe tunde wanjiru yetunde',
-  'zanele zuri efua kojo yaw tendai tariro amaka ifeoma uchenna',
+  'zanele zuri efua kojo yaw tendai tariro amaka ifeoma uchenna olu seun yemi bola kemi tobi dayo uche obi wale',
+  'kunle funmi esi akosua',
   // European
   'agnieszka alessandro alessia amelie anastasia anders antoine astrid bjorn chiara dmitri elisa elsa erik federico',
   'francesca giovanni giulia giuseppe greta ida ingrid irina ivan jakub jan johan jonas julien katarzyna katya',
@@ -102,7 +105,7 @@ export const WORDLIKE_GIVEN = new Set(
     'gene chase hunter carter cash angel sky river reed drew ray rob jack miles lane grant sage dean dale glenn',
     'guy jay page holly ivy iris daisy violet hazel amber crystal autumn penny chip buck rusty sterling wade earl',
     'royal christian dallas houston paris london sydney georgia carolina virginia savannah brooklyn',
-    'chelsea india phoenix florence dakota bo li na yu can long van lan mai hana ada sid noel',
+    'chelsea india phoenix florence dakota bo li na yu can long van lan mai hana ada sid noel min',
   ]
     .join(' ')
     .split(' '),
