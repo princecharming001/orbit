@@ -373,6 +373,50 @@ describe('notes after the calendar (EG-02 hook)', () => {
   });
 });
 
+describe('thank-you drafts follow the facts (DQ-03)', () => {
+  it('re-drafts an untouched thank-you when a fact arrives by any route, once', async () => {
+    const who = { name: 'Rhea Lund', email: 'rhea.lund@plaid.com' };
+    await ingestEmails(
+      user,
+      [
+        mail(who, 'out', ago(12 * D), OUTREACH('Rhea'), 'rhea_lund'),
+        mail(who, 'in', ago(11 * D), YES('Rhea'), 'rhea_lund'),
+      ],
+      { useLlm: false, now },
+    );
+    await ingestEvents(user, [meeting(who, 'rhea_lund', ago(4 * H))], now);
+    const p = await personByEmail(who.email);
+    const card = (await cardsOf(p.id)).find((s) => s.kind === 'thank_you' && s.status === 'pending')!;
+    const before = (await db.outbound.get(card.outboundMessageId!))!;
+    expect(before.bodyDraft).not.toMatch(/ledger|sandbox/i);
+    // the student types what they remember on the person page, after the draft was written
+    const later = new Date(Date.parse(before.createdAt) + 60_000).toISOString();
+    await db.facts.add({
+      id: 'f_dq03',
+      userId: user.id,
+      personId: p.id,
+      type: 'advice',
+      text: 'Rhea recommended building one small project on the Plaid sandbox before applying.',
+      sourceTable: 'manual',
+      sourceId: 'manual',
+      confidence: 1,
+      occurredAt: later,
+      createdAt: later,
+    });
+    await revalidatePending(user.id, now);
+    const after = (await db.outbound.get(card.outboundMessageId!))!;
+    expect(after.status).toBe('draft');
+    expect(after.bodyDraft).toMatch(/sandbox/i);
+    expect(after.claims?.some((c) => c.factId === 'f_dq03')).toBe(true);
+    expect((await db.suggestions.get(card.id))!.payload.factsAsOf).toBe(later);
+    // nothing new: no second re-draft, and an edited draft is never rewritten
+    await db.outbound.update(after.id, { bodyFinal: 'My own words.' });
+    await db.facts.update('f_dq03', { createdAt: new Date(Date.parse(later) + 1).toISOString() });
+    await revalidatePending(user.id, now);
+    expect((await db.outbound.get(after.id))!.bodyFinal).toBe('My own words.');
+  });
+});
+
 describe('out of office is not a reply (EG-12)', () => {
   it('holds the bump until two business days after the return date, then brings it back', async () => {
     const who = { name: 'Odile Marsh', email: 'odile.marsh@brex.com' };

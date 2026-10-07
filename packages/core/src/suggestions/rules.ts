@@ -500,12 +500,17 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
       confidence: 1,
     });
   }
-  // prep briefs: from 30 hours before the chat until it starts
+  // prep briefs: from 30 hours before the chat until it starts, and all day the day before (a brief built just
+  // after midnight still lists tomorrow's chat), by calendar day in the student's timezone
+  const tomorrow = new Date(Date.parse(`${todayKey(now, inp.timezone)}T00:00:00Z`) + DAY)
+    .toISOString()
+    .slice(0, 10);
   for (const e of inp.events) {
     if (e.status === 'cancelled' || !e.attendeePersonIds.length) continue;
     const start = new Date(e.startAt).getTime();
     const hours = (start - now.getTime()) / HOUR;
-    if (hours > 0 && hours <= 30 && (e.isCoffeeChat ?? false)) {
+    const soon = hours <= 30 || todayKey(new Date(start), inp.timezone) <= tomorrow;
+    if (hours > 0 && soon && (e.isCoffeeChat ?? false)) {
       const pid = e.attendeePersonIds[0]!;
       const p = inp.people.get(pid);
       if (!p) continue;
@@ -819,6 +824,8 @@ export const OBLIGATION_KINDS: SuggestionKind[] = [
   'action_item_reminder',
   'ask_referral',
   'report_back',
+  // following up on an intro the person offered: their offer, so it comes before strangers
+  'intro_request',
 ];
 /** Kinds that carry a message to the person; the one-per-person and per-company rules apply to these only. */
 export const MESSAGE_KINDS: SuggestionKind[] = [

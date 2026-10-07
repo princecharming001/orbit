@@ -1,9 +1,14 @@
-import type { MeetingNote, NoteSource, SuggestionKind, User } from '@orbit/core';
+import type { MeetingNote, NoteSource, User } from '@orbit/core';
 import { heuristicNoteExtraction, newId, normalizeEmail, parseGranolaText, parseName } from '@orbit/core';
 import { addTouchpoint, notify, recomputePersonStrength } from '../db/repo';
 import { db } from '../db/schema';
 import { hasLlm, llmNoteExtraction } from '../integrations/anthropic';
-import { evaluateImmediateSuggestions, refreshPersonSummary, refreshUntouchedDraft } from './brief';
+import {
+  evaluateImmediateSuggestions,
+  FACT_DRAFT_KINDS,
+  refreshIfFactsNewer,
+  refreshPersonSummary,
+} from './brief';
 import { upsertPerson } from './people';
 import { evaluateTrigger } from './stages';
 
@@ -235,11 +240,9 @@ export async function processNote(user: User, note: MeetingNote, now = new Date(
   await evaluateImmediateSuggestions(user.id, { personId: primary.id, chatId: chat?.id }, now);
   for (const s of drafted) {
     const fresh = await db.suggestions.get(s.id);
-    if (fresh?.status === 'pending') await refreshUntouchedDraft(user.id, fresh);
+    if (fresh?.status === 'pending') await refreshIfFactsNewer(user.id, fresh, { factsJustAdded: true });
   }
 }
-
-const FACT_DRAFT_KINDS = new Set<SuggestionKind>(['thank_you', 'nurture_checkin', 'ask_referral']);
 
 export function parseDueHint(hint: string | undefined, from: Date): Date {
   const d = new Date(from);

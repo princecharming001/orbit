@@ -21,15 +21,15 @@ Cold LinkedIn messages from a stranger get ignored. The same message after the r
 ## 4. The plan
 
 ```
-day 0   view_profile   "View their profile and follow them"
-day ⌊n/2⌋  react_post  "React to one recent post that you genuinely find useful"
-day n−1 comment_post   "Leave one specific, non-flattering comment (a question or an added point)"
+day 0   view_profile   "View their profile and follow them"          due when the plan starts, or 10:00 that day if earlier
+day ⌊n/2⌋  react_post  "React to one recent post that you genuinely find useful"   10:00 (no later than the comment)
+day n−1 comment_post   "Leave one specific, non-flattering comment (a question or an added point)"   10:00 (day 1 when n = 2)
 ready   day n, 09:00   outreach suggested once ready AND at least one action is done; once every action is resolved
                        with at least one done, from the start of day 2 (or day n if sooner), so the activity is never
                        one ten-minute burst; when every action is skipped, right away, worded as a choice
                        ("You skipped the warm-up. Message Dana without it?")
 ```
-Stored on `coffee_chats.warmUp` (`WarmUpPlan`: `startedAt`, `readyAt`, `actions[] {id, kind, label, url, dueAt, doneAt?, skippedAt?}`).
+Days and hours are in the student's timezone (`user.timezone`), `n` is clamped to 2..10, and every action is due before the ready date, so a plan started in the afternoon is never born overdue. Stored on `coffee_chats.warmUp` (`WarmUpPlan`: `startedAt`, `readyAt`, `actions[] {id, kind, label, url, dueAt, doneAt?, skippedAt?}`).
 
 ## 5. Suggestions and brief
 

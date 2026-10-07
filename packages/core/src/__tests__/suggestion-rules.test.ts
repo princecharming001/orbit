@@ -310,6 +310,18 @@ describe('selection (PS-8, PS-11)', () => {
     const sel = selectForBrief([cand('thank_you', 'alina', 0.95), yuki, bump], new Map(), 2);
     expect(sel.map((s) => s.kind)).toEqual(['thank_you', 'follow_up_bump']);
   });
+  it('follows up on an offered intro before messaging strangers', () => {
+    const sel = selectForBrief(
+      [
+        cand('new_outreach', 'yuki', 0.5, { goalRelevance: 1 }),
+        cand('new_outreach', 'ines', 0.5, { goalRelevance: 1 }),
+        cand('intro_request', 'sofia', 0.6),
+      ],
+      new Map(),
+      2,
+    );
+    expect(sel.map((s) => s.kind)).toContain('intro_request');
+  });
   it('caps one company at two non-urgent messages per brief', () => {
     const cands = ['a', 'b', 'c'].map((id, i) => cand('new_outreach', id, 0.5 - i * 0.01));
     const nurture = ['d'].map((id) => cand('nurture_checkin', id, 0.45));
@@ -425,6 +437,16 @@ describe('reason wording (PS-15)', () => {
       'Chat with grace starts in 10 minutes. Prep takes two minutes.',
     );
     expect(prep(ahead(20 * H))?.reasonText).toBe('Chat with grace is tomorrow. Prep takes two minutes.');
+    // a brief built just after midnight still lists tomorrow's chat, and not the day after
+    const midnight = new Date('2026-10-02T04:20:00Z'); // 00:20 in New York
+    const prepAt = (startAt: string) =>
+      generateCandidates(input({ now: midnight, people: [p], events: [ev(startAt)] })).find(
+        (c) => c.kind === 'prep_brief',
+      );
+    expect(prepAt('2026-10-03T15:30:00Z')?.reasonText).toBe(
+      'Chat with grace is tomorrow. Prep takes two minutes.',
+    );
+    expect(prepAt('2026-10-04T05:00:00Z')).toBeUndefined();
   });
   it('dates action items by calendar day in the student timezone', () => {
     // 09:00 in New York

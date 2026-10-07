@@ -561,3 +561,48 @@ describe('history wording (DR-13)', () => {
     expect(clip('launching in November.', 60)).toBe('launching in November');
   });
 });
+
+describe('warm-up plan dates (SND-20)', () => {
+  it('never makes the first action due before the plan started', () => {
+    // 15:30 in New York
+    const start = at('2026-10-02T19:30:00Z');
+    const plan = buildWarmUpPlan('dana', start, 4, TZ);
+    expect(plan.actions[0]!.dueAt).toBe(start.toISOString());
+    expect(warmUpProgress(plan, new Date(start.getTime() + 23 * H)).overdue).toBe(false);
+    // an early-morning start still gets 10:00 local
+    const early = buildWarmUpPlan('dana', at('2026-10-02T11:00:00Z'), 4, TZ);
+    expect(early.actions[0]!.dueAt).toBe('2026-10-02T14:00:00.000Z');
+  });
+
+  it('keeps every action due before the ready date, even with two days', () => {
+    const start = at('2026-10-02T19:30:00Z');
+    const plan = buildWarmUpPlan('dana', start, 2, TZ);
+    expect(plan.readyAt).toBe('2026-10-04T13:00:00.000Z');
+    expect(plan.actions.map((a) => a.dueAt)).toEqual([
+      start.toISOString(),
+      '2026-10-03T14:00:00.000Z',
+      '2026-10-03T14:00:00.000Z',
+    ]);
+    for (const n of [0, 1, 2, 3, 4, 7, 10, 30, Number.NaN]) {
+      const p = buildWarmUpPlan('dana', start, n, TZ);
+      const ready = Date.parse(p.readyAt);
+      let prev = start.getTime();
+      for (const a of p.actions) {
+        const due = Date.parse(a.dueAt);
+        expect(due).toBeGreaterThanOrEqual(prev);
+        expect(due).toBeLessThan(ready);
+        prev = due;
+      }
+      const days = Math.round((ready - Date.parse('2026-10-02T13:00:00Z')) / D);
+      expect(days).toBeGreaterThanOrEqual(2);
+      expect(days).toBeLessThanOrEqual(10);
+    }
+  });
+
+  it('places the days in the student timezone across a DST change', () => {
+    // 2026-11-01 is the end of DST in New York: 09:00 local on Nov 2 is 14:00Z
+    const plan = buildWarmUpPlan('dana', at('2026-10-29T20:00:00Z'), 4, TZ);
+    expect(plan.readyAt).toBe('2026-11-02T14:00:00.000Z');
+    expect(plan.actions[2]!.dueAt).toBe('2026-11-01T15:00:00.000Z');
+  });
+});

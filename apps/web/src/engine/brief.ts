@@ -240,6 +240,9 @@ export async function upsertSuggestions(
         JSON.stringify(timesOf(existing.payload)) !== JSON.stringify(timesOf(payload))
       )
         await refreshUntouchedDraft(userId, row);
+      // something new is known about them (notes, a reply, a fact typed in): a thank-you or check-in written
+      // before that must use it
+      else if (outboundMessageId) await refreshIfFactsNewer(userId, row);
       out.push(row);
       continue;
     }
@@ -321,7 +324,18 @@ export async function revalidatePending(userId: string, now = new Date()): Promi
   const inp = await ruleInput(userId, now);
   const retired = await revalidateSuggestions(userId, generateCandidates(inp), now);
   await retireMovedOnConfirmations(userId, now);
+  await refreshFactDrafts(userId);
   return retired;
+}
+
+/** Bring every pending, untouched fact-led draft up to date with what is now known about the person. */
+async function refreshFactDrafts(userId: string): Promise<void> {
+  const pending = await db.suggestions
+    .where('userId')
+    .equals(userId)
+    .filter((s) => s.status === 'pending' && !!s.outboundMessageId && FACT_DRAFT_KINDS.has(s.kind))
+    .toArray();
+  for (const s of pending) await refreshIfFactsNewer(userId, s);
 }
 
 /** Draft the message for cards that were kept without one (deferred), when the student opens them. */
@@ -723,6 +737,42 @@ export async function draftMessage(
   return msg;
 }
 
+/** Kinds whose draft leans on what the student knows about the person (what was said, their news). */
+export const FACT_DRAFT_KINDS = new Set<SuggestionKind>(['thank_you', 'nurture_checkin', 'ask_referral']);
+
+/**
+ * Re-draft an untouched thank-you, check-in or referral ask when the person has facts newer than the draft (the
+ * notes landed after the calendar event ended, the student typed a fact in). The newest fact seen is stored on the
+ * suggestion (`payload.factsAsOf`), so the same facts never cause a second re-draft. Facts the drafting itself
+ * stored (a connection line, source `outbound`) do not count.
+ */
+export async function refreshIfFactsNewer(
+  userId: string,
+  s: Suggestion,
+  opts: { factsJustAdded?: boolean } = {},
+): Promise<boolean> {
+  if (!s.personId || !s.outboundMessageId || !FACT_DRAFT_KINDS.has(s.kind)) return false;
+  const draft = await db.outbound.get(s.outboundMessageId);
+  if (!draft || draft.status !== 'draft' || draft.bodyFinal) return false;
+  const facts = await db.facts
+    .where('personId')
+    .equals(s.personId)
+    .filter((f) => !f.deletedAt && f.sourceTable !== 'outbound')
+    .toArray();
+  const newest = facts.reduce((m, f) => (f.createdAt > m ? f.createdAt : m), '');
+  // a caller that just wrote facts knows they are new even when the clock has not moved since the draft
+  const seen =
+    typeof s.payload?.factsAsOf === 'string'
+      ? s.payload.factsAsOf
+      : opts.factsJustAdded
+        ? ''
+        : draft.createdAt;
+  if (!newest || newest <= seen) return false;
+  const changed = await refreshUntouchedDraft(userId, s);
+  await db.suggestions.update(s.id, { payload: { ...s.payload, factsAsOf: newest } });
+  return changed;
+}
+
 /**
  * Re-draft an existing message with what the student supplied (a connection line, an update). The connection line
  * is kept as a fact on the person so later drafts (bumps, LinkedIn note) can reuse it.
@@ -1104,7 +1154,9 @@ export async function startWarmUpOrOutreach(
       outreachChannel: channel,
       bumpCount: 0,
       priority: 2,
-      warmUp: cold ? buildWarmUpPlan(person.linkedinSlug!, now, settings?.warmUpDays ?? 4) : undefined,
+      warmUp: cold
+        ? buildWarmUpPlan(person.linkedinSlug!, now, settings?.warmUpDays ?? 4, user.timezone)
+        : undefined,
       referrerPersonId: referrer?.id,
       referrerName: referrer?.firstName,
       createdAt: now.toISOString(),
