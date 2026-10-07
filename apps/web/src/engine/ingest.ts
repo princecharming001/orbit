@@ -12,8 +12,8 @@ import {
 } from '@orbit/core';
 import { addTouchpoint, notify, recomputePersonStrength } from '../db/repo';
 import { db } from '../db/schema';
-import { hasLlm, llmSignal, llmTriage } from '../integrations/anthropic';
-import { evaluateImmediateSuggestions } from './brief';
+import { llmEnabled, llmSignal, llmTriage } from '../integrations/anthropic';
+import { evaluateImmediateSuggestions, surfaceLlmFailure } from './brief';
 import { loadPeopleCache, upsertPerson } from './people';
 import { evaluateTrigger } from './stages';
 
@@ -36,6 +36,9 @@ function splitAddress(raw: string): { email: string; name?: string } {
   return { email: normalizeEmail(raw) };
 }
 
+/** Heuristic triage at or above this confidence is kept as is; only less certain threads go to Claude. */
+const HEURISTIC_CONFIDENT = 0.8;
+
 export interface IngestStats {
   threads: number;
   messages: number;
@@ -44,7 +47,11 @@ export interface IngestStats {
   skipped: number;
 }
 
-/** Ingest raw emails: people, threads, messages, triage, signals, touchpoints, chats, stage transitions. Idempotent on externalMessageId. */
+/**
+ * Ingest raw emails: people, threads, messages, triage, signals, touchpoints, chats, stage transitions. Idempotent on externalMessageId.
+ * Email bodies go to Anthropic only when the student turned on "Use Claude to read synced email"
+ * (`llmEnabled('emailTriage')`, off by default); `opts.useLlm: false` turns it off for one run.
+ */
 export async function ingestEmails(
   user: User,
   raws: RawEmail[],
@@ -53,7 +60,7 @@ export async function ingestEmails(
   const now = opts.now ?? new Date();
   const stats: IngestStats = { threads: 0, messages: 0, people: 0, networking: 0, skipped: 0 };
   const userEmails = new Set([normalizeEmail(user.email)]);
-  const useLlm = (opts.useLlm ?? true) && hasLlm();
+  const useLlm = (opts.useLlm ?? true) && llmEnabled('emailTriage');
   const byThread = new Map<string, RawEmail[]>();
   for (const r of raws) {
     const arr = byThread.get(r.externalThreadId) ?? [];
@@ -176,31 +183,33 @@ export async function ingestEmails(
         (!thread.isNetworking && newMessages.some((m) => !m.isAutomated))
       ) {
         const humanAll = all.filter((m) => !m.isAutomated);
-        const tri =
-          (useLlm && humanAll.length
+        const heuristic = heuristicTriage({
+          subject: thread.subject,
+          messages: all.map((m) => ({
+            fromEmail: m.fromEmail,
+            direction: m.direction,
+            body: m.bodyText,
+            isAutomated: m.isAutomated,
+          })),
+          userEmails: [...userEmails],
+        });
+        // Only threads the rules cannot call with confidence are sent to Claude.
+        const llmTri =
+          useLlm && humanAll.length && heuristic.confidence < HEURISTIC_CONFIDENT
             ? await llmTriage(
                 thread.subject,
                 humanAll
                   .slice(0, 3)
                   .map((m) => ({ fromEmail: m.fromEmail, direction: m.direction, body: m.bodyText })),
                 user.email,
-              ).catch(() => undefined)
-            : undefined) ??
-          heuristicTriage({
-            subject: thread.subject,
-            messages: all.map((m) => ({
-              fromEmail: m.fromEmail,
-              direction: m.direction,
-              body: m.bodyText,
-              isAutomated: m.isAutomated,
-            })),
-            userEmails: [...userEmails],
-          });
+              ).catch((e) => surfaceLlmFailure(user.id, e))
+            : undefined;
+        const tri = llmTri ?? heuristic;
         thread.category = tri.category;
         thread.categoryConfidence = tri.confidence;
         thread.isNetworking = tri.isNetworking;
         thread.classifiedAt = now.toISOString();
-        thread.classifiedBy = useLlm ? 'llm' : 'heuristic';
+        thread.classifiedBy = llmTri ? 'llm' : 'heuristic';
         if (tri.isNetworking) stats.networking++;
       }
       await db.threads.put(thread);
@@ -310,7 +319,7 @@ async function processNetworkingThread(
           context,
           user.timezone,
           new Date(m.sentAt).toISOString(),
-        ).catch(() => undefined)
+        ).catch((e) => surfaceLlmFailure(user.id, e))
       : undefined;
     const h = heuristicSignal(m.bodyText, m.direction, new Date(m.sentAt));
     const signal = sig?.signal ?? h.signal;

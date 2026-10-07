@@ -20,11 +20,38 @@ export interface SyncProgress {
   total: number;
 }
 
-/** Backfill: sent mail (90d) first, then inbox (90d), then calendar (−180d..+90d). Incremental runs use the stored checkpoint. */
+/** A message whose download failed is retried on later syncs this many times in total, then skipped. */
+export const MAX_FETCH_ATTEMPTS = 5;
+
+interface GoogleSyncState {
+  /** start time of the last completed sync; the next run lists mail newer than this (plus a day) */
+  lastSyncAt?: string;
+  /** Gmail message ids whose download failed, with the number of failed attempts so far */
+  failedIds?: Record<string, number>;
+}
+
+/** Message time: Gmail's internalDate, else the Date header, else now (never throws on a bad header). */
+export function messageSentAt(
+  internalDate: string | undefined,
+  dateHeader: string | undefined,
+  now = new Date(),
+): string {
+  const ms = Number(internalDate);
+  if (internalDate && Number.isFinite(ms)) return new Date(ms).toISOString();
+  const d = new Date(dateHeader ?? '');
+  return Number.isNaN(d.getTime()) ? now.toISOString() : d.toISOString();
+}
+
+/**
+ * Backfill: sent mail (90d) first, then inbox (90d), then calendar (−180d..+90d). Incremental runs use the stored checkpoint.
+ * Messages that failed to download on an earlier run are retried first. The checkpoint moves only
+ * when the run completes, and failed ids stay in `syncState.failedIds` until they are stored (or
+ * fail `MAX_FETCH_ATTEMPTS` times), so a transient error never silently drops a message.
+ */
 export async function syncGoogle(
   user: User,
   opts: { onProgress?: (p: SyncProgress) => void; useLlm?: boolean; days?: number } = {},
-): Promise<{ messages: number; events: number }> {
+): Promise<{ messages: number; events: number; failed: number; skipped: number }> {
   const token = currentGoogleToken();
   if (!token) throw new Error('Google is not connected.');
   const account = await db.integrations
@@ -32,26 +59,48 @@ export async function syncGoogle(
     .equals(user.id)
     .filter((i) => i.provider === 'google')
     .first();
-  const state = (account?.syncState ?? {}) as { lastSyncAt?: string };
+  const startedAt = new Date().toISOString();
+  const state = (account?.syncState ?? {}) as GoogleSyncState;
+  const priorFailures = state.failedIds ?? {};
+  const failed = new Map<string, number>();
+  const gaveUp = new Set<string>();
+  const markFailed = (id: string) => {
+    const attempts = (priorFailures[id] ?? 0) + 1;
+    if (attempts >= MAX_FETCH_ATTEMPTS) gaveUp.add(id);
+    else failed.set(id, attempts);
+  };
   const days = opts.days ?? 90;
   const since = state.lastSyncAt
     ? Math.max(1, Math.ceil((Date.now() - new Date(state.lastSyncAt).getTime()) / 86_400_000) + 1)
     : days;
   const progress = (phase: string, done: number, total: number) => opts.onProgress?.({ phase, done, total });
   let total = 0;
-  for (const [phase, q] of [
+  const retryIds = Object.keys(priorFailures);
+  const phases: [string, string | undefined][] = [
+    ...(retryIds.length ? ([['Retrying earlier messages', undefined]] as [string, undefined][]) : []),
     ['Sent mail', `in:sent newer_than:${since}d`],
     ['Inbox', `in:inbox newer_than:${since}d -category:promotions -category:social -category:forums`],
-  ] as const) {
+  ];
+  for (const [phase, q] of phases) {
     progress(phase, 0, 1);
-    const ids = await gmailListIds(q, 1500);
+    const ids = q ? await gmailListIds(q, 1500) : retryIds;
     const raws: RawEmail[] = [];
     for (let i = 0; i < ids.length; i += 20) {
       const chunk = await Promise.all(
-        ids.slice(i, i + 20).map((id) => gmailGet(id, 'full').catch(() => undefined)),
+        ids.slice(i, i + 20).map((id) =>
+          gmailGet(id, 'full').then(
+            (m) => ({ id, m }),
+            () => ({ id, m: undefined }),
+          ),
+        ),
       );
-      for (const m of chunk) {
-        if (!m) continue;
+      for (const { id, m } of chunk) {
+        if (!m) {
+          markFailed(id);
+          continue;
+        }
+        failed.delete(id);
+        gaveUp.delete(id);
         const h = gmailHeaders(m);
         const { text } = gmailExtractText(m);
         raws.push({
@@ -67,9 +116,7 @@ export async function syncGoogle(
             .map((s) => s.trim())
             .filter(Boolean),
           subject: h.subject,
-          sentAt: m.internalDate
-            ? new Date(Number(m.internalDate)).toISOString()
-            : new Date(h.date ?? Date.now()).toISOString(),
+          sentAt: messageSentAt(m.internalDate, h.date),
           bodyText: text || m.snippet || '',
           headers: h,
           labels: m.labelIds,
@@ -124,18 +171,35 @@ export async function syncGoogle(
   await recomputeAllStrengths(user.id);
   await recomputeEdges(user.id);
   await recommendationsRefresh(user);
+  const nextState: GoogleSyncState = {
+    ...state,
+    lastSyncAt: startedAt,
+    failedIds: failed.size ? Object.fromEntries(failed) : undefined,
+  };
+  if (!nextState.failedIds) delete nextState.failedIds;
   await db.integrations.update(account?.id ?? '', {
     lastSyncedAt: new Date().toISOString(),
-    syncState: { ...state, lastSyncAt: new Date().toISOString() },
+    syncState: nextState as Record<string, unknown>,
     status: 'active',
   });
+  const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`;
   await notify(
     user.id,
-    'system',
+    failed.size || gaveUp.size ? 'integration_problem' : 'system',
     'Google sync finished',
-    `${total} messages and ${ev.events} events processed.`,
+    [
+      `${plural(total, 'message')} and ${plural(ev.events, 'event')} processed.`,
+      failed.size
+        ? `${plural(failed.size, 'message')} could not be downloaded from Gmail and will be retried on the next sync.`
+        : '',
+      gaveUp.size
+        ? `${plural(gaveUp.size, 'message')} failed ${MAX_FETCH_ATTEMPTS} times and ${gaveUp.size === 1 ? 'was' : 'were'} skipped.`
+        : '',
+    ]
+      .filter(Boolean)
+      .join(' '),
   );
-  return { messages: total, events: ev.events };
+  return { messages: total, events: ev.events, failed: failed.size, skipped: gaveUp.size };
 }
 
 export async function dailyMaintenance(user: User): Promise<void> {

@@ -2,6 +2,7 @@ import type { Resume, ResumeFacet, User } from '@orbit/core';
 import { heuristicResumeParse, newId } from '@orbit/core';
 import { db } from '../db/schema';
 import { hasLlm, llmResumeParse } from '../integrations/anthropic';
+import { surfaceLlmFailure } from './brief';
 
 export async function extractTextFromFile(file: File): Promise<string> {
   if (file.type === 'application/pdf' || /\.pdf$/i.test(file.name)) {
@@ -46,7 +47,9 @@ export async function saveResume(user: User, file: File): Promise<{ resume: Resu
     createdAt: now,
   };
   await db.resumes.add(resume);
-  let facets = hasLlm() ? await llmResumeParse(text, resume.id).catch(() => undefined) : undefined;
+  let facets = hasLlm()
+    ? await llmResumeParse(text, resume.id).catch((e) => surfaceLlmFailure(user.id, e))
+    : undefined;
   const source: Resume['parseSource'] = facets ? 'llm' : 'heuristic';
   facets = facets ?? heuristicResumeParse(text, resume.id);
   await db.resumeFacets.bulkAdd(facets);

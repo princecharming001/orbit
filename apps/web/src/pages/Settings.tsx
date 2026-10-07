@@ -9,9 +9,20 @@ import { importConnectionsCsv } from '../engine/linkedin';
 import { saveResume } from '../engine/resume';
 import { syncGoogle } from '../engine/sync';
 import { addTargetCompany } from '../engine/targets';
-import { hasLlm, testApiKey } from '../integrations/anthropic';
+import { fmtFailureTime, hasLlm, MODEL, testApiKey } from '../integrations/anthropic';
 import { connectGoogle, currentGoogleToken, disconnectGoogle, googleClientId } from '../integrations/google';
-import { readPrefs, writePrefs } from '../integrations/prefs';
+import {
+  clearPrefs,
+  DEFAULT_DAILY_REQUEST_CAP,
+  DEFAULT_DAILY_TOKEN_CAP,
+  type LlmFeature,
+  llmFeatures,
+  readPrefs,
+  subscribePrefs,
+  todaysLlmUsage,
+  updatePrefs,
+  writePrefs,
+} from '../integrations/prefs';
 import { useSession } from '../state/session';
 import {
   Button,
@@ -339,9 +350,7 @@ function Integrations() {
   const google = accounts.find((a) => a.provider === 'google');
   const li = accounts.find((a) => a.provider === 'linkedin_csv');
   const [clientId, setClientId] = useState(googleClientId() ?? '');
-  const [apiKey, setApiKey] = useState(readPrefs().anthropicApiKey ?? '');
   const [busy, setBusy] = useState<string>();
-  const [keyStatus, setKeyStatus] = useState<string>();
   const token = currentGoogleToken();
   const connect = async () => {
     try {
@@ -513,39 +522,7 @@ function Integrations() {
           </li>
         </ul>
       </Card>
-      <Card>
-        <div className="font-medium">Claude (optional)</div>
-        <p className="text-[13px] text-ink-2 mt-0.5">
-          Paste your own Anthropic API key to have Claude draft messages, parse your resume and extract notes.
-          Stored only in this browser. Without it, Orbit's templates do the work. Model: claude-opus-5-5.
-        </p>
-        <div className="mt-3 flex gap-2">
-          <Input
-            type="password"
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            placeholder="sk-ant-…"
-            className="max-w-md"
-          />
-          <Button
-            onClick={async () => {
-              writePrefs({ anthropicApiKey: apiKey.trim() || undefined });
-              if (!apiKey.trim()) return setKeyStatus('Removed.');
-              setKeyStatus('Testing…');
-              const r = await testApiKey();
-              setKeyStatus(r.ok ? 'Works.' : r.error);
-            }}
-          >
-            Save & test
-          </Button>
-        </div>
-        {keyStatus && (
-          <p className={cx('text-[12px] mt-1', keyStatus === 'Works.' ? 'text-good' : 'text-ink-3')}>
-            {keyStatus}
-          </p>
-        )}
-        {hasLlm() && !keyStatus && <p className="text-[12px] mt-1 text-good">Key saved.</p>}
-      </Card>
+      <ClaudeCard />
       <Card>
         <div className="font-medium">Demo data</div>
         <p className="text-[13px] text-ink-2 mt-0.5">
@@ -570,6 +547,153 @@ function Integrations() {
         </Button>
       </Card>
     </div>
+  );
+}
+
+const AI_FEATURES: { key: LlmFeature; label: string; sends: string }[] = [
+  {
+    key: 'drafts',
+    label: 'Write drafts',
+    sends:
+      'When Orbit drafts a message, your profile and what Orbit knows about the recipient (name, role, saved facts, the last message in the thread) are sent to Anthropic.',
+  },
+  {
+    key: 'emailTriage',
+    label: 'Read synced email',
+    sends:
+      'Email bodies are sent to Anthropic for triage: threads Orbit cannot classify with confidence, and each new message in a networking thread. Off by default.',
+  },
+  {
+    key: 'notes',
+    label: 'Extract meeting notes',
+    sends: 'The full text of each note or transcript you add is sent to Anthropic.',
+  },
+  { key: 'resume', label: 'Parse your resume', sends: 'Your resume text is sent to Anthropic.' },
+  {
+    key: 'summaries',
+    label: 'Summarize people',
+    sends: "A person's saved facts and recent interactions are sent to Anthropic.",
+  },
+];
+
+function ClaudeCard() {
+  const tz = useSession().user?.timezone;
+  const [prefs, setPrefs] = useState(readPrefs);
+  const [apiKey, setApiKey] = useState(prefs.anthropicApiKey ?? '');
+  const [keyStatus, setKeyStatus] = useState<string>();
+  // Stay in step with changes made by Claude calls and by Orbit open in another tab.
+  useEffect(() => subscribePrefs(setPrefs), []);
+  const update = (p: Parameters<typeof writePrefs>[0]) => setPrefs(writePrefs(p));
+  const features = llmFeatures(prefs);
+  const usage = todaysLlmUsage(prefs);
+  const reqCap = prefs.llmDailyRequestCap ?? DEFAULT_DAILY_REQUEST_CAP;
+  const tokCap = prefs.llmDailyTokenCap ?? DEFAULT_DAILY_TOKEN_CAP;
+  const keySaved = !!prefs.anthropicApiKey;
+  return (
+    <Card>
+      <div className="font-medium">Claude (optional)</div>
+      <p className="text-[13px] text-ink-2 mt-0.5">
+        Paste your own Anthropic API key and choose what Claude may do. Without a key, Orbit's templates and
+        rules do the work. Model: {MODEL}. Calls are billed to your Anthropic account.
+      </p>
+      <p className="text-[12px] text-ink-3 mt-1">
+        The key is kept in this browser only, separate from your Orbit data and never in the export. Any
+        script running on this page could read it, so Orbit only allows its own code and Google's sign-in
+        script to run here.
+      </p>
+      <div className="mt-3 flex gap-2">
+        <Input
+          type="password"
+          value={apiKey}
+          onChange={(e) => setApiKey(e.target.value)}
+          placeholder="sk-ant-…"
+          className="max-w-md"
+          aria-label="Anthropic API key"
+        />
+        <Button
+          onClick={async () => {
+            update({ anthropicApiKey: apiKey.trim() || undefined });
+            if (!apiKey.trim()) return setKeyStatus('Removed.');
+            setKeyStatus('Testing…');
+            const r = await testApiKey();
+            setPrefs(readPrefs());
+            setKeyStatus(r.ok ? 'Works.' : r.error);
+          }}
+        >
+          Save & test
+        </Button>
+      </div>
+      {keyStatus && (
+        <p className={cx('text-[12px] mt-1', keyStatus === 'Works.' ? 'text-good' : 'text-ink-3')}>
+          {keyStatus}
+        </p>
+      )}
+      {hasLlm() && !keyStatus && <p className="text-[12px] mt-1 text-good">Key saved.</p>}
+      <fieldset className="mt-4 space-y-2" disabled={!keySaved} data-testid="ai-usage">
+        <legend className="text-[13px] font-medium">What Claude may do</legend>
+        {AI_FEATURES.map((f) => (
+          <label
+            key={f.key}
+            className={cx('flex items-start gap-2 text-[13.5px]', !keySaved && 'opacity-60')}
+          >
+            <input
+              type="checkbox"
+              className="mt-1"
+              data-testid={`ai-feature-${f.key}`}
+              checked={features[f.key]}
+              onChange={(e) => {
+                const on = e.target.checked;
+                // only this one switch changes; the others keep whatever is stored, even if set in another tab
+                setPrefs(
+                  updatePrefs((cur) => ({ ...cur, llmFeatures: { ...llmFeatures(cur), [f.key]: on } })),
+                );
+              }}
+            />
+            <span>
+              <strong className="font-medium">{f.label}.</strong>{' '}
+              <span className="text-ink-2">{f.sends}</span>
+            </span>
+          </label>
+        ))}
+      </fieldset>
+      <div className="mt-4 grid sm:grid-cols-2 gap-3 max-w-lg">
+        <div>
+          <Label hint="Orbit stops calling Claude for the day after this">Requests per day</Label>
+          <Input
+            type="number"
+            min={0}
+            value={reqCap}
+            data-testid="ai-cap-requests"
+            onChange={(e) =>
+              update({ llmDailyRequestCap: Math.max(0, Math.floor(Number(e.target.value) || 0)) })
+            }
+          />
+        </div>
+        <div>
+          <Label hint="input plus output">Tokens per day</Label>
+          <Input
+            type="number"
+            min={0}
+            step={10000}
+            value={tokCap}
+            onChange={(e) =>
+              update({ llmDailyTokenCap: Math.max(0, Math.floor(Number(e.target.value) || 0)) })
+            }
+          />
+        </div>
+      </div>
+      <p className="text-[12px] text-ink-3 mt-2" data-testid="ai-usage-today">
+        Today: {usage.requests} of {reqCap} requests,{' '}
+        {(usage.inputTokens + usage.outputTokens).toLocaleString('en-US')} of {tokCap.toLocaleString('en-US')}{' '}
+        tokens.
+      </p>
+      {prefs.lastLlmError && (
+        <p className="text-[12px] text-bad mt-1" data-testid="ai-last-error">
+          Last problem, {fmtFailureTime(prefs.lastLlmError.at, tz)}: {prefs.lastLlmError.message} Orbit used
+          its templates instead.
+        </p>
+      )}
+    </Card>
   );
 }
 
@@ -770,10 +894,16 @@ function Privacy() {
     const out: Record<string, unknown[]> = {};
     for (const t of tables) out[t] = await db.table(t).toArray();
     const blob = new Blob([JSON.stringify(out, null, 1)], { type: 'application/json' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `orbit-export-${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
+    const url = URL.createObjectURL(blob);
+    try {
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `orbit-export-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+    } finally {
+      // the click has started the download; release the blob on the next tick
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+    }
     toast.push({ text: 'Export downloaded.', tone: 'good' });
   };
   return (
@@ -790,30 +920,42 @@ function Privacy() {
             Derived data: people, closeness scores, inferred connections, stages, facts, suggestions, drafts,
             the audit trail of what was sent.
           </li>
-          <li>Optional secrets in localStorage: your Anthropic API key and Google OAuth client ID.</li>
+          <li>
+            Optional secrets, kept apart from your data: your Anthropic API key, Google OAuth client ID and
+            Claude settings. Any script running on this page could read them; Orbit's security policy only
+            lets its own code and Google's sign-in script run here.
+          </li>
         </ul>
         <p className="text-[13px] text-ink-2 mt-2">
           Nothing leaves your device except: calls you trigger to Google (your own account), to Anthropic
-          (with your key), and the pages you open on LinkedIn.
+          (with your key, only for the features you turned on in Integrations), and the pages you open on
+          LinkedIn.
         </p>
       </Card>
-      <Card className="flex flex-wrap gap-2 items-center">
-        <Button onClick={exportAll}>
-          <Download size={14} /> Export everything (JSON)
-        </Button>
-        <Button
-          variant="danger"
-          onClick={async () => {
-            if (!confirm('Delete all Orbit data from this browser? This cannot be undone.')) return;
-            disconnectGoogle();
-            localStorage.removeItem('orbit.prefs.v1');
-            await wipeDatabase();
-            await signOut();
-            nav('/');
-          }}
-        >
-          <Trash2 size={14} /> Delete all data
-        </Button>
+      <Card>
+        <p className="text-[13px] text-ink-2" data-testid="export-contents">
+          The export is one JSON file with everything Orbit stores about your network: full email text and
+          headers, calendar events, notes, people, facts, drafts and the audit trail. Treat it like your
+          inbox. It does not include your Anthropic key or Google client ID.
+        </p>
+        <div className="mt-3 flex flex-wrap gap-2 items-center">
+          <Button onClick={exportAll}>
+            <Download size={14} /> Export everything (JSON)
+          </Button>
+          <Button
+            variant="danger"
+            onClick={async () => {
+              if (!confirm('Delete all Orbit data from this browser? This cannot be undone.')) return;
+              disconnectGoogle();
+              await clearPrefs();
+              await wipeDatabase();
+              await signOut();
+              nav('/');
+            }}
+          >
+            <Trash2 size={14} /> Delete all data
+          </Button>
+        </div>
       </Card>
     </div>
   );

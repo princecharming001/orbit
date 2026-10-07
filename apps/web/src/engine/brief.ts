@@ -28,12 +28,40 @@ import {
 } from '@orbit/core';
 import { feedback, notify, recomputeAllStrengths } from '../db/repo';
 import { db } from '../db/schema';
-import { hasLlm, llmDraft, llmSummary } from '../integrations/anthropic';
+import { describeLlmFailure, hasLlm, llmDraft, llmSummary, toLlmError } from '../integrations/anthropic';
 import { bestPathStrength, buildReachGraph } from './graph';
 import { personSummary } from './prep';
 import { runTimedStageRules } from './stages';
 
 const DAY = 86_400_000;
+
+const surfacedLlmFailures = new Set<string>();
+
+/**
+ * Tell the student, once, that a Claude call failed and why (bad key, network, refusal, daily
+ * limit). Orbit keeps working on templates and rules. One notification per user and reason while
+ * an unread one exists, so a failing key during a 300-thread sync produces one notice, not 300.
+ * Always resolves to undefined so callers can use it as their `.catch` fallback.
+ */
+export async function surfaceLlmFailure(userId: string, e: unknown): Promise<undefined> {
+  const err = toLlmError(e);
+  const { title, body } = describeLlmFailure(err);
+  const key = `${userId}:${err.reason}`;
+  if (surfacedLlmFailures.has(key)) return undefined;
+  surfacedLlmFailures.add(key);
+  try {
+    const open = await db.notifications
+      .where('userId')
+      .equals(userId)
+      .filter((n) => !n.readAt && n.kind === 'integration_problem' && n.title === title)
+      .first();
+    if (!open) await notify(userId, 'integration_problem', title, body, '/settings/integrations');
+  } finally {
+    // the in-memory key only serialises concurrent failures; the unread notification is the lasting guard
+    surfacedLlmFailures.delete(key);
+  }
+  return undefined;
+}
 
 async function ruleInput(userId: string, now: Date, scope?: { chatId?: string; personId?: string }) {
   const [
@@ -469,7 +497,7 @@ async function materializeDraft(
   let out = template;
   let generatedBy: OutboundMessage['generatedBy'] = 'template';
   if (hasLlm() && !template.needsInput.length) {
-    const llm = await llmDraft(ctx, template).catch(() => undefined);
+    const llm = await llmDraft(ctx, template).catch((e) => surfaceLlmFailure(user.id, e));
     if (llm) {
       const issues = validateDraft(llm, {
         kind,
@@ -887,7 +915,7 @@ export async function refreshPersonSummary(user: User, personId: string): Promis
       facts.map((f) => ({ type: f.type, text: f.text })),
       tps.map((t) => `${t.occurredAt.slice(0, 10)}: ${t.summary ?? t.kind}`),
       goals?.cycleLabel ?? '',
-    ).catch(() => undefined);
+    ).catch((e) => surfaceLlmFailure(user.id, e));
     if (r) {
       summary = r.summary;
       talkingPoints = r.talkingPoints;

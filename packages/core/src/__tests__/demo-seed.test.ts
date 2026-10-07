@@ -9,6 +9,7 @@ import {
   isWeekend,
 } from '../demo/seed';
 import { extractProposedTimes, heuristicSignal, heuristicTriage } from '../email/triage';
+import { endOfNextBusinessDay } from '../suggestions/rules';
 import { isAutomatedSender } from '../text/email';
 
 // A Tuesday morning, a Friday evening, a Saturday, a Monday before work, around the winter break, and in spring.
@@ -244,5 +245,23 @@ describe('demo seed', () => {
       expect(stages, s).toContain(s);
     expect(ds.people.some((p) => p.relationshipType === 'mentor')).toBe(true);
     expect(ds.notes.some((n) => /offered to refer/i.test(n.rawText))).toBe(true);
+  });
+});
+
+describe('demo dataset at any time of day', () => {
+  // A fixed "tomorrow 11:30" fell outside the prep window whenever the demo loaded just after midnight. The chat is on
+  // the next business day, which the prep rule always looks ahead to.
+  it('always schedules the upcoming coffee chat inside the prep window, whatever the time of day', () => {
+    for (let h = 0; h < 24; h++) {
+      for (const m of [0, 48]) {
+        const now = new Date(2026, 9, 7, h, m);
+        const ev = buildDemoDataset({ now }).events.find((e) => e.id === 'ev_next');
+        expect(ev).toBeDefined();
+        const start = new Date(ev!.startAt).getTime();
+        const hours = (start - now.getTime()) / 3_600_000;
+        expect(hours, `loaded at ${h}:${m}`).toBeGreaterThan(1);
+        expect(start, `loaded at ${h}:${m}`).toBeLessThanOrEqual(endOfNextBusinessDay(now));
+      }
+    }
   });
 });

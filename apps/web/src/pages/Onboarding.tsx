@@ -794,8 +794,9 @@ function StepPrefs({
           placeholder="sk-ant-…"
         />
         <p className="text-[12px] text-ink-3 mt-1">
-          Without a key, Orbit uses its built-in templates. With one, drafts, resume parsing and note
-          extraction use Claude ({'claude-opus-5-5'}).
+          Without a key, Orbit uses its built-in templates. With one, Claude ({'claude-opus-5-5'}) writes your
+          drafts, up to 50 requests a day. Reading synced email, notes and your resume with Claude stays off
+          until you turn it on in Settings.
         </p>
       </div>
       <div className="sm:col-span-2">
