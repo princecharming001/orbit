@@ -1,5 +1,5 @@
-import type { CoffeeChat, EmailMessage, EmailThread, Person, User } from '@orbit/core';
-import { detectIntroduction, knownSizeBucket, newId } from '@orbit/core';
+import type { CoffeeChat, EmailMessage, EmailThread, Introduction, Person, User } from '@orbit/core';
+import { knownSizeBucket, newId, readIntroduction } from '@orbit/core';
 import { addTouchpoint } from '../db/repo';
 import { db } from '../db/schema';
 import { evaluateImmediateSuggestions } from './brief';
@@ -12,6 +12,15 @@ const ENDED: CoffeeChat['stage'][] = ['declined', 'no_response', 'archived'];
  * the thread (the graph turns it into an `introduced_by` edge), open a pipeline card for the person introduced with
  * the introducer as referrer, and let the rules suggest a reply while the intro is fresh. If the student already
  * answered in the thread, the card starts at outreach_sent.
+ *
+ * Answers inside an intro thread ("Thanks for the intro, Lena", "moving Lena to bcc") are never read as new
+ * introductions. When the intro itself is older than the sync and only the answer arrives, the answer still names
+ * who made it ("Thanks for the warm intro, Lena"): the intro is recorded from it, so the person who answered gets
+ * their card.
+ *
+ * `repliesReadLater`: the networking pass runs right after this on the same new messages (a small thread), so the
+ * answers among them are left to it. Applying them here too would count the student's reply twice (once as the
+ * card's start, once as a bump) and would lose the person's answer, which only the networking pass reads.
  */
 export async function processIntroductions(
   user: User,
@@ -19,17 +28,38 @@ export async function processIntroductions(
   newMessages: EmailMessage[],
   userEmails: string[],
   now: Date,
+  opts: { repliesReadLater?: boolean } = {},
 ): Promise<number> {
   if (thread.participantPersonIds.length < 2) return 0;
   const people = (await db.people.bulkGet(thread.participantPersonIds)).filter((p): p is Person => !!p);
+  const studentNames = [user.firstName, user.fullName].filter((n): n is string => !!n?.trim());
+  const fresh = new Set(newMessages.map((m) => m.id));
   let opened = 0;
   for (const m of [...newMessages].sort((a, b) => a.sentAt.localeCompare(b.sentAt))) {
-    // in a thread that already holds an introduction, the answers of the people it introduced ("Thanks Lena for
-    // the intro. Alex, happy to chat") are replies, not introductions of the introducer
-    const prior = thread.introduction;
-    if (prior && prior.messageId !== m.id && m.fromPersonId && prior.introducedIds.includes(m.fromPersonId))
-      continue;
-    const intro = detectIntroduction(m, people, userEmails);
+    const reading = readIntroduction(m, people, userEmails, { studentNames, prior: thread.introduction });
+    let intro: Introduction | undefined;
+    if (reading.kind === 'introduction' && m.fromPersonId)
+      intro = {
+        introducerId: m.fromPersonId,
+        introducedIds: reading.introducedIds,
+        messageId: m.id,
+        at: m.sentAt,
+      };
+    else if (
+      reading.kind === 'intro_reply' &&
+      !thread.introduction &&
+      m.direction === 'inbound' &&
+      m.fromPersonId &&
+      reading.introThankedIds.length === 1 &&
+      reading.introThankedIds[0] !== m.fromPersonId
+    )
+      // "Thanks for the warm intro, Lena. Alex, happy to chat": the intro predates what was synced
+      intro = {
+        introducerId: reading.introThankedIds[0]!,
+        introducedIds: [m.fromPersonId],
+        messageId: m.id,
+        at: m.sentAt,
+      };
     if (!intro) continue;
     if (!thread.introduction) {
       thread.introduction = intro;
@@ -37,8 +67,9 @@ export async function processIntroductions(
     }
     const introducer = people.find((p) => p.id === intro.introducerId);
     if (!introducer) continue;
+    const at = intro.at;
     const later = (await db.messages.where('threadId').equals(thread.id).sortBy('sentAt')).filter(
-      (x) => x.sentAt > intro.at && !x.isAutomated,
+      (x) => x.sentAt > at && !x.isAutomated && !(opts.repliesReadLater && fresh.has(x.id)),
     );
     const answered = later.find((x) => x.direction === 'outbound');
     for (const pid of intro.introducedIds) {

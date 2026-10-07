@@ -189,7 +189,14 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
     }
     // someone introduced the student by email: answer while the intro is fresh, before any cold note (the
     // introducer is copied and watching)
-    if (chat.stage === 'identified' && chat.introducedAt && !chat.lastOutboundAt) {
+    // (only while the person has not written since: once they answer, even with a no, the card that answers them
+    // takes over)
+    if (
+      chat.stage === 'identified' &&
+      chat.introducedAt &&
+      !chat.lastOutboundAt &&
+      !(chat.lastInboundAt && chat.lastInboundAt >= chat.introducedAt)
+    ) {
       const referrer = chat.referrerPersonId ? inp.people.get(chat.referrerPersonId) : undefined;
       const age = (now.getTime() - new Date(chat.introducedAt).getTime()) / DAY;
       if (referrer && age >= 0 && age <= INTRO_REPLY_DAYS) {
