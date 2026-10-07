@@ -555,25 +555,27 @@ function Integrations() {
     }
   };
   return (
-    <div className="space-y-4">
-      <Card>
+    <div className="flex flex-col gap-4">
+      <Card className={cx(!builtIn && !google && 'order-last')}>
         <div className="font-medium">Google (Gmail and Calendar)</div>
-        <p className="text-[13px] text-ink-2 mt-0.5">
-          Finds the people you already email and meet, notices replies, and sends the emails you approve.
-          Google asks you to sign in again after about an hour; Orbit reminds you when it needs that.
-        </p>
+        {builtIn || google ? (
+          <p className="text-[13px] text-ink-2 mt-0.5">
+            Finds the people you already email and meet, notices replies, and sends the emails you approve.
+            Google asks you to sign in again after about an hour; Orbit reminds you when it needs that.
+          </p>
+        ) : (
+          <p className="text-[13px] text-ink-2 mt-0.5" data-testid="google-unavailable">
+            Not part of this version of Orbit. Everything else works without it: you add people by hand or
+            from LinkedIn, send each email from your own mail app or Gmail and press I sent it, and when
+            someone replies you move their chat in Pipeline.
+          </p>
+        )}
         {google && (
           <p className="text-[12px] mt-1 inline-flex flex-wrap items-center gap-1 text-good">
             <Check size={13} /> Connected
             {google.externalAccountId ? ` as ${google.externalAccountId}` : ''} · last sync{' '}
             {google.lastSyncedAt ? relDate(google.lastSyncedAt) : 'never'}
             {!token && <span className="text-ink-3"> · signed out, reconnect to sync</span>}
-          </p>
-        )}
-        {!builtIn && !google && (
-          <p className="text-[13px] mt-2 rounded-lg bg-canvas-2 p-3" data-testid="google-unavailable">
-            Google sign-in is not available in this version of Orbit. You can still add people by hand and
-            import LinkedIn, and the emails you write open in your mail app or copy into Gmail.
           </p>
         )}
         {(builtIn || google) && (
@@ -606,7 +608,7 @@ function Integrations() {
         {!builtIn && (
           <details className="mt-3 text-[13px]">
             <summary className="cursor-pointer text-ink-3">
-              Advanced: use your own Google Cloud project
+              For developers: connect your own Google Cloud project
             </summary>
             <div className="mt-2">
               <Label

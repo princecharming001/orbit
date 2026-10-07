@@ -39,7 +39,7 @@ export function wentQuiet(chat: CoffeeChat, now = new Date()): boolean {
   return now.getTime() - new Date(chat.lastOutboundAt).getTime() >= QUIET_DAYS * DAY;
 }
 
-type SortKey = 'person' | 'company' | 'stage' | 'inStage' | 'lastSent' | 'lastReply' | 'closeness';
+type SortKey = 'person' | 'stage' | 'inStage' | 'lastSent' | 'lastReply' | 'closeness';
 
 export const STAGE_COLOR: Record<ChatStage, string> = {
   identified: '#9aa1ad',
@@ -86,6 +86,17 @@ export function Pipeline() {
           : [],
       [userId],
     ) ?? [];
+  // with Google connected Orbit reads replies and meetings itself; without it the student moves chats along
+  const googleOn =
+    useLiveQuery(
+      async () =>
+        userId
+          ? (await db.integrations.where('userId').equals(userId).toArray()).some(
+              (i) => i.provider === 'google' && i.status === 'active',
+            )
+          : false,
+      [userId],
+    ) ?? false;
   const tcs =
     useLiveQuery(
       () => (userId ? db.targetCompanies.where('userId').equals(userId).toArray() : []),
@@ -161,8 +172,6 @@ export function Pipeline() {
     switch (sort.key) {
       case 'person':
         return r.person.displayName.toLowerCase();
-      case 'company':
-        return (r.person.currentOrganizationRaw ?? '').toLowerCase();
       case 'stage':
         return [...ACTIVE_STAGES, ...CLOSED_STAGES].indexOf(r.chat.stage);
       case 'inStage':
@@ -186,7 +195,7 @@ export function Pipeline() {
   const header = (key: SortKey, label: string) => (
     <th
       key={key}
-      className="text-left font-medium px-3 h-9 whitespace-nowrap"
+      className="text-left font-medium px-2.5 h-9 whitespace-nowrap"
       aria-sort={sort.key === key ? (sort.dir === 1 ? 'ascending' : 'descending') : 'none'}
     >
       <button
@@ -203,7 +212,11 @@ export function Pipeline() {
     <div>
       <PageHeader
         title="Pipeline"
-        subtitle="Every coffee chat and where it stands. Orbit moves chats along as emails and meetings happen; you can move one yourself too."
+        subtitle={
+          googleOn
+            ? 'Every coffee chat and where it stands. Orbit moves chats along as emails and meetings happen; you can move one yourself too.'
+            : 'Every coffee chat and where it stands. Orbit cannot see your inbox, so when someone replies, accepts on LinkedIn or meets you, move their card.'
+        }
         actions={<AddPersonButton label="Add a person" />}
       />
       <FirstRunHint
@@ -301,8 +314,10 @@ export function Pipeline() {
             return (
               <div
                 key={stage}
-                className="w-full md:w-[228px] shrink-0"
+                // an empty stage takes less room, so the stages that hold someone fit on screen
+                className={cx('w-full shrink-0', items.length ? 'md:w-[228px]' : 'md:w-[132px]')}
                 data-stage={stage}
+                data-needs={items.filter((r) => nextFor(r.chat.id, r.person.id)).length || undefined}
                 onDragOver={(e) => e.preventDefault()}
                 onDrop={(e) => {
                   const id = e.dataTransfer.getData('text/chat');
@@ -311,8 +326,15 @@ export function Pipeline() {
                 }}
               >
                 <div className="flex items-center gap-2 mb-2 px-1" title={STAGE_HELP[stage]}>
-                  <span className="w-2 h-2 rounded-full" style={{ background: STAGE_COLOR[stage] }} />
-                  <span className="text-[13px] font-medium whitespace-nowrap">{STAGE_LABELS[stage]}</span>
+                  <span
+                    className="w-2 h-2 rounded-full shrink-0"
+                    style={{ background: STAGE_COLOR[stage] }}
+                  />
+                  <span
+                    className={cx('text-[13px] font-medium', items.length ? 'whitespace-nowrap' : 'truncate')}
+                  >
+                    {STAGE_LABELS[stage]}
+                  </span>
                   <span className="text-[12px] text-ink-3 tabular">{items.length}</span>
                 </div>
                 <div className="space-y-2 min-h-[80px] rounded-[12px] bg-canvas-2/70 p-2">
@@ -402,78 +424,85 @@ export function Pipeline() {
       {view === 'table' &&
         chats.length > 0 &&
         (rows.length ? (
-          <div className="border border-line rounded-[var(--radius-card)] overflow-x-auto">
-            <table className="w-full text-[13.5px] min-w-[760px]">
-              <thead className="bg-canvas-2 text-ink-3 text-[12px] uppercase tracking-wide">
-                <tr>
-                  {header('person', 'Person')}
-                  {header('stage', 'Stage')}
-                  {header('company', 'Company')}
-                  {header('inStage', 'In stage')}
-                  {header('lastSent', 'Last sent')}
-                  {header('lastReply', 'Last reply')}
-                  <th className="text-left font-medium px-3 h-9">Next</th>
-                  {header('closeness', 'Closeness')}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-line">
-                {tableRows.map(({ chat, person }) => {
-                  const next = nextFor(chat.id, person.id);
-                  return (
-                    <tr
-                      key={chat.id}
-                      className="hover:bg-canvas-2/60 cursor-pointer"
-                      onClick={() => nav(`/people/${person.id}`)}
-                    >
-                      <td className="px-3 h-11">
-                        <span className="inline-flex items-center gap-2">
-                          <Avatar name={person.displayName} id={person.id} size={24} />{' '}
-                          <Link
-                            to={`/people/${person.id}`}
-                            className="font-medium hover:underline whitespace-nowrap"
-                            onClick={(e) => e.stopPropagation()}
+          <>
+            {narrow && (
+              <p className="text-[12px] text-ink-3 mb-2">Swipe the table sideways to see every column.</p>
+            )}
+            <div className="border border-line rounded-[var(--radius-card)] overflow-x-auto">
+              <table className="w-full text-[13.5px] min-w-[700px]">
+                <thead className="bg-canvas-2 text-ink-3 text-[12px] uppercase tracking-wide">
+                  <tr>
+                    {header('person', 'Person')}
+                    {header('stage', 'Stage')}
+                    {header('inStage', 'In stage')}
+                    {header('lastSent', 'Last sent')}
+                    {header('lastReply', 'Last reply')}
+                    <th className="text-left font-medium px-2.5 h-9">Next</th>
+                    {header('closeness', 'Closeness')}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-line">
+                  {tableRows.map(({ chat, person }) => {
+                    const next = nextFor(chat.id, person.id);
+                    return (
+                      <tr
+                        key={chat.id}
+                        className="hover:bg-canvas-2/60 cursor-pointer"
+                        onClick={() => nav(`/people/${person.id}`)}
+                      >
+                        <td className="px-2.5 py-2">
+                          {/* the company sits under the name, so the table fits a laptop without a sideways scroll */}
+                          <span className="flex items-center gap-2 min-w-0">
+                            <Avatar name={person.displayName} id={person.id} size={24} />
+                            <span className="min-w-0">
+                              <Link
+                                to={`/people/${person.id}`}
+                                className="block font-medium hover:underline whitespace-nowrap"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                {person.displayName}
+                              </Link>
+                              <span className="block text-[12px] text-ink-3 truncate max-w-[200px]">
+                                {person.currentOrganizationRaw ?? ''}
+                              </span>
+                            </span>
+                          </span>
+                        </td>
+                        <td className="px-2.5" onClick={(e) => e.stopPropagation()}>
+                          <Select
+                            value={chat.stage}
+                            onChange={(e) => move(chat, e.target.value as ChatStage)}
+                            className="h-7 text-[12px]"
+                            aria-label={`Stage for ${person.displayName}`}
                           >
-                            {person.displayName}
-                          </Link>
-                        </span>
-                      </td>
-                      <td className="px-3" onClick={(e) => e.stopPropagation()}>
-                        <Select
-                          value={chat.stage}
-                          onChange={(e) => move(chat, e.target.value as ChatStage)}
-                          className="h-7 text-[12px]"
-                          aria-label={`Stage for ${person.displayName}`}
-                        >
-                          {[...ACTIVE_STAGES, ...CLOSED_STAGES].map((s) => (
-                            <option key={s} value={s}>
-                              {STAGE_LABELS[s]}
-                            </option>
-                          ))}
-                        </Select>
-                      </td>
-                      <td className="px-3 text-ink-2 whitespace-nowrap">
-                        {person.currentOrganizationRaw ?? '—'}
-                      </td>
-                      <td className="px-3 tabular text-ink-2 whitespace-nowrap">
-                        {daysLabel(chat.stageEnteredAt)}
-                      </td>
-                      <td className="px-3 text-ink-2 whitespace-nowrap">
-                        {relDate(chat.lastOutboundAt)}
-                        {wentQuiet(chat) && <span className="text-warn"> · quiet</span>}
-                      </td>
-                      <td className="px-3 text-ink-2 whitespace-nowrap">{relDate(chat.lastInboundAt)}</td>
-                      <td className="px-3" onClick={(e) => e.stopPropagation()}>
-                        {next ? <NextLink s={next} /> : <span className="text-ink-3">—</span>}
-                      </td>
-                      <td className="px-3">
-                        <StrengthDots v={person.strength} />
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                            {[...ACTIVE_STAGES, ...CLOSED_STAGES].map((s) => (
+                              <option key={s} value={s}>
+                                {STAGE_LABELS[s]}
+                              </option>
+                            ))}
+                          </Select>
+                        </td>
+                        <td className="px-2.5 tabular text-ink-2 whitespace-nowrap">
+                          {daysLabel(chat.stageEnteredAt)}
+                        </td>
+                        <td className="px-2.5 text-ink-2 whitespace-nowrap">
+                          {relDate(chat.lastOutboundAt)}
+                          {wentQuiet(chat) && <span className="text-warn"> · quiet</span>}
+                        </td>
+                        <td className="px-2.5 text-ink-2 whitespace-nowrap">{relDate(chat.lastInboundAt)}</td>
+                        <td className="px-2.5" onClick={(e) => e.stopPropagation()}>
+                          {next ? <NextLink s={next} /> : <span className="text-ink-3">—</span>}
+                        </td>
+                        <td className="px-2.5">
+                          <StrengthDots v={person.strength} />
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </>
         ) : (
           <EmptyState
             title={onlyQuiet ? 'Nobody has gone quiet' : 'No chats yet'}
@@ -505,12 +534,20 @@ export function Pipeline() {
 function Board({ children, count }: { children: React.ReactNode; count: number }) {
   const ref = useRef<HTMLDivElement>(null);
   const [more, setMore] = useState(0);
+  // cards with a next step in the stages off to the right: the board says so, so nothing that needs you hides there
+  const [needs, setNeeds] = useState<{ count: number; first?: HTMLElement }>({ count: 0 });
   const measure = () => {
     const el = ref.current;
     if (!el) return;
     const cols = [...el.querySelectorAll<HTMLElement>('[data-stage]')];
     const right = el.scrollLeft + el.clientWidth;
-    setMore(cols.filter((c) => c.offsetLeft + c.offsetWidth / 2 > right).length);
+    const hidden = cols.filter((c) => c.offsetLeft + c.offsetWidth / 2 > right);
+    setMore(hidden.length);
+    const withNeeds = hidden.filter((c) => Number(c.dataset.needs ?? 0) > 0);
+    const count = withNeeds.reduce((n, c) => n + Number(c.dataset.needs), 0);
+    setNeeds((cur) =>
+      cur.count === count && cur.first === withNeeds[0] ? cur : { count, first: withNeeds[0] },
+    );
   };
   useEffect(() => {
     measure();
@@ -520,7 +557,21 @@ function Board({ children, count }: { children: React.ReactNode; count: number }
   return (
     <div className="relative">
       {/* above the columns, never on top of a card; on a phone the stages stack, so there is nothing to scroll to */}
-      <div className="hidden md:flex justify-end h-8 -mt-2 mb-1">
+      <div className="hidden md:flex justify-end items-center gap-2 h-8 -mt-2 mb-1">
+        {needs.count > 0 && needs.first && (
+          <button
+            onClick={() => {
+              const el = ref.current;
+              const col = needs.first;
+              if (el && col) el.scrollTo({ left: col.offsetLeft - el.offsetLeft, behavior: 'smooth' });
+            }}
+            className="h-8 px-3 rounded-full bg-accent-soft text-accent text-[12px] font-medium inline-flex items-center gap-0.5 hover:bg-accent hover:text-white"
+            data-testid="board-needs"
+          >
+            {needs.count} card{needs.count === 1 ? '' : 's'} with a next step off to the right{' '}
+            <ChevronRight size={14} />
+          </button>
+        )}
         {more > 0 && (
           <button
             onClick={() => ref.current?.scrollBy({ left: 480, behavior: 'smooth' })}

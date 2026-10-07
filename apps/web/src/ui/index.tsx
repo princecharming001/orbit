@@ -46,14 +46,17 @@ export function Card({
   className,
   children,
   padded = true,
+  'data-testid': testId,
 }: {
   className?: string;
   children: ReactNode;
   padded?: boolean;
+  'data-testid'?: string;
 }) {
   return (
     <div
       className={cx('bg-canvas border border-line rounded-[var(--radius-card)]', padded && 'p-4', className)}
+      data-testid={testId}
     >
       {children}
     </div>

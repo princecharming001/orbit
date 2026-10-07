@@ -160,6 +160,29 @@ describe('connection derivation', () => {
 });
 
 describe('outreach', () => {
+  it('a "Why them" line typed as a bare phrase becomes a sentence, and the situation keeps what you are recruiting for', () => {
+    const r = check(
+      base({
+        person: { ...base().person, isAlumni: false },
+        facts: [fact('c', 'connection', 'Your talk at the Berkeley ML meetup on eval tooling')],
+      }),
+    );
+    expect(r.d.body).toMatch(/I'm writing because of your talk at the Berkeley ML meetup on eval tooling\./);
+    expect(r.d.body).not.toMatch(/,\n\nYour talk/);
+    expect(r.d.body).toMatch(/recruiting for .* this cycle/);
+    // a full sentence is kept as the student wrote it
+    const s = check(
+      base({
+        person: { ...base().person, isAlumni: false },
+        facts: [fact('c', 'connection', 'we were both in the Cornell Data Science club')],
+      }),
+    );
+    expect(s.d.body).toMatch(/We were both in the Cornell Data Science club\./);
+  });
+  it('the missing line is named "Why them" in the draft', () => {
+    const r = check(base({ person: { ...base().person, isAlumni: false } }));
+    expect(r.d.body).toMatch(/\[Why them: one line only true of /);
+  });
   it('cold outreach without any link is gated, not drafted generically', () => {
     const r = check(base({ person: { ...base().person, isAlumni: false } }));
     expect(r.d.needsInput).toContain('connection');

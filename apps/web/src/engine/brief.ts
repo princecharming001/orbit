@@ -1378,7 +1378,8 @@ export function briefSummaryText(counts: Map<string, number>, upcoming: number, 
   if (coming) return `Nothing to send today. ${coming[0]!.toUpperCase()}${coming.slice(1)}.`;
   if (peopleCount === 0)
     return 'Welcome. Your first step is to add a few people you want to talk to, then Orbit suggests what to do each day.';
-  return 'Nothing needs you today. Pick someone from Discover to start a new conversation.';
+  // Today names the next step below the line (a draft to finish, someone to write to, who to meet)
+  return 'Nothing needs you today.';
 }
 
 export async function generateBrief(user: User, kind: Brief['kind'], now = new Date()): Promise<Brief> {

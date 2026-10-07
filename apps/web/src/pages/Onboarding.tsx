@@ -853,7 +853,9 @@ function StepGoogle({ onNext, onBack }: { onNext: () => void; onBack: () => void
       {error && <p className="text-bad text-[13px] mt-2">{error}</p>}
       {!builtIn && (
         <details className="mt-4 text-[13px]">
-          <summary className="cursor-pointer text-ink-3">Advanced: use your own Google Cloud project</summary>
+          <summary className="cursor-pointer text-ink-3">
+            For developers: connect your own Google Cloud project
+          </summary>
           <div className="mt-2">
             <Label
               htmlFor="ob-client-id"

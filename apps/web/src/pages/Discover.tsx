@@ -1,6 +1,6 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { RefreshCw } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { AddPersonButton } from '../components/AddPerson';
 import { LinkedInImportButton } from '../components/LinkedInImport';
@@ -16,6 +16,8 @@ export function Discover() {
   const nav = useNavigate();
   const toast = useToast();
   const [busy, setBusy] = useState(false);
+  // the list is brought up to date each time the page opens, so someone just added shows up without a Refresh
+  const [updating, setUpdating] = useState(true);
   const [q, setQ] = useState('');
   const recs =
     useLiveQuery(
@@ -35,6 +37,19 @@ export function Discover() {
   const tcCount =
     useLiveQuery(() => (userId ? db.targetCompanies.where('userId').equals(userId).count() : 0), [userId]) ??
     0;
+  // people already in a chat are not recommended again; the empty list says so instead of "nobody matches"
+  const inPipeline =
+    useLiveQuery(() => (userId ? db.chats.where('userId').equals(userId).count() : 0), [userId]) ?? 0;
+  useEffect(() => {
+    if (!user) return;
+    let live = true;
+    recommendationsRefresh(user)
+      .catch(() => undefined)
+      .finally(() => live && setUpdating(false));
+    return () => {
+      live = false;
+    };
+  }, [user?.id]);
   const list = recs.sort(
     (a, b) => (b.status === 'saved' ? 1 : 0) - (a.status === 'saved' ? 1 : 0) || b.score - a.score,
   );
@@ -61,8 +76,10 @@ export function Discover() {
   const emptyHint = missing.people
     ? 'Orbit recommends people from your own network, and it is empty so far. Add the people you know of by hand, or import your LinkedIn connections, and recommendations follow.'
     : missing.goals
-      ? 'Tell Orbit which functions and companies you are recruiting for, then generate recommendations.'
-      : 'Nobody in your network matches your goals yet. Add people at your target companies or import more connections, then try again.';
+      ? 'Tell Orbit which functions and companies you are recruiting for, and Discover fills in from your network.'
+      : inPipeline
+        ? 'Everyone in your network who fits your goals is already in your Pipeline. Add more people at your target companies, or import your LinkedIn connections, for new suggestions.'
+        : 'Nobody in your network matches your goals yet. Add people at your target companies or import more connections.';
   const refresh = async () => {
     setBusy(true);
     await recommendationsRefresh(user);
@@ -162,7 +179,11 @@ export function Discover() {
           ))}
         </div>
       )}
-      {list.length === 0 ? (
+      {list.length === 0 && updating ? (
+        <p className="text-[13px] text-ink-3" data-testid="discover-updating">
+          Checking your network…
+        </p>
+      ) : list.length === 0 ? (
         <EmptyState
           title="No recommendations yet"
           body={emptyHint}
@@ -176,10 +197,10 @@ export function Discover() {
                   <Button variant={missing.people ? 'secondary' : 'primary'}>Set your goals</Button>
                 </Link>
               )}
-              {!missing.people && missing.goals && (
-                <Button variant="secondary" onClick={refresh}>
-                  Generate recommendations
-                </Button>
+              {!missing.people && !missing.goals && inPipeline > 0 && (
+                <Link to="/pipeline">
+                  <Button variant="secondary">Open Pipeline</Button>
+                </Link>
               )}
             </div>
           }

@@ -615,6 +615,11 @@ export interface OutboundMessage {
   bodyFinal?: string;
   bodyFinalHash?: string;
   status: OutboundStatus;
+  /**
+   * How a hand-off left Orbit (status `handed_off`): opened in the mail app, opened on LinkedIn, or copied for the
+   * student to paste into Gmail in the browser. Either way it waits for the student's "I sent it".
+   */
+  handoffVia?: 'mailto' | 'linkedin_compose' | 'linkedin_connect' | 'copy';
   approvedAt?: string;
   queuedAt?: string;
   /** end of the undo window for a queued provider send */

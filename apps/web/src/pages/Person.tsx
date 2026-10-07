@@ -26,7 +26,7 @@ import { ExternalLink, Linkedin, Mail, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { runApproval } from '../components/approve';
-import { DraftEditor, OutboxStatus } from '../components/DraftEditor';
+import { DraftEditor, handoffWhere, OutboxStatus } from '../components/DraftEditor';
 import { ScheduleChatDialog } from '../components/ScheduleChat';
 import { SuggestionCard } from '../components/SuggestionCard';
 import { feedback } from '../db/repo';
@@ -167,6 +167,25 @@ export function PersonPage() {
     if (person && !person.summary && user) refreshPersonSummary(user, person.id);
   }, [person?.id, person?.summary, user]);
   const wantDraft = params.get('draft') as MessageKind | null;
+  // a link to one draft the student started (from Drafts or Today) opens it in the composer
+  const wantOpen = params.get('open');
+  useEffect(() => {
+    if (!wantOpen) return;
+    const d = drafts.find((x) => x.id === wantOpen);
+    if (!d) return;
+    if (d.status === 'draft') {
+      setDraftId(d.id);
+      setComposing(d.kind);
+    }
+    setParams(
+      (p) => {
+        p.delete('open');
+        return p;
+      },
+      { replace: true },
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wantOpen, drafts.length]);
   useEffect(() => {
     if (person && user && wantDraft && !draftId && !busy) {
       compose(wantDraft);
@@ -190,8 +209,19 @@ export function PersonPage() {
         linkLabel="Back to People"
       />
     );
+  // a draft the student started here and has not sent: it waits for them, it is never written again from scratch
+  const openDraftFor = (kind: MessageKind) =>
+    drafts
+      .filter((d) => d.kind === kind && d.status === 'draft')
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
   const compose = async (kind: MessageKind, opts: { skipWarmUp?: boolean; confirmed?: boolean } = {}) => {
     const channel = person.primaryEmail ? 'gmail' : 'linkedin';
+    const started = openDraftFor(kind);
+    if (started) {
+      setDraftId(started.id);
+      setComposing(kind);
+      return;
+    }
     // A cold LinkedIn-only contact: explain the warm-up and let the student choose before anything starts.
     if (
       kind === 'outreach' &&
@@ -221,16 +251,38 @@ export function PersonPage() {
       setComposing(kind);
       return;
     }
-    // the draft the student already started for this kind (and maybe edited) is opened again, not written anew
-    const open = drafts
-      .filter((d) => d.kind === kind && d.status === 'draft')
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
-    const d = open ?? (await draftMessage(user, person.id, kind, channel, chat?.id));
+    const d = await draftMessage(user, person.id, kind, channel, chat?.id);
     setDraftId(d.id);
     setComposing(kind);
     setBusy(false);
   };
   const draft = drafts.find((d) => d.id === draftId);
+  /** Drop a draft the student started; `quiet` when nothing of theirs is in it, otherwise with an Undo. */
+  const discardDraft = async (id: string, quiet = false) => {
+    await db.outbound
+      .where('id')
+      .equals(id)
+      .filter((m) => m.status === 'draft')
+      .modify({ status: 'cancelled' });
+    if (id === draftId) {
+      setComposing(undefined);
+      setDraftId(undefined);
+    }
+    if (!quiet)
+      toast.push({
+        text: 'Draft discarded.',
+        action: {
+          label: 'Undo',
+          onClick: () =>
+            db.outbound
+              .where('id')
+              .equals(id)
+              .filter((m) => m.status === 'cancelled')
+              .modify({ status: 'draft' }),
+        },
+        ttl: 7000,
+      });
+  };
   const send = async (body: string, subject?: string) => {
     if (!draft) return;
     setBusy(true);
@@ -478,19 +530,52 @@ export function PersonPage() {
           (d) => d.status === 'handed_off' && d.id !== draft?.id && !cardDrafts.has(d.id),
         );
         const cards = waiting.filter((w) => !draft || w.outboundMessageId !== draft.id);
-        if (!cards.length && !handedOff.length) return null;
+        // drafts the student started here (Write to, the Map, Discover) and has not sent: they wait here and on Drafts
+        const started = drafts
+          .filter((d) => d.status === 'draft' && !d.suggestionId && d.id !== draft?.id)
+          .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+        if (!cards.length && !handedOff.length && !started.length) return null;
         return (
           <div className="mb-5 space-y-3" data-testid="person-waiting">
             <div className="text-[12px] uppercase tracking-wide text-ink-3">Waiting on you</div>
+            {started.map((d) => (
+              <div
+                key={d.id}
+                className="rounded-[var(--radius-card)] border border-line p-3"
+                data-testid="person-started-draft"
+              >
+                <div className="text-[13px] text-ink-2">
+                  {MESSAGE_KIND_LABELS[d.kind]} you started {relDate(d.createdAt)}, not sent yet.
+                </div>
+                <p className="text-[13px] text-ink-3 mt-1 line-clamp-2 whitespace-pre-line">
+                  {d.bodyFinal ?? d.bodyDraft}
+                </p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    onClick={() => {
+                      setDraftId(d.id);
+                      setComposing(d.kind);
+                    }}
+                    data-testid="person-continue-draft"
+                  >
+                    Continue writing
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => discardDraft(d.id)}>
+                    Discard draft
+                  </Button>
+                </div>
+              </div>
+            ))}
             {cards.map((w) => (
               <SuggestionCard key={w.id} s={w} compact />
             ))}
             {handedOff.map((d) => (
               <div key={d.id}>
                 <div className="text-[13px] text-ink-2 mb-1.5">
-                  {MESSAGE_KIND_LABELS[d.kind]} you opened in{' '}
-                  {d.channel === 'linkedin' ? 'LinkedIn' : 'your mail app'}{' '}
-                  {relDate(d.approvedAt ?? d.createdAt)}. Did it go out?
+                  {MESSAGE_KIND_LABELS[d.kind]} you {handoffWhere(d)} {relDate(d.approvedAt ?? d.createdAt)}.
+                  Did it go out?
                 </div>
                 <OutboxStatus draft={d} />
               </div>
@@ -519,27 +604,39 @@ export function PersonPage() {
                 </div>
               )}
             </div>
-            <div className="flex flex-wrap gap-1 text-[12px]" role="group" aria-label="Kind of message">
-              {kindsFor(chat?.stage, composing).map((k) => (
-                <button
-                  key={k}
-                  disabled={busy || draft.status !== 'draft'}
-                  onClick={() => compose(k, { confirmed: true })}
-                  aria-pressed={composing === k}
-                  className={cx(
-                    'px-2.5 h-8 rounded-full border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
-                    composing === k ? 'border-ink bg-ink text-white' : 'border-line text-ink-2',
-                  )}
-                >
-                  {MESSAGE_KIND_LABELS[k]}
-                </button>
-              ))}
-            </div>
+            {/* one kind only: nothing to switch to, so no button that looks like one (it used to restart the draft) */}
+            {kindsFor(chat?.stage, composing).length > 1 && (
+              <div className="flex flex-wrap gap-1 text-[12px]" role="group" aria-label="Kind of message">
+                {kindsFor(chat?.stage, composing).map((k) => (
+                  <button
+                    key={k}
+                    disabled={busy || draft.status !== 'draft'}
+                    onClick={() => {
+                      if (k === composing) return;
+                      // the draft being left keeps the student's words (it waits under Waiting on you); an untouched
+                      // one is dropped
+                      if (draft.status === 'draft' && !draft.bodyFinal && !draft.suggestionId)
+                        discardDraft(draft.id, true);
+                      compose(k, { confirmed: true });
+                    }}
+                    aria-pressed={composing === k}
+                    className={cx(
+                      'px-2.5 h-8 rounded-full border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+                      composing === k ? 'border-ink bg-ink text-white' : 'border-line text-ink-2',
+                    )}
+                  >
+                    {MESSAGE_KIND_LABELS[k]}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
           <DraftEditor
             draft={draft}
             onApprove={send}
-            onCancel={() => {
+            onCancel={({ kept }) => {
+              // a first message nobody wrote anything in is dropped; one with the student's words waits for them
+              if (!kept && draft.status === 'draft' && !draft.suggestionId) discardDraft(draft.id, true);
               setComposing(undefined);
               setDraftId(undefined);
             }}

@@ -178,7 +178,7 @@ describe('drafting against the demo data', () => {
     expect(cold, 'demo has a cold contact with no checkable link').toBeDefined();
     const d = await draftMessage(user, cold!.id, 'outreach', 'gmail');
     expect(d.needsInput).toEqual(['connection']);
-    expect(d.bodyDraft).toMatch(/\[Your link to/);
+    expect(d.bodyDraft).toMatch(/\[Why them: one line only true of /);
     const gated = await validateStored(d);
     expect(gated.some((i) => i.code === 'needs_connection' && i.blocking)).toBe(true);
     const line = 'We were both on the Cornell Hyperloop team, a few years apart';

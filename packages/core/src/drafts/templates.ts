@@ -512,11 +512,33 @@ function postPhrase(note: string): string {
 }
 
 /** First-person form of a line the student typed ("Read your post on X" -> "I read your post on X"). */
+/**
+ * The name of the one line only true of the recipient that a first message needs and only the student can supply. The
+ * same words everywhere: the bracketed gap in the draft, the card that says it is missing, and the box that asks for it.
+ */
+export const WHY_THEM = 'Why them';
+
 function studentSentence(text: string): string {
   const t = strip(text);
   if (/^(read|saw|met|found|heard|noticed|attended|watched|listened|came across|followed)\b/i.test(t))
     return `I ${lower1(t)}`;
+  // a bare noun phrase ("Your talk at the ML meetup", "a mutual friend, Sam") is not a sentence on its own: say it is
+  // why the student is writing, without adding a feeling they did not state
+  if (isFragment(t)) return `I'm writing because of ${lower1(t)}`;
   return cap1(t);
+}
+
+/** A phrase with no verb of its own, typed into the "Why them" box: "Your talk at ...", "The post you shared on ...". */
+function isFragment(t: string): boolean {
+  if (/^(i|we|you|they|he|she|it|both of us|my \w+ \w+ (suggested|told|said|mentioned))\b/i.test(t))
+    return false;
+  if (!/^(your|the|a|an|our|his|her|their|this|that|one of)\b/i.test(t)) return false;
+  // a verb after the opening noun ("Your post on X was great", "Our club hosted you") makes it a sentence; a verb inside
+  // a clause about them ("the post you shared") does not
+  const rest = t.replace(/\b(you|they|he|she|we|i)\s+\w+/gi, '');
+  return !/\b(is|was|were|are|am|has|have|had|suggested|told|said|mentioned|recommended|introduced|hosted|gave|spoke|talked|wrote|made|got|helped)\b/i.test(
+    rest,
+  );
 }
 
 /**
@@ -707,7 +729,8 @@ function opener(
     }
     case 'user_supplied': {
       claims.push({ text: c.text, factId: c.factId, kind: 'shared' });
-      return { text: `${studentSentence(c.text)}. I'm ${me}.`, claims, saidSituation: true };
+      // the situation line follows in full ("I'm a junior at ..., recruiting for ... this cycle"), so it is not cut short
+      return { text: `${studentSentence(c.text)}.`, claims, saidSituation: false };
     }
   }
 }
@@ -969,7 +992,7 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
         op?.text ??
         (commented
           ? `[What their post was about, e.g. "Read your post on ..." (you commented on it during the warm-up)]`
-          : `[Your link to ${first}: how you found them, what you share, or what of theirs you read]`);
+          : `[${WHY_THEM}: one line only true of ${first}, like how you found them, what you share, or something of theirs you read]`);
       claims.push(...(op?.claims ?? []));
       // a warm-up comment the student did not describe is still worth a clause next to another link
       const alsoCommented = op && commented ? 'I also left a comment on your recent post.' : '';
@@ -1010,7 +1033,7 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       if (threaded) subject = reSubject;
       // LinkedIn connection note (not yet connected) or message (connected)
       if (isLinkedIn) {
-        const short = op ? shortConnection(ctx, c!) : `[your link to ${first}]`;
+        const short = op ? shortConnection(ctx, c!) : `[${WHY_THEM}: one line only true of ${first}]`;
         const sq = shortQuestion(q);
         const candidates = [
           `Hi ${first}, ${school} ${yl} here. ${short} Would you be open to ${minutes} minutes on ${q}? Happy to work around your schedule. ${ctx.user.firstName}`,

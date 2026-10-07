@@ -281,7 +281,7 @@ test.describe('Orbit demo flow', () => {
     expect(found).toBe(true);
     const approve = page.getByRole('button', { name: /open in mail app|send to|copy & open linkedin/i });
     await expect(approve).toBeDisabled();
-    await expect(page.getByLabel('Message body')).toHaveValue(/\[Your link to/);
+    await expect(page.getByLabel('Message body')).toHaveValue(/\[Why them: one line only true of /);
     await page
       .getByTestId('draft-input-connection')
       .fill('We were both on the Cornell Hyperloop team, a few years apart');
@@ -777,7 +777,7 @@ test.describe('First-run guidance and plain next steps', () => {
     await card.getByTestId('draft-review').click();
     await expect(card.getByTestId('draft-to')).toContainText(/^To: /);
     await expect(card.getByRole('button', { name: /^open in mail app$/i })).toBeVisible();
-    await expect(card.getByTestId('draft-mail-hint')).toContainText(/opens this in your mail app/i);
+    await expect(card.getByTestId('draft-mail-hint')).toContainText(/starts the email in your mail app/i);
   });
 
   test('a duplicate is only merged after a second step, and a dismissed card can be brought back', async ({
@@ -810,12 +810,15 @@ test.describe('First-run guidance and plain next steps', () => {
   }) => {
     await loadDemo(page);
     const badge = Number(await page.getByTestId('approvals-badge').first().innerText());
-    // the same drafts as Today's cards, not Today plus everything that can wait
-    const todays = await page
-      .locator('[data-testid^="suggestion-"]')
-      .filter({ has: page.getByTestId('draft-review') })
-      .count();
-    expect(badge).toBe(todays);
+    // the same drafts as Today's cards, not Today plus everything that can wait (cards render as their drafts load)
+    await expect
+      .poll(() =>
+        page
+          .locator('[data-testid^="suggestion-"]')
+          .filter({ has: page.getByTestId('draft-review') })
+          .count(),
+      )
+      .toBe(badge);
     await page.goto('inbox');
     await expect(page.getByRole('heading', { name: 'Drafts' })).toBeVisible();
     await expect(page.getByRole('tab', { name: /ready to send/i })).toContainText(String(badge));
@@ -1046,5 +1049,227 @@ test.describe('Setup without Google', () => {
     await page.getByTestId('toasts').getByRole('button', { name: 'Undo' }).click();
     await expect(page.getByRole('button', { name: 'Delete fact: She grew up in Chicago' })).toBeVisible();
     await expect(page.getByTestId('fact-conflict')).toHaveCount(2);
+  });
+});
+
+/** A fresh profile set up without Google, recruiting at Goldman Sachs, with nobody in it yet. */
+async function newStudent(page: Page) {
+  await prep(page);
+  await page.goto('');
+  await page
+    .getByRole('button', { name: /^get started/i })
+    .first()
+    .click();
+  await page.getByTestId('ob-name').fill('Sam Okafor');
+  await page.getByTestId('ob-email').fill('sam@umich.edu');
+  await page.getByTestId('ob-school').fill('University of Michigan');
+  await page.getByTestId('ob-year').selectOption({ index: 2 });
+  await page.getByRole('button', { name: /continue/i }).click();
+  await page.getByTestId('ob-fn-pm').click();
+  await page.getByTestId('ob-company').fill('Goldman Sachs');
+  await page.getByRole('button', { name: /^add$/i }).click();
+  await page.getByRole('button', { name: /continue/i }).click();
+  await page.getByRole('button', { name: /skip for now/i }).click(); // resume
+  await page.getByRole('button', { name: /skip for now/i }).click(); // linkedin
+  await page.getByRole('button', { name: /finish setup/i }).click();
+  await expect(page).toHaveURL(/\/today$/, { timeout: 30_000 });
+}
+
+async function addByHand(
+  page: Page,
+  name: string,
+  company: string,
+  how: { email?: string; linkedin?: string },
+) {
+  await page
+    .getByRole('button', { name: /add a person/i })
+    .first()
+    .click();
+  await page.getByTestId('add-person-name').fill(name);
+  await page.getByTestId('add-person-company').fill(company);
+  if (how.email) await page.getByTestId('add-person-email').fill(how.email);
+  if (how.linkedin) await page.getByTestId('add-person-linkedin').fill(how.linkedin);
+  await page.getByTestId('add-person-save').click();
+  await expect(page).toHaveURL(/\/people\//);
+}
+
+test.describe("Never losing the student's work, and honest hand-offs", () => {
+  test('Cancel on an edited draft asks first: keep keeps the words, discard puts the text back', async ({
+    page,
+  }) => {
+    await loadDemo(page);
+    const card = page.getByTestId('suggestion-follow_up_bump').first();
+    await card.getByTestId('draft-review').click();
+    const box = card.getByLabel('Message body');
+    const original = await box.inputValue();
+    await box.fill(`${original} PS: loved the retries post.`);
+    await card.getByTestId('draft-cancel').click();
+    await expect(card.getByTestId('draft-close-confirm')).toBeVisible();
+    await card.getByTestId('draft-keep').click();
+    await expect(box).toBeHidden();
+    await card.getByTestId('draft-review').click();
+    await expect(box).toHaveValue(/PS: loved the retries post\.$/);
+    // after a reload too
+    await page.reload();
+    await page.getByTestId('suggestion-follow_up_bump').first().getByTestId('draft-review').click();
+    await expect(box).toHaveValue(/PS: loved the retries post\.$/);
+    await box.fill(`${original} Another line.`);
+    await card.getByTestId('draft-cancel').click();
+    await card.getByTestId('draft-discard').click();
+    await card.getByTestId('draft-review').click();
+    await expect(box).toHaveValue(/PS: loved the retries post\.$/);
+    // closing without a change asks nothing
+    await card.getByTestId('draft-cancel').click();
+    await expect(card.getByTestId('draft-close-confirm')).toHaveCount(0);
+    await expect(box).toBeHidden();
+  });
+
+  test('Copy text hands off like the mail app: the message waits for "I sent it", then counts as sent', async ({
+    page,
+  }) => {
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+    await loadDemo(page);
+    const card = page.getByTestId('suggestion-thank_you').first();
+    await card.getByTestId('draft-review').click();
+    await card.getByTestId('draft-copy').click();
+    const waiting = card.getByTestId('outbox-handed_off');
+    await expect(waiting).toBeVisible();
+    await expect(waiting).toContainText(/press I sent it/i);
+    // a reply in a thread is copied with its Re: subject, so it lands in the same conversation
+    const copied = await page.evaluate(() => navigator.clipboard.readText());
+    expect(copied).toMatch(/^Subject: Re: /);
+    await page.goto('inbox');
+    await expect(page.getByTestId('outbox-item').filter({ hasText: /copied/i })).toBeVisible();
+    await page
+      .getByTestId('outbox-item')
+      .getByRole('button', { name: /i sent it/i })
+      .first()
+      .click();
+    await page.getByRole('tab', { name: /sent/i }).last().click();
+    await expect(page.getByText(/thank-you/i).first()).toBeVisible();
+  });
+
+  test('confirming a time and pressing "I sent it" books the chat under Coming up', async ({ page }) => {
+    await loadDemo(page);
+    const card = page.getByTestId('suggestion-schedule_confirm').first();
+    const name = (await card.locator('a.font-medium').first().innerText()).trim();
+    await card.getByTestId('draft-review').click();
+    await card.getByRole('button', { name: /open in mail app/i }).click();
+    await card.getByRole('button', { name: /i sent it/i }).click();
+    await expect(page.getByText(/is booked for/i)).toBeVisible();
+    await expect(page.getByText('Coming up').locator('..').getByText(name)).toBeVisible();
+  });
+
+  test('a first message started on a person page survives leaving it, and is findable on Drafts and Today', async ({
+    page,
+  }) => {
+    await newStudent(page);
+    await addByHand(page, 'Daniel Kim', 'Goldman Sachs', {
+      linkedin: 'https://www.linkedin.com/in/daniel-kim-gs',
+    });
+    // adding someone leads to a next step on Today, not to an empty page
+    await page.goto('today');
+    const next = page.getByTestId('today-to-write');
+    await expect(next).toContainText('Daniel Kim');
+    await expect(page.getByTestId('today-summary')).toContainText(/first message to Daniel/i);
+    // Discover is up to date without a Refresh
+    await page.goto('discover');
+    await expect(page.getByTestId('rec-card').filter({ hasText: 'Daniel Kim' })).toBeVisible();
+    await page.goto('today');
+    await page.getByTestId('today-write').click();
+    await expect(page.getByTestId('warmup-choice')).toBeVisible();
+    await page.getByTestId('warmup-skip').click();
+    const box = page.getByLabel('Message body');
+    await expect(box).toBeVisible({ timeout: 15_000 });
+    // one name for the missing line, everywhere: the gap, the box, the fix
+    await expect(box).toHaveValue(/\[Why them: one line only true of Daniel\]/);
+    await expect(page.getByTestId('draft-needs-input')).toContainText('Why them');
+    // only one kind of message fits: no button that looks like a choice (it used to restart the draft)
+    await expect(page.getByRole('group', { name: /kind of message/i })).toHaveCount(0);
+    await box.fill(`${await box.inputValue()} Glad to.`);
+    await page
+      .getByRole('link', { name: /^drafts/i })
+      .first()
+      .click();
+    const started = page.getByTestId('started-draft');
+    await expect(started).toContainText('Daniel Kim');
+    await expect(started).toContainText('Glad to');
+    await page.goto('today');
+    await expect(page.getByTestId('today-started')).toContainText('Daniel Kim');
+    await page
+      .getByTestId('today-started')
+      .getByRole('button', { name: /continue writing/i })
+      .click();
+    await expect(box).toHaveValue(/Glad to/);
+    // Write to opens the same draft, without asking about the warm-up again
+    await page.reload();
+    await page.getByTestId('person-write').click();
+    await expect(page.getByTestId('warmup-choice')).toBeHidden();
+    await expect(box).toHaveValue(/Glad to/);
+  });
+
+  test('Copy text stays off while the "Why them" line is missing', async ({ page }) => {
+    await newStudent(page);
+    await addByHand(page, 'Priya Shah', 'Goldman Sachs', { email: 'priya.shah@gs.com' });
+    await page.getByTestId('person-write').click();
+    await expect(page.getByLabel('Message body')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('draft-copy')).toBeDisabled();
+    await page.getByTestId('draft-input-connection').fill('Your talk at the Michigan finance club last week');
+    await page.getByTestId('draft-redraft').click();
+    await expect(page.getByLabel('Message body')).toHaveValue(
+      /I'm writing because of your talk at the Michigan finance club last week\./,
+    );
+    await expect(page.getByTestId('draft-copy')).toBeEnabled();
+  });
+
+  test('the landing page, Settings and Pipeline promise only what a build without Google does', async ({
+    page,
+  }) => {
+    await prep(page);
+    await page.goto('');
+    await expect(page.locator('body')).not.toContainText(/Google/);
+    await expect(page.locator('body')).toContainText(/does not connect to your email or calendar/i);
+    await loadDemo(page);
+    await page.goto('settings/integrations');
+    const google = page.getByTestId('google-unavailable');
+    await expect(google).toContainText(/not part of this version/i);
+    await page.goto('pipeline');
+    await expect(page.getByText(/cannot see your inbox/i)).toBeVisible();
+  });
+
+  test('the Pipeline table fits a laptop, and the board points at next steps off to the right', async ({
+    page,
+  }) => {
+    await loadDemo(page);
+    await page.goto('pipeline?view=table');
+    const table = page.locator('table');
+    await expect(table).toBeVisible();
+    const fits = await table.evaluate((t) => t.scrollWidth <= (t.parentElement as HTMLElement).clientWidth);
+    expect(fits).toBe(true);
+    await expect(table.getByText('Closeness', { exact: true })).toBeInViewport();
+    await page.goto('pipeline');
+    const needs = page.getByTestId('board-needs');
+    await expect(needs).toBeVisible();
+    await needs.click();
+    await expect(page.getByTestId('chat-card-completed').first()).toBeInViewport();
+  });
+});
+
+test.describe('Phone: the same flows fit 390px', () => {
+  test.use({ viewport: { width: 390, height: 844 } });
+  test('the cancel prompt and a copied hand-off fit the screen', async ({ page }) => {
+    await loadDemo(page);
+    const card = page.getByTestId('suggestion-follow_up_bump').first();
+    await card.getByTestId('draft-review').click();
+    const box = card.getByLabel('Message body');
+    await box.fill(`${await box.inputValue()} PS.`);
+    await card.getByTestId('draft-cancel').click();
+    const confirm = card.getByTestId('draft-close-confirm');
+    await expect(confirm).toBeVisible();
+    const b = (await confirm.boundingBox())!;
+    expect(b.x).toBeGreaterThanOrEqual(0);
+    expect(b.x + b.width).toBeLessThanOrEqual(390);
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
+    expect(overflow).toBe(false);
   });
 });

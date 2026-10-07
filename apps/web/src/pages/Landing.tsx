@@ -7,6 +7,7 @@ import { Logo } from '../components/AppShell';
 import { db } from '../db/schema';
 import { createLocalUser, leaveDemoForOwnSetup } from '../engine/account';
 import { DEMO_USER_ID, demoResetPrompt, loadDemo } from '../engine/demo';
+import { envGoogleClientId } from '../integrations/prefs';
 import { useSession } from '../state/session';
 import { Button, Spinner } from '../ui';
 import { onboardingPath } from './Onboarding';
@@ -25,6 +26,8 @@ export function Landing() {
   const resolving = loading || !stored || stored.for !== userId;
   const user = resolving ? undefined : (stored?.user ?? undefined);
   const [busy, setBusy] = useState<string | undefined>();
+  // the page promises only what this build does: Gmail and Calendar only when this build can connect them
+  const google = !!envGoogleClientId();
   const onboarded = !!(userId && user?.onboardingCompletedAt);
   const midSetup = !!(userId && user && !user.onboardingCompletedAt);
   const isDemo = user?.id === DEMO_USER_ID;
@@ -125,9 +128,10 @@ export function Landing() {
             without the busywork.
           </h1>
           <p className="mt-5 text-[17px] text-ink-2 max-w-[520px] leading-relaxed">
-            Orbit helps you network for internships. It finds people worth a coffee chat, drafts each message
-            for you to edit, reminds you when to follow up and say thank you, and keeps track of every
-            conversation. Nothing is ever sent without you.
+            Orbit helps you network for internships. Add the people you want to meet, by hand or from your
+            LinkedIn connections, and Orbit points out who is worth a coffee chat, drafts each message for you
+            to edit, reminds you when to follow up and say thank you, and keeps track of every conversation.
+            Nothing is ever sent without you.
           </p>
           <div className="mt-7 flex flex-wrap items-center gap-3 min-h-11">
             {resolving ? (
@@ -187,7 +191,9 @@ export function Landing() {
               {
                 icon: Sun,
                 title: 'A short list for today',
-                body: 'The few things worth doing today: follow up, say thank you, confirm a time, prep for a chat, reconnect. Each with a ready draft and the reason it is there. The rest waits until you want it.',
+                body: google
+                  ? 'The few things worth doing today: follow up, say thank you, confirm a time, prep for a chat, reconnect. Each with a ready draft and the reason it is there. The rest waits until you want it.'
+                  : 'The few things worth doing today: follow up, say thank you, prep for a chat, keep a promise, reconnect. Each with the reason it is there, and a ready draft when there is a message to send. The rest waits until you want it.',
               },
               {
                 icon: Mail,
@@ -197,7 +203,9 @@ export function Landing() {
               {
                 icon: LayoutGrid,
                 title: 'Every chat in one place',
-                body: 'See where each conversation stands, from first message to scheduled to thanked, and who has gone quiet.',
+                body: google
+                  ? 'See where each conversation stands, from first message to scheduled to thanked, and who has gone quiet.'
+                  : 'See where each conversation stands, from first message to scheduled to thanked, and who has gone quiet. When someone replies, you move their card; Orbit takes it from there.',
               },
               {
                 icon: MapIcon,
@@ -229,10 +237,12 @@ export function Landing() {
         <div>
           <h2 className="text-[28px] font-semibold tracking-[-0.02em]">Your inbox stays yours.</h2>
           <p className="text-ink-2 mt-3 leading-relaxed">
-            This version of Orbit runs entirely in your browser. Email, calendar and LinkedIn data are stored
-            in your browser's local database and never uploaded. Google access is optional and uses Google's
-            own sign-in; Claude drafting is optional and uses an API key you paste in, stored only on your
-            device.
+            This version of Orbit runs entirely in your browser. The people, notes and LinkedIn connections
+            you add are stored in your browser's local database and never uploaded.{' '}
+            {google
+              ? "Connecting Gmail and Calendar is optional and uses Google's own sign-in. "
+              : 'It does not connect to your email or calendar: you send each message from your own mail app or LinkedIn, and tell Orbit when it went out. '}
+            Claude drafting is optional and uses an API key you paste in, stored only on your device.
           </p>
           <ul className="mt-5 space-y-2 text-[14px] text-ink-2">
             <li>• Nothing is sent without you. What goes out is exactly the text you read.</li>
@@ -279,12 +289,13 @@ export function Landing() {
 }
 
 function HeroMock() {
-  const cards = [
+  const cards: { kind: string; who: string; reason: string; tone: string; ready?: string }[] = [
     {
-      kind: 'Confirm time',
+      kind: 'Prep',
       who: 'Mei Chen · Product Manager at Figma',
-      reason: 'Mei suggested Thursday at 2pm',
-      tone: 'bg-accent-soft text-accent',
+      reason: 'Your chat is tomorrow at 2pm',
+      tone: 'bg-good-soft text-good',
+      ready: 'Notes ready',
     },
     {
       kind: 'Thank-you',
@@ -303,6 +314,7 @@ function HeroMock() {
       who: 'Jordan Lee · Designer at Linear',
       reason: 'React to one recent post before you message',
       tone: 'bg-canvas-2 text-ink-2',
+      ready: 'Step 2 of 3',
     },
   ];
   return (
@@ -333,7 +345,7 @@ function HeroMock() {
                   <div className="text-[13px] font-medium truncate">{c.who}</div>
                   <div className="text-[12px] text-ink-3 truncate">{c.reason}</div>
                 </div>
-                <span className="text-[12px] text-ink-3 shrink-0">Draft ready</span>
+                <span className="text-[12px] text-ink-3 shrink-0">{c.ready ?? 'Draft ready'}</span>
               </div>
             ))}
           </div>

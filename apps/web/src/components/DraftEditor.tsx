@@ -1,10 +1,11 @@
 import type { DraftNeed, OutboundMessage } from '@orbit/core';
-import { LINKEDIN_NOTE_MAX, MAX_WORDS, wordsIn } from '@orbit/core';
+import { LINKEDIN_NOTE_MAX, MAX_WORDS, WHY_THEM, wordsIn } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { type ReactNode, useEffect, useId, useLayoutEffect, useState } from 'react';
+import { type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { db } from '../db/schema';
 import { regenerateDraft } from '../engine/brief';
 import {
+  approveAndSend,
   checkSendAllowed,
   confirmHandoff,
   type DraftIssue,
@@ -23,10 +24,9 @@ import { copyText, openHandoff } from './approve';
 type PromptNeed = Exclude<DraftNeed, 'post'>;
 const INPUT_PROMPT: Record<PromptNeed, { label: string; hint: string; placeholder: string }> = {
   connection: {
-    label: 'Why you are writing to them',
-    hint: 'You have not talked yet, so the message needs one line that only fits them: how you found them, what you share, or something of theirs you read. Orbit will not send a first message without it.',
-    placeholder:
-      'e.g. We are both in the same campus club; I read your post about your first year at the firm',
+    label: WHY_THEM,
+    hint: 'One line only true of them: how you found them, what you share, or something of theirs you read. You have not talked yet, so Orbit will not send a first message without it.',
+    placeholder: 'e.g. I read your post about your first year at the firm',
   },
   update: {
     label: 'One real update since you last spoke',
@@ -70,7 +70,11 @@ export function DraftEditor({
   draft: OutboundMessage;
   /** resolves to an error to show inline when the message was not approved */
   onApprove: (body: string, subject?: string) => Promise<string | undefined>;
-  onCancel?: () => void;
+  /**
+   * Close the editor. An edited draft asks first (keep or discard the changes). `kept` says whether the draft still
+   * holds the student's own words afterwards, so a page can drop a draft nobody wrote anything in.
+   */
+  onCancel?: (r: { kept: boolean }) => void;
   busy?: boolean;
   approveLabel?: string;
 }) {
@@ -113,25 +117,37 @@ export function DraftEditor({
     setBody(draft.bodyFinal ?? draft.bodyDraft);
     setSubject(draft.subject ?? '');
   }, [draft.id, draft.bodyDraft]);
-  // edits are kept as they are typed, so leaving the page (to check LinkedIn) and coming back loses nothing
+  // what the editor showed when it opened, so Cancel knows whether anything changed since
+  const [opened] = useState(() => ({
+    body: draft.bodyFinal ?? draft.bodyDraft,
+    subject: draft.subject ?? '',
+  }));
+  const [confirmingClose, setConfirmingClose] = useState(false);
+  const [copying, setCopying] = useState(false);
+  // edits are kept as they are typed, so leaving the page (to check LinkedIn) and coming back loses nothing; the
+  // latest text is also written when the editor closes, so a change made just before leaving is never dropped
+  const latest = useRef({ body, subject, draft, discard: false });
+  latest.current = { ...latest.current, body, subject, draft };
   useEffect(() => {
     if (draft.status !== 'draft') return;
-    const t = setTimeout(() => {
-      const changedBody = body !== (draft.bodyFinal ?? draft.bodyDraft);
-      const changedSubject = subject !== (draft.subject ?? '');
-      if (!changedBody && !changedSubject) return;
-      db.outbound
-        .where('id')
-        .equals(draft.id)
-        .filter((m) => m.status === 'draft')
-        .modify({
-          bodyFinal: body.trim() === draft.bodyDraft.trim() ? undefined : body,
-          ...(changedSubject ? { subject: subject || undefined } : {}),
-        })
-        .catch(() => undefined);
-    }, 600);
+    const t = setTimeout(() => saveEdits(draft, body, subject), 400);
     return () => clearTimeout(t);
-  }, [body, subject, draft.id, draft.status, draft.bodyDraft, draft.bodyFinal, draft.subject]);
+  }, [body, subject, draft]);
+  useEffect(() => {
+    const flush = () => {
+      const l = latest.current;
+      if (!l.discard && l.draft.status === 'draft') saveEdits(l.draft, l.body, l.subject);
+    };
+    // the tab closing or going to the background (a phone switching apps) also saves what was typed
+    const hidden = () => document.visibilityState === 'hidden' && flush();
+    window.addEventListener('pagehide', flush);
+    document.addEventListener('visibilitychange', hidden);
+    return () => {
+      window.removeEventListener('pagehide', flush);
+      document.removeEventListener('visibilitychange', hidden);
+      flush();
+    };
+  }, []);
   useEffect(() => {
     let live = true;
     draftEnvelope(draft).then((e) => live && setEnvelope(e));
@@ -174,15 +190,48 @@ export function DraftEditor({
     (needs.length > 0 && (hasPlaceholder || !edited)) || issues.some((i) => i.blocking) || !!notAllowed;
   const shownError = error ?? (draft.status === 'failed' || draft.error ? draft.error : undefined);
   if (['queued', 'sending', 'handed_off', 'sent'].includes(draft.status))
-    return <OutboxStatus draft={draft} onClose={onCancel} />;
+    return <OutboxStatus draft={draft} onClose={onCancel && (() => onCancel({ kept: false }))} />;
   const first = person?.firstName ?? 'them';
+  // Copy text is a hand-off like the mail app: the message waits for "I sent it", so a Gmail user can log the send
   const copyAll = async () => {
-    const all = `${!isLinkedIn && subject && !envelope.threaded ? `Subject: ${subject}\n\n` : ''}${body}`;
-    toast.push({
-      text: (await copyText(all))
-        ? `Copied. Paste it into Gmail or any mail app, addressed to ${person?.primaryEmail ?? first}.`
-        : 'Select the text and copy it.',
-    });
+    if (!user) return;
+    const subj = envelope.threaded ? envelope.subject : subject;
+    // the clipboard write starts inside the click; browsers drop clipboard access after a long async gap
+    const copied = copyText(`${subj ? `Subject: ${subj}\n\n` : ''}${body}`);
+    setCopying(true);
+    setError(undefined);
+    try {
+      const r = await approveAndSend(user, draft.id, body, subject || undefined, new Date(), { via: 'copy' });
+      if (!r.ok) {
+        setError(r.error);
+        return;
+      }
+      toast.push({
+        text: (await copied)
+          ? 'Copied. Paste it into Gmail and send it, then come back and press I sent it.'
+          : 'Select the text in the box and copy it, send it from Gmail, then press I sent it.',
+        ttl: 8000,
+      });
+    } finally {
+      setCopying(false);
+    }
+  };
+  const dirty = body !== opened.body || subject !== opened.subject;
+  const close = (keep: boolean) => {
+    setConfirmingClose(false);
+    if (keep) {
+      saveEdits(draft, body, subject);
+      onCancel?.({ kept: true });
+      return;
+    }
+    // put back what was there when the editor opened, and make sure closing does not save the discarded text
+    latest.current.discard = true;
+    saveEdits(draft, opened.body, opened.subject);
+    onCancel?.({ kept: opened.body.trim() !== draft.bodyDraft.trim() });
+  };
+  const cancel = () => {
+    if (dirty) setConfirmingClose(true);
+    else onCancel?.({ kept: !!draft.bodyFinal });
   };
   const defaultLabel = isLinkedIn
     ? connectionNote
@@ -289,13 +338,24 @@ export function DraftEditor({
         )}
         <span>{draft.generatedBy === 'llm' ? 'Drafted with Claude' : 'Drafted by Orbit'}</span>
         {edited && (
-          <button className="underline underline-offset-2" onClick={() => setBody(draft.bodyDraft)}>
+          <button
+            className="underline underline-offset-2"
+            onClick={() => {
+              const mine = body;
+              setBody(draft.bodyDraft);
+              toast.push({
+                text: 'Back to the suggested text.',
+                action: { label: 'Undo', onClick: () => setBody(mine) },
+                ttl: 8000,
+              });
+            }}
+          >
             Reset to suggested
           </button>
         )}
         <span className="ml-auto flex gap-2">
           {onCancel && (
-            <Button variant="ghost" size="sm" onClick={onCancel}>
+            <Button variant="ghost" size="sm" onClick={cancel} data-testid="draft-cancel">
               Cancel
             </Button>
           )}
@@ -303,7 +363,12 @@ export function DraftEditor({
             <Button
               size="sm"
               onClick={copyAll}
-              title="Copy the message to paste into Gmail in your browser"
+              disabled={busy || copying || !body.trim() || blocked}
+              title={
+                blocked
+                  ? (notAllowed ?? issues.find((i) => i.blocking)?.text ?? 'Add the missing line first')
+                  : 'Copy the message to paste into Gmail in your browser'
+              }
               data-testid="draft-copy"
             >
               Copy text
@@ -328,10 +393,35 @@ export function DraftEditor({
           </Button>
         </span>
       </div>
+      {confirmingClose && (
+        <div
+          className="mt-2 rounded-lg border border-line bg-canvas-2 p-3 text-[13px]"
+          role="alertdialog"
+          aria-label="Keep your changes?"
+          data-testid="draft-close-confirm"
+        >
+          <p className="font-medium">Keep your changes to this draft?</p>
+          <p className="text-ink-3 text-[12px] mt-0.5">
+            Kept changes stay in the draft until you send it. Discarding puts back the text from when you
+            opened it.
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <Button size="sm" variant="primary" onClick={() => close(true)} data-testid="draft-keep">
+              Keep changes
+            </Button>
+            <Button size="sm" onClick={() => close(false)} data-testid="draft-discard">
+              Discard changes
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setConfirmingClose(false)}>
+              Keep editing
+            </Button>
+          </div>
+        </div>
+      )}
       {!isLinkedIn && direct === false && !approveLabel && (
         <p className="mt-1.5 text-[12px] text-ink-3 text-right" data-testid="draft-mail-hint">
-          Orbit opens this in your mail app, addressed to {first}. You send it from there. Use Gmail in the
-          browser? Copy the text instead.
+          Open in mail app starts the email in your mail app, addressed to {first}. Use Gmail in the browser?
+          Copy text, paste it there, then press I sent it.
         </p>
       )}
       {blocked &&
@@ -364,6 +454,28 @@ export function DraftEditor({
       )}
     </div>
   );
+}
+
+/** Write the student's edits to a draft that is still a draft; the suggested text itself is never stored twice. */
+function saveEdits(draft: OutboundMessage, body: string, subject: string): void {
+  const changedBody = body !== (draft.bodyFinal ?? draft.bodyDraft);
+  const changedSubject = subject !== (draft.subject ?? '');
+  if (!changedBody && !changedSubject) return;
+  db.outbound
+    .where('id')
+    .equals(draft.id)
+    .filter((m) => m.status === 'draft')
+    .modify({
+      bodyFinal: body.trim() === draft.bodyDraft.trim() ? undefined : body,
+      ...(changedSubject ? { subject: subject || undefined } : {}),
+    })
+    .catch(() => undefined);
+}
+
+/** Where a message waiting for "I sent it" went: "opened in LinkedIn", "opened in your mail app", "copied for Gmail". */
+export function handoffWhere(o: Pick<OutboundMessage, 'channel' | 'handoffVia'>): string {
+  if (o.handoffVia === 'copy') return 'copied to paste into Gmail';
+  return o.channel === 'linkedin' ? 'opened in LinkedIn' : 'opened in your mail app';
 }
 
 /** A message that left the editor: queued behind the undo window, handed off, sending or sent. */
@@ -417,13 +529,17 @@ export function OutboxStatus({ draft, onClose }: { draft: OutboundMessage; onClo
     line = `Sending to ${name}.`;
   } else if (draft.status === 'handed_off') {
     line =
-      draft.channel === 'gmail'
+      draft.handoffVia === 'copy'
         ? draft.externalThreadId
-          ? `Opened in your mail app as a new email to ${name}. Send it there, then press I sent it. Nothing opened? Copy the text into Gmail.`
-          : `Opened in your mail app, addressed to ${name}. Send it there, then press I sent it. Nothing opened? Copy the text into Gmail.`
-        : link?.via === 'linkedin_connect'
-          ? `On ${name}'s LinkedIn profile, click Connect, then Add a note, and paste the note. Press I sent it once the request is out.`
-          : `Paste the message into LinkedIn and send it to ${name}, then press I sent it.`;
+          ? `Copied. In Gmail, open your thread "${draft.subject?.replace(/^re:\s*/i, '') ?? 'with them'}" with ${name}, reply with the text, then press I sent it.`
+          : `Copied. Paste it into a new email to ${person?.primaryEmail ?? name} in Gmail, send it, then press I sent it.`
+        : draft.channel === 'gmail'
+          ? draft.externalThreadId
+            ? `Opened in your mail app as a new email to ${name}. Send it there, then press I sent it. Nothing opened? Copy the text into Gmail.`
+            : `Opened in your mail app, addressed to ${name}. Send it there, then press I sent it. Nothing opened? Copy the text into Gmail.`
+          : link?.via === 'linkedin_connect'
+            ? `On ${name}'s LinkedIn profile, click Connect, then Add a note, and paste the note. Press I sent it once the request is out.`
+            : `Paste the message into LinkedIn and send it to ${name}, then press I sent it.`;
     actions = (
       <>
         <Button
@@ -434,7 +550,15 @@ export function OutboxStatus({ draft, onClose }: { draft: OutboundMessage; onClo
             act(async () => {
               const r = await confirmHandoff(user, draft.id);
               toast.push(
-                r.ok ? { text: `Logged as sent to ${name}.`, tone: 'good' } : { text: r.error, tone: 'bad' },
+                r.ok
+                  ? {
+                      text: r.scheduledAt
+                        ? `Logged as sent. Your chat with ${name} is booked for ${new Date(r.scheduledAt).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}, under Coming up on Today.`
+                        : `Logged as sent to ${name}.`,
+                      tone: 'good',
+                      ttl: r.scheduledAt ? 8000 : undefined,
+                    }
+                  : { text: r.error, tone: 'bad' },
               );
             })
           }

@@ -5,6 +5,7 @@ import type {
   OutboundMessage,
   OutboundStatus,
   Person,
+  ProposedTime,
   Suggestion,
   User,
 } from '@orbit/core';
@@ -32,6 +33,7 @@ import {
   messageIdTokens,
 } from '../integrations/google';
 import { evaluateImmediateSuggestions, findReferrerFor } from './brief';
+import { scheduleChatAt, upcomingMeeting } from './move';
 import { evaluateTrigger, recordAlreadyDone } from './stages';
 
 /** Provider sends wait this long in `queued` so the student can undo (01 §6, 07 §5, 14 §7). */
@@ -311,7 +313,8 @@ function issueText(code: string, detail: string, person: Person): string {
     case 'em_dash':
       return 'Swap the long dash for a comma or a period. Dashes read as machine-written.';
     case 'placeholder':
-      return `Fill in ${detail} before sending.`;
+      // named the way the card and the editor name it ("Why them"), not by the whole instruction in the brackets
+      return `Replace the line in brackets, "${detail.slice(1, -1).split(/[:,]/)[0]!.trim()}", with your own words before sending.`;
     case 'injection':
       return 'The message contains instruction-like text. Remove it before sending.';
     case 'banned_subject':
@@ -427,7 +430,7 @@ export async function reviewDraft(
 
 // ---------- approval ----------
 
-export type HandoffVia = 'mailto' | 'linkedin_compose' | 'linkedin_connect';
+export type HandoffVia = 'mailto' | 'linkedin_compose' | 'linkedin_connect' | 'copy';
 
 export type ApproveResult =
   | { ok: true; status: 'queued'; sendAt: string }
@@ -513,7 +516,8 @@ export async function approveAndSend(
   bodyFinal: string,
   subject?: string,
   now = new Date(),
-  opts: { undoWindowMs?: number } = {},
+  /** `copy`: the student copies the text to paste into Gmail in the browser, so nothing opens and no address is needed */
+  opts: { undoWindowMs?: number; via?: 'copy' } = {},
 ): Promise<ApproveResult> {
   const msg = await db.outbound.get(messageId);
   if (!msg || msg.userId !== user.id) return { ok: false, error: 'Message not found' };
@@ -548,7 +552,7 @@ export async function approveAndSend(
     approvedAt: now.toISOString(),
     error: undefined,
   };
-  if (msg.channel === 'gmail' && (await googleSendActive(user.id))) {
+  if (msg.channel === 'gmail' && opts.via !== 'copy' && (await googleSendActive(user.id))) {
     if (!msg.toEmail) return { ok: false, error: `There is no email address for ${person.firstName}.` };
     const undoMs = opts.undoWindowMs ?? UNDO_WINDOW_MS;
     const sendAt = new Date(now.getTime() + undoMs).toISOString();
@@ -568,11 +572,15 @@ export async function approveAndSend(
     const r = await deliver(user, claimed, now);
     return r.ok ? { ok: true, status: 'sent' } : r;
   }
-  const h = handoffFor(msg, person, bodyFinal, env, await connectionNoteFor(msg, person));
+  const h: { url: string; via: HandoffVia } | { error: string } =
+    opts.via === 'copy'
+      ? { url: '', via: 'copy' }
+      : handoffFor(msg, person, bodyFinal, env, await connectionNoteFor(msg, person));
   if ('error' in h) return { ok: false, error: h.error };
   const claimed = await transition(msg.id, ['draft', 'failed', 'cancelled'], {
     ...approval,
     status: 'handed_off',
+    handoffVia: h.via,
     queuedAt: now.toISOString(),
     sendAt: undefined,
   });
@@ -601,6 +609,7 @@ export async function undoQueued(user: User, messageId: string): Promise<boolean
 export async function revertHandoff(user: User, messageId: string): Promise<boolean> {
   const m = await transition(messageId, ['handed_off'], {
     status: 'draft',
+    handoffVia: undefined,
     queuedAt: undefined,
     approvedAt: undefined,
   });
@@ -614,7 +623,7 @@ export async function handoffLink(
   messageId: string,
 ): Promise<{ url: string; via: HandoffVia } | undefined> {
   const m = await db.outbound.get(messageId);
-  if (!m || m.userId !== user.id || m.status !== 'handed_off') return undefined;
+  if (!m || m.userId !== user.id || m.status !== 'handed_off' || m.handoffVia === 'copy') return undefined;
   const person = await db.people.get(m.personId);
   if (!person) return undefined;
   const h = handoffFor(
@@ -636,7 +645,7 @@ export async function confirmHandoff(
   user: User,
   messageId: string,
   now = new Date(),
-): Promise<{ ok: true } | { ok: false; error: string }> {
+): Promise<{ ok: true; scheduledAt?: string } | { ok: false; error: string }> {
   const m = await transition(messageId, ['handed_off'], {
     status: 'sent',
     sentAt: now.toISOString(),
@@ -644,7 +653,8 @@ export async function confirmHandoff(
   });
   if (!m) return { ok: false, error: 'This message is not waiting for confirmation.' };
   try {
-    await finalizeSent(user, m, {}, now);
+    const done = await finalizeSent(user, m, {}, now);
+    return { ok: true, scheduledAt: done.scheduledAt };
   } catch (e) {
     return {
       ok: false,
@@ -653,7 +663,6 @@ export async function confirmHandoff(
         : 'Logged as sent and the chat is updated, but Orbit could not save all of it to their history. Check their page.',
     };
   }
-  return { ok: true };
 }
 
 let draining: Promise<unknown> | undefined;
@@ -816,9 +825,10 @@ async function finalizeSent(
   msg: OutboundMessage,
   provider: { providerMessageId?: string; providerThreadId?: string },
   now: Date,
-): Promise<void> {
+): Promise<{ scheduledAt?: string }> {
   let failure: unknown;
   let chatMissed = false;
+  let scheduledAt: string | undefined;
   const step = async (run: () => Promise<unknown>): Promise<boolean> => {
     try {
       await run();
@@ -915,6 +925,23 @@ async function finalizeSent(
     });
     chatMissed ||= !updated;
   }
+  // confirming the time they offered books the chat: it goes under Coming up, gets prep the day before and a thank-you
+  // after, unless a calendar already holds the meeting
+  const time =
+    suggestion?.kind === 'schedule_confirm' ? (suggestion.payload.time as ProposedTime) : undefined;
+  if (chat && time?.startIso && new Date(time.startIso).getTime() > now.getTime()) {
+    const booked = chat;
+    await step(async () => {
+      if (await upcomingMeeting(booked, now)) return;
+      const start = new Date(time.startIso);
+      const minutes = time.endIso
+        ? Math.max(15, Math.round((new Date(time.endIso).getTime() - start.getTime()) / 60_000))
+        : 30;
+      const fresh = (await db.chats.get(booked.id)) ?? booked;
+      await scheduleChatAt(user, fresh, start, minutes, now);
+      scheduledAt = start.toISOString();
+    });
+  }
   if (msg.kind === 'outreach')
     await step(() =>
       db.recommendations
@@ -926,6 +953,7 @@ async function finalizeSent(
   await step(() => recomputePersonStrength(msg.personId, now));
   await step(() => evaluateImmediateSuggestions(user.id, { personId: msg.personId, chatId: chat?.id }, now));
   if (failure !== undefined) throw new FinalizeError(failure, chatMissed);
+  return { scheduledAt };
 }
 
 /** Outreach approved from a recommendation (or anywhere without a chat) opens the chat it starts. */

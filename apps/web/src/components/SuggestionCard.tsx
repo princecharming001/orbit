@@ -667,14 +667,14 @@ function gapLabel(text: string): string | undefined {
 }
 
 /**
- * A draft preview with each "[Your link to Priya: how you found them ...]" gap shown as a short highlighted label
- * ("Your link to Priya"), so the card says a line is missing instead of showing the raw instruction.
+ * A draft preview with each "[Why them: one line only true of Priya ...]" gap shown by its short name ("[Why them]"),
+ * the same name the card and the editor use, so the card says a line is missing instead of showing the instruction.
  */
 function withGaps(text: string): ReactNode[] {
   return text.split(/(\[[^\]]{3,}\])/).map((part, i) =>
     /^\[[^\]]+\]$/.test(part) ? (
       <mark key={i} className="rounded bg-warn-soft px-1 text-warn not-italic">
-        [your line]
+        [{gapLabel(part) ?? 'your line'}]
       </mark>
     ) : (
       part
