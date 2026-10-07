@@ -1177,13 +1177,6 @@ export async function evaluateImmediateSuggestions(
       // the reply to an email introduction is due now, not in the next morning's batch
       !!c.signals.introducedBy,
   );
-  await retireStale(
-    userId,
-    cands,
-    new Set(inp.chats.map((c) => c.id)),
-    ['thank_you', 'schedule_propose', 'schedule_confirm', 'prep_brief'],
-    now,
-  );
   const scored = selectForBrief(cands, inp.dismissCounts, 5);
   const created = await upsertSuggestions(userId, scored, now);
   for (const s of created)
@@ -1213,43 +1206,6 @@ async function retireMovedOnConfirmations(userId: string, now: Date): Promise<vo
       now,
     );
   }
-}
-
-/** Suggestions that describe the state of a chat right now; they stop being true when that state changes. */
-const STATE_KINDS: SuggestionKind[] = [
-  'thank_you',
-  'schedule_propose',
-  'schedule_confirm',
-  'prep_brief',
-  'follow_up_bump',
-];
-
-/**
- * Retire pending suggestions whose trigger is gone: a "confirm Thursday at 2pm" card once the chat is scheduled, a
- * thank-you once it was sent from Gmail, times to propose once the meeting is on the calendar. Only chats the rules
- * just looked at are touched, and only the kinds they were asked to produce.
- */
-async function retireStale(
-  userId: string,
-  cands: { dedupeKey: string }[],
-  chatIds: Set<string>,
-  kinds: SuggestionKind[],
-  now: Date,
-): Promise<void> {
-  const live = new Set(cands.map((c) => c.dedupeKey));
-  const stale = await db.suggestions
-    .where('userId')
-    .equals(userId)
-    .filter(
-      (s) =>
-        s.status === 'pending' &&
-        kinds.includes(s.kind) &&
-        !!s.chatId &&
-        chatIds.has(s.chatId) &&
-        !live.has(s.dedupeKey),
-    )
-    .toArray();
-  await retireSuggestions(stale, 'trigger_gone', now);
 }
 
 async function addConfirmationCards(userId: string, now: Date): Promise<void> {
@@ -1383,7 +1339,6 @@ export async function generateBrief(user: User, kind: Brief['kind'], now = new D
   const cands = generateCandidates(inp);
   // validity pass first: nothing stale survives into (or next to) the new brief
   await revalidateSuggestions(user.id, cands, now);
-  await retireStale(user.id, cands, new Set(inp.chats.map((c) => c.id)), [...STATE_KINDS], now);
   const people = inp.people;
   const selected = selectForBrief(cands, inp.dismissCounts, 7, {
     orgOf: (pid) => {

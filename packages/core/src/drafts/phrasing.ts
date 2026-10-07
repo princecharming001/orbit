@@ -137,10 +137,28 @@ export function functionLabel(key: string | undefined): string | undefined {
   return FUNCTION_LABEL[key] ?? key.replace(/[_-]+/g, ' ').toLowerCase();
 }
 
-/** "software engineer" from "Software Engineer II"; keeps acronyms. */
+const TITLE_ABBREVIATIONS: [RegExp, string][] = [
+  [/\bSr\.?(?=\s|$)/gi, 'Senior'],
+  [/\bJr\.?(?=\s|$)/gi, 'Junior'],
+  [/\bAssoc\.?(?=\s|$)/gi, 'Associate'],
+  [/\bAsst\.?(?=\s|$)/gi, 'Assistant'],
+  [/\bMgr\.?(?=\s|$)/gi, 'Manager'],
+  [/\bDir\.?(?=\s|$)/gi, 'Director'],
+];
+
+/**
+ * "software engineer" from "Software Engineer II"; keeps acronyms. Abbreviations are spelled out ("Sr. Analyst" is
+ * "senior analyst"), and a rank before a comma keeps its area ("VP, Analytics" is "VP of analytics", not "VP").
+ */
 export function roleNoun(title: string | undefined): string | undefined {
   if (!title) return undefined;
-  const t = title
+  let full = title.trim();
+  for (const [re, word] of TITLE_ABBREVIATIONS) full = full.replace(re, word);
+  const rank = full.match(
+    /^((?:senior |executive |associate |assistant )?(?:S?VP|EVP|AVP|vice president|director|head))\s*,\s*([^,(]+)/i,
+  );
+  if (rank) full = `${rank[1]} of ${rank[2]!.trim()}`;
+  const t = full
     .replace(/\s*[,(].*$/, '')
     .replace(/\s+(I{1,3}|IV|V|\d)$/, '')
     .trim();
