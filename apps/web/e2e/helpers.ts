@@ -19,7 +19,10 @@ export async function prep(page: Page, opts: { clock?: boolean } = {}) {
 export async function loadDemo(page: Page, opts: { clock?: boolean } = {}) {
   await prep(page, opts);
   await page.goto('');
-  await page.getByRole('button', { name: /try it with demo data/i }).click();
+  await page
+    .getByRole('button', { name: /^try the demo$/i })
+    .first()
+    .click();
   await expect(page).toHaveURL(/\/today$/, { timeout: 90_000 });
   await expect(page.getByText(/good (morning|afternoon|evening)/i)).toBeVisible();
 }

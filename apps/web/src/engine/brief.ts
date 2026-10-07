@@ -1115,7 +1115,7 @@ export async function regenerateDraft(
   // drafting takes a while: if the student approved it in the meantime, the approved text is theirs to keep
   const applied = await db.transaction('rw', db.outbound, async () => {
     const cur = await db.outbound.get(messageId);
-    if (!cur || cur.status !== 'draft' || cur.bodyFinal !== msg.bodyFinal) return false;
+    if (cur?.status !== 'draft' || cur.bodyFinal !== msg.bodyFinal) return false;
     await db.outbound.update(messageId, changes);
     return true;
   });

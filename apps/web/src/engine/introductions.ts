@@ -309,7 +309,7 @@ export async function introductionQuestionCandidate(
   thread: EmailThread,
 ): Promise<(Candidate & { priorityScore: number }) | undefined> {
   const q = thread.possibleIntroduction;
-  if (!q || q.status !== 'open') return undefined;
+  if (q?.status !== 'open') return undefined;
   const [introducer, ...introduced] = await db.people.bulkGet([q.introducerId, ...q.personIds]);
   const named = introduced.filter((p): p is Person => !!p && !p.hiddenAt);
   if (!introducer || !named.length) return undefined;
@@ -346,7 +346,7 @@ export async function introductionQuestionCandidate(
  */
 export async function staleIntroductionQuestion(thread: EmailThread): Promise<string | undefined> {
   const q = thread.possibleIntroduction;
-  if (!q || q.status !== 'open') return undefined;
+  if (q?.status !== 'open') return undefined;
   if (thread.introduction) return 'introduction_recorded';
   let carded = 0;
   for (const pid of q.personIds)
