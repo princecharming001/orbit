@@ -1,3 +1,5 @@
+import { article } from '../drafts/phrasing';
+import { isFixedHolidayKey } from '../suggestions/calendar';
 import { linkedInSlug, normalizeCompany, normalizeEmail } from '../text/normalize';
 import type {
   Affiliation,
@@ -42,11 +44,11 @@ export function mulberry32(seed: number): () => number {
 // ---------- dates ----------
 
 export const isWeekend = (d: Date): boolean => d.getDay() === 0 || d.getDay() === 6;
-/** The fixed-date days off nobody books a coffee chat on: Independence Day, Christmas Eve and Day, New Year's Eve and Day. */
-const isHoliday = (d: Date): boolean => {
-  const md = (d.getMonth() + 1) * 100 + d.getDate();
-  return md === 704 || md === 1224 || md === 1225 || md === 1231 || md === 101;
-};
+/** The fixed-date days off nobody books a coffee chat on, the same ones the prep brief looks past. */
+const isHoliday = (d: Date): boolean =>
+  isFixedHolidayKey(
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`,
+  );
 /** Dec 20 to Jan 2, when nobody takes coffee chats. */
 export const inWinterBreak = (d: Date): boolean => {
   const md = d.getMonth() * 100 + d.getDate();
@@ -159,6 +161,8 @@ export interface DemoOrg {
   industry: string;
   size: string;
   slug: string;
+  /** the year the firm was founded: nobody worked there before it */
+  founded: number;
   /** how the firm builds addresses; a collision inside the firm falls through to the next pattern */
   emailPattern: 'first' | 'first.last' | 'flast';
   cities: string[];
@@ -176,6 +180,7 @@ export const DEMO_ORGS: DemoOrg[] = [
     industry: 'Fintech',
     size: '5001-10000',
     slug: 'stripe',
+    founded: 2010,
     emailPattern: 'first',
     cities: ['San Francisco, CA', 'New York, NY', 'Seattle, WA'],
     weight: 3,
@@ -187,6 +192,7 @@ export const DEMO_ORGS: DemoOrg[] = [
     industry: 'Software',
     size: '1001-5000',
     slug: 'figma',
+    founded: 2012,
     emailPattern: 'first',
     cities: ['San Francisco, CA', 'New York, NY'],
     weight: 3,
@@ -198,6 +204,7 @@ export const DEMO_ORGS: DemoOrg[] = [
     industry: 'Software',
     size: '501-1000',
     slug: 'notion',
+    founded: 2013,
     emailPattern: 'first',
     cities: ['San Francisco, CA', 'New York, NY'],
     weight: 2,
@@ -209,6 +216,7 @@ export const DEMO_ORGS: DemoOrg[] = [
     industry: 'AI',
     size: '1001-5000',
     slug: 'anthropic',
+    founded: 2021,
     emailPattern: 'first',
     cities: ['San Francisco, CA', 'Seattle, WA', 'New York, NY'],
     weight: 2,
@@ -220,6 +228,7 @@ export const DEMO_ORGS: DemoOrg[] = [
     industry: 'Investment banking',
     size: '10001+',
     slug: 'goldman-sachs',
+    founded: 1869,
     emailPattern: 'first.last',
     cities: ['New York, NY'],
     weight: 1.5,
@@ -231,6 +240,7 @@ export const DEMO_ORGS: DemoOrg[] = [
     industry: 'Consulting',
     size: '10001+',
     slug: 'mckinsey',
+    founded: 1926,
     emailPattern: 'first.last',
     cities: ['New York, NY', 'Chicago, IL', 'Boston, MA'],
     weight: 1,
@@ -242,6 +252,7 @@ export const DEMO_ORGS: DemoOrg[] = [
     industry: 'Fintech',
     size: '1001-5000',
     slug: 'ramp',
+    founded: 2019,
     emailPattern: 'first',
     cities: ['New York, NY'],
     weight: 2,
@@ -253,6 +264,7 @@ export const DEMO_ORGS: DemoOrg[] = [
     industry: 'Software',
     size: '51-200',
     slug: 'linear',
+    founded: 2019,
     emailPattern: 'first',
     cities: ['San Francisco, CA', 'Remote'],
     weight: 1,
@@ -264,6 +276,7 @@ export const DEMO_ORGS: DemoOrg[] = [
     industry: 'Software',
     size: '5001-10000',
     slug: 'datadog',
+    founded: 2010,
     emailPattern: 'first.last',
     cities: ['New York, NY', 'Boston, MA'],
     weight: 2,
@@ -275,6 +288,7 @@ export const DEMO_ORGS: DemoOrg[] = [
     industry: 'Consulting',
     size: '10001+',
     slug: 'bain',
+    founded: 1973,
     emailPattern: 'first.last',
     cities: ['Boston, MA', 'Chicago, IL', 'New York, NY'],
     weight: 1,
@@ -286,6 +300,7 @@ export const DEMO_ORGS: DemoOrg[] = [
     industry: 'Software',
     size: '201-500',
     slug: 'vercel',
+    founded: 2015,
     emailPattern: 'first',
     cities: ['San Francisco, CA', 'Remote'],
     weight: 1,
@@ -297,6 +312,7 @@ export const DEMO_ORGS: DemoOrg[] = [
     industry: 'Trading',
     size: '1001-5000',
     slug: 'jane-street',
+    founded: 2000,
     emailPattern: 'flast',
     cities: ['New York, NY'],
     weight: 1,
@@ -1053,7 +1069,8 @@ export function buildDemoDataset(
         break;
       }
     }
-    const years = 1 + Math.floor(rnd() * 11); // years since graduation
+    // years since graduation, 1 to 11, and never from before the firm existed (Anthropic hired nobody in 2017)
+    const years = 1 + (Math.floor(rnd() * 11) % Math.max(1, Math.min(11, Y - org.founded)));
     const grad = Y - years;
     const roles = demoRolesFor(org.slug).filter((x) => eligible(x, years));
     const fnWeights: Partial<Record<Fn, number>> = {};
@@ -1090,7 +1107,7 @@ export function buildDemoDataset(
       const entryAt = (o: DemoOrg) =>
         demoRolesFor(o.slug).find((x) => x.title === chain[0]!.title) ??
         (fn === 'other' ? undefined : demoRolesFor(o.slug).find((x) => x.fn === fn && x.min === 0));
-      const prevOrgs = DEMO_ORGS.filter((o) => o.slug !== org.slug && entryAt(o));
+      const prevOrgs = DEMO_ORGS.filter((o) => o.slug !== org.slug && o.founded <= grad && entryAt(o));
       const po = prevOrgs.length ? prevOrgs[Math.floor(rnd() * prevOrgs.length)]! : undefined;
       const entry = po && entryAt(po)!;
       const lastMove = Math.min(
@@ -2156,7 +2173,7 @@ export function buildDemoDataset(
   const takenFirst = new Set(people.slice(0, SHOWCASE).map((p) => p.firstName));
   const takenLast = new Set(people.slice(0, SHOWCASE).map((p) => p.lastName));
   const topicsUsed = new Map<Fn, number>();
-  const others: { p: Person; topic: Topic }[] = [];
+  const others: { p: Person; fn: Fn; topic: Topic }[] = [];
   for (const p of people.slice(SHOWCASE)) {
     const fn = fnOf.get(p.id);
     if (!p.primaryEmail || !fn || fn === 'other') continue;
@@ -2168,7 +2185,7 @@ export function buildDemoDataset(
     topicsUsed.set(fn, v + 1);
     takenFirst.add(p.firstName);
     takenLast.add(p.lastName);
-    others.push({ p, topic: TOPICS[fn][v]! });
+    others.push({ p, fn, topic: TOPICS[fn][v]! });
   }
   // Each conversation in its own words: people answer differently, and the student does not paste the same lines.
   const ASK_TAIL = [
@@ -2348,10 +2365,16 @@ export function buildDemoDataset(
     thankedAt.set(p.id, thanks);
   });
   // Two of those people later introduced the student to a colleague, who moved the conversation to its own thread.
+  // What the introducer says the student asked about is what their own conversation was about, not the new person's
+  // area: Sana talked with the student about Anthropic, so she cannot say they asked her about Goldman's deal teams.
+  // Nor does she say what the student wants from the new person: the thread never says, so the intro only names who
+  // the new person is. Each introducer passes the student to someone in their own line of work or the one next to it
+  // (an engineer to an engineer, a data scientist or a designer, never a banker), people they can vouch for.
+  const aTitle = (p: Person) => `${article(p.currentTitle ?? '')} ${p.currentTitle}`;
   const INTRO = [
     {
-      body: (a: Person, b: Person, area: string, standing: string) =>
-        `Hi ${meFirst} and ${b.firstName},\n\n${meFirst}, meet ${b.firstName}. ${b.firstName} is a ${b.currentTitle} at ${b.currentOrganizationRaw} and knows ${area} far better than I do. ${b.firstName}, ${meFirst} is a ${schoolShort} ${standing} I talked with recently and was impressed by. I'll leave it to you two.\n\n${a.firstName}`,
+      body: (a: Person, b: Person, area: string, standing: string, _asked: string) =>
+        `Hi ${meFirst} and ${b.firstName},\n\n${meFirst}, meet ${b.firstName}. ${b.firstName} is ${aTitle(b)} at ${b.currentOrganizationRaw} and knows ${area} far better than I do. ${b.firstName}, ${meFirst} is a ${schoolShort} ${standing} I talked with recently and was impressed by. I'll leave it to you two.\n\n${a.firstName}`,
       ack: (a: Person, b: Person, area: string) =>
         `Thank you, ${a.firstName} (moving you to bcc).\n\n${b.firstName}, nice to meet you. Would you have 15 minutes sometime in the next couple of weeks to tell me about ${area}? Any time that works for you is fine with me.\n\n${meFirst}`,
       subject: (a: Person) => `${a.firstName}'s intro`,
@@ -2360,8 +2383,8 @@ export function buildDemoDataset(
       close: (a: Person) => `I'll let ${a.firstName} know how helpful it was.`,
     },
     {
-      body: (a: Person, b: Person, area: string, standing: string) =>
-        `Hi ${b.firstName} and ${meFirst},\n\nAs promised, introducing you two. ${b.firstName}, ${meFirst} is a ${schoolShort} ${standing} who asked me good questions about ${area}, and you're the person I'd send them to. ${meFirst}, ${b.firstName} is a ${b.currentTitle} at ${b.currentOrganizationRaw}. Over to you both.\n\n${a.firstName}`,
+      body: (a: Person, b: Person, area: string, standing: string, asked: string) =>
+        `Hi ${b.firstName} and ${meFirst},\n\nIntroducing you two. ${b.firstName}, ${meFirst} is a ${schoolShort} ${standing} who asked me good questions about ${asked}. ${meFirst}, ${b.firstName} is ${aTitle(b)} at ${b.currentOrganizationRaw} and the person I'd ask about ${area}. Over to you both.\n\n${a.firstName}`,
       ack: (a: Person, b: Person, area: string) =>
         `Thanks for the intro, ${a.firstName}, moving you to bcc.\n\nHi ${b.firstName}, thanks for being open to this. Would you have 15 minutes in the next couple of weeks for a few questions about ${area}? I'm flexible on timing.\n\n${meFirst}`,
       subject: (a: Person) => `Connecting after ${a.firstName}'s note`,
@@ -2370,11 +2393,33 @@ export function buildDemoDataset(
       close: (a: Person) => `I'll tell ${a.firstName} how much I appreciated the intro.`,
     },
   ];
-  others.slice(6, 8).forEach(({ p: b, topic }, k) => {
+  // whom each kind of person knows well enough to vouch for, closest first
+  const NEAR: Record<Exclude<Fn, 'other'>, Fn[]> = {
+    swe: ['swe', 'bank_eng', 'data', 'pm', 'design'],
+    bank_eng: ['bank_eng', 'swe', 'data'],
+    data: ['data', 'swe', 'bank_eng'],
+    pm: ['pm', 'design', 'swe'],
+    design: ['design', 'pm'],
+    ib: ['ib'],
+    consulting: ['consulting'],
+    trading: ['trading'],
+  };
+  // the brief's one referral ask runs through Maya; someone met through an intro at a firm the student has already
+  // applied to would raise a second one
+  const applied = new Set(
+    targetCompanies.filter((t) => t.status !== 'researching').map((t) => t.organizationId),
+  );
+  const introPool = others.slice(6).filter((o) => !applied.has(o.p.currentOrganizationId ?? ''));
+  INTRO.forEach((x, k) => {
     const a = regulars[k]?.p;
     const aThanks = a && thankedAt.get(a.id);
-    const x = INTRO[k]!;
     if (!a || !aThanks) return;
+    const near = NEAR[regulars[k]!.fn as Exclude<Fn, 'other'>];
+    const fn = near.find((f) => introPool.some((o) => o.fn === f));
+    if (!fn) return;
+    const i = introPool.findIndex((o) => o.fn === fn);
+    const { p: b, topic } = introPool.splice(i, 1)[0]!;
+    const asked = regulars[k]!.topic.area(a.currentOrganizationRaw ?? '');
     const intro = businessDay(aThanks, 4 + k * 3, 9, 20 + k * 11);
     const area = topic.area(b.currentOrganizationRaw ?? '');
     addThread([a, b], `Intro: ${meFirst} <> ${b.firstName}`, [
@@ -2383,7 +2428,7 @@ export function buildDemoDataset(
         from: a,
         cc: [b],
         at: intro,
-        body: x.body(a, b, area, standingAt(intro)),
+        body: x.body(a, b, area, standingAt(intro), asked),
         signal: 'intro_offer',
       },
       {
