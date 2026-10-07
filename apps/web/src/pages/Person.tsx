@@ -29,7 +29,7 @@ import { DraftEditor } from '../components/DraftEditor';
 import { feedback } from '../db/repo';
 import { db } from '../db/schema';
 import { draftMessage, needsWarmUp, refreshPersonSummary, startWarmUpOrOutreach } from '../engine/brief';
-import { addSuggestedContacts } from '../engine/introductions';
+import { addSuggestedContacts, readSuggestedNames } from '../engine/introductions';
 import { buildPrep, personSummary } from '../engine/prep';
 import { applyStage } from '../engine/stages';
 import { useSession } from '../state/session';
@@ -811,6 +811,7 @@ function Prep({
 }) {
   const [suggested, setSuggested] = useState('');
   const [added, setAdded] = useState<string[]>([]);
+  const [notSaved, setNotSaved] = useState<string[]>([]);
   const { user, goals } = useSession();
   const plan = useMemo(
     () =>
@@ -977,13 +978,19 @@ function Prep({
           className="mt-1 w-full h-8 rounded-lg border border-line px-2.5 text-[13px]"
           onKeyDown={async (e) => {
             if (e.key !== 'Enter' || !suggested.trim()) return;
+            // what could not be read as a name stays in the field, with a note, instead of vanishing
+            const { skipped } = readSuggestedNames(suggested);
             const people = await addSuggestedContacts(userId, person.id, suggested);
-            if (people.length) {
-              setAdded((a) => [...a, ...people.map((p) => p.displayName)]);
-              setSuggested('');
-            }
+            if (people.length) setAdded((a) => [...a, ...people.map((p) => p.displayName)]);
+            setNotSaved(skipped);
+            setSuggested(skipped.join(', '));
           }}
         />
+        {notSaved.length > 0 && (
+          <p className="mt-1.5 text-ink-2" data-testid="prep-suggested-skipped">
+            Not saved: {notSaved.join(', ')}. Write each as a full name, like Priya Shah at Stripe or Tom Lee.
+          </p>
+        )}
         {added.length > 0 && (
           <p className="mt-1.5 text-ink-3">
             Saved to Discover as suggested by {person.firstName}: {added.join(', ')}

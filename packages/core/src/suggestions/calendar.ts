@@ -121,6 +121,19 @@ const MONTHS = [
   'december',
 ];
 const WEEKDAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+/** A month name or its usual abbreviation, as a whole word ("mar" in "market" is not March). */
+const MONTH_NAME =
+  '(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\\b\\.?';
+/** A weekday name or its usual abbreviation, as a whole word ("mon" in "month" is not Monday). */
+const WEEKDAY_NAME =
+  /\b(sun(?:day)?|mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:r|rs|rsday)?|fri(?:day)?|sat(?:urday)?)\b/;
+const NAMED_DATE = new RegExp(`\\b${MONTH_NAME} (\\d{1,2})(?:st|nd|rd|th)?\\b`);
+const NAMED_DATE_REV = new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)? (?:of )?${MONTH_NAME}`);
+/** "the end of the month", "the start of next month", "the end of October", "next month" */
+const MONTH_EDGE = new RegExp(
+  `\\b(?:(end|start|beginning) of (?:(the|this|next) month\\b|${MONTH_NAME})|next month\\b)`,
+);
+const monthIndex = (name: string) => MONTHS.findIndex((x) => x.startsWith(name.slice(0, 3))) + 1;
 
 /**
  * The day an out-of-office reply says the person is back ("back on Monday, October 12", "returning 10/12",
@@ -131,11 +144,13 @@ const WEEKDAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'frida
 export function parseReturnDate(text: string, sentAt: Date, tz?: string): Date | undefined {
   const t = text.toLowerCase().replace(/\s+/g, ' ');
   // "from Oct 5 to Oct 12", "between 10/5 and 10/12": the end of the range is the last day away
-  const range = /\b(?:from|between) [^.;\n]{1,30}? (?:to|until|till|through|thru|and|-) ([^.;\n]{0,40})/.exec(
-    t,
-  );
+  // ("Oct 5-Oct 12" with a bare hyphen too); "until" names the day they are back, the others the last day away
+  const range =
+    /\b(?:from|between) [^.;\n]{1,30}?(?: (to|until|till|through|thru|and) |\s*([-\u2013])\s*)([^.;\n]{0,40})/.exec(
+      t,
+    );
   if (range) {
-    const end = datePhrase(range[1]!, sentAt, tz, /^(until|till) /.test(range[0]) ? 0 : DAY);
+    const end = datePhrase(range[3]!, sentAt, tz, range[1] === 'until' || range[1] === 'till' ? 0 : DAY);
     if (end) return end;
   }
   const cue =
@@ -157,13 +172,8 @@ function datePhrase(rest: string, sentAt: Date, tz: string | undefined, extra: n
   const sentYear = Number(sentKey.slice(0, 4));
   const sentMonth = Number(sentKey.slice(5, 7));
   // "October 12", "Oct 12th", "12 October"
-  const named =
-    /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.? (\d{1,2})(?:st|nd|rd|th)?\b/.exec(
-      rest,
-    ) ?? undefined;
-  const namedRev =
-    /\b(\d{1,2})(?:st|nd|rd|th)? (jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b/.exec(rest) ??
-    undefined;
+  const named = NAMED_DATE.exec(rest) ?? undefined;
+  const namedRev = NAMED_DATE_REV.exec(rest) ?? undefined;
   const numeric = /\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/.exec(rest) ?? undefined;
   // "the 12th": a day of this month, or of next month once it has passed
   const ordinal = /^(?:the )?(\d{1,2})(?:st|nd|rd|th)\b/.exec(rest) ?? undefined;
@@ -171,10 +181,10 @@ function datePhrase(rest: string, sentAt: Date, tz: string | undefined, extra: n
   let day: number | undefined;
   let year: number | undefined;
   if (named) {
-    month = MONTHS.findIndex((x) => x.startsWith(named[1]!.slice(0, 3))) + 1;
+    month = monthIndex(named[1]!);
     day = Number(named[2]);
   } else if (namedRev) {
-    month = MONTHS.findIndex((x) => x.startsWith(namedRev[2]!.slice(0, 3))) + 1;
+    month = monthIndex(namedRev[2]!);
     day = Number(namedRev[1]);
   } else if (numeric) {
     month = Number(numeric[1]);
@@ -193,7 +203,18 @@ function datePhrase(rest: string, sentAt: Date, tz: string | undefined, extra: n
     if (!Number.isNaN(k) && k >= sentDay) return new Date(sentAt.getTime() + (k - sentDay) * DAY + extra);
     return undefined;
   }
-  const wd = /\b(sun|mon|tue|wed|thu|fri|sat)[a-z]*\b/.exec(rest);
+  // "until the end of the month", "back at the start of next month": they are back on the first of a month
+  const edge = MONTH_EDGE.exec(rest);
+  // (the month after the named one for "the end of October", the named one itself for "the start of November")
+  let target = 0; // months after the sent month
+  if (edge?.[3]) target = ((monthIndex(edge[3]) - sentMonth + 12) % 12) + (edge[1] === 'end' ? 1 : 0);
+  else if (edge) target = edge[1] === 'end' && edge[2] === 'next' ? 2 : 1;
+  if (edge && target > 0) {
+    const m0 = sentMonth - 1 + target;
+    const k = dayOfKey(keyOf(sentYear + Math.floor(m0 / 12), (m0 % 12) + 1, 1));
+    return new Date(sentAt.getTime() + (k - sentDay) * DAY);
+  }
+  const wd = WEEKDAY_NAME.exec(rest);
   if (wd) {
     const target = WEEKDAYS.findIndex((x) => x.startsWith(wd[1]!));
     const dow = new Date(`${sentKey}T00:00:00Z`).getUTCDay();

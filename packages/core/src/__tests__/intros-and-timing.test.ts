@@ -264,6 +264,37 @@ describe('out-of-office ranges and the winter freeze (EG-12 follow-up)', () => {
     expect(day(parseReturnDate('Back on the 4th.', at('2026-12-20T16:00:00Z'), TZ))).toBe('2027-01-04');
   });
 
+  it('reads month-relative returns and never mistakes "month" for Monday (L11)', () => {
+    expect(day(parseReturnDate('I am out of the office until the end of the month.', sent, TZ))).toBe(
+      '2026-11-01',
+    );
+    expect(day(parseReturnDate('I am on parental leave through the end of the month.', sent, TZ))).toBe(
+      '2026-11-01',
+    );
+    expect(day(parseReturnDate('I will be back at the start of next month.', sent, TZ))).toBe('2026-11-01');
+    expect(day(parseReturnDate('On leave between now and the end of the month.', sent, TZ))).toBe(
+      '2026-11-01',
+    );
+    expect(day(parseReturnDate('Out until the end of next month.', sent, TZ))).toBe('2026-12-01');
+    expect(day(parseReturnDate('On leave through the end of October.', sent, TZ))).toBe('2026-11-01');
+    expect(day(parseReturnDate('On leave through the end of December.', sent, TZ))).toBe('2027-01-01');
+    expect(day(parseReturnDate('Back at the beginning of November.', sent, TZ))).toBe('2026-11-01');
+    // words that merely start like a weekday or a month are not dates
+    expect(parseReturnDate('Back to monitoring email soon.', sent, TZ)).toBeUndefined();
+    expect(
+      parseReturnDate('Back after a satisfying break, thanks for your patience.', sent, TZ),
+    ).toBeUndefined();
+    // the full and short weekday names still work
+    expect(day(parseReturnDate('Back on Mon.', sent, TZ))).toBe('2026-10-05');
+    expect(day(parseReturnDate('Back Tues.', sent, TZ))).toBe('2026-10-06');
+  });
+
+  it('reads a range written with a bare hyphen, and "until" as the day they are back', () => {
+    expect(day(parseReturnDate('Out of office from Oct 5-Oct 12.', sent, TZ))).toBe('2026-10-13');
+    expect(day(parseReturnDate('Away from 10/5-10/9 with no email.', sent, TZ))).toBe('2026-10-10');
+    expect(day(parseReturnDate('Out from Oct 5 until Oct 12.', sent, TZ))).toBe('2026-10-12');
+  });
+
   it('lets the second bump come due before a freeze-spanning silence closes the thread', () => {
     const firstBump = at('2026-12-15T15:00:00Z');
     const secondDue = addBusinessDays(firstBump, 8, TZ);
@@ -340,6 +371,28 @@ describe('email introductions (EG-08)', () => {
     expect(
       detectIntroduction(msg({ direction: 'outbound' }), [alex, sana], ['me@school.edu']),
     ).toBeUndefined();
+  });
+
+  it('does not read ordinary "meet" wording as an introduction (L10)', () => {
+    const none = (bodyText: string, subject = 'Next week') =>
+      expect(detectIntroduction(msg({ subject, bodyText }), [alex, sana], ['me@school.edu'])).toBeUndefined();
+    none('Hi Jordan, Sana and I would love to meet with you next week. Does Tuesday work?');
+    none('Hi Jordan and Sana, great to meet you both at the career fair.');
+    none('Can we meet Thursday? Sana will send an invite.');
+    none('Thanks for introducing yourselves at the fair, Sana and Jordan.');
+    none('Sana will send the invite for our intro call on Thursday.', 'Intro call');
+    // the real thing, in its usual shapes
+    const some = (bodyText: string, subject = 'Hello') =>
+      expect(
+        detectIntroduction(msg({ subject, bodyText }), [alex, sana], ['me@school.edu'])?.introducedIds,
+      ).toEqual(['Sana']);
+    some("Jordan, meet Sana. Sana runs a team you'd find interesting.");
+    some('Sana, meet Jordan, the student I mentioned.');
+    some("I'd love for you to meet Sana, who leads design at Figma.");
+    some('Introducing you to Sana, who leads design at Figma.');
+    some('Happy to connect you with Sana; she knows the team well.');
+    some('Sana leads design at Figma and you two should talk.');
+    some('Sana leads design at Figma.', 'Intro: Jordan <> Sana');
   });
 
   it('turns a recorded introduction into an introduced_by edge', () => {
