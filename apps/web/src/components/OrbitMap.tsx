@@ -28,11 +28,55 @@ export interface MapProps {
   onSelect: (id: string) => void;
   /** an aggregate dot ("+14 at Google") was clicked */
   onSelectCluster?: (node: OrbitNode) => void;
-  /** `upper`: the dot sits in the top part of the map, so a card about it belongs at the bottom */
-  onHover?: (id: string | undefined, upper?: boolean) => void;
+  /** `place`: the corner of the map where a card about the person covers the fewest people */
+  onHover?: (id: string | undefined, place?: CardPlace) => void;
   rotate?: boolean;
   /** what the map shows, for screen readers */
   label?: string;
+}
+
+export type CardPlace = 'top-left' | 'bottom-left' | 'top-right' | 'bottom-right';
+
+/** The person card's size and inset in CSS px (MapPage draws it: 260 px wide from 640 px up, full width below). */
+const CARD_H = 92;
+const CARD_INSET = 12;
+/** Room the phone's tab bar takes at the bottom of the window. */
+const TAB_BAR = 72;
+
+/**
+ * Where the person card goes: the corner that hides the fewest people, never over the person it is about (or the
+ * name above their dot). On a touch screen the card prefers the top, and goes to the bottom only when the bottom of
+ * the map is on screen, clear of the tab bar.
+ */
+function cardPlace(scene: OrbitScene, id: string, canvas: HTMLCanvasElement, touch: boolean): CardPlace {
+  const w = canvas.clientWidth;
+  const h = canvas.clientHeight;
+  const cw = w < 640 ? w - 2 * CARD_INSET : 260;
+  const at = scene.positionOf(id);
+  const bottomShown = !touch || canvas.getBoundingClientRect().bottom <= window.innerHeight - TAB_BAR;
+  const order: CardPlace[] = touch
+    ? ['top-left', 'bottom-left', 'top-right', 'bottom-right']
+    : ['bottom-left', 'top-left', 'bottom-right', 'top-right'];
+  let best: CardPlace = order[0]!;
+  let bestScore = Number.POSITIVE_INFINITY;
+  for (const place of order) {
+    const top = place.startsWith('top');
+    if (!top && !bottomShown) continue;
+    if (cw > w / 2 && place.endsWith('right')) continue;
+    const x0 = place.endsWith('left') ? CARD_INSET : w - CARD_INSET - cw;
+    const y0 = top ? CARD_INSET : h - CARD_INSET - CARD_H;
+    const x1 = x0 + cw;
+    const y1 = y0 + CARD_H;
+    // the person themselves, and their name above the dot, stay in sight
+    const covers =
+      !!at && at.x + at.r + 8 > x0 && at.x - at.r - 8 < x1 && at.y + at.r + 8 > y0 && at.y - at.r - 34 < y1;
+    const score = (covers ? 1000 : 0) + scene.dotsIn(x0, y0, x1, y1);
+    if (score < bestScore) {
+      best = place;
+      bestScore = score;
+    }
+  }
+  return best;
 }
 
 const COARSE_QUERY = '(hover: none) and (pointer: coarse)';
@@ -143,12 +187,14 @@ export function OrbitMap({
   const coarse = useCoarsePointer();
   const reduced = useReducedMotion();
 
-  // Geometry is computed once per network at unit scale; the viewport only changes the draw scale.
+  // Geometry is computed once per network at unit scale; the viewport only changes the draw scale. Not while the
+  // network is still loading: people can arrive before their companies, and a big network's layout is costly, so
+  // it is worked out once, when everything it needs is there.
   const layout: OrbitLayout = useMemo(() => {
-    const l = orbitLayout(people, orgs, { previous: lastWedges });
+    const l = orbitLayout(loading ? [] : people, orgs, { previous: lastWedges });
     if (l.groups.length) lastWedges = l.groups;
     return l;
-  }, [people, orgs]);
+  }, [people, orgs, loading]);
   const overlaps = useMemo(() => countOverlaps(layout.nodes), [layout]);
   const outsideWedges = useMemo(() => countOutsideWedges(layout), [layout]);
   const byId = useMemo(() => new Map(people.map((p) => [p.id, p])), [people]);
@@ -164,6 +210,8 @@ export function OrbitMap({
         snapshot: () => scene.snapshot(),
         positions: (ids?: string[]) => scene.positions(ids),
         hitTest: (x: number, y: number) => scene.hitTest(x, y),
+        slot: (id: string) => scene.slotOf(id),
+        stageColor: (id: string) => scene.stageColorOf(id),
       };
     let live = true;
     document.fonts?.ready.then(() => {
@@ -205,10 +253,11 @@ export function OrbitMap({
     const changed = id !== cur.id;
     hoverRef.current = { id, how };
     scene.setHover(id, how);
-    if (changed) {
-      const at = id ? scene.positionOf(id) : undefined;
-      onHover?.(id, !!at && at.y < 170);
-    }
+    if (changed)
+      onHover?.(
+        id,
+        id && canvasRef.current ? cardPlace(scene, id, canvasRef.current, how === 'touch') : undefined,
+      );
   };
   // a tapped dot belongs to the view it was tapped in: a search, a route, a filter or the introductions view lets
   // go of it (a mouse hover follows the pointer anyway)

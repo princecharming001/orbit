@@ -1,12 +1,17 @@
 import { expect, type Page, test } from '@playwright/test';
 import {
   angleFromCentre,
+  briefWritten,
   degreesApart,
+  injectPeople,
   loadDemo,
   mapCanvas,
   mapDots,
+  mapHitTest,
   mapSettled,
+  mapSlot,
   mapSnapshot,
+  mapStageColor,
   nextRender,
   screenDots,
 } from './helpers';
@@ -101,6 +106,18 @@ async function stepAndMeasure(page: Page, ids: string[], frames: number, into: n
   }
 }
 
+/** Per-frame travel stays smooth: it moved, it never snapped, and no frame stands out from both of its neighbours. */
+function expectSmooth(moves: number[], max: number, label: string) {
+  expect(Math.max(...moves), label).toBeGreaterThan(2);
+  expect(Math.max(...moves), label).toBeLessThan(max);
+  for (let i = 1; i < moves.length - 1; i++) {
+    if (moves[i]! < 12) continue;
+    expect(moves[i]!, `${label}, frame ${i}: ${moves.slice(i - 2, i + 3).join(', ')}`).toBeLessThanOrEqual(
+      3 * Math.max(moves[i - 1]!, moves[i + 1]!),
+    );
+  }
+}
+
 /** Circular mean of the dots' angles around the centre, in degrees. */
 function meanAngle(dots: { x: number; y: number }[], centre: [number, number]): number {
   let sx = 0;
@@ -159,6 +176,51 @@ test.describe('Map motion', () => {
     await tab.close();
   });
 
+  test('the arrival is over within 1.4 s, and "You" never shrinks as it starts', async ({ page }) => {
+    await loadDemo(page);
+    await page.goto('map');
+    await expect
+      .poll(async () => (await mapSnapshot(page).catch(() => undefined))?.phase, {
+        timeout: 15_000,
+        intervals: [20],
+      })
+      .toBe('arrival');
+    await pauseClock(page);
+    // "You" swells once from the size it had while loading, then settles back
+    const centre = () =>
+      page.evaluate(() => {
+        const c = document.querySelector('[data-testid="orbit-canvas"]') as HTMLCanvasElement;
+        const ctx = c.getContext('2d')!;
+        const s = (
+          window as unknown as { __orbitMap: { snapshot(): { centre: [number, number] } } }
+        ).__orbitMap.snapshot();
+        const dpr = window.devicePixelRatio || 1;
+        // the radius of the accent disc: walk right from the centre until the pixel is no longer the accent
+        let r = 0;
+        for (let x = 0; x < 60; x++) {
+          const d = ctx.getImageData(
+            Math.round((s.centre[0] + x) * dpr),
+            Math.round(s.centre[1] * dpr - 10 * dpr),
+            1,
+            1,
+          ).data;
+          if (!(d[2]! > 180 && d[0]! < 120)) break;
+          r = x;
+        }
+        return r;
+      });
+    const sizes: number[] = [await centre()];
+    let elapsed = 0;
+    for (; elapsed <= 2000; elapsed += 16) {
+      if ((await mapCanvas(page).getAttribute('data-animating')) === 'false') break;
+      await page.clock.runFor(16);
+      if (elapsed < 400) sizes.push(await centre());
+    }
+    expect(elapsed).toBeLessThanOrEqual(1400);
+    for (let i = 1; i < sizes.length; i++)
+      expect(sizes[i]!, sizes.join(', ')).toBeGreaterThanOrEqual(sizes[0]! - 2);
+  });
+
   test('a company search turns its wedge to the top, pops its people, shows the count chip; Esc reverses it', async ({
     page,
   }) => {
@@ -191,6 +253,13 @@ test.describe('Map motion', () => {
     expect(degreesApart(meanAngle(dots, snap.centre), -90)).toBeLessThan(25);
     // everyone else is faded back
     expect(snap.dimmed).toBe(snap.nodes - stripe.length);
+    // the panel can list everyone the map lights up, not only the first six
+    const there = page.getByText(/people there now · \d+/i);
+    const n = Number((await there.textContent())!.match(/(\d+)/)![1]);
+    if (n > 6) {
+      await page.getByTestId('company-show-all').first().click();
+      await expect(there.locator('xpath=..').locator('li')).toHaveCount(n);
+    }
 
     await escapeTo(page, '');
     await mapSettled(page);
@@ -256,6 +325,73 @@ test.describe('Map motion', () => {
     }
   });
 
+  test('a search that finds no one says so on the page and shakes the search box', async ({ page }) => {
+    await loadDemo(page);
+    await openMap(page);
+    await search(page, 'Zzyzx Nobody');
+    await expect(page.getByTestId('map-legend-line')).toHaveText(
+      'No one matches “Zzyzx Nobody” in your network yet.',
+    );
+    await expect(page.getByTestId('reach-form')).toHaveClass(/shake-x/);
+    // typing again puts the line back
+    await page.getByTestId('reach-input').fill('Zzy');
+    await expect(page.getByTestId('map-legend-line')).toHaveText(/everyone you know/i);
+    await expect(page.getByTestId('reach-form')).not.toHaveClass(/shake-x/);
+  });
+
+  test('every animation carries on from where the dots are when another one interrupts it', async ({
+    page,
+  }) => {
+    await loadDemo(page);
+    await openMap(page);
+    const ids = Object.keys(await mapDots(page)).slice(0, 70);
+    await pauseClock(page);
+    // a route, then a company before the route has finished drawing
+    let moves: number[] = [];
+    await search(page, 'Maya Chen');
+    await expect(page.getByTestId('reach-path').first()).toBeVisible();
+    await stepAndMeasure(page, ids, 30, moves);
+    await page.getByTestId('reach-path').nth(1).click();
+    await stepAndMeasure(page, ids, 12, moves);
+    await search(page, 'Stripe');
+    await expect(page.getByTestId('map-legend-line')).toHaveText(/at Stripe/);
+    await stepAndMeasure(page, ids, 50, moves);
+    expectSmooth(moves, 80, 'route, route switch, company');
+    await page.keyboard.press('Escape');
+    await expect.poll(async () => (await mapSnapshot(page)).focus).toBe('');
+    await stepUntilSettled(page);
+    // the introductions view, and a filter before its people have reached the tree
+    moves = [];
+    await page.getByTestId('map-filter-intros').click();
+    await stepAndMeasure(page, ids, 20, moves);
+    await page.getByTestId('map-filter-alumni').click();
+    await stepAndMeasure(page, ids, 50, moves);
+    expectSmooth(moves, 80, 'introductions, then a filter');
+    await stepUntilSettled(page);
+  });
+
+  test('a search during the arrival takes the dots from where they are', async ({ page }) => {
+    await loadDemo(page);
+    await page.goto('map');
+    await expect
+      .poll(async () => (await mapSnapshot(page).catch(() => undefined))?.phase, {
+        timeout: 15_000,
+        intervals: [20],
+      })
+      .toBe('arrival');
+    await pauseClock(page);
+    const ids = Object.keys(await mapDots(page)).slice(0, 70);
+    const moves: number[] = [];
+    await stepAndMeasure(page, ids, 20, moves);
+    await search(page, 'Stripe');
+    await expect(page.getByTestId('map-legend-line')).toHaveText(/at Stripe/);
+    await stepAndMeasure(page, ids, 60, moves);
+    // the arrival's own spiral is the fastest travel on the map
+    expectSmooth(moves, 70, 'arrival, then a company');
+    await stepUntilSettled(page);
+    expect((await mapSnapshot(page)).focus).toBe('company:n:stripe');
+  });
+
   test('reach draws the route hop by hop with the target at the top; switching routes morphs', async ({
     page,
   }) => {
@@ -273,6 +409,17 @@ test.describe('Map motion', () => {
     expect(snap.path[snap.path.length - 1]).toBe(maya);
     expect(snap.pathDrawn).toBe(snap.path.length - 1);
     for (const id of snap.path.slice(1)) expect(snap.emphasized).toContain(id);
+    // everyone on the route is named on the map, so the panel's words match the dots
+    const names: string[] = await page.evaluate(async (ids) => {
+      const db = (
+        window as unknown as {
+          __orbitDb: { people: { toArray(): Promise<{ id: string; firstName: string }[]> } };
+        }
+      ).__orbitDb;
+      const all = await db.people.toArray();
+      return ids.map((id) => all.find((p) => p.id === id)!.firstName);
+    }, snap.path.slice(1));
+    for (const n of names) expect(snap.tags.some((t) => t.startsWith(n))).toBe(true);
     const target = (await mapDots(page, [maya]))[maya]!;
     expect(degreesApart(angleFromCentre(target, { x: snap.centre[0], y: snap.centre[1] }), -90)).toBeLessThan(
       10,
@@ -294,7 +441,7 @@ test.describe('Map motion', () => {
     for (const d of Object.values(onRoute)) expect(d.alpha).toBeGreaterThan(0.95);
   });
 
-  test('reach with no route: the sweep fades and the target shakes once', async ({ page }) => {
+  test('reach with no route: the sweep fades and the target shakes', async ({ page }) => {
     await loadDemo(page);
     await openMap(page);
     // someone with no tie to the student or to anyone they know
@@ -328,13 +475,40 @@ test.describe('Map motion', () => {
         updatedAt: now,
       });
     });
-    await page.goto('map?reach=e2e-alone');
-    await expect(page.getByText(/no route found/i)).toBeVisible({ timeout: 15_000 });
+    await page.goto('map');
     await mapSettled(page);
+    await pauseClock(page);
+    await search(page, 'Robin Okonkwo');
+    await expect(page.getByText(/no route found/i)).toBeVisible({ timeout: 15_000 });
+    // the target's sideways wobble: how far the dot sits from where its slot puts it, frame by frame
+    const slot = (await mapSlot(page, 'e2e-alone'))!;
+    const offsets: number[] = [];
+    for (let t = 0; t < 1400; t += 16) {
+      await page.clock.runFor(16);
+      const d = (await mapDots(page, ['e2e-alone']))['e2e-alone'];
+      const s = await mapSnapshot(page);
+      const k = Number(await mapCanvas(page).getAttribute('data-scale')) * s.zoom;
+      if (d) offsets.push(d.x - (s.centre[0] + Math.cos(slot.angle + s.rotation) * slot.radius * k));
+    }
+    const label = offsets.map((x) => x.toFixed(1)).join(' ');
+    expect(Math.max(...offsets.map(Math.abs)), label).toBeGreaterThan(2);
+    let turns = 0;
+    let side = 0;
+    for (const o of offsets) {
+      if (Math.abs(o) < 0.5) continue;
+      if (side && Math.sign(o) !== side) turns++;
+      side = Math.sign(o);
+    }
+    // one gentle shake: a few swings either way, and still again afterwards
+    expect(turns, label).toBeGreaterThanOrEqual(3);
+    expect(Math.abs(offsets.at(-1)!), label).toBeLessThan(0.5);
+    await stepUntilSettled(page);
     const snap = await mapSnapshot(page);
     expect(snap.focus).toBe('reach:e2e-alone:none');
     expect(snap.phaseLog).toContain('reach-none');
     expect(snap.path).toEqual([]);
+    // the radar swept for a moment before the answer, even though the answer came at once
+    expect(snap.phaseLog.indexOf('reach-search')).toBeGreaterThanOrEqual(0);
   });
 
   test('someone new is born at their introducer and lands; a stage change crossfades', async ({ page }) => {
@@ -408,25 +582,55 @@ test.describe('Map motion', () => {
     expect(
       Math.hypot(landed['e2e-new']!.x - landed[tomas]!.x, landed['e2e-new']!.y - landed[tomas]!.y),
     ).toBeGreaterThan(20);
+    // exactly on its own slot in the layout
+    const slot = (await mapSlot(page, 'e2e-new'))!;
+    const s = await mapSnapshot(page);
+    const k = Number(await mapCanvas(page).getAttribute('data-scale')) * s.zoom;
+    const want = {
+      x: s.centre[0] + Math.cos(slot.angle + s.rotation) * slot.radius * k,
+      y: s.centre[1] + Math.sin(slot.angle + s.rotation) * slot.radius * k,
+    };
+    expect(Math.hypot(landed['e2e-new']!.x - want.x, landed['e2e-new']!.y - want.y)).toBeLessThan(2);
 
     // a chat gets booked: the stage ring crossfades, with one soft burst
-    await page.evaluate(async (pid) => {
-      const db = (
-        window as unknown as {
-          __orbitDb: {
-            chats: {
-              where(k: string): { equals(v: string): { first(): Promise<{ id: string }> } };
-              update(id: string, x: unknown): Promise<unknown>;
-            };
-          };
-        }
-      ).__orbitDb;
-      const chat = await db.chats.where('personId').equals(pid).first();
-      await db.chats.update(chat.id, { stage: 'scheduled', updatedAt: new Date().toISOString() });
-    }, maya);
-    await stepUntil(page, async () => (await mapSnapshot(page)).phaseLog.slice(-2).includes('stage'));
-    await expect(mapCanvas(page)).toHaveAttribute('data-animating', 'true');
+    const setStage = (stage: string) =>
+      page.evaluate(
+        async ([pid, stage]) => {
+          const db = (
+            window as unknown as {
+              __orbitDb: {
+                chats: {
+                  where(k: string): { equals(v: string): { first(): Promise<{ id: string }> } };
+                  update(id: string, x: unknown): Promise<unknown>;
+                };
+              };
+            }
+          ).__orbitDb;
+          const chat = await db.chats.where('personId').equals(pid!).first();
+          await db.chats.update(chat.id, { stage, updatedAt: new Date().toISOString() });
+        },
+        [maya, stage],
+      );
+    // first a stage of another colour (warming up, amber), so the crossfade to green shows
+    await setStage('warming');
+    await stepUntil(page, async () => (await mapStageColor(page, maya)) === 'rgb(183,121,31)');
     await stepUntilSettled(page, 3000);
+    const before = await mapStageColor(page, maya);
+    const rest = (await mapDots(page, [maya]))[maya]!.r;
+    expect((await mapSnapshot(page)).phase).toBe('idle');
+    await setStage('scheduled');
+    // the warming change logged a 'stage' too, so wait for a new one after the idle
+    await stepUntil(page, async () => (await mapSnapshot(page)).phaseLog.at(-1) === 'stage');
+    await expect(mapCanvas(page)).toHaveAttribute('data-animating', 'true');
+    // half way: the ring is between the two colours, and the dot has lifted for the burst
+    await page.clock.runFor(200);
+    const mid = await mapStageColor(page, maya);
+    expect(mid).not.toBe(before);
+    expect(mid).not.toBe('rgb(31,138,76)');
+    expect((await mapDots(page, [maya]))[maya]!.r).toBeGreaterThan(rest * 1.1);
+    await stepUntilSettled(page, 3000);
+    // and it lands on the scheduled colour
+    expect(await mapStageColor(page, maya)).toBe('rgb(31,138,76)');
   });
 
   test('the Introductions view grows outward generation by generation; a chain lights up; search turns to it', async ({
@@ -459,6 +663,15 @@ test.describe('Map motion', () => {
     const dist = (id: string) => Math.hypot(dots[id]!.x - snap.centre[0], dots[id]!.y - snap.centre[1]);
     expect(dist(ids['Elena Cohen']!)).toBeLessThan(dist(ids['Tomas Costa']!));
     expect(dist(ids['Tomas Costa']!)).toBeLessThan(dist(ids['Aisha Volkov']!));
+    // the people in it are named on the map, and the line under the filters says what the rings mean now
+    for (const n of ['Elena', 'Tomas', 'Aisha'])
+      expect(
+        snap.tags.some((t) => t.startsWith(n)),
+        snap.tags.join(', '),
+      ).toBe(true);
+    await expect(page.getByTestId('map-legend-line')).toContainText(
+      'Each ring out from You is one more introduction',
+    );
     // the panel tells each chain in words
     const stories = page.getByTestId('map-intro-story');
     expect(await stories.count()).toBeGreaterThanOrEqual(3);
@@ -560,6 +773,43 @@ test.describe('Map motion', () => {
     expect((await mapSnapshot(page)).dimmed).toBe(0);
   });
 
+  test('the person card never covers the person it is about', async ({ page }) => {
+    await loadDemo(page);
+    await openMap(page);
+    const box = (await mapCanvas(page).boundingBox())!;
+    const all = await mapDots(page);
+    // dots from every part of the map: the left- and rightmost, the top and the bottom ones
+    const ids = Object.keys(all);
+    const pick = [
+      ...ids.sort((a, b) => all[a]!.x - all[b]!.x).slice(0, 3),
+      ...ids.sort((a, b) => all[b]!.x - all[a]!.x).slice(0, 3),
+      ...ids.sort((a, b) => all[b]!.y - all[a]!.y).slice(0, 3),
+      ...ids.sort((a, b) => all[a]!.y - all[b]!.y).slice(0, 3),
+    ];
+    let checked = 0;
+    for (const id of pick) {
+      const d = (await mapDots(page, [id]))[id];
+      if (!d) continue;
+      await page.mouse.move(box.x + d.x, box.y + d.y);
+      const hovered = await expect
+        .poll(async () => (await mapSnapshot(page)).hover, { timeout: 2000 })
+        .toBe(id)
+        .then(() => true)
+        .catch(() => false);
+      if (!hovered) continue;
+      const card = page.getByTestId('map-tooltip');
+      if (!(await card.isVisible())) continue;
+      const c = (await card.boundingBox())!;
+      const dot = (await mapDots(page, [id]))[id]!;
+      const x = box.x + dot.x;
+      const y = box.y + dot.y;
+      const inside = x > c.x && x < c.x + c.width && y > c.y && y < c.y + c.height;
+      expect(inside, `${id} at ${x},${y} under the card at ${JSON.stringify(c)}`).toBe(false);
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(4);
+  });
+
   test('keyboard: Tab focuses the map, arrows move between people, Enter opens, Esc lets go', async ({
     page,
   }) => {
@@ -589,6 +839,46 @@ test.describe('Map motion', () => {
     const three = (await mapSnapshot(page)).hover!;
     await page.keyboard.press('Enter');
     await expect(page).toHaveURL(new RegExp(`/people/${three}$`));
+  });
+});
+
+test.describe('Map motion with a big network', () => {
+  test.setTimeout(150_000);
+
+  test('a "+N" dot bursts open into a fan that can be clicked, folds back on Esc, and turns round if asked again', async ({
+    page,
+  }) => {
+    await loadDemo(page);
+    await briefWritten(page);
+    await injectPeople(page, 1910);
+    await openMap(page);
+    await search(page, 'Google');
+    await expect.poll(async () => (await mapSnapshot(page)).focus).toBe('company:n:google');
+    await mapSettled(page, 30_000);
+    const snap = await mapSnapshot(page);
+    expect(snap.fans.length).toBeGreaterThan(5);
+    // fanned dots sit side by side, never on top of each other, and a click lands on the one under the pointer
+    const fans = Object.values(await mapDots(page, snap.fans));
+    for (let i = 0; i < fans.length; i++)
+      for (let j = i + 1; j < fans.length; j++)
+        expect(Math.hypot(fans[i]!.x - fans[j]!.x, fans[i]!.y - fans[j]!.y)).toBeGreaterThan(
+          (fans[i]!.r + fans[j]!.r) * 0.95,
+        );
+    const one = snap.fans[Math.floor(snap.fans.length / 2)]!;
+    const at = (await mapDots(page, [one]))[one]!;
+    expect(await mapHitTest(page, at.x, at.y)).toBe(one);
+    // Esc folds the fan back; Google again half way through turns the same dots round, no restart from the "+N" dot
+    await pauseClock(page);
+    await page.keyboard.press('Escape');
+    await expect.poll(async () => (await mapSnapshot(page)).focus).toBe('');
+    const moves: number[] = [];
+    await stepAndMeasure(page, snap.fans, 10, moves);
+    await search(page, 'Google');
+    await expect.poll(async () => (await mapSnapshot(page)).focus).toBe('company:n:google');
+    await stepAndMeasure(page, snap.fans, 40, moves);
+    expectSmooth(moves, 90, 'fan folding back, then out again');
+    await stepUntilSettled(page);
+    expect(new Set((await mapSnapshot(page)).fans)).toEqual(new Set(snap.fans));
   });
 });
 
@@ -623,8 +913,19 @@ test.describe('Map motion with reduced motion', () => {
     // the introductions view draws its links at once: nothing to wait for beyond the fade
     await escapeTo(page, '');
     await mapSettled(page, 1500);
+    await pauseClock(page);
     await page.getByTestId('map-filter-intros').click();
     await expect.poll(async () => (await mapSnapshot(page)).focus).toBe('web');
+    // people are set in their place in the tree at once, with no travel
+    await page.clock.runFor(16);
+    await nextRender(page);
+    const ids = Object.keys(await mapDots(page)).slice(0, 40);
+    const first = await mapDots(page, ids);
+    await page.clock.runFor(1000);
+    const later = await mapDots(page, ids);
+    for (const id of ids)
+      expect(Math.hypot(first[id]!.x - later[id]!.x, first[id]!.y - later[id]!.y)).toBeLessThan(1);
+    await page.clock.resume();
     await mapSettled(page, 700);
     // a route search shows a still ring, no sweep, and settles as soon as the route is drawn
     await page.getByTestId('map-filter-all').click();

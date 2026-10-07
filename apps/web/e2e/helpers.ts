@@ -97,6 +97,7 @@ export interface MapSnapshot {
   webLit: string[];
   hover?: string;
   spin: number;
+  tags: string[];
   draws: number;
 }
 
@@ -167,4 +168,44 @@ export function angleFromCentre(dot: Dot, centre: { x: number; y: number }): num
 export function degreesApart(a: number, b: number): number {
   const d = Math.abs(a - b) % 360;
   return d > 180 ? 360 - d : d;
+}
+
+interface MapHooks {
+  hitTest(x: number, y: number): string | undefined;
+  slot(id: string): { angle: number; radius: number } | undefined;
+  stageColor(id: string): string | undefined;
+}
+
+/** The person (or "+N" dot) a click at this point inside the canvas would open. */
+export function mapHitTest(page: Page, x: number, y: number): Promise<string | undefined> {
+  return page.evaluate(
+    ([x, y]) => (window as unknown as { __orbitMap: MapHooks }).__orbitMap.hitTest(x!, y!),
+    [x, y],
+  );
+}
+
+/** A dot's own slot in the layout: angle before rotation (radians) and radius (layout units). */
+export function mapSlot(page: Page, id: string): Promise<{ angle: number; radius: number } | undefined> {
+  return page.evaluate((id) => (window as unknown as { __orbitMap: MapHooks }).__orbitMap.slot(id), id);
+}
+
+/** The colour a dot's stage ring shows now, as 'rgb(r,g,b)'. */
+export function mapStageColor(page: Page, id: string): Promise<string | undefined> {
+  return page.evaluate((id) => (window as unknown as { __orbitMap: MapHooks }).__orbitMap.stageColor(id), id);
+}
+
+/** Waits for the demo's first daily brief: it recomputes every strength, so people added before it would be reset. */
+export async function briefWritten(page: Page) {
+  await expect
+    .poll(
+      () =>
+        page.evaluate(async () => {
+          const db = (
+            window as unknown as { __orbitDb: { briefs: { toArray(): Promise<{ kind: string }[]> } } }
+          ).__orbitDb;
+          return (await db.briefs.toArray()).some((b) => b.kind === 'daily');
+        }),
+      { timeout: 60_000 },
+    )
+    .toBe(true);
 }

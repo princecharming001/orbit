@@ -68,6 +68,8 @@ const OMEGA = TAU / ORBIT_PERIOD_MS;
 /** extent of an orbit with no dots (the outer ring plus half a dot), for the empty and loading map */
 const EMPTY_EXTENT = 456;
 const FAN_PITCH = 30;
+/** an introductions web this small names everyone in it; a bigger one names only the lit chain */
+const TAG_WEB_ALL = 16;
 
 // ---------- timing (ms) ----------
 export const TIMING = {
@@ -88,16 +90,21 @@ export const TIMING = {
   filter: 250,
   filterSweep: 180,
   popStagger: 38,
+  /** the whole stagger of a company's pops, at most */
+  popSpread: 350,
   hover: 120,
   hoverLines: 220,
   tip: 150,
   hop: 350,
   turn: 700,
+  turnMax: 950,
   turnBackMax: 1150,
   retract: 260,
   cometPeriod: 2500,
   cometTravel: 1100,
-  radarTurn: 1400,
+  radarTurn: 1200,
+  /** the radar shows for at least this long, so a route found at once still reads as "searching" first */
+  radarMin: 480,
   shake: 520,
   webGen: 250,
   webLink: 450,
@@ -223,6 +230,8 @@ export interface SceneSnapshot {
   webLit: string[];
   hover?: string;
   spin: number;
+  /** the first names written under dots in the last frame drawn (a route, the introductions web) */
+  tags: string[];
   /** frames drawn since the map opened (the loop sleeps when nothing moves) */
   draws: number;
 }
@@ -320,7 +329,9 @@ export class OrbitScene {
   private ghost = new Tween(1);
   private labelIn = new Tween(1);
   private labelDim = new Tween(1);
-  private youPop = new Tween(1);
+  /** the loading halo and breathing round "You": fades out when the people arrive, never cut */
+  private youHalo = new Tween(1);
+  private youBumpAt = -1e9;
 
   private filterIds?: Set<string>;
   private groupsAlpha = new Tween(0);
@@ -330,8 +341,12 @@ export class OrbitScene {
   private companyCounts?: { count: number; warm: number };
   /** how far the focused company's wedge has opened (1 = its own width) */
   private spreadK = 1;
-  private wedge = { key: '', alpha: new Tween(0) };
-  private wedgeOld = { key: '', alpha: new Tween(0) };
+  /** `k`: how far the wedge is drawn open, tweened with its dots so the tint never runs ahead of them */
+  private wedge = { key: '', alpha: new Tween(0), k: new Tween(1) };
+  private wedgeOld = { key: '', alpha: new Tween(0), k: new Tween(1) };
+  /** the arc an open fan covers (before rotation), whose neighbouring labels fade out while it is open */
+  private fanArc = { mid: 0, half: 0 };
+  private fanVeil = new Tween(0);
   private chip = { text: '', key: '', alpha: new Tween(0), radius: 0 };
   private chipOld = { text: '', key: '', alpha: new Tween(0), radius: 0 };
 
@@ -362,10 +377,18 @@ export class OrbitScene {
 
   private introLinks: { from: NodeView; to: NodeView; start: number; end: number }[] = [];
 
+  /** name tags this frame (for tests), the dots they belong to with their alpha, and the boxes already taken */
+  private tags: string[] = [];
+  private tagList: (NodeView | number)[] = [];
+  private tagBoxes: number[] = [];
+  private tagNames = new Map<string, string>();
+
   private drag?: { last: number; t: number; v: number; moved: boolean; x0: number; y0: number };
 
   private raf = 0;
   private timer: ReturnType<typeof setTimeout> | undefined;
+  /** the loop is waiting on a timer between two slow drift draws (rather than asleep, or drawing every frame) */
+  private napping = false;
   private lastNow = -1;
   private lastDraw = -1e9;
   private busyUntil = 0;
@@ -380,6 +403,8 @@ export class OrbitScene {
   /** sprites are rebuilt within a few milliseconds per frame, so a zoom or a resize never stalls one frame */
   private spriteBuilds = 0;
   private spriteDeadline = 0;
+  /** where the sprite pre-build has got to in `views` (-1: nothing waiting) */
+  private prebuildAt = -1;
   private images = new Map<string, HTMLImageElement>();
   private destroyed = false;
   private you: Pt = { x: 0, y: 0 };
@@ -405,10 +430,6 @@ export class OrbitScene {
     this.timer = undefined;
   }
 
-  /**
-   * The canvas changed size (a mode with a shorter header, a window resize). `at` is its top left corner on the
-   * page: the orbit stays exactly where it was on screen, then glides to its new centre, so nothing jumps.
-   */
   /**
    * The canvas's size in CSS px and, with `at`, where it sits on the page. When the page moves or resizes the canvas
    * (a panel above it grows), the orbit first stays where the eye has it, then glides to its new centre.
@@ -467,6 +488,7 @@ export class OrbitScene {
 
   setData(d: SceneData): void {
     const now = this.clock.now();
+    if (d.people !== this.people) this.tagNames.clear();
     this.people = d.people;
     const prevIntroducers = this.introducerOf;
     this.introducerOf = d.introducerOf;
@@ -479,6 +501,7 @@ export class OrbitScene {
     }
     const wasLoading = this.loading;
     this.loading = false;
+    if (wasLoading) this.anim(this.youHalo, 0, now, 360, easing.outQuad);
     const initial = !this.initialized;
     const relaid = d.layout !== this.layout;
     if (relaid) this.applyLayout(d.layout, now, initial);
@@ -603,6 +626,7 @@ export class OrbitScene {
     const first = layout.nodes.find((n) => n.person);
     this.firstPerson = first ? this.byKey.get(first.id) : undefined;
     if (!initial && born.length) this.welcome(born, prevClusterOf, now);
+    if (born.length) this.prebuildAt = 0;
     this.refit();
     this.sortDrawList();
   }
@@ -759,7 +783,8 @@ export class OrbitScene {
       this.play(t, 0, 1, now, TIMING.ringSweep, easing.inOutCubic, i * TIMING.ringStagger);
     });
     this.anim(this.ghost, 0, now, 160, easing.outQuad);
-    this.play(this.youPop, 0.6, 1, now, 420, easing.outBack);
+    // "You" swells once as the people leave it, from the size it already has (no shrink, no cut)
+    this.youBumpAt = now;
     let last = 0;
     for (const v of this.views) {
       if (v.temp) continue;
@@ -791,7 +816,8 @@ export class OrbitScene {
     for (const t of this.ringSweep) ff(t, 1);
     ff(this.ghost, 0);
     ff(this.labelIn, 1);
-    ff(this.youPop, 1);
+    ff(this.youHalo, 0);
+    if (now - this.youBumpAt < 420) this.youBumpAt = -1e9;
     for (const v of this.views) {
       if (v.temp) continue;
       ff(v.a, v.a.to);
@@ -817,7 +843,7 @@ export class OrbitScene {
       v.stageMix,
     ];
     for (const v of this.views) for (const t of tweens(v)) if (t.duration > 0) end = Math.max(end, t.end);
-    for (const t of [...this.ringSweep, this.ghost, this.labelIn, this.labelDim, this.youPop, this.radar])
+    for (const t of [...this.ringSweep, this.ghost, this.labelIn, this.labelDim, this.youHalo, this.radar])
       if (t.duration > 0) end = Math.max(end, t.end);
     this.busyUntil = end;
   }
@@ -876,8 +902,10 @@ export class OrbitScene {
       this.webChain = new Set();
       this.webPath = [];
       if (!this.reduced) this.busyUntil = Math.max(this.busyUntil, now + TIMING.retract);
-      // everyone goes back to their own slot
+      // everyone goes back to their own slot, and the camera with them
       this.retarget(now, 600);
+      if (this.reach?.status === 'found') this.framePath(now);
+      else this.frame0(now);
       this.refreshEmphasis(now, 'web');
       this.anim(this.labelDim, this.dimForMode(), now, TIMING.emphasis, easing.outQuad);
       this.setPhase('web-out');
@@ -888,8 +916,10 @@ export class OrbitScene {
         this.lineageOf = new Map(
           [...w.web.root].map(([id, r]) => [id, LINEAGE[w.web.roots.indexOf(r) % LINEAGE.length]!]),
         );
-        // the people in the web move out to their generation's ring, then the links grow
+        // the people in the web move out to their generation's ring, then the links grow, and the camera moves in
+        // on the tree
         this.retarget(now, 650);
+        this.frameWeb(now);
         if (!prev) {
           this.webStart = now + (this.reduced ? 0 : 380);
           this.webOld = undefined;
@@ -918,7 +948,10 @@ export class OrbitScene {
         const target = w.turnTo.id ? this.viewFor(w.turnTo.id) : undefined;
         const g = w.turnTo.group ? this.groupOf(w.turnTo!.group) : undefined;
         const angle = target ? target.a.to : g ? wedgeMid(g) : undefined;
-        if (angle !== undefined) this.hold(rotationToTop(angle, this.rot), now);
+        if (angle !== undefined) {
+          this.hold(rotationToTop(angle, this.rot), now);
+          this.frameWeb(now);
+        }
       }
       this.refreshEmphasis(now, 'web');
       this.anim(this.labelDim, this.dimForMode(), now, TIMING.emphasis, easing.outQuad);
@@ -997,6 +1030,10 @@ export class OrbitScene {
       if (this.chip.text) this.fadeOutChip(now);
     }
     const g = groupKey ? this.groupOf(groupKey) : undefined;
+    if (g) {
+      this.wedge.key = g.key;
+      this.wedge.k.snap(1);
+    }
     this.retarget(now);
     if (!g) {
       if (prevKey) {
@@ -1009,7 +1046,6 @@ export class OrbitScene {
     }
     this.setPhase('company');
     this.hold(rotationToTop(wedgeMid(g), this.rot), now);
-    this.wedge.key = g.key;
     this.play(this.wedge.alpha, 0, 1, now, 320, easing.outQuad, 120);
     this.chip.key = g.key;
     this.chip.text = this.chipText(g);
@@ -1074,7 +1110,8 @@ export class OrbitScene {
 
   private chipRadius(rows: number): number {
     const extent = this.layout?.extent ?? EMPTY_EXTENT;
-    return rows ? this.fanBase() + (rows - 1) * FAN_PITCH + 14 : extent;
+    // clear of the top row of the fan, with a little air under the chip
+    return rows ? this.fanBase() + (rows - 1) * FAN_PITCH + 24 : extent;
   }
 
   /** Room above the wedge for the fan and the count chip: the orbit slides down just enough. */
@@ -1096,6 +1133,8 @@ export class OrbitScene {
     const mid = g ? wedgeMid(g) : 0;
     const k = g ? Math.min(1.35, Math.max(1, 3.4 / Math.max(1e-3, g.endAngle - g.startAngle))) : 1;
     this.spreadK = k;
+    const travel = this.reduced ? 0 : dur;
+    if (g && this.wedge.key === key) this.anim(this.wedge.k, k, now, travel, easing.inOutCubic);
     const tree = this.web ? this.webTree(this.web.web) : undefined;
     for (const v of this.views) {
       if (v.temp || !v.node || v.removing) continue;
@@ -1110,8 +1149,9 @@ export class OrbitScene {
         delay = (t.gen - 1) * 110;
       } else if (g && v.groupKey === key) a = mid + (a - mid) * k;
       const ta = nearestAngle(v.a.value(now), a);
-      if (Math.abs(ta - v.a.to) > 1e-6) this.anim(v.a, ta, now, dur, easing.inOutCubic, delay);
-      if (Math.abs(r - v.r.to) > 1e-6) this.anim(v.r, r, now, dur, easing.inOutCubic, delay);
+      // reduced motion: dots are set in place, never travel
+      if (Math.abs(ta - v.a.to) > 1e-6) this.anim(v.a, ta, now, travel, easing.inOutCubic, delay);
+      if (Math.abs(r - v.r.to) > 1e-6) this.anim(v.r, r, now, travel, easing.inOutCubic, delay);
     }
   }
 
@@ -1139,9 +1179,23 @@ export class OrbitScene {
     };
     const roots = web.roots.filter(shown);
     for (const r of roots) measure(r, 1);
-    // roots in their current order round the orbit, pushed apart where their sectors would overlap
-    const order = [...roots].sort((x, y) => home(x) - home(y));
-    const centre = order.map((id) => home(id));
+    // each lineage sits round the middle of where its people already are, so nobody crosses the orbit to reach it
+    const seat = new Map<string, number>();
+    for (const r of roots) {
+      const h = home(r);
+      let sum = 0;
+      let n = 0;
+      for (const [id, root] of web.root)
+        if (root === r && shown(id)) {
+          sum += nearestAngle(h, home(id)) - h;
+          n++;
+        }
+      const a = h + (n ? sum / n : 0);
+      seat.set(r, ((a % TAU) + TAU) % TAU);
+    }
+    // lineages in their order round the orbit, pushed apart where their sectors would overlap
+    const order = [...roots].sort((x, y) => seat.get(x)! - seat.get(y)!);
+    const centre = order.map((id) => seat.get(id)!);
     const span = order.map((id) => width.get(id)! + 0.12);
     const total = span.reduce((a, b) => a + b, 0);
     const squeeze = total > TAU ? TAU / total : 1;
@@ -1191,9 +1245,27 @@ export class OrbitScene {
     const slots = fanSlots(ids.length, wedgeMid(g), this.fanBase(), FAN_PITCH, this.fanSpan(g), 3);
     const shown = ids.slice(0, slots.length);
     const fanned = new Set<string>();
+    // the labels of the neighbouring wedges under the fan step aside while it is open
+    if (shown.length) {
+      const half = Math.max(...slots.slice(0, shown.length).map((x) => Math.abs(x.angle - wedgeMid(g))));
+      this.fanArc = { mid: wedgeMid(g), half: half + 0.06 };
+      this.anim(this.fanVeil, 1, now, 260, easing.outQuad, 120);
+    }
+    // a big fan opens a little faster per dot, so the whole burst lands with the turn
+    const stagger = Math.min(22, 300 / Math.max(1, shown.length));
     shown.forEach(({ pid, from }, i) => {
       const key = `fan:${pid}`;
+      const slot = slots[i]!;
       const old = this.byKey.get(key);
+      if (old?.removing && !old.dead) {
+        // the same company again while its fan was folding back: the dot turns round where it is, no restart
+        this.revive(old, now);
+        old.fromKey = from.key;
+        this.anim(old.a, nearestAngle(old.a.value(now), slot.angle), now, 420, easing.outCubic);
+        this.anim(old.r, slot.radius, now, 420, easing.outCubic);
+        fanned.add(pid);
+        return;
+      }
       if (old) this.dropView(old);
       const v = new NodeView(key, pid);
       v.temp = true;
@@ -1203,14 +1275,14 @@ export class OrbitScene {
       v.ring = 2;
       v.hue = hueOf(pid);
       v.layer = 3;
-      const slot = slots[i]!;
-      const delay = 180 + i * 22;
+      const delay = 180 + i * stagger;
       const fa = from.a.value(now);
       v.size.snap(Math.min(26, from.size.to));
       v.a.snap(fa);
       v.r.snap(from.r.value(now));
       this.play(v.a, fa, nearestAngle(fa, slot.angle), now, 520, easing.outCubic, delay);
-      this.play(v.r, from.r.value(now), slot.radius, now, 520, outBack(1.4), delay);
+      // a gentle overshoot: the rows land side by side without bumping into each other
+      this.play(v.r, from.r.value(now), slot.radius, now, 520, outBack(0.7), delay);
       this.play(v.appear, 0, 1, now, 200, easing.outQuad, delay);
       this.views.push(v);
       this.byKey.set(key, v);
@@ -1227,6 +1299,7 @@ export class OrbitScene {
   }
 
   private collapseFans(now: number): void {
+    this.anim(this.fanVeil, 0, now, 300, easing.inOutQuad, 120);
     const homes = new Set<NodeView>();
     for (const v of this.views) {
       if (!v.temp || v.removing) continue;
@@ -1248,6 +1321,10 @@ export class OrbitScene {
     this.wedgeOld.key = this.wedge.key;
     this.wedgeOld.alpha.snap(this.wedge.alpha.value(now));
     this.anim(this.wedgeOld.alpha, 0, now, 240, easing.inQuad);
+    // it closes with its dots as it fades
+    this.wedgeOld.k.snap(this.wedge.k.value(now));
+    this.anim(this.wedgeOld.k, 1, now, this.reduced ? 0 : 560, easing.inOutCubic);
+    this.wedge.k.snap(1);
     this.wedge.key = '';
     this.wedge.alpha.snap(0);
   }
@@ -1286,17 +1363,22 @@ export class OrbitScene {
     if (!changed) return;
     const target = this.viewFor(r.targetId);
     if (newTarget && target) this.hold(rotationToTop(target.a.to, this.rotTarget()), now);
+    // a radar that only just started keeps sweeping a moment longer, then hands over to the answer
+    const wait =
+      !this.reduced && prev?.status === 'searching' && !newTarget
+        ? Math.max(0, this.radarStart + TIMING.radarMin - now)
+        : 0;
     if (status === 'searching') {
-      this.radarStart = now;
-      this.anim(this.radar, 1, now, 200, easing.outQuad);
+      if (newTarget || prev?.status !== 'searching') this.radarStart = now;
+      this.anim(this.radar, 1, now, 160, easing.outQuad);
       this.retractPath(now);
       this.setPhase('reach-search');
     } else {
-      this.anim(this.radar, 0, now, 260, easing.inQuad);
+      this.anim(this.radar, 0, now, 260, easing.inQuad, wait);
       if (status === 'none') {
         this.retractPath(now);
         if (target && !this.reduced) {
-          target.shakeAt = now + 120;
+          target.shakeAt = now + wait + 120;
           this.busyUntil = Math.max(this.busyUntil, target.shakeAt + TIMING.shake);
         }
         this.setPhase('reach-none');
@@ -1304,7 +1386,10 @@ export class OrbitScene {
         // a new route: the old one retracts, then the new one draws hop by hop and each dot pops as it arrives
         const hadPath = this.path.ids.length > 0;
         this.retractPath(now);
-        this.path = { ids, start: now + (this.reduced ? 0 : hadPath ? TIMING.retract : 160) };
+        this.path = {
+          ids,
+          start: now + (this.reduced ? 0 : Math.max(wait, hadPath ? TIMING.retract : 160)),
+        };
         if (!this.reduced)
           for (let k = 1; k < ids.length; k++) {
             const v = this.viewFor(ids[k]!);
@@ -1368,8 +1453,43 @@ export class OrbitScene {
     this.anim(this.panY, cam.panY, now);
   }
 
+  /** The camera that keeps the whole introductions tree in view, as large as it comfortably goes. */
+  private frameWeb(now: number): void {
+    const web = this.web?.web;
+    const tree = web ? this.webTree(web) : undefined;
+    if (!tree?.size) {
+      this.anim(this.zoom, 1, now);
+      this.anim(this.panX, 0, now);
+      this.anim(this.panY, 0, now);
+      return;
+    }
+    const rot = this.rotTarget();
+    let minX = 0;
+    let minY = 0;
+    let maxX = 0;
+    let maxY = 0;
+    for (const [id, t] of tree) {
+      const v = this.byKey.get(id);
+      const a = t.a + rot;
+      const r = (t.r + (v?.size.to ?? 20)) * this.fitTarget;
+      minX = Math.min(minX, Math.cos(a) * r);
+      maxX = Math.max(maxX, Math.cos(a) * r);
+      minY = Math.min(minY, Math.sin(a) * r);
+      maxY = Math.max(maxY, Math.sin(a) * r);
+    }
+    // room below each dot for its name
+    const cam = frameBox(minX, minY - 6, maxX, maxY + 22, this.w, this.h, 48, 1.35);
+    this.anim(this.zoom, cam.zoom, now);
+    this.anim(this.panX, cam.panX, now);
+    this.anim(this.panY, cam.panY, now);
+  }
+
   private frame0(now: number): void {
     if (this.companyKey) return;
+    if (this.web) {
+      this.frameWeb(now);
+      return;
+    }
     this.anim(this.zoom, 1, now);
     this.anim(this.panX, 0, now);
     this.anim(this.panY, 0, now);
@@ -1380,7 +1500,11 @@ export class OrbitScene {
   /** Turn to `target` and hold there; remembers where the orbit was so clearing can turn back. */
   private hold(target: number, now: number): void {
     if (this.returnRot === null) this.returnRot = this.rot;
-    this.rotSpring.configure({ duration: TIMING.turn });
+    // a long turn takes a little longer, so the outer ring stays easy to follow instead of smearing
+    const deg = (Math.abs(target - this.rot) * 180) / Math.PI;
+    this.rotSpring.configure({
+      duration: Math.min(TIMING.turnMax, TIMING.turn + 2.2 * Math.max(0, deg - 60)),
+    });
     this.startSpring(target, now);
   }
 
@@ -1423,8 +1547,8 @@ export class OrbitScene {
     return (
       !!this.companyKey ||
       !!this.reach ||
-      !!this.web?.focusId ||
-      !!this.web?.focusGroup ||
+      // the introductions tree holds still, so its people are easy to point at and their names easy to read
+      !!this.web ||
       !!this.hoverKey ||
       !!this.drag?.moved ||
       this.returnRot !== null
@@ -1516,6 +1640,16 @@ export class OrbitScene {
     return best?.pid;
   }
 
+  /** How many dots a box (CSS px in the canvas) would hide: where the person card covers least. */
+  dotsIn(x0: number, y0: number, x1: number, y1: number): number {
+    let n = 0;
+    for (const v of this.drawList) {
+      if (!v.visible || v.pa < 0.3 || v.removing) continue;
+      if (v.x + v.pr > x0 && v.x - v.pr < x1 && v.y + v.pr > y0 && v.y - v.pr < y1) n++;
+    }
+    return n;
+  }
+
   /** For keyboard focus: the next dot in an arrow's direction from the given one (or the first dot). */
   neighbour(fromId: string | undefined, dx: number, dy: number): string | undefined {
     const list = this.drawList.filter((v) => v.visible && v.pa >= 0.1 && !v.removing);
@@ -1553,7 +1687,10 @@ export class OrbitScene {
     if (this.companyKey) this.refreshCompany(now);
     else this.retarget(now);
     if (this.reach?.status === 'found') this.framePath(now);
-    if (this.web) this.webChain = this.chainFor(this.web);
+    if (this.web) {
+      this.webChain = this.chainFor(this.web);
+      this.frameWeb(now);
+    }
     this.refreshEmphasis(now, 'layout');
   }
 
@@ -1624,12 +1761,14 @@ export class OrbitScene {
       if (!popping.includes(v)) this.anim(v.scale, scale, now, dur, easing.outCubic, delay);
       this.anim(v.glow, glow, now, dur, easing.outCubic, delay);
     }
-    // the company's people pop one after another, clockwise from the top of the wedge
+    // the company's people pop one after another, clockwise from the top of the wedge; a big company's pops are
+    // packed closer together, so the last one lands with the turn rather than trickling in seconds later
     const rot = this.rotTarget();
     popping.sort((a, b) => fromTop(a.a.to + rot) - fromTop(b.a.to + rot));
+    const stagger = Math.min(TIMING.popStagger, TIMING.popSpread / Math.max(1, popping.length));
     popping.forEach((v, i) => {
       const to = this.ringMulti[v.ring] ? 1.12 : 1.35;
-      this.play(v.scale, v.scale.value(now), to, now, 380, easing.outBack, 220 + i * TIMING.popStagger);
+      this.play(v.scale, v.scale.value(now), to, now, 380, easing.outBack, 220 + i * stagger);
     });
     this.sortDrawList();
   }
@@ -1798,8 +1937,19 @@ export class OrbitScene {
     this.raf = 0;
     if (this.destroyed || !this.ctx || !this.w || !this.h) return;
     const now = this.clock.now();
-    const dt = this.lastNow < 0 ? 16 : Math.min(100, Math.max(0, now - this.lastNow));
+    let dt = this.lastNow < 0 ? 16 : Math.min(100, Math.max(0, now - this.lastNow));
     this.lastNow = now;
+    if (this.napping && dt > 17) {
+      // woken from a nap between two slow drift draws: only the drift went on meanwhile, so it alone catches up,
+      // and anything that started since (a turn, a camera move) takes one ordinary frame's step, never a leap
+      const drift = this.spin.value(now) * (dt - 17);
+      if (this.rotSpringOn) {
+        this.rotSpring.x += drift;
+        this.rotSpring.target += drift;
+      } else if (!this.drag?.moved) this.rot += drift;
+      dt = 17;
+    }
+    this.napping = false;
     this.advance(now, dt);
     const transition = this.inTransition(now);
     const full = transition || this.fullRate(now);
@@ -1823,8 +1973,18 @@ export class OrbitScene {
     }
     this.animating = transition;
     this.publish();
-    if (full || half || this.dirty) {
+    if (full || this.dirty) {
       this.raf = requestAnimationFrame(this.frame);
+      return;
+    }
+    if (half) {
+      // the drift and the ripples draw at a lower rate: wait for the next draw on a timer rather than waking on
+      // every display frame, then ask for the frame just before it is due
+      const wait = every - (now - this.lastDraw);
+      if (wait > 20) {
+        this.napping = true;
+        this.timer = setTimeout(this.wake, wait - 12);
+      } else this.raf = requestAnimationFrame(this.frame);
       return;
     }
     this.recorder?.gap();
@@ -1990,10 +2150,12 @@ export class OrbitScene {
       this.drawWeb(ctx, now);
       this.drawPath(ctx, now);
       this.drawDots(ctx, now);
+      if (this.prebuildAt >= 0) this.prebuild(now);
       this.drawComet(ctx, now);
     }
     this.drawYou(ctx, now, ox, oy);
     if (!this.loading) {
+      this.drawNameTags(ctx, now);
       this.drawLabels(ctx, now, ox, oy, S, rot);
       this.drawChips(ctx, now, ox, oy, S, rot);
       this.drawTip(ctx, now);
@@ -2034,14 +2196,14 @@ export class OrbitScene {
   private drawRings(ctx: CanvasRenderingContext2D, now: number, ox: number, oy: number, S: number): void {
     const radii = this.layout?.ringRadii ?? [160, 300, 440];
     const ghost = this.ghost.value(now);
-    const breathing = this.loading && !this.reduced;
+    const breathing = this.reduced ? 0 : this.loading ? 1 : this.youHalo.value(now);
     const phase = ((now - this.loadingSince) / 2400) * TAU;
     ctx.lineWidth = 1;
     ctx.strokeStyle = RING;
     if (ghost > 0.01) {
       // while the network loads, the empty rings breathe
       for (let i = 0; i < 3; i++) {
-        const wave = breathing ? Math.sin(phase - i * 0.9) : 0;
+        const wave = breathing * Math.sin(phase - i * 0.9);
         ctx.globalAlpha = ghost * (0.6 + 0.3 * wave);
         ctx.beginPath();
         ctx.arc(ox, oy, Math.max(1, radii[i]! * S + wave * 2.5), 0, TAU);
@@ -2091,7 +2253,8 @@ export class OrbitScene {
     const inner = 60 * S;
     const outer = (this.layout.extent + 6) * S;
     const groups = this.layout.groups;
-    const ga = this.groupsAlpha.value(now);
+    // the Target companies tint steps back while one company is focused, so its wedge stands alone
+    const ga = this.groupsAlpha.value(now) * (1 - this.wedge.alpha.value(now));
     if (ga > 0.005 && this.shownGroups)
       for (const g of groups)
         if (this.shownGroups.has(g.key)) this.sector(ctx, g, ga, 0.045, ox, oy, inner, outer, rot);
@@ -2101,8 +2264,7 @@ export class OrbitScene {
       const alpha = wd.alpha.value(now);
       if (alpha <= 0.005) continue;
       const g = this.groupOf(wd.key);
-      if (g)
-        this.sector(ctx, g, alpha, 0.075, ox, oy, inner, outer, rot, wd === this.wedge ? this.spreadK : 1);
+      if (g) this.sector(ctx, g, alpha, 0.075, ox, oy, inner, outer, rot, wd.k.value(now));
     }
     ctx.globalAlpha = 1;
   }
@@ -2122,7 +2284,7 @@ export class OrbitScene {
   ): void {
     // opened by the same factor as the focused company's dots, plus half a dot either side
     const mid = wedgeMid(g);
-    const half = ((g.endAngle - g.startAngle) / 2) * k + (k > 1 ? 0.035 : 0);
+    const half = ((g.endAngle - g.startAngle) / 2) * k + 0.035 * clamp01((k - 1) / 0.08);
     const a0 = mid - half + rot;
     const a1 = mid + half + rot;
     ctx.globalAlpha = alpha;
@@ -2591,25 +2753,10 @@ export class OrbitScene {
   private drawSprite(ctx: CanvasRenderingContext2D, v: NodeView, now: number): void {
     const d = v.pr * 2;
     if (d < 0.5) return;
-    // built at the size the dot is heading for, so a pop, a lift or a spotlight does not rebuild it every frame
-    const target =
-      v.size.to *
-      this.fitTarget *
-      this.zoom.target *
-      v.scale.to *
-      (1 + 0.25 * v.lift.to) *
-      (now < v.spotEnd ? 1 + v.spotScale : 1);
-    const want = Math.max(d, target);
+    const want = Math.max(d, this.spriteSize(v, now));
     const label = v.cluster ? v.label : '';
     const photo = v.person?.photoUrl ? this.imageFor(v.person) : undefined;
-    const fresh =
-      !!v.sprite &&
-      v.spriteDpr === this.dpr &&
-      v.spriteLabel === label &&
-      want <= v.spriteD * 1.04 &&
-      want >= v.spriteD * 0.55 &&
-      v.spriteImg === !!(photo?.complete && photo.naturalWidth);
-    if (!fresh) {
+    if (!this.spriteFresh(v, want, label, photo)) {
       if (this.spriteBuilds < 4 || performance.now() < this.spriteDeadline) {
         this.spriteBuilds++;
         this.buildSprite(v, Math.ceil(want), label, photo);
@@ -2625,6 +2772,52 @@ export class OrbitScene {
     }
     const size = d + 6 * (d / v.spriteD);
     ctx.drawImage(v.sprite!, v.x - size / 2, v.y - size / 2, size, size);
+  }
+
+  /** The size a dot's sprite is built at: the size it is heading for, so a pop or a lift does not rebuild it. */
+  private spriteSize(v: NodeView, now: number): number {
+    return (
+      v.size.to *
+      this.fitTarget *
+      this.zoom.target *
+      v.scale.to *
+      (1 + 0.25 * v.lift.to) *
+      (now < v.spotEnd ? 1 + v.spotScale : 1)
+    );
+  }
+
+  private spriteFresh(
+    v: NodeView,
+    want: number,
+    label: string,
+    photo: HTMLImageElement | undefined,
+  ): boolean {
+    return (
+      !!v.sprite &&
+      v.spriteDpr === this.dpr &&
+      v.spriteLabel === label &&
+      want <= v.spriteD * 1.04 &&
+      want >= v.spriteD * 0.55 &&
+      v.spriteImg === !!(photo?.complete && photo.naturalWidth)
+    );
+  }
+
+  /**
+   * Builds the sprites of dots that are not on screen yet (people about to arrive) with whatever is left of this
+   * frame's sprite budget, so the frames where they fly in only draw them.
+   */
+  private prebuild(now: number): void {
+    const views = this.views;
+    while (this.prebuildAt < views.length) {
+      if (performance.now() >= this.spriteDeadline) return;
+      const v = views[this.prebuildAt++]!;
+      if (v.dead || v.visible || v.sprite || v.temp) continue;
+      const want = Math.ceil(this.spriteSize(v, now));
+      if (want < 1) continue;
+      const photo = v.person?.photoUrl ? this.imageFor(v.person) : undefined;
+      this.buildSprite(v, want, v.cluster ? v.label : '', photo);
+    }
+    this.prebuildAt = -1;
   }
 
   private imageFor(p: Person): HTMLImageElement | undefined {
@@ -2704,13 +2897,14 @@ export class OrbitScene {
   }
 
   private drawYou(ctx: CanvasRenderingContext2D, now: number, ox: number, oy: number): void {
-    let k = this.youPop.value(now);
-    const pulsing = this.loading && !this.reduced;
-    if (pulsing) k *= 1 + 0.06 * Math.sin(((now - this.loadingSince) / 1200) * TAU);
+    let k = 1 + bump(now - this.youBumpAt, 420, this.reduced ? 0 : 0.1);
+    // while loading "You" pulses with a halo; both fade out when the people arrive rather than stopping dead
+    const halo = this.reduced ? 0 : this.loading ? 1 : this.youHalo.value(now);
+    if (halo > 0.001) k *= 1 + 0.06 * halo * Math.sin(((now - this.loadingSince) / 1200) * TAU);
     const R = 26 * Math.max(0.6, this.fit) * this.zoom.x * k;
-    if (pulsing) {
+    if (halo > 0.001) {
       const p = ((now - this.loadingSince) % 1800) / 1800;
-      ctx.globalAlpha = 0.35 * (1 - p);
+      ctx.globalAlpha = 0.35 * (1 - p) * halo;
       ctx.strokeStyle = ACCENT;
       ctx.lineWidth = 2;
       ctx.beginPath();
@@ -2748,6 +2942,7 @@ export class OrbitScene {
     const base = shown * this.labelDim.value(now);
     const chipA = this.chip.alpha.value(now);
     const chipOldA = this.chipOld.alpha.value(now);
+    const veil = this.fanVeil.value(now);
     let clipped = 0;
     for (const l of this.labels) {
       const a = l.mid + rot;
@@ -2765,12 +2960,110 @@ export class OrbitScene {
       let alpha = l.key === this.companyKey ? fit * shown : fit * base;
       if (l.key === this.chip.key) alpha *= 1 - chipA;
       if (l.key === this.chipOld.key) alpha *= 1 - chipOldA;
+      // a neighbour's label under an open fan steps aside, so the fan reads cleanly
+      if (veil > 0.001 && l.key !== this.companyKey) {
+        const off = Math.abs(nearestAngle(this.fanArc.mid, l.mid) - this.fanArc.mid);
+        if (off < this.fanArc.half + half / labelR) alpha *= 1 - veil;
+      }
       if (alpha <= 0.01) continue;
       ctx.globalAlpha = alpha;
       ctx.fillText(l.text, x, y);
     }
     ctx.globalAlpha = 1;
     this.labelsClipped = clipped;
+  }
+
+  /**
+   * First names under the dots a story is about: the people on a route, and the people in the introductions web
+   * (all of them in a small web, the lit chain in a big one), so the words in the panel can be matched to dots
+   * without hovering each one. A name that would cover another is tried above its dot, else left out.
+   */
+  private drawNameTags(ctx: CanvasRenderingContext2D, now: number): void {
+    const tags = this.tags;
+    tags.length = 0;
+    const list = this.tagList;
+    list.length = 0;
+    const reach = this.reach;
+    if (reach) {
+      const t = this.viewFor(reach.targetId);
+      if (t && !t.cluster) list.push(t, 1);
+      if (reach.status === 'found')
+        for (let k = 1; k < this.path.ids.length - 1; k++) {
+          const v = this.viewFor(this.path.ids[k]!);
+          const shown = this.reduced ? 1 : clamp01((now - (this.path.start + k * TIMING.hop - 60)) / 200);
+          if (v && !v.cluster && shown > 0) list.push(v, shown);
+        }
+    }
+    const web = this.web;
+    const webOn = this.webAlpha.value(now);
+    if (web && webOn > 0.01) {
+      const lit = this.webChain.size > 0;
+      const all = web.web.members.size <= TAG_WEB_ALL;
+      for (const id of web.web.members) {
+        const onChain = this.webChain.has(id);
+        if (!onChain && !all) continue;
+        const v = this.viewFor(id);
+        if (!v || v.cluster) continue;
+        const gen = web.web.generation.get(id) ?? 1;
+        const grow = this.reduced
+          ? 1
+          : clamp01((now - this.webStart - (gen - 1) * TIMING.webGen - TIMING.webLink * 0.5) / 250);
+        const k = webOn * grow * (lit && !onChain ? 0.3 : 1);
+        if (k > 0.01) list.push(v, k);
+      }
+    }
+    if (!list.length) return;
+    const fontPx = 11;
+    ctx.font = `500 ${fontPx}px Inter, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const boxes = this.tagBoxes;
+    boxes.length = 0;
+    const hh = 8;
+    const free = (x: number, y: number, hw: number) => {
+      if (y - hh < 0 || y + hh > this.h || x - hw < 0 || x + hw > this.w) return false;
+      for (let i = 0; i < boxes.length; i += 4)
+        if (x - hw < boxes[i + 2]! && x + hw > boxes[i]! && y - hh < boxes[i + 3]! && y + hh > boxes[i + 1]!)
+          return false;
+      return true;
+    };
+    for (let i = 0; i < list.length; i += 2) {
+      const v = list[i] as NodeView;
+      const k = (list[i + 1] as number) * v.pa;
+      if (!v.visible || k <= 0.01 || !v.person) continue;
+      // the hovered dot already shows its full name above it
+      if (v.key === this.tipKey && this.tip.value(now) > 0.5) continue;
+      const text = this.tagText(v.person);
+      const hw = this.measure(text, fontPx, false) / 2 + 5;
+      let y = v.y + v.pr + 5 + hh;
+      if (!free(v.x, y, hw)) {
+        y = v.y - v.pr - 5 - hh;
+        if (!free(v.x, y, hw)) continue;
+      }
+      boxes.push(v.x - hw, y - hh, v.x + hw, y + hh);
+      ctx.globalAlpha = 0.92 * k;
+      ctx.fillStyle = '#ffffff';
+      roundRect(ctx, v.x - hw, y - hh, hw * 2, hh * 2, hh);
+      ctx.fill();
+      ctx.globalAlpha = k;
+      ctx.fillStyle = INK;
+      ctx.fillText(text, v.x, y + 0.5);
+      tags.push(text);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  /** A first name, with the last initial when someone else on the map shares it. */
+  private tagText(p: Person): string {
+    let text = this.tagNames.get(p.id);
+    if (text === undefined) {
+      let twins = 0;
+      for (const q of this.people.values()) if (q.firstName === p.firstName) twins++;
+      const first = p.firstName || p.displayName;
+      text = twins > 1 && p.lastName ? `${first} ${p.lastName[0]}.` : first;
+      this.tagNames.set(p.id, text);
+    }
+    return text;
   }
 
   /** The floating count chip ("7 at Stripe · 2 warm") that fades and slides in where the company's label was. */
@@ -2906,8 +3199,22 @@ export class OrbitScene {
       webLit: [...this.webChain],
       hover: this.hovered(),
       spin: this.spin.value(now),
+      tags: [...this.tags],
       draws: this.draws,
     };
+  }
+
+  /** A dot's own slot in the layout (angle before rotation, radius), for tests. */
+  slotOf(id: string): { angle: number; radius: number } | undefined {
+    const n = this.byKey.get(id)?.node;
+    return n ? { angle: n.angle, radius: n.radius } : undefined;
+  }
+
+  /** The colour a dot's stage ring shows now ('rgb(r,g,b)'), mid crossfade included; undefined with no stage. */
+  stageColorOf(id: string): string | undefined {
+    const v = this.byKey.get(id);
+    const c = v ? this.stageColorNow(v, this.clock.now()) : null;
+    return c ? mixRgb(c, c, 1) : undefined;
   }
 
   /** Current dot positions in CSS px, by person or aggregate-dot id. */

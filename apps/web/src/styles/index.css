@@ -85,8 +85,31 @@ select {
 .fade-up {
   animation: fade-up 0.25s ease-out both;
 }
+/* a search that found no one: the box shakes once, so the student sees it was heard */
+@keyframes shake-x {
+  0%,
+  100% {
+    transform: none;
+  }
+  20% {
+    transform: translateX(-5px);
+  }
+  40% {
+    transform: translateX(4px);
+  }
+  60% {
+    transform: translateX(-3px);
+  }
+  80% {
+    transform: translateX(2px);
+  }
+}
+.shake-x {
+  animation: shake-x 0.38s ease-out both;
+}
 @media (prefers-reduced-motion: reduce) {
-  .fade-up {
+  .fade-up,
+  .shake-x {
     animation: none;
   }
 }

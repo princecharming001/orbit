@@ -14,7 +14,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { Search, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { OrbitMap, useCoarsePointer } from '../components/OrbitMap';
+import { type CardPlace, OrbitMap, useCoarsePointer } from '../components/OrbitMap';
 import type { FocusSpec, WebSpec } from '../components/orbitScene';
 import { LINEAGE } from '../components/orbitScene';
 import { db } from '../db/schema';
@@ -69,9 +69,21 @@ export function MapPage() {
   const viewReq = useRef(0);
   const [target, setTarget] = useState<Person>();
   const [hover, setHover] = useState<string>();
-  // a tapped dot near the top of the map gets its card at the bottom, otherwise at the top (on a phone the bottom
-  // of the map can sit under the tab bar)
-  const [hoverUpper, setHoverUpper] = useState(false);
+  // the corner where the person card hides the fewest people (the map picks it)
+  const [hoverPlace, setHoverPlace] = useState<CardPlace>('bottom-left');
+  // a search that found no one: the line under the filters says so and the search box shakes once
+  const [missed, setMissed] = useState<{ q: string; n: number }>();
+  const searchForm = useRef<HTMLFormElement>(null);
+  // each search that finds no one replays the shake, without remounting the box (the cursor stays in it)
+  useEffect(() => {
+    const el = searchForm.current;
+    if (!el || !missed) return;
+    el.classList.remove('shake-x');
+    el.getBoundingClientRect();
+    el.classList.add('shake-x');
+  }, [missed]);
+  /** company lists in the panel show six people until the student asks for all of them */
+  const [showAll, setShowAll] = useState<string>();
   // a search inside the introductions view: a person or a company the map turns to
   const [webFocus, setWebFocus] = useState<{ id?: string; group?: string; label: string }>();
   const [storyHover, setStoryHover] = useState<string>();
@@ -285,6 +297,7 @@ export function MapPage() {
   const openCompany = async (orgIdOrName: string, label: string) => {
     if (!userId) return;
     const req = ++viewReq.current;
+    setShowAll(undefined);
     // the map turns at once, from the layout it already has; the panel's lists arrive when the lookup is done
     const norm = normalizeCompany(orgIdOrName);
     const org = orgMap.get(orgIdOrName) ?? orgs.find((o) => !!norm && o.nameNormalized === norm);
@@ -334,6 +347,7 @@ export function MapPage() {
         label:
           orgMap.get(atCompany.currentOrganizationId ?? '')?.name ?? atCompany.currentOrganizationRaw ?? q,
       });
+    setMissed((m) => ({ q: q.trim(), n: (m?.n ?? 0) + 1 }));
     toast.push({ text: 'No one by that name or company in your introductions yet.', ttl: 4000 });
   };
   const runSearch = async (q: string) => {
@@ -361,6 +375,7 @@ export function MapPage() {
     const norm = normalizeCompany(q);
     const tc = norm ? tcs.find((t) => normalizeCompany(t.nameRaw) === norm) : undefined;
     if (tc) return openCompany(tc.organizationId ?? tc.nameRaw, tc.nameRaw);
+    setMissed((m) => ({ q: q.trim(), n: (m?.n ?? 0) + 1 }));
     toast.push({
       text: 'No one by that name or company in your network yet. Add them from LinkedIn or Discover.',
       ttl: 5000,
@@ -389,7 +404,8 @@ export function MapPage() {
   const onEscape = useRef<() => void>(() => {});
   onEscape.current = () => {
     if (webFocus) setWebFocus(undefined);
-    else if (reachMode) exitReach();
+    // a company the map has already turned to counts even before the address bar has caught up with it
+    else if (reachMode || companyFocus) exitReach();
     else if (filter !== 'all') setFilter('all');
     else return;
     setQuery('');
@@ -491,6 +507,8 @@ export function MapPage() {
   const clear = touch ? '' : ' Esc to clear.';
   // one line under the filters that says what the map shows, in words, whenever it changes
   const legend = (() => {
+    if (missed && missed.q === query.trim())
+      return `No one matches “${missed.q}” ${webMode ? 'in your introductions' : 'in your network'} yet.`;
     if (reachMode) {
       if (companyFocus)
         return `Showing ${plural(companyCount, 'person', 'people')} at ${companyFocus.label}${
@@ -525,7 +543,7 @@ export function MapPage() {
           return `Showing introductions at ${webFocus.label}.${clear}`;
         if (webFocus?.id && webLit === webFocus.id)
           return `Showing the introductions through ${webFocus.label}.${clear}`;
-        return `${plural(web.links.length, 'introduction')} in ${plural(web.roots.length, 'chain')}. ${
+        return `${plural(web.links.length, 'introduction')} in ${plural(web.roots.length, 'chain')}. Each ring out from You is one more introduction. ${
           touch ? 'Tap' : 'Hover over'
         } a person to light up their chain.`;
       default:
@@ -550,11 +568,13 @@ export function MapPage() {
         </div>
         <div className="w-full sm:w-auto sm:ml-auto flex items-center gap-2">
           <form
+            ref={searchForm}
             onSubmit={(e) => {
               e.preventDefault();
               runSearch(query);
             }}
-            className="relative flex-1 sm:flex-none"
+            className={cx('relative flex-1 sm:flex-none', missed && missed.q === query.trim() && 'shake-x')}
+            data-testid="reach-form"
           >
             <Search size={14} className="absolute left-2.5 top-2.5 text-ink-3" />
             <Input
@@ -626,20 +646,22 @@ export function MapPage() {
             introducerOf={introducerOf}
             onSelect={(id) => (reachMode ? setParams({ reach: id }) : nav(`/people/${id}`))}
             onSelectCluster={openCluster}
-            onHover={(id, upper) => {
+            onHover={(id, place) => {
               setHover(id);
-              setHoverUpper(!!upper);
+              if (place) setHoverPlace(place);
             }}
           />
           {hovered && !reachMode && (
             <div
               className={cx(
-                'absolute left-3 right-3 sm:right-auto bg-canvas border border-line rounded-[12px] p-3 shadow-[var(--shadow-card)] sm:w-[260px] fade-up',
-                // on a phone the bottom of the map can sit under the tab bar, so the card goes on top unless the
-                // dot is up there; with a mouse the card lets the pointer through to the dots beneath it
-                touch && !hoverUpper ? 'top-3' : 'bottom-3',
+                'absolute left-3 right-3 bg-canvas border border-line rounded-[12px] p-3 shadow-[var(--shadow-card)] sm:w-[260px] fade-up',
+                // the map picks the corner that hides the fewest people and never the person themselves (on a phone
+                // the bottom only when it is clear of the tab bar); with a mouse the card lets the pointer through
+                hoverPlace.startsWith('top') ? 'top-3' : 'bottom-3',
+                hoverPlace.endsWith('right') ? 'sm:left-auto' : 'sm:right-auto',
                 touch ? '' : 'pointer-events-none',
               )}
+              data-place={hoverPlace}
               data-testid="map-tooltip"
             >
               <div className="flex items-center gap-2">
@@ -723,8 +745,8 @@ export function MapPage() {
           {webMode && (
             <>
               <div className="text-[13px] text-ink-2">
-                Each line runs from the person who introduced you to the person they introduced you to. A
-                dashed line is someone Orbit has no introducer on record for, and each colour is one chain.
+                Each line runs from the person who introduced you to the person they introduced you to, and
+                each colour is one chain. A dashed line from You means you know that person directly.
               </div>
               <Card padded>
                 <div className="font-medium text-[13px] mb-2">Your introductions</div>
@@ -892,7 +914,7 @@ export function MapPage() {
                   </div>
                   {list.length === 0 && <p className="text-[12px] text-ink-3">None</p>}
                   <ul className="space-y-1.5">
-                    {list.slice(0, 6).map((d) => (
+                    {(showAll === title ? list : list.slice(0, 6)).map((d) => (
                       <li key={d.person.id} className="flex items-center gap-2 text-[13px]">
                         <Avatar name={d.person.displayName} id={d.person.id} size={22} />
                         <button
@@ -908,6 +930,15 @@ export function MapPage() {
                       </li>
                     ))}
                   </ul>
+                  {list.length > 6 && showAll !== title && (
+                    <button
+                      className="mt-1.5 text-[12px] text-accent hover:underline"
+                      onClick={() => setShowAll(title)}
+                      data-testid="company-show-all"
+                    >
+                      Show all {list.length}
+                    </button>
+                  )}
                 </div>
               ))}
               {company.twoHop.length > 0 && (
