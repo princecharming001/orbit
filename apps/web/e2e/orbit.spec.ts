@@ -39,6 +39,15 @@ test.describe('Orbit demo flow', () => {
     await card.locator('button.line-clamp-2').click();
     const textarea = card.getByLabel('Message body');
     await expect(textarea).toBeVisible();
+    // a thank-you drafted before any notes exist asks for one thing they said (never a generic thank-you)
+    if (await card.getByTestId('draft-needs-input').isVisible()) {
+      await card
+        .getByTestId('draft-input-takeaway')
+        .fill('to lead every interview answer with one project story');
+      await card.getByTestId('draft-redraft').click();
+      await expect(card.getByTestId('draft-needs-input')).toBeHidden({ timeout: 15_000 });
+      await expect(textarea).not.toHaveValue(/\[/);
+    }
     await textarea.fill(`${await textarea.inputValue()}\n\nPS edited in e2e`);
     await card.getByRole('button', { name: /approve & send/i }).click();
     await expect(page.getByText(/opened in your mail app|sent to/i)).toBeVisible({ timeout: 15_000 });

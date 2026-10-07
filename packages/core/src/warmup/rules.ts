@@ -40,7 +40,7 @@ export function buildWarmUpPlan(slug: string, startedAt: Date, warmUpDays = 4): 
     {
       id: 'w3',
       kind: 'comment_post',
-      label: 'Leave one specific, non-flattering comment (a question or an added point)',
+      label: 'Leave one substantive comment: a question or an added point, not praise',
       url: linkedinActivityUrl(slug),
       dueAt: day(Math.max(2, warmUpDays - 1)),
     },

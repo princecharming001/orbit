@@ -23,7 +23,7 @@ Cold LinkedIn messages from a stranger get ignored. The same message after the r
 ```
 day 0   view_profile   "View their profile and follow them"
 day ⌊n/2⌋  react_post  "React to one recent post that you genuinely find useful"
-day n−1 comment_post   "Leave one specific, non-flattering comment (a question or an added point)"
+day n−1 comment_post   "Leave one substantive comment: a question or an added point, not praise"
 ready   day n, 09:00   outreach suggested once ready AND at least one action is done; or earlier once every action is done or skipped
 ```
 Stored on `coffee_chats.warmUp` (`WarmUpPlan`: `startedAt`, `readyAt`, `actions[] {id, kind, label, url, dueAt, doneAt?, skippedAt?}`).

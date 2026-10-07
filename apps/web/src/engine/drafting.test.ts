@@ -45,6 +45,17 @@ async function validateStored(d: OutboundMessage, s?: Suggestion) {
   );
 }
 
+/** What a student would type into the needs-input prompt. */
+const SAMPLE_INPUTS = {
+  connection: 'We were both on the Cornell Hyperloop team, a few years apart',
+  takeaway: 'to lead every interview answer with one project story',
+  update: 'I moved my summer search toward payments teams',
+  answer: 'Mostly payments infrastructure, since that is what I worked on last summer',
+  news: 'your promotion to team lead',
+  target: 'Lucas Fischer, Engineering Manager at Ramp',
+  role: 'Software Engineering Intern at Ramp',
+};
+
 async function people(filter: (p: Person) => boolean): Promise<Person[]> {
   return db.people.where('userId').equals(user.id).filter(filter).toArray();
 }
@@ -81,8 +92,20 @@ describe('drafting against the demo data', () => {
       .filter((s) => s.status === 'pending' && !!s.outboundMessageId)
       .toArray();
     expect(pending.length).toBeGreaterThan(3);
+    const NEED_CODES = ['needs_connection', 'needs_update', 'needs_input', 'placeholder', 'no_specific_line'];
     for (const s of pending) {
-      const d = (await db.outbound.get(s.outboundMessageId!))!;
+      let d = (await db.outbound.get(s.outboundMessageId!))!;
+      if (d.needsInput?.length) {
+        // a draft that asks the student for something is gated by exactly that, and passes once it is given
+        const gated = (await validateStored(d, s)).filter((i) => i.blocking);
+        expect(gated.length).toBeGreaterThan(0);
+        expect(
+          gated.filter((i) => !NEED_CODES.includes(i.code)),
+          d.bodyDraft,
+        ).toEqual([]);
+        d = (await regenerateDraft(user, d.id, SAMPLE_INPUTS))!;
+        expect(d.needsInput, d.bodyDraft).toBeUndefined();
+      }
       const issues = await validateStored(d, s);
       expect(
         issues.filter((i) => i.blocking),
@@ -305,4 +328,109 @@ describe('drafting against the demo data', () => {
       writeFileSync(process.env.DUMP_DRAFTS, out.join('\n\n'));
     }
   }, 60_000);
+
+  it('outreach to someone the student already emailed with replies in that thread, not as a stranger (EG-06)', async () => {
+    const diego = (await people((p) => p.displayName === 'Diego Lopez'))[0]!;
+    const th = (await db.threads
+      .where('userId')
+      .equals(user.id)
+      .filter((t) => t.participantPersonIds.includes(diego.id))
+      .first())!;
+    const d = await draftMessage(user, diego.id, 'outreach', 'gmail');
+    expect(d.externalThreadId).toBe(th.externalThreadId);
+    expect(d.inReplyToMessageId).toBeDefined();
+    expect(d.subject).toBe(`Re: ${th.subject}`);
+    expect(d.bodyDraft).toMatch(/^Dear Diego,\n\nThanks again for your note/);
+    expect(d.bodyDraft).toMatch(/As a quick reminder, I'm a senior at Cornell/);
+    expect((await validateStored(d)).filter((i) => i.blocking)).toEqual([]);
+    // on LinkedIn: no subject, and a short note (not the letter) when they are not connected yet
+    const li = await draftMessage(user, diego.id, 'outreach', 'linkedin');
+    expect(li.subject).toBeUndefined();
+    expect(li.externalThreadId).toBeUndefined();
+    await db.people.update(diego.id, { linkedinConnectedOn: undefined });
+    const note = await draftMessage(user, diego.id, 'outreach', 'linkedin');
+    expect(note.bodyDraft.length).toBeLessThanOrEqual(300);
+    expect(note.bodyDraft).toMatch(/^Hi Diego, thanks again for your email/);
+  });
+
+  it('a reply asking for the resume and the teams gets both before any times (EG-03)', async () => {
+    const chatted = await chattedIds();
+    const p = (await people((x) => !!x.primaryEmail && !chatted.has(x.id) && !x.hiddenAt)).find(
+      (x) => !/recruit/i.test(x.currentTitle ?? ''),
+    )!;
+    const now = Date.now();
+    const thId = newId('th');
+    await db.threads.add({
+      id: thId,
+      userId: user.id,
+      externalThreadId: `ext-${thId}`,
+      subject: 'Quick question',
+      messageCount: 2,
+      participantEmails: [p.primaryEmail!],
+      participantPersonIds: [p.id],
+      isNetworking: true,
+      lastMessageAt: new Date(now - 3_600_000).toISOString(),
+    });
+    await db.messages.add({
+      id: newId('m'),
+      userId: user.id,
+      threadId: thId,
+      externalMessageId: `x-${thId}`,
+      direction: 'inbound',
+      fromEmail: p.primaryEmail!,
+      toEmails: [],
+      ccEmails: [],
+      fromPersonId: p.id,
+      sentAt: new Date(now - 3_600_000).toISOString(),
+      bodyText:
+        "Hi Alex, happy to chat! Could you send over your resume and let me know which teams you're most interested in?",
+      headers: { 'message-id': `<${thId}@x>` },
+      isAutomated: false,
+      signal: 'reply_positive',
+      extraction: {
+        proposedTimes: [],
+        asksOfUser: ['Could you send over your resume', "let me know which teams you're most interested in"],
+        offers: [],
+        factsAboutSender: [],
+        sentiment: 'warm',
+      },
+    });
+    const chat = await newChat(p.id, { stage: 'replied', threadId: thId });
+    const d = await draftMessage(user, p.id, 'schedule', 'gmail', chat.id);
+    expect(d.externalThreadId).toBe(`ext-${thId}`);
+    expect(d.bodyDraft).toMatch(/resume/);
+    expect(d.needsInput).toEqual(['answer']);
+    const re = (await regenerateDraft(user, d.id, { answer: SAMPLE_INPUTS.answer }))!;
+    expect(re.bodyDraft).toMatch(/Mostly payments infrastructure/);
+    expect(re.bodyDraft).toMatch(/Would either of these work for a quick call\?/);
+    const ctx = await buildDraftContext(user, p, 'schedule', 'gmail', undefined, {}, chat);
+    const issues = validateDraft(
+      { body: re.bodyDraft, claims: re.claims ?? [] },
+      {
+        kind: 'schedule',
+        facts: ctx.facts,
+        allowedUrls: [],
+        recipientFirstName: p.firstName,
+        context: contextText(ctx),
+        asks: ctx.thread?.asksOfUser,
+      },
+    );
+    expect(issues.filter((i) => i.blocking)).toEqual([]);
+  });
+
+  it('a thank-you keeps the promise from the notes, and asks for a takeaway when there are no notes (EG-15)', async () => {
+    const alina = (await people((p) => p.displayName === 'Alina Rossi'))[0]!;
+    const ty = await draftMessage(user, alina.id, 'thank_you', 'gmail');
+    expect(ty.bodyDraft).toMatch(/As promised, I'll send my resume by Friday/);
+    expect((await validateStored(ty)).filter((i) => i.blocking)).toEqual([]);
+    const chatted = await chattedIds();
+    const p = (await people((x) => !!x.primaryEmail && !chatted.has(x.id) && !x.hiddenAt))[2]!;
+    await newChat(p.id, { stage: 'completed', completedAt: new Date(Date.now() - 3_600_000).toISOString() });
+    const bare = await draftMessage(user, p.id, 'thank_you', 'gmail');
+    expect(bare.needsInput).toEqual(['takeaway']);
+    const re = (await regenerateDraft(user, bare.id, { takeaway: SAMPLE_INPUTS.takeaway }))!;
+    expect(re.needsInput).toBeUndefined();
+    expect(re.bodyDraft).toMatch(/your advice to lead every interview answer with one project story/i);
+    expect((await validateStored((await db.outbound.get(bare.id))!)).filter((i) => i.blocking)).toEqual([]);
+  });
 });

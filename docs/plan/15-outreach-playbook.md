@@ -108,7 +108,7 @@ Exemplar (partner who spoke on campus; the only acceptable cold-to-partner messa
 
 ### 2.4 LinkedIn connection note (300 characters, hard cap)
 
-**Limit:** 150 to 260 characters [SECONDARY]; never fill all 300. **Required:** who + connection, one specific about them, the ask or the reason to connect. Never a bare request, never "can I ask you something?" The note must carry the ask so no second message is needed. No resume, no referral.
+**Limit:** 150 to 260 characters [SECONDARY]; never fill all 300. Free LinkedIn accounts cut notes at 200 characters, so the engine aims for 200 and only goes longer (never past 300) when the connection and the ask do not fit. **Required:** who + connection, one specific about them, the ask or the reason to connect. Never a bare request, never "can I ask you something?" The note must carry the ask so no second message is needed. No resume, no referral.
 
 > Hi {first}, {school} junior here. Saw you went from the debate team to {org}'s TMT group, which is the path I'm trying to understand. Would you be open to 15 minutes on how you made that jump? Happy to work around your schedule. {me}
 
@@ -311,12 +311,15 @@ Caps are enforced in code at send time (rule 4), not by the prompt.
 
 ## 9. How the engine applies this
 
-- **Never fabricate, ask instead.** When a draft is missing the one thing only the student knows, `generateDraft` returns `needsInput` and a bracketed line, and the editor asks for it: `connection` (cold outreach with no checkable link), `update` (nurture with neither an update nor a hook), `news` (congratulate with no job change on record), `target` (intro request with nobody named), `answer` (a question in their reply; Orbit never answers for the student), `role` (referral ask with no company). The student's line is used verbatim; a connection line is also stored as a `connection` fact for later drafts.
+- **Never fabricate, ask instead.** When a draft is missing the one thing only the student knows, `generateDraft` returns `needsInput` and a bracketed line, and the editor asks for it: `connection` (cold outreach with no checkable link), `update` (nurture with neither an update nor a hook), `news` (congratulate with no job change on record), `target` (intro request with nobody named), `answer` (a question in their reply; Orbit never answers for the student), `role` (referral ask with no company), `takeaway` (a thank-you with no note facts: one thing they said, since a thank-you without it is the generic note §2.8 forbids). The student's line is used verbatim; a connection line is also stored as a `connection` fact for later drafts.
 - **Facts are spliced only as grammatical clauses.** Stored facts are third person ("They recommended ...", "Alina offered ..."); `clause()` turns them into second person with verb agreement ("you recommended ...", "you offered ..."), and a fact that cannot be made grammatical (a third party as subject, a question, a fact about the student) is not used. Facts are chosen by type priority, newest first within a type, and `claims` lists exactly the facts the body uses.
 - **Register.** Finance, consulting, recruiters and a formal style card get the formal register (full name, short school name and class year in the sign-off; no contractions when the style card says so). LinkedIn messages sign with the first name. Schools are named the way students say them ("Cornell", "Michigan", "MIT").
 - **Time.** Windows are real free slots from the student's calendar, on different days, one morning and one afternoon, at least 12 hours out, with a buffer around events, shown with weekday, date, time and the zone for that date. A time the other person proposed is accepted only if it is in the future and free; otherwise Orbit counter-proposes. A thank-you locates the meeting by its real date ("yesterday", "on Tuesday", "last week").
 - **New threads.** Outreach, intro requests and referral asks open a new thread with their own subject; every other kind replies in the existing thread, and without one it carries a subject written for its kind.
 - **Referral ladder.** With no conversation on record, a referral ask is the first rung of the ladder in §2.11 (a process question), not a request.
+- **Known contacts.** Outreach to someone who has written back to the student before picks that exchange up ("Thanks again for your note a few weeks ago", "We traded emails in May") and, when the last message is under six months old, replies in that thread. The student's target function is named only when it is the recipient's field too.
+- **Answer the ask first.** When their reply asks for something (a resume, which teams, times), the scheduling reply answers it before proposing windows; a question goes to the student (`answer`). A booking link in their reply is used instead of the student's windows. The validator rejects a rewrite that drops a resume request.
+- **Promises.** An open action item the student took on in the conversation ("I will send my resume by Friday") is kept in the thank-you ("As promised, I'll ...").
 
 ---
 

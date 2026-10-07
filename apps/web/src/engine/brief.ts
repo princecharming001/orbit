@@ -232,6 +232,8 @@ export interface DraftInputs {
   answer?: string;
   /** the role and company for a referral ask: "PM Intern at Notion" */
   role?: string;
+  /** one thing they said that stuck with the student (thank-you, when no notes exist yet) */
+  takeaway?: string;
 }
 
 /** "Lucas Fischer, Engineering Manager at Ramp" -> name, title, org. */
@@ -346,6 +348,42 @@ export async function buildDraftContext(
       subject: th?.subject,
     };
   } else if (chat?.firstOutreachAt) thread = { firstOutboundAt: chat.firstOutreachAt };
+  // outreach to someone the student has already emailed with picks that exchange back up (and its thread, when the
+  // last message is recent enough to reply to) instead of introducing the student as a stranger
+  let history: DraftContext['history'];
+  if (kind === 'outreach' && !chat?.threadId) {
+    const theirThreads = await db.threads
+      .where('userId')
+      .equals(user.id)
+      .filter((t) => (t.participantPersonIds ?? []).includes(person.id))
+      .toArray();
+    const msgs = (
+      await Promise.all(theirThreads.map((t) => db.messages.where('threadId').equals(t.id).toArray()))
+    )
+      .flat()
+      .filter((m) => !m.isAutomated)
+      .sort((a, b) => a.sentAt.localeCompare(b.sentAt));
+    const last = msgs.at(-1);
+    if (last) {
+      const lastThread = theirThreads.find((t) => t.id === last.threadId);
+      const recent = now.getTime() - new Date(last.sentAt).getTime() <= 180 * DAY;
+      history = {
+        lastAt: last.sentAt,
+        lastInbound: last.direction === 'inbound',
+        repliedEver: msgs.some((m) => m.direction === 'inbound'),
+        threadId: recent && lastThread?.externalThreadId ? lastThread.id : undefined,
+      };
+      if (history.repliedEver && history.threadId && channel === 'gmail')
+        thread = { inThread: true, subject: lastThread?.subject };
+    }
+  }
+  // promises the student made to this person in the conversation, kept in the thank-you
+  const promises =
+    kind === 'thank_you'
+      ? (await db.actionItems.where('personId').equals(person.id).toArray())
+          .filter((a) => a.userId === user.id && a.status === 'open')
+          .map((a) => a.text)
+      : undefined;
   const tcId = s?.payload.targetCompanyId as string | undefined;
   let tc = tcId
     ? await db.targetCompanies.get(tcId)
@@ -391,6 +429,8 @@ export async function buildDraftContext(
       : undefined;
   const warm = chat?.warmUp ? warmUpProgress(chat.warmUp, now) : undefined;
   const warmUpNote = chat?.warmUp?.actions.find((a) => a.doneAt && a.note)?.note;
+  const commentedOnPost =
+    !warmUpNote && !!chat?.warmUp?.actions.some((a) => a.kind === 'comment_post' && a.doneAt);
   // when the conversation happened: the calendar event if there is one, otherwise when the chat was completed
   const meetingEvent = chat?.scheduledEventId
     ? events.find((e) => e.id === chat.scheduledEventId)
@@ -511,6 +551,7 @@ export async function buildDraftContext(
           referrerName,
           warmUpNote,
           warmUpDone: warm?.done,
+          commentedOnPost: commentedOnPost || undefined,
         }
       : referrerName
         ? { referrerName }
@@ -518,6 +559,9 @@ export async function buildDraftContext(
     update: inputs.update?.trim() || undefined,
     news: inputs.news?.trim() || undefined,
     answer: inputs.answer?.trim() || undefined,
+    takeaway: inputs.takeaway?.trim() || undefined,
+    history,
+    promises: promises?.length ? promises : undefined,
     newAffiliation,
     targetCompany: tc
       ? {
@@ -569,6 +613,7 @@ async function materializeDraft(
     hadConversation: kind === 'referral_ask' ? !!(ctx.chat?.completedAt || ctx.chat?.meetingAt) : undefined,
     channel,
     context,
+    asks: kind === 'schedule' || kind === 'reply' ? ctx.thread?.asksOfUser : undefined,
   });
   if (hasLlm() && !template.needsInput.length) {
     const llm = await llmDraft(ctx, template).catch(() => undefined);
@@ -582,6 +627,27 @@ async function materializeDraft(
     }
   }
   return { out, generatedBy, ctx };
+}
+
+/**
+ * Where a draft goes: the chat's thread for replies, nothing for kinds that open a new thread, except outreach that
+ * picks an earlier exchange with the person back up (see `history` in buildDraftContext).
+ */
+async function threadFor(
+  kind: MessageKind,
+  chat: CoffeeChat | undefined,
+  ctx: DraftContext,
+): Promise<{ externalThreadId?: string; inReplyTo?: string }> {
+  const threadId = NEW_THREAD_KINDS.has(kind)
+    ? kind === 'outreach' && ctx.thread?.inThread
+      ? ctx.history?.threadId
+      : undefined
+    : chat?.threadId;
+  if (!threadId) return {};
+  const th = await db.threads.get(threadId);
+  if (!th?.externalThreadId) return {};
+  const last = (await db.messages.where('threadId').equals(threadId).sortBy('sentAt')).pop();
+  return { externalThreadId: th.externalThreadId, inReplyTo: last?.headers['message-id'] };
 }
 
 function bodyFor(
@@ -606,16 +672,9 @@ export async function draftForSuggestion(
   if (!person) return undefined;
   const channel: 'gmail' | 'linkedin' =
     (s.payload.channel as 'gmail' | 'linkedin' | undefined) ?? (person.primaryEmail ? 'gmail' : 'linkedin');
-  const { out, generatedBy } = await materializeDraft(user, person, kind, channel, s);
+  const { out, generatedBy, ctx } = await materializeDraft(user, person, kind, channel, s);
   const chat = s.chatId && kind !== 'report_back' ? await db.chats.get(s.chatId) : undefined;
-  let externalThreadId: string | undefined;
-  let inReplyTo: string | undefined;
-  if (chat?.threadId && !NEW_THREAD_KINDS.has(kind)) {
-    const th = await db.threads.get(chat.threadId);
-    externalThreadId = th?.externalThreadId;
-    const last = (await db.messages.where('threadId').equals(chat.threadId).sortBy('sentAt')).pop();
-    inReplyTo = last?.headers['message-id'];
-  }
+  const { externalThreadId, inReplyTo } = await threadFor(kind, chat, ctx);
   const msg: OutboundMessage = {
     id: newId('out'),
     userId: user.id,
@@ -630,7 +689,7 @@ export async function draftForSuggestion(
     toLinkedinUrl: person.linkedinUrl,
     // a reply in an existing thread keeps the thread's subject; anything else carries the subject the template
     // wrote for its kind (never a generic "Quick question" on a check-in or a thank-you)
-    subject: externalThreadId ? undefined : out.subject,
+    subject: externalThreadId && kind !== 'outreach' ? undefined : out.subject,
     bodyDraft: bodyFor(out, channel, kind, !!person.linkedinConnectedOn),
     status: 'draft',
     generatedBy,
@@ -660,8 +719,16 @@ export async function draftMessage(
         .equals(personId)
         .filter((c) => c.stage !== 'archived')
         .first();
-  const { out, generatedBy } = await materializeDraft(user, person, kind, channel, undefined, inputs, chat);
-  const th = chat?.threadId ? await db.threads.get(chat.threadId) : undefined;
+  const { out, generatedBy, ctx } = await materializeDraft(
+    user,
+    person,
+    kind,
+    channel,
+    undefined,
+    inputs,
+    chat,
+  );
+  const where = await threadFor(kind, chat, ctx);
   const msg: OutboundMessage = {
     id: newId('out'),
     userId: user.id,
@@ -669,7 +736,8 @@ export async function draftMessage(
     chatId: chat?.id,
     channel,
     kind,
-    externalThreadId: NEW_THREAD_KINDS.has(kind) ? undefined : th?.externalThreadId,
+    externalThreadId: where.externalThreadId,
+    inReplyToMessageId: where.inReplyTo,
     toEmail: person.primaryEmail,
     toLinkedinUrl: person.linkedinUrl,
     subject: out.subject,

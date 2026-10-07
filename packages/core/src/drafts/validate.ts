@@ -33,6 +33,7 @@ export interface ValidationIssue {
     | 'long_sentences'
     | 'referral_without_conversation'
     | 'unsupported_detail'
+    | 'ignores_ask'
     | 'needs_input';
   detail: string;
   blocking: boolean;
@@ -53,6 +54,8 @@ export interface ValidateOptions {
    * connection or number in the body that is not in it is flagged, whether or not the draft cites claims.
    */
   context?: string;
+  /** what the other person asked the student in their last message; a reply must not ignore them */
+  asks?: string[];
 }
 
 const NEED_DETAIL: Record<string, string> = {
@@ -60,6 +63,7 @@ const NEED_DETAIL: Record<string, string> = {
   target: 'Name the person you would like to be introduced to.',
   answer: 'Answer their question in your own words.',
   role: 'Name the role and company you are applying to.',
+  takeaway: 'Add one thing they said that stuck with you.',
 };
 
 /** Capitalised words that are fine anywhere without appearing in the context. */
@@ -94,7 +98,23 @@ const PHRASE_CHECKS: { re: RegExp; anchor: RegExp; what: string }[] = [
     anchor: /\b(met|panel|spoke|talk|event|session|conference|workshop|fireside|completedAt|meetingAt)\b/i,
     what: 'a meeting or event',
   },
+  {
+    re: /\b(?:[Mm]y|[Aa]) (?:good |close |old )?(?:friend|colleague|classmate|roommate|cousin|professor|manager|mentor),?\s+[A-Z]/,
+    anchor: /\b(referr|introduc|suggested I write|friend|colleague|classmate|professor|mentor)/i,
+    what: 'a mutual connection',
+  },
+  {
+    re: /\b(referred (me )?by|pointed me to you|told me to (write|contact|email)|suggested I (write|contact|email))\b/i,
+    anchor: /\b(referr|introduc|suggested I write)/i,
+    what: 'a referral',
+  },
   { re: /\bGPA\b/i, anchor: /\bGPA\b/i, what: 'a GPA' },
+  {
+    re: /\b(top of my class|valedictorian|salutatorian|dean's list|summa cum laude|magna cum laude|perfect score|straight A'?s)\b/i,
+    anchor:
+      /\b(top of (my|the) class|valedictorian|salutatorian|dean's list|cum laude|perfect score|straight A)/i,
+    what: 'an academic honor',
+  },
 ];
 
 /** Names, companies, posts, mutual connections and figures in `body` that are not in `context`. */
@@ -145,15 +165,13 @@ export function validateDraft(
   const body = d.body;
   const lower = body.toLowerCase();
   const wc = wordsIn(body);
-  if (wc > MAX_WORDS[opts.kind] + 25)
-    issues.push({ code: 'too_long', detail: `${wc} words, aim for ${MAX_WORDS[opts.kind]}`, blocking: true });
-  else if (wc > MAX_WORDS[opts.kind])
-    issues.push({
-      code: 'too_long',
-      detail: `${wc} words, aim for ${MAX_WORDS[opts.kind]}`,
-      blocking: false,
-    });
-  if (wc < MIN_WORDS[opts.kind]) issues.push({ code: 'too_short', detail: `${wc} words`, blocking: false });
+  // a scheduling reply that also answers their asks is held to the reply limit
+  const limitKind = opts.kind === 'schedule' && opts.asks?.length ? 'reply' : opts.kind;
+  const max = MAX_WORDS[limitKind];
+  if (wc > max + 25) issues.push({ code: 'too_long', detail: `${wc} words, aim for ${max}`, blocking: true });
+  else if (wc > max)
+    issues.push({ code: 'too_long', detail: `${wc} words, aim for ${max}`, blocking: false });
+  if (wc < MIN_WORDS[limitKind]) issues.push({ code: 'too_short', detail: `${wc} words`, blocking: false });
   for (const p of BANNED_PHRASES)
     if (lower.includes(p)) issues.push({ code: 'banned_phrase', detail: p, blocking: true });
   if (/[—–]/.test(body))
@@ -272,6 +290,11 @@ export function validateDraft(
         detail: `${u} is not in anything Orbit knows about this person`,
         blocking: true,
       });
+  // a reply that ignores what they asked: a resume request with no word about the resume, a question with no answer
+  for (const a of opts.asks ?? []) {
+    if (/\b(resume|cv)\b/i.test(a) && !/\b(resume|cv)\b/i.test(body))
+      issues.push({ code: 'ignores_ask', detail: `they asked: ${a}`, blocking: true });
+  }
   if (
     opts.kind === 'referral_ask' &&
     opts.hadConversation === false &&

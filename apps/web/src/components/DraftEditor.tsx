@@ -37,6 +37,11 @@ const INPUT_PROMPT: Record<PromptNeed, { label: string; hint: string; placeholde
     hint: 'The role and the company, so the ask is a two-minute task for them.',
     placeholder: 'e.g. PM Intern at Notion',
   },
+  takeaway: {
+    label: 'One thing they said that stuck with you',
+    hint: 'A thank-you without it reads like a form letter. Their advice, a story, a point they made, in a few words.',
+    placeholder: 'e.g. to lead every interview answer with one project story',
+  },
 };
 
 export function DraftEditor({

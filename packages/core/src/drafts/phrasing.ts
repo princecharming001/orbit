@@ -115,6 +115,17 @@ const TITLE_FUNCTION: [RegExp, string][] = [
   [/operations|\bops\b/i, 'ops'],
   [/research/i, 'research'],
 ];
+/** The function a title belongs to, whatever the student is targeting ("Investment Banking Analyst" -> "ib"). */
+export function titleFunction(title: string | undefined): string | undefined {
+  const t = title ?? '';
+  for (const [re, key] of TITLE_FUNCTION) if (re.test(t)) return key;
+  return undefined;
+}
+/** The student's target function only when it is the recipient's function too; undefined otherwise. */
+export function matchedFunction(title: string | undefined, targets: string[]): string | undefined {
+  const f = titleFunction(title);
+  return f && targets.includes(f) ? f : undefined;
+}
 /** The student's target function that best matches the recipient's title, falling back to their first target. */
 export function functionFor(title: string | undefined, targets: string[]): string | undefined {
   const t = title ?? '';
@@ -290,7 +301,7 @@ export function clause(
 export function firstPart(s: string): string {
   return s
     .split(
-      /;\s+|,?\s+and (?:then |also )?(?:said|added|mentioned|noted|recommended|suggested|told|offered|grew|is|was|thinks)\b/i,
+      /;\s+|,?\s+and (?:then |also )?(?:said|added|mentioned|noted|recommended|suggested|told|offered|grew|is|was|thinks|would|wants|asked)\b/i,
     )[0]!
     .replace(/[\s,]+$/, '')
     .trim();
