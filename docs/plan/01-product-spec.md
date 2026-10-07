@@ -156,7 +156,7 @@ Header (person, company, stage stepper), timeline (touchpoints newest first: ema
 
 Layout top to bottom:
 
-1. **Brief header**: date, one-line summary ("3 follow-ups, 1 thank-you, 1 chat tomorrow with Daniel at Stripe").
+1. **Brief header**: date, one-line summary ("3 follow-ups, 1 thank-you; 1 chat coming up this week"), counted from the cards on screen at that moment, so it includes cards raised after the brief was made and drops the ones already handled.
 2. **Suggestion cards** (5 to 7, ranked): each card = kind label, person (avatar, name, title, company), the reason (one sentence from stored signals), the draft (collapsed preview, expandable, editable inline), and actions: **Approve & send**, **Edit**, **Snooze** (tomorrow / 3 days / next week), **Dismiss** (with optional reason: "already did this", "not now", "wrong person", "bad draft"). Prep cards have **Open prep** instead of send.
 3. **Upcoming**: calendar events in the next 7 days matched to people, each with a "Prep" link.
 4. **Needs you**: proposed stage transitions awaiting confirmation; merge suggestions; integration problems (reauth), with exactly one recovery action each.
@@ -231,7 +231,7 @@ Input: a target person (from the network, from a search result, or a pasted Link
 
 Output: up to 3 paths from the student to the target, each a chain of 1 to 3 hops with an explanation per hop ("You met Mei twice; Mei worked with Daniel at Stripe 2021 to 2023") and a path score. The map dims everything except the path nodes, draws the path as a curved line through them, and the side panel lists the paths with a **Ask for intro** button that creates an `intro_request` suggestion addressed to the first hop, with a draft that mentions the target and why.
 
-For a target company, the panel lists: direct contacts there (current), former employees in the network, alumni there (from enrichment), and second-hop routes, each with a strength.
+For a target company, the panel lists, in this order: direct contacts there (current, with an "Alum" badge on alumni rather than a separate alumni list), former employees in the network, and second-hop routes, each with a strength.
 
 Algorithms and data are in `06-graph-and-reach.md`.
 

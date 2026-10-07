@@ -22,6 +22,33 @@ async function loadDemo(page: Page) {
   await expect(page.getByText(/good (morning|afternoon|evening)/i)).toBeVisible();
 }
 
+/** Every state the landing header's buttons go through after a reload, as recorded by a MutationObserver. */
+async function landingHeaderStates(page: Page): Promise<string[]> {
+  await page.addInitScript(() => {
+    const seen: string[] = [];
+    (window as unknown as { __landingStates: string[] }).__landingStates = seen;
+    const record = () => {
+      const el = document.querySelector('[data-testid="landing-actions"]');
+      if (!el) return;
+      const text = Array.from(el.querySelectorAll('button'), (b) => b.textContent ?? '').join(',');
+      // an empty header (the profile is still being read) is fine; only the buttons it shows matter
+      if (text && seen[seen.length - 1] !== text) seen.push(text);
+    };
+    new MutationObserver(record).observe(document, { childList: true, subtree: true, characterData: true });
+  });
+  const states: string[] = [];
+  for (let i = 0; i < 5; i++) {
+    await page.goto('');
+    await expect(page.getByTestId('landing-actions').getByRole('button').first()).toBeVisible();
+    const seen = await page.evaluate(
+      () => (window as unknown as { __landingStates: string[] }).__landingStates,
+    );
+    expect(seen.length).toBeGreaterThan(0);
+    states.push(...seen);
+  }
+  return states;
+}
+
 test.describe('Orbit demo flow', () => {
   test('landing → demo → today shows a brief with the expected cards', async ({ page }) => {
     await loadDemo(page);
@@ -34,6 +61,12 @@ test.describe('Orbit demo flow', () => {
       page.getByTestId('suggestion-ask_referral').or(page.getByTestId('suggestion-nurture_checkin')).first(),
     ).toBeVisible();
     await expect(page.getByText(/upcoming/i)).toBeVisible();
+    // the line under the greeting counts the cards on screen, including stage updates raised after the brief
+    const summary = page.getByText(/coming up this week/);
+    const confirms = await page.getByTestId('suggestion-schedule_confirm').count();
+    await expect(summary).toContainText(`${confirms} time${confirms > 1 ? 's' : ''} to confirm`);
+    const updates = await page.getByTestId('suggestion-confirm_stage').count();
+    if (updates) await expect(summary).toContainText(`${updates} update${updates > 1 ? 's' : ''} to confirm`);
   });
 
   test('approve a thank-you: approval binds the text, card leaves Today, Sent tab lists it', async ({
@@ -511,7 +544,8 @@ test.describe('Manual onboarding', () => {
     await expect(page.getByRole('link', { name: /priya patel/i })).toBeVisible();
     await page.goto('discover');
     await expect(page.getByTestId('rec-card').first()).toBeVisible();
-    // Coming back to the landing page never offers to wipe this profile.
+    // Coming back to the landing page never offers to wipe this profile, not even while it is being read.
+    for (const state of await landingHeaderStates(page)) expect(state).toBe('Open Orbit');
     await page.goto('');
     await expect(page.getByRole('button', { name: /open orbit/i }).first()).toBeVisible();
     await expect(page.getByRole('button', { name: /try it with demo data|try the demo/i })).toHaveCount(0);
@@ -536,6 +570,9 @@ test.describe('Manual onboarding', () => {
     await page.getByTestId('ob-school').fill('University of Michigan');
     await page.getByRole('button', { name: /continue/i }).click();
     await expect(page).toHaveURL(/\/onboarding\/3/);
+    // while the stored profile is read, the header never offers the first-visit buttons, not even for one frame
+    for (const state of await landingHeaderStates(page))
+      expect(state).not.toMatch(/try the demo|get started/i);
     await page.goto('');
     const dialogs: string[] = [];
     page.on('dialog', (d) => {

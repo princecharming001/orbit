@@ -109,3 +109,22 @@ export function maxBumpsFor(sector: Sector, settingsMax: number): number {
   const cap = sector === 'finance' || sector === 'consulting' ? 2 : 1;
   return Math.max(0, Math.min(settingsMax, cap));
 }
+
+const BANK_ORG =
+  /\b(goldman|morgan stanley|jpmorgan|j\.p\. morgan|bank of america|bofa|citi|barclays|ubs|credit suisse|deutsche bank|evercore|lazard|moelis|pjt|centerview|jefferies|rbc|wells fargo|houlihan|guggenheim|perella|rothschild)\b/i;
+const PE_ORG = /\b(blackstone|kkr|apollo|carlyle|tpg|bain capital)\b/i;
+const TRADING_ORG = /\b(jane street|citadel|two sigma|de shaw|point72|millennium|bridgewater)\b/i;
+const VC_ORG = /\b(sequoia|a16z|andreessen|accel|benchmark)\b/i;
+
+/**
+ * Which kind of finance firm a known organization is. `sectorOf` calls all of these "finance", but a venture firm, a
+ * buyout fund or a trading firm has no investment banking team. Undefined when the firm is not one we know.
+ */
+export function financeFirmKind(org: string | undefined): 'bank' | 'pe' | 'trading' | 'vc' | undefined {
+  const o = org ?? '';
+  if (VC_ORG.test(o)) return 'vc';
+  if (PE_ORG.test(o)) return 'pe';
+  if (TRADING_ORG.test(o)) return 'trading';
+  if (BANK_ORG.test(o)) return 'bank';
+  return undefined;
+}
