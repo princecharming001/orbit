@@ -369,7 +369,7 @@ export interface DraftInputs {
   update?: string;
 }
 
-/** The person who introduced or pointed the student to `person`, if an intro request to them was sent. */
+/** The person who introduced or pointed the student to `person`: an intro request sent to them, or a suggestion from a chat. */
 export async function findReferrerFor(
   userId: string,
   person: Pick<Person, 'id' | 'displayName'>,
@@ -386,8 +386,14 @@ export async function findReferrerFor(
       )
       .toArray()
   ).sort((a, b) => (b.decidedAt ?? b.createdAt).localeCompare(a.decidedAt ?? a.createdAt))[0];
-  if (!intro?.personId) return undefined;
-  return db.people.get(intro.personId);
+  if (intro?.personId) return db.people.get(intro.personId);
+  // someone the student met suggested this person (captured on the prep tab)
+  const suggested = await db.facts
+    .where('personId')
+    .equals(person.id)
+    .filter((x) => x.type === 'connection' && x.sourceTable === 'suggested_by' && !x.deletedAt)
+    .last();
+  return suggested ? db.people.get(suggested.sourceId) : undefined;
 }
 
 /** One concrete thing the student has done, from the resume: the strongest project or experience line. */
@@ -568,6 +574,7 @@ export async function buildDraftContext(
     channel,
     bumpNumber: (chat?.bumpCount ?? 0) + 1,
     proposedWindows: windows,
+    missedProposal: s?.payload.missedProposal as DraftContext['missedProposal'],
     thread,
     target,
     chat: chat
@@ -575,6 +582,7 @@ export async function buildDraftContext(
           completedAt: chat.completedAt,
           stage: chat.stage,
           referrerName,
+          introducedAt: chat.introducedAt,
           warmUpNote,
           warmUpDone: warm?.done,
         }
@@ -849,16 +857,19 @@ export async function evaluateImmediateSuggestions(
   const all = generateCandidates(inp);
   // whatever this chat's rules no longer produce is no longer true
   await revalidateSuggestions(userId, all, now, scope);
-  const cands = all.filter((c) =>
-    [
-      'thank_you',
-      'schedule_propose',
-      'schedule_confirm',
-      'prep_brief',
-      'warm_up_engage',
-      'ask_referral',
-      'report_back',
-    ].includes(c.kind),
+  const cands = all.filter(
+    (c) =>
+      [
+        'thank_you',
+        'schedule_propose',
+        'schedule_confirm',
+        'prep_brief',
+        'warm_up_engage',
+        'ask_referral',
+        'report_back',
+      ].includes(c.kind) ||
+      // the reply to an email introduction is due now, not in the next morning's batch
+      !!c.signals.introducedBy,
   );
   const scored = selectForBrief(cands, inp.dismissCounts, 5);
   const created = await upsertSuggestions(userId, scored, now);

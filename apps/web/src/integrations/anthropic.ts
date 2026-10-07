@@ -231,6 +231,7 @@ export async function llmDraft(ctx: DraftContext, template: DraftOutput): Promis
     kind: ctx.kind,
     channel: ctx.channel,
     proposedWindows: ctx.proposedWindows,
+    missedProposal: ctx.missedProposal,
     thread: ctx.thread,
     target: ctx.target,
     connection: ctx.connection,

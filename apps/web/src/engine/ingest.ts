@@ -17,6 +17,7 @@ import { addTouchpoint, notify, recomputePersonStrength } from '../db/repo';
 import { db } from '../db/schema';
 import { hasLlm, llmSignal, llmTriage } from '../integrations/anthropic';
 import { evaluateImmediateSuggestions } from './brief';
+import { processIntroductions } from './introductions';
 import { loadPeopleCache, upsertPerson } from './people';
 import { evaluateTrigger } from './stages';
 
@@ -248,6 +249,9 @@ export async function ingestEmails(
       // only 1:1 threads create or advance chats; group threads still count as touchpoints and co-thread edges
       if (thread.isNetworking && thread.participantPersonIds.length === 1)
         await processNetworkingThread(user, thread, newMessages, all, useLlm, now);
+      // a group email that introduces the student to someone opens a card for that person
+      else if (thread.participantPersonIds.length > 1)
+        await processIntroductions(user, thread, newMessages, [...userEmails], now);
       for (const pid of thread.participantPersonIds) await recomputePersonStrength(pid, now);
     }
     done++;

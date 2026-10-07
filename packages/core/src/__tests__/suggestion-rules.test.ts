@@ -200,7 +200,20 @@ describe('confirming a proposed time (PS-2)', () => {
       status: 'confirmed',
     } as CalendarEvent;
     expect(usableProposedTime({ startIso: start, raw: 'x' }, [busy], NOW)).toBe('busy');
-    expect(usableProposedTime({ startIso: ahead(H), raw: 'x' }, [], NOW)).toBe('passed');
+    // an hour ahead has not passed: it can still be confirmed, right away
+    expect(usableProposedTime({ startIso: ahead(H), raw: 'x' }, [], NOW)).toBe('soon');
+    expect(usableProposedTime({ startIso: ago(H), raw: 'x' }, [], NOW)).toBe('passed');
+  });
+  it('confirms a time that starts within two hours instead of calling it passed', () => {
+    const cands = generateCandidates(
+      input({ people: [p], chats: [c], lastInboundByChat: new Map([['c1', msg(ahead(H))]]) }),
+    );
+    expect(cands.some((x) => x.kind === 'schedule_propose')).toBe(false);
+    const conf = cands.find((x) => x.kind === 'schedule_confirm')!;
+    expect(conf.reasonText).toBe(
+      'hannah suggested Thursday at 2pm, which starts in about an hour; confirm it right away',
+    );
+    expect(conf.signals.startsSoon).toBe(true);
   });
   it('says nothing about times once the chat is on the calendar', () => {
     const ev = {

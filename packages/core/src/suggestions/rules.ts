@@ -17,7 +17,7 @@ import type {
 } from '../types';
 import { todayKey } from '../util/ids';
 import { warmUpProgress } from '../warmup/rules';
-import { addBusinessDays, businessDaysBetween, isBusinessDay, localWeekday } from './calendar';
+import { addBusinessDays, businessDaysBetween, localWeekday } from './calendar';
 
 export * from './calendar';
 
@@ -85,6 +85,8 @@ export const NO_RESPONSE_AFTER_LAST_BUMP_BUSINESS_DAYS = 10;
 /** An offered intro that has not happened after this many days gets a gentle follow-up. */
 const INTRO_FOLLOWUP_AFTER_DAYS = 7;
 const INTRO_FOLLOWUP_MAX_DAYS = 60;
+/** An email introduction is answered within days; after two weeks the card stays, but the nudge does not. */
+const INTRO_REPLY_DAYS = 14;
 /** A live company: this many open threads there already and new cold outreach to it waits. */
 const LIVE_THREADS_PER_COMPANY = 2;
 const LIVE_STAGES: ChatStage[] = ['outreach_sent', 'replied', 'scheduling', 'scheduled'];
@@ -106,20 +108,25 @@ const monthKey = (d: Date) => `${d.getFullYear()}-${d.getMonth()}`;
 const quarterKey = (d: Date) => `${d.getFullYear()}-q${Math.floor(d.getMonth() / 3)}`;
 const dayKey = (iso: string, tz?: string) => todayKey(new Date(iso), tz);
 
-/** A proposed time is usable when it is still ahead (with some lead) and the student is free then. */
+/**
+ * Whether a proposed time can still be accepted: 'passed' once it has started, 'busy' when it clashes with the
+ * calendar, 'soon' when it is still ahead but less than CONFIRM_LEAD_HOURS away (confirmable, but only right now),
+ * 'ok' otherwise.
+ */
 export function usableProposedTime(
   t: ProposedTime,
   events: Pick<CalendarEvent, 'startAt' | 'endAt' | 'status'>[],
   now: Date,
-): 'ok' | 'passed' | 'busy' {
+): 'ok' | 'soon' | 'passed' | 'busy' {
   const start = new Date(t.startIso).getTime();
-  if (Number.isNaN(start) || start < now.getTime() + CONFIRM_LEAD_HOURS * HOUR) return 'passed';
+  if (Number.isNaN(start) || start <= now.getTime()) return 'passed';
   const end = t.endIso ? new Date(t.endIso).getTime() : start + 30 * 60_000;
   const busy = events.some(
     (e) =>
       e.status !== 'cancelled' && new Date(e.startAt).getTime() < end && new Date(e.endAt).getTime() > start,
   );
-  return busy ? 'busy' : 'ok';
+  if (busy) return 'busy';
+  return start < now.getTime() + CONFIRM_LEAD_HOURS * HOUR ? 'soon' : 'ok';
 }
 
 export function generateCandidates(inp: RuleInput): Candidate[] {
@@ -177,6 +184,26 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
         });
       }
       continue;
+    }
+    // someone introduced the student by email: answer while the intro is fresh, before any cold note (the
+    // introducer is copied and watching)
+    if (chat.stage === 'identified' && chat.introducedAt && !chat.lastOutboundAt) {
+      const referrer = chat.referrerPersonId ? inp.people.get(chat.referrerPersonId) : undefined;
+      const age = (now.getTime() - new Date(chat.introducedAt).getTime()) / DAY;
+      if (referrer && age >= 0 && age <= INTRO_REPLY_DAYS) {
+        out.push({
+          kind: 'new_outreach',
+          personId: chat.personId,
+          chatId: chat.id,
+          dedupeKey: `introreply:${chat.id}`,
+          reasonText: `${referrer.firstName} introduced you to ${person.firstName} ${relTime(chat.introducedAt, now, inp.timezone)}; reply while the intro is fresh`,
+          signals: { introducedBy: referrer.id, introducedAt: chat.introducedAt },
+          payload: { channel: person.primaryEmail ? 'gmail' : 'linkedin', introducedBy: referrer.id },
+          urgency: age > 3 ? 0.9 : 0.8,
+          goalRelevance: liveRel,
+          confidence: 1,
+        });
+      }
     }
     if (chat.stage === 'outreach_sent' && chat.lastOutboundAt) {
       const due = bumpDue(chat, person, inp);
@@ -238,23 +265,28 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
       proposedTimes.length
     ) {
       const checked = proposedTimes.map((t) => ({ t, verdict: usableProposedTime(t, inp.events, now) }));
-      const usable = checked.find((c) => c.verdict === 'ok')?.t;
+      // a time with some lead first; one that starts within the next couple of hours can still be taken, now
+      const usable = checked.find((c) => c.verdict === 'ok') ?? checked.find((c) => c.verdict === 'soon');
       if (usable) {
+        const soon = usable.verdict === 'soon';
         out.push({
           kind: 'schedule_confirm',
           personId: chat.personId,
           chatId: chat.id,
           dedupeKey: `confirm:${chat.id}:${lastIn.id}`,
-          reasonText: `${person.firstName} suggested ${usable.raw}; confirm it`,
-          signals: { proposed: usable },
-          payload: { inReplyTo: lastIn.id, time: usable },
+          reasonText: soon
+            ? `${person.firstName} suggested ${usable.t.raw}, which starts ${relTime(usable.t.startIso, now, inp.timezone)}; confirm it right away`
+            : `${person.firstName} suggested ${usable.t.raw}; confirm it`,
+          signals: { proposed: usable.t, startsSoon: soon || undefined },
+          payload: { inReplyTo: lastIn.id, time: usable.t },
           urgency: 1,
           goalRelevance: liveRel,
           confidence: lastIn.signalConfidence ?? 0.7,
         });
       } else {
-        // every suggested time has passed or clashes with the calendar: answer with new times instead
-        const first = checked[0]!;
+        // every suggested time has passed or clashes with the calendar: answer with new times instead (the draft
+        // owns up to the missed slot or names the conflict)
+        const first = checked[0]! as { t: ProposedTime; verdict: 'passed' | 'busy' };
         const why = first.verdict === 'busy' ? 'you are busy then' : 'that time has passed';
         out.push({
           kind: 'schedule_propose',
@@ -356,9 +388,15 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
         chat.followedUpAt &&
         now.getTime() - new Date(chat.followedUpAt).getTime() > 14 * DAY)
     ) {
-      const lastIso = inp.lastConversationByPerson?.get(person.id) ?? person.lastInteractionAt;
-      const last = lastIso ? new Date(lastIso) : undefined;
-      const days = last ? (now.getTime() - last.getTime()) / DAY : 999;
+      // the last real conversation: a meeting, note, email or message either way, or the chat itself
+      const convIso = [inp.lastConversationByPerson?.get(person.id), chat.completedAt]
+        .filter((x): x is string => !!x)
+        .sort()
+        .pop();
+      // without one, any touch (a LinkedIn connection, a CC) still dates the relationship, but is not a conversation
+      const lastIso = convIso ?? person.lastInteractionAt;
+      const days = lastIso ? (now.getTime() - new Date(lastIso).getTime()) / DAY : undefined;
+      const since = convIso ? 'since your last conversation' : 'since you were last in touch';
       const cadence = CADENCE[person.relationshipType];
       // an offered intro gets its own follow-up; "how did that go?" is not a question about an offer
       const hook = facts
@@ -367,16 +405,21 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
         .sort((a, b) => factTime(b) - factTime(a))[0];
       // with no hook, a plain "quick update" note is still worth sending every six to eight weeks; the draft asks
       // the student for the update instead of inventing one
-      const updateDue = days >= cadence + 14;
-      if (days >= cadence && !inp.recentlyContacted.has(person.id) && (hook || updateDue)) {
+      // (only after a real conversation: "keeps it warm" means nothing when you never actually talked)
+      const updateDue = !!convIso && days !== undefined && days >= cadence + 14;
+      // with no date at all, only a hook can justify a note; its text then says nothing about time
+      const cadenceDue = days === undefined ? !!hook : days >= cadence;
+      if (cadenceDue && !inp.recentlyContacted.has(person.id) && (hook || updateDue)) {
         out.push({
           kind: 'nurture_checkin',
           personId: chat.personId,
           chatId: chat.id,
           dedupeKey: `nurture:${person.id}:${monthKey(now)}`,
           reasonText: hook
-            ? `${Math.round(days)} days since your last conversation; you have a hook: "${clip(hook.text, 60)}"`
-            : `${Math.round(days)} days since your last conversation; a short update on your search keeps it warm`,
+            ? days === undefined
+              ? `You have a reason to check in with ${person.firstName}: "${clip(hook.text, 60)}"`
+              : `${Math.round(days)} days ${since}; you have a hook: "${clip(hook.text, 60)}"`
+            : `${Math.round(days ?? 0)} days ${since}; a short update on your search keeps it warm`,
           signals: { days, cadence, hookId: hook?.id },
           payload: hook ? { hookId: hook.id } : { needsUpdate: true },
           urgency: 0.4,
@@ -689,9 +732,13 @@ export function bumpDue(
   return { bdays, threshold, backFromOoo };
 }
 
-/** On a quiet day (the student's own, a weekend or a holiday) only time-bound items make the brief. */
+/**
+ * On a quiet day only time-bound items make the brief. Quiet days are the student's own choice (`quietDays`,
+ * weekdays in their timezone): many students do their networking on weekends, so a Saturday or a holiday is not
+ * quiet unless they say so. Business days still govern when a bump is due and when a thread is closed.
+ */
 export function isQuietDay(now: Date, settings: Pick<UserSettings, 'quietDays'>, tz?: string): boolean {
-  return settings.quietDays.includes(localWeekday(now, tz)) || !isBusinessDay(now, tz);
+  return settings.quietDays.includes(localWeekday(now, tz));
 }
 
 /** A thank-you is due while the conversation is fresh and nothing has gone out since it ended. */
@@ -897,7 +944,9 @@ export function selectForBrief(
     if (org) perOrg.set(org, (perOrg.get(org) ?? 0) + 1);
   };
   for (const c of scored) if (isHard(c) && chosen.length < 5) take(c);
-  for (const c of scored) if (!chosen.includes(c) && OBLIGATION_KINDS.includes(c.kind)) take(c);
+  // an email intro waiting on the student's reply is an obligation too, though its kind is new_outreach
+  const isObligation = (c: Candidate) => OBLIGATION_KINDS.includes(c.kind) || !!c.signals.introducedBy;
+  for (const c of scored) if (!chosen.includes(c) && isObligation(c)) take(c);
   for (const c of scored) if (!chosen.includes(c)) take(c);
   return chosen;
 }

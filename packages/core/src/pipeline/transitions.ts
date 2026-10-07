@@ -153,14 +153,19 @@ export function decideTransition(from: ChatStage, trig: StageTrigger): StageDeci
     case 'timer_completed_14d':
       return from === 'completed' ? d('nurturing', 1, 'timer:completed_14d') : undefined;
     case 'timer_no_response': {
-      // bumps exhausted and ten more business days of silence, or three weeks of silence whether or not a bump
-      // went out
+      // bumps exhausted and ten more business days of silence, or three weeks (15 business days) of silence whether
+      // or not a bump went out
       const exhausted =
         trig.bumps >= trig.maxBumps &&
         (trig.businessDaysSilent !== undefined
           ? trig.businessDaysSilent >= NO_RESPONSE_AFTER_BUMPS_BUSINESS_DAYS
           : trig.daysSilent >= NO_RESPONSE_AFTER_BUMPS_DAYS);
-      const stale = trig.daysSilent >= NO_RESPONSE_SILENT_DAYS;
+      // in business days when known, so a holiday stretch or the winter freeze cannot close a thread before the
+      // next bump was even due
+      const stale =
+        trig.businessDaysSilent !== undefined
+          ? trig.businessDaysSilent >= NO_RESPONSE_SILENT_BUSINESS_DAYS
+          : trig.daysSilent >= NO_RESPONSE_SILENT_DAYS;
       return from === 'outreach_sent' && (exhausted || stale)
         ? d('no_response', 1, exhausted ? 'timer:no_response' : 'timer:no_response_silent')
         : undefined;
@@ -177,3 +182,5 @@ export const NO_RESPONSE_AFTER_BUMPS_DAYS = 14;
 export const NO_RESPONSE_AFTER_BUMPS_BUSINESS_DAYS = 10;
 /** ... or this many days of silence with no bump sent at all (a dismissed or never-sent bump must not strand the chat) */
 export const NO_RESPONSE_SILENT_DAYS = 21;
+/** ... the same three weeks in business days (holidays and the winter freeze do not count); always past the last bump */
+export const NO_RESPONSE_SILENT_BUSINESS_DAYS = 15;

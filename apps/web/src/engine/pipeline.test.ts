@@ -573,3 +573,101 @@ describe('status news (EG-09)', () => {
     expect(draft.needsInput ?? []).toEqual([]);
   }, 60_000);
 });
+
+describe('email introductions and suggested names (EG-08)', () => {
+  it('the demo intro threads open a card for each person introduced, with the introducer as referrer', async () => {
+    const fresh = await loadDemo({ reset: true });
+    user = fresh;
+    const intros = await db.threads
+      .where('userId')
+      .equals(user.id)
+      .filter((t) => !!t.introduction)
+      .toArray();
+    expect(intros.length).toBeGreaterThan(0);
+    for (const t of intros) {
+      const intro = t.introduction!;
+      for (const pid of intro.introducedIds) {
+        const chat = await chatOf(pid);
+        expect(chat.referrerPersonId).toBe(intro.introducerId);
+        expect(chat.introducedAt).toBe(intro.at);
+      }
+    }
+    const edges = await db.edges
+      .where('userId')
+      .equals(user.id)
+      .filter((e) => e.type === 'introduced_by')
+      .toArray();
+    expect(edges.length).toBe(intros.length);
+    expect(edges[0]!.evidence.text).toMatch(/^\S+ introduced you to \S+$/);
+  }, 60_000);
+
+  it('a fresh intro email gets a reply card whose draft picks up the introduction', async () => {
+    const seq0 = seq++;
+    const raw: RawEmail = {
+      externalMessageId: `pt_intro_${seq0}`,
+      externalThreadId: `pt_intro_${seq0}`,
+      from: 'Lena Ortiz <lena.ortiz@northwind.com>',
+      to: [user.email],
+      cc: ['Sam Patel <sam.patel@contoso.com>'],
+      subject: 'Intro: Alex <> Sam',
+      sentAt: ago(D),
+      bodyText: `${user.firstName}, meet Sam. Sam leads the payments team at Contoso and was a Cornell student too. I'll let you two take it from here.\n\nLena`,
+      headers: { 'message-id': `<pt_intro_${seq0}@test>` },
+    };
+    await ingestEmails(user, [raw], { useLlm: false, now });
+    const sam = await personByEmail('sam.patel@contoso.com');
+    const lena = await personByEmail('lena.ortiz@northwind.com');
+    const chat = await chatOf(sam.id);
+    expect(chat.stage).toBe('identified');
+    expect(chat.referrerPersonId).toBe(lena.id);
+    const card = (await cardsOf(sam.id)).find((s) => s.dedupeKey === `introreply:${chat.id}`)!;
+    expect(card.status).toBe('pending');
+    expect(card.reasonText).toBe('Lena introduced you to Sam yesterday; reply while the intro is fresh');
+    const { ensureDrafts } = await import('./brief');
+    await ensureDrafts(user, [card.id]);
+    const row = (await db.suggestions.get(card.id))!;
+    const draft = (await db.outbound.get(row.outboundMessageId!))!;
+    expect(draft.subject).toBe("Following up on Lena's introduction");
+    expect(draft.bodyDraft).toMatch(/Lena was kind enough to introduce us|follow up on Lena's introduction/);
+  }, 60_000);
+
+  it('a name captured on the prep tab becomes a saved recommendation with the suggester as referrer', async () => {
+    const { addSuggestedContacts, parseSuggestedNames } = await import('./introductions');
+    expect(parseSuggestedNames('Priya Shah at Stripe, Tom Lee and maybe someone in sales')).toEqual([
+      { name: 'Priya Shah', org: 'Stripe' },
+      { name: 'Tom Lee' },
+    ]);
+    const sofia = (await db.people
+      .where('userId')
+      .equals(user.id)
+      .filter((p) => p.displayName === 'Sofia Bennett')
+      .first())!;
+    const [priya] = await addSuggestedContacts(user.id, sofia.id, 'Priya Shah at Stripe', now);
+    expect(priya?.displayName).toBe('Priya Shah');
+    const rec = await db.recommendations.where('personId').equals(priya!.id).first();
+    expect(rec?.status).toBe('saved');
+    expect(rec?.reasons[0]?.text).toBe('Suggested by Sofia');
+    const { findReferrerFor } = await import('./brief');
+    expect((await findReferrerFor(user.id, priya!))?.id).toBe(sofia.id);
+  }, 60_000);
+
+  it('a missed proposed time is owned up to in the new-times draft', async () => {
+    const who = { name: 'Rhea Malik', email: 'rhea.malik@globex.com' };
+    await ingestEmails(
+      user,
+      [
+        mail(who, 'out', ago(12 * D), OUTREACH('Rhea'), 'rhea'),
+        mail(who, 'in', ago(10 * D), 'Hi Alex, sure. Would Thursday at 2pm work?\n\nRhea', 'rhea'),
+      ],
+      { useLlm: false, now },
+    );
+    const p = await personByEmail(who.email);
+    const card = (await cardsOf(p.id)).find((s) => s.kind === 'schedule_propose' && s.status === 'pending')!;
+    expect(card.reasonText).toMatch(/but that time has passed; propose new times/);
+    const { ensureDrafts } = await import('./brief');
+    await ensureDrafts(user, [card.id]);
+    const row = (await db.suggestions.get(card.id))!;
+    const draft = (await db.outbound.get(row.outboundMessageId!))!;
+    expect(draft.bodyDraft).toMatch(/I'm sorry I didn't get back to you in time for Thursday at 2pm\./);
+  }, 60_000);
+});

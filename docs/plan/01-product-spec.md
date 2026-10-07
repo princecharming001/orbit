@@ -126,7 +126,7 @@ A **coffee chat** is one relationship-in-progress with one person, at one point 
 | `followed_up` | a thank-you or follow-up was sent after completion | send pipeline |
 | `nurturing` | long-term relationship mode; cadence rules apply | automatic 14 days after `followed_up` (or 14 days after `completed` when no thank-you was recorded), or user action |
 | `declined` | the person said no, or asked not to be contacted | inbound classifier (`reply_decline`) with confirmation card, or user |
-| `no_response` | the sector's bump limit reached and 10 business days silent since the last, or 21 days silent however many bumps went out (a dismissed or unsent bump never strands the chat); a reply after the last message stops the timer, and an out-of-office return date restarts it | nightly rule |
+| `no_response` | the sector's bump limit reached and 10 business days silent since the last, or 15 business days (about three weeks; holidays and the winter freeze do not count, so a second bump is always due first) silent however many bumps went out (a dismissed or unsent bump never strands the chat); a reply after the last message stops the timer, and an out-of-office return date restarts it | nightly rule |
 | `archived` | user removed it from view | user |
 
 Transitions are recorded in `coffee_chat_stage_events` with `evidence_ref` and `confidence`. Any transition with `confidence < 0.8` is recorded as `proposed` and surfaces as a confirmation card ("Looks like Priya replied and suggested Thursday. Move to Scheduling?"). The user confirms or corrects; corrections are feedback events. [DEFAULT threshold]

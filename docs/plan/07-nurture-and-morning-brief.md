@@ -13,7 +13,7 @@ Every rule runs in code over stored rows at brief time (and some on events, mark
 | `follow_up_bump` | chat `outreach_sent`; business days since the last outbound ≥ 5 for the first bump and ≥ 8 for the second (10 and 12 for LinkedIn copy-and-open); business days skip weekends, US federal holidays, the day after Thanksgiving and the Dec 20 to Jan 2 freeze, counted by calendar day in the student's timezone; no human inbound since (an out-of-office reply does not count as a reply: it sets `bump_not_before` to two business days after the return date it names, or five business days after the reply when it names none); `bump_count < max_bumps` (sector cap) | `bump` (`bumpNumber` 1 or 2) | `bump:{chat}:{bump_count+1}` |
 | `thank_you` ⚡ | chat `completed` within 3 days of the meeting's real end (`completed_at` is the event end or the note's time, never the sync time); no outbound of any kind since completion | `thank_you` | `thank:{chat}` |
 | `schedule_propose` ⚡ | chat `replied` with last inbound signal ∈ {reply_positive, question} and no scheduling message yet; or `scheduling` with the person's last message asking for times | `schedule` | `sched:{chat}:{last_inbound_id}` |
-| `schedule_confirm` ⚡ | last inbound `scheduling_proposal` with ≥ 1 parsed time at least 2 h ahead that is free in the student's calendar; no event for the chat on the calendar yet. When every proposed time has passed or clashes, the rule emits `schedule_propose` instead (reason "X suggested ..., but that time has passed; propose new times", `payload.missedProposal`) | `reply` (accepting a specific time) | `confirm:{chat}:{last_inbound_id}` |
+| `schedule_confirm` ⚡ | last inbound `scheduling_proposal` with ≥ 1 parsed time still ahead that is free in the student's calendar (a time at least 2 h ahead is preferred; one starting sooner is still offered, with the reason "..., which starts in an hour; confirm it right away"); no event for the chat on the calendar yet. When every proposed time has already started or clashes, the rule emits `schedule_propose` instead (reason "X suggested ..., but that time has passed; propose new times" or "..., but you are busy then; ...", `payload.missedProposal`); its draft apologises for the missed slot ("I'm sorry I didn't get back to you in time for Thursday at 2pm.") or names the conflict before offering new times | `reply` (accepting a specific time) | `confirm:{chat}:{last_inbound_id}` |
 | `prep_brief` ⚡ | calendar event with a matched person starts within the next 30 h, or on tomorrow's date in the student's timezone, and has not started yet | — (payload = PrepBrief) | `prep:{event}` |
 | `action_item_reminder` | open `action_items` due today or overdue, by calendar day in the student's timezone | — or `reply` when the item is "send X" | `ai:{action_item}` |
 | `nurture_checkin` | chat `nurturing` (or `followed_up` for 14+ days); days since the last real conversation ≥ cadence (section 2); not contacted in the last 30 days; and either a hook or a non-intro offer from the last 90 days, or 14+ days past the cadence (then a plain "quick update" note whose draft asks the student for the update) | `nurture` | `nurture:{person}:{month}` |
@@ -23,7 +23,8 @@ Every rule runs in code over stored rows at brief time (and some on events, mark
 | `ask_referral` | chat `followed_up|nurturing`; person's org is a target company that is `applied`, or still `researching` with a referral offer on record or a deadline within 30 days (a referral helps before or with the application, not after); a referral offer or strength ≥ 0.5; not contacted in 30 days | `referral_ask` | `ref:{person}:{target_company}` |
 | `intro_request` | created by Reach "Ask for intro" (user) or by a recommendation whose best path goes through a strong tie (≥ 0.5) and the target is at a priority-1 company | `intro_request` | `intro:{connector}:{target_key}` |
 | `intro_request` (offered intro) | chat `followed_up|nurturing`; an offer fact to introduce the student ("happy to intro me to their PM lead") 7 to 60 days old; no chat referred by this person since; nothing sent to them in 5 days. The draft names the offer and includes a blurb they can forward | `intro_request` (`target.offered`) | `introfu:{offer_fact}` |
-| `new_outreach` | weekly batch: top recommendations not yet acted on; limited by weekly target minus outreach already sent this week; skipped for a company where the student already has 2 live threads (`outreach_sent|replied|scheduling|scheduled`) | `outreach` | `new:{person}:{monday_of_week}` |
+| `new_outreach` (email intro) ⚡ | chat `identified` opened from a group email that introduced the student (the sender wrote "meet" or "introduce" and named the CC'd person; the thread records `introduction`, the graph an `introduced_by` edge, the chat `referrer` and `introduced_at`); nothing sent yet; intro at most 14 days old. Counts as an obligation in selection. The draft opens by picking up the introduction | `outreach` (referral connection, `introduced`) | `introreply:{chat}` |
+| `new_outreach` | weekly batch: top recommendations not yet acted on, saved ones first (a name the student captures on the prep tab's fixed last question, "anyone else I should talk to?", is saved as "Suggested by {person}" and that person becomes the chat's referrer); limited by weekly target minus outreach already sent this week; skipped for a company where the student already has 2 live threads (`outreach_sent|replied|scheduling|scheduled`) | `outreach` | `new:{person}:{monday_of_week}` |
 | `confirm_stage` ⚡ | `coffee_chat_stage_events.status = proposed` | — | `stage:{event}` |
 | `confirm_merge` | `merge_suggestions.status = pending` and score ≥ 0.6 | — | `merge:{suggestion}` |
 | `confirm_note_match` ⚡ | note `match_status = unmatched` with ≥ 1 candidate person | — | `note:{note}` |
@@ -34,15 +35,20 @@ Validity: a suggestion must be true when it is shown. Every pending or snoozed r
 
 ### 1.1 Nurture cadence by relationship type [DEFAULT]
 
-| Relationship type | Cadence (days since last touch) |
+| Relationship type | Cadence (days since the last real conversation) |
 |---|---|
-| `mentor`, `alumni` with completed chat | 45 |
-| `recruiter` | 30 during the cycle, 90 outside |
-| `peer`, `colleague` | 60 |
-| `professor`, `family_friend` | 90 |
-| `unknown`, `other` | 75 |
+| `mentor` | 28 |
+| `alumni` | 35 |
+| everyone else (`recruiter`, `peer`, `colleague`, `professor`, `family_friend`, `unknown`, `other`) | 42 |
 
-A `nurture` draft requires at least one hook: a fact of type `hook` or `offer` from the last 90 days (the newest wins), a new affiliation, a user update (new experience in the resume, a new target company that relates to the person), or a seasonal event (semester start, graduation, offer season). Without a hook, no suggestion.
+The last real conversation is the newest meeting, note, email or LinkedIn message either way, or the chat's own completion; a LinkedIn connection or a CC only dates the relationship ("since you were last in touch") and never counts as a conversation.
+
+A `nurture` suggestion fires once the cadence has passed and the person was not contacted in the last 30 days, in one of two forms:
+
+- With a hook: a fact of type `hook`, or an `offer` that is not an intro offer (offered intros get their own `intro_request` follow-up), from the last 90 days; the newest wins. The draft builds on that hook.
+- Without a hook: only after a real conversation and 14 or more days past the cadence, a short "quick update" note. The draft asks the student for the update (`needsInput`) instead of inventing one.
+
+With no date at all for the person, only a hook justifies a note, and its reason text makes no claim about time.
 
 ---
 
@@ -59,11 +65,11 @@ fatigue   = 1 − 0.15·(number of dismissals of this kind for this person in 60
 priority_score = urgency · value · confidence · fatigue
 ```
 
-Selection for a daily brief: sort by `priority_score`; always include every `schedule_confirm`, `thank_you`, `prep_brief`, `confirm_stage` and `action_item_reminder` (hard-urgent set plus promises due today or overdue, up to 5; a promise has goal relevance 1); then the obligations inside live threads (`follow_up_bump`, `schedule_propose`, `action_item_reminder`, `ask_referral`, `report_back`, and `intro_request`, the follow-up on an intro the person offered) before any cold outreach; fill to 7 with the rest, at most 2 `new_outreach`, at most 1 each of `reconnect` and `nurture_checkin`, and at most 2 non-urgent message-bearing suggestions to the same company. Any suggestion attached to an active chat has a goal relevance of at least 0.6. Fewer than 7 is fine; zero means no email.
+Selection for a daily brief: sort by `priority_score`; always include every `schedule_confirm`, `thank_you`, `prep_brief`, `confirm_stage` and `action_item_reminder` (hard-urgent set plus promises due today or overdue, up to 5; a promise has goal relevance 1); then the obligations inside live threads (`follow_up_bump`, `schedule_propose`, `action_item_reminder`, `ask_referral`, `report_back`, `intro_request`, the follow-up on an intro the person offered, and the reply to an email introduction) before any cold outreach; fill to 7 with the rest, at most 2 `new_outreach`, at most 1 each of `reconnect` and `nurture_checkin`, and at most 2 non-urgent message-bearing suggestions to the same company. Any suggestion attached to an active chat has a goal relevance of at least 0.6. Fewer than 7 is fine; zero means no email.
 
 Weekly outreach pacing (weeks run Monday to Sunday): if the student is behind their weekly target from Wednesday on, `new_outreach` urgency rises to 0.5; if ahead, it drops to 0.2.
 
-Quiet days (the student's `quiet_days`, weekends, US federal holidays and the winter freeze, in the student's timezone): the brief only selects answers inside live exchanges and time-bound items (`schedule_confirm`, `schedule_propose`, `thank_you`, `prep_brief`, `confirm_stage`, `action_item_reminder`, `warm_up_engage`); bumps, check-ins and cold outreach stay pending as deferred and compete again on the next working day.
+Quiet days (the student's own `quiet_days`, weekdays in the student's timezone; weekends and holidays are not quiet unless the student picks them, since many students network on weekends, though business days still decide when a bump is due): the brief only selects answers inside live exchanges and time-bound items (`schedule_confirm`, `schedule_propose`, `thank_you`, `prep_brief`, `confirm_stage`, `action_item_reminder`, `warm_up_engage`); bumps, check-ins and cold outreach stay pending as deferred and compete again on the next working day.
 
 ---
 

@@ -184,8 +184,10 @@ describe('business days (EG-11)', () => {
   });
 
   it('keeps bumps, check-ins and cold outreach out of the brief on quiet days', () => {
-    expect(isQuietDay(at('2026-10-10T15:00:00Z'), settings, TZ)).toBe(true); // Saturday
-    expect(isQuietDay(at('2026-11-26T15:00:00Z'), settings, TZ)).toBe(true); // Thanksgiving
+    // only the student's own quiet days count: weekends and holidays are when many students do their networking
+    expect(isQuietDay(at('2026-10-10T15:00:00Z'), settings, TZ)).toBe(false); // Saturday, quietDays []
+    expect(isQuietDay(at('2026-11-26T15:00:00Z'), settings, TZ)).toBe(false); // Thanksgiving, quietDays []
+    expect(isQuietDay(at('2026-10-11T15:00:00Z'), { quietDays: [0, 6] }, TZ)).toBe(true); // Sunday, chosen
     expect(isQuietDay(at('2026-10-07T15:00:00Z'), settings, TZ)).toBe(false);
     expect(isQuietDay(at('2026-10-07T15:00:00Z'), { quietDays: [3] }, TZ)).toBe(true); // the student's own
     const sel = selectForBrief(

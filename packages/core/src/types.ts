@@ -348,6 +348,8 @@ export interface EmailThread {
   chatId?: ID;
   classifiedAt?: string;
   classifiedBy?: 'heuristic' | 'llm';
+  /** set when a message in the thread introduced the student to someone (see detectIntroduction) */
+  introduction?: { introducerId: ID; introducedIds: ID[]; messageId: ID; at: string };
 }
 
 export interface EmailMessage {
@@ -427,6 +429,8 @@ export interface CoffeeChat {
   /** who introduced or pointed the student to this person (for the opener and the report-back) */
   referrerPersonId?: ID;
   referrerName?: string;
+  /** when the referrer introduced the student to this person by email (the chat was opened from that intro) */
+  introducedAt?: string;
   priority: 1 | 2 | 3;
   archivedAt?: string;
   createdAt: string;

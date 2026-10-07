@@ -7,7 +7,7 @@ import {
   kindAllowedInStage,
   maxBumpsFor,
   NO_RESPONSE_AFTER_BUMPS_BUSINESS_DAYS,
-  NO_RESPONSE_SILENT_DAYS,
+  NO_RESPONSE_SILENT_BUSINESS_DAYS,
   newId,
   PROPOSE_THRESHOLD,
   sectorOf,
@@ -231,8 +231,8 @@ export async function recordAlreadyDone(s: Suggestion, now = new Date()): Promis
 
 /**
  * Timed rules: followed_up → nurturing after 14 days; completed → nurturing 14 days after a chat whose thank-you
- * never got recorded; outreach_sent → no_response after max bumps + 10 business days of silence, or 21 days of
- * silence however many bumps went out. A thread with a reply after the last message is not silent, and an
+ * never got recorded; outreach_sent → no_response after max bumps + 10 business days of silence, or 15 business
+ * days (three weeks; holidays and the winter freeze do not count) of silence however many bumps went out. A thread with a reply after the last message is not silent, and an
  * out-of-office return date restarts the clock. The new stage is dated when the timer ran out, not when Orbit
  * noticed.
  */
@@ -286,7 +286,7 @@ export async function runTimedStageRules(
       const daysSilent = (now.getTime() - from.getTime()) / 86_400_000;
       const businessDaysSilent = businessDaysBetween(from, now, tz);
       const exhausted = c.bumpCount >= maxBumps;
-      const silentAt = new Date(from.getTime() + NO_RESPONSE_SILENT_DAYS * 86_400_000);
+      const silentAt = addBusinessDays(from, NO_RESPONSE_SILENT_BUSINESS_DAYS, tz);
       const doneAt = exhausted
         ? new Date(
             Math.min(

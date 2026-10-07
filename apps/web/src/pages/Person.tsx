@@ -8,6 +8,7 @@ import { DraftEditor } from '../components/DraftEditor';
 import { feedback } from '../db/repo';
 import { db } from '../db/schema';
 import { draftMessage, refreshPersonSummary, startWarmUpOrOutreach } from '../engine/brief';
+import { addSuggestedContacts } from '../engine/introductions';
 import { approveAndSend } from '../engine/send';
 import { applyStage } from '../engine/stages';
 import { useSession } from '../state/session';
@@ -463,6 +464,7 @@ export function PersonPage() {
               facts={facts}
               timeline={timeline.map((t) => `${t.at.slice(0, 10)}: ${t.text}`)}
               items={items}
+              userId={user.id}
             />
           )}
         </div>
@@ -642,12 +644,16 @@ function Prep({
   facts,
   timeline,
   items,
+  userId,
 }: {
   person: Person;
   facts: { type: string; text: string }[];
   timeline: string[];
   items: { text: string; status: string }[];
+  userId: string;
 }) {
+  const [suggested, setSuggested] = useState('');
+  const [added, setAdded] = useState<string[]>([]);
   const advice = facts.filter((f) => f.type === 'advice');
   const offers = facts.filter((f) => f.type === 'offer');
   const hooks = facts.filter((f) => f.type === 'hook');
@@ -661,13 +667,13 @@ function Prep({
       ? `What does a strong intern or new grad do in their first 90 days at ${person.currentOrganizationRaw}?`
       : 'What separates the people who do well early from those who struggle?',
     hooks[0]
-      ? `You mentioned ${hooks[0].text.replace(/\.$/, '')} — how is that going?`
+      ? `You mentioned ${hooks[0].text.replace(/\.$/, '')}. How is that going?`
       : 'What are you most focused on right now?',
     'What would you want to know at my stage that nobody told you?',
-    offers[0]
-      ? `When would be a good time to follow up on ${offers[0].text.replace(/\.$/, '')}?`
-      : 'Is there anyone else you think I should talk to?',
+    ...(offers[0] ? [`When would be a good time to follow up on ${offers[0].text.replace(/\.$/, '')}?`] : []),
     'What is the best way to be helpful to you?',
+    // always the last question: every good chat ends with the next name
+    'Is there anyone else you think I should talk to?',
   ];
   return (
     <div className="space-y-4 text-[13.5px]">
@@ -717,6 +723,30 @@ function Prep({
             <li key={i}>{q}</li>
           ))}
         </ol>
+        <label className="block mt-3 text-ink-2" htmlFor="prep-suggested">
+          Who did {person.firstName} suggest you talk to?
+        </label>
+        <input
+          id="prep-suggested"
+          data-testid="prep-suggested"
+          value={suggested}
+          onChange={(e) => setSuggested(e.target.value)}
+          placeholder="Priya Shah at Stripe, Tom Lee"
+          className="mt-1 w-full h-8 rounded-lg border border-line px-2.5 text-[13px]"
+          onKeyDown={async (e) => {
+            if (e.key !== 'Enter' || !suggested.trim()) return;
+            const people = await addSuggestedContacts(userId, person.id, suggested);
+            if (people.length) {
+              setAdded((a) => [...a, ...people.map((p) => p.displayName)]);
+              setSuggested('');
+            }
+          }}
+        />
+        {added.length > 0 && (
+          <p className="mt-1.5 text-ink-3">
+            Saved to Discover as suggested by {person.firstName}: {added.join(', ')}
+          </p>
+        )}
       </Card>
       <Card>
         <div className="font-medium">Follow-through from last time</div>

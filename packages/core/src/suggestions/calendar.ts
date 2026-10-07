@@ -124,64 +124,86 @@ const WEEKDAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'frida
 
 /**
  * The day an out-of-office reply says the person is back ("back on Monday, October 12", "returning 10/12",
- * "out until Oct 12", "away until Friday"), as the start of that day in `tz` terms, or undefined when the reply
- * names no date. Dates without a year are taken as the next such date on or after the reply.
+ * "out until Oct 12", "away until Friday", "back in the office on the 12th", "out from Oct 5 to Oct 12"), as the
+ * start of that day in `tz` terms, or undefined when the reply names no date. Dates without a year are taken as the
+ * next such date on or after the reply; a range or "through" names the last day away, so they are back the day after.
  */
 export function parseReturnDate(text: string, sentAt: Date, tz?: string): Date | undefined {
   const t = text.toLowerCase().replace(/\s+/g, ' ');
+  // "from Oct 5 to Oct 12", "between 10/5 and 10/12": the end of the range is the last day away
+  const range = /\b(?:from|between) [^.;\n]{1,30}? (?:to|until|till|through|thru|and|-) ([^.;\n]{0,40})/.exec(
+    t,
+  );
+  if (range) {
+    const end = datePhrase(range[1]!, sentAt, tz, /^(until|till) /.test(range[0]) ? 0 : DAY);
+    if (end) return end;
+  }
   const cue =
     /\b(back(?: in (?:the )?office)?|return(?:ing)?(?: to (?:the )?office)?|until|through|thru|till|resum(?:e|ing))\b(?: on)?(?: the)? ?([^.;\n]{0,40})/g;
-  const sentKey = todayKey(sentAt, tz);
-  const sentDay = dayOfKey(sentKey);
-  const sentYear = Number(sentKey.slice(0, 4));
   let m: RegExpExecArray | null;
   while ((m = cue.exec(t))) {
     // "out through Friday" means back the day after
     const extra = /^(through|thru)$/.test(m[1]!) ? DAY : 0;
-    const rest = m[2] ?? '';
-    // "October 12", "Oct 12th", "12 October"
-    const named =
-      /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.? (\d{1,2})(?:st|nd|rd|th)?\b/.exec(
-        rest,
-      ) ?? undefined;
-    const namedRev =
-      /\b(\d{1,2})(?:st|nd|rd|th)? (jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b/.exec(
-        rest,
-      ) ?? undefined;
-    const numeric = /\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/.exec(rest) ?? undefined;
-    let month: number | undefined;
-    let day: number | undefined;
-    let year: number | undefined;
-    if (named) {
-      month = MONTHS.findIndex((x) => x.startsWith(named[1]!.slice(0, 3))) + 1;
-      day = Number(named[2]);
-    } else if (namedRev) {
-      month = MONTHS.findIndex((x) => x.startsWith(namedRev[2]!.slice(0, 3))) + 1;
-      day = Number(namedRev[1]);
-    } else if (numeric) {
-      month = Number(numeric[1]);
-      day = Number(numeric[2]);
-      if (numeric[3]) year = Number(numeric[3].length === 2 ? `20${numeric[3]}` : numeric[3]);
-    }
-    if (month && day && month <= 12 && day <= 31) {
-      let y = year ?? sentYear;
-      let k = dayOfKey(keyOf(y, month, day));
-      if (!year && k < sentDay) k = dayOfKey(keyOf(++y, month, day));
-      if (!Number.isNaN(k) && k >= sentDay) return new Date(sentAt.getTime() + (k - sentDay) * DAY + extra);
-      continue;
-    }
-    const wd = /\b(sun|mon|tue|wed|thu|fri|sat)[a-z]*\b/.exec(rest);
-    if (wd) {
-      const target = WEEKDAYS.findIndex((x) => x.startsWith(wd[1]!));
-      const dow = new Date(`${sentKey}T00:00:00Z`).getUTCDay();
-      const delta = (target - dow + 7) % 7 || 7;
-      return new Date(sentAt.getTime() + delta * DAY + extra);
-    }
-    if (/\btomorrow\b/.test(rest)) return new Date(sentAt.getTime() + DAY);
-    if (/\bnext week\b/.test(rest)) {
-      const dow = new Date(`${sentKey}T00:00:00Z`).getUTCDay();
-      return new Date(sentAt.getTime() + ((1 - dow + 7) % 7 || 7) * DAY);
-    }
+    const d = datePhrase(m[2] ?? '', sentAt, tz, extra);
+    if (d) return d;
+  }
+  return undefined;
+}
+
+/** The first date named at the start of `rest` ("October 12", "12 Oct", "10/12", "the 12th", "Friday"), plus `extra`. */
+function datePhrase(rest: string, sentAt: Date, tz: string | undefined, extra: number): Date | undefined {
+  const sentKey = todayKey(sentAt, tz);
+  const sentDay = dayOfKey(sentKey);
+  const sentYear = Number(sentKey.slice(0, 4));
+  const sentMonth = Number(sentKey.slice(5, 7));
+  // "October 12", "Oct 12th", "12 October"
+  const named =
+    /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.? (\d{1,2})(?:st|nd|rd|th)?\b/.exec(
+      rest,
+    ) ?? undefined;
+  const namedRev =
+    /\b(\d{1,2})(?:st|nd|rd|th)? (jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b/.exec(rest) ??
+    undefined;
+  const numeric = /\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/.exec(rest) ?? undefined;
+  // "the 12th": a day of this month, or of next month once it has passed
+  const ordinal = /^(?:the )?(\d{1,2})(?:st|nd|rd|th)\b/.exec(rest) ?? undefined;
+  let month: number | undefined;
+  let day: number | undefined;
+  let year: number | undefined;
+  if (named) {
+    month = MONTHS.findIndex((x) => x.startsWith(named[1]!.slice(0, 3))) + 1;
+    day = Number(named[2]);
+  } else if (namedRev) {
+    month = MONTHS.findIndex((x) => x.startsWith(namedRev[2]!.slice(0, 3))) + 1;
+    day = Number(namedRev[1]);
+  } else if (numeric) {
+    month = Number(numeric[1]);
+    day = Number(numeric[2]);
+    if (numeric[3]) year = Number(numeric[3].length === 2 ? `20${numeric[3]}` : numeric[3]);
+  } else if (ordinal) {
+    day = Number(ordinal[1]);
+    month = sentMonth;
+    if (dayOfKey(keyOf(sentYear, month, day)) < sentDay) month = (month % 12) + 1;
+    if (month < sentMonth) year = sentYear + 1;
+  }
+  if (month && day && month <= 12 && day <= 31) {
+    let y = year ?? sentYear;
+    let k = dayOfKey(keyOf(y, month, day));
+    if (!year && k < sentDay) k = dayOfKey(keyOf(++y, month, day));
+    if (!Number.isNaN(k) && k >= sentDay) return new Date(sentAt.getTime() + (k - sentDay) * DAY + extra);
+    return undefined;
+  }
+  const wd = /\b(sun|mon|tue|wed|thu|fri|sat)[a-z]*\b/.exec(rest);
+  if (wd) {
+    const target = WEEKDAYS.findIndex((x) => x.startsWith(wd[1]!));
+    const dow = new Date(`${sentKey}T00:00:00Z`).getUTCDay();
+    const delta = (target - dow + 7) % 7 || 7;
+    return new Date(sentAt.getTime() + delta * DAY + extra);
+  }
+  if (/\btomorrow\b/.test(rest)) return new Date(sentAt.getTime() + DAY);
+  if (/\bnext week\b/.test(rest)) {
+    const dow = new Date(`${sentKey}T00:00:00Z`).getUTCDay();
+    return new Date(sentAt.getTime() + ((1 - dow + 7) % 7 || 7) * DAY);
   }
   return undefined;
 }
