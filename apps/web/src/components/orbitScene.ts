@@ -57,6 +57,13 @@ const STAGE_RGB: Record<string, Rgb> = Object.fromEntries(
 );
 const STAGE_FALLBACK = parseHex('#9aa1ad');
 const DIM = 0.16;
+const DASH: number[] = [3, 4];
+const SOLID: number[] = [];
+/** fill and edge colours for the company wedges, built once rather than every frame */
+const WEDGE_STYLE = new Map<number, [string, string]>(
+  [0.045, 0.075].map((f) => [f, [`rgba(${ACCENT_RGB},${f})`, `rgba(${ACCENT_RGB},${f * 2.4})`]]),
+);
+const CHIP_EDGE = `rgba(${ACCENT_RGB},0.35)`;
 const OMEGA = TAU / ORBIT_PERIOD_MS;
 /** extent of an orbit with no dots (the outer ring plus half a dot), for the empty and loading map */
 const EMPTY_EXTENT = 456;
@@ -65,14 +72,18 @@ const FAN_PITCH = 30;
 // ---------- timing (ms) ----------
 export const TIMING = {
   arrive: 700,
+  skip: 140,
   ringSweep: 520,
   ringStagger: 80,
   labelsIn: 300,
   fadeIn: 220,
   flip: 650,
+  makeRoom: 160,
+  spotHold: 1400,
   travel: 800,
   ripple: 900,
   introLinkHold: 3000,
+  introWait: 180,
   emphasis: 300,
   filter: 250,
   filterSweep: 180,
@@ -81,6 +92,8 @@ export const TIMING = {
   hoverLines: 220,
   tip: 150,
   hop: 350,
+  turn: 700,
+  turnBackMax: 1150,
   retract: 260,
   cometPeriod: 2500,
   cometTravel: 1100,
@@ -88,7 +101,8 @@ export const TIMING = {
   shake: 520,
   webGen: 250,
   webLink: 450,
-  webLight: 2200,
+  webLight: 1700,
+  webLightRest: 900,
   stage: 450,
   burst: 900,
   pendingPeriod: 2400,
@@ -99,7 +113,8 @@ export const TIMING = {
 export type ReachStatus = 'searching' | 'found' | 'none';
 
 export type FocusSpec =
-  | { kind: 'company'; groupKey: string }
+  /** `count` and `warm`: what the page's legend line says, so the chip on the map agrees with it */
+  | { kind: 'company'; groupKey: string; count?: number; warm?: number }
   /** `ids`: the route from the student outwards, 'user' first */
   | { kind: 'reach'; targetId: string; status: ReachStatus; ids?: string[] };
 
@@ -156,6 +171,10 @@ class NodeView {
   rippleAt = -1e9;
   shakeAt = -1e9;
   popAt = -1e9;
+  /** a moment in the spotlight (a newcomer, a tie that moved rings, a chat just booked): larger, with a halo */
+  spotStart = -1e9;
+  spotEnd = -1e9;
+  spotScale = 0.35;
   pending = false;
   removing = false;
   dead = false;
@@ -234,6 +253,13 @@ function bump(since: number, duration: number, height: number): number {
   return Math.sin((since / duration) * Math.PI) * height;
 }
 
+/** 0..1: how far into its spotlight a dot is (eases in, holds, eases out before the end). */
+function spotOf(v: NodeView, now: number): number {
+  if (now < v.spotStart || now > v.spotEnd) return 0;
+  const k = Math.min(clamp01((now - v.spotStart) / 220), clamp01((v.spotEnd - now) / 500));
+  return easing.outCubic(k);
+}
+
 const clusterLabel = (c: OrbitCluster) => (c.count > 999 ? '999+' : `+${c.count}`);
 
 export class OrbitScene {
@@ -261,6 +287,7 @@ export class OrbitScene {
   private spinAllowed = true;
 
   private layout?: OrbitLayout;
+  private groupByKey = new Map<string, OrbitGroup>();
   private people = new Map<string, Person>();
   private views: NodeView[] = [];
   private byKey = new Map<string, NodeView>();
@@ -300,6 +327,7 @@ export class OrbitScene {
   private shownGroups?: Set<string>;
 
   private companyKey?: string;
+  private companyCounts?: { count: number; warm: number };
   /** how far the focused company's wedge has opened (1 = its own width) */
   private spreadK = 1;
   private wedge = { key: '', alpha: new Tween(0) };
@@ -321,6 +349,10 @@ export class OrbitScene {
   private webPath: string[] = [];
   private webLightStart = 0;
   private lineageOf = new Map<string, string>();
+  private gradients = new WeakMap<
+    object,
+    { x0: number; y0: number; x1: number; y1: number; color: string; g: CanvasGradient }
+  >();
 
   private hoverKey?: string;
   private hoverHow: HoverHow = 'pointer';
@@ -474,7 +506,16 @@ export class OrbitScene {
       const from = this.viewFor(by);
       if (!to || !from || to.temp || to.appear.from !== 0 || now - to.appear.start > 2000) continue;
       if (this.introLinks.some((l) => l.to === to)) continue;
-      const l = { from, to, start: now, end: now + TIMING.travel + TIMING.introLinkHold };
+      let start = now;
+      if (now < to.a.start && !from.removing) {
+        // still waiting at You: set out from the introducer instead, at the same moment
+        start = to.a.start;
+        const oa = from.a.value(now);
+        this.play(to.a, oa, nearestAngle(oa, to.a.to), now, TIMING.travel, easing.inOutCubic, start - now);
+        this.play(to.r, from.r.value(now), to.r.to, now, TIMING.travel, easing.inOutCubic, start - now);
+      }
+      const l = { from, to, start, end: start + TIMING.travel + TIMING.introLinkHold };
+      if (to.spotEnd > now) this.spotlight(to, to.spotStart, l.end, to.spotScale);
       this.introLinks.push(l);
       this.busyUntil = Math.max(this.busyUntil, l.end);
       this.setPhase('newcomer-intro');
@@ -484,22 +525,39 @@ export class OrbitScene {
   private applyLayout(layout: OrbitLayout, now: number, initial: boolean): void {
     const prevClusterOf = this.clusterOf;
     this.layout = layout;
+    this.groupByKey = new Map(layout.groups.map((g) => [g.key, g]));
     const seen = new Set<string>();
     const born: NodeView[] = [];
     const dur = this.reduced ? 0 : TIMING.flip;
     let moved = false;
+    // a few people changing rings (a tie grew closer) lead: they move first and land in the spotlight, and
+    // everyone else makes room a beat later, so the eye follows the change rather than the reshuffle
+    let changers = 0;
+    for (const n of layout.nodes) {
+      const v = this.byKey.get(n.id);
+      if (v && !v.temp && !v.removing && v.person && v.ring !== n.ring) changers++;
+    }
+    const lead = !initial && !this.reduced && changers > 0 && changers <= 6;
     for (const n of layout.nodes) {
       let v = this.byKey.get(n.id);
       if (v?.temp) v = undefined;
       if (v) {
         if (v.removing) this.revive(v, now);
+        const changer = lead && !!v.person && v.ring !== n.ring;
         this.bind(v, n);
         const ta = nearestAngle(v.a.value(now), n.angle);
         if (Math.abs(ta - v.a.to) > 1e-6 || Math.abs(n.radius - v.r.to) > 1e-6) {
           // FLIP: glide from where the dot is now to its new slot, round the orbit and along the radius
-          this.anim(v.a, ta, now, dur, easing.inOutCubic);
-          this.anim(v.r, n.radius, now, dur, easing.inOutCubic);
+          const delay = lead && !changer ? TIMING.makeRoom : 0;
+          const d = lead && !changer ? TIMING.flip + 100 : dur;
+          this.anim(v.a, ta, now, d, easing.inOutCubic, delay);
+          this.anim(v.r, n.radius, now, d, easing.inOutCubic, delay);
           moved = true;
+        }
+        if (changer) {
+          this.spotlight(v, now, now + TIMING.flip + TIMING.spotHold, n.ring === 0 ? 0.15 : 0.3);
+          v.rippleAt = now + TIMING.flip - 60;
+          this.busyUntil = Math.max(this.busyUntil, v.rippleAt + TIMING.ripple);
         }
         this.anim(v.size, n.size, now, dur, easing.inOutCubic);
       } else {
@@ -559,6 +617,19 @@ export class OrbitScene {
     v.label = n.cluster ? clusterLabel(n.cluster) : '';
   }
 
+  /** A dot steps into the spotlight for a moment, so the eye finds what changed. */
+  private spotlight(v: NodeView, start: number, end: number, scale: number): void {
+    if (this.reduced) return;
+    v.spotStart = start;
+    v.spotEnd = end;
+    v.spotScale = scale;
+    this.busyUntil = Math.max(this.busyUntil, end);
+  }
+
+  private groupOf(key: string | undefined): OrbitGroup | undefined {
+    return key ? this.groupByKey.get(key) : undefined;
+  }
+
   private retire(v: NodeView, now: number, after: number): void {
     if (v.removing) return;
     v.removing = true;
@@ -587,11 +658,13 @@ export class OrbitScene {
         this.play(v.appear, 0, 1, now, TIMING.reduced, easing.linear);
         return;
       }
-      const delay = i * stagger;
       const introducer = bulk ? undefined : this.introducerOf?.get(v.pid);
       const from = introducer ? this.viewFor(introducer) : undefined;
       const was = prevClusterOf.get(v.pid);
       const origin = from && !from.removing ? from : was && !was.removing ? was : undefined;
+      // with no introducer on record yet, wait a moment: the record of who introduced them is often saved just
+      // after the person, and then they still set out from their introducer's dot (see lateIntroductions)
+      const delay = i * stagger + (bulk || origin ? 0 : TIMING.introWait);
       const oa = origin ? origin.a.value(now) : v.a.to - 0.9;
       const or = origin ? origin.r.value(now) : 0;
       this.play(v.a, oa, nearestAngle(oa, v.a.to), now, TIMING.travel, easing.inOutCubic, delay);
@@ -600,6 +673,11 @@ export class OrbitScene {
       if (!bulk || i < 24) {
         v.rippleAt = now + delay + TIMING.travel - 40;
         this.busyUntil = Math.max(this.busyUntil, v.rippleAt + TIMING.ripple);
+        // someone new is the news: larger, with a halo, until their introduction link fades
+        const landed = now + delay + TIMING.travel - 160;
+        const end =
+          from && origin === from ? now + delay + TIMING.travel + TIMING.introLinkHold : landed + 2400;
+        this.spotlight(v, landed, end, v.ring === 2 ? 0.7 : 0.4);
       }
       if (from && origin === from) {
         linked = true;
@@ -636,6 +714,8 @@ export class OrbitScene {
           v.burstAt = now;
           v.burstColor = STAGE_COLOR[s as keyof typeof STAGE_COLOR] ?? ACCENT;
           this.busyUntil = Math.max(this.busyUntil, now + TIMING.burst);
+          // the booked chat lifts above its neighbours while the burst plays
+          this.spotlight(v, now, now + TIMING.burst + 700, 0.35);
         }
         this.setPhase('stage');
       }
@@ -692,21 +772,34 @@ export class OrbitScene {
     this.play(this.labelIn, 0, 1, now, TIMING.labelsIn, easing.outQuad, last + TIMING.arrive - 250);
   }
 
-  /** Any pointer interaction during the arrival finishes it at once. */
+  /** The first-visit arrival is still flying in. */
+  arriving(): boolean {
+    return this.phase === 'arrival';
+  }
+
+  /**
+   * Any pointer interaction during the arrival finishes it: everything still on its way fast-forwards to its place
+   * in a blink (TIMING.skip), from wherever it is, so the click is honoured without a hard cut.
+   */
   finishArrival(): void {
     if (this.phase !== 'arrival') return;
-    for (const t of this.ringSweep) t.snap(1);
-    this.ghost.snap(0);
-    this.labelIn.snap(1);
-    this.youPop.snap(1);
+    const now = this.clock.now();
+    const ff = (t: Tween, to: number) => {
+      if (t.done(now) && t.to === to) return;
+      t.play(t.value(now), to, now, TIMING.skip, easing.outCubic);
+    };
+    for (const t of this.ringSweep) ff(t, 1);
+    ff(this.ghost, 0);
+    ff(this.labelIn, 1);
+    ff(this.youPop, 1);
     for (const v of this.views) {
       if (v.temp) continue;
-      v.a.snap(v.a.to);
-      v.r.snap(v.r.to);
-      v.appear.snap(v.removing ? 0 : 1);
+      ff(v.a, v.a.to);
+      ff(v.r, v.r.to);
+      ff(v.appear, v.removing ? 0 : 1);
     }
     this.recomputeBusy();
-    this.setPhase('idle');
+    this.setPhase('arrival-skip');
     this.wake();
   }
 
@@ -759,7 +852,13 @@ export class OrbitScene {
     const now = this.clock.now();
     const company = f?.kind === 'company' ? f.groupKey : undefined;
     const reach = f?.kind === 'reach' ? f : undefined;
+    this.companyCounts =
+      f?.kind === 'company' && f.count !== undefined ? { count: f.count, warm: f.warm ?? 0 } : undefined;
     if (company !== this.companyKey) this.applyCompany(company, now);
+    else if (company && this.chip.key === company) {
+      const g = this.groupOf(company);
+      if (g) this.chip.text = this.chipText(g);
+    }
     this.applyReach(reach, now);
     this.releaseIfFree(now);
     this.updateSpin(now);
@@ -771,12 +870,12 @@ export class OrbitScene {
     const prev = this.web;
     if (!w) {
       if (!prev) return;
-      this.webOld = { web: prev.web, start: now };
+      this.webOld = this.reduced ? undefined : { web: prev.web, start: now };
       this.anim(this.webAlpha, 0, now, TIMING.retract, easing.inQuad);
       this.web = undefined;
       this.webChain = new Set();
       this.webPath = [];
-      this.busyUntil = Math.max(this.busyUntil, now + TIMING.retract);
+      if (!this.reduced) this.busyUntil = Math.max(this.busyUntil, now + TIMING.retract);
       // everyone goes back to their own slot
       this.retarget(now, 600);
       this.refreshEmphasis(now, 'web');
@@ -795,10 +894,12 @@ export class OrbitScene {
           this.webStart = now + (this.reduced ? 0 : 380);
           this.webOld = undefined;
           this.anim(this.webAlpha, 1, now, 300, easing.outQuad);
-          this.busyUntil = Math.max(
-            this.busyUntil,
-            this.webStart + Math.max(0, w.web.depth - 1) * TIMING.webGen + TIMING.webLink,
-          );
+          // reduced motion draws every link at once, so there is nothing to wait for
+          if (!this.reduced)
+            this.busyUntil = Math.max(
+              this.busyUntil,
+              this.webStart + Math.max(0, w.web.depth - 1) * TIMING.webGen + TIMING.webLink,
+            );
           this.setPhase('web');
         }
       }
@@ -815,7 +916,7 @@ export class OrbitScene {
       if (turn !== prevTurn && w.turnTo) {
         // a search match: turn the orbit so it sits at the top, as for a company
         const target = w.turnTo.id ? this.viewFor(w.turnTo.id) : undefined;
-        const g = w.turnTo.group ? this.layout?.groups.find((x) => x.key === w.turnTo!.group) : undefined;
+        const g = w.turnTo.group ? this.groupOf(w.turnTo!.group) : undefined;
         const angle = target ? target.a.to : g ? wedgeMid(g) : undefined;
         if (angle !== undefined) this.hold(rotationToTop(angle, this.rot), now);
       }
@@ -895,7 +996,7 @@ export class OrbitScene {
       if (this.wedge.key) this.fadeOutWedge(now);
       if (this.chip.text) this.fadeOutChip(now);
     }
-    const g = groupKey ? this.layout?.groups.find((x) => x.key === groupKey) : undefined;
+    const g = groupKey ? this.groupOf(groupKey) : undefined;
     this.retarget(now);
     if (!g) {
       if (prevKey) {
@@ -922,7 +1023,7 @@ export class OrbitScene {
 
   /** The same company after the network changed: follow the wedge, keep the fan, no second burst. */
   private refreshCompany(now: number): void {
-    const g = this.companyKey ? this.layout?.groups.find((x) => x.key === this.companyKey) : undefined;
+    const g = this.companyKey ? this.groupOf(this.companyKey) : undefined;
     if (!g) {
       this.applyCompany(undefined, now);
       return;
@@ -936,7 +1037,7 @@ export class OrbitScene {
       this.collapseFans(now);
       this.chip.radius = this.chipRadius(this.burst(g, now));
     } else {
-      const slots = fanSlots(have.length, wedgeMid(g), this.fanBase(), FAN_PITCH, 0.95, 3);
+      const slots = fanSlots(have.length, wedgeMid(g), this.fanBase(), FAN_PITCH, this.fanSpan(g), 3);
       let i = 0;
       for (const v of this.views) {
         if (!v.temp || v.removing) continue;
@@ -950,10 +1051,21 @@ export class OrbitScene {
   }
 
   private chipText(g: OrbitGroup): string {
+    const said = this.companyCounts;
+    if (said) return `${said.count} at ${g.label}${said.warm ? ` · ${said.warm} warm` : ''}`;
     let warm = 0;
     for (const v of this.views)
       if (!v.temp && v.groupKey === g.key && (v.person?.strength ?? 0) >= 0.3) warm++;
     return `${g.count} at ${g.label}${warm ? ` · ${warm} warm` : ''}`;
+  }
+
+  /**
+   * How wide the fan may open: a little wider than the opened wedge, so a big company's fan stays above its own
+   * wedge instead of spilling over its neighbours' labels (whoever does not fit stays in the "+N" dot).
+   */
+  private fanSpan(g: OrbitGroup): number {
+    const wedge = (g.endAngle - g.startAngle) * this.spreadK;
+    return Math.min(0.95, Math.max(0.4, wedge + 0.12));
   }
 
   private fanBase(): number {
@@ -980,7 +1092,7 @@ export class OrbitScene {
    */
   private retarget(now: number, dur = 560): void {
     const key = this.companyKey;
-    const g = key ? this.layout?.groups.find((x) => x.key === key) : undefined;
+    const g = key ? this.groupOf(key) : undefined;
     const mid = g ? wedgeMid(g) : 0;
     const k = g ? Math.min(1.35, Math.max(1, 3.4 / Math.max(1e-3, g.endAngle - g.startAngle))) : 1;
     this.spreadK = k;
@@ -1076,7 +1188,7 @@ export class OrbitScene {
   private burst(g: OrbitGroup, now: number): number {
     const ids = this.clusterMembers(g);
     if (!ids.length) return 0;
-    const slots = fanSlots(ids.length, wedgeMid(g), this.fanBase(), FAN_PITCH, 0.95, 3);
+    const slots = fanSlots(ids.length, wedgeMid(g), this.fanBase(), FAN_PITCH, this.fanSpan(g), 3);
     const shown = ids.slice(0, slots.length);
     const fanned = new Set<string>();
     shown.forEach(({ pid, from }, i) => {
@@ -1106,7 +1218,7 @@ export class OrbitScene {
     });
     for (const c of new Set(ids.map((x) => x.from))) {
       const left = c.cluster!.personIds.filter((pid) => !fanned.has(pid)).length;
-      c.popAt = now;
+      if (!this.reduced) c.popAt = now;
       if (left) c.label = `+${left}`;
       else this.anim(c.appear, 0, now, 360, easing.inQuad, 160);
     }
@@ -1198,7 +1310,8 @@ export class OrbitScene {
             const v = this.viewFor(ids[k]!);
             if (v) v.popAt = this.path.start + k * TIMING.hop - 40;
           }
-        this.busyUntil = Math.max(this.busyUntil, this.path.start + (ids.length - 1) * TIMING.hop + 340);
+        if (!this.reduced)
+          this.busyUntil = Math.max(this.busyUntil, this.path.start + (ids.length - 1) * TIMING.hop + 340);
         this.setPhase('reach-path');
       }
     }
@@ -1211,7 +1324,7 @@ export class OrbitScene {
   private retractPath(now: number): void {
     if (!this.path.ids.length) return;
     const drawn = this.pathProgress(now);
-    if (drawn > 0) {
+    if (drawn > 0 && !this.reduced) {
       this.pathOld = { ids: this.path.ids, start: now, from: drawn };
       this.busyUntil = Math.max(this.busyUntil, now + TIMING.retract);
     }
@@ -1267,6 +1380,7 @@ export class OrbitScene {
   /** Turn to `target` and hold there; remembers where the orbit was so clearing can turn back. */
   private hold(target: number, now: number): void {
     if (this.returnRot === null) this.returnRot = this.rot;
+    this.rotSpring.configure({ duration: TIMING.turn });
     this.startSpring(target, now);
   }
 
@@ -1274,9 +1388,13 @@ export class OrbitScene {
   private releaseIfFree(now: number): void {
     const webTurn = !!this.web?.turnTo;
     if (this.companyKey || this.reach || webTurn || this.returnRot === null) return;
-    const back = this.returnRot;
+    const back = nearestAngle(this.rot, this.returnRot);
     this.returnRot = null;
-    this.startSpring(nearestAngle(this.rot, back), now);
+    // the way back runs while the camera zooms out too: a long turn takes a little longer, so the outer ring
+    // glides rather than strobes
+    const deg = (Math.abs(back - this.rot) * 180) / Math.PI;
+    this.rotSpring.configure({ duration: Math.min(TIMING.turnBackMax, TIMING.turn + 3 * deg) });
+    this.startSpring(back, now);
   }
 
   private startSpring(target: number, now: number): void {
@@ -1446,6 +1564,10 @@ export class OrbitScene {
     const reach = this.reach;
     const web = this.web;
     const popping: NodeView[] = [];
+    const route =
+      reach?.status === 'found' && !web
+        ? new Set(reach.ids.map((id) => this.viewFor(id)).filter((v): v is NodeView => !!v))
+        : undefined;
     for (const v of this.views) {
       if (v.temp) continue;
       let alpha = 1;
@@ -1473,7 +1595,8 @@ export class OrbitScene {
         } else {
           const k = reach.ids.indexOf(v.pid);
           alpha = k >= 0 || isTarget ? 1 : DIM;
-          scale = k >= 0 ? 1.12 : 0.95;
+          // the route grows, but never into a neighbour (two people on it can sit side by side in a ring)
+          scale = k >= 0 && route ? this.roomFor(v, 1.12, route, 0.95) : 0.95;
           glow = k >= 0 ? 0.55 : 0;
           // each dot on the route lights up as the line reaches it
           if (k > 0) delay = Math.max(0, this.path.start + k * TIMING.hop - 60 - now);
@@ -1509,6 +1632,27 @@ export class OrbitScene {
       this.play(v.scale, v.scale.value(now), to, now, 380, easing.outBack, 220 + i * TIMING.popStagger);
     });
     this.sortDrawList();
+  }
+
+  /**
+   * The largest scale up to `want` at which a dot still clears its neighbours (at their own emphasis: `want` for
+   * the others in `group`, `rest` for everyone else), never below 1.
+   */
+  private roomFor(v: NodeView, want: number, group: Set<NodeView>, rest: number): number {
+    let s = want;
+    const a = v.a.to;
+    const r = v.r.to;
+    for (const u of this.views) {
+      if (u === v || u.temp || u.removing || !u.node) continue;
+      const d = Math.sqrt(r * r + u.r.to * u.r.to - 2 * r * u.r.to * Math.cos(a - u.a.to));
+      if (d > (v.size.to + u.size.to) * want) continue;
+      const room = d - 2;
+      s = Math.min(
+        s,
+        group.has(u) ? (2 * room) / (v.size.to + u.size.to) : (2 * room - u.size.to * rest) / v.size.to,
+      );
+    }
+    return Math.max(1, s);
   }
 
   private sortDrawList(): void {
@@ -1642,6 +1786,7 @@ export class OrbitScene {
       this.publish();
     }
     if (this.raf) return;
+    if (this.animating) this.recorder?.resume(performance.now());
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = undefined;
@@ -1658,8 +1803,11 @@ export class OrbitScene {
     this.advance(now, dt);
     const transition = this.inTransition(now);
     const full = transition || this.fullRate(now);
-    const half = this.spin.value(now) > 0 || !this.spin.done(now) || this.rippling(now);
-    if (this.dirty || full || (half && now - this.lastDraw >= 33)) {
+    // the slow drift moves a few pixels a second, so 15 frames a second show it smoothly; a ripple needs 30
+    const rippling = this.rippling(now);
+    const half = this.spin.value(now) > 0 || !this.spin.done(now) || rippling;
+    const every = rippling || !this.spin.done(now) ? 33 : 66;
+    if (this.dirty || full || (half && now - this.lastDraw >= every)) {
       const t0 = performance.now();
       this.draw(now);
       // only frames of an animation count: the slow drift is drawn at half rate on purpose, not as dropped frames
@@ -1694,14 +1842,15 @@ export class OrbitScene {
       this.inertia !== 0 ||
       this.loading ||
       this.removals > 0 ||
-      this.reach?.status === 'searching'
+      // the radar sweeps while routes are found (reduced motion shows a still ring instead)
+      (this.reach?.status === 'searching' && !this.reduced)
     );
   }
 
   /** Effects that loop while shown: the route's comet and the lit chain's travelling light. */
   private fullRate(now: number): boolean {
     if (this.path.ids.length > 1 && this.cometT(now) >= 0) return true;
-    return !!this.web && this.webPath.length > 0 && !this.reduced;
+    return this.chainLightT(now) >= 0;
   }
 
   private rippling(now: number): boolean {
@@ -1719,6 +1868,11 @@ export class OrbitScene {
       const k = Math.max(0, Math.ceil((now - begin) / TIMING.cometPeriod));
       next = Math.min(next, begin + k * TIMING.cometPeriod);
     }
+    if (this.web && this.webPath.length && !this.reduced) {
+      const period = TIMING.webLight + TIMING.webLightRest;
+      const k = Math.max(0, Math.ceil((now - this.webLightStart) / period));
+      next = Math.min(next, this.webLightStart + k * period);
+    }
     return next;
   }
 
@@ -1732,6 +1886,13 @@ export class OrbitScene {
   private ripplePhase(now: number): number {
     const t = now % TIMING.pendingPeriod;
     return t < TIMING.pendingRipple ? t / TIMING.pendingRipple : -1;
+  }
+
+  /** The lit chain's travelling light, 0..1 along its trip, or -1 while it rests between trips. */
+  private chainLightT(now: number): number {
+    if (this.reduced || !this.web || !this.webPath.length) return -1;
+    const t = (now - this.webLightStart) % (TIMING.webLight + TIMING.webLightRest);
+    return t < TIMING.webLight ? t / TIMING.webLight : -1;
   }
 
   private cometBegin(): number {
@@ -1760,8 +1921,9 @@ export class OrbitScene {
         // holding still on a focus: land exactly on it
         this.rot = this.rotSpring.target;
         this.rotSpringOn = false;
-      } else if (spin > 0 && off < 2e-3 && Math.abs(this.rotSpring.v - spin) < 1e-5) {
-        // turning back into the slow drift: hand over at the same angle and speed, no snap
+      } else if (spin > 0 && off < 1e-2 && Math.abs(this.rotSpring.v - spin) < 1e-5) {
+        // turning back into the slow drift: hand over at the same angle and speed, no snap (a slower spring trails
+        // its drifting target by a little more, which is why the distance allowed is not tiny)
         this.rotSpringOn = false;
       }
     } else {
@@ -1858,7 +2020,8 @@ export class OrbitScene {
     const sc =
       v.scale.value(now) *
       (1 + 0.25 * v.lift.value(now)) *
-      (1 + bump(now - v.popAt, 340, 0.22)) *
+      (1 + bump(now - v.popAt, 340, this.reduced ? 0 : 0.22)) *
+      (1 + v.spotScale * spotOf(v, now)) *
       (0.55 + 0.45 * ap);
     const pr = (v.size.value(now) / 2) * S * sc;
     v.x = x;
@@ -1932,11 +2095,12 @@ export class OrbitScene {
     if (ga > 0.005 && this.shownGroups)
       for (const g of groups)
         if (this.shownGroups.has(g.key)) this.sector(ctx, g, ga, 0.045, ox, oy, inner, outer, rot);
-    for (const wd of [this.wedgeOld, this.wedge]) {
+    for (let i = 0; i < 2; i++) {
+      const wd = i ? this.wedge : this.wedgeOld;
       if (!wd.key) continue;
       const alpha = wd.alpha.value(now);
       if (alpha <= 0.005) continue;
-      const g = groups.find((x) => x.key === wd.key);
+      const g = this.groupOf(wd.key);
       if (g)
         this.sector(ctx, g, alpha, 0.075, ox, oy, inner, outer, rot, wd === this.wedge ? this.spreadK : 1);
     }
@@ -1966,9 +2130,13 @@ export class OrbitScene {
     ctx.arc(ox, oy, outer, a0, a1);
     ctx.arc(ox, oy, inner, a1, a0, true);
     ctx.closePath();
-    ctx.fillStyle = `rgba(${ACCENT_RGB},${fill})`;
+    const style = WEDGE_STYLE.get(fill) ?? [
+      `rgba(${ACCENT_RGB},${fill})`,
+      `rgba(${ACCENT_RGB},${fill * 2.4})`,
+    ];
+    ctx.fillStyle = style[0];
     ctx.fill();
-    ctx.strokeStyle = `rgba(${ACCENT_RGB},${fill * 2.4})`;
+    ctx.strokeStyle = style[1];
     ctx.lineWidth = 1;
     ctx.stroke();
   }
@@ -1976,6 +2144,20 @@ export class OrbitScene {
   private drawRadar(ctx: CanvasRenderingContext2D, now: number, ox: number, oy: number, S: number) {
     const alpha = this.radar.value(now);
     if (alpha <= 0.005 || !this.layout) return;
+    if (this.reduced) {
+      // reduced motion: no sweep, no pulse, just a still ring round the person Orbit is looking for
+      const t = this.reach ? this.viewFor(this.reach.targetId) : undefined;
+      if (t?.visible) {
+        ctx.globalAlpha = alpha * 0.6;
+        ctx.strokeStyle = ACCENT;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(t.x, t.y, t.pr + 9, 0, TAU);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+      return;
+    }
     const R = this.layout.extent * S;
     // a thin line sweeping round from the centre, with a fading trail
     const a = ((now - this.radarStart) / TIMING.radarTurn) * TAU - Math.PI / 2;
@@ -2073,6 +2255,7 @@ export class OrbitScene {
         lit,
         t,
         retract,
+        undefined,
       );
     }
     for (const l of web.links) {
@@ -2081,9 +2264,21 @@ export class OrbitScene {
       if (!from?.visible || !to || from === to) continue;
       const onChain = this.webChain.has(l.fromId) && this.webChain.has(l.toId);
       const gen = web.generation.get(l.toId) ?? 2;
-      this.webLink(ctx, from, to, gen, this.lineageOf.get(l.toId) ?? ACCENT, false, onChain, lit, t, retract);
+      this.webLink(
+        ctx,
+        from,
+        to,
+        gen,
+        this.lineageOf.get(l.toId) ?? ACCENT,
+        false,
+        onChain,
+        lit,
+        t,
+        retract,
+        l,
+      );
     }
-    if (this.web && this.webPath.length && !this.reduced) this.drawChainLight(ctx, now);
+    if (this.web && this.webPath.length) this.drawChainLight(ctx, now);
     ctx.globalAlpha = 1;
   }
 
@@ -2098,6 +2293,7 @@ export class OrbitScene {
     lit: boolean,
     t: number,
     retract: number,
+    link: object | undefined,
   ): void {
     const grow = this.reduced
       ? 1
@@ -2111,18 +2307,33 @@ export class OrbitScene {
     ctx.lineWidth = own ? 1.2 : onChain && lit ? 2.6 : 2;
     if (own) {
       ctx.strokeStyle = color;
-      ctx.setLineDash([3, 4]);
+      ctx.setLineDash(DASH);
     } else {
-      // fades in from the introducer to the person introduced, so the direction reads at a glance
-      const g = ctx.createLinearGradient(from.x, from.y, to.x, to.y);
-      g.addColorStop(0, `${color}26`);
-      g.addColorStop(1, color);
-      ctx.strokeStyle = g;
+      // fades in from the introducer to the person introduced, so the direction reads at a glance; the gradient
+      // is kept while the two dots hold still (a lit chain holds the orbit still), not rebuilt every frame
+      const cached = link ? this.gradients.get(link) : undefined;
+      if (
+        cached &&
+        cached.color === color &&
+        Math.abs(cached.x0 - from.x) +
+          Math.abs(cached.y0 - from.y) +
+          Math.abs(cached.x1 - to.x) +
+          Math.abs(cached.y1 - to.y) <
+          0.5
+      )
+        ctx.strokeStyle = cached.g;
+      else {
+        const g = ctx.createLinearGradient(from.x, from.y, to.x, to.y);
+        g.addColorStop(0, `${color}26`);
+        g.addColorStop(1, color);
+        ctx.strokeStyle = g;
+        if (link) this.gradients.set(link, { x0: from.x, y0: from.y, x1: to.x, y1: to.y, color, g });
+      }
     }
     ctx.beginPath();
     quadPartial(ctx, from.x, from.y, A.x, A.y, to.x, to.y, p);
     ctx.stroke();
-    if (own) ctx.setLineDash([]);
+    if (own) ctx.setLineDash(SOLID);
     else if (p > 0.92) {
       quadPoint(B, from.x, from.y, A.x, A.y, to.x, to.y, 0.94);
       const ang = Math.atan2(to.y - B.y, to.x - B.x);
@@ -2140,7 +2351,8 @@ export class OrbitScene {
 
   /** A light that travels down the lit chain: from You, through each introducer, to the person. */
   private drawChainLight(ctx: CanvasRenderingContext2D, now: number): void {
-    const k = ((now - this.webLightStart) % TIMING.webLight) / TIMING.webLight;
+    const k = this.chainLightT(now);
+    if (k < 0) return;
     const hops = this.webPath.length;
     const u = easing.inOutSine(Math.min(1, k * 1.25)) * hops;
     const i = Math.min(hops - 1, Math.floor(u));
@@ -2268,6 +2480,14 @@ export class OrbitScene {
         ctx.arc(x, y, pr + 8, 0, TAU);
         ctx.fill();
       }
+      const spot = spotOf(v, now);
+      if (spot > 0.01) {
+        ctx.fillStyle = ACCENT;
+        ctx.globalAlpha = pa * spot * 0.16;
+        ctx.beginPath();
+        ctx.arc(x, y, pr + 7, 0, TAU);
+        ctx.fill();
+      }
       // in the introductions view each lineage tints its people, so a chain reads as one branch
       if (webOn > 0.01 && v.person) {
         const color = this.lineageOf.get(v.pid);
@@ -2286,7 +2506,7 @@ export class OrbitScene {
         }
       }
       ctx.globalAlpha = pa;
-      this.drawSprite(ctx, v);
+      this.drawSprite(ctx, v, now);
       // pipeline stage ring, crossfading between colours when the stage changes
       if (v.stageFrom || v.stageTo) {
         const t = v.stageMix.value(now);
@@ -2308,16 +2528,20 @@ export class OrbitScene {
           ctx.stroke();
         }
       }
-      // one soft ring burst when a chat is booked or has happened
+      // one ring burst when a chat is booked or has happened: a bold ring in the stage colour, and a second,
+      // thinner one just behind it, so it reads even in a crowded inner ring
       const b = now - v.burstAt;
       if (b >= 0 && b < TIMING.burst) {
-        const k = b / TIMING.burst;
-        ctx.globalAlpha = pa * 0.55 * (1 - k);
         ctx.strokeStyle = v.burstColor;
-        ctx.lineWidth = 2.5 * (1 - k) + 0.5;
-        ctx.beginPath();
-        ctx.arc(x, y, pr + 3 + easing.outCubic(k) * 20, 0, TAU);
-        ctx.stroke();
+        for (let w = 0; w < 2; w++) {
+          const k = clamp01((b - w * 160) / (TIMING.burst - 160));
+          if (k <= 0 || k >= 1) continue;
+          ctx.globalAlpha = pa * (w ? 0.45 : 0.8) * (1 - k);
+          ctx.lineWidth = (w ? 2 : 5) * (1 - k) + 0.5;
+          ctx.beginPath();
+          ctx.arc(x, y, pr + 3 + easing.outCubic(k) * (w ? 34 : 26), 0, TAU);
+          ctx.stroke();
+        }
       }
       // a newcomer lands with a ripple
       const rp = now - v.rippleAt;
@@ -2364,11 +2588,17 @@ export class OrbitScene {
     ctx.globalAlpha = 1;
   }
 
-  private drawSprite(ctx: CanvasRenderingContext2D, v: NodeView): void {
+  private drawSprite(ctx: CanvasRenderingContext2D, v: NodeView, now: number): void {
     const d = v.pr * 2;
     if (d < 0.5) return;
-    // built at the size the dot is heading for, so a pop or a lift does not rebuild it every frame
-    const target = v.size.to * this.fitTarget * this.zoom.target * v.scale.to * (1 + 0.25 * v.lift.to);
+    // built at the size the dot is heading for, so a pop, a lift or a spotlight does not rebuild it every frame
+    const target =
+      v.size.to *
+      this.fitTarget *
+      this.zoom.target *
+      v.scale.to *
+      (1 + 0.25 * v.lift.to) *
+      (now < v.spotEnd ? 1 + v.spotScale : 1);
     const want = Math.max(d, target);
     const label = v.cluster ? v.label : '';
     const photo = v.person?.photoUrl ? this.imageFor(v.person) : undefined;
@@ -2553,10 +2783,11 @@ export class OrbitScene {
     rot: number,
   ) {
     if (!this.layout) return;
-    for (const chip of [this.chipOld, this.chip]) {
+    for (let i = 0; i < 2; i++) {
+      const chip = i ? this.chip : this.chipOld;
       const alpha = chip.alpha.value(now);
       if (alpha <= 0.01 || !chip.text) continue;
-      const g = this.layout.groups.find((x) => x.key === chip.key);
+      const g = this.groupOf(chip.key);
       if (!g) continue;
       const a = wedgeMid(g) + rot;
       ctx.font = '500 12px Inter, sans-serif';
@@ -2569,7 +2800,7 @@ export class OrbitScene {
       y = Math.min(Math.max(y, bh / 2 + 4), this.h - bh / 2 - 4);
       ctx.globalAlpha = alpha;
       ctx.fillStyle = '#ffffff';
-      ctx.strokeStyle = `rgba(${ACCENT_RGB},0.35)`;
+      ctx.strokeStyle = CHIP_EDGE;
       ctx.lineWidth = 1;
       roundRect(ctx, x - bw / 2, y - bh / 2, bw, bh, bh / 2);
       ctx.fill();

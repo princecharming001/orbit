@@ -242,4 +242,14 @@ describe('frame timing', () => {
     expect(s.workMax).toBe(3);
     expect(frameStats([]).frames).toBe(0);
   });
+
+  it('counts the first frame after a wake from the moment of the change', () => {
+    const r = new FrameRecorder();
+    r.gap();
+    r.resume(1000); // a click wakes the loop, then the page works for 60 ms before the frame
+    r.frame(1060, 2);
+    r.resume(1061); // already running: no effect
+    r.frame(1076.7, 2);
+    expect(r.deltas).toEqual([60, expect.closeTo(16.7, 5)]);
+  });
 });

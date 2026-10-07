@@ -59,6 +59,8 @@ const SIZE_STEPS: number[][] = [
   [1, 0.85, 0.75],
   [1, 0.85, 0.75],
 ];
+/** steps of SIZE_STEPS the inner ring takes before it opens a second track */
+const INNER_SHRINK_FIRST = 2;
 /** leave slack so wedge rounding never forces overlaps */
 const FILL = 0.85;
 export const OTHER_GROUP_KEY = 'other';
@@ -269,7 +271,15 @@ function sweep(entries: Entry[], steps: number[][]): Sweep {
 export function orbitLayout(
   people: Person[],
   orgs: Map<string, Organization>,
-  opts: { scale?: number } = {},
+  opts: {
+    scale?: number;
+    /**
+     * The wedges the student already sees (the previous layout's groups). Companies keep that order, new ones slot
+     * in by strength, and every wedge stays as close as it can to where it was, so one tie growing stronger moves
+     * that one person rather than swapping and sliding whole companies round the orbit.
+     */
+    previous?: readonly Pick<OrbitGroup, 'key' | 'startAngle' | 'endAngle'>[];
+  } = {},
 ): OrbitLayout {
   const scale = opts.scale ?? 1;
   const visible = people.filter((p) => p.isHuman && !p.hiddenAt);
@@ -296,11 +306,14 @@ export function orbitLayout(
     g.members.push(p);
     g.strength += p.strength;
   }
-  const ordered = [...groupsMap.values()].sort(
-    (a, b) =>
-      b.strength - a.strength ||
-      b.members.length - a.members.length ||
-      (a.key < b.key ? -1 : a.key > b.key ? 1 : 0),
+  const ordered = keepOrder(
+    [...groupsMap.values()].sort(
+      (a, b) =>
+        b.strength - a.strength ||
+        b.members.length - a.members.length ||
+        (a.key < b.key ? -1 : a.key > b.key ? 1 : 0),
+    ),
+    opts.previous?.map((g) => g.key),
   );
   const byStrength = (a: Person, b: Person) => b.strength - a.strength || (a.id < b.id ? -1 : 1);
   const ringMembers = new Map<string, Person[][]>();
@@ -386,7 +399,10 @@ export function orbitLayout(
     );
     if (roomy !== undefined) {
       const st = state[roomy]!;
-      if (st.tracks < st.geo.tracks.length) st.tracks++;
+      // close ties stay one clean ring for as long as slightly smaller dots allow: a second inner track would
+      // crowd You, and a tie growing closer would send half the ring to it
+      const shrinkFirst = roomy === 0 && st.step < INNER_SHRINK_FIRST;
+      if (st.tracks < st.geo.tracks.length && !shrinkFirst) st.tracks++;
       else {
         st.step++;
         st.geo = ringGeometry(roomy, SIZE_STEPS[roomy]![st.step]!);
@@ -431,12 +447,26 @@ export function orbitLayout(
   const f = (Math.PI * 2) / Math.max(sw.total, 1e-9);
   const fits = f >= 1 - 1e-9;
   const base = -Math.PI / 2;
+  // each wedge's start (from base) and width; its dots keep their packed offsets from the wedge's start
+  let wStart = sw.bounds.map((b) => b[0] * f);
+  let wSpan = sw.bounds.map((b, i) =>
+    i === entries.length - 1 ? Math.PI * 2 - b[0] * f : (b[1] - b[0]) * f,
+  );
+  let leftMost = (_ei: number, pos: number) => pos * f;
+  const anchored = fits && opts.previous?.length ? anchorWedges(entries, sw, opts.previous) : undefined;
+  if (anchored) {
+    wStart = anchored.map((b) => b - base);
+    wSpan = anchored.map(
+      (b, i) => (i + 1 < anchored.length ? anchored[i + 1]! : anchored[0]! + Math.PI * 2) - b,
+    );
+    leftMost = (ei, pos) => wStart[ei]! + pos - sw.bounds[ei]![0];
+  }
   const groups: OrbitGroup[] = entries.map((e, i) => ({
     key: e.key,
     label: e.label,
     orgId: e.orgId,
-    startAngle: base + sw.bounds[i]![0] * f,
-    endAngle: base + (i === entries.length - 1 ? Math.PI * 2 : sw.bounds[i]![1] * f),
+    startAngle: base + wStart[i]!,
+    endAngle: base + wStart[i]! + wSpan[i]!,
     count: e.count,
     logoUrl: e.logoUrl,
   }));
@@ -452,13 +482,13 @@ export function orbitLayout(
       for (let ei = 0; ei < entries.length; ei++) {
         const tr = sw.track[ei]![ring]!;
         const mine = tr.map((x, i) => (x === t ? i : -1)).filter((i) => i >= 0);
-        const s = sw.bounds[ei]![0] * f;
-        const span = (sw.bounds[ei]![1] - sw.bounds[ei]![0]) * f;
+        const s = wStart[ei]!;
+        const span = anchored ? wSpan[ei]! : (sw.bounds[ei]![1] - sw.bounds[ei]![0]) * f;
         mine.forEach((i, j) => {
           list.push({
             e: ei,
             i,
-            L: sw.pos[ei]![ring]![i]! * f,
+            L: leftMost(ei, sw.pos[ei]![ring]![i]!),
             lo: s + (INSIDE * d) / 2,
             hi: s + span - (INSIDE * d) / 2,
             E: s + (span * (j + 0.5)) / mine.length,
@@ -533,6 +563,94 @@ export function orbitLayout(
     extent: (nodes.length ? extent : RING_RADII[2] + NODE_SIZE[2] / 2) * scale,
     aggregated,
   };
+}
+
+/**
+ * Wedge boundaries (absolute angles, one per entry: where its wedge starts) as close as possible, in least squares,
+ * to where the previous layout had them, while every wedge keeps at least the width its dots need. With the
+ * minimum widths taken out this is isotonic regression (pool adjacent violators); the circle's wrap is then met by
+ * narrowing the spread. Undefined when no wedge was there before.
+ */
+function anchorWedges(
+  entries: { key: string }[],
+  sw: Sweep,
+  previous: readonly Pick<OrbitGroup, 'key' | 'startAngle' | 'endAngle'>[],
+): number[] | undefined {
+  const TAU = Math.PI * 2;
+  const n = entries.length;
+  const prevStart = new Map(previous.map((g) => [g.key, g.startAngle]));
+  // where each known wedge started, unwrapped so the targets increase round the circle
+  const target: (number | undefined)[] = [];
+  let last: number | undefined;
+  for (const e of entries) {
+    let b = prevStart.get(e.key);
+    if (b !== undefined && last !== undefined) while (b < last - 1e-9) b += TAU;
+    if (b !== undefined) last = b;
+    target.push(b);
+  }
+  const known = target.filter((b): b is number => b !== undefined);
+  if (!known.length) return undefined;
+  // a new company starts where the next known one did, so it opens up between its neighbours
+  for (let i = n - 1, next = known[0]! + TAU; i >= 0; i--) {
+    if (target[i] === undefined) target[i] = next;
+    else next = target[i]!;
+  }
+  const minW = sw.bounds.map((b) => b[1] - b[0]);
+  // the wrap: the last wedge also leaves the room the first dots on each track need
+  minW[n - 1] = minW[n - 1]! + sw.total - sw.bounds[n - 1]![1];
+  const cum: number[] = [];
+  let acc = 0;
+  for (let i = 0; i < n; i++) {
+    cum.push(acc);
+    acc += minW[i]!;
+  }
+  const slack = TAU - acc;
+  if (slack < -1e-9) return undefined;
+  const y = target.map((b, i) => b! - cum[i]!);
+  // pool adjacent violators: the closest non-decreasing sequence
+  const blocks: { sum: number; n: number }[] = [];
+  for (const v of y) {
+    blocks.push({ sum: v, n: 1 });
+    while (blocks.length > 1) {
+      const b = blocks[blocks.length - 1]!;
+      const a = blocks[blocks.length - 2]!;
+      if (a.sum / a.n <= b.sum / b.n) break;
+      a.sum += b.sum;
+      a.n += b.n;
+      blocks.pop();
+    }
+  }
+  const c: number[] = [];
+  for (const b of blocks) for (let k = 0; k < b.n; k++) c.push(b.sum / b.n);
+  const spread = c[n - 1]! - c[0]!;
+  if (spread > slack) for (let i = 0; i < n; i++) c[i] = c[0]! + ((c[i]! - c[0]!) * slack) / spread;
+  // any common turn keeps every constraint: take the one closest to the targets
+  let shift = 0;
+  for (let i = 0; i < n; i++) shift += y[i]! - c[i]!;
+  shift /= n;
+  return c.map((v, i) => v + shift + cum[i]!);
+}
+
+/**
+ * Companies the student has already seen keep their order round the orbit; a new company goes right after the
+ * known company it follows by strength (or first, when it is the strongest).
+ */
+function keepOrder<T extends { key: string }>(byStrength: T[], order?: readonly string[]): T[] {
+  if (!order?.length) return byStrength;
+  const rank = new Map(order.map((k, i) => [k, i]));
+  const known = byStrength.filter((g) => rank.has(g.key)).sort((a, b) => rank.get(a.key)! - rank.get(b.key)!);
+  if (!known.length) return byStrength;
+  const out = [...known];
+  let after: T | undefined;
+  for (const g of byStrength) {
+    if (rank.has(g.key)) {
+      after = g;
+      continue;
+    }
+    out.splice(after ? out.indexOf(after) + 1 : 0, 0, g);
+    after = g;
+  }
+  return out;
 }
 
 /** Push apart dots closer than one pitch on the same track; falls back to even spacing on a dense track. */

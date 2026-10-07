@@ -12,7 +12,7 @@ import {
 } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Search, X } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { OrbitMap, useCoarsePointer } from '../components/OrbitMap';
 import type { FocusSpec, WebSpec } from '../components/orbitScene';
@@ -61,9 +61,17 @@ export function MapPage() {
   const [paths, setPaths] = useState<ReachPath[] | undefined>([]);
   const [choices, setChoices] = useState<ReachCandidate[]>();
   const [pathIdx, setPathIdx] = useState(0);
+  // the company the map is turned to: set the moment the student asks, from what the map already knows
+  const [companyFocus, setCompanyFocus] = useState<{ key: string; label: string }>();
+  // who the student knows there, for the panel: looked up in the background, so the map never waits on it
   const [company, setCompany] = useState<CompanyReach & { label: string }>();
+  /** bumped whenever the view changes, so a lookup that finishes late cannot bring back a view the student left */
+  const viewReq = useRef(0);
   const [target, setTarget] = useState<Person>();
   const [hover, setHover] = useState<string>();
+  // a tapped dot near the top of the map gets its card at the bottom, otherwise at the top (on a phone the bottom
+  // of the map can sit under the tab bar)
+  const [hoverUpper, setHoverUpper] = useState(false);
   // a search inside the introductions view: a person or a company the map turns to
   const [webFocus, setWebFocus] = useState<{ id?: string; group?: string; label: string }>();
   const [storyHover, setStoryHover] = useState<string>();
@@ -202,8 +210,14 @@ export function MapPage() {
     for (const [key, c] of combinedPairWeights(edges ?? [])) {
       const [a, b] = key.split('|') as [string, string];
       if (!byId.has(a) || !byId.has(b)) continue;
-      out.set(a, [...(out.get(a) ?? []), { id: b, w: c.weight }]);
-      out.set(b, [...(out.get(b) ?? []), { id: a, w: c.weight }]);
+      for (const [x, y] of [
+        [a, b],
+        [b, a],
+      ] as const) {
+        const list = out.get(x);
+        if (list) list.push({ id: y, w: c.weight });
+        else out.set(x, [{ id: y, w: c.weight }]);
+      }
     }
     return new Map(
       [...out].map(([id, list]) => [
@@ -237,11 +251,15 @@ export function MapPage() {
       setTarget(undefined);
       setPaths([]);
       if (!reachParam) {
-        setCompany(undefined); // a company result set by runSearch survives the reach=1 param update
+        // a company result set by runSearch survives the reach=1 param update
+        viewReq.current++;
+        setCompanyFocus(undefined);
+        setCompany(undefined);
         setChoices(undefined);
       }
       return;
     }
+    viewReq.current++;
     let cancelled = false;
     (async () => {
       const p = await db.people.get(reachParam);
@@ -252,6 +270,7 @@ export function MapPage() {
         return;
       }
       setTarget(p);
+      setCompanyFocus(undefined);
       setCompany(undefined);
       setChoices(undefined);
       setPaths(undefined);
@@ -265,16 +284,26 @@ export function MapPage() {
   }, [reachParam, userId]);
   const openCompany = async (orgIdOrName: string, label: string) => {
     if (!userId) return;
+    const req = ++viewReq.current;
+    // the map turns at once, from the layout it already has; the panel's lists arrive when the lookup is done
+    const norm = normalizeCompany(orgIdOrName);
+    const org = orgMap.get(orgIdOrName) ?? orgs.find((o) => !!norm && o.nameNormalized === norm);
     setChoices(undefined);
     setTarget(undefined);
     setPaths([]);
-    setCompany({ ...(await reachCompany(userId, orgIdOrName)), label });
+    setCompany(undefined);
+    setCompanyFocus({
+      key: org ? `n:${org.nameNormalized}` : `n:${normalizeCompany(label)}`,
+      label: org?.name ?? label,
+    });
     setParams({ reach: '1', company: label });
+    const found = await reachCompany(userId, orgIdOrName);
+    if (viewReq.current === req) setCompany({ ...found, label });
   };
   // a company link opened directly (or a reload) focuses that company again
   const companyParam = params.get('company');
   useEffect(() => {
-    if (userId && reachParam === '1' && companyParam && !company && !choices)
+    if (userId && reachParam === '1' && companyParam && !companyFocus && !choices)
       void openCompany(companyParam, companyParam);
   }, [userId, reachParam, companyParam]);
   const choose = (c: ReachCandidate) => {
@@ -310,16 +339,19 @@ export function MapPage() {
   const runSearch = async (q: string) => {
     if (!userId || !q.trim()) return;
     if (webMode) return searchWeb(q);
-    // read straight from the database so a search typed before the map finished loading still works
-    const [allPeople, allOrgs] = await Promise.all([
-      db.people.where('userId').equals(userId).toArray(),
-      db.organizations.toArray(),
-    ]);
+    const req = ++viewReq.current;
+    // what the map already holds; a search typed before the map finished loading reads the database
+    const [allPeople, allOrgs] =
+      peopleQ && orgsQ
+        ? [peopleQ, orgsQ]
+        : await Promise.all([db.people.where('userId').equals(userId).toArray(), db.organizations.toArray()]);
+    if (viewReq.current !== req) return;
     const cands = rankReachTargets(q, allPeople, allOrgs);
     if (cands.length && isUnambiguous(cands)) return choose(cands[0]!);
     if (cands.length) {
       // several plausible matches ("go" could be Google or Goldman Sachs): let the student pick
       setTarget(undefined);
+      setCompanyFocus(undefined);
       setCompany(undefined);
       setPaths([]);
       setChoices(cands);
@@ -346,25 +378,31 @@ export function MapPage() {
     else nav('/people');
   };
   const exitReach = () => {
+    viewReq.current++;
     setParams({});
     setQuery('');
+    setCompanyFocus(undefined);
     setCompany(undefined);
     setChoices(undefined);
   };
   /** Esc clears what the map is focused on, with the reverse animation: a search, a route, a filter. */
+  const onEscape = useRef<() => void>(() => {});
+  onEscape.current = () => {
+    if (webFocus) setWebFocus(undefined);
+    else if (reachMode) exitReach();
+    else if (filter !== 'all') setFilter('all');
+    else return;
+    setQuery('');
+  };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || e.defaultPrevented) return;
       if (document.querySelector('[role="dialog"]')) return;
-      if (webFocus) setWebFocus(undefined);
-      else if (reachMode) exitReach();
-      else if (filter !== 'all') setFilter('all');
-      else return;
-      setQuery('');
+      onEscape.current();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  });
+  }, []);
   useEffect(() => {
     if (!webMode) {
       setWebFocus(undefined);
@@ -413,19 +451,27 @@ export function MapPage() {
   };
   const hovered = hover ? byId.get(hover) : undefined;
   const current = paths?.[pathIdx];
-  const companyKey = company
-    ? company.org
-      ? `n:${company.org.nameNormalized}`
-      : `n:${normalizeCompany(company.label)}`
-    : undefined;
+  const companyKey = companyFocus?.key;
+  // the legend line and the chip on the map count the same people: those in the company's wedge
+  const [companyCount, warmCount] = useMemo(() => {
+    if (!companyKey) return [0, 0];
+    let n = 0;
+    let warm = 0;
+    for (const p of visible)
+      if (orbitGroupKey(p, orgMap) === companyKey) {
+        n++;
+        if (p.strength >= 0.3) warm++;
+      }
+    return [n, warm];
+  }, [companyKey, visible, orgMap]);
   const status = paths === undefined ? 'searching' : paths.length ? 'found' : 'none';
   const routeIds = current ? ['user', ...current.hops.map((h) => h.toId)].join('>') : '';
   const focus: FocusSpec | undefined = useMemo(() => {
     if (target)
       return { kind: 'reach', targetId: target.id, status, ids: routeIds ? routeIds.split('>') : [] };
-    if (companyKey) return { kind: 'company', groupKey: companyKey };
+    if (companyKey) return { kind: 'company', groupKey: companyKey, count: companyCount, warm: warmCount };
     return undefined;
-  }, [target, status, routeIds, companyKey]);
+  }, [target, status, routeIds, companyKey, companyCount, warmCount]);
   const webLit = webMode
     ? (storyHover ?? (hover && web.members.has(hover) ? hover : undefined) ?? webFocus?.id)
     : undefined;
@@ -442,14 +488,12 @@ export function MapPage() {
         : undefined,
     [webMode, web, webLit, webFocus],
   );
-  const companyCount = company ? company.direct.length : 0;
-  const warmCount = company ? company.direct.filter((d) => d.person.strength >= 0.3).length : 0;
   const clear = touch ? '' : ' Esc to clear.';
   // one line under the filters that says what the map shows, in words, whenever it changes
   const legend = (() => {
     if (reachMode) {
-      if (company)
-        return `Showing ${plural(companyCount, 'person', 'people')} at ${company.org?.name ?? company.label}${
+      if (companyFocus)
+        return `Showing ${plural(companyCount, 'person', 'people')} at ${companyFocus.label}${
           warmCount ? `, ${warmCount} warm` : ''
         }.${touch ? '' : ' Drag to turn the orbit, Esc to clear.'}`;
       if (target) {
@@ -479,6 +523,8 @@ export function MapPage() {
         if (!web.links.length) return 'No introductions recorded yet.';
         if (webFocus && !webLit && webFocus.group)
           return `Showing introductions at ${webFocus.label}.${clear}`;
+        if (webFocus?.id && webLit === webFocus.id)
+          return `Showing the introductions through ${webFocus.label}.${clear}`;
         return `${plural(web.links.length, 'introduction')} in ${plural(web.roots.length, 'chain')}. ${
           touch ? 'Tap' : 'Hover over'
         } a person to light up their chain.`;
@@ -580,11 +626,20 @@ export function MapPage() {
             introducerOf={introducerOf}
             onSelect={(id) => (reachMode ? setParams({ reach: id }) : nav(`/people/${id}`))}
             onSelectCluster={openCluster}
-            onHover={setHover}
+            onHover={(id, upper) => {
+              setHover(id);
+              setHoverUpper(!!upper);
+            }}
           />
           {hovered && !reachMode && (
             <div
-              className="absolute left-3 right-3 sm:right-auto bottom-3 bg-canvas border border-line rounded-[12px] p-3 shadow-[var(--shadow-card)] sm:w-[260px] fade-up"
+              className={cx(
+                'absolute left-3 right-3 sm:right-auto bg-canvas border border-line rounded-[12px] p-3 shadow-[var(--shadow-card)] sm:w-[260px] fade-up',
+                // on a phone the bottom of the map can sit under the tab bar, so the card goes on top unless the
+                // dot is up there; with a mouse the card lets the pointer through to the dots beneath it
+                touch && !hoverUpper ? 'top-3' : 'bottom-3',
+                touch ? '' : 'pointer-events-none',
+              )}
               data-testid="map-tooltip"
             >
               <div className="flex items-center gap-2">
@@ -597,7 +652,10 @@ export function MapPage() {
                 </div>
                 <Link
                   to={`/people/${hovered.id}`}
-                  className={cx('text-[12px] text-accent shrink-0', touch ? '' : 'sm:hidden')}
+                  className={cx(
+                    'text-[12px] text-accent shrink-0 pointer-events-auto',
+                    touch ? '' : 'sm:hidden',
+                  )}
                   data-testid="map-open-person"
                 >
                   Open
@@ -666,7 +724,7 @@ export function MapPage() {
             <>
               <div className="text-[13px] text-ink-2">
                 Each line runs from the person who introduced you to the person they introduced you to. A
-                dashed line is someone you already knew, and each colour is one chain.
+                dashed line is someone Orbit has no introducer on record for, and each colour is one chain.
               </div>
               <Card padded>
                 <div className="font-medium text-[13px] mb-2">Your introductions</div>
@@ -709,7 +767,7 @@ export function MapPage() {
               )}
             </>
           )}
-          {reachMode && !target && !company && !choices && (
+          {reachMode && !target && !companyFocus && !choices && (
             <div className="text-[13px] text-ink-2">
               Type a name (someone in your network) or a company above. Orbit finds up to three routes through
               people you know, with the reason each hop works.
@@ -809,6 +867,14 @@ export function MapPage() {
                   Write to {target.firstName} directly
                 </Button>
               )}
+            </>
+          )}
+          {companyFocus && !company && (
+            <>
+              <div className="font-medium">{companyFocus.label}</div>
+              <p className="text-[13px] text-ink-3" data-testid="company-loading" aria-busy="true">
+                Looking up who you know at {companyFocus.label}…
+              </p>
             </>
           )}
           {company && (

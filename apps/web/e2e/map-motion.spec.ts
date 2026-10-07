@@ -43,8 +43,22 @@ async function search(page: Page, q: string) {
 
 /** Pause the page clock: from here on, time only moves when the test steps it. */
 async function pauseClock(page: Page) {
-  const now = await page.evaluate(() => Date.now());
-  await page.clock.pauseAt(new Date(now + 50));
+  // the page clock keeps running while this reads it: on a busy machine "50 ms from now" can already be past
+  for (const ahead of [50, 250, 1000]) {
+    const now = await page.evaluate(() => Date.now());
+    try {
+      await page.clock.pauseAt(new Date(now + ahead));
+      return;
+    } catch (e) {
+      if (!String(e).includes('past') || ahead === 1000) throw e;
+    }
+  }
+}
+
+/** Escape, then wait for the page to apply it before waiting for the map to settle (React applies it a beat later). */
+async function escapeTo(page: Page, focus: string) {
+  await page.keyboard.press('Escape');
+  await expect.poll(async () => (await mapSnapshot(page)).focus).toBe(focus);
 }
 
 /** With the clock paused: step it a frame at a time until `check` passes. */
@@ -178,7 +192,7 @@ test.describe('Map motion', () => {
     // everyone else is faded back
     expect(snap.dimmed).toBe(snap.nodes - stripe.length);
 
-    await page.keyboard.press('Escape');
+    await escapeTo(page, '');
     await mapSettled(page);
     const after = await mapSnapshot(page);
     expect(after.focus).toBe('');
@@ -189,6 +203,29 @@ test.describe('Map motion', () => {
     // the orbit turned back to where it was (it drifts slowly, so allow a little)
     const turned = Math.abs(((after.rotation - before.rotation + Math.PI) % (2 * Math.PI)) - Math.PI);
     expect(turned).toBeLessThan(0.05);
+  });
+
+  test('Esc right after a company search cancels it: the late lookup never brings it back', async ({
+    page,
+  }) => {
+    await loadDemo(page);
+    await openMap(page);
+    await search(page, 'Stripe');
+    // the map turns at once, before the panel's lookup is done
+    await expect.poll(async () => (await mapSnapshot(page)).focus).toBe('company:n:stripe');
+    await page.keyboard.press('Escape');
+    await expect.poll(async () => (await mapSnapshot(page)).focus).toBe('');
+    await mapSettled(page);
+    await page.waitForTimeout(500);
+    expect((await mapSnapshot(page)).focus).toBe('');
+    await expect(page).toHaveURL(/\/map$/);
+    await expect(page.getByTestId('map-legend-line')).toHaveText(/everyone you know/i);
+    // a company search followed at once by a person: the person's route stays
+    await search(page, 'Stripe');
+    await search(page, 'Maya Chen');
+    await expect.poll(async () => (await mapSnapshot(page)).focus).toMatch(/^reach:/);
+    await page.waitForTimeout(800);
+    expect((await mapSnapshot(page)).focus).toMatch(/^reach:/);
   });
 
   test('interrupting a focus never makes a dot jump', async ({ page }) => {
@@ -518,9 +555,9 @@ test.describe('Map motion', () => {
       new RegExp(`Showing ${alumni.length} alumni`),
     );
     await page.keyboard.press('Escape');
+    await expect(page.getByTestId('map-filter-all')).toHaveAttribute('aria-pressed', 'true');
     await mapSettled(page);
     expect((await mapSnapshot(page)).dimmed).toBe(0);
-    await expect(page.getByTestId('map-filter-all')).toHaveAttribute('aria-pressed', 'true');
   });
 
   test('keyboard: Tab focuses the map, arrows move between people, Enter opens, Esc lets go', async ({
@@ -583,6 +620,17 @@ test.describe('Map motion with reduced motion', () => {
     const dots = Object.values(await mapDots(page, stripe));
     expect(degreesApart(meanAngle(dots, after.centre), -90)).toBeLessThan(25);
     expect(after.fans).toEqual([]);
+    // the introductions view draws its links at once: nothing to wait for beyond the fade
+    await escapeTo(page, '');
+    await mapSettled(page, 1500);
+    await page.getByTestId('map-filter-intros').click();
+    await expect.poll(async () => (await mapSnapshot(page)).focus).toBe('web');
+    await mapSettled(page, 700);
+    // a route search shows a still ring, no sweep, and settles as soon as the route is drawn
+    await page.getByTestId('map-filter-all').click();
+    await search(page, 'Maya Chen');
+    await expect.poll(async () => (await mapSnapshot(page)).focus).toMatch(/:found$/);
+    await mapSettled(page, 700);
   });
 });
 

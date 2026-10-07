@@ -303,6 +303,14 @@ export class FrameRecorder {
     this.last = -1;
   }
 
+  /**
+   * The loop woke up at `t` (same clock as rAF times) for a change: the first frame counts from here, so work done
+   * between the change and that frame (the page reacting to a click) shows up as a long frame, not as nothing.
+   */
+  resume(t: number): void {
+    if (this.last < 0) this.last = t;
+  }
+
   reset(): void {
     this.deltas = [];
     this.work = [];

@@ -28,7 +28,8 @@ export interface MapProps {
   onSelect: (id: string) => void;
   /** an aggregate dot ("+14 at Google") was clicked */
   onSelectCluster?: (node: OrbitNode) => void;
-  onHover?: (id: string | undefined) => void;
+  /** `upper`: the dot sits in the top part of the map, so a card about it belongs at the bottom */
+  onHover?: (id: string | undefined, upper?: boolean) => void;
   rotate?: boolean;
   /** what the map shows, for screen readers */
   label?: string;
@@ -85,6 +86,12 @@ function place(scene: OrbitScene, el: HTMLElement) {
   });
 }
 
+/**
+ * The wedges the student last saw, for the whole visit: a company keeps its place round the orbit when ties change
+ * strength or people arrive, and when the student comes back to the map from another page.
+ */
+let lastWedges: OrbitLayout['groups'] | undefined;
+
 let recorder: FrameRecorder | undefined;
 /** `?perf=1` records every animated frame's rAF delta and script time on window.__orbitPerf. */
 function perfRecorder(): FrameRecorder | undefined {
@@ -131,11 +138,17 @@ export function OrbitMap({
   const [said, setSaid] = useState('');
   const lastTouch = useRef(0);
   const dragged = useRef(false);
+  /** a dot pressed while the arrival was still flying in: the click opens that dot, wherever it lands */
+  const pressedInFlight = useRef<string | undefined>(undefined);
   const coarse = useCoarsePointer();
   const reduced = useReducedMotion();
 
   // Geometry is computed once per network at unit scale; the viewport only changes the draw scale.
-  const layout: OrbitLayout = useMemo(() => orbitLayout(people, orgs), [people, orgs]);
+  const layout: OrbitLayout = useMemo(() => {
+    const l = orbitLayout(people, orgs, { previous: lastWedges });
+    if (l.groups.length) lastWedges = l.groups;
+    return l;
+  }, [people, orgs]);
   const overlaps = useMemo(() => countOverlaps(layout.nodes), [layout]);
   const outsideWedges = useMemo(() => countOutsideWedges(layout), [layout]);
   const byId = useMemo(() => new Map(people.map((p) => [p.id, p])), [people]);
@@ -192,8 +205,18 @@ export function OrbitMap({
     const changed = id !== cur.id;
     hoverRef.current = { id, how };
     scene.setHover(id, how);
-    if (changed) onHover?.(id);
+    if (changed) {
+      const at = id ? scene.positionOf(id) : undefined;
+      onHover?.(id, !!at && at.y < 170);
+    }
   };
+  // a tapped dot belongs to the view it was tapped in: a search, a route, a filter or the introductions view lets
+  // go of it (a mouse hover follows the pointer anyway)
+  const webOn = !!web;
+  useEffect(() => {
+    const cur = hoverRef.current;
+    if (cur.id && cur.how === 'touch') setHover(undefined, 'touch');
+  }, [focus, webOn, highlightIds]);
   // a dot that left the map (a new layout) cannot stay hovered
   useEffect(() => {
     const cur = hoverRef.current;
@@ -231,6 +254,7 @@ export function OrbitMap({
 
   return (
     <div ref={wrapRef} className="absolute inset-0 overflow-hidden">
+      {/* biome-ignore lint/a11y/noInteractiveElementToNoninteractiveRole: the canvas is a keyboard-driven widget (arrow keys, Enter, Escape), so screen readers must pass keys through to it */}
       <canvas
         ref={canvasRef}
         className="absolute left-0 top-0 block cursor-pointer touch-manipulation outline-none focus-visible:ring-2 focus-visible:ring-accent/50 rounded-[2px]"
@@ -240,15 +264,19 @@ export function OrbitMap({
         data-nodes={layout.nodes.length}
         data-aggregated={layout.aggregated}
         tabIndex={0}
-        role="img"
+        role="application"
+        aria-roledescription="orbit map"
         aria-label={
           label ??
           `Orbit map of ${people.length} people. Use the arrow keys to move between people and Enter to open one.`
         }
         onPointerDown={(e) => {
+          const { x, y } = local(e.clientX, e.clientY);
+          pressedInFlight.current = scene.arriving()
+            ? scene.hitTest(x, y, e.pointerType !== 'mouse')
+            : undefined;
           scene.finishArrival();
           if (e.pointerType !== 'mouse' || e.button !== 0) return;
-          const { x, y } = local(e.clientX, e.clientY);
           dragged.current = false;
           scene.pointerDown(x, y);
         }}
@@ -270,6 +298,9 @@ export function OrbitMap({
           setHover(id, 'pointer');
         }}
         onPointerLeave={(e) => {
+          // moving onto the person's card (its Open link) keeps them hovered
+          const to = e.relatedTarget;
+          if (to instanceof Element && to.closest('[data-testid="map-tooltip"]')) return;
           if (e.pointerType === 'mouse' && !dragged.current && hoverRef.current.how === 'pointer')
             setHover(undefined, 'pointer');
         }}
@@ -288,7 +319,8 @@ export function OrbitMap({
           // touch: the first tap shows who it is, a second tap on the same dot opens it
           lastTouch.current = Date.now();
           const { x, y } = local(e.clientX, e.clientY);
-          const id = scene.hitTest(x, y, true);
+          const id = pressedInFlight.current ?? scene.hitTest(x, y, true);
+          pressedInFlight.current = undefined;
           if (!id) return setHover(undefined, 'touch');
           if (id === hoverRef.current.id) return activate(id);
           setHover(id, 'touch');
@@ -300,7 +332,8 @@ export function OrbitMap({
           }
           if (Date.now() - lastTouch.current < 600) return; // already handled as a tap
           const { x, y } = local(e.clientX, e.clientY);
-          const id = scene.hitTest(x, y);
+          const id = pressedInFlight.current ?? scene.hitTest(x, y);
+          pressedInFlight.current = undefined;
           if (id) activate(id);
         }}
         onWheel={() => scene.finishArrival()}

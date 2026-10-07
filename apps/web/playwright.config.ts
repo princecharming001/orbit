@@ -18,4 +18,9 @@ export default defineConfig({
     timeout: 60_000,
   },
   reporter: [['list']],
+  projects: [
+    { name: 'app', testIgnore: /map-perf\.spec\.ts/ },
+    // frame times only mean something on a quiet machine: they run after everything else, on their own
+    { name: 'perf', testMatch: /map-perf\.spec\.ts/, dependencies: ['app'] },
+  ],
 });

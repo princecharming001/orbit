@@ -330,6 +330,26 @@ describe('carry-over (PS-10, PS-11)', () => {
     expect(after.bodyDraft).not.toBe(before);
   });
 
+  it('a draft already handed off to the mail app stays on its card when the brief lands again', async () => {
+    const who = { name: 'Ines Park', email: 'ines.park@airtable.com' };
+    await ingestEmails(
+      user,
+      [
+        mail(who, 'out', ago(4 * D), OUTREACH('Ines'), 'ines'),
+        mail(who, 'in', ago(1 * D), YES('Ines'), 'ines'),
+      ],
+      { useLlm: false, now },
+    );
+    const p = await personByEmail(who.email);
+    const card = (await cardsOf(p.id)).find((s) => s.kind === 'schedule_propose' && s.status === 'pending')!;
+    await db.outbound.update(card.outboundMessageId!, { status: 'handed_off' });
+    const fresh = { ...card, priorityScore: 0.8, urgency: 0.9, goalRelevance: 0.6, confidence: 1 };
+    await upsertSuggestions(user.id, [fresh], now);
+    const again = (await db.suggestions.get(card.id))!;
+    expect(again.outboundMessageId).toBe(card.outboundMessageId);
+    expect((await db.outbound.get(card.outboundMessageId!))!.status).toBe('handed_off');
+  });
+
   it('still-true cards that miss the cut are kept for later instead of lost', async () => {
     const brief = await generateBrief(user, 'daily', now);
     const pending = await db.suggestions
