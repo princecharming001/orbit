@@ -129,7 +129,10 @@ test.describe('Map motion', () => {
     const tab = await page.context().newPage();
     await tab.goto('map');
     await expect
-      .poll(async () => (await mapSnapshot(tab).catch(() => undefined))?.phase, { timeout: 15_000 })
+      .poll(async () => (await mapSnapshot(tab).catch(() => undefined))?.phase, {
+        timeout: 15_000,
+        intervals: [50],
+      })
       .toBe('arrival');
     // a click on an empty corner, so no dot ends up under the pointer
     const box = (await mapCanvas(tab).boundingBox())!;
