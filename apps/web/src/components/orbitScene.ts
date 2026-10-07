@@ -34,6 +34,7 @@ import {
   quadPartial,
   quadPoint,
   routeControls,
+  spreadApart,
   wedgeMid,
 } from './orbitGeometry';
 
@@ -73,6 +74,8 @@ const FAN_PITCH = 30;
 const NO_VIEWS = new Set<never>();
 /** How much a dot on a reach route grows (no more than its neighbours leave room for). */
 const ROUTE_SCALE = 1.12;
+/** CSS px kept clear between two people on a route who sit side by side: room for the hop, its arrow and names */
+const ROUTE_GAP = 26;
 /** an introductions web this small names everyone in it; a bigger one names only the lit chain */
 const TAG_WEB_ALL = 16;
 
@@ -237,8 +240,10 @@ export interface SceneSnapshot {
   webLit: string[];
   hover?: string;
   spin: number;
-  /** the first names written under dots in the last frame drawn (a route, the introductions web) */
+  /** the first names written under dots in the last frame drawn (a route, the introductions web, a spotlight) */
   tags: string[];
+  /** people the pending-suggestion ripple marks */
+  pending: string[];
   /** frames drawn since the map opened (the loop sleeps when nothing moves) */
   draws: number;
 }
@@ -391,6 +396,8 @@ export class OrbitScene {
   private tagList: (NodeView | number)[] = [];
   private tagBoxes: number[] = [];
   private tagNames = new Map<string, string>();
+  /** people in the spotlight (a newcomer, a tie that moved rings, a chat just booked), named while it lasts */
+  private named: NodeView[] = [];
 
   private drag?: { last: number; t: number; v: number; moved: boolean; x0: number; y0: number };
 
@@ -661,6 +668,7 @@ export class OrbitScene {
     v.spotStart = start;
     v.spotEnd = end;
     v.spotScale = scale;
+    if (!this.named.includes(v)) this.named.push(v);
     this.busyUntil = Math.max(this.busyUntil, end);
   }
 
@@ -1154,6 +1162,7 @@ export class OrbitScene {
     const travel = this.reduced ? 0 : dur;
     if (g && this.wedge.key === key) this.anim(this.wedge.k, k, now, travel, easing.inOutCubic);
     const tree = this.web ? this.webTree(this.web.web) : undefined;
+    const nudge = this.routeNudges();
     for (const v of this.views) {
       if (v.temp || !v.node || v.removing) continue;
       let a = v.node.angle;
@@ -1166,11 +1175,39 @@ export class OrbitScene {
         // the web grows outward: the first generation moves first
         delay = (t.gen - 1) * 110;
       } else if (g) a = openedAngle(a, mid, (g.endAngle - g.startAngle) / 2, k, v.groupKey === key);
+      if (nudge) a += nudge.get(v) ?? 0;
       const ta = nearestAngle(v.a.value(now), a);
       // reduced motion: dots are set in place, never travel
       if (Math.abs(ta - v.a.to) > 1e-6) this.anim(v.a, ta, now, travel, easing.inOutCubic, delay);
       if (Math.abs(r - v.r.to) > 1e-6) this.anim(v.r, r, now, travel, easing.inOutCubic, delay);
     }
+  }
+
+  /**
+   * People on a route who sit side by side on the orbit step apart while the route shows, so the hop between them,
+   * its arrow and both names can be seen. Angle nudges in layout units; none without a route.
+   */
+  private routeNudges(): Map<NodeView, number> | undefined {
+    const r = this.reach;
+    if (r?.status !== 'found' || r.ids.length < 3) return undefined;
+    const vs: NodeView[] = [];
+    for (let k = 1; k < r.ids.length; k++) {
+      const v = this.byKey.get(r.ids[k]!);
+      if (v && !v.temp && !v.removing && v.node && v.person && !vs.includes(v)) vs.push(v);
+    }
+    if (vs.length < 2) return undefined;
+    const off = spreadApart(
+      vs.map((v) => v.node!.angle),
+      vs.map((v) => v.node!.radius),
+      // a dot's size is its diameter
+      vs.map((v) => (v.size.to / 2) * (ROUTE_SCALE + 0.08)),
+      ROUTE_GAP / Math.max(0.3, this.fitTarget),
+    );
+    const out = new Map<NodeView, number>();
+    vs.forEach((v, i) => {
+      if (off[i]) out.set(v, off[i]!);
+    });
+    return out.size ? out : undefined;
   }
 
   /**
@@ -1366,6 +1403,8 @@ export class OrbitScene {
       if (!prev) return;
       this.reach = undefined;
       this.retractPath(now);
+      // people a route pulled apart go back to their places
+      this.retarget(now, 450);
       this.anim(this.radar, 0, now, 200, easing.inQuad);
       this.frame0(now);
       this.refreshEmphasis(now, 'reach');
@@ -1379,6 +1418,8 @@ export class OrbitScene {
     const changed = newTarget || prev.status !== status || prev.ids.join('>') !== ids.join('>');
     this.reach = { targetId: r.targetId, status, ids };
     if (!changed) return;
+    // people on the route who sit side by side step apart (and step back when the route goes)
+    this.retarget(now, 450);
     const target = this.viewFor(r.targetId);
     if (newTarget && target) this.hold(rotationToTop(target.a.to, this.rotTarget()), now);
     // a radar that only just started keeps sweeping a moment longer, then hands over to the answer
@@ -1671,6 +1712,28 @@ export class OrbitScene {
     for (const v of this.drawList) {
       if (!v.visible || v.pa < 0.3 || v.removing) continue;
       if (v.x + v.pr > x0 && v.x - v.pr < x1 && v.y + v.pr > y0 && v.y - v.pr < y1) n++;
+    }
+    return n;
+  }
+
+  /**
+   * How much of a person's ties a box would hide: the dots their hover lines run to (on top of `dotsIn`, so they
+   * weigh three times as much as anyone else) and the lines themselves, sampled. For placing the person card.
+   */
+  tiesIn(id: string, x0: number, y0: number, x1: number, y1: number): number {
+    const v = this.byKey.get(id);
+    const near = v?.person ? this.connections?.get(v.pid) : undefined;
+    if (!v || !near?.length) return 0;
+    let n = 0;
+    for (const tid of near) {
+      const t = this.viewFor(tid);
+      if (!t?.visible || t === v) continue;
+      if (t.x + t.pr > x0 && t.x - t.pr < x1 && t.y + t.pr > y0 && t.y - t.pr < y1) n += 2;
+      for (let k = 1; k < 4; k++) {
+        const px = v.x + ((t.x - v.x) * k) / 4;
+        const py = v.y + ((t.y - v.y) * k) / 4;
+        if (px > x0 && px < x1 && py > y0 && py < y1) n += 0.5;
+      }
     }
     return n;
   }
@@ -3119,6 +3182,18 @@ export class OrbitScene {
         if (k > 0.01) list.push(v, k);
       }
     }
+    // whoever is in the spotlight is named under their dot while it lasts, so the change reads in words where it
+    // happens (a few at a time: a big import is said in the line under the filters instead)
+    const named = this.named;
+    for (let i = named.length - 1; i >= 0; i--)
+      if (named[i]!.spotEnd <= now || named[i]!.dead) named.splice(i, 1);
+    if (named.length && named.length <= 4)
+      for (const v of named) {
+        if (v.cluster || now < v.spotStart || list.includes(v)) continue;
+        // gone a beat before the spotlight ends, so the last frame the loop draws never leaves it behind
+        const k = clamp01((now - v.spotStart) / 200) * clamp01((v.spotEnd - 120 - now) / 300);
+        if (k > 0.01) list.push(v, k);
+      }
     if (!list.length) return;
     const fontPx = 11;
     ctx.font = `500 ${fontPx}px Inter, sans-serif`;
@@ -3329,6 +3404,7 @@ export class OrbitScene {
       hover: this.hovered(),
       spin: this.spin.value(now),
       tags: [...this.tags],
+      pending: this.views.filter((v) => v.pending).map((v) => v.pid),
       draws: this.draws,
     };
   }

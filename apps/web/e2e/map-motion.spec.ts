@@ -531,6 +531,61 @@ test.describe('Map motion', () => {
     for (const d of Object.values(onRoute)) expect(d.alpha).toBeGreaterThan(0.95);
   });
 
+  test('people on a route who sit side by side step apart, so every hop shows, and step back after', async ({
+    page,
+  }) => {
+    await loadDemo(page);
+    await openMap(page);
+    // a route of three hops through two connectors (the demo has several)
+    const names: string[] = await page.evaluate(async () => {
+      const db = (
+        window as unknown as {
+          __orbitDb: {
+            people: { toArray(): Promise<{ displayName: string; strength: number; isHuman: boolean }[]> };
+          };
+        }
+      ).__orbitDb;
+      const all = (await db.people.toArray()).filter((p) => p.isHuman);
+      return all
+        .filter((p) => p.strength < 0.15 && all.filter((q) => q.displayName === p.displayName).length === 1)
+        .map((p) => p.displayName);
+    });
+    let path: string[] = [];
+    for (const name of names.slice(0, 25)) {
+      await search(page, name);
+      await expect(page.getByTestId('reach-path').first()).toBeVisible({ timeout: 15_000 });
+      await mapSettled(page);
+      path = (await mapSnapshot(page)).path;
+      if (path.length >= 4) break;
+      await escapeTo(page, '');
+      await mapSettled(page);
+    }
+    expect(path.length).toBeGreaterThanOrEqual(4);
+    const dots = await mapDots(page, path.slice(1));
+    const ids = path.slice(1);
+    for (let i = 0; i < ids.length; i++)
+      for (let j = i + 1; j < ids.length; j++) {
+        const a = dots[ids[i]!]!;
+        const b = dots[ids[j]!]!;
+        // room for the line, its arrow and the names between any two of them
+        expect(Math.hypot(a.x - b.x, a.y - b.y)).toBeGreaterThanOrEqual(a.r + b.r + 18);
+      }
+    // clearing the route puts everyone back on their own slot
+    await escapeTo(page, '');
+    await mapSettled(page);
+    const s = await mapSnapshot(page);
+    const k = Number(await mapCanvas(page).getAttribute('data-scale')) * s.zoom;
+    const back = await mapDots(page, ids);
+    for (const id of ids) {
+      const slot = (await mapSlot(page, id))!;
+      const want = {
+        x: s.centre[0] + Math.cos(slot.angle + s.rotation) * slot.radius * k,
+        y: s.centre[1] + Math.sin(slot.angle + s.rotation) * slot.radius * k,
+      };
+      expect(Math.hypot(back[id]!.x - want.x, back[id]!.y - want.y)).toBeLessThan(2);
+    }
+  });
+
   test('reach with no route: the sweep fades and the target shakes', async ({ page }) => {
     await loadDemo(page);
     await openMap(page);
@@ -672,8 +727,11 @@ test.describe('Map motion', () => {
     await expect(page.getByTestId('map-legend-line')).toHaveText(
       'Jamie Lindgren joined your orbit, introduced by Keiko Yamamoto.',
     );
+    // it lands and is named under its dot while in the spotlight; the name goes when the spotlight ends
+    await stepUntil(page, async () => (await mapSnapshot(page)).tags.some((t) => t.startsWith('Jamie')));
     // it travels to its own slot and lands
     await stepUntilSettled(page);
+    expect((await mapSnapshot(page)).tags.some((t) => t.startsWith('Jamie'))).toBe(false);
     const landed = await mapDots(page, ['e2e-new', keiko]);
     expect(landed['e2e-new']!.alpha).toBeGreaterThan(0.95);
     expect(
@@ -726,6 +784,8 @@ test.describe('Map motion', () => {
     expect(mid).not.toBe('rgb(31,138,76)');
     expect((await mapDots(page, [maya]))[maya]!.r).toBeGreaterThan(rest * 1.1);
     await expect(page.getByTestId('map-legend-line')).toHaveText('Your chat with Maya Chen is booked.');
+    // and the map names her where it happens
+    expect((await mapSnapshot(page)).tags.some((t) => t.startsWith('Maya'))).toBe(true);
     await stepUntilSettled(page, 3000);
     // and it lands on the scheduled colour
     expect(await mapStageColor(page, maya)).toBe('rgb(31,138,76)');
@@ -1054,6 +1114,25 @@ test.describe('Map motion on a touch screen', () => {
     expect(spills).toBe(false);
     const bar = (await page.getByRole('navigation', { name: 'Main' }).last().boundingBox())!;
     expect(b.y + b.height).toBeLessThanOrEqual(bar.y);
+    // it sits over the search box, so typing again takes it down
+    await page.getByTestId('reach-input').fill('Zzy');
+    await expect(toast).toHaveCount(0);
+  });
+
+  test('every control on the map page is at least 44 px tall for a thumb', async ({ page }) => {
+    await loadDemo(page);
+    await openMap(page);
+    const controls = page.locator(
+      '[data-testid^="map-filter-"], [data-testid="reach-input"], [data-testid="map-panel"] button',
+    );
+    expect(await controls.count()).toBeGreaterThan(6);
+    for (const box of await controls.evaluateAll((els) =>
+      els.map((el) => {
+        const r = el.getBoundingClientRect();
+        return { h: r.height, name: el.textContent ?? '' };
+      }),
+    ))
+      expect(box.h, box.name).toBeGreaterThanOrEqual(44);
   });
 
   test('pending suggestions ripple together every 2.4 s, and the map sleeps in between', async ({ page }) => {
@@ -1069,5 +1148,9 @@ test.describe('Map motion on a touch screen', () => {
     expect(drawn).toBeGreaterThan(20);
     expect(drawn).toBeLessThan(120);
     await expect(mapCanvas(page)).toHaveAttribute('data-animating', 'false');
+    // only the people behind the few most pressing suggestions ripple, not half the inner ring
+    const rippling = (await mapSnapshot(page)).pending;
+    expect(rippling.length).toBeGreaterThan(0);
+    expect(rippling.length).toBeLessThanOrEqual(3);
   });
 });

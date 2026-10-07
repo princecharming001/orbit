@@ -88,6 +88,8 @@ function cardPlace(scene: OrbitScene, id: string, canvas: HTMLCanvasElement, tou
         (covers(x, y, x1, y1) ? 1000 : 0) +
         (hidesYou ? 12 : 0) +
         scene.dotsIn(x, y, x1, y1) +
+        // the people the lines run to, and the lines, stay in sight
+        scene.tiesIn(id, x, y, x1, y1) +
         Math.hypot(dx, dy) / 30 +
         i * 0.25;
       if (score < bestScore) {

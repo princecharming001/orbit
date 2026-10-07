@@ -45,7 +45,9 @@ const FILTERS: [Filter, string][] = [
 ];
 
 /** How many people the pending-suggestion ripple marks at most: those behind the highest-priority suggestions. */
-const RIPPLE_TOP = 6;
+const RIPPLE_TOP = 3;
+/** On a touch screen every control on the map page is at least 44 px tall, so a thumb lands on it. */
+const TAP = 'pointer-coarse:min-h-11';
 /** The longest the map waits for the day's maintenance before it lays out anyway. */
 const MAINTENANCE_WAIT_MS = 2500;
 /** How long the legend line keeps the news of someone joining or a chat booked. */
@@ -545,7 +547,7 @@ export function MapPage() {
       await draftForSuggestion(user, s);
     }
     toast.push({
-      text: `Intro request drafted. It's in Approvals.`,
+      text: `Intro request drafted. It's in Drafts.`,
       tone: 'good',
       action: { label: 'Open', onClick: () => nav('/inbox') },
     });
@@ -666,20 +668,22 @@ export function MapPage() {
             className={cx('relative flex-1 sm:flex-none', missed && missed.q === query.trim() && 'shake-x')}
             data-testid="reach-form"
           >
-            <Search size={14} className="absolute left-2.5 top-2.5 text-ink-3" />
+            <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-3" />
             <Input
               value={query}
               onChange={(e) => {
                 setQuery(e.target.value);
+                // typing again takes the miss toast down: on a phone it sits over this box
+                clearMiss();
                 if (webMode && !e.target.value) setWebFocus(undefined);
               }}
               placeholder={webMode ? 'Search your introductions…' : 'Reach a person or company…'}
-              className="pl-8 w-full sm:w-64"
+              className="pl-8 w-full sm:w-64 pointer-coarse:h-11 pointer-coarse:text-[16px]"
               data-testid="reach-input"
             />
           </form>
           {reachMode && (
-            <Button variant="ghost" size="sm" onClick={exitReach}>
+            <Button variant="ghost" size="sm" className={TAP} onClick={exitReach}>
               <X size={14} /> Exit reach
             </Button>
           )}
@@ -695,7 +699,7 @@ export function MapPage() {
                 }}
                 aria-pressed={filter === k}
                 className={cx(
-                  'h-7 px-2.5 rounded-full border text-[12px] shrink-0 whitespace-nowrap transition-colors',
+                  'h-7 px-2.5 rounded-full border text-[12px] shrink-0 whitespace-nowrap transition-colors pointer-coarse:h-11 pointer-coarse:px-3.5 pointer-coarse:text-[13px]',
                   filter === k ? 'bg-ink text-white border-ink' : 'border-line text-ink-2 hover:bg-canvas-2',
                 )}
                 data-testid={`map-filter-${k}`}
@@ -771,7 +775,10 @@ export function MapPage() {
                   to={`/people/${hovered.id}`}
                   className={cx(
                     'text-[12px] text-accent shrink-0 pointer-events-auto',
-                    touch ? '' : 'sm:hidden',
+                    // a thumb-sized target that does not make the card any taller
+                    touch
+                      ? 'inline-flex items-center justify-center min-h-11 min-w-11 -my-2 -mr-2 px-2'
+                      : 'sm:hidden',
                   )}
                   data-testid="map-open-person"
                 >
@@ -811,7 +818,10 @@ export function MapPage() {
                     {targetGroups.map((g) => (
                       <li key={g.key}>
                         <button
-                          className="w-full flex items-center gap-2 text-left text-[13px] rounded-md px-2 py-1.5 hover:bg-canvas-2"
+                          className={cx(
+                            'w-full flex items-center gap-2 text-left text-[13px] rounded-md px-2 py-1.5 hover:bg-canvas-2',
+                            TAP,
+                          )}
                           onClick={() => void openCompany(g.orgId ?? g.label, g.label)}
                           data-testid="map-company-row"
                         >
@@ -833,7 +843,11 @@ export function MapPage() {
                   <li>Outer: new or cold</li>
                 </ul>
               </Card>
-              <Button variant="primary" className="w-full" onClick={() => setParams({ reach: '1' })}>
+              <Button
+                variant="primary"
+                className={cx('w-full', TAP)}
+                onClick={() => setParams({ reach: '1' })}
+              >
                 Find a path to someone
               </Button>
             </>
@@ -858,6 +872,7 @@ export function MapPage() {
                       <button
                         className={cx(
                           'w-full flex items-start gap-2 text-left text-[13px] rounded-md px-2 py-1.5 hover:bg-canvas-2',
+                          TAP,
                           // the chain lit from the map, when this entry already says it in words
                           !storyHover && chainSentence === s.text && 'bg-accent-soft/40',
                         )}
@@ -923,7 +938,10 @@ export function MapPage() {
               <div className="flex items-center gap-3">
                 <Avatar name={target.displayName} src={target.photoUrl} id={target.id} size={40} />
                 <div className="min-w-0">
-                  <Link to={`/people/${target.id}`} className="font-medium hover:underline">
+                  <Link
+                    to={`/people/${target.id}`}
+                    className={cx('font-medium hover:underline inline-flex items-center', TAP)}
+                  >
                     {target.displayName}
                   </Link>
                   <div className="text-[12px] text-ink-3 truncate">
@@ -977,14 +995,14 @@ export function MapPage() {
                 </button>
               ))}
               {current && current.hops.length > 1 && (
-                <Button variant="primary" className="w-full" onClick={() => askIntro(current)}>
+                <Button variant="primary" className={cx('w-full', TAP)} onClick={() => askIntro(current)}>
                   Ask {byId.get(current.hops[0]!.toId)?.firstName ?? 'them'} for an intro
                 </Button>
               )}
               {current && current.hops.length === 1 && (
                 <Button
                   variant="primary"
-                  className="w-full"
+                  className={cx('w-full', TAP)}
                   onClick={() => nav(`/people/${target.id}?draft=outreach`)}
                 >
                   Write to {target.firstName} directly
@@ -1019,7 +1037,7 @@ export function MapPage() {
                       <li key={d.person.id} className="flex items-center gap-2 text-[13px]">
                         <Avatar name={d.person.displayName} id={d.person.id} size={22} />
                         <button
-                          className="hover:underline truncate"
+                          className={cx('hover:underline truncate text-left', TAP)}
                           onClick={() => setParams({ reach: d.person.id })}
                         >
                           {d.person.displayName}
@@ -1033,7 +1051,7 @@ export function MapPage() {
                   </ul>
                   {list.length > 6 && showAll !== title && (
                     <button
-                      className="mt-1.5 text-[12px] text-accent hover:underline"
+                      className={cx('mt-1.5 text-[12px] text-accent hover:underline', TAP)}
                       onClick={() => setShowAll(title)}
                       data-testid="company-show-all"
                     >
@@ -1051,7 +1069,7 @@ export function MapPage() {
                     {company.twoHop.map((t) => (
                       <li key={t.target.id}>
                         <button
-                          className="hover:underline font-medium"
+                          className={cx('hover:underline font-medium', TAP)}
                           onClick={() => setParams({ reach: t.target.id })}
                         >
                           {t.target.displayName}
@@ -1070,7 +1088,10 @@ export function MapPage() {
                 </div>
               )}
               {company.org && (
-                <Link to={`/companies/${company.org.id}`} className="text-[13px] text-accent">
+                <Link
+                  to={`/companies/${company.org.id}`}
+                  className={cx('text-[13px] text-accent inline-flex items-center', TAP)}
+                >
                   Open company page →
                 </Link>
               )}

@@ -1,5 +1,5 @@
 import type { OrbitGroup, OrbitLayout } from '@orbit/core';
-import { clamp, TAU } from './motion';
+import { clamp, TAU, wrapAngle } from './motion';
 
 /** Gap between the outermost dots and the company labels, in CSS px. */
 export const LABEL_GAP = 14;
@@ -286,4 +286,44 @@ export function nearestInDirection(
     }
   }
   return best;
+}
+
+/**
+ * Angle nudges (radians, one per dot) that move dots sitting side by side apart until every pair is at least the sum
+ * of their sizes plus `gap` apart, centre to centre. Dots keep their radius; each push is shared by the two dots, and
+ * no dot moves more than `cap`. Polar input in layout units (angle before rotation, radius, drawn radius).
+ */
+export function spreadApart(
+  angles: readonly number[],
+  radii: readonly number[],
+  sizes: readonly number[],
+  gap: number,
+  cap = 0.5,
+): number[] {
+  const n = angles.length;
+  const off = new Array<number>(n).fill(0);
+  for (let pass = 0; pass < 8; pass++) {
+    let moved = false;
+    for (let i = 0; i < n; i++)
+      for (let j = i + 1; j < n; j++) {
+        const ri = radii[i]!;
+        const rj = radii[j]!;
+        const need = sizes[i]! + sizes[j]! + gap;
+        const diff = wrapAngle(angles[i]! + off[i]! - (angles[j]! + off[j]!));
+        // the angle between them that puts them `need` apart at these radii (none when the radii alone do it)
+        const c = (ri * ri + rj * rj - need * need) / (2 * ri * rj);
+        const want = c >= 1 ? 0 : c <= -1 ? Math.PI : Math.acos(c);
+        const push = (want - Math.abs(diff)) / 2;
+        if (push <= 1e-6) continue;
+        const dir = diff >= 0 ? 1 : -1;
+        const oi = clamp(off[i]! + dir * push, -cap, cap);
+        const oj = clamp(off[j]! - dir * push, -cap, cap);
+        if (Math.abs(oi - off[i]!) + Math.abs(oj - off[j]!) < 1e-6) continue;
+        off[i] = oi;
+        off[j] = oj;
+        moved = true;
+      }
+    if (!moved) break;
+  }
+  return off;
 }

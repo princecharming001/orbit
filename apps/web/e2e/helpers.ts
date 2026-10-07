@@ -101,6 +101,7 @@ export interface MapSnapshot {
   hover?: string;
   spin: number;
   tags: string[];
+  pending: string[];
   draws: number;
 }
 
