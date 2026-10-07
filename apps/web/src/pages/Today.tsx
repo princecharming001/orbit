@@ -3,6 +3,7 @@ import { RefreshCw } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { AddPersonButton } from '../components/AddPerson';
+import { LinkedInImportButton } from '../components/LinkedInImport';
 import { SuggestionCard } from '../components/SuggestionCard';
 import { db } from '../db/schema';
 import { ensureDrafts, generateBrief, revalidatePending } from '../engine/brief';
@@ -175,14 +176,20 @@ export function Today() {
             {summary}
           </p>
         </div>
-        <Button
-          onClick={regenerate}
-          disabled={busy}
-          title="Rebuild today's brief from your latest email, calendar and notes"
-          className="shrink-0"
-        >
-          <RefreshCw size={14} className={busy ? 'animate-spin' : ''} /> Refresh
-        </Button>
+        {/* with nobody in Orbit yet there is nothing to refresh */}
+        {visiblePeople > 0 && (
+          <Button
+            onClick={regenerate}
+            disabled={busy}
+            title="Rebuild today's brief from your latest email, calendar and notes"
+            aria-label="Refresh"
+            className="shrink-0 px-2.5 sm:px-3.5"
+            data-testid="today-refresh"
+          >
+            <RefreshCw size={14} className={busy ? 'animate-spin' : ''} />{' '}
+            <span className="hidden sm:inline">Refresh</span>
+          </Button>
+        )}
       </div>
       {problems.length > 0 && (
         <Card className="mb-4 border-warn/40 bg-warn-soft">
@@ -228,8 +235,12 @@ export function Today() {
                 </p>
                 <div className="mt-4 flex flex-wrap gap-2">
                   <AddPersonButton variant="primary" />
-                  <Link to="/settings/integrations">
-                    <Button>Import LinkedIn connections</Button>
+                  <LinkedInImportButton />
+                  <Link
+                    to="/settings/integrations"
+                    className="self-center text-[13px] text-ink-3 underline underline-offset-2 hover:text-ink"
+                  >
+                    How to get the LinkedIn file
                   </Link>
                   {googleReady && (
                     <Link to="/settings/integrations">

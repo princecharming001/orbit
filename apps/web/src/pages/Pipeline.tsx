@@ -1,5 +1,5 @@
 import type { ChatStage, CoffeeChat, Person, Suggestion } from '@orbit/core';
-import { ACTIVE_STAGES, CLOSED_STAGES, STAGE_HELP, STAGE_LABELS } from '@orbit/core';
+import { ACTIVE_STAGES, CLOSED_STAGES, normalizeCompany, STAGE_HELP, STAGE_LABELS } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { ArrowDown, ArrowUp, ChevronRight } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -88,7 +88,8 @@ export function Pipeline() {
       [userId],
     ) ?? [];
   const byId = useMemo(() => new Map(people.map((p) => [p.id, p])), [people]);
-  const targetNames = useMemo(() => new Set(tcs.map((t) => t.nameRaw.toLowerCase())), [tcs]);
+  // matched on the normalized name: a target typed as "McKinsey" covers "McKinsey & Company"
+  const targetNames = useMemo(() => new Set(tcs.map((t) => normalizeCompany(t.nameRaw))), [tcs]);
   const rows = useMemo(() => {
     const s = q.trim().toLowerCase();
     return chats
@@ -103,7 +104,7 @@ export function Pipeline() {
           r.person.displayName.toLowerCase().includes(s) ||
           (r.person.currentOrganizationRaw ?? '').toLowerCase().includes(s),
       )
-      .filter((r) => !onlyTargets || targetNames.has((r.person.currentOrganizationRaw ?? '').toLowerCase()))
+      .filter((r) => !onlyTargets || targetNames.has(normalizeCompany(r.person.currentOrganizationRaw)))
       .filter((r) => !onlyQuiet || wentQuiet(r.chat))
       .sort((a, b) => b.chat.updatedAt.localeCompare(a.chat.updatedAt));
   }, [chats, byId, q, onlyTargets, onlyQuiet, targetNames]);
@@ -607,7 +608,7 @@ function CompaniesView({
                 </span>
               </td>
               <td className="px-3">
-                {targetNames.has(g.name.toLowerCase()) ? (
+                {targetNames.has(normalizeCompany(g.name)) ? (
                   <Chip tone="accent">Target</Chip>
                 ) : (
                   <span className="text-ink-3">—</span>

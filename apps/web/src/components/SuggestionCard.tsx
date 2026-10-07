@@ -1,12 +1,18 @@
 import type { OutboundStatus, Person, Suggestion } from '@orbit/core';
-import { draftWarmUpComment, STAGE_LABELS } from '@orbit/core';
+import { draftWarmUpComment, STAGE_LABELS, warmUpProgress } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Check, ChevronDown, ChevronUp, Copy, ExternalLink, Sparkles } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { feedback } from '../db/repo';
 import { db } from '../db/schema';
-import { ensureDrafts, isMessageSuggestion, markWarmUpAction } from '../engine/brief';
+import {
+  ensureDrafts,
+  isMessageSuggestion,
+  markWarmUpAction,
+  needsWarmUp,
+  startWarmUpOrOutreach,
+} from '../engine/brief';
 import { mergePeople } from '../engine/people';
 import { dismissSuggestion, restoreSuggestion, snoozeSuggestion } from '../engine/send';
 import { decideProposedStage } from '../engine/stages';
@@ -70,7 +76,7 @@ export function SuggestionCard({
   /** scroll to this card and outline it (Today opened from a link that points at it) */
   highlight?: boolean;
 }) {
-  const { user } = useSession();
+  const { user, settings } = useSession();
   const nav = useNavigate();
   const toast = useToast();
   const [open, setOpen] = useState(false);
@@ -193,13 +199,55 @@ export function SuggestionCard({
       done,
       done ? postClaim : undefined,
     );
+    // say when Orbit comes back: the next step waits for its own day, the first message for the ready date
+    const after = await db.chats.get(s.chatId);
+    const next = after?.warmUp?.actions.find((a) => !a.doneAt && !a.skippedAt);
+    const day = (iso: string) =>
+      new Date(iso).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+    const nextDue = next ? new Date(next.dueAt) : undefined;
+    const when = next
+      ? nextDue && nextDue.getTime() > Date.now()
+        ? ` The next step is on Today on ${day(next.dueAt)}.`
+        : ' The next step is on Today.'
+      : after?.warmUp
+        ? (() => {
+            const prog = warmUpProgress(after.warmUp, new Date(), user.timezone);
+            return prog.ready
+              ? ' Your first message is ready on Today.'
+              : ` Orbit suggests your first message from ${day(prog.readyFrom)}.`;
+          })()
+        : '';
     toast.push({
-      text: done
-        ? postClaim.trim()
-          ? 'Logged. Your first message will mention the post.'
-          : 'Nice. Logged the warm-up.'
-        : 'Skipped.',
+      text: `${
+        done
+          ? postClaim.trim()
+            ? 'Logged. Your first message will mention the post.'
+            : 'Nice. Logged the warm-up.'
+          : 'Skipped.'
+      }${when}`,
+      ttl: 6000,
     });
+  };
+  // a first message suggested from a recommendation, to someone known only from LinkedIn and never talked to
+  const coldStart =
+    s.kind === 'new_outreach' &&
+    !s.chatId &&
+    !!person &&
+    !person.primaryEmail &&
+    needsWarmUp(person, 'linkedin', settings?.warmUpEnabled ?? true);
+  const startWarmUp = async () => {
+    if (!person) return;
+    setBusy(true);
+    try {
+      await startWarmUpOrOutreach(user, person.id, 'linkedin', 'recommendation');
+      toast.push({
+        text: `Warm-up started for ${person.firstName}. The first step is the new card on Today.`,
+        tone: 'good',
+        ttl: 6000,
+      });
+    } finally {
+      setBusy(false);
+    }
   };
   const copyComment = async () => {
     if (!comment) return;
@@ -260,16 +308,39 @@ export function SuggestionCard({
                 data-testid="draft-preview"
               >
                 {/* the clamp sits on the text, not the padded button, so no half line shows under it */}
-                <span className="line-clamp-2">{draft.bodyFinal ?? draft.bodyDraft}</span>
+                <span className="line-clamp-2">{withGaps(draft.bodyFinal ?? draft.bodyDraft)}</span>
               </button>
-              <div className="mt-2 flex flex-wrap items-center gap-2">
-                <Button variant="primary" size="sm" onClick={() => setOpen(true)} data-testid="draft-review">
-                  Review draft
-                </Button>
-                <span className="text-[12px] text-ink-3">
-                  Edit it if you like. Nothing is sent until you approve it.
-                </span>
-              </div>
+              {coldStart ? (
+                // the same rule as Discover: someone known only from LinkedIn gets a warm-up first
+                <div className="mt-2" data-testid="card-warmup-first">
+                  <p className="text-[12px] text-warn">
+                    You only have {first} on LinkedIn and have never talked, so Orbit suggests a short warm-up
+                    before your first message.
+                  </p>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <Button variant="primary" size="sm" onClick={startWarmUp} disabled={busy}>
+                      Start warm-up
+                    </Button>
+                    <Button size="sm" onClick={() => setOpen(true)} data-testid="draft-review">
+                      Write now instead
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    onClick={() => setOpen(true)}
+                    data-testid="draft-review"
+                  >
+                    Review draft
+                  </Button>
+                  <span className="text-[12px] text-ink-3">
+                    Edit it if you like. Nothing is sent until you approve it.
+                  </span>
+                </div>
+              )}
             </>
           )}
           {draft && !inFlight && open && (
@@ -461,7 +532,7 @@ export function SuggestionCard({
           {!dismissing ? (
             <>
               <button
-                className="px-2 h-8 rounded-md text-ink-3 hover:bg-canvas-2 hover:text-ink"
+                className="px-2 h-10 sm:h-8 rounded-md text-ink-3 hover:bg-canvas-2 hover:text-ink"
                 onClick={() => snooze(1)}
                 aria-label="Snooze for 1 day"
                 title="Snooze for 1 day"
@@ -469,7 +540,7 @@ export function SuggestionCard({
                 Snooze 1d
               </button>
               <button
-                className="px-2 h-8 rounded-md text-ink-3 hover:bg-canvas-2 hover:text-ink"
+                className="px-2 h-10 sm:h-8 rounded-md text-ink-3 hover:bg-canvas-2 hover:text-ink"
                 onClick={() => snooze(3)}
                 aria-label="Snooze for 3 days"
                 title="Snooze for 3 days"
@@ -477,7 +548,7 @@ export function SuggestionCard({
                 3d
               </button>
               <button
-                className="px-2 h-8 rounded-md text-ink-3 hover:bg-canvas-2 hover:text-ink"
+                className="px-2 h-10 sm:h-8 rounded-md text-ink-3 hover:bg-canvas-2 hover:text-ink"
                 onClick={() => snooze(7)}
                 aria-label="Snooze for 1 week"
                 title="Snooze for 1 week"
@@ -485,7 +556,7 @@ export function SuggestionCard({
                 1w
               </button>
               <button
-                className="ml-auto px-2 h-8 rounded-md text-ink-3 hover:bg-canvas-2 hover:text-ink"
+                className="ml-auto px-2 h-10 sm:h-8 rounded-md text-ink-3 hover:bg-canvas-2 hover:text-ink"
                 onClick={() => setDismissing(true)}
                 title="Remove this card and tell Orbit why, so it suggests better next time"
               >
@@ -503,13 +574,13 @@ export function SuggestionCard({
               ].map(([k, l]) => (
                 <button
                   key={k}
-                  className="px-2 h-8 rounded-md bg-canvas-2 hover:bg-line-2"
+                  className="px-2 h-10 sm:h-8 rounded-md bg-canvas-2 hover:bg-line-2"
                   onClick={() => dismiss(k!)}
                 >
                   {l}
                 </button>
               ))}
-              <button className="ml-auto px-2 h-8 text-ink-3" onClick={() => setDismissing(false)}>
+              <button className="ml-auto px-2 h-10 sm:h-8 text-ink-3" onClick={() => setDismissing(false)}>
                 Cancel
               </button>
             </>
@@ -517,6 +588,22 @@ export function SuggestionCard({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * A draft preview with each "[Your link to Priya: how you found them ...]" gap shown as a short highlighted label
+ * ("Your link to Priya"), so the card says a line is missing instead of showing the raw instruction.
+ */
+function withGaps(text: string): ReactNode[] {
+  return text.split(/(\[[^\]]{3,}\])/).map((part, i) =>
+    /^\[[^\]]+\]$/.test(part) ? (
+      <mark key={i} className="rounded bg-warn-soft px-1 text-warn not-italic">
+        {part.slice(1, -1).split(':')[0]}
+      </mark>
+    ) : (
+      part
+    ),
   );
 }
 

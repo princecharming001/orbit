@@ -24,6 +24,9 @@ import {
 import { upsertPerson } from './people';
 import { evaluateTrigger, retireSuggestions } from './stages';
 
+/** The stage event reason for a chat opened by a note about someone the student had never messaged. */
+const NOTE_OPENED_CHAT = 'note:met';
+
 export interface CaptureInput {
   text: string;
   source: NoteSource;
@@ -348,6 +351,19 @@ async function retireNoteEffects(note: MeetingNote, now: Date): Promise<void> {
     .toArray();
   for (const ev of events) {
     await db.stageEvents.update(ev.id, { status: 'rejected', decidedAt: at });
+    // a chat this note opened (the student met someone they had never messaged) goes with the note
+    if (ev.reason === NOTE_OPENED_CHAT) {
+      const opened = await db.chats.get(ev.chatId);
+      if (opened && opened.stage === 'completed' && !opened.lastOutboundAt && !opened.lastInboundAt) {
+        await db.chats.delete(opened.id);
+        await db.suggestions
+          .where('userId')
+          .equals(note.userId)
+          .filter((x) => x.chatId === opened.id && (x.status === 'pending' || x.status === 'snoozed'))
+          .modify({ status: 'expired', decidedAt: at });
+        continue;
+      }
+    }
     await db.suggestions
       .where('dedupeKey')
       .equals(`stage:${ev.id}`)
@@ -451,6 +467,60 @@ export async function processNote(user: User, note: MeetingNote, now = new Date(
   // nothing is written for a guess the student has not confirmed: no facts, no meeting, no chat stage,
   // no notification. Confirming it (rematchNote) processes the note again for the person they chose.
   if (!primary || note.matchStatus === 'unmatched') return;
+  // A note is written after a conversation. Someone the student met without messaging first (a career fair, a club
+  // event, an intro in person) has no chat yet: open one at "completed", so the thank-you comes next, not a cold
+  // first message to the person they just talked to.
+  if (!note.chatId) {
+    const open = await db.chats
+      .where('personId')
+      .equals(primary.id)
+      .filter((c) => !['declined', 'no_response', 'archived'].includes(c.stage))
+      .first();
+    if (open) {
+      note.chatId = open.id;
+    } else {
+      const at = now.toISOString();
+      const met = {
+        id: newId('c'),
+        userId: user.id,
+        personId: primary.id,
+        organizationId: primary.currentOrganizationId,
+        stage: 'completed' as const,
+        stageEnteredAt: note.occurredAt,
+        source: 'detected' as const,
+        goalTags: [],
+        bumpCount: 0,
+        priority: 2 as const,
+        completedAt: note.occurredAt,
+        createdAt: at,
+        updatedAt: at,
+      };
+      await db.chats.add(met);
+      await db.stageEvents.add({
+        id: newId('se'),
+        userId: user.id,
+        chatId: met.id,
+        toStage: 'completed',
+        status: 'applied',
+        actor: 'system',
+        reason: NOTE_OPENED_CHAT,
+        evidenceRefTable: 'notes',
+        evidenceRefId: note.id,
+        confidence: note.matchConfidence ?? 0.8,
+        createdAt: at,
+        decidedAt: at,
+      });
+      note.chatId = met.id;
+      // the first-message card for this person no longer holds: they have already talked
+      const firstMessage = await db.suggestions
+        .where('personId')
+        .equals(primary.id)
+        .filter((x) => x.kind === 'new_outreach' && (x.status === 'pending' || x.status === 'snoozed'))
+        .toArray();
+      if (firstMessage.length) await retireSuggestions(firstMessage, 'superseded:met', now);
+    }
+    await db.notes.update(note.id, { chatId: note.chatId });
+  }
   // each fact belongs to the person it is about: an id from the heuristic path, a name from the LLM path
   const personFor = (about: string | undefined): Person => {
     if (!about) return primary;

@@ -1,7 +1,7 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Compass, Inbox, LayoutGrid, Map as MapIcon, Plus, Search, Settings, Sun, Users } from 'lucide-react';
-import { useEffect, useState } from 'react';
-import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { db } from '../db/schema';
 import { isMessageSuggestion } from '../engine/brief';
 import { dailyMaintenance } from '../engine/sync';
@@ -23,6 +23,14 @@ export function AppShell() {
   const { user, userId } = useSession();
   const nav = useNavigate();
   const [palette, setPalette] = useState(false);
+  const { pathname } = useLocation();
+  const mainRef = useRef<HTMLElement>(null);
+  // a new page starts at its top, not where the last one was scrolled to (before any card scrolls itself into view)
+  useLayoutEffect(() => {
+    void pathname;
+    if (mainRef.current) mainRef.current.scrollTop = 0;
+    window.scrollTo(0, 0);
+  }, [pathname]);
   const pending =
     useLiveQuery(
       () =>
@@ -154,7 +162,7 @@ export function AppShell() {
             <Settings size={18} />
           </NavLink>
         </header>
-        <main className="flex-1 min-h-0 overflow-y-auto scroll-thin">
+        <main ref={mainRef} className="flex-1 min-h-0 overflow-y-auto scroll-thin">
           <div className="max-w-[1120px] mx-auto px-4 md:px-8 py-6 pb-24 md:pb-8">
             <Outlet />
           </div>

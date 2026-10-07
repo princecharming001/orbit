@@ -514,6 +514,7 @@ test.describe('Manual onboarding', () => {
     await page.getByTestId('ob-name').fill('Sam Okafor');
     await page.getByTestId('ob-email').fill('sam@umich.edu');
     await page.getByTestId('ob-school').fill('University of Michigan');
+    await page.getByTestId('ob-year').selectOption({ index: 2 });
     await page.getByRole('button', { name: /continue/i }).click();
     await expect(page).toHaveURL(/\/onboarding\/2$/);
     await page.getByTestId('ob-fn-pm').click();
@@ -568,6 +569,7 @@ test.describe('Manual onboarding', () => {
     await page.getByTestId('ob-name').fill('Real Person');
     await page.getByTestId('ob-email').fill('real@umich.edu');
     await page.getByTestId('ob-school').fill('University of Michigan');
+    await page.getByTestId('ob-year').selectOption({ index: 2 });
     await page.getByRole('button', { name: /continue/i }).click();
     await expect(page).toHaveURL(/\/onboarding\/2$/);
     // while the stored profile is read, the header never offers the first-visit buttons, not even for one frame
@@ -825,11 +827,14 @@ test.describe('Setup without Google', () => {
       .click();
     await expect(page.getByTestId('ob-progress')).toHaveText(/step 1 of 7/i);
     // Continue says what is missing while it is disabled
-    await expect(page.getByTestId('ob-missing')).toContainText(/your name, your email and your school/i);
+    await expect(page.getByTestId('ob-missing')).toContainText(
+      /your name, your email, your school and your graduation year/i,
+    );
     // labels belong to their fields, and say which are required
     await page.getByLabel('Full name Required').fill('Sam Okafor');
     await page.getByLabel('Email Required').fill('sam@umich.edu');
     await page.getByTestId('ob-school').fill('University of Michigan');
+    await page.getByTestId('ob-year').selectOption({ index: 2 });
     await page.getByRole('button', { name: /continue/i }).click();
     await page.getByTestId('ob-fn-consulting').click();
     await page.getByTestId('ob-roles').fill('Summer analyst');
@@ -871,5 +876,85 @@ test.describe('Setup without Google', () => {
     await page.goto('pipeline');
     await expect(page.getByText(/no chats yet/i)).toBeVisible();
     await expect(page.locator('[data-testid^="chat-card-"]')).toHaveCount(0);
+  });
+  test('an empty Today imports LinkedIn in place, says who to meet, and a note about someone met in person brings a thank-you', async ({
+    page,
+  }) => {
+    await prep(page);
+    await page.goto('');
+    await page
+      .getByRole('button', { name: /^get started/i })
+      .first()
+      .click();
+    await page.getByTestId('ob-name').fill('Jamie Park');
+    await page.getByTestId('ob-email').fill('jamie@umich.edu');
+    await page.getByTestId('ob-school').fill('University of Michigan');
+    await page.getByTestId('ob-year').selectOption({ index: 2 });
+    await page.getByRole('button', { name: /continue/i }).click();
+    await page.getByTestId('ob-fn-ib').click();
+    await page.getByTestId('ob-company').fill('Goldman Sachs');
+    await page.getByRole('button', { name: /continue/i }).click();
+    for (let i = 0; i < 3; i++) await page.getByRole('button', { name: /skip for now/i }).click();
+    await page.getByRole('button', { name: /continue/i }).click();
+    await page.getByRole('button', { name: /finish setup/i }).click();
+    await expect(page).toHaveURL(/\/today$/, { timeout: 30_000 });
+    // the upload is a real control: the keyboard reaches it, and it opens the picker right here
+    const upload = page.getByTestId('today-empty-network').getByTestId('linkedin-import');
+    await upload.focus();
+    await expect(upload).toBeFocused();
+    await upload.setInputFiles({
+      name: 'Connections.csv',
+      mimeType: 'text/csv',
+      buffer: Buffer.from(
+        [
+          'First Name,Last Name,URL,Email Address,Company,Position,Connected On',
+          'Priya,Raman,https://www.linkedin.com/in/priyaraman,,Goldman Sachs,Investment Banking Analyst,12 Mar 2025',
+          'Sarah,Lin,https://www.linkedin.com/in/sarahlin,,Evercore,Summer Analyst,21 Aug 2025',
+          'Marcus,Webb,https://www.linkedin.com/in/marcuswebb,,Bain & Company,Associate Consultant,02 Feb 2024',
+        ].join('\n'),
+      ),
+    });
+    const toast = page.getByTestId('toasts');
+    await expect(toast).toContainText(/3 people added.*worth a coffee chat are on Discover/i, {
+      timeout: 30_000,
+    });
+    await toast.getByRole('button', { name: /see who to meet/i }).click();
+    await expect(page).toHaveURL(/\/discover$/);
+    const priya = page.getByTestId('rec-card').filter({ hasText: 'Priya Raman' });
+    await expect(priya).toContainText('Works in investment banking (Investment Banking Analyst)');
+    // a consultant is not called a banker
+    await expect(page.getByTestId('rec-card').filter({ hasText: 'Marcus Webb' })).toHaveCount(0);
+    // Start warm-up keeps the student on the list
+    await priya.getByRole('button', { name: /start warm-up/i }).click();
+    await expect(toast).toContainText(/warm-up started for priya/i);
+    await expect(page).toHaveURL(/\/discover$/);
+    // a note about someone the student met in person (never messaged) leads to a thank-you, not a cold first message
+    await page.goto('notes/new');
+    await page
+      .getByTestId('capture-text')
+      .fill('Coffee chat with Sarah Lin at the career fair. She suggested I practice paper LBOs.');
+    await page.getByTestId('capture-save').click();
+    await expect(page).toHaveURL(/\/people\//, { timeout: 15_000 });
+    await page.goto('today');
+    await expect(page.getByTestId('suggestion-thank_you').filter({ hasText: 'Sarah Lin' })).toBeVisible();
+    await expect(page.getByTestId('suggestion-new_outreach').filter({ hasText: 'Sarah Lin' })).toHaveCount(0);
+  });
+
+  test('facts that disagree are pointed out, and a deleted fact can be brought back', async ({ page }) => {
+    await loadDemo(page);
+    await page.goto('people');
+    await page.locator('a[href*="/people/p"]:visible').first().click();
+    await page.getByRole('tab', { name: /facts/i }).click();
+    for (const t of ['She grew up in Pittsburgh', 'She grew up in Chicago']) {
+      await page.getByLabel('Kind of fact').selectOption('personal');
+      await page.getByLabel('New fact').fill(t);
+      await page.getByRole('button', { name: /^add$/i }).click();
+    }
+    await expect(page.getByTestId('fact-conflict')).toHaveCount(2);
+    await page.getByRole('button', { name: 'Delete fact: She grew up in Chicago' }).click();
+    await expect(page.getByTestId('fact-conflict')).toHaveCount(0);
+    await page.getByTestId('toasts').getByRole('button', { name: 'Undo' }).click();
+    await expect(page.getByRole('button', { name: 'Delete fact: She grew up in Chicago' })).toBeVisible();
+    await expect(page.getByTestId('fact-conflict')).toHaveCount(2);
   });
 });

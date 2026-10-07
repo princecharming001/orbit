@@ -1,7 +1,7 @@
 import type { DraftNeed, OutboundMessage } from '@orbit/core';
 import { LINKEDIN_NOTE_MAX, MAX_WORDS, wordsIn } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { type ReactNode, useEffect, useState } from 'react';
+import { type ReactNode, useEffect, useId, useLayoutEffect, useState } from 'react';
 import { db } from '../db/schema';
 import { regenerateDraft } from '../engine/brief';
 import {
@@ -75,6 +75,18 @@ export function DraftEditor({
 }) {
   const { user } = useSession();
   const [body, setBody] = useState(draft.bodyFinal ?? draft.bodyDraft);
+  const bodyId = useId();
+  // the box grows with the message, so the whole draft (sign-off included) is visible without scrolling inside it,
+  // which matters on a phone where every line wraps
+  useLayoutEffect(() => {
+    // the status too: the box mounts again when a hand-off is taken back for editing
+    void body;
+    void draft.status;
+    const el = document.getElementById(bodyId) as HTMLTextAreaElement | null;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight + 2}px`;
+  }, [body, bodyId, draft.status]);
   const [subject, setSubject] = useState(draft.subject ?? '');
   const [inputs, setInputs] = useState<Record<string, string>>({});
   const [regenerating, setRegenerating] = useState(false);
@@ -224,9 +236,11 @@ export function DraftEditor({
         </div>
       )}
       <Textarea
+        id={bodyId}
         value={body}
         onChange={(e) => setBody(e.target.value)}
-        rows={Math.min(14, Math.max(6, body.split('\n').length + 2))}
+        rows={6}
+        className="resize-none overflow-hidden"
         aria-label="Message body"
       />
       <div className="mt-2 flex items-center gap-3 text-[12px] text-ink-3 flex-wrap">

@@ -3,9 +3,10 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { AddPersonButton } from '../components/AddPerson';
+import { LinkedInImportButton } from '../components/LinkedInImport';
 import { db } from '../db/schema';
 import { useSession } from '../state/session';
-import { Avatar, Button, Chip, EmptyState, Input, PageHeader, relDate, Select } from '../ui';
+import { Avatar, Chip, EmptyState, Input, PageHeader, relDate, Select } from '../ui';
 import { StrengthDots } from './Pipeline';
 
 export function People() {
@@ -173,7 +174,7 @@ export function People() {
                           )}
                         </Link>
                       </td>
-                      <td className="px-3 text-ink-2 truncate max-w-[280px]">
+                      <td className="px-3 text-ink-2 truncate max-w-[220px]">
                         {[p.currentTitle, p.currentOrganizationRaw].filter(Boolean).join(' · ') || '—'}
                       </td>
                       <td className="px-3 text-ink-2 whitespace-nowrap">{role(p) ?? '—'}</td>
@@ -203,8 +204,12 @@ export function People() {
           action={
             <div className="flex flex-wrap justify-center gap-2">
               <AddPersonButton variant="primary" />
-              <Link to="/settings/integrations">
-                <Button>Import LinkedIn connections</Button>
+              <LinkedInImportButton />
+              <Link
+                to="/settings/integrations"
+                className="self-center text-[13px] text-ink-3 underline underline-offset-2 hover:text-ink"
+              >
+                How to get the LinkedIn file
               </Link>
             </div>
           }

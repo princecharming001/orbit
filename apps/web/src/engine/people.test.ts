@@ -1,7 +1,7 @@
 import type { User } from '@orbit/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { db, wipeDatabase } from '../db/schema';
-import { importConnectionsCsv } from './linkedin';
+import { importConnectionsCsv, importLinkedInExport } from './linkedin';
 import { suggestDuplicateMerges, upsertPerson } from './people';
 
 const user: User = {
@@ -280,5 +280,41 @@ describe('duplicate detection after imports (NRC-20)', () => {
     expect(await suggestDuplicateMerges(user.id)).toBe(0);
     await db.merges.update(merges[0]!.id, { status: 'rejected' });
     expect(await suggestDuplicateMerges(user.id)).toBe(0);
+  });
+});
+
+describe('a LinkedIn upload from anywhere in the app', () => {
+  it('rebuilds the recommendations at once, so Discover never says nobody matches right after an import', async () => {
+    await db.goals.put({
+      userId: user.id,
+      cycleLabel: 'Summer 2027',
+      targetRoles: ['Summer analyst'],
+      targetFunctions: ['ib', 'consulting'],
+      targetIndustries: [],
+      targetLocations: [],
+      ambition: 2,
+    });
+    await db.targetCompanies.put({
+      id: 'tc1',
+      userId: user.id,
+      nameRaw: 'Goldman Sachs',
+      priority: 1,
+      status: 'researching',
+    });
+    const r = await importLinkedInExport(
+      user,
+      `${HDR}Daniel,Okafor,https://www.linkedin.com/in/daniel-okafor,,Goldman Sachs,Analyst,12 Mar 2025\nSana,Ahmed,https://www.linkedin.com/in/sana-ahmed,,McKinsey & Company,Business Analyst,1 Sep 2023\n`,
+    );
+    expect(r).toMatchObject({ imported: 2, updated: 0 });
+    expect(r.recommended).toBeGreaterThan(0);
+    const recs = await db.recommendations.where('userId').equals(user.id).toArray();
+    const daniel = (await people()).find((p) => p.firstName === 'Daniel')!;
+    const rec = recs.find((x) => x.personId === daniel.id)!;
+    expect(rec.reasons.map((x) => x.text)).toContain('Works in investment banking (Analyst)');
+    const sana = (await people()).find((p) => p.firstName === 'Sana')!;
+    const sanaReasons = recs.find((x) => x.personId === sana.id)?.reasons.map((x) => x.text) ?? [];
+    expect(sanaReasons.join(' ')).not.toMatch(/investment banking/);
+    const li = await db.integrations.where('userId').equals(user.id).toArray();
+    expect(li.map((i) => i.provider)).toEqual(['linkedin_csv']);
   });
 });

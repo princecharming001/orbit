@@ -181,9 +181,10 @@ describe('note facts in drafts and on the person', () => {
     expect(nurture).not.toMatch(/\brecommended I apply\b|\boffered to refer\b/);
     const p = (await db.people.get(priya.id))!;
     expect(p.summary).toMatch(
-      /She recommended I apply early\. She offered to refer me to the APM program\.$/,
+      // the summary speaks to the student: their note said "me", the profile says "you"
+      /She recommended you apply early\. She offered to refer you to the APM program\.$/,
     );
-    expect(p.talkingPoints).toContain('Follow up: She offered to refer me to the APM program.');
+    expect(p.talkingPoints).toContain('Follow up: She offered to refer you to the APM program.');
   });
 });
 
@@ -451,6 +452,51 @@ describe('an unconfirmed guess and a corrected match leave no stale pipeline sta
       /^Who was your note from Fri, Oct 2 with\? It could be Tom Wu at (Bain & Company|Google) or Tom Wu at (Bain & Company|Google)\.$/,
     );
     expect([...(c.payload.candidatePersonIds as string[])].sort()).toEqual([bain.id, google.id].sort());
+  });
+});
+
+describe('a note about someone the student never messaged', () => {
+  it('opens the chat at completed, so a thank-you comes next and no cold first message', async () => {
+    await db.users.put({ ...user, onboardingCompletedAt: '2026-09-01T00:00:00.000Z' });
+    const daniel = await person('Daniel Okafor', 'daniel@goldman.com', 'Goldman Sachs');
+    await ingestNote(
+      user,
+      {
+        source: 'manual',
+        personIds: [daniel.id],
+        occurredAt: new Date(NOW.getTime() - 3 * 3_600_000).toISOString(),
+        text: 'Coffee chat with Daniel Okafor at the career fair. He suggested I practice paper LBOs. He offered to refer me in January.',
+      },
+      NOW,
+    );
+    const chats = await db.chats.where('personId').equals(daniel.id).toArray();
+    expect(chats.map((c) => c.stage)).toEqual(['completed']);
+    await evaluateImmediateSuggestions(user.id, { personId: daniel.id, chatId: chats[0]!.id }, NOW);
+    const kinds = (await db.suggestions.where('personId').equals(daniel.id).toArray())
+      .filter((x) => x.status === 'pending')
+      .map((x) => x.kind);
+    expect(kinds).toContain('thank_you');
+    expect(kinds).not.toContain('new_outreach');
+  });
+
+  it('a chat the note opened goes away when the note is moved to someone else', async () => {
+    const daniel = await person('Daniel Okafor', 'daniel@goldman.com', 'Goldman Sachs');
+    const maya = await person('Maya Chen', 'maya@stripe.com', 'Stripe');
+    const n = await ingestNote(
+      user,
+      {
+        source: 'manual',
+        personIds: [daniel.id],
+        occurredAt: NOW.toISOString(),
+        text: 'Coffee chat. Great advice on interviews.',
+      },
+      NOW,
+    );
+    await rematchNote(user, n.id, maya.id, NOW);
+    expect(await db.chats.where('personId').equals(daniel.id).count()).toBe(0);
+    expect((await db.chats.where('personId').equals(maya.id).toArray()).map((c) => c.stage)).toEqual([
+      'completed',
+    ]);
   });
 });
 

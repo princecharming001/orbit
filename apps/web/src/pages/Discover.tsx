@@ -3,6 +3,7 @@ import { RefreshCw } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { AddPersonButton } from '../components/AddPerson';
+import { LinkedInImportButton } from '../components/LinkedInImport';
 import { feedback } from '../db/repo';
 import { db } from '../db/schema';
 import { recommendationsRefresh, startWarmUpOrOutreach } from '../engine/brief';
@@ -91,12 +92,13 @@ export function Discover() {
     );
     if (r.draft) nav(`/people/${personId}?draft=outreach`);
     else {
+      // stay on the list: the student is still choosing who to meet, and the first step waits on Today
       toast.push({
-        text: `Warm-up started for ${p?.firstName}. The first step is outlined below.`,
+        text: `Warm-up started for ${p?.firstName}. The first step is on Today.`,
         tone: 'good',
-        ttl: 6000,
+        ttl: 8000,
+        action: { label: 'Open on Today', onClick: () => nav(`/today?person=${personId}`) },
       });
-      nav(`/today?person=${personId}`);
     }
   };
   const drop = async (id: string, reason: string, label: string) => {
@@ -162,11 +164,7 @@ export function Discover() {
           action={
             <div className="flex flex-wrap justify-center gap-2">
               {missing.people && <AddPersonButton variant="primary" />}
-              {missing.people && (
-                <Link to="/settings/integrations">
-                  <Button>Import LinkedIn connections</Button>
-                </Link>
-              )}
+              {missing.people && <LinkedInImportButton />}
               {missing.goals && (
                 <Link to="/settings/goals">
                   <Button variant={missing.people ? 'secondary' : 'primary'}>Set your goals</Button>

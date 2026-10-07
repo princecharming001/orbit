@@ -21,7 +21,7 @@ import {
   usHolidays,
 } from '../suggestions/rules';
 import type { CoffeeChat, Person, PersonFact, Recommendation, TargetCompany, UserSettings } from '../types';
-import { buildWarmUpPlan, warmUpProgress } from '../warmup/rules';
+import { buildWarmUpPlan, warmUpProgress, warmUpStepDue } from '../warmup/rules';
 
 const TZ = 'America/New_York';
 const H = 3_600_000;
@@ -540,6 +540,24 @@ describe('warm-up readiness (SND-15)', () => {
     const prog = warmUpProgress(plan, new Date(start.getTime() + 30 * H), tokyo);
     expect(prog.ready).toBe(true);
     expect(prog.readyFrom).toBe('2026-10-06T15:00:00.000Z');
+  });
+});
+
+describe('warm-up pacing', () => {
+  it('offers the next step on its own day, not right after the previous one is done', () => {
+    const start = at('2026-10-05T14:00:00Z'); // Monday 10:00 in New York
+    const plan = buildWarmUpPlan('dana', start, 4, TZ);
+    plan.actions[0]!.doneAt = new Date(start.getTime() + 5 * 60_000).toISOString();
+    const dana = person('Dana');
+    const c = chat('cw', 'Dana', { stage: 'warming', warmUp: plan });
+    const sameDay = generateCandidates(
+      input(new Date(start.getTime() + 10 * 60_000), { people: [dana], chats: [c] }),
+    );
+    expect(sameDay.some((x) => x.kind === 'warm_up_engage')).toBe(false);
+    const due = new Date(plan.actions[1]!.dueAt);
+    expect(warmUpStepDue(plan.actions[1]!, due, TZ)).toBe(true);
+    const nextDay = generateCandidates(input(due, { people: [dana], chats: [c] }));
+    expect(nextDay.find((x) => x.kind === 'warm_up_engage')?.signals.actionId).toBe('w2');
   });
 });
 

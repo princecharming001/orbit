@@ -32,7 +32,16 @@ export function AddPersonButton({
   );
 }
 
-export function AddPersonDialog({ onClose, company }: { onClose: () => void; company?: string }) {
+export function AddPersonDialog({
+  onClose,
+  company,
+  onAdded,
+}: {
+  onClose: () => void;
+  company?: string;
+  /** stay where the student is (a note being matched) and hand back who was added, instead of opening them */
+  onAdded?: (personId: string) => void;
+}) {
   const { user } = useSession();
   const nav = useNavigate();
   const toast = useToast();
@@ -52,6 +61,11 @@ export function AddPersonDialog({ onClose, company }: { onClose: () => void; com
       const r = await addPersonByHand(user.id, f, user.school);
       if (!r) return setError('Add their name first.');
       onClose();
+      if (onAdded) {
+        onAdded(r.person.id);
+        toast.push({ text: `Added ${r.person.displayName}.`, tone: 'good' });
+        return;
+      }
       toast.push({
         text: r.created
           ? `Added ${r.person.displayName}. When you are ready, use Write to ${r.person.firstName}.`

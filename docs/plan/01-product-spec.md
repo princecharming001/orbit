@@ -122,7 +122,7 @@ A **coffee chat** is one relationship-in-progress with one person, at one point 
 | `replied` | the person replied with anything that is not a decline | inbound classifier (`reply_positive`, `reply_neutral`) |
 | `scheduling` | times are being negotiated | inbound classifier (`scheduling_proposal`) or outbound draft of kind `schedule_propose` sent |
 | `scheduled` | a calendar event exists with this person as attendee, in the future | calendar sync |
-| `completed` | the scheduled event ended, or notes were ingested for a meeting with this person | calendar sync (event end + 15 min) or notes ingest |
+| `completed` | the scheduled event ended, or notes were ingested for a meeting with this person (a note about someone with no open chat, met at a career fair or an event, opens a chat at `completed`, so the thank-you comes next instead of a cold first message) | calendar sync (event end + 15 min) or notes ingest |
 | `followed_up` | a thank-you or follow-up was sent after completion | send pipeline |
 | `nurturing` | long-term relationship mode; cadence rules apply | automatic 14 days after `followed_up` (or 14 days after `completed` when no thank-you was recorded), or user action |
 | `declined` | the person said no, or asked not to be contacted | inbound classifier (`reply_decline`) with confirmation card, or user |

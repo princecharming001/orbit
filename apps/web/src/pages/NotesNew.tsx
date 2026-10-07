@@ -1,6 +1,7 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import { AddPersonDialog } from '../components/AddPerson';
 import { db } from '../db/schema';
 import { ingestNote, rematchNote } from '../engine/notes';
 import { useSession } from '../state/session';
@@ -22,6 +23,7 @@ export function NotesNew() {
   );
   const [source, setSource] = useState<'manual' | 'wispr_capture' | 'granola_email' | 'upload'>('manual');
   const [busy, setBusy] = useState(false);
+  const [adding, setAdding] = useState(false);
   const people =
     useLiveQuery(
       () =>
@@ -178,12 +180,12 @@ export function NotesNew() {
             />
             <div className="flex flex-wrap items-center gap-3 mt-2 text-[12px] text-ink-3">
               <span>Tip: your phone's or computer's dictation works in this box.</span>
-              <label className="ml-auto cursor-pointer underline underline-offset-2">
+              <label className="ml-auto cursor-pointer underline underline-offset-2 rounded focus-within:ring-2 focus-within:ring-accent/40">
                 Upload .txt / .md
                 <input
                   type="file"
                   accept=".txt,.md,.markdown"
-                  className="hidden"
+                  className="sr-only"
                   onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])}
                 />
               </label>
@@ -192,8 +194,9 @@ export function NotesNew() {
         )}
         <div className="grid sm:grid-cols-3 gap-3">
           <div className="sm:col-span-2">
-            <Label>Who was this with?</Label>
+            <Label htmlFor="capture-person">Who was this with?</Label>
             <Select
+              id="capture-person"
               value={personId}
               onChange={(e) => setPersonId(e.target.value)}
               className="w-full"
@@ -217,10 +220,24 @@ export function NotesNew() {
                 </option>
               ))}
             </Select>
+            <button
+              type="button"
+              className="mt-1.5 text-[12px] text-ink-3 underline underline-offset-2 hover:text-ink"
+              onClick={() => setAdding(true)}
+              data-testid="capture-add-person"
+            >
+              Not in Orbit yet? Add them
+            </button>
+            {adding && <AddPersonDialog onClose={() => setAdding(false)} onAdded={(id) => setPersonId(id)} />}
           </div>
           <div>
-            <Label>When</Label>
-            <Input type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} />
+            <Label htmlFor="capture-when">When</Label>
+            <Input
+              id="capture-when"
+              type="datetime-local"
+              value={when}
+              onChange={(e) => setWhen(e.target.value)}
+            />
           </div>
         </div>
         {!existing && (
@@ -262,7 +279,13 @@ export function NotesNew() {
             onClick={save}
             data-testid="capture-save"
           >
-            {busy ? 'Saving…' : existing ? 'Save match' : 'Save note'}
+            {busy
+              ? 'Saving…'
+              : existing
+                ? personId
+                  ? `Save note for ${person?.firstName ?? 'them'}`
+                  : 'Save without a person'
+                : 'Save note'}
           </Button>
         </div>
       </Card>

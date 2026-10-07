@@ -10,6 +10,7 @@ import type {
 import {
   CHANNEL_LABELS,
   composeKindFor,
+  conflictingFacts,
   FACT_TYPE_LABELS,
   linkedinActivityUrl,
   MESSAGE_KIND_LABELS,
@@ -231,6 +232,8 @@ export function PersonPage() {
   ].sort((a, b) => b.at.localeCompare(a.at));
   const grouped = new Map<string, typeof facts>();
   for (const f of facts) grouped.set(f.type, [...(grouped.get(f.type) ?? []), f]);
+  // two answers to the same question (two hometowns, two teams): point at both so the wrong one gets deleted
+  const conflicts = conflictingFacts(facts);
   const nextEvent = events
     .filter((e) => new Date(e.endAt).getTime() > Date.now())
     .sort((a, b) => a.startAt.localeCompare(b.startAt))[0];
@@ -537,9 +540,19 @@ export function PersonPage() {
                         <span className="flex-1">
                           {f.text}{' '}
                           <span className="text-ink-3 text-[12px]">
-                            · {f.sourceTable === 'notes' ? 'from notes' : 'from email'}
+                            ·{' '}
+                            {f.sourceTable === 'notes'
+                              ? 'from notes'
+                              : f.sourceTable === 'manual'
+                                ? 'added by you'
+                                : 'from email'}
                             {f.occurredAt ? ` · ${shortDate(f.occurredAt)}` : ''}
                           </span>
+                          {conflicts.has(f.id) && (
+                            <span className="block text-[12px] text-warn mt-0.5" data-testid="fact-conflict">
+                              Disagrees with “{conflicts.get(f.id)}”. Delete the one that is wrong.
+                            </span>
+                          )}
                         </span>
                         <button
                           className="shrink-0 -my-1 p-1.5 opacity-100 md:opacity-0 md:group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 text-ink-3 hover:text-bad rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
@@ -548,6 +561,14 @@ export function PersonPage() {
                           onClick={async () => {
                             await db.facts.update(f.id, { deletedAt: new Date().toISOString() });
                             await feedback(user.id, 'fact_delete', { refTable: 'facts', refId: f.id });
+                            toast.push({
+                              text: 'Fact deleted. Drafts will not use it.',
+                              action: {
+                                label: 'Undo',
+                                onClick: () => db.facts.update(f.id, { deletedAt: undefined }),
+                              },
+                              ttl: 6000,
+                            });
                           }}
                         >
                           <Trash2 size={14} />

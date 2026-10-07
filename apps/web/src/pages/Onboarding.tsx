@@ -1,4 +1,4 @@
-import { newId } from '@orbit/core';
+import { newId, yearLabel } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Check, Minus, Upload } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
@@ -54,6 +54,9 @@ export function Onboarding() {
   }, [user?.id]);
   const stepperRef = useRef<HTMLOListElement>(null);
   useEffect(() => {
+    // each step opens at its title, not scrolled down to where the last step's Continue button was
+    void step;
+    window.scrollTo(0, 0);
     stepperRef.current
       ?.querySelector('[aria-current="step"]')
       ?.scrollIntoView({ block: 'nearest', inline: 'center' });
@@ -201,7 +204,8 @@ function StepAbout({ onNext }: { onNext: () => void }) {
     email: user.email,
     school: user.school,
     schoolDomain: user.schoolDomain ?? '',
-    graduationYear: user.graduationYear ?? new Date().getFullYear() + 1,
+    // no default: a guessed year would call a sophomore a junior in every message
+    graduationYear: user.graduationYear ? String(user.graduationYear) : '',
     degree: user.degree ?? 'BS',
     majors: user.majors.join(', '),
     currentCity: user.currentCity ?? '',
@@ -232,7 +236,13 @@ function StepAbout({ onNext }: { onNext: () => void }) {
     !f.fullName.trim() && 'your name',
     !f.email.includes('@') && 'your email',
     !f.school.trim() && 'your school',
+    !f.graduationYear && 'your graduation year',
   ].filter(Boolean) as string[];
+  const now = new Date();
+  const firstYear = now.getMonth() >= 7 ? now.getFullYear() + 1 : now.getFullYear();
+  const years = Array.from({ length: 6 }, (_, i) => firstYear + i);
+  // a year saved earlier stays selectable, even one outside this list
+  if (f.graduationYear && !years.includes(Number(f.graduationYear))) years.unshift(Number(f.graduationYear));
   return (
     <div className="grid sm:grid-cols-2 gap-4 mt-4">
       <p className="sm:col-span-2 text-[13px] text-ink-2 -mt-1">
@@ -300,13 +310,23 @@ function StepAbout({ onNext }: { onNext: () => void }) {
         />
       </div>
       <div>
-        <Label htmlFor="ob-year">Graduation year</Label>
-        <Input
+        <Label htmlFor="ob-year" required>
+          Graduation year
+        </Label>
+        <Select
           id="ob-year"
-          type="number"
           value={f.graduationYear}
-          onChange={(e) => setF({ ...f, graduationYear: Number(e.target.value) })}
-        />
+          onChange={(e) => setF({ ...f, graduationYear: e.target.value })}
+          className="w-full"
+          data-testid="ob-year"
+        >
+          <option value="">Choose your year</option>
+          {years.map((y) => (
+            <option key={y} value={String(y)}>
+              {y} ({yearLabel(y, f.degree, now)} now)
+            </option>
+          ))}
+        </Select>
       </div>
       <div>
         <Label htmlFor="ob-degree">Degree</Label>
@@ -660,11 +680,11 @@ function StepResume({ onNext, onBack }: { onNext: () => void; onBack: () => void
         Orbit uses your resume to find people with overlapping experience and to describe you in first
         messages. PDF, Word (.docx) or plain text, up to 10 MB.
       </p>
-      <label className="mt-4 flex items-center justify-center gap-2 border border-dashed border-line rounded-[12px] h-28 cursor-pointer hover:bg-canvas-2">
+      <label className="mt-4 flex items-center justify-center gap-2 border border-dashed border-line rounded-[12px] h-28 cursor-pointer hover:bg-canvas-2 focus-within:ring-2 focus-within:ring-accent/40">
         <input
           type="file"
           accept=".pdf,.txt,.md,.docx"
-          className="hidden"
+          className="sr-only"
           onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])}
           data-testid="ob-resume"
         />
@@ -871,11 +891,11 @@ function StepLinkedIn({ onNext, onBack }: { onNext: () => void; onBack: () => vo
           <code className="bg-canvas-2 px-1 rounded">Connections.csv</code> here.
         </li>
       </ol>
-      <label className="mt-4 flex items-center justify-center gap-2 border border-dashed border-line rounded-[12px] h-24 cursor-pointer hover:bg-canvas-2">
+      <label className="mt-4 flex items-center justify-center gap-2 border border-dashed border-line rounded-[12px] h-24 cursor-pointer hover:bg-canvas-2 focus-within:ring-2 focus-within:ring-accent/40">
         <input
           type="file"
           accept=".csv"
-          className="hidden"
+          className="sr-only"
           onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])}
           data-testid="ob-linkedin"
         />

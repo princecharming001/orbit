@@ -82,7 +82,7 @@ export function buildWarmUpPlan(slug: string, startedAt: Date, warmUpDays = 4, t
     {
       id: 'w1',
       kind: 'view_profile',
-      label: 'View their profile and follow them',
+      label: 'Look at their profile and what they post about',
       url: linkedinProfileUrl(slug),
       dueAt: first,
     },
@@ -102,6 +102,14 @@ export function buildWarmUpPlan(slug: string, startedAt: Date, warmUpDays = 4, t
     },
   ];
   return { startedAt: startedAt.toISOString(), readyAt: day(n, 9), actions };
+}
+
+/**
+ * Whether a warm-up step's day has come, in the student's timezone. A step is offered on its own day, not the moment
+ * the previous one is done: three steps in ten minutes is not a warm-up.
+ */
+export function warmUpStepDue(action: WarmUpAction, now: Date, tz?: string): boolean {
+  return wallKey(new Date(action.dueAt), tz) <= wallKey(now, tz);
 }
 
 /** YYYY-MM-DD of `d` in `tz` (or the runtime's zone when tz is unset). */

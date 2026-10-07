@@ -2,6 +2,7 @@ import type { User } from '@orbit/core';
 import { newId, normalizeCompany, parseConnectionsCsv } from '@orbit/core';
 import { addTouchpoint, recomputeAllStrengths } from '../db/repo';
 import { db } from '../db/schema';
+import { generateBrief, recommendationsRefresh } from './brief';
 import { recomputeEdges } from './graph';
 import { loadPeopleCache, suggestDuplicateMerges, upsertPerson } from './people';
 
@@ -110,4 +111,45 @@ export function sameTitleKey(title: string): string {
     .replace(/\b(i{1,3}|iv|v|[1-5]|l[1-9])\s*$/, '')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+/**
+ * Upload of a LinkedIn Connections.csv from anywhere in the app: import it, record the integration, and bring the
+ * rest of Orbit up to date at once (recommendations on Discover and, after setup, first-message cards on Today), so
+ * the student is never told "nobody matches" by a list that simply has not been rebuilt yet.
+ */
+export async function importLinkedInExport(
+  user: User,
+  csvText: string,
+  onProgress?: (done: number, total: number) => void,
+): Promise<{ imported: number; updated: number; skipped: number; recommended: number }> {
+  const r = await importConnectionsCsv(user, csvText, onProgress);
+  const existing = await db.integrations
+    .where('userId')
+    .equals(user.id)
+    .filter((i) => i.provider === 'linkedin_csv')
+    .first();
+  const at = new Date().toISOString();
+  await db.integrations.put({
+    id: existing?.id ?? newId('int'),
+    userId: user.id,
+    provider: 'linkedin_csv',
+    status: 'active',
+    scopes: [],
+    syncState: { rows: r.imported + r.updated },
+    connectedAt: existing?.connectedAt ?? at,
+    lastSyncedAt: at,
+  });
+  const fresh = (await db.users.get(user.id)) ?? user;
+  let recommended = 0;
+  if (r.imported + r.updated > 0) {
+    await recommendationsRefresh(fresh);
+    recommended = await db.recommendations
+      .where('userId')
+      .equals(user.id)
+      .filter((x) => x.status === 'new' || x.status === 'saved')
+      .count();
+    if (fresh.onboardingCompletedAt) await generateBrief(fresh, 'daily');
+  }
+  return { ...r, recommended };
 }

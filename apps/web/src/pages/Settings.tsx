@@ -3,9 +3,9 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { Check, Download, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Navigate, NavLink, useNavigate, useParams } from 'react-router-dom';
+import { LinkedInImportButton } from '../components/LinkedInImport';
 import { db, wipeDatabase } from '../db/schema';
 import { demoResetPrompt, loadDemo } from '../engine/demo';
-import { importConnectionsCsv } from '../engine/linkedin';
 import { saveResume } from '../engine/resume';
 import { syncGoogle } from '../engine/sync';
 import { addTargetCompany } from '../engine/targets';
@@ -55,9 +55,21 @@ const SECTIONS = [
   ['privacy', 'Data & privacy'],
 ] as const;
 
+const SECTION_ALIASES: Record<string, string> = {
+  writing: 'style',
+  tone: 'style',
+  sending: 'limits',
+  schedule: 'limits',
+  data: 'privacy',
+  linkedin: 'integrations',
+  google: 'integrations',
+};
+
 export function SettingsPage() {
   const { section = 'profile' } = useParams();
-  if (!SECTIONS.some(([k]) => k === section)) return <Navigate to="/settings/profile" replace />;
+  if (!SECTIONS.some(([k]) => k === section))
+    // the words a student might guess ("writing", "tone") go to the section that has them
+    return <Navigate to={`/settings/${SECTION_ALIASES[section] ?? 'profile'}`} replace />;
   return (
     <div>
       <PageHeader title="Settings" />
@@ -96,29 +108,63 @@ export function SettingsPage() {
   );
 }
 
+type ProfileForm = {
+  fullName: string;
+  email: string;
+  school: string;
+  schoolDomain: string;
+  graduationYear: number;
+  majors: string;
+  currentCity: string;
+  linkedinUrl: string;
+  timezone: string;
+};
+const unsavedProfile = new Map<string, ProfileForm>();
+
 function Profile() {
   const user = useSession().user!;
-  const [f, setF] = useState({
-    fullName: user.fullName,
-    email: user.email,
-    school: user.school,
-    schoolDomain: user.schoolDomain ?? '',
-    graduationYear: user.graduationYear ?? 0,
-    majors: user.majors.join(', '),
-    currentCity: user.currentCity ?? '',
-    linkedinUrl: user.linkedinUrl ?? '',
-    timezone: user.timezone,
-  });
+  const [f, setF] = useState<ProfileForm>(
+    () =>
+      unsavedProfile.get(user.id) ?? {
+        fullName: user.fullName,
+        email: user.email,
+        school: user.school,
+        schoolDomain: user.schoolDomain ?? '',
+        graduationYear: user.graduationYear ?? 0,
+        majors: user.majors.join(', '),
+        currentCity: user.currentCity ?? '',
+        linkedinUrl: user.linkedinUrl ?? '',
+        timezone: user.timezone,
+      },
+  );
   const toast = useToast();
   const nameMissing = !f.fullName.trim();
-  const [saved, setSaved] = useState(JSON.stringify(f));
+  const [saved, setSaved] = useState(() =>
+    JSON.stringify({
+      fullName: user.fullName,
+      email: user.email,
+      school: user.school,
+      schoolDomain: user.schoolDomain ?? '',
+      graduationYear: user.graduationYear ?? 0,
+      majors: user.majors.join(', '),
+      currentCity: user.currentCity ?? '',
+      linkedinUrl: user.linkedinUrl ?? '',
+      timezone: user.timezone,
+    }),
+  );
   const dirty = saved !== JSON.stringify(f);
+  // an edit not saved yet survives a visit to another settings tab (it is kept until saved or the page reloads)
+  useEffect(() => {
+    if (dirty) unsavedProfile.set(user.id, f);
+    else unsavedProfile.delete(user.id);
+  }, [dirty, f, user.id]);
   const zones = timeZones(f.timezone);
   return (
     <Card className="grid sm:grid-cols-2 gap-4">
       <div className="sm:col-span-2">
-        <Label>Full name</Label>
+        <Label htmlFor="profile-name-input">Full name</Label>
         <Input
+          id="profile-name-input"
           value={f.fullName}
           onChange={(e) => setF({ ...f, fullName: e.target.value })}
           aria-invalid={nameMissing}
@@ -132,36 +178,57 @@ function Profile() {
         )}
       </div>
       <div>
-        <Label>Email</Label>
-        <Input value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} />
+        <Label htmlFor="profile-email">Email</Label>
+        <Input id="profile-email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} />
       </div>
       <div>
-        <Label>LinkedIn URL</Label>
-        <Input value={f.linkedinUrl} onChange={(e) => setF({ ...f, linkedinUrl: e.target.value })} />
-      </div>
-      <div>
-        <Label>School</Label>
-        <Input value={f.school} onChange={(e) => setF({ ...f, school: e.target.value })} />
-      </div>
-      <div>
-        <Label>School email domain</Label>
-        <Input value={f.schoolDomain} onChange={(e) => setF({ ...f, schoolDomain: e.target.value })} />
-      </div>
-      <div>
-        <Label>Graduation year</Label>
+        <Label htmlFor="profile-linkedin">LinkedIn URL</Label>
         <Input
+          id="profile-linkedin"
+          value={f.linkedinUrl}
+          onChange={(e) => setF({ ...f, linkedinUrl: e.target.value })}
+        />
+      </div>
+      <div>
+        <Label htmlFor="profile-school">School</Label>
+        <Input
+          id="profile-school"
+          value={f.school}
+          onChange={(e) => setF({ ...f, school: e.target.value })}
+        />
+      </div>
+      <div>
+        <Label htmlFor="profile-domain">School email domain</Label>
+        <Input
+          id="profile-domain"
+          value={f.schoolDomain}
+          onChange={(e) => setF({ ...f, schoolDomain: e.target.value })}
+        />
+      </div>
+      <div>
+        <Label htmlFor="profile-year">Graduation year</Label>
+        <Input
+          id="profile-year"
           type="number"
           value={f.graduationYear}
           onChange={(e) => setF({ ...f, graduationYear: Number(e.target.value) })}
         />
       </div>
       <div>
-        <Label>Majors</Label>
-        <Input value={f.majors} onChange={(e) => setF({ ...f, majors: e.target.value })} />
+        <Label htmlFor="profile-majors">Majors</Label>
+        <Input
+          id="profile-majors"
+          value={f.majors}
+          onChange={(e) => setF({ ...f, majors: e.target.value })}
+        />
       </div>
       <div>
-        <Label>City</Label>
-        <Input value={f.currentCity} onChange={(e) => setF({ ...f, currentCity: e.target.value })} />
+        <Label htmlFor="profile-city">City</Label>
+        <Input
+          id="profile-city"
+          value={f.currentCity}
+          onChange={(e) => setF({ ...f, currentCity: e.target.value })}
+        />
       </div>
       <div>
         <Label htmlFor="profile-tz" hint="times in your messages use it">
@@ -264,8 +331,12 @@ function Goals() {
     <div className="space-y-4">
       <Card className="grid sm:grid-cols-2 gap-4">
         <div className="sm:col-span-2">
-          <Label>Cycle</Label>
-          <Input value={f.cycleLabel} onChange={(e) => setF({ ...f, cycleLabel: e.target.value })} />
+          <Label htmlFor="goals-cycle">Recruiting cycle</Label>
+          <Input
+            id="goals-cycle"
+            value={f.cycleLabel}
+            onChange={(e) => setF({ ...f, cycleLabel: e.target.value })}
+          />
         </div>
         <div className="sm:col-span-2">
           <Label>Functions</Label>
@@ -276,26 +347,39 @@ function Goals() {
           />
         </div>
         <div>
-          <Label>Roles</Label>
-          <Input value={f.targetRoles} onChange={(e) => setF({ ...f, targetRoles: e.target.value })} />
+          <Label htmlFor="goals-roles">Target roles</Label>
+          <Input
+            id="goals-roles"
+            value={f.targetRoles}
+            onChange={(e) => setF({ ...f, targetRoles: e.target.value })}
+          />
         </div>
         <div>
-          <Label>Industries</Label>
+          <Label htmlFor="goals-industries">Industries</Label>
           <Input
+            id="goals-industries"
             value={f.targetIndustries}
             onChange={(e) => setF({ ...f, targetIndustries: e.target.value })}
           />
         </div>
         <div>
-          <Label>Locations</Label>
+          <Label htmlFor="goals-locations">Locations</Label>
           <Input
+            id="goals-locations"
             value={f.targetLocations}
             onChange={(e) => setF({ ...f, targetLocations: e.target.value })}
           />
         </div>
         <div className="sm:col-span-2">
-          <Label>Notes</Label>
-          <Textarea rows={2} value={f.freeText} onChange={(e) => setF({ ...f, freeText: e.target.value })} />
+          <Label htmlFor="goals-free" hint="what matters to you in a team or a firm">
+            Anything else?
+          </Label>
+          <Textarea
+            id="goals-free"
+            rows={2}
+            value={f.freeText}
+            onChange={(e) => setF({ ...f, freeText: e.target.value })}
+          />
         </div>
         <div className="sm:col-span-2">
           <Button
@@ -540,35 +624,7 @@ function Integrations() {
             {li.lastSyncedAt ? `imported ${relDate(li.lastSyncedAt)}` : ''}
           </p>
         )}
-        <label className="mt-3 inline-flex">
-          <input
-            type="file"
-            accept=".csv"
-            className="hidden"
-            data-testid="settings-linkedin"
-            onChange={async (e) => {
-              const f = e.target.files?.[0];
-              if (!f) return;
-              setBusy('Importing LinkedIn…');
-              const r = await importConnectionsCsv(user, await f.text());
-              await db.integrations.put({
-                id: li?.id ?? newId('int'),
-                userId: user.id,
-                provider: 'linkedin_csv',
-                status: 'active',
-                scopes: [],
-                syncState: { rows: r.imported + r.updated },
-                connectedAt: li?.connectedAt ?? new Date().toISOString(),
-                lastSyncedAt: new Date().toISOString(),
-              });
-              setBusy(undefined);
-              toast.push({ text: `${r.imported} added, ${r.updated} updated.`, tone: 'good' });
-            }}
-          />
-          <span className="inline-flex items-center justify-center gap-1.5 rounded-lg font-medium h-9 px-3.5 text-[14px] bg-canvas border border-line hover:bg-canvas-2 cursor-pointer">
-            Upload Connections.csv
-          </span>
-        </label>
+        <LinkedInImportButton label="Upload Connections.csv" testId="settings-linkedin" className="mt-3" />
       </Card>
       <Card>
         <div className="font-medium">Resume</div>
@@ -576,11 +632,11 @@ function Integrations() {
           Upload a newer resume any time. Orbit reads it again for what you have done, to find people with a
           shared background and to describe you in first messages.
         </p>
-        <label className="mt-3 inline-flex">
+        <label className="mt-3 inline-flex rounded-lg focus-within:ring-2 focus-within:ring-accent/40">
           <input
             type="file"
-            accept=".pdf,.txt,.md"
-            className="hidden"
+            accept=".pdf,.txt,.md,.docx"
+            className="sr-only"
             onChange={async (e) => {
               const f = e.target.files?.[0];
               if (!f) return;

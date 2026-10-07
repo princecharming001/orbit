@@ -4,7 +4,7 @@ import { type DraftContext, generateDraft } from '../drafts/templates';
 import { validateDraft } from '../drafts/validate';
 import { extractProposedTimes } from '../email/triage';
 import { parseConnectionsCsv } from '../linkedin/csv';
-import { recommendPeople } from '../recommend/score';
+import { matchedFunction, recommendPeople } from '../recommend/score';
 import { heuristicResumeParse } from '../resume/parse';
 import { buildStyleCard, defaultStyleCard } from '../style/card';
 import {
@@ -284,6 +284,20 @@ describe('recommendations', () => {
     expect(
       recs.every((r) => !ds.chats.some((c) => c.personId === r.personId && c.stage !== 'archived')),
     ).toBe(true);
+  });
+});
+
+describe('recommendation reasons', () => {
+  it('reads the function from the title and the company, so a consulting analyst is not called a banker', () => {
+    expect(matchedFunction('Business Analyst McKinsey & Company', ['ib'])).toBeUndefined();
+    expect(matchedFunction('Business Analyst McKinsey & Company', ['ib', 'consulting'])).toBe('consulting');
+    expect(matchedFunction('Associate Consultant Bain & Company', ['ib', 'consulting'])).toBe('consulting');
+    expect(matchedFunction('Analyst Goldman Sachs', ['ib'])).toBe('ib');
+    expect(matchedFunction('Investment Banking Analyst Evercore', ['ib', 'consulting'])).toBe('ib');
+    expect(matchedFunction('Software Engineer Goldman Sachs', ['ib'])).toBeUndefined();
+    // a company name alone says nothing about the role
+    expect(matchedFunction('Vice President JPMorgan Chase & Co.', ['ib'])).toBeUndefined();
+    expect(matchedFunction('Business Analyst Stripe', ['ib'])).toBeUndefined();
   });
 });
 

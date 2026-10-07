@@ -1898,8 +1898,9 @@ export function buildDemoDataset(
   }
   // 13. Warming up a cold LinkedIn target at a priority-1 company before the first message (doc 13).
   {
-    const started = businessDay(now, -2, 9);
-    const nextDue = isWeekend(now) ? businessDay(now, 1, 10) : businessDay(now, 0, 10);
+    // on a weekend the react step was due on Friday (still open), so the demo always shows a warm-up card
+    const started = isWeekend(now) ? businessDay(now, -3, 9) : businessDay(now, -2, 9);
+    const nextDue = isWeekend(now) ? businessDay(now, -1, 10) : businessDay(now, 0, 10);
     addChat(noah, 'warming', {
       outreachChannel: 'linkedin',
       source: 'recommendation',
@@ -1912,7 +1913,7 @@ export function buildDemoDataset(
           {
             id: 'w1',
             kind: 'view_profile',
-            label: 'View their profile and follow them',
+            label: 'Look at their profile and what they post about',
             url: `https://www.linkedin.com/in/${noah.linkedinSlug}/`,
             dueAt: started.toISOString(),
             doneAt: addMinutes(started, 20).toISOString(),

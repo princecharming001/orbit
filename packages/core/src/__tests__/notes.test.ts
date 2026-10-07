@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { conflictingFacts } from '../notes/conflicts';
 import { extractDueHint, heuristicNoteExtraction } from '../notes/extract';
 import { NOTES } from './fixtures/notes';
 
@@ -208,5 +209,26 @@ Priya Patel: You should apply early, we're hiring in January.`,
       people: [{ key: 't', first: 'Tom' }],
     });
     expect(r.facts[0]?.text).toBe('They recommended reading the last three postmortems');
+  });
+});
+
+describe('facts that disagree', () => {
+  it('points at two answers to the same question and leaves agreeing ones alone', () => {
+    const f = (id: string, text: string) => ({ id, text });
+    const out = conflictingFacts([
+      f('a', 'She grew up in Pittsburgh and still roots for the Steelers'),
+      f('b', 'She grew up in Chicago'),
+      f('c', 'She leads the payments risk team'),
+      f('d', 'She leads the bill pay engineering team'),
+      f('e', 'She is from Pittsburgh'),
+      f('g', 'She recommended one concrete project story'),
+    ]);
+    expect(out.get('b')).toMatch(/Pittsburgh/);
+    expect(out.has('a')).toBe(true);
+    expect(out.get('c')).toMatch(/bill pay/);
+    expect(out.has('g')).toBe(false);
+    expect(
+      conflictingFacts([f('a', 'She grew up in Pittsburgh'), f('e', 'She is from Pittsburgh, PA')]).size,
+    ).toBe(0);
   });
 });

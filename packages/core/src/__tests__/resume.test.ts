@@ -184,3 +184,25 @@ describe('resume keywords (NRC-22)', () => {
     expect(k).toEqual(expect.arrayContaining(['acquisition', 'node.js', 'services']));
   });
 });
+
+describe('one-line entries and places (UX round 1)', () => {
+  it('reads "Club — Role (dates). What I did." lines as separate entries, and a bare "Detroit MI" as a place', () => {
+    const text = `Jamie Park
+EXPERIENCE
+Michigan Finance Club — VP Education (2025-present). Led weekly technical training for 40 members.
+Wolverine Consulting Group — Analyst (2024-2025). Market sizing for a Detroit EV supplier.
+Ann Arbor SPARK — Summer Intern (2025). Built financial models for 3 seed-stage startups.
+Summer Analyst Intern, Comerica Bank, Detroit MI — Jun 2026 to Aug 2026
+- Built a DCF model for a mid-market manufacturing client
+`;
+    const xs = heuristicResumeParse(text, 'r').filter((f) => f.kind === 'experience');
+    expect(xs.map((f) => [f.organizationName, f.title])).toEqual([
+      ['Michigan Finance Club', 'VP Education'],
+      ['Wolverine Consulting Group', 'Analyst'],
+      ['Ann Arbor SPARK', 'Summer Intern'],
+      ['Comerica Bank', 'Summer Analyst Intern'],
+    ]);
+    expect(xs[0]!.text).toBe('Led weekly technical training for 40 members.');
+    for (const f of xs) expect(`${f.title} ${f.text}`).not.toMatch(/\(\s*,\s*\)|Detroit MI/);
+  });
+});

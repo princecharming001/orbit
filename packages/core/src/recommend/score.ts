@@ -12,8 +12,9 @@ import type {
 const FUNCTION_TITLE: Record<string, RegExp> = {
   swe: /\b(software|engineer|developer|swe|sde|backend|frontend|full[- ]?stack|ml engineer|infrastructure|platform)\b/i,
   pm: /\b(product manager|product lead|\bpm\b|head of product|product owner|associate product)\b/i,
-  ib: /\b(investment bank|analyst|associate|m&a|capital markets|leveraged finance|ecm|dcm)\b/i,
-  consulting: /\b(consult|strategy|bain|mckinsey|bcg|associate consultant|engagement manager)\b/i,
+  ib: /\b(investment bank(ing|er)?|m&a|mergers|capital markets|leveraged finance|ecm|dcm|restructuring)\b/i,
+  consulting:
+    /\b(consult(ant|ing)?|strategy|bain|mckinsey|bcg|boston consulting|deloitte|accenture|oliver wyman|kearney|engagement manager)\b/i,
   data: /\b(data (scientist|analyst|engineer)|analytics|machine learning|ml|ai research|quant)\b/i,
   design: /\b(designer|design lead|ux|product design|ui)\b/i,
   finance:
@@ -23,17 +24,31 @@ const FUNCTION_TITLE: Record<string, RegExp> = {
   vc: /\b(venture|vc|investor|principal|partner)\b/i,
   ops: /\b(operations|ops|chief of staff|bizops|strategy & operations)\b/i,
 };
+/**
+ * Titles that only hint at a function. "Analyst" or "Associate" is a banking title at a bank, but a McKinsey
+ * "Business Analyst" is a consultant and a Bain "Associate Consultant" too, so a hint counts only when nothing in the
+ * title or company points at another function.
+ */
+const FUNCTION_HINT: Record<string, RegExp> = {
+  ib: /\b(analyst|associate|banker)\b/i,
+};
+/** Titles a hint never covers: a "Business Analyst" outside a bank is operations or consulting work. */
+const NOT_A_HINT = /\bbusiness analyst\b/i;
 
-export function functionMatch(title: string | undefined, functions: string[]): number {
-  if (!title) return 0;
-  for (const f of functions) if (FUNCTION_TITLE[f]?.test(title)) return 1;
-  return 0;
+/** The student's target function this person works in, from their title and company (undefined when none). */
+export function matchedFunction(text: string | undefined, functions: string[]): string | undefined {
+  if (!text) return undefined;
+  const strong = functions.find((f) => FUNCTION_TITLE[f]?.test(text));
+  if (strong) return strong;
+  // a hint only when the title is not plainly another function (a consulting "Business Analyst" is not banking)
+  const other = Object.entries(FUNCTION_TITLE).some(([f, re]) => !functions.includes(f) && re.test(text));
+  if (other) return undefined;
+  if (NOT_A_HINT.test(text)) return undefined;
+  return functions.find((f) => FUNCTION_HINT[f]?.test(text));
 }
 
-/** The first of the student's target functions that the title matches, for the "Works in ..." reason. */
-export function matchedFunction(title: string | undefined, functions: string[]): string | undefined {
-  if (!title) return undefined;
-  return functions.find((f) => FUNCTION_TITLE[f]?.test(title));
+export function functionMatch(text: string | undefined, functions: string[]): number {
+  return matchedFunction(text, functions) ? 1 : 0;
 }
 
 export function keywordOverlap(a: string[], b: string[]): number {
@@ -109,7 +124,10 @@ export function recommendPeople(inp: RecommendInput): Recommendation[] {
         inp.targetCompanies.find((t) => t.organizationId === p.currentOrganizationId)) ||
       (orgNorm ? targetNames.get(orgNorm) : undefined);
     const companyMatch = tc ? (tc.priority === 1 ? 1 : 0.8) : 0;
-    const fnMatch = functionMatch(`${p.currentTitle ?? ''} ${p.headline ?? ''}`, inp.goals.targetFunctions);
+    // the company counts too: an "Analyst" at McKinsey is consulting, at Evercore banking
+    const roleText = `${p.currentTitle ?? ''} ${p.headline ?? ''} ${p.currentOrganizationRaw ?? ''}`;
+    const fnKey = matchedFunction(roleText, inp.goals.targetFunctions);
+    const fnMatch = fnKey ? 1 : 0;
     const indMatch = industries.some(
       (i) => (p.headline ?? '').toLowerCase().includes(i) || orgNorm.includes(i),
     )
@@ -131,7 +149,7 @@ export function recommendPeople(inp: RecommendInput): Recommendation[] {
     if (fnMatch)
       reasons.push({
         code: 'function_match',
-        text: `Works in ${functionPhrase(matchedFunction(`${p.currentTitle ?? ''} ${p.headline ?? ''}`, inp.goals.targetFunctions)) || 'your target function'}${p.currentTitle ? ` (${p.currentTitle})` : ''}`,
+        text: `Works in ${functionPhrase(fnKey) || 'your target function'}${p.currentTitle ? ` (${p.currentTitle})` : ''}`,
       });
     if (kw >= 0.2) reasons.push({ code: 'resume_overlap', text: 'Overlaps with your experience' });
     if (p.strength >= 0.3) reasons.push({ code: 'warm', text: 'You already know each other a little' });

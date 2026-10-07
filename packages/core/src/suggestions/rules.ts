@@ -18,7 +18,7 @@ import type {
   UserSettings,
 } from '../types';
 import { todayKey } from '../util/ids';
-import { warmUpProgress } from '../warmup/rules';
+import { warmUpProgress, warmUpStepDue } from '../warmup/rules';
 import { addBusinessDays, businessDaysBetween, localWeekday, nextWorkdayKey } from './calendar';
 
 export * from './calendar';
@@ -171,7 +171,8 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
           goalRelevance: rel,
           confidence: 1,
         });
-      } else if (prog.nextAction) {
+      } else if (prog.nextAction && warmUpStepDue(prog.nextAction, now, inp.timezone)) {
+        // the next step waits for its own day (no card in between), so the warm-up is spread out as promised
         out.push({
           kind: 'warm_up_engage',
           personId: chat.personId,

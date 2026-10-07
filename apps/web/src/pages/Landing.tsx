@@ -52,6 +52,16 @@ export function Landing() {
   const startLabel = onboarded ? 'Open Orbit' : midSetup ? 'Continue setup' : 'Get started';
   return (
     <div className="min-h-full bg-canvas">
+      {busy && (
+        // whichever button was pressed, the progress shows where the student is looking
+        <div
+          className="fixed bottom-6 inset-x-4 sm:inset-x-auto sm:left-1/2 sm:-translate-x-1/2 z-50 flex items-center justify-center gap-2 rounded-2xl bg-ink text-white px-4 py-2.5 text-[13px] shadow-lg"
+          role="status"
+          data-testid="landing-progress"
+        >
+          <Spinner /> {busy}
+        </div>
+      )}
       <header className="max-w-[1120px] mx-auto px-5 h-16 flex items-center gap-3">
         <Logo size={24} />
         <span className="font-semibold tracking-tight text-[16px]">Orbit</span>
@@ -103,9 +113,10 @@ export function Landing() {
             )}
             {!onboarded && !resolving && (
               <Button size="lg" variant="secondary" onClick={demo} disabled={!!busy}>
+                {/* the full progress message is in the status pill at the bottom; the button stays its own width */}
                 {busy ? (
                   <>
-                    <Spinner /> {busy}
+                    <Spinner /> Loading…
                   </>
                 ) : (
                   'Try it with demo data'
