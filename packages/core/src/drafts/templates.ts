@@ -1,4 +1,5 @@
 import { wordCount } from '../text/email';
+import { normalizeCompany } from '../text/normalize';
 import type {
   Channel,
   DraftClaim,
@@ -1146,7 +1147,8 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       );
       if (booked && !future.some((t) => !isBooked(t.startIso))) {
         parts.push(
-          `I have us down for ${fmtWindow({ startIso: booked }, tz)} ${tzAbbr(tz, new Date(booked))}, and I've got the invite.`,
+          // only that the meeting is on the calendar is known, not who sent the invite
+          `I have us down for ${fmtWindow({ startIso: booked }, tz)} ${tzAbbr(tz, new Date(booked))}.`,
         );
         claims.push({ text: `meeting on the calendar ${booked}`, kind: 'logistics' });
         confirmed = true;
@@ -1258,7 +1260,7 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
         line1 = `${thanks}. It was good to hear more about your work, especially that ${firstPart(hookProposition(hook.c)!)}.`;
         cite(hook);
       } else if (ctx.takeaway?.trim()) {
-        line1 = pointLine(thanks, takeawayPhrase(ctx.takeaway, P), seed);
+        line1 = takeawayLine(thanks, ctx.takeaway, P, seed);
         claims.push({ text: `takeaway: ${strip(ctx.takeaway)}`, kind: 'about_person' });
       } else {
         // a thank-you with nothing they said in it is the generic note the playbook forbids: ask the student
@@ -1336,12 +1338,14 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       const na = ctx.newAffiliation;
       const news = ctx.news?.trim();
       let what: string | undefined;
+      // "Anthropic" to "Anthropic PBC" is the same employer (a promotion), not a move
       const sameOrg =
-        !!na?.org && !!na.previousOrg && na.org.trim().toLowerCase() === na.previousOrg.trim().toLowerCase();
+        !!na?.org && !!na.previousOrg && normalizeCompany(na.org) === normalizeCompany(na.previousOrg);
       const newRole = na?.title ? roleNoun(na.title) : undefined;
-      if (na?.org && newRole && sameOrg)
-        what = `your new role as ${article(newRole)} ${newRole} at ${na.org}`;
-      else if (na?.org && newRole) what = `your move to ${na.org} as ${article(newRole)} ${newRole}`;
+      if (na?.org && newRole && sameOrg) {
+        const name = [na.org.trim(), na.previousOrg!.trim()].sort((a, b) => a.length - b.length)[0];
+        what = `your new role as ${article(newRole)} ${newRole} at ${name}`;
+      } else if (na?.org && newRole) what = `your move to ${na.org} as ${article(newRole)} ${newRole}`;
       else if (na?.org && !sameOrg) what = `your move to ${na.org}`;
       else if (newRole) what = `your new role as ${article(newRole)} ${newRole}`;
       else if (news) what = softLower(strip(news).replace(/^(congratulations|congrats) on\s+/i, ''));
@@ -1524,9 +1528,89 @@ function pointLine(thanks: string, phrase: string, seed: string): string {
   );
 }
 
-/** The student's own takeaway, typed in the editor, as a phrase addressed to the person ("your advice to ..."). */
-function takeawayPhrase(raw: string, person: DraftContext['person']): string {
-  const t = strip(raw).replace(/^that\s+/i, '');
+/** Words that name someone other than the recipient: a pronoun after one of them may be theirs. */
+const OTHER_PERSON =
+  /^(mom|mother|dad|father|parents?|sister|brother|siblings?|cousin|aunt|uncle|wife|husband|partner|boyfriend|girlfriend|friends?|roommates?|classmates?|professors?|prof|teachers?|managers?|boss|recruiters?|coworkers?|co-workers?|colleagues?|mentors?|advisors?|advisers?|founders?|ceo|cto|director|analysts?|associates?|engineers?|interns?|interviewers?|someone|somebody|anyone|anybody|everyone|person|people|alums?|alumni|alumnus|alumna)$/i;
+const NOT_A_NAME =
+  /^(I|I'm|I've|I'll|I'd|January|February|March|April|May|June|July|August|September|October|November|December|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)$/;
+/** After an object "her" ("email her about ..."), not a possessive one ("her team"). */
+const AFTER_OBJECT =
+  /^(about|to|for|with|if|whether|that|and|or|but|when|before|after|at|on|in|by|from|again|directly|a|an|the|my|some|any|this|these|those|how|what|why|where|who|so|back|up|out|once|soon|later|next|today|tomorrow|know)$/i;
+
+/**
+ * "her team" in the student's own words is "your team" in a note addressed to her, but only while nobody else is in
+ * the sentence: in "email Jenna and ask about her team" the team is Jenna's, so the student's words are kept. A
+ * sentence with "she" or "he" in it keeps its pronouns too, since turning half of them would mix the two people.
+ */
+function toSecondPerson(s: string, person: DraftContext['person']): string {
+  if (/\b(she|he)(?:'[a-z]+)?\b/i.test(s)) return s;
+  const own = new Set(
+    [
+      person.firstName,
+      person.lastName,
+      ...(person.fullName ?? '').split(/\s+/),
+      ...(person.org ?? '').split(/\s+/),
+    ]
+      .filter(Boolean)
+      .map((w) => w!.toLowerCase()),
+  );
+  const tokens = s.split(/(\s+)/);
+  let other = false;
+  return tokens
+    .map((tok, i) => {
+      if (other || /^\s*$/.test(tok)) return tok;
+      const m = tok.match(/^([^A-Za-z']*)([A-Za-z][A-Za-z'-]*)(.*)$/);
+      if (!m) return tok;
+      const [, pre, word, post] = m as unknown as [string, string, string, string];
+      const lower = word.toLowerCase();
+      const bare = lower.replace(/'s$/, '');
+      if (lower === 'his') return `${pre}your${post}`;
+      if (lower === 'him') return `${pre}you${post}`;
+      if (lower === 'hers') return `${pre}yours${post}`;
+      if (lower === 'himself' || lower === 'herself') return `${pre}yourself${post}`;
+      if (lower === 'her') {
+        const next = tokens[i + 2]?.match(/[A-Za-z][A-Za-z'-]*/)?.[0];
+        const object = !next || /[.,;:!?)]/.test(post) || AFTER_OBJECT.test(next);
+        return `${pre}${object ? 'you' : 'your'}${post}`;
+      }
+      if (OTHER_PERSON.test(bare)) other = true;
+      else if (i > 0 && /^[A-Z]/.test(word) && !NOT_A_NAME.test(word) && !own.has(bare)) other = true;
+      return tok;
+    })
+    .join('');
+}
+
+/**
+ * The thank-you's opening from the student's own takeaway, typed in the editor. Their words are addressed to the
+ * person ("your advice to ...", "your advice that I should ..."); a sentence about the student that is not advice
+ * ("I loved the story about Stripe") stays the student's own sentence rather than being forced into a phrase.
+ */
+function takeawayLine(thanks: string, raw: string, person: DraftContext['person'], seed: string): string {
+  const typed = strip(raw);
+  const t = typed.replace(/^that\s+/i, '');
+  // "I learned that recruiting starts in August": what they said is the part after "that"
+  const heard = t.match(
+    /^I\s+(?:learned|realized|realised|heard|took away|now know|found out|understood)\s+that\s+(.+)$/i,
+  );
+  if (heard && !/^(I|I'm|I've|I'll|I'd|me|my|we|our)\b/.test(heard[1]!))
+    return pointLine(thanks, takeawayPhrase(heard[1]!, person, true), seed);
+  const advice = t.match(
+    /^I\s+((should|shouldn't|should not|need to|needn't|must|have to|ought to|don't need to|do not need to|could|can|might)\b(?!').*)$/i,
+  );
+  if (advice) {
+    const noun = /^(could|can|might)$/i.test(advice[2]!) ? 'point' : 'advice';
+    return pointLine(thanks, `your ${noun} that I ${toSecondPerson(advice[1]!, person)}`, seed);
+  }
+  if (/^(my|our)\s/i.test(t))
+    return pointLine(thanks, `your point that ${toSecondPerson(lower1(t), person)}`, seed);
+  // the student's own sentence follows the same thanks the other forms open with, so the note is not shorter
+  if (/^(I|I'm|I've|I'll|I'd|me|we|we're)\b/i.test(t))
+    return `${pointLine(thanks, 'everything you shared', seed)} ${cap1(toSecondPerson(t, person))}.`;
+  return pointLine(thanks, takeawayPhrase(t, person, /^that\s/i.test(typed)), seed);
+}
+
+/** A takeaway about the person as a phrase addressed to them ("your advice to ..."); `isClause` after a typed "that". */
+function takeawayPhrase(t: string, person: DraftContext['person'], isClause = false): string {
   const c = clause(t, person);
   let phrase: string | undefined;
   if (c?.you) {
@@ -1536,6 +1620,7 @@ function takeawayPhrase(raw: string, person: DraftContext['person']): string {
   if (!phrase && c && /^your (point|advice|idea|line|comment|suggestion|story|take)\b/.test(c.text))
     phrase = c.text;
   if (!phrase && /^to\s/i.test(t)) phrase = `your advice ${lower1(t)}`;
+  if (!phrase && isClause) phrase = `your point that ${softLower(t)}`;
   if (!phrase) phrase = `what you said about ${softLower(t.replace(/^about\s+/i, ''))}`;
   return phrase;
 }

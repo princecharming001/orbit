@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { roleNoun } from '../drafts/phrasing';
 import { financeFirmKind, sectorOf, seniorityOf, yearLabel } from '../drafts/sector';
 import {
   BANNED_PHRASES,
@@ -1439,7 +1440,9 @@ describe('audit round 2 regressions', () => {
         proposedWindows: [{ startIso: '2026-10-09T14:00:00Z' }],
       }),
     );
-    expect(booked.body).toMatch(/I have us down for Thursday, Oct 8 at 11:30am EDT/);
+    expect(booked.body).toMatch(/I have us down for Thursday, Oct 8 at 11:30am EDT\./);
+    // who sent the invite is not in the data (L39)
+    expect(booked.body).not.toMatch(/invite/);
     expect(booked.body).not.toMatch(/instead|Friday|has already passed/);
     // they propose the very time that is already on the calendar with them: that is not a clash
     const same = generateDraft(
@@ -1479,6 +1482,85 @@ describe('audit round 2 regressions', () => {
     );
     expect(moved.body).toMatch(/your move to Stripe/);
     expect(moved.body).toMatch(/first few weeks/);
+  });
+
+  it('congratulate: a legal suffix is not a new employer, and abbreviated titles read as words (L37)', () => {
+    const promoted = generateDraft(
+      base({
+        kind: 'congratulate',
+        newAffiliation: { title: 'Sr. Analytics Engineer', org: 'Anthropic PBC', previousOrg: 'Anthropic' },
+      }),
+    );
+    expect(promoted.body).toMatch(/your new role as a senior analytics engineer at Anthropic\./);
+    expect(promoted.body).not.toMatch(/move to|sr\./i);
+    expect(promoted.subject).toBe('Congratulations');
+    const vp = generateDraft(
+      base({
+        kind: 'congratulate',
+        newAffiliation: { title: 'VP, Analytics', org: 'Stripe', previousOrg: 'Figma' },
+      }),
+    );
+    expect(vp.body).toMatch(/your move to Stripe as a VP of analytics\./);
+    expect(roleNoun('Jr. Data Analyst')).toBe('junior data analyst');
+    expect(roleNoun('Software Engineer, Payments')).toBe('software engineer');
+    expect(roleNoun('Vice President, Finance')).toBe('vice president of finance');
+  });
+
+  it('a typed takeaway in the first person still reads as a sentence (L38)', () => {
+    const ty = (takeaway: string, seed = 'priya') =>
+      generateDraft(
+        base({ kind: 'thank_you', seed, takeaway, chat: { meetingAt: '2026-09-24T19:00:00Z' } }),
+      ).body.split('\n\n')[1]!;
+    for (const seed of ['priya', 'x1', 'k7']) {
+      const line = ty('that I should learn SQL', seed);
+      expect(line).toMatch(/your advice that I should learn SQL\./);
+      expect(line).not.toMatch(/about I\b/);
+    }
+    expect(ty('I should talk to her manager Sam')).toMatch(
+      /your advice that I should talk to your manager Sam/,
+    );
+    expect(ty('I learned that recruiting starts in August')).toMatch(
+      /your point that recruiting starts in August/,
+    );
+    expect(ty('my resume needs a projects section')).toMatch(
+      /your point that my resume needs a projects section/,
+    );
+    expect(ty('I loved the story about Stripe')).toBe(
+      'Thank you for making time on September 24, and especially for everything you shared. I loved the story about Stripe.',
+    );
+    expect(ty("I can't stop thinking about the Stripe story")).not.toMatch(/your (point|advice) that/);
+    // the forms that already worked are unchanged
+    expect(ty('to lead with a project')).toMatch(/your advice to lead with a project/);
+  });
+
+  it('a typed takeaway turns only pronouns that can mean the recipient into "you" (L38)', () => {
+    const ty = (takeaway: string) =>
+      generateDraft(
+        base({ kind: 'thank_you', takeaway, chat: { meetingAt: '2026-09-24T19:00:00Z' } }),
+      ).body.split('\n\n')[1]!;
+    // a third party named before the pronoun owns it: the student's words are kept
+    const jenna = ty('I should email Jenna and ask about her team');
+    expect(jenna).toMatch(/your advice that I should email Jenna and ask about her team\./);
+    expect(jenna).not.toMatch(/your team/);
+    expect(ty('I should ask my roommate about his internship')).toMatch(/about his internship/);
+    expect(ty('I loved the story about Sam and his startup')).toMatch(/Sam and his startup/);
+    expect(ty('I should ask if she is hiring and email her')).toMatch(/she is hiring and email her\./);
+    // with nobody else in the sentence the pronoun is the recipient
+    expect(ty('I should talk to her manager Sam')).toMatch(/talk to your manager Sam/);
+    expect(ty('I should email her about the role')).toMatch(/I should email you about the role\./);
+    expect(ty('I should ask her about Priya')).not.toMatch(/ask your\b/);
+    expect(ty('I should follow up with him next month')).toMatch(/follow up with you next month/);
+  });
+
+  it("a first-person takeaway thank-you is long enough for Orbit's own length check (L38)", () => {
+    for (const takeaway of ['I loved the story about Stripe', "I'm going to apply to Figma"])
+      for (const seed of ['priya', 'x1', 'k7', 'z9', 'm3']) {
+        const { d, issues } = check(
+          base({ kind: 'thank_you', seed, takeaway, chat: { meetingAt: '2026-09-24T19:00:00Z' } }),
+        );
+        expect(d.body).toContain(`${takeaway}.`);
+        expect(issues.map((i) => i.code)).not.toContain('too_short');
+      }
   });
 
   it('a time-limited decline gives a re-engagement date; the second try quotes only what they said (EG-20)', () => {

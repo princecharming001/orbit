@@ -314,6 +314,43 @@ describe('system expiry is not a user decision (PS-5, PS-7)', () => {
     expect(back.expiredReason).toBeUndefined();
   });
 
+  it('a card retired right after an email names its reason, so it is told apart from a decision (L40)', async () => {
+    const who = { name: 'Yara Ito', email: 'yara.ito@notion.so' };
+    await ingestEmails(
+      user,
+      [
+        mail(who, 'out', ago(4 * D), OUTREACH('Yara'), 'yara'),
+        mail(who, 'in', ago(1 * D), YES('Yara'), 'yara'),
+      ],
+      { useLlm: false, now },
+    );
+    const p = await personByEmail(who.email);
+    const card = (await cardsOf(p.id)).find((s) => s.kind === 'schedule_propose' && s.status === 'pending')!;
+    expect(card).toBeDefined();
+    // the student proposed times from Gmail: the card's job is done
+    await ingestEmails(
+      user,
+      [
+        mail(
+          who,
+          'out',
+          ago(2 * H),
+          'Hi Yara,\n\nThank you. Would Tuesday at 2pm or Wednesday at 11am work for you?\n\nAlex',
+          'yara',
+        ),
+      ],
+      { useLlm: false, now },
+    );
+    await evaluateImmediateSuggestions(user.id, { chatId: card.chatId, personId: p.id }, now);
+    await generateBrief(user, 'daily', now);
+    const after = (await db.suggestions.get(card.id))!;
+    expect(after.status).toBe('expired');
+    // one retirement path, with the validity pass's reason (staleReason), not a second unnamed sweep
+    expect(after.expiredReason).toMatch(/^(already_sent|superseded|stage:\w+)$/);
+    const vague = await db.suggestions.filter((s) => s.expiredReason === 'trigger_gone').count();
+    expect(vague).toBe(0);
+  });
+
   it('"already did this" counts the bump, and a silent thread closes after three weeks', async () => {
     const who = { name: 'Vik Rao', email: 'vik.rao@ramp.com' };
     await ingestEmails(user, [mail(who, 'out', ago(9 * D), OUTREACH('Vik'), 'vik')], { useLlm: false, now });

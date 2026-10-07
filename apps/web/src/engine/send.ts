@@ -9,12 +9,14 @@ import type {
   User,
 } from '@orbit/core';
 import {
+  declineReengage,
   LINKEDIN_NOTE_MAX,
   linkedinMessageUrl,
   linkedinProfileUrl,
   MESSAGE_KIND_LABELS,
   maxBumpsFor,
   newId,
+  reengageDueAt,
   sectorOf,
   sha256Hex,
   validateDraft,
@@ -92,6 +94,22 @@ async function chatFor(
   return chats.find((c) => c.stage !== 'archived');
 }
 
+/**
+ * A decline with a time limit ("not this quarter") whose window has passed, with nothing sent since: the one polite
+ * second try the re-engagement card offers (the same rule that makes the card) may go out.
+ */
+async function declineWindowPassed(chat: CoffeeChat, now: Date): Promise<boolean> {
+  if (!chat.threadId) return false;
+  const last = (await db.messages.where('threadId').equals(chat.threadId).toArray())
+    .filter((m) => m.direction === 'inbound' && !m.isAutomated && m.signal !== 'out_of_office')
+    .sort((a, b) => b.sentAt.localeCompare(a.sentAt))[0];
+  if (last?.signal !== 'reply_decline') return false;
+  const saidAt = new Date(last.sentAt);
+  const re = declineReengage(last.bodyText, saidAt);
+  if (!re || now < reengageDueAt(re, saidAt)) return false;
+  return !chat.lastOutboundAt || new Date(chat.lastOutboundAt) < saidAt;
+}
+
 export async function checkSendAllowed(
   userId: string,
   personId: string,
@@ -127,7 +145,12 @@ export async function checkSendAllowed(
       reason: `Daily limit reached: ${cap} ${channel === 'linkedin' ? 'LinkedIn messages' : 'emails'} today. It resets at midnight.`,
     };
   const chat = await chatFor(personId, kind, opts.chatId);
-  if (chat?.stage === 'declined' && kind !== 'reply' && kind !== 'thank_you')
+  if (
+    chat?.stage === 'declined' &&
+    kind !== 'reply' &&
+    kind !== 'thank_you' &&
+    !(await declineWindowPassed(chat, now))
+  )
     return {
       allowed: false,
       reason: `${person.firstName} declined earlier. Move the chat out of Declined first if that changed.`,

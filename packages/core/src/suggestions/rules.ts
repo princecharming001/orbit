@@ -1,6 +1,6 @@
 import { maxBumpsFor, sectorOf } from '../drafts/sector';
 import { zonedTime } from '../drafts/time';
-import { declineReengage } from '../pipeline/transitions';
+import { declineReengage, reengageDueAt } from '../pipeline/transitions';
 import type {
   ActionItem,
   CalendarEvent,
@@ -393,7 +393,7 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
     if (chat.stage === 'declined' && lastIn?.signal === 'reply_decline') {
       const saidAt = new Date(lastIn.sentAt);
       const re = declineReengage(lastIn.bodyText, saidAt);
-      const due = re ? Math.max(new Date(re.at).getTime(), saidAt.getTime() + 21 * DAY) : 0;
+      const due = re ? reengageDueAt(re, saidAt).getTime() : 0;
       if (
         re &&
         now.getTime() >= due &&

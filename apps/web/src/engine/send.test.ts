@@ -16,7 +16,13 @@ import {
   googleScopeWarning,
 } from '../integrations/google';
 import { writePrefs } from '../integrations/prefs';
-import { draftForSuggestion, draftMessage, startWarmUpOrOutreach } from './brief';
+import {
+  draftForSuggestion,
+  draftMessage,
+  evaluateImmediateSuggestions,
+  generateBrief,
+  startWarmUpOrOutreach,
+} from './brief';
 import { loadDemo } from './demo';
 import { ingestEmails } from './ingest';
 import {
@@ -540,7 +546,97 @@ describe('cooldown and declined rules (SND-05, SND-13)', () => {
   });
 });
 
+describe('a time-limited decline (L35, L36)', () => {
+  it('the re-engagement card Orbit offers once the window passed can be sent, once', async () => {
+    const D = 86_400_000;
+    // ten days into the current quarter; they said "not this quarter" 25 days before it began
+    const today = new Date();
+    const qStart = new Date(today.getFullYear(), Math.floor(today.getMonth() / 3) * 3, 1);
+    const now = new Date(qStart.getTime() + 10 * D + 12 * 3_600_000);
+    const at = (daysAgo: number) => new Date(now.getTime() - daysAgo * D).toISOString();
+    const who = { name: 'Marcus Webb', email: 'marcus.webb@ramp.com' };
+    const raw = (id: string, dir: 'out' | 'in', sentAt: string, body: string) => ({
+      externalMessageId: `rg_${id}`,
+      externalThreadId: 'rg_thread',
+      from: dir === 'out' ? user.email : `${who.name} <${who.email}>`,
+      to: [dir === 'out' ? who.email : user.email],
+      cc: [],
+      subject: dir === 'out' ? 'Coffee chat?' : 'Re: Coffee chat?',
+      sentAt,
+      bodyText: body,
+      headers: { 'message-id': `<rg_${id}@test>` },
+    });
+    await ingestEmails(
+      user,
+      [
+        raw(
+          '1',
+          'out',
+          at(45),
+          "Hi Marcus,\n\nI'm a junior at Cornell studying CS. Would you be open to a 20-minute call sometime in the next couple of weeks?\n\nBest,\nAlex",
+        ),
+        raw(
+          '2',
+          'in',
+          at(35),
+          "Hi Alex, thanks for writing. I'm not able to take calls this quarter, sorry.\n\nMarcus",
+        ),
+      ],
+      { useLlm: false, now },
+    );
+    const p = (await db.people.filter((x) => x.primaryEmail === who.email).first())!;
+    const chat = (await db.chats.where('personId').equals(p.id).first())!;
+    if (chat.stage !== 'declined')
+      await db.chats.update(chat.id, { stage: 'declined', stageEnteredAt: at(35) });
+    // still inside the window: the declined chat holds every ask back
+    const early = await checkSendAllowed(
+      user.id,
+      p.id,
+      'gmail',
+      'nurture',
+      new Date(now.getTime() - 12 * D),
+      {
+        chatId: chat.id,
+      },
+    );
+    expect(early.allowed).toBe(false);
+    await generateBrief(user, 'daily', now);
+    const card = (await db.suggestions.where('personId').equals(p.id).toArray()).find((s) =>
+      s.dedupeKey.startsWith('reengage:'),
+    );
+    expect(card?.status).toBe('pending');
+    // drafted when the brief shows it, or when the student opens it
+    const d = card!.outboundMessageId
+      ? (await db.outbound.get(card!.outboundMessageId))!
+      : (await draftForSuggestion(user, card!, now))!;
+    expect(d.kind).toBe('nurture');
+    const r = await approveAndSend(user, d.id, d.bodyDraft, d.subject, now);
+    expect(r).toMatchObject({ ok: true });
+    // that was the one second try: another ask on the declined chat is held back again
+    await confirmHandoff(user, d.id);
+    const again = await checkSendAllowed(user.id, p.id, 'gmail', 'nurture', new Date(now.getTime() + 5 * D), {
+      chatId: chat.id,
+    });
+    expect(again.allowed).toBe(false);
+  });
+});
+
 describe('hand-offs (SND-07, SND-12, SND-14, UI-09)', () => {
+  it('a rule re-run keeps a handed-off draft on its card, so "I sent it" stays (e2e flake)', async () => {
+    const { s, d } = await pendingDraft(user, 'thank_you');
+    const r = await approveAndSend(user, d.id, `${d.bodyDraft}\n\nPS kept`);
+    expect(r.ok && r.status).toBe('handed_off');
+    // the same card comes back from the rules (a brief, an immediate pass) while the student is in the mail app
+    await evaluateImmediateSuggestions(user.id, { chatId: s.chatId, personId: s.personId });
+    await generateBrief(user, 'daily');
+    const after = (await db.suggestions.get(s.id))!;
+    expect(after.outboundMessageId).toBe(d.id);
+    const o = (await db.outbound.get(d.id))!;
+    expect(o.status).toBe('handed_off');
+    expect(o.bodyFinal).toMatch(/PS kept$/);
+    expect((await confirmHandoff(user, d.id)).ok).toBe(true);
+  });
+
   it('mailto is handed_off, not sent, until the student confirms; "Not sent" reverts to draft', async () => {
     const { s, d } = await pendingDraft(user, 'thank_you');
     const r = await approveAndSend(user, d.id, d.bodyDraft);

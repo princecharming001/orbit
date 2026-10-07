@@ -253,6 +253,14 @@ export function declineReengage(body: string | undefined, saidAt: Date): Reengag
 }
 
 /**
+ * When one polite second try after a time-limited decline becomes fair: once the window they named has passed, and
+ * never sooner than three weeks after they said it.
+ */
+export function reengageDueAt(re: Reengage, saidAt: Date): Date {
+  return new Date(Math.max(new Date(re.at).getTime(), saidAt.getTime() + 21 * 86_400_000));
+}
+
+/**
  * What "Write to {first}" should draft for a chat right now, or why nothing should go out yet. A check-in minutes
  * after a thank-you (or any note within two weeks of the student's last one, with no reply since) is not offered:
  * the stage alone would say "nurture", the calendar says "too soon".
