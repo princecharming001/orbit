@@ -301,7 +301,8 @@ export async function ingestEmails(
         const tri = llmTri ?? heuristic;
         thread.category = tri.category;
         thread.categoryConfidence = tri.confidence;
-        thread.isNetworking = tri.isNetworking;
+        // a thread that introduced the student to someone stays a networking thread: the answers come in it
+        thread.isNetworking = tri.isNetworking || !!thread.introduction;
         thread.classifiedAt = now.toISOString();
         thread.classifiedBy = llmTri ? 'llm' : 'heuristic';
         if (tri.isNetworking) stats.networking++;

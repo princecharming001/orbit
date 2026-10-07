@@ -118,6 +118,8 @@ export const WARMUP_MIN_SPREAD_DAYS = 2;
 export function warmUpProgress(
   plan: WarmUpPlan,
   now: Date,
+  /** the student's IANA timezone: the spread counts calendar days there (the runtime's zone when unset) */
+  tz?: string,
 ): {
   done: number;
   skipped: number;
@@ -136,11 +138,14 @@ export function warmUpProgress(
   const resolved = done + skipped === plan.actions.length;
   const skippedAll = resolved && done === 0;
   const plannedReady = new Date(plan.readyAt).getTime();
-  // the spread is counted in days: from the start of the day two days after the warm-up began
-  const spreadDay = new Date(plan.startedAt);
-  spreadDay.setDate(spreadDay.getDate() + WARMUP_MIN_SPREAD_DAYS);
-  spreadDay.setHours(0, 0, 0, 0);
-  const spread = spreadDay.getTime();
+  // the spread is counted in calendar days in the student's timezone: from the start of the day two days after the
+  // warm-up began there (the browser's zone would move the boundary for a student whose machine is set elsewhere)
+  const spreadKey = new Date(
+    Date.parse(`${wallKey(new Date(plan.startedAt), tz)}T00:00:00Z`) + WARMUP_MIN_SPREAD_DAYS * DAY_MS,
+  )
+    .toISOString()
+    .slice(0, 10);
+  const spread = atLocalHour(spreadKey, 0, tz).getTime();
   // three actions in ten minutes is not a warm-up: done early still waits for the spread (or the planned date)
   const readyFromMs = skippedAll ? now.getTime() : resolved ? Math.min(plannedReady, spread) : plannedReady;
   const ready = skippedAll || (now.getTime() >= readyFromMs && done >= 1);

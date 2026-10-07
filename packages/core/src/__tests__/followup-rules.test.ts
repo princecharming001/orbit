@@ -519,13 +519,27 @@ describe('warm-up readiness (SND-15)', () => {
   });
 
   it('spreads the activity over days even when every action is done in ten minutes', () => {
-    const plan = buildWarmUpPlan('dana', start, 4);
+    // 10:00 in New York
+    const plan = buildWarmUpPlan('dana', start, 4, TZ);
     for (const a of plan.actions) a.doneAt = new Date(start.getTime() + 10 * 60_000).toISOString();
-    expect(warmUpProgress(plan, new Date(start.getTime() + 20 * 60_000)).ready).toBe(false);
-    expect(warmUpProgress(plan, new Date(start.getTime() + 30 * H)).ready).toBe(false);
-    const prog = warmUpProgress(plan, new Date(start.getTime() + 2 * D));
+    expect(warmUpProgress(plan, new Date(start.getTime() + 20 * 60_000), TZ).ready).toBe(false);
+    expect(warmUpProgress(plan, new Date(start.getTime() + 30 * H), TZ).ready).toBe(false);
+    const prog = warmUpProgress(plan, new Date(start.getTime() + 2 * D), TZ);
     expect(prog.ready).toBe(true);
     expect(prog.done).toBe(3);
+    // the spread starts at midnight two days later in the student's timezone, whatever zone the runtime is in
+    expect(prog.readyFrom).toBe('2026-10-07T04:00:00.000Z');
+  });
+
+  it('counts the spread in calendar days of the student timezone, not the runtime zone', () => {
+    // the same instant is 23:00 on Monday in Tokyo: two calendar days later is Wednesday 00:00 there
+    const tokyo = 'Asia/Tokyo';
+    const plan = buildWarmUpPlan('dana', start, 4, tokyo);
+    for (const a of plan.actions) a.doneAt = new Date(start.getTime() + 10 * 60_000).toISOString();
+    expect(warmUpProgress(plan, new Date(start.getTime() + 24 * H), tokyo).ready).toBe(false);
+    const prog = warmUpProgress(plan, new Date(start.getTime() + 30 * H), tokyo);
+    expect(prog.ready).toBe(true);
+    expect(prog.readyFrom).toBe('2026-10-06T15:00:00.000Z');
   });
 });
 

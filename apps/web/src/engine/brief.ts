@@ -662,7 +662,7 @@ export async function buildDraftContext(
     kind === 'schedule' || kind === 'reply'
       ? proposeWindows(busy, now, user.timezone, { seed: person.id })
       : undefined;
-  const warm = chat?.warmUp ? warmUpProgress(chat.warmUp, now) : undefined;
+  const warm = chat?.warmUp ? warmUpProgress(chat.warmUp, now, user.timezone) : undefined;
   const warmUpNote = chat?.warmUp?.actions.find((a) => a.doneAt && a.note)?.note;
   const commentedOnPost =
     !warmUpNote && !!chat?.warmUp?.actions.some((a) => a.kind === 'comment_post' && a.doneAt);

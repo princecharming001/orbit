@@ -155,7 +155,7 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
     const liveRel = Math.max(rel, 0.6);
     // warm-up
     if (chat.stage === 'warming' && chat.warmUp) {
-      const prog = warmUpProgress(chat.warmUp, now);
+      const prog = warmUpProgress(chat.warmUp, now, inp.timezone);
       if (prog.ready) {
         out.push({
           kind: 'new_outreach',

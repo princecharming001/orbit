@@ -108,6 +108,13 @@ export function decideTransition(from: ChatStage, trig: StageTrigger): StageDeci
               reason: 'inbound_signal:reply_decline',
             }
           : undefined;
+      // they wrote first with a time ("happy to chat, would Thursday at 2pm work?", often in reply to an email
+      // introduction): that is their reply, and the student confirms the time from there
+      if (
+        (s === 'scheduling_proposal' || s === 'scheduling_confirmation') &&
+        ['identified', 'warming', 'no_response'].includes(from)
+      )
+        return d('replied', trig.confidence, `inbound_signal:${s}`);
       if (s === 'scheduling_proposal')
         return d('scheduling', trig.confidence, 'inbound_signal:scheduling_proposal');
       if (s === 'scheduling_confirmation')
