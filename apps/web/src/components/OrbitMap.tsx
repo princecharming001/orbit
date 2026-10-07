@@ -1,5 +1,12 @@
 import type { Organization, Person, ReachPath } from '@orbit/core';
-import { countOverlaps, type OrbitLayout, type OrbitNode, orbitLayout, orbitRotation } from '@orbit/core';
+import {
+  countOutsideWedges,
+  countOverlaps,
+  type OrbitLayout,
+  type OrbitNode,
+  orbitLayout,
+  orbitRotation,
+} from '@orbit/core';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { STAGE_COLOR } from '../pages/Pipeline';
 
@@ -98,6 +105,7 @@ export function OrbitMap({
   // Geometry is computed once per network at unit scale; the viewport only changes the draw scale.
   const layout: OrbitLayout = useMemo(() => orbitLayout(people, orgs), [people, orgs]);
   const overlaps = useMemo(() => countOverlaps(layout.nodes), [layout]);
+  const outsideWedges = useMemo(() => countOutsideWedges(layout), [layout]);
   const nodeById = useMemo(() => new Map(layout.nodes.map((n) => [n.id, n])), [layout]);
   const scale = size.w && size.h ? orbitScale(size.w, size.h, layout.extent) : 1;
   const narrow = size.w < 600;
@@ -391,6 +399,7 @@ export function OrbitMap({
         className="absolute left-0 top-0 block cursor-pointer touch-manipulation"
         data-testid="orbit-canvas"
         data-overlaps={overlaps}
+        data-outside-wedges={outsideWedges}
         data-nodes={layout.nodes.length}
         data-aggregated={layout.aggregated}
         data-scale={scale.toFixed(3)}

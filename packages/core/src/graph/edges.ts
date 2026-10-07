@@ -153,14 +153,17 @@ export function inferEdges(input: EdgeInput): Edge[] {
         const sf = sizeFactor(org?.sizeBucket, orgName, distinct);
         const bothCurrent = A.aff.isCurrent && B.aff.isCurrent;
         const current = [A, B].filter((m) => m.aff.isCurrent).map((m) => m.personId);
-        if (bothCurrent && !A.aff.startDate && !B.aff.startDate) {
+        // A stint's span is known only with a start date and, unless it is current, an end date. Without both
+        // spans we cannot say since when (or whether) two people worked side by side.
+        const spanKnown = (a: Affiliation) => !!a.startDate && (a.isCurrent || !!a.endDate);
+        if (bothCurrent && !(spanKnown(A.aff) && spanKnown(B.aff))) {
           put(A.personId, B.personId, 'same_current_company', 0.35 * sf, {
             orgName,
             current,
             text: `Both currently at ${orgName}`,
           });
-        } else if (!bothCurrent && (!A.aff.startDate || !B.aff.startDate)) {
-          // Past stints with unknown dates: they may well have overlapped, but we cannot say when.
+        } else if (!spanKnown(A.aff) || !spanKnown(B.aff)) {
+          // A past stint with unknown dates: they may well have overlapped, but we cannot say when.
           if (provablyDisjoint(A.aff, B.aff)) continue;
           put(A.personId, B.personId, 'co_tenure', 0.15 * sf, {
             orgName,

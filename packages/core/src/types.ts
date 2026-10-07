@@ -326,7 +326,10 @@ export interface StrengthBreakdown {
   raw: number;
   recency: number;
   counts: Partial<Record<TouchpointKind, number>>;
+  /** latest touch of any kind, CC and LinkedIn connection included */
   lastInteractionAt?: string;
+  /** latest email, meeting, logged chat or LinkedIn message: what the student would call talking */
+  lastConversationAt?: string;
 }
 
 export interface EmailThread {

@@ -36,6 +36,16 @@ const TWO_WAY: ReadonlySet<TouchpointKind> = new Set([
 /** Sharing a CC line, a mailing list or a LinkedIn connection is not an interaction. */
 const AMBIENT: ReadonlySet<TouchpointKind> = new Set(['email_cc', 'linkedin_connected']);
 
+/** Touches the student would call a conversation: what "the last one was ..." may refer to. */
+const CONVERSATION: ReadonlySet<TouchpointKind> = new Set([
+  'meeting',
+  'manual_log',
+  'email_in',
+  'email_out',
+  'linkedin_in',
+  'linkedin_out',
+]);
+
 /** Decayed raw evidence that outbound-only touches (cold emails, bumps, likes) can add before any reply. */
 export const ONE_WAY_RAW_CAP = 0.35;
 /** Decayed raw evidence that CC and group-thread touches can ever add. CC can nudge a tie, never create one. */
@@ -53,6 +63,7 @@ export function computeStrength(
   let connected = 0;
   let last: number | undefined;
   let lastActive: number | undefined;
+  let lastConversation: number | undefined;
   const counts: Partial<Record<TouchpointKind, number>> = {};
   const t = now.getTime();
   for (const tp of touchpoints) {
@@ -69,6 +80,8 @@ export function computeStrength(
     counts[tp.kind] = (counts[tp.kind] ?? 0) + 1;
     if (last === undefined || ti > last) last = ti;
     if (!AMBIENT.has(tp.kind) && (lastActive === undefined || ti > lastActive)) lastActive = ti;
+    if (CONVERSATION.has(tp.kind) && (lastConversation === undefined || ti > lastConversation))
+      lastConversation = ti;
   }
   if (last === undefined) return { strength: 0, breakdown: { raw: 0, recency: 0, counts } };
   const reciprocal = isReciprocal(counts);
@@ -81,7 +94,18 @@ export function computeStrength(
   const recencyWeight = reciprocal ? 0.15 : lastActive === undefined ? 0.05 : 0.075;
   let strength = Math.min(1, Math.max(0, recencyWeight * recency + 0.85 * saturated));
   if (!reciprocal) strength = Math.min(strength, UNRECIPROCATED_CEILING);
-  return { strength, breakdown: { raw, recency, counts, lastInteractionAt: new Date(last).toISOString() } };
+  return {
+    strength,
+    breakdown: {
+      raw,
+      recency,
+      counts,
+      lastInteractionAt: new Date(last).toISOString(),
+      ...(lastConversation === undefined
+        ? {}
+        : { lastConversationAt: new Date(lastConversation).toISOString() }),
+    },
+  };
 }
 
 /** Number of real interactions: CCs, mailing lists and the LinkedIn connection itself do not count. */

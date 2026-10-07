@@ -213,6 +213,8 @@ async function checkMap(page: Page, info: TestInfo, name: string) {
     .toBeGreaterThan(0);
   await expect(canvas).toHaveAttribute('data-labels-clipped', '0');
   await expect(canvas).toHaveAttribute('data-overlaps', '0');
+  // every dot sits inside its company's wedge, so a label names the people under it
+  await expect(canvas).toHaveAttribute('data-outside-wedges', '0');
   const box = (await canvas.boundingBox())!;
   expect(box.x).toBeGreaterThanOrEqual(0);
   expect(box.x + box.width).toBeLessThanOrEqual(vp.width + 1);

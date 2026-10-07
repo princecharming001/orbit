@@ -8,7 +8,7 @@ import {
   knownSizeBucket,
   sizeFactor,
 } from '../graph/edges';
-import { countOverlaps, orbitLayout, ringRotation } from '../graph/layout';
+import { countOutsideWedges, countOverlaps, orbitLayout, ringRotation } from '../graph/layout';
 import { addEdge, bestPathsFrom, kShortestPaths, makeGraph, toReachPath } from '../graph/paths';
 import { computeStrength, interactionCount, isReciprocal, strengthTier } from '../scoring/strength';
 import type { Affiliation, Edge, Organization, Person, Touchpoint } from '../types';
@@ -424,6 +424,33 @@ describe('inferEdges (GRL-09, GRL-10, GRL-16)', () => {
     ]);
     expect(disjoint.some((x) => x.type === 'co_tenure')).toBe(false);
   });
+  it('never claims "since YEAR" when one of two colleagues has no start date', () => {
+    const a = named('a', 'Ana');
+    const b = named('b', 'Ben');
+    const edges = infer(
+      [a, b],
+      [
+        empAff('a', 'Stripe', { isCurrent: true, startDate: '2020-01-01' }),
+        empAff('b', 'Stripe', { isCurrent: true }),
+      ],
+    );
+    expect(edges.some((e) => e.type === 'co_tenure')).toBe(false);
+    const same = edges.filter((e) => e.type === 'same_current_company');
+    expect(same.length).toBe(1);
+    const text = describePairHop(a, b, same);
+    expect(text).toBe('Ana and Ben both work at Stripe now');
+    expect(text).not.toMatch(/since|together/);
+    // a past stint with a start but no end date: we cannot say when they overlapped
+    const open = infer(
+      [a, b],
+      [
+        empAff('a', 'Ramp', { startDate: '2018-01-01' }),
+        empAff('b', 'Ramp', { startDate: '2020-01-01', endDate: '2021-06-01' }),
+      ],
+    ).find((e) => e.type === 'co_tenure')!;
+    expect(open.evidence.datesUnknown).toBe(true);
+    expect(open.evidence.fromYear).toBeUndefined();
+  });
   it('groups "Stripe", "Stripe, Inc." and an org-linked Stripe together', () => {
     const people = [person('a', 'Stripe'), person('b', 'Stripe, Inc.'), person('c', 'STRIPE')];
     people[0]!.currentOrganizationId = 'o1';
@@ -495,16 +522,37 @@ describe('hop explanations (GRL-08, GRL-11)', () => {
     expect(describeUserTie(cold, NOW)).toBe("You've emailed Ben twice and haven't heard back yet");
     const warm = person('z', 'Figma', {
       firstName: 'Cleo',
-      lastInteractionAt: new Date(NOW.getTime() - 15 * 86_400_000).toISOString(),
+      lastInteractionAt: new Date(NOW.getTime() - 86_400_000).toISOString(),
       strengthBreakdown: {
         raw: 2,
         recency: 1,
         counts: { email_in: 2, email_out: 1, meeting: 1, email_cc: 9 },
+        lastConversationAt: new Date(NOW.getTime() - 15 * 86_400_000).toISOString(),
       },
     });
     expect(describeUserTie(warm, NOW)).toBe(
       "You've had 3 emails and a meeting with Cleo; the last one was 2 weeks ago",
     );
+  });
+  it('"the last one" is the last email or meeting, never a CC or a LinkedIn connection', () => {
+    const { breakdown } = computeStrength(
+      [
+        at('email_in', 20, 0.7),
+        at('email_out', 19, 0.6),
+        at('email_cc', 30, 0.1, 1),
+        at('email_cc', 10, 0.1, 2),
+        at('email_cc', 1, 0.1, 3),
+        at('linkedin_connected', 0, 0.2),
+      ],
+      NOW,
+    );
+    expect(breakdown.lastInteractionAt).toBe(NOW.toISOString());
+    const ana = person('a', 'Figma', {
+      firstName: 'Ana',
+      lastInteractionAt: breakdown.lastInteractionAt,
+      strengthBreakdown: breakdown,
+    });
+    expect(describeUserTie(ana, NOW)).toBe("You've had 2 emails with Ana; the last one was 2 weeks ago");
   });
   it('never uses dashes or internal codes', () => {
     const texts = [
@@ -562,6 +610,22 @@ describe('orbitLayout at scale (GRL-05, GRL-07)', () => {
       else expect(l.nodes.length).toBeLessThan(800);
     });
   }
+  it('keeps every dot inside its own company wedge at any size', () => {
+    for (const seed of [1, 2, 3])
+      for (const n of [90, 150, 300, 1000, 2000]) {
+        const l = orbitLayout(zipfPeople(n, seed), new Map());
+        expect(countOutsideWedges(l), `seed ${seed}, ${n} people`).toBe(0);
+        expect(countOverlaps(l.nodes), `seed ${seed}, ${n} people`).toBe(0);
+        // the counter itself notices a dot pushed into a neighbour's wedge
+        if (n === 150 && seed === 1) {
+          const moved = { ...l, nodes: l.nodes.map((x, i) => (i ? x : { ...x, angle: x.angle + Math.PI })) };
+          expect(countOutsideWedges(moved)).toBe(1);
+        }
+        // every wedge holds at least one dot, so no label floats over an empty slice
+        const used = new Set(l.nodes.map((x) => x.groupKey));
+        expect(l.groups.filter((g) => !used.has(g.key))).toEqual([]);
+      }
+  });
   it('groups spellings of one company into one wedge', () => {
     const people = [
       person('a', 'Stripe'),
@@ -600,5 +664,14 @@ describe('demo seed: the upcoming chat is always inside the prep window', () => 
       expect(hours, `loaded at ${hour}:22`).toBeGreaterThan(0);
       expect(hours, `loaded at ${hour}:22`).toBeLessThanOrEqual(30);
     }
+  });
+  it('the week-old reply names the day of the chat instead of saying "tomorrow"', () => {
+    const now = new Date(2026, 9, 7, 9, 0);
+    const data = buildDemoDataset({ now });
+    const ev = data.events.find((e) => e.id === 'ev_tomorrow')!;
+    const day = new Date(ev.startAt).toLocaleDateString('en-US', { weekday: 'long' });
+    const reply = data.messages.find((m) => /Sent you an invite/.test(m.bodyText ?? ''))!;
+    expect(reply.bodyText).not.toMatch(/tomorrow/i);
+    expect(reply.bodyText).toContain(`${day}, October 8 at 11:30`);
   });
 });

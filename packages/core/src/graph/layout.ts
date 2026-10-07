@@ -111,11 +111,159 @@ export function orbitGroupKey(p: Person, orgs: Map<string, Organization>): strin
 
 type Slot = { person?: Person; cluster?: OrbitCluster };
 
+interface RingPack {
+  /** what each company shows on this ring, strongest first, its "+N" dot last */
+  slots: Map<string, Slot[]>;
+  /** the merged long tail ("Other companies"), empty or one dot */
+  other: Slot[];
+  aggregated: number;
+}
+
 /**
- * Deterministic orbit layout. Rings by strength tier; one contiguous wedge per company, shared by all rings.
- * Each ring packs dots on concentric tracks within its band. When a ring is still too full the dots shrink a
- * little, then each company's weakest overflow collapses into one "+N" dot, and finally the long tail of small
- * companies merges into an "Other companies" dot. A last pass on every track enforces a minimum spacing, so no
+ * One ring's dots: each company shows its members, or, when capped at q dots, its q - 1 strongest and one
+ * "+N" dot for the rest; merged companies go into a single "Other companies" dot.
+ */
+function packRing(
+  present: Group[],
+  members: (g: Group) => Person[],
+  caps: Map<string, number>,
+  merged: Set<string>,
+): RingPack {
+  const slots = new Map<string, Slot[]>();
+  let aggregated = 0;
+  const tail: Person[] = [];
+  for (const g of present) {
+    const m = members(g);
+    if (merged.has(g.key)) {
+      tail.push(...m);
+      continue;
+    }
+    const q = caps.get(g.key) ?? m.length;
+    if (m.length <= q) {
+      slots.set(
+        g.key,
+        m.map((person) => ({ person })),
+      );
+      continue;
+    }
+    const rest = m.slice(q - 1);
+    aggregated += rest.length;
+    slots.set(g.key, [
+      ...m.slice(0, q - 1).map((person) => ({ person })),
+      { cluster: { count: rest.length, personIds: rest.map((p) => p.id), label: g.label } },
+    ]);
+  }
+  const other: Slot[] = [];
+  if (tail.length) {
+    aggregated += tail.length;
+    other.push({
+      cluster: { count: tail.length, personIds: tail.map((p) => p.id), label: 'Other companies' },
+    });
+  }
+  return { slots, other, aggregated };
+}
+
+/** Angle two neighbouring dots on a track of radius r need so they never touch (chord >= pitch). */
+function trackStep(r: number, pitch: number): number {
+  return 2 * Math.asin(Math.min(1, (pitch + 0.5) / (2 * r)));
+}
+
+/** Radial jitter (px either way) on a ring that uses a single track; multi-track rings sit exactly on their tracks. */
+const RADIAL_JITTER = 6;
+/** Share of a dot's step that must lie inside its company's wedge (its centre always does). */
+const INSIDE = 0.25;
+/** Angular jitter limit, either way. */
+const MAX_JITTER = (6 * Math.PI) / 180;
+
+interface RingState {
+  step: number;
+  geo: RingGeometry;
+  /** how many of geo.tracks are in use, main track first */
+  tracks: number;
+  /** per company, the most dots it may show on this ring */
+  caps: Map<string, number>;
+  /** companies whose people on this ring are in "Other companies" */
+  merged: Set<string>;
+  pack: RingPack;
+}
+
+type Entry = { key: string; label: string; orgId?: string; logoUrl?: string; count: number; slots: Slot[][] };
+
+interface Sweep {
+  /** angle needed for everything, measured from the first wedge's start */
+  total: number;
+  bounds: [number, number][];
+  /** per entry, per ring, per dot: track index and left-most feasible angle */
+  track: number[][][];
+  pos: number[][][];
+  /** per entry, the ring that sets its width */
+  binding: number[];
+}
+
+/**
+ * Walk the companies in order and pack every dot as early as it can go: on each track a dot keeps one step from
+ * the previous dot there (whatever its company), and keeps INSIDE of its step within its own wedge. Dots go on
+ * the track where they fit earliest, so neighbouring small companies stagger across tracks. A wedge ends where
+ * its last dot's share ends.
+ */
+function sweep(entries: Entry[], steps: number[][]): Sweep {
+  const last = steps.map((ts) => ts.map(() => Number.NEGATIVE_INFINITY));
+  const first = steps.map((ts) => ts.map(() => Number.NaN));
+  const out: Sweep = { total: 0, bounds: [], track: [], pos: [], binding: [] };
+  let start = 0;
+  for (const e of entries) {
+    let end = start + 1e-3;
+    let bind = 0;
+    const tr: number[][] = [[], [], []];
+    const ps: number[][] = [[], [], []];
+    e.slots.forEach((items, r) => {
+      const ds = steps[r]!;
+      for (let i = 0; i < items.length; i++) {
+        let best = 0;
+        let at = Number.POSITIVE_INFINITY;
+        ds.forEach((d, t) => {
+          const c = Math.max(start + (INSIDE * d) / 2, last[r]![t]! + d);
+          if (c < at - 1e-12) {
+            at = c;
+            best = t;
+          }
+        });
+        last[r]![best] = at;
+        if (Number.isNaN(first[r]![best]!)) first[r]![best] = at;
+        tr[r]!.push(best);
+        ps[r]!.push(at);
+        const right = at + (INSIDE * ds[best]!) / 2;
+        if (right > end) {
+          end = right;
+          bind = r;
+        }
+      }
+    });
+    out.bounds.push([start, end]);
+    out.track.push(tr);
+    out.pos.push(ps);
+    out.binding.push(bind);
+    start = end;
+  }
+  out.total = start;
+  // around the circle, the last dot on a track must also keep one step from the first
+  for (let r = 0; r < steps.length; r++)
+    for (let t = 0; t < steps[r]!.length; t++)
+      if (!Number.isNaN(first[r]![t]!))
+        out.total = Math.max(out.total, last[r]![t]! - first[r]![t]! + steps[r]![t]!);
+  return out;
+}
+
+/**
+ * Deterministic orbit layout. Rings by strength tier; one contiguous wedge per company, shared by all rings,
+ * and every dot's centre sits inside its company's wedge.
+ *
+ * Each ring packs dots on concentric tracks within its own radial band, keeping one step between neighbours on
+ * a track. When the wedges do not fit around the circle, the ring that costs the most angle gets room in this
+ * order: another track, then slightly smaller dots, then fewer dots in the wedges that ring makes widest (such
+ * a company's weakest overflow collapses into one "+N" dot, and a company already down to one dot there merges
+ * into an "Other companies" dot), weak and medium rings before strong ties. Spare angle
+ * is shared out in proportion, and dots are spread evenly inside their wedge as far as spacing allows, so no
  * two dots overlap whatever the network size.
  */
 export function orbitLayout(
@@ -165,161 +313,211 @@ export function orbitLayout(
     for (const r of rings) r.sort(byStrength);
     ringMembers.set(g.key, rings);
   }
-  const membersOn = (g: Group, ring: number) => ringMembers.get(g.key)![ring]!;
-  const slots = new Map<string, Slot[][]>(ordered.map((g) => [g.key, [[], [], []]]));
-  const otherSlots: Slot[][] = [[], [], []];
-  const geometry: RingGeometry[] = [];
-  let aggregated = 0;
-  for (const ring of [0, 1, 2] as const) {
-    const demand = ordered.reduce((s, g) => s + membersOn(g, ring).length, 0);
-    let geo = ringGeometry(ring, 1);
-    for (const f of SIZE_STEPS[ring]!) {
-      geo = ringGeometry(ring, f);
-      if (demand <= geo.capacity * FILL) break;
-    }
-    geometry.push(geo);
-    const budget = Math.max(2, Math.floor(geo.capacity * FILL));
-    const present = ordered.filter((g) => membersOn(g, ring).length > 0);
-    if (demand <= budget) {
-      for (const g of present) slots.get(g.key)![ring] = membersOn(g, ring).map((person) => ({ person }));
-      continue;
-    }
-    // Keep the bigger companies on this ring as wedges and merge the long tail into "Other companies".
-    // Start by merging nothing; merge companies with up to S people here while that still leaves many
-    // pointless "+1"/"+2" dots, so every aggregate dot that remains stands for a real group.
-    const plan = (S: number) => {
-      const bySize = present
-        .filter((g) => membersOn(g, ring).length > S)
-        .sort((a, b) => membersOn(b, ring).length - membersOn(a, ring).length || b.strength - a.strength);
-      const keep = new Set(bySize.slice(0, budget - 1).map((g) => g.key));
-      const kept = present.filter((g) => keep.has(g.key));
-      const merged = present.filter((g) => !keep.has(g.key));
-      const room = budget - (merged.length ? 1 : 0);
-      // largest per-company cap q such that sum(min(members, q)) fits the room
-      const used = (q: number) => kept.reduce((s, g) => s + Math.min(membersOn(g, ring).length, q), 0);
-      let lo = 1;
-      let hi = Math.max(1, ...kept.map((g) => membersOn(g, ring).length));
-      while (lo < hi) {
-        const mid = Math.ceil((lo + hi) / 2);
-        if (used(mid) <= room) lo = mid;
-        else hi = mid - 1;
-      }
-      const tiny = kept.filter((g) => {
-        const m = membersOn(g, ring).length;
-        return m > lo && m - lo + 1 < MIN_CLUSTER;
-      }).length;
-      return { kept, merged, q: lo, tiny };
+  const RINGS = [0, 1, 2] as const;
+  const present = RINGS.map((ring) => ordered.filter((g) => ringMembers.get(g.key)![ring]!.length > 0));
+  const members = (ring: number) => (g: Group) => ringMembers.get(g.key)![ring]!;
+  const repack = (ring: 0 | 1 | 2) => {
+    const st = state[ring]!;
+    st.pack = packRing(present[ring]!, members(ring), st.caps, st.merged);
+  };
+
+  // start from the dot size each ring's head count calls for, on its main track, with everyone shown
+  const state: RingState[] = RINGS.map((ring) => {
+    const demand = present[ring]!.reduce((s, g) => s + members(ring)(g).length, 0);
+    const sizes = SIZE_STEPS[ring]!;
+    let step = 0;
+    while (step < sizes.length - 1 && demand > ringGeometry(ring, sizes[step]!).capacity * FILL) step++;
+    const geo = ringGeometry(ring, sizes[step]!);
+    const caps = new Map<string, number>();
+    const merged = new Set<string>();
+    return {
+      step,
+      geo,
+      tracks: 1,
+      caps,
+      merged,
+      pack: packRing(present[ring]!, members(ring), caps, merged),
     };
-    let best = plan(0);
-    // strong ties are never merged away for tidiness, only when the inner ring is truly full
-    for (let S = 1; ring > 0 && S <= 12 && best.tiny > 2; S++) best = plan(S);
-    const { kept, merged, q } = best;
-    for (const g of kept) {
-      const m = membersOn(g, ring);
-      if (m.length <= q) {
-        slots.get(g.key)![ring] = m.map((person) => ({ person }));
-        continue;
+  });
+
+  const entriesOf = (): Entry[] => {
+    const list: Entry[] = ordered
+      .map((g) => ({
+        key: g.key,
+        label: g.label,
+        orgId: g.orgId,
+        logoUrl: g.logoUrl,
+        count: g.members.length,
+        slots: RINGS.map((r) => state[r]!.pack.slots.get(g.key) ?? []),
+      }))
+      .filter((e) => e.slots.some((x) => x.length > 0)); // a company merged away on every ring has no wedge
+    if (state.some((s) => s.pack.other.length)) {
+      const other = RINGS.map((r) => state[r]!.pack.other);
+      list.push({
+        key: OTHER_GROUP_KEY,
+        label: 'Other companies',
+        count: other.reduce((s, o) => s + (o[0]?.cluster?.count ?? 0), 0),
+        slots: other,
+      });
+    }
+    return list;
+  };
+  const stepsOf = (ring: 0 | 1 | 2) => {
+    const st = state[ring]!;
+    const jitter = st.tracks === 1 ? RADIAL_JITTER : 0;
+    return st.geo.tracks.slice(0, st.tracks).map((r) => trackStep(r - jitter, st.geo.pitch));
+  };
+
+  let entries = entriesOf();
+  let steps = RINGS.map(stepsOf);
+  let sw = sweep(entries, steps);
+  for (let iter = 0; iter < 500 && sw.total > Math.PI * 2; iter++) {
+    // the angle each ring is responsible for: the wedges it makes widest
+    const cost = [0, 0, 0];
+    sw.binding.forEach((r, i) => {
+      cost[r]! += sw.bounds[i]![1] - sw.bounds[i]![0];
+    });
+    const byCost = [...RINGS].sort((a, b) => cost[b]! - cost[a]! || b - a);
+    // lossless room first (another track, then smaller dots), on the ring that costs most
+    const roomy = byCost.find(
+      (r) =>
+        cost[r]! > 0 &&
+        (state[r]!.tracks < state[r]!.geo.tracks.length || state[r]!.step < SIZE_STEPS[r]!.length - 1),
+    );
+    if (roomy !== undefined) {
+      const st = state[roomy]!;
+      if (st.tracks < st.geo.tracks.length) st.tracks++;
+      else {
+        st.step++;
+        st.geo = ringGeometry(roomy, SIZE_STEPS[roomy]![st.step]!);
+        st.tracks = Math.min(st.tracks, st.geo.tracks.length);
       }
-      const shown = m.slice(0, q - 1);
-      const rest = m.slice(q - 1);
-      aggregated += rest.length;
-      slots.get(g.key)![ring] = [
-        ...shown.map((person) => ({ person })),
-        { cluster: { count: rest.length, personIds: rest.map((p) => p.id), label: g.label } },
-      ];
+    } else {
+      // then fewer dots, weak and medium rings before strong ties, and only in the wedges that ring makes widest
+      const binding = (r: number) =>
+        entries.filter((e, i) => sw.binding[i] === r && e.key !== OTHER_GROUP_KEY && e.slots[r]!.length > 0);
+      const ring = byCost.find((r) => r > 0 && binding(r).length) ?? byCost.find((r) => binding(r).length);
+      if (ring === undefined) break;
+      const st = state[ring]!;
+      const wide = binding(ring);
+      const groupOf = new Map(present[ring]!.map((g) => [g.key, g]));
+      let capped = 0;
+      const single: Group[] = [];
+      for (const e of wide) {
+        const g = groupOf.get(e.key)!;
+        const m = members(ring)(g).length;
+        const shown = e.slots[ring]!.length;
+        // keep every "+N" dot a real group: never fewer than MIN_CLUSTER people behind it
+        const q = Math.min(Math.floor(shown * 0.75), m - MIN_CLUSTER + 1);
+        if (shown > 1 && q >= 1) {
+          st.caps.set(e.key, q);
+          capped++;
+        } else single.push(g);
+      }
+      if (!capped) {
+        // every wide wedge already shows one dot here: fold the smaller half of them into "Other companies"
+        single.sort((a, b) => members(ring)(a).length - members(ring)(b).length || a.strength - b.strength);
+        for (const g of single.slice(0, Math.max(1, Math.ceil(single.length / 2)))) st.merged.add(g.key);
+      }
+      repack(ring);
+      entries = entriesOf();
     }
-    if (merged.length) {
-      const rest = merged.flatMap((g) => membersOn(g, ring));
-      aggregated += rest.length;
-      otherSlots[ring] = [
-        { cluster: { count: rest.length, personIds: rest.map((p) => p.id), label: 'Other companies' } },
-      ];
-    }
+    steps = RINGS.map(stepsOf);
+    sw = sweep(entries, steps);
   }
-  // wedges: each company gets the share it needs on its most crowded ring, plus a little padding
-  const entries = ordered.map((g) => ({
-    key: g.key,
-    label: g.label,
-    orgId: g.orgId,
-    logoUrl: g.logoUrl,
-    slots: slots.get(g.key)!,
-    count: g.members.length,
+
+  // spread spare angle in proportion; if nothing fits (cannot happen with at least a few degrees per dot),
+  // squeeze and let the spacing pass below win over wedge membership
+  const f = (Math.PI * 2) / Math.max(sw.total, 1e-9);
+  const fits = f >= 1 - 1e-9;
+  const base = -Math.PI / 2;
+  const groups: OrbitGroup[] = entries.map((e, i) => ({
+    key: e.key,
+    label: e.label,
+    orgId: e.orgId,
+    startAngle: base + sw.bounds[i]![0] * f,
+    endAngle: base + (i === entries.length - 1 ? Math.PI * 2 : sw.bounds[i]![1] * f),
+    count: e.count,
+    logoUrl: e.logoUrl,
   }));
-  if (otherSlots.some((s) => s.length))
-    entries.push({
-      key: OTHER_GROUP_KEY,
-      label: 'Other companies',
-      orgId: undefined,
-      logoUrl: undefined,
-      slots: otherSlots,
-      count: otherSlots.reduce((s, r) => s + (r[0]?.cluster?.count ?? 0), 0),
-    });
-  const totalCap = geometry.reduce((s, geo) => s + geo.capacity, 0);
-  const weights = entries.map(
-    (e) => Math.max(...e.slots.map((s, r) => s.length / geometry[r]!.capacity)) + 1 / Math.max(totalCap, 1),
-  );
-  const totalWeight = weights.reduce((s, w) => s + w, 0) || 1;
-  const groups: OrbitGroup[] = [];
-  const perRing: { id: string; item: Slot; angle: number; key: string }[][] = [[], [], []];
-  let angle = -Math.PI / 2;
-  entries.forEach((e, gi) => {
-    const span = (weights[gi]! / totalWeight) * Math.PI * 2;
-    const start = angle;
-    groups.push({
-      key: e.key,
-      label: e.label,
-      orgId: e.orgId,
-      startAngle: start,
-      endAngle: start + span,
-      count: e.count,
-      logoUrl: e.logoUrl,
-    });
-    e.slots.forEach((items, ring) => {
-      const k = items.length;
-      const free = span / Math.max(k, 1) - geometry[ring]!.pitch / RING_RADII[ring as 0 | 1 | 2];
-      items.forEach((item, idx) => {
-        const id = item.person?.id ?? `cluster:${e.key}:${ring}`;
-        const jitter = free > 0 ? hashJitter(id, 'a') * Math.min(free, (12 * Math.PI) / 180) : 0;
-        perRing[ring]!.push({ id, item, angle: start + (span * (idx + 0.5)) / k + jitter, key: e.key });
-      });
-    });
-    angle = start + span;
-  });
+
+  // place each track's dots in circular order
   const nodes: OrbitNode[] = [];
-  perRing.forEach((list, ringIdx) => {
-    if (!list.length) return;
-    const ring = ringIdx as 0 | 1 | 2;
-    const geo = geometry[ring]!;
-    // use as few tracks as the ring needs: main track first, then one inside, one outside, ...
-    const caps = geo.tracks.map((r) => Math.floor((2 * Math.PI * r) / geo.pitch));
-    let used = 1;
-    let cap = caps[0]!;
-    while (used < caps.length && list.length > cap * FILL) cap += caps[used++]!;
-    const tracks = geo.tracks.slice(0, used);
-    geo.tracks = tracks; // the separation pass works on the tracks actually used
-    // in angular order, put each dot on the track that is least full relative to its capacity,
-    // so neighbours alternate between tracks instead of piling up on one
-    const count = tracks.map(() => 0);
-    list.sort((a, b) => a.angle - b.angle);
-    for (const it of list) {
-      let best = 0;
-      for (let t = 1; t < tracks.length; t++)
-        if (count[t]! / caps[t]! < count[best]! / caps[best]! - 1e-12) best = t;
-      count[best]!++;
-      const jitterR = tracks.length === 1 ? hashJitter(it.id, 'r') * 12 : 0;
-      nodes.push({
-        id: it.id,
-        person: it.item.person,
-        cluster: it.item.cluster,
-        ring,
-        angle: it.angle,
-        radius: tracks[best]! + jitterR,
-        size: geo.size,
-        groupKey: it.key,
+  RINGS.forEach((ring) => {
+    const st = state[ring]!;
+    const tracks = st.geo.tracks.slice(0, st.tracks);
+    tracks.forEach((radius, t) => {
+      const d = steps[ring]![t]!;
+      const list: { e: number; i: number; L: number; lo: number; hi: number; E: number }[] = [];
+      for (let ei = 0; ei < entries.length; ei++) {
+        const tr = sw.track[ei]![ring]!;
+        const mine = tr.map((x, i) => (x === t ? i : -1)).filter((i) => i >= 0);
+        const s = sw.bounds[ei]![0] * f;
+        const span = (sw.bounds[ei]![1] - sw.bounds[ei]![0]) * f;
+        mine.forEach((i, j) => {
+          list.push({
+            e: ei,
+            i,
+            L: sw.pos[ei]![ring]![i]! * f,
+            lo: s + (INSIDE * d) / 2,
+            hi: s + span - (INSIDE * d) / 2,
+            E: s + (span * (j + 0.5)) / mine.length,
+          });
+        });
+      }
+      const n = list.length;
+      if (!n) return;
+      let p: number[];
+      if (fits) {
+        // right-most feasible placement, then pull each dot toward its even spot without breaking spacing:
+        // the average of a forward and a backward repair of the clamped targets stays feasible
+        const R = new Array<number>(n);
+        let next = list[0]!.L + Math.PI * 2;
+        for (let k = n - 1; k >= 0; k--) {
+          R[k] = Math.min(list[k]!.hi, next - d);
+          next = R[k]!;
+        }
+        const c = list.map((x, k) => Math.min(Math.max(x.E, x.L), R[k]!));
+        const F = [...c];
+        for (let k = 1; k < n; k++) F[k] = Math.max(c[k]!, F[k - 1]! + d);
+        const B = [...c];
+        for (let k = n - 2; k >= 0; k--) B[k] = Math.min(c[k]!, B[k + 1]! - d);
+        p = F.map((x, k) => (x + B[k]!) / 2);
+      } else p = list.map((x) => x.L);
+      p.forEach((a, k) => {
+        const x = list[k]!;
+        const e = entries[x.e]!;
+        const item = e.slots[ring]![x.i]!;
+        const id = item.person?.id ?? `cluster:${e.key}:${ring}`;
+        let angle = a;
+        if (fits) {
+          // jitter within half the slack to each neighbour and inside the wedge
+          const prev = n === 1 ? a - Math.PI * 2 : k ? p[k - 1]! : p[n - 1]! - Math.PI * 2;
+          const next = n === 1 ? a + Math.PI * 2 : k < n - 1 ? p[k + 1]! : p[0]! + Math.PI * 2;
+          const left = Math.max(0, Math.min((a - prev - d) / 2, a - x.lo, MAX_JITTER));
+          const right = Math.max(0, Math.min((next - a - d) / 2, x.hi - a, MAX_JITTER));
+          const j = hashJitter(id, 'a') * 2;
+          angle += j < 0 ? j * left : j * right;
+        }
+        nodes.push({
+          id,
+          person: item.person,
+          cluster: item.cluster,
+          ring,
+          angle: base + angle,
+          radius: radius + (tracks.length === 1 ? hashJitter(id, 'r') * 2 * RADIAL_JITTER : 0),
+          size: st.geo.size,
+          groupKey: e.key,
+        });
       });
-    }
+    });
   });
-  separateOnTracks(nodes, geometry);
+  if (!fits)
+    separateOnTracks(
+      nodes,
+      state.map((s) => ({ ...s.geo, tracks: s.geo.tracks.slice(0, s.tracks) })),
+    );
+  const aggregated = state.reduce((s, st) => s + st.pack.aggregated, 0);
   let extent = 0;
   for (const n of nodes) extent = Math.max(extent, n.radius + n.size / 2);
   if (scale !== 1) {
@@ -388,6 +586,25 @@ function separateOnTracks(nodes: OrbitNode[], geometry: RingGeometry[]): void {
       });
     }
   }
+}
+
+/** Number of dots whose centre lies outside their company's wedge (used by tests and the map's readability check). */
+export function countOutsideWedges(layout: Pick<OrbitLayout, 'nodes' | 'groups'>): number {
+  const TAU = Math.PI * 2;
+  const wedges = new Map(layout.groups.map((g) => [g.key, g]));
+  let n = 0;
+  for (const x of layout.nodes) {
+    const w = wedges.get(x.groupKey);
+    if (!w) {
+      n++;
+      continue;
+    }
+    let a = x.angle;
+    while (a < w.startAngle - 1e-6) a += TAU;
+    while (a >= w.startAngle + TAU - 1e-6) a -= TAU;
+    if (a > w.endAngle + 1e-6) n++;
+  }
+  return n;
 }
 
 /** Number of pairs of dots that overlap (used by tests and the map's readability check). */

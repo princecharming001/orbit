@@ -55,7 +55,8 @@ export function describeUserTie(p: Person, now: Date = new Date()): string {
   const meetings = (c.meeting ?? 0) + (c.manual_log ?? 0);
   const linkedin = (c.linkedin_in ?? 0) + (c.linkedin_out ?? 0);
   const name = p.firstName || p.displayName;
-  const when = relativeAgo(p.lastInteractionAt, now);
+  // only a real conversation can be "the last one": a CC or a LinkedIn connection is not
+  const when = relativeAgo(p.strengthBreakdown?.lastConversationAt, now);
   if (!isReciprocal(c)) {
     if (emailsOut) {
       const times = emailsOut === 1 ? 'once' : emailsOut === 2 ? 'twice' : `${emailsOut} times`;

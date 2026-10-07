@@ -650,7 +650,8 @@ export function buildDemoDataset(
       {
         dir: 'inbound',
         daysAgo: 7,
-        body: 'Happy to. Sent you an invite for tomorrow 11:30. Looking forward to it!',
+        // written a week ago, so it names the day rather than saying "tomorrow"
+        body: `Happy to. Sent you an invite for ${start.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })} at 11:30. Looking forward to it!`,
         signal: 'scheduling_confirmation',
       },
     ]);
