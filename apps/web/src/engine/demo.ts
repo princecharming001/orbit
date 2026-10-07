@@ -1,5 +1,5 @@
 import type { CoffeeChat, DemoDataset, User } from '@orbit/core';
-import { buildDemoDataset } from '@orbit/core';
+import { buildDemoDataset, businessDay } from '@orbit/core';
 import { recomputeAllStrengths, setCurrentUserId } from '../db/repo';
 import { db, wipeDatabase } from '../db/schema';
 import { generateBrief, recommendationsRefresh, refreshPersonSummary } from './brief';
@@ -197,11 +197,12 @@ export async function loadDemo(
 
   log('Reading your mailbox and calendar (demo)');
   const seen = new Set(await db.notifications.toCollection().primaryKeys());
+  // what the engine notified about before the previous business day is not news today (on a Monday, Friday's is)
+  const newsSince = businessDay(now, -1, 0).getTime();
   for (const s of timeline(user, ds, now)) {
     await s.run(new Date(s.at));
-    // what the engine notified about back then is not news today
     const fresh = (await db.notifications.toCollection().primaryKeys()).filter((id) => !seen.has(id));
-    if (now.getTime() - s.at > 3 * DAY) await db.notifications.bulkDelete(fresh);
+    if (s.at < newsSince) await db.notifications.bulkDelete(fresh);
     else for (const id of fresh) seen.add(id);
   }
   // Suggestions the immediate rules raised along the way belonged to their moment. Today's come from the welcome

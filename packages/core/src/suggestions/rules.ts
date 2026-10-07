@@ -338,7 +338,9 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
     if (e.status === 'cancelled' || !e.attendeePersonIds.length) continue;
     const start = new Date(e.startAt).getTime();
     const hours = (start - now.getTime()) / 3_600_000;
-    if (hours > -1 && hours <= 30 && (e.isCoffeeChat ?? false)) {
+    // within 30 hours, or on the next business day: a Friday or weekend brief preps Monday's chat
+    const soon = hours <= 30 || start < endOfNextBusinessDay(now);
+    if (hours > -1 && soon && (e.isCoffeeChat ?? false)) {
       const pid = e.attendeePersonIds[0]!;
       const p = inp.people.get(pid);
       if (!p) continue;
@@ -350,7 +352,7 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
         reasonText: `Chat with ${p.firstName} ${relTime(e.startAt, now)} — prep in 2 minutes`,
         signals: { startAt: e.startAt },
         payload: { eventId: e.id },
-        urgency: 0.95,
+        urgency: hours <= 30 ? 0.95 : 0.8,
         goalRelevance: goalRel(pid),
         confidence: e.coffeeChatConfidence ?? 0.8,
       });
@@ -436,6 +438,15 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
     added++;
   }
   return out;
+}
+
+/** The end of the next business day after `now`, in local time (Friday and the weekend both look ahead to Monday). */
+export function endOfNextBusinessDay(now: Date): number {
+  const d = new Date(now);
+  do d.setDate(d.getDate() + 1);
+  while (d.getDay() === 0 || d.getDay() === 6);
+  d.setHours(23, 59, 59, 999);
+  return d.getTime();
 }
 
 export function relTime(iso: string, now: Date): string {

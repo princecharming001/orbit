@@ -86,6 +86,8 @@ describe('loaded demo', () => {
     for (const s of (await pending()).filter((x) => x.kind === 'schedule_confirm')) {
       const t = s.payload.time as { startIso: string };
       expect(new Date(t.startIso) > NOW).toBe(true);
+      // Omar wrote "2pm your time", so the card confirms 2pm on the student's clock, whatever zone that is
+      expect(new Date(t.startIso).getHours()).toBe(14);
     }
   });
 
@@ -114,4 +116,31 @@ describe('demo loaded on a weekend', () => {
     expect(sugg.some((s) => s.kind === 'thank_you')).toBe(true);
     expect(sugg.some((s) => s.kind === 'schedule_confirm')).toBe(true);
   });
+});
+
+describe('demo loaded on any day of the week', () => {
+  // the next chat is always on the next business day, so a Friday or weekend brief still preps it, and the replies
+  // that came in on the last business day are still news
+  for (const at of [
+    '2026-10-09T09:00:00',
+    '2026-10-09T19:00:00',
+    '2026-10-10T09:00:00',
+    '2026-10-11T20:00:00',
+    '2026-10-12T18:30:00',
+  ])
+    it(`opens with a prep card and fresh replies on ${new Date(at).toDateString()} at ${at.slice(11, 16)}`, {
+      timeout: 60_000,
+    }, async () => {
+      const now = new Date(at);
+      const u = await loadDemo({ reset: true, now });
+      const brief = (await db.briefs.where('userId').equals(u.id).toArray())[0]!;
+      const sugg = await db.suggestions.where('userId').equals(u.id).toArray();
+      const kinds = new Set(sugg.filter((s) => brief.suggestionIds.includes(s.id)).map((s) => s.kind));
+      for (const k of ['prep_brief', 'thank_you', 'schedule_confirm']) expect(kinds, k).toContain(k);
+      const replied = (await db.notifications.where('userId').equals(u.id).toArray()).filter(
+        (n) => n.kind === 'reply_received',
+      );
+      expect(replied.length).toBeGreaterThan(0);
+      expect(replied.length).toBeLessThanOrEqual(4);
+    });
 });

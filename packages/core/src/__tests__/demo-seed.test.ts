@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { buildDemoDataset, DEMO_ORGS, type DemoDataset, demoRolesFor, isWeekend } from '../demo/seed';
+import {
+  buildDemoDataset,
+  businessDay,
+  DEMO_ORGS,
+  type DemoDataset,
+  demoRolesFor,
+  inWinterBreak,
+  isWeekend,
+} from '../demo/seed';
 import { extractProposedTimes, heuristicSignal, heuristicTriage } from '../email/triage';
 import { isAutomatedSender } from '../text/email';
 
@@ -46,11 +54,23 @@ function check(now: Date, ds: DemoDataset) {
         `${p.displayName} started ${job.startDate} before ${edu.endDate}`,
       ).toBe(true);
       const jobSlug = job.organizationId!.replace(/^org_/, '');
-      expect(demoRolesFor(jobSlug).some((r) => r.title === job.title)).toBe(true);
+      const r = demoRolesFor(jobSlug).find((x) => x.title === job.title);
+      expect(r, `${job.title} at ${job.nameRaw}`).toBeDefined();
+      // every title, past or present, was earned: nobody starts as Staff Engineer the month after graduating
+      const held = `${p.displayName}: ${job.title} at ${job.nameRaw} from ${job.startDate}, graduated ${grad}`;
+      expect(yearOf(job.startDate) - grad, held).toBeGreaterThanOrEqual(r!.min);
+      if (r!.max !== undefined)
+        expect((job.endDate ? yearOf(job.endDate) : now.getFullYear()) - grad, held).toBeLessThanOrEqual(
+          r!.max,
+        );
     }
-    const prev = affs.find((a) => a.kind === 'employment' && !a.isCurrent);
-    const cur = affs.find((a) => a.kind === 'employment' && a.isCurrent)!;
-    if (prev) expect(prev.endDate! <= cur.startDate!).toBe(true);
+    const jobs = affs
+      .filter((a) => a.kind === 'employment')
+      .sort((a, b) => a.startDate!.localeCompare(b.startDate!));
+    const cur = jobs[jobs.length - 1]!;
+    expect(cur.isCurrent, p.displayName).toBe(true);
+    for (let i = 1; i < jobs.length; i++)
+      expect(jobs[i - 1]!.endDate! < jobs[i]!.startDate!, p.displayName).toBe(true);
     expect(new Date(cur.startDate!) < now).toBe(true);
   }
   // mail: weekdays only, nothing in the future, turns in order, no placeholders or banned copy
@@ -88,11 +108,27 @@ function check(now: Date, ds: DemoDataset) {
       return m.bodyText.split(p.firstName).join('{first}').split(p.currentOrganizationRaw!).join('{org}');
     });
   expect(new Set(written).size).toBe(written.length);
+  // and no two conversations share a subject or a sentence: people answer in their own words, and the student does
+  // not paste the same lines from thread to thread
+  const subjects = ds.threads.map((t) => t.subject);
+  expect(subjects.filter((x, i) => subjects.indexOf(x) !== i)).toEqual([]);
+  const seenIn = new Map<string, string>();
+  for (const m of ds.messages)
+    for (const sentence of m.bodyText.split(/(?<=[.?:])\s+|\n+/)) {
+      const x = sentence.trim();
+      if (x.split(/\s+/).length < 3) continue;
+      const other = seenIn.get(x);
+      expect(other === undefined || other === m.threadId, `"${x}" in two threads`).toBe(true);
+      seenIn.set(x, m.threadId);
+    }
   // the pipeline's own heuristics read each message the way the seed says it should
   for (const m of ds.messages) {
     if (!m.signal || m.isAutomated) continue;
     const h = heuristicSignal(m.bodyText, m.direction, new Date(m.sentAt));
     expect(h.signal, `${m.subject}: ${m.bodyText.slice(0, 80)}`).toBe(m.signal);
+    // a proposed time is in the student's own clock: no zone the pipeline would have to convert (Omar once wrote
+    // "2pm ET" and the demo confirmed 2pm wherever the browser was)
+    if (m.extraction?.proposedTimes.length) expect(m.bodyText).not.toMatch(/\b([ECMP][SD]?T|UTC|GMT)\b/);
     for (const t of m.extraction?.proposedTimes ?? []) {
       const parsed = extractProposedTimes(m.bodyText, new Date(m.sentAt));
       expect(parsed[0]?.startIso, m.bodyText).toBe(t.startIso);
@@ -104,10 +140,9 @@ function check(now: Date, ds: DemoDataset) {
   for (const e of ds.events) {
     const s = new Date(e.startAt);
     expect(isWeekend(s)).toBe(false);
-    // last year's conversations stay out of the winter break (the recent ones follow whenever the demo is loaded)
-    const md = s.getMonth() * 100 + s.getDate();
-    if (now.getTime() - s.getTime() > 45 * 86_400_000)
-      expect(md >= 1120 || md <= 1, `coffee chat over the winter break: ${s.toDateString()}`).toBe(false);
+    // earlier conversations stay out of the winter break (this week's follow whenever the demo is loaded)
+    if (now.getTime() - s.getTime() > 10 * 86_400_000)
+      expect(inWinterBreak(s), `coffee chat over the winter break: ${s.toDateString()}`).toBe(false);
     expect(s.getHours()).toBeGreaterThanOrEqual(9);
     expect(s.getHours()).toBeLessThan(18);
   }
@@ -118,8 +153,14 @@ function check(now: Date, ds: DemoDataset) {
   for (const a of warm.warmUp!.actions) expect(isWeekend(new Date(a.dueAt))).toBe(false);
   expect(new Date(warm.warmUp!.readyAt) > now).toBe(true);
   // the chat that wants a thank-you happened in the last three days; the proposed slot is still ahead
+  // (unless a holiday leaves no business day in those three days, when it is the last business day's chat)
   const done = ds.chats.find((c) => c.stage === 'completed')!;
-  expect(now.getTime() - new Date(done.completedAt!).getTime()).toBeLessThan(3 * 86_400_000);
+  const lastBusinessDay = businessDay(now, -1, 0);
+  expect(new Date(done.completedAt!) > lastBusinessDay).toBe(true);
+  const midnight = new Date(now);
+  midnight.setHours(0, 0, 0, 0);
+  if (midnight.getTime() - lastBusinessDay.getTime() <= 3 * 86_400_000 + 3_600_000)
+    expect(now.getTime() - new Date(done.completedAt!).getTime()).toBeLessThan(3 * 86_400_000);
   const scheduling = ds.chats.find((c) => c.stage === 'scheduling')!;
   const proposal = ds.messages.filter((m) => m.threadId === scheduling.threadId).pop()!;
   expect(new Date(proposal.extraction!.proposedTimes[0]!.startIso) > now).toBe(true);
@@ -130,6 +171,20 @@ describe('demo seed', () => {
     it(`is a plausible season when loaded on ${now.toDateString()} ${now.getHours()}:00`, () => {
       check(now, buildDemoDataset({ now }));
     });
+
+  it('stays plausible whatever day of the year it is loaded', { timeout: 120_000 }, () => {
+    const start = new Date('2026-10-01T00:00:00');
+    for (let i = 0; i < 366; i++) {
+      const now = new Date(start);
+      now.setDate(start.getDate() + i);
+      now.setHours(7 + (i % 14), (i * 17) % 60);
+      try {
+        check(now, buildDemoDataset({ now }));
+      } catch (e) {
+        throw new Error(`loaded on ${now.toString()}: ${(e as Error).message}`);
+      }
+    }
+  });
 
   it('is deterministic', () => {
     const a = buildDemoDataset({ now: NOWS[0] });
