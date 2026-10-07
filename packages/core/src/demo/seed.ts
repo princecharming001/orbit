@@ -2173,7 +2173,7 @@ export function buildDemoDataset(
   const takenFirst = new Set(people.slice(0, SHOWCASE).map((p) => p.firstName));
   const takenLast = new Set(people.slice(0, SHOWCASE).map((p) => p.lastName));
   const topicsUsed = new Map<Fn, number>();
-  const others: { p: Person; topic: Topic }[] = [];
+  const others: { p: Person; fn: Fn; topic: Topic }[] = [];
   for (const p of people.slice(SHOWCASE)) {
     const fn = fnOf.get(p.id);
     if (!p.primaryEmail || !fn || fn === 'other') continue;
@@ -2185,7 +2185,7 @@ export function buildDemoDataset(
     topicsUsed.set(fn, v + 1);
     takenFirst.add(p.firstName);
     takenLast.add(p.lastName);
-    others.push({ p, topic: TOPICS[fn][v]! });
+    others.push({ p, fn, topic: TOPICS[fn][v]! });
   }
   // Each conversation in its own words: people answer differently, and the student does not paste the same lines.
   const ASK_TAIL = [
@@ -2367,6 +2367,9 @@ export function buildDemoDataset(
   // Two of those people later introduced the student to a colleague, who moved the conversation to its own thread.
   // What the introducer says the student asked about is what their own conversation was about, not the new person's
   // area: Sana talked with the student about Anthropic, so she cannot say they asked her about Goldman's deal teams.
+  // Nor does she say what the student wants from the new person: the thread never says, so the intro only names who
+  // the new person is. Each introducer passes the student to someone in their own line of work or the one next to it
+  // (an engineer to an engineer, a data scientist or a designer, never a banker), people they can vouch for.
   const aTitle = (p: Person) => `${article(p.currentTitle ?? '')} ${p.currentTitle}`;
   const INTRO = [
     {
@@ -2381,7 +2384,7 @@ export function buildDemoDataset(
     },
     {
       body: (a: Person, b: Person, area: string, standing: string, asked: string) =>
-        `Hi ${b.firstName} and ${meFirst},\n\nAs promised, introducing you two. ${b.firstName}, ${meFirst} is a ${schoolShort} ${standing} who asked me good questions about ${asked}. ${meFirst} wants to hear about ${area}, and you're the person I'd send them to. ${meFirst}, ${b.firstName} is ${aTitle(b)} at ${b.currentOrganizationRaw}. Over to you both.\n\n${a.firstName}`,
+        `Hi ${b.firstName} and ${meFirst},\n\nIntroducing you two. ${b.firstName}, ${meFirst} is a ${schoolShort} ${standing} who asked me good questions about ${asked}. ${meFirst}, ${b.firstName} is ${aTitle(b)} at ${b.currentOrganizationRaw} and the person I'd ask about ${area}. Over to you both.\n\n${a.firstName}`,
       ack: (a: Person, b: Person, area: string) =>
         `Thanks for the intro, ${a.firstName}, moving you to bcc.\n\nHi ${b.firstName}, thanks for being open to this. Would you have 15 minutes in the next couple of weeks for a few questions about ${area}? I'm flexible on timing.\n\n${meFirst}`,
       subject: (a: Person) => `Connecting after ${a.firstName}'s note`,
@@ -2390,12 +2393,33 @@ export function buildDemoDataset(
       close: (a: Person) => `I'll tell ${a.firstName} how much I appreciated the intro.`,
     },
   ];
-  others.slice(6, 8).forEach(({ p: b, topic }, k) => {
+  // whom each kind of person knows well enough to vouch for, closest first
+  const NEAR: Record<Exclude<Fn, 'other'>, Fn[]> = {
+    swe: ['swe', 'bank_eng', 'data', 'pm', 'design'],
+    bank_eng: ['bank_eng', 'swe', 'data'],
+    data: ['data', 'swe', 'bank_eng'],
+    pm: ['pm', 'design', 'swe'],
+    design: ['design', 'pm'],
+    ib: ['ib'],
+    consulting: ['consulting'],
+    trading: ['trading'],
+  };
+  // the brief's one referral ask runs through Maya; someone met through an intro at a firm the student has already
+  // applied to would raise a second one
+  const applied = new Set(
+    targetCompanies.filter((t) => t.status !== 'researching').map((t) => t.organizationId),
+  );
+  const introPool = others.slice(6).filter((o) => !applied.has(o.p.currentOrganizationId ?? ''));
+  INTRO.forEach((x, k) => {
     const a = regulars[k]?.p;
-    const asked = a ? regulars[k]!.topic.area(a.currentOrganizationRaw ?? '') : '';
     const aThanks = a && thankedAt.get(a.id);
-    const x = INTRO[k]!;
     if (!a || !aThanks) return;
+    const near = NEAR[regulars[k]!.fn as Exclude<Fn, 'other'>];
+    const fn = near.find((f) => introPool.some((o) => o.fn === f));
+    if (!fn) return;
+    const i = introPool.findIndex((o) => o.fn === fn);
+    const { p: b, topic } = introPool.splice(i, 1)[0]!;
+    const asked = regulars[k]!.topic.area(a.currentOrganizationRaw ?? '');
     const intro = businessDay(aThanks, 4 + k * 3, 9, 20 + k * 11);
     const area = topic.area(b.currentOrganizationRaw ?? '');
     addThread([a, b], `Intro: ${meFirst} <> ${b.firstName}`, [

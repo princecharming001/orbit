@@ -8,6 +8,7 @@ import {
   inWinterBreak,
   isWeekend,
 } from '../demo/seed';
+import { titleFunction } from '../drafts/phrasing';
 import { extractProposedTimes, heuristicSignal, heuristicTriage } from '../email/triage';
 import { endOfNextBusinessDay } from '../suggestions/rules';
 import { isAutomatedSender } from '../text/email';
@@ -105,6 +106,22 @@ function check(now: Date, ds: DemoDataset) {
     const own = ds.threads.find((t) => t.participantPersonIds.join() === introducer.id)!;
     const opener = byThread.get(own.id)![0]!;
     expect(opener.bodyText, `${introducer.displayName}'s intro: "${asked}"`).toContain(asked);
+  }
+  // nor does an introducer claim a promise or a wish of the student's that no thread contains, and they pass the
+  // student to someone in their own line of work (an Anthropic engineer does not send a CS student to Goldman M&A)
+  const TECH = ['swe', 'data', 'pm', 'design'];
+  // and both earlier conversations still end in an introduction, beside the mentor's
+  expect(ds.threads.filter((t) => t.subject?.startsWith('Intro: '))).toHaveLength(3);
+  for (const m of ds.messages.filter((x) => x.signal === 'intro_offer')) {
+    expect(m.bodyText).not.toMatch(/as promised|wants to (hear|learn|talk)|is interested in|is keen/i);
+    const introducer = ds.people.find((p) => p.primaryEmail === m.fromEmail)!;
+    const th = ds.threads.find((t) => t.id === m.threadId)!;
+    const introducee = people.get(th.participantPersonIds.find((id) => id !== introducer.id)!)!;
+    const [fa, fb] = [titleFunction(introducer.currentTitle), titleFunction(introducee.currentTitle)];
+    expect(
+      fa === fb || (TECH.includes(fa ?? '') && TECH.includes(fb ?? '')),
+      `${introducer.currentTitle} introduces ${introducee.currentTitle}`,
+    ).toBe(true);
   }
   for (const [, msgs] of byThread)
     for (let i = 1; i < msgs.length; i++) expect(msgs[i]!.sentAt > msgs[i - 1]!.sentAt).toBe(true);
