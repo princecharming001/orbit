@@ -605,6 +605,40 @@ describe('hand-offs (SND-07, SND-12, SND-14, UI-09)', () => {
     expect((await handoffLink(user, ty.id))?.via).toBe('linkedin_compose');
   });
 
+  it('LinkedIn: after the chat moves on to Nurturing or Archived, a check-in is still a message, not Connect', async () => {
+    const p = await freshPerson(user, { email: false, linkedin: true, connected: false });
+    const note = await draftMessage(user, p.id, 'outreach', 'linkedin');
+    const short = `Hi ${p.firstName}, I'm a junior at Michigan recruiting for product roles. Could I ask you 3 questions about your team in 20 minutes? Thanks, Sam`;
+    expect((await approveAndSend(user, note.id, short)).ok).toBe(true);
+    expect((await confirmHandoff(user, note.id)).ok).toBe(true);
+    const chat = (await db.chats.where('personId').equals(p.id).first())!;
+    const long = `Hi ${p.firstName}, ${'A short update from me on the internship search and what I learned. '.repeat(6)}`;
+    // the note went out weeks ago; they answered on LinkedIn (marked by hand, so no inbound email date) and the chat happened
+    await db.outbound.update(note.id, { sentAt: new Date(Date.now() - 45 * 86_400_000).toISOString() });
+    const answered = new Date(Date.now() - 40 * 86_400_000).toISOString();
+    await db.chats.update(chat.id, { stage: 'replied', stageEnteredAt: answered });
+    await db.chats.update(chat.id, { stage: 'completed', stageEnteredAt: answered, completedAt: answered });
+    for (const stage of ['nurturing', 'archived'] as const) {
+      await db.chats.update(chat.id, { stage, stageEnteredAt: new Date().toISOString() });
+      const d = await draftMessage(user, p.id, 'nurture', 'linkedin', chat.id);
+      expect(
+        (await reviewDraft(user, d, long)).find((i) => i.code === 'linkedin_note_too_long'),
+      ).toBeUndefined();
+      const r = await approveAndSend(user, d.id, long);
+      expect(r.ok && r.status === 'handed_off' && r.via).toBe('linkedin_compose');
+      expect(r.ok && r.status === 'handed_off' && r.handoffUrl).toMatch(/messaging\/compose/);
+      expect((await handoffLink(user, d.id))?.via).toBe('linkedin_compose');
+      expect(await revertHandoff(user, d.id)).toBe(true);
+      await db.outbound.update(d.id, { status: 'cancelled' });
+    }
+    // an archived chat they never answered does not make them a connection
+    await db.chats.update(chat.id, { completedAt: undefined });
+    const cold = await draftMessage(user, p.id, 'nurture', 'linkedin', chat.id);
+    expect(
+      (await reviewDraft(user, cold, long)).find((i) => i.code === 'linkedin_note_too_long')?.blocking,
+    ).toBe(true);
+  });
+
   it('hand-offs count toward the daily cap from the moment they open', async () => {
     await db.settings.update(user.id, { dailySendCapLinkedin: 1 });
     const a = await freshPerson(user, { email: false, linkedin: true, connected: false });
@@ -621,7 +655,7 @@ describe('hand-offs (SND-07, SND-12, SND-14, UI-09)', () => {
   });
 
   it('a confirmation that fails half way is still recorded as sent, never stuck in sending', async () => {
-    const { d } = await pendingDraft(user, 'thank_you');
+    const { s, d } = await pendingDraft(user, 'thank_you');
     expect((await approveAndSend(user, d.id, d.bodyDraft)).ok).toBe(true);
     const spy = vi.spyOn(db.touchpoints, 'add').mockRejectedValueOnce(new Error('QuotaExceededError'));
     const r = await confirmHandoff(user, d.id);
@@ -632,6 +666,24 @@ describe('hand-offs (SND-07, SND-12, SND-14, UI-09)', () => {
     expect(o.status).toBe('sent');
     expect(o.sentAt).toBeTruthy();
     expect((await confirmHandoff(user, d.id)).ok).toBe(false);
+    // the rest of the bookkeeping still ran: the card is closed and the chat moved on
+    expect((await db.suggestions.get(s.id))!.status).toBe('sent');
+    expect((await db.chats.get(s.chatId!))!.stage).toBe('followed_up');
+  });
+
+  it('a Gmail send whose bookkeeping fails half way still closes the card and moves the chat', async () => {
+    await connectGoogle(user);
+    const { s, d } = await pendingDraft(user, 'thank_you');
+    const t0 = new Date();
+    await approveAndSend(user, d.id, d.bodyDraft, undefined, t0);
+    const spy = vi.spyOn(db.audit, 'add').mockRejectedValueOnce(new Error('QuotaExceededError'));
+    const res = await sendDueQueued(user, new Date(t0.getTime() + UNDO_WINDOW_MS + 1000));
+    spy.mockRestore();
+    expect(res).toEqual([{ id: d.id, ok: true }]);
+    expect(sent).toHaveLength(1);
+    expect((await db.outbound.get(d.id))!.status).toBe('sent');
+    expect((await db.suggestions.get(s.id))!.status).toBe('sent');
+    expect((await db.chats.get(s.chatId!))!.stage).toBe('followed_up');
   });
 
   it('a person with no email and no LinkedIn profile gets an error, never "sent"', async () => {

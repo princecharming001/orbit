@@ -291,18 +291,38 @@ function issueText(code: string, detail: string, person: Person): string {
   }
 }
 
+type ChatEvidence = Pick<
+  CoffeeChat,
+  'stage' | 'outreachChannel' | 'lastInboundAt' | 'completedAt' | 'followedUpAt'
+>;
+
+/**
+ * Did they answer this chat that started on LinkedIn? Its stage says so while it is in an answered stage or Nurturing
+ * (only answered chats get there), and its dates say so after it moves on, for example to Archived.
+ */
+function answeredOnLinkedin(c: ChatEvidence): boolean {
+  if (c.outreachChannel !== 'linkedin') return false;
+  return (
+    ANSWERED_STAGES.includes(c.stage) ||
+    c.stage === 'nurturing' ||
+    !!c.lastInboundAt ||
+    !!c.completedAt ||
+    !!c.followedUpAt
+  );
+}
+
 /**
  * Is this LinkedIn message a connection note? It is unless they are a connection: in the imported connections, or they
- * answered a chat that started on LinkedIn (they accepted the request, so LinkedIn lets the student message them).
+ * ever answered a chat that started on LinkedIn (they accepted the request, so LinkedIn lets the student message them).
  * A note goes with Connect, Add a note, and LinkedIn caps it at 300 characters, whatever kind of message it is.
  */
 export function isConnectionNote(
   msg: Pick<OutboundMessage, 'channel'>,
   person?: Pick<Person, 'linkedinConnectedOn'>,
-  chats: Pick<CoffeeChat, 'stage' | 'outreachChannel'>[] = [],
+  chats: ChatEvidence[] = [],
 ): boolean {
   if (msg.channel !== 'linkedin' || person?.linkedinConnectedOn) return false;
-  return !chats.some((c) => c.outreachChannel === 'linkedin' && ANSWERED_STAGES.includes(c.stage));
+  return !chats.some(answeredOnLinkedin);
 }
 
 async function connectionNoteFor(msg: OutboundMessage, person: Person): Promise<boolean> {
@@ -719,87 +739,123 @@ const TRIGGER_KIND: Partial<
   nurture: 'nurture',
 };
 
-/** Record a message that really went out: status, audit, suggestion, feedback, touchpoint, chat, thread, stage. */
+/**
+ * Record a message that really went out: status, suggestion, chat and stage, thread, audit, feedback, touchpoint.
+ * Each step runs even when an earlier one fails, so one failed write (a full disk on the touchpoint, say) cannot leave
+ * the card pending or the chat behind for a message that is already out. The first failure is rethrown at the end so
+ * the caller can tell the student to check.
+ */
 async function finalizeSent(
   user: User,
   msg: OutboundMessage,
   provider: { providerMessageId?: string; providerThreadId?: string },
   now: Date,
 ): Promise<void> {
-  const suggestion = msg.suggestionId ? await db.suggestions.get(msg.suggestionId) : undefined;
-  let chat = await chatFor(msg.personId, msg.kind, msg.chatId);
-  if (!chat && msg.kind === 'outreach') chat = await openChatForOutreach(user, msg, suggestion, now);
-  await db.outbound.update(msg.id, {
-    status: 'sent',
-    sentAt: now.toISOString(),
-    sendAt: undefined,
-    error: undefined,
-    chatId: msg.chatId ?? chat?.id,
-    providerMessageId: provider.providerMessageId,
-    externalThreadId: provider.providerThreadId ?? msg.externalThreadId,
+  let failure: unknown;
+  const step = async (run: () => Promise<unknown>): Promise<void> => {
+    try {
+      await run();
+    } catch (e) {
+      failure ??= e;
+    }
+  };
+  let suggestion: Suggestion | undefined;
+  let chat: CoffeeChat | undefined;
+  await step(async () => {
+    suggestion = msg.suggestionId ? await db.suggestions.get(msg.suggestionId) : undefined;
   });
-  await audit(user.id, 'message.sent', {
-    objectTable: 'outbound',
-    objectId: msg.id,
-    metadata: {
-      channel: msg.channel,
-      kind: msg.kind,
-      hash: msg.bodyFinalHash,
-      via: provider.providerMessageId ? 'gmail_api' : 'handoff_confirmed',
-    },
+  await step(async () => {
+    chat = await chatFor(msg.personId, msg.kind, msg.chatId);
+    if (!chat && msg.kind === 'outreach') chat = await openChatForOutreach(user, msg, suggestion, now);
   });
+  await step(() =>
+    db.outbound.update(msg.id, {
+      status: 'sent',
+      sentAt: now.toISOString(),
+      sendAt: undefined,
+      error: undefined,
+      chatId: msg.chatId ?? chat?.id,
+      providerMessageId: provider.providerMessageId,
+      externalThreadId: provider.providerThreadId ?? msg.externalThreadId,
+    }),
+  );
   if (suggestion) {
+    const s = suggestion;
+    await step(() => db.suggestions.update(s.id, { status: 'sent', decidedAt: now.toISOString() }));
     const edited = (msg.bodyFinal ?? '').trim() !== msg.bodyDraft.trim();
-    await db.suggestions.update(suggestion.id, { status: 'sent', decidedAt: now.toISOString() });
-    await feedback(user.id, edited ? 'edit' : 'approve', {
-      suggestionId: suggestion.id,
-      outboundMessageId: msg.id,
-      editDistance: edited ? Math.abs((msg.bodyFinal ?? '').length - msg.bodyDraft.length) : 0,
-      editBefore: edited ? msg.bodyDraft : undefined,
-      editAfter: edited ? msg.bodyFinal : undefined,
-    } as never);
+    await step(() =>
+      feedback(user.id, edited ? 'edit' : 'approve', {
+        suggestionId: s.id,
+        outboundMessageId: msg.id,
+        editDistance: edited ? Math.abs((msg.bodyFinal ?? '').length - msg.bodyDraft.length) : 0,
+        editBefore: edited ? msg.bodyDraft : undefined,
+        editAfter: edited ? msg.bodyFinal : undefined,
+      } as never),
+    );
   }
-  await addTouchpoint({
-    userId: user.id,
-    personId: msg.personId,
-    kind: msg.channel === 'linkedin' ? 'linkedin_out' : 'email_out',
-    occurredAt: now.toISOString(),
-    refTable: 'outbound',
-    refId: msg.id,
-    summary: `${msg.channel === 'linkedin' ? 'LinkedIn message' : 'Email'}: ${msg.subject ?? MESSAGE_KIND_LABELS[msg.kind]}`,
-    weight: msg.channel === 'linkedin' ? 0.5 : 0.6,
-  });
-  if (provider.providerMessageId && provider.providerThreadId)
-    await recordSentEmail(user, msg, provider.providerMessageId, provider.providerThreadId, chat, now);
+  await step(() =>
+    audit(user.id, 'message.sent', {
+      objectTable: 'outbound',
+      objectId: msg.id,
+      metadata: {
+        channel: msg.channel,
+        kind: msg.kind,
+        hash: msg.bodyFinalHash,
+        via: provider.providerMessageId ? 'gmail_api' : 'handoff_confirmed',
+      },
+    }),
+  );
+  await step(() =>
+    addTouchpoint({
+      userId: user.id,
+      personId: msg.personId,
+      kind: msg.channel === 'linkedin' ? 'linkedin_out' : 'email_out',
+      occurredAt: now.toISOString(),
+      refTable: 'outbound',
+      refId: msg.id,
+      summary: `${msg.channel === 'linkedin' ? 'LinkedIn message' : 'Email'}: ${msg.subject ?? MESSAGE_KIND_LABELS[msg.kind]}`,
+      weight: msg.channel === 'linkedin' ? 0.5 : 0.6,
+    }),
+  );
+  if (provider.providerMessageId && provider.providerThreadId) {
+    const { providerMessageId, providerThreadId } = provider;
+    await step(() => recordSentEmail(user, msg, providerMessageId, providerThreadId, chat, now));
+  }
   if (chat) {
-    const fresh = (await db.chats.get(chat.id)) ?? chat;
-    const changes: Partial<CoffeeChat> = {
-      lastOutboundAt: now.toISOString(),
-      updatedAt: now.toISOString(),
-      outreachChannel: fresh.outreachChannel ?? msg.channel,
-    };
-    if (msg.kind === 'outreach') changes.firstOutreachAt = fresh.firstOutreachAt ?? now.toISOString();
-    if (msg.kind === 'bump') changes.bumpCount = fresh.bumpCount + 1;
-    await db.chats.update(fresh.id, changes);
-    Object.assign(fresh, changes);
-    // a 'reply' only moves the stage when it settles a time; an answer to a question is just a reply
-    const kind =
-      msg.kind === 'reply'
-        ? suggestion?.kind === 'schedule_confirm' || suggestion?.kind === 'schedule_propose'
-          ? 'schedule'
-          : 'other'
-        : (TRIGGER_KIND[msg.kind] ?? 'other');
-    await evaluateTrigger(fresh, { type: 'outbound_sent', kind }, { table: 'outbound', id: msg.id }, now);
-    chat = fresh;
+    const known = chat;
+    await step(async () => {
+      const fresh = (await db.chats.get(known.id)) ?? known;
+      const changes: Partial<CoffeeChat> = {
+        lastOutboundAt: now.toISOString(),
+        updatedAt: now.toISOString(),
+        outreachChannel: fresh.outreachChannel ?? msg.channel,
+      };
+      if (msg.kind === 'outreach') changes.firstOutreachAt = fresh.firstOutreachAt ?? now.toISOString();
+      if (msg.kind === 'bump') changes.bumpCount = fresh.bumpCount + 1;
+      await db.chats.update(fresh.id, changes);
+      Object.assign(fresh, changes);
+      chat = fresh;
+      // a 'reply' only moves the stage when it settles a time; an answer to a question is just a reply
+      const kind =
+        msg.kind === 'reply'
+          ? suggestion?.kind === 'schedule_confirm' || suggestion?.kind === 'schedule_propose'
+            ? 'schedule'
+            : 'other'
+          : (TRIGGER_KIND[msg.kind] ?? 'other');
+      await evaluateTrigger(fresh, { type: 'outbound_sent', kind }, { table: 'outbound', id: msg.id }, now);
+    });
   }
   if (msg.kind === 'outreach')
-    await db.recommendations
-      .where('personId')
-      .equals(msg.personId)
-      .filter((r) => r.userId === user.id && (r.status === 'new' || r.status === 'saved'))
-      .modify({ status: 'converted' });
-  await recomputePersonStrength(msg.personId, now);
-  await evaluateImmediateSuggestions(user.id, { personId: msg.personId, chatId: chat?.id }, now);
+    await step(() =>
+      db.recommendations
+        .where('personId')
+        .equals(msg.personId)
+        .filter((r) => r.userId === user.id && (r.status === 'new' || r.status === 'saved'))
+        .modify({ status: 'converted' }),
+    );
+  await step(() => recomputePersonStrength(msg.personId, now));
+  await step(() => evaluateImmediateSuggestions(user.id, { personId: msg.personId, chatId: chat?.id }, now));
+  if (failure !== undefined) throw failure;
 }
 
 /** Outreach approved from a recommendation (or anywhere without a chat) opens the chat it starts. */
