@@ -305,6 +305,165 @@ describe('ingest: email understanding', () => {
     expect(toSam?.reasonText).toContain('Dana introduced you to Sam');
   });
 
+  it('L4: the intro card is retired once the student writes to the person introduced', async () => {
+    await ingestEmails(
+      user,
+      [
+        raw({
+          from: ALEX,
+          to: ['Dana Ortiz <dana@figma.com>'],
+          bodyText: OUTREACH,
+          sentAt: '2026-10-01T15:00:00Z',
+        }),
+        raw({
+          from: 'Dana Ortiz <dana@figma.com>',
+          to: [ALEX],
+          cc: ['Sam Cho <sam@figma.com>'],
+          bodyText: "Of course! Looping in Sam (cc'd) who leads growth. Sam, Alex is a Cornell junior.",
+          sentAt: '2026-10-04T15:00:00Z',
+        }),
+      ],
+      { useLlm: false, now: NOW },
+    );
+    const sam = await chatFor('sam@figma.com');
+    const card = () =>
+      db.suggestions.filter((s) => s.kind === 'new_outreach' && s.personId === sam.person?.id).first();
+    expect((await card())?.status).toBe('pending');
+    await ingestEmails(
+      user,
+      [
+        raw({
+          externalThreadId: 't2',
+          from: ALEX,
+          to: ['Sam Cho <sam@figma.com>'],
+          subject: 'Dana suggested I write',
+          // a first note that already offers times leaves the chat where it was, but it is still written
+          bodyText:
+            "Hi Sam,\n\nDana suggested I write. I'm a junior at Cornell studying CS. Would Thursday at 2pm or Friday at 10am work for a quick chat?\n\nBest,\nAlex",
+          sentAt: '2026-10-05T15:00:00Z',
+        }),
+      ],
+      { useLlm: false, now: NOW },
+    );
+    expect((await db.chats.get(sam.chat!.id))?.lastOutboundAt).toBe('2026-10-05T15:00:00Z');
+    expect((await card())?.status).toBe('expired');
+  });
+
+  it("L3: a yes with the sender's assistant cc'd to find a time proposes times and writes to nobody else", async () => {
+    await ingestEmails(
+      user,
+      [
+        raw({
+          from: ALEX,
+          to: ['Dana Ortiz <dana@figma.com>'],
+          bodyText: OUTREACH,
+          sentAt: '2026-10-01T15:00:00Z',
+        }),
+        raw({
+          from: 'Dana Ortiz <dana@figma.com>',
+          to: [ALEX],
+          cc: ['Jordan Lee <jordan@figma.com>'],
+          bodyText: "Happy to chat! I'm cc'ing my EA Jordan to set up time.\n\nDana",
+          sentAt: '2026-10-04T15:00:00Z',
+        }),
+      ],
+      { useLlm: false, now: NOW },
+    );
+    const dana = await chatFor('dana@figma.com');
+    const jordan = await chatFor('jordan@figma.com');
+    const pending = await db.suggestions.filter((s) => s.status === 'pending').toArray();
+    expect(
+      pending.filter((s) => s.kind === 'schedule_propose' && s.personId === dana.person?.id),
+    ).toHaveLength(1);
+    expect(jordan.chat).toBeUndefined();
+    expect(pending.filter((s) => s.kind === 'new_outreach')).toHaveLength(0);
+  });
+
+  it('L3: a yes to a chat that also mentions a colleague moves the chat to replied and proposes times', async () => {
+    await ingestEmails(
+      user,
+      [
+        raw({
+          from: ALEX,
+          to: ['Dana Ortiz <dana@figma.com>'],
+          bodyText: OUTREACH,
+          sentAt: '2026-10-01T15:00:00Z',
+        }),
+        raw({
+          from: 'Dana Ortiz <dana@figma.com>',
+          to: [ALEX],
+          bodyText:
+            'Happy to chat next week. My colleague Ana would be great too, I can connect you after.\n\nDana',
+          sentAt: '2026-10-04T15:00:00Z',
+        }),
+      ],
+      { useLlm: false, now: NOW },
+    );
+    const dana = await chatFor('dana@figma.com');
+    expect(dana.chat?.stage).toBe('replied');
+    const pending = await db.suggestions
+      .filter((s) => s.status === 'pending' && s.personId === dana.person?.id)
+      .toArray();
+    expect(pending.filter((s) => s.kind === 'schedule_propose')).toHaveLength(1);
+    expect(pending.filter((s) => s.kind === 'confirm_stage')).toHaveLength(0);
+  });
+
+  it('L5: a bare "best of luck" is a decline on a chat waiting on an answer, a friendly close otherwise', async () => {
+    await ingestEmails(
+      user,
+      [
+        raw({ from: ALEX, to: ['priya@figma.com'], bodyText: OUTREACH, sentAt: '2026-10-01T15:00:00Z' }),
+        raw({
+          from: 'Priya Sharma <priya@figma.com>',
+          to: [ALEX],
+          bodyText: 'Thanks for reaching out. Best of luck with your search.\n\nPriya',
+          sentAt: '2026-10-02T15:00:00Z',
+        }),
+      ],
+      { useLlm: false, now: NOW },
+    );
+    expect(await db.stageEvents.filter((e) => e.toStage === 'declined').count()).toBe(1);
+    await ingestEmails(
+      user,
+      [
+        raw({
+          externalThreadId: 't3',
+          from: ALEX,
+          to: ['omar@figma.com'],
+          bodyText: OUTREACH,
+          sentAt: '2026-09-01T15:00:00Z',
+        }),
+      ],
+      { useLlm: false, now: NOW },
+    );
+    const { chat } = await chatFor('omar@figma.com');
+    await db.chats.update(chat!.id, { stage: 'nurturing' });
+    await ingestEmails(
+      user,
+      [
+        raw({
+          externalThreadId: 't3',
+          from: ALEX,
+          to: ['omar@figma.com'],
+          bodyText: 'Hi Omar,\n\nQuick update: I got the Figma internship offer.\n\nBest,\nAlex',
+          sentAt: '2026-10-03T15:00:00Z',
+        }),
+        raw({
+          externalThreadId: 't3',
+          from: 'Omar Haddad <omar@figma.com>',
+          to: [ALEX],
+          bodyText: 'Nice work on the offer. Best of luck!\n\nOmar',
+          sentAt: '2026-10-04T15:00:00Z',
+        }),
+      ],
+      { useLlm: false, now: NOW },
+    );
+    expect((await db.chats.get(chat!.id))?.stage).toBe('nurturing');
+    expect(
+      await db.stageEvents.filter((e) => e.toStage === 'declined' && e.chatId === chat!.id).count(),
+    ).toBe(0);
+  });
+
   it('moves a completed chat to followed_up on a natural thank-you note', async () => {
     await ingestEmails(
       user,

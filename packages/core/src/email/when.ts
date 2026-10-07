@@ -41,6 +41,49 @@ const ZONE_NAME: Record<string, string> = {
   mountain: 'America/Denver',
   pacific: 'America/Los_Angeles',
 };
+/** Cities people name a zone by ("3pm London time", "Thursday at 3 New York time"). */
+const CITY_ZONE: Record<string, string> = {
+  'new york': 'America/New_York',
+  nyc: 'America/New_York',
+  boston: 'America/New_York',
+  'washington dc': 'America/New_York',
+  dc: 'America/New_York',
+  philadelphia: 'America/New_York',
+  atlanta: 'America/New_York',
+  miami: 'America/New_York',
+  toronto: 'America/Toronto',
+  chicago: 'America/Chicago',
+  austin: 'America/Chicago',
+  dallas: 'America/Chicago',
+  houston: 'America/Chicago',
+  denver: 'America/Denver',
+  phoenix: 'America/Phoenix',
+  'los angeles': 'America/Los_Angeles',
+  la: 'America/Los_Angeles',
+  'san francisco': 'America/Los_Angeles',
+  sf: 'America/Los_Angeles',
+  'bay area': 'America/Los_Angeles',
+  seattle: 'America/Los_Angeles',
+  london: 'Europe/London',
+  dublin: 'Europe/Dublin',
+  paris: 'Europe/Paris',
+  berlin: 'Europe/Berlin',
+  amsterdam: 'Europe/Amsterdam',
+  zurich: 'Europe/Zurich',
+  singapore: 'Asia/Singapore',
+  'hong kong': 'Asia/Hong_Kong',
+  tokyo: 'Asia/Tokyo',
+  sydney: 'Australia/Sydney',
+  bangalore: 'Asia/Kolkata',
+  bengaluru: 'Asia/Kolkata',
+  mumbai: 'Asia/Kolkata',
+};
+const CITY_ALT = Object.keys(CITY_ZONE)
+  .sort((a, b) => b.length - a.length)
+  .map((c) => c.replace(/ /g, '\\s+'))
+  .join('|');
+/** "Boston time", "New York time" right after a number: a zone, not a place. */
+const CITY_TIME_AFTER = new RegExp(`^\\s+(?:${CITY_ALT})\\s+time\\b`, 'i');
 
 export function isValidTimeZone(tz: string | undefined): tz is string {
   if (!tz) return false;
@@ -74,6 +117,8 @@ export function resolveZone(token: string): string | undefined {
     .replace(/\s+time$/, '')
     .trim();
   if (ZONE_NAME[name]) return ZONE_NAME[name];
+  const city = name.replace(/\s+/g, ' ');
+  if (CITY_ZONE[city]) return CITY_ZONE[city];
   if (/^[A-Z][A-Za-z_]+\/[A-Za-z_]+(\/[A-Za-z_]+)?$/.test(t) && isValidTimeZone(t)) return t;
   return undefined;
 }
@@ -173,7 +218,8 @@ type Tok =
   | { k: 'past' }
   | { k: 'conn' };
 type Part = 'morning' | 'afternoon' | 'evening';
-type Positioned = Tok & { start: number; end: number };
+/** `endsSentence`: a day or month name whose trailing dot ends the sentence ("I'm booked Wednesday. Tuesday at 2pm"). */
+type Positioned = Tok & { start: number; end: number; endsSentence?: boolean };
 
 const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 const DAY_WORDS: [RegExp, number][] = [
@@ -187,8 +233,7 @@ const DAY_WORDS: [RegExp, number][] = [
 ];
 /** Abbreviations that are also ordinary English words only count when capitalised. */
 const AMBIGUOUS_DAY = /^(sun|sat|mon|wed)$/;
-const ZONE_ALT =
-  '\\(?\\b(?:ET|EST|EDT|CT|CST|CDT|MT|MST|MDT|PT|PST|PDT|AKST|AKDT|HST|GMT|UTC|BST|CET|CEST|IST|SGT|JST)\\)?(?![A-Za-z])|\\b(?:eastern|central|mountain|pacific)(?:\\s+(?:standard|daylight))?(?:\\s+time)?(?![a-z])|[A-Z][a-z]+\\/[A-Z][A-Za-z_]+(?:\\/[A-Z][A-Za-z_]+)?';
+const ZONE_ALT = `\\(?\\b(?:ET|EST|EDT|CT|CST|CDT|MT|MST|MDT|PT|PST|PDT|AKST|AKDT|HST|GMT|UTC|BST|CET|CEST|IST|SGT|JST)\\)?(?![A-Za-z])|\\b(?:eastern|central|mountain|pacific)(?:\\s+(?:standard|daylight))?(?:\\s+time)?(?![a-z])|[A-Z][a-z]+\\/[A-Z][A-Za-z_]+(?:\\/[A-Z][A-Za-z_]+)?|\\b(?:${CITY_ALT})\\s+time\\b`;
 
 const TOKEN_RE = new RegExp(
   [
@@ -229,11 +274,33 @@ const COUNT_RANGE_AFTER = new RegExp(
   `^\\s*(?:-|to|through|and|or)\\s*\\d{1,4}(?:\\.\\d+)?\\+?\\s*${NOT_TIME_AFTER.source.replace(/^\^\\s\*/, '')}`,
   'i',
 );
-/** A capitalised word right after a bare number ("5 Capital", "10 Hudson Yards"). */
-const PROPER_NOUN_AFTER = /^\s+([A-Z][a-z]+)/;
+/** A capitalised word right after a bare number, on the same line ("5 Capital", "10 Hudson Yards"). */
+const PROPER_NOUN_AFTER = /^[ \t]+([A-Z][a-z]+)/;
+/** A day right before a bare number ("Thursday at 3", "Mon 10/5 around 4"): the number is a time of that day. */
+const DAY_BEFORE =
+  /(?:\b(?:mon|tues?|wed(?:nes)?|thu(?:rs?)?|fri|sat(?:ur)?|sun)(?:day)?\.?|\b(?:today|tomorrow|tonight)|\d{1,2}\/\d{1,2}|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(?:st|nd|rd|th)?|\bthe\s+\d{1,2}(?:st|nd|rd|th))[\s,]*(?:(?:at|around|about|@|~)\s*)?$/i;
 /** Capitalised words that still belong to a time: weekdays, months, zones, parts of the day, sentence glue. */
 const NOT_A_NAME =
-  /^(mon(day)?|tue(s(day)?)?|wed(s|nesday)?|thu(r(s(day)?)?)?|fri(day)?|sat(urday)?|sun(day)?|jan(uary)?|feb(ruary)?|mar(ch)?|apr(il)?|may|june?|july?|aug(ust)?|sept?(ember)?|oct(ober)?|nov(ember)?|dec(ember)?|eastern|central|mountain|pacific|morning|afternoon|evening|tonight|tomorrow|today|or|and|to|works?|would|does|is|if|let|thanks|thank|best|cheers|looking|talk|see|ok|okay|sounds|hope|please|either|otherwise|happy)$/i;
+  /^(your|my|mon(day)?|tue(s(day)?)?|wed(s|nesday)?|thu(r(s(day)?)?)?|fri(day)?|sat(urday)?|sun(day)?|jan(uary)?|feb(ruary)?|mar(ch)?|apr(il)?|may|june?|july?|aug(ust)?|sept?(ember)?|oct(ober)?|nov(ember)?|dec(ember)?|eastern|central|mountain|pacific|morning|afternoon|evening|tonight|tomorrow|today|or|and|to|works?|would|does|is|if|let|thanks|thank|best|cheers|looking|talk|see|ok|okay|sounds|hope|please|either|otherwise|happy)$/i;
+
+/**
+ * Whether a bare number names a place or a firm ("at 5 Capital", "10 Hudson Yards", "Monday at 5 Capital Street")
+ * rather than a time. Right after a day only a name of two or more capitalised words does: "Thursday at 3 Alex?",
+ * "Monday at 4 Sound good?" and "Thursday at 3 Boston time" are times.
+ */
+function placeAfterNumber(text: string, start: number, rest: string): boolean {
+  const m = PROPER_NOUN_AFTER.exec(rest);
+  if (!m || NOT_A_NAME.test(m[1]!) || CITY_TIME_AFTER.test(rest)) return false;
+  if (!DAY_BEFORE.test(text.slice(Math.max(0, start - 40), start))) return true;
+  const next = PROPER_NOUN_AFTER.exec(rest.slice(m[0].length));
+  return !!next && !NOT_A_NAME.test(next[1]!);
+}
+
+/** Full day and month names never end in an abbreviation dot: "I'm booked Wednesday. Tuesday at 2pm" is two sentences. */
+const FULL_DAY_OR_MONTH =
+  /(?:day|january|february|march|april|june|july|august|september|october|november|december)\.$/i;
+/** "Mon. Tues at 2pm": an abbreviation dot followed by a capitalised word that is not a month ends the sentence. */
+const SENTENCE_AFTER_DOT = /^\s*\n|^\s+(?!(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\b)[A-Z]/;
 
 function tokenize(text: string): Positioned[] {
   const out: Positioned[] = [];
@@ -248,7 +315,9 @@ function tokenize(text: string): Positioned[] {
       TOKEN_RE.lastIndex++;
       continue;
     }
-    const push = (t: Tok) => out.push({ ...t, start, end } as Positioned);
+    let endsSentence = false;
+    const push = (t: Tok) =>
+      out.push({ ...t, start, end, ...(endsSentence ? { endsSentence } : {}) } as Positioned);
     if (g.mdy) {
       const parts = g.mdy.split('/').map((x) => Number.parseInt(x, 10));
       const [mo, d, y] = parts as [number, number, number | undefined];
@@ -268,6 +337,7 @@ function tokenize(text: string): Positioned[] {
       continue;
     }
     if (g.dmon) {
+      endsSentence = FULL_DAY_OR_MONTH.test(raw);
       const mm = /^(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?([a-z]+)/i.exec(g.dmon)!;
       const word = mm[2]!;
       if (/^(may|mar)$/i.test(word) && word[0] !== word[0]!.toUpperCase()) continue;
@@ -282,6 +352,8 @@ function tokenize(text: string): Positioned[] {
       continue;
     }
     if (g.day) {
+      endsSentence =
+        raw.endsWith('.') && (FULL_DAY_OR_MONTH.test(raw) || SENTENCE_AFTER_DOT.test(text.slice(end)));
       const word = g.day.replace(/\.$/, '');
       const lower = word.toLowerCase();
       if (AMBIGUOUS_DAY.test(lower) && word[0] !== word[0]!.toUpperCase()) continue;
@@ -331,8 +403,7 @@ function tokenize(text: string): Positioned[] {
       // "from 5 to 20 people": the second number counts something, so the first does too
       if (bare && COUNT_RANGE_AFTER.test(rest)) continue;
       // "at 5 Capital", "5 Main Street": a bare number naming a place or a firm, not a time
-      if (bare && PROPER_NOUN_AFTER.test(rest) && !NOT_A_NAME.test(PROPER_NOUN_AFTER.exec(rest)![1]!))
-        continue;
+      if (bare && placeAfterNumber(text, start, rest)) continue;
       if (ap && (h < 1 || h > 12)) continue;
       if (!ap && !mm[2] && (h < 1 || h > 12)) continue;
       if (mm[2] && h > 23) continue;
@@ -384,12 +455,31 @@ function tokenize(text: string): Positioned[] {
 }
 
 /** Group adjacent tokens. Tokens are adjacent when only spaces, commas, colons or parentheses separate them. */
+const ANCHOR_KINDS = new Set<Tok['k']>(['day', 'date', 'ord', 'rel']);
+
+/**
+ * Whether the sentence starting at token `i` names a day of its own. A day that ends a sentence still pairs with a
+ * bare time in the next one ("Let's do Wednesday. 2pm work?"), but not with a time the next sentence gives its own
+ * day ("I'm booked Wednesday. Tuesday at 2pm").
+ */
+function namesOwnDay(text: string, toks: Positioned[], i: number): boolean {
+  const from = toks[i]!.start;
+  const stop = /[.!?\n]/.exec(text.slice(from));
+  const end = stop ? from + stop.index : text.length;
+  for (let j = i; j < toks.length && toks[j]!.start < end; j++) if (ANCHOR_KINDS.has(toks[j]!.k)) return true;
+  return false;
+}
+
 function chunks(text: string, toks: Positioned[]): Positioned[][] {
   const out: Positioned[][] = [];
   let cur: Positioned[] = [];
-  for (const t of toks) {
+  for (const [i, t] of toks.entries()) {
     const prev = cur[cur.length - 1];
-    if (prev && !/^[\s,:()]*$/.test(text.slice(prev.end, t.start))) {
+    if (
+      prev &&
+      (!/^[\s,:()]*$/.test(text.slice(prev.end, t.start)) ||
+        (prev.endsSentence && namesOwnDay(text, toks, i)))
+    ) {
       out.push(cur);
       cur = [];
     }
@@ -421,6 +511,8 @@ interface Draft {
   anchors: Anchor[];
   anchorStart?: number;
   anchorEnd?: number;
+  /** where each anchor sits in the text, parallel to `anchors` */
+  anchorSpans: Span[];
   times: TimeSpec[];
   part?: Part;
   zone?: string;
@@ -429,15 +521,19 @@ interface Draft {
   /** "2pm Thursday": the time came before its day, so a later time starts a new proposal */
   timeFirst?: boolean;
 }
+interface Span {
+  start: number;
+  end: number;
+}
 interface Proposal {
   anchor: Anchor;
   time: TimeSpec;
   part?: Part;
   zone?: string;
   raw: string;
-  /** where the proposal sits in the text: [start, end) over its day and time */
-  start: number;
-  end: number;
+  /** where its own day and its time sit in the text, each [start, end) */
+  anchorSpan: Span;
+  timeSpan: Span;
 }
 
 function to24(h: number, ap: 'am' | 'pm' | undefined): number {
@@ -526,7 +622,7 @@ function interpretChunk(
   const proposals: Proposal[] = [];
   const leftover: Draft[] = [];
   const emitted: Proposal[] = [];
-  let d: Draft = { anchors: [], times: [], past: false };
+  let d: Draft = { anchors: [], anchorSpans: [], times: [], past: false };
   let pendingNext = false;
   let pendingNextStart: number | undefined;
   let pendingPast = false;
@@ -535,7 +631,7 @@ function interpretChunk(
   let between = false;
   const flush = (keepAnchors: boolean) => {
     if (d.anchors.length && d.times.length && !d.past) {
-      for (const a of d.anchors)
+      for (const [ai, a] of d.anchors.entries())
         for (const t of d.times) {
           const stop = d.zoneEnd && d.zoneEnd > t.stop && d.zoneEnd - t.stop < 24 ? d.zoneEnd : t.stop;
           const timeRaw = text.slice(t.start, stop);
@@ -552,14 +648,19 @@ function interpretChunk(
             part: d.part,
             zone: d.zone,
             raw: raw.trim().replace(/[.,]$/, ''),
-            start: Math.min(d.anchorStart!, t.start),
-            end: Math.max(d.anchorEnd!, stop),
+            anchorSpan: d.anchorSpans[ai]!,
+            timeSpan: { start: t.start, end: stop },
           };
           proposals.push(p);
           emitted.push(p);
         }
     } else if ((d.anchors.length || d.times.length) && !d.past) leftover.push(d);
-    const next: Draft = { anchors: keepAnchors ? d.anchors : [], times: [], past: false };
+    const next: Draft = {
+      anchors: keepAnchors ? d.anchors : [],
+      anchorSpans: keepAnchors ? d.anchorSpans : [],
+      times: [],
+      past: false,
+    };
     if (keepAnchors) {
       next.anchorStart = d.anchorStart;
       next.anchorEnd = d.anchorEnd;
@@ -574,10 +675,15 @@ function interpretChunk(
     // "Thurs 10/8", "Monday the 12th": a weekday followed by its date is one anchor; keep the date and the weekday
     if (last && last.k === 'day' && (a.k === 'date' || a.k === 'ord') && t.start - (d.anchorEnd ?? 0) < 4) {
       d.anchors[d.anchors.length - 1] = { ...a, dow: last.dow };
+      d.anchorSpans[d.anchorSpans.length - 1]!.end = t.end;
     } else {
       if (d.anchors.length && d.times.length) flush(false);
       if (!d.anchors.length && d.times.length) d.timeFirst = true;
       d.anchors.push(a);
+      d.anchorSpans.push({
+        start: pendingNext && pendingNextStart !== undefined ? pendingNextStart : t.start,
+        end: t.end,
+      });
     }
     const from = pendingNext && pendingNextStart !== undefined ? pendingNextStart : t.start;
     if (d.anchorStart === undefined || from < d.anchorStart) d.anchorStart = from;
@@ -674,17 +780,33 @@ function interpretChunk(
 
 const NEGATING = /\b(not|can'?t|cannot|busy|class|meeting|conflict|except|unless|until|booked|out)\b/i;
 
-/** Where a clause ends: sentence ends, semicolons, commas and the turns of a contrast ("but", "how about"). */
+/**
+ * Where a clause ends: sentence ends, semicolons, commas, the turns of a contrast ("but", "how about") and a "so"
+ * that moves on from a busy day ("I can't do Monday so Tuesday at 2pm works").
+ */
 const CLAUSE_BREAK =
-  /[.!?;\n,]|\b(?:but|however|though|although|instead|otherwise|whereas|while|how about|what about)\b/gi;
-/** A clause that says the time is taken ("I'm in class Monday at 10", "Monday at 10 doesn't work"). */
+  /[.!?;\n,]|\b(?:but|however|though|although|instead|otherwise|whereas|while|so|how about|what about)\b/gi;
+/** A clause that says the time is taken ("I'm in class Monday at 10", "Monday at 10 doesn't work", "I'm out Monday"). */
 const BUSY_CLAUSE =
-  /\b(?:not|no|never|cannot|busy|booked|in class|have class|in a meeting|in meetings|conflict|unavailable|tied up|out of (?:the )?office|traveling|travelling|away|blocked)\b|n['’]t\b/i;
+  /\b(?:not|no|never|cannot|busy|booked|in class|have class|in a meeting|in meetings|conflict|unavailable|tied up|out of (?:the )?office|traveling|travelling|away|blocked)\b|n['’]t\b|\b(?:i['’]?m|i am|i['’]?ll be|i will be|we['’]?re|we are|we['’]?ll be)\s+(?:\w+\s+)?(?:out|off)\b(?!\s+work)/i;
+/**
+ * A negative question that suggests a time ("Why don't we do Tuesday at 2pm?", "Can't we just do Tuesday at 2pm?",
+ * "Wouldn't it be easier to do Tuesday at 2pm?"): at the start of the clause, followed by its subject.
+ * "Can't do Monday at 2" has no subject and still says the time is taken.
+ */
+const NEGATION_LEAD =
+  "^\\s*(?:(?:so|well|honestly|actually|hey|hmm|and|or|ok|okay)[\\s,]+)*(?:why\\s+)?(?:can['’]?t|cannot|couldn['’]?t|wouldn['’]?t|won['’]?t|shouldn['’]?t|don['’]?t|doesn['’]?t|didn['’]?t|isn['’]?t|aren['’]?t|wasn['’]?t)";
+const NEGATIVE_QUESTION = new RegExp(`${NEGATION_LEAD}\\s+(?:we|you|i|it|that|this|there|they)\\b`, 'i');
+/**
+ * A negation right before the day ("Isn't Tuesday at 2 better?") asks only when its clause ends in a question mark;
+ * "Can't Monday at 2, sorry" and "Couldn't Monday at 2pm, but Tuesday at 3pm" say the time is taken.
+ */
+const NEGATIVE_QUESTION_BARE = new RegExp(`${NEGATION_LEAD}\\s*$`, 'i');
 /** Phrases with a negation that do not say the time is taken. */
 const NOT_BUSY_PHRASE =
   /\b(?:if (?:not|that|this|those|these|none|neither|it|they|you|so)\b.*$|unless\b.*$|no (?:worries|problem|rush|pressure|stress)|not a problem|not sure|can['’]?t wait|(?:don['’]?t|do not) worry|(?:doesn['’]?t|does not) matter|(?:wouldn['’]?t|don['’]?t) mind|(?:don['’]?t|do not) hesitate|why not|no later than)/gi;
 
-function isBusyClause(text: string, start: number, end: number): boolean {
+function busyAround(text: string, start: number, end: number): boolean {
   let lo = 0;
   let hi = text.length;
   CLAUSE_BREAK.lastIndex = 0;
@@ -698,8 +820,27 @@ function isBusyClause(text: string, start: number, end: number): boolean {
       break;
     }
   }
-  const clause = `${text.slice(lo, start)} ${text.slice(end, hi)}`.replace(NOT_BUSY_PHRASE, ' ');
+  let before = text.slice(lo, start).replace(NEGATIVE_QUESTION, ' ');
+  if (text[hi] === '?') before = before.replace(NEGATIVE_QUESTION_BARE, ' ');
+  const clause = `${before} ${text.slice(end, hi)}`.replace(NOT_BUSY_PHRASE, ' ');
   return BUSY_CLAUSE.test(clause);
+}
+
+const HAS_CLAUSE_BREAK = new RegExp(CLAUSE_BREAK.source, 'i');
+
+/**
+ * Whether the sender says a proposal's time is taken. When its day and its time are in different clauses ("I'm out
+ * Monday, Tuesday at 2 works" pairs Monday with 2), each is judged in its own clause, so the busy words around one
+ * day never take away the free time next to another.
+ */
+function isTaken(text: string, p: Proposal): boolean {
+  const a = p.anchorSpan;
+  const t = p.timeSpan;
+  const gapLo = Math.min(a.end, t.end);
+  const gapHi = Math.max(a.start, t.start);
+  if (gapHi <= gapLo || !HAS_CLAUSE_BREAK.test(text.slice(gapLo, gapHi)))
+    return busyAround(text, Math.min(a.start, t.start), Math.max(a.end, t.end));
+  return busyAround(text, a.start, a.end) || busyAround(text, t.start, t.end);
 }
 
 function sentenceIndexAt(text: string, pos: number): number {
@@ -811,7 +952,7 @@ export function extractTimes(text: string, reference: Date, opts: ExtractOptions
       const hi = Math.max(a.end, t.end);
       const between = norm.slice(Math.min(a.end, t.end), Math.max(a.start, t.start));
       if (NEGATING.test(between) || between.length > 60) continue;
-      for (const anchor of a.draft.anchors)
+      for (const [ai, anchor] of a.draft.anchors.entries())
         for (const time of t.draft.times)
           proposals.push({
             anchor,
@@ -819,14 +960,14 @@ export function extractTimes(text: string, reference: Date, opts: ExtractOptions
             part: t.draft.part ?? a.draft.part,
             zone: t.draft.zone ?? a.draft.zone,
             raw: norm.slice(lo, hi).trim(),
-            start: lo,
-            end: hi,
+            anchorSpan: a.draft.anchorSpans[ai]!,
+            timeSpan: { start: time.start, end: time.stop },
           });
     }
   }
   const out: ProposedTime[] = [];
   for (const p of proposals) {
-    if (isBusyClause(norm, p.start, p.end)) continue;
+    if (isTaken(norm, p)) continue;
     const statedZone = p.zone ?? messageZone;
     const tz = statedZone ?? fallbackTz;
     const now = zonedParts(reference, tz);

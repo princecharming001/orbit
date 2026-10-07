@@ -8,7 +8,7 @@ import {
   isAutoReplyBody,
 } from '../email/triage';
 import { heuristicNoteExtraction } from '../notes/extract';
-import { canTransition, decideTransition } from '../pipeline/transitions';
+import { canTransition, decideTransition, PROPOSE_THRESHOLD } from '../pipeline/transitions';
 import { generateCandidates } from '../suggestions/rules';
 import {
   decodeEntities,
@@ -890,6 +890,157 @@ describe('email understanding regressions, round 3', () => {
     expect(
       run({ ...intro.extraction, handoff: false }).filter((c) => c.kind === 'schedule_propose'),
     ).toHaveLength(1);
+  });
+});
+
+describe('email understanding leftovers (L1 to L7)', () => {
+  const ref = new Date('2026-10-01T13:00:00Z'); // Thursday 9:00 AM Eastern
+  const ET = 'America/New_York';
+  const sig = (body: string, awaitingAnswer?: boolean) =>
+    heuristicSignal(body, 'inbound', ref, { timeZone: ET, awaitingAnswer });
+  /** proposals as "Tue 14:00" in New York */
+  const slots = (body: string) =>
+    sig(body).extraction.proposedTimes.map((t) =>
+      new Date(t.startIso).toLocaleString('en-US', {
+        timeZone: ET,
+        weekday: 'short',
+        hour: '2-digit',
+        minute: '2-digit',
+        hourCycle: 'h23',
+      }),
+    );
+
+  it('L1: a negative question or a busy day elsewhere does not take a free time away', () => {
+    for (const body of [
+      "Why don't we do Tuesday at 2pm?",
+      "Can't we just do Tuesday at 2pm?",
+      "Wouldn't it be easier to do Tuesday at 2pm?",
+      "I can't do Monday so Tuesday at 2pm works.",
+      "I won't be around Monday. Tuesday at 2pm?",
+    ]) {
+      expect(slots(body), body).toEqual(['Tue 14:00']);
+      expect(sig(body).signal, body).toBe('scheduling_proposal');
+    }
+    expect(slots("I'm booked Wednesday. Tuesday at 2pm or 4pm works.")).toEqual(['Tue 14:00', 'Tue 16:00']);
+    // a negation that does say the time is taken still does
+    expect(slots("Can't do Monday at 2pm, sorry.")).toEqual([]);
+    expect(slots("Tuesday at 2pm doesn't work, how about Wednesday at 3pm?")).toEqual(['Wed 15:00']);
+    // a bare negation before the day is a question only when the clause asks one
+    expect(slots("Isn't Tuesday at 2 better?")).toEqual(['Tue 14:00']);
+    for (const body of [
+      "Can't Monday at 2, sorry. Could we do Tuesday at 3?",
+      "Can't Monday at 2pm but Tuesday at 3pm works.",
+      "Hi Alex,\n\nCan't Monday at 2. Tuesday at 3pm?",
+      "Couldn't Monday at 2pm, but Tuesday at 3pm.",
+    ])
+      expect(slots(body), body).toEqual(['Tue 15:00']);
+  });
+
+  it('L1: a day ending one sentence still pairs with a bare time in the next', () => {
+    expect(slots("Let's do Wednesday. 2pm work?")).toEqual(['Wed 14:00']);
+    expect(slots('Free Wednesday. Around 2pm?')).toEqual(['Wed 14:00']);
+    expect(slots('Thursday. 3pm ET.')).toEqual(['Thu 15:00']);
+    expect(sig('Thursday. 3pm ET.').signal).toBe('scheduling_proposal');
+    // but not with a time the next sentence gives its own day
+    expect(slots("I'm booked Wednesday. Tuesday at 2pm.")).toEqual(['Tue 14:00']);
+  });
+
+  it('L2: a name, a stray capital or a city zone after the time keeps the time', () => {
+    for (const [body, want] of [
+      ['Can you do Thursday at 3 Alex?', 'Thu 15:00'],
+      ['Free Monday at 4 Alex, does that work?', 'Mon 16:00'],
+      ['Would Monday at 4 Sound good?', 'Mon 16:00'],
+      ["Let's do Thursday at 4 Your time.", 'Thu 16:00'],
+      ['Hi Alex,\n\nCould we do Thursday at 3\nDana', 'Thu 15:00'],
+      ['Thursday at 3 Boston time?', 'Thu 15:00'],
+      ['How about Thursday at 3 New York time?', 'Thu 15:00'],
+      // 3pm in London is 10am in New York
+      ['Does Thursday at 3 London time work?', 'Thu 10:00'],
+    ] as const) {
+      expect(slots(body), body).toEqual([want]);
+      expect(sig(body).signal, body).toBe('scheduling_proposal');
+    }
+    expect(sig('Does Thursday at 3 London time work?').extraction.proposedTimes[0]?.timeZone).toBe(
+      'Europe/London',
+    );
+    // firms and streets are still not times
+    expect(slots('I work at 5 Capital on Monday')).toEqual([]);
+    expect(slots('Monday at 5 Capital Street')).toEqual([]);
+  });
+
+  it('L7: a day the sender is out is never proposed, across a sentence or a comma', () => {
+    expect(slots("Hi Alex,\n\nI'm out Monday. Tuesday at 2pm?")).toEqual(['Tue 14:00']);
+    expect(slots("I'm out Monday, Tuesday at 2 works.")).toEqual(['Tue 14:00']);
+    expect(slots('Monday or Tuesday at 2 works.')).toEqual(['Mon 14:00', 'Tue 14:00']);
+  });
+
+  it('L3: a yes to a chat is not a hand-off, and an assistant added to find a time is a yes', () => {
+    const yesAndIntro = sig(
+      'Happy to chat next week. My colleague Ana would be great too, I can connect you after.',
+    );
+    expect(yesAndIntro.signal).toBe('intro_offer');
+    expect(yesAndIntro.extraction.handoff).toBeUndefined();
+    // as sure as any other yes, so the chat moves to replied without asking the student
+    expect(yesAndIntro.confidence).toBeGreaterThanOrEqual(PROPOSE_THRESHOLD);
+    for (const body of [
+      "Happy to chat! I'm cc'ing my EA Jordan to set up time.",
+      "Looping in my assistant (cc'd) to find a time",
+      'Copying my coordinator who handles my calendar',
+    ]) {
+      const r = sig(body);
+      expect(r.signal, body).toBe('reply_positive');
+      expect(r.extraction.handoff, body).toBeUndefined();
+      expect(r.extraction.offers, body).toEqual([]);
+    }
+    // a redirect away from the sender, or an intro with no yes of their own, still hands off
+    expect(
+      sig("Happy to help, but I'm not the right person. My colleague Sana would be a better contact.")
+        .extraction.handoff,
+    ).toBe(true);
+    expect(sig("Looping in Sam (cc'd) to find a time for you two to chat.").extraction.handoff).toBe(true);
+    // a named colleague added to find a time, with no assistant role, is an intro to them
+    for (const body of [
+      "Looping in Sam (cc'd) to find a time to chat with you.",
+      "Looping in Sam (cc'd) to set up a time with Alex.",
+      "Cc'ing Sam to schedule a time, he runs the internship program.",
+    ]) {
+      const r = sig(body);
+      expect(r.signal, body).toBe('intro_offer');
+      expect(r.extraction.handoff, body).toBe(true);
+    }
+  });
+
+  it('L5: a bare "best of luck" is a no only on an ask waiting for an answer, or next to a refusal', () => {
+    for (const body of [
+      'Wow, well done. Best of luck this summer!',
+      'Nice work on the offer. Best of luck!',
+      'Appreciate you sending this. Best of luck!',
+      'Thanks for sharing, really cool to see. Best of luck!',
+      'Way to go! Best of luck with the rest of the summer.',
+      'Glad it was helpful. Best of luck!',
+      'Sounds like a great opportunity. Best of luck!',
+      'No worries at all. Best of luck!',
+    ])
+      expect(sig(body, false).signal, body).not.toBe('reply_decline');
+    expect(sig('Thanks for reaching out. Best of luck with your search.', true).signal).toBe('reply_decline');
+    expect(sig('Thanks for reaching out. Best of luck with your search.', false).signal).not.toBe(
+      'reply_decline',
+    );
+    expect(sig("Sorry, we aren't hiring interns this cycle. Best of luck!", false).signal).toBe(
+      'reply_decline',
+    );
+  });
+
+  it('L6: passing on a call while inviting questions asks for email, never a referral', () => {
+    const r = sig("I'll pass on a call for now but feel free to send over questions.");
+    expect(r.signal).toBe('question');
+    expect(r.extraction.prefersEmail).toBe(true);
+    expect(r.extraction.offers).toEqual([]);
+    // passing something along is still a referral
+    expect(sig("I'll pass your resume along to the hiring manager.").signal).toBe('referral_offer');
+    expect(sig('Happy to pass it on to our recruiter.').signal).toBe('referral_offer');
+    expect(sig('I can pass this along to my manager.').signal).toBe('referral_offer');
+    expect(sig("I'll pass that on to the team.").signal).toBe('referral_offer');
   });
 });
 

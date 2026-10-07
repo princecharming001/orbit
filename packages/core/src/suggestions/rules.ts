@@ -1144,6 +1144,10 @@ export function staleReason(
       )
         return 'thanked';
       return 'window_passed';
+    case 'new_outreach':
+      if (chat?.lastOutboundAt && new Date(chat.lastOutboundAt) > new Date(s.createdAt))
+        return 'already_sent';
+      return 'superseded';
     case 'prep_brief':
       return 'event_passed';
     case 'action_item_reminder':
