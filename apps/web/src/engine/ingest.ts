@@ -416,6 +416,8 @@ async function retireSchedulingCards(
 const ACTIVE = (c: CoffeeChat) => !['declined', 'no_response', 'archived'].includes(c.stage);
 /** An intro older than this is history, not a to-do: no new chat is created for the person introduced. */
 const INTRO_CHAT_WINDOW_MS = 30 * 86_400_000;
+/** Stages in which the student's ask is still waiting on the person's answer. */
+const AWAITING_ANSWER = new Set<CoffeeChat['stage']>(['outreach_sent', 'replied', 'no_response']);
 
 async function processNetworkingThread(
   user: User,
@@ -536,7 +538,12 @@ async function processNetworkingThread(
           new Date(m.sentAt).toISOString(),
         ).catch((e) => surfaceLlmFailure(user.id, e))
       : undefined;
-    const h = heuristicSignal(m.bodyText, m.direction, new Date(m.sentAt), { timeZone: user.timezone });
+    // a bare "best of luck" is a no only while the sender's chat is still waiting on their answer
+    const senderStage = m.fromPersonId ? chats.get(m.fromPersonId)?.stage : undefined;
+    const h = heuristicSignal(m.bodyText, m.direction, new Date(m.sentAt), {
+      timeZone: user.timezone,
+      awaitingAnswer: !!senderStage && AWAITING_ANSWER.has(senderStage),
+    });
     const signal = sig?.signal ?? h.signal;
     const confidence = sig?.confidence ?? h.confidence;
     const extraction = sig

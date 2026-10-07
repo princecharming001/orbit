@@ -332,7 +332,8 @@ export async function revalidateSuggestions(
   for (const s of rows) {
     if (keys.has(s.dedupeKey)) continue;
     if (scope) {
-      if (SCOPE_GLOBAL_KINDS.has(s.kind)) continue;
+      // a card the rules make from one chat alone (an intro to answer) is judged by a run over that chat
+      if (SCOPE_GLOBAL_KINDS.has(s.kind) && !CHAT_RULE_KEYS.some((p) => s.dedupeKey.startsWith(p))) continue;
       const inScope = scope.chatId
         ? s.chatId === scope.chatId
         : !!scope.personId && !!s.chatId && s.personId === scope.personId;
@@ -349,6 +350,9 @@ export async function revalidateSuggestions(
   }
   return retired;
 }
+
+/** Cards of a network-wide kind that one chat's rules decide alone: "write to Sam while the intro is fresh". */
+const CHAT_RULE_KEYS = ['intro:', 'introreply:'];
 
 /** Kinds whose rules read the whole network (weekly pacing, cadences); a scoped run cannot judge them. */
 const SCOPE_GLOBAL_KINDS = new Set<SuggestionKind>([
