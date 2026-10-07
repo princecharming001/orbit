@@ -268,7 +268,8 @@ function addressOnlyScore(f: ResolveFeatures): number {
 function corroborated(f: ResolveFeatures, rel: ReturnType<typeof firstNameRelation>): boolean {
   const independent = f.email_name_sim >= 0.7 || f.domain_org_match > 0 || f.school_match > 0;
   if (rel !== 'same') return independent;
-  return independent || f.org_match > 0;
+  // only the very same employer counts: "Bain" and "Bain Capital" look alike but are different firms
+  return independent || f.org_match >= 1;
 }
 
 export function scorePair(
@@ -279,7 +280,12 @@ export function scorePair(
   const f = computeFeatures(inc, cand, ctx);
   const incName = incomingName(inc);
   if (!incName.full || isPlaceholderName(cand)) return { score: addressOnlyScore(f), features: f };
-  let score = scoreFeatures(f);
+  // an address at the employer both already list is the employer again, not a second piece of evidence:
+  // colleagues share it
+  const scored = f.org_match > 0 && f.domain_org_match > 0 ? { ...f, domain_org_match: 0 } : f;
+  let score = scoreFeatures(scored);
+  // the names have to agree before anything else counts (Priya Patel and Arjun Patel at Figma are two people)
+  if (f.name_sim < 0.5) score = Math.min(score, SUGGEST_THRESHOLD - 0.01);
   const rel = firstNameRelation(incName.first, parseName(cand.displayName).first);
   if (score >= AUTO_MERGE_THRESHOLD && !corroborated(f, rel)) score = AUTO_MERGE_THRESHOLD - 0.01;
   return { score, features: f };
@@ -415,16 +421,8 @@ export function findDuplicatePairs(
           [a, b],
           [b, a],
         ] as const) {
-          const r = scorePair(asIncoming(x), y, full);
-          const named = !isPlaceholderName(x) && !isPlaceholderName(y);
-          // the names have to agree before anything else counts
-          if (named && r.features.name_sim < 0.5) continue;
-          let { score, features } = r;
-          // an address at the employer both already list says nothing about whether they are one person
-          if (named && features.org_match > 0 && features.domain_org_match > 0) {
-            features = { ...features, domain_org_match: 0 };
-            score = Math.min(score, scoreFeatures(features));
-          }
+          // scorePair requires agreeing names and counts a shared employer once
+          const { score, features } = scorePair(asIncoming(x), y, full);
           if (!best || score > best.score) best = { score, features };
         }
         if (best && best.score >= SUGGEST_THRESHOLD) out.push({ a, b, ...best });

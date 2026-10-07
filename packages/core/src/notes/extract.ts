@@ -461,8 +461,11 @@ function swapPerspective(s: string): string {
     .join('');
 }
 
-const ADVERBS =
-  'also|still|now|recently|just|currently|really|already|previously|usually|often|never|always|actually|mostly|mainly|personally|apparently';
+const upper1 = (s: string) => (s ? s[0]!.toUpperCase() + s.slice(1) : s);
+const lowerStart = (s: string) =>
+  /^(I|I'm|I'll|I'd|I've)\b/.test(s) ? s : /^[A-Z][a-z]/.test(s) ? s[0]!.toLowerCase() + s.slice(1) : s;
+const stripEnd = (s: string) => s.replace(/[\s,;:.!?]+$/, '').trim();
+
 const IRREGULAR: Record<string, string> = {
   is: 'are',
   was: 'were',
@@ -476,9 +479,14 @@ const IRREGULAR: Record<string, string> = {
 };
 
 const COMMON_VERBS_3RD =
-  'loves|likes|plays|runs|works|leads|manages|lives|has|is|was|does|enjoys|coaches|volunteers|teaches|writes|mentors|travels|cooks|bakes|hikes|climbs|skis|surfs|swims|reads|owns|speaks|studies|spends|goes|rides|paints|sings|builds|makes|helps|knows|wants|misses|hates|recruits|interviews|hires';
+  'loves|likes|plays|runs|works|leads|manages|lives|has|is|was|does|enjoys|coaches|volunteers|teaches|writes|mentors|travels|cooks|bakes|hikes|climbs|skis|surfs|swims|reads|owns|speaks|studies|spends|goes|rides|paints|sings|builds|makes|helps|knows|wants|misses|hates|recruits|interviews|hires|thinks|says|mentions|recommends|suggests|offers|plans|prefers|uses|needs';
+/** Verbs a subjectless note fragment starts with ("loves bouldering", "said the process opens in August"). */
+const FRAGMENT_VERB = new RegExp(
+  `^(?:(?:also|still|now|recently|just|currently|really|already|previously|usually|often|never|always)\\s+)*(?:${COMMON_VERBS_3RD}|said|mentioned|recommended|suggested|advised|offered|told|explained|worked|led|ran|managed|moved|grew|lived|loved|liked|played|joined|started|spent|went|studied|switched|transferred|interned|built|founded|left|used|had|did|came|got|thought|wanted|was)\\b`,
+  'i',
+);
 
-/** "leads" -> "lead", "studies" -> "study", "is" -> "are" (after a new subject "you"). */
+/** "leads" -> "lead", "studies" -> "study", "is" -> "are" (after a plural "they"). */
 function agree(verb: string): string {
   const v = verb.toLowerCase();
   if (IRREGULAR[v]) return IRREGULAR[v]!;
@@ -488,69 +496,125 @@ function agree(verb: string): string {
   return v.slice(0, -1);
 }
 
+const CONJ_BEFORE_SUBJECT =
+  /^(and|but|so|or|that|if|when|because|which|since|while|though|although|until|once|before|after|where)$/i;
+
 /**
- * Turn a sentence about the counterpart (third person, or their name) into a clause addressed to them:
- * "Priya leads a 6-person team" -> "you lead a 6-person team"; "she's from Houston" -> "you're from Houston".
+ * A counterpart's line, already in the student's frame by `swapPerspective` ("you can refer me"), back in
+ * the third person ("they can refer me"). Every "you" in such a line is the counterpart.
  */
-function toSecondPerson(s: string, names: string[]): string {
-  const nameAlt = names
-    .filter((n) => n.length >= 2)
-    .map(escapeRe)
-    .join('|');
-  let t = s;
-  // possessive name: "Priya's team" -> "your team"
-  if (nameAlt)
-    t = t.replace(
-      new RegExp(`\\b(?:${nameAlt})(?:\\s+(?:${nameAlt}))?['’]s\\b(?!\\s+(?:been|got))`, 'g'),
-      'your',
-    );
-  const subj = nameAlt ? `(?:${nameAlt})(?:\\s+(?:${nameAlt}))?|she|he` : 'she|he';
-  t = t.replace(
-    new RegExp(
-      `(^|[^\\p{L}'’])(${subj})(['’](?:s|d|ll))?(\\s+)((?:(?:${ADVERBS})\\s+)*)([\\p{L}'’]+)`,
-      'giu',
-    ),
-    (_all, lead: string, _who: string, contr: string | undefined, sp: string, advs: string, verb: string) => {
-      if (contr) {
-        const c = contr.slice(1).toLowerCase();
-        if (c === 'd') return `${lead}you'd${sp}${advs}${verb}`;
-        if (c === 'll') return `${lead}you'll${sp}${advs}${verb}`;
-        const have =
-          /^(been|got|gotten|done|worked|had|seen|made|built|led|spent|lived|moved|started|joined)$/i.test(
-            verb,
-          );
-        return `${lead}${have ? "you've" : "you're"}${sp}${advs}${verb}`;
+function youToThey(s: string): string {
+  const parts = s.split(/(\s+)/);
+  let prev = '';
+  return parts
+    .map((t) => {
+      if (!t || /^\s+$/.test(t)) return t;
+      const m = t.match(/^([("“']*)([A-Za-z’']+)([^A-Za-z’']*)$/);
+      if (!m) {
+        prev = t.toLowerCase();
+        return t;
       }
-      return `${lead}you${sp}${advs}${agree(verb)}`;
-    },
-  );
+      const [, pre, word, post] = m as unknown as [string, string, string, string];
+      const lw = word.toLowerCase().replace(/’/g, "'");
+      const atStart = !prev || /[,;:]$/.test(prev) || CONJ_BEFORE_SUBJECT.test(prev);
+      prev = `${lw}${post}`;
+      const map: Record<string, string> = {
+        "you're": "they're",
+        "you've": "they've",
+        "you'll": "they'll",
+        "you'd": "they'd",
+        your: 'their',
+        yours: 'theirs',
+        yourself: 'themselves',
+      };
+      const r = lw === 'you' ? (atStart ? 'they' : 'them') : map[lw];
+      return r ? `${pre}${r}${post}` : t;
+    })
+    .join('');
+}
+
+const PARTICIPLE =
+  /^(been|got|gotten|done|worked|had|seen|made|built|led|spent|lived|moved|started|joined|gone|grown|taken)$/i;
+
+/**
+ * Make a fact clause a short third-person sentence with an explicit subject, the way the student would
+ * write it in their notes: "Priya leads a small team on payments", "She offered to refer me to the APM
+ * program", "They will put in a good word". Facts are stored in this form; the drafting engine turns
+ * them into "you ..." when it addresses the person, and the Person page shows them as written.
+ */
+function thirdPerson(clause: string, subject: string, nameAlt: string): string {
+  const subj = `(?:she|he|they|${nameAlt ? `(?:${nameAlt})(?:\\s+(?:${nameAlt}))?` : 'x^'})`;
+  let t = stripEnd(clause).replace(/\s+/g, ' ');
+  if (FRAGMENT_VERB.test(t)) {
+    // subjectless fragment: "loves bouldering", "said the new grad process opens in August"
+    t = t[0]!.toLowerCase() + t.slice(1);
+    if (subject === 'They')
+      t = t.replace(
+        /^((?:(?:also|still|now|recently|just|currently|really|already|usually|often|never|always)\s+)*)(\S+)/i,
+        (_, adv: string, v: string) => `${adv}${agree(v)}`,
+      );
+    t = `${subject} ${t}`;
+  }
+  // spell out the subject's contraction so the clause reads unambiguously: "she'll" -> "she will"
   t = t
-    .replace(/\b(his|their)\b/gi, 'your')
-    .replace(
-      /\bher\b(?=\s+(?:to|about|for|and|that|when|if|at|in|on|with|from|by|after|before|again|too|so|but|or)\b|\s*[,.;!?]|\s*$)/gi,
-      'you',
+    .replace(new RegExp(`^(${subj})['’]ll\\b`, 'i'), '$1 will')
+    .replace(new RegExp(`^(${subj})['’]ve\\b`, 'i'), '$1 have')
+    .replace(new RegExp(`^(${subj})['’]d\\s+(\\S+)`, 'i'), (_, w: string, v: string) =>
+      PARTICIPLE.test(v) ? `${w} had ${v}` : `${w} would ${v}`,
     )
-    .replace(/\bher\b/gi, 'your')
-    .replace(/\b(him|them)\b/gi, 'you')
-    .replace(/\b(herself|himself|themselves)\b/gi, 'yourself')
-    .replace(/\bthey\s+(are|were|have|do)\b/gi, 'you $1')
-    .replace(/\bthey(['’](?:re|ve|ll|d))/gi, 'you$1')
-    .replace(/^they\b/i, 'you')
-    .replace(/\byou\s+(is|was|has)\b/gi, (_, v: string) => `you ${IRREGULAR[v.toLowerCase()]}`);
-  if (nameAlt) t = t.replace(new RegExp(`\\b(?:${nameAlt})\\b`, 'g'), 'you');
-  // "you grew up in Austin and loves bouldering" -> "and love bouldering"
-  if (/^you\b/i.test(t))
-    t = t.replace(
-      new RegExp(`\\b(and|but|or)\\s+(${COMMON_VERBS_3RD})\\b`, 'gi'),
-      (_, c: string, v: string) => `${c} ${agree(v)}`,
+    .replace(
+      new RegExp(`^((?:she|he|${nameAlt || 'x^'}))['’]s\\s+(\\S+)`, 'i'),
+      (all, w: string, v: string) => (PARTICIPLE.test(v) ? `${w} has ${v}` : all),
     );
+  return upper1(t);
+}
+
+/**
+ * An offer in one shape: "<subject> offered to <what>" ("She said she'd forward my resume" -> "She offered
+ * to forward my resume"; "They can connect me with their recruiter" -> "They offered to connect me ...").
+ */
+function offerSentence(t: string, nameAlt: string): string {
+  const subj = `(?:She|He|They|${nameAlt ? `(?:${nameAlt})(?:\\s+(?:${nameAlt}))?` : 'x^'})`;
+  const reported = t.match(
+    new RegExp(
+      `^(${subj})\\s+(?:also\\s+)?(?:said|says|mentioned|told me)\\s+(?:that\\s+)?(?:she|he|they)\\s*(?:['’]d|would|will|['’]ll|can|could)\\s+(?:be\\s+(?:happy|glad|willing|more than happy)\\s+to\\s+)?(.+)$`,
+      'iu',
+    ),
+  );
+  if (reported) return `${reported[1]} offered to ${reported[2]}`;
+  const modal = t.match(
+    new RegExp(
+      `^(${subj})\\s+(?:also\\s+)?(?:would be (?:happy|glad|willing|more than happy) to|(?:is|are|was|were) (?:happy|glad|willing|more than happy) to|would love to|is going to|are going to|would|will|can|could)\\s+(?:(?:definitely|happily|also|probably|gladly)\\s+)?(.+)$`,
+      'iu',
+    ),
+  );
+  if (modal && !/^(be|have|not)\b/i.test(modal[2]!)) return `${modal[1]} offered to ${modal[2]}`;
   return t;
 }
 
-const upper1 = (s: string) => (s ? s[0]!.toUpperCase() + s.slice(1) : s);
-const lowerStart = (s: string) =>
-  /^(I|I'm|I'll|I'd|I've)\b/.test(s) ? s : /^[A-Z][a-z]/.test(s) ? s[0]!.toLowerCase() + s.slice(1) : s;
-const stripEnd = (s: string) => s.replace(/[\s,;:.!?]+$/, '').trim();
+/** The student's own words in a line addressed to the student: "refer me if I send it" -> "refer you if you send it". */
+function toStudent(s: string): string {
+  return s
+    .replace(/\bI'm\b/g, "you're")
+    .replace(/\bI've\b/g, "you've")
+    .replace(/\bI'll\b/g, "you'll")
+    .replace(/\bI'd\b/g, "you'd")
+    .replace(/\bI am\b/g, 'you are')
+    .replace(/\bI was\b/g, 'you were')
+    .replace(/\bI\b/g, 'you')
+    .replace(/\bmyself\b/gi, 'yourself')
+    .replace(/\bmine\b/gi, 'yours')
+    .replace(/\bmy\b/gi, 'your')
+    .replace(/\bme\b/gi, 'you');
+}
+
+/** "offer to refer you when the posting goes up", for "Follow up on Priya's ..." in the notification. */
+function offerPhrase(text: string, nameAlt: string): string {
+  const subj = `(?:She|He|They|${nameAlt ? `(?:${nameAlt})(?:\\s+(?:${nameAlt}))?` : 'x^'})`;
+  const m = text.match(new RegExp(`^${subj}\\s+offered\\s+(to\\s+)?(.+)$`, 'iu'));
+  if (m) return `offer ${m[1] ? 'to ' : 'of '}${truncateWords(toStudent(m[2]!), 110)}`;
+  return `offer: ${truncateWords(toStudent(text), 110)}`;
+}
 
 function subClauses(s: string): string[] {
   const parts = s.split(/,\s*(?=(?:but|and|so|though|although|while)\b)|;\s*|\s+-\s+/i).map(stripConnectors);
@@ -622,15 +686,11 @@ export function heuristicNoteExtraction(
   const offers: string[] = [];
   const hooks: string[] = [];
   const summaryParts: string[] = [];
-  const offerEvidence: { key: string; evidence: string }[] = [];
+  const offerEvidence: { key: string; text: string }[] = [];
   let warm = 0;
   let cool = 0;
   let lastSubject = primaryKey;
   const pronounOf: { he?: string; she?: string } = {};
-  const namesOf = (key: string) => {
-    const p = people.find((x) => x.key === key);
-    return p ? [p.first, ...(p.last ? [p.last] : [])] : [];
-  };
   const allNames = people.flatMap((p) => [p.first, ...(p.last ? [p.last] : [])]).filter((n) => n.length >= 2);
   const nameAlt = allNames.map(escapeRe).join('|');
   const nameSet = new Set(allNames.map((n) => n.toLowerCase()));
@@ -673,16 +733,45 @@ export function heuristicNoteExtraction(
     return lastSubject;
   };
 
-  const pushHook = (clause: string, evidence: string, about: string) => {
-    const c = toSecondPerson(stripConnectors(clause), namesOf(about));
-    hooks.push(lowerStart(stripEnd(c)));
-    pushFact('hook', c, evidence, about, 0.65);
+  /** The subject for a clause that has none: the pronoun the note uses for that person, else "They". */
+  const subjectOf = (about: string, line: Line): string => {
+    if (line.speaker === 'counterpart') return 'They';
+    if (pronounOf.she === about && pronounOf.he !== about) return 'She';
+    if (pronounOf.he === about && pronounOf.she !== about) return 'He';
+    return 'They';
   };
-  const pushFact = (type: FactType, clause: string, evidence: string, about: string, confidence: number) => {
-    const t = lowerStart(stripEnd(clause).replace(/\s+/g, ' '));
+  /** A clause as a stored fact: third person, explicit subject, names capitalised. */
+  const fin = (clause: string, about: string, line: Line): string => {
+    let c = stripConnectors(clause);
+    if (line.speaker === 'counterpart') c = youToThey(c);
+    return thirdPerson(capitalizeNames(c), subjectOf(about, line), nameAlt);
+  };
+  const adviceSentence = (clause: string, about: string, line: Line): string => {
+    const t = fin(clause, about, line)
+      .replace(/^I (should|need to|have to|must|ought to)\b/, (m) => `${subjectOf(about, line)} said ${m}`)
+      .replace(
+        /^(\S+(?:\s+[A-Z][\p{L}'-]+)?)\s+(?:would\s+|'d\s+)?(recommend|suggest|advise)s?\b/iu,
+        (_, w: string, v: string) => `${w} ${v.toLowerCase()}${v.toLowerCase() === 'advise' ? 'd' : 'ed'}`,
+      );
+    return upper1(t);
+  };
+
+  const pushFact = (type: FactType, text: string, evidence: string, about: string, confidence: number) => {
+    const t = stripEnd(text).replace(/\s+/g, ' ');
     if (wordCount(t) < 2 || t.length < 8) return;
     if (facts.some((f) => f.text.toLowerCase() === t.toLowerCase())) return;
     facts.push({ about, type, text: t, confidence, evidence });
+  };
+  const pushHook = (clause: string, evidence: string, about: string, line: Line) => {
+    const t = stripEnd(fin(clause, about, line));
+    hooks.push(t);
+    pushFact('hook', t, evidence, about, 0.65);
+  };
+  const pushOffer = (text: string, evidence: string, about: string) => {
+    const t = stripEnd(offerSentence(text, nameAlt));
+    offers.push(t);
+    offerEvidence.push({ key: about, text: t });
+    pushFact('offer', t, evidence, about, 0.75);
   };
 
   for (const line of lines) {
@@ -701,7 +790,6 @@ export function heuristicNoteExtraction(
       if (WARM.test(s0)) warm++;
       if (COOL.test(s0)) cool++;
       const about = aboutOf(s0, line);
-      const names = namesOf(about);
       const due = extractDueHint(s0);
 
       // 1. the student's own promises (and anything under "Action items")
@@ -720,14 +808,16 @@ export function heuristicNoteExtraction(
         if (theirs && OFFER_VERB.test(s0)) {
           // "Elena: intro to the recruiting coordinator" under Action items
           const bare = labelled && !counterpartSubject.test(s0);
-          const clause = bare
-            ? /^(intro|introduction|referral)\b/i.test(s0)
-              ? `you offered ${/^i/i.test(s0) ? 'an' : 'a'} ${lowerStart(s0)}`
-              : `you'll ${lowerStart(s0)}`
-            : toSecondPerson(s0, names);
-          offers.push(lowerStart(stripEnd(clause)));
-          offerEvidence.push({ key: about, evidence });
-          pushFact('offer', clause, evidence, about, 0.75);
+          const subject = subjectOf(about, line);
+          pushOffer(
+            bare
+              ? /^(intro|introduction|referral)\b/i.test(s0)
+                ? `${subject} offered ${/^i/i.test(s0) ? 'an' : 'a'} ${lowerStart(capitalizeNames(s0))}`
+                : `${subject} will ${lowerStart(capitalizeNames(youToThey(s0)))}`
+              : fin(s0, about, line),
+            evidence,
+            about,
+          );
         } else
           actionItems.push({
             owner: theirs ? 'counterpart' : 'user',
@@ -740,8 +830,8 @@ export function heuristicNoteExtraction(
       // the counterpart telling the student what to do ("You should apply early") is advice, not a promise
       if (line.speaker === 'counterpart' && /^I\s+(should|need to|have to|must|ought to)\b/.test(s0)) {
         const [head, ...tail] = s0.split(/,\s+/);
-        pushFact('advice', head!, evidence, about, 0.7);
-        for (const t of tail) if (HOOK.test(t)) pushHook(t, evidence, about);
+        pushFact('advice', adviceSentence(head!, about, line), evidence, about, 0.7);
+        for (const t of tail) if (HOOK.test(t)) pushHook(t, evidence, about, line);
         continue;
       }
       if (COMMIT.test(s0)) {
@@ -761,17 +851,20 @@ export function heuristicNoteExtraction(
         const modal = frame.match(/\bI (should|need to|must|have to)\s*$/i);
         if (modal) rest = `${modal[0].trim()} ${rest}`;
         else if (/\bto\s*$/i.test(frame)) rest = `I should ${rest}`;
-        rest = rest.replace(
-          /^I\s+(?!should\b|must\b|need\b|have to\b)([a-z]+)/,
-          (_, v: string) => `I should ${v}`,
+        // the advice itself, without a second clause it was joined to ("... and said the key is ...")
+        const advice = s0.replace(
+          /,?\s+and (?:also )?(?:said|says|mentioned|told me|thinks|explained|noted)\b.*$/i,
+          '',
         );
-        if (/^to\s+/i.test(rest)) rest = `I should ${rest.replace(/^to\s+/i, '')}`;
-        if (/^me to\s+/i.test(rest)) rest = `I should ${rest.replace(/^me to\s+/i, '')}`;
-        pushFact('advice', toSecondPerson(rest, names), evidence, about, 0.7);
+        pushFact('advice', adviceSentence(advice, about, line), evidence, about, 0.7);
         if (due && /\b(apply|submit|send|register|sign up|email|follow up)\b/i.test(rest))
           actionItems.push({
             owner: 'user',
-            text: actionText(rest.replace(/^I should\s+/i, '')),
+            text: actionText(
+              rest
+                .replace(/^I\s+(?!should\b|must\b|need\b|have to\b)/, '')
+                .replace(/^(?:I should\s+|to\s+|me to\s+)/i, ''),
+            ),
             dueHint: due,
             about,
           });
@@ -787,13 +880,15 @@ export function heuristicNoteExtraction(
       const offerPart = [s0, ...subClauses(s0)].find(isOffer);
       if (offerPart) {
         let core = (offerPart === s0 ? focusClause(s0, OFFER_VERB) : offerPart)
-          .replace(reporting, '')
-          .replace(/,?\s*which I (?:need|have) to do\b.*$/i, '');
-        core = core.replace(/^(happy|glad) to\b/i, (_, w: string) => `you'd be ${w.toLowerCase()} to`);
-        const clause = toSecondPerson(core, names);
-        offers.push(lowerStart(stripEnd(clause)));
-        offerEvidence.push({ key: about, evidence });
-        pushFact('offer', clause, evidence, about, 0.75);
+          .replace(/,?\s*which I (?:need|have) to do\b.*$/i, '')
+          .replace(/,?\s+and that\b.*$/i, '');
+        if (!reportedOffer.test(core)) core = core.replace(reporting, '');
+        const subject = subjectOf(about, line);
+        core = core.replace(
+          /^(happy|glad) to\b/i,
+          (_, w: string) => `${subject} would be ${w.toLowerCase()} to`,
+        );
+        pushOffer(fin(core, about, line), evidence, about);
         // "...if I send it over, which I need to do by tomorrow"
         if (due && /\bI\s+(need to|have to|will|should|must|promised)\b|\bI'll\b|\bif I send\b/i.test(s0)) {
           const sendIt = s0.match(
@@ -812,31 +907,34 @@ export function heuristicNoteExtraction(
         continue;
       }
 
-      const body = toSecondPerson(s0.replace(reporting, ''), names);
+      const body = s0.replace(reporting, '');
       if (
         PERSONAL.test(s0) &&
         !ROLE_SWITCH.test(s0) &&
         !/\b(hiring|launch|headcount|opening|deadline|posting)\b/i.test(s0)
       ) {
-        pushFact('personal', focusClause(body, PERSONAL), evidence, about, 0.55);
+        pushFact('personal', fin(focusClause(body, PERSONAL), about, line), evidence, about, 0.55);
         continue;
       }
       if (HOOK.test(s0)) {
-        const clause = focusClause(body, HOOK);
-        hooks.push(lowerStart(stripEnd(clause)));
-        pushFact('hook', clause, evidence, about, 0.65);
+        pushHook(focusClause(body, HOOK), evidence, about, line);
         continue;
       }
-      if (ROLE_SWITCH.test(s0)) pushFact('role_detail', body, evidence, about, 0.65);
+      if (ROLE_SWITCH.test(s0)) pushFact('role_detail', fin(body, about, line), evidence, about, 0.65);
       else if (ADVICE.test(s0))
         pushFact(
           'advice',
-          focusClause(body, ADVICE).replace(/^(?:your|the) (?:advice|tip) (?:is|was) to\s+/i, 'I should '),
+          adviceSentence(
+            focusClause(body, ADVICE).replace(/^(?:your|the) (?:advice|tip) (?:is|was) to\s+/i, 'I should '),
+            about,
+            line,
+          ),
           evidence,
           about,
           0.7,
         );
-      else if (ROLE.test(s0)) pushFact('role_detail', focusClause(body, ROLE), evidence, about, 0.65);
+      else if (ROLE.test(s0))
+        pushFact('role_detail', fin(focusClause(body, ROLE), about, line), evidence, about, 0.65);
     }
   }
 
@@ -847,7 +945,7 @@ export function heuristicNoteExtraction(
   const myItems = actionItems.filter((a) => a.owner === 'user');
   const offerer = firstOffer ? nameOf(firstOffer.key) : undefined;
   const suggestedNextStep = firstOffer
-    ? `Follow up on ${offerer ? `${offerer}'s` : 'their'} offer: "${truncateWords(firstOffer.evidence, 120)}"`
+    ? `Follow up on ${offerer ? `${offerer}'s` : 'their'} ${offerPhrase(firstOffer.text, nameAlt)}.`
     : myItems.length
       ? `Do what you promised: ${truncateWords(myItems[0]!.text, 120)}.`
       : 'Send a thank-you within 24 hours that references one specific thing from the conversation.';

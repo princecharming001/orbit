@@ -75,11 +75,28 @@ export async function loadPeopleCache(userId: string): Promise<PeopleCache> {
   return { people, orgDomains: new Map(orgs.map((o) => [o.id, o.domains])) };
 }
 
+/**
+ * True when a display name is an address handle rather than a name: one token joined by dots, dashes or
+ * underscores ("priya.patel"), or the address's local part typed in lower case ("erodriguez" for
+ * erodriguez@bain.com).
+ */
+export function isHandleName(displayName: string | undefined, email: string | undefined): boolean {
+  const t = (displayName ?? '').trim();
+  if (!t || /\s/.test(t)) return false;
+  if (/^[\p{Ll}\d]+(?:[._-][\p{Ll}\d]+)+$/u.test(t)) return true;
+  const addr = (email?.match(/<([^>]+)>/)?.[1] ?? email ?? '').trim();
+  const local = addr.includes('@') ? addr.slice(0, addr.lastIndexOf('@')).replace(/\+.*$/, '') : '';
+  const squash = (x: string) => x.toLowerCase().replace(/[._+-]/g, '');
+  return !!local && t === t.toLowerCase() && squash(t) === squash(local);
+}
+
 /** Resolve an incoming identity against the user's people and create/update a Person. Returns the person and whether it was created. */
 export async function upsertPerson(
-  inp: UpsertPersonInput,
+  raw: UpsertPersonInput,
   cache?: PeopleCache,
 ): Promise<{ person: Person; created: boolean; merged?: boolean }> {
+  // a header "name" that is only the address handle ("priya.patel", "erodriguez") is no name at all
+  const inp = isHandleName(raw.displayName, raw.email) ? { ...raw, displayName: undefined } : raw;
   const c = cache ?? (await loadPeopleCache(inp.userId));
   const people = c.people;
   const orgDomains = c.orgDomains;

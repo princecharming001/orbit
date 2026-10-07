@@ -119,6 +119,44 @@ describe('people resolution across sources', () => {
     // dotted address without a name reads as a name until a real one arrives
     const dotted = await upsertPerson({ userId: user.id, email: 'maya.wu@figma.com', source: 'gmail' });
     expect(dotted.person.displayName).toBe('Maya Wu');
+    // a header name that is only the handle ("priya.patel") is no name: never "Hi Priya.patel,"
+    const handle = await upsertPerson({
+      userId: user.id,
+      email: 'priya.patel@x.com',
+      displayName: 'priya.patel',
+      source: 'gmail',
+    });
+    expect(handle.person).toMatchObject({
+      displayName: 'Priya Patel',
+      firstName: 'Priya',
+      namePlaceholder: true,
+    });
+    const bare = await upsertPerson({
+      userId: user.id,
+      email: 'dkim@stripe.com',
+      displayName: 'dkim',
+      source: 'gmail',
+    });
+    expect(bare.person).toMatchObject({ displayName: 'dkim', namePlaceholder: true });
+  });
+
+  it('NRC-20: two colleagues who share a surname and an employer get no merge card', async () => {
+    await upsertPerson({
+      userId: user.id,
+      email: 'priya@figma.com',
+      displayName: 'Priya Patel',
+      companyRaw: 'Figma',
+      source: 'gmail',
+    });
+    const arjun = await upsertPerson({
+      userId: user.id,
+      email: 'arjun@figma.com',
+      displayName: 'Arjun Patel',
+      companyRaw: 'Figma',
+      source: 'gmail',
+    });
+    expect(arjun.created).toBe(true);
+    expect(await db.merges.count()).toBe(0);
   });
 
   it('NRC-10: a typed address matches the CSV person at that employer instead of creating a duplicate', async () => {

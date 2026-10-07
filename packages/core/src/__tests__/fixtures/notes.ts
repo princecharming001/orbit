@@ -4,7 +4,7 @@ import type { FactType } from '../../types';
 /**
  * Twenty-five notes the way students actually capture them: Granola summaries (with and without a
  * transcript), voice dictation with no punctuation, pasted transcripts with speaker labels, and quick typed
- * notes. Each lists the facts and action items that must come out (clauses in the second person) and
+ * notes. Each lists the facts and action items that must come out (third-person sentences with an explicit subject, the form the drafting engine turns into "you ...") and
  * things that must not.
  */
 export interface NoteFixture {
@@ -44,11 +44,11 @@ Transcript
 Priya Patel: So tell me about yourself.
 Ravi Jain: I'm a junior at Michigan.`,
     facts: [
-      { type: 'role_detail', text: 'you lead a small team on payments onboarding at Stripe' },
-      { type: 'advice', text: 'focusing on one concrete project story for interviews' },
-      { type: 'hook', text: 'you are hiring interns in January for the platform team' },
-      { type: 'offer', text: 'you offered to refer me when the posting goes up' },
-      { type: 'personal', text: 'you ran a marathon in April and grew up in Chicago' },
+      { type: 'role_detail', text: 'Priya leads a small team on payments onboarding at Stripe' },
+      { type: 'advice', text: 'She recommended focusing on one concrete project story for interviews' },
+      { type: 'hook', text: 'They are hiring interns in January for the platform team' },
+      { type: 'offer', text: 'Priya offered to refer me when the posting goes up' },
+      { type: 'personal', text: 'She ran a marathon in April and grew up in Chicago' },
     ],
     actions: [{ text: 'Send my resume by Friday and share the marketplace project link', due: /friday/i }],
     absent: ['Attendees', 'Coffee chat with', 'tell me about yourself', 'junior at Michigan'],
@@ -69,9 +69,9 @@ Date: Oct 2, 2026
 - Send Elena my resume by Monday
 - Elena: intro to the recruiting coordinator`,
     facts: [
-      { type: 'role_detail', text: 'you work on healthcare cases out of the Boston office' },
-      { type: 'hook', text: /^recruiting for the summer associate role opens in July$/ },
-      { type: 'offer', text: /intro to the recruiting coordinator/ },
+      { type: 'role_detail', text: 'Elena works on healthcare cases out of the Boston office' },
+      { type: 'hook', text: /^Recruiting for the summer associate role opens in July$/ },
+      { type: 'offer', text: 'They offered an intro to the recruiting coordinator' },
     ],
     actions: [{ text: 'Send Elena my resume by Monday', due: /monday/i }],
     absent: ['Date:', 'Key takeaways', 'Chat with Elena'],
@@ -82,9 +82,9 @@ Date: Oct 2, 2026
     text: `Summary
 Elena works on healthcare cases and recommended I apply by the early deadline in October. She grew up in Miami.`,
     facts: [
-      { type: 'role_detail', text: 'you work on healthcare cases' },
-      { type: 'advice', text: 'I should apply by the early deadline in October' },
-      { type: 'personal', text: 'you grew up in Miami' },
+      { type: 'role_detail', text: 'Elena works on healthcare cases' },
+      { type: 'advice', text: 'Elena recommended I apply by the early deadline in October' },
+      { type: 'personal', text: 'She grew up in Miami' },
     ],
     actions: [{ text: 'Apply by the early deadline in October', due: /october/i }],
     noOffers: true,
@@ -97,8 +97,8 @@ Elena works on healthcare cases and recommended I apply by the early deadline in
 Notes
 Daniel moved from Google to Stripe last year and works on the fraud team. I'll send him my portfolio tomorrow. I'll share the deck by Thursday. He suggested I talk to someone in risk ops too.`,
     facts: [
-      { type: 'role_detail', text: /^you moved from Google to Stripe last year/ },
-      { type: 'advice', text: 'I should talk to someone in risk ops too' },
+      { type: 'role_detail', text: /^Daniel moved from Google to Stripe last year/ },
+      { type: 'advice', text: 'He suggested I talk to someone in risk ops too' },
     ],
     actions: [
       { text: 'Send him my portfolio tomorrow', due: /tomorrow/i },
@@ -116,11 +116,11 @@ Tom moved to Boston last year. Elena grew up in Miami. He also plays in a jazz b
 
 Attendees: Elena Rodriguez, Tom Wu`,
     facts: [
-      { type: 'role_detail', text: 'you work on healthcare cases', about: 'elena' },
-      { type: 'offer', text: "you'd intro me to the recruiting coordinator", about: 'tom' },
-      { type: 'personal', text: 'you moved to Boston last year', about: 'tom' },
-      { type: 'personal', text: 'you grew up in Miami', about: 'elena' },
-      { type: 'personal', text: 'you also play in a jazz band', about: 'tom' },
+      { type: 'role_detail', text: 'Elena works on healthcare cases', about: 'elena' },
+      { type: 'offer', text: 'Tom offered to intro me to the recruiting coordinator', about: 'tom' },
+      { type: 'personal', text: 'Tom moved to Boston last year', about: 'tom' },
+      { type: 'personal', text: 'Elena grew up in Miami', about: 'elena' },
+      { type: 'personal', text: 'He also plays in a jazz band', about: 'tom' },
     ],
     absent: ['Attendees'],
   },
@@ -133,9 +133,9 @@ Attendees: Elena Rodriguez, Tom Wu`,
 • She has a corgi named Mochi
 • Recommended reading "Refactoring UI" before the design exercise`,
     facts: [
-      { type: 'hook', text: 'your team is launching a new onboarding flow next quarter' },
-      { type: 'personal', text: /^you have a corgi named Mochi$/ },
-      { type: 'advice', text: 'reading "Refactoring UI" before the design exercise' },
+      { type: 'hook', text: 'Her team is launching a new onboarding flow next quarter' },
+      { type: 'personal', text: /^She has a corgi named Mochi$/ },
+      { type: 'advice', text: 'They recommended reading "Refactoring UI" before the design exercise' },
     ],
   },
   {
@@ -145,8 +145,8 @@ Attendees: Elena Rodriguez, Tom Wu`,
 Priya said the team values people who can write clearly. She's been at Stripe for four years.
 Next steps: send Priya a thank-you note tonight`,
     facts: [
-      { type: 'role_detail', text: "you've been at Stripe for four years" },
-      { type: 'advice', text: /^the team values people who can write clearly$/ },
+      { type: 'role_detail', text: 'She has been at Stripe for four years' },
+      { type: 'advice', text: /^The team values people who can write clearly$/ },
     ],
     actions: [{ text: /thank-you note tonight/i, due: /tonight/i }],
     noOffers: true,
@@ -166,10 +166,10 @@ Daniel is pretty busy this quarter and couldn't promise anything. He said the be
     people: [MAYA],
     text: `ok so just talked to maya from figma um she was pretty nice honestly said the new grad process opens in like august and she said she'd forward my resume to her recruiter if i send it over which i need to do by like tomorrow also she's from houston originally and the key thing for the interviews is to practice product sense cases`,
     facts: [
-      { type: 'hook', text: 'the new grad process opens in August' },
-      { type: 'offer', text: "you'd forward my resume to your recruiter if I send it over" },
-      { type: 'personal', text: "you're from houston originally" },
-      { type: 'advice', text: 'the key thing for the interviews is to practice product sense cases' },
+      { type: 'hook', text: 'The new grad process opens in August' },
+      { type: 'offer', text: 'She offered to forward my resume to her recruiter if I send it over' },
+      { type: 'personal', text: "She's from houston originally" },
+      { type: 'advice', text: 'The key thing for the interviews is to practice product sense cases' },
     ],
     actions: [{ text: 'Send my resume to Maya by tomorrow', due: /tomorrow/i }],
     absent: [' um ', ' like ', 'honestly'],
@@ -178,7 +178,7 @@ Daniel is pretty busy this quarter and couldn't promise anything. He said the be
     name: 'dictated, student promises only',
     people: [TOM],
     text: `talked to tom wu for like twenty minutes he works on the data platform team at datadog um i need to send him my github link tonight and i should read the postmortem he mentioned`,
-    facts: [{ type: 'role_detail', text: /^you work on the data platform team at datadog$/ }],
+    facts: [{ type: 'role_detail', text: /^He works on the data platform team at datadog$/ }],
     actions: [{ text: /^Send him my github link tonight$/i, due: /tonight/i }],
     noOffers: true,
   },
@@ -187,9 +187,9 @@ Daniel is pretty busy this quarter and couldn't promise anything. He said the be
     people: [PRIYA],
     text: `quick note priya said they're hiring two interns for the payments team next summer and she offered to look over my resume before i apply also she grew up in austin and loves bouldering`,
     facts: [
-      { type: 'hook', text: /^you're hiring two interns for the payments team next summer$/ },
-      { type: 'offer', text: /^you offered to look over my resume before I apply$/ },
-      { type: 'personal', text: /^you grew up in austin and love bouldering$/ },
+      { type: 'hook', text: /^They're hiring two interns for the payments team next summer$/ },
+      { type: 'offer', text: /^She offered to look over my resume before I apply$/ },
+      { type: 'personal', text: /^She grew up in austin and loves bouldering$/ },
     ],
   },
   {
@@ -197,8 +197,8 @@ Daniel is pretty busy this quarter and couldn't promise anything. He said the be
     people: [ELENA],
     text: `um so elena um basically told me to focus on networking with people in the healthcare practice and uh she also mentioned that the deadline for the early round is in september`,
     facts: [
-      { type: 'advice', text: 'I should focus on networking with people in the healthcare practice' },
-      { type: 'hook', text: 'the deadline for the early round is in September' },
+      { type: 'advice', text: 'Elena told me to focus on networking with people in the healthcare practice' },
+      { type: 'hook', text: 'The deadline for the early round is in September' },
     ],
     absent: ['um', 'uh', 'basically'],
   },
@@ -206,7 +206,7 @@ Daniel is pretty busy this quarter and couldn't promise anything. He said the be
     name: 'dictated in two sentences',
     people: [DANIEL],
     text: `Daniel was super helpful. he said he can refer me once the posting is live and that i should prep system design. i'm going to send him a thank you note tonight`,
-    facts: [{ type: 'offer', text: /^you can refer me once the posting is live/ }],
+    facts: [{ type: 'offer', text: 'He offered to refer me once the posting is live' }],
     actions: [{ text: /^Send him a thank you note tonight$/i, due: /tonight/i }],
   },
   {
@@ -214,16 +214,20 @@ Daniel is pretty busy this quarter and couldn't promise anything. He said the be
     people: [ELENA, TOM],
     text: `met elena and tom at the bain info session elena said she'd introduce me to a consultant in the dc office and tom moved from chicago last month he's training for a marathon`,
     facts: [
-      { type: 'offer', text: "you'd introduce me to a consultant in the dc office", about: 'elena' },
-      { type: 'personal', text: /^you moved from chicago last month$/, about: 'tom' },
-      { type: 'personal', text: /^you're training for a marathon$/, about: 'tom' },
+      {
+        type: 'offer',
+        text: 'Elena offered to introduce me to a consultant in the dc office',
+        about: 'elena',
+      },
+      { type: 'personal', text: /^Tom moved from chicago last month$/, about: 'tom' },
+      { type: 'personal', text: /^He's training for a marathon$/, about: 'tom' },
     ],
   },
   {
     name: 'dictated with "I owe"',
     people: [JOSE],
     text: `José runs the analytics team at Bain and I owe him my updated resume by Friday`,
-    facts: [{ type: 'role_detail', text: 'you run the analytics team at Bain' }],
+    facts: [{ type: 'role_detail', text: 'José runs the analytics team at Bain' }],
     actions: [{ text: /resume by Friday/i, due: /friday/i }],
     noOffers: true,
   },
@@ -239,9 +243,9 @@ Ravi Jain: I'll send over my resume tonight and I'll follow up with Priya like y
 Priya Patel: No guarantee of course, the process is pretty competitive, but I'll put in a good word.
 Priya Patel: I lead a 6-person team on payments onboarding.`,
     facts: [
-      { type: 'hook', text: "you're hiring in January" },
-      { type: 'offer', text: "you'll put in a good word" },
-      { type: 'role_detail', text: 'you lead a 6-person team on payments onboarding' },
+      { type: 'hook', text: "They're hiring in January" },
+      { type: 'offer', text: 'They offered to put in a good word' },
+      { type: 'role_detail', text: 'They lead a 6-person team on payments onboarding' },
     ],
     actions: [{ text: 'Send over my resume tonight', due: /tonight/i }, { text: 'Follow up with Priya' }],
     absent: ['Priya Patel:', 'Ravi Jain', 'Attendees', 'Coffee chat with'],
@@ -255,9 +259,9 @@ Priya Patel: I lead a 6-person team on payments onboarding.`,
 [00:03:05] Maya Wu: Happy to review it and send you feedback.
 [00:04:30] Maya Wu: You should apply early, the design internship closes in October.`,
     facts: [
-      { type: 'role_detail', text: /^you've been at Figma for three years/ },
-      { type: 'offer', text: /^you'd be happy to review it and send me feedback$/ },
-      { type: 'hook', text: /the design internship closes in October/ },
+      { type: 'role_detail', text: /^They have been at Figma for three years/ },
+      { type: 'offer', text: /^They offered to review it and send me feedback$/ },
+      { type: 'hook', text: /^The design internship closes in October$/ },
     ],
     actions: [{ text: /^Send you my case study this week$/, due: /this week/i }],
   },
@@ -269,8 +273,8 @@ Them: Of course. I can connect you with our new grad recruiter if that helps.
 Me: That would be great, I'll email you my resume tomorrow.
 Them: I moved to Datadog from Square last spring.`,
     facts: [
-      { type: 'offer', text: /^you can connect me with your new grad recruiter/ },
-      { type: 'role_detail', text: 'you moved to Datadog from Square last spring' },
+      { type: 'offer', text: /^They offered to connect me with their new grad recruiter/ },
+      { type: 'role_detail', text: 'They moved to Datadog from Square last spring' },
     ],
     actions: [{ text: /^Email you my resume tomorrow$/, due: /tomorrow/i }],
   },
@@ -281,7 +285,7 @@ Them: I moved to Datadog from Square last spring.`,
     text: `Daniel Kim: The fraud team works closely with risk ops.
 Ravi Jain: I'll send you the write-up by Friday.
 Ravi Jain: I can also share my notebook.`,
-    facts: [{ type: 'role_detail', text: /^the fraud team works closely with risk ops$/ }],
+    facts: [{ type: 'role_detail', text: /^The fraud team works closely with risk ops$/ }],
     actions: [{ text: /^Send you the write-up by Friday$/, due: /friday/i }],
     noOffers: true,
   },
@@ -293,9 +297,9 @@ Ravi Jain: I can also share my notebook.`,
 Tom Wu: I can intro you to our recruiting coordinator.
 Elena Rodriguez: I grew up in Miami.`,
     facts: [
-      { type: 'role_detail', text: 'you work on healthcare cases', about: 'elena' },
-      { type: 'offer', text: 'you can intro me to your recruiting coordinator', about: 'tom' },
-      { type: 'personal', text: 'you grew up in Miami', about: 'elena' },
+      { type: 'role_detail', text: 'They work on healthcare cases', about: 'elena' },
+      { type: 'offer', text: 'They offered to intro me to their recruiting coordinator', about: 'tom' },
+      { type: 'personal', text: 'They grew up in Miami', about: 'elena' },
     ],
   },
   {
@@ -306,8 +310,8 @@ Elena Rodriguez: I grew up in Miami.`,
 Ravi Jain: Will do. I'll circle back after the superday.
 José Núñez: We're launching a new healthcare fund next month.`,
     facts: [
-      { type: 'advice', text: /know the firm's last three deals cold/ },
-      { type: 'hook', text: /^you're launching a new healthcare fund next month$/ },
+      { type: 'advice', text: "They said I should know the firm's last three deals cold" },
+      { type: 'hook', text: /^They're launching a new healthcare fund next month$/ },
     ],
     noOffers: true,
   },
@@ -323,7 +327,7 @@ José Núñez: We're launching a new healthcare fund next month.`,
     name: 'typed note, advice is not an action item',
     people: [MAYA],
     text: `She recommended I apply to the APM program.`,
-    facts: [{ type: 'advice', text: 'I should apply to the APM program' }],
+    facts: [{ type: 'advice', text: 'She recommended I apply to the APM program' }],
     actions: [],
   },
   {
@@ -331,9 +335,9 @@ José Núñez: We're launching a new healthcare fund next month.`,
     people: [DANIEL],
     text: `Daniel said the team is launching a new product in November and would love to hear what I think after it ships. Recommended reading "Working Backwards". Happy to intro me to their PM lead.`,
     facts: [
-      { type: 'hook', text: /^the team is launching a new product in November/ },
-      { type: 'advice', text: 'reading "Working Backwards"' },
-      { type: 'offer', text: "you'd be happy to intro me to your PM lead" },
+      { type: 'hook', text: /^The team is launching a new product in November/ },
+      { type: 'advice', text: 'They recommended reading "Working Backwards"' },
+      { type: 'offer', text: 'They offered to intro me to their PM lead' },
     ],
   },
   {
@@ -341,9 +345,9 @@ José Núñez: We're launching a new healthcare fund next month.`,
     people: [JOSE],
     text: `José leads the healthcare coverage group. He studied economics at Michigan, so we have that in common. He thinks I should learn to read a 10-K before the interview.`,
     facts: [
-      { type: 'role_detail', text: 'you lead the healthcare coverage group' },
-      { type: 'personal', text: /^you studied economics at Michigan/ },
-      { type: 'advice', text: 'I should learn to read a 10-K before the interview' },
+      { type: 'role_detail', text: 'José leads the healthcare coverage group' },
+      { type: 'personal', text: /^He studied economics at Michigan/ },
+      { type: 'advice', text: 'He thinks I should learn to read a 10-K before the interview' },
     ],
   },
 ];

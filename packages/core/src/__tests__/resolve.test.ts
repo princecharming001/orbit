@@ -289,3 +289,39 @@ describe('findDuplicatePairs (NRC-20)', () => {
     expect(r.map(key)).toContain('bare|named');
   });
 });
+
+describe('the incremental resolver applies the same guards as findDuplicatePairs', () => {
+  it('two colleagues with one surname at one employer get no merge card', () => {
+    const priya = base({
+      id: 'p1',
+      primaryEmail: 'priya@figma.com',
+      emails: ['priya@figma.com'],
+      currentOrganizationRaw: 'Figma',
+    });
+    const d = resolveIdentity(
+      { displayName: 'Arjun Patel', email: 'arjun@figma.com', companyRaw: 'Figma', source: 'gmail' },
+      { people: [priya] },
+    );
+    expect(d.kind).toBe('new');
+  });
+  it('the same name at a look-alike firm is only suggested (Bain Capital is not Bain & Company)', () => {
+    const jose = base({
+      id: 'j',
+      displayName: 'José Núñez',
+      firstName: 'José',
+      lastName: 'Núñez',
+      nameNormalized: 'jose nunez',
+      currentOrganizationRaw: 'Bain & Company',
+    });
+    const d = resolveIdentity(
+      { displayName: 'Jose Nunez', companyRaw: 'Bain Capital', source: 'linkedin_csv' },
+      { people: [jose] },
+    );
+    expect(d.kind).toBe('suggest');
+    const titled = resolveIdentity(
+      { displayName: 'Jose Nunez', companyRaw: 'Bain Capital', title: 'Associate', source: 'linkedin_csv' },
+      { people: [{ ...jose, currentTitle: 'Associate' }] },
+    );
+    expect(titled.kind).toBe('suggest');
+  });
+});

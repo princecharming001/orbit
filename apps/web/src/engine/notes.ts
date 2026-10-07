@@ -36,7 +36,8 @@ const escapeRe = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /**
  * People a note names: full names ("Maya Wu"), and first names alone ("call with Maya") when exactly one
- * person has that first name. A first name shared by several people comes back as `ambiguous`.
+ * person has that first name. A first name, or a full name, shared by several people comes back as
+ * `ambiguous`.
  */
 export function mentionedPeople(
   text: string,
@@ -47,7 +48,13 @@ export function mentionedPeople(
   const humans = people.filter((p) => p.isHuman && !p.hiddenAt && !isPlaceholderName(p));
   const fullHit = (name: string) =>
     new RegExp(`(?:^|[^\\p{L}])${escapeRe(stripDiacritics(name))}(?![\\p{L}])`, 'iu').test(folded);
-  const full = humans.filter((p) => p.displayName.includes(' ') && fullHit(p.displayName));
+  const fullHits = humans.filter((p) => p.displayName.includes(' ') && fullHit(p.displayName));
+  // a full name several people share ("Tom Wu" at Bain and "Tom Wu" at Google) does not say which one
+  const nameKey = (p: Person) => stripDiacritics(p.displayName).toLowerCase().replace(/\s+/g, ' ').trim();
+  const fullCount = new Map<string, number>();
+  for (const p of fullHits) fullCount.set(nameKey(p), (fullCount.get(nameKey(p)) ?? 0) + 1);
+  const full = fullHits.filter((p) => fullCount.get(nameKey(p)) === 1);
+  const sharedFull = fullHits.filter((p) => fullCount.get(nameKey(p))! > 1);
   // capitalised words in the note: "Maya", "Mary-Kate" (a first name written in lower case is too risky)
   const words = new Set(folded.match(/\p{Lu}[\p{L}-]*\p{L}/gu) ?? []);
   const self = stripDiacritics(userFirstName ?? '').toLowerCase();
@@ -60,9 +67,9 @@ export function mentionedPeople(
     if (!words.has(first) && !words.has(cap)) continue;
     byFirst.set(key, [...(byFirst.get(key) ?? []), p]);
   }
-  const named = new Set(full.map((p) => stripDiacritics(p.firstName).toLowerCase()));
+  const named = new Set(fullHits.map((p) => stripDiacritics(p.firstName).toLowerCase()));
   const byFirstName: Person[] = [];
-  const ambiguous: Person[] = [];
+  const ambiguous: Person[] = [...sharedFull];
   for (const [key, list] of byFirst) {
     if (named.has(key)) continue; // "Maya Wu ... Maya said" is the person already named in full
     if (list.length === 1) byFirstName.push(list[0]!);
@@ -184,7 +191,8 @@ export async function ingestNote(user: User, inp: CaptureInput, now = new Date()
     rawSummary: parsed?.summary,
     attendees,
     personIds: ids,
-    chatId: chat?.id,
+    // an unconfirmed guess touches nothing in the pipeline until the student confirms it
+    chatId: sure ? chat?.id : undefined,
     calendarEventId,
     matchStatus: sure ? 'auto' : 'unmatched',
     matchConfidence: confidence,
@@ -223,16 +231,20 @@ export async function noteMatchCandidate(
     (p): p is Person => !!p && !p.hiddenAt,
   );
   const day = dayLabel(note.occurredAt, user.timezone || 'UTC');
+  const everyone = [...guessed, ...others];
+  // two people with the same name are told apart by where they work (or their address)
+  const label = (p: Person) => {
+    if (everyone.filter((q) => q.displayName === p.displayName).length < 2) return p.displayName;
+    const where = p.currentOrganizationRaw ?? p.primaryEmail ?? p.emails[0];
+    return where ? `${p.displayName} ${p.currentOrganizationRaw ? 'at' : 'with'} ${where}` : p.displayName;
+  };
   const names = (ps: Person[], joiner: string) =>
     ps.length <= 2
-      ? ps.map((p) => p.displayName).join(` ${joiner} `)
-      : `${ps
-          .slice(0, -1)
-          .map((p) => p.displayName)
-          .join(', ')}, ${joiner} ${ps[ps.length - 1]!.displayName}`;
+      ? ps.map(label).join(` ${joiner} `)
+      : `${ps.slice(0, -1).map(label).join(', ')}, ${joiner} ${label(ps[ps.length - 1]!)}`;
   const reasonText =
     guessed.length === 1
-      ? `Was your note from ${day} with ${guessed[0]!.displayName}?`
+      ? `Was your note from ${day} with ${label(guessed[0]!)}?`
       : guessed.length > 1
         ? `Who was your note from ${day} with? It mentions ${names(guessed, 'and')}.`
         : others.length
@@ -265,21 +277,13 @@ export async function rematchNote(
   if (!note) return;
   await db.suggestions.where('dedupeKey').equals(`note:${noteId}`).modify({ status: 'done' });
   const previous = note.personIds;
-  if (personId && previous.length === 1 && previous[0] === personId && note.processedAt) {
+  // an unconfirmed guess wrote nothing but the extraction; an automatic match wrote facts and pipeline state
+  const applied = note.matchStatus !== 'unmatched' && !!note.processedAt;
+  if (personId && previous.length === 1 && previous[0] === personId && applied) {
     await db.notes.update(noteId, { matchStatus: 'confirmed', matchConfidence: 1 });
     return;
   }
-  if (previous.length) {
-    const fromNote = (x: { sourceTable?: string; sourceId?: string }) =>
-      x.sourceTable === 'notes' && x.sourceId === noteId;
-    await db.facts.where('personId').anyOf(previous).filter(fromNote).delete();
-    await db.actionItems.where('personId').anyOf(previous).filter(fromNote).delete();
-    await db.touchpoints
-      .where('personId')
-      .anyOf(previous)
-      .filter((tp) => tp.refTable === 'notes' && (tp.refId === noteId || tp.refId === `${noteId}:meeting`))
-      .delete();
-  }
+  if (previous.length) await retireNoteEffects(note, now);
   const chatId = personId
     ? (
         await db.chats
@@ -306,6 +310,89 @@ export async function rematchNote(
     }
 }
 
+/**
+ * Undo what processing a note wrote for the people it was matched to: facts, action items and
+ * touchpoints from the note, the chat stage it moved (and the completion date it set), the
+ * suggestions that only made sense because of that stage, and the "Notes are in" notification.
+ */
+async function retireNoteEffects(note: MeetingNote, now: Date): Promise<void> {
+  const previous = note.personIds;
+  const noteId = note.id;
+  const fromNote = (x: { sourceTable?: string; sourceId?: string }) =>
+    x.sourceTable === 'notes' && x.sourceId === noteId;
+  await db.facts.where('personId').anyOf(previous).filter(fromNote).delete();
+  await db.actionItems.where('personId').anyOf(previous).filter(fromNote).delete();
+  await db.touchpoints
+    .where('personId')
+    .anyOf(previous)
+    .filter((tp) => tp.refTable === 'notes' && (tp.refId === noteId || tp.refId === `${noteId}:meeting`))
+    .delete();
+  const at = now.toISOString();
+  const reverted = new Set<string>();
+  const events = await db.stageEvents
+    .where('userId')
+    .equals(note.userId)
+    .filter((e) => e.evidenceRefTable === 'notes' && e.evidenceRefId === noteId && e.status !== 'rejected')
+    .toArray();
+  for (const ev of events) {
+    await db.stageEvents.update(ev.id, { status: 'rejected', decidedAt: at });
+    await db.suggestions
+      .where('dedupeKey')
+      .equals(`stage:${ev.id}`)
+      .filter((x) => x.status === 'pending' || x.status === 'snoozed')
+      .modify({ status: 'expired', decidedAt: at });
+    const chat = await db.chats.get(ev.chatId);
+    if (ev.status !== 'proposed' && chat && chat.stage === ev.toStage) {
+      await db.chats.update(chat.id, {
+        stage: ev.fromStage,
+        stageEnteredAt: at,
+        updatedAt: at,
+        ...(ev.toStage === 'completed' ? { completedAt: undefined } : {}),
+      });
+      reverted.add(chat.id);
+    }
+  }
+  for (const chat of await db.chats.where('personId').anyOf(previous).toArray()) {
+    if (chat.completedAt && chat.completedAt === note.occurredAt && chat.stage !== 'completed') {
+      await db.chats.update(chat.id, { completedAt: undefined, updatedAt: at });
+      reverted.add(chat.id);
+    }
+  }
+  // suggestions raised because the chat had happened no longer hold
+  for (const chatId of reverted) {
+    const stale = await db.suggestions
+      .where('userId')
+      .equals(note.userId)
+      .filter(
+        (x) =>
+          x.chatId === chatId &&
+          (x.status === 'pending' || x.status === 'snoozed') &&
+          ['thank_you', 'ask_referral', 'report_back'].includes(x.kind),
+      )
+      .toArray();
+    for (const x of stale) {
+      await db.suggestions.update(x.id, { status: 'expired', decidedAt: at });
+      if (x.outboundMessageId)
+        await db.outbound
+          .where('id')
+          .equals(x.outboundMessageId)
+          .filter((m) => m.status === 'draft')
+          .modify({ status: 'cancelled' });
+    }
+  }
+  const body = note.extraction?.suggestedNextStep;
+  await db.notifications
+    .where('userId')
+    .equals(note.userId)
+    .filter(
+      (x) =>
+        previous.some((id) => x.link === `/people/${id}`) &&
+        /^Notes from your chat with /.test(x.title) &&
+        x.body === body,
+    )
+    .delete();
+}
+
 export async function processNote(user: User, note: MeetingNote, now = new Date()): Promise<void> {
   const notePeople = (await db.people.bulkGet(note.personIds)).filter((p): p is Person => !!p);
   const primary = notePeople.find((p) => p.id === note.personIds[0]);
@@ -318,7 +405,10 @@ export async function processNote(user: User, note: MeetingNote, now = new Date(
       userNames: [user.fullName, user.firstName].filter(Boolean),
     });
   await db.notes.update(note.id, { extraction: ext, summary: ext.summary, processedAt: now.toISOString() });
-  if (!primary) return;
+  note.extraction = ext;
+  // nothing is written for a guess the student has not confirmed: no facts, no meeting, no chat stage,
+  // no notification. Confirming it (rematchNote) processes the note again for the person they chose.
+  if (!primary || note.matchStatus === 'unmatched') return;
   // each fact belongs to the person it is about: an id from the heuristic path, a name from the LLM path
   const personFor = (about: string | undefined): Person => {
     if (!about) return primary;

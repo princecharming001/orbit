@@ -879,12 +879,15 @@ export async function refreshPersonSummary(user: User, personId: string): Promis
     const off = facts.find((f) => f.type === 'offer');
     const hook = facts.find((f) => f.type === 'hook');
     const n = tps.length;
-    // fact text is a clause addressed to the person ("you offered to ..."); the student reads the source sentence
-    const said = (f: { text: string; evidence?: string }) => (f.evidence ?? f.text).replace(/\.$/, '');
+    // facts are short third-person sentences about the person ("She offered to refer me to the APM program")
+    const said = (f: { text: string }) => {
+      const t = f.text.trim().replace(/[.\s]+$/, '');
+      return t ? t[0]!.toUpperCase() + t.slice(1) : t;
+    };
     summary = `${person.firstName} is ${role}${person.isAlumni ? ` and a ${user.school} alum` : ''}. ${n ? `You have ${n} recent interaction${n === 1 ? '' : 's'}, most recently ${tps[0]!.occurredAt.slice(0, 10)}.` : 'No interactions yet.'}${adv ? ` ${said(adv)}.` : ''}${off ? ` ${said(off)}.` : ''}`;
     talkingPoints = [
       hook ? `Ask about: ${said(hook)}` : undefined,
-      off ? `Follow up on their offer: ${said(off)}` : undefined,
+      off ? `Follow up: ${said(off)}` : undefined,
       adv ? `Report back on their advice: ${said(adv)}` : undefined,
       person.currentOrganizationRaw
         ? `What's changed at ${person.currentOrganizationRaw} recently`

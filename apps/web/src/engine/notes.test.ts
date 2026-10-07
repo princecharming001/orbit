@@ -1,7 +1,7 @@
 import type { User } from '@orbit/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { db, wipeDatabase } from '../db/schema';
-import { evaluateImmediateSuggestions } from './brief';
+import { draftMessage, evaluateImmediateSuggestions } from './brief';
 import { ingestNote, parseDueHint, rematchNote } from './notes';
 import { upsertPerson } from './people';
 
@@ -48,8 +48,8 @@ Priya Patel: No guarantee of course, the process is pretty competitive, but I'll
     const facts = await db.facts.where('personId').equals(priya.id).toArray();
     expect(facts.map((f) => [f.type, f.text])).toEqual(
       expect.arrayContaining([
-        ['hook', "you're hiring in January"],
-        ['offer', "you'll put in a good word"],
+        ['hook', "They're hiring in January"],
+        ['offer', 'They offered to put in a good word'],
       ]),
     );
     for (const f of facts) {
@@ -78,7 +78,7 @@ Priya Patel: No guarantee of course, the process is pretty competitive, but I'll
     const facts = await db.facts.where('personId').equals(maya.id).toArray();
     expect(facts.length).toBeGreaterThanOrEqual(3);
     expect(facts.find((f) => f.type === 'offer')?.text).toBe(
-      "you'd forward my resume to your recruiter if I send it over",
+      'She offered to forward my resume to her recruiter if I send it over',
     );
     const [item] = await db.actionItems.where('personId').equals(maya.id).toArray();
     expect(item!.text).toBe('Send my resume to Maya by tomorrow');
@@ -107,18 +107,22 @@ Attendees: Elena Rodriguez, Tom Wu`,
     const onTom = (await db.facts.where('personId').equals(tom.id).toArray()).map((f) => f.text);
     expect(onTom).toEqual(
       expect.arrayContaining([
-        "you'd intro me to the recruiting coordinator",
-        'you moved to Boston last year',
+        'Tom offered to intro me to the recruiting coordinator',
+        'Tom moved to Boston last year',
       ]),
     );
-    expect(onElena).toEqual(expect.arrayContaining(['you work on healthcare cases', 'you grew up in Miami']));
+    expect(onElena).toEqual(
+      expect.arrayContaining(['Elena works on healthcare cases', 'Elena grew up in Miami']),
+    );
     expect(onElena.join(' ')).not.toMatch(/Boston|intro/);
     // NRC-14: the advice has a real October date, not "a week from now"
     const [apply] = await db.actionItems.where('personId').equals(elena.id).toArray();
     expect(apply!.text).toBe('Apply by the early deadline in October');
     expect(apply!.dueAt).toBe('2026-10-31T21:00:00.000Z');
     const note = (await db.notes.toArray())[0]!;
-    expect(note.extraction!.suggestedNextStep).toMatch(/^Follow up on Tom's offer/);
+    expect(note.extraction!.suggestedNextStep).toBe(
+      "Follow up on Tom's offer to intro you to the recruiting coordinator.",
+    );
   });
 
   it('NRC-14: "she recommended I apply" is advice and creates no action item', async () => {
@@ -135,7 +139,41 @@ Attendees: Elena Rodriguez, Tom Wu`,
     );
     expect(await db.actionItems.count()).toBe(0);
     const [f] = await db.facts.where('personId').equals(maya.id).toArray();
-    expect(f).toMatchObject({ type: 'advice', text: 'I should apply to the APM program' });
+    expect(f).toMatchObject({ type: 'advice', text: 'She recommended I apply to the APM program' });
+  });
+});
+
+describe('note facts in drafts and on the person', () => {
+  it('a typed note reads correctly in the referral ask, the thank-you and the summary', async () => {
+    const priya = await person('Priya Patel', 'priya@figma.com', 'Figma');
+    await ingestNote(
+      user,
+      {
+        source: 'manual',
+        personIds: [priya.id],
+        occurredAt: NOW.toISOString(),
+        text: 'Met Priya for coffee. She offered to refer me to the APM program. She recommended I apply early.',
+      },
+      NOW,
+    );
+    const facts = await db.facts.where('personId').equals(priya.id).toArray();
+    expect(facts.map((f) => f.text).sort()).toEqual([
+      'She offered to refer me to the APM program',
+      'She recommended I apply early',
+    ]);
+    const ask = await draftMessage(user, priya.id, 'referral_ask', 'gmail');
+    expect(ask.bodyDraft).toMatch(/offer(ed|ing) to refer me to the APM program/);
+    for (const kind of ['referral_ask', 'thank_you', 'nurture'] as const) {
+      const d = await draftMessage(user, priya.id, kind, 'gmail');
+      expect(d.bodyDraft).not.toMatch(
+        /\b(to|on|mentioned) (you|she) offered\b|\bwas I should\b|\bi should\b/,
+      );
+    }
+    const p = (await db.people.get(priya.id))!;
+    expect(p.summary).toMatch(
+      /She recommended I apply early\. She offered to refer me to the APM program\.$/,
+    );
+    expect(p.talkingPoints).toContain('Follow up: She offered to refer me to the APM program');
   });
 });
 
@@ -144,7 +182,7 @@ describe('matching a note to a person (NRC-19, UI-12)', () => {
   const MAYA_NOTE =
     'Quick call with Maya today. She recommended I apply to the design engineering role and offered to refer me.';
 
-  it('a first name only one person has is a likely match, attached and confirmed with a card', async () => {
+  it('a first name only one person has is a likely match, asked about with a card before anything is written', async () => {
     const maya = await person('Maya Wu', 'maya@figma.com', 'Figma');
     await person('Tom Wu', 'tom.wu@bain.com', 'Bain & Company');
     const n = await ingestNote(
@@ -154,12 +192,10 @@ describe('matching a note to a person (NRC-19, UI-12)', () => {
     );
     expect(n).toMatchObject({ personIds: [maya.id], matchStatus: 'unmatched', matchConfidence: 0.7 });
     expect(n.title).toBe('Note from Fri, Oct 2');
-    const offers = await db.facts
-      .where('personId')
-      .equals(maya.id)
-      .filter((f) => f.type === 'offer')
-      .toArray();
-    expect(offers).toHaveLength(1);
+    // an unconfirmed guess writes no facts, meetings or action items
+    expect(await db.facts.where('personId').equals(maya.id).count()).toBe(0);
+    expect(await db.touchpoints.where('personId').equals(maya.id).count()).toBe(0);
+    expect((await db.notes.get(n.id))!.extraction!.facts.length).toBeGreaterThan(0);
     const c = (await card(n.id))!;
     expect(c).toMatchObject({ kind: 'confirm_note_match', status: 'pending' });
     expect(c.reasonText).toBe('Was your note from Fri, Oct 2 with Maya Wu?');
@@ -229,7 +265,7 @@ describe('matching a note to a person (NRC-19, UI-12)', () => {
     });
   });
 
-  it('choosing another person moves what the guess wrote; confirming the guess writes nothing twice', async () => {
+  it('choosing another person writes the note for them; confirming again writes nothing twice', async () => {
     const maya = await person('Maya Wu', 'maya@figma.com', 'Figma');
     const tom = await person('Tom Wu', 'tom.wu@bain.com', 'Bain & Company');
     const n = await ingestNote(
@@ -241,7 +277,7 @@ describe('matching a note to a person (NRC-19, UI-12)', () => {
       },
       NOW,
     );
-    expect(await db.actionItems.where('personId').equals(maya.id).count()).toBe(1);
+    expect(await db.actionItems.where('personId').equals(maya.id).count()).toBe(0);
     await rematchNote(user, n.id, tom.id, NOW);
     expect(await db.facts.where('personId').equals(maya.id).count()).toBe(0);
     expect(await db.actionItems.where('personId').equals(maya.id).count()).toBe(0);
@@ -262,6 +298,102 @@ describe('matching a note to a person (NRC-19, UI-12)', () => {
     expect((await card(n.id))!.status).toBe('done');
     await rematchNote(user, n.id, tom.id, NOW);
     expect(await db.actionItems.where('personId').equals(tom.id).count()).toBe(1);
+  });
+});
+
+describe('an unconfirmed guess and a corrected match leave no stale pipeline state', () => {
+  const chatFor = async (personId: string, stage: 'scheduled' | 'completed') => {
+    const at = '2026-09-20T12:00:00.000Z';
+    await db.chats.add({
+      id: `c-${personId}`,
+      userId: user.id,
+      personId,
+      stage,
+      stageEnteredAt: at,
+      source: 'manual',
+      goalTags: [],
+      bumpCount: 0,
+      priority: 2,
+      createdAt: at,
+      updatedAt: at,
+    });
+    return `c-${personId}`;
+  };
+  const NOTE = 'Quick call with Maya today. She offered to refer me to the design engineering role.';
+
+  it('a first-name guess does not complete the chat or send a notification; choosing someone else leaves the guess untouched', async () => {
+    await db.users.update(user.id, { onboardingCompletedAt: '2026-09-01T00:00:00.000Z' });
+    const u = (await db.users.get(user.id))!;
+    const maya = await person('Maya Wu', 'maya@figma.com', 'Figma');
+    const mia = await person('Mia Lopez', 'mia@ramp.com', 'Ramp');
+    const c1 = await chatFor(maya.id, 'scheduled');
+    const n = await ingestNote(u, { source: 'manual', occurredAt: NOW.toISOString(), text: NOTE }, NOW);
+    expect(n).toMatchObject({ personIds: [maya.id], matchStatus: 'unmatched', chatId: undefined });
+    expect((await db.chats.get(c1))!.stage).toBe('scheduled');
+    expect((await db.chats.get(c1))!.completedAt).toBeUndefined();
+    expect(await db.notifications.count()).toBe(0);
+    expect(await db.stageEvents.count()).toBe(0);
+    await rematchNote(u, n.id, mia.id, NOW);
+    expect((await db.chats.get(c1))!.stage).toBe('scheduled');
+    expect((await db.chats.get(c1))!.completedAt).toBeUndefined();
+    expect(await db.facts.where('personId').equals(maya.id).count()).toBe(0);
+    expect(await db.facts.where('personId').equals(mia.id).count()).toBeGreaterThan(0);
+    const notes = await db.notifications.toArray();
+    expect(notes.map((x) => x.link)).toEqual([`/people/${mia.id}`]);
+  });
+
+  it('confirming the guess writes the note for that person', async () => {
+    const maya = await person('Maya Wu', 'maya@figma.com', 'Figma');
+    const c1 = await chatFor(maya.id, 'scheduled');
+    const n = await ingestNote(user, { source: 'manual', occurredAt: NOW.toISOString(), text: NOTE }, NOW);
+    await rematchNote(user, n.id, maya.id, NOW);
+    expect((await db.notes.get(n.id))!).toMatchObject({ matchStatus: 'confirmed', chatId: c1 });
+    expect(await db.facts.where('personId').equals(maya.id).count()).toBeGreaterThan(0);
+    expect((await db.chats.get(c1))!.stage).toBe('completed');
+  });
+
+  it('correcting an automatic match puts the first chat back where it was', async () => {
+    const maya = await person('Maya Wu', 'maya@figma.com', 'Figma');
+    const mia = await person('Mia Lopez', 'mia@ramp.com', 'Ramp');
+    const c1 = await chatFor(maya.id, 'scheduled');
+    const n = await ingestNote(
+      user,
+      { source: 'manual', occurredAt: NOW.toISOString(), text: `Coffee with Maya Wu. ${NOTE}` },
+      NOW,
+    );
+    expect(n.matchStatus).toBe('auto');
+    expect((await db.chats.get(c1))!.stage).toBe('completed');
+    expect(await db.notifications.count()).toBe(1);
+    await rematchNote(user, n.id, mia.id, NOW);
+    const chat = (await db.chats.get(c1))!;
+    expect(chat.stage).toBe('scheduled');
+    expect(chat.completedAt).toBeUndefined();
+    expect((await db.notifications.toArray()).every((x) => x.link !== `/people/${maya.id}`)).toBe(true);
+    expect(
+      (await db.stageEvents.where('chatId').equals(c1).toArray()).every((e) => e.status === 'rejected'),
+    ).toBe(true);
+  });
+
+  it('a full name two people share is not attached; the card tells them apart by company', async () => {
+    const bain = await person('Tom Wu', 'tom.wu@bain.com', 'Bain & Company');
+    const google = await person('Tom Wu', 'tomwu@google.com', 'Google');
+    expect(bain.id).not.toBe(google.id);
+    const n = await ingestNote(
+      user,
+      {
+        source: 'manual',
+        occurredAt: NOW.toISOString(),
+        text: 'Summary\nTom Wu walked me through the case interview.\n\nAttendees: Tom Wu',
+      },
+      NOW,
+    );
+    expect(n).toMatchObject({ personIds: [], matchStatus: 'unmatched' });
+    expect(await db.touchpoints.count()).toBe(0);
+    const c = (await db.suggestions.where('dedupeKey').equals(`note:${n.id}`).first())!;
+    expect(c.reasonText).toMatch(
+      /^Who was your note from Fri, Oct 2 with\? It could be Tom Wu at (Bain & Company|Google) or Tom Wu at (Bain & Company|Google)\.$/,
+    );
+    expect([...(c.payload.candidatePersonIds as string[])].sort()).toEqual([bain.id, google.id].sort());
   });
 });
 
