@@ -68,6 +68,14 @@ function check(now: Date, ds: DemoDataset) {
     const jobs = affs
       .filter((a) => a.kind === 'employment')
       .sort((a, b) => a.startDate!.localeCompare(b.startDate!));
+    // and nobody worked at a firm before it was founded (Anthropic in 2017, Ramp in 2015)
+    for (const job of jobs) {
+      const firm = DEMO_ORGS.find((o) => `org_${o.slug}` === job.organizationId)!;
+      expect(
+        yearOf(job.startDate),
+        `${p.displayName}: ${job.title} at ${job.nameRaw} from ${job.startDate}, founded ${firm.founded}`,
+      ).toBeGreaterThanOrEqual(firm.founded);
+    }
     const cur = jobs[jobs.length - 1]!;
     expect(cur.isCurrent, p.displayName).toBe(true);
     for (let i = 1; i < jobs.length; i++)
@@ -85,6 +93,18 @@ function check(now: Date, ds: DemoDataset) {
       /\.\.\.|…|—|–|!|reach out|pick your brain|hope this (email |message )?finds|passionate/i,
     );
     expect(m.bodyText.trim().length).toBeGreaterThan(40);
+    // "an Investment Banking Associate", never "a Investment Banking Associate"
+    expect(m.bodyText).not.toMatch(/(?<![\w&])a (?!uni|one|eu|use)[aeiou]/i);
+  }
+  // an introducer says the student asked them about what their own conversation was about, not about the new
+  // person's area (Sana talked about Anthropic, so she cannot say the student asked her about Goldman's deal teams)
+  for (const m of ds.messages.filter((x) => x.signal === 'intro_offer')) {
+    const asked = /asked me good questions about (.+?)\./.exec(m.bodyText)?.[1];
+    if (!asked) continue;
+    const introducer = ds.people.find((p) => p.primaryEmail === m.fromEmail)!;
+    const own = ds.threads.find((t) => t.participantPersonIds.join() === introducer.id)!;
+    const opener = byThread.get(own.id)![0]!;
+    expect(opener.bodyText, `${introducer.displayName}'s intro: "${asked}"`).toContain(asked);
   }
   for (const [, msgs] of byThread)
     for (let i = 1; i < msgs.length; i++) expect(msgs[i]!.sentAt > msgs[i - 1]!.sentAt).toBe(true);
@@ -252,16 +272,25 @@ describe('demo dataset at any time of day', () => {
   // A fixed "tomorrow 11:30" fell outside the prep window whenever the demo loaded just after midnight. The chat is on
   // the next business day, which the prep rule always looks ahead to.
   it('always schedules the upcoming coffee chat inside the prep window, whatever the time of day', () => {
-    for (let h = 0; h < 24; h++) {
-      for (const m of [0, 48]) {
-        const now = new Date(2026, 9, 7, h, m);
-        const ev = buildDemoDataset({ now }).events.find((e) => e.id === 'ev_next');
-        expect(ev).toBeDefined();
-        const start = new Date(ev!.startAt).getTime();
-        const hours = (start - now.getTime()) / 3_600_000;
-        expect(hours, `loaded at ${h}:${m}`).toBeGreaterThan(1);
-        expect(start, `loaded at ${h}:${m}`).toBeLessThanOrEqual(endOfNextBusinessDay(now));
+    // an ordinary Wednesday, and the days before Christmas and New Year's, when the next chat is the Monday after
+    for (const [y, mo, d] of [
+      [2026, 9, 7],
+      [2026, 11, 23],
+      [2026, 11, 24],
+      [2026, 11, 30],
+      [2026, 11, 31],
+      [2027, 6, 2],
+    ] as const)
+      for (let h = 0; h < 24; h++) {
+        for (const m of [0, 48]) {
+          const now = new Date(y, mo, d, h, m);
+          const ev = buildDemoDataset({ now }).events.find((e) => e.id === 'ev_next');
+          expect(ev).toBeDefined();
+          const start = new Date(ev!.startAt).getTime();
+          const hours = (start - now.getTime()) / 3_600_000;
+          expect(hours, `loaded at ${now.toString()}`).toBeGreaterThan(1);
+          expect(start, `loaded at ${now.toString()}`).toBeLessThanOrEqual(endOfNextBusinessDay(now));
+        }
       }
-    }
   });
 });

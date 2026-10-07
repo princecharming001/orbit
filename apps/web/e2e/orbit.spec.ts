@@ -113,28 +113,63 @@ test.describe('Orbit demo flow', () => {
     page,
   }) => {
     await loadDemo(page);
-    // demo contacts with an email, no chat and nothing checkable in common with the student
+    // demo contacts with an email, no chat and nothing checkable in common with the student; the generated cast
+    // depends on the year the demo is loaded in (nobody joins a firm before it was founded), so the list covers
+    // 2026 to 2029, the most reliable first
     const candidates = [
-      'p42',
-      'p53',
-      'p69',
-      'p8',
+      'p47',
+      'p67',
+      'p68',
+      'p74',
+      'p21',
+      'p33',
+      'p44',
+      'p65',
+      'p70',
+      'p46',
       'p48',
-      'p24',
-      'p27',
+      'p79',
+      'p85',
+      'p89',
+      'p90',
       'p40',
+      'p42',
       'p43',
-      'p14',
-      'p29',
+      'p51',
+      'p55',
+      'p63',
+      'p66',
+      'p71',
+      'p81',
+      'p25',
+      'p26',
+      'p27',
+      'p34',
+      'p36',
+      'p38',
+      'p50',
+      'p56',
       'p61',
+      'p39',
+      'p45',
+      'p52',
+      'p54',
+      'p62',
       'p64',
+      'p69',
+      'p72',
+      'p75',
+      'p83',
+      'p84',
+      'p87',
     ];
     let found = false;
     for (const id of candidates) {
       await page.goto(`people/${id}`);
       await page.getByTestId('person-write').click();
       await expect(page.getByLabel('Message body')).toBeVisible({ timeout: 15_000 });
-      if (await page.getByTestId('draft-needs-input').isVisible()) {
+      // the connection prompt itself: someone with a chat asks for an update instead
+      if (await page.getByTestId('draft-input-connection').isVisible()) {
         found = true;
         break;
       }

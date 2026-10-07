@@ -72,6 +72,29 @@ export function isBusinessDayKey(key: string): boolean {
   return !usHolidays(Number(key.slice(0, 4))).has(key);
 }
 
+/** The fixed-date days nobody books a coffee chat on: Independence Day, Christmas Eve and Day, New Year's Eve and Day. */
+export function isFixedHolidayKey(key: string): boolean {
+  const md = key.slice(5);
+  return md === '07-04' || md === '12-24' || md === '12-25' || md === '12-31' || md === '01-01';
+}
+
+/**
+ * A day off for coffee chats: a weekend or one of the fixed holidays. The demo books its chats around the same days,
+ * and the prep brief looks past them. Unlike `isBusinessDayKey` (which times nudges), the rest of the winter freeze
+ * and the Monday holidays still count: people do meet then, they just do not want a nudge.
+ */
+export function isDayOffKey(key: string): boolean {
+  const dow = new Date(`${key}T00:00:00Z`).getUTCDay();
+  return dow === 0 || dow === 6 || isFixedHolidayKey(key);
+}
+
+/** The first working day after `now`'s calendar day in `tz`, as YYYY-MM-DD (a Friday looks ahead to Monday). */
+export function nextWorkdayKey(now: Date, tz?: string): string {
+  let k = dayOfKey(todayKey(now, tz)) + 1;
+  while (isDayOffKey(keyOfDay(k))) k++;
+  return keyOfDay(k);
+}
+
 /** Is `d` a business day, judged by its calendar date in `tz`? */
 export function isBusinessDay(d: Date, tz?: string): boolean {
   return isBusinessDayKey(todayKey(d, tz));

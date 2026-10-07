@@ -1,4 +1,5 @@
 import { maxBumpsFor, sectorOf } from '../drafts/sector';
+import { zonedTime } from '../drafts/time';
 import { declineReengage } from '../pipeline/transitions';
 import type {
   ActionItem,
@@ -18,7 +19,7 @@ import type {
 } from '../types';
 import { todayKey } from '../util/ids';
 import { warmUpProgress } from '../warmup/rules';
-import { addBusinessDays, businessDaysBetween, localWeekday } from './calendar';
+import { addBusinessDays, businessDaysBetween, localWeekday, nextWorkdayKey } from './calendar';
 
 export * from './calendar';
 
@@ -601,15 +602,14 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
   const tomorrow = new Date(Date.parse(`${todayKey(now, inp.timezone)}T00:00:00Z`) + DAY)
     .toISOString()
     .slice(0, 10);
-  // the next weekday after today in the student's timezone: a Friday or weekend brief preps Monday's chat
-  let nextBusinessDay = tomorrow;
-  while ([0, 6].includes(new Date(`${nextBusinessDay}T00:00:00Z`).getUTCDay()))
-    nextBusinessDay = new Date(Date.parse(`${nextBusinessDay}T00:00:00Z`) + DAY).toISOString().slice(0, 10);
+  // the next working day: a Friday, weekend or pre-holiday brief preps the chat on the first working day after the
+  // weekend or holiday, the same days off the demo books its chats around
+  const nextBusinessDay = nextWorkdayKey(now, inp.timezone);
   for (const e of inp.events) {
     if (e.status === 'cancelled' || !e.attendeePersonIds.length) continue;
     const start = new Date(e.startAt).getTime();
     const hours = (start - now.getTime()) / HOUR;
-    // within 30 hours, all of tomorrow, or on the next business day (not the weekend days before it)
+    // within 30 hours, all of tomorrow, or on the next working day (not the days off before it)
     const day = todayKey(new Date(start), inp.timezone);
     const soon = hours <= 30 || day <= tomorrow || day === nextBusinessDay;
     if (hours > 0 && soon && (e.isCoffeeChat ?? false)) {
@@ -728,13 +728,14 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
   return out;
 }
 
-/** The end of the next business day after `now`, in local time (Friday and the weekend both look ahead to Monday). */
-export function endOfNextBusinessDay(now: Date): number {
-  const d = new Date(now);
-  do d.setDate(d.getDate() + 1);
-  while (d.getDay() === 0 || d.getDay() === 6);
-  d.setHours(23, 59, 59, 999);
-  return d.getTime();
+/**
+ * The end of the next working day after `now`, in `tz` (local time when absent): Friday and the weekend look ahead to
+ * Monday, and the days before a holiday look past it. The prep brief covers a chat on that day.
+ */
+export function endOfNextBusinessDay(now: Date, tz?: string): number {
+  const [y, m, d] = nextWorkdayKey(now, tz).split('-').map(Number) as [number, number, number];
+  if (!tz) return new Date(y, m - 1, d, 23, 59, 59, 999).getTime();
+  return zonedTime(y, m, d + 1, 0, 0, tz).getTime() - 1;
 }
 
 /** The target company a person works at, matched by organization id or by name. */
