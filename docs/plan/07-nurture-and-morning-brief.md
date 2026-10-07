@@ -12,8 +12,8 @@ Every rule runs in code over stored rows at brief time (and some on events, mark
 |---|---|---|---|
 | `follow_up_bump` | chat `outreach_sent`; days since last outbound ≥ 5 business days (10 for LinkedIn copy-and-open); no inbound since; `bump_count < max_bumps` | `bump` | `bump:{chat}:{bump_count+1}` |
 | `thank_you` ⚡ | chat `completed` within 48 h; no outbound `thank_you` since completion | `thank_you` | `thank:{chat}` |
-| `schedule_propose` ⚡ | chat `replied` with last inbound signal ∈ {reply_positive, question} and no scheduling message yet; or `scheduling` with the person's last message asking for times | `schedule` | `sched:{chat}:{last_inbound_id}` |
-| `schedule_confirm` ⚡ | last inbound `scheduling_proposal` with ≥ 1 parsed time that is free in the student's calendar | `reply` (accepting a specific time) | `confirm:{chat}:{last_inbound_id}` |
+| `schedule_propose` ⚡ | chat `replied` with last inbound signal ∈ {reply_positive, reply_neutral, question, referral_offer, intro_offer} and no scheduling message yet, except a reply that prefers email (`prefersEmail`) or hands the student to someone else (`intro_offer` with `handoff`); or `scheduling` with the person's last message asking for times. Retired when a calendar invitation for the person arrives | `schedule` | `sched:{chat}:{last_inbound_id}` |
+| `schedule_confirm` ⚡ | last inbound `scheduling_proposal` with ≥ 1 parsed time that is free in the student's calendar; retired when a calendar invitation for the person arrives | `reply` (accepting a specific time) | `confirm:{chat}:{last_inbound_id}` |
 | `prep_brief` ⚡ | calendar event with a matched person starts within 30 h, or on the next business day (a Friday or weekend brief preps Monday's chat) | — (payload = PrepBrief) | `prep:{event}` |
 | `action_item_reminder` | open `action_items` due today or overdue | — or `reply` when the item is "send X" | `ai:{action_item}` |
 | `nurture_checkin` | chat `nurturing` or person strength ≥ 0.5 without a chat; days since last touch ≥ cadence (section 2); not contacted in the last 30 days | `nurture` | `nurture:{person}:{month}` |
@@ -21,7 +21,7 @@ Every rule runs in code over stored rows at brief time (and some on events, mark
 | `congratulate` ⚡ | enrichment refresh shows a new current affiliation (org or title changed) within 30 days; strength ≥ 0.3 | `congratulate` | `congrats:{person}:{affiliation}` |
 | `ask_referral` | chat `followed_up|nurturing`; person's org is a target company with status `applied` or a deadline within 21 days; `offers` facts include referral or warmth = warm; no referral ask in 90 days | `referral_ask` | `ref:{person}:{target_company}` |
 | `intro_request` | created by Reach "Ask for intro" (user) or by a recommendation whose best path goes through a strong tie (≥ 0.5) and the target is at a priority-1 company | `intro_request` | `intro:{connector}:{target_key}` |
-| `new_outreach` | weekly batch: top recommendations not yet acted on; limited by weekly target minus outreach already sent this week | `outreach` | `new:{candidate_key}` |
+| `new_outreach` | weekly batch: top recommendations not yet acted on; limited by weekly target minus outreach already sent this week. ⚡ Also for a chat opened by an intro (`identified`, `referrerPersonId` set, nothing sent yet, within 14 days): "Dana introduced you to Sam; write to Sam while the intro is fresh" | `outreach` | `new:{candidate_key}`; `intro:{chat}` |
 | `confirm_stage` ⚡ | `coffee_chat_stage_events.status = proposed` | — | `stage:{event}` |
 | `confirm_merge` | `merge_suggestions.status = pending` and score ≥ 0.6 | — | `merge:{suggestion}` |
 | `confirm_note_match` ⚡ | note `match_status = unmatched` with ≥ 1 candidate person | — | `note:{note}` |

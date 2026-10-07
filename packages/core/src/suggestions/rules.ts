@@ -138,7 +138,12 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
       if (
         bdays >= threshold &&
         chat.bumpCount < maxBumps &&
-        (!chat.lastInboundAt || new Date(chat.lastInboundAt) < since)
+        (!chat.lastInboundAt || new Date(chat.lastInboundAt) < since) &&
+        // an out-of-office reply holds the bump until the day after they are back
+        !(
+          chat.outOfOfficeUntil &&
+          now.getTime() < new Date(`${chat.outOfOfficeUntil}T00:00:00Z`).getTime() + 2 * DAY
+        )
       ) {
         out.push({
           kind: 'follow_up_bump',
@@ -164,6 +169,10 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
       ['reply_positive', 'question', 'reply_neutral', 'intro_offer', 'referral_offer'].includes(
         lastIn.signal ?? '',
       ) &&
+      // they said no to a call but yes to questions over email: proposing times would ignore what they asked
+      !lastIn.extraction?.prefersEmail &&
+      // they handed the student to someone else (redirect, "looping in Sam"): the next step is with that person
+      !(lastIn.signal === 'intro_offer' && lastIn.extraction?.handoff) &&
       (!chat.lastOutboundAt || new Date(chat.lastOutboundAt) < new Date(lastIn.sentAt))
     ) {
       out.push({
@@ -292,6 +301,26 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
         });
       }
     }
+  }
+  // an intro just landed ("Looping in Sam"): write to the person introduced while it is fresh
+  for (const chat of inp.chats) {
+    if (chat.stage !== 'identified' || !chat.referrerPersonId || chat.lastOutboundAt) continue;
+    if (now.getTime() - new Date(chat.stageEnteredAt).getTime() > 14 * DAY) continue;
+    const target = inp.people.get(chat.personId);
+    const referrer = inp.people.get(chat.referrerPersonId);
+    if (!target?.isHuman || target.hiddenAt || !referrer) continue;
+    out.push({
+      kind: 'new_outreach',
+      personId: target.id,
+      chatId: chat.id,
+      dedupeKey: `intro:${chat.id}`,
+      reasonText: `${referrer.firstName} introduced you to ${target.firstName}; write to ${target.firstName} while the intro is fresh`,
+      signals: { introducedBy: referrer.id },
+      payload: { channel: target.primaryEmail ? 'gmail' : 'linkedin' },
+      urgency: 0.85,
+      goalRelevance: goalRel(target.id),
+      confidence: 1,
+    });
   }
   // report back to whoever made the intro, once the chat with the target resolved
   for (const chat of inp.chats) {
@@ -494,7 +523,8 @@ export function selectForBrief(
     perKind.set(c.kind, n + 1);
   };
   const isHard = (c: Candidate) =>
-    HARD_URGENT.includes(c.kind) || (c.kind === 'new_outreach' && !!c.signals.warmUpDone);
+    HARD_URGENT.includes(c.kind) ||
+    (c.kind === 'new_outreach' && (!!c.signals.warmUpDone || !!c.signals.introducedBy));
   for (const c of scored) if (isHard(c) && chosen.length < 5) take(c);
   for (const c of scored) if (!chosen.includes(c)) take(c);
   return chosen;

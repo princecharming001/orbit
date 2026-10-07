@@ -1,5 +1,6 @@
 // Client-side Google: Google Identity Services token flow, Gmail and Calendar REST.
 // Tokens live in memory + sessionStorage (1 hour); the user re-consents when expired.
+import { htmlToText } from '@orbit/core';
 import { envGoogleClientId, readPrefs } from './prefs';
 
 export const GOOGLE_SCOPES = [
@@ -206,18 +207,7 @@ export function gmailExtractText(msg: GmailMessageRaw): { text: string; html?: s
     for (const c of p.parts ?? []) walk(c);
   };
   walk(msg.payload);
-  if (!text && html)
-    text = html
-      .replace(/<style[\s\S]*?<\/style>/gi, '')
-      .replace(/<br\s*\/?>/gi, '\n')
-      .replace(/<\/p>/gi, '\n')
-      .replace(/<[^>]+>/g, '')
-      .replace(/&nbsp;/g, ' ')
-      .replace(/&amp;/g, '&')
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&#39;/g, "'")
-      .replace(/&quot;/g, '"');
+  if (!text && html) text = htmlToText(html);
   return { text: text.replace(/\r\n/g, '\n').trim(), html };
 }
 

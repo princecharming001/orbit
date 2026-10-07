@@ -1,13 +1,21 @@
 import type { CalendarEvent, CoffeeChat, EmailMessage, EmailThread, Person, User } from '@orbit/core';
 import {
+  detectOutOfOffice,
   emailDomain,
+  GRATITUDE,
   heuristicSignal,
   heuristicTriage,
   isAutomatedSender,
+  isAutoReply,
+  isAutoReplyBody,
+  isCalendarNotice,
+  isRoleName,
   newId,
   normalizeEmail,
+  parseAddress,
   parseName,
   splitSignature,
+  stripDiacritics,
   stripQuotedReply,
 } from '@orbit/core';
 import { addTouchpoint, notify, recomputePersonStrength } from '../db/repo';
@@ -30,10 +38,46 @@ export interface RawEmail {
   labels?: string[];
 }
 
-function splitAddress(raw: string): { email: string; name?: string } {
-  const m = raw.match(/^\s*"?([^"<]*?)"?\s*<([^>]+)>\s*$/);
-  if (m) return { email: normalizeEmail(m[2]!), name: m[1]?.trim() || undefined };
-  return { email: normalizeEmail(raw) };
+const splitAddress = parseAddress;
+
+/** "Alex Rivera", "Rivera, Alex" and "alex rivera" are the same name. */
+function sameName(a: string, b: string): boolean {
+  const n = (x: string) =>
+    stripDiacritics(x)
+      .toLowerCase()
+      .replace(/[^a-z ,]/g, '')
+      .split(/[\s,]+/)
+      .filter(Boolean)
+      .sort()
+      .join(' ');
+  return Boolean(n(a)) && n(a) === n(b);
+}
+
+/**
+ * Every address the student sends from: the primary address, any From on a message Gmail labelled SENT (send-as
+ * aliases), any From the student used on earlier outbound mail, and a From at the student's school domain whose
+ * display name is the student's own name (netid@school.edu next to first.last@school.edu).
+ */
+export async function collectUserEmails(user: User, raws: RawEmail[]): Promise<Set<string>> {
+  const out = new Set([normalizeEmail(user.email)]);
+  const earlier = await db.messages
+    .where('userId')
+    .equals(user.id)
+    .filter((m) => m.direction === 'outbound')
+    .toArray();
+  for (const m of earlier) out.add(normalizeEmail(m.fromEmail));
+  for (const r of raws) {
+    const from = splitAddress(r.from);
+    if (!from.email.includes('@')) continue;
+    const sentLabel = r.labels?.includes('SENT');
+    const schoolAlias =
+      Boolean(user.schoolDomain) &&
+      emailDomain(from.email) === user.schoolDomain &&
+      Boolean(from.name) &&
+      sameName(from.name!, user.fullName);
+    if (sentLabel || schoolAlias) out.add(from.email);
+  }
+  return out;
 }
 
 /** Heuristic triage at or above this confidence is kept as is; only less certain threads go to Claude. */
@@ -59,7 +103,7 @@ export async function ingestEmails(
 ): Promise<IngestStats> {
   const now = opts.now ?? new Date();
   const stats: IngestStats = { threads: 0, messages: 0, people: 0, networking: 0, skipped: 0 };
-  const userEmails = new Set([normalizeEmail(user.email)]);
+  const userEmails = await collectUserEmails(user, raws);
   const useLlm = (opts.useLlm ?? true) && llmEnabled('emailTriage');
   const byThread = new Map<string, RawEmail[]>();
   for (const r of raws) {
@@ -69,6 +113,8 @@ export async function ingestEmails(
   }
   let done = 0;
   const cache = await loadPeopleCache(user.id);
+  /** calendar invitations seen in this batch: the people on them and when they were sent */
+  const invites: { emails: string[]; sentAt: string }[] = [];
   for (const [extThreadId, list] of byThread) {
     list.sort((a, b) => a.sentAt.localeCompare(b.sentAt));
     let thread = await db.threads.where('externalThreadId').equals(extThreadId).first();
@@ -96,9 +142,17 @@ export async function ingestEmails(
       }
       const from = splitAddress(r.from);
       const direction: EmailMessage['direction'] = userEmails.has(from.email) ? 'outbound' : 'inbound';
-      const automated = direction === 'inbound' && isAutomatedSender(from.email, r.headers, r.labels);
+      // machine mail: bulk/notification senders, vacation auto-replies, calendar invitations (the calendar sync owns those)
       const stripped = stripQuotedReply(r.bodyText);
-      const sig = splitSignature(stripped);
+      // a vacation responder without auto-reply headers still reads like one ("Thank you for your email. I am
+      // traveling with limited access to email"); it is not a reply from the person
+      const automated =
+        direction === 'inbound' &&
+        (isAutomatedSender(from.email, r.headers, r.labels, from.name) ||
+          isAutoReply(r.headers, r.subject) ||
+          isAutoReplyBody(stripped) ||
+          isCalendarNotice(r.subject, r.bodyText, r.headers));
+      const sig = splitSignature(stripped, { name: from.name });
       const msg: EmailMessage = {
         id: newId('m'),
         userId: user.id,
@@ -125,8 +179,10 @@ export async function ingestEmails(
         ...(direction === 'inbound' ? r.to.map((t) => ({ ...splitAddress(t), isSender: false })) : []),
       ].filter((x) => !userEmails.has(x.email));
       if (!automated) {
-        for (const c of counterparts.filter((x) => !userEmails.has(x.email))) {
-          const auto = isAutomatedSender(c.email, {}, []);
+        // a fragment without an address is never a person
+        for (const c of counterparts.filter((x) => x.email.includes('@') && !userEmails.has(x.email))) {
+          // shared inboxes and team names (campusrecruiting@, "Stripe Careers") are not people to network with
+          const auto = isAutomatedSender(c.email, {}, [], c.name) || isRoleName(c.name);
           const { person, created } = await upsertPerson(
             {
               userId: user.id,
@@ -150,7 +206,8 @@ export async function ingestEmails(
           if (!thread.participantPersonIds.includes(person.id)) thread.participantPersonIds.push(person.id);
         }
         for (const c of ccs) {
-          const { person } = await upsertPerson(
+          if (!c.email.includes('@')) continue;
+          const { person, created } = await upsertPerson(
             {
               userId: user.id,
               email: c.email,
@@ -161,12 +218,20 @@ export async function ingestEmails(
             },
             cache,
           );
+          if (created && (isAutomatedSender(c.email, {}, [], c.name) || isRoleName(c.name)))
+            await db.people.update(person.id, { isHuman: false });
           if (!thread.participantPersonIds.includes(person.id)) thread.participantPersonIds.push(person.id);
         }
       }
       for (const e of [from.email, ...msg.toEmails, ...msg.ccEmails])
         if (!thread.participantEmails.includes(e)) thread.participantEmails.push(e);
       await db.messages.add(msg);
+      if (
+        automated &&
+        BOOKED_NOTICE.test(r.subject ?? '') &&
+        isCalendarNotice(r.subject, r.bodyText, r.headers)
+      )
+        invites.push({ emails: [from.email, ...msg.toEmails, ...msg.ccEmails], sentAt: r.sentAt });
       newMessages.push(msg);
       stats.messages++;
     }
@@ -250,17 +315,69 @@ export async function ingestEmails(
           });
         }
       }
-      // networking: chats + signals + stages
-      // only 1:1 threads create or advance chats; group threads still count as touchpoints and co-thread edges
-      if (thread.isNetworking && thread.participantPersonIds.length === 1)
+      // networking: chats + signals + stages. 1:1 threads and small threads (an intro with one or two people on CC)
+      // are read; larger group threads only count as touchpoints and co-thread edges.
+      if (
+        thread.isNetworking &&
+        thread.participantPersonIds.length >= 1 &&
+        thread.participantPersonIds.length <= 3
+      )
         await processNetworkingThread(user, thread, newMessages, all, useLlm, now);
       for (const pid of thread.participantPersonIds) await recomputePersonStrength(pid, now);
     }
     done++;
     opts.onProgress?.(done, byThread.size);
   }
+  for (const inv of invites) await retireSchedulingCards(user.id, inv.emails, inv.sentAt, userEmails, now);
   return stats;
 }
+
+/** A calendar notice that means a meeting is on the calendar (not a decline or a cancellation). */
+const BOOKED_NOTICE = /^\s*(updated invitation|invitation|new event|accepted)\b/i;
+
+/**
+ * A calendar invitation is mail the calendar sync owns, so it is not read as a reply. It still answers the open
+ * "propose times" or "confirm it" card for the people on it: the meeting is booked. Cards raised by a message sent
+ * after the invitation (a later reschedule) are kept.
+ */
+async function retireSchedulingCards(
+  userId: string,
+  emails: string[],
+  sentAt: string,
+  userEmails: Set<string>,
+  now: Date,
+): Promise<void> {
+  const others = new Set(emails.map((e) => e.toLowerCase()).filter((e) => !userEmails.has(e)));
+  if (!others.size) return;
+  const people = await db.people
+    .where('userId')
+    .equals(userId)
+    .filter((p) => p.emails.some((e) => others.has(e.toLowerCase())))
+    .toArray();
+  for (const p of people) {
+    const open = await db.suggestions
+      .where('personId')
+      .equals(p.id)
+      .filter(
+        (s) =>
+          (s.kind === 'schedule_confirm' || s.kind === 'schedule_propose') &&
+          (s.status === 'pending' || s.status === 'snoozed'),
+      )
+      .toArray();
+    for (const s of open) {
+      const trigger =
+        typeof s.payload.inReplyTo === 'string' ? await db.messages.get(s.payload.inReplyTo) : undefined;
+      if (trigger && trigger.sentAt > sentAt) continue;
+      await db.suggestions.update(s.id, { status: 'expired', decidedAt: now.toISOString() });
+    }
+  }
+}
+
+const ACTIVE = (c: CoffeeChat) => !['declined', 'no_response', 'archived'].includes(c.stage);
+/** An intro older than this is history, not a to-do: no new chat is created for the person introduced. */
+const INTRO_CHAT_WINDOW_MS = 30 * 86_400_000;
+/** A note with thanks sent this soon after a completed chat is the thank-you, whatever else it says. */
+const THANK_YOU_WINDOW_MS = 7 * 86_400_000;
 
 async function processNetworkingThread(
   user: User,
@@ -270,20 +387,36 @@ async function processNetworkingThread(
   useLlm: boolean,
   now: Date,
 ): Promise<void> {
-  const counterpartId =
-    thread.participantPersonIds.find((pid) => all.some((m) => m.fromPersonId === pid)) ??
-    thread.participantPersonIds[0];
-  if (!counterpartId) return;
-  const person = await db.people.get(counterpartId);
-  if (!person || !person.isHuman) return;
+  const participants = (await db.people.bulkGet(thread.participantPersonIds)).filter((p): p is Person =>
+    Boolean(p),
+  );
+  const byEmail = (e: string) => participants.find((p) => p.emails.includes(e));
+  const humanAll = all.filter((m) => !m.isAutomated);
+  const first = humanAll[0] ?? all[0]!;
+  // the counterpart: the person of the thread's chat, else whom the student first wrote to, else the first sender
   let chat: CoffeeChat | undefined = thread.chatId ? await db.chats.get(thread.chatId) : undefined;
-  if (!chat)
-    chat = await db.chats
-      .where('personId')
-      .equals(counterpartId)
-      .filter((c) => !['declined', 'no_response', 'archived'].includes(c.stage))
-      .first();
-  if (!chat) {
+  let counterpartId =
+    chat && thread.participantPersonIds.includes(chat.personId)
+      ? chat.personId
+      : first.direction === 'outbound'
+        ? first.toEmails.map(byEmail).find(Boolean)?.id
+        : first.fromPersonId;
+  counterpartId ??= thread.participantPersonIds.find((pid) => all.some((m) => m.fromPersonId === pid));
+  counterpartId ??= thread.participantPersonIds[0];
+  if (!counterpartId) return;
+  const person = participants.find((p) => p.id === counterpartId);
+  if (!person || !person.isHuman) return;
+  // a thread that began 1:1 belongs to the counterpart's chat (and may create it); a thread that began as a group
+  // only moves a chat already bound to it
+  const othersOnFirst = [...first.toEmails, ...first.ccEmails, first.fromEmail].filter(
+    (e) => byEmail(e) && byEmail(e)!.id !== counterpartId,
+  );
+  const beganOneToOne = othersOnFirst.length === 0;
+  if (!chat || chat.personId !== counterpartId)
+    chat = beganOneToOne
+      ? await db.chats.where('personId').equals(counterpartId).filter(ACTIVE).first()
+      : undefined;
+  if (!chat && beganOneToOne) {
     const firstOut = all.find((m) => m.direction === 'outbound');
     chat = {
       id: newId('c'),
@@ -304,9 +437,47 @@ async function processNetworkingThread(
     };
     await db.chats.add(chat);
   }
-  if (!thread.chatId) await db.threads.update(thread.id, { chatId: chat.id });
+  if (chat && !thread.chatId) await db.threads.update(thread.id, { chatId: chat.id });
+  // chats this thread can move: the counterpart's and those of people introduced on it
+  const chats = new Map<string, CoffeeChat>();
+  if (chat) chats.set(counterpartId, chat);
+  for (const p of participants) {
+    if (p.id === counterpartId || !p.isHuman) continue;
+    const c = await db.chats
+      .where('personId')
+      .equals(p.id)
+      .filter((x) => ACTIVE(x) && x.threadId === thread.id)
+      .first();
+    if (c) chats.set(p.id, c);
+  }
+  const touched = new Set<string>();
   for (const m of newMessages.sort((a, b) => a.sentAt.localeCompare(b.sentAt))) {
-    if (m.isAutomated) continue;
+    if (m.isAutomated) {
+      // a vacation auto-reply from the counterpart: record it and hold bumps until the return date
+      const c = chats.get(counterpartId);
+      if (m.direction !== 'inbound' || !c || !person.emails.includes(m.fromEmail)) continue;
+      const ooo = detectOutOfOffice(m.bodyText, new Date(m.sentAt), { timeZone: user.timezone });
+      if (!ooo.isOutOfOffice) continue;
+      await db.messages.update(m.id, {
+        signal: 'out_of_office',
+        signalConfidence: 0.9,
+        extraction: {
+          proposedTimes: [],
+          asksOfUser: [],
+          offers: [],
+          factsAboutSender: [],
+          sentiment: 'neutral',
+          ...(ooo.returnDate ? { returnDate: ooo.returnDate } : {}),
+        },
+        processedAt: now.toISOString(),
+      });
+      if (ooo.returnDate && (!c.outOfOfficeUntil || ooo.returnDate > c.outOfOfficeUntil)) {
+        c.outOfOfficeUntil = ooo.returnDate;
+        await db.chats.update(c.id, { outOfOfficeUntil: ooo.returnDate, updatedAt: now.toISOString() });
+      }
+      touched.add(counterpartId);
+      continue;
+    }
     const context = all
       .filter((x) => x.sentAt < m.sentAt)
       .slice(-3)
@@ -321,7 +492,7 @@ async function processNetworkingThread(
           new Date(m.sentAt).toISOString(),
         ).catch((e) => surfaceLlmFailure(user.id, e))
       : undefined;
-    const h = heuristicSignal(m.bodyText, m.direction, new Date(m.sentAt));
+    const h = heuristicSignal(m.bodyText, m.direction, new Date(m.sentAt), { timeZone: user.timezone });
     const signal = sig?.signal ?? h.signal;
     const confidence = sig?.confidence ?? h.confidence;
     const extraction = sig
@@ -331,6 +502,15 @@ async function processNetworkingThread(
           offers: sig.offers,
           factsAboutSender: sig.facts.map((f) => ({ type: f.type as never, text: f.text })),
           sentiment: sig.sentiment,
+          // what only the heuristic reads (return date, "try me in January", "email is easier") when both agree
+          ...(sig.signal === h.signal
+            ? {
+                ...(h.extraction.returnDate ? { returnDate: h.extraction.returnDate } : {}),
+                ...(h.extraction.followUpAfter ? { followUpAfter: h.extraction.followUpAfter } : {}),
+                ...(h.extraction.prefersEmail ? { prefersEmail: true } : {}),
+                ...(h.extraction.handoff ? { handoff: true } : {}),
+              }
+            : {}),
         }
       : h.extraction;
     await db.messages.update(m.id, {
@@ -341,12 +521,30 @@ async function processNetworkingThread(
     });
     m.signal = signal;
     m.extraction = extraction;
-    if (m.direction === 'inbound' && m.fromPersonId === counterpartId) {
+    if (m.direction === 'inbound' && signal === 'out_of_office') {
+      // "I'm traveling this week, back Monday": not an answer. It does not count as a reply (the bump still comes,
+      // after the return date) and never moves the chat.
+      const c = m.fromPersonId ? chats.get(m.fromPersonId) : undefined;
+      const back =
+        extraction.returnDate ??
+        detectOutOfOffice(m.bodyText, new Date(m.sentAt), { timeZone: user.timezone }).returnDate;
+      if (c && back && (!c.outOfOfficeUntil || back > c.outOfOfficeUntil)) {
+        c.outOfOfficeUntil = back;
+        await db.chats.update(c.id, { outOfOfficeUntil: back, updatedAt: now.toISOString() });
+      }
+      if (m.fromPersonId) touched.add(m.fromPersonId);
+      continue;
+    }
+    if (m.direction === 'inbound') {
+      const senderId = m.fromPersonId;
+      const c = senderId ? chats.get(senderId) : undefined;
+      const sender = participants.find((p) => p.id === senderId);
+      if (!c || !sender) continue;
       for (const f of extraction.factsAboutSender)
         await db.facts.add({
           id: newId('f'),
           userId: user.id,
-          personId: counterpartId,
+          personId: sender.id,
           type: f.type,
           text: f.text,
           sourceTable: 'messages',
@@ -359,7 +557,7 @@ async function processNetworkingThread(
         await db.facts.add({
           id: newId('f'),
           userId: user.id,
-          personId: counterpartId,
+          personId: sender.id,
           type: 'offer',
           text: o,
           sourceTable: 'messages',
@@ -368,47 +566,105 @@ async function processNetworkingThread(
           confidence: 0.75,
           createdAt: now.toISOString(),
         });
-      await db.chats.update(chat.id, { lastInboundAt: m.sentAt, updatedAt: now.toISOString() });
-      chat.lastInboundAt = m.sentAt;
+      await db.chats.update(c.id, { lastInboundAt: m.sentAt, updatedAt: now.toISOString() });
+      c.lastInboundAt = m.sentAt;
       await evaluateTrigger(
-        chat,
+        c,
         { type: 'inbound_signal', signal, confidence },
         { table: 'messages', id: m.id, at: m.sentAt },
         now,
       );
+      touched.add(sender.id);
+      // an intro: the people the sender put on the thread become chats the student can open, credited to the sender
+      if (
+        signal === 'intro_offer' &&
+        sender.id === counterpartId &&
+        now.getTime() - new Date(m.sentAt).getTime() < INTRO_CHAT_WINDOW_MS
+      ) {
+        for (const e of [...m.toEmails, ...m.ccEmails]) {
+          const target = byEmail(e);
+          if (!target || target.id === counterpartId || !target.isHuman || chats.has(target.id)) continue;
+          let tc = await db.chats.where('personId').equals(target.id).filter(ACTIVE).first();
+          if (!tc) {
+            tc = {
+              id: newId('c'),
+              userId: user.id,
+              personId: target.id,
+              organizationId: target.currentOrganizationId,
+              stage: 'identified',
+              stageEnteredAt: m.sentAt,
+              source: 'detected',
+              goalTags: [],
+              outreachChannel: 'gmail',
+              bumpCount: 0,
+              priority: 2,
+              threadId: thread.id,
+              referrerPersonId: sender.id,
+              referrerName: sender.displayName,
+              createdAt: m.sentAt,
+              updatedAt: now.toISOString(),
+            };
+            await db.chats.add(tc);
+          }
+          chats.set(target.id, tc);
+          touched.add(target.id);
+        }
+      }
       if (now.getTime() - new Date(m.sentAt).getTime() < 3 * 86_400_000)
         await notify(
           user.id,
           'reply_received',
-          `${person.firstName} replied`,
+          `${sender.firstName} replied`,
           m.bodyText.slice(0, 120),
-          `/people/${person.id}`,
+          `/people/${sender.id}`,
         );
-    } else if (m.direction === 'outbound') {
-      const kind =
-        signal === 'thank_you'
-          ? 'thank_you'
-          : signal === 'scheduling_proposal'
-            ? 'schedule'
-            : chat.stage === 'identified' || chat.stage === 'warming'
-              ? 'outreach'
-              : 'other';
-      await db.chats.update(chat.id, {
-        lastOutboundAt: m.sentAt,
-        firstOutreachAt: chat.firstOutreachAt ?? m.sentAt,
-        updatedAt: now.toISOString(),
-      });
-      chat.lastOutboundAt = m.sentAt;
-      chat.firstOutreachAt = chat.firstOutreachAt ?? m.sentAt;
-      await evaluateTrigger(
-        chat,
-        { type: 'outbound_sent', kind },
-        { table: 'messages', id: m.id, at: m.sentAt },
-        now,
+    } else {
+      // the student's message moves the chats of the people it was addressed to
+      const targets = [...chats.entries()].filter(
+        ([pid]) => chats.size === 1 || m.toEmails.some((e) => byEmail(e)?.id === pid),
       );
+      for (const [pid, c] of targets) {
+        let kind: 'thank_you' | 'schedule' | 'outreach' | 'other' =
+          signal === 'thank_you'
+            ? 'thank_you'
+            : signal === 'scheduling_proposal'
+              ? 'schedule'
+              : c.stage === 'identified' || c.stage === 'warming'
+                ? 'outreach'
+                : 'other';
+        const sinceDone = c.completedAt
+          ? new Date(m.sentAt).getTime() - new Date(c.completedAt).getTime()
+          : -1;
+        if (
+          kind !== 'thank_you' &&
+          c.stage === 'completed' &&
+          sinceDone >= 0 &&
+          sinceDone < THANK_YOU_WINDOW_MS &&
+          GRATITUDE.test(m.bodyText)
+        )
+          kind = 'thank_you';
+        await db.chats.update(c.id, {
+          lastOutboundAt: m.sentAt,
+          firstOutreachAt: c.firstOutreachAt ?? m.sentAt,
+          updatedAt: now.toISOString(),
+        });
+        c.lastOutboundAt = m.sentAt;
+        c.firstOutreachAt = c.firstOutreachAt ?? m.sentAt;
+        await evaluateTrigger(
+          c,
+          { type: 'outbound_sent', kind },
+          { table: 'messages', id: m.id, at: m.sentAt },
+          now,
+        );
+        touched.add(pid);
+      }
     }
   }
-  await evaluateImmediateSuggestions(user.id, { chatId: chat.id, personId: counterpartId }, now);
+  if (chat) touched.add(counterpartId);
+  for (const pid of touched) {
+    const c = chats.get(pid);
+    if (c) await evaluateImmediateSuggestions(user.id, { chatId: c.id, personId: pid }, now);
+  }
 }
 
 export interface RawEvent {
@@ -442,7 +698,7 @@ export async function ingestEvents(
     const others = r.attendees.filter((a) => !a.self && normalizeEmail(a.email) !== userEmail);
     const attendeePersonIds: string[] = [];
     for (const a of others.slice(0, 8)) {
-      if (isAutomatedSender(a.email)) continue;
+      if (isAutomatedSender(a.email, {}, [], a.displayName) || isRoleName(a.displayName)) continue;
       const { person } = await upsertPerson(
         {
           userId: user.id,

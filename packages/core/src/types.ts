@@ -374,6 +374,8 @@ export interface ProposedTime {
   startIso: string;
   endIso?: string;
   raw: string;
+  /** IANA zone the sender stated ("2pm ET"); absent when the time was read in the student's own zone */
+  timeZone?: string;
 }
 
 export interface MessageExtraction {
@@ -382,6 +384,14 @@ export interface MessageExtraction {
   offers: string[];
   factsAboutSender: { type: FactType; text: string }[];
   sentiment: 'warm' | 'neutral' | 'cool';
+  /** out-of-office return date (YYYY-MM-DD) when the auto-reply states one */
+  returnDate?: string;
+  /** a soft "not now" that says when to try again ("ping me in January"): first day to follow up (YYYY-MM-DD) */
+  followUpAfter?: string;
+  /** they declined a call but offered to answer questions over email: reply by email, never propose times */
+  prefersEmail?: boolean;
+  /** an intro or redirect that hands the student to someone else (named, cc'd): the next step is with them */
+  handoff?: boolean;
 }
 
 export interface CalendarEvent {
@@ -415,6 +425,8 @@ export interface CoffeeChat {
   lastOutboundAt?: string;
   lastInboundAt?: string;
   bumpCount: number;
+  /** the person's out-of-office return date (YYYY-MM-DD); bumps wait until the day after */
+  outOfOfficeUntil?: string;
   scheduledEventId?: ID;
   completedAt?: string;
   followedUpAt?: string;

@@ -2221,6 +2221,7 @@ export function buildDemoDataset(
     (me: string) => `Anytime, ${me}. Keep me posted on where you end up.`,
     () => 'It was good to meet you. Best of luck with the search.',
   ];
+  const GLAD_SIGNAL: ReplySignal[] = ['reply_neutral', 'reply_neutral', 'thank_you'];
   const CHECK_IN = [
     {
       open: (month: string) => `A quick update since our call in ${month}:`,
@@ -2319,7 +2320,8 @@ export function buildDemoDataset(
         dir: 'in',
         at: lastIn,
         body: `${GLAD[k / 2]!(meFirst)}\n\n${p.firstName}`,
-        signal: 'reply_neutral',
+        // "It was good to meet you" is their own thank-you for the chat; the other two only answer the student's
+        signal: GLAD_SIGNAL[k / 2]!,
       });
     }
     // talked before the internship started, checked in during it
