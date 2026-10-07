@@ -23,12 +23,15 @@ import { isGivenName, WORDLIKE_GIVEN } from './given-names';
  *    belongs to the person before; a clause with a company also completes a lone first name before it ("Maybe
  *    Kevin? He's at Plaid now").
  * 3. Clean the name part: drop lead-ins ("definitely", "she said to talk to", "I'd ping", "sent you an intro to",
- *    "her manager"), trailing hedges ("too", "maybe"), leading roles ("Engineering Manager Tom Lee") and the clause
+ *    "her manager", "I think", and an interjection before a dash or colon: "Yes — Leo Fischer"), trailing hedges ("too", "maybe"), leading roles ("Engineering Manager Tom Lee") and the clause
  *    after the name ("who...", "is the hiring manager", "in sales", "on slack", "on my team").
  * 4. Reject the piece when any word (or any part of a hyphenated word) is a function word (pronouns, verbs,
- *    non-answers), a role, team, place, group, year or industry word, a plural acronym ("MBAs"), a contraction or
- *    possessive, or not a word at all; when it has more than four words; or when the whole phrase is a company
- *    ("Morgan Stanley", "Mayo Clinic").
+ *    non-answers), a role, team, place, group, year or industry word, a field of work or study ("Supply Chain",
+ *    "Machine Learning", "Real Estate"), a plural acronym ("MBAs"), a contraction or possessive, or not a word at
+ *    all; when it has more than four words; when it pairs a name with an acronym ("Stanford GSB", "NYU Stern") or
+ *    starts with a university ("Berkeley Haas"); or when the whole phrase is an organisation: a company whose name
+ *    reads like a person's ("Morgan Stanley", "Credit Suisse", "Peace Corps"), an institution ("Mayo Clinic"), or
+ *    one the student already has in Orbit (`knownOrgs`: their contacts' companies, targets and school).
  * 5. Decide:
  *    - one word: a name only with a company ("Tom at Stripe"); "Definitely Tom" alone is not enough to save;
  *    - a title and a surname ("Dr. Patel", "Professor Alvarez"): confirm;
@@ -51,6 +54,14 @@ export interface SuggestedNames {
   confirm: SuggestedName[];
   /** Text that is not a person; it stays in the field with a note. */
   skipped: string[];
+}
+
+export interface ReadNamesOptions {
+  /**
+   * Organisations the student already has in Orbit (their contacts' companies, target companies, their school). A
+   * phrase that is one of them is a company, never a person ("Wilson Sonsini"), and completes the person before it.
+   */
+  knownOrgs?: readonly string[];
 }
 
 type Verdict = { kind: 'save' | 'confirm'; name: string } | { kind: 'skip' };
@@ -110,13 +121,39 @@ const DESCRIPTORS = new Set(
     'biotech healthcare consumer retail media entertainment government nonprofit early new old former current',
     'several few many most lots lot bunch couple handful various multiple every each both either neither another',
     'plenty year years first second third fourth final freshman freshmen sophomore sophomores recent mba mbas',
-    'phd phds undergrad undergrads postdoc postdocs',
+    'phd phds undergrad undergrads postdoc postdocs volunteer volunteers',
     'clinic clinics hospital hospitals medicine medical health institute foundation holdings securities',
     'technologies systems inc llc corp corporation',
   ]
     .join(' ')
     .split(' '),
 );
+/**
+ * Fields of work or study, typed as an answer ("Supply Chain", "Machine Learning", "Real Estate"): never part of a
+ * person's name. Only the name is judged with these; a company may contain one ("at Credit Karma", "at Apex Energy").
+ */
+const FIELD_WORDS = new Set(
+  [
+    'learning chain supply resources estate vision processing language languages intelligence economics econ',
+    'physics biology chemistry neuroscience psychology sociology statistics mathematics math robotics aerospace',
+    'logistics procurement pharma pharmaceuticals biotech energy climate sustainability insurance manufacturing',
+    'journalism nursing cybersecurity blockchain crypto semiconductors tech credit corps americorps policy affairs',
+    'relations humanities philosophy linguistics architecture fintech edtech healthtech proptech',
+  ]
+    .join(' ')
+    .split(' '),
+);
+/**
+ * Universities and business schools that open an organisation's name ("Stanford GSB", "Berkeley Haas", "Oxford
+ * Saïd", "Cornell Tech"). Ambiguous ones that are common names ("Duke", "Penn", "Brown", "Rice") are left out.
+ */
+const UNIVERSITY_FIRST = new Set(
+  'stanford harvard yale princeton cornell berkeley nyu mit oxford cambridge ucla usc wharton kellogg insead dartmouth northwestern georgetown columbia caltech carnegie'.split(
+    ' ',
+  ),
+);
+/** An acronym of three or more capitals ("GSB", "HAI", "BNP"): an organisation, not part of a name. */
+const ACRONYM = /^\p{Lu}{3,}$/u;
 /** Companies whose names read like a person's: never saved as one. */
 const NAMELIKE_COMPANIES = new Set([
   'morgan stanley',
@@ -151,6 +188,31 @@ const NAMELIKE_COMPANIES = new Set([
   'houlihan lokey',
   'cantor fitzgerald',
   'baird',
+  'credit suisse',
+  'credit agricole',
+  'bnp paribas',
+  'societe generale',
+  'peace corps',
+  'teach for america',
+  'city year',
+  'americorps',
+  'mass general',
+  'kaiser permanente',
+  'wilson sonsini',
+  'fenwick west',
+  'kirkland ellis',
+  'latham watkins',
+  'sullivan cromwell',
+  'davis polk',
+  'simpson thacher',
+  'cleary gottlieb',
+  'paul weiss',
+  'alvarez marsal',
+  'perella weinberg',
+  'evercore',
+  'lazard',
+  'moelis',
+  'guggenheim',
 ]);
 /** Last words that make a capitalised phrase a company or institution: "Mayo Clinic", "Bain Capital". */
 const ORG_SUFFIX = new Set(
@@ -178,6 +240,8 @@ const LEAD_IN = new RegExp(
       'definitely|def|maybe|probably|prob|perhaps|possibly|also|especially|and|or|either|plus|oh|um|uh|hmm|so|ok',
       'okay|yes|yeah|honestly|actually|well|just|really|totally|say|suggest|recommend|like|love|meet',
       'try|ask|contact|email|ping|text|message|dm|thanks|thank you|look up|hit up',
+      // "I think Noah Williams", "honestly I believe Clara Nunez": a hedge before the name
+      '(?:i|we) (?:think|believe|guess|reckon|suppose|feel like)(?: that)?',
       // "I'd", "you'd want to", "I would", "we should": the speaker before the verb
       "(?:i|you|we)(?:'d|'ll| would| will| should| could| can| might| must)(?: (?:want|have|need|like|love) to)?",
       '(?:you|i|we) (?:should|could|can|might|must)(?: (?:definitely|probably|also|maybe|really))? (?:talk|speak|reach out|chat|connect|meet|get in touch)(?: (?:to|with))?',
@@ -192,6 +256,12 @@ const LEAD_IN = new RegExp(
     ')\\s+)+',
   'iu',
 );
+/**
+ * An interjection before a dash or a colon: "Yes — Leo Fischer at Zalando", "Sure - Ivy Chen", "Oh yes: Kenji Ito".
+ * Dropped before the dash can be read as "Name - Company".
+ */
+const INTERJECTION =
+  /^(?:(?:yes|yeah|yep|yup|sure|ok|okay|oh|ah|hmm|um|uh|well|so|definitely|absolutely|totally|honestly|of course|for sure|good question|great question)\b[,!.]*(?:\s+|(?=[—–:])))+(?:[—–:]+|-+(?=\s))\s*/i;
 /** Hedges after a name: "Fatima Malik too", "Priya Shah maybe". */
 const TRAIL =
   /\s+(?:too|as well|also|maybe|probably|perhaps|i think|i guess|tho|though|for sure|definitely|lol|haha)$/i;
@@ -220,14 +290,24 @@ function titleWord(w: string): string {
     : base;
 }
 
-function isCompany(phrase: string): boolean {
-  const key = phrase
+/** "Fenwick & West" -> "fenwick west", "Société Générale" -> "societe generale". */
+function orgKey(phrase: string): string {
+  return phrase
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
     .toLowerCase()
     .replace(/\band\b|&/g, ' ')
     .replace(/[^\p{L}\s]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-  return NAMELIKE_COMPANIES.has(key) || !!knownSizeBucket(phrase);
+}
+
+/** The student's own organisations for one read, as orgKey forms. */
+let known: ReadonlySet<string> = new Set();
+
+function isCompany(phrase: string): boolean {
+  const key = orgKey(phrase);
+  return NAMELIKE_COMPANIES.has(key) || known.has(key) || !!knownSizeBucket(phrase);
 }
 
 /**
@@ -314,6 +394,7 @@ function judgeName(raw: string, hasOrg: boolean): Verdict {
     .replace(/’/g, "'")
     .replace(/[.:!?]+$/, '')
     .trim()
+    .replace(INTERJECTION, '')
     .replace(LEAD_IN, '')
     .replace(TRAIL, '')
     .replace(CLAUSE, '')
@@ -342,13 +423,19 @@ function judgeName(raw: string, hasOrg: boolean): Verdict {
     if (PLURAL_ACRONYM.test(w)) return true;
     // "Second-year", "co-op": a hyphenated word with a role or function word in it ("Mary-Kate" is a name)
     const parts = l.split('-');
-    return parts.some((p) => FUNCTION_WORDS.has(p) || DESCRIPTORS.has(p));
+    return parts.some((p) => FUNCTION_WORDS.has(p) || DESCRIPTORS.has(p) || FIELD_WORDS.has(p));
   };
   const core = words.filter((w, i) => !(i > 0 && i < words.length - 1 && PARTICLES.has(lower(w))));
   if (core.some((w, i) => bad(w, i))) return { kind: 'skip' };
   if (core.length > 4) return { kind: 'skip' };
   if (PARTICLES.has(first) || PARTICLES.has(lower(words[words.length - 1]!))) return { kind: 'skip' };
   if (isCompany(words.join(' '))) return { kind: 'skip' };
+  // an organisation by its shape: "Stanford GSB", "NYU Stern" (an acronym beside a word that is not one), "Berkeley
+  // Haas" (a university first)
+  if (words.length > 1 && !words.every((w) => ACRONYM.test(w)) && words.some((w) => ACRONYM.test(w)))
+    return { kind: 'skip' };
+  if (words.length > 1 && UNIVERSITY_FIRST.has(lower(words[0]!)) && !isGivenName(words[0]!))
+    return { kind: 'skip' };
   const name = words
     .map((w, i) => (i > 0 && PARTICLES.has(w.toLowerCase()) ? w.toLowerCase() : titleWord(w)))
     .join(' ');
@@ -368,7 +455,17 @@ function judgeName(raw: string, hasOrg: boolean): Verdict {
 }
 
 /** Steps 1 and 2: split the answer into pieces with their company. */
-export function readSuggestedNames(text: string): SuggestedNames {
+export function readSuggestedNames(text: string, opts: ReadNamesOptions = {}): SuggestedNames {
+  const outer = known;
+  known = new Set([...outer, ...(opts.knownOrgs ?? []).map(orgKey).filter(Boolean)]);
+  try {
+    return readAnswer(text);
+  } finally {
+    known = outer;
+  }
+}
+
+function readAnswer(text: string): SuggestedNames {
   const names: SuggestedName[] = [];
   const confirm: SuggestedName[] = [];
   const skipped: string[] = [];
@@ -414,7 +511,7 @@ export function readSuggestedNames(text: string): SuggestedNames {
     .replace(/\s\d+[.)]\s+/g, '\n')
     .split(/[,;\n]|[!?]+\s*|(?<!\b(?:dr|mr|mrs|ms|mx|prof|st|\p{L}))\.\s+/iu);
   for (const chunk of chunks) {
-    let part = (chunk ?? '').trim().replace(/[.]+$/, '').trim();
+    let part = (chunk ?? '').trim().replace(/[.]+$/, '').trim().replace(INTERJECTION, '');
     if (!part) continue;
     const before = lone;
     lone = undefined;
@@ -484,7 +581,7 @@ export function readSuggestedNames(text: string): SuggestedNames {
         add(judgeName(name, !!org), org, people.length === 1 ? `${name.trim()}${at[0]}${rest.trim()}` : name);
       skipped.push(...notPeople.reverse().map((s) => s.trim()));
       for (const t of tail.reverse()) {
-        const r = readSuggestedNames(t);
+        const r = readAnswer(t);
         for (const n of r.names) add({ kind: 'save', name: n.name }, n.org, t);
         for (const n of r.confirm) add({ kind: 'confirm', name: n.name }, n.org, t);
         skipped.push(...r.skipped);

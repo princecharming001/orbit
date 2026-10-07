@@ -1266,6 +1266,28 @@ describe('email introductions and suggested names (EG-08)', () => {
     expect(await addSuggestedContacts(user.id, sofia.id, 'Definitely Tom', now)).toEqual([]);
   }, 60_000);
 
+  it("prep-tab answers that name one of the student's own organisations save no person", async () => {
+    const { addSuggestedContacts, knownOrganisations } = await import('./introductions');
+    const sofia = (await db.people
+      .where('userId')
+      .equals(user.id)
+      .filter((p) => p.displayName === 'Sofia Bennett')
+      .first())!;
+    await db.targetCompanies.add({
+      id: 'tc_kirby',
+      userId: user.id,
+      nameRaw: 'Kirby Hale',
+      priority: 2,
+      status: 'researching',
+    });
+    expect(await knownOrganisations(user.id)).toContain('Kirby Hale');
+    expect(await addSuggestedContacts(user.id, sofia.id, 'Kirby Hale', now)).toEqual([]);
+    const [marta] = await addSuggestedContacts(user.id, sofia.id, 'Marta Ruiz, Kirby Hale', now);
+    expect(marta?.displayName).toBe('Marta Ruiz');
+    expect(marta?.currentOrganizationRaw).toBe('Kirby Hale');
+    await db.targetCompanies.delete('tc_kirby');
+  }, 60_000);
+
   it('prep-tab non-answers and company lists never become people (L12)', async () => {
     const { addSuggestedContacts, readSuggestedNames } = await import('./introductions');
     for (const answer of [
