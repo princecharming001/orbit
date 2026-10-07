@@ -242,9 +242,11 @@ export async function upsertSuggestions(
         continue;
       const revived = existing.status === 'expired';
       let outboundMessageId = existing.outboundMessageId;
+      // a cancelled draft (the card was retired) is replaced; one in the student's hands (queued, handed off to
+      // the mail app, failed with its error) stays on the card, or "I sent it" and "Undo" would vanish under them
       if (outboundMessageId) {
         const draft = await db.outbound.get(outboundMessageId);
-        if (!draft || draft.status !== 'draft') outboundMessageId = undefined;
+        if (!draft || draft.status === 'cancelled' || draft.status === 'sent') outboundMessageId = undefined;
       }
       const payload = { ...existing.payload, ...c.payload };
       const changes: Partial<Suggestion> = {
