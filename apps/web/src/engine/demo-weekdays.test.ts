@@ -1,5 +1,7 @@
-// The other suites pin a Tuesday afternoon so the demo's cards exist whenever they run. That must not hide a demo that
-// is empty on the days a student actually opens it: a Friday evening, a weekend, early on a Monday, late at night.
+// demo.test.ts sweeps the weekdays too, but it passes `now` to the loader and checks the brief's prep, thank-you and
+// confirm cards. This suite loads the demo the way the app does, from the clock alone, and checks that every card the
+// demo seeds a chat for is pending, including the bump and the time proposal, on the days a student actually opens it:
+// a Friday evening, a weekend, early on a Monday, late at night.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { db } from '../db/schema';
 import { loadDemo } from './demo';
@@ -19,7 +21,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe('demo loaded on any day of the week', () => {
+describe('demo loaded from the clock on any day of the week', () => {
   for (const [label, at] of LOADS)
     it(`shows prep, a pending bump and the scheduling cards on a ${label}`, async () => {
       vi.useFakeTimers({ toFake: ['Date'], shouldAdvanceTime: true });

@@ -661,7 +661,10 @@ describe('hand-offs (SND-07, SND-12, SND-14, UI-09)', () => {
     const r = await confirmHandoff(user, d.id);
     spy.mockRestore();
     expect(r.ok).toBe(false);
-    expect(!r.ok && r.error).toMatch(/Logged as sent/);
+    // the chat did move, so the student is not told it did not
+    expect(!r.ok && r.error).toBe(
+      'Logged as sent and the chat is updated, but Orbit could not save all of it to their history. Check their page.',
+    );
     const o = (await db.outbound.get(d.id))!;
     expect(o.status).toBe('sent');
     expect(o.sentAt).toBeTruthy();
@@ -669,6 +672,49 @@ describe('hand-offs (SND-07, SND-12, SND-14, UI-09)', () => {
     // the rest of the bookkeeping still ran: the card is closed and the chat moved on
     expect((await db.suggestions.get(s.id))!.status).toBe('sent');
     expect((await db.chats.get(s.chatId!))!.stage).toBe('followed_up');
+  });
+
+  it('a confirmation whose chat update fails says the chat is behind', async () => {
+    const { s, d } = await pendingDraft(user, 'thank_you');
+    expect((await approveAndSend(user, d.id, d.bodyDraft)).ok).toBe(true);
+    const spy = vi.spyOn(db.chats, 'update').mockRejectedValueOnce(new Error('QuotaExceededError'));
+    const r = await confirmHandoff(user, d.id);
+    spy.mockRestore();
+    expect(!r.ok && r.error).toBe(
+      'Logged as sent, but Orbit could not update the chat. Check its stage on their page.',
+    );
+    expect((await db.outbound.get(d.id))!.status).toBe('sent');
+    expect((await db.suggestions.get(s.id))!.status).toBe('sent');
+  });
+
+  it('a Gmail send whose bookkeeping fails tells the student whether the chat moved', async () => {
+    await connectGoogle(user);
+    const seen = new Set<string>();
+    const newNotes = async () => {
+      const fresh = (await db.notifications.where('userId').equals(user.id).toArray()).filter(
+        (n) => !seen.has(n.id),
+      );
+      for (const n of fresh) seen.add(n.id);
+      return fresh.filter((n) => n.title === 'Sent').map((n) => n.body);
+    };
+    await newNotes();
+    const t0 = new Date();
+    const due = new Date(t0.getTime() + UNDO_WINDOW_MS + 1000);
+    const { d } = await pendingDraft(user, 'thank_you');
+    await approveAndSend(user, d.id, d.bodyDraft, undefined, t0);
+    const audit = vi.spyOn(db.audit, 'add').mockRejectedValueOnce(new Error('QuotaExceededError'));
+    await sendDueQueued(user, due);
+    audit.mockRestore();
+    expect(await newNotes()).toEqual([
+      'Orbit sent it and updated the chat, but could not save all of it to their history. Check their page.',
+    ]);
+    const bump = await bumpDraft(user);
+    await approveAndSend(user, bump.id, bump.bodyDraft, undefined, t0);
+    const chats = vi.spyOn(db.chats, 'update').mockRejectedValueOnce(new Error('QuotaExceededError'));
+    await sendDueQueued(user, due);
+    chats.mockRestore();
+    expect((await db.outbound.get(bump.id))!.status).toBe('sent');
+    expect(await newNotes()).toEqual(['Orbit sent it but could not update the chat. Check its stage.']);
   });
 
   it('a Gmail send whose bookkeeping fails half way still closes the card and moves the chat', async () => {

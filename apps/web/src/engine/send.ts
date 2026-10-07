@@ -599,10 +599,12 @@ export async function confirmHandoff(
   if (!m) return { ok: false, error: 'This message is not waiting for confirmation.' };
   try {
     await finalizeSent(user, m, {}, now);
-  } catch {
+  } catch (e) {
     return {
       ok: false,
-      error: 'Logged as sent, but Orbit could not update the chat. Check its stage on their page.',
+      error: chatBehind(e)
+        ? 'Logged as sent, but Orbit could not update the chat. Check its stage on their page.'
+        : 'Logged as sent and the chat is updated, but Orbit could not save all of it to their history. Check their page.',
     };
   }
   return { ok: true };
@@ -708,7 +710,7 @@ async function deliver(
       { providerMessageId: r.id, providerThreadId: r.threadId },
       now,
     );
-  } catch {
+  } catch (e) {
     // it went out: record that much, never leave it in `sending`
     try {
       await db.outbound.update(msg.id, {
@@ -722,7 +724,9 @@ async function deliver(
         user.id,
         'system',
         'Sent',
-        'Orbit sent it but could not update the chat. Check its stage.',
+        chatBehind(e)
+          ? 'Orbit sent it but could not update the chat. Check its stage.'
+          : 'Orbit sent it and updated the chat, but could not save all of it to their history. Check their page.',
       );
     } catch {}
   }
@@ -739,11 +743,27 @@ const TRIGGER_KIND: Partial<
   nurture: 'nurture',
 };
 
+/** The bookkeeping after a send failed somewhere; `chatBehind` says whether the chat itself missed the update. */
+class FinalizeError extends Error {
+  constructor(
+    cause: unknown,
+    readonly chatBehind: boolean,
+  ) {
+    super('Could not finish recording a sent message', { cause });
+  }
+}
+
+/** Whether a failure from `finalizeSent` left the chat (its stage, last contact) behind. Unknown errors count as yes. */
+function chatBehind(e: unknown): boolean {
+  return e instanceof FinalizeError ? e.chatBehind : true;
+}
+
 /**
- * Record a message that really went out: status, suggestion, chat and stage, thread, audit, feedback, touchpoint.
- * Each step runs even when an earlier one fails, so one failed write (a full disk on the touchpoint, say) cannot leave
- * the card pending or the chat behind for a message that is already out. The first failure is rethrown at the end so
- * the caller can tell the student to check.
+ * Record a message that really went out, in this order: status, suggestion, feedback, audit, touchpoint, thread, then
+ * the chat and its stage, recommendations, relationship strength and fresh suggestions. Each step runs even when an
+ * earlier one fails, so one failed write (a full disk on the touchpoint, say) cannot leave the card pending or the chat
+ * behind for a message that is already out. The first failure is rethrown at the end as a `FinalizeError` that says
+ * whether the chat was updated, so the caller tells the student exactly what to check.
  */
 async function finalizeSent(
   user: User,
@@ -752,11 +772,14 @@ async function finalizeSent(
   now: Date,
 ): Promise<void> {
   let failure: unknown;
-  const step = async (run: () => Promise<unknown>): Promise<void> => {
+  let chatMissed = false;
+  const step = async (run: () => Promise<unknown>): Promise<boolean> => {
     try {
       await run();
+      return true;
     } catch (e) {
       failure ??= e;
+      return false;
     }
   };
   let suggestion: Suggestion | undefined;
@@ -764,10 +787,10 @@ async function finalizeSent(
   await step(async () => {
     suggestion = msg.suggestionId ? await db.suggestions.get(msg.suggestionId) : undefined;
   });
-  await step(async () => {
+  chatMissed = !(await step(async () => {
     chat = await chatFor(msg.personId, msg.kind, msg.chatId);
     if (!chat && msg.kind === 'outreach') chat = await openChatForOutreach(user, msg, suggestion, now);
-  });
+  }));
   await step(() =>
     db.outbound.update(msg.id, {
       status: 'sent',
@@ -823,7 +846,7 @@ async function finalizeSent(
   }
   if (chat) {
     const known = chat;
-    await step(async () => {
+    const updated = await step(async () => {
       const fresh = (await db.chats.get(known.id)) ?? known;
       const changes: Partial<CoffeeChat> = {
         lastOutboundAt: now.toISOString(),
@@ -844,6 +867,7 @@ async function finalizeSent(
           : (TRIGGER_KIND[msg.kind] ?? 'other');
       await evaluateTrigger(fresh, { type: 'outbound_sent', kind }, { table: 'outbound', id: msg.id }, now);
     });
+    chatMissed ||= !updated;
   }
   if (msg.kind === 'outreach')
     await step(() =>
@@ -855,7 +879,7 @@ async function finalizeSent(
     );
   await step(() => recomputePersonStrength(msg.personId, now));
   await step(() => evaluateImmediateSuggestions(user.id, { personId: msg.personId, chatId: chat?.id }, now));
-  if (failure !== undefined) throw failure;
+  if (failure !== undefined) throw new FinalizeError(failure, chatMissed);
 }
 
 /** Outreach approved from a recommendation (or anywhere without a chat) opens the chat it starts. */
