@@ -180,6 +180,36 @@ test.describe('Orbit demo flow', () => {
     await expect(page.getByLabel('Message body')).toBeVisible();
   });
 
+  test('prep tab: clear names are saved, unsure ones wait for a yes, roles stay unsaved', async ({
+    page,
+  }) => {
+    await loadDemo(page);
+    await page.getByTestId('suggestion-thank_you').first().getByRole('link').nth(1).click();
+    await expect(page).toHaveURL(/\/people\//);
+    await page.getByRole('tab', { name: /prep/i }).click();
+    const field = page.getByTestId('prep-suggested');
+    await field.fill('Priya Shah at Stripe, will park, career services');
+    await field.press('Enter');
+    await expect(page.getByText(/saved to discover as suggested by .*: Priya Shah$/i)).toBeVisible();
+    const unsure = page.getByTestId('prep-suggested-confirm');
+    await expect(unsure.getByTestId('prep-confirm-row')).toHaveText([/Will Park/]);
+    await expect(field).toHaveValue('career services');
+    await expect(page.getByTestId('prep-suggested-skipped')).toContainText('career services');
+    await unsure.getByTestId('prep-confirm-save').click();
+    await expect(unsure).toBeHidden();
+    await expect(
+      page.getByText(/saved to discover as suggested by .*: Priya Shah, Will Park$/i),
+    ).toBeVisible();
+    await field.fill('mark chen');
+    await field.press('Enter');
+    await expect(unsure.getByTestId('prep-confirm-row')).toHaveText([/Mark Chen/]);
+    await unsure.getByTestId('prep-confirm-skip').click();
+    await expect(unsure).toBeHidden();
+    await expect(
+      page.getByText(/saved to discover as suggested by .*: Priya Shah, Will Park$/i),
+    ).toBeVisible();
+  });
+
   test('cold outreach asks for a connection line, redrafts with it, then approval unlocks', async ({
     page,
   }) => {
