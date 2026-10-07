@@ -207,7 +207,8 @@ describe('suggestions over the demo dataset', () => {
     expect(
       sel
         .slice(0, 3)
-        .every((s) => ['schedule_confirm', 'thank_you', 'prep_brief', 'confirm_stage'].includes(s.kind)),
+        // a promise due today or overdue is hard too (in a timezone west of UTC this one is already overdue)
+        .every((s) => [...HARD_URGENT, 'action_item_reminder'].includes(s.kind)),
     ).toBe(true);
     // one message-bearing card per person; a reminder or prep card may sit next to it (a promise is never dropped)
     const ids = sel
