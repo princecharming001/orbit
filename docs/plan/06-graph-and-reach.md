@@ -162,7 +162,7 @@ Mechanics: `apps/web/src/components/motion.ts` holds the easing curves, a `Tween
 | 5 | A chat changes stage | The stage ring crossfades to the new colour (450 ms); booking a chat and completing one add a single soft burst. |
 | 6 | The Introductions view | Section 6.2. |
 | 7 | Hover, or arrow-key focus | The dot lifts to 1.25 times (120 ms), thin lines to its strongest ties inside the network (up to 12) grow out of it, and the name card fades and slides in; the drift eases to a stop. Leaving reverses it. |
-| 8 | Filters (All, Target companies, Alumni, In a chat, Recent) | Alpha and scale tween over 250 ms, starting at twelve o'clock and sweeping clockwise round the orbit. |
+| 8 | Filters (Everyone, Target companies, Alumni, In pipeline, Last 90 days) | Alpha and scale tween over 250 ms, starting at twelve o'clock and sweeping clockwise round the orbit. |
 | 9 | Pending suggestions | One soft ripple every 2.4 s, on the same beat for every dot, drawn at half rate; the loop sleeps between ripples. |
 | 10 | Loading | An empty orbit whose rings breathe and whose "You" pulses; when the people arrive, animation 1 plays (or a short fade when it already played this session). |
 
