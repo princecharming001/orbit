@@ -187,6 +187,8 @@ Implemented in `packages/core/src/pipeline/transitions.ts` and mirrored in `appl
 
 ## 7. Drafting system (T8)
 
+What a good message says is specified in 15 (outreach playbook): word limits and required moves per kind, connection first, sector register, subject lines, cadence, and the banned phrases the validator rejects. 15 amends this section; where the table below and 15 disagree, 15 wins, and the static build's templates and validator (`packages/core/src/drafts`) follow 15.
+
 ### 7.1 Message kinds and constraints
 
 | Kind | Max words | Must include | Channel notes |

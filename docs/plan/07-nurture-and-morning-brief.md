@@ -1,6 +1,6 @@
 # 07. Nurture engine and the morning brief
 
-Status: build specification. Defines how suggestions are generated (triggers), scored, deduplicated, capped, drafted, assembled into a brief, delivered, acted on, and learned from. Implemented in `packages/core/src/suggestions` (rules and scoring), `packages/jobs/src/functions/brief` (orchestration) and `apps/web/src/app/(app)/today` (UI).
+Status: build specification. Defines how suggestions are generated (triggers), scored, deduplicated, capped, drafted, assembled into a brief, delivered, acted on, and learned from. Implemented in `packages/core/src/suggestions` (rules and scoring), `packages/jobs/src/functions/brief` (orchestration) and `apps/web/src/app/(app)/today` (UI). Every draft attached to a card (bump, scheduling, thank-you, nurture check-in, referral ask, intro request) is written to the outreach playbook (15 §2), and the timing targets the triggers below serve (one bump after five to seven business days, a thank-you within 24 hours, a check-in every four to six weeks) are in 15 §5. The static v1 differs where 14 §1 says so; notably it has no 60-second undo after **Approve & send** (section 4).
 
 ---
 
@@ -14,7 +14,7 @@ Every rule runs in code over stored rows at brief time (and some on events, mark
 | `thank_you` ⚡ | chat `completed` within 48 h; no outbound `thank_you` since completion | `thank_you` | `thank:{chat}` |
 | `schedule_propose` ⚡ | chat `replied` with last inbound signal ∈ {reply_positive, question} and no scheduling message yet; or `scheduling` with the person's last message asking for times | `schedule` | `sched:{chat}:{last_inbound_id}` |
 | `schedule_confirm` ⚡ | last inbound `scheduling_proposal` with ≥ 1 parsed time that is free in the student's calendar | `reply` (accepting a specific time) | `confirm:{chat}:{last_inbound_id}` |
-| `prep_brief` ⚡ | calendar event with a matched person starts in 18–30 h (or today, if created late) | — (payload = PrepBrief) | `prep:{event}` |
+| `prep_brief` ⚡ | calendar event with a matched person starts within 30 h, or on the next business day (a Friday or weekend brief preps Monday's chat) | — (payload = PrepBrief) | `prep:{event}` |
 | `action_item_reminder` | open `action_items` due today or overdue | — or `reply` when the item is "send X" | `ai:{action_item}` |
 | `nurture_checkin` | chat `nurturing` or person strength ≥ 0.5 without a chat; days since last touch ≥ cadence (section 2); not contacted in the last 30 days | `nurture` | `nurture:{person}:{month}` |
 | `reconnect` | strength was ≥ 0.6 at any point and is now < 0.35; last touch > 60 days; person at a target company or alumni | `nurture` | `reconnect:{person}:{quarter}` |
