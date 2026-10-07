@@ -76,6 +76,9 @@ export class LlmError extends Error {
   }
 }
 
+/** What the student sees for any answer Orbit cannot use, whichever check caught it. */
+const BAD_OUTPUT_MESSAGE = 'Claude returned an answer Orbit could not read.';
+
 /** The SDK throws a plain AnthropicError when structured output is not valid JSON or does not match the schema. */
 function isParseFailure(e: unknown): boolean {
   return (
@@ -104,8 +107,7 @@ export function toLlmError(e: unknown): LlmError {
     return (e.status ?? 0) >= 500
       ? new LlmError('server', 'Anthropic had a temporary problem on its side.', detail)
       : new LlmError('other', 'Anthropic could not complete the request.', detail);
-  if (isParseFailure(e))
-    return new LlmError('bad_output', 'Claude returned an answer Orbit could not read.', detail);
+  if (isParseFailure(e)) return new LlmError('bad_output', BAD_OUTPUT_MESSAGE, detail);
   return new LlmError('other', 'Something went wrong while asking Claude.', detail);
 }
 
@@ -266,6 +268,22 @@ async function runParse<T extends z.ZodTypeAny>(
   const c = client();
   if (!c) return undefined;
   const { tag, wrap } = makeWrap(newNonce());
+  // runtime helper reads zod/v4 schemas; its .d.ts names the root 'zod' export (v3 in zod 3.25)
+  const base = zodOutputFormat(schema as never);
+  // The SDK parses inside messages.parse and throws without the response, so its usage would be lost. Catch the
+  // parse error here instead: the tokens of a truncated or malformed answer still count against the daily cap.
+  let parseError: unknown;
+  const format: typeof base = {
+    ...base,
+    parse: (content: string) => {
+      try {
+        return base.parse(content);
+      } catch (e) {
+        parseError = e;
+        return null as never;
+      }
+    },
+  };
   try {
     reserveRequest();
     const res = await c.messages.parse({
@@ -273,14 +291,13 @@ async function runParse<T extends z.ZodTypeAny>(
       max_tokens: maxTokens,
       system: `${system}\n\n${untrustedRule(tag)}`,
       messages: [{ role: 'user', content: buildUser(wrap) }],
-      // runtime helper reads zod/v4 schemas; its .d.ts names the root 'zod' export (v3 in zod 3.25)
-      output_config: { format: zodOutputFormat(schema as never), effort },
+      output_config: { format, effort },
     });
     recordTokens(res.usage);
     if (res.stop_reason === 'refusal') throw new LlmError('refusal', 'Claude declined this request.');
+    if (parseError !== undefined) throw parseError;
     const out = res.parsed_output;
-    if (out === null || out === undefined)
-      throw new LlmError('bad_output', 'Claude returned output that did not match the schema.');
+    if (out === null || out === undefined) throw new LlmError('bad_output', BAD_OUTPUT_MESSAGE);
     if (readPrefs().lastLlmError) writePrefs({ lastLlmError: undefined });
     return out as z.infer<T>;
   } catch (e) {

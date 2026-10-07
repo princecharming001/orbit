@@ -160,6 +160,12 @@ describe('prompt injection hardening', () => {
     await expect(
       llmTriage('a', [{ fromEmail: 'a@b.com', direction: 'inbound', body: INJECTED }], 'me@x.edu'),
     ).rejects.toMatchObject({ reason: 'bad_output' });
+    // Settings shows this verbatim: plain words, and the same as when the SDK itself could not parse the answer
+    const stored = readPrefs().lastLlmError!;
+    expect(stored.message).not.toMatch(/schema/i);
+    expect(stored.message).toBe(
+      toLlmError(new Anthropic.AnthropicError('Failed to parse structured output')).message,
+    );
   });
 
   it('neutralizes every spelling of an untrusted tag', () => {
@@ -268,6 +274,38 @@ describe('daily budget and failures', () => {
     const usage = todaysLlmUsage(readPrefs());
     expect(usage).toMatchObject({ requests: 2, inputTokens: 200, outputTokens: 40 });
     expect(readPrefs().lastLlmError?.reason).toBe('cap');
+  });
+
+  it('counts the tokens of an answer the SDK could not parse against the daily cap', async () => {
+    writePrefs({ llmFeatures: { emailTriage: true } });
+    // the real SDK client, so its own structured-output parsing runs; the answer was cut off at max_tokens
+    const answers = ['{"category":"netw', JSON.stringify(NETWORKING)];
+    const fetch = vi.fn(async () => {
+      const text = answers.shift()!;
+      return Response.json({
+        id: 'msg_1',
+        type: 'message',
+        role: 'assistant',
+        model: 'claude-opus-5-5',
+        content: [{ type: 'text', text }],
+        stop_reason: text.endsWith('}') ? 'end_turn' : 'max_tokens',
+        stop_sequence: null,
+        usage: { input_tokens: 300, output_tokens: 5 },
+      });
+    });
+    setLlmClientFactoryForTests(
+      (apiKey) => new Anthropic({ apiKey, fetch, maxRetries: 0, dangerouslyAllowBrowser: true }),
+    );
+    const p = llmTriage('a', [{ fromEmail: 'a@b.com', direction: 'inbound', body: 'x' }], 'me@x.edu');
+    await expect(p).rejects.toMatchObject({ reason: 'bad_output' });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(todaysLlmUsage(readPrefs())).toMatchObject({ requests: 1, inputTokens: 300, outputTokens: 5 });
+    expect(readPrefs().lastLlmError?.message).toBe('Claude returned an answer Orbit could not read.');
+    // a well-formed answer still comes back parsed
+    const ok = await llmTriage('a', [{ fromEmail: 'a@b.com', direction: 'inbound', body: 'x' }], 'me@x.edu');
+    expect(ok).toMatchObject({ category: 'networking', isNetworking: true });
+    expect(todaysLlmUsage(readPrefs())).toMatchObject({ requests: 2, inputTokens: 600, outputTokens: 10 });
+    expect(readPrefs().lastLlmError).toBeUndefined();
   });
 
   it('maps a rejected key to an auth failure and records it for Settings', async () => {
