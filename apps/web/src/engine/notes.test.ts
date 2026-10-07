@@ -374,6 +374,53 @@ describe('an unconfirmed guess and a corrected match leave no stale pipeline sta
     ).toBe(true);
   });
 
+  it('L18: a thank-you drafted from the note stops quoting a fact that moved to someone else', async () => {
+    await db.users.update(user.id, { onboardingCompletedAt: '2026-09-01T00:00:00.000Z' });
+    const u = (await db.users.get(user.id))!;
+    const maya = await person('Maya Wu', 'maya@figma.com', 'Figma');
+    const mia = await person('Mia Lopez', 'mia@ramp.com', 'Ramp');
+    const at = '2026-10-02T15:00:00.000Z';
+    // the calendar already completed the chat, so correcting the note does not revert it
+    await db.chats.add({
+      id: 'c-done',
+      userId: user.id,
+      personId: maya.id,
+      stage: 'completed',
+      stageEnteredAt: at,
+      completedAt: at,
+      source: 'manual',
+      goalTags: [],
+      bumpCount: 0,
+      priority: 2,
+      createdAt: '2026-09-20T12:00:00.000Z',
+      updatedAt: at,
+    });
+    const text = `Coffee with Maya Wu. ${NOTE}`;
+    const thanks = async () => (await db.suggestions.where('dedupeKey').equals('thank:c-done').first())!;
+    const draftOf = async () => (await db.outbound.get((await thanks()).outboundMessageId!))!;
+
+    const n = await ingestNote(u, { source: 'manual', occurredAt: at, text }, NOW);
+    expect(n.matchStatus).toBe('auto');
+    await evaluateImmediateSuggestions(user.id, {}, NOW);
+    expect((await draftOf()).bodyDraft).toMatch(/refer me to the design engineering role/);
+    await rematchNote(u, n.id, mia.id, NOW);
+    const redrafted = await draftOf();
+    expect((await thanks()).status).toBe('pending');
+    expect(redrafted.status).toBe('draft');
+    expect(redrafted.bodyDraft).not.toMatch(/refer/);
+    expect(redrafted.claims ?? []).toEqual([]);
+
+    // a draft the student already edited cannot be rewritten: it is cancelled and the card retired
+    await rematchNote(u, n.id, maya.id, NOW);
+    await evaluateImmediateSuggestions(user.id, {}, NOW);
+    const again = await draftOf();
+    expect(again.bodyDraft).toMatch(/refer me to the design engineering role/);
+    await db.outbound.update(again.id, { bodyFinal: `${again.bodyDraft}\nSee you soon.` });
+    await rematchNote(u, n.id, mia.id, NOW);
+    expect((await db.outbound.get(again.id))!.status).toBe('cancelled');
+    expect(await thanks()).toMatchObject({ status: 'expired', expiredReason: 'note_moved' });
+  });
+
   it('a full name two people share is not attached; the card tells them apart by company', async () => {
     const bain = await person('Tom Wu', 'tom.wu@bain.com', 'Bain & Company');
     const google = await person('Tom Wu', 'tomwu@google.com', 'Google');
