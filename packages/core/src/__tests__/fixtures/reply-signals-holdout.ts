@@ -402,4 +402,57 @@ export const HOLDOUT: SignalExample[] = [
     times: ['Thu 10/8 14:00', 'Fri 10/9 11:00'],
     zone: 'America/Los_Angeles',
   },
+  // Blind-test round: half of the replies a tester wrote without seeing the corpus, set aside before tuning.
+  {
+    id: 'bt-pos-what-times',
+    label: 'positive',
+    body: 'Yes of course!! Would love to. What times work for you?',
+  },
+  {
+    id: 'bt-prop-monday-10am',
+    label: 'proposal',
+    body: 'Happy to chat! Monday works. 10am?',
+    times: ['Mon 10/5 10:00'],
+  },
+  {
+    id: 'bt-resched-thursday',
+    label: 'reschedule',
+    body: "I won't be able to make Thursday, I'm afraid. Can we find another time?",
+  },
+  {
+    id: 'bt-dh-many-requests',
+    label: 'decline_hard',
+    body: "Hi Jordan,\n\nI appreciate you reaching out. I get a lot of these requests and unfortunately can't take them on. I wish you the best in your search.\n\nRegards,\nM. Patel",
+  },
+  { id: 'bt-dh-thx-but-no', label: 'decline_hard', body: 'thx but no' },
+  {
+    id: 'bt-ds-year-end-close',
+    label: 'decline_soft',
+    body: 'Timing is rough right now with year-end close. Reach back out in a couple months.',
+  },
+  {
+    id: 'bt-ds-mentees-next-fall',
+    label: 'decline_soft',
+    body: "I'm not taking on any new mentees this year, sorry. Maybe reach out next fall?",
+  },
+  {
+    id: 'bt-ih-rachel-bain',
+    label: 'intro_handoff',
+    body: "You should definitely talk to my old manager Rachel Green — she's at Bain now. Want me to introduce you?",
+  },
+  {
+    id: 'bt-ref-program',
+    label: 'referral',
+    body: "We have an employee referral program; I'd be glad to put your name in.",
+  },
+  {
+    id: 'bt-eo-phone-here',
+    label: 'email_only',
+    body: "Phone isn't great for me — I'm happy to answer a few questions here though.",
+  },
+  {
+    id: 'bt-ty-follow-up-note',
+    label: 'thank_you',
+    body: 'Thank you for the follow-up note, glad it was helpful. Keep in touch!',
+  },
 ];

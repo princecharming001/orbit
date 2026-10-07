@@ -1740,7 +1740,7 @@ export function buildDemoDataset(
         dir: 'in',
         at: offerAt,
         body: `Of course. Once you've picked a team, send me the posting and I'll put your name in with the recruiter.\n\nMaya`,
-        signal: 'reply_positive',
+        signal: 'referral_offer',
       },
     ]);
     const ev = addEvent(maya, {

@@ -1248,3 +1248,64 @@ describe('warm-up', () => {
     expect(new Date(plan.readyAt).getDate()).toBe(8); // Thursday
   });
 });
+
+describe('blind-test misses: the causes, not the strings', () => {
+  const ref = new Date('2026-10-01T13:00:00Z'); // Thursday 9:00 AM Eastern
+  const ET = 'America/New_York';
+  const sig = (body: string) => heuristicSignal(body, 'inbound', ref, { timeZone: ET });
+  const slots = (body: string) =>
+    sig(body).extraction.proposedTimes.map(
+      (t) =>
+        `${new Date(t.startIso).toLocaleString('en-US', {
+          timeZone: t.timeZone ?? ET,
+          weekday: 'short',
+          month: 'numeric',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+          hourCycle: 'h23',
+        })}${t.timeZone ? ` ${t.timeZone}` : ''}`,
+    );
+
+  it('a bare time in the sentence after a day takes that day', () => {
+    expect(slots('Friday is good. 11am?')).toEqual(['Fri, 10/2, 11:00']);
+    expect(sig('Friday is good. 11am?').signal).toBe('scheduling_proposal');
+    // not a day the sender says is taken
+    expect(slots("I'm out Friday. 11am?")).toEqual([]);
+  });
+
+  it('"later that day" and "that afternoon" reuse the day named before, and a stated zone holds for the sentence', () => {
+    expect(slots('Tue 10/6 at 9am CT works, or that afternoon at 3.')).toEqual([
+      'Tue, 10/6, 09:00 America/Chicago',
+      'Tue, 10/6, 15:00 America/Chicago',
+    ]);
+    expect(slots('Wednesday at 10am, or later the same day around 4pm.')).toEqual([
+      'Wed, 10/7, 10:00',
+      'Wed, 10/7, 16:00',
+    ]);
+  });
+
+  it('an invitation to come back sets the follow-up date and softens a no', () => {
+    expect(followUpDate('Heads down until our launch in March. Reach back out in April?', ref, ET)).toBe(
+      '2027-04-01',
+    );
+    expect(followUpDate('try me in Q2', ref, ET)).toBe('2027-04-01');
+    expect(followUpDate('maybe after Q1', ref, ET)).toBe('2027-04-01');
+    const r = sig("I'll have to say no for the moment, but ask me again next spring.");
+    expect(r.signal).toBe('reply_decline');
+    expect(r.extraction.decline).toBe('soft');
+    expect(r.extraction.followUpAfter).toBe('2027-03-01');
+  });
+
+  it('a no to a call with an article still pairs with a yes to written questions', () => {
+    const r = sig("I can't take a call this month, but happy to answer questions in this thread.");
+    expect(r.signal).toBe('question');
+    expect(r.extraction.prefersEmail).toBe(true);
+  });
+
+  it('an assistant added to find a time is a yes, even with "looking forward to it"', () => {
+    expect(sig("cc'ing my EA Sam to find us a time. Looking forward to it.").signal).toBe('reply_positive');
+    // a real confirmation still is one
+    expect(sig('Accepted the invite, looking forward to it.').signal).toBe('scheduling_confirmation');
+  });
+});
