@@ -51,6 +51,11 @@ const ANSWERED_STAGES: CoffeeChat['stage'][] = [
   'completed',
   'followed_up',
 ];
+/**
+ * Entering one of these after the student's last message means the person answered it. `followed_up` is not one:
+ * the student's own thank-you puts the chat there.
+ */
+const ANSWER_STAGES: CoffeeChat['stage'][] = ANSWERED_STAGES.filter((st) => st !== 'followed_up');
 const INACTIVE_STAGES: CoffeeChat['stage'][] = ['declined', 'no_response', 'archived'];
 /** Statuses that count as "already written" for caps and cooldowns; a hand-off counts from the moment it opened. */
 const COMMITTED: OutboundStatus[] = ['sent', 'queued', 'sending', 'handed_off'];
@@ -141,7 +146,7 @@ export async function checkSendAllowed(
       const chats = await db.chats.where('personId').equals(personId).toArray();
       const answered =
         chats.some((c) => !!c.lastInboundAt && new Date(c.lastInboundAt) > lastAt) ||
-        (!!chat && ANSWERED_STAGES.includes(chat.stage) && new Date(chat.stageEnteredAt) >= lastAt);
+        (!!chat && ANSWER_STAGES.includes(chat.stage) && new Date(chat.stageEnteredAt) >= lastAt);
       if (!answered)
         return {
           allowed: false,

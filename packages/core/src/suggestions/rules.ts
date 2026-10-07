@@ -1,4 +1,5 @@
 import { maxBumpsFor, sectorOf } from '../drafts/sector';
+import { declineReengage } from '../pipeline/transitions';
 import type {
   ActionItem,
   CalendarEvent,
@@ -385,6 +386,32 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
         goalRelevance: liveRel,
         confidence: 1,
       });
+    }
+    // a decline with a time limit ("not this quarter") is a "not now": once the window has passed (and at least three
+    // weeks after they said it), one polite second try is fair
+    if (chat.stage === 'declined' && lastIn?.signal === 'reply_decline') {
+      const saidAt = new Date(lastIn.sentAt);
+      const re = declineReengage(lastIn.bodyText, saidAt);
+      const due = re ? Math.max(new Date(re.at).getTime(), saidAt.getTime() + 21 * DAY) : 0;
+      if (
+        re &&
+        now.getTime() >= due &&
+        now.getTime() - due < 45 * DAY &&
+        (!chat.lastOutboundAt || new Date(chat.lastOutboundAt) < saidAt) &&
+        !inp.recentlyContacted.has(person.id)
+      )
+        out.push({
+          kind: 'reconnect',
+          personId: chat.personId,
+          chatId: chat.id,
+          dedupeKey: `reengage:${chat.id}:${lastIn.id}`,
+          reasonText: `${person.firstName} said not ${re.said}; that has passed, so one short note is fair`,
+          signals: { saidAt: lastIn.sentAt, reengageAt: re.at },
+          payload: { reengage: { said: re.said, past: re.past, at: lastIn.sentAt } },
+          urgency: 0.5,
+          goalRelevance: rel,
+          confidence: 0.9,
+        });
     }
     if (
       chat.stage === 'nurturing' ||

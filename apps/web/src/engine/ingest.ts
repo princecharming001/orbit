@@ -22,7 +22,7 @@ import {
 import { addTouchpoint, notify, recomputePersonStrength } from '../db/repo';
 import { db } from '../db/schema';
 import { llmEnabled, llmSignal, llmTriage } from '../integrations/anthropic';
-import { evaluateImmediateSuggestions, surfaceLlmFailure } from './brief';
+import { evaluateImmediateSuggestions, refreshPendingDrafts, surfaceLlmFailure } from './brief';
 import { processIntroductions } from './introductions';
 import { loadPeopleCache, upsertPerson } from './people';
 import { evaluateTrigger } from './stages';
@@ -890,7 +890,8 @@ export async function ingestEvents(
           now,
           new Date(r.startAt),
         );
-      // the chat was completed when the meeting ended, not when Orbit noticed
+      // the chat was completed when the meeting ended, not when Orbit read the calendar (a meeting from August is not
+      // "just now", and gets no thank-you card seven weeks late)
       await evaluateTrigger(
         chat,
         { type: 'event_ended', confidence: confidence >= 0.9 ? 0.95 : 0.7 },
@@ -900,7 +901,20 @@ export async function ingestEvents(
       );
       await db.chats.update(chat.id, { completedAt: chat.completedAt ?? r.endAt });
       chat.completedAt = chat.completedAt ?? r.endAt;
-      // mail is often synced before the calendar: a message already sent after the meeting is the thank-you
+      // mail is often read before the calendar: a thank-you already sent after the meeting moves the chat on, with
+      // that message as the evidence; any other message sent after the meeting is the thank-you too
+      if (chat.stage === 'completed' && chat.threadId) {
+        const thanks = (await db.messages.where('threadId').equals(chat.threadId).sortBy('sentAt')).find(
+          (m) => m.direction === 'outbound' && m.signal === 'thank_you' && m.sentAt >= r.endAt,
+        );
+        if (thanks)
+          await evaluateTrigger(
+            chat,
+            { type: 'outbound_sent', kind: 'thank_you' },
+            { table: 'messages', id: thanks.id, at: thanks.sentAt },
+            now,
+          );
+      }
       if (chat.stage === 'completed' && chat.lastOutboundAt && chat.lastOutboundAt > r.endAt)
         await evaluateTrigger(
           chat,
@@ -928,6 +942,8 @@ export async function ingestEvents(
     }
     await evaluateImmediateSuggestions(user.id, { chatId: chat.id, personId: pid }, now);
   }
+  // proposed windows were drafted against the old calendar
+  if (count) await refreshPendingDrafts(user, { kinds: ['schedule', 'reply'] });
   return { events: count, chats: chatCount };
 }
 

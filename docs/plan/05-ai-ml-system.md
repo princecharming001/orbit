@@ -214,13 +214,16 @@ What a good message says is specified in 15 (outreach playbook): word limits and
 
 ```ts
 {
-  user: { firstName, school, gradYear, majors, cycleLabel, targetFunctions, oneLiner /* from resume_facets.summary */, schedulingLink?, timezone },
+  user: { firstName, school, gradYear, degree, majors, cycleLabel, targetFunctions, credibility? /* one resume line that opens with a past-tense verb */, schedulingLink?, timezone },
+  // the "who I am" clause is composed from year, short school name and major; a free-text resume summary is never spliced in
   styleCard, exemplars: [3 outbound emails of the same kind if available, else closest],
   person: { name, firstName, title, org, location, school, relationshipType, isAlumni, strength, affiliations: [...last 3] },
   facts: PersonFact[] /* type, text, occurred_at, source */ (max 15, newest first, ranked by relevance to kind),
   thread: last 4 messages (stripped) when replying,
   chat: { stage, lastOutboundAt, lastInboundAt, bumpCount, scheduledEvent? },
-  kind, channel, proposedWindows?: [...], target?: { name, title, org, why } /* intro_request */,
+  kind, channel, proposedWindows?: [...] /* real free slots, see 15 §9 */, busy?: [...] /* to check a time they proposed */,
+  target?: { name, title, org, why } /* intro_request */, newAffiliation? /* a current role started in the last 120 days */,
+  update?, news?, answer? /* what the student typed into the needs-input prompt */,
   suggestionReason,
   constraints: { maxWords, mustInclude[], mustNotInclude[] }
 }
@@ -241,6 +244,7 @@ DraftMessage = z.object({
 Validator (`packages/ai/src/tasks/draft_message/validate.ts`), all must pass or the draft is regenerated once with the failures appended, then marked `needs_review` and excluded from the brief:
 
 - every `about_person` or `shared` claim has a `fact_id` that exists in the pack (hallucination gate);
+- the body names no person, company, school, post, event, mutual connection or figure (GPA, percentage, large number) that is not in the context pack or the template draft, even when the model returns no claims (`unsupported_detail`; the template itself is held to the same check in tests);
 - word count ≤ max; no banned phrases (`I hope this email finds you well`, `reach out`, `pick your brain`, `leverage`, `synergy`, `as an AI`); no URLs other than the scheduling link, the user's LinkedIn or a URL present in facts; no email addresses other than the recipient's;
 - for `bump`: contains a reference to the prior message date or topic; for `schedule`: contains the windows or the link; for `reply`: every ask in `asks_of_user` is addressed (checked by a second cheap call `reply_coverage` only when `asks_of_user` is non-empty);
 - the recipient's first name appears exactly as stored (no nickname inventing);

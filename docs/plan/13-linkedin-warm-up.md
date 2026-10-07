@@ -23,13 +23,13 @@ Cold LinkedIn messages from a stranger get ignored. The same message after the r
 ```
 day 0                 view_profile   "View their profile and follow them"   due when the plan starts, or 10:00 that day if earlier
 day max(1, ⌊n/2⌋)     react_post     "React to one recent post that you genuinely find useful"   10:00 (no later than the comment)
-day max(1, n−1)       comment_post   "Leave one specific, non-flattering comment (a question or an added point)"   10:00 (day 1 when n = 2)
+day max(1, n−1)       comment_post   "Leave one substantive comment: a question or an added point, not praise"   10:00 (day 1 when n = 2)
 ready  day n, 09:00   outreach suggested once ready AND at least one action is done; once every action is resolved
                       with at least one done, from the start of day 2 (or day n if sooner), so the activity is never
                       one ten-minute burst; when every action is skipped, right away, worded as a choice
                       ("You skipped the warm-up. Message Dana without it?")
 ```
-`n` is `warmUpDays`, clamped to 2..10; days and hours are in the student's timezone (`user.timezone`), and every action is due before the ready date, so a plan started in the afternoon is never born overdue (`buildWarmUpPlan` in `packages/core/src/warmup/rules.ts`). Stored on `coffee_chats.warmUp` (`WarmUpPlan`: `startedAt`, `readyAt`, `actions[] {id, kind, label, url, dueAt, doneAt?, skippedAt?, note?}`).
+`n` is `warmUpDays`, clamped to 2..10. Days after day 0 are working days: no step is due on a Saturday or a Sunday, so a warm-up started on a Friday reacts on Tuesday and is ready on Thursday (n = 4). Days and hours are in the student's timezone (`user.timezone`), and every action is due before the ready date, so a plan started in the afternoon is never born overdue (`buildWarmUpPlan` in `packages/core/src/warmup/rules.ts`). Stored on `coffee_chats.warmUp` (`WarmUpPlan`: `startedAt`, `readyAt`, `actions[] {id, kind, label, url, dueAt, doneAt?, skippedAt?, note?}`).
 
 ## 5. Suggestions and brief
 

@@ -52,10 +52,11 @@ function atLocalHour(key: string, hour: number, tz?: string): Date {
 }
 
 /**
- * The warm-up schedule, in the student's timezone. The first action is due when the plan starts (or at 10:00 that
- * day if they start in the early morning), never earlier, so a plan started in the afternoon is not born overdue.
- * The react and the comment fall on later days, and every action is due before the ready date (day n, 09:00).
- * `warmUpDays` is clamped to 2..10; with 2 days the react and the comment share day 1.
+ * The warm-up schedule, in the student's timezone, counted in working days (Saturdays and Sundays are skipped). The
+ * first action is due when the plan starts (or at 10:00 that day if they start in the early morning), never earlier,
+ * so a plan started in the afternoon is not born overdue. The react and the comment fall on later days, and every
+ * action is due before the ready date (working day n, 09:00). `warmUpDays` is clamped to 2..10; with 2 days the
+ * react and the comment share day 1.
  */
 export function buildWarmUpPlan(slug: string, startedAt: Date, warmUpDays = 4, tz?: string): WarmUpPlan {
   const n = Math.min(
@@ -63,8 +64,18 @@ export function buildWarmUpPlan(slug: string, startedAt: Date, warmUpDays = 4, t
     Math.max(WARMUP_DAYS_MIN, Number.isFinite(warmUpDays) ? Math.round(warmUpDays) : 4),
   );
   const startDay = Date.parse(`${wallKey(startedAt, tz)}T00:00:00Z`);
-  const day = (k: number, h = 10) =>
-    atLocalHour(new Date(startDay + k * DAY_MS).toISOString().slice(0, 10), h, tz).toISOString();
+  // the k-th working day after the start: people are on LinkedIn during the week, so no step is due on a Saturday
+  // or a Sunday (a warm-up started on Friday reacts on Tuesday, not Sunday)
+  const dayKey = (k: number) => {
+    let at = startDay;
+    for (let added = 0; added < k; ) {
+      at += DAY_MS;
+      const wd = new Date(at).getUTCDay();
+      if (wd !== 0 && wd !== 6) added++;
+    }
+    return new Date(at).toISOString().slice(0, 10);
+  };
+  const day = (k: number, h = 10) => atLocalHour(dayKey(k), h, tz).toISOString();
   const first = new Date(Math.max(startedAt.getTime(), Date.parse(day(0)))).toISOString();
   const commentDay = Math.max(1, n - 1);
   const actions: WarmUpAction[] = [
@@ -85,7 +96,7 @@ export function buildWarmUpPlan(slug: string, startedAt: Date, warmUpDays = 4, t
     {
       id: 'w3',
       kind: 'comment_post',
-      label: 'Leave one specific, non-flattering comment (a question or an added point)',
+      label: 'Leave one substantive comment: a question or an added point, not praise',
       url: linkedinActivityUrl(slug),
       dueAt: day(commentDay),
     },

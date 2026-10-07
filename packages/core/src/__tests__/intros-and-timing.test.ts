@@ -127,9 +127,9 @@ describe('a missed proposed time (PS-2 follow-up)', () => {
         missedProposal: { raw: 'Thursday at 2pm', startIso: '2026-10-08T18:00:00Z', reason: 'passed' },
       }),
     );
-    expect(out.body).toContain("I'm sorry I didn't get back to you in time for Thursday at 2pm.");
+    expect(out.body).toContain("I'm sorry I didn't get back to you in time for Thursday, Oct 8 at 2pm.");
     expect(out.body).toContain(
-      'Would either of these work instead? Monday at 10am or Tuesday at 10am (EDT).',
+      'Would either of these work instead? Monday, Oct 12 at 10am or Tuesday, Oct 13 at 10am (EDT).',
     );
     expect(out.body).not.toMatch(/that would be great/);
     const issues = validateDraft(out, {
@@ -150,9 +150,9 @@ describe('a missed proposed time (PS-2 follow-up)', () => {
       }),
     );
     expect(out.body).toContain(
-      'Thank you for suggesting Monday at 9am. Unfortunately I have a conflict then.',
+      'Thank you for suggesting Monday, Oct 12 at 9am. Unfortunately I have a conflict then.',
     );
-    expect(out.body).toContain('Would Monday at 10am (EDT) work instead?');
+    expect(out.body).toContain('Would Monday, Oct 12 at 10am (EDT) work instead?');
   });
 });
 

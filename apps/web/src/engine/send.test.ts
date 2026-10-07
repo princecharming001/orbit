@@ -139,6 +139,10 @@ async function freshPerson(user: User, opts: { email?: boolean; linkedin?: boole
   const chatted = new Set([
     ...(await db.chats.where('userId').equals(user.id).toArray()).map((c) => c.personId),
     ...(await db.outbound.where('userId').equals(user.id).toArray()).map((o) => o.personId),
+    // nor anyone on an email thread: outreach to them picks that thread back up instead of starting one
+    ...(await db.threads.where('userId').equals(user.id).toArray()).flatMap(
+      (t) => t.participantPersonIds ?? [],
+    ),
   ]);
   const p = (await db.people
     .where('userId')
@@ -198,8 +202,11 @@ describe('threading (SND-01, IS-1, SND-18)', () => {
 
   it('a bump drafted from the profile (no In-Reply-To stored) still replies to the last message', async () => {
     await connectGoogle(user);
-    const bump = await bumpDraft(user);
-    expect(bump.externalThreadId).toBeTruthy();
+    const drafted = await bumpDraft(user);
+    expect(drafted.externalThreadId).toBeTruthy();
+    // drafts now store the message they answer; an older draft without it must still reply to the last message
+    await db.outbound.update(drafted.id, { inReplyToMessageId: undefined });
+    const bump = (await db.outbound.get(drafted.id))!;
     expect(bump.inReplyToMessageId).toBeUndefined();
     const r = await approveAndSend(user, bump.id, bump.bodyDraft, undefined, new Date(), { undoWindowMs: 0 });
     expect(r.ok).toBe(true);

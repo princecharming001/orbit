@@ -1910,7 +1910,7 @@ export function buildDemoDataset(
           {
             id: 'w3',
             kind: 'comment_post',
-            label: 'Leave one specific, non-flattering comment (a question or an added point)',
+            label: 'Leave one substantive comment: a question or an added point, not praise',
             url: `https://www.linkedin.com/in/${noah.linkedinSlug}/recent-activity/all/`,
             dueAt: businessDay(nextDue, 1, 10).toISOString(),
           },

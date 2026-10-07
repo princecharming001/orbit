@@ -1,4 +1,4 @@
-import type { OutboundMessage } from '@orbit/core';
+import type { DraftNeed, OutboundMessage } from '@orbit/core';
 import { LINKEDIN_NOTE_MAX, MAX_WORDS, wordsIn } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { type ReactNode, useEffect, useState } from 'react';
@@ -19,10 +19,8 @@ import { useSession } from '../state/session';
 import { Button, cx, Input, relDate, Textarea, useToast } from '../ui';
 import { copyText, openHandoff } from './approve';
 
-const INPUT_PROMPT: Record<
-  'connection' | 'update' | 'post',
-  { label: string; hint: string; placeholder: string }
-> = {
+type PromptNeed = Exclude<DraftNeed, 'post'>;
+const INPUT_PROMPT: Record<PromptNeed, { label: string; hint: string; placeholder: string }> = {
   connection: {
     label: 'One line only true of them',
     hint: 'How you found them, what you share, or what of theirs you read. Orbit will not send a cold message without it.',
@@ -33,10 +31,30 @@ const INPUT_PROMPT: Record<
     hint: 'What you did with their advice, or what changed. A check-in without news reads as a nudge.',
     placeholder: 'e.g. Took your advice and moved my summer to the ops role; first week was ...',
   },
-  post: {
-    label: 'What is their post about?',
-    hint: 'One claim from it, in your words.',
-    placeholder: 'e.g. junior engineers should own a metric in their first quarter',
+  news: {
+    label: 'What are you congratulating them on?',
+    hint: 'Finish the sentence "Just saw the news about ...". Orbit has no job change on record for them.',
+    placeholder: 'e.g. your move to Figma as a senior PM',
+  },
+  target: {
+    label: 'Who should they introduce you to?',
+    hint: 'Name, and title and company if you know them.',
+    placeholder: 'e.g. Lucas Fischer, Engineering Manager at Ramp',
+  },
+  answer: {
+    label: 'Your answer to their question',
+    hint: 'Orbit never answers a question for you. One or two sentences in your own words.',
+    placeholder: 'e.g. Mostly growth and onboarding, since that is what I worked on at Brex',
+  },
+  role: {
+    label: 'Which role are you applying to?',
+    hint: 'The role and the company, so the ask is a two-minute task for them.',
+    placeholder: 'e.g. PM Intern at Notion',
+  },
+  takeaway: {
+    label: 'One thing they said that stuck with you',
+    hint: 'A thank-you without it reads like a form letter. Their advice, a story, a point they made, in a few words.',
+    placeholder: 'e.g. to lead every interview answer with one project story',
   },
 };
 
@@ -110,18 +128,20 @@ export function DraftEditor({
   const edited = body.trim() !== draft.bodyDraft.trim();
   const isLinkedIn = draft.channel === 'linkedin';
   const connectionNote = isConnectionNote(draft, person ?? undefined, chats ?? []);
-  const needs = (draft.needsInput ?? []).filter((n) => n === 'connection' || n === 'update');
+  const needs = (draft.needsInput ?? []).filter((n): n is PromptNeed => n !== 'post');
   const hasPlaceholder = /\[[^\]]{3,}\]/.test(body);
   const blocked =
     (needs.length > 0 && (hasPlaceholder || !edited)) || issues.some((i) => i.blocking) || !!notAllowed;
   const shownError = error ?? (draft.status === 'failed' || draft.error ? draft.error : undefined);
   if (['queued', 'sending', 'handed_off', 'sent'].includes(draft.status))
     return <OutboxStatus draft={draft} onClose={onCancel} />;
-  const canRegenerate = needs.every((n) => (inputs[n] ?? '').trim().length >= 8);
+  const canRegenerate = needs.every((n) => (inputs[n] ?? '').trim().length >= (n === 'role' ? 4 : 8));
   const regenerate = async () => {
     if (!user) return;
     setRegenerating(true);
-    await regenerateDraft(user, draft.id, { connection: inputs.connection, update: inputs.update });
+    const given = Object.fromEntries(needs.map((n) => [n, inputs[n]?.trim()]).filter(([, v]) => v));
+    await regenerateDraft(user, draft.id, given);
+    setInputs({});
     setRegenerating(false);
   };
   return (
@@ -140,6 +160,7 @@ export function DraftEditor({
                 onChange={(e) => setInputs((v) => ({ ...v, [n]: e.target.value }))}
                 placeholder={INPUT_PROMPT[n].placeholder}
                 aria-label={INPUT_PROMPT[n].label}
+                data-testid={`draft-input-${n}`}
               />
             </div>
           ))}
@@ -149,6 +170,7 @@ export function DraftEditor({
               size="sm"
               disabled={!canRegenerate || regenerating}
               onClick={regenerate}
+              data-testid="draft-redraft"
             >
               {regenerating ? 'Redrafting…' : 'Redraft with this'}
             </Button>

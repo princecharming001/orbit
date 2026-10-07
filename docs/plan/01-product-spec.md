@@ -169,6 +169,7 @@ Layout top to bottom:
 - Suggestion kinds, triggers, ranking and guardrails are specified in `07-nurture-and-morning-brief.md`.
 - "Approve & send" opens a 60-second undo toast; the send is queued with a 60 s delay and cancelled on undo. [DEFAULT] (The static v1 keeps the 60 s queue in the browser for Gmail API sends; mail and LinkedIn hand-offs have no queue and wait for the student's "I sent it", see 14 §7.)
 - A suggestion not acted on stays pending while it is still true and competes again in the next brief; cards that miss the cut are kept under "N more suggestions". A suggestion expires (feedback event `expired`, with a reason) only when its trigger is gone: the chat moved on, the time passed, the person replied. Dismissing with "already did this" records the action: a bump counts toward the bump limit, a thank-you moves the chat to followed up.
+- A suggestion that describes the state of a chat (`thank_you`, `schedule_propose`, `schedule_confirm`, `prep_brief`, `follow_up_bump`) is retired (`expired`) as soon as the rules no longer produce it: a "confirm Thursday at 2pm" card once the meeting is on the calendar, a thank-you once one was sent. Untouched drafts on pending cards are redrafted when what they were drafted from changes (notes with new facts, a calendar change under proposed windows).
 
 ### 6.3 Approvals centre (`/inbox`)
 
@@ -320,7 +321,7 @@ Events are listed in `11-testing-evals-observability.md` section 5.
 The drafting system (`05` section 7) is told, for every message:
 
 - Audience: a professional the student does not know well; keep under 120 words for first outreach, under 80 for bumps, under 100 for thank-yous. [DEFAULT]
-- Structure for outreach: one line of connection (shared school, mutual contact, specific interest), one line of context (who the student is, one specific thing), one ask (a 15 to 20 minute call, with 2 time windows or the scheduling link), a short sign-off.
+- Structure for outreach: one line of connection (shared school, mutual contact, specific interest), one line of context (who the student is, one specific thing), one ask (a 15 to 20 minute call, scheduling deferred to them; no slot grid or calendar link to a stranger), a short sign-off. Concrete windows come once they say yes (`schedule`): two real free slots from the student's calendar on different days and times, dated, in the student's timezone, with the scheduling link only as the fallback when no free slot is known.
 - Voice: the student's style card (greeting, sign-off, formality, sentence length, use of contractions, emoji policy) learned from their sent mail; never more formal than the student's own writing.
 - Specificity: at least one concrete, fact-backed detail about the recipient; never generic praise.
 - Never: fabricate a mutual connection, claim to have read something not in the facts, mention the student's GPA unless they put it in the goals, or apologise for writing.

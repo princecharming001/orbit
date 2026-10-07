@@ -578,12 +578,13 @@ describe('warm-up plan dates (SND-20)', () => {
 
   it('keeps every action due before the ready date, even with two days', () => {
     const start = at('2026-10-02T19:30:00Z');
+    // started on a Friday afternoon: the steps are working days, so day 1 is Monday and the plan is ready Tuesday
     const plan = buildWarmUpPlan('dana', start, 2, TZ);
-    expect(plan.readyAt).toBe('2026-10-04T13:00:00.000Z');
+    expect(plan.readyAt).toBe('2026-10-06T13:00:00.000Z');
     expect(plan.actions.map((a) => a.dueAt)).toEqual([
       start.toISOString(),
-      '2026-10-03T14:00:00.000Z',
-      '2026-10-03T14:00:00.000Z',
+      '2026-10-05T14:00:00.000Z',
+      '2026-10-05T14:00:00.000Z',
     ]);
     for (const n of [0, 1, 2, 3, 4, 7, 10, 30, Number.NaN]) {
       const p = buildWarmUpPlan('dana', start, n, TZ);
@@ -595,16 +596,18 @@ describe('warm-up plan dates (SND-20)', () => {
         expect(due).toBeLessThan(ready);
         prev = due;
       }
+      // 2..10 working days from a Friday: 4 to 14 calendar days (each weekend in between adds two)
       const days = Math.round((ready - Date.parse('2026-10-02T13:00:00Z')) / D);
-      expect(days).toBeGreaterThanOrEqual(2);
-      expect(days).toBeLessThanOrEqual(10);
+      expect(days).toBeGreaterThanOrEqual(4);
+      expect(days).toBeLessThanOrEqual(14);
     }
   });
 
   it('places the days in the student timezone across a DST change', () => {
-    // 2026-11-01 is the end of DST in New York: 09:00 local on Nov 2 is 14:00Z
+    // 2026-11-01 is the end of DST in New York. Started Thursday Oct 29 (EDT), four working days later is
+    // Wednesday Nov 4: 09:00 local is 14:00Z after the change; the comment on Tuesday Nov 3 at 10:00 is 15:00Z
     const plan = buildWarmUpPlan('dana', at('2026-10-29T20:00:00Z'), 4, TZ);
-    expect(plan.readyAt).toBe('2026-11-02T14:00:00.000Z');
-    expect(plan.actions[2]!.dueAt).toBe('2026-11-01T15:00:00.000Z');
+    expect(plan.readyAt).toBe('2026-11-04T14:00:00.000Z');
+    expect(plan.actions[2]!.dueAt).toBe('2026-11-03T15:00:00.000Z');
   });
 });

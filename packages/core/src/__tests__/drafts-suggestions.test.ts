@@ -171,6 +171,36 @@ describe('suggestions over the demo dataset', () => {
   it('writes reasons a person would write: no dashes, no exclamation marks, no internal codes', () => {
     for (const c of cands) expect(c.reasonText).not.toMatch(/[—–!]|_|\b(swe|ib)\b/);
   });
+  it('a "not this quarter" decline comes back once the quarter and three weeks have passed (EG-20)', () => {
+    const at = (d: Date) =>
+      generateCandidates({
+        userId: ds.user.id,
+        now: d,
+        settings: ds.settings,
+        people,
+        chats: ds.chats,
+        lastInboundByChat: lastInbound,
+        events: ds.events,
+        actionItems: [],
+        factsByPerson,
+        targetCompanies: ds.targetCompanies,
+        recommendations: [],
+        dismissCounts: new Map(),
+        outreachSentThisWeek: 0,
+        freeSlotsIso: [],
+        recentlyContacted: new Set(),
+      }).filter((c) => c.dedupeKey.startsWith('reengage:'));
+    // the demo's "not this quarter" came about 18 business days ago, in September: still that quarter on Sep 30
+    expect(at(new Date('2026-09-30T13:00:00Z'))).toHaveLength(0);
+    // in October the quarter has turned and three weeks have passed since they said it
+    expect(cands.filter((c) => c.dedupeKey.startsWith('reengage:'))).toHaveLength(1);
+    const later = at(new Date('2026-10-12T13:00:00Z'));
+    expect(later).toHaveLength(1);
+    expect(later[0]!.kind).toBe('reconnect');
+    expect(later[0]!.reasonText).toMatch(/said not this quarter/);
+    expect(later[0]!.payload.reengage).toMatchObject({ said: 'this quarter' });
+    expect(at(new Date('2027-01-20T13:00:00Z'))).toHaveLength(0); // the window to try again has passed too
+  });
   it('selects at most 7 with hard-urgent first and one per person', () => {
     const sel = selectForBrief(cands, new Map());
     expect(sel.length).toBeLessThanOrEqual(7);

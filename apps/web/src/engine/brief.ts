@@ -14,6 +14,7 @@ import type {
 import {
   buildWarmUpPlan,
   type Candidate,
+  contextText,
   defaultStyleCard,
   generateCandidates,
   generateDraft,
@@ -21,6 +22,7 @@ import {
   isQuietDay,
   isRuleSuggestion,
   newId,
+  proposeWindows,
   STAGE_LABELS,
   scoreCandidate,
   selectForBrief,
@@ -268,7 +270,7 @@ export async function upsertSuggestions(
         TIME_KINDS.has(c.kind) &&
         JSON.stringify(timesOf(existing.payload)) !== JSON.stringify(timesOf(payload))
       )
-        await refreshUntouchedDraft(userId, row);
+        await refreshUntouchedDraft(userId, row, now);
       // something new is known about them (notes, a reply, a fact typed in): a thank-you or check-in written
       // before that must use it
       else if (outboundMessageId) await refreshIfFactsNewer(userId, row);
@@ -291,13 +293,17 @@ const timesOf = (p: Record<string, unknown>) => [p.windows ?? null, p.time ?? nu
  * Re-draft a suggestion's message when what it rests on changed (times rolled forward, notes from the chat came
  * in), as long as the student has not touched it: an approved, edited or sent message is never rewritten.
  */
-export async function refreshUntouchedDraft(userId: string, s: Suggestion): Promise<boolean> {
+export async function refreshUntouchedDraft(
+  userId: string,
+  s: Suggestion,
+  now = new Date(),
+): Promise<boolean> {
   if (!s.outboundMessageId) return false;
   const draft = await db.outbound.get(s.outboundMessageId);
   if (!draft || draft.status !== 'draft' || draft.bodyFinal) return false;
   const user = await db.users.get(userId);
   if (!user) return false;
-  return !!(await regenerateDraft(user, draft.id, {}));
+  return !!(await regenerateDraft(user, draft.id, {}, now));
 }
 
 /**
@@ -390,12 +396,37 @@ const DRAFT_KIND: Partial<Record<SuggestionKind, MessageKind>> = {
   report_back: 'report_back',
 };
 
+/** Kinds that open a new email thread with their own subject instead of replying in the chat's thread. */
+const NEW_THREAD_KINDS = new Set<MessageKind>(['outreach', 'intro_request', 'referral_ask']);
+
 /** Extra, user-supplied inputs for a draft (from the needs-input prompt in the editor). */
 export interface DraftInputs {
   /** one line only true of the recipient: how the student found them, what they share, what of theirs they read */
   connection?: string;
   /** one real update since the last conversation (nurture) */
   update?: string;
+  /** what the student is congratulating them on (congratulate, when no job change is on record) */
+  news?: string;
+  /** who the student wants an intro to: "Lucas Fischer, Engineering Manager at Ramp" (intro request) */
+  target?: string;
+  /** the student's answer to a question in the thread (reply) */
+  answer?: string;
+  /** the role and company for a referral ask: "PM Intern at Notion" */
+  role?: string;
+  /** one thing they said that stuck with the student (thank-you, when no notes exist yet) */
+  takeaway?: string;
+}
+
+/** "Lucas Fischer, Engineering Manager at Ramp" -> name, title, org. */
+function parseTargetLine(line: string): { name: string; title?: string; org?: string } {
+  const t = line.replace(/\s+/g, ' ').trim();
+  const [name, ...restParts] = t.split(/\s*[,(]\s*|\s+-\s+/);
+  const rest = restParts.join(', ').replace(/\)$/, '');
+  const m = rest.match(/^(.*?)\s+(?:at|@)\s+(.+)$/);
+  if (m) return { name: name!.trim(), title: m[1]!.trim() || undefined, org: m[2]!.trim() };
+  const only = t.match(/^(.+?)\s+(?:at|@)\s+(.+)$/);
+  if (!rest && only) return { name: only[1]!.trim(), org: only[2]!.trim() };
+  return { name: name!.trim(), title: rest || undefined };
 }
 
 /** The person who introduced or pointed the student to `person`: an intro request sent to them, or a suggestion from a chat. */
@@ -435,10 +466,15 @@ function credibilityLine(
   const cands = facets
     .filter((f) => f.kind === 'project' || f.kind === 'experience')
     .map((f) => {
-      const first = f.text.split(/(?<=[.!?])\s+/)[0] ?? f.text;
-      const line = first.replace(/\s+/g, ' ').trim().replace(/\.$/, '');
+      // one clause: the first sentence, cut at a semicolon ("Built X in Go; reduced Y by 30%" -> "Built X in Go")
+      const first = (f.text.split(/(?<=[.!?])\s+/)[0] ?? f.text).split(/;\s*/)[0]!;
+      const line = first.replace(/\s+/g, ' ').trim().replace(/[.,]$/, '');
       return { line, score: score(line) + (f.kind === 'project' ? 0.5 : 0), len: line.length };
     })
+    // it is spliced after the student's name ("Alex built ..."), so it must open with a past-tense verb
+    .filter((c) =>
+      /^[A-Za-z]+ed\b|^(built|led|ran|won|grew|wrote|made|shipped|taught|drove|began)\b/i.test(c.line),
+    )
     .filter((c) => c.len >= 20 && c.len <= 110)
     .sort((a, b) => b.score - a.score || a.len - b.len);
   return cands[0]?.line;
@@ -452,36 +488,41 @@ export async function buildDraftContext(
   s?: Suggestion,
   inputs: DraftInputs = {},
   chatOverride?: CoffeeChat,
+  /** the moment the draft is written for (free windows and relative dates); defaults to now */
+  now = new Date(),
 ): Promise<DraftContext> {
-  const now = new Date();
-  const [goals, settings, style, facts, resumeFacets, chatFound, affiliations, org] = await Promise.all([
-    db.goals.get(user.id),
-    db.settings.get(user.id),
-    db.styles.get(user.id),
-    db.facts
-      .where('personId')
-      .equals(person.id)
-      .filter((f) => !f.deletedAt)
-      .toArray(),
-    db.resumeFacets.toArray(),
-    chatOverride
-      ? Promise.resolve(chatOverride)
-      : s?.chatId
-        ? db.chats.get(s.chatId)
-        : db.chats
-            .where('personId')
-            .equals(person.id)
-            .filter((c) => !['archived'].includes(c.stage))
-            .first(),
-    db.affiliations.where('personId').equals(person.id).toArray(),
-    person.currentOrganizationId ? db.organizations.get(person.currentOrganizationId) : undefined,
-  ]);
+  const [goals, settings, style, facts, resumeFacets, chatFound, affiliations, org, events] =
+    await Promise.all([
+      db.goals.get(user.id),
+      db.settings.get(user.id),
+      db.styles.get(user.id),
+      db.facts
+        .where('personId')
+        .equals(person.id)
+        .filter((f) => !f.deletedAt)
+        .toArray(),
+      db.resumeFacets.toArray(),
+      chatOverride
+        ? Promise.resolve(chatOverride)
+        : s?.chatId
+          ? db.chats.get(s.chatId)
+          : db.chats
+              .where('personId')
+              .equals(person.id)
+              .filter((c) => !['archived'].includes(c.stage))
+              .first(),
+      db.affiliations.where('personId').equals(person.id).toArray(),
+      person.currentOrganizationId ? db.organizations.get(person.currentOrganizationId) : undefined,
+      db.events.where('userId').equals(user.id).toArray(),
+    ]);
   // a report-back is addressed to the referrer; the chat on the suggestion is the target's chat
   const chat = kind === 'report_back' ? undefined : chatFound;
-  const summary = resumeFacets.find((f) => f.kind === 'summary')?.text;
   let thread: DraftContext['thread'];
   if (chat?.threadId) {
-    const msgs = await db.messages.where('threadId').equals(chat.threadId).sortBy('sentAt');
+    const [msgs, th] = await Promise.all([
+      db.messages.where('threadId').equals(chat.threadId).sortBy('sentAt'),
+      db.threads.get(chat.threadId),
+    ]);
     const lastIn = [...msgs].reverse().find((m) => m.direction === 'inbound');
     const firstOut = msgs.find((m) => m.direction === 'outbound');
     thread = {
@@ -491,10 +532,56 @@ export async function buildDraftContext(
       asksOfUser: lastIn?.extraction?.asksOfUser,
       proposedTimes: lastIn?.extraction?.proposedTimes.map((t) => ({ startIso: t.startIso, raw: t.raw })),
       lastSignal: lastIn?.signal,
+      inThread: !NEW_THREAD_KINDS.has(kind) && !!th?.externalThreadId,
+      subject: th?.subject,
     };
   } else if (chat?.firstOutreachAt) thread = { firstOutboundAt: chat.firstOutreachAt };
+  // outreach to someone the student has already emailed with picks that exchange back up (and its thread, when the
+  // last message is recent enough to reply to) instead of introducing the student as a stranger
+  let history: DraftContext['history'];
+  if (kind === 'outreach' && !chat?.threadId) {
+    const theirThreads = await db.threads
+      .where('userId')
+      .equals(user.id)
+      .filter((t) => (t.participantPersonIds ?? []).includes(person.id))
+      .toArray();
+    const msgs = (
+      await Promise.all(theirThreads.map((t) => db.messages.where('threadId').equals(t.id).toArray()))
+    )
+      .flat()
+      // only what passed between the student and this person: on a group thread (an intro that CC'd them),
+      // the introducer's note is not something they wrote
+      .filter(
+        (m) =>
+          !m.isAutomated &&
+          (m.direction === 'inbound'
+            ? m.fromPersonId === person.id
+            : [...m.toEmails, ...m.ccEmails].some((e) => person.emails.includes(e))),
+      )
+      .sort((a, b) => a.sentAt.localeCompare(b.sentAt));
+    const last = msgs.at(-1);
+    if (last) {
+      const lastThread = theirThreads.find((t) => t.id === last.threadId);
+      const recent = now.getTime() - new Date(last.sentAt).getTime() <= 180 * DAY;
+      history = {
+        lastAt: last.sentAt,
+        lastInbound: last.direction === 'inbound',
+        repliedEver: msgs.some((m) => m.direction === 'inbound'),
+        threadId: recent && lastThread?.externalThreadId ? lastThread.id : undefined,
+      };
+      if (history.repliedEver && history.threadId && channel === 'gmail')
+        thread = { inThread: true, subject: lastThread?.subject };
+    }
+  }
+  // promises the student made to this person in the conversation, kept in the thank-you
+  const promises =
+    kind === 'thank_you'
+      ? (await db.actionItems.where('personId').equals(person.id).toArray())
+          .filter((a) => a.userId === user.id && a.status === 'open')
+          .map((a) => a.text)
+      : undefined;
   const tcId = s?.payload.targetCompanyId as string | undefined;
-  const tc = tcId
+  let tc = tcId
     ? await db.targetCompanies.get(tcId)
     : person.currentOrganizationRaw
       ? await db.targetCompanies
@@ -507,25 +594,94 @@ export async function buildDraftContext(
           )
           .first()
       : undefined;
-  const target = s?.payload.target as DraftContext['target'] | undefined;
-  if (target && !target.firstName) target.firstName = target.name.split(' ')[0];
-  const windows = (s?.payload.windows as string[] | undefined)?.map((w) => ({ startIso: w }));
+  // the student said which role (referral ask): "PM Intern at Notion"
+  let roleInput: { name: string; roleLabel?: string } | undefined;
+  if (inputs.role?.trim()) {
+    const m = inputs.role.trim().match(/^(.*?)\s+(?:at|@)\s+(.+)$/);
+    roleInput = m ? { roleLabel: m[1]!.trim(), name: m[2]!.trim() } : { name: inputs.role.trim() };
+    const known = await db.targetCompanies
+      .where('userId')
+      .equals(user.id)
+      .filter((t) => t.nameRaw.toLowerCase() === roleInput!.name.toLowerCase())
+      .first();
+    if (known) tc = known;
+  }
+  let target = s?.payload.target as DraftContext['target'] | undefined;
+  if (!target && inputs.target?.trim()) {
+    const parsed = parseTargetLine(inputs.target);
+    const known = (await db.people.where('userId').equals(user.id).toArray()).find(
+      (p) => p.displayName.toLowerCase() === parsed.name.toLowerCase(),
+    );
+    target = known
+      ? { name: known.displayName, title: known.currentTitle, org: known.currentOrganizationRaw }
+      : parsed;
+  }
+  if (target && !target.firstName) target = { ...target, firstName: target.name.split(' ')[0] };
+  // real free windows from the student's calendar, in their timezone, on different days and times
+  const busy = events.map((e) => ({
+    startIso: e.startAt,
+    endIso: e.endAt,
+    status: e.status,
+    withPerson: e.attendeePersonIds?.includes(person.id) || undefined,
+  }));
+  // a meeting with them already on the calendar and still ahead (a reply never proposes new times over it)
+  const upcomingAt = events
+    .filter(
+      (e) =>
+        e.status !== 'cancelled' &&
+        e.attendeePersonIds?.includes(person.id) &&
+        new Date(e.startAt).getTime() > now.getTime(),
+    )
+    .sort((a, b) => a.startAt.localeCompare(b.startAt))[0]?.startAt;
+  const windows =
+    kind === 'schedule' || kind === 'reply'
+      ? proposeWindows(busy, now, user.timezone, { seed: person.id })
+      : undefined;
   const warm = chat?.warmUp ? warmUpProgress(chat.warmUp, now) : undefined;
   const warmUpNote = chat?.warmUp?.actions.find((a) => a.doneAt && a.note)?.note;
+  const commentedOnPost =
+    !warmUpNote && !!chat?.warmUp?.actions.some((a) => a.kind === 'comment_post' && a.doneAt);
+  // when the conversation happened: the calendar event if there is one, otherwise when the chat was completed
+  const meetingEvent = chat?.scheduledEventId
+    ? events.find((e) => e.id === chat.scheduledEventId)
+    : undefined;
+  const meetingAt =
+    meetingEvent && new Date(meetingEvent.startAt) <= now ? meetingEvent.startAt : chat?.completedAt;
   // previous employer: the most recent non-current employment affiliation
-  const previous = affiliations
-    .filter(
-      (a) =>
-        a.kind === 'employment' && !a.isCurrent && a.nameRaw && a.nameRaw !== person.currentOrganizationRaw,
-    )
+  const employment = affiliations.filter((a) => a.kind === 'employment');
+  const previous = employment
+    .filter((a) => !a.isCurrent && a.nameRaw && a.nameRaw !== person.currentOrganizationRaw)
     .sort((a, b) => (b.endDate ?? b.startDate ?? '').localeCompare(a.endDate ?? a.startDate ?? ''))[0];
+  // a job change on record: a current role that started in the last 120 days (a LinkedIn re-import that saw a new
+  // company or title records exactly that)
+  const latest = employment
+    .filter((a) => a.isCurrent && a.startDate)
+    .sort((a, b) => (b.startDate ?? '').localeCompare(a.startDate ?? ''))[0];
+  // the role it replaced: closed the day the new one opened (a re-import), so a same-company title change is not a "move"
+  const replaced = latest?.startDate
+    ? employment.find(
+        (a) => !a.isCurrent && a.endDate && a.endDate.slice(0, 10) === latest.startDate!.slice(0, 10),
+      )
+    : undefined;
+  const newAffiliation =
+    latest?.startDate && now.getTime() - new Date(latest.startDate).getTime() <= 120 * DAY
+      ? {
+          title: latest.title,
+          org: latest.nameRaw,
+          since: latest.startDate,
+          previousOrg: replaced?.nameRaw,
+          // a LinkedIn re-import dates the change by when Orbit saw it, not when it happened
+          observed: latest.source === 'linkedin_csv' || undefined,
+        }
+      : undefined;
   // referrer: on the chat, or the person who received an intro request for this person
   let referrerName = chat?.referrerName;
   if (!referrerName && chat?.referrerPersonId)
     referrerName = (await db.people.get(chat.referrerPersonId))?.firstName;
   if (!referrerName && kind === 'outreach')
     referrerName = (await findReferrerFor(user.id, person))?.firstName;
-  // openings used for the same company in the last 30 days (avoid repeating ourselves across a team)
+  // openings used for the same company in the last 30 days (avoid repeating ourselves across a team), and the
+  // people there the student has already spoken with (a recruiter email names them)
   const sameOrg = person.currentOrganizationRaw
     ? (await db.people.where('userId').equals(user.id).toArray()).filter(
         (p) =>
@@ -534,11 +690,18 @@ export async function buildDraftContext(
       )
     : [];
   const recentOpenings: string[] = [];
+  const sameOrgContacts: string[] = [];
   for (const p of sameOrg) {
     const rows = await db.outbound.where('personId').equals(p.id).toArray();
     for (const r of rows)
       if (r.opening && now.getTime() - new Date(r.sentAt ?? r.createdAt).getTime() < 30 * DAY)
         recentOpenings.push(r.opening);
+    const spoke = await db.chats
+      .where('personId')
+      .equals(p.id)
+      .filter((c) => !!c.completedAt)
+      .first();
+    if (spoke) sameOrgContacts.push(p.firstName);
   }
   const pastOrgs = resumeFacets
     .filter((f) => f.kind === 'experience' && f.organizationName)
@@ -549,7 +712,7 @@ export async function buildDraftContext(
   const factList: PersonFact[] = facts
     .sort((a, b) => (b.occurredAt ?? '').localeCompare(a.occurredAt ?? ''))
     .slice(0, 15);
-  if (userConnection)
+  if (userConnection && !factList.some((f) => f.type === 'connection' && f.text === userConnection))
     factList.unshift({
       id: `input-connection`,
       userId: user.id,
@@ -570,14 +733,10 @@ export async function buildDraftContext(
       gradYear: user.graduationYear,
       degree: user.degree,
       majors: user.majors,
-      cycleLabel: goals?.cycleLabel ?? 'this recruiting cycle',
+      cycleLabel: goals?.cycleLabel ?? '',
       targetFunctions: goals?.targetFunctions ?? [],
-      oneLiner: summary
-        ? summary
-            .replace(/^.*? is /, `${user.firstName} is `)
-            .replace(/\.$/, '')
-            .replace(new RegExp(`^${user.firstName} is `), '')
-        : undefined,
+      // the "who I am" clause is composed from structured fields (year, school, major); a free-text resume
+      // summary is never spliced in, since heuristic parses put the contact header there
       credibility: credibilityLine(resumeFacets),
       schedulingLink: settings?.schedulingLink,
       timezone: user.timezone,
@@ -595,6 +754,7 @@ export async function buildDraftContext(
       relationshipType: person.relationshipType,
       strength: person.strength,
       linkedinConnected: !!person.linkedinConnectedOn,
+      linkedinConnectedAt: person.linkedinConnectedOn,
       previousOrg: previous?.nameRaw,
       previousTitle: previous?.title,
     },
@@ -604,37 +764,55 @@ export async function buildDraftContext(
     bumpNumber: (chat?.bumpCount ?? 0) + 1,
     proposedWindows: windows,
     missedProposal: s?.payload.missedProposal as DraftContext['missedProposal'],
+    busy,
     thread,
     target,
     chat: chat
       ? {
           completedAt: chat.completedAt,
+          meetingAt,
           stage: chat.stage,
           referrerName,
           introducedAt: chat.introducedAt,
           warmUpNote,
           warmUpDone: warm?.done,
+          commentedOnPost: commentedOnPost || undefined,
+          upcomingAt,
         }
       : referrerName
         ? { referrerName }
         : undefined,
     // a status-news card carries the update itself (applied, interviewing, offer); the student's own text wins
     update: inputs.update?.trim() || (s?.payload.update as string | undefined) || undefined,
+    news: inputs.news?.trim() || undefined,
+    answer: inputs.answer?.trim() || undefined,
+    takeaway: inputs.takeaway?.trim() || undefined,
+    reengage: s?.payload.reengage as DraftContext['reengage'] | undefined,
+    history,
+    promises: promises?.length ? promises : undefined,
+    newAffiliation,
     targetCompany: tc
       ? {
           name: tc.nameRaw,
-          roleLabel: goals?.targetRoles[0],
+          roleLabel: roleInput?.roleLabel ?? goals?.targetRoles[0],
           applied: tc.status === 'applied' || tc.status === 'interviewing',
         }
-      : undefined,
+      : roleInput
+        ? { name: roleInput.name, roleLabel: roleInput.roleLabel }
+        : undefined,
     reportBack,
+    sameOrgContacts,
     recentOpenings,
     seed: person.id,
     now,
   };
 }
 
-/** Template first; the LLM may improve voice and specificity only if its result passes the same validator. */
+/**
+ * Template first; the LLM may improve voice and specificity only if its result passes the same validator,
+ * including the check that it mentions nothing (no name, company, post, mutual connection or figure) that is not in
+ * the context pack or the template.
+ */
 async function materializeDraft(
   user: User,
   person: Person,
@@ -643,29 +821,34 @@ async function materializeDraft(
   s?: Suggestion,
   inputs: DraftInputs = {},
   chat?: CoffeeChat,
+  now?: Date,
 ): Promise<{
   out: ReturnType<typeof generateDraft>;
   generatedBy: OutboundMessage['generatedBy'];
   ctx: DraftContext;
 }> {
-  const ctx = await buildDraftContext(user, person, kind, channel, s, inputs, chat);
+  const ctx = await buildDraftContext(user, person, kind, channel, s, inputs, chat, now);
   const template = generateDraft(ctx);
   let out = template;
   let generatedBy: OutboundMessage['generatedBy'] = 'template';
+  const opts = (context: string) => ({
+    kind,
+    facts: ctx.facts,
+    allowedUrls: [ctx.user.schedulingLink ?? '', user.linkedinUrl ?? ''].filter(Boolean),
+    recipientEmail: person.primaryEmail,
+    recipientFirstName: person.firstName,
+    recipientFullName: person.displayName,
+    recentOpenings: ctx.recentOpenings,
+    hadConversation: kind === 'referral_ask' ? !!(ctx.chat?.completedAt || ctx.chat?.meetingAt) : undefined,
+    channel,
+    context,
+    asks: kind === 'schedule' || kind === 'reply' ? ctx.thread?.asksOfUser : undefined,
+  });
   if (hasLlm() && !template.needsInput.length) {
     const llm = await llmDraft(ctx, template).catch((e) => surfaceLlmFailure(user.id, e));
     if (llm) {
-      const issues = validateDraft(llm, {
-        kind,
-        facts: ctx.facts,
-        allowedUrls: [ctx.user.schedulingLink ?? '', user.linkedinUrl ?? ''].filter(Boolean),
-        recipientEmail: person.primaryEmail,
-        recipientFirstName: person.firstName,
-        recipientFullName: person.displayName,
-        recentOpenings: ctx.recentOpenings,
-        hadConversation: kind === 'referral_ask' ? !!ctx.chat?.completedAt : undefined,
-        channel,
-      });
+      const grounded = `${contextText(ctx)}\n${template.subject ?? ''}\n${template.body}\n${template.bodyShort ?? ''}`;
+      const issues = validateDraft(llm, opts(grounded));
       if (!isBlocked(issues)) {
         out = { ...llm, needsInput: [], sector: template.sector, register: template.register };
         generatedBy = 'llm';
@@ -673,6 +856,27 @@ async function materializeDraft(
     }
   }
   return { out, generatedBy, ctx };
+}
+
+/**
+ * Where a draft goes: the chat's thread for replies, nothing for kinds that open a new thread, except outreach that
+ * picks an earlier exchange with the person back up (see `history` in buildDraftContext).
+ */
+async function threadFor(
+  kind: MessageKind,
+  chat: CoffeeChat | undefined,
+  ctx: DraftContext,
+): Promise<{ externalThreadId?: string; inReplyTo?: string }> {
+  const threadId = NEW_THREAD_KINDS.has(kind)
+    ? kind === 'outreach' && ctx.thread?.inThread
+      ? ctx.history?.threadId
+      : undefined
+    : chat?.threadId;
+  if (!threadId) return {};
+  const th = await db.threads.get(threadId);
+  if (!th?.externalThreadId) return {};
+  const last = (await db.messages.where('threadId').equals(threadId).sortBy('sentAt')).pop();
+  return { externalThreadId: th.externalThreadId, inReplyTo: last?.headers['message-id'] };
 }
 
 function bodyFor(
@@ -697,16 +901,9 @@ export async function draftForSuggestion(
   if (!person) return undefined;
   const channel: 'gmail' | 'linkedin' =
     (s.payload.channel as 'gmail' | 'linkedin' | undefined) ?? (person.primaryEmail ? 'gmail' : 'linkedin');
-  const { out, generatedBy } = await materializeDraft(user, person, kind, channel, s);
+  const { out, generatedBy, ctx } = await materializeDraft(user, person, kind, channel, s);
   const chat = s.chatId && kind !== 'report_back' ? await db.chats.get(s.chatId) : undefined;
-  let externalThreadId: string | undefined;
-  let inReplyTo: string | undefined;
-  if (chat?.threadId && kind !== 'outreach') {
-    const th = await db.threads.get(chat.threadId);
-    externalThreadId = th?.externalThreadId;
-    const last = (await db.messages.where('threadId').equals(chat.threadId).sortBy('sentAt')).pop();
-    inReplyTo = last?.headers['message-id'];
-  }
+  const { externalThreadId, inReplyTo } = await threadFor(kind, chat, ctx);
   const msg: OutboundMessage = {
     id: newId('out'),
     userId: user.id,
@@ -719,7 +916,9 @@ export async function draftForSuggestion(
     inReplyToMessageId: inReplyTo,
     toEmail: person.primaryEmail,
     toLinkedinUrl: person.linkedinUrl,
-    subject: out.subject ?? (externalThreadId ? undefined : `Quick question`),
+    // a reply in an existing thread keeps the thread's subject; anything else carries the subject the template
+    // wrote for its kind (never a generic "Quick question" on a check-in or a thank-you)
+    subject: externalThreadId && kind !== 'outreach' ? undefined : out.subject,
     bodyDraft: bodyFor(out, channel, kind, !!person.linkedinConnectedOn),
     status: 'draft',
     generatedBy,
@@ -749,8 +948,16 @@ export async function draftMessage(
         .equals(personId)
         .filter((c) => c.stage !== 'archived')
         .first();
-  const { out, generatedBy } = await materializeDraft(user, person, kind, channel, undefined, inputs, chat);
-  const th = chat?.threadId ? await db.threads.get(chat.threadId) : undefined;
+  const { out, generatedBy, ctx } = await materializeDraft(
+    user,
+    person,
+    kind,
+    channel,
+    undefined,
+    inputs,
+    chat,
+  );
+  const where = await threadFor(kind, chat, ctx);
   const msg: OutboundMessage = {
     id: newId('out'),
     userId: user.id,
@@ -758,7 +965,8 @@ export async function draftMessage(
     chatId: chat?.id,
     channel,
     kind,
-    externalThreadId: kind === 'outreach' ? undefined : th?.externalThreadId,
+    externalThreadId: where.externalThreadId,
+    inReplyToMessageId: where.inReplyTo,
     toEmail: person.primaryEmail,
     toLinkedinUrl: person.linkedinUrl,
     subject: out.subject,
@@ -818,12 +1026,12 @@ export async function regenerateDraft(
   user: User,
   messageId: string,
   inputs: DraftInputs,
+  now = new Date(),
 ): Promise<OutboundMessage | undefined> {
   const msg = await db.outbound.get(messageId);
   if (!msg || msg.userId !== user.id || msg.status !== 'draft') return undefined;
   const person = await db.people.get(msg.personId);
   if (!person) return undefined;
-  const now = new Date();
   if (inputs.connection?.trim()) {
     const text = inputs.connection.trim().replace(/\s+/g, ' ');
     const dup = await db.facts
@@ -855,6 +1063,7 @@ export async function regenerateDraft(
     s,
     inputs,
     chat,
+    now,
   );
   const changes: Partial<OutboundMessage> = {
     subject: msg.externalThreadId ? msg.subject : (out.subject ?? msg.subject),
@@ -872,6 +1081,56 @@ export async function regenerateDraft(
     reason: `input:${Object.keys(inputs).join(',')}`,
   } as never);
   return { ...msg, ...changes };
+}
+
+/**
+ * Redraft pending suggestion drafts the student has not touched when what they were drafted from has changed: notes
+ * with new facts arrived after a thank-you was drafted, or the calendar changed under proposed windows. The draft
+ * keeps its id; a redraft that would ask the student for something the current draft already has is not applied.
+ */
+export async function refreshPendingDrafts(
+  user: User,
+  scope: { personId?: string; kinds?: MessageKind[] } = {},
+): Promise<number> {
+  const pending = await db.suggestions
+    .where('userId')
+    .equals(user.id)
+    .filter(
+      (s) =>
+        s.status === 'pending' && !!s.outboundMessageId && (!scope.personId || s.personId === scope.personId),
+    )
+    .toArray();
+  let changed = 0;
+  for (const s of pending) {
+    const d = await db.outbound.get(s.outboundMessageId!);
+    if (d?.status !== 'draft' || d.bodyFinal !== undefined) continue;
+    if (scope.kinds && !scope.kinds.includes(d.kind)) continue;
+    const person = await db.people.get(d.personId);
+    if (!person) continue;
+    const chat = d.chatId ? await db.chats.get(d.chatId) : undefined;
+    const { out, generatedBy } = await materializeDraft(
+      user,
+      person,
+      d.kind,
+      d.channel as 'gmail' | 'linkedin',
+      s,
+      {},
+      chat,
+    );
+    const body = bodyFor(out, d.channel as 'gmail' | 'linkedin', d.kind, !!person.linkedinConnectedOn);
+    if (body === d.bodyDraft) continue;
+    if (out.needsInput.length > (d.needsInput?.length ?? 0)) continue;
+    await db.outbound.update(d.id, {
+      subject: d.externalThreadId ? d.subject : (out.subject ?? d.subject),
+      bodyDraft: body,
+      generatedBy,
+      claims: out.claims,
+      needsInput: out.needsInput.length ? out.needsInput : undefined,
+      opening: out.opening,
+    });
+    changed++;
+  }
+  return changed;
 }
 
 /** ⚡ rules: run the rule engine for one chat/person right away (reply received, note ingested, event changed). */
@@ -899,6 +1158,13 @@ export async function evaluateImmediateSuggestions(
       ].includes(c.kind) ||
       // the reply to an email introduction is due now, not in the next morning's batch
       !!c.signals.introducedBy,
+  );
+  await retireStale(
+    userId,
+    cands,
+    new Set(inp.chats.map((c) => c.id)),
+    ['thank_you', 'schedule_propose', 'schedule_confirm', 'prep_brief'],
+    now,
   );
   const scored = selectForBrief(cands, inp.dismissCounts, 5);
   const created = await upsertSuggestions(userId, scored, now);
@@ -929,6 +1195,43 @@ async function retireMovedOnConfirmations(userId: string, now: Date): Promise<vo
       now,
     );
   }
+}
+
+/** Suggestions that describe the state of a chat right now; they stop being true when that state changes. */
+const STATE_KINDS: SuggestionKind[] = [
+  'thank_you',
+  'schedule_propose',
+  'schedule_confirm',
+  'prep_brief',
+  'follow_up_bump',
+];
+
+/**
+ * Retire pending suggestions whose trigger is gone: a "confirm Thursday at 2pm" card once the chat is scheduled, a
+ * thank-you once it was sent from Gmail, times to propose once the meeting is on the calendar. Only chats the rules
+ * just looked at are touched, and only the kinds they were asked to produce.
+ */
+async function retireStale(
+  userId: string,
+  cands: { dedupeKey: string }[],
+  chatIds: Set<string>,
+  kinds: SuggestionKind[],
+  now: Date,
+): Promise<void> {
+  const live = new Set(cands.map((c) => c.dedupeKey));
+  const stale = await db.suggestions
+    .where('userId')
+    .equals(userId)
+    .filter(
+      (s) =>
+        s.status === 'pending' &&
+        kinds.includes(s.kind) &&
+        !!s.chatId &&
+        chatIds.has(s.chatId) &&
+        !live.has(s.dedupeKey),
+    )
+    .toArray();
+  await retireSuggestions(stale, 'trigger_gone', now);
 }
 
 async function addConfirmationCards(userId: string, now: Date): Promise<void> {
@@ -1072,6 +1375,7 @@ export async function generateBrief(user: User, kind: Brief['kind'], now = new D
   const cands = generateCandidates(inp);
   // validity pass first: nothing stale survives into (or next to) the new brief
   await revalidateSuggestions(user.id, cands, now);
+  await retireStale(user.id, cands, new Set(inp.chats.map((c) => c.id)), [...STATE_KINDS], now);
   const people = inp.people;
   const selected = selectForBrief(cands, inp.dismissCounts, 7, {
     orgOf: (pid) => {

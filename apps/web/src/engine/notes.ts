@@ -7,6 +7,7 @@ import {
   evaluateImmediateSuggestions,
   FACT_DRAFT_KINDS,
   refreshIfFactsNewer,
+  refreshPendingDrafts,
   refreshPersonSummary,
   surfaceLlmFailure,
 } from './brief';
@@ -233,8 +234,10 @@ export async function processNote(user: User, note: MeetingNote, now = new Date(
     ext.suggestedNextStep,
     `/people/${primary.id}`,
   );
-  // drafts that lean on what was said (thank-you, check-in, referral ask) and were written before these notes
-  // existed are re-drafted with the new facts; an edited draft is left alone
+  // a thank-you (or check-in) drafted before these notes arrived is redrafted with what they said
+  await refreshPendingDrafts(user, { personId: primary.id });
+  // and the fact-driven kinds (thank-you, check-in, referral ask) remember which facts they were drafted with, so
+  // the validity pass does not re-draft them again for the same facts
   const drafted = await db.suggestions
     .where('personId')
     .equals(primary.id)

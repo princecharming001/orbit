@@ -916,7 +916,18 @@ describe('warm-up', () => {
     expect(plan.actions[1]!.url).toContain('recent-activity');
     expect(warmUpProgress(plan, new Date('2026-10-02T10:00:00Z')).ready).toBe(false);
     plan.actions[0]!.doneAt = '2026-10-01T11:00:00Z';
-    expect(warmUpProgress(plan, new Date('2026-10-06T10:00:00Z')).ready).toBe(true);
+    // four working days after Thursday Oct 1 is Wednesday Oct 7 (the weekend does not count)
+    expect(warmUpProgress(plan, new Date('2026-10-08T10:00:00Z')).ready).toBe(true);
     expect(warmUpProgress(plan, new Date('2026-10-02T10:00:00Z')).nextAction?.id).toBe('w2');
+  });
+
+  it('never puts a step on a weekend (EG-20)', () => {
+    const plan = buildWarmUpPlan('x', new Date(2026, 9, 2, 10), 4); // Friday Oct 2, local time
+    const days = [...plan.actions.slice(1).map((a) => a.dueAt), plan.readyAt].map((d) =>
+      new Date(d).getDay(),
+    );
+    expect(days.every((d) => d !== 0 && d !== 6)).toBe(true);
+    expect(new Date(plan.actions[1]!.dueAt).getDate()).toBe(6); // Tuesday, not Sunday Oct 4
+    expect(new Date(plan.readyAt).getDate()).toBe(8); // Thursday
   });
 });

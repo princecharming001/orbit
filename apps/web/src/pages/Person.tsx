@@ -9,12 +9,14 @@ import type {
 } from '@orbit/core';
 import {
   CHANNEL_LABELS,
+  composeKindFor,
   FACT_TYPE_LABELS,
   linkedinActivityUrl,
   MESSAGE_KIND_LABELS,
   NOTE_SOURCE_LABELS,
   newId,
   RELATIONSHIP_LABELS,
+  relTime,
   STAGE_LABELS,
   TOUCHPOINT_LABELS,
 } from '@orbit/core';
@@ -310,21 +312,17 @@ export function PersonPage() {
               variant="primary"
               size="sm"
               disabled={busy}
-              onClick={() =>
-                compose(
-                  chat
-                    ? chat.stage === 'completed'
-                      ? 'thank_you'
-                      : chat.stage === 'outreach_sent'
-                        ? 'bump'
-                        : chat.stage === 'nurturing' || chat.stage === 'followed_up'
-                          ? 'nurture'
-                          : chat.stage === 'replied' || chat.stage === 'scheduling'
-                            ? 'schedule'
-                            : 'outreach'
-                    : 'outreach',
-                )
-              }
+              onClick={() => {
+                // the stage and the calendar together: no check-in minutes after a thank-you
+                const next = composeKindFor(chat, new Date());
+                if ('wait' in next)
+                  toast.push({
+                    text: `You wrote to ${person.firstName} ${relTime(next.wait.since, new Date())}. A check-in fits in a few weeks, and Orbit will suggest one.`,
+                    tone: 'neutral',
+                    ttl: 6000,
+                  });
+                else compose(next.kind);
+              }}
               data-testid="person-write"
             >
               Write to {person.firstName}

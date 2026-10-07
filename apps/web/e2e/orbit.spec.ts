@@ -46,6 +46,10 @@ test.describe('Orbit demo flow', () => {
     await card.locator('button.line-clamp-2').click();
     const textarea = card.getByLabel('Message body');
     await expect(textarea).toBeVisible();
+    // the demo's notes are in, so the stored thank-you already quotes what they said: no prompt, no placeholder
+    await expect(card.getByTestId('draft-needs-input')).toBeHidden();
+    await expect(textarea).not.toHaveValue(/\[/);
+    await expect(textarea).toHaveValue(/what you said about|your advice|your point/i);
     await textarea.fill(`${await textarea.inputValue()}\n\nPS edited in e2e`);
     await card.getByRole('button', { name: /approve & send/i }).click();
     await expect(page.getByText(/opened in your mail app/i).first()).toBeVisible({ timeout: 15_000 });
@@ -56,6 +60,12 @@ test.describe('Orbit demo flow', () => {
     await page.getByRole('tab', { name: /sent/i }).click();
     await expect(page.getByText('PS edited in e2e')).toBeVisible();
     await expect(page.getByRole('link', { name })).toBeVisible();
+    // minutes after the thank-you, "Write to" does not draft a check-in
+    await page.getByRole('link', { name }).first().click();
+    await expect(page).toHaveURL(/\/people\//);
+    await page.getByTestId('person-write').click();
+    await expect(page.getByText(/a check-in fits in a few weeks/i)).toBeVisible();
+    await expect(page.getByLabel('Message body')).toBeHidden();
   });
 
   test('warm-up card: mark done, see progress', async ({ page }) => {
@@ -97,6 +107,50 @@ test.describe('Orbit demo flow', () => {
     await expect(page.getByTestId('person-summary')).not.toHaveText(/\d{4}-\d{2}-\d{2}|building/i);
     await page.getByTestId('person-write').click();
     await expect(page.getByLabel('Message body')).toBeVisible();
+  });
+
+  test('cold outreach asks for a connection line, redrafts with it, then approval unlocks', async ({
+    page,
+  }) => {
+    await loadDemo(page);
+    // demo contacts with an email, no chat and nothing checkable in common with the student
+    const candidates = [
+      'p42',
+      'p53',
+      'p69',
+      'p8',
+      'p48',
+      'p24',
+      'p27',
+      'p40',
+      'p43',
+      'p14',
+      'p29',
+      'p61',
+      'p64',
+    ];
+    let found = false;
+    for (const id of candidates) {
+      await page.goto(`people/${id}`);
+      await page.getByTestId('person-write').click();
+      await expect(page.getByLabel('Message body')).toBeVisible({ timeout: 15_000 });
+      if (await page.getByTestId('draft-needs-input').isVisible()) {
+        found = true;
+        break;
+      }
+    }
+    expect(found).toBe(true);
+    const approve = page.getByRole('button', { name: /approve & send|copy & open linkedin/i });
+    await expect(approve).toBeDisabled();
+    await expect(page.getByLabel('Message body')).toHaveValue(/\[Your link to/);
+    await page
+      .getByTestId('draft-input-connection')
+      .fill('We were both on the Cornell Hyperloop team, a few years apart');
+    await page.getByTestId('draft-redraft').click();
+    await expect(page.getByTestId('draft-needs-input')).toBeHidden({ timeout: 15_000 });
+    await expect(page.getByLabel('Message body')).toHaveValue(/We were both on the Cornell Hyperloop team/);
+    await expect(page.getByLabel('Message body')).not.toHaveValue(/\[/);
+    await expect(approve).toBeEnabled();
   });
 
   test('map renders the orbit and reach finds a route', async ({ page }) => {

@@ -1,4 +1,4 @@
-import type { ChatStage } from '../types';
+import type { ChatStage, CoffeeChat, MessageKind } from '../types';
 
 export const ACTIVE_STAGES: ChatStage[] = [
   'identified',
@@ -184,3 +184,103 @@ export const NO_RESPONSE_AFTER_BUMPS_BUSINESS_DAYS = 10;
 export const NO_RESPONSE_SILENT_DAYS = 21;
 /** ... the same three weeks in business days (holidays and the winter freeze do not count); always past the last bump */
 export const NO_RESPONSE_SILENT_BUSINESS_DAYS = 15;
+
+export interface Reengage {
+  /** when it is fair to write again */
+  at: string;
+  /** the qualifier as they wrote it ("this quarter") */
+  said: string;
+  /** what they said, as seen from after the window, for "you mentioned ..." ("last quarter wasn't a good time") */
+  past: string;
+}
+
+const MONTH_NAMES = [
+  'january',
+  'february',
+  'march',
+  'april',
+  'may',
+  'june',
+  'july',
+  'august',
+  'september',
+  'october',
+  'november',
+  'december',
+];
+
+/**
+ * A decline with a time limit ("not able to take calls this quarter", "swamped until January") is a "not now", not a
+ * "no": the window after which a polite second try is fair. Undefined for a decline without one.
+ */
+export function declineReengage(body: string | undefined, saidAt: Date): Reengage | undefined {
+  if (!body) return undefined;
+  const t = body.toLowerCase();
+  const y = saidAt.getFullYear();
+  const m = saidAt.getMonth();
+  const mk = (d: Date, said: string, past: string): Reengage => ({ at: d.toISOString(), said, past });
+  const until = t.match(
+    /\b(?:until|till|after)\s+(?:early\s+|mid[- ])?(january|february|march|april|may|june|july|august|september|october|november|december)\b/,
+  );
+  if (until) {
+    const mi = MONTH_NAMES.indexOf(until[1]!);
+    const month = until[1]!.charAt(0).toUpperCase() + until[1]!.slice(1);
+    const after = /^after/.test(until[0]);
+    const at = new Date(mi > m ? y : y + 1, after ? mi + 1 : mi, 1, 9);
+    return mk(
+      at,
+      `${after ? 'until after' : 'until'} ${month}`,
+      `you were tied up until ${after ? 'after ' : ''}${month}`,
+    );
+  }
+  if (/\bthis (quarter|q[1-4])\b/.test(t))
+    return mk(
+      new Date(y, Math.floor(m / 3) * 3 + 3, 1, 9),
+      'this quarter',
+      "last quarter wasn't a good time",
+    );
+  if (/\bthis (semester|term)\b/.test(t)) {
+    const unit = /\bthis term\b/.test(t) ? 'term' : 'semester';
+    // spring runs January to May, fall August to December
+    const at = m <= 4 ? new Date(y, 7, 25, 9) : new Date(y + 1, 0, 15, 9);
+    return mk(at, `this ${unit}`, `last ${unit} wasn't a good time`);
+  }
+  if (/\bthis summer\b/.test(t) && m <= 7)
+    return mk(new Date(y, 8, 8, 9), 'this summer', "the summer wasn't a good time");
+  if (/\bthis month\b/.test(t))
+    return mk(new Date(y, m + 1, 1, 9), 'this month', "last month wasn't a good time");
+  return undefined;
+}
+
+/**
+ * What "Write to {first}" should draft for a chat right now, or why nothing should go out yet. A check-in minutes
+ * after a thank-you (or any note within two weeks of the student's last one, with no reply since) is not offered:
+ * the stage alone would say "nurture", the calendar says "too soon".
+ */
+export function composeKindFor(
+  chat: Pick<CoffeeChat, 'stage' | 'lastOutboundAt' | 'lastInboundAt'> | undefined,
+  now: Date,
+): { kind: MessageKind } | { wait: { since: string } } {
+  if (!chat) return { kind: 'outreach' };
+  const lastOut = chat.lastOutboundAt ? new Date(chat.lastOutboundAt).getTime() : undefined;
+  const repliedSince = !!chat.lastInboundAt && (!lastOut || new Date(chat.lastInboundAt).getTime() > lastOut);
+  switch (chat.stage) {
+    case 'completed':
+      return { kind: 'thank_you' };
+    case 'outreach_sent':
+      return { kind: 'bump' };
+    case 'replied':
+    case 'scheduling':
+      return { kind: 'schedule' };
+    case 'scheduled':
+      return { kind: repliedSince ? 'reply' : 'outreach' };
+    case 'followed_up':
+    case 'nurturing':
+      if (repliedSince) return { kind: 'reply' };
+      if (lastOut && now.getTime() - lastOut < 14 * 86_400_000)
+        return { wait: { since: chat.lastOutboundAt! } };
+      return { kind: 'nurture' };
+    default:
+      return { kind: 'outreach' };
+  }
+}

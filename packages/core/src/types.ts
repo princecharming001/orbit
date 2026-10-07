@@ -580,10 +580,13 @@ export interface OutboundMessage {
   error?: string;
   generatedBy: 'template' | 'llm';
   claims?: DraftClaim[];
-  needsInput?: ('connection' | 'update' | 'post')[];
+  needsInput?: DraftNeed[];
   opening?: string;
   createdAt: string;
 }
+
+/** What a draft is missing that only the student can supply (the needs-input prompt in the editor). */
+export type DraftNeed = 'connection' | 'update' | 'post' | 'news' | 'target' | 'answer' | 'role' | 'takeaway';
 
 export interface DraftClaim {
   text: string;

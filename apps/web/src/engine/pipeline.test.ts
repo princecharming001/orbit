@@ -681,6 +681,8 @@ describe('email introductions and suggested names (EG-08)', () => {
     await ensureDrafts(user, [card.id]);
     const row = (await db.suggestions.get(card.id))!;
     const draft = (await db.outbound.get(row.outboundMessageId!))!;
-    expect(draft.bodyDraft).toMatch(/I'm sorry I didn't get back to you in time for Thursday at 2pm\./);
+    expect(draft.bodyDraft).toMatch(
+      /I'm sorry I didn't get back to you in time for Thursday, \w{3} \d{1,2} at 2pm\./,
+    );
   }, 60_000);
 });
