@@ -379,6 +379,35 @@ describe('ingest: email understanding', () => {
     expect(pending.filter((s) => s.kind === 'new_outreach')).toHaveLength(0);
   });
 
+  it('L3: a yes to a chat that also mentions a colleague moves the chat to replied and proposes times', async () => {
+    await ingestEmails(
+      user,
+      [
+        raw({
+          from: ALEX,
+          to: ['Dana Ortiz <dana@figma.com>'],
+          bodyText: OUTREACH,
+          sentAt: '2026-10-01T15:00:00Z',
+        }),
+        raw({
+          from: 'Dana Ortiz <dana@figma.com>',
+          to: [ALEX],
+          bodyText:
+            'Happy to chat next week. My colleague Ana would be great too, I can connect you after.\n\nDana',
+          sentAt: '2026-10-04T15:00:00Z',
+        }),
+      ],
+      { useLlm: false, now: NOW },
+    );
+    const dana = await chatFor('dana@figma.com');
+    expect(dana.chat?.stage).toBe('replied');
+    const pending = await db.suggestions
+      .filter((s) => s.status === 'pending' && s.personId === dana.person?.id)
+      .toArray();
+    expect(pending.filter((s) => s.kind === 'schedule_propose')).toHaveLength(1);
+    expect(pending.filter((s) => s.kind === 'confirm_stage')).toHaveLength(0);
+  });
+
   it('L5: a bare "best of luck" is a decline on a chat waiting on an answer, a friendly close otherwise', async () => {
     await ingestEmails(
       user,

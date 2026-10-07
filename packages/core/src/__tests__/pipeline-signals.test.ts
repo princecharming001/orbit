@@ -8,7 +8,7 @@ import {
   isAutoReplyBody,
 } from '../email/triage';
 import { heuristicNoteExtraction } from '../notes/extract';
-import { canTransition, decideTransition } from '../pipeline/transitions';
+import { canTransition, decideTransition, PROPOSE_THRESHOLD } from '../pipeline/transitions';
 import { generateCandidates } from '../suggestions/rules';
 import {
   decodeEntities,
@@ -925,6 +925,24 @@ describe('email understanding leftovers (L1 to L7)', () => {
     // a negation that does say the time is taken still does
     expect(slots("Can't do Monday at 2pm, sorry.")).toEqual([]);
     expect(slots("Tuesday at 2pm doesn't work, how about Wednesday at 3pm?")).toEqual(['Wed 15:00']);
+    // a bare negation before the day is a question only when the clause asks one
+    expect(slots("Isn't Tuesday at 2 better?")).toEqual(['Tue 14:00']);
+    for (const body of [
+      "Can't Monday at 2, sorry. Could we do Tuesday at 3?",
+      "Can't Monday at 2pm but Tuesday at 3pm works.",
+      "Hi Alex,\n\nCan't Monday at 2. Tuesday at 3pm?",
+      "Couldn't Monday at 2pm, but Tuesday at 3pm.",
+    ])
+      expect(slots(body), body).toEqual(['Tue 15:00']);
+  });
+
+  it('L1: a day ending one sentence still pairs with a bare time in the next', () => {
+    expect(slots("Let's do Wednesday. 2pm work?")).toEqual(['Wed 14:00']);
+    expect(slots('Free Wednesday. Around 2pm?')).toEqual(['Wed 14:00']);
+    expect(slots('Thursday. 3pm ET.')).toEqual(['Thu 15:00']);
+    expect(sig('Thursday. 3pm ET.').signal).toBe('scheduling_proposal');
+    // but not with a time the next sentence gives its own day
+    expect(slots("I'm booked Wednesday. Tuesday at 2pm.")).toEqual(['Tue 14:00']);
   });
 
   it('L2: a name, a stray capital or a city zone after the time keeps the time', () => {
@@ -962,6 +980,8 @@ describe('email understanding leftovers (L1 to L7)', () => {
     );
     expect(yesAndIntro.signal).toBe('intro_offer');
     expect(yesAndIntro.extraction.handoff).toBeUndefined();
+    // as sure as any other yes, so the chat moves to replied without asking the student
+    expect(yesAndIntro.confidence).toBeGreaterThanOrEqual(PROPOSE_THRESHOLD);
     for (const body of [
       "Happy to chat! I'm cc'ing my EA Jordan to set up time.",
       "Looping in my assistant (cc'd) to find a time",
@@ -978,6 +998,16 @@ describe('email understanding leftovers (L1 to L7)', () => {
         .extraction.handoff,
     ).toBe(true);
     expect(sig("Looping in Sam (cc'd) to find a time for you two to chat.").extraction.handoff).toBe(true);
+    // a named colleague added to find a time, with no assistant role, is an intro to them
+    for (const body of [
+      "Looping in Sam (cc'd) to find a time to chat with you.",
+      "Looping in Sam (cc'd) to set up a time with Alex.",
+      "Cc'ing Sam to schedule a time, he runs the internship program.",
+    ]) {
+      const r = sig(body);
+      expect(r.signal, body).toBe('intro_offer');
+      expect(r.extraction.handoff, body).toBe(true);
+    }
   });
 
   it('L5: a bare "best of luck" is a no only on an ask waiting for an answer, or next to a refusal', () => {
@@ -1009,6 +1039,8 @@ describe('email understanding leftovers (L1 to L7)', () => {
     // passing something along is still a referral
     expect(sig("I'll pass your resume along to the hiring manager.").signal).toBe('referral_offer');
     expect(sig('Happy to pass it on to our recruiter.').signal).toBe('referral_offer');
+    expect(sig('I can pass this along to my manager.').signal).toBe('referral_offer');
+    expect(sig("I'll pass that on to the team.").signal).toBe('referral_offer');
   });
 });
 

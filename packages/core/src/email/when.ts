@@ -218,7 +218,8 @@ type Tok =
   | { k: 'past' }
   | { k: 'conn' };
 type Part = 'morning' | 'afternoon' | 'evening';
-type Positioned = Tok & { start: number; end: number };
+/** `endsSentence`: a day or month name whose trailing dot ends the sentence ("I'm booked Wednesday. Tuesday at 2pm"). */
+type Positioned = Tok & { start: number; end: number; endsSentence?: boolean };
 
 const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 const DAY_WORDS: [RegExp, number][] = [
@@ -309,12 +310,14 @@ function tokenize(text: string): Positioned[] {
     const g = m.groups ?? {};
     const raw = m[0];
     const start = m.index;
-    let end = start + raw.length;
+    const end = start + raw.length;
     if (!raw.length) {
       TOKEN_RE.lastIndex++;
       continue;
     }
-    const push = (t: Tok) => out.push({ ...t, start, end } as Positioned);
+    let endsSentence = false;
+    const push = (t: Tok) =>
+      out.push({ ...t, start, end, ...(endsSentence ? { endsSentence } : {}) } as Positioned);
     if (g.mdy) {
       const parts = g.mdy.split('/').map((x) => Number.parseInt(x, 10));
       const [mo, d, y] = parts as [number, number, number | undefined];
@@ -334,7 +337,7 @@ function tokenize(text: string): Positioned[] {
       continue;
     }
     if (g.dmon) {
-      if (FULL_DAY_OR_MONTH.test(raw)) end -= 1;
+      endsSentence = FULL_DAY_OR_MONTH.test(raw);
       const mm = /^(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?([a-z]+)/i.exec(g.dmon)!;
       const word = mm[2]!;
       if (/^(may|mar)$/i.test(word) && word[0] !== word[0]!.toUpperCase()) continue;
@@ -349,8 +352,8 @@ function tokenize(text: string): Positioned[] {
       continue;
     }
     if (g.day) {
-      if (raw.endsWith('.') && (FULL_DAY_OR_MONTH.test(raw) || SENTENCE_AFTER_DOT.test(text.slice(end))))
-        end -= 1;
+      endsSentence =
+        raw.endsWith('.') && (FULL_DAY_OR_MONTH.test(raw) || SENTENCE_AFTER_DOT.test(text.slice(end)));
       const word = g.day.replace(/\.$/, '');
       const lower = word.toLowerCase();
       if (AMBIGUOUS_DAY.test(lower) && word[0] !== word[0]!.toUpperCase()) continue;
@@ -452,12 +455,31 @@ function tokenize(text: string): Positioned[] {
 }
 
 /** Group adjacent tokens. Tokens are adjacent when only spaces, commas, colons or parentheses separate them. */
+const ANCHOR_KINDS = new Set<Tok['k']>(['day', 'date', 'ord', 'rel']);
+
+/**
+ * Whether the sentence starting at token `i` names a day of its own. A day that ends a sentence still pairs with a
+ * bare time in the next one ("Let's do Wednesday. 2pm work?"), but not with a time the next sentence gives its own
+ * day ("I'm booked Wednesday. Tuesday at 2pm").
+ */
+function namesOwnDay(text: string, toks: Positioned[], i: number): boolean {
+  const from = toks[i]!.start;
+  const stop = /[.!?\n]/.exec(text.slice(from));
+  const end = stop ? from + stop.index : text.length;
+  for (let j = i; j < toks.length && toks[j]!.start < end; j++) if (ANCHOR_KINDS.has(toks[j]!.k)) return true;
+  return false;
+}
+
 function chunks(text: string, toks: Positioned[]): Positioned[][] {
   const out: Positioned[][] = [];
   let cur: Positioned[] = [];
-  for (const t of toks) {
+  for (const [i, t] of toks.entries()) {
     const prev = cur[cur.length - 1];
-    if (prev && !/^[\s,:()]*$/.test(text.slice(prev.end, t.start))) {
+    if (
+      prev &&
+      (!/^[\s,:()]*$/.test(text.slice(prev.end, t.start)) ||
+        (prev.endsSentence && namesOwnDay(text, toks, i)))
+    ) {
       out.push(cur);
       cur = [];
     }
@@ -769,11 +791,17 @@ const BUSY_CLAUSE =
   /\b(?:not|no|never|cannot|busy|booked|in class|have class|in a meeting|in meetings|conflict|unavailable|tied up|out of (?:the )?office|traveling|travelling|away|blocked)\b|n['’]t\b|\b(?:i['’]?m|i am|i['’]?ll be|i will be|we['’]?re|we are|we['’]?ll be)\s+(?:\w+\s+)?(?:out|off)\b(?!\s+work)/i;
 /**
  * A negative question that suggests a time ("Why don't we do Tuesday at 2pm?", "Can't we just do Tuesday at 2pm?",
- * "Wouldn't it be easier to do Tuesday at 2pm?", "Isn't Tuesday at 2 better?"): at the start of the clause, followed
- * by its subject or by the day itself. "Can't do Monday at 2" has no subject and still says the time is taken.
+ * "Wouldn't it be easier to do Tuesday at 2pm?"): at the start of the clause, followed by its subject.
+ * "Can't do Monday at 2" has no subject and still says the time is taken.
  */
-const NEGATIVE_QUESTION =
-  /^\s*(?:(?:so|well|honestly|actually|hey|hmm|and|or|ok|okay)[\s,]+)*(?:why\s+)?(?:can['’]?t|cannot|couldn['’]?t|wouldn['’]?t|won['’]?t|shouldn['’]?t|don['’]?t|doesn['’]?t|didn['’]?t|isn['’]?t|aren['’]?t|wasn['’]?t)(?:\s+(?:we|you|i|it|that|this|there|they)\b|\s*$)/i;
+const NEGATION_LEAD =
+  "^\\s*(?:(?:so|well|honestly|actually|hey|hmm|and|or|ok|okay)[\\s,]+)*(?:why\\s+)?(?:can['’]?t|cannot|couldn['’]?t|wouldn['’]?t|won['’]?t|shouldn['’]?t|don['’]?t|doesn['’]?t|didn['’]?t|isn['’]?t|aren['’]?t|wasn['’]?t)";
+const NEGATIVE_QUESTION = new RegExp(`${NEGATION_LEAD}\\s+(?:we|you|i|it|that|this|there|they)\\b`, 'i');
+/**
+ * A negation right before the day ("Isn't Tuesday at 2 better?") asks only when its clause ends in a question mark;
+ * "Can't Monday at 2, sorry" and "Couldn't Monday at 2pm, but Tuesday at 3pm" say the time is taken.
+ */
+const NEGATIVE_QUESTION_BARE = new RegExp(`${NEGATION_LEAD}\\s*$`, 'i');
 /** Phrases with a negation that do not say the time is taken. */
 const NOT_BUSY_PHRASE =
   /\b(?:if (?:not|that|this|those|these|none|neither|it|they|you|so)\b.*$|unless\b.*$|no (?:worries|problem|rush|pressure|stress)|not a problem|not sure|can['’]?t wait|(?:don['’]?t|do not) worry|(?:doesn['’]?t|does not) matter|(?:wouldn['’]?t|don['’]?t) mind|(?:don['’]?t|do not) hesitate|why not|no later than)/gi;
@@ -792,7 +820,8 @@ function busyAround(text: string, start: number, end: number): boolean {
       break;
     }
   }
-  const before = text.slice(lo, start).replace(NEGATIVE_QUESTION, ' ');
+  let before = text.slice(lo, start).replace(NEGATIVE_QUESTION, ' ');
+  if (text[hi] === '?') before = before.replace(NEGATIVE_QUESTION_BARE, ' ');
   const clause = `${before} ${text.slice(end, hi)}`.replace(NOT_BUSY_PHRASE, ' ');
   return BUSY_CLAUSE.test(clause);
 }
