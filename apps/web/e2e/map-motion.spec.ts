@@ -339,6 +339,96 @@ test.describe('Map motion', () => {
     await expect(page.getByTestId('reach-form')).not.toHaveClass(/shake-x/);
   });
 
+  test('a search that finds someone takes down the toast an earlier miss left up', async ({ page }) => {
+    await loadDemo(page);
+    await openMap(page);
+    const toast = page.getByTestId('toasts').getByText(/no one by that name or company/i);
+    await search(page, 'Zzyzx Nobody');
+    await expect(toast).toBeVisible();
+    await search(page, 'Stripe');
+    await expect(page.getByTestId('map-legend-line')).toHaveText(/Showing \d+ people at Stripe/);
+    await expect(toast).toHaveCount(0);
+  });
+
+  test('the company panel names the same route, with the same hops, that Reach then shows', async ({
+    page,
+  }) => {
+    await loadDemo(page);
+    await openMap(page);
+    await search(page, 'Stripe');
+    const row = page.getByTestId('company-routes').locator('li').first();
+    await expect(row).toBeVisible();
+    await expect(page.getByText(/two-hop/i)).toHaveCount(0);
+    const text = await row.innerText();
+    const hops = Number(/(\d+) hops?, via/.exec(text)?.[1]);
+    expect(hops).toBeGreaterThan(1);
+    const vias = text.split(', via ')[1]!.split(' then ');
+    await row.getByRole('button').click();
+    const first = page.getByTestId('reach-path').first();
+    await expect(first).toContainText(`Route 1 · ${hops} hops`);
+    for (const v of vias) await expect(first).toContainText(v.trim());
+  });
+
+  test('the person card sits beside the hovered dot, and the map does not write the name a second time', async ({
+    page,
+  }) => {
+    await loadDemo(page);
+    await openMap(page);
+    const { 'Maya Chen': maya } = await idsByName(page, ['Maya Chen']);
+    const box = (await mapCanvas(page).boundingBox())!;
+    const at = (await mapDots(page, [maya]))[maya]!;
+    await page.mouse.move(box.x + at.x, box.y + at.y);
+    const card = page.getByTestId('map-tooltip');
+    await expect(card).toContainText('Maya Chen');
+    await expect(card).toHaveAttribute('data-place', 'beside');
+    await mapSettled(page);
+    const c = (await card.boundingBox())!;
+    const dot = (await mapDots(page, [maya]))[maya]!;
+    const x = box.x + dot.x;
+    const y = box.y + dot.y;
+    // the gap between the dot and the card's nearest edge
+    const dx = Math.max(c.x - x, 0, x - (c.x + c.width));
+    const dy = Math.max(c.y - y, 0, y - (c.y + c.height));
+    expect(Math.hypot(dx, dy)).toBeLessThan(dot.r + 40);
+  });
+
+  test('with a filter on, the arrow keys walk only the people it shows, and the subtitle counts them', async ({
+    page,
+  }) => {
+    await loadDemo(page);
+    await openMap(page);
+    const alumni: string[] = await page.evaluate(async () => {
+      const db = (
+        window as unknown as { __orbitDb: { people: { toArray(): Promise<Record<string, unknown>[]> } } }
+      ).__orbitDb;
+      return (await db.people.toArray())
+        .filter((p) => p.isAlumni && p.isHuman && !p.hiddenAt)
+        .map((p) => p.id as string);
+    });
+    const all = Object.keys(await mapDots(page)).length;
+    await page.getByTestId('map-filter-alumni').click();
+    await mapSettled(page);
+    await expect(page.getByText(`${alumni.length} of ${all} people shown`)).toBeVisible();
+    await mapCanvas(page).focus();
+    const seen = new Set<string>();
+    for (const key of [
+      'Home',
+      'ArrowRight',
+      'ArrowRight',
+      'ArrowDown',
+      'ArrowLeft',
+      'ArrowUp',
+      'ArrowRight',
+    ]) {
+      await page.keyboard.press(key);
+      const id = (await mapSnapshot(page)).hover;
+      expect(id).toBeTruthy();
+      seen.add(id!);
+    }
+    expect(seen.size).toBeGreaterThan(2);
+    for (const id of seen) expect(alumni).toContain(id);
+  });
+
   test('every animation carries on from where the dots are when another one interrupts it', async ({
     page,
   }) => {
@@ -575,6 +665,10 @@ test.describe('Map motion', () => {
       12,
     );
     expect((await mapSnapshot(page)).phaseLog).toContain('newcomer-intro');
+    // the line under the filters says it in words, for anyone who blinked
+    await expect(page.getByTestId('map-legend-line')).toHaveText(
+      'Jamie Lindgren joined your orbit, introduced by Tomas Costa.',
+    );
     // it travels to its own slot and lands
     await stepUntilSettled(page);
     const landed = await mapDots(page, ['e2e-new', tomas]);
@@ -628,6 +722,7 @@ test.describe('Map motion', () => {
     expect(mid).not.toBe(before);
     expect(mid).not.toBe('rgb(31,138,76)');
     expect((await mapDots(page, [maya]))[maya]!.r).toBeGreaterThan(rest * 1.1);
+    await expect(page.getByTestId('map-legend-line')).toHaveText('Your chat with Maya Chen is booked.');
     await stepUntilSettled(page, 3000);
     // and it lands on the scheduled colour
     expect(await mapStageColor(page, maya)).toBe('rgb(31,138,76)');
@@ -683,15 +778,17 @@ test.describe('Map motion', () => {
     await expect
       .poll(async () => new Set((await mapSnapshot(page)).webLit))
       .toEqual(new Set(Object.values(ids)));
-    // hovering Aisha on the map lights the same chain and says it in words under the list
+    // hovering Aisha on the map lights the same chain; the list already says it in those words, so its entry is
+    // marked rather than repeated in a card under the list
+    await page.mouse.move(5, 5);
     const box = (await mapCanvas(page).boundingBox())!;
     const aishaDot = (await mapDots(page, [ids['Aisha Volkov']]))[ids['Aisha Volkov']]!;
     await page.mouse.move(box.x + aishaDot.x, box.y + aishaDot.y);
-    await expect(page.getByTestId('map-chain-sentence')).toHaveText(
-      'Elena introduced you to Tomas, who introduced you to Aisha.',
-    );
-    await page.mouse.move(5, 5);
+    const said = stories.filter({ hasText: 'Elena introduced you to Tomas, who introduced you to Aisha.' });
+    await expect(said).toHaveAttribute('data-lit', 'true');
     await expect(page.getByTestId('map-chain-sentence')).toHaveCount(0);
+    await page.mouse.move(5, 5);
+    await expect(said).not.toHaveAttribute('data-lit', 'true');
     // the search box searches the web and turns the orbit to the match
     await search(page, 'Aisha');
     await expect.poll(async () => (await mapSnapshot(page)).focus).toBe(`web:${ids['Aisha Volkov']}`);
@@ -937,6 +1034,24 @@ test.describe('Map motion with reduced motion', () => {
 
 test.describe('Map motion on a touch screen', () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+
+  test('a search that finds no one says so in a toast that fits the phone, above the tab bar', async ({
+    page,
+  }) => {
+    await loadDemo(page);
+    await openMap(page);
+    await search(page, 'Zzyzx Nobody');
+    const toast = page.getByTestId('toasts').locator('> div').first();
+    await expect(toast).toContainText(/no one by that name or company/i);
+    const b = (await toast.boundingBox())!;
+    expect(b.x).toBeGreaterThanOrEqual(8);
+    expect(b.x + b.width).toBeLessThanOrEqual(390 - 8);
+    // nothing spills out of the pill, and it clears the tab bar
+    const spills = await toast.evaluate((el) => el.scrollHeight > el.clientHeight + 1);
+    expect(spills).toBe(false);
+    const bar = (await page.getByRole('navigation', { name: 'Main' }).last().boundingBox())!;
+    expect(b.y + b.height).toBeLessThanOrEqual(bar.y);
+  });
 
   test('pending suggestions ripple together every 2.4 s, and the map sleeps in between', async ({ page }) => {
     await loadDemo(page);

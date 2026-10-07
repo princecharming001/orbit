@@ -46,7 +46,7 @@ export function detectIntroduction(
   const introducedIds: string[] = [];
   for (const e of others) {
     const p = people.find((x) => x.emails.some((y) => lower(y) === e));
-    if (!p || !p.isHuman || p.id === msg.fromPersonId || introducedIds.includes(p.id)) continue;
+    if (!p?.isHuman || p.id === msg.fromPersonId || introducedIds.includes(p.id)) continue;
     const first = p.firstName.trim();
     if (first.length < 2) continue;
     // a proper name, capitalised: "Will" or "Grace" as a name, not "will" or "grace" as words

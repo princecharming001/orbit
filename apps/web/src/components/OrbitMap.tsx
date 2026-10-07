@@ -30,53 +30,91 @@ export interface MapProps {
   onSelectCluster?: (node: OrbitNode) => void;
   /** `place`: the corner of the map where a card about the person covers the fewest people */
   onHover?: (id: string | undefined, place?: CardPlace) => void;
+  /** the page shows a card next to the hovered person, so the map does not write their name above the dot too */
+  personCard?: boolean;
   rotate?: boolean;
   /** what the map shows, for screen readers */
   label?: string;
 }
 
-export type CardPlace = 'top-left' | 'bottom-left' | 'top-right' | 'bottom-right';
+/**
+ * Where the person card goes. From 640 px up it is a 260 px card next to the dot (`x`, `y`: its top-left corner in
+ * the map), so the eye does not have to cross the map; below that it spans the map's width at the top or bottom.
+ */
+export type CardPlace = { at: 'top' | 'bottom' } | { x: number; y: number };
 
 /** The person card's size and inset in CSS px (MapPage draws it: 260 px wide from 640 px up, full width below). */
+export const CARD_W = 260;
 const CARD_H = 92;
 const CARD_INSET = 12;
 /** Room the phone's tab bar takes at the bottom of the window. */
 const TAB_BAR = 72;
 
 /**
- * Where the person card goes: the corner that hides the fewest people, never over the person it is about (or the
- * name above their dot). On a touch screen the card prefers the top, and goes to the bottom only when the bottom of
+ * Where the person card goes: never over the person it is about, and over as few other people as it can. Next to
+ * the dot on a wide map (the side away from the centre first, where the orbit is thinner), at the top or bottom of
+ * a narrow one. On a touch screen a narrow map's card prefers the top, and goes to the bottom only when the bottom of
  * the map is on screen, clear of the tab bar.
  */
 function cardPlace(scene: OrbitScene, id: string, canvas: HTMLCanvasElement, touch: boolean): CardPlace {
   const w = canvas.clientWidth;
   const h = canvas.clientHeight;
-  const cw = w < 640 ? w - 2 * CARD_INSET : 260;
   const at = scene.positionOf(id);
+  const covers = (x0: number, y0: number, x1: number, y1: number) =>
+    !!at && at.x + at.r + 8 > x0 && at.x - at.r - 8 < x1 && at.y + at.r + 8 > y0 && at.y - at.r - 8 < y1;
+  if (w >= 640 && at) {
+    const gap = 14;
+    const you = scene.youAt();
+    // beside the dot (level with it, or with the dot at the card's top or bottom), or above or below it
+    const xs = { right: at.x + at.r + gap, left: at.x - at.r - gap - CARD_W };
+    const ys = [at.y - CARD_H / 2, at.y - 18, at.y + 18 - CARD_H];
+    const sides = at.x >= w / 2 ? [xs.right, xs.left] : [xs.left, xs.right];
+    const cands: { x: number; y: number }[] = [];
+    for (const x of sides) for (const y of ys) cands.push({ x, y });
+    for (const y of [at.y + at.r + gap, at.y - at.r - gap - CARD_H])
+      for (const x of [at.x - CARD_W / 2, at.x - 24, at.x + 24 - CARD_W]) cands.push({ x, y });
+    let best = cands[0]!;
+    let bestScore = Number.POSITIVE_INFINITY;
+    cands.forEach((c, i) => {
+      const x = Math.round(Math.min(Math.max(c.x, CARD_INSET), w - CARD_INSET - CARD_W));
+      const y = Math.round(Math.min(Math.max(c.y, CARD_INSET), h - CARD_INSET - CARD_H));
+      const x1 = x + CARD_W;
+      const y1 = y + CARD_H;
+      // how far the card ended up from the dot once kept inside the map
+      const dx = Math.max(x - at.x, 0, at.x - x1);
+      const dy = Math.max(y - at.y, 0, at.y - y1);
+      const hidesYou = you.x + you.r > x && you.x - you.r < x1 && you.y + you.r > y && you.y - you.r < y1;
+      const score =
+        (covers(x, y, x1, y1) ? 1000 : 0) +
+        (hidesYou ? 12 : 0) +
+        scene.dotsIn(x, y, x1, y1) +
+        Math.hypot(dx, dy) / 30 +
+        i * 0.25;
+      if (score < bestScore) {
+        best = { x, y };
+        bestScore = score;
+      }
+    });
+    return best;
+  }
+  const cw = w - 2 * CARD_INSET;
   const bottomShown = !touch || canvas.getBoundingClientRect().bottom <= window.innerHeight - TAB_BAR;
-  const order: CardPlace[] = touch
-    ? ['top-left', 'bottom-left', 'top-right', 'bottom-right']
-    : ['bottom-left', 'top-left', 'bottom-right', 'top-right'];
-  let best: CardPlace = order[0]!;
+  const order: ('top' | 'bottom')[] = touch ? ['top', 'bottom'] : ['bottom', 'top'];
+  let best: 'top' | 'bottom' = order[0]!;
   let bestScore = Number.POSITIVE_INFINITY;
-  for (const place of order) {
-    const top = place.startsWith('top');
-    if (!top && !bottomShown) continue;
-    if (cw > w / 2 && place.endsWith('right')) continue;
-    const x0 = place.endsWith('left') ? CARD_INSET : w - CARD_INSET - cw;
-    const y0 = top ? CARD_INSET : h - CARD_INSET - CARD_H;
-    const x1 = x0 + cw;
-    const y1 = y0 + CARD_H;
-    // the person themselves, and their name above the dot, stay in sight
-    const covers =
-      !!at && at.x + at.r + 8 > x0 && at.x - at.r - 8 < x1 && at.y + at.r + 8 > y0 && at.y - at.r - 34 < y1;
-    const score = (covers ? 1000 : 0) + scene.dotsIn(x0, y0, x1, y1);
+  for (const side of order) {
+    if (side === 'bottom' && !bottomShown) continue;
+    const y0 = side === 'top' ? CARD_INSET : h - CARD_INSET - CARD_H;
+    // the person themselves, and the name above their dot, stay in sight
+    const hidden =
+      !!at && covers(CARD_INSET, y0, CARD_INSET + cw, y0 + CARD_H + (side === 'bottom' ? 26 : 0));
+    const score = (hidden ? 1000 : 0) + scene.dotsIn(CARD_INSET, y0, CARD_INSET + cw, y0 + CARD_H);
     if (score < bestScore) {
-      best = place;
+      best = side;
       bestScore = score;
     }
   }
-  return best;
+  return { at: best };
 }
 
 const COARSE_QUERY = '(hover: none) and (pointer: coarse)';
@@ -170,6 +208,7 @@ export function OrbitMap({
   onSelect,
   onSelectCluster,
   onHover,
+  personCard = false,
   rotate = true,
   label,
 }: MapProps) {
@@ -237,7 +276,10 @@ export function OrbitMap({
   });
 
   // On touch screens the orbit holds still: a moving dot is hard to tap and its name card would drift away.
-  useEffect(() => scene.setOptions({ spin: rotate && !coarse, reduced }), [scene, rotate, coarse, reduced]);
+  useEffect(
+    () => scene.setOptions({ spin: rotate && !coarse, reduced, personCard }),
+    [scene, rotate, coarse, reduced, personCard],
+  );
   useEffect(
     () => scene.setData({ layout, people: byId, loading, stages, pending, introducerOf }),
     [scene, layout, byId, loading, stages, pending, introducerOf],

@@ -318,10 +318,10 @@ export async function ingestEmails(
             ? m.fromPersonId
               ? [m.fromPersonId]
               : []
-            : thread.participantPersonIds.filter((pid) => true);
+            : [...thread.participantPersonIds];
         for (const pid of thread.participantPersonIds) {
           const p = await db.people.get(pid);
-          if (!p || !p.isHuman) continue;
+          if (!p?.isHuman) continue;
           const isDirect =
             direct.includes(pid) &&
             (m.direction === 'inbound' || m.toEmails.some((e) => p.emails.includes(e)));
@@ -443,7 +443,7 @@ async function processNetworkingThread(
   counterpartId ??= thread.participantPersonIds[0];
   if (!counterpartId) return;
   const person = participants.find((p) => p.id === counterpartId);
-  if (!person || !person.isHuman) return;
+  if (!person?.isHuman) return;
   // a thread that began 1:1 belongs to the counterpart's chat (and may create it); a thread that began as a group
   // only moves a chat already bound to it
   const othersOnFirst = [...first.toEmails, ...first.ccEmails, first.fromEmail].filter(

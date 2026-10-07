@@ -8,7 +8,8 @@ export const LABEL_FONT_PX = 11;
 /** Fit the orbit (dots plus labels) inside the canvas: labels above and below need room, sides are clamped. */
 export function orbitScale(w: number, h: number, extent: number): number {
   const side = w < 600 ? 10 : 60;
-  const s = Math.min(1, (h / 2 - LABEL_GAP - 16) / extent, (w / 2 - side) / extent);
+  // the top and bottom labels keep a clear margin from the canvas edge
+  const s = Math.min(1, (h / 2 - LABEL_GAP - LABEL_FONT_PX - 14) / extent, (w / 2 - side) / extent);
   return Math.max(0.2, s);
 }
 
@@ -57,6 +58,93 @@ export function curveControl(out: Pt, x0: number, y0: number, x1: number, y1: nu
   out.x = (x0 + x1) / 2 + (y1 - y0) * bend;
   out.y = (y0 + y1) / 2 - (x1 - x0) * bend;
   return out;
+}
+
+/**
+ * Control points for the hops of a route that starts at the centre (You) and runs through `pts`. Each hop bows
+ * gently to the left of travel, like `curveControl`. Two cases get more room:
+ * - a hop whose straight line would pass close to the centre swings round it, on the far side from the centre, so
+ *   it never reads as a line from You;
+ * - a hop that heads back the way the previous one came, and that previous one, bow apart like a lens, wider, so
+ *   the two read as two lines that never cross rather than one thick one.
+ * `minClear` is the least distance from the centre a hop between two dots keeps (the You dot plus some air).
+ */
+export function routeControls(pts: readonly Pt[], cx: number, cy: number, minClear: number, out: Pt[]): Pt[] {
+  const hops = Math.max(0, pts.length - 1);
+  out.length = hops;
+  // a hop followed by one that heads back the way it came (within about 40 degrees): the pair bows apart like a
+  // lens, the way out away from where the way back ends and the way back toward it, so the two never cross
+  const want = new Array<number>(hops).fill(0);
+  for (let k = 0; k + 1 < hops; k++) {
+    const a = pts[k]!;
+    const b = pts[k + 1]!;
+    const c = pts[k + 2]!;
+    const ox = b.x - a.x;
+    const oy = b.y - a.y;
+    const rx = c.x - b.x;
+    const ry = c.y - b.y;
+    const lo = Math.hypot(ox, oy);
+    const lr = Math.hypot(rx, ry);
+    if (lo < 1 || lr < 1 || (-ox * rx - oy * ry) / (lo * lr) <= 0.76) continue;
+    // which side of the way out the way back ends on (left of travel is +1)
+    const sigma = (c.x - a.x) * (oy / lo) - (c.y - a.y) * (ox / lo) >= 0 ? 1 : -1;
+    want[k] = -sigma;
+    want[k + 1] = -sigma;
+  }
+  for (let k = 0; k < hops; k++) {
+    const a = pts[k]!;
+    const b = pts[k + 1]!;
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const len = Math.hypot(dx, dy);
+    const mx = (a.x + b.x) / 2;
+    const my = (a.y + b.y) / 2;
+    const c = out[k] ?? { x: 0, y: 0 };
+    out[k] = c;
+    if (len < 1) {
+      c.x = mx;
+      c.y = my;
+      continue;
+    }
+    // unit normal to the left of travel (the side curveControl bows to)
+    const nx = dy / len;
+    const ny = -dx / len;
+    let side = want[k] || 1;
+    let offset = (want[k] ? 0.32 : 0.15) * len;
+    const ra = Math.hypot(a.x - cx, a.y - cy);
+    const rb = Math.hypot(b.x - cx, b.y - cy);
+    if (ra > 1 && rb > 1) {
+      const t = ((cx - a.x) * dx + (cy - a.y) * dy) / (len * len);
+      const across = (cx - mx) * nx + (cy - my) * ny;
+      const clear = Math.max(minClear, 0.45 * Math.min(ra, rb));
+      if (t > 0.05 && t < 0.95 && Math.abs(across) < clear) {
+        // bow away from the centre, far enough that the curve's middle clears it
+        side = across > 0 ? -1 : 1;
+        offset = Math.min(1.2 * len, Math.max(offset, 2 * (clear - Math.abs(across))));
+      }
+    }
+    c.x = mx + nx * side * offset;
+    c.y = my + ny * side * offset;
+  }
+  return out;
+}
+
+/**
+ * Where a dot at angle `a` sits while the wedge centred on `mid` (half-width `half`) opens up by `k`: the wedge's
+ * own dots spread out from its centre, and everyone else closes up a little round the rest of the circle to make
+ * the room, so the opened wedge never pushes its dots onto a neighbour's.
+ */
+export function openedAngle(a: number, mid: number, half: number, k: number, inside: boolean): number {
+  if (k === 1) return a;
+  if (inside) return mid + (a - mid) * k;
+  let d = (a - mid) % TAU;
+  if (d > Math.PI) d -= TAU;
+  if (d <= -Math.PI) d += TAU;
+  const m = Math.abs(d);
+  const open = Math.min(Math.PI * 0.9, half * k);
+  if (m <= half || half >= Math.PI) return a + d * (k - 1);
+  const squeezed = open + ((m - half) * (Math.PI - open)) / (Math.PI - half);
+  return a + Math.sign(d) * (squeezed - m);
 }
 
 /** Point at parameter t on a quadratic curve. */

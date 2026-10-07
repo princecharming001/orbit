@@ -39,7 +39,6 @@ test.describe('Orbit demo flow', () => {
 
   test('approve a thank-you: approval binds the text, card leaves Today, Sent tab lists it', async ({
     page,
-    context,
   }) => {
     await loadDemo(page);
     const card = page.getByTestId('suggestion-thank_you').first();

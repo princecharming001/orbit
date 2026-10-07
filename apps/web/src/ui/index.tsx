@@ -427,15 +427,17 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastCtx.Provider value={value}>
       {children}
+      {/* full width less a margin on a phone, above the tab bar; a long message wraps inside its own pill */}
       <div
-        className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[60] flex flex-col gap-2 items-center"
+        className="fixed inset-x-4 bottom-[4.5rem] md:bottom-4 z-[60] flex flex-col gap-2 items-center pointer-events-none"
         aria-live="polite"
+        data-testid="toasts"
       >
         {items.map((t) => (
           <div
             key={t.id}
             className={cx(
-              'fade-up flex items-center gap-3 rounded-full px-4 h-10 shadow-lg text-[13px]',
+              'fade-up pointer-events-auto flex items-center gap-3 rounded-[20px] px-4 py-2.5 min-h-10 max-w-[560px] shadow-lg text-[13px] leading-snug',
               t.tone === 'bad'
                 ? 'bg-bad text-white'
                 : t.tone === 'good'
@@ -443,10 +445,10 @@ export function ToastProvider({ children }: { children: ReactNode }) {
                   : 'bg-ink text-white',
             )}
           >
-            <span>{t.text}</span>
+            <span className="min-w-0">{t.text}</span>
             {t.action && (
               <button
-                className="font-semibold underline-offset-2 hover:underline"
+                className="shrink-0 font-semibold underline-offset-2 hover:underline"
                 onClick={() => {
                   t.action!.onClick();
                   dismiss(t.id);

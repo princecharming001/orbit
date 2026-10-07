@@ -165,7 +165,7 @@ export async function decideProposedStage(
   correction?: ChatStage,
 ): Promise<'applied' | 'rejected' | 'moved_on' | 'none'> {
   const ev = await db.stageEvents.get(eventId);
-  if (!ev || ev.status !== 'proposed') return 'none';
+  if (ev?.status !== 'proposed') return 'none';
   const chat = await db.chats.get(ev.chatId);
   const now = new Date();
   if (!chat) return 'none';

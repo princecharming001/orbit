@@ -1,21 +1,36 @@
 import { describe, expect, it } from 'vitest';
 import { TAU } from './motion';
+import type { Pt } from './orbitGeometry';
 import {
   curveControl,
   fanSlots,
   frameBox,
   labelSlots,
   nearestInDirection,
+  openedAngle,
   orbitScale,
   type PathSink,
   quadPartial,
   quadPoint,
+  routeControls,
   wedgeMid,
 } from './orbitGeometry';
 
+/** The closest a quadratic curve comes to a point, sampled. */
+function closest(a: Pt, c: Pt, b: Pt, px: number, py: number): number {
+  let best = Number.POSITIVE_INFINITY;
+  const q = { x: 0, y: 0 };
+  for (let i = 0; i <= 200; i++) {
+    quadPoint(q, a.x, a.y, c.x, c.y, b.x, b.y, i / 200);
+    best = Math.min(best, Math.hypot(q.x - px, q.y - py));
+  }
+  return best;
+}
+
 describe('orbit geometry', () => {
   it('fits the orbit and its labels inside the canvas', () => {
-    expect(orbitScale(1280, 720, 520)).toBeCloseTo((360 - 30) / 520);
+    // the top label keeps at least 14 px from the canvas edge
+    expect(orbitScale(1280, 720, 520)).toBeCloseTo((360 - 39) / 520);
     expect(orbitScale(390, 560, 520)).toBeCloseTo((195 - 10) / 520);
     expect(orbitScale(100, 100, 520)).toBe(0.2);
   });
@@ -110,5 +125,80 @@ describe('orbit geometry', () => {
     expect(nearestInDirection(0, 0, -1, 0, xs, ys, none)).toBe(3);
     expect(nearestInDirection(0, 0, 0, -1, xs, ys, none)).toBe(4);
     expect(nearestInDirection(0, 0, 0, -1, xs, ys, (i) => i === 4)).toBe(-1);
+  });
+
+  it('swings a hop round You instead of drawing it through the centre', () => {
+    // You at the centre, a connector below, the target straight above: the straight line would cross You
+    const pts = [
+      { x: 0, y: 0 },
+      { x: 10, y: 120 },
+      { x: -5, y: 260 },
+      { x: 0, y: -150 },
+    ];
+    const cs = routeControls(pts, 0, 0, 30, []);
+    expect(cs).toHaveLength(3);
+    expect(closest(pts[2]!, cs[2]!, pts[3]!, 0, 0)).toBeGreaterThan(50);
+    // and it stays clear of the first hop out of You
+    const q = { x: 0, y: 0 };
+    quadPoint(q, pts[2]!.x, pts[2]!.y, cs[2]!.x, cs[2]!.y, pts[3]!.x, pts[3]!.y, 0.5);
+    expect(Math.abs(q.x)).toBeGreaterThan(50);
+    // a hop out of You keeps its gentle bow
+    const plain = curveControl({ x: 0, y: 0 }, 0, 0, 10, 120, 0.15);
+    expect(cs[0]!.x).toBeCloseTo(plain.x);
+    expect(cs[0]!.y).toBeCloseTo(plain.y);
+  });
+
+  it('bows a hop that doubles back to the other side, wider', () => {
+    // Rhea and Maya sit side by side on the inner ring; Kenji is out on the edge
+    const pts = [
+      { x: 0, y: 0 },
+      { x: 150, y: 0 },
+      { x: 400, y: 30 },
+      { x: 152, y: 18 },
+    ];
+    const cs = routeControls(pts, 0, 0, 30, []);
+    const mid = (k: number) =>
+      quadPoint({ x: 0, y: 0 }, pts[k]!.x, pts[k]!.y, cs[k]!.x, cs[k]!.y, pts[k + 1]!.x, pts[k + 1]!.y, 0.5);
+    const out = mid(1);
+    const back = mid(2);
+    // the two middles sit well apart, on opposite sides of the chord between Rhea and Kenji
+    expect(Math.hypot(out.x - back.x, out.y - back.y)).toBeGreaterThan(60);
+    const side = (p: Pt) => (p.x - 150) * (30 - 0) - (p.y - 0) * (400 - 150);
+    expect(Math.sign(side(out))).not.toBe(Math.sign(side(back)));
+    // and the way back bows toward where it ends (Maya's side), so the two lines never cross
+    expect(Math.sign(side(back))).toBe(Math.sign(side(pts[3]!)));
+    // the same with Maya on the other side of Rhea
+    const flip = pts.map((p) => ({ x: p.x, y: -p.y }));
+    const cf = routeControls(flip, 0, 0, 30, []);
+    const backF = quadPoint(
+      { x: 0, y: 0 },
+      flip[2]!.x,
+      flip[2]!.y,
+      cf[2]!.x,
+      cf[2]!.y,
+      flip[3]!.x,
+      flip[3]!.y,
+      0.5,
+    );
+    const sideF = (p: Pt) => (p.x - 150) * (-30 - 0) - (p.y - 0) * (400 - 150);
+    expect(Math.sign(sideF(backF))).toBe(Math.sign(sideF(flip[3]!)));
+  });
+
+  it('opens a wedge and closes the rest of the circle up to make room', () => {
+    const mid = 1;
+    const half = 0.2;
+    // the wedge's own edge goes out by k
+    expect(openedAngle(mid + half, mid, half, 1.3, true)).toBeCloseTo(mid + half * 1.3);
+    // a neighbour just outside moves out with it, never landing inside the opened wedge
+    const next = openedAngle(mid + half + 0.05, mid, half, 1.3, false);
+    expect(next).toBeGreaterThan(mid + half * 1.3);
+    expect(next - (mid + half * 1.3)).toBeGreaterThan(0.045);
+    // the point opposite the wedge stays put, and order round the circle is kept
+    expect(openedAngle(mid + Math.PI - 1e-6, mid, half, 1.3, false)).toBeCloseTo(mid + Math.PI, 4);
+    const around = [0.3, 0.8, 1.5, 2.5, 3.5, 4.5, 5.5].map((d) =>
+      openedAngle(mid + half + d * 0.5, mid, half, 1.3, false),
+    );
+    for (let i = 1; i < around.length; i++) expect(around[i]!).toBeGreaterThan(around[i - 1]!);
+    expect(openedAngle(2, mid, half, 1, false)).toBe(2);
   });
 });

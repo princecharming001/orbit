@@ -12,7 +12,7 @@ import {
 } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Search, X } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { type CardPlace, OrbitMap, useCoarsePointer } from '../components/OrbitMap';
 import type { FocusSpec, WebSpec } from '../components/orbitScene';
@@ -28,6 +28,7 @@ import {
   reachPerson,
   targetCompanyMatcher,
 } from '../engine/graph';
+import { maintenanceRunning, watchMaintenance } from '../engine/sync';
 import { useSession } from '../state/session';
 import { Avatar, Button, Card, Chip, cx, Input, useToast } from '../ui';
 import { StrengthDots } from './Pipeline';
@@ -42,6 +43,13 @@ const FILTERS: [Filter, string][] = [
   ['recent', 'Last 90 days'],
   ['intros', 'Introductions'],
 ];
+
+/** How many people the pending-suggestion ripple marks at most: those behind the highest-priority suggestions. */
+const RIPPLE_TOP = 6;
+/** The longest the map waits for the day's maintenance before it lays out anyway. */
+const MAINTENANCE_WAIT_MS = 2500;
+/** How long the legend line keeps the news of someone joining or a chat booked. */
+const NEWS_MS = 6000;
 
 /** How many of each person's direct connections the map draws on hover. */
 const HOVER_LINKS = 12;
@@ -69,11 +77,22 @@ export function MapPage() {
   const viewReq = useRef(0);
   const [target, setTarget] = useState<Person>();
   const [hover, setHover] = useState<string>();
-  // the corner where the person card hides the fewest people (the map picks it)
-  const [hoverPlace, setHoverPlace] = useState<CardPlace>('bottom-left');
+  // where the person card goes: beside the dot, or at the top or bottom of a narrow map (the map picks it)
+  const [hoverPlace, setHoverPlace] = useState<CardPlace>({ at: 'bottom' });
   // a search that found no one: the line under the filters says so and the search box shakes once
   const [missed, setMissed] = useState<{ q: string; n: number }>();
   const searchForm = useRef<HTMLFormElement>(null);
+  // the toast a search that found no one left up: the next search takes it down, so the screen never contradicts itself
+  const missToast = useRef(0);
+  const clearMiss = () => {
+    if (missToast.current) toast.dismiss(missToast.current);
+    missToast.current = 0;
+  };
+  const sayMiss = (q: string, text: string, ttl: number) => {
+    setMissed((m) => ({ q: q.trim(), n: (m?.n ?? 0) + 1 }));
+    clearMiss();
+    missToast.current = toast.push({ text, ttl });
+  };
   // each search that finds no one replays the shake, without remounting the box (the cursor stays in it)
   useEffect(() => {
     const el = searchForm.current;
@@ -140,10 +159,21 @@ export function MapPage() {
         : [],
     [userId],
   );
+  // the day's maintenance recomputes every tie's strength when the app opens: the map waits for it (a little while
+  // at most), so people do not change rings straight after they have landed
+  const maintaining = useSyncExternalStore(watchMaintenance, maintenanceRunning);
+  const [waitedEnough, setWaitedEnough] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setWaitedEnough(true), MAINTENANCE_WAIT_MS);
+    return () => clearTimeout(t);
+  }, []);
   // the arrival waits for everything the map draws, so it plays on a quiet main thread
-  const loading = [peopleQ, orgsQ, chatsQ, pendingQ, tcsQ, edges, introThreads, suggestedFacts].some(
-    (q) => q === undefined,
-  );
+  const loading =
+    !user ||
+    (maintaining && !waitedEnough) ||
+    [peopleQ, orgsQ, chatsQ, pendingQ, tcsQ, edges, introThreads, suggestedFacts].some(
+      (q) => q === undefined,
+    );
   const people = useMemo(() => peopleQ ?? [], [peopleQ]);
   const orgs = useMemo(() => orgsQ ?? [], [orgsQ]);
   const chats = useMemo(() => chatsQ ?? [], [chatsQ]);
@@ -157,7 +187,18 @@ export function MapPage() {
       ),
     [chats],
   );
-  const pendingIds = useMemo(() => new Set(pending.map((s) => s.personId!)), [pending]);
+  // the ripple marks the people behind the most pressing suggestions only: when everyone ripples, no one stands out
+  const pendingIds = useMemo(
+    () =>
+      new Set(
+        [...pending]
+          .sort((a, b) => b.priorityScore - a.priorityScore)
+          .map((s) => s.personId!)
+          .filter((id, i, all) => all.indexOf(id) === i)
+          .slice(0, RIPPLE_TOP),
+      ),
+    [pending],
+  );
   const isTarget = useMemo(() => targetCompanyMatcher(tcs, orgMap), [tcs, orgMap]);
   const visible = useMemo(() => people.filter((p) => p.isHuman && !p.hiddenAt), [people]);
   const byId = useMemo(() => new Map(visible.map((p) => [p.id, p])), [visible]);
@@ -255,6 +296,47 @@ export function MapPage() {
     return (firstNames.get(p.firstName) ?? 0) > 1 ? p.displayName : p.firstName;
   };
   const stories = useMemo(() => introStories(web, nameOf), [web, firstNames, byId]);
+  // someone new, or a chat booked, while the map is open: the legend line says it in words for a few seconds
+  const [news, setNews] = useState<
+    { kind: 'joined'; ids: string[] } | { kind: 'stage'; id: string; stage: string }
+  >();
+  const seen = useRef<{ people: Set<string>; stages: Map<string, string> }>(undefined);
+  const newsTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(newsTimer.current), []);
+  useEffect(() => {
+    if (loading) return;
+    const prev = seen.current;
+    seen.current = { people: new Set(visible.map((p) => p.id)), stages: new Map(stages) };
+    if (!prev) return;
+    const born = visible.filter((p) => !prev.people.has(p.id)).map((p) => p.id);
+    let next: typeof news;
+    if (born.length) next = { kind: 'joined', ids: born };
+    else
+      for (const [id, stage] of stages)
+        if (prev.stages.get(id) !== stage && (stage === 'scheduled' || stage === 'completed'))
+          next = { kind: 'stage', id, stage };
+    if (!next) return;
+    setNews(next);
+    clearTimeout(newsTimer.current);
+    newsTimer.current = setTimeout(() => setNews(undefined), NEWS_MS);
+  }, [visible, stages, loading]);
+  const newsLine = (() => {
+    if (!news) return '';
+    if (news.kind === 'stage') {
+      const p = byId.get(news.id);
+      if (!p) return '';
+      return news.stage === 'scheduled'
+        ? `Your chat with ${p.displayName} is booked.`
+        : `You had your chat with ${p.displayName}.`;
+    }
+    if (news.ids.length > 1) return `${news.ids.length} people joined your orbit.`;
+    const p = byId.get(news.ids[0]!);
+    if (!p) return '';
+    const by = byId.get(introducerOf.get(p.id) ?? '');
+    return by
+      ? `${p.displayName} joined your orbit, introduced by ${by.displayName}.`
+      : `${p.displayName} joined your orbit.`;
+  })();
   const reachMode = !!reachParam;
   const webMode = filter === 'intros' && !reachMode;
   // resolve reach param (person id or '1' = open search)
@@ -272,6 +354,7 @@ export function MapPage() {
       return;
     }
     viewReq.current++;
+    clearMiss();
     let cancelled = false;
     (async () => {
       const p = await db.people.get(reachParam);
@@ -297,6 +380,7 @@ export function MapPage() {
   const openCompany = async (orgIdOrName: string, label: string) => {
     if (!userId) return;
     const req = ++viewReq.current;
+    clearMiss();
     setShowAll(undefined);
     // the map turns at once, from the layout it already has; the panel's lists arrive when the lookup is done
     const norm = normalizeCompany(orgIdOrName);
@@ -347,11 +431,11 @@ export function MapPage() {
         label:
           orgMap.get(atCompany.currentOrganizationId ?? '')?.name ?? atCompany.currentOrganizationRaw ?? q,
       });
-    setMissed((m) => ({ q: q.trim(), n: (m?.n ?? 0) + 1 }));
-    toast.push({ text: 'No one by that name or company in your introductions yet.', ttl: 4000 });
+    sayMiss(q, 'No one by that name or company in your introductions yet.', 4000);
   };
   const runSearch = async (q: string) => {
     if (!userId || !q.trim()) return;
+    clearMiss();
     if (webMode) return searchWeb(q);
     const req = ++viewReq.current;
     // what the map already holds; a search typed before the map finished loading reads the database
@@ -375,11 +459,11 @@ export function MapPage() {
     const norm = normalizeCompany(q);
     const tc = norm ? tcs.find((t) => normalizeCompany(t.nameRaw) === norm) : undefined;
     if (tc) return openCompany(tc.organizationId ?? tc.nameRaw, tc.nameRaw);
-    setMissed((m) => ({ q: q.trim(), n: (m?.n ?? 0) + 1 }));
-    toast.push({
-      text: 'No one by that name or company in your network yet. Add them from LinkedIn or Discover.',
-      ttl: 5000,
-    });
+    sayMiss(
+      q,
+      'No one by that name or company in your network yet. Add them from LinkedIn or Discover.',
+      5000,
+    );
   };
   const openCluster = (node: OrbitNode) => {
     const g = node.groupKey;
@@ -394,6 +478,7 @@ export function MapPage() {
   };
   const exitReach = () => {
     viewReq.current++;
+    clearMiss();
     setParams({});
     setQuery('');
     setCompanyFocus(undefined);
@@ -509,6 +594,7 @@ export function MapPage() {
   const legend = (() => {
     if (missed && missed.q === query.trim())
       return `No one matches “${missed.q}” ${webMode ? 'in your introductions' : 'in your network'} yet.`;
+    if (newsLine && !reachMode) return newsLine;
     if (reachMode) {
       if (companyFocus)
         return `Showing ${plural(companyCount, 'person', 'people')} at ${companyFocus.label}${
@@ -550,9 +636,11 @@ export function MapPage() {
         return 'Everyone you know, closest in the middle, each company a wedge.';
     }
   })();
-  const litSentence = webLit ? describeIntroChain(web, webLit, nameOf) : '';
+  // a chain lit from the map, in words, unless the list already says exactly that
+  const chainSentence = webLit ? describeIntroChain(web, webLit, nameOf) : '';
+  const litSentence = stories.some((s) => s.text === chainSentence) ? '' : chainSentence;
   return (
-    <div className="-my-6 -mx-4 md:-mx-8 flex flex-col lg:h-[calc(100vh-3rem)]">
+    <div className="-my-6 md:-mb-8 -mx-4 md:-mx-8 flex flex-col lg:h-screen">
       <div className="px-4 md:px-8 pt-5 pb-3 flex flex-wrap items-center gap-2 border-b border-line bg-canvas">
         <div className="min-w-0">
           <h1 className="text-[20px] font-semibold tracking-[-0.01em]">
@@ -563,7 +651,9 @@ export function MapPage() {
               ? 'Who can get you to someone, through people you already know.'
               : webMode
                 ? 'Who introduced you to whom, generation by generation.'
-                : `${visible.length} people · inner ring = closest`}
+                : highlightIds
+                  ? `${highlightIds.size} of ${visible.length} people shown · inner ring = closest`
+                  : `${visible.length} people · inner ring = closest`}
           </p>
         </div>
         <div className="w-full sm:w-auto sm:ml-auto flex items-center gap-2">
@@ -646,6 +736,7 @@ export function MapPage() {
             introducerOf={introducerOf}
             onSelect={(id) => (reachMode ? setParams({ reach: id }) : nav(`/people/${id}`))}
             onSelectCluster={openCluster}
+            personCard={!reachMode}
             onHover={(id, place) => {
               setHover(id);
               if (place) setHoverPlace(place);
@@ -653,15 +744,19 @@ export function MapPage() {
           />
           {hovered && !reachMode && (
             <div
+              key={hovered.id}
               className={cx(
-                'absolute left-3 right-3 bg-canvas border border-line rounded-[12px] p-3 shadow-[var(--shadow-card)] sm:w-[260px] fade-up',
-                // the map picks the corner that hides the fewest people and never the person themselves (on a phone
-                // the bottom only when it is clear of the tab bar); with a mouse the card lets the pointer through
-                hoverPlace.startsWith('top') ? 'top-3' : 'bottom-3',
-                hoverPlace.endsWith('right') ? 'sm:left-auto' : 'sm:right-auto',
+                'absolute bg-canvas border border-line rounded-[12px] p-3 shadow-[var(--shadow-card)] fade-up',
+                // the map puts the card next to the dot on a wide map and at the top or bottom of a narrow one, never
+                // over the person (on a phone the bottom only when it is clear of the tab bar); with a mouse the card
+                // lets the pointer through
+                'at' in hoverPlace
+                  ? cx('left-3 right-3', hoverPlace.at === 'top' ? 'top-3' : 'bottom-3')
+                  : 'w-[260px]',
                 touch ? '' : 'pointer-events-none',
               )}
-              data-place={hoverPlace}
+              style={'at' in hoverPlace ? undefined : { left: hoverPlace.x, top: hoverPlace.y }}
+              data-place={'at' in hoverPlace ? hoverPlace.at : 'beside'}
               data-testid="map-tooltip"
             >
               <div className="flex items-center gap-2">
@@ -700,8 +795,9 @@ export function MapPage() {
                 {touch
                   ? 'Tap a person to see who they are, and tap again to open their profile.'
                   : 'Hover over a person to see who they are and who they know, and click to open their profile. Drag to turn the orbit.'}{' '}
-                Companies read as wedges. The thin coloured ring is pipeline stage, and a soft ripple means a
-                pending suggestion. A grey dot with a number stands for more people at that company.
+                Companies read as wedges. The thin coloured ring is pipeline stage, and a soft ripple marks
+                the people your most pressing suggestions are about. A grey dot with a number stands for more
+                people at that company.
               </div>
               {targetGroups && (
                 <Card padded>
@@ -760,7 +856,12 @@ export function MapPage() {
                   {stories.map((s) => (
                     <li key={s.text}>
                       <button
-                        className="w-full flex items-start gap-2 text-left text-[13px] rounded-md px-2 py-1.5 hover:bg-canvas-2"
+                        className={cx(
+                          'w-full flex items-start gap-2 text-left text-[13px] rounded-md px-2 py-1.5 hover:bg-canvas-2',
+                          // the chain lit from the map, when this entry already says it in words
+                          !storyHover && chainSentence === s.text && 'bg-accent-soft/40',
+                        )}
+                        data-lit={!storyHover && chainSentence === s.text ? 'true' : undefined}
                         onMouseEnter={() => setStoryHover(s.focusId)}
                         onMouseLeave={() => setStoryHover(undefined)}
                         onFocus={() => setStoryHover(s.focusId)}
@@ -943,8 +1044,10 @@ export function MapPage() {
               ))}
               {company.twoHop.length > 0 && (
                 <div>
-                  <div className="text-[12px] uppercase tracking-wide text-ink-3 mb-1">Two-hop routes</div>
-                  <ul className="space-y-1 text-[13px]">
+                  <div className="text-[12px] uppercase tracking-wide text-ink-3 mb-1">
+                    Routes through people you know
+                  </div>
+                  <ul className="space-y-1 text-[13px]" data-testid="company-routes">
                     {company.twoHop.map((t) => (
                       <li key={t.target.id}>
                         <button
@@ -953,7 +1056,14 @@ export function MapPage() {
                         >
                           {t.target.displayName}
                         </button>{' '}
-                        <span className="text-ink-3">via {byId.get(t.path.hops[0]!.toId)?.firstName}</span>
+                        {/* the same route, and the same count of hops, that Reach shows for this person */}
+                        <span className="text-ink-3">
+                          {plural(t.path.hops.length, 'hop')}, via{' '}
+                          {t.path.hops
+                            .slice(0, -1)
+                            .map((h) => byId.get(h.toId)?.firstName ?? 'someone')
+                            .join(' then ')}
+                        </span>
                       </li>
                     ))}
                   </ul>

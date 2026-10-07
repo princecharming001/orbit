@@ -28,10 +28,12 @@ import {
   type LabelSlot,
   labelSlots,
   nearestInDirection,
+  openedAngle,
   orbitScale,
   type Pt,
   quadPartial,
   quadPoint,
+  routeControls,
   wedgeMid,
 } from './orbitGeometry';
 
@@ -68,6 +70,9 @@ const OMEGA = TAU / ORBIT_PERIOD_MS;
 /** extent of an orbit with no dots (the outer ring plus half a dot), for the empty and loading map */
 const EMPTY_EXTENT = 456;
 const FAN_PITCH = 30;
+const NO_VIEWS = new Set<never>();
+/** How much a dot on a reach route grows (no more than its neighbours leave room for). */
+const ROUTE_SCALE = 1.12;
 /** an introductions web this small names everyone in it; a bigger one names only the lit chain */
 const TAG_WEB_ALL = 16;
 
@@ -178,6 +183,8 @@ class NodeView {
   rippleAt = -1e9;
   shakeAt = -1e9;
   popAt = -1e9;
+  /** how far the pop swells the dot: less when its neighbours leave no room */
+  popH = 0.22;
   /** a moment in the spotlight (a newcomer, a tie that moved rings, a chat just booked): larger, with a halo */
   spotStart = -1e9;
   spotEnd = -1e9;
@@ -292,6 +299,8 @@ export class OrbitScene {
   /** rings that use several tracks (dense networks): their dots have less room to grow */
   private ringMulti = [false, false, false];
   private narrow = false;
+  /** the page shows a card next to the hovered person, so the canvas does not write their name a second time */
+  private personCard = false;
   private reduced = false;
   private spinAllowed = true;
 
@@ -410,6 +419,9 @@ export class OrbitScene {
   private you: Pt = { x: 0, y: 0 };
   private scratchA: Pt = { x: 0, y: 0 };
   private scratchB: Pt = { x: 0, y: 0 };
+  private routePts: Pt[] = [];
+  private chipXY: [number, number, number, number] = [0, 0, 0, 0];
+  private routeCs: Pt[] = [];
 
   // ---------- lifecycle ----------
 
@@ -469,9 +481,11 @@ export class OrbitScene {
     this.wake();
   }
 
-  setOptions(o: { spin: boolean; reduced: boolean }): void {
+  setOptions(o: { spin: boolean; reduced: boolean; personCard?: boolean }): void {
     this.spinAllowed = o.spin;
     this.reduced = o.reduced;
+    this.personCard = !!o.personCard;
+    this.dirty = true;
     this.updateSpin(this.clock.now());
     this.wake();
   }
@@ -701,7 +715,9 @@ export class OrbitScene {
         const landed = now + delay + TIMING.travel - 160;
         const end =
           from && origin === from ? now + delay + TIMING.travel + TIMING.introLinkHold : landed + 2400;
-        this.spotlight(v, landed, end, v.ring === 2 ? 0.7 : 0.4);
+        // larger, but never over a neighbour's initials once landed: the halo and the ripple say the rest
+        const want = v.ring === 2 ? 0.7 : 0.4;
+        this.spotlight(v, landed, end, Math.min(want, this.roomFor(v, 1 + want, NO_VIEWS, 1) - 1));
       }
       if (from && origin === from) {
         linked = true;
@@ -788,7 +804,9 @@ export class OrbitScene {
     let last = 0;
     for (const v of this.views) {
       if (v.temp) continue;
-      const delay = 120 + v.ring * 110 + fromTop(v.a.to + this.rot) * 260;
+      // a wave down both sides from twelve o'clock, meeting at six: smooth all round, with no seam where it began
+      const wave = (1 - Math.cos(fromTop(v.a.to + this.rot) * TAU)) / 2;
+      const delay = 100 + v.ring * 90 + wave * 240;
       last = Math.max(last, delay);
       this.play(v.a, v.a.to - 0.55, v.a.to, now, TIMING.arrive, easing.outCubic, delay);
       this.play(v.r, 0, v.r.to, now, TIMING.arrive, outBack(1.25), delay);
@@ -1111,7 +1129,7 @@ export class OrbitScene {
   private chipRadius(rows: number): number {
     const extent = this.layout?.extent ?? EMPTY_EXTENT;
     // clear of the top row of the fan, with a little air under the chip
-    return rows ? this.fanBase() + (rows - 1) * FAN_PITCH + 24 : extent;
+    return rows ? this.fanBase() + (rows - 1) * FAN_PITCH + 30 : extent;
   }
 
   /** Room above the wedge for the fan and the count chip: the orbit slides down just enough. */
@@ -1147,7 +1165,7 @@ export class OrbitScene {
         r = t.r;
         // the web grows outward: the first generation moves first
         delay = (t.gen - 1) * 110;
-      } else if (g && v.groupKey === key) a = mid + (a - mid) * k;
+      } else if (g) a = openedAngle(a, mid, (g.endAngle - g.startAngle) / 2, k, v.groupKey === key);
       const ta = nearestAngle(v.a.value(now), a);
       // reduced motion: dots are set in place, never travel
       if (Math.abs(ta - v.a.to) > 1e-6) this.anim(v.a, ta, now, travel, easing.inOutCubic, delay);
@@ -1390,11 +1408,17 @@ export class OrbitScene {
           ids,
           start: now + (this.reduced ? 0 : Math.max(wait, hadPath ? TIMING.retract : 160)),
         };
-        if (!this.reduced)
+        if (!this.reduced) {
+          const route = new Set(ids.map((id) => this.viewFor(id)).filter((v): v is NodeView => !!v));
           for (let k = 1; k < ids.length; k++) {
             const v = this.viewFor(ids[k]!);
-            if (v) v.popAt = this.path.start + k * TIMING.hop - 40;
+            if (!v) continue;
+            v.popAt = this.path.start + k * TIMING.hop - 40;
+            // the pop swells only as far as the neighbours leave room (two people on a route can sit side by side)
+            const rest = this.roomFor(v, ROUTE_SCALE, route, 0.95);
+            v.popH = Math.min(0.22, this.roomFor(v, ROUTE_SCALE * 1.22, route, 0.95) / rest - 1);
           }
+        }
         if (!this.reduced)
           this.busyUntil = Math.max(this.busyUntil, this.path.start + (ids.length - 1) * TIMING.hop + 340);
         this.setPhase('reach-path');
@@ -1630,7 +1654,8 @@ export class OrbitScene {
     for (let i = this.drawList.length - 1; i >= 0; i--) {
       const v = this.drawList[i]!;
       if (!v.visible || v.pa < 0.1 || v.removing) continue;
-      const reach = Math.max(v.pr + 4, touch ? 16 : 8);
+      // a finger gets a 44 px target; the nearest dot still wins where targets overlap
+      const reach = Math.max(v.pr + 4, touch ? 22 : 8);
       const d = (x - v.x) ** 2 + (y - v.y) ** 2;
       if (d <= reach * reach && d < bestD) {
         best = v;
@@ -1652,7 +1677,10 @@ export class OrbitScene {
 
   /** For keyboard focus: the next dot in an arrow's direction from the given one (or the first dot). */
   neighbour(fromId: string | undefined, dx: number, dy: number): string | undefined {
-    const list = this.drawList.filter((v) => v.visible && v.pa >= 0.1 && !v.removing);
+    // the arrows walk the people the view is about: a dot the view has faded back is skipped
+    const shown = this.drawList.filter((v) => v.visible && v.pa >= 0.1 && !v.removing);
+    const lit = shown.filter((v) => v.alpha.to >= 0.3 || v.pid === fromId);
+    const list = lit.some((v) => v.pid !== fromId) ? lit : shown;
     const from = fromId ? list.find((v) => v.pid === fromId) : undefined;
     if (!from) return (this.firstPerson && list.includes(this.firstPerson) ? this.firstPerson : list[0])?.pid;
     const xs = list.map((v) => v.x);
@@ -1667,6 +1695,11 @@ export class OrbitScene {
 
   nodeOf(id: string): OrbitNode | undefined {
     return this.byKey.get(id)?.node;
+  }
+
+  /** Where "You" is now (CSS px): the centre of the orbit and its radius. */
+  youAt(): { x: number; y: number; r: number } {
+    return { x: this.you.x, y: this.you.y, r: 26 * Math.max(0.6, this.fit) * this.zoom.x };
   }
 
   /** Where a dot is now (CSS px), for tests and keyboard focus. */
@@ -1701,6 +1734,8 @@ export class OrbitScene {
     const reach = this.reach;
     const web = this.web;
     const popping: NodeView[] = [];
+    const popTo = new Map<NodeView, number>();
+    let members: Set<NodeView> | undefined;
     const route =
       reach?.status === 'found' && !web
         ? new Set(reach.ids.map((id) => this.viewFor(id)).filter((v): v is NodeView => !!v))
@@ -1733,17 +1768,20 @@ export class OrbitScene {
           const k = reach.ids.indexOf(v.pid);
           alpha = k >= 0 || isTarget ? 1 : DIM;
           // the route grows, but never into a neighbour (two people on it can sit side by side in a ring)
-          scale = k >= 0 && route ? this.roomFor(v, 1.12, route, 0.95) : 0.95;
+          scale = k >= 0 && route ? this.roomFor(v, ROUTE_SCALE, route, 0.95) : 0.95;
           glow = k >= 0 ? 0.55 : 0;
           // each dot on the route lights up as the line reaches it
           if (k > 0) delay = Math.max(0, this.path.start + k * TIMING.hop - 60 - now);
         }
       } else if (company) {
         if (v.groupKey === company) {
-          // the wedge opens up so its people can grow without touching (less where rings are packed in tracks)
-          scale = v.person ? (this.ringMulti[v.ring] ? 1.12 : 1.35) : 1;
+          // the wedge opens up so its people can grow without touching (less where rings are packed in tracks),
+          // and each grows only as far as its neighbours, in the wedge or beside it, leave room
+          members ??= new Set(this.views.filter((u) => !u.temp && u.person && u.groupKey === company));
+          scale = v.person ? this.roomFor(v, this.ringMulti[v.ring] ? 1.12 : 1.35, members, 0.92) : 1;
           glow = v.person ? 1 : 0;
           if (v.person && v.scale.to !== scale) popping.push(v);
+          if (v.person) popTo.set(v, scale);
         } else {
           alpha = 0.15;
           scale = 0.92;
@@ -1767,8 +1805,11 @@ export class OrbitScene {
     popping.sort((a, b) => fromTop(a.a.to + rot) - fromTop(b.a.to + rot));
     const stagger = Math.min(TIMING.popStagger, TIMING.popSpread / Math.max(1, popping.length));
     popping.forEach((v, i) => {
-      const to = this.ringMulti[v.ring] ? 1.12 : 1.35;
-      this.play(v.scale, v.scale.value(now), to, now, 380, easing.outBack, 220 + i * stagger);
+      const to = popTo.get(v) ?? 1;
+      const want = this.ringMulti[v.ring] ? 1.12 : 1.35;
+      // the overshoot only where there is room for it
+      const ease = to >= want - 1e-3 ? easing.outBack : easing.outCubic;
+      this.play(v.scale, v.scale.value(now), to, now, 380, ease, 220 + i * stagger);
     });
     this.sortDrawList();
   }
@@ -2182,7 +2223,7 @@ export class OrbitScene {
     const sc =
       v.scale.value(now) *
       (1 + 0.25 * v.lift.value(now)) *
-      (1 + bump(now - v.popAt, 340, this.reduced ? 0 : 0.22)) *
+      (1 + bump(now - v.popAt, 340, this.reduced ? 0 : v.popH)) *
       (1 + v.spotScale * spotOf(v, now)) *
       (0.55 + 0.45 * ap);
     const pr = (v.size.value(now) / 2) * S * sc;
@@ -2545,18 +2586,37 @@ export class OrbitScene {
     return v?.visible ? v : undefined;
   }
 
+  /**
+   * The route's points and the control point of each hop's curve this frame: hops bow round You rather than through
+   * it, and a hop that doubles back bows to the other side (see routeControls). False when a point is off the map.
+   */
+  private routeCurve(ids: string[]): boolean {
+    const pts = this.routePts;
+    pts.length = 0;
+    for (const id of ids) {
+      const p = this.pathPoint(id);
+      if (!p) return false;
+      pts.push(p);
+    }
+    const youR = 26 * Math.max(0.6, this.fit) * this.zoom.x;
+    routeControls(pts, this.you.x, this.you.y, youR + 22, this.routeCs);
+    return true;
+  }
+
   private drawHops(ctx: CanvasRenderingContext2D, ids: string[], upto: number, alpha: number): void {
-    if (upto <= 0 || alpha <= 0) return;
-    const A = this.scratchA;
+    if (upto <= 0 || alpha <= 0 || !this.routeCurve(ids)) return;
+    const pts = this.routePts;
+    const cs = this.routeCs;
+    const B = this.scratchB;
     ctx.lineCap = 'round';
     ctx.strokeStyle = ACCENT;
-    for (let k = 0; k < ids.length - 1; k++) {
+    ctx.fillStyle = ACCENT;
+    for (let k = 0; k < pts.length - 1; k++) {
       const p = clamp01(upto - k);
       if (p <= 0) break;
-      const a = this.pathPoint(ids[k]!);
-      const b = this.pathPoint(ids[k + 1]!);
-      if (!a || !b) continue;
-      curveControl(A, a.x, a.y, b.x, b.y, 0.15);
+      const a = pts[k]!;
+      const b = pts[k + 1]!;
+      const A = cs[k]!;
       const e = this.reduced ? 1 : easing.inOutSine(p);
       ctx.globalAlpha = 0.16 * alpha;
       ctx.lineWidth = 7;
@@ -2568,6 +2628,23 @@ export class OrbitScene {
       ctx.beginPath();
       quadPartial(ctx, a.x, a.y, A.x, A.y, b.x, b.y, e);
       ctx.stroke();
+      // a small arrowhead halfway along says which way the hop goes, once the line has passed it
+      if (e < 0.62) continue;
+      quadPoint(B, a.x, a.y, A.x, A.y, b.x, b.y, 0.55);
+      // the curve's direction at that point
+      const tx = 0.9 * (A.x - a.x) + 1.1 * (b.x - A.x);
+      const ty = 0.9 * (A.y - a.y) + 1.1 * (b.y - A.y);
+      const tl = Math.hypot(tx, ty);
+      if (tl < 1) continue;
+      const ux = tx / tl;
+      const uy = ty / tl;
+      ctx.globalAlpha = alpha * clamp01((e - 0.62) / 0.2);
+      ctx.beginPath();
+      ctx.moveTo(B.x + ux * 5, B.y + uy * 5);
+      ctx.lineTo(B.x - ux * 4 - uy * 4.5, B.y - uy * 4 + ux * 4.5);
+      ctx.lineTo(B.x - ux * 4 + uy * 4.5, B.y - uy * 4 - ux * 4.5);
+      ctx.closePath();
+      ctx.fill();
     }
     ctx.lineCap = 'butt';
   }
@@ -2587,19 +2664,20 @@ export class OrbitScene {
     const k = this.cometT(now);
     const ids = this.path.ids;
     if (k < 0 || ids.length < 2) return;
+    if (!this.routeCurve(ids)) return;
+    const pts = this.routePts;
+    const cs = this.routeCs;
     const hops = ids.length - 1;
     const head = easing.inOutSine(k) * hops;
-    const A = this.scratchA;
     const B = this.scratchB;
     const out = k > 0.85 ? (1 - k) / 0.15 : 1;
     for (let j = 9; j >= 0; j--) {
       const u = head - j * 0.035 * hops;
       if (u < 0) continue;
       const i = Math.min(hops - 1, Math.floor(u));
-      const a = this.pathPoint(ids[i]!);
-      const b = this.pathPoint(ids[i + 1]!);
-      if (!a || !b) continue;
-      curveControl(A, a.x, a.y, b.x, b.y, 0.15);
+      const a = pts[i]!;
+      const b = pts[i + 1]!;
+      const A = cs[i]!;
       quadPoint(B, a.x, a.y, A.x, A.y, b.x, b.y, u - i);
       const fade = (1 - j / 10) * out;
       if (j === 0) {
@@ -2944,8 +3022,27 @@ export class OrbitScene {
     const chipOldA = this.chipOld.alpha.value(now);
     const veil = this.fanVeil.value(now);
     let clipped = 0;
+    // where the count chips are (alpha, x, y, width, height), measured in the chip's own font
+    const chips: number[] = [];
+    if (chipA > 0.01 || chipOldA > 0.01) {
+      ctx.font = '500 12px Inter, sans-serif';
+      for (const [chip, ca] of [
+        [this.chip, chipA],
+        [this.chipOld, chipOldA],
+      ] as const)
+        if (ca > 0.01 && this.chipBox(chip, ca, ox, oy, S, rot)) chips.push(ca, ...this.chipXY);
+      ctx.font = `500 ${fontPx}px Inter, sans-serif`;
+    }
+    // while a company's wedge is open, the other labels close up with their dots
+    const wd = this.wedge.key ? this.wedge : this.wedgeOld.key ? this.wedgeOld : undefined;
+    const open = wd ? this.groupOf(wd.key) : undefined;
+    const openK = wd ? wd.k.value(now) : 1;
     for (const l of this.labels) {
-      const a = l.mid + rot;
+      const mid =
+        open && openK !== 1 && l.key !== open.key
+          ? openedAngle(l.mid, wedgeMid(open), (open.endAngle - open.startAngle) / 2, openK, false)
+          : l.mid;
+      const a = mid + rot;
       const half = this.measure(l.text, fontPx, false) / 2;
       // anchor the label's near edge on the label ring, so side labels grow outwards, not into the dots
       const r = labelR + Math.abs(Math.cos(a)) * half + Math.abs(Math.sin(a)) * (fontPx / 2);
@@ -2962,8 +3059,18 @@ export class OrbitScene {
       if (l.key === this.chipOld.key) alpha *= 1 - chipOldA;
       // a neighbour's label under an open fan steps aside, so the fan reads cleanly
       if (veil > 0.001 && l.key !== this.companyKey) {
-        const off = Math.abs(nearestAngle(this.fanArc.mid, l.mid) - this.fanArc.mid);
+        const off = Math.abs(nearestAngle(this.fanArc.mid, mid) - this.fanArc.mid);
         if (off < this.fanArc.half + half / labelR) alpha *= 1 - veil;
+      }
+      // any label under the count chip steps aside for it
+      for (let i = 0; i < chips.length; i += 5) {
+        const [ca, cx, cy, cw, ch] = [chips[i]!, chips[i + 1]!, chips[i + 2]!, chips[i + 3]!, chips[i + 4]!];
+        if (
+          x - half < cx + cw / 2 + 6 &&
+          x + half > cx - cw / 2 - 6 &&
+          Math.abs(y - cy) < ch / 2 + fontPx / 2 + 4
+        )
+          alpha *= 1 - ca;
       }
       if (alpha <= 0.01) continue;
       ctx.globalAlpha = alpha;
@@ -3032,7 +3139,7 @@ export class OrbitScene {
       const k = (list[i + 1] as number) * v.pa;
       if (!v.visible || k <= 0.01 || !v.person) continue;
       // the hovered dot already shows its full name above it
-      if (v.key === this.tipKey && this.tip.value(now) > 0.5) continue;
+      if (v.key === this.tipKey && this.tip.value(now) > 0.5 && !this.cardShown()) continue;
       const text = this.tagText(v.person);
       const hw = this.measure(text, fontPx, false) / 2 + 5;
       let y = v.y + v.pr + 5 + hh;
@@ -3080,17 +3187,9 @@ export class OrbitScene {
       const chip = i ? this.chip : this.chipOld;
       const alpha = chip.alpha.value(now);
       if (alpha <= 0.01 || !chip.text) continue;
-      const g = this.groupOf(chip.key);
-      if (!g) continue;
-      const a = wedgeMid(g) + rot;
       ctx.font = '500 12px Inter, sans-serif';
-      const bw = this.measure(chip.text, 12, false) + 22;
-      const bh = 24;
-      const r = chip.radius * S + LABEL_GAP + bh / 2 + (1 - alpha) * 10;
-      let x = ox + Math.cos(a) * (r + Math.abs(Math.cos(a)) * (bw / 2 - bh / 2));
-      let y = oy + Math.sin(a) * r;
-      x = Math.min(Math.max(x, bw / 2 + 4), this.w - bw / 2 - 4);
-      y = Math.min(Math.max(y, bh / 2 + 4), this.h - bh / 2 - 4);
+      if (!this.chipBox(chip, alpha, ox, oy, S, rot)) continue;
+      const [x, y, bw, bh] = this.chipXY;
       ctx.globalAlpha = alpha;
       ctx.fillStyle = '#ffffff';
       ctx.strokeStyle = CHIP_EDGE;
@@ -3106,12 +3205,42 @@ export class OrbitScene {
     ctx.globalAlpha = 1;
   }
 
+  /** Where a count chip sits (centre x, y, width, height in chipXY); false when its company is gone. */
+  private chipBox(
+    chip: { text: string; key: string; radius: number },
+    alpha: number,
+    ox: number,
+    oy: number,
+    S: number,
+    rot: number,
+  ): boolean {
+    const g = this.groupOf(chip.key);
+    if (!g || !chip.text) return false;
+    const a = wedgeMid(g) + rot;
+    const bw = this.measure(chip.text, 12, false) + 22;
+    const bh = 24;
+    const r = chip.radius * S + LABEL_GAP + bh / 2 + (1 - alpha) * 10;
+    const x = ox + Math.cos(a) * (r + Math.abs(Math.cos(a)) * (bw / 2 - bh / 2));
+    const y = oy + Math.sin(a) * r;
+    const out = this.chipXY;
+    out[0] = Math.min(Math.max(x, bw / 2 + 4), this.w - bw / 2 - 4);
+    out[1] = Math.min(Math.max(y, bh / 2 + 4), this.h - bh / 2 - 4);
+    out[2] = bw;
+    out[3] = bh;
+    return true;
+  }
+
+  /** The page's person card sits next to the dot (wide maps); on a narrow map it sits at the edge, so the name stays. */
+  private cardShown(): boolean {
+    return this.personCard && this.w >= 640;
+  }
+
   /** The name label above the hovered (or keyboard-focused) dot, which fades and slides in. */
   private drawTip(ctx: CanvasRenderingContext2D, now: number): void {
     const alpha = this.tip.value(now);
     if (alpha <= 0.01 || !this.tipKey) return;
     const v = this.byKey.get(this.tipKey);
-    if (!v?.visible) return;
+    if (!v?.visible || (v.person && this.cardShown())) return;
     const label = v.cluster
       ? v.cluster.label === 'Other companies'
         ? `${v.cluster.count} people at other companies`

@@ -91,7 +91,7 @@ export function Today() {
   const byId = new Map(people.map((p) => [p.id, p]));
   const live = suggestions.filter((s) => stillTrue(s, now));
   const inBrief = latest ? live.filter((s) => latest.suggestionIds.includes(s.id)) : [];
-  const rest = live.filter((s) => !s.deferred && (!latest || !latest.suggestionIds.includes(s.id)));
+  const rest = live.filter((s) => !s.deferred && !latest?.suggestionIds.includes(s.id));
   const cards = [...inBrief, ...rest].sort((a, b) => b.priorityScore - a.priorityScore);
   const more = live
     .filter((s) => s.deferred && !latest?.suggestionIds.includes(s.id))
