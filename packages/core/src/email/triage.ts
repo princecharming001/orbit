@@ -154,14 +154,14 @@ const AUTO_REPLY_OPENER =
 const RETURN_PHRASE =
   /\b(?:until|through|thru|till|returning(?: to the office)?(?: on)?|return(?: to the office)? on|back(?: in the office| in office| at my desk| online)?(?: on)?)\s+([^\n]{0,60})/gi;
 
-/** A no to a call ("I don't do coffee chats", "calls are tough for me", "I'll pass on a call"). */
+/** A no to a call ("I don't do coffee chats", "calls are tough for me", "I'll pass on a call", "Pass on a call for now"). */
 const NO_CALL: RegExp[] = [
   /\b(don'?t|do not|can'?t|cannot|won'?t be able to|am not able to|'m not able to|unable to|no longer) (really )?(do|take|make time for|have time for|hop on|get on|jump on|schedule) (a |an |any )?(more )?(quick |live |phone |video |zoom )?(coffee chats?|calls?|phone calls?|video calls?|meetings?|zoom( calls)?|informational( interviews?| calls)?)\b/i,
   /\b(not|no longer|n'?t) (really )?(doing|taking) (any )?(more )?(informational |coffee |phone |video )?(coffee chats|chats|calls|meetings|informational|interviews)\b/i,
   /\b(not|n'?t) (allowed|permitted) to (do|take|have|hop on) (any )?(calls|meetings|chats|coffee chats)\b/i,
   /\b(rather|easier) (than|to skip) (a|the) (call|chat|meeting)\b/i,
   /\be-?mail is (easier|better|best)( for me)? than (a|the) (call|chat|meeting)\b/i,
-  /\b(going to|gonna|have to|need to|will|'ll|'d|would|should) pass on (a|the|any|doing a|hopping on a|getting on a) (live |phone |video |zoom )?(call|chat|meeting|coffee( chat)?)\b/i,
+  /(^|\b(going to|gonna|have to|need to|will|'ll|'d|would|should) )pass on (a|the|any|doing a|hopping on a|getting on a) (live |phone |video |zoom )?(call|chat|meeting|coffee( chat)?)\b/i,
   /\b(i'?d|i would) (rather|prefer) (not|to skip|to pass on) (to )?(do|have|hop on|jump on|get on|take|schedule|set up)? ?(a|the|any) (live |phone |video |zoom )?(call|chat|meeting|coffee( chat)?)\b/i,
   /\b(skip|forgo) (a|the) (call|meeting|zoom|chat)\b/i,
   /\b(schedule|calendar) (doesn'?t|does not|won'?t) (really )?allow (for )?(calls|meetings|chats)\b/i,
@@ -188,8 +188,9 @@ const PASS_REFERRAL =
 /** A "pass" that refuses: "I'll pass", "I'm going to pass this time", "have to pass on this one". */
 function refusingPass(text: string): boolean {
   const re = /(?:^|\b(?:going to|gonna|will|'ll|have to|need to|must|i)\s+)(?:have to\s+)?(?=pass\b)/gi;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text))) {
+  // matchAll steps past an empty match (the `^` alternative before a leading "pass"); a bare exec loop would match
+  // the same empty string at index 0 forever
+  for (const m of text.matchAll(re)) {
     const rest = text.slice(m.index + m[0].length);
     if (!PASS_REFERRAL.test(rest) && !/^pass on (a|the|any|doing|hopping|getting) /i.test(rest)) return true;
   }
