@@ -9,6 +9,7 @@ import {
   confirmHandoff,
   type DraftIssue,
   draftEnvelope,
+  googleSendActive,
   handoffLink,
   isConnectionNote,
   revertHandoff,
@@ -23,7 +24,7 @@ type PromptNeed = Exclude<DraftNeed, 'post'>;
 const INPUT_PROMPT: Record<PromptNeed, { label: string; hint: string; placeholder: string }> = {
   connection: {
     label: 'One line only true of them',
-    hint: 'How you found them, what you share, or what of theirs you read. Orbit will not send a cold message without it.',
+    hint: 'You have not talked yet, so the message needs one line that shows why you are writing to them: how you found them, what you share, or something of theirs you read. Orbit will not send a first message without it.',
     placeholder: 'e.g. Read your post on pricing experiments at Ramp; we both interned at Brex',
   },
   update: {
@@ -84,6 +85,11 @@ export function DraftEditor({
     threaded: !!draft.externalThreadId,
   });
   const person = useLiveQuery(() => db.people.get(draft.personId), [draft.personId]);
+  // whether approving sends from Orbit (Google connected with send permission) or opens the mail app
+  const direct = useLiveQuery(
+    async () => (user && draft.channel === 'gmail' ? googleSendActive(user.id) : false),
+    [user?.id, draft.channel],
+  );
   const chats = useLiveQuery(
     () => db.chats.where('personId').equals(draft.personId).toArray(),
     [draft.personId],
@@ -135,6 +141,14 @@ export function DraftEditor({
   const shownError = error ?? (draft.status === 'failed' || draft.error ? draft.error : undefined);
   if (['queued', 'sending', 'handed_off', 'sent'].includes(draft.status))
     return <OutboxStatus draft={draft} onClose={onCancel} />;
+  const first = person?.firstName ?? 'them';
+  const defaultLabel = isLinkedIn
+    ? connectionNote
+      ? 'Copy note & open LinkedIn'
+      : 'Copy & open LinkedIn'
+    : direct
+      ? `Send to ${first}`
+      : 'Open in mail app';
   const canRegenerate = needs.every((n) => (inputs[n] ?? '').trim().length >= (n === 'role' ? 4 : 8));
   const regenerate = async () => {
     if (!user) return;
@@ -178,19 +192,28 @@ export function DraftEditor({
           </div>
         </div>
       )}
+      {!isLinkedIn && (
+        <div className="text-[12px] text-ink-3 mb-1.5 truncate" data-testid="draft-to">
+          To: {person?.displayName ?? 'them'}
+          {draft.toEmail ? ` <${draft.toEmail}>` : ''}
+        </div>
+      )}
       {!isLinkedIn && !envelope.threaded && (
-        <div className="mb-2">
+        <div className="mb-2 flex items-center gap-2">
+          <label htmlFor={`subject-${draft.id}`} className="text-[12px] text-ink-3 shrink-0">
+            Subject
+          </label>
           <Input
+            id={`subject-${draft.id}`}
             value={subject}
             onChange={(e) => setSubject(e.target.value)}
             placeholder="Subject"
-            aria-label="Subject"
           />
         </div>
       )}
       {!isLinkedIn && envelope.threaded && (
         <div className="text-[12px] text-ink-3 mb-2" data-testid="draft-thread-subject">
-          Replies in the thread{envelope.subject ? `: ${envelope.subject}` : ''}
+          Goes as a reply in your email thread{envelope.subject ? ` “${envelope.subject}”` : ''}.
         </div>
       )}
       {isLinkedIn && (
@@ -208,7 +231,8 @@ export function DraftEditor({
       />
       <div className="mt-2 flex items-center gap-3 text-[12px] text-ink-3 flex-wrap">
         <span className={cx('tabular', wc > max && 'text-warn')}>
-          {wc} words{wc > max ? ` (aim for ≤ ${max})` : ''}
+          {wc} word{wc === 1 ? '' : 's'}
+          {wc > max ? ` (aim for ${max} or fewer)` : ''}
         </span>
         {isLinkedIn && (
           <span className={cx('tabular', connectionNote && body.length > LINKEDIN_NOTE_MAX && 'text-bad')}>
@@ -217,7 +241,7 @@ export function DraftEditor({
               : `${body.length} characters`}
           </span>
         )}
-        <span>{draft.generatedBy === 'llm' ? 'Drafted with Claude' : 'Drafted from the playbook'}</span>
+        <span>{draft.generatedBy === 'llm' ? 'Drafted with Claude' : 'Drafted by Orbit'}</span>
         {edited && (
           <button className="underline underline-offset-2" onClick={() => setBody(draft.bodyDraft)}>
             Reset to suggested
@@ -244,15 +268,23 @@ export function DraftEditor({
               if (e) setError(e);
             }}
           >
-            {approveLabel ??
-              (isLinkedIn
-                ? connectionNote
-                  ? 'Copy note & open LinkedIn'
-                  : 'Copy & open LinkedIn'
-                : 'Approve & send')}
+            {approveLabel ?? defaultLabel}
           </Button>
         </span>
       </div>
+      {!isLinkedIn && direct === false && !approveLabel && (
+        <p className="mt-1.5 text-[12px] text-ink-3 text-right" data-testid="draft-mail-hint">
+          Orbit opens this in your mail app, addressed to {first}. You send it from there.
+        </p>
+      )}
+      {blocked &&
+        needs.length > 0 &&
+        !notAllowed &&
+        !issues.some((i) => i.blocking || i.code === 'placeholder') && (
+          <p className="mt-1.5 text-[12px] text-warn" data-testid="draft-blocked-hint">
+            Add the missing line above, or replace the text in brackets, to approve this.
+          </p>
+        )}
       {(shownError || notAllowed || issues.length > 0) && (
         <ul className="mt-2 space-y-1 text-[12.5px]" data-testid="draft-issues">
           {shownError && <li className="text-bad">Not sent: {shownError}</li>}
@@ -260,8 +292,14 @@ export function DraftEditor({
             <li className="text-bad">Can't send this yet: {notAllowed}</li>
           )}
           {issues.map((i) => (
-            <li key={`${i.code}:${i.text}`} className={i.blocking ? 'text-bad' : 'text-warn'}>
-              {i.blocking ? 'Fix before sending: ' : 'Worth a look: '}
+            // a placeholder holds the button back while the line is missing, so it reads as a fix, not a suggestion
+            <li
+              key={`${i.code}:${i.text}`}
+              className={i.blocking || (blocked && i.code === 'placeholder') ? 'text-bad' : 'text-warn'}
+            >
+              {i.blocking || (blocked && i.code === 'placeholder')
+                ? 'Fix before sending: '
+                : 'Worth a look: '}
               {i.text}
             </li>
           ))}
@@ -324,11 +362,11 @@ export function OutboxStatus({ draft, onClose }: { draft: OutboundMessage; onClo
     line =
       draft.channel === 'gmail'
         ? draft.externalThreadId
-          ? 'Opened in your mail app. Reply in the original thread if you can, then mark it as sent.'
-          : 'Opened in your mail app. Mark as sent when you have sent it.'
+          ? `Opened in your mail app, addressed to ${name}. Send it there as a reply in your original thread if you can, then press I sent it.`
+          : `Opened in your mail app, addressed to ${name}. Send it there, then press I sent it.`
         : link?.via === 'linkedin_connect'
-          ? `On ${name}'s LinkedIn profile, click Connect, then Add a note, and paste the note. Mark it as sent once the request is out.`
-          : `Paste the message into LinkedIn and send it to ${name}, then mark it as sent.`;
+          ? `On ${name}'s LinkedIn profile, click Connect, then Add a note, and paste the note. Press I sent it once the request is out.`
+          : `Paste the message into LinkedIn and send it to ${name}, then press I sent it.`;
     actions = (
       <>
         <Button

@@ -14,7 +14,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 
 export function cx(...parts: (string | false | null | undefined)[]): string {
   return parts.filter(Boolean).join(' ');
@@ -93,11 +93,31 @@ export function Select({ className, ...rest }: SelectHTMLAttributes<HTMLSelectEl
     />
   );
 }
-export function Label({ children, hint }: { children: ReactNode; hint?: string }) {
+/**
+ * A field label. The label never shrinks: a long hint wraps under it instead of squeezing the label into a column.
+ * Pass `htmlFor` so a click (and a screen reader) lands on the field; `required` / `optional` say so in words.
+ */
+export function Label({
+  children,
+  hint,
+  htmlFor,
+  required,
+  optional,
+}: {
+  children: ReactNode;
+  hint?: string;
+  htmlFor?: string;
+  required?: boolean;
+  optional?: boolean;
+}) {
   return (
-    <div className="mb-1.5 flex items-baseline justify-between">
-      <span className="text-[13px] font-medium text-ink-2">{children}</span>
-      {hint && <span className="text-[12px] text-ink-3">{hint}</span>}
+    <div className="mb-1.5 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
+      <label htmlFor={htmlFor} className="text-[13px] font-medium text-ink-2 shrink-0">
+        {children}
+        {required && <span className="ml-1 text-[12px] font-normal text-ink-3"> Required</span>}
+        {optional && <span className="ml-1 text-[12px] font-normal text-ink-3"> Optional</span>}
+      </label>
+      {hint && <span className="text-[12px] text-ink-3 min-w-0">{hint}</span>}
     </div>
   );
 }
@@ -121,7 +141,7 @@ export function Chip({
   return (
     <span
       className={cx(
-        'inline-flex items-center gap-1 rounded-full border px-2 h-6 text-[12px] font-medium leading-none',
+        'inline-flex items-center gap-1 rounded-full border px-2 h-6 text-[12px] font-medium leading-none whitespace-nowrap shrink-0',
         tones,
         className,
       )}
@@ -406,47 +426,62 @@ interface ToastItem {
   action?: { label: string; onClick: () => void };
   tone?: 'neutral' | 'good' | 'bad';
   ttl?: number;
+  /** keep the toast when the page changes (it announces what the new page shows) */
+  sticky?: boolean;
+  at: number;
 }
-const ToastCtx = createContext<{ push: (t: Omit<ToastItem, 'id'>) => number; dismiss: (id: number) => void }>(
-  { push: () => 0, dismiss: () => {} },
-);
+const ToastCtx = createContext<{
+  push: (t: Omit<ToastItem, 'id' | 'at'>) => number;
+  dismiss: (id: number) => void;
+}>({ push: () => 0, dismiss: () => {} });
+/** At most this many toasts at once; a new one pushes the oldest out instead of stacking over the page. */
+const MAX_TOASTS = 2;
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<ToastItem[]>([]);
   const counter = useRef(0);
+  const { pathname } = useLocation();
   const dismiss = useCallback((id: number) => setItems((xs) => xs.filter((x) => x.id !== id)), []);
   const push = useCallback(
-    (t: Omit<ToastItem, 'id'>) => {
+    (t: Omit<ToastItem, 'id' | 'at'>) => {
       const id = ++counter.current;
-      setItems((xs) => [...xs, { ...t, id }]);
+      setItems((xs) => [...xs, { ...t, id, at: Date.now() }].slice(-MAX_TOASTS));
       setTimeout(() => dismiss(id), t.ttl ?? 4000);
       return id;
     },
     [dismiss],
   );
+  // A toast belongs to the page it was raised on. Moving to another page clears it, unless it was raised for that
+  // move (just before it) or says what the new page holds.
+  useEffect(() => {
+    void pathname;
+    setItems((xs) => xs.filter((x) => x.sticky || Date.now() - x.at < 1500));
+  }, [pathname]);
   const value = useMemo(() => ({ push, dismiss }), [push, dismiss]);
   return (
     <ToastCtx.Provider value={value}>
       {children}
       <div
-        className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[60] flex flex-col gap-2 items-center"
+        className="fixed bottom-20 md:bottom-4 inset-x-4 md:inset-x-auto md:left-1/2 md:-translate-x-1/2 z-[60] flex flex-col gap-2 items-center pointer-events-none"
         aria-live="polite"
+        data-testid="toasts"
       >
         {items.map((t) => (
           <div
             key={t.id}
             className={cx(
-              'fade-up flex items-center gap-3 rounded-full px-4 h-10 shadow-lg text-[13px]',
+              'pointer-events-auto fade-up flex items-center gap-3 rounded-2xl px-4 py-2.5 min-h-10 max-w-full md:max-w-[560px] shadow-lg text-[13px] leading-snug',
               t.tone === 'bad'
                 ? 'bg-bad text-white'
                 : t.tone === 'good'
                   ? 'bg-good text-white'
                   : 'bg-ink text-white',
             )}
+            role="status"
           >
-            <span>{t.text}</span>
+            <span className="min-w-0">{t.text}</span>
             {t.action && (
               <button
-                className="font-semibold underline-offset-2 hover:underline"
+                className="shrink-0 font-semibold underline underline-offset-2 hover:no-underline"
                 onClick={() => {
                   t.action!.onClick();
                   dismiss(t.id);
@@ -455,6 +490,13 @@ export function ToastProvider({ children }: { children: ReactNode }) {
                 {t.action.label}
               </button>
             )}
+            <button
+              className="shrink-0 -mr-1 p-1 rounded-full opacity-70 hover:opacity-100"
+              onClick={() => dismiss(t.id)}
+              aria-label="Close message"
+            >
+              <X size={14} />
+            </button>
           </div>
         ))}
       </div>
@@ -463,6 +505,15 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 }
 export function useToast() {
   return useContext(ToastCtx);
+}
+
+/** The modifier key a shortcut uses on this computer: the Command key on a Mac, Ctrl elsewhere. */
+export function modKeyLabel(): string {
+  const p =
+    (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ??
+    navigator.platform ??
+    '';
+  return /mac|iphone|ipad/i.test(p) ? '⌘' : 'Ctrl';
 }
 
 export function Kbd({ children }: { children: ReactNode }) {
@@ -483,21 +534,29 @@ export function Stat({ label, value, hint }: { label: string; value: ReactNode; 
   );
 }
 
+/** Whole calendar days from `a` to `b` in local time (Wednesday evening to Thursday morning is 1). */
+export function calendarDaysBetween(a: Date, b: Date): number {
+  const da = new Date(a.getFullYear(), a.getMonth(), a.getDate());
+  const db_ = new Date(b.getFullYear(), b.getMonth(), b.getDate());
+  return Math.round((db_.getTime() - da.getTime()) / 86_400_000);
+}
+
 export function relDate(iso: string | undefined, now = new Date()): string {
   if (!iso) return '—';
   const d = new Date(iso);
   const diff = now.getTime() - d.getTime();
-  const days = Math.floor(diff / 86_400_000);
+  const days = calendarDaysBetween(d, now);
   if (diff < 0) {
-    const ahead = Math.ceil(-diff / 86_400_000);
+    // ahead: counted in calendar days, so Thursday is "tomorrow" all of Wednesday
+    const ahead = -days;
     if (-diff < 3_600_000) return 'in under an hour';
-    if (-diff < 86_400_000) return `in ${Math.round(-diff / 3_600_000)} h`;
+    if (ahead === 0) return `in ${Math.round(-diff / 3_600_000)} h`;
     return ahead === 1 ? 'tomorrow' : `in ${ahead} days`;
   }
   if (diff < 3_600_000) return 'just now';
   if (days === 0) return `${Math.round(diff / 3_600_000)} h ago`;
   if (days === 1) return 'yesterday';
-  if (days < 30) return `${days} d ago`;
+  if (days < 30) return `${days} days ago`;
   return d.toLocaleDateString('en-US', {
     month: 'short',
     day: 'numeric',
@@ -536,6 +595,48 @@ export function FunctionPicker({
           </button>
         );
       })}
+    </div>
+  );
+}
+
+/**
+ * A first-run hint: a short note that explains a page the first time. "Got it" closes it for good (stored with the
+ * student's settings, so it does not come back on another visit).
+ */
+export function FirstRunHint({
+  id,
+  title,
+  children,
+  dismissed,
+  onDismiss,
+}: {
+  id: string;
+  title: string;
+  children: ReactNode;
+  dismissed: boolean;
+  onDismiss: (id: string) => void;
+}) {
+  if (dismissed) return null;
+  return (
+    <div
+      className="mb-4 rounded-[var(--radius-card)] border border-accent/30 bg-accent-soft/60 px-4 py-3 text-[13.5px]"
+      role="note"
+      data-testid={`hint-${id}`}
+    >
+      <div className="flex items-start gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="font-medium">{title}</div>
+          <div className="text-ink-2 mt-0.5">{children}</div>
+        </div>
+        <Button
+          size="sm"
+          variant="secondary"
+          onClick={() => onDismiss(id)}
+          data-testid={`hint-${id}-dismiss`}
+        >
+          Got it
+        </Button>
+      </div>
     </div>
   );
 }

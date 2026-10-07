@@ -538,7 +538,7 @@ describe('warm-up actions (SND-19)', () => {
         return undefined;
       }))!;
     expect(p).toBeDefined();
-    const { chat } = await startWarmUpOrOutreach(user, p.id, 'linkedin');
+    const chat = (await startWarmUpOrOutreach(user, p.id, 'linkedin')).chat!;
     expect(chat.stage).toBe('warming');
     await markWarmUpAction(user.id, chat.id, 'w1', true);
     await markWarmUpAction(user.id, chat.id, 'w1', true);

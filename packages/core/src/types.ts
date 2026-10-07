@@ -199,6 +199,8 @@ export interface UserSettings {
   warmUpDays: number; // days of warm-up before cold LinkedIn outreach
   anthropicApiKey?: string;
   googleClientId?: string;
+  /** first-run hints the student closed; they never come back */
+  dismissedHints?: string[];
 }
 
 export interface RecruitingGoals {

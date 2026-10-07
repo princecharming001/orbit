@@ -29,19 +29,17 @@ describe("Today's summary line (L27)", () => {
     const { cards, events, people } = await screen();
     expect(count(cards, 'confirm_stage')).toBeGreaterThan(0);
     const text = todaySummaryText(cards, events, people, NOW);
-    const confirms = count(cards, 'schedule_confirm');
-    expect(text).toContain(`${confirms} time${confirms > 1 ? 's' : ''} to confirm`);
-    const updates = count(cards, 'confirm_stage');
-    expect(text).toContain(`${updates} update${updates > 1 ? 's' : ''} to confirm`);
-    expect(text).toContain('1 chat coming up this week');
+    // a short count, not a list of every kind (the cards say what each one is)
+    expect(text).toBe(`${cards.length} things for today, most urgent first. 1 chat coming up this week.`);
   });
 
   it('stops counting a card once it is handled', async () => {
     const { cards, events, people } = await screen();
     expect(count(cards, 'schedule_confirm')).toBe(1);
-    expect(todaySummaryText(cards, events, people, NOW)).toMatch(/1 time to confirm/);
+    expect(todaySummaryText(cards, events, people, NOW)).toMatch(new RegExp(`^${cards.length} things`));
     const left = cards.filter((s) => s.kind !== 'schedule_confirm');
-    expect(todaySummaryText(left, events, people, NOW)).not.toMatch(/times? to confirm/);
+    expect(todaySummaryText(left, events, people, NOW)).toMatch(new RegExp(`^${left.length} things`));
+    expect(todaySummaryText([], events, people, NOW)).toMatch(/^Nothing to send today/);
   });
 
   it('a stored demo never shows a confirm-time card for a chat that is already booked', async () => {

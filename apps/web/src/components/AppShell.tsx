@@ -3,9 +3,10 @@ import { Compass, Inbox, LayoutGrid, Map as MapIcon, Plus, Search, Settings, Sun
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { db } from '../db/schema';
+import { isMessageSuggestion } from '../engine/brief';
 import { dailyMaintenance } from '../engine/sync';
 import { useSession } from '../state/session';
-import { Avatar, cx, Kbd } from '../ui';
+import { Avatar, cx, Kbd, modKeyLabel } from '../ui';
 import { CommandPalette } from './CommandPalette';
 import { OutboxScheduler } from './OutboxScheduler';
 
@@ -29,7 +30,8 @@ export function AppShell() {
           ? db.suggestions
               .where('userId')
               .equals(userId)
-              .filter((s) => s.status === 'pending' && !s.deferred)
+              // the same list as the Approvals page: every message waiting for the student's OK
+              .filter((s) => s.status === 'pending' && isMessageSuggestion(s.kind))
               .count()
           : 0,
       [userId],
@@ -57,12 +59,12 @@ export function AppShell() {
         </div>
         <button
           onClick={() => setPalette(true)}
-          aria-label="Search (Ctrl or Command K)"
+          aria-label={`Search (${modKeyLabel() === 'Ctrl' ? 'Ctrl' : 'Command'} K)`}
           className="mx-3 mb-3 h-9 rounded-lg border border-line bg-canvas flex items-center gap-2 px-3 text-ink-3 text-[13px] hover:bg-canvas-2"
         >
           <Search size={14} /> Search{' '}
           <span className="ml-auto flex gap-0.5">
-            <Kbd>⌘</Kbd>
+            <Kbd>{modKeyLabel()}</Kbd>
             <Kbd>K</Kbd>
           </span>
         </button>
@@ -83,7 +85,11 @@ export function AppShell() {
               <Icon size={16} className="text-ink-3" />
               {label}
               {label === 'Approvals' && pending > 0 && (
-                <span className="ml-auto text-[11px] bg-accent text-white rounded-full px-1.5 h-5 inline-flex items-center tabular">
+                <span
+                  className="ml-auto text-[11px] bg-accent text-white rounded-full px-1.5 h-5 inline-flex items-center tabular"
+                  title={`${pending} message${pending === 1 ? '' : 's'} waiting for your OK`}
+                  data-testid="approvals-badge"
+                >
                   {pending}
                 </span>
               )}
@@ -123,7 +129,7 @@ export function AppShell() {
           <Logo /> <span className="font-semibold ml-1">Orbit</span>
           <button
             onClick={() => setPalette(true)}
-            className="ml-auto p-2 rounded-md hover:bg-canvas-2"
+            className="ml-auto p-2.5 rounded-md hover:bg-canvas-2"
             aria-label="Search"
             title="Search people and actions"
           >
@@ -131,7 +137,7 @@ export function AppShell() {
           </button>
           <NavLink
             to="/notes/new"
-            className="p-2 rounded-md hover:bg-canvas-2"
+            className="p-2.5 rounded-md hover:bg-canvas-2"
             aria-label="Add note"
             title="Add a note about a conversation"
             data-testid="mobile-add-note"
@@ -140,7 +146,7 @@ export function AppShell() {
           </NavLink>
           <NavLink
             to="/settings"
-            className={({ isActive }) => cx('p-2 rounded-md hover:bg-canvas-2', isActive && 'text-accent')}
+            className={({ isActive }) => cx('p-2.5 rounded-md hover:bg-canvas-2', isActive && 'text-accent')}
             aria-label="Settings"
             title="Settings"
             data-testid="mobile-settings"

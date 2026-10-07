@@ -420,3 +420,38 @@ export async function suggestDuplicateMerges(userId: string, now = new Date()): 
   }
   return added;
 }
+
+export interface ManualPersonInput {
+  name: string;
+  company?: string;
+  title?: string;
+  email?: string;
+  linkedinUrl?: string;
+  school?: string;
+}
+
+/**
+ * Add someone the student wants to talk to by hand (no Google, no LinkedIn export needed). An existing record with the
+ * same email or LinkedIn profile is updated instead of duplicated. Returns undefined when the name is missing.
+ */
+export async function addPersonByHand(
+  userId: string,
+  inp: ManualPersonInput,
+  userSchool?: string,
+): Promise<{ person: Person; created: boolean } | undefined> {
+  const name = inp.name.trim().replace(/\s+/g, ' ');
+  if (!name) return undefined;
+  const clean = (x?: string) => x?.trim() || undefined;
+  const r = await upsertPerson({
+    userId,
+    displayName: name,
+    email: clean(inp.email),
+    linkedinUrl: clean(inp.linkedinUrl),
+    companyRaw: clean(inp.company),
+    title: clean(inp.title),
+    school: clean(inp.school),
+    userSchool,
+    source: 'manual',
+  });
+  return { person: r.person, created: r.created };
+}

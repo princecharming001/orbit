@@ -1,8 +1,8 @@
 import { newId } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Check, Upload } from 'lucide-react';
-import { useEffect, useState } from 'react';
-import { Navigate, useNavigate, useParams } from 'react-router-dom';
+import { Check, Minus, Upload } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
 import { Logo } from '../components/AppShell';
 import { db } from '../db/schema';
 import { generateBrief, recommendationsRefresh } from '../engine/brief';
@@ -11,10 +11,11 @@ import { saveResume } from '../engine/resume';
 import { syncGoogle } from '../engine/sync';
 import { addTargetCompany } from '../engine/targets';
 import { connectGoogle, googleClientId, googleScopeWarning } from '../integrations/google';
-import { readPrefs, writePrefs } from '../integrations/prefs';
+import { envGoogleClientId, readPrefs, writePrefs } from '../integrations/prefs';
 import { useSession } from '../state/session';
-import { Button, Card, cx, FunctionPicker, Input, Label, Select, Spinner, Textarea, useToast } from '../ui';
+import { Button, Card, cx, FunctionPicker, Input, Label, Select, Spinner, Textarea } from '../ui';
 
+/** Internal step numbers (stored in `user.onboardingStep`); the address shows them as 1 to 7. */
 const STEPS = [2, 3, 4, 5, 6, 7, 8] as const;
 const TITLES: Record<number, string> = {
   2: 'About you',
@@ -25,31 +26,50 @@ const TITLES: Record<number, string> = {
   7: 'Meeting notes',
   8: 'Preferences',
 };
+/** Steps the student may skip; the stepper marks a skipped one as skipped, never as done. */
+const OPTIONAL = new Set([4, 5, 6]);
+
+/** The address of an internal onboarding step: step 2 (About you) is /onboarding/1. */
+export function onboardingPath(step: number): string {
+  return `/onboarding/${Math.min(8, Math.max(2, step)) - 1}`;
+}
 
 export function Onboarding() {
   const { step: stepParam } = useParams();
-  const step = Number(stepParam ?? 2);
+  const step = Number(stepParam ?? 1) + 1;
   const nav = useNavigate();
   const { user } = useSession();
-  const toast = useToast();
+  // what the optional steps actually produced, so a skipped step never shows a done check
+  const did = useLiveQuery(async () => {
+    if (!user) return {};
+    const [resume, ints] = await Promise.all([
+      db.resumes.where('userId').equals(user.id).first(),
+      db.integrations.where('userId').equals(user.id).toArray(),
+    ]);
+    return {
+      4: !!resume,
+      5: ints.some((i) => i.provider === 'google'),
+      6: ints.some((i) => i.provider === 'linkedin_csv'),
+    } as Record<number, boolean>;
+  }, [user?.id]);
+  const stepperRef = useRef<HTMLOListElement>(null);
+  useEffect(() => {
+    stepperRef.current
+      ?.querySelector('[aria-current="step"]')
+      ?.scrollIntoView({ block: 'nearest', inline: 'center' });
+  }, [step]);
   if (!user) return null;
   const idx = STEPS.indexOf(step as (typeof STEPS)[number]);
   // An unknown step (an old link, a typo) goes back to where the user actually is.
   if (idx === -1)
     return (
-      <Navigate
-        to={
-          user.onboardingCompletedAt
-            ? '/today'
-            : `/onboarding/${Math.min(8, Math.max(2, user.onboardingStep))}`
-        }
-        replace
-      />
+      <Navigate to={user.onboardingCompletedAt ? '/today' : onboardingPath(user.onboardingStep)} replace />
     );
   const go = async (next: number) => {
     await db.users.update(user.id, { onboardingStep: Math.max(user.onboardingStep, next) });
-    nav(`/onboarding/${next}`);
+    nav(onboardingPath(next));
   };
+  const back = (to: number) => nav(onboardingPath(to));
   const finish = async () => {
     await db.users.update(user.id, { onboardingStep: 11, onboardingCompletedAt: new Date().toISOString() });
     const fresh = (await db.users.get(user.id))!;
@@ -57,50 +77,77 @@ export function Onboarding() {
     await generateBrief(fresh, 'welcome');
     nav('/today');
   };
+  const status = (s: number, i: number): 'done' | 'skipped' | 'current' | 'todo' =>
+    i === idx ? 'current' : i > idx ? 'todo' : OPTIONAL.has(s) && !did?.[s] ? 'skipped' : 'done';
   return (
     <div className="min-h-full bg-canvas-2/60">
-      <div className="max-w-[760px] mx-auto px-5 py-8">
-        <div className="flex items-center gap-2 mb-8">
-          <Logo /> <span className="font-semibold">Orbit</span>
+      <div className="max-w-[760px] mx-auto px-4 sm:px-5 py-6 sm:py-8">
+        <div className="flex items-center gap-2 mb-6">
+          <Link to="/" className="inline-flex items-center gap-2" title="Back to the Orbit home page">
+            <Logo /> <span className="font-semibold">Orbit</span>
+          </Link>
           <span className="text-ink-3 text-[13px] ml-2">Setup</span>
         </div>
-        <ol className="flex items-center gap-2 mb-6 overflow-x-auto">
-          {STEPS.map((s, i) => (
-            <li
-              key={s}
-              className={cx(
-                'flex items-center gap-2 text-[12px] whitespace-nowrap',
-                i <= idx ? 'text-ink' : 'text-ink-3',
-              )}
-            >
-              <span
-                className={cx(
-                  'w-5 h-5 rounded-full inline-flex items-center justify-center text-[11px] font-semibold',
-                  i < idx ? 'bg-good text-white' : i === idx ? 'bg-ink text-white' : 'bg-line text-ink-3',
-                )}
-              >
-                {i < idx ? <Check size={12} /> : i + 1}
-              </span>
-              {TITLES[s]}
-              {i < STEPS.length - 1 && <span className="w-6 h-px bg-line" />}
-            </li>
-          ))}
-        </ol>
-        <Card className="p-6">
+        <div className="mb-5">
+          <p className="text-[13px] text-ink-2" data-testid="ob-progress">
+            Step {idx + 1} of {STEPS.length}
+            {OPTIONAL.has(step) ? <span className="text-ink-3"> · optional</span> : null}
+          </p>
+          <ol ref={stepperRef} className="mt-2 grid grid-cols-7 gap-1.5" aria-label="Setup steps">
+            {STEPS.map((s, i) => {
+              const st = status(s, i);
+              return (
+                <li
+                  key={s}
+                  aria-current={st === 'current' ? 'step' : undefined}
+                  className="min-w-0"
+                  data-testid={`ob-step-${i + 1}`}
+                  data-status={st}
+                >
+                  <span
+                    className={cx(
+                      'block h-1.5 rounded-full',
+                      st === 'done'
+                        ? 'bg-good'
+                        : st === 'current'
+                          ? 'bg-ink'
+                          : st === 'skipped'
+                            ? 'bg-line [background-image:repeating-linear-gradient(90deg,#c7cbd3_0_4px,transparent_4px_8px)]'
+                            : 'bg-line',
+                    )}
+                  />
+                  <span
+                    className={cx(
+                      'mt-1.5 hidden sm:flex items-start gap-1 text-[11.5px] leading-tight',
+                      st === 'current' ? 'text-ink font-medium' : 'text-ink-3',
+                    )}
+                  >
+                    {st === 'done' && <Check size={12} className="text-good shrink-0 mt-px" aria-hidden />}
+                    {st === 'skipped' && <Minus size={12} className="shrink-0 mt-px" aria-hidden />}
+                    <span className="min-w-0">{TITLES[s]}</span>
+                  </span>
+                  <span className="sr-only">
+                    {TITLES[s]}: {st === 'current' ? 'current step' : st === 'todo' ? 'not started' : st}
+                  </span>
+                </li>
+              );
+            })}
+          </ol>
+          {STEPS.some((s, i) => status(s, i) === 'skipped') && (
+            <p className="mt-2 text-[12px] text-ink-3">
+              Skipped steps stay open: you can do them any time from Settings.
+            </p>
+          )}
+        </div>
+        <Card className="p-5 sm:p-6">
           <h1 className="text-[20px] font-semibold mb-1">{TITLES[step]}</h1>
           {step === 2 && <StepAbout onNext={() => go(3)} />}
-          {step === 3 && <StepGoals onNext={() => go(4)} onBack={() => nav('/onboarding/2')} />}
-          {step === 4 && <StepResume onNext={() => go(5)} onBack={() => nav('/onboarding/3')} />}
-          {step === 5 && <StepGoogle onNext={() => go(6)} onBack={() => nav('/onboarding/4')} />}
-          {step === 6 && <StepLinkedIn onNext={() => go(7)} onBack={() => nav('/onboarding/5')} />}
-          {step === 7 && <StepNotes onNext={() => go(8)} onBack={() => nav('/onboarding/6')} />}
-          {step === 8 && (
-            <StepPrefs
-              onNext={finish}
-              onBack={() => nav('/onboarding/7')}
-              toast={(t) => toast.push({ text: t })}
-            />
-          )}
+          {step === 3 && <StepGoals onNext={() => go(4)} onBack={() => back(2)} />}
+          {step === 4 && <StepResume onNext={() => go(5)} onBack={() => back(3)} />}
+          {step === 5 && <StepGoogle onNext={() => go(6)} onBack={() => back(4)} />}
+          {step === 6 && <StepLinkedIn onNext={() => go(7)} onBack={() => back(5)} />}
+          {step === 7 && <StepNotes onNext={() => go(8)} onBack={() => back(6)} />}
+          {step === 8 && <StepPrefs onNext={finish} onBack={() => back(7)} />}
         </Card>
       </div>
     </div>
@@ -112,31 +159,37 @@ function Nav({
   onNext,
   nextLabel = 'Continue',
   disabled,
+  disabledHint,
   skip,
 }: {
   onBack?: () => void;
   onNext: () => void;
   nextLabel?: string;
   disabled?: boolean;
-  skip?: () => void;
+  /** says what is missing while Continue is disabled */
+  disabledHint?: string;
+  /** an optional step with nothing done yet: the one button reads "Skip for now" */
+  skip?: boolean;
 }) {
   return (
-    <div className="mt-6 flex items-center gap-2">
-      {onBack && (
-        <Button variant="ghost" onClick={onBack}>
-          Back
-        </Button>
-      )}
-      <span className="ml-auto flex gap-2">
-        {skip && (
-          <Button variant="ghost" onClick={skip}>
-            Skip for now
+    <div className="mt-6">
+      <div className="flex items-center gap-2">
+        {onBack && (
+          <Button variant="ghost" onClick={onBack}>
+            Back
           </Button>
         )}
-        <Button variant="primary" onClick={onNext} disabled={disabled}>
-          {nextLabel}
-        </Button>
-      </span>
+        <span className="ml-auto flex gap-2">
+          <Button variant={skip ? 'secondary' : 'primary'} onClick={onNext} disabled={disabled}>
+            {skip ? 'Skip for now' : nextLabel}
+          </Button>
+        </span>
+      </div>
+      {disabled && disabledHint && (
+        <p className="mt-2 text-[12px] text-ink-3 text-right" data-testid="ob-missing">
+          {disabledHint}
+        </p>
+      )}
     </div>
   );
 }
@@ -175,95 +228,170 @@ function StepAbout({ onNext }: { onNext: () => void }) {
     });
     onNext();
   };
-  const ok = f.fullName.trim() && f.email.includes('@') && f.school.trim();
+  const missing = [
+    !f.fullName.trim() && 'your name',
+    !f.email.includes('@') && 'your email',
+    !f.school.trim() && 'your school',
+  ].filter(Boolean) as string[];
   return (
     <div className="grid sm:grid-cols-2 gap-4 mt-4">
+      <p className="sm:col-span-2 text-[13px] text-ink-2 -mt-1">
+        Orbit uses this to sign your messages and to spot alumni from your school.
+      </p>
       <div className="sm:col-span-2">
-        <Label>Full name</Label>
+        <Label htmlFor="ob-name" required>
+          Full name
+        </Label>
         <Input
+          id="ob-name"
           value={f.fullName}
           onChange={(e) => setF({ ...f, fullName: e.target.value })}
-          placeholder="Alex Rivera"
+          placeholder="e.g. Alex Rivera"
+          autoComplete="name"
           data-testid="ob-name"
         />
       </div>
       <div>
-        <Label hint="the one you recruit from">Email</Label>
+        <Label htmlFor="ob-email" required hint="the one you recruit from">
+          Email
+        </Label>
         <Input
+          id="ob-email"
           type="email"
           value={f.email}
           onChange={(e) => setF({ ...f, email: e.target.value })}
-          placeholder="alex@cornell.edu"
+          placeholder="e.g. alex@cornell.edu"
+          autoComplete="email"
           data-testid="ob-email"
         />
       </div>
       <div>
-        <Label>LinkedIn URL</Label>
+        <Label htmlFor="ob-li" optional>
+          LinkedIn profile link
+        </Label>
         <Input
+          id="ob-li"
           value={f.linkedinUrl}
           onChange={(e) => setF({ ...f, linkedinUrl: e.target.value })}
-          placeholder="linkedin.com/in/…"
+          placeholder="e.g. linkedin.com/in/alex-rivera"
         />
       </div>
       <div>
-        <Label>School</Label>
+        <Label htmlFor="ob-school" required>
+          School
+        </Label>
         <Input
+          id="ob-school"
           value={f.school}
           onChange={(e) => setF({ ...f, school: e.target.value })}
-          placeholder="Cornell University"
+          placeholder="e.g. Cornell University"
           data-testid="ob-school"
         />
       </div>
       <div>
-        <Label hint="to spot alumni">School email domain</Label>
+        <Label htmlFor="ob-domain" optional hint="to spot alumni">
+          School email domain
+        </Label>
         <Input
+          id="ob-domain"
           value={f.schoolDomain}
           onChange={(e) => setF({ ...f, schoolDomain: e.target.value })}
-          placeholder="cornell.edu"
+          placeholder="e.g. cornell.edu"
         />
       </div>
       <div>
-        <Label>Graduation year</Label>
+        <Label htmlFor="ob-year">Graduation year</Label>
         <Input
+          id="ob-year"
           type="number"
           value={f.graduationYear}
           onChange={(e) => setF({ ...f, graduationYear: Number(e.target.value) })}
         />
       </div>
       <div>
-        <Label>Degree</Label>
-        <Select value={f.degree} onChange={(e) => setF({ ...f, degree: e.target.value })} className="w-full">
+        <Label htmlFor="ob-degree">Degree</Label>
+        <Select
+          id="ob-degree"
+          value={f.degree}
+          onChange={(e) => setF({ ...f, degree: e.target.value })}
+          className="w-full"
+        >
           {['BS', 'BA', 'BBA', 'MS', 'MBA', 'MEng', 'PhD', 'Other'].map((d) => (
             <option key={d}>{d}</option>
           ))}
         </Select>
       </div>
       <div>
-        <Label>Major(s)</Label>
+        <Label htmlFor="ob-majors" optional>
+          Major(s)
+        </Label>
         <Input
+          id="ob-majors"
           value={f.majors}
           onChange={(e) => setF({ ...f, majors: e.target.value })}
-          placeholder="Computer Science, Economics"
+          placeholder="e.g. Economics, Computer Science"
         />
       </div>
       <div>
-        <Label>Current city</Label>
+        <Label htmlFor="ob-city" optional>
+          Current city
+        </Label>
         <Input
+          id="ob-city"
           value={f.currentCity}
           onChange={(e) => setF({ ...f, currentCity: e.target.value })}
-          placeholder="Ithaca, NY"
+          placeholder="e.g. Ithaca, NY"
         />
       </div>
       <div className="sm:col-span-2">
-        <Nav onNext={save} disabled={!ok} />
+        <Nav
+          onNext={save}
+          disabled={missing.length > 0}
+          disabledHint={`Add ${missing.join(', ').replace(/, ([^,]*)$/, ' and $1')} to continue.`}
+        />
       </div>
     </div>
   );
 }
 
+/** Example answers that fit the first function the student picked, so a banker is not shown tech examples. */
+const GOAL_EXAMPLES: Record<string, { roles: string; industries: string; company: string; free: string }> = {
+  ib: {
+    roles: 'e.g. Summer analyst',
+    industries: 'e.g. M&A, Restructuring',
+    company: 'e.g. Evercore',
+    free: 'e.g. I want a group with a strong deal flow and good mentorship.',
+  },
+  finance: {
+    roles: 'e.g. Summer analyst',
+    industries: 'e.g. Asset management, Equity research',
+    company: 'e.g. Blackstone',
+    free: 'e.g. I care most about learning to build models from day one.',
+  },
+  consulting: {
+    roles: 'e.g. Summer associate, Business analyst intern',
+    industries: 'e.g. Healthcare, Strategy',
+    company: 'e.g. McKinsey',
+    free: 'e.g. I want broad exposure before I pick an industry.',
+  },
+  vc: {
+    roles: 'e.g. Investment intern',
+    industries: 'e.g. Fintech, Climate',
+    company: 'e.g. Sequoia',
+    free: 'e.g. I want to see early-stage deals up close.',
+  },
+  default: {
+    roles: 'e.g. Software engineering intern, Product intern',
+    industries: 'e.g. Fintech, AI, Consumer',
+    company: 'e.g. Stripe',
+    free: 'e.g. I care most about payments infrastructure and small teams.',
+  },
+};
+
 function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void }) {
   const user = useSession().user!;
-  const goals = useLiveQuery(() => db.goals.get(user.id), [user.id]);
+  // null once read and absent; undefined only while loading
+  const goals = useLiveQuery(async () => (await db.goals.get(user.id)) ?? null, [user.id]);
   const tcs =
     useLiveQuery(() => db.targetCompanies.where('userId').equals(user.id).toArray(), [user.id]) ?? [];
   const [f, setF] = useState({
@@ -276,7 +404,11 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
     ambition: 2 as 1 | 2 | 3,
   });
   const [company, setCompany] = useState('');
+  const loaded = useRef(false);
   useEffect(() => {
+    // fill the form once from what is stored; later saves (Back, Continue) must not reset what is being typed
+    if (goals === undefined || loaded.current) return;
+    loaded.current = true;
     if (goals)
       setF({
         cycleLabel: goals.cycleLabel,
@@ -291,46 +423,48 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
   }, [goals]);
   const [companyNote, setCompanyNote] = useState('');
   const addCompany = async () => {
+    if (!company.trim()) return;
     const r = await addTargetCompany(user.id, company);
     if (r === 'duplicate') return setCompanyNote(`${company.trim()} is already on your list.`);
     setCompanyNote('');
     if (r === 'added') setCompany('');
   };
-  const save = async () => {
+  const split = (x: string) =>
+    x
+      .split(',')
+      .map((v) => v.trim())
+      .filter(Boolean);
+  /** Keep what is on screen, whichever way the student leaves the step (a company typed but not added included). */
+  const persist = async () => {
+    if (company.trim()) await addCompany();
     await db.goals.put({
       userId: user.id,
       cycleLabel: f.cycleLabel.trim() || 'This cycle',
-      targetRoles: f.targetRoles
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean),
+      targetRoles: split(f.targetRoles),
       targetFunctions: f.targetFunctions,
-      targetIndustries: f.targetIndustries
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean),
-      targetLocations: f.targetLocations
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean),
+      targetIndustries: split(f.targetIndustries),
+      targetLocations: split(f.targetLocations),
       freeText: f.freeText,
       ambition: f.ambition,
     });
     await db.settings.update(user.id, { weeklyOutreachTarget: { 1: 2, 2: 4, 3: 7 }[f.ambition] });
-    onNext();
   };
+  const ex = GOAL_EXAMPLES[f.targetFunctions[0] ?? ''] ?? GOAL_EXAMPLES.default!;
   return (
     <div className="mt-4 space-y-4">
       <div>
-        <Label>Recruiting cycle</Label>
+        <Label htmlFor="ob-cycle">Recruiting cycle</Label>
         <Input
+          id="ob-cycle"
           value={f.cycleLabel}
           onChange={(e) => setF({ ...f, cycleLabel: e.target.value })}
           data-testid="ob-cycle"
         />
       </div>
       <div>
-        <Label>Functions</Label>
+        <Label required hint="pick one or more">
+          Functions
+        </Label>
         <FunctionPicker
           value={f.targetFunctions}
           onChange={(targetFunctions) => setF({ ...f, targetFunctions })}
@@ -339,32 +473,43 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
       </div>
       <div className="grid sm:grid-cols-2 gap-4">
         <div>
-          <Label>Target roles</Label>
+          <Label htmlFor="ob-roles" optional>
+            Target roles
+          </Label>
           <Input
+            id="ob-roles"
             value={f.targetRoles}
             onChange={(e) => setF({ ...f, targetRoles: e.target.value })}
-            placeholder="SWE intern, APM intern"
+            placeholder={ex.roles}
+            data-testid="ob-roles"
           />
         </div>
         <div>
-          <Label>Industries</Label>
+          <Label htmlFor="ob-industries" optional>
+            Industries
+          </Label>
           <Input
+            id="ob-industries"
             value={f.targetIndustries}
             onChange={(e) => setF({ ...f, targetIndustries: e.target.value })}
-            placeholder="Fintech, AI, Consumer"
+            placeholder={ex.industries}
           />
         </div>
         <div>
-          <Label>Locations</Label>
+          <Label htmlFor="ob-locations" optional>
+            Locations
+          </Label>
           <Input
+            id="ob-locations"
             value={f.targetLocations}
             onChange={(e) => setF({ ...f, targetLocations: e.target.value })}
-            placeholder="NYC, SF, Remote"
+            placeholder="e.g. New York, San Francisco, Remote"
           />
         </div>
         <div>
-          <Label>How hard are you going?</Label>
+          <Label htmlFor="ob-ambition">How hard are you going?</Label>
           <Select
+            id="ob-ambition"
             value={f.ambition}
             onChange={(e) => setF({ ...f, ambition: Number(e.target.value) as 1 | 2 | 3 })}
             className="w-full"
@@ -376,13 +521,16 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
         </div>
       </div>
       <div>
-        <Label hint="add as many as you like">Target companies</Label>
+        <Label htmlFor="ob-company" optional hint="add as many as you like">
+          Target companies
+        </Label>
         <div className="flex gap-2">
           <Input
+            id="ob-company"
             value={company}
             onChange={(e) => setCompany(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addCompany())}
-            placeholder="Stripe"
+            placeholder={ex.company}
             data-testid="ob-company"
           />
           <Button onClick={addCompany}>Add</Button>
@@ -396,10 +544,13 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
           {tcs.map((t) => (
             <span
               key={t.id}
-              className="inline-flex items-center gap-1 rounded-full border border-line px-2.5 h-7 text-[13px]"
+              className="inline-flex items-center gap-1 rounded-full border border-line pl-1 pr-1 h-8 text-[13px]"
             >
               <button
-                className={cx('text-[11px] font-semibold', t.priority === 1 ? 'text-accent' : 'text-ink-3')}
+                className={cx(
+                  'h-7 w-7 rounded-full text-[13px] font-semibold hover:bg-canvas-2',
+                  t.priority === 1 ? 'text-accent' : 'text-ink-3',
+                )}
                 title={
                   t.priority === 1 ? 'Top priority. Click to make it a normal target' : 'Mark as top priority'
                 }
@@ -413,7 +564,7 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
               </button>
               {t.nameRaw}
               <button
-                className="text-ink-3 hover:text-ink"
+                className="h-7 w-7 rounded-full text-ink-3 hover:text-ink hover:bg-canvas-2"
                 onClick={() => db.targetCompanies.delete(t.id)}
                 aria-label={`Remove ${t.nameRaw}`}
                 title={`Remove ${t.nameRaw}`}
@@ -423,19 +574,55 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
             </span>
           ))}
         </div>
+        {tcs.length > 0 && (
+          <p className="text-[12px] text-ink-3 mt-1.5">Tap the star to mark a company as a top priority.</p>
+        )}
       </div>
       <div>
-        <Label hint="optional">Anything else?</Label>
+        <Label htmlFor="ob-free" optional>
+          Anything else?
+        </Label>
         <Textarea
+          id="ob-free"
           rows={2}
           value={f.freeText}
           onChange={(e) => setF({ ...f, freeText: e.target.value })}
-          placeholder="I care most about payments infrastructure and small teams."
+          placeholder={ex.free}
         />
       </div>
-      <Nav onBack={onBack} onNext={save} disabled={!f.targetFunctions.length} />
+      <Nav
+        onBack={async () => {
+          await persist();
+          onBack();
+        }}
+        onNext={async () => {
+          await persist();
+          onNext();
+        }}
+        disabled={!f.targetFunctions.length}
+        disabledHint="Pick at least one function to continue."
+      />
     </div>
   );
+}
+
+const FACET_LABELS: Record<string, string> = {
+  experience: 'Experience',
+  education: 'Education',
+  project: 'Project',
+  skill_group: 'Skills',
+  interest: 'Interests',
+  summary: 'Summary',
+};
+
+/** The facet's text without repeating its title or organization (the parse often carries both). */
+export function facetDetail(f: { title?: string; organizationName?: string; text: string }): string {
+  let t = f.text.trim();
+  for (const part of [f.title, f.organizationName].filter(Boolean) as string[]) {
+    const re = new RegExp(`^${part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s,·:-]*`, 'i');
+    t = t.replace(re, '').trim();
+  }
+  return t;
 }
 
 function StepResume({ onNext, onBack }: { onNext: () => void; onBack: () => void }) {
@@ -504,26 +691,24 @@ function StepResume({ onNext, onBack }: { onNext: () => void; onBack: () => void
                   type="checkbox"
                   className="mt-1"
                   checked={!f.excluded}
-                  aria-label={`Use ${f.title ?? f.kind.replace('_', ' ')}`}
+                  aria-label={`Use ${f.title ?? FACET_LABELS[f.kind] ?? 'this line'}`}
                   data-testid="ob-facet-toggle"
                   onChange={(e) =>
                     db.resumeFacets.update(f.id, { excluded: !e.target.checked, confirmed: e.target.checked })
                   }
                 />
-                <span>
-                  <span className="text-ink-3 uppercase text-[10px] tracking-wide mr-1.5">
-                    {f.kind.replace('_', ' ')}
-                  </span>
+                <span className="min-w-0">
+                  <span className="text-ink-3 text-[12px] mr-1.5">{FACET_LABELS[f.kind] ?? 'Other'}</span>
                   {f.title ? <strong className="font-medium">{f.title}</strong> : null}
-                  {f.organizationName ? ` · ${f.organizationName}` : ''}{' '}
-                  <span className="text-ink-2">{f.text.slice(0, 140)}</span>
+                  {f.organizationName && f.organizationName !== f.title ? ` · ${f.organizationName}` : ''}{' '}
+                  <span className="text-ink-2">{facetDetail(f).slice(0, 140)}</span>
                 </span>
               </li>
             ))}
           </ul>
         </div>
       )}
-      <Nav onBack={onBack} onNext={onNext} skip={onNext} />
+      <Nav onBack={onBack} onNext={onNext} skip={!resume} />
     </div>
   );
 }
@@ -570,45 +755,72 @@ function StepGoogle({ onNext, onBack }: { onNext: () => void; onBack: () => void
       setError(String((e as Error).message ?? e));
     }
   };
+  // A copy of Orbit set up with its own Google sign-in needs nothing from the student but a click. Without one, the
+  // client ID field is for someone who runs their own copy, so it waits behind "Advanced".
+  const builtIn = !!envGoogleClientId();
   return (
     <div className="mt-4">
       <p className="text-ink-2 text-[14px]">
-        Orbit reads threads with real people (never newsletters) and your calendar to track chats and write
-        with context. Sending only happens after you approve a draft. Everything stays in this browser.
+        With Google connected, Orbit finds the people you already email and meet, notices replies, and can
+        send the messages you approve. It reads conversations with real people, never newsletters. Everything
+        stays in this browser.
       </p>
-      <div className="mt-4">
-        <Label hint="from Google Cloud → Credentials (Web application). Add this site as an authorised JavaScript origin.">
-          OAuth client ID
-        </Label>
-        <Input
-          value={clientId}
-          onChange={(e) => setClientId(e.target.value)}
-          placeholder="1234567890-abc.apps.googleusercontent.com"
-        />
-      </div>
-      <div className="mt-3 flex items-center gap-3">
-        <Button variant="primary" onClick={connect} disabled={!!busy || !clientId.trim()}>
-          {busy ? (
-            <>
-              <Spinner /> {busy}
-            </>
-          ) : account ? (
-            'Reconnect & sync'
-          ) : (
-            'Connect Google'
+      {builtIn || account ? (
+        <div className="mt-4 flex flex-wrap items-center gap-3">
+          <Button variant="primary" onClick={connect} disabled={!!busy || !clientId.trim()}>
+            {busy ? (
+              <>
+                <Spinner /> {busy}
+              </>
+            ) : account ? (
+              'Reconnect and sync'
+            ) : (
+              'Connect Google'
+            )}
+          </Button>
+          {account && (
+            <span className="text-[13px] text-good inline-flex items-center gap-1">
+              <Check size={14} /> Connected
+              {account.externalAccountId ? ` as ${account.externalAccountId}` : ''}
+            </span>
           )}
-        </Button>
-        {account && (
-          <span className="text-[13px] text-good inline-flex items-center gap-1">
-            <Check size={14} /> Connected{account.externalAccountId ? ` as ${account.externalAccountId}` : ''}
-          </span>
-        )}
-      </div>
+        </div>
+      ) : (
+        <div className="mt-4 rounded-lg bg-canvas-2 p-3 text-[13.5px]" data-testid="ob-google-unavailable">
+          <p className="font-medium">Google sign-in is not set up on this copy of Orbit.</p>
+          <p className="text-ink-2 mt-1">
+            That is fine: skip this step. You can add people by hand or import your LinkedIn connections next,
+            and approved emails open in your mail app.
+          </p>
+        </div>
+      )}
       {error && <p className="text-bad text-[13px] mt-2">{error}</p>}
-      <p className="text-[12px] text-ink-3 mt-3">
-        No client ID yet? Skip this and try the demo mailbox from Settings, or import LinkedIn next.
-      </p>
-      <Nav onBack={onBack} onNext={onNext} skip={onNext} />
+      {!builtIn && (
+        <details className="mt-4 text-[13px]">
+          <summary className="cursor-pointer text-ink-3">Advanced: use your own Google Cloud project</summary>
+          <div className="mt-2">
+            <Label
+              htmlFor="ob-client-id"
+              hint="Google Cloud, APIs and Services, Credentials, OAuth client (Web application), with this site as an authorised JavaScript origin"
+            >
+              OAuth client ID
+            </Label>
+            <div className="flex flex-wrap gap-2">
+              <Input
+                id="ob-client-id"
+                value={clientId}
+                onChange={(e) => setClientId(e.target.value)}
+                placeholder="1234567890-abc.apps.googleusercontent.com"
+                className="flex-1 min-w-0"
+              />
+              <Button onClick={connect} disabled={!!busy || !clientId.trim()}>
+                Connect Google
+              </Button>
+            </div>
+          </div>
+        </details>
+      )}
+      <Nav onBack={onBack} onNext={onNext} skip={!account} />
     </div>
   );
 }
@@ -638,8 +850,9 @@ function StepLinkedIn({ onNext, onBack }: { onNext: () => void; onBack: () => vo
   return (
     <div className="mt-4">
       <p className="text-ink-2 text-[14px]">
-        LinkedIn has no API for your connections, so Orbit uses the export LinkedIn gives you. It takes about
-        ten minutes and lands in your email.
+        Bring in everyone you are connected to on LinkedIn, so Orbit can spot alumni and people at your target
+        companies. LinkedIn sends the file by email, usually within ten minutes, so you can also skip this now
+        and upload it later from Settings.
       </p>
       <ol className="mt-3 space-y-1.5 text-[13.5px] text-ink-2 list-decimal pl-5">
         <li>
@@ -674,7 +887,7 @@ function StepLinkedIn({ onNext, onBack }: { onNext: () => void; onBack: () => vo
           <Check size={14} /> {result}
         </p>
       )}
-      <Nav onBack={onBack} onNext={onNext} skip={onNext} />
+      <Nav onBack={onBack} onNext={onNext} skip={!result} />
     </div>
   );
 }
@@ -683,40 +896,29 @@ function StepNotes({ onNext, onBack }: { onNext: () => void; onBack: () => void 
   return (
     <div className="mt-4 space-y-3 text-[14px] text-ink-2">
       <p>
-        After a chat, Orbit wants what was said so the thank-you is specific and the profile remembers. Three
-        ways in:
+        After each coffee chat, add a quick note: what you learned, what they offered, what you promised.
+        Orbit turns it into a specific thank-you and remembers it for next time. Nothing to set up now.
       </p>
       <ul className="space-y-2 list-disc pl-5">
         <li>
-          <strong className="font-medium text-ink">Granola:</strong> open the note → Share → copy, then paste
-          it into <em>Add note</em>. (Granola's email share and API arrive with the hosted version.)
+          <strong className="font-medium text-ink">Type or dictate</strong> into Add note. Your phone's or
+          computer's dictation works.
         </li>
         <li>
-          <strong className="font-medium text-ink">Voice:</strong> Wispr Flow (or any dictation) types
-          straight into the capture box. Orbit nudges you right after a chat ends.
-        </li>
-        <li>
-          <strong className="font-medium text-ink">Typed or uploaded:</strong> .txt / .md files work too.
+          <strong className="font-medium text-ink">Paste</strong> notes from an app that took them for you, or
+          upload a .txt file.
         </li>
       </ul>
       <p className="text-[13px] text-ink-3">
-        Orbit extracts advice, offers (like "happy to refer you"), hooks to mention later, and anything you
-        promised, then schedules the follow-ups.
+        Orbit picks out advice, offers (like "happy to refer you"), things to mention later and anything you
+        promised, and reminds you to follow up.
       </p>
       <Nav onBack={onBack} onNext={onNext} />
     </div>
   );
 }
 
-function StepPrefs({
-  onNext,
-  onBack,
-  toast,
-}: {
-  onNext: () => void;
-  onBack: () => void;
-  toast: (t: string) => void;
-}) {
+function StepPrefs({ onNext, onBack }: { onNext: () => void; onBack: () => void }) {
   const user = useSession().user!;
   const settings = useLiveQuery(() => db.settings.get(user.id), [user.id]);
   const [f, setF] = useState({
@@ -746,23 +948,31 @@ function StepPrefs({
       warmUpEnabled: f.warmUpEnabled,
     });
     writePrefs({ anthropicApiKey: f.apiKey.trim() || undefined });
-    toast('Preparing your first brief…');
     await onNext();
     setBusy(false);
   };
   return (
     <div className="mt-4 grid sm:grid-cols-2 gap-4">
+      <p className="sm:col-span-2 text-[13px] text-ink-2 -mt-1">
+        All of these can be changed later in Settings.
+      </p>
       <div>
-        <Label>Brief time</Label>
+        <Label htmlFor="ob-brief" hint="when today's cards are ready">
+          Daily brief time
+        </Label>
         <Input
+          id="ob-brief"
           type="time"
           value={f.briefTimeLocal}
           onChange={(e) => setF({ ...f, briefTimeLocal: e.target.value })}
         />
       </div>
       <div>
-        <Label hint="until Orbit learns from your sent mail">Tone</Label>
+        <Label htmlFor="ob-tone" hint="how your drafts sound">
+          Writing style
+        </Label>
         <Select
+          id="ob-tone"
           value={f.tonePreset}
           onChange={(e) => setF({ ...f, tonePreset: e.target.value as never })}
           className="w-full"
@@ -773,8 +983,11 @@ function StepPrefs({
         </Select>
       </div>
       <div className="sm:col-span-2">
-        <Label hint="Calendly, Cal.com, Google appointment page">Scheduling link</Label>
+        <Label htmlFor="ob-sched" optional hint="Calendly, Cal.com or a Google booking page">
+          Scheduling link
+        </Label>
         <Input
+          id="ob-sched"
           value={f.schedulingLink}
           onChange={(e) => setF({ ...f, schedulingLink: e.target.value })}
           placeholder="https://cal.com/you/20min"
@@ -788,27 +1001,34 @@ function StepPrefs({
           onChange={(e) => setF({ ...f, warmUpEnabled: e.target.checked })}
         />
         <span>
-          <strong className="font-medium">Warm up cold LinkedIn targets first.</strong>{' '}
+          <strong className="font-medium">Warm up before messaging strangers on LinkedIn.</strong>{' '}
           <span className="text-ink-2">
-            Before messaging someone you've never interacted with, Orbit schedules a few days of genuine
-            engagement with their posts (done by you, with deep links) so your message doesn't arrive cold.
+            For someone you only have on LinkedIn and have never talked to, Orbit first suggests a few small
+            steps over a few days, like reacting to one of their posts, so your name is familiar when your
+            message arrives. You do each step yourself; Orbit opens the right LinkedIn page.
           </span>
         </span>
       </label>
-      <div className="sm:col-span-2">
-        <Label hint="optional · stored only in this browser">Anthropic API key for Claude drafting</Label>
-        <Input
-          type="password"
-          value={f.apiKey}
-          onChange={(e) => setF({ ...f, apiKey: e.target.value })}
-          placeholder="sk-ant-…"
-        />
-        <p className="text-[12px] text-ink-3 mt-1">
-          Without a key, Orbit uses its built-in templates. With one, Claude ({'claude-opus-5-5'}) writes your
-          drafts, up to 50 requests a day. Reading synced email, notes and your resume with Claude stays off
-          until you turn it on in Settings.
-        </p>
-      </div>
+      <details className="sm:col-span-2 text-[13.5px]">
+        <summary className="cursor-pointer text-ink-2">Optional: let Claude write your drafts</summary>
+        <div className="mt-2">
+          <p className="text-[12.5px] text-ink-3 mb-2">
+            Orbit writes drafts on its own. If you have an Anthropic account, paste your API key and Claude
+            writes them instead, billed to your account. The key stays in this browser. Reading your email,
+            notes or resume with Claude stays off until you turn it on in Settings.
+          </p>
+          <Label htmlFor="ob-key" optional>
+            Anthropic API key
+          </Label>
+          <Input
+            id="ob-key"
+            type="password"
+            value={f.apiKey}
+            onChange={(e) => setF({ ...f, apiKey: e.target.value })}
+            placeholder="Starts with sk-ant-"
+          />
+        </div>
+      </details>
       <div className="sm:col-span-2">
         <Nav onBack={onBack} onNext={save} nextLabel={busy ? 'Finishing…' : 'Finish setup'} disabled={busy} />
       </div>

@@ -1,13 +1,16 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { RefreshCw } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
+import { AddPersonButton } from '../components/AddPerson';
 import { SuggestionCard } from '../components/SuggestionCard';
 import { db } from '../db/schema';
 import { ensureDrafts, generateBrief, revalidatePending } from '../engine/brief';
 import { todayCards, todaySummaryText } from '../engine/today';
+import { googleClientId } from '../integrations/google';
+import { useHints } from '../state/hints';
 import { useSession } from '../state/session';
-import { Avatar, Button, Card, EmptyState, relDate, Spinner, Stat } from '../ui';
+import { Avatar, Button, Card, EmptyState, FirstRunHint, relDate, Spinner, Stat, useToast } from '../ui';
 
 const PROVIDER_LABELS: Record<string, string> = {
   google: 'Google',
@@ -23,6 +26,12 @@ export function Today() {
   const { user, userId } = useSession();
   const [busy, setBusy] = useState(false);
   const [showMore, setShowMore] = useState(false);
+  const [params] = useSearchParams();
+  // a link that points at one card (a warm-up just started, a pipeline next step): show it and outline it
+  const focusCard = params.get('card') ?? undefined;
+  const focusPerson = params.get('person') ?? undefined;
+  const toast = useToast();
+  const hints = useHints();
   const now = new Date();
   // before showing the brief, retire anything that stopped being true since it was made
   useEffect(() => {
@@ -82,6 +91,22 @@ export function Today() {
     () => (userId ? db.integrations.where('userId').equals(userId).toArray() : []),
     [userId],
   );
+  const targets = useLiveQuery(
+    () => (userId ? db.targetCompanies.where('userId').equals(userId).toArray() : []),
+    [userId],
+  );
+  // a card id wins; for a person, the newest of their cards (the warm-up step just started, the thank-you just drafted)
+  const focused =
+    (suggestions ?? []).find((s) => s.id === focusCard) ??
+    (focusPerson
+      ? (suggestions ?? [])
+          .filter((s) => s.personId === focusPerson)
+          .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]
+      : undefined);
+  // the card a link points at may be one kept for later: open that list so it is on screen
+  useEffect(() => {
+    if (focused?.deferred) setShowMore(true);
+  }, [focused?.id, focused?.deferred]);
   if (!user || !suggestions || !people)
     return (
       <div className="py-20 flex justify-center">
@@ -124,9 +149,16 @@ export function Today() {
   const problems = (integrations ?? []).filter((i) => i.status === 'needs_reauth' || i.status === 'error');
   const regenerate = async () => {
     setBusy(true);
-    await generateBrief(user, 'daily');
-    setBusy(false);
+    try {
+      const b = await generateBrief(user, 'daily');
+      toast.push({
+        text: `Updated from your latest email, calendar and notes. ${b.suggestionIds.length} card${b.suggestionIds.length === 1 ? '' : 's'} in today's brief.`,
+      });
+    } finally {
+      setBusy(false);
+    }
   };
+  const googleReady = !!googleClientId();
   const hour = now.getHours();
   const greet = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
   return (
@@ -139,7 +171,9 @@ export function Today() {
           <h1 className="text-[24px] font-semibold tracking-[-0.01em] mt-0.5">
             {greet}, {user.firstName || 'there'}
           </h1>
-          <p className="text-ink-2 mt-1">{summary}</p>
+          <p className="text-ink-2 mt-1" data-testid="today-summary">
+            {summary}
+          </p>
         </div>
         <Button
           onClick={regenerate}
@@ -165,24 +199,63 @@ export function Today() {
           ))}
         </Card>
       )}
+      {cards.length > 0 && (
+        <FirstRunHint
+          id="today"
+          title="How Today works"
+          dismissed={hints.seen('today')}
+          onDismiss={hints.dismiss}
+        >
+          Each card is one thing worth doing, most urgent first, with the reason under the name. Open a draft
+          to read and edit it: nothing is sent until you approve it. Snooze a card to see it again later, or
+          dismiss it if it is wrong.
+        </FirstRunHint>
+      )}
       <div className="grid lg:grid-cols-[minmax(0,1fr)_300px] gap-6 items-start">
         <div className="space-y-3 min-w-0">
           {cards.length === 0 &&
             (visiblePeople === 0 ? (
-              <EmptyState
-                title="Orbit has nobody to work with yet"
-                body="Connect Google so Orbit can read who you email and meet, or upload your LinkedIn connections export. Your first suggestions appear here a minute later."
-                action={
-                  <div className="flex flex-wrap justify-center gap-2">
+              <div
+                className="border border-dashed border-line rounded-[var(--radius-card)] p-6"
+                data-testid="today-empty-network"
+              >
+                <p className="font-medium">Add the first people you want to talk to</p>
+                <p className="text-ink-3 mt-1 text-[13px] max-w-xl">
+                  Orbit works from the people you add: an alum at a target company, a friend's older sibling,
+                  a speaker from a club event. Add one by hand, or bring in everyone at once from your
+                  LinkedIn connections.
+                  {googleReady ? ' Connecting Google also finds the people you already email and meet.' : ''}
+                </p>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <AddPersonButton variant="primary" />
+                  <Link to="/settings/integrations">
+                    <Button>Import LinkedIn connections</Button>
+                  </Link>
+                  {googleReady && (
                     <Link to="/settings/integrations">
-                      <Button variant="primary">Connect Google</Button>
+                      <Button variant="ghost">Connect Google</Button>
                     </Link>
-                    <Link to="/settings/integrations">
-                      <Button>Upload LinkedIn connections</Button>
-                    </Link>
+                  )}
+                </div>
+                {(targets ?? []).length > 0 && (
+                  <div className="mt-5 pt-4 border-t border-line-2">
+                    <p className="text-[13px] text-ink-2">
+                      Know someone at a company on your list? Add them and Orbit helps you write the first
+                      message.
+                    </p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {(targets ?? []).slice(0, 6).map((t) => (
+                        <AddPersonButton
+                          key={t.id}
+                          label={`Someone at ${t.nameRaw}`}
+                          company={t.nameRaw}
+                          variant="ghost"
+                        />
+                      ))}
+                    </div>
                   </div>
-                }
-              />
+                )}
+              </div>
             ) : (
               <EmptyState
                 title="Nothing needs you right now"
@@ -195,14 +268,26 @@ export function Today() {
               />
             ))}
           {cards.map((s) => (
-            <SuggestionCard key={s.id} s={s} />
+            <SuggestionCard key={s.id} s={s} highlight={s.id === focused?.id} />
           ))}
           {more.length > 0 && !showMore && (
-            <Button onClick={openMore} data-testid="today-more">
-              {more.length} more suggestion{more.length === 1 ? '' : 's'}
-            </Button>
+            <div className="flex flex-wrap items-center gap-3 pt-1">
+              <Button onClick={openMore} data-testid="today-more">
+                Show {more.length} more that can wait
+              </Button>
+              <span className="text-[12px] text-ink-3">
+                Orbit puts the few most useful first, so today stays short.
+              </span>
+            </div>
           )}
-          {showMore && more.map((s) => <SuggestionCard key={s.id} s={s} />)}
+          {showMore && (
+            <>
+              <div className="text-[12px] uppercase tracking-wide text-ink-3 pt-2">Can wait</div>
+              {more.map((s) => (
+                <SuggestionCard key={s.id} s={s} highlight={s.id === focused?.id} />
+              ))}
+            </>
+          )}
         </div>
         <div className="space-y-4 min-w-0">
           <Card>

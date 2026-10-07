@@ -157,7 +157,7 @@ Header (person, company, stage stepper), timeline (touchpoints newest first: ema
 Layout top to bottom:
 
 1. **Brief header**: date, one-line summary ("3 follow-ups, 1 thank-you; 1 chat coming up this week"), counted from the cards on screen at that moment, so it includes cards raised after the brief was made and drops the ones already handled.
-2. **Suggestion cards** (5 to 7, ranked): each card = kind label, person (avatar, name, title, company), the reason (one sentence from stored signals), the draft (collapsed preview, expandable, editable inline), and actions: **Approve & send**, **Edit**, **Snooze** (tomorrow / 3 days / next week), **Dismiss** (with optional reason: "already did this", "not now", "wrong person", "bad draft"). Prep cards have **Open prep** instead of send.
+2. **Suggestion cards** (5 to 7, ranked): each card = kind label, person (avatar, name, title, company), the reason (one sentence from stored signals), the draft (collapsed preview, expandable, editable inline), and actions: **Review draft** then the approve button ("Send to <name>" when Gmail sends, "Open in mail app" or "Copy & open LinkedIn" for a hand-off), **Edit**, **Snooze** (tomorrow / 3 days / next week), **Dismiss** (with optional reason: "already did this", "not now", "wrong person", "bad draft"). Prep cards have **Open prep** instead of send.
 3. **Upcoming**: calendar events in the next 7 days matched to people, each with a "Prep" link.
 4. **Needs you**: proposed stage transitions awaiting confirmation; merge suggestions; integration problems (reauth), with exactly one recovery action each.
 5. **Progress**: this week's outreach vs target, chats completed this season, reply rate (last 30 days).

@@ -58,5 +58,9 @@ export function todaySummaryText(
       new Date(e.startAt) > now &&
       new Date(e.startAt).getTime() - now.getTime() < 7 * DAY,
   ).length;
+  const n = cards.length;
+  const coming = upcoming ? ` ${upcoming} chat${upcoming > 1 ? 's' : ''} coming up this week.` : '';
+  // a count, not a list of every kind: the cards below already say what each one is
+  if (n) return `${n} thing${n > 1 ? 's' : ''} for today, most urgent first.${coming}`;
   return briefSummaryText(counts, upcoming, peopleCount);
 }

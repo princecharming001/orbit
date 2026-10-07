@@ -186,11 +186,11 @@ export function PersonPage() {
       setBusy(false);
       if (!r.draft) {
         toast.push({
-          text: `Warm-up started for ${person.firstName}. Your first step is on Today.`,
+          text: `Warm-up started for ${person.firstName}. The first step is outlined below.`,
           tone: 'good',
           ttl: 6000,
         });
-        nav('/today');
+        nav(`/today?person=${person.id}`);
         return;
       }
       setDraftId(r.draft.id);
@@ -285,29 +285,34 @@ export function PersonPage() {
                   <Linkedin size={13} /> LinkedIn
                 </a>
               )}
-              <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+              <span
+                className="inline-flex items-center gap-1.5 whitespace-nowrap"
+                title="How well you know them, from your emails, meetings and notes"
+              >
                 Closeness <StrengthDots v={person.strength} />{' '}
-                <span className="tabular">{Math.round(person.strength * 100)}</span>
+                <span className="tabular">{Math.round(person.strength * 100)} / 100</span>
               </span>
               <span className="whitespace-nowrap">Last touch {relDate(person.lastInteractionAt)}</span>
             </div>
           </div>
         </div>
         <div className="flex flex-col items-stretch lg:items-end gap-2 w-full lg:w-auto lg:shrink-0">
-          <div className="flex flex-wrap gap-2 lg:justify-end">
-            <Select
-              value={person.relationshipType}
-              onChange={(e) => db.people.update(person.id, { relationshipType: e.target.value as never })}
-              className="h-8 text-[13px]"
-              aria-label={`How you know ${person.firstName}`}
-              title="How you know them. Orbit adjusts tone and suggestions to it."
-            >
-              {Object.entries(RELATIONSHIP_LABELS).map(([k, l]) => (
-                <option key={k} value={k}>
-                  {k === 'unknown' ? 'Relationship: not set' : l}
-                </option>
-              ))}
-            </Select>
+          <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+            <label className="inline-flex items-center gap-1.5 text-[12px] text-ink-3">
+              How you know them
+              <Select
+                value={person.relationshipType}
+                onChange={(e) => db.people.update(person.id, { relationshipType: e.target.value as never })}
+                className="h-8 text-[13px] text-ink"
+                title="Orbit adjusts the tone of drafts and its suggestions to it."
+              >
+                {Object.entries(RELATIONSHIP_LABELS).map(([k, l]) => (
+                  <option key={k} value={k}>
+                    {k === 'unknown' ? 'Not set' : l}
+                  </option>
+                ))}
+              </Select>
+            </label>
             <Button
               variant="primary"
               size="sm"
@@ -328,21 +333,24 @@ export function PersonPage() {
               Write to {person.firstName}
             </Button>
           </div>
-          <div className="flex flex-wrap gap-1 text-[12px] lg:justify-end">
+          <div className="flex flex-wrap items-center gap-1 text-[12px] lg:justify-end">
             {chat && (
-              <Select
-                value={chat.stage}
-                onChange={(e) => applyStage(chat, e.target.value as never, 'user', 'user:select')}
-                className="h-7 text-[12px]"
-                aria-label="Chat stage"
-                title="Move this chat to another stage"
-              >
-                {Object.entries(STAGE_LABELS).map(([k, v]) => (
-                  <option key={k} value={k}>
-                    {v}
-                  </option>
-                ))}
-              </Select>
+              <label className="inline-flex items-center gap-1.5 text-ink-3 mr-1">
+                Stage
+                <Select
+                  value={chat.stage}
+                  onChange={(e) => applyStage(chat, e.target.value as never, 'user', 'user:select')}
+                  className="h-8 text-[12px] text-ink"
+                  aria-label="Chat stage"
+                  title="Move this chat to another stage"
+                >
+                  {Object.entries(STAGE_LABELS).map(([k, v]) => (
+                    <option key={k} value={k}>
+                      {v}
+                    </option>
+                  ))}
+                </Select>
+              </label>
             )}
             <Button
               variant="ghost"
@@ -356,9 +364,9 @@ export function PersonPage() {
               variant="ghost"
               size="sm"
               onClick={() => nav(`/map?reach=${person.id}`)}
-              title={`Find who can introduce you to ${person.firstName}`}
+              title={`See who you know that could introduce you to ${person.firstName}`}
             >
-              Reach
+              Find an intro
             </Button>
             <Button
               variant="ghost"
@@ -369,8 +377,19 @@ export function PersonPage() {
                   : 'Hide this person from People, Today and the map'
               }
               onClick={async () => {
-                await db.people.update(person.id, {
-                  hiddenAt: person.hiddenAt ? undefined : new Date().toISOString(),
+                if (person.hiddenAt) {
+                  await db.people.update(person.id, { hiddenAt: undefined });
+                  toast.push({ text: `${person.firstName} is back in People, Today and the map.` });
+                  return;
+                }
+                await db.people.update(person.id, { hiddenAt: new Date().toISOString() });
+                toast.push({
+                  text: `Hid ${person.displayName}. Find them under Hidden in People.`,
+                  action: {
+                    label: 'Undo',
+                    onClick: () => db.people.update(person.id, { hiddenAt: undefined }),
+                  },
+                  ttl: 7000,
                 });
                 nav('/people');
               }}
@@ -420,8 +439,21 @@ export function PersonPage() {
       {composing && draft && (
         <Card className="mb-5 border-accent/40">
           <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-            <div className="font-medium">
-              {MESSAGE_KIND_LABELS[composing]} · {CHANNEL_LABELS[draft.channel]}
+            <div className="min-w-0">
+              <div className="font-medium">
+                {MESSAGE_KIND_LABELS[composing]} · {CHANNEL_LABELS[draft.channel]}
+              </div>
+              <div className="text-[12px] text-ink-3">
+                Orbit picked this kind of message from where your chat stands. Pick another and it rewrites
+                the draft.
+              </div>
+              {composing === 'outreach' && chat?.stage === 'warming' && chat.warmUp && (
+                <div className="text-[12px] text-warn mt-0.5" data-testid="compose-warmup-early">
+                  Your warm-up is {chat.warmUp.actions.filter((a) => a.doneAt).length} of{' '}
+                  {chat.warmUp.actions.length} steps done. You can write now, but the message lands better
+                  once {person.firstName} has seen your name.
+                </div>
+              )}
             </div>
             <div className="flex flex-wrap gap-1 text-[12px]" role="group" aria-label="Kind of message">
               {(
@@ -432,7 +464,7 @@ export function PersonPage() {
                   onClick={() => compose(k, { confirmed: true })}
                   aria-pressed={composing === k}
                   className={cx(
-                    'px-2 h-6 rounded-full border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+                    'px-2.5 h-8 rounded-full border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
                     composing === k ? 'border-ink bg-ink text-white' : 'border-line text-ink-2',
                   )}
                 >
@@ -510,7 +542,7 @@ export function PersonPage() {
                           </span>
                         </span>
                         <button
-                          className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 text-ink-3 hover:text-bad rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                          className="shrink-0 -my-1 p-1.5 opacity-100 md:opacity-0 md:group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 text-ink-3 hover:text-bad rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
                           title="Delete this fact (it won't come back)"
                           aria-label={`Delete fact: ${f.text}`}
                           onClick={async () => {
@@ -746,8 +778,24 @@ function AddFact({ personId, userId }: { personId: string; userId: string }) {
   const [type, setType] = useState<'hook' | 'advice' | 'offer' | 'personal' | 'role_detail' | 'background'>(
     'hook',
   );
+  const add = async () => {
+    if (!text.trim()) return;
+    await db.facts.add({
+      id: newId('f'),
+      userId,
+      personId,
+      type,
+      text: text.trim(),
+      sourceTable: 'manual',
+      sourceId: 'manual',
+      confidence: 1,
+      occurredAt: new Date().toISOString(),
+      createdAt: new Date().toISOString(),
+    });
+    setText('');
+  };
   return (
-    <div className="flex gap-2 items-center">
+    <div className="flex flex-wrap gap-2 items-center">
       <Select
         value={type}
         onChange={(e) => setType(e.target.value as never)}
@@ -763,27 +811,16 @@ function AddFact({ personId, userId }: { personId: string; userId: string }) {
       <input
         value={text}
         onChange={(e) => setText(e.target.value)}
-        placeholder="Add a fact you know, then press Enter"
+        placeholder="Something you know about them"
         aria-label="New fact"
-        className="flex-1 min-w-0 h-8 rounded-lg border border-line px-2.5 text-[13px]"
-        onKeyDown={async (e) => {
-          if (e.key === 'Enter' && text.trim()) {
-            await db.facts.add({
-              id: newId('f'),
-              userId,
-              personId,
-              type,
-              text: text.trim(),
-              sourceTable: 'manual',
-              sourceId: 'manual',
-              confidence: 1,
-              occurredAt: new Date().toISOString(),
-              createdAt: new Date().toISOString(),
-            });
-            setText('');
-          }
+        className="flex-1 min-w-[160px] h-8 rounded-lg border border-line px-2.5 text-[13px]"
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') add();
         }}
       />
+      <Button size="sm" onClick={add} disabled={!text.trim()}>
+        Add
+      </Button>
     </div>
   );
 }

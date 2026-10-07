@@ -1,5 +1,4 @@
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Mic } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { db } from '../db/schema';
@@ -108,8 +107,39 @@ export function NotesNew() {
         nav(`/notes/new?note=${n.id}`);
         return;
       }
-      toast.push({ text: 'Saved. Facts and follow-ups extracted.', tone: 'good' });
-      nav(n.personIds[0] ? `/people/${n.personIds[0]}` : '/today');
+      // say what Orbit took from the note, and where the thank-you it drafted is
+      const [facts, promises] = await Promise.all([
+        db.facts
+          .where('personId')
+          .anyOf(n.personIds)
+          .filter((f) => f.sourceId === n.id)
+          .count(),
+        db.actionItems
+          .where('userId')
+          .equals(user.id)
+          .filter((a) => a.sourceId === n.id)
+          .count(),
+      ]);
+      const thanks = n.personIds[0]
+        ? await db.suggestions
+            .where('userId')
+            .equals(user.id)
+            .filter((x) => x.status === 'pending' && x.kind === 'thank_you' && x.personId === n.personIds[0])
+            .first()
+        : undefined;
+      const found = [
+        facts ? `${facts} thing${facts === 1 ? '' : 's'} to remember` : '',
+        promises ? `${promises} promise${promises === 1 ? '' : 's'} you made` : '',
+      ].filter(Boolean);
+      toast.push({
+        text: `Saved.${found.length ? ` Orbit noted ${found.join(' and ')}.` : ''}${thanks ? ' Your thank-you draft is ready.' : ''}`,
+        tone: 'good',
+        ttl: 8000,
+        action: thanks
+          ? { label: 'Open thank-you', onClick: () => nav(`/today?card=${thanks.id}`) }
+          : undefined,
+      });
+      nav(n.personIds[0] ? `/people/${n.personIds[0]}${facts ? '?tab=facts' : ''}` : '/today');
     } finally {
       setBusy(false);
     }
@@ -126,7 +156,7 @@ export function NotesNew() {
         subtitle={
           existing
             ? existing.title
-            : 'Talk it out: what did you learn, what did they offer, what did you promise? Dictation (Wispr Flow or any) works here.'
+            : 'Right after a chat: what did you learn, what did they offer, what did you promise? Type, dictate or paste notes from another app.'
         }
       />
       <Card className="space-y-4">
@@ -146,10 +176,8 @@ export function NotesNew() {
               }
               data-testid="capture-text"
             />
-            <div className="flex items-center gap-3 mt-2 text-[12px] text-ink-3">
-              <span className="inline-flex items-center gap-1">
-                <Mic size={12} /> Dictation-friendly
-              </span>
+            <div className="flex flex-wrap items-center gap-3 mt-2 text-[12px] text-ink-3">
+              <span>Tip: your phone's or computer's dictation works in this box.</span>
               <label className="ml-auto cursor-pointer underline underline-offset-2">
                 Upload .txt / .md
                 <input
@@ -196,19 +224,25 @@ export function NotesNew() {
           </div>
         </div>
         {!existing && (
-          <div className="flex items-center gap-2 text-[13px]">
-            <span className="text-ink-3">Source</span>
+          <div
+            className="flex flex-wrap items-center gap-2 text-[13px]"
+            role="group"
+            aria-label="How you took this note"
+            title="Helps Orbit read it: dictated notes and notetaker summaries are laid out differently from typed ones"
+          >
+            <span className="text-ink-3">How you took it</span>
             {(
               [
                 ['manual', 'Typed'],
                 ['wispr_capture', 'Dictated'],
-                ['granola_email', 'Granola'],
+                ['granola_email', 'Notetaker app'],
               ] as const
             ).map(([k, l]) => (
               <button
                 key={k}
                 onClick={() => setSource(k)}
-                className={`h-7 px-2.5 rounded-full border text-[12px] ${source === k ? 'border-ink bg-ink text-white' : 'border-line text-ink-2'}`}
+                aria-pressed={source === k}
+                className={`h-8 px-3 rounded-full border text-[12px] ${source === k ? 'border-ink bg-ink text-white' : 'border-line text-ink-2'}`}
               >
                 {l}
               </button>

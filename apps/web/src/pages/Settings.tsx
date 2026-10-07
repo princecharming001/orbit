@@ -21,6 +21,7 @@ import {
   clearPrefs,
   DEFAULT_DAILY_REQUEST_CAP,
   DEFAULT_DAILY_TOKEN_CAP,
+  envGoogleClientId,
   type LlmFeature,
   llmFeatures,
   readPrefs,
@@ -50,7 +51,7 @@ const SECTIONS = [
   ['goals', 'Goals'],
   ['integrations', 'Integrations'],
   ['style', 'Writing style'],
-  ['limits', 'Sending limits'],
+  ['limits', 'Limits and schedule'],
   ['privacy', 'Data & privacy'],
 ] as const;
 
@@ -61,17 +62,20 @@ export function SettingsPage() {
     <div>
       <PageHeader title="Settings" />
       <div className="grid md:grid-cols-[200px_minmax(0,1fr)] gap-6 items-start">
-        <nav className="flex md:flex-col gap-0.5 overflow-x-auto min-w-0" aria-label="Settings sections">
+        <nav
+          className="flex flex-wrap md:flex-nowrap md:flex-col gap-1 md:gap-0.5 min-w-0"
+          aria-label="Settings sections"
+        >
           {SECTIONS.map(([k, l]) => (
             <NavLink
               key={k}
               to={`/settings/${k}`}
               className={({ isActive }) =>
                 cx(
-                  'h-9 px-3 rounded-lg flex items-center text-[14px] whitespace-nowrap',
+                  'h-9 px-3 rounded-lg flex items-center text-[14px] whitespace-nowrap border md:border-0',
                   isActive || (k === 'profile' && section === 'profile')
-                    ? 'bg-canvas-2 font-medium'
-                    : 'text-ink-2 hover:bg-canvas-2',
+                    ? 'bg-canvas-2 font-medium border-line'
+                    : 'text-ink-2 hover:bg-canvas-2 border-transparent',
                 )
               }
             >
@@ -107,6 +111,9 @@ function Profile() {
   });
   const toast = useToast();
   const nameMissing = !f.fullName.trim();
+  const [saved, setSaved] = useState(JSON.stringify(f));
+  const dirty = saved !== JSON.stringify(f);
+  const zones = timeZones(f.timezone);
   return (
     <Card className="grid sm:grid-cols-2 gap-4">
       <div className="sm:col-span-2">
@@ -157,8 +164,21 @@ function Profile() {
         <Input value={f.currentCity} onChange={(e) => setF({ ...f, currentCity: e.target.value })} />
       </div>
       <div>
-        <Label>Timezone</Label>
-        <Input value={f.timezone} onChange={(e) => setF({ ...f, timezone: e.target.value })} />
+        <Label htmlFor="profile-tz" hint="times in your messages use it">
+          Time zone
+        </Label>
+        <Select
+          id="profile-tz"
+          value={f.timezone}
+          onChange={(e) => setF({ ...f, timezone: e.target.value })}
+          className="w-full"
+        >
+          {zones.map((z) => (
+            <option key={z} value={z}>
+              {z.replace(/_/g, ' ')}
+            </option>
+          ))}
+        </Select>
       </div>
       <div className="sm:col-span-2">
         <Button
@@ -179,14 +199,29 @@ function Profile() {
               schoolDomain: f.schoolDomain || undefined,
               linkedinUrl: f.linkedinUrl || undefined,
             });
+            setSaved(JSON.stringify(f));
             toast.push({ text: 'Saved.', tone: 'good' });
           }}
         >
           Save
         </Button>
+        {dirty && <span className="ml-3 text-[12px] text-warn">Unsaved changes</span>}
       </div>
     </Card>
   );
+}
+
+/** Every time zone the browser knows, with the current one first if it is not in the list (an old "UTC"). */
+function timeZones(current: string): string[] {
+  let all: string[] = [];
+  try {
+    all =
+      (Intl as unknown as { supportedValuesOf?: (k: string) => string[] }).supportedValuesOf?.('timeZone') ??
+      [];
+  } catch {}
+  if (!all.length)
+    all = ['America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles', 'UTC'];
+  return all.includes(current) ? all : [current, ...all];
 }
 
 function Goals() {
@@ -299,47 +334,63 @@ function Goals() {
         </div>
         <ul className="divide-y divide-line text-[13.5px]">
           {tcs.map((t) => (
-            <li key={t.id} className="py-2 flex flex-wrap items-center gap-2">
-              <span className="font-medium min-w-0 flex-1 basis-32 truncate">{t.nameRaw}</span>
-              <Select
-                value={t.priority}
-                onChange={(e) =>
-                  db.targetCompanies.update(t.id, { priority: Number(e.target.value) as 1 | 2 | 3 })
-                }
-                className="h-7 text-[12px]"
-                aria-label={`Priority for ${t.nameRaw}`}
-              >
-                <option value={1}>Top priority</option>
-                <option value={2}>Normal</option>
-                <option value={3}>Low</option>
-              </Select>
-              <Select
-                value={t.status}
-                onChange={(e) =>
-                  db.targetCompanies.update(t.id, {
-                    status: e.target.value as never,
-                    statusChangedAt: new Date().toISOString(),
-                  })
-                }
-                className="h-7 text-[12px]"
-                aria-label={`Application status for ${t.nameRaw}`}
-              >
-                {Object.entries(TARGET_STATUS_LABELS).map(([k, l]) => (
-                  <option key={k} value={k}>
-                    {l}
-                  </option>
-                ))}
-              </Select>
-              <Input
-                type="date"
-                value={t.deadline ?? ''}
-                onChange={(e) => db.targetCompanies.update(t.id, { deadline: e.target.value || undefined })}
-                className="h-7 text-[12px] w-36"
-                aria-label={`Application deadline for ${t.nameRaw}`}
-              />
+            <li key={t.id} className="py-2 flex flex-wrap items-end gap-2">
+              <span className="font-medium min-w-0 flex-1 basis-32 truncate self-center">{t.nameRaw}</span>
+              <label className="flex flex-col gap-0.5 text-[11px] text-ink-3">
+                Priority
+                <Select
+                  value={t.priority}
+                  onChange={(e) =>
+                    db.targetCompanies.update(t.id, { priority: Number(e.target.value) as 1 | 2 | 3 })
+                  }
+                  className="h-8 text-[12px] text-ink"
+                  aria-label={`Priority for ${t.nameRaw}`}
+                >
+                  <option value={1}>Top priority</option>
+                  <option value={2}>Normal</option>
+                  <option value={3}>Low</option>
+                </Select>
+              </label>
+              <label className="flex flex-col gap-0.5 text-[11px] text-ink-3">
+                Application
+                <Select
+                  value={t.status}
+                  onChange={(e) =>
+                    db.targetCompanies.update(t.id, {
+                      status: e.target.value as never,
+                      statusChangedAt: new Date().toISOString(),
+                    })
+                  }
+                  className="h-8 text-[12px] text-ink"
+                  aria-label={`Application status for ${t.nameRaw}`}
+                >
+                  {Object.entries(TARGET_STATUS_LABELS).map(([k, l]) => (
+                    <option key={k} value={k}>
+                      {l}
+                    </option>
+                  ))}
+                </Select>
+              </label>
+              <label className="flex flex-col gap-0.5 text-[11px] text-ink-3">
+                Deadline
+                <Input
+                  type="date"
+                  value={t.deadline ?? ''}
+                  onChange={(e) => db.targetCompanies.update(t.id, { deadline: e.target.value || undefined })}
+                  className="h-8 text-[12px] w-36 text-ink"
+                  aria-label={`Application deadline for ${t.nameRaw}`}
+                />
+              </label>
               <button
-                className="text-ink-3 hover:text-bad p-1 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-                onClick={() => db.targetCompanies.delete(t.id)}
+                className="text-ink-3 hover:text-bad p-2 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                onClick={async () => {
+                  await db.targetCompanies.delete(t.id);
+                  toast.push({
+                    text: `Removed ${t.nameRaw} from your targets.`,
+                    action: { label: 'Undo', onClick: () => db.targetCompanies.put(t) },
+                    ttl: 7000,
+                  });
+                }}
                 aria-label={`Remove ${t.nameRaw}`}
                 title={`Remove ${t.nameRaw} from your targets`}
               >
@@ -363,6 +414,7 @@ function Integrations() {
   const [clientId, setClientId] = useState(googleClientId() ?? '');
   const [busy, setBusy] = useState<string>();
   const token = currentGoogleToken();
+  const builtIn = !!envGoogleClientId();
   const connect = async () => {
     try {
       writePrefs({ googleClientId: clientId.trim() || undefined });
@@ -399,67 +451,91 @@ function Integrations() {
   return (
     <div className="space-y-4">
       <Card>
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <div className="font-medium">Google (Gmail + Calendar)</div>
-            <p className="text-[13px] text-ink-2 mt-0.5">
-              Reads threads with people and your calendar; sends only what you approve. Browser-only token,
-              re-consent about every hour of use.
-            </p>
+        <div className="font-medium">Google (Gmail and Calendar)</div>
+        <p className="text-[13px] text-ink-2 mt-0.5">
+          Finds the people you already email and meet, notices replies, and sends the emails you approve.
+          Google asks you to sign in again after about an hour; Orbit reminds you when it needs that.
+        </p>
+        {google && (
+          <p className="text-[12px] mt-1 inline-flex flex-wrap items-center gap-1 text-good">
+            <Check size={13} /> Connected
+            {google.externalAccountId ? ` as ${google.externalAccountId}` : ''} · last sync{' '}
+            {google.lastSyncedAt ? relDate(google.lastSyncedAt) : 'never'}
+            {!token && <span className="text-ink-3"> · signed out, reconnect to sync</span>}
+          </p>
+        )}
+        {!builtIn && !google && (
+          <p className="text-[13px] mt-2 rounded-lg bg-canvas-2 p-3" data-testid="google-unavailable">
+            Google sign-in is not set up on this copy of Orbit. You can still add people by hand and import
+            LinkedIn, and approved emails open in your mail app.
+          </p>
+        )}
+        {(builtIn || google) && (
+          <div className="mt-3 flex gap-2 flex-wrap">
+            <Button variant="primary" onClick={connect} disabled={!!busy || !clientId.trim()}>
+              {busy ? (
+                <>
+                  <Spinner /> {busy}
+                </>
+              ) : google ? (
+                'Reconnect and sync now'
+              ) : (
+                'Connect Google'
+              )}
+            </Button>
             {google && (
-              <p className="text-[12px] mt-1 inline-flex items-center gap-1 text-good">
-                <Check size={13} /> Connected
-                {google.externalAccountId ? ` as ${google.externalAccountId}` : ''} · last sync{' '}
-                {google.lastSyncedAt ? new Date(google.lastSyncedAt).toLocaleString() : 'never'}
-                {!token && ' · session expired'}
-              </p>
+              <Button
+                variant="ghost"
+                onClick={async () => {
+                  disconnectGoogle();
+                  await db.integrations.delete(google.id);
+                  toast.push({ text: 'Disconnected. Imported mail stays until you delete your data.' });
+                }}
+              >
+                Disconnect
+              </Button>
             )}
           </div>
-        </div>
-        <div className="mt-3">
-          <Label hint="Google Cloud → APIs & Services → Credentials → OAuth client (Web). Authorised JavaScript origin: this site's origin.">
-            OAuth client ID
-          </Label>
-          <Input
-            value={clientId}
-            onChange={(e) => setClientId(e.target.value)}
-            placeholder="…apps.googleusercontent.com"
-          />
-        </div>
-        <div className="mt-3 flex gap-2 flex-wrap">
-          <Button variant="primary" onClick={connect} disabled={!!busy || !clientId.trim()}>
-            {busy ? (
-              <>
-                <Spinner /> {busy}
-              </>
-            ) : google ? (
-              'Reconnect & sync now'
-            ) : (
-              'Connect Google'
-            )}
-          </Button>
-          {google && (
-            <Button
-              variant="ghost"
-              onClick={async () => {
-                disconnectGoogle();
-                await db.integrations.delete(google.id);
-                toast.push({ text: 'Disconnected. Imported mail stays until you wipe data.' });
-              }}
-            >
-              Disconnect
-            </Button>
-          )}
-        </div>
+        )}
+        {!builtIn && (
+          <details className="mt-3 text-[13px]">
+            <summary className="cursor-pointer text-ink-3">
+              Advanced: use your own Google Cloud project
+            </summary>
+            <div className="mt-2">
+              <Label
+                htmlFor="settings-client-id"
+                hint="Google Cloud, APIs and Services, Credentials, OAuth client (Web), with this site as an authorised JavaScript origin"
+              >
+                OAuth client ID
+              </Label>
+              <div className="flex flex-wrap gap-2">
+                <Input
+                  id="settings-client-id"
+                  value={clientId}
+                  onChange={(e) => setClientId(e.target.value)}
+                  placeholder="…apps.googleusercontent.com"
+                  className="flex-1 min-w-0"
+                />
+                {!google && (
+                  <Button onClick={connect} disabled={!!busy || !clientId.trim()}>
+                    Connect Google
+                  </Button>
+                )}
+              </div>
+            </div>
+          </details>
+        )}
       </Card>
       <Card>
         <div className="font-medium">LinkedIn export</div>
         <p className="text-[13px] text-ink-2 mt-0.5">
-          Upload Connections.csv from LinkedIn's "Get a copy of your data". Re-uploading is safe; existing
-          people are updated.
+          Brings in everyone you are connected to. On LinkedIn: Me, Settings and Privacy, Data privacy, Get a
+          copy of your data, then Connections. LinkedIn emails you a file; upload Connections.csv from it
+          here. Uploading again later is safe: people already in Orbit are updated, not doubled.
         </p>
         {li && (
-          <p className="text-[12px] mt-1 text-good inline-flex items-center gap-1">
+          <p className="text-[12px] mt-1 text-good flex items-center gap-1">
             <Check size={13} /> {String((li.syncState as { rows?: number }).rows ?? 0)} connections ·{' '}
             {li.lastSyncedAt ? `imported ${relDate(li.lastSyncedAt)}` : ''}
           </p>
@@ -497,7 +573,8 @@ function Integrations() {
       <Card>
         <div className="font-medium">Resume</div>
         <p className="text-[13px] text-ink-2 mt-0.5">
-          Replace your resume any time; facets are re-extracted.
+          Upload a newer resume any time. Orbit reads it again for what you have done, to find people with a
+          shared background and to describe you in first messages.
         </p>
         <label className="mt-3 inline-flex">
           <input
@@ -522,17 +599,13 @@ function Integrations() {
         <div className="font-medium">Meeting notes</div>
         <ul className="text-[13px] text-ink-2 mt-1 space-y-1 list-disc pl-5">
           <li>
-            <strong className="font-medium text-ink">Granola:</strong> copy the note and paste it into Add
-            note; Orbit recognises the Summary/Transcript layout. Granola's API, webhooks and email share
-            connect when Orbit has a server.
+            <strong className="font-medium text-ink">Type or dictate</strong> in Add note after a chat. Your
+            phone's or computer's dictation works in any Orbit text box.
           </li>
           <li>
-            <strong className="font-medium text-ink">Wispr Flow:</strong> dictate into any Orbit text box.
-            Wispr has no dictation API; the capture box is the integration.
-          </li>
-          <li>
-            <strong className="font-medium text-ink">Fathom / Otter / Fireflies:</strong> export the
-            transcript as text and upload it from Add note.
+            <strong className="font-medium text-ink">Notes from a notetaker app</strong> (Granola, Otter,
+            Fathom and similar): copy the note or export the transcript as text, then paste or upload it in
+            Add note.
           </li>
         </ul>
       </Card>
@@ -575,7 +648,7 @@ const AI_FEATURES: { key: LlmFeature; label: string; sends: string }[] = [
     key: 'emailTriage',
     label: 'Read synced email',
     sends:
-      'Email bodies are sent to Anthropic for triage: threads Orbit cannot classify with confidence, and each new message in a networking thread. Off by default.',
+      'The text of emails is sent to Anthropic to sort them: threads Orbit cannot place on its own, and each new message in a conversation with someone you are networking with. Off by default.',
   },
   {
     key: 'notes',
@@ -607,13 +680,8 @@ function ClaudeCard() {
     <Card>
       <div className="font-medium">Claude (optional)</div>
       <p className="text-[13px] text-ink-2 mt-0.5">
-        Paste your own Anthropic API key and choose what Claude may do. Without a key, Orbit's templates and
-        rules do the work. Model: {MODEL}. Calls are billed to your Anthropic account.
-      </p>
-      <p className="text-[12px] text-ink-3 mt-1">
-        The key is kept in this browser only, separate from your Orbit data and never in the export. Any
-        script running on this page could read it, so Orbit only allows its own code and Google's sign-in
-        script to run here.
+        Orbit writes drafts on its own. If you have an Anthropic account, add your API key and Claude can
+        write them instead, billed to your account. You choose what Claude may read.
       </p>
       <div className="mt-3 flex gap-2">
         <Input
@@ -625,6 +693,7 @@ function ClaudeCard() {
           aria-label="Anthropic API key"
         />
         <Button
+          disabled={!apiKey.trim() && !keySaved}
           onClick={async () => {
             update({ anthropicApiKey: apiKey.trim() || undefined });
             if (!apiKey.trim()) return setKeyStatus('Removed.');
@@ -634,7 +703,7 @@ function ClaudeCard() {
             setKeyStatus(r.ok ? 'Works.' : r.error);
           }}
         >
-          Save & test
+          {apiKey.trim() || !keySaved ? 'Save and test' : 'Remove key'}
         </Button>
       </div>
       {keyStatus && (
@@ -670,37 +739,51 @@ function ClaudeCard() {
           </label>
         ))}
       </fieldset>
-      <div className="mt-4 grid sm:grid-cols-2 gap-3 max-w-lg">
-        <div>
-          <Label hint="Orbit stops calling Claude for the day after this">Requests per day</Label>
-          <Input
-            type="number"
-            min={0}
-            value={reqCap}
-            data-testid="ai-cap-requests"
-            onChange={(e) =>
-              update({ llmDailyRequestCap: Math.max(0, Math.floor(Number(e.target.value) || 0)) })
-            }
-          />
+      <details className="mt-4 text-[13px]" data-testid="ai-advanced">
+        <summary className="cursor-pointer text-ink-3">Advanced: daily limits, usage and privacy</summary>
+        <p className="text-[12px] text-ink-3 mt-2">
+          Model: {MODEL}. The key is kept in this browser only, separate from your Orbit data and never in the
+          export. Any script running on this page could read it, so Orbit only allows its own code and
+          Google's sign-in script to run here.
+        </p>
+        <div className="mt-3 grid sm:grid-cols-2 gap-3 max-w-lg items-start">
+          <div>
+            <Label htmlFor="ai-req">Requests per day</Label>
+            <Input
+              id="ai-req"
+              type="number"
+              min={0}
+              value={reqCap}
+              data-testid="ai-cap-requests"
+              onChange={(e) =>
+                update({ llmDailyRequestCap: Math.max(0, Math.floor(Number(e.target.value) || 0)) })
+              }
+            />
+          </div>
+          <div>
+            <Label htmlFor="ai-tok">Tokens per day</Label>
+            <Input
+              id="ai-tok"
+              type="number"
+              min={0}
+              step={10000}
+              value={tokCap}
+              onChange={(e) =>
+                update({ llmDailyTokenCap: Math.max(0, Math.floor(Number(e.target.value) || 0)) })
+              }
+            />
+          </div>
         </div>
-        <div>
-          <Label hint="input plus output">Tokens per day</Label>
-          <Input
-            type="number"
-            min={0}
-            step={10000}
-            value={tokCap}
-            onChange={(e) =>
-              update({ llmDailyTokenCap: Math.max(0, Math.floor(Number(e.target.value) || 0)) })
-            }
-          />
-        </div>
-      </div>
-      <p className="text-[12px] text-ink-3 mt-2" data-testid="ai-usage-today">
-        Today: {usage.requests} of {reqCap} requests,{' '}
-        {(usage.inputTokens + usage.outputTokens).toLocaleString('en-US')} of {tokCap.toLocaleString('en-US')}{' '}
-        tokens.
-      </p>
+        <p className="text-[12px] text-ink-3 mt-2">
+          Orbit stops calling Claude for the rest of the day at either limit and uses its own drafts instead.
+          A token is roughly three quarters of a word, counting what is sent and what comes back.
+        </p>
+        <p className="text-[12px] text-ink-3 mt-2" data-testid="ai-usage-today">
+          Today: {usage.requests} of {reqCap} requests,{' '}
+          {(usage.inputTokens + usage.outputTokens).toLocaleString('en-US')} of{' '}
+          {tokCap.toLocaleString('en-US')} tokens.
+        </p>
+      </details>
       {prefs.lastLlmError && (
         <p className="text-[12px] text-bad mt-1" data-testid="ai-last-error">
           Last problem, {fmtFailureTime(prefs.lastLlmError.at, tz)}: {prefs.lastLlmError.message} Orbit used
@@ -711,49 +794,57 @@ function ClaudeCard() {
   );
 }
 
+const FORMALITY_WORDS = (f: number) =>
+  f >= 0.75 ? 'Formal' : f >= 0.5 ? 'Polite and fairly formal' : f >= 0.3 ? 'Friendly and polite' : 'Casual';
+
 function Style() {
   const user = useSession().user!;
   const settings = useLiveQuery(() => db.settings.get(user.id), [user.id]);
   const style = useLiveQuery(() => db.styles.get(user.id), [user.id]);
   const toast = useToast();
   const card = style?.card ?? defaultStyleCard(settings?.tonePreset ?? 'warm', user.firstName);
+  const learned = card.builtFromCount > 0;
+  const example = (g: string) => g.replace(/\{first\}/g, 'Sarah');
   return (
     <div className="space-y-4">
       <Card>
-        <div className="flex items-center justify-between">
-          <div className="font-medium">Your style card</div>
-          <span className="text-[12px] text-ink-3">
-            {card.builtFromCount
-              ? `Learned from ${card.builtFromCount} sent emails`
-              : `Preset: ${settings?.tonePreset}`}
-          </span>
-        </div>
-        <dl className="grid sm:grid-cols-2 gap-x-6 gap-y-2 text-[13.5px] mt-3">
+        <div className="font-medium">How your drafts sound</div>
+        <p className="text-[13px] text-ink-2 mt-0.5">
+          {learned
+            ? `Learned from ${card.builtFromCount} emails you sent.`
+            : 'Set by the style you pick below. With Google connected, Orbit can learn it from emails you sent instead.'}
+        </p>
+        <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-6 gap-y-2 text-[13.5px] mt-3">
           <dt className="text-ink-3">Greeting</dt>
-          <dd className="whitespace-pre-line">{card.greetingPatterns.join(' / ')}</dd>
+          <dd>{card.greetingPatterns.map(example).join(' or ')}</dd>
           <dt className="text-ink-3">Sign-off</dt>
-          <dd className="whitespace-pre-line">{card.signoffs[0]}</dd>
-          <dt className="text-ink-3">Formality</dt>
-          <dd>{Math.round(card.formality * 100)} / 100</dd>
-          <dt className="text-ink-3">Sentences</dt>
-          <dd>
-            ~{card.avgSentenceWords} words · messages ~{card.avgMessageWords} words
+          <dd className="whitespace-pre-line">
+            {learned
+              ? card.signoffs[0]
+              : settings?.tonePreset === 'formal'
+                ? `"Kind regards, ${user.firstName}" for most emails. "Best regards" and your full name for finance, consulting and recruiters.`
+                : `"Thanks, ${user.firstName}" for most messages. "Best" and your full name for finance and consulting emails, "Best regards" for recruiters.`}
           </dd>
-          <dt className="text-ink-3">Contractions</dt>
+          <dt className="text-ink-3">Tone</dt>
           <dd>
-            {card.contractions ? 'yes' : 'no'} · exclamations {card.exclamationsPerMessage.toFixed(1)} per
-            message · emoji {card.emoji ? 'yes' : 'no'}
+            {FORMALITY_WORDS(card.formality)}, {card.contractions ? 'with' : 'without'} contractions like
+            "I'm"{card.emoji ? ', emoji allowed' : ''}
           </dd>
+          <dt className="text-ink-3">Length</dt>
+          <dd>Short sentences, about {card.avgMessageWords} words a message at most</dd>
         </dl>
-        <div className="mt-4 flex gap-2 items-center">
-          <Select
-            value={settings?.tonePreset ?? 'warm'}
-            onChange={(e) => db.settings.update(user.id, { tonePreset: e.target.value as never })}
-          >
-            <option value="warm">Warm</option>
-            <option value="direct">Direct</option>
-            <option value="formal">Formal</option>
-          </Select>
+        <div className="mt-4 flex flex-wrap gap-2 items-center">
+          <label className="inline-flex items-center gap-2 text-[13px] text-ink-2">
+            Style
+            <Select
+              value={settings?.tonePreset ?? 'warm'}
+              onChange={(e) => db.settings.update(user.id, { tonePreset: e.target.value as never })}
+            >
+              <option value="warm">Warm</option>
+              <option value="direct">Direct</option>
+              <option value="formal">Formal</option>
+            </Select>
+          </label>
           <Button
             onClick={async () => {
               const sent = await db.messages
@@ -763,7 +854,7 @@ function Style() {
                 .toArray();
               if (sent.length < 5)
                 return toast.push({
-                  text: 'Need at least 5 sent emails to learn from. Connect Google first.',
+                  text: 'Orbit needs at least 5 emails you sent to learn from. Connect Google first.',
                 });
               await db.styles.put({
                 userId: user.id,
@@ -774,14 +865,14 @@ function Style() {
                 ),
                 updatedAt: new Date().toISOString(),
               });
-              toast.push({ text: 'Rebuilt from your sent mail.', tone: 'good' });
+              toast.push({ text: 'Learned from your sent mail.', tone: 'good' });
             }}
           >
-            Rebuild from sent mail
+            Learn from my sent mail
           </Button>
           {style && (
             <Button variant="ghost" onClick={() => db.styles.delete(user.id)}>
-              Use preset instead
+              Use the picked style instead
             </Button>
           )}
         </div>
@@ -793,108 +884,136 @@ function Style() {
 function Limits() {
   const user = useSession().user!;
   const settings = useLiveQuery(() => db.settings.get(user.id), [user.id]);
-  const toast = useToast();
+  const [savedAt, setSavedAt] = useState<number>();
   if (!settings) return null;
-  const upd = (p: Partial<typeof settings>) => db.settings.update(user.id, p);
+  const upd = async (p: Partial<typeof settings>) => {
+    await db.settings.update(user.id, p);
+    setSavedAt(Date.now());
+  };
   return (
-    <Card className="grid sm:grid-cols-2 gap-4">
-      <div>
-        <Label>First messages per week</Label>
-        <Input
-          type="number"
-          min={0}
-          max={30}
-          value={settings.weeklyOutreachTarget}
-          onChange={(e) => upd({ weeklyOutreachTarget: Number(e.target.value) })}
-        />
-      </div>
-      <div>
-        <Label>Brief time</Label>
-        <Input
-          type="time"
-          value={settings.briefTimeLocal}
-          onChange={(e) => upd({ briefTimeLocal: e.target.value })}
-        />
-      </div>
-      <div>
-        <Label>Daily cap · Gmail</Label>
-        <Input
-          type="number"
-          min={1}
-          max={50}
-          value={settings.dailySendCapGmail}
-          onChange={(e) => upd({ dailySendCapGmail: Number(e.target.value) })}
-        />
-      </div>
-      <div>
-        <Label>Daily cap · LinkedIn</Label>
-        <Input
-          type="number"
-          min={1}
-          max={30}
-          value={settings.dailySendCapLinkedin}
-          onChange={(e) => upd({ dailySendCapLinkedin: Number(e.target.value) })}
-        />
-      </div>
-      <div>
-        <Label>Hours between messages to the same person</Label>
-        <Input
-          type="number"
-          min={0}
-          value={settings.perPersonCooldownHours}
-          onChange={(e) => upd({ perPersonCooldownHours: Number(e.target.value) })}
-        />
-      </div>
-      <div>
-        <Label>Max follow-ups per thread</Label>
-        <Input
-          type="number"
-          min={0}
-          max={2}
-          value={settings.maxBumps}
-          onChange={(e) => upd({ maxBumps: Math.max(0, Math.min(2, Number(e.target.value))) })}
-        />
-        <p className="text-[12px] text-ink-3 mt-1">
-          One bump for most people; a second, graceful last word only in finance and consulting.
-        </p>
-      </div>
-      <div className="sm:col-span-2 border-t border-line pt-4">
-        <label className="flex items-start gap-2 text-[13.5px]">
-          <input
-            type="checkbox"
-            className="mt-1"
-            checked={settings.warmUpEnabled}
-            onChange={(e) => upd({ warmUpEnabled: e.target.checked })}
-          />
-          <span>
-            <strong className="font-medium">LinkedIn warm-up before a first message to a stranger.</strong>{' '}
-            <span className="text-ink-2">
-              A few days of viewing, reacting and one real comment, done by you via deep links. Orbit never
-              automates LinkedIn.
-            </span>
-          </span>
-        </label>
-        <div className="mt-3 max-w-xs">
-          <Label>Warm-up length (days)</Label>
+    <div className="space-y-4">
+      <p className="text-[13px] text-ink-3" aria-live="polite">
+        Changes here save as you make them.
+        {savedAt ? <span className="text-good"> Saved.</span> : null}
+      </p>
+      <Card className="grid sm:grid-cols-2 gap-4 items-start">
+        <div className="sm:col-span-2 font-medium -mb-1">Sending limits</div>
+        <div>
+          <Label htmlFor="lim-week">First messages per week</Label>
           <Input
+            id="lim-week"
             type="number"
-            min={2}
-            max={10}
-            value={settings.warmUpDays}
-            onChange={(e) => upd({ warmUpDays: Number(e.target.value) })}
+            min={0}
+            max={30}
+            value={settings.weeklyOutreachTarget}
+            onChange={(e) => upd({ weeklyOutreachTarget: Number(e.target.value) })}
+          />
+          <p className="text-[12px] text-ink-3 mt-1">Your goal for new people each week, shown on Today.</p>
+        </div>
+        <div>
+          <Label htmlFor="lim-cool">Hours between messages to the same person</Label>
+          <Input
+            id="lim-cool"
+            type="number"
+            min={0}
+            value={settings.perPersonCooldownHours}
+            onChange={(e) => upd({ perPersonCooldownHours: Number(e.target.value) })}
           />
         </div>
-      </div>
-      <div className="sm:col-span-2">
-        <Label>Scheduling link</Label>
-        <Input
-          value={settings.schedulingLink ?? ''}
-          onChange={(e) => upd({ schedulingLink: e.target.value || undefined })}
-          placeholder="https://cal.com/you/20min"
-          onBlur={() => toast.push({ text: 'Saved.' })}
-        />
-      </div>
-    </Card>
+        <div>
+          <Label htmlFor="lim-gmail">Emails per day, at most</Label>
+          <Input
+            id="lim-gmail"
+            type="number"
+            min={1}
+            max={50}
+            value={settings.dailySendCapGmail}
+            onChange={(e) => upd({ dailySendCapGmail: Number(e.target.value) })}
+          />
+        </div>
+        <div>
+          <Label htmlFor="lim-li">LinkedIn messages per day, at most</Label>
+          <Input
+            id="lim-li"
+            type="number"
+            min={1}
+            max={30}
+            value={settings.dailySendCapLinkedin}
+            onChange={(e) => upd({ dailySendCapLinkedin: Number(e.target.value) })}
+          />
+        </div>
+        <div className="sm:col-span-2">
+          <Label htmlFor="lim-bumps">Follow-ups when someone has not replied</Label>
+          <Input
+            id="lim-bumps"
+            type="number"
+            min={0}
+            max={2}
+            value={settings.maxBumps}
+            onChange={(e) => upd({ maxBumps: Math.max(0, Math.min(2, Number(e.target.value))) })}
+            className="max-w-[120px]"
+          />
+          <p className="text-[12px] text-ink-3 mt-1">
+            1 suits most people. With 2, Orbit may suggest a short, polite last note, which is normal in
+            finance and consulting.
+          </p>
+        </div>
+        <div className="sm:col-span-2 border-t border-line pt-4">
+          <label className="flex items-start gap-2 text-[13.5px]">
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={settings.warmUpEnabled}
+              onChange={(e) => upd({ warmUpEnabled: e.target.checked })}
+            />
+            <span>
+              <strong className="font-medium">Warm up before messaging strangers on LinkedIn.</strong>{' '}
+              <span className="text-ink-2">
+                A few small steps over a few days, like viewing their profile and reacting to a post. You do
+                each one yourself; Orbit opens the right page and never acts on LinkedIn for you.
+              </span>
+            </span>
+          </label>
+          <div className="mt-3 max-w-xs">
+            <Label htmlFor="lim-wdays">Warm-up length in days</Label>
+            <Input
+              id="lim-wdays"
+              type="number"
+              min={2}
+              max={10}
+              value={settings.warmUpDays}
+              onChange={(e) => upd({ warmUpDays: Number(e.target.value) })}
+            />
+          </div>
+        </div>
+      </Card>
+      <Card className="grid sm:grid-cols-2 gap-4 items-start">
+        <div className="sm:col-span-2 font-medium -mb-1">Your schedule</div>
+        <div>
+          <Label htmlFor="lim-brief" hint="when today's cards are ready">
+            Daily brief time
+          </Label>
+          <Input
+            id="lim-brief"
+            type="time"
+            value={settings.briefTimeLocal}
+            onChange={(e) => upd({ briefTimeLocal: e.target.value })}
+          />
+        </div>
+        <div className="sm:col-span-2">
+          <Label htmlFor="lim-sched" optional hint="Calendly, Cal.com or a Google booking page">
+            Scheduling link
+          </Label>
+          <Input
+            id="lim-sched"
+            value={settings.schedulingLink ?? ''}
+            onChange={(e) => upd({ schedulingLink: e.target.value || undefined })}
+            placeholder="https://cal.com/you/20min"
+          />
+          <p className="text-[12px] text-ink-3 mt-1">Orbit adds it when you propose times for a chat.</p>
+        </div>
+      </Card>
+    </div>
   );
 }
 

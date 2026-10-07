@@ -1047,3 +1047,13 @@ export async function snoozeSuggestion(userId: string, s: Suggestion, days: numb
   });
   await feedback(userId, 'snooze', { suggestionId: s.id, reason: `${days}d` });
 }
+
+/**
+ * Put a snoozed or dismissed card back as it was (the Undo on the toast). A dismissed card's draft comes back as a
+ * draft; a message already handed off or queued stays cancelled, since Orbit cannot know what happened to it.
+ */
+export async function restoreSuggestion(s: Suggestion, draftWas?: OutboundStatus): Promise<void> {
+  await db.suggestions.update(s.id, { status: 'pending', snoozedUntil: undefined, decidedAt: undefined });
+  if (s.outboundMessageId && draftWas && ['draft', 'failed'].includes(draftWas))
+    await transition(s.outboundMessageId, ['cancelled'], { status: draftWas });
+}

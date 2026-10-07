@@ -257,6 +257,24 @@ describe('outreach', () => {
     expect(r.d.body).toMatch(/rolling basis|deadline/);
     expect(r.d.needsInput).toEqual([]);
   });
+  it('a recruiter message on LinkedIn signs off once, not "Thank you for your time." and then "Thanks"', () => {
+    const r = generateDraft(
+      base({
+        channel: 'linkedin',
+        person: {
+          firstName: 'Felix',
+          fullName: 'Felix Sato',
+          title: 'Campus Recruiter',
+          org: 'Ramp',
+          isAlumni: false,
+          relationshipType: 'recruiter',
+          strength: 0,
+        },
+      }),
+    );
+    expect(r.body).toMatch(/Thanks,\s+\w+\s*$/);
+    expect(r.body).not.toMatch(/Thank you for your time/);
+  });
   it('transition and referral openers name the fact', () => {
     const t = check(
       base({
@@ -1598,5 +1616,16 @@ describe('financeFirmKind', () => {
     expect(financeFirmKind('Citi')).toBe('bank');
     expect(financeFirmKind('Ramp')).toBeUndefined();
     expect(financeFirmKind(undefined)).toBeUndefined();
+  });
+});
+
+describe('wordsIn', () => {
+  it('counts a one-paragraph LinkedIn note, leaving out only the greeting', () => {
+    expect(
+      wordsIn(
+        'Hi Noah, I read your post on onboarding and liked the point about shipping early. Open to a short chat?',
+      ),
+    ).toBe(18);
+    expect(wordsIn('Hi Noah,\n\nOne line here.\n\nThanks,\nAlex')).toBe(3);
   });
 });

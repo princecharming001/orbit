@@ -29,7 +29,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       { kind: 'action', id: 'today', label: 'Go to Today', to: '/today' },
       { kind: 'action', id: 'note', label: 'Add a note', to: '/notes/new' },
       { kind: 'action', id: 'map', label: 'Open the map', to: '/map' },
-      { kind: 'action', id: 'reach', label: 'Find a path to someone (Reach)', to: '/map?reach=1' },
+      { kind: 'action', id: 'reach', label: 'Find someone who can introduce you', to: '/map?reach=1' },
       { kind: 'action', id: 'discover', label: 'Discover people to meet', to: '/discover' },
       { kind: 'action', id: 'settings', label: 'Settings', to: '/settings' },
     ].filter((a) => !s || a.label.toLowerCase().includes(s));
