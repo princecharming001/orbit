@@ -208,6 +208,103 @@ describe('ingest: email understanding', () => {
     expect(await db.suggestions.filter((s) => s.kind === 'schedule_propose').count()).toBe(0);
   });
 
+  it('retires the "confirm it" card once a calendar invitation for that time arrives', async () => {
+    const reply = raw({
+      from: 'Rae Kim <rae@figma.com>',
+      to: [ALEX],
+      bodyText: 'Happy to chat. How about Thursday at 2pm?\n\nRae',
+      sentAt: '2026-10-05T15:00:00Z',
+    });
+    await ingestEmails(
+      user,
+      [raw({ from: ALEX, to: ['rae@figma.com'], bodyText: OUTREACH, sentAt: '2026-10-01T15:00:00Z' }), reply],
+      { useLlm: false, now: NOW },
+    );
+    const confirm = () => db.suggestions.filter((s) => s.kind === 'schedule_confirm').toArray();
+    expect((await confirm()).map((s) => s.status)).toEqual(['pending']);
+    await ingestEmails(
+      user,
+      [
+        raw({
+          from: 'Rae Kim <rae@figma.com>',
+          to: [ALEX],
+          subject: 'Invitation: Coffee chat @ Thu Oct 8, 2pm - 2:30pm (PDT)',
+          headers: { sender: 'Google Calendar <calendar-notification@google.com>' },
+          bodyText:
+            'You have been invited to the following event.\n\nJoin with Google Meet\nInvitation from Google Calendar',
+          sentAt: '2026-10-05T15:30:00Z',
+        }),
+      ],
+      { useLlm: false, now: NOW },
+    );
+    expect((await confirm()).map((s) => s.status)).toEqual(['expired']);
+    expect(
+      await db.suggestions.filter((s) => s.status === 'pending' && s.kind.startsWith('schedule')).count(),
+    ).toBe(0);
+  });
+
+  it('a warm "best of luck" reply on a nurturing chat proposes no decline', async () => {
+    await ingestEmails(
+      user,
+      [raw({ from: ALEX, to: ['priya@figma.com'], bodyText: OUTREACH, sentAt: '2026-09-01T15:00:00Z' })],
+      { useLlm: false, now: NOW },
+    );
+    const { chat } = await chatFor('priya@figma.com');
+    await db.chats.update(chat!.id, { stage: 'nurturing' });
+    await ingestEmails(
+      user,
+      [
+        raw({
+          from: ALEX,
+          to: ['priya@figma.com'],
+          bodyText:
+            'Hi Priya,\n\nQuick update: I accepted the Figma internship offer for this summer.\n\nBest,\nAlex',
+          sentAt: '2026-10-03T15:00:00Z',
+        }),
+        raw({
+          from: 'Priya Sharma <priya@figma.com>',
+          to: [ALEX],
+          bodyText: 'Congrats Alex, that is awesome news! Best of luck this summer.\n\nPriya',
+          sentAt: '2026-10-04T15:00:00Z',
+        }),
+      ],
+      { useLlm: false, now: NOW },
+    );
+    expect((await db.chats.get(chat!.id))?.stage).toBe('nurturing');
+    expect(await db.stageEvents.filter((e) => e.toStage === 'declined').count()).toBe(0);
+  });
+
+  it('an intro hands off: no propose-times card for the introducer, an outreach card for the person introduced', async () => {
+    await ingestEmails(
+      user,
+      [
+        raw({
+          from: ALEX,
+          to: ['Dana Ortiz <dana@figma.com>'],
+          bodyText: OUTREACH,
+          sentAt: '2026-10-01T15:00:00Z',
+        }),
+        raw({
+          from: 'Dana Ortiz <dana@figma.com>',
+          to: [ALEX],
+          cc: ['Sam Cho <sam@figma.com>'],
+          bodyText: "Of course! Looping in Sam (cc'd) who leads growth. Sam, Alex is a Cornell junior.",
+          sentAt: '2026-10-04T15:00:00Z',
+        }),
+      ],
+      { useLlm: false, now: NOW },
+    );
+    const dana = await chatFor('dana@figma.com');
+    const sam = await chatFor('sam@figma.com');
+    const pending = await db.suggestions.filter((s) => s.status === 'pending').toArray();
+    expect(
+      pending.filter((s) => s.kind === 'schedule_propose' && s.personId === dana.person?.id),
+    ).toHaveLength(0);
+    const toSam = pending.find((s) => s.kind === 'new_outreach' && s.personId === sam.person?.id);
+    expect(toSam?.chatId).toBe(sam.chat?.id);
+    expect(toSam?.reasonText).toContain('Dana introduced you to Sam');
+  });
+
   it('moves a completed chat to followed_up on a natural thank-you note', async () => {
     await ingestEmails(
       user,

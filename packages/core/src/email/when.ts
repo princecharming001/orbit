@@ -224,6 +224,17 @@ const TOKEN_RE = new RegExp(
 const NOT_TIME_AFTER =
   /^\s*(min(ute)?s?|hours?|hrs?|people|years?|yrs?|days?|weeks?|months?|percent|k\b|x\b|times\b|of\b|interns?|students?|questions?|projects?|teams?|slides?)/i;
 
+/** "5 to 20 people", "10-15 interns": a range whose far end is a count. */
+const COUNT_RANGE_AFTER = new RegExp(
+  `^\\s*(?:-|to|through|and|or)\\s*\\d{1,4}(?:\\.\\d+)?\\+?\\s*${NOT_TIME_AFTER.source.replace(/^\^\\s\*/, '')}`,
+  'i',
+);
+/** A capitalised word right after a bare number ("5 Capital", "10 Hudson Yards"). */
+const PROPER_NOUN_AFTER = /^\s+([A-Z][a-z]+)/;
+/** Capitalised words that still belong to a time: weekdays, months, zones, parts of the day, sentence glue. */
+const NOT_A_NAME =
+  /^(mon(day)?|tue(s(day)?)?|wed(s|nesday)?|thu(r(s(day)?)?)?|fri(day)?|sat(urday)?|sun(day)?|jan(uary)?|feb(ruary)?|mar(ch)?|apr(il)?|may|june?|july?|aug(ust)?|sept?(ember)?|oct(ober)?|nov(ember)?|dec(ember)?|eastern|central|mountain|pacific|morning|afternoon|evening|tonight|tomorrow|today|or|and|to|works?|would|does|is|if|let|thanks|thank|best|cheers|looking|talk|see|ok|okay|sounds|hope|please|either|otherwise|happy)$/i;
+
 function tokenize(text: string): Positioned[] {
   const out: Positioned[] = [];
   TOKEN_RE.lastIndex = 0;
@@ -314,7 +325,14 @@ function tokenize(text: string): Positioned[] {
       const apRaw = (mm[3] ?? mm[4] ?? '').toLowerCase();
       const ap = apRaw.startsWith('a') ? 'am' : apRaw.startsWith('p') ? 'pm' : undefined;
       const ish = Boolean(mm[5]);
-      if (NOT_TIME_AFTER.test(text.slice(end))) continue;
+      const rest = text.slice(end);
+      if (NOT_TIME_AFTER.test(rest)) continue;
+      const bare = !ap && !mm[2] && !ish;
+      // "from 5 to 20 people": the second number counts something, so the first does too
+      if (bare && COUNT_RANGE_AFTER.test(rest)) continue;
+      // "at 5 Capital", "5 Main Street": a bare number naming a place or a firm, not a time
+      if (bare && PROPER_NOUN_AFTER.test(rest) && !NOT_A_NAME.test(PROPER_NOUN_AFTER.exec(rest)![1]!))
+        continue;
       if (ap && (h < 1 || h > 12)) continue;
       if (!ap && !mm[2] && (h < 1 || h > 12)) continue;
       if (mm[2] && h > 23) continue;
@@ -417,6 +435,9 @@ interface Proposal {
   part?: Part;
   zone?: string;
   raw: string;
+  /** where the proposal sits in the text: [start, end) over its day and time */
+  start: number;
+  end: number;
 }
 
 function to24(h: number, ap: 'am' | 'pm' | undefined): number {
@@ -531,6 +552,8 @@ function interpretChunk(
             part: d.part,
             zone: d.zone,
             raw: raw.trim().replace(/[.,]$/, ''),
+            start: Math.min(d.anchorStart!, t.start),
+            end: Math.max(d.anchorEnd!, stop),
           };
           proposals.push(p);
           emitted.push(p);
@@ -651,6 +674,34 @@ function interpretChunk(
 
 const NEGATING = /\b(not|can'?t|cannot|busy|class|meeting|conflict|except|unless|until|booked|out)\b/i;
 
+/** Where a clause ends: sentence ends, semicolons, commas and the turns of a contrast ("but", "how about"). */
+const CLAUSE_BREAK =
+  /[.!?;\n,]|\b(?:but|however|though|although|instead|otherwise|whereas|while|how about|what about)\b/gi;
+/** A clause that says the time is taken ("I'm in class Monday at 10", "Monday at 10 doesn't work"). */
+const BUSY_CLAUSE =
+  /\b(?:not|no|never|cannot|busy|booked|in class|have class|in a meeting|in meetings|conflict|unavailable|tied up|out of (?:the )?office|traveling|travelling|away|blocked)\b|n['’]t\b/i;
+/** Phrases with a negation that do not say the time is taken. */
+const NOT_BUSY_PHRASE =
+  /\b(?:if (?:not|that|this|those|these|none|neither|it|they|you|so)\b.*$|unless\b.*$|no (?:worries|problem|rush|pressure|stress)|not a problem|not sure|can['’]?t wait|(?:don['’]?t|do not) worry|(?:doesn['’]?t|does not) matter|(?:wouldn['’]?t|don['’]?t) mind|(?:don['’]?t|do not) hesitate|why not|no later than)/gi;
+
+function isBusyClause(text: string, start: number, end: number): boolean {
+  let lo = 0;
+  let hi = text.length;
+  CLAUSE_BREAK.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = CLAUSE_BREAK.exec(text))) {
+    const at = m.index;
+    const stop = at + m[0].length;
+    if (stop <= start) lo = stop;
+    else if (at >= end) {
+      hi = at;
+      break;
+    }
+  }
+  const clause = `${text.slice(lo, start)} ${text.slice(end, hi)}`.replace(NOT_BUSY_PHRASE, ' ');
+  return BUSY_CLAUSE.test(clause);
+}
+
 function sentenceIndexAt(text: string, pos: number): number {
   let n = 0;
   const re = /[.!?](?=\s)|\n/g;
@@ -768,11 +819,14 @@ export function extractTimes(text: string, reference: Date, opts: ExtractOptions
             part: t.draft.part ?? a.draft.part,
             zone: t.draft.zone ?? a.draft.zone,
             raw: norm.slice(lo, hi).trim(),
+            start: lo,
+            end: hi,
           });
     }
   }
   const out: ProposedTime[] = [];
   for (const p of proposals) {
+    if (isBusyClause(norm, p.start, p.end)) continue;
     const statedZone = p.zone ?? messageZone;
     const tz = statedZone ?? fallbackTz;
     const now = zonedParts(reference, tz);

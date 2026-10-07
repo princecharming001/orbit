@@ -317,8 +317,8 @@ const ENTITIES: Record<string, string> = {
   lsquo: '‘',
   rdquo: '”',
   ldquo: '“',
-  ndash: '-',
-  mdash: ', ',
+  ndash: '–',
+  mdash: '—',
   hellip: '...',
   bull: '•',
   middot: '·',
@@ -406,8 +406,6 @@ export function decodeEntities(s: string): string {
     if (code[0] === '#') {
       const hex = code[1] === 'x' || code[1] === 'X';
       const n = hex ? Number.parseInt(code.slice(2), 16) : Number.parseInt(code.slice(1), 10);
-      if (n === 0x2014) return ENTITIES.mdash!;
-      if (n === 0x2013) return ENTITIES.ndash!;
       if (n === 0xa0) return ' ';
       return Number.isFinite(n) && n > 0 && n < 0x110000 ? String.fromCodePoint(n) : all;
     }
@@ -449,7 +447,6 @@ export function htmlToText(html: string): string {
   return decodeEntities(h)
     .replace(/ /g, ' ')
     .replace(/[ \t]+/g, ' ')
-    .replace(/ ,/g, ',')
     .split('\n')
     .map((l) => l.trim())
     .join('\n')

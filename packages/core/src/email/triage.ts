@@ -114,9 +114,9 @@ const RETURN_PHRASE =
   /\b(?:until|through|thru|till|returning(?: to the office)?(?: on)?|return(?: to the office)? on|back(?: in the office| in office| at my desk| online)?(?: on)?)\s+([^\n]{0,60})/gi;
 /** "I don't do coffee chats, but happy to answer questions over email": a no to a call, a yes to email. */
 const NO_CALLS =
-  /\b((don'?t|do not|can'?t|cannot|won'?t be able to|am not able to|'m not able to|unable to|no longer) (really )?(do|take|make time for|have time for|hop on|get on|jump on|schedule) (any )?(more )?(coffee chats?|calls?|phone calls?|video calls?|meetings?|zoom( calls)?|informational( interviews?)?)|(not|no longer) (doing|taking) (coffee chats|calls|meetings|informational)|(rather|easier) (than|to skip) (a|the) (call|chat|meeting))\b/i;
+  /\b((don'?t|do not|can'?t|cannot|won'?t be able to|am not able to|'m not able to|unable to|no longer) (really )?(do|take|make time for|have time for|hop on|get on|jump on|schedule) (any )?(more )?(coffee chats?|calls?|phone calls?|video calls?|meetings?|zoom( calls)?|informational( interviews?)?)|(not|no longer) (doing|taking) (coffee chats|calls|meetings|informational)|(rather|easier) (than|to skip) (a|the) (call|chat|meeting)|(going to|gonna|have to|need to|will|'ll|'d|would|should) pass on (a|the|any|doing a|hopping on a|getting on a) (live |phone |video |zoom )?(call|chat|meeting|coffee( chat)?)|(i'?d|i would) (rather|prefer) (not|to skip|to pass on) (to )?(do|have|hop on|jump on|get on|take|schedule|set up)? ?(a|the|any) (live |phone |video |zoom )?(call|chat|meeting|coffee( chat)?)|(skip|forgo) (a|the) (call|meeting|zoom))\b/i;
 const EMAIL_OK =
-  /\b((answer|take|field|respond to) (a few|a couple( of)?|some|any|your) questions? (over|via|by|through|on) e-?mail|(over|via|by) e-?mail (instead|is (easier|better|best))|(e-?mail|send) (me )?(your|a few|a couple( of)?|any|some) questions|feel free to (e-?mail|send|shoot|write) (me )?(your |any |a few |some )?questions)\b/i;
+  /\b((answer|take|field|respond to|help with) (a few |a couple( of)? |some |any |your )?questions? (over|via|by|through|on) e-?mail|(over|via|by) e-?mail (instead|is (easier|better|best))|e-?mail (works|is) (better|easier|best)|(e-?mail|send) (me )?(your|a few|a couple( of)?|any|some) questions|feel free to (e-?mail|send|shoot|write) (me )?(your |any |a few |some )?questions|(happy|glad) to (help|answer)[^.?!]{0,40}\b(over|via|by|through) e-?mail)\b/i;
 /** Unambiguous "no". Redirects to a colleague are handled first and are intros, not declines. */
 const HARD_DECLINE =
   /\b((am|'m) not (able|in a position) to (chat|talk|meet|take|help|connect|do)|not able to take (any )?(calls|meetings|chats)|(not|no longer) taking (any )?(calls|chats|meetings|coffee chats|informational)|i'?m going to (have to )?pass(?! (it|your|along|on your))|i('ll| will) (have to )?pass(?! (it|your|along|on your|the|her|his|my))|have to (pass|decline)|(please )?(don'?t|do not) (contact|email) me|remove me|unsubscribe me|not interested|(don'?t|do not) have (the )?(time|capacity) (to|for) (calls|chats|this|that|meetings)|can'?t help|unable to (help|meet|chat|take)|not (a|the) (right|good) fit)\b/i;
@@ -124,6 +124,12 @@ const SOFT_DECLINE =
   /\b(slammed|swamped|underwater|crazy busy|super busy|heads[- ]down|(don'?t|do not) (really |currently |actually |quite )?have (much |the |any )?(bandwidth|capacity)|(don'?t|do not) (really |currently )?have (the |much )?time (for|to take) (calls|chats|meetings|coffee)|no bandwidth|stretched (too )?thin|can'?t (really )?take (on )?(any )?(more|new) (calls|chats|meetings)|maybe (in the |after the )?(new year|next (month|quarter|semester|year)|spring|summer|fall|winter|january)|circle back (in|after|later)|ping me (again )?(in|after|later)|reach out again (in|after)|not a (great|good) time( right now)?|(no longer|don'?t) work (at|for)|not (at|with) [a-z]+ any ?more|left (the company|[a-z]+ (last|in|a few))|no longer (at|with))\b/i;
 /** A sign-off that closes the door when nothing in the message opens one. */
 const PARTING = /\b(best of luck|good luck with (the|your)|wish(ing)? you (the best|luck|all the best))\b/i;
+/**
+ * Warmth that makes "best of luck" a friendly close, not a no: congratulations, glad to have met, thanks for an
+ * update or a thank-you, keep me posted. A plain "thanks for reaching out" is how many declines open, so it is not one.
+ */
+const WARM_CLOSE =
+  /\b(congrat(s|ulations)?|(great|nice|lovely|good|so good|wonderful) (to (meet|see|hear|chat|connect|talk)|meeting|chatting|talking|seeing)|(great|awesome|amazing|exciting|fantastic|wonderful|terrific|good) news|(that'?s|this is|how) (awesome|great|amazing|exciting|fantastic|wonderful|terrific)|so (glad|happy|excited|proud)|proud of you|thank(s| you)( so much)? for (the|your) (update|thank[- ]you|kind (words|note)|note after|follow[- ]up|lovely note|sweet note)|thanks for (keeping me posted|following up|letting me know how|sharing (the|your) (news|update))|keep me posted|keep in touch|stay in touch|let me know how (it|things|everything) (goes|go|turns out)|enjoyed (our|the|meeting|chatting|talking))\b/i;
 const REDIRECT =
   /\b(not the (right|best) (person|contact)|(you should|you might want to|you'?d be better off|i'?d (recommend|suggest)|try) (talk(ing)? to|reach(ing)? out to|contact(ing)?|connect(ing)? with|email(ing)?|ask(ing)?)|(a )?better (person|contact|fit) (to|for|would be)|(colleague|teammate|coworker|someone on (my|our) team)\b[^.?!]{0,40}\b(would be|is|might be|could)\b)/i;
 const RESCHEDULE =
@@ -252,8 +258,9 @@ export function detectOutOfOffice(
  * Classify one message. Inbound order: out of office (a vacation responder always; a hand-typed one unless a time is
  * offered) → redirect to a colleague (an intro) → reschedule or counter-proposal → no-calls-but-email (a question,
  * `prefersEmail`) → confirmation (a proposal when it also asks about a new time) → proposal → hard decline →
- * referral / intro offers → soft decline ("slammed this quarter", "best of luck", with `followUpAfter` when they
- * say when) → thank-you after a conversation → positive / question / neutral.
+ * referral / intro offers (`handoff` when a colleague is named or cc'd) → thank-you after a conversation → soft
+ * decline ("slammed this quarter", with `followUpAfter` when they say when; a bare "best of luck" only when nothing
+ * in the message is warm) → positive / question / neutral.
  */
 export function heuristicSignal(
   body: string,
@@ -323,6 +330,7 @@ export function heuristicSignal(
   if (REDIRECT.test(body) && !schedulingCue) {
     if (!extraction.offers.length)
       extraction.offers.push(lines.find((l) => REDIRECT.test(l)) ?? body.slice(0, 200));
+    extraction.handoff = true;
     return warm('intro_offer', 0.75);
   }
   // reschedule or counter-proposal: with a new time it is a proposal to confirm, without one a reschedule
@@ -354,19 +362,30 @@ export function heuristicSignal(
   }
   if (extraction.offers.some((o) => /refer|word|forward|resume|pass|submitted|flag/i.test(o)))
     return warm('referral_offer', 0.8);
-  if (extraction.offers.length || INTRO_BODY.test(body)) return warm('intro_offer', 0.8);
+  if (extraction.offers.length || INTRO_BODY.test(body)) {
+    // someone else is already on the thread ("Looping in Sam (cc'd)", "Sam, meet Alex"): the next step is with them
+    if (
+      OFFER_NAME.test(body) ||
+      INTRO_BODY.test(body) ||
+      /\b(looping in|loop(ed)? in|cc'?(ing|d)|copying)\b/i.test(body)
+    )
+      extraction.handoff = true;
+    return warm('intro_offer', 0.8);
+  }
+  const softDecline = SOFT_DECLINE.test(body) && !COUNTER.test(body);
+  const endsWithQuestion = /\?\s*$/.test(body.trim());
+  // a thank-you after a conversation ("thanks for the chat today"), never "thanks for reaching out"
+  if (!softDecline && INBOUND_THANKS.test(body) && !positive && !endsWithQuestion)
+    return warm('thank_you', 0.7);
   if (
-    (SOFT_DECLINE.test(body) && !COUNTER.test(body)) ||
-    (PARTING.test(body) && !positive && !SCHED_ASK.test(body) && !/\?/.test(body))
+    softDecline ||
+    (PARTING.test(body) && !positive && !WARM_CLOSE.test(body) && !SCHED_ASK.test(body) && !/\?/.test(body))
   ) {
     extraction.sentiment = 'cool';
     const later = followUpDate(body, reference, opts.timeZone);
     if (later) extraction.followUpAfter = later;
     return { signal: 'reply_decline', confidence: 0.6, extraction };
   }
-  const endsWithQuestion = /\?\s*$/.test(body.trim());
-  // a thank-you after a conversation ("thanks for the chat today"), never "thanks for reaching out"
-  if (INBOUND_THANKS.test(body) && !positive && !endsWithQuestion) return warm('thank_you', 0.7);
   if (positive && !endsWithQuestion) return warm('reply_positive', 0.82);
   if (endsWithQuestion || extraction.asksOfUser.length)
     return { signal: 'question', confidence: 0.6, extraction };

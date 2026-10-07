@@ -390,6 +390,8 @@ export interface MessageExtraction {
   followUpAfter?: string;
   /** they declined a call but offered to answer questions over email: reply by email, never propose times */
   prefersEmail?: boolean;
+  /** an intro or redirect that hands the student to someone else (named, cc'd): the next step is with them */
+  handoff?: boolean;
 }
 
 export interface CalendarEvent {

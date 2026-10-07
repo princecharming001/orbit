@@ -631,12 +631,13 @@ export function buildDemoDataset(
       stageEnteredAt: isoDaysAgo(now, 3),
     });
   }
-  // 4: scheduled tomorrow -> prep brief
+  // 4: scheduled at the next 11:30 at least two hours out -> prep brief. "Tomorrow at 11:30" is more than the
+  // 30-hour prep window away when the demo loads before 05:30, so the prep card depended on the time of day.
   {
     const p = pick(3);
     const start = new Date(now);
-    start.setDate(start.getDate() + 1);
     start.setHours(11, 30, 0, 0);
+    if (start.getTime() - now.getTime() < 2 * 3_600_000) start.setDate(start.getDate() + 1);
     const end = new Date(start.getTime() + 30 * 60_000);
     const th = addThread(p, 'Chat next week', [
       {
@@ -648,7 +649,7 @@ export function buildDemoDataset(
       {
         dir: 'inbound',
         daysAgo: 7,
-        body: 'Happy to. Sent you an invite for tomorrow 11:30. Looking forward to it!',
+        body: 'Happy to. Sent you an invite for 11:30. Looking forward to it!',
         signal: 'scheduling_confirmation',
       },
     ]);

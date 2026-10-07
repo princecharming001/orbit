@@ -730,15 +730,166 @@ describe('email understanding regressions, round 2', () => {
   });
 
   it('IS-12: HTML mail drops script and head text and decodes named and numeric entities', () => {
+    // the sender's own punctuation is kept as written: the copy rules apply to what Orbit writes, not quoted mail
     expect(
       htmlToText(
         '<head><style>p{}</style><script>alert(1)</script></head><p>Hi Jos&eacute; &#8212; let&#8217;s chat</p>',
       ),
-    ).toBe('Hi José, let’s chat');
+    ).toBe('Hi José — let’s chat');
+    expect(htmlToText('<p>Mon&mdash;Wed, 9&ndash;5</p>')).toBe('Mon—Wed, 9–5');
+    expect(htmlToText('<p>Hi Jos&eacute; — let’s chat</p>')).toBe(
+      htmlToText('<p>Hi Jos&eacute; &mdash; let’s chat</p>'),
+    );
     expect(decodeEntities('Fran&ccedil;ois M&uuml;ller &amp; &Aring;sa &euro;5 &szlig;')).toBe(
       'François Müller & Åsa €5 ß',
     );
     expect(decodeEntities('&unknownentity; stays')).toBe('&unknownentity; stays');
+  });
+});
+
+describe('email understanding regressions, round 3', () => {
+  const ref = new Date('2026-10-05T16:00:00Z'); // Monday 9:00 AM Pacific
+  const PT = 'America/Los_Angeles';
+  const sig = (body: string) => heuristicSignal(body, 'inbound', ref, { timeZone: PT });
+
+  it('a warm "best of luck" close is not a decline', () => {
+    for (const body of [
+      'Congrats Alex, that is awesome news! Best of luck this summer.',
+      'Thanks for the thank-you note! Best of luck with recruiting.',
+      'So glad it worked out. Keep me posted, and best of luck with the offer.',
+    ])
+      expect(sig(body).signal, body).not.toBe('reply_decline');
+    expect(sig('Great to meet you today. Best of luck with your applications!').signal).toBe('thank_you');
+    // a bare close after a no is still a decline
+    expect(sig("Thanks for reaching out. We aren't hiring interns this cycle. Best of luck!").signal).toBe(
+      'reply_decline',
+    );
+  });
+
+  it('counts, firms and street numbers next to a weekday are not meeting times', () => {
+    for (const body of [
+      'Our team grew from 5 to 20 people on Monday, so it has been busy.',
+      'I work at 5 Capital on Monday',
+      'Monday at 5 Capital Street',
+    ]) {
+      const r = sig(body);
+      expect(r.extraction.proposedTimes, body).toEqual([]);
+      expect(r.signal, body).toBe('reply_neutral');
+    }
+    // a real bare time next to a zone or a weekday still reads
+    expect(extractProposedTimes('Could we meet Tuesday at 2 Eastern?', ref, PT)[0]?.startIso).toBe(
+      '2026-10-06T18:00:00.000Z',
+    );
+    expect(
+      extractProposedTimes('Tuesday at 2 works. Our office is at 10 Hudson Yards.', ref, PT),
+    ).toHaveLength(1);
+  });
+
+  it('a time the sender says is taken is not offered', () => {
+    const r = sig("I'm in class Monday at 10 but free Tuesday at 2.");
+    expect(r.signal).toBe('scheduling_proposal');
+    expect(r.extraction.proposedTimes.map((t) => t.startIso)).toEqual(['2026-10-06T21:00:00.000Z']);
+    const times = (b: string) => extractProposedTimes(b, ref, PT).map((t) => t.raw);
+    expect(times("Tuesday at 2pm doesn't work for me anymore, could we do Wednesday at 3pm?")).toEqual([
+      'Wednesday at 3pm',
+    ]);
+    expect(times('Wednesday at 3pm is no good, how about Thursday at 3pm?')).toEqual(['Thursday at 3pm']);
+    // conditional and idiomatic negations do not take a time away
+    expect(times('Would Thursday at 2pm work? If not, I am also free Friday morning at 10.')).toHaveLength(2);
+    expect(times('No problem at all. Does Thursday at 2pm work?')).toEqual(['Thursday at 2pm']);
+    expect(times('Happy to chat. Tuesday at 2pm works if that is not too early for you.')).toEqual([
+      'Tuesday at 2pm',
+    ]);
+  });
+
+  it('EG-18 variants: a no to a call with a yes to email asks for email, not times', () => {
+    for (const body of [
+      "I'm going to pass on a call, but feel free to email questions.",
+      "I'd rather not do a call, but happy to answer questions by email.",
+    ]) {
+      const r = sig(body);
+      expect(r.signal, body).toBe('question');
+      expect(r.extraction.prefersEmail, body).toBe(true);
+    }
+  });
+
+  it('a redirect or an intro hands off: no propose-times card for the introducer, an outreach card for the target', () => {
+    const redirect = sig(
+      "Not the right person for this, but my colleague Sana runs our analyst program and would be a better contact. I've cc'd her here.",
+    );
+    expect(redirect.signal).toBe('intro_offer');
+    expect(redirect.extraction.handoff).toBe(true);
+    const intro = sig("Of course! Looping in Sam (cc'd) who leads growth. Sam, meet Alex.");
+    expect(intro.signal).toBe('intro_offer');
+    expect(intro.extraction.handoff).toBe(true);
+    const person = (id: string, first: string, email: string) => ({
+      id,
+      userId: 'u1',
+      displayName: `${first} Ortiz`,
+      firstName: first,
+      lastName: 'Ortiz',
+      emails: [email],
+      primaryEmail: email,
+      isHuman: true,
+    });
+    const chat = (id: string, personId: string, stage: string, extra: Record<string, unknown> = {}) => ({
+      id,
+      userId: 'u1',
+      personId,
+      stage,
+      stageEnteredAt: '2026-10-02T15:00:00Z',
+      source: 'detected',
+      goalTags: [],
+      bumpCount: 0,
+      priority: 2,
+      createdAt: '2026-10-01T15:00:00Z',
+      updatedAt: '2026-10-02T15:00:00Z',
+      ...extra,
+    });
+    const run = (extraction: typeof intro.extraction) =>
+      generateCandidates({
+        userId: 'u1',
+        now: ref,
+        settings: buildDemoDataset({ now: ref }).settings,
+        people: new Map([
+          ['pd', person('pd', 'Dana', 'dana@figma.com')],
+          ['ps', person('ps', 'Sam', 'sam@figma.com')],
+        ]),
+        chats: [
+          chat('cd', 'pd', 'replied', { lastOutboundAt: '2026-10-01T15:00:00Z' }),
+          chat('cs', 'ps', 'identified', { referrerPersonId: 'pd', referrerName: 'Dana' }),
+        ],
+        lastInboundByChat: new Map([
+          [
+            'cd',
+            {
+              id: 'm1',
+              sentAt: '2026-10-02T15:00:00Z',
+              signal: 'intro_offer',
+              signalConfidence: 0.8,
+              extraction,
+            },
+          ],
+        ]),
+        events: [],
+        actionItems: [],
+        factsByPerson: new Map(),
+        targetCompanies: [],
+        recommendations: [],
+        dismissCounts: new Map(),
+        outreachSentThisWeek: 0,
+        freeSlotsIso: ['2026-10-08T21:00:00Z'],
+        recentlyContacted: new Set(),
+      } as never);
+    const cands = run(intro.extraction);
+    expect(cands.filter((c) => c.kind === 'schedule_propose')).toHaveLength(0);
+    const toSam = cands.find((c) => c.kind === 'new_outreach' && c.personId === 'ps');
+    expect(toSam?.chatId).toBe('cs');
+    expect(toSam?.reasonText).toBe('Dana introduced you to Sam; write to Sam while the intro is fresh');
+    // "happy to intro you later" with nobody on the thread still gets times proposed to the person who replied
+    expect(
+      run({ ...intro.extraction, handoff: false }).filter((c) => c.kind === 'schedule_propose'),
+    ).toHaveLength(1);
   });
 });
 

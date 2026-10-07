@@ -106,6 +106,8 @@ export async function ingestEmails(
   }
   let done = 0;
   const cache = await loadPeopleCache(user.id);
+  /** calendar invitations seen in this batch: the people on them and when they were sent */
+  const invites: { emails: string[]; sentAt: string }[] = [];
   for (const [extThreadId, list] of byThread) {
     list.sort((a, b) => a.sentAt.localeCompare(b.sentAt));
     let thread = await db.threads.where('externalThreadId').equals(extThreadId).first();
@@ -217,6 +219,12 @@ export async function ingestEmails(
       for (const e of [from.email, ...msg.toEmails, ...msg.ccEmails])
         if (!thread.participantEmails.includes(e)) thread.participantEmails.push(e);
       await db.messages.add(msg);
+      if (
+        automated &&
+        BOOKED_NOTICE.test(r.subject ?? '') &&
+        isCalendarNotice(r.subject, r.bodyText, r.headers)
+      )
+        invites.push({ emails: [from.email, ...msg.toEmails, ...msg.ccEmails], sentAt: r.sentAt });
       newMessages.push(msg);
       stats.messages++;
     }
@@ -311,7 +319,49 @@ export async function ingestEmails(
     done++;
     opts.onProgress?.(done, byThread.size);
   }
+  for (const inv of invites) await retireSchedulingCards(user.id, inv.emails, inv.sentAt, userEmails, now);
   return stats;
+}
+
+/** A calendar notice that means a meeting is on the calendar (not a decline or a cancellation). */
+const BOOKED_NOTICE = /^\s*(updated invitation|invitation|new event|accepted)\b/i;
+
+/**
+ * A calendar invitation is mail the calendar sync owns, so it is not read as a reply. It still answers the open
+ * "propose times" or "confirm it" card for the people on it: the meeting is booked. Cards raised by a message sent
+ * after the invitation (a later reschedule) are kept.
+ */
+async function retireSchedulingCards(
+  userId: string,
+  emails: string[],
+  sentAt: string,
+  userEmails: Set<string>,
+  now: Date,
+): Promise<void> {
+  const others = new Set(emails.map((e) => e.toLowerCase()).filter((e) => !userEmails.has(e)));
+  if (!others.size) return;
+  const people = await db.people
+    .where('userId')
+    .equals(userId)
+    .filter((p) => p.emails.some((e) => others.has(e.toLowerCase())))
+    .toArray();
+  for (const p of people) {
+    const open = await db.suggestions
+      .where('personId')
+      .equals(p.id)
+      .filter(
+        (s) =>
+          (s.kind === 'schedule_confirm' || s.kind === 'schedule_propose') &&
+          (s.status === 'pending' || s.status === 'snoozed'),
+      )
+      .toArray();
+    for (const s of open) {
+      const trigger =
+        typeof s.payload.inReplyTo === 'string' ? await db.messages.get(s.payload.inReplyTo) : undefined;
+      if (trigger && trigger.sentAt > sentAt) continue;
+      await db.suggestions.update(s.id, { status: 'expired', decidedAt: now.toISOString() });
+    }
+  }
 }
 
 const ACTIVE = (c: CoffeeChat) => !['declined', 'no_response', 'archived'].includes(c.stage);
@@ -449,6 +499,7 @@ async function processNetworkingThread(
                 ...(h.extraction.returnDate ? { returnDate: h.extraction.returnDate } : {}),
                 ...(h.extraction.followUpAfter ? { followUpAfter: h.extraction.followUpAfter } : {}),
                 ...(h.extraction.prefersEmail ? { prefersEmail: true } : {}),
+                ...(h.extraction.handoff ? { handoff: true } : {}),
               }
             : {}),
         }

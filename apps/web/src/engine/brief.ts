@@ -661,16 +661,19 @@ export async function evaluateImmediateSuggestions(
   const user = await db.users.get(userId);
   if (!user || !user.onboardingCompletedAt) return;
   const inp = await ruleInput(userId, now, scope);
-  const cands = generateCandidates(inp).filter((c) =>
-    [
-      'thank_you',
-      'schedule_propose',
-      'schedule_confirm',
-      'prep_brief',
-      'warm_up_engage',
-      'ask_referral',
-      'report_back',
-    ].includes(c.kind),
+  const cands = generateCandidates(inp).filter(
+    (c) =>
+      [
+        'thank_you',
+        'schedule_propose',
+        'schedule_confirm',
+        'prep_brief',
+        'warm_up_engage',
+        'ask_referral',
+        'report_back',
+      ].includes(c.kind) ||
+      // an intro that just landed is answered while it is fresh, not at the next brief
+      (c.kind === 'new_outreach' && !!c.signals.introducedBy),
   );
   const scored = selectForBrief(cands, inp.dismissCounts, 5);
   const created = await upsertSuggestions(userId, scored, now);
