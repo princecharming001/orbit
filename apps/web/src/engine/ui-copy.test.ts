@@ -4,7 +4,7 @@ import { db } from '../db/schema';
 import { briefSummaryText, needsWarmUp, refreshPersonSummary, startWarmUpOrOutreach } from './brief';
 import { DEMO_USER_ID, demoResetPrompt } from './demo';
 import { buildPrep, CLOSING_QUESTION, personSummary, sayWhen, withArticle } from './prep';
-import { hoursAgo } from './send';
+import { timeAgo } from './send';
 import { addTargetCompany, isDuplicateTarget } from './targets';
 
 const NOW = new Date('2026-10-06T15:00:00Z');
@@ -289,10 +289,11 @@ describe('validation (UI-19)', () => {
     expect(await db.targetCompanies.where('userId').equals('u9').count()).toBe(1);
     expect(isDuplicateTarget('Stripe', [{ nameRaw: 'Figma' }])).toBe(false);
   });
-  it('says "less than an hour ago" instead of "0 hours ago"', () => {
-    expect(hoursAgo(20 * 60_000)).toBe('less than an hour ago');
-    expect(hoursAgo(3_600_000)).toBe('1 hour ago');
-    expect(hoursAgo(72 * 3_600_000)).toBe('3 days ago');
+  it('never says "0 hours ago" in the cooldown message', () => {
+    expect(timeAgo(20_000)).toBe('just now');
+    expect(timeAgo(20 * 60_000)).toBe('20 minutes ago');
+    expect(timeAgo(3_600_000)).toBe('1 hour ago');
+    expect(timeAgo(72 * 3_600_000)).toBe('3 days ago');
   });
 });
 

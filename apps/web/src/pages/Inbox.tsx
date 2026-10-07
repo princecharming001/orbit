@@ -1,15 +1,20 @@
+import type { OutboundMessage, Person } from '@orbit/core';
 import { CHANNEL_LABELS, MESSAGE_KIND_LABELS } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
+import { runApproval } from '../components/approve';
+import { DraftEditor, OutboxStatus } from '../components/DraftEditor';
 import { KIND_LABEL, SuggestionCard } from '../components/SuggestionCard';
 import { db } from '../db/schema';
 import { useSession } from '../state/session';
-import { Avatar, Chip, EmptyState, PageHeader, relDate, Tabs } from '../ui';
+import { Avatar, Chip, EmptyState, PageHeader, relDate, Tabs, useToast } from '../ui';
+
+const IN_FLIGHT: OutboundMessage['status'][] = ['queued', 'sending', 'handed_off', 'failed'];
 
 export function InboxPage() {
   const { userId } = useSession();
-  const [tab, setTab] = useState<'pending' | 'snoozed' | 'sent'>('pending');
+  const [tab, setTab] = useState<'pending' | 'snoozed' | 'outbox' | 'sent'>('pending');
   const suggestions =
     useLiveQuery(() => (userId ? db.suggestions.where('userId').equals(userId).toArray() : []), [userId]) ??
     [];
@@ -20,7 +25,7 @@ export function InboxPage() {
           ? db.outbound
               .where('userId')
               .equals(userId)
-              .filter((o) => o.status === 'sent')
+              .filter((o) => o.status === 'sent' || IN_FLIGHT.includes(o.status))
               .toArray()
           : [],
       [userId],
@@ -34,16 +39,25 @@ export function InboxPage() {
   const snoozed = suggestions
     .filter((s) => s.status === 'snoozed')
     .sort((a, b) => (a.snoozedUntil ?? '').localeCompare(b.snoozedUntil ?? ''));
-  const sent = outbound.sort((a, b) => (b.sentAt ?? '').localeCompare(a.sentAt ?? ''));
+  const sent = outbound
+    .filter((o) => o.status === 'sent')
+    .sort((a, b) => (b.sentAt ?? '').localeCompare(a.sentAt ?? ''));
+  const outbox = outbound
+    .filter((o) => IN_FLIGHT.includes(o.status))
+    .sort((a, b) => (b.queuedAt ?? b.createdAt).localeCompare(a.queuedAt ?? a.createdAt));
   return (
     <div>
-      <PageHeader title="Approvals" subtitle="Everything waiting on you, plus what Orbit has sent." />
+      <PageHeader
+        title="Approvals"
+        subtitle="Everything waiting on you, what is on its way, and what you have sent."
+      />
       <Tabs
         value={tab}
         onChange={setTab}
         items={[
           { value: 'pending', label: 'Pending', count: pending.length },
           { value: 'snoozed', label: 'Snoozed', count: snoozed.length },
+          { value: 'outbox', label: 'Outbox', count: outbox.length },
           { value: 'sent', label: 'Sent', count: sent.length },
         ]}
       />
@@ -92,6 +106,19 @@ export function InboxPage() {
         ) : (
           <EmptyState title="Nothing snoozed" />
         ))}
+      {tab === 'outbox' &&
+        (outbox.length ? (
+          <div className="space-y-3">
+            {outbox.map((o) => (
+              <OutboxItem key={o.id} o={o} person={byId.get(o.personId)} />
+            ))}
+          </div>
+        ) : (
+          <EmptyState
+            title="Nothing on its way"
+            body="Messages waiting out the undo window, opened in your mail app or LinkedIn, or not sent show up here."
+          />
+        ))}
       {tab === 'sent' &&
         (sent.length ? (
           <ul className="divide-y divide-line border border-line rounded-[var(--radius-card)]">
@@ -120,6 +147,43 @@ export function InboxPage() {
         ) : (
           <EmptyState title="Nothing sent yet" />
         ))}
+    </div>
+  );
+}
+
+function OutboxItem({ o, person }: { o: OutboundMessage; person?: Person }) {
+  const { user } = useSession();
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  if (!user) return null;
+  return (
+    <div className="border border-line rounded-[var(--radius-card)] p-3" data-testid="outbox-item">
+      <div className="flex items-center gap-2 text-[13.5px] mb-2">
+        {person && <Avatar name={person.displayName} src={person.photoUrl} id={person.id} size={26} />}
+        <Link to={person ? `/people/${person.id}` : '#'} className="font-medium">
+          {person?.displayName ?? 'Unknown'}
+        </Link>
+        <Chip>{MESSAGE_KIND_LABELS[o.kind]}</Chip>
+        <Chip>{CHANNEL_LABELS[o.channel]}</Chip>
+        {o.status === 'failed' && <Chip tone="bad">Not sent</Chip>}
+      </div>
+      {o.status === 'failed' ? (
+        <DraftEditor
+          draft={o}
+          busy={busy}
+          approveLabel="Try again"
+          onApprove={async (body, subject) => {
+            setBusy(true);
+            try {
+              return await runApproval(user, o, body, subject, toast, person?.firstName);
+            } finally {
+              setBusy(false);
+            }
+          }}
+        />
+      ) : (
+        <OutboxStatus draft={o} />
+      )}
     </div>
   );
 }

@@ -32,7 +32,7 @@ Scopes requested at onboarding step 5, in one consent (incremental auth is not u
 |---|---|---|
 | `https://www.googleapis.com/auth/gmail.readonly` | restricted [VERIFIED] | read threads/messages for classification, context, reply detection |
 | `https://www.googleapis.com/auth/gmail.send` | sensitive [SECONDARY] | send approved messages from the student's address |
-| `https://www.googleapis.com/auth/calendar.events` | sensitive | read events (attendees, times), write nothing in v1 |
+| `https://www.googleapis.com/auth/calendar.events.readonly` | sensitive | read events (attendees, times); v1 writes nothing, so it asks for read-only access |
 | `openid email profile` | non-sensitive | identity of the connected mailbox |
 
 Not requested: `gmail.modify` (we never label or archive), `gmail.metadata` (also restricted and insufficient), `contacts` (People API) in v1 [DECIDED].

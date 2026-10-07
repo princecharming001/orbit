@@ -83,6 +83,27 @@ export async function collectUserEmails(user: User, raws: RawEmail[]): Promise<S
 /** Heuristic triage at or above this confidence is kept as is; only less certain threads go to Claude. */
 const HEURISTIC_CONFIDENT = 0.8;
 
+/**
+ * The Orbit outbound row an email came from: Orbit puts X-Orbit-Message-Id on every Gmail API send, and the Gmail id
+ * of the sent message is stored as providerMessageId. Such an email is already counted (touchpoint, stage change).
+ */
+async function orbitOutboundId(
+  userId: string,
+  m: { externalMessageId: string; headers: Record<string, string> },
+): Promise<string | undefined> {
+  const id = m.headers['x-orbit-message-id']?.trim();
+  if (id) {
+    const o = await db.outbound.get(id);
+    if (o && o.userId === userId) return o.id;
+  }
+  const byProvider = await db.outbound
+    .where('userId')
+    .equals(userId)
+    .filter((o) => o.providerMessageId === m.externalMessageId)
+    .first();
+  return byProvider?.id;
+}
+
 export interface IngestStats {
   threads: number;
   messages: number;
@@ -137,6 +158,9 @@ export async function ingestEmails(
     for (const r of list) {
       const exists = await db.messages.where('externalMessageId').equals(r.externalMessageId).first();
       if (exists) {
+        // a message Orbit recorded when it sent it learns its real Message-ID here, for later replies
+        if (!exists.headers['message-id'] && r.headers['message-id'])
+          await db.messages.update(exists.id, { headers: { ...r.headers, ...exists.headers } });
         stats.skipped++;
         continue;
       }
@@ -302,13 +326,16 @@ export async function ingestEmails(
                   ? 0.6
                   : 0.1
               : 0.1;
+          // an email Orbit sent already has its touchpoint, keyed to the outbound row: key this one the same way
+          const sentByOrbit =
+            isDirect && m.direction === 'outbound' ? await orbitOutboundId(user.id, m) : undefined;
           await addTouchpoint({
             userId: user.id,
             personId: pid,
             kind,
             occurredAt: m.sentAt,
-            refTable: 'messages',
-            refId: m.id,
+            refTable: sentByOrbit ? 'outbound' : 'messages',
+            refId: sentByOrbit ?? m.id,
             summary:
               `${m.direction === 'inbound' ? 'Email from' : 'Email to'} ${p.firstName}: ${m.subject ?? ''}`.trim(),
             weight,
@@ -449,6 +476,11 @@ async function processNetworkingThread(
       .filter((x) => ACTIVE(x) && x.threadId === thread.id)
       .first();
     if (c) chats.set(p.id, c);
+  }
+  // a chat Orbit started (or found by person) learns its thread so follow-ups reply in it
+  if (chat && !chat.threadId) {
+    await db.chats.update(chat.id, { threadId: thread.id });
+    chat.threadId = thread.id;
   }
   const touched = new Set<string>();
   for (const m of newMessages.sort((a, b) => a.sentAt.localeCompare(b.sentAt))) {
@@ -618,8 +650,8 @@ async function processNetworkingThread(
           m.bodyText.slice(0, 120),
           `/people/${sender.id}`,
         );
-    } else {
-      // the student's message moves the chats of the people it was addressed to
+    } else if (!(await orbitOutboundId(user.id, m))) {
+      // a message Orbit sent through Gmail was counted when it was sent; otherwise the student's message moves the chats of the people it was addressed to
       const targets = [...chats.entries()].filter(
         ([pid]) => chats.size === 1 || m.toEmails.some((e) => byEmail(e)?.id === pid),
       );

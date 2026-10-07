@@ -10,7 +10,13 @@ import { saveResume } from '../engine/resume';
 import { syncGoogle } from '../engine/sync';
 import { addTargetCompany } from '../engine/targets';
 import { fmtFailureTime, hasLlm, MODEL, testApiKey } from '../integrations/anthropic';
-import { connectGoogle, currentGoogleToken, disconnectGoogle, googleClientId } from '../integrations/google';
+import {
+  connectGoogle,
+  currentGoogleToken,
+  disconnectGoogle,
+  googleClientId,
+  googleScopeWarning,
+} from '../integrations/google';
 import {
   clearPrefs,
   DEFAULT_DAILY_REQUEST_CAP,
@@ -363,14 +369,17 @@ function Integrations() {
         provider: 'google',
         externalAccountId: t.email,
         status: 'active',
-        scopes: [],
+        scopes: t.scopes ?? [],
         syncState: google?.syncState ?? {},
         connectedAt: google?.connectedAt ?? new Date().toISOString(),
       });
       await syncGoogle(user, {
         onProgress: (p) => setBusy(`${p.phase} ${p.total > 1 ? `${p.done}/${p.total}` : ''}`),
       });
-      toast.push({ text: 'Google synced.', tone: 'good' });
+      const missing = googleScopeWarning(t.scopes);
+      toast.push(
+        missing ? { text: missing, tone: 'bad', ttl: 10_000 } : { text: 'Google synced.', tone: 'good' },
+      );
     } catch (e) {
       toast.push({ text: String((e as Error).message ?? e), tone: 'bad', ttl: 7000 });
       if (google)
