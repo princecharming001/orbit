@@ -128,6 +128,29 @@ describe('stage dates come from the evidence (PS-1, PS-16, EG-01)', () => {
     expect(chat.lastOutboundAt).toBe(ago(5 * D));
   });
 
+  it('a stage reached from older evidence never starts before the stage it replaces (L29)', async () => {
+    const who = { name: 'Lena Ortiz', email: 'lena.ortiz@ledgerly.com' };
+    await ingestEmails(user, [mail(who, 'out', ago(12 * D), OUTREACH('Lena'), 'lena')], {
+      useLlm: false,
+      now,
+    });
+    const chat = await chatOf((await personByEmail(who.email)).id);
+    // the student marks the reply by hand today; a sync later reads her answer, sent three days ago
+    expect(await applyStage(chat, 'replied', 'user', 'manual', { now })).toBe('applied');
+    const movedAt = (await chatOf(chat.personId)).stageEnteredAt;
+    await ingestEmails(
+      user,
+      [mail(who, 'in', ago(3 * D), 'Hi Alex,\n\nHappy to chat. Does Thursday at 2pm work?\n\nLena', 'lena')],
+      { useLlm: false, now },
+    );
+    const after = await chatOf(chat.personId);
+    expect(after.stage).toBe('scheduling');
+    expect(after.stageEnteredAt >= movedAt).toBe(true);
+    // the same holds for any later stage whose evidence predates the current one
+    expect(await applyStage(after, 'scheduled', 'system', 'invite', { now, at: ago(4 * D) })).toBe('applied');
+    expect((await chatOf(chat.personId)).stageEnteredAt).toBe(after.stageEnteredAt);
+  });
+
   it('a note about a chat three weeks ago completes it then, with no thank-you card', async () => {
     const who = { name: 'Priya Natarajan', email: 'priya.natarajan@stripe.com' };
     await ingestEmails(

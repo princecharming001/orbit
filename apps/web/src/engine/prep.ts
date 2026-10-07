@@ -158,6 +158,41 @@ function sameField(fn: PersonFunction, target: string | undefined): boolean {
   );
 }
 
+/** The kind of company a target function lives in. Functions most companies have (marketing, operations) are absent. */
+const TARGET_SECTOR: Record<string, string> = {
+  swe: 'tech',
+  pm: 'tech',
+  design: 'tech',
+  data: 'tech',
+  ib: 'finance',
+  finance: 'finance',
+  vc: 'vc',
+  consulting: 'consulting',
+};
+const FUNCTION_SECTOR: Record<PersonFunction, string | undefined> = {
+  swe: 'tech',
+  pm: 'tech',
+  design: 'tech',
+  data: 'tech',
+  ib: 'finance',
+  vc: 'vc',
+  consulting: 'consulting',
+  general: undefined,
+};
+
+/**
+ * Could the person's company have the function the student is recruiting for? Only what the data shows counts: the
+ * person's own function, or the company's sector. An Engagement Manager at Ramp says nothing about banking at Ramp.
+ */
+function companyHasTarget(fn: PersonFunction, org: string | undefined, target: string | undefined): boolean {
+  if (!target) return false;
+  const want = TARGET_SECTOR[target];
+  if (!want) return true;
+  if (FUNCTION_SECTOR[fn] === want) return true;
+  // a venture firm's people are investors whatever the firm's list says
+  return fn !== 'vc' && !!org?.trim() && sectorOf({ org }) === want;
+}
+
 export type Audience = 'recruiter' | 'junior' | 'mid' | 'senior';
 export type PersonFunction = 'swe' | 'pm' | 'design' | 'data' | 'ib' | 'consulting' | 'vc' | 'general';
 
@@ -332,7 +367,8 @@ export function buildPrep(args: {
   const cycleRaw = goals?.cycleLabel?.trim() ?? '';
   const cycle = /^(this cycle)?$/i.test(cycleRaw) ? '' : cycleRaw;
   const search = cycle ? `${cycle} search` : 'search';
-  const myFn = goals?.targetFunctions?.[0] ? functionPhrase(goals.targetFunctions[0]) : '';
+  const target = goals?.targetFunctions?.[0];
+  const myFn = target ? functionPhrase(target) : '';
   const recruiter = isRecruiter(person.currentTitle);
   const seniority = seniorityOf(person.currentTitle);
   const audience: Audience = recruiter
@@ -367,9 +403,11 @@ export function buildPrep(args: {
       ? hadAdvice
         ? `Tell ${first} what you did with their advice, and get their read on your next step.`
         : `Catch ${first} up on your ${search} since you last spoke, and get their read on your next step.`
-      : sameField(fn, goals?.targetFunctions?.[0]) || !myFn
-        ? `Understand what the work at ${org} is really like and whether ${myFn ? `${myFn} there` : 'a role there'} fits your ${search}.`
-        : `Learn how ${org} works from someone in ${fn === 'general' ? 'another part of the company' : functionPhrase(fn)}, and who on the ${myFn} side you should meet next.`;
+      : !myFn || !companyHasTarget(fn, person.currentOrganizationRaw, target)
+        ? `Understand what the work at ${org} is really like and whether a role there fits your ${search}.`
+        : sameField(fn, target)
+          ? `Understand what the work at ${org} is really like and whether ${myFn} there fits your ${search}.`
+          : `Learn how ${org} works from someone in ${functionPhrase(fn)}, and who on the ${myFn} side you should meet next.`;
   const ask = recruiter
     ? 'Which deadline or event matters most for you, and who to follow up with.'
     : metBefore

@@ -13,14 +13,16 @@ import { Button, Spinner } from '../ui';
 export function Landing() {
   const nav = useNavigate();
   const { loading, userId, setUserId } = useSession();
-  // undefined while the stored profile is still being read, null when there is none. Until it is known the page
-  // shows no buttons: a click in that window would load the demo over real data without asking.
-  const stored = useLiveQuery<User | null>(
-    async () => (userId ? ((await db.users.get(userId)) ?? null) : null),
+  // The stored profile for the current session (null when there is none). Until it is known the page shows no
+  // buttons: a click in that window would load the demo over real data without asking. The answer carries the id it
+  // was read for, because a live query keeps returning its previous answer (the "no user" read made while the session
+  // was loading) for a render after its key changes.
+  const stored = useLiveQuery<{ for: string | undefined; user: User | null }>(
+    async () => ({ for: userId, user: userId ? ((await db.users.get(userId)) ?? null) : null }),
     [userId],
   );
-  const resolving = loading || stored === undefined;
-  const user = stored ?? undefined;
+  const resolving = loading || !stored || stored.for !== userId;
+  const user = resolving ? undefined : (stored?.user ?? undefined);
   const [busy, setBusy] = useState<string | undefined>();
   const onboarded = !!(userId && user?.onboardingCompletedAt);
   const midSetup = !!(userId && user && !user.onboardingCompletedAt);

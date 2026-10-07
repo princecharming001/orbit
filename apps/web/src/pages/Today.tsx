@@ -1,4 +1,3 @@
-import type { Suggestion } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { RefreshCw } from 'lucide-react';
 import { useEffect, useState } from 'react';
@@ -6,6 +5,7 @@ import { Link } from 'react-router-dom';
 import { SuggestionCard } from '../components/SuggestionCard';
 import { db } from '../db/schema';
 import { ensureDrafts, generateBrief, revalidatePending } from '../engine/brief';
+import { todayCards, todaySummaryText } from '../engine/today';
 import { useSession } from '../state/session';
 import { Avatar, Button, Card, EmptyState, relDate, Spinner, Stat } from '../ui';
 
@@ -89,13 +89,7 @@ export function Today() {
       </div>
     );
   const byId = new Map(people.map((p) => [p.id, p]));
-  const live = suggestions.filter((s) => stillTrue(s, now));
-  const inBrief = latest ? live.filter((s) => latest.suggestionIds.includes(s.id)) : [];
-  const rest = live.filter((s) => !s.deferred && (!latest || !latest.suggestionIds.includes(s.id)));
-  const cards = [...inBrief, ...rest].sort((a, b) => b.priorityScore - a.priorityScore);
-  const more = live
-    .filter((s) => s.deferred && !latest?.suggestionIds.includes(s.id))
-    .sort((a, b) => b.priorityScore - a.priorityScore);
+  const { cards, more } = todayCards(suggestions, latest, now);
   const openMore = async () => {
     setShowMore(true);
     await ensureDrafts(
@@ -123,6 +117,10 @@ export function Today() {
   ).length;
   const completed = (chats ?? []).filter((c) => c.completedAt).length;
   const visiblePeople = people.filter((p) => p.isHuman && !p.hiddenAt).length;
+  // counted from the cards on screen, so the line never disagrees with them
+  const summary = latest
+    ? todaySummaryText(cards, events ?? [], visiblePeople, now)
+    : 'Your first brief will appear here.';
   const problems = (integrations ?? []).filter((i) => i.status === 'needs_reauth' || i.status === 'error');
   const regenerate = async () => {
     setBusy(true);
@@ -141,7 +139,7 @@ export function Today() {
           <h1 className="text-[24px] font-semibold tracking-[-0.01em] mt-0.5">
             {greet}, {user.firstName || 'there'}
           </h1>
-          <p className="text-ink-2 mt-1">{latest?.summaryText ?? 'Your first brief will appear here.'}</p>
+          <p className="text-ink-2 mt-1">{summary}</p>
         </div>
         <Button
           onClick={regenerate}
@@ -268,17 +266,4 @@ export function Today() {
       </div>
     </div>
   );
-}
-
-/** Cards whose moment has passed are hidden at once, even before the engine retires them. */
-function stillTrue(s: Suggestion, now: Date): boolean {
-  if (s.kind === 'schedule_confirm') {
-    const start = (s.payload.time as { startIso?: string } | undefined)?.startIso;
-    if (start && new Date(start) <= now) return false;
-  }
-  if (s.kind === 'prep_brief') {
-    const start = s.signals.startAt as string | undefined;
-    if (start && new Date(start) <= now) return false;
-  }
-  return true;
 }
