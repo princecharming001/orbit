@@ -1060,6 +1060,156 @@ describe('email understanding leftovers (L1 to L7)', () => {
   });
 });
 
+describe('email understanding leftovers, round 2', () => {
+  const ref = new Date('2026-10-01T13:00:00Z'); // Thursday 9:00 AM Eastern
+  const ET = 'America/New_York';
+  const sig = (body: string) => heuristicSignal(body, 'inbound', ref, { timeZone: ET });
+  const slots = (body: string) =>
+    sig(body).extraction.proposedTimes.map((t) =>
+      new Date(t.startIso).toLocaleString('en-US', {
+        timeZone: ET,
+        weekday: 'short',
+        hour: '2-digit',
+        minute: '2-digit',
+        hourCycle: 'h23',
+      }),
+    );
+  /** schedule_propose cards for a replied chat whose last inbound is `body` */
+  const proposeCards = (body: string) => {
+    const h = sig(body);
+    return generateCandidates({
+      userId: 'u1',
+      now: ref,
+      settings: buildDemoDataset({ now: ref }).settings,
+      people: new Map([
+        [
+          'p1',
+          {
+            id: 'p1',
+            userId: 'u1',
+            displayName: 'Priya Patel',
+            firstName: 'Priya',
+            lastName: 'Patel',
+            emails: ['priya@figma.com'],
+            isHuman: true,
+          },
+        ],
+      ]),
+      chats: [
+        {
+          id: 'c1',
+          userId: 'u1',
+          personId: 'p1',
+          stage: 'replied',
+          stageEnteredAt: '2026-09-30T16:00:00Z',
+          source: 'detected',
+          goalTags: [],
+          bumpCount: 0,
+          priority: 2,
+          lastOutboundAt: '2026-09-28T16:00:00Z',
+          createdAt: '2026-09-28T16:00:00Z',
+          updatedAt: '2026-09-30T16:00:00Z',
+        },
+      ],
+      lastInboundByChat: new Map([
+        [
+          'c1',
+          {
+            id: 'm1',
+            sentAt: '2026-09-30T16:00:00Z',
+            signal: h.signal,
+            signalConfidence: h.confidence,
+            extraction: h.extraction,
+          },
+        ],
+      ]),
+      events: [],
+      actionItems: [],
+      factsByPerson: new Map(),
+      targetCompanies: [],
+      recommendations: [],
+      dismissCounts: new Map(),
+      outreachSentThisWeek: 0,
+      freeSlotsIso: ['2026-10-06T18:00:00Z'],
+      recentlyContacted: new Set(),
+    } as never).filter((c) => c.kind === 'schedule_propose');
+  };
+
+  it('"I\'ll pass this time" is a hard no: the chat is declined and nobody is told to propose times', () => {
+    for (const body of [
+      "I'll pass this time, sorry.",
+      "I'll pass this time.",
+      "I'm going to pass this round.",
+      "I'm going to pass this time around, but thanks for thinking of me.",
+    ]) {
+      const r = sig(body);
+      expect(r.signal, body).toBe('reply_decline');
+      expect(r.extraction.decline, body).toBe('hard');
+      expect(
+        decideTransition('outreach_sent', {
+          type: 'inbound_signal',
+          signal: r.signal,
+          confidence: r.confidence,
+        })?.to,
+        body,
+      ).toBe('declined');
+      expect(proposeCards(body), body).toHaveLength(0);
+    }
+    // passing something along is still a referral, not a no
+    for (const body of [
+      "I'll pass this along to the team.",
+      "I'll pass that on to my manager.",
+      "I'll pass on your resume.",
+    ])
+      expect(sig(body).signal, body).toBe('referral_offer');
+  });
+
+  it('an office the sender works out of is where they are, not a day they are away', () => {
+    for (const [body, signal] of [
+      [
+        "I'm working out of our Boston office Tuesday and free at 2pm, want to grab coffee?",
+        'scheduling_proposal',
+      ],
+      ["I'm based out of SF and Tuesday at 2pm PT works.", 'scheduling_proposal'],
+      ["I'm working out of the NYC office Tuesday at 2pm, happy to meet there.", 'scheduling_proposal'],
+    ] as const) {
+      expect(sig(body).signal, body).toBe(signal);
+      expect(sig(body).extraction.proposedTimes, body).toHaveLength(1);
+    }
+    expect(slots("I'm working out of the NYC office Tuesday at 2pm, happy to meet there.")).toEqual([
+      'Tue 14:00',
+    ]);
+    // 2pm Pacific is 5pm Eastern
+    expect(slots("I'm based out of SF and Tuesday at 2pm PT works.")).toEqual(['Tue 17:00']);
+    // being out still takes the day away
+    expect(slots("I'm also out Monday, Tuesday at 2 works.")).toEqual(['Tue 14:00']);
+    expect(slots("I'm out Monday at 2, but Tuesday at 2 works.")).toEqual(['Tue 14:00']);
+    expect(slots('I teach a class Monday at 6 but could do Tuesday at 6pm.')).toEqual(['Tue 18:00']);
+    expect(slots('Wednesday is booked solid. Thursday at 10 or 11 either works.')).toEqual([
+      'Thu 10:00',
+      'Thu 11:00',
+    ]);
+  });
+
+  it('a yes plus "you should talk to Ana" is a yes with an extra intro: times go to the sender', () => {
+    for (const body of [
+      'Happy to chat next week! You should talk to Ana on my team too, she did the same rotation.',
+      'Happy to chat. You should also talk to Ana.',
+      'Happy to chat! You should talk to Ana too',
+    ]) {
+      const r = sig(body);
+      expect(r.signal, body).toBe('intro_offer');
+      expect(r.extraction.handoff, body).toBeUndefined();
+      expect(r.confidence, body).toBeGreaterThanOrEqual(PROPOSE_THRESHOLD);
+      expect(proposeCards(body), body).toHaveLength(1);
+    }
+    // sending the student to Ana instead of a chat of their own still hands off
+    const away = 'Happy to help, but honestly you should talk to Ana instead, she is the one hiring.';
+    expect(sig(away).extraction.handoff).toBe(true);
+    expect(proposeCards(away)).toHaveLength(0);
+  });
+});
+
 describe('note extraction', () => {
   it('finds offers, action items, hooks, advice', () => {
     const r = heuristicNoteExtraction(
@@ -1096,5 +1246,66 @@ describe('warm-up', () => {
     expect(days.every((d) => d !== 0 && d !== 6)).toBe(true);
     expect(new Date(plan.actions[1]!.dueAt).getDate()).toBe(6); // Tuesday, not Sunday Oct 4
     expect(new Date(plan.readyAt).getDate()).toBe(8); // Thursday
+  });
+});
+
+describe('blind-test misses: the causes, not the strings', () => {
+  const ref = new Date('2026-10-01T13:00:00Z'); // Thursday 9:00 AM Eastern
+  const ET = 'America/New_York';
+  const sig = (body: string) => heuristicSignal(body, 'inbound', ref, { timeZone: ET });
+  const slots = (body: string) =>
+    sig(body).extraction.proposedTimes.map(
+      (t) =>
+        `${new Date(t.startIso).toLocaleString('en-US', {
+          timeZone: t.timeZone ?? ET,
+          weekday: 'short',
+          month: 'numeric',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+          hourCycle: 'h23',
+        })}${t.timeZone ? ` ${t.timeZone}` : ''}`,
+    );
+
+  it('a bare time in the sentence after a day takes that day', () => {
+    expect(slots('Friday is good. 11am?')).toEqual(['Fri, 10/2, 11:00']);
+    expect(sig('Friday is good. 11am?').signal).toBe('scheduling_proposal');
+    // not a day the sender says is taken
+    expect(slots("I'm out Friday. 11am?")).toEqual([]);
+  });
+
+  it('"later that day" and "that afternoon" reuse the day named before, and a stated zone holds for the sentence', () => {
+    expect(slots('Tue 10/6 at 9am CT works, or that afternoon at 3.')).toEqual([
+      'Tue, 10/6, 09:00 America/Chicago',
+      'Tue, 10/6, 15:00 America/Chicago',
+    ]);
+    expect(slots('Wednesday at 10am, or later the same day around 4pm.')).toEqual([
+      'Wed, 10/7, 10:00',
+      'Wed, 10/7, 16:00',
+    ]);
+  });
+
+  it('an invitation to come back sets the follow-up date and softens a no', () => {
+    expect(followUpDate('Heads down until our launch in March. Reach back out in April?', ref, ET)).toBe(
+      '2027-04-01',
+    );
+    expect(followUpDate('try me in Q2', ref, ET)).toBe('2027-04-01');
+    expect(followUpDate('maybe after Q1', ref, ET)).toBe('2027-04-01');
+    const r = sig("I'll have to say no for the moment, but ask me again next spring.");
+    expect(r.signal).toBe('reply_decline');
+    expect(r.extraction.decline).toBe('soft');
+    expect(r.extraction.followUpAfter).toBe('2027-03-01');
+  });
+
+  it('a no to a call with an article still pairs with a yes to written questions', () => {
+    const r = sig("I can't take a call this month, but happy to answer questions in this thread.");
+    expect(r.signal).toBe('question');
+    expect(r.extraction.prefersEmail).toBe(true);
+  });
+
+  it('an assistant added to find a time is a yes, even with "looking forward to it"', () => {
+    expect(sig("cc'ing my EA Sam to find us a time. Looking forward to it.").signal).toBe('reply_positive');
+    // a real confirmation still is one
+    expect(sig('Accepted the invite, looking forward to it.').signal).toBe('scheduling_confirmation');
   });
 });

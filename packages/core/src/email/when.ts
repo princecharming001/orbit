@@ -216,6 +216,7 @@ type Tok =
   | { k: 'next'; word: string }
   | { k: 'week'; offset: number; relative: boolean }
   | { k: 'past' }
+  | { k: 'same'; part?: Part }
   | { k: 'conn' };
 type Part = 'morning' | 'afternoon' | 'evening';
 /** `endsSentence`: a day or month name whose trailing dot ends the sentence ("I'm booked Wednesday. Tuesday at 2pm"). */
@@ -245,6 +246,8 @@ const TOKEN_RE = new RegExp(
     '(?<dmon>(?<![\\d/.:])(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:of\\s+)?(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\\b\\.?)',
     // the 8th
     '(?<ord>\\bthe\\s+(\\d{1,2})(?:st|nd|rd|th)\\b)',
+    // the day named last: "later that day", "that afternoon", "the same day"
+    '(?<same>\\b(?:(?:later|earlier)\\s+(?:on\\s+|in\\s+)?)?(?:that|the\\s+same)\\s+(day|morning|afternoon|evening|night)\\b)',
     // weekday
     '(?<day>\\b(monday|mon|tuesday|tues|tue|wednesday|weds|wed|thursday|thurs|thur|thu|friday|fri|saturday|sat|sunday|sun)\\b\\.?)',
     // relative day
@@ -359,6 +362,11 @@ function tokenize(text: string): Positioned[] {
       if (AMBIGUOUS_DAY.test(lower) && word[0] !== word[0]!.toUpperCase()) continue;
       const hit = DAY_WORDS.find(([re]) => re.test(lower));
       if (hit) push({ k: 'day', dow: hit[1] });
+      continue;
+    }
+    if (g.same) {
+      const w = g.same.toLowerCase().split(/\s+/).pop()!;
+      push(w === 'day' ? { k: 'same' } : { k: 'same', part: w === 'night' ? 'evening' : (w as Part) });
       continue;
     }
     if (g.rel) {
@@ -614,10 +622,16 @@ function weekIsBlocked(text: string, start: number, end: number): boolean {
   return !(WEEK_OPEN.test(clause) && !/\b(not|cannot)\b|n['’]t\b/i.test(clause));
 }
 
+/** What a chunk needs from the chunks before it: the day named last, for "later that day". */
+interface ChunkContext {
+  lastAnchor?: Anchor;
+}
+
 function interpretChunk(
   text: string,
   chunk: Positioned[],
   weekAt: WeekAt = () => undefined,
+  ctx: ChunkContext = {},
 ): { proposals: Proposal[]; leftover: Draft[] } {
   const proposals: Proposal[] = [];
   const leftover: Draft[] = [];
@@ -691,6 +705,7 @@ function interpretChunk(
     if (pendingPast) d.past = true;
     pendingPast = false;
     pendingNext = false;
+    ctx.lastAnchor = d.anchors[d.anchors.length - 1];
   };
   for (let i = 0; i < chunk.length; i++) {
     const t = chunk[i]!;
@@ -714,6 +729,12 @@ function interpretChunk(
         break;
       case 'rel':
         addAnchor({ k: 'rel', offset: t.offset }, t);
+        if (t.part) d.part = t.part;
+        break;
+      case 'same':
+        // "8am Monday, or later that day around 5:30pm": the day named last, again
+        if (!ctx.lastAnchor) break;
+        addAnchor({ ...ctx.lastAnchor }, t);
         if (t.part) d.part = t.part;
         break;
       case 'part':
@@ -744,6 +765,8 @@ function interpretChunk(
           t.ish ||
           Boolean(mod) ||
           rangeOpen ||
+          // "Thursday at 10 or 11": a bare number offered as the alternative to a time is a time too
+          (prev?.k === 'or' && d.times.length > 0) ||
           (nextTok?.k === 'range' && chunk[i + 2]?.k === 'time') ||
           nextTok?.k === 'part' ||
           prev?.k === 'part' ||
@@ -786,9 +809,13 @@ const NEGATING = /\b(not|can'?t|cannot|busy|class|meeting|conflict|except|unless
  */
 const CLAUSE_BREAK =
   /[.!?;\n,]|\b(?:but|however|though|although|instead|otherwise|whereas|while|so|how about|what about)\b/gi;
-/** A clause that says the time is taken ("I'm in class Monday at 10", "Monday at 10 doesn't work", "I'm out Monday"). */
+/**
+ * A clause that says the time is taken ("I'm in class Monday at 10", "Monday at 10 doesn't work", "I'm out Monday").
+ * Only an adverb may stand between "I'm" and "out" ("I'm also out Monday"): "I'm based out of SF" and "I'm working
+ * out of our Boston office" say where they are, not that they are away.
+ */
 const BUSY_CLAUSE =
-  /\b(?:not|no|never|cannot|busy|booked|in class|have class|in a meeting|in meetings|conflict|unavailable|tied up|out of (?:the )?office|traveling|travelling|away|blocked)\b|n['’]t\b|\b(?:i['’]?m|i am|i['’]?ll be|i will be|we['’]?re|we are|we['’]?ll be)\s+(?:\w+\s+)?(?:out|off)\b(?!\s+work)/i;
+  /\b(?:not|no|never|cannot|busy|booked|in class|have class|teach(?:ing)? (?:a |my )?class(?:es)?|in a meeting|in meetings|conflict|unavailable|tied up|out of (?:the )?office|traveling|travelling|away|blocked)\b|n['’]t\b|\b(?:i['’]?m|i am|i['’]?ll be|i will be|we['’]?re|we are|we['’]?ll be)\s+(?:(?:also|all|totally|completely|mostly|just|actually|unfortunately|still|both|then)\s+)?(?:out|off)\b(?!\s+work)/i;
 /**
  * A negative question that suggests a time ("Why don't we do Tuesday at 2pm?", "Can't we just do Tuesday at 2pm?",
  * "Wouldn't it be easier to do Tuesday at 2pm?"): at the start of the clause, followed by its subject.
@@ -930,8 +957,9 @@ export function extractTimes(text: string, reference: Date, opts: ExtractOptions
   const weekAt = weekScopes(norm, toks);
   const proposals: Proposal[] = [];
   const leftovers: { draft: Draft; sentence: number; start: number; end: number }[] = [];
+  const ctx: ChunkContext = {};
   for (const c of chunks(norm, toks)) {
-    const r = interpretChunk(norm, c, weekAt);
+    const r = interpretChunk(norm, c, weekAt, ctx);
     proposals.push(...r.proposals);
     for (const l of r.leftover) {
       const start = Math.min(l.anchorStart ?? Number.POSITIVE_INFINITY, ...l.times.map((t) => t.start));
@@ -940,12 +968,19 @@ export function extractTimes(text: string, reference: Date, opts: ExtractOptions
     }
   }
   // "I'm free Thursday, anytime after 2pm": a lone day and a lone time in the same sentence belong together
+  // "Monday works. 10am?": a sentence that gives only a time takes the one day the sentence before it named
   const bySentence = new Map<number, typeof leftovers>();
   for (const l of leftovers) bySentence.set(l.sentence, [...(bySentence.get(l.sentence) ?? []), l]);
-  for (const group of bySentence.values()) {
-    const anchors = group.filter((g) => g.draft.anchors.length && !g.draft.times.length);
+  const anchorsIn = (n: number) =>
+    (bySentence.get(n) ?? []).filter((g) => g.draft.anchors.length && !g.draft.times.length);
+  const sentenceHasAnchor = (n: number) =>
+    toks.some((t) => ANCHOR_KINDS.has(t.k) && sentenceIndexAt(norm, t.start) === n);
+  for (const [n, group] of bySentence) {
     const times = group.filter((g) => g.draft.times.length && !g.draft.anchors.length);
-    if (anchors.length !== 1 || !times.length) continue;
+    if (!times.length) continue;
+    let anchors = anchorsIn(n);
+    if (!anchors.length && !sentenceHasAnchor(n)) anchors = anchorsIn(n - 1);
+    if (anchors.length !== 1) continue;
     const a = anchors[0]!;
     for (const t of times) {
       const lo = Math.min(a.start, t.start);
@@ -964,6 +999,17 @@ export function extractTimes(text: string, reference: Date, opts: ExtractOptions
             timeSpan: { start: time.start, end: time.stop },
           });
     }
+  }
+  // "Mon 10/19 at 8am PT, or later that day around 5:30pm": a zone stated once in a sentence holds for all of it
+  const sentenceZones = new Map<number, Set<string>>();
+  for (const p of proposals)
+    if (p.zone) {
+      const n = sentenceIndexAt(norm, p.timeSpan.start);
+      sentenceZones.set(n, (sentenceZones.get(n) ?? new Set()).add(p.zone));
+    }
+  for (const p of proposals) {
+    const zones = sentenceZones.get(sentenceIndexAt(norm, p.timeSpan.start));
+    if (!p.zone && zones?.size === 1) p.zone = [...zones][0];
   }
   const out: ProposedTime[] = [];
   for (const p of proposals) {
