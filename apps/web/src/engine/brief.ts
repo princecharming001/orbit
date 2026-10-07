@@ -411,6 +411,11 @@ const DRAFT_KIND: Partial<Record<SuggestionKind, MessageKind>> = {
   report_back: 'report_back',
 };
 
+/** True for a card whose job is a message for the student to approve (it has, or will get, a draft). */
+export function isMessageSuggestion(kind: SuggestionKind): boolean {
+  return !!DRAFT_KIND[kind];
+}
+
 /** Kinds that open a new email thread with their own subject instead of replying in the chat's thread. */
 const NEW_THREAD_KINDS = new Set<MessageKind>(['outreach', 'intro_request', 'referral_ask']);
 
@@ -966,17 +971,20 @@ export async function draftMessage(
   personId: string,
   kind: MessageKind,
   channel: 'gmail' | 'linkedin',
-  chatId?: string,
+  /** the chat to write in; undefined finds the person's chat; null drafts outside any chat (a fresh first message) */
+  chatId?: string | null,
   inputs: DraftInputs = {},
 ): Promise<OutboundMessage> {
   const person = (await db.people.get(personId))!;
   const chat = chatId
     ? await db.chats.get(chatId)
-    : await db.chats
-        .where('personId')
-        .equals(personId)
-        .filter((c) => c.stage !== 'archived')
-        .first();
+    : chatId === null
+      ? undefined
+      : await db.chats
+          .where('personId')
+          .equals(personId)
+          .filter((c) => c.stage !== 'archived')
+          .first();
   const { out, generatedBy, ctx } = await materializeDraft(
     user,
     person,
@@ -1276,6 +1284,12 @@ async function addConfirmationCards(userId: string, now: Date): Promise<void> {
   for (const m of merges) {
     const [a, b] = await Promise.all([db.people.get(m.personAId), db.people.get(m.personBId)]);
     if (!a || !b) continue;
+    // a guess with little behind it (different first names, no shared address) waits behind "can wait"; it does not
+    // take one of the few spots on Today
+    const lower = (x?: string) => (x ?? '').trim().toLowerCase();
+    const emails = new Set([a.primaryEmail, ...a.emails].filter(Boolean).map((e) => lower(e)));
+    const sharedEmail = [b.primaryEmail, ...b.emails].some((e) => e && emails.has(lower(e)));
+    const weak = !sharedEmail && lower(a.firstName) !== lower(b.firstName);
     await upsertSuggestions(
       userId,
       [
@@ -1293,6 +1307,8 @@ async function addConfirmationCards(userId: string, now: Date): Promise<void> {
         },
       ],
       now,
+      undefined,
+      { deferred: weak },
     );
   }
   const unmatched = await db.notes
@@ -1336,7 +1352,7 @@ function describeStage(stage: string): string {
 const BRIEF_LABELS: Record<SuggestionKind, (n: number) => string> = {
   follow_up_bump: (n) => `${n} follow-up${n > 1 ? 's' : ''}`,
   thank_you: (n) => `${n} thank-you${n > 1 ? 's' : ''}`,
-  schedule_propose: (n) => `${n} to schedule`,
+  schedule_propose: (n) => `${n} chat${n > 1 ? 's' : ''} to propose times for`,
   schedule_confirm: (n) => `${n} time${n > 1 ? 's' : ''} to confirm`,
   prep_brief: (n) => `${n} chat${n > 1 ? 's' : ''} to prep`,
   warm_up_engage: (n) => `${n} LinkedIn warm-up${n > 1 ? 's' : ''}`,
@@ -1348,7 +1364,7 @@ const BRIEF_LABELS: Record<SuggestionKind, (n: number) => string> = {
   action_item_reminder: (n) => `${n} promise${n > 1 ? 's' : ''} to keep`,
   intro_request: (n) => `${n} intro ask${n > 1 ? 's' : ''}`,
   report_back: (n) => `${n} loop${n > 1 ? 's' : ''} to close`,
-  confirm_stage: (n) => `${n} update${n > 1 ? 's' : ''} to confirm`,
+  confirm_stage: (n) => `${n} stage update${n > 1 ? 's' : ''} to check`,
   confirm_merge: (n) => `${n} possible duplicate${n > 1 ? 's' : ''}`,
   confirm_note_match: (n) => `${n} note${n > 1 ? 's' : ''} to match`,
   confirm_intro: (n) => `${n} intro${n > 1 ? 's' : ''} to confirm`,
@@ -1361,7 +1377,7 @@ export function briefSummaryText(counts: Map<string, number>, upcoming: number, 
   if (parts.length) return `${parts.join(', ')}${coming ? `; ${coming}` : ''}.`;
   if (coming) return `Nothing to send today. ${coming[0]!.toUpperCase()}${coming.slice(1)}.`;
   if (peopleCount === 0)
-    return 'Orbit has nobody to work with yet. Connect Google or upload your LinkedIn connections to get your first suggestions.';
+    return 'Welcome. Your first step is to add a few people you want to talk to, then Orbit suggests what to do each day.';
   return 'Nothing needs you today. Pick someone from Discover to start a new conversation.';
 }
 
@@ -1476,7 +1492,7 @@ export async function startWarmUpOrOutreach(
   channel: 'gmail' | 'linkedin',
   source: CoffeeChat['source'] = 'manual',
   opts: { skipWarmUp?: boolean } = {},
-): Promise<{ chat: CoffeeChat; draft?: OutboundMessage }> {
+): Promise<{ chat?: CoffeeChat; draft?: OutboundMessage }> {
   const settings = await db.settings.get(user.id);
   const person = (await db.people.get(personId))!;
   const now = new Date();
@@ -1486,6 +1502,13 @@ export async function startWarmUpOrOutreach(
     .filter((c) => !['declined', 'no_response', 'archived'].includes(c.stage))
     .first();
   const cold = !opts.skipWarmUp && needsWarmUp(person, channel, settings?.warmUpEnabled ?? true);
+  // Looking at a first draft is not starting a chat: the chat (and its Pipeline card) is opened when the message is
+  // approved and sent (openChatForOutreach). Only a warm-up, which has steps to track, opens one right away.
+  if (!chat && !cold) {
+    // null: an old declined or silent chat is not the context for a fresh first message
+    const draft = await draftMessage(user, personId, 'outreach', channel, null);
+    return { draft };
+  }
   if (!chat) {
     const referrer = await findReferrerFor(user.id, person);
     chat = {
@@ -1522,6 +1545,13 @@ export async function startWarmUpOrOutreach(
     });
   }
   await db.recommendations.where('personId').equals(personId).modify({ status: 'converted' });
+  // a "First message" card for this person is answered by what was just started (a warm-up or the draft)
+  const firstMessageCards = await db.suggestions
+    .where('userId')
+    .equals(user.id)
+    .filter((x) => x.personId === personId && x.kind === 'new_outreach' && x.status === 'pending')
+    .toArray();
+  if (firstMessageCards.length) await retireSuggestions(firstMessageCards, 'superseded:started', now);
   if (chat.stage === 'warming' && !opts.skipWarmUp) {
     await evaluateImmediateSuggestions(user.id, { chatId: chat.id, personId }, now);
     return { chat };

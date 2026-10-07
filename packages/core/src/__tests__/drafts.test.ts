@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { roleNoun } from '../drafts/phrasing';
+import { pointPhrase, roleNoun } from '../drafts/phrasing';
 import { financeFirmKind, sectorOf, seniorityOf, yearLabel } from '../drafts/sector';
 import {
   BANNED_PHRASES,
@@ -256,6 +256,24 @@ describe('outreach', () => {
     expect(r.d.body).not.toMatch(/minutes/);
     expect(r.d.body).toMatch(/rolling basis|deadline/);
     expect(r.d.needsInput).toEqual([]);
+  });
+  it('a recruiter message on LinkedIn signs off once, not "Thank you for your time." and then "Thanks"', () => {
+    const r = generateDraft(
+      base({
+        channel: 'linkedin',
+        person: {
+          firstName: 'Felix',
+          fullName: 'Felix Sato',
+          title: 'Campus Recruiter',
+          org: 'Ramp',
+          isAlumni: false,
+          relationshipType: 'recruiter',
+          strength: 0,
+        },
+      }),
+    );
+    expect(r.body).toMatch(/Thanks,\s+\w+\s*$/);
+    expect(r.body).not.toMatch(/Thank you for your time/);
   });
   it('transition and referral openers name the fact', () => {
     const t = check(
@@ -1598,5 +1616,35 @@ describe('financeFirmKind', () => {
     expect(financeFirmKind('Citi')).toBe('bank');
     expect(financeFirmKind('Ramp')).toBeUndefined();
     expect(financeFirmKind(undefined)).toBeUndefined();
+  });
+});
+
+describe('wordsIn', () => {
+  it('counts a one-paragraph LinkedIn note, leaving out only the greeting', () => {
+    expect(
+      wordsIn(
+        'Hi Noah, I read your post on onboarding and liked the point about shipping early. Open to a short chat?',
+      ),
+    ).toBe(18);
+    expect(wordsIn('Hi Noah,\n\nOne line here.\n\nThanks,\nAlex')).toBe(3);
+  });
+});
+
+describe('usability round 2: thank-you phrasing from typed notes', () => {
+  it('"recommended I read X" is the advice to read X, and "their" after a company stays the company\'s', () => {
+    const c = clause('She recommended I read the Ramp engineering blog post on their ledger', {
+      firstName: 'Lena',
+      fullName: 'Lena Novak',
+    });
+    expect(pointPhrase(c)).toBe('your advice to read the Ramp engineering blog post on their ledger');
+    // with no company named, "their" is still the person's
+    expect(clause('They recommended reading their team blog', { firstName: 'Lena' })?.text).toBe(
+      'you recommended reading your team blog',
+    );
+  });
+  it('a two-part promise keeps one "I\'ll"', () => {
+    expect(promiseLine('Send her my resume by Friday and share my side project link')).toBe(
+      "As promised, I'll send you my resume by Friday and share my side project link.",
+    );
   });
 });

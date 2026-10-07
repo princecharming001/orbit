@@ -1,14 +1,15 @@
 import type { User } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { ArrowRight, CalendarCheck, Mail, Map as MapIcon, Sparkles, Sun } from 'lucide-react';
+import { ArrowRight, LayoutGrid, Mail, Map as MapIcon, NotebookPen, Sparkles, Sun } from 'lucide-react';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Logo } from '../components/AppShell';
 import { db } from '../db/schema';
-import { createLocalUser } from '../engine/account';
+import { createLocalUser, leaveDemoForOwnSetup } from '../engine/account';
 import { DEMO_USER_ID, demoResetPrompt, loadDemo } from '../engine/demo';
 import { useSession } from '../state/session';
 import { Button, Spinner } from '../ui';
+import { onboardingPath } from './Onboarding';
 
 export function Landing() {
   const nav = useNavigate();
@@ -40,33 +41,62 @@ export function Landing() {
   };
   const start = async () => {
     if (resolving) return;
+    // the demo holds nothing of the student's: their own setup replaces it
+    if (isDemo) {
+      setBusy('Clearing the demo…');
+      const u = await leaveDemoForOwnSetup();
+      await setUserId(u.id);
+      nav(onboardingPath(2));
+      return;
+    }
     // An existing user continues where they are; only a first visit creates a new local profile.
     if (onboarded) return nav('/today');
-    if (midSetup && user) return nav(`/onboarding/${Math.max(2, user.onboardingStep)}`);
+    if (midSetup && user) return nav(onboardingPath(user.onboardingStep));
     setBusy('Creating your space…');
     const u = await createLocalUser();
     await setUserId(u.id);
-    nav('/onboarding/2');
+    nav(onboardingPath(2));
   };
-  const startLabel = onboarded ? 'Open Orbit' : midSetup ? 'Continue setup' : 'Get started';
+  const startLabel = isDemo
+    ? 'Set up Orbit for me'
+    : onboarded
+      ? 'Open Orbit'
+      : midSetup
+        ? 'Continue setup'
+        : 'Get started';
   return (
     <div className="min-h-full bg-canvas">
+      {busy && (
+        // whichever button was pressed, the progress shows where the student is looking
+        <div
+          className="fixed bottom-6 inset-x-4 sm:inset-x-auto sm:left-1/2 sm:-translate-x-1/2 z-50 flex items-center justify-center gap-2 rounded-2xl bg-ink text-white px-4 py-2.5 text-[13px] shadow-lg"
+          role="status"
+          data-testid="landing-progress"
+        >
+          <Spinner /> {busy}
+        </div>
+      )}
       <header className="max-w-[1120px] mx-auto px-5 h-16 flex items-center gap-3">
         <Logo size={24} />
         <span className="font-semibold tracking-tight text-[16px]">Orbit</span>
         <nav className="ml-auto hidden sm:flex items-center gap-6 text-[14px] text-ink-2">
           <a href="#how">How it works</a>
           <a href="#privacy">Privacy</a>
-          <a
-            href="https://github.com/princecharming001/orbit/tree/main/docs/plan"
-            target="_blank"
-            rel="noreferrer"
-          >
-            Docs
-          </a>
         </nav>
         <div className="ml-auto sm:ml-4 flex items-center gap-2" data-testid="landing-actions">
-          {resolving ? null : onboarded ? (
+          {resolving ? null : isDemo && onboarded ? (
+            <>
+              {/* on a phone the hero below has this button too; the header keeps only the next step */}
+              <span className="hidden sm:inline">
+                <Button variant="ghost" onClick={() => nav('/today')}>
+                  Back to the demo
+                </Button>
+              </span>
+              <Button variant="primary" onClick={start} disabled={!!busy}>
+                Set up Orbit for me
+              </Button>
+            </>
+          ) : onboarded ? (
             <Button variant="primary" onClick={() => nav('/today')}>
               Open Orbit
             </Button>
@@ -85,19 +115,19 @@ export function Landing() {
         </div>
       </header>
 
-      <section className="max-w-[1120px] mx-auto px-5 pt-12 pb-16 grid md:grid-cols-[1.05fr_1fr] gap-10 items-center">
-        <div className="fade-up">
+      <section className="max-w-[1120px] mx-auto px-5 pt-10 md:pt-12 pb-16 grid grid-cols-1 md:grid-cols-[1.05fr_1fr] gap-10 md:items-start">
+        <div className="fade-up min-w-0">
           <span className="inline-flex items-center gap-1.5 rounded-full border border-line px-3 h-7 text-[12px] font-medium text-ink-2">
             <Sparkles size={13} className="text-accent" /> Built for students who are recruiting
           </span>
           <h1 className="mt-5 text-[44px] md:text-[56px] leading-[1.02] font-bold tracking-[-0.03em]">
             Coffee chats, <br />
-            on autopilot.
+            without the busywork.
           </h1>
           <p className="mt-5 text-[17px] text-ink-2 max-w-[520px] leading-relaxed">
-            Orbit connects your Gmail, calendar and LinkedIn, learns what you're recruiting for, finds the
-            right people, drafts in your voice, and hands you a morning brief of one-tap follow-ups. Nothing
-            is ever sent without you.
+            Orbit helps you network for internships. It finds people worth a coffee chat, drafts each message
+            for you to edit, reminds you when to follow up and say thank you, and keeps track of every
+            conversation. Nothing is ever sent without you.
           </p>
           <div className="mt-7 flex flex-wrap items-center gap-3 min-h-11">
             {resolving ? (
@@ -107,18 +137,29 @@ export function Landing() {
                 {startLabel} <ArrowRight size={16} />
               </Button>
             )}
+            {isDemo && onboarded && !resolving && (
+              <Button size="lg" variant="secondary" onClick={() => nav('/today')}>
+                Back to the demo
+              </Button>
+            )}
             {!onboarded && !resolving && (
               <Button size="lg" variant="secondary" onClick={demo} disabled={!!busy}>
+                {/* the full progress message is in the status pill at the bottom; the button stays its own width */}
                 {busy ? (
                   <>
-                    <Spinner /> {busy}
+                    <Spinner /> Loading…
                   </>
                 ) : (
-                  'Try it with demo data'
+                  'Try the demo'
                 )}
               </Button>
             )}
           </div>
+          {isDemo && onboarded && (
+            <p className="mt-3 text-[13px] text-ink-2">
+              You are in the demo, with a made-up student's data. Setting up your own clears it.
+            </p>
+          )}
           {onboarded && !isDemo && (
             <p className="mt-3 text-[13px] text-ink-2">
               Your data on this browser belongs to {user?.fullName || 'your profile'}. To try the demo
@@ -128,26 +169,10 @@ export function Landing() {
           <p className="mt-3 text-[12px] text-ink-3">
             Free. Runs in your browser; your data stays on your device.
           </p>
-          <div className="mt-8 flex flex-wrap gap-2">
-            {[
-              'Morning brief',
-              'Pipeline',
-              'Orbit map',
-              'Reach paths',
-              'Warm-ups',
-              'Granola notes',
-              'Voice capture',
-            ].map((t) => (
-              <span
-                key={t}
-                className="rounded-full border border-line px-3 h-7 inline-flex items-center text-[12px] text-ink-2"
-              >
-                {t}
-              </span>
-            ))}
-          </div>
         </div>
-        <HeroMock />
+        <div className="min-w-0 md:mt-8">
+          <HeroMock />
+        </div>
       </section>
 
       <section id="how" className="border-t border-line bg-canvas-2/60">
@@ -161,33 +186,33 @@ export function Landing() {
             {[
               {
                 icon: Sun,
-                title: 'Morning brief',
-                body: 'Five to seven things worth doing today: follow up, thank, confirm a time, prep for a chat, reconnect. Each with a ready draft and a reason.',
+                title: 'A short list for today',
+                body: 'The few things worth doing today: follow up, say thank you, confirm a time, prep for a chat, reconnect. Each with a ready draft and the reason it is there. The rest waits until you want it.',
               },
               {
                 icon: Mail,
                 title: 'Drafts in your voice',
-                body: 'Learned from your own sent mail. Every claim traces to something you actually know about the person. You approve, edit or skip.',
+                body: 'Every line comes from something you actually know about the person. You edit it, send it yourself, or skip it.',
               },
               {
-                icon: CalendarCheck,
-                title: 'A pipeline that fills itself',
-                body: 'Stages are inferred from email and calendar: first message sent, replied, scheduling, scheduled, completed, followed up, nurturing.',
+                icon: LayoutGrid,
+                title: 'Every chat in one place',
+                body: 'See where each conversation stands, from first message to scheduled to thanked, and who has gone quiet.',
               },
               {
                 icon: MapIcon,
                 title: 'Your network as an orbit',
-                body: 'You in the centre, people by closeness, companies as arcs. Ask for a path to anyone and Orbit shows who can introduce you.',
+                body: 'You in the centre, people by how well you know them. Pick anyone and Orbit shows who could introduce you.',
               },
               {
                 icon: Sparkles,
                 title: 'Warm before you write',
-                body: 'For cold LinkedIn targets, Orbit schedules a few days of genuine engagement with their posts before suggesting the message.',
+                body: 'For someone you only know from LinkedIn, Orbit suggests a few small steps first, like reacting to a post, so your name is familiar when you write.',
               },
               {
-                icon: CalendarCheck,
+                icon: NotebookPen,
                 title: 'Remembers every chat',
-                body: 'Share Granola notes by email, dictate with Wispr Flow into the capture box, or paste. Facts, offers and promises land on the profile.',
+                body: 'Type, dictate or paste notes after a chat. What they said, what they offered and what you promised land on their profile.',
               },
             ].map(({ icon: Icon, title, body }) => (
               <div key={title} className="bg-canvas border border-line rounded-[12px] p-5">
@@ -210,7 +235,7 @@ export function Landing() {
             device.
           </p>
           <ul className="mt-5 space-y-2 text-[14px] text-ink-2">
-            <li>• Nothing is sent without your tap. Approval binds the exact text.</li>
+            <li>• Nothing is sent without you. What goes out is exactly the text you read.</li>
             <li>• No scraping. LinkedIn comes from your own data export.</li>
             <li>• Export or wipe everything from Settings, any time.</li>
           </ul>
@@ -223,8 +248,8 @@ export function Landing() {
               upload your resume.
             </li>
             <li>
-              <span className="font-medium text-ink">2.</span> Connect Google, or upload your LinkedIn export,
-              or just try the demo.
+              <span className="font-medium text-ink">2.</span> Add the people you want to meet, or import your
+              LinkedIn connections. Or just try the demo.
             </li>
             <li>
               <span className="font-medium text-ink">3.</span> Open your first brief.
@@ -268,7 +293,7 @@ function HeroMock() {
       tone: 'bg-good-soft text-good',
     },
     {
-      kind: 'Follow up',
+      kind: 'Follow-up',
       who: 'Priya Patel · Engineering Manager at Ramp',
       reason: 'No reply in 6 business days',
       tone: 'bg-warn-soft text-warn',
@@ -282,8 +307,8 @@ function HeroMock() {
   ];
   return (
     <div className="relative fade-up" style={{ animationDelay: '80ms' }}>
-      <div className="absolute -inset-6 bg-[radial-gradient(ellipse_at_center,_rgba(91,91,214,0.12),_transparent_60%)]" />
-      <div className="relative rounded-[14px] border border-line bg-canvas shadow-[var(--shadow-card)] overflow-hidden">
+      <div className="absolute -inset-6 hidden md:block bg-[radial-gradient(ellipse_at_center,_rgba(91,91,214,0.12),_transparent_60%)]" />
+      <div className="relative z-10 rounded-[14px] border border-line bg-canvas shadow-[var(--shadow-card)] overflow-hidden">
         <div className="h-10 border-b border-line flex items-center px-4 gap-2 text-[12px] text-ink-3">
           <span className="w-2.5 h-2.5 rounded-full bg-line" />
           <span className="w-2.5 h-2.5 rounded-full bg-line" />
@@ -295,9 +320,12 @@ function HeroMock() {
           <div className="font-semibold text-[16px] mt-0.5">4 things for today</div>
           <div className="mt-3 space-y-2">
             {cards.map((c) => (
-              <div key={c.kind} className="rounded-[10px] border border-line p-3 flex items-start gap-3">
+              <div
+                key={c.kind}
+                className="rounded-[10px] border border-line p-3 flex items-start gap-3 min-w-0"
+              >
                 <span
-                  className={`rounded-full px-2 h-5 inline-flex items-center text-[11px] font-medium ${c.tone}`}
+                  className={`rounded-full px-2 h-5 inline-flex items-center text-[11px] font-medium whitespace-nowrap shrink-0 ${c.tone}`}
                 >
                   {c.kind}
                 </span>
@@ -305,13 +333,14 @@ function HeroMock() {
                   <div className="text-[13px] font-medium truncate">{c.who}</div>
                   <div className="text-[12px] text-ink-3 truncate">{c.reason}</div>
                 </div>
-                <span className="text-[12px] text-accent font-medium">Review</span>
+                <span className="text-[12px] text-ink-3 shrink-0">Draft ready</span>
               </div>
             ))}
           </div>
         </div>
       </div>
-      <div className="absolute -bottom-6 -left-6 hidden md:block">
+      {/* sits behind the preview card, so it never covers the names on it */}
+      <div className="absolute -bottom-12 -right-4 z-0 hidden lg:block opacity-60" aria-hidden>
         <OrbitMini />
       </div>
     </div>

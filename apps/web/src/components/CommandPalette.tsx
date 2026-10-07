@@ -29,7 +29,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       { kind: 'action', id: 'today', label: 'Go to Today', to: '/today' },
       { kind: 'action', id: 'note', label: 'Add a note', to: '/notes/new' },
       { kind: 'action', id: 'map', label: 'Open the map', to: '/map' },
-      { kind: 'action', id: 'reach', label: 'Find a path to someone (Reach)', to: '/map?reach=1' },
+      { kind: 'action', id: 'reach', label: 'Find someone who can introduce you', to: '/map?reach=1' },
       { kind: 'action', id: 'discover', label: 'Discover people to meet', to: '/discover' },
       { kind: 'action', id: 'settings', label: 'Settings', to: '/settings' },
     ].filter((a) => !s || a.label.toLowerCase().includes(s));
@@ -67,7 +67,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
     nav(to);
   };
   return (
-    <Modal open={open} onClose={onClose} title="Search people, companies, actions" width={560}>
+    <Modal open={open} onClose={onClose} title="Search people and actions" width={560}>
       <input
         ref={ref}
         value={q}
@@ -86,7 +86,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
           }
           if (e.key === 'Enter' && results[idx]) go(results[idx]!.to);
         }}
-        placeholder="Type a name, company, or action…"
+        placeholder="Type a name, a company they work at, or an action…"
         className="w-full h-10 rounded-lg border border-line px-3 text-[14px] focus:outline-none focus:ring-2 focus:ring-accent/30"
       />
       <ul className="mt-3 max-h-[360px] overflow-y-auto scroll-thin -mx-2">

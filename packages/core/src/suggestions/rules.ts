@@ -18,7 +18,7 @@ import type {
   UserSettings,
 } from '../types';
 import { todayKey } from '../util/ids';
-import { warmUpProgress } from '../warmup/rules';
+import { warmUpProgress, warmUpStepDue } from '../warmup/rules';
 import { addBusinessDays, businessDaysBetween, localWeekday, nextWorkdayKey } from './calendar';
 
 export * from './calendar';
@@ -171,7 +171,8 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
           goalRelevance: rel,
           confidence: 1,
         });
-      } else if (prog.nextAction) {
+      } else if (prog.nextAction && warmUpStepDue(prog.nextAction, now, inp.timezone)) {
+        // the next step waits for its own day (no card in between), so the warm-up is spread out as promised
         out.push({
           kind: 'warm_up_engage',
           personId: chat.personId,
@@ -457,8 +458,8 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
           reasonText: hook
             ? days === undefined
               ? `You have a reason to check in with ${person.firstName}: "${clip(hook.text, 60)}"`
-              : `${Math.round(days)} days ${since}; you have a hook: "${clip(hook.text, 60)}"`
-            : `${Math.round(days ?? 0)} days ${since}; a short update on your search keeps it warm`,
+              : `${Math.round(days)} days ${since}; something to ask about: "${clip(hook.text, 60)}"`
+            : `${Math.round(days ?? 0)} days ${since}; a short update on your search keeps you in touch`,
           signals: { days, cadence, hookId: hook?.id },
           payload: hook ? { hookId: hook.id } : { needsUpdate: true },
           urgency: 0.4,

@@ -1,20 +1,27 @@
 import type { OutboundMessage, Person } from '@orbit/core';
 import { CHANNEL_LABELS, MESSAGE_KIND_LABELS } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { runApproval } from '../components/approve';
 import { DraftEditor, OutboxStatus } from '../components/DraftEditor';
 import { KIND_LABEL, SuggestionCard } from '../components/SuggestionCard';
 import { db } from '../db/schema';
+import { ensureDrafts } from '../engine/brief';
+import { draftLists } from '../engine/today';
 import { useSession } from '../state/session';
-import { Avatar, Chip, EmptyState, PageHeader, relDate, Tabs, useToast } from '../ui';
+import { Avatar, Button, Chip, EmptyState, PageHeader, relDate, Tabs, useToast } from '../ui';
 
 const IN_FLIGHT: OutboundMessage['status'][] = ['queued', 'sending', 'handed_off', 'failed'];
 
 export function InboxPage() {
-  const { userId } = useSession();
-  const [tab, setTab] = useState<'pending' | 'snoozed' | 'outbox' | 'sent'>('pending');
+  const { user, userId } = useSession();
+  const [tab, setTab] = useState<'pending' | 'snoozed' | 'outbox' | 'sent'>();
+  const [showLater, setShowLater] = useState(false);
+  const briefs = useLiveQuery(
+    () => (userId ? db.briefs.where('userId').equals(userId).toArray() : []),
+    [userId],
+  );
   const suggestions =
     useLiveQuery(() => (userId ? db.suggestions.where('userId').equals(userId).toArray() : []), [userId]) ??
     [];
@@ -33,9 +40,19 @@ export function InboxPage() {
   const people =
     useLiveQuery(() => (userId ? db.people.where('userId').equals(userId).toArray() : []), [userId]) ?? [];
   const byId = new Map(people.map((p) => [p.id, p]));
-  const pending = suggestions
-    .filter((s) => s.status === 'pending')
-    .sort((a, b) => b.priorityScore - a.priorityScore);
+  // Drafts holds the messages Orbit wrote for the student; other cards (prep, warm-ups, confirmations) live on Today.
+  // A draft already opened in the mail app or LinkedIn is under "Not sent yet", not here as well.
+  const latest = (briefs ?? []).sort((a, b) => b.generatedAt.localeCompare(a.generatedAt))[0];
+  const { forToday, later } = draftLists(suggestions, outbound, latest, new Date());
+  const pending = [...forToday, ...later];
+  const undrafted = pending
+    .filter((s) => !s.outboundMessageId)
+    .map((s) => s.id)
+    .join(',');
+  // cards kept for later have no draft yet: write them now, so every card here has something to approve
+  useEffect(() => {
+    if (user && undrafted) ensureDrafts(user, undrafted.split(',')).catch(() => undefined);
+  }, [user, undrafted]);
   const snoozed = suggestions
     .filter((s) => s.status === 'snoozed')
     .sort((a, b) => (a.snoozedUntil ?? '').localeCompare(b.snoozedUntil ?? ''));
@@ -45,36 +62,63 @@ export function InboxPage() {
   const outbox = outbound
     .filter((o) => IN_FLIGHT.includes(o.status))
     .sort((a, b) => (b.queuedAt ?? b.createdAt).localeCompare(a.queuedAt ?? a.createdAt));
+  // a message opened in the mail app or LinkedIn and not marked as sent comes first: it is waiting on the student
+  const shown =
+    tab ?? (outbox.some((o) => o.status === 'handed_off' || o.status === 'failed') ? 'outbox' : 'pending');
   return (
     <div>
       <PageHeader
-        title="Approvals"
-        subtitle="Everything waiting on you, what is on its way, and what you have sent."
+        title="Drafts"
+        subtitle="Every message Orbit wrote for you, in one place. Read it, edit it, and send it yourself. The same drafts show on Today, next to prep and warm-ups."
       />
       <Tabs
-        value={tab}
+        value={shown}
         onChange={setTab}
         items={[
-          { value: 'pending', label: 'Pending', count: pending.length },
+          { value: 'pending', label: 'Ready to send', count: forToday.length },
+          { value: 'outbox', label: 'Not sent yet', count: outbox.length },
           { value: 'snoozed', label: 'Snoozed', count: snoozed.length },
-          { value: 'outbox', label: 'Outbox', count: outbox.length },
           { value: 'sent', label: 'Sent', count: sent.length },
         ]}
       />
-      {tab === 'pending' &&
+      {shown === 'pending' &&
         (pending.length ? (
           <div className="space-y-3">
-            {pending.map((s) => (
+            {forToday.length === 0 && (
+              <p className="text-[13px] text-ink-3">Nothing to send today. The drafts below can wait.</p>
+            )}
+            {forToday.map((s) => (
               <SuggestionCard key={s.id} s={s} compact />
             ))}
+            {later.length > 0 &&
+              (showLater ? (
+                <>
+                  <div className="flex items-center gap-3 pt-2">
+                    <span className="text-[12px] uppercase tracking-wide text-ink-3">Can wait</span>
+                    <button
+                      className="text-[12px] text-ink-3 underline underline-offset-2 hover:text-ink"
+                      onClick={() => setShowLater(false)}
+                    >
+                      Hide them
+                    </button>
+                  </div>
+                  {later.map((s) => (
+                    <SuggestionCard key={s.id} s={s} compact />
+                  ))}
+                </>
+              ) : (
+                <Button onClick={() => setShowLater(true)} data-testid="drafts-later">
+                  Show {later.length} that can wait
+                </Button>
+              ))}
           </div>
         ) : (
           <EmptyState
-            title="Nothing waiting on you"
-            body="New approvals show up here as Orbit drafts them."
+            title="No drafts right now"
+            body="When a reply comes in or a follow-up is due, Orbit drafts the message and it waits here for you."
           />
         ))}
-      {tab === 'snoozed' &&
+      {shown === 'snoozed' &&
         (snoozed.length ? (
           <ul className="divide-y divide-line border border-line rounded-[var(--radius-card)]">
             {snoozed.map((s) => {
@@ -106,20 +150,24 @@ export function InboxPage() {
         ) : (
           <EmptyState title="Nothing snoozed" />
         ))}
-      {tab === 'outbox' &&
+      {shown === 'outbox' &&
         (outbox.length ? (
           <div className="space-y-3">
+            <p className="text-[13px] text-ink-3">
+              Messages you opened in your mail app or LinkedIn but have not marked as sent, and any that could
+              not be sent. Press I sent it once a message is out, so Orbit can follow up at the right time.
+            </p>
             {outbox.map((o) => (
               <OutboxItem key={o.id} o={o} person={byId.get(o.personId)} />
             ))}
           </div>
         ) : (
           <EmptyState
-            title="Nothing on its way"
-            body="Messages waiting out the undo window, opened in your mail app or LinkedIn, or not sent show up here."
+            title="Nothing waiting"
+            body="A message you open in your mail app or LinkedIn waits here until you press I sent it."
           />
         ))}
-      {tab === 'sent' &&
+      {shown === 'sent' &&
         (sent.length ? (
           <ul className="divide-y divide-line border border-line rounded-[var(--radius-card)]">
             {sent.map((o) => {

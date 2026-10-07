@@ -1,5 +1,5 @@
-import type { Brief, CalendarEvent, Suggestion } from '@orbit/core';
-import { briefSummaryText } from './brief';
+import type { Brief, CalendarEvent, OutboundMessage, Suggestion } from '@orbit/core';
+import { briefSummaryText, isMessageSuggestion } from './brief';
 
 const DAY = 86_400_000;
 
@@ -31,10 +31,11 @@ export function todayCards(
   const live = suggestions.filter((s) => stillTrue(s, now));
   const inBrief = latest ? live.filter((s) => latest.suggestionIds.includes(s.id)) : [];
   const rest = live.filter((s) => !s.deferred && !latest?.suggestionIds.includes(s.id));
-  const cards = [...inBrief, ...rest].sort((a, b) => b.priorityScore - a.priorityScore);
-  const more = live
-    .filter((s) => s.deferred && !latest?.suggestionIds.includes(s.id))
-    .sort((a, b) => b.priorityScore - a.priorityScore);
+  // ties keep one order from load to load (the card that was first stays first)
+  const order = (a: Suggestion, b: Suggestion) =>
+    b.priorityScore - a.priorityScore || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
+  const cards = [...inBrief, ...rest].sort(order);
+  const more = live.filter((s) => s.deferred && !latest?.suggestionIds.includes(s.id)).sort(order);
   return { cards, more };
 }
 
@@ -58,5 +59,36 @@ export function todaySummaryText(
       new Date(e.startAt) > now &&
       new Date(e.startAt).getTime() - now.getTime() < 7 * DAY,
   ).length;
+  const n = cards.length;
+  const coming = upcoming ? ` ${upcoming} chat${upcoming > 1 ? 's' : ''} coming up this week.` : '';
+  // a count, not a list of every kind: the cards below already say what each one is
+  if (n) return `${n} thing${n > 1 ? 's' : ''} for today, most urgent first.${coming}`;
   return briefSummaryText(counts, upcoming, peopleCount);
+}
+
+const IN_FLIGHT: OutboundMessage['status'][] = ['queued', 'sending', 'handed_off', 'failed'];
+
+/**
+ * The drafts page's lists: message cards waiting to be sent, split the way Today splits them (worth sending today,
+ * and the ones that can wait). A draft already opened in the mail app or LinkedIn is not counted again here; it is
+ * waiting for "I sent it" instead. The nav badge is `forToday.length`, so it matches Today and the page.
+ */
+export function draftLists(
+  suggestions: Suggestion[],
+  outbound: Pick<OutboundMessage, 'id' | 'status'>[],
+  latest: Pick<Brief, 'suggestionIds'> | undefined,
+  now: Date,
+): { forToday: Suggestion[]; later: Suggestion[] } {
+  const inFlight = new Set(outbound.filter((o) => IN_FLIGHT.includes(o.status)).map((o) => o.id));
+  const pending = suggestions
+    .filter(
+      (s) =>
+        s.status === 'pending' &&
+        isMessageSuggestion(s.kind) &&
+        !(s.outboundMessageId && inFlight.has(s.outboundMessageId)),
+    )
+    .sort((a, b) => b.priorityScore - a.priorityScore || a.id.localeCompare(b.id));
+  const { cards } = todayCards(pending, latest, now);
+  const ids = new Set(cards.map((s) => s.id));
+  return { forToday: pending.filter((s) => ids.has(s.id)), later: pending.filter((s) => !ids.has(s.id)) };
 }

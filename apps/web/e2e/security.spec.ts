@@ -30,7 +30,10 @@ async function prep(page: Page) {
 async function loadDemo(page: Page) {
   await prep(page);
   await page.goto('');
-  await page.getByRole('button', { name: /try it with demo data/i }).click();
+  await page
+    .getByRole('button', { name: /^try the demo$/i })
+    .first()
+    .click();
   await expect(page).toHaveURL(/\/today$/, { timeout: 90_000 });
 }
 
@@ -82,13 +85,17 @@ test.describe('security', () => {
     await expect(page.getByTestId('ai-feature-drafts')).toBeChecked();
     await expect(page.getByTestId('ai-feature-emailTriage')).not.toBeChecked();
     await expect(
-      page.getByText('Email bodies are sent to Anthropic for triage', { exact: false }),
+      page.getByText('The text of emails is sent to Anthropic to sort them', { exact: false }),
     ).toBeVisible();
     await page.getByTestId('ai-feature-emailTriage').check();
+    // daily limits and usage are advanced settings, behind a disclosure
+    await expect(page.getByTestId('ai-cap-requests')).toBeHidden();
+    await page.getByTestId('ai-advanced').locator('summary').click();
     await page.getByTestId('ai-cap-requests').fill('20');
     await page.waitForTimeout(200);
     await page.reload();
     await expect(page.getByTestId('ai-feature-emailTriage')).toBeChecked();
+    await page.getByTestId('ai-advanced').locator('summary').click();
     await expect(page.getByTestId('ai-cap-requests')).toHaveValue('20');
     await expect(page.getByTestId('ai-usage-today')).toContainText('of 20 requests');
 

@@ -37,17 +37,15 @@ export function openHandoff(url: string): boolean {
   return true;
 }
 
-export function handoffToast(via: HandoffVia, copied: boolean, threaded: boolean): string {
-  if (via === 'mailto')
-    return threaded
-      ? 'Opened in your mail app. Reply in the original thread if you can, then mark it as sent.'
-      : 'Opened in your mail app. Mark as sent when you have sent it.';
+export function handoffToast(via: HandoffVia, copied: boolean, _threaded: boolean): string {
+  // the card underneath says what to do next, so the toast only says what just happened
+  if (via === 'mailto') return 'Opened in your mail app.';
   if (via === 'linkedin_connect')
     return copied
       ? 'Note copied. Click Connect on their profile, add a note and paste it.'
       : 'Their profile is open. Copy the note from the card, then Connect and add it.';
   return copied
-    ? 'Copied. Paste it into LinkedIn and send, then mark it as sent.'
+    ? 'Copied. Paste it into LinkedIn and send it.'
     : 'LinkedIn is open. Copy the message from the card and paste it there.';
 }
 

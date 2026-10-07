@@ -92,6 +92,26 @@ function lastTouchSentence(tp: Touchpoint, first: string, when: string): string 
   }
 }
 
+/**
+ * Facts from the student's own notes are written as they said them ("She offered to refer me"). The summary speaks
+ * to the student, so it says "you".
+ */
+export function toYou(text: string): string {
+  return text
+    .replace(/\bI'm\b/g, "you're")
+    .replace(/\bI've\b/g, "you've")
+    .replace(/\bI'll\b/g, "you'll")
+    .replace(/\bI'd\b/g, "you'd")
+    .replace(/\bI am\b/g, 'you are')
+    .replace(/\bI was\b/g, 'you were')
+    .replace(/\bI\b/g, 'you')
+    .replace(/\bmyself\b/gi, 'yourself')
+    .replace(/\bmy\b/g, 'your')
+    .replace(/\bMy\b/g, 'Your')
+    .replace(/\bmine\b/g, 'yours')
+    .replace(/\bme\b/g, 'you');
+}
+
 /** The template summary and talking points shown on a person's page when no model is configured. */
 export function personSummary(args: {
   user: Pick<User, 'school' | 'timezone'>;
@@ -138,14 +158,17 @@ export function personSummary(args: {
   else parts.push(`You haven't been in touch yet.`);
   const adv = facts.find((f) => f.type === 'advice');
   const off = facts.find((f) => f.type === 'offer');
-  const fromNotes = [adv, off].filter((f): f is NonNullable<typeof f> => !!f).map((f) => sentence(f.text));
+  const fromNotes = [adv, off]
+    .filter((f): f is NonNullable<typeof f> => !!f)
+    .map((f) => sentence(toYou(f.text)));
   if (fromNotes.length) parts.push(`From your notes: ${fromNotes.join(' ')}`);
   const hook = facts.find((f) => f.type === 'hook');
   const talkingPoints = [
-    hook ? `Ask how this is going: ${sentence(hook.text)}` : undefined,
-    // facts are third-person sentences ("She offered to refer me ..."), so the label does not repeat the offer
-    off ? `Follow up: ${sentence(off.text)}` : undefined,
-    adv ? `Tell them what you did with their advice: ${sentence(adv.text)}` : undefined,
+    // a hook is anything worth asking about (a project, a plan, a race they are training for)
+    hook ? `Worth bringing up: ${sentence(toYou(hook.text))}` : undefined,
+    // facts are third-person sentences ("She offered to refer you ..."), so the label does not repeat the offer
+    off ? `Follow up: ${sentence(toYou(off.text))}` : undefined,
+    adv ? `Tell them what you did with their advice: ${sentence(toYou(adv.text))}` : undefined,
   ].filter((x): x is string => !!x);
   return { summary: parts.join(' '), talkingPoints };
 }

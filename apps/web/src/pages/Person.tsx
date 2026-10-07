@@ -10,6 +10,7 @@ import type {
 import {
   CHANNEL_LABELS,
   composeKindFor,
+  conflictingFacts,
   FACT_TYPE_LABELS,
   linkedinActivityUrl,
   MESSAGE_KIND_LABELS,
@@ -25,13 +26,21 @@ import { ExternalLink, Linkedin, Mail, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { runApproval } from '../components/approve';
-import { DraftEditor } from '../components/DraftEditor';
+import { DraftEditor, OutboxStatus } from '../components/DraftEditor';
+import { ScheduleChatDialog } from '../components/ScheduleChat';
+import { SuggestionCard } from '../components/SuggestionCard';
 import { feedback } from '../db/repo';
 import { db } from '../db/schema';
-import { draftMessage, needsWarmUp, refreshPersonSummary, startWarmUpOrOutreach } from '../engine/brief';
+import {
+  draftMessage,
+  isMessageSuggestion,
+  needsWarmUp,
+  refreshPersonSummary,
+  startWarmUpOrOutreach,
+} from '../engine/brief';
 import { readSuggestedNames, type SuggestedName, saveSuggestedContacts } from '../engine/introductions';
-import { buildPrep, personSummary } from '../engine/prep';
-import { applyStage } from '../engine/stages';
+import { moveChat, upcomingMeeting } from '../engine/move';
+import { buildPrep, personSummary, toYou } from '../engine/prep';
 import { useSession } from '../state/session';
 import { Avatar, Button, Card, Chip, cx, Modal, NotFound, relDate, Select, Tabs, useToast } from '../ui';
 import { STAGE_COLOR, StrengthDots } from './Pipeline';
@@ -81,6 +90,20 @@ export function PersonPage() {
     useLiveQuery(() => (id ? db.actionItems.where('personId').equals(id).toArray() : []), [id]) ?? [];
   const drafts =
     useLiveQuery(() => (id ? db.outbound.where('personId').equals(id).toArray() : []), [id]) ?? [];
+  // messages waiting on the student for this person: a drafted card (a thank-you after a note) and anything handed to
+  // the mail app or LinkedIn that is not marked as sent yet, so leaving the page never loses the "I sent it" step
+  const waiting =
+    useLiveQuery(
+      () =>
+        id
+          ? db.suggestions
+              .where('personId')
+              .equals(id)
+              .filter((x) => x.status === 'pending' && isMessageSuggestion(x.kind))
+              .toArray()
+          : [],
+      [id],
+    ) ?? [];
   const edges =
     useLiveQuery(
       () => (id ? db.edges.where('personAId').equals(id).or('personBId').equals(id).toArray() : []),
@@ -115,6 +138,7 @@ export function PersonPage() {
   const [draftId, setDraftId] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [warmUpChoice, setWarmUpChoice] = useState(false);
+  const [asking, setAsking] = useState(false);
   const settings = useSession().settings;
   const events =
     useLiveQuery(
@@ -186,18 +210,22 @@ export function PersonPage() {
       setBusy(false);
       if (!r.draft) {
         toast.push({
-          text: `Warm-up started for ${person.firstName}. Your first step is on Today.`,
+          text: `Warm-up started for ${person.firstName}. The first step is outlined below.`,
           tone: 'good',
           ttl: 6000,
         });
-        nav('/today');
+        nav(`/today?person=${person.id}`);
         return;
       }
       setDraftId(r.draft.id);
       setComposing(kind);
       return;
     }
-    const d = await draftMessage(user, person.id, kind, channel, chat?.id);
+    // the draft the student already started for this kind (and maybe edited) is opened again, not written anew
+    const open = drafts
+      .filter((d) => d.kind === kind && d.status === 'draft')
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+    const d = open ?? (await draftMessage(user, person.id, kind, channel, chat?.id));
     setDraftId(d.id);
     setComposing(kind);
     setBusy(false);
@@ -231,6 +259,8 @@ export function PersonPage() {
   ].sort((a, b) => b.at.localeCompare(a.at));
   const grouped = new Map<string, typeof facts>();
   for (const f of facts) grouped.set(f.type, [...(grouped.get(f.type) ?? []), f]);
+  // two answers to the same question (two hometowns, two teams): point at both so the wrong one gets deleted
+  const conflicts = conflictingFacts(facts);
   const nextEvent = events
     .filter((e) => new Date(e.endAt).getTime() > Date.now())
     .sort((a, b) => a.startAt.localeCompare(b.startAt))[0];
@@ -285,29 +315,33 @@ export function PersonPage() {
                   <Linkedin size={13} /> LinkedIn
                 </a>
               )}
-              <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
-                Closeness <StrengthDots v={person.strength} />{' '}
-                <span className="tabular">{Math.round(person.strength * 100)}</span>
+              <span
+                className="inline-flex items-center gap-1.5 whitespace-nowrap"
+                title="How well you know them, from how often and how recently you have emailed, met and written notes. It grows as you talk."
+              >
+                Closeness <StrengthDots v={person.strength} /> {closenessWord(person.strength)}
               </span>
               <span className="whitespace-nowrap">Last touch {relDate(person.lastInteractionAt)}</span>
             </div>
           </div>
         </div>
         <div className="flex flex-col items-stretch lg:items-end gap-2 w-full lg:w-auto lg:shrink-0">
-          <div className="flex flex-wrap gap-2 lg:justify-end">
-            <Select
-              value={person.relationshipType}
-              onChange={(e) => db.people.update(person.id, { relationshipType: e.target.value as never })}
-              className="h-8 text-[13px]"
-              aria-label={`How you know ${person.firstName}`}
-              title="How you know them. Orbit adjusts tone and suggestions to it."
-            >
-              {Object.entries(RELATIONSHIP_LABELS).map(([k, l]) => (
-                <option key={k} value={k}>
-                  {k === 'unknown' ? 'Relationship: not set' : l}
-                </option>
-              ))}
-            </Select>
+          <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+            <label className="inline-flex items-center gap-1.5 text-[12px] text-ink-3">
+              How you know them
+              <Select
+                value={person.relationshipType}
+                onChange={(e) => db.people.update(person.id, { relationshipType: e.target.value as never })}
+                className="h-8 text-[13px] text-ink"
+                title="Orbit adjusts the tone of drafts and its suggestions to it."
+              >
+                {Object.entries(RELATIONSHIP_LABELS).map(([k, l]) => (
+                  <option key={k} value={k}>
+                    {k === 'unknown' ? 'Not set' : l}
+                  </option>
+                ))}
+              </Select>
+            </label>
             <Button
               variant="primary"
               size="sm"
@@ -328,21 +362,28 @@ export function PersonPage() {
               Write to {person.firstName}
             </Button>
           </div>
-          <div className="flex flex-wrap gap-1 text-[12px] lg:justify-end">
+          <div className="flex flex-wrap items-center gap-1 text-[12px] lg:justify-end">
             {chat && (
-              <Select
-                value={chat.stage}
-                onChange={(e) => applyStage(chat, e.target.value as never, 'user', 'user:select')}
-                className="h-7 text-[12px]"
-                aria-label="Chat stage"
-                title="Move this chat to another stage"
-              >
-                {Object.entries(STAGE_LABELS).map(([k, v]) => (
-                  <option key={k} value={k}>
-                    {v}
-                  </option>
-                ))}
-              </Select>
+              <label className="inline-flex items-center gap-1.5 text-ink-3 mr-1">
+                Stage
+                <Select
+                  value={chat.stage}
+                  onChange={async (e) => {
+                    const to = e.target.value as CoffeeChat['stage'];
+                    await moveChat(user, chat, to, 'user:select');
+                    if (to === 'scheduled' && !(await upcomingMeeting(chat))) setAsking(true);
+                  }}
+                  className="h-8 text-[12px] text-ink"
+                  aria-label="Chat stage"
+                  title="Move this chat to another stage"
+                >
+                  {Object.entries(STAGE_LABELS).map(([k, v]) => (
+                    <option key={k} value={k}>
+                      {v}
+                    </option>
+                  ))}
+                </Select>
+              </label>
             )}
             <Button
               variant="ghost"
@@ -356,9 +397,9 @@ export function PersonPage() {
               variant="ghost"
               size="sm"
               onClick={() => nav(`/map?reach=${person.id}`)}
-              title={`Find who can introduce you to ${person.firstName}`}
+              title={`See who you know that could introduce you to ${person.firstName}`}
             >
-              Reach
+              Find an intro
             </Button>
             <Button
               variant="ghost"
@@ -369,18 +410,32 @@ export function PersonPage() {
                   : 'Hide this person from People, Today and the map'
               }
               onClick={async () => {
-                await db.people.update(person.id, {
-                  hiddenAt: person.hiddenAt ? undefined : new Date().toISOString(),
+                if (person.hiddenAt) {
+                  await db.people.update(person.id, { hiddenAt: undefined });
+                  toast.push({ text: `${person.firstName} is back in People, Today and the map.` });
+                  return;
+                }
+                await db.people.update(person.id, { hiddenAt: new Date().toISOString() });
+                toast.push({
+                  text: `Hid ${person.displayName}. Find them under Hidden in People.`,
+                  action: {
+                    label: 'Undo',
+                    onClick: () => db.people.update(person.id, { hiddenAt: undefined }),
+                  },
+                  ttl: 7000,
                 });
                 nav('/people');
               }}
             >
-              {person.hiddenAt ? 'Unhide' : 'Hide'}
+              {person.hiddenAt ? 'Show again' : 'Hide from Orbit'}
             </Button>
           </div>
         </div>
       </div>
 
+      {asking && chat && (
+        <ScheduleChatDialog chat={chat} firstName={person.firstName} onClose={() => setAsking(false)} />
+      )}
       <Modal
         open={warmUpChoice}
         onClose={() => setWarmUpChoice(false)}
@@ -417,22 +472,62 @@ export function PersonPage() {
         </div>
       </Modal>
 
+      {(() => {
+        const cardDrafts = new Set(waiting.map((w) => w.outboundMessageId).filter(Boolean));
+        const handedOff = drafts.filter(
+          (d) => d.status === 'handed_off' && d.id !== draft?.id && !cardDrafts.has(d.id),
+        );
+        const cards = waiting.filter((w) => !draft || w.outboundMessageId !== draft.id);
+        if (!cards.length && !handedOff.length) return null;
+        return (
+          <div className="mb-5 space-y-3" data-testid="person-waiting">
+            <div className="text-[12px] uppercase tracking-wide text-ink-3">Waiting on you</div>
+            {cards.map((w) => (
+              <SuggestionCard key={w.id} s={w} compact />
+            ))}
+            {handedOff.map((d) => (
+              <div key={d.id}>
+                <div className="text-[13px] text-ink-2 mb-1.5">
+                  {MESSAGE_KIND_LABELS[d.kind]} you opened in{' '}
+                  {d.channel === 'linkedin' ? 'LinkedIn' : 'your mail app'}{' '}
+                  {relDate(d.approvedAt ?? d.createdAt)}. Did it go out?
+                </div>
+                <OutboxStatus draft={d} />
+              </div>
+            ))}
+          </div>
+        );
+      })()}
       {composing && draft && (
         <Card className="mb-5 border-accent/40">
           <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-            <div className="font-medium">
-              {MESSAGE_KIND_LABELS[composing]} · {CHANNEL_LABELS[draft.channel]}
+            <div className="min-w-0">
+              <div className="font-medium">
+                {MESSAGE_KIND_LABELS[composing]} · {CHANNEL_LABELS[draft.channel]}
+              </div>
+              <div className="text-[12px] text-ink-3">
+                Orbit picked this kind of message from where your chat stands.
+                {kindsFor(chat?.stage, composing).length > 1
+                  ? ' Pick another and it rewrites the draft.'
+                  : ''}
+              </div>
+              {composing === 'outreach' && chat?.stage === 'warming' && chat.warmUp && (
+                <div className="text-[12px] text-warn mt-0.5" data-testid="compose-warmup-early">
+                  Your warm-up is {chat.warmUp.actions.filter((a) => a.doneAt).length} of{' '}
+                  {chat.warmUp.actions.length} steps done. You can write now, but the message lands better
+                  once {person.firstName} has seen your name.
+                </div>
+              )}
             </div>
             <div className="flex flex-wrap gap-1 text-[12px]" role="group" aria-label="Kind of message">
-              {(
-                ['outreach', 'bump', 'schedule', 'thank_you', 'nurture', 'referral_ask'] as MessageKind[]
-              ).map((k) => (
+              {kindsFor(chat?.stage, composing).map((k) => (
                 <button
                   key={k}
+                  disabled={busy || draft.status !== 'draft'}
                   onClick={() => compose(k, { confirmed: true })}
                   aria-pressed={composing === k}
                   className={cx(
-                    'px-2 h-6 rounded-full border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+                    'px-2.5 h-8 rounded-full border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
                     composing === k ? 'border-ink bg-ink text-white' : 'border-line text-ink-2',
                   )}
                 >
@@ -461,7 +556,7 @@ export function PersonPage() {
             items={[
               { value: 'timeline', label: 'Timeline', count: timeline.length },
               { value: 'facts', label: 'Facts', count: facts.length },
-              { value: 'connections', label: 'Connections', count: neighbours.filter(Boolean).length },
+              { value: 'connections', label: 'People they know', count: neighbours.filter(Boolean).length },
               { value: 'prep', label: 'Prep' },
             ]}
           />
@@ -503,19 +598,42 @@ export function PersonPage() {
                     {fs.map((f) => (
                       <li key={f.id} className="group flex items-start gap-2 text-[13.5px]">
                         <span className="flex-1">
-                          {f.text}{' '}
+                          {/* stored as written in the notes ("She offered to intro me"); shown to the student as "you" */}
+                          {toYou(f.text)}{' '}
                           <span className="text-ink-3 text-[12px]">
-                            · {f.sourceTable === 'notes' ? 'from notes' : 'from email'}
+                            ·{' '}
+                            {f.sourceTable === 'notes'
+                              ? 'from notes'
+                              : f.sourceTable === 'manual'
+                                ? 'added by you'
+                                : f.sourceTable === 'outbound'
+                                  ? 'from a message you wrote'
+                                  : f.sourceTable === 'messages'
+                                    ? 'from email'
+                                    : 'from Orbit'}
                             {f.occurredAt ? ` · ${shortDate(f.occurredAt)}` : ''}
                           </span>
+                          {conflicts.has(f.id) && (
+                            <span className="block text-[12px] text-warn mt-0.5" data-testid="fact-conflict">
+                              Disagrees with “{conflicts.get(f.id)}”. Delete the one that is wrong.
+                            </span>
+                          )}
                         </span>
                         <button
-                          className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 text-ink-3 hover:text-bad rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                          className="shrink-0 -my-1 p-1.5 opacity-100 md:opacity-0 md:group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 text-ink-3 hover:text-bad rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
                           title="Delete this fact (it won't come back)"
                           aria-label={`Delete fact: ${f.text}`}
                           onClick={async () => {
                             await db.facts.update(f.id, { deletedAt: new Date().toISOString() });
                             await feedback(user.id, 'fact_delete', { refTable: 'facts', refId: f.id });
+                            toast.push({
+                              text: 'Fact deleted. Drafts will not use it.',
+                              action: {
+                                label: 'Undo',
+                                onClick: () => db.facts.update(f.id, { deletedAt: undefined }),
+                              },
+                              ttl: 6000,
+                            });
                           }}
                         >
                           <Trash2 size={14} />
@@ -746,8 +864,24 @@ function AddFact({ personId, userId }: { personId: string; userId: string }) {
   const [type, setType] = useState<'hook' | 'advice' | 'offer' | 'personal' | 'role_detail' | 'background'>(
     'hook',
   );
+  const add = async () => {
+    if (!text.trim()) return;
+    await db.facts.add({
+      id: newId('f'),
+      userId,
+      personId,
+      type,
+      text: text.trim(),
+      sourceTable: 'manual',
+      sourceId: 'manual',
+      confidence: 1,
+      occurredAt: new Date().toISOString(),
+      createdAt: new Date().toISOString(),
+    });
+    setText('');
+  };
   return (
-    <div className="flex gap-2 items-center">
+    <div className="flex flex-wrap gap-2 items-center">
       <Select
         value={type}
         onChange={(e) => setType(e.target.value as never)}
@@ -763,27 +897,16 @@ function AddFact({ personId, userId }: { personId: string; userId: string }) {
       <input
         value={text}
         onChange={(e) => setText(e.target.value)}
-        placeholder="Add a fact you know, then press Enter"
+        placeholder="Something you know about them"
         aria-label="New fact"
-        className="flex-1 min-w-0 h-8 rounded-lg border border-line px-2.5 text-[13px]"
-        onKeyDown={async (e) => {
-          if (e.key === 'Enter' && text.trim()) {
-            await db.facts.add({
-              id: newId('f'),
-              userId,
-              personId,
-              type,
-              text: text.trim(),
-              sourceTable: 'manual',
-              sourceId: 'manual',
-              confidence: 1,
-              occurredAt: new Date().toISOString(),
-              createdAt: new Date().toISOString(),
-            });
-            setText('');
-          }
+        className="flex-1 min-w-[160px] h-8 rounded-lg border border-line px-2.5 text-[13px]"
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') add();
         }}
       />
+      <Button size="sm" onClick={add} disabled={!text.trim()}>
+        Add
+      </Button>
     </div>
   );
 }
@@ -848,6 +971,8 @@ function Prep({
   const personal = facts.filter((f) => f.type === 'personal');
   const open = items.filter((i) => i.status === 'open');
   const tz = user.timezone || undefined;
+  // the same email subject five times says nothing: one line per thing, newest first
+  const lastTimes = timeline.filter((t, i) => timeline.findIndex((x) => x.text === t.text) === i).slice(0, 4);
   return (
     <div className="space-y-4 text-[13.5px]" data-testid="prep">
       <Card>
@@ -885,7 +1010,7 @@ function Prep({
           {plan.research.map((r) => (
             <li key={r.label} className="flex items-start gap-2">
               <span aria-hidden className="text-ink-3">
-                ○
+                •
               </span>
               {r.url ? (
                 <a
@@ -903,7 +1028,7 @@ function Prep({
           ))}
           <li className="flex items-start gap-2">
             <span aria-hidden className="text-ink-3">
-              ○
+              •
             </span>
             <span>Practice your 30-second intro out loud once.</span>
           </li>
@@ -939,7 +1064,7 @@ function Prep({
         <div className="font-medium">Questions to ask</div>
         <p className="text-ink-3 text-[12px] mt-0.5">
           {chat
-            ? 'Tick the three you most want answered. Orbit keeps them with this chat.'
+            ? 'Tick up to three you most want answered. Orbit keeps them with this chat.'
             : 'Pick three to lead with.'}
         </p>
         <ol className="mt-2 space-y-1.5 text-ink-2">
@@ -950,6 +1075,8 @@ function Prep({
                   type="checkbox"
                   className="mt-1"
                   checked={picked.includes(q)}
+                  // three is the point: more than that and nothing gets asked properly
+                  disabled={!picked.includes(q) && picked.length >= 3}
                   onChange={() => toggle(q)}
                   aria-label={`Pick question ${i + 1}`}
                 />
@@ -973,81 +1100,86 @@ function Prep({
             {picked.length} picked for this chat.
           </p>
         )}
-        <label className="block mt-3 text-ink-2" htmlFor="prep-suggested">
-          Who did {person.firstName} suggest you talk to?
-        </label>
-        <input
-          id="prep-suggested"
-          data-testid="prep-suggested"
-          value={suggested}
-          onChange={(e) => setSuggested(e.target.value)}
-          placeholder="Priya Shah at Stripe, Tom Lee"
-          className="mt-1 w-full h-8 rounded-lg border border-line px-2.5 text-[13px]"
-          onKeyDown={async (e) => {
-            if (e.key !== 'Enter' || !suggested.trim()) return;
-            // clear names are saved; unsure ones wait for a yes; what is not a name stays in the field with a note
-            const { names, confirm, skipped } = readSuggestedNames(suggested);
-            await keep(names);
-            setUnsure((u) => [
-              ...u,
-              ...confirm.filter((c) => !u.some((x) => x.name.toLowerCase() === c.name.toLowerCase())),
-            ]);
-            setNotSaved(skipped);
-            setSuggested(skipped.join(', '));
-          }}
-        />
-        {unsure.length > 0 && (
-          <div className="mt-2 rounded-lg border border-line p-2.5" data-testid="prep-suggested-confirm">
-            <p className="text-ink-2">
-              Are these people {person.firstName} suggested? Nothing is saved until you say yes.
-            </p>
-            <ul className="mt-1.5 space-y-1.5">
-              {unsure.map((s) => (
-                <li
-                  key={label(s)}
-                  className="flex flex-wrap items-center gap-2"
-                  data-testid="prep-confirm-row"
-                >
-                  <span className="flex-1 min-w-0 font-medium">{label(s)}</span>
-                  <Button
-                    size="sm"
-                    data-testid="prep-confirm-save"
-                    onClick={async () => {
-                      setUnsure((u) => u.filter((x) => x !== s));
-                      await keep([s]);
-                    }}
-                  >
-                    Save
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    data-testid="prep-confirm-skip"
-                    onClick={() => setUnsure((u) => u.filter((x) => x !== s))}
-                  >
-                    Not a person
-                  </Button>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-        {notSaved.length > 0 && (
-          <p className="mt-1.5 text-ink-2" data-testid="prep-suggested-skipped">
-            Not saved: {notSaved.join(', ')}. Write each as a full name, like Priya Shah at Stripe or Tom Lee.
-          </p>
-        )}
-        {added.length > 0 && (
-          <p className="mt-1.5 text-ink-3">
-            Saved to Discover as suggested by {person.firstName}: {added.join(', ')}
-          </p>
+        {(chat?.completedAt || ['completed', 'followed_up', 'nurturing'].includes(chat?.stage ?? '')) && (
+          <>
+            <label className="block mt-3 text-ink-2" htmlFor="prep-suggested">
+              Who did {person.firstName} suggest you talk to?
+            </label>
+            <input
+              id="prep-suggested"
+              data-testid="prep-suggested"
+              value={suggested}
+              onChange={(e) => setSuggested(e.target.value)}
+              placeholder="Priya Shah at Stripe, Tom Lee"
+              className="mt-1 w-full h-8 rounded-lg border border-line px-2.5 text-[13px]"
+              onKeyDown={async (e) => {
+                if (e.key !== 'Enter' || !suggested.trim()) return;
+                // clear names are saved; unsure ones wait for a yes; what is not a name stays in the field with a note
+                const { names, confirm, skipped } = readSuggestedNames(suggested);
+                await keep(names);
+                setUnsure((u) => [
+                  ...u,
+                  ...confirm.filter((c) => !u.some((x) => x.name.toLowerCase() === c.name.toLowerCase())),
+                ]);
+                setNotSaved(skipped);
+                setSuggested(skipped.join(', '));
+              }}
+            />
+            {unsure.length > 0 && (
+              <div className="mt-2 rounded-lg border border-line p-2.5" data-testid="prep-suggested-confirm">
+                <p className="text-ink-2">
+                  Are these people {person.firstName} suggested? Nothing is saved until you say yes.
+                </p>
+                <ul className="mt-1.5 space-y-1.5">
+                  {unsure.map((s) => (
+                    <li
+                      key={label(s)}
+                      className="flex flex-wrap items-center gap-2"
+                      data-testid="prep-confirm-row"
+                    >
+                      <span className="flex-1 min-w-0 font-medium">{label(s)}</span>
+                      <Button
+                        size="sm"
+                        data-testid="prep-confirm-save"
+                        onClick={async () => {
+                          setUnsure((u) => u.filter((x) => x !== s));
+                          await keep([s]);
+                        }}
+                      >
+                        Save
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        data-testid="prep-confirm-skip"
+                        onClick={() => setUnsure((u) => u.filter((x) => x !== s))}
+                      >
+                        Not a person
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {notSaved.length > 0 && (
+              <p className="mt-1.5 text-ink-2" data-testid="prep-suggested-skipped">
+                Not saved: {notSaved.join(', ')}. Write each as a full name, like Priya Shah at Stripe or Tom
+                Lee.
+              </p>
+            )}
+            {added.length > 0 && (
+              <p className="mt-1.5 text-ink-3">
+                Saved to Discover as suggested by {person.firstName}: {added.join(', ')}
+              </p>
+            )}
+          </>
         )}
       </Card>
       <Card>
         <div className="font-medium">From last time</div>
-        {timeline.length ? (
+        {lastTimes.length ? (
           <ul className="list-disc pl-4 mt-2 text-ink-2 space-y-1">
-            {timeline.slice(0, 5).map((t, i) => (
+            {lastTimes.map((t, i) => (
               <li key={i}>
                 {t.text}{' '}
                 <span className="text-ink-3 text-[12px]">
@@ -1125,4 +1257,28 @@ function Prep({
       </Card>
     </div>
   );
+}
+
+/** Closeness in words: the score is a rough sense of how well you know them, not a precise number. */
+export function closenessWord(v: number): string {
+  return v >= 0.6 ? 'Close' : v >= 0.35 ? 'Getting to know' : v > 0.05 ? 'Light' : 'New contact';
+}
+
+/** The kinds of message that fit where the chat stands: no thank-you or referral ask to someone never met. */
+export function kindsFor(stage: CoffeeChat['stage'] | undefined, current: MessageKind): MessageKind[] {
+  const by: Partial<Record<CoffeeChat['stage'], MessageKind[]>> = {
+    identified: ['outreach'],
+    warming: ['outreach'],
+    outreach_sent: ['bump', 'outreach'],
+    no_response: ['bump', 'outreach'],
+    replied: ['schedule', 'bump'],
+    scheduling: ['schedule', 'bump'],
+    scheduled: ['schedule'],
+    completed: ['thank_you', 'nurture', 'referral_ask'],
+    followed_up: ['nurture', 'referral_ask', 'schedule'],
+    nurturing: ['nurture', 'referral_ask', 'schedule'],
+    declined: ['nurture'],
+  };
+  const list = (stage && by[stage]) ?? ['outreach'];
+  return list.includes(current) ? list : [current, ...list];
 }

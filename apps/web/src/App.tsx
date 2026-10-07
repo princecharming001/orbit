@@ -6,7 +6,7 @@ import { InboxPage } from './pages/Inbox';
 import { Landing } from './pages/Landing';
 import { MapPage } from './pages/MapPage';
 import { NotesNew } from './pages/NotesNew';
-import { Onboarding } from './pages/Onboarding';
+import { Onboarding, onboardingPath } from './pages/Onboarding';
 import { People } from './pages/People';
 import { PersonPage } from './pages/Person';
 import { Pipeline } from './pages/Pipeline';
@@ -26,7 +26,7 @@ function Gate({ children }: { children: React.ReactNode }) {
     );
   if (!userId) return <Navigate to="/" replace state={{ from: loc.pathname }} />;
   if (user && !user.onboardingCompletedAt && !loc.pathname.startsWith('/onboarding'))
-    return <Navigate to={`/onboarding/${Math.max(2, user.onboardingStep)}`} replace />;
+    return <Navigate to={onboardingPath(user.onboardingStep)} replace />;
   return <>{children}</>;
 }
 

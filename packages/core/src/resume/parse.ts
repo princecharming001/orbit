@@ -198,6 +198,8 @@ export function resumeSectionOf(rawLine: string): Section | undefined {
 }
 
 const BULLET = /^[-•*▪◦●➢►–]\s*/;
+/** Employer, a dash, the role, the dates in brackets, then optionally what they did, all on one line. */
+const INLINE_ENTRY = /^([^—–]+?)\s+[—–-]\s+([^().]+?)\s*\(([^)]*\d{4}[^)]*)\)[.,;:]?\s*(.*)$/;
 const stripBullet = (l: string) => l.replace(BULLET, '').trim();
 const isRule = (l: string) => /^[\W_]+$/.test(l);
 
@@ -272,9 +274,16 @@ function headerParts(line: string, e: Entry): string[] {
     .filter((p) => p.length > 1 && !/^(present|current)$/i.test(p));
 }
 
+/** "Detroit MI" or "New York, NY" on its own: a place, not part of the title. */
+const CITY_STATE = new RegExp(`^[A-Z][A-Za-z.'’]+(?:\\s[A-Z][A-Za-z.'’]+){0,2},?\\s(?:${US_STATE})$`);
+
 function assignParts(parts: string[], e: Entry): void {
   for (const raw of parts) {
     const p = fixCaps(raw);
+    if (e.section !== 'education' && CITY_STATE.test(p)) {
+      e.location ??= p;
+      continue;
+    }
     if (e.section === 'education') {
       const degree = DEGREE_WORDS.test(p);
       if (SCHOOL_WORDS.test(p) && !e.org && !degree) e.org = p;
@@ -527,6 +536,23 @@ export function heuristicResumeParse(
     if (BULLET.test(line)) {
       e ??= newEntry(section);
       e.body.push(stripBullet(line));
+      continue;
+    }
+    // a whole entry on one line: "Michigan Finance Club — VP Education (2025-present). Led weekly training."
+    const inline = section !== 'education' ? line.match(INLINE_ENTRY) : null;
+    if (inline) {
+      finish();
+      e = newEntry(section);
+      let parts = headerParts(`${inline[1]}   ${inline[2]}   ${inline[3]}`, e);
+      // "(2025)": a bare year in brackets is the date, not part of the role
+      const year = inline[3]!.trim();
+      if (!e.range && !e.single && /^\d{4}$/.test(year)) {
+        e.single = year;
+        parts = parts.filter((p) => p !== year);
+      }
+      e.headers++;
+      assignParts(parts, e);
+      if (inline[4]?.trim()) e.body.push(inline[4].trim());
       continue;
     }
     if (e?.body.length && /^[a-z(&]/.test(line)) {

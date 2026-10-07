@@ -14,16 +14,32 @@ export const ACTIVE_STAGES: ChatStage[] = [
 export const CLOSED_STAGES: ChatStage[] = ['declined', 'no_response', 'archived'];
 export const STAGE_ORDER: ChatStage[] = [...ACTIVE_STAGES, ...CLOSED_STAGES];
 
+/** What each stage means, in one plain sentence (the Pipeline legend). */
+export const STAGE_HELP: Record<ChatStage, string> = {
+  identified: 'Someone you plan to write to. Nothing sent yet.',
+  warming: 'Doing a few small LinkedIn steps first, so your name is familiar when you write.',
+  outreach_sent: 'You sent the first message and are waiting for a reply.',
+  replied: 'They wrote back.',
+  scheduling: 'You are finding a time to talk.',
+  scheduled: 'A time is on the calendar.',
+  completed: 'You had the chat. A thank-you is next.',
+  followed_up: 'You sent the thank-you or follow-up after the chat.',
+  nurturing: 'An occasional check-in keeps the relationship warm.',
+  declined: 'They said no, or not now.',
+  no_response: 'No reply after your follow-ups.',
+  archived: 'Put away. It no longer shows on the board.',
+};
+
 export const STAGE_LABELS: Record<ChatStage, string> = {
-  identified: 'Identified',
+  identified: 'To contact',
   warming: 'Warming up',
   outreach_sent: 'First message sent',
   replied: 'Replied',
   scheduling: 'Scheduling',
   scheduled: 'Scheduled',
   completed: 'Completed',
-  followed_up: 'Followed up',
-  nurturing: 'Nurturing',
+  followed_up: 'Thanked',
+  nurturing: 'Staying in touch',
   declined: 'Declined',
   no_response: 'No response',
   archived: 'Archived',

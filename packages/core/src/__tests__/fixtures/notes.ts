@@ -135,7 +135,8 @@ Attendees: Elena Rodriguez, Tom Wu`,
     facts: [
       { type: 'hook', text: 'Her team is launching a new onboarding flow next quarter' },
       { type: 'personal', text: /^She has a corgi named Mochi$/ },
-      { type: 'advice', text: 'They recommended reading "Refactoring UI" before the design exercise' },
+      // the note calls Maya "she", so the subjectless line takes her pronoun
+      { type: 'advice', text: 'She recommended reading "Refactoring UI" before the design exercise' },
     ],
   },
   {

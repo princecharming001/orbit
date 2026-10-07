@@ -144,7 +144,7 @@ describe('demo pipeline', () => {
       .filter((p) => !p.primaryEmail && p.strength < 0.2 && !!p.linkedinSlug && !chatted.has(p.id))
       .first())!;
     const r1 = await startWarmUpOrOutreach(user, cold.id, 'linkedin');
-    expect(r1.chat.stage).toBe('warming');
+    expect(r1.chat?.stage).toBe('warming');
     expect(r1.draft).toBeUndefined();
     const warm = (await db.people
       .where('userId')
@@ -152,8 +152,11 @@ describe('demo pipeline', () => {
       .filter((p) => !!p.primaryEmail && p.strength < 0.2 && !chatted.has(p.id))
       .first())!;
     const r2 = await startWarmUpOrOutreach(user, warm.id, 'gmail');
-    expect(r2.chat.stage).toBe('identified');
+    // a first draft alone does not put anyone on the Pipeline: the chat opens when the message goes out
+    expect(r2.chat).toBeUndefined();
     expect(r2.draft?.kind).toBe('outreach');
+    expect(r2.draft?.chatId).toBeUndefined();
+    expect(await db.chats.where('personId').equals(warm.id).count()).toBe(0);
   });
   it('notes: ingests a dictated note, matches the person, moves scheduled → completed', async () => {
     const chat = (await db.chats

@@ -381,7 +381,7 @@ describe('nurture check-in (PS-13)', () => {
       }),
     );
     expect(cands.find((x) => x.kind === 'nurture_checkin')?.reasonText).toBe(
-      '50 days since your last conversation; you have a hook: "launching in November"',
+      '50 days since your last conversation; something to ask about: "launching in November"',
     );
   });
 });

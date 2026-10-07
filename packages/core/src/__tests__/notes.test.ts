@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { conflictingFacts } from '../notes/conflicts';
 import { extractDueHint, heuristicNoteExtraction } from '../notes/extract';
 import { NOTES } from './fixtures/notes';
 
@@ -208,5 +209,88 @@ Priya Patel: You should apply early, we're hiring in January.`,
       people: [{ key: 't', first: 'Tom' }],
     });
     expect(r.facts[0]?.text).toBe('They recommended reading the last three postmortems');
+  });
+});
+
+describe('facts that disagree', () => {
+  it('points at two answers to the same question and leaves agreeing ones alone', () => {
+    const f = (id: string, text: string) => ({ id, text });
+    const out = conflictingFacts([
+      f('a', 'She grew up in Pittsburgh and still roots for the Steelers'),
+      f('b', 'She grew up in Chicago'),
+      f('c', 'She leads the payments risk team'),
+      f('d', 'She leads the bill pay engineering team'),
+      f('e', 'She is from Pittsburgh'),
+      f('g', 'She recommended one concrete project story'),
+    ]);
+    expect(out.get('b')).toMatch(/Pittsburgh/);
+    expect(out.has('a')).toBe(true);
+    expect(out.get('c')).toMatch(/bill pay/);
+    expect(out.has('g')).toBe(false);
+    expect(
+      conflictingFacts([f('a', 'She grew up in Pittsburgh'), f('e', 'She is from Pittsburgh, PA')]).size,
+    ).toBe(0);
+  });
+});
+
+describe('notes students pasted in usability testing', () => {
+  const kinds = (text: string, people: { key: string; first: string; last?: string }[], user: string) => {
+    const r = heuristicNoteExtraction(text, { people, userNames: [user] });
+    return {
+      facts: r.facts.map((f) => `${f.type}: ${f.text}`),
+      actions: r.actionItems.filter((a) => a.owner === 'user').map((a) => a.text),
+    };
+  };
+  it('a notetaker summary: key points are not promises, and the student named in it is "me"', () => {
+    const r = kinds(
+      `Meeting summary - Hannah Brooks (Figma) / Alex Rivera
+Action items:
+- Alex to send portfolio link by Monday
+Key points:
+- Hannah recommended taking HCI course
+- Figma APM applications open in January
+- Hannah offered to review Alex's resume`,
+      [{ key: 'h', first: 'Hannah', last: 'Brooks' }],
+      'Alex Rivera',
+    );
+    expect(r.actions).toEqual(['Send portfolio link by Monday']);
+    expect(r.facts).toContain('advice: Hannah recommended taking HCI course');
+    expect(r.facts).toContain('hook: Figma APM applications open in January');
+    expect(r.facts).toContain('offer: Hannah offered to review my resume');
+    // the offer list says it the same way, so it is not stored twice
+    expect(
+      heuristicNoteExtraction("Key points:\n- Hannah offered to review Alex's resume", {
+        people: [{ key: 'h', first: 'Hannah', last: 'Brooks' }],
+        userNames: ['Alex Rivera'],
+      }).offers,
+    ).toEqual(['Hannah offered to review my resume']);
+  });
+  it('keeps every point of a typed note, and a second promise reads as one sentence', () => {
+    const r = kinds(
+      `Talked with Lena for 30 min. She runs the platform team at Ramp. She said the best interns write a design doc before coding. She recommended I read the Ramp engineering blog post on their ledger. Ramp opens intern applications Nov 1. I promised to send her my resume by Friday and to share my side project link.`,
+      [{ key: 'l', first: 'Lena', last: 'Novak' }],
+      'Alex Rivera',
+    );
+    expect(r.facts).toContain('advice: She said the best interns write a design doc before coding');
+    expect(r.facts).toContain('hook: Ramp opens intern applications Nov 1');
+    expect(r.actions).toEqual(['Send her my resume by Friday and share my side project link']);
+  });
+  it('a labelled "Advice:" line is advice in their words, not "Advice: ..."', () => {
+    const r = kinds(
+      `Talked with Hannah for 25 min. She leads growth PM for FigJam. Advice: pick one metric story and practice it out loud.`,
+      [{ key: 'h', first: 'Hannah', last: 'Brooks' }],
+      'Alex Rivera',
+    );
+    expect(r.facts).toContain('advice: She said to pick one metric story and practice it out loud');
+  });
+  it('splits a date from the advice joined to it, and keeps a team they love', () => {
+    const r = kinds(
+      `Talked to Tom Becker from McKinsey today for 20 min. He said consulting recruiting at Ross opens in January, and to prep with Case in Point plus live cases. He loves the Detroit Pistons.`,
+      [{ key: 't', first: 'Tom', last: 'Becker' }],
+      'Jamie Chen',
+    );
+    expect(r.facts).toContain('hook: Consulting recruiting at Ross opens in January');
+    expect(r.facts).toContain('advice: He said to prep with Case in Point plus live cases');
+    expect(r.facts).toContain('personal: He loves the Detroit Pistons');
   });
 });

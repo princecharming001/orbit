@@ -95,7 +95,7 @@ describe('person summary (UI-17)', () => {
     expect(r.summary).toBe(
       "Sofia works at Jane Street as an Associate Product Manager. Like you, Sofia went to University of Michigan. You last met on Aug 13. You've been in touch 3 times in the last three months. From your notes: They recommended practicing product sense questions.",
     );
-    expect(r.talkingPoints[0]).toBe('Ask how this is going: She is training for the Chicago marathon.');
+    expect(r.talkingPoints[0]).toBe('Worth bringing up: She is training for the Chicago marathon.');
     for (const t of [r.summary, ...r.talkingPoints]) expect(t).not.toMatch(BANNED);
   });
   it('describes the meeting, not the note logged about it at the same time', () => {
@@ -303,8 +303,9 @@ describe('prep (EG-13)', () => {
 describe('brief summary (UI-11)', () => {
   it('never tells a user with an empty network that it is in good shape', () => {
     const empty = briefSummaryText(new Map(), 0, 0);
-    expect(empty).toMatch(/nobody to work with yet/);
-    expect(empty).toMatch(/Connect Google|LinkedIn/);
+    // a new student's first step, not a dead end that needs Google
+    expect(empty).toMatch(/add a few people you want to talk to/);
+    expect(empty).not.toMatch(/Connect Google/);
     expect(briefSummaryText(new Map(), 0, 12)).not.toMatch(/good shape/);
     expect(briefSummaryText(new Map([['confirm_merge', 2]]), 1, 12)).toBe(
       '2 possible duplicates; 1 chat coming up this week.',
@@ -349,8 +350,34 @@ describe('write to a LinkedIn-only contact (UI-13)', () => {
     await db.users.put(user);
     await db.people.put(li);
     const r = await startWarmUpOrOutreach(user, 'p-li', 'linkedin', 'manual', { skipWarmUp: true });
-    expect(r.chat.stage).toBe('identified');
-    expect(r.chat.warmUp).toBeUndefined();
+    expect(r.chat).toBeUndefined();
     expect(r.draft?.channel).toBe('linkedin');
+  });
+});
+
+describe('starting a warm-up answers the "First message" card (usability round 1)', () => {
+  it('retires a pending first-message card for that person, so Today does not offer both', async () => {
+    const li = person({ id: 'p-li2', linkedinSlug: 'keiko-h', strength: 0.02 });
+    await db.users.put(user);
+    await db.people.put(li);
+    await db.suggestions.put({
+      id: 's-first',
+      userId: user.id,
+      personId: li.id,
+      kind: 'new_outreach',
+      status: 'pending',
+      dedupeKey: `outreach:${li.id}`,
+      reasonText: 'Cornell alum at a target company',
+      signals: {},
+      payload: {},
+      urgency: 0.5,
+      goalRelevance: 0.5,
+      confidence: 0.8,
+      priorityScore: 0.5,
+      createdAt: new Date().toISOString(),
+    } as never);
+    const r = await startWarmUpOrOutreach(user, li.id, 'linkedin');
+    expect(r.chat?.stage).toBe('warming');
+    expect((await db.suggestions.get('s-first'))?.status).not.toBe('pending');
   });
 });

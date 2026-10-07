@@ -2,7 +2,7 @@ import type { User } from '@orbit/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { db, wipeDatabase } from '../db/schema';
 import { draftMessage, evaluateImmediateSuggestions } from './brief';
-import { ingestNote, parseDueHint, rematchNote } from './notes';
+import { ingestNote, parseDueHint, previewNoteMatch, rematchNote } from './notes';
 import { upsertPerson } from './people';
 
 const user: User = {
@@ -181,9 +181,10 @@ describe('note facts in drafts and on the person', () => {
     expect(nurture).not.toMatch(/\brecommended I apply\b|\boffered to refer\b/);
     const p = (await db.people.get(priya.id))!;
     expect(p.summary).toMatch(
-      /She recommended I apply early\. She offered to refer me to the APM program\.$/,
+      // the summary speaks to the student: their note said "me", the profile says "you"
+      /She recommended you apply early\. She offered to refer you to the APM program\.$/,
     );
-    expect(p.talkingPoints).toContain('Follow up: She offered to refer me to the APM program.');
+    expect(p.talkingPoints).toContain('Follow up: She offered to refer you to the APM program.');
   });
 });
 
@@ -454,6 +455,51 @@ describe('an unconfirmed guess and a corrected match leave no stale pipeline sta
   });
 });
 
+describe('a note about someone the student never messaged', () => {
+  it('opens the chat at completed, so a thank-you comes next and no cold first message', async () => {
+    await db.users.put({ ...user, onboardingCompletedAt: '2026-09-01T00:00:00.000Z' });
+    const daniel = await person('Daniel Okafor', 'daniel@goldman.com', 'Goldman Sachs');
+    await ingestNote(
+      user,
+      {
+        source: 'manual',
+        personIds: [daniel.id],
+        occurredAt: new Date(NOW.getTime() - 3 * 3_600_000).toISOString(),
+        text: 'Coffee chat with Daniel Okafor at the career fair. He suggested I practice paper LBOs. He offered to refer me in January.',
+      },
+      NOW,
+    );
+    const chats = await db.chats.where('personId').equals(daniel.id).toArray();
+    expect(chats.map((c) => c.stage)).toEqual(['completed']);
+    await evaluateImmediateSuggestions(user.id, { personId: daniel.id, chatId: chats[0]!.id }, NOW);
+    const kinds = (await db.suggestions.where('personId').equals(daniel.id).toArray())
+      .filter((x) => x.status === 'pending')
+      .map((x) => x.kind);
+    expect(kinds).toContain('thank_you');
+    expect(kinds).not.toContain('new_outreach');
+  });
+
+  it('a chat the note opened goes away when the note is moved to someone else', async () => {
+    const daniel = await person('Daniel Okafor', 'daniel@goldman.com', 'Goldman Sachs');
+    const maya = await person('Maya Chen', 'maya@stripe.com', 'Stripe');
+    const n = await ingestNote(
+      user,
+      {
+        source: 'manual',
+        personIds: [daniel.id],
+        occurredAt: NOW.toISOString(),
+        text: 'Coffee chat. Great advice on interviews.',
+      },
+      NOW,
+    );
+    await rematchNote(user, n.id, maya.id, NOW);
+    expect(await db.chats.where('personId').equals(daniel.id).count()).toBe(0);
+    expect((await db.chats.where('personId').equals(maya.id).toArray()).map((c) => c.stage)).toEqual([
+      'completed',
+    ]);
+  });
+});
+
 describe('parseDueHint', () => {
   const tz = 'America/New_York';
   const from = NOW; // Fri 2 Oct 2026, 2 pm in New York
@@ -468,5 +514,80 @@ describe('parseDueHint', () => {
     expect(at('in January')).toBe('2027-01-31T22:00:00.000Z');
     expect(at('end of the month')).toBe('2026-10-31T21:00:00.000Z');
     expect(at('this week')).toBe('2026-10-02T21:00:00.000Z');
+  });
+});
+
+describe('usability round 2: who a note is filed with', () => {
+  const meetingWith = async (personId: string, endAt: Date) => {
+    await db.events.put({
+      id: 'ev_recent',
+      userId: user.id,
+      externalEventId: 'g1',
+      title: 'Coffee chat',
+      startAt: new Date(endAt.getTime() - 30 * 60_000).toISOString(),
+      endAt: endAt.toISOString(),
+      status: 'confirmed',
+      attendees: [],
+      attendeePersonIds: [personId],
+      isCoffeeChat: true,
+    });
+  };
+  const summary = `Meeting summary - Hannah Brooks (Figma) / Ravi Jain
+Action items:
+- Ravi to send portfolio link by Monday
+Key points:
+- Hannah recommended taking HCI course
+- Figma APM applications open in January
+- Hannah offered to review Ravi's resume`;
+
+  it('a notetaker summary naming someone else is not filed with the chat that just ended', async () => {
+    const lena = await person('Lena Novak', 'lena@ramp.com', 'Ramp');
+    const hannah = await person('Hannah Brooks', 'hannah@figma.com', 'Figma');
+    await meetingWith(lena.id, new Date(NOW.getTime() - 3_600_000));
+    const n = await ingestNote(user, { source: 'manual', text: summary, occurredAt: NOW.toISOString() }, NOW);
+    expect(n.personIds).toEqual([hannah.id]);
+    expect(await db.facts.where('personId').equals(lena.id).count()).toBe(0);
+    // the key points are what Hannah said, not promises; the one promise is the student's own line
+    const items = await db.actionItems.where('userId').equals(user.id).toArray();
+    expect(items.map((i) => i.text)).toEqual(['Send portfolio link by Monday']);
+    const facts = (await db.facts.where('personId').equals(hannah.id).toArray()).map((f) => f.text);
+    expect(facts).toContain('Hannah offered to review my resume');
+  });
+
+  it('the picker preview says who Orbit will file the note with, and why', async () => {
+    const lena = await person('Lena Novak', 'lena@ramp.com', 'Ramp');
+    const hannah = await person('Hannah Brooks', 'hannah@figma.com', 'Figma');
+    const people = await db.people.toArray();
+    const named = previewNoteMatch(summary, people, user, lena);
+    expect(named).toMatchObject({ kind: 'person', why: 'named' });
+    expect(named.kind === 'person' && named.person.id).toBe(hannah.id);
+    // nothing named: the calendar's chat, said as such
+    const cal = previewNoteMatch('Great chat about recruiting timelines.', people, user, lena);
+    expect(cal).toMatchObject({ kind: 'person', why: 'calendar' });
+    expect(previewNoteMatch('Great chat about recruiting timelines.', people, user)).toEqual({
+      kind: 'none',
+    });
+  });
+});
+
+describe('usability round 2: the same promise in two notes', () => {
+  it('is kept once', async () => {
+    const lena = await person('Lena Novak', 'lena@ramp.com', 'Ramp');
+    await ingestNote(
+      user,
+      { source: 'manual', personIds: [lena.id], text: 'I promised to send her my resume by Friday.' },
+      NOW,
+    );
+    await ingestNote(
+      user,
+      {
+        source: 'manual',
+        personIds: [lena.id],
+        text: 'I promised to send her my resume by Friday and to share my side project link.',
+      },
+      NOW,
+    );
+    const items = await db.actionItems.where('personId').equals(lena.id).toArray();
+    expect(items).toHaveLength(1);
   });
 });

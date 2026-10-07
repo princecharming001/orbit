@@ -48,8 +48,11 @@ const ROLE_SWITCH =
   /\b(moved|switched|went|came)\s+(to|from|over to)\s+\S+(\s+\S+)?\s+(from|to)\s+\S+|\bjoined\b|\bswitched\b/i;
 const PERSONAL =
   /\b(hometown|grew up|originally from|from [a-z]+ originally|hobby|hobbies|marathon|hiking|climbing|bouldering|cooking|baking|guitar|piano|surfing|skiing|travel(ed|ing|s)?|kids?|daughter|son|wife|husband|dog|cat|corgi|puppy|pet|moved to|moved from|lives? in|weekends?|went to (college|school)|studied|alum|alumna|alumnus|played|plays|wedding|new baby|vacation)\b/i;
+/** Being a fan of a team, an artist or a show: "He loves the Detroit Pistons", "big fan of Taylor Swift". Case matters. */
+const FAN =
+  /\b(?:[Ff]an of|[Bb]ig fan|[Rr]oots? for|[Cc]heers? for|season tickets|[Ll]oves? (?:the )?[A-Z][\p{L}'-]+)/u;
 const HOOK = new RegExp(
-  `\\b(hiring|headcount|opening (up|in)|opens? (in|on|up)|applications? (open|close|are due)|posting|deadline|launch(ing|es|ed)?|ships?|shipping|conference|offsite|reorg|new (team|role|product|office)|promotion|promoted|next (month|quarter|week|year)|this (fall|spring|summer|winter)|in (${MONTHS})|recruiting (starts|kicks off|opens))\\b`,
+  `\\b(opens? (?:\\w+ ){1,3}applications|apps? (?:open|close)|(?:${MONTH_SHORT})\\.? \\d{1,2}(?:st|nd|rd|th)?|hiring|headcount|opening (up|in)|opens? (in|on|up)|applications? (open|close|are due)|posting|deadline|launch(ing|es|ed)?|ships?|shipping|conference|offsite|reorg|new (team|role|product|office)|promotion|promoted|next (month|quarter|week|year)|this (fall|spring|summer|winter)|in (${MONTHS})|recruiting (starts|kicks off|opens))\\b`,
   'i',
 );
 const ADVICE =
@@ -110,7 +113,7 @@ const NON_SPEAKER_LABELS = new Set([
 const HEADER_LINE =
   /^(attendees|participants|with|date|time|when|where|location|title|subject|meeting|duration|recorded|created|agenda|calendar|event|link|zoom|google meet)\s*:/i;
 const SECTION_LINE =
-  /^#{0,4}\s*(summary|notes|meeting notes|key takeaways|takeaways|highlights|transcript|action items?|next steps?|to-?dos?|follow[- ]?ups?|discussion|details|overview)\s*:?\s*$/i;
+  /^#{0,4}\s*(summary|notes|meeting notes|key takeaways|takeaways|highlights|key points|main points|discussion points|points|decisions|insights|learnings|recap|transcript|action items?|next steps?|to-?dos?|follow[- ]?ups?|discussion|details|overview)\s*:?\s*$/i;
 const ACTION_SECTION = /^(action items?|next steps?|to-?dos?|follow[- ]?ups?)$/i;
 
 const SPEAKER =
@@ -373,6 +376,25 @@ function splitCompound(s: string): string[] {
   return [m[1]!, `${subject} ${m[3]!}`];
 }
 
+/** People named after the dash in a notes title: "Coffee chat - Priya Patel (Stripe) / Alex Rivera". */
+export function titleAttendees(title: string): string[] {
+  const m = title.match(
+    /^(?:[^-–:|]*\b(?:summary|notes?|recap|meeting|chat|call|sync|coffee|1:1|intro)\b[^-–:|]*)\s*[-–:|]\s*(.+)$/i,
+  );
+  if (!m) return [];
+  return m[1]!
+    .replace(/\([^)]*\)/g, ' ')
+    .split(/\s*(?:\/|&|,|\+|<>|\band\b|\bx\b|\bwith\b)\s*/i)
+    .map((n) => n.replace(/\s+/g, ' ').trim())
+    .filter((n) => /^\p{Lu}[\p{L}'.-]+(?:\s+\p{Lu}[\p{L}'.-]+){1,2}$/u.test(n));
+}
+
+/** Whether a note opens with a notetaker's title line ("Meeting summary - ...", "Summary", "Transcript"). */
+export function looksLikeNotetakerText(text: string): boolean {
+  const first = text.trim().split('\n')[0] ?? '';
+  return /^(summary|transcript)/im.test(text) || (first.length < 120 && titleAttendees(first).length > 0);
+}
+
 /** Recognise Granola's share-by-email / paste format and split summary from transcript. */
 export function parseGranolaText(text: string): {
   title?: string;
@@ -387,6 +409,8 @@ export function parseGranolaText(text: string): {
   const attendees: { name: string }[] = [];
   const att = text.match(/^(attendees|participants|with):\s*(.+)$/im);
   if (att?.[2]) for (const n of att[2].split(/,|&| and /)) if (n.trim()) attendees.push({ name: n.trim() });
+  // a notetaker's title line names who was there: "Meeting summary - Hannah Brooks (Figma) / Alex Rivera"
+  if (!attendees.length && title) for (const name of titleAttendees(title)) attendees.push({ name });
   const idx = text.search(/^#{0,3}\s*(transcript)\b/im);
   const summaryIdx = text.search(/^#{0,3}\s*(summary|notes|key takeaways)\b/im);
   const summary =
@@ -736,6 +760,8 @@ function actionText(s: string): string {
         .replace(/^(also|just|then|definitely|probably|still)\s+/i, '')
         .replace(/\s+(?:like|as) (?:you|she|he|they) (?:suggested|said|asked)\b/gi, '')
         .replace(/\band I'll\b/g, 'and')
+        // "promised to send my resume and to share my link": the second verb follows "and" without its "to"
+        .replace(/\b(and|or) to (?=\p{Ll})/gu, '$1 ')
         .replace(/^I owe (?:him|her|them|you) /i, 'Send '),
     ),
   );
@@ -850,13 +876,39 @@ export function heuristicNoteExtraction(
     return lastSubject;
   };
 
+  // a note about one person that calls them "she" (or "he") throughout: that is their pronoun
+  const sheCount = (text.match(/\b(she|her|hers|she's|she'd|she'll)\b/gi) ?? []).length;
+  const heCount = (text.match(/\b(he|him|his|he's|he'd|he'll)\b/gi) ?? []).length;
+  const soleKey = people.length === 1 ? people[0]!.key : undefined;
+  const solePronoun = soleKey
+    ? sheCount && !heCount
+      ? 'She'
+      : heCount && !sheCount
+        ? 'He'
+        : undefined
+    : undefined;
   /** The subject for a clause that has none: the pronoun the note uses for that person, else "They". */
   const subjectOf = (about: string, line: Line): string => {
     if (line.speaker === 'counterpart') return 'They';
     if (pronounOf.she === about && pronounOf.he !== about) return 'She';
     if (pronounOf.he === about && pronounOf.she !== about) return 'He';
+    if (about === soleKey && solePronoun && !pronounOf.she && !pronounOf.he) return solePronoun;
     return 'They';
   };
+  // the student named in their own notes ("Alex to send portfolio link", "review Alex's resume") is "I" and "me"
+  const selfNames = (opts.userNames ?? [])
+    .flatMap((n) => [n.trim(), n.trim().split(/\s+/)[0] ?? ''])
+    .filter((n) => n.length >= 2)
+    .sort((a, b) => b.length - a.length)
+    .map(escapeRe);
+  const selfAlt = selfNames.length ? `(?:${[...new Set(selfNames)].join('|')})` : undefined;
+  const selfLead = selfAlt ? new RegExp(`^${selfAlt}\\s+(?:to|will|should|needs? to)\\s+`, 'i') : undefined;
+  const selfInText = (t: string) =>
+    selfAlt
+      ? t
+          .replace(new RegExp(`\\b${selfAlt}['’]s\\b`, 'g'), 'my')
+          .replace(new RegExp(`(?<=\\S\\s+)\\b${selfAlt}\\b`, 'g'), 'me')
+      : t;
   /** A clause as a stored fact: third person, explicit subject, names capitalised. */
   const fin = (clause: string, about: string, line: Line): string => {
     let c = stripConnectors(clause);
@@ -874,18 +926,18 @@ export function heuristicNoteExtraction(
   };
 
   const pushFact = (type: FactType, text: string, evidence: string, about: string, confidence: number) => {
-    const t = stripEnd(text).replace(/\s+/g, ' ');
+    const t = selfInText(stripEnd(text).replace(/\s+/g, ' '));
     if (wordCount(t) < 2 || t.length < 8) return;
     if (facts.some((f) => f.text.toLowerCase() === t.toLowerCase())) return;
     facts.push({ about, type, text: t, confidence, evidence });
   };
   const pushHook = (clause: string, evidence: string, about: string, line: Line) => {
-    const t = stripEnd(fin(clause, about, line));
+    const t = selfInText(stripEnd(fin(clause, about, line)));
     hooks.push(t);
     pushFact('hook', t, evidence, about, 0.65);
   };
   const pushOffer = (text: string, evidence: string, about: string) => {
-    const t = stripEnd(offerSentence(text, nameAlt));
+    const t = selfInText(stripEnd(offerSentence(text, nameAlt)));
     offers.push(t);
     offerEvidence.push({ key: about, text: t });
     pushFact('offer', t, evidence, about, 0.75);
@@ -904,11 +956,41 @@ export function heuristicNoteExtraction(
           line.speaker === 'counterpart' ? nameOf(line.speakerKey ?? primaryKey) : undefined;
         summaryParts.push(speakerName ? `${speakerName} said, "${evidence}"` : evidence);
       }
+      if (selfLead?.test(s0)) {
+        // "Alex to send portfolio link by Monday": the student's own to-do, wherever it sits
+        actionItems.push({
+          owner: 'user',
+          text: actionText(s0.replace(selfLead, '')),
+          dueHint: extractDueHint(s0),
+          about: primaryKey,
+        });
+        continue;
+      }
       if (WARM.test(s0)) warm++;
       if (COOL.test(s0)) cool++;
       const about = aboutOf(s0, line);
       const due = extractDueHint(s0);
 
+      // "Advice: pick one metric story" (a label the student typed): what they told the student to do
+      const labelled = s0.match(
+        /^(?:advice|tip|tips|recommendation|their advice|his advice|her advice)\s*:\s*(.+)$/i,
+      );
+      if (labelled && line.speaker !== 'user' && !line.actions) {
+        const what = labelled[1]!;
+        const subject = subjectOf(about, line);
+        const statement =
+          /^(the|a|an|your|my|their|it|it's|there|that|this|most|every|best|good|great|always|never|you|I)\b/i.test(
+            what,
+          );
+        const dont = what.match(/^(?:don't|do not|never)\s+(.+)$/i);
+        const t = dont
+          ? `${subject} said not to ${dont[1]}`
+          : statement
+            ? `${subject} said ${lowerStart(capitalizeNames(what))}`
+            : `${subject} said to ${lowerStart(capitalizeNames(what))}`;
+        pushFact('advice', upper1(stripEnd(t)), evidence, about, 0.7);
+        continue;
+      }
       // 1. the student's own promises (and anything under "Action items")
       if (line.speaker === 'user') {
         // "That would be great, I'll email you my resume tomorrow"
@@ -1033,8 +1115,25 @@ export function heuristicNoteExtraction(
         pushFact('personal', fin(focusClause(body, PERSONAL), about, line), evidence, about, 0.55);
         continue;
       }
+      // "He said recruiting opens in January, and to prep with Case in Point": the tail is advice of its own
+      const toTail = reporting.test(s0) ? body.match(/^(.+?),?\s+and (?:also )?to\s+(\S.+)$/i) : null;
+      if (toTail && HOOK.test(toTail[1]!)) {
+        pushHook(toTail[1]!, evidence, about, line);
+        pushFact(
+          'advice',
+          upper1(stripEnd(`${subjectOf(about, line)} said to ${capitalizeNames(toTail[2]!)}`)),
+          evidence,
+          about,
+          0.7,
+        );
+        continue;
+      }
       if (HOOK.test(s0)) {
         pushHook(focusClause(body, HOOK), evidence, about, line);
+        continue;
+      }
+      if (FAN.test(s0)) {
+        pushFact('personal', fin(body, about, line), evidence, about, 0.55);
         continue;
       }
       if (ROLE_SWITCH.test(s0)) pushFact('role_detail', fin(body, about, line), evidence, about, 0.65);
@@ -1052,6 +1151,15 @@ export function heuristicNoteExtraction(
         );
       else if (ROLE.test(s0))
         pushFact('role_detail', fin(focusClause(body, ROLE), about, line), evidence, about, 0.65);
+      else if (
+        reporting.test(s0) &&
+        counterpartSubject.test(s0) &&
+        /\b(best|should|key|always|never|most|matters?|important|worth|look(?:s|ing)? for|stand out|good)\b/i.test(
+          body,
+        )
+      )
+        // "She said the best interns write a design doc before coding": a view on what works, kept as advice
+        pushFact('advice', upper1(stripEnd(fin(s0, about, line))), evidence, about, 0.6);
     }
   }
 

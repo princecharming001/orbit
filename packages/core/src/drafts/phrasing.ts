@@ -304,8 +304,22 @@ export function clause(
     t = lower1(t);
   }
   if (you) {
+    // "their" after a company named in the clause ("the Ramp blog post on their ledger") is the company's
+    const ownWords = new Set(
+      [person.fullName, person.firstName, person.lastName]
+        .flatMap((n) => (n ?? '').split(/\s+/))
+        .filter(Boolean)
+        .map((w) => w.toLowerCase()),
+    );
+    const orgBefore = (at: number) =>
+      t
+        .slice(0, at)
+        .split(/\s+/)
+        .slice(1)
+        .some((w) => /^[A-Z][\p{L}&'-]+$/u.test(w) && w !== 'I' && !ownWords.has(w.toLowerCase()));
+    t = t.replace(/\btheir\b/gi, (m, at: number) => (orgBefore(at) ? m : 'your'));
     t = t
-      .replace(/\b(their|his)\b/gi, 'your')
+      .replace(/\b(his)\b/gi, 'your')
       .replace(/\b(themselves|himself|herself)\b/gi, 'yourself')
       .replace(/^you are\b/, "you're");
     if (names.length) t = t.replace(new RegExp(`\\b${nameRe}\\b`, 'g'), 'you');
@@ -335,6 +349,11 @@ export function pointPhrase(c: FactClause | undefined): string | undefined {
   if (/^(recommended|suggested|advised|urged)$/.test(v)) {
     rest = rest.replace(/^that\s+/, '');
     if (/^\w+ing\b/.test(rest)) return `what you said about ${rest}`;
+    // "recommended I read the blog post" is the advice "to read the blog post"
+    const todo = rest.match(
+      /^(?:I|me)\s+(?:should\s+|to\s+)?(?!am\b|was\b|have\b|had\b|did\b|got\b)([a-z]+)\b(.*)$/,
+    );
+    if (todo && !/(ed|ing)$/.test(todo[1]!)) return `your advice to ${todo[1]}${todo[2]}`;
     if (/^(I|me)\b/.test(rest)) return `your advice that ${rest.replace(/^me\b/, 'I')}`;
     if (/^to\b/.test(rest)) return `your advice ${rest}`;
     return `your recommendation of ${rest}`;

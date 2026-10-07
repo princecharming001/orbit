@@ -18,7 +18,10 @@ async function prep(page: Page) {
 async function loadDemo(page: Page) {
   await prep(page);
   await page.goto('');
-  await page.getByRole('button', { name: /try it with demo data/i }).click();
+  await page
+    .getByRole('button', { name: /^try the demo$/i })
+    .first()
+    .click();
   await expect(page).toHaveURL(/\/today$/, { timeout: 90_000 });
   await expect(page.getByText(/good (morning|afternoon|evening)/i)).toBeVisible();
 }
@@ -61,13 +64,12 @@ test.describe('Orbit demo flow', () => {
     await expect(
       page.getByTestId('suggestion-ask_referral').or(page.getByTestId('suggestion-nurture_checkin')).first(),
     ).toBeVisible();
-    await expect(page.getByText(/upcoming/i)).toBeVisible();
+    await expect(page.getByText('Coming up', { exact: true })).toBeVisible();
     // the line under the greeting counts the cards on screen, including stage updates raised after the brief
-    const summary = page.getByText(/coming up this week/);
-    const confirms = await page.getByTestId('suggestion-schedule_confirm').count();
-    await expect(summary).toContainText(`${confirms} time${confirms > 1 ? 's' : ''} to confirm`);
-    const updates = await page.getByTestId('suggestion-confirm_stage').count();
-    if (updates) await expect(summary).toContainText(`${updates} update${updates > 1 ? 's' : ''} to confirm`);
+    const summary = page.getByTestId('today-summary');
+    await expect(summary).toContainText(/coming up this week/);
+    const cards = await page.locator('[data-testid^="suggestion-"]').count();
+    await expect(summary).toContainText(`${cards} things for today`);
   });
 
   test('approve a thank-you: approval binds the text, card leaves Today, Sent tab lists it', async ({
@@ -76,7 +78,7 @@ test.describe('Orbit demo flow', () => {
     await loadDemo(page);
     const card = page.getByTestId('suggestion-thank_you').first();
     const name = await card.getByRole('link').nth(1).innerText();
-    await card.locator('button.line-clamp-2').click();
+    await card.getByTestId('draft-review').click();
     const textarea = card.getByLabel('Message body');
     await expect(textarea).toBeVisible();
     // the demo's notes are in, so the stored thank-you already quotes what they said: no prompt, no placeholder
@@ -84,13 +86,14 @@ test.describe('Orbit demo flow', () => {
     await expect(textarea).not.toHaveValue(/\[/);
     await expect(textarea).toHaveValue(/what you said about|your advice|your point/i);
     await textarea.fill(`${await textarea.inputValue()}\n\nPS edited in e2e`);
-    await card.getByRole('button', { name: /approve & send/i }).click();
+    // without Gmail sending, the button says what it does: it opens the mail app
+    await card.getByRole('button', { name: /^open in mail app$/i }).click();
     await expect(page.getByText(/opened in your mail app/i).first()).toBeVisible({ timeout: 15_000 });
     // a mail-app hand-off is not "sent" until the student says so
     await card.getByRole('button', { name: /i sent it/i }).click();
     await expect(page.getByText(/logged as sent to/i)).toBeVisible();
     await page.goto('inbox?tab=sent');
-    await page.getByRole('tab', { name: /sent/i }).click();
+    await page.getByRole('tab', { name: /^sent/i }).click();
     await expect(page.getByText('PS edited in e2e')).toBeVisible();
     await expect(page.getByRole('link', { name })).toBeVisible();
     // minutes after the thank-you, "Write to" does not draft a check-in
@@ -276,7 +279,7 @@ test.describe('Orbit demo flow', () => {
       }
     }
     expect(found).toBe(true);
-    const approve = page.getByRole('button', { name: /approve & send|copy & open linkedin/i });
+    const approve = page.getByRole('button', { name: /open in mail app|send to|copy & open linkedin/i });
     await expect(approve).toBeDisabled();
     await expect(page.getByLabel('Message body')).toHaveValue(/\[Your link to/);
     await page
@@ -330,7 +333,8 @@ test.describe('Orbit demo flow', () => {
     await page.getByTestId('capture-save').click();
     await expect(page).toHaveURL(/\/people\//, { timeout: 15_000 });
     await page.getByRole('tab', { name: /facts/i }).click();
-    await expect(page.getByText(/offered to refer me/i).first()).toBeVisible();
+    // the fact is stored as written ("offered to refer me") and shown to the student as "you"
+    await expect(page.getByText(/offered to refer you/i).first()).toBeVisible();
     await expect(page.getByText(/you promised/i).first()).toBeVisible();
   });
 
@@ -348,7 +352,7 @@ test.describe('Orbit demo flow', () => {
     await loadDemo(page);
     await page.goto('settings/privacy');
     const dl = page.waitForEvent('download');
-    await page.getByRole('button', { name: /export everything/i }).click();
+    await page.getByRole('button', { name: /download all my data/i }).click();
     expect((await dl).suggestedFilename()).toMatch(/orbit-export/);
     page.on('dialog', (d) => d.accept());
     await page.getByRole('button', { name: /delete all data/i }).click();
@@ -530,12 +534,13 @@ test.describe('Manual onboarding', () => {
       .getByRole('button', { name: /^get started/i })
       .first()
       .click();
-    await expect(page).toHaveURL(/\/onboarding\/2/);
+    await expect(page).toHaveURL(/\/onboarding\/1$/);
     await page.getByTestId('ob-name').fill('Sam Okafor');
     await page.getByTestId('ob-email').fill('sam@umich.edu');
     await page.getByTestId('ob-school').fill('University of Michigan');
+    await page.getByTestId('ob-year').selectOption({ index: 2 });
     await page.getByRole('button', { name: /continue/i }).click();
-    await expect(page).toHaveURL(/\/onboarding\/3/);
+    await expect(page).toHaveURL(/\/onboarding\/2$/);
     await page.getByTestId('ob-fn-pm').click();
     await page.getByTestId('ob-company').fill('Figma');
     await page.getByRole('button', { name: /^add$/i }).click();
@@ -546,10 +551,9 @@ test.describe('Manual onboarding', () => {
     await expect(page.getByText(/already on your list/i)).toBeVisible();
     await expect(page.getByRole('button', { name: /remove figma/i })).toHaveCount(1);
     await page.getByRole('button', { name: /continue/i }).click();
-    await expect(page).toHaveURL(/\/onboarding\/4/);
+    await expect(page).toHaveURL(/\/onboarding\/3$/);
     await page.getByRole('button', { name: /skip for now/i }).click();
-    await page.getByRole('button', { name: /skip for now/i }).click(); // google
-    // linkedin: upload a tiny CSV
+    // linkedin (no Google step: Google sign-in is not set up on this build): upload a tiny CSV
     const csv =
       'First Name,Last Name,URL,Email Address,Company,Position,Connected On\nPriya,Patel,https://www.linkedin.com/in/priya-patel,priya@figma.com,Figma,Product Manager,12 Mar 2025\nDaniel,Kim,https://www.linkedin.com/in/daniel-kim,,Stripe,Software Engineer,03 Jan 2024\n';
     await page
@@ -557,7 +561,8 @@ test.describe('Manual onboarding', () => {
       .setInputFiles({ name: 'Connections.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) });
     await expect(page.getByText(/2 people added/i)).toBeVisible();
     await page.getByRole('button', { name: /continue/i }).click();
-    await page.getByRole('button', { name: /continue/i }).click(); // notes
+    // meeting notes are a tip on the last step, not a step of their own
+    await expect(page.getByTestId('ob-notes-tip')).toBeVisible();
     await page.getByRole('button', { name: /finish setup/i }).click();
     await expect(page).toHaveURL(/\/today$/, { timeout: 30_000 });
     await page.goto('people');
@@ -588,8 +593,9 @@ test.describe('Manual onboarding', () => {
     await page.getByTestId('ob-name').fill('Real Person');
     await page.getByTestId('ob-email').fill('real@umich.edu');
     await page.getByTestId('ob-school').fill('University of Michigan');
+    await page.getByTestId('ob-year').selectOption({ index: 2 });
     await page.getByRole('button', { name: /continue/i }).click();
-    await expect(page).toHaveURL(/\/onboarding\/3/);
+    await expect(page).toHaveURL(/\/onboarding\/2$/);
     // while the stored profile is read, the header never offers the first-visit buttons, not even for one frame
     for (const state of await landingHeaderStates(page))
       expect(state).not.toMatch(/try the demo|get started/i);
@@ -599,14 +605,17 @@ test.describe('Manual onboarding', () => {
       dialogs.push(d.message());
       d.dismiss();
     });
-    await page.getByRole('button', { name: /try it with demo data/i }).click();
+    await page
+      .getByRole('button', { name: /^try the demo$/i })
+      .first()
+      .click();
     await expect.poll(() => dialogs.length).toBe(1);
     expect(dialogs[0]).toMatch(/discards the setup you started for Real Person/);
     await page
       .getByRole('button', { name: /continue setup/i })
       .first()
       .click();
-    await expect(page).toHaveURL(/\/onboarding\/3/);
+    await expect(page).toHaveURL(/\/onboarding\/2$/);
   });
 });
 
@@ -623,12 +632,21 @@ test.describe('Keyboard, dead ends and plain words', () => {
     await expect(page.getByRole('button', { name: 'Snooze for 3 days' }).first()).toBeVisible();
     await page.goto('pipeline');
     const card = page.getByTestId('chat-card-warming').first();
-    const name = await card.getByRole('link').innerText();
-    await card.getByRole('link').focus();
-    await expect(card.getByRole('link')).toBeFocused();
+    // the name link covers the card; the next-step chip is a second, separate link
+    const link = card.getByRole('link').first();
+    const name = await link.innerText();
+    await link.focus();
+    await expect(link).toBeFocused();
     await card.getByTestId('chat-card-move').selectOption('identified');
     await expect(page.getByTestId('chat-card-identified').filter({ hasText: name })).toBeVisible();
-    await page.getByTestId('chat-card-identified').filter({ hasText: name }).getByRole('link').press('Enter');
+    // the move says what happened and can be undone
+    await expect(page.getByTestId('toasts')).toContainText(`Moved ${name.split(' ')[0]} to To contact`);
+    await page
+      .getByTestId('chat-card-identified')
+      .filter({ hasText: name })
+      .getByRole('link')
+      .first()
+      .press('Enter');
     await expect(page).toHaveURL(/\/people\//);
   });
 
@@ -716,7 +734,7 @@ for (const vp of [
     const card = page.getByTestId('suggestion-thank_you').first();
     const box = await card.getByRole('button', { name: /dismiss/i }).boundingBox();
     expect(box && box.x + box.width).toBeLessThanOrEqual(vp.width);
-    await card.locator('button.line-clamp-2').click();
+    await card.getByTestId('draft-review').click();
     await expect(card.getByLabel('Message body')).toBeVisible();
     await fits('today-draft-open');
     for (const path of ['pipeline', 'pipeline?view=table', 'people', 'discover', 'inbox', 'settings/goals']) {
@@ -724,7 +742,8 @@ for (const vp of [
       await fits(path.replace(/[?=/]/g, '-'));
     }
     await page.goto('people');
-    await page.locator('table tbody tr').first().getByRole('link').click();
+    // phones get a list instead of the table
+    await page.locator('a[href*="/people/p"]:visible').first().click();
     await expect(page).toHaveURL(/\/people\//);
     await fits('person');
     const write = await page.getByTestId('person-write').boundingBox();
@@ -736,3 +755,296 @@ for (const vp of [
     await fits('person-compose');
   });
 }
+
+test.describe('First-run guidance and plain next steps', () => {
+  test('Today explains itself once: the hint closes for good, and each draft card says how to review it', async ({
+    page,
+  }) => {
+    await loadDemo(page);
+    const hint = page.getByTestId('hint-today');
+    await expect(hint).toBeVisible();
+    await expect(hint).toContainText(/nothing goes out until you send it yourself/i);
+    await page.getByTestId('hint-today-dismiss').click();
+    await expect(hint).toHaveCount(0);
+    await page.reload();
+    await expect(page.getByTestId('suggestion-thank_you').first()).toBeVisible();
+    await expect(page.getByTestId('hint-today')).toHaveCount(0);
+    // the line under the greeting is a count, not a list of every kind of card
+    const cards = await page.locator('[data-testid^="suggestion-"]').count();
+    await expect(page.getByTestId('today-summary')).toHaveText(new RegExp(`^${cards} things for today`));
+    // every card with a draft has a visible button that opens it, and the approve button says what it does
+    const card = page.getByTestId('suggestion-follow_up_bump').first();
+    await card.getByTestId('draft-review').click();
+    await expect(card.getByTestId('draft-to')).toContainText(/^To: /);
+    await expect(card.getByRole('button', { name: /^open in mail app$/i })).toBeVisible();
+    await expect(card.getByTestId('draft-mail-hint')).toContainText(/opens this in your mail app/i);
+  });
+
+  test('a duplicate is only merged after a second step, and a dismissed card can be brought back', async ({
+    page,
+  }) => {
+    await loadDemo(page);
+    // a duplicate guess with little behind it (different first names) waits behind "can wait"
+    await page.getByTestId('today-more').click();
+    const merge = page.getByTestId('suggestion-confirm_merge').first();
+    await expect(merge.getByTestId('merge-choice')).toContainText(/both have/i);
+    await merge.getByTestId('merge-ask').click();
+    await expect(merge.getByRole('alertdialog')).toContainText(/cannot be undone/i);
+    await merge.getByRole('button', { name: /^cancel$/i }).click();
+    await expect(merge.getByTestId('merge-confirm')).toHaveCount(0);
+    // dismiss shows a toast with Undo, and Undo puts the card back
+    const card = page.getByTestId('suggestion-thank_you').first();
+    const who = await card.getByRole('link').nth(1).innerText();
+    await card.getByRole('button', { name: /^dismiss$/i }).click();
+    await card.getByRole('button', { name: /not now/i }).click();
+    await expect(page.getByTestId('suggestion-thank_you').filter({ hasText: who })).toHaveCount(0);
+    await page
+      .getByTestId('toasts')
+      .getByRole('button', { name: /^undo$/i })
+      .click();
+    await expect(page.getByTestId('suggestion-thank_you').filter({ hasText: who })).toBeVisible();
+  });
+
+  test('the Drafts badge counts exactly the drafts ready to send today, and an opened draft is counted once', async ({
+    page,
+  }) => {
+    await loadDemo(page);
+    const badge = Number(await page.getByTestId('approvals-badge').first().innerText());
+    // the same drafts as Today's cards, not Today plus everything that can wait
+    const todays = await page
+      .locator('[data-testid^="suggestion-"]')
+      .filter({ has: page.getByTestId('draft-review') })
+      .count();
+    expect(badge).toBe(todays);
+    await page.goto('inbox');
+    await expect(page.getByRole('heading', { name: 'Drafts' })).toBeVisible();
+    await expect(page.getByRole('tab', { name: /ready to send/i })).toContainText(String(badge));
+    await expect(page.locator('[data-testid^="suggestion-"]')).toHaveCount(badge);
+    await expect(page.getByTestId('suggestion-prep_brief')).toHaveCount(0);
+    // opened in the mail app: it moves to "Not sent yet" and is no longer counted as ready
+    const card = page.getByTestId('suggestion-follow_up_bump').first();
+    await card.getByTestId('draft-review').click();
+    await card.getByRole('button', { name: /^open in mail app$/i }).click();
+    await expect(page.getByRole('tab', { name: /ready to send/i })).toContainText(String(badge - 1));
+    await expect(page.getByRole('tab', { name: /not sent yet/i })).toContainText('1');
+    await expect(page.getByTestId('approvals-badge').first()).toHaveText(String(badge - 1));
+    // leaving and coming back keeps the "I sent it" step: the page opens on what is waiting, and Today shows it
+    await page.goto('today');
+    await page.goto('inbox');
+    await expect(page.getByRole('tab', { name: /not sent yet/i })).toHaveAttribute('aria-selected', 'true');
+    await expect(page.getByRole('button', { name: /i sent it/i })).toBeVisible();
+    await expect(page.getByTestId('handoff-copy')).toBeVisible();
+  });
+
+  test('Add note never picks the person behind your back, and files a notetaker summary with the person it names', async ({
+    page,
+  }) => {
+    await loadDemo(page);
+    await page.goto('notes/new');
+    const select = page.getByTestId('capture-person');
+    await expect.poll(() => select.locator('option').count(), { timeout: 15_000 }).toBeGreaterThan(3);
+    await expect(select).toHaveValue('');
+    // choosing someone and then "Let Orbit figure it out" again sticks
+    await select.selectOption({ index: 3 });
+    await select.selectOption({ label: 'Let Orbit figure it out' });
+    await page.waitForTimeout(500);
+    await expect(select).toHaveValue('');
+    await page
+      .getByTestId('capture-text')
+      .fill(
+        "Meeting summary - Hannah Brooks (Figma) / Alex Rivera\nAction items:\n- Alex to send portfolio link by Monday\nKey points:\n- Hannah recommended taking HCI course\n- Figma APM applications open in January\n- Hannah offered to review Alex's resume",
+      );
+    await expect(page.getByTestId('capture-match-preview')).toContainText(/file this with Hannah Brooks/);
+    await page.getByTestId('capture-save').click();
+    await expect(page).toHaveURL(/\/people\//, { timeout: 15_000 });
+    await expect(page.getByRole('heading', { name: 'Hannah Brooks' })).toBeVisible();
+    await expect(page.getByTestId('toasts')).toContainText(/1 promise you made/);
+    // the thank-you is right on the page she lands on
+    await expect(page.getByTestId('person-waiting').getByTestId('suggestion-thank_you')).toBeVisible();
+  });
+
+  test('the demo says it is demo data and leads to your own setup', async ({ page }) => {
+    await loadDemo(page);
+    await expect(page.getByTestId('demo-banner')).toContainText(/made-up student/);
+    await page.goto('');
+    await expect(page.getByRole('button', { name: /set up orbit for me/i }).first()).toBeVisible();
+    await page.goto('today');
+    await page.getByTestId('demo-start-own').click();
+    await page.getByTestId('demo-start-confirm').click();
+    await expect(page).toHaveURL(/\/onboarding\/1$/, { timeout: 15_000 });
+    await expect(page.getByTestId('ob-name')).toHaveValue('');
+  });
+
+  test('Pipeline explains its stages and finds who went quiet; the next-step chip opens that card on Today', async ({
+    page,
+  }) => {
+    await loadDemo(page);
+    await page.goto('pipeline');
+    await expect(page.getByTestId('hint-pipeline')).toBeVisible();
+    await page.getByTestId('stage-legend').locator('summary').click();
+    await expect(page.getByTestId('stage-legend')).toContainText(/waiting for a reply/i);
+    await page.getByTestId('hint-pipeline-dismiss').click();
+    await expect(page.getByTestId('hint-pipeline')).toHaveCount(0);
+    await page.reload();
+    await expect(page.getByTestId('chat-card-warming').first()).toBeVisible();
+    await expect(page.getByTestId('hint-pipeline')).toHaveCount(0);
+    await page.getByTestId('filter-quiet').check();
+    const quiet = page.locator('[data-testid^="chat-card-"]:not([data-testid="chat-card-move"])');
+    await expect(quiet.first()).toBeVisible();
+    for (const t of await quiet.allInnerTexts()) expect(t).toMatch(/quiet/);
+    await page.getByTestId('filter-quiet').uncheck();
+    // the table sorts from its headers
+    await page.getByRole('tab', { name: 'Table' }).click();
+    await page.locator('thead').getByRole('button', { name: 'Person', exact: true }).click();
+    await expect(page.locator('th[aria-sort="ascending"]')).toContainText(/person/i);
+    await page.getByRole('tab', { name: 'Board' }).click();
+    const next = page.getByTestId('chat-next').first();
+    await next.click();
+    await expect(page).toHaveURL(/\/today\?card=/);
+    await expect(page.locator('[data-highlight="true"]')).toBeVisible();
+  });
+});
+
+test.describe('Setup without Google', () => {
+  test('setup keeps answers on Back, marks skipped steps as skipped, and an empty Today offers Add a person', async ({
+    page,
+  }) => {
+    await prep(page);
+    await page.goto('');
+    await page
+      .getByRole('button', { name: /^get started/i })
+      .first()
+      .click();
+    await expect(page.getByTestId('ob-progress')).toHaveText(/step 1 of 5/i);
+    // Continue says what is missing while it is disabled
+    await expect(page.getByTestId('ob-missing')).toContainText(
+      /your name, your email, your school and your graduation year/i,
+    );
+    // labels belong to their fields, and say which are required
+    await page.getByLabel('Full name Required').fill('Sam Okafor');
+    await page.getByLabel('Email Required').fill('sam@umich.edu');
+    await page.getByTestId('ob-school').fill('University of Michigan');
+    await page.getByTestId('ob-year').selectOption({ index: 2 });
+    await page.getByRole('button', { name: /continue/i }).click();
+    await page.getByTestId('ob-fn-consulting').click();
+    await page.getByTestId('ob-roles').fill('Summer analyst');
+    // a company typed but not added is kept, not thrown away
+    await page.getByTestId('ob-company').fill('Evercore');
+    await page.getByRole('button', { name: /^back$/i }).click();
+    await expect(page).toHaveURL(/\/onboarding\/1$/);
+    await page.getByRole('button', { name: /continue/i }).click();
+    await expect(page.getByTestId('ob-fn-consulting')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByTestId('ob-roles')).toHaveValue('Summer analyst');
+    await expect(page.getByRole('button', { name: /remove evercore/i })).toBeVisible();
+    await page.getByRole('button', { name: /continue/i }).click();
+    await page.getByRole('button', { name: /skip for now/i }).click(); // resume
+    // without a Google sign-in set up on this build there is no Google step that could only say "not available"
+    await expect(page.getByTestId('ob-google-unavailable')).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: 'LinkedIn' })).toBeVisible();
+    await expect(page.getByTestId('ob-step-3')).toHaveAttribute('data-status', 'skipped');
+    await expect(page.getByTestId('ob-step-2')).toHaveAttribute('data-status', 'done');
+    await page.getByRole('button', { name: /skip for now/i }).click(); // linkedin
+    await expect(page.getByTestId('ob-step-4')).toHaveAttribute('data-status', 'skipped');
+    await page.getByRole('button', { name: /finish setup/i }).click();
+    await expect(page).toHaveURL(/\/today$/, { timeout: 30_000 });
+    const empty = page.getByTestId('today-empty-network');
+    await expect(empty).toBeVisible();
+    await expect(empty.getByRole('button', { name: /someone at evercore/i })).toBeVisible();
+    await empty.getByRole('button', { name: /someone at evercore/i }).click();
+    await expect(page.getByTestId('add-person-company')).toHaveValue('Evercore');
+    await page.getByTestId('add-person-name').fill('Priya Shah');
+    await expect(page.getByTestId('add-person-save')).toBeDisabled(); // needs a way to reach them
+    await page.getByTestId('add-person-email').fill('priya.shah@evercore.com');
+    await page.getByTestId('add-person-save').click();
+    await expect(page).toHaveURL(/\/people\//);
+    await expect(page.getByRole('heading', { name: 'Priya Shah' })).toBeVisible();
+    // looking at a first draft does not put her on the Pipeline
+    await page.getByTestId('person-write').click();
+    await expect(page.getByLabel('Message body')).toBeVisible({ timeout: 15_000 });
+    await page.goto('pipeline');
+    await expect(page.getByText(/no chats yet/i)).toBeVisible();
+    await expect(page.locator('[data-testid^="chat-card-"]')).toHaveCount(0);
+  });
+  test('an empty Today imports LinkedIn in place, says who to meet, and a note about someone met in person brings a thank-you', async ({
+    page,
+  }) => {
+    await prep(page);
+    await page.goto('');
+    await page
+      .getByRole('button', { name: /^get started/i })
+      .first()
+      .click();
+    await page.getByTestId('ob-name').fill('Jamie Park');
+    await page.getByTestId('ob-email').fill('jamie@umich.edu');
+    await page.getByTestId('ob-school').fill('University of Michigan');
+    await page.getByTestId('ob-year').selectOption({ index: 2 });
+    await page.getByRole('button', { name: /continue/i }).click();
+    await page.getByTestId('ob-fn-ib').click();
+    await page.getByTestId('ob-company').fill('Goldman Sachs');
+    await page.getByRole('button', { name: /continue/i }).click();
+    // resume and LinkedIn (no Google step on this build, and meeting notes are a tip on the last step)
+    await page.getByRole('button', { name: /skip for now/i }).click();
+    await expect(page.getByRole('heading', { name: 'LinkedIn' })).toBeVisible();
+    await page.getByRole('button', { name: /skip for now/i }).click();
+    await page.getByRole('button', { name: /finish setup/i }).click();
+    await expect(page).toHaveURL(/\/today$/, { timeout: 30_000 });
+    // the upload is a real control: the keyboard reaches it, and it opens the picker right here
+    const upload = page.getByTestId('today-empty-network').getByTestId('linkedin-import');
+    await upload.focus();
+    await expect(upload).toBeFocused();
+    await upload.setInputFiles({
+      name: 'Connections.csv',
+      mimeType: 'text/csv',
+      buffer: Buffer.from(
+        [
+          'First Name,Last Name,URL,Email Address,Company,Position,Connected On',
+          'Priya,Raman,https://www.linkedin.com/in/priyaraman,,Goldman Sachs,Investment Banking Analyst,12 Mar 2025',
+          'Sarah,Lin,https://www.linkedin.com/in/sarahlin,,Evercore,Summer Analyst,21 Aug 2025',
+          'Marcus,Webb,https://www.linkedin.com/in/marcuswebb,,Bain & Company,Associate Consultant,02 Feb 2024',
+        ].join('\n'),
+      ),
+    });
+    const toast = page.getByTestId('toasts');
+    await expect(toast).toContainText(/3 people added.*worth a coffee chat are on Discover/i, {
+      timeout: 30_000,
+    });
+    await toast.getByRole('button', { name: /see who to meet/i }).click();
+    await expect(page).toHaveURL(/\/discover$/);
+    const priya = page.getByTestId('rec-card').filter({ hasText: 'Priya Raman' });
+    await expect(priya).toContainText('Works in investment banking (Investment Banking Analyst)');
+    // a consultant is not called a banker
+    await expect(page.getByTestId('rec-card').filter({ hasText: 'Marcus Webb' })).toHaveCount(0);
+    // Start warm-up keeps the student on the list
+    await priya.getByRole('button', { name: /start warm-up/i }).click();
+    await expect(toast).toContainText(/warm-up started for priya/i);
+    await expect(page).toHaveURL(/\/discover$/);
+    // a note about someone the student met in person (never messaged) leads to a thank-you, not a cold first message
+    await page.goto('notes/new');
+    await page
+      .getByTestId('capture-text')
+      .fill('Coffee chat with Sarah Lin at the career fair. She suggested I practice paper LBOs.');
+    await page.getByTestId('capture-save').click();
+    await expect(page).toHaveURL(/\/people\//, { timeout: 15_000 });
+    await page.goto('today');
+    await expect(page.getByTestId('suggestion-thank_you').filter({ hasText: 'Sarah Lin' })).toBeVisible();
+    await expect(page.getByTestId('suggestion-new_outreach').filter({ hasText: 'Sarah Lin' })).toHaveCount(0);
+  });
+
+  test('facts that disagree are pointed out, and a deleted fact can be brought back', async ({ page }) => {
+    await loadDemo(page);
+    await page.goto('people');
+    await page.locator('a[href*="/people/p"]:visible').first().click();
+    await page.getByRole('tab', { name: /facts/i }).click();
+    for (const t of ['She grew up in Pittsburgh', 'She grew up in Chicago']) {
+      await page.getByLabel('Kind of fact').selectOption('personal');
+      await page.getByLabel('New fact').fill(t);
+      await page.getByRole('button', { name: /^add$/i }).click();
+    }
+    await expect(page.getByTestId('fact-conflict')).toHaveCount(2);
+    await page.getByRole('button', { name: 'Delete fact: She grew up in Chicago' }).click();
+    await expect(page.getByTestId('fact-conflict')).toHaveCount(0);
+    await page.getByTestId('toasts').getByRole('button', { name: 'Undo' }).click();
+    await expect(page.getByRole('button', { name: 'Delete fact: She grew up in Chicago' })).toBeVisible();
+    await expect(page.getByTestId('fact-conflict')).toHaveCount(2);
+  });
+});

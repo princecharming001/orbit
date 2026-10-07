@@ -2,6 +2,8 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { RefreshCw } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { AddPersonButton } from '../components/AddPerson';
+import { LinkedInImportButton } from '../components/LinkedInImport';
 import { feedback } from '../db/repo';
 import { db } from '../db/schema';
 import { recommendationsRefresh, startWarmUpOrOutreach } from '../engine/brief';
@@ -57,10 +59,10 @@ export function Discover() {
     goals: !goals?.targetFunctions.length && !tcCount,
   };
   const emptyHint = missing.people
-    ? 'Orbit recommends people from your own network, and it is empty. Import your LinkedIn connections or connect Google, then generate recommendations.'
+    ? 'Orbit recommends people from your own network, and it is empty so far. Add the people you know of by hand, or import your LinkedIn connections, and recommendations follow.'
     : missing.goals
       ? 'Tell Orbit which functions and companies you are recruiting for, then generate recommendations.'
-      : 'Nobody in your network matches your goals yet. Import more connections or add target companies, then try again.';
+      : 'Nobody in your network matches your goals yet. Add people at your target companies or import more connections, then try again.';
   const refresh = async () => {
     setBusy(true);
     await recommendationsRefresh(user);
@@ -74,7 +76,10 @@ export function Discover() {
     toast.push({
       text: shown
         ? `${shown} recommendation${shown === 1 ? '' : 's'} ready.`
-        : 'No new recommendations yet. See the note below for what would help.',
+        : missing.people
+          ? 'No recommendations yet: your network is empty. Add a person or import your LinkedIn connections first.'
+          : 'No new recommendations. Add people at your target companies or import more connections.',
+      ttl: 6000,
     });
   };
   const start = async (personId: string) => {
@@ -87,19 +92,32 @@ export function Discover() {
     );
     if (r.draft) nav(`/people/${personId}?draft=outreach`);
     else {
+      // stay on the list: the student is still choosing who to meet, and the first step waits on Today
       toast.push({
-        text: `Warm-up started for ${p?.firstName}. First step is on Today.`,
+        text: `Warm-up started for ${p?.firstName}. The first step is on Today.`,
         tone: 'good',
-        ttl: 5000,
+        ttl: 8000,
+        action: { label: 'Open on Today', onClick: () => nav(`/today?person=${personId}`) },
       });
-      nav('/today');
     }
+  };
+  const drop = async (id: string, reason: string, label: string) => {
+    await db.recommendations.update(id, { status: 'dismissed', dismissedReason: reason });
+    await feedback(user.id, 'recommendation_dismiss', { reason, refTable: 'recommendations', refId: id });
+    toast.push({
+      text: `Removed (${label.toLowerCase()}). Orbit learns from this for the next list.`,
+      action: {
+        label: 'Undo',
+        onClick: () => db.recommendations.update(id, { status: 'new', dismissedReason: undefined }),
+      },
+      ttl: 6000,
+    });
   };
   return (
     <div>
       <PageHeader
         title="Discover"
-        subtitle="People worth a coffee chat, ranked by fit, reachability and how likely they are to reply."
+        subtitle="People from your network worth a coffee chat. Saved people come first, then the best mix of how well they match your goals and how easy they are to reach."
         actions={
           <Button onClick={refresh} disabled={busy}>
             <RefreshCw size={14} className={busy ? 'animate-spin' : ''} /> Refresh
@@ -110,13 +128,18 @@ export function Discover() {
         <Input
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="Search your network: name, company, title"
+          placeholder="Search your network"
           aria-label="Search your network"
           className="w-full sm:w-80"
         />
-        <Link to="/map?reach=1">
-          <Button variant="secondary">Find a path to someone</Button>
-        </Link>
+        {people.filter((p) => p.isHuman && !p.hiddenAt).length > 1 && (
+          <Link
+            to="/map?reach=1"
+            title="Opens the Map, where you pick a person and see who could introduce you"
+          >
+            <Button variant="secondary">Find an intro on the Map</Button>
+          </Link>
+        )}
       </div>
       {searchHits.length > 0 && (
         <div className="mb-6 border border-line rounded-[var(--radius-card)] divide-y divide-line">
@@ -145,115 +168,126 @@ export function Discover() {
           body={emptyHint}
           action={
             <div className="flex flex-wrap justify-center gap-2">
-              {missing.people && (
-                <Link to="/settings/integrations">
-                  <Button variant="primary">Import connections</Button>
-                </Link>
-              )}
+              {/* the two things the message suggests, right here, whatever is missing */}
+              <AddPersonButton variant={missing.people || !missing.goals ? 'primary' : 'secondary'} />
+              <LinkedInImportButton />
               {missing.goals && (
                 <Link to="/settings/goals">
                   <Button variant={missing.people ? 'secondary' : 'primary'}>Set your goals</Button>
                 </Link>
               )}
-              <Button variant={missing.people || missing.goals ? 'secondary' : 'primary'} onClick={refresh}>
-                Generate recommendations
-              </Button>
+              {!missing.people && missing.goals && (
+                <Button variant="secondary" onClick={refresh}>
+                  Generate recommendations
+                </Button>
+              )}
             </div>
           }
         />
       ) : (
-        <div className="grid md:grid-cols-2 gap-3 [&>*]:min-w-0">
-          {list.map((r) => {
-            const p = byId.get(r.personId);
-            if (!p) return null;
-            const cold = p.strength < 0.2 && !p.primaryEmail;
-            return (
-              <div
-                key={r.id}
-                className={cx(
-                  'bg-canvas border rounded-[var(--radius-card)] p-4 fade-up',
-                  r.status === 'saved' ? 'border-accent/50' : 'border-line',
-                )}
-                data-testid="rec-card"
-              >
-                <div className="flex items-start gap-3">
-                  <Link to={`/people/${p.id}`}>
-                    <Avatar name={p.displayName} src={p.photoUrl} id={p.id} size={44} />
-                  </Link>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <Link to={`/people/${p.id}`} className="font-medium hover:underline truncate">
-                        {p.displayName}
-                      </Link>
-                      {p.isAlumni && (
-                        <Chip tone="accent" className="h-5">
-                          Alum
-                        </Chip>
-                      )}
-                      {r.status === 'saved' && <Chip className="h-5">Saved</Chip>}
-                    </div>
-                    <div className="text-[13px] text-ink-2 truncate">
-                      {[p.currentTitle, p.currentOrganizationRaw].filter(Boolean).join(' · ')}
-                    </div>
-                    <ul className="mt-2 text-[13px] text-ink-2 space-y-0.5">
-                      {r.reasons.slice(0, 3).map((x) => (
-                        <li key={x.code}>· {x.text}</li>
-                      ))}
-                    </ul>
-                    <div className="mt-2 flex items-center gap-3 text-[12px] text-ink-3">
-                      <span className="inline-flex items-center gap-1">
-                        Reach <StrengthDots v={r.reachScore} label="Reach" />
-                      </span>
-                      <span>Fit {Math.round(r.fitScore * 100)}</span>
+        <>
+          <p className="text-[12px] text-ink-3 mb-3" data-testid="discover-legend">
+            Match is how well their role and company fit your goals, out of 100. Reach is how easy they are to
+            get to: through people you know, a shared school, or a past conversation. The order weighs both.
+          </p>
+          <div className="grid md:grid-cols-2 gap-3 [&>*]:min-w-0">
+            {list.map((r) => {
+              const p = byId.get(r.personId);
+              if (!p) return null;
+              const cold = p.strength < 0.2 && !p.primaryEmail;
+              return (
+                <div
+                  key={r.id}
+                  className={cx(
+                    'bg-canvas border rounded-[var(--radius-card)] p-4 fade-up flex flex-col',
+                    r.status === 'saved' ? 'border-accent/50' : 'border-line',
+                  )}
+                  data-testid="rec-card"
+                >
+                  <div className="flex items-start gap-3">
+                    <Link to={`/people/${p.id}`}>
+                      <Avatar name={p.displayName} src={p.photoUrl} id={p.id} size={44} />
+                    </Link>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <Link to={`/people/${p.id}`} className="font-medium hover:underline truncate">
+                          {p.displayName}
+                        </Link>
+                        {p.isAlumni && (
+                          <Chip tone="accent" className="h-5">
+                            Alum
+                          </Chip>
+                        )}
+                        {r.status === 'saved' && <Chip className="h-5">Saved</Chip>}
+                      </div>
+                      <div className="text-[13px] text-ink-2 truncate">
+                        {[p.currentTitle, p.currentOrganizationRaw].filter(Boolean).join(' · ')}
+                      </div>
+                      <ul className="mt-2 text-[13px] text-ink-2 space-y-0.5">
+                        {r.reasons.slice(0, 3).map((x) => (
+                          <li key={x.code}>· {x.text}</li>
+                        ))}
+                      </ul>
+                      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-ink-3">
+                        <span title="How well their role and company fit your goals, out of 100">
+                          Match {Math.round(r.fitScore * 100)}
+                        </span>
+                        <span title="How easy they are to reach, out of 100">
+                          Reach {Math.round(r.reachScore * 100)}
+                        </span>
+                      </div>
                       {cold && (
-                        <Chip tone="warn" className="h-5">
-                          Warm-up first
-                        </Chip>
+                        <p className="mt-1.5 text-[12px] text-warn" data-testid="rec-warmup-why">
+                          You only have {p.firstName} on LinkedIn and have never talked, so Orbit suggests a
+                          short warm-up before your first message.
+                        </p>
                       )}
                     </div>
                   </div>
-                </div>
-                <div className="mt-3 flex flex-wrap items-center gap-2">
-                  <Button variant="primary" size="sm" onClick={() => start(p.id)} data-testid="rec-start">
-                    {cold ? 'Start warm-up' : 'Write first message'}
-                  </Button>
-                  {r.status !== 'saved' && (
-                    <Button size="sm" onClick={() => db.recommendations.update(r.id, { status: 'saved' })}>
-                      Save
+                  <div className="mt-auto pt-3 flex flex-wrap items-center gap-2">
+                    <Button variant="primary" size="sm" onClick={() => start(p.id)} data-testid="rec-start">
+                      {cold ? 'Start warm-up' : 'Write first message'}
                     </Button>
-                  )}
-                  <div
-                    className="sm:ml-auto flex flex-wrap gap-1 text-[12px]"
-                    role="group"
-                    aria-label="Not a fit? Tell Orbit why"
-                  >
-                    {[
-                      ['wrong_role', 'Wrong role'],
-                      ['wrong_company', 'Wrong company'],
-                      ['know_them', 'Know them'],
-                      ['not_now', 'Not now'],
-                    ].map(([k, l]) => (
-                      <button
-                        key={k}
-                        className="px-2 h-6 rounded-md text-ink-3 hover:bg-canvas-2 hover:text-ink"
+                    {r.status !== 'saved' && (
+                      <Button
+                        size="sm"
                         onClick={async () => {
-                          await db.recommendations.update(r.id, { status: 'dismissed', dismissedReason: k });
-                          await feedback(user.id, 'recommendation_dismiss', {
-                            reason: k,
-                            refTable: 'recommendations',
-                            refId: r.id,
+                          await db.recommendations.update(r.id, { status: 'saved' });
+                          toast.push({
+                            text: `Saved ${p.firstName}. Saved people stay at the top of Discover until you write to them.`,
                           });
                         }}
                       >
-                        {l}
-                      </button>
-                    ))}
+                        Save for later
+                      </Button>
+                    )}
+                    <div
+                      className="w-full flex flex-wrap items-center gap-1 text-[12px]"
+                      role="group"
+                      aria-label="Not a fit? Tell Orbit why"
+                    >
+                      <span className="text-ink-3 self-center mr-0.5">Not a fit?</span>
+                      {[
+                        ['wrong_role', 'Wrong role'],
+                        ['wrong_company', 'Wrong company'],
+                        ['know_them', 'Already know them'],
+                        ['not_now', 'Not now'],
+                      ].map(([k, l]) => (
+                        <button
+                          key={k}
+                          className="px-2 h-7 rounded-md text-ink-3 hover:bg-canvas-2 hover:text-ink"
+                          onClick={() => drop(r.id, k!, l!)}
+                        >
+                          {l}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 </div>
-              </div>
-            );
-          })}
-        </div>
+              );
+            })}
+          </div>
+        </>
       )}
     </div>
   );

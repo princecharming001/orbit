@@ -20,6 +20,9 @@ import { db } from '../db/schema';
  * decision: the same dedupeKey may come back as pending when its trigger becomes true again. An untouched draft
  * attached to it is cancelled so it cannot be sent by accident.
  */
+/** Events the student entered by hand ("When is the chat?") rather than read from a calendar. */
+export const MANUAL_EVENT_PREFIX = 'manual:';
+
 export async function retireSuggestions(rows: Suggestion[], reason: string, now = new Date()): Promise<void> {
   for (const s of rows) {
     if (s.status !== 'pending' && s.status !== 'snoozed') continue;
@@ -283,6 +286,24 @@ export async function runTimedStageRules(
         now,
         new Date(new Date(c.completedAt).getTime() + 14 * 86_400_000),
       );
+    // a chat the student booked by hand (no calendar connected): once its time has passed, it happened
+    if (c.stage === 'scheduled' && c.scheduledEventId) {
+      const ev = await db.events.get(c.scheduledEventId);
+      if (
+        ev?.externalEventId.startsWith(MANUAL_EVENT_PREFIX) &&
+        ev.status !== 'cancelled' &&
+        new Date(ev.endAt).getTime() + 15 * 60_000 < now.getTime()
+      ) {
+        await evaluateTrigger(
+          c,
+          { type: 'event_ended', confidence: 0.95 },
+          { table: 'events', id: ev.id },
+          now,
+          new Date(ev.endAt),
+        );
+        continue;
+      }
+    }
     if (
       c.stage === 'outreach_sent' &&
       c.lastOutboundAt &&

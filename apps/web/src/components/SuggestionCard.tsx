@@ -1,15 +1,21 @@
-import type { Person, Suggestion } from '@orbit/core';
-import { draftWarmUpComment } from '@orbit/core';
+import type { OutboundStatus, Person, Suggestion } from '@orbit/core';
+import { draftWarmUpComment, STAGE_LABELS, warmUpProgress } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Check, ChevronDown, ChevronUp, Copy, ExternalLink, Sparkles } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { feedback } from '../db/repo';
 import { db } from '../db/schema';
-import { markWarmUpAction } from '../engine/brief';
+import {
+  ensureDrafts,
+  isMessageSuggestion,
+  markWarmUpAction,
+  needsWarmUp,
+  startWarmUpOrOutreach,
+} from '../engine/brief';
 import { answerIntroductionQuestion } from '../engine/introductions';
 import { mergePeople } from '../engine/people';
-import { dismissSuggestion, snoozeSuggestion } from '../engine/send';
+import { dismissSuggestion, restoreSuggestion, snoozeSuggestion } from '../engine/send';
 import { decideProposedStage } from '../engine/stages';
 import { useSession } from '../state/session';
 import { Avatar, Button, Chip, cx, useToast } from '../ui';
@@ -22,7 +28,7 @@ export const KIND_LABEL: Record<
 > = {
   new_outreach: { label: 'First message', tone: 'accent' },
   warm_up_engage: { label: 'LinkedIn warm-up', tone: 'neutral' },
-  follow_up_bump: { label: 'Follow up', tone: 'warn' },
+  follow_up_bump: { label: 'Follow-up', tone: 'warn' },
   schedule_propose: { label: 'Propose times', tone: 'accent' },
   schedule_confirm: { label: 'Confirm time', tone: 'accent' },
   prep_brief: { label: 'Prep', tone: 'good' },
@@ -34,19 +40,73 @@ export const KIND_LABEL: Record<
   ask_referral: { label: 'Referral ask', tone: 'accent' },
   intro_request: { label: 'Intro ask', tone: 'accent' },
   report_back: { label: 'Close the loop', tone: 'good' },
-  confirm_stage: { label: 'Confirm', tone: 'neutral' },
-  confirm_merge: { label: 'Same person?', tone: 'neutral' },
+  confirm_stage: { label: 'Stage update', tone: 'neutral' },
+  confirm_merge: { label: 'Possible duplicate', tone: 'neutral' },
   confirm_note_match: { label: 'Match note', tone: 'neutral' },
   confirm_intro: { label: 'Introduction?', tone: 'neutral' },
 };
 
-export function SuggestionCard({ s, compact }: { s: Suggestion; compact?: boolean }) {
-  const { user } = useSession();
+/** What two records have in common and where they differ, in plain words, so the student can judge a merge. */
+export function mergeEvidence(a: Person, b: Person): { same: string[]; differ: string[] } {
+  const same: string[] = [];
+  const differ: string[] = [];
+  const eq = (x?: string, y?: string) => !!x && !!y && x.trim().toLowerCase() === y.trim().toLowerCase();
+  const emailsA = new Set([a.primaryEmail, ...a.emails].filter(Boolean).map((e) => e!.toLowerCase()));
+  if ([b.primaryEmail, ...b.emails].some((e) => e && emailsA.has(e.toLowerCase())))
+    same.push('the same email address');
+  if (eq(a.firstName, b.firstName)) same.push('the same first name');
+  else if (a.firstName && b.firstName) differ.push('different first names');
+  if (eq(a.lastName, b.lastName)) same.push('the same last name');
+  if (eq(a.currentOrganizationRaw, b.currentOrganizationRaw)) same.push('the same company');
+  else if (a.currentOrganizationRaw && b.currentOrganizationRaw) differ.push('different companies');
+  if (eq(a.school, b.school)) same.push('the same school');
+  if (eq(a.linkedinSlug, b.linkedinSlug)) same.push('the same LinkedIn profile');
+  return { same, differ };
+}
+
+/** The "no" to a stage Orbit read from an email, in plain words rather than the stage's name. */
+function stageNoLabel(to: string | undefined, first: string): string {
+  switch (to) {
+    case 'declined':
+      return `No, ${first} hasn't said no`;
+    case 'replied':
+      return `No, ${first} hasn't replied`;
+    case 'scheduled':
+      return 'No, nothing is booked yet';
+    case 'scheduling':
+      return 'No, not scheduling yet';
+    case 'completed':
+      return "No, we haven't talked yet";
+    default:
+      return 'No, leave it as it is';
+  }
+}
+
+function sentenceList(xs: string[]): string {
+  return xs.length <= 1 ? (xs[0] ?? '') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`;
+}
+
+export function SuggestionCard({
+  s,
+  compact,
+  highlight,
+}: {
+  s: Suggestion;
+  compact?: boolean;
+  /** scroll to this card and outline it (Today opened from a link that points at it) */
+  highlight?: boolean;
+}) {
+  const { user, settings } = useSession();
   const nav = useNavigate();
   const toast = useToast();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [dismissing, setDismissing] = useState(false);
+  const [mergeAsk, setMergeAsk] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (highlight) ref.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, [highlight]);
   const [postClaim, setPostClaim] = useState('');
   const [ownExperience, setOwnExperience] = useState('');
   const person = useLiveQuery(() => (s.personId ? db.people.get(s.personId) : undefined), [s.personId]);
@@ -57,6 +117,14 @@ export function SuggestionCard({ s, compact }: { s: Suggestion; compact?: boolea
   const chat = useLiveQuery(() => (s.chatId ? db.chats.get(s.chatId) : undefined), [s.chatId]);
   const other = useOther(s.payload.otherPersonId as string | undefined);
   const introducer = useOther(s.payload.introducerId as string | undefined);
+  // what made Orbit think the stage changed: the message it read, when there is one
+  const evidence = useLiveQuery(async () => {
+    if (s.kind !== 'confirm_stage') return undefined;
+    const e = await db.stageEvents.get(s.payload.stageEventId as string);
+    if (e?.evidenceRefTable !== 'messages' || !e.evidenceRefId) return undefined;
+    const m = await db.messages.get(e.evidenceRefId);
+    return m ? { text: m.bodyText.replace(/\s+/g, ' ').trim(), at: m.sentAt } : undefined;
+  }, [s.kind, s.payload.stageEventId]);
   const warmAction = chat?.warmUp?.actions.find((a) => a.id === (s.payload.actionId as string));
   const comment = useMemo(
     () =>
@@ -81,16 +149,38 @@ export function SuggestionCard({ s, compact }: { s: Suggestion; compact?: boolea
     }
   };
   const inFlight = !!draft && ['queued', 'sending', 'handed_off'].includes(draft.status);
+  const first = person?.firstName ?? 'them';
   const dismiss = async (reason: string) => {
+    const draftWas: OutboundStatus | undefined = draft?.status;
     await dismissSuggestion(user.id, s, reason);
     setDismissing(false);
+    // "Already did this" also logs what was done, so it is not offered back
+    toast.push(
+      reason === 'already_did'
+        ? { text: 'Marked as done.' }
+        : {
+            text: 'Card removed.',
+            action: { label: 'Undo', onClick: () => restoreSuggestion(s, draftWas) },
+            ttl: 6000,
+          },
+    );
   };
   const snooze = async (days: number) => {
     await snoozeSuggestion(user.id, s, days);
-    toast.push({ text: `Snoozed for ${days} day${days > 1 ? 's' : ''}.` });
+    toast.push({
+      text: `Snoozed. It comes back in ${days === 7 ? 'a week' : `${days} day${days > 1 ? 's' : ''}`}.`,
+      action: { label: 'Undo', onClick: () => restoreSuggestion(s) },
+      ttl: 6000,
+    });
   };
+  const toStage = s.payload.toStage as keyof typeof STAGE_LABELS | undefined;
   const confirmStage = async (accept: boolean) => {
     await decideProposedStage(s.payload.stageEventId as string, accept);
+    toast.push({
+      text: accept
+        ? `Moved ${first} to ${toStage ? STAGE_LABELS[toStage] : 'the new stage'}.`
+        : `Kept ${first} in ${chat ? STAGE_LABELS[chat.stage] : 'the same stage'}.`,
+    });
   };
   const confirmMerge = async (accept: boolean) => {
     const mergeId = s.payload.mergeId as string;
@@ -105,6 +195,21 @@ export function SuggestionCard({ s, compact }: { s: Suggestion; compact?: boolea
       await feedback(user.id, 'merge_reject', { refTable: 'merges', refId: mergeId });
     }
     await db.suggestions.update(s.id, { status: 'done', decidedAt: new Date().toISOString() });
+    toast.push({
+      text: accept
+        ? `Merged into ${person?.displayName ?? 'one record'}.`
+        : 'Kept as two people. Orbit will not ask again.',
+      tone: accept ? 'good' : 'neutral',
+    });
+  };
+  const draftNow = async () => {
+    setBusy(true);
+    try {
+      await ensureDrafts(user, [s.id]);
+      setOpen(true);
+    } finally {
+      setBusy(false);
+    }
   };
   const answerIntro = async (yes: boolean) => {
     setBusy(true);
@@ -131,13 +236,55 @@ export function SuggestionCard({ s, compact }: { s: Suggestion; compact?: boolea
       done,
       done ? postClaim : undefined,
     );
+    // say when Orbit comes back: the next step waits for its own day, the first message for the ready date
+    const after = await db.chats.get(s.chatId);
+    const next = after?.warmUp?.actions.find((a) => !a.doneAt && !a.skippedAt);
+    const day = (iso: string) =>
+      new Date(iso).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+    const nextDue = next ? new Date(next.dueAt) : undefined;
+    const when = next
+      ? nextDue && nextDue.getTime() > Date.now()
+        ? ` The next step is on Today on ${day(next.dueAt)}.`
+        : ' The next step is on Today.'
+      : after?.warmUp
+        ? (() => {
+            const prog = warmUpProgress(after.warmUp, new Date(), user.timezone);
+            return prog.ready
+              ? ' Your first message is ready on Today.'
+              : ` Orbit suggests your first message from ${day(prog.readyFrom)}.`;
+          })()
+        : '';
     toast.push({
-      text: done
-        ? postClaim.trim()
-          ? 'Logged. Your first message will mention the post.'
-          : 'Nice. Logged the warm-up.'
-        : 'Skipped.',
+      text: `${
+        done
+          ? postClaim.trim()
+            ? 'Logged. Your first message will mention the post.'
+            : 'Nice. Logged the warm-up.'
+          : 'Skipped.'
+      }${when}`,
+      ttl: 6000,
     });
+  };
+  // a first message suggested from a recommendation, to someone known only from LinkedIn and never talked to
+  const coldStart =
+    s.kind === 'new_outreach' &&
+    !s.chatId &&
+    !!person &&
+    !person.primaryEmail &&
+    needsWarmUp(person, 'linkedin', settings?.warmUpEnabled ?? true);
+  const startWarmUp = async () => {
+    if (!person) return;
+    setBusy(true);
+    try {
+      await startWarmUpOrOutreach(user, person.id, 'linkedin', 'recommendation');
+      toast.push({
+        text: `Warm-up started for ${person.firstName}. The first step is the new card on Today.`,
+        tone: 'good',
+        ttl: 6000,
+      });
+    } finally {
+      setBusy(false);
+    }
   };
   const copyComment = async () => {
     if (!comment) return;
@@ -153,8 +300,11 @@ export function SuggestionCard({ s, compact }: { s: Suggestion; compact?: boolea
       className={cx(
         'bg-canvas border border-line rounded-[var(--radius-card)] p-4 fade-up min-w-0 max-w-full break-words',
         !compact && 'shadow-[var(--shadow-card)]',
+        highlight && 'ring-2 ring-accent/50 border-accent/50',
       )}
       data-testid={`suggestion-${s.kind}`}
+      data-highlight={highlight ? 'true' : undefined}
+      ref={ref}
     >
       <div className="flex items-start gap-3">
         {person ? (
@@ -187,43 +337,111 @@ export function SuggestionCard({ s, compact }: { s: Suggestion; compact?: boolea
             </div>
           )}
           {draft && !inFlight && !open && (
-            <button
-              onClick={() => setOpen(true)}
-              className="mt-2 text-left w-full rounded-lg bg-canvas-2 px-3 py-2 text-[13px] text-ink-2 line-clamp-2 hover:bg-line-2"
-            >
-              {draft.bodyFinal ?? draft.bodyDraft}
-            </button>
+            <>
+              <button
+                onClick={() => setOpen(true)}
+                className="group mt-2 block text-left w-full rounded-lg bg-canvas-2 px-3 py-2 text-[13px] text-ink-2 hover:bg-line-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                aria-label={`Open the draft to ${first} to edit it`}
+                data-testid="draft-preview"
+              >
+                {/* a draft still missing the student's line says so first, instead of reading like a broken message */}
+                {gapLabel(draft.bodyFinal ?? draft.bodyDraft) && (
+                  <span className="block text-warn font-medium mb-0.5" data-testid="draft-preview-gap">
+                    Needs one line from you: {gapLabel(draft.bodyFinal ?? draft.bodyDraft)}
+                  </span>
+                )}
+                {/* the clamp sits on the text, not the padded button, so no half line shows under it */}
+                <span className="line-clamp-2">{withGaps(draft.bodyFinal ?? draft.bodyDraft)}</span>
+              </button>
+              {coldStart ? (
+                // the same rule as Discover: someone known only from LinkedIn gets a warm-up first
+                <div className="mt-2" data-testid="card-warmup-first">
+                  <p className="text-[12px] text-warn">
+                    You only have {first} on LinkedIn and have never talked, so Orbit suggests a short warm-up
+                    before your first message.
+                  </p>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <Button variant="primary" size="sm" onClick={startWarmUp} disabled={busy}>
+                      Start warm-up
+                    </Button>
+                    <Button size="sm" onClick={() => setOpen(true)} data-testid="draft-review">
+                      Write now instead
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    onClick={() => setOpen(true)}
+                    data-testid="draft-review"
+                  >
+                    Review draft
+                  </Button>
+                  <span className="text-[12px] text-ink-3">
+                    Edit it if you like. Nothing goes out until you send it yourself.
+                  </span>
+                </div>
+              )}
+            </>
           )}
-          {draft && !inFlight && open && (
-            <div className="mt-3">
-              <DraftEditor draft={draft} onApprove={approve} busy={busy} onCancel={() => setOpen(false)} />
+
+          {s.kind === 'warm_up_engage' && (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <a
+                href={s.payload.url as string}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1.5 h-9 px-3.5 rounded-lg bg-accent text-white text-[14px] font-medium hover:bg-accent-2"
+              >
+                Open on LinkedIn <ExternalLink size={14} />
+              </a>
             </div>
+          )}
+          {s.kind === 'warm_up_engage' && chat?.warmUp && (
+            // every step with its day, so "step 2 of 3" and the dates in the toasts add up
+            <ol className="mt-3 text-[12px] text-ink-3 space-y-0.5" data-testid="warmup-steps">
+              {chat.warmUp.actions.map((a, i) => {
+                const current = a.id === (s.payload.actionId as string);
+                return (
+                  <li key={a.id} className={cx(current && 'text-ink font-medium')}>
+                    {i + 1}. {WARM_STEP[a.kind] ?? a.label}
+                    {' · '}
+                    {a.doneAt ? 'done' : a.skippedAt ? 'skipped' : current ? 'now' : shortDay(a.dueAt)}
+                  </li>
+                );
+              })}
+              <li>Then your first message, from {shortDay(chat.warmUp.readyAt)}.</li>
+            </ol>
           )}
           {s.kind === 'warm_up_engage' && warmAction && warmAction.kind !== 'view_profile' && (
             <div className="mt-3 rounded-lg bg-canvas-2 p-3 text-[13px]" data-testid="warmup-helper">
-              <div className="font-medium">
+              <label className="font-medium block" htmlFor={`warm-${s.id}`}>
                 {warmAction.kind === 'comment_post'
                   ? 'What is the post about?'
-                  : 'Which post did you react to?'}
-              </div>
+                  : 'Which post did you react to?'}{' '}
+                <span className="font-normal text-ink-3">Optional</span>
+              </label>
               <div className="text-ink-3 text-[12px] mb-1.5">
-                One claim from it, in your words. Orbit turns it into a comment that asks or adds, never
-                praises, and uses it as the hook in your message.
+                {warmAction.kind === 'comment_post'
+                  ? 'One point from it, in your own words. Orbit drafts a short comment that asks a question or adds something, and mentions the post in your first message.'
+                  : 'One point from it, in your own words. Orbit mentions the post in your first message.'}
               </div>
               <input
+                id={`warm-${s.id}`}
                 className="w-full h-9 rounded-lg border border-line bg-canvas px-3 text-[13px]"
                 value={postClaim}
                 onChange={(e) => setPostClaim(e.target.value)}
-                placeholder="e.g. junior engineers should own a metric in their first quarter"
-                aria-label="Post topic"
+                placeholder="e.g. ship something in week one"
               />
               {warmAction.kind === 'comment_post' && (
                 <input
                   className="w-full h-9 mt-2 rounded-lg border border-line bg-canvas px-3 text-[13px]"
                   value={ownExperience}
                   onChange={(e) => setOwnExperience(e.target.value)}
-                  placeholder="Optional: your own experience with it, one clause"
-                  aria-label="Your experience"
+                  placeholder="Your own experience with it (optional)"
+                  aria-label="Your experience with it (optional)"
                 />
               )}
               {comment && (
@@ -243,31 +461,19 @@ export function SuggestionCard({ s, compact }: { s: Suggestion; compact?: boolea
           )}
           {s.kind === 'warm_up_engage' && (
             <div className="mt-3 flex flex-wrap items-center gap-2">
-              <a
-                href={s.payload.url as string}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-1.5 h-9 px-3.5 rounded-lg bg-accent text-white text-[14px] font-medium hover:bg-accent-2"
-              >
-                Open on LinkedIn <ExternalLink size={14} />
-              </a>
               <Button onClick={() => warmDone(true)}>
                 <Check size={14} /> Done
               </Button>
-              <Button variant="ghost" onClick={() => warmDone(false)}>
-                Skip this one
+              <Button
+                variant="ghost"
+                onClick={() => warmDone(false)}
+                title="Move on to the next warm-up step without doing this one"
+              >
+                Skip this step
               </Button>
-              {chat?.warmUp && (
-                <span className="text-[12px] text-ink-3 ml-1">
-                  {chat.warmUp.actions.filter((a) => a.doneAt).length} of {chat.warmUp.actions.length} done ·
-                  first message suggested after{' '}
-                  {new Date(chat.warmUp.readyAt).toLocaleDateString('en-US', {
-                    weekday: 'short',
-                    month: 'short',
-                    day: 'numeric',
-                  })}
-                </span>
-              )}
+              <span className="basis-full text-[12px] text-ink-3">
+                Either way, the next step shows up here on its day.
+              </span>
             </div>
           )}
           {s.kind === 'prep_brief' && person && (
@@ -299,29 +505,34 @@ export function SuggestionCard({ s, compact }: { s: Suggestion; compact?: boolea
             </div>
           )}
           {s.kind === 'confirm_stage' && (
-            <div className="mt-3 flex flex-wrap gap-2">
-              <Button variant="primary" onClick={() => confirmStage(true)}>
-                Yes, move it
-              </Button>
-              <Button onClick={() => confirmStage(false)}>No</Button>
-            </div>
-          )}
-          {s.kind === 'confirm_merge' && (
-            <div className="mt-3 flex items-center gap-2 flex-wrap">
-              {other && (
-                <span className="text-[13px] text-ink-2">
-                  Other record:{' '}
-                  <Link className="underline" to={`/people/${other.id}`}>
-                    {other.displayName}
-                  </Link>
-                  {other.primaryEmail ? ` (${other.primaryEmail})` : ''}
-                </span>
+            <>
+              {evidence && (
+                <blockquote
+                  className="mt-2 rounded-lg bg-canvas-2 px-3 py-2 text-[13px] text-ink-2"
+                  data-testid="stage-evidence"
+                >
+                  <span className="text-ink-3">
+                    {first} wrote{' '}
+                    {new Date(evidence.at).toLocaleDateString('en-US', {
+                      weekday: 'short',
+                      month: 'short',
+                      day: 'numeric',
+                    })}
+                    :{' '}
+                  </span>
+                  <span className="line-clamp-2">“{evidence.text}”</span>
+                </blockquote>
               )}
-              <Button variant="primary" onClick={() => confirmMerge(true)}>
-                Merge
-              </Button>
-              <Button onClick={() => confirmMerge(false)}>Keep separate</Button>
-            </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button variant="primary" onClick={() => confirmStage(true)}>
+                  Yes, mark as {toStage ? STAGE_LABELS[toStage].toLowerCase() : 'changed'}
+                </Button>
+                <Button onClick={() => confirmStage(false)}>{stageNoLabel(toStage, first)}</Button>
+              </div>
+            </>
+          )}
+          {s.kind === 'confirm_merge' && person && other && (
+            <MergeChoice a={person} b={other} asking={mergeAsk} onAsk={setMergeAsk} onDecide={confirmMerge} />
           )}
           {s.kind === 'confirm_intro' && (
             <div className="mt-2 flex flex-wrap gap-2">
@@ -347,76 +558,189 @@ export function SuggestionCard({ s, compact }: { s: Suggestion; compact?: boolea
               </Button>
             </div>
           )}
+          {s.kind !== 'new_outreach' && isMessageSuggestion(s.kind) && !draft && person && (
+            <div className="mt-3 flex gap-2">
+              <Button variant="primary" onClick={draftNow} disabled={busy} data-testid="draft-now">
+                {busy ? 'Drafting…' : `Draft a message to ${person.firstName}`}
+              </Button>
+            </div>
+          )}
         </div>
         {draft && !inFlight && (
           <button
             onClick={() => setOpen((o) => !o)}
-            className="p-1.5 rounded-md text-ink-3 hover:bg-canvas-2 shrink-0"
-            aria-label={open ? 'Collapse the draft' : 'Open the draft'}
+            className="p-2 -m-1 rounded-md text-ink-3 hover:bg-canvas-2 shrink-0"
+            aria-label={open ? 'Close the draft' : 'Open the draft'}
             aria-expanded={open}
           >
             {open ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
           </button>
         )}
       </div>
-      {!['confirm_stage', 'confirm_merge', 'confirm_intro'].includes(s.kind) && (
+      {/* the open draft uses the card's full width, not the column next to the avatar (a phone needs every pixel) */}
+      {draft && !inFlight && open && (
+        <div className="mt-3">
+          <DraftEditor draft={draft} onApprove={approve} busy={busy} onCancel={() => setOpen(false)} />
+        </div>
+      )}
+      {!['confirm_stage', 'confirm_merge', 'confirm_intro'].includes(s.kind) && !inFlight && (
         <div className="mt-3 pt-3 border-t border-line-2 flex flex-wrap items-center gap-1 text-[12px]">
           {!dismissing ? (
             <>
               <button
-                className="px-2 h-7 rounded-md text-ink-3 hover:bg-canvas-2 hover:text-ink"
+                className="px-2 h-10 sm:h-8 rounded-md text-ink-3 hover:bg-canvas-2 hover:text-ink"
                 onClick={() => snooze(1)}
                 aria-label="Snooze for 1 day"
                 title="Snooze for 1 day"
               >
-                Snooze 1d
+                Snooze: 1 day
               </button>
               <button
-                className="px-2 h-7 rounded-md text-ink-3 hover:bg-canvas-2 hover:text-ink"
+                className="px-2 h-10 sm:h-8 rounded-md text-ink-3 hover:bg-canvas-2 hover:text-ink"
                 onClick={() => snooze(3)}
                 aria-label="Snooze for 3 days"
                 title="Snooze for 3 days"
               >
-                3d
+                3 days
               </button>
               <button
-                className="px-2 h-7 rounded-md text-ink-3 hover:bg-canvas-2 hover:text-ink"
+                className="px-2 h-10 sm:h-8 rounded-md text-ink-3 hover:bg-canvas-2 hover:text-ink"
                 onClick={() => snooze(7)}
                 aria-label="Snooze for 1 week"
                 title="Snooze for 1 week"
               >
-                1w
+                1 week
               </button>
               <button
-                className="ml-auto px-2 h-7 rounded-md text-ink-3 hover:bg-canvas-2 hover:text-ink"
+                className="ml-auto px-2 h-10 sm:h-8 rounded-md text-ink-3 hover:bg-canvas-2 hover:text-ink"
                 onClick={() => setDismissing(true)}
-                title="Remove this card and tell Orbit why"
+                title="Remove this card and tell Orbit why, so it suggests better next time"
               >
                 Dismiss
               </button>
             </>
           ) : (
             <>
-              <span className="text-ink-3 mr-1">Why?</span>
+              <span className="text-ink-3 mr-1">Why remove it?</span>
               {[
                 ['already_did', 'Already did this'],
                 ['not_now', 'Not now'],
                 ['wrong_person', 'Wrong person'],
-                ['bad_draft', 'Bad draft'],
+                // only a card with a message can have a bad draft
+                ...(draft ? [['bad_draft', 'Bad draft']] : []),
               ].map(([k, l]) => (
                 <button
                   key={k}
-                  className="px-2 h-7 rounded-md bg-canvas-2 hover:bg-line-2"
+                  className="px-2 h-10 sm:h-8 rounded-md bg-canvas-2 hover:bg-line-2"
                   onClick={() => dismiss(k!)}
                 >
                   {l}
                 </button>
               ))}
-              <button className="ml-auto px-2 h-7 text-ink-3" onClick={() => setDismissing(false)}>
+              <button className="ml-auto px-2 h-10 sm:h-8 text-ink-3" onClick={() => setDismissing(false)}>
                 Cancel
               </button>
             </>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const WARM_STEP: Record<string, string> = {
+  view_profile: 'Look at their profile',
+  react_post: 'React to one of their posts',
+  comment_post: 'Comment on one of their posts',
+};
+const shortDay = (iso: string) =>
+  new Date(iso).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+
+/** The first missing line of a draft, as a short label ("One real update since you last spoke"), if any. */
+function gapLabel(text: string): string | undefined {
+  const m = text.match(/\[([^\]]{3,})\]/);
+  if (!m) return undefined;
+  return m[1]!
+    .split(':')[0]!
+    .replace(/\s+(with|to)\s+\p{Lu}[\p{L}'-]*$/u, '')
+    .trim();
+}
+
+/**
+ * A draft preview with each "[Your link to Priya: how you found them ...]" gap shown as a short highlighted label
+ * ("Your link to Priya"), so the card says a line is missing instead of showing the raw instruction.
+ */
+function withGaps(text: string): ReactNode[] {
+  return text.split(/(\[[^\]]{3,}\])/).map((part, i) =>
+    /^\[[^\]]+\]$/.test(part) ? (
+      <mark key={i} className="rounded bg-warn-soft px-1 text-warn not-italic">
+        [your line]
+      </mark>
+    ) : (
+      part
+    ),
+  );
+}
+
+/** The two records side by side, what they share and where they differ, and a second step before merging. */
+function MergeChoice({
+  a,
+  b,
+  asking,
+  onAsk,
+  onDecide,
+}: {
+  a: Person;
+  b: Person;
+  asking: boolean;
+  onAsk: (v: boolean) => void;
+  onDecide: (accept: boolean) => void;
+}) {
+  const ev = mergeEvidence(a, b);
+  const row = (p: Person) => (
+    <li className="min-w-0">
+      <Link className="font-medium hover:underline" to={`/people/${p.id}`}>
+        {p.displayName}
+      </Link>
+      <span className="text-ink-3">
+        {[p.currentTitle, p.currentOrganizationRaw].filter(Boolean).length
+          ? ` · ${[p.currentTitle, p.currentOrganizationRaw].filter(Boolean).join(' at ')}`
+          : ''}
+        {p.primaryEmail ? ` · ${p.primaryEmail}` : ''}
+      </span>
+    </li>
+  );
+  return (
+    <div className="mt-2 text-[13px]" data-testid="merge-choice">
+      <ul className="rounded-lg bg-canvas-2 px-3 py-2 space-y-1">
+        {row(a)}
+        {row(b)}
+      </ul>
+      <p className="text-ink-3 text-[12px] mt-1.5">
+        {ev.same.length ? `Both have ${sentenceList(ev.same)}.` : 'Their names look alike.'}
+        {ev.differ.length ? ` But they have ${sentenceList(ev.differ)}.` : ''}
+      </p>
+      {asking ? (
+        <div className="mt-2 rounded-lg border border-line p-3" role="alertdialog" aria-label="Confirm merge">
+          <p>
+            Merge {b.displayName} into {a.displayName}? Their emails, notes and chats are combined under{' '}
+            {a.displayName}. This cannot be undone.
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <Button variant="primary" onClick={() => onDecide(true)} data-testid="merge-confirm">
+              Merge them
+            </Button>
+            <Button onClick={() => onAsk(false)}>Cancel</Button>
+          </div>
+        </div>
+      ) : (
+        <div className="mt-3 flex items-center gap-2 flex-wrap">
+          <Button onClick={() => onAsk(true)} data-testid="merge-ask">
+            Same person, merge
+          </Button>
+          <Button variant="primary" onClick={() => onDecide(false)}>
+            Different people
+          </Button>
         </div>
       )}
     </div>

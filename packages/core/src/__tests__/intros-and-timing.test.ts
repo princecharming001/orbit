@@ -232,7 +232,7 @@ describe('nurture claims only real conversations (EG-19 follow-up)', () => {
         factsByPerson: new Map([['Omar', [hook('Omar')]]]),
       }),
     ).find((x) => x.kind === 'nurture_checkin')!;
-    expect(hooked.reasonText).toMatch(/^127 days since you were last in touch; you have a hook/);
+    expect(hooked.reasonText).toMatch(/^127 days since you were last in touch; something to ask about/);
   });
 
   it('counts the completed chat itself as the last conversation', () => {
@@ -244,7 +244,7 @@ describe('nurture claims only real conversations (EG-19 follow-up)', () => {
       }),
     ).find((x) => x.kind === 'nurture_checkin')!;
     expect(n.reasonText).toBe(
-      '60 days since your last conversation; a short update on your search keeps it warm',
+      '60 days since your last conversation; a short update on your search keeps you in touch',
     );
   });
 });

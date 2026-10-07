@@ -122,7 +122,7 @@ A **coffee chat** is one relationship-in-progress with one person, at one point 
 | `replied` | the person replied with anything that is not a decline | inbound classifier (`reply_positive`, `reply_neutral`) |
 | `scheduling` | times are being negotiated | inbound classifier (`scheduling_proposal`) or outbound draft of kind `schedule_propose` sent |
 | `scheduled` | a calendar event exists with this person as attendee, in the future | calendar sync |
-| `completed` | the scheduled event ended, or notes were ingested for a meeting with this person | calendar sync (event end + 15 min) or notes ingest |
+| `completed` | the scheduled event ended, or notes were ingested for a meeting with this person (a note about someone with no open chat, met at a career fair or an event, opens a chat at `completed`, so the thank-you comes next instead of a cold first message) | calendar sync (event end + 15 min) or notes ingest |
 | `followed_up` | a thank-you or follow-up was sent after completion | send pipeline |
 | `nurturing` | long-term relationship mode; cadence rules apply | automatic 14 days after `followed_up` (or 14 days after `completed` when no thank-you was recorded), or user action |
 | `declined` | the person said no, or asked not to be contacted | inbound classifier (`reply_decline`) with confirmation card, or user |
@@ -157,7 +157,7 @@ Header (person, company, stage stepper), timeline (touchpoints newest first: ema
 Layout top to bottom:
 
 1. **Brief header**: date, one-line summary ("3 follow-ups, 1 thank-you; 1 chat coming up this week"), counted from the cards on screen at that moment, so it includes cards raised after the brief was made and drops the ones already handled.
-2. **Suggestion cards** (5 to 7, ranked): each card = kind label, person (avatar, name, title, company), the reason (one sentence from stored signals), the draft (collapsed preview, expandable, editable inline), and actions: **Approve & send**, **Edit**, **Snooze** (tomorrow / 3 days / next week), **Dismiss** (with optional reason: "already did this", "not now", "wrong person", "bad draft"). Prep cards have **Open prep** instead of send.
+2. **Suggestion cards** (5 to 7, ranked): each card = kind label, person (avatar, name, title, company), the reason (one sentence from stored signals), the draft (collapsed preview, expandable, editable inline), and actions: **Review draft** then the approve button ("Send to <name>" when Gmail sends, "Open in mail app" or "Copy & open LinkedIn" for a hand-off), **Edit**, **Snooze** (tomorrow / 3 days / next week), **Dismiss** (with optional reason: "already did this", "not now", "wrong person", "bad draft"). Prep cards have **Open prep** instead of send.
 3. **Upcoming**: calendar events in the next 7 days matched to people, each with a "Prep" link.
 4. **Needs you**: proposed stage transitions awaiting confirmation; merge suggestions; integration problems (reauth), with exactly one recovery action each.
 5. **Progress**: this week's outreach vs target, chats completed this season, reply rate (last 30 days).
@@ -171,9 +171,9 @@ Layout top to bottom:
 - A suggestion not acted on stays pending while it is still true and competes again in the next brief; cards that miss the cut are kept under "N more suggestions". A suggestion expires (feedback event `expired`, with a reason) only when its trigger is gone: the chat moved on, the time passed, the person replied. Dismissing with "already did this" records the action: a bump counts toward the bump limit, a thank-you moves the chat to followed up.
 - A suggestion that describes the state of a chat (`thank_you`, `schedule_propose`, `schedule_confirm`, `prep_brief`, `follow_up_bump`) is retired (`expired`) as soon as the rules no longer produce it: a "confirm Thursday at 2pm" card once the meeting is on the calendar, a thank-you once one was sent. Untouched drafts on pending cards are redrafted when what they were drafted from changes (notes with new facts, a calendar change under proposed windows).
 
-### 6.3 Approvals centre (`/inbox`)
+### 6.3 Drafts (`/inbox`)
 
-All pending suggestions and drafts across days (not only today's), plus a **Sent** tab (every message Orbit sent, with provider id and reply status) and a **Snoozed** tab.
+Every drafted message across days, split like Today: **Ready to send** (the drafts that are cards on Today, which is what the nav badge counts) with the rest behind "Show N that can wait"; **Not sent yet** (opened in the mail app or LinkedIn and not confirmed with "I sent it", or failed); a **Snoozed** tab; and a **Sent** tab (every message Orbit sent, with provider id and reply status).
 
 ---
 

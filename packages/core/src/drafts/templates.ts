@@ -379,12 +379,16 @@ function signoff(ctx: DraftContext, sector: Sector, recruiter: boolean): string 
   if (learned) return learned;
   if (ctx.channel === 'linkedin') return `Thanks,\n${ctx.user.firstName}`; // a chat message, not a letter
   const formal = isFormalStyle(ctx.styleCard);
-  if (sector === 'finance' || sector === 'consulting' || recruiter) {
+  // the full name with school and class year is for someone who does not know the student yet; a thank-you or a
+  // check-in to someone they have talked to signs with the first name, like any other note between them
+  const firstContact = ctx.kind === 'outreach' || ctx.kind === 'bump' || ctx.kind === 'schedule';
+  if (recruiter || ((sector === 'finance' || sector === 'consulting') && firstContact)) {
     const cy = classYear(ctx.user.gradYear);
     const school = schoolShort(ctx.user.school);
     return `${formal || recruiter ? 'Best regards' : 'Best'},\n${ctx.user.fullName}${school ? `\n${school}${cy ? ` ${cy}` : ''}` : ''}`;
   }
   if (formal) return `Kind regards,\n${ctx.user.firstName}`;
+  if (sector === 'finance' || sector === 'consulting') return `Best,\n${ctx.user.firstName}`;
   return `Thanks,\n${ctx.user.firstName}`;
 }
 
@@ -912,7 +916,7 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
           ? `${reconnectLine(ctx, known, now)} As a quick reminder, I'm ${me}, and I'm`
           : `I'm ${me}, and I'm`;
         if (known) claims.push({ text: `${first} and the student have emailed before`, kind: 'shared' });
-        body = `${G}\n\n${intro} planning to apply for ${role}${org ? ` at ${org}` : ''} this cycle. One quick question: are applications reviewed on a rolling basis, and is there a campus event or deadline I should plan around?${spokeLine}\n\nThank you for your time.\n\n${S}`;
+        body = `${G}\n\n${intro} planning to apply for ${role}${org ? ` at ${org}` : ''} this cycle. One quick question: are applications reviewed on a rolling basis, and is there a campus event or deadline I should plan around?${spokeLine}${/^thank/i.test(S.trim()) ? '' : '\n\nThank you for your time.'}\n\n${S}`;
         claims.push({ text: `${first} recruits${org ? ` for ${org}` : ''}`, kind: 'about_person' });
         claims.push({ text: 'logistics question', kind: 'logistics' });
         if (ctx.channel === 'linkedin') {
@@ -1729,9 +1733,14 @@ export function wordsIn(body: string): number {
     .split('\n')
     .map((l) => l.trim())
     .filter(Boolean);
+  // a greeting is not a word of the message, but a one-paragraph note ("Hi Noah, I read your post...") keeps the rest
+  if (lines.length) {
+    const g = lines[0]!.match(/^(hi|hey|hello|dear)\b[^,.!?\n]{0,40}[,.!]?\s*/i);
+    if (g) lines[0] = lines[0]!.slice(g[0].length).trim();
+  }
   const content = lines.filter(
-    (l, i) =>
-      !(i === 0 && /^(hi|hey|hello|dear)\b/i.test(l)) &&
+    (l) =>
+      !!l &&
       !/^(best|thanks|thank you|cheers|regards|warmly|all the best|talk soon|sincerely|take care|thanks so much|many thanks|kind regards|best regards)[,!.]?$/i.test(
         l,
       ),

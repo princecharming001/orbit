@@ -1,4 +1,4 @@
-import type { OutboundMessage, Suggestion, User } from '@orbit/core';
+import type { CoffeeChat, OutboundMessage, Suggestion, User } from '@orbit/core';
 import { newId } from '@orbit/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openHandoff, runApproval } from '../components/approve';
@@ -480,10 +480,29 @@ describe('approval ordering and idempotency (SND-04, SND-06)', () => {
 describe('cooldown and declined rules (SND-05, SND-13)', () => {
   async function sentOutreach(hoursAgo: number) {
     const p = await freshPerson(user, { email: true });
-    const { chat, draft } = await startWarmUpOrOutreach(user, p.id, 'gmail');
+    const { draft } = await startWarmUpOrOutreach(user, p.id, 'gmail');
     const at = new Date(Date.now() - hoursAgo * 3_600_000).toISOString();
-    await db.outbound.update(draft!.id, { status: 'sent', sentAt: at, bodyFinal: draft!.bodyDraft });
-    await db.chats.update(chat.id, { stage: 'outreach_sent', stageEnteredAt: at, firstOutreachAt: at });
+    const chat: CoffeeChat = {
+      id: newId('c'),
+      userId: user.id,
+      personId: p.id,
+      stage: 'outreach_sent',
+      stageEnteredAt: at,
+      firstOutreachAt: at,
+      source: 'manual',
+      goalTags: [],
+      bumpCount: 0,
+      priority: 2,
+      createdAt: at,
+      updatedAt: at,
+    };
+    await db.chats.add(chat);
+    await db.outbound.update(draft!.id, {
+      status: 'sent',
+      sentAt: at,
+      bodyFinal: draft!.bodyDraft,
+      chatId: chat.id,
+    });
     return { p, chat };
   }
 
@@ -530,7 +549,8 @@ describe('cooldown and declined rules (SND-05, SND-13)', () => {
       updatedAt: '2025-03-01T10:00:00.000Z',
     });
     const { chat, draft } = await startWarmUpOrOutreach(user, p.id, 'gmail');
-    expect(chat.stage).toBe('identified');
+    // the old declined chat is not reused, and no new one opens until the message goes out
+    expect(chat).toBeUndefined();
     const body = draft!.bodyDraft.replace(/\[[^\]]+\]/g, 'we both studied at Michigan');
     const r = await approveAndSend(user, draft!.id, body, draft!.subject ?? 'Quick question');
     expect(r.ok).toBe(true);
@@ -896,6 +916,15 @@ describe('re-validation at approval (SND-17) and stage mapping (SND-21)', () => 
     expect((await db.outbound.get(d.id))!.status).toBe('draft');
     const warn = await reviewDraft(user, d, `${d.bodyDraft}\n\nMy site: https://sam.dev`);
     expect(warn.find((i) => i.code === 'unknown_url')?.blocking).toBe(false);
+  });
+
+  it("the student's own ordinary words ('reach out') are a suggestion, not a block", async () => {
+    const { d } = await pendingDraft(user, 'thank_you');
+    const body = d.bodyDraft.replace(/\n\n/, '\n\nAisha Johnson suggested I reach out. ');
+    const issues = await reviewDraft(user, d, body);
+    const phrase = issues.find((i) => i.code === 'banned_phrase');
+    expect(phrase?.blocking).toBe(false);
+    expect(phrase?.text).toMatch(/fine to keep/i);
   });
 
   it("a plain 'reply' (not a time confirmation) does not move the chat to scheduling", async () => {
