@@ -348,7 +348,7 @@ test.describe('Map readability', () => {
       .nth(2)
       .locator('td')
       .first()
-      .locator('span.font-medium')
+      .getByRole('link')
       .innerText();
     await page.goto('map?reach=1');
     await page.evaluate(() => {
