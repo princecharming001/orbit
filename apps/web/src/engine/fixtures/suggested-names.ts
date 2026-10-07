@@ -230,6 +230,108 @@ export const NAME_CASES: NameCase[] = [
   { text: 'the founders' },
 ];
 
+/**
+ * Round two: answers written by a blind tester who had not seen the corpus above, each one a miss of the first
+ * reader, plus variants written for the patterns in the training half. Half of the blind answers are held out
+ * (`holdout: true`) and were scored only after the reader had been retuned on the rest.
+ */
+export const BLIND_CASES: (NameCase & { holdout?: true })[] = [
+  // blind answers, training half
+  { text: 'Jenny Liu (Figma) and Dan Ortiz (Airbnb)', save: ['Jenny Liu | Figma', 'Dan Ortiz | Airbnb'] },
+  { text: "Maybe Kevin? He's at Plaid now", save: ['Kevin | Plaid'] },
+  { text: 'Yes! Olivia Martinez at Pinterest would love to chat', save: ['Olivia Martinez | Pinterest'] },
+  { text: 'my sister Emily, she works at Bain', save: ['Emily | Bain'] },
+  { text: 'Diego Alvarez is the hiring manager', save: ['Diego Alvarez'] },
+  {
+    text: 'Sophie Turner and Lena Hart are both at Asana',
+    save: ['Sophie Turner | Asana', 'Lena Hart | Asana'],
+  },
+  { text: 'Christina Yang, Mayo Clinic', save: ['Christina Yang | Mayo Clinic'] },
+  { text: 'Second-year MBAs who interned at BCG' },
+  // one given name and a company is a name (rule 5), so Aditya is saved like "Priya and Tom Lee at Ramp"
+  { text: 'Aditya & Meera Krishnan (both at Google)', save: ['Aditya | Google', 'Meera Krishnan | Google'] },
+  // blind answers, held out
+  {
+    text: "I'd ping Sarah Kim on the growth team at Duolingo",
+    save: ['Sarah Kim | Duolingo'],
+    holdout: true,
+  },
+  { text: 'Lauren Brooks, recruiter at Deloitte', save: ['Lauren Brooks | Deloitte'], holdout: true },
+  { text: 'Olivia Martinez at Pinterest is great', save: ['Olivia Martinez | Pinterest'], holdout: true },
+  { text: "i'd say talk to jessica tran at intuit", save: ['Jessica Tran | Intuit'], holdout: true },
+  { text: 'Hmm, maybe Nora Kim or Ben Tal at Wiz', save: ['Nora Kim | Wiz', 'Ben Tal | Wiz'], holdout: true },
+  { text: 'ping Hiroshi Tanaka on slack', save: ['Hiroshi Tanaka'], holdout: true },
+  { text: 'Victoria, who runs recruiting at Lyft', save: ['Victoria | Lyft'], holdout: true },
+  { text: 'Sent you a LinkedIn intro to Carla Mendes!', save: ['Carla Mendes'], holdout: true },
+  // a zero-width space after the name, as text pasted from LinkedIn often has
+  { text: 'Yuki Sato\u200b at Rakuten', save: ['Yuki Sato | Rakuten'], holdout: true },
+  // variants for the training patterns
+  { text: 'Marcus Webb (Notion), Hana Ito (Canva)', save: ['Marcus Webb | Notion', 'Hana Ito | Canva'] },
+  {
+    text: 'Rachel Green (Ralph Lauren) and Ross Geller',
+    save: ['Rachel Green | Ralph Lauren', 'Ross Geller'],
+  },
+  { text: 'Tariq Aziz (Uber) & Mina Cho (Lyft)', save: ['Tariq Aziz | Uber', 'Mina Cho | Lyft'] },
+  { text: 'Maybe Priya? She runs data at Gusto', save: ['Priya | Gusto'] },
+  { text: 'Kevin? not sure where he works now' },
+  { text: 'Tom! he is at Brex', save: ['Tom | Brex'] },
+  { text: 'Ok! Tara Singh at Etsy would be a great person to ask', save: ['Tara Singh | Etsy'] },
+  { text: 'Ben Cho at Ramp is super helpful', save: ['Ben Cho | Ramp'] },
+  { text: 'Maya Patel from Square might have time', save: ['Maya Patel | Square'] },
+  { text: 'my cousin Daniel, he works at Visa now', save: ['Daniel | Visa'] },
+  { text: 'my roommate Theo, he interned at Jane Street', save: ['Theo | Jane Street'] },
+  { text: 'Maya Patel was my manager', save: ['Maya Patel'] },
+  { text: 'Ana Ruiz is in sales at Ramp', save: ['Ana Ruiz | Ramp'] },
+  { text: 'Grace Liu and Omar Haddad were both on her team', save: ['Grace Liu', 'Omar Haddad'] },
+  { text: 'Noah Kim and Ella Park both work at Stripe', save: ['Noah Kim | Stripe', 'Ella Park | Stripe'] },
+  { text: 'Hiro Sato is the team lead', save: ['Hiro Sato'] },
+  { text: 'Elena Ruiz, Cleveland Clinic', save: ['Elena Ruiz | Cleveland Clinic'] },
+  { text: 'Sam Park, Bain Capital', save: ['Sam Park | Bain Capital'] },
+  { text: 'Jon Bell, Penn Medicine', save: ['Jon Bell | Penn Medicine'] },
+  { text: 'Mayo Clinic' },
+  { text: 'First-year analysts at Evercore' },
+  { text: 'PhDs at DeepMind' },
+  { text: 'MBA interns' },
+  { text: 'Second-years from Wharton' },
+  { text: 'Recent grads who joined Ramp' },
+  // variants for the patterns the hold-out showed, added after it was first scored
+  { text: "You'd want to ask Kofi Boateng", save: ['Kofi Boateng'] },
+  { text: 'I would talk to Ines Moreau at Danone', save: ['Ines Moreau | Danone'] },
+  { text: "honestly i'd just email marco rossi", save: ['Marco Rossi'] },
+  { text: "I'd say no one really" },
+  { text: "I'd ask around" },
+  { text: 'Fatima Noor, analyst at Lazard', save: ['Fatima Noor | Lazard'] },
+  { text: 'Raj Patel, the hiring manager at Ramp', save: ['Raj Patel | Ramp'] },
+  { text: 'Priya Shah or Tom Lee', save: ['Priya Shah', 'Tom Lee'] },
+  { text: 'either Mia Chen or Leo Park at Figma', save: ['Mia Chen | Figma', 'Leo Park | Figma'] },
+  { text: 'message Ama Owusu on linkedin', save: ['Ama Owusu'] },
+  { text: 'Talk to Felix Wagner via email', save: ['Felix Wagner'] },
+  { text: 'ping the alumni office on slack' },
+  { text: 'She made an intro to Ruth Okafor', save: ['Ruth Okafor'] },
+  { text: 'she introduced me to Ivan Petrov at Datadog', save: ['Ivan Petrov | Datadog'] },
+  { text: 'an intro to the recruiting team' },
+  { text: 'Marta\u00a0Silva at Nubank', save: ['Marta Silva | Nubank'] },
+  { text: 'Leo Park\u200d (Figma)', save: ['Leo Park | Figma'] },
+  { text: "you'd like to meet Grace Ho", save: ['Grace Ho'] },
+  // fresh answers written after tuning and scored once, held out
+  {
+    text: 'Grace Kim (Notion) or Alex Moreno (Ramp)',
+    save: ['Grace Kim | Notion', 'Alex Moreno | Ramp'],
+    holdout: true,
+  },
+  { text: "you'd like Owen Brady, he's a PM at Robinhood", save: ['Owen Brady | Robinhood'], holdout: true },
+  { text: 'Nina Rossi is amazing, she runs ops at Brex', save: ['Nina Rossi | Brex'], holdout: true },
+  { text: 'a few second-years in the MBA program', holdout: true },
+  { text: 'Ethan Wu, senior associate at KKR', save: ['Ethan Wu | KKR'], holdout: true },
+  { text: 'ping maria lopez\u200b on teams', save: ['Maria Lopez'], holdout: true },
+];
+
 /** The 80% the reader was tuned on, and the 20% it was not. */
-export const TRAIN_CASES = NAME_CASES.filter((_, i) => i % 5 !== 4);
-export const HOLDOUT_CASES = NAME_CASES.filter((_, i) => i % 5 === 4);
+export const TRAIN_CASES = [
+  ...NAME_CASES.filter((_, i) => i % 5 !== 4),
+  ...BLIND_CASES.filter((c) => !c.holdout),
+];
+export const HOLDOUT_CASES = [
+  ...NAME_CASES.filter((_, i) => i % 5 === 4),
+  ...BLIND_CASES.filter((c) => c.holdout),
+];

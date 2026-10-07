@@ -10,18 +10,25 @@ import { isGivenName, WORDLIKE_GIVEN } from './given-names';
  * note). Deterministic and dependency-free.
  *
  * Decision order:
- * 1. Split the answer into pieces: new lines, bullets, list numbers, commas, semicolons, "!" or "?", a full stop
- *    that ends a sentence, and "and" or "&" between people (never inside a company: "at Procter and Gamble").
+ * 1. Drop invisible characters pasted with a name (zero-width spaces), then split the answer into pieces: new
+ *    lines, bullets, list numbers, commas, semicolons, "!" or "?", a full stop that ends a sentence, a closing
+ *    bracket ("Jenny Liu (Figma) and Dan Ortiz (Airbnb)"), and "and", "&" or "or" between people (never inside a
+ *    company: "at Procter and Gamble").
  * 2. Read the company of each piece: "at", "from", "@" or a dash ("Tom Lee - Stripe"), "on the X team at",
- *    brackets ("Priya Shah (Stripe)"), or a relative clause ("who leads growth at Ramp"). A company that is a
- *    description ("the data team", "HR", "her old team") is dropped. A piece that is only a company ("Tom Lee,
- *    Stripe") or a clause about the last person ("Mark Chen, he runs sales at Ramp") belongs to the person before.
- * 3. Clean the name part: drop lead-ins ("definitely", "she said to talk to", "her manager"), trailing hedges
- *    ("too", "maybe"), leading roles ("Engineering Manager Tom Lee") and the clause after the name ("who...",
- *    "in sales", "on my team").
- * 4. Reject the piece when any word is a function word (pronouns, verbs, non-answers), a role, team, place, group
- *    or industry word, a contraction or possessive, or not a word at all; when it has more than four words; or when
- *    the whole phrase is a company ("Morgan Stanley").
+ *    brackets ("Priya Shah (Stripe)", for the person just before them unless they say "both"), or a relative clause
+ *    ("who leads growth at Ramp"). The company ends where the sentence goes on ("at Pinterest would love to chat",
+ *    "at Plaid now"). A company that is a description ("the data team", "HR", "her old team") is dropped. A piece
+ *    that is only a company ("Tom Lee, Stripe", "Christina Yang, Mayo Clinic"), a role with a company ("Lauren
+ *    Brooks, recruiter at Deloitte") or a clause about the last person ("Mark Chen, he runs sales at Ramp")
+ *    belongs to the person before; a clause with a company also completes a lone first name before it ("Maybe
+ *    Kevin? He's at Plaid now").
+ * 3. Clean the name part: drop lead-ins ("definitely", "she said to talk to", "I'd ping", "sent you an intro to",
+ *    "her manager"), trailing hedges ("too", "maybe"), leading roles ("Engineering Manager Tom Lee") and the clause
+ *    after the name ("who...", "is the hiring manager", "in sales", "on slack", "on my team").
+ * 4. Reject the piece when any word (or any part of a hyphenated word) is a function word (pronouns, verbs,
+ *    non-answers), a role, team, place, group, year or industry word, a plural acronym ("MBAs"), a contraction or
+ *    possessive, or not a word at all; when it has more than four words; or when the whole phrase is a company
+ *    ("Morgan Stanley", "Mayo Clinic").
  * 5. Decide:
  *    - one word: a name only with a company ("Tom at Stripe"); "Definitely Tom" alone is not enough to save;
  *    - a title and a surname ("Dr. Patel", "Professor Alvarez"): confirm;
@@ -66,7 +73,7 @@ const FUNCTION_WORDS = new Set(
     'maybe definitely probably perhaps possibly also too just only still yet else other others more any all some',
     'one ones later soon sometime next time week thanks thank sorry tbd na hmm lol haha',
     'good great fine sounds question check look search find linkedin google email emails call text names name',
-    'specific particular named comes come mind around',
+    'specific particular named comes come mind around like love now currently nowadays today lately anymore',
   ]
     .join(' ')
     .split(' '),
@@ -102,7 +109,10 @@ const DESCRIPTORS = new Set(
     'big tech four large small top tier boutique bulge bracket elite middle market industry industries fintech',
     'biotech healthcare consumer retail media entertainment government nonprofit early new old former current',
     'several few many most lots lot bunch couple handful various multiple every each both either neither another',
-    'plenty',
+    'plenty year years first second third fourth final freshman freshmen sophomore sophomores recent mba mbas',
+    'phd phds undergrad undergrads postdoc postdocs',
+    'clinic clinics hospital hospitals medicine medical health institute foundation holdings securities',
+    'technologies systems inc llc corp corporation',
   ]
     .join(' ')
     .split(' '),
@@ -142,6 +152,17 @@ const NAMELIKE_COMPANIES = new Set([
   'cantor fitzgerald',
   'baird',
 ]);
+/** Last words that make a capitalised phrase a company or institution: "Mayo Clinic", "Bain Capital". */
+const ORG_SUFFIX = new Set(
+  [
+    'bank capital partners group clinic hospital medicine medical health labs ventures consulting securities',
+    'holdings technologies systems inc llc corp corporation institute foundation advisors associates management',
+  ]
+    .join(' ')
+    .split(' '),
+);
+/** A plural acronym is a group of people, not a person: "MBAs", "PhDs", "VPs". */
+const PLURAL_ACRONYM = /^\p{Lu}[\p{L}]*\p{Lu}s$/u;
 const HONORIFIC = /^(?:dr|mr|mrs|ms|mx|prof|professor)\.?$/i;
 /** "don't", "she'll", "Tom's": a contraction or possessive is never part of a name ("O'Neil" and "D'Souza" are). */
 const CONTRACTION = /(?:n't|'(?:s|re|ve|ll|d|m)|s')$/i;
@@ -154,10 +175,17 @@ const WORDISH =
 const LEAD_IN = new RegExp(
   '^(?:(?:' +
     [
-      'definitely|def|maybe|probably|prob|perhaps|possibly|also|especially|and|or|plus|oh|um|uh|so|ok|okay|yes|yeah',
-      'try|ask|contact|email|ping|text|message|dm|thanks|thank you',
+      'definitely|def|maybe|probably|prob|perhaps|possibly|also|especially|and|or|either|plus|oh|um|uh|hmm|so|ok',
+      'okay|yes|yeah|honestly|actually|well|just|really|totally|say|suggest|recommend|like|love|meet',
+      'try|ask|contact|email|ping|text|message|dm|thanks|thank you|look up|hit up',
+      // "I'd", "you'd want to", "I would", "we should": the speaker before the verb
+      "(?:i|you|we)(?:'d|'ll| would| will| should| could| can| might| must)(?: (?:want|have|need|like|love) to)?",
       '(?:you|i|we) (?:should|could|can|might|must)(?: (?:definitely|probably|also|maybe|really))? (?:talk|speak|reach out|chat|connect|meet|get in touch)(?: (?:to|with))?',
       '(?:talk(?:ing)?|speak(?:ing)?|reach(?:ing)? out|chat|connect(?:ing)?|get in touch) (?:to|with)',
+      // "Sent you a LinkedIn intro to", "she made an intro to", "introduced me to", "put me in touch with"
+      "(?:(?:i|she|he|they|i've|she's|he's|i'll|she'll|he'll|just) )?(?:(?:sent|made|did|send|make|do|set up) )?(?:(?:you|me|him|her|them|us) )?(?:(?:a|an) )?(?:(?:linkedin|email|quick|warm|double opt-in) )?intro(?:duction)? (?:to|with)",
+      '(?:\\p{L}+ )?(?:introduced|connected|introducing|connecting) (?:you|me|us|him|her|them) (?:to|with)',
+      '(?:\\p{L}+ )?(?:put|putting) (?:you|me|us|him|her|them) in touch with',
       '\\p{L}+ (?:also )?(?:said|mentioned|suggested|recommended|thinks|thought)(?: (?:that|i should|to))?(?: (?:talk|speak|reach out|chat) (?:to|with))?',
       '(?:my|her|his|their|our|the) (?:old |former |current )?(?:friend|colleague|coworker|co-worker|teammate|manager|boss|mentor|cofounder|co-founder|roommate|classmate|sister|brother|cousin)',
     ].join('|') +
@@ -169,12 +197,17 @@ const TRAIL =
   /\s+(?:too|as well|also|maybe|probably|perhaps|i think|i guess|tho|though|for sure|definitely|lol|haha)$/i;
 /** The clause after a name, which may name the company: "who leads growth at Ramp", "in sales", "on my team". */
 const CLAUSE =
-  /\s+(?:who|whom|since|because|bc|if|but|when|she|he|they|she's|he's|they're|tho|though|(?:on|in) (?:her|his|their|my|the|our)|in [\p{L}]+)\b.*$/iu;
+  /\s+(?:who|whom|since|because|bc|if|but|when|she|he|they|she's|he's|they're|tho|though|(?:on|in) (?:her|his|their|my|the|our)|(?:in|on|via|over|through|thru) [\p{L}]+|is|was|are|were|works|worked|interned|runs|ran|leads|led|manages|managed|would|will|might|could|should|can|has|had|does|did|both|all|each)\b.*$/iu;
 /** "at Ramp", "from Stripe", "@ Stripe", "- Stripe", "on the payments team at Stripe". */
 const ORG_AT = /\s+(?:at|from|@|-|–|—|on the .+? team at)\s+/i;
 /** A piece that only describes the last person named: "he runs sales at Ramp", "who leads data at Plaid". */
 const DESCRIBES_LAST =
   /^(?:who|he|she|they|he's|she's|they're|tho|though|but|since|because|bc|if|might|probably)\b/i;
+
+/** "and", "&" or "or" between people: "Priya Shah & Tom Lee", "maybe Nora Kim or Ben Tal". */
+const JOIN = /\s+(?:and|&|or)\s+/i;
+/** Articles and possessives that may sit before a role: "the hiring manager", "her recruiter". */
+const ROLE_LEAD = new Set(['a', 'an', 'the', 'her', 'his', 'their', 'our', 'my']);
 
 const lower = (w: string) => w.toLowerCase().replace(/[.]$/, '');
 const typedCapital = (w: string) => /^\p{Lu}/u.test(w);
@@ -209,10 +242,17 @@ function readOrg(raw: string | undefined): string | undefined {
     .trim();
   const inner = /\s(?:at|@)\s+(.+)$/i.exec(org);
   if (inner) org = inner[1]!.trim();
-  const words = org.split(/\s+/).filter(Boolean);
+  let words = org.split(/\s+/).filter(Boolean);
+  // the sentence goes on after the company: "at Pinterest would love to chat", "at Plaid now", "at Ramp in SF"
+  const keep = ['and', 'of', 'the', '&'];
+  const cut = words.findIndex((w, i) => i > 0 && FUNCTION_WORDS.has(lower(w)) && !keep.includes(lower(w)));
+  if (cut > 0) {
+    words = words.slice(0, cut);
+    org = words.join(' ');
+  }
   if (!words.length || words.length > 5) return undefined;
   const plain = words.map(lower);
-  if (!isCompany(org)) {
+  if (!isCompany(org) && !isInstitution(words)) {
     if (plain.some((w) => FUNCTION_WORDS.has(w) && w !== 'and' && w !== 'of' && w !== 'the'))
       return undefined;
     if (['the', 'a', 'an'].includes(plain[0]!)) return undefined;
@@ -232,11 +272,24 @@ function readOrg(raw: string | undefined): string | undefined {
     .join(' ');
 }
 
-/** Whether the text is a single company name, for "Tom Lee, Stripe". */
+/**
+ * A capitalised phrase that ends in a company word and has no role or function word before it: "Mayo Clinic",
+ * "Bain Capital", "Penn Medicine" (but not "Investment Bank" or "the Data Labs").
+ */
+function isInstitution(words: string[]): boolean {
+  if (words.length < 2 || words.length > 4) return false;
+  if (!ORG_SUFFIX.has(lower(words[words.length - 1]!))) return false;
+  return words
+    .slice(0, -1)
+    .every((w) => typedCapital(w) && !FUNCTION_WORDS.has(lower(w)) && !DESCRIPTORS.has(lower(w)));
+}
+
+/** Whether the text is only a company name, for "Tom Lee, Stripe" and "Christina Yang, Mayo Clinic". */
 function onlyOrg(text: string): boolean {
   const t = text.replace(/[!?.]+$/, '').trim();
   if (isCompany(t)) return true;
   const words = t.split(/\s+/);
+  if (words.every(typedCapital) && isInstitution(words)) return true;
   if (words.length !== 1) return false;
   const w = words[0]!;
   return (
@@ -246,6 +299,12 @@ function onlyOrg(text: string): boolean {
     !FUNCTION_WORDS.has(lower(w)) &&
     !DESCRIPTORS.has(lower(w))
   );
+}
+
+/** Whether the text is only a role: "recruiter", "the hiring manager", "senior analyst". */
+function isRole(text: string): boolean {
+  const words = text.trim().split(/\s+/).filter(Boolean).map(lower);
+  return words.some((w) => DESCRIPTORS.has(w)) && words.every((w) => DESCRIPTORS.has(w) || ROLE_LEAD.has(w));
 }
 
 /** Steps 3 to 5 for one piece's name part. */
@@ -280,7 +339,10 @@ function judgeName(raw: string, hasOrg: boolean): Verdict {
     const l = lower(w);
     // "Will Park", "may chen": a given name that is also a word is judged by the rest of the phrase
     if (i === 0 && wordlikeFirst && words.length > 1) return DESCRIPTORS.has(l);
-    return FUNCTION_WORDS.has(l) || DESCRIPTORS.has(l);
+    if (PLURAL_ACRONYM.test(w)) return true;
+    // "Second-year", "co-op": a hyphenated word with a role or function word in it ("Mary-Kate" is a name)
+    const parts = l.split('-');
+    return parts.some((p) => FUNCTION_WORDS.has(p) || DESCRIPTORS.has(p));
   };
   const core = words.filter((w, i) => !(i > 0 && i < words.length - 1 && PARTICLES.has(lower(w))));
   if (core.some((w, i) => bad(w, i))) return { kind: 'skip' };
@@ -312,10 +374,18 @@ export function readSuggestedNames(text: string): SuggestedNames {
   const skipped: string[] = [];
   /** The last person read without a company, which a following "Stripe" or "he runs sales at Ramp" completes. */
   let open: SuggestedName | undefined;
+  /**
+   * The last piece when it was a lone first name ("Maybe Kevin"): not saved on its own, but a following clause with
+   * a company ("He's at Plaid now") makes it a first name with a company, which is a name (rule 5).
+   */
+  let lone: { verdict: Verdict; raw: string } | undefined;
   const add = (v: Verdict, org: string | undefined, raw: string) => {
     if (v.kind === 'skip') {
       skipped.push(raw.trim());
       open = undefined;
+      const withOrg = org ? v : judgeName(raw, true);
+      if (!org && withOrg.kind === 'save' && !withOrg.name.includes(' '))
+        lone = { verdict: withOrg, raw: raw.trim() };
       return;
     }
     const entry: SuggestedName = org ? { name: v.name, org } : { name: v.name };
@@ -335,17 +405,29 @@ export function readSuggestedNames(text: string): SuggestedNames {
   };
 
   const chunks = text
+    // text pasted from LinkedIn or a phone carries invisible characters inside names ("Yuki Sato\u200b")
+    .replace(/[\u200b-\u200d\u2060\ufeff\u00ad]/g, '')
+    .replace(/’/g, "'")
     .replace(/^\s*(?:\d+[.)]|[-•*])\s+/gm, '')
+    // a bracket ends its person: "Jenny Liu (Figma) and Dan Ortiz (Airbnb)"
+    .replace(/\)\s*(?:(?:and|&|or)\s+)?(?=\S)/gi, ')\n')
     .replace(/\s\d+[.)]\s+/g, '\n')
     .split(/[,;\n]|[!?]+\s*|(?<!\b(?:dr|mr|mrs|ms|mx|prof|st|\p{L}))\.\s+/iu);
   for (const chunk of chunks) {
     let part = (chunk ?? '').trim().replace(/[.]+$/, '').trim();
     if (!part) continue;
-    // a clause about the last person: "Mark Chen, he runs sales at Ramp"
-    if (DESCRIBES_LAST.test(part) && names.length + confirm.length > 0) {
-      const at = /\b(?:at|from|@)\s+(.+)$/i.exec(part);
-      const org = readOrg(at?.[1]);
+    const before = lone;
+    lone = undefined;
+    // a clause about the last person: "Mark Chen, he runs sales at Ramp", "Maybe Kevin? He's at Plaid now"
+    const describes = DESCRIBES_LAST.test(part);
+    const lastOrg = describes ? readOrg(/\b(?:at|from|@)\s+(.+)$/i.exec(part)?.[1]) : undefined;
+    if (describes && (names.length + confirm.length > 0 || (before && lastOrg))) {
+      const org = lastOrg;
       if (open && org) open.org = org;
+      else if (!open && before && org) {
+        skipped.splice(skipped.lastIndexOf(before.raw), 1);
+        add(before.verdict, org, before.raw);
+      }
       open = undefined;
       continue;
     }
@@ -355,17 +437,28 @@ export function readSuggestedNames(text: string): SuggestedNames {
       open = undefined;
       continue;
     }
+    // "Lauren Brooks, recruiter at Deloitte": a role with a company describes the person before it
+    const roleAt = ORG_AT.exec(part);
+    if (open && roleAt && isRole(part.slice(0, roleAt.index))) {
+      const org = readOrg(part.slice(roleAt.index + roleAt[0].length));
+      if (org) open.org = org;
+      open = undefined;
+      continue;
+    }
     let org: string | undefined;
+    /** A bracket names the company of the person just before it, or of everyone with "both" or "all". */
+    let orgOfLastOnly = false;
     const paren = /^(.*?)\s*\(([^)]+)\)(.*)$/.exec(part);
     if (paren) {
       part = `${paren[1]!.trim()} ${paren[3]!.trim()}`.trim();
       const inside = paren[2]!.trim();
       const at = /\b(?:at|@)\s+(.+)$/i.exec(inside);
       org = readOrg(at ? at[1] : inside);
+      orgOfLastOnly = !/^(?:both|all|each|they|they're)\b/i.test(inside);
     }
     const at = ORG_AT.exec(part);
     if (at && !org) {
-      const people = part.slice(0, at.index).split(/\s+(?:and|&)\s+/i);
+      const people = part.slice(0, at.index).split(JOIN);
       // "at Stripe and Tom Lee": another person after the company only when it reads as a name (or has its own
       // "at"), taken from the end. A company with "and" in its name stays whole ("at Procter and Gamble"); a second
       // company ("at Goldman Sachs and Morgan Stanley") or a lone first name after a company ("at Stripe and Tom")
@@ -374,7 +467,7 @@ export function readSuggestedNames(text: string): SuggestedNames {
       const tail: string[] = [];
       const notPeople: string[] = [];
       for (;;) {
-        const m = /^(.+)\s+(?:and|&)\s+(.+?)$/i.exec(rest);
+        const m = /^(.+)\s+(?:and|&|or)\s+(.+?)$/i.exec(rest);
         if (!m || isCompany(rest)) break;
         const [, head, after] = m as unknown as [string, string, string];
         if (ORG_AT.test(after) || (!isCompany(after) && isName(after))) tail.push(after);
@@ -398,7 +491,8 @@ export function readSuggestedNames(text: string): SuggestedNames {
       }
       continue;
     }
-    for (const piece of part.split(/\s+(?:and|&)\s+/i)) {
+    const pieces = part.split(JOIN);
+    for (const [i, piece] of pieces.entries()) {
       if (open && onlyOrg(piece)) {
         open.org = readOrg(piece) ?? piece;
         open = undefined;
@@ -406,7 +500,8 @@ export function readSuggestedNames(text: string): SuggestedNames {
       }
       // the company may sit in the clause after the name: "Priya Shah who leads growth at Ramp"
       const clause = CLAUSE.exec(piece.replace(TRAIL, ''));
-      const clauseOrg = org ?? (clause ? readOrg(/\b(?:at|@)\s+(.+)$/i.exec(clause[0])?.[1]) : undefined);
+      const own = orgOfLastOnly && i < pieces.length - 1 ? undefined : org;
+      const clauseOrg = own ?? (clause ? readOrg(/\b(?:at|@)\s+(.+)$/i.exec(clause[0])?.[1]) : undefined);
       add(judgeName(piece, !!clauseOrg), clauseOrg, piece);
     }
   }
