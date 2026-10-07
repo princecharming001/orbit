@@ -38,6 +38,11 @@ import { addTouchpoint, feedback, notify, recomputeAllStrengths } from '../db/re
 import { db } from '../db/schema';
 import { describeLlmFailure, hasLlm, llmDraft, llmSummary, toLlmError } from '../integrations/anthropic';
 import { bestPathStrength, buildReachGraph } from './graph';
+import {
+  introductionQuestionCandidate,
+  retireIntroductionQuestion,
+  staleIntroductionQuestion,
+} from './introductions';
 import { noteMatchCandidate } from './notes';
 import { personSummary } from './prep';
 import { currentResumeFacets } from './resume';
@@ -1197,8 +1202,15 @@ export async function evaluateImmediateSuggestions(
   await addConfirmationCards(userId, now);
 }
 
-/** A proposed stage change is only a question while the chat is still where it was when Orbit proposed it. */
+/**
+ * A proposed stage change is only a question while the chat is still where it was when Orbit proposed it, and "Did
+ * Lena introduce you to Sam?" only while no introduction is recorded on the thread and Sam has no card yet.
+ */
 async function retireMovedOnConfirmations(userId: string, now: Date): Promise<void> {
+  for (const t of await openIntroductionQuestions(userId)) {
+    const reason = await staleIntroductionQuestion(t);
+    if (reason) await retireIntroductionQuestion(t, reason, now);
+  }
   const proposed = await db.stageEvents
     .where('userId')
     .equals(userId)
@@ -1252,6 +1264,10 @@ async function addConfirmationCards(userId: string, now: Date): Promise<void> {
       now,
     );
   }
+  for (const t of await openIntroductionQuestions(userId)) {
+    const c = await introductionQuestionCandidate(t);
+    if (c) await upsertSuggestions(userId, [c], now);
+  }
   const merges = await db.merges
     .where('userId')
     .equals(userId)
@@ -1295,6 +1311,15 @@ async function addConfirmationCards(userId: string, now: Date): Promise<void> {
   }
 }
 
+/** Threads with an open "Did Lena introduce you to Sam?" question. */
+function openIntroductionQuestions(userId: string) {
+  return db.threads
+    .where('userId')
+    .equals(userId)
+    .filter((t) => t.possibleIntroduction?.status === 'open')
+    .toArray();
+}
+
 function describeStage(stage: string): string {
   return (
     {
@@ -1326,6 +1351,7 @@ const BRIEF_LABELS: Record<SuggestionKind, (n: number) => string> = {
   confirm_stage: (n) => `${n} update${n > 1 ? 's' : ''} to confirm`,
   confirm_merge: (n) => `${n} possible duplicate${n > 1 ? 's' : ''}`,
   confirm_note_match: (n) => `${n} note${n > 1 ? 's' : ''} to match`,
+  confirm_intro: (n) => `${n} intro${n > 1 ? 's' : ''} to confirm`,
 };
 
 /** The one-line summary at the top of Today. It always names a real next step, never "all good" on an empty network. */

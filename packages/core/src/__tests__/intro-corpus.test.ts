@@ -5,6 +5,7 @@ import {
   type IntroCase,
   type IntroKind,
   introCaseRight,
+  possibleIntroCase,
   readIntroCase,
 } from './fixtures/intro-corpus';
 
@@ -64,5 +65,31 @@ describe('introduction corpus (detectIntroduction / readIntroduction)', () => {
       (c) => c.expect.kind === 'introduction' && !introCaseRight(c, readIntroCase(c)),
     );
     expect(missedIntros.map((c) => c.id)).toEqual([]);
+  });
+
+  it('asks "Did Lena introduce you to Sam?" rarely: on at most 1% of the messages that are not introductions', () => {
+    const lines: string[] = [];
+    for (const [label, cases] of [
+      ['tuning set', INTRO_TRAIN],
+      ['hold-out', INTRO_HOLDOUT],
+    ] as const) {
+      const neither = cases.filter((c) => c.expect.kind === 'none');
+      const replies = cases.filter((c) => c.expect.kind === 'intro_reply');
+      const intros = cases.filter((c) => c.expect.kind === 'introduction');
+      const asked = neither.filter((c) => possibleIntroCase(c));
+      const askedReplies = replies.filter((c) => possibleIntroCase(c));
+      const caught = intros.filter((c) => {
+        const p = possibleIntroCase(c, { ifMissed: true });
+        return !!p && p.personIds.some((id) => c.expect.introduced?.includes(id));
+      });
+      lines.push(
+        `fallback, ${label}: asks on ${asked.length}/${neither.length} non-introductions (${((asked.length / neither.length) * 100).toFixed(1)}%), ${askedReplies.length}/${replies.length} replies; would ask about ${caught.length}/${intros.length} introductions (${((caught.length / intros.length) * 100).toFixed(1)}%) if the cues missed them`,
+        ...asked.map((c) => `  asks on: ${c.id}`),
+      );
+      expect(asked.length / neither.length).toBeLessThanOrEqual(0.01);
+      expect(askedReplies).toEqual([]);
+      expect(caught.length / intros.length).toBeGreaterThanOrEqual(0.6);
+    }
+    console.log(lines.join('\n'));
   });
 });

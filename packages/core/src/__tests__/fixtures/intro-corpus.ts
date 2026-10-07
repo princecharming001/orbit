@@ -15,9 +15,18 @@
  * `INTRO_TRAIN` is what the classifier was tuned on; `INTRO_HOLDOUT` is a fifth of the corpus written after tuning
  * froze and measured once blind. Each hold-out round that fell short of the bar was folded into the tuning set and
  * a fresh round written (ROUND_ONE to ROUND_ELEVEN record each round's blind score); see INTRO_HOLDOUT for the last.
+ * BLIND_ROUND_ONE holds the messages an independent reviewer's blind round got wrong, with variants of each family.
+ *
+ * `possibleIntroCase` reads a case through the fallback question ("Did Lena introduce you to Sam?"), in its worst case
+ * (the student knows the sender and nobody else), so the test can report how often it would ask.
  */
 
-import { readIntroduction } from '../../pipeline/introductions';
+import {
+  type IntroductionReading,
+  type PossibleIntroduction,
+  possibleIntroduction,
+  readIntroduction,
+} from '../../pipeline/introductions';
 import { splitSignature, stripQuotedReply } from '../../text/email';
 import type { EmailMessage, Person } from '../../types';
 
@@ -55,6 +64,8 @@ export const ROSTER: Record<string, RosterEntry> = {
   david: { name: 'David Chen', email: 'dchen@cs.cornell.edu' },
   recruiting: { name: 'Stripe University Recruiting', email: 'university@stripe.com', human: false },
   calendly: { name: 'Calendly', email: 'notifications@calendly.com', human: false },
+  kenji: { name: 'Kenji Watanabe', email: 'kenji.watanabe@tailspin.com' },
+  chris: { name: 'Chris Novak', email: 'chris.novak@gs.com' },
 };
 
 export type IntroKind = 'introduction' | 'intro_reply' | 'none';
@@ -2026,8 +2037,8 @@ export const ROSTER_PEOPLE: Pick<Person, 'id' | 'firstName' | 'lastName' | 'emai
 
 const address = (key: string) => (key === 'me' ? STUDENT_EMAIL : ROSTER[key]!.email);
 
-/** Reads one case as ingest would: quoted history stripped, signature split off, then `readIntroduction`. */
-export function readIntroCase(c: IntroCase): { kind: IntroKind; introduced: string[]; reason: string } {
+/** The message of a case as ingest stores it: quoted history stripped, signature split off. */
+function caseMessage(c: IntroCase): EmailMessage {
   const fromName = c.from === 'me' ? 'Alex Rivera' : ROSTER[c.from]!.name;
   const stripped = stripQuotedReply(c.body);
   const sig = splitSignature(stripped, { name: fromName });
@@ -2048,11 +2059,37 @@ export function readIntroCase(c: IntroCase): { kind: IntroKind; introduced: stri
     headers: {},
     isAutomated: !!c.automated,
   };
-  const r = readIntroduction(msg, ROSTER_PEOPLE, [STUDENT_EMAIL], {
+  return msg;
+}
+
+function readCase(c: IntroCase): IntroductionReading {
+  return readIntroduction(caseMessage(c), ROSTER_PEOPLE, [STUDENT_EMAIL], {
     studentNames: ['Alex', 'Alex Rivera'],
     prior: c.prior ? { introducerId: c.prior.by, introducedIds: c.prior.introduced } : undefined,
   });
+}
+
+/** Reads one case as ingest would: quoted history stripped, signature split off, then `readIntroduction`. */
+export function readIntroCase(c: IntroCase): { kind: IntroKind; introduced: string[]; reason: string } {
+  const r = readCase(c);
   return { kind: r.kind, introduced: r.introducedIds, reason: r.reason };
+}
+
+/**
+ * Whether the fallback would ask "Did <sender> introduce you to <person>?" about a case, in the worst case for it:
+ * the student knows the sender and nobody else on the message. `ifMissed` asks as if the cues had not called the
+ * message an introduction (how much of what the cues miss the question would still catch).
+ */
+export function possibleIntroCase(
+  c: IntroCase,
+  opts: { ifMissed?: boolean } = {},
+): PossibleIntroduction | undefined {
+  const r = readCase(c);
+  return possibleIntroduction(
+    caseMessage(c),
+    opts.ifMissed && r.kind === 'introduction' ? { ...r, kind: 'none' } : r,
+    { senderKnown: true },
+  );
 }
 
 /** A case is right when the kind matches and, for an introduction, exactly the right people are introduced. */
@@ -22958,6 +22995,396 @@ const ROUND_ELEVEN: IntroCase[] = [
   },
 ];
 
+/**
+ * An independent blind round (the reviewer's `blind:intro:r1`), written by someone who never saw the code. These
+ * are the seven messages it got wrong, each with the variants written to fix its family without overfitting: a
+ * reply-all with no subject line that thanks the introducer and gives a time ("Ines, you are too kind. Alex, Monday
+ * at 11?"); someone copied for an administrative reason ("cc'd Chris from our HR team for the paperwork", "for
+ * visibility since she's coordinating", "who handles our internship applications"); an offer to introduce later
+ * ("Would you like me to introduce you to someone at McKinsey?", "happy to introduce you to a few folks once...");
+ * a copied scheduler who "can find us 30 min"; and "Sam (cc'd) and I enjoyed your presentation". They joined the
+ * tuning set.
+ */
+const BLIND_ROUND_ONE: IntroCase[] = [
+  // ---- a reply-all inside an introduction thread, with and without a subject
+  {
+    id: 'b1-r08',
+    from: 'kenji',
+    to: ['me'],
+    cc: ['ines'],
+    subject: '',
+    body: 'Ines, you are too kind. Alex, Monday at 11?\n\nKenji',
+    expect: reply,
+  },
+  {
+    id: 'b1-r08b',
+    from: 'kenji',
+    to: ['me'],
+    cc: ['ines'],
+    subject: 'Re: Alex / Kenji',
+    body: 'Ines, you are too kind. Alex, Monday at 11?\n\nKenji',
+    expect: reply,
+  },
+  {
+    id: 'b1-r08c',
+    from: 'kenji',
+    to: ['me'],
+    cc: ['ines'],
+    subject: 'Re: robotics student',
+    body: 'Ines, you are too kind. Alex, Monday at 11?\n\nKenji',
+    expect: reply,
+  },
+  {
+    id: 'b1-r08d',
+    from: 'sam',
+    to: ['me'],
+    cc: ['lena'],
+    subject: '',
+    body: 'Lena, thank you as always. Alex, does Thursday at 4 work for a call?\n\nSam',
+    expect: reply,
+  },
+  {
+    id: 'b1-r08e',
+    from: 'ana',
+    to: ['me', 'priya'],
+    subject: '',
+    body: "Priya, so kind of you. Alex, I'm free Tuesday at 2pm PT if that works.\n\nAna\n\nSent from my iPhone",
+    expect: reply,
+  },
+  {
+    id: 'b1-r08f',
+    from: 'lena',
+    to: ['me'],
+    cc: ['sam'],
+    subject: '',
+    body: 'Sam, please send Alex the deck before the session. Alex, Monday at 11?\n\nLena',
+    expect: none,
+  },
+  // ---- copied for an administrative reason
+  {
+    id: 'b1-n05',
+    from: 'olu',
+    to: ['me'],
+    cc: ['chris'],
+    subject: 'Offer',
+    body: "Hi Alex, congrats on the offer! I've cc'd Chris from our HR team for the paperwork.\n\nOlu",
+    expect: none,
+  },
+  {
+    id: 'b1-n32',
+    from: 'tom',
+    to: ['me'],
+    cc: ['lena'],
+    subject: 'Case packet',
+    body: "Hi Alex, attaching the case packet for Friday. cc'ing Lena for visibility since she's coordinating the practice group.\n\nTom",
+    expect: none,
+  },
+  {
+    id: 'b1-n37',
+    from: 'marcus',
+    to: ['me'],
+    cc: ['chris'],
+    subject: 'Re: Summer analyst program',
+    body: "Thanks for your intro email, Alex! I'm cc'ing Chris on my team, who handles our internship applications, to answer your question about deadlines.\n\nMarcus",
+    expect: none,
+  },
+  {
+    id: 'b1-n37b',
+    from: 'marcus',
+    to: ['me'],
+    cc: ['kofi'],
+    subject: 'Re: Start date',
+    body: 'Congrats again. Copying Kofi from HR, who will send over the onboarding forms.\n\nMarcus',
+    expect: none,
+  },
+  {
+    id: 'b1-n32b',
+    from: 'david',
+    to: ['me'],
+    cc: ['hannah'],
+    subject: 'TA hours',
+    body: "Looping in Hannah for visibility, she's coordinating the TA schedule this term.\n\nDC",
+    expect: none,
+  },
+  {
+    id: 'b1-n05b',
+    from: 'tom',
+    to: ['me'],
+    cc: ['nadia'],
+    subject: 'Travel',
+    body: "Thanks for coming in. I'm cc'ing Nadia from our recruiting team to process your travel reimbursement.\n\nTom",
+    expect: none,
+  },
+  {
+    id: 'b1-n05c',
+    from: 'grace',
+    to: ['me'],
+    cc: ['mei'],
+    subject: 'Workshop',
+    body: 'Hi Alex, adding Mei from our operations team for your records; she has the workshop invoices.\n\nGrace',
+    expect: none,
+  },
+  {
+    id: 'b1-i05',
+    from: 'marcus',
+    to: ['me'],
+    cc: ['chris'],
+    subject: 'Chris',
+    body: "Alex, I've cc'd Chris from our product team, who made the same jump from Cornell to Goldman that you're weighing. You two should talk.\n\nMarcus",
+    expect: intro('chris'),
+  },
+  {
+    id: 'b1-i06',
+    from: 'lena',
+    to: ['me'],
+    cc: ['sam'],
+    subject: 'Analytics',
+    body: "cc'ing Sam since you asked about analytics roles; he runs that team at Contoso and is happy to chat.\n\nLena",
+    expect: intro('sam'),
+  },
+  {
+    id: 'b1-i07',
+    from: 'priya',
+    to: ['me'],
+    cc: ['ana'],
+    subject: 'Data science recruiting',
+    body: 'Copying Ana, who handles campus recruiting for data science at Stripe and is the best person to ask about the role.\n\nPriya',
+    expect: intro('ana'),
+  },
+  // ---- an offer to introduce later, not an introduction yet
+  {
+    id: 'b1-n13',
+    from: 'lena',
+    to: ['me'],
+    cc: ['jordan'],
+    subject: 'Google',
+    body: "I'd be happy to introduce you to a few folks at Google once you've narrowed down teams. Jordan (cc'd) can find us 30 min next week to discuss.\n\nLena",
+    expect: none,
+  },
+  {
+    id: 'b1-n14',
+    from: 'lena',
+    to: ['me'],
+    cc: ['tom'],
+    subject: 'McKinsey',
+    body: 'Would you like me to introduce you to someone at McKinsey? Tom and I were just talking about who might be a good fit. Let me know and I will ask them first.\n\nLena',
+    expect: none,
+  },
+  {
+    id: 'b1-n14b',
+    from: 'lena',
+    to: ['me'],
+    cc: ['sam'],
+    subject: 'Contoso',
+    body: "Want me to introduce you to a couple of people on Sam's team? Sam and I can figure out who fits best.\n\nLena",
+    expect: none,
+  },
+  {
+    id: 'b1-n14c',
+    from: 'priya',
+    to: ['me'],
+    cc: ['ana'],
+    subject: 'Resume',
+    body: "Once your resume is updated, I'm happy to introduce you to some folks in data science. Ana will send you the template.\n\nPriya",
+    expect: none,
+  },
+  {
+    id: 'b1-n14d',
+    from: 'grace',
+    to: ['me'],
+    cc: ['olu'],
+    subject: 'Investors',
+    body: 'Shall I introduce you to a few investors after demo day? Olu and I are putting together a list.\n\nGrace',
+    expect: none,
+  },
+  {
+    id: 'b1-i08',
+    from: 'lena',
+    to: ['me'],
+    cc: ['sam'],
+    subject: 'Analytics',
+    body: "Happy to introduce you to Sam (cc'd), who runs analytics at Contoso.\n\nLena",
+    expect: intro('sam'),
+  },
+  {
+    id: 'b1-i09',
+    from: 'david',
+    to: ['me'],
+    cc: ['mei'],
+    subject: 'Databricks',
+    body: "As promised, I'd love to introduce you to Mei, copied here. She's an engineer at Databricks.\n\nDC",
+    expect: intro('mei'),
+  },
+  {
+    id: 'b1-i10',
+    from: 'priya',
+    to: ['me'],
+    cc: ['ana'],
+    subject: 'Ana',
+    body: "You asked if I knew anyone in fraud analytics, so I'd like to introduce you to Ana. She's on that team and offered to help.\n\nPriya",
+    expect: intro('ana'),
+  },
+  // ---- a copied scheduler
+  {
+    id: 'b1-n13b',
+    from: 'lena',
+    to: ['me'],
+    cc: ['jordan'],
+    subject: 'Next week',
+    body: "Jordan (cc'd) will find us a slot next week to go over your plan.\n\nLena",
+    expect: none,
+  },
+  {
+    id: 'b1-n13c',
+    from: 'sam',
+    to: ['me'],
+    cc: ['rui'],
+    subject: 'Thursday',
+    body: "Rui (cc'd) can grab us 20 minutes on Thursday.\n\nSam",
+    expect: none,
+  },
+  // ---- the copied person acts with the sender
+  {
+    id: 'b1-n18',
+    from: 'lena',
+    to: ['me'],
+    cc: ['sam'],
+    subject: 'Today',
+    body: "Sam (cc'd) and I both really enjoyed your presentation today. Great job on the Q&A!\n\nLena",
+    expect: none,
+  },
+  {
+    id: 'b1-n18b',
+    from: 'david',
+    to: ['me'],
+    cc: ['mei'],
+    subject: 'Poster',
+    body: 'Mei (copied) and I loved your poster at the expo.\n\nDC',
+    expect: none,
+  },
+  {
+    id: 'b1-n18c',
+    from: 'nadia',
+    to: ['me'],
+    cc: ['tom'],
+    subject: 'Friday',
+    body: "Tom (cc'd) and I will be your interviewers on Friday. See you then.\n\nNadia",
+    expect: none,
+  },
+  {
+    id: 'b1-i11',
+    from: 'lena',
+    to: ['me'],
+    cc: ['sam'],
+    subject: 'Sports analytics',
+    body: "Sam (cc'd) and Alex, you two should talk: you are both obsessed with sports analytics.\n\nLena",
+    expect: intro('sam'),
+  },
+  {
+    id: 'b1-i12',
+    from: 'will',
+    to: ['me'],
+    cc: ['mark'],
+    subject: 'Design',
+    body: "Hooked you up with Mark here; he's our design lead and loves mentoring students.\n\nWill",
+    expect: intro('mark'),
+  },
+  {
+    id: 'b1-i13',
+    from: 'olu',
+    to: ['me'],
+    cc: ['kai'],
+    subject: 'Robots',
+    body: 'I really think you and Kai should talk. He builds warehouse robots at Tailspin and started out in a dorm room too.\n\nOlu',
+    expect: intro('kai'),
+  },
+  {
+    id: 'b1-n19',
+    from: 'kofi',
+    to: ['me'],
+    cc: ['marcus'],
+    subject: 'Superday',
+    body: 'Marcus, copied, needs your availability for next week.\n\nKofi',
+    expect: none,
+  },
+  {
+    id: 'b1-n20',
+    from: 'sam',
+    to: ['me'],
+    cc: ['rui'],
+    subject: 'Monday',
+    body: 'You and Rui should meet at the front desk at 9 on Monday; he has your visitor pass.\n\nSam',
+    expect: none,
+  },
+];
+
+/**
+ * Variants written to fix round fourteen's families without fitting its exact messages (round fourteen itself stays
+ * in the hold-out as a regression guard).
+ */
+const ROUND_FOURTEEN_VARIANTS: IntroCase[] = [
+  {
+    id: 'v14-001',
+    from: 'eli',
+    to: ['me'],
+    cc: ['dana'],
+    subject: 'Pricing',
+    body: 'The one to ask about pricing at Ramp is Dana. She has run every pricing test we have shipped.\n\nEli',
+    expect: intro('dana'),
+  },
+  {
+    id: 'v14-002',
+    from: 'sam',
+    to: ['me'],
+    cc: ['rui'],
+    subject: 'Platform',
+    body: "Alex, Rui has spent ten years on data platforms and mentors a lot of new grads. I've looped him in. I'll step back and let you two connect.\n\nSam",
+    expect: intro('rui'),
+  },
+  {
+    id: 'v14-003',
+    from: 'david',
+    to: ['me'],
+    cc: ['mei'],
+    subject: 'Conference',
+    body: 'Say hi to Mei for me at the conference tomorrow.\n\nDC',
+    expect: none,
+  },
+  {
+    id: 'v14-004',
+    from: 'lena',
+    to: ['me', 'sam'],
+    subject: 'Analytics project',
+    body: 'You and Sam are paired for the analytics project. Sam, Alex has the survey data; Alex, Sam has the dashboards.\n\nLena',
+    expect: none,
+  },
+  {
+    id: 'v14-005',
+    from: 'tom',
+    to: ['me', 'nadia'],
+    subject: 'Case team',
+    body: 'Nadia, Alex will be on your case team for the competition. Alex, Nadia owns the slides and you own the model.\n\nTom',
+    expect: none,
+  },
+  {
+    id: 'v14-006',
+    from: 'grace',
+    to: ['me', 'olu'],
+    subject: 'Founders',
+    body: 'Olu, the student engineer I mentioned is Alex. Alex, Olu has backed three student companies. I will bow out now.\n\nGrace',
+    expect: intro('olu'),
+  },
+  {
+    id: 'v14-007',
+    from: 'chris',
+    to: ['me'],
+    cc: ['marcus'],
+    subject: 'Re: Credit',
+    body: 'Marcus, cheers for this. Alex, send over a couple of times that suit you.\n\nChris',
+    expect: reply,
+  },
+];
+
 /** Every case the classifier was tuned on: the first corpus and the hold-out rounds that fell short. */
 export const INTRO_TRAIN: IntroCase[] = [
   ...INTRO_CASES,
@@ -22972,6 +23399,8 @@ export const INTRO_TRAIN: IntroCase[] = [
   ...ROUND_NINE,
   ...ROUND_TEN,
   ...ROUND_ELEVEN,
+  ...BLIND_ROUND_ONE,
+  ...ROUND_FOURTEEN_VARIANTS,
 ];
 
 /**
@@ -22981,7 +23410,7 @@ export const INTRO_TRAIN: IntroCase[] = [
  * thread with Olu and Kai"). Those families were then fixed, so this set now guards against regressions rather than
  * measuring generalisation: the last blind figures are round eleven's 97.2% and this round's 96.3%.
  */
-export const INTRO_HOLDOUT: IntroCase[] = [
+const ROUND_TWELVE: IntroCase[] = [
   // ---- introductions
   {
     id: 'hz-001',
@@ -28649,3 +29078,767 @@ export const INTRO_HOLDOUT: IntroCase[] = [
     expect: none,
   },
 ];
+
+/**
+ * Round thirteen of the hold-out, written before the blind-round-one fixes, probing phrasings no earlier round used:
+ * "allow me to present", "te presento", "in each other's orbit", "doing the email handshake", an administrative copy
+ * ("so he has your availability", "who will issue your badge"), an offer to introduce later, and reply-alls with no
+ * subject line. Before those fixes it scored 35 of 47; measured once after them, 44 of 47 (93.6%) blind, missing two
+ * introductions ("Hooking you up with Eli", "thought you and Nadia should meet") and reading "Grace, copied, has
+ * your reimbursement form" as one. Those families were then fixed, so it now guards against regressions.
+ */
+const ROUND_THIRTEEN: IntroCase[] = [
+  // ---- introductions
+  {
+    id: 'h13-001',
+    from: 'david',
+    to: ['me'],
+    cc: ['kai'],
+    subject: 'Robotics',
+    body: 'Alex, allow me to present Kai Nakamura, who runs the robotics group at Tailspin. Kai, Alex is the student who built the sorting arm.\n\nDavid',
+    expect: intro('kai'),
+  },
+  {
+    id: 'h13-002',
+    from: 'jose',
+    to: ['me', 'siobhan'],
+    subject: 'Presentación',
+    body: 'Alex, te presento a Siobhan, una gran amiga de McKinsey. Siobhan, Alex is the Cornell junior I told you about. Les dejo para que coordinen.\n\nJosé',
+    expect: intro('siobhan'),
+  },
+  {
+    id: 'h13-003',
+    from: 'lena',
+    to: ['me'],
+    cc: ['dana'],
+    subject: 'Ramp',
+    body: "Figured you two should be in each other's orbit. Dana runs credit risk at Ramp and Alex is building a credit model for his thesis.\n\nLena",
+    expect: intro('dana'),
+  },
+  {
+    id: 'h13-004',
+    from: 'priya',
+    to: ['me', 'ana'],
+    subject: 'Email handshake',
+    body: 'Doing the email handshake between you two as promised. Ana leads fraud analytics at Stripe; Alex is a junior at Cornell who wants to work on fraud.\n\nPriya',
+    expect: intro('ana'),
+  },
+  {
+    id: 'h13-005',
+    from: 'grace',
+    to: ['me'],
+    cc: ['olu'],
+    subject: 'Olu',
+    body: "Hi Alex,\n\nOlu has kindly agreed to give you twenty minutes on fundraising. He's on cc, so take it from here.\n\nGrace",
+    expect: intro('olu'),
+  },
+  {
+    id: 'h13-006',
+    from: 'kai',
+    to: ['me'],
+    cc: ['will'],
+    subject: 'Figma design',
+    body: "Adding Will to this thread because he's the person at Figma who knows the most about design systems. Will, Alex is a sophomore with a lot of good questions.\n\nKai",
+    expect: intro('will'),
+  },
+  {
+    id: 'h13-007',
+    from: 'hannah',
+    to: ['me', 'mei'],
+    subject: 'Two of my favorite people',
+    body: 'Introducing two of my favorite people: Alex and Mei. Mei was my lab partner and is now an engineer at Databricks.\n\nHannah',
+    expect: intro('mei'),
+  },
+  {
+    id: 'h13-008',
+    from: 'david',
+    to: ['mei'],
+    cc: ['me'],
+    subject: 'The student I mentioned',
+    body: "Mei, as discussed, here's Alex (cc). He would love to hear how you chose between research and industry.\n\nDavid",
+    expect: intro('mei'),
+  },
+  {
+    id: 'h13-009',
+    from: 'marcus',
+    to: ['me'],
+    cc: ['eli'],
+    subject: 'Ramp',
+    body: 'Hooking you up with Eli, who did the Ramp rotational program and loves talking about it.\n\nMarcus',
+    expect: intro('eli'),
+  },
+  {
+    id: 'h13-010',
+    from: 'lena',
+    to: ['me'],
+    cc: ['eli'],
+    subject: 'Rotational programs',
+    body: "Eli is the one to talk to about Ramp's rotational program. He's copied.\n\nLena",
+    expect: intro('eli'),
+  },
+  {
+    id: 'h13-011',
+    from: 'tom',
+    to: ['me'],
+    cc: ['nadia'],
+    subject: 'Bain',
+    body: 'Alex, thought you and Nadia should meet. Nadia was a Cornell econ major too and is now a consultant in our Boston office.\n\nTom',
+    expect: intro('nadia'),
+  },
+  {
+    id: 'h13-012',
+    from: 'siobhan',
+    to: ['me'],
+    cc: ['kofi'],
+    subject: 'JPMorgan',
+    body: 'Kofi, meet the student I keep telling you about. Alex, Kofi covers fintech at JPMorgan. Over to you both.\n\nSiobhan',
+    expect: intro('kofi'),
+  },
+  {
+    id: 'h13-013',
+    from: 'ines',
+    to: ['me'],
+    cc: ['kenji'],
+    subject: 'robotics',
+    body: 'hi alex! cc-ing kenji who i mentioned at the career fair, he does robotics at tailspin and is super nice\n\nines',
+    expect: intro('kenji'),
+  },
+  {
+    id: 'h13-014',
+    from: 'olu',
+    to: ['me', 'grace'],
+    subject: 'Alex <> Grace',
+    body: 'Grace, Alex. Alex, Grace. Grace runs Huang Capital and backs student founders. Enjoy!\n\nOlu',
+    expect: intro('grace'),
+  },
+  {
+    id: 'h13-015',
+    from: 'priya',
+    to: ['me'],
+    cc: ['chris'],
+    subject: 'Goldman',
+    body: "Alex, I've asked my friend Chris to get in touch. He's an analyst at Goldman and went through the same recruiting cycle last year.\n\nPriya",
+    expect: intro('chris'),
+  },
+  {
+    id: 'h13-016',
+    from: 'marcus',
+    to: ['me'],
+    cc: ['kofi', 'chris'],
+    subject: 'Banking',
+    body: 'Alex, two people you should know: Kofi at JPMorgan and Chris at Goldman, both copied. They each started as summer analysts.\n\nMarcus',
+    expect: intro('kofi', 'chris'),
+  },
+  {
+    id: 'h13-017',
+    from: 'sam',
+    to: ['rui'],
+    cc: ['me'],
+    subject: 'Platform internship',
+    body: 'Rui, Alex (cc) is the junior who wrote that blog post on feature stores. Could you spare 20 minutes for him this month?\n\nSam',
+    expect: intro('rui'),
+  },
+  {
+    id: 'h13-018',
+    from: 'ana',
+    to: ['me'],
+    cc: ['priya'],
+    subject: 'Stripe',
+    body: "Hi Alex! Connecting you with my teammate Priya as promised. She's the one who built our risk dashboards.\n\nAna",
+    expect: intro('priya'),
+  },
+  // ---- replies inside introduction threads
+  {
+    id: 'h13-101',
+    from: 'grace',
+    to: ['me'],
+    cc: ['olu'],
+    subject: '',
+    body: 'Thanks a ton, Olu! Alex, I can do Thursday morning, say 9:30?\n\nGrace',
+    expect: reply,
+  },
+  {
+    id: 'h13-102',
+    from: 'ana',
+    to: ['me'],
+    cc: ['priya'],
+    subject: 'Re: Email handshake',
+    body: 'Moving Priya to bcc, thank you! Alex, Wednesday at 3pm PT works for me.\n\nAna',
+    expect: reply,
+  },
+  {
+    id: 'h13-103',
+    from: 'dana',
+    to: ['me'],
+    cc: ['lena'],
+    subject: 'Re: Ramp',
+    body: 'Appreciate you, Lena. Alex, happy to chat. How does Friday afternoon look?\n\nDana',
+    expect: reply,
+  },
+  {
+    id: 'h13-104',
+    from: 'kai',
+    to: ['me'],
+    cc: ['david'],
+    subject: 'Re: Robotics',
+    body: 'Lovely to e-meet you, Alex. Here is my calendar link; grab any slot next week.\n\nKai',
+    expect: reply,
+  },
+  {
+    id: 'h13-105',
+    from: 'siobhan',
+    to: ['me'],
+    cc: ['jose'],
+    subject: 'Re: Presentación',
+    body: 'Gracias, José. Alex, encantada. Tuesday at 10 my time works.\n\nSiobhan',
+    expect: reply,
+  },
+  {
+    id: 'h13-106',
+    from: 'eli',
+    to: ['me'],
+    cc: ['marcus'],
+    subject: 'Re: Ramp',
+    body: 'Marcus, you legend. Alex, send me a few times that work for you.\n\nEli',
+    expect: reply,
+  },
+  {
+    id: 'h13-107',
+    from: 'will',
+    to: ['me'],
+    cc: ['kai'],
+    subject: 'Re: Figma design',
+    body: 'Thanks for the connection, Kai.\n\nAlex, nice to meet you. Free most afternoons next week.\n\nWill',
+    expect: reply,
+  },
+  {
+    id: 'h13-108',
+    from: 'olu',
+    to: ['me'],
+    cc: ['grace'],
+    subject: 'Re: Olu',
+    prior: { by: 'grace', introduced: ['olu'] },
+    body: 'Just following up on this, Alex. Still happy to chat whenever suits.\n\nOlu',
+    expect: reply,
+  },
+  {
+    id: 'h13-109',
+    from: 'me',
+    to: ['nadia'],
+    cc: ['tom'],
+    subject: 'Re: Bain',
+    outbound: true,
+    body: 'Thank you Tom (to bcc). Nadia, great to meet you. Would Monday at 4pm work?\n\nAlex',
+    expect: reply,
+  },
+  // ---- not introductions
+  {
+    id: 'h13-201',
+    from: 'jordan',
+    to: ['me'],
+    cc: ['marcus'],
+    subject: 'Availability',
+    body: "cc'ing Marcus so he has your availability for the superday.\n\nJordan",
+    expect: none,
+  },
+  {
+    id: 'h13-202',
+    from: 'eli',
+    to: ['me'],
+    cc: ['dana'],
+    subject: 'Badge',
+    body: 'Welcome aboard! Copying Dana, our office manager, who will issue your building badge on Monday.\n\nEli',
+    expect: none,
+  },
+  {
+    id: 'h13-203',
+    from: 'kai',
+    to: ['me'],
+    cc: ['kenji'],
+    subject: 'Visit',
+    body: 'Kenji will meet you at reception at 2pm and walk you to room 4B.\n\nKai',
+    expect: none,
+  },
+  {
+    id: 'h13-204',
+    from: 'eli',
+    to: ['me'],
+    cc: ['dana'],
+    subject: 'Ramp events',
+    body: 'Happy to connect you with a few folks at Ramp later this fall. Dana (cc) will send over the event invite.\n\nEli',
+    expect: none,
+  },
+  {
+    id: 'h13-205',
+    from: 'lena',
+    to: ['me'],
+    cc: ['sam'],
+    subject: 'Contoso',
+    body: "If you'd like an introduction to someone on Sam's team, just let me know.\n\nLena",
+    expect: none,
+  },
+  {
+    id: 'h13-206',
+    from: 'nadia',
+    to: ['me'],
+    cc: ['tom'],
+    subject: 'Case competition',
+    body: 'Tom (cc) and I are judging the case competition this weekend. Good luck!\n\nNadia',
+    expect: none,
+  },
+  {
+    id: 'h13-207',
+    from: 'olu',
+    to: ['me'],
+    cc: ['grace'],
+    subject: 'Reimbursement',
+    body: 'Grace, copied, has your reimbursement form. Send her the receipts by Friday.\n\nOlu',
+    expect: none,
+  },
+  {
+    id: 'h13-208',
+    from: 'david',
+    to: ['me'],
+    cc: ['hannah'],
+    subject: 'Grading',
+    body: 'Adding Hannah so she can update your grade in the system.\n\nDC',
+    expect: none,
+  },
+  {
+    id: 'h13-209',
+    from: 'marcus',
+    to: ['me'],
+    cc: ['jordan'],
+    subject: 'Interview',
+    body: "Thanks for your note, Alex. I've copied Jordan, our recruiting coordinator, who will book your first round.\n\nMarcus",
+    expect: none,
+  },
+  {
+    id: 'h13-210',
+    from: 'priya',
+    to: ['me'],
+    cc: ['ana'],
+    subject: 'Offsite',
+    body: 'Ana and I are running the offsite on Thursday. The agenda is attached.\n\nPriya',
+    expect: none,
+  },
+  {
+    id: 'h13-211',
+    from: 'sam',
+    to: ['me'],
+    cc: ['rui'],
+    subject: 'Coffee',
+    body: 'Great to meet you yesterday! Rui and I would love to grab coffee again before you head back.\n\nSam',
+    expect: none,
+  },
+  {
+    id: 'h13-212',
+    from: 'tom',
+    to: ['me'],
+    cc: ['nadia'],
+    subject: 'Feedback',
+    body: 'Nadia reviewed your case write-up and left comments in the doc. Nice work overall.\n\nTom',
+    expect: none,
+  },
+  {
+    id: 'h13-213',
+    from: 'grace',
+    to: ['me'],
+    cc: ['mei'],
+    subject: 'Introductions later',
+    body: 'Do you want me to put you in touch with someone at Databricks once Mei confirms headcount? No rush.\n\nGrace',
+    expect: none,
+  },
+  {
+    id: 'h13-214',
+    from: 'hannah',
+    to: ['me'],
+    cc: ['david'],
+    subject: 'Office hours',
+    body: 'Looping in Professor Chen for awareness since he is approving the extension.\n\nHannah',
+    expect: none,
+  },
+  {
+    id: 'h13-215',
+    from: 'kofi',
+    to: ['me'],
+    cc: ['marcus'],
+    subject: 'Superday',
+    body: 'Marcus (copied) and I will be on your panel. Bring a calculator.\n\nKofi',
+    expect: none,
+  },
+  {
+    id: 'h13-216',
+    from: 'jose',
+    to: ['me'],
+    cc: ['siobhan'],
+    subject: 'Dinner',
+    body: 'Siobhan and I are hosting the alumni dinner on the 14th. Hope you can come.\n\nJosé',
+    expect: none,
+  },
+  {
+    id: 'h13-217',
+    from: 'will',
+    to: ['me'],
+    cc: ['mark'],
+    subject: 'Contract',
+    body: 'Copying Mark from legal for the contract questions you raised.\n\nWill',
+    expect: none,
+  },
+  {
+    id: 'h13-218',
+    from: 'calendly',
+    to: ['me'],
+    cc: ['sam'],
+    subject: 'New event: Alex and Sam',
+    automated: true,
+    body: 'A new event has been scheduled. Invitee: Sam Patel.',
+    expect: none,
+  },
+];
+
+/**
+ * Round fourteen of the hold-out, written after the fallback question was built and measured once, blind: ordinary
+ * group email that must never be read as an introduction (and should rarely make Orbit ask), plus introductions in
+ * phrasings no earlier round used. It scored 31 of 38 (81.6%) blind: three ordinary threads read as introductions (a
+ * project pairing, "Alex will be our second grader", a split of shared work), three introductions missed ("the
+ * person you want for rates questions is Marcus ... I've copied him", "the student founder I mentioned is Alex",
+ * "say hello to Kenji") and one reply ("cheers for this"). The fallback asked on 1 of its 30 ordinary threads ("you
+ * two have met twice already") and would have asked about 1 of the 3 missed introductions. Those families were then
+ * fixed (with fresh variants in the tuning set), so it now guards against regressions.
+ */
+const ROUND_FOURTEEN: IntroCase[] = [
+  // ---- ordinary group threads
+  {
+    id: 'h14-001',
+    from: 'hannah',
+    to: ['me', 'david'],
+    subject: 'Project groups',
+    body: 'Hi both, you are paired for the final project. David, Alex has the data; Alex, David has the cluster access. Proposals are due Friday.\n\nHannah',
+    expect: none,
+  },
+  {
+    id: 'h14-002',
+    from: 'sam',
+    to: ['me'],
+    cc: ['rui'],
+    subject: 'Laptop',
+    body: 'Rui is shipping your laptop today, it should arrive by Wednesday.\n\nSam',
+    expect: none,
+  },
+  {
+    id: 'h14-003',
+    from: 'lena',
+    to: ['me', 'sam'],
+    subject: 'Photos from the mixer',
+    body: 'Sharing the photos from Thursday! Sam, you look great in the group shot.\n\nLena',
+    expect: none,
+  },
+  {
+    id: 'h14-004',
+    from: 'priya',
+    to: ['me'],
+    cc: ['ana'],
+    subject: 'Your take-home',
+    body: 'Ana and I graded your take-home. You passed; next step is the onsite.\n\nPriya',
+    expect: none,
+  },
+  {
+    id: 'h14-005',
+    from: 'kofi',
+    to: ['me', 'marcus'],
+    subject: 'Fantasy league',
+    body: 'Marcus is taking over as commissioner this season. Draft is Sunday night, do not be late.\n\nKofi',
+    expect: none,
+  },
+  {
+    id: 'h14-006',
+    from: 'grace',
+    to: ['me'],
+    cc: ['olu'],
+    subject: 'Pitch night',
+    body: 'Olu will be the MC at pitch night. Your slot is 7:40pm, five minutes plus Q&A.\n\nGrace',
+    expect: none,
+  },
+  {
+    id: 'h14-007',
+    from: 'david',
+    to: ['me'],
+    cc: ['mei'],
+    subject: 'Paper draft',
+    body: 'Mei has comments on section 3. Can you address them before we submit?\n\nDC',
+    expect: none,
+  },
+  {
+    id: 'h14-008',
+    from: 'will',
+    to: ['me', 'mark'],
+    subject: 'Hackathon team',
+    body: 'Team is set: you two plus me. Mark has the domain, I will grab the API keys.\n\nWill',
+    expect: none,
+  },
+  {
+    id: 'h14-009',
+    from: 'jose',
+    to: ['me'],
+    cc: ['siobhan'],
+    subject: 'Alumni panel',
+    body: 'Siobhan is moderating the alumni panel next week. Send her your questions in advance if you have any.\n\nJosé',
+    expect: none,
+  },
+  {
+    id: 'h14-010',
+    from: 'tom',
+    to: ['me', 'nadia'],
+    subject: 'Practice case',
+    body: 'Nadia, can you run the practice case with Alex on Thursday? I am traveling.\n\nTom',
+    expect: none,
+  },
+  {
+    id: 'h14-011',
+    from: 'eli',
+    to: ['me', 'dana'],
+    subject: 'Ski trip',
+    body: 'Dana booked the cabin. Venmo her $120 by Friday please.\n\nEli',
+    expect: none,
+  },
+  {
+    id: 'h14-012',
+    from: 'ines',
+    to: ['me'],
+    cc: ['kai'],
+    subject: 'Your first week',
+    body: 'Kai will be your onboarding buddy for the first two weeks. He sits next to you.\n\nInes',
+    expect: none,
+  },
+  {
+    id: 'h14-013',
+    from: 'hannah',
+    to: ['me'],
+    cc: ['jose'],
+    subject: 'Mentor check-in',
+    body: 'José let me know you two have met twice already. Great to hear it is going well.\n\nHannah',
+    expect: none,
+  },
+  {
+    id: 'h14-014',
+    from: 'marcus',
+    to: ['me'],
+    cc: ['kofi'],
+    subject: 'Book',
+    body: 'Kofi lent me this book and I think you would like it too. Pass it back to him when you are done.\n\nMarcus',
+    expect: none,
+  },
+  {
+    id: 'h14-015',
+    from: 'ana',
+    to: ['me', 'priya'],
+    subject: 'Team lunch',
+    body: 'Priya picked the spot for Friday, the Thai place on Market. Noon.\n\nAna',
+    expect: none,
+  },
+  {
+    id: 'h14-016',
+    from: 'olu',
+    to: ['me'],
+    cc: ['grace'],
+    subject: 'Term sheet questions',
+    body: 'Grace already sent over the term sheet template. Shout if anything in it is unclear.\n\nOlu',
+    expect: none,
+  },
+  {
+    id: 'h14-017',
+    from: 'lena',
+    to: ['me'],
+    cc: ['sam'],
+    subject: 'Club budget',
+    body: 'Sam signed off on the club budget. You can order the shirts.\n\nLena',
+    expect: none,
+  },
+  {
+    id: 'h14-018',
+    from: 'siobhan',
+    to: ['me', 'kofi'],
+    subject: 'Case book',
+    body: 'Attaching the case book. Kofi, please share it with the first-years too.\n\nSiobhan',
+    expect: none,
+  },
+  {
+    id: 'h14-019',
+    from: 'mark',
+    to: ['me'],
+    cc: ['will'],
+    subject: 'Design review',
+    body: 'Will is the reviewer for your design doc this week. He tends to ask about edge cases, so be ready.\n\nMark',
+    expect: none,
+  },
+  {
+    id: 'h14-020',
+    from: 'dana',
+    to: ['me'],
+    cc: ['eli'],
+    subject: 'Return offer',
+    body: 'Eli and the rest of the team voted yes on your return offer. Congrats!\n\nDana',
+    expect: none,
+  },
+  {
+    id: 'h14-021',
+    from: 'priya',
+    to: ['me'],
+    cc: ['ana'],
+    subject: 'Study group',
+    body: 'Ana started a study group for the SQL interview. It meets in the library on Sundays.\n\nPriya',
+    expect: none,
+  },
+  {
+    id: 'h14-022',
+    from: 'kai',
+    to: ['me', 'ines'],
+    subject: 'Robot demo',
+    body: 'Ines and I watched the demo video. The arm is much smoother now. Nice job.\n\nKai',
+    expect: none,
+  },
+  {
+    id: 'h14-023',
+    from: 'david',
+    to: ['me', 'hannah'],
+    subject: 'Grader position',
+    body: 'Hannah, Alex will be our second grader this term. Please add him to the course staff list.\n\nDC',
+    expect: none,
+  },
+  {
+    id: 'h14-024',
+    from: 'will',
+    to: ['me'],
+    cc: ['mark'],
+    subject: 'Portfolio',
+    body: 'Mark looked at your portfolio over lunch. He liked the case study on onboarding.\n\nWill',
+    expect: none,
+  },
+  {
+    id: 'h14-025',
+    from: 'jose',
+    to: ['me', 'siobhan'],
+    subject: 'Fwd: Alumni weekend',
+    body: 'See below. Siobhan and I will be there Saturday if either of you wants to grab a coffee.\n\nJosé',
+    expect: none,
+  },
+  {
+    id: 'h14-026',
+    from: 'nadia',
+    to: ['me'],
+    cc: ['tom'],
+    subject: 'Offer deadline',
+    body: 'Tom approved the extension; your new deadline is November 15.\n\nNadia',
+    expect: none,
+  },
+  {
+    id: 'h14-027',
+    from: 'eli',
+    to: ['me', 'dana'],
+    subject: 'Pricing project',
+    body: 'Dana owns the pricing dashboard and you own the experiment write-up. Sync whenever works.\n\nEli',
+    expect: none,
+  },
+  {
+    id: 'h14-028',
+    from: 'grace',
+    to: ['me'],
+    cc: ['mei'],
+    subject: 'Demo day',
+    body: 'Mei is bringing the projector. Can you bring the HDMI adapter?\n\nGrace',
+    expect: none,
+  },
+  {
+    id: 'h14-029',
+    from: 'sam',
+    to: ['me', 'rui'],
+    subject: 'Bug in the pipeline',
+    body: 'Rui found the bug: the timezone conversion was off by one hour. Fix is merged.\n\nSam',
+    expect: none,
+  },
+  {
+    id: 'h14-030',
+    from: 'lena',
+    to: ['me'],
+    cc: ['jordan'],
+    subject: 'Holiday party',
+    body: 'Jordan is organizing the holiday party this year and needs a headcount. Are you coming?\n\nLena',
+    expect: none,
+  },
+  // ---- introductions in new phrasings
+  {
+    id: 'h14-101',
+    from: 'kofi',
+    to: ['me'],
+    cc: ['marcus'],
+    subject: 'Rates',
+    body: "Alex, the person you want for rates questions is Marcus. He's been on the desk at Goldman for eight years and is a generous mentor. I've copied him.\n\nKofi",
+    expect: intro('marcus'),
+  },
+  {
+    id: 'h14-102',
+    from: 'grace',
+    to: ['me', 'olu'],
+    subject: 'Fundraising',
+    body: 'Olu, the student founder I mentioned is Alex. Alex, Olu raised two funds and loves helping first-time founders. I will step back now.\n\nGrace',
+    expect: intro('olu'),
+  },
+  {
+    id: 'h14-103',
+    from: 'ines',
+    to: ['me'],
+    cc: ['kenji'],
+    subject: 'robotics at Tailspin',
+    body: 'Alex, say hello to Kenji. He leads perception at Tailspin and has mentored a few Cornell interns.\n\nInes',
+    expect: intro('kenji'),
+  },
+  {
+    id: 'h14-104',
+    from: 'mei',
+    to: ['me'],
+    cc: ['david'],
+    subject: 'Query optimizer',
+    body: "Alex, Professor Chen literally wrote the paper on this. I've added him so you can ask him directly.\n\nMei",
+    expect: intro('david'),
+  },
+  {
+    id: 'h14-105',
+    from: 'marcus',
+    to: ['me', 'chris'],
+    subject: 'Two Cornell people',
+    body: 'Chris, Alex. Both Cornell, both into credit. I suspect you will have plenty to talk about.\n\nMarcus',
+    expect: intro('chris'),
+  },
+  {
+    id: 'h14-106',
+    from: 'priya',
+    to: ['me'],
+    cc: ['ana'],
+    subject: 'Your fraud question',
+    body: 'Ana is who I would ask about fraud modeling at Stripe; she built most of it. She is copied and expecting to hear from you.\n\nPriya',
+    expect: intro('ana'),
+  },
+  // ---- replies inside introduction threads
+  {
+    id: 'h14-201',
+    from: 'marcus',
+    to: ['me'],
+    cc: ['kofi'],
+    subject: 'Re: Rates',
+    body: 'Kofi, much obliged. Alex, how is Wednesday at 5?\n\nMarcus',
+    expect: reply,
+  },
+  {
+    id: 'h14-202',
+    from: 'kenji',
+    to: ['me'],
+    cc: ['ines'],
+    subject: 'Re: robotics at Tailspin',
+    body: 'Ines, cheers for this. Alex, hello! Send me a couple of times next week.\n\nKenji',
+    expect: reply,
+  },
+];
+
+/** The hold-out: rounds twelve to fourteen. */
+export const INTRO_HOLDOUT: IntroCase[] = [...ROUND_TWELVE, ...ROUND_THIRTEEN, ...ROUND_FOURTEEN];

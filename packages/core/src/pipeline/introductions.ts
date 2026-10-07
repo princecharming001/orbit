@@ -28,14 +28,21 @@ import type { EmailMessage, Person } from '../types';
  *  1. Gates: a human message that is not machine mail. An inbound one needs the student on the To or CC line. An
  *     outbound one (the student's own) can be an `intro_reply`, never an introduction.
  *  2. People who cannot be introduced are set aside: the sender, the student, the introducer and the people already
- *     introduced on the thread (`prior`), anyone thanked for the intro or moved to bcc, and an assistant brought in
- *     to schedule ("cc'ing my EA Jordan to set up time").
+ *     introduced on the thread (`prior`), anyone thanked for the intro or moved to bcc, an assistant brought in
+ *     to schedule ("cc'ing my EA Jordan to set up time", "Jordan (cc'd) can find us 30 min"), and anyone pointed at
+ *     only in sentences that copy them for an administrative reason ("cc'd Chris from our HR team for the
+ *     paperwork", "for visibility since she's coordinating"). A clause offering to introduce later ("Would you like
+ *     me to introduce you to someone at McKinsey?") carries no cue at all.
  *  3. Everyone left scoring at least 2 is introduced: `introduction`.
  *  4. Otherwise the message is an `intro_reply` when the thread already holds an introduction, someone is thanked
  *     for one, someone is moved to bcc, the reply speaks to the person on the thread and then gives the student a
  *     time ("Ines, you are too kind. Alex, Monday at 11?"), or the subject answers an introduction subject
  *     ("Re: Intro: Alex <> Sam").
  *  5. Otherwise `none`.
+ *
+ * Whatever the decision, `possible` keeps the fallback's evidence for each person the cues did not settle (named,
+ * said who they are, pointed to as someone to talk to, against logistics and shared work), so the app can ask
+ * "Did Lena introduce you to Sam?" about a group email the cues missed (`possibleIntroduction`) instead of losing it.
  *
  * Deterministic and dependency-free: small lexicons and anchored patterns, no model. The labelled corpus in
  * `__tests__/fixtures/intro-corpus.ts` pins it.
@@ -68,6 +75,19 @@ export interface IntroductionReading {
   schedulerIds: string[];
   /** the rule that decided, for debugging and the corpus report */
   reason: string;
+  /**
+   * How much the message looks like an introduction of each person on it whom the cues did not settle, for the
+   * fallback question ("Did Lena introduce you to Sam?"). Read whatever the decision; see `possibleIntroduction`.
+   */
+  possible: PossibleCue[];
+}
+
+/** The fallback's evidence that the sender may be introducing one person on the message. */
+export interface PossibleCue {
+  personId: string;
+  score: number;
+  /** what added up, for debugging and the corpus report */
+  cues: string[];
 }
 
 export interface IntroductionContext {
@@ -142,7 +162,7 @@ const BEFORE_NAME: RegExp[] = [
   new RegExp(`\\bintro(?:duction)?s?\\s+(?:to|for|with)\\s+${DESC}$`),
   // "connecting you with Kai", "putting you in touch with Marcus", "you have been matched with José"
   new RegExp(
-    `\\b(?:connect(?:s|ed|ing)?|put(?:ting)?\\s+(?:you\\s+)?in\\s+touch|match(?:ed)?)\\s+(?:you\\s+(?:both\\s+|two\\s+)?)?(?:with|to)\\s+${DESC}$`,
+    `\\b(?:connect(?:s|ed|ing)?|put(?:ting)?\\s+(?:you\\s+)?in\\s+touch|match(?:ed)?|hook(?:s|ed|ing)?\\s+(?:you\\s+)?up)\\s+(?:you\\s+(?:both\\s+|two\\s+)?)?(?:with|to)\\s+${DESC}$`,
   ),
   // "you should talk to Ana", "I'd also suggest you talk to David", "for McKinsey questions talk to Siobhan"
   new RegExp(
@@ -160,6 +180,10 @@ const BEFORE_NAME: RegExp[] = [
   new RegExp(
     `\\b(?:you're|you\\s+are|ur|you'll|you\\s+will|u\\s+will|u'll)\\s+(?:gonna\\s+|going\\s+to\\s+|really\\s+)?(?:love|like|enjoy)\\s+(?:meeting\\s+|talking\\s+to\\s+)?${DESC}$`,
   ),
+  // "the person you want for rates questions is Marcus", "the one to ask about fraud is Ana"
+  new RegExp(
+    `\\b(?:person|one|guy|people|folks)\\s+(?:you\\s+(?:want|need|should\\s+(?:talk\\s+to|ask|meet))|to\\s+(?:ask|talk\\s+to|speak\\s+(?:to|with)))\\b[^.!?]{0,40}?\\s(?:is|are)\\s+${DESC}$`,
+  ),
   // "+Marcus"
   /^\s*\+\s*$/,
   // "Alex, this is Mark", "here is Sam"
@@ -174,6 +198,16 @@ const AROUND_NAME: [RegExp, RegExp][] = [
     ),
     /^\s+(?:in|into|here)\b(?!\s+on\s+(?:your|the|our|my)\b)/,
   ],
+  // "Alex, say hello to Kenji"; not "say hi to Kenji for me"
+  [
+    /(?:^|\byou\s+should\s+|\bplease\s+|,\s*)\s*say\s+(?:hi|hello|hey)\s+to\s+$/,
+    /^(?!(?:\s+[\p{L}'-]+)?\s+(?:for|when|if|at|from|tomorrow|tonight|on)\b)/u,
+  ],
+  // "I thought you and Nadia should meet", "you and Kai would get along"
+  [
+    /\byou\s+(?:and|&)\s+$/,
+    /^(?:\s+[\p{L}'-]+)?\s+(?:should|must|need\s+to|have\s+to|ought\s+to|would|'d|will|'ll|could)\s+(?:really\s+|definitely\s+|totally\s+|also\s+|absolutely\s+)?(?:meet|talk|connect|chat|speak|get\s+(?:to\s+know|along|together|coffee)|know\s+each\s+other|hit\s+it\s+off|compare\s+notes)\b(?!\s+(?:(?:up\s+)?(?:at|in|outside|by)\s+(?:the|our|a|an|\d|reception)|tomorrow|tonight|today|on\s+(?:mon|tue|wed|thu|fri|sat|sun)))/u,
+  ],
   [
     new RegExp(`\\b(?:asked|told)\\s+${DESC}$`),
     /^\s+(?:to\s+(?:help|chat|talk|connect|meet|speak|share|join|jump\s+in|chime\s+in|weigh\s+in|get\s+in\s+touch|reach\s+out|email|contact|write|call)|about\s+you|you(?:'d|\s+would|\s+might)\b)/,
@@ -185,7 +219,7 @@ const AFTER_NAME: RegExp[] = [
   // "Kai (cc'd)", "Mei Lin (cc)", "Grace (copied)", "talk to Siobhan, cc'd here", "Sam's on cc now",
   // "(David) is copied"; not "Nadia is cc'd for the paperwork"
   new RegExp(
-    `^\\)?(?:\\s+[\\p{L}'-]+)?(?:\\s+(?:and|&)\\s+[\\p{L}'-]+)?\\s*(?:\\(\\s*(?:also\\s+)?(?:cc|${CC_STATE})(?:\\s+here)?\\s*\\)|,\\s*(?:who\\s+(?:is|'s)\\s+)?${CC_STATE}(?:\\s+here)?\\b|(?:\\s+is|'s|\\s+has\\s+been)\\s+(?:now\\s+|also\\s+)?${CC_STATE}(?:\\s+(?:here|now))?)(?!\\s*(?:for|so|since|because|as|in\\s+case|to\\s+(?!share|help|answer|talk|chat|walk|tell|explain|give|offer|introduce|connect|meet))\\b)(?!\\s*(?:and\\s+)?(?:will|can|'ll|is\\s+going\\s+to|would)\\s+(?:send|forward|process|handle|share\\s+the|book|schedule|set\\s+up|confirm|add\\s+you|coordinate|bring|walk\\s+you|run\\s+the|track|file)\\b)(?!\\s*(?:and\\s+)?(?:has|have|had|already|just)\\s+(?:already\\s+)?(?:submitted|sent|signed|approved|confirmed|filed|shared|forwarded|reviewed|booked|scheduled|processed)\\b)`,
+    `^\\)?(?:\\s+[\\p{L}'-]+)?(?:\\s+(?:and|&)\\s+[\\p{L}'-]+)?\\s*(?:\\(\\s*(?:also\\s+)?(?:cc|${CC_STATE})(?:\\s+here)?\\s*\\)|,\\s*(?:who\\s+(?:is|'s)\\s+)?${CC_STATE}(?:\\s+here)?\\b|(?:\\s+is|'s|\\s+has\\s+been)\\s+(?:now\\s+|also\\s+)?${CC_STATE}(?:\\s+(?:here|now))?)(?!\\s*,?\\s*(?:and|&)\\s+(?:i|me|myself)\\s+(?:both\\s+|also\\s+|really\\s+|just\\s+)*(?:enjoyed|loved|liked|appreciated|saw|read|reviewed|watched|attended|noticed|heard|judged|interviewed|will|'ll|are|am|would|'d|can|could|look|wanted|want|need|have\\s+(?:reviewed|read|seen|been\\s+(?:reviewing|reading|looking))|were\\s+(?:so\\s+|really\\s+|both\\s+)*(?:impressed|thrilled|blown|delighted|excited|happy|glad|sorry))\\b)(?!\\s*(?:for|so|since|because|as|in\\s+case|to\\s+(?!share|help|answer|talk|chat|walk|tell|explain|give|offer|introduce|connect|meet))\\b)(?!\\s*(?:and\\s+)?(?:will|can|'ll|is\\s+going\\s+to|would)\\s+(?:send|forward|process|handle|share\\s+the|book|schedule|set\\s+up|confirm|add\\s+you|coordinate|bring|walk\\s+you|run\\s+the|track|file)\\b)(?!\\s*(?:and\\s+)?(?:has|have|had|already|just)\\s+(?:already\\s+)?(?:submitted|sent|signed|approved|confirmed|filed|shared|forwarded|reviewed|booked|scheduled|processed)\\b)`,
     'u',
   ),
   // "you will find Ana on cc", "dana is on here too", "Siobhan's email is on this thread"
@@ -243,6 +277,7 @@ const GENERIC_CUES: RegExp[] = [
   /\b(?:he|she|they)(?:'d|\s+would|'s|\s+is|\s+are|'re)\s+(?:be\s+)?(?:very\s+|more\s+than\s+|really\s+)?(?:happy|glad|keen|willing|open|delighted)\s+to\s+(?:talk|chat|help|connect|speak|meet|share|answer)|\b(?:he|she|they)(?:'d|\s+would|'ll|\s+will)\s+(?:make|find)\s+(?:some\s+)?time\b/,
   /\bover\s+to\s+you\s+(?:two|both)\b/,
   /\btake\s+it\s+from\s+here\b/,
+  /\b(?:i'?ll|i\s+will|let\s+me)\s+(?:now\s+)?(?:step\s+back|bow\s+out|get\s+out\s+of\s+the\s+way|drop\s+off(?:\s+(?:the|this)\s+thread)?)\b/,
   /\b(?:should|ought\s+to)\s+know\s+each\s+other\b/,
   /\b(?:people|folks|friends|contacts|someone|somebody|a\s+person|a\s+friend|a\s+colleague)\s+(?:to\s+meet|you\s+should\s+(?:meet|talk\s+to|know|speak\s+(?:to|with))|worth\s+(?:meeting|knowing|talking\s+to)|to\s+(?:know|talk\s+to))\b/,
   /\bexpecting\s+(?:your|you\b|to\s+hear)/,
@@ -255,7 +290,7 @@ const GENERIC_CUES: RegExp[] = [
   ),
   /\b(?:he|she|they)\s+knows?\s+you\s+(?:might|will|may)\b/,
   /\bhere\s+is\s+the\s+(?:student|junior|sophomore|senior|freshman|candidate|mentee)\b/,
-  /\b(?:the|a|my|our)\s+(?:[\p{L}'-]+\s+){0,3}?(?:student|junior|sophomore|senior|freshman|undergrad|mentee|candidate|kid)\s+(?:i|we)\s+(?:mentioned|told\s+you\s+about|mentor|spoke\s+(?:about|of))\b/u,
+  /\b(?:the|a|my|our)\s+(?:[\p{L}'-]+\s+){0,3}?(?:student|junior|sophomore|senior|freshman|undergrad|mentee|candidate|kid)(?:\s+(?:founder|engineer|researcher|designer|developer|builder))?\s+(?:i|we)\s+(?:mentioned|told\s+you\s+about|mentor|spoke\s+(?:about|of))\b/u,
 ];
 
 /** "Alex is a junior at Cornell": describing the student to the person introduced. */
@@ -290,7 +325,41 @@ const BCC =
 const SCHEDULER_ROLE =
   /\b(?:ea|executive\s+assistant|assistant|chief\s+of\s+staff|scheduler|coordinator|who\s+(?:manages|runs|handles|keeps)\s+my\s+(?:calendar|schedule|diary))\b/;
 const SCHEDULER_TASK =
-  /\bto\s+(?:help\s+)?(?:set\s+up|find|schedule|book|coordinate|arrange|lock\s+in|nail\s+down|grab|get)\s+(?:a\s+|some\s+)?(?:time|times|slot|slots|\d+\s*(?:min(?:ute)?s?)|call|meeting|chat)\b|\bfor\s+scheduling\b|\bto\s+schedule\b/;
+  /\bto\s+(?:help\s+)?(?:set\s+up|find|schedule|book|coordinate|arrange|lock\s+in|nail\s+down|grab|get)\s+(?:a\s+|some\s+)?(?:time|times|slot|slots|\d+\s*(?:min(?:ute)?s?)|call|meeting|chat)\b|\bfor\s+scheduling\b|\bto\s+schedule\b|\b(?:find|book|grab|schedule|set\s+up|get|hold)\s+us\s+(?:a\s+|some\s+)?(?:time|slot|\d+\s*(?:min(?:ute)?s?)|call|meeting|room)\b|\bfind\s+(?:a\s+)?(?:slot|time)\s+for\s+us\b/;
+
+/**
+ * An offer to introduce later, not an introduction yet: a double opt-in question ("Would you like me to introduce you
+ * to someone at McKinsey?") or an introduction to people not named ("happy to introduce you to a few folks at Google
+ * once you've narrowed down teams"). Such a clause carries no cue, and a name in it ("a couple of people on Sam's
+ * team") is not being introduced.
+ */
+const OFFER_QUESTION =
+  /\b(?:would\s+you\s+like\s+(?:me\s+)?to|(?:do\s+you\s+)?want\s+me\s+to|shall\s+i|should\s+i|would\s+it\s+help\s+if\s+i)\s+(?:\w+\s+){0,2}?(?:introduc|connect|put\s+you|make\s+(?:an?\s+)?intro|intro)/;
+const OFFER_UNNAMED =
+  /\b(?:introduc(?:e|ing)|connect(?:ing)?|put(?:ting)?\s+you\s+in\s+touch|intro(?:duction)?s?)\s+(?:you\s+)?(?:to|with)\s+(?:someone|somebody|anyone|anybody|a\s+few|a\s+couple|a\s+handful|some|several|other|more|people|folks|others)\b/;
+
+/**
+ * Someone copied for an administrative reason: "cc'd Chris from our HR team for the paperwork", "for visibility since
+ * she's coordinating the practice group", "who handles our internship applications", "so he has your availability".
+ * A copy cue in such a sentence is not an introduction.
+ */
+const ADMIN_PURPOSE = new RegExp(
+  [
+    '\\bfor\\s+(?:the\\s+|your\\s+|any\\s+)?(?:paperwork|visibility|awareness|context|reference|records?|onboarding|logistics|forms?|offer\\s+letter|background\\s+check|benefits|payroll|reimbursements?|expenses?|invoices?|badges?|compliance|approval|sign-?off|fyi)\\b',
+    '\\bfor\\s+(?:the\\s+|your\\s+|any\\s+)?(?:contract|paperwork|legal|visa|tax|payroll|benefits|housing|relocation|logistics|travel|billing|grading)\\s+questions?\\b',
+    "\\bfyi\\b|\\bkeep(?:ing)?\\s+(?:[\\p{L}'-]+\\s+){1,2}in\\s+the\\s+loop\\b",
+    "\\bsince\\s+(?:he|she|they)(?:'s|'re|\\s+is|\\s+are)\\s+(?:coordinating|organizing|organising|handling|managing|approving|processing|in\\s+charge\\s+of)\\b",
+    '\\b(?:who|that)\\s+(?:handles|processes|manages|coordinates|owns|approves|will\\s+(?:handle|process|send|issue|book|update|file|approve)|can\\s+(?:process|issue|update|file|approve))\\s+(?:(?:our|the|your|all|any)\\s+)?(?:[\\p{L}-]+\\s+){0,2}?(?:applications?|paperwork|onboarding|logistics|forms?|badges?|payroll|benefits|reimbursements?|scheduling|travel|contracts?|i-9|invoices?|expenses?|grades?|access|laptop|accounts?)\\b',
+    '\\bfrom\\s+(?:(?:our|the)\\s+)?(?:hr|human\\s+resources|people\\s+ops|payroll|legal|facilities|benefits|it\\s+(?:team|department|office))\\b|\\b(?:on|in)\\s+(?:our|the)\\s+(?:hr|human\\s+resources|people\\s+ops|payroll|legal|facilities|benefits|it)\\s+(?:team|department|office)\\b',
+    '\\bto\\s+(?:process|sort\\s+out|issue|file|approve|finalize|finalise|update\\s+your)\\b',
+    '\\bso\\s+(?:he|she|they)\\s+(?:has|have|knows|can\\s+(?:update|process|send|issue|book|file|approve|add|track|confirm))\\b',
+    '\\b(?:has|have|holds|needs)\\s+your\\s+(?:[\\p{L}-]+\\s+){0,2}?(?:forms?|paperwork|receipts?|availability|address|documents?|contract|badge|invoices?|expenses?|details)\\b',
+    "\\b(?:cc'?d|copied|looped\\s+in|on\\s+cc|included)\\s+(?:as|since\\s+(?:he|she|they))\\s+(?:the\\s+|our\\s+)?(?:[\\p{L}-]+\\s+)?coordinat\\w*",
+    '\\bfor\\s+your\\s+(?:it\\s+)?(?:setup|set-up|laptop|access|accounts?|equipment)\\b',
+    '\\bquestions?\\s+about\\s+(?:the\\s+|your\\s+)?(?:deadlines?|dates?|logistics|paperwork|forms?|timing|start\\s+dates?|application\\s+(?:process|portal)|reimbursements?|housing|relocation|visas?)\\b',
+  ].join('|'),
+  'u',
+);
 
 /** Subject cues: "Intro: Alex <> Sam", "Introduction - Eli Brooks", "Connecting you". */
 const SUBJECT_INTRO =
@@ -326,6 +395,10 @@ const notPresenting = (n: string) =>
 const ARRANGES_MEETING =
   /\blet'?s\s+meet\b|\bmeet\s+(?:you|u|me|us|up|there)\b|\b(?:great|nice|lovely|good|pleasure|fun)\s+(?:to\s+)?meet(?:ing)?\b|\bcome\s+(?:meet|say)\b|\bjoin\s+(?:us|you)\b|\bsee\s+you\s+(?:there|then)\b|\b(?:want|like)\s+to\s+meet\b|\bcan\s+we\s+meet\b/;
 
+/** Shared work handed out ("you are paired for the final project", "Dana owns the dashboard and you own the write-up"). */
+const WORK_SPLIT =
+  /\byou\s+(?:own|take|handle|have)\s+the\b|\b(?:paired|partnered|teamed\s+up)\b|\b(?:proposals?|drafts?|reports?)\s+(?:are|is)\s+due\b|\b(?:course|teaching)\s+staff\b|\bgraders?\b/;
+
 /** Who someone is, in the present tense: "Mei is an engineer at Databricks", "Rui runs platform at Contoso". */
 const roleDescribed = (n: string) =>
   new RegExp(
@@ -333,9 +406,38 @@ const roleDescribed = (n: string) =>
     'iu',
   );
 
+/** The fallback: words around a person the student is pointed to ("ask her", "knows the team", "went through it"). */
+const POSSIBLE_TALK =
+  /\b(?:talk(?:ing)?\s+(?:to|with)|chat(?:ting)?\s+(?:to|with)|speak(?:ing)?\s+(?:to|with)|ask\s+(?:him|her|them)|questions|advice|help\s+you|happy\s+to\s+help|glad\s+to\s+help|learn\s+from|hear\s+from|get\s+in\s+touch|reach\s+out|write\s+to|knows?\b|insights?|perspective|went\s+through|did\s+the\s+same|same\s+(?:path|program|rotation|switch|jump)|(?:great|good|right|best)\s+(?:person|resource|contact)|generous\s+with|worth\s+(?:a\s+)?(?:chat|call|talking|conversation)|mentor(?:s|ed|ing)?|loves?\s+helping|happy\s+to|glad\s+to|say\s+(?:hi|hello)|(?:plenty|lots|a\s+lot)\s+to\s+talk\s+about)/;
+/** The fallback: wording around introducing, even where it points at no one ("cc", "meet", "e-meet", "over to you"). */
+const POSSIBLE_PRESENTING =
+  /\b(?:meet|e-?meet|introduc\w*|intros?|connect(?:ing)?|loop(?:ing|ed)?\s+in|cc'?(?:d|ed|ing)?|copy(?:ing)?|copied|adding|added|bring(?:ing)?\s+in|put(?:ting)?\s+you|in\s+touch|over\s+to\s+you|take\s+it\s+from\s+here|each\s+other|you\s+(?:two|both))\b/;
+/** The fallback: who someone is, after their name or a pronoun ("Rui, who runs platform", "She is at McKinsey"). */
+const POSSIBLE_ROLE =
+  "(?:who\\s+(?:runs|leads|heads|works|worked|did|went|is|was|has|knows|built|started|founded|joined|spent|covers|manages)|(?:is|'s|was)\\s+(?:now\\s+)?(?:a|an|at|on|in|the|my|our|one)\\b|(?:runs|ran|leads|led|heads|manages|works|worked|did|went|started|founded|built|covers|trades|invests|joined|spent|switched|graduated|studied|interned|taught|mentors))";
+/** The fallback: the person acts with the sender or on the work at hand ("Sam and I", "Kai set up your desk"). */
+const POSSIBLE_COUNTER = (n: string) =>
+  new RegExp(
+    [
+      `\\b${n}(?:\\s+[\\p{L}'-]+)?(?:\\s*\\([^)]*\\))?\\s+(?:and|&)\\s+(?:i|me|myself)\\b|\\b(?:i|me)\\s+(?:and|&)\\s+${n}\\b`,
+      `\\b${n}(?:\\s+[\\p{L}'-]+)?\\s+(?:will|'ll|is\\s+going\\s+to|is|'s)\\s+(?:send|forward|share|bring|book|schedule|set\\s+up|confirm|handle|process|run|host|give|giving|present|presenting|join|joining|cover|covering|lead|leading|organize|organizing|putting\\s+together|teach|teaching|judge|judging|sit\\s+in|sitting\\s+in)\\b`,
+      `\\b${n}(?:\\s+[\\p{L}'-]+)?\\s+(?:says|mentioned|enjoyed|loved|liked|took|looked|reviewed|read|submitted|presented|wrote|sent|asked|hosted|recommended|organized|organised|moved|approved|set\\s+up|made|gave|shared|forwarded|booked|signed|added\\s+you|demoed|needs|wants|has\\s+(?:already|your))\\b`,
+      `\\b(?:see|saw|seeing|thank|thanks|congratulate)\\s+(?:you\\s+and\\s+)?${n}\\b|\\b${n}\\s+(?:let\\s+me\\s+know|told\\s+me)\\b`,
+      `\\b${n}(?:\\s+[\\p{L}'-]+)?(?:\\s*\\([^)]*\\))?\\s+(?:submitted|judged|posted|approved|went\\s+through\\s+your|(?:is|'s)\\s+(?:my|our)\\s+(?:manager|boss|coordinator|ta|assistant)|(?:is|'s)\\s+running|would\\s+know\\s+better)\\b`,
+      `\\b${n}'s\\s+(?:talk|lecture|class|session|presentation|team\\s+(?:dinner|offsite|event)|birthday|party|wedding)\\b`,
+    ].join('|'),
+    'u',
+  );
+/** The fallback: a day, a clock time or a place to be, what a note about a meeting or an event carries. */
+const POSSIBLE_WHEN_WHERE =
+  /\b(?:mon|tues|wednes|thurs|fri|satur|sun)day\b|\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b|\b(?:front\s+desk|reception|lobby|room\s+\w+|open\s+house|day\s+one|tomorrow|tonight|tmrw)\b/;
+/** The fallback: logistics in a message, what a copy for the work at hand talks about. */
+const POSSIBLE_LOGISTICS =
+  /\b(?:attach(?:ed|ing)?|agenda|invite|invitation|deadline|forms?|room|badge|receipts?|slides|packet|syllabus|grades?|assignment|rsvp|parking|zoom\s+link|dial-in|panel|superday|offer\s+letter|reimburse\w*|paperwork|signature|survey|portal|sign\s+up|recording|reservation|dinner|lunch|party|congrats|congratulations|thanks\s+for\s+coming|moved\s+our)\b/;
+
 /** A reply that arranges the call: a day, a clock time, a calendar link. */
 const ARRANGES_TIME =
-  /\b(?:mon|tues|wednes|thurs|fri|satur|sun)day\b|\b(?:mon|tue|wed|thu|thurs|fri)\b|\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b|\b(?:calendly|calendar|a few times|what times|what works|when works|free\s+(?:next|this|on|at))\b/i;
+  /\b(?:mon|tues|wednes|thurs|fri|satur|sun)day\b|\b(?:mon|tue|wed|thu|thurs|fri)\b|\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b|\b(?:calendly|calendar|a few times|a couple (?:of )?times|some times|times that work|what times|what works|when works|free\s+(?:next|this|on|at))\b/i;
 
 /** First names that are also everyday words: in lowercase they are words, not names. */
 const COMMON_WORD_NAMES = new Set([
@@ -392,9 +494,15 @@ interface Candidate {
   /** thanked for anything ("Nadia, thank you for setting this up") */
   looseThanked: boolean;
   scheduler: boolean;
+  /** pointed at only in sentences that copy them for an administrative reason ("cc'd for the paperwork") */
+  admin: boolean;
+  /** pointed at in a sentence with no administrative reason */
+  plainStrong: boolean;
 }
 
-type ClauseKind = 'plain' | 'thanks' | 'bare' | 'bcc';
+/** `offer`: an offer to introduce later ("Would you like me to introduce you to someone at McKinsey?") */
+type ClauseKind = 'plain' | 'thanks' | 'bare' | 'bcc' | 'offer';
+const THANKING: ReadonlySet<ClauseKind> = new Set(['thanks', 'bare', 'bcc']);
 
 /**
  * Reads one message for an introduction: who introduces whom to the student, or whether it is a reply inside an
@@ -416,6 +524,7 @@ export function readIntroduction(
     thankedIds: [],
     introThankedIds: [],
     schedulerIds: [],
+    possible: [],
     reason,
     ...extra,
   });
@@ -449,6 +558,8 @@ export function readIntroduction(
       introThanked: false,
       looseThanked: false,
       scheduler: false,
+      admin: false,
+      plainStrong: false,
     });
   }
   const isCandidateWord = (w: string) => candidates.some((c) => c.name.toLowerCase() === w.toLowerCase());
@@ -516,9 +627,13 @@ export function readIntroduction(
       AFTER_NAME.some((re) => re.test(after))
     );
   };
+  /** the sentence being read copies someone for an administrative reason */
+  let adminSentence = false;
   const mark = (c: Candidate, score: number) => {
     c.score = Math.max(c.score, score);
     if (score >= STRONG) c.strong = true;
+    if (score >= STRONG && adminSentence) c.admin = true;
+    else if (score >= STRONG) c.plainStrong = true;
   };
 
   // ---- the subject: a new subject carries cues; a reply's subject only tells that this answers an intro thread
@@ -542,6 +657,8 @@ export function readIntroduction(
   // ---- the body, sentence by sentence
   let genericCue = !isReplySubject && (subjectIntro || pairNames.size > 0);
   let bccCue = false;
+  /** an offer to introduce later ("Would you like me to introduce you to someone at McKinsey?") */
+  let offerCue = false;
   let unnamedThanks = false;
   /** a reply that opens by thanking someone ("Thanks Professor!") */
   let bareThanks = false;
@@ -566,14 +683,17 @@ export function readIntroduction(
       return at + cl.length;
     }, 0);
     const lowerSentence = sentence.toLowerCase();
+    adminSentence = ADMIN_PURPOSE.test(lowerSentence);
     const kinds: ClauseKind[] = clauses.map((cl) => {
       const l = cl.toLowerCase();
       if (BCC.test(l)) return 'bcc';
+      if (OFFER_QUESTION.test(l) || OFFER_UNNAMED.test(l)) return 'offer';
       if (INTRO_THANKS.some((re) => re.test(l))) return 'thanks';
       if (BARE_THANKS.test(l)) return 'bare';
       return 'plain';
     });
     if (kinds.includes('bcc')) bccCue = true;
+    if (kinds.includes('offer')) offerCue = true;
     const introThanks = kinds.some((k) => k === 'thanks' || k === 'bcc');
     const thank = (c: Candidate) => {
       c.thanked = true;
@@ -581,7 +701,7 @@ export function readIntroduction(
     };
     const loose = clauses.map((cl) =>
       new RegExp(
-        `\\b${THANKS}\\b|^\\s*(?:of\\s+course|absolutely|sure\\s+thing|with\\s+pleasure|my\\s+pleasure|happy\\s+to\\s+help|glad\\s+to\\s+help|anything\\s+for\\s+you|happy\\s+to|glad\\s+to)\\s*[!.]*\\s*$|\\b(?:ofc|of\\s+course|legend)\\b|\\b(?:you(?:'re|\\s+are)|ur|u\\s+r)\\s+(?:too\\s+kind|so\\s+kind|the\\s+best|a\\s+(?:gem|star|legend))|\\byou\\s+rock\\b|\\b(?:that(?:'s|\\s+is)|how)\\s+(?:very\\s+|so\\s+)?kind\\b`,
+        `\\b${THANKS}\\b|^\\s*(?:of\\s+course|absolutely|sure\\s+thing|with\\s+pleasure|my\\s+pleasure|happy\\s+to\\s+help|glad\\s+to\\s+help|anything\\s+for\\s+you|happy\\s+to|glad\\s+to)\\s*[!.]*\\s*$|\\b(?:ofc|of\\s+course|legend)\\b|\\b(?:you(?:'re|\\s+are)|ur|u\\s+r)\\s+(?:too\\s+kind|so\\s+kind|the\\s+best|a\\s+(?:gem|star|legend))|\\byou\\s+rock\\b|\\b(?:that(?:'s|\\s+is)|how)\\s+(?:very\\s+|so\\s+)?kind\\b|^\\s*(?:so|very|too|how)\\s+kind\\s+of\\s+you\\b|\\bcheers\\s+for\\b|\\bmuch\\s+obliged\\b`,
       ).test(cl.toLowerCase()),
     );
     // a clause that is only names (and greeting words): whom the sentence speaks to
@@ -637,13 +757,14 @@ export function readIntroduction(
         const at = mentions(cl, c, caseless || kinds[i] !== 'plain' || vocative[i]!);
         if (!at.length) return;
         if (loose[i] || (vocative[i] && loose.some(Boolean))) c.looseThanked = true;
+        if (kinds[i] === 'offer') return;
         if (kinds[i] !== 'plain') {
           // "Thanks Lena", "appreciate the intro, Lena", "moving Lena to bcc"
           thank(c);
           return;
         }
         // a name on its own next to a thanks clause: "Lena, great intro, thank you", "Thank you, Priya!"
-        if (vocative[i] && ((kinds[i + 1] ?? 'plain') !== 'plain' || (kinds[i - 1] ?? 'plain') !== 'plain')) {
+        if (vocative[i] && (THANKING.has(kinds[i + 1] ?? 'plain') || THANKING.has(kinds[i - 1] ?? 'plain'))) {
           thank(c);
           return;
         }
@@ -655,7 +776,7 @@ export function readIntroduction(
           if (
             studentAlt &&
             new RegExp(
-              `^(?:${studentAlt})(?:\\s*\\([^)]*\\))?\\s+(?:is|'s|has|had|was|wants|would|built|asked|just|recently|did|will|loves|reached|graduated|studies|interned|spent|made|wrote|hopes|plans|ran|led|won)\\b`,
+              `^(?:${studentAlt})(?:\\s*\\([^)]*\\))?\\s+(?:is|'s|(?:has|had)\\s+(?:been|built|done|worked|written|published|interned|spent|led|run|shipped|started|a|an|some|lots|real|great|strong)|was|wants|would|built|asked|just|recently|did|loves|reached|graduated|studies|interned|spent|made|wrote|hopes|plans|ran|led|won)\\b`,
               'i',
             ).test(rest)
           )
@@ -699,7 +820,8 @@ export function readIntroduction(
     // the sentence or the one before (and not the one spoken to: "Hannah, can you add them to the folder?")
     const namedHere = candidates.filter((c) => !c.thanked && mentions(sentence, c, caseless).length);
     const named = namedHere.length ? namedHere : namedBefore;
-    namedBefore = namedHere;
+    // "He's been on the desk for eight years. I've copied him.": a sentence about them by pronoun keeps them in view
+    if (namedHere.length || !/^\s*(?:he|she|they)\b/i.test(sentence)) namedBefore = namedHere;
     if (
       named.length === 1 &&
       !addressed.includes(named[0]!) &&
@@ -739,7 +861,7 @@ export function readIntroduction(
       introducing = true;
     }
     // a sentence that thanks and introduces no one thanks whoever it addresses
-    if (kinds.some((k) => k !== 'plain') && !introducing) for (const c of addressed) thank(c);
+    if (kinds.some((k) => THANKING.has(k)) && !introducing) for (const c of addressed) thank(c);
     // "Alex, Siobhan." / "Kai, Alex.": a sentence of names only, the student's and the person's
     if (vocative.every(Boolean) && namesStudent(sentence))
       for (const c of addressed)
@@ -755,6 +877,7 @@ export function readIntroduction(
     )
       unnamedThanks = true;
   }
+  adminSentence = false;
 
   // "Alex, Sam. Sam, Alex." / "Alex — Mark. Mark — Alex." / "alex this is eli, eli this is alex"
   const swaps = [
@@ -788,7 +911,7 @@ export function readIntroduction(
 
   // the sender speaks to the student and to the person, and tells the student who the person is: "Alex, Rui runs
   // the data platform at Contoso. Rui, thank you for making the time."
-  if (!isReplySubject && studentAddressed)
+  if (!isReplySubject && studentAddressed && !WORK_SPLIT.test(body.toLowerCase()))
     for (const c of candidates)
       if (spokenTo.has(c.person.id) && described.has(c.person.id) && !c.thanked) mark(c, GENERIC);
 
@@ -800,7 +923,8 @@ export function readIntroduction(
       (e) =>
         !mine.has(e) && e !== from && !candidates.some((c) => c.person.emails.some((x) => lower(x) === e)),
     ).length;
-  if (inbound && !isReplySubject && others <= 2 && !ARRANGES_MEETING.test(body.toLowerCase()))
+  const workSplit = WORK_SPLIT.test(body.toLowerCase());
+  if (inbound && !isReplySubject && others <= 2 && !ARRANGES_MEETING.test(body.toLowerCase()) && !workSplit)
     for (const c of candidates) {
       if (c.thanked || c.looseThanked || c.scheduler || !mentioned.has(c.person.id)) continue;
       const counter = notPresenting(escapeRe(c.name.toLowerCase()));
@@ -814,7 +938,7 @@ export function readIntroduction(
         mark(c, GENERIC);
     }
 
-  if (inbound && !isReplySubject)
+  if (inbound && !isReplySubject && !workSplit)
     for (const c of candidates)
       if (tellsAbout.has(c.person.id) && !c.thanked && !c.looseThanked && !c.scheduler) mark(c, GENERIC);
 
@@ -842,10 +966,67 @@ export function readIntroduction(
   // anyone named in a message that introduces
   if (genericCue) for (const c of candidates) if (mentioned.has(c.person.id)) mark(c, GENERIC);
 
+  // ---- the fallback's evidence: a person named in a short group email from a third party, said to be someone the
+  // student could talk to, with nothing showing they are copied for another reason
+  const lowerBody = body.toLowerCase();
+  const possible: PossibleCue[] = [];
+  if (inbound && !ctx.prior && others <= 3) {
+    const bodySentences = sentencesOf(body);
+    const presentingWords = POSSIBLE_PRESENTING.test(lowerBody) || POSSIBLE_PRESENTING.test(subjectLower);
+    for (const c of candidates) {
+      if (c.scheduler || c.admin || c.thanked || c.looseThanked) continue;
+      const inSubject = !isReplySubject && mentions(subject, c, true).length > 0;
+      if (!mentioned.has(c.person.id) && !inSubject) continue;
+      const at = bodySentences.flatMap((x, i) => (mentions(x, c, caseless).length ? [i] : []));
+      const where = at.map((i) => bodySentences[i]!);
+      // the sentence after a mention that goes on about them: "He leads analytics at Contoso."
+      const after = at
+        .map((i) => bodySentences[i + 1] ?? '')
+        .filter((x) => x && !candidates.some((o) => o !== c && mentions(x, o, caseless).length));
+      const next = after.filter((x) => /^\s*(?:he|she|they)\b/i.test(x));
+      const cues: string[] = [];
+      let score = 0;
+      const add = (n: number, cue: string) => {
+        score += n;
+        cues.push(`${n > 0 ? '+' : ''}${n} ${cue}`);
+      };
+      add(1, 'named');
+      if (!isReplySubject) add(1, 'a new thread');
+      const role = roleDescribed(escapeRe(c.name));
+      const n = escapeRe(c.name.toLowerCase());
+      if (
+        where.some((x) => role.test(caseless ? x.replace(/^./, (ch) => ch.toUpperCase()) : x)) ||
+        where.some((x) => new RegExp(`\\b${n}\\b[^.!?]{0,40}?\\b${POSSIBLE_ROLE}`, 'iu').test(x)) ||
+        next.some((x) => new RegExp(`^\\s*(?:he|she|they)\\b[^.!?]{0,30}?\\b${POSSIBLE_ROLE}`, 'iu').test(x))
+      )
+        add(1, 'says who they are');
+      // "Worth a conversation.": the sentence after them, when it names no one else
+      if ([...where, ...after].some((x) => POSSIBLE_TALK.test(x.toLowerCase()))) add(1, 'someone to talk to');
+      if (presentingWords) add(1, 'presenting words');
+      if (
+        studentDesc?.test(body) ||
+        tellsAbout.has(c.person.id) ||
+        bodySentences.some((x) => namesStudent(x) && POSSIBLE_PRESENTING.test(x.toLowerCase()))
+      )
+        add(1, 'presents the student');
+      if (POSSIBLE_WHEN_WHERE.test(lowerBody)) add(-1, 'a time or a place');
+      const counter = POSSIBLE_COUNTER(n);
+      if (where.some((x) => counter.test(x.toLowerCase()))) add(-2, 'acts with the sender or on the work');
+      if (ARRANGES_MEETING.test(lowerBody)) add(-1, 'arranges a meeting');
+      if (/\b(?:have|had|already)\s+(?:already\s+)?met\b/.test(lowerBody)) add(-2, 'they have met');
+      if (workSplit) add(-2, 'shared work');
+      if (ADMIN_PURPOSE.test(lowerBody)) add(-2, 'an administrative copy');
+      if (offerCue) add(-2, 'an offer to introduce later');
+      if (POSSIBLE_LOGISTICS.test(lowerBody)) add(-1, 'logistics');
+      possible.push({ personId: c.person.id, score, cues });
+    }
+  }
+
   // ---- decide
   const prior = ctx.prior;
   const excluded = (c: Candidate) =>
     c.scheduler ||
+    (c.admin && !c.plainStrong) ||
     (c.thanked && !c.strong) ||
     (!!prior && (prior.introducerId === c.person.id || prior.introducedIds.includes(c.person.id)));
   const thankedIds = candidates.filter((c) => c.thanked).map((c) => c.person.id);
@@ -862,6 +1043,7 @@ export function readIntroduction(
       thankedIds,
       introThankedIds,
       schedulerIds,
+      possible,
     });
   const answersIntroSubject =
     isReplySubject &&
@@ -881,7 +1063,10 @@ export function readIntroduction(
                   body,
                 )
               ? 'a reply to people just introduced ("nice to e-meet")'
-              : isReplySubject && candidates.some((c) => c.looseThanked) && ARRANGES_TIME.test(body)
+              : // a reply-all with no subject line at all reads like one with "Re:"
+                (isReplySubject || !subject) &&
+                  candidates.some((c) => c.looseThanked) &&
+                  ARRANGES_TIME.test(body)
                 ? 'thanks someone on the thread and arranges the call'
                 : isReplySubject &&
                     candidates.some((c) => spokenTo.has(c.person.id) && !c.scheduler) &&
@@ -892,12 +1077,19 @@ export function readIntroduction(
                     ? 'answers an introduction subject'
                     : undefined;
   if (replyReason)
-    return out('intro_reply', replyReason, { studentOn, thankedIds, introThankedIds, schedulerIds });
+    return out('intro_reply', replyReason, {
+      studentOn,
+      thankedIds,
+      introThankedIds,
+      schedulerIds,
+      possible,
+    });
   return out('none', schedulerIds.length ? 'an assistant brought in to schedule' : 'no introducing cue', {
     studentOn,
     thankedIds,
     introThankedIds,
     schedulerIds,
+    possible,
   });
 }
 
@@ -920,5 +1112,47 @@ export function detectIntroduction(
     introducedIds: r.introducedIds,
     messageId: msg.id,
     at: msg.sentAt,
+  };
+}
+
+/** The fallback asks only when the evidence reaches this (see `possibleIntroduction`). */
+export const POSSIBLE_INTRO_THRESHOLD = 4;
+
+export interface PossibleIntroduction {
+  /** the sender, who may have made the introduction */
+  introducerId: string;
+  /** the new people on the message the sender may be introducing, most likely first */
+  personIds: string[];
+  messageId: string;
+  at: string;
+  score: number;
+}
+
+/**
+ * The fallback for an introduction the cues missed: a group email from someone the student knows, with the student
+ * and at least one new person on the To or CC line, that `readIntroduction` did not call an introduction (nor a reply
+ * in one) but whose evidence for a new person reaches `POSSIBLE_INTRO_THRESHOLD`. The app then asks the student
+ * ("Did Lena introduce you to Sam?") instead of guessing either way. Rare by design: on the labelled corpus it asks
+ * about a small share of the messages that are not introductions (see the corpus test).
+ */
+export function possibleIntroduction(
+  msg: Pick<EmailMessage, 'id' | 'direction' | 'fromPersonId' | 'sentAt'>,
+  reading: IntroductionReading,
+  opts: { senderKnown: boolean; knownIds?: Iterable<string> },
+): PossibleIntroduction | undefined {
+  if (reading.kind !== 'none' || msg.direction !== 'inbound' || !msg.fromPersonId || !opts.senderKnown)
+    return undefined;
+  const known = new Set(opts.knownIds ?? []);
+  const hits = reading.possible
+    .filter((p) => p.personId !== msg.fromPersonId && !known.has(p.personId))
+    .filter((p) => p.score >= POSSIBLE_INTRO_THRESHOLD)
+    .sort((a, b) => b.score - a.score);
+  if (!hits.length) return undefined;
+  return {
+    introducerId: msg.fromPersonId,
+    personIds: hits.map((p) => p.personId),
+    messageId: msg.id,
+    at: msg.sentAt,
+    score: hits[0]!.score,
   };
 }
