@@ -1,10 +1,22 @@
-import type { OrbitNode, Person, ReachPath } from '@orbit/core';
-import { newId, normalizeCompany, REACH_BAND_LABELS, STAGE_LABELS } from '@orbit/core';
+import type { IntroWeb, OrbitNode, Person, ReachPath } from '@orbit/core';
+import {
+  buildIntroWeb,
+  combinedPairWeights,
+  describeIntroChain,
+  introStories,
+  newId,
+  normalizeCompany,
+  orbitGroupKey,
+  REACH_BAND_LABELS,
+  STAGE_LABELS,
+} from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Search, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { OrbitMap, useCoarsePointer } from '../components/OrbitMap';
+import type { FocusSpec, WebSpec } from '../components/orbitScene';
+import { LINEAGE } from '../components/orbitScene';
 import { db } from '../db/schema';
 import { draftMessage } from '../engine/brief';
 import {
@@ -20,6 +32,22 @@ import { useSession } from '../state/session';
 import { Avatar, Button, Card, Chip, cx, Input, useToast } from '../ui';
 import { StrengthDots } from './Pipeline';
 
+type Filter = 'all' | 'targets' | 'alumni' | 'chats' | 'recent' | 'intros';
+
+const FILTERS: [Filter, string][] = [
+  ['all', 'Everyone'],
+  ['targets', 'Target companies'],
+  ['alumni', 'Alumni'],
+  ['chats', 'In pipeline'],
+  ['recent', 'Last 90 days'],
+  ['intros', 'Introductions'],
+];
+
+/** How many of each person's direct connections the map draws on hover. */
+const HOVER_LINKS = 12;
+
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
 export function MapPage() {
   const { userId, user } = useSession();
   const [params, setParams] = useSearchParams();
@@ -28,36 +56,77 @@ export function MapPage() {
   const reachParam = params.get('reach');
   const touch = useCoarsePointer();
   const [query, setQuery] = useState('');
-  const [filter, setFilter] = useState<'all' | 'targets' | 'alumni' | 'chats' | 'recent'>('all');
+  const [filter, setFilter] = useState<Filter>('all');
   // undefined while routes are being computed, so the panel never claims "no route" before it knows
   const [paths, setPaths] = useState<ReachPath[] | undefined>([]);
   const [choices, setChoices] = useState<ReachCandidate[]>();
   const [pathIdx, setPathIdx] = useState(0);
-  const [company, setCompany] = useState<CompanyReach>();
+  const [company, setCompany] = useState<CompanyReach & { label: string }>();
   const [target, setTarget] = useState<Person>();
   const [hover, setHover] = useState<string>();
-  const people =
-    useLiveQuery(() => (userId ? db.people.where('userId').equals(userId).toArray() : []), [userId]) ?? [];
-  const orgs = useLiveQuery(() => db.organizations.toArray(), []) ?? [];
-  const chats =
-    useLiveQuery(() => (userId ? db.chats.where('userId').equals(userId).toArray() : []), [userId]) ?? [];
-  const pending =
-    useLiveQuery(
-      () =>
-        userId
-          ? db.suggestions
-              .where('userId')
-              .equals(userId)
-              .filter((s) => s.status === 'pending' && !!s.personId)
-              .toArray()
-          : [],
-      [userId],
-    ) ?? [];
-  const tcs =
-    useLiveQuery(
-      () => (userId ? db.targetCompanies.where('userId').equals(userId).toArray() : []),
-      [userId],
-    ) ?? [];
+  // a search inside the introductions view: a person or a company the map turns to
+  const [webFocus, setWebFocus] = useState<{ id?: string; group?: string; label: string }>();
+  const [storyHover, setStoryHover] = useState<string>();
+  const peopleQ = useLiveQuery(
+    () => (userId ? db.people.where('userId').equals(userId).toArray() : []),
+    [userId],
+  );
+  const orgsQ = useLiveQuery(() => db.organizations.toArray(), []);
+  const chatsQ = useLiveQuery(
+    () => (userId ? db.chats.where('userId').equals(userId).toArray() : []),
+    [userId],
+  );
+  const pendingQ = useLiveQuery(
+    () =>
+      userId
+        ? db.suggestions
+            .where('userId')
+            .equals(userId)
+            .filter((s) => s.status === 'pending' && !!s.personId)
+            .toArray()
+        : [],
+    [userId],
+  );
+  const tcsQ = useLiveQuery(
+    () => (userId ? db.targetCompanies.where('userId').equals(userId).toArray() : []),
+    [userId],
+  );
+  const pending = useMemo(() => pendingQ ?? [], [pendingQ]);
+  const tcs = useMemo(() => tcsQ ?? [], [tcsQ]);
+  const edges = useLiveQuery(
+    () => (userId ? db.edges.where('userId').equals(userId).toArray() : []),
+    [userId],
+  );
+  // the records an introduction leaves: an intro email on a thread, a "suggested I talk with you" fact
+  const introThreads = useLiveQuery(
+    () =>
+      userId
+        ? db.threads
+            .where('userId')
+            .equals(userId)
+            .filter((t) => !!t.introduction)
+            .toArray()
+        : [],
+    [userId],
+  );
+  const suggestedFacts = useLiveQuery(
+    () =>
+      userId
+        ? db.facts
+            .where('userId')
+            .equals(userId)
+            .filter((f) => f.sourceTable === 'suggested_by')
+            .toArray()
+        : [],
+    [userId],
+  );
+  // the arrival waits for everything the map draws, so it plays on a quiet main thread
+  const loading = [peopleQ, orgsQ, chatsQ, pendingQ, tcsQ, edges, introThreads, suggestedFacts].some(
+    (q) => q === undefined,
+  );
+  const people = useMemo(() => peopleQ ?? [], [peopleQ]);
+  const orgs = useMemo(() => orgsQ ?? [], [orgsQ]);
+  const chats = useMemo(() => chatsQ ?? [], [chatsQ]);
   const orgMap = useMemo(() => new Map(orgs.map((o) => [o.id, o])), [orgs]);
   const stages = useMemo(
     () =>
@@ -71,8 +140,9 @@ export function MapPage() {
   const pendingIds = useMemo(() => new Set(pending.map((s) => s.personId!)), [pending]);
   const isTarget = useMemo(() => targetCompanyMatcher(tcs, orgMap), [tcs, orgMap]);
   const visible = useMemo(() => people.filter((p) => p.isHuman && !p.hiddenAt), [people]);
+  const byId = useMemo(() => new Map(visible.map((p) => [p.id, p])), [visible]);
   const highlightIds = useMemo(() => {
-    if (filter === 'all') return undefined;
+    if (filter === 'all' || filter === 'intros') return undefined;
     const now = Date.now();
     return new Set(
       visible
@@ -88,7 +158,79 @@ export function MapPage() {
         .map((p) => p.id),
     );
   }, [filter, visible, isTarget, stages]);
+  // Target companies: their wedges are tinted, and the panel lists them so one click turns the map to it
+  const targetGroups = useMemo(() => {
+    if (filter !== 'targets') return undefined;
+    const groups = new Map<string, { key: string; label: string; orgId?: string; people: Person[] }>();
+    for (const p of visible) {
+      if (!isTarget(p)) continue;
+      const key = orbitGroupKey(p, orgMap);
+      const org = p.currentOrganizationId ? orgMap.get(p.currentOrganizationId) : undefined;
+      const g = groups.get(key) ?? {
+        key,
+        label: org?.name ?? p.currentOrganizationRaw ?? 'Other',
+        orgId: org?.id,
+        people: [],
+      };
+      g.people.push(p);
+      groups.set(key, g);
+    }
+    return [...groups.values()].sort(
+      (a, b) => b.people.length - a.people.length || a.label.localeCompare(b.label),
+    );
+  }, [filter, visible, isTarget, orgMap]);
+  const highlightGroups = useMemo(
+    () => (targetGroups ? new Set(targetGroups.map((g) => g.key)) : undefined),
+    [targetGroups],
+  );
+  // the referral web, built only from recorded introductions, referrals and suggestions
+  const web: IntroWeb = useMemo(
+    () =>
+      buildIntroWeb({
+        people: visible,
+        edges: edges ?? [],
+        threads: introThreads ?? [],
+        chats,
+        facts: suggestedFacts ?? [],
+      }),
+    [visible, edges, introThreads, chats, suggestedFacts],
+  );
+  const introducerOf = useMemo(() => new Map([...web.parent].map(([to, l]) => [to, l.fromId])), [web]);
+  // each person's strongest direct connections inside the network, for the hover lines
+  const connections = useMemo(() => {
+    const out = new Map<string, { id: string; w: number }[]>();
+    for (const [key, c] of combinedPairWeights(edges ?? [])) {
+      const [a, b] = key.split('|') as [string, string];
+      if (!byId.has(a) || !byId.has(b)) continue;
+      out.set(a, [...(out.get(a) ?? []), { id: b, w: c.weight }]);
+      out.set(b, [...(out.get(b) ?? []), { id: a, w: c.weight }]);
+    }
+    return new Map(
+      [...out].map(([id, list]) => [
+        id,
+        list
+          .sort((x, y) => y.w - x.w)
+          .slice(0, HOVER_LINKS)
+          .map((x) => x.id),
+      ]),
+    );
+  }, [edges, byId]);
+  const firstNames = useMemo(() => {
+    const count = new Map<string, number>();
+    for (const id of web.members) {
+      const f = byId.get(id)?.firstName ?? '';
+      count.set(f, (count.get(f) ?? 0) + 1);
+    }
+    return count;
+  }, [web, byId]);
+  const nameOf = (id: string) => {
+    const p = byId.get(id);
+    if (!p) return 'someone';
+    return (firstNames.get(p.firstName) ?? 0) > 1 ? p.displayName : p.firstName;
+  };
+  const stories = useMemo(() => introStories(web, nameOf), [web, firstNames, byId]);
   const reachMode = !!reachParam;
+  const webMode = filter === 'intros' && !reachMode;
   // resolve reach param (person id or '1' = open search)
   useEffect(() => {
     if (!userId || !reachParam || reachParam === '1') {
@@ -126,16 +268,48 @@ export function MapPage() {
     setChoices(undefined);
     setTarget(undefined);
     setPaths([]);
-    setCompany(await reachCompany(userId, orgIdOrName));
+    setCompany({ ...(await reachCompany(userId, orgIdOrName)), label });
     setParams({ reach: '1', company: label });
   };
+  // a company link opened directly (or a reload) focuses that company again
+  const companyParam = params.get('company');
+  useEffect(() => {
+    if (userId && reachParam === '1' && companyParam && !company && !choices)
+      void openCompany(companyParam, companyParam);
+  }, [userId, reachParam, companyParam]);
   const choose = (c: ReachCandidate) => {
     setChoices(undefined);
     if (c.kind === 'person') setParams({ reach: c.id });
     else void openCompany(c.id, c.label);
   };
+  /** Inside the introductions view the search box looks only at the people in the web. */
+  const searchWeb = (q: string) => {
+    const norm = q.trim().toLowerCase();
+    const comp = normalizeCompany(q);
+    const members = [...web.members].map((id) => byId.get(id)).filter((p): p is Person => !!p);
+    const person =
+      members.find((p) => p.displayName.toLowerCase() === norm) ??
+      members.find((p) =>
+        p.displayName
+          .toLowerCase()
+          .split(/\s+/)
+          .some((w) => w.startsWith(norm)),
+      );
+    if (person) return setWebFocus({ id: person.id, label: person.displayName });
+    const atCompany = members.find(
+      (p) => comp && orbitGroupKey(p, orgMap) === `n:${comp}` && normalizeCompany(p.currentOrganizationRaw),
+    );
+    if (atCompany)
+      return setWebFocus({
+        group: orbitGroupKey(atCompany, orgMap),
+        label:
+          orgMap.get(atCompany.currentOrganizationId ?? '')?.name ?? atCompany.currentOrganizationRaw ?? q,
+      });
+    toast.push({ text: 'No one by that name or company in your introductions yet.', ttl: 4000 });
+  };
   const runSearch = async (q: string) => {
     if (!userId || !q.trim()) return;
+    if (webMode) return searchWeb(q);
     // read straight from the database so a search typed before the map finished loading still works
     const [allPeople, allOrgs] = await Promise.all([
       db.people.where('userId').equals(userId).toArray(),
@@ -165,12 +339,38 @@ export function MapPage() {
     const group = node.cluster;
     if (!group) return;
     const org = [...orgMap.values()].find((o) => `n:${o.nameNormalized}` === g);
-    if (org && !reachMode) nav(`/companies/${org.id}`);
-    else if (org) void openCompany(org.id, org.name);
+    // the "+N" dot bursts open on the map, and the panel lists everyone there
+    if (org) void openCompany(org.id, org.name);
     else if (group.label !== 'Other companies' && g !== 'independent')
       void openCompany(group.label, group.label);
     else nav('/people');
   };
+  const exitReach = () => {
+    setParams({});
+    setQuery('');
+    setCompany(undefined);
+    setChoices(undefined);
+  };
+  /** Esc clears what the map is focused on, with the reverse animation: a search, a route, a filter. */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      if (document.querySelector('[role="dialog"]')) return;
+      if (webFocus) setWebFocus(undefined);
+      else if (reachMode) exitReach();
+      else if (filter !== 'all') setFilter('all');
+      else return;
+      setQuery('');
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
+  useEffect(() => {
+    if (!webMode) {
+      setWebFocus(undefined);
+      setStoryHover(undefined);
+    }
+  }, [webMode]);
   const askIntro = async (path: ReachPath) => {
     if (!user || !target) return;
     const connectorId = path.hops[0]!.toId;
@@ -211,20 +411,95 @@ export function MapPage() {
       action: { label: 'Open', onClick: () => nav('/inbox') },
     });
   };
-  const pathPeople = useMemo(() => new Map(visible.map((p) => [p.id, p])), [visible]);
-  const hovered = hover ? pathPeople.get(hover) : undefined;
+  const hovered = hover ? byId.get(hover) : undefined;
   const current = paths?.[pathIdx];
+  const companyKey = company
+    ? company.org
+      ? `n:${company.org.nameNormalized}`
+      : `n:${normalizeCompany(company.label)}`
+    : undefined;
+  const status = paths === undefined ? 'searching' : paths.length ? 'found' : 'none';
+  const routeIds = current ? ['user', ...current.hops.map((h) => h.toId)].join('>') : '';
+  const focus: FocusSpec | undefined = useMemo(() => {
+    if (target)
+      return { kind: 'reach', targetId: target.id, status, ids: routeIds ? routeIds.split('>') : [] };
+    if (companyKey) return { kind: 'company', groupKey: companyKey };
+    return undefined;
+  }, [target, status, routeIds, companyKey]);
+  const webLit = webMode
+    ? (storyHover ?? (hover && web.members.has(hover) ? hover : undefined) ?? webFocus?.id)
+    : undefined;
+  const webSpec: WebSpec | undefined = useMemo(
+    () =>
+      webMode
+        ? {
+            web,
+            focusId: webLit,
+            focusGroup: webLit ? undefined : webFocus?.group,
+            // a search match turns the orbit to it; hovering never moves the dot under the pointer
+            turnTo: webFocus ? { id: webFocus.id, group: webFocus.group } : undefined,
+          }
+        : undefined,
+    [webMode, web, webLit, webFocus],
+  );
+  const companyCount = company ? company.direct.length : 0;
+  const warmCount = company ? company.direct.filter((d) => d.person.strength >= 0.3).length : 0;
+  const clear = touch ? '' : ' Esc to clear.';
+  // one line under the filters that says what the map shows, in words, whenever it changes
+  const legend = (() => {
+    if (reachMode) {
+      if (company)
+        return `Showing ${plural(companyCount, 'person', 'people')} at ${company.org?.name ?? company.label}${
+          warmCount ? `, ${warmCount} warm` : ''
+        }.${touch ? '' : ' Drag to turn the orbit, Esc to clear.'}`;
+      if (target) {
+        if (paths === undefined) return `Finding routes to ${target.displayName}.`;
+        if (!current) return `No route to ${target.displayName} through your network yet.${clear}`;
+        if (current.hops.length === 1) return `You know ${target.displayName} directly.${clear}`;
+        const via = byId.get(current.hops[0]!.toId)?.firstName ?? 'someone';
+        return `Route ${pathIdx + 1} of ${paths.length} to ${target.displayName}, through ${via}.${clear}`;
+      }
+      if (choices) return 'Several matches. Pick the one you meant.';
+      return 'Type a name or a company to find a way in.';
+    }
+    switch (filter) {
+      case 'targets':
+        return `Showing ${plural(highlightIds?.size ?? 0, 'person', 'people')} at ${plural(
+          targetGroups?.length ?? 0,
+          'target company',
+          'target companies',
+        )}.${clear}`;
+      case 'alumni':
+        return `Showing ${plural(highlightIds?.size ?? 0, 'alum', 'alumni')}${user?.school ? ` of ${user.school}` : ''}.${clear}`;
+      case 'chats':
+        return `Showing ${plural(highlightIds?.size ?? 0, 'person', 'people')} in your pipeline.${clear}`;
+      case 'recent':
+        return `Showing ${plural(highlightIds?.size ?? 0, 'person', 'people')} you were in touch with in the last 90 days.${clear}`;
+      case 'intros':
+        if (!web.links.length) return 'No introductions recorded yet.';
+        if (webFocus && !webLit && webFocus.group)
+          return `Showing introductions at ${webFocus.label}.${clear}`;
+        return `${plural(web.links.length, 'introduction')} in ${plural(web.roots.length, 'chain')}. ${
+          touch ? 'Tap' : 'Hover over'
+        } a person to light up their chain.`;
+      default:
+        return 'Everyone you know, closest in the middle, each company a wedge.';
+    }
+  })();
+  const litSentence = webLit ? describeIntroChain(web, webLit, nameOf) : '';
   return (
     <div className="-my-6 -mx-4 md:-mx-8 flex flex-col lg:h-[calc(100vh-3rem)]">
       <div className="px-4 md:px-8 pt-5 pb-3 flex flex-wrap items-center gap-2 border-b border-line bg-canvas">
         <div className="min-w-0">
           <h1 className="text-[20px] font-semibold tracking-[-0.01em]">
-            {reachMode ? 'Reach' : 'Your orbit'}
+            {reachMode ? 'Reach' : webMode ? 'Introductions' : 'Your orbit'}
           </h1>
           <p className="text-[12px] text-ink-3">
             {reachMode
               ? 'Who can get you to someone, through people you already know.'
-              : `${visible.length} people · inner ring = closest`}
+              : webMode
+                ? 'Who introduced you to whom, generation by generation.'
+                : `${visible.length} people · inner ring = closest`}
           </p>
         </div>
         <div className="w-full sm:w-auto sm:ml-auto flex items-center gap-2">
@@ -238,51 +513,49 @@ export function MapPage() {
             <Search size={14} className="absolute left-2.5 top-2.5 text-ink-3" />
             <Input
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Reach a person or company…"
+              onChange={(e) => {
+                setQuery(e.target.value);
+                if (webMode && !e.target.value) setWebFocus(undefined);
+              }}
+              placeholder={webMode ? 'Search your introductions…' : 'Reach a person or company…'}
               className="pl-8 w-full sm:w-64"
               data-testid="reach-input"
             />
           </form>
           {reachMode && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                setParams({});
-                setQuery('');
-                setCompany(undefined);
-                setChoices(undefined);
-              }}
-            >
+            <Button variant="ghost" size="sm" onClick={exitReach}>
               <X size={14} /> Exit reach
             </Button>
           )}
         </div>
         {!reachMode && (
           <div className="w-full flex flex-wrap gap-1.5 mt-1" role="group" aria-label="Show">
-            {(
-              [
-                ['all', 'Everyone'],
-                ['targets', 'Target companies'],
-                ['alumni', 'Alumni'],
-                ['chats', 'In pipeline'],
-                ['recent', 'Last 90 days'],
-              ] as const
-            ).map(([k, l]) => (
+            {FILTERS.map(([k, l]) => (
               <button
                 key={k}
-                onClick={() => setFilter(k)}
+                onClick={() => {
+                  setFilter(k);
+                  setWebFocus(undefined);
+                }}
+                aria-pressed={filter === k}
                 className={cx(
-                  'h-7 px-2.5 rounded-full border text-[12px] shrink-0 whitespace-nowrap',
+                  'h-7 px-2.5 rounded-full border text-[12px] shrink-0 whitespace-nowrap transition-colors',
                   filter === k ? 'bg-ink text-white border-ink' : 'border-line text-ink-2 hover:bg-canvas-2',
                 )}
+                data-testid={`map-filter-${k}`}
               >
                 {l}
               </button>
             ))}
           </div>
         )}
+        <p
+          className="w-full text-[12px] text-ink-3 min-h-[18px] mt-0.5"
+          aria-live="polite"
+          data-testid="map-legend-line"
+        >
+          {legend}
+        </p>
       </div>
       <div className="lg:flex-1 lg:min-h-0 grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_340px]">
         <div
@@ -298,12 +571,16 @@ export function MapPage() {
             orgs={orgMap}
             stages={stages}
             pending={pendingIds}
-            highlightPath={current}
+            loading={loading}
             highlightIds={highlightIds}
+            highlightGroups={highlightGroups}
+            focus={focus}
+            web={webSpec}
+            connections={connections}
+            introducerOf={introducerOf}
             onSelect={(id) => (reachMode ? setParams({ reach: id }) : nav(`/people/${id}`))}
             onSelectCluster={openCluster}
             onHover={setHover}
-            focusId={target?.id}
           />
           {hovered && !reachMode && (
             <div
@@ -337,15 +614,41 @@ export function MapPage() {
           className="min-w-0 border-t lg:border-t-0 lg:border-l border-line bg-canvas lg:overflow-y-auto scroll-thin p-4 space-y-3"
           data-testid="map-panel"
         >
-          {!reachMode && (
+          {!reachMode && !webMode && (
             <>
               <div className="text-[13px] text-ink-2">
                 {touch
                   ? 'Tap a person to see who they are, and tap again to open their profile.'
-                  : 'Hover over a person to see who they are, and click to open their profile.'}{' '}
-                Companies read as wedges. The thin coloured ring is pipeline stage, and a pulse means a
+                  : 'Hover over a person to see who they are and who they know, and click to open their profile. Drag to turn the orbit.'}{' '}
+                Companies read as wedges. The thin coloured ring is pipeline stage, and a soft ripple means a
                 pending suggestion. A grey dot with a number stands for more people at that company.
               </div>
+              {targetGroups && (
+                <Card padded>
+                  <div className="font-medium text-[13px] mb-2">Target companies</div>
+                  {targetGroups.length === 0 && (
+                    <p className="text-[12px] text-ink-3">
+                      No one at your target companies in your network yet.
+                    </p>
+                  )}
+                  <ul className="space-y-1">
+                    {targetGroups.map((g) => (
+                      <li key={g.key}>
+                        <button
+                          className="w-full flex items-center gap-2 text-left text-[13px] rounded-md px-2 py-1.5 hover:bg-canvas-2"
+                          onClick={() => void openCompany(g.orgId ?? g.label, g.label)}
+                          data-testid="map-company-row"
+                        >
+                          <span className="font-medium truncate">{g.label}</span>
+                          <span className="ml-auto text-ink-3 tabular shrink-0">
+                            {plural(g.people.length, 'person', 'people')}
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </Card>
+              )}
               <Card padded>
                 <div className="font-medium text-[13px] mb-2">Legend</div>
                 <ul className="text-[12px] text-ink-2 space-y-1">
@@ -357,6 +660,51 @@ export function MapPage() {
               <Button variant="primary" className="w-full" onClick={() => setParams({ reach: '1' })}>
                 Find a path to someone
               </Button>
+            </>
+          )}
+          {webMode && (
+            <>
+              <div className="text-[13px] text-ink-2">
+                Each line runs from the person who introduced you to the person they introduced you to. A
+                dashed line is someone you already knew, and each colour is one chain.
+              </div>
+              {litSentence && (
+                <Card padded className="border-accent/40 bg-accent-soft/30">
+                  <p className="text-[13px]" data-testid="map-chain-sentence">
+                    {litSentence}
+                  </p>
+                </Card>
+              )}
+              <Card padded>
+                <div className="font-medium text-[13px] mb-2">Your introductions</div>
+                {stories.length === 0 && (
+                  <p className="text-[12px] text-ink-3">
+                    When someone introduces you by email, or you note who suggested a person, the chain shows
+                    up here and on the map.
+                  </p>
+                )}
+                <ul className="space-y-1">
+                  {stories.map((s) => (
+                    <li key={s.text}>
+                      <button
+                        className="w-full flex items-start gap-2 text-left text-[13px] rounded-md px-2 py-1.5 hover:bg-canvas-2"
+                        onMouseEnter={() => setStoryHover(s.focusId)}
+                        onMouseLeave={() => setStoryHover(undefined)}
+                        onFocus={() => setStoryHover(s.focusId)}
+                        onBlur={() => setStoryHover(undefined)}
+                        onClick={() => nav(`/people/${s.focusId}`)}
+                        data-testid="map-intro-story"
+                      >
+                        <span
+                          className="mt-1.5 w-2 h-2 rounded-full shrink-0"
+                          style={{ background: LINEAGE[web.roots.indexOf(s.rootId) % LINEAGE.length] }}
+                        />
+                        <span>{s.text}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </Card>
             </>
           )}
           {reachMode && !target && !company && !choices && (
@@ -401,11 +749,9 @@ export function MapPage() {
                 </div>
               </div>
               {paths === undefined && (
-                <div className="space-y-2" data-testid="reach-loading" aria-busy="true">
-                  <p className="text-[13px] text-ink-3">Finding routes through your network…</p>
-                  <div className="h-20 rounded-[12px] bg-canvas-2 animate-pulse" />
-                  <div className="h-20 rounded-[12px] bg-canvas-2 animate-pulse" />
-                </div>
+                <p className="text-[13px] text-ink-3" data-testid="reach-loading" aria-busy="true">
+                  Finding routes through your network…
+                </p>
               )}
               {paths?.length === 0 && (
                 <p className="text-[13px] text-ink-3">
@@ -417,7 +763,7 @@ export function MapPage() {
                   key={i}
                   onClick={() => setPathIdx(i)}
                   className={cx(
-                    'w-full text-left border rounded-[12px] p-3',
+                    'w-full text-left border rounded-[12px] p-3 transition-colors',
                     i === pathIdx ? 'border-accent bg-accent-soft/40' : 'border-line hover:bg-canvas-2',
                   )}
                   data-testid="reach-path"
@@ -432,7 +778,7 @@ export function MapPage() {
                   </div>
                   <ol className="mt-2 space-y-1.5 text-[13px]">
                     {p.hops.map((h, k) => {
-                      const to = pathPeople.get(h.toId);
+                      const to = byId.get(h.toId);
                       return (
                         <li key={k} className="flex items-start gap-2">
                           <span className="text-ink-3 tabular w-4">{k + 1}.</span>
@@ -449,7 +795,7 @@ export function MapPage() {
               ))}
               {current && current.hops.length > 1 && (
                 <Button variant="primary" className="w-full" onClick={() => askIntro(current)}>
-                  Ask {pathPeople.get(current.hops[0]!.toId)?.firstName ?? 'them'} for an intro
+                  Ask {byId.get(current.hops[0]!.toId)?.firstName ?? 'them'} for an intro
                 </Button>
               )}
               {current && current.hops.length === 1 && (
@@ -465,7 +811,7 @@ export function MapPage() {
           )}
           {company && (
             <>
-              <div className="font-medium">{company.org?.name ?? params.get('company')}</div>
+              <div className="font-medium">{company.org?.name ?? company.label}</div>
               {(
                 [
                   ['People there now', company.direct],
@@ -508,9 +854,7 @@ export function MapPage() {
                         >
                           {t.target.displayName}
                         </button>{' '}
-                        <span className="text-ink-3">
-                          via {pathPeople.get(t.path.hops[0]!.toId)?.firstName}
-                        </span>
+                        <span className="text-ink-3">via {byId.get(t.path.hops[0]!.toId)?.firstName}</span>
                       </li>
                     ))}
                   </ul>
