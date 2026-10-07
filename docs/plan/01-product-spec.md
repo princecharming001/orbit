@@ -169,6 +169,7 @@ Layout top to bottom:
 - Suggestion kinds, triggers, ranking and guardrails are specified in `07-nurture-and-morning-brief.md`.
 - "Approve & send" opens a 60-second undo toast; the send is queued with a 60 s delay and cancelled on undo. [DEFAULT]
 - A suggestion not acted on by the next brief is carried over at most once, then expires with a feedback event `expired`.
+- A suggestion that describes the state of a chat (`thank_you`, `schedule_propose`, `schedule_confirm`, `prep_brief`, `follow_up_bump`) is retired (`expired`) as soon as the rules no longer produce it: a "confirm Thursday at 2pm" card once the meeting is on the calendar, a thank-you once one was sent. Untouched drafts on pending cards are redrafted when what they were drafted from changes (notes with new facts, a calendar change under proposed windows).
 
 ### 6.3 Approvals centre (`/inbox`)
 

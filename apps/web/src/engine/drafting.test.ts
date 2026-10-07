@@ -1,5 +1,13 @@
 import type { CoffeeChat, MessageKind, OutboundMessage, Person, Suggestion, User } from '@orbit/core';
-import { contextText, generateDraft, newId, sectorOf, validateDraft } from '@orbit/core';
+import {
+  composeKindFor,
+  contextText,
+  fmtWindows,
+  generateDraft,
+  newId,
+  sectorOf,
+  validateDraft,
+} from '@orbit/core';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { db } from '../db/schema';
 import {
@@ -12,7 +20,9 @@ import {
   regenerateDraft,
 } from './brief';
 import { loadDemo } from './demo';
-import { checkSendAllowed } from './send';
+import { importConnectionsCsv } from './linkedin';
+import { ingestNote } from './notes';
+import { approveAndSend, checkSendAllowed } from './send';
 
 let user: User;
 beforeAll(async () => {
@@ -85,6 +95,45 @@ async function newChat(personId: string, over: Partial<CoffeeChat> = {}): Promis
 }
 
 describe('drafting against the demo data', () => {
+  it('the welcome brief is true when it loads: thank-yous quote the notes, nothing is stale (UI-10)', async () => {
+    const pending = await db.suggestions
+      .where('userId')
+      .equals(user.id)
+      .filter((s) => s.status === 'pending')
+      .toArray();
+    const thanks = pending.filter((s) => s.kind === 'thank_you');
+    expect(thanks.length).toBeGreaterThan(0);
+    for (const s of thanks) {
+      // the stored card, exactly as Today shows it, not a regenerated one
+      const d = (await db.outbound.get(s.outboundMessageId!))!;
+      const facts = await db.facts.where('personId').equals(s.personId!).toArray();
+      expect(facts.length).toBeGreaterThan(0);
+      expect(d.needsInput, d.bodyDraft).toBeUndefined();
+      expect(d.bodyDraft).not.toMatch(/\[/);
+      expect(d.claims?.some((c) => !!c.factId && facts.some((f) => f.id === c.factId))).toBe(true);
+      const chat = (await db.chats.get(s.chatId!))!;
+      expect(Date.now() - new Date(chat.completedAt!).getTime()).toBeLessThan(3 * 86_400_000);
+    }
+    // the mentor chat was in August and the thank-you went out the next day: no thank-you card seven weeks later
+    const mentor = (await people((p) => p.relationshipType === 'mentor'))[0]!;
+    const mentorChat = (await db.chats.where('personId').equals(mentor.id).first())!;
+    expect(['followed_up', 'nurturing']).toContain(mentorChat.stage);
+    expect(Date.now() - new Date(mentorChat.completedAt!).getTime()).toBeGreaterThan(30 * 86_400_000);
+    expect(pending.some((s) => s.kind === 'thank_you' && s.personId === mentor.id)).toBe(false);
+    // a booked chat has no "confirm the time" card, and windows in stored drafts are the current free slots
+    for (const s of pending.filter((x) => x.kind === 'schedule_confirm' || x.kind === 'schedule_propose')) {
+      const chat = (await db.chats.get(s.chatId!))!;
+      expect(['replied', 'scheduling']).toContain(chat.stage);
+      const d = (await db.outbound.get(s.outboundMessageId!))!;
+      expect(d.bodyDraft).not.toMatch(/has already passed|come and gone/);
+      if (s.kind === 'schedule_propose') {
+        const p = (await db.people.get(s.personId!))!;
+        const ctx = await buildDraftContext(user, p, 'schedule', 'gmail', s);
+        expect(d.bodyDraft).toContain(fmtWindows(ctx.proposedWindows!.slice(0, 2), user.timezone));
+      }
+    }
+  });
+
   it('every draft for every pending suggestion passes the validator with no blocking issue', async () => {
     const pending = await db.suggestions
       .where('userId')
@@ -236,7 +285,7 @@ describe('drafting against the demo data', () => {
   it('thank-you and nurture splice facts grammatically, located by the real meeting date', async () => {
     const alina = (await people((p) => p.displayName === 'Alina Rossi'))[0]!;
     const ty = await draftMessage(user, alina.id, 'thank_you', 'gmail');
-    expect(ty.bodyDraft).toMatch(/What you said about focusing on one concrete project story/);
+    expect(ty.bodyDraft).toMatch(/what you said about focusing on one concrete project story/i);
     expect(ty.bodyDraft).toMatch(/Thanks also for offering to refer me when the posting goes up/);
     expect(ty.bodyDraft).not.toMatch(/Alina offered|point that recommended/);
     const n = await draftMessage(user, alina.id, 'nurture', 'gmail');
@@ -432,5 +481,89 @@ describe('drafting against the demo data', () => {
     expect(re.needsInput).toBeUndefined();
     expect(re.bodyDraft).toMatch(/your advice to lead every interview answer with one project story/i);
     expect((await validateStored((await db.outbound.get(bare.id))!)).filter((i) => i.blocking)).toEqual([]);
+  });
+
+  it('notes that arrive after a thank-you was drafted update the stored draft (DQ-03)', async () => {
+    const chatted = await chattedIds();
+    const p = (await people((x) => !!x.primaryEmail && !chatted.has(x.id) && !x.hiddenAt))[5]!;
+    const chat = await newChat(p.id, {
+      stage: 'completed',
+      completedAt: new Date(Date.now() - 2 * 3_600_000).toISOString(),
+    });
+    await evaluateImmediateSuggestions(user.id, { chatId: chat.id, personId: p.id });
+    const s = (await db.suggestions.where('dedupeKey').equals(`thank:${chat.id}`).first())!;
+    const before = (await db.outbound.get(s.outboundMessageId!))!;
+    expect(before.needsInput).toEqual(['takeaway']);
+    await ingestNote(user, {
+      text: `Coffee with ${p.displayName}. They recommended practicing system design with a friend before onsites.`,
+      source: 'manual',
+      personIds: [p.id],
+    });
+    const after = (await db.outbound.get(s.outboundMessageId!))!;
+    expect(after.id).toBe(before.id);
+    expect(after.needsInput).toBeUndefined();
+    expect(after.bodyDraft).toMatch(/practicing system design with a friend/);
+    expect((await validateStored(after, s)).filter((i) => i.blocking)).toEqual([]);
+  });
+
+  it('after a thank-you goes out, "Write to" waits instead of drafting a check-in (UI-04)', async () => {
+    const chatted = await chattedIds();
+    const p = (await people((x) => !!x.primaryEmail && !chatted.has(x.id) && !x.hiddenAt))[6]!;
+    const chat = await newChat(p.id, {
+      stage: 'completed',
+      completedAt: new Date(Date.now() - 2 * 3_600_000).toISOString(),
+    });
+    const d = await draftMessage(user, p.id, 'thank_you', 'gmail', chat.id, {
+      takeaway: SAMPLE_INPUTS.takeaway,
+    });
+    expect((await approveAndSend(user, d.id, d.bodyDraft)).ok).toBe(true);
+    const fresh = (await db.chats.get(chat.id))!;
+    expect(fresh.stage).toBe('followed_up');
+    expect(composeKindFor(fresh, new Date())).toMatchObject({ wait: { since: fresh.lastOutboundAt } });
+    const later = new Date(Date.now() + 20 * 86_400_000);
+    expect(composeKindFor(fresh, later)).toEqual({ kind: 'nurture' });
+    const blocked = await checkSendAllowed(user.id, p.id, 'gmail', 'nurture');
+    expect(blocked.allowed).toBe(false);
+    expect(blocked.reason).toMatch(new RegExp(`You wrote to ${p.firstName} just now`));
+    expect(blocked.reason).not.toMatch(/\b0 hours/);
+  });
+
+  it('a LinkedIn re-import records a job change only when there is one, and says it right (DQ-13)', {
+    timeout: 30_000,
+  }, async () => {
+    const chatted = await chattedIds();
+    const cands = await people(
+      (x) =>
+        !!x.linkedinUrl &&
+        !!x.currentTitle &&
+        !!x.currentOrganizationRaw &&
+        !chatted.has(x.id) &&
+        !x.hiddenAt,
+    );
+    const [a, b] = [cands[0]!, cands[1]!];
+    const affs = async (id: string) =>
+      (await db.affiliations.where('personId').equals(id).toArray()).filter((x) => x.kind === 'employment');
+    const beforeA = await affs(a.id);
+    const row = (p: Person, company: string, title: string) =>
+      `${p.firstName},${p.lastName ?? ''},${p.linkedinUrl},,${company},${title},01 Jan 2024`;
+    const csv = `First Name,Last Name,URL,Email Address,Company,Position,Connected On\n${row(
+      a,
+      ` ${a.currentOrganizationRaw!.toUpperCase()} `,
+      `${a.currentTitle!.toLowerCase()}  II`,
+    )}\n${row(b, b.currentOrganizationRaw!, `Staff ${b.currentTitle}`)}\n`;
+    await importConnectionsCsv(user, csv);
+    // case, spacing and a level suffix are not news
+    const afterA = await affs(a.id);
+    expect(afterA.length).toBe(beforeA.length);
+    expect(afterA.filter((x) => x.isCurrent).every((x) => !x.endDate)).toBe(true);
+    const ca = await draftMessage(user, a.id, 'congratulate', 'gmail');
+    expect(ca.needsInput).toEqual(['news']);
+    // a new title at the same company is a new role, not a move, and its start date is not assumed
+    const cb = await draftMessage(user, b.id, 'congratulate', 'gmail');
+    expect(cb.needsInput).toBeUndefined();
+    expect(cb.bodyDraft).toMatch(
+      new RegExp(`your new role as an? staff .* at ${b.currentOrganizationRaw}`, 'i'),
+    );
+    expect(cb.bodyDraft).not.toMatch(/your move to|first few weeks/);
   });
 });

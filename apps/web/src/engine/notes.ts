@@ -3,7 +3,7 @@ import { heuristicNoteExtraction, newId, normalizeEmail, parseGranolaText, parse
 import { addTouchpoint, notify, recomputePersonStrength } from '../db/repo';
 import { db } from '../db/schema';
 import { hasLlm, llmNoteExtraction } from '../integrations/anthropic';
-import { evaluateImmediateSuggestions, refreshPersonSummary } from './brief';
+import { evaluateImmediateSuggestions, refreshPendingDrafts, refreshPersonSummary } from './brief';
 import { upsertPerson } from './people';
 import { evaluateTrigger } from './stages';
 
@@ -224,6 +224,8 @@ export async function processNote(user: User, note: MeetingNote, now = new Date(
     ext.suggestedNextStep,
     `/people/${primary.id}`,
   );
+  // a thank-you (or check-in) drafted before these notes arrived is redrafted with what they said
+  await refreshPendingDrafts(user, { personId: primary.id });
   await evaluateImmediateSuggestions(user.id, { personId: primary.id, chatId: chat?.id }, now);
 }
 

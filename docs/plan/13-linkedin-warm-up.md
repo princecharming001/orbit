@@ -26,6 +26,8 @@ day ⌊n/2⌋  react_post  "React to one recent post that you genuinely find use
 day n−1 comment_post   "Leave one substantive comment: a question or an added point, not praise"
 ready   day n, 09:00   outreach suggested once ready AND at least one action is done; or earlier once every action is done or skipped
 ```
+Days after day 0 are working days: no step is due on a Saturday or a Sunday, so a warm-up started on a Friday reacts on Tuesday and is ready on Thursday (n = 4).
+
 Stored on `coffee_chats.warmUp` (`WarmUpPlan`: `startedAt`, `readyAt`, `actions[] {id, kind, label, url, dueAt, doneAt?, skippedAt?}`).
 
 ## 5. Suggestions and brief

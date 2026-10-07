@@ -422,7 +422,21 @@ export async function buildDraftContext(
   }
   if (target && !target.firstName) target = { ...target, firstName: target.name.split(' ')[0] };
   // real free windows from the student's calendar, in their timezone, on different days and times
-  const busy = events.map((e) => ({ startIso: e.startAt, endIso: e.endAt, status: e.status }));
+  const busy = events.map((e) => ({
+    startIso: e.startAt,
+    endIso: e.endAt,
+    status: e.status,
+    withPerson: e.attendeePersonIds?.includes(person.id) || undefined,
+  }));
+  // a meeting with them already on the calendar and still ahead (a reply never proposes new times over it)
+  const upcomingAt = events
+    .filter(
+      (e) =>
+        e.status !== 'cancelled' &&
+        e.attendeePersonIds?.includes(person.id) &&
+        new Date(e.startAt).getTime() > now.getTime(),
+    )
+    .sort((a, b) => a.startAt.localeCompare(b.startAt))[0]?.startAt;
   const windows =
     kind === 'schedule' || kind === 'reply'
       ? proposeWindows(busy, now, user.timezone, { seed: person.id })
@@ -447,9 +461,22 @@ export async function buildDraftContext(
   const latest = employment
     .filter((a) => a.isCurrent && a.startDate)
     .sort((a, b) => (b.startDate ?? '').localeCompare(a.startDate ?? ''))[0];
+  // the role it replaced: closed the day the new one opened (a re-import), so a same-company title change is not a "move"
+  const replaced = latest?.startDate
+    ? employment.find(
+        (a) => !a.isCurrent && a.endDate && a.endDate.slice(0, 10) === latest.startDate!.slice(0, 10),
+      )
+    : undefined;
   const newAffiliation =
     latest?.startDate && now.getTime() - new Date(latest.startDate).getTime() <= 120 * DAY
-      ? { title: latest.title, org: latest.nameRaw, since: latest.startDate }
+      ? {
+          title: latest.title,
+          org: latest.nameRaw,
+          since: latest.startDate,
+          previousOrg: replaced?.nameRaw,
+          // a LinkedIn re-import dates the change by when Orbit saw it, not when it happened
+          observed: latest.source === 'linkedin_csv' || undefined,
+        }
       : undefined;
   // referrer: on the chat, or the person who received an intro request for this person
   let referrerName = chat?.referrerName;
@@ -552,6 +579,7 @@ export async function buildDraftContext(
           warmUpNote,
           warmUpDone: warm?.done,
           commentedOnPost: commentedOnPost || undefined,
+          upcomingAt,
         }
       : referrerName
         ? { referrerName }
@@ -560,6 +588,7 @@ export async function buildDraftContext(
     news: inputs.news?.trim() || undefined,
     answer: inputs.answer?.trim() || undefined,
     takeaway: inputs.takeaway?.trim() || undefined,
+    reengage: s?.payload.reengage as DraftContext['reengage'] | undefined,
     history,
     promises: promises?.length ? promises : undefined,
     newAffiliation,
@@ -817,6 +846,56 @@ export async function regenerateDraft(
   return { ...msg, ...changes };
 }
 
+/**
+ * Redraft pending suggestion drafts the student has not touched when what they were drafted from has changed: notes
+ * with new facts arrived after a thank-you was drafted, or the calendar changed under proposed windows. The draft
+ * keeps its id; a redraft that would ask the student for something the current draft already has is not applied.
+ */
+export async function refreshPendingDrafts(
+  user: User,
+  scope: { personId?: string; kinds?: MessageKind[] } = {},
+): Promise<number> {
+  const pending = await db.suggestions
+    .where('userId')
+    .equals(user.id)
+    .filter(
+      (s) =>
+        s.status === 'pending' && !!s.outboundMessageId && (!scope.personId || s.personId === scope.personId),
+    )
+    .toArray();
+  let changed = 0;
+  for (const s of pending) {
+    const d = await db.outbound.get(s.outboundMessageId!);
+    if (d?.status !== 'draft' || d.bodyFinal !== undefined) continue;
+    if (scope.kinds && !scope.kinds.includes(d.kind)) continue;
+    const person = await db.people.get(d.personId);
+    if (!person) continue;
+    const chat = d.chatId ? await db.chats.get(d.chatId) : undefined;
+    const { out, generatedBy } = await materializeDraft(
+      user,
+      person,
+      d.kind,
+      d.channel as 'gmail' | 'linkedin',
+      s,
+      {},
+      chat,
+    );
+    const body = bodyFor(out, d.channel as 'gmail' | 'linkedin', d.kind, !!person.linkedinConnectedOn);
+    if (body === d.bodyDraft) continue;
+    if (out.needsInput.length > (d.needsInput?.length ?? 0)) continue;
+    await db.outbound.update(d.id, {
+      subject: d.externalThreadId ? d.subject : (out.subject ?? d.subject),
+      bodyDraft: body,
+      generatedBy,
+      claims: out.claims,
+      needsInput: out.needsInput.length ? out.needsInput : undefined,
+      opening: out.opening,
+    });
+    changed++;
+  }
+  return changed;
+}
+
 /** ⚡ rules: run the rule engine for one chat/person right away (reply received, note ingested, event changed). */
 export async function evaluateImmediateSuggestions(
   userId: string,
@@ -837,11 +916,56 @@ export async function evaluateImmediateSuggestions(
       'report_back',
     ].includes(c.kind),
   );
+  await retireStale(
+    userId,
+    cands,
+    new Set(inp.chats.map((c) => c.id)),
+    ['thank_you', 'schedule_propose', 'schedule_confirm', 'prep_brief'],
+    now,
+  );
   const scored = selectForBrief(cands, inp.dismissCounts, 5);
   const created = await upsertSuggestions(userId, scored, now);
   for (const s of created)
     if (!s.outboundMessageId && DRAFT_KIND[s.kind]) await draftForSuggestion(user, s, now);
   await addConfirmationCards(userId, now);
+}
+
+/** Suggestions that describe the state of a chat right now; they stop being true when that state changes. */
+const STATE_KINDS: SuggestionKind[] = [
+  'thank_you',
+  'schedule_propose',
+  'schedule_confirm',
+  'prep_brief',
+  'follow_up_bump',
+];
+
+/**
+ * Retire pending suggestions whose trigger is gone: a "confirm Thursday at 2pm" card once the chat is scheduled, a
+ * thank-you once it was sent from Gmail, times to propose once the meeting is on the calendar. Only chats the rules
+ * just looked at are touched, and only the kinds they were asked to produce.
+ */
+async function retireStale(
+  userId: string,
+  cands: { dedupeKey: string }[],
+  chatIds: Set<string>,
+  kinds: SuggestionKind[],
+  now: Date,
+): Promise<void> {
+  const live = new Set(cands.map((c) => c.dedupeKey));
+  const stale = await db.suggestions
+    .where('userId')
+    .equals(userId)
+    .filter(
+      (s) =>
+        s.status === 'pending' &&
+        kinds.includes(s.kind) &&
+        !!s.chatId &&
+        chatIds.has(s.chatId) &&
+        !live.has(s.dedupeKey),
+    )
+    .toArray();
+  for (const s of stale)
+    await db.suggestions.update(s.id, { status: 'expired', decidedAt: now.toISOString() });
 }
 
 async function addConfirmationCards(userId: string, now: Date): Promise<void> {
@@ -951,6 +1075,7 @@ export async function generateBrief(user: User, kind: Brief['kind'], now = new D
   await recomputeAllStrengths(user.id, now);
   const inp = await ruleInput(user.id, now);
   const cands = generateCandidates(inp);
+  await retireStale(user.id, cands, new Set(inp.chats.map((c) => c.id)), [...STATE_KINDS], now);
   const selected = selectForBrief(cands, inp.dismissCounts, 7);
   const briefId = existing?.id ?? newId('b');
   const sugg = await upsertSuggestions(user.id, selected, now, briefId);

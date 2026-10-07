@@ -15,10 +15,18 @@ export function linkedinMessageUrl(slug: string): string {
   return `https://www.linkedin.com/messaging/compose/?recipient=${encodeURIComponent(slug)}`;
 }
 
+/**
+ * The plan counts working days: people are on LinkedIn during the week, so no step is due on a Saturday or a Sunday
+ * (a warm-up started on Friday reacts on Tuesday, not Sunday).
+ */
 export function buildWarmUpPlan(slug: string, startedAt: Date, warmUpDays = 4): WarmUpPlan {
   const day = (n: number, h = 10) => {
     const d = new Date(startedAt);
-    d.setDate(d.getDate() + n);
+    let added = 0;
+    while (added < n) {
+      d.setDate(d.getDate() + 1);
+      if (d.getDay() !== 0 && d.getDay() !== 6) added++;
+    }
     d.setHours(h, 0, 0, 0);
     return d.toISOString();
   };

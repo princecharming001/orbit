@@ -13,7 +13,7 @@ import {
 import { addTouchpoint, notify, recomputePersonStrength } from '../db/repo';
 import { db } from '../db/schema';
 import { hasLlm, llmSignal, llmTriage } from '../integrations/anthropic';
-import { evaluateImmediateSuggestions } from './brief';
+import { evaluateImmediateSuggestions, refreshPendingDrafts } from './brief';
 import { loadPeopleCache, upsertPerson } from './people';
 import { evaluateTrigger } from './stages';
 
@@ -545,13 +545,29 @@ export async function ingestEvents(
           { table: 'events', id: ev.id },
           new Date(r.startAt),
         );
+      // the chat was completed when the meeting ended, not when Orbit read the calendar (a meeting from August is not
+      // "just now", and gets no thank-you card seven weeks late)
       await evaluateTrigger(
         chat,
         { type: 'event_ended', confidence: confidence >= 0.9 ? 0.95 : 0.7 },
         { table: 'events', id: ev.id },
-        now,
+        new Date(r.endAt),
       );
       await db.chats.update(chat.id, { completedAt: chat.completedAt ?? r.endAt });
+      chat.completedAt = chat.completedAt ?? r.endAt;
+      // a thank-you already sent after the meeting (mail is read before the calendar) moves the chat on
+      if (chat.stage === 'completed' && chat.threadId) {
+        const thanks = (await db.messages.where('threadId').equals(chat.threadId).sortBy('sentAt')).find(
+          (m) => m.direction === 'outbound' && m.signal === 'thank_you' && m.sentAt >= r.endAt,
+        );
+        if (thanks)
+          await evaluateTrigger(
+            chat,
+            { type: 'outbound_sent', kind: 'thank_you' },
+            { table: 'messages', id: thanks.id },
+            new Date(thanks.sentAt),
+          );
+      }
       await recomputePersonStrength(pid, now);
     } else {
       await evaluateTrigger(
@@ -563,6 +579,8 @@ export async function ingestEvents(
     }
     await evaluateImmediateSuggestions(user.id, { chatId: chat.id, personId: pid }, now);
   }
+  // proposed windows were drafted against the old calendar
+  if (count) await refreshPendingDrafts(user, { kinds: ['schedule', 'reply'] });
   return { events: count, chats: chatCount };
 }
 

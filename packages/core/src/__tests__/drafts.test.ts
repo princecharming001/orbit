@@ -16,10 +16,13 @@ import {
   promiseLine,
   proposeWindows,
   schoolShort,
+  sinceLabel,
   targetLabel,
+  whenLabel,
   wordsIn,
 } from '../drafts/templates';
 import { isBlocked, unsupportedDetails, validateDraft } from '../drafts/validate';
+import { declineReengage } from '../pipeline/transitions';
 import { defaultStyleCard } from '../style/card';
 import type { PersonFact } from '../types';
 
@@ -632,7 +635,9 @@ describe('audit round 1 regressions', () => {
         chat: { meetingAt: '2026-10-05T19:00:00Z' },
       }),
     );
-    expect(t.body).toMatch(/What you said about focusing on one concrete project story for interviews/);
+    expect(t.body).toMatch(/what you said about focusing on one concrete project story for interviews/i);
+    // what the student felt or did about it is not in the data, so it is never claimed
+    expect(t.body).not.toMatch(/putting it to use|started acting|acting on it|hadn't heard|kept thinking/i);
     expect(t.body).toMatch(/Thanks also for offering to refer me when the posting goes up/);
     expect(t.body).not.toMatch(/Alina offered|point that recommended|follow up on alina/i);
     const n = generateDraft(base({ kind: 'nurture', person: ALINA, facts: NOTE_FACTS }));
@@ -925,7 +930,8 @@ describe('audit round 1 regressions', () => {
     );
     expect(formal.body).toMatch(/^Dear Priya,/);
     expect(formal.body).not.toMatch(/Floating|buried|Totally|\b\w+'(m|ll|d|ve|re|s)\b/);
-    expect(formal.body).toMatch(/I wanted to follow up on my note from last week/);
+    // Sep 24 is the week before last from Tuesday Oct 6, so it is dated rather than called "last week"
+    expect(formal.body).toMatch(/I wanted to follow up on my note from September 24/);
     expect(formal.body).toMatch(/Kind regards,\nAlex$/);
   });
 
@@ -1314,5 +1320,188 @@ describe('audit round 1, expert gaps (EG, SND, UI-10)', () => {
       }),
     );
     expect(dated.body).toMatch(/my note from Thursday/);
+  });
+});
+
+describe('audit round 2 regressions', () => {
+  const WED = new Date('2026-10-07T14:00:00Z'); // Wednesday 10am in New York
+  const NY = 'America/New_York';
+
+  it('whenLabel and sinceLabel use calendar weeks; the week before last is dated', () => {
+    expect(whenLabel('2026-09-24T15:00:00Z', WED, NY)).toBe('on September 24');
+    expect(whenLabel('2026-09-30T15:00:00Z', WED, NY)).toBe('last week'); // Wednesday a week ago
+    expect(whenLabel('2026-10-02T15:00:00Z', WED, NY)).toBe('on Friday');
+    expect(whenLabel('2026-10-06T15:00:00Z', WED, NY)).toBe('yesterday');
+    expect(whenLabel('2025-12-01T15:00:00Z', WED, NY)).toBe('on December 1, 2025');
+    expect(sinceLabel('2026-10-05T15:00:00Z', WED, NY)).toBe('earlier this week');
+    expect(sinceLabel('2026-10-01T15:00:00Z', WED, NY)).toBe('last week');
+    expect(sinceLabel('2026-09-24T15:00:00Z', WED, NY)).toBe('a couple of weeks ago');
+    expect(sinceLabel('2026-09-10T15:00:00Z', WED, NY)).toBe('a few weeks ago');
+    const ty = generateDraft(
+      base({ kind: 'thank_you', facts: FACTS, now: WED, chat: { meetingAt: '2026-09-24T15:00:00Z' } }),
+    );
+    expect(ty.body).toMatch(/Thank you for making time on September 24/);
+    const bump = generateDraft(
+      base({
+        kind: 'bump',
+        now: WED,
+        seed: 'b2',
+        thread: { inThread: true, firstOutboundAt: '2026-09-24T14:00:00Z' },
+      }),
+    );
+    expect(bump.body).not.toMatch(/last week/);
+    const undated = generateDraft(base({ kind: 'bump', now: WED, seed: 'b2', thread: { inThread: true } }));
+    expect(undated.body).not.toMatch(/last week|from on/);
+  });
+
+  it('thank-you states what they said and never what the student felt or did', () => {
+    for (const seed of ['a', 'b', 'c', 'd', 'e', 'f']) {
+      for (const over of [
+        { facts: FACTS },
+        { facts: [], takeaway: 'to lead every interview answer with one project story' },
+        { facts: [fact('h', 'hook', 'they are hiring interns in January')] },
+      ]) {
+        const d = generateDraft(
+          base({ kind: 'thank_you', seed, chat: { meetingAt: '2026-10-05T19:00:00Z' }, ...over }),
+        );
+        expect(d.body).not.toMatch(
+          /putting it to use|started acting|acting on it|hadn't heard|kept thinking|keep coming back|this week/i,
+        );
+        expect(d.needsInput).toEqual([]);
+      }
+    }
+    const t = generateDraft(
+      base({
+        kind: 'thank_you',
+        seed: 'a',
+        facts: [],
+        takeaway: 'to lead every interview answer with one project story',
+        chat: { meetingAt: '2026-10-05T19:00:00Z' },
+      }),
+    );
+    expect(t.body).toMatch(/your advice to lead every interview answer with one project story/);
+  });
+
+  it('alumni and research openers never claim how the student found the person', () => {
+    const found =
+      /alumni page|alumni database|came across your profile|found you|while (reading|looking|researching)/i;
+    for (const seed of ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']) {
+      for (const channel of ['gmail', 'linkedin'] as const) {
+        const alum = generateDraft(base({ seed, channel }));
+        expect(alum.body, alum.body).not.toMatch(found);
+        expect(alum.bodyShort ?? '', alum.bodyShort).not.toMatch(found);
+        const trans = generateDraft(
+          base({
+            seed,
+            channel,
+            person: { ...base().person, isAlumni: false, previousOrg: 'Goldman Sachs' },
+          }),
+        );
+        expect(trans.body).not.toMatch(found);
+        const hook = generateDraft(
+          base({
+            seed,
+            channel,
+            person: { ...base().person, isAlumni: false },
+            facts: [fact('h', 'hook', 'they are hiring interns in January')],
+          }),
+        );
+        expect(hook.body).not.toMatch(found);
+      }
+    }
+    const note = generateDraft(base({ seed: 'a', channel: 'linkedin' })).bodyShort!;
+    expect(note.match(/Cornell/g)?.length ?? 0).toBeLessThanOrEqual(1);
+  });
+
+  it('a past proposed time is dated, and a meeting already on the calendar is confirmed, not moved', () => {
+    const thread = {
+      inThread: true,
+      lastSignal: 'scheduling_proposal',
+      proposedTimes: [{ startIso: '2026-10-01T15:30:00Z', raw: 'tomorrow 11:30' }],
+    };
+    const past = generateDraft(
+      base({
+        kind: 'reply',
+        now: WED,
+        thread,
+        proposedWindows: [{ startIso: '2026-10-09T14:00:00Z' }, { startIso: '2026-10-13T19:30:00Z' }],
+      }),
+    );
+    expect(past.body).toMatch(/Thursday, Oct 1 at 11:30am has already passed/);
+    expect(past.body).not.toMatch(/come and gone/);
+    const booked = generateDraft(
+      base({
+        kind: 'reply',
+        now: WED,
+        thread,
+        busy: [{ startIso: '2026-10-08T15:30:00Z', endIso: '2026-10-08T16:00:00Z', withPerson: true }],
+        chat: { upcomingAt: '2026-10-08T15:30:00Z' },
+        proposedWindows: [{ startIso: '2026-10-09T14:00:00Z' }],
+      }),
+    );
+    expect(booked.body).toMatch(/I have us down for Thursday, Oct 8 at 11:30am EDT/);
+    expect(booked.body).not.toMatch(/instead|Friday|has already passed/);
+    // they propose the very time that is already on the calendar with them: that is not a clash
+    const same = generateDraft(
+      base({
+        kind: 'reply',
+        now: WED,
+        thread: { ...thread, proposedTimes: [{ startIso: '2026-10-08T15:30:00Z', raw: 'Thursday 11:30' }] },
+        busy: [{ startIso: '2026-10-08T15:30:00Z', endIso: '2026-10-08T16:00:00Z', withPerson: true }],
+        chat: { upcomingAt: '2026-10-08T15:30:00Z' },
+      }),
+    );
+    expect(same.body).toMatch(/Thursday, Oct 8 at 11:30am EDT/);
+    expect(same.body).not.toMatch(/tight for me|instead/);
+  });
+
+  it('congratulate: a same-company title change is a new role, and an observed change is not assumed recent', () => {
+    const sameOrg = generateDraft(
+      base({
+        kind: 'congratulate',
+        newAffiliation: {
+          title: 'Staff Engineer',
+          org: 'Figma',
+          previousOrg: 'Figma',
+          since: '2026-10-06',
+          observed: true,
+        },
+      }),
+    );
+    expect(sameOrg.body).toMatch(/your new role as a staff engineer at Figma/i);
+    expect(sameOrg.body).not.toMatch(/move to Figma|first few weeks/);
+    expect(sameOrg.subject).toBe('Congratulations');
+    const moved = generateDraft(
+      base({
+        kind: 'congratulate',
+        newAffiliation: { title: 'Staff Engineer', org: 'Stripe', previousOrg: 'Figma', since: '2026-09-20' },
+      }),
+    );
+    expect(moved.body).toMatch(/your move to Stripe/);
+    expect(moved.body).toMatch(/first few weeks/);
+  });
+
+  it('a time-limited decline gives a re-engagement date; the second try quotes only what they said (EG-20)', () => {
+    const said = new Date(2026, 8, 19, 10); // Sep 19, local
+    const q = declineReengage('Unfortunately I am not able to take calls this quarter. Best of luck!', said)!;
+    expect(new Date(q.at).getMonth()).toBe(9); // October 1
+    expect(new Date(q.at).getDate()).toBe(1);
+    expect(q.said).toBe('this quarter');
+    const jan = declineReengage("I'm swamped until January, sorry.", said)!;
+    expect(new Date(jan.at).getFullYear()).toBe(2027);
+    expect(new Date(jan.at).getMonth()).toBe(0);
+    expect(declineReengage('Thanks, but I will pass.', said)).toBeUndefined();
+    const d = generateDraft(
+      base({
+        kind: 'nurture',
+        now: new Date('2026-10-20T14:00:00Z'),
+        thread: { inThread: true },
+        reengage: { said: q.said, past: q.past, at: said.toISOString() },
+      }),
+    );
+    expect(d.needsInput).toEqual([]);
+    expect(d.body).toMatch(/you mentioned last quarter wasn't a good time, so I wanted to try once more/);
+    expect(d.body).toMatch(/\b20 minutes/); // an alum: 20
+    expect(d.body).not.toMatch(/\[|No reply needed/);
   });
 });

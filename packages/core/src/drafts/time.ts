@@ -165,7 +165,32 @@ export function calendarDaysBetween(from: Date, to: Date, tz: string): number {
   return Math.round((Date.UTC(b.y, b.m - 1, b.d) - Date.UTC(a.y, a.m - 1, a.d)) / 86_400_000);
 }
 
-/** Where a past meeting sits relative to now: "this morning", "yesterday", "on Tuesday", "last week", "on September 12". */
+/** Monday-based calendar weeks between two instants on the wall clock in `tz` (0 = same week, 1 = last week). */
+export function calendarWeeksBetween(from: Date, to: Date, tz: string): number {
+  const a = partsIn(from, tz);
+  const b = partsIn(to, tz);
+  const monday = (y: number, m: number, d: number) => {
+    const t = Date.UTC(y, m - 1, d);
+    return t - ((new Date(t).getUTCDay() + 6) % 7) * 86_400_000;
+  };
+  return Math.round((monday(b.y, b.m, b.d) - monday(a.y, a.m, a.d)) / (7 * 86_400_000));
+}
+
+function monthDay(d: Date, now: Date, zone: string): string {
+  const sameYear = partsIn(d, zone).y === partsIn(now, zone).y;
+  return d.toLocaleDateString('en-US', {
+    month: 'long',
+    day: 'numeric',
+    ...(sameYear ? {} : { year: 'numeric' }),
+    timeZone: zone,
+  });
+}
+
+/**
+ * Where a past meeting sits relative to now, in calendar terms: "this morning", "yesterday", "on Tuesday" (within the
+ * last six days), "last week" (only when it was in the previous Monday-to-Sunday week), otherwise the date
+ * ("on September 24"), so a meeting from the week before last is never called "last week".
+ */
 export function whenLabel(iso: string | undefined, now: Date, tz: string): string | undefined {
   if (!iso) return undefined;
   const d = new Date(iso);
@@ -178,19 +203,28 @@ export function whenLabel(iso: string | undefined, now: Date, tz: string): strin
   }
   if (days === 1) return 'yesterday';
   if (days < 7) return `on ${d.toLocaleDateString('en-US', { weekday: 'long', timeZone: zone })}`;
-  if (days < 14) return 'last week';
-  return `on ${d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', timeZone: zone })}`;
+  if (calendarWeeksBetween(d, now, zone) === 1) return 'last week';
+  return `on ${monthDay(d, now, zone)}`;
 }
 
-/** For "since we talked ...": "last week", "a few weeks ago", "in September". */
+/**
+ * For "since we talked ...": "earlier this week", "last week" (the previous calendar week), "a couple of weeks ago",
+ * "a few weeks ago", "in September" (with the year when it was not this year).
+ */
 export function sinceLabel(iso: string | undefined, now: Date, tz: string): string | undefined {
   if (!iso) return undefined;
   const d = new Date(iso);
-  const days = calendarDaysBetween(d, now, tz);
+  if (Number.isNaN(d.getTime())) return undefined;
+  const zone = safeTz(tz);
+  const days = calendarDaysBetween(d, now, zone);
   if (days < 2) return undefined;
-  if (days < 14) return 'last week';
+  const weeks = calendarWeeksBetween(d, now, zone);
+  if (weeks === 0) return 'earlier this week';
+  if (weeks === 1) return 'last week';
+  if (weeks === 2) return 'a couple of weeks ago';
   if (days < 35) return 'a few weeks ago';
-  return `in ${d.toLocaleDateString('en-US', { month: 'long', timeZone: safeTz(tz) })}`;
+  const sameYear = partsIn(d, zone).y === partsIn(now, zone).y;
+  return `in ${d.toLocaleDateString('en-US', { month: 'long', ...(sameYear ? {} : { year: 'numeric' }), timeZone: zone })}`;
 }
 
 export function overlapsBusy(

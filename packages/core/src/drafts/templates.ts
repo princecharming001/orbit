@@ -84,6 +84,8 @@ export interface BusyBlock {
   startIso: string;
   endIso?: string;
   status?: string;
+  /** the recipient is on this event (a meeting with them, not a conflict with them) */
+  withPerson?: boolean;
 }
 
 export interface DraftContext {
@@ -152,6 +154,8 @@ export interface DraftContext {
     warmUpDone?: number;
     /** the student left a comment on one of their posts during the warm-up but did not say what it was about */
     commentedOnPost?: boolean;
+    /** a meeting with them already on the calendar, still ahead */
+    upcomingAt?: string;
   };
   /**
    * An earlier email exchange with this person, for outreach to someone the student already knows: when the last
@@ -169,10 +173,17 @@ export interface DraftContext {
   promises?: string[];
   /** the one thing the student took away from the conversation, when no note facts exist (thank-you) */
   takeaway?: string;
+  /** a second try after a time-limited decline: what they said and when (nurture) */
+  reengage?: { said: string; past: string; at: string };
   update?: string; // the student's own update, for nurture
   news?: string; // what the student is congratulating them on, when no affiliation change is on record
   answer?: string; // the student's answer to a question in the thread
-  newAffiliation?: { title?: string; org?: string; since?: string };
+  /**
+   * A job change on record. `previousOrg` is the employer of the role it replaced (a title change at the same company
+   * is a new role, not a move); `observed` means `since` is when Orbit noticed it (a LinkedIn re-import), not when it
+   * started, so the note does not assume it is recent.
+   */
+  newAffiliation?: { title?: string; org?: string; since?: string; previousOrg?: string; observed?: boolean };
   targetCompany?: {
     name: string;
     roleLabel?: string;
@@ -543,9 +554,10 @@ function opener(
       return {
         text: pick(
           [
-            // the school is named once: "at Cornell ... our alumni page", "went to Cornell too ... there now"
-            `I'm ${me}, and I found you on our alumni page while looking at ${where}.`,
-            `I came across your profile while reading about ${where} and saw you went to ${school} too. I'm ${situationNoSchool(ctx, now)} there now.`,
+            // only what the data says: they went to the student's school and are at `where` now (never how the
+            // student found them, which Orbit does not know); the school is named once
+            `I'm ${me}, and I saw that you went from ${school} to ${where}.`,
+            `You went to ${school} before ${where}, which is why I'm writing to you in particular. I'm ${situationNoSchool(ctx, now)} there now.`,
             ctx.user.oneLiner
               ? `I'm ${me}, and I noticed you went from ${school} to ${where}.`
               : `I'm ${situationNoSchool(ctx, now)} at ${school}, and I noticed you went from there to ${where}.`,
@@ -588,7 +600,7 @@ function opener(
       return {
         text: pick(
           [
-            `I'm ${me}, and I came across your profile while researching ${org ?? 'your team'}. I noticed you moved from ${c.previous} to ${role ? `${role}${org ? ` at ${org}` : ''}` : (org ?? 'your current role')}.`,
+            `I'm ${me}, and I noticed you moved from ${c.previous} to ${role ? `${role}${org ? ` at ${org}` : ''}` : (org ?? 'your current role')}.`,
             `I saw you went from ${c.previous} to ${org ?? 'your current role'}, and I'd like to understand how that happened. I'm ${me}.`,
           ],
           seed,
@@ -620,7 +632,7 @@ function opener(
       return {
         text: pick(
           [
-            `I'm ${me}, and I came across your profile while researching ${org ?? 'the field'}. I saw that ${c.text}, which is exactly what I'm trying to learn more about.`,
+            `I'm ${me}, and I saw that ${c.text}, which is exactly what I'm trying to learn more about.`,
             `I saw that ${c.text}, and that's what made me write. I'm ${me}.`,
           ],
           seed,
@@ -956,9 +968,11 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
     }
     case 'bump': {
       const n = ctx.bumpNumber ?? 1;
-      const noteWhen = ctx.thread?.firstOutboundAt
-        ? (whenLabel(ctx.thread.firstOutboundAt, now, tz) ?? 'last week').replace(/^on /, '')
-        : 'last week';
+      // "my note from Thursday", "my note from last week", "my note from September 24"; undated when unknown
+      const noteDate = ctx.thread?.firstOutboundAt
+        ? whenLabel(ctx.thread.firstOutboundAt, now, tz)?.replace(/^on /, '')
+        : undefined;
+      const myNote = noteDate ? `my note from ${noteDate}` : 'my earlier note';
       if (n >= 2) {
         body = `${G}\n\n${
           formal
@@ -980,11 +994,11 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
             : '';
         body = `${G}\n\n${
           formal
-            ? `I wanted to follow up on my note from ${noteWhen} in case it was missed. If ${minutes} minutes in the coming weeks would be possible${topic}, I would be grateful, and if someone else on your team would be better placed, a pointer would be very helpful.`
+            ? `I wanted to follow up on ${myNote} in case it was missed. If ${minutes} minutes in the coming weeks would be possible${topic}, I would be grateful, and if someone else on your team would be better placed, a pointer would be very helpful.`
             : pick(
                 [
                   `Floating this back up in case it got buried. I'd still love ${minutes} minutes whenever it's convenient${topic}, and if someone else on your team would be a better person to ask, I'd be grateful for a pointer.`,
-                  `Just surfacing my note from ${noteWhen} in case it got buried. Totally understand if the timing isn't right; even ${minutes} minutes whenever it's convenient would help${topic}.`,
+                  `Just surfacing ${myNote} in case it got buried. Totally understand if the timing isn't right; even ${minutes} minutes whenever it's convenient would help${topic}.`,
                   `Following up on my note in case it got lost. I'd still value ${minutes} minutes in the next couple of weeks${topic}, and completely understand if now isn't a good time.`,
                 ],
                 seed,
@@ -1030,8 +1044,31 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       const parts: string[] = [];
       let confirmed = false;
       let offeredTimes = false;
-      const free = future.find((t) => !overlapsBusy(t.startIso, 30, ctx.busy ?? []));
-      if (free) {
+      // a meeting with them already on the calendar is the answer, not a reason to propose new times
+      const withThem = (ctx.busy ?? []).filter((b) => b.withPerson && b.status !== 'cancelled');
+      const isBooked = (iso: string) =>
+        withThem.some(
+          (b) => Math.abs(new Date(b.startIso).getTime() - new Date(iso).getTime()) < 30 * 60_000,
+        );
+      const booked =
+        ctx.chat?.upcomingAt && new Date(ctx.chat.upcomingAt).getTime() > now.getTime()
+          ? ctx.chat.upcomingAt
+          : undefined;
+      const free = future.find(
+        (t) =>
+          !overlapsBusy(
+            t.startIso,
+            30,
+            (ctx.busy ?? []).filter((b) => !b.withPerson),
+          ),
+      );
+      if (booked && !future.some((t) => !isBooked(t.startIso))) {
+        parts.push(
+          `I have us down for ${fmtWindow({ startIso: booked }, tz)} ${tzAbbr(tz, new Date(booked))}, and I've got the invite.`,
+        );
+        claims.push({ text: `meeting on the calendar ${booked}`, kind: 'logistics' });
+        confirmed = true;
+      } else if (free) {
         parts.push(
           `${fmtWindow(free, tz)} ${tzAbbr(tz, new Date(free.startIso))} works. I'll send a calendar invite with a video link; if you'd rather do a phone call, just say so.`,
         );
@@ -1055,7 +1092,7 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
         const t = future[0] ?? proposed[0]!;
         const lead = future.length
           ? `${fmtWindow(t, tz)} is tight for me, sorry.`
-          : `Sorry for the slow reply; ${fmtWindow(t, tz).replace(/, \w+ \d+ at/, ' at')} has come and gone.`;
+          : `Sorry for the slow reply; ${fmtWindow(t, tz)} has already passed.`;
         parts.push(
           windowsText
             ? `${lead} Could you do ${windowsText} instead?`
@@ -1127,28 +1164,24 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       const advice = fact(['advice', 'preference'], (c) => !!pointPhrase(c));
       const offer = fact(['offer'], (c) => !!offerPhrase(c));
       const hook = advice ? undefined : fact(HOOK_TYPES, (c) => !!hookProposition(c));
+      const thanks = `Thank you for making time ${when ?? 'to talk'}`;
+      // Only what they said is stated. What the student felt or did about it is not in the data, so the note never
+      // claims it ("I'm putting it to use this week"); the student can add it in the editor.
       let line1: string;
       const point = pointPhrase(advice?.c);
       if (point) {
-        line1 = pick(
-          [
-            `${cap1(point)} is something I hadn't heard before, and I'm putting it to use this week.`,
-            `I keep coming back to ${point}, and I've already started acting on it.`,
-          ],
-          seed,
-          'ty1',
-        );
+        line1 = pointLine(thanks, point, seed);
         cite(advice);
       } else if (hook) {
-        line1 = `I kept thinking about what you said about your work, especially that ${firstPart(hookProposition(hook.c)!)}.`;
+        line1 = `${thanks}. It was good to hear more about your work, especially that ${firstPart(hookProposition(hook.c)!)}.`;
         cite(hook);
       } else if (ctx.takeaway?.trim()) {
-        line1 = takeawayLine(ctx.takeaway, P, seed);
+        line1 = pointLine(thanks, takeawayPhrase(ctx.takeaway, P), seed);
         claims.push({ text: `takeaway: ${strip(ctx.takeaway)}`, kind: 'about_person' });
       } else {
         // a thank-you with nothing they said in it is the generic note the playbook forbids: ask the student
         needsInput.push('takeaway');
-        line1 = `[One thing ${first} said that stuck with you, and what you are doing about it]`;
+        line1 = `${thanks}. [One thing ${first} said that stuck with you]`;
       }
       let line2 = '';
       const op = offerPhrase(offer?.c);
@@ -1161,7 +1194,7 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       if (promise) claims.push({ text: `promise: ${promise}`, kind: 'logistics' });
       const line3 = promise ? ` ${promise}` : '';
       const cycle = cyclePhrase(ctx.user.cycleLabel);
-      body = `${G}\n\nThank you for making time ${when ?? 'to talk'}. ${line1}${line2}${line3}\n\n${pick([`I'll let you know how ${cycle} goes. Would it be alright to send a question your way if one comes up?`, `I'll keep you posted on how ${cycle} goes, and if there's ever anything I can do for you, please say so.`], seed, 'ty-close')}\n\n${S}`;
+      body = `${G}\n\n${line1}${line2}${line3}\n\n${pick([`I'll let you know how ${cycle} goes. Would it be alright to send a question your way if one comes up?`, `I'll keep you posted on how ${cycle} goes, and if there's ever anything I can do for you, please say so.`], seed, 'ty-close')}\n\n${S}`;
       subject = threaded
         ? undefined
         : when
@@ -1170,6 +1203,19 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       break;
     }
     case 'nurture': {
+      if (ctx.reengage) {
+        // they said "not this quarter": one short second try that quotes nothing but what they said
+        const re = ctx.reengage;
+        const when = sinceLabel(re.at, now, tz);
+        claims.push({ text: `${first} said not ${re.said}`, kind: 'shared' });
+        body = `${G}\n\nWhen we emailed${when ? ` ${when}` : ''}, you mentioned ${re.past}, so I wanted to try once more. ${
+          formal
+            ? `Would you have ${minutes} minutes in the next few weeks? I completely understand if it is still a busy stretch.`
+            : `Would you have ${minutes} minutes sometime in the next few weeks? Completely understand if it's still a busy stretch, and thanks either way.`
+        }\n\n${S}`;
+        subject = threaded ? undefined : (reSubject ?? `${school} ${yl}, trying once more`);
+        break;
+      }
       const hook = fact(['hook'], (c) => !!hookProposition(c));
       const advice = fact(['advice'], (c) => !!pointPhrase(c));
       const since = sinceLabel(meetingAt, now, tz);
@@ -1208,10 +1254,14 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       const na = ctx.newAffiliation;
       const news = ctx.news?.trim();
       let what: string | undefined;
-      if (na?.org && na.title)
-        what = `your move to ${na.org} as ${article(roleNoun(na.title)!)} ${roleNoun(na.title)}`;
-      else if (na?.org) what = `your move to ${na.org}`;
-      else if (na?.title) what = `the new role as ${roleNoun(na.title)}`;
+      const sameOrg =
+        !!na?.org && !!na.previousOrg && na.org.trim().toLowerCase() === na.previousOrg.trim().toLowerCase();
+      const newRole = na?.title ? roleNoun(na.title) : undefined;
+      if (na?.org && newRole && sameOrg)
+        what = `your new role as ${article(newRole)} ${newRole} at ${na.org}`;
+      else if (na?.org && newRole) what = `your move to ${na.org} as ${article(newRole)} ${newRole}`;
+      else if (na?.org && !sameOrg) what = `your move to ${na.org}`;
+      else if (newRole) what = `your new role as ${article(newRole)} ${newRole}`;
       else if (news) what = softLower(strip(news).replace(/^(congratulations|congrats) on\s+/i, ''));
       if (!what) {
         needsInput.push('news');
@@ -1224,13 +1274,18 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
         ['preference', 'advice'],
         (c) => c.you && /^(wanted|wants|hoped|hopes|planned|plans|said)$/.test(c.verb ?? ''),
       );
-      const recent = na?.since && now.getTime() - new Date(na.since).getTime() < 60 * 86_400_000;
+      const recent =
+        !!na?.since && !na.observed && now.getTime() - new Date(na.since).getTime() < 60 * 86_400_000;
       const tieLine = tie
         ? ` I remember ${tie.c.text.replace(/^you /, 'you saying you ')}, so this sounds like a great fit.`
         : '';
       if (tie) cite(tie);
       body = `${G}\n\nJust saw the news about ${what}. Congratulations${tie ? '.' : ', well deserved.'}${tieLine}${recent ? ' Hope the first few weeks are going well.' : ''}\n\n${S}`;
-      subject = threaded ? undefined : na?.org ? `Congratulations on ${na.org}` : 'Congratulations';
+      subject = threaded
+        ? undefined
+        : na?.org && !sameOrg && what.startsWith('your move')
+          ? `Congratulations on ${na.org}`
+          : 'Congratulations';
       break;
     }
     case 'referral_ask': {
@@ -1372,28 +1427,29 @@ export function promiseLine(text: string): string | undefined {
   return `As promised, I'll ${rest.replace(/\b(them|him|her)\b/g, 'you')}.`;
 }
 
-/** The student's own takeaway, typed in the editor, as a sentence addressed to the person. */
-function takeawayLine(raw: string, person: DraftContext['person'], seed: string): string {
+/** "Thank you for making time yesterday, and especially for your advice to ..." (nothing the student did is claimed). */
+function pointLine(thanks: string, phrase: string, seed: string): string {
+  return pick(
+    [`${thanks}, and especially for ${phrase}.`, `${thanks}. I really appreciated ${phrase}.`],
+    seed,
+    'ty1',
+  );
+}
+
+/** The student's own takeaway, typed in the editor, as a phrase addressed to the person ("your advice to ..."). */
+function takeawayPhrase(raw: string, person: DraftContext['person']): string {
   const t = strip(raw).replace(/^that\s+/i, '');
   const c = clause(t, person);
   let phrase: string | undefined;
   if (c?.you) {
     phrase = pointPhrase(c);
-    if (!phrase && hookProposition(c))
-      return `I kept thinking about what you said about your work, especially that ${firstPart(hookProposition(c)!)}.`;
+    if (!phrase && hookProposition(c)) phrase = `telling me that ${firstPart(hookProposition(c)!)}`;
   }
   if (!phrase && c && /^your (point|advice|idea|line|comment|suggestion|story|take)\b/.test(c.text))
     phrase = c.text;
   if (!phrase && /^to\s/i.test(t)) phrase = `your advice ${lower1(t)}`;
   if (!phrase) phrase = `what you said about ${softLower(t.replace(/^about\s+/i, ''))}`;
-  return pick(
-    [
-      `${cap1(phrase)} is something I hadn't heard before, and I'm putting it to use this week.`,
-      `I keep coming back to ${phrase}, and I've already started acting on it.`,
-    ],
-    seed,
-    'ty1',
-  );
+  return phrase;
 }
 
 function shortQuestion(q: string): string {
@@ -1403,7 +1459,6 @@ function shortQuestion(q: string): string {
 /** One short clause for the LinkedIn note, from the connection. */
 function shortConnection(ctx: DraftContext, c: Connection): string {
   const org = ctx.person.org;
-  const school = schoolShort(ctx.user.school);
   switch (c.kind) {
     case 'prior_thread':
       return reconnectLine(ctx, c, ctx.now ?? new Date()).replace(/, and (sorry|I wanted).*\.$/, '.');
@@ -1412,7 +1467,8 @@ function shortConnection(ctx: DraftContext, c: Connection): string {
     case 'event':
       return c.eventName ? `I was at the ${c.eventName.replace(/^the\s+/i, '')}.` : `${cap1(c.text)}.`;
     case 'alumni':
-      return `Found you on the ${school} alumni page${org ? ` while looking at ${org}` : ''}.`;
+      // the note already opens with "{school} {year} here", so the school is not named again
+      return `Saw you're an alum too${org ? `, now at ${org}` : ''}.`;
     case 'transition':
       return `Saw you went from ${c.previous} to ${org ?? 'your current role'}, which is the path I'm trying to understand.`;
     case 'shared_employer':
@@ -1452,6 +1508,9 @@ export function contextText(ctx: DraftContext): string {
     classYear(ctx.user.gradYear),
     ...windows,
     ...proposed,
+    ctx.chat?.upcomingAt
+      ? `${fmtWindow({ startIso: ctx.chat.upcomingAt }, tz)} ${tzAbbr(tz, new Date(ctx.chat.upcomingAt))}`
+      : '',
     whenLabel(ctx.chat?.meetingAt ?? ctx.chat?.completedAt, now, tz) ?? '',
     whenLabel(ctx.thread?.firstOutboundAt, now, tz) ?? '',
     ctx.history ? `emailed before ${sinceLabel(ctx.history.lastAt, now, tz) ?? ''}` : '',

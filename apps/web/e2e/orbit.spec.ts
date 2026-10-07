@@ -39,15 +39,10 @@ test.describe('Orbit demo flow', () => {
     await card.locator('button.line-clamp-2').click();
     const textarea = card.getByLabel('Message body');
     await expect(textarea).toBeVisible();
-    // a thank-you drafted before any notes exist asks for one thing they said (never a generic thank-you)
-    if (await card.getByTestId('draft-needs-input').isVisible()) {
-      await card
-        .getByTestId('draft-input-takeaway')
-        .fill('to lead every interview answer with one project story');
-      await card.getByTestId('draft-redraft').click();
-      await expect(card.getByTestId('draft-needs-input')).toBeHidden({ timeout: 15_000 });
-      await expect(textarea).not.toHaveValue(/\[/);
-    }
+    // the demo's notes are in, so the stored thank-you already quotes what they said: no prompt, no placeholder
+    await expect(card.getByTestId('draft-needs-input')).toBeHidden();
+    await expect(textarea).not.toHaveValue(/\[/);
+    await expect(textarea).toHaveValue(/what you said about|your advice|your point/i);
     await textarea.fill(`${await textarea.inputValue()}\n\nPS edited in e2e`);
     await card.getByRole('button', { name: /approve & send/i }).click();
     await expect(page.getByText(/opened in your mail app|sent to/i)).toBeVisible({ timeout: 15_000 });
@@ -55,6 +50,12 @@ test.describe('Orbit demo flow', () => {
     await page.getByRole('tab', { name: /sent/i }).click();
     await expect(page.getByText('PS edited in e2e')).toBeVisible();
     await expect(page.getByRole('link', { name })).toBeVisible();
+    // minutes after the thank-you, "Write to" does not draft a check-in
+    await page.getByRole('link', { name }).first().click();
+    await expect(page).toHaveURL(/\/people\//);
+    await page.getByTestId('person-write').click();
+    await expect(page.getByText(/a check-in fits in a few weeks/i)).toBeVisible();
+    await expect(page.getByLabel('Message body')).toBeHidden();
   });
 
   test('warm-up card: mark done, see progress', async ({ page }) => {

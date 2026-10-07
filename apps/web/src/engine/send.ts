@@ -1,5 +1,5 @@
 import type { OutboundMessage, Suggestion, User } from '@orbit/core';
-import { linkedinMessageUrl, maxBumpsFor, sectorOf, sha256Hex } from '@orbit/core';
+import { linkedinMessageUrl, maxBumpsFor, relTime, sectorOf, sha256Hex } from '@orbit/core';
 import { addTouchpoint, audit, feedback, notify, recomputePersonStrength } from '../db/repo';
 import { db } from '../db/schema';
 import { gmailSend } from '../integrations/google';
@@ -49,7 +49,7 @@ export async function checkSendAllowed(
     if (!repliedSince && kind !== 'reply')
       return {
         allowed: false,
-        reason: `You wrote to ${person.firstName} ${Math.round((now.getTime() - new Date(last.sentAt).getTime()) / 3_600_000)} hours ago and they haven't replied yet.`,
+        reason: `You wrote to ${person.firstName} ${relTime(last.sentAt, now)} and they haven't replied yet.`,
       };
   }
   const chat = await db.chats

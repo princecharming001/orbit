@@ -161,6 +161,33 @@ describe('suggestions over the demo dataset', () => {
     expect(kinds).toContain('warm_up_engage');
     expect(kinds).toContain('nurture_checkin');
   });
+  it('a "not this quarter" decline comes back once the quarter and three weeks have passed (EG-20)', () => {
+    const at = (d: Date) =>
+      generateCandidates({
+        userId: ds.user.id,
+        now: d,
+        settings: ds.settings,
+        people,
+        chats: ds.chats,
+        lastInboundByChat: lastInbound,
+        events: ds.events,
+        actionItems: [],
+        factsByPerson,
+        targetCompanies: ds.targetCompanies,
+        recommendations: [],
+        dismissCounts: new Map(),
+        outreachSentThisWeek: 0,
+        freeSlotsIso: [],
+        recentlyContacted: new Set(),
+      }).filter((c) => c.dedupeKey.startsWith('reengage:'));
+    expect(cands.some((c) => c.dedupeKey.startsWith('reengage:'))).toBe(false); // said 18 days ago
+    const later = at(new Date('2026-10-12T13:00:00Z'));
+    expect(later).toHaveLength(1);
+    expect(later[0]!.kind).toBe('reconnect');
+    expect(later[0]!.reasonText).toMatch(/said not this quarter/);
+    expect(later[0]!.payload.reengage).toMatchObject({ said: 'this quarter' });
+    expect(at(new Date('2027-01-20T13:00:00Z'))).toHaveLength(0); // the window to try again has passed too
+  });
   it('selects at most 7 with hard-urgent first and one per person', () => {
     const sel = selectForBrief(cands, new Map());
     expect(sel.length).toBeLessThanOrEqual(7);
