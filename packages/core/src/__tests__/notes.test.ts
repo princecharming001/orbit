@@ -77,6 +77,33 @@ describe('NRC-04: dictated notes', () => {
   });
 });
 
+describe('proper nouns in a dictated note (L20)', () => {
+  const dictated = `ok so just talked to maya from figma um she said the new grad process opens in like august and she grew up in new york but she's from houston originally and she speaks spanish`;
+  it('capitalises places, languages and the employer, wherever the fact is stored', () => {
+    const r = heuristicNoteExtraction(dictated, {
+      people: [{ key: 'm', first: 'Maya', last: 'Wu' }],
+      organizations: ['Figma'],
+    });
+    const all = [...r.facts.flatMap((f) => [f.text, f.evidence ?? '']), r.summary].join(' | ');
+    expect(all).toMatch(/\bHouston\b/);
+    expect(all).toMatch(/\bNew York\b/);
+    expect(all).not.toMatch(/\b(houston|new york|figma|august|spanish)\b/);
+    expect(r.summary).toMatch(/Maya from Figma/);
+    expect(r.facts.map((f) => f.text)).toContain("She's from Houston originally");
+  });
+  it('recases "may" only as the month, and an everyday word only where it names the employer', () => {
+    const r = heuristicNoteExtraction(
+      'she may have an opening on her team in may. she said my target role is a good fit at target.',
+      { people: [{ key: 'm', first: 'Maya' }], organizations: ['Target'] },
+    );
+    const all = [...r.facts.flatMap((f) => [f.text, f.evidence ?? '']), r.summary].join(' | ');
+    expect(all).toMatch(/\bmay have\b/);
+    expect(all).not.toMatch(/\bMay have\b/);
+    expect(all).toMatch(/\bin May\b/);
+    expect(all).not.toMatch(/\bmy Target role\b/);
+  });
+});
+
 describe('NRC-14: advice is not a promise', () => {
   it('keeps "she recommended I apply" as advice without a made-up due date', () => {
     const r = heuristicNoteExtraction('She recommended I apply to the APM program.', 'Maya');

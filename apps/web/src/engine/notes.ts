@@ -444,6 +444,7 @@ export async function processNote(user: User, note: MeetingNote, now = new Date(
     heuristicNoteExtraction(note.rawSummary ?? note.rawText, {
       people: notePeople.map((p) => ({ key: p.id, first: p.firstName, last: p.lastName || undefined })),
       userNames: [user.fullName, user.firstName].filter(Boolean),
+      organizations: notePeople.map((p) => p.currentOrganizationRaw).filter((o): o is string => !!o),
     });
   await db.notes.update(note.id, { extraction: ext, summary: ext.summary, processedAt: now.toISOString() });
   note.extraction = ext;

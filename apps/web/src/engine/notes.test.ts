@@ -80,6 +80,9 @@ Priya Patel: No guarantee of course, the process is pretty competitive, but I'll
     expect(facts.find((f) => f.type === 'offer')?.text).toBe(
       'She offered to forward my resume to her recruiter if I send it over',
     );
+    // L20: places and the employer are capitalised, on the Person page and in the note summary
+    expect(facts.map((f) => f.text)).toContain("She's from Houston originally");
+    expect((await db.notes.toArray())[0]!.summary).toMatch(/\bMaya from Figma\b/);
     const [item] = await db.actionItems.where('personId').equals(maya.id).toArray();
     expect(item!.text).toBe('Send my resume to Maya by tomorrow');
     expect(item!.dueAt).toBe('2026-10-03T21:00:00.000Z'); // Saturday 5 pm in New York
@@ -161,14 +164,21 @@ describe('note facts in drafts and on the person', () => {
       'She offered to refer me to the APM program',
       'She recommended I apply early',
     ]);
-    const ask = await draftMessage(user, priya.id, 'referral_ask', 'gmail');
-    expect(ask.bodyDraft).toMatch(/offer(ed|ing) to refer me to the APM program/);
-    for (const kind of ['referral_ask', 'thank_you', 'nurture'] as const) {
-      const d = await draftMessage(user, priya.id, kind, 'gmail');
-      expect(d.bodyDraft).not.toMatch(
-        /\b(to|on|mentioned) (you|she) offered\b|\bwas I should\b|\bi should\b/,
-      );
-    }
+    // the facts are spliced in the second person and as grammatical clauses, never pasted after a frame
+    // ("was recommended I apply", "your advice about recommended", "you mentioned offered to")
+    const spliceErrors =
+      /\b(to|on|about|was|mentioned|that) (you |she )?(offered|recommended|suggested)\b|\b(she|he) (offered|recommended)\b|\bI should\b/i;
+    const ask = (await draftMessage(user, priya.id, 'referral_ask', 'gmail')).bodyDraft;
+    expect(ask).toMatch(/\byou (kindly )?offered to refer me to the APM program\b/);
+    expect(ask).not.toMatch(spliceErrors);
+    const thanks = (await draftMessage(user, priya.id, 'thank_you', 'gmail')).bodyDraft;
+    expect(thanks).toMatch(/\b(your advice (that I|to)|you (recommended|suggested) I) apply early\b/);
+    expect(thanks).toMatch(/\boffering to refer me to the APM program\b/);
+    expect(thanks).not.toMatch(spliceErrors);
+    // a check-in only quotes a fact it can phrase; otherwise it asks the student for an update
+    const nurture = (await draftMessage(user, priya.id, 'nurture', 'gmail')).bodyDraft;
+    expect(nurture).not.toMatch(spliceErrors);
+    expect(nurture).not.toMatch(/\brecommended I apply\b|\boffered to refer\b/);
     const p = (await db.people.get(priya.id))!;
     expect(p.summary).toMatch(
       /She recommended I apply early\. She offered to refer me to the APM program\.$/,

@@ -168,7 +168,7 @@ Daniel is pretty busy this quarter and couldn't promise anything. He said the be
     facts: [
       { type: 'hook', text: 'The new grad process opens in August' },
       { type: 'offer', text: 'She offered to forward my resume to her recruiter if I send it over' },
-      { type: 'personal', text: "She's from houston originally" },
+      { type: 'personal', text: "She's from Houston originally" },
       { type: 'advice', text: 'The key thing for the interviews is to practice product sense cases' },
     ],
     actions: [{ text: 'Send my resume to Maya by tomorrow', due: /tomorrow/i }],
@@ -189,7 +189,7 @@ Daniel is pretty busy this quarter and couldn't promise anything. He said the be
     facts: [
       { type: 'hook', text: /^They're hiring two interns for the payments team next summer$/ },
       { type: 'offer', text: /^She offered to look over my resume before I apply$/ },
-      { type: 'personal', text: /^She grew up in austin and loves bouldering$/ },
+      { type: 'personal', text: /^She grew up in Austin and loves bouldering$/ },
     ],
   },
   {
@@ -216,10 +216,10 @@ Daniel is pretty busy this quarter and couldn't promise anything. He said the be
     facts: [
       {
         type: 'offer',
-        text: 'Elena offered to introduce me to a consultant in the dc office',
+        text: 'Elena offered to introduce me to a consultant in the DC office',
         about: 'elena',
       },
-      { type: 'personal', text: /^Tom moved from chicago last month$/, about: 'tom' },
+      { type: 'personal', text: /^Tom moved from Chicago last month$/, about: 'tom' },
       { type: 'personal', text: /^He's training for a marathon$/, about: 'tom' },
     ],
   },
