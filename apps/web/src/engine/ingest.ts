@@ -353,16 +353,22 @@ export async function ingestEmails(
       }
       // networking: chats + signals + stages. 1:1 threads and small threads (an intro with one or two people on CC)
       // are read; larger group threads only count as touchpoints and co-thread edges.
-      if (
-        thread.isNetworking &&
-        thread.participantPersonIds.length >= 1 &&
-        thread.participantPersonIds.length <= 3
-      )
-        await processNetworkingThread(user, thread, newMessages, all, useLlm, now);
-      // a group email that introduces the student to someone opens a card for that person (a small intro thread
-      // read above may already have opened it; this records the intro and fills in only what is missing)
+      const small = thread.participantPersonIds.length >= 1 && thread.participantPersonIds.length <= 3;
+      // a group email that introduces the student to someone opens a card for that person first, so the answers
+      // that arrive in the same sync (the person's reply-all with a time, the student's "moving Lena to bcc") reach
+      // that card in the networking pass below instead of being lost
       if (thread.participantPersonIds.length > 1)
-        await processIntroductions(user, thread, newMessages, [...userEmails], now);
+        await processIntroductions(user, thread, newMessages, [...userEmails], now, {
+          repliesReadLater: small,
+        });
+      if (thread.introduction && !thread.isNetworking) {
+        // the answers to an introduction come in its thread
+        thread.isNetworking = true;
+        await db.threads.update(thread.id, { isNetworking: true });
+        stats.networking++;
+      }
+      if (thread.isNetworking && small)
+        await processNetworkingThread(user, thread, newMessages, all, useLlm, now);
       for (const pid of thread.participantPersonIds) await recomputePersonStrength(pid, now);
     }
     done++;
@@ -453,10 +459,16 @@ async function processNetworkingThread(
     (e) => byEmail(e) && byEmail(e)!.id !== counterpartId,
   );
   const beganOneToOne = othersOnFirst.length === 0;
+  // (a card an introduction opened for the counterpart in this very thread is bound to it: "Thanks for the warm
+  // intro, Lena. Alex, happy to chat" is the first message Orbit sees when the intro predates the sync)
   if (!chat || chat.personId !== counterpartId)
     chat = beganOneToOne
       ? await db.chats.where('personId').equals(counterpartId).filter(ACTIVE).first()
-      : undefined;
+      : await db.chats
+          .where('personId')
+          .equals(counterpartId)
+          .filter((c) => ACTIVE(c) && c.threadId === thread.id)
+          .first();
   if (!chat && beganOneToOne) {
     const firstOut = all.find((m) => m.direction === 'outbound');
     chat = {

@@ -7,6 +7,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { feedback } from '../db/repo';
 import { db } from '../db/schema';
 import { markWarmUpAction } from '../engine/brief';
+import { answerIntroductionQuestion } from '../engine/introductions';
 import { mergePeople } from '../engine/people';
 import { dismissSuggestion, snoozeSuggestion } from '../engine/send';
 import { decideProposedStage } from '../engine/stages';
@@ -36,6 +37,7 @@ export const KIND_LABEL: Record<
   confirm_stage: { label: 'Confirm', tone: 'neutral' },
   confirm_merge: { label: 'Same person?', tone: 'neutral' },
   confirm_note_match: { label: 'Match note', tone: 'neutral' },
+  confirm_intro: { label: 'Introduction?', tone: 'neutral' },
 };
 
 export function SuggestionCard({ s, compact }: { s: Suggestion; compact?: boolean }) {
@@ -54,6 +56,7 @@ export function SuggestionCard({ s, compact }: { s: Suggestion; compact?: boolea
   );
   const chat = useLiveQuery(() => (s.chatId ? db.chats.get(s.chatId) : undefined), [s.chatId]);
   const other = useOther(s.payload.otherPersonId as string | undefined);
+  const introducer = useOther(s.payload.introducerId as string | undefined);
   const warmAction = chat?.warmUp?.actions.find((a) => a.id === (s.payload.actionId as string));
   const comment = useMemo(
     () =>
@@ -102,6 +105,22 @@ export function SuggestionCard({ s, compact }: { s: Suggestion; compact?: boolea
       await feedback(user.id, 'merge_reject', { refTable: 'merges', refId: mergeId });
     }
     await db.suggestions.update(s.id, { status: 'done', decidedAt: new Date().toISOString() });
+  };
+  const answerIntro = async (yes: boolean) => {
+    setBusy(true);
+    try {
+      await answerIntroductionQuestion(user, s.payload.threadId as string, yes);
+      toast.push(
+        yes
+          ? {
+              text: `Added to your pipeline, with ${introducer?.firstName ?? 'them'} as the referrer.`,
+              tone: 'good',
+            }
+          : { text: 'Got it. Orbit will not ask about this thread again.' },
+      );
+    } finally {
+      setBusy(false);
+    }
   };
   const warmDone = async (done: boolean) => {
     if (!s.chatId) return;
@@ -304,6 +323,16 @@ export function SuggestionCard({ s, compact }: { s: Suggestion; compact?: boolea
               <Button onClick={() => confirmMerge(false)}>Keep separate</Button>
             </div>
           )}
+          {s.kind === 'confirm_intro' && (
+            <div className="mt-2 flex flex-wrap gap-2">
+              <Button size="sm" variant="primary" disabled={busy} onClick={() => answerIntro(true)}>
+                Yes
+              </Button>
+              <Button size="sm" disabled={busy} onClick={() => answerIntro(false)}>
+                No
+              </Button>
+            </div>
+          )}
           {s.kind === 'confirm_note_match' && (
             <div className="mt-3 flex gap-2">
               <Button variant="primary" onClick={() => nav(`/notes/new?note=${s.payload.noteId as string}`)}>
@@ -330,7 +359,7 @@ export function SuggestionCard({ s, compact }: { s: Suggestion; compact?: boolea
           </button>
         )}
       </div>
-      {!['confirm_stage', 'confirm_merge'].includes(s.kind) && (
+      {!['confirm_stage', 'confirm_merge', 'confirm_intro'].includes(s.kind) && (
         <div className="mt-3 pt-3 border-t border-line-2 flex flex-wrap items-center gap-1 text-[12px]">
           {!dismissing ? (
             <>

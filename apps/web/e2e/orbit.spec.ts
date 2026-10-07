@@ -101,6 +101,44 @@ test.describe('Orbit demo flow', () => {
     await expect(page.getByLabel('Message body')).toBeHidden();
   });
 
+  test('an introduction the cues missed is asked about; yes opens a card with the referrer', async ({
+    page,
+  }) => {
+    await loadDemo(page);
+    const card = page.getByTestId('suggestion-confirm_intro');
+    await expect(card).toHaveCount(1);
+    const question = await card.getByText(/^Did \S+ introduce you to \S+\?$/).innerText();
+    const [, introducer, person] = /^Did (\S+) introduce you to (\S+)\?$/.exec(question)!;
+    const fullName = await card.getByRole('link').nth(1).innerText();
+    // a low-key question: two answers, no snooze or dismiss row
+    await expect(card.getByRole('button', { name: /snooze/i })).toHaveCount(0);
+    await card.getByRole('button', { name: 'Yes', exact: true }).click();
+    await expect(page.getByText(`Added to your pipeline, with ${introducer} as the referrer.`)).toBeVisible();
+    await expect(card).toHaveCount(0);
+    // exactly what a detected introduction gives: the reply-while-fresh card, credited to the introducer
+    await expect(
+      page.getByText(
+        new RegExp(`${introducer} introduced you to ${person} .*reply while the intro is fresh`),
+      ),
+    ).toBeVisible();
+    await page.goto('pipeline');
+    await expect(page.getByTestId('chat-card-identified').filter({ hasText: fullName })).toBeVisible();
+  });
+
+  test('an introduction question answered no stays answered after a reload', async ({ page }) => {
+    await loadDemo(page);
+    const card = page.getByTestId('suggestion-confirm_intro');
+    await expect(card).toHaveCount(1);
+    await card.getByRole('button', { name: 'No', exact: true }).click();
+    await expect(page.getByText('Got it. Orbit will not ask about this thread again.')).toBeVisible();
+    await expect(card).toHaveCount(0);
+    await page.reload();
+    await expect(page.getByText(/good (morning|afternoon|evening)/i)).toBeVisible();
+    await page.getByRole('button', { name: /refresh/i }).click();
+    await expect(page.getByRole('button', { name: /refresh/i })).toBeEnabled();
+    await expect(page.getByTestId('suggestion-confirm_intro')).toHaveCount(0);
+  });
+
   test('warm-up card: mark done, see progress', async ({ page }) => {
     await loadDemo(page);
     const card = page.getByTestId('suggestion-warm_up_engage').first();

@@ -2472,6 +2472,28 @@ export function buildDemoDataset(
     });
     pastChat(b, th, ev, addMinutes(reply, 40), thanks, { out: thanks, in: reply });
   });
+  // A softer introduction from one of the regulars, two business days ago: a colleague copied and described, with
+  // no "meet" or "introduce" anywhere. The introduction cues cannot call it, so Orbit asks the student instead
+  // ("Did Omar introduce you to Lin?") rather than dropping it or guessing.
+  const soft = regulars[2]?.p;
+  // a LinkedIn connection the student has never written to or met, in the introducer's line of work or next to it
+  const softFn =
+    regulars[2] &&
+    NEAR[regulars[2].fn as Exclude<Fn, 'other'>]?.find((f) => introPool.some((o) => o.fn === f));
+  const softNew = (introPool.find((o) => o.fn === softFn) ?? introPool[0])?.p;
+  if (soft && softNew && thankedAt.has(soft.id)) {
+    const at = businessDay(now, -2, 8, 50);
+    addThread([soft, softNew], `${softNew.firstName} at ${softNew.currentOrganizationRaw}`, [
+      {
+        dir: 'in',
+        from: soft,
+        cc: [softNew],
+        at,
+        body: `Hi ${meFirst},\n\n${softNew.firstName} spent the last few years as ${aTitle(softNew)} at ${softNew.currentOrganizationRaw} and mentors students on the side. Worth a conversation before your applications go in.\n\n${soft.firstName}`,
+        signal: 'reply_neutral',
+      },
+    ]);
+  }
   return {
     user,
     settings,

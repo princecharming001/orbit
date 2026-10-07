@@ -875,6 +875,295 @@ describe('email introductions and suggested names (EG-08)', () => {
       }
     }, 60_000);
 
+  /** A weekday two weeks out, as the person writes it ("Tuesday, October 13"), in the student's zone. */
+  const dayAhead = (days: number) =>
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: user.timezone,
+      weekday: 'long',
+      month: 'long',
+      day: 'numeric',
+    }).format(new Date(now.getTime() + days * D));
+  /** A small intro thread: everyone gets distinct names per test, so runs never share people. */
+  function introThread(tag: string) {
+    const n = seq++;
+    const t = `pt_intro_${tag}_${n}`;
+    const p = (first: string, last: string, domain: string) => ({
+      first,
+      email: `${first.toLowerCase()}.${last.toLowerCase()}${n}@${domain}`,
+      addr: `${first} ${last} <${first.toLowerCase()}.${last.toLowerCase()}${n}@${domain}>`,
+    });
+    let k = 0;
+    const raw = (
+      from: string,
+      to: string[],
+      cc: string[],
+      sentAt: string,
+      bodyText: string,
+      subject = `Intro: ${user.firstName} <> Sam`,
+    ): RawEmail => {
+      k++;
+      return {
+        externalThreadId: t,
+        externalMessageId: `${t}_${k}`,
+        from,
+        to,
+        cc,
+        subject: k > 1 ? `Re: ${subject}` : subject,
+        sentAt,
+        bodyText,
+        headers: { 'message-id': `<${t}_${k}@test>` },
+      };
+    };
+    return { t, p, raw };
+  }
+
+  for (const shape of ['one-person', 'two-person'] as const)
+    it(`the intro and the person's reply-all arrive in the same sync (L9, ${shape} intro)`, async () => {
+      const { t, p, raw } = introThread(`same_${shape}`);
+      const both = shape === 'two-person';
+      const lena = p('Lena', both ? 'Okafor' : 'Quist', 'contoso.com');
+      const sam = p('Sam', both ? 'Whitfield' : 'Ambrose', 'northwind.com');
+      const rui = p('Rui', 'Calloway', 'northwind.com');
+      const when = dayAhead(6);
+      await ingestEmails(
+        user,
+        [
+          raw(
+            lena.addr,
+            [user.email],
+            both ? [sam.addr, rui.addr] : [sam.addr],
+            ago(2 * D),
+            both
+              ? `${user.firstName}, meet Sam and Rui. Sam leads analytics at Northwind and Rui runs the data team.\n\nLena`
+              : `${user.firstName}, meet Sam. Sam leads analytics at Northwind.\n\nLena`,
+          ),
+          raw(
+            sam.addr,
+            [user.email],
+            both ? [lena.addr, rui.addr] : [lena.addr],
+            ago(3 * H),
+            `Thanks Lena. ${user.firstName}, happy to chat. Would ${when} at 2pm work?\n\nSam`,
+          ),
+        ],
+        { useLlm: false, now },
+      );
+      await revalidatePending(user.id, now);
+      const s = await personByEmail(sam.email);
+      const chat = await chatOf(s.id);
+      // his answer is read: the chat moved on, and the student confirms his time
+      expect(chat.stage).toBe('replied');
+      expect(chat.lastInboundAt).toBe(ago(3 * H));
+      const cards = await cardsOf(s.id);
+      expect(cards.some((c) => c.dedupeKey.startsWith('introreply:') && c.status === 'pending')).toBe(false);
+      expect(cards.find((c) => c.kind === 'schedule_confirm' && c.status === 'pending')?.reasonText).toMatch(
+        /^Sam suggested .*2pm; confirm it$/,
+      );
+      const thread = (await db.threads.where('externalThreadId').equals(t).first())!;
+      expect(thread.isNetworking).toBe(true);
+      // the reply-all is not an introduction of Lena by Sam
+      const l = await personByEmail(lena.email);
+      expect((await db.chats.where('personId').equals(l.id).toArray()).some((c) => c.referrerPersonId)).toBe(
+        false,
+      );
+      if (both) {
+        const r = await personByEmail(rui.email);
+        expect((await chatOf(r.id)).stage).toBe('identified');
+        expect(
+          (await cardsOf(r.id)).some((c) => c.dedupeKey.startsWith('introreply:') && c.status === 'pending'),
+        ).toBe(true);
+      }
+    }, 60_000);
+
+  it("the student's reply-all and the person's time arrive with the intro, in one sync (L9)", async () => {
+    const { p, raw } = introThread('same_student');
+    const lena = p('Lena', 'Varga', 'contoso.com');
+    const sam = p('Sam', 'Okonkwo', 'northwind.com');
+    await ingestEmails(
+      user,
+      [
+        raw(lena.addr, [user.email], [sam.addr], ago(3 * D), `${user.firstName}, meet Sam.\n\nLena`),
+        raw(
+          user.email,
+          [sam.addr],
+          [],
+          ago(2 * D),
+          'Thanks Lena (moving you to bcc). Sam, great to meet you. Would you have 20 minutes next week?\n\nAlex',
+        ),
+        raw(sam.addr, [user.email], [], ago(4 * H), `Happy to. Would ${dayAhead(5)} at 2pm work?\n\nSam`),
+      ],
+      { useLlm: false, now },
+    );
+    await revalidatePending(user.id, now);
+    const s = await personByEmail(sam.email);
+    const chat = await chatOf(s.id);
+    expect(chat.stage).toBe('scheduling');
+    expect(chat.firstOutreachAt).toBe(ago(2 * D));
+    // the student's answer to the intro is the outreach, not a bump
+    expect(chat.bumpCount).toBe(0);
+    const cards = await cardsOf(s.id);
+    expect(cards.some((c) => c.kind === 'schedule_confirm' && c.status === 'pending')).toBe(true);
+    expect(cards.some((c) => c.dedupeKey.startsWith('introreply:') && c.status === 'pending')).toBe(false);
+  }, 60_000);
+
+  it('a decline by reply-all retires the "reply while the intro is fresh" card (L9)', async () => {
+    const { p, raw } = introThread('decline');
+    const lena = p('Lena', 'Brandt', 'contoso.com');
+    const sam = p('Sam', 'Ferreira', 'northwind.com');
+    await ingestEmails(
+      user,
+      [raw(lena.addr, [user.email], [sam.addr], ago(2 * D), `${user.firstName}, meet Sam.\n\nLena`)],
+      {
+        useLlm: false,
+        now,
+      },
+    );
+    const s = await personByEmail(sam.email);
+    const chat = await chatOf(s.id);
+    expect(
+      (await cardsOf(s.id)).some((c) => c.dedupeKey === `introreply:${chat.id}` && c.status === 'pending'),
+    ).toBe(true);
+    await ingestEmails(
+      user,
+      [
+        raw(
+          sam.addr,
+          [user.email],
+          [lena.addr],
+          ago(3 * H),
+          `Thanks Lena. ${user.firstName}, unfortunately I am not able to take calls this month. Best of luck!\n\nSam`,
+        ),
+      ],
+      { useLlm: false, now },
+    );
+    await revalidatePending(user.id, now);
+    const cards = await cardsOf(s.id);
+    expect(cards.some((c) => c.dedupeKey === `introreply:${chat.id}` && c.status === 'pending')).toBe(false);
+    // what is left is the question the decline raises
+    expect(cards.some((c) => c.kind === 'confirm_stage' && c.status === 'pending')).toBe(true);
+  }, 60_000);
+
+  it("a thank-you for an intro that predates the sync opens the person's chat, not a reverse intro (scenario K)", async () => {
+    const { p, raw } = introThread('k');
+    const lena = p('Lena', 'Sorensen', 'contoso.com');
+    const sam = p('Sam', 'Achebe', 'northwind.com');
+    await ingestEmails(
+      user,
+      [
+        raw(
+          sam.addr,
+          [user.email],
+          [lena.addr],
+          ago(3 * H),
+          `Thanks for the warm intro, Lena. ${user.firstName}, happy to chat. Would ${dayAhead(6)} at 2pm work?\n\nSam`,
+          `Re: ${user.firstName} / Sam`,
+        ),
+      ],
+      { useLlm: false, now },
+    );
+    await revalidatePending(user.id, now);
+    const l = await personByEmail(lena.email);
+    expect((await db.chats.where('personId').equals(l.id).toArray()).some((c) => c.referrerPersonId)).toBe(
+      false,
+    );
+    expect((await cardsOf(l.id)).some((c) => c.dedupeKey.startsWith('introreply:'))).toBe(false);
+    // Sam's chat is open, credited to Lena, and his time is waiting to be confirmed
+    const s = await personByEmail(sam.email);
+    const chat = await chatOf(s.id);
+    expect(chat.referrerPersonId).toBe(l.id);
+    expect(chat.stage).toBe('replied');
+    expect((await cardsOf(s.id)).some((c) => c.kind === 'schedule_confirm' && c.status === 'pending')).toBe(
+      true,
+    );
+  }, 60_000);
+
+  it('"Sam, please meet Alex" opens Sam\'s card, and his "appreciate the intro" reply moves it (scenario J)', async () => {
+    const { p, raw } = introThread('j');
+    const lena = p('Lena', 'Marchetti', 'contoso.com');
+    const sam = p('Sam', 'Lindgren', 'northwind.com');
+    await ingestEmails(
+      user,
+      [
+        raw(
+          lena.addr,
+          [user.email],
+          [sam.addr],
+          ago(2 * D),
+          `Sam, please meet ${user.firstName}. ${user.firstName} is a junior at Cornell.\n\nLena`,
+          'Hello',
+        ),
+      ],
+      { useLlm: false, now },
+    );
+    const s = await personByEmail(sam.email);
+    const l = await personByEmail(lena.email);
+    expect((await chatOf(s.id)).referrerPersonId).toBe(l.id);
+    await ingestEmails(
+      user,
+      [
+        raw(
+          sam.addr,
+          [user.email],
+          [lena.addr],
+          ago(3 * H),
+          `Appreciate the intro, Lena! ${user.firstName}, happy to chat. Would ${dayAhead(6)} at 2pm work?\n\nSam`,
+          'Hello',
+        ),
+      ],
+      { useLlm: false, now },
+    );
+    await revalidatePending(user.id, now);
+    expect((await chatOf(s.id)).stage).toBe('replied');
+    expect((await cardsOf(s.id)).some((c) => c.kind === 'schedule_confirm' && c.status === 'pending')).toBe(
+      true,
+    );
+    expect((await db.chats.where('personId').equals(l.id).toArray()).some((c) => c.referrerPersonId)).toBe(
+      false,
+    );
+    expect((await cardsOf(l.id)).some((c) => c.dedupeKey.startsWith('introreply:'))).toBe(false);
+  }, 60_000);
+
+  for (const [name, subject, body, last] of [
+    [
+      'a dash before meet (G)',
+      'Analytics',
+      '{me} - meet Sam. Sam leads analytics at Northwind.',
+      'Delacroix',
+    ],
+    [
+      'introducing the student to the person on CC (H)',
+      'Hello',
+      'Sam, I wanted to introduce {me}, a junior I mentor.',
+      'Ostrowski',
+    ],
+    [
+      '"connecting you as promised" (I)',
+      'Hello',
+      'Hi Sam and {me}, connecting you as promised.',
+      'Penhaligon',
+    ],
+    ['an "Introduction: A / B" subject', 'Introduction: {me} / Sam', 'Sam leads analytics.', 'Thackeray'],
+  ] as const)
+    it(`an introduction written as ${name} opens a card for the person`, async () => {
+      const { p, raw } = introThread('shape');
+      const lena = p('Lena', `Hargreave${last}`, 'contoso.com');
+      const sam = p('Sam', last, 'northwind.com');
+      const fill = (x: string) => x.replaceAll('{me}', user.firstName);
+      await ingestEmails(
+        user,
+        [raw(lena.addr, [user.email], [sam.addr], ago(D), `${fill(body)}\n\nLena`, fill(subject))],
+        {
+          useLlm: false,
+          now,
+        },
+      );
+      const s = await personByEmail(sam.email);
+      const chat = await chatOf(s.id);
+      expect(chat?.referrerPersonId).toBe((await personByEmail(lena.email)).id);
+      expect(
+        (await cardsOf(s.id)).some((c) => c.dedupeKey === `introreply:${chat.id}` && c.status === 'pending'),
+      ).toBe(true);
+    }, 60_000);
+
   it('a group email that only says "meet with you" opens no introduction card (L10)', async () => {
     const t = `pt_meet_l10_${seq++}`;
     await ingestEmails(

@@ -102,7 +102,9 @@ export type SuggestionKind =
   | 'intro_request'
   | 'confirm_stage'
   | 'confirm_merge'
-  | 'confirm_note_match';
+  | 'confirm_note_match'
+  /** "Did Lena introduce you to Sam?": a group email the introduction cues could not call (see possibleIntroduction) */
+  | 'confirm_intro';
 export type SuggestionStatus =
   | 'pending'
   | 'approved'
@@ -379,6 +381,20 @@ export interface EmailThread {
   classifiedBy?: 'heuristic' | 'llm';
   /** set when a message in the thread introduced the student to someone (see detectIntroduction) */
   introduction?: { introducerId: ID; introducedIds: ID[]; messageId: ID; at: string };
+  /**
+   * A message in the thread that may have introduced the student to someone, which the cues could not call: Orbit
+   * asks ("Did Lena introduce you to Sam?"). `confirmed` recorded it as `introduction`; `dismissed` is the student's
+   * no, remembered for the thread; `retired` means the question stopped being true (an introduction was recorded
+   * from a later message, or the student already writes to the person).
+   */
+  possibleIntroduction?: {
+    introducerId: ID;
+    personIds: ID[];
+    messageId: ID;
+    at: string;
+    status: 'open' | 'confirmed' | 'dismissed' | 'retired';
+    decidedAt?: string;
+  };
 }
 
 export interface EmailMessage {
@@ -716,7 +732,9 @@ export interface FeedbackEvent {
     | 'fact_delete'
     | 'recommendation_dismiss'
     | 'warmup_done'
-    | 'warmup_skip';
+    | 'warmup_skip'
+    | 'intro_confirm'
+    | 'intro_reject';
   suggestionId?: ID;
   outboundMessageId?: ID;
   refTable?: string;
