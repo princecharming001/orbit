@@ -18,6 +18,11 @@ const user: User = {
 };
 const HDR = 'First Name,Last Name,URL,Email Address,Company,Position,Connected On\n';
 const people = () => db.people.where('userId').equals(user.id).toArray();
+const pick = (p: { displayName: string; firstName: string; namePlaceholder?: boolean }) => ({
+  name: p.displayName,
+  firstName: p.firstName,
+  namePlaceholder: p.namePlaceholder,
+});
 
 beforeEach(async () => {
   await wipeDatabase();
@@ -138,6 +143,33 @@ describe('people resolution across sources', () => {
       source: 'gmail',
     });
     expect(bare.person).toMatchObject({ displayName: 'dkim', namePlaceholder: true });
+  });
+
+  it('L21: a handle in any case becomes the name it spells out, never "Hi Priya.Patel," or "Hi pp,"', async () => {
+    const cases: [string, string, string, string][] = [
+      ['Priya.Patel', 'priya.patel@y.com', 'Priya Patel', 'Priya'],
+      ['priya_patel', 'pp@x.com', 'Priya Patel', 'Priya'],
+      ['jdoe', 'john.doe@acme.com', 'John Doe', 'John'],
+      ['Sam_Lee', 'slee@z.com', 'Sam Lee', 'Sam'],
+    ];
+    for (const [displayName, email, full, first] of cases) {
+      const r = await upsertPerson({ userId: user.id, email, displayName, source: 'gmail' });
+      expect({ displayName, ...pick(r.person) }).toEqual({
+        displayName,
+        name: full,
+        firstName: first,
+        namePlaceholder: true,
+      });
+    }
+    // a capitalised hyphenated single name is a real name, not a handle
+    const mj = await upsertPerson({
+      userId: user.id,
+      email: 'mj@q.com',
+      displayName: 'Mary-Jane',
+      source: 'gmail',
+    });
+    expect(mj.person).toMatchObject({ displayName: 'Mary-Jane' });
+    expect(mj.person.namePlaceholder).toBeUndefined();
   });
 
   it('NRC-20: two colleagues who share a surname and an employer get no merge card', async () => {
