@@ -110,8 +110,9 @@ function check(now: Date, ds: DemoDataset) {
   // nor does an introducer claim a promise or a wish of the student's that no thread contains, and they pass the
   // student to someone in their own line of work (an Anthropic engineer does not send a CS student to Goldman M&A)
   const TECH = ['swe', 'data', 'pm', 'design'];
-  // and both earlier conversations still end in an introduction, beside the mentor's
-  expect(ds.threads.filter((t) => t.subject?.startsWith('Intro: '))).toHaveLength(3);
+  // and both earlier conversations still end in an introduction, beside the mentor's, and each person met through
+  // one of them passed the student on once more (the map's Introductions view has chains three generations deep)
+  expect(ds.threads.filter((t) => t.subject?.startsWith('Intro: '))).toHaveLength(5);
   for (const m of ds.messages.filter((x) => x.signal === 'intro_offer')) {
     expect(m.bodyText).not.toMatch(/as promised|wants to (hear|learn|talk)|is interested in|is keen/i);
     const introducer = ds.people.find((p) => p.primaryEmail === m.fromEmail)!;

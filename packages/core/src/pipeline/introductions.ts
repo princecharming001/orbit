@@ -545,8 +545,7 @@ export function readIntroduction(
   for (const e of [...to, ...cc]) {
     if (mine.has(e) || e === from) continue;
     const p = people.find((x) => x.emails.some((y) => lower(y) === e));
-    if (!p || !p.isHuman || p.id === msg.fromPersonId || candidates.some((c) => c.person.id === p.id))
-      continue;
+    if (!p?.isHuman || p.id === msg.fromPersonId || candidates.some((c) => c.person.id === p.id)) continue;
     const first = fold(p.firstName.trim());
     if (first.length < 2) continue;
     candidates.push({

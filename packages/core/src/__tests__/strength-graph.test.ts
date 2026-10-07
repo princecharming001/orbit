@@ -629,6 +629,61 @@ describe('orbitLayout at scale (GRL-05, GRL-07)', () => {
         expect(l.groups.filter((g) => !used.has(g.key))).toEqual([]);
       }
   });
+  it('keeps companies where the student saw them when one tie grows closer or a company is new', () => {
+    const TAU = Math.PI * 2;
+    const mid = (g: { startAngle: number; endAngle: number }) => (g.startAngle + g.endAngle) / 2;
+    const apart = (a: number, b: number) => Math.abs(((((a - b) % TAU) + TAU + Math.PI) % TAU) - Math.PI);
+    for (const seed of [1, 2, 3])
+      for (const n of [90, 300, 2000]) {
+        const people = zipfPeople(n, seed);
+        const before = orbitLayout(people, new Map());
+        // the weakest tie at the second-largest company becomes a close one
+        const key = before.groups[1]!.key;
+        const at = people
+          .filter((p) => `n:${p.currentOrganizationRaw!.toLowerCase()}` === key)
+          .sort((a, b) => a.strength - b.strength)[0]!;
+        const closer = people.map((p) => (p === at ? { ...p, strength: 0.9 } : p));
+        const fresh = orbitLayout(closer, new Map());
+        const kept = orbitLayout(closer, new Map(), { previous: before.groups });
+        expect(countOverlaps(kept.nodes), `seed ${seed}, ${n}`).toBe(0);
+        expect(countOutsideWedges(kept), `seed ${seed}, ${n}`).toBe(0);
+        // the companies on both maps keep their order (a dense map may fold a small one into "Other companies")
+        const both = (l: typeof kept, other: typeof kept) =>
+          l.groups.map((g) => g.key).filter((k) => other.groups.some((g) => g.key === k));
+        expect(both(kept, before)).toEqual(both(before, kept));
+        const was = new Map(before.groups.map((g) => [g.key, mid(g)]));
+        const drift = (l: typeof kept) =>
+          Math.max(...l.groups.filter((g) => was.has(g.key)).map((g) => apart(mid(g), was.get(g.key)!)));
+        const meanDrift = (l: typeof kept) => {
+          const d = l.groups.filter((g) => was.has(g.key)).map((g) => apart(mid(g), was.get(g.key)!));
+          return d.reduce((a, b) => a + b, 0) / d.length;
+        };
+        // wedges move less than when laid out from scratch, and on average by a few degrees at most
+        expect(drift(kept), `seed ${seed}, ${n}`).toBeLessThanOrEqual(drift(fresh) + 1e-9);
+        expect(meanDrift(kept), `seed ${seed}, ${n}`).toBeLessThanOrEqual(meanDrift(fresh) + 1e-9);
+        expect(meanDrift(kept), `seed ${seed}, ${n}`).toBeLessThan((6 * Math.PI) / 180);
+        const total = kept.groups.reduce((s, g) => s + (g.endAngle - g.startAngle), 0);
+        expect(total).toBeCloseTo(TAU, 5);
+      }
+    // a new company opens up between its neighbours; the rest keep their order
+    const people = zipfPeople(90, 4);
+    const before = orbitLayout(people, new Map());
+    const after = orbitLayout(
+      [
+        ...people,
+        person('new1', 'Brand New Co', { strength: 0.95 }),
+        person('new2', 'Brand New Co', { strength: 0.9 }),
+      ],
+      new Map(),
+      { previous: before.groups },
+    );
+    const common = (l: typeof after, other: typeof after) =>
+      l.groups.map((g) => g.key).filter((k) => other.groups.some((g) => g.key === k));
+    expect(after.groups.some((g) => g.label === 'Brand New Co')).toBe(true);
+    expect(common(after, before)).toEqual(common(before, after));
+    expect(countOverlaps(after.nodes)).toBe(0);
+    expect(countOutsideWedges(after)).toBe(0);
+  });
   it('groups spellings of one company into one wedge', () => {
     const people = [
       person('a', 'Stripe'),

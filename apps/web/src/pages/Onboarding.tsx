@@ -381,7 +381,11 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
           <Input
             value={company}
             onChange={(e) => setCompany(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addCompany())}
+            onKeyDown={(e) => {
+              if (e.key !== 'Enter') return;
+              e.preventDefault();
+              addCompany();
+            }}
             placeholder="Stripe"
             data-testid="ob-company"
           />

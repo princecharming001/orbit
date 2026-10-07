@@ -197,14 +197,39 @@ export async function syncGoogle(
   return { messages: total, events: ev.events, failed: failed.size, skipped: gaveUp.size };
 }
 
+let maintaining = 0;
+const maintenanceWatchers = new Set<() => void>();
+const maintenanceChanged = (by: number) => {
+  maintaining += by;
+  for (const w of maintenanceWatchers) w();
+};
+
+/** True while the day's maintenance (strengths, the daily brief) is running: the map waits for it before it lays out. */
+export function maintenanceRunning(): boolean {
+  return maintaining > 0;
+}
+
+export function watchMaintenance(onChange: () => void): () => void {
+  maintenanceWatchers.add(onChange);
+  return () => {
+    maintenanceWatchers.delete(onChange);
+  };
+}
+
 export async function dailyMaintenance(user: User): Promise<void> {
-  const today = new Date().toISOString().slice(0, 10);
-  const existing = await db.briefs
-    .where('userId')
-    .equals(user.id)
-    .filter((b) => b.kind === 'daily' && b.briefDate === today)
-    .first();
-  if (existing) return;
-  await recomputeAllStrengths(user.id);
-  await generateBrief(user, 'daily');
+  // marked as running before the first await, so a page that mounts with the app already knows to wait
+  maintenanceChanged(1);
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const existing = await db.briefs
+      .where('userId')
+      .equals(user.id)
+      .filter((b) => b.kind === 'daily' && b.briefDate === today)
+      .first();
+    if (existing) return;
+    await recomputeAllStrengths(user.id);
+    await generateBrief(user, 'daily');
+  } finally {
+    maintenanceChanged(-1);
+  }
 }

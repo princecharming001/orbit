@@ -75,7 +75,7 @@ export function CompanyPage() {
             }))}
           />
           <Card>
-            <div className="font-medium mb-2">Two-hop routes</div>
+            <div className="font-medium mb-2">Routes through people you know</div>
             {reach.twoHop.length === 0 && (
               <p className="text-ink-3 text-[13px]">No indirect routes found yet.</p>
             )}

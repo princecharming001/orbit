@@ -1,68 +1,196 @@
-import type { Organization, Person, ReachPath } from '@orbit/core';
-import {
-  countOutsideWedges,
-  countOverlaps,
-  type OrbitLayout,
-  type OrbitNode,
-  orbitLayout,
-  orbitRotation,
-} from '@orbit/core';
+import type { OrbitNode, Organization, Person } from '@orbit/core';
+import { countOutsideWedges, countOverlaps, type OrbitLayout, orbitLayout } from '@orbit/core';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { STAGE_COLOR } from '../pages/Pipeline';
+import { FrameRecorder } from './motion';
+import { type FocusSpec, type HoverHow, OrbitScene, type WebSpec } from './orbitScene';
+
+export { orbitScale } from './orbitGeometry';
 
 export interface MapProps {
   people: Person[];
   orgs: Map<string, Organization>;
   stages: Map<string, string>;
   pending: Set<string>;
-  highlightPath?: ReachPath; // reach mode
+  /** the network is still loading: the empty orbit breathes until the people arrive */
+  loading?: boolean;
+  /** a filter: everyone else fades back */
   highlightIds?: Set<string>;
+  /** companies whose wedges are tinted (Target companies) */
+  highlightGroups?: Set<string>;
+  /** a company or a reach target the map turns to and frames */
+  focus?: FocusSpec;
+  /** the introductions view */
+  web?: WebSpec;
+  /** each person's strongest direct connections inside the network, strongest first */
+  connections?: Map<string, string[]>;
+  /** who introduced each person, so someone new is born at their introducer's dot */
+  introducerOf?: Map<string, string>;
   onSelect: (id: string) => void;
   /** an aggregate dot ("+14 at Google") was clicked */
   onSelectCluster?: (node: OrbitNode) => void;
-  onHover?: (id: string | undefined) => void;
+  /** `place`: the corner of the map where a card about the person covers the fewest people */
+  onHover?: (id: string | undefined, place?: CardPlace) => void;
+  /** the page shows a card next to the hovered person, so the map does not write their name above the dot too */
+  personCard?: boolean;
   rotate?: boolean;
-  focusId?: string;
+  /** what the map shows, for screen readers */
+  label?: string;
 }
 
-interface Pos {
-  x: number;
-  y: number;
-  r: number;
-  id: string;
-}
+/**
+ * Where the person card goes. From 640 px up it is a 260 px card next to the dot (`x`, `y`: its top-left corner in
+ * the map), so the eye does not have to cross the map; below that it spans the map's width at the top or bottom.
+ */
+export type CardPlace = { at: 'top' | 'bottom' } | { x: number; y: number };
 
-interface LabelSlot {
-  key: string;
-  text: string;
-  mid: number; // wedge centre angle before rotation
-}
+/** The person card's size and inset in CSS px (MapPage draws it: 260 px wide from 640 px up, full width below). */
+export const CARD_W = 260;
+const CARD_H = 92;
+const CARD_INSET = 12;
+/** Room the phone's tab bar takes at the bottom of the window. */
+const TAB_BAR = 72;
 
-/** gap between the outermost dots and the company labels, in CSS px */
-const LABEL_GAP = 14;
-const LABEL_FONT_PX = 11;
+/**
+ * Where the person card goes: never over the person it is about, and over as few other people as it can. Next to
+ * the dot on a wide map (the side away from the centre first, where the orbit is thinner), at the top or bottom of
+ * a narrow one. On a touch screen a narrow map's card prefers the top, and goes to the bottom only when the bottom of
+ * the map is on screen, clear of the tab bar.
+ */
+function cardPlace(scene: OrbitScene, id: string, canvas: HTMLCanvasElement, touch: boolean): CardPlace {
+  const w = canvas.clientWidth;
+  const h = canvas.clientHeight;
+  const at = scene.positionOf(id);
+  const covers = (x0: number, y0: number, x1: number, y1: number) =>
+    !!at && at.x + at.r + 8 > x0 && at.x - at.r - 8 < x1 && at.y + at.r + 8 > y0 && at.y - at.r - 8 < y1;
+  if (w >= 640 && at) {
+    const gap = 14;
+    const you = scene.youAt();
+    // beside the dot (level with it, or with the dot at the card's top or bottom), or above or below it
+    const xs = { right: at.x + at.r + gap, left: at.x - at.r - gap - CARD_W };
+    const ys = [at.y - CARD_H / 2, at.y - 18, at.y + 18 - CARD_H];
+    const sides = at.x >= w / 2 ? [xs.right, xs.left] : [xs.left, xs.right];
+    const cands: { x: number; y: number }[] = [];
+    for (const x of sides) for (const y of ys) cands.push({ x, y });
+    for (const y of [at.y + at.r + gap, at.y - at.r - gap - CARD_H])
+      for (const x of [at.x - CARD_W / 2, at.x - 24, at.x + 24 - CARD_W]) cands.push({ x, y });
+    let best = cands[0]!;
+    let bestScore = Number.POSITIVE_INFINITY;
+    cands.forEach((c, i) => {
+      const x = Math.round(Math.min(Math.max(c.x, CARD_INSET), w - CARD_INSET - CARD_W));
+      const y = Math.round(Math.min(Math.max(c.y, CARD_INSET), h - CARD_INSET - CARD_H));
+      const x1 = x + CARD_W;
+      const y1 = y + CARD_H;
+      // how far the card ended up from the dot once kept inside the map
+      const dx = Math.max(x - at.x, 0, at.x - x1);
+      const dy = Math.max(y - at.y, 0, at.y - y1);
+      const hidesYou = you.x + you.r > x && you.x - you.r < x1 && you.y + you.r > y && you.y - you.r < y1;
+      const score =
+        (covers(x, y, x1, y1) ? 1000 : 0) +
+        (hidesYou ? 12 : 0) +
+        scene.dotsIn(x, y, x1, y1) +
+        Math.hypot(dx, dy) / 30 +
+        i * 0.25;
+      if (score < bestScore) {
+        best = { x, y };
+        bestScore = score;
+      }
+    });
+    return best;
+  }
+  const cw = w - 2 * CARD_INSET;
+  const bottomShown = !touch || canvas.getBoundingClientRect().bottom <= window.innerHeight - TAB_BAR;
+  const order: ('top' | 'bottom')[] = touch ? ['top', 'bottom'] : ['bottom', 'top'];
+  let best: 'top' | 'bottom' = order[0]!;
+  let bestScore = Number.POSITIVE_INFINITY;
+  for (const side of order) {
+    if (side === 'bottom' && !bottomShown) continue;
+    const y0 = side === 'top' ? CARD_INSET : h - CARD_INSET - CARD_H;
+    // the person themselves, and the name above their dot, stay in sight
+    const hidden =
+      !!at && covers(CARD_INSET, y0, CARD_INSET + cw, y0 + CARD_H + (side === 'bottom' ? 26 : 0));
+    const score = (hidden ? 1000 : 0) + scene.dotsIn(CARD_INSET, y0, CARD_INSET + cw, y0 + CARD_H);
+    if (score < bestScore) {
+      best = side;
+      bestScore = score;
+    }
+  }
+  return { at: best };
+}
 
 const COARSE_QUERY = '(hover: none) and (pointer: coarse)';
-/** True on phones and tablets: no hover, a finger instead of a mouse. Follows changes (a tablet with a mouse). */
-export function useCoarsePointer(): boolean {
-  const [coarse, setCoarse] = useState(
-    () => typeof window !== 'undefined' && !!window.matchMedia?.(COARSE_QUERY).matches,
-  );
+const REDUCED_QUERY = '(prefers-reduced-motion: reduce)';
+const ARRIVED = 'orbit.map.arrived';
+
+function useMedia(query: string): boolean {
+  const [on, setOn] = useState(() => typeof window !== 'undefined' && !!window.matchMedia?.(query).matches);
   useEffect(() => {
-    const mq = window.matchMedia?.(COARSE_QUERY);
+    const mq = window.matchMedia?.(query);
     if (!mq) return;
-    const on = () => setCoarse(mq.matches);
-    mq.addEventListener?.('change', on);
-    return () => mq.removeEventListener?.('change', on);
-  }, []);
-  return coarse;
+    const update = () => setOn(mq.matches);
+    update();
+    mq.addEventListener?.('change', update);
+    return () => mq.removeEventListener?.('change', update);
+  }, [query]);
+  return on;
 }
 
-/** Fit the orbit (dots plus labels) inside the canvas: labels above and below need room, sides are clamped. */
-export function orbitScale(w: number, h: number, extent: number): number {
-  const side = w < 600 ? 10 : 60;
-  const s = Math.min(1, (h / 2 - LABEL_GAP - 16) / extent, (w / 2 - side) / extent);
-  return Math.max(0.2, s);
+/** True on phones and tablets: no hover, a finger instead of a mouse. Follows changes (a tablet with a mouse). */
+export function useCoarsePointer(): boolean {
+  return useMedia(COARSE_QUERY);
+}
+
+export function useReducedMotion(): boolean {
+  return useMedia(REDUCED_QUERY);
+}
+
+function sessionFlag(): boolean {
+  try {
+    return sessionStorage.getItem(ARRIVED) === '1';
+  } catch {
+    return true;
+  }
+}
+
+function setSessionFlag(): void {
+  try {
+    sessionStorage.setItem(ARRIVED, '1');
+  } catch {
+    // private mode: the arrival may play again, which is harmless
+  }
+}
+
+/** Tells the scene the canvas's size and where it sits on the page. */
+function place(scene: OrbitScene, el: HTMLElement) {
+  const r = el.getBoundingClientRect();
+  scene.resize(el.clientWidth, el.clientHeight, {
+    left: r.left + window.scrollX,
+    top: r.top + window.scrollY,
+  });
+}
+
+/**
+ * The wedges the student last saw, for the whole visit: a company keeps its place round the orbit when ties change
+ * strength or people arrive, and when the student comes back to the map from another page.
+ */
+let lastWedges: OrbitLayout['groups'] | undefined;
+
+let recorder: FrameRecorder | undefined;
+/** `?perf=1` records every animated frame's rAF delta and script time on window.__orbitPerf. */
+function perfRecorder(): FrameRecorder | undefined {
+  if (recorder) return recorder;
+  try {
+    if (new URLSearchParams(window.location.search).get('perf') !== '1') return undefined;
+  } catch {
+    return undefined;
+  }
+  const r = new FrameRecorder();
+  recorder = r;
+  (window as unknown as { __orbitPerf: unknown }).__orbitPerf = {
+    stats: () => r.stats(),
+    reset: () => r.reset(),
+    deltas: () => [...r.deltas],
+  };
+  return r;
 }
 
 export function OrbitMap({
@@ -70,388 +198,269 @@ export function OrbitMap({
   orgs,
   stages,
   pending,
-  highlightPath,
+  loading = false,
   highlightIds,
+  highlightGroups,
+  focus,
+  web,
+  connections,
+  introducerOf,
   onSelect,
   onSelectCluster,
   onHover,
+  personCard = false,
   rotate = true,
-  focusId,
+  label,
 }: MapProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
-  const [size, setSize] = useState({ w: 0, h: 0 });
-  const [hover, setHover] = useState<string | undefined>();
-  const [paused, setPaused] = useState(false);
-  const images = useRef(new Map<string, HTMLImageElement>());
-  const startRef = useRef(performance.now());
-  const posRef = useRef<Pos[]>([]);
-  const dirtyRef = useRef(true);
+  const sceneRef = useRef<OrbitScene | null>(null);
+  if (!sceneRef.current) sceneRef.current = new OrbitScene();
+  const scene = sceneRef.current;
+  const hoverRef = useRef<{ id?: string; how: HoverHow }>({ how: 'pointer' });
+  const [said, setSaid] = useState('');
   const lastTouch = useRef(0);
-  const reduced =
-    typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-  // On touch screens the orbit holds still: a moving dot is hard to tap and its name card would drift away.
+  const dragged = useRef(false);
+  /** a dot pressed while the arrival was still flying in: the click opens that dot, wherever it lands */
+  const pressedInFlight = useRef<string | undefined>(undefined);
   const coarse = useCoarsePointer();
+  const reduced = useReducedMotion();
+
+  // Geometry is computed once per network at unit scale; the viewport only changes the draw scale. Not while the
+  // network is still loading: people can arrive before their companies, and a big network's layout is costly, so
+  // it is worked out once, when everything it needs is there.
+  const layout: OrbitLayout = useMemo(() => {
+    const l = orbitLayout(loading ? [] : people, orgs, { previous: lastWedges });
+    if (l.groups.length) lastWedges = l.groups;
+    return l;
+  }, [people, orgs, loading]);
+  const overlaps = useMemo(() => countOverlaps(layout.nodes), [layout]);
+  const outsideWedges = useMemo(() => countOutsideWedges(layout), [layout]);
+  const byId = useMemo(() => new Map(people.map((p) => [p.id, p])), [people]);
+
+  useLayoutEffect(() => {
+    const canvas = canvasRef.current!;
+    scene.recorder = perfRecorder();
+    scene.arrivalPending = !sessionFlag();
+    scene.onArrival = setSessionFlag;
+    scene.attach(canvas);
+    if (navigator.webdriver || scene.recorder)
+      (window as unknown as { __orbitMap: unknown }).__orbitMap = {
+        snapshot: () => scene.snapshot(),
+        positions: (ids?: string[]) => scene.positions(ids),
+        hitTest: (x: number, y: number) => scene.hitTest(x, y),
+        slot: (id: string) => scene.slotOf(id),
+        stageColor: (id: string) => scene.stageColorOf(id),
+      };
+    let live = true;
+    document.fonts?.ready.then(() => {
+      if (live) scene.invalidateText();
+    });
+    return () => {
+      live = false;
+      scene.destroy();
+    };
+  }, [scene]);
+
   // The canvas is absolutely positioned, so the wrapper's size comes from the page layout, never from the canvas.
   useLayoutEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
-    const measure = () => setSize({ w: el.clientWidth, h: el.clientHeight });
-    measure();
-    const ro = new ResizeObserver(measure);
+    const ro = new ResizeObserver(() => place(scene, el));
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
-  // Geometry is computed once per network at unit scale; the viewport only changes the draw scale.
-  const layout: OrbitLayout = useMemo(() => orbitLayout(people, orgs), [people, orgs]);
-  const overlaps = useMemo(() => countOverlaps(layout.nodes), [layout]);
-  const outsideWedges = useMemo(() => countOutsideWedges(layout), [layout]);
-  const nodeById = useMemo(() => new Map(layout.nodes.map((n) => [n.id, n])), [layout]);
-  const scale = size.w && size.h ? orbitScale(size.w, size.h, layout.extent) : 1;
-  const narrow = size.w < 600;
-  const pathIds = useMemo(
-    () => new Set(highlightPath ? highlightPath.hops.flatMap((h) => [h.fromId, h.toId]) : []),
-    [highlightPath],
+  }, [scene]);
+  // After every render as well, before the paint: a panel above can move the map without resizing it.
+  useLayoutEffect(() => {
+    if (wrapRef.current) place(scene, wrapRef.current);
+  });
+
+  // On touch screens the orbit holds still: a moving dot is hard to tap and its name card would drift away.
+  useEffect(
+    () => scene.setOptions({ spin: rotate && !coarse, reduced, personCard }),
+    [scene, rotate, coarse, reduced, personCard],
   );
-  // Company labels, biggest companies first. A label is shown only when its arc is free; the test uses angles,
-  // so the set of labels does not change while the orbit turns.
-  const labels: LabelSlot[] = useMemo(() => {
-    if (!size.w) return [];
-    const ctx = document.createElement('canvas').getContext('2d');
-    if (!ctx) return [];
-    ctx.font = `500 ${Math.max(10, LABEL_FONT_PX * Math.max(0.85, scale))}px Inter, sans-serif`;
-    const radius = layout.extent * scale + LABEL_GAP;
-    const max = narrow ? 12 : 18;
-    const taken: [number, number][] = [];
-    const out: LabelSlot[] = [];
-    const ordered = [...layout.groups].sort((a, b) => b.count - a.count);
-    for (const g of ordered) {
-      if (g.count < 2 && layout.groups.length > 8) continue;
-      const text = g.label.length > max ? `${g.label.slice(0, max - 1)}…` : g.label;
-      const half = (ctx.measureText(text).width + 12) / 2 / radius;
-      const mid = (g.startAngle + g.endAngle) / 2;
-      const lo = mid - half;
-      const hi = mid + half;
-      const TAU = Math.PI * 2;
-      const clash = taken.some(([a, b]) => [-TAU, 0, TAU].some((s) => lo < b + s && hi > a + s));
-      if (clash) continue;
-      taken.push([lo, hi]);
-      out.push({ key: g.key, text, mid });
-    }
-    return out;
-  }, [layout, scale, size.w, narrow]);
+  useEffect(
+    () => scene.setData({ layout, people: byId, loading, stages, pending, introducerOf }),
+    [scene, layout, byId, loading, stages, pending, introducerOf],
+  );
+  useEffect(() => scene.setFilter(highlightIds, highlightGroups), [scene, highlightIds, highlightGroups]);
+  useEffect(() => scene.setFocus(focus), [scene, focus]);
+  useEffect(() => scene.setWeb(web), [scene, web]);
+  useEffect(() => scene.setConnections(connections), [scene, connections]);
+
+  const setHover = (id: string | undefined, how: HoverHow) => {
+    const cur = hoverRef.current;
+    if (id === cur.id && how === cur.how) return;
+    const changed = id !== cur.id;
+    hoverRef.current = { id, how };
+    scene.setHover(id, how);
+    if (changed)
+      onHover?.(
+        id,
+        id && canvasRef.current ? cardPlace(scene, id, canvasRef.current, how === 'touch') : undefined,
+      );
+  };
+  // a tapped dot belongs to the view it was tapped in: a search, a route, a filter or the introductions view lets
+  // go of it (a mouse hover follows the pointer anyway)
+  const webOn = !!web;
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || !size.w || !size.h) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    let raf = 0;
-    let lastDraw = 0;
-    dirtyRef.current = true;
-    const moving = rotate && !coarse && !paused && !reduced && !highlightPath;
-    canvas.dataset.moving = String(moving);
-    const animating = moving || pending.size > 0;
-    const draw = (now: number) => {
-      raf = requestAnimationFrame(draw);
-      // redraw on change, otherwise at ~30 fps while something moves; an idle map costs nothing
-      if (!dirtyRef.current && (!animating || now - lastDraw < 33)) return;
-      dirtyRef.current = false;
-      lastDraw = now;
-      const dpr = window.devicePixelRatio || 1;
-      const W = Math.round(size.w * dpr);
-      const H = Math.round(size.h * dpr);
-      if (canvas.width !== W || canvas.height !== H) {
-        canvas.width = W;
-        canvas.height = H;
-        canvas.style.width = `${size.w}px`;
-        canvas.style.height = `${size.h}px`;
-      }
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.clearRect(0, 0, size.w, size.h);
-      const cx = size.w / 2;
-      const cy = size.h / 2;
-      const rot = orbitRotation(moving ? performance.now() - startRef.current : 0);
-      // rings
-      ctx.strokeStyle = '#eceef2';
-      ctx.lineWidth = 1;
-      for (const r of layout.ringRadii) {
-        ctx.beginPath();
-        ctx.arc(cx, cy, r * scale, 0, Math.PI * 2);
-        ctx.stroke();
-      }
-      // company labels just outside the outermost dots, kept inside the canvas
-      const labelR = layout.extent * scale + LABEL_GAP;
-      const fontPx = Math.max(10, LABEL_FONT_PX * Math.max(0.85, scale));
-      ctx.font = `500 ${fontPx}px Inter, sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      let clipped = 0;
-      const labelAlpha = highlightPath || highlightIds ? 0.45 : 1;
-      ctx.fillStyle = '#767d89';
-      for (const l of labels) {
-        const a = l.mid + rot;
-        const half = ctx.measureText(l.text).width / 2;
-        // anchor the label's near edge on the label ring, so side labels grow outwards, not into the dots
-        const r = labelR + Math.abs(Math.cos(a)) * half + Math.abs(Math.sin(a)) * (fontPx / 2);
-        const want = cx + Math.cos(a) * r;
-        const x = Math.min(Math.max(want, half + 4), size.w - half - 4);
-        const y = cy + Math.sin(a) * r;
-        // a label that would have to slide over the dots to stay on screen fades out instead (narrow screens)
-        const alpha = Math.max(0, Math.min(1, 1 - (Math.abs(want - x) - 4) / 16));
-        if (alpha <= 0) continue;
-        if (y - fontPx / 2 < 0 || y + fontPx / 2 > size.h || x - half < 0 || x + half > size.w) clipped++;
-        ctx.globalAlpha = alpha * labelAlpha;
-        ctx.fillText(l.text, x, y);
-      }
-      ctx.globalAlpha = 1;
-      canvas.dataset.labels = String(labels.length);
-      canvas.dataset.labelsClipped = String(clipped);
-      // positions
-      const pos: Pos[] = [];
-      for (const n of layout.nodes) {
-        const a = n.angle + rot;
-        const r = n.radius * scale;
-        pos.push({ id: n.id, x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r, r: (n.size * scale) / 2 });
-      }
-      posRef.current = pos;
-      // test hook: where the strongest person's dot is, in CSS px from the canvas's top left
-      const first = pos.find((q) => nodeById.get(q.id)?.person);
-      if (first) canvas.dataset.firstDot = `${Math.round(first.x)},${Math.round(first.y)}`;
-      const byId = new Map(pos.map((p) => [p.id, p]));
-      // path lines
-      if (highlightPath) {
-        ctx.strokeStyle = '#5B5BD6';
-        ctx.lineWidth = 2;
-        for (const h of highlightPath.hops) {
-          const from = h.fromId === 'user' ? { x: cx, y: cy } : byId.get(h.fromId);
-          const to = byId.get(h.toId);
-          if (!from || !to) continue;
-          ctx.beginPath();
-          ctx.moveTo(from.x, from.y);
-          const mx = (from.x + to.x) / 2 + (to.y - from.y) * 0.15;
-          const my = (from.y + to.y) / 2 - (to.x - from.x) * 0.15;
-          ctx.quadraticCurveTo(mx, my, to.x, to.y);
-          ctx.stroke();
-        }
-      }
-      // nodes
-      for (const n of layout.nodes) {
-        const p = byId.get(n.id)!;
-        if (n.cluster) {
-          const dim =
-            !!highlightPath || (highlightIds && !n.cluster.personIds.some((id) => highlightIds.has(id)));
-          ctx.globalAlpha = dim ? 0.18 : 1;
-          ctx.beginPath();
-          ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-          ctx.fillStyle = '#eef0f5';
-          ctx.fill();
-          ctx.lineWidth = 1;
-          ctx.strokeStyle = '#c9cdd6';
-          ctx.stroke();
-          const label = n.cluster.count > 999 ? '999+' : `+${n.cluster.count}`;
-          if (p.r >= 5) {
-            ctx.fillStyle = '#4a505c';
-            ctx.font = `600 ${Math.max(7, Math.min(p.r * 0.8, (p.r * 2.8) / label.length))}px Inter, sans-serif`;
-            ctx.fillText(label, p.x, p.y + 0.5);
-          }
-          ctx.globalAlpha = 1;
-          continue;
-        }
-        const person = n.person!;
-        const dim = (highlightPath && !pathIds.has(n.id)) || (highlightIds && !highlightIds.has(n.id));
-        ctx.globalAlpha = dim ? 0.18 : 1;
-        let img = person.photoUrl ? images.current.get(person.id) : undefined;
-        if (person.photoUrl && !img) {
-          img = new Image();
-          img.crossOrigin = 'anonymous';
-          img.onload = () => {
-            dirtyRef.current = true;
-          };
-          img.src = person.photoUrl;
-          images.current.set(person.id, img);
-        }
-        ctx.save();
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-        ctx.closePath();
-        ctx.clip();
-        if (img?.complete && img.naturalWidth) ctx.drawImage(img, p.x - p.r, p.y - p.r, p.r * 2, p.r * 2);
-        else {
-          ctx.fillStyle = `hsl(${hue(person.id)} 45% 55%)`;
-          ctx.fillRect(p.x - p.r, p.y - p.r, p.r * 2, p.r * 2);
-          if (p.r >= 7) {
-            ctx.fillStyle = '#fff';
-            ctx.font = `600 ${Math.max(7, p.r * 0.8)}px Inter, sans-serif`;
-            ctx.fillText(initialsOf(person), p.x, p.y + 0.5);
-          }
-        }
-        ctx.restore();
-        // ring: stage colour or hairline
-        const st = stages.get(n.id);
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, p.r + 1.5, 0, Math.PI * 2);
-        ctx.lineWidth = st ? 2.5 : 1;
-        ctx.strokeStyle = st
-          ? (STAGE_COLOR[st as keyof typeof STAGE_COLOR] ?? '#9aa1ad')
-          : 'rgba(15,17,21,0.08)';
-        ctx.stroke();
-        if (pathIds.has(n.id) || focusId === n.id) {
-          ctx.beginPath();
-          ctx.arc(p.x, p.y, p.r + 5, 0, Math.PI * 2);
-          ctx.lineWidth = 2;
-          ctx.strokeStyle = '#5B5BD6';
-          ctx.stroke();
-        }
-        if (pending.has(n.id) && !dim) {
-          const t = (performance.now() / 1200) % 1;
-          ctx.beginPath();
-          ctx.arc(p.x, p.y, p.r + 3 + t * 10, 0, Math.PI * 2);
-          ctx.strokeStyle = `rgba(91,91,214,${0.5 * (1 - t)})`;
-          ctx.lineWidth = 1.5;
-          ctx.stroke();
-        }
-        ctx.globalAlpha = 1;
-      }
-      // centre
-      ctx.beginPath();
-      ctx.arc(cx, cy, 26 * Math.max(0.6, scale), 0, Math.PI * 2);
-      ctx.fillStyle = '#5B5BD6';
-      ctx.fill();
-      ctx.fillStyle = '#fff';
-      ctx.font = `700 ${12 * Math.max(0.8, scale)}px Inter, sans-serif`;
-      ctx.fillText('You', cx, cy + 1);
-      // tooltip
-      if (hover) {
-        const p = byId.get(hover);
-        const node = nodeById.get(hover);
-        if (p && node) {
-          const label = node.cluster
-            ? node.cluster.label === 'Other companies'
-              ? `${node.cluster.count} people at other companies`
-              : `${node.cluster.count} more at ${node.cluster.label}`
-            : node.person!.displayName;
-          ctx.font = '500 12px Inter, sans-serif';
-          const w = ctx.measureText(label).width + 16;
-          const x = Math.min(Math.max(p.x, w / 2 + 4), size.w - w / 2 - 4);
-          const y = Math.max(p.y - p.r - 18, 14);
-          ctx.fillStyle = '#fff';
-          ctx.strokeStyle = '#e6e8ec';
-          ctx.lineWidth = 1;
-          roundRect(ctx, x - w / 2, y - 11, w, 22, 6);
-          ctx.fill();
-          ctx.stroke();
-          ctx.fillStyle = '#0f1115';
-          ctx.fillText(label, x, y);
-        }
-      }
-    };
-    raf = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(raf);
-  }, [
-    layout,
-    labels,
-    nodeById,
-    size,
-    hover,
-    paused,
-    rotate,
-    coarse,
-    reduced,
-    highlightPath,
-    highlightIds,
-    pathIds,
-    stages,
-    pending,
-    scale,
-    focusId,
-  ]);
-  const hit = (clientX: number, clientY: number, touch = false): string | undefined => {
-    const rect = canvasRef.current!.getBoundingClientRect();
-    const x = clientX - rect.left;
-    const y = clientY - rect.top;
-    let best: Pos | undefined;
-    let bestD = Number.POSITIVE_INFINITY;
-    for (const p of posRef.current) {
-      // small dots get a finger-sized target on touch screens
-      const reach = Math.max(p.r + 4, touch ? 16 : 8);
-      const d = (x - p.x) ** 2 + (y - p.y) ** 2;
-      if (d <= reach ** 2 && d < bestD) {
-        best = p;
-        bestD = d;
-      }
+    const cur = hoverRef.current;
+    if (cur.id && cur.how === 'touch') setHover(undefined, 'touch');
+  }, [focus, webOn, highlightIds]);
+  // a dot that left the map (a new layout) cannot stay hovered
+  useEffect(() => {
+    const cur = hoverRef.current;
+    if (cur.id && !scene.positionOf(cur.id)) {
+      hoverRef.current = { how: cur.how };
+      scene.setHover(undefined);
+      onHover?.(undefined);
     }
-    return best?.id;
+  }, [layout]);
+
+  const local = (clientX: number, clientY: number) => {
+    const rect = canvasRef.current!.getBoundingClientRect();
+    return { x: clientX - rect.left, y: clientY - rect.top };
   };
   const activate = (id: string) => {
-    const node = nodeById.get(id);
+    const node = scene.nodeOf(id);
     if (node?.cluster) onSelectCluster?.(node);
     else onSelect(id);
   };
-  const clearHover = () => {
-    setHover(undefined);
-    setPaused(false);
-    onHover?.(undefined);
+  const describe = (id: string): string => {
+    const node = scene.nodeOf(id);
+    if (node?.cluster)
+      return node.cluster.label === 'Other companies'
+        ? `${node.cluster.count} people at other companies. Press Enter to see them.`
+        : `${node.cluster.count} more people at ${node.cluster.label}. Press Enter to see them.`;
+    const p = byId.get(id);
+    if (!p) return '';
+    const role = [p.currentTitle, p.currentOrganizationRaw].filter(Boolean).join(' at ');
+    return `${p.displayName}${role ? `, ${role}` : ''}. Press Enter to open.`;
   };
+  const focusDot = (id: string | undefined) => {
+    setHover(id, 'keyboard');
+    setSaid(id ? describe(id) : '');
+  };
+
   return (
     <div ref={wrapRef} className="absolute inset-0 overflow-hidden">
+      {/* biome-ignore lint/a11y/noInteractiveElementToNoninteractiveRole: the canvas is a keyboard-driven widget (arrow keys, Enter, Escape), so screen readers must pass keys through to it */}
       <canvas
         ref={canvasRef}
-        className="absolute left-0 top-0 block cursor-pointer touch-manipulation"
+        className="absolute left-0 top-0 block cursor-pointer touch-manipulation outline-none focus-visible:ring-2 focus-visible:ring-accent/50 rounded-[2px]"
         data-testid="orbit-canvas"
         data-overlaps={overlaps}
         data-outside-wedges={outsideWedges}
         data-nodes={layout.nodes.length}
         data-aggregated={layout.aggregated}
-        data-scale={scale.toFixed(3)}
-        aria-label={`Orbit map of ${people.length} people`}
-        role="img"
+        tabIndex={0}
+        role="application"
+        aria-roledescription="orbit map"
+        aria-label={
+          label ??
+          `Orbit map of ${people.length} people. Use the arrow keys to move between people and Enter to open one.`
+        }
+        onPointerDown={(e) => {
+          const { x, y } = local(e.clientX, e.clientY);
+          pressedInFlight.current = scene.arriving()
+            ? scene.hitTest(x, y, e.pointerType !== 'mouse')
+            : undefined;
+          scene.finishArrival();
+          if (e.pointerType !== 'mouse' || e.button !== 0) return;
+          dragged.current = false;
+          scene.pointerDown(x, y);
+        }}
         onPointerMove={(e) => {
           if (e.pointerType !== 'mouse') return;
-          const id = hit(e.clientX, e.clientY);
-          if (id !== hover) {
-            setHover(id);
-            onHover?.(id);
+          const { x, y } = local(e.clientX, e.clientY);
+          const canvas = canvasRef.current!;
+          if (e.buttons & 1 && scene.pointerMove(x, y)) {
+            if (!dragged.current) {
+              dragged.current = true;
+              canvas.setPointerCapture?.(e.pointerId);
+              if (hoverRef.current.id) setHover(undefined, 'pointer');
+            }
+            canvas.style.cursor = 'grabbing';
+            return;
           }
-          setPaused(!!id);
+          const id = scene.hitTest(x, y);
+          canvas.style.cursor = id ? 'pointer' : 'grab';
+          setHover(id, 'pointer');
         }}
         onPointerLeave={(e) => {
-          if (e.pointerType === 'mouse') clearHover();
+          // moving onto the person's card (its Open link) keeps them hovered
+          const to = e.relatedTarget;
+          if (to instanceof Element && to.closest('[data-testid="map-tooltip"]')) return;
+          if (e.pointerType === 'mouse' && !dragged.current && hoverRef.current.how === 'pointer')
+            setHover(undefined, 'pointer');
+        }}
+        onPointerCancel={() => {
+          scene.pointerUp();
+          dragged.current = false;
         }}
         onPointerUp={(e) => {
-          if (e.pointerType === 'mouse') return;
+          if (e.pointerType === 'mouse') {
+            if (scene.pointerUp()) {
+              canvasRef.current!.style.cursor = 'grab';
+              canvasRef.current!.releasePointerCapture?.(e.pointerId);
+            }
+            return;
+          }
           // touch: the first tap shows who it is, a second tap on the same dot opens it
           lastTouch.current = Date.now();
-          const id = hit(e.clientX, e.clientY, true);
-          if (!id) return clearHover();
-          if (id === hover) return activate(id);
-          setHover(id);
-          setPaused(true);
-          onHover?.(id);
+          const { x, y } = local(e.clientX, e.clientY);
+          const id = pressedInFlight.current ?? scene.hitTest(x, y, true);
+          pressedInFlight.current = undefined;
+          if (!id) return setHover(undefined, 'touch');
+          if (id === hoverRef.current.id) return activate(id);
+          setHover(id, 'touch');
         }}
         onClick={(e) => {
+          if (dragged.current) {
+            dragged.current = false;
+            return;
+          }
           if (Date.now() - lastTouch.current < 600) return; // already handled as a tap
-          const id = hit(e.clientX, e.clientY);
+          const { x, y } = local(e.clientX, e.clientY);
+          const id = pressedInFlight.current ?? scene.hitTest(x, y);
+          pressedInFlight.current = undefined;
           if (id) activate(id);
         }}
+        onWheel={() => scene.finishArrival()}
+        onKeyDown={(e) => {
+          const dirs: Record<string, [number, number]> = {
+            ArrowLeft: [-1, 0],
+            ArrowRight: [1, 0],
+            ArrowUp: [0, -1],
+            ArrowDown: [0, 1],
+          };
+          const dir = dirs[e.key];
+          const current = hoverRef.current.how === 'keyboard' ? hoverRef.current.id : undefined;
+          if (dir) {
+            e.preventDefault();
+            scene.finishArrival();
+            focusDot(scene.neighbour(current, dir[0], dir[1]));
+          } else if (e.key === 'Home') {
+            e.preventDefault();
+            focusDot(scene.neighbour(undefined, 0, 0));
+          } else if ((e.key === 'Enter' || e.key === ' ') && current) {
+            e.preventDefault();
+            activate(current);
+          } else if (e.key === 'Escape' && current) {
+            // the first Escape lets go of the dot; the next one clears the view (handled by the page)
+            e.preventDefault();
+            e.stopPropagation();
+            focusDot(undefined);
+          }
+        }}
+        onBlur={() => {
+          if (hoverRef.current.how === 'keyboard' && hoverRef.current.id) focusDot(undefined);
+        }}
       />
+      <div className="sr-only" aria-live="polite" data-testid="map-announce">
+        {said}
+      </div>
     </div>
   );
-}
-
-function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.arcTo(x + w, y, x + w, y + h, r);
-  ctx.arcTo(x + w, y + h, x, y + h, r);
-  ctx.arcTo(x, y + h, x, y, r);
-  ctx.arcTo(x, y, x + w, y, r);
-  ctx.closePath();
-}
-function hue(id: string): number {
-  let h = 0;
-  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
-  return h % 360;
-}
-function initialsOf(p: Person): string {
-  return `${p.firstName[0] ?? ''}${p.lastName[0] ?? ''}`.toUpperCase() || '?';
 }

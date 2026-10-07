@@ -311,7 +311,7 @@ export async function refreshUntouchedDraft(
 ): Promise<boolean> {
   if (!s.outboundMessageId) return false;
   const draft = await db.outbound.get(s.outboundMessageId);
-  if (!draft || draft.status !== 'draft' || draft.bodyFinal) return false;
+  if (draft?.status !== 'draft' || draft.bodyFinal) return false;
   const user = await db.users.get(userId);
   if (!user) return false;
   return !!(await regenerateDraft(user, draft.id, {}, now));
@@ -1027,7 +1027,7 @@ export async function refreshIfFactsNewer(
 ): Promise<boolean> {
   if (!s.personId || !s.outboundMessageId || !FACT_DRAFT_KINDS.has(s.kind)) return false;
   const draft = await db.outbound.get(s.outboundMessageId);
-  if (!draft || draft.status !== 'draft' || draft.bodyFinal) return false;
+  if (draft?.status !== 'draft' || draft.bodyFinal) return false;
   const facts = await db.facts
     .where('personId')
     .equals(s.personId)
@@ -1176,7 +1176,7 @@ export async function evaluateImmediateSuggestions(
   now = new Date(),
 ): Promise<void> {
   const user = await db.users.get(userId);
-  if (!user || !user.onboardingCompletedAt) return;
+  if (!user?.onboardingCompletedAt) return;
   const inp = await ruleInput(userId, now, scope);
   const all = generateCandidates(inp);
   // whatever this chat's rules no longer produce is no longer true

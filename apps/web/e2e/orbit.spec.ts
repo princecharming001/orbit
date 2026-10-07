@@ -1,4 +1,5 @@
 import { expect, type Page, type TestInfo, test } from '@playwright/test';
+import { injectPeople } from './helpers';
 
 async function prep(page: Page) {
   // The demo is laid out on business days relative to "now" (a Monday chat is not "tomorrow" on a Friday), so pin
@@ -71,7 +72,6 @@ test.describe('Orbit demo flow', () => {
 
   test('approve a thank-you: approval binds the text, card leaves Today, Sent tab lists it', async ({
     page,
-    context,
   }) => {
     await loadDemo(page);
     const card = page.getByTestId('suggestion-thank_you').first();
@@ -356,56 +356,6 @@ test.describe('Orbit demo flow', () => {
   });
 });
 
-/** Add `n` synthetic contacts (Zipf-distributed companies, mostly weak ties) straight into IndexedDB. */
-async function injectPeople(page: Page, n: number) {
-  await page.evaluate(async (count) => {
-    const open = indexedDB.open('orbit');
-    const idb: IDBDatabase = await new Promise((res, rej) => {
-      open.onsuccess = () => res(open.result);
-      open.onerror = () => rej(open.error);
-    });
-    const userId: string = await new Promise((res) => {
-      const r = idb.transaction('users').objectStore('users').getAll();
-      r.onsuccess = () => res((r.result as { id: string }[])[0]!.id);
-    });
-    let seed = 7;
-    const rnd = () => {
-      seed = (seed * 1664525 + 1013904223) >>> 0;
-      return seed / 2 ** 32;
-    };
-    const tx = idb.transaction('people', 'readwrite');
-    const store = tx.objectStore('people');
-    const companies = Math.max(5, Math.round(count / 3));
-    for (let i = 0; i < count; i++) {
-      const c = Math.floor(companies * rnd() ** 2.5);
-      const u = rnd();
-      const strength = u < 0.03 ? 0.6 + rnd() * 0.3 : u < 0.15 ? 0.3 + rnd() * 0.25 : rnd() * 0.25;
-      store.put({
-        id: `e2e-${i}`,
-        userId,
-        displayName: `Test Person ${i}`,
-        firstName: 'Test',
-        lastName: `Person${i}`,
-        nameNormalized: `test person ${i}`,
-        emails: [],
-        currentOrganizationRaw: c === 0 ? 'Google' : `Synthetic Company ${c}`,
-        relationshipType: 'unknown',
-        strength,
-        interactionCount: 0,
-        sources: ['manual'],
-        isHuman: true,
-        tags: [],
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
-    }
-    await new Promise((res) => {
-      tx.oncomplete = res;
-    });
-    idb.close();
-  }, n);
-}
-
 async function checkMap(page: Page, info: TestInfo, name: string) {
   const vp = page.viewportSize()!;
   const canvas = page.getByTestId('orbit-canvas');
@@ -518,6 +468,8 @@ test.describe('Map on a touch phone (UI-18)', () => {
     await expect
       .poll(async () => await canvas.getAttribute('data-first-dot'), { timeout: 10_000 })
       .toBeTruthy();
+    // the first visit plays the arrival: tap where the dot has landed
+    await expect(canvas).toHaveAttribute('data-animating', 'false', { timeout: 10_000 });
     // the orbit holds still on touch screens, and the copy talks about taps, not hovering
     await expect(canvas).toHaveAttribute('data-moving', 'false');
     await expect(page.getByText(/tap a person to see who they are/i)).toBeVisible();

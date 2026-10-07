@@ -2393,6 +2393,7 @@ export function buildDemoDataset(
       close: (a: Person) => `I'll tell ${a.firstName} how much I appreciated the intro.`,
     },
   ];
+  const introduced: { b: Person; topic: Topic; thanks: Date }[] = [];
   // whom each kind of person knows well enough to vouch for, closest first
   const NEAR: Record<Exclude<Fn, 'other'>, Fn[]> = {
     swe: ['swe', 'bank_eng', 'data', 'pm', 'design'],
@@ -2471,6 +2472,141 @@ export function buildDemoDataset(
       invitedAt: addMinutes(reply, 45),
     });
     pastChat(b, th, ev, addMinutes(reply, 40), thanks, { out: thanks, in: reply });
+    introduced.push({ b, topic, thanks });
+  });
+  // Both of the people met through those intros later passed the student on again, so the introductions reach a
+  // third generation. Each sends the student to someone in their own line of work or the one next to it (the same
+  // rule as above), at a firm they worked at when there is one, and every loop is closed: the intro, a call, and a
+  // thank-you that promises to tell the introducer.
+  const SECOND = [
+    {
+      body: (a: Person, c: Person, area: string, standing: string, talked: string) =>
+        `Hi ${meFirst} and ${c.firstName},\n\n${meFirst}, meet ${c.firstName}. ${c.firstName} is ${aTitle(c)} at ${c.currentOrganizationRaw}, and the first person I'd ask about ${area}. ${c.firstName}, ${meFirst} is the ${schoolShort} ${standing} I spoke with a few weeks ago about ${talked}. Over to the two of you.\n\n${a.firstName}`,
+      ack: (a: Person, c: Person, area: string) =>
+        `Thanks, ${a.firstName}, and I'll move you to bcc.\n\n${c.firstName}, it's good to meet you. Could we find 15 minutes sometime soon? I'd like to hear about ${area}.\n\n${meFirst}`,
+      subject: (a: Person) => `${a.firstName} thought we should talk`,
+      propose: (a: Person, when: string) =>
+        `Glad ${a.firstName} put us in touch. Does ${when} work for a call?`,
+      accept: (when: string) => `${when} is great, thank you. I'll be there.`,
+      thanks: (when: string) => `Thank you for your help ${when}.`,
+      area: (org: string) => `what the first year at ${org} looks like`,
+      advice:
+        'Your advice to ask for one small project I can own in the first month is the first thing I will try.',
+      close: (a: Person) => `I'll make sure ${a.firstName} hears how useful it was.`,
+    },
+    {
+      body: (a: Person, c: Person, area: string, standing: string, talked: string) =>
+        `Hi ${meFirst} and ${c.firstName},\n\n${meFirst}, meet ${c.firstName}. ${c.firstName} is ${aTitle(c)} at ${c.currentOrganizationRaw} and the right person for your questions about ${area}. ${c.firstName}, ${meFirst} is a ${schoolShort} ${standing}, and we had a good talk about ${talked}. I'll let you take it from here.\n\n${a.firstName}`,
+      ack: (a: Person, c: Person, area: string) =>
+        `Thank you, ${a.firstName}, moving you to bcc so your inbox stays quiet.\n\n${c.firstName}, thanks for being open to a call. Would 15 minutes sometime soon be possible? I'm curious about ${area}.\n\n${meFirst}`,
+      subject: (a: Person) => `Following ${a.firstName}'s note`,
+      propose: (a: Person, when: string) => `Any friend of ${a.firstName}'s is welcome. How about ${when}?`,
+      accept: (when: string, c: Person) => `${when} suits me well. Thank you, ${c.firstName}.`,
+      thanks: (_: string, slot: Date) => `Thanks a lot for the perspective ${partOfDay(slot)}.`,
+      area: (org: string) => `how new hires at ${org} pick their first team`,
+      advice: 'Hearing how you chose your first team made the decision ahead of me far more concrete.',
+      close: (a: Person) => `I'll let ${a.firstName} know the intro was worth it.`,
+    },
+  ];
+  /**
+   * Someone the introducer could vouch for, from the connections the student has not written to: in their line of
+   * work or the one next to it (else, for someone in tech, anyone else in tech), at a firm they worked at, then their own, then anywhere; never at a firm the student
+   * has applied to (the brief's one referral ask runs through Maya).
+   */
+  const vouchFor = (a: Person): Person | undefined => {
+    const fnA = fnOf.get(a.id);
+    if (!fnA || fnA === 'other') return undefined;
+    const near = NEAR[fnA];
+    // when no one in their own line of work is left, someone in tech knows the rest of tech
+    const TECH: Fn[] = ['swe', 'data', 'pm', 'design'];
+    const fits = TECH.includes(fnA) ? [...near, ...TECH.filter((f) => !near.includes(f))] : near;
+    const inOthers = new Set(others.map((o) => o.p.id));
+    const talked = new Set(threads.flatMap((t) => t.participantPersonIds));
+    // a first name of their own, so "Did Mateo introduce you to Felix?" and the map's chains name one person each
+    const talkedLast = new Set(people.filter((p) => talked.has(p.id)).map((p) => p.lastName));
+    const past = affiliations
+      .filter((x) => x.personId === a.id && x.kind === 'employment' && !x.isCurrent)
+      .map((x) => x.organizationId);
+    const rank = (p: Person) => {
+      const org = p.currentOrganizationId ?? '';
+      const where = past.includes(org) ? 0 : org === a.currentOrganizationId ? 1 : 2;
+      return where * 10 + fits.indexOf(fnOf.get(p.id)!);
+    };
+    const pick = people
+      .slice(SHOWCASE)
+      .filter(
+        (p) =>
+          !!p.primaryEmail &&
+          !inOthers.has(p.id) &&
+          !talked.has(p.id) &&
+          !takenFirst.has(p.firstName) &&
+          !talkedLast.has(p.lastName) &&
+          p.currentOrganizationId !== 'org_stripe' &&
+          !applied.has(p.currentOrganizationId ?? '') &&
+          fits.includes(fnOf.get(p.id) ?? 'other'),
+      )
+      .sort((x, y) => rank(x) - rank(y))[0];
+    if (!pick) return undefined;
+    takenFirst.add(pick.firstName);
+    takenLast.add(pick.lastName);
+    return pick;
+  };
+  introduced.forEach(({ b: a, topic: aTopic, thanks: aThanks }, k) => {
+    const x = SECOND[k];
+    const c = x && vouchFor(a);
+    if (!x || !c) return;
+    const area = x.area(c.currentOrganizationRaw ?? '');
+    const talked = aTopic.area(a.currentOrganizationRaw ?? '');
+    const intro = businessDay(aThanks, 3, 10, 5 + k * 13);
+    addThread([a, c], `Intro: ${meFirst} <> ${c.firstName}`, [
+      {
+        dir: 'in',
+        from: a,
+        cc: [c],
+        at: intro,
+        body: x.body(a, c, area, standingAt(intro), talked),
+        signal: 'intro_offer',
+      },
+      {
+        dir: 'out',
+        to: [c],
+        at: addMinutes(intro, 95),
+        body: x.ack(a, c, area),
+        signal: 'other',
+      },
+    ]);
+    const reply = businessDay(intro, 1, 12, 20);
+    const slot = businessDay(intro, 4, 16);
+    const thanks = businessDay(slot, 0, 18, 25);
+    const when = `${weekday(slot)} at 4pm`;
+    const th = addThread([c], x.subject(a), [
+      {
+        dir: 'in',
+        at: reply,
+        body: `Hi ${meFirst},\n\n${x.propose(a, when)}\n\n${c.firstName}`,
+        signal: 'scheduling_proposal',
+        times: proposal(slot, when),
+      },
+      {
+        dir: 'out',
+        at: addMinutes(reply, 35),
+        body: `${x.accept(when, c)}\n\n${meFirst}`,
+        signal: 'scheduling_proposal',
+      },
+      {
+        dir: 'out',
+        at: thanks,
+        body: `Hi ${c.firstName},\n\n${x.thanks(dayRef(slot, thanks), slot)} ${x.advice} ${x.close(a)}\n\n${meFirst}`,
+        signal: 'thank_you',
+      },
+    ]);
+    const ev = addEvent(c, {
+      id: `ev_intro2_${c.id}`,
+      title: `${meFirst} / ${c.firstName}`,
+      start: slot,
+      invitedAt: addMinutes(reply, 40),
+    });
+    pastChat(c, th, ev, addMinutes(reply, 35), thanks, { out: thanks, in: reply });
   });
   // A softer introduction from one of the regulars, two business days ago: a colleague copied and described, with
   // no "meet" or "introduce" anywhere. The introduction cues cannot call it, so Orbit asks the student instead

@@ -149,7 +149,7 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
   };
   for (const chat of inp.chats) {
     const person = inp.people.get(chat.personId);
-    if (!person || !person.isHuman || person.hiddenAt) continue;
+    if (!person?.isHuman || person.hiddenAt) continue;
     const rel = goalRel(chat.personId);
     // a live conversation is worth more than its company alone: never let a cold lead outrank it
     const liveRel = Math.max(rel, 0.6);

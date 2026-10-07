@@ -2,7 +2,7 @@
 
 A networking copilot for college students who are recruiting: coffee chats on autopilot.
 
-Orbit connects Gmail, Google Calendar and your LinkedIn export, learns what you're recruiting for, finds the right people, drafts in your voice, tracks every conversation through an inferred pipeline, remembers what was said (Granola notes, voice capture), shows your network as an orbit map with paths to anyone, and hands you a morning brief of one-tap suggestions. Every draft follows the outreach playbook in [`docs/plan/15-outreach-playbook.md`](docs/plan/15-outreach-playbook.md). Nothing is sent without your approval, and approval sends at once (there is no undo window in this version), so the draft editor is where you make changes.
+Orbit connects Gmail, Google Calendar and your LinkedIn export, learns what you're recruiting for, finds the right people, drafts in your voice, tracks every conversation through an inferred pipeline, remembers what was said (Granola notes, voice capture), shows your network as an animated orbit map with paths to anyone and the chains of introductions behind each person, and hands you a morning brief of one-tap suggestions. Every draft follows the outreach playbook in [`docs/plan/15-outreach-playbook.md`](docs/plan/15-outreach-playbook.md). Nothing is sent without your approval, and approval sends at once (there is no undo window in this version), so the draft editor is where you make changes.
 
 "Try it with demo data" on the landing page loads a junior's recruiting season replayed through the real pipeline; see [`docs/plan/14-static-v1-architecture.md`](docs/plan/14-static-v1-architecture.md) §3.
 

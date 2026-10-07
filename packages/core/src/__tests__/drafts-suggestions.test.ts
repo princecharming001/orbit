@@ -1,12 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { buildDemoDataset } from '../demo/seed';
-import { type DraftContext, generateDraft } from '../drafts/templates';
-import { validateDraft } from '../drafts/validate';
 import { extractProposedTimes } from '../email/triage';
 import { parseConnectionsCsv } from '../linkedin/csv';
 import { recommendPeople } from '../recommend/score';
 import { heuristicResumeParse } from '../resume/parse';
-import { buildStyleCard, defaultStyleCard } from '../style/card';
+import { buildStyleCard } from '../style/card';
 import {
   endOfNextBusinessDay,
   generateCandidates,
@@ -15,70 +13,6 @@ import {
   selectForBrief,
 } from '../suggestions/rules';
 import type { PersonFact } from '../types';
-
-const facts: PersonFact[] = [
-  {
-    id: 'f1',
-    userId: 'u',
-    personId: 'p',
-    type: 'advice',
-    text: 'the key is showing how you handled ambiguity',
-    sourceTable: 'notes',
-    sourceId: 'n',
-    confidence: 0.8,
-    createdAt: '',
-  },
-  {
-    id: 'f2',
-    userId: 'u',
-    personId: 'p',
-    type: 'offer',
-    text: 'offered to refer me when the posting goes up',
-    sourceTable: 'notes',
-    sourceId: 'n',
-    confidence: 0.8,
-    createdAt: '',
-  },
-  {
-    id: 'f3',
-    userId: 'u',
-    personId: 'p',
-    type: 'hook',
-    text: 'they are hiring interns in January',
-    sourceTable: 'notes',
-    sourceId: 'n',
-    confidence: 0.7,
-    createdAt: '',
-  },
-];
-const ctx = (kind: DraftContext['kind'], extra: Partial<DraftContext> = {}): DraftContext => ({
-  user: {
-    firstName: 'Alex',
-    fullName: 'Alex Rivera',
-    school: 'Cornell University',
-    gradYear: 2027,
-    majors: ['Computer Science'],
-    cycleLabel: 'Summer 2027 internship',
-    targetFunctions: ['swe'],
-    timezone: 'America/New_York',
-    schedulingLink: 'https://cal.com/alex',
-  },
-  styleCard: defaultStyleCard('warm', 'Alex'),
-  person: {
-    firstName: 'Priya',
-    fullName: 'Priya Patel',
-    title: 'Product Manager',
-    org: 'Figma',
-    isAlumni: true,
-    relationshipType: 'alumni',
-    strength: 0.5,
-  },
-  facts,
-  kind,
-  channel: 'gmail',
-  now: new Date('2026-10-05T12:00:00Z'),
-  ...extra,
-});
 
 describe('style card', () => {
   it('learns greeting and signoff', () => {
