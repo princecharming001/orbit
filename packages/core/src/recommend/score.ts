@@ -70,7 +70,8 @@ export interface RecommendInput {
   resumeFacets: ResumeFacet[];
   people: Person[];
   chats: CoffeeChat[];
-  pathStrength: (personId: string) => number; // best path strength from the graph, 0..1
+  /** best path strength from the graph, 0..1; build it once per batch (bestPathsFrom), not one search per call */
+  pathStrength: (personId: string) => number;
   recentlyRecommended: Set<string>;
   now: Date;
   batchSize?: number;
@@ -120,7 +121,8 @@ export function recommendPeople(inp: RecommendInput): Recommendation[] {
     );
     const fit = 0.35 * companyMatch + 0.25 * fnMatch + 0.15 * indMatch + 0.25 * kw;
     if (fit < 0.12 && !p.isAlumni) continue;
-    const reach = Math.max(inp.pathStrength(p.id), p.strength, p.isAlumni ? 0.6 : 0.25);
+    const pathStrength = inp.pathStrength(p.id); // one lookup per candidate; callers pass a precomputed table
+    const reach = Math.max(pathStrength, p.strength, p.isAlumni ? 0.6 : 0.25);
     const prior = responsePrior(p, inp.user);
     const score = Math.max(fit, 0.05) ** 0.5 * reach ** 0.3 * prior ** 0.2;
     const reasons: { code: string; text: string }[] = [];
@@ -133,8 +135,7 @@ export function recommendPeople(inp: RecommendInput): Recommendation[] {
       });
     if (kw >= 0.2) reasons.push({ code: 'resume_overlap', text: 'Overlaps with your experience' });
     if (p.strength >= 0.3) reasons.push({ code: 'warm', text: 'You already know each other a little' });
-    else if (inp.pathStrength(p.id) >= 0.15)
-      reasons.push({ code: 'path', text: 'Reachable through someone you know' });
+    else if (pathStrength >= 0.15) reasons.push({ code: 'path', text: 'Reachable through someone you know' });
     out.push({
       id: `rec-${p.id}-${batchDate}`,
       userId: inp.userId,

@@ -1,6 +1,13 @@
 import type { Organization, Person, ReachPath } from '@orbit/core';
-import { type OrbitLayout, orbitLayout, ringRotation } from '@orbit/core';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  countOutsideWedges,
+  countOverlaps,
+  type OrbitLayout,
+  type OrbitNode,
+  orbitLayout,
+  orbitRotation,
+} from '@orbit/core';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { STAGE_COLOR } from '../pages/Pipeline';
 
 export interface MapProps {
@@ -11,6 +18,8 @@ export interface MapProps {
   highlightPath?: ReachPath; // reach mode
   highlightIds?: Set<string>;
   onSelect: (id: string) => void;
+  /** an aggregate dot ("+14 at Google") was clicked */
+  onSelectCluster?: (node: OrbitNode) => void;
   onHover?: (id: string | undefined) => void;
   rotate?: boolean;
   focusId?: string;
@@ -23,6 +32,39 @@ interface Pos {
   id: string;
 }
 
+interface LabelSlot {
+  key: string;
+  text: string;
+  mid: number; // wedge centre angle before rotation
+}
+
+/** gap between the outermost dots and the company labels, in CSS px */
+const LABEL_GAP = 14;
+const LABEL_FONT_PX = 11;
+
+const COARSE_QUERY = '(hover: none) and (pointer: coarse)';
+/** True on phones and tablets: no hover, a finger instead of a mouse. Follows changes (a tablet with a mouse). */
+export function useCoarsePointer(): boolean {
+  const [coarse, setCoarse] = useState(
+    () => typeof window !== 'undefined' && !!window.matchMedia?.(COARSE_QUERY).matches,
+  );
+  useEffect(() => {
+    const mq = window.matchMedia?.(COARSE_QUERY);
+    if (!mq) return;
+    const on = () => setCoarse(mq.matches);
+    mq.addEventListener?.('change', on);
+    return () => mq.removeEventListener?.('change', on);
+  }, []);
+  return coarse;
+}
+
+/** Fit the orbit (dots plus labels) inside the canvas: labels above and below need room, sides are clamped. */
+export function orbitScale(w: number, h: number, extent: number): number {
+  const side = w < 600 ? 10 : 60;
+  const s = Math.min(1, (h / 2 - LABEL_GAP - 16) / extent, (w / 2 - side) / extent);
+  return Math.max(0.2, s);
+}
+
 export function OrbitMap({
   people,
   orgs,
@@ -31,47 +73,96 @@ export function OrbitMap({
   highlightPath,
   highlightIds,
   onSelect,
+  onSelectCluster,
   onHover,
   rotate = true,
   focusId,
 }: MapProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
-  const [size, setSize] = useState({ w: 800, h: 640 });
+  const [size, setSize] = useState({ w: 0, h: 0 });
   const [hover, setHover] = useState<string | undefined>();
   const [paused, setPaused] = useState(false);
   const images = useRef(new Map<string, HTMLImageElement>());
   const startRef = useRef(performance.now());
   const posRef = useRef<Pos[]>([]);
+  const dirtyRef = useRef(true);
+  const lastTouch = useRef(0);
   const reduced =
     typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-  useEffect(() => {
+  // On touch screens the orbit holds still: a moving dot is hard to tap and its name card would drift away.
+  const coarse = useCoarsePointer();
+  // The canvas is absolutely positioned, so the wrapper's size comes from the page layout, never from the canvas.
+  useLayoutEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
-    const ro = new ResizeObserver(() => setSize({ w: el.clientWidth, h: Math.max(420, el.clientHeight) }));
+    const measure = () => setSize({ w: el.clientWidth, h: el.clientHeight });
+    measure();
+    const ro = new ResizeObserver(measure);
     ro.observe(el);
-    setSize({ w: el.clientWidth, h: Math.max(420, el.clientHeight) });
     return () => ro.disconnect();
   }, []);
-  const scale = Math.min(1, Math.min(size.w, size.h) / 960) * (size.w < 480 ? 0.9 : 1);
-  const layout: OrbitLayout = useMemo(
-    () => orbitLayout(people, orgs, { scale: Math.max(0.42, scale) }),
-    [people, orgs, scale],
-  );
+  // Geometry is computed once per network at unit scale; the viewport only changes the draw scale.
+  const layout: OrbitLayout = useMemo(() => orbitLayout(people, orgs), [people, orgs]);
+  const overlaps = useMemo(() => countOverlaps(layout.nodes), [layout]);
+  const outsideWedges = useMemo(() => countOutsideWedges(layout), [layout]);
+  const nodeById = useMemo(() => new Map(layout.nodes.map((n) => [n.id, n])), [layout]);
+  const scale = size.w && size.h ? orbitScale(size.w, size.h, layout.extent) : 1;
+  const narrow = size.w < 600;
   const pathIds = useMemo(
     () => new Set(highlightPath ? highlightPath.hops.flatMap((h) => [h.fromId, h.toId]) : []),
     [highlightPath],
   );
+  // Company labels, biggest companies first. A label is shown only when its arc is free; the test uses angles,
+  // so the set of labels does not change while the orbit turns.
+  const labels: LabelSlot[] = useMemo(() => {
+    if (!size.w) return [];
+    const ctx = document.createElement('canvas').getContext('2d');
+    if (!ctx) return [];
+    ctx.font = `500 ${Math.max(10, LABEL_FONT_PX * Math.max(0.85, scale))}px Inter, sans-serif`;
+    const radius = layout.extent * scale + LABEL_GAP;
+    const max = narrow ? 12 : 18;
+    const taken: [number, number][] = [];
+    const out: LabelSlot[] = [];
+    const ordered = [...layout.groups].sort((a, b) => b.count - a.count);
+    for (const g of ordered) {
+      if (g.count < 2 && layout.groups.length > 8) continue;
+      const text = g.label.length > max ? `${g.label.slice(0, max - 1)}…` : g.label;
+      const half = (ctx.measureText(text).width + 12) / 2 / radius;
+      const mid = (g.startAngle + g.endAngle) / 2;
+      const lo = mid - half;
+      const hi = mid + half;
+      const TAU = Math.PI * 2;
+      const clash = taken.some(([a, b]) => [-TAU, 0, TAU].some((s) => lo < b + s && hi > a + s));
+      if (clash) continue;
+      taken.push([lo, hi]);
+      out.push({ key: g.key, text, mid });
+    }
+    return out;
+  }, [layout, scale, size.w, narrow]);
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d')!;
+    if (!canvas || !size.w || !size.h) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
     let raf = 0;
-    const draw = () => {
+    let lastDraw = 0;
+    dirtyRef.current = true;
+    const moving = rotate && !coarse && !paused && !reduced && !highlightPath;
+    canvas.dataset.moving = String(moving);
+    const animating = moving || pending.size > 0;
+    const draw = (now: number) => {
+      raf = requestAnimationFrame(draw);
+      // redraw on change, otherwise at ~30 fps while something moves; an idle map costs nothing
+      if (!dirtyRef.current && (!animating || now - lastDraw < 33)) return;
+      dirtyRef.current = false;
+      lastDraw = now;
       const dpr = window.devicePixelRatio || 1;
-      if (canvas.width !== size.w * dpr || canvas.height !== size.h * dpr) {
-        canvas.width = size.w * dpr;
-        canvas.height = size.h * dpr;
+      const W = Math.round(size.w * dpr);
+      const H = Math.round(size.h * dpr);
+      if (canvas.width !== W || canvas.height !== H) {
+        canvas.width = W;
+        canvas.height = H;
         canvas.style.width = `${size.w}px`;
         canvas.style.height = `${size.h}px`;
       }
@@ -79,37 +170,53 @@ export function OrbitMap({
       ctx.clearRect(0, 0, size.w, size.h);
       const cx = size.w / 2;
       const cy = size.h / 2;
-      const elapsed =
-        rotate && !paused && !reduced && !highlightPath ? performance.now() - startRef.current : 0;
+      const rot = orbitRotation(moving ? performance.now() - startRef.current : 0);
       // rings
       ctx.strokeStyle = '#eceef2';
       ctx.lineWidth = 1;
       for (const r of layout.ringRadii) {
         ctx.beginPath();
-        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.arc(cx, cy, r * scale, 0, Math.PI * 2);
         ctx.stroke();
       }
-      // company arcs/labels on outer ring
-      const outer = layout.ringRadii[2] + 44 * Math.max(0.42, scale);
-      ctx.font = `500 ${Math.max(10, 11 * Math.max(0.8, scale))}px Inter, sans-serif`;
+      // company labels just outside the outermost dots, kept inside the canvas
+      const labelR = layout.extent * scale + LABEL_GAP;
+      const fontPx = Math.max(10, LABEL_FONT_PX * Math.max(0.85, scale));
+      ctx.font = `500 ${fontPx}px Inter, sans-serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      for (const g of layout.groups) {
-        if (g.count < 2 && layout.groups.length > 12) continue;
-        const a = (g.startAngle + g.endAngle) / 2 + ringRotation(2, elapsed);
-        const x = cx + Math.cos(a) * outer;
-        const y = cy + Math.sin(a) * outer;
-        const dim = (highlightPath || highlightIds) && true;
-        ctx.fillStyle = dim ? 'rgba(118,125,137,0.45)' : '#767d89';
-        ctx.fillText(g.label.length > 18 ? `${g.label.slice(0, 17)}…` : g.label, x, y);
+      let clipped = 0;
+      const labelAlpha = highlightPath || highlightIds ? 0.45 : 1;
+      ctx.fillStyle = '#767d89';
+      for (const l of labels) {
+        const a = l.mid + rot;
+        const half = ctx.measureText(l.text).width / 2;
+        // anchor the label's near edge on the label ring, so side labels grow outwards, not into the dots
+        const r = labelR + Math.abs(Math.cos(a)) * half + Math.abs(Math.sin(a)) * (fontPx / 2);
+        const want = cx + Math.cos(a) * r;
+        const x = Math.min(Math.max(want, half + 4), size.w - half - 4);
+        const y = cy + Math.sin(a) * r;
+        // a label that would have to slide over the dots to stay on screen fades out instead (narrow screens)
+        const alpha = Math.max(0, Math.min(1, 1 - (Math.abs(want - x) - 4) / 16));
+        if (alpha <= 0) continue;
+        if (y - fontPx / 2 < 0 || y + fontPx / 2 > size.h || x - half < 0 || x + half > size.w) clipped++;
+        ctx.globalAlpha = alpha * labelAlpha;
+        ctx.fillText(l.text, x, y);
       }
+      ctx.globalAlpha = 1;
+      canvas.dataset.labels = String(labels.length);
+      canvas.dataset.labelsClipped = String(clipped);
       // positions
       const pos: Pos[] = [];
       for (const n of layout.nodes) {
-        const a = n.angle + ringRotation(n.ring, elapsed);
-        pos.push({ id: n.id, x: cx + Math.cos(a) * n.radius, y: cy + Math.sin(a) * n.radius, r: n.size / 2 });
+        const a = n.angle + rot;
+        const r = n.radius * scale;
+        pos.push({ id: n.id, x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r, r: (n.size * scale) / 2 });
       }
       posRef.current = pos;
+      // test hook: where the strongest person's dot is, in CSS px from the canvas's top left
+      const first = pos.find((q) => nodeById.get(q.id)?.person);
+      if (first) canvas.dataset.firstDot = `${Math.round(first.x)},${Math.round(first.y)}`;
       const byId = new Map(pos.map((p) => [p.id, p]));
       // path lines
       if (highlightPath) {
@@ -130,15 +237,38 @@ export function OrbitMap({
       // nodes
       for (const n of layout.nodes) {
         const p = byId.get(n.id)!;
+        if (n.cluster) {
+          const dim =
+            !!highlightPath || (highlightIds && !n.cluster.personIds.some((id) => highlightIds.has(id)));
+          ctx.globalAlpha = dim ? 0.18 : 1;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+          ctx.fillStyle = '#eef0f5';
+          ctx.fill();
+          ctx.lineWidth = 1;
+          ctx.strokeStyle = '#c9cdd6';
+          ctx.stroke();
+          const label = n.cluster.count > 999 ? '999+' : `+${n.cluster.count}`;
+          if (p.r >= 5) {
+            ctx.fillStyle = '#4a505c';
+            ctx.font = `600 ${Math.max(7, Math.min(p.r * 0.8, (p.r * 2.8) / label.length))}px Inter, sans-serif`;
+            ctx.fillText(label, p.x, p.y + 0.5);
+          }
+          ctx.globalAlpha = 1;
+          continue;
+        }
+        const person = n.person!;
         const dim = (highlightPath && !pathIds.has(n.id)) || (highlightIds && !highlightIds.has(n.id));
         ctx.globalAlpha = dim ? 0.18 : 1;
-        const person = n.person;
-        const img = person.photoUrl ? images.current.get(person.id) : undefined;
+        let img = person.photoUrl ? images.current.get(person.id) : undefined;
         if (person.photoUrl && !img) {
-          const im = new Image();
-          im.crossOrigin = 'anonymous';
-          im.src = person.photoUrl;
-          images.current.set(person.id, im);
+          img = new Image();
+          img.crossOrigin = 'anonymous';
+          img.onload = () => {
+            dirtyRef.current = true;
+          };
+          img.src = person.photoUrl;
+          images.current.set(person.id, img);
         }
         ctx.save();
         ctx.beginPath();
@@ -149,9 +279,11 @@ export function OrbitMap({
         else {
           ctx.fillStyle = `hsl(${hue(person.id)} 45% 55%)`;
           ctx.fillRect(p.x - p.r, p.y - p.r, p.r * 2, p.r * 2);
-          ctx.fillStyle = '#fff';
-          ctx.font = `600 ${Math.max(9, p.r * 0.8)}px Inter, sans-serif`;
-          ctx.fillText(initialsOf(person), p.x, p.y + 0.5);
+          if (p.r >= 7) {
+            ctx.fillStyle = '#fff';
+            ctx.font = `600 ${Math.max(7, p.r * 0.8)}px Inter, sans-serif`;
+            ctx.fillText(initialsOf(person), p.x, p.y + 0.5);
+          }
         }
         ctx.restore();
         // ring: stage colour or hairline
@@ -191,15 +323,20 @@ export function OrbitMap({
       // tooltip
       if (hover) {
         const p = byId.get(hover);
-        const person = layout.nodes.find((n) => n.id === hover)?.person;
-        if (p && person) {
-          const label = person.displayName;
+        const node = nodeById.get(hover);
+        if (p && node) {
+          const label = node.cluster
+            ? node.cluster.label === 'Other companies'
+              ? `${node.cluster.count} people at other companies`
+              : `${node.cluster.count} more at ${node.cluster.label}`
+            : node.person!.displayName;
           ctx.font = '500 12px Inter, sans-serif';
           const w = ctx.measureText(label).width + 16;
-          const x = p.x;
-          const y = p.y - p.r - 18;
+          const x = Math.min(Math.max(p.x, w / 2 + 4), size.w - w / 2 - 4);
+          const y = Math.max(p.y - p.r - 18, 14);
           ctx.fillStyle = '#fff';
           ctx.strokeStyle = '#e6e8ec';
+          ctx.lineWidth = 1;
           roundRect(ctx, x - w / 2, y - 11, w, 22, 6);
           ctx.fill();
           ctx.stroke();
@@ -207,16 +344,18 @@ export function OrbitMap({
           ctx.fillText(label, x, y);
         }
       }
-      raf = requestAnimationFrame(draw);
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
   }, [
     layout,
+    labels,
+    nodeById,
     size,
     hover,
     paused,
     rotate,
+    coarse,
     reduced,
     highlightPath,
     highlightIds,
@@ -226,36 +365,73 @@ export function OrbitMap({
     scale,
     focusId,
   ]);
-  const hit = (e: React.MouseEvent<HTMLCanvasElement>): string | undefined => {
+  const hit = (clientX: number, clientY: number, touch = false): string | undefined => {
     const rect = canvasRef.current!.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
     let best: Pos | undefined;
-    for (const p of posRef.current) if ((x - p.x) ** 2 + (y - p.y) ** 2 <= (p.r + 4) ** 2) best = p;
+    let bestD = Number.POSITIVE_INFINITY;
+    for (const p of posRef.current) {
+      // small dots get a finger-sized target on touch screens
+      const reach = Math.max(p.r + 4, touch ? 16 : 8);
+      const d = (x - p.x) ** 2 + (y - p.y) ** 2;
+      if (d <= reach ** 2 && d < bestD) {
+        best = p;
+        bestD = d;
+      }
+    }
     return best?.id;
   };
+  const activate = (id: string) => {
+    const node = nodeById.get(id);
+    if (node?.cluster) onSelectCluster?.(node);
+    else onSelect(id);
+  };
+  const clearHover = () => {
+    setHover(undefined);
+    setPaused(false);
+    onHover?.(undefined);
+  };
   return (
-    <div ref={wrapRef} className="relative w-full h-full min-h-[420px]">
+    <div ref={wrapRef} className="absolute inset-0 overflow-hidden">
       <canvas
         ref={canvasRef}
-        className="block cursor-pointer"
+        className="absolute left-0 top-0 block cursor-pointer touch-manipulation"
         data-testid="orbit-canvas"
-        onMouseMove={(e) => {
-          const id = hit(e);
+        data-overlaps={overlaps}
+        data-outside-wedges={outsideWedges}
+        data-nodes={layout.nodes.length}
+        data-aggregated={layout.aggregated}
+        data-scale={scale.toFixed(3)}
+        aria-label={`Orbit map of ${people.length} people`}
+        role="img"
+        onPointerMove={(e) => {
+          if (e.pointerType !== 'mouse') return;
+          const id = hit(e.clientX, e.clientY);
           if (id !== hover) {
             setHover(id);
             onHover?.(id);
           }
           setPaused(!!id);
         }}
-        onMouseLeave={() => {
-          setHover(undefined);
-          setPaused(false);
-          onHover?.(undefined);
+        onPointerLeave={(e) => {
+          if (e.pointerType === 'mouse') clearHover();
+        }}
+        onPointerUp={(e) => {
+          if (e.pointerType === 'mouse') return;
+          // touch: the first tap shows who it is, a second tap on the same dot opens it
+          lastTouch.current = Date.now();
+          const id = hit(e.clientX, e.clientY, true);
+          if (!id) return clearHover();
+          if (id === hover) return activate(id);
+          setHover(id);
+          setPaused(true);
+          onHover?.(id);
         }}
         onClick={(e) => {
-          const id = hit(e);
-          if (id) onSelect(id);
+          if (Date.now() - lastTouch.current < 600) return; // already handled as a tap
+          const id = hit(e.clientX, e.clientY);
+          if (id) activate(id);
         }}
       />
     </div>

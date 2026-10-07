@@ -1,4 +1,4 @@
-import { expect, type Page, test } from '@playwright/test';
+import { expect, type Page, type TestInfo, test } from '@playwright/test';
 
 async function prep(page: Page) {
   // The demo is laid out on business days relative to "now" (a Monday chat is not "tomorrow" on a Friday), so pin
@@ -217,6 +217,220 @@ test.describe('Orbit demo flow', () => {
     page.on('dialog', (d) => d.accept());
     await page.getByRole('button', { name: /delete all data/i }).click();
     await expect(page).toHaveURL(/\/(orbit\/?)?$/);
+  });
+});
+
+/** Add `n` synthetic contacts (Zipf-distributed companies, mostly weak ties) straight into IndexedDB. */
+async function injectPeople(page: Page, n: number) {
+  await page.evaluate(async (count) => {
+    const open = indexedDB.open('orbit');
+    const idb: IDBDatabase = await new Promise((res, rej) => {
+      open.onsuccess = () => res(open.result);
+      open.onerror = () => rej(open.error);
+    });
+    const userId: string = await new Promise((res) => {
+      const r = idb.transaction('users').objectStore('users').getAll();
+      r.onsuccess = () => res((r.result as { id: string }[])[0]!.id);
+    });
+    let seed = 7;
+    const rnd = () => {
+      seed = (seed * 1664525 + 1013904223) >>> 0;
+      return seed / 2 ** 32;
+    };
+    const tx = idb.transaction('people', 'readwrite');
+    const store = tx.objectStore('people');
+    const companies = Math.max(5, Math.round(count / 3));
+    for (let i = 0; i < count; i++) {
+      const c = Math.floor(companies * rnd() ** 2.5);
+      const u = rnd();
+      const strength = u < 0.03 ? 0.6 + rnd() * 0.3 : u < 0.15 ? 0.3 + rnd() * 0.25 : rnd() * 0.25;
+      store.put({
+        id: `e2e-${i}`,
+        userId,
+        displayName: `Test Person ${i}`,
+        firstName: 'Test',
+        lastName: `Person${i}`,
+        nameNormalized: `test person ${i}`,
+        emails: [],
+        currentOrganizationRaw: c === 0 ? 'Google' : `Synthetic Company ${c}`,
+        relationshipType: 'unknown',
+        strength,
+        interactionCount: 0,
+        sources: ['manual'],
+        isHuman: true,
+        tags: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+    }
+    await new Promise((res) => {
+      tx.oncomplete = res;
+    });
+    idb.close();
+  }, n);
+}
+
+async function checkMap(page: Page, info: TestInfo, name: string) {
+  const vp = page.viewportSize()!;
+  const canvas = page.getByTestId('orbit-canvas');
+  await expect(canvas).toBeVisible();
+  // wait for the people to load and a frame with company labels to be drawn
+  await expect
+    .poll(async () => Number(await canvas.getAttribute('data-labels')), { timeout: 10_000 })
+    .toBeGreaterThan(0);
+  await expect(canvas).toHaveAttribute('data-labels-clipped', '0');
+  await expect(canvas).toHaveAttribute('data-overlaps', '0');
+  // every dot sits inside its company's wedge, so a label names the people under it
+  await expect(canvas).toHaveAttribute('data-outside-wedges', '0');
+  const box = (await canvas.boundingBox())!;
+  expect(box.x).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width).toBeLessThanOrEqual(vp.width + 1);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(vp.width);
+  // the side panel (legend and the path finder) is reachable at every width
+  const finder = page.getByRole('button', { name: /find a path to someone/i });
+  await finder.scrollIntoViewIfNeeded();
+  await expect(finder).toBeInViewport();
+  const fb = (await finder.boundingBox())!;
+  expect(fb.x + fb.width).toBeLessThanOrEqual(vp.width + 1);
+  // the whole panel (legend, instructions, path finder) is on screen horizontally, never cut off (UI-07)
+  const panel = (await page.getByTestId('map-panel').boundingBox())!;
+  expect(panel.x).toBeGreaterThanOrEqual(0);
+  expect(panel.x + panel.width).toBeLessThanOrEqual(vp.width + 1);
+  expect(panel.height).toBeGreaterThan(150);
+  await info.attach(`map-${name}-${vp.width}x${vp.height}`, {
+    body: await page.screenshot({ fullPage: false }),
+    contentType: 'image/png',
+  });
+}
+
+test.describe('Map readability', () => {
+  test('orbit fits, has no overlapping dots and no clipped labels at phone and laptop widths', async ({
+    page,
+  }, info) => {
+    test.setTimeout(180_000);
+    await loadDemo(page);
+    for (const [w, h] of [
+      [390, 844],
+      [820, 1180],
+      [1024, 768],
+      [1280, 720],
+      [1440, 800],
+    ] as const) {
+      await page.setViewportSize({ width: w, height: h });
+      await page.goto('map');
+      await checkMap(page, info, 'demo');
+    }
+    // the stated scale: 300 and 2,000 people
+    for (const extra of [210, 1700]) {
+      await injectPeople(page, extra);
+      for (const [w, h] of [
+        [390, 844],
+        [1280, 720],
+      ] as const) {
+        await page.setViewportSize({ width: w, height: h });
+        await page.goto('map');
+        await checkMap(page, info, `${extra}`);
+        if (extra > 1000)
+          expect(
+            Number(await page.getByTestId('orbit-canvas').getAttribute('data-aggregated')),
+          ).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  test('reach never shows "No route found" before the routes load, and company search is normalised', async ({
+    page,
+  }) => {
+    await loadDemo(page);
+    await page.goto('pipeline?view=table');
+    const name = await page
+      .locator('table tbody tr')
+      .nth(2)
+      .locator('td')
+      .first()
+      .locator('span.font-medium')
+      .innerText();
+    await page.goto('map?reach=1');
+    await page.evaluate(() => {
+      const w = window as unknown as { __sawNoRoute: boolean };
+      w.__sawNoRoute = false;
+      new MutationObserver(() => {
+        if (document.body.innerText.includes('No route found')) w.__sawNoRoute = true;
+      }).observe(document.body, { subtree: true, childList: true, characterData: true });
+    });
+    await page.getByTestId('reach-input').fill(name.trim());
+    await page.getByTestId('reach-input').press('Enter');
+    await expect(page.getByTestId('reach-path').first()).toBeVisible({ timeout: 15_000 });
+    expect(await page.evaluate(() => (window as unknown as { __sawNoRoute: boolean }).__sawNoRoute)).toBe(
+      false,
+    );
+    await page.getByTestId('reach-input').fill('stripe inc');
+    await page.getByTestId('reach-input').press('Enter');
+    await expect(page.getByText(/people there now/i)).toBeVisible();
+  });
+});
+
+test.describe('Map on a touch phone (UI-18)', () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+
+  test('a tap names the person without leaving the map, and the reach routes are on screen', async ({
+    page,
+  }, info) => {
+    await loadDemo(page);
+    await page.goto('map');
+    const canvas = page.getByTestId('orbit-canvas');
+    await expect
+      .poll(async () => await canvas.getAttribute('data-first-dot'), { timeout: 10_000 })
+      .toBeTruthy();
+    // the orbit holds still on touch screens, and the copy talks about taps, not hovering
+    await expect(canvas).toHaveAttribute('data-moving', 'false');
+    await expect(page.getByText(/tap a person to see who they are/i)).toBeVisible();
+    await expect(page.getByText(/hover/i)).toHaveCount(0);
+    const [x, y] = (await canvas.getAttribute('data-first-dot'))!.split(',').map(Number) as [number, number];
+    const box = (await canvas.boundingBox())!;
+    await page.touchscreen.tap(box.x + x, box.y + y);
+    const card = page.getByTestId('map-tooltip');
+    await expect(card).toBeVisible();
+    await expect(page).toHaveURL(/\/map$/);
+    await expect(card.getByTestId('map-open-person')).toBeVisible();
+    const name = (await card.locator('.font-medium').first().innerText()).trim();
+    expect(name.length).toBeGreaterThan(1);
+    await info.attach('map-touch-tooltip-390x844', {
+      body: await page.screenshot({ fullPage: false }),
+      contentType: 'image/png',
+    });
+    // a second tap on the same dot opens the profile
+    await page.touchscreen.tap(box.x + x, box.y + y);
+    await expect(page).toHaveURL(/\/people\//);
+
+    // reach on a phone: the first route shows without scrolling, the next step is reachable
+    const targetId: string = await page.evaluate(async () => {
+      const open = indexedDB.open('orbit');
+      const idb: IDBDatabase = await new Promise((res, rej) => {
+        open.onsuccess = () => res(open.result);
+        open.onerror = () => rej(open.error);
+      });
+      const all: { id: string; strength: number; isHuman: boolean }[] = await new Promise((res) => {
+        const r = idb.transaction('people').objectStore('people').getAll();
+        r.onsuccess = () => res(r.result);
+      });
+      idb.close();
+      return all.filter((p) => p.isHuman && p.strength < 0.3).sort((a, b) => a.id.localeCompare(b.id))[0]!.id;
+    });
+    await page.goto(`map?reach=${targetId}`);
+    const route = page.getByTestId('reach-path').first();
+    await expect(route).toBeVisible({ timeout: 15_000 });
+    await expect(route).toBeInViewport();
+    const next = page.getByRole('button', { name: /^(ask .+ for an intro|write to .+ directly)$/i });
+    await next.scrollIntoViewIfNeeded();
+    await expect(next).toBeInViewport();
+    const nb = (await next.boundingBox())!;
+    expect(nb.x + nb.width).toBeLessThanOrEqual(391);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+    await info.attach('map-touch-reach-390x844', {
+      body: await page.screenshot({ fullPage: false }),
+      contentType: 'image/png',
+    });
   });
 });
 

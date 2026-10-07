@@ -60,7 +60,11 @@ export function CompanyPage() {
         <div className="grid md:grid-cols-2 gap-4">
           <Section
             title="People there now"
-            items={reach.direct.map((d) => ({ person: d.person, strength: d.strength }))}
+            items={reach.direct.map((d) => ({
+              person: d.person,
+              strength: d.strength,
+              alum: !!d.person.isAlumni,
+            }))}
           />
           <Section
             title="Former employees you know"
@@ -69,10 +73,6 @@ export function CompanyPage() {
               strength: d.strength,
               note: d.endedAt ? `left ${d.endedAt.slice(0, 4)}` : 'former',
             }))}
-          />
-          <Section
-            title="Alumni there"
-            items={reach.alumni.map((d) => ({ person: d.person, strength: d.strength }))}
           />
           <Card>
             <div className="font-medium mb-2">Two-hop routes</div>
@@ -107,6 +107,8 @@ function Section({
     person: { id: string; displayName: string; currentTitle?: string; photoUrl?: string };
     strength: number;
     note?: string;
+    /** went to the student's school: a badge on the row, not a second list */
+    alum?: boolean;
   }[];
 }) {
   return (
@@ -122,6 +124,7 @@ function Section({
             <Link to={`/people/${i.person.id}`} className="font-medium hover:underline">
               {i.person.displayName}
             </Link>
+            {i.alum && <Chip>Alum</Chip>}
             <span className="text-ink-3 truncate">
               {i.person.currentTitle}
               {i.note ? ` · ${i.note}` : ''}

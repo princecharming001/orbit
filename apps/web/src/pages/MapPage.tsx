@@ -1,13 +1,21 @@
-import type { Person, ReachPath } from '@orbit/core';
-import { newId, REACH_BAND_LABELS, STAGE_LABELS } from '@orbit/core';
+import type { OrbitNode, Person, ReachPath } from '@orbit/core';
+import { newId, normalizeCompany, REACH_BAND_LABELS, STAGE_LABELS } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Search, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { OrbitMap } from '../components/OrbitMap';
+import { OrbitMap, useCoarsePointer } from '../components/OrbitMap';
 import { db } from '../db/schema';
 import { draftMessage } from '../engine/brief';
-import { type CompanyReach, reachCompany, reachPerson } from '../engine/graph';
+import {
+  type CompanyReach,
+  isUnambiguous,
+  type ReachCandidate,
+  rankReachTargets,
+  reachCompany,
+  reachPerson,
+  targetCompanyMatcher,
+} from '../engine/graph';
 import { useSession } from '../state/session';
 import { Avatar, Button, Card, Chip, cx, Input, useToast } from '../ui';
 import { StrengthDots } from './Pipeline';
@@ -18,9 +26,12 @@ export function MapPage() {
   const nav = useNavigate();
   const toast = useToast();
   const reachParam = params.get('reach');
+  const touch = useCoarsePointer();
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<'all' | 'targets' | 'alumni' | 'chats' | 'recent'>('all');
-  const [paths, setPaths] = useState<ReachPath[]>([]);
+  // undefined while routes are being computed, so the panel never claims "no route" before it knows
+  const [paths, setPaths] = useState<ReachPath[] | undefined>([]);
+  const [choices, setChoices] = useState<ReachCandidate[]>();
   const [pathIdx, setPathIdx] = useState(0);
   const [company, setCompany] = useState<CompanyReach>();
   const [target, setTarget] = useState<Person>();
@@ -58,7 +69,7 @@ export function MapPage() {
     [chats],
   );
   const pendingIds = useMemo(() => new Set(pending.map((s) => s.personId!)), [pending]);
-  const targetNames = useMemo(() => new Set(tcs.map((t) => t.nameRaw.toLowerCase())), [tcs]);
+  const isTarget = useMemo(() => targetCompanyMatcher(tcs, orgMap), [tcs, orgMap]);
   const visible = useMemo(() => people.filter((p) => p.isHuman && !p.hiddenAt), [people]);
   const highlightIds = useMemo(() => {
     if (filter === 'all') return undefined;
@@ -67,7 +78,7 @@ export function MapPage() {
       visible
         .filter((p) =>
           filter === 'targets'
-            ? targetNames.has((p.currentOrganizationRaw ?? '').toLowerCase())
+            ? isTarget(p)
             : filter === 'alumni'
               ? p.isAlumni
               : filter === 'chats'
@@ -76,52 +87,89 @@ export function MapPage() {
         )
         .map((p) => p.id),
     );
-  }, [filter, visible, targetNames, stages]);
+  }, [filter, visible, isTarget, stages]);
   const reachMode = !!reachParam;
   // resolve reach param (person id or '1' = open search)
   useEffect(() => {
     if (!userId || !reachParam || reachParam === '1') {
       setTarget(undefined);
       setPaths([]);
-      if (!reachParam) setCompany(undefined); // a company result set by runSearch survives the reach=1 param update
+      if (!reachParam) {
+        setCompany(undefined); // a company result set by runSearch survives the reach=1 param update
+        setChoices(undefined);
+      }
       return;
     }
+    let cancelled = false;
     (async () => {
       const p = await db.people.get(reachParam);
-      if (p) {
-        setTarget(p);
-        setCompany(undefined);
-        const ps = await reachPerson(userId, p.id);
-        setPaths(ps);
-        setPathIdx(0);
+      if (cancelled) return;
+      if (!p) {
+        setTarget(undefined);
+        setPaths([]);
+        return;
       }
+      setTarget(p);
+      setCompany(undefined);
+      setChoices(undefined);
+      setPaths(undefined);
+      setPathIdx(0);
+      const ps = await reachPerson(userId, p.id);
+      if (!cancelled) setPaths(ps);
     })();
+    return () => {
+      cancelled = true;
+    };
   }, [reachParam, userId]);
-  const runSearch = async (q: string) => {
+  const openCompany = async (orgIdOrName: string, label: string) => {
     if (!userId) return;
-    const s = q.trim().toLowerCase();
-    if (!s) return;
-    const hit =
-      visible.find((p) => p.displayName.toLowerCase() === s) ??
-      visible.find((p) => p.displayName.toLowerCase().includes(s));
-    const orgHit = orgs.find((o) => o.nameNormalized === s) ?? orgs.find((o) => o.nameNormalized.includes(s));
-    if (hit && (!orgHit || hit.displayName.toLowerCase().startsWith(s))) {
-      setParams({ reach: hit.id });
-      return;
-    }
-    if (orgHit || tcs.some((t) => t.nameRaw.toLowerCase().includes(s))) {
+    setChoices(undefined);
+    setTarget(undefined);
+    setPaths([]);
+    setCompany(await reachCompany(userId, orgIdOrName));
+    setParams({ reach: '1', company: label });
+  };
+  const choose = (c: ReachCandidate) => {
+    setChoices(undefined);
+    if (c.kind === 'person') setParams({ reach: c.id });
+    else void openCompany(c.id, c.label);
+  };
+  const runSearch = async (q: string) => {
+    if (!userId || !q.trim()) return;
+    // read straight from the database so a search typed before the map finished loading still works
+    const [allPeople, allOrgs] = await Promise.all([
+      db.people.where('userId').equals(userId).toArray(),
+      db.organizations.toArray(),
+    ]);
+    const cands = rankReachTargets(q, allPeople, allOrgs);
+    if (cands.length && isUnambiguous(cands)) return choose(cands[0]!);
+    if (cands.length) {
+      // several plausible matches ("go" could be Google or Goldman Sachs): let the student pick
       setTarget(undefined);
+      setCompany(undefined);
       setPaths([]);
-      setCompany(await reachCompany(userId, orgHit?.name ?? q));
-      setParams({ reach: '1', company: q });
+      setChoices(cands);
+      if (reachParam !== '1') setParams({ reach: '1' });
       return;
     }
-    if (hit) setParams({ reach: hit.id });
-    else
-      toast.push({
-        text: 'No one by that name or company in your network yet. Add them from LinkedIn or Discover.',
-        ttl: 5000,
-      });
+    const norm = normalizeCompany(q);
+    const tc = norm ? tcs.find((t) => normalizeCompany(t.nameRaw) === norm) : undefined;
+    if (tc) return openCompany(tc.organizationId ?? tc.nameRaw, tc.nameRaw);
+    toast.push({
+      text: 'No one by that name or company in your network yet. Add them from LinkedIn or Discover.',
+      ttl: 5000,
+    });
+  };
+  const openCluster = (node: OrbitNode) => {
+    const g = node.groupKey;
+    const group = node.cluster;
+    if (!group) return;
+    const org = [...orgMap.values()].find((o) => `n:${o.nameNormalized}` === g);
+    if (org && !reachMode) nav(`/companies/${org.id}`);
+    else if (org) void openCompany(org.id, org.name);
+    else if (group.label !== 'Other companies' && g !== 'independent')
+      void openCompany(group.label, group.label);
+    else nav('/people');
   };
   const askIntro = async (path: ReachPath) => {
     if (!user || !target) return;
@@ -163,13 +211,13 @@ export function MapPage() {
       action: { label: 'Open', onClick: () => nav('/inbox') },
     });
   };
-  const hovered = hover ? visible.find((p) => p.id === hover) : undefined;
-  const current = paths[pathIdx];
   const pathPeople = useMemo(() => new Map(visible.map((p) => [p.id, p])), [visible]);
+  const hovered = hover ? pathPeople.get(hover) : undefined;
+  const current = paths?.[pathIdx];
   return (
-    <div className="h-[calc(100vh-7rem)] md:h-[calc(100vh-3rem)] -my-6 -mx-4 md:-mx-8 flex flex-col">
+    <div className="-my-6 -mx-4 md:-mx-8 flex flex-col lg:h-[calc(100vh-3rem)]">
       <div className="px-4 md:px-8 pt-5 pb-3 flex flex-wrap items-center gap-2 border-b border-line bg-canvas">
-        <div>
+        <div className="min-w-0">
           <h1 className="text-[20px] font-semibold tracking-[-0.01em]">
             {reachMode ? 'Reach' : 'Your orbit'}
           </h1>
@@ -179,20 +227,20 @@ export function MapPage() {
               : `${visible.length} people · inner ring = closest`}
           </p>
         </div>
-        <div className="ml-auto flex items-center gap-2">
+        <div className="w-full sm:w-auto sm:ml-auto flex items-center gap-2">
           <form
             onSubmit={(e) => {
               e.preventDefault();
               runSearch(query);
             }}
-            className="relative"
+            className="relative flex-1 sm:flex-none"
           >
             <Search size={14} className="absolute left-2.5 top-2.5 text-ink-3" />
             <Input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Reach a person or company…"
-              className="pl-8 w-64"
+              className="pl-8 w-full sm:w-64"
               data-testid="reach-input"
             />
           </form>
@@ -204,6 +252,7 @@ export function MapPage() {
                 setParams({});
                 setQuery('');
                 setCompany(undefined);
+                setChoices(undefined);
               }}
             >
               <X size={14} /> Exit reach
@@ -211,11 +260,7 @@ export function MapPage() {
           )}
         </div>
         {!reachMode && (
-          <div
-            className="w-full flex gap-1.5 mt-1 overflow-x-auto scroll-thin"
-            role="group"
-            aria-label="Show"
-          >
+          <div className="w-full flex flex-wrap gap-1.5 mt-1" role="group" aria-label="Show">
             {(
               [
                 ['all', 'Everyone'],
@@ -239,8 +284,15 @@ export function MapPage() {
           </div>
         )}
       </div>
-      <div className="flex-1 min-h-0 grid lg:grid-cols-[1fr_340px]">
-        <div className="relative min-h-[420px] bg-[radial-gradient(circle_at_center,_#fff_0%,_#fafafc_70%)]">
+      <div className="lg:flex-1 lg:min-h-0 grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_340px]">
+        <div
+          className={cx(
+            'relative min-w-0 overflow-hidden lg:h-auto lg:min-h-[420px] bg-[radial-gradient(circle_at_center,_#fff_0%,_#fafafc_70%)]',
+            // on phones the routes sit under the canvas, so in reach mode the canvas leaves room for them
+            reachMode ? 'h-[min(48vh,420px)] min-h-[280px]' : 'h-[min(72vh,560px)] min-h-[340px]',
+          )}
+          data-testid="orbit-stage"
+        >
           <OrbitMap
             people={visible}
             orgs={orgMap}
@@ -249,19 +301,30 @@ export function MapPage() {
             highlightPath={current}
             highlightIds={highlightIds}
             onSelect={(id) => (reachMode ? setParams({ reach: id }) : nav(`/people/${id}`))}
+            onSelectCluster={openCluster}
             onHover={setHover}
             focusId={target?.id}
           />
           {hovered && !reachMode && (
-            <div className="absolute left-4 bottom-4 bg-canvas border border-line rounded-[12px] p-3 shadow-[var(--shadow-card)] w-[260px] fade-up">
+            <div
+              className="absolute left-3 right-3 sm:right-auto bottom-3 bg-canvas border border-line rounded-[12px] p-3 shadow-[var(--shadow-card)] sm:w-[260px] fade-up"
+              data-testid="map-tooltip"
+            >
               <div className="flex items-center gap-2">
                 <Avatar name={hovered.displayName} src={hovered.photoUrl} id={hovered.id} size={32} />
-                <div className="min-w-0">
+                <div className="min-w-0 flex-1">
                   <div className="font-medium truncate">{hovered.displayName}</div>
                   <div className="text-[12px] text-ink-3 truncate">
                     {[hovered.currentTitle, hovered.currentOrganizationRaw].filter(Boolean).join(' · ')}
                   </div>
                 </div>
+                <Link
+                  to={`/people/${hovered.id}`}
+                  className={cx('text-[12px] text-accent shrink-0', touch ? '' : 'sm:hidden')}
+                  data-testid="map-open-person"
+                >
+                  Open
+                </Link>
               </div>
               <div className="mt-2 flex items-center gap-2 text-[12px] text-ink-3">
                 <StrengthDots v={hovered.strength} />{' '}
@@ -270,12 +333,18 @@ export function MapPage() {
             </div>
           )}
         </div>
-        <aside className="border-l border-line bg-canvas overflow-y-auto scroll-thin p-4 space-y-3">
+        <aside
+          className="min-w-0 border-t lg:border-t-0 lg:border-l border-line bg-canvas lg:overflow-y-auto scroll-thin p-4 space-y-3"
+          data-testid="map-panel"
+        >
           {!reachMode && (
             <>
               <div className="text-[13px] text-ink-2">
-                Hover a person for their name; click to open their profile. Companies read as wedges; the thin
-                coloured ring is pipeline stage; a pulse means a pending suggestion.
+                {touch
+                  ? 'Tap a person to see who they are, and tap again to open their profile.'
+                  : 'Hover over a person to see who they are, and click to open their profile.'}{' '}
+                Companies read as wedges. The thin coloured ring is pipeline stage, and a pulse means a
+                pending suggestion. A grey dot with a number stands for more people at that company.
               </div>
               <Card padded>
                 <div className="font-medium text-[13px] mb-2">Legend</div>
@@ -290,10 +359,32 @@ export function MapPage() {
               </Button>
             </>
           )}
-          {reachMode && !target && !company && (
+          {reachMode && !target && !company && !choices && (
             <div className="text-[13px] text-ink-2">
               Type a name (someone in your network) or a company above. Orbit finds up to three routes through
               people you know, with the reason each hop works.
+            </div>
+          )}
+          {choices && (
+            <div>
+              <div className="text-[13px] text-ink-2 mb-2">Several matches. Which one did you mean?</div>
+              <ul className="space-y-1.5">
+                {choices.map((c) => (
+                  <li key={`${c.kind}:${c.id}`}>
+                    <button
+                      className="w-full text-left border border-line rounded-[10px] px-3 py-2 hover:bg-canvas-2"
+                      onClick={() => choose(c)}
+                      data-testid="reach-choice"
+                    >
+                      <span className="font-medium text-[13px]">{c.label}</span>
+                      <span className="ml-2 text-[11px] text-ink-3">
+                        {c.kind === 'company' ? 'Company' : 'Person'}
+                      </span>
+                      {c.sub && <div className="text-[12px] text-ink-3 truncate">{c.sub}</div>}
+                    </button>
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
           {target && (
@@ -309,15 +400,19 @@ export function MapPage() {
                   </div>
                 </div>
               </div>
-              {paths.length === 0 && (
+              {paths === undefined && (
+                <div className="space-y-2" data-testid="reach-loading" aria-busy="true">
+                  <p className="text-[13px] text-ink-3">Finding routes through your network…</p>
+                  <div className="h-20 rounded-[12px] bg-canvas-2 animate-pulse" />
+                  <div className="h-20 rounded-[12px] bg-canvas-2 animate-pulse" />
+                </div>
+              )}
+              {paths?.length === 0 && (
                 <p className="text-[13px] text-ink-3">
-                  No route found through your network yet.{' '}
-                  {target.strength > 0.02
-                    ? 'You already know them directly.'
-                    : 'Import more connections or start a warm-up.'}
+                  No route found through your network yet. Import more connections or start a warm-up.
                 </p>
               )}
-              {paths.map((p, i) => (
+              {paths?.map((p, i) => (
                 <button
                   key={i}
                   onClick={() => setPathIdx(i)}
@@ -371,25 +466,28 @@ export function MapPage() {
           {company && (
             <>
               <div className="font-medium">{company.org?.name ?? params.get('company')}</div>
-              {[
-                ['People there now', company.direct],
-                ['Former employees you know', company.former],
-                ['Alumni there', company.alumni],
-              ].map(([title, list]) => (
-                <div key={title as string}>
+              {(
+                [
+                  ['People there now', company.direct],
+                  ['Former employees you know (last five years)', company.former],
+                ] as const
+              ).map(([title, list]) => (
+                <div key={title}>
                   <div className="text-[12px] uppercase tracking-wide text-ink-3 mb-1">
-                    {title as string} · {(list as { person: Person }[]).length}
+                    {title} · {list.length}
                   </div>
-                  {(list as { person: Person; strength: number }[]).length === 0 && (
-                    <p className="text-[12px] text-ink-3">None</p>
-                  )}
+                  {list.length === 0 && <p className="text-[12px] text-ink-3">None</p>}
                   <ul className="space-y-1.5">
-                    {(list as { person: Person; strength: number }[]).slice(0, 6).map((d) => (
+                    {list.slice(0, 6).map((d) => (
                       <li key={d.person.id} className="flex items-center gap-2 text-[13px]">
                         <Avatar name={d.person.displayName} id={d.person.id} size={22} />
-                        <button className="hover:underline" onClick={() => setParams({ reach: d.person.id })}>
+                        <button
+                          className="hover:underline truncate"
+                          onClick={() => setParams({ reach: d.person.id })}
+                        >
                           {d.person.displayName}
                         </button>
+                        {d.person.isAlumni && <Chip>Alum</Chip>}
                         <span className="ml-auto">
                           <StrengthDots v={d.strength} />
                         </span>

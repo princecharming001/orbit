@@ -27,6 +27,9 @@ import { processIntroductions } from './introductions';
 import { loadPeopleCache, suggestDuplicateMerges, upsertPerson } from './people';
 import { evaluateTrigger } from './stages';
 
+/** Threads with more people than this are group mail (clubs, lists, class threads) and carry no tie. */
+const GROUP_THREAD_MAX_PEOPLE = 8;
+
 export interface RawEmail {
   externalMessageId: string;
   externalThreadId: string;
@@ -307,6 +310,9 @@ export async function ingestEmails(
       // touchpoints for every human message
       for (const m of newMessages) {
         if (m.isAutomated) continue;
+        // Mailing lists and big group threads are not relationships: no touchpoints there at all. Elsewhere a CC
+        // adds at most one touchpoint per thread (and computeStrength caps the CC total).
+        if (thread.participantPersonIds.length > GROUP_THREAD_MAX_PEOPLE) continue;
         const direct =
           m.direction === 'inbound'
             ? m.fromPersonId
@@ -336,8 +342,8 @@ export async function ingestEmails(
             personId: pid,
             kind,
             occurredAt: m.sentAt,
-            refTable: sentByOrbit ? 'outbound' : 'messages',
-            refId: sentByOrbit ?? m.id,
+            refTable: sentByOrbit ? 'outbound' : kind === 'email_cc' ? 'threads' : 'messages',
+            refId: sentByOrbit ?? (kind === 'email_cc' ? thread.id : m.id),
             summary:
               `${m.direction === 'inbound' ? 'Email from' : 'Email to'} ${p.firstName}: ${m.subject ?? ''}`.trim(),
             weight,
