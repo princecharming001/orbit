@@ -169,6 +169,7 @@ type Tok =
   | { k: 'range'; word: string }
   | { k: 'or' }
   | { k: 'next'; word: string }
+  | { k: 'week'; offset: number; relative: boolean }
   | { k: 'past' }
   | { k: 'conn' };
 type Part = 'morning' | 'afternoon' | 'evening';
@@ -203,6 +204,8 @@ const TOKEN_RE = new RegExp(
     '(?<day>\\b(monday|mon|tuesday|tues|tue|wednesday|weds|wed|thursday|thurs|thur|thu|friday|fri|saturday|sat|sunday|sun)\\b\\.?)',
     // relative day
     '(?<rel>\\b(today|tonight|tomorrow|tmrw|tmr|this\\s+(?:morning|afternoon|evening))\\b)',
+    // week scope: "next week", "the week after", "week after next"
+    '(?<week>\\b(?:(?:this\\s+coming|this|next|the\\s+following|following|the\\s+coming|coming)\\s+week|(?:the\\s+)?week\\s+after(?:\\s+(?:next|that))?)\\b)',
     '(?<named>\\b(noon|midday|midnight)\\b)',
     // clock time
     "(?<time>(?<![\\d/:.$£€#])(\\d{1,2})(?::([0-5]\\d))?(?:\\s?(a\\.m\\.?|p\\.m\\.?|am|pm)(?![a-z])|([ap])(?![a-z]))?(-?ish|\\s?o'?clock)?(?![\\d/:%a-z]))",
@@ -281,6 +284,13 @@ function tokenize(text: string): Positioned[] {
       else if (w === 'tonight') push({ k: 'rel', offset: 0, part: 'evening' });
       else if (w.startsWith('this')) push({ k: 'rel', offset: 0, part: w.split(/\s+/)[1] as Part });
       else push({ k: 'rel', offset: 1 });
+      continue;
+    }
+    if (g.week) {
+      const w = g.week.toLowerCase().replace(/\s+/g, ' ');
+      if (w.endsWith('after next')) push({ k: 'week', offset: 2, relative: false });
+      else if (w.includes('after')) push({ k: 'week', offset: 1, relative: true });
+      else push({ k: 'week', offset: /^this(?! coming)/.test(w) ? 0 : 1, relative: false });
       continue;
     }
     if (g.named) {
@@ -385,7 +395,7 @@ interface TimeSpec {
   stop: number;
 }
 type Anchor =
-  | { k: 'day'; dow: number; next: boolean }
+  | { k: 'day'; dow: number; next: boolean; week?: number }
   | { k: 'date'; m: number; d: number; y?: number; dow?: number }
   | { k: 'ord'; d: number; dow?: number }
   | { k: 'rel'; offset: number };
@@ -442,7 +452,56 @@ function resolveHours(t: TimeSpec, part?: Part): { start: number; end?: number }
   return { start, end };
 }
 
-function interpretChunk(text: string, chunk: Positioned[]): { proposals: Proposal[]; leftover: Draft[] } {
+/** Week offset (0 this week, 1 next week, 2 the week after) that applies to a bare weekday at [start, end). */
+type WeekAt = (start: number, end: number) => number | undefined;
+
+/**
+ * Week scopes in a message: "next week is wide open. Tues 10am?" puts Tuesday in next week, and "I'm away next
+ * week, but how about the week after? Tuesday at 2pm?" two weeks out. A scope right after the weekday ("Tuesday
+ * next week") wins; otherwise the closest scope earlier in the message (within a few sentences) applies.
+ */
+function weekScopes(text: string, toks: Positioned[]): WeekAt {
+  const scopes: { start: number; end: number; offset: number; blocked: boolean }[] = [];
+  for (const t of toks) {
+    if (t.k !== 'week') continue;
+    const prev = scopes[scopes.length - 1];
+    scopes.push({
+      start: t.start,
+      end: t.end,
+      offset: t.relative ? (prev?.offset ?? 0) + t.offset : t.offset,
+      blocked: weekIsBlocked(text, t.start, t.end),
+    });
+  }
+  return (start, end) => {
+    const after = scopes.find((s) => s.start >= end && s.start - end <= 2);
+    if (after) return after.offset;
+    let hit: number | undefined;
+    for (const s of scopes)
+      if (s.end <= start && start - s.end <= 250) hit = s.blocked ? undefined : s.offset;
+    return hit;
+  };
+}
+
+const WEEK_BLOCKED =
+  /\b(not|cannot|can'?t|won'?t|isn'?t|doesn'?t|busy|booked|slammed|swamped|packed|hectic|away|out|off|traveling|travelling|vacation|pto|leave|conference|offsite|unavailable)\b/i;
+const WEEK_OPEN = /\b(open|free|available|works?|flexible|better|easier|how about|what about)\b/i;
+
+/** "I'm traveling next week" names a week the time is NOT in; "next week is wide open" names the week it is in. */
+function weekIsBlocked(text: string, start: number, end: number): boolean {
+  const before = text.slice(Math.max(0, start - 80), start);
+  const after = text.slice(end, end + 80);
+  const lo = before.split(/[.;!?\n]|,|\bbut\b|\bthough\b|\bhowever\b/i).pop() ?? '';
+  const hi = after.split(/[.;!?\n]|,|\bbut\b|\bthough\b|\bhowever\b/i)[0] ?? '';
+  const clause = `${lo} ${hi}`;
+  if (!WEEK_BLOCKED.test(clause)) return false;
+  return !(WEEK_OPEN.test(clause) && !/\b(not|cannot)\b|n['’]t\b/i.test(clause));
+}
+
+function interpretChunk(
+  text: string,
+  chunk: Positioned[],
+  weekAt: WeekAt = () => undefined,
+): { proposals: Proposal[]; leftover: Draft[] } {
   const proposals: Proposal[] = [];
   const leftover: Draft[] = [];
   const emitted: Proposal[] = [];
@@ -516,7 +575,7 @@ function interpretChunk(text: string, chunk: Positioned[]): { proposals: Proposa
         pendingNextStart = t.start;
         break;
       case 'day':
-        addAnchor({ k: 'day', dow: t.dow, next: pendingNext }, t);
+        addAnchor({ k: 'day', dow: t.dow, next: pendingNext, week: weekAt(t.start, t.end) }, t);
         break;
       case 'date':
         addAnchor({ k: 'date', m: t.m, d: t.d, y: t.y }, t);
@@ -633,6 +692,13 @@ function resolveAnchorDate(
     case 'rel':
       return addDays(today, a.offset);
     case 'day': {
+      // "next Thursday" and a weekday under "next week" are that day in the following Monday-to-Sunday week;
+      // "the week after" is one week later still
+      const week = a.week ?? (a.next ? 1 : undefined);
+      if (week !== undefined && week > 0) {
+        const monday = addDays(today, -((todayDow + 6) % 7));
+        return addDays(monday, 7 * week + ((a.dow + 6) % 7));
+      }
       let delta = (a.dow - todayDow + 7) % 7;
       if (delta === 0 && (a.next || sameDayPassed)) delta = 7;
       return addDays(today, delta);
@@ -669,10 +735,11 @@ export function extractTimes(text: string, reference: Date, opts: ExtractOptions
   const norm = text.replace(/[–‒]/g, '-').replace(/[—]/g, ', ').replace(/ /g, ' ');
   const messageZone = statedMessageZone(norm);
   const toks = tokenize(norm);
+  const weekAt = weekScopes(norm, toks);
   const proposals: Proposal[] = [];
   const leftovers: { draft: Draft; sentence: number; start: number; end: number }[] = [];
   for (const c of chunks(norm, toks)) {
-    const r = interpretChunk(norm, c);
+    const r = interpretChunk(norm, c, weekAt);
     proposals.push(...r.proposals);
     for (const l of r.leftover) {
       const start = Math.min(l.anchorStart ?? Number.POSITIVE_INFINITY, ...l.times.map((t) => t.start));

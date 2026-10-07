@@ -1,5 +1,5 @@
 import type { User } from '@orbit/core';
-import { buildStyleCard, parseAddressList } from '@orbit/core';
+import { buildStyleCard, decodeMimeWords, parseAddressList } from '@orbit/core';
 import { notify, recomputeAllStrengths } from '../db/repo';
 import { db } from '../db/schema';
 import {
@@ -64,11 +64,11 @@ export async function syncGoogle(
         raws.push({
           externalMessageId: m.id,
           externalThreadId: m.threadId,
-          from: h.from ?? '',
+          from: decodeMimeWords(h.from ?? ''),
           // quoted display names may contain commas ("Doe, Jane" <jane@x.com>)
           to: parseAddressList(h.to),
           cc: parseAddressList(h.cc),
-          subject: h.subject,
+          subject: h.subject === undefined ? undefined : decodeMimeWords(h.subject),
           sentAt: sentAtOf(m.internalDate, h.date),
           bodyText: text || m.snippet || '',
           headers: h,

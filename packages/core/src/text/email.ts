@@ -1,7 +1,34 @@
 import { emailDomain, emailLocalPart, normalizeEmail } from './normalize';
 
+/** Local parts only machines send from. */
 const BULK_LOCAL =
-  /^(no[-_.]?reply|donotreply|invitations?|notify|do-not-reply|notifications?|newsletter|mailer-daemon|postmaster|bounce|alerts?|updates?|info|news|digest|support|team|hello|marketing|billing|invoices?|receipts?|careers|jobs|recruiting|talent|hr|noreply-.*|.*-noreply|.*-notifications?)$/i;
+  /^(no[-_.]?reply|do[-_.]?not[-_.]?reply|donotreply|invitations?|notify|notifications?|newsletters?|mailer|mailer[-_.]daemon|postmaster|bounces?|alerts?|updates?|news|digest|marketing|billing|invoices?|receipts?|dse(_\w+)?|automated|system|calendar|no[-_.]?reply[-_.+].*|.*[-_.+]no[-_.]?reply|.*[-_.]notifications?|.*[-_.]alerts?)$/i;
+/**
+ * Shared recruiting inboxes (campusrecruiting@, university-recruiting@, earlycareers@, careers@): a team, not a
+ * person. Every token of the local part has to be a role word, so jane.recruiter@ stays a person.
+ */
+const ROLE_TOKEN =
+  /^(recruit|recruits|recruiting|recruitment|recruiter|campus|campusrecruiting|universityrecruiting|collegerecruiting|earlycareers?|careers?|jobs?|talent|talentacquisition|ta|hr|people|hiring|staffing|university|college|early|students?|programs?|internships?|interns|graduates?|grad|admissions|events|relations|ur|acquisition)$/i;
+/** Generic inboxes a founder or small team may answer personally (hello@, team@): human only with a person's name on it. */
+const GENERIC_LOCAL =
+  /^(team|hello|hi|hey|info|support|contact|help|office|admin|founders|general|inquiries|enquiries)$/i;
+/** Display names of teams and systems: "Goldman Sachs University Recruiting", "Stripe Careers", "Figma Team". */
+const ROLE_NAME =
+  /\b(recruiting|recruitment|careers?|talent( acquisition)?|admissions|human resources|university relations|campus|early careers|team|notifications?|no-?reply|support|newsletter|digest|alerts?|calendar|via linkedin|hiring)\b/i;
+
+/** True when a display name names a team or a system rather than a person. */
+export function isRoleName(displayName: string | undefined): boolean {
+  return Boolean(displayName) && ROLE_NAME.test(displayName!);
+}
+
+/** A shared inbox local part: all role words (campus.recruiting, university-recruiting, earlycareers). */
+export function isRoleLocalPart(local: string): boolean {
+  const tokens = local
+    .toLowerCase()
+    .split(/[._+-]+/)
+    .filter(Boolean);
+  return tokens.length > 0 && tokens.every((t) => ROLE_TOKEN.test(t));
+}
 
 /**
  * Domains used only to send machine mail: a sender on one of these (or a subdomain) is automated whatever the
@@ -29,6 +56,19 @@ export const NOTIFICATION_DOMAINS = new Set([
   'myworkday.com',
   'talent.icims.com',
   'reddithelp.com',
+  'docusign.net',
+  'beehiiv.com',
+  'convertkit-mail.com',
+  'convertkit-mail2.com',
+  'klaviyomail.com',
+  'ccsend.com',
+  'rsgsv.net',
+  'mailchimpapp.net',
+  'sparkpostmail.com',
+  'mktomail.com',
+  'marketo.org',
+  'salesforce-mail.com',
+  'exacttarget.com',
 ]);
 /** Former name of NOTIFICATION_DOMAINS. */
 export const BULK_DOMAINS = NOTIFICATION_DOMAINS;
@@ -128,15 +168,18 @@ export function isCalendarNotice(subject = '', body = '', headers: HeaderLike = 
 }
 
 /**
- * Machine mail. Decided by headers (List-Unsubscribe, List-Id, Precedence, Auto-Submitted, X-Autoreply, a Sender
- * that is a notification address), Gmail category labels, a bulk local part (noreply@, notifications@) and
- * notification-only domains. A person's address at a company that also sends bulk mail (Capital One, LinkedIn)
+ * Machine or team mail. Decided by headers (List-Unsubscribe, List-Id, Precedence, Auto-Submitted, X-Autoreply, a
+ * Sender that is a notification address), Gmail category labels, a bulk local part (noreply@, no_reply@,
+ * notifications@), a shared recruiting inbox (campusrecruiting@, university-recruiting@), and notification-only
+ * domains. A generic inbox (hello@, team@, info@) is automated only without a person's display name, so a founder
+ * writing from hello@ is human. A person's address at a company that also sends bulk mail (Capital One, LinkedIn)
  * is human.
  */
 export function isAutomatedSender(
   fromEmail: string,
   headers: HeaderLike = {},
   labels: string[] = [],
+  displayName?: string,
 ): boolean {
   if (headers['list-unsubscribe'] || headers['list-id']) return true;
   const prec = (headers.precedence ?? '').toLowerCase();
@@ -149,21 +192,69 @@ export function isAutomatedSender(
     const sender = parseAddress(headers.sender).email;
     if (sender.includes('@') && sender !== normalizeEmail(fromEmail)) {
       if (sender === 'calendar-notification@google.com') return true;
-      if (BULK_LOCAL.test(emailLocalPart(sender)) || isNotificationDomain(emailDomain(sender))) return true;
+      const sl = emailLocalPart(sender);
+      if (BULK_LOCAL.test(sl) || isRoleLocalPart(sl) || isNotificationDomain(emailDomain(sender)))
+        return true;
     }
   }
   if (labels.some((l) => /CATEGORY_(PROMOTIONS|SOCIAL|FORUMS|UPDATES)/i.test(l))) return true;
   const local = emailLocalPart(fromEmail);
-  if (BULK_LOCAL.test(local)) return true;
+  if (BULK_LOCAL.test(local) || isRoleLocalPart(local)) return true;
+  if (GENERIC_LOCAL.test(local)) {
+    const name = (displayName ?? '').trim();
+    const personal =
+      Boolean(name) && !isRoleName(name) && /^[A-Z][a-z'’-]+(\s+[A-Z][A-Za-z'’.-]+){0,3}$/.test(name);
+    if (!personal) return true;
+  }
   return isNotificationDomain(emailDomain(fromEmail));
 }
 
 // ---------------------------------------------------------------------------------------------------------------
 // addresses
 
-/** Parse one address: `"Doe, Jane" <jane@x.com>`, `Jane Doe <jane@x.com>` or `jane@x.com`. */
+function decodeWordBytes(charset: string, bytes: Uint8Array): string {
+  try {
+    return new TextDecoder(charset.toLowerCase().replace(/\*.*$/, ''), { fatal: false }).decode(bytes);
+  } catch {
+    return new TextDecoder('utf-8').decode(bytes);
+  }
+}
+
+/**
+ * Decode RFC 2047 encoded words in a header ("=?UTF-8?Q?Jos=C3=A9?= <jose@x.com>", "=?utf-8?B?...?="). Whitespace
+ * between two encoded words is dropped, as the RFC requires. Malformed words are left as they are.
+ */
+export function decodeMimeWords(header: string): string {
+  if (!header.includes('=?')) return header;
+  return header
+    .replace(/(\?=)\s+(?==\?)/g, '$1')
+    .replace(/=\?([^?\s]+)\?([BbQq])\?([^?\s]*)\?=/g, (all, charset: string, enc: string, data: string) => {
+      try {
+        let bytes: Uint8Array;
+        if (enc.toUpperCase() === 'B') {
+          const bin = atob(data);
+          bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+        } else {
+          const out: number[] = [];
+          const q = data.replace(/_/g, ' ');
+          for (let i = 0; i < q.length; i++) {
+            if (q[i] === '=' && /^[0-9a-f]{2}$/i.test(q.slice(i + 1, i + 3))) {
+              out.push(Number.parseInt(q.slice(i + 1, i + 3), 16));
+              i += 2;
+            } else out.push(q.charCodeAt(i) & 0xff);
+          }
+          bytes = Uint8Array.from(out);
+        }
+        return decodeWordBytes(charset, bytes);
+      } catch {
+        return all;
+      }
+    });
+}
+
+/** Parse one address: `"Doe, Jane" <jane@x.com>`, `Jane Doe <jane@x.com>`, `=?UTF-8?Q?Jos=C3=A9?= <a@b>` or `jane@x.com`. */
 export function parseAddress(raw: string): { email: string; name?: string } {
-  const s = raw.trim();
+  const s = decodeMimeWords(raw.trim());
   const m = s.match(/^(.*?)\s*<([^>]+)>\s*$/);
   if (m) {
     const name = m[1]!
@@ -234,14 +325,93 @@ const ENTITIES: Record<string, string> = {
   copy: '©',
 };
 
+const MORE_ENTITIES: Record<string, string> = {
+  szlig: 'ß',
+  aelig: 'æ',
+  AElig: 'Æ',
+  oelig: 'œ',
+  OElig: 'Œ',
+  oslash: 'ø',
+  Oslash: 'Ø',
+  eth: 'ð',
+  ETH: 'Ð',
+  thorn: 'þ',
+  THORN: 'Þ',
+  euro: '€',
+  pound: '£',
+  yen: '¥',
+  cent: '¢',
+  sect: '§',
+  para: '¶',
+  deg: '°',
+  plusmn: '±',
+  times: '×',
+  divide: '÷',
+  frac12: '½',
+  frac14: '¼',
+  frac34: '¾',
+  laquo: '«',
+  raquo: '»',
+  lsaquo: '‹',
+  rsaquo: '›',
+  sbquo: '‚',
+  bdquo: '„',
+  iexcl: '¡',
+  iquest: '¿',
+  trade: '™',
+  reg: '®',
+  dagger: '†',
+  Dagger: '‡',
+  prime: '′',
+  Prime: '″',
+  rarr: '→',
+  larr: '←',
+  ensp: ' ',
+  emsp: ' ',
+  thinsp: ' ',
+  zwnj: '',
+  zwj: '',
+  shy: '',
+  lrm: '',
+  rlm: '',
+  ordf: 'ª',
+  ordm: 'º',
+  micro: 'µ',
+  sup1: '¹',
+  sup2: '²',
+  sup3: '³',
+};
+/** Accented letters: &eacute; &Agrave; &ntilde; &uuml; &ccedil; &aring; built from the base letter and a mark. */
+const MARKS: Record<string, string> = {
+  acute: '\u0301',
+  grave: '\u0300',
+  circ: '\u0302',
+  uml: '\u0308',
+  tilde: '\u0303',
+  ring: '\u030A',
+  cedil: '\u0327',
+  caron: '\u030C',
+};
+
+function namedEntity(name: string): string | undefined {
+  const hit = ENTITIES[name.toLowerCase()] ?? MORE_ENTITIES[name] ?? MORE_ENTITIES[name.toLowerCase()];
+  if (hit !== undefined) return hit;
+  const m = /^([A-Za-z])(acute|grave|circ|uml|tilde|ring|cedil|caron)$/.exec(name);
+  if (m) return `${m[1]}${MARKS[m[2]!]}`.normalize('NFC');
+  return undefined;
+}
+
 export function decodeEntities(s: string): string {
-  return s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (all, code: string) => {
+  return s.replace(/&(#x[0-9a-f]+|#\d+|[a-z][a-z0-9]*);/gi, (all, code: string) => {
     if (code[0] === '#') {
       const hex = code[1] === 'x' || code[1] === 'X';
       const n = hex ? Number.parseInt(code.slice(2), 16) : Number.parseInt(code.slice(1), 10);
+      if (n === 0x2014) return ENTITIES.mdash!;
+      if (n === 0x2013) return ENTITIES.ndash!;
+      if (n === 0xa0) return ' ';
       return Number.isFinite(n) && n > 0 && n < 0x110000 ? String.fromCodePoint(n) : all;
     }
-    return ENTITIES[code.toLowerCase()] ?? all;
+    return namedEntity(code) ?? all;
   });
 }
 
@@ -279,6 +449,7 @@ export function htmlToText(html: string): string {
   return decodeEntities(h)
     .replace(/ /g, ' ')
     .replace(/[ \t]+/g, ' ')
+    .replace(/ ,/g, ',')
     .split('\n')
     .map((l) => l.trim())
     .join('\n')
@@ -342,7 +513,14 @@ const MEETING_URL =
 const DISCLAIMER = /(confidential|intended recipient|privileged|disclaimer|pronouns?:)/i;
 const GREETING = /^(hi|hey|hello|dear|good (morning|afternoon|evening))\b[^\n]{0,40}$/i;
 const TITLE_WORDS =
-  /(engineer|manager|director|analyst|associate|partner|founder|ceo|cto|coo|cfo|vp|vice president|head of|lead|recruiter|consultant|scientist|designer|product|intern|student|professor|md\b|phd)/i;
+  /\b(engineer|engineering manager|manager|director|analyst|associate|partner|principal|founder|co-?founder|ceo|cto|coo|cfo|cmo|vp|svp|evp|avp|vice president|president|head of|lead|recruiter|sourcer|consultant|scientist|designer|product manager|pm|intern|student|candidate|professor|lecturer|researcher|fellow|md|managing director|officer|specialist|coordinator|advisor|adviser|counsel|attorney|architect|developer|strategist|controller|trader|banker|economist|editor|chair|dean|ta|teaching assistant|program manager|generalist)\b/i;
+/** What follows a comma after a title when it is the team, not the employer ("Senior PM, Growth"). */
+const TEAM_WORDS =
+  /\b(team|group|growth|banking|engineering|marketing|sales|operations|ops|research|strategy|product|design|data|platform|infrastructure|infra|finance|technology|tech|division|coverage|m&a|capital markets|consulting|recruiting|talent|people|legal|security|ads|cloud|payments|analytics|investments?|equity|credit|trading|wealth|risk|ai|ml|machine learning|mobile|web|backend|frontend|core|search|commerce|partnerships|business development|bd|corporate development|communications|policy|healthcare|consumer|enterprise|americas|emea|apac|north america|east|west|university relations|campus)\b/i;
+const NAME_LINE =
+  /^(?:(?:dr|prof|mr|ms|mrs|mx)\.?\s+)?[A-Z][A-Za-z'’-]+(?:\s+(?:[A-Z][A-Za-z'’.-]*|de|del|da|van|von|der|la|le|bin|al))*(?:,?\s+(?:phd|ph\.d\.|mba|cfa|cpa|md|jd|pe|she\/her|he\/him|they\/them))*$/i;
+const ORG_HINT =
+  /\b(inc|llc|llp|ltd|corp|co|company|group|partners|capital|bank|university|college|school|institute|labs?|technologies|systems|ventures|holdings|foundation|associates)\b\.?/i;
 
 function words(l: string): number {
   return l.trim() ? l.trim().split(/\s+/).length : 0;
@@ -354,7 +532,9 @@ function sigLike(line: string): boolean {
   if (MOBILE_FOOTER.test(l) || DISCLAIMER.test(l)) return true;
   if (MEETING_URL.test(l) && words(l) > 1) return false;
   if (l.includes('?')) return false;
-  if (l.length > 100 || words(l) > 10) return false;
+  // "Goldman Sachs & Co. LLC | 200 West Street, New York": pipe-separated blocks run longer than a sentence-free line
+  const piped = /\s[|•·]\s/.test(l);
+  if (l.length > (piped ? 140 : 100) || words(l) > (piped ? 18 : 10)) return false;
   if (/[.!]$/.test(l) && words(l) >= 4 && !CONTACT.test(l)) return false;
   return true;
 }
@@ -401,9 +581,10 @@ export interface SignatureInfo {
 /**
  * Split the signature off a (quote-stripped) body. A signature starts at "--", at the last closer line ("Best,")
  * when everything after it looks like a signature, or at a name-plus-title/contact block. A line with a Calendly,
- * Zoom, Meet or Teams link, or a sentence that mentions a phone number, stays in the body.
+ * Zoom, Meet or Teams link, or a sentence that mentions a phone number, stays in the body. `name` (the sender's
+ * display name) is removed before the title and company are read.
  */
-export function splitSignature(body: string): SignatureInfo {
+export function splitSignature(body: string, opts: { name?: string } = {}): SignatureInfo {
   const lines = body.replace(/\r\n/g, '\n').trimEnd().split('\n');
   const start = findSignatureStart(lines);
   if (start < 0) return { body: body.trim() };
@@ -420,23 +601,102 @@ export function splitSignature(body: string): SignatureInfo {
   if (phone) info.phone = phone[0].trim();
   const li = sig.match(/(?:https?:\/\/)?(?:www\.)?linkedin\.com\/in\/[A-Za-z0-9_-]+/i);
   if (li) info.linkedinUrl = li[0];
-  for (const l of sigLines) {
-    if (CLOSER.test(l)) continue;
-    const pipe = l.split(/\s*[|•·,]\s*/);
-    if (pipe.length >= 2 && TITLE_WORDS.test(pipe[0]!)) {
-      info.title = pipe[0];
-      info.company = pipe[1];
-      break;
-    }
-    const at = l.match(/^(.{3,60}?)\s+(?:at|@)\s+(.{2,60})$/i);
-    if (at && TITLE_WORDS.test(at[1]!)) {
-      info.title = at[1]!.trim();
-      info.company = at[2]!.trim();
-      break;
-    }
-    if (!info.title && TITLE_WORDS.test(l) && l.length < 60 && !/@|http/.test(l)) info.title = l;
-  }
+  Object.assign(info, parseTitleCompany(sigLines, opts.name));
   return info;
+}
+
+function sameAsName(seg: string, name: string): boolean {
+  const norm = (x: string) =>
+    x
+      .toLowerCase()
+      .replace(/^(dr|prof|mr|ms|mrs|mx)\.?\s+/, '')
+      .replace(/,.*$/, '')
+      .replace(/[^a-z ]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  const n = norm(name);
+  const t = norm(seg);
+  return Boolean(n) && (t === n || n.split(' ').every((w) => t.split(' ').includes(w)));
+}
+
+function looksLikeName(seg: string, name?: string): boolean {
+  const t = seg.trim();
+  if (!t || TITLE_WORDS.test(t) || ORG_HINT.test(t) || /\d|@|http|www\./i.test(t)) return false;
+  if (name && sameAsName(t, name)) return true;
+  return NAME_LINE.test(t) && t.split(/\s+/).length <= 5;
+}
+
+/** An employer or school segment: no title word, no digits (addresses, phones), not a link, not a pronoun line. */
+function looksLikeOrg(seg: string): boolean {
+  const t = seg.trim();
+  if (!t || t.length > 60 || TITLE_WORDS.test(t)) return false;
+  if (/\d|@|https?:|www\.|linkedin|\b(she|he|they)\/(her|him|them)\b|pronouns/i.test(t)) return false;
+  if (CLOSER.test(t) || MOBILE_FOOTER.test(t) || DISCLAIMER.test(t)) return false;
+  return /^[A-Z0-9&]/.test(t) || ORG_HINT.test(t);
+}
+
+/**
+ * Title and employer from signature lines. The sender's name is dropped first (a name line, or a leading "Name |"
+ * or "Name," segment). Lines split on | • ·. The first segment with a title word is the title; "Title at Company"
+ * and "Title @ Company" split there. A comma after the title keeps a team ("Senior PM, Growth",
+ * "Vice President, Investment Banking") and splits off an employer ("Analyst, Goldman Sachs"). The employer is the
+ * next segment on the title line, else the next line that reads as an organisation ("Figma", "Cornell University",
+ * "Goldman Sachs & Co. LLC | 200 West Street").
+ */
+export function parseTitleCompany(lines: string[], name?: string): { title?: string; company?: string } {
+  const rows = lines
+    .map((l) => l.trim())
+    .filter((l) => l && !CLOSER.test(l) && !MOBILE_FOOTER.test(l) && !DISCLAIMER.test(l))
+    .map((l) =>
+      l
+        .split(/\s*[|•·]\s*|\s+[-–]\s+/)
+        .map((x) => x.trim())
+        .filter(Boolean),
+    );
+  for (let i = 0; i < rows.length; i++) {
+    const segs = rows[i]!;
+    // drop the name: a "Name, Title" or "Name | Title" lead segment
+    while (
+      segs.length &&
+      looksLikeName(segs[0]!.split(',')[0]!, name) &&
+      !TITLE_WORDS.test(segs[0]!.split(',')[0]!)
+    ) {
+      const first = segs[0]!;
+      const comma = first.indexOf(',');
+      if (comma > 0 && TITLE_WORDS.test(first.slice(comma + 1))) segs[0] = first.slice(comma + 1).trim();
+      else segs.shift();
+    }
+    const ti = segs.findIndex((x) => TITLE_WORDS.test(x) && !/@\S+\.|https?:/i.test(x) && x.length <= 80);
+    if (ti < 0) continue;
+    let title = segs[ti]!;
+    let company: string | undefined;
+    const at = /^(.{2,60}?)\s+(?:at|@)\s+(.{2,60})$/i.exec(title);
+    if (at && TITLE_WORDS.test(at[1]!)) {
+      title = at[1]!.trim();
+      company = at[2]!.trim();
+    } else if (title.includes(',')) {
+      const parts = title.split(/\s*,\s*/);
+      const head: string[] = [parts[0]!];
+      for (const p of parts.slice(1)) {
+        if (!company && !TITLE_WORDS.test(p) && !TEAM_WORDS.test(p) && looksLikeOrg(p)) company = p;
+        else if (!company) head.push(p);
+      }
+      title = head.join(', ');
+    }
+    if (!company) company = segs.slice(ti + 1).find(looksLikeOrg);
+    if (!company)
+      for (const row of rows.slice(i + 1)) {
+        // names come before titles, so below the title only the sender's own name is skipped
+        const hit = row.find((x) => !(name && sameAsName(x, name)));
+        if (hit && looksLikeOrg(hit)) {
+          company = hit;
+          break;
+        }
+        if (hit && TITLE_WORDS.test(hit)) break;
+      }
+    return { title: title.replace(/[,.]$/, '').trim(), company: company?.replace(/[,.]$/, '').trim() };
+  }
+  return {};
 }
 
 export function wordCount(s: string): number {

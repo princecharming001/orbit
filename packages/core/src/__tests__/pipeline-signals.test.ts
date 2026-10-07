@@ -1,11 +1,22 @@
 import { describe, expect, it } from 'vitest';
-import { extractProposedTimes, heuristicSignal, heuristicTriage } from '../email/triage';
+import { buildDemoDataset } from '../demo/seed';
+import {
+  extractProposedTimes,
+  followUpDate,
+  heuristicSignal,
+  heuristicTriage,
+  isAutoReplyBody,
+} from '../email/triage';
 import { heuristicNoteExtraction } from '../notes/extract';
 import { canTransition, decideTransition } from '../pipeline/transitions';
+import { generateCandidates } from '../suggestions/rules';
 import {
+  decodeEntities,
+  decodeMimeWords,
   htmlToText,
   isAutomatedSender,
   isCalendarNotice,
+  isRoleName,
   parseAddress,
   parseAddressList,
   splitSignature,
@@ -463,6 +474,271 @@ describe('email understanding regressions', () => {
     expect(text).toBe(
       'Happy to chat & grab a slot here (https://calendly.com/priya/20min).\n\nTalk soon,\nPriya',
     );
+  });
+});
+
+describe('email understanding regressions, round 2', () => {
+  const ref = new Date('2026-10-05T16:00:00Z'); // Monday 9:00 AM Pacific
+  const PT = 'America/Los_Angeles';
+  const sig = (body: string) => heuristicSignal(body, 'inbound', ref, { timeZone: PT });
+  const starts = (body: string) => sig(body).extraction.proposedTimes.map((t) => t.startIso);
+
+  it('EU-17: a hand-typed vacation note that offers a time is a proposal in the right week', () => {
+    const r = sig("I'm on vacation next week, but how about the week after? Tuesday at 2pm?");
+    expect(r.signal).toBe('scheduling_proposal');
+    expect(r.extraction.sentiment).toBe('warm');
+    // Tuesday 20 October, 2pm Pacific
+    expect(starts("I'm on vacation next week, but how about the week after? Tuesday at 2pm?")).toEqual([
+      '2026-10-20T21:00:00.000Z',
+    ]);
+    // a vacation responder is out of office whatever else it says
+    expect(
+      sig(
+        'Thank you for your email. I am out of the office until Monday, October 19. How about we reconnect then?',
+      ).signal,
+    ).toBe('out_of_office');
+  });
+
+  it('EU-17: week scopes ("next week is wide open", "Tuesday next week") place a bare weekday', () => {
+    expect(starts("I'm fully booked this week, but next week is wide open. Tues 10am or Wed 4pm?")).toEqual([
+      '2026-10-13T17:00:00.000Z',
+      '2026-10-14T23:00:00.000Z',
+    ]);
+    expect(starts('Could you do Tuesday next week at 11?')).toEqual(['2026-10-13T18:00:00.000Z']);
+    // a week named as busy does not move the day into it
+    expect(starts("I'm traveling next week. Would Thursday at 2pm work?")).toEqual([
+      '2026-10-08T21:00:00.000Z',
+    ]);
+    expect(starts("Can't do it this week, but the week after works. Wednesday at 3pm?")).toEqual([
+      '2026-10-14T22:00:00.000Z',
+    ]);
+  });
+
+  it('EU-22: "next <weekday>" is that day in the following week; mobile footers and multi-word closers split', () => {
+    expect(starts('How about next Thursday at 3pm?')).toEqual(['2026-10-15T22:00:00.000Z']);
+    expect(starts('How about this Thursday at 3pm?')).toEqual(['2026-10-08T22:00:00.000Z']);
+    expect(splitSignature('Sure, Thursday works.\n\nSent from my iPhone')).toMatchObject({
+      body: 'Sure, Thursday works.',
+      signature: 'Sent from my iPhone',
+    });
+    expect(splitSignature('Happy to chat.\n\nKind regards,\nPriya')).toMatchObject({
+      body: 'Happy to chat.',
+      signature: 'Kind regards,\nPriya',
+    });
+  });
+
+  it('EU-18: soft declines are declines, with the follow-up date when they give one', () => {
+    const later = sig(
+      "Hi Alex, I'm pretty slammed this quarter but maybe in the new year? Feel free to ping me again in January.",
+    );
+    expect(later.signal).toBe('reply_decline');
+    expect(later.extraction.sentiment).toBe('cool');
+    expect(later.extraction.followUpAfter).toBe('2027-01-01');
+    for (const b of [
+      "Thanks for reaching out. I don't really have bandwidth for calls right now. Best of luck with the search!",
+      'I no longer work at Google, so probably not much help on that front. Sorry!',
+      "I'm stretched too thin to take on new calls this fall, sorry about that.",
+    ])
+      expect(sig(b).signal).toBe('reply_decline');
+    // a warm yes with a "good luck" in it stays positive
+    expect(sig('Happy to chat! Best of luck with recruiting.').signal).toBe('reply_positive');
+    expect(followUpDate('try me again in a few weeks', ref, PT)).toBe('2026-10-26');
+    expect(followUpDate('circle back after the holidays', ref, PT)).toBe('2027-01-01');
+    expect(followUpDate('maybe in the spring', ref, PT)).toBe('2027-03-01');
+    expect(followUpDate('ping me in November', ref, PT)).toBe('2026-11-01');
+  });
+
+  it('EU-19: short confirmations are confirmations; a "booked" day with a new time is a proposal', () => {
+    for (const b of [
+      'Perfect, talk Thursday!',
+      'Accepted the invite, looking forward to it!',
+      "Great, that works. Here's the Zoom link: https://zoom.us/j/8921234567\n\nTalk soon,\nPriya",
+      'Thursday at 2pm works for me. Talk then.',
+      "You're all set, see you Thursday.",
+    ])
+      expect(sig(b).signal).toBe('scheduling_confirmation');
+    expect(sig("I'm fully booked this week, but next week is wide open. Tues 10am or Wed 4pm?").signal).toBe(
+      'scheduling_proposal',
+    );
+    expect(sig('Monday is booked solid, but does Tues 10am work?').signal).toBe('scheduling_proposal');
+    expect(sig('I can do Thursday at 2pm, let me know if that works.').signal).toBe('scheduling_proposal');
+  });
+
+  it('EU-20: signature title and company for the common layouts', () => {
+    const sigOf = (block: string, name?: string) =>
+      splitSignature(`Happy to chat next week.\n\nBest,\n${block}`, { name });
+    expect(sigOf('Senior Product Manager, Growth\nFigma\n415-555-0100')).toMatchObject({
+      title: 'Senior Product Manager, Growth',
+      company: 'Figma',
+    });
+    expect(sigOf('Priya Patel | Product Manager | Figma', 'Priya Patel')).toMatchObject({
+      title: 'Product Manager',
+      company: 'Figma',
+    });
+    expect(sigOf('Priya Patel, Product Manager at Figma', 'Priya Patel')).toMatchObject({
+      title: 'Product Manager',
+      company: 'Figma',
+    });
+    expect(
+      sigOf('Dr. Priya Patel\nAssociate Professor of Computer Science\nCornell University'),
+    ).toMatchObject({
+      title: 'Associate Professor of Computer Science',
+      company: 'Cornell University',
+    });
+    expect(
+      sigOf('Vice President, Investment Banking\nGoldman Sachs & Co. LLC | 200 West Street, New York'),
+    ).toMatchObject({ title: 'Vice President, Investment Banking', company: 'Goldman Sachs & Co. LLC' });
+    expect(sigOf('Dana Kim\nAnalyst, Goldman Sachs\n(212) 555-0100', 'Dana Kim')).toMatchObject({
+      title: 'Analyst',
+      company: 'Goldman Sachs',
+    });
+    // "International" is not "intern"
+    expect(sigOf('Maria Lopez\nGoldman Sachs International').title).toBeUndefined();
+  });
+
+  it('EU-21 / NRC-12: shared recruiting inboxes and bulk senders are machines; founders on hello@ are people', () => {
+    for (const e of [
+      'no_reply@example.com',
+      'no.reply@example.com',
+      'dse_NA4@docusign.net',
+      'mailer@beehiiv.com',
+      'campusrecruiting@jpmorgan.com',
+      'university-recruiting@goldman.com',
+      'campus.recruiting@gs.com',
+      'earlycareers@jpmorgan.com',
+      'campusrecruiting@morganstanley.com',
+      'do_not_reply@workday.com',
+      'team@tinystartup.io',
+    ])
+      expect(isAutomatedSender(e), e).toBe(true);
+    expect(isAutomatedSender('team@tinystartup.io', {}, [], 'Maya Chen')).toBe(false);
+    expect(isAutomatedSender('hello@tinystartup.io', {}, [], 'Maya Chen')).toBe(false);
+    expect(isAutomatedSender('hello@tinystartup.io', {}, [], 'Tiny Startup Team')).toBe(true);
+    expect(isAutomatedSender('jane.recruiter@stripe.com')).toBe(false);
+    expect(isAutomatedSender('priya.recruiting@figma.com')).toBe(false);
+    expect(isRoleName('Goldman Sachs University Recruiting')).toBe(true);
+    expect(isRoleName('Stripe Careers')).toBe(true);
+    expect(isRoleName('Priya Patel')).toBe(false);
+  });
+
+  it('EG-10: a stated zone wins over the student zone', () => {
+    const r = sig("Sure! Would Thursday at 2pm work? I'm on Eastern time.");
+    expect(r.extraction.proposedTimes[0]).toMatchObject({
+      startIso: '2026-10-08T18:00:00.000Z',
+      timeZone: 'America/New_York',
+    });
+  });
+
+  it('EG-18: thanks plus a question, a redirect, and "no calls but email" are read for what they ask', () => {
+    expect(
+      sig(
+        "thanks for the note. Can you tell me a bit more about what you're hoping to get out of the conversation?",
+      ).signal,
+    ).toBe('question');
+    expect(
+      sig("Not the right person for this, but my colleague Sana runs the intern program, I've cc'd her.")
+        .signal,
+    ).toBe('intro_offer');
+    const email = sig(
+      "I don't do coffee chats during recruiting season, but happy to answer a couple of questions over email.",
+    );
+    expect(email.signal).toBe('question');
+    expect(email.extraction.prefersEmail).toBe(true);
+  });
+
+  it('EG-18: a "questions over email" reply never gets a propose-times card', () => {
+    const body =
+      "I don't do coffee chats during recruiting season, but happy to answer a couple of questions over email.";
+    const h = sig(body);
+    const person = {
+      id: 'p1',
+      userId: 'u1',
+      displayName: 'Priya Patel',
+      firstName: 'Priya',
+      lastName: 'Patel',
+      emails: ['priya@figma.com'],
+      isHuman: true,
+    };
+    const chat = {
+      id: 'c1',
+      userId: 'u1',
+      personId: 'p1',
+      stage: 'replied',
+      stageEnteredAt: '2026-10-04T16:00:00Z',
+      source: 'detected',
+      goalTags: [],
+      bumpCount: 0,
+      priority: 2,
+      lastOutboundAt: '2026-10-01T16:00:00Z',
+      createdAt: '2026-10-01T16:00:00Z',
+      updatedAt: '2026-10-04T16:00:00Z',
+    };
+    const lastIn = {
+      id: 'm1',
+      sentAt: '2026-10-04T16:00:00Z',
+      signal: h.signal,
+      signalConfidence: h.confidence,
+      extraction: h.extraction,
+    };
+    const run = (extraction: typeof h.extraction) =>
+      generateCandidates({
+        userId: 'u1',
+        now: ref,
+        settings: buildDemoDataset({ now: ref }).settings,
+        people: new Map([['p1', person]]),
+        chats: [chat],
+        lastInboundByChat: new Map([['c1', { ...lastIn, extraction }]]),
+        events: [],
+        actionItems: [],
+        factsByPerson: new Map(),
+        targetCompanies: [],
+        recommendations: [],
+        dismissCounts: new Map(),
+        outreachSentThisWeek: 0,
+        freeSlotsIso: ['2026-10-08T21:00:00Z'],
+        recentlyContacted: new Set(),
+      } as never).filter((c) => c.kind === 'schedule_propose');
+    expect(run(h.extraction)).toHaveLength(0);
+    expect(run({ ...h.extraction, prefersEmail: false })).toHaveLength(1);
+  });
+
+  it('PS-9: a vacation responder without auto-reply headers is recognised from its text', () => {
+    const body =
+      'Thanks for your email. I am traveling this week with limited access to email and will get back to you when I return.';
+    expect(isAutoReplyBody(body)).toBe(true);
+    const r = sig(body);
+    expect(r.signal).toBe('out_of_office');
+    expect(r.extraction.returnDate).toBe('2026-10-12');
+    expect(isAutoReplyBody("I'm on vacation next week, but how about the week after? Tuesday at 2pm?")).toBe(
+      false,
+    );
+    expect(isAutoReplyBody('Thanks for your email! Happy to chat, does Thursday work?')).toBe(false);
+  });
+
+  it('IS-2 / NRC-02: quoted commas and RFC 2047 encoded names', () => {
+    expect(parseAddressList('"Patel, Priya" <priya@figma.com>, Dan Kim <dan.kim@stripe.com>')).toEqual([
+      '"Patel, Priya" <priya@figma.com>',
+      'Dan Kim <dan.kim@stripe.com>',
+    ]);
+    expect(parseAddress('=?UTF-8?Q?Jos=C3=A9_Garc=C3=ADa?= <jose@x.com>')).toEqual({
+      email: 'jose@x.com',
+      name: 'José García',
+    });
+    expect(parseAddress('=?utf-8?B?Sm9zw6k=?= <jose@x.com>').name).toBe('José');
+    expect(decodeMimeWords('=?UTF-8?Q?Coffee_chat?= =?UTF-8?Q?_next_week?=')).toBe('Coffee chat next week');
+    expect(decodeMimeWords('Plain subject')).toBe('Plain subject');
+  });
+
+  it('IS-12: HTML mail drops script and head text and decodes named and numeric entities', () => {
+    expect(
+      htmlToText(
+        '<head><style>p{}</style><script>alert(1)</script></head><p>Hi Jos&eacute; &#8212; let&#8217;s chat</p>',
+      ),
+    ).toBe('Hi José, let’s chat');
+    expect(decodeEntities('Fran&ccedil;ois M&uuml;ller &amp; &Aring;sa &euro;5 &szlig;')).toBe(
+      'François Müller & Åsa €5 ß',
+    );
+    expect(decodeEntities('&unknownentity; stays')).toBe('&unknownentity; stays');
   });
 });
 

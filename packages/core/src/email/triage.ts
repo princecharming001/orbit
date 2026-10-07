@@ -106,14 +106,24 @@ export function extractProposedTimes(text: string, reference: Date, timeZone?: s
 // reply signals
 
 const OOO =
-  /\b(out of (the )?office|on (vacation|leave|pto|parental leave|maternity leave|paternity leave|holiday|sabbatical)|away (until|from|through)|auto(-| )?reply|automatic reply|(limited|intermittent) (access to )?email|currently (traveling|travelling|away|out)|ooo)\b/i;
+  /\b(out of (the )?office|on (vacation|leave|pto|parental leave|maternity leave|paternity leave|holiday|sabbatical)|away (until|from|through)|auto(-| )?reply|automatic reply|(limited|intermittent|no|minimal) (access to )?(my )?e-?mail|currently (traveling|travelling|away|out)|(will|i'?ll) (get back to you|respond|reply)( to (you|your (e-?mail|message|note)))?( as soon as possible)? (when|once|upon|after) (i|my) return|back in the office|ooo)\b/i;
+/** How a vacation responder opens: the first line reads like a template, not like a person answering. */
+const AUTO_REPLY_OPENER =
+  /^(?:(?:hi|hello|dear)[^\n]{0,30}\n+)?\s*(thank(s| you) for your (e-?mail|message|note|inquiry)|i am (currently )?(out of the office|away from (the|my) (office|desk)|on (annual |parental |maternity |paternity )?leave|ooo\b)|i will be (out of the office|away from)|automatic reply|this is an automat)/i;
 const RETURN_PHRASE =
   /\b(?:until|through|thru|till|returning(?: to the office)?(?: on)?|return(?: to the office)? on|back(?: in the office| in office| at my desk| online)?(?: on)?)\s+([^\n]{0,60})/gi;
+/** "I don't do coffee chats, but happy to answer questions over email": a no to a call, a yes to email. */
+const NO_CALLS =
+  /\b((don'?t|do not|can'?t|cannot|won'?t be able to|am not able to|'m not able to|unable to|no longer) (really )?(do|take|make time for|have time for|hop on|get on|jump on|schedule) (any )?(more )?(coffee chats?|calls?|phone calls?|video calls?|meetings?|zoom( calls)?|informational( interviews?)?)|(not|no longer) (doing|taking) (coffee chats|calls|meetings|informational)|(rather|easier) (than|to skip) (a|the) (call|chat|meeting))\b/i;
+const EMAIL_OK =
+  /\b((answer|take|field|respond to) (a few|a couple( of)?|some|any|your) questions? (over|via|by|through|on) e-?mail|(over|via|by) e-?mail (instead|is (easier|better|best))|(e-?mail|send) (me )?(your|a few|a couple( of)?|any|some) questions|feel free to (e-?mail|send|shoot|write) (me )?(your |any |a few |some )?questions)\b/i;
 /** Unambiguous "no". Redirects to a colleague are handled first and are intros, not declines. */
 const HARD_DECLINE =
   /\b((am|'m) not (able|in a position) to (chat|talk|meet|take|help|connect|do)|not able to take (any )?(calls|meetings|chats)|(not|no longer) taking (any )?(calls|chats|meetings|coffee chats|informational)|i'?m going to (have to )?pass(?! (it|your|along|on your))|i('ll| will) (have to )?pass(?! (it|your|along|on your|the|her|his|my))|have to (pass|decline)|(please )?(don'?t|do not) (contact|email) me|remove me|unsubscribe me|not interested|(don'?t|do not) have (the )?(time|capacity) (to|for) (calls|chats|this|that|meetings)|can'?t help|unable to (help|meet|chat|take)|not (a|the) (right|good) fit)\b/i;
 const SOFT_DECLINE =
-  /\b(slammed|swamped|underwater|crazy busy|super busy|heads[- ]down|(don'?t|do not) have (much |the |any )?(bandwidth|capacity)|no bandwidth|maybe (in the |after the )?(new year|next (month|quarter|semester|year)|spring|summer|fall|winter|january)|circle back (in|after|later)|ping me (again )?(in|after|later)|reach out again (in|after)|not a (great|good) time( right now)?|(no longer|don'?t) work (at|for)|not (at|with) [a-z]+ any ?more|left (the company|[a-z]+ (last|in|a few))|no longer (at|with))\b/i;
+  /\b(slammed|swamped|underwater|crazy busy|super busy|heads[- ]down|(don'?t|do not) (really |currently |actually |quite )?have (much |the |any )?(bandwidth|capacity)|(don'?t|do not) (really |currently )?have (the |much )?time (for|to take) (calls|chats|meetings|coffee)|no bandwidth|stretched (too )?thin|can'?t (really )?take (on )?(any )?(more|new) (calls|chats|meetings)|maybe (in the |after the )?(new year|next (month|quarter|semester|year)|spring|summer|fall|winter|january)|circle back (in|after|later)|ping me (again )?(in|after|later)|reach out again (in|after)|not a (great|good) time( right now)?|(no longer|don'?t) work (at|for)|not (at|with) [a-z]+ any ?more|left (the company|[a-z]+ (last|in|a few))|no longer (at|with))\b/i;
+/** A sign-off that closes the door when nothing in the message opens one. */
+const PARTING = /\b(best of luck|good luck with (the|your)|wish(ing)? you (the best|luck|all the best))\b/i;
 const REDIRECT =
   /\b(not the (right|best) (person|contact)|(you should|you might want to|you'?d be better off|i'?d (recommend|suggest)|try) (talk(ing)? to|reach(ing)? out to|contact(ing)?|connect(ing)? with|email(ing)?|ask(ing)?)|(a )?better (person|contact|fit) (to|for|would be)|(colleague|teammate|coworker|someone on (my|our) team)\b[^.?!]{0,40}\b(would be|is|might be|could)\b)/i;
 const RESCHEDULE =
@@ -123,7 +133,7 @@ const DEFER =
 const COUNTER =
   /\b(but|however|instead|though)\b[^.?!]{0,80}\b(happy|could|can|works?|free|available|how about|what about|week after|open)\b/i;
 const CONFIRM =
-  /\b(confirmed|see you (then|on|soon|there|tomorrow|next|(mon|tues|wednes|thurs|fri|satur|sun)day)|talk (to you )?(then|soon|tomorrow|on (mon|tues|wednes|thurs|fri|satur|sun)day|(mon|tues|wednes|thurs|fri|satur|sun)day)|sounds good,? (see|talk)|calendar invite|sent (you )?(an|the|a calendar|a) invite|(just )?(sent|accepted) (the|your|an|it) ?(invite|invitation)|accepted the (invite|invitation|meeting)|invite accepted|booked|locked in|(it'?s|that'?s) on (my|the) calendar|added (it )?to my calendar|(here'?s|here is|i'?ll send) the (zoom|meet|teams|google meet|video|dial-in|call) (link|info|details)|zoom link|meet link|(i'?ll|i will|i'?m going to|let me) send (you |over )?(a|an|the) (google meet |zoom |calendar |teams |video )?invite|looking forward to (speaking|chatting|our (call|chat|conversation)|it|talking)|perfect,? (talk|see|thanks))\b/i;
+  /\b(confirmed|see you (then|on|soon|there|tomorrow|next|(mon|tues|wednes|thurs|fri|satur|sun)day)|talk (to you )?(then|soon|tomorrow|on (mon|tues|wednes|thurs|fri|satur|sun)day|(mon|tues|wednes|thurs|fri|satur|sun)day)|sounds good,? (see|talk)|calendar invite|sent (you )?(an|the|a calendar|a) invite|(just )?(sent|accepted) (the|your|an|it) ?(invite|invitation)|accepted the (invite|invitation|meeting)|invite accepted|booked (it|us|you|the (time|room|slot|call))|(you'?re|we'?re|it'?s|all) (booked|set)|locked in|(?<!(if|whether) )(that|this) works( for me)?(?! for you)|(?<!(if|whether) [a-z]+ )works (for me|great|perfectly)|(it'?s|that'?s) on (my|the) calendar|added (it )?to my calendar|(here'?s|here is|i'?ll send) the (zoom|meet|teams|google meet|video|dial-in|call) (link|info|details)|zoom link|meet link|(i'?ll|i will|i'?m going to|let me) send (you |over )?(a|an|the) (google meet |zoom |calendar |teams |video )?invite|looking forward to (speaking|chatting|our (call|chat|conversation)|it|talking)|perfect,? (talk|see|thanks))\b/i;
 const SCHED_CUE =
   /\b(does .{1,40} work|free (on|at|this|next)|available (on|at|this|next)|what (time|day)s? work|here are (a few|some) times|my availability|pick a (time|slot)|grab (a|any) (time|slot)|calendly|cal\.com|booking link|how about|what about (mon|tue|wed|thu|fri)|would (any of )?(these|those|the following) (times )?work)\b/i;
 const SCHED_ASK =
@@ -143,6 +153,66 @@ const OUTBOUND_THANKS =
 /** A gratitude word anywhere; used by ingest for a note sent right after a completed chat. */
 export const GRATITUDE = /\b(thank(s| you)|grateful|appreciate[ds]?)\b/i;
 
+const MONTH_NAMES = [
+  'january',
+  'february',
+  'march',
+  'april',
+  'may',
+  'june',
+  'july',
+  'august',
+  'september',
+  'october',
+  'november',
+  'december',
+];
+const SEASON_MONTH: Record<string, number> = { spring: 3, summer: 6, fall: 9, autumn: 9, winter: 12 };
+
+/**
+ * When a soft "not now" says to try again later ("ping me again in January", "maybe in the new year", "after the
+ * holidays", "in a few weeks"), the first day it is fine to follow up, as YYYY-MM-DD in the student's zone.
+ */
+export function followUpDate(text: string, reference: Date, timeZone?: string): string | undefined {
+  const t = text.toLowerCase();
+  const today = extractFirstDate('today', reference, timeZone);
+  if (!today) return undefined;
+  const [y, m] = today.split('-').map(Number) as [number, number, number];
+  const firstOf = (year: number, month: number) => {
+    const yy = year + Math.floor((month - 1) / 12);
+    const mm = ((month - 1) % 12) + 1;
+    return `${yy}-${String(mm).padStart(2, '0')}-01`;
+  };
+  const after = (n: number) => {
+    const d = new Date(`${today}T12:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + n);
+    return d.toISOString().slice(0, 10);
+  };
+  const cue =
+    '(?:in|after|around|by|until|come|early|mid|later in|sometime in)\\s+(?:the\\s+|early\\s+|mid[- ]?|late\\s+)?';
+  const month = new RegExp(`${cue}(${MONTH_NAMES.join('|')})\\b`).exec(t);
+  if (month) {
+    const mo = MONTH_NAMES.indexOf(month[1]!) + 1;
+    return firstOf(mo > m ? y : y + 1, mo);
+  }
+  if (/\b(new year|after the (holidays|break)|next year)\b/.test(t)) return firstOf(y + 1, 1);
+  const season = new RegExp(`${cue}(spring|summer|fall|autumn|winter)\\b`).exec(t);
+  if (season) {
+    const mo = SEASON_MONTH[season[1]!]!;
+    return firstOf(mo > m ? y : y + 1, mo);
+  }
+  if (/\bnext (month|semester)\b/.test(t)) return firstOf(y, m + 1);
+  if (/\bnext quarter\b|\b(a few|a couple( of)?|couple|few) months\b/.test(t)) return firstOf(y, m + 3);
+  if (/\b(a few|a couple( of)?|couple|few|several) weeks\b/.test(t)) return after(21);
+  if (/\bnext week\b/.test(t)) return after(7);
+  return undefined;
+}
+
+/** A vacation responder: an out-of-office message whose first line reads like a template. */
+export function isAutoReplyBody(body: string): boolean {
+  return OOO.test(body) && AUTO_REPLY_OPENER.test(body.trim());
+}
+
 export interface SignalOptions {
   /** the student's IANA zone; times without a stated zone resolve in it */
   timeZone?: string;
@@ -154,6 +224,16 @@ function returnDate(text: string, reference: Date, timeZone?: string): string | 
   while ((m = RETURN_PHRASE.exec(text))) {
     const d = extractFirstDate(m[1]!, reference, timeZone);
     if (d) return d;
+  }
+  // "traveling this week" / "out next week" with no date: back the Monday after
+  const week = /\b(this|the rest of the|next) week\b/i.exec(text);
+  if (week) {
+    const monday = extractFirstDate('next monday', reference, timeZone);
+    if (!monday) return undefined;
+    if (week[1]!.toLowerCase() !== 'next') return monday;
+    const d = new Date(`${monday}T12:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + 7);
+    return d.toISOString().slice(0, 10);
   }
   return undefined;
 }
@@ -169,9 +249,11 @@ export function detectOutOfOffice(
 }
 
 /**
- * Classify one message. Inbound order: out of office (unless a time is offered) → redirect to a colleague (an
- * intro) → reschedule or counter-proposal → confirmation → proposal → hard decline → referral / intro offers →
- * soft decline → thank-you after a conversation → positive / question / neutral.
+ * Classify one message. Inbound order: out of office (a vacation responder always; a hand-typed one unless a time is
+ * offered) → redirect to a colleague (an intro) → reschedule or counter-proposal → no-calls-but-email (a question,
+ * `prefersEmail`) → confirmation (a proposal when it also asks about a new time) → proposal → hard decline →
+ * referral / intro offers → soft decline ("slammed this quarter", "best of luck", with `followUpAfter` when they
+ * say when) → thank-you after a conversation → positive / question / neutral.
  */
 export function heuristicSignal(
   body: string,
@@ -229,7 +311,10 @@ export function heuristicSignal(
   const positive = POSITIVE.test(body);
   const schedulingCue = times.length > 0 || SCHED_CUE.test(body);
   // out of office, unless the message goes on to offer a time ("on vacation next week, but how about Tuesday at 2pm?")
-  if (OOO.test(body) && !times.length && !COUNTER.test(body) && !SCHED_CUE.test(body)) {
+  if (
+    OOO.test(body) &&
+    (isAutoReplyBody(body) || (!times.length && !COUNTER.test(body) && !SCHED_CUE.test(body)))
+  ) {
     const rd = returnDate(body, reference, opts.timeZone);
     if (rd) extraction.returnDate = rd;
     return { signal: 'out_of_office', confidence: 0.9, extraction };
@@ -246,7 +331,16 @@ export function heuristicSignal(
     return { signal: 'reschedule', confidence: 0.75, extraction };
   }
   if (DEFER.test(body) && positive) return warm('reply_positive', 0.75);
-  if (CONFIRM.test(body)) return warm('scheduling_confirmation', 0.8);
+  // a no to a call that offers email instead: answer by email, never propose times
+  if (NO_CALLS.test(body) && EMAIL_OK.test(body)) {
+    extraction.prefersEmail = true;
+    return warm('question', 0.7);
+  }
+  // "Monday is booked, but Tues 10am works?" offers a time; "Confirmed for Thursday at 2pm" confirms one
+  if (CONFIRM.test(body)) {
+    if (times.length && (body.includes('?') || SCHED_CUE.test(body))) return warm('scheduling_proposal', 0.8);
+    return warm('scheduling_confirmation', 0.8);
+  }
   if (schedulingCue) {
     if (HARD_DECLINE.test(body) && !times.length && !COUNTER.test(body)) {
       extraction.sentiment = 'cool';
@@ -261,8 +355,13 @@ export function heuristicSignal(
   if (extraction.offers.some((o) => /refer|word|forward|resume|pass|submitted|flag/i.test(o)))
     return warm('referral_offer', 0.8);
   if (extraction.offers.length || INTRO_BODY.test(body)) return warm('intro_offer', 0.8);
-  if (SOFT_DECLINE.test(body) && !COUNTER.test(body)) {
+  if (
+    (SOFT_DECLINE.test(body) && !COUNTER.test(body)) ||
+    (PARTING.test(body) && !positive && !SCHED_ASK.test(body) && !/\?/.test(body))
+  ) {
     extraction.sentiment = 'cool';
+    const later = followUpDate(body, reference, opts.timeZone);
+    if (later) extraction.followUpAfter = later;
     return { signal: 'reply_decline', confidence: 0.6, extraction };
   }
   const endsWithQuestion = /\?\s*$/.test(body.trim());

@@ -386,6 +386,10 @@ export interface MessageExtraction {
   sentiment: 'warm' | 'neutral' | 'cool';
   /** out-of-office return date (YYYY-MM-DD) when the auto-reply states one */
   returnDate?: string;
+  /** a soft "not now" that says when to try again ("ping me in January"): first day to follow up (YYYY-MM-DD) */
+  followUpAfter?: string;
+  /** they declined a call but offered to answer questions over email: reply by email, never propose times */
+  prefersEmail?: boolean;
 }
 
 export interface CalendarEvent {

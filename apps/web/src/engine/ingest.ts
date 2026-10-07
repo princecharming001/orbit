@@ -7,7 +7,9 @@ import {
   heuristicTriage,
   isAutomatedSender,
   isAutoReply,
+  isAutoReplyBody,
   isCalendarNotice,
+  isRoleName,
   newId,
   normalizeEmail,
   parseAddress,
@@ -132,13 +134,16 @@ export async function ingestEmails(
       const from = splitAddress(r.from);
       const direction: EmailMessage['direction'] = userEmails.has(from.email) ? 'outbound' : 'inbound';
       // machine mail: bulk/notification senders, vacation auto-replies, calendar invitations (the calendar sync owns those)
+      const stripped = stripQuotedReply(r.bodyText);
+      // a vacation responder without auto-reply headers still reads like one ("Thank you for your email. I am
+      // traveling with limited access to email"); it is not a reply from the person
       const automated =
         direction === 'inbound' &&
-        (isAutomatedSender(from.email, r.headers, r.labels) ||
+        (isAutomatedSender(from.email, r.headers, r.labels, from.name) ||
           isAutoReply(r.headers, r.subject) ||
+          isAutoReplyBody(stripped) ||
           isCalendarNotice(r.subject, r.bodyText, r.headers));
-      const stripped = stripQuotedReply(r.bodyText);
-      const sig = splitSignature(stripped);
+      const sig = splitSignature(stripped, { name: from.name });
       const msg: EmailMessage = {
         id: newId('m'),
         userId: user.id,
@@ -165,8 +170,10 @@ export async function ingestEmails(
         ...(direction === 'inbound' ? r.to.map((t) => ({ ...splitAddress(t), isSender: false })) : []),
       ].filter((x) => !userEmails.has(x.email));
       if (!automated) {
-        for (const c of counterparts.filter((x) => !userEmails.has(x.email))) {
-          const auto = isAutomatedSender(c.email, {}, []);
+        // a fragment without an address is never a person
+        for (const c of counterparts.filter((x) => x.email.includes('@') && !userEmails.has(x.email))) {
+          // shared inboxes and team names (campusrecruiting@, "Stripe Careers") are not people to network with
+          const auto = isAutomatedSender(c.email, {}, [], c.name) || isRoleName(c.name);
           const { person, created } = await upsertPerson(
             {
               userId: user.id,
@@ -190,7 +197,8 @@ export async function ingestEmails(
           if (!thread.participantPersonIds.includes(person.id)) thread.participantPersonIds.push(person.id);
         }
         for (const c of ccs) {
-          const { person } = await upsertPerson(
+          if (!c.email.includes('@')) continue;
+          const { person, created } = await upsertPerson(
             {
               userId: user.id,
               email: c.email,
@@ -201,6 +209,8 @@ export async function ingestEmails(
             },
             cache,
           );
+          if (created && (isAutomatedSender(c.email, {}, [], c.name) || isRoleName(c.name)))
+            await db.people.update(person.id, { isHuman: false });
           if (!thread.participantPersonIds.includes(person.id)) thread.participantPersonIds.push(person.id);
         }
       }
@@ -433,6 +443,14 @@ async function processNetworkingThread(
           offers: sig.offers,
           factsAboutSender: sig.facts.map((f) => ({ type: f.type as never, text: f.text })),
           sentiment: sig.sentiment,
+          // what only the heuristic reads (return date, "try me in January", "email is easier") when both agree
+          ...(sig.signal === h.signal
+            ? {
+                ...(h.extraction.returnDate ? { returnDate: h.extraction.returnDate } : {}),
+                ...(h.extraction.followUpAfter ? { followUpAfter: h.extraction.followUpAfter } : {}),
+                ...(h.extraction.prefersEmail ? { prefersEmail: true } : {}),
+              }
+            : {}),
         }
       : h.extraction;
     await db.messages.update(m.id, {
@@ -443,6 +461,20 @@ async function processNetworkingThread(
     });
     m.signal = signal;
     m.extraction = extraction;
+    if (m.direction === 'inbound' && signal === 'out_of_office') {
+      // "I'm traveling this week, back Monday": not an answer. It does not count as a reply (the bump still comes,
+      // after the return date) and never moves the chat.
+      const c = m.fromPersonId ? chats.get(m.fromPersonId) : undefined;
+      const back =
+        extraction.returnDate ??
+        detectOutOfOffice(m.bodyText, new Date(m.sentAt), { timeZone: user.timezone }).returnDate;
+      if (c && back && (!c.outOfOfficeUntil || back > c.outOfOfficeUntil)) {
+        c.outOfOfficeUntil = back;
+        await db.chats.update(c.id, { outOfOfficeUntil: back, updatedAt: now.toISOString() });
+      }
+      if (m.fromPersonId) touched.add(m.fromPersonId);
+      continue;
+    }
     if (m.direction === 'inbound') {
       const senderId = m.fromPersonId;
       const c = senderId ? chats.get(senderId) : undefined;
@@ -599,7 +631,7 @@ export async function ingestEvents(
     const others = r.attendees.filter((a) => !a.self && normalizeEmail(a.email) !== userEmail);
     const attendeePersonIds: string[] = [];
     for (const a of others.slice(0, 8)) {
-      if (isAutomatedSender(a.email)) continue;
+      if (isAutomatedSender(a.email, {}, [], a.displayName) || isRoleName(a.displayName)) continue;
       const { person } = await upsertPerson(
         {
           userId: user.id,

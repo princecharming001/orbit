@@ -15,6 +15,8 @@ export interface CorpusMessage {
   id: string;
   direction: 'inbound' | 'outbound';
   from: string;
+  /** display name on the From line, when it matters for sender detection */
+  fromName?: string;
   subject?: string;
   body: string;
   headers?: Record<string, string>;
@@ -31,6 +33,15 @@ export interface CorpusMessage {
     bodyDrops?: string[];
     offers?: number;
     asks?: number;
+    /** a soft decline that says when to try again */
+    followUpAfter?: string;
+    /** they declined a call but offered email */
+    prefersEmail?: boolean;
+    /** a vacation responder judged from its text alone */
+    autoReplyBody?: boolean;
+    /** title and company read from the signature */
+    title?: string;
+    company?: string;
   };
 }
 
@@ -541,6 +552,168 @@ export const MESSAGES: CorpusMessage[] = [
       times: ['Thu 10/8 14:00', 'Fri 10/9 10:00'],
       zone: 'America/Los_Angeles',
     },
+  },
+  // ---- round 2: week scopes, soft declines, short confirmations, email-only, responders, senders ---------------
+  {
+    id: 'counter-vacation-week-after',
+    direction: 'inbound',
+    from: 'yusuf.ali@palantir.com',
+    body: "I'm on vacation next week, but how about the week after? Tuesday at 2pm?",
+    expect: { signal: 'scheduling_proposal', times: ['Tue 10/20 14:00'], autoReplyBody: false },
+  },
+  {
+    id: 'sched-next-week-open',
+    direction: 'inbound',
+    from: 'grace.liu@databricks.com',
+    body: "I'm fully booked this week, but next week is wide open. Tues 10am or Wed 4pm?\n\nGrace",
+    expect: { signal: 'scheduling_proposal', times: ['Tue 10/13 10:00', 'Wed 10/14 16:00'] },
+  },
+  {
+    id: 'sched-traveling-next-week',
+    direction: 'inbound',
+    from: 'ben.okafor@bain.com',
+    body: "I'm traveling next week. Would Thursday at 2pm work?",
+    expect: { signal: 'scheduling_proposal', times: ['Thu 10/8 14:00'] },
+  },
+  {
+    id: 'sched-day-next-week',
+    direction: 'inbound',
+    from: 'nina.shah@airbnb.com',
+    body: 'Sure thing. Could you do Tuesday next week at 11?',
+    expect: { signal: 'scheduling_proposal', times: ['Tue 10/13 11:00'] },
+  },
+  {
+    id: 'sched-next-thursday',
+    direction: 'inbound',
+    from: 'kai.wong@notion.so',
+    body: 'Happy to. How about next Thursday at 3pm?',
+    expect: { signal: 'scheduling_proposal', times: ['Thu 10/15 15:00'] },
+  },
+  {
+    id: 'sched-booked-solid-offer',
+    direction: 'inbound',
+    from: 'eva.martin@mckinsey.com',
+    body: 'Monday is booked solid, but does Tues 10am work?',
+    expect: { signal: 'scheduling_proposal', times: ['Tue 10/6 10:00'] },
+  },
+  {
+    id: 'sched-if-that-works',
+    direction: 'inbound',
+    from: 'raj.iyer@citadel.com',
+    body: 'I can do Thursday at 2pm, let me know if that works.',
+    expect: { signal: 'scheduling_proposal', times: ['Thu 10/8 14:00'] },
+  },
+  {
+    id: 'confirm-perfect-talk',
+    direction: 'inbound',
+    from: 'priya.patel@figma.com',
+    body: 'Perfect, talk Thursday!',
+    expect: { signal: 'scheduling_confirmation', times: [] },
+  },
+  {
+    id: 'confirm-works-for-me',
+    direction: 'inbound',
+    from: 'tom.becker@stripe.com',
+    body: 'Thursday at 2pm works for me. Talk then.',
+    expect: { signal: 'scheduling_confirmation', times: ['Thu 10/8 14:00'] },
+  },
+  {
+    id: 'confirm-all-set',
+    direction: 'inbound',
+    from: 'lena.fischer@blackstone.com',
+    body: "You're all set, see you Thursday.\n\nSent from my iPhone",
+    expect: { signal: 'scheduling_confirmation', bodyDrops: ['Sent from my iPhone'] },
+  },
+  {
+    id: 'decline-slammed-january',
+    direction: 'inbound',
+    from: 'marco.rossi@google.com',
+    body: "Hi Alex, I'm pretty slammed this quarter but maybe in the new year? Feel free to ping me again in January.\n\nMarco",
+    expect: { signal: 'reply_decline', followUpAfter: '2027-01-01' },
+  },
+  {
+    id: 'decline-bandwidth-luck',
+    direction: 'inbound',
+    from: 'sara.cohen@meta.com',
+    body: "Thanks for reaching out. I don't really have bandwidth for calls right now. Best of luck with the search!",
+    expect: { signal: 'reply_decline' },
+  },
+  {
+    id: 'decline-left-company',
+    direction: 'inbound',
+    from: 'jordan.lee@gmail.com',
+    body: 'I no longer work at Google, so probably not much help on that front. Sorry!',
+    expect: { signal: 'reply_decline' },
+  },
+  {
+    id: 'email-only-questions',
+    direction: 'inbound',
+    from: 'amy.zhang@goldmansachs.com',
+    body: "I don't do coffee chats during recruiting season, but happy to answer a couple of questions over email.\n\nBest,\nAmy",
+    expect: { signal: 'question', prefersEmail: true, times: [] },
+  },
+  {
+    id: 'question-after-thanks',
+    direction: 'inbound',
+    from: 'will.turner@jpmorgan.com',
+    body: "thanks for the note. Can you tell me a bit more about what you're hoping to get out of the conversation?",
+    expect: { signal: 'question' },
+  },
+  {
+    id: 'ooo-template-no-header',
+    direction: 'inbound',
+    from: 'felix.wagner@deloitte.com',
+    subject: 'Re: Cornell junior, quick question',
+    body: 'Thanks for your email. I am traveling this week with limited access to email and will get back to you when I return.',
+    expect: { signal: 'out_of_office', returnDate: '2026-10-12', autoReplyBody: true, automated: false },
+  },
+  {
+    id: 'founder-hello-inbox',
+    direction: 'inbound',
+    from: 'hello@tinystartup.io',
+    fromName: 'Maya Chen',
+    body: 'Hey Alex, love that you are into dev tools. Happy to chat, grab any time on my Calendly: https://calendly.com/maya-chen/20min',
+    expect: {
+      signal: 'scheduling_proposal',
+      automated: false,
+      bodyKeeps: ['https://calendly.com/maya-chen/20min'],
+    },
+  },
+  {
+    id: 'campus-recruiting-alias',
+    direction: 'inbound',
+    from: 'university-recruiting@goldman.com',
+    fromName: 'Goldman Sachs University Recruiting',
+    body: 'Thank you for your interest in the Goldman Sachs Summer Analyst program. Your application has been received and is under review.',
+    expect: { signal: 'reply_neutral', automated: true },
+  },
+  {
+    id: 'docusign-envelope',
+    direction: 'inbound',
+    from: 'dse_NA4@docusign.net',
+    body: 'Please review and sign your offer letter.',
+    expect: { signal: 'reply_neutral', automated: true },
+  },
+  {
+    id: 'sig-pipe-name-title-company',
+    direction: 'inbound',
+    from: 'priya.patel@figma.com',
+    fromName: 'Priya Patel',
+    body: 'Happy to chat next week.\n\nBest,\nPriya Patel | Product Manager | Figma\n415-555-0100',
+    expect: {
+      signal: 'reply_positive',
+      title: 'Product Manager',
+      company: 'Figma',
+      bodyDrops: ['415-555-0100'],
+    },
+  },
+  {
+    id: 'sig-title-team-org-line',
+    direction: 'inbound',
+    from: 'dev.patel@figma.com',
+    fromName: 'Dev Patel',
+    body: 'Sure, happy to share what I know.\n\nThanks,\nDev\nSenior Product Manager, Growth\nFigma',
+    expect: { signal: 'reply_positive', title: 'Senior Product Manager, Growth', company: 'Figma' },
   },
   {
     id: 'out-outreach',

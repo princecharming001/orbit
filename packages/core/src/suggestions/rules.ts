@@ -169,6 +169,8 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
       ['reply_positive', 'question', 'reply_neutral', 'intro_offer', 'referral_offer'].includes(
         lastIn.signal ?? '',
       ) &&
+      // they said no to a call but yes to questions over email: proposing times would ignore what they asked
+      !lastIn.extraction?.prefersEmail &&
       (!chat.lastOutboundAt || new Date(chat.lastOutboundAt) < new Date(lastIn.sentAt))
     ) {
       out.push({

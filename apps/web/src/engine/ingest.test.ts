@@ -1,5 +1,5 @@
 import type { User } from '@orbit/core';
-import { buildDemoDataset } from '@orbit/core';
+import { buildDemoDataset, parseAddressList } from '@orbit/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { db, wipeDatabase } from '../db/schema';
 import { ingestEmails, type RawEmail } from './ingest';
@@ -251,5 +251,166 @@ describe('ingest: email understanding', () => {
     expect(reply?.bodyText).toContain('https://calendly.com/priya/20min');
     expect(reply?.bodyText).not.toMatch(/wrote:|alex@cornell\.edu/);
     expect(reply?.signal).toBe('scheduling_proposal');
+  });
+});
+
+describe('ingest: senders, responders and address lists', () => {
+  it('PS-9: a vacation responder without auto-reply headers is not a reply and holds the bump', async () => {
+    await ingestEmails(
+      user,
+      [
+        raw({
+          from: ALEX,
+          to: ['Felix Wagner <felix.wagner@deloitte.com>'],
+          bodyText: OUTREACH,
+          sentAt: '2026-10-05T15:00:00Z',
+        }),
+        raw({
+          from: 'Felix Wagner <felix.wagner@deloitte.com>',
+          to: [ALEX],
+          subject: 'Re: Cornell junior, quick question',
+          bodyText:
+            'Thanks for your email. I am traveling this week with limited access to email and will get back to you when I return.',
+          sentAt: '2026-10-05T15:02:00Z',
+        }),
+      ],
+      { useLlm: false, now: NOW },
+    );
+    const { chat } = await chatFor('felix.wagner@deloitte.com');
+    expect(chat?.stage).toBe('outreach_sent');
+    expect(chat?.lastInboundAt).toBeUndefined();
+    expect(chat?.outOfOfficeUntil).toBe('2026-10-12');
+    const ooo = await db.messages.where('externalMessageId').equals(`m${seq}`).first();
+    expect(ooo?.isAutomated).toBe(true);
+    expect(ooo?.signal).toBe('out_of_office');
+    const proposals = await db.stageEvents
+      .filter((e) => e.chatId === chat?.id && e.toStage === 'replied')
+      .count();
+    expect(proposals).toBe(0);
+  });
+
+  it('PS-9: a hand-typed "on vacation until" note does not count as a reply', async () => {
+    await ingestEmails(
+      user,
+      [
+        raw({
+          from: ALEX,
+          to: ['Omar Haddad <omar@stripe.com>'],
+          bodyText: OUTREACH,
+          sentAt: '2026-10-02T15:00:00Z',
+        }),
+        raw({
+          from: 'Omar Haddad <omar@stripe.com>',
+          to: [ALEX],
+          subject: 'Re: Cornell junior, quick question',
+          bodyText: "I'm on vacation until October 14, I'll get back to you when I return.",
+          sentAt: '2026-10-03T15:00:00Z',
+        }),
+      ],
+      { useLlm: false, now: NOW },
+    );
+    const { chat } = await chatFor('omar@stripe.com');
+    expect(chat?.stage).toBe('outreach_sent');
+    expect(chat?.lastInboundAt).toBeUndefined();
+    expect(chat?.outOfOfficeUntil).toBe('2026-10-14');
+    const m = await db.messages.where('externalMessageId').equals(`m${seq}`).first();
+    expect(m?.signal).toBe('out_of_office');
+  });
+
+  it('NRC-02 / IS-2: a quoted "Last, First" name is one person, and a fragment without an address is none', async () => {
+    const stats = await ingestEmails(
+      user,
+      [
+        raw({
+          from: ALEX,
+          to: parseAddressList('"Patel, Priya" <priya@figma.com>, Dan Kim <dan.kim@stripe.com>'),
+          bodyText: OUTREACH,
+          sentAt: '2026-10-01T15:00:00Z',
+        }),
+        raw({
+          externalThreadId: 't2',
+          from: ALEX,
+          // what a naive comma split used to hand over
+          to: ['"Patel', 'Lee" <ann.lee@figma.com>'],
+          bodyText: OUTREACH,
+          sentAt: '2026-10-01T16:00:00Z',
+        }),
+      ],
+      { useLlm: false, now: NOW },
+    );
+    const people = await db.people.toArray();
+    expect(people.every((p) => p.emails.every((e) => e.includes('@')))).toBe(true);
+    expect(people.map((p) => p.primaryEmail).sort()).toEqual([
+      'ann.lee@figma.com',
+      'dan.kim@stripe.com',
+      'priya@figma.com',
+    ]);
+    expect(stats.people).toBe(3);
+    const priya = people.find((p) => p.primaryEmail === 'priya@figma.com');
+    expect(priya?.firstName).toBe('Priya');
+    expect(priya?.lastName).toBe('Patel');
+  });
+
+  it('NRC-12: campus recruiting inboxes are not people; a founder writing from hello@ is', async () => {
+    await ingestEmails(
+      user,
+      [
+        raw({
+          from: ALEX,
+          to: ['Goldman Sachs University Recruiting <university-recruiting@goldman.com>'],
+          bodyText:
+            'Hello, I wanted to ask whether the summer analyst application is reviewed on a rolling basis.',
+          sentAt: '2026-10-01T15:00:00Z',
+        }),
+        raw({
+          externalThreadId: 't2',
+          from: 'JPMorgan Campus Recruiting <campusrecruiting@jpmorgan.com>',
+          to: [ALEX],
+          bodyText: 'Thank you for applying. Your application is under review.',
+          sentAt: '2026-10-02T15:00:00Z',
+        }),
+        raw({
+          externalThreadId: 't3',
+          from: 'Maya Chen <hello@tinystartup.io>',
+          to: [ALEX],
+          subject: 'Re: Cornell junior, quick question',
+          bodyText: 'Hey Alex, happy to chat about dev tools. Does Thursday at 2pm work?\n\nMaya',
+          sentAt: '2026-10-02T16:00:00Z',
+        }),
+      ],
+      { useLlm: false, now: NOW },
+    );
+    const gs = await db.people.filter((p) => p.emails.includes('university-recruiting@goldman.com')).first();
+    expect(gs?.isHuman).toBe(false);
+    expect(await db.people.filter((p) => p.emails.includes('campusrecruiting@jpmorgan.com')).count()).toBe(0);
+    const jpm = await db.messages.filter((m) => m.fromEmail === 'campusrecruiting@jpmorgan.com').first();
+    expect(jpm?.isAutomated).toBe(true);
+    const { person: maya } = await chatFor('hello@tinystartup.io');
+    expect(maya?.isHuman).toBe(true);
+    expect(maya?.firstName).toBe('Maya');
+  });
+
+  it('EU-20: reads the title and employer from a "Name | Title | Company" signature', async () => {
+    await ingestEmails(
+      user,
+      [
+        raw({
+          from: ALEX,
+          to: ['Priya Patel <priya@figma.com>'],
+          bodyText: OUTREACH,
+          sentAt: '2026-10-01T15:00:00Z',
+        }),
+        raw({
+          from: 'Priya Patel <priya@figma.com>',
+          to: [ALEX],
+          bodyText: 'Happy to chat next week.\n\nBest,\nPriya Patel | Product Manager | Figma\n415-555-0100',
+          sentAt: '2026-10-02T15:00:00Z',
+        }),
+      ],
+      { useLlm: false, now: NOW },
+    );
+    const { person } = await chatFor('priya@figma.com');
+    expect(person?.currentTitle).toBe('Product Manager');
+    expect(person?.currentOrganizationRaw ?? '').toMatch(/Figma/);
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { heuristicSignal, heuristicTriage } from '../email/triage';
+import { heuristicSignal, heuristicTriage, isAutoReplyBody } from '../email/triage';
 import { isAutomatedSender, splitSignature, stripQuotedReply } from '../text/email';
 import type { ProposedTime } from '../types';
 import { CORPUS_NOW, CORPUS_TZ, MESSAGES, THREADS } from './fixtures/email-corpus';
@@ -27,9 +27,14 @@ function fmt(t: ProposedTime): string {
 
 function read(m: (typeof MESSAGES)[number]) {
   const stripped = stripQuotedReply(m.body);
-  const sig = splitSignature(stripped);
+  const sig = splitSignature(stripped, { name: m.fromName });
   const body = sig.body || stripped;
-  return { body, ...heuristicSignal(body, m.direction, CORPUS_NOW, { timeZone: CORPUS_TZ }) };
+  return {
+    body,
+    stripped,
+    sig,
+    ...heuristicSignal(body, m.direction, CORPUS_NOW, { timeZone: CORPUS_TZ }),
+  };
 }
 
 describe('email corpus', () => {
@@ -47,7 +52,15 @@ describe('email corpus', () => {
       if (m.expect.zone) for (const t of r.extraction.proposedTimes) expect(t.timeZone).toBe(m.expect.zone);
       else for (const t of r.extraction.proposedTimes) expect(t.timeZone).toBeUndefined();
       if (m.expect.automated !== undefined)
-        expect(isAutomatedSender(m.from, m.headers ?? {}, [])).toBe(m.expect.automated);
+        expect(isAutomatedSender(m.from, m.headers ?? {}, [], m.fromName)).toBe(m.expect.automated);
+      if (m.expect.followUpAfter !== undefined)
+        expect(r.extraction.followUpAfter).toBe(m.expect.followUpAfter);
+      if (m.expect.prefersEmail !== undefined)
+        expect(Boolean(r.extraction.prefersEmail)).toBe(m.expect.prefersEmail);
+      if (m.expect.autoReplyBody !== undefined)
+        expect(isAutoReplyBody(r.stripped)).toBe(m.expect.autoReplyBody);
+      if (m.expect.title !== undefined) expect(r.sig.title).toBe(m.expect.title);
+      if (m.expect.company !== undefined) expect(r.sig.company).toBe(m.expect.company);
       if (m.expect.returnDate) expect(r.extraction.returnDate).toBe(m.expect.returnDate);
       for (const k of m.expect.bodyKeeps ?? []) expect(r.body).toContain(k);
       for (const k of m.expect.bodyDrops ?? []) expect(r.body).not.toContain(k);
