@@ -1297,7 +1297,9 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
   // A reply that asks something (send your resume, which teams) or hands over a booking link is answered first;
   // proposing two times while ignoring the ask is the classic tell of a template.
   // A time they proposed is answered too: confirmed when it is free, never ignored for two new slots.
-  const theyProposed = !!ctx.thread?.proposedTimes?.length && ctx.thread.lastSignal !== 'reschedule';
+  // (a time Orbit already knows was missed is owned up to in the scheduling note itself)
+  const theyProposed =
+    !!ctx.thread?.proposedTimes?.length && ctx.thread.lastSignal !== 'reschedule' && !ctx.missedProposal;
   const kind: MessageKind =
     ctx.kind === 'schedule' &&
     ((asks.length && ctx.thread?.lastSignal !== 'reschedule') || booking || theyProposed)
