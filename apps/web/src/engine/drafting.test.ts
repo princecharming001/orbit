@@ -291,8 +291,16 @@ describe('drafting against the demo data', () => {
       : (await draftForSuggestion(user, s))!;
     expect(d.personId).toBe(referrer!.id);
     expect(d.bodyDraft).toMatch(new RegExp(`Thanks again for connecting me with ${target!.firstName}\\.`));
-    expect(d.bodyDraft).toMatch(/We spoke yesterday\./);
-    expect((await validateStored(d, s)).filter((i) => i.blocking)).toEqual([]);
+    // the introducer enjoys hearing one thing from the conversation, so the student is asked for it (panel round 3)
+    expect(d.bodyDraft).toMatch(/We spoke yesterday, and \[one thing/);
+    expect(d.needsInput).toContain('takeaway');
+    const filled = (await regenerateDraft(user, d.id, {
+      takeaway: 'he walked me through how his team runs interviews',
+    }))!;
+    expect(filled.bodyDraft).toMatch(
+      /We spoke yesterday, and he walked me through how his team runs interviews\./,
+    );
+    expect((await validateStored(filled, s)).filter((i) => i.blocking)).toEqual([]);
   });
 
   it('thank-you and nurture splice facts grammatically, located by the real meeting date', async () => {
@@ -328,7 +336,8 @@ describe('drafting against the demo data', () => {
     const i = await draftMessage(user, lena.id, 'intro_request', 'gmail');
     expect(i.needsInput).toEqual(['target']);
     const i2 = (await regenerateDraft(user, i.id, { target: 'Lucas Fischer, Engineering Manager at Ramp' }))!;
-    expect(i2.bodyDraft).toMatch(/introducing me to Lucas Fischer, an Engineering Manager at Ramp\?/);
+    // a colleague at their own firm needs no title or firm (panel round 3)
+    expect(i2.bodyDraft).toMatch(/introducing me to Lucas Fischer\?/);
     expect(i2.subject).toBe('Small ask: intro to Lucas Fischer?');
   });
 
@@ -416,12 +425,11 @@ describe('drafting against the demo data', () => {
     expect(d.inReplyToMessageId).toBeDefined();
     expect(d.subject).toBe(`Re: ${th.subject}`);
     // she has written to the student, so "Hi", and the application is stated as it stands (drafts panel round 2)
+    // the student wrote last, days ago: the news leads, and nothing hides who is waiting on whom (panel round 3)
     expect(d.bodyDraft).toMatch(
-      /^Hi Chloe,\n\nWe traded emails [^,]+, and I wanted to pick that conversation back up\./,
+      /^Hi Chloe,\n\nA quick update since my note [^:]+: I've applied for the Software Engineering Intern role at Ramp, and I've spoken with Lena Novak, an engineering manager there\./,
     );
-    expect(d.bodyDraft).toMatch(
-      /A quick update: I've applied for the Software Engineering Intern role at Ramp\./,
-    );
+    expect(d.bodyDraft).not.toMatch(/We traded emails/);
     expect(d.bodyDraft).not.toMatch(/planning to apply|helpful conversations|As a quick reminder/);
     expect((await validateStored(d)).filter((i) => i.blocking)).toEqual([]);
     // on LinkedIn: no subject, and a short note (not the letter) when they are not connected yet
@@ -431,7 +439,7 @@ describe('drafting against the demo data', () => {
     await db.people.update(chloe.id, { linkedinConnectedOn: undefined });
     const note = await draftMessage(user, chloe.id, 'outreach', 'linkedin');
     expect(note.bodyDraft.length).toBeLessThanOrEqual(300);
-    expect(note.bodyDraft).toMatch(/^Hi Chloe, we traded emails/);
+    expect(note.bodyDraft).toMatch(/^Hi Chloe, (we traded emails|following up on my note)/);
   });
 
   it('a reply asking for the resume and the teams gets both before any times (EG-03)', async () => {
