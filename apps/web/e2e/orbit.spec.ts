@@ -1810,4 +1810,18 @@ test.describe('Usability round 6', () => {
     await page.goto('drafts');
     await expect(page).toHaveURL(/\/inbox$/);
   });
+
+  test('the next day, a thank-you says the day, and a chat whose time passed asks for the thank-you', async ({
+    page,
+  }) => {
+    await loadDemo(page);
+    await page.clock.setSystemTime(new Date('2026-10-08T10:00:00'));
+    await page.goto('today');
+    const lena = page.getByTestId('suggestion-thank_you').filter({ hasText: 'Lena' });
+    await lena.getByTestId('draft-review').click();
+    await expect(lena.getByLabel('Message body')).toHaveValue(/making time on Monday/);
+    await expect(lena.getByLabel('Message body')).not.toHaveValue(/yesterday/);
+    // Ethan's chat was yesterday at 11:30 and the demo has no calendar sync: it moved on by itself
+    await expect(page.getByTestId('suggestion-thank_you').filter({ hasText: 'Ethan' })).toBeVisible();
+  });
 });
