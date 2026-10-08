@@ -1604,13 +1604,11 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
         claims.push({ text: 'first bump after their out-of-office', kind: 'logistics' });
       } else {
         const pointer = senior
-          ? formal
-            ? ', and if someone else on your team would be better placed, a pointer would be very helpful'
-            : ", and if someone else on your team would be a better person to ask, I'd be grateful for a pointer"
+          ? ", and if someone else on your team would be a better person to ask, I'd be grateful for a pointer"
           : '';
         body = `${G}\n\n${
           formal
-            ? `${refLine ?? `I wanted to follow up on ${myNote}${about}.`} If ${minutes} minutes in the coming weeks would be possible, I would be grateful${pointer}.`
+            ? `${refLine ?? `I wanted to follow up on ${myNote}${about}.`} I would be grateful for ${minutes} minutes in the coming weeks${senior ? ', or for a pointer to someone better placed' : ''}.`
             : friend
               ? `Bumping this in case it got buried. I'd still love ${minutes} minutes${hear} whenever you have a moment, no rush at all.`
               : refLine
