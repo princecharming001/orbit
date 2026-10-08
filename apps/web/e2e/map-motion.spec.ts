@@ -697,6 +697,41 @@ test.describe('Map motion', () => {
     await expect(page.getByTestId('company-routes-why')).toContainText(/know these people only slightly/);
   });
 
+  test('a search that finds no one takes the old route away; one with several matches lights them on the map', async ({
+    page,
+  }) => {
+    await loadDemo(page);
+    await openMap(page);
+    await search(page, 'Felix Garcia');
+    await expect(page.getByTestId('reach-path').first()).toBeVisible({ timeout: 15_000 });
+    await expect.poll(async () => (await mapSnapshot(page)).path.length).toBeGreaterThan(1);
+    await search(page, 'Zzqx Corp');
+    await expect(page.getByTestId('map-legend-line')).toHaveText(/No one matches/);
+    await expect(page.getByTestId('reach-path')).toHaveCount(0);
+    await expect.poll(async () => (await mapSnapshot(page)).focus).toBe('');
+    await mapSettled(page);
+    expect((await mapSnapshot(page)).path).toEqual([]);
+    await search(page, 'Ines');
+    await expect(page.getByTestId('reach-choice').first()).toBeVisible();
+    await expect(page.getByTestId('map-legend-line')).toHaveText(/lit on the map/);
+    const ines = await page.evaluate(async () => {
+      const db = (
+        window as unknown as {
+          __orbitDb: {
+            people: { toArray(): Promise<{ id: string; firstName?: string; isHuman: boolean }[]> };
+          };
+        }
+      ).__orbitDb;
+      return (await db.people.toArray()).filter((p) => p.isHuman && p.firstName === 'Ines').map((p) => p.id);
+    });
+    expect(ines.length).toBeGreaterThanOrEqual(2);
+    await mapSettled(page);
+    const dots = await mapDots(page);
+    for (const id of ines) expect(dots[id]!.alpha, id).toBeGreaterThan(0.9);
+    const faded = Object.entries(dots).filter(([id, d]) => !ines.includes(id) && d.alpha < 0.5);
+    expect(faded.length).toBeGreaterThan(Object.keys(dots).length / 2);
+  });
+
   test('people on a route who sit side by side step apart, so every hop shows, and step back after', async ({
     page,
   }) => {
