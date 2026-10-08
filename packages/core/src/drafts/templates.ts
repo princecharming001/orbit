@@ -1951,7 +1951,7 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
         claims.push({ text: 'first bump after their out-of-office', kind: 'logistics' });
       } else {
         const pointer = senior
-          ? ", and if someone else on your team would be a better person to ask, I'd be grateful for a pointer"
+          ? " If someone else on your team would be a better person to ask, I'd be grateful for a pointer."
           : '';
         body = `${G}\n\n${
           formal
@@ -1959,12 +1959,12 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
             : friend
               ? `Bumping this in case it got buried. I'd still love ${minutes} minutes${hear} whenever you have a moment, no rush at all.`
               : refLine
-                ? `${refLine} I'd still love ${minutes} minutes${hear} whenever it's convenient${pointer}.`
+                ? `${refLine} I'd still love ${minutes} minutes${hear} whenever it's convenient.${pointer}`
                 : pick(
                     [
-                      `Floating this back up in case it got buried. I'd still love ${minutes} minutes${hear} whenever it's convenient${pointer}.`,
-                      `Just surfacing ${myNote}${about} in case it got buried. Even ${minutes} minutes${topic ? '' : hear} whenever it's convenient would help${pointer || ", and I completely understand if the timing isn't right"}.`,
-                      `Following up on ${myNote}${about} in case it got lost. I'd still value ${minutes} minutes${topic ? '' : hear} in the next couple of weeks${pointer || ", and completely understand if now isn't a good time"}.`,
+                      `Floating this back up in case it got buried. I'd still love ${minutes} minutes${hear} whenever it's convenient.${pointer}`,
+                      `Just surfacing ${myNote}${about} in case it got buried. Even ${minutes} minutes${topic ? '' : hear} whenever it's convenient would help${pointer ? `.${pointer}` : ", and I completely understand if the timing isn't right."}`,
+                      `Following up on ${myNote}${about} in case it got lost. I'd still value ${minutes} minutes${topic ? '' : hear} in the next couple of weeks${pointer ? `.${pointer}` : ", and completely understand if now isn't a good time."}`,
                     ],
                     seed,
                     'bump1',
