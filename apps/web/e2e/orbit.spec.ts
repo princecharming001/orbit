@@ -758,8 +758,20 @@ for (const vp of [
     await fits('person');
     const write = await page.getByTestId('person-write').boundingBox();
     expect(write && write.x + write.width).toBeLessThanOrEqual(vp.width);
-    const h1 = await page.locator('h1').boundingBox();
-    expect(h1!.width).toBeGreaterThan(120);
+    // The name keeps its own room: never one word per line, and never under the action buttons. Measured in lines and
+    // overlap rather than pixels, because a name's width depends on the fonts the machine has.
+    const name = await page.evaluate(() => {
+      const h = document.querySelector('h1')!;
+      const r = h.getBoundingClientRect();
+      const range = document.createRange();
+      range.selectNodeContents(h);
+      const tops = new Set([...range.getClientRects()].map((x) => Math.round(x.top)));
+      const w = document.querySelector('[data-testid="person-write"]')!.getBoundingClientRect();
+      const overlaps = r.left < w.right && r.right > w.left && r.top < w.bottom && r.bottom > w.top;
+      return { words: (h.textContent ?? '').trim().split(/\s+/).length, lines: tops.size, overlaps };
+    });
+    expect(name.overlaps, 'name under the action buttons').toBe(false);
+    expect(name.lines, 'name wrapped one word per line').toBeLessThan(Math.max(2, name.words));
     await page.getByTestId('person-write').click();
     await expect(page.getByLabel('Message body')).toBeVisible({ timeout: 15_000 });
     await fits('person-compose');

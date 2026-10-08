@@ -36,7 +36,14 @@ jobs:
       - name: Install Playwright browsers
         run: pnpm --filter @orbit/web exec playwright install --with-deps chromium
       - name: End-to-end tests
-        run: pnpm --filter @orbit/web e2e
+        run: pnpm --filter @orbit/web exec playwright test --project=app
+        env:
+          ORBIT_BASE: /${{ github.event.repository.name }}/
+      # Frame times depend on the machine, so on shared CI runners they are measured and reported but do not block
+      # the deploy. Run `pnpm e2e` locally for the enforced limits.
+      - name: Map frame times (reported)
+        continue-on-error: true
+        run: pnpm --filter @orbit/web exec playwright test --project=perf --no-deps
         env:
           ORBIT_BASE: /${{ github.event.repository.name }}/
       - uses: actions/configure-pages@v5
