@@ -471,7 +471,9 @@ describe('email introductions (EG-08)', () => {
     );
     // a reply-all on the introduction: the introducer is thanked and moved to bcc, then the person is greeted
     // (drafts panel round 2: a new thread "Following up on Alex's introduction" is not how it is done)
-    expect(draft.body).toMatch(/^Thanks for the introduction, Alex \(moving you to bcc\)\.\n\nHi Sana,\n\n(It's )?[Gg]reat to meet you\./);
+    expect(draft.body).toMatch(
+      /^Thanks for the introduction, Alex \(moving you to bcc\)\.\n\nHi Sana,\n\n(It's )?[Gg]reat to meet you\./,
+    );
     expect(draft.body).not.toMatch(/said to say hello/);
     expect(draft.introReply).toEqual({ bcc: 'Alex' });
     expect(draft.subject).toBeUndefined();

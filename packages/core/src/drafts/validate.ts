@@ -323,7 +323,9 @@ export function validateDraft(
       issues.push({ code: 'ignores_ask', detail: `they asked: ${a}`, blocking: true });
   }
   // a friend is asked directly; the rule is about people the student has never talked with
-  const knowsPersonally = d.claims.some((c) => c.kind === 'shared' && /knows the student personally$/.test(c.text));
+  const knowsPersonally = d.claims.some(
+    (c) => c.kind === 'shared' && /knows the student personally$/.test(c.text),
+  );
   if (
     opts.kind === 'referral_ask' &&
     opts.hadConversation === false &&

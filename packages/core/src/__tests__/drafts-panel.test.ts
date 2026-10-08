@@ -202,7 +202,9 @@ describe('referral ask', () => {
     }
     // an intro they offered is what the student asks for, never a referral they did not offer (drafts panel round 2)
     const intro = asked('offered to introduce me to their hiring manager').body;
-    expect(intro).toMatch(/you kindly offered to introduce me to your hiring manager\. I'd love to take you up on that/);
+    expect(intro).toMatch(
+      /you kindly offered to introduce me to your hiring manager\. I'd love to take you up on that/,
+    );
     expect(intro).not.toMatch(/refer me|referral/);
     expect(asked('offered to refer me once I have picked a team').body).toMatch(
       /you kindly offered to refer me once I'd picked a team, so I wanted to follow up/,

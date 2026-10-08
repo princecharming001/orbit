@@ -294,10 +294,7 @@ export function reengageDueAt(re: Reengage, saidAt: Date): Date {
  */
 export function composeKindFor(
   chat:
-    | Pick<
-        CoffeeChat,
-        'stage' | 'lastOutboundAt' | 'lastInboundAt' | 'outOfOfficeUntil' | 'bumpNotBefore'
-      >
+    | Pick<CoffeeChat, 'stage' | 'lastOutboundAt' | 'lastInboundAt' | 'outOfOfficeUntil' | 'bumpNotBefore'>
     | undefined,
   now: Date,
   opts: { lastInbound?: ThreadState; timezone?: string } = {},
@@ -323,7 +320,8 @@ export function composeKindFor(
         return { wait: { since: chat.lastOutboundAt, until: away.toISOString(), reason: 'away' } };
       // a bump two days after the first note reads as pushy: it waits five business days
       const due = addBusinessDays(new Date(chat.lastOutboundAt), 5, opts.timezone);
-      if (now < due) return { wait: { since: chat.lastOutboundAt, until: due.toISOString(), reason: 'too_soon' } };
+      if (now < due)
+        return { wait: { since: chat.lastOutboundAt, until: due.toISOString(), reason: 'too_soon' } };
       return { kind: 'bump' };
     }
     case 'replied':

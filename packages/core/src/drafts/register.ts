@@ -244,7 +244,7 @@ export function questionsFor(p: QuestionInput, sector: Sector, opts: { late?: bo
           `how you ended up at ${org ?? 'a startup'} so early, and what that stage has been like`,
           `joining ${org ?? 'a startup'} early`,
         ),
-        q('what you\'d focus on if you were recruiting again'),
+        q("what you'd focus on if you were recruiting again"),
       ];
     case 'big_tech':
     case 'tech': {
@@ -255,7 +255,9 @@ export function questionsFor(p: QuestionInput, sector: Sector, opts: { late?: bo
               ? 'what you look for in interns and new grads'
               : 'what you look for in the interns and new grads on your team',
             'what you look for in interns',
-            exec ? 'What do you look for in interns and new grads?' : 'What do you look for in the interns on your team?',
+            exec
+              ? 'What do you look for in interns and new grads?'
+              : 'What do you look for in the interns on your team?',
           ),
           q(
             `what separates the interns who get return offers${org ? ` at ${org}` : ''}`,

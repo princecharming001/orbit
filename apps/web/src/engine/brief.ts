@@ -574,7 +574,8 @@ export async function buildDraftContext(
       lastSignal: lastIn?.signal,
       // the first note to someone the student was introduced to is a reply-all on the introduction
       inThread:
-        (!NEW_THREAD_KINDS.has(kind) || (kind === 'outreach' && !!chat.introducedAt)) && !!th?.externalThreadId,
+        (!NEW_THREAD_KINDS.has(kind) || (kind === 'outreach' && !!chat.introducedAt)) &&
+        !!th?.externalThreadId,
       subject: th?.subject,
     };
   } else if (chat?.firstOutreachAt) thread = { firstOutboundAt: chat.firstOutreachAt };

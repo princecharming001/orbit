@@ -382,7 +382,10 @@ export function shortOrg(org: string | undefined): string | undefined {
   const cut = o
     .replace(/,?\s+(inc|llc|ltd|plc|corp|corporation|co|pbc|l\.?p)\.?$/i, '')
     // "Bain Capital" is not Bain, and "Citadel Securities" is not Citadel
-    .replace(/^(?!bain capital$)(.+?)\s+(venture partners|capital partners|partners|capital|ventures|group)$/i, '$1');
+    .replace(
+      /^(?!bain capital$)(.+?)\s+(venture partners|capital partners|partners|capital|ventures|group)$/i,
+      '$1',
+    );
   // never cut a name down to a stub ("Jump Trading" stays, "Accel" stays)
   return cut.length >= 3 && /^[A-Z]/.test(cut) && !/\s(of|and|&)$/i.test(cut) ? cut : o;
 }

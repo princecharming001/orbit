@@ -1,16 +1,7 @@
 import { extractTimes } from '../email/when';
 import { wordCount } from '../text/email';
 import { normalizeCompany } from '../text/normalize';
-import type {
-  Channel,
-  DraftClaim,
-  DraftNeed,
-  MessageKind,
-  PersonFact,
-  Sector,
-  Seniority,
-  StyleCard,
-} from '../types';
+import type { Channel, DraftClaim, DraftNeed, MessageKind, PersonFact, Sector, StyleCard } from '../types';
 import {
   article,
   cap1,
@@ -472,7 +463,10 @@ function isFriend(p: DraftContext['person']): boolean {
 /** What the student is recruiting for, named the way the recipient would say it. */
 function lookingForPhrase(ctx: DraftContext): string {
   const sector = sectorOf({ title: ctx.person.title, org: ctx.person.org, industry: ctx.person.orgIndustry });
-  const firm = firmKindOf({ title: ctx.person.title, org: ctx.person.org, industry: ctx.person.orgIndustry }, sector);
+  const firm = firmKindOf(
+    { title: ctx.person.title, org: ctx.person.org, industry: ctx.person.orgIndustry },
+    sector,
+  );
   const target = ctx.user.targetFunctions[0];
   // their own function when it is the student's target, otherwise the student's target when that firm hires for it
   const matched = functionLabel(
@@ -487,13 +481,6 @@ function lookingForPhrase(ctx: DraftContext): string {
       : 'full-time roles';
 }
 
-/** "a junior studying computer science" (for sentences that already named the school). */
-function situationNoSchool(ctx: DraftContext, now: Date): string {
-  const year = yearLabel(ctx.user.gradYear, ctx.user.degree, now);
-  const major = ctx.user.majors[0] ? ` studying ${lowerPhrase(ctx.user.majors[0])}` : '';
-  return `${article(year)} ${year}${major}`;
-}
-
 /** The student in one clause, from structured fields only: "a junior at Cornell studying computer science". */
 function situation(ctx: DraftContext, now: Date): string {
   if (ctx.user.oneLiner) return ctx.user.oneLiner;
@@ -505,7 +492,10 @@ function situation(ctx: DraftContext, now: Date): string {
 
 /** The firm's kind for this person (see register.ts). */
 function firmOf(ctx: DraftContext, sector: Sector) {
-  return firmKindOf({ title: ctx.person.title, org: ctx.person.org, industry: ctx.person.orgIndustry }, sector);
+  return firmKindOf(
+    { title: ctx.person.title, org: ctx.person.org, industry: ctx.person.orgIndustry },
+    sector,
+  );
 }
 
 /** Verbs a role note opens with ("works on ...", "covers ..."), as the "-ing" form a question can carry. */
@@ -526,14 +516,21 @@ const WORK_GERUND: Record<string, string> = {
  * saw that you ..." line. Undefined when no role note fits.
  */
 function workQuestion(ctx: DraftContext, firm: string): Question | undefined {
-  const facts = ctx.facts.filter((f) => !f.deletedAt && f.type === 'role_detail' && (f.confidence ?? 1) >= 0.6);
+  const facts = ctx.facts.filter(
+    (f) => !f.deletedAt && f.type === 'role_detail' && (f.confidence ?? 1) >= 0.6,
+  );
   for (const f of facts) {
     const c = clause(f.text, ctx.person);
     const g = c?.you ? WORK_GERUND[(c.verb ?? '').toLowerCase()] : undefined;
     const rest = c?.rest ? firstPart(c.rest) : '';
     if (!g || !rest || rest.split(' ').length > 9 || isConfidential(rest, firm)) continue;
     const what = theirWords(`${g} ${rest}`);
-    return { q: `what ${what} is like day to day`, short: `what ${what} is like`, factId: f.id, factText: f.text };
+    return {
+      q: `what ${what} is like day to day`,
+      short: `what ${what} is like`,
+      factId: f.id,
+      factText: f.text,
+    };
   }
   return undefined;
 }
@@ -560,7 +557,11 @@ function postFollowUp(topic: string, firm: string): string {
       ? 'how that approach has held up as the team has grown'
       : 'what you look for now when you hire';
   if (/\breviews?\b|\bprocess\b|\bruns?\b/.test(t)) return `how much of that ${junior} actually sees`;
-  if (/\b(learn|structure|prepare|train|ramp|first month|onboard|new (consultants|traders|engineers|analysts|hires))/.test(t))
+  if (
+    /\b(learn|structure|prepare|train|ramp|first month|onboard|new (consultants|traders|engineers|analysts|hires))/.test(
+      t,
+    )
+  )
     return 'what separates the people who pick it up fastest';
   if (/\b(evaluat|invest|thesis|memo|diligence|underwrit)/.test(t))
     return 'how a student could start building that kind of judgment';
@@ -596,7 +597,12 @@ function questionFor(ctx: DraftContext, sector: Sector, seed: string, now: Date)
   }
   const late = cycleTiming(firm, ctx.user.cycleLabel, now) === 'late';
   const bank = questionsFor(
-    { title: ctx.person.title, org: ctx.person.org, group: ctx.person.group, industry: ctx.person.orgIndustry },
+    {
+      title: ctx.person.title,
+      org: ctx.person.org,
+      group: ctx.person.group,
+      industry: ctx.person.orgIndustry,
+    },
     sector,
     { late },
   );
@@ -718,7 +724,10 @@ function nameMutual(text: string, name: string | undefined): { text: string; mis
   if (!m) return { text, missing: false };
   const at = m.index! + m[0].length;
   const who = name?.trim() ? strip(name) : `[your ${m[1]}'s name]`;
-  return { text: `${text.slice(0, at)}, ${who},${text.slice(at)}`.replace(/,,/g, ','), missing: !name?.trim() };
+  return {
+    text: `${text.slice(0, at)}, ${who},${text.slice(at)}`.replace(/,,/g, ','),
+    missing: !name?.trim(),
+  };
 }
 
 /**
@@ -731,7 +740,9 @@ function reconnectLine(ctx: DraftContext, c: Connection, now: Date): string {
   const since = c.lastAt ? sinceLabel(c.lastAt, now, tz) : undefined;
   const days = c.lastAt ? calendarDaysBetween(new Date(c.lastAt), now, tz) : 0;
   if (isFriend(ctx.person))
-    return days >= 45 ? "It's been a few months since we last caught up, so I hope things are good." : 'Hope things are good.';
+    return days >= 45
+      ? "It's been a few months since we last caught up, so I hope things are good."
+      : 'Hope things are good.';
   const medium = ctx.channel === 'linkedin' ? 'email' : 'note';
   const topic = subjectTopic(ctx.thread?.subject);
   const about = topic ? ` about ${topic}` : '';
@@ -756,7 +767,9 @@ function opener(
   seed: string,
   now: Date,
   qq: Question,
-): { text: string; claims: DraftClaim[]; saidSituation: boolean; introReply?: string; missing?: DraftNeed } | undefined {
+):
+  | { text: string; claims: DraftClaim[]; saidSituation: boolean; introReply?: string; missing?: DraftNeed }
+  | undefined {
   const c = ctx.connection;
   const first = firstNameOf(ctx.person);
   const org = shortOrg(ctx.person.org);
@@ -806,7 +819,12 @@ function opener(
             saidSituation: true,
           };
         return {
-          text: pick([`Great to meet you. I'm ${me}.`, `It's great to meet you. I'm ${me}.`], seed, 'op-intro', avoid),
+          text: pick(
+            [`Great to meet you. I'm ${me}.`, `It's great to meet you. I'm ${me}.`],
+            seed,
+            'op-intro',
+            avoid,
+          ),
           claims,
           saidSituation: true,
           introReply: rFirst,
@@ -843,7 +861,11 @@ function opener(
     }
     case 'alumni': {
       claims.push({ text: `${first} went to ${ctx.user.school}`, kind: 'shared' });
-      const where = placeOf(ctx, sector) ?? (roleNoun(ctx.person.title) ? `working as ${article(roleNoun(ctx.person.title)!)} ${roleNoun(ctx.person.title)}` : undefined);
+      const where =
+        placeOf(ctx, sector) ??
+        (roleNoun(ctx.person.title)
+          ? `working as ${article(roleNoun(ctx.person.title)!)} ${roleNoun(ctx.person.title)}`
+          : undefined);
       return {
         text: pick(
           // only what the data says: they went to the student's school and are at `where` now (never how the
@@ -922,7 +944,10 @@ function opener(
       claims.push({ text: c.text, factId: c.factId, kind: 'about_person' });
       return {
         text: pick(
-          [`I saw that ${c.text}, and that's what made me write. I'm ${me}.`, `I'm ${me}, and I saw that ${c.text}.`],
+          [
+            `I saw that ${c.text}, and that's what made me write. I'm ${me}.`,
+            `I'm ${me}, and I saw that ${c.text}.`,
+          ],
           seed,
           'op-hook',
           avoid,
@@ -936,7 +961,9 @@ function opener(
       const named = nameMutual(c.text, ctx.mutualName);
       const said = studentSentence(named.text);
       // the student's own line, then the one question it raises (never the line read back as the ask)
-      const text = qq.reacted ? `${said}, and I've been wondering ${qq.q}. I'm ${me}.` : `${said}. I'm ${me}.`;
+      const text = qq.reacted
+        ? `${said}, and I've been wondering ${qq.q}. I'm ${me}.`
+        : `${said}. I'm ${me}.`;
       return { text, claims, saidSituation: true, missing: named.missing ? 'mutual' : undefined };
     }
   }
@@ -1287,8 +1314,7 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
         // does not answer for this kind of firm: a startup or a fund has no campus event.
         const intern = isInternCycle(ctx.user.cycleLabel);
         const tc =
-          ctx.targetCompany &&
-          (!org || normalizeCompany(ctx.targetCompany.name) === normalizeCompany(org))
+          ctx.targetCompany && (!org || normalizeCompany(ctx.targetCompany.name) === normalizeCompany(org))
             ? ctx.targetCompany
             : undefined;
         const applied = !!tc?.applied;
@@ -1352,7 +1378,11 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
                 ? `Is there a deadline or a ${school || 'campus'} info session I should plan around?`
                 : 'Is there a timeline for intern hiring this year?';
           const notes = [
-            ...(known ? [`Hi ${first}, ${lower1(shortConnection(ctx, known))} ${shortStatus} ${shortQ} Thanks, ${ctx.user.firstName}`] : []),
+            ...(known
+              ? [
+                  `Hi ${first}, ${lower1(shortConnection(ctx, known))} ${shortStatus} ${shortQ} Thanks, ${ctx.user.firstName}`,
+                ]
+              : []),
             `Hi ${first}, ${school} ${yl} here. ${shortStatus} ${shortQ} Thank you, ${ctx.user.firstName}`,
             `Hi ${first}, ${school} ${yl} here. ${shortStatus} ${shortQ} ${ctx.user.firstName}`,
           ];
@@ -1446,7 +1476,8 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
         `Quick question about your path to ${o ?? roleNoun(ctx.person.title) ?? 'your role'}`,
         `${school} ${yl}, question about ${o ?? 'your work'}`,
       );
-      const named = !!c && (['referral', 'event', 'transition', 'met'].includes(c.kind) || friend || !!qq.reacted);
+      const named =
+        !!c && (['referral', 'event', 'transition', 'met'].includes(c.kind) || friend || !!qq.reacted);
       const specific = subjectCandidates
         .slice(0, named ? 1 : ctx.person.isAlumni ? 1 : 0)
         .find((s) => s.length <= 60);
@@ -1496,7 +1527,10 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
             : NaN;
           const recent = !Number.isNaN(at) && now.getTime() - at < 21 * 86_400_000;
           const emailOk = pick(
-            ['A few lines over email would be just as helpful.', "Happy to keep it to email if that's easier."],
+            [
+              'A few lines over email would be just as helpful.',
+              "Happy to keep it to email if that's easier.",
+            ],
             seed,
             'li-email',
           );
@@ -1580,18 +1614,20 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
               : refLine
                 ? `${refLine} I'd still love ${minutes} minutes${hear} whenever it's convenient${pointer}.`
                 : pick(
-                  [
-                    `Floating this back up in case it got buried. I'd still love ${minutes} minutes${hear} whenever it's convenient${pointer}.`,
-                    `Just surfacing ${myNote}${about} in case it got buried. Even ${minutes} minutes whenever it's convenient would help${pointer || ", and I completely understand if the timing isn't right"}.`,
-                    `Following up on ${myNote}${about} in case it got lost. I'd still value ${minutes} minutes in the next couple of weeks${pointer || ", and completely understand if now isn't a good time"}.`,
-                  ],
-                  seed,
-                  'bump1',
-                )
+                    [
+                      `Floating this back up in case it got buried. I'd still love ${minutes} minutes${hear} whenever it's convenient${pointer}.`,
+                      `Just surfacing ${myNote}${about} in case it got buried. Even ${minutes} minutes whenever it's convenient would help${pointer || ", and I completely understand if the timing isn't right"}.`,
+                      `Following up on ${myNote}${about} in case it got lost. I'd still value ${minutes} minutes in the next couple of weeks${pointer || ", and completely understand if now isn't a good time"}.`,
+                    ],
+                    seed,
+                    'bump1',
+                  )
         }\n\n${S}`;
         if (ref)
           claims.push({
-            text: c?.introduced ? `${ref} introduced the student to ${first}` : `${ref} suggested writing to ${first}`,
+            text: c?.introduced
+              ? `${ref} introduced the student to ${first}`
+              : `${ref} suggested writing to ${first}`,
             kind: 'shared',
           });
         claims.push({ text: 'first bump in thread', kind: 'logistics' });
@@ -1842,7 +1878,9 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
           ? [
               "I'll keep you posted on how recruiting goes. I really appreciate the time, and I hope it's alright to send a question your way if one comes up.",
             ]
-          : ["I'll keep you posted on how recruiting goes. Thanks again for being so generous with your time."]),
+          : [
+              "I'll keep you posted on how recruiting goes. Thanks again for being so generous with your time.",
+            ]),
       ];
       body = `${G}\n\n${line1}${line2}${line3}\n\n${pick(closers, seed, 'ty-close')}${link ? `\n\n${link}` : ''}\n\n${S}`;
       subject = threaded
@@ -1890,7 +1928,9 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       // the student's own update first; writing again after a sign-off can say what is on record instead (they
       // have applied, or plan to apply, to the person's company; they are recruiting this cycle)
       const typed = ctx.update?.trim() ? softLower(strip(ctx.update)) : undefined;
-      const roleText = tc?.roleLabel ? roleWords(tc.roleLabel) : `${fnLabel} ${intern ? 'internship' : 'role'}`;
+      const roleText = tc?.roleLabel
+        ? roleWords(tc.roleLabel)
+        : `${fnLabel} ${intern ? 'internship' : 'role'}`;
       // an application to their company is on record and is news to them; "recruiting this cycle" is enough only
       // when picking a quiet thread back up
       const derived = tc
@@ -1909,7 +1949,8 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       const parts: string[] = [];
       let congrats = false;
       // they talked after the change: the student knew, so it is not news ("Hope the new role ..." instead)
-      const knewIt = !!meetingAt && !!na?.since && new Date(meetingAt).getTime() > new Date(na.since).getTime();
+      const knewIt =
+        !!meetingAt && !!na?.since && new Date(meetingAt).getTime() > new Date(na.since).getTime();
       if (na?.org && naTitle && !knewIt) {
         parts.push(
           `I saw you're now ${article(naTitle)} ${naTitle} at ${shortOrg(na.org)}. Congratulations, that's great to see.`,
@@ -1928,8 +1969,7 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
           }`,
         );
         if (topic) claims.push({ text: `the thread was about ${topic}`, kind: 'shared' });
-      } else if (update)
-        parts.push(`Quick update${since ? ` since we talked ${since}` : ''}: ${update}.`);
+      } else if (update) parts.push(`Quick update${since ? ` since we talked ${since}` : ''}: ${update}.`);
       else if (!hook && !offer && !congrats)
         parts.push(
           `Quick update${since ? ` since we talked ${since}` : ''}: [one real update${since ? '' : talked ? ` since you last spoke with ${first}` : ` to share with ${first}`}].`,
@@ -1954,7 +1994,9 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
               : 'Hope it went well.';
         // only a note that says they said it ("Alina mentioned ...") is put in their mouth
         const saidThen = /\b(said|mentioned|told)\b/i.test(hook.fact.text);
-        parts.push(`${saidThen ? 'You mentioned' : parts.length ? 'I also saw that' : 'I saw that'} ${prop}. ${wish}`);
+        parts.push(
+          `${saidThen ? 'You mentioned' : parts.length ? 'I also saw that' : 'I saw that'} ${prop}. ${wish}`,
+        );
         cite(hook);
       }
       // a reason to write again after months (their company is on the student's list) earns one small ask
@@ -2031,10 +2073,7 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
         !!meetingAt && !!na?.since && new Date(meetingAt).getTime() > new Date(na.since).getTime();
       // news the student typed is news they just saw
       const fresh = (recent && !talkedSince) || (!na?.org && !newRole && !!news);
-      const lead =
-        fresh
-          ? `Just saw the news about ${what}. Congratulations`
-          : `Congratulations on ${what}`;
+      const lead = fresh ? `Just saw the news about ${what}. Congratulations` : `Congratulations on ${what}`;
       body = `${G}\n\n${lead}${tie || !knows ? '.' : ', well deserved.'}${tieLine}${recent && !talkedSince ? ' Hope the first few weeks are going well.' : ''}\n\n${S}`;
       subject = threaded
         ? undefined
@@ -2129,8 +2168,7 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       const roleFn = titleFunction(label);
       const crossFn = sector === 'tech' && !!theirFn && !!roleFn && theirFn !== roleFn && theirFn !== 'swe';
       let askLine: string;
-      if (introOffer)
-        askLine = 'I can send a two-line blurb and my resume so the intro takes you no time.';
+      if (introOffer) askLine = 'I can send a two-line blurb and my resume so the intro takes you no time.';
       else if (otherCompany)
         askLine = `I know you're at ${shortOrg(org)}, but if you know anyone at ${co} who'd be comfortable flagging my application, an intro would mean a lot.`;
       else if (offer)
@@ -2181,7 +2219,11 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       const tFirst = t.firstName ?? t.name.split(' ')[0]!;
       const tRole = roleNoun(t.title);
       const tOrg = shortOrg(t.org);
-      const desc = tRole ? `, ${article(t.title!)} ${t.title}${tOrg ? ` at ${tOrg}` : ''}` : tOrg ? ` at ${tOrg}` : '';
+      const desc = tRole
+        ? `, ${article(t.title!)} ${t.title}${tOrg ? ` at ${tOrg}` : ''}`
+        : tOrg
+          ? ` at ${tOrg}`
+          : '';
       // the credibility line goes in the blurb only when it means something to the target (an engineer, a founder)
       const targetSector = sectorOf({ title: t.title, org: t.org }, ctx.user.targetFunctions);
       const credFits =
@@ -2248,10 +2290,7 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
   let finalBody = body.replace(/[ \t]+\n/g, '\n').trim();
   // a "Dear" letter is written without contractions throughout, never "Dear Grace, I'm ..."; so is everything from a
   // student whose own sent mail has none (a learned card), but not a preset to a friend
-  if (
-    (ctx.styleCard.builtFromCount > 0 && ctx.styleCard.contractions === false) ||
-    /^Dear\b/.test(finalBody)
-  )
+  if ((ctx.styleCard.builtFromCount > 0 && ctx.styleCard.contractions === false) || /^Dear\b/.test(finalBody))
     finalBody = expandContractions(finalBody);
   return {
     subject,
@@ -2273,7 +2312,9 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
  */
 function answerLine(question: string, answer: string): string {
   const a = strip(answer);
-  const noun = question.match(/\b(?:which|what)\s+(?:kinds? of\s+|types? of\s+)?([a-z]+(?:\s+[a-z]+)?)\b/i)?.[1];
+  const noun = question.match(
+    /\b(?:which|what)\s+(?:kinds? of\s+|types? of\s+)?([a-z]+(?:\s+[a-z]+)?)\b/i,
+  )?.[1];
   const full = /^(I|I'm|I've|I'd|My|We)\b/.test(a);
   if (!noun || /^(are|is|do|does|would|could|you|time|times)\b/i.test(noun) || /^(as for|on|for)\b/i.test(a))
     return `${cap1(a)}.`;
@@ -2305,14 +2346,21 @@ function offerNext(
   if (!/^(offered|volunteered|agreed|promised)$/.test(v) && !(v === 'said' && /^you'd be /.test(c.rest)))
     return undefined;
   const r = theirWords(reported(c.rest.replace(/^(to|you'd be happy to|you'd be glad to)\s+/i, '')));
-  const lead = mode === 'thanks' ? `Thanks also for offering to ${r}.` : `When we spoke, you offered to ${r}.`;
+  const lead =
+    mode === 'thanks' ? `Thanks also for offering to ${r}.` : `When we spoke, you offered to ${r}.`;
   const org = ctx.person.org;
   const tc =
     ctx.targetCompany && (!org || normalizeCompany(ctx.targetCompany.name) === normalizeCompany(org))
       ? ctx.targetCompany
       : undefined;
-  if (/\b(refer me|referral|(pass|forward|send|share|submit|put)\s+(along\s+)?my (resume|name|application))\b/i.test(r)) {
-    const later = /\b(when|once|after|as soon as)\b.*\b(posting|role|req|opening|application|team)\b/i.test(r);
+  if (
+    /\b(refer me|referral|(pass|forward|send|share|submit|put)\s+(along\s+)?my (resume|name|application))\b/i.test(
+      r,
+    )
+  ) {
+    const later = /\b(when|once|after|as soon as)\b.*\b(posting|role|req|opening|application|team)\b/i.test(
+      r,
+    );
     if (later && !tc?.applied && !tc?.link)
       // nothing to act on yet: the posting is not up, or the student has not picked the team
       return { text: `${lead} I'll send the posting as soon as it's live.` };
@@ -2324,7 +2372,9 @@ function offerNext(
     };
   }
   if (/^introduce me\b|^connect me\b|^put me in touch\b/i.test(r))
-    return { text: `${lead} I'd love to take you up on that, and I can send a two-line blurb to make it easy.` };
+    return {
+      text: `${lead} I'd love to take you up on that, and I can send a two-line blurb to make it easy.`,
+    };
   if (/\b(practice|mock) (case|interview)s?\b|\bcase prep\b|\b(review|look over|go over) my\b/i.test(r))
     return { text: `${lead} I'd love to take you up on that. Would sometime in the next few weeks work?` };
   if (/^(share|send|show)\b/i.test(r)) return { text: `${lead} I'd love to see it whenever it's easy.` };
@@ -2528,7 +2578,13 @@ export function contextText(ctx: DraftContext): string {
     }),
     schoolShort(ctx.user.school),
     // firms as their people write them ("BCG", "a16z", "Lightspeed")
-    ...[ctx.person.org, ctx.person.previousOrg, ctx.targetCompany?.name, ctx.newAffiliation?.org, ctx.target?.org]
+    ...[
+      ctx.person.org,
+      ctx.person.previousOrg,
+      ctx.targetCompany?.name,
+      ctx.newAffiliation?.org,
+      ctx.target?.org,
+    ]
       .map((o) => shortOrg(o) ?? '')
       .filter(Boolean),
     targetLabel(ctx),

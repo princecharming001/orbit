@@ -637,5 +637,149 @@
     "body": "The stat that half of referred hires came from people the referrer had worked with under a year surprised me. Is that because newer colleagues are more active on LinkedIn, or something else?",
     "source": "Orbit warm-up specification (13 §4)",
     "notes": "Quotes one specific number from the post and asks about the mechanism; short and non-flattering."
+  },
+  {
+    "kind": "nurture",
+    "sector": "tech",
+    "relationship": "warm",
+    "subject": null,
+    "body": "Hi {first},\n\nRecruiting is in full swing now, so I wanted to check back in after our conversation in {month} about {topic}. I'm planning to apply for {org}'s {role} this cycle.\n\nWould you have 15 minutes in the next couple of weeks to tell me what the team looks for in interns? Happy to do it over email if that's easier.\n\nThanks,\n{me}",
+    "source": "Orbit drafts panel, round 2 (banker, consultant, tech referrer, career coach): rewrites of the weakest drafts, generalised to placeholders",
+    "notes": "Picking a thread back up after their sign-off ('Good luck this fall'). Never 'Thank you for the reply' months later, never times before they say yes. Names the earlier conversation (the thread subject), gives a reason to write now (an application on record), one small optional ask."
+  },
+  {
+    "kind": "nurture",
+    "sector": "tech",
+    "relationship": "warm",
+    "subject": null,
+    "body": "Hi {first},\n\nYou asked me to keep you posted, so here's an update: I'm planning to apply for {org}'s {role} this cycle, and our talk in {month} about {topic} is a big part of why.\n\nIf you have 15 minutes in the next couple of weeks, I'd love your read on what makes an intern application stand out at {org}. Either way, thanks again for your help.\n\nThanks,\n{me}",
+    "source": "Orbit drafts panel, round 2 (banker, consultant, tech referrer, career coach): rewrites of the weakest drafts, generalised to placeholders",
+    "notes": "Their last line was 'Keep me posted': answer exactly that first. The 'big part of why' clause is the student's to keep only if true; the engine leaves it out."
+  },
+  {
+    "kind": "nurture",
+    "sector": "tech",
+    "relationship": "alumni",
+    "subject": null,
+    "body": "Hi {first},\n\nI saw you're now a {new title} at {org}. Congratulations, that's great to see.\n\nThanks again for talking with me in {month} about {topic}. I'm recruiting for {function} internships this fall.\n\nNo need to reply, I just wanted to say congratulations.\n\n{me}",
+    "source": "Orbit drafts panel, round 2 (banker, consultant, tech referrer, career coach): rewrites of the weakest drafts, generalised to placeholders",
+    "notes": "A new role on record is the honest reason to write; it goes first, no ask. A change Orbit only noticed on an import is not called recent."
+  },
+  {
+    "kind": "bump",
+    "sector": "tech",
+    "relationship": "cold",
+    "subject": null,
+    "body": "Hi {first},\n\nWelcome back, and I hope the time away was good. Resurfacing my note from last week about {topic} in case it got buried while you were out. I've since applied for the {role} at {org}, so 15 minutes on what the team looks for would be especially helpful.\n\nThanks,\n{me}",
+    "source": "Orbit drafts panel, round 2 (banker, consultant, tech referrer, career coach): rewrites of the weakest drafts, generalised to placeholders",
+    "notes": "Held until two business days after their out-of-office return date. Acknowledges the time away, restates the ask in one clause, adds the one new true fact."
+  },
+  {
+    "kind": "schedule",
+    "sector": "tech",
+    "relationship": "alumni",
+    "subject": null,
+    "body": "Hi {first},\n\nThank you, I really appreciate it. Would Monday, Oct 12 at 10:30am or Wednesday, Oct 14 at 4pm (EDT) work for 20 minutes? If neither does, send me a time and I'll make it work.\n\nLooking forward to hearing about {topic}.\n\nThanks,\n{me}",
+    "source": "Orbit drafts panel, round 2 (banker, consultant, tech referrer, career coach): rewrites of the weakest drafts, generalised to placeholders",
+    "notes": "They said yes and asked for times next week: two windows inside the week they named, and one line that ties back to why the student wrote. Never a bump to someone who has answered."
+  },
+  {
+    "kind": "reply",
+    "sector": "tech",
+    "relationship": "cold",
+    "subject": null,
+    "body": "Hi {first},\n\nFriday, Oct 9 at 2pm EDT works great, thank you. I'll send a calendar invite with a video link shortly.\n\nLooking forward to hearing about {topic}.\n\nThanks,\n{me}",
+    "source": "Orbit drafts panel, round 2 (banker, consultant, tech referrer, career coach): rewrites of the weakest drafts, generalised to placeholders",
+    "notes": "They proposed a time the student can make: take it, restate it with the zone, say who sends the invite. Countering with two other slots makes them schedule twice."
+  },
+  {
+    "kind": "outreach",
+    "sector": "tech",
+    "relationship": "cold",
+    "subject": "{school} CS junior, your post on {topic}",
+    "body": "Hi {first},\n\nI read your post on {topic}, and I've been wondering how much of that process an intern actually sees.\n\nI'm a junior at {school} studying computer science. Would you have 15 minutes in the next couple of weeks to talk about it? Happy to work around your calendar.\n\nThanks,\n{me}",
+    "source": "Orbit drafts panel, round 2 (banker, consultant, tech referrer, career coach): rewrites of the weakest drafts, generalised to placeholders",
+    "notes": "React to the post with the one question it raises; never read its title back as the ask ('tell me more about {topic}')."
+  },
+  {
+    "kind": "outreach",
+    "sector": "tech",
+    "relationship": "cold",
+    "subject": "{school} CS junior, a question on your design-review post",
+    "body": "Hi {first},\n\nI read your post on how your teams run design reviews for new services. I'm a CS junior at {school}, and I'm trying to get better at writing design docs before I interview.\n\nOne question, if you have a minute: what's the most common gap you see in a new engineer's first design review? A one-line reply would be plenty.\n\nThanks,\n{me}",
+    "source": "Orbit drafts panel, round 2 (banker, consultant, tech referrer, career coach): rewrites of the weakest drafts, generalised to placeholders",
+    "notes": "To a VP or a founder: one sharp question answerable from a phone, not 15 minutes on a post they wrote."
+  },
+  {
+    "kind": "outreach",
+    "sector": "general",
+    "relationship": "warm",
+    "subject": "Re: {introducer subject}",
+    "body": "Thanks for the intro, {introducer} (moving you to bcc).\n\nHi {first}, great to meet you. I'm a junior at {school} studying computer science, and I recently applied for {org}'s software engineering internship. I'd love 15 minutes to hear what you look for in early engineers. Happy to work around your schedule.\n\nBest,\n{me}",
+    "source": "Orbit drafts panel, round 2 (banker, consultant, tech referrer, career coach): rewrites of the weakest drafts, generalised to placeholders",
+    "notes": "After an introduction: reply-all on the intro thread, thank the introducer, move them to bcc, then the conversation ask the intro was for. Never a new thread, never a process question."
+  },
+  {
+    "kind": "outreach",
+    "sector": "tech",
+    "relationship": "recruiter",
+    "subject": "Re: {thread subject}",
+    "body": "Hi {first},\n\nThanks again for your help when we emailed last week. A quick update: I've applied for the {role} at {org}, and I've also spoken with {colleague} on the team.\n\nOne question: is there a typical timeline for when first-round interviews go out, or anything I should do on my end in the meantime?\n\nThank you,\n{me}",
+    "source": "Orbit drafts panel, round 2 (banker, consultant, tech referrer, career coach): rewrites of the weakest drafts, generalised to placeholders",
+    "notes": "State the application as it stands on record (never 'planning to apply' after applying), one conversation as one conversation, and the question that matters after applying."
+  },
+  {
+    "kind": "outreach",
+    "sector": "finance",
+    "relationship": "recruiter",
+    "subject": "{school} '{yy}, question about {org} summer analyst recruiting",
+    "body": "Dear {first},\n\nI'm a junior at {school} studying economics, and I'm interested in {org}'s summer analyst program. I know the main Summer {year} cycle ran earlier this year. Are there seats still open, or off-cycle or diversity programs, that I should know about?\n\nThank you for your time.\n\nBest regards,\n{me}\n{school} '{yy}",
+    "source": "Orbit drafts panel, round 2 (banker, consultant, tech referrer, career coach): rewrites of the weakest drafts, generalised to placeholders",
+    "notes": "Bank summer analyst recruiting fills early in the prior year. In the fall, a note that says 'planning to apply this cycle' or asks what to know 'before recruiting starts' shows the homework is not done."
+  },
+  {
+    "kind": "report_back",
+    "sector": "consulting",
+    "relationship": "alumni",
+    "subject": "Thank you for the intro to {target}",
+    "body": "Hi {first},\n\nThanks again for connecting me with {target}. I've followed up and will let you know how it goes. I really appreciate you making the intro, and I'll keep you posted on how recruiting goes.\n\nBest,\n{me}",
+    "source": "Orbit drafts panel, round 2 (banker, consultant, tech referrer, career coach): rewrites of the weakest drafts, generalised to placeholders",
+    "notes": "Never 'I haven't heard back yet' to the introducer: it asks them to chase a colleague. Bump the target first; report the real outcome later."
+  },
+  {
+    "kind": "thank_you",
+    "sector": "consulting",
+    "relationship": "alumni",
+    "subject": "Thank you for yesterday",
+    "body": "Hi {first},\n\nThank you for making time yesterday, and especially for your point about structuring the case out loud before doing any math. Thanks also for offering to do a practice case with me before first rounds. I'd love to take you up on that. Would sometime in the next few weeks work?\n\nI'll let you know how recruiting goes.\n\nBest,\n{me}",
+    "source": "Orbit drafts panel, round 2 (banker, consultant, tech referrer, career coach): rewrites of the weakest drafts, generalised to placeholders",
+    "notes": "Their point, not their sentence read back ('your point that the key is ...'). An offer becomes a next step with a time, not only a thank-you for it."
+  },
+  {
+    "kind": "referral_ask",
+    "sector": "tech",
+    "relationship": "alumni",
+    "subject": "{org} {role}, a small ask",
+    "body": "Hi {first},\n\nWhen we spoke last week, you kindly offered to refer me when the posting went up, so I wanted to follow up. I'm applying for the {role} at {org} (req {req}, link below). I've attached my resume so the referral takes two minutes before I submit through the portal.\n\n{link}\n\nThanks,\n{me}",
+    "source": "Orbit drafts panel, round 2 (banker, consultant, tech referrer, career coach): rewrites of the weakest drafts, generalised to placeholders",
+    "notes": "They offered: no 'completely fine if not', no 'if you'd be comfortable'. The resume goes with the note, never 'I'll send it over today'."
+  },
+  {
+    "kind": "referral_ask",
+    "sector": "general",
+    "relationship": "warm",
+    "subject": "{org} {role}, a small ask",
+    "body": "Hi {first},\n\nI've applied for the {role} at {org}. Would you be comfortable referring me, or flagging my application to the recruiting team? I've attached my resume. Totally fine if not, I know it puts your name on it.\n\nThanks,\n{me}",
+    "source": "Orbit drafts panel, round 2 (banker, consultant, tech referrer, career coach): rewrites of the weakest drafts, generalised to placeholders",
+    "notes": "A friend on the team gets a direct, gracious ask, never a coy process question ('is there anything that helps an application once it's in?')."
+  },
+  {
+    "kind": "reply",
+    "sector": "finance",
+    "relationship": "alumni",
+    "subject": null,
+    "body": "Hi {first},\n\nThank you for the reply. I've attached my resume. As for teams, I'm most interested in TMT and healthcare, since those are the sectors I've followed most closely.\n\nBest,\n{me}",
+    "source": "Orbit drafts panel, round 2 (banker, consultant, tech referrer, career coach): rewrites of the weakest drafts, generalised to placeholders",
+    "notes": "Asked for the resume: it is in this reply. The answer to 'which teams' has a lead-in, not a pasted fragment."
   }
 ]

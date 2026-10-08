@@ -1288,4 +1288,3 @@ function Prep({
 export function closenessWord(v: number): string {
   return v >= 0.6 ? 'Close' : v >= 0.35 ? 'Getting to know' : v > 0.05 ? 'Light' : 'New contact';
 }
-

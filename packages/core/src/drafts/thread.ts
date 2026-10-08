@@ -64,7 +64,8 @@ export function subjectTopic(subject: string | undefined): string | undefined {
     .replace(/^\s*((re|fwd?|aw)\s*:\s*)+/i, '')
     .replace(/\s+/g, ' ')
     .trim();
-  if (!s || /^(intro|introduction|introducing|connecting)\b/i.test(s) || /<>|\bmeet\b/i.test(s)) return undefined;
+  if (!s || /^(intro|introduction|introducing|connecting)\b/i.test(s) || /<>|\bmeet\b/i.test(s))
+    return undefined;
   const comma = s.indexOf(', ');
   if (comma > 0 && comma < 45) s = s.slice(comma + 2);
   s = s

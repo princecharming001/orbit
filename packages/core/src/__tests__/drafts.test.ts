@@ -514,7 +514,9 @@ describe('other kinds', () => {
     expect(t.body).toMatch(/Thank you for making time yesterday/);
     // the point, not "the key is ..." read back word for word (drafts panel round 2)
     expect(t.body).toMatch(/your point about showing how I handled ambiguity/i);
-    expect(t.body).toMatch(/Thanks also for offering to refer me when the posting goes up\. I'll send the posting/);
+    expect(t.body).toMatch(
+      /Thanks also for offering to refer me when the posting goes up\. I'll send the posting/,
+    );
     expect(t.body).toMatch(/\?/);
     expect(t.claims.filter((c) => c.factId).length).toBe(2);
   });
@@ -677,7 +679,9 @@ describe('audit round 1 regressions', () => {
     // a note that does not say they said it is something the student saw, and an open offer is acted on, not left
     // in the notes (drafts panel round 2)
     expect(n.body).toMatch(/I also saw that you're hiring interns in January for the platform team\./);
-    expect(n.body).toMatch(/you offered to refer me when the posting goes up\. I'll send the posting as soon as it's live\./);
+    expect(n.body).toMatch(
+      /you offered to refer me when the posting goes up\. I'll send the posting as soon as it's live\./,
+    );
     expect(n.body).not.toMatch(/mentioned (Alina|they)|Alina offered/i);
     expect(n.body).not.toMatch(/It's been a little while/);
   });
