@@ -118,12 +118,13 @@ test.describe('Orbit demo flow', () => {
     await card.getByRole('button', { name: 'Yes', exact: true }).click();
     await expect(page.getByText(`Added to your pipeline, with ${introducer} as the referrer.`)).toBeVisible();
     await expect(card).toHaveCount(0);
-    // exactly what a detected introduction gives: the reply-while-fresh card, credited to the introducer
+    // exactly what a detected introduction gives: the reply-while-fresh card, credited to the introducer (it is
+    // drafted after the answer is saved, which can take longer than the default wait on a loaded machine)
     await expect(
       page.getByText(
         new RegExp(`${introducer} introduced you to ${person} .*reply while the intro is fresh`),
       ),
-    ).toBeVisible();
+    ).toBeVisible({ timeout: 15_000 });
     await page.goto('pipeline');
     await expect(page.getByTestId('chat-card-identified').filter({ hasText: fullName })).toBeVisible();
   });
@@ -809,13 +810,17 @@ test.describe('First-run guidance and plain next steps', () => {
     page,
   }) => {
     await loadDemo(page);
-    const badge = Number(await page.getByTestId('approvals-badge').first().innerText());
-    // the same drafts as Today's cards, not Today plus everything that can wait
-    const todays = await page
-      .locator('[data-testid^="suggestion-"]')
-      .filter({ has: page.getByTestId('draft-review') })
-      .count();
-    expect(badge).toBe(todays);
+    const badgeNow = async () => Number(await page.getByTestId('approvals-badge').first().innerText());
+    // the same drafts as Today's cards, not Today plus everything that can wait (Today writes its cards' drafts a
+    // moment after the page opens, so the two are compared once the page has caught up)
+    const todaysNow = () =>
+      page
+        .locator('[data-testid^="suggestion-"]')
+        .filter({ has: page.getByTestId('draft-review') })
+        .count();
+    await expect.poll(async () => (await badgeNow()) - (await todaysNow()), { timeout: 15_000 }).toBe(0);
+    const badge = await badgeNow();
+    expect(badge).toBeGreaterThan(0);
     await page.goto('inbox');
     await expect(page.getByRole('heading', { name: 'Drafts' })).toBeVisible();
     await expect(page.getByRole('tab', { name: /ready to send/i })).toContainText(String(badge));

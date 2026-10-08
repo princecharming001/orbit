@@ -21,12 +21,14 @@ import { db } from '../db/schema';
 import { draftMessage } from '../engine/brief';
 import {
   type CompanyReach,
+  isColdDirect,
   isUnambiguous,
   type ReachCandidate,
   rankReachTargets,
   reachCompany,
   reachPerson,
   targetCompanyMatcher,
+  WARMER_ROUTES_WHY,
 } from '../engine/graph';
 import { maintenanceRunning, watchMaintenance } from '../engine/sync';
 import { useSession } from '../state/session';
@@ -45,7 +47,9 @@ const FILTERS: [Filter, string][] = [
 ];
 
 /** How many people the pending-suggestion ripple marks at most: those behind the highest-priority suggestions. */
-const RIPPLE_TOP = 6;
+const RIPPLE_TOP = 3;
+/** On a touch screen every control on the map page is at least 44 px tall, so a thumb lands on it. */
+const TAP = 'pointer-coarse:min-h-11';
 /** The longest the map waits for the day's maintenance before it lays out anyway. */
 const MAINTENANCE_WAIT_MS = 2500;
 /** How long the legend line keeps the news of someone joining or a chat booked. */
@@ -78,7 +82,7 @@ export function MapPage() {
   const [target, setTarget] = useState<Person>();
   const [hover, setHover] = useState<string>();
   // where the person card goes: beside the dot, or at the top or bottom of a narrow map (the map picks it)
-  const [hoverPlace, setHoverPlace] = useState<CardPlace>({ at: 'bottom' });
+  const [hoverPlace, setHoverPlace] = useState<CardPlace>({ at: 'bottom', y: 0 });
   // a search that found no one: the line under the filters says so and the search box shakes once
   const [missed, setMissed] = useState<{ q: string; n: number }>();
   const searchForm = useRef<HTMLFormElement>(null);
@@ -106,6 +110,8 @@ export function MapPage() {
   // a search inside the introductions view: a person or a company the map turns to
   const [webFocus, setWebFocus] = useState<{ id?: string; group?: string; label: string }>();
   const [storyHover, setStoryHover] = useState<string>();
+  /** people the map holds in grey "+N" dots: the panel explains those dots only when the map shows some */
+  const [aggregated, setAggregated] = useState(0);
   const peopleQ = useLiveQuery(
     () => (userId ? db.people.where('userId').equals(userId).toArray() : []),
     [userId],
@@ -219,6 +225,25 @@ export function MapPage() {
         .map((p) => p.id),
     );
   }, [filter, visible, isTarget, stages]);
+  // a search with several matches lights them on the map, so the student sees where each one is before picking
+  const choiceIds = useMemo(() => {
+    if (!choices) return undefined;
+    const keys = new Set(
+      choices.filter((c) => c.kind === 'company').map((c) => `n:${normalizeCompany(c.label)}`),
+    );
+    const ids = new Set(choices.filter((c) => c.kind === 'person').map((c) => c.id));
+    const orgIds = new Set(choices.filter((c) => c.kind === 'company').map((c) => c.id));
+    return new Set(
+      visible
+        .filter(
+          (p) =>
+            ids.has(p.id) ||
+            (!!p.currentOrganizationId && orgIds.has(p.currentOrganizationId)) ||
+            keys.has(orbitGroupKey(p, orgMap)),
+        )
+        .map((p) => p.id),
+    );
+  }, [choices, visible, orgMap]);
   // Target companies: their wedges are tinted, and the panel lists them so one click turns the map to it
   const targetGroups = useMemo(() => {
     if (filter !== 'targets') return undefined;
@@ -459,6 +484,14 @@ export function MapPage() {
     const norm = normalizeCompany(q);
     const tc = norm ? tcs.find((t) => normalizeCompany(t.nameRaw) === norm) : undefined;
     if (tc) return openCompany(tc.organizationId ?? tc.nameRaw, tc.nameRaw);
+    // the route or company the last search showed goes, so the map and the panel never answer an older question
+    setTarget(undefined);
+    setCompanyFocus(undefined);
+    setCompany(undefined);
+    setChoices(undefined);
+    setPaths([]);
+    if (reachParam && reachParam !== '1') setParams({ reach: '1' });
+    else if (params.get('company')) setParams({ reach: '1' });
     sayMiss(
       q,
       'No one by that name or company in your network yet. Add them from LinkedIn or Discover.',
@@ -545,7 +578,7 @@ export function MapPage() {
       await draftForSuggestion(user, s);
     }
     toast.push({
-      text: `Intro request drafted. It's in Approvals.`,
+      text: `Intro request drafted. It's in Drafts.`,
       tone: 'good',
       action: { label: 'Open', onClick: () => nav('/inbox') },
     });
@@ -566,6 +599,8 @@ export function MapPage() {
     return [n, warm];
   }, [companyKey, visible, orgMap]);
   const status = paths === undefined ? 'searching' : paths.length ? 'found' : 'none';
+  // a faint tie the student has to the target, offered after the warmer routes: the panel says why it comes last
+  const coldDirect = paths?.find((p, i) => i > 0 && isColdDirect(p));
   const routeIds = current ? ['user', ...current.hops.map((h) => h.toId)].join('>') : '';
   const focus: FocusSpec | undefined = useMemo(() => {
     if (target)
@@ -603,11 +638,13 @@ export function MapPage() {
       if (target) {
         if (paths === undefined) return `Finding routes to ${target.displayName}.`;
         if (!current) return `No route to ${target.displayName} through your network yet.${clear}`;
+        if (isColdDirect(current))
+          return `You know ${target.displayName} only slightly, so a note straight to them would be a cold one.${clear}`;
         if (current.hops.length === 1) return `You know ${target.displayName} directly.${clear}`;
         const via = byId.get(current.hops[0]!.toId)?.firstName ?? 'someone';
         return `Route ${pathIdx + 1} of ${paths.length} to ${target.displayName}, through ${via}.${clear}`;
       }
-      if (choices) return 'Several matches. Pick the one you meant.';
+      if (choices) return 'Several matches, lit on the map. Pick the one you meant.';
       return 'Type a name or a company to find a way in.';
     }
     switch (filter) {
@@ -640,7 +677,7 @@ export function MapPage() {
   const chainSentence = webLit ? describeIntroChain(web, webLit, nameOf) : '';
   const litSentence = stories.some((s) => s.text === chainSentence) ? '' : chainSentence;
   return (
-    <div className="-my-6 md:-mb-8 -mx-4 md:-mx-8 flex flex-col lg:h-screen">
+    <div className="-my-6 md:-mb-8 -mx-4 md:-mx-8 flex flex-col lg:flex-1 lg:min-h-0" data-testid="map-page">
       <div className="px-4 md:px-8 pt-5 pb-3 flex flex-wrap items-center gap-2 border-b border-line bg-canvas">
         <div className="min-w-0">
           <h1 className="text-[20px] font-semibold tracking-[-0.01em]">
@@ -666,20 +703,22 @@ export function MapPage() {
             className={cx('relative flex-1 sm:flex-none', missed && missed.q === query.trim() && 'shake-x')}
             data-testid="reach-form"
           >
-            <Search size={14} className="absolute left-2.5 top-2.5 text-ink-3" />
+            <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-3" />
             <Input
               value={query}
               onChange={(e) => {
                 setQuery(e.target.value);
+                // typing again takes the miss toast down: on a phone it sits over this box
+                clearMiss();
                 if (webMode && !e.target.value) setWebFocus(undefined);
               }}
               placeholder={webMode ? 'Search your introductions…' : 'Reach a person or company…'}
-              className="pl-8 w-full sm:w-64"
+              className="pl-8 w-full sm:w-64 pointer-coarse:h-11 pointer-coarse:text-[16px]"
               data-testid="reach-input"
             />
           </form>
           {reachMode && (
-            <Button variant="ghost" size="sm" onClick={exitReach}>
+            <Button variant="ghost" size="sm" className={TAP} onClick={exitReach}>
               <X size={14} /> Exit reach
             </Button>
           )}
@@ -695,7 +734,7 @@ export function MapPage() {
                 }}
                 aria-pressed={filter === k}
                 className={cx(
-                  'h-7 px-2.5 rounded-full border text-[12px] shrink-0 whitespace-nowrap transition-colors',
+                  'h-7 px-2.5 rounded-full border text-[12px] shrink-0 whitespace-nowrap transition-colors pointer-coarse:h-11 pointer-coarse:px-3.5 pointer-coarse:text-[13px]',
                   filter === k ? 'bg-ink text-white border-ink' : 'border-line text-ink-2 hover:bg-canvas-2',
                 )}
                 data-testid={`map-filter-${k}`}
@@ -718,7 +757,11 @@ export function MapPage() {
           className={cx(
             'relative min-w-0 overflow-hidden lg:h-auto lg:min-h-[420px] bg-[radial-gradient(circle_at_center,_#fff_0%,_#fafafc_70%)]',
             // on phones the routes sit under the canvas, so in reach mode the canvas leaves room for them
-            reachMode ? 'h-[min(48vh,420px)] min-h-[280px]' : 'h-[min(72vh,560px)] min-h-[340px]',
+            // a phone's orbit is as wide as the screen, so the canvas is only as tall as that orbit needs (with
+            // room for the top and bottom labels): no empty band above it pushing its bottom under the tab bar
+            reachMode
+              ? 'h-[min(48vh,420px)] min-h-[280px]'
+              : 'h-[min(72vh,560px,calc(100vw_+_60px))] min-h-[340px]',
           )}
           data-testid="orbit-stage"
         >
@@ -728,7 +771,7 @@ export function MapPage() {
             stages={stages}
             pending={pendingIds}
             loading={loading}
-            highlightIds={highlightIds}
+            highlightIds={choiceIds ?? highlightIds}
             highlightGroups={highlightGroups}
             focus={focus}
             web={webSpec}
@@ -737,25 +780,26 @@ export function MapPage() {
             onSelect={(id) => (reachMode ? setParams({ reach: id }) : nav(`/people/${id}`))}
             onSelectCluster={openCluster}
             personCard={!reachMode}
+            question={webFocus}
+            onAggregated={setAggregated}
             onHover={(id, place) => {
               setHover(id);
               if (place) setHoverPlace(place);
             }}
           />
           {hovered && !reachMode && (
+            // one card that follows the focus from dot to dot: it fades in when it first shows, not again with
+            // each arrow key
             <div
-              key={hovered.id}
               className={cx(
                 'absolute bg-canvas border border-line rounded-[12px] p-3 shadow-[var(--shadow-card)] fade-up',
                 // the map puts the card next to the dot on a wide map and at the top or bottom of a narrow one, never
                 // over the person (on a phone the bottom only when it is clear of the tab bar); with a mouse the card
                 // lets the pointer through
-                'at' in hoverPlace
-                  ? cx('left-3 right-3', hoverPlace.at === 'top' ? 'top-3' : 'bottom-3')
-                  : 'w-[260px]',
+                'at' in hoverPlace ? 'left-3 right-3' : 'w-[260px]',
                 touch ? '' : 'pointer-events-none',
               )}
-              style={'at' in hoverPlace ? undefined : { left: hoverPlace.x, top: hoverPlace.y }}
+              style={'at' in hoverPlace ? { top: hoverPlace.y } : { left: hoverPlace.x, top: hoverPlace.y }}
               data-place={'at' in hoverPlace ? hoverPlace.at : 'beside'}
               data-testid="map-tooltip"
             >
@@ -763,15 +807,24 @@ export function MapPage() {
                 <Avatar name={hovered.displayName} src={hovered.photoUrl} id={hovered.id} size={32} />
                 <div className="min-w-0 flex-1">
                   <div className="font-medium truncate">{hovered.displayName}</div>
-                  <div className="text-[12px] text-ink-3 truncate">
-                    {[hovered.currentTitle, hovered.currentOrganizationRaw].filter(Boolean).join(' · ')}
-                  </div>
+                  {/* the company on a line of its own, so a long title never cuts it off */}
+                  {hovered.currentTitle && (
+                    <div className="text-[12px] text-ink-3 truncate">{hovered.currentTitle}</div>
+                  )}
+                  {hovered.currentOrganizationRaw && (
+                    <div className="text-[12px] text-ink-2 truncate" data-testid="map-tooltip-company">
+                      {hovered.currentOrganizationRaw}
+                    </div>
+                  )}
                 </div>
                 <Link
                   to={`/people/${hovered.id}`}
                   className={cx(
                     'text-[12px] text-accent shrink-0 pointer-events-auto',
-                    touch ? '' : 'sm:hidden',
+                    // a thumb-sized target that does not make the card any taller
+                    touch
+                      ? 'inline-flex items-center justify-center min-h-11 min-w-11 -my-2 -mr-2 px-2'
+                      : 'sm:hidden',
                   )}
                   data-testid="map-open-person"
                 >
@@ -796,8 +849,8 @@ export function MapPage() {
                   ? 'Tap a person to see who they are, and tap again to open their profile.'
                   : 'Hover over a person to see who they are and who they know, and click to open their profile. Drag to turn the orbit.'}{' '}
                 Companies read as wedges. The thin coloured ring is pipeline stage, and a soft ripple marks
-                the people your most pressing suggestions are about. A grey dot with a number stands for more
-                people at that company.
+                the people your most pressing suggestions are about.
+                {aggregated > 0 && ' A grey dot with a number stands for more people at that company.'}
               </div>
               {targetGroups && (
                 <Card padded>
@@ -811,7 +864,10 @@ export function MapPage() {
                     {targetGroups.map((g) => (
                       <li key={g.key}>
                         <button
-                          className="w-full flex items-center gap-2 text-left text-[13px] rounded-md px-2 py-1.5 hover:bg-canvas-2"
+                          className={cx(
+                            'w-full flex items-center gap-2 text-left text-[13px] rounded-md px-2 py-1.5 hover:bg-canvas-2',
+                            TAP,
+                          )}
                           onClick={() => void openCompany(g.orgId ?? g.label, g.label)}
                           data-testid="map-company-row"
                         >
@@ -833,7 +889,11 @@ export function MapPage() {
                   <li>Outer: new or cold</li>
                 </ul>
               </Card>
-              <Button variant="primary" className="w-full" onClick={() => setParams({ reach: '1' })}>
+              <Button
+                variant="primary"
+                className={cx('w-full', TAP)}
+                onClick={() => setParams({ reach: '1' })}
+              >
                 Find a path to someone
               </Button>
             </>
@@ -858,6 +918,7 @@ export function MapPage() {
                       <button
                         className={cx(
                           'w-full flex items-start gap-2 text-left text-[13px] rounded-md px-2 py-1.5 hover:bg-canvas-2',
+                          TAP,
                           // the chain lit from the map, when this entry already says it in words
                           !storyHover && chainSentence === s.text && 'bg-accent-soft/40',
                         )}
@@ -893,7 +954,8 @@ export function MapPage() {
           {reachMode && !target && !companyFocus && !choices && (
             <div className="text-[13px] text-ink-2">
               Type a name (someone in your network) or a company above. Orbit finds up to three routes through
-              people you know, with the reason each hop works.
+              people you know, with the reason each hop works, and when you already know the person, a note
+              straight to them as well.
             </div>
           )}
           {choices && (
@@ -923,7 +985,10 @@ export function MapPage() {
               <div className="flex items-center gap-3">
                 <Avatar name={target.displayName} src={target.photoUrl} id={target.id} size={40} />
                 <div className="min-w-0">
-                  <Link to={`/people/${target.id}`} className="font-medium hover:underline">
+                  <Link
+                    to={`/people/${target.id}`}
+                    className={cx('font-medium hover:underline inline-flex items-center', TAP)}
+                  >
                     {target.displayName}
                   </Link>
                   <div className="text-[12px] text-ink-3 truncate">
@@ -955,9 +1020,13 @@ export function MapPage() {
                     <span className="text-[12px] font-medium">
                       Route {i + 1} · {p.hops.length} hop{p.hops.length > 1 ? 's' : ''}
                     </span>
-                    <Chip tone={p.band === 'strong' ? 'good' : p.band === 'possible' ? 'warn' : 'neutral'}>
-                      {REACH_BAND_LABELS[p.band]}
-                    </Chip>
+                    {isColdDirect(p) ? (
+                      <Chip>Cold tie</Chip>
+                    ) : (
+                      <Chip tone={p.band === 'strong' ? 'good' : p.band === 'possible' ? 'warn' : 'neutral'}>
+                        {REACH_BAND_LABELS[p.band]}
+                      </Chip>
+                    )}
                   </div>
                   <ol className="mt-2 space-y-1.5 text-[13px]">
                     {p.hops.map((h, k) => {
@@ -976,15 +1045,24 @@ export function MapPage() {
                   </ol>
                 </button>
               ))}
+              {/* after the routes it explains, so on a phone the first route still shows without scrolling */}
+              {coldDirect && (
+                <p className="text-[13px] text-ink-2" data-testid="reach-cold-note">
+                  {coldDirect.hops[0]!.text}. That tie is faint, so a note from you alone may go unanswered. A
+                  word from someone who knows {target.firstName} carries more weight, which is why the routes
+                  through people you know come first. Writing to {target.firstName} yourself is Route{' '}
+                  {paths!.indexOf(coldDirect) + 1}.
+                </p>
+              )}
               {current && current.hops.length > 1 && (
-                <Button variant="primary" className="w-full" onClick={() => askIntro(current)}>
+                <Button variant="primary" className={cx('w-full', TAP)} onClick={() => askIntro(current)}>
                   Ask {byId.get(current.hops[0]!.toId)?.firstName ?? 'them'} for an intro
                 </Button>
               )}
               {current && current.hops.length === 1 && (
                 <Button
                   variant="primary"
-                  className="w-full"
+                  className={cx('w-full', TAP)}
                   onClick={() => nav(`/people/${target.id}?draft=outreach`)}
                 >
                   Write to {target.firstName} directly
@@ -1019,7 +1097,7 @@ export function MapPage() {
                       <li key={d.person.id} className="flex items-center gap-2 text-[13px]">
                         <Avatar name={d.person.displayName} id={d.person.id} size={22} />
                         <button
-                          className="hover:underline truncate"
+                          className={cx('hover:underline truncate text-left', TAP)}
                           onClick={() => setParams({ reach: d.person.id })}
                         >
                           {d.person.displayName}
@@ -1033,7 +1111,7 @@ export function MapPage() {
                   </ul>
                   {list.length > 6 && showAll !== title && (
                     <button
-                      className="mt-1.5 text-[12px] text-accent hover:underline"
+                      className={cx('mt-1.5 text-[12px] text-accent hover:underline', TAP)}
                       onClick={() => setShowAll(title)}
                       data-testid="company-show-all"
                     >
@@ -1047,11 +1125,14 @@ export function MapPage() {
                   <div className="text-[12px] uppercase tracking-wide text-ink-3 mb-1">
                     Routes through people you know
                   </div>
+                  <p className="text-[12px] text-ink-3 mb-1.5" data-testid="company-routes-why">
+                    {WARMER_ROUTES_WHY}
+                  </p>
                   <ul className="space-y-1 text-[13px]" data-testid="company-routes">
                     {company.twoHop.map((t) => (
                       <li key={t.target.id}>
                         <button
-                          className="hover:underline font-medium"
+                          className={cx('hover:underline font-medium', TAP)}
                           onClick={() => setParams({ reach: t.target.id })}
                         >
                           {t.target.displayName}
@@ -1070,7 +1151,10 @@ export function MapPage() {
                 </div>
               )}
               {company.org && (
-                <Link to={`/companies/${company.org.id}`} className="text-[13px] text-accent">
+                <Link
+                  to={`/companies/${company.org.id}`}
+                  className={cx('text-[13px] text-accent inline-flex items-center', TAP)}
+                >
                   Open company page →
                 </Link>
               )}

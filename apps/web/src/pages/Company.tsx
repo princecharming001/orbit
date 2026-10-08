@@ -3,7 +3,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { db } from '../db/schema';
-import { type CompanyReach, reachCompany } from '../engine/graph';
+import { type CompanyReach, reachCompany, WARMER_ROUTES_WHY } from '../engine/graph';
 import { useSession } from '../state/session';
 import { Avatar, Card, Chip, NotFound, PageHeader, Spinner } from '../ui';
 import { StrengthDots } from './Pipeline';
@@ -75,7 +75,8 @@ export function CompanyPage() {
             }))}
           />
           <Card>
-            <div className="font-medium mb-2">Routes through people you know</div>
+            <div className="font-medium mb-1">Routes through people you know</div>
+            {reach.twoHop.length > 0 && <p className="text-ink-3 text-[12px] mb-2">{WARMER_ROUTES_WHY}</p>}
             {reach.twoHop.length === 0 && (
               <p className="text-ink-3 text-[13px]">No indirect routes found yet.</p>
             )}

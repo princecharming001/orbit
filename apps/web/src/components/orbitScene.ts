@@ -34,6 +34,7 @@ import {
   quadPartial,
   quadPoint,
   routeControls,
+  spreadApart,
   wedgeMid,
 } from './orbitGeometry';
 
@@ -71,8 +72,15 @@ const OMEGA = TAU / ORBIT_PERIOD_MS;
 const EMPTY_EXTENT = 456;
 const FAN_PITCH = 30;
 const NO_VIEWS = new Set<never>();
+/** A drag released slower than this (radians a millisecond, about 70 degrees a second) does not coast. */
+const FLICK_MIN = 0.0012;
+/** How far from a person the dots round them count extra when the person card is placed (CSS px). */
+const NEAR_CARD = 140;
+
 /** How much a dot on a reach route grows (no more than its neighbours leave room for). */
 const ROUTE_SCALE = 1.12;
+/** CSS px kept clear between two people on a route who sit side by side: room for the hop, its arrow and names */
+const ROUTE_GAP = 26;
 /** an introductions web this small names everyone in it; a bigger one names only the lit chain */
 const TAG_WEB_ALL = 16;
 
@@ -101,6 +109,8 @@ export const TIMING = {
   hoverLines: 220,
   tip: 150,
   hop: 350,
+  /** a hop's draw when the student picks another route: the new one draws while the old one pulls back */
+  hopSwitch: 220,
   turn: 700,
   turnMax: 950,
   turnBackMax: 1150,
@@ -228,6 +238,8 @@ export interface SceneSnapshot {
   chip: string;
   path: string[];
   pathDrawn: number;
+  /** hops of a route being replaced that are still drawn as it pulls back */
+  pathOldDrawn: number;
   emphasized: string[];
   dimmed: number;
   nodes: number;
@@ -237,8 +249,10 @@ export interface SceneSnapshot {
   webLit: string[];
   hover?: string;
   spin: number;
-  /** the first names written under dots in the last frame drawn (a route, the introductions web) */
+  /** the first names written under dots in the last frame drawn (a route, the introductions web, a spotlight) */
   tags: string[];
+  /** people the pending-suggestion ripple marks */
+  pending: string[];
   /** frames drawn since the map opened (the loop sleeps when nothing moves) */
   draws: number;
 }
@@ -360,8 +374,12 @@ export class OrbitScene {
   private chipOld = { text: '', key: '', alpha: new Tween(0), radius: 0 };
 
   private reach?: { targetId: string; status: ReachStatus; ids: string[] };
-  private path = { ids: [] as string[], start: 0 };
-  private pathOld = { ids: [] as string[], start: 0, from: 0 };
+  /** the route on the map: `start` is when its first hop began drawing, `hop` how long each hop takes */
+  private path = { ids: [] as string[], start: 0, hop: TIMING.hop as number };
+  /** a route being replaced: it pulls back from `from` hops drawn to `to` (the hops it shares with the new one) */
+  private pathOld = { ids: [] as string[], start: 0, from: 0, to: 0 };
+  /** the reach target the orbit has turned to the top */
+  private reachTurned?: string;
   private radar = new Tween(0);
   private radarStart = 0;
 
@@ -390,7 +408,12 @@ export class OrbitScene {
   private tags: string[] = [];
   private tagList: (NodeView | number)[] = [];
   private tagBoxes: number[] = [];
-  private tagNames = new Map<string, string>();
+  /** each person's tag, as a first name and with the last initial */
+  private tagNames = new Map<string, [string, string]>();
+  /** how many of this frame's tags share each first name */
+  private tagTwins = new Map<string, number>();
+  /** people in the spotlight (a newcomer, a tie that moved rings, a chat just booked), named while it lasts */
+  private named: NodeView[] = [];
 
   private drag?: { last: number; t: number; v: number; moved: boolean; x0: number; y0: number };
 
@@ -661,6 +684,7 @@ export class OrbitScene {
     v.spotStart = start;
     v.spotEnd = end;
     v.spotScale = scale;
+    if (!this.named.includes(v)) this.named.push(v);
     this.busyUntil = Math.max(this.busyUntil, end);
   }
 
@@ -798,7 +822,9 @@ export class OrbitScene {
     this.ringSweep.forEach((t, i) => {
       this.play(t, 0, 1, now, TIMING.ringSweep, easing.inOutCubic, i * TIMING.ringStagger);
     });
-    this.anim(this.ghost, 0, now, 160, easing.outQuad);
+    // the rings the loading orbit already shows stay while the pen goes round them, and step back once all three
+    // are drawn: the arrival carries on from the loading orbit instead of clearing it first
+    this.anim(this.ghost, 0, now, 260, easing.outQuad, TIMING.ringSweep + 2 * TIMING.ringStagger);
     // "You" swells once as the people leave it, from the size it already has (no shrink, no cut)
     this.youBumpAt = now;
     let last = 0;
@@ -973,6 +999,11 @@ export class OrbitScene {
       }
       this.refreshEmphasis(now, 'web');
       this.anim(this.labelDim, this.dimForMode(), now, TIMING.emphasis, easing.outQuad);
+      if (turn !== prevTurn && !w.turnTo) {
+        // the match let go: the orbit turns back, and the camera frames the whole web again as it does
+        this.releaseIfFree(now);
+        this.frameWeb(now);
+      }
     }
     this.releaseIfFree(now);
     this.updateSpin(now);
@@ -1154,6 +1185,7 @@ export class OrbitScene {
     const travel = this.reduced ? 0 : dur;
     if (g && this.wedge.key === key) this.anim(this.wedge.k, k, now, travel, easing.inOutCubic);
     const tree = this.web ? this.webTree(this.web.web) : undefined;
+    const nudge = this.routeNudges();
     for (const v of this.views) {
       if (v.temp || !v.node || v.removing) continue;
       let a = v.node.angle;
@@ -1166,11 +1198,39 @@ export class OrbitScene {
         // the web grows outward: the first generation moves first
         delay = (t.gen - 1) * 110;
       } else if (g) a = openedAngle(a, mid, (g.endAngle - g.startAngle) / 2, k, v.groupKey === key);
+      if (nudge) a += nudge.get(v) ?? 0;
       const ta = nearestAngle(v.a.value(now), a);
       // reduced motion: dots are set in place, never travel
       if (Math.abs(ta - v.a.to) > 1e-6) this.anim(v.a, ta, now, travel, easing.inOutCubic, delay);
       if (Math.abs(r - v.r.to) > 1e-6) this.anim(v.r, r, now, travel, easing.inOutCubic, delay);
     }
+  }
+
+  /**
+   * People on a route who sit side by side on the orbit step apart while the route shows, so the hop between them,
+   * its arrow and both names can be seen. Angle nudges in layout units; none without a route.
+   */
+  private routeNudges(): Map<NodeView, number> | undefined {
+    const r = this.reach;
+    if (r?.status !== 'found' || r.ids.length < 3) return undefined;
+    const vs: NodeView[] = [];
+    for (let k = 1; k < r.ids.length; k++) {
+      const v = this.byKey.get(r.ids[k]!);
+      if (v && !v.temp && !v.removing && v.node && v.person && !vs.includes(v)) vs.push(v);
+    }
+    if (vs.length < 2) return undefined;
+    const off = spreadApart(
+      vs.map((v) => v.node!.angle),
+      vs.map((v) => v.node!.radius),
+      // a dot's size is its diameter
+      vs.map((v) => (v.size.to / 2) * (ROUTE_SCALE + 0.08)),
+      ROUTE_GAP / Math.max(0.3, this.fitTarget),
+    );
+    const out = new Map<NodeView, number>();
+    vs.forEach((v, i) => {
+      if (off[i]) out.set(v, off[i]!);
+    });
+    return out.size ? out : undefined;
   }
 
   /**
@@ -1365,7 +1425,10 @@ export class OrbitScene {
     if (!r) {
       if (!prev) return;
       this.reach = undefined;
+      this.reachTurned = undefined;
       this.retractPath(now);
+      // people a route pulled apart go back to their places
+      this.retarget(now, 450);
       this.anim(this.radar, 0, now, 200, easing.inQuad);
       this.frame0(now);
       this.refreshEmphasis(now, 'reach');
@@ -1379,8 +1442,15 @@ export class OrbitScene {
     const changed = newTarget || prev.status !== status || prev.ids.join('>') !== ids.join('>');
     this.reach = { targetId: r.targetId, status, ids };
     if (!changed) return;
+    // people on the route who sit side by side step apart (and step back when the route goes)
+    this.retarget(now, 450);
     const target = this.viewFor(r.targetId);
-    if (newTarget && target) this.hold(rotationToTop(target.a.to, this.rotTarget()), now);
+    // the target turns to the top as the search starts; with reduced motion it waits for the answer, so the turn
+    // and the camera framing the route are one set instead of two snaps a moment apart
+    if (target && this.reachTurned !== r.targetId && (!this.reduced || status !== 'searching')) {
+      this.reachTurned = r.targetId;
+      this.hold(rotationToTop(target.a.to, this.rotTarget()), now);
+    }
     // a radar that only just started keeps sweeping a moment longer, then hands over to the answer
     const wait =
       !this.reduced && prev?.status === 'searching' && !newTarget
@@ -1401,26 +1471,33 @@ export class OrbitScene {
         }
         this.setPhase('reach-none');
       } else if (ids.join('>') !== this.path.ids.join('>')) {
-        // a new route: the old one retracts, then the new one draws hop by hop and each dot pops as it arrives
-        const hadPath = this.path.ids.length > 0;
-        this.retractPath(now);
+        // Another route to the same person morphs: the hops both routes share stay drawn, the rest of the old one
+        // pulls back while the new one draws out at once, a little faster, so the map is never without a route.
+        // A first route waits for the radar, then draws hop by hop; each dot pops as the line reaches it.
+        const morph = !newTarget && this.path.ids.length > 1;
+        let shared = 0;
+        if (morph) while (shared < ids.length - 1 && this.path.ids[shared + 1] === ids[shared + 1]) shared++;
+        const drawn = this.pathProgress(now);
+        this.retractPath(now, Math.min(shared, drawn));
+        const hop = morph ? TIMING.hopSwitch : TIMING.hop;
+        const from = morph ? Math.min(shared, drawn) : 0;
         this.path = {
           ids,
-          start: now + (this.reduced ? 0 : Math.max(wait, hadPath ? TIMING.retract : 160)),
+          hop,
+          start: this.reduced ? now : (morph ? now : now + Math.max(wait, 160)) - from * hop,
         };
         if (!this.reduced) {
           const route = new Set(ids.map((id) => this.viewFor(id)).filter((v): v is NodeView => !!v));
-          for (let k = 1; k < ids.length; k++) {
+          for (let k = Math.ceil(from) + 1; k < ids.length; k++) {
             const v = this.viewFor(ids[k]!);
             if (!v) continue;
-            v.popAt = this.path.start + k * TIMING.hop - 40;
+            v.popAt = this.hopAt(k) - 40;
             // the pop swells only as far as the neighbours leave room (two people on a route can sit side by side)
             const rest = this.roomFor(v, ROUTE_SCALE, route, 0.95);
             v.popH = Math.min(0.22, this.roomFor(v, ROUTE_SCALE * 1.22, route, 0.95) / rest - 1);
           }
         }
-        if (!this.reduced)
-          this.busyUntil = Math.max(this.busyUntil, this.path.start + (ids.length - 1) * TIMING.hop + 340);
+        if (!this.reduced) this.busyUntil = Math.max(this.busyUntil, this.hopAt(ids.length - 1) + 340);
         this.setPhase('reach-path');
       }
     }
@@ -1430,14 +1507,30 @@ export class OrbitScene {
     this.anim(this.labelDim, this.dimForMode(), now, TIMING.emphasis, easing.outQuad);
   }
 
-  private retractPath(now: number): void {
+  /** Pulls the route on the map back to its first `keep` hops (the ones the next route shares), then lets it go. */
+  private retractPath(now: number, keep = 0): void {
     if (!this.path.ids.length) return;
     const drawn = this.pathProgress(now);
-    if (drawn > 0 && !this.reduced) {
-      this.pathOld = { ids: this.path.ids, start: now, from: drawn };
+    // a route picked a moment ago has barely started: the one still pulling back is the line the student sees
+    const old = this.oldPathDrawn(now);
+    if (drawn > keep && !this.reduced && drawn >= old) {
+      this.pathOld = { ids: this.path.ids, start: now, from: drawn, to: keep };
       this.busyUntil = Math.max(this.busyUntil, now + TIMING.retract);
     }
-    this.path = { ids: [], start: 0 };
+    this.path = { ids: [], start: 0, hop: TIMING.hop };
+  }
+
+  /** Hops of the route being replaced still drawn, as it pulls back. */
+  private oldPathDrawn(now: number): number {
+    const o = this.pathOld;
+    if (!o.ids.length) return 0;
+    const k = clamp01((now - o.start) / TIMING.retract);
+    return o.from - (o.from - o.to) * easing.inCubic(k);
+  }
+
+  /** When the line reaches the route's `k`th stop. */
+  private hopAt(k: number): number {
+    return this.path.start + k * this.path.hop;
   }
 
   /** Hops drawn so far (0..hops). */
@@ -1445,7 +1538,7 @@ export class OrbitScene {
     const hops = this.path.ids.length - 1;
     if (hops <= 0) return 0;
     if (this.reduced) return now >= this.path.start ? hops : 0;
-    return Math.max(0, Math.min(hops, (now - this.path.start) / TIMING.hop));
+    return Math.max(0, Math.min(hops, (now - this.path.start) / this.path.hop));
   }
 
   /** The camera that keeps the whole route in view (with the target turned to the top). */
@@ -1636,8 +1729,10 @@ export class OrbitScene {
     this.drag = undefined;
     if (!d?.moved) return false;
     const now = this.clock.now();
-    // a flick keeps turning for a moment
-    this.inertia = now - d.t < 80 && !this.reduced ? Math.max(-0.004, Math.min(0.004, d.v)) : 0;
+    // a flick keeps turning for a moment; a slow, steady drag stops where the hand let go (only the speed past
+    // FLICK_MIN carries on, so a drag that only just counts as a flick coasts only a little)
+    const fast = Math.max(0, Math.abs(d.v) - FLICK_MIN);
+    this.inertia = now - d.t < 80 && !this.reduced ? Math.sign(d.v) * Math.min(0.004, fast) : 0;
     this.updateSpin(now);
     this.wake();
     return true;
@@ -1665,12 +1760,39 @@ export class OrbitScene {
     return best?.pid;
   }
 
-  /** How many dots a box (CSS px in the canvas) would hide: where the person card covers least. */
-  dotsIn(x0: number, y0: number, x1: number, y1: number): number {
+  /**
+   * How many dots a box (CSS px in the canvas) would hide: where the person card covers least. Given a point (the
+   * person the card is about), a dot near it weighs up to three times as much as one across the map: the people
+   * round someone are the ones the eye looks at next.
+   */
+  dotsIn(x0: number, y0: number, x1: number, y1: number, near?: { x: number; y: number }): number {
     let n = 0;
     for (const v of this.drawList) {
       if (!v.visible || v.pa < 0.3 || v.removing) continue;
-      if (v.x + v.pr > x0 && v.x - v.pr < x1 && v.y + v.pr > y0 && v.y - v.pr < y1) n++;
+      if (v.x + v.pr > x0 && v.x - v.pr < x1 && v.y + v.pr > y0 && v.y - v.pr < y1)
+        n += near ? 1 + 5 * Math.max(0, 1 - Math.hypot(v.x - near.x, v.y - near.y) / NEAR_CARD) : 1;
+    }
+    return n;
+  }
+
+  /**
+   * How much of a person's ties a box would hide: the dots their hover lines run to (on top of `dotsIn`, so they
+   * weigh three times as much as anyone else) and the lines themselves, sampled. For placing the person card.
+   */
+  tiesIn(id: string, x0: number, y0: number, x1: number, y1: number): number {
+    const v = this.byKey.get(id);
+    const near = v?.person ? this.connections?.get(v.pid) : undefined;
+    if (!v || !near?.length) return 0;
+    let n = 0;
+    for (const tid of near) {
+      const t = this.viewFor(tid);
+      if (!t?.visible || t === v) continue;
+      if (t.x + t.pr > x0 && t.x - t.pr < x1 && t.y + t.pr > y0 && t.y - t.pr < y1) n += 2;
+      for (let k = 1; k < 4; k++) {
+        const px = v.x + ((t.x - v.x) * k) / 4;
+        const py = v.y + ((t.y - v.y) * k) / 4;
+        if (px > x0 && px < x1 && py > y0 && py < y1) n += 0.5;
+      }
     }
     return n;
   }
@@ -1740,6 +1862,23 @@ export class OrbitScene {
       reach?.status === 'found' && !web
         ? new Set(reach.ids.map((id) => this.viewFor(id)).filter((v): v is NodeView => !!v))
         : undefined;
+    // in the introductions view the web's people sit on their generation's ring, where someone faded back may be
+    // under them: that faded dot steps out of sight instead of peeping out from behind as a double dot
+    const inWeb = web
+      ? this.views.filter(
+          (v) =>
+            !v.temp &&
+            !v.removing &&
+            (v.person
+              ? web.web.members.has(v.pid)
+              : !!v.cluster?.personIds.some((id) => web.web.members.has(id))),
+        )
+      : [];
+    const underWeb = (v: NodeView) =>
+      inWeb.some((m) => {
+        const d = Math.sqrt(v.r.to ** 2 + m.r.to ** 2 - 2 * v.r.to * m.r.to * Math.cos(v.a.to - m.a.to));
+        return d < (v.size.to * 0.85 + m.size.to * 1.12) / 2 + 4;
+      });
     for (const v of this.views) {
       if (v.temp) continue;
       let alpha = 1;
@@ -1750,7 +1889,10 @@ export class OrbitScene {
         const has = (s: Set<string>) =>
           v.person ? s.has(v.pid) : !!v.cluster?.personIds.some((id) => s.has(id));
         const member = has(web.web.members);
-        if (this.webChain.size) {
+        if (!member && underWeb(v)) {
+          alpha = 0;
+          scale = 0.85;
+        } else if (this.webChain.size) {
           const lit = has(this.webChain);
           alpha = lit ? 1 : member ? 0.32 : 0.1;
           scale = lit ? 1.12 : member ? 1 : 0.85;
@@ -1771,7 +1913,7 @@ export class OrbitScene {
           scale = k >= 0 && route ? this.roomFor(v, ROUTE_SCALE, route, 0.95) : 0.95;
           glow = k >= 0 ? 0.55 : 0;
           // each dot on the route lights up as the line reaches it
-          if (k > 0) delay = Math.max(0, this.path.start + k * TIMING.hop - 60 - now);
+          if (k > 0) delay = Math.max(0, this.hopAt(k) - 60 - now);
         }
       } else if (company) {
         if (v.groupKey === company) {
@@ -2097,7 +2239,7 @@ export class OrbitScene {
   }
 
   private cometBegin(): number {
-    return this.path.start + (this.path.ids.length - 1) * TIMING.hop + 300;
+    return this.hopAt(this.path.ids.length - 1) + 300;
   }
 
   /** The comet's trip along the route, 0..1, or -1 while it rests between trips. */
@@ -2118,8 +2260,10 @@ export class OrbitScene {
       this.rotSpring.step(dt);
       this.rot = this.rotSpring.x;
       const off = Math.abs(this.rotSpring.x - this.rotSpring.target);
-      if (spin === 0 && this.spin.done(now) && off < 1e-4 && Math.abs(this.rotSpring.v) < 1e-6) {
-        // holding still on a focus: land exactly on it
+      // how far the outer ring moves for one radian, in CSS px: the turn is over once nothing moves a visible amount
+      const R = Math.max(1, (this.layout?.ringRadii[2] ?? 440) * this.fit * this.zoom.x);
+      if (spin === 0 && this.spin.done(now) && off * R < 0.5 && Math.abs(this.rotSpring.v) * R < 0.008) {
+        // holding still on a focus: land exactly on it (less than half a pixel away, and all but still)
         this.rot = this.rotSpring.target;
         this.rotSpringOn = false;
       } else if (spin > 0 && off < 1e-2 && Math.abs(this.rotSpring.v - spin) < 1e-5) {
@@ -2160,7 +2304,7 @@ export class OrbitScene {
       this.introLinks = this.introLinks.filter((l) => now <= l.end);
     if (this.webOld && now - this.webOld.start > TIMING.retract) this.webOld = undefined;
     if (this.pathOld.ids.length && now - this.pathOld.start >= TIMING.retract)
-      this.pathOld = { ids: [], start: 0, from: 0 };
+      this.pathOld = { ids: [], start: 0, from: 0, to: 0 };
   }
 
   // ---------- drawing ----------
@@ -2191,6 +2335,7 @@ export class OrbitScene {
       this.drawWeb(ctx, now);
       this.drawPath(ctx, now);
       this.drawDots(ctx, now);
+      this.drawHoverEnds(ctx, now);
       if (this.prebuildAt >= 0) this.prebuild(now);
       this.drawComet(ctx, now);
     }
@@ -2415,6 +2560,31 @@ export class OrbitScene {
       t.mark = mark;
       curveControl(A, v.x, v.y, t.x, t.y, 0.12);
       quadPartial(ctx, v.x, v.y, A.x, A.y, t.x, t.y, grow);
+    }
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  /** A thin accent ring round each person the hover lines reach, so it reads who they run to, not just where. */
+  private drawHoverEnds(ctx: CanvasRenderingContext2D, now: number): void {
+    const p = this.hoverLines.value(now);
+    if (p <= 0.01 || !this.hoverKey || this.web || (this.reach && this.reach.status !== 'searching')) return;
+    const v = this.byKey.get(this.hoverKey);
+    const near = v?.person ? this.connections?.get(v.pid) : undefined;
+    if (!v?.visible || !near?.length) return;
+    // each ring shows as its line arrives
+    const shown = clamp01((easing.outCubic(p) - 0.7) / 0.3);
+    if (shown <= 0) return;
+    ctx.globalAlpha = 0.85 * shown;
+    ctx.strokeStyle = ACCENT;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (const id of near) {
+      const t = this.viewFor(id);
+      if (!t?.visible || t === v || t.pa < 0.1) continue;
+      const r = t.pr + 2.5;
+      ctx.moveTo(t.x + r, t.y);
+      ctx.arc(t.x, t.y, r, 0, TAU);
     }
     ctx.stroke();
     ctx.globalAlpha = 1;
@@ -2653,7 +2823,7 @@ export class OrbitScene {
     // a route being replaced retracts toward You while the new one draws out
     if (this.pathOld.ids.length) {
       const k = clamp01((now - this.pathOld.start) / TIMING.retract);
-      this.drawHops(ctx, this.pathOld.ids, this.pathOld.from * (1 - easing.inCubic(k)), 1 - k * 0.3);
+      this.drawHops(ctx, this.pathOld.ids, this.oldPathDrawn(now), 1 - k * 0.3);
     }
     if (this.path.ids.length > 1) this.drawHops(ctx, this.path.ids, this.pathProgress(now), 1);
     ctx.globalAlpha = 1;
@@ -3097,7 +3267,7 @@ export class OrbitScene {
       if (reach.status === 'found')
         for (let k = 1; k < this.path.ids.length - 1; k++) {
           const v = this.viewFor(this.path.ids[k]!);
-          const shown = this.reduced ? 1 : clamp01((now - (this.path.start + k * TIMING.hop - 60)) / 200);
+          const shown = this.reduced ? 1 : clamp01((now - (this.hopAt(k) - 60)) / 200);
           if (v && !v.cluster && shown > 0) list.push(v, shown);
         }
     }
@@ -3119,11 +3289,31 @@ export class OrbitScene {
         if (k > 0.01) list.push(v, k);
       }
     }
+    // whoever is in the spotlight is named under their dot while it lasts, so the change reads in words where it
+    // happens (a few at a time: a big import is said in the line under the filters instead)
+    const named = this.named;
+    for (let i = named.length - 1; i >= 0; i--)
+      if (named[i]!.spotEnd <= now || named[i]!.dead) named.splice(i, 1);
+    if (named.length && named.length <= 4)
+      for (const v of named) {
+        if (v.cluster || now < v.spotStart || list.includes(v)) continue;
+        // gone a beat before the spotlight ends, so the last frame the loop draws never leaves it behind
+        const k = clamp01((now - v.spotStart) / 200) * clamp01((v.spotEnd - 120 - now) / 300);
+        if (k > 0.01) list.push(v, k);
+      }
     if (!list.length) return;
     const fontPx = 11;
     ctx.font = `500 ${fontPx}px Inter, sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
+    // names are told apart only among the people named together, so the tags read alike ("Diego" next to
+    // "Victor", not "Diego S." because another Diego sits somewhere else on the map), as the panel words them
+    const twins = this.tagTwins;
+    twins.clear();
+    for (let i = 0; i < list.length; i += 2) {
+      const p = (list[i] as NodeView).person;
+      if (p) twins.set(p.firstName, (twins.get(p.firstName) ?? 0) + 1);
+    }
     const boxes = this.tagBoxes;
     boxes.length = 0;
     const hh = 8;
@@ -3160,17 +3350,15 @@ export class OrbitScene {
     ctx.globalAlpha = 1;
   }
 
-  /** A first name, with the last initial when someone else on the map shares it. */
+  /** A first name, with the last initial when someone else named on the map at the same time shares it. */
   private tagText(p: Person): string {
     let text = this.tagNames.get(p.id);
     if (text === undefined) {
-      let twins = 0;
-      for (const q of this.people.values()) if (q.firstName === p.firstName) twins++;
       const first = p.firstName || p.displayName;
-      text = twins > 1 && p.lastName ? `${first} ${p.lastName[0]}.` : first;
+      text = [first, p.lastName ? `${first} ${p.lastName[0]}.` : first];
       this.tagNames.set(p.id, text);
     }
-    return text;
+    return (this.tagTwins.get(p.firstName) ?? 0) > 1 ? text[1] : text[0];
   }
 
   /** The floating count chip ("7 at Stripe · 2 warm") that fades and slides in where the company's label was. */
@@ -3311,6 +3499,8 @@ export class OrbitScene {
       chip: this.chip.text,
       path: this.path.ids,
       pathDrawn: this.pathProgress(now),
+      pathOldDrawn:
+        this.pathOld.ids.length && now - this.pathOld.start < TIMING.retract ? this.oldPathDrawn(now) : 0,
       emphasized: this.views
         .filter((v) => !v.temp && v.alpha.to >= 0.9 && (v.glow.to > 0 || v.scale.to > 1.05))
         .map((v) => v.pid),
@@ -3329,6 +3519,7 @@ export class OrbitScene {
       hover: this.hovered(),
       spin: this.spin.value(now),
       tags: [...this.tags],
+      pending: this.views.filter((v) => v.pending).map((v) => v.pid),
       draws: this.draws,
     };
   }

@@ -33,19 +33,27 @@ export interface MapProps {
   /** the page shows a card next to the hovered person, so the map does not write their name above the dot too */
   personCard?: boolean;
   rotate?: boolean;
+  /**
+   * Changes whenever the student asks the map something new that the props above do not show (a search inside the
+   * introductions view): whoever was tapped or hovered is let go, so the answer is not hidden behind an older one.
+   */
+  question?: unknown;
+  /** the layout changed: how many people sit inside grey "+N" dots, so the page explains those only when there are some */
+  onAggregated?: (n: number) => void;
   /** what the map shows, for screen readers */
   label?: string;
 }
 
 /**
  * Where the person card goes. From 640 px up it is a 260 px card next to the dot (`x`, `y`: its top-left corner in
- * the map), so the eye does not have to cross the map; below that it spans the map's width at the top or bottom.
+ * the map), so the eye does not have to cross the map; below that it spans the map's width, `y` from the map's
+ * top: at the top, at the bottom, or just below or above the person when the top and the bottom would cover them.
  */
-export type CardPlace = { at: 'top' | 'bottom' } | { x: number; y: number };
+export type CardPlace = { at: 'top' | 'bottom'; y: number } | { x: number; y: number };
 
 /** The person card's size and inset in CSS px (MapPage draws it: 260 px wide from 640 px up, full width below). */
 export const CARD_W = 260;
-const CARD_H = 92;
+const CARD_H = 108;
 const CARD_INSET = 12;
 /** Room the phone's tab bar takes at the bottom of the window. */
 const TAB_BAR = 72;
@@ -53,10 +61,16 @@ const TAB_BAR = 72;
 /**
  * Where the person card goes: never over the person it is about, and over as few other people as it can. Next to
  * the dot on a wide map (the side away from the centre first, where the orbit is thinner), at the top or bottom of
- * a narrow one. On a touch screen a narrow map's card prefers the top, and goes to the bottom only when the bottom of
- * the map is on screen, clear of the tab bar.
+ * a narrow one. On a touch screen a narrow map's card prefers the top, and its bottom place is as low as the screen
+ * shows the map, clear of the tab bar.
+ *
+ * On a wide map the card weighs what it would hide: every dot under it (with a little room round the card, so a dot
+ * peeping out from under its edge counts too), the person's ties and the lines to them, and, for keyboard focus, the
+ * dots the arrow keys go to next, which must stay in sight. It may move a little further from the dot to clear them,
+ * out to a corner of the map when the orbit round the dot is crowded.
  */
-function cardPlace(scene: OrbitScene, id: string, canvas: HTMLCanvasElement, touch: boolean): CardPlace {
+function cardPlace(scene: OrbitScene, id: string, canvas: HTMLCanvasElement, how: HoverHow): CardPlace {
+  const touch = how === 'touch';
   const w = canvas.clientWidth;
   const h = canvas.clientHeight;
   const at = scene.positionOf(id);
@@ -65,16 +79,36 @@ function cardPlace(scene: OrbitScene, id: string, canvas: HTMLCanvasElement, tou
   if (w >= 640 && at) {
     const gap = 14;
     const you = scene.youAt();
-    // beside the dot (level with it, or with the dot at the card's top or bottom), or above or below it
-    const xs = { right: at.x + at.r + gap, left: at.x - at.r - gap - CARD_W };
-    const ys = [at.y - CARD_H / 2, at.y - 18, at.y + 18 - CARD_H];
-    const sides = at.x >= w / 2 ? [xs.right, xs.left] : [xs.left, xs.right];
+    // the dots the arrow keys go to from here: a keyboard user's next stop is never under the card
+    const next = new Set<string>();
+    if (how === 'keyboard')
+      for (const [dx, dy] of [
+        [1, 0],
+        [-1, 0],
+        [0, 1],
+        [0, -1],
+      ] as const) {
+        const n = scene.neighbour(id, dx, dy);
+        if (n && n !== id) next.add(n);
+      }
+    const nextAt = [...next].map((n) => scene.positionOf(n)).filter((p) => !!p);
+    // beside the dot (level with it, or with the dot at the card's top or bottom), or above or below it, and the
+    // same a step further out; then the corners of the map
     const cands: { x: number; y: number }[] = [];
-    for (const x of sides) for (const y of ys) cands.push({ x, y });
-    for (const y of [at.y + at.r + gap, at.y - at.r - gap - CARD_H])
-      for (const x of [at.x - CARD_W / 2, at.x - 24, at.x + 24 - CARD_W]) cands.push({ x, y });
+    for (const far of [0, 40, 90, 140]) {
+      const xs = { right: at.x + at.r + gap + far, left: at.x - at.r - gap - far - CARD_W };
+      const ys = [at.y - CARD_H / 2, at.y - 18, at.y + 18 - CARD_H];
+      const sides = at.x >= w / 2 ? [xs.right, xs.left] : [xs.left, xs.right];
+      for (const x of sides) for (const y of ys) cands.push({ x, y });
+      for (const y of [at.y + at.r + gap + far, at.y - at.r - gap - far - CARD_H])
+        for (const x of [at.x - CARD_W / 2, at.x - 24, at.x + 24 - CARD_W]) cands.push({ x, y });
+    }
+    for (const x of [0, w])
+      for (const y of [0, h]) cands.push({ x: x - (x ? CARD_W : 0), y: y - (y ? CARD_H : 0) });
     let best = cands[0]!;
     let bestScore = Number.POSITIVE_INFINITY;
+    const m = 6;
+    const far = (d: number) => d / 30 + Math.max(0, d - 60) / 8;
     cands.forEach((c, i) => {
       const x = Math.round(Math.min(Math.max(c.x, CARD_INSET), w - CARD_INSET - CARD_W));
       const y = Math.round(Math.min(Math.max(c.y, CARD_INSET), h - CARD_INSET - CARD_H));
@@ -84,12 +118,19 @@ function cardPlace(scene: OrbitScene, id: string, canvas: HTMLCanvasElement, tou
       const dx = Math.max(x - at.x, 0, at.x - x1);
       const dy = Math.max(y - at.y, 0, at.y - y1);
       const hidesYou = you.x + you.r > x && you.x - you.r < x1 && you.y + you.r > y && you.y - you.r < y1;
+      const hidesNext = nextAt.filter(
+        (p) => p.x + p.r + m > x && p.x - p.r - m < x1 && p.y + p.r + m > y && p.y - p.r - m < y1,
+      ).length;
       const score =
         (covers(x, y, x1, y1) ? 1000 : 0) +
-        (hidesYou ? 12 : 0) +
-        scene.dotsIn(x, y, x1, y1) +
-        Math.hypot(dx, dy) / 30 +
-        i * 0.25;
+        (hidesYou ? 80 : 0) +
+        hidesNext * 40 +
+        2 * scene.dotsIn(x - m, y - m, x1 + m, y1 + m, at) +
+        // the people the lines run to, and the lines, stay in sight
+        3 * scene.tiesIn(id, x, y, x1, y1) +
+        // close to the dot, and only a little further when that clears the people round it
+        far(Math.hypot(dx, dy)) +
+        i * 0.05;
       if (score < bestScore) {
         best = { x, y };
         bestScore = score;
@@ -97,24 +138,37 @@ function cardPlace(scene: OrbitScene, id: string, canvas: HTMLCanvasElement, tou
     });
     return best;
   }
+  // a narrow map: the card spans its width, at the top or the bottom, or just below the person when both of those
+  // would cover them. On a touch screen the bottom of the card stays above the tab bar and on the screen.
   const cw = w - 2 * CARD_INSET;
-  const bottomShown = !touch || canvas.getBoundingClientRect().bottom <= window.innerHeight - TAB_BAR;
-  const order: ('top' | 'bottom')[] = touch ? ['top', 'bottom'] : ['bottom', 'top'];
-  let best: 'top' | 'bottom' = order[0]!;
+  const rect = canvas.getBoundingClientRect();
+  const lowest = h - CARD_INSET - CARD_H;
+  const shownBottom = touch
+    ? Math.min(lowest, window.innerHeight - TAB_BAR - rect.top - CARD_INSET - CARD_H)
+    : lowest;
+  const cands: { at: 'top' | 'bottom'; y: number; cost: number }[] = [{ at: 'top', y: CARD_INSET, cost: 0 }];
+  // the bottom of the map, or as low as the screen shows it, as long as the card is still on the screen
+  if (shownBottom > CARD_INSET && rect.top + shownBottom >= 0)
+    cands.push({ at: 'bottom', y: Math.round(shownBottom), cost: touch ? 0.5 : -0.5 });
+  if (at) {
+    // just below the person (clear of the name under their dot), or just above them
+    const below = Math.round(at.y + at.r + 22);
+    if (below <= shownBottom) cands.push({ at: 'top', y: below, cost: 2 });
+    const above = Math.round(at.y - at.r - 8 - CARD_H);
+    if (above >= CARD_INSET && above <= shownBottom) cands.push({ at: 'top', y: above, cost: 2 });
+  }
+  let best = cands[0]!;
   let bestScore = Number.POSITIVE_INFINITY;
-  for (const side of order) {
-    if (side === 'bottom' && !bottomShown) continue;
-    const y0 = side === 'top' ? CARD_INSET : h - CARD_INSET - CARD_H;
-    // the person themselves, and the name above their dot, stay in sight
-    const hidden =
-      !!at && covers(CARD_INSET, y0, CARD_INSET + cw, y0 + CARD_H + (side === 'bottom' ? 26 : 0));
-    const score = (hidden ? 1000 : 0) + scene.dotsIn(CARD_INSET, y0, CARD_INSET + cw, y0 + CARD_H);
+  for (const c of cands) {
+    // the person themselves stay in sight
+    const hidden = covers(CARD_INSET, c.y, CARD_INSET + cw, c.y + CARD_H);
+    const score = (hidden ? 1000 : 0) + c.cost + scene.dotsIn(CARD_INSET, c.y, CARD_INSET + cw, c.y + CARD_H);
     if (score < bestScore) {
-      best = side;
+      best = c;
       bestScore = score;
     }
   }
-  return { at: best };
+  return { at: best.at, y: best.y };
 }
 
 const COARSE_QUERY = '(hover: none) and (pointer: coarse)';
@@ -210,6 +264,8 @@ export function OrbitMap({
   onHover,
   personCard = false,
   rotate = true,
+  question,
+  onAggregated,
   label,
 }: MapProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -235,6 +291,9 @@ export function OrbitMap({
     return l;
   }, [people, orgs, loading]);
   const overlaps = useMemo(() => countOverlaps(layout.nodes), [layout]);
+  const tellAggregated = useRef(onAggregated);
+  tellAggregated.current = onAggregated;
+  useEffect(() => tellAggregated.current?.(layout.aggregated), [layout]);
   const outsideWedges = useMemo(() => countOutsideWedges(layout), [layout]);
   const byId = useMemo(() => new Map(people.map((p) => [p.id, p])), [people]);
 
@@ -251,6 +310,7 @@ export function OrbitMap({
         hitTest: (x: number, y: number) => scene.hitTest(x, y),
         slot: (id: string) => scene.slotOf(id),
         stageColor: (id: string) => scene.stageColorOf(id),
+        neighbour: (id: string, dx: number, dy: number) => scene.neighbour(id, dx, dy),
       };
     let live = true;
     document.fonts?.ready.then(() => {
@@ -296,18 +356,16 @@ export function OrbitMap({
     hoverRef.current = { id, how };
     scene.setHover(id, how);
     if (changed)
-      onHover?.(
-        id,
-        id && canvasRef.current ? cardPlace(scene, id, canvasRef.current, how === 'touch') : undefined,
-      );
+      onHover?.(id, id && canvasRef.current ? cardPlace(scene, id, canvasRef.current, how) : undefined);
   };
-  // a tapped dot belongs to the view it was tapped in: a search, a route, a filter or the introductions view lets
-  // go of it (a mouse hover follows the pointer anyway)
+  // a tapped or hovered dot belongs to the view it was picked in: a search, a route, a filter or the introductions
+  // view lets go of it. The dots may move from under a resting pointer, and its card would point at empty space; the
+  // next move of the mouse hovers whoever is under it then. Keyboard focus stays: it moves only with the arrow keys.
   const webOn = !!web;
   useEffect(() => {
     const cur = hoverRef.current;
-    if (cur.id && cur.how === 'touch') setHover(undefined, 'touch');
-  }, [focus, webOn, highlightIds]);
+    if (cur.id && cur.how !== 'keyboard') setHover(undefined, cur.how);
+  }, [focus, webOn, highlightIds, question]);
   // a dot that left the map (a new layout) cannot stay hovered
   useEffect(() => {
     const cur = hoverRef.current;
@@ -348,7 +406,8 @@ export function OrbitMap({
       {/* biome-ignore lint/a11y/noInteractiveElementToNoninteractiveRole: the canvas is a keyboard-driven widget (arrow keys, Enter, Escape), so screen readers must pass keys through to it */}
       <canvas
         ref={canvasRef}
-        className="absolute left-0 top-0 block cursor-pointer touch-manipulation outline-none focus-visible:ring-2 focus-visible:ring-accent/50 rounded-[2px]"
+        // the focus outline is drawn inside the canvas: the map's frame clips anything drawn round it
+        className="absolute left-0 top-0 block cursor-pointer touch-manipulation outline-none focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent/60 rounded-[2px]"
         data-testid="orbit-canvas"
         data-overlaps={overlaps}
         data-outside-wedges={outsideWedges}

@@ -37,6 +37,7 @@ export function AppShell() {
   const [palette, setPalette] = useState(false);
   const { pathname } = useLocation();
   const mainRef = useRef<HTMLElement>(null);
+  const fillsScreen = pathname === '/map';
   // a new page starts at its top, not where the last one was scrolled to (before any card scrolls itself into view)
   useLayoutEffect(() => {
     void pathname;
@@ -175,7 +176,14 @@ export function AppShell() {
         </header>
         <DemoBanner />
         <main ref={mainRef} className="flex-1 min-h-0 overflow-y-auto scroll-thin">
-          <div className="max-w-[1120px] mx-auto px-4 md:px-8 py-6 pb-24 md:pb-8">
+          <div
+            className={cx(
+              'max-w-[1120px] mx-auto px-4 md:px-8 py-6 pb-24 md:pb-8',
+              // on a wide screen the map fills exactly the room under the header and the demo banner, so the page
+              // never scrolls under it (focusing the canvas or a route would otherwise jump the page)
+              fillsScreen && 'lg:h-full lg:flex lg:flex-col',
+            )}
+          >
             <Outlet />
           </div>
         </main>

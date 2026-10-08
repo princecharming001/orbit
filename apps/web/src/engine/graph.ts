@@ -7,6 +7,7 @@ import {
   describeUserTie,
   inferEdges,
   kShortestPaths,
+  MEDIUM_TIE,
   makeGraph,
   normalizeCompany,
   type PathTable,
@@ -148,7 +149,24 @@ export function reachPersonIn(g: WeightedGraph, targetPersonId: string, k = 3): 
     out.push(p);
     if (out.length >= k) break;
   }
-  return out;
+  // Someone the student is already tied to, however faintly (a LinkedIn connection, an email that went unanswered),
+  // can always be written to directly. Someone they know well is written to first, never asked for through others.
+  // A faint tie that warmer routes outrank comes last, so the panel can offer it and say why it is not the first
+  // suggestion, instead of leaving the student to wonder why they need two people to reach someone they know.
+  const tie = g.adj.get('user')?.get(targetPersonId);
+  if (!tie) return out;
+  const direct = out.find((p) => p.hops.length === 1) ?? toReachPath(g, ['user', targetPersonId]);
+  const others = out.filter((p) => p !== direct);
+  return tie.weight >= MEDIUM_TIE || out[0] === direct ? [direct, ...others] : [...others, direct];
+}
+
+/** Why the panels suggest routes through other people to someone the student already has on their map. */
+export const WARMER_ROUTES_WHY =
+  'You know these people only slightly, so a word from someone who knows them is likelier to get a reply than a note from you alone.';
+
+/** True when a route is the student writing straight to someone they barely know: a cold note. */
+export function isColdDirect(p: ReachPath): boolean {
+  return p.hops.length === 1 && p.hops[0]!.weight < MEDIUM_TIE;
 }
 
 export interface CompanyReach {

@@ -13,6 +13,7 @@ import {
   quadPartial,
   quadPoint,
   routeControls,
+  spreadApart,
   wedgeMid,
 } from './orbitGeometry';
 
@@ -200,5 +201,46 @@ describe('orbit geometry', () => {
     );
     for (let i = 1; i < around.length; i++) expect(around[i]!).toBeGreaterThan(around[i - 1]!);
     expect(openedAngle(2, mid, half, 1, false)).toBe(2);
+  });
+});
+
+describe('spreadApart', () => {
+  const dist = (a1: number, r1: number, a2: number, r2: number) =>
+    Math.hypot(Math.cos(a1) * r1 - Math.cos(a2) * r2, Math.sin(a1) * r1 - Math.sin(a2) * r2);
+
+  it('moves two neighbours on a ring apart until the gap fits, sharing the push', () => {
+    // two dots of radius 20 on the same ring, 30 apart centre to centre: they overlap
+    const r = 150;
+    const a = [0, 30 / r];
+    const off = spreadApart(a, [r, r], [20, 20], 26);
+    const d = dist(a[0]! + off[0]!, r, a[1]! + off[1]!, r);
+    expect(d).toBeGreaterThanOrEqual(66 - 0.5);
+    expect(off[0]!).toBeLessThan(0);
+    expect(off[1]!).toBeGreaterThan(0);
+    expect(off[0]! + off[1]!).toBeCloseTo(0, 6);
+  });
+
+  it('leaves dots that already have room where they are, including dots on rings far apart', () => {
+    expect(spreadApart([0, 1.2], [150, 150], [20, 20], 26)).toEqual([0, 0]);
+    // same angle, but one ring further out than the dots and the gap need
+    expect(spreadApart([0.3, 0.3], [100, 200], [20, 20], 26)).toEqual([0, 0]);
+  });
+
+  it('works across the ±π seam and keeps three side-by-side dots in their order', () => {
+    const r = 120;
+    const a = [-Math.PI + 0.05, Math.PI - 0.05, Math.PI - 0.25];
+    const off = spreadApart(a, [r, r, r], [14, 14, 14], 20);
+    const moved = a.map((x, i) => x + off[i]!);
+    for (let i = 0; i < 3; i++)
+      for (let j = i + 1; j < 3; j++)
+        expect(dist(moved[i]!, r, moved[j]!, r)).toBeGreaterThanOrEqual(48 - 0.5);
+    // the dot just past the seam moves on round, away from the other two
+    expect(off[0]!).toBeGreaterThan(0);
+    expect(off[2]!).toBeLessThan(0);
+  });
+
+  it('never moves a dot further than the cap', () => {
+    const off = spreadApart([0, 0.001], [50, 50], [40, 40], 30, 0.2);
+    for (const o of off) expect(Math.abs(o)).toBeLessThanOrEqual(0.2 + 1e-9);
   });
 });
