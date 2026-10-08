@@ -268,7 +268,7 @@ describe('recommendations: an organisation on the resume (UX round 6)', () => {
       id,
       displayName: name,
       firstName: name.split(' ')[0]!,
-      lastName: name.split(' ')[1],
+      lastName: name.split(' ')[1] ?? '',
       currentTitle: title,
       currentOrganizationRaw: org,
       currentOrganizationId: undefined,
