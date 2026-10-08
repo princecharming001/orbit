@@ -245,7 +245,7 @@ export function SuggestionCard({
       toast.push(
         yes
           ? {
-              text: `Added to your pipeline, with ${introducer?.firstName ?? 'them'} as the referrer.`,
+              text: `Added to your pipeline, noting that ${introducer?.firstName ?? 'they'} introduced you.`,
               tone: 'good',
             }
           : { text: 'Got it. Orbit will not ask about this thread again.' },
@@ -621,7 +621,13 @@ export function SuggestionCard({
       {/* the open draft uses the card's full width, not the column next to the avatar (a phone needs every pixel) */}
       {draft && !inFlight && open && (
         <div className="mt-3">
-          <DraftEditor draft={draft} onApprove={approve} busy={busy} onCancel={() => setOpen(false)} />
+          <DraftEditor
+            draft={draft}
+            onApprove={approve}
+            busy={busy}
+            onCancel={() => setOpen(false)}
+            focusOnOpen
+          />
         </div>
       )}
       {!['confirm_stage', 'confirm_merge', 'confirm_intro'].includes(s.kind) && !inFlight && (

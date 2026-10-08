@@ -74,3 +74,33 @@ describe('usability round 6: a chat moved on by hand counts for the relationship
     expect(strengthTier(back.strength)).toBe('weak');
   });
 });
+
+describe('usability round 6: "I sent it" can be taken back', () => {
+  it('puts the message, the chat and the cards back as they were', async () => {
+    const { addPersonByHand } = await import('./people');
+    const { draftMessage } = await import('./brief');
+    const { approveAndSend, confirmHandoff, restorePerson, snapshotPerson } = await import('./send');
+    const r = (await addPersonByHand(user.id, {
+      name: 'Dana Whit',
+      company: 'Lazard',
+      email: 'dana@lazard.com',
+    }))!;
+    const d = await draftMessage(user, r.person.id, 'outreach', 'gmail', null);
+    const body = d.bodyDraft.replace(/\[[^\]]+\]/g, 'We met at the Ross finance night.');
+    expect((await approveAndSend(user, d.id, body, d.subject)).ok).toBe(true);
+    const before = await snapshotPerson(user.id, r.person.id);
+    expect((await confirmHandoff(user, d.id)).ok).toBe(true);
+    expect((await db.outbound.get(d.id))!.status).toBe('sent');
+    expect(await db.chats.where('personId').equals(r.person.id).count()).toBe(1);
+    await restorePerson(user.id, before);
+    expect((await db.outbound.get(d.id))!.status).toBe('handed_off');
+    expect(await db.chats.where('personId').equals(r.person.id).count()).toBe(0);
+    expect(
+      await db.touchpoints
+        .where('personId')
+        .equals(r.person.id)
+        .filter((t) => t.kind === 'email_out')
+        .count(),
+    ).toBe(0);
+  });
+});

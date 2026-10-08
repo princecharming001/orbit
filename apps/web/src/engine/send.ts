@@ -665,6 +665,47 @@ export async function confirmHandoff(
   }
 }
 
+/**
+ * Everything "I sent it" can change for one person: the person (closeness), their chats and stage history, cards,
+ * messages, touchpoints, booked events and recommendations. Taken just before, it is what Undo puts back.
+ */
+export interface PersonSnapshot {
+  personId: string;
+  rows: { [table: string]: unknown[] };
+}
+const SNAPSHOT_TABLES = ['chats', 'suggestions', 'outbound', 'touchpoints', 'recommendations'] as const;
+export async function snapshotPerson(userId: string, personId: string): Promise<PersonSnapshot> {
+  const rows: PersonSnapshot['rows'] = {};
+  for (const t of SNAPSHOT_TABLES) rows[t] = await db.table(t).where('personId').equals(personId).toArray();
+  const chatIds = (rows.chats as CoffeeChat[]).map((c) => c.id);
+  rows.stageEvents = chatIds.length ? await db.stageEvents.where('chatId').anyOf(chatIds).toArray() : [];
+  rows.events = await db.events
+    .where('userId')
+    .equals(userId)
+    .filter((e) => e.attendeePersonIds.includes(personId))
+    .toArray();
+  rows.people = [await db.people.get(personId)].filter(Boolean);
+  return { personId, rows };
+}
+/** Put a person's rows back exactly as the snapshot holds them: rows added since go, rows changed are restored. */
+export async function restorePerson(userId: string, snap: PersonSnapshot): Promise<void> {
+  const now = await snapshotPerson(userId, snap.personId);
+  // chats opened since the snapshot take their stage history with them
+  const tables = [...SNAPSHOT_TABLES, 'stageEvents', 'events', 'people'] as const;
+  await db.transaction(
+    'rw',
+    tables.map((t) => db.table(t)),
+    async () => {
+      for (const t of tables) {
+        const keep = new Set((snap.rows[t] as { id: string }[]).map((r) => r.id));
+        const added = (now.rows[t] as { id: string }[]).filter((r) => !keep.has(r.id)).map((r) => r.id);
+        if (added.length) await db.table(t).bulkDelete(added);
+        if (snap.rows[t]!.length) await db.table(t).bulkPut(snap.rows[t]!);
+      }
+    },
+  );
+}
+
 let draining: Promise<unknown> | undefined;
 
 /**

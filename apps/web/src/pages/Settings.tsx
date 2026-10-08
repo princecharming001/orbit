@@ -797,29 +797,6 @@ function Integrations() {
         </ul>
       </Card>
       <ClaudeCard />
-      <Card>
-        <div className="font-medium">Demo data</div>
-        <p className="text-[13px] text-ink-2 mt-0.5">
-          Replace everything with the demo: a sample network with emails and a calendar, so you can see every
-          part of Orbit. What you added yourself is deleted.
-        </p>
-        <Button
-          className="mt-3"
-          variant="danger"
-          onClick={async () => {
-            const prompt =
-              demoResetPrompt(user) ??
-              'Reload the demo from scratch? Changes you made to the demo data are lost.';
-            if (!confirm(prompt)) return;
-            setBusy('Loading demo…');
-            await loadDemo({ reset: true });
-            setBusy(undefined);
-            location.assign(`${import.meta.env.BASE_URL}today`);
-          }}
-        >
-          Reset to demo
-        </Button>
-      </Card>
     </div>
   );
 }
@@ -1007,6 +984,9 @@ function Style() {
   );
   return (
     <div className="space-y-4">
+      <p className="text-[13px] text-ink-3">
+        Changes here save as you make them. Every draft stays yours to edit before it goes out.
+      </p>
       <Card>
         <div className="font-medium">How your drafts sound</div>
         <p className="text-[13px] text-ink-2 mt-0.5">
@@ -1103,7 +1083,7 @@ function Limits() {
         {savedAt ? <span className="text-good"> Saved.</span> : null}
       </p>
       <Card className="grid sm:grid-cols-2 gap-4 items-start">
-        <div className="sm:col-span-2 font-medium -mb-1">Sending limits</div>
+        <div className="sm:col-span-2 font-medium -mb-1">Weekly goal</div>
         <div>
           <Label htmlFor="lim-week">First messages a week</Label>
           <Input
@@ -1324,6 +1304,39 @@ function Privacy() {
           </Button>
         </div>
       </Card>
+      <DemoResetCard />
     </div>
+  );
+}
+
+/** Replace everything with the demo: under Data & privacy, since it deletes what the student entered. */
+function DemoResetCard() {
+  const user = useSession().user!;
+  const [busy, setBusy] = useState(false);
+  return (
+    <Card>
+      <div className="font-medium">Demo data</div>
+      <p className="text-[13px] text-ink-2 mt-0.5">
+        Replace everything with the demo: a sample network with emails and a calendar, so you can see every
+        part of Orbit. What you added yourself is deleted.
+      </p>
+      <Button
+        className="mt-3"
+        variant="danger"
+        disabled={busy}
+        onClick={async () => {
+          const prompt =
+            demoResetPrompt(user) ??
+            'Reload the demo from scratch? Changes you made to the demo data are lost.';
+          if (!confirm(prompt)) return;
+          setBusy(true);
+          await loadDemo({ reset: true });
+          location.assign(`${import.meta.env.BASE_URL}today`);
+        }}
+        data-testid="settings-reset-demo"
+      >
+        {busy ? 'Loading demo…' : 'Reset to demo'}
+      </Button>
+    </Card>
   );
 }

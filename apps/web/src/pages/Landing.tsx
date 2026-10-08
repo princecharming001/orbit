@@ -167,7 +167,7 @@ export function Landing() {
           {onboarded && !isDemo && (
             <p className="mt-3 text-[13px] text-ink-2">
               Your data on this browser belongs to {user?.fullName || 'your profile'}. To try the demo
-              instead, use Reset to demo in Settings under LinkedIn, resume &amp; AI.
+              instead, use Reset to demo in Settings under Data &amp; privacy.
             </p>
           )}
           <p className="mt-3 text-[12px] text-ink-3">

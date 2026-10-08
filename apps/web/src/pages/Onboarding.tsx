@@ -171,7 +171,19 @@ export function Onboarding() {
           </ol>
           {STEPS.some((s, i) => status(s, i) === 'skipped') && (
             <p className="mt-2 text-[12px] text-ink-3">
-              Skipped steps stay open: add a resume or your LinkedIn connections any time in Settings.
+              Skipped steps stay open: add{' '}
+              {STEPS.filter((s, i) => status(s, i) === 'skipped')
+                .map((s) =>
+                  s === 4
+                    ? 'a resume'
+                    : s === 6
+                      ? 'your LinkedIn connections'
+                      : s === 5
+                        ? 'Google'
+                        : TITLES[s],
+                )
+                .join(' or ')}{' '}
+              any time in Settings.
             </p>
           )}
         </div>

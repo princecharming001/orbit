@@ -43,7 +43,8 @@ export function DemoBanner() {
         <div className="space-y-3 text-[13.5px] text-ink-2">
           <p>
             Orbit clears the demo data from this browser and walks you through your own setup. It takes about
-            two minutes, and you can come back to the demo any time from the home page.
+            two minutes. To see the demo again later, use Reset to demo in Settings under Data &amp; privacy;
+            it replaces what you entered, so Orbit asks first.
           </p>
           <div className="flex flex-wrap gap-2 pt-1">
             <Button variant="primary" onClick={start} disabled={busy} data-testid="demo-start-confirm">

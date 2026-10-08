@@ -21,8 +21,10 @@ import {
   googleSendActive,
   handoffLink,
   isConnectionNote,
+  restorePerson,
   revertHandoff,
   reviewDraft,
+  snapshotPerson,
   undoQueued,
 } from '../engine/send';
 import { useSession } from '../state/session';
@@ -70,23 +72,33 @@ const INPUT_PROMPT: Record<PromptNeed, { label: string; hint: string; placeholde
   },
 };
 
+/** How the student last used the page: a key press or a pointer (mouse, finger). */
+let lastInput: 'keyboard' | 'pointer' = 'pointer';
+if (typeof window !== 'undefined') {
+  window.addEventListener('keydown', () => (lastInput = 'keyboard'), true);
+  window.addEventListener('pointerdown', () => (lastInput = 'pointer'), true);
+}
+
 export function DraftEditor({
   draft,
   onApprove,
   onCancel,
   busy,
   approveLabel,
+  focusOnOpen,
 }: {
   draft: OutboundMessage;
   /** resolves to an error to show inline when the message was not approved */
   onApprove: (body: string, subject?: string) => Promise<string | undefined>;
   /**
-   * Close the editor. An edited draft asks first (keep or discard the changes). `kept` says whether the draft still
+   * Close the editor. An edited draft keeps the edits and offers Undo changes in a toast. `kept` says whether the draft still
    * holds the student's own words afterwards, so a page can drop a draft nobody wrote anything in.
    */
   onCancel?: (r: { kept: boolean }) => void;
   busy?: boolean;
   approveLabel?: string;
+  /** opened by the student's own click or key press: the cursor goes into the message, where the keyboard was */
+  focusOnOpen?: boolean;
 }) {
   const { user } = useSession();
   const toast = useToast();
@@ -103,6 +115,12 @@ export function DraftEditor({
     el.style.height = 'auto';
     el.style.height = `${el.scrollHeight + 2}px`;
   }, [body, bodyId, draft.status]);
+  // the button that opened the editor is gone, so focus would fall back to the page: put it in the message instead
+  // (only after a key press: a tap on a phone would pop the keyboard up over the draft the student wants to read)
+  useEffect(() => {
+    if (!focusOnOpen || lastInput !== 'keyboard') return;
+    (document.getElementById(bodyId) as HTMLTextAreaElement | null)?.focus({ preventScroll: true });
+  }, [focusOnOpen, bodyId]);
   const [subject, setSubject] = useState(draft.subject ?? '');
   const [inputs, setInputs] = useState<Record<string, string>>({});
   const [regenerating, setRegenerating] = useState(false);
@@ -152,12 +170,11 @@ export function DraftEditor({
     body: draft.bodyFinal ?? draft.bodyDraft,
     subject: draft.subject ?? '',
   }));
-  const [confirmingClose, setConfirmingClose] = useState(false);
   const [confirmingRedraft, setConfirmingRedraft] = useState(false);
   const [copying, setCopying] = useState(false);
   // edits are kept as they are typed, so leaving the page (to check LinkedIn) and coming back loses nothing; the
   // latest text is also written when the editor closes, so a change made just before leaving is never dropped
-  const latest = useRef({ body, subject, draft, discard: false });
+  const latest = useRef({ body, subject, draft });
   latest.current = { ...latest.current, body, subject, draft };
   useEffect(() => {
     if (draft.status !== 'draft') return;
@@ -167,7 +184,7 @@ export function DraftEditor({
   useEffect(() => {
     const flush = () => {
       const l = latest.current;
-      if (!l.discard && l.draft.status === 'draft') saveEdits(l.draft, l.body, l.subject);
+      if (l.draft.status === 'draft') saveEdits(l.draft, l.body, l.subject);
     };
     // the tab closing or going to the background (a phone switching apps) also saves what was typed
     const hidden = () => document.visibilityState === 'hidden' && flush();
@@ -238,32 +255,37 @@ export function DraftEditor({
         setError(r.error);
         return;
       }
-      toast.push({
-        text: (await copied)
-          ? 'Copied the message. Paste it into Gmail and send it, then come back and press I sent it.'
-          : 'Select the text in the box and copy it, send it from Gmail, then press I sent it.',
-        ttl: 8000,
-      });
+      // the line under the message says what to do next; a toast repeating it would only cover the page
+      if (!(await copied))
+        toast.push({
+          text: 'Select the text in the box and copy it, send it from Gmail, then press I sent it.',
+          ttl: 8000,
+        });
     } finally {
       setCopying(false);
     }
   };
   const dirty = body !== opened.body || subject !== opened.subject;
-  const close = (keep: boolean) => {
-    setConfirmingClose(false);
-    if (keep) {
-      saveEdits(draft, body, subject);
-      onCancel?.({ kept: true });
+  const close = () => {
+    saveEdits(draft, body, subject);
+    onCancel?.({ kept: true });
+  };
+  // Close keeps what was typed (it is saved as it is typed anyway) and offers to undo the edits, rather than asking a
+  // question whose obvious answer is "keep them"
+  const cancel = () => {
+    if (!dirty) {
+      onCancel?.({ kept: !!draft.bodyFinal });
       return;
     }
-    // put back what was there when the editor opened, and make sure closing does not save the discarded text
-    latest.current.discard = true;
-    saveEdits(draft, opened.body, opened.subject);
-    onCancel?.({ kept: opened.body.trim() !== draft.bodyDraft.trim() });
-  };
-  const cancel = () => {
-    if (dirty) setConfirmingClose(true);
-    else onCancel?.({ kept: !!draft.bodyFinal });
+    close();
+    toast.push({
+      text: 'Your changes are kept in the draft.',
+      action: {
+        label: 'Undo changes',
+        onClick: () => saveEdits(draft, opened.body, opened.subject),
+      },
+      ttl: 8000,
+    });
   };
   const defaultLabel = isLinkedIn
     ? connectionNote
@@ -328,7 +350,11 @@ export function DraftEditor({
           {needs.map((n) => (
             <div key={n} className="mb-2 last:mb-0">
               <div className="font-medium">{INPUT_PROMPT[n].label}</div>
-              <div className="text-ink-3 text-[12px] mb-1.5">{INPUT_PROMPT[n].hint}</div>
+              <div className="text-ink-3 text-[12px] mb-1.5" data-testid={`draft-input-hint-${n}`}>
+                {edited && !hasPlaceholder
+                  ? 'You wrote it into the message yourself, so the send buttons are on. Or type it here and Orbit redrafts around it.'
+                  : INPUT_PROMPT[n].hint}
+              </div>
               <Input
                 value={inputs[n] ?? ''}
                 onChange={(e) => setInputs((v) => ({ ...v, [n]: e.target.value }))}
@@ -440,7 +466,13 @@ export function DraftEditor({
               : `${body.length} characters`}
           </span>
         )}
-        <span>{draft.generatedBy === 'llm' ? 'Drafted with Claude' : 'Drafted by Orbit'}</span>
+        <span>
+          {edited
+            ? 'Edited by you'
+            : draft.generatedBy === 'llm'
+              ? 'Drafted with Claude'
+              : 'Drafted by Orbit'}
+        </span>
         {edited && (
           <button
             className="underline underline-offset-2"
@@ -497,31 +529,6 @@ export function DraftEditor({
           </Button>
         </span>
       </div>
-      {confirmingClose && (
-        <div
-          className="mt-2 rounded-lg border border-line bg-canvas-2 p-3 text-[13px]"
-          role="alertdialog"
-          aria-label="Keep your changes?"
-          data-testid="draft-close-confirm"
-        >
-          <p className="font-medium">Keep your changes to this draft?</p>
-          <p className="text-ink-3 text-[12px] mt-0.5">
-            Kept changes stay in the draft until you send it. Discarding puts back the text from when you
-            opened it.
-          </p>
-          <div className="mt-2 flex flex-wrap gap-2">
-            <Button size="sm" variant="primary" onClick={() => close(true)} data-testid="draft-keep">
-              Keep changes
-            </Button>
-            <Button size="sm" onClick={() => close(false)} data-testid="draft-discard">
-              Discard changes
-            </Button>
-            <Button size="sm" variant="ghost" onClick={() => setConfirmingClose(false)}>
-              Keep editing
-            </Button>
-          </div>
-        </div>
-      )}
       {!isLinkedIn && direct === false && !approveLabel && (
         <p className="mt-1.5 text-[12px] text-ink-3 text-right" data-testid="draft-mail-hint">
           Opens your mail app with the email to {first}. Gmail in the browser? Use Copy text.
@@ -645,6 +652,8 @@ export function OutboxStatus({ draft, onClose }: { draft: OutboundMessage; onClo
   } else if (draft.status === 'sending') {
     line = `Sending to ${name}.`;
   } else if (draft.status === 'handed_off') {
+    // on a phone the words say tap, not click
+    const coarse = typeof window !== 'undefined' && !!window.matchMedia?.('(pointer: coarse)').matches;
     line =
       draft.handoffVia === 'copy'
         ? draft.externalThreadId
@@ -655,7 +664,7 @@ export function OutboxStatus({ draft, onClose }: { draft: OutboundMessage; onClo
             ? `Opened in your mail app as a new email to ${name}. Send it there, then press I sent it. Nothing opened? Copy the text into Gmail.`
             : `Opened in your mail app, addressed to ${name}. Send it there, then press I sent it. Nothing opened? Copy the text into Gmail.`
           : link?.via === 'linkedin_connect'
-            ? `On ${name}'s LinkedIn profile, click Connect, then Add a note, and paste the note. In the LinkedIn phone app, tap More, then Personalize invite, so the request does not go out without it. Press I sent it once the request is out.`
+            ? `On ${name}'s LinkedIn profile, ${coarse ? 'tap' : 'click'} Connect, then Add a note, and paste the note. In the LinkedIn phone app, tap More, then Personalize invite, so the request does not go out without it. Press I sent it once the request is out.`
             : `Paste the message into LinkedIn and send it to ${name}, then press I sent it.`;
     actions = (
       <>
@@ -665,6 +674,8 @@ export function OutboxStatus({ draft, onClose }: { draft: OutboundMessage; onClo
           disabled={working}
           onClick={() =>
             act(async () => {
+              // a tap before the message really went out can be taken back: everything it changed is put back
+              const before = await snapshotPerson(user.id, draft.personId);
               const r = await confirmHandoff(user, draft.id);
               toast.push(
                 r.ok
@@ -673,7 +684,16 @@ export function OutboxStatus({ draft, onClose }: { draft: OutboundMessage; onClo
                         ? `Logged as sent. Your chat with ${name} is booked for ${new Date(r.scheduledAt).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}, under Coming up on Today.`
                         : `Logged as sent to ${name}.`,
                       tone: 'good',
-                      ttl: r.scheduledAt ? 8000 : undefined,
+                      ttl: 8000,
+                      action: {
+                        label: 'Undo',
+                        onClick: async () => {
+                          await restorePerson(user.id, before);
+                          toast.push({
+                            text: `Not sent after all. The message to ${name} is waiting again.`,
+                          });
+                        },
+                      },
                     }
                   : { text: r.error, tone: 'bad' },
               );

@@ -278,7 +278,7 @@ export function Discover() {
                       // someone the student knows can introduce them: that beats a warm-up with a stranger
                       <Link to={`/map?reach=${p.id}`} data-testid="rec-intro">
                         <Button variant="primary" size="sm">
-                          Ask {introducer.firstName} for an intro
+                          See how {introducer.firstName} can introduce you
                         </Button>
                       </Link>
                     ) : null}

@@ -1,4 +1,4 @@
-import { RELATIONSHIP_LABELS, STAGE_LABELS } from '@orbit/core';
+import { interactionCount, type Person, RELATIONSHIP_LABELS, STAGE_LABELS } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
@@ -8,6 +8,16 @@ import { db } from '../db/schema';
 import { useSession } from '../state/session';
 import { Avatar, Chip, EmptyState, Input, PageHeader, relDate, Select } from '../ui';
 import { StrengthDots } from './Pipeline';
+
+/**
+ * When the student last actually dealt with them: a message, a meeting, a note. Becoming LinkedIn connections (the
+ * date in the LinkedIn file) or sharing a CC line is not a touch.
+ */
+function lastTouch(p: Person): string | undefined {
+  const b = p.strengthBreakdown;
+  if (!b) return p.lastInteractionAt;
+  return b.lastConversationAt ?? (interactionCount(b.counts) > 0 ? p.lastInteractionAt : undefined);
+}
 
 export function People() {
   const { userId } = useSession();
@@ -56,7 +66,7 @@ export function People() {
         sort === 'strength'
           ? b.strength - a.strength
           : sort === 'recent'
-            ? (b.lastInteractionAt ?? '').localeCompare(a.lastInteractionAt ?? '')
+            ? (lastTouch(b) ?? '').localeCompare(lastTouch(a) ?? '')
             : a.displayName.localeCompare(b.displayName),
       );
   }, [people, q, filter, sort, activeChat, targetNames]);
@@ -190,7 +200,7 @@ export function People() {
                       <td className="px-3">
                         <StrengthDots v={p.strength} />
                       </td>
-                      <td className="px-3 text-ink-2 whitespace-nowrap">{relDate(p.lastInteractionAt)}</td>
+                      <td className="px-3 text-ink-2 whitespace-nowrap">{relDate(lastTouch(p))}</td>
                       <td className="px-3">
                         {c ? <Chip>{STAGE_LABELS[c.stage]}</Chip> : <span className="text-ink-3">—</span>}
                       </td>
@@ -216,7 +226,7 @@ export function People() {
               <LinkedInImportButton />
               <Link
                 to="/settings/integrations"
-                className="self-center text-[13px] text-ink-3 underline underline-offset-2 hover:text-ink"
+                className="self-center text-[13px] text-accent underline underline-offset-2 hover:text-ink"
               >
                 How to get the LinkedIn file
               </Link>

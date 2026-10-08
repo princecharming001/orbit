@@ -117,7 +117,9 @@ test.describe('Orbit demo flow', () => {
     // a low-key question: two answers, no snooze or dismiss row
     await expect(card.getByRole('button', { name: /snooze/i })).toHaveCount(0);
     await card.getByRole('button', { name: 'Yes', exact: true }).click();
-    await expect(page.getByText(`Added to your pipeline, with ${introducer} as the referrer.`)).toBeVisible();
+    await expect(
+      page.getByText(`Added to your pipeline, noting that ${introducer} introduced you.`),
+    ).toBeVisible();
     await expect(card).toHaveCount(0);
     // exactly what a detected introduction gives: the reply-while-fresh card, credited to the introducer
     await expect(
@@ -1101,19 +1103,17 @@ async function addByHand(
 }
 
 test.describe("Never losing the student's work, and honest hand-offs", () => {
-  test('Cancel on an edited draft asks first: keep keeps the words, discard puts the text back', async ({
-    page,
-  }) => {
+  test('Close on an edited draft keeps the words, and Undo changes puts the text back', async ({ page }) => {
     await loadDemo(page);
     const card = page.getByTestId('suggestion-follow_up_bump').first();
     await card.getByTestId('draft-review').click();
     const box = card.getByLabel('Message body');
     const original = await box.inputValue();
     await box.fill(`${original} PS: loved the retries post.`);
+    await expect(card.getByText('Edited by you')).toBeVisible();
     await card.getByTestId('draft-cancel').click();
-    await expect(card.getByTestId('draft-close-confirm')).toBeVisible();
-    await card.getByTestId('draft-keep').click();
     await expect(box).toBeHidden();
+    await expect(page.getByTestId('toasts')).toContainText(/changes are kept/i);
     await card.getByTestId('draft-review').click();
     await expect(box).toHaveValue(/PS: loved the retries post\.$/);
     // after a reload too
@@ -1122,13 +1122,16 @@ test.describe("Never losing the student's work, and honest hand-offs", () => {
     await expect(box).toHaveValue(/PS: loved the retries post\.$/);
     await box.fill(`${original} Another line.`);
     await card.getByTestId('draft-cancel').click();
-    await card.getByTestId('draft-discard').click();
+    await page
+      .getByTestId('toasts')
+      .getByRole('button', { name: /undo changes/i })
+      .click();
     await card.getByTestId('draft-review').click();
     await expect(box).toHaveValue(/PS: loved the retries post\.$/);
-    // closing without a change asks nothing
+    // closing without a change says nothing
     await card.getByTestId('draft-cancel').click();
-    await expect(card.getByTestId('draft-close-confirm')).toHaveCount(0);
     await expect(box).toBeHidden();
+    await expect(page.getByTestId('toasts')).not.toContainText(/changes are kept/i);
   });
 
   test('Copy text hands off like the mail app: the message waits for "I sent it", then counts as sent', async ({
@@ -1265,16 +1268,16 @@ test.describe("Never losing the student's work, and honest hand-offs", () => {
 
 test.describe('Phone: the same flows fit 390px', () => {
   test.use({ viewport: { width: 390, height: 844 } });
-  test('the cancel prompt and a copied hand-off fit the screen', async ({ page }) => {
+  test('closing an edited draft and its Undo fit the screen', async ({ page }) => {
     await loadDemo(page);
     const card = page.getByTestId('suggestion-follow_up_bump').first();
     await card.getByTestId('draft-review').click();
     const box = card.getByLabel('Message body');
     await box.fill(`${await box.inputValue()} PS.`);
     await card.getByTestId('draft-cancel').click();
-    const confirm = card.getByTestId('draft-close-confirm');
-    await expect(confirm).toBeVisible();
-    const b = (await confirm.boundingBox())!;
+    const toast = page.getByTestId('toasts').getByRole('status');
+    await expect(toast).toBeVisible();
+    const b = (await toast.boundingBox())!;
     expect(b.x).toBeGreaterThanOrEqual(0);
     expect(b.x + b.width).toBeLessThanOrEqual(390);
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
@@ -1462,7 +1465,8 @@ test.describe('Usability round 5: one draft, kept edits, saved settings, chats t
     await loadDemo(page);
     await page.goto('discover');
     const intro = page.getByTestId('rec-intro').first();
-    await expect(intro).toHaveText(/^Ask \S+ for an intro$/);
+    // it opens the routes on the Map, so it says that, not that it drafts the ask
+    await expect(intro).toHaveText(/^See how \S+ can introduce you$/);
     const card = page
       .getByTestId('rec-card')
       .filter({ has: page.getByTestId('rec-write-now') })

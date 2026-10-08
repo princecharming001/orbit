@@ -253,9 +253,9 @@ export function Pipeline() {
         dismissed={hints.seen('pipeline') || chats.length === 0 || view !== 'board'}
         onDismiss={hints.dismiss}
       >
-        The stages run in order, from people to contact to staying in touch. Drag a card or use its Move to
-        menu to change the stage. When a card has a chip, that is the next thing to do; it opens that card on
-        Today.
+        Each column is a stage, in order: someone to write to, then message sent, replied, chat booked, chat
+        done, thanked and staying in touch. To change a card's stage, drag it or use its Move to menu. When a
+        card has a chip, that is the next thing to do; it opens that card on Today.
       </FirstRunHint>
       <details className="mb-4 text-[13px]" data-testid="stage-legend">
         <summary className="cursor-pointer text-ink-2 w-fit">What the stages mean</summary>
