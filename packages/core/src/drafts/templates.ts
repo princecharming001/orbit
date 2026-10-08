@@ -1333,7 +1333,12 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       if (op) {
         line2 = sameThing
           ? ` Thanks also for ${op}.`
-          : ` Thanks also for ${op}; I'll follow up ${/\b(posting|role|opening|application|req)\b/i.test(op) ? "once it's live" : 'when the timing is right'}.`;
+          : /\b(posting|role|opening|application|req)\b/i.test(op)
+            ? ` Thanks also for ${op}; I'll follow up once it's live.`
+            : // something they will send or share: there is nothing for the student to time, only to be glad of
+              /^offering to (send|share|forward|email|pass along) (me|over)\b/i.test(op)
+              ? ` Thanks also for ${op}; I'd really appreciate it.`
+              : ` Thanks also for ${op}; I'll follow up when the timing is right.`;
         cite(offer);
       }
       if (promise) claims.push({ text: `promise: ${promise}`, kind: 'logistics' });

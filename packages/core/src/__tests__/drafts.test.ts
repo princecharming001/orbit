@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { expandShorthand, pointPhrase, roleNoun } from '../drafts/phrasing';
+import { expandShorthand, offerPhrase, pointPhrase, roleNoun } from '../drafts/phrasing';
 import { financeFirmKind, sectorOf, seniorityOf, yearLabel } from '../drafts/sector';
 import {
   BANNED_PHRASES,
@@ -663,6 +663,17 @@ describe('audit round 1 regressions', () => {
     expect(clause("Alina's team is hiring in January", p)?.text).toBe('your team is hiring in January');
     expect(clause('The team is launching a new product in November', p)?.text).toBe(
       'your team is launching a new product in November',
+    );
+    // a possessive "her" in a note about her is theirs; an object "her" or someone else's stays
+    const a = { firstName: 'Aisha', fullName: 'Aisha Bello' };
+    expect(clause('She offered to send me her old interview prep doc', a)?.text).toBe(
+      'you offered to send me your old interview prep doc',
+    );
+    expect(clause('She offered to introduce me to Jenna and her team', a)?.text).toBe(
+      'you offered to introduce me to Jenna and her team',
+    );
+    expect(offerPhrase(clause('She offered to send me her old interview prep doc', a))).toBe(
+      'offering to send me your old interview prep doc',
     );
     // a third party, a question, or a fact about the student cannot be addressed to the person
     expect(clause('Mei said the team is great', p)).toBeUndefined();

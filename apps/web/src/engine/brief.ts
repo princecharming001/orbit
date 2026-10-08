@@ -34,6 +34,7 @@ import {
   validateDraft,
   WHY_THEM_GAP,
   warmUpProgress,
+  whenLabel,
   whyThemSentence,
 } from '@orbit/core';
 import { addTouchpoint, feedback, notify, recomputeAllStrengths } from '../db/repo';
@@ -980,7 +981,16 @@ export async function draftForSuggestion(
   if (!person) return undefined;
   const channel: 'gmail' | 'linkedin' =
     (s.payload.channel as 'gmail' | 'linkedin' | undefined) ?? (person.primaryEmail ? 'gmail' : 'linkedin');
-  const { out, generatedBy, ctx } = await materializeDraft(user, person, kind, channel, s);
+  const { out, generatedBy, ctx } = await materializeDraft(
+    user,
+    person,
+    kind,
+    channel,
+    s,
+    {},
+    undefined,
+    now,
+  );
   const chat = s.chatId && kind !== 'report_back' ? await db.chats.get(s.chatId) : undefined;
   const { externalThreadId, inReplyTo } = await threadFor(kind, chat, ctx);
   const msg: OutboundMessage = {
@@ -1232,6 +1242,72 @@ export async function refreshPendingDrafts(
   return changed;
 }
 
+/**
+ * A draft says when things happened in words that depend on the day ("Thank you for making time yesterday"). On a
+ * new day, a draft written on an earlier one is rewritten with today's words; a draft the student edited keeps their
+ * text and only has the old day word swapped for the new one ("yesterday" becomes "on Monday").
+ */
+export async function refreshDatedDrafts(user: User, now = new Date()): Promise<number> {
+  const tz = user.timezone || 'UTC';
+  const today = todayKey(now, tz);
+  const drafts = await db.outbound
+    .where('userId')
+    .equals(user.id)
+    .filter((o) => o.status === 'draft' && !!o.suggestionId)
+    .toArray();
+  let changed = 0;
+  for (const d of drafts) {
+    const since = new Date(d.draftedAt ?? d.createdAt);
+    if (todayKey(since, tz) === today) continue;
+    const s = await db.suggestions.get(d.suggestionId!);
+    if (s?.status !== 'pending') continue;
+    const person = await db.people.get(d.personId);
+    if (!person) continue;
+    const chat = d.chatId ? await db.chats.get(d.chatId) : undefined;
+    if (d.bodyFinal === undefined) {
+      const { out, generatedBy } = await materializeDraft(
+        user,
+        person,
+        d.kind,
+        d.channel as 'gmail' | 'linkedin',
+        s,
+        {},
+        chat,
+        now,
+      );
+      if (out.needsInput.length > (d.needsInput?.length ?? 0)) continue;
+      const body = bodyFor(out, d.channel as 'gmail' | 'linkedin', d.kind, !!person.linkedinConnectedOn);
+      await db.outbound.update(d.id, {
+        draftedAt: now.toISOString(),
+        ...(body === d.bodyDraft
+          ? {}
+          : {
+              bodyDraft: body,
+              subject: d.externalThreadId ? d.subject : (out.subject ?? d.subject),
+              generatedBy,
+              claims: out.claims,
+              opening: out.opening,
+            }),
+      });
+      if (body !== d.bodyDraft) changed++;
+      continue;
+    }
+    // edited: swap only the day word of the meeting it thanks them for
+    const event = chat?.scheduledEventId ? await db.events.get(chat.scheduledEventId) : undefined;
+    const meetingAt = event && new Date(event.startAt) <= now ? event.startAt : chat?.completedAt;
+    const before = whenLabel(meetingAt, since, tz);
+    const after = whenLabel(meetingAt, now, tz);
+    let bodyFinal = d.bodyFinal;
+    if (before && after && before !== after && (d.kind === 'thank_you' || d.kind === 'referral_ask')) {
+      const re = new RegExp(`\\b${before.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
+      bodyFinal = bodyFinal.replace(re, after);
+    }
+    await db.outbound.update(d.id, { draftedAt: now.toISOString(), bodyFinal });
+    if (bodyFinal !== d.bodyFinal) changed++;
+  }
+  return changed;
+}
+
 /** ⚡ rules: run the rule engine for one chat/person right away (reply received, note ingested, event changed). */
 export async function evaluateImmediateSuggestions(
   userId: string,
@@ -1469,6 +1545,7 @@ export async function generateBrief(user: User, kind: Brief['kind'], now = new D
   await addConfirmationCards(user.id, now);
   for (const s of sugg)
     if (!s.outboundMessageId && DRAFT_KIND[s.kind]) await draftForSuggestion(user, s, now);
+  await refreshDatedDrafts(user, now);
   const upcoming = inp.events.filter(
     (e) =>
       e.status !== 'cancelled' &&

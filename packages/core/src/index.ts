@@ -2,6 +2,7 @@ export * from './demo/seed';
 export { expandShorthand } from './drafts/phrasing';
 export * from './drafts/sector';
 export * from './drafts/templates';
+export { whenLabel } from './drafts/time';
 export * from './drafts/validate';
 export * from './email/triage';
 export * from './entity/resolve';

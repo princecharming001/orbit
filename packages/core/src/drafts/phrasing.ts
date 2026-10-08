@@ -275,6 +275,10 @@ function genericYouToI(s: string): string {
     .replace(/\byou\b/gi, 'I');
 }
 
+/** Words after an object "her" ("send her my resume", "ask her about it"), not a possessive one ("her team"). */
+const HER_AS_OBJECT =
+  /^(about|to|for|with|if|whether|that|and|or|but|when|before|after|at|on|in|by|from|again|directly|a|an|the|my|some|any|this|these|those|how|what|why|where|who|so|back|up|out|once|soon|later|next|today|tomorrow|know|first|too|as|over)$/i;
+
 /**
  * Convert a stored fact ("They recommended focusing on ...", "Alina offered to refer me ...") into a clause
  * addressed to the person ("you recommended focusing on ...", "you offered to refer me ..."). Returns undefined when
@@ -356,7 +360,7 @@ export function clause(
       // "her colleague" in a note about her is the person's colleague: "your colleague" in a message to her
       .replace(
         /\bher (colleagues?|team(mates?)?|manager|boss|firm|group|office|company|friends?|classmates?|recruiters?|contacts?|old team|former team|desk|org)\b/gi,
-        'your $1',
+        (m: string, noun: string, _t: string, at: number) => (orgBefore(at) ? m : `your ${noun}`),
       )
       // "update her after first-round applications": the person is the one to update
       .replace(
@@ -365,6 +369,11 @@ export function clause(
       )
       .replace(/\b(themselves|himself|herself)\b/gi, 'yourself')
       .replace(/^you are\b/, "you're");
+    // any other possessive "her" ("offered to send me her old prep doc") is theirs too, unless someone else is named
+    // before it in the clause ("introduced me to Jenna and her team" keeps Jenna's team)
+    t = t.replace(/\bher(\s+)([A-Za-z'-]+)/g, (m, sp: string, next: string, at: number) =>
+      HER_AS_OBJECT.test(next) || orgBefore(at) ? m : `your${sp}${next}`,
+    );
     if (names.length) t = t.replace(new RegExp(`\\b${nameRe}\\b`, 'g'), 'you');
   }
   t = t.replace(/\bthe (team|group|office|desk)\b(?= (is|are|was|were|will|has|plans|wants))/i, 'your $1');

@@ -633,6 +633,8 @@ export interface OutboundMessage {
   claims?: DraftClaim[];
   needsInput?: DraftNeed[];
   opening?: string;
+  /** when the draft's words were last written: a draft that says "yesterday" is rewritten the next day */
+  draftedAt?: string;
   createdAt: string;
 }
 
