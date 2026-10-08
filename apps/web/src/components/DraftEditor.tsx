@@ -248,11 +248,12 @@ export function DraftEditor({
     (draft.needsInput ?? []).includes('resume') && !isLinkedIn && /\battached\b/i.test(body);
   const [attached, setAttached] = useState(false);
   const hasPlaceholder = /\[[^\]]{3,}\]/.test(body);
-  const blocked =
-    (needs.length > 0 && (hasPlaceholder || !edited)) ||
-    issues.some((i) => i.blocking) ||
-    !!notAllowed ||
-    (attachResume && (!!direct || !attached));
+  const missingLine =
+    (needs.length > 0 && (hasPlaceholder || !edited)) || issues.some((i) => i.blocking) || !!notAllowed;
+  const blocked = missingLine || (attachResume && (!!direct || !attached));
+  // Copy text is how a resume goes out with a Gmail-sent message (pasted into Gmail, where the student attaches it),
+  // so only the mail-app hand-off waits for "I will attach it"
+  const copyBlocked = missingLine || (attachResume && !direct && !attached);
   const shownError = error ?? (draft.status === 'failed' || draft.error ? draft.error : undefined);
   if (['queued', 'sending', 'handed_off', 'sent'].includes(draft.status))
     return <OutboxStatus draft={draft} onClose={onCancel && (() => onCancel({ kept: false }))} />;
@@ -564,11 +565,13 @@ export function DraftEditor({
             <Button
               size="sm"
               onClick={copyAll}
-              disabled={busy || copying || !body.trim() || blocked}
+              disabled={busy || copying || !body.trim() || copyBlocked}
               title={
-                blocked
+                missingLine
                   ? (notAllowed ?? issues.find((i) => i.blocking)?.text ?? 'Add the missing line first')
-                  : 'Copy the message to paste into Gmail in your browser'
+                  : copyBlocked
+                    ? 'Confirm you will attach your resume first'
+                    : 'Copy the message to paste into Gmail in your browser'
               }
               data-testid="draft-copy"
             >

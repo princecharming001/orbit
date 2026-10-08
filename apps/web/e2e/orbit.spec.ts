@@ -1182,6 +1182,10 @@ test.describe("Never losing the student's work, and honest hand-offs", () => {
     await loadDemo(page);
     const card = page.getByTestId('suggestion-thank_you').first();
     await card.getByTestId('draft-review').click();
+    await expect(card.getByLabel('Message body')).toBeVisible();
+    // the note says the resume is attached: Orbit cannot attach files, so the student confirms they will
+    if (await card.getByTestId('draft-attach-resume').isVisible())
+      await card.getByTestId('draft-attach-confirm').check();
     await card.getByTestId('draft-copy').click();
     const waiting = card.getByTestId('outbox-handed_off');
     await expect(waiting).toBeVisible();
@@ -1714,6 +1718,9 @@ test.describe('Usability round 6', () => {
     await page.getByTestId('capture-text').fill('Coffee chat w Lena. She said interns get real ownership.');
     // a stray tap on the nav loses nothing
     await page.getByRole('link', { name: 'Pipeline' }).first().click();
+    // the Pipeline page is really shown (a route change renders as a transition, so going back before it lands would
+    // never leave Add note at all)
+    await expect(page.getByRole('heading', { name: 'Pipeline', level: 1 })).toBeVisible();
     await page.goBack();
     await expect(page.getByTestId('capture-text')).toHaveValue(/Coffee chat w Lena/);
     await expect(page.getByTestId('capture-draft-hint')).toContainText(/unsaved note/i);
@@ -1794,6 +1801,10 @@ test.describe('Usability round 6', () => {
     await loadDemo(page);
     const card = page.getByTestId('suggestion-thank_you').first();
     await card.getByTestId('draft-review').click();
+    await expect(card.getByLabel('Message body')).toBeVisible();
+    // the note says the resume is attached: Orbit cannot attach files, so the student confirms they will
+    if (await card.getByTestId('draft-attach-resume').isVisible())
+      await card.getByTestId('draft-attach-confirm').check();
     await card.getByTestId('draft-copy').click();
     await expect(card.getByTestId('outbox-handed_off')).toBeVisible();
     await card.getByRole('button', { name: /i sent it/i }).click();
