@@ -639,7 +639,11 @@ export type DraftNeed =
   | 'answer'
   | 'role'
   | 'takeaway'
-  | 'posting';
+  | 'posting'
+  /** the name of a mutual tie the connection line mentions without one ("my roommate") */
+  | 'mutual'
+  /** a reminder, not a line to write: the message says the resume is attached, so the student attaches it */
+  | 'resume';
 
 export interface DraftClaim {
   text: string;

@@ -189,3 +189,20 @@ export function isSeniorTitle(title: string | undefined): boolean {
   const s = seniorityOf(title);
   return s === 'senior' || s === 'exec';
 }
+
+/**
+ * Where the student's cycle stands for this kind of firm. Bank summer analyst recruiting for summer Y runs early: most
+ * seats are filled between January and June of Y-1, so in the fall a junior writing about a summer internship is
+ * late, and a note that asks what to know "before recruiting starts" or tells a recruiter "I'm planning to apply this
+ * cycle" reads as someone who has not done the homework. Consulting, trading and tech summer recruiting runs in the
+ * fall of Y-1, so October is on time there. `late` only for a bank and a summer or internship cycle with a year.
+ */
+export function cycleTiming(firm: FirmKind, cycleLabel: string | undefined, now: Date): 'late' | 'on_time' {
+  if (firm !== 'bank') return 'on_time';
+  const l = cycleLabel ?? '';
+  if (!/\b(summer|intern)/i.test(l)) return 'on_time';
+  const y = Number(l.match(/\b(20\d\d)\b/)?.[1]);
+  if (!y) return 'on_time';
+  // from July 1 of the year before the summer
+  return now.getTime() >= Date.UTC(y - 1, 6, 1) ? 'late' : 'on_time';
+}

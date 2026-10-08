@@ -361,6 +361,32 @@ export function reported(s: string): string {
   return s.replace(/\b(once|when|after|as soon as|until|if) I (?:have|'ve)\b/gi, "$1 I'd");
 }
 
+const ORG_SHORT: [RegExp, string][] = [
+  [/^mckinsey\s*(&|and)\s*company$/i, 'McKinsey'],
+  [/^(the )?boston consulting group(\s*\(bcg\))?$/i, 'BCG'],
+  [/^bain\s*(&|and)\s*company$/i, 'Bain'],
+  [/^goldman sachs(\s*(&|and)\s*co\.?)?$/i, 'Goldman'],
+  [/^andreessen horowitz$/i, 'a16z'],
+  [/^hudson river trading$/i, 'HRT'],
+  [/^jpmorgan chase(\s*(&|and)\s*co\.?)?$/i, 'J.P. Morgan'],
+];
+/**
+ * A firm as the people there write it: "McKinsey", "BCG", "Bain", "Goldman", "Lightspeed", "Centerview",
+ * "Sequoia". A legal or full name ("McKinsey & Company", "Lightspeed Venture Partners") repeated in a short note is a
+ * mail-merge tell.
+ */
+export function shortOrg(org: string | undefined): string | undefined {
+  const o = org?.replace(/\s+/g, ' ').trim();
+  if (!o) return o;
+  for (const [re, s] of ORG_SHORT) if (re.test(o)) return s;
+  const cut = o
+    .replace(/,?\s+(inc|llc|ltd|plc|corp|corporation|co|pbc|l\.?p)\.?$/i, '')
+    // "Bain Capital" is not Bain, and "Citadel Securities" is not Citadel
+    .replace(/^(?!bain capital$)(.+?)\s+(venture partners|capital partners|partners|capital|ventures|group)$/i, '$1');
+  // never cut a name down to a stub ("Jump Trading" stays, "Accel" stays)
+  return cut.length >= 3 && /^[A-Z]/.test(cut) && !/\s(of|and|&)$/i.test(cut) ? cut : o;
+}
+
 /** "Goldman Sachs'" and "J.P. Morgan's". */
 export function possessive(name: string): string {
   return /s$/i.test(name.trim()) ? `${name.trim()}'` : `${name.trim()}'s`;
