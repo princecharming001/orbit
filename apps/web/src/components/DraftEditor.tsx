@@ -65,7 +65,7 @@ const INPUT_PROMPT: Record<PromptNeed, { label: string; hint: string; placeholde
   },
   takeaway: {
     label: 'One thing they said that stuck with you',
-    hint: 'A thank-you without it reads like a form letter. Their advice, a story, a point they made, in a few words.',
+    hint: 'A note without it reads like a form letter. Their advice, a story, a point they made, in a few words.',
     placeholder: 'e.g. to lead every interview answer with one project story',
   },
 };
@@ -275,6 +275,18 @@ export function DraftEditor({
               I will attach it before sending
             </label>
           )}
+        </div>
+      )}
+      {draft.holdUntil && new Date(draft.holdUntil).getTime() > Date.now() && (
+        <div className="text-[12px] text-warn mb-1.5" data-testid="draft-hold">
+          Your last note to {person?.firstName ?? 'them'} went out only a few days ago. Wait until{' '}
+          {new Date(draft.holdUntil).toLocaleDateString('en-US', {
+            weekday: 'long',
+            month: 'short',
+            day: 'numeric',
+            timeZone: user?.timezone,
+          })}{' '}
+          to send this one.
         </div>
       )}
       {!isLinkedIn && (

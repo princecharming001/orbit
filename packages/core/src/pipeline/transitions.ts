@@ -345,7 +345,16 @@ export function composeKindFor(
  * The kinds of message that fit where the chat stands: no thank-you or referral ask to someone never met, no bump to
  * someone who has answered, and no second "first" message to someone already written to (that is the bump).
  */
-export function composeKinds(stage: ChatStage | undefined, current: MessageKind): MessageKind[] {
+export function composeKinds(
+  stage: ChatStage | undefined,
+  current: MessageKind,
+  /**
+   * `referral: false`: nothing on record makes a referral ask fit (no offer to refer, no application to their
+   * company), so it is not offered; an ask with no role at a firm whose side does not hire for the student's target
+   * reads as a check-in written wrong.
+   */
+  opts: { referral?: boolean } = {},
+): MessageKind[] {
   const by: Partial<Record<ChatStage, MessageKind[]>> = {
     identified: ['outreach'],
     warming: ['outreach'],
@@ -359,6 +368,8 @@ export function composeKinds(stage: ChatStage | undefined, current: MessageKind)
     nurturing: ['nurture', 'referral_ask', 'schedule'],
     declined: ['nurture'],
   };
-  const list = (stage && by[stage]) ?? ['outreach'];
+  const list = ((stage && by[stage]) ?? ['outreach']).filter(
+    (k) => k === current || k !== 'referral_ask' || opts.referral !== false,
+  );
   return list.includes(current) ? list : [current, ...list];
 }

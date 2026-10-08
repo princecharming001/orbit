@@ -255,6 +255,9 @@ export function clause(
   if (!t || /[?\n]/.test(t) || t.split(' ').length > 34) return undefined;
   if ((t.match(/"/g) ?? []).length % 2) return undefined;
   t = genericYouToI(t);
+  // a third party's role stays theirs: "offered to introduce me to their hiring manager" is "the hiring manager",
+  // never "your hiring manager" (which reads as the recipient's boss)
+  t = t.replace(/\b(their|his|her) (hiring manager|recruiter|recruiting team)\b/gi, 'the $2');
   const names = [person.fullName, person.firstName, person.lastName]
     .filter((n): n is string => !!n && n.length > 1)
     .sort((a, b) => b.length - a.length)

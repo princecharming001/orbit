@@ -29,6 +29,7 @@ import {
   schoolShort,
   scoreCandidate,
   selectForBrief,
+  shortOrg,
   staleReason,
   suggestionFromCandidate,
   todayKey,
@@ -454,6 +455,24 @@ function parseTargetLine(line: string): { name: string; title?: string; org?: st
   return { name: name!.trim(), title: rest || undefined };
 }
 
+/**
+ * The referrer as the recipient can place them, from the data only: someone at the recipient's own firm ("who's also
+ * at Evercore"), or the student's tie to them ("a classmate of mine"). Undefined when neither is on record.
+ */
+function referrerTieFor(referrer: Person, person: Person): string | undefined {
+  const org = (person.currentOrganizationRaw ?? '').trim().toLowerCase();
+  if (org && (referrer.currentOrganizationRaw ?? '').trim().toLowerCase() === org)
+    return `who's also at ${shortOrg(person.currentOrganizationRaw) ?? person.currentOrganizationRaw}`;
+  const tie: Partial<Record<string, string>> = {
+    peer: 'a classmate of mine',
+    professor: 'one of my professors',
+    mentor: 'a mentor of mine',
+    family_friend: 'a family friend',
+    colleague: 'a former colleague of mine',
+  };
+  return tie[referrer.relationshipType];
+}
+
 /** The person who introduced or pointed the student to `person`: an intro request sent to them, or a suggestion from a chat. */
 export async function findReferrerFor(
   userId: string,
@@ -736,10 +755,14 @@ export async function buildDraftContext(
       : undefined;
   // referrer: on the chat, or the person who received an intro request for this person
   let referrerName = chat?.referrerName;
-  if (!referrerName && chat?.referrerPersonId)
-    referrerName = (await db.people.get(chat.referrerPersonId))?.firstName;
-  if (!referrerName && kind === 'outreach')
-    referrerName = (await findReferrerFor(user.id, person))?.firstName;
+  let referrer = chat?.referrerPersonId ? await db.people.get(chat.referrerPersonId) : undefined;
+  if (!referrerName && referrer) referrerName = referrer.firstName;
+  if (!referrerName && kind === 'outreach') {
+    referrer = await findReferrerFor(user.id, person);
+    referrerName = referrer?.firstName;
+  }
+  // who the referrer is, so the recipient can place them: a colleague at their firm, or the student's own tie
+  const referrerTie = referrer ? referrerTieFor(referrer, person) : undefined;
   // openings used for the same company in the last 30 days (avoid repeating ourselves across a team), and the
   // people there the student has already spoken with (a recruiter email names them)
   const sameOrg = person.currentOrganizationRaw
@@ -750,7 +773,7 @@ export async function buildDraftContext(
       )
     : [];
   const recentOpenings: string[] = [];
-  const sameOrgContacts: string[] = [];
+  const sameOrgContacts: { name: string; title?: string }[] = [];
   for (const p of sameOrg) {
     const rows = await db.outbound.where('personId').equals(p.id).toArray();
     // only sentences the student actually wrote: never a bracketed prompt or a bare sign-off
@@ -767,7 +790,7 @@ export async function buildDraftContext(
       .equals(p.id)
       .filter((c) => !!c.completedAt)
       .first();
-    if (spoke) sameOrgContacts.push(p.firstName);
+    if (spoke) sameOrgContacts.push({ name: p.displayName, title: p.currentTitle });
   }
   const pastOrgs = resumeFacets
     .filter((f) => f.kind === 'experience' && f.organizationName)
@@ -838,6 +861,7 @@ export async function buildDraftContext(
           meetingAt,
           stage: chat.stage,
           referrerName,
+          referrerTie,
           introducedAt: chat.introducedAt,
           warmUpNote,
           warmUpDone: warm?.done,
@@ -846,7 +870,7 @@ export async function buildDraftContext(
           awayUntil: chat.outOfOfficeUntil,
         }
       : referrerName
-        ? { referrerName }
+        ? { referrerName, referrerTie }
         : undefined,
     // a status-news card carries the update itself (applied, interviewing, offer); the student's own text wins
     update: inputs.update?.trim() || (s?.payload.update as string | undefined) || undefined,
@@ -963,6 +987,15 @@ async function bccFor(
   return ref?.primaryEmail ? [ref.primaryEmail] : undefined;
 }
 
+/** The channel a draft goes out on: the one the thread called for (an email introduction is answered by email) when the person has an address for it. */
+function writtenChannel(
+  out: ReturnType<typeof generateDraft>,
+  asked: 'gmail' | 'linkedin',
+  person: Person,
+): 'gmail' | 'linkedin' {
+  return out.channel === 'gmail' && person.primaryEmail ? 'gmail' : asked;
+}
+
 function bodyFor(
   out: ReturnType<typeof generateDraft>,
   channel: 'gmail' | 'linkedin',
@@ -983,11 +1016,13 @@ export async function draftForSuggestion(
   if (!asked || !s.personId) return undefined;
   const person = await db.people.get(s.personId);
   if (!person) return undefined;
-  const channel: 'gmail' | 'linkedin' =
+  const asked0Channel: 'gmail' | 'linkedin' =
     (s.payload.channel as 'gmail' | 'linkedin' | undefined) ?? (person.primaryEmail ? 'gmail' : 'linkedin');
-  const { out, generatedBy, ctx } = await materializeDraft(user, person, asked, channel, s);
-  // the kind the thread called for (a bump to someone who answered is the scheduling reply)
+  const { out, generatedBy, ctx } = await materializeDraft(user, person, asked, asked0Channel, s);
+  // the kind the thread called for (a bump to someone who answered is the scheduling reply), and the channel (an
+  // introduction made by email is answered on it)
   const kind = out.kind ?? asked;
+  const channel = writtenChannel(out, asked0Channel, person);
   const chat = s.chatId && kind !== 'report_back' ? await db.chats.get(s.chatId) : undefined;
   const { externalThreadId, inReplyTo } = await threadFor(kind, chat, ctx);
   const msg: OutboundMessage = {
@@ -1012,6 +1047,7 @@ export async function draftForSuggestion(
     claims: out.claims,
     needsInput: out.needsInput.length ? out.needsInput : undefined,
     opening: out.opening,
+    holdUntil: out.holdUntil,
     createdAt: now.toISOString(),
   };
   await db.outbound.add(msg);
@@ -1048,13 +1084,14 @@ export async function draftMessage(
     chat,
   );
   const kind = out.kind ?? asked;
+  const written = writtenChannel(out, channel, person);
   const where = await threadFor(kind, chat, ctx);
   const msg: OutboundMessage = {
     id: newId('out'),
     userId: user.id,
     personId,
     chatId: chat?.id,
-    channel,
+    channel: written,
     kind,
     bccEmails: await bccFor(out, chat),
     externalThreadId: where.externalThreadId,
@@ -1062,12 +1099,13 @@ export async function draftMessage(
     toEmail: person.primaryEmail,
     toLinkedinUrl: person.linkedinUrl,
     subject: out.subject,
-    bodyDraft: bodyFor(out, channel, kind, !!person.linkedinConnectedOn),
+    bodyDraft: bodyFor(out, written, kind, !!person.linkedinConnectedOn),
     status: 'draft',
     generatedBy,
     claims: out.claims,
     needsInput: out.needsInput.length ? out.needsInput : undefined,
     opening: out.opening,
+    holdUntil: out.holdUntil,
     createdAt: new Date().toISOString(),
   };
   await db.outbound.add(msg);

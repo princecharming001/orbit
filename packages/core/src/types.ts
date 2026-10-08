@@ -628,6 +628,8 @@ export interface OutboundMessage {
   claims?: DraftClaim[];
   needsInput?: DraftNeed[];
   opening?: string;
+  /** the thread says to wait: send no earlier than this (the student's own note to them went out days ago) */
+  holdUntil?: string;
   createdAt: string;
 }
 

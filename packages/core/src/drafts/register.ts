@@ -23,6 +23,8 @@ export interface Question {
   short: string;
   /** the topic of a post or talk the student named */
   about?: string;
+  /** what the student's line named: "post", "article", "talk" ("talk about your post", never a dangling "it") */
+  piece?: string;
   /** `q` is the question the student's own line raised ("how much of that an intern actually sees") */
   reacted?: boolean;
   /** the same question asked directly, for one question by email to someone senior ("What do you look for ...?") */
@@ -30,6 +32,8 @@ export interface Question {
   /** the role note the question is built on, to cite */
   factId?: string;
   factText?: string;
+  /** `q` follows up on the role note the opener states ("how much of that work a summer analyst actually sees") */
+  roleLine?: boolean;
 }
 
 export interface QuestionInput {
@@ -45,10 +49,19 @@ function q(qText: string, short?: string, direct?: string): Question {
 
 /**
  * `late`: the student is writing to a bank after its summer analyst cycle has mostly run (see `cycleTiming`), so a
- * question about what to know "before recruiting starts" would show they have not done the homework; the questions
- * are about the late paths instead (seats still open, off-cycle and diversity programs, full-time).
+ * question about what to know "before recruiting starts" would show they have not done the homework. A banker is
+ * asked for their judgment ("how you'd approach the rest of this cycle"), never whether their group "still brings on
+ * summer analysts" or about off-cycle and diversity programs: seats are a recruiting-office question, and nothing on
+ * record says the student qualifies for a diversity program.
+ *
+ * `major`: the student's field, for the one question it raises with someone senior ("for candidates coming from
+ * computer science rather than math or statistics, what gap do you see most often").
  */
-export function questionsFor(p: QuestionInput, sector: Sector, opts: { late?: boolean } = {}): Question[] {
+export function questionsFor(
+  p: QuestionInput,
+  sector: Sector,
+  opts: { late?: boolean; applied?: boolean; major?: string } = {},
+): Question[] {
   const kind: FirmKind = firmKindOf(p, sector);
   const senior = isSeniorTitle(p.title);
   const exec = seniorityOf(p.title) === 'exec';
@@ -59,28 +72,51 @@ export function questionsFor(p: QuestionInput, sector: Sector, opts: { late?: bo
   const TG = group ? `the ${groupNoun(group, sector)}` : undefined;
   const role = roleNoun(p.title);
   const theirFn = functionLabel(titleFunction(p.title));
+  const major = opts.major?.trim().toLowerCase();
+  // a field a recruiting process does not expect ("computer science" in consulting, "economics" in quant)
+  const cs = !!major && /\b(computer science|cs|software|computer engineering)\b/.test(major);
   switch (kind) {
     case 'bank':
-      if (opts.late)
+      // the application is in: the question is about the group they would join, never about the cycle or what to
+      // know "before recruiting starts"
+      if (opts.applied)
         return senior
           ? [
               q(
-                `whether ${TG ?? 'your group'} still brings on summer analysts this late, through off-cycle or diversity programs`,
-                'late paths into banking',
+                `what separates the summer analysts who do well${TG ? ` in ${TG}` : org ? ` at ${org}` : ''}`,
+                'what separates the summer analysts who do well',
               ),
               q(
-                "what you'd tell a student who missed the main summer analyst cycle",
-                'recruiting after the main cycle',
+                `what you'd want an incoming summer analyst to understand about ${TG ?? 'the group'}`,
+                `what an incoming summer analyst should know`,
               ),
             ]
           : [
               q(
-                `how you chose ${G ?? org ?? 'banking'} and what the work is like day to day`,
+                `what the first year looks like${TG ? ` in ${TG}` : org ? ` at ${org}` : ''} and what you wish you'd known going in`,
+                'what the first year looks like',
+              ),
+            ];
+      if (opts.late)
+        return senior
+          ? [
+              q(
+                "how you'd approach the rest of this cycle if you were in my position",
+                'recruiting at this point in the cycle',
+              ),
+              q(
+                `what separates the analysts who do well${TG ? ` in ${TG}` : org ? ` at ${org}` : ''}`,
+                'what separates the analysts who do well',
+              ),
+            ]
+          : [
+              q(
+                `how you chose ${G ?? org ?? 'banking'} and what you wish you'd known going in`,
                 `how you chose ${G ?? org ?? 'banking'}`,
               ),
               q(
-                "how you'd approach it if you were recruiting off-cycle now, after the main summer analyst cycle",
-                'recruiting off-cycle',
+                "what you'd focus on at this point in the cycle if you were recruiting now",
+                'recruiting at this point in the cycle',
               ),
             ];
       return senior
@@ -97,7 +133,7 @@ export function questionsFor(p: QuestionInput, sector: Sector, opts: { late?: bo
           ]
         : [
             q(
-              `how you chose ${G ?? org ?? 'banking'} and what the work is like day to day`,
+              `how you chose ${G ?? org ?? 'banking'} and what you wish you'd known going in`,
               `how you chose ${G ?? org ?? 'banking'}`,
             ),
             q('how recruiting went for you and what helped most', 'how recruiting went for you'),
@@ -119,7 +155,7 @@ export function questionsFor(p: QuestionInput, sector: Sector, opts: { late?: bo
           ]
         : [
             q(
-              'how you made the move into private equity and what the work is like',
+              'how you made the move into private equity and what surprised you about the work',
               'how you got into private equity',
             ),
             q(
@@ -129,19 +165,27 @@ export function questionsFor(p: QuestionInput, sector: Sector, opts: { late?: bo
           ];
     case 'trading': {
       const trader = /\btrad/i.test(p.title ?? '');
+      // a head of a desk or a partner answers one question by email, and it is one only they can answer: never
+      // "what separates the interns who get return offers" from a student who has no internship there
       if (exec)
         return [
-          q(
-            `what separates the interns who get return offers${org ? ` at ${org}` : ''}`,
-            'what separates the interns who get return offers',
-            `What separates the interns who get return offers${org ? ` at ${org}` : ''}?`,
-          ),
+          cs
+            ? q(
+                'for candidates coming from computer science rather than math or statistics, what gap you see most often',
+                'where computer science candidates fall short',
+                'For candidates coming from computer science rather than math or statistics, what gap do you see most often?',
+              )
+            : q(
+                'what separates the candidates who do well in your interviews',
+                'what separates the strongest candidates',
+                'What separates the candidates who do well in your interviews?',
+              ),
         ];
       return senior
         ? [
             q(
-              `what separates the interns who get return offers${org ? ` at ${org}` : ''}`,
-              'what separates the interns who get return offers',
+              `what separates the new hires who do well on your ${trader ? 'desk' : 'team'}`,
+              'what separates the new hires who do well',
             ),
             q(
               "what you'd tell a student deciding between trading and research",
@@ -155,7 +199,10 @@ export function questionsFor(p: QuestionInput, sector: Sector, opts: { late?: bo
             ),
             trader
               ? q('how you decided between trading and research')
-              : q(`what research looks like day to day${org ? ` at ${org}` : ''}`),
+              : q(
+                  `what a typical research problem looks like in your first year${org ? ` at ${org}` : ''}`,
+                  'what research looks like in the first year',
+                ),
           ];
     }
     case 'vc':
@@ -183,18 +230,28 @@ export function questionsFor(p: QuestionInput, sector: Sector, opts: { late?: bo
     case 'consulting': {
       const office = group && /\boffice$/i.test(group) ? chosenGroup(group) : undefined;
       const practice = group && !office ? chosenGroup(group) : undefined;
-      // a partner is asked what they look for; an engagement manager or a principal, who runs the case team, what
-      // separates the first-years on it; a consultant or business analyst about their own choices
+      // a student whose major is not business has the question every interviewer will ask them
+      const fromField =
+        major && !/\b(business|economics|finance|management|commerce)\b/.test(major)
+          ? q(
+              `how someone coming from ${lowerField(opts.major!)} should prepare for case interviews`,
+              `coming to consulting from ${lowerField(opts.major!)}`,
+            )
+          : undefined;
+      // a partner does not staff first-year business analysts (they are generalists): a partner is asked for
+      // judgment; an engagement manager or a principal, who runs the case team, what separates the first-years on
+      // it; a consultant or business analyst about their own choices
       if (exec)
         return [
           q(
-            `what you look for in the first-years you staff${practice ? ` in ${practice}` : ''}`,
-            'what you look for in first-years',
+            'what separates the business analysts who do well in their first year',
+            'what makes new analysts stand out',
           ),
           q(
-            `what you'd tell a student choosing which office and practice to aim for${org ? ` at ${org}` : ''}`,
-            'choosing an office and practice',
+            "what you'd tell a student deciding whether consulting is the right first job",
+            'whether consulting is the right first job',
           ),
+          ...(fromField ? [fromField] : []),
         ];
       if (senior)
         return [
@@ -206,13 +263,14 @@ export function questionsFor(p: QuestionInput, sector: Sector, opts: { late?: bo
             `how case prep translates to the first months on a team${org ? ` at ${org}` : ''}`,
             'how case prep translates to the job',
           ),
+          ...(fromField ? [fromField] : []),
         ];
       return [
         office
           ? q(`how you picked ${office} and what the first year there is like`, `how you picked ${office}`)
           : practice
             ? q(
-                `how you ended up in ${practice} and what the work is like`,
+                `how you ended up in ${practice} and what surprised you about the work`,
                 `how you ended up in ${practice}`,
               )
             : q(
@@ -223,6 +281,7 @@ export function questionsFor(p: QuestionInput, sector: Sector, opts: { late?: bo
           `how you prepared for case interviews${org ? ` at ${org}` : ''} and what you'd do the same way again`,
           'how you prepared for case interviews',
         ),
+        ...(fromField ? [fromField] : []),
       ];
     }
     case 'startup':
@@ -248,21 +307,27 @@ export function questionsFor(p: QuestionInput, sector: Sector, opts: { late?: bo
       ];
     case 'big_tech':
     case 'tech': {
+      // a VP or a head of engineering is far from the intern class: the small, grantable ask is a pointer to the
+      // right person on their team; a manager or a staff engineer is asked what they look for on their team
+      if (exec || /\b(vice president|vp|head of|director)\b/i.test(p.title ?? ''))
+        return [
+          q(
+            "whether there's someone on your team, maybe a recent intern or new grad, you'd suggest I talk to",
+            'who on your team I should talk to',
+            "Is there someone on your team, maybe a recent intern or new grad, you'd suggest I talk to?",
+          ),
+        ];
       if (senior)
         return [
           q(
-            exec
-              ? 'what you look for in interns and new grads'
-              : 'what you look for in the interns and new grads on your team',
+            'what you look for in the interns and new grads on your team',
             'what you look for in interns',
-            exec
-              ? 'What do you look for in interns and new grads?'
-              : 'What do you look for in the interns on your team?',
+            'What do you look for in the interns on your team?',
           ),
           q(
-            `what separates the interns who get return offers${org ? ` at ${org}` : ''}`,
-            'what separates the interns who get return offers',
-            `What separates the interns who get return offers${org ? ` at ${org}` : ''}?`,
+            'what the interns who do well on your team do differently in their first few weeks',
+            'what the interns who do well do differently',
+            'What do the interns who do well on your team do differently in their first few weeks?',
           ),
         ];
       const where = group ? `on ${chosenGroup(group)}` : org ? `at ${org}` : '';
@@ -288,4 +353,13 @@ export function questionsFor(p: QuestionInput, sector: Sector, opts: { late?: bo
           : q(`what the path${org ? ` to ${org}` : ''} looked like`),
       ];
   }
+}
+
+/** "Computer Science" as a field in a sentence: "computer science", keeping acronyms. */
+function lowerField(s: string): string {
+  return s
+    .trim()
+    .split(/\s+/)
+    .map((w) => (/^[A-Z]{2,}$/.test(w) ? w : w.toLowerCase()))
+    .join(' ');
 }

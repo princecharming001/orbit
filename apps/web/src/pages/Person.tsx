@@ -112,6 +112,34 @@ export function PersonPage() {
     ) ?? [];
   const affs =
     useLiveQuery(() => (id ? db.affiliations.where('personId').equals(id).toArray() : []), [id]) ?? [];
+  // a referral ask is offered only when something on record makes it fit: their offer to refer or pass the resume
+  // along, or the student's application to their company
+  const referralFits =
+    useLiveQuery(async () => {
+      if (!person || !user) return true;
+      const org = (person.currentOrganizationRaw ?? '').trim().toLowerCase();
+      const applying = org
+        ? !!(await db.targetCompanies
+            .where('userId')
+            .equals(user.id)
+            .filter(
+              (t) =>
+                (!!person.currentOrganizationId && t.organizationId === person.currentOrganizationId) ||
+                t.nameRaw.trim().toLowerCase() === org,
+            )
+            .first())
+        : false;
+      return (
+        applying ||
+        facts.some(
+          (f) =>
+            f.type === 'offer' &&
+            /\b(refer|referral|pass (along )?my (resume|name)|flag|put in a (good )?word|introduce me)\b/i.test(
+              f.text,
+            ),
+        )
+      );
+    }, [person?.id, person?.currentOrganizationRaw, user?.id, facts.length]) ?? true;
   const neighbourIds = useMemo(
     () => edges.map((e) => (e.personAId === id ? e.personBId : e.personAId)),
     [edges, id],
@@ -532,7 +560,7 @@ export function PersonPage() {
               </div>
               <div className="text-[12px] text-ink-3">
                 Orbit picked this kind of message from where your chat stands.
-                {composeKinds(chat?.stage, composing).length > 1
+                {composeKinds(chat?.stage, composing, { referral: referralFits }).length > 1
                   ? ' Pick another and it rewrites the draft.'
                   : ''}
               </div>
@@ -545,7 +573,7 @@ export function PersonPage() {
               )}
             </div>
             <div className="flex flex-wrap gap-1 text-[12px]" role="group" aria-label="Kind of message">
-              {composeKinds(chat?.stage, composing).map((k) => (
+              {composeKinds(chat?.stage, composing, { referral: referralFits }).map((k) => (
                 <button
                   key={k}
                   disabled={busy || draft.status !== 'draft'}
