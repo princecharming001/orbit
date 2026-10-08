@@ -999,6 +999,11 @@ export class OrbitScene {
       }
       this.refreshEmphasis(now, 'web');
       this.anim(this.labelDim, this.dimForMode(), now, TIMING.emphasis, easing.outQuad);
+      if (turn !== prevTurn && !w.turnTo) {
+        // the match let go: the orbit turns back, and the camera frames the whole web again as it does
+        this.releaseIfFree(now);
+        this.frameWeb(now);
+      }
     }
     this.releaseIfFree(now);
     this.updateSpin(now);

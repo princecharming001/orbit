@@ -1060,9 +1060,14 @@ test.describe('Map motion', () => {
     const s2 = await mapSnapshot(page);
     const zara = (await mapDots(page, [ids['Zara Fischer']!]))[ids['Zara Fischer']!]!;
     expect(degreesApart(angleFromCentre(zara, { x: s2.centre[0], y: s2.centre[1] }), -90)).toBeLessThan(10);
-    // Esc lets go of the match, then of the view
+    // Esc lets go of the match, then of the view; letting go of the match turns the orbit back and frames the
+    // whole web again, as it was before the search
     await page.keyboard.press('Escape');
     await expect.poll(async () => (await mapSnapshot(page)).focus).toBe('web');
+    await mapSettled(page);
+    const back = await mapSnapshot(page);
+    expect(Math.abs(back.zoom - snap.zoom)).toBeLessThan(0.02);
+    expect(Math.hypot(back.centre[0] - snap.centre[0], back.centre[1] - snap.centre[1])).toBeLessThan(4);
     await page.keyboard.press('Escape');
     await expect.poll(async () => (await mapSnapshot(page)).focus).toBe('');
     await mapSettled(page);
