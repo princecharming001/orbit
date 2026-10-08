@@ -996,14 +996,6 @@ export function MapPage() {
                   No route found through your network yet. Import more connections or start a warm-up.
                 </p>
               )}
-              {coldDirect && (
-                <p className="text-[13px] text-ink-2" data-testid="reach-cold-note">
-                  {coldDirect.hops[0]!.text}. That tie is faint, so a note from you alone may go unanswered. A
-                  word from someone who knows {target.firstName} carries more weight, which is why the routes
-                  through people you know come first. Writing to {target.firstName} yourself is Route{' '}
-                  {paths!.indexOf(coldDirect) + 1}.
-                </p>
-              )}
               {paths?.map((p, i) => (
                 <button
                   key={i}
@@ -1043,6 +1035,15 @@ export function MapPage() {
                   </ol>
                 </button>
               ))}
+              {/* after the routes it explains, so on a phone the first route still shows without scrolling */}
+              {coldDirect && (
+                <p className="text-[13px] text-ink-2" data-testid="reach-cold-note">
+                  {coldDirect.hops[0]!.text}. That tie is faint, so a note from you alone may go unanswered. A
+                  word from someone who knows {target.firstName} carries more weight, which is why the routes
+                  through people you know come first. Writing to {target.firstName} yourself is Route{' '}
+                  {paths!.indexOf(coldDirect) + 1}.
+                </p>
+              )}
               {current && current.hops.length > 1 && (
                 <Button variant="primary" className={cx('w-full', TAP)} onClick={() => askIntro(current)}>
                   Ask {byId.get(current.hops[0]!.toId)?.firstName ?? 'them'} for an intro
