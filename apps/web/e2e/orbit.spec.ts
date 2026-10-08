@@ -1637,6 +1637,15 @@ test.describe('Usability round 5 on a phone', () => {
       .click();
     await expect(page.getByTestId('ob-coming-up')).toContainText(/Resume \(optional\)/);
   });
+  test("a person's tabs fit one row, so Prep is not left alone on a second line", async ({ page }) => {
+    await loadDemo(page);
+    await page.goto('people');
+    await page.getByRole('link', { name: 'Ethan Park' }).first().click();
+    const tabs = page.getByRole('tablist');
+    await expect(tabs.getByRole('tab', { name: /^prep/i })).toBeVisible();
+    const box = await tabs.boundingBox();
+    expect(box!.height).toBeLessThan(44);
+  });
   test('Settings is one menu on a phone, and nothing runs off the side', async ({ page }) => {
     await loadDemo(page);
     await page.goto('settings/profile');

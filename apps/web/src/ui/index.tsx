@@ -275,7 +275,7 @@ export function Tabs<T extends string>({
   return (
     <div
       // tabs wrap on a narrow screen instead of hiding the last one off the edge
-      className="flex flex-wrap items-center gap-x-1 border-b border-line mb-4"
+      className="flex flex-wrap items-center gap-x-0.5 sm:gap-x-1 border-b border-line mb-4"
       role="tablist"
     >
       {items.map((it) => (
@@ -285,7 +285,7 @@ export function Tabs<T extends string>({
           aria-selected={value === it.value}
           onClick={() => onChange(it.value)}
           className={cx(
-            'px-2 sm:px-3 h-9 text-[13px] sm:text-[14px] border-b-2 -mb-px transition-colors shrink-0 whitespace-nowrap',
+            'px-1.5 sm:px-3 h-9 text-[13px] sm:text-[14px] border-b-2 -mb-px transition-colors shrink-0 whitespace-nowrap',
             value === it.value
               ? 'border-ink text-ink font-medium'
               : 'border-transparent text-ink-3 hover:text-ink',
