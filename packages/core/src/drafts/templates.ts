@@ -22,6 +22,7 @@ import {
   functionLabel,
   hookProposition,
   hookTense,
+  inOrAt,
   isInternCycle,
   lower1,
   lowerPhrase,
@@ -103,6 +104,13 @@ export interface Connection {
   introduced?: boolean;
   eventName?: string;
   sharedOrg?: string;
+  /**
+   * shared_employer: who is there now. `both_now` (the student's club or job, where they are now too), `them_now` (they
+   * work where the student was), `them_before` (they used to be where the student was)
+   */
+  overlap?: 'both_now' | 'them_now' | 'them_before';
+  /** shared_employer: what the student did there, as a verb phrase ("interned", "worked", "was a member") */
+  userDid?: string;
   previous?: string; // previous org or title for transitions
   /** prior_thread: when the last email in the earlier exchange was, and whether it was theirs */
   lastAt?: string;
@@ -133,6 +141,8 @@ export interface DraftContext {
     schedulingLink?: string;
     timezone: string;
     pastOrgs?: string[]; // from the resume: employers/orgs the student has been at
+    /** the same, with the student's role there and whether they are still there (a club they are in now) */
+    orgRoles?: { name: string; title?: string; current: boolean }[];
   };
   styleCard: StyleCard;
   person: {
@@ -368,11 +378,13 @@ function greeting(ctx: DraftContext, sector: Sector, seniority: Seniority, recru
   const first = firstNameOf(ctx.person);
   const learned = ctx.styleCard.builtFromCount > 0 && ctx.styleCard.greetingPatterns[0];
   if (learned && !/^dear/i.test(learned)) return learned.replace('{first}', first);
-  // a club president or a fellow student is a peer, never "Dear Jake Morrison"
+  // a club president, a fellow student or someone in the student's own club is a peer, never "Dear Jake Morrison"
   const peer =
     /\b(student|club|society|association|undergraduate|fraternity|sorority)\b/i.test(
       `${ctx.person.title ?? ''} ${ctx.person.org ?? ''}`,
-    ) || /\b(university|college)\b/i.test(ctx.person.org ?? '');
+    ) ||
+    /\b(university|college)\b/i.test(ctx.person.org ?? '') ||
+    sharedOrgWith(ctx)?.overlap === 'both_now';
   const execCold =
     !peer &&
     (sector === 'finance' || sector === 'consulting') &&
@@ -423,6 +435,22 @@ function questionFor(ctx: DraftContext, sector: Sector, seed: string): string {
   // the recipient's own field ("product design"), never the student's target when the two differ
   const theirFn = functionLabel(titleFunction(ctx.person.title));
   const c = ctx.connection;
+  // a fellow student (their club, or one the student is in too) is asked about recruiting, not about "the firm"
+  const studentOrg =
+    /\b(student|club|society|association|undergraduate|fraternity|sorority)\b/i.test(
+      `${ctx.person.title ?? ''} ${org ?? ''}`,
+    ) || sharedOrgWith(ctx)?.overlap === 'both_now';
+  if (studentOrg) {
+    const target = targetLabel(ctx);
+    return pick(
+      [
+        `how you approached ${target} recruiting and what you'd do differently`,
+        `what helped most when you were recruiting for ${target}`,
+      ],
+      seed,
+      'q-peer',
+    );
+  }
   if (c?.kind === 'transition' && c.previous)
     return pick(
       [
@@ -446,7 +474,7 @@ function questionFor(ctx: DraftContext, sector: Sector, seed: string): string {
   if (sector === 'consulting')
     return pick(
       [
-        `how you decided on ${group ?? org ?? 'the firm'} and how juniors get staffed`,
+        `how you decided on ${group ?? org ?? 'the firm'} and how first-year consultants get staffed`,
         `what made you pick ${org ?? 'consulting'} over the other firms you looked at`,
         `how you picked the office and what the first year looked like`,
       ],
@@ -715,12 +743,21 @@ function opener(
       };
     }
     case 'shared_employer': {
-      claims.push({ text: `both spent time at ${c.sharedOrg}`, factId: c.factId, kind: 'shared' });
+      claims.push({ text: c.text, factId: c.factId, kind: 'shared' });
+      if (c.overlap === 'both_now' || c.overlap === 'them_now')
+        return {
+          text:
+            c.overlap === 'both_now'
+              ? `I'm ${me}, and we're both ${inOrAt(c.sharedOrg!)}.`
+              : `I'm ${me}, and ${userAtOrg(c)}, where you are now.`,
+          claims,
+          saidSituation: true,
+        };
       return {
         text: pick(
           [
-            `I'm ${me}, and I interned at ${c.sharedOrg}, where you were before ${org ?? 'your current role'}.`,
-            `We overlap on ${c.sharedOrg}: I interned there, and I saw you were there before ${org ?? 'where you are now'}. I'm ${me}.`,
+            `I'm ${me}, and ${userAtOrg(c)}, where you were before ${org ?? 'your current role'}.`,
+            `We overlap on ${c.sharedOrg}: ${userAtOrg(c)}, and I saw you were there before ${org ?? 'where you are now'}. I'm ${me}.`,
           ],
           seed,
           'op-shared',
@@ -775,6 +812,54 @@ function pickFact(
   return undefined;
 }
 
+/**
+ * An organisation on the student's resume that the person is at now, or was at: the strongest link a cold message can
+ * name, because it is checkable from both sides. A student club the student is in now makes them peers.
+ */
+export function sharedOrgWith(ctx: Pick<DraftContext, 'user' | 'person'>): Connection | undefined {
+  const mine =
+    ctx.user.orgRoles ??
+    (ctx.user.pastOrgs ?? []).map((name) => ({ name, title: undefined, current: false }));
+  const same = (a?: string, b?: string) => !!a && !!b && normalizeCompany(a) === normalizeCompany(b);
+  const did = (o: { name: string; title?: string; current: boolean }) =>
+    /\bintern/i.test(o.title ?? '')
+      ? 'interned'
+      : inOrAt(o.name, o.title).startsWith('in ')
+        ? o.current
+          ? 'am'
+          : 'was'
+        : 'worked';
+  const now = mine.find((o) => same(o.name, ctx.person.org));
+  if (now)
+    return {
+      kind: 'shared_employer',
+      text: now.current
+        ? `both ${inOrAt(now.name, now.title)}`
+        : `${ctx.person.fullName} works where the student was`,
+      sharedOrg: now.name,
+      overlap: now.current ? 'both_now' : 'them_now',
+      userDid: did(now),
+    };
+  const before = mine.find((o) => same(o.name, ctx.person.previousOrg));
+  if (before)
+    return {
+      kind: 'shared_employer',
+      text: `both spent time at ${before.name}`,
+      sharedOrg: before.name,
+      overlap: 'them_before',
+      userDid: did(before),
+    };
+  return undefined;
+}
+
+/** "I interned at Comerica Bank", "I'm in Wolverine Consulting Group", "I was in the club". */
+function userAtOrg(c: Connection): string {
+  const where = inOrAt(c.sharedOrg ?? '');
+  if (c.userDid === 'am') return `I'm ${where}`;
+  if (c.userDid === 'was') return `I was ${where}`;
+  return `I ${c.userDid ?? 'worked'} ${where}`;
+}
+
 /** Find the strongest checkable link between student and recipient from stored data. */
 export function deriveConnection(ctx: DraftContext): Connection | undefined {
   if (ctx.connection) return ctx.connection;
@@ -816,10 +901,8 @@ export function deriveConnection(ctx: DraftContext): Connection | undefined {
     return { kind: 'warmup', text: strip(ctx.chat.warmUpNote) };
   if (ctx.person.isAlumni)
     return { kind: 'alumni', text: `${ctx.person.fullName} went to ${ctx.user.school}` };
-  const shared = (ctx.user.pastOrgs ?? []).find(
-    (o) => o && ctx.person.previousOrg && o.toLowerCase() === ctx.person.previousOrg.toLowerCase(),
-  );
-  if (shared) return { kind: 'shared_employer', text: `both spent time at ${shared}`, sharedOrg: shared };
+  const shared = sharedOrgWith(ctx);
+  if (shared) return shared;
   if (ctx.person.previousOrg && ctx.person.org && ctx.person.previousOrg !== ctx.person.org)
     return {
       kind: 'transition',
@@ -1054,17 +1137,19 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       if (isLinkedIn) {
         const short = op ? shortConnection(ctx, c!) : `[${WHY_THEM}: one line only true of ${first}]`;
         const sq = shortQuestion(q);
+        // who the student is comes first and stays: a long "Why them" line shortens the question, then drops it for
+        // "a few questions", and only then the line saying who is writing
         const candidates = [
           `Hi ${first}, ${school} ${yl} here. ${short} Would you be open to ${minutes} minutes on ${q}? Happy to work around your schedule. ${ctx.user.firstName}`,
           `Hi ${first}, I'm ${me}. ${short} Could I take ${minutes} minutes to hear ${q}? Thanks either way, ${ctx.user.firstName}`,
-          `Hi ${first}, ${school} ${yl} here. ${short} Would ${minutes} minutes on ${sq} be possible? Thanks, ${ctx.user.firstName}`,
-          // a long "Why them" line keeps the real question and drops the "who I am" opener before it drops the ask
-          `Hi ${first}, ${short} Would ${minutes} minutes on ${q} be possible? Thanks, ${ctx.user.firstName}`,
+          `Hi ${first}, ${school} ${yl} here. ${short} Could I take ${minutes} minutes to hear ${sq}? Thanks, ${ctx.user.firstName}`,
+          `Hi ${first}, ${school} ${yl} here. ${short} Could I take ${minutes} minutes to hear ${sq}? ${ctx.user.firstName}`,
           `Hi ${first}, ${school} ${yl} here. ${short} Would you have ${minutes} minutes for a few questions? Thanks, ${ctx.user.firstName}`,
+          `Hi ${first}, ${afterComma(short)} Could I take ${minutes} minutes to hear ${sq}? Thanks, ${ctx.user.firstName}`,
         ];
         bodyShort =
           candidates.find((x) => x.length <= LINKEDIN_NOTE_TARGET) ??
-          candidates.slice(0, 4).find((x) => x.length <= LINKEDIN_NOTE_MAX) ??
+          candidates.slice(0, 5).find((x) => x.length <= LINKEDIN_NOTE_MAX) ??
           [...candidates].sort((a, b) => a.length - b.length).find((x) => x.length <= LINKEDIN_NOTE_MAX) ??
           fitNote(candidates[4]!, LINKEDIN_NOTE_MAX);
         if (ctx.person.linkedinConnected) {
@@ -1698,6 +1783,13 @@ function takeawayPhrase(t: string, person: DraftContext['person'], isClause = fa
   return phrase;
 }
 
+/** A sentence carried on after "Hi Rachel,": "you spoke at ...", while "I", "Sarah" and "MIT" keep their capital. */
+function afterComma(s: string): string {
+  return /^(You|Your|We|Our|Saw|Read|Following|A|An|The|Just|Loved|Thanks)\b/.test(s)
+    ? lower1(s)
+    : softLower(s);
+}
+
 function shortQuestion(q: string): string {
   return q.replace(/,? and what (you'd|you would) do differently.*$/, '');
 }
@@ -1720,7 +1812,11 @@ function shortConnection(ctx: DraftContext, c: Connection): string {
     case 'transition':
       return `Saw you went from ${c.previous} to ${org ?? 'your current role'}, which is the path I'm trying to understand.`;
     case 'shared_employer':
-      return `We overlap on ${c.sharedOrg}; I interned there.`;
+      return c.overlap === 'both_now'
+        ? `We're both ${inOrAt(c.sharedOrg!)}.`
+        : c.overlap === 'them_now'
+          ? `${userAtOrg(c)}, where you are now.`
+          : `We overlap on ${c.sharedOrg}; ${userAtOrg(c)}.`;
     case 'post':
     case 'warmup':
       return `Read your post ${postPhrase(c.text)}.`;

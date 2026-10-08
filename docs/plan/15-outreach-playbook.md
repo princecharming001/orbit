@@ -108,7 +108,7 @@ Exemplar (partner who spoke on campus; the only acceptable cold-to-partner messa
 
 ### 2.4 LinkedIn connection note (300 characters, hard cap)
 
-**Limit:** 150 to 260 characters [SECONDARY]; never fill all 300. Free LinkedIn accounts cut notes at 200 characters, so the engine aims for 200 and only goes longer (never past 300) when the connection and the ask do not fit. **Required:** who + connection, one specific about them, the ask or the reason to connect. Never a bare request, never "can I ask you something?" The note must carry the ask so no second message is needed. No resume, no referral.
+**Limit:** 150 to 260 characters [SECONDARY]; never fill all 300. Free LinkedIn accounts cut notes at 200 characters, so the engine aims for 200 and only goes longer (never past 300) when the connection and the ask do not fit. **Required:** who + connection, one specific about them, the ask or the reason to connect. Never a bare request, never "can I ask you something?" The note must carry the ask so no second message is needed. No resume, no referral. When the connection line is long, the engine shortens the question first, then swaps it for "a few questions", and only last drops the line saying who is writing. The composer counts the note against 200 characters and warns past it.
 
 > Hi {first}, {school} junior here. Saw you went from the debate team to {org}'s TMT group, which is the path I'm trying to understand. Would you be open to 15 minutes on how you made that jump? Happy to work around your schedule. {me}
 

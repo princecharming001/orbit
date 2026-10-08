@@ -1755,14 +1755,28 @@ describe('usability round 5', () => {
     expect(t.body).toMatch(/resume/);
     expect(wordsIn(t.body)).toBeLessThanOrEqual(MAX_WORDS.thank_you);
   });
-  it('a long "Why them" line in a LinkedIn note keeps the real question instead of "a few questions"', () => {
-    const long = base({
-      channel: 'linkedin',
-      person: { ...base().person, isAlumni: false },
-      facts: [fact('c', 'connection', 'We both rowed crew at Michigan and I read your post on staffing')],
-    });
-    const d = generateDraft(long);
-    expect(d.bodyShort ?? d.body).not.toMatch(/a few questions/);
+  it('a long "Why them" line in a LinkedIn note keeps the real question while it fits, and always says who is writing', () => {
+    // the playbook requires who is writing in a connection note (15 §2.4); the specific question is kept whenever the
+    // note still fits in the 200 characters a free account allows (usability round 6 reversed the round 5 order,
+    // which dropped "who I am" first and sent notes that never said who the student was)
+    const mid = generateDraft(
+      base({
+        channel: 'linkedin',
+        person: { ...base().person, isAlumni: false },
+        facts: [fact('c', 'connection', 'I read your post on staffing')],
+      }),
+    );
+    expect(mid.bodyShort).not.toMatch(/a few questions/);
+    expect(mid.bodyShort).toMatch(/Cornell junior here/);
+    const long = generateDraft(
+      base({
+        channel: 'linkedin',
+        person: { ...base().person, isAlumni: false },
+        facts: [fact('c', 'connection', 'We both rowed crew at Michigan and I read your post on staffing')],
+      }),
+    );
+    expect(long.bodyShort).toMatch(/Cornell junior here/);
+    expect(long.bodyShort!.length).toBeLessThanOrEqual(200);
   });
   it('the "Why them" gap is found in a draft, and a typed line drops into it as a sentence', () => {
     const d = generateDraft(base({ person: { ...base().person, isAlumni: false } }));
@@ -1792,5 +1806,86 @@ describe('greeting a peer (usability round 5)', () => {
       }),
     );
     expect(d.body).not.toMatch(/^Dear Jake Morrison/);
+  });
+});
+
+describe('an organisation on the resume the person is at (UX round 6)', () => {
+  const consultingStudent = {
+    ...base().user,
+    targetFunctions: ['consulting'],
+    pastOrgs: ['Wolverine Consulting Group', 'Comerica Bank'],
+    orgRoles: [
+      { name: 'Wolverine Consulting Group', title: 'Associate Consultant', current: true },
+      { name: 'Comerica Bank', title: 'Summer Analyst Intern', current: false },
+    ],
+  };
+  it('the president of the student club they are in is a peer: "Hi Jake", and the club is the connection', () => {
+    const d = generateDraft(
+      base({
+        user: consultingStudent,
+        person: {
+          firstName: 'Jake',
+          lastName: 'Morrison',
+          fullName: 'Jake Morrison',
+          title: 'President',
+          org: 'Wolverine Consulting Group',
+          relationshipType: 'unknown',
+          strength: 0.05,
+        },
+        seed: 'jake',
+      }),
+    );
+    expect(d.body).toMatch(/^Hi Jake,/);
+    expect(d.body).toMatch(/we're both at Wolverine Consulting Group/);
+    expect(d.needsInput).not.toContain('connection');
+  });
+  it('someone at the firm the student interned at hears that, not a generic note', () => {
+    const d = generateDraft(
+      base({
+        user: consultingStudent,
+        person: {
+          firstName: 'Hannah',
+          lastName: 'Lee',
+          fullName: 'Hannah Lee',
+          title: 'Credit Analyst',
+          org: 'Comerica Bank',
+          relationshipType: 'unknown',
+          strength: 0.05,
+        },
+        seed: 'hannah',
+      }),
+    );
+    expect(d.body).toMatch(/I interned at Comerica Bank, where you are now\./);
+    expect(d.needsInput).not.toContain('connection');
+  });
+});
+
+describe('a LinkedIn note with a long "Why them" line (UX round 6)', () => {
+  it('keeps who is writing, and never capitalises the line after "Hi Rachel,"', () => {
+    for (const line of [
+      'You spoke at the Michigan consulting club panel last Thursday',
+      'You spoke at the Michigan consulting club panel last Thursday about how you recruited from a non-target school',
+    ]) {
+      const d = generateDraft(
+        base({
+          channel: 'linkedin',
+          user: { ...base().user, targetFunctions: ['consulting'] },
+          person: {
+            firstName: 'Rachel',
+            lastName: 'Kim',
+            fullName: 'Rachel Kim',
+            title: 'Business Analyst',
+            org: 'McKinsey',
+            relationshipType: 'unknown',
+            strength: 0.05,
+          },
+          facts: [fact('c', 'connection', line)],
+          seed: 'rachel',
+        }),
+      );
+      expect(d.bodyShort).not.toMatch(/Hi Rachel, You\b/);
+      expect(d.bodyShort).not.toMatch(/Would \d+ minutes on .* be possible/);
+      expect(d.bodyShort).toMatch(/Cornell junior here|I'm a junior at Cornell/);
+    }
   });
 });

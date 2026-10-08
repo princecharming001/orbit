@@ -42,6 +42,7 @@ import {
 import { readSuggestedNames, type SuggestedName, saveSuggestedContacts } from '../engine/introductions';
 import { moveChat, upcomingMeeting } from '../engine/move';
 import { buildPrep, personSummary, toYou } from '../engine/prep';
+import { sharesOrgNow } from '../engine/resume';
 import { useSession } from '../state/session';
 import { Avatar, Button, Card, Chip, cx, Modal, NotFound, relDate, Select, Tabs, useToast } from '../ui';
 import { STAGE_COLOR, StrengthDots } from './Pipeline';
@@ -252,7 +253,15 @@ export function PersonPage() {
       kind === 'outreach' &&
       !chat &&
       !opts.confirmed &&
-      needsWarmUp(person, channel, settings?.warmUpEnabled ?? true)
+      needsWarmUp(
+        person,
+        channel,
+        settings?.warmUpEnabled ?? true,
+        sharesOrgNow(
+          person,
+          resumeFacets.filter((f) => !f.excluded),
+        ),
+      )
     ) {
       setWarmUpChoice(true);
       return;

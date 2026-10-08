@@ -15,6 +15,7 @@ import {
 } from '../engine/brief';
 import { answerIntroductionQuestion } from '../engine/introductions';
 import { mergePeople } from '../engine/people';
+import { currentResumeFacets, sharesOrgNow } from '../engine/resume';
 import { dismissSuggestion, restoreSuggestion, snoozeSuggestion } from '../engine/send';
 import { applyStage, decideProposedStage } from '../engine/stages';
 import { useSession } from '../state/session';
@@ -115,6 +116,14 @@ export function SuggestionCard({
     [s.outboundMessageId],
   );
   const chat = useLiveQuery(() => (s.chatId ? db.chats.get(s.chatId) : undefined), [s.chatId]);
+  const sharedOrgNow =
+    useLiveQuery(
+      async () =>
+        s.kind === 'new_outreach' && person && user
+          ? sharesOrgNow(person, await currentResumeFacets(user.id))
+          : false,
+      [s.kind, person?.currentOrganizationRaw, user?.id],
+    ) ?? false;
   const other = useOther(s.payload.otherPersonId as string | undefined);
   const introducer = useOther(s.payload.introducerId as string | undefined);
   // what made Orbit think the stage changed: the message it read, when there is one
@@ -289,7 +298,7 @@ export function SuggestionCard({
     !s.chatId &&
     !!person &&
     !person.primaryEmail &&
-    needsWarmUp(person, 'linkedin', settings?.warmUpEnabled ?? true);
+    needsWarmUp(person, 'linkedin', settings?.warmUpEnabled ?? true, sharedOrgNow);
   const startWarmUp = async () => {
     if (!person) return;
     setBusy(true);

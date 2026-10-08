@@ -217,8 +217,11 @@ export function Discover() {
             {list.map((r) => {
               const p = byId.get(r.personId);
               if (!p) return null;
+              // someone the student was pointed to, or in their own club, is written to directly
               const cold =
-                p.strength < 0.2 && !p.primaryEmail && !r.reasons.some((x) => x.code === 'referred');
+                p.strength < 0.2 &&
+                !p.primaryEmail &&
+                !r.reasons.some((x) => x.code === 'referred' || x.code === 'shared_org_now');
               const introId =
                 r.bestPath && r.bestPath.hops.length >= 2 ? r.bestPath.hops[0]!.toId : undefined;
               const introducer = introId ? byId.get(introId) : undefined;

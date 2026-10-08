@@ -16,7 +16,7 @@ Cold LinkedIn messages from a stranger get ignored. The same message after the r
 
 ## 3. When a warm-up starts
 
-`startWarmUpOrOutreach` creates the chat in `warming` instead of `identified` when all of: the channel is LinkedIn (no email on file), the person's closeness is under 0.2, the person has a LinkedIn slug, and the setting `warmUpEnabled` is on (default on; `warmUpDays` default 4, range 2–10). Otherwise the chat starts in `identified` with an outreach draft as before.
+`startWarmUpOrOutreach` creates the chat in `warming` instead of `identified` when all of: the channel is LinkedIn (no email on file), the person's closeness is under 0.2, the person has a LinkedIn slug, the person is not at an organisation the student is in now (their own club or current job on the resume, `sharesOrgNow`: someone they see is not warmed up to), and the setting `warmUpEnabled` is on (default on; `warmUpDays` default 4, range 2–10). Otherwise the chat starts in `identified` with an outreach draft as before.
 
 ## 4. The plan
 

@@ -1197,7 +1197,7 @@ export function staleReason(
  */
 export function joinReasons(texts: string[], firstName = 'they'): string {
   const subject = (t: string, i: number) => {
-    if (/^Works in\b/.test(t))
+    if (/^Works (in|at)\b/.test(t))
       return `${i ? firstName : 'Works'} ${i ? 'works' : ''}${t.slice(5)}`.replace(/\s+/g, ' ');
     if (/^Overlaps with your experience$/.test(t))
       return i ? `${firstName}'s background overlaps with yours` : t;

@@ -12,7 +12,7 @@ import {
   MESSAGE_KINDS,
   selectForBrief,
 } from '../suggestions/rules';
-import type { PersonFact } from '../types';
+import type { Person, PersonFact } from '../types';
 
 describe('style card', () => {
   it('learns greeting and signoff', () => {
@@ -257,5 +257,68 @@ describe('resume parse', () => {
     expect(exp?.startDate).toBe('2025-06-01');
     expect(exp?.keywords).toContain('reconciliation');
     expect(facets.find((f) => f.kind === 'skill_group')?.keywords).toContain('typescript');
+  });
+});
+
+describe('recommendations: an organisation on the resume (UX round 6)', () => {
+  it('names the student club they share and the firm the student interned at', () => {
+    const ds = buildDemoDataset({ now: new Date('2026-10-06T13:00:00Z') });
+    const mk = (id: string, name: string, title: string, org: string): Person => ({
+      ...ds.people[0]!,
+      id,
+      displayName: name,
+      firstName: name.split(' ')[0]!,
+      lastName: name.split(' ')[1],
+      currentTitle: title,
+      currentOrganizationRaw: org,
+      currentOrganizationId: undefined,
+      isAlumni: false,
+      strength: 0.05,
+    });
+    const people = [
+      mk('jake', 'Jake Morrison', 'President', 'Wolverine Consulting Group'),
+      mk('hannah', 'Hannah Lee', 'Credit Analyst', 'Comerica Bank'),
+    ];
+    const recs = recommendPeople({
+      userId: 'u',
+      user: { school: ds.user.school, majors: ds.user.majors, gradYear: 2027 },
+      goals: { ...ds.goals, targetFunctions: ['consulting'] },
+      targetCompanies: [],
+      resumeFacets: [
+        {
+          id: 'f1',
+          resumeId: 'r',
+          kind: 'experience',
+          title: 'Associate Consultant',
+          organizationName: 'Wolverine Consulting Group',
+          startDate: '2025-09-01',
+          text: 'x',
+          keywords: [],
+          confirmed: true,
+        },
+        {
+          id: 'f2',
+          resumeId: 'r',
+          kind: 'experience',
+          title: 'Summer Analyst Intern',
+          organizationName: 'Comerica Bank',
+          startDate: '2026-06-01',
+          endDate: '2026-08-01',
+          text: 'x',
+          keywords: [],
+          confirmed: true,
+        },
+      ],
+      people,
+      chats: [],
+      pathStrength: () => 0,
+      recentlyRecommended: new Set(),
+      now: new Date('2026-10-06T13:00:00Z'),
+    });
+    const why = (id: string) => recs.find((r) => r.personId === id)?.reasons.map((x) => x.text) ?? [];
+    expect(why('jake')[0]).toBe("You're both at Wolverine Consulting Group");
+    expect(recs.find((r) => r.personId === 'jake')!.reasons[0]!.code).toBe('shared_org_now');
+    expect(why('hannah')[0]).toBe('Works at Comerica Bank, where you interned');
+    expect(why('jake')).not.toContain('Overlaps with your experience');
   });
 });

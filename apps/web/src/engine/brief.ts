@@ -48,7 +48,7 @@ import {
 } from './introductions';
 import { noteMatchCandidate } from './notes';
 import { personSummary } from './prep';
-import { currentResumeFacets } from './resume';
+import { currentResumeFacets, sharesOrgNow } from './resume';
 import { retireSuggestions, runTimedStageRules } from './stages';
 
 const DAY = 86_400_000;
@@ -788,6 +788,9 @@ export async function buildDraftContext(
     .filter((f) => f.kind === 'experience' && f.organizationName)
     .map((f) => f.organizationName!)
     .filter((v, i, arr) => arr.indexOf(v) === i);
+  const orgRoles = resumeFacets
+    .filter((f) => f.kind === 'experience' && f.organizationName)
+    .map((f) => ({ name: f.organizationName!, title: f.title, current: !f.endDate }));
   const reportBack = s?.payload.reportBack as DraftContext['reportBack'] | undefined;
   const userConnection = inputs.connection?.trim();
   const factList: PersonFact[] = facts
@@ -821,6 +824,7 @@ export async function buildDraftContext(
       schedulingLink: settings?.schedulingLink,
       timezone: user.timezone,
       pastOrgs,
+      orgRoles,
     },
     styleCard: style?.card ?? defaultStyleCard(settings?.tonePreset ?? 'warm', user.firstName),
     person: {
@@ -1615,8 +1619,12 @@ export function needsWarmUp(
   person: Pick<Person, 'strength' | 'linkedinSlug'>,
   channel: 'gmail' | 'linkedin',
   warmUpEnabled: boolean,
+  /** they are in the student's own club or at their job now (`sharesOrgNow`): no warm-up for someone you see */
+  sharedOrgNow = false,
 ): boolean {
-  return person.strength < 0.2 && channel === 'linkedin' && !!person.linkedinSlug && warmUpEnabled;
+  return (
+    person.strength < 0.2 && channel === 'linkedin' && !!person.linkedinSlug && warmUpEnabled && !sharedOrgNow
+  );
 }
 
 export async function startWarmUpOrOutreach(
@@ -1637,7 +1645,12 @@ export async function startWarmUpOrOutreach(
   // a person someone pointed the student to is written to now, naming who suggested it: no warm-up
   const cold =
     !opts.skipWarmUp &&
-    needsWarmUp(person, channel, settings?.warmUpEnabled ?? true) &&
+    needsWarmUp(
+      person,
+      channel,
+      settings?.warmUpEnabled ?? true,
+      sharesOrgNow(person, await currentResumeFacets(user.id)),
+    ) &&
     !(await findReferrerFor(user.id, person));
   // a first message the student already started for this person is the one they continue: a second click (or a page
   // that asks again while the first draft is still being written) never makes a second copy

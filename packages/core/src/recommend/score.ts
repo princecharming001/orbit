@@ -1,3 +1,4 @@
+import { inOrAt } from '../drafts/phrasing';
 import { functionPhrase } from '../labels';
 import { normalizeCompany } from '../text/normalize';
 import type {
@@ -138,13 +139,29 @@ export function recommendPeople(inp: RecommendInput): Recommendation[] {
       resumeKeywords,
       `${p.headline ?? ''} ${p.currentTitle ?? ''}`.split(/\W+/).filter((w) => w.length > 3),
     );
-    const fit = 0.35 * companyMatch + 0.25 * fnMatch + 0.15 * indMatch + 0.25 * kw;
+    // someone at an organisation on the student's resume: their own club now, or the firm they interned at
+    const shared = orgNorm
+      ? inp.resumeFacets.find(
+          (f) =>
+            f.kind === 'experience' &&
+            !!f.organizationName &&
+            normalizeCompany(f.organizationName) === orgNorm,
+        )
+      : undefined;
+    const fit = 0.35 * companyMatch + 0.25 * fnMatch + 0.15 * indMatch + 0.25 * kw + (shared ? 0.3 : 0);
     if (fit < 0.12 && !p.isAlumni) continue;
     const pathStrength = inp.pathStrength(p.id); // one lookup per candidate; callers pass a precomputed table
     const reach = Math.max(pathStrength, p.strength, p.isAlumni ? 0.6 : 0.25);
     const prior = responsePrior(p, inp.user);
     const score = Math.max(fit, 0.05) ** 0.5 * reach ** 0.3 * prior ** 0.2;
     const reasons: { code: string; text: string }[] = [];
+    if (shared)
+      reasons.push({
+        code: shared.endDate ? 'shared_org' : 'shared_org_now',
+        text: !shared.endDate
+          ? `You're both ${inOrAt(p.currentOrganizationRaw!, shared.title)}`
+          : `Works at ${p.currentOrganizationRaw}, where you ${/\bintern/i.test(shared.title ?? '') ? 'interned' : 'worked'}`,
+      });
     if (p.isAlumni) reasons.push({ code: 'alumni', text: `${inp.user.school} alum` });
     if (tc) reasons.push({ code: 'target_company', text: `${tc.nameRaw} is on your target list` });
     if (fnMatch)
@@ -152,7 +169,7 @@ export function recommendPeople(inp: RecommendInput): Recommendation[] {
         code: 'function_match',
         text: `Works in ${functionPhrase(fnKey) || 'your target function'}${p.currentTitle ? ` (${p.currentTitle})` : ''}`,
       });
-    if (kw >= 0.2) reasons.push({ code: 'resume_overlap', text: 'Overlaps with your experience' });
+    if (kw >= 0.2 && !shared) reasons.push({ code: 'resume_overlap', text: 'Overlaps with your experience' });
     if (p.strength >= 0.3) reasons.push({ code: 'warm', text: 'You already know each other a little' });
     else if (pathStrength >= 0.15) reasons.push({ code: 'path', text: 'Reachable through someone you know' });
     out.push({

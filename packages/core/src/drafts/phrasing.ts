@@ -519,3 +519,14 @@ const CONTRACTIONS: [RegExp, string][] = [
 export function expandContractions(s: string): string {
   return CONTRACTIONS.reduce((acc, [re, to]) => acc.replace(re, to), s);
 }
+
+const CLUB_LIKE = /\b(club|society|association|council|chapter|committee|fraternity|sorority)\b/i;
+
+/** "in Wolverine Consulting Group" for a student organisation, "at Comerica Bank" for an employer. */
+export function inOrAt(org: string, title?: string): string {
+  const club =
+    CLUB_LIKE.test(org) ||
+    /\b(president|treasurer|secretary|chair|member|captain)\b/i.test(title ?? '') ||
+    /\b(student|campus|undergraduate)\b/i.test(org);
+  return club ? `in ${org}` : `at ${org}`;
+}

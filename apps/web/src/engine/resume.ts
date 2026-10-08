@@ -1,5 +1,5 @@
 import type { Resume, ResumeFacet, User } from '@orbit/core';
-import { heuristicResumeParse, newId, summarySentence } from '@orbit/core';
+import { heuristicResumeParse, newId, normalizeCompany, summarySentence } from '@orbit/core';
 import { db } from '../db/schema';
 import { hasLlm, llmResumeParse } from '../integrations/anthropic';
 import { surfaceLlmFailure } from './brief';
@@ -166,6 +166,27 @@ export async function extractTextFromFile(file: File): Promise<string> {
       'That file has no text Orbit can read (a scanned PDF is an image). Upload a PDF exported from your editor.',
     );
   return text;
+}
+
+/**
+ * The person is at an organisation the student is in now (their own club, their current job): someone they see, not a
+ * stranger to warm up to on LinkedIn.
+ */
+export function sharesOrgNow(
+  person: { currentOrganizationRaw?: string },
+  facets: Pick<ResumeFacet, 'kind' | 'organizationName' | 'endDate'>[],
+): boolean {
+  const org = normalizeCompany(person.currentOrganizationRaw);
+  return (
+    !!org &&
+    facets.some(
+      (f) =>
+        f.kind === 'experience' &&
+        !f.endDate &&
+        !!f.organizationName &&
+        normalizeCompany(f.organizationName) === org,
+    )
+  );
 }
 
 /** The facets of the student's current resume that they kept: what matching and drafting may use. */
