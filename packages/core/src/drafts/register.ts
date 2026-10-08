@@ -100,10 +100,7 @@ export function questionsFor(
       if (opts.late)
         return senior
           ? [
-              q(
-                "how you'd approach the rest of this cycle if you were in my position",
-                'recruiting at this point in the cycle',
-              ),
+              q("how you'd approach recruiting from here if you were in my position", 'recruiting from here'),
               q(
                 `what separates the analysts who do well${TG ? ` in ${TG}` : org ? ` at ${org}` : ''}`,
                 'what separates the analysts who do well',
@@ -243,10 +240,7 @@ export function questionsFor(
       // it; a consultant or business analyst about their own choices
       if (exec)
         return [
-          q(
-            'what separates the business analysts who do well in their first year',
-            'what makes new analysts stand out',
-          ),
+          q('what separates the business analysts who do well early on', 'what makes new analysts stand out'),
           q(
             "what you'd tell a student deciding whether consulting is the right first job",
             'whether consulting is the right first job',

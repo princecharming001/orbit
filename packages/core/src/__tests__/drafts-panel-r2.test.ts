@@ -100,7 +100,10 @@ describe('thread state', () => {
     );
     expect(d.kind).toBe('nurture');
     expect(d.body).not.toMatch(/Thank you for the reply|Thanks for getting back|Would either of these work/);
-    expect(d.body).toMatch(/Thanks again for talking with me in May about Postgres or Elasticsearch\./);
+    // the substance of the chat as people say it, never the subject line pasted in (panel round 3)
+    expect(d.body).toMatch(
+      /Thanks again for talking with me in May about choosing between Postgres and Elasticsearch\./,
+    );
     expect(d.body).toMatch(/I'm planning to apply for Linear's software engineering internship this cycle\./);
     expect(d.body).toMatch(/15 minutes/);
     expect(d.needsInput).toEqual([]);
@@ -206,7 +209,8 @@ describe('thread state', () => {
     expect(d.kind).toBe('bump');
     expect(d.body).toMatch(/Welcome back/);
     expect(d.body).toMatch(/about your first year on Ramp's card team/);
-    expect(d.body).toMatch(/I've since applied/);
+    // "since" asserts an order the data does not show (panel round 3)
+    expect(d.body).toMatch(/I've also applied/);
   });
   it('a "first" message to someone already written to is the bump on that thread', () => {
     const d = generateDraft(
@@ -255,9 +259,10 @@ describe('honesty about state', () => {
         { title: 'University Recruiter', org: 'Ramp', relationshipType: 'recruiter', strength: 0 },
       ),
     );
-    expect(d.body).toMatch(/I have applied for the Software Engineering Intern role at Ramp\./);
+    // a tech recruiter gets "Hi" and contractions (panel round 3)
+    expect(d.body).toMatch(/I've applied for the Software Engineering Intern role at Ramp\./);
     expect(d.body).not.toMatch(/planning to apply|helpful conversations|rolling basis/);
-    expect(d.body).toMatch(/I have also spoken with Lena on the team\./);
+    expect(d.body).toMatch(/I've also spoken with Lena\./);
     expect(d.body).toMatch(/first-round interviews/);
   });
   it('a thank-you never promises to follow up on a posting the student already applied to', () => {
@@ -288,7 +293,9 @@ describe('honesty about state', () => {
         { title: 'Vice President, M&A', org: 'Goldman Sachs' },
       ),
     );
-    expect(misfit.body).toMatch(/a check-in fits better than a referral ask/);
+    // their side of the firm does not hire for the student's target: the check-in, not a referral ask (round 3)
+    expect(misfit.kind).toBe('nurture');
+    expect(misfit.body).not.toMatch(/refer|role at Goldman/);
   });
   it('a hook from the notes is something the student saw, unless the note says they said it', () => {
     const saw = generateDraft(
@@ -299,7 +306,8 @@ describe('honesty about state', () => {
         facts: [fact('h', 'hook', 'they are hiring their first two interns in January', 4)],
       }),
     );
-    expect(saw.body).toMatch(/I also saw that you're hiring your first two interns in January\./);
+    // a note about the firm is the firm's, and not "I also saw" bolted on (panel round 3)
+    expect(saw.body).toMatch(/I saw that Linear is hiring its first two interns in January\./);
     expect(saw.body).not.toMatch(/you mentioned/i);
     const said = generateDraft(
       base({
@@ -320,7 +328,8 @@ describe('honesty about state', () => {
       }),
     );
     expect(d.body).not.toMatch(/Just saw the news/);
-    expect(d.body).toMatch(/Congratulations on your move from Deloitte to Oliver Wyman/);
+    expect(d.body).toMatch(/Congratulations on (joining|the move to) Oliver Wyman/);
+    expect(d.body).not.toMatch(/Deloitte/);
     // advice noted after the move says the same, with no meeting on record
     const noted = generateDraft(
       base({
@@ -329,14 +338,21 @@ describe('honesty about state', () => {
         newAffiliation: { title: 'Principal', org: 'Oliver Wyman', since: ago(10), previousOrg: 'Deloitte' },
       }),
     );
-    expect(noted.body).not.toMatch(/Just saw the news|first few weeks/);
+    expect(noted.body).not.toMatch(/Just saw the news/);
+    // the conversation is picked back up with what they said (panel round 3)
+    expect(noted.body).toMatch(
+      /Thanks again for your advice to structure the case out loud|structuring the case out loud/,
+    );
   });
   it('a report-back never tells the introducer the person has not answered', () => {
     const d = generateDraft(
       base({ kind: 'report_back', reportBack: { targetName: 'Lucas Fischer', outcome: 'no_reply' } }),
     );
     expect(d.body).not.toMatch(/haven't heard|no reply|not heard/i);
-    expect(d.body).toMatch(/I've followed up and will let you know how it goes\./);
+    // one promise, once, and no action the data does not show (panel round 3)
+    expect(d.body).not.toMatch(/followed up/);
+    expect(d.body).toMatch(/I've written to Lucas and will let you know how it goes once we've talked\./);
+    expect(d.body.match(/keep you posted|let you know/g)).toHaveLength(1);
   });
 });
 
@@ -358,8 +374,15 @@ describe('investment banking timing', () => {
         { title: 'Campus Recruiter', org: 'Goldman Sachs', relationshipType: 'recruiter' },
       ),
     );
-    expect(recruiter.body).toMatch(/main Summer 2027 cycle ran earlier this year/);
-    expect(recruiter.body).toMatch(/off-cycle or diversity programs/);
+    expect(recruiter.body).toMatch(/most Summer 2027 seats filled earlier this year/);
+    // nothing on record says the student qualifies for a diversity program (panel round 3)
+    expect(recruiter.body).toMatch(/off-cycle program/);
+    expect(recruiter.body).not.toMatch(/diversity/);
+    // and a banker is asked for their judgment, never whether the group "still brings on" analysts
+    for (const seed of ['a', 'b', 'c', 'd']) {
+      const vp = generateDraft(base({ seed, user: IB_USER() }, BANKER));
+      expect(vp.body).not.toMatch(/diversity|still brings on|off-cycle|missed the main/);
+    }
     expect(recruiter.body).not.toMatch(/planning to apply/);
   });
 });
@@ -382,7 +405,9 @@ describe('the ask', () => {
     );
     expect(stranger.kind).toBe('outreach');
     expect(stranger.body).not.toMatch(/anything that helps an application|process question|refer me/);
-    expect(stranger.body).toMatch(/I've applied for Google's software engineering internship \(req R-1\)\./);
+    // a req number is for a recruiter (panel round 3)
+    expect(stranger.body).toMatch(/I've applied for Google's software engineering internship\./);
+    expect(stranger.body).not.toMatch(/R-1/);
     expect(stranger.body).toMatch(/15 minutes/);
     const introduced = generateDraft(
       base({
@@ -437,7 +462,7 @@ describe('the ask', () => {
       ),
     );
     expect(startup.body).not.toMatch(/campus event|info session|rolling basis/);
-    expect(startup.body).toMatch(/hiring your first two interns in January/);
+    expect(startup.body).toMatch(/Hex is hiring its first two interns in January/);
     const fund = generateDraft(
       base(
         { user: IB_USER() },
@@ -451,7 +476,9 @@ describe('the ask', () => {
         { title: 'Campus Recruiter', org: 'Evercore', relationshipType: 'recruiter' },
       ),
     );
-    expect(bank.body).toMatch(/Cornell info session/);
+    // one question only the recruiter can answer, never a deadline or an info session the careers page lists
+    expect(bank.body).not.toMatch(/deadline|info session/);
+    expect(bank.body).toMatch(/apply to a specific group/);
   });
   it('an offer becomes the next step, and an offered intro is what is asked for', () => {
     const cases: [string, RegExp][] = [
@@ -485,7 +512,7 @@ describe('the ask', () => {
         targetCompany: { name: 'Linear', roleLabel: 'Software Engineering Intern' },
       }),
     );
-    expect(intro.body).toMatch(/introduce me to your hiring manager\. I'd love to take you up on that/);
+    expect(intro.body).toMatch(/introduce me to the hiring manager\. I'd love to take you up on that/);
     expect(intro.body).not.toMatch(/refer me|Completely fine if not|If you would be comfortable/);
   });
   it('a resume asked for or promised is attached, never "I\'ll send it over today"', () => {
@@ -543,8 +570,37 @@ describe('register and specificity', () => {
     expect(li.body).toMatch(/^Hi Rhea,/);
     // a "Dear" letter signs off as one, never "Dear ... Best,"
     const dear = generateDraft(
-      base({ styleCard: formal }, { title: 'Managing Director', org: 'Evercore', isAlumni: true }),
+      base(
+        {
+          styleCard: formal,
+          facts: [fact('c', 'connection', 'I heard you speak on the Cornell finance club panel last spring')],
+        },
+        { title: 'Managing Director', org: 'Evercore', isAlumni: false, relationshipType: 'cold' },
+      ),
     );
+    // an alum, or anyone in a warm or direct voice, gets "Hi" (panel round 3)
+    for (const [card, isAlumni] of [
+      [formal, true],
+      [defaultStyleCard('warm', 'Alex'), false],
+    ] as const)
+      expect(
+        generateDraft(
+          base(
+            {
+              styleCard: card,
+              facts: [
+                fact('c', 'connection', 'I heard you speak on the Cornell finance club panel last spring'),
+              ],
+            },
+            {
+              title: 'Managing Director',
+              org: 'Evercore',
+              isAlumni,
+              relationshipType: isAlumni ? 'alumni' : 'cold',
+            },
+          ),
+        ).body,
+      ).toMatch(/^Hi Rhea,/);
     expect(dear.body).toMatch(/^Dear Rhea,[\s\S]*Best regards,\nAlex Rivera\nCornell '28$/);
   });
   it('what the student built goes only to a reader it means something to, and never after a conversation', () => {
@@ -567,7 +623,9 @@ describe('register and specificity', () => {
         targetCompany: { name: 'Linear', roleLabel: 'Software Engineering Intern' },
       }),
     );
-    expect(met.body).not.toMatch(/reconciliation|For context/);
+    // a referral ask carries one sentence of fit, never "For context" (panel round 3)
+    expect(met.body).not.toMatch(/For context/);
+    expect(met.body).toMatch(/Most relevant to the role, I built a reconciliation service/);
   });
   it('alumni openers name the school once, never "went from there", never restate their title', () => {
     for (const seed of ['a', 'b', 'c', 'd', 'e', 'f']) {
@@ -577,7 +635,9 @@ describe('register and specificity', () => {
           { title: 'CTO', org: 'Mercury', isAlumni: true, relationshipType: 'alumni' },
         ),
       );
-      expect(d.body.match(/Cornell/g)?.length).toBe(1 + (d.body.match(/Cornell '28/g)?.length ?? 0));
+      expect(d.body.match(/Cornell\b/g)?.length).toBe(1 + (d.body.match(/Cornell '28/g)?.length ?? 0));
+      // a fellow alum, never "an alum at Mercury", which reads as a former employee (panel round 3)
+      expect(d.body).not.toMatch(/an alum (at|in) /);
       expect(d.body).not.toMatch(
         /from there to|which is why I'm writing to you in particular|lead the engineering team|I noticed/,
       );
@@ -598,7 +658,9 @@ describe('register and specificity', () => {
     );
     expect(d.body).toMatch(/moved from Notion to Stripe|went from Notion to Stripe/);
     expect(d.body).not.toMatch(/product designer at Notion to/);
-    expect(d.body).toMatch(/how product design and software engineering work together/);
+    // the question only a designer's seat can answer for an engineering student (panel round 3)
+    expect(d.body).toMatch(/what the engineers you work best with do differently/);
+    expect(d.body).not.toMatch(/the kind of move I'm trying to understand/);
     expect(d.body).not.toMatch(/what you'd do differently|how that happened/);
   });
   it('a role change on record is the reason to write, not a request for a connection line', () => {
@@ -631,7 +693,9 @@ describe('register and specificity', () => {
       expect(peer.body).not.toMatch(/someone else on your team/);
     }
     const ref = generateDraft(base({ kind: 'bump', chat: { referrerName: 'Mei Chen' }, thread }));
-    expect(ref.body).toMatch(/Mei suggested I write to you/);
+    // what happened, never the referral as the reason for the bump (panel round 3)
+    expect(ref.body).toMatch(/the note I sent at Mei's suggestion/);
+    expect(ref.body).not.toMatch(/Mei suggested I write to you, so/);
     const senior = generateDraft(
       base({ kind: 'bump', seed: 'a', thread }, { title: 'Director of Engineering' }),
     );

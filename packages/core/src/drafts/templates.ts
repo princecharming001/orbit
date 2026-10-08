@@ -588,6 +588,8 @@ function roleFact(ctx: DraftContext, firm: string): RoleFact | undefined {
     const forms = c?.you ? ROLE_VERBS[v] : undefined;
     let rest = c?.rest ? theirWords(firstPart(c.rest)) : '';
     if (!forms || !rest || rest.split(' ').length > 12 || isConfidential(rest, firm)) continue;
+    // "leads the engineering team" to a CTO restates the title; only what the title does not say is worth a line
+    if (/^(the |a |an )?(\w+ )?(team|org|organization|group|company|department)$/i.test(rest)) continue;
     if (org) rest = rest.replace(/\bthe (company|startup|firm)\b/i, org);
     const named = (!!org && rest.includes(org)) || /\b(at|for) [A-Z]/.test(rest);
     const place = named || !org ? '' : ` at ${org}`;
@@ -911,7 +913,7 @@ function reconnectLine(ctx: DraftContext, c: Connection, now: Date): string {
         )
       : 'Hope things are good.';
   const medium = ctx.channel === 'linkedin' ? 'email' : 'note';
-  const topic = subjectTopic(ctx.thread?.subject);
+  const topic = talkTopic(subjectTopic(ctx.thread?.subject));
   const about = topic ? ` about ${topic}` : '';
   if (c.lastInbound)
     return `Thanks again for your ${medium}${since ? ` ${since}` : ''}${about}${days >= 14 ? ', and sorry it took me a while to follow up' : ''}.`;
@@ -938,7 +940,8 @@ const SCHOOL_DEMONYM: Record<string, string> = {
   Harvard: 'Harvard alum',
 };
 function fellowOf(school: string): string {
-  return school ? `a fellow ${SCHOOL_DEMONYM[school] ?? `${school} alum`}` : 'a fellow alum';
+  // the school is named in the same sentence, so without a word like "Cornellian" it is "a fellow alum"
+  return SCHOOL_DEMONYM[school] ? `a fellow ${SCHOOL_DEMONYM[school]}` : 'a fellow alum';
 }
 
 /**
@@ -1470,7 +1473,7 @@ function writtenKind(ctx: DraftContext, now: Date): { kind: MessageKind; reopen?
     return { kind: 'bump' };
   const upcoming = !!ctx.chat?.upcomingAt && new Date(ctx.chat.upcomingAt).getTime() > now.getTime();
   if (
-    ctx.kind === 'reply' &&
+    (ctx.kind === 'reply' || ctx.kind === 'schedule') &&
     t?.lastInboundAt &&
     !inboundNeedsAnswer(t, now) &&
     !upcoming &&
@@ -1643,7 +1646,7 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
           intro = `A quick update since my note ${ownRecent}: ${status}${spokeClause ? `, and ${spokeClause.replace(/^I've also/, "I've")}` : ''}.`;
           holdUntil = ownHold(known!, now, tz);
         } else if (known)
-          intro = `${reconnectLine(ctx, known, now)} A quick update: ${status}.${spokeClause ? ` ${spokeClause}.` : ''}`;
+          intro = `${reconnectLine(ctx, known, now)} ${applied ? `A quick update: ${status}.` : `I'm ${me}, and ${status}.`}${spokeClause ? ` ${spokeClause}.` : ''}`;
         else intro = `I'm ${me}, and ${status}.${spokeClause ? ` ${spokeClause}.` : ''}`;
         if (known) claims.push({ text: `${first} and the student have emailed before`, kind: 'shared' });
         body = `${G}\n\n${intro}${credLine} ${question}${/^thank/i.test(S.trim()) ? '' : '\n\nThank you for your time.'}\n\n${S}`;
@@ -1717,7 +1720,9 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       const roleSentence = useRole && op && !op.usedRole ? `I saw that you ${useRole.you}.` : '';
       const sit = op?.saidSituation
         ? ''
-        : `I'm ${me}, recruiting for ${lookingForPhrase(ctx)}${late ? '' : ' this cycle'}.`;
+        : ctx.applicationLine || tc
+          ? `I'm ${me}.`
+          : `I'm ${me}, recruiting for ${lookingForPhrase(ctx)}${late ? '' : ' this cycle'}.`;
       const commented =
         !!ctx.chat?.commentedOnPost && !['warmup', 'post'].includes(ctx.connection?.kind ?? '');
       const openText =
@@ -1759,7 +1764,7 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       // the firm is named once: a question that repeats it after the opener says "there"
       if (o && `${op?.text ?? ''} ${roleSentence} ${aboutLine}`.includes(o)) qq = thereFor(qq, o);
       const ask = askBlock(minutes, qq, seed, formal, thanksSignoff, { oneQuestion, friend });
-      const lines = join(openText, alsoCommented, roleSentence, appLine, aboutLine, sit, cred);
+      const lines = join(openText, alsoCommented, sit, roleSentence, appLine, aboutLine, cred);
       body = `${G}\n\n${lines}\n\n${ask}\n\n${S}`;
       if (op?.introReply) {
         // a reply-all on the introduction: thank the introducer, move them to bcc, then speak to the person
@@ -1866,7 +1871,7 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
                   seed,
                   'li-soft',
                 )}`;
-          body = `${recent ? `Hi ${first}, thanks for connecting. ` : `${G}\n\n`}${join(openText, roleSentence, appLine, aboutLine, sit, cred)} ${ending}\n\n${S}`;
+          body = `${recent ? `Hi ${first}, thanks for connecting. ` : `${G}\n\n`}${join(openText, sit, roleSentence, appLine, aboutLine, cred)} ${ending}\n\n${S}`;
         }
         subject = undefined;
       }
@@ -1980,7 +1985,7 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
     case 'schedule': {
       const last = ctx.thread?.lastSignal;
       // the reason they agreed to talk, so the times are not all the note says
-      const topic = subjectTopic(ctx.thread?.subject);
+      const topic = talkTopic(subjectTopic(ctx.thread?.subject));
       const looking = topic ? `\n\nLooking forward to hearing about ${topic}.` : '';
       const lead = pick(["That's great, thank you.", 'Thank you, that would be great.'], seed, 'sched');
       if (last === 'reschedule') {
@@ -2075,7 +2080,7 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
         // a time they gave without a zone is confirmed as they gave it, with the zone the invite will use said once
         // (a partner on the West Coast may have meant theirs); a video call they asked for is not offered as a phone call
         const abbr = tzAbbr(tz, new Date(free.startIso));
-        const zoneSaid = ZONE_WORD.test(free.raw);
+        const zoneSaid = ZONE_WORD.test(free.raw) || ZONE_WORD.test(ctx.thread?.lastInboundBody ?? '');
         const clock = fmtTime(new Date(free.startIso), tz);
         parts.push(
           zoneSaid
@@ -2170,7 +2175,7 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
               : "What times work for you over the next week or so? Send me a couple and I'll make one fit.",
         );
       }
-      const topic = subjectTopic(ctx.thread?.subject);
+      const topic = talkTopic(subjectTopic(ctx.thread?.subject));
       body = `${G}\n\n${parts.join(' ')}${confirmed ? `\n\nLooking forward to ${topic ? `hearing about ${topic}` : 'it'}.` : ''}\n\n${S}`;
       subject = threaded ? undefined : (reSubject ?? 'Re: your note');
       break;
@@ -2342,7 +2347,7 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
         );
       else if (update)
         parts.push(
-          `Quick update since we talked${since ? ` ${since}` : ''}${introBy}${topicAbout}: ${update}.`,
+          `Quick update${since ? ` since we talked ${since}${introBy}${topicAbout}` : ''}: ${update}.`,
         );
       else if (!hook && !offer && !congrats)
         parts.push(
@@ -2394,7 +2399,8 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
           ? `Would you have ${minutes} minutes in the next couple of weeks to tell me what ${o ?? 'the team'} looks for in ${intern ? 'interns' : 'new grads'}? Happy to do it over email if that's easier.`
           : undefined;
       // nothing in the note is only true of them: the student adds one thing from the conversation
-      if (!aboutThem && talked && !needsInput.includes('update')) {
+      // (an update the student wrote is theirs to send as it is)
+      if (!aboutThem && talked && !typed && !needsInput.includes('update')) {
         needsInput.push('takeaway');
         parts.push(`[One thing ${first} said when you talked, so the note is about them]`);
       }
@@ -2447,15 +2453,17 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       if (na?.org && newRole && sameOrg) {
         const name = [na.org.trim(), na.previousOrg!.trim()].sort((a, b) => a.length - b.length)[0];
         lead = `Congratulations on your new role as ${article(newRole)} ${newRole} at ${shortOrg(name)}.`;
-      } else if (landed)
+      } else if (landed) {
+        // the role goes with the firm when no group says where ("joined Hex as a founding engineer")
+        const as = landed === naOrg && newRole ? ` as ${article(newRole)} ${newRole}` : '';
         lead = fresh
-          ? `I just saw that you joined ${landed}. Congratulations.`
+          ? `I just saw that you joined ${landed}${as}. Congratulations.`
           : pick(
-              [`Congratulations on joining ${landed}.`, `Congratulations on the move to ${naOrg}.`],
+              [`Congratulations on joining ${landed}${as}.`, `Congratulations on the move to ${naOrg}${as}.`],
               seed,
               'congrats',
             );
-      else if (newRole) lead = `Congratulations on your new role as ${article(newRole)} ${newRole}.`;
+      } else if (newRole) lead = `Congratulations on your new role as ${article(newRole)} ${newRole}.`;
       else if (news) {
         const what = softLower(strip(news).replace(/^(congratulations|congrats) on\s+/i, ''));
         lead = `Just saw the news about ${what}. Congratulations.`;
@@ -2486,6 +2494,22 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
         parts.push(`Thanks again for ${pointPhrase(advice.c)}.`);
         cite(advice);
       }
+      // with no advice on record, what they said they wanted, as a hope, never as "a great fit" the student cannot know
+      const tie = advice
+        ? undefined
+        : fact(
+            ['preference'],
+            (c) =>
+              c.you &&
+              /^(wanted|wants|hoped|hopes|planned|plans)$/i.test(c.verb ?? '') &&
+              /^to\s/.test(c.rest ?? ''),
+          );
+      if (tie) {
+        parts.push(
+          `I remember you saying you ${theirWords(tie.c.text.replace(/^you /, ''))}, and I hope the new role is a step that way.`,
+        );
+        cite(tie);
+      }
       const offer = fact(['offer'], (c) => !!offerNext(c, ctx, 'nurture'));
       const later = offer ? laterOffer(offer.c, ctx) : undefined;
       if (later) {
@@ -2494,7 +2518,8 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       }
       // "well deserved" is for someone the student knows; from a stranger it is presumptuous
       const knows = knowsStudent(ctx) || P.strength >= 0.35;
-      if (!advice && !later && knows && !sameOrg) parts[0] = parts[0]!.replace(/\.$/, ', well deserved.');
+      if (!advice && !tie && !later && knows && !sameOrg)
+        parts[0] = parts[0]!.replace(/\.$/, ', well deserved.');
       // the news and the wish, then (when there is one) the thread picked back up
       const [head, ...rest] = parts;
       const wish = recent ? rest.shift() : undefined;

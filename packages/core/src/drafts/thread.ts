@@ -34,9 +34,11 @@ const ANSWERABLE = new Set([
  */
 export function inboundNeedsAnswer(t: ThreadState | undefined, now: Date): boolean {
   if (!t?.lastInboundAt) return false;
-  if (t.asksOfUser?.length || t.proposedTimes?.length) return true;
   const age = now.getTime() - new Date(t.lastInboundAt).getTime();
-  return ANSWERABLE.has(t.lastSignal ?? '') && age <= 21 * DAY;
+  // a question or a time from months ago waits on nothing now ("Friday at 3pm" in May is not answered in October)
+  if (age > 21 * DAY) return false;
+  if (t.asksOfUser?.length || t.proposedTimes?.length) return true;
+  return ANSWERABLE.has(t.lastSignal ?? '');
 }
 
 /** They wrote back after the student's first note (an out-of-office or a bounce does not count as an answer). */

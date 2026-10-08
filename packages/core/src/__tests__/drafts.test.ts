@@ -210,15 +210,18 @@ describe('outreach', () => {
     expect(sentences.length).toBeLessThanOrEqual(7);
   });
   it('exec at a bank gets Dear and the first name (never a mail-merge full name); an engineer gets Hi', () => {
+    // "Dear" is for a stranger at a bank written to in the formal voice the student chose (panel round 3)
     const r = check(
       base({
+        styleCard: defaultStyleCard('formal', 'Alex'),
+        facts: [fact('c', 'connection', 'I heard you speak on the Cornell finance club panel last spring')],
         person: {
           firstName: 'Sofia',
           fullName: 'Sofia Rossi',
           title: 'Managing Director',
           org: 'Evercore',
-          isAlumni: true,
-          relationshipType: 'alumni',
+          isAlumni: false,
+          relationshipType: 'cold',
           strength: 0,
         },
       }),
@@ -449,6 +452,8 @@ describe('outreach', () => {
               (i) =>
                 !(kind === 'outreach' && i.code === 'needs_connection') &&
                 !(kind === 'reply' && i.code === 'needs_input') &&
+                // an offer to refer "when the posting goes up" waits on the posting (panel round 3)
+                !(kind === 'referral_ask' && i.code === 'needs_input') &&
                 // a thank-you with nothing they said asks the student for one thing (EG-15)
                 !(kind === 'thank_you' && !withFacts && i.code === 'needs_input') &&
                 i.code !== 'placeholder' &&
@@ -480,7 +485,10 @@ describe('other kinds', () => {
     expect(b1.subject).toBeUndefined();
     expect(wordsIn(b1.body)).toBeLessThanOrEqual(55);
     const b2 = generateDraft(base({ kind: 'bump', bumpNumber: 2 }));
-    expect(b2.body).toMatch(/Last note from me|One last nudge/);
+    // the graceful last word restates the ask and the cheapest way to answer, never "I promise" (panel round 3)
+    expect(b2.body).toMatch(/One last note|one last time/);
+    expect(b2.body).not.toMatch(/I promise|leave you be/);
+    expect(b2.body).toMatch(/by email/);
     expect(wordsIn(b2.body)).toBeLessThanOrEqual(45);
   });
   it('schedule proposes two windows with the timezone and an out; reply confirms a proposed time', () => {
@@ -501,7 +509,8 @@ describe('other kinds', () => {
         },
       }),
     );
-    expect(r.body).toMatch(/Thursday, Oct 8 at 2pm EDT works/);
+    // a time given without a zone is confirmed as given, and the invite's zone is said once (panel round 3)
+    expect(r.body).toMatch(/Thursday, Oct 8 at 2pm works\. I'll send a calendar invite for 2pm EDT/);
     expect(r.body).toMatch(/calendar invite/);
     // the resume goes with this reply, not "over today" (drafts panel round 2); the student attaches it
     expect(r.body).toMatch(/I've attached my resume|My resume is attached/);
@@ -529,7 +538,8 @@ describe('other kinds', () => {
     // "hiring in January", asked in October, is still ahead (DQ-08); a note that says "No reply needed" never ends
     // its line about them in a question (panel review)
     // a note that does not say they said it is something the student saw (drafts panel round 2)
-    expect(n.body).toMatch(/I saw that you're hiring interns in January\. Hope that's shaping up well\./);
+    // a note about the firm is the firm's (panel round 3)
+    expect(n.body).toMatch(/I saw that Figma is hiring interns in January\. Hope that's shaping up well\./);
     expect(n.body).not.toMatch(/\?/);
     expect(n.body).toMatch(/No reply needed/);
   });
@@ -549,10 +559,10 @@ describe('other kinds', () => {
     );
     expect(r.body).toMatch(/offered to refer me when the posting goes up, so I wanted to follow up/);
     expect(r.body).toMatch(/req 7731/);
-    expect(r.body).toMatch(/before I submit through the portal/);
-    // they offered: no hedge, and the resume goes with it (drafts panel round 2)
-    expect(r.body).not.toMatch(/Completely fine if not/);
-    expect(r.body).toMatch(/I've attached my resume/);
+    expect(r.body).toMatch(/I haven't submitted through the portal yet, so the referral can go in first/);
+    // they offered: no hedge, and the resume goes with it (drafts panel round 2), without "two minutes" (round 3)
+    expect(r.body).not.toMatch(/Completely fine if not|two minutes/);
+    expect(r.body).toMatch(/My resume is attached/);
     expect(r.body).toMatch(/https:\/\/figma.com\/careers\/7731/);
     expect(
       validateDraft(r, {
@@ -588,8 +598,9 @@ describe('other kinds', () => {
     );
     // the old expectation pinned an ungrammatical splice ("what you said about wanted to ..."), see DQ-01
     // no date on record, so it is not claimed as news just seen
-    expect(c.body).toMatch(/Congratulations on your move to Figma as a senior PM\./);
+    expect(c.body).toMatch(/Congratulations on (joining|the move to) Figma as a senior PM\./);
     expect(c.body).toMatch(/I remember you saying you wanted to sit closer to the product/);
+    expect(c.body).not.toMatch(/great fit/);
     const rb = generateDraft(
       base({
         kind: 'report_back',
@@ -678,7 +689,8 @@ describe('audit round 1 regressions', () => {
     const n = generateDraft(base({ kind: 'nurture', person: ALINA, facts: NOTE_FACTS }));
     // a note that does not say they said it is something the student saw, and an open offer is acted on, not left
     // in the notes (drafts panel round 2)
-    expect(n.body).toMatch(/I also saw that you're hiring interns in January for the platform team\./);
+    // with an offer taken up, the note has one purpose: no line about their team, no "No reply needed" (round 3)
+    expect(n.body).not.toMatch(/hiring interns|No reply needed/);
     expect(n.body).toMatch(
       /you offered to refer me when the posting goes up\. I'll send the posting as soon as it's live\./,
     );
@@ -707,7 +719,8 @@ describe('audit round 1 regressions', () => {
     const o = generateDraft(base({ facts: NOTE_FACTS, person: ALINA }));
     for (const c of o.claims.filter((x) => x.factId)) {
       const used = NOTE_FACTS.find((f) => f.id === c.factId)!;
-      expect(o.body).toContain(clause(used.text, ALINA)!.text);
+      // (the words of the note, whoever the sentence makes its subject: "who leads ...", "Jane Street is hiring ...")
+      expect(o.body).toContain(clause(used.text, ALINA)!.text.split(' ').slice(-5).join(' '));
     }
     // a hook connection prefers a hook over background
     const hookFirst = generateDraft(
@@ -803,10 +816,12 @@ describe('audit round 1 regressions', () => {
         sameOrgContacts: ['Grace'],
       }),
     );
-    expect(r.body).toMatch(/^Dear Nina,/);
-    expect(r.body).toMatch(/planning to apply for software engineering internships at Notion/);
+    // a tech recruiter gets "Hi" and contractions; the question is one only they can answer (panel round 3)
+    expect(r.body).toMatch(/^Hi Nina,/);
+    expect(r.body).toMatch(/I'm applying for software engineering internships at Notion this cycle/);
     // one conversation is all Orbit knows (drafts panel round 2: "helpful conversations" overstates it)
-    expect(r.body).toMatch(/I (have|'ve) also spoken with Grace on the team/);
+    expect(r.body).toMatch(/I've also spoken with Grace\./);
+    expect(r.body).not.toMatch(/deadline|info session/);
     expect(r.body).not.toMatch(/your path|minutes/);
   });
 
@@ -983,7 +998,14 @@ describe('audit round 1 regressions', () => {
       base({
         kind: 'bump',
         styleCard: defaultStyleCard('formal', 'Alex'),
-        person: { ...base().person, title: 'Director of Product', isAlumni: false, strength: 0 },
+        person: {
+          ...base().person,
+          title: 'Vice President',
+          org: 'Goldman Sachs',
+          isAlumni: false,
+          relationshipType: 'cold',
+          strength: 0,
+        },
         thread: { inThread: true, firstOutboundAt: '2026-09-24T14:00:00Z' },
       }),
     );
@@ -1008,8 +1030,11 @@ describe('audit round 1 regressions', () => {
         newAffiliation: { title: 'Senior Product Manager', org: 'Figma', since: '2026-09-20' },
       }),
     );
-    expect(move.body).toMatch(/your move to Figma as a senior product manager/);
-    expect(move.body).toMatch(/Hope the first few weeks are going well/);
+    // the move is the news, with no employer they left (it reads as being watched, panel round 3)
+    expect(move.body).toMatch(
+      /I just saw that you joined Figma as a senior product manager\. Congratulations/,
+    );
+    expect(move.body).toMatch(/first few weeks have been good|off to a good start/);
     expect(move.subject).toBe('Congratulations on the move to Figma');
   });
 
@@ -1338,7 +1363,7 @@ describe('audit round 1, expert gaps (EG, SND, UI-10)', () => {
     expect(recruiter.subject).toBeUndefined();
     expect(recruiter.bodyShort!.length).toBeLessThanOrEqual(200);
     expect(recruiter.bodyShort).toMatch(
-      /^Hi Nina, Cornell junior here\. I'm planning to apply for software engineering/,
+      /^Hi Nina, Cornell junior here\. I'm applying for software engineering/,
     );
   });
 
@@ -1541,8 +1566,10 @@ describe('audit round 2 regressions', () => {
       }),
     );
     // the employer they left is on record, so the line is about them (panel review)
-    expect(moved.body).toMatch(/your move from Figma to Stripe/);
-    expect(moved.body).toMatch(/first few weeks/);
+    // the employer they left is not named (panel round 3: a job-change alert, and surveillance)
+    expect(moved.body).toMatch(/joined Stripe as a staff engineer/);
+    expect(moved.body).not.toMatch(/Figma/);
+    expect(moved.body).toMatch(/first few weeks|off to a good start/);
   });
 
   it('congratulate: a legal suffix is not a new employer, and abbreviated titles read as words (L37)', () => {
@@ -1561,7 +1588,7 @@ describe('audit round 2 regressions', () => {
         newAffiliation: { title: 'VP, Analytics', org: 'Stripe', previousOrg: 'Figma' },
       }),
     );
-    expect(vp.body).toMatch(/your move from Figma to Stripe as a VP of analytics\b/);
+    expect(vp.body).toMatch(/(joining|move to) Stripe as a VP of analytics\b/);
     expect(roleNoun('Jr. Data Analyst')).toBe('junior data analyst');
     expect(roleNoun('Software Engineer, Payments')).toBe('software engineer');
     expect(roleNoun('Vice President, Finance')).toBe('vice president of finance');
