@@ -1688,4 +1688,55 @@ test.describe('Usability round 6', () => {
     await page.goto('notes/new');
     await expect(page.getByTestId('capture-text')).toHaveValue('');
   });
+
+  test('setup reads a one-line resume entry cleanly, and any line can be fixed in place', async ({
+    page,
+  }) => {
+    await prep(page);
+    await page.goto('');
+    await page
+      .getByRole('button', { name: /^get started/i })
+      .first()
+      .click();
+    await page.getByTestId('ob-name').fill('Jamie Ortiz');
+    await page.getByTestId('ob-email').fill('jamie@umich.edu');
+    await page.getByTestId('ob-school').fill('University of Michigan');
+    await page.getByTestId('ob-year').selectOption({ index: 2 });
+    await page.getByRole('button', { name: /continue/i }).click();
+    await page.getByTestId('ob-fn-ib').click();
+    await page.getByRole('button', { name: /continue/i }).click();
+    await page.getByTestId('ob-resume').setInputFiles({
+      name: 'resume.txt',
+      mimeType: 'text/plain',
+      buffer: Buffer.from(
+        'Jamie Ortiz\njamie.ortiz@umich.edu\n\nExperience\nSummer Analyst Intern, Comerica Bank, Detroit, MI — June 2026 to August 2026. Built a DCF model for a mid-market\nclient; automated a weekly credit report in Excel.\n\nSkills\nExcel, Python\n',
+      ),
+    });
+    const job = page.getByTestId('resume-facet').filter({ hasText: 'Comerica Bank' });
+    await expect(job).toContainText('Summer Analyst Intern · Comerica Bank');
+    await expect(job).toContainText('Built a DCF model for a mid-market client');
+    await job.getByTestId('resume-facet-edit').click();
+    const editor = page.getByTestId('resume-facet-editor');
+    await editor.getByLabel('Role').fill('Summer Analyst');
+    await editor.getByTestId('resume-facet-save').click();
+    await expect(page.getByTestId('resume-facet').filter({ hasText: 'Comerica Bank' })).toContainText(
+      'Summer Analyst · Comerica Bank',
+    );
+  });
+
+  test('a LinkedIn connection note counts against the 200 characters a free account allows', async ({
+    page,
+  }) => {
+    await newStudent(page);
+    await addByHand(page, 'Sarah Lin', 'Evercore', { linkedin: 'https://www.linkedin.com/in/sarah-lin-ev' });
+    await page.getByTestId('person-write').click();
+    const skip = page.getByTestId('warmup-skip');
+    await expect(skip.or(page.getByLabel('Message body'))).toBeVisible({ timeout: 15_000 });
+    if (await skip.isVisible()) await skip.click();
+    await expect(page.getByLabel('Message body')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('draft-linkedin-hint')).toContainText(/free LinkedIn account allows 200/);
+    await expect(page.getByTestId('draft-char-count')).toContainText('/ 200 characters');
+    await page.getByLabel('Message body').fill('x'.repeat(240));
+    await expect(page.getByTestId('draft-char-count')).toContainText(/free account cuts the rest/);
+  });
 });

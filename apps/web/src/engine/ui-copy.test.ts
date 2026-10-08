@@ -159,6 +159,25 @@ describe('prep (EG-13)', () => {
     expect(swe.intro).toBe(
       "I'm Sam, a junior at University of Michigan studying Computer Science. Most recently I was a Software Engineering Intern at Ford. I'm recruiting for software engineering roles (Summer 2027 internship), and I'd love to hear how you got where you are.",
     );
+    // a club role is said as one, never like a job
+    const club = buildPrep({
+      ...base,
+      resumeFacets: [
+        {
+          kind: 'experience' as const,
+          title: 'Treasurer',
+          organizationName: 'Michigan Investment Club',
+          startDate: '2025-01',
+          text: '',
+        },
+      ],
+      person: person({
+        firstName: 'Grace',
+        currentTitle: 'Software Engineer',
+        currentOrganizationRaw: 'Notion',
+      }),
+    });
+    expect(club.intro).toContain("I'm Treasurer of the Michigan Investment Club.");
     expect(swe.logistics?.when).toMatch(/^Wednesday, Oct 7, 2:00 PM EDT, 30 minutes$/);
     expect(swe.logistics?.link).toBe('https://meet.google.com/abc');
     expect(swe.research[0]!.url).toContain('linkedin.com/in/grace/recent-activity');

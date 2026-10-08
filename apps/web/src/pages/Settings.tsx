@@ -5,6 +5,7 @@ import { Check, Download, Trash2 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Navigate, NavLink, useNavigate, useParams } from 'react-router-dom';
 import { LinkedInImportButton } from '../components/LinkedInImport';
+import { ResumeFacetList } from '../components/ResumeFacets';
 import { db, wipeDatabase } from '../db/schema';
 import { demoResetPrompt, loadDemo } from '../engine/demo';
 import { saveResume } from '../engine/resume';
@@ -592,6 +593,12 @@ function Integrations() {
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0],
     [user.id],
   );
+  const facets =
+    useLiveQuery(
+      () => (resume ? db.resumeFacets.where('resumeId').equals(resume.id).toArray() : []),
+      [resume?.id],
+    ) ?? [];
+  const [showFacets, setShowFacets] = useState(false);
   const [clientId, setClientId] = useState(googleClientId() ?? '');
   const [busy, setBusy] = useState<string>();
   const token = currentGoogleToken();
@@ -758,6 +765,22 @@ function Integrations() {
             {resume ? 'Upload a newer resume' : 'Upload resume'}
           </span>
         </label>
+        {facets.length > 0 && (
+          <div className="mt-3">
+            <button
+              type="button"
+              className="text-[13px] underline underline-offset-2 text-ink-2 hover:text-ink"
+              aria-expanded={showFacets}
+              onClick={() => setShowFacets((v) => !v)}
+              data-testid="settings-resume-facets"
+            >
+              {showFacets ? 'Hide what Orbit read' : 'Check or fix what Orbit read from it'}
+            </button>
+            {showFacets && (
+              <ResumeFacetList facets={facets} readBy={resume?.parseSource === 'llm' ? 'Claude' : 'Orbit'} />
+            )}
+          </div>
+        )}
       </Card>
       <Card>
         <div className="font-medium">Meeting notes</div>

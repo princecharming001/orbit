@@ -487,9 +487,20 @@ export function buildPrep(args: {
     ];
     if (exp) {
       const current = !exp.endDate || /present|now/i.test(exp.endDate);
-      bits.push(
-        `${current ? "Right now I'm" : 'Most recently I was'} ${withArticle(exp.title!)} at ${exp.organizationName}.`,
-      );
+      const org = exp.organizationName!;
+      // a student club is not an employer: "Treasurer of the Michigan Investment Club", "an analyst in the ..."
+      const club = /\b(club|association|society|council|chapter|committee|fraternity|sorority)\b/i.test(org);
+      const the = /^the\b/i.test(org) ? '' : 'the ';
+      const officer =
+        /^(president|vice president|vp|treasurer|secretary|chair|co-?chair|captain|founder|co-?founder|director|head|lead)\b/i.test(
+          exp.title!,
+        );
+      const role = club
+        ? officer
+          ? `${exp.title} of ${the}${org}`
+          : `${withArticle(exp.title!)} in ${the}${org}`
+        : `${withArticle(exp.title!)} at ${org}`;
+      bits.push(`${current ? (club ? "I'm" : "Right now I'm") : 'Most recently I was'} ${role}.`);
     } else if (project) bits.push(`Lately I've been working on ${project.title}.`);
     const missing: string[] = [];
     if (!exp && !project)

@@ -4,6 +4,7 @@ import { Check, Minus, Upload } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Link, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { Logo } from '../components/AppShell';
+import { ResumeFacetList } from '../components/ResumeFacets';
 import { db } from '../db/schema';
 import { generateBrief, recommendationsRefresh } from '../engine/brief';
 import { connectionsText, importConnectionsCsv } from '../engine/linkedin';
@@ -685,26 +686,6 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
   );
 }
 
-const FACET_LABELS: Record<string, string> = {
-  experience: 'Experience',
-  education: 'Education',
-  project: 'Project',
-  skill_group: 'Skills',
-  interest: 'Interests',
-  summary: 'Summary',
-};
-
-/** The facet's text without repeating its title or organization (the parse often carries both). */
-export function facetDetail(f: { title?: string; organizationName?: string; text: string }): string {
-  let t = f.text.trim();
-  for (const part of [f.title, f.organizationName].filter(Boolean) as string[]) {
-    const re = new RegExp(`^${part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s,·:-]*`, 'i');
-    t = t.replace(re, '').trim();
-  }
-  // what is left of "Treasurer, Club soccer." once the role and the club are shown is a full stop: nothing to show
-  return /\w/.test(t) ? t : '';
-}
-
 function StepResume({ onNext, onBack }: { onNext: () => void; onBack: () => void }) {
   const user = useSession().user!;
   const [busy, setBusy] = useState(false);
@@ -755,42 +736,7 @@ function StepResume({ onNext, onBack }: { onNext: () => void; onBack: () => void
       </label>
       {error && <p className="text-bad text-[13px] mt-2">{error}</p>}
       {facets.length > 0 && (
-        <div className="mt-4">
-          <Label hint="uncheck anything that's wrong and Orbit won't use it">
-            {resume?.parseSource === 'llm'
-              ? 'What Claude read from your resume'
-              : 'What Orbit read from your resume'}
-          </Label>
-          <ul className="space-y-2 max-h-72 overflow-y-auto scroll-thin pr-1">
-            {facets.map((f) => (
-              <li
-                key={f.id}
-                className={`flex items-start gap-2 text-[13px] ${f.excluded ? 'opacity-50' : ''}`}
-              >
-                <input
-                  type="checkbox"
-                  className="mt-1"
-                  checked={!f.excluded}
-                  aria-label={`Use ${f.title ?? FACET_LABELS[f.kind] ?? 'this line'}`}
-                  data-testid="ob-facet-toggle"
-                  onChange={(e) =>
-                    db.resumeFacets.update(f.id, { excluded: !e.target.checked, confirmed: e.target.checked })
-                  }
-                />
-                <span className="min-w-0">
-                  <span className="text-ink-3 text-[12px] mr-1.5">{FACET_LABELS[f.kind] ?? 'Other'}</span>
-                  <strong className="font-medium">
-                    {[f.title, f.organizationName !== f.title ? f.organizationName : undefined]
-                      .filter(Boolean)
-                      .join(' · ')}
-                  </strong>
-                  {/* what they did on its own line, so the employer and the first bullet never run together */}
-                  {facetDetail(f) && <span className="block text-ink-2">{facetDetail(f).slice(0, 140)}</span>}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </div>
+        <ResumeFacetList facets={facets} readBy={resume?.parseSource === 'llm' ? 'Claude' : 'Orbit'} />
       )}
       <Nav onBack={onBack} onNext={onNext} skip={!resume} />
     </div>

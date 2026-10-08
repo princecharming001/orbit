@@ -1,6 +1,7 @@
 import type { DraftNeed, OutboundMessage } from '@orbit/core';
 import {
   LINKEDIN_NOTE_MAX,
+  LINKEDIN_NOTE_TARGET,
   MAX_WORDS,
   MESSAGE_KIND_LABELS,
   WHY_THEM,
@@ -403,7 +404,7 @@ export function DraftEditor({
       {isLinkedIn && (
         <div className="text-[12px] text-ink-3 mb-2" data-testid="draft-linkedin-hint">
           {connectionNote
-            ? `Connection note. You are not connected to ${person?.firstName ?? 'them'} yet, so this goes with your connection request (${LINKEDIN_NOTE_MAX} characters at most).`
+            ? `Connection note. You are not connected to ${person?.firstName ?? 'them'} yet, so this goes with your connection request. A free LinkedIn account allows ${LINKEDIN_NOTE_TARGET} characters (Premium allows ${LINKEDIN_NOTE_MAX}).`
             : 'LinkedIn message. You are connected, so this opens a message to them.'}
         </div>
       )}
@@ -421,9 +422,21 @@ export function DraftEditor({
           {wc > max ? ` (aim for ${max} or fewer)` : ''}
         </span>
         {isLinkedIn && (
-          <span className={cx('tabular', connectionNote && body.length > LINKEDIN_NOTE_MAX && 'text-bad')}>
+          <span
+            className={cx(
+              'tabular',
+              connectionNote && body.length > LINKEDIN_NOTE_MAX
+                ? 'text-bad'
+                : connectionNote && body.length > LINKEDIN_NOTE_TARGET && 'text-warn',
+            )}
+            data-testid="draft-char-count"
+          >
             {connectionNote
-              ? `${body.length} / ${LINKEDIN_NOTE_MAX} characters`
+              ? body.length > LINKEDIN_NOTE_MAX
+                ? `${body.length} / ${LINKEDIN_NOTE_MAX} characters. Too long for LinkedIn, trim it`
+                : body.length > LINKEDIN_NOTE_TARGET
+                  ? `${body.length} / ${LINKEDIN_NOTE_TARGET} characters. A free account cuts the rest, so trim it unless you have Premium`
+                  : `${body.length} / ${LINKEDIN_NOTE_TARGET} characters`
               : `${body.length} characters`}
           </span>
         )}

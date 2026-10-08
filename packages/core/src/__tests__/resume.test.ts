@@ -236,3 +236,31 @@ Black Business Students Association
     ]);
   });
 });
+
+describe('one-line dated entries (UX round 6)', () => {
+  it('reads "Role, Employer, City, ST — dates. What I did." with the description wrapped onto the next line', () => {
+    const text = `Jamie Ortiz
+jamie.ortiz@umich.edu · Ann Arbor, MI · linkedin.com/in/jamieortiz
+
+Experience
+Summer Analyst Intern, Comerica Bank, Detroit, MI — June 2026 to August 2026. Built a DCF model for a mid-market
+client; automated a weekly credit report in Excel saving 4 hours a week.
+
+Treasurer, Michigan Investment Club — 2025 to present. Led a 6-person team pitching consumer stocks; managed a $50k
+student fund.
+
+Skills
+Excel, financial modeling
+`;
+    const xs = heuristicResumeParse(text, 'r').filter((f) => f.kind === 'experience');
+    expect(xs.map((f) => [f.title, f.organizationName])).toEqual([
+      ['Summer Analyst Intern', 'Comerica Bank'],
+      ['Treasurer', 'Michigan Investment Club'],
+    ]);
+    expect(xs[0]!.text).toBe(
+      'Built a DCF model for a mid-market client; automated a weekly credit report in Excel saving 4 hours a week.',
+    );
+    expect(xs[0]!.startDate).toBe('2026-06-01');
+    expect(xs[1]!.text).toBe('Led a 6-person team pitching consumer stocks; managed a $50k student fund.');
+  });
+});

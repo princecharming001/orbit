@@ -201,6 +201,23 @@ export function resumeSectionOf(rawLine: string): Section | undefined {
 const BULLET = /^(?:[-•*▪◦●➢►–·∙‣⁃○■□✓✔➤→\uF0B7\uF0A7\uF076\uF0D8]|o(?=\s))\s*/;
 /** Employer, a dash, the role, the dates in brackets, then optionally what they did, all on one line. */
 const INLINE_ENTRY = /^([^—–]+?)\s+[—–-]\s+([^().]+?)\s*\(([^)]*\d{4}[^)]*)\)[.,;:]?\s*(.*)$/;
+/**
+ * Role, employer and place, a dash, the dates, then what they did, all on one line: "Summer Analyst Intern, Comerica
+ * Bank, Detroit, MI — June 2026 to August 2026. Built a DCF model for a mid-market client". Returns the header (with
+ * the dates), and the description after them.
+ */
+function datedInline(line: string): { header: string; desc: string } | undefined {
+  const dm = line.match(DATE_RANGE) ?? line.match(DATE_SINGLE);
+  if (!dm || dm.index === undefined || dm.index === 0) return undefined;
+  const before = line.slice(0, dm.index);
+  const after = line.slice(dm.index + dm[0].length);
+  if (!/\s[—–-]\s*$/.test(before) && !/\(\s*$/.test(before)) return undefined;
+  const rest = after.replace(/^\s*\)/, '').match(/^\s*(?:[.;:,]\s+(.*)|\.?\s*)$/);
+  if (!rest) return undefined;
+  const header = before.replace(/[\s,(—–-]+$/, '');
+  if (!header || header.split(/\s+/).length > 14) return undefined;
+  return { header: `${header}   ${dm[0]}`, desc: rest[1]?.trim() ?? '' };
+}
 const stripBullet = (l: string) => l.replace(BULLET, '').trim();
 const isRule = (l: string) => /^[\W_]+$/.test(l);
 
@@ -577,6 +594,16 @@ export function heuristicResumeParse(
       e.headers++;
       assignParts(parts, e);
       if (inline[4]?.trim()) e.body.push(inline[4].trim());
+      continue;
+    }
+    const dated = section !== 'education' ? datedInline(line) : undefined;
+    if (dated) {
+      finish();
+      e = newEntry(section);
+      const parts = headerParts(dated.header, e);
+      e.headers++;
+      assignParts(parts, e);
+      if (dated.desc) e.body.push(dated.desc);
       continue;
     }
     if (e?.body.length && /^[a-z(&]/.test(line)) {
