@@ -276,8 +276,12 @@ export function Discover() {
                   <div className="mt-auto pt-3 flex flex-wrap items-center gap-2">
                     {cold && introducer ? (
                       // someone the student knows can introduce them: that beats a warm-up with a stranger
-                      <Link to={`/map?reach=${p.id}`} data-testid="rec-intro">
-                        <Button variant="primary" size="sm">
+                      <Link to={`/map?reach=${p.id}`} data-testid="rec-intro" className="max-w-full">
+                        <Button
+                          variant="primary"
+                          size="sm"
+                          className="whitespace-normal! h-auto! min-h-8 py-1 text-left"
+                        >
                           See how {introducer.firstName} can introduce you
                         </Button>
                       </Link>

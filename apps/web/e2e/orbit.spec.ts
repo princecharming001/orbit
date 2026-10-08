@@ -1453,7 +1453,9 @@ test.describe('Usability round 5: one draft, kept edits, saved settings, chats t
     await expect(page.getByText(/moved jonah to replied/i)).toBeVisible();
     await page.goto('today');
     await expect(
-      page.getByTestId('suggestion-schedule_propose').filter({ hasText: /Jonah replied\. Write back/ }),
+      page
+        .getByTestId('suggestion-schedule_propose')
+        .filter({ hasText: /Jonah replied\. Orbit cannot see what they wrote/ }),
     ).toBeVisible();
     // Scheduled with the time left for later: the card and the page ask for it
     await page.goto('pipeline');
@@ -1619,13 +1621,15 @@ test.describe('Usability round 5: chats Orbit cannot see, and notes in shorthand
     await expect(page.getByTestId('today-quiet')).toHaveCount(0);
     const card = page
       .getByTestId('suggestion-schedule_propose')
-      .filter({ hasText: /Aisha replied\. Write back/ });
+      .filter({ hasText: /Aisha replied\. Orbit cannot see what they wrote/ });
     await expect(card).toBeVisible();
     await expect(card).toContainText('Find a time');
     await card.getByTestId('draft-review').click();
     const body = card.getByLabel('Message body');
     // Orbit has no calendar here: the draft asks for her times instead of offering slots the student never chose
     await expect(body).toHaveValue(/what times work for you/i);
+    // Orbit never saw what she wrote, so the reply does not answer a yes it cannot know about
+    await expect(body).toHaveValue(/Thanks for getting back to me\./);
     await expect(body).not.toHaveValue(/would either of these work|\(UTC\)|\d(am|pm)\b/i);
     await page.reload();
     await expect(page.getByTestId('suggestion-schedule_propose')).toBeVisible();
