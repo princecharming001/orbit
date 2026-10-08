@@ -530,3 +530,45 @@ export function inOrAt(org: string, title?: string): string {
     /\b(student|campus|undergraduate)\b/i.test(org);
   return club ? `in ${org}` : `at ${org}`;
 }
+
+/**
+ * A promise the student wrote in their own words ("Send her my resume by Monday"), said back to them with the person
+ * named ("Send Aisha your resume by Monday"), so a list of promises never mixes "her", "my" and "(for Aisha)".
+ */
+export function promiseText(text: string, firstName?: string): string {
+  let t = text
+    .trim()
+    .replace(/[.;]+$/, '')
+    .replace(
+      /^(?:I\s+(?:will|'ll|need to|have to|should|promised to|said I'd|said I would)|I'll|Will)\s+/i,
+      '',
+    )
+    .replace(/^to\s+/i, '');
+  const tokens = t.split(/(\s+)/);
+  t = tokens
+    .map((tok, i) => {
+      const m = tok.match(/^([^A-Za-z']*)([A-Za-z][A-Za-z'-]*)(.*)$/);
+      if (!m) return tok;
+      const [, pre, word, post] = m as unknown as [string, string, string, string];
+      const lower = word.toLowerCase();
+      if (lower === 'my') return `${pre}your${post}`;
+      if (lower === 'me') return `${pre}you${post}`;
+      if (lower === 'myself') return `${pre}yourself${post}`;
+      if (lower === 'mine') return `${pre}yours${post}`;
+      if (!firstName) return tok;
+      if (lower === 'him') return `${pre}${firstName}${post}`;
+      if (lower === 'his') return `${pre}${firstName}'s${post}`;
+      if (lower === 'her') {
+        const next = tokens[i + 2]?.match(/[A-Za-z][A-Za-z'-]*/)?.[0];
+        // "send her my resume", "email her by Friday", "thank her": the person; "her team": theirs
+        return !next || /[.,;!?]$/.test(tok) || PROMISE_OBJECT_NEXT.test(next)
+          ? `${pre}${firstName}${post}`
+          : `${pre}${firstName}'s${post}`;
+      }
+      return tok;
+    })
+    .join('');
+  return t ? t[0]!.toUpperCase() + t.slice(1) : t;
+}
+const PROMISE_OBJECT_NEXT =
+  /^(about|to|for|with|if|whether|that|and|or|but|when|before|after|at|on|in|by|from|again|a|an|the|my|your|some|any|this|these|those|how|what|why|where|who|back|up|once|soon|later|next|today|tomorrow|tonight|know|monday|tuesday|wednesday|thursday|friday|saturday|sunday|over)$/i;

@@ -16,6 +16,7 @@ import {
   MESSAGE_KIND_LABELS,
   NOTE_SOURCE_LABELS,
   newId,
+  promiseText,
   RELATIONSHIP_LABELS,
   relTime,
   STAGE_LABELS,
@@ -993,7 +994,7 @@ export function PersonPage() {
                         onChange={() => db.actionItems.update(i.id, { status: 'done' })}
                       />
                       <span className="flex-1">
-                        {i.text}
+                        {promiseText(i.text, person.firstName)}
                         {i.dueAt ? <span className="text-ink-3"> · due {relDate(i.dueAt)}</span> : null}
                       </span>
                     </li>
@@ -1406,7 +1407,7 @@ function Prep({
             <div className="font-medium mt-3">You promised</div>
             <ul className="list-disc pl-4 mt-1 text-ink-2 space-y-1">
               {open.map((i, k) => (
-                <li key={k}>{i.text}</li>
+                <li key={k}>{promiseText(i.text, person.firstName)}</li>
               ))}
             </ul>
           </>

@@ -502,7 +502,9 @@ describe('a reply the student logged by moving the card (usability round 5)', ()
     });
     const out = generateCandidates(input({ people: [p], chats: [moved] }));
     const card = out.find((c) => c.kind === 'schedule_propose');
-    expect(card?.reasonText).toMatch(/rachel replied\. Write back/);
+    expect(card?.reasonText).toMatch(
+      /rachel replied\. Orbit cannot see what they wrote: if they asked something, answer it/,
+    );
     expect(card?.dedupeKey).toBe(`sched:c1:moved:${moved.stageEnteredAt}`);
     // the student wrote back after the move: nothing more to do until they answer
     const answered = { ...moved, lastOutboundAt: ago(10 * 60_000) };

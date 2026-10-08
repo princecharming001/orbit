@@ -1209,7 +1209,12 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
     }
     case 'schedule': {
       const last = ctx.thread?.lastSignal;
-      const lead = pick(["That's great, thank you.", 'Thank you, that would be great.'], seed, 'sched');
+      // "that would be great" answers a yes; when Orbit never saw their reply (the student moved the card by hand) it
+      // does not know what they said, so the note only thanks them for writing back
+      const sawReply = !!last || !!ctx.thread?.lastInboundBody;
+      const lead = sawReply
+        ? pick(["That's great, thank you.", 'Thank you, that would be great.'], seed, 'sched')
+        : 'Thanks for getting back to me.';
       if (last === 'reschedule') {
         body = `${G}\n\nNo problem at all. ${
           windowsText

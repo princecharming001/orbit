@@ -1889,3 +1889,29 @@ describe('a LinkedIn note with a long "Why them" line (UX round 6)', () => {
     }
   });
 });
+
+describe('promises said back to the student (UX round 6)', () => {
+  it('names the person and speaks to the student', async () => {
+    const { promiseText } = await import('../drafts/phrasing');
+    expect(promiseText('Send her my resume by Monday', 'Aisha')).toBe('Send Aisha your resume by Monday');
+    expect(promiseText('I will send my resume and github by Sunday', 'Lena')).toBe(
+      'Send your resume and github by Sunday',
+    );
+    expect(promiseText('update her after first round apps', 'Rachel')).toBe(
+      'Update Rachel after first round apps',
+    );
+    expect(promiseText('ask about her team', 'Rachel')).toBe("Ask about Rachel's team");
+  });
+});
+
+describe('a reply Orbit never saw (UX round 6)', () => {
+  it('does not answer a yes it cannot know about', () => {
+    const d = generateDraft(base({ kind: 'schedule', person: { ...base().person, isAlumni: false } }));
+    expect(d.body).not.toMatch(/that would be great|That's great/);
+    expect(d.body).toMatch(/Thanks for getting back to me\./);
+    const seen = generateDraft(
+      base({ kind: 'schedule', thread: { lastSignal: 'positive', lastInboundBody: 'Happy to chat!' } }),
+    );
+    expect(seen.body).toMatch(/that would be great|That's great/);
+  });
+});

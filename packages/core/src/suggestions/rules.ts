@@ -1,3 +1,4 @@
+import { promiseText } from '../drafts/phrasing';
 import { maxBumpsFor, sectorOf } from '../drafts/sector';
 import { zonedTime } from '../drafts/time';
 import { declineReengage, reengageDueAt } from '../pipeline/transitions';
@@ -359,7 +360,7 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
         personId: chat.personId,
         chatId: chat.id,
         dedupeKey: `sched:${chat.id}:moved:${chat.stageEnteredAt}`,
-        reasonText: `${person.firstName} replied. Write back and ask when suits them to talk`,
+        reasonText: `${person.firstName} replied. Orbit cannot see what they wrote: if they asked something, answer it, then suggest a time to talk`,
         signals: { movedByStudent: true },
         payload: { windows: inp.freeSlotsIso.slice(0, 2) },
         urgency: 0.85,
@@ -681,7 +682,10 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
         personId: a.personId,
         chatId: a.chatId,
         dedupeKey: `ai:${a.id}`,
-        reasonText: `${overdue ? 'Overdue' : 'Due today'}: ${clip(a.text, 80)}${p ? ` (for ${p.firstName})` : ''}`,
+        reasonText: ((said) =>
+          `${overdue ? 'Overdue' : 'Due today'}: ${clip(said, 80)}${p && !said.includes(p.firstName) ? ` (for ${p.firstName})` : ''}`)(
+          promiseText(a.text, p?.firstName),
+        ),
         signals: { dueAt: a.dueAt, overdue },
         payload: { actionItemId: a.id },
         urgency: 0.7 + (overdue ? 0.15 : 0),
