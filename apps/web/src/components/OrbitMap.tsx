@@ -115,7 +115,7 @@ function cardPlace(scene: OrbitScene, id: string, canvas: HTMLCanvasElement, how
       ).length;
       const score =
         (covers(x, y, x1, y1) ? 1000 : 0) +
-        (hidesYou ? 12 : 0) +
+        (hidesYou ? 80 : 0) +
         hidesNext * 40 +
         2 * scene.dotsIn(x - m, y - m, x1 + m, y1 + m, at) +
         // the people the lines run to, and the lines, stay in sight
