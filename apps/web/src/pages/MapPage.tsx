@@ -778,6 +778,7 @@ export function MapPage() {
             onSelect={(id) => (reachMode ? setParams({ reach: id }) : nav(`/people/${id}`))}
             onSelectCluster={openCluster}
             personCard={!reachMode}
+            question={webFocus}
             onHover={(id, place) => {
               setHover(id);
               if (place) setHoverPlace(place);

@@ -1070,6 +1070,45 @@ test.describe('Map motion', () => {
     expect((await mapSnapshot(page)).webLinks).toBe(0);
   });
 
+  test('a search inside Introductions replaces the hovered person, and a change of view lets go of a hover', async ({
+    page,
+  }) => {
+    await loadDemo(page);
+    await openMap(page);
+    const ids = await idsByName(page, ['Keiko Yamamoto', 'Priya Hassan']);
+    const keiko = ids['Keiko Yamamoto']!;
+    const priya = ids['Priya Hassan']!;
+    await page.getByTestId('map-filter-intros').click();
+    await mapSettled(page);
+    const box = (await mapCanvas(page).boundingBox())!;
+    const hoverKeiko = async () => {
+      const at = (await mapDots(page, [keiko]))[keiko]!;
+      await page.mouse.move(box.x + at.x, box.y + at.y);
+      await expect.poll(async () => (await mapSnapshot(page)).hover).toBe(keiko);
+      await expect(page.getByTestId('map-tooltip')).toContainText('Keiko Yamamoto');
+    };
+    await hoverKeiko();
+    expect((await mapSnapshot(page)).focus).toBe(`web:${keiko}`);
+    // the pointer rests on Keiko while the student searches: the search answers, not the old hover
+    await search(page, 'Priya');
+    await expect.poll(async () => (await mapSnapshot(page)).focus).toBe(`web:${priya}`);
+    await expect(page.getByTestId('map-legend-line')).toContainText(
+      'Showing the introductions through Priya Hassan',
+    );
+    await expect(page.getByTestId('map-tooltip')).toHaveCount(0);
+    expect((await mapSnapshot(page)).hover).toBeUndefined();
+    // back to the whole web, then hover Keiko and press Esc without moving the mouse: her dot glides back to her
+    // orbit slot, and her card and lines go with the view instead of pointing at empty space
+    await page.keyboard.press('Escape');
+    await expect.poll(async () => (await mapSnapshot(page)).focus).toBe('web');
+    await mapSettled(page);
+    await hoverKeiko();
+    await page.keyboard.press('Escape');
+    await expect.poll(async () => (await mapSnapshot(page)).focus).toBe('');
+    await expect(page.getByTestId('map-tooltip')).toHaveCount(0);
+    expect((await mapSnapshot(page)).hover).toBeUndefined();
+  });
+
   test('hover lifts the dot and stops the drift; leaving lets it drift again', async ({ page }) => {
     await loadDemo(page);
     await openMap(page);

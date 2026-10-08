@@ -33,6 +33,11 @@ export interface MapProps {
   /** the page shows a card next to the hovered person, so the map does not write their name above the dot too */
   personCard?: boolean;
   rotate?: boolean;
+  /**
+   * Changes whenever the student asks the map something new that the props above do not show (a search inside the
+   * introductions view): whoever was tapped or hovered is let go, so the answer is not hidden behind an older one.
+   */
+  question?: unknown;
   /** what the map shows, for screen readers */
   label?: string;
 }
@@ -243,6 +248,7 @@ export function OrbitMap({
   onHover,
   personCard = false,
   rotate = true,
+  question,
   label,
 }: MapProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -332,13 +338,14 @@ export function OrbitMap({
     if (changed)
       onHover?.(id, id && canvasRef.current ? cardPlace(scene, id, canvasRef.current, how) : undefined);
   };
-  // a tapped dot belongs to the view it was tapped in: a search, a route, a filter or the introductions view lets
-  // go of it (a mouse hover follows the pointer anyway)
+  // a tapped or hovered dot belongs to the view it was picked in: a search, a route, a filter or the introductions
+  // view lets go of it. The dots may move from under a resting pointer, and its card would point at empty space; the
+  // next move of the mouse hovers whoever is under it then. Keyboard focus stays: it moves only with the arrow keys.
   const webOn = !!web;
   useEffect(() => {
     const cur = hoverRef.current;
-    if (cur.id && cur.how === 'touch') setHover(undefined, 'touch');
-  }, [focus, webOn, highlightIds]);
+    if (cur.id && cur.how !== 'keyboard') setHover(undefined, cur.how);
+  }, [focus, webOn, highlightIds, question]);
   // a dot that left the map (a new layout) cannot stay hovered
   useEffect(() => {
     const cur = hoverRef.current;

@@ -408,7 +408,10 @@ export class OrbitScene {
   private tags: string[] = [];
   private tagList: (NodeView | number)[] = [];
   private tagBoxes: number[] = [];
-  private tagNames = new Map<string, string>();
+  /** each person's tag, as a first name and with the last initial */
+  private tagNames = new Map<string, [string, string]>();
+  /** how many of this frame's tags share each first name */
+  private tagTwins = new Map<string, number>();
   /** people in the spotlight (a newcomer, a tie that moved rings, a chat just booked), named while it lasts */
   private named: NodeView[] = [];
 
@@ -3298,6 +3301,14 @@ export class OrbitScene {
     ctx.font = `500 ${fontPx}px Inter, sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
+    // names are told apart only among the people named together, so the tags read alike ("Diego" next to
+    // "Victor", not "Diego S." because another Diego sits somewhere else on the map), as the panel words them
+    const twins = this.tagTwins;
+    twins.clear();
+    for (let i = 0; i < list.length; i += 2) {
+      const p = (list[i] as NodeView).person;
+      if (p) twins.set(p.firstName, (twins.get(p.firstName) ?? 0) + 1);
+    }
     const boxes = this.tagBoxes;
     boxes.length = 0;
     const hh = 8;
@@ -3334,17 +3345,15 @@ export class OrbitScene {
     ctx.globalAlpha = 1;
   }
 
-  /** A first name, with the last initial when someone else on the map shares it. */
+  /** A first name, with the last initial when someone else named on the map at the same time shares it. */
   private tagText(p: Person): string {
     let text = this.tagNames.get(p.id);
     if (text === undefined) {
-      let twins = 0;
-      for (const q of this.people.values()) if (q.firstName === p.firstName) twins++;
       const first = p.firstName || p.displayName;
-      text = twins > 1 && p.lastName ? `${first} ${p.lastName[0]}.` : first;
+      text = [first, p.lastName ? `${first} ${p.lastName[0]}.` : first];
       this.tagNames.set(p.id, text);
     }
-    return text;
+    return (this.tagTwins.get(p.firstName) ?? 0) > 1 ? text[1] : text[0];
   }
 
   /** The floating count chip ("7 at Stripe · 2 warm") that fades and slides in where the company's label was. */
