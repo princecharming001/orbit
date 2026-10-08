@@ -126,6 +126,10 @@ export async function upsertPerson(
   const decision = resolveIdentity(inp, { people, orgDomains });
   const now = new Date().toISOString();
   const email = inp.email ? normalizeEmail(inp.email) : undefined;
+  // shown as written: Gmail ignores dots, but a student checking "marcus.bell@gmail.com" expects to see the dot
+  const asWritten =
+    inp.email && email ? (inp.email.match(/<([^>]+)>/)?.[1] ?? inp.email).trim().toLowerCase() : undefined;
+  const writtenField = asWritten && asWritten !== email ? asWritten : undefined;
   const liUrl = normalizeLinkedInUrl(inp.linkedinUrl);
   const name = incomingName(inp);
   const title = inp.title ?? inp.position;
@@ -181,7 +185,10 @@ export async function upsertPerson(
   };
   if (email && !target.emails.includes(email)) {
     changes.emails = [...target.emails, email];
-    if (!target.primaryEmail) changes.primaryEmail = email;
+    if (!target.primaryEmail) {
+      changes.primaryEmail = email;
+      if (writtenField) changes.primaryEmailAsWritten = writtenField;
+    }
   }
   if (liUrl && !target.linkedinUrl) {
     changes.linkedinUrl = liUrl;
@@ -266,6 +273,7 @@ export async function upsertPerson(
       namePlaceholder: placeholder || undefined,
       fieldSources,
       primaryEmail: email,
+      primaryEmailAsWritten: writtenField,
       emails: email ? [email] : [],
       linkedinUrl: liUrl,
       linkedinSlug: linkedInSlug(liUrl),

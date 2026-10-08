@@ -60,6 +60,8 @@ export function App() {
               <Route path="/map" element={<MapPage />} />
               <Route path="/discover" element={<Discover />} />
               <Route path="/inbox" element={<InboxPage />} />
+              {/* the nav calls this page Drafts: a typed or bookmarked /drafts lands there too */}
+              <Route path="/drafts" element={<Navigate to="/inbox" replace />} />
               <Route path="/notes/new" element={<NotesNew />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/settings/:section" element={<SettingsPage />} />

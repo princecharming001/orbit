@@ -1,7 +1,9 @@
 export * from './demo/seed';
+export { expandShorthand, promiseText } from './drafts/phrasing';
 export * from './drafts/sector';
 export * from './drafts/templates';
 export * from './drafts/thread';
+export { whenLabel } from './drafts/time';
 export * from './drafts/validate';
 export * from './email/triage';
 export * from './entity/resolve';

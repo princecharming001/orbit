@@ -692,6 +692,43 @@ describe('hand-offs (SND-07, SND-12, SND-14, UI-09)', () => {
     expect((await confirmHandoff(user, d.id)).ok).toBe(false);
   });
 
+  it('Copy text is a hand-off too: it waits for "I sent it", opens nothing, and Not sent puts it back', async () => {
+    const { s, d } = await pendingDraft(user, 'thank_you');
+    const r = await approveAndSend(user, d.id, d.bodyDraft, undefined, new Date(), { via: 'copy' });
+    expect(r.ok && r.status === 'handed_off' && r.via).toBe('copy');
+    const o = (await db.outbound.get(d.id))!;
+    expect(o.status).toBe('handed_off');
+    expect(o.handoffVia).toBe('copy');
+    // nothing to open again: the text is on the clipboard
+    expect(await handoffLink(user, d.id)).toBeUndefined();
+    expect(await revertHandoff(user, d.id)).toBe(true);
+    expect((await db.outbound.get(d.id))!.handoffVia).toBeUndefined();
+    await approveAndSend(user, d.id, d.bodyDraft, undefined, new Date(), { via: 'copy' });
+    expect((await confirmHandoff(user, d.id)).ok).toBe(true);
+    expect((await db.outbound.get(d.id))!.status).toBe('sent');
+    expect((await db.suggestions.get(s.id))!.status).toBe('sent');
+  });
+
+  it('sending the answer to a "Confirm time" card books the chat at that time', async () => {
+    const { s, d } = await pendingDraft(user, 'schedule_confirm');
+    const time = s.payload.time as { startIso: string };
+    // no calendar entry for this chat yet (the demo's calendar has none for an unconfirmed time)
+    await db.events
+      .where('userId')
+      .equals(user.id)
+      .filter((e) => e.attendeePersonIds.includes(s.personId!))
+      .delete();
+    const r = await approveAndSend(user, d.id, d.bodyDraft);
+    expect(r.ok).toBe(true);
+    const c = await confirmHandoff(user, d.id);
+    expect(c.ok && c.scheduledAt).toBe(new Date(time.startIso).toISOString());
+    const chat = (await db.chats.get(s.chatId!))!;
+    expect(chat.stage).toBe('scheduled');
+    const ev = (await db.events.get(chat.scheduledEventId!))!;
+    expect(ev.startAt).toBe(new Date(time.startIso).toISOString());
+    expect(ev.attendeePersonIds).toEqual([s.personId]);
+  });
+
   it('LinkedIn: a non-connection goes to the profile with a note capped at 300 characters; a connection to compose', async () => {
     const cold = await freshPerson(user, { email: false, linkedin: true, connected: false });
     const note = await draftMessage(user, cold.id, 'outreach', 'linkedin');

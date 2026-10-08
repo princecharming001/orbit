@@ -10,9 +10,10 @@ import {
   NO_RESPONSE_SILENT_BUSINESS_DAYS,
   newId,
   PROPOSE_THRESHOLD,
+  replanWarmUp,
   sectorOf,
 } from '@orbit/core';
-import { addTouchpoint, feedback } from '../db/repo';
+import { addTouchpoint, feedback, recomputePersonStrength } from '../db/repo';
 import { db } from '../db/schema';
 
 /**
@@ -42,7 +43,78 @@ export async function retireSuggestions(rows: Suggestion[], reason: string, now 
 }
 
 /** After a chat changes stage: older proposals for it are moot, and so are cards that only made sense before. */
+const REPLIED_OR_LATER: ReadonlySet<ChatStage> = new Set([
+  'replied',
+  'scheduling',
+  'scheduled',
+  'completed',
+  'followed_up',
+  'nurturing',
+]);
+const MET: ReadonlySet<ChatStage> = new Set(['completed', 'followed_up', 'nurturing']);
+const BEFORE_REPLY: ReadonlySet<ChatStage> = new Set(['identified', 'warming', 'outreach_sent']);
+const TWO_WAY_KINDS = new Set(['meeting', 'email_in', 'linkedin_in', 'manual_log', 'intro_observed']);
+
+/**
+ * A chat the student moved on by hand (a reply Orbit cannot see without Gmail, a chat booked by hand that happened) is
+ * evidence about the relationship, the same as the email or calendar event would have been: without it, someone who
+ * replied, met the student and was thanked stays "new or cold", and Reach calls them a long shot. The evidence goes
+ * again when the chat is moved back (an undo).
+ */
+async function recordStageEvidence(chat: CoffeeChat, to: ChatStage, now: Date): Promise<void> {
+  const since = chat.firstOutreachAt ?? chat.createdAt;
+  const tps = await db.touchpoints.where('personId').equals(chat.personId).toArray();
+  const mine = (kind: string) =>
+    tps.find((t) => t.refTable === 'stage_evidence' && t.refId === `${chat.id}:${kind}`);
+  const ofThisChat = (t: (typeof tps)[number]) => !since || t.occurredAt >= since;
+  let changed = false;
+  const evidence = async (
+    key: string,
+    kind: 'manual_log' | 'meeting' | 'email_in' | 'linkedin_in',
+    at: string,
+    summary: string,
+    weight: number,
+  ) => {
+    changed =
+      (await addTouchpoint({
+        userId: chat.userId,
+        personId: chat.personId,
+        kind,
+        occurredAt: at,
+        refTable: 'stage_evidence',
+        refId: `${chat.id}:${key}`,
+        summary,
+        weight,
+      })) || changed;
+  };
+  // moved back (an undo): the evidence goes; a chat that ends (declined, archived) keeps what happened
+  const ended = to === 'declined' || to === 'no_response' || to === 'archived';
+  if (REPLIED_OR_LATER.has(to)) {
+    if (!tps.some((t) => TWO_WAY_KINDS.has(t.kind) && ofThisChat(t))) {
+      // the reply came back the way the student wrote
+      const wrote = tps.filter((t) => ofThisChat(t)).sort((a, b) => b.occurredAt.localeCompare(a.occurredAt));
+      const via = wrote.find((t) => t.kind === 'email_out' || t.kind === 'linkedin_out')?.kind;
+      const kind = via === 'email_out' ? 'email_in' : via === 'linkedin_out' ? 'linkedin_in' : 'manual_log';
+      await evidence('replied', kind, chat.lastInboundAt ?? now.toISOString(), 'They replied', 0.6);
+    }
+  } else if (BEFORE_REPLY.has(to) && mine('replied')) {
+    await db.touchpoints.delete(mine('replied')!.id);
+    changed = true;
+  }
+  if (MET.has(to) && chat.completedAt) {
+    const event = chat.scheduledEventId ? await db.events.get(chat.scheduledEventId) : undefined;
+    const at = event && event.startAt <= now.toISOString() ? event.startAt : chat.completedAt;
+    if (!tps.some((t) => t.kind === 'meeting' && ofThisChat(t)))
+      await evidence('met', 'meeting', at, 'Coffee chat', 1);
+  } else if (!MET.has(to) && !ended && mine('met')) {
+    await db.touchpoints.delete(mine('met')!.id);
+    changed = true;
+  }
+  if (changed) await recomputePersonStrength(chat.personId, now);
+}
+
 async function settleAfterStageChange(chat: CoffeeChat, to: ChatStage, now: Date): Promise<void> {
+  await recordStageEvidence(chat, to, now);
   const stale = await db.stageEvents
     .where('chatId')
     .equals(chat.id)
@@ -256,7 +328,22 @@ export async function runTimedStageRules(
 ): Promise<void> {
   const chats = await db.chats.where('userId').equals(userId).toArray();
   const tz = (await db.users.get(userId))?.timezone;
+  // without a calendar sync nobody else will notice that a booked chat's time has passed (the demo, or Google
+  // disconnected): such a chat is treated like one booked by hand
+  const syncing = await db.integrations
+    .where('userId')
+    .equals(userId)
+    .filter((i) => i.provider === 'google' && i.status === 'active')
+    .count();
   for (const c of chats) {
+    // a warm-up the student fell behind on moves its steps left forward, so no card lists a day already over
+    if (c.stage === 'warming' && c.warmUp) {
+      const re = replanWarmUp(c.warmUp, now, tz);
+      if (re) {
+        await db.chats.update(c.id, { warmUp: re, updatedAt: now.toISOString() });
+        c.warmUp = re;
+      }
+    }
     const person = await db.people.get(c.personId);
     const maxBumps = maxBumpsFor(
       sectorOf({ title: person?.currentTitle, org: person?.currentOrganizationRaw }),
@@ -290,7 +377,8 @@ export async function runTimedStageRules(
     if (c.stage === 'scheduled' && c.scheduledEventId) {
       const ev = await db.events.get(c.scheduledEventId);
       if (
-        ev?.externalEventId.startsWith(MANUAL_EVENT_PREFIX) &&
+        ev &&
+        (ev.externalEventId.startsWith(MANUAL_EVENT_PREFIX) || !syncing) &&
         ev.status !== 'cancelled' &&
         new Date(ev.endAt).getTime() + 15 * 60_000 < now.getTime()
       ) {

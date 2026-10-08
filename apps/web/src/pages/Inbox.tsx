@@ -8,7 +8,7 @@ import { DraftEditor, OutboxStatus } from '../components/DraftEditor';
 import { KIND_LABEL, SuggestionCard } from '../components/SuggestionCard';
 import { db } from '../db/schema';
 import { ensureDrafts } from '../engine/brief';
-import { draftLists } from '../engine/today';
+import { draftLists, startedDrafts } from '../engine/today';
 import { useSession } from '../state/session';
 import { Avatar, Button, Chip, EmptyState, PageHeader, relDate, Tabs, useToast } from '../ui';
 
@@ -32,7 +32,7 @@ export function InboxPage() {
           ? db.outbound
               .where('userId')
               .equals(userId)
-              .filter((o) => o.status === 'sent' || IN_FLIGHT.includes(o.status))
+              .filter((o) => o.status === 'sent' || o.status === 'draft' || IN_FLIGHT.includes(o.status))
               .toArray()
           : [],
       [userId],
@@ -41,10 +41,11 @@ export function InboxPage() {
     useLiveQuery(() => (userId ? db.people.where('userId').equals(userId).toArray() : []), [userId]) ?? [];
   const byId = new Map(people.map((p) => [p.id, p]));
   // Drafts holds the messages Orbit wrote for the student; other cards (prep, warm-ups, confirmations) live on Today.
-  // A draft already opened in the mail app or LinkedIn is under "Not sent yet", not here as well.
+  // A draft already opened in the mail app or LinkedIn is under "Opened, not marked sent", not here as well.
   const latest = (briefs ?? []).sort((a, b) => b.generatedAt.localeCompare(a.generatedAt))[0];
   const { forToday, later } = draftLists(suggestions, outbound, latest, new Date());
   const pending = [...forToday, ...later];
+  const started = startedDrafts(outbound);
   const undrafted = pending
     .filter((s) => !s.outboundMessageId)
     .map((s) => s.id)
@@ -75,12 +76,20 @@ export function InboxPage() {
         value={shown}
         onChange={setTab}
         items={[
-          { value: 'pending', label: 'Ready to send', count: forToday.length },
-          { value: 'outbox', label: 'Not sent yet', count: outbox.length },
+          { value: 'pending', label: 'To send', count: forToday.length + started.length },
+          { value: 'outbox', label: 'Opened, not marked sent', count: outbox.length },
           { value: 'snoozed', label: 'Snoozed', count: snoozed.length },
           { value: 'sent', label: 'Sent', count: sent.length },
         ]}
       />
+      {shown === 'pending' && started.length > 0 && (
+        <div className="space-y-2 mb-5" data-testid="drafts-started">
+          <div className="text-[12px] uppercase tracking-wide text-ink-3">Started by you</div>
+          {started.map((o) => (
+            <StartedItem key={o.id} o={o} person={byId.get(o.personId)} />
+          ))}
+        </div>
+      )}
       {shown === 'pending' &&
         (pending.length ? (
           <div className="space-y-3">
@@ -113,10 +122,12 @@ export function InboxPage() {
               ))}
           </div>
         ) : (
-          <EmptyState
-            title="No drafts right now"
-            body="When a reply comes in or a follow-up is due, Orbit drafts the message and it waits here for you."
-          />
+          !started.length && (
+            <EmptyState
+              title="No drafts right now"
+              body="When a follow-up or a thank-you is due, Orbit drafts the message and it waits here for you. A message you start on someone's page waits here too until you send it."
+            />
+          )
         ))}
       {shown === 'snoozed' &&
         (snoozed.length ? (
@@ -195,6 +206,49 @@ export function InboxPage() {
         ) : (
           <EmptyState title="Nothing sent yet" />
         ))}
+    </div>
+  );
+}
+
+/** A draft the student started on a person's page: open it there to keep writing, or drop it. */
+function StartedItem({ o, person }: { o: OutboundMessage; person?: Person }) {
+  const toast = useToast();
+  return (
+    <div className="border border-line rounded-[var(--radius-card)] p-3" data-testid="started-draft">
+      <div className="flex items-center gap-2 text-[13.5px] flex-wrap">
+        {person && <Avatar name={person.displayName} src={person.photoUrl} id={person.id} size={26} />}
+        <Link to={person ? `/people/${person.id}` : '#'} className="font-medium">
+          {person?.displayName ?? 'Unknown'}
+        </Link>
+        <Chip>{MESSAGE_KIND_LABELS[o.kind]}</Chip>
+        <span className="text-ink-3 text-[12px] ml-auto">started {relDate(o.createdAt)}</span>
+      </div>
+      <p className="text-[13px] text-ink-2 mt-1.5 line-clamp-2 whitespace-pre-line">
+        {o.bodyFinal ?? o.bodyDraft}
+      </p>
+      <div className="mt-2 flex flex-wrap gap-2">
+        {person && (
+          <Link to={`/people/${person.id}?open=${o.id}`}>
+            <Button size="sm" variant="primary">
+              Continue writing
+            </Button>
+          </Link>
+        )}
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={async () => {
+            await db.outbound.update(o.id, { status: 'cancelled' });
+            toast.push({
+              text: 'Draft discarded.',
+              action: { label: 'Undo', onClick: () => db.outbound.update(o.id, { status: 'draft' }) },
+              ttl: 7000,
+            });
+          }}
+        >
+          Discard draft
+        </Button>
+      </div>
     </div>
   );
 }

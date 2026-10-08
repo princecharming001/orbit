@@ -224,6 +224,39 @@ function youVerb(w: string, singular: boolean): string {
   return l;
 }
 
+/**
+ * Note shorthand that reads wrong in a message ("for McK", "after first round apps", "w/ her team"), written out. Only
+ * forms that cannot mean anything else in a recruiting note are expanded.
+ */
+export function expandShorthand(s: string): string {
+  return (
+    s
+      .replace(/\bMcK\b/g, 'McKinsey')
+      .replace(/\bGS\b/g, 'Goldman Sachs')
+      .replace(/\bJPM\b/g, 'J.P. Morgan')
+      .replace(/\bBofA\b/g, 'Bank of America')
+      .replace(/\bS&T\b/g, 'sales and trading')
+      .replace(
+        /\b(first|second|final|1st|2nd)[ -]round apps\b/gi,
+        (_, r: string) => `${r.toLowerCase()}-round applications`,
+      )
+      .replace(/\b(my|the|summer|internship|recruiting|job|full-time) apps\b/gi, '$1 applications')
+      .replace(/\bw\/o\s*/gi, 'without ')
+      .replace(/\bw\/\s*/gi, 'with ')
+      .replace(/\bb\/c\b/gi, 'because')
+      .replace(/\bppl\b/gi, 'people')
+      .replace(/\bmtg\b/gi, 'meeting')
+      .replace(/\bmgr\b/gi, 'manager')
+      // not shorthand, but a phrase the playbook keeps out of messages
+      .replace(
+        /\breach(ed|es|ing)? out to\b/gi,
+        (_, x?: string) =>
+          `${x === 'ed' ? 'got' : x === 'es' ? 'gets' : x === 'ing' ? 'getting' : 'get'} in touch with`,
+      )
+      .replace(/\bco-?workers?\b/gi, (m) => (m.endsWith('s') ? 'colleagues' : 'colleague'))
+  );
+}
+
 /** In the student's notes "you" is the generic you (the candidate), never the person: make it "I". */
 function genericYouToI(s: string): string {
   return s
@@ -242,6 +275,10 @@ function genericYouToI(s: string): string {
     .replace(/\byou\b/gi, 'I');
 }
 
+/** Words after an object "her" ("send her my resume", "ask her about it"), not a possessive one ("her team"). */
+const HER_AS_OBJECT =
+  /^(about|to|for|with|if|whether|that|and|or|but|when|before|after|at|on|in|by|from|again|directly|a|an|the|my|some|any|this|these|those|how|what|why|where|who|so|back|up|out|once|soon|later|next|today|tomorrow|know|first|too|as|over)$/i;
+
 /**
  * Convert a stored fact ("They recommended focusing on ...", "Alina offered to refer me ...") into a clause
  * addressed to the person ("you recommended focusing on ...", "you offered to refer me ..."). Returns undefined when
@@ -251,7 +288,7 @@ export function clause(
   raw: string,
   person: { firstName?: string; fullName?: string; lastName?: string } = {},
 ): FactClause | undefined {
-  let t = strip(raw);
+  let t = expandShorthand(strip(raw));
   if (!t || /[?\n]/.test(t) || t.split(' ').length > 34) return undefined;
   if ((t.match(/"/g) ?? []).length % 2) return undefined;
   t = genericYouToI(t);
@@ -323,8 +360,23 @@ export function clause(
     t = t.replace(/\btheir\b/gi, (m, at: number) => (orgBefore(at) ? m : 'your'));
     t = t
       .replace(/\b(his)\b/gi, 'your')
+      // "her colleague" in a note about her is the person's colleague: "your colleague" in a message to her
+      .replace(
+        /\bher (colleagues?|team(mates?)?|manager|boss|firm|group|office|company|friends?|classmates?|recruiters?|contacts?|old team|former team|desk|org)\b/gi,
+        (m: string, noun: string, _t: string, at: number) => (orgBefore(at) ? m : `your ${noun}`),
+      )
+      // "update her after first-round applications": the person is the one to update
+      .replace(
+        /\b(update|tell|email|text|ping|message|thank|call|send|ask|remind|show|let|keep) (her|him)\b/gi,
+        '$1 you',
+      )
       .replace(/\b(themselves|himself|herself)\b/gi, 'yourself')
       .replace(/^you are\b/, "you're");
+    // any other possessive "her" ("offered to send me her old prep doc") is theirs too, unless someone else is named
+    // before it in the clause ("introduced me to Jenna and her team" keeps Jenna's team)
+    t = t.replace(/\bher(\s+)([A-Za-z'-]+)/g, (m, sp: string, next: string, at: number) =>
+      HER_AS_OBJECT.test(next) || orgBefore(at) ? m : `your${sp}${next}`,
+    );
     if (names.length) t = t.replace(new RegExp(`\\b${nameRe}\\b`, 'g'), 'you');
   }
   t = t.replace(/\bthe (team|group|office|desk)\b(?= (is|are|was|were|will|has|plans|wants))/i, 'your $1');
@@ -464,6 +516,9 @@ function pointPhraseRaw(c: FactClause | undefined): string | undefined {
     )
   ) {
     rest = rest.replace(/^(me|out)\s+/, '').replace(/^that\s+/, '');
+    // "said to update her after first-round applications" is a request to keep them posted, which the closing line
+    // already answers; thanking them for it as advice reads oddly
+    if (/^to (update|keep|tell|email|text|ping|let|message|call|send) you\b/.test(rest)) return undefined;
     if (/^to\b/.test(rest)) return `your advice ${rest}`;
     if (/^(about|how|why|what)\b/.test(rest)) return `what you said ${rest}`;
     return `your point that ${rest}`;
@@ -564,3 +619,56 @@ const CONTRACTIONS: [RegExp, string][] = [
 export function expandContractions(s: string): string {
   return CONTRACTIONS.reduce((acc, [re, to]) => acc.replace(re, to), s);
 }
+
+const CLUB_LIKE = /\b(club|society|association|council|chapter|committee|fraternity|sorority)\b/i;
+
+/** "in Wolverine Consulting Group" for a student organisation, "at Comerica Bank" for an employer. */
+export function inOrAt(org: string, title?: string): string {
+  const club =
+    CLUB_LIKE.test(org) ||
+    /\b(president|treasurer|secretary|chair|member|captain)\b/i.test(title ?? '') ||
+    /\b(student|campus|undergraduate)\b/i.test(org);
+  return club ? `in ${org}` : `at ${org}`;
+}
+
+/**
+ * A promise the student wrote in their own words ("Send her my resume by Monday"), said back to them with the person
+ * named ("Send Aisha your resume by Monday"), so a list of promises never mixes "her", "my" and "(for Aisha)".
+ */
+export function promiseText(text: string, firstName?: string): string {
+  let t = text
+    .trim()
+    .replace(/[.;]+$/, '')
+    .replace(
+      /^(?:I\s+(?:will|'ll|need to|have to|should|promised to|said I'd|said I would)|I'll|Will)\s+/i,
+      '',
+    )
+    .replace(/^to\s+/i, '');
+  const tokens = t.split(/(\s+)/);
+  t = tokens
+    .map((tok, i) => {
+      const m = tok.match(/^([^A-Za-z']*)([A-Za-z][A-Za-z'-]*)(.*)$/);
+      if (!m) return tok;
+      const [, pre, word, post] = m as unknown as [string, string, string, string];
+      const lower = word.toLowerCase();
+      if (lower === 'my') return `${pre}your${post}`;
+      if (lower === 'me') return `${pre}you${post}`;
+      if (lower === 'myself') return `${pre}yourself${post}`;
+      if (lower === 'mine') return `${pre}yours${post}`;
+      if (!firstName) return tok;
+      if (lower === 'him') return `${pre}${firstName}${post}`;
+      if (lower === 'his') return `${pre}${firstName}'s${post}`;
+      if (lower === 'her') {
+        const next = tokens[i + 2]?.match(/[A-Za-z][A-Za-z'-]*/)?.[0];
+        // "send her my resume", "email her by Friday", "thank her": the person; "her team": theirs
+        return !next || /[.,;!?]$/.test(tok) || PROMISE_OBJECT_NEXT.test(next)
+          ? `${pre}${firstName}${post}`
+          : `${pre}${firstName}'s${post}`;
+      }
+      return tok;
+    })
+    .join('');
+  return t ? t[0]!.toUpperCase() + t.slice(1) : t;
+}
+const PROMISE_OBJECT_NEXT =
+  /^(about|to|for|with|if|whether|that|and|or|but|when|before|after|at|on|in|by|from|again|a|an|the|my|your|some|any|this|these|those|how|what|why|where|who|back|up|once|soon|later|next|today|tomorrow|tonight|know|monday|tuesday|wednesday|thursday|friday|saturday|sunday|over)$/i;

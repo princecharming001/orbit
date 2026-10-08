@@ -25,3 +25,34 @@ export async function addTargetCompany(
   });
   return 'added';
 }
+
+/**
+ * Split what was typed into the company box into companies: "Evercore, Lazard" is two. A legal suffix after a comma
+ * ("Stripe, Inc.") stays with its company.
+ */
+export function splitCompanyList(raw: string): string[] {
+  const out: string[] = [];
+  for (const part of raw.split(/[,;\n]/)) {
+    const t = part.trim().replace(/\s+/g, ' ');
+    if (!t) continue;
+    if (out.length && /^(inc|llc|ltd|co|corp|plc|lp|llp|gmbh|s\.?a)\.?$/i.test(t))
+      out[out.length - 1] += `, ${t}`;
+    else out.push(t);
+  }
+  return out;
+}
+
+/** Add every company in a typed list once; says which were already on the list. */
+export async function addTargetCompanies(
+  userId: string,
+  raw: string,
+): Promise<{ added: string[]; duplicates: string[] }> {
+  const added: string[] = [];
+  const duplicates: string[] = [];
+  for (const name of splitCompanyList(raw)) {
+    const r = await addTargetCompany(userId, name);
+    if (r === 'added') added.push(name);
+    if (r === 'duplicate') duplicates.push(name);
+  }
+  return { added, duplicates };
+}

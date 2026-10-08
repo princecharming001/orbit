@@ -83,24 +83,29 @@ test.describe('security', () => {
     await expect(page.getByText('Key saved.')).toBeVisible();
     expect(await page.evaluate(() => localStorage.getItem('orbit.prefs.v1'))).toBeNull();
     await expect(page.getByTestId('ai-feature-drafts')).toBeChecked();
-    await expect(page.getByTestId('ai-feature-emailTriage')).not.toBeChecked();
+    // reading synced email is only offered where Google is part of the build
+    await expect(page.getByTestId('ai-feature-emailTriage')).toHaveCount(0);
+    await expect(page.getByTestId('ai-feature-notes')).not.toBeChecked();
     await expect(
-      page.getByText('The text of emails is sent to Anthropic to sort them', { exact: false }),
+      page.getByText('The full text of each note or transcript you add is sent to Anthropic', {
+        exact: false,
+      }),
     ).toBeVisible();
-    await page.getByTestId('ai-feature-emailTriage').check();
+    await page.getByTestId('ai-feature-notes').check();
     // daily limits and usage are advanced settings, behind a disclosure
     await expect(page.getByTestId('ai-cap-requests')).toBeHidden();
     await page.getByTestId('ai-advanced').locator('summary').click();
     await page.getByTestId('ai-cap-requests').fill('20');
     await page.waitForTimeout(200);
     await page.reload();
-    await expect(page.getByTestId('ai-feature-emailTriage')).toBeChecked();
+    await expect(page.getByTestId('ai-feature-notes')).toBeChecked();
     await page.getByTestId('ai-advanced').locator('summary').click();
     await expect(page.getByTestId('ai-cap-requests')).toHaveValue('20');
     await expect(page.getByTestId('ai-usage-today')).toContainText('of 20 requests');
 
     await page.goto('settings/privacy');
-    await expect(page.getByTestId('export-contents')).toContainText('full email text and headers');
+    // the demo has sample emails, so the download lists them
+    await expect(page.getByTestId('export-contents')).toContainText('email text and headers');
     await expect(page.getByTestId('export-contents')).toContainText('does not include your Anthropic key');
   });
 });

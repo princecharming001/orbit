@@ -15,6 +15,7 @@ import {
   functionLabel,
   hookProposition,
   hookTense,
+  inOrAt,
   isInternCycle,
   lower1,
   lowerPhrase,
@@ -116,6 +117,13 @@ export interface Connection {
   introduced?: boolean;
   eventName?: string;
   sharedOrg?: string;
+  /**
+   * shared_employer: who is there now. `both_now` (the student's club or job, where they are now too), `them_now` (they
+   * work where the student was), `them_before` (they used to be where the student was)
+   */
+  overlap?: 'both_now' | 'them_now' | 'them_before';
+  /** shared_employer: what the student did there, as a verb phrase ("interned", "worked", "was a member") */
+  userDid?: string;
   previous?: string; // previous org or title for transitions
   /** prior_thread: when the last email in the earlier exchange was, and whether it was theirs */
   lastAt?: string;
@@ -146,6 +154,8 @@ export interface DraftContext {
     schedulingLink?: string;
     timezone: string;
     pastOrgs?: string[]; // from the resume: employers/orgs the student has been at
+    /** the same, with the student's role there and whether they are still there (a club they are in now) */
+    orgRoles?: { name: string; title?: string; current: boolean }[];
   };
   styleCard: StyleCard;
   person: {
@@ -452,7 +462,15 @@ function greeting(ctx: DraftContext, sector: Sector, recruiterFirst: boolean): s
   // never "Dear Elena Rossi," (a mail merge); without a known gender "Mr./Ms." is not an option either
   if (recruiterFirst) return ['bank', 'pe', 'consulting'].includes(firm) ? `Dear ${first},` : `Hi ${first},`;
   const tie = !!ctx.person.isAlumni || !!ctx.chat?.referrerName;
-  if (isSeniorTitle(ctx.person.title) && (firm === 'bank' || firm === 'pe') && !tie) return `Dear ${first},`;
+  // a club president, a fellow student or someone in the student's own club is a peer, never a "Dear" letter
+  const peer =
+    /\b(student|club|society|association|undergraduate|fraternity|sorority)\b/i.test(
+      `${ctx.person.title ?? ''} ${ctx.person.org ?? ''}`,
+    ) ||
+    /\b(university|college)\b/i.test(ctx.person.org ?? '') ||
+    sharedOrgWith(ctx)?.overlap === 'both_now';
+  if (!peer && isSeniorTitle(ctx.person.title) && (firm === 'bank' || firm === 'pe') && !tie)
+    return `Dear ${first},`;
   return `Hi ${first},`;
 }
 function signoff(ctx: DraftContext, sector: Sector, G: string, recruiter: boolean): string {
@@ -699,6 +717,28 @@ function questionFor(ctx: DraftContext, sector: Sector, seed: string, now: Date,
         ?.toLowerCase() ?? 'post';
     return { q: postFollowUp(topic, firm), short: 'it', about: topic, reacted: true, piece };
   }
+  // a fellow student (their club, or one the student is in too) is asked about recruiting, not about "the firm"
+  const studentOrg =
+    /\b(student|club|society|association|undergraduate|fraternity|sorority)\b/i.test(
+      `${ctx.person.title ?? ''} ${ctx.person.org ?? ''}`,
+    ) || sharedOrgWith(ctx)?.overlap === 'both_now';
+  if (studentOrg) {
+    const target = targetLabel(ctx);
+    return pick(
+      [
+        {
+          q: `how you approached ${target} recruiting and what you'd do differently`,
+          short: `how you approached ${target} recruiting`,
+        },
+        {
+          q: `what helped most when you were recruiting for ${target}`,
+          short: `what helped most when you were recruiting for ${target}`,
+        },
+      ],
+      seed,
+      'q-peer',
+    );
+  }
   // another function than the student's: the question only their seat can answer
   const cross = crossQuestion(ctx);
   if (cross) return cross;
@@ -844,10 +884,19 @@ function postPhrase(note: string): string {
 }
 
 /** First-person form of a line the student typed ("Read your post on X" -> "I read your post on X"). */
+/**
+ * The name of the one line only true of the recipient that a first message needs and only the student can supply. The
+ * same words everywhere: the bracketed gap in the draft, the card that says it is missing, and the box that asks for it.
+ */
+export const WHY_THEM = 'Why them';
+
 function studentSentence(text: string): string {
   const t = strip(text);
   if (/^(read|saw|met|found|heard|noticed|attended|watched|listened|came across|followed)\b/i.test(t))
     return `I ${lower1(t)}`;
+  // a bare noun phrase ("Your talk at the ML meetup", "a mutual friend, Sam") is not a sentence on its own: say it is
+  // why the student is writing, without adding a feeling they did not state
+  if (isFragment(t)) return `I'm writing because of ${lower1(t)}`;
   return cap1(t);
 }
 
@@ -889,6 +938,30 @@ function ownHold(c: Connection, now: Date, tz: string): string | undefined {
   if (!c.lastAt) return undefined;
   const at = addBusinessDays(new Date(c.lastAt), 5, tz);
   return at.getTime() > now.getTime() ? at.toISOString() : undefined;
+}
+
+/**
+ * The line typed into the "Why them" box as the sentence a draft would open with, for dropping into a message the
+ * student already edited (their own words around it stay as they are).
+ */
+export function whyThemSentence(text: string): string {
+  return `${studentSentence(strip(text))}.`;
+}
+
+/** The bracketed "Why them" gap in a draft, in the long (email) or short (LinkedIn note) form. */
+export const WHY_THEM_GAP = new RegExp(`\\[${WHY_THEM}:[^\\]]*\\]`);
+
+/** A phrase with no verb of its own, typed into the "Why them" box: "Your talk at ...", "The post you shared on ...". */
+function isFragment(t: string): boolean {
+  if (/^(i|we|you|they|he|she|it|both of us|my \w+ \w+ (suggested|told|said|mentioned))\b/i.test(t))
+    return false;
+  if (!/^(your|the|a|an|our|his|her|their|this|that|one of)\b/i.test(t)) return false;
+  // a verb after the opening noun ("Your post on X was great", "Our club hosted you") makes it a sentence; a verb inside
+  // a clause about them ("the post you shared") does not
+  const rest = t.replace(/\b(you|they|he|she|we|i)\s+\w+/gi, '');
+  return !/\b(is|was|were|are|am|has|have|had|suggested|told|said|mentioned|recommended|introduced|hosted|gave|spoke|talked|wrote|made|got|helped)\b/i.test(
+    rest,
+  );
 }
 
 /**
@@ -1156,12 +1229,21 @@ function opener(
       };
     }
     case 'shared_employer': {
-      claims.push({ text: `both spent time at ${c.sharedOrg}`, factId: c.factId, kind: 'shared' });
+      claims.push({ text: c.text, factId: c.factId, kind: 'shared' });
+      if (c.overlap === 'both_now' || c.overlap === 'them_now')
+        return {
+          text:
+            c.overlap === 'both_now'
+              ? `I'm ${me}, and we're both ${inOrAt(c.sharedOrg!)}.`
+              : `I'm ${me}, and ${userAtOrg(c)}, where you are now.`,
+          claims,
+          saidSituation: true,
+        };
       return {
         text: pick(
           [
-            `I'm ${me}, and I interned at ${c.sharedOrg}, where you were before ${org ?? 'your current role'}.`,
-            `We overlap on ${c.sharedOrg}: I interned there, and I saw you were there before ${org ?? 'where you are now'}. I'm ${me}.`,
+            `I'm ${me}, and ${userAtOrg(c)}, where you were before ${org ?? 'your current role'}.`,
+            `We overlap on ${c.sharedOrg}: ${userAtOrg(c)}, and I saw you were there before ${org ?? 'where you are now'}. I'm ${me}.`,
           ],
           seed,
           'op-shared',
@@ -1194,11 +1276,10 @@ function opener(
       claims.push({ text: c.text, factId: c.factId, kind: 'shared' });
       const named = nameMutual(c.text, ctx.mutualName);
       const said = studentSentence(named.text);
-      // the student's own line, then the one question it raises (never the line read back as the ask)
-      const text = qq.reacted
-        ? `${said}, and I've been wondering ${qq.q}. I'm ${me}.`
-        : `${said}. I'm ${me}.`;
-      return { text, claims, saidSituation: true, missing: named.missing ? 'mutual' : undefined };
+      // the student's own line, then the one question it raises (never the line read back as the ask); the situation
+      // line follows in full ("I'm a junior at ..., recruiting for ... this cycle"), so it is not cut short
+      const text = qq.reacted ? `${said}, and I've been wondering ${qq.q}.` : `${said}.`;
+      return { text, claims, saidSituation: false, missing: named.missing ? 'mutual' : undefined };
     }
   }
 }
@@ -1248,6 +1329,54 @@ function pickFact(
   return undefined;
 }
 
+/**
+ * An organisation on the student's resume that the person is at now, or was at: the strongest link a cold message can
+ * name, because it is checkable from both sides. A student club the student is in now makes them peers.
+ */
+export function sharedOrgWith(ctx: Pick<DraftContext, 'user' | 'person'>): Connection | undefined {
+  const mine =
+    ctx.user.orgRoles ??
+    (ctx.user.pastOrgs ?? []).map((name) => ({ name, title: undefined, current: false }));
+  const same = (a?: string, b?: string) => !!a && !!b && normalizeCompany(a) === normalizeCompany(b);
+  const did = (o: { name: string; title?: string; current: boolean }) =>
+    /\bintern/i.test(o.title ?? '')
+      ? 'interned'
+      : inOrAt(o.name, o.title).startsWith('in ')
+        ? o.current
+          ? 'am'
+          : 'was'
+        : 'worked';
+  const now = mine.find((o) => same(o.name, ctx.person.org));
+  if (now)
+    return {
+      kind: 'shared_employer',
+      text: now.current
+        ? `both ${inOrAt(now.name, now.title)}`
+        : `${ctx.person.fullName} works where the student was`,
+      sharedOrg: now.name,
+      overlap: now.current ? 'both_now' : 'them_now',
+      userDid: did(now),
+    };
+  const before = mine.find((o) => same(o.name, ctx.person.previousOrg));
+  if (before)
+    return {
+      kind: 'shared_employer',
+      text: `both spent time at ${before.name}`,
+      sharedOrg: before.name,
+      overlap: 'them_before',
+      userDid: did(before),
+    };
+  return undefined;
+}
+
+/** "I interned at Comerica Bank", "I'm in Wolverine Consulting Group", "I was in the club". */
+function userAtOrg(c: Connection): string {
+  const where = inOrAt(c.sharedOrg ?? '');
+  if (c.userDid === 'am') return `I'm ${where}`;
+  if (c.userDid === 'was') return `I was ${where}`;
+  return `I ${c.userDid ?? 'worked'} ${where}`;
+}
+
 /** Find the strongest checkable link between student and recipient from stored data. */
 export function deriveConnection(ctx: DraftContext): Connection | undefined {
   if (ctx.connection) return ctx.connection;
@@ -1294,10 +1423,8 @@ export function deriveConnection(ctx: DraftContext): Connection | undefined {
     return { kind: 'warmup', text: strip(ctx.chat.warmUpNote) };
   if (ctx.person.isAlumni)
     return { kind: 'alumni', text: `${ctx.person.fullName} went to ${ctx.user.school}` };
-  const shared = (ctx.user.pastOrgs ?? []).find(
-    (o) => o && ctx.person.previousOrg && o.toLowerCase() === ctx.person.previousOrg.toLowerCase(),
-  );
-  if (shared) return { kind: 'shared_employer', text: `both spent time at ${shared}`, sharedOrg: shared };
+  const shared = sharedOrgWith(ctx);
+  if (shared) return shared;
   if (ctx.person.previousOrg && ctx.person.org && ctx.person.previousOrg !== ctx.person.org)
     return {
       kind: 'transition',
@@ -1729,7 +1856,7 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
         op?.text ??
         (commented
           ? `[What their post was about, e.g. "Read your post on ..." (you commented on it during the warm-up)]`
-          : `[Your link to ${first}: how you found them, what you share, or what of theirs you read]`);
+          : `[${WHY_THEM}: one line only true of ${first}, like how you found them, what you share, or something of theirs you read]`);
       claims.push(...(op?.claims ?? []));
       // a warm-up comment the student did not describe is still worth a clause next to another link
       const alsoCommented = op && commented ? 'I also left a comment on your recent post.' : '';
@@ -1748,7 +1875,7 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       // and never to someone who already knows the student
       const cred =
         op && ctx.user.credibility && !friend && c?.kind !== 'met' && credibilityFits(ctx, sector, firm)
-          ? appLine
+          ? appLine || sit
             ? `I ${softLower(strip(ctx.user.credibility))}.`
             : `I ${softLower(strip(ctx.user.credibility))}, and I'm recruiting for ${lookingForPhrase(ctx)} this cycle.`
           : '';
@@ -1818,7 +1945,7 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       if (threaded || introReply) subject = reSubject;
       // LinkedIn connection note (not yet connected) or message (connected)
       if (isLinkedIn) {
-        const short = op ? shortConnection(ctx, c!) : `[your link to ${first}]`;
+        const short = op ? shortConnection(ctx, c!) : `[${WHY_THEM}: one line only true of ${first}]`;
         if (o && short.includes(o)) qq = thereFor(qq, o);
         // someone who already knows the student is not told their school and year again
         const known = !!c && (c.kind === 'met' || (c.kind === 'prior_thread' && friend) || !!c.introduced);
@@ -1828,9 +1955,7 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
         const lead = `Hi ${first}, ${
           intro
             ? `${intro} ${short}`
-            : softLower(short)
-                .replace(/^Thanks\b/, 'thanks')
-                .replace(/^Following\b/, 'following')
+            : afterComma(short)
                 .replace(/^It's\b/, "it's")
                 .replace(/^Hope\b/, 'hope')
         }`;
@@ -1847,12 +1972,15 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
           `${lead} Would you have ${minutes} minutes to talk about ${qq.short}? Happy to work around your schedule. ${name}`,
           `${lead} Would you have ${minutes} minutes to talk about ${qq.short}? Thanks, ${name}`,
           `${lead} Would you have ${minutes} minutes to talk about ${qq.reacted ? qq.short : pathTo}? Thanks, ${name}`,
-          `Hi ${first}, ${lower1(short)} Would you have ${minutes} minutes to talk about ${qq.reacted ? qq.short : pathTo}? Thanks, ${name}`,
+          // who the student is comes first and stays: a long "Why them" line shortens the question, then drops it for
+          // "a few questions", and only then the line saying who is writing
+          `${lead} Would you have ${minutes} minutes for a few questions? Thanks, ${name}`,
+          `Hi ${first}, ${afterComma(short)} Would you have ${minutes} minutes to talk about ${qq.reacted ? qq.short : pathTo}? Thanks, ${name}`,
         ];
         bodyShort =
           candidates.find((x) => x.length <= LINKEDIN_NOTE_TARGET) ??
           candidates.find((x) => x.length <= LINKEDIN_NOTE_MAX) ??
-          fitNote(candidates[candidates.length - 1]!, LINKEDIN_NOTE_MAX);
+          fitNote(candidates[candidates.length - 2]!, LINKEDIN_NOTE_MAX);
         if (ctx.person.linkedinConnected) {
           const at = ctx.person.linkedinConnectedAt
             ? new Date(ctx.person.linkedinConnectedAt).getTime()
@@ -1987,7 +2115,12 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       // the reason they agreed to talk, so the times are not all the note says
       const topic = talkTopic(subjectTopic(ctx.thread?.subject));
       const looking = topic ? `\n\nLooking forward to hearing about ${topic}.` : '';
-      const lead = pick(["That's great, thank you.", 'Thank you, that would be great.'], seed, 'sched');
+      // "that would be great" answers a yes; when Orbit never saw their reply (the student moved the card by hand) it
+      // does not know what they said, so the note only thanks them for writing back
+      const sawReply = !!last || !!ctx.thread?.lastInboundBody;
+      const lead = sawReply
+        ? pick(["That's great, thank you.", 'Thank you, that would be great.'], seed, 'sched')
+        : 'Thanks for getting back to me.';
       if (last === 'reschedule') {
         body = `${G}\n\nNo problem at all. ${
           windowsText
@@ -2242,6 +2375,9 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
             ]),
       ];
       body = `${G}\n\n${line1}${line2}${line3}\n\n${pick(closers, seed, 'ty-close')}${link ? `\n\n${link}` : ''}\n\n${S}`;
+      // Orbit's own draft stays inside the length it asks the student to keep to: a long note gets the short close
+      if (wordsIn(body) > MAX_WORDS.thank_you)
+        body = `${G}\n\n${line1}${line2}${line3}\n\nI'll let you know how recruiting goes.${link ? `\n\n${link}` : ''}\n\n${S}`;
       subject = threaded
         ? undefined
         : when
@@ -3037,6 +3173,13 @@ function takeawayPhrase(t: string, person: DraftContext['person'], isClause = fa
   return phrase;
 }
 
+/** A sentence carried on after "Hi Rachel,": "you spoke at ...", while "I", "Sarah" and "MIT" keep their capital. */
+function afterComma(s: string): string {
+  return /^(You|Your|We|Our|Saw|Read|Following|A|An|The|Just|Loved|Thanks)\b/.test(s)
+    ? lower1(s)
+    : softLower(s);
+}
+
 /** One short clause for the LinkedIn note, from the connection. */
 function shortConnection(ctx: DraftContext, c: Connection): string {
   const org = shortOrg(ctx.person.org);
@@ -3059,7 +3202,11 @@ function shortConnection(ctx: DraftContext, c: Connection): string {
     case 'transition':
       return `Saw you moved from ${c.previous} to ${org ?? 'your current role'}.`;
     case 'shared_employer':
-      return `We overlap on ${c.sharedOrg}; I interned there.`;
+      return c.overlap === 'both_now'
+        ? `We're both ${inOrAt(c.sharedOrg!)}.`
+        : c.overlap === 'them_now'
+          ? `${userAtOrg(c)}, where you are now.`
+          : `We overlap on ${c.sharedOrg}; ${userAtOrg(c)}.`;
     case 'post':
     case 'warmup':
       return `Read your post ${postPhrase(c.text)}.`;

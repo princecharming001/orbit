@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { pointPhrase, roleNoun } from '../drafts/phrasing';
+import { expandShorthand, offerPhrase, pointPhrase, roleNoun } from '../drafts/phrasing';
 import { financeFirmKind, sectorOf, seniorityOf, yearLabel } from '../drafts/sector';
 import {
   BANNED_PHRASES,
@@ -19,7 +19,9 @@ import {
   schoolShort,
   sinceLabel,
   targetLabel,
+  WHY_THEM_GAP,
   whenLabel,
+  whyThemSentence,
   wordsIn,
 } from '../drafts/templates';
 import { isBlocked, unsupportedDetails, validateDraft } from '../drafts/validate';
@@ -160,6 +162,32 @@ describe('connection derivation', () => {
 });
 
 describe('outreach', () => {
+  it('a "Why them" line typed as a bare phrase becomes a sentence, and the situation keeps what you are recruiting for', () => {
+    const r = check(
+      base({
+        person: { ...base().person, isAlumni: false },
+        facts: [fact('c', 'connection', 'Your talk at the Berkeley ML meetup on eval tooling')],
+      }),
+    );
+    // the talk's topic also raises the one question the note asks (drafting round 3), so the sentence may go on
+    expect(r.d.body).toMatch(
+      /I'm writing because of your talk at the Berkeley ML meetup on eval tooling[.,]/,
+    );
+    expect(r.d.body).not.toMatch(/,\n\nYour talk/);
+    expect(r.d.body).toMatch(/recruiting for .* this cycle/);
+    // a full sentence is kept as the student wrote it
+    const s = check(
+      base({
+        person: { ...base().person, isAlumni: false },
+        facts: [fact('c', 'connection', 'we were both in the Cornell Data Science club')],
+      }),
+    );
+    expect(s.d.body).toMatch(/We were both in the Cornell Data Science club\./);
+  });
+  it('the missing line is named "Why them" in the draft', () => {
+    const r = check(base({ person: { ...base().person, isAlumni: false } }));
+    expect(r.d.body).toMatch(/\[Why them: one line only true of /);
+  });
   it('cold outreach without any link is gated, not drafted generically', () => {
     const r = check(base({ person: { ...base().person, isAlumni: false } }));
     expect(r.d.needsInput).toContain('connection');
@@ -665,6 +693,17 @@ describe('audit round 1 regressions', () => {
     expect(clause("Alina's team is hiring in January", p)?.text).toBe('your team is hiring in January');
     expect(clause('The team is launching a new product in November', p)?.text).toBe(
       'your team is launching a new product in November',
+    );
+    // a possessive "her" in a note about her is theirs; an object "her" or someone else's stays
+    const a = { firstName: 'Aisha', fullName: 'Aisha Bello' };
+    expect(clause('She offered to send me her old interview prep doc', a)?.text).toBe(
+      'you offered to send me your old interview prep doc',
+    );
+    expect(clause('She offered to introduce me to Jenna and her team', a)?.text).toBe(
+      'you offered to introduce me to Jenna and her team',
+    );
+    expect(offerPhrase(clause('She offered to send me her old interview prep doc', a))).toBe(
+      'offering to send me your old interview prep doc',
     );
     // a third party, a question, or a fact about the student cannot be addressed to the person
     expect(clause('Mei said the team is great', p)).toBeUndefined();
@@ -1716,5 +1755,236 @@ describe('usability round 2: thank-you phrasing from typed notes', () => {
     expect(promiseLine('Send her my resume by Friday and share my side project link')).toBe(
       "As promised, I'll send you my resume by Friday and share my side project link.",
     );
+  });
+});
+
+describe('usability round 5', () => {
+  it('a thank-you built from note shorthand writes it out and speaks to the person ("your colleague", "McKinsey")', () => {
+    const facts = [
+      fact(
+        'a',
+        'advice',
+        'told me to reach out to her colleague Marcus Lee who runs Ross recruiting events for McK',
+      ),
+    ];
+    const t = generateDraft(
+      base({
+        kind: 'thank_you',
+        facts,
+        person: {
+          ...base().person,
+          firstName: 'Rachel',
+          lastName: 'Kim',
+          fullName: 'Rachel Kim',
+          org: 'McKinsey',
+        },
+        chat: { completedAt: '2026-10-05T19:00:00Z' },
+      }),
+    );
+    expect(t.body).toMatch(/your colleague Marcus Lee/);
+    expect(t.body).toMatch(/for McKinsey/);
+    expect(t.body).not.toMatch(/\bher colleague\b|\bMcK\b|reach out/);
+    expect(expandShorthand('update her after first round apps')).toBe(
+      'update her after first-round applications',
+    );
+    expect(clause('She said to update her after first round apps', { firstName: 'Rachel' })?.text).toBe(
+      'you said to update you after first-round applications',
+    );
+  });
+  it('a request to keep them posted is not thanked as advice: the real advice is', () => {
+    const facts = [
+      fact(
+        'a',
+        'advice',
+        'They told me to reach out to her colleague Marcus Lee who runs Ross recruiting events for McK',
+      ),
+      fact('b', 'advice', 'They said to update her after first round apps'),
+    ];
+    const t = generateDraft(
+      base({
+        kind: 'thank_you',
+        facts,
+        person: { ...base().person, firstName: 'Rachel', lastName: 'Kim', fullName: 'Rachel Kim' },
+        chat: { completedAt: '2026-10-05T19:00:00Z' },
+      }),
+    );
+    expect(t.body).toMatch(/your advice to get in touch with your colleague Marcus Lee/);
+    expect(t.body).not.toMatch(/advice to update you/);
+  });
+  it('an offer and a promise about the same resume get one timing, and the note keeps to its own length', () => {
+    const facts = [
+      fact('o', 'offer', 'offered to look over my resume before applications open'),
+      fact('a', 'advice', 'the key is showing how you handled ambiguity in one project story'),
+    ];
+    const t = generateDraft(
+      base({
+        kind: 'thank_you',
+        facts,
+        chat: { completedAt: '2026-10-05T19:00:00Z' },
+        promises: ['I will send my resume by Monday.'],
+      }),
+    );
+    expect(t.body).not.toMatch(/when the timing is right/);
+    expect(t.body).toMatch(/resume/);
+    expect(wordsIn(t.body)).toBeLessThanOrEqual(MAX_WORDS.thank_you);
+  });
+  it('a long "Why them" line in a LinkedIn note keeps the real question while it fits, and always says who is writing', () => {
+    // the playbook requires who is writing in a connection note (15 §2.4); the specific question is kept whenever the
+    // note still fits in the 200 characters a free account allows (usability round 6 reversed the round 5 order,
+    // which dropped "who I am" first and sent notes that never said who the student was)
+    const mid = generateDraft(
+      base({
+        channel: 'linkedin',
+        person: { ...base().person, isAlumni: false },
+        facts: [fact('c', 'connection', 'I read your post on staffing')],
+      }),
+    );
+    expect(mid.bodyShort).not.toMatch(/a few questions/);
+    expect(mid.bodyShort).toMatch(/Cornell junior here/);
+    const long = generateDraft(
+      base({
+        channel: 'linkedin',
+        person: { ...base().person, isAlumni: false },
+        facts: [fact('c', 'connection', 'We both rowed crew at Michigan and I read your post on staffing')],
+      }),
+    );
+    expect(long.bodyShort).toMatch(/Cornell junior here/);
+    expect(long.bodyShort!.length).toBeLessThanOrEqual(200);
+  });
+  it('the "Why them" gap is found in a draft, and a typed line drops into it as a sentence', () => {
+    const d = generateDraft(base({ person: { ...base().person, isAlumni: false } }));
+    expect(WHY_THEM_GAP.test(d.body)).toBe(true);
+    expect(d.body.replace(WHY_THEM_GAP, whyThemSentence('read your post on staffing'))).toMatch(
+      /I read your post on staffing\./,
+    );
+  });
+});
+
+describe('greeting a peer (usability round 5)', () => {
+  it('a student club president is "Hi Jake", not "Dear Jake Morrison"', () => {
+    const d = generateDraft(
+      base({
+        person: {
+          ...base().person,
+          firstName: 'Jake',
+          lastName: 'Morrison',
+          fullName: 'Jake Morrison',
+          title: 'President, Michigan Investment Club',
+          org: 'University of Michigan',
+          isAlumni: false,
+          strength: 0.1,
+        },
+        user: { ...base().user, targetFunctions: ['ib'] },
+        facts: [fact('c', 'connection', 'we are both in the Ross finance club')],
+      }),
+    );
+    expect(d.body).not.toMatch(/^Dear Jake Morrison/);
+  });
+});
+
+describe('an organisation on the resume the person is at (UX round 6)', () => {
+  const consultingStudent = {
+    ...base().user,
+    targetFunctions: ['consulting'],
+    pastOrgs: ['Wolverine Consulting Group', 'Comerica Bank'],
+    orgRoles: [
+      { name: 'Wolverine Consulting Group', title: 'Associate Consultant', current: true },
+      { name: 'Comerica Bank', title: 'Summer Analyst Intern', current: false },
+    ],
+  };
+  it('the president of the student club they are in is a peer: "Hi Jake", and the club is the connection', () => {
+    const d = generateDraft(
+      base({
+        user: consultingStudent,
+        person: {
+          firstName: 'Jake',
+          lastName: 'Morrison',
+          fullName: 'Jake Morrison',
+          title: 'President',
+          org: 'Wolverine Consulting Group',
+          relationshipType: 'unknown',
+          strength: 0.05,
+        },
+        seed: 'jake',
+      }),
+    );
+    expect(d.body).toMatch(/^Hi Jake,/);
+    expect(d.body).toMatch(/we're both at Wolverine Consulting Group/);
+    expect(d.needsInput).not.toContain('connection');
+  });
+  it('someone at the firm the student interned at hears that, not a generic note', () => {
+    const d = generateDraft(
+      base({
+        user: consultingStudent,
+        person: {
+          firstName: 'Hannah',
+          lastName: 'Lee',
+          fullName: 'Hannah Lee',
+          title: 'Credit Analyst',
+          org: 'Comerica Bank',
+          relationshipType: 'unknown',
+          strength: 0.05,
+        },
+        seed: 'hannah',
+      }),
+    );
+    expect(d.body).toMatch(/I interned at Comerica Bank, where you are now\./);
+    expect(d.needsInput).not.toContain('connection');
+  });
+});
+
+describe('a LinkedIn note with a long "Why them" line (UX round 6)', () => {
+  it('keeps who is writing, and never capitalises the line after "Hi Rachel,"', () => {
+    for (const line of [
+      'You spoke at the Michigan consulting club panel last Thursday',
+      'You spoke at the Michigan consulting club panel last Thursday about how you recruited from a non-target school',
+    ]) {
+      const d = generateDraft(
+        base({
+          channel: 'linkedin',
+          user: { ...base().user, targetFunctions: ['consulting'] },
+          person: {
+            firstName: 'Rachel',
+            lastName: 'Kim',
+            fullName: 'Rachel Kim',
+            title: 'Business Analyst',
+            org: 'McKinsey',
+            relationshipType: 'unknown',
+            strength: 0.05,
+          },
+          facts: [fact('c', 'connection', line)],
+          seed: 'rachel',
+        }),
+      );
+      expect(d.bodyShort).not.toMatch(/Hi Rachel, You\b/);
+      expect(d.bodyShort).not.toMatch(/Would \d+ minutes on .* be possible/);
+      expect(d.bodyShort).toMatch(/Cornell junior here|I'm a junior at Cornell/);
+    }
+  });
+});
+
+describe('promises said back to the student (UX round 6)', () => {
+  it('names the person and speaks to the student', async () => {
+    const { promiseText } = await import('../drafts/phrasing');
+    expect(promiseText('Send her my resume by Monday', 'Aisha')).toBe('Send Aisha your resume by Monday');
+    expect(promiseText('I will send my resume and github by Sunday', 'Lena')).toBe(
+      'Send your resume and github by Sunday',
+    );
+    expect(promiseText('update her after first round apps', 'Rachel')).toBe(
+      'Update Rachel after first round apps',
+    );
+    expect(promiseText('ask about her team', 'Rachel')).toBe("Ask about Rachel's team");
+  });
+});
+
+describe('a reply Orbit never saw (UX round 6)', () => {
+  it('does not answer a yes it cannot know about', () => {
+    const d = generateDraft(base({ kind: 'schedule', person: { ...base().person, isAlumni: false } }));
+    expect(d.body).not.toMatch(/that would be great|That's great/);
+    expect(d.body).toMatch(/Thanks for getting back to me\./);
+    const seen = generateDraft(
+      base({ kind: 'schedule', thread: { lastSignal: 'positive', lastInboundBody: 'Happy to chat!' } }),
+    );
+    expect(seen.body).toMatch(/that would be great|That's great/);
   });
 });

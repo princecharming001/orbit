@@ -79,7 +79,15 @@ export function AddPersonDialog({
     }
   };
   return (
-    <Modal open onClose={onClose} title="Add a person">
+    // a stray tap beside the dialog never throws away what was typed
+    <Modal
+      open
+      onClose={onClose}
+      title="Add a person"
+      keepOnBackdrop={Object.entries(f).some(
+        ([k, v]) => v.trim() && !(k === 'company' && v === (company ?? '')),
+      )}
+    >
       <form
         className="space-y-3"
         onSubmit={(e) => {

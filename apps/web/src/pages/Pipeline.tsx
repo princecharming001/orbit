@@ -5,7 +5,7 @@ import { ArrowDown, ArrowUp, ChevronRight } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { AddPersonButton } from '../components/AddPerson';
-import { ScheduleChatDialog } from '../components/ScheduleChat';
+import { ConfirmEarlyDone, chatTimeLabel, ScheduleChatDialog } from '../components/ScheduleChat';
 import { KIND_LABEL } from '../components/SuggestionCard';
 import { db } from '../db/schema';
 import { moveChat, upcomingMeeting } from '../engine/move';
@@ -36,10 +36,12 @@ const WAITING_STAGES: ChatStage[] = ['outreach_sent', 'replied', 'scheduling'];
 export function wentQuiet(chat: CoffeeChat, now = new Date()): boolean {
   if (!WAITING_STAGES.includes(chat.stage) || !chat.lastOutboundAt) return false;
   if (chat.lastInboundAt && chat.lastInboundAt >= chat.lastOutboundAt) return false;
+  // moved on since the student last wrote ("They replied", a move on the board): an answer Orbit cannot see came in
+  if (chat.stage !== 'outreach_sent' && chat.stageEnteredAt > chat.lastOutboundAt) return false;
   return now.getTime() - new Date(chat.lastOutboundAt).getTime() >= QUIET_DAYS * DAY;
 }
 
-type SortKey = 'person' | 'company' | 'stage' | 'inStage' | 'lastSent' | 'lastReply' | 'closeness';
+type SortKey = 'person' | 'stage' | 'inStage' | 'lastSent' | 'lastReply' | 'closeness';
 
 export const STAGE_COLOR: Record<ChatStage, string> = {
   identified: '#9aa1ad',
@@ -67,6 +69,8 @@ export function Pipeline() {
   // active chats first, in pipeline order; the newest activity first within a stage
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: 'stage', dir: 1 });
   const [asking, setAsking] = useState<CoffeeChat>();
+  // a chat whose meeting is still ahead, about to be marked done: asked first
+  const [early, setEarly] = useState<{ chat: CoffeeChat; at: string }>();
   const nav = useNavigate();
   const toast = useToast();
   const hints = useHints();
@@ -86,6 +90,34 @@ export function Pipeline() {
           : [],
       [userId],
     ) ?? [];
+  // with Google connected Orbit reads replies and meetings itself; without it the student moves chats along
+  const googleOn =
+    useLiveQuery(
+      async () =>
+        userId
+          ? (await db.integrations.where('userId').equals(userId).toArray()).some(
+              (i) => i.provider === 'google' && i.status === 'active',
+            )
+          : false,
+      [userId],
+    ) ?? false;
+  // booked chats still ahead, so a Scheduled card says when, not how long it has sat there
+  const meetings =
+    useLiveQuery(
+      () =>
+        userId
+          ? db.events
+              .where('userId')
+              .equals(userId)
+              .filter((e) => e.status !== 'cancelled' && new Date(e.endAt).getTime() > Date.now())
+              .toArray()
+          : [],
+      [userId],
+    ) ?? [];
+  const meetingFor = (chat: CoffeeChat) =>
+    meetings
+      .filter((e) => e.chatId === chat.id || e.attendeePersonIds.includes(chat.personId))
+      .sort((a, b) => a.startAt.localeCompare(b.startAt))[0];
   const tcs =
     useLiveQuery(
       () => (userId ? db.targetCompanies.where('userId').equals(userId).toArray() : []),
@@ -118,8 +150,13 @@ export function Pipeline() {
   );
   const nextFor = (chatId: string, personId: string) =>
     suggestions.find((s) => s.chatId === chatId || (s.personId === personId && !s.chatId));
-  const move = async (chat: CoffeeChat, to: ChatStage) => {
+  const move = async (chat: CoffeeChat, to: ChatStage, sure = false) => {
     if (chat.stage === to || !user) return;
+    const ahead = to === 'completed' && !sure ? await upcomingMeeting(chat) : undefined;
+    if (ahead && new Date(ahead.startAt).getTime() > Date.now()) {
+      setEarly({ chat, at: ahead.startAt });
+      return;
+    }
     const from = chat.stage;
     await moveChat(user, chat, to, 'user:drag');
     const name = byId.get(chat.personId)?.firstName ?? 'This chat';
@@ -142,7 +179,9 @@ export function Pipeline() {
           ? thanks
             ? ' Your thank-you draft is on Today.'
             : ' Add a note about the chat and Orbit drafts your thank-you from it.'
-          : ''
+          : to === 'replied'
+            ? ' Your reply is on Today.'
+            : ''
       }`,
       action: {
         label: 'Undo',
@@ -161,8 +200,6 @@ export function Pipeline() {
     switch (sort.key) {
       case 'person':
         return r.person.displayName.toLowerCase();
-      case 'company':
-        return (r.person.currentOrganizationRaw ?? '').toLowerCase();
       case 'stage':
         return [...ACTIVE_STAGES, ...CLOSED_STAGES].indexOf(r.chat.stage);
       case 'inStage':
@@ -186,7 +223,7 @@ export function Pipeline() {
   const header = (key: SortKey, label: string) => (
     <th
       key={key}
-      className="text-left font-medium px-3 h-9 whitespace-nowrap"
+      className="text-left font-medium px-2.5 h-9 whitespace-nowrap"
       aria-sort={sort.key === key ? (sort.dir === 1 ? 'ascending' : 'descending') : 'none'}
     >
       <button
@@ -203,7 +240,11 @@ export function Pipeline() {
     <div>
       <PageHeader
         title="Pipeline"
-        subtitle="Every coffee chat and where it stands. Orbit moves chats along as emails and meetings happen; you can move one yourself too."
+        subtitle={
+          googleOn
+            ? 'Every coffee chat and where it stands. Orbit moves chats along as emails and meetings happen; you can move one yourself too.'
+            : 'Every coffee chat and where it stands. Orbit cannot see your inbox, so when someone replies, accepts on LinkedIn or meets you, move their card.'
+        }
         actions={<AddPersonButton label="Add a person" />}
       />
       <FirstRunHint
@@ -212,9 +253,9 @@ export function Pipeline() {
         dismissed={hints.seen('pipeline') || chats.length === 0 || view !== 'board'}
         onDismiss={hints.dismiss}
       >
-        The stages run in order, from people to contact to staying in touch. Drag a card or use its Move to
-        menu to change the stage. When a card has a chip, that is the next thing to do; it opens that card on
-        Today.
+        Each column is a stage, in order: someone to write to, then message sent, replied, chat booked, chat
+        done, thanked and staying in touch. To change a card's stage, drag it or use its Move to menu. When a
+        card has a chip, that is the next thing to do; it opens that card on Today.
       </FirstRunHint>
       <details className="mb-4 text-[13px]" data-testid="stage-legend">
         <summary className="cursor-pointer text-ink-2 w-fit">What the stages mean</summary>
@@ -301,8 +342,10 @@ export function Pipeline() {
             return (
               <div
                 key={stage}
-                className="w-full md:w-[228px] shrink-0"
+                // an empty stage takes less room, so the stages that hold someone fit on screen
+                className={cx('w-full shrink-0', items.length ? 'md:w-[228px]' : 'md:w-[132px]')}
                 data-stage={stage}
+                data-needs={items.filter((r) => nextFor(r.chat.id, r.person.id)).length || undefined}
                 onDragOver={(e) => e.preventDefault()}
                 onDrop={(e) => {
                   const id = e.dataTransfer.getData('text/chat');
@@ -311,8 +354,18 @@ export function Pipeline() {
                 }}
               >
                 <div className="flex items-center gap-2 mb-2 px-1" title={STAGE_HELP[stage]}>
-                  <span className="w-2 h-2 rounded-full" style={{ background: STAGE_COLOR[stage] }} />
-                  <span className="text-[13px] font-medium whitespace-nowrap">{STAGE_LABELS[stage]}</span>
+                  <span
+                    className="w-2 h-2 rounded-full shrink-0"
+                    style={{ background: STAGE_COLOR[stage] }}
+                  />
+                  <span
+                    className={cx(
+                      'text-[13px] font-medium',
+                      items.length ? 'whitespace-nowrap' : 'leading-tight',
+                    )}
+                  >
+                    {STAGE_LABELS[stage]}
+                  </span>
                   <span className="text-[12px] text-ink-3 tabular">{items.length}</span>
                 </div>
                 <div className="space-y-2 min-h-[80px] rounded-[12px] bg-canvas-2/70 p-2">
@@ -338,7 +391,10 @@ export function Pipeline() {
                               {person.displayName}
                             </Link>
                             {person.currentTitle && (
-                              <div className="text-[12px] text-ink-3 truncate" title={person.currentTitle}>
+                              <div
+                                className="text-[12px] text-ink-3 line-clamp-2 leading-snug"
+                                title={person.currentTitle}
+                              >
                                 {person.currentTitle}
                               </div>
                             )}
@@ -350,10 +406,11 @@ export function Pipeline() {
                           </div>
                         </div>
                         <div className="mt-2 flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-[12px] text-ink-3">
-                          <span className="whitespace-nowrap">
-                            {daysLabel(chat.stageEnteredAt)} in stage
-                            {wentQuiet(chat) && <span className="text-warn"> · quiet</span>}
-                          </span>
+                          <CardWhen
+                            chat={chat}
+                            meetingAt={meetingFor(chat)?.startAt}
+                            onSetTime={() => setAsking(chat)}
+                          />
                           {next && <NextLink s={next} />}
                         </div>
                         {chat.warmUp && stage === 'warming' && (
@@ -402,78 +459,85 @@ export function Pipeline() {
       {view === 'table' &&
         chats.length > 0 &&
         (rows.length ? (
-          <div className="border border-line rounded-[var(--radius-card)] overflow-x-auto">
-            <table className="w-full text-[13.5px] min-w-[760px]">
-              <thead className="bg-canvas-2 text-ink-3 text-[12px] uppercase tracking-wide">
-                <tr>
-                  {header('person', 'Person')}
-                  {header('stage', 'Stage')}
-                  {header('company', 'Company')}
-                  {header('inStage', 'In stage')}
-                  {header('lastSent', 'Last sent')}
-                  {header('lastReply', 'Last reply')}
-                  <th className="text-left font-medium px-3 h-9">Next</th>
-                  {header('closeness', 'Closeness')}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-line">
-                {tableRows.map(({ chat, person }) => {
-                  const next = nextFor(chat.id, person.id);
-                  return (
-                    <tr
-                      key={chat.id}
-                      className="hover:bg-canvas-2/60 cursor-pointer"
-                      onClick={() => nav(`/people/${person.id}`)}
-                    >
-                      <td className="px-3 h-11">
-                        <span className="inline-flex items-center gap-2">
-                          <Avatar name={person.displayName} id={person.id} size={24} />{' '}
-                          <Link
-                            to={`/people/${person.id}`}
-                            className="font-medium hover:underline whitespace-nowrap"
-                            onClick={(e) => e.stopPropagation()}
+          <>
+            {narrow && (
+              <p className="text-[12px] text-ink-3 mb-2">Swipe the table sideways to see every column.</p>
+            )}
+            <div className="border border-line rounded-[var(--radius-card)] overflow-x-auto">
+              <table className="w-full text-[13.5px] min-w-[700px]">
+                <thead className="bg-canvas-2 text-ink-3 text-[12px] uppercase tracking-wide">
+                  <tr>
+                    {header('person', 'Person')}
+                    {header('stage', 'Stage')}
+                    {header('inStage', 'In stage')}
+                    {header('lastSent', 'Last sent')}
+                    {header('lastReply', 'Last reply')}
+                    <th className="text-left font-medium px-2.5 h-9">Next</th>
+                    {header('closeness', 'Closeness')}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-line">
+                  {tableRows.map(({ chat, person }) => {
+                    const next = nextFor(chat.id, person.id);
+                    return (
+                      <tr
+                        key={chat.id}
+                        className="hover:bg-canvas-2/60 cursor-pointer"
+                        onClick={() => nav(`/people/${person.id}`)}
+                      >
+                        <td className="px-2.5 py-2">
+                          {/* the company sits under the name, so the table fits a laptop without a sideways scroll */}
+                          <span className="flex items-center gap-2 min-w-0">
+                            <Avatar name={person.displayName} id={person.id} size={24} />
+                            <span className="min-w-0">
+                              <Link
+                                to={`/people/${person.id}`}
+                                className="block font-medium hover:underline whitespace-nowrap"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                {person.displayName}
+                              </Link>
+                              <span className="block text-[12px] text-ink-3 truncate max-w-[200px]">
+                                {person.currentOrganizationRaw ?? ''}
+                              </span>
+                            </span>
+                          </span>
+                        </td>
+                        <td className="px-2.5" onClick={(e) => e.stopPropagation()}>
+                          <Select
+                            value={chat.stage}
+                            onChange={(e) => move(chat, e.target.value as ChatStage)}
+                            className="h-7 text-[12px]"
+                            aria-label={`Stage for ${person.displayName}`}
                           >
-                            {person.displayName}
-                          </Link>
-                        </span>
-                      </td>
-                      <td className="px-3" onClick={(e) => e.stopPropagation()}>
-                        <Select
-                          value={chat.stage}
-                          onChange={(e) => move(chat, e.target.value as ChatStage)}
-                          className="h-7 text-[12px]"
-                          aria-label={`Stage for ${person.displayName}`}
-                        >
-                          {[...ACTIVE_STAGES, ...CLOSED_STAGES].map((s) => (
-                            <option key={s} value={s}>
-                              {STAGE_LABELS[s]}
-                            </option>
-                          ))}
-                        </Select>
-                      </td>
-                      <td className="px-3 text-ink-2 whitespace-nowrap">
-                        {person.currentOrganizationRaw ?? '—'}
-                      </td>
-                      <td className="px-3 tabular text-ink-2 whitespace-nowrap">
-                        {daysLabel(chat.stageEnteredAt)}
-                      </td>
-                      <td className="px-3 text-ink-2 whitespace-nowrap">
-                        {relDate(chat.lastOutboundAt)}
-                        {wentQuiet(chat) && <span className="text-warn"> · quiet</span>}
-                      </td>
-                      <td className="px-3 text-ink-2 whitespace-nowrap">{relDate(chat.lastInboundAt)}</td>
-                      <td className="px-3" onClick={(e) => e.stopPropagation()}>
-                        {next ? <NextLink s={next} /> : <span className="text-ink-3">—</span>}
-                      </td>
-                      <td className="px-3">
-                        <StrengthDots v={person.strength} />
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                            {[...ACTIVE_STAGES, ...CLOSED_STAGES].map((s) => (
+                              <option key={s} value={s}>
+                                {STAGE_LABELS[s]}
+                              </option>
+                            ))}
+                          </Select>
+                        </td>
+                        <td className="px-2.5 tabular text-ink-2 whitespace-nowrap">
+                          {daysLabel(chat.stageEnteredAt)}
+                        </td>
+                        <td className="px-2.5 text-ink-2 whitespace-nowrap">
+                          {relDate(chat.lastOutboundAt)}
+                          {wentQuiet(chat) && <span className="text-warn"> · quiet</span>}
+                        </td>
+                        <td className="px-2.5 text-ink-2 whitespace-nowrap">{relDate(chat.lastInboundAt)}</td>
+                        <td className="px-2.5" onClick={(e) => e.stopPropagation()}>
+                          {next ? <NextLink s={next} /> : <span className="text-ink-3">—</span>}
+                        </td>
+                        <td className="px-2.5">
+                          <StrengthDots v={person.strength} />
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </>
         ) : (
           <EmptyState
             title={onlyQuiet ? 'Nobody has gone quiet' : 'No chats yet'}
@@ -485,11 +549,27 @@ export function Pipeline() {
           />
         ))}
       {view === 'companies' && chats.length > 0 && <CompaniesView rows={rows} targetNames={targetNames} />}
-      <ScheduleChatDialog
-        chat={asking}
-        firstName={(asking && byId.get(asking.personId)?.firstName) ?? 'them'}
-        onClose={() => setAsking(undefined)}
-      />
+      {asking && (
+        <ScheduleChatDialog
+          key={asking.id}
+          chat={asking}
+          firstName={byId.get(asking.personId)?.firstName ?? 'them'}
+          current={meetingFor(asking)?.startAt}
+          onClose={() => setAsking(undefined)}
+        />
+      )}
+      {early && (
+        <ConfirmEarlyDone
+          firstName={byId.get(early.chat.personId)?.firstName ?? 'them'}
+          at={early.at}
+          onClose={() => setEarly(undefined)}
+          onConfirm={() => {
+            const c = early.chat;
+            setEarly(undefined);
+            move(c, 'completed', true);
+          }}
+        />
+      )}
       {user && rows.length === 0 && chats.length > 0 && view === 'board' && (
         <p className="text-[13px] text-ink-3 mt-2">
           {onlyQuiet
@@ -505,12 +585,20 @@ export function Pipeline() {
 function Board({ children, count }: { children: React.ReactNode; count: number }) {
   const ref = useRef<HTMLDivElement>(null);
   const [more, setMore] = useState(0);
+  // cards with a next step in the stages off to the right: the board says so, so nothing that needs you hides there
+  const [needs, setNeeds] = useState<{ count: number; first?: HTMLElement }>({ count: 0 });
   const measure = () => {
     const el = ref.current;
     if (!el) return;
     const cols = [...el.querySelectorAll<HTMLElement>('[data-stage]')];
     const right = el.scrollLeft + el.clientWidth;
-    setMore(cols.filter((c) => c.offsetLeft + c.offsetWidth / 2 > right).length);
+    const hidden = cols.filter((c) => c.offsetLeft + c.offsetWidth / 2 > right);
+    setMore(hidden.length);
+    const withNeeds = hidden.filter((c) => Number(c.dataset.needs ?? 0) > 0);
+    const count = withNeeds.reduce((n, c) => n + Number(c.dataset.needs), 0);
+    setNeeds((cur) =>
+      cur.count === count && cur.first === withNeeds[0] ? cur : { count, first: withNeeds[0] },
+    );
   };
   useEffect(() => {
     measure();
@@ -520,7 +608,21 @@ function Board({ children, count }: { children: React.ReactNode; count: number }
   return (
     <div className="relative">
       {/* above the columns, never on top of a card; on a phone the stages stack, so there is nothing to scroll to */}
-      <div className="hidden md:flex justify-end h-8 -mt-2 mb-1">
+      <div className="hidden md:flex justify-end items-center gap-2 h-8 -mt-2 mb-1">
+        {needs.count > 0 && needs.first && (
+          <button
+            onClick={() => {
+              const el = ref.current;
+              const col = needs.first;
+              if (el && col) el.scrollTo({ left: col.offsetLeft - el.offsetLeft, behavior: 'smooth' });
+            }}
+            className="h-8 px-3 rounded-full bg-accent-soft text-accent text-[12px] font-medium inline-flex items-center gap-0.5 hover:bg-accent hover:text-white"
+            data-testid="board-needs"
+          >
+            {needs.count} card{needs.count === 1 ? '' : 's'} with a next step off to the right{' '}
+            <ChevronRight size={14} />
+          </button>
+        )}
         {more > 0 && (
           <button
             onClick={() => ref.current?.scrollBy({ left: 480, behavior: 'smooth' })}
@@ -573,6 +675,54 @@ function useNarrow(): boolean {
     return () => m.removeEventListener('change', on);
   }, []);
   return !!narrow;
+}
+
+/**
+ * The line at the foot of a board card: when a booked chat is (or a button to set it), who went quiet and since when
+ * (the same words as Today), otherwise how long the card has sat in its stage.
+ */
+function CardWhen({
+  chat,
+  meetingAt,
+  onSetTime,
+}: {
+  chat: CoffeeChat;
+  meetingAt?: string;
+  onSetTime: () => void;
+}) {
+  if (chat.stage === 'scheduled')
+    return meetingAt ? (
+      <span className="relative z-10 inline-flex items-center gap-1" data-testid="chat-card-time">
+        Chat {chatTimeLabel(meetingAt)}
+        <button
+          type="button"
+          className="underline underline-offset-2 hover:text-ink"
+          onClick={onSetTime}
+          aria-label="Change the time"
+        >
+          Change
+        </button>
+      </span>
+    ) : (
+      <span className="relative z-10 inline-flex items-center gap-1.5">
+        <span className="text-warn">Time not set</span>
+        <button
+          type="button"
+          className="h-6 px-2 rounded-full border border-line text-ink-2 hover:bg-canvas-2"
+          onClick={onSetTime}
+          data-testid="chat-card-set-time"
+        >
+          Set time
+        </button>
+      </span>
+    );
+  if (wentQuiet(chat))
+    return (
+      <span className="whitespace-nowrap">
+        You wrote {relDate(chat.lastOutboundAt)} <span className="text-warn">· quiet</span>
+      </span>
+    );
+  return <span className="whitespace-nowrap">{daysLabel(chat.stageEnteredAt)} in stage</span>;
 }
 
 function daysLabel(since: string): string {
@@ -635,12 +785,14 @@ function CompaniesView({
   }
   const list = [...groups.values()].sort((a, b) => b.people.size - a.people.size);
   if (!list.length) return <EmptyState title="No companies yet" />;
+  // three columns, with the target mark and the last activity under the company, so it fits a phone without a sideways
+  // scroll
   return (
     <div className="border border-line rounded-[var(--radius-card)] overflow-x-auto">
-      <table className="w-full text-[13.5px] min-w-[560px]">
+      <table className="w-full text-[13.5px]">
         <thead className="bg-canvas-2 text-ink-3 text-[12px] uppercase tracking-wide">
           <tr>
-            {['Company', 'People', 'Stages', 'Target', 'Last activity'].map((h) => (
+            {['Company', 'People', 'Stages'].map((h) => (
               <th key={h} className="text-left font-medium px-3 h-9">
                 {h}
               </th>
@@ -650,34 +802,34 @@ function CompaniesView({
         <tbody className="divide-y divide-line">
           {list.map((g) => (
             <tr key={g.name}>
-              <td className="px-3 h-11 font-medium">
-                {g.orgId ? (
-                  <Link to={`/companies/${g.orgId}`} className="hover:underline">
-                    {g.name}
-                  </Link>
-                ) : (
-                  g.name
-                )}
+              <td className="px-3 py-2 align-top">
+                <span className="flex flex-wrap items-center gap-1.5 font-medium">
+                  {g.orgId ? (
+                    <Link to={`/companies/${g.orgId}`} className="hover:underline">
+                      {g.name}
+                    </Link>
+                  ) : (
+                    g.name
+                  )}
+                  {targetNames.has(normalizeCompany(g.name)) && (
+                    <Chip tone="accent" className="h-5">
+                      Target
+                    </Chip>
+                  )}
+                </span>
+                <span className="block text-[12px] text-ink-3">Last activity {relDate(g.last)}</span>
               </td>
-              <td className="px-3 tabular">{g.people.size}</td>
-              <td className="px-3">
+              <td className="px-3 py-2 align-top tabular">{g.people.size}</td>
+              <td className="px-3 py-2 align-top">
                 <span className="flex flex-wrap gap-1">
-                  {[...g.byStage.entries()].map(([s, n]) => (
-                    <Chip key={s}>
-                      <span className="w-1.5 h-1.5 rounded-full" style={{ background: STAGE_COLOR[s] }} />
-                      {STAGE_LABELS[s]} {n}
+                  {[...g.byStage.entries()].map(([st, n]) => (
+                    <Chip key={st}>
+                      <span className="w-1.5 h-1.5 rounded-full" style={{ background: STAGE_COLOR[st] }} />
+                      {STAGE_LABELS[st]} {n}
                     </Chip>
                   ))}
                 </span>
               </td>
-              <td className="px-3">
-                {targetNames.has(normalizeCompany(g.name)) ? (
-                  <Chip tone="accent">Target</Chip>
-                ) : (
-                  <span className="text-ink-3">—</span>
-                )}
-              </td>
-              <td className="px-3 text-ink-2">{relDate(g.last)}</td>
             </tr>
           ))}
         </tbody>

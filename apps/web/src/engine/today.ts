@@ -1,4 +1,4 @@
-import type { Brief, CalendarEvent, OutboundMessage, Suggestion } from '@orbit/core';
+import type { Brief, CalendarEvent, CoffeeChat, OutboundMessage, Person, Suggestion } from '@orbit/core';
 import { briefSummaryText, isMessageSuggestion } from './brief';
 
 const DAY = 86_400_000;
@@ -91,4 +91,50 @@ export function draftLists(
   const { cards } = todayCards(pending, latest, now);
   const ids = new Set(cards.map((s) => s.id));
   return { forToday: pending.filter((s) => ids.has(s.id)), later: pending.filter((s) => !ids.has(s.id)) };
+}
+
+/**
+ * Drafts the student started themselves (Write to on a person, a first message from Discover or the Map) and has not
+ * sent or discarded, newest first. They belong to no card, so without this list they would only live on the person's
+ * page; Drafts and Today list them too, so leaving the page never loses one.
+ */
+export function startedDrafts<T extends Pick<OutboundMessage, 'status' | 'suggestionId' | 'createdAt'>>(
+  outbound: T[],
+): T[] {
+  return outbound
+    .filter((o) => o.status === 'draft' && !o.suggestionId)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+const NEW_PERSON_DAYS = 30;
+
+/**
+ * People the student added by hand recently and has done nothing with yet: no chat, no message in any state, no card.
+ * Today names them with a "Write to" button, so adding someone always leads to a next step. A bulk import (LinkedIn,
+ * the demo) is left out: Discover ranks those.
+ */
+export function notYetWritten<
+  P extends Pick<Person, 'id' | 'isHuman' | 'hiddenAt' | 'sources' | 'createdAt'>,
+>(
+  people: P[],
+  chats: Pick<CoffeeChat, 'personId'>[],
+  outbound: Pick<OutboundMessage, 'personId' | 'status'>[],
+  suggestions: Pick<Suggestion, 'personId' | 'status'>[],
+  now: Date,
+): P[] {
+  const busy = new Set([
+    ...chats.map((c) => c.personId),
+    ...outbound.filter((o) => o.status !== 'cancelled').map((o) => o.personId),
+    ...suggestions.filter((s) => s.status === 'pending' && s.personId).map((s) => s.personId!),
+  ]);
+  return people
+    .filter(
+      (p) =>
+        p.isHuman &&
+        !p.hiddenAt &&
+        p.sources.includes('manual') &&
+        !busy.has(p.id) &&
+        now.getTime() - new Date(p.createdAt).getTime() < NEW_PERSON_DAYS * DAY,
+    )
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }

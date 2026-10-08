@@ -15,7 +15,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { db } from '../db/schema';
 import { dailyMaintenance } from '../engine/sync';
-import { draftLists } from '../engine/today';
+import { draftLists, startedDrafts } from '../engine/today';
 import { useSession } from '../state/session';
 import { Avatar, cx, Kbd, modKeyLabel } from '../ui';
 import { CommandPalette } from './CommandPalette';
@@ -44,7 +44,8 @@ export function AppShell() {
     if (mainRef.current) mainRef.current.scrollTop = 0;
     window.scrollTo(0, 0);
   }, [pathname]);
-  // the same count as the Drafts page's "Ready to send" tab: drafts worth sending today, not the ones that can wait
+  // what waits on the student in Drafts: the "To send" tab (drafts worth sending today, not the ones that can wait,
+  // and the drafts the student started) plus messages opened in the mail app or LinkedIn and not marked as sent
   const pending =
     useLiveQuery(async () => {
       if (!userId) return 0;
@@ -54,7 +55,11 @@ export function AppShell() {
         db.briefs.where('userId').equals(userId).toArray(),
       ]);
       const latest = briefs.sort((a, b) => b.generatedAt.localeCompare(a.generatedAt))[0];
-      return draftLists(suggestions, outbound, latest, new Date()).forToday.length;
+      return (
+        draftLists(suggestions, outbound, latest, new Date()).forToday.length +
+        startedDrafts(outbound).length +
+        outbound.filter((o) => o.status === 'handed_off').length
+      );
     }, [userId]) ?? 0;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -107,7 +112,7 @@ export function AppShell() {
               {label === 'Drafts' && pending > 0 && (
                 <span
                   className="ml-auto text-[11px] bg-accent text-white rounded-full px-1.5 h-5 inline-flex items-center tabular"
-                  title={`${pending} draft${pending === 1 ? '' : 's'} ready to send today`}
+                  title={`${pending} message${pending === 1 ? '' : 's'} waiting on you: to send, or to mark as sent`}
                   data-testid="approvals-badge"
                 >
                   {pending}
@@ -162,7 +167,7 @@ export function AppShell() {
             title="Add a note about a conversation"
             data-testid="mobile-add-note"
           >
-            <NotebookPen size={18} aria-hidden /> <span className="text-[12px]">Note</span>
+            <NotebookPen size={18} aria-hidden /> <span className="text-[12px]">Add note</span>
           </NavLink>
           <NavLink
             to="/settings"

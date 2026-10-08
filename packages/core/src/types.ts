@@ -282,6 +282,8 @@ export interface Person {
   lastName: string;
   nameNormalized: string;
   primaryEmail?: string;
+  /** the primary address as the student's source wrote it ("marcus.bell@gmail.com"); `primaryEmail` is the matching key */
+  primaryEmailAsWritten?: string;
   emails: string[];
   linkedinUrl?: string;
   linkedinSlug?: string;
@@ -617,6 +619,11 @@ export interface OutboundMessage {
   bodyFinal?: string;
   bodyFinalHash?: string;
   status: OutboundStatus;
+  /**
+   * How a hand-off left Orbit (status `handed_off`): opened in the mail app, opened on LinkedIn, or copied for the
+   * student to paste into Gmail in the browser. Either way it waits for the student's "I sent it".
+   */
+  handoffVia?: 'mailto' | 'linkedin_compose' | 'linkedin_connect' | 'copy';
   approvedAt?: string;
   queuedAt?: string;
   /** end of the undo window for a queued provider send */
@@ -630,6 +637,8 @@ export interface OutboundMessage {
   opening?: string;
   /** the thread says to wait: send no earlier than this (the student's own note to them went out days ago) */
   holdUntil?: string;
+  /** when the draft's words were last written: a draft that says "yesterday" is rewritten the next day */
+  draftedAt?: string;
   createdAt: string;
 }
 

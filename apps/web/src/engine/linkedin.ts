@@ -153,3 +153,67 @@ export async function importLinkedInExport(
   }
   return { ...r, recommended };
 }
+
+/**
+ * The text of Connections.csv from what the student picked: the CSV itself, or LinkedIn's whole ZIP (a phone cannot
+ * easily take one file out of a ZIP). Anything else that is not text is refused with what to upload instead, so a
+ * ZIP is never read as a CSV and imported as a person named "PK…".
+ */
+export async function connectionsText(file: Blob): Promise<string> {
+  const bytes = new Uint8Array(await bytesOf(file));
+  if (bytes[0] === 0x50 && bytes[1] === 0x4b) return csvFromZip(bytes);
+  // NUL bytes mean a binary file (a PDF, an image), not a spreadsheet export
+  if (bytes.subarray(0, 4096).includes(0))
+    throw new Error('That is not a CSV file. Upload Connections.csv from the LinkedIn export.');
+  return new TextDecoder().decode(bytes);
+}
+
+const NO_CSV_IN_ZIP =
+  'That ZIP has no Connections.csv in it. Request the export with Connections ticked, then upload the new file.';
+
+/** Find Connections.csv in a ZIP (stored or deflated) by its central directory. */
+async function csvFromZip(b: Uint8Array): Promise<string> {
+  const v = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  // the end-of-central-directory record sits in the last 64 KB
+  let eocd = -1;
+  for (let i = b.length - 22; i >= Math.max(0, b.length - 65_557); i--)
+    if (v.getUint32(i, true) === 0x06054b50) {
+      eocd = i;
+      break;
+    }
+  if (eocd < 0) throw new Error('That ZIP file looks damaged. Download it from LinkedIn again.');
+  const count = v.getUint16(eocd + 10, true);
+  let p = v.getUint32(eocd + 16, true);
+  for (let n = 0; n < count && p + 46 <= b.length; n++) {
+    if (v.getUint32(p, true) !== 0x02014b50) break;
+    const method = v.getUint16(p + 10, true);
+    const size = v.getUint32(p + 20, true);
+    const nameLen = v.getUint16(p + 28, true);
+    const extraLen = v.getUint16(p + 30, true);
+    const commentLen = v.getUint16(p + 32, true);
+    const local = v.getUint32(p + 42, true);
+    const name = new TextDecoder().decode(b.subarray(p + 46, p + 46 + nameLen));
+    p += 46 + nameLen + extraLen + commentLen;
+    if (!/(^|\/)connections\.csv$/i.test(name)) continue;
+    if (v.getUint32(local, true) !== 0x04034b50) break;
+    const start = local + 30 + v.getUint16(local + 26, true) + v.getUint16(local + 28, true);
+    const data = b.subarray(start, start + size);
+    if (method === 0) return new TextDecoder().decode(data);
+    if (method !== 8 || typeof DecompressionStream === 'undefined')
+      throw new Error('Orbit cannot open this ZIP here. Unzip it and upload Connections.csv from it.');
+    const out = new Response(data.slice()).body!.pipeThrough(new DecompressionStream('deflate-raw'));
+    return new Response(out).text();
+  }
+  throw new Error(NO_CSV_IN_ZIP);
+}
+
+/** A file's bytes; older engines (and the test DOM) have FileReader but no Blob.arrayBuffer. */
+function bytesOf(file: Blob): Promise<ArrayBuffer> {
+  if (typeof file.arrayBuffer === 'function') return file.arrayBuffer();
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result as ArrayBuffer);
+    r.onerror = () => reject(r.error);
+    r.readAsArrayBuffer(file);
+  });
+}

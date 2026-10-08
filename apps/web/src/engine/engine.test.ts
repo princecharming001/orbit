@@ -158,18 +158,37 @@ describe('demo pipeline', () => {
     expect(r2.draft?.chatId).toBeUndefined();
     expect(await db.chats.where('personId').equals(warm.id).count()).toBe(0);
   });
-  it('notes: ingests a dictated note, matches the person, moves scheduled → completed', async () => {
+  it('notes: a note from before the booked chat keeps it booked; the note from the chat moves scheduled → completed', async () => {
     const chat = (await db.chats
       .where('userId')
       .equals(user.id)
       .filter((c) => c.stage === 'scheduled')
       .first())!;
     const p = (await db.people.get(chat.personId))!;
+    // a note dated before the booked chat (prep, an earlier talk) is filed with them but leaves the chat booked
+    const early = await ingestNote(user, {
+      text: `Questions to ask ${p.displayName}: how the team is staffed.`,
+      source: 'manual',
+      personIds: [p.id],
+    });
+    expect(early.personIds).toEqual([p.id]);
+    expect((await db.chats.get(chat.id))!.stage).toBe('scheduled');
+    // the note from the chat itself, written after it, closes it
+    const ev = (
+      await db.events
+        .where('userId')
+        .equals(user.id)
+        .filter((e) => e.attendeePersonIds.includes(p.id) && e.status !== 'cancelled')
+        .toArray()
+    ).sort((a, b) => b.startAt.localeCompare(a.startAt))[0]!;
+    const was = new Date();
+    vi.setSystemTime(new Date(new Date(ev.endAt).getTime() + 30 * 60_000));
     const n = await ingestNote(user, {
       text: `Great chat with ${p.displayName}. They recommended practicing system design. ${p.firstName} offered to intro me to their manager. I will send a thank-you by tomorrow.`,
       source: 'wispr_capture',
       personIds: [p.id],
     });
+    vi.setSystemTime(was);
     expect(n.personIds).toEqual([p.id]);
     const fresh = (await db.chats.get(chat.id))!;
     expect(fresh.stage).toBe('completed');

@@ -33,14 +33,26 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       { kind: 'action', id: 'discover', label: 'Discover people to meet', to: '/discover' },
       { kind: 'action', id: 'settings', label: 'Settings', to: '/settings' },
     ].filter((a) => !s || a.label.toLowerCase().includes(s));
+    // a name that starts with what was typed ranks first ("Lena" finds Lena Novak before Elena Cohen), then a word
+    // in the name that starts with it, then anything else that contains it (company, title); closer people first
+    const rank = (p: (typeof people)[number]) => {
+      const name = p.displayName.toLowerCase();
+      if (name === s || p.firstName.toLowerCase() === s) return 0;
+      if (name.startsWith(s)) return 1;
+      if (name.split(/\s+/).some((w) => w.startsWith(s))) return 2;
+      if (name.includes(s)) return 3;
+      return 4;
+    };
     const ppl = (
       s
-        ? people.filter(
-            (p) =>
-              p.displayName.toLowerCase().includes(s) ||
-              (p.currentOrganizationRaw ?? '').toLowerCase().includes(s) ||
-              (p.currentTitle ?? '').toLowerCase().includes(s),
-          )
+        ? people
+            .filter(
+              (p) =>
+                p.displayName.toLowerCase().includes(s) ||
+                (p.currentOrganizationRaw ?? '').toLowerCase().includes(s) ||
+                (p.currentTitle ?? '').toLowerCase().includes(s),
+            )
+            .sort((a, b) => rank(a) - rank(b) || b.strength - a.strength)
         : people.slice().sort((a, b) => b.strength - a.strength)
     ).slice(0, 8);
     return [

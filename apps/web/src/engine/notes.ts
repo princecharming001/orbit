@@ -97,14 +97,19 @@ export function mentionedPeople(
  * only one person has, then the chat on the calendar that just ended.
  */
 export type NoteMatchPreview =
-  | { kind: 'person'; person: Person; why: 'named' | 'calendar' }
+  | { kind: 'person'; person: Person; why: 'named' | 'calendar' | 'recent' }
   | { kind: 'several'; people: Person[] }
   | { kind: 'none' };
+/**
+ * `recentPeople` are the people of chats on the calendar in the last few days: a first name in the note that matches
+ * one of them is that chat (the page then dates the note to it, so saving files it with them for sure).
+ */
 export function previewNoteMatch(
   text: string,
   people: Person[],
   user: Pick<User, 'firstName' | 'fullName'>,
   calendarPerson?: Person,
+  recentPeople: Person[] = [],
 ): NoteMatchPreview {
   const self = parseName(user.fullName || user.firstName || '').normalized;
   const fromTitle = looksLikeNotetakerText(text)
@@ -124,9 +129,23 @@ export function previewNoteMatch(
   if (named.length) {
     if (calendarPerson && named.some((p) => p.id === calendarPerson.id))
       return { kind: 'person', person: calendarPerson, why: 'calendar' };
+    const recent = recentPeople.filter((r) => named.some((p) => p.id === r.id));
+    if (recent.length === 1 && !m.full.some((p) => p.id !== recent[0]!.id))
+      return { kind: 'person', person: recent[0]!, why: 'recent' };
     return { kind: 'several', people: named };
   }
   return calendarPerson ? { kind: 'person', person: calendarPerson, why: 'calendar' } : { kind: 'none' };
+}
+
+/**
+ * The people a note names, said once each: "Ethan and Lena", or "Ethan and 5 people named Priya" when several people
+ * share a first name (listing "Priya" five times reads like a bug).
+ */
+export function namedPeopleLabel(people: Person[]): string {
+  const byFirst = new Map<string, number>();
+  for (const p of people) byFirst.set(p.firstName, (byFirst.get(p.firstName) ?? 0) + 1);
+  const parts = [...byFirst].map(([first, n]) => (n > 1 ? `${n} people named ${first}` : first));
+  return parts.length <= 2 ? parts.join(' and ') : `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}`;
 }
 
 /** "Tue, Oct 6" in the student's time zone. */
@@ -235,6 +254,9 @@ export async function ingestNote(user: User, inp: CaptureInput, now = new Date()
         .first()
     : undefined;
   const sure = ids.length > 0 && confidence >= 0.8;
+  // a note dated before the chat booked with them is not from that chat (prep, or an earlier talk): it lands on
+  // their page but does not mark the booked chat done, so the chat stays under Coming up
+  const bookedLater = !!primary && (await bookedAfter(user.id, primary.id, occurredAt));
   const note: MeetingNote = {
     id: newId('n'),
     userId: user.id,
@@ -252,7 +274,7 @@ export async function ingestNote(user: User, inp: CaptureInput, now = new Date()
     attendees,
     personIds: ids,
     // an unconfirmed guess touches nothing in the pipeline until the student confirms it
-    chatId: sure ? chat?.id : undefined,
+    chatId: sure && !bookedLater ? chat?.id : undefined,
     calendarEventId,
     matchStatus: sure ? 'auto' : 'unmatched',
     matchConfidence: confidence,
@@ -496,6 +518,22 @@ async function settleDraftsCiting(
   }
 }
 
+/** A chat with this person is booked to start after `at`: a note from then is not about that chat. */
+export async function bookedAfter(userId: string, personId: string, at: string): Promise<boolean> {
+  const t = new Date(at).getTime() + 15 * 60_000;
+  const later = await db.events
+    .where('userId')
+    .equals(userId)
+    .filter(
+      (e) =>
+        e.status !== 'cancelled' &&
+        e.attendeePersonIds.includes(personId) &&
+        new Date(e.startAt).getTime() > t,
+    )
+    .first();
+  return !!later;
+}
+
 export async function processNote(user: User, note: MeetingNote, now = new Date()): Promise<void> {
   const notePeople = (await db.people.bulkGet(note.personIds)).filter((p): p is Person => !!p);
   const primary = notePeople.find((p) => p.id === note.personIds[0]);
@@ -518,7 +556,8 @@ export async function processNote(user: User, note: MeetingNote, now = new Date(
   // A note is written after a conversation. Someone the student met without messaging first (a career fair, a club
   // event, an intro in person) has no chat yet: open one at "completed", so the thank-you comes next, not a cold
   // first message to the person they just talked to.
-  if (!note.chatId) {
+  const early = await bookedAfter(user.id, primary.id, note.occurredAt);
+  if (!note.chatId && !early) {
     const open = await db.chats
       .where('personId')
       .equals(primary.id)
@@ -695,7 +734,7 @@ export async function processNote(user: User, note: MeetingNote, now = new Date(
       summary: `Notes: ${note.title ?? ''}`,
       weight: 0.3,
     });
-    if (!note.calendarEventId)
+    if (!note.calendarEventId && !early)
       await addTouchpoint({
         userId: user.id,
         personId: p.id,

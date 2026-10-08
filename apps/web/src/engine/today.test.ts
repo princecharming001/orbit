@@ -4,7 +4,7 @@ import { db } from '../db/schema';
 import { loadDemo } from './demo';
 import { moveChat, scheduleChatAt, upcomingMeeting } from './move';
 import { runTimedStageRules } from './stages';
-import { draftLists, todayCards, todaySummaryText } from './today';
+import { draftLists, notYetWritten, startedDrafts, todayCards, todaySummaryText } from './today';
 
 const NOW = new Date('2026-10-06T10:00:00');
 
@@ -104,5 +104,47 @@ describe('usability round 2: drafts, hand-offs and chats moved by hand', () => {
       .filter((s) => s.kind === 'thank_you' && s.status === 'pending')
       .count();
     expect(thanks).toBe(1);
+  });
+});
+
+describe('started drafts and people not written to yet (round 3)', () => {
+  const at = (iso: string) => ({ createdAt: iso });
+  it('a draft the student started (no card behind it) is listed until it is sent or discarded', () => {
+    const out = [
+      { id: 'a', status: 'draft', suggestionId: undefined, ...at('2026-10-05T10:00:00Z') },
+      { id: 'b', status: 'draft', suggestionId: 's1', ...at('2026-10-05T11:00:00Z') },
+      { id: 'c', status: 'cancelled', suggestionId: undefined, ...at('2026-10-05T12:00:00Z') },
+      { id: 'd', status: 'handed_off', suggestionId: undefined, ...at('2026-10-05T13:00:00Z') },
+      { id: 'e', status: 'draft', suggestionId: undefined, ...at('2026-10-06T09:00:00Z') },
+    ] as const;
+    expect(startedDrafts([...out]).map((o) => o.id)).toEqual(['e', 'a']);
+  });
+  it('someone added by hand with no chat, message or card is a next step; a bulk import or an old add is not', () => {
+    const person = (id: string, sources: string[], createdAt: string) => ({
+      id,
+      isHuman: true,
+      hiddenAt: undefined,
+      sources: sources as never,
+      createdAt,
+    });
+    const people = [
+      person('new', ['manual'], '2026-10-05T10:00:00Z'),
+      person('imported', ['linkedin_csv'], '2026-10-05T10:00:00Z'),
+      person('old', ['manual'], '2026-07-01T10:00:00Z'),
+      person('chatting', ['manual'], '2026-10-05T10:00:00Z'),
+      person('drafted', ['manual'], '2026-10-05T10:00:00Z'),
+      person('dropped', ['manual'], '2026-10-04T10:00:00Z'),
+    ];
+    const r = notYetWritten(
+      people,
+      [{ personId: 'chatting' }],
+      [
+        { personId: 'drafted', status: 'draft' },
+        { personId: 'dropped', status: 'cancelled' },
+      ],
+      [],
+      NOW,
+    );
+    expect(r.map((p) => p.id)).toEqual(['new', 'dropped']);
   });
 });

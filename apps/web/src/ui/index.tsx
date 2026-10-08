@@ -46,14 +46,17 @@ export function Card({
   className,
   children,
   padded = true,
+  'data-testid': testId,
 }: {
   className?: string;
   children: ReactNode;
   padded?: boolean;
+  'data-testid'?: string;
 }) {
   return (
     <div
       className={cx('bg-canvas border border-line rounded-[var(--radius-card)]', padded && 'p-4', className)}
+      data-testid={testId}
     >
       {children}
     </div>
@@ -272,7 +275,7 @@ export function Tabs<T extends string>({
   return (
     <div
       // tabs wrap on a narrow screen instead of hiding the last one off the edge
-      className="flex flex-wrap items-center gap-x-1 border-b border-line mb-4"
+      className="flex flex-wrap items-center gap-x-0.5 sm:gap-x-1 border-b border-line mb-4"
       role="tablist"
     >
       {items.map((it) => (
@@ -282,7 +285,7 @@ export function Tabs<T extends string>({
           aria-selected={value === it.value}
           onClick={() => onChange(it.value)}
           className={cx(
-            'px-2.5 sm:px-3 h-9 text-[14px] border-b-2 -mb-px transition-colors shrink-0 whitespace-nowrap',
+            'px-1.5 sm:px-3 h-9 text-[13px] sm:text-[14px] border-b-2 -mb-px transition-colors shrink-0 whitespace-nowrap',
             value === it.value
               ? 'border-ink text-ink font-medium'
               : 'border-transparent text-ink-3 hover:text-ink',
@@ -388,18 +391,21 @@ export function Modal({
   title,
   children,
   width = 520,
+  keepOnBackdrop,
 }: {
   open: boolean;
   onClose: () => void;
   title?: ReactNode;
   children: ReactNode;
   width?: number;
+  /** a tap outside does not close it (a form with something typed in): Cancel, the close button or Escape do */
+  keepOnBackdrop?: boolean;
 }) {
   const ref = useDialog(open, onClose);
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-ink/30" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink/30" onClick={keepOnBackdrop ? undefined : onClose} />
       <div
         ref={ref}
         tabIndex={-1}
@@ -463,8 +469,9 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     <ToastCtx.Provider value={value}>
       {children}
       <div
-        // on a phone the toast sits under the top bar, clear of the cards' buttons and the bottom tabs
-        className="fixed top-14 md:top-auto md:bottom-4 inset-x-4 md:inset-x-auto md:left-1/2 md:-translate-x-1/2 z-[60] flex flex-col gap-2 items-center pointer-events-none"
+        // on a phone the toast sits under the top bar, clear of the cards' buttons and the bottom tabs; on a laptop it
+        // sits in the bottom right corner, off the main column where the cards and their buttons are
+        className="fixed top-14 md:top-auto md:bottom-4 inset-x-4 md:inset-x-auto md:right-4 z-[60] flex flex-col gap-2 items-center md:items-end pointer-events-none"
         aria-live="polite"
         data-testid="toasts"
       >
@@ -472,7 +479,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
           <div
             key={t.id}
             className={cx(
-              'pointer-events-auto fade-up flex items-center gap-3 rounded-2xl px-4 py-2.5 min-h-10 max-w-full md:max-w-[560px] shadow-lg text-[13px] leading-snug',
+              'pointer-events-auto fade-up flex items-center gap-3 rounded-2xl px-4 py-2.5 min-h-10 max-w-full md:max-w-[400px] shadow-lg text-[13px] leading-snug',
               t.tone === 'bad'
                 ? 'bg-bad text-white'
                 : t.tone === 'good'

@@ -11,11 +11,13 @@ import type {
   User,
 } from '@orbit/core';
 import {
+  expandShorthand,
   financeFirmKind,
   functionPhrase,
   isRecruiter,
   linkedinActivityUrl,
   linkedinProfileUrl,
+  matchedFunction,
   sectorOf,
   seniorityOf,
   yearLabel,
@@ -97,7 +99,8 @@ function lastTouchSentence(tp: Touchpoint, first: string, when: string): string 
  * to the student, so it says "you".
  */
 export function toYou(text: string): string {
-  return text
+  // note shorthand ("McK", "first round apps") is written out wherever Orbit shows a note back
+  return expandShorthand(text)
     .replace(/\bI'm\b/g, "you're")
     .replace(/\bI've\b/g, "you've")
     .replace(/\bI'll\b/g, "you'll")
@@ -126,7 +129,10 @@ export function personSummary(args: {
   const parts: string[] = [];
   const title = person.currentTitle?.trim();
   const org = person.currentOrganizationRaw?.trim();
-  if (title && org) {
+  if (title && org && /^(student|undergrad(uate)?|mba candidate|grad(uate)? student)$/i.test(title)) {
+    // "Tom is a student at the University of Michigan", not "works at ... as a Student"
+    parts.push(`${first} is a student at ${org}.`);
+  } else if (title && org) {
     const { main, team } = splitTitle(title);
     parts.push(`${first} works at ${org} as ${withArticle(main)}${team ? ` (${team})` : ''}.`);
   } else if (title) parts.push(`${first} is ${withArticle(title)}.`);
@@ -168,7 +174,10 @@ export function personSummary(args: {
     hook ? `Worth bringing up: ${sentence(toYou(hook.text))}` : undefined,
     // facts are third-person sentences ("She offered to refer you ..."), so the label does not repeat the offer
     off ? `Follow up: ${sentence(toYou(off.text))}` : undefined,
-    adv ? `Tell them what you did with their advice: ${sentence(toYou(adv.text))}` : undefined,
+    // a note line that already says "advice" ("Big advice: ...") is not labelled advice twice
+    adv
+      ? `Tell them what you did with their advice: ${sentence(toYou(adv.text.replace(/^(big |main |key |their |her |his )?(advice|tip)\s*[:-]\s*/i, '')))}`
+      : undefined,
   ].filter((x): x is string => !!x);
   return { summary: parts.join(' '), talkingPoints };
 }
@@ -410,7 +419,13 @@ export function buildPrep(args: {
   const cycleRaw = goals?.cycleLabel?.trim() ?? '';
   const cycle = /^(this cycle)?$/i.test(cycleRaw) ? '' : cycleRaw;
   const search = cycle ? `${cycle} search` : 'search';
-  const target = goals?.targetFunctions?.[0];
+  // the student's goal that fits this person ("consulting" to a McKinsey analyst), not just the first one they listed
+  const targets = goals?.targetFunctions ?? [];
+  const target =
+    matchedFunction(
+      `${person.currentTitle ?? ''} ${person.headline ?? ''} ${person.currentOrganizationRaw ?? ''}`,
+      targets,
+    ) ?? targets[0];
   const myFn = target ? functionPhrase(target) : '';
   const recruiter = isRecruiter(person.currentTitle);
   const seniority = seniorityOf(person.currentTitle);
@@ -472,9 +487,20 @@ export function buildPrep(args: {
     ];
     if (exp) {
       const current = !exp.endDate || /present|now/i.test(exp.endDate);
-      bits.push(
-        `${current ? "Right now I'm" : 'Most recently I was'} ${withArticle(exp.title!)} at ${exp.organizationName}.`,
-      );
+      const org = exp.organizationName!;
+      // a student club is not an employer: "Treasurer of the Michigan Investment Club", "an analyst in the ..."
+      const club = /\b(club|association|society|council|chapter|committee|fraternity|sorority)\b/i.test(org);
+      const the = /^the\b/i.test(org) ? '' : 'the ';
+      const officer =
+        /^(president|vice president|vp|treasurer|secretary|chair|co-?chair|captain|founder|co-?founder|director|head|lead)\b/i.test(
+          exp.title!,
+        );
+      const role = club
+        ? officer
+          ? `${exp.title} of ${the}${org}`
+          : `${withArticle(exp.title!)} in ${the}${org}`
+        : `${withArticle(exp.title!)} at ${org}`;
+      bits.push(`${current ? (club ? "I'm" : "Right now I'm") : 'Most recently I was'} ${role}.`);
     } else if (project) bits.push(`Lately I've been working on ${project.title}.`);
     const missing: string[] = [];
     if (!exp && !project)

@@ -16,7 +16,7 @@ Cold LinkedIn messages from a stranger get ignored. The same message after the r
 
 ## 3. When a warm-up starts
 
-`startWarmUpOrOutreach` creates the chat in `warming` instead of `identified` when all of: the channel is LinkedIn (no email on file), the person's closeness is under 0.2, the person has a LinkedIn slug, and the setting `warmUpEnabled` is on (default on; `warmUpDays` default 4, range 2–10). Otherwise the chat starts in `identified` with an outreach draft as before.
+`startWarmUpOrOutreach` creates the chat in `warming` instead of `identified` when all of: the channel is LinkedIn (no email on file), the person's closeness is under 0.2, the person has a LinkedIn slug, the person is not at an organisation the student is in now (their own club or current job on the resume, `sharesOrgNow`: someone they see is not warmed up to), and the setting `warmUpEnabled` is on (default on; `warmUpDays` default 4, range 2–10). Otherwise the chat starts in `identified` with an outreach draft as before.
 
 ## 4. The plan
 
@@ -39,7 +39,7 @@ ready  day n, 09:00   outreach suggested once ready AND at least one action is d
 
 ## 6. UI
 
-Pipeline board shows a `Warming up` column with a progress bar per card; the profile shows the plan with checkmarks and the activity link; Discover explains for cold LinkedIn-only candidates why a warm-up comes first and the button reads "Start warm-up" (the student stays on the list; a toast links to the step on Today). A first-message card on Today for the same kind of person (from a recommendation, no chat yet) follows the same rule: its primary button is "Start warm-up", with "Write now instead" beside it. Settings → Sending limits holds the toggle and length.
+Pipeline board shows a `Warming up` column with a progress bar per card; the profile shows the plan with checkmarks and the activity link; Discover explains for cold LinkedIn-only candidates why a warm-up comes first and the button reads "Start warm-up" (the student stays on the list; a toast links to the step on Today). A first-message card on Today for the same kind of person (from a recommendation, no chat yet) follows the same rule: its primary button is "Start warm-up", with "Write now instead" beside it. Settings → Limits and schedule holds the toggle and the length in working days. A warm-up whose next step's day has passed moves the steps left (and the first-message date) forward to today, keeping their spacing (`replanWarmUp`).
 
 ## 7. Metrics
 

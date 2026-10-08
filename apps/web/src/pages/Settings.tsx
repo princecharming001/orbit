@@ -1,14 +1,16 @@
-import { buildStyleCard, defaultStyleCard, newId, TARGET_STATUS_LABELS } from '@orbit/core';
+import type { TargetCompany, RecruitingGoals as UserGoals } from '@orbit/core';
+import { buildStyleCard, defaultStyleCard, newId, TARGET_STATUS_LABELS, yearLabel } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Check, Download, Trash2 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Navigate, NavLink, useNavigate, useParams } from 'react-router-dom';
 import { LinkedInImportButton } from '../components/LinkedInImport';
+import { ResumeFacetList } from '../components/ResumeFacets';
 import { db, wipeDatabase } from '../db/schema';
 import { demoResetPrompt, loadDemo } from '../engine/demo';
 import { saveResume } from '../engine/resume';
 import { syncGoogle } from '../engine/sync';
-import { addTargetCompany } from '../engine/targets';
+import { addTargetCompanies } from '../engine/targets';
 import { fmtFailureTime, hasLlm, MODEL, testApiKey } from '../integrations/anthropic';
 import {
   connectGoogle,
@@ -46,10 +48,13 @@ import {
   useToast,
 } from '../ui';
 
+/** The section with the LinkedIn import, the resume and the Claude key (its route keeps the older name). */
+const INTEGRATIONS_LABEL = 'LinkedIn, resume & AI';
+
 const SECTIONS = [
   ['profile', 'Profile'],
   ['goals', 'Goals'],
-  ['integrations', 'Integrations'],
+  ['integrations', INTEGRATIONS_LABEL],
   ['style', 'Writing style'],
   ['limits', 'Limits and schedule'],
   ['privacy', 'Data & privacy'],
@@ -67,6 +72,7 @@ const SECTION_ALIASES: Record<string, string> = {
 
 export function SettingsPage() {
   const { section = 'profile' } = useParams();
+  const nav = useNavigate();
   if (!SECTIONS.some(([k]) => k === section))
     // the words a student might guess ("writing", "tone") go to the section that has them
     return <Navigate to={`/settings/${SECTION_ALIASES[section] ?? 'profile'}`} replace />;
@@ -74,10 +80,23 @@ export function SettingsPage() {
     <div>
       <PageHeader title="Settings" />
       <div className="grid md:grid-cols-[200px_minmax(0,1fr)] gap-6 items-start">
-        <nav
-          className="flex flex-wrap md:flex-nowrap md:flex-col gap-1 md:gap-0.5 min-w-0"
-          aria-label="Settings sections"
-        >
+        {/* on a phone the six sections are one menu, not three rows of buttons */}
+        <label className="md:hidden">
+          <span className="sr-only">Settings section</span>
+          <Select
+            value={section}
+            onChange={(e) => nav(`/settings/${e.target.value}`)}
+            className="w-full"
+            data-testid="settings-section-select"
+          >
+            {SECTIONS.map(([k, l]) => (
+              <option key={k} value={k}>
+                {l}
+              </option>
+            ))}
+          </Select>
+        </label>
+        <nav className="hidden md:flex md:flex-col md:gap-0.5 min-w-0" aria-label="Settings sections">
           {SECTIONS.map(([k, l]) => (
             <NavLink
               key={k}
@@ -114,53 +133,116 @@ type ProfileForm = {
   school: string;
   schoolDomain: string;
   graduationYear: number;
+  degree: string;
   majors: string;
   currentCity: string;
   linkedinUrl: string;
   timezone: string;
 };
-const unsavedProfile = new Map<string, ProfileForm>();
+
+/**
+ * Settings save as they are made, like Limits and schedule: an edit is written a moment after the typing stops, and
+ * at once when the section closes or the tab hides, so leaving the page or reloading never loses it. `valid` holds a
+ * save back (an empty name) and the page says why.
+ */
+function useAutosave<T>(
+  value: T,
+  save: (v: T) => Promise<unknown>,
+  valid = true,
+): 'saved' | 'saving' | 'held' {
+  const json = JSON.stringify(value);
+  const [savedJson, setSavedJson] = useState(json);
+  const latest = useRef({ value, json, save, valid, savedJson });
+  latest.current = { value, json, save, valid, savedJson };
+  const flush = () => {
+    const l = latest.current;
+    if (!l.valid || l.json === l.savedJson) return;
+    latest.current.savedJson = l.json;
+    l.save(l.value)
+      .then(() => setSavedJson(l.json))
+      .catch(() => undefined);
+  };
+  useEffect(() => {
+    if (!valid || json === savedJson) return;
+    const t = setTimeout(flush, 500);
+    return () => clearTimeout(t);
+  });
+  useEffect(() => {
+    const hidden = () => document.visibilityState === 'hidden' && flush();
+    window.addEventListener('pagehide', flush);
+    document.addEventListener('visibilitychange', hidden);
+    return () => {
+      window.removeEventListener('pagehide', flush);
+      document.removeEventListener('visibilitychange', hidden);
+      flush();
+    };
+  }, []);
+  return !valid ? 'held' : json === savedJson ? 'saved' : 'saving';
+}
+
+function SaveState({ state, held }: { state: 'saved' | 'saving' | 'held'; held?: string }) {
+  return (
+    <p className="text-[12px] text-ink-3 flex items-center gap-1.5" aria-live="polite" data-testid="autosave">
+      {state === 'held' ? (
+        <span className="text-warn">{held ?? 'Not saved yet.'}</span>
+      ) : state === 'saving' ? (
+        'Saving…'
+      ) : (
+        <>
+          <Check size={13} className="text-good" /> Changes here save as you make them.
+        </>
+      )}
+    </p>
+  );
+}
 
 function Profile() {
   const user = useSession().user!;
-  const [f, setF] = useState<ProfileForm>(
-    () =>
-      unsavedProfile.get(user.id) ?? {
-        fullName: user.fullName,
-        email: user.email,
-        school: user.school,
-        schoolDomain: user.schoolDomain ?? '',
-        graduationYear: user.graduationYear ?? 0,
-        majors: user.majors.join(', '),
-        currentCity: user.currentCity ?? '',
-        linkedinUrl: user.linkedinUrl ?? '',
-        timezone: user.timezone,
-      },
-  );
-  const toast = useToast();
+  const [f, setF] = useState<ProfileForm>(() => ({
+    fullName: user.fullName,
+    email: user.email,
+    school: user.school,
+    schoolDomain: user.schoolDomain ?? '',
+    graduationYear: user.graduationYear ?? 0,
+    degree: user.degree ?? '',
+    majors: user.majors.join(', '),
+    currentCity: user.currentCity ?? '',
+    linkedinUrl: user.linkedinUrl ?? '',
+    timezone: user.timezone,
+  }));
   const nameMissing = !f.fullName.trim();
-  const [saved, setSaved] = useState(() =>
-    JSON.stringify({
-      fullName: user.fullName,
-      email: user.email,
-      school: user.school,
-      schoolDomain: user.schoolDomain ?? '',
-      graduationYear: user.graduationYear ?? 0,
-      majors: user.majors.join(', '),
-      currentCity: user.currentCity ?? '',
-      linkedinUrl: user.linkedinUrl ?? '',
-      timezone: user.timezone,
-    }),
+  const state = useAutosave(
+    f,
+    (v) => {
+      const [first, ...rest] = v.fullName.trim().split(/\s+/);
+      return db.users.update(user.id, {
+        ...v,
+        fullName: v.fullName.trim(),
+        firstName: first ?? '',
+        lastName: rest.join(' '),
+        majors: v.majors
+          .split(',')
+          .map((m) => m.trim())
+          .filter(Boolean),
+        schoolDomain: v.schoolDomain || undefined,
+        linkedinUrl: v.linkedinUrl || undefined,
+        graduationYear: v.graduationYear || undefined,
+        degree: v.degree || undefined,
+      });
+    },
+    !nameMissing,
   );
-  const dirty = saved !== JSON.stringify(f);
-  // an edit not saved yet survives a visit to another settings tab (it is kept until saved or the page reloads)
-  useEffect(() => {
-    if (dirty) unsavedProfile.set(user.id, f);
-    else unsavedProfile.delete(user.id);
-  }, [dirty, f, user.id]);
   const zones = timeZones(f.timezone);
+  const now = new Date();
+  const firstYear = now.getMonth() >= 7 ? now.getFullYear() + 1 : now.getFullYear();
+  const grad = /\b(MBA|MS|MENG|PHD)\b/i.test(f.degree);
+  const years = Array.from({ length: /PHD/i.test(f.degree) ? 6 : grad ? 2 : 4 }, (_, i) => firstYear + i);
+  if (f.graduationYear && !years.includes(f.graduationYear)) years.unshift(f.graduationYear);
   return (
     <Card className="grid sm:grid-cols-2 gap-4">
+      <div className="sm:col-span-2">
+        <SaveState state={state} held="Your name is missing, so nothing on this page is saved yet." />
+      </div>
       <div className="sm:col-span-2">
         <Label htmlFor="profile-name-input">Full name</Label>
         <Input
@@ -207,12 +289,40 @@ function Profile() {
       </div>
       <div>
         <Label htmlFor="profile-year">Graduation year</Label>
-        <Input
+        {/* the same choice as in setup, with the year it makes you now */}
+        <Select
           id="profile-year"
-          type="number"
-          value={f.graduationYear}
+          value={f.graduationYear ? String(f.graduationYear) : ''}
           onChange={(e) => setF({ ...f, graduationYear: Number(e.target.value) })}
-        />
+          className="w-full"
+        >
+          <option value="">Choose your year</option>
+          {years.map((y) => (
+            <option key={y} value={String(y)}>
+              {y} ({yearLabel(y, f.degree || undefined, now)} now)
+            </option>
+          ))}
+        </Select>
+      </div>
+      <div>
+        <Label
+          htmlFor="profile-degree"
+          hint="so messages call you a junior, a senior or an MBA student correctly"
+        >
+          Degree
+        </Label>
+        <Select
+          id="profile-degree"
+          value={f.degree}
+          onChange={(e) => setF({ ...f, degree: e.target.value })}
+          className="w-full"
+          data-testid="profile-degree"
+        >
+          <option value="">Not set</option>
+          {['BS', 'BA', 'BBA', 'MS', 'MBA', 'MEng', 'PhD', 'Other'].map((d) => (
+            <option key={d}>{d}</option>
+          ))}
+        </Select>
       </div>
       <div>
         <Label htmlFor="profile-majors">Majors</Label>
@@ -248,46 +358,28 @@ function Profile() {
               </option>
             ))}
           </optgroup>
-          <optgroup label="All time zones">
+          <optgroup label="Other time zones">
             {zones
               .filter((z) => !COMMON_ZONES.some(([c]) => c === z))
+              .sort((x, y) => zoneLabel(x).localeCompare(zoneLabel(y)))
               .map((z) => (
                 <option key={z} value={z}>
-                  {z.replace(/_/g, ' ')}
+                  {zoneLabel(z)}
                 </option>
               ))}
           </optgroup>
         </Select>
       </div>
-      <div className="sm:col-span-2">
-        <Button
-          variant="primary"
-          disabled={nameMissing}
-          onClick={async () => {
-            if (nameMissing) return;
-            const [first, ...rest] = f.fullName.trim().split(/\s+/);
-            await db.users.update(user.id, {
-              ...f,
-              fullName: f.fullName.trim(),
-              firstName: first ?? '',
-              lastName: rest.join(' '),
-              majors: f.majors
-                .split(',')
-                .map((m) => m.trim())
-                .filter(Boolean),
-              schoolDomain: f.schoolDomain || undefined,
-              linkedinUrl: f.linkedinUrl || undefined,
-            });
-            setSaved(JSON.stringify(f));
-            toast.push({ text: 'Saved.', tone: 'good' });
-          }}
-        >
-          Save
-        </Button>
-        {dirty && <span className="ml-3 text-[12px] text-warn">Unsaved changes</span>}
-      </div>
     </Card>
   );
+}
+
+/** "London (Europe)" rather than "Europe/London": the city first, the way people look for it. */
+function zoneLabel(z: string): string {
+  const parts = z.split('/');
+  if (parts.length < 2) return z.replace(/_/g, ' ');
+  const city = parts.slice(1).reverse().join(', ').replace(/_/g, ' ');
+  return `${city} (${parts[0]!.replace(/_/g, ' ')})`;
 }
 
 /** Every time zone the browser knows, with the current one first if it is not in the list (an old "UTC"). */
@@ -318,40 +410,57 @@ function Goals() {
   const goals = useLiveQuery(() => db.goals.get(user.id), [user.id]);
   const tcs =
     useLiveQuery(() => db.targetCompanies.where('userId').equals(user.id).toArray(), [user.id]) ?? [];
-  const [f, setF] = useState({
-    cycleLabel: '',
-    targetRoles: '',
-    targetFunctions: [] as string[],
-    targetIndustries: '',
-    targetLocations: '',
-    freeText: '',
-  });
+  if (!goals) return null;
+  return <GoalsForm goals={goals} tcs={tcs} />;
+}
+
+function GoalsForm({ goals, tcs }: { goals: UserGoals; tcs: TargetCompany[] }) {
+  const user = useSession().user!;
+  // filled once from what is stored; saving as the student types never resets what they are typing
+  const [f, setF] = useState(() => ({
+    cycleLabel: goals.cycleLabel,
+    targetRoles: goals.targetRoles.join(', '),
+    targetFunctions: goals.targetFunctions,
+    targetIndustries: goals.targetIndustries.join(', '),
+    targetLocations: goals.targetLocations.join(', '),
+    freeText: goals.freeText ?? '',
+  }));
   const [company, setCompany] = useState('');
   const toast = useToast();
+  // "Evercore, Lazard" adds two companies
   const addCompany = async () => {
-    const r = await addTargetCompany(user.id, company);
-    if (r === 'duplicate') toast.push({ text: `${company.trim()} is already on your list.` });
-    if (r === 'added') setCompany('');
-  };
-  useEffect(() => {
-    if (goals)
-      setF({
-        cycleLabel: goals.cycleLabel,
-        targetRoles: goals.targetRoles.join(', '),
-        targetFunctions: goals.targetFunctions,
-        targetIndustries: goals.targetIndustries.join(', '),
-        targetLocations: goals.targetLocations.join(', '),
-        freeText: goals.freeText ?? '',
+    const r = await addTargetCompanies(user.id, company);
+    if (r.duplicates.length)
+      toast.push({
+        text: `${r.duplicates.join(', ')} ${r.duplicates.length === 1 ? 'is' : 'are'} already on your list.`,
       });
-  }, [goals]);
+    setCompany('');
+  };
   const split = (s: string) =>
     s
       .split(',')
       .map((x) => x.trim())
       .filter(Boolean);
+  const state = useAutosave(f, async (v) => {
+    // read fresh: the ambition lives on the same row and may have changed elsewhere
+    const cur = await db.goals.get(user.id);
+    await db.goals.put({
+      userId: user.id,
+      cycleLabel: v.cycleLabel,
+      targetRoles: split(v.targetRoles),
+      targetFunctions: v.targetFunctions,
+      targetIndustries: split(v.targetIndustries),
+      targetLocations: split(v.targetLocations),
+      freeText: v.freeText,
+      ambition: cur?.ambition ?? goals.ambition ?? 2,
+    });
+  });
   return (
     <div className="space-y-4">
       <Card className="grid sm:grid-cols-2 gap-4">
+        <div className="sm:col-span-2">
+          <SaveState state={state} />
+        </div>
         <div className="sm:col-span-2">
           <Label htmlFor="goals-cycle">Recruiting cycle</Label>
           <Input
@@ -361,14 +470,14 @@ function Goals() {
           />
         </div>
         <div className="sm:col-span-2">
-          <Label>Functions</Label>
+          <Label>What kind of work</Label>
           <FunctionPicker
             value={f.targetFunctions}
             onChange={(targetFunctions) => setF({ ...f, targetFunctions })}
             testIdPrefix="settings-fn"
           />
         </div>
-        <div>
+        <div className="sm:col-span-2">
           <Label htmlFor="goals-roles">Target roles</Label>
           <Input
             id="goals-roles"
@@ -402,26 +511,6 @@ function Goals() {
             value={f.freeText}
             onChange={(e) => setF({ ...f, freeText: e.target.value })}
           />
-        </div>
-        <div className="sm:col-span-2">
-          <Button
-            variant="primary"
-            onClick={async () => {
-              await db.goals.put({
-                userId: user.id,
-                cycleLabel: f.cycleLabel,
-                targetRoles: split(f.targetRoles),
-                targetFunctions: f.targetFunctions,
-                targetIndustries: split(f.targetIndustries),
-                targetLocations: split(f.targetLocations),
-                freeText: f.freeText,
-                ambition: goals?.ambition ?? 2,
-              });
-              toast.push({ text: 'Saved.', tone: 'good' });
-            }}
-          >
-            Save
-          </Button>
         </div>
       </Card>
       <Card>
@@ -517,6 +606,19 @@ function Integrations() {
     useLiveQuery(() => db.integrations.where('userId').equals(user.id).toArray(), [user.id]) ?? [];
   const google = accounts.find((a) => a.provider === 'google');
   const li = accounts.find((a) => a.provider === 'linkedin_csv');
+  const resume = useLiveQuery(
+    async () =>
+      (await db.resumes.where('userId').equals(user.id).toArray())
+        .filter((r) => r.isCurrent)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0],
+    [user.id],
+  );
+  const facets =
+    useLiveQuery(
+      () => (resume ? db.resumeFacets.where('resumeId').equals(resume.id).toArray() : []),
+      [resume?.id],
+    ) ?? [];
+  const [showFacets, setShowFacets] = useState(false);
   const [clientId, setClientId] = useState(googleClientId() ?? '');
   const [busy, setBusy] = useState<string>();
   const token = currentGoogleToken();
@@ -555,25 +657,27 @@ function Integrations() {
     }
   };
   return (
-    <div className="space-y-4">
-      <Card>
+    <div className="flex flex-col gap-4">
+      <Card className={cx(!builtIn && !google && 'order-last')}>
         <div className="font-medium">Google (Gmail and Calendar)</div>
-        <p className="text-[13px] text-ink-2 mt-0.5">
-          Finds the people you already email and meet, notices replies, and sends the emails you approve.
-          Google asks you to sign in again after about an hour; Orbit reminds you when it needs that.
-        </p>
+        {builtIn || google ? (
+          <p className="text-[13px] text-ink-2 mt-0.5">
+            Finds the people you already email and meet, notices replies, and sends the emails you approve.
+            Google asks you to sign in again after about an hour; Orbit reminds you when it needs that.
+          </p>
+        ) : (
+          <p className="text-[13px] text-ink-2 mt-0.5" data-testid="google-unavailable">
+            Not part of this version of Orbit. Everything else works without it: you add people by hand or
+            from LinkedIn, send each email from your own mail app or Gmail and press I sent it, and when
+            someone replies you move their chat in Pipeline.
+          </p>
+        )}
         {google && (
           <p className="text-[12px] mt-1 inline-flex flex-wrap items-center gap-1 text-good">
             <Check size={13} /> Connected
             {google.externalAccountId ? ` as ${google.externalAccountId}` : ''} · last sync{' '}
             {google.lastSyncedAt ? relDate(google.lastSyncedAt) : 'never'}
             {!token && <span className="text-ink-3"> · signed out, reconnect to sync</span>}
-          </p>
-        )}
-        {!builtIn && !google && (
-          <p className="text-[13px] mt-2 rounded-lg bg-canvas-2 p-3" data-testid="google-unavailable">
-            Google sign-in is not available in this version of Orbit. You can still add people by hand and
-            import LinkedIn, and the emails you write open in your mail app or copy into Gmail.
           </p>
         )}
         {(builtIn || google) && (
@@ -606,7 +710,7 @@ function Integrations() {
         {!builtIn && (
           <details className="mt-3 text-[13px]">
             <summary className="cursor-pointer text-ink-3">
-              Advanced: use your own Google Cloud project
+              For developers: connect your own Google Cloud project
             </summary>
             <div className="mt-2">
               <Label
@@ -654,6 +758,15 @@ function Integrations() {
           Upload a newer resume any time. Orbit reads it again for what you have done, to find people with a
           shared background and to describe you in first messages.
         </p>
+        <p className="text-[12px] mt-1 flex items-center gap-1" data-testid="resume-on-file">
+          {resume ? (
+            <span className="text-good inline-flex items-center gap-1">
+              <Check size={13} /> On file: {resume.filename}, added {relDate(resume.createdAt)}
+            </span>
+          ) : (
+            <span className="text-ink-3">No resume yet.</span>
+          )}
+        </p>
         <label className="mt-3 inline-flex rounded-lg focus-within:ring-2 focus-within:ring-accent/40">
           <input
             type="file"
@@ -669,9 +782,25 @@ function Integrations() {
             }}
           />
           <span className="inline-flex items-center justify-center gap-1.5 rounded-lg font-medium h-9 px-3.5 text-[14px] bg-canvas border border-line hover:bg-canvas-2 cursor-pointer">
-            Upload resume
+            {resume ? 'Upload a newer resume' : 'Upload resume'}
           </span>
         </label>
+        {facets.length > 0 && (
+          <div className="mt-3">
+            <button
+              type="button"
+              className="text-[13px] underline underline-offset-2 text-ink-2 hover:text-ink"
+              aria-expanded={showFacets}
+              onClick={() => setShowFacets((v) => !v)}
+              data-testid="settings-resume-facets"
+            >
+              {showFacets ? 'Hide what Orbit read' : 'Check or fix what Orbit read from it'}
+            </button>
+            {showFacets && (
+              <ResumeFacetList facets={facets} readBy={resume?.parseSource === 'llm' ? 'Claude' : 'Orbit'} />
+            )}
+          </div>
+        )}
       </Card>
       <Card>
         <div className="font-medium">Meeting notes</div>
@@ -688,29 +817,6 @@ function Integrations() {
         </ul>
       </Card>
       <ClaudeCard />
-      <Card>
-        <div className="font-medium">Demo data</div>
-        <p className="text-[13px] text-ink-2 mt-0.5">
-          Replace everything with the demo mailbox and network. Useful to see the full product before
-          connecting your own accounts.
-        </p>
-        <Button
-          className="mt-3"
-          variant="danger"
-          onClick={async () => {
-            const prompt =
-              demoResetPrompt(user) ??
-              'Reload the demo from scratch? Changes you made to the demo data are lost.';
-            if (!confirm(prompt)) return;
-            setBusy('Loading demo…');
-            await loadDemo({ reset: true });
-            setBusy(undefined);
-            location.assign(`${import.meta.env.BASE_URL}today`);
-          }}
-        >
-          Reset to demo
-        </Button>
-      </Card>
     </div>
   );
 }
@@ -743,6 +849,7 @@ const AI_FEATURES: { key: LlmFeature; label: string; sends: string }[] = [
 
 function ClaudeCard() {
   const tz = useSession().user?.timezone;
+  const sources = useSources(useSession().user?.id ?? '');
   const [prefs, setPrefs] = useState(readPrefs);
   const [apiKey, setApiKey] = useState(prefs.anthropicApiKey ?? '');
   const [keyStatus, setKeyStatus] = useState<string>();
@@ -793,7 +900,8 @@ function ClaudeCard() {
       {hasLlm() && !keyStatus && <p className="text-[12px] mt-1 text-good">Key saved.</p>}
       <fieldset className="mt-4 space-y-2" disabled={!keySaved} data-testid="ai-usage">
         <legend className="text-[13px] font-medium">What Claude may do</legend>
-        {AI_FEATURES.map((f) => (
+        {/* reading synced email only exists where Google does */}
+        {AI_FEATURES.filter((f) => f.key !== 'emailTriage' || sources.google).map((f) => (
           <label
             key={f.key}
             className={cx('flex items-start gap-2 text-[13.5px]', !keySaved && 'opacity-60')}
@@ -822,8 +930,8 @@ function ClaudeCard() {
         <summary className="cursor-pointer text-ink-3">Advanced: daily limits, usage and privacy</summary>
         <p className="text-[12px] text-ink-3 mt-2">
           Model: {MODEL}. The key is kept in this browser only, separate from your Orbit data and never in the
-          export. Any script running on this page could read it, so Orbit only allows its own code and
-          Google's sign-in script to run here.
+          export. Any script running on this page could read it, so Orbit only allows its own code
+          {sources.google ? " and Google's sign-in script" : ''} to run here.
         </p>
         <div className="mt-3 grid sm:grid-cols-2 gap-3 max-w-lg items-start">
           <div>
@@ -896,6 +1004,9 @@ function Style() {
   );
   return (
     <div className="space-y-4">
+      <p className="text-[13px] text-ink-3">
+        Changes here save as you make them. Every draft stays yours to edit before it goes out.
+      </p>
       <Card>
         <div className="font-medium">How your drafts sound</div>
         <p className="text-[13px] text-ink-2 mt-0.5">
@@ -992,7 +1103,7 @@ function Limits() {
         {savedAt ? <span className="text-good"> Saved.</span> : null}
       </p>
       <Card className="grid sm:grid-cols-2 gap-4 items-start">
-        <div className="sm:col-span-2 font-medium -mb-1">Sending limits</div>
+        <div className="sm:col-span-2 font-medium -mb-1">Weekly goal</div>
         <div>
           <Label htmlFor="lim-week">First messages a week</Label>
           <Input
@@ -1083,7 +1194,9 @@ function Limits() {
                 </span>
               </label>
               <div className="mt-3 max-w-xs">
-                <Label htmlFor="lim-wdays">Warm-up length in days</Label>
+                <Label htmlFor="lim-wdays" hint="weekends are skipped">
+                  Warm-up length in working days
+                </Label>
                 <Input
                   id="lim-wdays"
                   type="number"
@@ -1120,10 +1233,25 @@ function Limits() {
   );
 }
 
+/**
+ * Whether Google is part of this copy of Orbit for this student (a built-in or developer client ID, or an account
+ * already connected), and whether the data is the demo's. Without Google, Settings says nothing about email or
+ * calendar sync: Orbit never reads the student's email.
+ */
+function useSources(userId: string): { google: boolean; demo: boolean } {
+  const accounts =
+    useLiveQuery(() => db.integrations.where('userId').equals(userId).toArray(), [userId]) ?? [];
+  return {
+    google: !!googleClientId() || accounts.some((a) => a.provider === 'google'),
+    demo: accounts.some((a) => a.provider === 'demo'),
+  };
+}
+
 function Privacy() {
   const { user, signOut } = useSession();
   const nav = useNavigate();
   const toast = useToast();
+  const sources = useSources(user?.id ?? '');
   if (!user) return null;
   const exportAll = async () => {
     const tables = db.tables.map((t) => t.name);
@@ -1149,8 +1277,11 @@ function Privacy() {
         <ul className="text-[13px] text-ink-2 mt-2 list-disc pl-5 space-y-1">
           <li>Your profile, goals, and your resume with what Orbit read from it.</li>
           <li>
-            Email threads with people (bodies with quotes stripped), calendar events, LinkedIn connections,
-            meeting notes.
+            {sources.google
+              ? 'Email threads with people (bodies with quotes stripped), calendar events, LinkedIn connections, meeting notes.'
+              : sources.demo
+                ? "The demo's sample emails and calendar, LinkedIn connections, the meeting notes you add, and chat times you enter. Orbit does not read your own email or calendar."
+                : 'The people you add or import from LinkedIn, the meeting notes you add, and chat times you enter. Orbit does not read your email or calendar.'}
           </li>
           <li>
             What Orbit works out from those: the people you know and how well, who knows whom, where each chat
@@ -1159,20 +1290,22 @@ function Privacy() {
           </li>
           <li>
             If you added them: your Anthropic API key and Claude settings, kept apart from the rest. Only
-            Orbit's own code and Google's sign-in can run on this page, so no other site can read them.
+            Orbit's own code{sources.google ? " and Google's sign-in" : ''} can run on this page, so no other
+            site can read them.
           </li>
         </ul>
         <p className="text-[13px] text-ink-2 mt-2">
-          Nothing leaves your device except: calls you trigger to Google (your own account), to Anthropic
-          (with your key, only for the features you turned on in Integrations), and the pages you open on
-          LinkedIn.
+          Nothing leaves your device except:{' '}
+          {sources.google ? 'calls you trigger to Google (your own account), ' : ''}calls to Anthropic (with
+          your key, only for the features you turned on under {INTEGRATIONS_LABEL}), the emails you open in
+          your own mail app, and the pages you open on LinkedIn.
         </p>
       </Card>
       <Card>
         <p className="text-[13px] text-ink-2" data-testid="export-contents">
-          The download is one file with everything Orbit stores about your network: full email text and
-          headers, calendar events, notes, people, facts, drafts and what you sent. Keep it as private as your
-          inbox. It does not include your Anthropic key.
+          The download is one file with everything Orbit stores about your network:{' '}
+          {sources.google || sources.demo ? 'email text and headers, calendar events, ' : ''}people, notes,
+          facts, drafts and what you sent. Keep it private. It does not include your Anthropic key.
         </p>
         <div className="mt-3 flex flex-wrap gap-2 items-center">
           <Button onClick={exportAll}>
@@ -1193,6 +1326,39 @@ function Privacy() {
           </Button>
         </div>
       </Card>
+      <DemoResetCard />
     </div>
+  );
+}
+
+/** Replace everything with the demo: under Data & privacy, since it deletes what the student entered. */
+function DemoResetCard() {
+  const user = useSession().user!;
+  const [busy, setBusy] = useState(false);
+  return (
+    <Card>
+      <div className="font-medium">Demo data</div>
+      <p className="text-[13px] text-ink-2 mt-0.5">
+        Replace everything with the demo: a sample network with emails and a calendar, so you can see every
+        part of Orbit. What you added yourself is deleted.
+      </p>
+      <Button
+        className="mt-3"
+        variant="danger"
+        disabled={busy}
+        onClick={async () => {
+          const prompt =
+            demoResetPrompt(user) ??
+            'Reload the demo from scratch? Changes you made to the demo data are lost.';
+          if (!confirm(prompt)) return;
+          setBusy(true);
+          await loadDemo({ reset: true });
+          location.assign(`${import.meta.env.BASE_URL}today`);
+        }}
+        data-testid="settings-reset-demo"
+      >
+        {busy ? 'Loading demo…' : 'Reset to demo'}
+      </Button>
+    </Card>
   );
 }

@@ -1,9 +1,10 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { RefreshCw } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { AddPersonButton } from '../components/AddPerson';
 import { LinkedInImportButton } from '../components/LinkedInImport';
+import { RoleLine } from '../components/SuggestionCard';
 import { feedback } from '../db/repo';
 import { db } from '../db/schema';
 import { recommendationsRefresh, startWarmUpOrOutreach } from '../engine/brief';
@@ -16,6 +17,8 @@ export function Discover() {
   const nav = useNavigate();
   const toast = useToast();
   const [busy, setBusy] = useState(false);
+  // the list is brought up to date each time the page opens, so someone just added shows up without a Refresh
+  const [updating, setUpdating] = useState(true);
   const [q, setQ] = useState('');
   const recs =
     useLiveQuery(
@@ -35,6 +38,19 @@ export function Discover() {
   const tcCount =
     useLiveQuery(() => (userId ? db.targetCompanies.where('userId').equals(userId).count() : 0), [userId]) ??
     0;
+  // people already in a chat are not recommended again; the empty list says so instead of "nobody matches"
+  const inPipeline =
+    useLiveQuery(() => (userId ? db.chats.where('userId').equals(userId).count() : 0), [userId]) ?? 0;
+  useEffect(() => {
+    if (!user) return;
+    let live = true;
+    recommendationsRefresh(user)
+      .catch(() => undefined)
+      .finally(() => live && setUpdating(false));
+    return () => {
+      live = false;
+    };
+  }, [user?.id]);
   const list = recs.sort(
     (a, b) => (b.status === 'saved' ? 1 : 0) - (a.status === 'saved' ? 1 : 0) || b.score - a.score,
   );
@@ -61,8 +77,10 @@ export function Discover() {
   const emptyHint = missing.people
     ? 'Orbit recommends people from your own network, and it is empty so far. Add the people you know of by hand, or import your LinkedIn connections, and recommendations follow.'
     : missing.goals
-      ? 'Tell Orbit which functions and companies you are recruiting for, then generate recommendations.'
-      : 'Nobody in your network matches your goals yet. Add people at your target companies or import more connections, then try again.';
+      ? 'Tell Orbit which functions and companies you are recruiting for, and Discover fills in from your network.'
+      : inPipeline
+        ? 'Everyone in your network who fits your goals is already in your Pipeline. Add more people at your target companies, or import your LinkedIn connections, for new suggestions.'
+        : 'Nobody in your network matches your goals yet. Add people at your target companies or import more connections.';
   const refresh = async () => {
     setBusy(true);
     await recommendationsRefresh(user);
@@ -82,15 +100,16 @@ export function Discover() {
       ttl: 6000,
     });
   };
-  const start = async (personId: string) => {
+  const start = async (personId: string, opts: { skipWarmUp?: boolean } = {}) => {
     const p = byId.get(personId);
     const r = await startWarmUpOrOutreach(
       user,
       personId,
       p?.primaryEmail ? 'gmail' : 'linkedin',
       'recommendation',
+      opts,
     );
-    if (r.draft) nav(`/people/${personId}?draft=outreach`);
+    if (r.draft) nav(`/people/${personId}?open=${r.draft.id}`);
     else {
       // stay on the list: the student is still choosing who to meet, and the first step waits on Today
       toast.push({
@@ -162,7 +181,11 @@ export function Discover() {
           ))}
         </div>
       )}
-      {list.length === 0 ? (
+      {list.length === 0 && updating ? (
+        <p className="text-[13px] text-ink-3" data-testid="discover-updating">
+          Checking your network…
+        </p>
+      ) : list.length === 0 ? (
         <EmptyState
           title="No recommendations yet"
           body={emptyHint}
@@ -176,10 +199,10 @@ export function Discover() {
                   <Button variant={missing.people ? 'secondary' : 'primary'}>Set your goals</Button>
                 </Link>
               )}
-              {!missing.people && missing.goals && (
-                <Button variant="secondary" onClick={refresh}>
-                  Generate recommendations
-                </Button>
+              {!missing.people && !missing.goals && inPipeline > 0 && (
+                <Link to="/pipeline">
+                  <Button variant="secondary">Open Pipeline</Button>
+                </Link>
               )}
             </div>
           }
@@ -194,7 +217,14 @@ export function Discover() {
             {list.map((r) => {
               const p = byId.get(r.personId);
               if (!p) return null;
-              const cold = p.strength < 0.2 && !p.primaryEmail;
+              // someone the student was pointed to, or in their own club, is written to directly
+              const cold =
+                p.strength < 0.2 &&
+                !p.primaryEmail &&
+                !r.reasons.some((x) => x.code === 'referred' || x.code === 'shared_org_now');
+              const introId =
+                r.bestPath && r.bestPath.hops.length >= 2 ? r.bestPath.hops[0]!.toId : undefined;
+              const introducer = introId ? byId.get(introId) : undefined;
               return (
                 <div
                   key={r.id}
@@ -220,9 +250,7 @@ export function Discover() {
                         )}
                         {r.status === 'saved' && <Chip className="h-5">Saved</Chip>}
                       </div>
-                      <div className="text-[13px] text-ink-2 truncate">
-                        {[p.currentTitle, p.currentOrganizationRaw].filter(Boolean).join(' · ')}
-                      </div>
+                      <RoleLine title={p.currentTitle} company={p.currentOrganizationRaw} />
                       <ul className="mt-2 text-[13px] text-ink-2 space-y-0.5">
                         {r.reasons.slice(0, 3).map((x) => (
                           <li key={x.code}>· {x.text}</li>
@@ -238,16 +266,44 @@ export function Discover() {
                       </div>
                       {cold && (
                         <p className="mt-1.5 text-[12px] text-warn" data-testid="rec-warmup-why">
-                          You only have {p.firstName} on LinkedIn and have never talked, so Orbit suggests a
-                          short warm-up before your first message.
+                          {introducer
+                            ? `You only have ${p.firstName} on LinkedIn, but ${introducer.firstName} knows them: an intro gets a much warmer reply than a cold note.`
+                            : `You only have ${p.firstName} on LinkedIn and have never talked, so Orbit suggests a short warm-up before your first message.`}
                         </p>
                       )}
                     </div>
                   </div>
                   <div className="mt-auto pt-3 flex flex-wrap items-center gap-2">
-                    <Button variant="primary" size="sm" onClick={() => start(p.id)} data-testid="rec-start">
+                    {cold && introducer ? (
+                      // someone the student knows can introduce them: that beats a warm-up with a stranger
+                      <Link to={`/map?reach=${p.id}`} data-testid="rec-intro" className="max-w-full">
+                        <Button
+                          variant="primary"
+                          size="sm"
+                          className="whitespace-normal! h-auto! min-h-8 py-1 text-left"
+                        >
+                          See how {introducer.firstName} can introduce you
+                        </Button>
+                      </Link>
+                    ) : null}
+                    <Button
+                      variant={cold && introducer ? 'secondary' : 'primary'}
+                      size="sm"
+                      onClick={() => start(p.id)}
+                      data-testid="rec-start"
+                    >
                       {cold ? 'Start warm-up' : 'Write first message'}
                     </Button>
+                    {cold && (
+                      // the same choice Today and the person page give: a student who already knows them writes now
+                      <Button
+                        size="sm"
+                        onClick={() => start(p.id, { skipWarmUp: true })}
+                        data-testid="rec-write-now"
+                      >
+                        Write now instead
+                      </Button>
+                    )}
                     {r.status !== 'saved' && (
                       <Button
                         size="sm"
