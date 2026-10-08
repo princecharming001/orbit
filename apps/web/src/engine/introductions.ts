@@ -464,6 +464,20 @@ export function parseSuggestedNames(text: string): SuggestedName[] {
   return readSuggestedNames(text).names;
 }
 
+/**
+ * The organisations the student already has in Orbit: their contacts' companies, their target companies and their
+ * school. The name reader treats a phrase that is one of them as a company, never a person.
+ */
+export async function knownOrganisations(userId: string): Promise<string[]> {
+  const [orgs, targets, user] = await Promise.all([
+    db.organizations.toArray(),
+    db.targetCompanies.where('userId').equals(userId).toArray(),
+    db.users.get(userId),
+  ]);
+  const names = [...orgs.map((o) => o.name), ...targets.map((t) => t.nameRaw), user?.school ?? ''];
+  return [...new Set(names.map((n) => n.trim()).filter(Boolean))];
+}
+
 /** Saves the names read with confidence from a typed answer; see saveSuggestedContacts. */
 export async function addSuggestedContacts(
   userId: string,
@@ -471,7 +485,8 @@ export async function addSuggestedContacts(
   text: string,
   now = new Date(),
 ): Promise<Person[]> {
-  return saveSuggestedContacts(userId, fromPersonId, parseSuggestedNames(text), now);
+  const knownOrgs = await knownOrganisations(userId);
+  return saveSuggestedContacts(userId, fromPersonId, readSuggestedNames(text, { knownOrgs }).names, now);
 }
 
 /**

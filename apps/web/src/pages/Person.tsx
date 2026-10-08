@@ -38,7 +38,12 @@ import {
   refreshPersonSummary,
   startWarmUpOrOutreach,
 } from '../engine/brief';
-import { readSuggestedNames, type SuggestedName, saveSuggestedContacts } from '../engine/introductions';
+import {
+  knownOrganisations,
+  readSuggestedNames,
+  type SuggestedName,
+  saveSuggestedContacts,
+} from '../engine/introductions';
 import { moveChat, upcomingMeeting } from '../engine/move';
 import { buildPrep, personSummary, toYou } from '../engine/prep';
 import { useSession } from '../state/session';
@@ -1115,7 +1120,9 @@ function Prep({
               onKeyDown={async (e) => {
                 if (e.key !== 'Enter' || !suggested.trim()) return;
                 // clear names are saved; unsure ones wait for a yes; what is not a name stays in the field with a note
-                const { names, confirm, skipped } = readSuggestedNames(suggested);
+                // an organisation the student already has ("Wilson Sonsini") is a company, never a person
+                const knownOrgs = await knownOrganisations(userId);
+                const { names, confirm, skipped } = readSuggestedNames(suggested, { knownOrgs });
                 await keep(names);
                 setUnsure((u) => [
                   ...u,

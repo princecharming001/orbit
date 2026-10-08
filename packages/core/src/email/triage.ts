@@ -147,7 +147,12 @@ function anyOf(res: RegExp[], text: string): boolean {
 // ---- lexicons --------------------------------------------------------------------------------------------------
 
 const OOO =
-  /\b(out of (the )?office|on (vacation|leave|pto|parental leave|maternity leave|paternity leave|holiday|sabbatical)|away (until|from|through)|auto(-| )?reply|automatic reply|(limited|intermittent|no|minimal) (access to )?(my )?e-?mail|currently (traveling|travelling|away|out)|(will|i'?ll) (get back to you|respond|reply)( to (you|your (e-?mail|message|note)))?( as soon as possible)? (when|once|upon|after) (i|my) return|back in the office|ooo)\b/i;
+  /\b(out of (the )?office|on (vacation|leave|pto|parental leave|maternity leave|paternity leave|holiday|sabbatical)|away (until|from|through)|auto(-| )?reply|automatic reply|(limited|intermittent|no|minimal) (access to )?(my )?e-?mail|currently (traveling|travelling|away|out)|(will|i'?ll) (get back to you|respond|reply)( to (you|your (e-?mail|message|note)))?( as soon as possible)? (when|once|upon|after) (i|my) return|back in the office|ooo|(will|i'?ll) (get back to you|respond|reply|write back|answer|follow up)( to (you|this|your (e-?mail|message|note)))?( properly| in full| in detail| fully| at length| for real)? (when|once|after) (i'?m|i am|i get|i'?m) (back|home)|more (when|once) (i'?m|i am|i get) (back|home))\b/i;
+/*
+ * The last OOO alternatives are a hand-typed away note that puts the reply off until the sender is back ("traveling
+ * this week with spotty wifi, will reply properly when I'm back", "more when I get back"); a note that also offers a
+ * time or a contrast ("but happy to chat next week") is read further, see step 1 of heuristicSignal.
+ */
 /** How a vacation responder opens: the first line reads like a template, not like a person answering. */
 const AUTO_REPLY_OPENER =
   /^(?:(?:hi|hello|dear)[^\n]{0,30}\n+)?\s*(thank(s| you) for your (e-?mail|message|note|inquiry)|i am (currently )?(out of the office|away from (the|my) (office|desk)|on (annual |parental |maternity |paternity )?leave|ooo\b)|i will be (out of the office|away from)|automatic reply|this is an automat)/i;
@@ -156,7 +161,7 @@ const RETURN_PHRASE =
 
 /** A no to a call ("I don't do coffee chats", "calls are tough for me", "I'll pass on a call", "Pass on a call for now"). */
 const NO_CALL: RegExp[] = [
-  /\b(don'?t|do not|can'?t|cannot|won'?t be able to|am not able to|'m not able to|unable to|no longer) (really )?(do|take|make time for|have time for|hop on|get on|jump on|schedule) (a |an |any )?(more )?(quick |live |phone |video |zoom )?(coffee chats?|calls?|phone calls?|video calls?|meetings?|zoom( calls)?|informational( interviews?| calls)?)\b/i,
+  /\b(don'?t|do not|can'?t|cannot|won'?t be able to|am not able to|'m not able to|unable to|no longer) (really )?(do|take|make time for|have time for|hop on|get on|jump on|schedule|commit to|fit in|squeeze in|fit) (a |an |any )?(more )?(quick |live |phone |video |zoom )?(coffee chats?|calls?|phone calls?|video calls?|meetings?|zoom( calls)?|informational( interviews?| calls)?)\b/i,
   /\b(not|no longer|n'?t) (really )?(doing|taking) (any )?(more )?(informational |coffee |phone |video )?(coffee chats|chats|calls|meetings|informational|interviews)\b/i,
   /\b(not|n'?t) (allowed|permitted) to (do|take|have|hop on) (any )?(calls|meetings|chats|coffee chats)\b/i,
   /\b(rather|easier) (than|to skip) (a|the) (call|chat|meeting)\b/i,
@@ -166,7 +171,9 @@ const NO_CALL: RegExp[] = [
   /\b(skip|forgo) (a|the) (call|meeting|zoom|chat)\b/i,
   /\b(schedule|calendar) (doesn'?t|does not|won'?t) (really )?allow (for )?(calls|meetings|chats)\b/i,
   // "calls are tough for me", "phone isn't great for me", "video calls aren't really doable"
-  /\b(calls?|phone( calls?)?|video( calls?)?|zoom( calls?)?|live calls?|meetings?) (is|are) (really |pretty |a bit |kind of )?(tough|hard|difficult|tricky|impossible|rough|not (easy|possible|great|ideal|doable|realistic|an option))\b/i,
+  /\b(calls?|phone( calls?)?|video( calls?)?|zoom( calls?)?|live calls?|meetings?)(?: (is|are)|'s|'re) (really |pretty |a bit |kind of )?(tough|hard|difficult|tricky|impossible|rough|not (easy|possible|great|ideal|doable|realistic|an option))\b/i,
+  // "calls don't really work with my schedule", "phone calls don't fit my week"
+  /\b(calls|phone calls|video calls|zoom calls|live calls|meetings) (don'?t|do not|won'?t) (really |always |usually )?(work|fit)\b/i,
   /\b(calls?|phone( calls?)?|video( calls?)?|zoom( calls?)?|live calls?|meetings?) (isn'?t|aren'?t) (really |always |usually )?(great|good|ideal|easy|possible|doable|realistic|practical|an option)\b/i,
 ];
 /** A yes to questions by email ("happy to answer a couple of questions over email", "send over questions"). */
@@ -211,8 +218,10 @@ const HARD_NO: RegExp[] = [
   /\bnot (a|the) (right|good) fit\b/i,
   /\bi'?d rather not\b(?!\s+(?:do|have|hop|jump|get|take|schedule|set))/i,
   /\bnot something i can (do|help with)\b/i,
+  // "I won't be able to take this on", "not going to be able to help here", "can't take this on"
+  /\b(won'?t|will not|(?:am|'m) not going to|not going to|can'?t|cannot|unable to)( be able to)? (take (this|it|that) on|help (here|with (this|that)( one)?|you (here|with (this|that)))|help\s*[.!,]|do (this|it|that)(?! (week|month|morning|afternoon|evening|time|date|day|weekend|quarter|semester|(mon|tues|wednes|thurs|fri|satur|sun)day)))/i,
   // a category of asks refused: "I can't take them on", "I don't take these on", "I'm not taking on mentees"
-  /\b(can'?t|cannot|don'?t|do not|won'?t|unable to) (really )?(take|accept) (these|those|them|such requests|requests like this) on\b/i,
+  /\b(can'?t|cannot|don'?t|do not|won'?t|unable to) (really )?(take|accept) (these|those|them|this|such requests|requests like this) on\b/i,
   /\b(can'?t|cannot|don'?t|do not|won'?t|unable to) (really )?((take on|accept) (these|those|such|requests like this)|(take on|accept|do) (this|these) kinds? of (things?|requests?))\b/i,
   /\b(not|no longer|n'?t) (taking|accepting|doing) (on )?(any )?(new |more )?(mentees|students|requests|informational interviews|coffee chats|calls|meetings)\b/i,
 ];
@@ -346,42 +355,67 @@ const ADDED: RegExp[] = [
   /^\+\s?[A-Z][a-z]+/,
 ];
 /** Any cue that someone was added, named or not; with an assistant role it is the sender's scheduler. */
-const ADDED_CUE = /\b(looping in|loop(ed)? in|cc'?(ing|d)|copying|adding)\b/i;
+const ADDED_CUE = /\b(looping in|loop(ed)? in|cc'?(ing|d)|copying|copied|adding)\b|(?:^|\s)\+\s?\p{L}/iu;
 /** Who handles the sender's calendar: an assistant or a scheduler of their own. */
 const SCHEDULER_ROLE =
   /\bmy\s+(executive\s+|administrative\s+)?(ea|assistant|admin|scheduler|chief of staff|coordinator)\b/i;
 /** The sender's own calendar ("handles my calendar", "get something on my calendar"), whoever is added for it. */
 const OWN_CALENDAR =
   /\b((handles?|manages?|runs?|keeps?|owns?) my (calendar|schedule)|(get|put) (something|it|us) on my calendar)\b/i;
+/** Someone from the sender's own office or team ("Beth from my office", "Leah on my team"). */
+const OWN_OFFICE = /\b(from|in|on|at) my (office|team|group|desk|front office)\b/i;
+/**
+ * Only scheduling, nothing with the student ("to help schedule", "to coordinate scheduling", "she'll sort out a
+ * time"); "to find a time to chat with you" is a chat with the person added.
+ */
+const SCHEDULING_ONLY =
+  /\b(help (us )?schedule|to schedule|coordinate (a time|scheduling|times|the scheduling|our calendars)|(sort|figure) out (a |the )?time|find us (a |some )?(time|slot)|help (us )?(find|pick|set up|book) (a |some )?(time|slot)|get (something|us|it) on (the|my|our) calendar|book (us|a time)|with scheduling|for scheduling)\b(?![^.?!]{0,30}\bwith (you|her|him|them)\b)/i;
 /**
  * A line that adds the sender's scheduler to the thread: the next step is sending times, not writing to a stranger.
  * Someone named "to find a time" with no assistant role ("Looping in Sam (cc'd) to find a time to chat with you")
  * is an intro to Sam, not the sender's calendar.
  */
 function isSchedulerLine(line: string): boolean {
-  return ADDED_CUE.test(line) && (SCHEDULER_ROLE.test(line) || OWN_CALENDAR.test(line));
+  return (
+    ADDED_CUE.test(line) &&
+    (SCHEDULER_ROLE.test(line) ||
+      OWN_CALENDAR.test(line) ||
+      (OWN_OFFICE.test(line) && SCHEDULING_ONLY.test(line)))
+  );
 }
 /** "pass it along", "pass your resume on": the referral sense of "pass". */
 const PASS_ALONG =
   'pass (?:(?:it|this|that|these|them|your resume|your info|your name|your note|your email|the resume|the note) )?along|pass (?:it|this|that|these|them|your resume|your info|your name|your note|your email|the resume|the note) on|pass on your';
+/** Passing on a greeting ("Pass along my best to Professor Chen", "pass my regards to your dad"): not a referral. */
+const PASS_GREETING =
+  /\bpass(?:ing)?\s+(?:(?:it|this)\s+)?(?:along|on)\s+(?:(?:my|our|a|a big|warm|warmest)\s+)?(?:best|regards|thanks|love|congrat\w*|greetings|hellos?|hi|wishes|best wishes|gratitude)\b|\bpass(?:ing)?\s+(?:my|our)\s+(?:best|regards|thanks|love|congrat\w*|greetings|hellos?|wishes|best wishes|gratitude)\b/gi;
 /** Who offers: "I can", "I'll", "happy to", with an optional "also" ("I can also introduce you"). */
 const OFFERER =
   "(?:i(?:'ll| will| can| could| would|(?:'d| would) be (?:happy|glad|more than happy) to|(?:'m| am) (?:happy|glad) to)|happy to|glad to|more than happy to|let me)\\s+(?:also\\s+|definitely\\s+|gladly\\s+|totally\\s+|happily\\s+)?";
 /** A referral offered or made. */
 const OFFER_REFER = new RegExp(
-  `\\b(${OFFERER}(refer|${PASS_ALONG}|pass (it|this|that|these|them|your \\w+) (on )?to|put in a (good )?word|forward (your|it|this|them)|send (it|your resume)|pass (your|it along|along)|flag (you|your)|submit (you|your|a referral)|put (your name|your resume|your application) (in|forward|through|up)|put you forward|pass this along)|i (passed|forwarded|sent|submitted) your (resume|info|name|application)|forwarded your (resume|info|application)|(just )?submitted (a|my) referral|referred you|put in a (good )?word|${PASS_ALONG})\\b`,
+  `\\b(${OFFERER}(refer|put in (a|an|my) (\\w+ )?referral|put (a|an|my) (\\w+ )?referral in|${PASS_ALONG}|pass (it|this|that|these|them|your \\w+) (on )?to|put in a (good )?word|forward (your|it|this|them)|send (it|your resume)|pass (your|it along|along)|flag (you|your)|submit (you|your|a referral|(a|an|my) (\\w+ )?referral)|put (your name|your resume|your application) (in|forward|through|up)|put you forward|pass this along)|i (passed|forwarded|sent|submitted) your (resume|info|name|application)|forwarded your (resume|info|application)|(just )?submitted (a|my) referral|referred you|put in a (good )?word|${PASS_ALONG})\\b`,
   'i',
 );
-/** An intro offered for later ("I can introduce you", "let me know if you'd like an intro"). */
+/**
+ * An intro offered for later ("I can introduce you", "let me know if you'd like an intro"), also as a question ("Would
+ * you like me to introduce you to someone at McKinsey?", "Would it help if I introduced you?") or as making the
+ * connection ("Happy to make the connection").
+ */
 const OFFER_INTRO = new RegExp(
-  `\\b(${OFFERER}(intro|introduce|connect you|put you in touch|make (an|that|the|a few|some) intros?|do an intro)|(want|like|need) an? intro|intro(duction)? to (anyone|someone|my|our|a few)|connect you (with|two)|put you in touch)\\b`,
+  `\\b(${OFFERER}(intro|introduce|connect you|put you in touch|make (an|that|the|a few|some) intros?|do an intro|make (the|a|an|that) (connection|introduction))|(want|like|need) an? intro|intro(duction)? to (anyone|someone|my|our|a few)|connect you (with|two)|put you in touch|(would you like|do you want|did you want|want|would it help( if)?|should|shall|can|could|may) (me to|i) (intro|introduce|introduced|connect|put) you|(interested in|open to) an? intro(duction)?)\\b`,
   'i',
 );
 /** A question about the student or the past ("which Sarah referred you?"), where an offer word is not an offer. */
 const ASKS_ABOUT =
   /^(?:sorry,?\s+|so,?\s+|and\s+|hmm,?\s+)?(which|who|what|when|where|did|was|were|has|have|how)\b(?![^?]*\b(i|me) (to )?(refer|intro|introduce|connect)\b)/i;
 const RESCHEDULE =
-  /\b(resched\w*|push (it|this|our|us|things|back)|push to|move (it|this|our|things)|something came up|(no longer|doesn'?t|does not|won'?t) work (for me )?any ?more|(can'?t|cannot) make it [a-z]+ any ?more|need to (change|move|shift|bump|cancel)|have to (cancel|move)|different (time|day)|bump (it|this|our)|rain ?check|(can'?t|cannot) make (it|that|our)|conflict|(won'?t|will not|can'?t|cannot|not) (be able to )?make (it|that|our|the (call|meeting|chat)|(mon|tues|wednes|thurs|fri|satur|sun)day|tomorrow|today|tonight)|missed (our|the|my|today'?s) (call|meeting|chat|zoom|coffee)|(can|could|shall|should) we (try|do (it|this)) again|(find|pick|set|grab|schedule|look for|suggest|propose) (another|a new|a different|a better) (time|day|slot))\b/i;
+  /\b(resched\w*|postpon\w*|push (it|this|our|us|things|back)|push to|move (it|this|our|things)|something came up|(no longer|doesn'?t|does not|won'?t) work (for me )?any ?more|(can'?t|cannot) make it [a-z]+ any ?more|need to (change|move|shift|bump|cancel)|have to (cancel|move)|different (time|day)|bump (it|this|our)|rain ?check|(can'?t|cannot) make (it|that|our)|conflict|(won'?t|will not|can'?t|cannot|not) (be able to )?make (it|that|our|the (call|meeting|chat)|(mon|tues|wednes|thurs|fri|satur|sun)day|tomorrow|today|tonight)|missed (our|the|my|today'?s) (call|meeting|chat|zoom|coffee)|(can|could|shall|should) we (try|do (it|this)) again|(find|pick|set|grab|schedule|look for|suggest|propose) (another|a new|a different|a better) (time|day|slot))\b/i;
+/** Postponing to a later season rather than to another day: "postpone until after the new year". */
+const POSTPONE_LATER = new RegExp(
+  `\\bpostpon\\w*\\b[^.?!]{0,30}?\\b(?:until|till|to|into)\\s+${LATER_WHEN}`,
+  'i',
+);
 /** They moved the meeting themselves: the new time is already on the calendar, so it is booked, not offered. */
 const MOVED_INVITE =
   /\b(i'?ve |i |just )?(moved|updated|shifted|rescheduled|changed|pushed)\s+(our|the|my)\s+(calendar\s+)?(invite|invitation|meeting|event|call)\b/i;
@@ -399,14 +433,39 @@ const SCHED_CUE =
 /** A question that is about when to meet, or a check ("Still useful?"), rather than a question for the student. */
 const SCHEDULING_QUESTION =
   /\b(does|do|would|will|could|can|might) [^?]{0,40}\b(work|suit)( for (you|u))?\s*\?|\b(free|available|open) (on|at|this|next|then|that|[a-z]+day)\b|\bwhat (time|day)s?\b|\bwhich (time|day|slot)s?\b|\bhow about\b|\bwhat about\b|\byour (schedule|calendar|availability)\b|\bwhen (works|is good|is best|are you free)\b/i;
+/**
+ * A question that offers a day ("anything Friday morning?", "Any chance Thursday afternoon works?", "How's Monday
+ * morning next week?"): read per clause, so "Not Monday, sorry, but anything Friday?" offers Friday. A clause that
+ * turns the day down ("not Monday", "I'm out Tuesday"), asks about the past ("Did you get my note Monday?") or checks
+ * a booking ("Are we still on for Tuesday?") offers nothing.
+ */
+const DAY = /\b((mon|tues|wednes|thurs|fri|satur|sun)day|tomorrow)\b/i;
+const DAY_NOT_OFFERED =
+  /\b(not|no|never|can'?t|cannot|won'?t|don'?t|doesn'?t|isn'?t|out|busy|booked|slammed|was|were|did|had|last|still|what|which)\b/i;
+function offersDay(sentences: Sentence[]): boolean {
+  return sentences.some(
+    (s) =>
+      s.question &&
+      s.text.split(/[,;:]|\s[-–—]+\s|[–—]|\b(?=but\b)/).some((c) => DAY.test(c) && !DAY_NOT_OFFERED.test(c)),
+  );
+}
 const CHECK_QUESTION =
   /^(still (useful|helpful|interested)|make sense|sound good|sounds good|ok|okay|right|deal)\?$/i;
 const ASK_OF_USER =
   /\b(could you|can you|please send|send (me|over)|would you mind|let me know (which|what|your)|what (teams|roles|areas)|share your resume)\b/i;
 const INBOUND_THANKS =
-  /\b(thank(s| you)( so much| again| a lot)? for (your time|the (great |lovely |nice |helpful )?(chat|call|conversation|time)|taking the time|chatting|talking|meeting|speaking)|(great|nice|lovely|good) (chatting|talking|speaking|meeting|to (meet|chat|talk|connect)) (with )?you|(a )?pleasure (meeting|chatting|talking|speaking)( with)? you|(really )?enjoyed (our|the) (chat|conversation|call|coffee)|thank(s| you)( so much| again| a lot)? for (the|your) (follow[- ]up|thank[- ]you|thank you) (note|message|email|e-mail))\b/i;
+  /\b(thank(s| you)( so much| again| a lot)? for (your time|the (great |lovely |nice |helpful )?(chat|call|conversation|time)|taking the time|making (the )?time|chatting|talking|meeting|speaking)|(really |truly )?appreciated (our|the) (great |lovely |nice |helpful )?(chat|call|conversation|coffee)|(really |truly )?appreciated (chatting|talking|speaking|meeting)|(great|nice|lovely|good) (chatting|talking|speaking|meeting|to (meet|chat|talk|connect)) (with )?you|(a |such a |what a |real )?pleasure (meeting|chatting|talking|speaking|to (meet|chat|talk|speak))( with)?( you)?|(really |truly |so |all )?enjoyed (our|the) (chat|conversation|call|coffee)|(really |truly |so |all )?enjoyed (meeting|chatting with|talking (with|to)|speaking with|getting to know|hosting) you|thank(s| you)( so much| again| a lot)? for (coming|stopping|dropping|swinging) (by|in|over)|thank(s| you)( so much| again| a lot)? for (visiting|coming to (the|our)|joining us)|thank(s| you)( so much| again| a lot)? for (the|your) (follow[- ]up|thank[- ]you|thank you) (note|message|email|e-mail))\b/i;
 const OUTBOUND_THANKS =
   /\b(thank(s| you)( so much| again| a lot| a ton)*( for| for the| for your)? ?(great |wonderful |helpful |thoughtful |lovely )?(time|chat|call|conversation|advice|insights?|meeting|talking|chatting|speaking|help|perspective|coffee|lunch)|thank(s| you)( so much| again)* for (taking the time|making time|meeting with me|hopping on)|(great|wonderful|lovely|nice) (chatting|talking|speaking|to (meet|chat|talk)) with you|really (enjoyed|appreciated?) (our|the|your|you) ?(chat|conversation|call|time|advice|insights?|sharing|taking)|i really enjoyed (our|the) (chat|conversation|call))\b/i;
+/**
+ * Thanks for a kind note ("Thank you for the lovely note!"): the answer to a thank-you, unless the chat is still
+ * waiting on an answer to the student's ask, where it opens a reply that says nothing yet.
+ */
+const THANKS_FOR_NOTE =
+  /\bthank(s| you)( so much| again| a lot)? for (the|your) (lovely|kind|sweet) (note|message|words|e-?mail)\b/i;
+/** A refusal next to thanks: the thanks only opens it. */
+const REFUSAL =
+  /\bunfortunately\b|\bregret(tably)?\b|(\bnot|n't) (hiring|able to|taking|accepting|moving forward)\b|\bno (openings?|open roles|roles|positions|spots)\b/i;
 /** A gratitude word anywhere; used by ingest for a note sent right after a completed chat. */
 export const GRATITUDE = /\b(thank(s| you)|grateful|appreciate[ds]?)\b/i;
 
@@ -576,17 +635,22 @@ function stanceOf(sentences: Sentence[], noCallCounts: boolean): Stance {
  *   1. out of office (a vacation responder always; a hand-typed one unless a time is offered)
  *   2. a redirect to someone else (an intro; `handoff` unless the sender also says yes to a chat of their own, or
  *      asks for times, and nothing sends the student away from them)
- *   3. reschedule or counter-proposal (a proposal when it names a new time); a vague "after the holidays" from
- *      someone who is not-now-ing is a soft decline instead
+ *   3. reschedule ("can we postpone?") or counter-proposal (a proposal when it names a new time or asks about a new
+ *      day); a vague "after the holidays" or "postpone until the new year" from someone who is not-now-ing is a soft
+ *      decline instead
  *   4. no to a call but yes to email: a question with `prefersEmail`
- *   4b. the sender's assistant added to find a time, no time named yet: a yes
+ *   4b. the sender's scheduler added to find a time, no time named yet: a yes. The scheduler is an assistant ("+Kelly
+ *      (my EA)"), whoever keeps the sender's calendar, or someone from the sender's office or team brought in only
+ *      to schedule ("Looping in Beth from my office to help schedule"); someone from the office "who ran our intern
+ *      program" is an intro
  *   5. confirmation (a proposal when it also asks about a new time); a closing "looking forward to it" only when
  *      nothing still looks for a time
- *   6. proposal (times, a booking link, "does Thursday work", "anything Friday morning?"), unless it is a hard no
- *      without a time
+ *   6. proposal (times, a booking link, "does Thursday work", a question offering a day: "Not Monday, sorry, but
+ *      anything Friday morning?"), unless it is a hard no without a time
  *   7. hard decline (`decline: 'hard'`) when the no outweighs any yes and nothing counters it; a no limited to now,
  *      or followed by an invitation to try later, is a not-now instead
- *   8. referral offer, then intro offer (`handoff` when someone is introduced or added, or the sender points away
+ *   8. referral offer ("I can put in a referral for you"; passing on a greeting, "pass along my best to Professor
+ *      Chen", is not one), then intro offer (`handoff` when someone is introduced or added, or the sender points away
  *      from themselves, and the sender gave no yes and asked for no times)
  *   9. only the sender's assistant added: a yes
  *  10. thank-you after a conversation
@@ -596,11 +660,13 @@ function stanceOf(sentences: Sentence[], noCallCounts: boolean): Stance {
  *      then neutral
  */
 export function heuristicSignal(
-  body: string,
+  text: string,
   direction: 'inbound' | 'outbound',
   reference: Date,
   opts: SignalOptions = {},
 ): { signal: ReplySignal; confidence: number; extraction: MessageExtraction } {
+  // a phone types curly apostrophes ("won’t", "Phone’s"): the lexicons are written with straight ones
+  const body = text.replace(/[\u2018\u2019\u02bc]/g, "'");
   const t = body.toLowerCase();
   const times = extractProposedTimes(body, reference, opts.timeZone);
   const extraction: MessageExtraction = {
@@ -613,7 +679,9 @@ export function heuristicSignal(
   const sentences = sentencesOf(body);
   const lines = sentences.map((s) => s.text);
   const isOffer = (s: Sentence) =>
-    (OFFER_REFER.test(s.text) || OFFER_INTRO.test(s.text) || anyOf(ADDED, s.text)) &&
+    (OFFER_REFER.test(s.text.replace(PASS_GREETING, ' ')) ||
+      OFFER_INTRO.test(s.text) ||
+      anyOf(ADDED, s.text)) &&
     !isSchedulerLine(s.text) &&
     !(s.question && ASKS_ABOUT.test(s.text));
   for (const s of sentences) {
@@ -668,7 +736,8 @@ export function heuristicSignal(
     stance.hardNo = 0;
   }
   const yes = stance.yes > 0;
-  const schedulingCue = times.length > 0 || SCHED_CUE.test(body);
+  const dayOffered = offersDay(sentences);
+  const schedulingCue = times.length > 0 || SCHED_CUE.test(body) || dayOffered;
   const countered = COUNTER.test(body);
 
   // 1. out of office, unless the message goes on to offer a time ("on vacation next week, but how about Tuesday?")
@@ -696,10 +765,13 @@ export function heuristicSignal(
   }
 
   // 3. reschedule or counter-proposal: with a new time it is a proposal to confirm, without one a reschedule
-  const vagueLater = DEFER.test(body) && !RESCHEDULE.test(body);
+  // "postpone until after the new year" from someone not-now-ing is a not-now, not a meeting to move
+  const vagueLater = (DEFER.test(body) && !RESCHEDULE.test(body)) || POSTPONE_LATER.test(body);
   if (RESCHEDULE.test(body) || (DEFER.test(body) && !yes)) {
     if (times.length && MOVED_INVITE.test(body)) return warm('scheduling_confirmation', 0.8);
     if (times.length) return warm('scheduling_proposal', 0.85);
+    // "Can't do this week, sorry. How's Monday morning next week?": a new day offered, no clock time yet
+    if (dayOffered && !RESCHEDULE.test(body)) return warm('scheduling_proposal', 0.75);
     if (!(vagueLater && stance.notNow > stance.yes))
       return { signal: 'reschedule', confidence: 0.75, extraction };
   }
@@ -731,7 +803,8 @@ export function heuristicSignal(
   if (hardNo) return decline('hard', 0.75);
 
   // 8. offers: a referral, then an intro (a hand-off when someone is introduced or added and there is no yes)
-  if (extraction.offers.some((o) => OFFER_REFER.test(o))) return warm('referral_offer', 0.8);
+  if (extraction.offers.some((o) => OFFER_REFER.test(o.replace(PASS_GREETING, ' '))))
+    return warm('referral_offer', 0.8);
   const introduced = anyOf(INTRO_ACT, restBody);
   if (extraction.offers.length || introduced) {
     // a hand-off when someone is introduced or added, or the sender points away from themselves, with no yes
@@ -753,7 +826,11 @@ export function heuristicSignal(
       !anyOf(SCHED_ASK, s.text),
   );
   const asksQuestion = sentences.some((s) => s.question);
-  if (!notNow && INBOUND_THANKS.test(body) && !yes && !asksQuestion) return warm('thank_you', 0.7);
+  // "Thanks for joining us at the info session. We're not hiring interns this cycle" is not a thank-you after a chat
+  const thanks =
+    (INBOUND_THANKS.test(body) || (THANKS_FOR_NOTE.test(body) && opts.awaitingAnswer !== true)) &&
+    !REFUSAL.test(body);
+  if (!notNow && thanks && !yes && !asksQuestion) return warm('thank_you', 0.7);
 
   // 11. not now; a bare "best of luck" closes the door only on an ask still waiting for an answer, or next to a no
   const partingNo =

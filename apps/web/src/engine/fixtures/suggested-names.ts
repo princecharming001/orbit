@@ -12,6 +12,8 @@ export interface NameCase {
   text: string;
   save?: string[];
   confirm?: string[];
+  /** organisations the student already has in Orbit (companies of their contacts, targets, their school) */
+  known?: string[];
 }
 
 export const NAME_CASES: NameCase[] = [
@@ -326,12 +328,160 @@ export const BLIND_CASES: (NameCase & { holdout?: true })[] = [
   { text: 'ping maria lopez\u200b on teams', save: ['Maria Lopez'], holdout: true },
 ];
 
+/**
+ * Round five: the fifth blind round's misses and variants of each family (tuning), and a fresh set written before the
+ * fix and scored once blind (held out, never tuned on). The families: a field or an organisation typed alone and saved
+ * as a person ("Supply Chain", "Machine Learning", "Stanford GSB", "Peace Corps", "Credit Suisse"), a lead-in before
+ * the name ("I think Noah Williams", "Yes — Leo Fischer"), and organisations the student already has in Orbit
+ * (`known`). A title with a full name ("Dr. Elena Petrova") keeps the full name and drops the title, which the
+ * reviewer accepted.
+ */
+export const ROUND_FIVE_CASES: (NameCase & { holdout?: true })[] = [
+  // blind misses
+  { text: 'Supply Chain' },
+  { text: 'Machine Learning' },
+  { text: 'Stanford GSB' },
+  { text: 'Peace Corps' },
+  { text: 'Credit Suisse' },
+  {
+    text: 'Thanks! Yes — Leo Fischer at Zalando and Maja Nowak at Allegro.',
+    save: ['Leo Fischer | Zalando', 'Maja Nowak | Allegro'],
+  },
+  { text: 'I think Noah Williams at Bain would be a good person to ask', save: ['Noah Williams | Bain'] },
+  { text: 'Dr. Elena Petrova at Mass General', save: ['Elena Petrova | Mass General'] },
+  { text: 'Mx. Taylor Quinn', save: ['Taylor Quinn'] },
+  // variants: fields
+  { text: 'Operations Research' },
+  { text: 'Deep Learning' },
+  { text: 'supply chain at Amazon' },
+  { text: 'Human Resources' },
+  { text: 'Management Consulting' },
+  { text: 'Venture Capital' },
+  { text: 'climate tech' },
+  // variants: schools, programs and organisations
+  { text: 'Kellogg MBA' },
+  { text: 'NYU Stern' },
+  { text: 'Columbia Business School' },
+  { text: 'City Year' },
+  { text: 'Credit Agricole' },
+  { text: 'BNP Paribas' },
+  { text: 'Peace Corps volunteers' },
+  { text: 'Berkeley Haas' },
+  { text: 'Oxford Saïd' },
+  // the student's own organisations
+  { text: 'Wilson Sonsini', known: ['Wilson Sonsini'] },
+  { text: 'Priya Shah, Wilson Sonsini', known: ['Wilson Sonsini'], save: ['Priya Shah | Wilson Sonsini'] },
+  { text: 'Fenwick West', known: ['Fenwick & West'] },
+  // variants: lead-ins
+  { text: 'Yes - Ana Ruiz at Ramp', save: ['Ana Ruiz | Ramp'] },
+  { text: 'Yeah — Tom Lee', save: ['Tom Lee'] },
+  { text: 'I think maybe Grace Ho', save: ['Grace Ho'] },
+  { text: 'I believe Ravi Kumar at Meta', save: ['Ravi Kumar | Meta'] },
+  { text: 'i guess lina haddad', save: ['Lina Haddad'] },
+  { text: 'Oh yes: Kenji Ito at Sony', save: ['Kenji Ito | Sony'] },
+  { text: 'I think the recruiting team' },
+  { text: 'I think so' },
+  { text: 'I think no one' },
+  // people whose names share a word with a field or a company stay people
+  { text: 'Peace Okafor at Shell', save: ['Peace Okafor | Shell'] },
+  { text: 'Chase Miller', save: ['Chase Miller'] },
+  { text: 'Morgan Chen at Credit Suisse', save: ['Morgan Chen | Credit Suisse'] },
+  // fresh answers written before the fix and held out: 7 of 20 right blind, 20 of 20 after the fix (the fix was
+  // written against the tuning half above, but these misses were visible while it was written)
+  { text: 'Product Management', holdout: true },
+  { text: 'Real Estate', holdout: true },
+  { text: 'Teach For America', holdout: true },
+  { text: 'Wharton MBA', holdout: true },
+  { text: 'Computer Vision', holdout: true },
+  { text: 'Natural Language Processing', holdout: true },
+  { text: 'Credit Karma', holdout: true },
+  { text: 'Societe Generale', holdout: true },
+  { text: 'Stanford HAI', holdout: true },
+  { text: 'Cornell Tech', holdout: true },
+  { text: 'Public Health', holdout: true },
+  { text: 'Kirby Hale', known: ['Kirby Hale'], holdout: true },
+  { text: 'Yes! Mira Patel at Notion', save: ['Mira Patel | Notion'], holdout: true },
+  { text: 'I think Lucas Brandt at Siemens could help', save: ['Lucas Brandt | Siemens'], holdout: true },
+  { text: 'Oh — Hana Sato at Mercari', save: ['Hana Sato | Mercari'], holdout: true },
+  { text: 'Honestly I think Dev Shah', save: ['Dev Shah'], holdout: true },
+  { text: 'I believe Clara Nunez at Spotify knows the team', save: ['Clara Nunez | Spotify'], holdout: true },
+  { text: "Definitely — Omar Farouk, he's at Uber", save: ['Omar Farouk | Uber'], holdout: true },
+  { text: 'Sure - Ivy Chen at Plaid', save: ['Ivy Chen | Plaid'], holdout: true },
+  { text: 'Ms. Rosa Diaz at Kaiser', save: ['Rosa Diaz | Kaiser'], holdout: true },
+];
+
+/**
+ * Round six: the sixth blind round's misses and variants of each family (tuning), and a fresh set written before the
+ * fix and scored once blind (held out, never tuned on). The families: a name whose part is also a short English word
+ * ("Li Na", "Jing He"), a short or West African given name typed in lowercase ("sam okafor", "tobi adebayo"), a
+ * bracket with a former and a current employer ("ex-Goldman, now at Blackstone"), and "at the World Bank".
+ */
+export const ROUND_SIX_CASES: (NameCase & { holdout?: true })[] = [
+  // blind misses
+  { text: 'Wei Zhang and Li Na at Tencent', save: ['Wei Zhang | Tencent', 'Li Na | Tencent'] },
+  { text: 'sam okafor & priya shah', save: ['Sam Okafor', 'Priya Shah'] },
+  { text: 'Olu Adeyemi (ex-Goldman, now at Blackstone)', save: ['Olu Adeyemi | Blackstone'] },
+  { text: 'Nina Petrova at the World Bank', save: ['Nina Petrova | World Bank'] },
+  // variants: a short word inside a name
+  { text: 'Li Na', save: ['Li Na'] },
+  { text: 'Xu Ming and Zhou He at Alibaba', save: ['Xu Ming | Alibaba', 'Zhou He | Alibaba'] },
+  { text: 'Kim So at Coupang', save: ['Kim So | Coupang'] },
+  { text: 'na' },
+  { text: 'na, sorry' },
+  { text: 'He Is Great' },
+  // variants: short and West African given names in lowercase
+  { text: 'jen walsh and ed park', save: ['Jen Walsh', 'Ed Park'] },
+  { text: "meg o'brien", save: ["Meg O'Brien"] },
+  { text: 'yemi at Paystack', save: ['Yemi | Paystack'] },
+  { text: 'femi' },
+  { text: 'dan reyes, nico bauer', save: ['Dan Reyes', 'Nico Bauer'] },
+  // variants: former and current employers
+  { text: 'Ravi Menon (ex-McKinsey; now at Stripe)', save: ['Ravi Menon | Stripe'] },
+  { text: 'Grace Obi (formerly at Google)', save: ['Grace Obi'] },
+  { text: 'Tom Lee (used to be at Bain, now KKR)', save: ['Tom Lee | KKR'] },
+  { text: 'Ana Ruiz, ex-Goldman, now at Blackstone', save: ['Ana Ruiz | Blackstone'] },
+  { text: 'Dina Haddad (previously Meta)', save: ['Dina Haddad'] },
+  // variants: "at the" before a name or a description
+  { text: 'Leo Park at the Carlyle Group', save: ['Leo Park | Carlyle Group'] },
+  { text: 'Sara Lim at the New York Times', save: ['Sara Lim | New York Times'] },
+  { text: 'Omar Haddad at the IMF', save: ['Omar Haddad | IMF'] },
+  { text: 'Ben Ito at the bank', save: ['Ben Ito'] },
+  { text: 'Ana Ruiz at the Data Team', save: ['Ana Ruiz'] },
+  { text: 'someone at the World Bank' },
+  // fresh answers written before the fix and held out: 1 of 12 right blind, 11 of 12 after the fix (written against
+  // the tuning half above; "An Nguyen", a short word first in a name, is still not saved)
+  {
+    text: 'Jing He and Bo Li at ByteDance',
+    save: ['Jing He | ByteDance', 'Bo Li | ByteDance'],
+    holdout: true,
+  },
+  { text: 'An Nguyen at Deloitte', save: ['An Nguyen | Deloitte'], holdout: true },
+  { text: 'tobi adebayo & kemi bello', save: ['Tobi Adebayo', 'Kemi Bello'], holdout: true },
+  { text: 'nico ferrari', save: ['Nico Ferrari'], holdout: true },
+  { text: 'Ade Ogun (formerly Citi, now at Lazard)', save: ['Ade Ogun | Lazard'], holdout: true },
+  { text: 'Hannah Cole (ex-Meta)', save: ['Hannah Cole'], holdout: true },
+  { text: 'Tariq Aziz at the Gates Foundation', save: ['Tariq Aziz | Gates Foundation'], holdout: true },
+  { text: 'Joy Park at the Fed', save: ['Joy Park | Fed'], holdout: true },
+  { text: 'Ben Moss at the data team', save: ['Ben Moss'], holdout: true },
+  {
+    text: 'Mei Chen, Min So, and Ravi Rao at Ramp',
+    save: ['Mei Chen', 'Min So', 'Ravi Rao | Ramp'],
+    holdout: true,
+  },
+  { text: 'priya at the World Bank', save: ['Priya | World Bank'], holdout: true },
+  { text: 'dan ortiz', save: ['Dan Ortiz'], holdout: true },
+];
+
 /** The 80% the reader was tuned on, and the 20% it was not. */
 export const TRAIN_CASES = [
   ...NAME_CASES.filter((_, i) => i % 5 !== 4),
   ...BLIND_CASES.filter((c) => !c.holdout),
+  ...ROUND_FIVE_CASES.filter((c) => !c.holdout),
+  ...ROUND_SIX_CASES.filter((c) => !c.holdout),
 ];
 export const HOLDOUT_CASES = [
   ...NAME_CASES.filter((_, i) => i % 5 === 4),
   ...BLIND_CASES.filter((c) => c.holdout),
+  ...ROUND_FIVE_CASES.filter((c) => c.holdout),
+  ...ROUND_SIX_CASES.filter((c) => c.holdout),
 ];

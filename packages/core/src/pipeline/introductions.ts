@@ -31,13 +31,17 @@ import type { EmailMessage, Person } from '../types';
  *     introduced on the thread (`prior`), anyone thanked for the intro or moved to bcc, an assistant brought in
  *     to schedule ("cc'ing my EA Jordan to set up time", "Jordan (cc'd) can find us 30 min"), and anyone pointed at
  *     only in sentences that copy them for an administrative reason ("cc'd Chris from our HR team for the
- *     paperwork", "for visibility since she's coordinating"). A clause offering to introduce later ("Would you like
- *     me to introduce you to someone at McKinsey?") carries no cue at all.
+ *     paperwork", "for visibility since she's coordinating", "cc'ing Kofi so he's in the loop on the judging
+ *     schedule"). A clause offering to introduce later ("Would you like me to introduce you to someone at
+ *     McKinsey?") carries no cue at all, nor does introducing a thing ("I wanted to introduce our new office hours
+ *     schedule"); a bare "Connecting" subject over help connecting to a call or a network ("Having trouble
+ *     connecting to the Zoom?") is no subject cue.
  *  3. Everyone left scoring at least 2 is introduced: `introduction`.
  *  4. Otherwise the message is an `intro_reply` when the thread already holds an introduction, someone is thanked
  *     for one, someone is moved to bcc, the reply speaks to the person on the thread and then gives the student a
  *     time ("Ines, you are too kind. Alex, Monday at 11?"), or the subject answers an introduction subject
- *     ("Re: Intro: Alex <> Sam").
+ *     ("Re: Intro: Alex <> Sam"), unless the body answers the student's request for one ("Thanks for the intro
+ *     request, I'll pass for now"), which thanks no one for an introduction.
  *  5. Otherwise `none`.
  *
  * Whatever the decision, `possible` keeps the fallback's evidence for each person the cues did not settle (named,
@@ -304,10 +308,10 @@ const THANKS =
   '(?:thanks|thank\\s+(?:you|u|ya)|thanku|thx|thnx|ty|tysm|many\\s+thanks|much\\s+appreciated|appreciate[ds]?|grateful|gracias|merci|danke|grazie|obrigad[oa])';
 /** What a reply thanks the introducer for. */
 const INTRO_OBJECT =
-  "(?:intro(?:duction)?s?(?!\\s+to\\s+(?:the|our|my|a|an|this|that|your)\\b)|introducing\\s+(?:us|me)|presentacion|connection|connecting\\s+(?:us|me)|loop(?:ing)?\\s+me\\s+in|the\\s+cc|cc'?ing\\s+me|thinking\\s+of\\s+me|putting\\s+us\\s+in\\s+touch|(?:the\\s+)?match|pairing|referral|setting\\s+(?:this|it|us)\\s+up|making\\s+this\\s+happen)";
+  "(?:intro(?:duction)?s?\\b(?!\\s+to\\s+(?:the|our|my|a|an|this|that|your)\\b|\\s+(?:request|ask|offer)s?\\b)|introducing\\s+(?:us|me)|presentacion|connection|connecting\\s+(?:us|me)|loop(?:ing)?\\s+me\\s+in|the\\s+cc|cc'?ing\\s+me|thinking\\s+of\\s+me|putting\\s+us\\s+in\\s+touch|(?:the\\s+)?match|pairing|referral|setting\\s+(?:this|it|us)\\s+up|making\\s+this\\s+happen)";
 /** Thanks for an introduction: "thanks for the warm intro", "appreciate you connecting us", "great intro". */
 const INTRO_THANKS: RegExp[] = [
-  /\b(?:for|on|re|about)\s+the\s+(?:kind\s+|warm\s+|quick\s+|lovely\s+)?intro(?:duction)?\b(?!\s+to\s+(?:the|our|my|a|an|this|that|your)\b)/,
+  /\b(?:for|on|re|about)\s+the\s+(?:kind\s+|warm\s+|quick\s+|lovely\s+)?intro(?:duction)?\b(?!\s+to\s+(?:the|our|my|a|an|this|that|your)\b|\s+(?:request|ask|offer)s?\b)/,
   new RegExp(`\\b${THANKS}\\b[^.!?]{0,40}?\\b${INTRO_OBJECT}`),
   /\b(?:great|lovely|wonderful|perfect|fantastic|awesome|amazing|kind|nice|thoughtful|generous)\s+(?:intro(?:duction)?|connection)\b/,
   /\b(?:connected|introduced)\s+us\b|\bput\s+us\s+in\s+touch\b|\bany\s+friend\s+of\b/,
@@ -320,6 +324,27 @@ const BARE_THANKS = new RegExp(
 /** "Moving Lena to bcc", "(bcc)", "bcc'ing Lena". */
 const BCC =
   /\b(?:mov(?:e|ed|es|ing)\s+(?:[\p{L}'-]+\s+){0,2}?to\s+bcc|to\s+bcc\b|bcc'?(?:ing|ed|d)\b|in\s+bcc\b|on\s+bcc\b)|^\s*bcc'?d?\s*$/u;
+
+/**
+ * The student asking for an introduction, answered ("Thanks for the intro request, I'll pass for now"): a thread about
+ * a request, not an introduction thread, so its "Re: Intro" subject makes no reply.
+ */
+const INTRO_REQUEST =
+  /\bintro(?:duction)?\s+(?:request|ask)s?\b|\brequest(?:ing|ed)?\s+(?:for\s+)?(?:an?\s+)?intro(?:duction)?\b|\bask(?:ed|ing)?\s+(?:me\s+)?for\s+(?:an?\s+)?intro(?:duction)?\b/;
+
+/**
+ * "Introduce our new office hours schedule", "Introducing our fall newsletter": introducing a thing, not a person.
+ * Such a clause carries no introducing cue.
+ */
+const INTRODUCES_THING =
+  /\bintroduc(?:e|es|ed|ing)\s+(?:you\s+to\s+)?(?:my|our|the|a|an|this|these|some)\s+(?:[\p{L}'-]+\s+){0,3}?(?:schedule|calendar|process|program|programme|policy|policies|tool|tools|system|platform|newsletter|series|sessions?|hours|format|portal|app|feature|course|class|workshop|events?|initiative|guidelines?|rules?|website|site|handbook|sheet|form|way|plan|version|update|changes?|curriculum|syllabus|office|space|lab|club|group\s+chat|channel|podcast|blog|survey|deadline|timeline|structure|rotation|cohort)\b/u;
+
+/**
+ * Connecting to a call, a link or a network ("Having trouble connecting to the Zoom?", "problems connecting to the
+ * VPN"): technical help, so a bare "Connecting" subject on it is no introduction.
+ */
+const TECH_CONNECT =
+  /\b(?:connect(?:s|ed|ing)?|log(?:ging)?\s+in)\s+(?:to|with|into)\s+(?:the\s+|a\s+|your\s+|our\s+)?(?:zoom|vpn|wi-?fi|wireless|network|internet|portal|drive|shared\s+drive|server|call|meeting|link|webinar|platform|app|system|database|printer|account|teams|slack|stream|room|projector|display|screen|bluetooth|hotspot|guest\s+network)\b|\b(?:trouble|problems?|issues?|difficulty|difficulties)\s+(?:connecting|with\s+(?:the\s+|your\s+)?connection)\b/;
 
 /** An assistant brought in to find a time: a scheduling hand-off, not an introduction. */
 const SCHEDULER_ROLE =
@@ -348,6 +373,10 @@ const ADMIN_PURPOSE = new RegExp(
     '\\bfor\\s+(?:the\\s+|your\\s+|any\\s+)?(?:paperwork|visibility|awareness|context|reference|records?|onboarding|logistics|forms?|offer\\s+letter|background\\s+check|benefits|payroll|reimbursements?|expenses?|invoices?|badges?|compliance|approval|sign-?off|fyi)\\b',
     '\\bfor\\s+(?:the\\s+|your\\s+|any\\s+)?(?:contract|paperwork|legal|visa|tax|payroll|benefits|housing|relocation|logistics|travel|billing|grading)\\s+questions?\\b',
     "\\bfyi\\b|\\bkeep(?:ing)?\\s+(?:[\\p{L}'-]+\\s+){1,2}in\\s+the\\s+loop\\b",
+    // "so he's in the loop on the judging schedule", "to keep her posted", "so he's aware of the regrade"
+    "\\bso\\s+(?:that\\s+)?(?:he|she|they)(?:'s|'re|\\s+is|\\s+are|\\s+stays?|\\s+can\\s+stay)\\s+(?:also\\s+)?(?:in\\s+the\\s+loop|aware|informed|up\\s+to\\s+speed|in\\s+the\\s+know|across|posted)\\b",
+    "\\bkeep(?:s|ing)?\\s+(?:him|her|them|[\\p{L}'-]+)\\s+(?:posted|informed|updated|in\\s+the\\s+know|up\\s+to\\s+speed|aware)\\b",
+    '\\bso\\s+(?:that\\s+)?(?:he|she|they)\\s+(?:sees?|can\\s+see|gets?|hears?|is\\s+aware)\\b',
     "\\bsince\\s+(?:he|she|they)(?:'s|'re|\\s+is|\\s+are)\\s+(?:coordinating|organizing|organising|handling|managing|approving|processing|in\\s+charge\\s+of)\\b",
     '\\b(?:who|that)\\s+(?:handles|processes|manages|coordinates|owns|approves|will\\s+(?:handle|process|send|issue|book|update|file|approve)|can\\s+(?:process|issue|update|file|approve))\\s+(?:(?:our|the|your|all|any)\\s+)?(?:[\\p{L}-]+\\s+){0,2}?(?:applications?|paperwork|onboarding|logistics|forms?|badges?|payroll|benefits|reimbursements?|scheduling|travel|contracts?|i-9|invoices?|expenses?|grades?|access|laptop|accounts?)\\b',
     '\\bfrom\\s+(?:(?:our|the)\\s+)?(?:hr|human\\s+resources|people\\s+ops|payroll|legal|facilities|benefits|it\\s+(?:team|department|office))\\b|\\b(?:on|in)\\s+(?:our|the)\\s+(?:hr|human\\s+resources|people\\s+ops|payroll|legal|facilities|benefits|it)\\s+(?:team|department|office)\\b',
@@ -644,6 +673,11 @@ export function readIntroduction(
   const subjectIntro =
     SUBJECT_INTRO.test(subjectLower) &&
     !/\b(?:thanks|thank\s+you)\b/.test(subjectLower) &&
+    // "Connecting" over "Having trouble connecting to the Zoom?" is about a link, not people
+    !(
+      !/\b(?:intro(?:duction)?s?|introducing)\b/.test(subjectLower) &&
+      TECH_CONNECT.test(fold(msg.bodyText ?? '').toLowerCase())
+    ) &&
     // "Intro to Systems": "intro to" counts only before a person
     (!introTo || isCandidateWord(introTo[1]!) || isStudentWord(introTo[1]!));
   const pairNames = new Set<string>();
@@ -745,7 +779,7 @@ export function readIntroduction(
           aimed = true;
       }
       if (/(?:^|\bplease\s+)meet\s+(?:you\s+(?:two|both)|each\s+other)\b/.test(l)) aimed = true;
-      if (/\bintroduc(?:e|es|ing)\s+(?:my|our)\s/.test(l)) aimed = true;
+      if (/\bintroduc(?:e|es|ing)\s+(?:my|our)\s/.test(l) && !INTRODUCES_THING.test(l)) aimed = true;
     });
     if (aimed) introducing = genericCue = true;
     /** candidates this sentence only addresses ("Ines, you are the best, thanks for making the connection") */
@@ -1044,7 +1078,10 @@ export function readIntroduction(
       schedulerIds,
       possible,
     });
+  // "Thanks for the intro request, I'll pass": the thread is the student's request, not an introduction
+  const requestThread = INTRO_REQUEST.test(lowerBody);
   const answersIntroSubject =
+    !requestThread &&
     isReplySubject &&
     (subjectIntro || pairNames.size > 0 || /<>|\bintro(?:duction)?s?\b|\bopt-?in\b/i.test(subject));
   const replyReason = prior

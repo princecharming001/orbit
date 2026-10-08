@@ -23,12 +23,15 @@ import { isGivenName, WORDLIKE_GIVEN } from './given-names';
  *    belongs to the person before; a clause with a company also completes a lone first name before it ("Maybe
  *    Kevin? He's at Plaid now").
  * 3. Clean the name part: drop lead-ins ("definitely", "she said to talk to", "I'd ping", "sent you an intro to",
- *    "her manager"), trailing hedges ("too", "maybe"), leading roles ("Engineering Manager Tom Lee") and the clause
+ *    "her manager", "I think", and an interjection before a dash or colon: "Yes — Leo Fischer"), trailing hedges ("too", "maybe"), leading roles ("Engineering Manager Tom Lee") and the clause
  *    after the name ("who...", "is the hiring manager", "in sales", "on slack", "on my team").
  * 4. Reject the piece when any word (or any part of a hyphenated word) is a function word (pronouns, verbs,
- *    non-answers), a role, team, place, group, year or industry word, a plural acronym ("MBAs"), a contraction or
- *    possessive, or not a word at all; when it has more than four words; or when the whole phrase is a company
- *    ("Morgan Stanley", "Mayo Clinic").
+ *    non-answers), a role, team, place, group, year or industry word, a field of work or study ("Supply Chain",
+ *    "Machine Learning", "Real Estate"), a plural acronym ("MBAs"), a contraction or possessive, or not a word at
+ *    all; when it has more than four words; when it pairs a name with an acronym ("Stanford GSB", "NYU Stern") or
+ *    starts with a university ("Berkeley Haas"); or when the whole phrase is an organisation: a company whose name
+ *    reads like a person's ("Morgan Stanley", "Credit Suisse", "Peace Corps"), an institution ("Mayo Clinic"), or
+ *    one the student already has in Orbit (`knownOrgs`: their contacts' companies, targets and school).
  * 5. Decide:
  *    - one word: a name only with a company ("Tom at Stripe"); "Definitely Tom" alone is not enough to save;
  *    - a title and a surname ("Dr. Patel", "Professor Alvarez"): confirm;
@@ -51,6 +54,14 @@ export interface SuggestedNames {
   confirm: SuggestedName[];
   /** Text that is not a person; it stays in the field with a note. */
   skipped: string[];
+}
+
+export interface ReadNamesOptions {
+  /**
+   * Organisations the student already has in Orbit (their contacts' companies, target companies, their school). A
+   * phrase that is one of them is a company, never a person ("Wilson Sonsini"), and completes the person before it.
+   */
+  knownOrgs?: readonly string[];
 }
 
 type Verdict = { kind: 'save' | 'confirm'; name: string } | { kind: 'skip' };
@@ -78,6 +89,11 @@ const FUNCTION_WORDS = new Set(
     .join(' ')
     .split(' '),
 );
+/**
+ * Short function words that are also a part of a name: "Li Na", "Jing He", "Kim So". Typed with a capital after a
+ * name in a phrase typed all with capitals, they are part of the name; anywhere else they are what they say.
+ */
+const NAMELIKE_SHORT = new Set(['he', 'na', 'so', 'do', 'an']);
 /** Roles, teams, places, groups, events and industries: "career services", "VP Engineering", "Big Four firms". */
 const DESCRIPTORS = new Set(
   [
@@ -110,13 +126,39 @@ const DESCRIPTORS = new Set(
     'biotech healthcare consumer retail media entertainment government nonprofit early new old former current',
     'several few many most lots lot bunch couple handful various multiple every each both either neither another',
     'plenty year years first second third fourth final freshman freshmen sophomore sophomores recent mba mbas',
-    'phd phds undergrad undergrads postdoc postdocs',
+    'phd phds undergrad undergrads postdoc postdocs volunteer volunteers',
     'clinic clinics hospital hospitals medicine medical health institute foundation holdings securities',
     'technologies systems inc llc corp corporation',
   ]
     .join(' ')
     .split(' '),
 );
+/**
+ * Fields of work or study, typed as an answer ("Supply Chain", "Machine Learning", "Real Estate"): never part of a
+ * person's name. Only the name is judged with these; a company may contain one ("at Credit Karma", "at Apex Energy").
+ */
+const FIELD_WORDS = new Set(
+  [
+    'learning chain supply resources estate vision processing language languages intelligence economics econ',
+    'physics biology chemistry neuroscience psychology sociology statistics mathematics math robotics aerospace',
+    'logistics procurement pharma pharmaceuticals biotech energy climate sustainability insurance manufacturing',
+    'journalism nursing cybersecurity blockchain crypto semiconductors tech credit corps americorps policy affairs',
+    'relations humanities philosophy linguistics architecture fintech edtech healthtech proptech',
+  ]
+    .join(' ')
+    .split(' '),
+);
+/**
+ * Universities and business schools that open an organisation's name ("Stanford GSB", "Berkeley Haas", "Oxford
+ * Saïd", "Cornell Tech"). Ambiguous ones that are common names ("Duke", "Penn", "Brown", "Rice") are left out.
+ */
+const UNIVERSITY_FIRST = new Set(
+  'stanford harvard yale princeton cornell berkeley nyu mit oxford cambridge ucla usc wharton kellogg insead dartmouth northwestern georgetown columbia caltech carnegie'.split(
+    ' ',
+  ),
+);
+/** An acronym of three or more capitals ("GSB", "HAI", "BNP"): an organisation, not part of a name. */
+const ACRONYM = /^\p{Lu}{3,}$/u;
 /** Companies whose names read like a person's: never saved as one. */
 const NAMELIKE_COMPANIES = new Set([
   'morgan stanley',
@@ -151,7 +193,34 @@ const NAMELIKE_COMPANIES = new Set([
   'houlihan lokey',
   'cantor fitzgerald',
   'baird',
+  'credit suisse',
+  'credit agricole',
+  'bnp paribas',
+  'societe generale',
+  'peace corps',
+  'teach for america',
+  'city year',
+  'americorps',
+  'mass general',
+  'kaiser permanente',
+  'wilson sonsini',
+  'fenwick west',
+  'kirkland ellis',
+  'latham watkins',
+  'sullivan cromwell',
+  'davis polk',
+  'simpson thacher',
+  'cleary gottlieb',
+  'paul weiss',
+  'alvarez marsal',
+  'perella weinberg',
+  'evercore',
+  'lazard',
+  'moelis',
+  'guggenheim',
 ]);
+/** Last words that make "the X" a part of a company rather than the company: "the Stripe team", "the NYC office". */
+const TEAMISH = new Set('team teams office offices desk department dept side division unit squad'.split(' '));
 /** Last words that make a capitalised phrase a company or institution: "Mayo Clinic", "Bain Capital". */
 const ORG_SUFFIX = new Set(
   [
@@ -178,6 +247,8 @@ const LEAD_IN = new RegExp(
       'definitely|def|maybe|probably|prob|perhaps|possibly|also|especially|and|or|either|plus|oh|um|uh|hmm|so|ok',
       'okay|yes|yeah|honestly|actually|well|just|really|totally|say|suggest|recommend|like|love|meet',
       'try|ask|contact|email|ping|text|message|dm|thanks|thank you|look up|hit up',
+      // "I think Noah Williams", "honestly I believe Clara Nunez": a hedge before the name
+      '(?:i|we) (?:think|believe|guess|reckon|suppose|feel like)(?: that)?',
       // "I'd", "you'd want to", "I would", "we should": the speaker before the verb
       "(?:i|you|we)(?:'d|'ll| would| will| should| could| can| might| must)(?: (?:want|have|need|like|love) to)?",
       '(?:you|i|we) (?:should|could|can|might|must)(?: (?:definitely|probably|also|maybe|really))? (?:talk|speak|reach out|chat|connect|meet|get in touch)(?: (?:to|with))?',
@@ -192,6 +263,12 @@ const LEAD_IN = new RegExp(
     ')\\s+)+',
   'iu',
 );
+/**
+ * An interjection before a dash or a colon: "Yes — Leo Fischer at Zalando", "Sure - Ivy Chen", "Oh yes: Kenji Ito".
+ * Dropped before the dash can be read as "Name - Company".
+ */
+const INTERJECTION =
+  /^(?:(?:yes|yeah|yep|yup|sure|ok|okay|oh|ah|hmm|um|uh|well|so|definitely|absolutely|totally|honestly|of course|for sure|good question|great question)\b[,!.]*(?:\s+|(?=[—–:])))+(?:[—–:]+|-+(?=\s))\s*/i;
 /** Hedges after a name: "Fatima Malik too", "Priya Shah maybe". */
 const TRAIL =
   /\s+(?:too|as well|also|maybe|probably|perhaps|i think|i guess|tho|though|for sure|definitely|lol|haha)$/i;
@@ -203,6 +280,28 @@ const ORG_AT = /\s+(?:at|from|@|-|–|—|on the .+? team at)\s+/i;
 /** A piece that only describes the last person named: "he runs sales at Ramp", "who leads data at Plaid". */
 const DESCRIBES_LAST =
   /^(?:who|he|she|they|he's|she's|they're|tho|though|but|since|because|bc|if|might|probably)\b/i;
+
+/** A former employer: "ex-Goldman", "formerly at Google", "used to be at Bain", "previously Meta". */
+const FORMER =
+  /^(?:ex-|ex\s+|formerly\b|former\b|previously\b|prev\.?\s|used to (?:be|work)\b|until recently\b|was\b)/i;
+/** A current employer after a former one: "now at Blackstone", "currently KKR". */
+const CURRENT = /^(?:now|currently|these days|today)\s+(?:(?:at|@|with|works at|working at)\s+)?/i;
+
+/**
+ * The company a bracket names: the current one when it lists a former one ("ex-Goldman, now at Blackstone" is
+ * Blackstone), none when it only names a former one ("ex-Meta").
+ */
+function bracketOrg(inside: string): string | undefined {
+  for (const seg of inside.split(/[,;]/)) {
+    const t = seg.trim();
+    if (!t || FORMER.test(t)) continue;
+    const cur = t.replace(CURRENT, '');
+    const at = /\b(?:at|@)\s+(.+)$/i.exec(cur);
+    const org = readOrg(at ? at[1] : cur);
+    if (org) return org;
+  }
+  return undefined;
+}
 
 /** "and", "&" or "or" between people: "Priya Shah & Tom Lee", "maybe Nora Kim or Ben Tal". */
 const JOIN = /\s+(?:and|&|or)\s+/i;
@@ -220,14 +319,24 @@ function titleWord(w: string): string {
     : base;
 }
 
-function isCompany(phrase: string): boolean {
-  const key = phrase
+/** "Fenwick & West" -> "fenwick west", "Société Générale" -> "societe generale". */
+function orgKey(phrase: string): string {
+  return phrase
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
     .toLowerCase()
     .replace(/\band\b|&/g, ' ')
     .replace(/[^\p{L}\s]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-  return NAMELIKE_COMPANIES.has(key) || !!knownSizeBucket(phrase);
+}
+
+/** The student's own organisations for one read, as orgKey forms. */
+let known: ReadonlySet<string> = new Set();
+
+function isCompany(phrase: string): boolean {
+  const key = orgKey(phrase);
+  return NAMELIKE_COMPANIES.has(key) || known.has(key) || !!knownSizeBucket(phrase);
 }
 
 /**
@@ -250,9 +359,26 @@ function readOrg(raw: string | undefined): string | undefined {
     words = words.slice(0, cut);
     org = words.join(' ');
   }
+  // "at the World Bank", "the Carlyle Group", "the Fed": a name typed with capitals after "the" is the company
+  // without it; "the data team", "the Data Team", "the Stripe team" and "the bank" stay descriptions
+  let proper = false;
+  if (words.length > 1 && lower(words[0]!) === 'the') {
+    const after = words.slice(1);
+    const joiner = (w: string) => ['of', 'and', '&', 'for'].includes(lower(w));
+    const content = after.filter((w) => !joiner(w));
+    if (
+      after.every((w) => typedCapital(w) || joiner(w)) &&
+      content.some((w) => !DESCRIPTORS.has(lower(w)) && !FUNCTION_WORDS.has(lower(w))) &&
+      !TEAMISH.has(lower(after[after.length - 1]!))
+    ) {
+      words = after;
+      org = words.join(' ');
+      proper = true;
+    }
+  }
   if (!words.length || words.length > 5) return undefined;
   const plain = words.map(lower);
-  if (!isCompany(org) && !isInstitution(words)) {
+  if (!proper && !isCompany(org) && !isInstitution(words)) {
     if (plain.some((w) => FUNCTION_WORDS.has(w) && w !== 'and' && w !== 'of' && w !== 'the'))
       return undefined;
     if (['the', 'a', 'an'].includes(plain[0]!)) return undefined;
@@ -307,6 +433,24 @@ function isRole(text: string): boolean {
   return words.some((w) => DESCRIPTORS.has(w)) && words.every((w) => DESCRIPTORS.has(w) || ROLE_LEAD.has(w));
 }
 
+/**
+ * The text without the clause after the name ("who leads growth", "is the hiring manager"). A last word that only
+ * looks like a clause start is kept when it is a capitalised part of the name: "Zhou He".
+ */
+function cutClause(text: string): string {
+  const m = CLAUSE.exec(text);
+  if (!m) return text;
+  const tail = m[0].trim();
+  const before = text.slice(0, m.index).trim().split(/\s+/);
+  if (
+    /^\p{Lu}\p{Ll}*$/u.test(tail) &&
+    NAMELIKE_SHORT.has(tail.toLowerCase()) &&
+    before.every((w) => typedCapital(w))
+  )
+    return text;
+  return text.slice(0, m.index);
+}
+
 /** Steps 3 to 5 for one piece's name part. */
 function judgeName(raw: string, hasOrg: boolean): Verdict {
   const text = raw
@@ -314,11 +458,10 @@ function judgeName(raw: string, hasOrg: boolean): Verdict {
     .replace(/’/g, "'")
     .replace(/[.:!?]+$/, '')
     .trim()
+    .replace(INTERJECTION, '')
     .replace(LEAD_IN, '')
-    .replace(TRAIL, '')
-    .replace(CLAUSE, '')
-    .trim();
-  let words = text.split(/\s+/).filter(Boolean);
+    .replace(TRAIL, '');
+  let words = cutClause(text).trim().split(/\s+/).filter(Boolean);
   if (!words.length) return { kind: 'skip' };
   if (words.some((w) => !WORD.test(w) || CONTRACTION.test(w))) return { kind: 'skip' };
   // a title: "Dr. Priya Patel" is Priya Patel; "Dr. Patel" is a person without a full name
@@ -334,21 +477,29 @@ function judgeName(raw: string, hasOrg: boolean): Verdict {
   if (j > 0 && j < words.length && (typedCapital(words[j]!) || isGivenName(words[j]!)))
     words = words.slice(j);
   const first = lower(words[0]!);
+  const allCapitals = words.every((w) => typedCapital(w) || PARTICLES.has(lower(w)));
   const wordlikeFirst = WORDLIKE_GIVEN.has(first);
   const bad = (w: string, i: number) => {
     const l = lower(w);
     // "Will Park", "may chen": a given name that is also a word is judged by the rest of the phrase
     if (i === 0 && wordlikeFirst && words.length > 1) return DESCRIPTORS.has(l);
     if (PLURAL_ACRONYM.test(w)) return true;
+    if (i > 0 && NAMELIKE_SHORT.has(l) && allCapitals) return false;
     // "Second-year", "co-op": a hyphenated word with a role or function word in it ("Mary-Kate" is a name)
     const parts = l.split('-');
-    return parts.some((p) => FUNCTION_WORDS.has(p) || DESCRIPTORS.has(p));
+    return parts.some((p) => FUNCTION_WORDS.has(p) || DESCRIPTORS.has(p) || FIELD_WORDS.has(p));
   };
   const core = words.filter((w, i) => !(i > 0 && i < words.length - 1 && PARTICLES.has(lower(w))));
   if (core.some((w, i) => bad(w, i))) return { kind: 'skip' };
   if (core.length > 4) return { kind: 'skip' };
   if (PARTICLES.has(first) || PARTICLES.has(lower(words[words.length - 1]!))) return { kind: 'skip' };
   if (isCompany(words.join(' '))) return { kind: 'skip' };
+  // an organisation by its shape: "Stanford GSB", "NYU Stern" (an acronym beside a word that is not one), "Berkeley
+  // Haas" (a university first)
+  if (words.length > 1 && !words.every((w) => ACRONYM.test(w)) && words.some((w) => ACRONYM.test(w)))
+    return { kind: 'skip' };
+  if (words.length > 1 && UNIVERSITY_FIRST.has(lower(words[0]!)) && !isGivenName(words[0]!))
+    return { kind: 'skip' };
   const name = words
     .map((w, i) => (i > 0 && PARTICLES.has(w.toLowerCase()) ? w.toLowerCase() : titleWord(w)))
     .join(' ');
@@ -368,7 +519,17 @@ function judgeName(raw: string, hasOrg: boolean): Verdict {
 }
 
 /** Steps 1 and 2: split the answer into pieces with their company. */
-export function readSuggestedNames(text: string): SuggestedNames {
+export function readSuggestedNames(text: string, opts: ReadNamesOptions = {}): SuggestedNames {
+  const outer = known;
+  known = new Set([...outer, ...(opts.knownOrgs ?? []).map(orgKey).filter(Boolean)]);
+  try {
+    return readAnswer(text);
+  } finally {
+    known = outer;
+  }
+}
+
+function readAnswer(text: string): SuggestedNames {
   const names: SuggestedName[] = [];
   const confirm: SuggestedName[] = [];
   const skipped: string[] = [];
@@ -405,6 +566,8 @@ export function readSuggestedNames(text: string): SuggestedNames {
   };
 
   const chunks = text
+    // a comma or semicolon inside a bracket stays with it: "Olu Adeyemi (ex-Goldman, now at Blackstone)"
+    .replace(/\([^()]*\)/g, (m) => m.replace(/,/g, '\ue000').replace(/;/g, '\ue001'))
     // text pasted from LinkedIn or a phone carries invisible characters inside names ("Yuki Sato\u200b")
     .replace(/[\u200b-\u200d\u2060\ufeff\u00ad]/g, '')
     .replace(/’/g, "'")
@@ -414,7 +577,13 @@ export function readSuggestedNames(text: string): SuggestedNames {
     .replace(/\s\d+[.)]\s+/g, '\n')
     .split(/[,;\n]|[!?]+\s*|(?<!\b(?:dr|mr|mrs|ms|mx|prof|st|\p{L}))\.\s+/iu);
   for (const chunk of chunks) {
-    let part = (chunk ?? '').trim().replace(/[.]+$/, '').trim();
+    let part = (chunk ?? '')
+      .replace(/\ue000/g, ',')
+      .replace(/\ue001/g, ';')
+      .trim()
+      .replace(/[.]+$/, '')
+      .trim()
+      .replace(INTERJECTION, '');
     if (!part) continue;
     const before = lone;
     lone = undefined;
@@ -430,6 +599,17 @@ export function readSuggestedNames(text: string): SuggestedNames {
       }
       open = undefined;
       continue;
+    }
+    // "Ana Ruiz, ex-Goldman, now at Blackstone": a former employer says nothing about where the person is now, and a
+    // current one completes the person before it
+    if (open && FORMER.test(part)) continue;
+    if (open && CURRENT.test(part)) {
+      const org = readOrg(part.replace(CURRENT, ''));
+      if (org) {
+        open.org = org;
+        open = undefined;
+        continue;
+      }
     }
     // "Tom Lee, Stripe": a company on its own completes the person before it
     if (open && onlyOrg(part)) {
@@ -452,8 +632,7 @@ export function readSuggestedNames(text: string): SuggestedNames {
     if (paren) {
       part = `${paren[1]!.trim()} ${paren[3]!.trim()}`.trim();
       const inside = paren[2]!.trim();
-      const at = /\b(?:at|@)\s+(.+)$/i.exec(inside);
-      org = readOrg(at ? at[1] : inside);
+      org = bracketOrg(inside);
       orgOfLastOnly = !/^(?:both|all|each|they|they're)\b/i.test(inside);
     }
     const at = ORG_AT.exec(part);
@@ -484,7 +663,7 @@ export function readSuggestedNames(text: string): SuggestedNames {
         add(judgeName(name, !!org), org, people.length === 1 ? `${name.trim()}${at[0]}${rest.trim()}` : name);
       skipped.push(...notPeople.reverse().map((s) => s.trim()));
       for (const t of tail.reverse()) {
-        const r = readSuggestedNames(t);
+        const r = readAnswer(t);
         for (const n of r.names) add({ kind: 'save', name: n.name }, n.org, t);
         for (const n of r.confirm) add({ kind: 'confirm', name: n.name }, n.org, t);
         skipped.push(...r.skipped);

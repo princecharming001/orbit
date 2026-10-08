@@ -1207,4 +1207,304 @@ export const TRAIN: SignalExample[] = [
     label: 'thank_you',
     body: 'Thanks so much for the thank-you note! Glad our chat was useful. Stay in touch.',
   },
+  // Fifth blind round: the ten replies it got wrong (all in the tuning part, since they were seen), plus variants
+  // written for each family so the fix is not fitted to one sentence.
+  {
+    id: 'b5-pos-pass-along-best',
+    label: 'positive',
+    body: "Pass along my best to Professor Chen! And yes, let's find a time — send over your availability.",
+  },
+  {
+    id: 'b5v-pos-pass-hello',
+    label: 'positive',
+    body: 'Pass along a hello to Coach Rivera for me. Happy to chat, let me know what works.',
+  },
+  {
+    id: 'b5v-neutral-pass-regards',
+    label: 'neutral',
+    body: 'Please pass on my regards to your mom.',
+  },
+  {
+    id: 'b5v-ref-pass-resume-still',
+    label: 'referral',
+    body: "Send me your resume and I'll pass it along to the hiring manager.",
+  },
+  {
+    id: 'b5-pos-beth-office',
+    label: 'positive',
+    body: 'Looping in Beth from my office to help schedule.',
+  },
+  {
+    id: 'b5v-pos-office-manager',
+    label: 'positive',
+    body: "Sure thing. Copying Raj from my office, he'll help us find a time.",
+  },
+  {
+    id: 'b5v-pos-team-coordinate',
+    label: 'positive',
+    body: 'Adding Leah on my team to coordinate scheduling. Talk soon.',
+  },
+  {
+    id: 'b5-pos-plus-kelly-ea',
+    label: 'positive',
+    body: "Sure. +Kelly (my EA) who'll coordinate a time for us.",
+  },
+  {
+    id: 'b5v-pos-plus-assistant-calendar',
+    label: 'positive',
+    body: 'Yes, glad to. + Marco (my assistant), who can get something on the calendar.',
+  },
+  {
+    id: 'b5v-ih-office-not-scheduling',
+    label: 'intro_handoff',
+    body: "I'm not the best person for this. Looping in Beth from my office, who ran our intern program for years.",
+  },
+  {
+    id: 'b5-prop-not-monday-friday',
+    label: 'proposal',
+    body: 'Not Monday, sorry — but anything Friday morning?',
+  },
+  {
+    id: 'b5v-prop-wednesday-no-thursday',
+    label: 'proposal',
+    body: "Wednesday won't work, sorry. Anything Thursday afternoon?",
+  },
+  {
+    id: 'b5v-prop-not-this-week-next',
+    label: 'proposal',
+    body: 'Not this week unfortunately, but anytime next Tuesday?',
+  },
+  {
+    id: 'b5-res-postpone-sick',
+    label: 'reschedule',
+    body: 'Can we postpone? Kid is home sick today.',
+  },
+  {
+    id: 'b5v-res-postpone-week',
+    label: 'reschedule',
+    body: 'Any chance we could postpone by a week? Things blew up at work.',
+  },
+  {
+    id: 'b5v-res-postponing',
+    label: 'reschedule',
+    body: 'So sorry, I need to postpone our chat. I will send new times shortly.',
+  },
+  {
+    id: 'b5-dh-take-this-on',
+    label: 'decline_hard',
+    body: 'Thanks for thinking of me! Unfortunately I won’t be able to take this on.',
+  },
+  {
+    id: 'b5v-dh-wont-be-able-to-help',
+    label: 'decline_hard',
+    body: "Appreciate the note. Unfortunately I won't be able to help here.",
+  },
+  {
+    id: 'b5v-dh-not-going-to-be-able',
+    label: 'decline_hard',
+    body: "I'm not going to be able to take this on, sorry.",
+  },
+  {
+    id: 'b5v-pos-take-this-on-yes',
+    label: 'positive',
+    body: "Unfortunately I'm a bit slow on email, but I'd be happy to take this on. Let's find a time.",
+  },
+  {
+    id: 'b5-eo-cant-commit-call',
+    label: 'email_only',
+    body: "Can't commit to a phone call right now, but feel free to send your questions via email.",
+  },
+  {
+    id: 'b5-eo-phone-tough',
+    label: 'email_only',
+    body: 'Phone’s tough with my schedule. Happy to help over email though — what do you want to know?',
+  },
+  {
+    id: 'b5v-eo-video-hard',
+    label: 'email_only',
+    body: "Video's hard for me these days. Happy to help by email instead, ask away.",
+  },
+  {
+    id: 'b5v-eo-cant-fit-call',
+    label: 'email_only',
+    body: "I can't fit in a call this month, but send me your questions by email and I'll answer.",
+  },
+  {
+    id: 'b5-ref-put-in-referral',
+    label: 'referral',
+    body: "I can put in a referral for you if you'd like — just let me know which role.",
+  },
+  {
+    id: 'b5v-ref-submit-referral',
+    label: 'referral',
+    body: "Happy to submit a referral once you've picked a role. Which one are you eyeing?",
+  },
+  {
+    id: 'b5v-ref-put-referral-in',
+    label: 'referral',
+    body: "Let me know the job ID and I'll put a referral in for you.",
+  },
+  {
+    id: 'b5v-ques-referral-past',
+    label: 'question',
+    body: 'Did someone already put in a referral for you?',
+  },
+  {
+    id: 'b5-ty-appreciated-conversation',
+    label: 'thank_you',
+    body: 'Appreciated the conversation earlier — thanks for making the time.',
+  },
+  {
+    id: 'b5v-ty-appreciated-chatting',
+    label: 'thank_you',
+    body: 'Really appreciated chatting today. Good luck with the interviews.',
+  },
+  {
+    id: 'b5v-ds-postpone-new-year',
+    label: 'decline_soft',
+    body: "I'd like to postpone until after the new year, things are crazy right now.",
+  },
+  {
+    id: 'b5v-eo-calls-dont-fit',
+    label: 'email_only',
+    body: "Phone calls don't really fit my week, but happy to answer questions over email.",
+  },
+  {
+    id: 'b5v-prop-cant-this-week-anything',
+    label: 'proposal',
+    body: "Can't make this week work, sorry. Anything Tuesday next week?",
+  },
+  {
+    id: 'b5v-ques-past-day',
+    label: 'question',
+    body: 'Did you get my note on Monday?',
+  },
+  // Sixth blind round: its misses and variants of each family. "Thursday at 3 London time works for me" was labelled a
+  // proposal by the tester, who then agreed that "works for me" accepts the time; it is a confirmation here, as
+  // "Thursday at 2pm works for me" is in the older corpus.
+  {
+    id: 'b6-conf-london-works',
+    label: 'confirmation',
+    body: 'Thursday at 3 London time works for me.',
+    times: ['Thu 10/8 15:00'],
+    zone: 'Europe/London',
+  },
+  {
+    id: 'b6v-conf-paris-works',
+    label: 'confirmation',
+    body: 'Great, Wednesday at 5 Paris time works for me.',
+    times: ['Wed 10/7 17:00'],
+    zone: 'Europe/Paris',
+  },
+  {
+    id: 'b6-ooo-spotty-wifi',
+    label: 'ooo',
+    body: "Hi Alex — traveling this week with spotty wifi, will reply properly when I'm back!",
+  },
+  {
+    id: 'b6v-ooo-bad-reception',
+    label: 'ooo',
+    body: "On the road until Friday with bad reception. I'll respond properly when I'm back.",
+  },
+  {
+    id: 'b6v-ooo-family-trip',
+    label: 'ooo',
+    body: "Away on a family trip, I'll reply once I'm home.",
+  },
+  {
+    id: 'b6v-ooo-more-when-back',
+    label: 'ooo',
+    body: 'Typing from my phone at a conference with limited wifi. More when I get back next week!',
+  },
+  {
+    id: 'b6v-pos-traveling-but-happy',
+    label: 'positive',
+    body: "I'm traveling with spotty wifi this week, but happy to chat next week. Send me a couple of times.",
+  },
+  {
+    id: 'b6v-pos-was-away',
+    label: 'positive',
+    body: 'Sorry, I was away with no wifi last week. Of course, happy to chat. What works for you?',
+  },
+  {
+    id: 'b6-intro-would-you-like',
+    label: 'intro',
+    body: 'Would you like me to introduce you to someone at McKinsey? Happy to make the connection.',
+  },
+  {
+    id: 'b6v-intro-want-me-to',
+    label: 'intro',
+    body: 'Do you want me to introduce you to a couple of people on the strategy team?',
+  },
+  {
+    id: 'b6v-intro-shall-i',
+    label: 'intro',
+    body: 'Shall I connect you with our campus lead? She knows the program inside out.',
+  },
+  {
+    id: 'b6v-intro-make-connection',
+    label: 'intro',
+    body: 'My cousin is a PM at Spotify. Glad to make the connection if useful.',
+  },
+  {
+    id: 'b6v-intro-could-intro',
+    label: 'intro',
+    body: 'I could intro you to a former teammate at Stripe if that helps.',
+  },
+  {
+    id: 'b6v-q-did-someone-introduce',
+    label: 'question',
+    body: 'Did someone introduce you to me, or did you find me on LinkedIn?',
+  },
+  {
+    id: 'b6v-q-should-i-connect-recruiter',
+    label: 'question',
+    body: 'Should I connect with your recruiter directly, or wait for you?',
+  },
+  {
+    id: 'b6-ty-lovely-note-pleasure',
+    label: 'thank_you',
+    body: 'Thank you for the lovely note! It was a pleasure chatting.',
+  },
+  {
+    id: 'b6-ty-coming-by-office',
+    label: 'thank_you',
+    body: 'Thanks again for coming by the office — really enjoyed meeting you.',
+  },
+  {
+    id: 'b6v-ty-pleasure-to-meet',
+    label: 'thank_you',
+    body: 'It was a pleasure to meet you today. Best of luck with the rest of recruiting.',
+  },
+  {
+    id: 'b6v-ty-kind-note',
+    label: 'thank_you',
+    body: 'Thanks so much for the kind note, it made my day.',
+  },
+  {
+    id: 'b6v-ty-enjoyed-getting-to-know',
+    label: 'thank_you',
+    body: 'Thanks for visiting the lab on Friday. I enjoyed getting to know you.',
+  },
+  {
+    id: 'b6v-pos-enjoyed-meeting-happy',
+    label: 'positive',
+    body: 'Really enjoyed meeting you at the info session. Happy to chat more, what works for you?',
+  },
+  {
+    id: 'b6v-q-pleasure-question',
+    label: 'question',
+    body: 'Pleasure chatting earlier. Which office are you applying to?',
+  },
+  {
+    id: 'b6v-neutral-thanks-note-awaiting',
+    label: 'neutral',
+    awaiting: true,
+    body: 'Thanks for the kind note.',
+  },
+  {
+    id: 'b6v-neutral-visit-not-hiring',
+    label: 'neutral',
+    body: "Thanks for coming by the office. We aren't hiring interns this cycle.",
+  },
 ];
