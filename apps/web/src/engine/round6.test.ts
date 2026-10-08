@@ -37,3 +37,40 @@ describe('usability round 6 (engine)', () => {
     expect(fresh.bodyDraft).not.toMatch(/yesterday/);
   });
 });
+
+describe('usability round 6: a chat moved on by hand counts for the relationship', () => {
+  it('someone who replied, met and was thanked is no longer a cold contact, and undo takes it back', async () => {
+    const { addPersonByHand } = await import('./people');
+    const { startWarmUpOrOutreach } = await import('./brief');
+    const { approveAndSend, confirmHandoff } = await import('./send');
+    const { applyStage } = await import('./stages');
+    const { describeUserTie, strengthTier } = await import('@orbit/core');
+    const r = (await addPersonByHand(user.id, {
+      name: 'Aisha Okoro',
+      company: 'Goldman Sachs',
+      linkedinUrl: 'https://www.linkedin.com/in/aisha-okoro-gs',
+    }))!;
+    const s = await startWarmUpOrOutreach(user, r.person.id, 'linkedin', 'manual', { skipWarmUp: true });
+    const body = s.draft!.bodyDraft.replace(/\[[^\]]+\]/g, 'We met at the Ross finance night.');
+    expect((await approveAndSend(user, s.draft!.id, body)).ok).toBe(true);
+    expect((await confirmHandoff(user, s.draft!.id)).ok).toBe(true);
+    const chat = () =>
+      db.chats
+        .where('personId')
+        .equals(r.person.id)
+        .first()
+        .then((c) => c!);
+    const later = new Date(NOW.getTime() + 2 * 3_600_000);
+    expect(await applyStage(await chat(), 'replied', 'user', 'user:move', { now: later })).toBe('applied');
+    expect(describeUserTie((await db.people.get(r.person.id))!, later)).not.toMatch(/haven't heard back/);
+    await applyStage(await chat(), 'scheduled', 'user', 'user:move', { now: later });
+    await applyStage(await chat(), 'completed', 'user', 'user:move', { now: later });
+    await applyStage(await chat(), 'followed_up', 'user', 'user:move', { now: later });
+    const met = (await db.people.get(r.person.id))!;
+    expect(strengthTier(met.strength)).not.toBe('weak');
+    // moved back to "first message sent": what the move said happened is taken back
+    await applyStage(await chat(), 'outreach_sent', 'user', 'user:undo', { now: later });
+    const back = (await db.people.get(r.person.id))!;
+    expect(strengthTier(back.strength)).toBe('weak');
+  });
+});
