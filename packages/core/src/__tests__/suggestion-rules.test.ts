@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { decideTransition } from '../pipeline/transitions';
+import { matchedFunction } from '../recommend/score';
 import {
   type Candidate,
   generateCandidates,
+  joinReasons,
   kindAllowedInStage,
   type RuleInput,
   relTime,
@@ -486,5 +488,69 @@ describe('reason wording (PS-15)', () => {
       .filter((c) => c.kind === 'action_item_reminder')
       .map((c) => c.reasonText);
     expect(reasons).toEqual(['Overdue: Send resume', 'Due today: Send resume']);
+  });
+});
+
+describe('a reply the student logged by moving the card (usability round 5)', () => {
+  it('Replied set by hand after the last message raises "write back", once, and not after the student answers', () => {
+    const p = person('rachel');
+    const moved = chat('c1', 'rachel', {
+      stage: 'replied',
+      lastOutboundAt: ago(12 * D),
+      stageEnteredAt: ago(1 * H),
+      outreachChannel: 'linkedin',
+    });
+    const out = generateCandidates(input({ people: [p], chats: [moved] }));
+    const card = out.find((c) => c.kind === 'schedule_propose');
+    expect(card?.reasonText).toMatch(/rachel replied\. Write back/);
+    expect(card?.dedupeKey).toBe(`sched:c1:moved:${moved.stageEnteredAt}`);
+    // the student wrote back after the move: nothing more to do until they answer
+    const answered = { ...moved, lastOutboundAt: ago(10 * 60_000) };
+    expect(
+      generateCandidates(input({ people: [p], chats: [answered] })).some(
+        (c) => c.kind === 'schedule_propose',
+      ),
+    ).toBe(false);
+    // a chat already booked needs no times
+    const booked = generateCandidates(
+      input({
+        people: [p],
+        chats: [moved],
+        events: [
+          {
+            id: 'e',
+            userId: 'u',
+            externalEventId: 'manual:e',
+            title: 'Chat',
+            startAt: ahead(2 * D),
+            endAt: ahead(2 * D + H),
+            status: 'confirmed',
+            attendees: [],
+            attendeePersonIds: ['rachel'],
+            chatId: 'c1',
+          } as CalendarEvent,
+        ],
+      }),
+    );
+    expect(booked.some((c) => c.kind === 'schedule_propose')).toBe(false);
+  });
+});
+
+describe('reason lines (usability round 5)', () => {
+  it('two reasons read as one sentence with a subject, not "; Works in ..."', () => {
+    expect(
+      joinReasons(
+        ['Lazard is on your target list', 'Works in investment banking (Financial Analyst)'],
+        'Priya',
+      ),
+    ).toBe('Lazard is on your target list, and Priya works in investment banking (Financial Analyst)');
+    expect(joinReasons(['Works in consulting (Engagement Manager)'], 'Priya')).toBe(
+      'Works in consulting (Engagement Manager)',
+    );
+  });
+  it('a credit analyst at a commercial bank is finance, never investment banking', () => {
+    expect(matchedFunction('Credit Analyst Comerica Bank', ['ib', 'finance'])).toBe('finance');
+    expect(matchedFunction('Credit Analyst Comerica Bank', ['ib'])).toBeUndefined();
+    expect(matchedFunction('Analyst Evercore', ['ib'])).toBe('ib');
   });
 });

@@ -368,8 +368,16 @@ function greeting(ctx: DraftContext, sector: Sector, seniority: Seniority, recru
   const first = firstNameOf(ctx.person);
   const learned = ctx.styleCard.builtFromCount > 0 && ctx.styleCard.greetingPatterns[0];
   if (learned && !/^dear/i.test(learned)) return learned.replace('{first}', first);
+  // a club president or a fellow student is a peer, never "Dear Jake Morrison"
+  const peer =
+    /\b(student|club|society|association|undergraduate|fraternity|sorority)\b/i.test(
+      `${ctx.person.title ?? ''} ${ctx.person.org ?? ''}`,
+    ) || /\b(university|college)\b/i.test(ctx.person.org ?? '');
   const execCold =
-    (sector === 'finance' || sector === 'consulting') && seniority === 'exec' && ctx.person.strength < 0.3;
+    !peer &&
+    (sector === 'finance' || sector === 'consulting') &&
+    seniority === 'exec' &&
+    ctx.person.strength < 0.3;
   if (execCold) return `Dear ${ctx.person.fullName},`;
   if (recruiter || isFormalStyle(ctx.styleCard)) return `Dear ${first},`;
   return `Hi ${first},`;
@@ -439,7 +447,7 @@ function questionFor(ctx: DraftContext, sector: Sector, seed: string): string {
     return pick(
       [
         `how you decided on ${group ?? org ?? 'the firm'} and how juniors get staffed`,
-        `whether an industry stint first is the better route into ${org ?? 'consulting'}`,
+        `what made you pick ${org ?? 'consulting'} over the other firms you looked at`,
         `how you picked the office and what the first year looked like`,
       ],
       seed,
@@ -527,6 +535,17 @@ function studentSentence(text: string): string {
   if (isFragment(t)) return `I'm writing because of ${lower1(t)}`;
   return cap1(t);
 }
+
+/**
+ * The line typed into the "Why them" box as the sentence a draft would open with, for dropping into a message the
+ * student already edited (their own words around it stay as they are).
+ */
+export function whyThemSentence(text: string): string {
+  return `${studentSentence(strip(text))}.`;
+}
+
+/** The bracketed "Why them" gap in a draft, in the long (email) or short (LinkedIn note) form. */
+export const WHY_THEM_GAP = new RegExp(`\\[${WHY_THEM}:[^\\]]*\\]`);
 
 /** A phrase with no verb of its own, typed into the "Why them" box: "Your talk at ...", "The post you shared on ...". */
 function isFragment(t: string): boolean {
@@ -1039,12 +1058,15 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
           `Hi ${first}, ${school} ${yl} here. ${short} Would you be open to ${minutes} minutes on ${q}? Happy to work around your schedule. ${ctx.user.firstName}`,
           `Hi ${first}, I'm ${me}. ${short} Could I take ${minutes} minutes to hear ${q}? Thanks either way, ${ctx.user.firstName}`,
           `Hi ${first}, ${school} ${yl} here. ${short} Would ${minutes} minutes on ${sq} be possible? Thanks, ${ctx.user.firstName}`,
+          // a long "Why them" line keeps the real question and drops the "who I am" opener before it drops the ask
+          `Hi ${first}, ${short} Would ${minutes} minutes on ${q} be possible? Thanks, ${ctx.user.firstName}`,
           `Hi ${first}, ${school} ${yl} here. ${short} Would you have ${minutes} minutes for a few questions? Thanks, ${ctx.user.firstName}`,
         ];
         bodyShort =
           candidates.find((x) => x.length <= LINKEDIN_NOTE_TARGET) ??
+          candidates.slice(0, 4).find((x) => x.length <= LINKEDIN_NOTE_MAX) ??
           [...candidates].sort((a, b) => a.length - b.length).find((x) => x.length <= LINKEDIN_NOTE_MAX) ??
-          fitNote(candidates[3]!, LINKEDIN_NOTE_MAX);
+          fitNote(candidates[4]!, LINKEDIN_NOTE_MAX);
         if (ctx.person.linkedinConnected) {
           const at = ctx.person.linkedinConnectedAt
             ? new Date(ctx.person.linkedinConnectedAt).getTime()
@@ -1296,16 +1318,35 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       }
       let line2 = '';
       const op = offerPhrase(offer?.c);
-      if (op) {
-        line2 = ` Thanks also for ${op}; I'll follow up ${/\b(posting|role|opening|application|req)\b/i.test(op) ? "once it's live" : 'when the timing is right'}.`;
-        cite(offer);
-      }
       // a promise made in the conversation ("I will send my resume by Friday") is kept in the same note
       const promise = (ctx.promises ?? []).map(promiseLine).find(Boolean);
+      // the offer and the promise about the same thing (their offer to read the resume, the student's promise to send
+      // it by Monday) get one timing, the promised one, not "when the timing is right" as well
+      const sameThing =
+        !!op &&
+        !!promise &&
+        (
+          op
+            .toLowerCase()
+            .match(/\b(resume|cv|cover letter|deck|model|application|intro(duction)?|portfolio)\b/g) ?? []
+        ).some((w) => promise.toLowerCase().includes(w));
+      if (op) {
+        line2 = sameThing
+          ? ` Thanks also for ${op}.`
+          : ` Thanks also for ${op}; I'll follow up ${/\b(posting|role|opening|application|req)\b/i.test(op) ? "once it's live" : 'when the timing is right'}.`;
+        cite(offer);
+      }
       if (promise) claims.push({ text: `promise: ${promise}`, kind: 'logistics' });
       const line3 = promise ? ` ${promise}` : '';
       const cycle = cyclePhrase(ctx.user.cycleLabel);
-      body = `${G}\n\n${line1}${line2}${line3}\n\n${pick([`I'll let you know how ${cycle} goes. Would it be alright to send a question your way if one comes up?`, `I'll keep you posted on how ${cycle} goes, and if there's ever anything I can do for you, please say so.`], seed, 'ty-close')}\n\n${S}`;
+      const closes = [
+        `I'll let you know how ${cycle} goes. Would it be alright to send a question your way if one comes up?`,
+        `I'll keep you posted on how ${cycle} goes, and if there's ever anything I can do for you, please say so.`,
+      ];
+      body = `${G}\n\n${line1}${line2}${line3}\n\n${pick(closes, seed, 'ty-close')}\n\n${S}`;
+      // Orbit's own draft stays inside the length it asks the student to keep to: a long note gets the short close
+      if (wordsIn(body) > MAX_WORDS.thank_you)
+        body = `${G}\n\n${line1}${line2}${line3}\n\n${`I'll let you know how ${cycle} goes.`}\n\n${S}`;
       subject = threaded
         ? undefined
         : when

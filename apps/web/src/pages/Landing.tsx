@@ -167,7 +167,7 @@ export function Landing() {
           {onboarded && !isDemo && (
             <p className="mt-3 text-[13px] text-ink-2">
               Your data on this browser belongs to {user?.fullName || 'your profile'}. To try the demo
-              instead, use Reset to demo in Settings under Integrations.
+              instead, use Reset to demo in Settings under LinkedIn, resume &amp; AI.
             </p>
           )}
           <p className="mt-3 text-[12px] text-ink-3">
@@ -205,7 +205,7 @@ export function Landing() {
                 title: 'Every chat in one place',
                 body: google
                   ? 'See where each conversation stands, from first message to scheduled to thanked, and who has gone quiet.'
-                  : 'See where each conversation stands, from first message to scheduled to thanked, and who has gone quiet. When someone replies, you move their card; Orbit takes it from there.',
+                  : 'See where each conversation stands, from first message to scheduled to thanked, and who has gone quiet. When someone replies, move their card and Today shows your next step, starting with a draft reply.',
               },
               {
                 icon: MapIcon,
@@ -262,7 +262,8 @@ export function Landing() {
               LinkedIn connections. Or just try the demo.
             </li>
             <li>
-              <span className="font-medium text-ink">3.</span> Open your first brief.
+              <span className="font-medium text-ink">3.</span> Open Today: it lists the few things to do
+              first, with drafts ready to edit.
             </li>
           </ol>
           <div className="mt-5 flex gap-2 min-h-9">

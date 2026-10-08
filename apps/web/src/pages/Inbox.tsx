@@ -41,7 +41,7 @@ export function InboxPage() {
     useLiveQuery(() => (userId ? db.people.where('userId').equals(userId).toArray() : []), [userId]) ?? [];
   const byId = new Map(people.map((p) => [p.id, p]));
   // Drafts holds the messages Orbit wrote for the student; other cards (prep, warm-ups, confirmations) live on Today.
-  // A draft already opened in the mail app or LinkedIn is under "Not sent yet", not here as well.
+  // A draft already opened in the mail app or LinkedIn is under "Opened, not marked sent", not here as well.
   const latest = (briefs ?? []).sort((a, b) => b.generatedAt.localeCompare(a.generatedAt))[0];
   const { forToday, later } = draftLists(suggestions, outbound, latest, new Date());
   const pending = [...forToday, ...later];
@@ -76,15 +76,15 @@ export function InboxPage() {
         value={shown}
         onChange={setTab}
         items={[
-          { value: 'pending', label: 'Ready to send', count: forToday.length + started.length },
-          { value: 'outbox', label: 'Not sent yet', count: outbox.length },
+          { value: 'pending', label: 'To send', count: forToday.length + started.length },
+          { value: 'outbox', label: 'Opened, not marked sent', count: outbox.length },
           { value: 'snoozed', label: 'Snoozed', count: snoozed.length },
           { value: 'sent', label: 'Sent', count: sent.length },
         ]}
       />
       {shown === 'pending' && started.length > 0 && (
         <div className="space-y-2 mb-5" data-testid="drafts-started">
-          <div className="text-[12px] uppercase tracking-wide text-ink-3">Started by you, not sent yet</div>
+          <div className="text-[12px] uppercase tracking-wide text-ink-3">Started by you</div>
           {started.map((o) => (
             <StartedItem key={o.id} o={o} person={byId.get(o.personId)} />
           ))}

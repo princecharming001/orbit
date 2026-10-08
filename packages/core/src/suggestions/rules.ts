@@ -164,7 +164,9 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
           dedupeKey: `new:${chat.personId}:${chat.id}`,
           reasonText: prog.skippedAll
             ? `You skipped the warm-up. Message ${person.firstName} without it?`
-            : `Warm-up done (${prog.done} of ${prog.total}); ready to message ${person.firstName}`,
+            : prog.done < prog.total
+              ? `The warm-up days are over (${prog.done} of ${prog.total} steps done); ready to message ${person.firstName}`
+              : `Warm-up done; ready to message ${person.firstName}`,
           signals: { warmUpDone: prog.done, warmUpSkipped: prog.skippedAll || undefined },
           payload: { channel: 'linkedin' },
           urgency: 0.6,
@@ -334,6 +336,33 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
         signals: { signal: lastIn.signal },
         payload: { inReplyTo: lastIn.id, windows: inp.freeSlotsIso.slice(0, 2) },
         urgency: 0.9,
+        goalRelevance: liveRel,
+        confidence: 0.8,
+      });
+    }
+    // the student moved the card to Replied themselves (an answer Orbit cannot see: no Gmail, or a LinkedIn reply):
+    // the next step is theirs, to write back and suggest a time, so Today says so instead of "nothing needs you"
+    const movedByStudent =
+      chat.stage === 'replied' &&
+      !awaitingReply &&
+      !(lastIn && chat.lastOutboundAt && lastIn.sentAt > chat.lastOutboundAt) &&
+      (!chat.lastOutboundAt || chat.stageEnteredAt > chat.lastOutboundAt) &&
+      !inp.events.some(
+        (e) =>
+          (e.chatId === chat.id || e.attendeePersonIds?.includes(chat.personId)) &&
+          e.status !== 'cancelled' &&
+          new Date(e.endAt).getTime() > now.getTime(),
+      );
+    if (movedByStudent) {
+      out.push({
+        kind: 'schedule_propose',
+        personId: chat.personId,
+        chatId: chat.id,
+        dedupeKey: `sched:${chat.id}:moved:${chat.stageEnteredAt}`,
+        reasonText: `${person.firstName} replied. Write back and ask when suits them to talk`,
+        signals: { movedByStudent: true },
+        payload: { windows: inp.freeSlotsIso.slice(0, 2) },
+        urgency: 0.85,
         goalRelevance: liveRel,
         confidence: 0.8,
       });
@@ -721,10 +750,7 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
       personId: r.personId,
       dedupeKey: `new:${r.personId}:${weekMondayKey(now)}`,
       reasonText:
-        r.reasons
-          .map((x) => x.text)
-          .slice(0, 2)
-          .join('; ') || 'Good fit for your goals',
+        joinReasons(r.reasons.map((x) => x.text).slice(0, 2), p.firstName) || 'Good fit for your goals',
       signals: { score: r.score, recommendationId: r.id },
       payload: { recommendationId: r.id, channel: p.primaryEmail ? 'gmail' : 'linkedin' },
       urgency: behind ? 0.5 : remaining > 0 ? 0.3 : 0.2,
@@ -1163,4 +1189,19 @@ export function staleReason(
     default:
       return 'superseded';
   }
+}
+
+/**
+ * Two reasons as one sentence with its subject: "Lazard is on your target list, and Priya works in investment
+ * banking", not "...; Works in investment banking".
+ */
+export function joinReasons(texts: string[], firstName = 'they'): string {
+  const subject = (t: string, i: number) => {
+    if (/^Works in\b/.test(t))
+      return `${i ? firstName : 'Works'} ${i ? 'works' : ''}${t.slice(5)}`.replace(/\s+/g, ' ');
+    if (/^Overlaps with your experience$/.test(t))
+      return i ? `${firstName}'s background overlaps with yours` : t;
+    return i && /^(You|Reachable)\b/.test(t) ? t[0]!.toLowerCase() + t.slice(1) : t;
+  };
+  return texts.map(subject).join(', and ');
 }

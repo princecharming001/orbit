@@ -1,7 +1,7 @@
 import { Upload } from 'lucide-react';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { importLinkedInExport } from '../engine/linkedin';
+import { connectionsText, importLinkedInExport } from '../engine/linkedin';
 import { useSession } from '../state/session';
 import { cx, Spinner, useToast } from '../ui';
 
@@ -35,7 +35,7 @@ export function LinkedInImportButton({
   const onFile = async (f: File) => {
     setBusy('Importing…');
     try {
-      const r = await importLinkedInExport(user, await f.text(), (d, t) =>
+      const r = await importLinkedInExport(user, await connectionsText(f), (d, t) =>
         setBusy(`Importing ${d} of ${t}…`),
       );
       const added = `${r.imported} ${r.imported === 1 ? 'person' : 'people'} added, ${r.updated} updated.`;
@@ -58,7 +58,7 @@ export function LinkedInImportButton({
             : { label: 'Set goals', onClick: () => nav('/settings/goals') },
         });
     } catch (e) {
-      toast.push({ text: `That file could not be read: ${String((e as Error).message ?? e)}`, tone: 'bad' });
+      toast.push({ text: String((e as Error).message ?? e), tone: 'bad', ttl: 9000 });
     } finally {
       setBusy(undefined);
     }
@@ -74,7 +74,7 @@ export function LinkedInImportButton({
     >
       <input
         type="file"
-        accept=".csv"
+        accept=".csv,.zip"
         className="sr-only"
         data-testid={testId}
         disabled={!!busy}

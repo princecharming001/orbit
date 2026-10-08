@@ -1,4 +1,4 @@
-import { MESSAGE_KIND_LABELS } from '@orbit/core';
+import { MESSAGE_KIND_LABELS, warmUpProgress } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { RefreshCw } from 'lucide-react';
 import { useEffect, useState } from 'react';
@@ -164,7 +164,7 @@ export function Today() {
   const completed = (chats ?? []).filter((c) => c.completedAt).length;
   const visiblePeople = people.filter((p) => p.isHuman && !p.hiddenAt).length;
   // counted from the cards on screen, so the line never disagrees with them
-  const summary = latest
+  const baseSummary = latest
     ? todaySummaryText(cards, events ?? [], visiblePeople, now)
     : 'Your first brief will appear here.';
   const problems = (integrations ?? []).filter((i) => i.status === 'needs_reauth' || i.status === 'error');
@@ -187,7 +187,13 @@ export function Today() {
   // warm-ups under way, so a quiet Today still says who is in progress and when the next step comes
   const warming = (chats ?? [])
     .filter((c) => c.stage === 'warming' && c.warmUp)
-    .map((c) => ({ chat: c, next: c.warmUp!.actions.find((a) => !a.doneAt && !a.skippedAt) }))
+    .map((c) => ({
+      chat: c,
+      // once the warm-up days are over the next thing is the first message, whatever steps are left
+      next: warmUpProgress(c.warmUp!, now, user.timezone).ready
+        ? undefined
+        : c.warmUp!.actions.find((a) => !a.doneAt && !a.skippedAt),
+    }))
     .filter((w) => byId.get(w.chat.personId) && !byId.get(w.chat.personId)!.hiddenAt);
   const googleReady = !!googleClientId();
   // without Google, Orbit cannot see replies or meetings: the student tells it, so the words say so
@@ -196,6 +202,12 @@ export function Today() {
   const started = startedDrafts(outbound ?? []).filter((o) => !byId.get(o.personId)?.hiddenAt);
   // someone added by hand and not written to yet: the next step is to write to them, not to go looking elsewhere
   const toWrite = notYetWritten(people, chats ?? [], outbound ?? [], suggestions, now).slice(0, 3);
+  // a message waiting for "I sent it" is something that needs the student: the line never says "nothing needs you"
+  // above it
+  const summary =
+    !cards.length && handedOff.length
+      ? `${handedOff.length === 1 ? 'One message you opened to send is' : `${handedOff.length} messages you opened to send are`} waiting for you to say whether ${handedOff.length === 1 ? 'it' : 'they'} went out.`
+      : baseSummary;
   // with no cards, the line points at what is on screen instead: a draft to finish, someone to write to
   const nextLine = cards.length
     ? ''
@@ -365,6 +377,7 @@ export function Today() {
           {cards.length === 0 &&
             !toWrite.length &&
             !started.length &&
+            !handedOff.length &&
             (visiblePeople === 0 ? (
               <div
                 className="border border-dashed border-line rounded-[var(--radius-card)] p-6"
@@ -519,7 +532,9 @@ export function Today() {
                         Warm-up ·{' '}
                         {next
                           ? `next step ${new Date(next.dueAt) <= now ? 'today' : relDate(next.dueAt, now)}`
-                          : `first message ${relDate(chat.warmUp!.readyAt, now)}`}
+                          : new Date(chat.warmUp!.readyAt) <= now
+                            ? 'first message ready'
+                            : `first message ${relDate(chat.warmUp!.readyAt, now)}`}
                       </div>
                     </div>
                   </li>
@@ -559,8 +574,8 @@ export function Today() {
                         onClick={async () => {
                           await moveChat(user, c, 'replied', 'user:replied');
                           toast.push({
-                            text: `Moved ${p.firstName} to Replied. Write back from their page.`,
-                            action: { label: `Open ${p.firstName}`, onClick: () => nav(`/people/${p.id}`) },
+                            text: `Moved ${p.firstName} to Replied. Your reply to ${p.firstName} is now a card here.`,
+                            action: { label: 'Show it', onClick: () => nav(`/today?person=${p.id}`) },
                             ttl: 7000,
                           });
                         }}

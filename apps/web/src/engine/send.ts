@@ -942,6 +942,17 @@ async function finalizeSent(
       scheduledAt = start.toISOString();
     });
   }
+  // a copy of the same message the student never touched is now stale: it would ask to be sent a second time
+  await step(() =>
+    db.outbound
+      .where('personId')
+      .equals(msg.personId)
+      .filter(
+        (o) =>
+          o.id !== msg.id && o.kind === msg.kind && o.status === 'draft' && !o.bodyFinal && !o.suggestionId,
+      )
+      .modify({ status: 'cancelled' }),
+  );
   if (msg.kind === 'outreach')
     await step(() =>
       db.recommendations

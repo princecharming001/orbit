@@ -206,6 +206,14 @@ export async function saveResume(user: User, file: File): Promise<{ resume: Resu
     const sentence = summarySentence(f.text, user.fullName || undefined);
     return sentence ? [{ ...f, text: sentence }] : [];
   });
+  // a line Orbit could not read well (no role and no organization, or a few stray words) starts unticked, so it is
+  // never used to describe the student until they say it is right
+  facets = facets.map((f) =>
+    ['experience', 'education', 'project'].includes(f.kind) &&
+    ((!f.title && !f.organizationName) || f.text.split(/\s+/).length < 3)
+      ? { ...f, excluded: true }
+      : f,
+  );
   await db.resumeFacets.bulkAdd(facets);
   await db.resumes.update(resume.id, { parsedAt: now, parseSource: source });
   return { resume: { ...resume, parsedAt: now, parseSource: source }, facets };

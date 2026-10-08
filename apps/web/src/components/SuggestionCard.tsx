@@ -1,7 +1,7 @@
 import type { OutboundStatus, Person, Suggestion } from '@orbit/core';
 import { draftWarmUpComment, STAGE_LABELS, warmUpProgress } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Check, ChevronDown, ChevronUp, Copy, ExternalLink, Sparkles } from 'lucide-react';
+import { Check, ChevronUp, Copy, ExternalLink, Sparkles } from 'lucide-react';
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { feedback } from '../db/repo';
@@ -16,7 +16,7 @@ import {
 import { answerIntroductionQuestion } from '../engine/introductions';
 import { mergePeople } from '../engine/people';
 import { dismissSuggestion, restoreSuggestion, snoozeSuggestion } from '../engine/send';
-import { decideProposedStage } from '../engine/stages';
+import { applyStage, decideProposedStage } from '../engine/stages';
 import { useSession } from '../state/session';
 import { Avatar, Button, Chip, cx, useToast } from '../ui';
 import { runApproval } from './approve';
@@ -40,7 +40,7 @@ export const KIND_LABEL: Record<
   ask_referral: { label: 'Referral ask', tone: 'accent' },
   intro_request: { label: 'Intro ask', tone: 'accent' },
   report_back: { label: 'Close the loop', tone: 'good' },
-  confirm_stage: { label: 'Stage update', tone: 'neutral' },
+  confirm_stage: { label: 'Did this change?', tone: 'neutral' },
   confirm_merge: { label: 'Possible duplicate', tone: 'neutral' },
   confirm_note_match: { label: 'Match note', tone: 'neutral' },
   confirm_intro: { label: 'Introduction?', tone: 'neutral' },
@@ -119,6 +119,11 @@ export function SuggestionCard({
   const introducer = useOther(s.payload.introducerId as string | undefined);
   // what made Orbit think the stage changed: the message it read, when there is one
   const evidence = useLiveQuery(async () => {
+    // "Did Mateo introduce you to Felix?" shows the email that made Orbit ask
+    if (s.kind === 'confirm_intro' && typeof s.payload.messageId === 'string') {
+      const m = await db.messages.get(s.payload.messageId);
+      return m ? { text: m.bodyText.replace(/\s+/g, ' ').trim(), at: m.sentAt } : undefined;
+    }
     if (s.kind !== 'confirm_stage') return undefined;
     const e = await db.stageEvents.get(s.payload.stageEventId as string);
     if (e?.evidenceRefTable !== 'messages' || !e.evidenceRefId) return undefined;
@@ -175,11 +180,24 @@ export function SuggestionCard({
   };
   const toStage = s.payload.toStage as keyof typeof STAGE_LABELS | undefined;
   const confirmStage = async (accept: boolean) => {
-    await decideProposedStage(s.payload.stageEventId as string, accept);
+    const from = chat?.stage;
+    const r = await decideProposedStage(s.payload.stageEventId as string, accept);
     toast.push({
       text: accept
         ? `Moved ${first} to ${toStage ? STAGE_LABELS[toStage] : 'the new stage'}.`
         : `Kept ${first} in ${chat ? STAGE_LABELS[chat.stage] : 'the same stage'}.`,
+      // a stage the student accepted can be taken back, like a move on the Pipeline
+      action:
+        accept && r === 'applied' && from && s.chatId
+          ? {
+              label: 'Undo',
+              onClick: async () => {
+                const now = s.chatId ? await db.chats.get(s.chatId) : undefined;
+                if (now) await applyStage(now, from, 'user', 'user:undo');
+              },
+            }
+          : undefined,
+      ttl: accept ? 6000 : undefined,
     });
   };
   const confirmMerge = async (accept: boolean) => {
@@ -325,9 +343,7 @@ export function SuggestionCard({
               </Link>
             )}
             {person && (person.currentTitle || person.currentOrganizationRaw) && (
-              <span className="text-ink-3 text-[13px] truncate min-w-0 max-w-full">
-                {[person.currentTitle, person.currentOrganizationRaw].filter(Boolean).join(' · ')}
-              </span>
+              <RoleLine title={person.currentTitle} company={person.currentOrganizationRaw} />
             )}
           </div>
           <p className="text-[13.5px] text-ink-2 mt-1">{s.reasonText}</p>
@@ -338,8 +354,10 @@ export function SuggestionCard({
           )}
           {draft && !inFlight && !open && (
             <>
+              {/* a click target for the mouse; the keyboard reaches the same thing through Review draft, one stop */}
               <button
                 onClick={() => setOpen(true)}
+                tabIndex={-1}
                 className="group mt-2 block text-left w-full rounded-lg bg-canvas-2 px-3 py-2 text-[13px] text-ink-2 hover:bg-line-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
                 aria-label={`Open the draft to ${first} to edit it`}
                 data-testid="draft-preview"
@@ -418,22 +436,19 @@ export function SuggestionCard({
           {s.kind === 'warm_up_engage' && warmAction && warmAction.kind !== 'view_profile' && (
             <div className="mt-3 rounded-lg bg-canvas-2 p-3 text-[13px]" data-testid="warmup-helper">
               <label className="font-medium block" htmlFor={`warm-${s.id}`}>
-                {warmAction.kind === 'comment_post'
-                  ? 'What is the post about?'
-                  : 'Which post did you react to?'}{' '}
-                <span className="font-normal text-ink-3">Optional</span>
+                What was the post about? <span className="font-normal text-ink-3">Optional</span>
               </label>
               <div className="text-ink-3 text-[12px] mb-1.5">
                 {warmAction.kind === 'comment_post'
-                  ? 'One point from it, in your own words. Orbit drafts a short comment that asks a question or adds something, and mentions the post in your first message.'
-                  : 'One point from it, in your own words. Orbit mentions the post in your first message.'}
+                  ? 'One point it makes, in your own words, not a link. Orbit drafts a short comment that asks a question or adds something, and mentions the post in your first message.'
+                  : 'One point from the post you reacted to, in your own words, not a link. Orbit mentions it in your first message.'}
               </div>
               <input
                 id={`warm-${s.id}`}
                 className="w-full h-9 rounded-lg border border-line bg-canvas px-3 text-[13px]"
                 value={postClaim}
                 onChange={(e) => setPostClaim(e.target.value)}
-                placeholder="e.g. ship something in week one"
+                placeholder="e.g. new analysts should ship something in week one"
               />
               {warmAction.kind === 'comment_post' && (
                 <input
@@ -534,6 +549,23 @@ export function SuggestionCard({
           {s.kind === 'confirm_merge' && person && other && (
             <MergeChoice a={person} b={other} asking={mergeAsk} onAsk={setMergeAsk} onDecide={confirmMerge} />
           )}
+          {s.kind === 'confirm_intro' && evidence && (
+            <blockquote
+              className="mt-2 rounded-lg bg-canvas-2 px-3 py-2 text-[13px] text-ink-2"
+              data-testid="intro-evidence"
+            >
+              <span className="text-ink-3">
+                Orbit asks because {introducer?.firstName ?? 'they'} wrote to you both{' '}
+                {new Date(evidence.at).toLocaleDateString('en-US', {
+                  weekday: 'short',
+                  month: 'short',
+                  day: 'numeric',
+                })}
+                :{' '}
+              </span>
+              <span className="line-clamp-2">“{evidence.text}”</span>
+            </blockquote>
+          )}
           {s.kind === 'confirm_intro' && (
             <div className="mt-2 flex flex-wrap gap-2">
               <Button size="sm" variant="primary" disabled={busy} onClick={() => answerIntro(true)}>
@@ -566,14 +598,14 @@ export function SuggestionCard({
             </div>
           )}
         </div>
-        {draft && !inFlight && (
+        {draft && !inFlight && open && (
           <button
-            onClick={() => setOpen((o) => !o)}
+            onClick={() => setOpen(false)}
             className="p-2 -m-1 rounded-md text-ink-3 hover:bg-canvas-2 shrink-0"
-            aria-label={open ? 'Close the draft' : 'Open the draft'}
-            aria-expanded={open}
+            aria-label="Close the draft"
+            title="Close the draft (your edits are kept)"
           >
-            {open ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+            <ChevronUp size={16} />
           </button>
         )}
       </div>
@@ -587,32 +619,28 @@ export function SuggestionCard({
         <div className="mt-3 pt-3 border-t border-line-2 flex flex-wrap items-center gap-1 text-[12px]">
           {!dismissing ? (
             <>
+              <span className="text-ink-3 mr-1" id={`snooze-${s.id}`}>
+                Snooze
+              </span>
+              {(
+                [
+                  [1, '1 day'],
+                  [3, '3 days'],
+                  [7, '1 week'],
+                ] as const
+              ).map(([d, l]) => (
+                <button
+                  key={d}
+                  className={CARD_SMALL_BUTTON}
+                  onClick={() => snooze(d)}
+                  aria-label={`Snooze for ${l}`}
+                  title={`Hide this card for ${l}; it comes back on Today`}
+                >
+                  {l}
+                </button>
+              ))}
               <button
-                className="px-2 h-10 sm:h-8 rounded-md text-ink-3 hover:bg-canvas-2 hover:text-ink"
-                onClick={() => snooze(1)}
-                aria-label="Snooze for 1 day"
-                title="Snooze for 1 day"
-              >
-                Snooze: 1 day
-              </button>
-              <button
-                className="px-2 h-10 sm:h-8 rounded-md text-ink-3 hover:bg-canvas-2 hover:text-ink"
-                onClick={() => snooze(3)}
-                aria-label="Snooze for 3 days"
-                title="Snooze for 3 days"
-              >
-                3 days
-              </button>
-              <button
-                className="px-2 h-10 sm:h-8 rounded-md text-ink-3 hover:bg-canvas-2 hover:text-ink"
-                onClick={() => snooze(7)}
-                aria-label="Snooze for 1 week"
-                title="Snooze for 1 week"
-              >
-                1 week
-              </button>
-              <button
-                className="ml-auto px-2 h-10 sm:h-8 rounded-md text-ink-3 hover:bg-canvas-2 hover:text-ink"
+                className={cx('ml-auto', CARD_SMALL_BUTTON)}
                 onClick={() => setDismissing(true)}
                 title="Remove this card and tell Orbit why, so it suggests better next time"
               >
@@ -645,6 +673,21 @@ export function SuggestionCard({
         </div>
       )}
     </div>
+  );
+}
+
+/** The small secondary buttons along a card's foot (Snooze, Dismiss): bordered, so they read as buttons at rest. */
+const CARD_SMALL_BUTTON =
+  'px-2.5 h-10 sm:h-8 rounded-md border border-line text-ink-2 hover:bg-canvas-2 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40';
+
+/** "Title · Company" where a long title gives way first: the company is the part that matters. */
+export function RoleLine({ title, company }: { title?: string; company?: string }) {
+  return (
+    <span className="text-ink-3 text-[13px] flex min-w-0 max-w-full">
+      {title && <span className="truncate min-w-0">{title}</span>}
+      {title && company && <span className="shrink-0 whitespace-pre"> · </span>}
+      {company && <span className="truncate shrink-0 max-w-full">{company}</span>}
+    </span>
   );
 }
 

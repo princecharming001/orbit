@@ -1,5 +1,12 @@
 import type { DraftNeed, OutboundMessage } from '@orbit/core';
-import { LINKEDIN_NOTE_MAX, MAX_WORDS, WHY_THEM, wordsIn } from '@orbit/core';
+import {
+  LINKEDIN_NOTE_MAX,
+  MAX_WORDS,
+  MESSAGE_KIND_LABELS,
+  WHY_THEM,
+  WHY_THEM_GAP,
+  wordsIn,
+} from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { db } from '../db/schema';
@@ -22,10 +29,12 @@ import { Button, cx, Input, relDate, Textarea, useToast } from '../ui';
 import { copyText, openHandoff } from './approve';
 
 type PromptNeed = Exclude<DraftNeed, 'post'>;
+/** Messages that ask a favour: two of them to one person at once is too much. */
+const ASK_KINDS = new Set<OutboundMessage['kind']>(['referral_ask', 'intro_request']);
 const INPUT_PROMPT: Record<PromptNeed, { label: string; hint: string; placeholder: string }> = {
   connection: {
     label: WHY_THEM,
-    hint: 'One line only true of them: how you found them, what you share, or something of theirs you read. You have not talked yet, so Orbit will not send a first message without it.',
+    hint: 'One line only true of them: how you found them, what you share, or something of theirs you read. You have not talked yet, so the send buttons stay off until you add it.',
     placeholder: 'e.g. I read your post about your first year at the firm',
   },
   update: {
@@ -112,6 +121,26 @@ export function DraftEditor({
     () => db.chats.where('personId').equals(draft.personId).toArray(),
     [draft.personId],
   );
+  // a second favour asked of the same person while the first is still waiting (a referral ask and an intro ask)
+  const otherAsk = useLiveQuery(
+    () =>
+      ASK_KINDS.has(draft.kind)
+        ? db.outbound
+            .where('personId')
+            .equals(draft.personId)
+            .filter(
+              (o) =>
+                o.id !== draft.id &&
+                ASK_KINDS.has(o.kind) &&
+                (['draft', 'queued', 'handed_off'].includes(o.status) ||
+                  (o.status === 'sent' &&
+                    !!o.sentAt &&
+                    Date.now() - new Date(o.sentAt).getTime() < 3 * 86_400_000)),
+            )
+            .first()
+        : undefined,
+    [draft.id, draft.personId, draft.kind],
+  );
   // a new draft (or a redraft) replaces the text; the student's own saved edits do not reset what they are typing
   useEffect(() => {
     setBody(draft.bodyFinal ?? draft.bodyDraft);
@@ -123,6 +152,7 @@ export function DraftEditor({
     subject: draft.subject ?? '',
   }));
   const [confirmingClose, setConfirmingClose] = useState(false);
+  const [confirmingRedraft, setConfirmingRedraft] = useState(false);
   const [copying, setCopying] = useState(false);
   // edits are kept as they are typed, so leaving the page (to check LinkedIn) and coming back loses nothing; the
   // latest text is also written when the editor closes, so a change made just before leaving is never dropped
@@ -195,9 +225,10 @@ export function DraftEditor({
   // Copy text is a hand-off like the mail app: the message waits for "I sent it", so a Gmail user can log the send
   const copyAll = async () => {
     if (!user) return;
-    const subj = envelope.threaded ? envelope.subject : subject;
+    // the message alone: a "Subject:" line pasted into the body would go out as its first line. The subject is
+    // shown next to the I sent it step with its own Copy button.
     // the clipboard write starts inside the click; browsers drop clipboard access after a long async gap
-    const copied = copyText(`${subj ? `Subject: ${subj}\n\n` : ''}${body}`);
+    const copied = copyText(body);
     setCopying(true);
     setError(undefined);
     try {
@@ -208,7 +239,7 @@ export function DraftEditor({
       }
       toast.push({
         text: (await copied)
-          ? 'Copied. Paste it into Gmail and send it, then come back and press I sent it.'
+          ? 'Copied the message. Paste it into Gmail and send it, then come back and press I sent it.'
           : 'Select the text in the box and copy it, send it from Gmail, then press I sent it.',
         ttl: 8000,
       });
@@ -239,15 +270,52 @@ export function DraftEditor({
       : 'Copy & open LinkedIn'
     : direct
       ? `Send to ${first}`
-      : 'Open in mail app';
+      : `Open email to ${first}`;
   const canRegenerate = needs.every((n) => (inputs[n] ?? '').trim().length >= (n === 'role' ? 4 : 8));
-  const regenerate = async () => {
+  // the student's edits survive a redraft: the missing line drops into the gap in their own text, and when there is
+  // no gap left to fill (they rewrote that part) Orbit asks before it rewrites the message
+  const keepsMine = edited && needs.length === 1 && needs[0] === 'connection' && WHY_THEM_GAP.test(body);
+  const regenerate = async (force = false) => {
     if (!user) return;
+    if (edited && !keepsMine && !force) {
+      setConfirmingRedraft(true);
+      return;
+    }
+    setConfirmingRedraft(false);
     setRegenerating(true);
+    const before = {
+      bodyDraft: draft.bodyDraft,
+      bodyFinal: edited ? body : undefined,
+      subject: subject || undefined,
+      needsInput: draft.needsInput,
+      opening: draft.opening,
+      claims: draft.claims,
+    };
+    // what was typed a moment ago is stored first, so the redraft starts from the student's latest words
+    await saveEdits(draft, body, subject);
     const given = Object.fromEntries(needs.map((n) => [n, inputs[n]?.trim()]).filter(([, v]) => v));
-    await regenerateDraft(user, draft.id, given);
-    setInputs({});
+    const done = await regenerateDraft(user, draft.id, given, new Date(), {
+      mine: keepsMine ? body : undefined,
+    });
     setRegenerating(false);
+    if (!done) {
+      setError('Orbit could not redraft this message. Your text is unchanged.');
+      return;
+    }
+    setInputs({});
+    toast.push({
+      text: keepsMine ? 'Added your line to your message.' : 'Redrafted with your line.',
+      action: {
+        label: 'Undo',
+        onClick: () =>
+          db.outbound
+            .where('id')
+            .equals(draft.id)
+            .filter((m) => m.status === 'draft')
+            .modify(before),
+      },
+      ttl: 8000,
+    });
   };
   return (
     <div>
@@ -269,24 +337,47 @@ export function DraftEditor({
               />
             </div>
           ))}
-          <div className="mt-2 flex items-center gap-2">
-            <Button
-              variant="primary"
-              size="sm"
-              disabled={!canRegenerate || regenerating}
-              onClick={regenerate}
-              data-testid="draft-redraft"
-            >
-              {regenerating ? 'Redrafting…' : 'Redraft with this'}
-            </Button>
-            <span className="text-[12px] text-ink-3">or edit the bracketed line yourself below.</span>
-          </div>
+          {confirmingRedraft ? (
+            <div className="mt-2" role="alertdialog" aria-label="Rewrite your edited message?">
+              <p className="text-[12.5px]" data-testid="draft-redraft-confirm">
+                You have edited this message. Redrafting rewrites all of it, so your edits go. To keep them,
+                write the line into the message yourself instead.
+              </p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <Button size="sm" variant="primary" onClick={() => setConfirmingRedraft(false)}>
+                  Keep my text
+                </Button>
+                <Button size="sm" onClick={() => regenerate(true)} data-testid="draft-redraft-anyway">
+                  Redraft anyway
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+              <Button
+                variant="primary"
+                size="sm"
+                disabled={!canRegenerate || regenerating}
+                onClick={() => regenerate()}
+                data-testid="draft-redraft"
+              >
+                {regenerating ? 'Adding…' : keepsMine ? 'Add to my message' : 'Redraft with this'}
+              </Button>
+              <span className="text-[12px] text-ink-3">
+                {keepsMine
+                  ? 'It goes where the bracketed line is. The rest of your text stays.'
+                  : 'or edit the bracketed line yourself below.'}
+              </span>
+            </div>
+          )}
         </div>
       )}
       {!isLinkedIn && (
         <div className="text-[12px] text-ink-3 mb-1.5 truncate" data-testid="draft-to">
           To: {person?.displayName ?? 'them'}
-          {draft.toEmail ? ` <${draft.toEmail}>` : ''}
+          {draft.toEmail
+            ? ` <${person?.primaryEmail === draft.toEmail ? (person.primaryEmailAsWritten ?? draft.toEmail) : draft.toEmail}>`
+            : ''}
         </div>
       )}
       {!isLinkedIn && !envelope.threaded && (
@@ -420,8 +511,21 @@ export function DraftEditor({
       )}
       {!isLinkedIn && direct === false && !approveLabel && (
         <p className="mt-1.5 text-[12px] text-ink-3 text-right" data-testid="draft-mail-hint">
-          Open in mail app starts the email in your mail app, addressed to {first}. Use Gmail in the browser?
-          Copy text, paste it there, then press I sent it.
+          Opens your mail app with the email to {first}. Gmail in the browser? Use Copy text.
+        </p>
+      )}
+      {!edited && draft.claims?.some((c) => c.factId) && ['thank_you', 'nurture'].includes(draft.kind) && (
+        <p className="mt-1.5 text-[12px] text-ink-3" data-testid="draft-from-notes">
+          Parts of this come from your notes. Read it once as {first} will: names, short forms and who "she"
+          or "he" is.
+        </p>
+      )}
+      {otherAsk && (
+        <p className="mt-1.5 text-[12px] text-warn" data-testid="draft-other-ask">
+          You {otherAsk.status === 'sent' ? 'just sent' : 'also have'} {first} a{' '}
+          {MESSAGE_KIND_LABELS[otherAsk.kind].toLowerCase()}
+          {otherAsk.status === 'sent' ? '' : ' waiting'}. Two favours at once is a lot to ask: send one, and
+          the other a few days after they answer.
         </p>
       )}
       {blocked &&
@@ -457,11 +561,11 @@ export function DraftEditor({
 }
 
 /** Write the student's edits to a draft that is still a draft; the suggested text itself is never stored twice. */
-function saveEdits(draft: OutboundMessage, body: string, subject: string): void {
+function saveEdits(draft: OutboundMessage, body: string, subject: string): Promise<unknown> {
   const changedBody = body !== (draft.bodyFinal ?? draft.bodyDraft);
   const changedSubject = subject !== (draft.subject ?? '');
-  if (!changedBody && !changedSubject) return;
-  db.outbound
+  if (!changedBody && !changedSubject) return Promise.resolve();
+  return db.outbound
     .where('id')
     .equals(draft.id)
     .filter((m) => m.status === 'draft')
@@ -532,13 +636,13 @@ export function OutboxStatus({ draft, onClose }: { draft: OutboundMessage; onClo
       draft.handoffVia === 'copy'
         ? draft.externalThreadId
           ? `Copied. In Gmail, open your thread "${draft.subject?.replace(/^re:\s*/i, '') ?? 'with them'}" with ${name}, reply with the text, then press I sent it.`
-          : `Copied. Paste it into a new email to ${person?.primaryEmail ?? name} in Gmail, send it, then press I sent it.`
+          : `Copied. In Gmail, start a new email to ${person?.primaryEmail ?? name}, paste the message, add the subject below, send it, then press I sent it.`
         : draft.channel === 'gmail'
           ? draft.externalThreadId
             ? `Opened in your mail app as a new email to ${name}. Send it there, then press I sent it. Nothing opened? Copy the text into Gmail.`
             : `Opened in your mail app, addressed to ${name}. Send it there, then press I sent it. Nothing opened? Copy the text into Gmail.`
           : link?.via === 'linkedin_connect'
-            ? `On ${name}'s LinkedIn profile, click Connect, then Add a note, and paste the note. Press I sent it once the request is out.`
+            ? `On ${name}'s LinkedIn profile, click Connect, then Add a note, and paste the note. In the LinkedIn phone app, tap More, then Personalize invite, so the request does not go out without it. Press I sent it once the request is out.`
             : `Paste the message into LinkedIn and send it to ${name}, then press I sent it.`;
     actions = (
       <>
@@ -563,7 +667,7 @@ export function OutboxStatus({ draft, onClose }: { draft: OutboundMessage; onClo
             })
           }
         >
-          I sent it
+          I sent it to {name}
         </Button>
         {link && (
           <Button
@@ -584,11 +688,9 @@ export function OutboxStatus({ draft, onClose }: { draft: OutboundMessage; onClo
           disabled={working}
           onClick={async () =>
             toast.push({
-              text: (await copyText(
-                draft.channel === 'gmail' && draft.subject ? `Subject: ${draft.subject}\n\n${text}` : text,
-              ))
+              text: (await copyText(text))
                 ? draft.channel === 'gmail'
-                  ? `Copied. Paste it into a new email to ${person?.primaryEmail ?? name}.`
+                  ? `Copied the message. Paste it into the email to ${person?.primaryEmail ?? name}.`
                   : 'Copied.'
                 : 'Select the text and copy it.',
             })
@@ -618,6 +720,30 @@ export function OutboxStatus({ draft, onClose }: { draft: OutboundMessage; onClo
   return (
     <div className="rounded-lg border border-line bg-canvas-2 p-3" data-testid={`outbox-${draft.status}`}>
       <p className="text-[13px] text-ink-2 whitespace-pre-line line-clamp-3">{text}</p>
+      {draft.status === 'handed_off' &&
+        draft.channel === 'gmail' &&
+        draft.subject &&
+        !(draft.handoffVia === 'copy' && draft.externalThreadId) && (
+          <div
+            className="mt-1.5 flex items-center gap-2 text-[12.5px] text-ink-3"
+            data-testid="handoff-subject"
+          >
+            <span className="min-w-0 truncate">Subject: {draft.subject}</span>
+            <button
+              type="button"
+              className="shrink-0 underline underline-offset-2 hover:text-ink"
+              onClick={async () =>
+                toast.push({
+                  text: (await copyText(draft.subject ?? ''))
+                    ? 'Copied the subject.'
+                    : 'Select the subject and copy it.',
+                })
+              }
+            >
+              Copy subject
+            </button>
+          </div>
+        )}
       <div className="mt-2 flex items-center gap-2 flex-wrap text-[13px]">
         <span className="font-medium mr-auto" aria-live="polite">
           {line}

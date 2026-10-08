@@ -224,6 +224,39 @@ function youVerb(w: string, singular: boolean): string {
   return l;
 }
 
+/**
+ * Note shorthand that reads wrong in a message ("for McK", "after first round apps", "w/ her team"), written out. Only
+ * forms that cannot mean anything else in a recruiting note are expanded.
+ */
+export function expandShorthand(s: string): string {
+  return (
+    s
+      .replace(/\bMcK\b/g, 'McKinsey')
+      .replace(/\bGS\b/g, 'Goldman Sachs')
+      .replace(/\bJPM\b/g, 'J.P. Morgan')
+      .replace(/\bBofA\b/g, 'Bank of America')
+      .replace(/\bS&T\b/g, 'sales and trading')
+      .replace(
+        /\b(first|second|final|1st|2nd)[ -]round apps\b/gi,
+        (_, r: string) => `${r.toLowerCase()}-round applications`,
+      )
+      .replace(/\b(my|the|summer|internship|recruiting|job|full-time) apps\b/gi, '$1 applications')
+      .replace(/\bw\/o\s*/gi, 'without ')
+      .replace(/\bw\/\s*/gi, 'with ')
+      .replace(/\bb\/c\b/gi, 'because')
+      .replace(/\bppl\b/gi, 'people')
+      .replace(/\bmtg\b/gi, 'meeting')
+      .replace(/\bmgr\b/gi, 'manager')
+      // not shorthand, but a phrase the playbook keeps out of messages
+      .replace(
+        /\breach(ed|es|ing)? out to\b/gi,
+        (_, x?: string) =>
+          `${x === 'ed' ? 'got' : x === 'es' ? 'gets' : x === 'ing' ? 'getting' : 'get'} in touch with`,
+      )
+      .replace(/\bco-?workers?\b/gi, (m) => (m.endsWith('s') ? 'colleagues' : 'colleague'))
+  );
+}
+
 /** In the student's notes "you" is the generic you (the candidate), never the person: make it "I". */
 function genericYouToI(s: string): string {
   return s
@@ -251,7 +284,7 @@ export function clause(
   raw: string,
   person: { firstName?: string; fullName?: string; lastName?: string } = {},
 ): FactClause | undefined {
-  let t = strip(raw);
+  let t = expandShorthand(strip(raw));
   if (!t || /[?\n]/.test(t) || t.split(' ').length > 34) return undefined;
   if ((t.match(/"/g) ?? []).length % 2) return undefined;
   t = genericYouToI(t);
@@ -320,6 +353,16 @@ export function clause(
     t = t.replace(/\btheir\b/gi, (m, at: number) => (orgBefore(at) ? m : 'your'));
     t = t
       .replace(/\b(his)\b/gi, 'your')
+      // "her colleague" in a note about her is the person's colleague: "your colleague" in a message to her
+      .replace(
+        /\bher (colleagues?|team(mates?)?|manager|boss|firm|group|office|company|friends?|classmates?|recruiters?|contacts?|old team|former team|desk|org)\b/gi,
+        'your $1',
+      )
+      // "update her after first-round applications": the person is the one to update
+      .replace(
+        /\b(update|tell|email|text|ping|message|thank|call|send|ask|remind|show|let|keep) (her|him)\b/gi,
+        '$1 you',
+      )
       .replace(/\b(themselves|himself|herself)\b/gi, 'yourself')
       .replace(/^you are\b/, "you're");
     if (names.length) t = t.replace(new RegExp(`\\b${nameRe}\\b`, 'g'), 'you');

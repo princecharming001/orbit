@@ -3,6 +3,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { AddPersonDialog } from '../components/AddPerson';
+import { chatTimeLabel } from '../components/ScheduleChat';
 import { db } from '../db/schema';
 import { ingestNote, previewNoteMatch, rematchNote } from '../engine/notes';
 import { useSession } from '../state/session';
@@ -93,10 +94,37 @@ export function NotesNew() {
         `${p.displayName} ${p.currentOrganizationRaw ?? ''}`.toLowerCase().includes(q)),
   );
   const person = people.find((p) => p.id === personId);
+  // the chat that just ended sets the note's time, unless the student already picked one
+  const [whenTouched, setWhenTouched] = useState(false);
+  useEffect(() => {
+    if (!recentEvent || whenTouched || existing) return;
+    const start = new Date(recentEvent.startAt);
+    if (start.getTime() > Date.now()) return;
+    setWhen(new Date(start.getTime() - start.getTimezoneOffset() * 60_000).toISOString().slice(0, 16));
+  }, [recentEvent?.id, whenTouched, existing]);
   const preview = useMemo(
     () => (!existing && !personId && user ? previewNoteMatch(text, people, user, calendarPerson) : undefined),
     [existing, personId, user, text, people, calendarPerson],
   );
+  // a chat booked with them after the note's time: the note is saved to their page, the chat stays booked
+  const filedWith = personId || (preview?.kind === 'person' ? preview.person.id : '');
+  const bookedLater = useLiveQuery(
+    () =>
+      userId && filedWith
+        ? db.events
+            .where('userId')
+            .equals(userId)
+            .filter(
+              (e) =>
+                e.status !== 'cancelled' &&
+                e.attendeePersonIds.includes(filedWith) &&
+                new Date(e.startAt).getTime() > new Date(when).getTime() + 15 * 60_000,
+            )
+            .first()
+        : undefined,
+    [userId, filedWith, when],
+  );
+
   if (!user) return null;
   const save = async () => {
     setBusy(true);
@@ -265,7 +293,7 @@ export function NotesNew() {
                     Orbit will file this with{' '}
                     <strong className="font-medium">{preview.person.displayName}</strong>
                     {preview.why === 'calendar'
-                      ? ', from the chat on your calendar that just ended.'
+                      ? ', from your chat with them that just ended.'
                       : ', who the note names.'}{' '}
                     <button
                       type="button"
@@ -302,8 +330,18 @@ export function NotesNew() {
               id="capture-when"
               type="datetime-local"
               value={when}
-              onChange={(e) => setWhen(e.target.value)}
+              onChange={(e) => {
+                setWhenTouched(true);
+                setWhen(e.target.value);
+              }}
             />
+            {bookedLater && (
+              <p className="mt-1.5 text-[12px] text-warn" data-testid="capture-booked-later">
+                Your chat with {people.find((p) => p.id === filedWith)?.firstName ?? 'them'} is booked for{' '}
+                {chatTimeLabel(bookedLater.startAt)}, after this time. Orbit adds the note to their page and
+                keeps the chat booked. Notes from that chat? Set When to after it started.
+              </p>
+            )}
           </div>
         </div>
         {!existing && (

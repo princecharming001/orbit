@@ -197,7 +197,8 @@ export function resumeSectionOf(rawLine: string): Section | undefined {
   return undefined;
 }
 
-const BULLET = /^[-•*▪◦●➢►–]\s*/;
+// the glyphs resumes and PDF-to-text use for a bullet, including the middle dot and the private-use dot from Word
+const BULLET = /^(?:[-•*▪◦●➢►–·∙‣⁃○■□✓✔➤→\uF0B7\uF0A7\uF076\uF0D8]|o(?=\s))\s*/;
 /** Employer, a dash, the role, the dates in brackets, then optionally what they did, all on one line. */
 const INLINE_ENTRY = /^([^—–]+?)\s+[—–-]\s+([^().]+?)\s*\(([^)]*\d{4}[^)]*)\)[.,;:]?\s*(.*)$/;
 const stripBullet = (l: string) => l.replace(BULLET, '').trim();
@@ -264,10 +265,12 @@ function headerParts(line: string, e: Entry): string[] {
     s = s.slice(0, loc.index);
   }
   return s
-    .split(/\s{3,}|\s+[|–—@]\s+|\s+-\s+|,\s+/)
+    .split(/\s{3,}|\s+[|–—@·•]\s+|\s+-\s+|,\s+/)
     .map((p) =>
       p
-        .replace(/^[\s,|–—-]+|[\s,|–—-]+$/g, '')
+        .replace(/^[\s,|–—·•.-]+|[\s,|–—·•-]+$/g, '')
+        // a stray full stop after a name ("Ross School of Business .") is not part of it
+        .replace(/\s+\.$/, '')
         .replace(/\s+/g, ' ')
         .trim(),
     )
@@ -277,7 +280,23 @@ function headerParts(line: string, e: Entry): string[] {
 /** "Detroit MI" or "New York, NY" on its own: a place, not part of the title. */
 const CITY_STATE = new RegExp(`^[A-Z][A-Za-z.'’]+(?:\\s[A-Z][A-Za-z.'’]+){0,2},?\\s(?:${US_STATE})$`);
 
-function assignParts(parts: string[], e: Entry): void {
+/** A two-letter state code or a state's name, the second half of "Detroit, MI" once a header is split on commas. */
+const STATE_PART = new RegExp(
+  `^(?:${US_STATE}|Michigan|California|New York|Illinois|Massachusetts|Texas|Pennsylvania|Ohio|Georgia|Washington|Virginia|North Carolina|New Jersey|Florida|Colorado|Indiana|Wisconsin|Minnesota|Maryland|Connecticut)$`,
+);
+
+function assignParts(rawParts: string[], e: Entry): void {
+  // "Detroit", "MI" split apart by the comma between them: one place, never part of the role
+  const parts: string[] = [];
+  for (const p of rawParts) {
+    const prev = parts[parts.length - 1];
+    if (prev && STATE_PART.test(p.trim()) && /^[A-Z][A-Za-z.'’]+(?:\s[A-Z][A-Za-z.'’]+){0,2}$/.test(prev)) {
+      parts.pop();
+      if (e.section !== 'education') e.location ??= `${prev}, ${p.trim()}`;
+      continue;
+    }
+    parts.push(p);
+  }
   for (const raw of parts) {
     const p = fixCaps(raw);
     if (e.section !== 'education' && CITY_STATE.test(p)) {
@@ -449,6 +468,11 @@ export function heuristicResumeParse(
     const kind: ResumeFacet['kind'] =
       cur.section === 'education' ? 'education' : cur.section === 'project' ? 'project' : 'experience';
     const sentence = (b: string) => (/[.!?]$/.test(b) ? b : `${b}.`);
+    // a line that is only punctuation (a stray "." left by a PDF) adds nothing
+    cur.body = cur.body.map((b) => b.replace(/\s+([.,;:])/g, '$1').trim()).filter((b) => /\w{2}/.test(b));
+    cur.details = cur.details
+      .map((b) => b.replace(/\s+([.,;:])/g, '$1').trim())
+      .filter((b) => /\w{2}/.test(b));
     const head = [cur.title, cur.org].filter(Boolean).join(', ');
     const when = cur.range ? cur.range[0] : cur.single;
     // bullets describe the work; entries without bullets (education) read as their header plus details
@@ -579,7 +603,15 @@ export function heuristicResumeParse(
       e.details.push(line);
       continue;
     }
-    const complete = !!e && !!e.title && !!e.org && (!!e.range || !!e.single);
+    // a role and an employer already, and this line brings no dates: it starts the next entry ("Treasurer, Club
+    // soccer" then "Black Business Students Association"), it does not rename the one above
+    const complete =
+      !!e &&
+      !!e.title &&
+      !!e.org &&
+      (!!e.range ||
+        !!e.single ||
+        (section !== 'education' && !DATE_RANGE.test(line) && !DATE_SINGLE.test(line)));
     if (!e || e.body.length > 0 || e.details.length > 0 || complete) {
       finish();
       e = newEntry(section);

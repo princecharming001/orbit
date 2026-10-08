@@ -235,6 +235,9 @@ export async function ingestNote(user: User, inp: CaptureInput, now = new Date()
         .first()
     : undefined;
   const sure = ids.length > 0 && confidence >= 0.8;
+  // a note dated before the chat booked with them is not from that chat (prep, or an earlier talk): it lands on
+  // their page but does not mark the booked chat done, so the chat stays under Coming up
+  const bookedLater = !!primary && (await bookedAfter(user.id, primary.id, occurredAt));
   const note: MeetingNote = {
     id: newId('n'),
     userId: user.id,
@@ -252,7 +255,7 @@ export async function ingestNote(user: User, inp: CaptureInput, now = new Date()
     attendees,
     personIds: ids,
     // an unconfirmed guess touches nothing in the pipeline until the student confirms it
-    chatId: sure ? chat?.id : undefined,
+    chatId: sure && !bookedLater ? chat?.id : undefined,
     calendarEventId,
     matchStatus: sure ? 'auto' : 'unmatched',
     matchConfidence: confidence,
@@ -496,6 +499,22 @@ async function settleDraftsCiting(
   }
 }
 
+/** A chat with this person is booked to start after `at`: a note from then is not about that chat. */
+export async function bookedAfter(userId: string, personId: string, at: string): Promise<boolean> {
+  const t = new Date(at).getTime() + 15 * 60_000;
+  const later = await db.events
+    .where('userId')
+    .equals(userId)
+    .filter(
+      (e) =>
+        e.status !== 'cancelled' &&
+        e.attendeePersonIds.includes(personId) &&
+        new Date(e.startAt).getTime() > t,
+    )
+    .first();
+  return !!later;
+}
+
 export async function processNote(user: User, note: MeetingNote, now = new Date()): Promise<void> {
   const notePeople = (await db.people.bulkGet(note.personIds)).filter((p): p is Person => !!p);
   const primary = notePeople.find((p) => p.id === note.personIds[0]);
@@ -518,7 +537,8 @@ export async function processNote(user: User, note: MeetingNote, now = new Date(
   // A note is written after a conversation. Someone the student met without messaging first (a career fair, a club
   // event, an intro in person) has no chat yet: open one at "completed", so the thank-you comes next, not a cold
   // first message to the person they just talked to.
-  if (!note.chatId) {
+  const early = await bookedAfter(user.id, primary.id, note.occurredAt);
+  if (!note.chatId && !early) {
     const open = await db.chats
       .where('personId')
       .equals(primary.id)
@@ -695,7 +715,7 @@ export async function processNote(user: User, note: MeetingNote, now = new Date(
       summary: `Notes: ${note.title ?? ''}`,
       weight: 0.3,
     });
-    if (!note.calendarEventId)
+    if (!note.calendarEventId && !early)
       await addTouchpoint({
         userId: user.id,
         personId: p.id,

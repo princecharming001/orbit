@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { pointPhrase, roleNoun } from '../drafts/phrasing';
+import { expandShorthand, pointPhrase, roleNoun } from '../drafts/phrasing';
 import { financeFirmKind, sectorOf, seniorityOf, yearLabel } from '../drafts/sector';
 import {
   BANNED_PHRASES,
@@ -19,7 +19,9 @@ import {
   schoolShort,
   sinceLabel,
   targetLabel,
+  WHY_THEM_GAP,
   whenLabel,
+  whyThemSentence,
   wordsIn,
 } from '../drafts/templates';
 import { isBlocked, unsupportedDetails, validateDraft } from '../drafts/validate';
@@ -1669,5 +1671,95 @@ describe('usability round 2: thank-you phrasing from typed notes', () => {
     expect(promiseLine('Send her my resume by Friday and share my side project link')).toBe(
       "As promised, I'll send you my resume by Friday and share my side project link.",
     );
+  });
+});
+
+describe('usability round 5', () => {
+  it('a thank-you built from note shorthand writes it out and speaks to the person ("your colleague", "McKinsey")', () => {
+    const facts = [
+      fact(
+        'a',
+        'advice',
+        'told me to reach out to her colleague Marcus Lee who runs Ross recruiting events for McK',
+      ),
+    ];
+    const t = generateDraft(
+      base({
+        kind: 'thank_you',
+        facts,
+        person: {
+          ...base().person,
+          firstName: 'Rachel',
+          lastName: 'Kim',
+          fullName: 'Rachel Kim',
+          org: 'McKinsey',
+        },
+        chat: { completedAt: '2026-10-05T19:00:00Z' },
+      }),
+    );
+    expect(t.body).toMatch(/your colleague Marcus Lee/);
+    expect(t.body).toMatch(/for McKinsey/);
+    expect(t.body).not.toMatch(/\bher colleague\b|\bMcK\b|reach out/);
+    expect(expandShorthand('update her after first round apps')).toBe(
+      'update her after first-round applications',
+    );
+    expect(clause('She said to update her after first round apps', { firstName: 'Rachel' })?.text).toBe(
+      'you said to update you after first-round applications',
+    );
+  });
+  it('an offer and a promise about the same resume get one timing, and the note keeps to its own length', () => {
+    const facts = [
+      fact('o', 'offer', 'offered to look over my resume before applications open'),
+      fact('a', 'advice', 'the key is showing how you handled ambiguity in one project story'),
+    ];
+    const t = generateDraft(
+      base({
+        kind: 'thank_you',
+        facts,
+        chat: { completedAt: '2026-10-05T19:00:00Z' },
+        promises: ['I will send my resume by Monday.'],
+      }),
+    );
+    expect(t.body).not.toMatch(/when the timing is right/);
+    expect(t.body).toMatch(/resume/);
+    expect(wordsIn(t.body)).toBeLessThanOrEqual(MAX_WORDS.thank_you);
+  });
+  it('a long "Why them" line in a LinkedIn note keeps the real question instead of "a few questions"', () => {
+    const long = base({
+      channel: 'linkedin',
+      person: { ...base().person, isAlumni: false },
+      facts: [fact('c', 'connection', 'We both rowed crew at Michigan and I read your post on staffing')],
+    });
+    const d = generateDraft(long);
+    expect(d.bodyShort ?? d.body).not.toMatch(/a few questions/);
+  });
+  it('the "Why them" gap is found in a draft, and a typed line drops into it as a sentence', () => {
+    const d = generateDraft(base({ person: { ...base().person, isAlumni: false } }));
+    expect(WHY_THEM_GAP.test(d.body)).toBe(true);
+    expect(d.body.replace(WHY_THEM_GAP, whyThemSentence('read your post on staffing'))).toMatch(
+      /I read your post on staffing\./,
+    );
+  });
+});
+
+describe('greeting a peer (usability round 5)', () => {
+  it('a student club president is "Hi Jake", not "Dear Jake Morrison"', () => {
+    const d = generateDraft(
+      base({
+        person: {
+          ...base().person,
+          firstName: 'Jake',
+          lastName: 'Morrison',
+          fullName: 'Jake Morrison',
+          title: 'President, Michigan Investment Club',
+          org: 'University of Michigan',
+          isAlumni: false,
+          strength: 0.1,
+        },
+        user: { ...base().user, targetFunctions: ['ib'] },
+        facts: [fact('c', 'connection', 'we are both in the Ross finance club')],
+      }),
+    );
+    expect(d.body).not.toMatch(/^Dear Jake Morrison/);
   });
 });

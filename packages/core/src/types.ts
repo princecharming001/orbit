@@ -282,6 +282,8 @@ export interface Person {
   lastName: string;
   nameNormalized: string;
   primaryEmail?: string;
+  /** the primary address as the student's source wrote it ("marcus.bell@gmail.com"); `primaryEmail` is the matching key */
+  primaryEmailAsWritten?: string;
   emails: string[];
   linkedinUrl?: string;
   linkedinSlug?: string;

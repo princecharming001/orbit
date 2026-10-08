@@ -5,7 +5,7 @@ import { ArrowDown, ArrowUp, ChevronRight } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { AddPersonButton } from '../components/AddPerson';
-import { ScheduleChatDialog } from '../components/ScheduleChat';
+import { ConfirmEarlyDone, chatTimeLabel, ScheduleChatDialog } from '../components/ScheduleChat';
 import { KIND_LABEL } from '../components/SuggestionCard';
 import { db } from '../db/schema';
 import { moveChat, upcomingMeeting } from '../engine/move';
@@ -36,6 +36,8 @@ const WAITING_STAGES: ChatStage[] = ['outreach_sent', 'replied', 'scheduling'];
 export function wentQuiet(chat: CoffeeChat, now = new Date()): boolean {
   if (!WAITING_STAGES.includes(chat.stage) || !chat.lastOutboundAt) return false;
   if (chat.lastInboundAt && chat.lastInboundAt >= chat.lastOutboundAt) return false;
+  // moved on since the student last wrote ("They replied", a move on the board): an answer Orbit cannot see came in
+  if (chat.stage !== 'outreach_sent' && chat.stageEnteredAt > chat.lastOutboundAt) return false;
   return now.getTime() - new Date(chat.lastOutboundAt).getTime() >= QUIET_DAYS * DAY;
 }
 
@@ -67,6 +69,8 @@ export function Pipeline() {
   // active chats first, in pipeline order; the newest activity first within a stage
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: 'stage', dir: 1 });
   const [asking, setAsking] = useState<CoffeeChat>();
+  // a chat whose meeting is still ahead, about to be marked done: asked first
+  const [early, setEarly] = useState<{ chat: CoffeeChat; at: string }>();
   const nav = useNavigate();
   const toast = useToast();
   const hints = useHints();
@@ -97,6 +101,23 @@ export function Pipeline() {
           : false,
       [userId],
     ) ?? false;
+  // booked chats still ahead, so a Scheduled card says when, not how long it has sat there
+  const meetings =
+    useLiveQuery(
+      () =>
+        userId
+          ? db.events
+              .where('userId')
+              .equals(userId)
+              .filter((e) => e.status !== 'cancelled' && new Date(e.endAt).getTime() > Date.now())
+              .toArray()
+          : [],
+      [userId],
+    ) ?? [];
+  const meetingFor = (chat: CoffeeChat) =>
+    meetings
+      .filter((e) => e.chatId === chat.id || e.attendeePersonIds.includes(chat.personId))
+      .sort((a, b) => a.startAt.localeCompare(b.startAt))[0];
   const tcs =
     useLiveQuery(
       () => (userId ? db.targetCompanies.where('userId').equals(userId).toArray() : []),
@@ -129,8 +150,13 @@ export function Pipeline() {
   );
   const nextFor = (chatId: string, personId: string) =>
     suggestions.find((s) => s.chatId === chatId || (s.personId === personId && !s.chatId));
-  const move = async (chat: CoffeeChat, to: ChatStage) => {
+  const move = async (chat: CoffeeChat, to: ChatStage, sure = false) => {
     if (chat.stage === to || !user) return;
+    const ahead = to === 'completed' && !sure ? await upcomingMeeting(chat) : undefined;
+    if (ahead && new Date(ahead.startAt).getTime() > Date.now()) {
+      setEarly({ chat, at: ahead.startAt });
+      return;
+    }
     const from = chat.stage;
     await moveChat(user, chat, to, 'user:drag');
     const name = byId.get(chat.personId)?.firstName ?? 'This chat';
@@ -153,7 +179,9 @@ export function Pipeline() {
           ? thanks
             ? ' Your thank-you draft is on Today.'
             : ' Add a note about the chat and Orbit drafts your thank-you from it.'
-          : ''
+          : to === 'replied'
+            ? ' Your reply is on Today.'
+            : ''
       }`,
       action: {
         label: 'Undo',
@@ -331,7 +359,10 @@ export function Pipeline() {
                     style={{ background: STAGE_COLOR[stage] }}
                   />
                   <span
-                    className={cx('text-[13px] font-medium', items.length ? 'whitespace-nowrap' : 'truncate')}
+                    className={cx(
+                      'text-[13px] font-medium',
+                      items.length ? 'whitespace-nowrap' : 'leading-tight',
+                    )}
                   >
                     {STAGE_LABELS[stage]}
                   </span>
@@ -360,7 +391,10 @@ export function Pipeline() {
                               {person.displayName}
                             </Link>
                             {person.currentTitle && (
-                              <div className="text-[12px] text-ink-3 truncate" title={person.currentTitle}>
+                              <div
+                                className="text-[12px] text-ink-3 line-clamp-2 leading-snug"
+                                title={person.currentTitle}
+                              >
                                 {person.currentTitle}
                               </div>
                             )}
@@ -372,10 +406,11 @@ export function Pipeline() {
                           </div>
                         </div>
                         <div className="mt-2 flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-[12px] text-ink-3">
-                          <span className="whitespace-nowrap">
-                            {daysLabel(chat.stageEnteredAt)} in stage
-                            {wentQuiet(chat) && <span className="text-warn"> · quiet</span>}
-                          </span>
+                          <CardWhen
+                            chat={chat}
+                            meetingAt={meetingFor(chat)?.startAt}
+                            onSetTime={() => setAsking(chat)}
+                          />
                           {next && <NextLink s={next} />}
                         </div>
                         {chat.warmUp && stage === 'warming' && (
@@ -514,11 +549,27 @@ export function Pipeline() {
           />
         ))}
       {view === 'companies' && chats.length > 0 && <CompaniesView rows={rows} targetNames={targetNames} />}
-      <ScheduleChatDialog
-        chat={asking}
-        firstName={(asking && byId.get(asking.personId)?.firstName) ?? 'them'}
-        onClose={() => setAsking(undefined)}
-      />
+      {asking && (
+        <ScheduleChatDialog
+          key={asking.id}
+          chat={asking}
+          firstName={byId.get(asking.personId)?.firstName ?? 'them'}
+          current={meetingFor(asking)?.startAt}
+          onClose={() => setAsking(undefined)}
+        />
+      )}
+      {early && (
+        <ConfirmEarlyDone
+          firstName={byId.get(early.chat.personId)?.firstName ?? 'them'}
+          at={early.at}
+          onClose={() => setEarly(undefined)}
+          onConfirm={() => {
+            const c = early.chat;
+            setEarly(undefined);
+            move(c, 'completed', true);
+          }}
+        />
+      )}
       {user && rows.length === 0 && chats.length > 0 && view === 'board' && (
         <p className="text-[13px] text-ink-3 mt-2">
           {onlyQuiet
@@ -626,6 +677,54 @@ function useNarrow(): boolean {
   return !!narrow;
 }
 
+/**
+ * The line at the foot of a board card: when a booked chat is (or a button to set it), who went quiet and since when
+ * (the same words as Today), otherwise how long the card has sat in its stage.
+ */
+function CardWhen({
+  chat,
+  meetingAt,
+  onSetTime,
+}: {
+  chat: CoffeeChat;
+  meetingAt?: string;
+  onSetTime: () => void;
+}) {
+  if (chat.stage === 'scheduled')
+    return meetingAt ? (
+      <span className="relative z-10 inline-flex items-center gap-1" data-testid="chat-card-time">
+        Chat {chatTimeLabel(meetingAt)}
+        <button
+          type="button"
+          className="underline underline-offset-2 hover:text-ink"
+          onClick={onSetTime}
+          aria-label="Change the time"
+        >
+          Change
+        </button>
+      </span>
+    ) : (
+      <span className="relative z-10 inline-flex items-center gap-1.5">
+        <span className="text-warn">Time not set</span>
+        <button
+          type="button"
+          className="h-6 px-2 rounded-full border border-line text-ink-2 hover:bg-canvas-2"
+          onClick={onSetTime}
+          data-testid="chat-card-set-time"
+        >
+          Set time
+        </button>
+      </span>
+    );
+  if (wentQuiet(chat))
+    return (
+      <span className="whitespace-nowrap">
+        You wrote {relDate(chat.lastOutboundAt)} <span className="text-warn">· quiet</span>
+      </span>
+    );
+  return <span className="whitespace-nowrap">{daysLabel(chat.stageEnteredAt)} in stage</span>;
+}
+
 function daysLabel(since: string): string {
   const d = Math.max(0, Math.floor((Date.now() - new Date(since).getTime()) / 86_400_000));
   return d === 0 ? 'Under a day' : d === 1 ? '1 day' : `${d} days`;
@@ -686,12 +785,14 @@ function CompaniesView({
   }
   const list = [...groups.values()].sort((a, b) => b.people.size - a.people.size);
   if (!list.length) return <EmptyState title="No companies yet" />;
+  // three columns, with the target mark and the last activity under the company, so it fits a phone without a sideways
+  // scroll
   return (
     <div className="border border-line rounded-[var(--radius-card)] overflow-x-auto">
-      <table className="w-full text-[13.5px] min-w-[560px]">
+      <table className="w-full text-[13.5px]">
         <thead className="bg-canvas-2 text-ink-3 text-[12px] uppercase tracking-wide">
           <tr>
-            {['Company', 'People', 'Stages', 'Target', 'Last activity'].map((h) => (
+            {['Company', 'People', 'Stages'].map((h) => (
               <th key={h} className="text-left font-medium px-3 h-9">
                 {h}
               </th>
@@ -701,34 +802,34 @@ function CompaniesView({
         <tbody className="divide-y divide-line">
           {list.map((g) => (
             <tr key={g.name}>
-              <td className="px-3 h-11 font-medium">
-                {g.orgId ? (
-                  <Link to={`/companies/${g.orgId}`} className="hover:underline">
-                    {g.name}
-                  </Link>
-                ) : (
-                  g.name
-                )}
+              <td className="px-3 py-2 align-top">
+                <span className="flex flex-wrap items-center gap-1.5 font-medium">
+                  {g.orgId ? (
+                    <Link to={`/companies/${g.orgId}`} className="hover:underline">
+                      {g.name}
+                    </Link>
+                  ) : (
+                    g.name
+                  )}
+                  {targetNames.has(normalizeCompany(g.name)) && (
+                    <Chip tone="accent" className="h-5">
+                      Target
+                    </Chip>
+                  )}
+                </span>
+                <span className="block text-[12px] text-ink-3">Last activity {relDate(g.last)}</span>
               </td>
-              <td className="px-3 tabular">{g.people.size}</td>
-              <td className="px-3">
+              <td className="px-3 py-2 align-top tabular">{g.people.size}</td>
+              <td className="px-3 py-2 align-top">
                 <span className="flex flex-wrap gap-1">
-                  {[...g.byStage.entries()].map(([s, n]) => (
-                    <Chip key={s}>
-                      <span className="w-1.5 h-1.5 rounded-full" style={{ background: STAGE_COLOR[s] }} />
-                      {STAGE_LABELS[s]} {n}
+                  {[...g.byStage.entries()].map(([st, n]) => (
+                    <Chip key={st}>
+                      <span className="w-1.5 h-1.5 rounded-full" style={{ background: STAGE_COLOR[st] }} />
+                      {STAGE_LABELS[st]} {n}
                     </Chip>
                   ))}
                 </span>
               </td>
-              <td className="px-3">
-                {targetNames.has(normalizeCompany(g.name)) ? (
-                  <Chip tone="accent">Target</Chip>
-                ) : (
-                  <span className="text-ink-3">—</span>
-                )}
-              </td>
-              <td className="px-3 text-ink-2">{relDate(g.last)}</td>
             </tr>
           ))}
         </tbody>

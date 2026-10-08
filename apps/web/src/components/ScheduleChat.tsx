@@ -17,14 +17,18 @@ export function ScheduleChatDialog({
   chat,
   firstName,
   onClose,
+  current,
 }: {
   chat: CoffeeChat | undefined;
   firstName: string;
   onClose: () => void;
+  /** the time already saved, when the student is changing it */
+  current?: string;
 }) {
   const { user } = useSession();
   const toast = useToast();
   const [when, setWhen] = useState(() => {
+    if (current && new Date(current).getTime() > Date.now()) return localInput(new Date(current));
     const d = new Date(Date.now() + 86_400_000);
     d.setHours(12, 0, 0, 0);
     return localInput(d);
@@ -52,7 +56,7 @@ export function ScheduleChatDialog({
       <div className="space-y-3 text-[13.5px]" data-testid="schedule-chat">
         <p className="text-ink-2">
           Orbit shows it under Coming up on Today, puts prep there the day before, and reminds you to say
-          thank you after.
+          thank you after. Not booked yet? Set it later from {firstName}'s page or the Pipeline card.
         </p>
         <div className="grid grid-cols-[1fr_auto] gap-3">
           <div>
@@ -82,7 +86,53 @@ export function ScheduleChatDialog({
             Save the time
           </Button>
           <Button variant="ghost" onClick={onClose}>
-            Not set yet
+            {current ? 'Keep the time' : 'Not set yet'}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/** "Wed, Oct 7, 11:30 AM": when a booked chat is, on the Pipeline card and the person page. */
+export function chatTimeLabel(iso: string): string {
+  return new Date(iso).toLocaleString('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
+/**
+ * Asked before a chat whose meeting is still ahead is marked done: marking it done writes a thank-you for a talk that
+ * has not happened.
+ */
+export function ConfirmEarlyDone({
+  firstName,
+  at,
+  onConfirm,
+  onClose,
+}: {
+  firstName: string;
+  at: string;
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <Modal open onClose={onClose} title={`Mark your chat with ${firstName} as done?`}>
+      <div className="space-y-3 text-[13.5px]" data-testid="confirm-early-done">
+        <p className="text-ink-2">
+          It is on your list for {chatTimeLabel(at)}, which has not come yet. Marking it done now drafts a
+          thank-you for a chat that has not happened.
+        </p>
+        <div className="flex flex-wrap gap-2 pt-1">
+          <Button variant="primary" onClick={onClose}>
+            Keep it scheduled
+          </Button>
+          <Button onClick={onConfirm} data-testid="confirm-early-done-yes">
+            Mark done anyway
           </Button>
         </div>
       </div>

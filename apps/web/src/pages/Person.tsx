@@ -27,7 +27,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { runApproval } from '../components/approve';
 import { DraftEditor, handoffWhere, OutboxStatus } from '../components/DraftEditor';
-import { ScheduleChatDialog } from '../components/ScheduleChat';
+import { ConfirmEarlyDone, chatTimeLabel, ScheduleChatDialog } from '../components/ScheduleChat';
 import { SuggestionCard } from '../components/SuggestionCard';
 import { feedback } from '../db/repo';
 import { db } from '../db/schema';
@@ -37,6 +37,7 @@ import {
   needsWarmUp,
   refreshPersonSummary,
   startWarmUpOrOutreach,
+  unsentDraftOf,
 } from '../engine/brief';
 import { readSuggestedNames, type SuggestedName, saveSuggestedContacts } from '../engine/introductions';
 import { moveChat, upcomingMeeting } from '../engine/move';
@@ -44,6 +45,21 @@ import { buildPrep, personSummary, toYou } from '../engine/prep';
 import { useSession } from '../state/session';
 import { Avatar, Button, Card, Chip, cx, Modal, NotFound, relDate, Select, Tabs, useToast } from '../ui';
 import { STAGE_COLOR, StrengthDots } from './Pipeline';
+
+/**
+ * "Last touch 3 days ago", or "Connected on LinkedIn Mar 27" when accepting a connection is all there has been: a
+ * connection is not a conversation.
+ */
+function lastTouchLabel(
+  person: Pick<Person, 'lastInteractionAt' | 'linkedinConnectedOn'>,
+  tps: { kind: string }[],
+): string {
+  const talked = tps.some((t) => t.kind !== 'linkedin_connected');
+  if (!talked && person.linkedinConnectedOn)
+    return `Connected on LinkedIn ${shortDate(person.linkedinConnectedOn).replace(/, \d{4}$/, '')}`;
+  if (!talked) return 'Not in touch yet';
+  return `Last touch ${relDate(person.lastInteractionAt)}`;
+}
 
 const shortDate = (iso: string) =>
   new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
@@ -139,6 +155,7 @@ export function PersonPage() {
   const [busy, setBusy] = useState(false);
   const [warmUpChoice, setWarmUpChoice] = useState(false);
   const [asking, setAsking] = useState(false);
+  const [early, setEarly] = useState<string>();
   const settings = useSession().settings;
   const events =
     useLiveQuery(
@@ -163,9 +180,16 @@ export function PersonPage() {
         .toArray();
     }, [user?.id]) ?? [];
   const chat = chats.find((c) => !['archived'].includes(c.stage)) ?? chats[0];
+  // the summary is rewritten when something newer than it happened (a message sent, a note, a fact typed in), so it
+  // never says "you haven't been in touch" after the first email went out
+  const newestActivity = [...tps.map((t) => t.occurredAt), ...facts.map((f) => f.createdAt)]
+    .filter((at) => at <= new Date().toISOString())
+    .reduce((m, at) => (at > m ? at : m), '');
+  const summaryStale =
+    !!person?.summary && !!person.summaryUpdatedAt && newestActivity > person.summaryUpdatedAt;
   useEffect(() => {
-    if (person && !person.summary && user) refreshPersonSummary(user, person.id);
-  }, [person?.id, person?.summary, user]);
+    if (person && user && (!person.summary || summaryStale)) refreshPersonSummary(user, person.id);
+  }, [person?.id, person?.summary, user, summaryStale]);
   const wantDraft = params.get('draft') as MessageKind | null;
   // a link to one draft the student started (from Drafts or Today) opens it in the composer
   const wantOpen = params.get('open');
@@ -216,7 +240,8 @@ export function PersonPage() {
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
   const compose = async (kind: MessageKind, opts: { skipWarmUp?: boolean; confirmed?: boolean } = {}) => {
     const channel = person.primaryEmail ? 'gmail' : 'linkedin';
-    const started = openDraftFor(kind);
+    // read from the database too: a page opened from Discover or Today may not have its drafts loaded yet
+    const started = openDraftFor(kind) ?? (await unsentDraftOf(person.id, kind));
     if (started) {
       setDraftId(started.id);
       setComposing(kind);
@@ -300,8 +325,9 @@ export function PersonPage() {
       icon: TP_ICON[t.kind] ?? '•',
       kind: t.kind,
     })),
+    // a sent message already logged as a touchpoint ("Email: <subject>") is one entry, not two
     ...drafts
-      .filter((d) => d.status === 'sent')
+      .filter((d) => d.status === 'sent' && !tps.some((t) => t.refTable === 'outbound' && t.refId === d.id))
       .map((d) => ({
         at: d.sentAt!,
         text: `${MESSAGE_KIND_LABELS[d.kind]} sent ${d.channel === 'linkedin' ? 'on LinkedIn' : d.channel === 'gmail' ? 'by email' : 'as copied text'}`,
@@ -354,7 +380,7 @@ export function PersonPage() {
                   href={`mailto:${person.primaryEmail}`}
                   className="inline-flex items-center gap-1 hover:text-ink"
                 >
-                  <Mail size={13} /> {person.primaryEmail}
+                  <Mail size={13} /> {person.primaryEmailAsWritten ?? person.primaryEmail}
                 </a>
               )}
               {person.linkedinUrl && (
@@ -373,8 +399,37 @@ export function PersonPage() {
               >
                 Closeness <StrengthDots v={person.strength} /> {closenessWord(person.strength)}
               </span>
-              <span className="whitespace-nowrap">Last touch {relDate(person.lastInteractionAt)}</span>
+              <span className="whitespace-nowrap">{lastTouchLabel(person, tps)}</span>
             </div>
+            {chat && (chat.stage === 'scheduled' || nextEvent) && (
+              <div
+                className="mt-2 flex flex-wrap items-center gap-2 text-[13px]"
+                data-testid="person-chat-time"
+              >
+                {nextEvent ? (
+                  <>
+                    <span>
+                      Chat <span className="font-medium">{chatTimeLabel(nextEvent.startAt)}</span> (
+                      {relDate(nextEvent.startAt)})
+                    </span>
+                    <button
+                      type="button"
+                      className="text-[12px] text-ink-3 underline underline-offset-2 hover:text-ink"
+                      onClick={() => setAsking(true)}
+                    >
+                      Change the time
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <span className="text-warn">Your chat is booked, but the time is not set.</span>
+                    <Button size="sm" onClick={() => setAsking(true)} data-testid="person-set-time">
+                      Set the time
+                    </Button>
+                  </>
+                )}
+              </div>
+            )}
           </div>
         </div>
         <div className="flex flex-col items-stretch lg:items-end gap-2 w-full lg:w-auto lg:shrink-0">
@@ -422,6 +477,12 @@ export function PersonPage() {
                   value={chat.stage}
                   onChange={async (e) => {
                     const to = e.target.value as CoffeeChat['stage'];
+                    // a chat still ahead is not done yet: ask before drafting a thank-you for it
+                    const ahead = to === 'completed' ? await upcomingMeeting(chat) : undefined;
+                    if (ahead && new Date(ahead.startAt).getTime() > Date.now()) {
+                      setEarly(ahead.startAt);
+                      return;
+                    }
                     await moveChat(user, chat, to, 'user:select');
                     if (to === 'scheduled' && !(await upcomingMeeting(chat))) setAsking(true);
                   }}
@@ -479,14 +540,30 @@ export function PersonPage() {
                 nav('/people');
               }}
             >
-              {person.hiddenAt ? 'Show again' : 'Hide from Orbit'}
+              {person.hiddenAt ? 'Show again' : 'Hide from lists'}
             </Button>
           </div>
         </div>
       </div>
 
       {asking && chat && (
-        <ScheduleChatDialog chat={chat} firstName={person.firstName} onClose={() => setAsking(false)} />
+        <ScheduleChatDialog
+          chat={chat}
+          firstName={person.firstName}
+          current={nextEvent?.startAt}
+          onClose={() => setAsking(false)}
+        />
+      )}
+      {early && chat && (
+        <ConfirmEarlyDone
+          firstName={person.firstName}
+          at={early}
+          onClose={() => setEarly(undefined)}
+          onConfirm={async () => {
+            setEarly(undefined);
+            await moveChat(user, chat, 'completed', 'user:select');
+          }}
+        />
       )}
       <Modal
         open={warmUpChoice}
@@ -653,7 +730,7 @@ export function PersonPage() {
             items={[
               { value: 'timeline', label: 'Timeline', count: timeline.length },
               { value: 'facts', label: 'Facts', count: facts.length },
-              { value: 'connections', label: 'People they know', count: neighbours.filter(Boolean).length },
+              { value: 'connections', label: 'Who they know', count: neighbours.filter(Boolean).length },
               { value: 'prep', label: 'Prep' },
             ]}
           />
@@ -696,7 +773,8 @@ export function PersonPage() {
                       <li key={f.id} className="group flex items-start gap-2 text-[13.5px]">
                         <span className="flex-1">
                           {/* stored as written in the notes ("She offered to intro me"); shown to the student as "you" */}
-                          {toYou(f.text)}{' '}
+                          {/* a "Why them" line was written to them, so it is shown as written, in quotes */}
+                          {f.sourceTable === 'outbound' ? `“${f.text}”` : toYou(f.text)}{' '}
                           <span className="text-ink-3 text-[12px]">
                             ·{' '}
                             {f.sourceTable === 'notes'

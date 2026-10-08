@@ -64,10 +64,9 @@ export function People() {
   const hiddenCount = people.filter((p) => p.hiddenAt).length;
   const filtered = !!q.trim() || filter !== 'all';
   const shown = Math.min(list.length, 300);
+  // the same answer the person page shows under "How you know them"
   const role = (p: (typeof list)[number]) =>
-    p.relationshipType === 'unknown' || (p.relationshipType === 'alumni' && p.isAlumni)
-      ? undefined
-      : RELATIONSHIP_LABELS[p.relationshipType];
+    p.relationshipType === 'unknown' ? undefined : RELATIONSHIP_LABELS[p.relationshipType];
   return (
     <div>
       <PageHeader
@@ -149,7 +148,7 @@ export function People() {
             <table className="w-full text-[13.5px] min-w-[640px]">
               <thead className="bg-canvas-2 text-ink-3 text-[12px] uppercase tracking-wide">
                 <tr>
-                  {['Name', 'Title · Company', 'Relationship', 'Closeness', 'Last touch', 'Stage'].map(
+                  {['Name', 'Title · Company', 'How you know them', 'Closeness', 'Last touch', 'Stage'].map(
                     (h) => (
                       <th key={h} className="text-left font-medium px-3 h-9 whitespace-nowrap">
                         {h}

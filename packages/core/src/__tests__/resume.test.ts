@@ -205,4 +205,34 @@ Summer Analyst Intern, Comerica Bank, Detroit MI — Jun 2026 to Aug 2026
     expect(xs[0]!.text).toBe('Led weekly technical training for 40 members.');
     for (const f of xs) expect(`${f.title} ${f.text}`).not.toMatch(/\(\s*,\s*\)|Detroit MI/);
   });
+
+  it('keeps "Detroit, MI" out of the role, reads middle-dot bullets, drops stray full stops, and splits one-line activities', () => {
+    const text = `Sam Patel
+Education
+University of Michigan, Ross School of Business .
+BBA in Business Administration, May 2028
+Experience
+Comerica Bank
+Summer Analyst Intern, Detroit, MI    Jun 2025 – Aug 2025
+· Built a DCF model for a middle-market
+client; automated weekly covenant reporting.
+Activities
+Treasurer, Club soccer
+Black Business Students Association
+`;
+    const fs = heuristicResumeParse(text, 'r');
+    const edu = fs.find((f) => f.kind === 'education')!;
+    expect(edu.organizationName).toBe('University of Michigan, Ross School of Business');
+    expect(edu.text).not.toMatch(/\s\./);
+    const job = fs.find((f) => f.organizationName === 'Comerica Bank')!;
+    expect(job.title).toBe('Summer Analyst Intern');
+    expect(job.text).toBe(
+      'Built a DCF model for a middle-market client; automated weekly covenant reporting.',
+    );
+    const acts = fs.filter((f) => f.kind === 'experience' && f.organizationName !== 'Comerica Bank');
+    expect(acts.map((f) => [f.title, f.organizationName])).toEqual([
+      ['Treasurer', 'Club soccer'],
+      [undefined, 'Black Business Students Association'],
+    ]);
+  });
 });

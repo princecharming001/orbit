@@ -2,14 +2,14 @@ import { newId, yearLabel } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Check, Minus, Upload } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
+import { Link, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { Logo } from '../components/AppShell';
 import { db } from '../db/schema';
 import { generateBrief, recommendationsRefresh } from '../engine/brief';
-import { importConnectionsCsv } from '../engine/linkedin';
+import { connectionsText, importConnectionsCsv } from '../engine/linkedin';
 import { saveResume } from '../engine/resume';
 import { syncGoogle } from '../engine/sync';
-import { addTargetCompany } from '../engine/targets';
+import { addTargetCompanies } from '../engine/targets';
 import { connectGoogle, googleClientId, googleScopeWarning } from '../integrations/google';
 import { envGoogleClientId, readPrefs, writePrefs } from '../integrations/prefs';
 import { useSession } from '../state/session';
@@ -43,6 +43,7 @@ export function Onboarding() {
   const { step: stepParam } = useParams();
   const step = Number(stepParam ?? 1) + 1;
   const nav = useNavigate();
+  const location = useLocation();
   const { user } = useSession();
   // what the optional steps actually produced, so a skipped step never shows a done check
   const did = useLiveQuery(async () => {
@@ -82,9 +83,14 @@ export function Onboarding() {
   const before = (s: number) => [...STEPS].reverse().find((x) => x < s) ?? 2;
   const go = async (next: number) => {
     await db.users.update(user.id, { onboardingStep: Math.max(user.onboardingStep, next) });
-    nav(onboardingPath(next));
+    nav(onboardingPath(next), { state: { fromStep: step } });
   };
-  const back = (to: number) => nav(onboardingPath(to));
+  // Back is the browser's Back when the step before is where the student came from, so the browser's own Back
+  // button afterwards keeps going back instead of returning to the step just left
+  const back = (to: number) => {
+    if ((location.state as { fromStep?: number } | null)?.fromStep === to) nav(-1);
+    else nav(onboardingPath(to), { replace: true });
+  };
   const finish = async () => {
     await db.users.update(user.id, { onboardingStep: 11, onboardingCompletedAt: new Date().toISOString() });
     const fresh = (await db.users.get(user.id))!;
@@ -108,6 +114,15 @@ export function Onboarding() {
             Step {idx + 1} of {STEPS.length}
             {OPTIONAL.has(step) ? <span className="text-ink-3"> · optional</span> : null}
           </p>
+          {/* a phone has no room for the names under the bar: say what is left, and which steps are optional */}
+          {idx < STEPS.length - 1 && (
+            <p className="sm:hidden text-[12px] text-ink-3 mt-0.5" data-testid="ob-coming-up">
+              Next:{' '}
+              {STEPS.slice(idx + 1)
+                .map((x) => `${TITLES[x]}${OPTIONAL.has(x) ? ' (optional)' : ''}`)
+                .join(', ')}
+            </p>
+          )}
           <ol
             ref={stepperRef}
             className="mt-2 grid gap-1.5"
@@ -359,7 +374,11 @@ function StepAbout({ onNext }: { onNext: () => void }) {
         </Select>
       </div>
       <div>
-        <Label htmlFor="ob-degree" optional hint="decides how Orbit names your year">
+        <Label
+          htmlFor="ob-degree"
+          optional
+          hint="so messages call you a junior, a senior or an MBA student correctly"
+        >
           Degree
         </Label>
         <Select
@@ -474,12 +493,16 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
     else setF((x) => ({ ...x, cycleLabel: `Summer ${new Date().getFullYear() + 1} internship` }));
   }, [goals]);
   const [companyNote, setCompanyNote] = useState('');
+  // "Evercore, Lazard" adds two companies
   const addCompany = async () => {
     if (!company.trim()) return;
-    const r = await addTargetCompany(user.id, company);
-    if (r === 'duplicate') return setCompanyNote(`${company.trim()} is already on your list.`);
-    setCompanyNote('');
-    if (r === 'added') setCompany('');
+    const r = await addTargetCompanies(user.id, company);
+    setCompanyNote(
+      r.duplicates.length
+        ? `${r.duplicates.join(', ')} ${r.duplicates.length === 1 ? 'is' : 'are'} already on your list.`
+        : '',
+    );
+    setCompany('');
   };
   const split = (x: string) =>
     x
@@ -524,7 +547,7 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
         />
       </div>
       <div className="grid sm:grid-cols-2 gap-4">
-        <div>
+        <div className="sm:col-span-2">
           <Label htmlFor="ob-roles" optional>
             Target roles
           </Label>
@@ -573,7 +596,7 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
         </div>
       </div>
       <div>
-        <Label htmlFor="ob-company" optional hint="add as many as you like">
+        <Label htmlFor="ob-company" optional hint="add as many as you like, separated by commas">
           Target companies
         </Label>
         <div className="flex gap-2">
@@ -678,7 +701,8 @@ export function facetDetail(f: { title?: string; organizationName?: string; text
     const re = new RegExp(`^${part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s,·:-]*`, 'i');
     t = t.replace(re, '').trim();
   }
-  return t;
+  // what is left of "Treasurer, Club soccer." once the role and the club are shown is a full stop: nothing to show
+  return /\w/.test(t) ? t : '';
 }
 
 function StepResume({ onNext, onBack }: { onNext: () => void; onBack: () => void }) {
@@ -755,9 +779,13 @@ function StepResume({ onNext, onBack }: { onNext: () => void; onBack: () => void
                 />
                 <span className="min-w-0">
                   <span className="text-ink-3 text-[12px] mr-1.5">{FACET_LABELS[f.kind] ?? 'Other'}</span>
-                  {f.title ? <strong className="font-medium">{f.title}</strong> : null}
-                  {f.organizationName && f.organizationName !== f.title ? ` · ${f.organizationName}` : ''}{' '}
-                  <span className="text-ink-2">{facetDetail(f).slice(0, 140)}</span>
+                  <strong className="font-medium">
+                    {[f.title, f.organizationName !== f.title ? f.organizationName : undefined]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </strong>
+                  {/* what they did on its own line, so the employer and the first bullet never run together */}
+                  {facetDetail(f) && <span className="block text-ink-2">{facetDetail(f).slice(0, 140)}</span>}
                 </span>
               </li>
             ))}
@@ -887,24 +915,53 @@ function StepLinkedIn({ onNext, onBack }: { onNext: () => void; onBack: () => vo
   const user = useSession().user!;
   const [busy, setBusy] = useState<string>();
   const [result, setResult] = useState<string>();
+  const [error, setError] = useState<string>();
+  // an import done earlier (before Back, or on another visit) still shows, so the step never looks undone
+  const earlier = useLiveQuery(
+    () =>
+      db.integrations
+        .where('userId')
+        .equals(user.id)
+        .filter((i) => i.provider === 'linkedin_csv')
+        .first(),
+    [user.id],
+  );
   const onFile = async (f: File) => {
     setBusy('Importing…');
-    const r = await importConnectionsCsv(user, await f.text(), (d, t) => setBusy(`Importing ${d}/${t}…`));
-    await db.integrations.put({
-      id: newId('int'),
-      userId: user.id,
-      provider: 'linkedin_csv',
-      status: 'active',
-      scopes: [],
-      syncState: { rows: r.imported + r.updated },
-      connectedAt: new Date().toISOString(),
-      lastSyncedAt: new Date().toISOString(),
-    });
-    setBusy(undefined);
-    setResult(
-      `${r.imported} people added, ${r.updated} updated${r.skipped ? `, ${r.skipped} rows skipped` : ''}.`,
-    );
+    setError(undefined);
+    try {
+      const r = await importConnectionsCsv(user, await connectionsText(f), (d, t) =>
+        setBusy(`Importing ${d}/${t}…`),
+      );
+      if (r.imported + r.updated === 0) {
+        setError(
+          'Orbit found nobody in that file. Upload Connections.csv from the LinkedIn export, or the ZIP.',
+        );
+        return;
+      }
+      await db.integrations.put({
+        id: earlier?.id ?? newId('int'),
+        userId: user.id,
+        provider: 'linkedin_csv',
+        status: 'active',
+        scopes: [],
+        syncState: { rows: r.imported + r.updated },
+        connectedAt: earlier?.connectedAt ?? new Date().toISOString(),
+        lastSyncedAt: new Date().toISOString(),
+      });
+      setResult(
+        `${r.imported} people added, ${r.updated} updated${r.skipped ? `, ${r.skipped} rows skipped` : ''}.`,
+      );
+    } catch (e) {
+      setError(String((e as Error).message ?? e));
+    } finally {
+      setBusy(undefined);
+    }
   };
+  const doneBefore =
+    !result && earlier
+      ? `${String((earlier.syncState as { rows?: number }).rows ?? 0)} connections imported.`
+      : '';
   return (
     <div className="mt-4">
       <p className="text-ink-2 text-[14px]">
@@ -925,27 +982,41 @@ function StepLinkedIn({ onNext, onBack }: { onNext: () => void; onBack: () => vo
           request the archive.
         </li>
         <li>
-          When the email arrives, download the ZIP and upload{' '}
-          <code className="bg-canvas-2 px-1 rounded">Connections.csv</code> here.
+          When the email arrives, download the ZIP and upload it here as it is, or just{' '}
+          <code className="bg-canvas-2 px-1 rounded">Connections.csv</code> from inside it.
         </li>
       </ol>
       <label className="mt-4 flex items-center justify-center gap-2 border border-dashed border-line rounded-[12px] h-24 cursor-pointer hover:bg-canvas-2 focus-within:ring-2 focus-within:ring-accent/40">
         <input
           type="file"
-          accept=".csv"
+          accept=".csv,.zip"
           className="sr-only"
-          onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])}
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            e.target.value = '';
+            if (f) onFile(f);
+          }}
           data-testid="ob-linkedin"
         />
         {busy ? <Spinner /> : <Upload size={16} className="text-ink-3" />}{' '}
-        <span className="text-[14px]">{busy ?? 'Upload Connections.csv'}</span>
+        <span className="text-[14px]">
+          {busy ?? (earlier ? 'Upload a newer export' : 'Upload the ZIP or Connections.csv')}
+        </span>
       </label>
-      {result && (
-        <p className="text-good text-[13px] mt-2 inline-flex items-center gap-1">
-          <Check size={14} /> {result}
+      {(result || doneBefore) && (
+        <p
+          className="text-good text-[13px] mt-2 inline-flex items-center gap-1"
+          data-testid="ob-linkedin-done"
+        >
+          <Check size={14} /> {result || doneBefore}
         </p>
       )}
-      <Nav onBack={onBack} onNext={onNext} skip={!result} />
+      {error && (
+        <p className="text-bad text-[13px] mt-2" role="alert">
+          {error}
+        </p>
+      )}
+      <Nav onBack={onBack} onNext={onNext} skip={!result && !earlier} />
     </div>
   );
 }
@@ -1059,7 +1130,8 @@ function StepPrefs({ onNext, onBack }: { onNext: () => void; onBack: () => void 
       >
         <strong className="font-medium text-ink">After each chat, add a note.</strong> Type, dictate or paste
         what you learned, what they offered and what you promised. Orbit drafts your thank-you from it and
-        remembers it for next time. Add note is at the top of every page.
+        remembers it for next time. Add note is always one tap away: at the foot of the menu on a laptop, at
+        the top of the screen on a phone, and on each person's page.
       </p>
       <div className="sm:col-span-2">
         <Nav onBack={onBack} onNext={save} nextLabel={busy ? 'Finishing…' : 'Finish setup'} disabled={busy} />

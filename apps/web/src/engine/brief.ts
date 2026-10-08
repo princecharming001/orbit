@@ -32,12 +32,14 @@ import {
   suggestionFromCandidate,
   todayKey,
   validateDraft,
+  WHY_THEM_GAP,
   warmUpProgress,
+  whyThemSentence,
 } from '@orbit/core';
 import { addTouchpoint, feedback, notify, recomputeAllStrengths } from '../db/repo';
 import { db } from '../db/schema';
 import { describeLlmFailure, hasLlm, llmDraft, llmSummary, toLlmError } from '../integrations/anthropic';
-import { bestPathStrength, buildReachGraph } from './graph';
+import { bestPathStrength, buildReachGraph, reachPersonIn } from './graph';
 import {
   introductionQuestionCandidate,
   retireIntroductionQuestion,
@@ -185,7 +187,9 @@ async function ruleInput(userId: string, now: Date, scope?: { chatId?: string; p
     recommendations,
     dismissCounts,
     outreachSentThisWeek,
-    freeSlotsIso: freeSlots(events, now),
+    // free time is only known from a calendar: without one, a scheduling draft asks for the student's times instead
+    // of offering slots they never chose
+    freeSlotsIso: (await calendarKnown(userId)) ? freeSlots(events, now) : [],
     recentlyContacted,
     timezone: user?.timezone,
     lastConversationByPerson,
@@ -200,6 +204,15 @@ const CONVERSATION_TOUCHPOINTS = new Set([
   'linkedin_out',
   'note',
 ]);
+
+/**
+ * Whether Orbit can see the student's calendar (Google, or the demo's sample calendar). Without it, the few meetings it
+ * knows of are the ones typed in, so "free" times would be guesses.
+ */
+export async function calendarKnown(userId: string): Promise<boolean> {
+  const all = await db.integrations.where('userId').equals(userId).toArray();
+  return all.some((i) => (i.provider === 'google' || i.provider === 'demo') && i.status === 'active');
+}
 
 /** Two free 30-minute windows in the next 5 working days, 10:00–17:00 local, avoiding existing events. */
 export function freeSlots(events: { startAt: string; endAt: string; status: string }[], now: Date): string[] {
@@ -238,6 +251,21 @@ export async function upsertSuggestions(
   const out: Suggestion[] = [];
   const deferred = opts.deferred ? true : undefined;
   for (const c of cands) {
+    // a first message the student already started (or opened to send) answers the "First message" card: it is not
+    // raised, or brought back, beside it
+    if (
+      c.kind === 'new_outreach' &&
+      c.personId &&
+      (await db.outbound
+        .where('personId')
+        .equals(c.personId)
+        .filter(
+          (o) =>
+            o.kind === 'outreach' && !o.suggestionId && ['draft', 'queued', 'handed_off'].includes(o.status),
+        )
+        .count())
+    )
+      continue;
     const existing = await db.suggestions.where('dedupeKey').equals(c.dedupeKey).first();
     if (existing) {
       // a user decision (dismissed, sent, done, approved, edited) is final; a system expiry is not: the trigger is
@@ -473,7 +501,24 @@ export async function findReferrerFor(
     .equals(person.id)
     .filter((x) => x.type === 'connection' && x.sourceTable === 'suggested_by' && !x.deletedAt)
     .last();
-  return suggested ? db.people.get(suggested.sourceId) : undefined;
+  if (suggested) return db.people.get(suggested.sourceId);
+  // someone told the student, in a chat their notes recorded, to get in touch with this person by full name
+  // ("told me to reach out to her colleague Marcus Lee"): they are the referrer, not a cold lead
+  const name = person.displayName.trim();
+  if (name.split(/\s+/).length < 2) return undefined;
+  const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pointer = new RegExp(
+    `\\b(reach(ed)? out to|get in touch with|talk to|speak (to|with)|meet|email|contact|connect with|introduce me to|ping|follow up with)\\b[^.]*\\b${esc}\\b`,
+    'i',
+  );
+  const told = await db.facts
+    .where('userId')
+    .equals(userId)
+    .filter(
+      (f) => !f.deletedAt && f.personId !== person.id && f.sourceTable === 'notes' && pointer.test(f.text),
+    )
+    .last();
+  return told ? db.people.get(told.personId) : undefined;
 }
 
 /** One concrete thing the student has done, from the resume: the strongest project or experience line. */
@@ -669,7 +714,7 @@ export async function buildDraftContext(
     )
     .sort((a, b) => a.startAt.localeCompare(b.startAt))[0]?.startAt;
   const windows =
-    kind === 'schedule' || kind === 'reply'
+    (kind === 'schedule' || kind === 'reply') && (await calendarKnown(user.id))
       ? proposeWindows(busy, now, user.timezone, { seed: person.id })
       : undefined;
   const warm = chat?.warmUp ? warmUpProgress(chat.warmUp, now, user.timezone) : undefined;
@@ -1064,6 +1109,11 @@ export async function regenerateDraft(
   messageId: string,
   inputs: DraftInputs,
   now = new Date(),
+  /**
+   * The text the student has edited. When it still holds the bracketed "Why them" gap, only that gap is filled with
+   * their line and the rest of their words stay; the fresh draft becomes what "Reset to suggested" goes back to.
+   */
+  opts: { mine?: string } = {},
 ): Promise<OutboundMessage | undefined> {
   const msg = await db.outbound.get(messageId);
   if (!msg || msg.userId !== user.id || msg.status !== 'draft') return undefined;
@@ -1102,10 +1152,15 @@ export async function regenerateDraft(
     chat,
     now,
   );
+  const merged =
+    opts.mine && inputs.connection?.trim() && WHY_THEM_GAP.test(opts.mine)
+      ? opts.mine.replace(WHY_THEM_GAP, whyThemSentence(inputs.connection))
+      : undefined;
   const changes: Partial<OutboundMessage> = {
-    subject: msg.externalThreadId ? msg.subject : (out.subject ?? msg.subject),
+    // the student's own subject stays when their text is kept
+    subject: msg.externalThreadId || merged ? msg.subject : (out.subject ?? msg.subject),
     bodyDraft: bodyFor(out, msg.channel as 'gmail' | 'linkedin', msg.kind, !!person.linkedinConnectedOn),
-    bodyFinal: undefined,
+    bodyFinal: merged,
     bodyFinalHash: undefined,
     generatedBy,
     claims: out.claims,
@@ -1502,10 +1557,19 @@ export async function startWarmUpOrOutreach(
     .equals(personId)
     .filter((c) => !['declined', 'no_response', 'archived'].includes(c.stage))
     .first();
-  const cold = !opts.skipWarmUp && needsWarmUp(person, channel, settings?.warmUpEnabled ?? true);
+  // a person someone pointed the student to is written to now, naming who suggested it: no warm-up
+  const cold =
+    !opts.skipWarmUp &&
+    needsWarmUp(person, channel, settings?.warmUpEnabled ?? true) &&
+    !(await findReferrerFor(user.id, person));
+  // a first message the student already started for this person is the one they continue: a second click (or a page
+  // that asks again while the first draft is still being written) never makes a second copy
+  const started = await unsentDraftOf(personId, 'outreach');
   // Looking at a first draft is not starting a chat: the chat (and its Pipeline card) is opened when the message is
   // approved and sent (openChatForOutreach). Only a warm-up, which has steps to track, opens one right away.
   if (!chat && !cold) {
+    await retireFirstMessageCards(user.id, personId, now, true);
+    if (started) return { draft: started };
     // null: an old declined or silent chat is not the context for a fresh first message
     const draft = await draftMessage(user, personId, 'outreach', channel, null);
     return { draft };
@@ -1546,19 +1610,53 @@ export async function startWarmUpOrOutreach(
     });
   }
   await db.recommendations.where('personId').equals(personId).modify({ status: 'converted' });
-  // a "First message" card for this person is answered by what was just started (a warm-up or the draft)
-  const firstMessageCards = await db.suggestions
-    .where('userId')
-    .equals(user.id)
-    .filter((x) => x.personId === personId && x.kind === 'new_outreach' && x.status === 'pending')
-    .toArray();
-  if (firstMessageCards.length) await retireSuggestions(firstMessageCards, 'superseded:started', now);
+  await retireFirstMessageCards(user.id, personId, now, !(chat.stage === 'warming' && !opts.skipWarmUp));
   if (chat.stage === 'warming' && !opts.skipWarmUp) {
     await evaluateImmediateSuggestions(user.id, { chatId: chat.id, personId }, now);
     return { chat };
   }
+  if (started) return { chat, draft: started };
   const draft = await draftMessage(user, personId, 'outreach', channel, chat.id);
   return { chat, draft };
+}
+
+/** The newest message of this kind the student started for a person and has not sent or discarded. */
+export async function unsentDraftOf(
+  personId: string,
+  kind: MessageKind,
+): Promise<OutboundMessage | undefined> {
+  const all = await db.outbound
+    .where('personId')
+    .equals(personId)
+    .filter((m) => m.kind === kind && m.status === 'draft')
+    .toArray();
+  return all.sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+}
+
+/** A "First message" card for this person is answered by what was just started (a warm-up or the draft). */
+async function retireFirstMessageCards(
+  userId: string,
+  personId: string,
+  now: Date,
+  /** a first message is being opened now: the card's draft is the one it continues */
+  keepDraft: boolean,
+): Promise<void> {
+  const cards = await db.suggestions
+    .where('userId')
+    .equals(userId)
+    .filter((x) => x.personId === personId && x.kind === 'new_outreach' && x.status === 'pending')
+    .toArray();
+  // the card's draft becomes a started draft (edits and all) instead of being cancelled with the card when it is the
+  // message being opened, or when the student already wrote in it; an untouched one goes with the card (a warm-up)
+  for (const c of cards) {
+    if (!c.outboundMessageId) continue;
+    const draft = await db.outbound.get(c.outboundMessageId);
+    if (draft?.status !== 'draft' || (!keepDraft && !draft.bodyFinal)) continue;
+    await db.outbound.update(draft.id, { suggestionId: undefined });
+    await db.suggestions.update(c.id, { outboundMessageId: undefined });
+    c.outboundMessageId = undefined;
+  }
+  if (cards.length) await retireSuggestions(cards, 'superseded:started', now);
 }
 
 export async function markWarmUpAction(
@@ -1646,8 +1744,24 @@ export async function recommendationsRefresh(user: User, now = new Date()): Prom
     recentlyRecommended: recent,
     now,
   });
+  const named = new Map(people.map((p) => [p.id, p]));
   for (const r of recs) {
     r.bestPath = undefined;
+    // someone the student met pointed them at this person: that comes first, and no warm-up is needed
+    const person = named.get(r.personId);
+    const referrer = person ? await findReferrerFor(user.id, person) : undefined;
+    if (referrer && !r.reasons.some((x) => x.code === 'referred'))
+      r.reasons.unshift({ code: 'referred', text: `${referrer.firstName} suggested you get in touch` });
+    // "Reachable through someone you know" names who: the first person on the best route, who could introduce them
+    const via = r.reasons.find((x) => x.code === 'path');
+    if (via) {
+      const route = reachPersonIn(g, r.personId, 1)[0];
+      const introducer = route && route.hops.length >= 2 ? named.get(route.hops[0]!.toId) : undefined;
+      if (introducer) {
+        r.bestPath = route;
+        via.text = `${introducer.firstName} knows them and could introduce you`;
+      }
+    }
     const prev = existing.find((e) => e.personId === r.personId && e.status === 'saved');
     if (prev) continue;
     await db.recommendations

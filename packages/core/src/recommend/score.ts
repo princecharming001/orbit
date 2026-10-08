@@ -18,7 +18,7 @@ const FUNCTION_TITLE: Record<string, RegExp> = {
   data: /\b(data (scientist|analyst|engineer)|analytics|machine learning|ml|ai research|quant)\b/i,
   design: /\b(designer|design lead|ux|product design|ui)\b/i,
   finance:
-    /\b(finance|fp&a|treasury|controller|accounting|private equity|hedge fund|asset management|wealth)\b/i,
+    /\b(finance|fp&a|treasury|controller|accounting|private equity|hedge fund|asset management|wealth|credit|lending|underwriting)\b/i,
   marketing: /\b(marketing|growth|brand|content|communications|demand gen)\b/i,
   research: /\b(research|scientist|lab|phd|postdoc)\b/i,
   vc: /\b(venture|vc|investor|principal|partner)\b/i,
@@ -33,7 +33,8 @@ const FUNCTION_HINT: Record<string, RegExp> = {
   ib: /\b(analyst|associate|banker)\b/i,
 };
 /** Titles a hint never covers: a "Business Analyst" outside a bank is operations or consulting work. */
-const NOT_A_HINT = /\bbusiness analyst\b/i;
+const NOT_A_HINT =
+  /\b(business|credit|loan|lending|risk|compliance|audit|commercial|retail|branch|operations|systems|it|data|marketing|policy)\s+(analyst|associate)\b/i;
 
 /** The student's target function this person works in, from their title and company (undefined when none). */
 export function matchedFunction(text: string | undefined, functions: string[]): string | undefined {

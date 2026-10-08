@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { AddPersonButton } from '../components/AddPerson';
 import { LinkedInImportButton } from '../components/LinkedInImport';
+import { RoleLine } from '../components/SuggestionCard';
 import { feedback } from '../db/repo';
 import { db } from '../db/schema';
 import { recommendationsRefresh, startWarmUpOrOutreach } from '../engine/brief';
@@ -99,15 +100,16 @@ export function Discover() {
       ttl: 6000,
     });
   };
-  const start = async (personId: string) => {
+  const start = async (personId: string, opts: { skipWarmUp?: boolean } = {}) => {
     const p = byId.get(personId);
     const r = await startWarmUpOrOutreach(
       user,
       personId,
       p?.primaryEmail ? 'gmail' : 'linkedin',
       'recommendation',
+      opts,
     );
-    if (r.draft) nav(`/people/${personId}?draft=outreach`);
+    if (r.draft) nav(`/people/${personId}?open=${r.draft.id}`);
     else {
       // stay on the list: the student is still choosing who to meet, and the first step waits on Today
       toast.push({
@@ -215,7 +217,11 @@ export function Discover() {
             {list.map((r) => {
               const p = byId.get(r.personId);
               if (!p) return null;
-              const cold = p.strength < 0.2 && !p.primaryEmail;
+              const cold =
+                p.strength < 0.2 && !p.primaryEmail && !r.reasons.some((x) => x.code === 'referred');
+              const introId =
+                r.bestPath && r.bestPath.hops.length >= 2 ? r.bestPath.hops[0]!.toId : undefined;
+              const introducer = introId ? byId.get(introId) : undefined;
               return (
                 <div
                   key={r.id}
@@ -241,9 +247,7 @@ export function Discover() {
                         )}
                         {r.status === 'saved' && <Chip className="h-5">Saved</Chip>}
                       </div>
-                      <div className="text-[13px] text-ink-2 truncate">
-                        {[p.currentTitle, p.currentOrganizationRaw].filter(Boolean).join(' · ')}
-                      </div>
+                      <RoleLine title={p.currentTitle} company={p.currentOrganizationRaw} />
                       <ul className="mt-2 text-[13px] text-ink-2 space-y-0.5">
                         {r.reasons.slice(0, 3).map((x) => (
                           <li key={x.code}>· {x.text}</li>
@@ -259,16 +263,40 @@ export function Discover() {
                       </div>
                       {cold && (
                         <p className="mt-1.5 text-[12px] text-warn" data-testid="rec-warmup-why">
-                          You only have {p.firstName} on LinkedIn and have never talked, so Orbit suggests a
-                          short warm-up before your first message.
+                          {introducer
+                            ? `You only have ${p.firstName} on LinkedIn, but ${introducer.firstName} knows them: an intro gets a much warmer reply than a cold note.`
+                            : `You only have ${p.firstName} on LinkedIn and have never talked, so Orbit suggests a short warm-up before your first message.`}
                         </p>
                       )}
                     </div>
                   </div>
                   <div className="mt-auto pt-3 flex flex-wrap items-center gap-2">
-                    <Button variant="primary" size="sm" onClick={() => start(p.id)} data-testid="rec-start">
+                    {cold && introducer ? (
+                      // someone the student knows can introduce them: that beats a warm-up with a stranger
+                      <Link to={`/map?reach=${p.id}`} data-testid="rec-intro">
+                        <Button variant="primary" size="sm">
+                          Ask {introducer.firstName} for an intro
+                        </Button>
+                      </Link>
+                    ) : null}
+                    <Button
+                      variant={cold && introducer ? 'secondary' : 'primary'}
+                      size="sm"
+                      onClick={() => start(p.id)}
+                      data-testid="rec-start"
+                    >
                       {cold ? 'Start warm-up' : 'Write first message'}
                     </Button>
+                    {cold && (
+                      // the same choice Today and the person page give: a student who already knows them writes now
+                      <Button
+                        size="sm"
+                        onClick={() => start(p.id, { skipWarmUp: true })}
+                        data-testid="rec-write-now"
+                      >
+                        Write now instead
+                      </Button>
+                    )}
                     {r.status !== 'saved' && (
                       <Button
                         size="sm"

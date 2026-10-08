@@ -16,6 +16,7 @@ import {
   isRecruiter,
   linkedinActivityUrl,
   linkedinProfileUrl,
+  matchedFunction,
   sectorOf,
   seniorityOf,
   yearLabel,
@@ -126,7 +127,10 @@ export function personSummary(args: {
   const parts: string[] = [];
   const title = person.currentTitle?.trim();
   const org = person.currentOrganizationRaw?.trim();
-  if (title && org) {
+  if (title && org && /^(student|undergrad(uate)?|mba candidate|grad(uate)? student)$/i.test(title)) {
+    // "Tom is a student at the University of Michigan", not "works at ... as a Student"
+    parts.push(`${first} is a student at ${org}.`);
+  } else if (title && org) {
     const { main, team } = splitTitle(title);
     parts.push(`${first} works at ${org} as ${withArticle(main)}${team ? ` (${team})` : ''}.`);
   } else if (title) parts.push(`${first} is ${withArticle(title)}.`);
@@ -168,7 +172,10 @@ export function personSummary(args: {
     hook ? `Worth bringing up: ${sentence(toYou(hook.text))}` : undefined,
     // facts are third-person sentences ("She offered to refer you ..."), so the label does not repeat the offer
     off ? `Follow up: ${sentence(toYou(off.text))}` : undefined,
-    adv ? `Tell them what you did with their advice: ${sentence(toYou(adv.text))}` : undefined,
+    // a note line that already says "advice" ("Big advice: ...") is not labelled advice twice
+    adv
+      ? `Tell them what you did with their advice: ${sentence(toYou(adv.text.replace(/^(big |main |key |their |her |his )?(advice|tip)\s*[:-]\s*/i, '')))}`
+      : undefined,
   ].filter((x): x is string => !!x);
   return { summary: parts.join(' '), talkingPoints };
 }
@@ -410,7 +417,13 @@ export function buildPrep(args: {
   const cycleRaw = goals?.cycleLabel?.trim() ?? '';
   const cycle = /^(this cycle)?$/i.test(cycleRaw) ? '' : cycleRaw;
   const search = cycle ? `${cycle} search` : 'search';
-  const target = goals?.targetFunctions?.[0];
+  // the student's goal that fits this person ("consulting" to a McKinsey analyst), not just the first one they listed
+  const targets = goals?.targetFunctions ?? [];
+  const target =
+    matchedFunction(
+      `${person.currentTitle ?? ''} ${person.headline ?? ''} ${person.currentOrganizationRaw ?? ''}`,
+      targets,
+    ) ?? targets[0];
   const myFn = target ? functionPhrase(target) : '';
   const recruiter = isRecruiter(person.currentTitle);
   const seniority = seniorityOf(person.currentTitle);
