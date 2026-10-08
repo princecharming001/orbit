@@ -416,7 +416,23 @@ export function orgGroup(org: string, group: string | undefined, sector: string)
 /** "what you said about focusing on X" / "your point that the key is Y" / "your advice to apply early". */
 export function pointPhrase(c: FactClause | undefined): string | undefined {
   const p = pointPhraseRaw(c);
-  return p && theirWords(p);
+  return p && theirWords(paraphrase(p));
+}
+
+/**
+ * "your point that the key is knowing one deal cold" read back word for word is a parrot; the point itself is what
+ * they said: "your point about knowing one deal cold", "your advice to ship one small project".
+ */
+function paraphrase(p: string): string {
+  const m = p.match(
+    /^your point that (?:the )?(?:key|trick|secret|most important thing|biggest thing|best thing|main thing)(?: here)? (?:is|was) (.+)$/i,
+  );
+  if (!m) return p;
+  const rest = m[1]!.replace(/^that\s+/i, '');
+  if (/^to\s/i.test(rest)) return `your advice ${rest}`;
+  if (/^\w+ing\b/i.test(rest)) return `your point about ${rest}`;
+  if (/^(a|an|one|the|your|my)\b/i.test(rest)) return `your point that it comes down to ${rest}`;
+  return p;
 }
 function pointPhraseRaw(c: FactClause | undefined): string | undefined {
   if (!c) return undefined;

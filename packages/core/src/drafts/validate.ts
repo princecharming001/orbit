@@ -34,7 +34,8 @@ export interface ValidationIssue {
     | 'referral_without_conversation'
     | 'unsupported_detail'
     | 'ignores_ask'
-    | 'needs_input';
+    | 'needs_input'
+    | 'attach_resume';
   detail: string;
   blocking: boolean;
 }
@@ -65,6 +66,7 @@ const NEED_DETAIL: Record<string, string> = {
   role: 'Name the role and company you are applying to.',
   takeaway: 'Add one thing they said that stuck with you.',
   posting: 'Add the link to the posting they asked for.',
+  mutual: 'Name the person you both know, so they can place the connection.',
 };
 
 /** Capitalised words that are fine anywhere without appearing in the context. */
@@ -205,6 +207,13 @@ export function validateDraft(
         detail: 'Add one real update since you last spoke.',
         blocking: true,
       });
+    else if (n === 'resume')
+      // a reminder, not a gap in the text: the message says the resume is attached
+      issues.push({
+        code: 'attach_resume',
+        detail: 'Attach your resume before you send; the message says it is attached.',
+        blocking: false,
+      });
     else if (n !== 'post')
       issues.push({
         code: 'needs_input',
@@ -313,9 +322,12 @@ export function validateDraft(
     if (/\b(resume|cv)\b/i.test(a) && !/\b(resume|cv)\b/i.test(body))
       issues.push({ code: 'ignores_ask', detail: `they asked: ${a}`, blocking: true });
   }
+  // a friend is asked directly; the rule is about people the student has never talked with
+  const knowsPersonally = d.claims.some((c) => c.kind === 'shared' && /knows the student personally$/.test(c.text));
   if (
     opts.kind === 'referral_ask' &&
     opts.hadConversation === false &&
+    !knowsPersonally &&
     /\b(refer me|flag(ging)? my (name|application)|submit my name|put in a word)\b/i.test(body)
   )
     issues.push({

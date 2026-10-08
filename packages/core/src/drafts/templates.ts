@@ -239,6 +239,11 @@ export interface DraftContext {
   update?: string; // the student's own update, for nurture
   news?: string; // what the student is congratulating them on, when no affiliation change is on record
   answer?: string; // the student's answer to a question in the thread
+  /**
+   * A referral ask to someone the student has not talked with is written as the conversation ask instead; the
+   * application is one clause in it ("I've applied for Google's software engineering internship.").
+   */
+  applicationLine?: string;
   /** the name of the mutual tie a connection line mentions without one ("my roommate"), from the student */
   mutualName?: string;
   /**
@@ -424,7 +429,8 @@ function greeting(ctx: DraftContext, sector: Sector, recruiterFirst: boolean): s
   const first = firstNameOf(ctx.person);
   const learned = ctx.styleCard.builtFromCount > 0 && ctx.styleCard.greetingPatterns[0];
   if (learned && !/^dear/i.test(learned)) return learned.replace('{first}', first);
-  if (knowsStudent(ctx)) return `Hi ${first},`;
+  // a LinkedIn message is a chat, not a letter
+  if (knowsStudent(ctx) || ctx.channel === 'linkedin') return `Hi ${first},`;
   // never "Dear Elena Rossi," (a mail merge); without a known gender "Mr./Ms." is not an option either
   if (recruiterFirst) return `Dear ${first},`;
   const senior = isSeniorTitle(ctx.person.title);
@@ -458,12 +464,21 @@ function signoff(ctx: DraftContext, sector: Sector, G: string, recruiter: boolea
  * for the gap, no "as a quick reminder".
  */
 function isFriend(p: DraftContext['person']): boolean {
-  return /^(friend|family|classmate|roommate|teammate)$/i.test(p.relationshipType) || p.strength >= 0.6;
+  if (/^(friend|family|classmate|roommate|teammate)$/i.test(p.relationshipType)) return true;
+  // a close tie Orbit inferred counts only when nothing says they are an alum, a recruiter or a cold contact
+  return p.strength >= 0.8 && /^(unknown|other|)$/i.test(p.relationshipType ?? '');
 }
 
 /** What the student is recruiting for, named the way the recipient would say it. */
 function lookingForPhrase(ctx: DraftContext): string {
-  const matched = functionLabel(matchedFunction(ctx.person.title, ctx.user.targetFunctions));
+  const sector = sectorOf({ title: ctx.person.title, org: ctx.person.org, industry: ctx.person.orgIndustry });
+  const firm = firmKindOf({ title: ctx.person.title, org: ctx.person.org, industry: ctx.person.orgIndustry }, sector);
+  const target = ctx.user.targetFunctions[0];
+  // their own function when it is the student's target, otherwise the student's target when that firm hires for it
+  const matched = functionLabel(
+    matchedFunction(ctx.person.title, ctx.user.targetFunctions) ??
+      (target && firm !== 'other' && functionFits(target, ctx.person.title, firm) ? target : undefined),
+  );
   const intern = isInternCycle(ctx.user.cycleLabel);
   return matched
     ? `${matched} ${intern ? 'internships' : 'roles'}`
@@ -620,7 +635,7 @@ function askBlock(
   opts: { oneQuestion?: boolean; friend?: boolean } = {},
 ): string {
   if (opts.oneQuestion && qq.direct)
-    return `One question, if you have a minute: ${qq.direct} A line or two by email would be plenty, or ${minutes} minutes on a call if that's easier.`;
+    return `One question, if you have a minute: ${lower1(qq.direct)} A line or two by email would be plenty, or ${minutes} minutes on a call if that's easier.`;
   const talk = qq.reacted ? 'talk about it' : `tell me ${qq.q}`;
   if (formal)
     return `Would you have ${minutes} minutes in the coming weeks to ${talk}? I would be glad to work around your schedule.`;
@@ -642,7 +657,10 @@ function askBlock(
       : [
           `Would you have ${minutes} minutes sometime in the next couple of weeks to tell me ${qq.q}?`,
           `I'd love to hear ${qq.q}. Would you have ${minutes} minutes in the next couple of weeks?`,
-          `Could I ask you ${qq.q} on a ${minutes}-minute call sometime in the next two weeks?`,
+          // only a short question fits inside this frame
+          ...(qq.q.split(' ').length <= 8
+            ? [`Could I ask you ${qq.q} on a ${minutes}-minute call sometime in the next two weeks?`]
+            : []),
         ],
     seed,
     'ask',
@@ -657,6 +675,17 @@ function askBlock(
     'soft',
   );
   return `${frame} ${soft}`;
+}
+
+/** "what your first months at Jane Street were like" after an opener that already named Jane Street: "... there". */
+function thereFor(qq: Question, org: string): Question {
+  const re = new RegExp(`\\s(?:at|on|in) ${org.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=\\b|[^\\w]|$)`);
+  return {
+    ...qq,
+    q: qq.q.replace(re, ' there'),
+    short: qq.short.replace(re, ' there'),
+    direct: qq.direct?.replace(re, ' there'),
+  };
 }
 
 /** A warm-up note is a claim from their post ("junior engineers should own a metric") or a topic ("migrating off a monolith"). */
@@ -1164,6 +1193,9 @@ function writtenKind(ctx: DraftContext, now: Date): { kind: MessageKind; reopen?
   const t = ctx.thread;
   if (ctx.kind === 'bump' && answeredAfterOutreach(t))
     return inboundNeedsAnswer(t, now) ? { kind: 'schedule' } : { kind: 'nurture', reopen: true };
+  // a "first" message to someone already written to, with no answer yet, is the bump on that thread
+  if (ctx.kind === 'outreach' && t?.firstOutboundAt && !t.lastInboundAt && !ctx.history?.repliedEver)
+    return { kind: 'bump' };
   const upcoming = !!ctx.chat?.upcomingAt && new Date(ctx.chat.upcomingAt).getTime() > now.getTime();
   if (
     ctx.kind === 'reply' &&
@@ -1273,12 +1305,12 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
         const status = applied
           ? `I've applied for ${role}${at}.`
           : late
-            ? `I'm interested in ${o ? `${possessive(o)} ` : 'your '}summer analyst program, and I know the main ${year ? `Summer ${year} ` : ''}cycle ran earlier this year.`
+            ? `I'm interested in ${o ? `${possessive(o)} ` : 'your '}summer analyst program.`
             : `I'm planning to apply for ${role}${at} this cycle.`;
         const question = applied
           ? 'Is there a typical timeline for when first-round interviews go out, or anything I should do on my end in the meantime?'
           : late
-            ? 'Are there seats still open, or off-cycle or diversity programs, that I should know about?'
+            ? `I know the main ${year ? `Summer ${year} ` : ''}cycle ran earlier this year. Are there seats still open, or off-cycle or diversity programs, that I should know about?`
             : hiring
               ? `I saw that ${firstPart(hiring.c.text)}. Is there a timeline for that, or a best way to be considered?`
               : campus
@@ -1296,8 +1328,8 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
         // a recruiter the student has already emailed with is not a stranger
         const known = ctx.connection?.kind === 'prior_thread' ? ctx.connection : undefined;
         const intro = known
-          ? `${reconnectLine(ctx, known, now)} ${applied ? `A quick update: ${status}` : `I'm ${me}, and ${lower1(status)}`}`
-          : `I'm ${me}, and ${lower1(status)}`;
+          ? `${reconnectLine(ctx, known, now)} ${applied ? `A quick update: ${status}` : `I'm ${me}. ${status}`}`
+          : `I'm ${me}. ${status}`;
         if (known) claims.push({ text: `${first} and the student have emailed before`, kind: 'shared' });
         body = `${G}\n\n${intro} ${question}${spokeLine}${/^thank/i.test(S.trim()) ? '' : '\n\nThank you for your time.'}\n\n${S}`;
         claims.push({ text: `${first} recruits${org ? ` for ${org}` : ''}`, kind: 'about_person' });
@@ -1329,7 +1361,7 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
         } else if (threaded) subject = reSubject;
         break;
       }
-      const qq = questionFor(ctx, sector, seed, now);
+      let qq = questionFor(ctx, sector, seed, now);
       if (qq.factId) claims.push({ text: qq.factText!, factId: qq.factId, kind: 'about_person' });
       const op = opener(ctx, seed, now, qq);
       if (!op) {
@@ -1355,7 +1387,7 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       // a hiring note ("hiring their first two interns in January") is the fact that matters most to a student; other
       // notes about their work go into the question, never a stacked "I also saw that you ..." line
       const hiring =
-        op && c?.kind !== 'hook' && !friend
+        op && c?.kind !== 'hook' && !friend && !qq.reacted
           ? fact(
               ['hook'],
               (x) =>
@@ -1377,10 +1409,13 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       const oneQuestion =
         !friend &&
         c?.kind !== 'met' &&
+        !c?.introduced &&
         ['big_tech', 'tech', 'startup', 'trading'].includes(firm) &&
         (seniority === 'exec' || /\b(vice president|vp)\b/i.test(P.title ?? ''));
+      // the firm is named once: a question that repeats it after the opener says "there"
+      if (o && op?.text.includes(o)) qq = thereFor(qq, o);
       const ask = askBlock(minutes, qq, seed, formal, thanksSignoff, { oneQuestion, friend });
-      body = `${G}\n\n${join(openText, alsoCommented, aboutLine, sit, cred)}\n\n${ask}\n\n${S}`;
+      body = `${G}\n\n${join(openText, alsoCommented, ctx.applicationLine, aboutLine, sit, cred)}\n\n${ask}\n\n${S}`;
       if (op?.introReply && !isLinkedIn) {
         // a reply-all on the introduction: thank the introducer, move them to bcc, then speak to the person
         introReply = { bcc: op.introReply };
@@ -1425,6 +1460,7 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       // LinkedIn connection note (not yet connected) or message (connected)
       if (isLinkedIn) {
         const short = op ? shortConnection(ctx, c!) : `[your link to ${first}]`;
+        if (o && short.includes(o)) qq = thereFor(qq, o);
         // someone who already knows the student is not told their school and year again
         const known = !!c && (c.kind === 'met' || (c.kind === 'prior_thread' && friend) || !!c.introduced);
         const intro = known
@@ -1463,7 +1499,7 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
           );
           body = `${recent ? `Hi ${first}, thanks for connecting. ` : `${G}\n\n`}${join(openText, aboutLine, sit, cred)} ${
             oneQuestion && qq.direct
-              ? `One question, if you have a minute: ${qq.direct}`
+              ? `One question, if you have a minute: ${lower1(qq.direct)} Even a line back would help, or ${minutes} minutes if a call is easier.`
               : `Would you have ${minutes} minutes in the next couple of weeks to ${qq.reacted ? 'talk about it' : `tell me ${qq.q}`}?`
           } ${emailOk}\n\n${S}`;
         }
@@ -1495,6 +1531,12 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       // a pointer to someone else fits a senior person who may not be the right one, never a friend or a peer
       const senior = isSeniorTitle(P.title) && !friend;
       const ref = c?.kind === 'referral' ? c.referrerName?.split(' ')[0] : undefined;
+      // the referrer is the strongest reason to answer, so a bump on a referred thread names them
+      const refLine = ref
+        ? c?.introduced
+          ? `Following up on ${ref}'s introduction in case my note got buried.`
+          : `${ref} suggested I write to you, so I wanted to float this back up in case it got buried.`
+        : undefined;
       const away = ctx.thread?.lastSignal === 'out_of_office' || !!ctx.chat?.awayUntil;
       const tc =
         ctx.targetCompany && (!org || normalizeCompany(ctx.targetCompany.name) === normalizeCompany(org))
@@ -1507,7 +1549,7 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
             : pick(
                 [
                   `Last note from me, I promise. If the next few weeks are too busy, no problem at all. If a ${minutes}-minute call ever does fit, I'll make the time work.`,
-                  `One last nudge and then I'll leave you be. If a ${minutes}-minute call${hear} fits at some point this cycle, I'd still be glad to take it.`,
+                  `One last nudge and then I'll leave you be. If a ${minutes}-minute call fits at some point this cycle, I'd still be glad to take it.`,
                 ],
                 seed,
                 'bump2',
@@ -1529,12 +1571,14 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
           : '';
         body = `${G}\n\n${
           formal
-            ? `I wanted to follow up on ${myNote}${about} in case it was missed. If ${minutes} minutes in the coming weeks would be possible, I would be grateful${pointer}.`
+            ? `${refLine ?? `I wanted to follow up on ${myNote}${about}.`} If ${minutes} minutes in the coming weeks would be possible, I would be grateful${pointer}.`
             : friend
               ? `Bumping this in case it got buried. I'd still love ${minutes} minutes${hear} whenever you have a moment, no rush at all.`
-              : pick(
+              : refLine
+                ? `${refLine} I'd still love ${minutes} minutes${hear} whenever it's convenient${pointer}.`
+                : pick(
                   [
-                    `${ref ? `${ref} suggested I write to you, so I wanted to float this back up in case it got buried.` : 'Floating this back up in case it got buried.'} I'd still love ${minutes} minutes${hear} whenever it's convenient${pointer}.`,
+                    `Floating this back up in case it got buried. I'd still love ${minutes} minutes${hear} whenever it's convenient${pointer}.`,
                     `Just surfacing ${myNote}${about} in case it got buried. Even ${minutes} minutes whenever it's convenient would help${pointer || ", and I completely understand if the timing isn't right"}.`,
                     `Following up on ${myNote}${about} in case it got lost. I'd still value ${minutes} minutes in the next couple of weeks${pointer || ", and completely understand if now isn't a good time"}.`,
                   ],
@@ -1542,7 +1586,11 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
                   'bump1',
                 )
         }\n\n${S}`;
-        if (ref) claims.push({ text: `${ref} suggested writing to ${first}`, kind: 'shared' });
+        if (ref)
+          claims.push({
+            text: c?.introduced ? `${ref} introduced the student to ${first}` : `${ref} suggested writing to ${first}`,
+            kind: 'shared',
+          });
         claims.push({ text: 'first bump in thread', kind: 'logistics' });
       }
       subject = threaded ? undefined : (reSubject ?? `${school} ${yl}, following up on my note`);
@@ -1550,6 +1598,9 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
     }
     case 'schedule': {
       const last = ctx.thread?.lastSignal;
+      // the reason they agreed to talk, so the times are not all the note says
+      const topic = subjectTopic(ctx.thread?.subject);
+      const looking = topic ? `\n\nLooking forward to hearing about ${topic}.` : '';
       const lead = pick(["That's great, thank you.", 'Thank you, that would be great.'], seed, 'sched');
       if (last === 'reschedule') {
         body = `${G}\n\nNo problem at all. ${
@@ -1583,7 +1634,7 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
             ? `Would either of these work? ${windowsText}.`
             : `Would ${windowsText} work?`;
         const alt = `If ${futureWindows.length === 2 ? 'neither does' : 'not'}, send me a time and I'll make it fit.`;
-        body = `${G}\n\n${lead} ${offer} ${alt}\n\n${S}`;
+        body = `${G}\n\n${lead} ${offer} ${alt}${looking}\n\n${S}`;
       } else if (ctx.user.schedulingLink) {
         body = `${G}\n\n${lead} Here's my calendar if it's easiest to grab a time: ${ctx.user.schedulingLink}\n\nIf nothing there works, just reply with a time that suits you.\n\n${S}`;
       } else {
@@ -1691,16 +1742,11 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       const questions: string[] = [];
       for (const a of asks) {
         if (RESUME_ASK.test(a)) {
-          parts.push(
-            pick(
-              [
-                "Happy to share my resume; I'll send it over today.",
-                "Of course, I'll send my resume over today.",
-              ],
-              seed,
-              'reply-resume',
-            ),
-          );
+          // the resume goes with this reply, not "over today": the student attaches it (a reminder, not a line)
+          const what = a.match(RESUME_ASK)![1]!.toLowerCase();
+          const doc = what === 'cv' ? 'CV' : what;
+          parts.push(pick([`I've attached my ${doc}.`, `My ${doc} is attached.`], seed, 'reply-resume'));
+          if (!needsInput.includes('resume')) needsInput.push('resume');
           claims.push({ text: `answers: ${a}`, kind: 'logistics' });
         } else if (TIMES_ASK.test(a) && (!QUESTION_START.test(a) || /\b(work|free|available)\b/i.test(a))) {
           if (!confirmed && !offeredTimes) {
@@ -1716,7 +1762,7 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
         } else questions.push(a.replace(/[.?]+$/, ''));
       }
       if (questions.length) {
-        if (ctx.answer?.trim()) parts.push(`${cap1(strip(ctx.answer))}.`);
+        if (ctx.answer?.trim()) parts.push(answerLine(questions[0]!, ctx.answer));
         else {
           parts.push(`[Your answer to: ${questions.join('? ')}?]`);
           needsInput.push('answer');
@@ -1731,7 +1777,8 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
               : "What times work for you over the next week or so? Send me a couple and I'll make one fit.",
         );
       }
-      body = `${G}\n\n${parts.join(' ')}${confirmed ? '\n\nLooking forward to it.' : ''}\n\n${S}`;
+      const topic = subjectTopic(ctx.thread?.subject);
+      body = `${G}\n\n${parts.join(' ')}${confirmed ? `\n\nLooking forward to ${topic ? `hearing about ${topic}` : 'it'}.` : ''}\n\n${S}`;
       subject = threaded ? undefined : (reSubject ?? 'Re: your note');
       break;
     }
@@ -1759,21 +1806,40 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
         needsInput.push('takeaway');
         line1 = `${thanks}. [One thing ${first} said that stuck with you]`;
       }
+      // an offer becomes the next step, never just a thank-you for it
       let line2 = '';
-      const op = offerPhrase(offer?.c);
-      if (op) {
-        // only a promise with a clear moment ("when the posting goes up") gets a follow-up line; a vague "when the
-        // timing is right" next to a firm resume date reads as a brush-off
-        const posting = /\b(posting|role|opening|application|req)\b/i.test(op);
-        line2 = ` Thanks also for ${theirWords(op)}${posting ? "; I'll follow up once it's live" : ''}.`;
+      let link: string | undefined;
+      const next = offer ? offerNext(offer.c, ctx, 'thanks') : undefined;
+      if (next) {
+        line2 = ` ${next.text}`;
+        if (next.resume && !needsInput.includes('resume')) needsInput.push('resume');
+        link = next.link;
         cite(offer);
       }
-      // a promise made in the conversation ("I will send my resume by Friday") is kept in the same note
+      // a promise made in the conversation ("I will send my resume by Friday") is kept in the same note, and a resume
+      // promised is attached to it rather than promised again
       const promise = (ctx.promises ?? []).map(promiseLine).find(Boolean);
-      if (promise) claims.push({ text: `promise: ${promise}`, kind: 'logistics' });
-      const line3 = promise ? ` ${promise}` : '';
-      const cycle = cyclePhrase(ctx.user.cycleLabel);
-      body = `${G}\n\n${line1}${line2}${line3}\n\n${pick([`I'll let you know how ${cycle} goes. Would it be alright to send a question your way if one comes up?`, `I'll keep you posted on how ${cycle} goes. Thanks again for being so generous with your time.`], seed, 'ty-close')}\n\n${S}`;
+      let line3 = '';
+      if (promise) {
+        claims.push({ text: `promise: ${promise}`, kind: 'logistics' });
+        const attached = attachPromise(promise);
+        if (attached) {
+          if (!next?.resume) {
+            line3 = ` ${attached}`;
+            if (!needsInput.includes('resume')) needsInput.push('resume');
+          } else {
+            const rest = attached.match(/, and (I'll .*)$/)?.[1];
+            line3 = rest ? ` As promised, ${rest}` : '';
+          }
+        } else line3 = ` ${promise}`;
+      }
+      const closers = [
+        "I'll let you know how recruiting goes. Would it be alright to send a question your way if one comes up?",
+        ...(/^thank/i.test(S.trim())
+          ? ["I'll keep you posted on how recruiting goes."]
+          : ["I'll keep you posted on how recruiting goes. Thanks again for being so generous with your time."]),
+      ];
+      body = `${G}\n\n${line1}${line2}${line3}\n\n${pick(closers, seed, 'ty-close')}${link ? `\n\n${link}` : ''}\n\n${S}`;
       subject = threaded
         ? undefined
         : when
@@ -1796,24 +1862,70 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
         break;
       }
       const firm = firmKindOf({ title: P.title, org, industry: P.orgIndustry }, sector);
+      const o = shortOrg(org);
+      const reopen = !!ctx.reopen;
       // a live deal or a fundraise is never asked about in writing
       const hook = fact(['hook'], (c) => !!hookProposition(c) && !isConfidential(c.text, firm));
-      const since = sinceLabel(meetingAt, now, tz);
+      const offer = fact(['offer'], (c) => !!offerNext(c, ctx, 'nurture'));
+      const since = sinceLabel(meetingAt ?? (reopen ? ctx.thread?.lastInboundAt : undefined), now, tz);
       const talked = !!meetingAt;
-      const update = ctx.update?.trim();
-      if (!update && !hook) needsInput.push('update');
+      const topic = subjectTopic(ctx.thread?.subject);
+      const tc =
+        ctx.targetCompany && org && normalizeCompany(ctx.targetCompany.name) === normalizeCompany(org)
+          ? ctx.targetCompany
+          : undefined;
+      const intern = isInternCycle(ctx.user.cycleLabel);
+      // the student's own update first; writing again after a sign-off can say what is on record instead (they
+      // have applied, or plan to apply, to the person's company; they are recruiting this cycle)
+      const typed = ctx.update?.trim() ? softLower(strip(ctx.update)) : undefined;
+      const roleText = tc?.roleLabel ? roleWords(tc.roleLabel) : `${fnLabel} ${intern ? 'internship' : 'role'}`;
+      const derived = reopen
+        ? tc
+          ? tc.applied
+            ? `I've applied for ${o ? `${possessive(o)} ` : 'the '}${roleText}`
+            : `I'm planning to apply for ${o ? `${possessive(o)} ` : 'the '}${roleText} this cycle`
+          : `I'm recruiting for ${lookingForPhrase(ctx)} this cycle`
+        : undefined;
+      const update = typed ?? derived;
+      // their news is the reason to write: a new role comes first
+      const na = ctx.newAffiliation;
+      const naTitle = na?.title?.replace(/\s*[,(].*$/, '').trim();
+      if (!update && !hook && !offer && !(na?.org && naTitle)) needsInput.push('update');
       const parts: string[] = [];
+      let congrats = false;
+      if (na?.org && naTitle) {
+        parts.push(
+          `I saw you're now ${article(naTitle)} ${naTitle} at ${shortOrg(na.org)}. Congratulations, that's great to see.`,
+        );
+        claims.push({ text: `new role: ${na.title} at ${na.org}`, kind: 'about_person' });
+        congrats = true;
+      }
       // the update stands on its own: the note never claims it happened because of their advice, which Orbit
       // does not know
-      if (update)
-        parts.push(`Quick update${since ? ` since we talked ${since}` : ''}: ${softLower(strip(update))}.`);
-      else if (!hook)
+      if (reopen && askedForUpdate(ctx.thread?.lastInboundBody) && update)
+        parts.push(`You asked me to keep you posted, so here's an update: ${update}.`);
+      else if (reopen) {
+        parts.push(
+          `Thanks again for ${talked ? 'talking with me' : 'your help'}${since ? ` ${since}` : ''}${topic ? ` about ${topic}` : ''}.${
+            update ? ` ${cap1(update)}.` : ' [One real update since then.]'
+          }`,
+        );
+        if (topic) claims.push({ text: `the thread was about ${topic}`, kind: 'shared' });
+      } else if (update)
+        parts.push(`Quick update${since ? ` since we talked ${since}` : ''}: ${update}.`);
+      else if (!hook && !offer && !congrats)
         parts.push(
           `Quick update${since ? ` since we talked ${since}` : ''}: [one real update${since ? '' : talked ? ` since you last spoke with ${first}` : ` to share with ${first}`}].`,
         );
-      // one line about them, as a wish: "No reply needed" never follows a question
-      const na = ctx.newAffiliation;
-      const newRole = na?.title ? roleNoun(na.title) : undefined;
+      // an open offer is taken up, not left in the notes
+      const next = offer ? offerNext(offer.c, ctx, 'nurture') : undefined;
+      if (next) {
+        parts.push(next.text);
+        if (next.resume && !needsInput.includes('resume')) needsInput.push('resume');
+        cite(offer);
+      }
+      // one line about them, as a wish: "No reply needed" never follows a question. A note from after the
+      // conversation is something the student saw, not something they said.
       if (hook) {
         const prop = hookProposition(hook.c)!;
         const tense = hookTense(prop, now);
@@ -1823,17 +1935,34 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
             : tense === 'ongoing'
               ? "Hope it's going well."
               : 'Hope it went well.';
-        parts.push(`${parts.length ? 'Also, you' : 'You'} mentioned ${prop}. ${wish}`);
+        const saidThen =
+          !!meetingAt &&
+          /\b(said|mentioned|told)\b/i.test(hook.fact.text) &&
+          Math.abs(new Date(hook.fact.occurredAt ?? hook.fact.createdAt ?? 0).getTime() - new Date(meetingAt).getTime()) <=
+            2 * 86_400_000;
+        parts.push(`${saidThen ? 'You mentioned' : parts.length ? 'I also saw that' : 'I saw that'} ${prop}. ${wish}`);
         cite(hook);
-      } else if (na?.org && newRole && !na.observed)
-        parts.push(`Hope the new role as ${article(newRole)} ${newRole} is going well.`);
-      else if (org) parts.push(`Hope things are going well at ${org}.`);
-      body = `${G}\n\n${parts.join(' ')}\n\nNo reply needed, just wanted to stay in touch.\n\n${S}`;
+      } else if (!congrats && !next && o) parts.push(`Hope things are going well at ${o}.`);
+      // a reason to write again after months (their company is on the student's list) earns one small ask
+      const ask =
+        reopen && tc && !next && !isFriend(P)
+          ? `Would you have ${minutes} minutes in the next couple of weeks to tell me what ${o ?? 'the team'} looks for in ${intern ? 'interns' : 'new grads'}? Happy to do it over email if that's easier.`
+          : undefined;
+      const close =
+        ask ??
+        (next && /\?$/.test(next.text)
+          ? undefined
+          : congrats
+            ? 'No need to reply, I just wanted to say congratulations.'
+            : 'No reply needed, just wanted to stay in touch.');
+      body = `${G}\n\n${parts.join(' ')}${close ? `\n\n${close}` : ''}\n\n${S}`;
       subject = threaded
         ? undefined
-        : since?.startsWith('in ')
-          ? `Quick update since ${since.slice(3)}`
-          : `Quick update from ${school || ctx.user.firstName}`;
+        : congrats
+          ? `Congratulations on the new role`
+          : since?.startsWith('in ')
+            ? `Quick update since ${since.slice(3)}`
+            : `Quick update from ${school || ctx.user.firstName}`;
       break;
     }
     case 'congratulate': {
@@ -1854,13 +1983,14 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       if (na?.org && newRole && sameOrg) {
         const name = [na.org.trim(), na.previousOrg!.trim()].sort((a, b) => a.length - b.length)[0];
         what = `your new role as ${article(newRole)} ${newRole} at ${name}`;
-      } else if (na?.org && newRole) what = `your move${from} to ${na.org} as ${article(newRole)} ${newRole}`;
-      else if (na?.org && !sameOrg) what = `your move${from} to ${na.org}`;
+      } else if (na?.org && newRole)
+        what = `your move${from} to ${shortOrg(na.org)} as ${article(newRole)} ${newRole}`;
+      else if (na?.org && !sameOrg) what = `your move${from} to ${shortOrg(na.org)}`;
       else if (newRole) what = `your new role as ${article(newRole)} ${newRole}`;
       else if (news) what = softLower(strip(news).replace(/^(congratulations|congrats) on\s+/i, ''));
       if (!what) {
         needsInput.push('news');
-        body = `${G}\n\nCongratulations on [what you are congratulating ${first} on, e.g. a promotion or a launch].${org ? ` Hope things are going well at ${org}.` : ''}\n\n${S}`;
+        body = `${G}\n\nCongratulations on [what you are congratulating ${first} on, e.g. a promotion or a launch].${org ? ` Hope things are going well at ${shortOrg(org)}.` : ''}\n\n${S}`;
         subject = threaded ? undefined : 'Congratulations';
         break;
       }
@@ -1877,11 +2007,19 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       if (tie) cite(tie);
       // "well deserved" is for someone the student knows; from a stranger it is presumptuous
       const knows = !!meetingAt || isFriend(P) || P.strength >= 0.35 || !!ctx.history?.repliedEver;
-      body = `${G}\n\nJust saw the news about ${what}. Congratulations${tie || !knows ? '.' : ', well deserved.'}${tieLine}${recent ? ' Hope the first few weeks are going well.' : ''}\n\n${S}`;
+      // "just saw the news" only when it is news: not when they have talked since it happened, and not for a change
+      // Orbit only noticed on an import
+      const talkedSince =
+        !!meetingAt && !!na?.since && new Date(meetingAt).getTime() > new Date(na.since).getTime();
+      const lead =
+        recent && !talkedSince
+          ? `Just saw the news about ${what}. Congratulations`
+          : `Congratulations on ${what}`;
+      body = `${G}\n\n${lead}${tie || !knows ? '.' : ', well deserved.'}${tieLine}${recent && !talkedSince ? ' Hope the first few weeks are going well.' : ''}\n\n${S}`;
       subject = threaded
         ? undefined
         : na?.org && !sameOrg && what.startsWith('your move')
-          ? `Congratulations on ${na.org}`
+          ? `Congratulations on the move to ${shortOrg(na.org)}`
           : 'Congratulations';
       break;
     }
@@ -1894,36 +2032,34 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
         subject = threaded ? undefined : 'A small ask';
         break;
       }
+      const co = shortOrg(company)!;
+      const firm = firmKindOf({ title: P.title, org: company, industry: P.orgIndustry }, sector);
       // only an offer to refer (or to pass the resume along) is a reason to ask for one; a practice case or a memo
       // template they offered is not recast as a referral offer
       const offer = fact(
         ['offer'],
         (c) =>
           c.you &&
-          /\b(refer|referral|pass (along )?my (resume|name|application)|flag|put in a (good )?word|forward my (resume|application)|submit my name|recommend me)\b/i.test(
+          /\b(refer|referral|pass (along )?my (resume|name|application)|flag|put in a (good )?word|put my name in|forward my (resume|application)|submit my name|recommend me)\b/i.test(
             c.text,
           ),
       );
-      const intern = isInternCycle(ctx.user.cycleLabel);
+      // an intro they offered is the ask, not a referral they never offered
+      const introOffer = offer
+        ? undefined
+        : fact(['offer'], (c) => c.you && /\b(introduce me|connect me|put me in touch)\b/i.test(c.text));
       const label = tc?.roleLabel?.trim();
-      // no role on record: the student's target names one only when it is a role that firm hires for ("software
-      // engineering internship" at Stripe, never at McKinsey); otherwise the student says which role
-      const fnKey = functionFor(P.title, ctx.user.targetFunctions);
-      const knownRole =
-        !!label ||
-        functionFits(
-          fnKey,
-          P.title,
-          firmKindOf({ title: P.title, org: company, industry: P.orgIndustry }, sector),
-        );
-      if (!knownRole) needsInput.push('role');
+      // no role on record: the student says which (Orbit never assumes one), and the prompt asks whether the role is
+      // one this person's side of the firm hires for at all
+      if (!label) needsInput.push('role');
+      const fits = functionFits(functionFor(P.title, ctx.user.targetFunctions), P.title, firm);
       const role = label
         ? /\b(role|internship|position|program|programme|req)$/i.test(label)
           ? label
           : `${label} role`
-        : knownRole
-          ? `${fnLabel} ${intern ? 'internship' : 'role'}`
-          : '[role you are applying for]';
+        : fits
+          ? '[role you are applying for]'
+          : `[role at ${co}, if it is one ${first}'s part of the firm hires for; if not, a check-in fits better than a referral ask]`;
       const req = tc?.reqId
         ? ` (req ${tc.reqId}${tc.link ? ', link below' : ''})`
         : tc?.link
@@ -1931,59 +2067,86 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
           : '';
       const spoke = ctx.chat?.completedAt || ctx.chat?.meetingAt;
       const when = spoke ? whenLabel(meetingAt, now, tz) : undefined;
-      const otherCompany = !!org && company.toLowerCase() !== org.toLowerCase();
+      const otherCompany = !!org && normalizeCompany(company) !== normalizeCompany(org);
       const applied = !!tc?.applied;
       const applyLine = applied
-        ? `I've applied for the ${role} at ${company}${req}.`
-        : `I'm applying for the ${role} at ${company}${req}.`;
-      if (!spoke && !offer) {
-        // Thin relationship: the first rung of the ladder is a process question, not a referral request. Someone who
-        // knows the student is not told their school and year.
-        claims.push({ text: `asks about referral process at ${company}`, kind: 'logistics' });
-        const intro = isFriend(P) || ctx.history?.repliedEver ? applyLine : `I'm ${me}, and ${applyLine}`;
-        const question = applied
-          ? `Quick question about process: is there anything that helps an application at ${company} once it's in, like talking to someone on the team?`
-          : `Quick question about process: are referrals common at ${company}, and is it better to talk to someone on the team before I submit?`;
-        body = `${G}\n\n${intro} ${question} Completely understand if that's not something you can weigh in on.\n\n${S}`;
-        subject = knownRole
-          ? `${company} ${role}, a quick process question`
-          : `${company}, a quick process question`;
-        if (tc?.link) body = body.replace(`\n\n${S}`, `\n\n${tc.link}\n\n${S}`);
+        ? `I've applied for the ${role} at ${co}${req}.`
+        : `I'm applying for the ${role} at ${co}${req}.`;
+      const friend = isFriend(P);
+      if (!spoke && !offer && !introOffer) {
+        if (!friend) {
+          // No conversation yet: a referral ask (even one dressed as a process question) is the wrong first message.
+          // It is the conversation ask, with the application as one clause of context.
+          const out = generateDraft({
+            ...ctx,
+            kind: 'outreach',
+            applicationLine: applied
+              ? `I've applied for ${possessive(co)} ${label ? roleWords(label) : 'internship'}${tc?.reqId ? ` (req ${tc.reqId})` : ''}.`
+              : undefined,
+          });
+          return { ...out, kind: 'outreach' };
+        }
+        // a friend gets a direct, gracious ask, never a coy process question
+        claims.push({ text: `${first} knows the student personally`, kind: 'shared' });
+        body = `${G}\n\n${applyLine} Would you be comfortable referring me, or flagging my application to the recruiting team? I've attached my resume. Totally fine if not, I know it puts your name on it.${tc?.link ? `\n\n${tc.link}` : ''}\n\n${S}`;
+        if (!needsInput.includes('resume')) needsInput.push('resume');
+        subject = `${co} ${label ? role : 'application'}, a small ask`;
         break;
       }
       let open: string;
       if (offer) {
-        const t = reported(offer.c.text.replace(/^you offered\b/, 'you kindly offered'));
+        const t = reported(theirWords(offer.c.text).replace(/^you offered\b/, 'you kindly offered'));
         open = `When we spoke${when ? ` ${when}` : ''}, ${t}, so I wanted to follow up.`;
         cite(offer);
+      } else if (introOffer) {
+        const t = reported(theirWords(introOffer.c.text).replace(/^you offered\b/, 'you kindly offered'));
+        open = `When we spoke${when ? ` ${when}` : ''}, ${t}. I'd love to take you up on that.`;
+        cite(introOffer);
       } else open = `Thanks again for the conversation${when ? ` ${when}` : ''}.`;
-      const fit =
-        ctx.user.credibility && !offer ? ` For context, I ${softLower(strip(ctx.user.credibility))}.` : '';
+      // a different function at a tech company (a designer, for an engineering role) passes the name along; they
+      // do not refer into a team they are not on
+      const theirFn = titleFunction(P.title);
+      const roleFn = titleFunction(label);
+      const crossFn = sector === 'tech' && !!theirFn && !!roleFn && theirFn !== roleFn && theirFn !== 'swe';
       let askLine: string;
-      if (otherCompany)
-        askLine = `I know you're at ${org}, but if you know anyone at ${company} who'd be comfortable flagging my application, an intro would mean a lot.`;
+      if (introOffer)
+        askLine = 'I can send a two-line blurb and my resume so the intro takes you no time.';
+      else if (otherCompany)
+        askLine = `I know you're at ${shortOrg(org)}, but if you know anyone at ${co} who'd be comfortable flagging my application, an intro would mean a lot.`;
+      else if (offer)
+        askLine =
+          sector === 'tech' && !crossFn
+            ? applied
+              ? "I've attached my resume so adding the referral takes two minutes."
+              : "I've attached my resume so the referral takes two minutes before I submit through the portal."
+            : "I've attached my resume so it's easy to pass along.";
+      else if (crossFn)
+        askLine = `If you'd be comfortable passing my name to the recruiter or the hiring manager for the role, I'd be grateful. I've attached my resume.`;
       else if (sector === 'tech')
         askLine = applied
-          ? 'Would you be willing to add a referral for my application?'
-          : 'Would you be willing to refer me before I submit through the portal?';
-      else askLine = `If you'd be comfortable flagging my name to the recruiting team, I'd be grateful.`;
-      // they asked for the posting ("send me the posting"): it goes in, or the student is asked for it
+          ? "Would you be willing to add a referral for my application? I've attached my resume."
+          : "Would you be willing to refer me before I submit through the portal? I've attached my resume.";
+      else
+        askLine = `If you'd be comfortable flagging my name to the recruiting team, I'd be grateful. I've attached my resume.`;
+      if (!introOffer && !needsInput.includes('resume')) needsInput.push('resume');
+      // they asked for the posting ("send me the posting"): it goes in, or the student is asked for it, with the
+      // team when they made picking one the condition
+      const said = `${offer?.fact.text ?? ''} ${ctx.thread?.lastInboundBody ?? ''}`;
       const wantsPosting =
         !tc?.link &&
         /\b(send|share|forward|pass)\b[^.?!]{0,40}\b(posting|job (link|id|description)|req(uisition)?|link to the (role|job))\b/i.test(
-          `${offer?.fact.text ?? ''} ${ctx.thread?.lastInboundBody ?? ''}`,
+          said,
         );
+      const wantsTeam = /\b(picked|chosen|choose|pick|decided on)\b[^.?!]{0,15}\bteam\b/i.test(said);
       if (wantsPosting) needsInput.push('posting');
-      const resumeLine =
-        tc?.link || wantsPosting
-          ? 'The posting is below, and I can send my resume right away. Completely fine if not.'
-          : 'I can send my resume and the posting right away. Completely fine if not.';
-      body = `${G}\n\n${open} ${applyLine}${fit} ${askLine} ${resumeLine}${wantsPosting ? '\n\n[link to the posting]' : ''}\n\n${S}`;
-      subject = !knownRole
-        ? `${company}, a small ask`
+      // an offer is not hedged ("completely fine if not" to someone who offered reads as not having listened)
+      const out = offer || introOffer ? '' : ' Completely fine if not.';
+      body = `${G}\n\n${open} ${applyLine} ${askLine}${out}${wantsPosting ? `\n\n[${wantsTeam ? 'the team you picked, and the ' : ''}link to the posting]` : ''}\n\n${S}`;
+      subject = !label
+        ? `${co}, a small ask`
         : applied
-          ? `Quick update + applied to ${company} ${role}`
-          : `${company} ${role}, a small ask`;
+          ? `Quick update + applied to ${co} ${role}`
+          : `${co} ${role}, a small ask`;
       if (tc?.link) body = body.replace(`\n\n${S}`, `\n\n${tc.link}\n\n${S}`);
       break;
     }
@@ -1997,34 +2160,39 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       }
       const tFirst = t.firstName ?? t.name.split(' ')[0]!;
       const tRole = roleNoun(t.title);
-      const desc = tRole ? ` (${t.title}${t.org ? ` at ${t.org}` : ''})` : t.org ? ` at ${t.org}` : '';
-      // "their path" stays "their path" in the note to the connector (the name is said once, in the blurb)
-      const topic = t.why
-        ? strip(t.why)
-        : t.org
-          ? `how ${t.org} thinks about ${fnLabel} hiring`
-          : `how ${tFirst} got into ${fnLabel}`;
-      const cred = ctx.user.credibility
-        ? ` ${ctx.user.firstName} ${softLower(strip(ctx.user.credibility))}, and`
+      const tOrg = shortOrg(t.org);
+      const desc = tRole ? `, ${article(t.title!)} ${t.title}${tOrg ? ` at ${tOrg}` : ''}` : tOrg ? ` at ${tOrg}` : '';
+      // the credibility line goes in the blurb only when it means something to the target (an engineer, a founder)
+      const targetSector = sectorOf({ title: t.title, org: t.org }, ctx.user.targetFunctions);
+      const credFits =
+        !!ctx.user.credibility &&
+        targetSector === 'tech' &&
+        /\b(engineer|engineering|developer|cto|founder|product)\b/i.test(t.title ?? '');
+      const cred = credFits
+        ? ` ${ctx.user.firstName} ${softLower(strip(ctx.user.credibility!))}, and`
         : ` ${ctx.user.firstName}`;
       const link =
         ctx.connection?.kind === 'shared_employer' && ctx.connection.sharedOrg
           ? ` I noticed you two worked together at ${ctx.connection.sharedOrg}.`
           : '';
       const intern = isInternCycle(ctx.user.cycleLabel);
-      // the blurb asks about the same thing as the note: the reason given, or their path
+      // the topic is said once, in the blurb, with the target's name ("Lucas's move from coverage into the sponsors
+      // group", "how Lucas chose the healthcare practice"); the note to the connector only asks
       const blurbTopic = t.why
-        ? strip(t.why).replace(/\btheir\b/, `${tFirst}'s`)
+        ? strip(t.why)
+            .replace(/\btheir\b/, `${tFirst}'s`)
+            .replace(/\bthey\b/, tFirst)
+            .replace(/\bthem\b/, tFirst)
         : tRole
-          ? `${tFirst}'s path to ${tRole}${t.org ? ` at ${t.org}` : ''}`
-          : `${tFirst}'s work${t.org ? ` at ${t.org}` : ''}`;
+          ? `${tFirst}'s path to ${tRole}${tOrg ? ` at ${tOrg}` : ''}`
+          : `${tFirst}'s work${tOrg ? ` at ${tOrg}` : ''}`;
       const blurb = `"${ctx.user.fullName} is ${me}, recruiting for ${fnLabel} ${intern ? 'internships' : 'roles'}.${cred} would love 15 minutes to hear about ${blurbTopic}."`;
-      body = `${G}\n\nSmall ask. I'm hoping to talk with ${t.name}${desc} about ${topic}.${link} If you'd be comfortable making a short intro, here's something you could forward:\n\n${blurb}\n\nAnd if it's not a good fit to ask, no worries at all.\n\n${S}`;
+      body = `${G}\n\nSmall ask. Would you be comfortable introducing me to ${t.name}${desc}?${link} If so, here's a short note you could forward:\n\n${blurb}\n\nAnd if it's not a good fit to ask, no worries at all.\n\n${S}`;
       claims.push({ text: `target: ${t.name}`, kind: 'logistics' });
       subject = threaded ? undefined : `Small ask: intro to ${t.name}?`;
       if (t.offered) {
         // following up on an intro they offered: name the offer, make forwarding a two-second task
-        const offerBlurb = `"${ctx.user.fullName} is ${me}, recruiting for ${fnLabel} ${intern ? 'internships' : 'roles'}.${cred} would love 15 minutes to hear about your work${t.org ? ` at ${t.org}` : ''}."`;
+        const offerBlurb = `"${ctx.user.fullName} is ${me}, recruiting for ${fnLabel} ${intern ? 'internships' : 'roles'}.${cred} would love 15 minutes to hear about ${t.why ? blurbTopic : `${tFirst}'s work${tOrg ? ` at ${tOrg}` : ''}`}."`;
         body = `${G}\n\nWhen we spoke, you kindly offered to introduce me to ${t.name}. If that's still easy, here's a short note you could forward so it takes no time:\n\n${offerBlurb}\n\nAnd if the timing isn't right anymore, no worries at all. Thanks again for offering.\n\n${S}`;
         subject = threaded || ctx.thread ? undefined : `Intro to ${t.name}`;
       }
@@ -2033,21 +2201,24 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
     case 'report_back': {
       const rb = ctx.reportBack;
       const tName = rb?.targetName ?? 'them';
+      const tFirst = tName.split(' ')[0]!;
       const line = rb?.line ? ` ${cap1(strip(rb.line))}.` : '';
+      // the introducer is never told "I haven't heard back": that asks them to chase a colleague. The student wrote
+      // to the person; the outcome is reported once there is one.
       const outcome =
         rb?.outcome === 'spoke'
           ? `We spoke ${rb?.when ?? 'last week'}.${line}`
           : rb?.outcome === 'declined'
-            ? `${tName.split(' ')[0]} couldn't make time this cycle, which is completely fair.`
-            : `I haven't heard back yet, but I wanted you to know I followed up on it.`;
+            ? "The timing didn't work out this cycle, which is completely fair."
+            : `I've followed up${rb?.when ? ` ${rb.when}` : ''} and will let you know how it goes.`;
       // "making it happen" only when it did happen
       const thanks =
         rb?.outcome === 'spoke'
           ? 'Really appreciate you making it happen'
-          : 'I really appreciate you making the intro either way';
-      body = `${G}\n\nQuick note to say thank you for the intro to ${tName}. ${outcome} ${thanks}, and I'll keep you posted on how recruiting goes.\n\n${S}`;
+          : 'I really appreciate you making the intro';
+      body = `${G}\n\nThanks again for connecting me with ${tFirst}. ${outcome} ${thanks}, and I'll keep you posted on how recruiting goes.\n\n${S}`;
       claims.push({ text: `report back on ${tName}`, kind: 'logistics' });
-      subject = threaded ? undefined : `Thank you for the intro to ${tName.split(' ')[0]}`;
+      subject = threaded ? undefined : `Thank you for the intro to ${tFirst}`;
       break;
     }
   }
@@ -2074,6 +2245,84 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
     kind,
     introReply,
   };
+}
+
+/**
+ * The student's answer to their question with a lead-in, so a bare fragment ("Mostly healthcare and operations work,
+ * since ...") does not read like a form field: "As for teams, mostly healthcare and operations work, since ...".
+ */
+function answerLine(question: string, answer: string): string {
+  const a = strip(answer);
+  const noun = question.match(/\b(?:which|what)\s+(?:kinds? of\s+|types? of\s+)?([a-z]+(?:\s+[a-z]+)?)\b/i)?.[1];
+  const full = /^(I|I'm|I've|I'd|My|We)\b/.test(a);
+  if (!noun || /^(are|is|do|does|would|could|you|time|times)\b/i.test(noun) || /^(as for|on|for)\b/i.test(a))
+    return `${cap1(a)}.`;
+  const what = noun.split(' ')[0]!.toLowerCase();
+  return `As for ${what}, ${full ? a : lower1(a)}.`;
+}
+
+/** A role label as words in a sentence: "Software Engineering Intern" is "software engineering internship". */
+function roleWords(label: string): string {
+  const l = lowerPhrase(label.trim()).replace(/\bintern$/, 'internship');
+  return /\b(internship|role|program|programme|position)$/.test(l) ? l : `${l} role`;
+}
+
+/**
+ * What the student does with an offer the person made: the next step, never only "thanks also for offering ...". A
+ * practice case is taken up with a time, an intro with a blurb, a template or a pointer with a plain "I'd love
+ * that", a resume to pass along is attached, and a referral promised "when the posting goes up" gets the posting
+ * once it is on record (`resume`: the note says the resume is attached, so the student attaches it).
+ */
+function offerNext(
+  c: FactClause,
+  ctx: DraftContext,
+  mode: 'thanks' | 'nurture',
+): { text: string; resume?: boolean; link?: string } | undefined {
+  if (!c.you || !c.rest) return undefined;
+  const v = (c.verb ?? '').toLowerCase();
+  if (!/^(offered|volunteered|agreed|promised)$/.test(v) && !(v === 'said' && /^you'd be /.test(c.rest)))
+    return undefined;
+  const r = theirWords(reported(c.rest.replace(/^(to|you'd be happy to|you'd be glad to)\s+/i, '')));
+  const lead = mode === 'thanks' ? `Thanks also for offering to ${r}.` : `When we spoke, you offered to ${r}.`;
+  const org = ctx.person.org;
+  const tc =
+    ctx.targetCompany && (!org || normalizeCompany(ctx.targetCompany.name) === normalizeCompany(org))
+      ? ctx.targetCompany
+      : undefined;
+  if (/\b(refer me|referral|(pass|forward|send|share|submit|put)\s+(along\s+)?my (resume|name|application))\b/i.test(r)) {
+    const later = /\b(when|once|after|as soon as)\b.*\b(posting|role|req|opening|application|team)\b/i.test(r);
+    if (later && !tc?.applied && !tc?.link)
+      // nothing to act on yet: the posting is not up, or the student has not picked the team
+      return { text: `${lead} I'll send the posting as soon as it's live.` };
+    const posting = tc?.link ? ', along with the posting (link below)' : '';
+    return {
+      text: `${lead} I've attached my resume${posting} so it's easy to pass along${mode === 'nurture' ? ' if the offer still stands' : ''}.`,
+      resume: true,
+      link: tc?.link,
+    };
+  }
+  if (/^introduce me\b|^connect me\b|^put me in touch\b/i.test(r))
+    return { text: `${lead} I'd love to take you up on that, and I can send a two-line blurb to make it easy.` };
+  if (/\b(practice|mock) (case|interview)s?\b|\bcase prep\b|\b(review|look over|go over) my\b/i.test(r))
+    return { text: `${lead} I'd love to take you up on that. Would sometime in the next few weeks work?` };
+  if (/^(share|send|show)\b/i.test(r)) return { text: `${lead} I'd love to see it whenever it's easy.` };
+  if (/^(tell|let) me\b/i.test(r)) return { text: `${lead} I'd love to hear whenever you have a minute.` };
+  return { text: `${lead} I'd love to take you up on that.` };
+}
+
+/**
+ * A promise to send the resume, kept as an attachment: "As promised, my resume is attached." (and anything else in
+ * the promise stays a promise: "..., and I'll send the marketplace project link by Friday."). Undefined when the
+ * promise is not about the resume.
+ */
+function attachPromise(promise: string): string | undefined {
+  const m = promise.match(/^As promised, I'll (?:send|share|email|forward)\s+(.+?)(\s+(?:by|on|before|today|tomorrow|this|next)\b.*)?\.$/i);
+  if (!m || !/\bmy (resume|cv)\b/i.test(m[1]!)) return undefined;
+  const others = m[1]!
+    .replace(/\bmy (resume|cv)\b(\s+and\s+)?/i, '')
+    .replace(/\s+and\s*$/i, '')
+    .trim();
+  return `As promised, my resume is attached${others ? `, and I'll send ${others}${m[2] ?? ''}` : ''}.`;
 }
 
 /** "I will send my resume by Friday" -> "As promised, I'll send my resume by Friday." Undefined for anything else. */
@@ -2248,6 +2497,10 @@ export function contextText(ctx: DraftContext): string {
       styleCard: { greetingPatterns: ctx.styleCard.greetingPatterns, signoffs: ctx.styleCard.signoffs },
     }),
     schoolShort(ctx.user.school),
+    // firms as their people write them ("BCG", "a16z", "Lightspeed")
+    ...[ctx.person.org, ctx.person.previousOrg, ctx.targetCompany?.name, ctx.newAffiliation?.org, ctx.target?.org]
+      .map((o) => shortOrg(o) ?? '')
+      .filter(Boolean),
     targetLabel(ctx),
     cyclePhrase(ctx.user.cycleLabel),
     yearLabel(ctx.user.gradYear, ctx.user.degree, now),
