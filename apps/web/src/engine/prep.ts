@@ -11,6 +11,7 @@ import type {
   User,
 } from '@orbit/core';
 import {
+  expandShorthand,
   financeFirmKind,
   functionPhrase,
   isRecruiter,
@@ -98,7 +99,8 @@ function lastTouchSentence(tp: Touchpoint, first: string, when: string): string 
  * to the student, so it says "you".
  */
 export function toYou(text: string): string {
-  return text
+  // note shorthand ("McK", "first round apps") is written out wherever Orbit shows a note back
+  return expandShorthand(text)
     .replace(/\bI'm\b/g, "you're")
     .replace(/\bI've\b/g, "you've")
     .replace(/\bI'll\b/g, "you'll")

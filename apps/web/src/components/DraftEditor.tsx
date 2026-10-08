@@ -447,7 +447,7 @@ export function DraftEditor({
         <span className="ml-auto flex gap-2">
           {onCancel && (
             <Button variant="ghost" size="sm" onClick={cancel} data-testid="draft-cancel">
-              Cancel
+              Close
             </Button>
           )}
           {!isLinkedIn && !direct && !approveLabel && (

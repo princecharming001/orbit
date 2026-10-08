@@ -1707,6 +1707,26 @@ describe('usability round 5', () => {
       'you said to update you after first-round applications',
     );
   });
+  it('a request to keep them posted is not thanked as advice: the real advice is', () => {
+    const facts = [
+      fact(
+        'a',
+        'advice',
+        'They told me to reach out to her colleague Marcus Lee who runs Ross recruiting events for McK',
+      ),
+      fact('b', 'advice', 'They said to update her after first round apps'),
+    ];
+    const t = generateDraft(
+      base({
+        kind: 'thank_you',
+        facts,
+        person: { ...base().person, firstName: 'Rachel', lastName: 'Kim', fullName: 'Rachel Kim' },
+        chat: { completedAt: '2026-10-05T19:00:00Z' },
+      }),
+    );
+    expect(t.body).toMatch(/your advice to get in touch with your colleague Marcus Lee/);
+    expect(t.body).not.toMatch(/advice to update you/);
+  });
   it('an offer and a promise about the same resume get one timing, and the note keeps to its own length', () => {
     const facts = [
       fact('o', 'offer', 'offered to look over my resume before applications open'),

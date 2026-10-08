@@ -29,7 +29,7 @@ export const KIND_LABEL: Record<
   new_outreach: { label: 'First message', tone: 'accent' },
   warm_up_engage: { label: 'LinkedIn warm-up', tone: 'neutral' },
   follow_up_bump: { label: 'Follow-up', tone: 'warn' },
-  schedule_propose: { label: 'Propose times', tone: 'accent' },
+  schedule_propose: { label: 'Find a time', tone: 'accent' },
   schedule_confirm: { label: 'Confirm time', tone: 'accent' },
   prep_brief: { label: 'Prep', tone: 'good' },
   thank_you: { label: 'Thank-you', tone: 'good' },

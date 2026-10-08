@@ -1558,6 +1558,74 @@ test.describe('Usability round 5: one draft, kept edits, saved settings, chats t
   });
 });
 
+test.describe('Usability round 5: chats Orbit cannot see, and notes in shorthand', () => {
+  test('"They replied" clears Waiting on a reply, and the reply asks for their times when Orbit has no calendar', async ({
+    page,
+  }) => {
+    await newStudent(page);
+    await addByHand(page, 'Aisha Bello', 'Bain', {
+      linkedin: 'https://www.linkedin.com/in/aisha-bello-bain',
+    });
+    await page.getByTestId('person-write').click();
+    await page.getByTestId('warmup-skip').click();
+    await page.getByTestId('draft-input-connection').fill('We both played club soccer at Michigan');
+    await page.getByTestId('draft-redraft').click();
+    await page.getByRole('button', { name: /^copy (note )?& open linkedin$/i }).click();
+    await page.getByRole('button', { name: /^i sent it to aisha$/i }).click();
+    await expect(page.getByText(/logged as sent to aisha/i)).toBeVisible();
+    // twelve days of silence on LinkedIn: no follow-up is due yet, so she waits on Today's side list
+    await page.clock.fastForward(12 * 86_400_000);
+    await page.goto('today');
+    const quiet = page.getByTestId('today-quiet');
+    await expect(quiet).toContainText('Aisha Bello');
+    await quiet.getByTestId('today-quiet-replied').click();
+    await expect(page.getByTestId('today-quiet')).toHaveCount(0);
+    const card = page
+      .getByTestId('suggestion-schedule_propose')
+      .filter({ hasText: /Aisha replied\. Write back/ });
+    await expect(card).toBeVisible();
+    await expect(card).toContainText('Find a time');
+    await card.getByTestId('draft-review').click();
+    const body = card.getByLabel('Message body');
+    // Orbit has no calendar here: the draft asks for her times instead of offering slots the student never chose
+    await expect(body).toHaveValue(/what times work for you/i);
+    await expect(body).not.toHaveValue(/would either of these work|\(UTC\)|\d(am|pm)\b/i);
+    await page.reload();
+    await expect(page.getByTestId('suggestion-schedule_propose')).toBeVisible();
+    await expect(page.getByTestId('today-quiet')).toHaveCount(0);
+    await page.goto('pipeline');
+    await expect(chatCard(page, 'Aisha Bello')).toHaveAttribute('data-testid', 'chat-card-replied');
+    await expect(chatCard(page, 'Aisha Bello')).not.toContainText(/quiet/);
+  });
+
+  test('a thank-you built from a shorthand note writes it out, speaks to the person, and says to read it once', async ({
+    page,
+  }) => {
+    await newStudent(page);
+    await addByHand(page, 'Rachel Kim', 'McKinsey', { email: 'rachel.kim@mckinsey.com' });
+    await page
+      .getByTestId('person-header')
+      .getByRole('button', { name: /^add note$/i })
+      .click();
+    await page
+      .getByTestId('capture-text')
+      .fill(
+        '- told me to reach out to her colleague Marcus Lee who runs Ross recruiting events for McK\n- said to update her after first round apps\n- offered to look over my resume',
+      );
+    await page.getByTestId('capture-save').click();
+    await expect(page).toHaveURL(/\/people\//);
+    await page.goto('today');
+    const card = page.getByTestId('suggestion-thank_you').filter({ hasText: 'Rachel Kim' });
+    await card.getByTestId('draft-review').click();
+    const body = card.getByLabel('Message body');
+    await expect(body).toHaveValue(/your colleague Marcus Lee/);
+    await expect(body).toHaveValue(/for McKinsey/);
+    await expect(body).not.toHaveValue(/\bher colleague\b|\bMcK\b|reach out|advice to update you/);
+    await expect(card.getByTestId('draft-from-notes')).toContainText(/read it once as rachel will/i);
+    await expect(card.getByTestId('draft-cancel')).toHaveText('Close');
+  });
+});
+
 test.describe('Usability round 5 on a phone', () => {
   test.use({ viewport: { width: 390, height: 844 } });
   test('setup says which steps are left and which are optional', async ({ page }) => {

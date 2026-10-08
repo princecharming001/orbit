@@ -407,6 +407,9 @@ export function pointPhrase(c: FactClause | undefined): string | undefined {
     )
   ) {
     rest = rest.replace(/^(me|out)\s+/, '').replace(/^that\s+/, '');
+    // "said to update her after first-round applications" is a request to keep them posted, which the closing line
+    // already answers; thanking them for it as advice reads oddly
+    if (/^to (update|keep|tell|email|text|ping|let|message|call|send) you\b/.test(rest)) return undefined;
     if (/^to\b/.test(rest)) return `your advice ${rest}`;
     if (/^(about|how|why|what)\b/.test(rest)) return `what you said ${rest}`;
     return `your point that ${rest}`;
