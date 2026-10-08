@@ -97,14 +97,19 @@ export function mentionedPeople(
  * only one person has, then the chat on the calendar that just ended.
  */
 export type NoteMatchPreview =
-  | { kind: 'person'; person: Person; why: 'named' | 'calendar' }
+  | { kind: 'person'; person: Person; why: 'named' | 'calendar' | 'recent' }
   | { kind: 'several'; people: Person[] }
   | { kind: 'none' };
+/**
+ * `recentPeople` are the people of chats on the calendar in the last few days: a first name in the note that matches
+ * one of them is that chat (the page then dates the note to it, so saving files it with them for sure).
+ */
 export function previewNoteMatch(
   text: string,
   people: Person[],
   user: Pick<User, 'firstName' | 'fullName'>,
   calendarPerson?: Person,
+  recentPeople: Person[] = [],
 ): NoteMatchPreview {
   const self = parseName(user.fullName || user.firstName || '').normalized;
   const fromTitle = looksLikeNotetakerText(text)
@@ -124,9 +129,23 @@ export function previewNoteMatch(
   if (named.length) {
     if (calendarPerson && named.some((p) => p.id === calendarPerson.id))
       return { kind: 'person', person: calendarPerson, why: 'calendar' };
+    const recent = recentPeople.filter((r) => named.some((p) => p.id === r.id));
+    if (recent.length === 1 && !m.full.some((p) => p.id !== recent[0]!.id))
+      return { kind: 'person', person: recent[0]!, why: 'recent' };
     return { kind: 'several', people: named };
   }
   return calendarPerson ? { kind: 'person', person: calendarPerson, why: 'calendar' } : { kind: 'none' };
+}
+
+/**
+ * The people a note names, said once each: "Ethan and Lena", or "Ethan and 5 people named Priya" when several people
+ * share a first name (listing "Priya" five times reads like a bug).
+ */
+export function namedPeopleLabel(people: Person[]): string {
+  const byFirst = new Map<string, number>();
+  for (const p of people) byFirst.set(p.firstName, (byFirst.get(p.firstName) ?? 0) + 1);
+  const parts = [...byFirst].map(([first, n]) => (n > 1 ? `${n} people named ${first}` : first));
+  return parts.length <= 2 ? parts.join(' and ') : `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}`;
 }
 
 /** "Tue, Oct 6" in the student's time zone. */

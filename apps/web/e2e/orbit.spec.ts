@@ -1655,3 +1655,37 @@ test.describe('Usability round 5 on a phone', () => {
     expect(overflow).toBe(false);
   });
 });
+
+test.describe('Usability round 6', () => {
+  test('Add note keeps a half-typed note, picks the one person a typed name leaves, and dates a note to the chat it names', async ({
+    page,
+  }) => {
+    await loadDemo(page);
+    await page.goto('notes/new');
+    await page.getByTestId('capture-text').fill('Coffee chat w Lena. She said interns get real ownership.');
+    // a stray tap on the nav loses nothing
+    await page.getByRole('link', { name: 'Pipeline' }).first().click();
+    await page.goBack();
+    await expect(page.getByTestId('capture-text')).toHaveValue(/Coffee chat w Lena/);
+    await expect(page.getByTestId('capture-draft-hint')).toContainText(/unsaved note/i);
+    // the note names Lena, who had a chat yesterday: it is filed with her, at the time of that chat
+    await expect(page.getByTestId('capture-match-preview')).toContainText(/file this with Lena Novak/);
+    await expect(page.getByTestId('capture-when-chat')).toContainText(/your chat with Lena/);
+    await expect(page.getByTestId('capture-when')).not.toHaveValue('2026-10-06T10:00');
+    // typing a name that leaves one person picks them
+    await page.getByTestId('capture-person-filter').fill('Hannah');
+    await expect(page.getByTestId('capture-person')).not.toHaveValue('');
+    await expect(page.getByTestId('capture-person').locator('option:checked')).toHaveText(/Hannah Brooks/);
+    await page.getByTestId('capture-person-filter').fill('');
+    await expect(page.getByTestId('capture-person')).toHaveValue('');
+    // a first name five people share is said once
+    await page.getByTestId('capture-text').fill('Met Ethan and Priya at the fair.');
+    await expect(page.getByTestId('capture-match-preview')).toContainText(/Ethan and \d people named Priya/);
+    await page.getByTestId('capture-text').fill('Coffee chat w Lena. She said interns get real ownership.');
+    await page.getByTestId('capture-save').click();
+    await expect(page).toHaveURL(/\/people\//, { timeout: 15_000 });
+    await expect(page.getByRole('heading', { name: 'Lena Novak' })).toBeVisible();
+    await page.goto('notes/new');
+    await expect(page.getByTestId('capture-text')).toHaveValue('');
+  });
+});

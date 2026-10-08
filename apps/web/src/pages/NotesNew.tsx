@@ -1,15 +1,33 @@
 import { STAGE_LABELS } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { AddPersonDialog } from '../components/AddPerson';
 import { chatTimeLabel } from '../components/ScheduleChat';
 import { db } from '../db/schema';
-import { ingestNote, previewNoteMatch, rematchNote } from '../engine/notes';
+import { ingestNote, namedPeopleLabel, previewNoteMatch, rematchNote } from '../engine/notes';
 import { useSession } from '../state/session';
 import { Avatar, Button, Card, Input, Label, PageHeader, Select, Textarea, useToast } from '../ui';
 
 const DRAFT_KEY = 'orbit.capture.draft';
+const readDraft = () => {
+  try {
+    return localStorage.getItem(DRAFT_KEY) ?? '';
+  } catch {
+    return '';
+  }
+};
+const writeDraft = (t: string) => {
+  try {
+    if (t.trim()) localStorage.setItem(DRAFT_KEY, t);
+    else localStorage.removeItem(DRAFT_KEY);
+  } catch {
+    // private window: the note still saves, only the half-typed copy is not kept
+  }
+};
+/** A Date as the value of a datetime-local input, in the browser's time zone. */
+const localInput = (d: Date) =>
+  new Date(d.getTime() - d.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
 
 export function NotesNew() {
   const { user, userId } = useSession();
@@ -18,11 +36,16 @@ export function NotesNew() {
   const [params] = useSearchParams();
   const noteId = params.get('note') ?? undefined;
   const presetPerson = params.get('person') ?? undefined;
-  const [text, setText] = useState(() => localStorage.getItem(DRAFT_KEY) ?? '');
+  // a half-typed note is kept on this device as it is typed, so leaving the page (a stray tap on the nav) loses nothing
+  const [text, setTextState] = useState(readDraft);
+  const [restored, setRestored] = useState(() => !!readDraft().trim());
+  const setText = (t: string) => {
+    setTextState(t);
+    setRestored(false);
+    writeDraft(t);
+  };
   const [personId, setPersonId] = useState<string>(presetPerson ?? '');
-  const [when, setWhen] = useState(() =>
-    new Date(Date.now() - new Date().getTimezoneOffset() * 60_000).toISOString().slice(0, 16),
-  );
+  const [whenManual, setWhenManual] = useState<string | undefined>();
   const [source, setSource] = useState<'manual' | 'wispr_capture' | 'granola_email' | 'upload'>('manual');
   const [busy, setBusy] = useState(false);
   const [adding, setAdding] = useState(false);
@@ -53,33 +76,41 @@ export function NotesNew() {
     ],
     [existing, matchCard],
   );
-  const recentEvent = useLiveQuery(
-    () =>
-      userId
-        ? db.events
-            .where('userId')
-            .equals(userId)
-            .filter(
-              (e) =>
-                e.attendeePersonIds.length > 0 &&
-                Math.abs(Date.now() - new Date(e.endAt).getTime()) < 6 * 3_600_000,
-            )
-            .first()
-        : undefined,
-    [userId],
-  );
+  // chats on the calendar that started in the last three days, most recent first
+  const recentEvents =
+    useLiveQuery(
+      () =>
+        userId
+          ? db.events
+              .where('userId')
+              .equals(userId)
+              .filter(
+                (e) =>
+                  e.status !== 'cancelled' &&
+                  e.attendeePersonIds.length > 0 &&
+                  new Date(e.startAt).getTime() <= Date.now() &&
+                  Date.now() - new Date(e.startAt).getTime() < 3 * 86_400_000,
+              )
+              .toArray()
+              .then((es) => es.sort((a, b) => b.startAt.localeCompare(a.startAt)))
+          : [],
+      [userId],
+    ) ?? [];
+  const recentEvent = recentEvents.find((e) => Date.now() - new Date(e.endAt).getTime() < 6 * 3_600_000);
   // the picker is never filled in behind the student's back: "Let Orbit figure it out" stays chosen, and the line
   // under it says who Orbit will file the note with (a name in the note, or the chat on the calendar that just ended)
   const calendarPerson = people.find((p) => p.id === recentEvent?.attendeePersonIds[0]);
+  const recentPeople = useMemo(
+    () => people.filter((p) => recentEvents.some((e) => e.attendeePersonIds.includes(p.id))),
+    [people, recentEvents],
+  );
   // matching a saved note: start from Orbit's guess, if it made one
   useEffect(() => {
     if (existing && existing.personIds.length === 1 && !presetPerson) setPersonId(existing.personIds[0]!);
   }, [existing, presetPerson]);
-  useEffect(() => {
-    const t = setTimeout(() => localStorage.setItem(DRAFT_KEY, text), 500);
-    return () => clearTimeout(t);
-  }, [text]);
   const [filter, setFilter] = useState('');
+  // the "who was this with?" step after saving starts from a clean list
+  useEffect(() => setFilter(''), [noteId]);
   const sorted = useMemo(
     () => people.slice().sort((a, b) => a.displayName.localeCompare(b.displayName)),
     [people],
@@ -93,21 +124,43 @@ export function NotesNew() {
         p.id === personId ||
         `${p.displayName} ${p.currentOrganizationRaw ?? ''}`.toLowerCase().includes(q)),
   );
-  const person = people.find((p) => p.id === personId);
-  // the chat that just ended sets the note's time, unless the student already picked one
-  const [whenTouched, setWhenTouched] = useState(false);
-  useEffect(() => {
-    if (!recentEvent || whenTouched || existing) return;
-    const start = new Date(recentEvent.startAt);
-    if (start.getTime() > Date.now()) return;
-    setWhen(new Date(start.getTime() - start.getTimezoneOffset() * 60_000).toISOString().slice(0, 16));
-  }, [recentEvent?.id, whenTouched, existing]);
-  const preview = useMemo(
-    () => (!existing && !personId && user ? previewNoteMatch(text, people, user, calendarPerson) : undefined),
-    [existing, personId, user, text, people, calendarPerson],
+  // typing a name that leaves exactly one person picks them (the student thinks they chose them); the pick is undone
+  // when the filter no longer points at one person, unless the student chose from the list since
+  const matches = [...mentioned, ...rest].filter(
+    (p) => q && `${p.displayName} ${p.currentOrganizationRaw ?? ''}`.toLowerCase().includes(q),
   );
-  // a chat booked with them after the note's time: the note is saved to their page, the chat stays booked
+  const autoPicked = useRef<string | undefined>(undefined);
+  const onlyMatch = matches.length === 1 ? matches[0]!.id : undefined;
+  useEffect(() => {
+    if (onlyMatch) {
+      if (!personId || personId === autoPicked.current) {
+        autoPicked.current = onlyMatch;
+        setPersonId(onlyMatch);
+      }
+    } else if (autoPicked.current && personId === autoPicked.current) {
+      autoPicked.current = undefined;
+      setPersonId('');
+    }
+  }, [onlyMatch]);
+  const person = people.find((p) => p.id === personId);
+  const preview = useMemo(
+    () =>
+      !existing && !personId && user
+        ? previewNoteMatch(text, people, user, calendarPerson, recentPeople)
+        : undefined,
+    [existing, personId, user, text, people, calendarPerson, recentPeople],
+  );
+  // who the note will be filed with, and their chat on the calendar in the last few days: the note is dated to it
+  // (unless the student set a time), so it adds to that chat instead of logging a second one at "now"
   const filedWith = personId || (preview?.kind === 'person' ? preview.person.id : '');
+  const chatEvent = existing
+    ? undefined
+    : filedWith
+      ? recentEvents.find((e) => e.attendeePersonIds.includes(filedWith))
+      : recentEvent;
+  const [nowInput] = useState(() => localInput(new Date()));
+  const when = whenManual ?? (chatEvent ? localInput(new Date(chatEvent.startAt)) : nowInput);
+  // a chat booked with them after the note's time: the note is saved to their page, the chat stays booked
   const bookedLater = useLiveQuery(
     () =>
       userId && filedWith
@@ -149,7 +202,7 @@ export function NotesNew() {
         personIds: personId ? [personId] : undefined,
         occurredAt: new Date(when).toISOString(),
       });
-      localStorage.removeItem(DRAFT_KEY);
+      writeDraft('');
       if (n.matchStatus === 'unmatched') {
         // Orbit is not sure who it was with: ask now, on the note itself
         toast.push({
@@ -198,6 +251,7 @@ export function NotesNew() {
       setBusy(false);
     }
   };
+  const nameOf = (id: string) => people.find((p) => p.id === id)?.firstName ?? 'them';
   const onFile = async (f: File) => {
     const t = await f.text();
     setText(t);
@@ -231,7 +285,23 @@ export function NotesNew() {
               data-testid="capture-text"
             />
             <div className="flex flex-wrap items-center gap-3 mt-2 text-[12px] text-ink-3">
-              <span>Tip: your phone's or computer's dictation works in this box.</span>
+              <span data-testid="capture-draft-hint">
+                {restored && text.trim()
+                  ? 'Your unsaved note from before. Orbit keeps it on this device until you save it.'
+                  : "Tip: your phone's or computer's dictation works in this box. Orbit keeps what you type if you leave the page."}
+              </span>
+              {text.trim() && (
+                <button
+                  type="button"
+                  className="underline underline-offset-2 hover:text-ink"
+                  onClick={() => {
+                    if (window.confirm('Clear this note? What you typed is deleted.')) setText('');
+                  }}
+                  data-testid="capture-clear"
+                >
+                  Clear
+                </button>
+              )}
               <label className="ml-auto cursor-pointer underline underline-offset-2 rounded focus-within:ring-2 focus-within:ring-accent/40">
                 Upload .txt / .md
                 <input
@@ -260,7 +330,10 @@ export function NotesNew() {
             <Select
               id="capture-person"
               value={personId}
-              onChange={(e) => setPersonId(e.target.value)}
+              onChange={(e) => {
+                autoPicked.current = undefined;
+                setPersonId(e.target.value);
+              }}
               className="w-full"
               data-testid="capture-person"
             >
@@ -294,7 +367,9 @@ export function NotesNew() {
                     <strong className="font-medium">{preview.person.displayName}</strong>
                     {preview.why === 'calendar'
                       ? ', from your chat with them that just ended.'
-                      : ', who the note names.'}{' '}
+                      : preview.why === 'recent'
+                        ? ', who the note names and you had a chat with.'
+                        : ', who the note names.'}{' '}
                     <button
                       type="button"
                       className="underline underline-offset-2"
@@ -306,8 +381,30 @@ export function NotesNew() {
                   </>
                 ) : preview.kind === 'several' ? (
                   <>
-                    The note names {preview.people.map((p) => p.firstName).join(', ')}. Pick who it was with,
-                    or Orbit asks you after you save.
+                    The note names {namedPeopleLabel(preview.people)}.{' '}
+                    {preview.people.length <= 3 ? (
+                      <>
+                        Pick who it was with:{' '}
+                        {preview.people.map((p, i) => (
+                          <span key={p.id}>
+                            {i > 0 && ', '}
+                            <button
+                              type="button"
+                              className="underline underline-offset-2"
+                              onClick={() => setPersonId(p.id)}
+                              data-testid="capture-pick-named"
+                            >
+                              {preview.people.filter((x) => x.firstName === p.firstName).length > 1
+                                ? `${p.displayName}${p.currentOrganizationRaw ? ` at ${p.currentOrganizationRaw}` : ''}`
+                                : p.displayName}
+                            </button>
+                          </span>
+                        ))}
+                        . Or Orbit asks you after you save.
+                      </>
+                    ) : (
+                      'Pick who it was with above, or Orbit asks you after you save.'
+                    )}
                   </>
                 ) : text.trim() ? (
                   'No name in the note yet. Orbit asks you who it was with after you save.'
@@ -330,16 +427,20 @@ export function NotesNew() {
               id="capture-when"
               type="datetime-local"
               value={when}
-              onChange={(e) => {
-                setWhenTouched(true);
-                setWhen(e.target.value);
-              }}
+              onChange={(e) => setWhenManual(e.target.value)}
+              data-testid="capture-when"
             />
+            {chatEvent && !whenManual && (
+              <p className="mt-1.5 text-[12px] text-ink-3" data-testid="capture-when-chat">
+                The time of your chat with {nameOf(chatEvent.attendeePersonIds[0]!)}. Change it if this note
+                is from another talk.
+              </p>
+            )}
             {bookedLater && (
               <p className="mt-1.5 text-[12px] text-warn" data-testid="capture-booked-later">
-                Your chat with {people.find((p) => p.id === filedWith)?.firstName ?? 'them'} is booked for{' '}
-                {chatTimeLabel(bookedLater.startAt)}, after this time. Orbit adds the note to their page and
-                keeps the chat booked. Notes from that chat? Set When to after it started.
+                Your chat with {nameOf(filedWith)} is booked for {chatTimeLabel(bookedLater.startAt)}, after
+                this time. Orbit adds the note to their page and keeps the chat booked. Notes from that chat?
+                Set When to after it started.
               </p>
             )}
           </div>
@@ -383,7 +484,7 @@ export function NotesNew() {
             </span>
           )}
           <Button
-            variant="primary"
+            variant={existing && !personId ? 'secondary' : 'primary'}
             className="ml-auto"
             disabled={busy || (!existing && !text.trim())}
             onClick={save}

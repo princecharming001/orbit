@@ -2,7 +2,7 @@ import type { User } from '@orbit/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { db, wipeDatabase } from '../db/schema';
 import { draftMessage, evaluateImmediateSuggestions } from './brief';
-import { ingestNote, parseDueHint, previewNoteMatch, rematchNote } from './notes';
+import { ingestNote, namedPeopleLabel, parseDueHint, previewNoteMatch, rematchNote } from './notes';
 import { upsertPerson } from './people';
 
 const user: User = {
@@ -589,5 +589,27 @@ describe('usability round 2: the same promise in two notes', () => {
     );
     const items = await db.actionItems.where('personId').equals(lena.id).toArray();
     expect(items).toHaveLength(1);
+  });
+});
+
+describe('usability round 6: who a note was with', () => {
+  it('a first name that matches a chat from the last few days files the note with that person', async () => {
+    const lena = await person('Lena Novak', 'lena@ramp.com', 'Ramp');
+    await person('Lena Park', 'lena.park@bain.com', 'Bain');
+    const people = await db.people.toArray();
+    const text = 'Lena said the team takes interns every summer.';
+    expect(previewNoteMatch(text, people, user)).toMatchObject({ kind: 'several' });
+    const recent = previewNoteMatch(text, people, user, undefined, [lena]);
+    expect(recent).toMatchObject({ kind: 'person', why: 'recent' });
+    expect(recent.kind === 'person' && recent.person.id).toBe(lena.id);
+  });
+
+  it('names each first name once', async () => {
+    const ethan = await person('Ethan Brooks', 'ethan@x.com', 'X');
+    const priyas = await Promise.all(
+      ['Shah', 'Patel', 'Rao'].map((l, i) => person(`Priya ${l}`, `p${i}@y.com`, 'Y')),
+    );
+    expect(namedPeopleLabel([ethan, ...priyas])).toBe('Ethan and 3 people named Priya');
+    expect(namedPeopleLabel([ethan, priyas[0]!])).toBe('Ethan and Priya');
   });
 });
