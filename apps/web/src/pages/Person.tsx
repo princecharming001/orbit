@@ -352,6 +352,11 @@ export function PersonPage() {
   const nextEvent = events
     .filter((e) => new Date(e.endAt).getTime() > Date.now())
     .sort((a, b) => a.startAt.localeCompare(b.startAt))[0];
+  // the booked chat's time has passed and the chat has not moved on yet: say so, not "the time is not set"
+  const pastEvent =
+    chat?.stage === 'scheduled' && !nextEvent && chat.scheduledEventId
+      ? events.find((e) => e.id === chat.scheduledEventId && e.status !== 'cancelled')
+      : undefined;
   const liveSummary = person.summary
     ? undefined
     : personSummary({ user, person, facts, touchpoints: tps, now: new Date() });
@@ -429,6 +434,23 @@ export function PersonPage() {
                     >
                       Change the time
                     </button>
+                  </>
+                ) : pastEvent ? (
+                  <>
+                    <span data-testid="person-chat-past">
+                      Your chat was <span className="font-medium">{chatTimeLabel(pastEvent.startAt)}</span>.
+                      How did it go?
+                    </span>
+                    <Link to={`/notes/new?person=${person.id}`}>
+                      <Button size="sm">Add notes</Button>
+                    </Link>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => moveChat(user, chat, 'completed', 'user:select')}
+                    >
+                      Mark it done
+                    </Button>
                   </>
                 ) : (
                   <>

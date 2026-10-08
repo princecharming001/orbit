@@ -327,6 +327,13 @@ export async function runTimedStageRules(
 ): Promise<void> {
   const chats = await db.chats.where('userId').equals(userId).toArray();
   const tz = (await db.users.get(userId))?.timezone;
+  // without a calendar sync nobody else will notice that a booked chat's time has passed (the demo, or Google
+  // disconnected): such a chat is treated like one booked by hand
+  const syncing = await db.integrations
+    .where('userId')
+    .equals(userId)
+    .filter((i) => i.provider === 'google' && i.status === 'active')
+    .count();
   for (const c of chats) {
     const person = await db.people.get(c.personId);
     const maxBumps = maxBumpsFor(
@@ -361,7 +368,8 @@ export async function runTimedStageRules(
     if (c.stage === 'scheduled' && c.scheduledEventId) {
       const ev = await db.events.get(c.scheduledEventId);
       if (
-        ev?.externalEventId.startsWith(MANUAL_EVENT_PREFIX) &&
+        ev &&
+        (ev.externalEventId.startsWith(MANUAL_EVENT_PREFIX) || !syncing) &&
         ev.status !== 'cancelled' &&
         new Date(ev.endAt).getTime() + 15 * 60_000 < now.getTime()
       ) {
