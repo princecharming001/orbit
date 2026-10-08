@@ -282,7 +282,16 @@ export function DraftEditor({
       text: 'Your changes are kept in the draft.',
       action: {
         label: 'Undo changes',
-        onClick: () => saveEdits(draft, opened.body, opened.subject),
+        // written as is: the draft held in this closure still has the text from before, so a diff would skip it
+        onClick: () =>
+          db.outbound
+            .where('id')
+            .equals(draft.id)
+            .filter((m) => m.status === 'draft')
+            .modify({
+              bodyFinal: opened.body.trim() === draft.bodyDraft.trim() ? undefined : opened.body,
+              subject: opened.subject || undefined,
+            }),
       },
       ttl: 8000,
     });

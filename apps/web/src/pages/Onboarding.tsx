@@ -255,7 +255,7 @@ function StepAbout({ onNext }: { onNext: () => void }) {
     schoolDomain: user.schoolDomain ?? '',
     // no default: a guessed year would call a sophomore a junior in every message
     graduationYear: user.graduationYear ? String(user.graduationYear) : '',
-    degree: user.degree ?? 'BS',
+    degree: user.degree ?? '',
     majors: user.majors.join(', '),
     currentCity: user.currentCity ?? '',
     linkedinUrl: user.linkedinUrl ?? '',
@@ -271,7 +271,7 @@ function StepAbout({ onNext }: { onNext: () => void }) {
       schoolDomain:
         f.schoolDomain.trim().toLowerCase() || (f.email.includes('@') ? f.email.split('@')[1] : undefined),
       graduationYear: Number(f.graduationYear),
-      degree: f.degree,
+      degree: f.degree || undefined,
       majors: f.majors
         .split(',')
         .map((m) => m.trim())
@@ -400,6 +400,7 @@ function StepAbout({ onNext }: { onNext: () => void }) {
           onChange={(e) => setF({ ...f, degree: e.target.value })}
           className="w-full"
         >
+          <option value="">Choose your degree</option>
           {['BS', 'BA', 'BBA', 'MS', 'MBA', 'MEng', 'PhD', 'Other'].map((d) => (
             <option key={d}>{d}</option>
           ))}
@@ -595,7 +596,9 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
           />
         </div>
         <div>
-          <Label htmlFor="ob-ambition">First messages a week</Label>
+          <Label htmlFor="ob-ambition" hint="a goal Orbit paces Today by, not a limit">
+            First messages a week
+          </Label>
           <Select
             id="ob-ambition"
             value={f.ambition}

@@ -133,6 +133,7 @@ type ProfileForm = {
   school: string;
   schoolDomain: string;
   graduationYear: number;
+  degree: string;
   majors: string;
   currentCity: string;
   linkedinUrl: string;
@@ -203,6 +204,7 @@ function Profile() {
     school: user.school,
     schoolDomain: user.schoolDomain ?? '',
     graduationYear: user.graduationYear ?? 0,
+    degree: user.degree ?? '',
     majors: user.majors.join(', '),
     currentCity: user.currentCity ?? '',
     linkedinUrl: user.linkedinUrl ?? '',
@@ -225,6 +227,7 @@ function Profile() {
         schoolDomain: v.schoolDomain || undefined,
         linkedinUrl: v.linkedinUrl || undefined,
         graduationYear: v.graduationYear || undefined,
+        degree: v.degree || undefined,
       });
     },
     !nameMissing,
@@ -232,11 +235,8 @@ function Profile() {
   const zones = timeZones(f.timezone);
   const now = new Date();
   const firstYear = now.getMonth() >= 7 ? now.getFullYear() + 1 : now.getFullYear();
-  const grad = /\b(MBA|MS|MENG|PHD)\b/i.test(user.degree ?? '');
-  const years = Array.from(
-    { length: /PHD/i.test(user.degree ?? '') ? 6 : grad ? 2 : 4 },
-    (_, i) => firstYear + i,
-  );
+  const grad = /\b(MBA|MS|MENG|PHD)\b/i.test(f.degree);
+  const years = Array.from({ length: /PHD/i.test(f.degree) ? 6 : grad ? 2 : 4 }, (_, i) => firstYear + i);
   if (f.graduationYear && !years.includes(f.graduationYear)) years.unshift(f.graduationYear);
   return (
     <Card className="grid sm:grid-cols-2 gap-4">
@@ -299,8 +299,28 @@ function Profile() {
           <option value="">Choose your year</option>
           {years.map((y) => (
             <option key={y} value={String(y)}>
-              {y} ({yearLabel(y, user.degree, now)} now)
+              {y} ({yearLabel(y, f.degree || undefined, now)} now)
             </option>
+          ))}
+        </Select>
+      </div>
+      <div>
+        <Label
+          htmlFor="profile-degree"
+          hint="so messages call you a junior, a senior or an MBA student correctly"
+        >
+          Degree
+        </Label>
+        <Select
+          id="profile-degree"
+          value={f.degree}
+          onChange={(e) => setF({ ...f, degree: e.target.value })}
+          className="w-full"
+          data-testid="profile-degree"
+        >
+          <option value="">Not set</option>
+          {['BS', 'BA', 'BBA', 'MS', 'MBA', 'MEng', 'PhD', 'Other'].map((d) => (
+            <option key={d}>{d}</option>
           ))}
         </Select>
       </div>

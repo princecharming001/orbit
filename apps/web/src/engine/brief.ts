@@ -1425,6 +1425,14 @@ async function addConfirmationCards(userId: string, now: Date): Promise<void> {
     const emails = new Set([a.primaryEmail, ...a.emails].filter(Boolean).map((e) => lower(e)));
     const sharedEmail = [b.primaryEmail, ...b.emails].some((e) => e && emails.has(lower(e)));
     const weak = !sharedEmail && lower(a.firstName) !== lower(b.firstName);
+    // different first names and different employers: the guess argues against itself, so it is not asked at all
+    const orgA = lower(a.currentOrganizationRaw);
+    const orgB = lower(b.currentOrganizationRaw);
+    if (weak && orgA && orgB && orgA !== orgB) {
+      const shown = await db.suggestions.where('dedupeKey').equals(`merge:${m.id}`).toArray();
+      await retireSuggestions(shown, 'weak_merge_guess', now);
+      continue;
+    }
     await upsertSuggestions(
       userId,
       [

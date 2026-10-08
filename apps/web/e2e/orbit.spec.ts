@@ -789,8 +789,41 @@ test.describe('First-run guidance and plain next steps', () => {
     page,
   }) => {
     await loadDemo(page);
-    // a duplicate guess with little behind it (different first names) waits behind "can wait"
-    await page.getByTestId('today-more').click();
+    // the demo's only guess (Sana and Alina Ahmed: different first names, different employers) argues against
+    // itself, so it is never asked; a pair with the same first name is
+    await expect(page.getByTestId('suggestion-confirm_merge')).toHaveCount(0);
+    await page.evaluate(async () => {
+      const open = indexedDB.open('orbit');
+      const idb: IDBDatabase = await new Promise((res, rej) => {
+        open.onsuccess = () => res(open.result);
+        open.onerror = () => rej(open.error);
+      });
+      const all = <T>(store: string): Promise<T[]> =>
+        new Promise((res) => {
+          const r = idb.transaction(store).objectStore(store).getAll();
+          r.onsuccess = () => res(r.result as T[]);
+        });
+      const people = await all<{ id: string; userId: string; firstName: string }>('people');
+      const priyas = people.filter((p) => p.firstName === 'Priya').slice(0, 2);
+      const tx = idb.transaction('merges', 'readwrite');
+      tx.objectStore('merges').put({
+        id: 'mrg-e2e',
+        userId: priyas[0]!.userId,
+        personAId: priyas[0]!.id,
+        personBId: priyas[1]!.id,
+        score: 0.7,
+        features: {},
+        status: 'pending',
+        createdAt: new Date().toISOString(),
+      });
+      await new Promise((res) => {
+        tx.oncomplete = res;
+      });
+      idb.close();
+    });
+    await page.getByTestId('today-refresh').click();
+    await expect(page.getByTestId('toasts')).toContainText(/updated/i);
+    if (await page.getByTestId('today-more').isVisible()) await page.getByTestId('today-more').click();
     const merge = page.getByTestId('suggestion-confirm_merge').first();
     await expect(merge.getByTestId('merge-choice')).toContainText(/both have/i);
     await merge.getByTestId('merge-ask').click();
@@ -1742,5 +1775,39 @@ test.describe('Usability round 6', () => {
     await expect(page.getByTestId('draft-char-count')).toContainText('/ 200 characters');
     await page.getByLabel('Message body').fill('x'.repeat(240));
     await expect(page.getByTestId('draft-char-count')).toContainText(/free account cuts the rest/);
+  });
+
+  test('"I sent it" can be undone, putting the message back to waiting', async ({ page }) => {
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+    await loadDemo(page);
+    const card = page.getByTestId('suggestion-thank_you').first();
+    await card.getByTestId('draft-review').click();
+    await card.getByTestId('draft-copy').click();
+    await expect(card.getByTestId('outbox-handed_off')).toBeVisible();
+    await card.getByRole('button', { name: /i sent it/i }).click();
+    await expect(page.getByTestId('toasts')).toContainText(/logged as sent/i);
+    await page
+      .getByTestId('toasts')
+      .getByRole('button', { name: /^undo$/i })
+      .click();
+    await expect(page.getByTestId('toasts')).toContainText(/not sent after all/i);
+    await page.goto('inbox');
+    await expect(
+      page
+        .getByTestId('outbox-item')
+        .getByRole('button', { name: /i sent it/i })
+        .first(),
+    ).toBeVisible();
+  });
+
+  test('search puts an exact name first, and /drafts opens Drafts', async ({ page }) => {
+    await loadDemo(page);
+    await page.keyboard.press('Control+k');
+    await page.getByRole('dialog').getByRole('textbox').fill('Lena');
+    await expect(page.getByRole('dialog').locator('ul button').first()).toContainText('Lena Novak');
+    await page.keyboard.press('Enter');
+    await expect(page.getByRole('heading', { name: 'Lena Novak' })).toBeVisible();
+    await page.goto('drafts');
+    await expect(page).toHaveURL(/\/inbox$/);
   });
 });
