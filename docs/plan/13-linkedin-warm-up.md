@@ -39,7 +39,7 @@ ready  day n, 09:00   outreach suggested once ready AND at least one action is d
 
 ## 6. UI
 
-Pipeline board shows a `Warming up` column with a progress bar per card; the profile shows the plan with checkmarks and the activity link; Discover explains for cold LinkedIn-only candidates why a warm-up comes first and the button reads "Start warm-up" (the student stays on the list; a toast links to the step on Today). A first-message card on Today for the same kind of person (from a recommendation, no chat yet) follows the same rule: its primary button is "Start warm-up", with "Write now instead" beside it. Settings → Sending limits holds the toggle and length.
+Pipeline board shows a `Warming up` column with a progress bar per card; the profile shows the plan with checkmarks and the activity link; Discover explains for cold LinkedIn-only candidates why a warm-up comes first and the button reads "Start warm-up" (the student stays on the list; a toast links to the step on Today). A first-message card on Today for the same kind of person (from a recommendation, no chat yet) follows the same rule: its primary button is "Start warm-up", with "Write now instead" beside it. Settings → Limits and schedule holds the toggle and the length in working days. A warm-up whose next step's day has passed moves the steps left (and the first-message date) forward to today, keeping their spacing (`replanWarmUp`).
 
 ## 7. Metrics
 
