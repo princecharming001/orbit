@@ -657,6 +657,23 @@ describe('hand-offs (SND-07, SND-12, SND-14, UI-09)', () => {
     expect((await confirmHandoff(user, d.id)).ok).toBe(true);
   });
 
+  it('a reply-all on an introduction moves the introducer to bcc, in Gmail and in the mail app', async () => {
+    const raw = buildMimeMessage({
+      to: 'sam@contoso.com',
+      bcc: ['lena@northwind.com'],
+      fromEmail: 'alex@cornell.edu',
+      subject: 'Re: Intro: Alex <> Sam',
+      body: 'Thanks for the introduction, Lena (moving you to bcc).',
+      orbitId: 'out_bcc',
+    });
+    expect(raw.split('\r\n\r\n')[0]).toMatch(/\r\nBcc: lena@northwind\.com\r\n/);
+    const { d } = await pendingDraft(user, 'thank_you');
+    await db.outbound.update(d.id, { bccEmails: ['lena@northwind.com'] });
+    const r = await approveAndSend(user, d.id, d.bodyDraft);
+    expect(r.ok && r.status === 'handed_off').toBe(true);
+    expect((await handoffLink(user, d.id))!.url).toMatch(/^mailto:[^?]+\?bcc=lena%40northwind\.com&subject=/);
+  });
+
   it('mailto is handed_off, not sent, until the student confirms; "Not sent" reverts to draft', async () => {
     const { s, d } = await pendingDraft(user, 'thank_you');
     const r = await approveAndSend(user, d.id, d.bodyDraft);
