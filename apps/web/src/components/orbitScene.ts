@@ -1854,6 +1854,23 @@ export class OrbitScene {
       reach?.status === 'found' && !web
         ? new Set(reach.ids.map((id) => this.viewFor(id)).filter((v): v is NodeView => !!v))
         : undefined;
+    // in the introductions view the web's people sit on their generation's ring, where someone faded back may be
+    // under them: that faded dot steps out of sight instead of peeping out from behind as a double dot
+    const inWeb = web
+      ? this.views.filter(
+          (v) =>
+            !v.temp &&
+            !v.removing &&
+            (v.person
+              ? web.web.members.has(v.pid)
+              : !!v.cluster?.personIds.some((id) => web.web.members.has(id))),
+        )
+      : [];
+    const underWeb = (v: NodeView) =>
+      inWeb.some((m) => {
+        const d = Math.sqrt(v.r.to ** 2 + m.r.to ** 2 - 2 * v.r.to * m.r.to * Math.cos(v.a.to - m.a.to));
+        return d < (v.size.to * 0.85 + m.size.to * 1.12) / 2 + 4;
+      });
     for (const v of this.views) {
       if (v.temp) continue;
       let alpha = 1;
@@ -1864,7 +1881,10 @@ export class OrbitScene {
         const has = (s: Set<string>) =>
           v.person ? s.has(v.pid) : !!v.cluster?.personIds.some((id) => s.has(id));
         const member = has(web.web.members);
-        if (this.webChain.size) {
+        if (!member && underWeb(v)) {
+          alpha = 0;
+          scale = 0.85;
+        } else if (this.webChain.size) {
           const lit = has(this.webChain);
           alpha = lit ? 1 : member ? 0.32 : 0.1;
           scale = lit ? 1.12 : member ? 1 : 0.85;
@@ -2307,6 +2327,7 @@ export class OrbitScene {
       this.drawWeb(ctx, now);
       this.drawPath(ctx, now);
       this.drawDots(ctx, now);
+      this.drawHoverEnds(ctx, now);
       if (this.prebuildAt >= 0) this.prebuild(now);
       this.drawComet(ctx, now);
     }
@@ -2531,6 +2552,31 @@ export class OrbitScene {
       t.mark = mark;
       curveControl(A, v.x, v.y, t.x, t.y, 0.12);
       quadPartial(ctx, v.x, v.y, A.x, A.y, t.x, t.y, grow);
+    }
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  /** A thin accent ring round each person the hover lines reach, so it reads who they run to, not just where. */
+  private drawHoverEnds(ctx: CanvasRenderingContext2D, now: number): void {
+    const p = this.hoverLines.value(now);
+    if (p <= 0.01 || !this.hoverKey || this.web || (this.reach && this.reach.status !== 'searching')) return;
+    const v = this.byKey.get(this.hoverKey);
+    const near = v?.person ? this.connections?.get(v.pid) : undefined;
+    if (!v?.visible || !near?.length) return;
+    // each ring shows as its line arrives
+    const shown = clamp01((easing.outCubic(p) - 0.7) / 0.3);
+    if (shown <= 0) return;
+    ctx.globalAlpha = 0.85 * shown;
+    ctx.strokeStyle = ACCENT;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (const id of near) {
+      const t = this.viewFor(id);
+      if (!t?.visible || t === v || t.pa < 0.1) continue;
+      const r = t.pr + 2.5;
+      ctx.moveTo(t.x + r, t.y);
+      ctx.arc(t.x, t.y, r, 0, TAU);
     }
     ctx.stroke();
     ctx.globalAlpha = 1;
