@@ -175,10 +175,11 @@ describe('note facts in drafts and on the person', () => {
     expect(thanks).toMatch(/\b(your advice (that I|to)|you (recommended|suggested) I) apply early\b/);
     expect(thanks).toMatch(/\boffering to refer me to the APM program\b/);
     expect(thanks).not.toMatch(spliceErrors);
-    // a check-in only quotes a fact it can phrase; otherwise it asks the student for an update
+    // a check-in only quotes a fact it can phrase, and takes up the open offer (drafts panel round 2)
     const nurture = (await draftMessage(user, priya.id, 'nurture', 'gmail')).bodyDraft;
     expect(nurture).not.toMatch(spliceErrors);
-    expect(nurture).not.toMatch(/\brecommended I apply\b|\boffered to refer\b/);
+    expect(nurture).not.toMatch(/\brecommended I apply\b/);
+    expect(nurture).toMatch(/When we spoke, you offered to refer me to the APM program\./);
     const p = (await db.people.get(priya.id))!;
     expect(p.summary).toMatch(
       // the summary speaks to the student: their note said "me", the profile says "you"

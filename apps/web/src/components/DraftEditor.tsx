@@ -208,7 +208,9 @@ export function DraftEditor({
     : direct
       ? `Send to ${first}`
       : 'Open in mail app';
-  const canRegenerate = needs.every((n) => (inputs[n] ?? '').trim().length >= (n === 'mutual' ? 2 : n === 'role' ? 4 : 8));
+  const canRegenerate = needs.every(
+    (n) => (inputs[n] ?? '').trim().length >= (n === 'mutual' ? 2 : n === 'role' ? 4 : 8),
+  );
   const regenerate = async () => {
     if (!user) return;
     setRegenerating(true);

@@ -724,7 +724,9 @@ describe('email introductions and suggested names (EG-08)', () => {
     expect(draft.externalThreadId).toBe(`pt_intro_${seq0}`);
     expect(draft.subject).toBe('Re: Intro: Alex <> Sam');
     expect(draft.bccEmails).toEqual(['lena.ortiz@northwind.com']);
-    expect(draft.bodyDraft).toMatch(/^Thanks for the introduction, Lena \(moving you to bcc\)\.\n\nHi Sam,\n\n/);
+    expect(draft.bodyDraft).toMatch(
+      /^Thanks for the introduction, Lena \(moving you to bcc\)\.\n\nHi Sam,\n\n/,
+    );
   }, 60_000);
 
   it('a reply in the intro thread, in a later sync, moves the chat and reads their answer (L9)', async () => {

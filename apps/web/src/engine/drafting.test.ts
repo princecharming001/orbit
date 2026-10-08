@@ -112,7 +112,11 @@ describe('drafting against the demo data', () => {
       const d = (await db.outbound.get(s.outboundMessageId!))!;
       const facts = await db.facts.where('personId').equals(s.personId!).toArray();
       expect(facts.length).toBeGreaterThan(0);
-      expect(d.needsInput, d.bodyDraft).toBeUndefined();
+      // the only thing a thank-you may ask of the student is to attach the resume it says is attached
+      expect(
+        (d.needsInput ?? []).filter((n) => n !== 'resume'),
+        d.bodyDraft,
+      ).toEqual([]);
       expect(d.bodyDraft).not.toMatch(/\[/);
       expect(d.claims?.some((c) => !!c.factId && facts.some((f) => f.id === c.factId))).toBe(true);
       const chat = (await db.chats.get(s.chatId!))!;
@@ -149,7 +153,9 @@ describe('drafting against the demo data', () => {
     for (const s of pending) {
       let d = (await db.outbound.get(s.outboundMessageId!))!;
       let typed: DraftInputs = {};
-      if (d.needsInput?.length) {
+      // "attach your resume" is a reminder, not a gap in the text
+      const prompts = (n?: string[]) => (n ?? []).filter((x) => x !== 'resume');
+      if (prompts(d.needsInput).length) {
         // a draft that asks the student for something is gated by exactly that, and passes once it is given
         const gated = (await validateStored(d, s)).filter((i) => i.blocking);
         expect(gated.length).toBeGreaterThan(0);
@@ -158,7 +164,7 @@ describe('drafting against the demo data', () => {
           d.bodyDraft,
         ).toEqual([]);
         d = (await regenerateDraft(user, d.id, SAMPLE_INPUTS))!;
-        expect(d.needsInput, d.bodyDraft).toBeUndefined();
+        expect(prompts(d.needsInput), d.bodyDraft).toEqual([]);
         typed = SAMPLE_INPUTS;
       }
       const issues = await validateStored(d, s, typed);
@@ -284,7 +290,7 @@ describe('drafting against the demo data', () => {
       ? (await db.outbound.get(s.outboundMessageId))!
       : (await draftForSuggestion(user, s))!;
     expect(d.personId).toBe(referrer!.id);
-    expect(d.bodyDraft).toMatch(new RegExp(`thank you for the intro to ${target!.displayName}`));
+    expect(d.bodyDraft).toMatch(new RegExp(`Thanks again for connecting me with ${target!.firstName}\\.`));
     expect(d.bodyDraft).toMatch(/We spoke yesterday\./);
     expect((await validateStored(d, s)).filter((i) => i.blocking)).toEqual([]);
   });
@@ -293,18 +299,21 @@ describe('drafting against the demo data', () => {
     // the demo's chat that just ended, with a Granola note: Lena at Ramp
     const lena = (await people((p) => p.displayName === 'Lena Novak'))[0]!;
     const ty = await draftMessage(user, lena.id, 'thank_you', 'gmail');
+    // the point, not "the key is ..." read back; the offer becomes the next step (drafts panel round 2)
     expect(ty.bodyDraft).toMatch(
-      /your point that the key is one concrete project story that shows how I handled/i,
+      /your point that it comes down to one concrete project story that shows how I handled/i,
     );
     expect(ty.bodyDraft).toMatch(
-      /Thanks also for offering to pass my name to the recruiter who owns the software engineering intern req/,
+      /Thanks also for offering to pass my name to the recruiter who owns the software engineering intern req\. I've attached my resume/,
     );
     expect(ty.bodyDraft).not.toMatch(/Lena offered|She offered|point that recommended|how you handled/);
-    // with no hook on record the check-in asks for the student's update first
+    // the check-in has something real to say from what is on record (her open offer, the application to Ramp),
+    // so it does not ask for a made-up update; the student's own update still wins when typed
     const asked = await draftMessage(user, lena.id, 'nurture', 'gmail');
-    expect(asked.needsInput).toEqual(['update']);
+    expect(asked.needsInput ?? []).not.toContain('update');
+    expect(asked.bodyDraft).not.toMatch(/\[/);
     const n = (await regenerateDraft(user, asked.id, { update: SAMPLE_INPUTS.update }))!;
-    expect(n.needsInput).toBeUndefined();
+    expect(n.bodyDraft).toContain(SAMPLE_INPUTS.update!.replace(/[.]$/, ''));
     expect(n.bodyDraft).not.toMatch(/mentioned Lena|It's been a little while/);
     for (const d of [ty, n]) expect((await validateStored(d)).filter((i) => i.blocking)).toEqual([]);
   });
@@ -319,7 +328,7 @@ describe('drafting against the demo data', () => {
     const i = await draftMessage(user, lena.id, 'intro_request', 'gmail');
     expect(i.needsInput).toEqual(['target']);
     const i2 = (await regenerateDraft(user, i.id, { target: 'Lucas Fischer, Engineering Manager at Ramp' }))!;
-    expect(i2.bodyDraft).toMatch(/talk with Lucas Fischer \(Engineering Manager at Ramp\)/);
+    expect(i2.bodyDraft).toMatch(/introducing me to Lucas Fischer, an Engineering Manager at Ramp\?/);
     expect(i2.subject).toBe('Small ask: intro to Lucas Fischer?');
   });
 
@@ -406,11 +415,14 @@ describe('drafting against the demo data', () => {
     expect(d.externalThreadId).toBe(th.externalThreadId);
     expect(d.inReplyToMessageId).toBeDefined();
     expect(d.subject).toBe(`Re: ${th.subject}`);
+    // she has written to the student, so "Hi", and the application is stated as it stands (drafts panel round 2)
     expect(d.bodyDraft).toMatch(
-      /^Dear Chloe,\n\nWe traded emails [^,]+, and I wanted to pick that conversation back up\./,
+      /^Hi Chloe,\n\nWe traded emails [^,]+, and I wanted to pick that conversation back up\./,
     );
-    // a "Dear" letter to a recruiter is written without contractions throughout (panel review)
-    expect(d.bodyDraft).toMatch(/As a quick reminder, I am a junior at Cornell/);
+    expect(d.bodyDraft).toMatch(
+      /A quick update: I've applied for the Software Engineering Intern role at Ramp\./,
+    );
+    expect(d.bodyDraft).not.toMatch(/planning to apply|helpful conversations|As a quick reminder/);
     expect((await validateStored(d)).filter((i) => i.blocking)).toEqual([]);
     // on LinkedIn: no subject, and a short note (not the letter) when they are not connected yet
     const li = await draftMessage(user, chloe.id, 'outreach', 'linkedin');
@@ -468,9 +480,9 @@ describe('drafting against the demo data', () => {
     const d = await draftMessage(user, p.id, 'schedule', 'gmail', chat.id);
     expect(d.externalThreadId).toBe(`ext-${thId}`);
     expect(d.bodyDraft).toMatch(/resume/);
-    expect(d.needsInput).toEqual(['answer']);
+    expect(d.needsInput).toEqual(['resume', 'answer']);
     const re = (await regenerateDraft(user, d.id, { answer: SAMPLE_INPUTS.answer }))!;
-    expect(re.bodyDraft).toMatch(/Mostly payments infrastructure/);
+    expect(re.bodyDraft).toMatch(/As for teams, mostly payments infrastructure/);
     expect(re.bodyDraft).toMatch(/Would either of these work for a quick call\?/);
     const ctx = await buildDraftContext(user, p, 'schedule', 'gmail', undefined, {}, chat);
     const issues = validateDraft(
@@ -490,9 +502,10 @@ describe('drafting against the demo data', () => {
   it('a thank-you keeps the promise from the notes, and asks for a takeaway when there are no notes (EG-15)', async () => {
     const lena = (await people((p) => p.displayName === 'Lena Novak'))[0]!;
     const ty = await draftMessage(user, lena.id, 'thank_you', 'gmail');
-    expect(ty.bodyDraft).toMatch(
-      /As promised, I'll send my resume and the marketplace project link by Friday/,
-    );
+    // the resume she offered to pass along is attached; the rest of the promise is kept
+    expect(ty.bodyDraft).toMatch(/I've attached my resume so it's easy to pass along\./);
+    expect(ty.bodyDraft).toMatch(/As promised, I'll send the marketplace project link by Friday\./);
+    expect(ty.needsInput).toEqual(['resume']);
     expect((await validateStored(ty)).filter((i) => i.blocking)).toEqual([]);
     const chatted = await chattedIds();
     const p = (await people((x) => !!x.primaryEmail && !chatted.has(x.id) && !x.hiddenAt))[2]!;
@@ -662,11 +675,13 @@ describe('drafts review, round 2 (web)', () => {
     const maya = (await people((p) => p.displayName === 'Maya Chen'))[0]!;
     // Maya wrote "send me the posting": the ask goes out with it, or the student is asked for it
     const d = await draftMessage(user, maya.id, 'referral_ask', 'gmail');
-    expect(d.needsInput).toEqual(['posting']);
+    // the posting (with the team she made the condition), and the resume to attach (drafts panel round 2)
+    expect(d.needsInput).toEqual(['resume', 'posting']);
+    expect(d.bodyDraft).toMatch(/\[the team you picked, and the link to the posting\]/);
     const re = (await regenerateDraft(user, d.id, {
       posting: 'https://stripe.com/jobs/listing/intern/123',
     }))!;
-    expect(re.needsInput).toBeUndefined();
+    expect(re.needsInput).toEqual(['resume']);
     expect(re.bodyDraft).toMatch(/https:\/\/stripe\.com\/jobs\/listing\/intern\/123/);
     expect(re.bodyDraft).not.toMatch(/\[/);
   });
