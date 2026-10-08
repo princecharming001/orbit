@@ -223,6 +223,25 @@ export function MapPage() {
         .map((p) => p.id),
     );
   }, [filter, visible, isTarget, stages]);
+  // a search with several matches lights them on the map, so the student sees where each one is before picking
+  const choiceIds = useMemo(() => {
+    if (!choices) return undefined;
+    const keys = new Set(
+      choices.filter((c) => c.kind === 'company').map((c) => `n:${normalizeCompany(c.label)}`),
+    );
+    const ids = new Set(choices.filter((c) => c.kind === 'person').map((c) => c.id));
+    const orgIds = new Set(choices.filter((c) => c.kind === 'company').map((c) => c.id));
+    return new Set(
+      visible
+        .filter(
+          (p) =>
+            ids.has(p.id) ||
+            (!!p.currentOrganizationId && orgIds.has(p.currentOrganizationId)) ||
+            keys.has(orbitGroupKey(p, orgMap)),
+        )
+        .map((p) => p.id),
+    );
+  }, [choices, visible, orgMap]);
   // Target companies: their wedges are tinted, and the panel lists them so one click turns the map to it
   const targetGroups = useMemo(() => {
     if (filter !== 'targets') return undefined;
@@ -463,6 +482,14 @@ export function MapPage() {
     const norm = normalizeCompany(q);
     const tc = norm ? tcs.find((t) => normalizeCompany(t.nameRaw) === norm) : undefined;
     if (tc) return openCompany(tc.organizationId ?? tc.nameRaw, tc.nameRaw);
+    // the route or company the last search showed goes, so the map and the panel never answer an older question
+    setTarget(undefined);
+    setCompanyFocus(undefined);
+    setCompany(undefined);
+    setChoices(undefined);
+    setPaths([]);
+    if (reachParam && reachParam !== '1') setParams({ reach: '1' });
+    else if (params.get('company')) setParams({ reach: '1' });
     sayMiss(
       q,
       'No one by that name or company in your network yet. Add them from LinkedIn or Discover.',
@@ -615,7 +642,7 @@ export function MapPage() {
         const via = byId.get(current.hops[0]!.toId)?.firstName ?? 'someone';
         return `Route ${pathIdx + 1} of ${paths.length} to ${target.displayName}, through ${via}.${clear}`;
       }
-      if (choices) return 'Several matches. Pick the one you meant.';
+      if (choices) return 'Several matches, lit on the map. Pick the one you meant.';
       return 'Type a name or a company to find a way in.';
     }
     switch (filter) {
@@ -728,7 +755,11 @@ export function MapPage() {
           className={cx(
             'relative min-w-0 overflow-hidden lg:h-auto lg:min-h-[420px] bg-[radial-gradient(circle_at_center,_#fff_0%,_#fafafc_70%)]',
             // on phones the routes sit under the canvas, so in reach mode the canvas leaves room for them
-            reachMode ? 'h-[min(48vh,420px)] min-h-[280px]' : 'h-[min(72vh,560px)] min-h-[340px]',
+            // a phone's orbit is as wide as the screen, so the canvas is only as tall as that orbit needs (with
+            // room for the top and bottom labels): no empty band above it pushing its bottom under the tab bar
+            reachMode
+              ? 'h-[min(48vh,420px)] min-h-[280px]'
+              : 'h-[min(72vh,560px,calc(100vw_+_60px))] min-h-[340px]',
           )}
           data-testid="orbit-stage"
         >
@@ -738,7 +769,7 @@ export function MapPage() {
             stages={stages}
             pending={pendingIds}
             loading={loading}
-            highlightIds={highlightIds}
+            highlightIds={choiceIds ?? highlightIds}
             highlightGroups={highlightGroups}
             focus={focus}
             web={webSpec}

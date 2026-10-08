@@ -72,6 +72,8 @@ const OMEGA = TAU / ORBIT_PERIOD_MS;
 const EMPTY_EXTENT = 456;
 const FAN_PITCH = 30;
 const NO_VIEWS = new Set<never>();
+/** A drag released slower than this (radians a millisecond, about 70 degrees a second) does not coast. */
+const FLICK_MIN = 0.0012;
 /** How far from a person the dots round them count extra when the person card is placed (CSS px). */
 const NEAR_CARD = 140;
 
@@ -376,6 +378,8 @@ export class OrbitScene {
   private path = { ids: [] as string[], start: 0, hop: TIMING.hop as number };
   /** a route being replaced: it pulls back from `from` hops drawn to `to` (the hops it shares with the new one) */
   private pathOld = { ids: [] as string[], start: 0, from: 0, to: 0 };
+  /** the reach target the orbit has turned to the top */
+  private reachTurned?: string;
   private radar = new Tween(0);
   private radarStart = 0;
 
@@ -815,7 +819,9 @@ export class OrbitScene {
     this.ringSweep.forEach((t, i) => {
       this.play(t, 0, 1, now, TIMING.ringSweep, easing.inOutCubic, i * TIMING.ringStagger);
     });
-    this.anim(this.ghost, 0, now, 160, easing.outQuad);
+    // the rings the loading orbit already shows stay while the pen goes round them, and step back once all three
+    // are drawn: the arrival carries on from the loading orbit instead of clearing it first
+    this.anim(this.ghost, 0, now, 260, easing.outQuad, TIMING.ringSweep + 2 * TIMING.ringStagger);
     // "You" swells once as the people leave it, from the size it already has (no shrink, no cut)
     this.youBumpAt = now;
     let last = 0;
@@ -1411,6 +1417,7 @@ export class OrbitScene {
     if (!r) {
       if (!prev) return;
       this.reach = undefined;
+      this.reachTurned = undefined;
       this.retractPath(now);
       // people a route pulled apart go back to their places
       this.retarget(now, 450);
@@ -1430,7 +1437,12 @@ export class OrbitScene {
     // people on the route who sit side by side step apart (and step back when the route goes)
     this.retarget(now, 450);
     const target = this.viewFor(r.targetId);
-    if (newTarget && target) this.hold(rotationToTop(target.a.to, this.rotTarget()), now);
+    // the target turns to the top as the search starts; with reduced motion it waits for the answer, so the turn
+    // and the camera framing the route are one set instead of two snaps a moment apart
+    if (target && this.reachTurned !== r.targetId && (!this.reduced || status !== 'searching')) {
+      this.reachTurned = r.targetId;
+      this.hold(rotationToTop(target.a.to, this.rotTarget()), now);
+    }
     // a radar that only just started keeps sweeping a moment longer, then hands over to the answer
     const wait =
       !this.reduced && prev?.status === 'searching' && !newTarget
@@ -1709,8 +1721,10 @@ export class OrbitScene {
     this.drag = undefined;
     if (!d?.moved) return false;
     const now = this.clock.now();
-    // a flick keeps turning for a moment
-    this.inertia = now - d.t < 80 && !this.reduced ? Math.max(-0.004, Math.min(0.004, d.v)) : 0;
+    // a flick keeps turning for a moment; a slow, steady drag stops where the hand let go (only the speed past
+    // FLICK_MIN carries on, so a drag that only just counts as a flick coasts only a little)
+    const fast = Math.max(0, Math.abs(d.v) - FLICK_MIN);
+    this.inertia = now - d.t < 80 && !this.reduced ? Math.sign(d.v) * Math.min(0.004, fast) : 0;
     this.updateSpin(now);
     this.wake();
     return true;
@@ -2218,8 +2232,10 @@ export class OrbitScene {
       this.rotSpring.step(dt);
       this.rot = this.rotSpring.x;
       const off = Math.abs(this.rotSpring.x - this.rotSpring.target);
-      if (spin === 0 && this.spin.done(now) && off < 1e-4 && Math.abs(this.rotSpring.v) < 1e-6) {
-        // holding still on a focus: land exactly on it
+      // how far the outer ring moves for one radian, in CSS px: the turn is over once nothing moves a visible amount
+      const R = Math.max(1, (this.layout?.ringRadii[2] ?? 440) * this.fit * this.zoom.x);
+      if (spin === 0 && this.spin.done(now) && off * R < 0.5 && Math.abs(this.rotSpring.v) * R < 0.008) {
+        // holding still on a focus: land exactly on it (less than half a pixel away, and all but still)
         this.rot = this.rotSpring.target;
         this.rotSpringOn = false;
       } else if (spin > 0 && off < 1e-2 && Math.abs(this.rotSpring.v - spin) < 1e-5) {
