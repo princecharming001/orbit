@@ -82,7 +82,7 @@ export function MapPage() {
   const [target, setTarget] = useState<Person>();
   const [hover, setHover] = useState<string>();
   // where the person card goes: beside the dot, or at the top or bottom of a narrow map (the map picks it)
-  const [hoverPlace, setHoverPlace] = useState<CardPlace>({ at: 'bottom' });
+  const [hoverPlace, setHoverPlace] = useState<CardPlace>({ at: 'bottom', y: 0 });
   // a search that found no one: the line under the filters says so and the search box shakes once
   const [missed, setMissed] = useState<{ q: string; n: number }>();
   const searchForm = useRef<HTMLFormElement>(null);
@@ -110,6 +110,8 @@ export function MapPage() {
   // a search inside the introductions view: a person or a company the map turns to
   const [webFocus, setWebFocus] = useState<{ id?: string; group?: string; label: string }>();
   const [storyHover, setStoryHover] = useState<string>();
+  /** people the map holds in grey "+N" dots: the panel explains those dots only when the map shows some */
+  const [aggregated, setAggregated] = useState(0);
   const peopleQ = useLiveQuery(
     () => (userId ? db.people.where('userId').equals(userId).toArray() : []),
     [userId],
@@ -779,25 +781,25 @@ export function MapPage() {
             onSelectCluster={openCluster}
             personCard={!reachMode}
             question={webFocus}
+            onAggregated={setAggregated}
             onHover={(id, place) => {
               setHover(id);
               if (place) setHoverPlace(place);
             }}
           />
           {hovered && !reachMode && (
+            // one card that follows the focus from dot to dot: it fades in when it first shows, not again with
+            // each arrow key
             <div
-              key={hovered.id}
               className={cx(
                 'absolute bg-canvas border border-line rounded-[12px] p-3 shadow-[var(--shadow-card)] fade-up',
                 // the map puts the card next to the dot on a wide map and at the top or bottom of a narrow one, never
                 // over the person (on a phone the bottom only when it is clear of the tab bar); with a mouse the card
                 // lets the pointer through
-                'at' in hoverPlace
-                  ? cx('left-3 right-3', hoverPlace.at === 'top' ? 'top-3' : 'bottom-3')
-                  : 'w-[260px]',
+                'at' in hoverPlace ? 'left-3 right-3' : 'w-[260px]',
                 touch ? '' : 'pointer-events-none',
               )}
-              style={'at' in hoverPlace ? undefined : { left: hoverPlace.x, top: hoverPlace.y }}
+              style={'at' in hoverPlace ? { top: hoverPlace.y } : { left: hoverPlace.x, top: hoverPlace.y }}
               data-place={'at' in hoverPlace ? hoverPlace.at : 'beside'}
               data-testid="map-tooltip"
             >
@@ -805,9 +807,15 @@ export function MapPage() {
                 <Avatar name={hovered.displayName} src={hovered.photoUrl} id={hovered.id} size={32} />
                 <div className="min-w-0 flex-1">
                   <div className="font-medium truncate">{hovered.displayName}</div>
-                  <div className="text-[12px] text-ink-3 truncate">
-                    {[hovered.currentTitle, hovered.currentOrganizationRaw].filter(Boolean).join(' · ')}
-                  </div>
+                  {/* the company on a line of its own, so a long title never cuts it off */}
+                  {hovered.currentTitle && (
+                    <div className="text-[12px] text-ink-3 truncate">{hovered.currentTitle}</div>
+                  )}
+                  {hovered.currentOrganizationRaw && (
+                    <div className="text-[12px] text-ink-2 truncate" data-testid="map-tooltip-company">
+                      {hovered.currentOrganizationRaw}
+                    </div>
+                  )}
                 </div>
                 <Link
                   to={`/people/${hovered.id}`}
@@ -841,8 +849,8 @@ export function MapPage() {
                   ? 'Tap a person to see who they are, and tap again to open their profile.'
                   : 'Hover over a person to see who they are and who they know, and click to open their profile. Drag to turn the orbit.'}{' '}
                 Companies read as wedges. The thin coloured ring is pipeline stage, and a soft ripple marks
-                the people your most pressing suggestions are about. A grey dot with a number stands for more
-                people at that company.
+                the people your most pressing suggestions are about.
+                {aggregated > 0 && ' A grey dot with a number stands for more people at that company.'}
               </div>
               {targetGroups && (
                 <Card padded>
@@ -946,7 +954,8 @@ export function MapPage() {
           {reachMode && !target && !companyFocus && !choices && (
             <div className="text-[13px] text-ink-2">
               Type a name (someone in your network) or a company above. Orbit finds up to three routes through
-              people you know, with the reason each hop works.
+              people you know, with the reason each hop works, and when you already know the person, a note
+              straight to them as well.
             </div>
           )}
           {choices && (

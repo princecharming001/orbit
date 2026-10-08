@@ -1221,6 +1221,18 @@ test.describe('Map motion', () => {
       await page.keyboard.press('Tab');
     }
     await expect(mapCanvas(page)).toBeFocused();
+    // the focus shows at once, drawn inside the map's frame (which clips anything round the canvas)
+    const outline = await mapCanvas(page).evaluate((c) => {
+      const st = getComputedStyle(c);
+      return {
+        style: st.outlineStyle,
+        width: Number.parseFloat(st.outlineWidth),
+        offset: Number.parseFloat(st.outlineOffset),
+      };
+    });
+    expect(outline.style).not.toBe('none');
+    expect(outline.width).toBeGreaterThan(0);
+    expect(outline.offset + outline.width).toBeLessThanOrEqual(0);
     await page.keyboard.press('ArrowRight');
     await expect(page.getByTestId('map-announce')).toHaveText(/Press Enter to (open|see them)\.$/);
     const one = (await mapSnapshot(page)).hover;
