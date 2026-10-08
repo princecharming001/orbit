@@ -720,8 +720,13 @@ describe('email introductions and suggested names (EG-08)', () => {
     await ensureDrafts(user, [card.id]);
     const row = (await db.suggestions.get(card.id))!;
     const draft = (await db.outbound.get(row.outboundMessageId!))!;
-    expect(draft.subject).toBe("Following up on Lena's introduction");
-    expect(draft.bodyDraft).toMatch(/Lena was kind enough to introduce us|follow up on Lena's introduction/);
+    // a reply-all on the introduction, with Lena thanked and moved to bcc (drafts panel round 2)
+    expect(draft.externalThreadId).toBe(`pt_intro_${seq0}`);
+    expect(draft.subject).toBe('Re: Intro: Alex <> Sam');
+    expect(draft.bccEmails).toEqual(['lena.ortiz@northwind.com']);
+    expect(draft.bodyDraft).toMatch(
+      /^Thanks for the introduction, Lena \(moving you to bcc\)\.\n\nHi Sam,\n\n/,
+    );
   }, 60_000);
 
   it('a reply in the intro thread, in a later sync, moves the chat and reads their answer (L9)', async () => {

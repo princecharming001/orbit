@@ -609,6 +609,8 @@ export interface OutboundMessage {
   externalThreadId?: string;
   inReplyToMessageId?: string;
   toEmail?: string;
+  /** blind copies: the introducer, moved to bcc on a reply-all to their introduction */
+  bccEmails?: string[];
   toLinkedinUrl?: string;
   subject?: string;
   bodyDraft: string;
@@ -626,11 +628,26 @@ export interface OutboundMessage {
   claims?: DraftClaim[];
   needsInput?: DraftNeed[];
   opening?: string;
+  /** the thread says to wait: send no earlier than this (the student's own note to them went out days ago) */
+  holdUntil?: string;
   createdAt: string;
 }
 
 /** What a draft is missing that only the student can supply (the needs-input prompt in the editor). */
-export type DraftNeed = 'connection' | 'update' | 'post' | 'news' | 'target' | 'answer' | 'role' | 'takeaway';
+export type DraftNeed =
+  | 'connection'
+  | 'update'
+  | 'post'
+  | 'news'
+  | 'target'
+  | 'answer'
+  | 'role'
+  | 'takeaway'
+  | 'posting'
+  /** the name of a mutual tie the connection line mentions without one ("my roommate") */
+  | 'mutual'
+  /** a reminder, not a line to write: the message says the resume is attached, so the student attaches it */
+  | 'resume';
 
 export interface DraftClaim {
   text: string;

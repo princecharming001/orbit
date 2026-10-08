@@ -428,6 +428,8 @@ export function messageIdTokens(...values: (string | undefined)[]): string[] {
 
 export interface MimeOptions {
   to: string;
+  /** blind copies (the introducer on a reply-all to their introduction); Gmail delivers and strips the header */
+  bcc?: string[];
   subject: string;
   body: string;
   fromName?: string;
@@ -445,6 +447,7 @@ export function buildMimeMessage(opts: MimeOptions): string {
   const lines = [
     addressHeader('From', opts.fromEmail, opts.fromName),
     addressHeader('To', opts.to),
+    ...(opts.bcc ?? []).filter(Boolean).map((b) => addressHeader('Bcc', b)),
     unstructuredHeader('Subject', subject),
     'MIME-Version: 1.0',
     'Content-Type: text/plain; charset="UTF-8"',

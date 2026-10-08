@@ -10,6 +10,7 @@ import type {
 import {
   CHANNEL_LABELS,
   composeKindFor,
+  composeKinds,
   conflictingFacts,
   FACT_TYPE_LABELS,
   linkedinActivityUrl,
@@ -116,6 +117,34 @@ export function PersonPage() {
     ) ?? [];
   const affs =
     useLiveQuery(() => (id ? db.affiliations.where('personId').equals(id).toArray() : []), [id]) ?? [];
+  // a referral ask is offered only when something on record makes it fit: their offer to refer or pass the resume
+  // along, or the student's application to their company
+  const referralFits =
+    useLiveQuery(async () => {
+      if (!person || !user) return true;
+      const org = (person.currentOrganizationRaw ?? '').trim().toLowerCase();
+      const applying = org
+        ? !!(await db.targetCompanies
+            .where('userId')
+            .equals(user.id)
+            .filter(
+              (t) =>
+                (!!person.currentOrganizationId && t.organizationId === person.currentOrganizationId) ||
+                t.nameRaw.trim().toLowerCase() === org,
+            )
+            .first())
+        : false;
+      return (
+        applying ||
+        facts.some(
+          (f) =>
+            f.type === 'offer' &&
+            /\b(refer|referral|pass (along )?my (resume|name)|flag|put in a (good )?word|introduce me)\b/i.test(
+              f.text,
+            ),
+        )
+      );
+    }, [person?.id, person?.currentOrganizationRaw, user?.id, facts.length]) ?? true;
   const neighbourIds = useMemo(
     () => edges.map((e) => (e.personAId === id ? e.personBId : e.personAId)),
     [edges, id],
@@ -168,6 +197,21 @@ export function PersonPage() {
         .toArray();
     }, [user?.id]) ?? [];
   const chat = chats.find((c) => !['archived'].includes(c.stage)) ?? chats[0];
+  // their last message on the chat's thread: "Write to" answers it only when it waits on an answer
+  const lastInbound = useLiveQuery(async () => {
+    if (!chat?.threadId) return null;
+    const msgs = await db.messages.where('threadId').equals(chat.threadId).sortBy('sentAt');
+    const m = [...msgs].reverse().find((x) => x.direction === 'inbound');
+    return m
+      ? {
+          lastInboundAt: m.sentAt,
+          lastInboundBody: m.bodyText,
+          lastSignal: m.signal,
+          asksOfUser: m.extraction?.asksOfUser,
+          proposedTimes: m.extraction?.proposedTimes,
+        }
+      : null;
+  }, [chat?.threadId, chat?.lastInboundAt]);
   useEffect(() => {
     if (person && !person.summary && user) refreshPersonSummary(user, person.id);
   }, [person?.id, person?.summary, user]);
@@ -232,7 +276,8 @@ export function PersonPage() {
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
     const d = open ?? (await draftMessage(user, person.id, kind, channel, chat?.id));
     setDraftId(d.id);
-    setComposing(kind);
+    // the thread may call for another kind (a bump to someone who answered is the scheduling reply)
+    setComposing(d.kind);
     setBusy(false);
   };
   const draft = drafts.find((d) => d.id === draftId);
@@ -353,10 +398,18 @@ export function PersonPage() {
               disabled={busy}
               onClick={() => {
                 // the stage and the calendar together: no check-in minutes after a thank-you
-                const next = composeKindFor(chat, new Date());
+                const next = composeKindFor(chat, new Date(), {
+                  lastInbound: lastInbound ?? undefined,
+                  timezone: user?.timezone,
+                });
                 if ('wait' in next)
                   toast.push({
-                    text: `You wrote to ${person.firstName} ${relTime(next.wait.since, new Date())}. A check-in fits in a few weeks, and Orbit will suggest one.`,
+                    text:
+                      next.wait.reason === 'away' && next.wait.until
+                        ? `${person.firstName} is away. A follow-up fits from ${new Date(next.wait.until).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', timeZone: user?.timezone })}, once they have had a couple of days back, and Orbit will suggest it then.`
+                        : next.wait.reason === 'too_soon' && next.wait.until
+                          ? `You wrote to ${person.firstName} ${relTime(next.wait.since, new Date())}. A follow-up fits from ${new Date(next.wait.until).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', timeZone: user?.timezone })}, and Orbit will suggest it then.`
+                          : `You wrote to ${person.firstName} ${relTime(next.wait.since, new Date())}. A check-in fits in a few weeks, and Orbit will suggest one.`,
                     tone: 'neutral',
                     ttl: 6000,
                   });
@@ -512,7 +565,7 @@ export function PersonPage() {
               </div>
               <div className="text-[12px] text-ink-3">
                 Orbit picked this kind of message from where your chat stands.
-                {kindsFor(chat?.stage, composing).length > 1
+                {composeKinds(chat?.stage, composing, { referral: referralFits }).length > 1
                   ? ' Pick another and it rewrites the draft.'
                   : ''}
               </div>
@@ -525,7 +578,7 @@ export function PersonPage() {
               )}
             </div>
             <div className="flex flex-wrap gap-1 text-[12px]" role="group" aria-label="Kind of message">
-              {kindsFor(chat?.stage, composing).map((k) => (
+              {composeKinds(chat?.stage, composing, { referral: referralFits }).map((k) => (
                 <button
                   key={k}
                   disabled={busy || draft.status !== 'draft'}
@@ -1269,23 +1322,4 @@ function Prep({
 /** Closeness in words: the score is a rough sense of how well you know them, not a precise number. */
 export function closenessWord(v: number): string {
   return v >= 0.6 ? 'Close' : v >= 0.35 ? 'Getting to know' : v > 0.05 ? 'Light' : 'New contact';
-}
-
-/** The kinds of message that fit where the chat stands: no thank-you or referral ask to someone never met. */
-export function kindsFor(stage: CoffeeChat['stage'] | undefined, current: MessageKind): MessageKind[] {
-  const by: Partial<Record<CoffeeChat['stage'], MessageKind[]>> = {
-    identified: ['outreach'],
-    warming: ['outreach'],
-    outreach_sent: ['bump', 'outreach'],
-    no_response: ['bump', 'outreach'],
-    replied: ['schedule', 'bump'],
-    scheduling: ['schedule', 'bump'],
-    scheduled: ['schedule'],
-    completed: ['thank_you', 'nurture', 'referral_ask'],
-    followed_up: ['nurture', 'referral_ask', 'schedule'],
-    nurturing: ['nurture', 'referral_ask', 'schedule'],
-    declined: ['nurture'],
-  };
-  const list = (stage && by[stage]) ?? ['outreach'];
-  return list.includes(current) ? list : [current, ...list];
 }

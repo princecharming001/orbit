@@ -474,7 +474,7 @@ function handoffFor(
   if (msg.channel === 'gmail') {
     if (!msg.toEmail) return { error: `There is no email address for ${person.firstName}.` };
     return {
-      url: `mailto:${encodeURIComponent(msg.toEmail)}?subject=${encodeURIComponent(env.subject ?? '')}&body=${encodeURIComponent(body)}`,
+      url: `mailto:${encodeURIComponent(msg.toEmail)}?${msg.bccEmails?.length ? `bcc=${encodeURIComponent(msg.bccEmails.join(','))}&` : ''}subject=${encodeURIComponent(env.subject ?? '')}&body=${encodeURIComponent(body)}`,
       via: 'mailto',
     };
   }
@@ -737,6 +737,7 @@ async function deliver(
   try {
     r = await gmailSend({
       to: msg.toEmail,
+      bcc: msg.bccEmails,
       subject: env.subject,
       body: msg.bodyFinal,
       fromEmail: user.email,

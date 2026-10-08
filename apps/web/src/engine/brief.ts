@@ -16,6 +16,7 @@ import {
   type Candidate,
   contextText,
   defaultStyleCard,
+  earliestFor,
   generateCandidates,
   generateDraft,
   isBlocked,
@@ -28,6 +29,7 @@ import {
   schoolShort,
   scoreCandidate,
   selectForBrief,
+  shortOrg,
   staleReason,
   suggestionFromCandidate,
   todayKey,
@@ -435,6 +437,10 @@ export interface DraftInputs {
   role?: string;
   /** one thing they said that stuck with the student (thank-you, when no notes exist yet) */
   takeaway?: string;
+  /** the link to the posting, for a referral ask to someone who asked for it */
+  posting?: string;
+  /** the name of the mutual tie a connection line mentions without one ("my roommate") */
+  mutual?: string;
 }
 
 /** "Lucas Fischer, Engineering Manager at Ramp" -> name, title, org. */
@@ -447,6 +453,24 @@ function parseTargetLine(line: string): { name: string; title?: string; org?: st
   const only = t.match(/^(.+?)\s+(?:at|@)\s+(.+)$/);
   if (!rest && only) return { name: only[1]!.trim(), org: only[2]!.trim() };
   return { name: name!.trim(), title: rest || undefined };
+}
+
+/**
+ * The referrer as the recipient can place them, from the data only: someone at the recipient's own firm ("who's also
+ * at Evercore"), or the student's tie to them ("a classmate of mine"). Undefined when neither is on record.
+ */
+function referrerTieFor(referrer: Person, person: Person): string | undefined {
+  const org = (person.currentOrganizationRaw ?? '').trim().toLowerCase();
+  if (org && (referrer.currentOrganizationRaw ?? '').trim().toLowerCase() === org)
+    return `who's also at ${shortOrg(person.currentOrganizationRaw) ?? person.currentOrganizationRaw}`;
+  const tie: Partial<Record<string, string>> = {
+    peer: 'a classmate of mine',
+    professor: 'one of my professors',
+    mentor: 'a mentor of mine',
+    family_friend: 'a family friend',
+    colleague: 'a former colleague of mine',
+  };
+  return tie[referrer.relationshipType];
 }
 
 /** The person who introduced or pointed the student to `person`: an intro request sent to them, or a suggestion from a chat. */
@@ -567,7 +591,10 @@ export async function buildDraftContext(
       asksOfUser: lastIn?.extraction?.asksOfUser,
       proposedTimes: lastIn?.extraction?.proposedTimes.map((t) => ({ startIso: t.startIso, raw: t.raw })),
       lastSignal: lastIn?.signal,
-      inThread: !NEW_THREAD_KINDS.has(kind) && !!th?.externalThreadId,
+      // the first note to someone the student was introduced to is a reply-all on the introduction
+      inThread:
+        (!NEW_THREAD_KINDS.has(kind) || (kind === 'outreach' && !!chat.introducedAt)) &&
+        !!th?.externalThreadId,
       subject: th?.subject,
     };
   } else if (chat?.firstOutreachAt) thread = { firstOutboundAt: chat.firstOutreachAt };
@@ -641,6 +668,16 @@ export async function buildDraftContext(
       .first();
     if (known) tc = known;
   }
+  // the posting link the student pasted (a referral ask to someone who asked for it), or one in the role line
+  const postingLink = (inputs.posting ?? inputs.role ?? '')
+    .match(/https?:\/\/\S+/)?.[0]
+    ?.replace(/[).,]+$/, '');
+  if (roleInput && postingLink)
+    roleInput = {
+      ...roleInput,
+      roleLabel: roleInput.roleLabel?.replace(postingLink, '').trim() || undefined,
+      name: roleInput.name.replace(postingLink, '').trim(),
+    };
   let target = s?.payload.target as DraftContext['target'] | undefined;
   if (!target && inputs.target?.trim()) {
     const parsed = parseTargetLine(inputs.target);
@@ -668,9 +705,16 @@ export async function buildDraftContext(
         new Date(e.startAt).getTime() > now.getTime(),
     )
     .sort((a, b) => a.startAt.localeCompare(b.startAt))[0]?.startAt;
+  // "send me a couple of times next week" is answered with times next week, not tomorrow
+  const notBefore = earliestFor(
+    thread?.lastInboundBody,
+    thread?.lastInboundAt ? new Date(thread.lastInboundAt) : now,
+    user.timezone,
+  );
+  // a bump to someone who has answered is written as the scheduling reply, so it needs the windows too
   const windows =
-    kind === 'schedule' || kind === 'reply'
-      ? proposeWindows(busy, now, user.timezone, { seed: person.id })
+    kind === 'schedule' || kind === 'reply' || kind === 'bump'
+      ? proposeWindows(busy, now, user.timezone, { seed: person.id, notBefore })
       : undefined;
   const warm = chat?.warmUp ? warmUpProgress(chat.warmUp, now, user.timezone) : undefined;
   const warmUpNote = chat?.warmUp?.actions.find((a) => a.doneAt && a.note)?.note;
@@ -711,10 +755,14 @@ export async function buildDraftContext(
       : undefined;
   // referrer: on the chat, or the person who received an intro request for this person
   let referrerName = chat?.referrerName;
-  if (!referrerName && chat?.referrerPersonId)
-    referrerName = (await db.people.get(chat.referrerPersonId))?.firstName;
-  if (!referrerName && kind === 'outreach')
-    referrerName = (await findReferrerFor(user.id, person))?.firstName;
+  let referrer = chat?.referrerPersonId ? await db.people.get(chat.referrerPersonId) : undefined;
+  if (!referrerName && referrer) referrerName = referrer.firstName;
+  if (!referrerName && kind === 'outreach') {
+    referrer = await findReferrerFor(user.id, person);
+    referrerName = referrer?.firstName;
+  }
+  // who the referrer is, so the recipient can place them: a colleague at their firm, or the student's own tie
+  const referrerTie = referrer ? referrerTieFor(referrer, person) : undefined;
   // openings used for the same company in the last 30 days (avoid repeating ourselves across a team), and the
   // people there the student has already spoken with (a recruiter email names them)
   const sameOrg = person.currentOrganizationRaw
@@ -725,18 +773,24 @@ export async function buildDraftContext(
       )
     : [];
   const recentOpenings: string[] = [];
-  const sameOrgContacts: string[] = [];
+  const sameOrgContacts: { name: string; title?: string }[] = [];
   for (const p of sameOrg) {
     const rows = await db.outbound.where('personId').equals(p.id).toArray();
+    // only sentences the student actually wrote: never a bracketed prompt or a bare sign-off
     for (const r of rows)
-      if (r.opening && now.getTime() - new Date(r.sentAt ?? r.createdAt).getTime() < 30 * DAY)
+      if (
+        r.opening &&
+        !/\[|\]/.test(r.opening) &&
+        r.opening.split(/\s+/).length >= 3 &&
+        now.getTime() - new Date(r.sentAt ?? r.createdAt).getTime() < 30 * DAY
+      )
         recentOpenings.push(r.opening);
     const spoke = await db.chats
       .where('personId')
       .equals(p.id)
       .filter((c) => !!c.completedAt)
       .first();
-    if (spoke) sameOrgContacts.push(p.firstName);
+    if (spoke) sameOrgContacts.push({ name: p.displayName, title: p.currentTitle });
   }
   const pastOrgs = resumeFacets
     .filter((f) => f.kind === 'experience' && f.organizationName)
@@ -807,19 +861,22 @@ export async function buildDraftContext(
           meetingAt,
           stage: chat.stage,
           referrerName,
+          referrerTie,
           introducedAt: chat.introducedAt,
           warmUpNote,
           warmUpDone: warm?.done,
           commentedOnPost: commentedOnPost || undefined,
           upcomingAt,
+          awayUntil: chat.outOfOfficeUntil,
         }
       : referrerName
-        ? { referrerName }
+        ? { referrerName, referrerTie }
         : undefined,
     // a status-news card carries the update itself (applied, interviewing, offer); the student's own text wins
     update: inputs.update?.trim() || (s?.payload.update as string | undefined) || undefined,
     news: inputs.news?.trim() || undefined,
     answer: inputs.answer?.trim() || undefined,
+    mutualName: inputs.mutual?.trim() || undefined,
     takeaway: inputs.takeaway?.trim() || undefined,
     reengage: s?.payload.reengage as DraftContext['reengage'] | undefined,
     history,
@@ -830,9 +887,10 @@ export async function buildDraftContext(
           name: tc.nameRaw,
           roleLabel: roleInput?.roleLabel ?? goals?.targetRoles[0],
           applied: tc.status === 'applied' || tc.status === 'interviewing',
+          link: postingLink,
         }
       : roleInput
-        ? { name: roleInput.name, roleLabel: roleInput.roleLabel }
+        ? { name: roleInput.name, roleLabel: roleInput.roleLabel, link: postingLink }
         : undefined,
     reportBack,
     sameOrgContacts,
@@ -903,7 +961,10 @@ async function threadFor(
 ): Promise<{ externalThreadId?: string; inReplyTo?: string }> {
   const threadId = NEW_THREAD_KINDS.has(kind)
     ? kind === 'outreach' && ctx.thread?.inThread
-      ? ctx.history?.threadId
+      ? // the introduction thread, or an earlier exchange with them picked back up
+        chat?.introducedAt
+        ? chat.threadId
+        : ctx.history?.threadId
       : undefined
     : chat?.threadId;
   if (!threadId) return {};
@@ -911,6 +972,28 @@ async function threadFor(
   if (!th?.externalThreadId) return {};
   const last = (await db.messages.where('threadId').equals(threadId).sortBy('sentAt')).pop();
   return { externalThreadId: th.externalThreadId, inReplyTo: last?.headers['message-id'] };
+}
+
+/**
+ * A reply-all on an introduction moves the introducer to bcc: their address, when Orbit knows who introduced them
+ * (the chat's referrer).
+ */
+async function bccFor(
+  out: ReturnType<typeof generateDraft>,
+  chat: CoffeeChat | undefined,
+): Promise<string[] | undefined> {
+  if (!out.introReply || !chat?.referrerPersonId) return undefined;
+  const ref = await db.people.get(chat.referrerPersonId);
+  return ref?.primaryEmail ? [ref.primaryEmail] : undefined;
+}
+
+/** The channel a draft goes out on: the one the thread called for (an email introduction is answered by email) when the person has an address for it. */
+function writtenChannel(
+  out: ReturnType<typeof generateDraft>,
+  asked: 'gmail' | 'linkedin',
+  person: Person,
+): 'gmail' | 'linkedin' {
+  return out.channel === 'gmail' && person.primaryEmail ? 'gmail' : asked;
 }
 
 function bodyFor(
@@ -929,13 +1012,17 @@ export async function draftForSuggestion(
   s: Suggestion,
   now = new Date(),
 ): Promise<OutboundMessage | undefined> {
-  const kind = DRAFT_KIND[s.kind];
-  if (!kind || !s.personId) return undefined;
+  const asked = DRAFT_KIND[s.kind];
+  if (!asked || !s.personId) return undefined;
   const person = await db.people.get(s.personId);
   if (!person) return undefined;
-  const channel: 'gmail' | 'linkedin' =
+  const asked0Channel: 'gmail' | 'linkedin' =
     (s.payload.channel as 'gmail' | 'linkedin' | undefined) ?? (person.primaryEmail ? 'gmail' : 'linkedin');
-  const { out, generatedBy, ctx } = await materializeDraft(user, person, kind, channel, s);
+  const { out, generatedBy, ctx } = await materializeDraft(user, person, asked, asked0Channel, s);
+  // the kind the thread called for (a bump to someone who answered is the scheduling reply), and the channel (an
+  // introduction made by email is answered on it)
+  const kind = out.kind ?? asked;
+  const channel = writtenChannel(out, asked0Channel, person);
   const chat = s.chatId && kind !== 'report_back' ? await db.chats.get(s.chatId) : undefined;
   const { externalThreadId, inReplyTo } = await threadFor(kind, chat, ctx);
   const msg: OutboundMessage = {
@@ -946,6 +1033,7 @@ export async function draftForSuggestion(
     suggestionId: s.id,
     channel,
     kind,
+    bccEmails: await bccFor(out, chat),
     externalThreadId,
     inReplyToMessageId: inReplyTo,
     toEmail: person.primaryEmail,
@@ -959,6 +1047,7 @@ export async function draftForSuggestion(
     claims: out.claims,
     needsInput: out.needsInput.length ? out.needsInput : undefined,
     opening: out.opening,
+    holdUntil: out.holdUntil,
     createdAt: now.toISOString(),
   };
   await db.outbound.add(msg);
@@ -969,7 +1058,7 @@ export async function draftForSuggestion(
 export async function draftMessage(
   user: User,
   personId: string,
-  kind: MessageKind,
+  asked: MessageKind,
   channel: 'gmail' | 'linkedin',
   /** the chat to write in; undefined finds the person's chat; null drafts outside any chat (a fresh first message) */
   chatId?: string | null,
@@ -988,31 +1077,35 @@ export async function draftMessage(
   const { out, generatedBy, ctx } = await materializeDraft(
     user,
     person,
-    kind,
+    asked,
     channel,
     undefined,
     inputs,
     chat,
   );
+  const kind = out.kind ?? asked;
+  const written = writtenChannel(out, channel, person);
   const where = await threadFor(kind, chat, ctx);
   const msg: OutboundMessage = {
     id: newId('out'),
     userId: user.id,
     personId,
     chatId: chat?.id,
-    channel,
+    channel: written,
     kind,
+    bccEmails: await bccFor(out, chat),
     externalThreadId: where.externalThreadId,
     inReplyToMessageId: where.inReplyTo,
     toEmail: person.primaryEmail,
     toLinkedinUrl: person.linkedinUrl,
     subject: out.subject,
-    bodyDraft: bodyFor(out, channel, kind, !!person.linkedinConnectedOn),
+    bodyDraft: bodyFor(out, written, kind, !!person.linkedinConnectedOn),
     status: 'draft',
     generatedBy,
     claims: out.claims,
     needsInput: out.needsInput.length ? out.needsInput : undefined,
     opening: out.opening,
+    holdUntil: out.holdUntil,
     createdAt: new Date().toISOString(),
   };
   await db.outbound.add(msg);

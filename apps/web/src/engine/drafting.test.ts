@@ -2,6 +2,7 @@ import type { CoffeeChat, MessageKind, OutboundMessage, Person, Suggestion, User
 import {
   composeKindFor,
   contextText,
+  earliestFor,
   fmtWindows,
   generateDraft,
   newId,
@@ -12,6 +13,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { db } from '../db/schema';
 import {
   buildDraftContext,
+  type DraftInputs,
   draftForSuggestion,
   draftMessage,
   evaluateImmediateSuggestions,
@@ -30,9 +32,10 @@ beforeAll(async () => {
 }, 60_000);
 
 /** Validate a stored draft exactly as the app would, against everything Orbit knows about the person. */
-async function validateStored(d: OutboundMessage, s?: Suggestion) {
+async function validateStored(d: OutboundMessage, s?: Suggestion, inputs: DraftInputs = {}) {
   const p = (await db.people.get(d.personId))!;
-  const ctx = await buildDraftContext(user, p, d.kind, d.channel as 'gmail' | 'linkedin', s);
+  // what the student typed (a posting link, a role) is part of what the draft may mention, as in materializeDraft
+  const ctx = await buildDraftContext(user, p, d.kind, d.channel as 'gmail' | 'linkedin', s, inputs);
   return validateDraft(
     {
       body: d.bodyDraft,
@@ -64,6 +67,7 @@ const SAMPLE_INPUTS = {
   news: 'your promotion to team lead',
   target: 'Lucas Fischer, Engineering Manager at Ramp',
   role: 'Software Engineering Intern at Ramp',
+  posting: 'https://ramp.com/careers/software-engineering-intern',
 };
 
 async function people(filter: (p: Person) => boolean): Promise<Person[]> {
@@ -108,7 +112,11 @@ describe('drafting against the demo data', () => {
       const d = (await db.outbound.get(s.outboundMessageId!))!;
       const facts = await db.facts.where('personId').equals(s.personId!).toArray();
       expect(facts.length).toBeGreaterThan(0);
-      expect(d.needsInput, d.bodyDraft).toBeUndefined();
+      // the only thing a thank-you may ask of the student is to attach the resume it says is attached
+      expect(
+        (d.needsInput ?? []).filter((n) => n !== 'resume'),
+        d.bodyDraft,
+      ).toEqual([]);
       expect(d.bodyDraft).not.toMatch(/\[/);
       expect(d.claims?.some((c) => !!c.factId && facts.some((f) => f.id === c.factId))).toBe(true);
       const chat = (await db.chats.get(s.chatId!))!;
@@ -144,7 +152,10 @@ describe('drafting against the demo data', () => {
     const NEED_CODES = ['needs_connection', 'needs_update', 'needs_input', 'placeholder', 'no_specific_line'];
     for (const s of pending) {
       let d = (await db.outbound.get(s.outboundMessageId!))!;
-      if (d.needsInput?.length) {
+      let typed: DraftInputs = {};
+      // "attach your resume" is a reminder, not a gap in the text
+      const prompts = (n?: string[]) => (n ?? []).filter((x) => x !== 'resume');
+      if (prompts(d.needsInput).length) {
         // a draft that asks the student for something is gated by exactly that, and passes once it is given
         const gated = (await validateStored(d, s)).filter((i) => i.blocking);
         expect(gated.length).toBeGreaterThan(0);
@@ -153,9 +164,10 @@ describe('drafting against the demo data', () => {
           d.bodyDraft,
         ).toEqual([]);
         d = (await regenerateDraft(user, d.id, SAMPLE_INPUTS))!;
-        expect(d.needsInput, d.bodyDraft).toBeUndefined();
+        expect(prompts(d.needsInput), d.bodyDraft).toEqual([]);
+        typed = SAMPLE_INPUTS;
       }
-      const issues = await validateStored(d, s);
+      const issues = await validateStored(d, s, typed);
       expect(
         issues.filter((i) => i.blocking),
         `${s.kind} -> ${d.kind}: ${d.bodyDraft}`,
@@ -278,27 +290,38 @@ describe('drafting against the demo data', () => {
       ? (await db.outbound.get(s.outboundMessageId))!
       : (await draftForSuggestion(user, s))!;
     expect(d.personId).toBe(referrer!.id);
-    expect(d.bodyDraft).toMatch(new RegExp(`thank you for the intro to ${target!.displayName}`));
-    expect(d.bodyDraft).toMatch(/We spoke yesterday\./);
-    expect((await validateStored(d, s)).filter((i) => i.blocking)).toEqual([]);
+    expect(d.bodyDraft).toMatch(new RegExp(`Thanks again for connecting me with ${target!.firstName}\\.`));
+    // the introducer enjoys hearing one thing from the conversation, so the student is asked for it (panel round 3)
+    expect(d.bodyDraft).toMatch(/We spoke yesterday, and \[one thing/);
+    expect(d.needsInput).toContain('takeaway');
+    const filled = (await regenerateDraft(user, d.id, {
+      takeaway: 'he walked me through how his team runs interviews',
+    }))!;
+    expect(filled.bodyDraft).toMatch(
+      /We spoke yesterday, and he walked me through how his team runs interviews\./,
+    );
+    expect((await validateStored(filled, s)).filter((i) => i.blocking)).toEqual([]);
   });
 
   it('thank-you and nurture splice facts grammatically, located by the real meeting date', async () => {
     // the demo's chat that just ended, with a Granola note: Lena at Ramp
     const lena = (await people((p) => p.displayName === 'Lena Novak'))[0]!;
     const ty = await draftMessage(user, lena.id, 'thank_you', 'gmail');
+    // the point, not "the key is ..." read back; the offer becomes the next step (drafts panel round 2)
     expect(ty.bodyDraft).toMatch(
-      /your point that the key is one concrete project story that shows how I handled/i,
+      /your point that it comes down to one concrete project story that shows how I handled/i,
     );
     expect(ty.bodyDraft).toMatch(
-      /Thanks also for offering to pass my name to the recruiter who owns the software engineering intern req/,
+      /Thanks also for offering to pass my name to the recruiter who owns the software engineering intern req\. I've attached my resume/,
     );
     expect(ty.bodyDraft).not.toMatch(/Lena offered|She offered|point that recommended|how you handled/);
-    // with no hook on record the check-in asks for the student's update first
+    // the check-in has something real to say from what is on record (her open offer, the application to Ramp),
+    // so it does not ask for a made-up update; the student's own update still wins when typed
     const asked = await draftMessage(user, lena.id, 'nurture', 'gmail');
-    expect(asked.needsInput).toEqual(['update']);
+    expect(asked.needsInput ?? []).not.toContain('update');
+    expect(asked.bodyDraft).not.toMatch(/\[/);
     const n = (await regenerateDraft(user, asked.id, { update: SAMPLE_INPUTS.update }))!;
-    expect(n.needsInput).toBeUndefined();
+    expect(n.bodyDraft).toContain(SAMPLE_INPUTS.update!.replace(/[.]$/, ''));
     expect(n.bodyDraft).not.toMatch(/mentioned Lena|It's been a little while/);
     for (const d of [ty, n]) expect((await validateStored(d)).filter((i) => i.blocking)).toEqual([]);
   });
@@ -313,7 +336,8 @@ describe('drafting against the demo data', () => {
     const i = await draftMessage(user, lena.id, 'intro_request', 'gmail');
     expect(i.needsInput).toEqual(['target']);
     const i2 = (await regenerateDraft(user, i.id, { target: 'Lucas Fischer, Engineering Manager at Ramp' }))!;
-    expect(i2.bodyDraft).toMatch(/talk with Lucas Fischer \(Engineering Manager at Ramp\)/);
+    // a colleague at their own firm needs no title or firm (panel round 3)
+    expect(i2.bodyDraft).toMatch(/introducing me to Lucas Fischer\?/);
     expect(i2.subject).toBe('Small ask: intro to Lucas Fischer?');
   });
 
@@ -400,10 +424,13 @@ describe('drafting against the demo data', () => {
     expect(d.externalThreadId).toBe(th.externalThreadId);
     expect(d.inReplyToMessageId).toBeDefined();
     expect(d.subject).toBe(`Re: ${th.subject}`);
+    // she has written to the student, so "Hi", and the application is stated as it stands (drafts panel round 2)
+    // the student wrote last, days ago: the news leads, and nothing hides who is waiting on whom (panel round 3)
     expect(d.bodyDraft).toMatch(
-      /^Dear Chloe,\n\nWe traded emails [^,]+, and I wanted to pick that conversation back up\./,
+      /^Hi Chloe,\n\nA quick update since my note [^:]+: I've applied for the Software Engineering Intern role at Ramp, and I've spoken with Lena Novak, an engineering manager there\./,
     );
-    expect(d.bodyDraft).toMatch(/As a quick reminder, I'm a junior at Cornell/);
+    expect(d.bodyDraft).not.toMatch(/We traded emails/);
+    expect(d.bodyDraft).not.toMatch(/planning to apply|helpful conversations|As a quick reminder/);
     expect((await validateStored(d)).filter((i) => i.blocking)).toEqual([]);
     // on LinkedIn: no subject, and a short note (not the letter) when they are not connected yet
     const li = await draftMessage(user, chloe.id, 'outreach', 'linkedin');
@@ -412,7 +439,7 @@ describe('drafting against the demo data', () => {
     await db.people.update(chloe.id, { linkedinConnectedOn: undefined });
     const note = await draftMessage(user, chloe.id, 'outreach', 'linkedin');
     expect(note.bodyDraft.length).toBeLessThanOrEqual(300);
-    expect(note.bodyDraft).toMatch(/^Hi Chloe, we traded emails/);
+    expect(note.bodyDraft).toMatch(/^Hi Chloe, (we traded emails|following up on my note)/);
   });
 
   it('a reply asking for the resume and the teams gets both before any times (EG-03)', async () => {
@@ -461,9 +488,9 @@ describe('drafting against the demo data', () => {
     const d = await draftMessage(user, p.id, 'schedule', 'gmail', chat.id);
     expect(d.externalThreadId).toBe(`ext-${thId}`);
     expect(d.bodyDraft).toMatch(/resume/);
-    expect(d.needsInput).toEqual(['answer']);
+    expect(d.needsInput).toEqual(['resume', 'answer']);
     const re = (await regenerateDraft(user, d.id, { answer: SAMPLE_INPUTS.answer }))!;
-    expect(re.bodyDraft).toMatch(/Mostly payments infrastructure/);
+    expect(re.bodyDraft).toMatch(/As for teams, mostly payments infrastructure/);
     expect(re.bodyDraft).toMatch(/Would either of these work for a quick call\?/);
     const ctx = await buildDraftContext(user, p, 'schedule', 'gmail', undefined, {}, chat);
     const issues = validateDraft(
@@ -483,9 +510,10 @@ describe('drafting against the demo data', () => {
   it('a thank-you keeps the promise from the notes, and asks for a takeaway when there are no notes (EG-15)', async () => {
     const lena = (await people((p) => p.displayName === 'Lena Novak'))[0]!;
     const ty = await draftMessage(user, lena.id, 'thank_you', 'gmail');
-    expect(ty.bodyDraft).toMatch(
-      /As promised, I'll send my resume and the marketplace project link by Friday/,
-    );
+    // the resume she offered to pass along is attached; the rest of the promise is kept
+    expect(ty.bodyDraft).toMatch(/I've attached my resume so it's easy to pass along\./);
+    expect(ty.bodyDraft).toMatch(/As promised, I'll send the marketplace project link by Friday\./);
+    expect(ty.needsInput).toEqual(['resume']);
     expect((await validateStored(ty)).filter((i) => i.blocking)).toEqual([]);
     const chatted = await chattedIds();
     const p = (await people((x) => !!x.primaryEmail && !chatted.has(x.id) && !x.hiddenAt))[2]!;
@@ -607,5 +635,62 @@ describe('the "who I am" clause (resume one-liner)', () => {
     const withContact = (await buildDraftContext(noYear, someone, 'outreach', 'gmail')).user.oneLiner;
     expect(withContact ?? '').not.toMatch(/@|\d{3}/);
     await db.resumeFacets.update(summary.id, { text: summary.text });
+  });
+});
+
+describe('drafts review, round 2 (web)', () => {
+  it('a reply asking for times "next week" gets windows from next Monday, never tomorrow', async () => {
+    const hannah = (await people((p) => p.displayName === 'Hannah Brooks'))[0]!;
+    const ctx = await buildDraftContext(user, hannah, 'schedule', 'gmail');
+    expect(ctx.thread?.lastInboundBody).toMatch(/next week/);
+    const from = earliestFor(
+      ctx.thread!.lastInboundBody,
+      new Date(ctx.thread!.lastInboundAt!),
+      user.timezone,
+    )!;
+    expect(ctx.proposedWindows!.length).toBeGreaterThan(0);
+    for (const w of ctx.proposedWindows!)
+      expect(new Date(w.startIso).getTime()).toBeGreaterThanOrEqual(from.getTime());
+  });
+
+  it('a placeholder or a bare sign-off never enters the same-company opening check', async () => {
+    const [a, b] = (await people((p) => (p.currentOrganizationRaw ?? '') === 'Figma')).slice(0, 2);
+    const now = new Date().toISOString();
+    for (const opening of [
+      '[One real update since you last spoke with Jonah]',
+      'Thanks,',
+      'I read your post on the design system.',
+    ])
+      await db.outbound.add({
+        id: newId('out'),
+        userId: user.id,
+        personId: a!.id,
+        channel: 'gmail',
+        kind: 'outreach',
+        bodyDraft: opening,
+        status: 'draft',
+        generatedBy: 'template',
+        claims: [],
+        opening,
+        createdAt: now,
+      });
+    const ctx = await buildDraftContext(user, b!, 'outreach', 'gmail');
+    expect(ctx.recentOpenings).toContain('I read your post on the design system.');
+    expect(ctx.recentOpenings!.some((o) => /\[|^Thanks,$/.test(o))).toBe(false);
+  });
+
+  it('a posting link the student pastes goes into the referral ask', async () => {
+    const maya = (await people((p) => p.displayName === 'Maya Chen'))[0]!;
+    // Maya wrote "send me the posting": the ask goes out with it, or the student is asked for it
+    const d = await draftMessage(user, maya.id, 'referral_ask', 'gmail');
+    // the posting (with the team she made the condition), and the resume to attach (drafts panel round 2)
+    expect(d.needsInput).toEqual(['resume', 'posting']);
+    expect(d.bodyDraft).toMatch(/\[the team you picked, and the link to the posting\]/);
+    const re = (await regenerateDraft(user, d.id, {
+      posting: 'https://stripe.com/jobs/listing/intern/123',
+    }))!;
+    expect(re.needsInput).toEqual(['resume']);
+    expect(re.bodyDraft).toMatch(/https:\/\/stripe\.com\/jobs\/listing\/intern\/123/);
+    expect(re.bodyDraft).not.toMatch(/\[/);
   });
 });

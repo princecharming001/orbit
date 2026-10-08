@@ -255,6 +255,9 @@ export function clause(
   if (!t || /[?\n]/.test(t) || t.split(' ').length > 34) return undefined;
   if ((t.match(/"/g) ?? []).length % 2) return undefined;
   t = genericYouToI(t);
+  // a third party's role stays theirs: "offered to introduce me to their hiring manager" is "the hiring manager",
+  // never "your hiring manager" (which reads as the recipient's boss)
+  t = t.replace(/\b(their|his|her) (hiring manager|recruiter|recruiting team)\b/gi, 'the $2');
   const names = [person.fullName, person.firstName, person.lastName]
     .filter((n): n is string => !!n && n.length > 1)
     .sort((a, b) => b.length - a.length)
@@ -339,8 +342,105 @@ export function firstPart(s: string): string {
     .trim();
 }
 
+/**
+ * Their own words in the student's note ("the key is knowing one deal on our coverage list"): "our" and "we" were the
+ * speaker's, so in a note back to them they are "your" and "you" ("on your coverage list").
+ */
+export function theirWords(s: string): string {
+  return s
+    .replace(/\bwe're\b/g, "you're")
+    .replace(/\bwe've\b/g, "you've")
+    .replace(/\bourselves\b/g, 'yourselves')
+    .replace(/\bours\b/g, 'yours')
+    .replace(/\bour\b/g, 'your')
+    .replace(/\bwe\b/g, 'you');
+}
+
+/**
+ * A note the student wrote at the time, retold afterwards: "refer me once I have picked a team" reads "refer me once
+ * I'd picked a team" in "When we spoke, you offered to ...".
+ */
+export function reported(s: string): string {
+  return s.replace(/\b(once|when|after|as soon as|until|if) I (?:have|'ve)\b/gi, "$1 I'd");
+}
+
+const ORG_SHORT: [RegExp, string][] = [
+  [/^mckinsey\s*(&|and)\s*company$/i, 'McKinsey'],
+  [/^(the )?boston consulting group(\s*\(bcg\))?$/i, 'BCG'],
+  [/^bain\s*(&|and)\s*company$/i, 'Bain'],
+  [/^goldman sachs(\s*(&|and)\s*co\.?)?$/i, 'Goldman'],
+  [/^andreessen horowitz$/i, 'a16z'],
+  [/^hudson river trading$/i, 'HRT'],
+  [/^jpmorgan chase(\s*(&|and)\s*co\.?)?$/i, 'J.P. Morgan'],
+];
+/**
+ * A firm as the people there write it: "McKinsey", "BCG", "Bain", "Goldman", "Lightspeed", "Centerview",
+ * "Sequoia". A legal or full name ("McKinsey & Company", "Lightspeed Venture Partners") repeated in a short note is a
+ * mail-merge tell.
+ */
+export function shortOrg(org: string | undefined): string | undefined {
+  const o = org?.replace(/\s+/g, ' ').trim();
+  if (!o) return o;
+  for (const [re, s] of ORG_SHORT) if (re.test(o)) return s;
+  const cut = o
+    .replace(/,?\s+(inc|llc|ltd|plc|corp|corporation|co|pbc|l\.?p)\.?$/i, '')
+    // "Bain Capital" is not Bain, and "Citadel Securities" is not Citadel
+    .replace(
+      /^(?!bain capital$)(.+?)\s+(venture partners|capital partners|partners|capital|ventures|group)$/i,
+      '$1',
+    );
+  // never cut a name down to a stub ("Jump Trading" stays, "Accel" stays)
+  return cut.length >= 3 && /^[A-Z]/.test(cut) && !/\s(of|and|&)$/i.test(cut) ? cut : o;
+}
+
+/** "Goldman Sachs'" and "J.P. Morgan's". */
+export function possessive(name: string): string {
+  return /s$/i.test(name.trim()) ? `${name.trim()}'` : `${name.trim()}'s`;
+}
+
+const GROUP_NOUN =
+  /\b(office|team|group|practice|desk|division|department|unit|labs?|org|organization|studio|platform|fund|program)$/i;
+/** A group as stored ("TMT", "Boston office", "fintech team") with the noun it needs: "TMT group", "Boston office". */
+export function groupNoun(group: string, sector: string): string {
+  const g = group.replace(/\s+/g, ' ').trim();
+  if (GROUP_NOUN.test(g)) return g;
+  return `${g} ${sector === 'finance' ? 'group' : sector === 'consulting' ? 'practice' : 'team'}`;
+}
+/**
+ * The group as the object of "chose": a banker's group by its name ("how you chose TMT", "Leveraged Finance"), anything
+ * that carries its own noun with an article ("the Boston office", "the fintech team").
+ */
+export function chosenGroup(group: string): string {
+  const g = group.replace(/\s+/g, ' ').trim();
+  return GROUP_NOUN.test(g) || /^[a-z]/.test(g) ? `the ${g}` : g;
+}
+/** "Goldman Sachs' TMT group", "Bain & Company's Boston office", "Meta's Ads Infrastructure team". */
+export function orgGroup(org: string, group: string | undefined, sector: string): string {
+  return group?.trim() ? `${possessive(org)} ${groupNoun(group, sector)}` : org;
+}
+
 /** "what you said about focusing on X" / "your point that the key is Y" / "your advice to apply early". */
 export function pointPhrase(c: FactClause | undefined): string | undefined {
+  const p = pointPhraseRaw(c);
+  return p && theirWords(paraphrase(p));
+}
+
+/**
+ * "your point that the key is knowing one deal cold" read back word for word is a parrot; the point itself is what
+ * they said: "your point about knowing one deal cold", "your advice to ship one small project".
+ */
+function paraphrase(p: string): string {
+  const m = p.match(
+    /^your point that (?:the )?(?:key|trick|secret|most important thing|biggest thing|best thing|main thing)(?: here)? (?:is|was) (.+)$/i,
+  );
+  if (!m) return p;
+  const rest = m[1]!.replace(/^that\s+/i, '');
+  if (/^to\s/i.test(rest)) return `your advice ${rest}`;
+  if (/^\w+ing\b/i.test(rest)) return `your point about ${rest}`;
+  if (/^(a|an|one|the|your|my)\b/i.test(rest)) return `your point that it comes down to ${rest}`;
+  return p;
+}
+function pointPhraseRaw(c: FactClause | undefined): string | undefined {
   if (!c) return undefined;
   if (!c.you) return `your point that ${firstPart(c.text)}`;
   const v = c.verb?.toLowerCase() ?? '';

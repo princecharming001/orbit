@@ -469,8 +469,14 @@ describe('email introductions (EG-08)', () => {
         chat: { referrerName: 'Alex', introducedAt: '2026-10-05T15:00:00Z', stage: 'identified' },
       }),
     );
-    expect(draft.body).toMatch(/Alex was kind enough to introduce us|follow up on Alex's introduction/);
+    // a reply-all on the introduction: the introducer is thanked and moved to bcc, then the person is greeted
+    // (drafts panel round 2: a new thread "Following up on Alex's introduction" is not how it is done)
+    expect(draft.body).toMatch(
+      /^Thanks for the introduction, Alex \(moving you to bcc\)\.\n\nHi Sana,\n\n(It's )?[Gg]reat to meet you\./,
+    );
     expect(draft.body).not.toMatch(/said to say hello/);
-    expect(draft.subject).toBe("Following up on Alex's introduction");
+    expect(draft.introReply).toEqual({ bcc: 'Alex' });
+    expect(draft.subject).toBeUndefined();
+    expect(draft.opening).not.toMatch(/bcc/);
   });
 });
