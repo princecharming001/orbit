@@ -391,6 +391,10 @@ test.describe('Map motion', () => {
     const card = page.getByTestId('map-tooltip');
     await expect(card).toContainText('Maya Chen');
     await expect(card).toHaveAttribute('data-place', 'beside');
+    // the company has a line of its own, so a long title never cuts it off
+    const company = card.getByTestId('map-tooltip-company');
+    await expect(company).toBeVisible();
+    expect(await company.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
     await mapSettled(page);
     const c = (await card.boundingBox())!;
     const dots = await mapDots(page);
