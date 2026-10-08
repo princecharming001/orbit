@@ -2075,8 +2075,12 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       const knows = !!meetingAt || isFriend(P) || P.strength >= 0.35 || !!ctx.history?.repliedEver;
       // "just saw the news" only when it is news: not when they have talked since it happened, and not for a change
       // Orbit only noticed on an import
+      // (advice or an offer noted after the change means they have talked since, even with no meeting on record)
+      const after = (iso: string | undefined) =>
+        !!iso && !!na?.since && new Date(iso).getTime() > new Date(na.since).getTime();
       const talkedSince =
-        !!meetingAt && !!na?.since && new Date(meetingAt).getTime() > new Date(na.since).getTime();
+        after(meetingAt) ||
+        facts.some((f) => ['advice', 'offer', 'preference'].includes(f.type) && after(f.occurredAt));
       // news the student typed is news they just saw
       const fresh = (recent && !talkedSince) || (!na?.org && !newRole && !!news);
       const lead = fresh ? `Just saw the news about ${what}. Congratulations` : `Congratulations on ${what}`;

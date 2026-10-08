@@ -321,6 +321,15 @@ describe('honesty about state', () => {
     );
     expect(d.body).not.toMatch(/Just saw the news/);
     expect(d.body).toMatch(/Congratulations on your move from Deloitte to Oliver Wyman/);
+    // advice noted after the move says the same, with no meeting on record
+    const noted = generateDraft(
+      base({
+        kind: 'congratulate',
+        facts: [fact('a', 'advice', 'the key is structuring the case out loud', 2)],
+        newAffiliation: { title: 'Principal', org: 'Oliver Wyman', since: ago(10), previousOrg: 'Deloitte' },
+      }),
+    );
+    expect(noted.body).not.toMatch(/Just saw the news|first few weeks/);
   });
   it('a report-back never tells the introducer the person has not answered', () => {
     const d = generateDraft(
