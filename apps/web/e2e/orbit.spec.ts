@@ -86,8 +86,14 @@ test.describe('Orbit demo flow', () => {
     await expect(textarea).not.toHaveValue(/\[/);
     await expect(textarea).toHaveValue(/what you said about|your advice|your point/i);
     await textarea.fill(`${await textarea.inputValue()}\n\nPS edited in e2e`);
+    // the note says the resume is attached: Orbit cannot attach files, so the student confirms they will
+    const open = card.getByRole('button', { name: /^open in mail app$/i });
+    if (await card.getByTestId('draft-attach-resume').isVisible()) {
+      await expect(open).toBeDisabled();
+      await card.getByTestId('draft-attach-confirm').check();
+    }
     // without Gmail sending, the button says what it does: it opens the mail app
-    await card.getByRole('button', { name: /^open in mail app$/i }).click();
+    await open.click();
     await expect(page.getByText(/opened in your mail app/i).first()).toBeVisible({ timeout: 15_000 });
     // a mail-app hand-off is not "sent" until the student says so
     await card.getByRole('button', { name: /i sent it/i }).click();

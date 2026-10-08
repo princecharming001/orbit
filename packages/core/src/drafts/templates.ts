@@ -1076,6 +1076,12 @@ export function deriveConnection(ctx: DraftContext): Connection | undefined {
           ? `${lowerPhrase(roleNoun(ctx.person.previousTitle) ?? ctx.person.previousTitle)} at ${shortOrg(ctx.person.previousOrg)}`
           : shortOrg(ctx.person.previousOrg),
     };
+  // a role change on record is a checkable fact about them and the natural reason to write (never called recent
+  // when Orbit only noticed it on an import)
+  const na = ctx.newAffiliation;
+  const naRole = na?.title ? roleNoun(na.title) : undefined;
+  if (na?.org && naRole)
+    return { kind: 'hook', text: `you're now ${article(naRole)} ${naRole} at ${shortOrg(na.org)}` };
   const kind = firmKindOf(
     { title: ctx.person.title, org: ctx.person.org, industry: ctx.person.orgIndustry },
     sectorOf({ title: ctx.person.title, org: ctx.person.org, industry: ctx.person.orgIndustry }),

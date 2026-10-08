@@ -592,6 +592,15 @@ describe('register and specificity', () => {
     expect(d.body).toMatch(/how product design and software engineering work together/);
     expect(d.body).not.toMatch(/what you'd do differently|how that happened/);
   });
+  it('a role change on record is the reason to write, not a request for a connection line', () => {
+    const d = generateDraft(
+      base({
+        newAffiliation: { title: 'Engineering Manager', org: 'Figma', since: '2026-08-01', observed: true },
+      }),
+    );
+    expect(d.needsInput).toEqual([]);
+    expect(d.body).toMatch(/I saw that you're now an engineering manager at Figma/);
+  });
   it('a mutual tie with no name is asked for, and named when given', () => {
     const line = 'You spoke with my roommate at a recruiting dinner last spring';
     const d = generateDraft(base({ facts: [fact('c', 'connection', line)] }));
