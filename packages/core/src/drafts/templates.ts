@@ -789,7 +789,7 @@ function askBlock(
       [
         `Would you have ${minutes} minutes sometime soon to ${talk}? No rush at all.`,
         `Any chance you'd have ${minutes} minutes in the next couple of weeks to ${talk}? No rush.`,
-        `Could I steal ${minutes} minutes sometime in the next few weeks to ${talk}? Whenever works for you.`,
+        `Could I grab ${minutes} minutes of your time in the next few weeks to ${about ? `talk about ${about}` : `hear ${qq.q}`}? Whenever works for you.`,
       ],
       seed,
       'ask-friend',

@@ -781,5 +781,95 @@
     "body": "Hi {first},\n\nThank you for the reply. I've attached my resume. As for teams, I'm most interested in TMT and healthcare, since those are the sectors I've followed most closely.\n\nBest,\n{me}",
     "source": "Orbit drafts panel, round 2 (banker, consultant, tech referrer, career coach): rewrites of the weakest drafts, generalised to placeholders",
     "notes": "Asked for the resume: it is in this reply. The answer to 'which teams' has a lead-in, not a pasted fragment."
+  },
+  {
+    "kind": "outreach",
+    "sector": "finance",
+    "relationship": "alumni",
+    "subject": "{school} '{yy}, quick question on {org} {group}",
+    "body": "Hi {first},\n\nI'm a junior at {school} studying economics, and I saw that you're a fellow alum who {their_work} at {org}.\n\nWould you have 15 minutes in the next few weeks to tell me how you'd approach recruiting from here if you were in my position? Happy to work around your schedule.\n\nBest,\n{me}\n{school} '{yy}",
+    "source": "Expert panel round 3 rewrite (banker, consultant, tech referrer, career coach), distilled to placeholders",
+    "notes": "To a VP or MD: the role note is the line about them, the school is said once, and the ask is for their judgment. Never whether the group 'still brings on' analysts, never off-cycle or diversity programs (a recruiting-office question, and a presumption). 'Hi' to an alum even in banking."
+  },
+  {
+    "kind": "outreach",
+    "sector": "finance",
+    "relationship": "warm",
+    "subject": null,
+    "body": "Thanks for the introduction, {introducer} (moving you to bcc).\n\nHi {first},\n\nGreat to meet you. I'm a junior at {school} studying economics, and I've applied for {org}'s summer analyst program. I'd love to hear what you'd want an incoming summer analyst to understand about the {group} group. Would you have 15 minutes in the next couple of weeks? Happy to work around your schedule.\n\nBest,\n{me}",
+    "source": "Expert panel round 3 rewrite (banker, consultant, tech referrer, career coach), distilled to placeholders",
+    "notes": "A reply-all on the introduction. The application is one clause of context and the question follows from it: about the group they would join, never about the cycle the student has already applied in."
+  },
+  {
+    "kind": "congratulate",
+    "sector": "consulting",
+    "relationship": "met",
+    "subject": "Congratulations on the move to {org}",
+    "body": "Hi {first},\n\nCongratulations on joining {org}. I hope the first few weeks have been good.\n\nThanks again for your point about {their_advice}. Once you've settled in, if your offer to {their_offer} still stands, I'd love to take you up on it. No rush at all.\n\nBest,\n{me}",
+    "source": "Expert panel round 3 rewrite (banker, consultant, tech referrer, career coach), distilled to placeholders",
+    "notes": "A job change is the moment to pick the thread back up: congratulate, recall what they told you (never what you did about it), and take up their offer gently. Never 'your move from {old_org} to {org} as a {title}': that is a job-change alert, and naming the old employer reads as being watched."
+  },
+  {
+    "kind": "nurture",
+    "sector": "tech",
+    "relationship": "met",
+    "subject": "Quick update since {month}",
+    "body": "Hi {first},\n\nQuick update since we talked in {month}: {update}.\n\nWhen we spoke, you offered to {their_offer}. If that's still on the table, I'd love to take you up on it, and I can send a two-line blurb and my resume to make it easy.\n\nThanks,\n{me}",
+    "source": "Expert panel round 3 rewrite (banker, consultant, tech referrer, career coach), distilled to placeholders",
+    "notes": "One purpose. A note that takes up an offer never ends 'No reply needed', and carries no stapled line about the team's internal projects ('migrating its services ...'), which reads as scraped."
+  },
+  {
+    "kind": "nurture",
+    "sector": "consulting",
+    "relationship": "met",
+    "subject": null,
+    "body": "Hi {first},\n\nA quick update since we talked in {month} about {topic}: {which_way_the_student_went}.\n\nThanks again for talking it through with me, and I hope the fall is going well at {org}. No need to reply.\n\nBest,\n{me}",
+    "source": "Expert panel round 3 rewrite (banker, consultant, tech referrer, career coach), distilled to placeholders",
+    "notes": "The update a person cares about is how the question you discussed came out. 'I'm recruiting this cycle' is not an update; without a real one the engine asks the student for it."
+  },
+  {
+    "kind": "outreach",
+    "sector": "tech",
+    "relationship": "alumni",
+    "subject": null,
+    "body": "Hi {first}, thanks for connecting. I'm a {school} junior in CS, and I saw {org} is hiring its first interns in {month}. I built {project}, and I'm applying for software engineering internships. What would make a student stand out for one of those spots? A line or two here would be plenty, or 15 minutes if a call is easier.\n\nThanks,\n{me}",
+    "source": "Expert panel round 3 rewrite (banker, consultant, tech referrer, career coach), distilled to placeholders",
+    "notes": "A hiring note is the firm's ('{org} is hiring'), never pinned on the person, and the question is about it. One way to answer, said once, in the chat they are reading: no 'happy to keep it to email' in a LinkedIn message."
+  },
+  {
+    "kind": "outreach",
+    "sector": "tech",
+    "relationship": "cold",
+    "subject": null,
+    "body": "Hi {first}, thanks for connecting. I'm a {school} junior in CS, and I'm applying for software engineering internships for next summer. I'd love to understand what engineering on {their_area} looks like for someone early in their career. Is there someone on your team, maybe a recent intern or new grad, you'd suggest I talk to? Thanks either way.\n\n{me}",
+    "source": "Expert panel round 3 rewrite (banker, consultant, tech referrer, career coach), distilled to placeholders",
+    "notes": "A VP or head of engineering is far from the intern class: the small, grantable ask is a pointer to the right person, never 'what separates the interns who get return offers' from a student who has no internship there."
+  },
+  {
+    "kind": "outreach",
+    "sector": "tech",
+    "relationship": "alumni",
+    "subject": "{school} junior, a question from the engineering side",
+    "body": "Hi {first},\n\nI'm a fellow alum studying computer science, and I've applied for {org}'s software engineering internship. You've designed products at {prev_org} and {org}, so I'd love your view on what the engineers you work best with do differently, especially early in their time on a team.\n\nWould you have 15 minutes in the next couple of weeks? A few lines here would be just as helpful.\n\nThanks,\n{me}",
+    "source": "Expert panel round 3 rewrite (banker, consultant, tech referrer, career coach), distilled to placeholders",
+    "notes": "Someone in another function is asked what only their seat can answer about the student's own work, never 'how you ended up as a product designer', and never a motive the student does not have ('the kind of move I'm trying to understand')."
+  },
+  {
+    "kind": "report_back",
+    "sector": "general",
+    "relationship": "met",
+    "subject": "Thank you for the intro to {target_first}",
+    "body": "Hi {first},\n\nThanks again for connecting me with {target_first}. We spoke on {day}, and {one_thing_they_said}. Really appreciate you making it happen, and I'll keep you posted on how recruiting goes.\n\nThanks,\n{me}",
+    "source": "Expert panel round 3 rewrite (banker, consultant, tech referrer, career coach), distilled to placeholders",
+    "notes": "The introducer enjoys hearing one thing from the conversation; one promise, once. A non-event ('I've followed up') is not reported."
+  },
+  {
+    "kind": "outreach",
+    "sector": "tech",
+    "relationship": "recruiter",
+    "subject": null,
+    "body": "Hi {first},\n\nA quick update since my last note: I've submitted my application for the {role} role, and I had a helpful conversation with {colleague}, who {colleague_role}. Is there anything else you'd like from me, or a typical timeline for first-round interviews?\n\nThanks,\n{me}",
+    "source": "Expert panel round 3 rewrite (banker, consultant, tech referrer, career coach), distilled to placeholders",
+    "notes": "After the student's own unanswered note, wait about a week, then lead with the news. Never 'We traded emails earlier this week', which hides who is waiting on whom. A tech recruiter gets 'Hi' and contractions."
   }
 ]

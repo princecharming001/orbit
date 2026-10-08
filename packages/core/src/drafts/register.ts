@@ -307,7 +307,7 @@ export function questionsFor(
         return [
           q(
             "whether there's someone on your team, maybe a recent intern or new grad, you'd suggest I talk to",
-            'who on your team I should talk to',
+            'how your team brings on interns',
             "Is there someone on your team, maybe a recent intern or new grad, you'd suggest I talk to?",
           ),
         ];
