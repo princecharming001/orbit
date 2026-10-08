@@ -1121,6 +1121,10 @@ test.describe('Map motion', () => {
     await openMap(page);
     const { 'Maya Chen': maya } = await idsByName(page, ['Maya Chen']);
     expect((await mapSnapshot(page)).spin).toBeGreaterThan(0);
+    // the demo's map has no grey "+N" dots, so the panel does not explain them
+    await expect(mapCanvas(page)).toHaveAttribute('data-aggregated', '0');
+    await expect(page.getByTestId('map-panel')).toContainText('Companies read as wedges');
+    await expect(page.getByTestId('map-panel')).not.toContainText('grey dot');
     const box = (await mapCanvas(page).boundingBox())!;
     const at = (await mapDots(page, [maya]))[maya]!;
     await page.mouse.move(box.x + at.x, box.y + at.y);
@@ -1271,6 +1275,8 @@ test.describe('Map motion with a big network', () => {
     await briefWritten(page);
     await injectPeople(page, 1910);
     await openMap(page);
+    // the panel explains the grey "+N" dots now that the map shows some
+    await expect(page.getByTestId('map-panel')).toContainText('A grey dot with a number');
     await search(page, 'Google');
     await expect.poll(async () => (await mapSnapshot(page)).focus).toBe('company:n:google');
     await mapSettled(page, 30_000);
