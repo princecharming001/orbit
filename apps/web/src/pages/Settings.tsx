@@ -429,12 +429,20 @@ function GoalsForm({ goals, tcs }: { goals: UserGoals; tcs: TargetCompany[] }) {
   const toast = useToast();
   // "Evercore, Lazard" adds two companies
   const addCompany = async () => {
-    const r = await addTargetCompanies(user.id, company);
+    // take the text now and clear the box at once, so a company typed while this one saves is kept
+    const value = company;
+    setCompany('');
+    let r: Awaited<ReturnType<typeof addTargetCompanies>>;
+    try {
+      r = await addTargetCompanies(user.id, value);
+    } catch (e) {
+      setCompany((current) => current || value);
+      throw e;
+    }
     if (r.duplicates.length)
       toast.push({
         text: `${r.duplicates.join(', ')} ${r.duplicates.length === 1 ? 'is' : 'are'} already on your list.`,
       });
-    setCompany('');
   };
   const split = (s: string) =>
     s

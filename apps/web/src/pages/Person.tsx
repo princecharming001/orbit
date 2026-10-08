@@ -1130,20 +1130,26 @@ function AddFact({ personId, userId }: { personId: string; userId: string }) {
     'hook',
   );
   const add = async () => {
-    if (!text.trim()) return;
-    await db.facts.add({
-      id: newId('f'),
-      userId,
-      personId,
-      type,
-      text: text.trim(),
-      sourceTable: 'manual',
-      sourceId: 'manual',
-      confidence: 1,
-      occurredAt: new Date().toISOString(),
-      createdAt: new Date().toISOString(),
-    });
+    // Take the text now and clear the box at once: clearing after the save would wipe a fact typed while it ran.
+    const value = text.trim();
+    if (!value) return;
     setText('');
+    try {
+      await db.facts.add({
+        id: newId('f'),
+        userId,
+        personId,
+        type,
+        text: value,
+        sourceTable: 'manual',
+        sourceId: 'manual',
+        confidence: 1,
+        occurredAt: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+      });
+    } catch {
+      setText((current) => current || value); // the save failed: give the words back unless new ones were typed
+    }
   };
   return (
     <div className="flex flex-wrap gap-2 items-center">

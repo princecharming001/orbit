@@ -509,14 +509,22 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
   const [companyNote, setCompanyNote] = useState('');
   // "Evercore, Lazard" adds two companies
   const addCompany = async () => {
-    if (!company.trim()) return;
-    const r = await addTargetCompanies(user.id, company);
+    // take the text now and clear the box at once, so a company typed while this one saves is kept
+    const value = company;
+    if (!value.trim()) return;
+    setCompany('');
+    let r: Awaited<ReturnType<typeof addTargetCompanies>>;
+    try {
+      r = await addTargetCompanies(user.id, value);
+    } catch (e) {
+      setCompany((current) => current || value);
+      throw e;
+    }
     setCompanyNote(
       r.duplicates.length
         ? `${r.duplicates.join(', ')} ${r.duplicates.length === 1 ? 'is' : 'are'} already on your list.`
         : '',
     );
-    setCompany('');
   };
   const split = (x: string) =>
     x
