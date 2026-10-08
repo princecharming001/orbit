@@ -75,7 +75,7 @@ export function subjectTopic(subject: string | undefined): string | undefined {
     .trim();
   if (!s || s.split(' ').length < 2 || s.length > 70) return undefined;
   if (
-    /^(quick question|question|following up|follow up|checking in|thank you|thanks|congratulations|hello|hi)\b/i.test(
+    /^(quick question|question|following up|follow up|checking in|catching up|touching base|reconnecting|thank you|thanks|congratulations|hello|hi)\b/i.test(
       s,
     )
   )

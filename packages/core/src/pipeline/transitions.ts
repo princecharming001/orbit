@@ -1,3 +1,5 @@
+import { inboundNeedsAnswer, type ThreadState } from '../drafts/thread';
+import { addBusinessDays } from '../suggestions/calendar';
 import type { ChatStage, CoffeeChat, MessageKind } from '../types';
 
 export const ACTIVE_STAGES: ChatStage[] = [
@@ -286,32 +288,79 @@ export function reengageDueAt(re: Reengage, saidAt: Date): Date {
 /**
  * What "Write to {first}" should draft for a chat right now, or why nothing should go out yet. A check-in minutes
  * after a thank-you (or any note within two weeks of the student's last one, with no reply since) is not offered:
- * the stage alone would say "nurture", the calendar says "too soon".
+ * the stage alone would say "nurture", the calendar says "too soon". A bump waits for its business days and for an
+ * out-of-office return (plus two business days); a reply is only a reply when their last message waits on an answer
+ * (a months-old "Good luck this fall" calls for a check-in, not "Thank you for the reply").
  */
 export function composeKindFor(
-  chat: Pick<CoffeeChat, 'stage' | 'lastOutboundAt' | 'lastInboundAt'> | undefined,
+  chat:
+    | Pick<
+        CoffeeChat,
+        'stage' | 'lastOutboundAt' | 'lastInboundAt' | 'outOfOfficeUntil' | 'bumpNotBefore'
+      >
+    | undefined,
   now: Date,
-): { kind: MessageKind } | { wait: { since: string } } {
+  opts: { lastInbound?: ThreadState; timezone?: string } = {},
+): { kind: MessageKind } | { wait: { since: string; until?: string; reason?: 'away' | 'too_soon' } } {
   if (!chat) return { kind: 'outreach' };
   const lastOut = chat.lastOutboundAt ? new Date(chat.lastOutboundAt).getTime() : undefined;
   const repliedSince = !!chat.lastInboundAt && (!lastOut || new Date(chat.lastInboundAt).getTime() > lastOut);
+  // with the message in hand, "replied" means it waits on an answer; without it, any reply since counts
+  const answerDue = repliedSince && (!opts.lastInbound || inboundNeedsAnswer(opts.lastInbound, now));
   switch (chat.stage) {
     case 'completed':
       return { kind: 'thank_you' };
-    case 'outreach_sent':
+    case 'outreach_sent': {
+      if (!chat.lastOutboundAt) return { kind: 'bump' };
+      const holds = [
+        chat.bumpNotBefore ? new Date(chat.bumpNotBefore) : undefined,
+        chat.outOfOfficeUntil
+          ? addBusinessDays(new Date(`${chat.outOfOfficeUntil}T12:00:00Z`), 2, opts.timezone)
+          : undefined,
+      ].filter((d): d is Date => !!d && !Number.isNaN(d.getTime()));
+      const away = holds.length ? new Date(Math.max(...holds.map((d) => d.getTime()))) : undefined;
+      if (away && now < away)
+        return { wait: { since: chat.lastOutboundAt, until: away.toISOString(), reason: 'away' } };
+      // a bump two days after the first note reads as pushy: it waits five business days
+      const due = addBusinessDays(new Date(chat.lastOutboundAt), 5, opts.timezone);
+      if (now < due) return { wait: { since: chat.lastOutboundAt, until: due.toISOString(), reason: 'too_soon' } };
       return { kind: 'bump' };
+    }
     case 'replied':
     case 'scheduling':
       return { kind: 'schedule' };
     case 'scheduled':
-      return { kind: repliedSince ? 'reply' : 'outreach' };
+      // a time is on the calendar: the note is about that meeting, never a first message
+      return { kind: 'reply' };
     case 'followed_up':
     case 'nurturing':
-      if (repliedSince) return { kind: 'reply' };
-      if (lastOut && now.getTime() - lastOut < 14 * 86_400_000)
+      if (answerDue) return { kind: 'reply' };
+      if (lastOut && !repliedSince && now.getTime() - lastOut < 14 * 86_400_000)
         return { wait: { since: chat.lastOutboundAt! } };
       return { kind: 'nurture' };
     default:
       return { kind: 'outreach' };
   }
+}
+
+/**
+ * The kinds of message that fit where the chat stands: no thank-you or referral ask to someone never met, no bump to
+ * someone who has answered, and no second "first" message to someone already written to (that is the bump).
+ */
+export function composeKinds(stage: ChatStage | undefined, current: MessageKind): MessageKind[] {
+  const by: Partial<Record<ChatStage, MessageKind[]>> = {
+    identified: ['outreach'],
+    warming: ['outreach'],
+    outreach_sent: ['bump'],
+    no_response: ['bump'],
+    replied: ['schedule'],
+    scheduling: ['schedule'],
+    scheduled: ['schedule'],
+    completed: ['thank_you', 'nurture', 'referral_ask'],
+    followed_up: ['nurture', 'referral_ask', 'schedule'],
+    nurturing: ['nurture', 'referral_ask', 'schedule'],
+    declined: ['nurture'],
+  };
+  const list = (stage && by[stage]) ?? ['outreach'];
+  return list.includes(current) ? list : [current, ...list];
 }

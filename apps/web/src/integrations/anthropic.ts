@@ -567,11 +567,16 @@ export async function llmDraft(ctx: DraftContext, template: DraftOutput): Promis
     body
       .split('\n')
       .map((l) => l.trim())
-      .filter((l) => l && !/^(hi|hey|hello|dear)\b/i.test(l))[0]
+      .filter((l) => l && !/^(hi|hey|hello|dear)\b/i.test(l) && !/\bbcc\b/i.test(l))[0]
       ?.split(/(?<=[.!?])\s+/)[0] ?? template.opening;
+  // a reply-all on an introduction keeps its first line: the introducer is moved to bcc, so the note must say so
+  const bccLine = template.introReply ? template.body.split('\n')[0]! : undefined;
+  const withBcc = bccLine && !/\bbcc\b/i.test(body) ? `${bccLine}\n\n${body}` : body;
   return {
+    kind: template.kind,
+    introReply: template.introReply,
     subject: r.subject ?? undefined,
-    body,
+    body: withBcc,
     bodyShort: r.body_short ?? undefined,
     claims: r.claims.map((c) => ({ text: c.text, factId: c.fact_id ?? undefined, kind: c.kind })),
     needsInput: [],

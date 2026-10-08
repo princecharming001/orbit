@@ -609,6 +609,8 @@ export interface OutboundMessage {
   externalThreadId?: string;
   inReplyToMessageId?: string;
   toEmail?: string;
+  /** blind copies: the introducer, moved to bcc on a reply-all to their introduction */
+  bccEmails?: string[];
   toLinkedinUrl?: string;
   subject?: string;
   bodyDraft: string;

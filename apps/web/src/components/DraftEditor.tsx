@@ -20,7 +20,7 @@ import { useSession } from '../state/session';
 import { Button, cx, Input, relDate, Textarea, useToast } from '../ui';
 import { copyText, openHandoff } from './approve';
 
-type PromptNeed = Exclude<DraftNeed, 'post'>;
+type PromptNeed = Exclude<DraftNeed, 'post' | 'resume'>;
 const INPUT_PROMPT: Record<PromptNeed, { label: string; hint: string; placeholder: string }> = {
   connection: {
     label: 'Why you are writing to them',
@@ -50,12 +50,17 @@ const INPUT_PROMPT: Record<PromptNeed, { label: string; hint: string; placeholde
   },
   role: {
     label: 'Which role are you applying to?',
-    hint: 'The role and the company, so the ask is a two-minute task for them.',
+    hint: 'The role and the company, so the ask is a two-minute task for them. If it is not a role their part of the firm hires for, a check-in fits better than a referral ask.',
     placeholder: 'e.g. PM Intern at Notion',
+  },
+  mutual: {
+    label: 'Who do you both know?',
+    hint: 'Your line mentions someone without a name. With the name, they can place the connection.',
+    placeholder: 'e.g. Jordan Lee',
   },
   posting: {
     label: 'Link to the posting',
-    hint: 'They asked for the posting, so the ask goes out with it. Paste the link to the role.',
+    hint: 'They asked for the posting, so the ask goes out with it. Paste the link to the role, and name the team if they asked you to pick one.',
     placeholder: 'e.g. https://stripe.com/jobs/listing/software-engineer-intern/1234',
   },
   takeaway: {
@@ -173,10 +178,17 @@ export function DraftEditor({
   const edited = body.trim() !== draft.bodyDraft.trim();
   const isLinkedIn = draft.channel === 'linkedin';
   const connectionNote = isConnectionNote(draft, person ?? undefined, chats ?? []);
-  const needs = (draft.needsInput ?? []).filter((n): n is PromptNeed => n !== 'post');
+  const needs = (draft.needsInput ?? []).filter((n): n is PromptNeed => n !== 'post' && n !== 'resume');
+  // the message says the resume is attached: Orbit cannot attach files, so the student does it in their mail app
+  const attachResume =
+    (draft.needsInput ?? []).includes('resume') && !isLinkedIn && /\battached\b/i.test(body);
+  const [attached, setAttached] = useState(false);
   const hasPlaceholder = /\[[^\]]{3,}\]/.test(body);
   const blocked =
-    (needs.length > 0 && (hasPlaceholder || !edited)) || issues.some((i) => i.blocking) || !!notAllowed;
+    (needs.length > 0 && (hasPlaceholder || !edited)) ||
+    issues.some((i) => i.blocking) ||
+    !!notAllowed ||
+    (attachResume && (!!direct || !attached));
   const shownError = error ?? (draft.status === 'failed' || draft.error ? draft.error : undefined);
   if (['queued', 'sending', 'handed_off', 'sent'].includes(draft.status))
     return <OutboxStatus draft={draft} onClose={onCancel} />;
@@ -239,10 +251,35 @@ export function DraftEditor({
           </div>
         </div>
       )}
+      {attachResume && (
+        <div
+          className="mb-3 rounded-lg border border-warn/40 bg-warn/5 p-3 text-[13px]"
+          data-testid="draft-attach-resume"
+        >
+          <div className="font-medium">Attach your resume</div>
+          <div className="text-ink-3 text-[12px] mb-1.5">
+            {direct
+              ? 'The message says your resume is attached, and Orbit cannot attach files. Copy the text into Gmail and attach it there.'
+              : 'The message says your resume is attached. Orbit cannot attach files, so add it in your mail app before you send.'}
+          </div>
+          {!direct && (
+            <label className="inline-flex items-center gap-2 text-[13px]">
+              <input
+                type="checkbox"
+                checked={attached}
+                onChange={(e) => setAttached(e.target.checked)}
+                data-testid="draft-attach-confirm"
+              />
+              I will attach it before sending
+            </label>
+          )}
+        </div>
+      )}
       {!isLinkedIn && (
         <div className="text-[12px] text-ink-3 mb-1.5 truncate" data-testid="draft-to">
           To: {person?.displayName ?? 'them'}
           {draft.toEmail ? ` <${draft.toEmail}>` : ''}
+          {draft.bccEmails?.length ? ` · Bcc: ${draft.bccEmails.join(', ')}` : ''}
         </div>
       )}
       {!isLinkedIn && !envelope.threaded && (
@@ -304,7 +341,7 @@ export function DraftEditor({
               Cancel
             </Button>
           )}
-          {!isLinkedIn && !direct && !approveLabel && (
+          {!isLinkedIn && (!direct || attachResume) && !approveLabel && (
             <Button
               size="sm"
               onClick={copyAll}
@@ -321,7 +358,13 @@ export function DraftEditor({
             title={
               notAllowed ??
               issues.find((i) => i.blocking)?.text ??
-              (blocked ? 'Add the missing line first' : undefined)
+              (attachResume && direct
+                ? 'Orbit cannot attach your resume. Copy the text into Gmail instead.'
+                : attachResume && !attached
+                  ? 'Confirm you will attach your resume first'
+                  : blocked
+                    ? 'Add the missing line first'
+                    : undefined)
             }
             onClick={async () => {
               setError(undefined);

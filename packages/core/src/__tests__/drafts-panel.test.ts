@@ -195,12 +195,15 @@ describe('referral ask', () => {
       'offered to do a practice case with me before first rounds',
       'offered to share the memo template their team uses',
       'offered to tell me which desks take interns',
-      'offered to introduce me to their hiring manager',
     ]) {
       const d = asked(offer);
       expect(d.body).not.toMatch(/kindly offered|practice case|memo template|desks|hiring manager/);
       expect(d.body).toMatch(/Thanks again for the conversation/);
     }
+    // an intro they offered is what the student asks for, never a referral they did not offer (drafts panel round 2)
+    const intro = asked('offered to introduce me to their hiring manager').body;
+    expect(intro).toMatch(/you kindly offered to introduce me to your hiring manager\. I'd love to take you up on that/);
+    expect(intro).not.toMatch(/refer me|referral/);
     expect(asked('offered to refer me once I have picked a team').body).toMatch(
       /you kindly offered to refer me once I'd picked a team, so I wanted to follow up/,
     );
@@ -217,7 +220,8 @@ describe('referral ask', () => {
     expect(d.body).not.toMatch(
       /ready to send|couple of minutes|has your name on it|Most relevant thing I've done:/,
     );
-    expect(d.body).toMatch(/For context, I built a reconciliation service/);
+    // after a conversation they know the student: no credibility line stapled on (drafts panel round 2)
+    expect(d.body).not.toMatch(/For context|reconciliation service/);
   });
   it('asks for the posting when they asked for it', () => {
     const d = asked('offered to refer me once I have picked a team', {
@@ -232,7 +236,7 @@ describe('referral ask', () => {
         link: 'https://stripe.com/jobs/1',
       },
     });
-    expect(withLink.needsInput).toEqual([]);
+    expect(withLink.needsInput).toEqual(['resume']);
     expect(withLink.body).toMatch(/https:\/\/stripe\.com\/jobs\/1/);
   });
   it('never invents a role the firm does not hire for', () => {
@@ -242,7 +246,7 @@ describe('referral ask', () => {
         { title: 'Engagement Manager', org: 'McKinsey & Company', isAlumni: false },
       ),
     );
-    expect(d.needsInput).toEqual(['role']);
+    expect(d.needsInput).toContain('role');
     expect(d.body).not.toMatch(/software engineering/i);
   });
   it('an application already in is not "before I submit", and a friend is not reintroduced', () => {
@@ -353,9 +357,12 @@ describe('outreach register', () => {
         { title: 'Analyst', org: 'Goldman Sachs', isAlumni: false },
       ),
     );
-    expect(d.body).toMatch(/I read your post about how your team runs deal reviews\./);
-    expect(d.body).toMatch(/(more )?about how your team runs deal reviews[.?]/);
-    expect(d.body.match(/how your team runs deal reviews/g)).toHaveLength(2);
+    // one question the post raises, never its title read back as the ask (drafts panel round 2)
+    expect(d.body).toMatch(
+      /I read your post about how your team runs deal reviews, and I've been wondering how much of that a summer analyst actually sees\./,
+    );
+    expect(d.body.match(/how your team runs deal reviews/g)).toHaveLength(1);
+    expect(d.body).toMatch(/minutes .*to talk about it\?|could I ask you about it\?/);
   });
   it('uses what they work on and, in tech, what the student built', () => {
     const d = generateDraft(
@@ -364,8 +371,11 @@ describe('outreach register', () => {
         user: { ...base().user, credibility: 'built a campus marketplace used by 800 students' },
       }),
     );
-    expect(d.body).toMatch(/I (noticed|also saw that) you work on the card issuing platform\./);
-    expect(d.body).toMatch(/For context, I built a campus marketplace used by 800 students\./);
+    // what they work on is the question, not a stacked "I noticed ..." line; what the student built is the reason
+    // for writing, not "For context" (drafts panel round 2)
+    expect(d.body).toMatch(/what working on the card issuing platform is like day to day/);
+    expect(d.body).not.toMatch(/I noticed|I also saw that you work/);
+    expect(d.body).toMatch(/I built a campus marketplace used by 800 students, and I'm recruiting for/);
     expect(d.claims.some((c) => c.factId === 'r')).toBe(true);
     // a banker does not get the brag
     const ib = generateDraft(
@@ -391,7 +401,10 @@ describe('outreach register', () => {
       ),
     );
     expect(d.body).not.toMatch(/quick reminder|sorry it took me|I'm a junior/);
-    expect(d.body).toMatch(/Thanks again for your note in June\./);
+    // a friend's job is not "noticed", and an unnamed "note in June" is not how friends write (drafts panel round 2)
+    expect(d.body).toMatch(/It's been a few months since we last caught up/);
+    expect(d.body).not.toMatch(/note in June|I noticed/);
+    expect(d.body).toMatch(/^Hi Priya,[\s\S]*Thanks,\nAlex$/);
   });
 });
 

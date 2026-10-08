@@ -601,7 +601,8 @@ function questionFor(ctx: DraftContext, sector: Sector, seed: string, now: Date)
     { late },
   );
   const work = isSeniorTitle(ctx.person.title) ? undefined : workQuestion(ctx, firm);
-  return pick(work ? [work, ...bank.slice(0, 1)] : bank, seed, 'q');
+  // what they work on, when it is on record, is the question only they can answer
+  return work ?? pick(bank, seed, 'q');
 }
 
 /**
@@ -848,8 +849,10 @@ function opener(
           // only what the data says: they went to the student's school and are at `where` now (never how the
           // student found them, which Orbit does not know); the school is named once
           [
-            `I'm ${me}, and I saw that you're a ${school} alum${where ? ` ${where}` : ''}.`,
-            `I'm ${me}, and I saw that you went from ${school} to ${where?.replace(/^(at|on|in) /, '') ?? 'where you are now'}.`,
+            ctx.user.oneLiner || !ctx.user.majors[0]
+              ? `I'm ${me}, and I saw that you're an alum${where ? ` ${where}` : ''}.`
+              : `${school} ${yearLabel(ctx.user.gradYear, ctx.user.degree, now)} here, studying ${lowerPhrase(ctx.user.majors[0])}, and I saw that you're an alum${where ? ` ${where}` : ''}.`,
+            `I'm ${me}, and I saw that you're an alum${where ? `, now ${where}` : ''}.`,
           ],
           seed,
           'op-alum',
@@ -1561,7 +1564,7 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
         const applied = tc?.applied
           ? ` I've since applied for the ${tc.roleLabel ? `${tc.roleLabel} role` : 'internship'}${o ? ` at ${o}` : ''}, so ${minutes} minutes on what the team looks for would be especially helpful.`
           : ` I'd still love ${minutes} minutes whenever it's convenient.`;
-        body = `${G}\n\nWelcome back, and I hope the time away was good. I wanted to resurface ${myNote}${about} in case it got buried while you were out.${applied} Completely understand if your first week back is busy.\n\n${S}`;
+        body = `${G}\n\nWelcome back, and I hope the time away was good. Resurfacing ${myNote}${about} in case it got buried while you were out.${applied}\n\n${S}`;
         claims.push({ text: 'first bump after their out-of-office', kind: 'logistics' });
       } else {
         const pointer = senior
@@ -1836,7 +1839,9 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       const closers = [
         "I'll let you know how recruiting goes. Would it be alright to send a question your way if one comes up?",
         ...(/^thank/i.test(S.trim())
-          ? ["I'll keep you posted on how recruiting goes."]
+          ? [
+              "I'll keep you posted on how recruiting goes. I really appreciate the time, and I hope it's alright to send a question your way if one comes up.",
+            ]
           : ["I'll keep you posted on how recruiting goes. Thanks again for being so generous with your time."]),
       ];
       body = `${G}\n\n${line1}${line2}${line3}\n\n${pick(closers, seed, 'ty-close')}${link ? `\n\n${link}` : ''}\n\n${S}`;
@@ -1863,7 +1868,14 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       }
       const firm = firmKindOf({ title: P.title, org, industry: P.orgIndustry }, sector);
       const o = shortOrg(org);
-      const reopen = !!ctx.reopen;
+      // writing again after their last message went quiet (a sign-off, a thanks, weeks ago) names the conversation and
+      // gives a reason to write now, not only "Quick update"
+      const t = ctx.thread;
+      const reopen =
+        !!ctx.reopen ||
+        (!!t?.lastInboundAt &&
+          !inboundNeedsAnswer(t, now) &&
+          now.getTime() - new Date(t.lastInboundAt).getTime() > 21 * 86_400_000);
       // a live deal or a fundraise is never asked about in writing
       const hook = fact(['hook'], (c) => !!hookProposition(c) && !isConfidential(c.text, firm));
       const offer = fact(['offer'], (c) => !!offerNext(c, ctx, 'nurture'));
@@ -1879,21 +1891,26 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       // have applied, or plan to apply, to the person's company; they are recruiting this cycle)
       const typed = ctx.update?.trim() ? softLower(strip(ctx.update)) : undefined;
       const roleText = tc?.roleLabel ? roleWords(tc.roleLabel) : `${fnLabel} ${intern ? 'internship' : 'role'}`;
-      const derived = reopen
-        ? tc
-          ? tc.applied
-            ? `I've applied for ${o ? `${possessive(o)} ` : 'the '}${roleText}`
-            : `I'm planning to apply for ${o ? `${possessive(o)} ` : 'the '}${roleText} this cycle`
-          : `I'm recruiting for ${lookingForPhrase(ctx)} this cycle`
-        : undefined;
+      // an application to their company is on record and is news to them; "recruiting this cycle" is enough only
+      // when picking a quiet thread back up
+      const derived = tc
+        ? tc.applied
+          ? `I've applied for ${o ? `${possessive(o)} ` : 'the '}${roleText}`
+          : `I'm planning to apply for ${o ? `${possessive(o)} ` : 'the '}${roleText} this cycle`
+        : reopen
+          ? `I'm recruiting for ${lookingForPhrase(ctx)} this cycle`
+          : undefined;
       const update = typed ?? derived;
       // their news is the reason to write: a new role comes first
       const na = ctx.newAffiliation;
       const naTitle = na?.title?.replace(/\s*[,(].*$/, '').trim();
-      if (!update && !hook && !offer && !(na?.org && naTitle)) needsInput.push('update');
+      const knew = !!meetingAt && !!na?.since && new Date(meetingAt).getTime() > new Date(na.since).getTime();
+      if (!update && !hook && !offer && !(na?.org && naTitle && !knew)) needsInput.push('update');
       const parts: string[] = [];
       let congrats = false;
-      if (na?.org && naTitle) {
+      // they talked after the change: the student knew, so it is not news ("Hope the new role ..." instead)
+      const knewIt = !!meetingAt && !!na?.since && new Date(meetingAt).getTime() > new Date(na.since).getTime();
+      if (na?.org && naTitle && !knewIt) {
         parts.push(
           `I saw you're now ${article(naTitle)} ${naTitle} at ${shortOrg(na.org)}. Congratulations, that's great to see.`,
         );
@@ -1935,19 +1952,20 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
             : tense === 'ongoing'
               ? "Hope it's going well."
               : 'Hope it went well.';
-        const saidThen =
-          !!meetingAt &&
-          /\b(said|mentioned|told)\b/i.test(hook.fact.text) &&
-          Math.abs(new Date(hook.fact.occurredAt ?? hook.fact.createdAt ?? 0).getTime() - new Date(meetingAt).getTime()) <=
-            2 * 86_400_000;
+        // only a note that says they said it ("Alina mentioned ...") is put in their mouth
+        const saidThen = /\b(said|mentioned|told)\b/i.test(hook.fact.text);
         parts.push(`${saidThen ? 'You mentioned' : parts.length ? 'I also saw that' : 'I saw that'} ${prop}. ${wish}`);
         cite(hook);
-      } else if (!congrats && !next && o) parts.push(`Hope things are going well at ${o}.`);
+      }
       // a reason to write again after months (their company is on the student's list) earns one small ask
       const ask =
         reopen && tc && !next && !isFriend(P)
           ? `Would you have ${minutes} minutes in the next couple of weeks to tell me what ${o ?? 'the team'} looks for in ${intern ? 'interns' : 'new grads'}? Happy to do it over email if that's easier.`
           : undefined;
+      const newRole = na?.title ? roleNoun(na.title) : undefined;
+      if (!hook && !congrats && !next && !ask && na?.org && newRole && knewIt && !na.observed)
+        parts.push(`Hope the new role as ${article(newRole)} ${newRole} is going well.`);
+      else if (!hook && !congrats && !next && !ask && o) parts.push(`Hope things are going well at ${o}.`);
       const close =
         ask ??
         (next && /\?$/.test(next.text)
@@ -2011,8 +2029,10 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       // Orbit only noticed on an import
       const talkedSince =
         !!meetingAt && !!na?.since && new Date(meetingAt).getTime() > new Date(na.since).getTime();
+      // news the student typed is news they just saw
+      const fresh = (recent && !talkedSince) || (!na?.org && !newRole && !!news);
       const lead =
-        recent && !talkedSince
+        fresh
           ? `Just saw the news about ${what}. Congratulations`
           : `Congratulations on ${what}`;
       body = `${G}\n\n${lead}${tie || !knows ? '.' : ', well deserved.'}${tieLine}${recent && !talkedSince ? ' Hope the first few weeks are going well.' : ''}\n\n${S}`;
@@ -2258,6 +2278,8 @@ function answerLine(question: string, answer: string): string {
   if (!noun || /^(are|is|do|does|would|could|you|time|times)\b/i.test(noun) || /^(as for|on|for)\b/i.test(a))
     return `${cap1(a)}.`;
   const what = noun.split(' ')[0]!.toLowerCase();
+  // "As for teams, ..." for a plural noun; anything else reads better without a lead-in
+  if (!/[^s]s$/.test(what)) return `${cap1(a)}.`;
   return `As for ${what}, ${full ? a : lower1(a)}.`;
 }
 
@@ -2316,13 +2338,21 @@ function offerNext(
  * promise is not about the resume.
  */
 function attachPromise(promise: string): string | undefined {
-  const m = promise.match(/^As promised, I'll (?:send|share|email|forward)\s+(.+?)(\s+(?:by|on|before|today|tomorrow|this|next)\b.*)?\.$/i);
-  if (!m || !/\bmy (resume|cv)\b/i.test(m[1]!)) return undefined;
-  const others = m[1]!
+  const m = promise.match(/^As promised, I'll (.+)\.$/);
+  if (!m) return undefined;
+  const clauses = m[1]!.split(/,?\s+and\s+(?=(?:send|share|email|forward|introduce|connect|follow|get)\b)/i);
+  const at = clauses.findIndex((c) => /^(send|share|email|forward)\b.*\bmy (resume|cv)\b/i.test(c));
+  if (at < 0) return undefined;
+  // "send my resume and the project link by Friday": the resume is attached, the rest is still a promise
+  const objs = clauses[at]!.replace(/^(send|share|email|forward)\s+/i, '');
+  const deadline = objs.match(/\s+(?:by|on|before|today|tomorrow|this|next)\b.*$/)?.[0] ?? '';
+  const items = objs
+    .slice(0, objs.length - deadline.length)
     .replace(/\bmy (resume|cv)\b(\s+and\s+)?/i, '')
     .replace(/\s+and\s*$/i, '')
     .trim();
-  return `As promised, my resume is attached${others ? `, and I'll send ${others}${m[2] ?? ''}` : ''}.`;
+  const rest = [...(items ? [`send ${items}${deadline}`] : []), ...clauses.filter((_, i) => i !== at)];
+  return `As promised, my resume is attached${rest.length ? `, and I'll ${rest.join(' and ')}` : ''}.`;
 }
 
 /** "I will send my resume by Friday" -> "As promised, I'll send my resume by Friday." Undefined for anything else. */

@@ -199,7 +199,8 @@ describe('outreach', () => {
     expect(r.d.sector).toBe('finance');
     expect(r.d.body).toMatch(/Best,\nAlex Rivera\nCornell '28$/);
     expect(r.d.register).toBe('formal');
-    expect(r.d.subject).toMatch(/Cornell '28, quick question on Goldman Sachs healthcare/);
+    // the firm as its people write it (drafts panel round 2: "McKinsey & Company" twice in a note is a tell)
+    expect(r.d.subject).toMatch(/Cornell '28, quick question on Goldman healthcare/);
     const sentences = r.d.body
       .split('\n')
       .slice(1)
@@ -256,7 +257,9 @@ describe('outreach', () => {
       {},
     );
     expect(r.d.body).not.toMatch(/minutes/);
-    expect(r.d.body).toMatch(/rolling basis|deadline/);
+    // a fintech has no campus event to plan around (drafts panel round 2): its timeline is the question
+    expect(r.d.body).toMatch(/timeline for intern hiring/);
+    expect(r.d.body).not.toMatch(/campus event|info session|rolling basis/);
     expect(r.d.needsInput).toEqual([]);
   });
   it('a recruiter message on LinkedIn signs off once, not "Thank you for your time." and then "Thanks"', () => {
@@ -500,15 +503,18 @@ describe('other kinds', () => {
     );
     expect(r.body).toMatch(/Thursday, Oct 8 at 2pm EDT works/);
     expect(r.body).toMatch(/calendar invite/);
-    expect(r.body).toMatch(/I'll send it over today/);
+    // the resume goes with this reply, not "over today" (drafts panel round 2); the student attaches it
+    expect(r.body).toMatch(/I've attached my resume|My resume is attached/);
+    expect(r.needsInput).toContain('resume');
   });
   it('thank-you locates the memory, quotes advice, mentions the offer, asks permission', () => {
     const t = generateDraft(
       base({ kind: 'thank_you', facts: FACTS, chat: { completedAt: '2026-10-05T19:00:00Z' } }),
     );
     expect(t.body).toMatch(/Thank you for making time yesterday/);
-    expect(t.body).toMatch(/your point that the key is showing how I handled ambiguity/i);
-    expect(t.body).toMatch(/Thanks also for offering to refer me when the posting goes up/);
+    // the point, not "the key is ..." read back word for word (drafts panel round 2)
+    expect(t.body).toMatch(/your point about showing how I handled ambiguity/i);
+    expect(t.body).toMatch(/Thanks also for offering to refer me when the posting goes up\. I'll send the posting/);
     expect(t.body).toMatch(/\?/);
     expect(t.claims.filter((c) => c.factId).length).toBe(2);
   });
@@ -520,7 +526,8 @@ describe('other kinds', () => {
     );
     // "hiring in January", asked in October, is still ahead (DQ-08); a note that says "No reply needed" never ends
     // its line about them in a question (panel review)
-    expect(n.body).toMatch(/You mentioned you're hiring interns in January\. Hope that's shaping up well\./);
+    // a note that does not say they said it is something the student saw (drafts panel round 2)
+    expect(n.body).toMatch(/I saw that you're hiring interns in January\. Hope that's shaping up well\./);
     expect(n.body).not.toMatch(/\?/);
     expect(n.body).toMatch(/No reply needed/);
   });
@@ -541,7 +548,9 @@ describe('other kinds', () => {
     expect(r.body).toMatch(/offered to refer me when the posting goes up, so I wanted to follow up/);
     expect(r.body).toMatch(/req 7731/);
     expect(r.body).toMatch(/before I submit through the portal/);
-    expect(r.body).toMatch(/Completely fine if not/);
+    // they offered: no hedge, and the resume goes with it (drafts panel round 2)
+    expect(r.body).not.toMatch(/Completely fine if not/);
+    expect(r.body).toMatch(/I've attached my resume/);
     expect(r.body).toMatch(/https:\/\/figma.com\/careers\/7731/);
     expect(
       validateDraft(r, {
@@ -576,7 +585,8 @@ describe('other kinds', () => {
       }),
     );
     // the old expectation pinned an ungrammatical splice ("what you said about wanted to ..."), see DQ-01
-    expect(c.body).toMatch(/Just saw the news about your move to Figma as a senior PM\. Congratulations\./);
+    // no date on record, so it is not claimed as news just seen
+    expect(c.body).toMatch(/Congratulations on your move to Figma as a senior PM\./);
     expect(c.body).toMatch(/I remember you saying you wanted to sit closer to the product/);
     const rb = generateDraft(
       base({
@@ -664,8 +674,11 @@ describe('audit round 1 regressions', () => {
     expect(t.body).toMatch(/Thanks also for offering to refer me when the posting goes up/);
     expect(t.body).not.toMatch(/Alina offered|point that recommended|follow up on alina/i);
     const n = generateDraft(base({ kind: 'nurture', person: ALINA, facts: NOTE_FACTS }));
-    expect(n.body).toMatch(/You mentioned you're hiring interns in January for the platform team\./);
-    expect(n.body).not.toMatch(/mentioned (Alina|they)|offered to refer me/i);
+    // a note that does not say they said it is something the student saw, and an open offer is acted on, not left
+    // in the notes (drafts panel round 2)
+    expect(n.body).toMatch(/I also saw that you're hiring interns in January for the platform team\./);
+    expect(n.body).toMatch(/you offered to refer me when the posting goes up\. I'll send the posting as soon as it's live\./);
+    expect(n.body).not.toMatch(/mentioned (Alina|they)|Alina offered/i);
     expect(n.body).not.toMatch(/It's been a little while/);
   });
 
@@ -788,7 +801,8 @@ describe('audit round 1 regressions', () => {
     );
     expect(r.body).toMatch(/^Dear Nina,/);
     expect(r.body).toMatch(/planning to apply for software engineering internships at Notion/);
-    expect(r.body).toMatch(/helpful conversations with Grace on the team/);
+    // one conversation is all Orbit knows (drafts panel round 2: "helpful conversations" overstates it)
+    expect(r.body).toMatch(/I (have|'ve) also spoken with Grace on the team/);
     expect(r.body).not.toMatch(/your path|minutes/);
   });
 
@@ -935,11 +949,13 @@ describe('audit round 1 regressions', () => {
         },
       }),
     );
-    // the note says "their", the forwardable blurb names him once (panel review: "Lucas's path ... Lucas's path")
+    // the note only asks; the forwardable blurb carries the topic with his name, once (drafts panel round 2: "their"
+    // in the ask and the same why repeated in the blurb)
     expect(i.body).toMatch(
-      /I'm hoping to talk with Daniel Kim \(Engineering Manager at Stripe\) about their work at Stripe\./,
+      /Would you be comfortable introducing me to Daniel Kim, an Engineering Manager at Stripe\?/,
     );
     expect(i.body).toMatch(/hear about Daniel's work at Stripe\."/);
+    expect(i.body).not.toMatch(/\btheir\b/);
     expect(i.body.match(/Daniel's/g)).toHaveLength(1);
     expect(i.body).not.toMatch(/thoughtful|will come prepared|They'd love/);
   });
@@ -957,11 +973,21 @@ describe('audit round 1 regressions', () => {
         thread: { inThread: true, firstOutboundAt: '2026-09-24T14:00:00Z' },
       }),
     );
-    expect(formal.body).toMatch(/^Dear Priya,/);
-    expect(formal.body).not.toMatch(/Floating|buried|Totally|\b\w+'(m|ll|d|ve|re|s)\b/);
+    // the formal preset never overrides the relationship: a peer gets "Hi" (drafts panel round 2)
+    expect(formal.body).toMatch(/^Hi Priya,/);
+    const senior = generateDraft(
+      base({
+        kind: 'bump',
+        styleCard: defaultStyleCard('formal', 'Alex'),
+        person: { ...base().person, title: 'Director of Product', isAlumni: false, strength: 0 },
+        thread: { inThread: true, firstOutboundAt: '2026-09-24T14:00:00Z' },
+      }),
+    );
+    expect(senior.body).toMatch(/^Dear Priya,/);
+    expect(senior.body).not.toMatch(/Floating|buried|Totally|\b\w+'(m|ll|d|ve|re|s)\b/);
     // Sep 24 is the week before last from Tuesday Oct 6, so it is dated rather than called "last week"
-    expect(formal.body).toMatch(/I wanted to follow up on my note from September 24/);
-    expect(formal.body).toMatch(/Kind regards,\nAlex$/);
+    expect(senior.body).toMatch(/I wanted to follow up on my note from September 24/);
+    expect(senior.body).toMatch(/Best regards,\nAlex Rivera\nCornell '28$/);
   });
 
   it('congratulate needs the news; with a job change on record it names it (DQ-13)', () => {
@@ -980,7 +1006,7 @@ describe('audit round 1 regressions', () => {
     );
     expect(move.body).toMatch(/your move to Figma as a senior product manager/);
     expect(move.body).toMatch(/Hope the first few weeks are going well/);
-    expect(move.subject).toBe('Congratulations on Figma');
+    expect(move.subject).toBe('Congratulations on the move to Figma');
   });
 
   it('subjects fit the kind; no "Quick question" on a check-in (DQ-15)', () => {
@@ -1087,15 +1113,16 @@ describe('audit round 1, expert gaps (EG, SND, UI-10)', () => {
     });
     const d = generateDraft(ctx);
     expect(d.body).toMatch(/resume/);
-    expect(d.needsInput).toEqual(['answer']);
+    expect(d.needsInput).toEqual(['resume', 'answer']);
     expect(d.body).toMatch(/\[Your answer to: let me know which teams you're most interested in\?\]/);
     expect(d.body).toMatch(/Thursday, Oct 8 at 10am or Monday, Oct 12 at 2pm \(EDT\)/);
     // resume answer, then the student's answer, then the times
     expect(d.body.indexOf('resume')).toBeLessThan(d.body.indexOf('[Your answer'));
     expect(d.body.indexOf('[Your answer')).toBeLessThan(d.body.indexOf('Thursday'));
     const answered = generateDraft({ ...ctx, answer: 'Payments infrastructure first, then developer tools' });
-    expect(answered.needsInput).toEqual([]);
-    expect(answered.body).toMatch(/Payments infrastructure first, then developer tools\./);
+    expect(answered.needsInput).toEqual(['resume']);
+    // the student's answer with a lead-in, not a bare fragment (drafts panel round 2)
+    expect(answered.body).toMatch(/As for teams, payments infrastructure first, then developer tools\./);
     const opts = {
       kind: 'schedule' as const,
       facts: [],
@@ -1174,7 +1201,7 @@ describe('audit round 1, expert gaps (EG, SND, UI-10)', () => {
       }),
     );
     expect(recruiter.body).toMatch(
-      /^Dear Diego,\n\nThanks again for your note a few weeks ago, and sorry it took me a while to follow up\. As a quick reminder, I am a junior at Cornell/,
+      /^Hi Diego,\n\nThanks again for your note a few weeks ago, and sorry it took me a while to follow up\. I'm a junior at Cornell/,
     );
     expect(recruiter.subject).toBe('Re: Catching up');
     const peer = generateDraft(
@@ -1212,11 +1239,12 @@ describe('audit round 1, expert gaps (EG, SND, UI-10)', () => {
         promises: ['I will send my resume by Friday and share the marketplace project link.'],
       }),
     );
-    expect(typed.needsInput).toEqual([]);
     expect(typed.body).toMatch(/your advice to lead every interview answer with one project story/i);
+    // a promised resume is attached to the note, and the rest of the promise is kept (drafts panel round 2)
     expect(typed.body).toMatch(
-      /As promised, I'll send my resume by Friday and share the marketplace project link\./,
+      /As promised, my resume is attached, and I'll share the marketplace project link\./,
     );
+    expect(typed.needsInput).toEqual(['resume']);
     expect(
       generateDraft(base({ kind: 'thank_you', takeaway: 'She said recruiting starts in August' })).body,
     ).toMatch(/your point that recruiting starts in August/i);
@@ -1306,7 +1334,7 @@ describe('audit round 1, expert gaps (EG, SND, UI-10)', () => {
     expect(recruiter.subject).toBeUndefined();
     expect(recruiter.bodyShort!.length).toBeLessThanOrEqual(200);
     expect(recruiter.bodyShort).toMatch(
-      /^Hi Nina, Cornell junior here, planning to apply for software engineering/,
+      /^Hi Nina, Cornell junior here\. I'm planning to apply for software engineering/,
     );
   });
 
@@ -1520,7 +1548,7 @@ describe('audit round 2 regressions', () => {
         newAffiliation: { title: 'Sr. Analytics Engineer', org: 'Anthropic PBC', previousOrg: 'Anthropic' },
       }),
     );
-    expect(promoted.body).toMatch(/your new role as a senior analytics engineer at Anthropic\./);
+    expect(promoted.body).toMatch(/your new role as a senior analytics engineer at Anthropic\b/);
     expect(promoted.body).not.toMatch(/move to|sr\./i);
     expect(promoted.subject).toBe('Congratulations');
     const vp = generateDraft(
@@ -1529,7 +1557,7 @@ describe('audit round 2 regressions', () => {
         newAffiliation: { title: 'VP, Analytics', org: 'Stripe', previousOrg: 'Figma' },
       }),
     );
-    expect(vp.body).toMatch(/your move from Figma to Stripe as a VP of analytics\./);
+    expect(vp.body).toMatch(/your move from Figma to Stripe as a VP of analytics\b/);
     expect(roleNoun('Jr. Data Analyst')).toBe('junior data analyst');
     expect(roleNoun('Software Engineer, Payments')).toBe('software engineer');
     expect(roleNoun('Vice President, Finance')).toBe('vice president of finance');

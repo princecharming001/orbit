@@ -438,6 +438,8 @@ export interface DraftInputs {
   takeaway?: string;
   /** the link to the posting, for a referral ask to someone who asked for it */
   posting?: string;
+  /** the name of the mutual tie a connection line mentions without one ("my roommate") */
+  mutual?: string;
 }
 
 /** "Lucas Fischer, Engineering Manager at Ramp" -> name, title, org. */
@@ -570,7 +572,9 @@ export async function buildDraftContext(
       asksOfUser: lastIn?.extraction?.asksOfUser,
       proposedTimes: lastIn?.extraction?.proposedTimes.map((t) => ({ startIso: t.startIso, raw: t.raw })),
       lastSignal: lastIn?.signal,
-      inThread: !NEW_THREAD_KINDS.has(kind) && !!th?.externalThreadId,
+      // the first note to someone the student was introduced to is a reply-all on the introduction
+      inThread:
+        (!NEW_THREAD_KINDS.has(kind) || (kind === 'outreach' && !!chat.introducedAt)) && !!th?.externalThreadId,
       subject: th?.subject,
     };
   } else if (chat?.firstOutreachAt) thread = { firstOutboundAt: chat.firstOutreachAt };
@@ -687,8 +691,9 @@ export async function buildDraftContext(
     thread?.lastInboundAt ? new Date(thread.lastInboundAt) : now,
     user.timezone,
   );
+  // a bump to someone who has answered is written as the scheduling reply, so it needs the windows too
   const windows =
-    kind === 'schedule' || kind === 'reply'
+    kind === 'schedule' || kind === 'reply' || kind === 'bump'
       ? proposeWindows(busy, now, user.timezone, { seed: person.id, notBefore })
       : undefined;
   const warm = chat?.warmUp ? warmUpProgress(chat.warmUp, now, user.timezone) : undefined;
@@ -837,6 +842,7 @@ export async function buildDraftContext(
           warmUpDone: warm?.done,
           commentedOnPost: commentedOnPost || undefined,
           upcomingAt,
+          awayUntil: chat.outOfOfficeUntil,
         }
       : referrerName
         ? { referrerName }
@@ -845,6 +851,7 @@ export async function buildDraftContext(
     update: inputs.update?.trim() || (s?.payload.update as string | undefined) || undefined,
     news: inputs.news?.trim() || undefined,
     answer: inputs.answer?.trim() || undefined,
+    mutualName: inputs.mutual?.trim() || undefined,
     takeaway: inputs.takeaway?.trim() || undefined,
     reengage: s?.payload.reengage as DraftContext['reengage'] | undefined,
     history,
@@ -929,7 +936,10 @@ async function threadFor(
 ): Promise<{ externalThreadId?: string; inReplyTo?: string }> {
   const threadId = NEW_THREAD_KINDS.has(kind)
     ? kind === 'outreach' && ctx.thread?.inThread
-      ? ctx.history?.threadId
+      ? // the introduction thread, or an earlier exchange with them picked back up
+        chat?.introducedAt
+        ? chat.threadId
+        : ctx.history?.threadId
       : undefined
     : chat?.threadId;
   if (!threadId) return {};
@@ -937,6 +947,19 @@ async function threadFor(
   if (!th?.externalThreadId) return {};
   const last = (await db.messages.where('threadId').equals(threadId).sortBy('sentAt')).pop();
   return { externalThreadId: th.externalThreadId, inReplyTo: last?.headers['message-id'] };
+}
+
+/**
+ * A reply-all on an introduction moves the introducer to bcc: their address, when Orbit knows who introduced them
+ * (the chat's referrer).
+ */
+async function bccFor(
+  out: ReturnType<typeof generateDraft>,
+  chat: CoffeeChat | undefined,
+): Promise<string[] | undefined> {
+  if (!out.introReply || !chat?.referrerPersonId) return undefined;
+  const ref = await db.people.get(chat.referrerPersonId);
+  return ref?.primaryEmail ? [ref.primaryEmail] : undefined;
 }
 
 function bodyFor(
@@ -955,13 +978,15 @@ export async function draftForSuggestion(
   s: Suggestion,
   now = new Date(),
 ): Promise<OutboundMessage | undefined> {
-  const kind = DRAFT_KIND[s.kind];
-  if (!kind || !s.personId) return undefined;
+  const asked = DRAFT_KIND[s.kind];
+  if (!asked || !s.personId) return undefined;
   const person = await db.people.get(s.personId);
   if (!person) return undefined;
   const channel: 'gmail' | 'linkedin' =
     (s.payload.channel as 'gmail' | 'linkedin' | undefined) ?? (person.primaryEmail ? 'gmail' : 'linkedin');
-  const { out, generatedBy, ctx } = await materializeDraft(user, person, kind, channel, s);
+  const { out, generatedBy, ctx } = await materializeDraft(user, person, asked, channel, s);
+  // the kind the thread called for (a bump to someone who answered is the scheduling reply)
+  const kind = out.kind ?? asked;
   const chat = s.chatId && kind !== 'report_back' ? await db.chats.get(s.chatId) : undefined;
   const { externalThreadId, inReplyTo } = await threadFor(kind, chat, ctx);
   const msg: OutboundMessage = {
@@ -972,6 +997,7 @@ export async function draftForSuggestion(
     suggestionId: s.id,
     channel,
     kind,
+    bccEmails: await bccFor(out, chat),
     externalThreadId,
     inReplyToMessageId: inReplyTo,
     toEmail: person.primaryEmail,
@@ -995,7 +1021,7 @@ export async function draftForSuggestion(
 export async function draftMessage(
   user: User,
   personId: string,
-  kind: MessageKind,
+  asked: MessageKind,
   channel: 'gmail' | 'linkedin',
   /** the chat to write in; undefined finds the person's chat; null drafts outside any chat (a fresh first message) */
   chatId?: string | null,
@@ -1014,12 +1040,13 @@ export async function draftMessage(
   const { out, generatedBy, ctx } = await materializeDraft(
     user,
     person,
-    kind,
+    asked,
     channel,
     undefined,
     inputs,
     chat,
   );
+  const kind = out.kind ?? asked;
   const where = await threadFor(kind, chat, ctx);
   const msg: OutboundMessage = {
     id: newId('out'),
@@ -1028,6 +1055,7 @@ export async function draftMessage(
     chatId: chat?.id,
     channel,
     kind,
+    bccEmails: await bccFor(out, chat),
     externalThreadId: where.externalThreadId,
     inReplyToMessageId: where.inReplyTo,
     toEmail: person.primaryEmail,
