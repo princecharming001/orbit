@@ -643,3 +643,19 @@ describe('warm-up plan dates (SND-20)', () => {
     expect(plan.actions[2]!.dueAt).toBe('2026-11-03T15:00:00.000Z');
   });
 });
+
+describe('a warm-up the student fell behind on (UX round 6)', () => {
+  it('moves the steps left forward so none is in the past', async () => {
+    const { buildWarmUpPlan, replanWarmUp } = await import('../warmup/rules');
+    const tz = 'America/New_York';
+    const plan = buildWarmUpPlan('jo', new Date('2026-10-12T14:00:00Z'), 4, tz);
+    const now = new Date('2026-10-26T14:00:00Z'); // two weeks later, a Monday
+    expect(replanWarmUp(plan, new Date('2026-10-12T15:00:00Z'), tz)).toBeUndefined();
+    const re = replanWarmUp(plan, now, tz)!;
+    for (const a of re.actions)
+      expect(new Date(a.dueAt).getTime()).toBeGreaterThanOrEqual(now.getTime() - 60_000);
+    expect(new Date(re.readyAt).getTime()).toBeGreaterThan(now.getTime());
+    expect(re.actions[0]!.dueAt.slice(0, 10)).toBe('2026-10-26');
+    for (const a of re.actions) expect([0, 6]).not.toContain(new Date(a.dueAt).getUTCDay());
+  });
+});

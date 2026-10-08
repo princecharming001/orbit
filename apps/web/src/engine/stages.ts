@@ -10,6 +10,7 @@ import {
   NO_RESPONSE_SILENT_BUSINESS_DAYS,
   newId,
   PROPOSE_THRESHOLD,
+  replanWarmUp,
   sectorOf,
 } from '@orbit/core';
 import { addTouchpoint, feedback, recomputePersonStrength } from '../db/repo';
@@ -335,6 +336,14 @@ export async function runTimedStageRules(
     .filter((i) => i.provider === 'google' && i.status === 'active')
     .count();
   for (const c of chats) {
+    // a warm-up the student fell behind on moves its steps left forward, so no card lists a day already over
+    if (c.stage === 'warming' && c.warmUp) {
+      const re = replanWarmUp(c.warmUp, now, tz);
+      if (re) {
+        await db.chats.update(c.id, { warmUp: re, updatedAt: now.toISOString() });
+        c.warmUp = re;
+      }
+    }
     const person = await db.people.get(c.personId);
     const maxBumps = maxBumpsFor(
       sectorOf({ title: person?.currentTitle, org: person?.currentOrganizationRaw }),

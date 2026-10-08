@@ -169,3 +169,32 @@ export function warmUpProgress(
     overdue,
   };
 }
+
+/**
+ * A warm-up the student fell behind on: its next step's day has passed. The steps left (and the first-message date)
+ * move forward so the next step is today, keeping their spacing and skipping weekends, so the card never lists dates
+ * that are already over. Returns undefined when nothing needs to move.
+ */
+export function replanWarmUp(plan: WarmUpPlan, now: Date, tz?: string): WarmUpPlan | undefined {
+  const next = plan.actions.find((a) => !a.doneAt && !a.skippedAt);
+  if (!next) return undefined;
+  const today = wallKey(now, tz);
+  const due = wallKey(new Date(next.dueAt), tz);
+  if (due >= today) return undefined;
+  const shift = Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${due}T00:00:00Z`)) / DAY_MS);
+  const move = (iso: string): string => {
+    const at = new Date(iso);
+    const hour = new Date(wallClock(at.getTime(), tz)).getUTCHours();
+    let ms = Date.parse(`${wallKey(at, tz)}T00:00:00Z`) + shift * DAY_MS;
+    while ([0, 6].includes(new Date(ms).getUTCDay())) ms += DAY_MS;
+    const key = new Date(ms).toISOString().slice(0, 10);
+    // the first step moved to today is due now, not later today
+    const t = atLocalHour(key, hour, tz);
+    return (key === today && t.getTime() > now.getTime() && iso === next.dueAt ? now : t).toISOString();
+  };
+  return {
+    ...plan,
+    readyAt: move(plan.readyAt),
+    actions: plan.actions.map((a) => (a.doneAt || a.skippedAt ? a : { ...a, dueAt: move(a.dueAt) })),
+  };
+}

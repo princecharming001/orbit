@@ -1194,7 +1194,9 @@ function Limits() {
                 </span>
               </label>
               <div className="mt-3 max-w-xs">
-                <Label htmlFor="lim-wdays">Warm-up length in days</Label>
+                <Label htmlFor="lim-wdays" hint="weekends are skipped">
+                  Warm-up length in working days
+                </Label>
                 <Input
                   id="lim-wdays"
                   type="number"
