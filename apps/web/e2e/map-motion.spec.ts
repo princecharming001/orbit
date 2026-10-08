@@ -106,6 +106,16 @@ async function stepAndMeasure(page: Page, ids: string[], frames: number, into: n
   }
 }
 
+/** True when a dot (page px) is at least partly under a box on the page. */
+function under(
+  box: { x: number; y: number; width: number; height: number },
+  d: { x: number; y: number; r: number },
+) {
+  return (
+    d.x + d.r > box.x && d.x - d.r < box.x + box.width && d.y + d.r > box.y && d.y - d.r < box.y + box.height
+  );
+}
+
 /** Per-frame travel stays smooth: it moved, it never snapped, and no frame stands out from both of its neighbours. */
 function expectSmooth(moves: number[], max: number, label: string) {
   expect(Math.max(...moves), label).toBeGreaterThan(2);
@@ -369,7 +379,7 @@ test.describe('Map motion', () => {
     for (const v of vias) await expect(first).toContainText(v.trim());
   });
 
-  test('the person card sits beside the hovered dot, and the map does not write the name a second time', async ({
+  test('the person card sits near the hovered dot without hiding the people right round it', async ({
     page,
   }) => {
     await loadDemo(page);
@@ -383,13 +393,81 @@ test.describe('Map motion', () => {
     await expect(card).toHaveAttribute('data-place', 'beside');
     await mapSettled(page);
     const c = (await card.boundingBox())!;
-    const dot = (await mapDots(page, [maya]))[maya]!;
+    const dots = await mapDots(page);
+    const dot = dots[maya]!;
     const x = box.x + dot.x;
     const y = box.y + dot.y;
-    // the gap between the dot and the card's nearest edge
+    // the gap between the dot and the card's nearest edge: close enough that the eye does not cross the map
     const dx = Math.max(c.x - x, 0, x - (c.x + c.width));
     const dy = Math.max(c.y - y, 0, y - (c.y + c.height));
-    expect(Math.hypot(dx, dy)).toBeLessThan(dot.r + 40);
+    expect(Math.hypot(dx, dy)).toBeGreaterThan(dot.r);
+    expect(Math.hypot(dx, dy)).toBeLessThan(180);
+    // nobody sitting right next to her is under the card
+    const hidden = Object.entries(dots).filter(
+      ([id, d]) =>
+        id !== maya &&
+        d.alpha > 0.3 &&
+        Math.hypot(d.x - dot.x, d.y - dot.y) < 70 &&
+        under(c, { ...d, x: box.x + d.x, y: box.y + d.y }),
+    );
+    expect(hidden.map(([id]) => id)).toEqual([]);
+  });
+
+  test('with keyboard focus, the person card never hides the dots the arrow keys go to next', async ({
+    page,
+  }) => {
+    await loadDemo(page);
+    await openMap(page);
+    await mapCanvas(page).focus();
+    await page.keyboard.press('Home');
+    const card = page.getByTestId('map-tooltip');
+    const seen = new Set<string>();
+    for (const key of [
+      '',
+      'ArrowRight',
+      'ArrowDown',
+      'ArrowLeft',
+      'ArrowUp',
+      'ArrowUp',
+      'ArrowRight',
+      'ArrowDown',
+    ]) {
+      if (key) await page.keyboard.press(key);
+      const id = (await mapSnapshot(page)).hover!;
+      seen.add(id);
+      await expect(card).toBeVisible();
+      const c = (await card.boundingBox())!;
+      const box = (await mapCanvas(page).boundingBox())!;
+      const next: string[] = await page.evaluate(
+        (id) =>
+          (
+            [
+              [1, 0],
+              [-1, 0],
+              [0, 1],
+              [0, -1],
+            ] as const
+          )
+            .map(([dx, dy]) =>
+              (
+                window as unknown as {
+                  __orbitMap: { neighbour(id: string, dx: number, dy: number): string | undefined };
+                }
+              ).__orbitMap.neighbour(id, dx, dy),
+            )
+            .filter((n): n is string => !!n && n !== id),
+        id,
+      );
+      expect(next.length).toBeGreaterThan(0);
+      const dots = await mapDots(page, [id, ...next]);
+      expect(under(c, { ...dots[id]!, x: box.x + dots[id]!.x, y: box.y + dots[id]!.y }), id).toBe(false);
+      for (const n of next)
+        expect(
+          under(c, { ...dots[n]!, x: box.x + dots[n]!.x, y: box.y + dots[n]!.y }),
+          `${key} ${id} > ${n}`,
+        ).toBe(false);
+    }
+    expect(seen.size).toBeGreaterThan(2);
   });
 
   test('with a filter on, the arrow keys walk only the people it shows, and the subtitle counts them', async ({
@@ -529,6 +607,94 @@ test.describe('Map motion', () => {
     // every dot on the route is fully drawn
     const onRoute = await mapDots(page, snap.path.slice(1));
     for (const d of Object.values(onRoute)) expect(d.alpha).toBeGreaterThan(0.95);
+  });
+
+  test('on a laptop with the demo banner showing, the map fits the window and the page never scrolls under it', async ({
+    page,
+  }) => {
+    await loadDemo(page);
+    await openMap(page);
+    await expect(page.getByTestId('demo-banner')).toBeVisible();
+    const fits = () =>
+      page.evaluate(() => {
+        const main = document.querySelector('main')!;
+        const canvas = document.querySelector('[data-testid="orbit-canvas"]')!.getBoundingClientRect();
+        return {
+          overflow: main.scrollHeight - main.clientHeight,
+          below: Math.round(canvas.bottom - window.innerHeight),
+          scrolled: main.scrollTop + window.scrollY,
+        };
+      });
+    expect(await fits()).toEqual({ overflow: 0, below: expect.any(Number), scrolled: 0 });
+    expect((await fits()).below).toBeLessThanOrEqual(1);
+    // a route picked lower in the panel, and the keyboard on the canvas, leave the page where it is
+    await search(page, 'Felix Garcia');
+    await expect(page.getByTestId('reach-path').nth(2)).toBeVisible({ timeout: 15_000 });
+    await page.getByTestId('reach-path').nth(2).click();
+    await mapCanvas(page).focus();
+    await page.keyboard.press('ArrowRight');
+    await page.keyboard.press('ArrowDown');
+    const after = await fits();
+    expect(after.scrolled).toBe(0);
+    expect(after.overflow).toBe(0);
+    await expect(page.getByRole('heading', { name: 'Reach' })).toBeInViewport({ ratio: 1 });
+    await expect(page.getByTestId('reach-input')).toBeInViewport({ ratio: 1 });
+  });
+
+  test('picking another route morphs: the map always shows a route, and the new one is drawn in under a second', async ({
+    page,
+  }) => {
+    await loadDemo(page);
+    await openMap(page);
+    await search(page, 'Felix Garcia');
+    await expect(page.getByTestId('reach-path').nth(1)).toBeVisible({ timeout: 15_000 });
+    await mapSettled(page);
+    const first = (await mapSnapshot(page)).path.join('>');
+    await pauseClock(page);
+    for (const pick of [1, 0]) {
+      const before = (await mapSnapshot(page)).path.join('>');
+      await page.getByTestId('reach-path').nth(pick).click();
+      await expect.poll(async () => (await mapSnapshot(page)).path.join('>')).not.toBe(before);
+      const frames: string[] = [];
+      let done = -1;
+      for (let t = 0; t <= 1200; t += 16) {
+        const s = await mapSnapshot(page);
+        const hops = s.path.length - 1;
+        frames.push(`${t}:${s.pathDrawn.toFixed(2)}/${s.pathOldDrawn.toFixed(2)}`);
+        // the old route pulls back while the new one draws: never a moment with no route on the map
+        expect(Math.max(s.pathDrawn, s.pathOldDrawn), frames.join(' ')).toBeGreaterThan(0.4);
+        if (s.pathDrawn >= hops && done < 0) done = t;
+        await page.clock.runFor(16);
+      }
+      expect(done, frames.join(' ')).toBeGreaterThanOrEqual(0);
+      expect(done, frames.join(' ')).toBeLessThan(900);
+      if (!pick) expect((await mapSnapshot(page)).path.join('>')).toBe(first);
+    }
+  });
+
+  test('a contact the student barely knows: Reach says why the routes go through others, and offers the direct note last', async ({
+    page,
+  }) => {
+    await loadDemo(page);
+    await openMap(page);
+    await search(page, 'Felix Garcia');
+    const routes = page.getByTestId('reach-path');
+    await expect(routes.first()).toBeVisible({ timeout: 15_000 });
+    await expect(routes.first()).toContainText('3 hops');
+    const note = page.getByTestId('reach-cold-note');
+    await expect(note).toContainText(/connected with Felix on LinkedIn/);
+    await expect(note).toContainText(/routes through people you know come first/);
+    const last = routes.last();
+    await expect(last).toContainText('1 hop');
+    await expect(last).toContainText('Cold tie');
+    await expect(note).toContainText(`Route ${await routes.count()}`);
+    await last.click();
+    await expect(page.getByTestId('map-legend-line')).toHaveText(/only slightly/);
+    await expect(page.getByRole('button', { name: 'Write to Felix directly' })).toBeVisible();
+    // the company panel says why it lists a route to someone it also lists as there now
+    await search(page, 'Stripe');
+    await expect(page.getByTestId('company-routes')).toBeVisible();
+    await expect(page.getByTestId('company-routes-why')).toContainText(/know these people only slightly/);
   });
 
   test('people on a route who sit side by side step apart, so every hop shows, and step back after', async ({

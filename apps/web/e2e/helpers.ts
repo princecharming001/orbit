@@ -91,6 +91,7 @@ export interface MapSnapshot {
   chip: string;
   path: string[];
   pathDrawn: number;
+  pathOldDrawn: number;
   emphasized: string[];
   dimmed: number;
   nodes: number;

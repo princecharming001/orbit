@@ -55,8 +55,14 @@ const TAB_BAR = 72;
  * the dot on a wide map (the side away from the centre first, where the orbit is thinner), at the top or bottom of
  * a narrow one. On a touch screen a narrow map's card prefers the top, and goes to the bottom only when the bottom of
  * the map is on screen, clear of the tab bar.
+ *
+ * On a wide map the card weighs what it would hide: every dot under it (with a little room round the card, so a dot
+ * peeping out from under its edge counts too), the person's ties and the lines to them, and, for keyboard focus, the
+ * dots the arrow keys go to next, which must stay in sight. It may move a little further from the dot to clear them,
+ * out to a corner of the map when the orbit round the dot is crowded.
  */
-function cardPlace(scene: OrbitScene, id: string, canvas: HTMLCanvasElement, touch: boolean): CardPlace {
+function cardPlace(scene: OrbitScene, id: string, canvas: HTMLCanvasElement, how: HoverHow): CardPlace {
+  const touch = how === 'touch';
   const w = canvas.clientWidth;
   const h = canvas.clientHeight;
   const at = scene.positionOf(id);
@@ -65,16 +71,36 @@ function cardPlace(scene: OrbitScene, id: string, canvas: HTMLCanvasElement, tou
   if (w >= 640 && at) {
     const gap = 14;
     const you = scene.youAt();
-    // beside the dot (level with it, or with the dot at the card's top or bottom), or above or below it
-    const xs = { right: at.x + at.r + gap, left: at.x - at.r - gap - CARD_W };
-    const ys = [at.y - CARD_H / 2, at.y - 18, at.y + 18 - CARD_H];
-    const sides = at.x >= w / 2 ? [xs.right, xs.left] : [xs.left, xs.right];
+    // the dots the arrow keys go to from here: a keyboard user's next stop is never under the card
+    const next = new Set<string>();
+    if (how === 'keyboard')
+      for (const [dx, dy] of [
+        [1, 0],
+        [-1, 0],
+        [0, 1],
+        [0, -1],
+      ] as const) {
+        const n = scene.neighbour(id, dx, dy);
+        if (n && n !== id) next.add(n);
+      }
+    const nextAt = [...next].map((n) => scene.positionOf(n)).filter((p) => !!p);
+    // beside the dot (level with it, or with the dot at the card's top or bottom), or above or below it, and the
+    // same a step further out; then the corners of the map
     const cands: { x: number; y: number }[] = [];
-    for (const x of sides) for (const y of ys) cands.push({ x, y });
-    for (const y of [at.y + at.r + gap, at.y - at.r - gap - CARD_H])
-      for (const x of [at.x - CARD_W / 2, at.x - 24, at.x + 24 - CARD_W]) cands.push({ x, y });
+    for (const far of [0, 40, 90, 140]) {
+      const xs = { right: at.x + at.r + gap + far, left: at.x - at.r - gap - far - CARD_W };
+      const ys = [at.y - CARD_H / 2, at.y - 18, at.y + 18 - CARD_H];
+      const sides = at.x >= w / 2 ? [xs.right, xs.left] : [xs.left, xs.right];
+      for (const x of sides) for (const y of ys) cands.push({ x, y });
+      for (const y of [at.y + at.r + gap + far, at.y - at.r - gap - far - CARD_H])
+        for (const x of [at.x - CARD_W / 2, at.x - 24, at.x + 24 - CARD_W]) cands.push({ x, y });
+    }
+    for (const x of [0, w])
+      for (const y of [0, h]) cands.push({ x: x - (x ? CARD_W : 0), y: y - (y ? CARD_H : 0) });
     let best = cands[0]!;
     let bestScore = Number.POSITIVE_INFINITY;
+    const m = 6;
+    const far = (d: number) => d / 30 + Math.max(0, d - 60) / 8;
     cands.forEach((c, i) => {
       const x = Math.round(Math.min(Math.max(c.x, CARD_INSET), w - CARD_INSET - CARD_W));
       const y = Math.round(Math.min(Math.max(c.y, CARD_INSET), h - CARD_INSET - CARD_H));
@@ -84,14 +110,19 @@ function cardPlace(scene: OrbitScene, id: string, canvas: HTMLCanvasElement, tou
       const dx = Math.max(x - at.x, 0, at.x - x1);
       const dy = Math.max(y - at.y, 0, at.y - y1);
       const hidesYou = you.x + you.r > x && you.x - you.r < x1 && you.y + you.r > y && you.y - you.r < y1;
+      const hidesNext = nextAt.filter(
+        (p) => p.x + p.r + m > x && p.x - p.r - m < x1 && p.y + p.r + m > y && p.y - p.r - m < y1,
+      ).length;
       const score =
         (covers(x, y, x1, y1) ? 1000 : 0) +
         (hidesYou ? 12 : 0) +
-        scene.dotsIn(x, y, x1, y1) +
+        hidesNext * 40 +
+        2 * scene.dotsIn(x - m, y - m, x1 + m, y1 + m, at) +
         // the people the lines run to, and the lines, stay in sight
-        scene.tiesIn(id, x, y, x1, y1) +
-        Math.hypot(dx, dy) / 30 +
-        i * 0.25;
+        3 * scene.tiesIn(id, x, y, x1, y1) +
+        // close to the dot, and only a little further when that clears the people round it
+        far(Math.hypot(dx, dy)) +
+        i * 0.05;
       if (score < bestScore) {
         best = { x, y };
         bestScore = score;
@@ -253,6 +284,7 @@ export function OrbitMap({
         hitTest: (x: number, y: number) => scene.hitTest(x, y),
         slot: (id: string) => scene.slotOf(id),
         stageColor: (id: string) => scene.stageColorOf(id),
+        neighbour: (id: string, dx: number, dy: number) => scene.neighbour(id, dx, dy),
       };
     let live = true;
     document.fonts?.ready.then(() => {
@@ -298,10 +330,7 @@ export function OrbitMap({
     hoverRef.current = { id, how };
     scene.setHover(id, how);
     if (changed)
-      onHover?.(
-        id,
-        id && canvasRef.current ? cardPlace(scene, id, canvasRef.current, how === 'touch') : undefined,
-      );
+      onHover?.(id, id && canvasRef.current ? cardPlace(scene, id, canvasRef.current, how) : undefined);
   };
   // a tapped dot belongs to the view it was tapped in: a search, a route, a filter or the introductions view lets
   // go of it (a mouse hover follows the pointer anyway)

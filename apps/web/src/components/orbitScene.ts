@@ -72,6 +72,9 @@ const OMEGA = TAU / ORBIT_PERIOD_MS;
 const EMPTY_EXTENT = 456;
 const FAN_PITCH = 30;
 const NO_VIEWS = new Set<never>();
+/** How far from a person the dots round them count extra when the person card is placed (CSS px). */
+const NEAR_CARD = 140;
+
 /** How much a dot on a reach route grows (no more than its neighbours leave room for). */
 const ROUTE_SCALE = 1.12;
 /** CSS px kept clear between two people on a route who sit side by side: room for the hop, its arrow and names */
@@ -104,6 +107,8 @@ export const TIMING = {
   hoverLines: 220,
   tip: 150,
   hop: 350,
+  /** a hop's draw when the student picks another route: the new one draws while the old one pulls back */
+  hopSwitch: 220,
   turn: 700,
   turnMax: 950,
   turnBackMax: 1150,
@@ -231,6 +236,8 @@ export interface SceneSnapshot {
   chip: string;
   path: string[];
   pathDrawn: number;
+  /** hops of a route being replaced that are still drawn as it pulls back */
+  pathOldDrawn: number;
   emphasized: string[];
   dimmed: number;
   nodes: number;
@@ -365,8 +372,10 @@ export class OrbitScene {
   private chipOld = { text: '', key: '', alpha: new Tween(0), radius: 0 };
 
   private reach?: { targetId: string; status: ReachStatus; ids: string[] };
-  private path = { ids: [] as string[], start: 0 };
-  private pathOld = { ids: [] as string[], start: 0, from: 0 };
+  /** the route on the map: `start` is when its first hop began drawing, `hop` how long each hop takes */
+  private path = { ids: [] as string[], start: 0, hop: TIMING.hop as number };
+  /** a route being replaced: it pulls back from `from` hops drawn to `to` (the hops it shares with the new one) */
+  private pathOld = { ids: [] as string[], start: 0, from: 0, to: 0 };
   private radar = new Tween(0);
   private radarStart = 0;
 
@@ -1442,26 +1451,33 @@ export class OrbitScene {
         }
         this.setPhase('reach-none');
       } else if (ids.join('>') !== this.path.ids.join('>')) {
-        // a new route: the old one retracts, then the new one draws hop by hop and each dot pops as it arrives
-        const hadPath = this.path.ids.length > 0;
-        this.retractPath(now);
+        // Another route to the same person morphs: the hops both routes share stay drawn, the rest of the old one
+        // pulls back while the new one draws out at once, a little faster, so the map is never without a route.
+        // A first route waits for the radar, then draws hop by hop; each dot pops as the line reaches it.
+        const morph = !newTarget && this.path.ids.length > 1;
+        let shared = 0;
+        if (morph) while (shared < ids.length - 1 && this.path.ids[shared + 1] === ids[shared + 1]) shared++;
+        const drawn = this.pathProgress(now);
+        this.retractPath(now, Math.min(shared, drawn));
+        const hop = morph ? TIMING.hopSwitch : TIMING.hop;
+        const from = morph ? Math.min(shared, drawn) : 0;
         this.path = {
           ids,
-          start: now + (this.reduced ? 0 : Math.max(wait, hadPath ? TIMING.retract : 160)),
+          hop,
+          start: this.reduced ? now : (morph ? now : now + Math.max(wait, 160)) - from * hop,
         };
         if (!this.reduced) {
           const route = new Set(ids.map((id) => this.viewFor(id)).filter((v): v is NodeView => !!v));
-          for (let k = 1; k < ids.length; k++) {
+          for (let k = Math.ceil(from) + 1; k < ids.length; k++) {
             const v = this.viewFor(ids[k]!);
             if (!v) continue;
-            v.popAt = this.path.start + k * TIMING.hop - 40;
+            v.popAt = this.hopAt(k) - 40;
             // the pop swells only as far as the neighbours leave room (two people on a route can sit side by side)
             const rest = this.roomFor(v, ROUTE_SCALE, route, 0.95);
             v.popH = Math.min(0.22, this.roomFor(v, ROUTE_SCALE * 1.22, route, 0.95) / rest - 1);
           }
         }
-        if (!this.reduced)
-          this.busyUntil = Math.max(this.busyUntil, this.path.start + (ids.length - 1) * TIMING.hop + 340);
+        if (!this.reduced) this.busyUntil = Math.max(this.busyUntil, this.hopAt(ids.length - 1) + 340);
         this.setPhase('reach-path');
       }
     }
@@ -1471,14 +1487,30 @@ export class OrbitScene {
     this.anim(this.labelDim, this.dimForMode(), now, TIMING.emphasis, easing.outQuad);
   }
 
-  private retractPath(now: number): void {
+  /** Pulls the route on the map back to its first `keep` hops (the ones the next route shares), then lets it go. */
+  private retractPath(now: number, keep = 0): void {
     if (!this.path.ids.length) return;
     const drawn = this.pathProgress(now);
-    if (drawn > 0 && !this.reduced) {
-      this.pathOld = { ids: this.path.ids, start: now, from: drawn };
+    // a route picked a moment ago has barely started: the one still pulling back is the line the student sees
+    const old = this.oldPathDrawn(now);
+    if (drawn > keep && !this.reduced && drawn >= old) {
+      this.pathOld = { ids: this.path.ids, start: now, from: drawn, to: keep };
       this.busyUntil = Math.max(this.busyUntil, now + TIMING.retract);
     }
-    this.path = { ids: [], start: 0 };
+    this.path = { ids: [], start: 0, hop: TIMING.hop };
+  }
+
+  /** Hops of the route being replaced still drawn, as it pulls back. */
+  private oldPathDrawn(now: number): number {
+    const o = this.pathOld;
+    if (!o.ids.length) return 0;
+    const k = clamp01((now - o.start) / TIMING.retract);
+    return o.from - (o.from - o.to) * easing.inCubic(k);
+  }
+
+  /** When the line reaches the route's `k`th stop. */
+  private hopAt(k: number): number {
+    return this.path.start + k * this.path.hop;
   }
 
   /** Hops drawn so far (0..hops). */
@@ -1486,7 +1518,7 @@ export class OrbitScene {
     const hops = this.path.ids.length - 1;
     if (hops <= 0) return 0;
     if (this.reduced) return now >= this.path.start ? hops : 0;
-    return Math.max(0, Math.min(hops, (now - this.path.start) / TIMING.hop));
+    return Math.max(0, Math.min(hops, (now - this.path.start) / this.path.hop));
   }
 
   /** The camera that keeps the whole route in view (with the target turned to the top). */
@@ -1706,12 +1738,17 @@ export class OrbitScene {
     return best?.pid;
   }
 
-  /** How many dots a box (CSS px in the canvas) would hide: where the person card covers least. */
-  dotsIn(x0: number, y0: number, x1: number, y1: number): number {
+  /**
+   * How many dots a box (CSS px in the canvas) would hide: where the person card covers least. Given a point (the
+   * person the card is about), a dot near it weighs up to three times as much as one across the map: the people
+   * round someone are the ones the eye looks at next.
+   */
+  dotsIn(x0: number, y0: number, x1: number, y1: number, near?: { x: number; y: number }): number {
     let n = 0;
     for (const v of this.drawList) {
       if (!v.visible || v.pa < 0.3 || v.removing) continue;
-      if (v.x + v.pr > x0 && v.x - v.pr < x1 && v.y + v.pr > y0 && v.y - v.pr < y1) n++;
+      if (v.x + v.pr > x0 && v.x - v.pr < x1 && v.y + v.pr > y0 && v.y - v.pr < y1)
+        n += near ? 1 + 5 * Math.max(0, 1 - Math.hypot(v.x - near.x, v.y - near.y) / NEAR_CARD) : 1;
     }
     return n;
   }
@@ -1834,7 +1871,7 @@ export class OrbitScene {
           scale = k >= 0 && route ? this.roomFor(v, ROUTE_SCALE, route, 0.95) : 0.95;
           glow = k >= 0 ? 0.55 : 0;
           // each dot on the route lights up as the line reaches it
-          if (k > 0) delay = Math.max(0, this.path.start + k * TIMING.hop - 60 - now);
+          if (k > 0) delay = Math.max(0, this.hopAt(k) - 60 - now);
         }
       } else if (company) {
         if (v.groupKey === company) {
@@ -2160,7 +2197,7 @@ export class OrbitScene {
   }
 
   private cometBegin(): number {
-    return this.path.start + (this.path.ids.length - 1) * TIMING.hop + 300;
+    return this.hopAt(this.path.ids.length - 1) + 300;
   }
 
   /** The comet's trip along the route, 0..1, or -1 while it rests between trips. */
@@ -2223,7 +2260,7 @@ export class OrbitScene {
       this.introLinks = this.introLinks.filter((l) => now <= l.end);
     if (this.webOld && now - this.webOld.start > TIMING.retract) this.webOld = undefined;
     if (this.pathOld.ids.length && now - this.pathOld.start >= TIMING.retract)
-      this.pathOld = { ids: [], start: 0, from: 0 };
+      this.pathOld = { ids: [], start: 0, from: 0, to: 0 };
   }
 
   // ---------- drawing ----------
@@ -2716,7 +2753,7 @@ export class OrbitScene {
     // a route being replaced retracts toward You while the new one draws out
     if (this.pathOld.ids.length) {
       const k = clamp01((now - this.pathOld.start) / TIMING.retract);
-      this.drawHops(ctx, this.pathOld.ids, this.pathOld.from * (1 - easing.inCubic(k)), 1 - k * 0.3);
+      this.drawHops(ctx, this.pathOld.ids, this.oldPathDrawn(now), 1 - k * 0.3);
     }
     if (this.path.ids.length > 1) this.drawHops(ctx, this.path.ids, this.pathProgress(now), 1);
     ctx.globalAlpha = 1;
@@ -3160,7 +3197,7 @@ export class OrbitScene {
       if (reach.status === 'found')
         for (let k = 1; k < this.path.ids.length - 1; k++) {
           const v = this.viewFor(this.path.ids[k]!);
-          const shown = this.reduced ? 1 : clamp01((now - (this.path.start + k * TIMING.hop - 60)) / 200);
+          const shown = this.reduced ? 1 : clamp01((now - (this.hopAt(k) - 60)) / 200);
           if (v && !v.cluster && shown > 0) list.push(v, shown);
         }
     }
@@ -3386,6 +3423,8 @@ export class OrbitScene {
       chip: this.chip.text,
       path: this.path.ids,
       pathDrawn: this.pathProgress(now),
+      pathOldDrawn:
+        this.pathOld.ids.length && now - this.pathOld.start < TIMING.retract ? this.oldPathDrawn(now) : 0,
       emphasized: this.views
         .filter((v) => !v.temp && v.alpha.to >= 0.9 && (v.glow.to > 0 || v.scale.to > 1.05))
         .map((v) => v.pid),

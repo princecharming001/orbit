@@ -21,12 +21,14 @@ import { db } from '../db/schema';
 import { draftMessage } from '../engine/brief';
 import {
   type CompanyReach,
+  isColdDirect,
   isUnambiguous,
   type ReachCandidate,
   rankReachTargets,
   reachCompany,
   reachPerson,
   targetCompanyMatcher,
+  WARMER_ROUTES_WHY,
 } from '../engine/graph';
 import { maintenanceRunning, watchMaintenance } from '../engine/sync';
 import { useSession } from '../state/session';
@@ -568,6 +570,8 @@ export function MapPage() {
     return [n, warm];
   }, [companyKey, visible, orgMap]);
   const status = paths === undefined ? 'searching' : paths.length ? 'found' : 'none';
+  // a faint tie the student has to the target, offered after the warmer routes: the panel says why it comes last
+  const coldDirect = paths?.find((p, i) => i > 0 && isColdDirect(p));
   const routeIds = current ? ['user', ...current.hops.map((h) => h.toId)].join('>') : '';
   const focus: FocusSpec | undefined = useMemo(() => {
     if (target)
@@ -605,6 +609,8 @@ export function MapPage() {
       if (target) {
         if (paths === undefined) return `Finding routes to ${target.displayName}.`;
         if (!current) return `No route to ${target.displayName} through your network yet.${clear}`;
+        if (isColdDirect(current))
+          return `You know ${target.displayName} only slightly, so a note straight to them would be a cold one.${clear}`;
         if (current.hops.length === 1) return `You know ${target.displayName} directly.${clear}`;
         const via = byId.get(current.hops[0]!.toId)?.firstName ?? 'someone';
         return `Route ${pathIdx + 1} of ${paths.length} to ${target.displayName}, through ${via}.${clear}`;
@@ -642,7 +648,7 @@ export function MapPage() {
   const chainSentence = webLit ? describeIntroChain(web, webLit, nameOf) : '';
   const litSentence = stories.some((s) => s.text === chainSentence) ? '' : chainSentence;
   return (
-    <div className="-my-6 md:-mb-8 -mx-4 md:-mx-8 flex flex-col lg:h-screen">
+    <div className="-my-6 md:-mb-8 -mx-4 md:-mx-8 flex flex-col lg:flex-1 lg:min-h-0" data-testid="map-page">
       <div className="px-4 md:px-8 pt-5 pb-3 flex flex-wrap items-center gap-2 border-b border-line bg-canvas">
         <div className="min-w-0">
           <h1 className="text-[20px] font-semibold tracking-[-0.01em]">
@@ -959,6 +965,14 @@ export function MapPage() {
                   No route found through your network yet. Import more connections or start a warm-up.
                 </p>
               )}
+              {coldDirect && (
+                <p className="text-[13px] text-ink-2" data-testid="reach-cold-note">
+                  {coldDirect.hops[0]!.text}. That tie is faint, so a note from you alone may go unanswered. A
+                  word from someone who knows {target.firstName} carries more weight, which is why the routes
+                  through people you know come first. Writing to {target.firstName} yourself is Route{' '}
+                  {paths!.indexOf(coldDirect) + 1}.
+                </p>
+              )}
               {paths?.map((p, i) => (
                 <button
                   key={i}
@@ -973,9 +987,13 @@ export function MapPage() {
                     <span className="text-[12px] font-medium">
                       Route {i + 1} · {p.hops.length} hop{p.hops.length > 1 ? 's' : ''}
                     </span>
-                    <Chip tone={p.band === 'strong' ? 'good' : p.band === 'possible' ? 'warn' : 'neutral'}>
-                      {REACH_BAND_LABELS[p.band]}
-                    </Chip>
+                    {isColdDirect(p) ? (
+                      <Chip>Cold tie</Chip>
+                    ) : (
+                      <Chip tone={p.band === 'strong' ? 'good' : p.band === 'possible' ? 'warn' : 'neutral'}>
+                        {REACH_BAND_LABELS[p.band]}
+                      </Chip>
+                    )}
                   </div>
                   <ol className="mt-2 space-y-1.5 text-[13px]">
                     {p.hops.map((h, k) => {
@@ -1065,6 +1083,9 @@ export function MapPage() {
                   <div className="text-[12px] uppercase tracking-wide text-ink-3 mb-1">
                     Routes through people you know
                   </div>
+                  <p className="text-[12px] text-ink-3 mb-1.5" data-testid="company-routes-why">
+                    {WARMER_ROUTES_WHY}
+                  </p>
                   <ul className="space-y-1 text-[13px]" data-testid="company-routes">
                     {company.twoHop.map((t) => (
                       <li key={t.target.id}>

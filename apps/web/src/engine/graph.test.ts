@@ -1,15 +1,18 @@
 import type { Organization, Person, User } from '@orbit/core';
+import { addEdge, makeGraph } from '@orbit/core';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { db } from '../db/schema';
 import { loadDemo } from './demo';
 import {
   buildReachGraph,
+  isColdDirect,
   isUnambiguous,
   LINKEDIN_ONLY_WEIGHT,
   rankReachTargets,
   reachCompany,
   reachGraphFrom,
   reachPerson,
+  reachPersonIn,
   targetCompanyMatcher,
 } from './graph';
 import { ingestEmails, type RawEmail } from './ingest';
@@ -218,5 +221,48 @@ describe('with the demo network', () => {
       }
     }
     expect(checked).toBeGreaterThan(0);
+  });
+});
+
+describe('reach to someone already on the map', () => {
+  // the student knows Ines and Rhea well; Ines and Rhea both worked with Yuki, who worked with Felix
+  const graph = (felix: number) => {
+    const g = makeGraph();
+    addEdge(g, 'user', 'ines', 0.7, 'strength', 'You and Ines talk often', true);
+    addEdge(g, 'user', 'rhea', 0.6, 'strength', 'You and Rhea talk often', true);
+    addEdge(g, 'user', 'felix', felix, 'strength', "You're connected with Felix on LinkedIn", true);
+    for (const [a, b] of [
+      ['ines', 'yuki'],
+      ['rhea', 'yuki'],
+      ['yuki', 'felix'],
+    ] as const) {
+      addEdge(g, a, b, 0.95, 'co_tenure', `${a} and ${b} worked together`, true);
+      addEdge(g, b, a, 0.95, 'co_tenure', `${b} and ${a} worked together`, true);
+    }
+    return g;
+  };
+
+  it('offers a cold tie as the last route, after the warmer routes, so the panel can say why', () => {
+    const paths = reachPersonIn(graph(0.12), 'felix');
+    expect(paths.length).toBeGreaterThan(1);
+    expect(paths[0]!.hops.length).toBeGreaterThan(1);
+    const last = paths.at(-1)!;
+    expect(last.hops.map((h) => h.toId)).toEqual(['felix']);
+    expect(isColdDirect(last)).toBe(true);
+    expect(paths.filter((p) => p.hops.length === 1)).toHaveLength(1);
+  });
+
+  it('writes straight to someone the student knows well, before any route through others', () => {
+    const paths = reachPersonIn(graph(0.45), 'felix');
+    expect(paths[0]!.hops.map((h) => h.toId)).toEqual(['felix']);
+    expect(isColdDirect(paths[0]!)).toBe(false);
+  });
+
+  it('offers no direct route to someone the student has no tie to', () => {
+    const g = graph(0.12);
+    g.adj.get('user')!.delete('felix');
+    const paths = reachPersonIn(g, 'felix');
+    expect(paths.length).toBeGreaterThan(0);
+    expect(paths.every((p) => p.hops.length > 1)).toBe(true);
   });
 });
