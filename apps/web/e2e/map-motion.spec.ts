@@ -1082,6 +1082,8 @@ test.describe('Map motion', () => {
     await mapSettled(page);
     const box = (await mapCanvas(page).boundingBox())!;
     const hoverKeiko = async () => {
+      // from off the map, so the pointer moves even when Keiko is back where it last rested
+      await page.mouse.move(2, 2);
       const at = (await mapDots(page, [keiko]))[keiko]!;
       await page.mouse.move(box.x + at.x, box.y + at.y);
       await expect.poll(async () => (await mapSnapshot(page)).hover).toBe(keiko);
@@ -1369,6 +1371,81 @@ test.describe('Map motion on a touch screen', () => {
     // it sits over the search box, so typing again takes it down
     await page.getByTestId('reach-input').fill('Zzy');
     await expect(toast).toHaveCount(0);
+  });
+
+  test('in Introductions a tapped person is never under their card, and a search replaces them', async ({
+    page,
+  }) => {
+    await loadDemo(page);
+    await openMap(page);
+    const ids = await idsByName(page, ['Keiko Yamamoto', 'Priya Hassan']);
+    await page.getByTestId('map-filter-intros').click();
+    await mapSettled(page);
+    const card = page.getByTestId('map-tooltip');
+    // everyone in the web: the rest of the map is faded back
+    const members = Object.entries(await mapDots(page))
+      .filter(([id, d]) => id !== 'user' && d.alpha > 0.9)
+      .map(([id]) => id);
+    expect(members).toContain(ids['Keiko Yamamoto']);
+    let checked = 0;
+    for (const id of members) {
+      const box = (await mapCanvas(page).boundingBox())!;
+      const d = (await mapDots(page, [id]))[id];
+      // only people the phone shows above the tab bar can be tapped
+      if (!d || box.y + d.y < 0 || box.y + d.y > 844 - 80) continue;
+      await page.touchscreen.tap(box.x + d.x, box.y + d.y);
+      if (
+        !(await expect
+          .poll(async () => (await mapSnapshot(page)).hover, { timeout: 2000 })
+          .toBe(id)
+          .then(() => true)
+          .catch(() => false))
+      )
+        continue;
+      await expect(card).toBeVisible();
+      await mapSettled(page);
+      const c = (await card.boundingBox())!;
+      const dot = (await mapDots(page, [id]))[id]!;
+      const x = box.x + dot.x;
+      const y = box.y + dot.y;
+      const r = dot.r * 0.8;
+      const under = x + r > c.x && x - r < c.x + c.width && y + r > c.y && y - r < c.y + c.height;
+      expect(under, `${id} at ${x},${y} under the card at ${JSON.stringify(c)}`).toBe(false);
+      // tapping empty canvas, clear of every dot and of the card, lets go
+      const dots = Object.values(await mapDots(page));
+      const centre = (await mapSnapshot(page)).centre;
+      let empty: { x: number; y: number } | undefined;
+      for (let gy = 20; gy < Math.min(box.height, 844 - 90 - box.y) && !empty; gy += 12)
+        for (let gx = 20; gx < box.width - 20 && !empty; gx += 12) {
+          const clear =
+            dots.every((o) => Math.hypot(o.x - gx, o.y - gy) > o.r + 24) &&
+            Math.hypot(centre[0] - gx, centre[1] - gy) > 50 &&
+            !(
+              box.x + gx > c.x - 8 &&
+              box.x + gx < c.x + c.width + 8 &&
+              box.y + gy > c.y - 8 &&
+              box.y + gy < c.y + c.height + 8
+            );
+          if (clear) empty = { x: gx, y: gy };
+        }
+      expect(empty).toBeTruthy();
+      await page.touchscreen.tap(box.x + empty!.x, box.y + empty!.y);
+      await expect(card).toHaveCount(0);
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(2);
+    // tap Keiko, then search for Priya: the search lights Priya's chain and Keiko's card goes
+    const box = (await mapCanvas(page).boundingBox())!;
+    const keiko = ids['Keiko Yamamoto']!;
+    const k = (await mapDots(page, [keiko]))[keiko]!;
+    await page.touchscreen.tap(box.x + k.x, box.y + k.y);
+    await expect(card).toContainText('Keiko Yamamoto');
+    await search(page, 'Priya');
+    await expect.poll(async () => (await mapSnapshot(page)).focus).toBe(`web:${ids['Priya Hassan']}`);
+    await expect(card).toHaveCount(0);
+    await expect(page.getByTestId('map-legend-line')).toContainText(
+      'Showing the introductions through Priya Hassan',
+    );
   });
 
   test('every control on the map page is at least 44 px tall for a thumb', async ({ page }) => {

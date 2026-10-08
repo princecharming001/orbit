@@ -407,7 +407,7 @@ export function OrbitMap({
       <canvas
         ref={canvasRef}
         // the focus outline is drawn inside the canvas: the map's frame clips anything drawn round it
-        className="absolute left-0 top-0 block cursor-pointer touch-manipulation outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent/60 rounded-[2px]"
+        className="absolute left-0 top-0 block cursor-pointer touch-manipulation outline-none focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent/60 rounded-[2px]"
         data-testid="orbit-canvas"
         data-overlaps={overlaps}
         data-outside-wedges={outsideWedges}
