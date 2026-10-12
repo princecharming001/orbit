@@ -180,6 +180,8 @@ export interface ChipSpec {
   input: Record<string, unknown>;
   /** the message shown in the thread as the student's turn */
   asUser: string;
+  /** a chip that just says something: the home sends this as a normal turn instead of running `tool` */
+  message?: string;
 }
 
 export interface ChatEngine {

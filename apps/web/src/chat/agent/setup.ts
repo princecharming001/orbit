@@ -1,4 +1,5 @@
 import type { Brief, Suggestion } from '@orbit/core';
+import { isMessageSuggestion } from '../../engine/brief';
 import { todayCards } from '../../engine/today';
 
 /**
@@ -87,5 +88,8 @@ export function peopleWaitingNow(
   latestBrief: Pick<Brief, 'suggestionIds'> | undefined,
   now: Date,
 ): number {
-  return peopleWaiting(todayCards(pending, latestBrief, now).cards);
+  // only cards whose job is a message: a prep sheet or a duplicate to confirm is not someone waiting on a message
+  return peopleWaiting(
+    todayCards(pending, latestBrief, now).cards.filter((c) => isMessageSuggestion(c.kind)),
+  );
 }
