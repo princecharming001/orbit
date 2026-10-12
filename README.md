@@ -22,7 +22,7 @@ The build and the e2e preview default to the `/orbit/` base path (`ORBIT_BASE` o
 ## Layout
 
 - `packages/core` — pure domain logic (entity resolution, closeness, graph and Reach paths, orbit layout, stage machine, email signals, note extraction, drafting + validator, LinkedIn warm-up, suggestion rules, recommendations, parsers, demo seed) with unit tests.
-- `apps/web` — Vite + React app over IndexedDB; engines, Google and Anthropic adapters, all screens, integration and e2e tests.
+- `apps/web` — Vite + React app over IndexedDB; engines, Google and Anthropic adapters, all screens, integration and e2e tests. The chat is the home: its side panel (`src/chat/panel`) runs the app's own pages next to the conversation, so everything can be done without leaving it.
 - `supabase/functions/orbit-claude` — Orbit's shared Claude access: a small proxy that holds an Anthropic key on the server so visitors without their own key can use the chat, with per-visitor limits (`supabase/migrations` has its tables). The site uses it when built with `VITE_ORBIT_CLAUDE_PROXY`; a visitor's own key always wins.
 - `docs/plan` — the complete product and system plan (hosted architecture, data model, AI/ML design, integrations research, roadmap), the as-built note for this static version (14) and the outreach playbook the drafts follow (15). Start at [`docs/plan/README.md`](docs/plan/README.md).
 
