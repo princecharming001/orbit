@@ -69,6 +69,7 @@ import {
   todaysLlmUsage,
 } from '../../integrations/prefs';
 import { sharedClaudeAvailable } from '../../integrations/shared-claude';
+import { villageConfigured, villagePaths } from '../../integrations/village';
 import { z } from '../../zod';
 import type { ToolContext } from '../types';
 import {
@@ -1062,13 +1063,29 @@ export const findRoutes = defineTool({
       people.set(target.id, target);
       const routes = paths.map((p) => pathView(p, people, ctx));
       const direct = routes.find((r) => r.hops.length === 1);
+      // when the student has connected Village, add its real warm-intro paths alongside Orbit's own graph
+      const warmIntros = villageConfigured()
+        ? await villagePaths(
+            {
+              name: target.displayName,
+              company: target.currentOrganizationRaw,
+              linkedinUrl: target.linkedinUrl,
+            },
+            { signal: ctx.signal },
+          )
+        : [];
       const summary = routes.length
         ? `${plural(routes.length, 'route')} to ${target.displayName}${direct?.cold ? '. You know them only slightly, so an intro through someone who knows them is likelier to get a reply' : ''}.`
         : `No route to ${target.displayName} through people you know yet.`;
       return ok(
         'routes',
-        { target: personRef(target), routes, why: WARMER_ROUTES_WHY },
-        { target: personRef(target), routes, note: direct?.cold ? WARMER_ROUTES_WHY : undefined },
+        { target: personRef(target), routes, warmIntros, why: WARMER_ROUTES_WHY },
+        {
+          target: personRef(target),
+          routes,
+          warmIntros: warmIntros.length ? warmIntros : undefined,
+          note: direct?.cold ? WARMER_ROUTES_WHY : undefined,
+        },
         summary,
         `/map?reach=${target.id}`,
       );
