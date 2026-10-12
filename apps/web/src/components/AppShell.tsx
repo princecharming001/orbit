@@ -532,7 +532,7 @@ function Recent({ chat }: { chat: ReturnType<typeof threadActions> }) {
   );
 }
 
-/** Orbit's mark: the glass atom on its dark tile, rounded like an app icon. */
+/** Orbit's mark: the glass atom on a transparent background, with a soft shadow so it reads on light surfaces. */
 export function Logo({ size = 26 }: { size?: number }) {
   return (
     <img
@@ -542,7 +542,7 @@ export function Logo({ size = 26 }: { size?: number }) {
       alt=""
       aria-hidden
       draggable={false}
-      className="shrink-0 rounded-[24%] shadow-[0_1px_2px_rgba(15,23,42,0.18)]"
+      className="shrink-0 drop-shadow-[0_1px_1.5px_rgba(15,23,42,0.28)]"
       data-testid="logo"
     />
   );
