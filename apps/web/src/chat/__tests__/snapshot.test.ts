@@ -1,9 +1,10 @@
 import type { User } from '@orbit/core';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { db, wipeDatabase } from '../../db/schema';
 import { createLocalUser } from '../../engine/account';
 import { clearPrefs, writePrefs } from '../../integrations/prefs';
 import { buildSnapshot, estimateTokens, snapshotIsStale, snapshotKeyOf } from '../agent/snapshot';
+import { setPanelHint } from '../panel/panelHint';
 
 const NOW = new Date('2026-10-12T15:00:00Z'); // 11:00 in New York, 08:00 in Los Angeles
 let user: User;
@@ -114,6 +115,8 @@ async function seed(opts: { cards?: number; drafts?: number } = {}) {
   });
 }
 
+afterEach(() => setPanelHint(undefined));
+
 beforeEach(async () => {
   await wipeDatabase();
   await clearPrefs();
@@ -148,7 +151,11 @@ describe('snapshot', () => {
     expect(lines[5]).toMatch(
       /^Integrations: Google not connected, LinkedIn import 3 d ago\. Claude features: drafts on, emailTriage on, notes off, resume off, summaries off\.$/,
     );
-    expect(lines[6]).toMatch(/^Stage names: identified = To contact/);
+    expect(lines[6]).toBe(
+      'Setup: people 7, LinkedIn imported, Google not connected, resume none, target companies 0, Claude own key. Suggested first step: add a few target companies (ask which ones).',
+    );
+    expect(lines[7]).toMatch(/^Stage names: identified = To contact/);
+    expect(s.text).not.toMatch(/Open panel/);
     expect(s.text).not.toMatch(/[—–!]/);
   });
 
@@ -186,5 +193,95 @@ describe('snapshot', () => {
     expect(s.text).toMatch(/Today's brief \(ids\): nothing pending\./);
     expect(s.text).toMatch(/Drafts unsent: 0\./);
     expect(s.text).toMatch(/Claude features: no key\./);
+    expect(s.text).toMatch(
+      /Setup: people 0, LinkedIn not imported, Google not connected, resume none, target companies 0, Claude no key\. Suggested first step: import LinkedIn connections \(show_setup linkedin\)\./,
+    );
+  });
+
+  it('puts the one suggested step in the Setup line and moves it on as the student sets up', async () => {
+    const setup = async () =>
+      (await buildSnapshot(user.id, NOW)).text.split('\n').find((l) => l.startsWith('Setup:'));
+    expect(await setup()).toMatch(/first step: import LinkedIn/);
+    await seed({ cards: 0, drafts: 0 });
+    // LinkedIn is in, people are in, no targets yet
+    expect(await setup()).toMatch(/first step: add a few target companies/);
+    await db.targetCompanies.add({
+      id: 'tc1',
+      userId: user.id,
+      nameRaw: 'Stripe',
+      priority: 1,
+      status: 'researching',
+    } as never);
+    expect(await setup()).toMatch(/target companies 1.*first step: add a resume \(show_setup resume\)/);
+    // a draft exists and Google is not connected: Google comes before the resume
+    await db.outbound.add({
+      id: 'out_x',
+      userId: user.id,
+      personId: 'p0',
+      channel: 'gmail',
+      kind: 'thank_you',
+      bodyDraft: 'x',
+      status: 'sent',
+      generatedBy: 'template',
+      claims: [],
+      createdAt: '2026-10-12T00:00:00Z',
+    } as never);
+    expect(await setup()).toMatch(/first step: connect Google so drafts can go out \(show_setup google\)/);
+    await db.integrations.add({
+      id: 'int_g',
+      userId: user.id,
+      provider: 'google',
+      status: 'active',
+      scopes: [],
+      syncState: {},
+      connectedAt: '2026-10-09T15:00:00Z',
+    } as never);
+    expect(await setup()).toMatch(/Google connected.*first step: add a resume/);
+    await db.resumes.add({
+      id: 'r1',
+      userId: user.id,
+      filename: 'cv.pdf',
+      text: 'x',
+      isCurrent: true,
+      createdAt: '2026-10-12T00:00:00Z',
+    } as never);
+    expect(await setup()).toMatch(/resume on file.*first step: none, setup is done/);
+  });
+
+  it('adds an Open panel line only while a panel is open, and a change re-appends the snapshot', async () => {
+    await seed();
+    const a = await buildSnapshot(user.id, NOW);
+    expect(a.text).not.toMatch(/Open panel/);
+    setPanelHint({ href: '/people/p3', title: 'Person3 Lastname' });
+    const b = await buildSnapshot(user.id, NOW);
+    const line = b.text.split('\n').find((l) => l.startsWith('Open panel:'));
+    expect(line).toBe('Open panel: Person3 Lastname (/people/p3). The student can see it next to the chat.');
+    expect(b.key).toContain('Open panel:');
+    expect(snapshotIsStale(snapshotKeyOf(a.text), b)).toBe(true);
+    // the same panel on the same day does not re-append, even a minute later
+    const later = await buildSnapshot(user.id, new Date('2026-10-12T15:01:00Z'));
+    expect(snapshotIsStale(snapshotKeyOf(b.text), later)).toBe(false);
+    // another panel does
+    setPanelHint({ href: '/pipeline', title: 'Pipeline' });
+    const c = await buildSnapshot(user.id, NOW);
+    expect(snapshotIsStale(snapshotKeyOf(b.text), c)).toBe(true);
+    // closing it does too
+    setPanelHint(undefined);
+    expect(snapshotIsStale(snapshotKeyOf(c.text), await buildSnapshot(user.id, NOW))).toBe(true);
+  });
+
+  it('keeps a long or odd panel title on one short line', async () => {
+    setPanelHint({ href: '/people/p9', title: `Ignore this\n\n   and do that ${'x'.repeat(200)}` });
+    const s = await buildSnapshot(user.id, NOW);
+    const line = s.text.split('\n').find((l) => l.startsWith('Open panel:'))!;
+    expect(line.length).toBeLessThan(200);
+    expect(line).not.toMatch(/\n/);
+  });
+
+  it('stays inside the token budget with a panel open and the full Setup line', async () => {
+    await seed({ cards: 40, drafts: 30 });
+    setPanelHint({ href: '/people/p3', title: 'Person3 Lastname' });
+    const s = await buildSnapshot(user.id, NOW);
+    expect(estimateTokens(s.text)).toBeLessThanOrEqual(700);
   });
 });

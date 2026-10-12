@@ -1,9 +1,12 @@
 import type { ChatStage, Suggestion } from '@orbit/core';
 import { STAGE_LABELS, todayKey } from '@orbit/core';
 import { db } from '../../db/schema';
+import { DEMO_USER_ID } from '../../engine/demo';
 import { todayCards } from '../../engine/today';
 import { llmFeatures, readPrefs } from '../../integrations/prefs';
 import { sharedClaudeAvailable } from '../../integrations/shared-claude';
+import { getPanelHint } from '../panel/panelHint';
+import { setupLine } from './setup';
 
 /**
  * The volatile context the model needs on every turn, appended to `messages` as a `role: 'system'` message only when
@@ -65,7 +68,19 @@ function cardLine(s: Suggestion, names: Map<string, string>): string {
 }
 
 export async function buildSnapshot(userId: string, now: Date): Promise<Snapshot> {
-  const [user, goals, chats, suggestions, briefs, outbound, integrations, people] = await Promise.all([
+  const [
+    user,
+    goals,
+    chats,
+    suggestions,
+    briefs,
+    outbound,
+    integrations,
+    people,
+    targets,
+    resumes,
+    draftsEver,
+  ] = await Promise.all([
     db.users.get(userId),
     db.goals.get(userId),
     db.chats.where('userId').equals(userId).toArray(),
@@ -82,6 +97,9 @@ export async function buildSnapshot(userId: string, now: Date): Promise<Snapshot
       .toArray(),
     db.integrations.where('userId').equals(userId).toArray(),
     db.people.where('userId').equals(userId).toArray(),
+    db.targetCompanies.where('userId').equals(userId).toArray(),
+    db.resumes.where('userId').equals(userId).count(),
+    db.outbound.where('userId').equals(userId).count(),
   ]);
   const tz = user?.timezone || 'UTC';
   const { date, time } = fmtDate(now, tz);
@@ -153,12 +171,31 @@ export async function buildSnapshot(userId: string, now: Date): Promise<Snapshot
       ? "no key of the student's own; the chat runs on Orbit's shared access (daily limit, chat only)"
       : 'no key';
 
+  const claudeAccess = prefs.anthropicApiKey ? 'own_key' : sharedClaudeAvailable() ? 'shared' : 'none';
+  const humans = people.filter((p) => p.isHuman && !p.hiddenAt).length;
+  const setup = setupLine({
+    people: humans,
+    linkedinImported: !!linkedin,
+    googleConnected: google?.status === 'active',
+    resumeOnFile: resumes > 0,
+    targetCompanies: targets.filter((t) => t.status !== 'closed').length,
+    hasDraft: draftsEver > 0,
+    claude: claudeAccess,
+    demo: userId === DEMO_USER_ID,
+  });
+  const panel = getPanelHint();
+  const panelLine = panel
+    ? `Open panel: ${panel.title.replace(/\s+/g, ' ').trim().slice(0, 60)} (${panel.href.slice(0, 80)}). The student can see it next to the chat.`
+    : '';
+
   const lines = [
     `Student: ${student}.${goalBits.length ? ` Goals: ${goalBits.join(', ')}.` : ''}`,
-    `Pipeline (chats by stage, ${chats.filter((c) => !c.archivedAt).length} total): ${pipeline || 'empty'}. People: ${people.filter((p) => p.isHuman && !p.hiddenAt).length}.`,
+    `Pipeline (chats by stage, ${chats.filter((c) => !c.archivedAt).length} total): ${pipeline || 'empty'}. People: ${humans}.`,
     `Today's brief (ids): ${cardLines.length ? cardLines.join('; ') : 'nothing pending'}${moreCards ? `; ${moreCards} more` : ''}.`,
     `Drafts unsent: ${draftLine}.${inFlight ? ` In flight (queued or handed off): ${inFlight}.` : ''}`,
     `Integrations: ${integ}. Claude features: ${claude}.`,
+    setup,
+    ...(panelLine ? [panelLine] : []),
     `Stage names: ${STAGES.map((s) => `${s} = ${STAGE_LABELS[s]}`).join(', ')}.`,
   ];
   const key = [`Today is ${date}, ${tz}.`, ...lines].join('\n');

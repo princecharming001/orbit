@@ -111,10 +111,15 @@ describe('request shape', () => {
     expect(body.system[0].text).toMatch(/untrusted_[0-9a-f]{16}/);
     expect(body.system[0].text).toMatch(/needs_confirmation/);
     expect(body.system[0].text).toMatch(/[Nn]ever claim an action happened/);
+    expect(body.system[0].text).toMatch(/Talking like a friend/);
+    expect(body.system[0].text).toMatch(/offer_choices/);
+    expect(body.system[0].text).toMatch(/show_setup/);
     expect(body.system[0].text).not.toMatch(/[—–!]/);
     const sys = body.messages.find((m: { role: string }) => m.role === 'system');
     expect(sys.content[0].text).toMatch(/^Today is \w{3} \d{4}-\d{2}-\d{2}, \d{2}:\d{2}, America\/New_York/);
     expect(sys.content[0].text).toContain('Sam Lee');
+    // the volatile context says where setup stands, in one line
+    expect(sys.content[0].text).toMatch(/^Setup: people \d+, /m);
   });
 
   it("uses 'low' effort in quick mode", async () => {

@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod/v4';
 import type { MatchablePerson } from '../agent/people-match';
 import { matchPeople, rankPerson, resolvePerson } from '../agent/people-match';
 import { type RouterContext, routeUtterance } from '../agent/router';
 import { registry as realRegistry } from '../registry';
+import type { ChoiceOption, ToolSpec } from '../types';
 
 const person = (
   id: string,
@@ -64,7 +66,7 @@ const HANDLED: [string, string, Record<string, unknown>][] = [
   ['today', 'get_today_brief', {}],
   ['brief', 'get_today_brief', {}],
   ['What should I do today?', 'get_today_brief', {}],
-  ['good morning', 'get_today_brief', {}],
+  ['start my day', 'get_today_brief', {}],
   ['my day', 'get_today_brief', {}],
   // who went quiet
   ['who went quiet', 'list_pipeline', { quietOnly: true }],
@@ -212,8 +214,6 @@ const HANDLED: [string, string, Record<string, unknown>][] = [
 
 /** utterance, expected href */
 const POINTERS: [string, string][] = [
-  ['import my linkedin connections', '/settings/integrations'],
-  ['upload linkedin export', '/settings/integrations'],
   ['where do I change my tone', '/settings/style'],
   ['how do I connect google', '/settings/integrations'],
   ['settings', '/settings'],
@@ -338,6 +338,235 @@ describe('router: honest refusals', () => {
 
   it('an empty message gets the command list', () => {
     expect(routeUtterance('   ', ctx())).toMatchObject({ kind: 'text' });
-    expect(routeUtterance('help', ctx())).toMatchObject({ kind: 'text' });
+    expect(routeUtterance('commands', ctx())).toMatchObject({ kind: 'text' });
+  });
+});
+
+// ---- small talk: short, warm, one next step ----------------------------------------------------------------------
+
+const fakeTool = (name: string, input: z.ZodObject): ToolSpec =>
+  ({
+    name,
+    kind: 'read',
+    description: name,
+    input,
+    capabilities: [],
+    execute: async () => ({ kind: 'text', data: {}, summary: '' }),
+  }) as unknown as ToolSpec;
+
+const offerChoices = fakeTool(
+  'offer_choices',
+  z.object({
+    options: z
+      .array(z.object({ label: z.string().max(28), message: z.string() }))
+      .min(2)
+      .max(3),
+  }),
+);
+const showSetup = fakeTool(
+  'show_setup',
+  z.object({ what: z.enum(['google', 'linkedin', 'claude_key', 'resume']) }),
+);
+
+/** The registry with the two conversation tools, whether or not the real one has them yet. */
+const withTools = new Map<string, ToolSpec>([
+  ...realRegistry,
+  ['offer_choices', offerChoices],
+  ['show_setup', showSetup],
+]);
+/** The registry as it was before those tools existed. */
+const withoutTools = new Map<string, ToolSpec>([...realRegistry]);
+withoutTools.delete('offer_choices');
+withoutTools.delete('show_setup');
+
+const EMPTY = { people: [], companies: [], cards: [], drafts: [], nextChat: undefined };
+const words = (t: string) => t.trim().split(/\s+/).length;
+
+function reply(utterance: string, c: Partial<RouterContext> = {}) {
+  const r = routeUtterance(utterance, ctx({ registry: withTools, firstName: 'Alex', ...c }));
+  const text = r.kind === 'tool' ? (r.lead ?? '') : r.text;
+  const options = r.kind === 'tool' && r.tool === 'offer_choices' ? (r.input.options as ChoiceOption[]) : [];
+  return { r, text, options };
+}
+
+/** Anything the router says in small talk reads like a friend: short, plain, one question at most. */
+function expectFriendly(text: string) {
+  expect(words(text), text).toBeLessThanOrEqual(45);
+  expect(text).not.toMatch(/[—–!\n*#]/);
+  expect(text).not.toMatch(/^\s*(\d+[.)]|[-•])\s/m);
+  expect((text.match(/\?/g) ?? []).length).toBeLessThanOrEqual(1);
+}
+
+describe('router: small talk with data', () => {
+  it.each(['hey', 'Hi', 'hello!', 'yo', 'hey orbit', 'hi there', 'Hey!!'])(
+    '%s gets a greeting, the one most useful thing, and two choices',
+    (g) => {
+      const { r, text, options } = reply(g, { waiting: undefined });
+      expect(r).toMatchObject({ kind: 'tool', tool: 'offer_choices' });
+      expect(text).toBe("Hey Alex. You've got 2 people waiting on a message today. Want to start there?");
+      expect(options.map((o) => o.label)).toEqual(['Show me', 'Not now']);
+      expectFriendly(text);
+    },
+  );
+
+  it('greets by the time of day and without a name', () => {
+    expect(reply('good morning').text).toMatch(/^Good morning Alex\. /);
+    expect(reply('Good evening', { firstName: undefined }).text).toMatch(/^Good evening there\. /);
+  });
+
+  it('counts people waiting from the engine when it says so, and says one person in the singular', () => {
+    expect(reply('hey', { waiting: 3 }).text).toContain("You've got 3 people waiting");
+    expect(reply('hey', { waiting: 1 }).text).toContain("You've got 1 person waiting");
+  });
+
+  it('falls back to unsent drafts, then to where the chats stand', () => {
+    const noCards = { cards: [] as never[] };
+    const drafts = reply('hey', {
+      ...noCards,
+      drafts: [{ id: 'd1', personId: 'p1', status: 'draft', kind: 'thank_you' }],
+    });
+    expect(drafts.text).toBe("Hey Alex. You've got 1 draft ready for a look. Want to start there?");
+    expect(drafts.options[0]).toEqual({ label: 'Show me', message: 'Show my drafts' });
+    const none = reply('hey', { ...noCards, drafts: [] });
+    expect(none.text).toBe('Hey Alex. Nothing is waiting on you today. Want to see where your chats stand?');
+    expect(none.options[0]).toEqual({ label: 'Show me', message: 'Show my pipeline' });
+  });
+
+  it.each([
+    ['who are you', /^I'm Orbit/],
+    ['What can you do?', /^I find who to message/],
+    ['help', /^I find who to message/],
+    ['thanks', /^Anytime\. /],
+    ['ok', /^Okay\. /],
+    ['Thank you!', /^Anytime\. /],
+  ])('%s gets a short warm reply with choices', (u, re) => {
+    const { r, text, options } = reply(u);
+    expect(r).toMatchObject({ kind: 'tool', tool: 'offer_choices' });
+    expect(text).toMatch(re);
+    expect(options.length).toBeGreaterThanOrEqual(2);
+    expect(options.length).toBeLessThanOrEqual(3);
+    expectFriendly(text);
+  });
+
+  it('help offers three easy asks, not a command list', () => {
+    const { options, text } = reply('what can you do');
+    expect(options.map((o) => o.label)).toEqual([
+      "What's on today",
+      'Who went quiet',
+      'Where my chats stand',
+    ]);
+    expect(text).not.toMatch(/Try:/);
+  });
+
+  it('every pill the router offers is something the router understands, with and without data', () => {
+    const states: Partial<RouterContext>[] = [
+      {},
+      { cards: [], drafts: [{ id: 'd1', personId: 'p1', status: 'draft', kind: 'thank_you' }] },
+      { cards: [], drafts: [] },
+    ];
+    for (const st of states)
+      for (const u of ['hey', 'who are you', 'help', 'thanks', 'ok']) {
+        for (const o of reply(u, st).options) {
+          expect(o.label.length, o.label).toBeLessThanOrEqual(28);
+          const next = routeUtterance(o.message, ctx({ registry: withTools, ...st }));
+          expect(next.kind, `${u} -> ${o.message}`).not.toBe('refuse');
+        }
+      }
+  });
+
+  it('"Show me" opens the brief, the drafts or the pipeline, whichever the greeting named', () => {
+    expect(routeUtterance("What's on today?", ctx({ registry: withTools }))).toMatchObject({
+      kind: 'tool',
+      tool: 'get_today_brief',
+    });
+    expect(routeUtterance('show me', ctx({ registry: withTools }))).toMatchObject({
+      tool: 'get_today_brief',
+    });
+    expect(
+      routeUtterance(
+        'yes',
+        ctx({
+          registry: withTools,
+          cards: [],
+          drafts: [{ id: 'd', personId: 'p1', status: 'draft', kind: 'thank_you' }],
+        }),
+      ),
+    ).toMatchObject({ tool: 'list_drafts' });
+    expect(routeUtterance('sure', ctx({ registry: withTools, cards: [], drafts: [] }))).toMatchObject({
+      tool: 'list_pipeline',
+    });
+  });
+
+  it('"Not now" is taken gracefully and "add someone I met" asks one question', () => {
+    for (const u of ['Not now', 'maybe later', 'no thanks', "I'm good"]) {
+      const r = routeUtterance(u, ctx({ registry: withTools }));
+      expect(r).toMatchObject({ kind: 'text' });
+      expectFriendly((r as { text: string }).text);
+    }
+    const add = routeUtterance('Add someone I met', ctx({ registry: withTools }));
+    expect(add).toMatchObject({ kind: 'text' });
+    expect((add as { text: string }).text).toMatch(/Who did you meet\?/);
+    expect(add).not.toMatchObject({ tool: 'add_person' });
+    // a real name still adds
+    expect(routeUtterance('add person Jordan Lee at Figma', ctx({ registry: withTools }))).toMatchObject({
+      tool: 'add_person',
+    });
+  });
+});
+
+describe('router: small talk on an empty account', () => {
+  it.each(['hey', 'hello', 'good morning', 'what can you do?', 'help', 'who are you', 'thanks', 'ok'])(
+    '%s offers one easy step with the LinkedIn widget',
+    (u) => {
+      const { r, text } = reply(u, EMPTY);
+      expect(r).toMatchObject({ kind: 'tool', tool: 'show_setup', input: { what: 'linkedin' } });
+      expect(text).toMatch(/LinkedIn/);
+      expectFriendly(text);
+      // one next step in prose
+      expect((text.match(/\bor\b/g) ?? []).length).toBeLessThanOrEqual(0);
+    },
+  );
+
+  it('keeps the greeting personal', () => {
+    expect(reply('hey', EMPTY).text).toMatch(/^Hey Alex\. /);
+  });
+
+  it('"I want to connect my LinkedIn" shows the drop zone instead of explaining steps', () => {
+    const { r, text } = reply('import my linkedin connections', EMPTY);
+    expect(r).toMatchObject({ kind: 'tool', tool: 'show_setup', input: { what: 'linkedin' } });
+    expectFriendly(text);
+  });
+});
+
+describe('router: small talk when the conversation tools are not in the registry', () => {
+  const plain = (u: string, c: Partial<RouterContext> = {}) =>
+    routeUtterance(u, ctx({ registry: withoutTools, firstName: 'Alex', ...c }));
+
+  it.each(['hey', 'help', 'who are you', 'thanks', 'ok'])('%s degrades to short plain text', (u) => {
+    for (const c of [{}, EMPTY]) {
+      const r = plain(u, c);
+      expect(r.kind).toBe('text');
+      expectFriendly((r as { text: string }).text.replace(/[?]/g, ''));
+    }
+  });
+
+  it('still names the one thing to do, in words the router understands', () => {
+    const r = plain('hey') as { text: string };
+    expect(r.text).toContain('Say "What\'s on today?"');
+    const e = plain('hey', EMPTY) as { text: string };
+    expect(e.text).toContain('+ button');
+  });
+
+  it('LinkedIn import falls back to the pointer to Settings', () => {
+    expect(plain('import my linkedin connections')).toMatchObject({
+      kind: 'text',
+      href: '/settings/integrations',
+    });
+    expect(plain('upload linkedin export')).toMatchObject({ kind: 'text', href: '/settings/integrations' });
+  });
+
+  it('the long command list stays available to anyone who asks for it', () => {
+    const r = plain('commands') as { text: string };
+    expect(r.text).toMatch(/^Try: /);
   });
 });

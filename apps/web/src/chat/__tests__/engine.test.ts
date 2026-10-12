@@ -4,12 +4,13 @@ import { db, wipeDatabase } from '../../db/schema';
 import { createLocalUser } from '../../engine/account';
 import { MODEL } from '../../integrations/anthropic';
 import { clearPrefs, writePrefs } from '../../integrations/prefs';
+import { z } from '../../zod';
 import { createChatEngine } from '../agent';
 import { makeChatClient, setChatClientFactoryForTests } from '../agent/client';
 import { ChatStore, unpairedToolUses } from '../agent/store';
 import { type FakeAnthropic, messageRequests, scriptedFetch } from '../test/fakeAnthropic';
 import { makeStubRegistry, type StubRegistry } from '../test/stubRegistry';
-import type { ChatEngine, TurnEvent } from '../types';
+import type { ChatEngine, ToolSpec, TurnEvent } from '../types';
 
 let user: User;
 let stub: StubRegistry;
@@ -105,6 +106,39 @@ describe('router mode', () => {
     expect(actions[0]!.envelope?.kind).toBe('pipeline');
     expect(actions[0]!.messageId).toBe(messages[1]!.id);
     expect(messageRequests(fake)).toHaveLength(0);
+  });
+
+  it('says a friendly line first and shows the choices under it, storing only the line', async () => {
+    // the conversation tools live elsewhere; a minimal stand-in with the same contract
+    const offer = {
+      name: 'offer_choices',
+      kind: 'read',
+      description: 'choices',
+      input: z.object({
+        options: z
+          .array(z.object({ label: z.string(), message: z.string() }))
+          .min(2)
+          .max(3),
+      }),
+      capabilities: [],
+      execute: async (input: { options: unknown[] }) => ({
+        kind: 'choices' as const,
+        data: { options: input.options },
+        summary: 'Offered 2 choices.',
+      }),
+    } as unknown as ToolSpec;
+    const registry = new Map<string, ToolSpec>([...stub.registry, ['offer_choices', offer]]);
+    const execute = (name: string, input: unknown, ctx: Parameters<typeof stub.execute>[2]) =>
+      name === 'offer_choices' ? offer.execute(input as never, ctx) : stub.execute(name, input, ctx);
+    engine = createChatEngine({ registry, execute, user: () => user, store });
+    const c = await engine.startConversation({ temporary: false });
+    const events = await send(c.id, 'hey');
+    expect(kinds(events)).toEqual(['text', 'tool_start', 'tool_result', 'done']);
+    const line = (events[0] as { delta: string }).delta;
+    expect(line).toMatch(/^Hey Sam\. /);
+    expect(result(events)?.envelope.kind).toBe('choices');
+    const { messages } = await engine.loadConversation(c.id);
+    expect((messages[1]!.content as { text: string }[])[0]!.text).toBe(line);
   });
 
   it('resolves people from the database for a draft command', async () => {
