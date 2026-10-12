@@ -1,0 +1,515 @@
+import type { User } from '@orbit/core';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { wipeDatabase } from '../../db/schema';
+import { createLocalUser } from '../../engine/account';
+import { MODEL } from '../../integrations/anthropic';
+import { clearPrefs, readPrefs, todaysLlmUsage, writePrefs } from '../../integrations/prefs';
+import { makeChatClient, setChatClientFactoryForTests } from '../agent/client';
+import { CHAT_BETAS, runTurn, type TurnDeps } from '../agent/loop';
+import { ChatStore, unpairedToolUses } from '../agent/store';
+import { type FakeAnthropic, messageRequests, type ScriptTurn, scriptedFetch } from '../test/fakeAnthropic';
+import { makeStubRegistry, type StubRegistry } from '../test/stubRegistry';
+import type { ChatConversation, TurnEvent } from '../types';
+
+let user: User;
+let store: ChatStore;
+let stub: StubRegistry;
+let fake: FakeAnthropic;
+let conversation: ChatConversation;
+
+function deps(extra: Partial<TurnDeps> = {}): TurnDeps {
+  const client = makeChatClient('sk-ant-test', { fetch: fake.fetch, maxRetries: 0 });
+  return {
+    client,
+    registry: stub.registry,
+    execute: stub.execute,
+    store,
+    user,
+    conversation,
+    prefixMismatch: 'error',
+    ...extra,
+  };
+}
+
+async function turn(text: string, script: ScriptTurn[], extra: Partial<TurnDeps> = {}, signal?: AbortSignal) {
+  fake.push(...script);
+  const events: TurnEvent[] = [];
+  await runTurn(deps(extra), [{ type: 'text', text }], (e) => events.push(e), signal);
+  return events;
+}
+
+const text = (events: TurnEvent[]) =>
+  events
+    .filter((e): e is Extract<TurnEvent, { type: 'text' }> => e.type === 'text')
+    .map((e) => e.delta)
+    .join('');
+const kinds = (events: TurnEvent[]) => events.map((e) => e.type);
+const errorOf = (events: TurnEvent[]) =>
+  events.find((e) => e.type === 'error') as Extract<TurnEvent, { type: 'error' }>;
+
+beforeEach(async () => {
+  await wipeDatabase();
+  await clearPrefs();
+  writePrefs({ anthropicApiKey: 'sk-ant-test' });
+  user = await createLocalUser({
+    fullName: 'Sam Lee',
+    firstName: 'Sam',
+    school: 'Cornell',
+    timezone: 'America/New_York',
+  });
+  store = new ChatStore();
+  stub = makeStubRegistry();
+  fake = scriptedFetch();
+  setChatClientFactoryForTests((key) => makeChatClient(key, { fetch: fake.fetch, maxRetries: 0 }));
+  conversation = await store.createConversation({ userId: user.id, model: MODEL, temporary: false });
+});
+afterEach(() => setChatClientFactoryForTests(undefined));
+
+describe('request shape', () => {
+  it('sends the beta headers, fallbacks, compaction, caching, adaptive thinking with updates and strict eager tools', async () => {
+    const events = await turn('hi', [{ text: 'Hello Sam.' }]);
+    expect(text(events)).toBe('Hello Sam.');
+    expect(kinds(events).at(-1)).toBe('done');
+    const [req] = messageRequests(fake);
+    expect(req).toBeTruthy();
+    const betas = req!.headers['anthropic-beta']!.split(',').map((s) => s.trim());
+    for (const b of CHAT_BETAS) expect(betas).toContain(b);
+    const body = req!.body;
+    expect(body.model).toBe(MODEL);
+    expect(body.max_tokens).toBe(16_000);
+    expect(body.stream).toBe(true);
+    expect(body.fallbacks).toEqual([{ model: 'claude-opus-5' }]);
+    expect(body.context_management.edits[0].type).toBe('compact_20260112');
+    expect(body.cache_control).toEqual({ type: 'ephemeral' });
+    expect(body.system).toHaveLength(1);
+    expect(body.system[0].cache_control).toEqual({ type: 'ephemeral' });
+    expect(body.thinking).toEqual({
+      type: 'adaptive',
+      display: 'updates',
+      block_binding: { prefix_mismatch_behavior: 'error' },
+    });
+    expect(body.output_config).toEqual({ effort: 'medium' });
+    expect(body.tool_choice).toBeUndefined();
+    expect(body.max_iterations).toBeUndefined();
+    const names = body.tools.map((t: { name: string }) => t.name);
+    expect(names).toEqual([...names].sort());
+    // file-bearing tools have no JSON Schema form: they stay UI-only and are never offered to the model
+    expect(names).toEqual([...stub.registry.keys()].filter((n) => !/resume|linkedin/.test(n)).sort());
+    for (const t of body.tools) {
+      expect(t.strict).toBe(true);
+      expect(t.eager_input_streaming).toBe(true);
+      expect(t.input_schema.additionalProperties).toBe(false);
+      expect(t.run).toBeUndefined();
+    }
+    // the system block is frozen: no date, no name, no counts; the volatile snapshot is a system message instead
+    expect(body.system[0].text).not.toMatch(/Sam|2026|Today is/);
+    expect(body.system[0].text).toMatch(/untrusted_[0-9a-f]{16}/);
+    expect(body.system[0].text).toMatch(/needs_confirmation/);
+    expect(body.system[0].text).toMatch(/[Nn]ever claim an action happened/);
+    expect(body.system[0].text).not.toMatch(/[—–!]/);
+    const sys = body.messages.find((m: { role: string }) => m.role === 'system');
+    expect(sys.content[0].text).toMatch(/^Today is \w{3} \d{4}-\d{2}-\d{2}, \d{2}:\d{2}, America\/New_York/);
+    expect(sys.content[0].text).toContain('Sam Lee');
+  });
+
+  it("uses 'low' effort in quick mode", async () => {
+    await turn('hi', [{ text: 'ok' }], { quick: true });
+    expect(messageRequests(fake)[0]!.body.output_config).toEqual({ effort: 'low' });
+  });
+});
+
+describe('tools', () => {
+  it('runs parallel tool calls and returns every result in one user message, in the model order', async () => {
+    const events = await turn('what is on and who went quiet', [
+      {
+        thinking: ['Checking the brief and the pipeline.'],
+        text: 'Let me look.',
+        toolCalls: [
+          { id: 'toolu_a', name: 'get_today_brief', input: {} },
+          { id: 'toolu_b', name: 'list_pipeline', input: { stage: 'no_response' } },
+        ],
+      },
+      { text: 'One card today and nobody went quiet.' },
+    ]);
+    expect(kinds(events)).toEqual([
+      'progress',
+      'text',
+      'text',
+      'text',
+      'tool_start',
+      'tool_start',
+      'tool_result',
+      'tool_result',
+      'text',
+      'text',
+      'text',
+      'done',
+    ]);
+    expect(events[0]).toEqual({ type: 'progress', text: 'Checking the brief and the pipeline.' });
+    expect(events[4]).toEqual({
+      type: 'tool_start',
+      toolUseId: 'toolu_a',
+      toolName: 'get_today_brief',
+      progress: 'Looking at your day',
+    });
+    const results = events.filter((e) => e.type === 'tool_result') as Extract<
+      TurnEvent,
+      { type: 'tool_result' }
+    >[];
+    expect(results.map((r) => r.toolUseId)).toEqual(['toolu_a', 'toolu_b']);
+    expect(results[0]!.envelope.kind).toBe('brief');
+    expect(stub.calls.map((c) => c.name)).toEqual(['get_today_brief', 'list_pipeline']);
+    expect(stub.calls[1]!.input).toEqual({ stage: 'no_response' });
+    expect(stub.calls[0]!.ctx).toMatchObject({
+      caller: 'llm',
+      toolUseId: 'toolu_a',
+      conversationId: conversation.id,
+    });
+
+    const reqs = messageRequests(fake);
+    expect(reqs).toHaveLength(2);
+    const last = reqs[1]!.body.messages.at(-1);
+    expect(last.role).toBe('user');
+    expect(last.content.map((b: { type: string; tool_use_id: string }) => [b.type, b.tool_use_id])).toEqual([
+      ['tool_result', 'toolu_a'],
+      ['tool_result', 'toolu_b'],
+    ]);
+    // the model reads the projection, not the full data
+    expect(JSON.parse(last.content[0].content)).toEqual({
+      kind: 'brief',
+      summary: 'One card today: thank Priya Patel.',
+      data: { cards: 1 },
+      href: '/today',
+    });
+    expect(last.content[0].is_error).toBeUndefined();
+    // thinking blocks go back unchanged
+    const assistant = reqs[1]!.body.messages.at(-2);
+    expect(assistant.role).toBe('assistant');
+    expect(assistant.content[0].type).toBe('thinking');
+    expect(assistant.content[0].signature).toMatch(/^sig_/);
+
+    // the stored history mirrors the runner's own messages, block for block
+    const rows = await store.messages(conversation.id);
+    expect(rows.map((r) => [r.role, r.meta ?? ''])).toEqual([
+      ['user', ''],
+      ['system', 'snapshot'],
+      ['assistant', ''],
+      ['user', ''],
+      ['assistant', ''],
+    ]);
+    expect(JSON.stringify(rows[3]!.content)).toBe(JSON.stringify(last.content));
+    expect(unpairedToolUses(rows)).toEqual([]);
+    expect(rows[2]!.model).toBe(MODEL);
+    expect(rows[2]!.usage).toMatchObject({ input: 1000, output: 50 });
+    const actions = await store.actions(conversation.id);
+    expect(actions.map((a) => [a.id, a.status])).toEqual([
+      ['toolu_a', 'done'],
+      ['toolu_b', 'done'],
+    ]);
+    expect(actions[0]!.messageId).toBe(rows[2]!.id);
+    expect(actions[0]!.envelope?.data).toEqual({
+      cards: [{ id: 's_1', kind: 'thank_you', person: 'Priya Patel' }],
+    });
+  });
+
+  it('keeps the cached prefix byte-identical across turns and appends the snapshot only when it changed', async () => {
+    await turn('first', [
+      { text: 'Looking.', toolCalls: [{ id: 'toolu_1', name: 'list_drafts', input: { status: 'draft' } }] },
+      { thinking: ['Nothing waiting.'], text: 'No drafts waiting.' },
+    ]);
+    await turn('second', [{ text: 'Still nothing.' }]);
+    const reqs = messageRequests(fake);
+    expect(reqs).toHaveLength(3);
+    const [r1, r2, r3] = reqs as [(typeof reqs)[0], (typeof reqs)[0], (typeof reqs)[0]];
+    for (const k of [
+      'system',
+      'tools',
+      'model',
+      'thinking',
+      'output_config',
+      'fallbacks',
+      'context_management',
+    ])
+      expect(JSON.stringify(r3.body[k])).toBe(JSON.stringify(r1.body[k]));
+    // turn 2 replays everything turn 1 sent, then the final assistant message of turn 1, then the new user turn
+    const n = r2.body.messages.length;
+    expect(JSON.stringify(r3.body.messages.slice(0, n))).toBe(JSON.stringify(r2.body.messages));
+    const tail = r3.body.messages.slice(n);
+    expect(tail.map((m: { role: string }) => m.role)).toEqual(['assistant', 'user']);
+    expect(tail[0].content.map((b: { type: string }) => b.type)).toEqual(['thinking', 'text']);
+    expect(tail[0].content[1].text).toBe('No drafts waiting.');
+    expect(tail[1].content).toEqual([{ type: 'text', text: 'second' }]);
+    // one snapshot in the whole history: the second turn's was identical but for the clock
+    expect(r3.body.messages.filter((m: { role: string }) => m.role === 'system')).toHaveLength(1);
+  });
+
+  it('answers a tool that throws with an is_error result and an error envelope, without the raw error in the copy', async () => {
+    const events = await turn('explode', [
+      { toolCalls: [{ id: 'toolu_x', name: 'explode', input: { why: 'test' } }] },
+      { text: 'That tool failed.' },
+    ]);
+    const result = events.find((e) => e.type === 'tool_result') as Extract<
+      TurnEvent,
+      { type: 'tool_result' }
+    >;
+    expect(result.envelope.kind).toBe('error');
+    expect(result.envelope.summary).toBe('The tool could not finish.');
+    const last = messageRequests(fake)[1]!.body.messages.at(-1);
+    expect(last.content[0]).toMatchObject({ type: 'tool_result', tool_use_id: 'toolu_x', is_error: true });
+    expect(JSON.parse(last.content[0].content).kind).toBe('error');
+    const rows = await store.messages(conversation.id);
+    expect(JSON.stringify(rows[3]!.content)).toBe(JSON.stringify(last.content));
+    expect((await store.getAction('toolu_x'))?.status).toBe('error');
+    expect(kinds(events).at(-1)).toBe('done');
+  });
+
+  it('never runs a tool whose input failed validation and mirrors the runner is_error result', async () => {
+    // truncated JSON parses as {} and fails the schema (personId and stage are required)
+    await turn('move', [
+      { toolCalls: [{ id: 'toolu_bad', name: 'move_pipeline_stage', rawJson: '{"personId": "p1", "sta' }] },
+      { text: 'I could not do that.' },
+    ]);
+    expect(stub.calls).toHaveLength(0);
+    const last = messageRequests(fake)[1]!.body.messages.at(-1);
+    expect(last.content[0]).toMatchObject({ type: 'tool_result', tool_use_id: 'toolu_bad', is_error: true });
+    const rows = await store.messages(conversation.id);
+    expect(JSON.stringify(rows[3]!.content)).toBe(JSON.stringify(last.content));
+    expect(unpairedToolUses(rows)).toEqual([]);
+  });
+
+  it('records a pending confirmation for a risky tool and stops the turn without claiming the action happened', async () => {
+    const events = await turn('send it', [
+      { toolCalls: [{ id: 'toolu_s', name: 'send_draft', input: { draftId: 'out_1' } }] },
+      { text: 'Approve to send it.' },
+    ]);
+    const result = events.find((e) => e.type === 'tool_result') as Extract<
+      TurnEvent,
+      { type: 'tool_result' }
+    >;
+    expect(result.envelope.kind).toBe('needs_confirmation');
+    expect(result.envelope.confirmationId).toBe('conf_1');
+    const pending = await store.getAction('conf_1');
+    expect(pending).toMatchObject({ status: 'pending', toolName: 'send_draft', input: { draftId: 'out_1' } });
+    expect(pending?.expiresAt).toBeTruthy();
+  });
+});
+
+describe('stop reasons', () => {
+  it('runs no tool on max_tokens with a tool_use and leaves the stored history continuable', async () => {
+    const events = await turn('do a lot', [
+      {
+        text: 'Working',
+        toolCalls: [{ id: 'toolu_t', name: 'add_note', input: { text: 'long' } }],
+        stopReason: 'max_tokens',
+      },
+    ]);
+    expect(stub.calls).toHaveLength(0);
+    const err = errorOf(events);
+    expect(err.kind).toBe('other');
+    expect(err.message).toMatch(/ran out of room/);
+    expect(messageRequests(fake)).toHaveLength(1);
+    const rows = await store.messages(conversation.id);
+    expect(rows.map((r) => [r.role, r.meta ?? ''])).toEqual([
+      ['user', ''],
+      ['system', 'snapshot'],
+      ['system', 'error'],
+    ]);
+    expect(unpairedToolUses(rows)).toEqual([]);
+    // the next turn still works and does not replay the orphaned snapshot before the new user message
+    const again = await turn('try again', [{ text: 'Done now.' }]);
+    expect(kinds(again).at(-1)).toBe('done');
+    const req = messageRequests(fake)[1]!.body.messages;
+    expect(req.map((m: { role: string }) => m.role)).toEqual(['user', 'user', 'system']);
+    expect(req[1].content).toEqual([{ type: 'text', text: 'try again' }]);
+  });
+
+  it('returns truncated text as the final message on max_tokens without a tool_use', async () => {
+    const events = await turn('write', [{ text: 'A long answer that was cut', stopReason: 'max_tokens' }]);
+    const done = events.at(-1) as Extract<TurnEvent, { type: 'done' }>;
+    expect(done.type).toBe('done');
+    expect(done.stopReason).toBe('max_tokens');
+    expect(text(events)).toBe('A long answer that was cut');
+  });
+
+  it('runs no tool on a refusal, stores the turn with cancelled results and shows the refusal copy', async () => {
+    const events = await turn('bad', [
+      {
+        text: 'I cannot',
+        toolCalls: [{ id: 'toolu_r', name: 'add_note', input: { text: 'x' } }],
+        stopReason: 'refusal',
+        stopDetails: { category: 'general_harms' },
+      },
+    ]);
+    expect(stub.calls).toHaveLength(0);
+    const err = errorOf(events);
+    expect(err.kind).toBe('refusal');
+    expect(err.message).toMatch(/declined/);
+    const rows = await store.messages(conversation.id);
+    expect(unpairedToolUses(rows)).toEqual([]);
+    const paired = rows[3]!.content as { type: string; is_error?: boolean; content: string }[];
+    expect(paired[0]).toMatchObject({ type: 'tool_result', is_error: true });
+    expect(paired[0]!.content).toMatch(/declined/);
+    expect(readPrefs().lastLlmError?.reason).toBe('refusal');
+  });
+
+  it('re-issues the turn once when the tool JSON cannot be parsed, without running any tool twice', async () => {
+    const events = await turn('move', [
+      { toolCalls: [{ id: 'toolu_j', name: 'list_pipeline', rawJson: '}{', chunks: 1 }] },
+      { toolCalls: [{ id: 'toolu_k', name: 'list_pipeline', input: {} }] },
+      { text: 'Here is your pipeline.' },
+    ]);
+    expect(kinds(events).at(-1)).toBe('done');
+    expect(stub.calls.map((c) => c.name)).toEqual(['list_pipeline']);
+    const reqs = messageRequests(fake);
+    expect(reqs).toHaveLength(3);
+    // the failed turn was never appended: the retry sends the same messages as the first request
+    expect(JSON.stringify(reqs[1]!.body.messages)).toBe(JSON.stringify(reqs[0]!.body.messages));
+    const rows = await store.messages(conversation.id);
+    expect(unpairedToolUses(rows)).toEqual([]);
+    expect(rows.filter((r) => r.role === 'assistant')).toHaveLength(2);
+  });
+
+  it('gives up after two consecutive unparseable turns', async () => {
+    const bad = { toolCalls: [{ id: 'toolu_j', name: 'list_pipeline', rawJson: '}{', chunks: 1 }] };
+    const events = await turn('move', [bad, bad, bad]);
+    expect(errorOf(events).kind).toBe('other');
+    expect(messageRequests(fake)).toHaveLength(3);
+    expect(stub.calls).toHaveLength(0);
+  });
+});
+
+describe('budget, abort and failures', () => {
+  it('counts every iteration against the daily caps and stops with cancelled results when the token cap is hit', async () => {
+    writePrefs({ llmDailyTokenCap: 1500 });
+    const events = await turn('go', [
+      {
+        toolCalls: [{ id: 'toolu_c', name: 'get_today_brief', input: {} }],
+        usage: { input_tokens: 1400, output_tokens: 200 },
+      },
+      { text: 'never served' },
+    ]);
+    expect(stub.calls).toHaveLength(0);
+    expect(errorOf(events).kind).toBe('cap');
+    expect(todaysLlmUsage(readPrefs())).toMatchObject({ requests: 1, inputTokens: 1400, outputTokens: 200 });
+    expect(messageRequests(fake)).toHaveLength(1);
+    const rows = await store.messages(conversation.id);
+    expect(unpairedToolUses(rows)).toEqual([]);
+    const paired = rows[3]!.content as { type: string; is_error?: boolean; content: string }[];
+    expect(paired[0]!.content).toMatch(/daily limit/);
+  });
+
+  it('refuses to start when the request cap is already reached, without touching the history', async () => {
+    writePrefs({ llmDailyRequestCap: 0 });
+    const events = await turn('go', [{ text: 'never' }]);
+    expect(errorOf(events).kind).toBe('cap');
+    expect(messageRequests(fake)).toHaveLength(0);
+    expect(await store.messages(conversation.id)).toHaveLength(0);
+  });
+
+  it('counts cached tokens and reads the usage of every iteration', async () => {
+    await turn('go', [
+      {
+        toolCalls: [{ id: 'toolu_u', name: 'get_today_brief', input: {} }],
+        usage: { input_tokens: 100, cache_read_input_tokens: 900, output_tokens: 10 },
+      },
+      { text: 'ok', usage: { input_tokens: 120, cache_read_input_tokens: 1000, output_tokens: 5 } },
+    ]);
+    expect(todaysLlmUsage(readPrefs())).toMatchObject({ requests: 1, inputTokens: 2120, outputTokens: 15 });
+    const rows = await store.messages(conversation.id);
+    expect(rows[2]!.usage).toEqual({ input: 100, output: 10, cacheRead: 900, cacheWrite: 0 });
+  });
+
+  it('stops on abort while a tool runs, records a cancelled is_error result and does not count it as a failure', async () => {
+    stub.delays.set('add_note', 5_000);
+    const ctl = new AbortController();
+    const p = turn(
+      'note',
+      [{ toolCalls: [{ id: 'toolu_n', name: 'add_note', input: { text: 'slow' } }] }, { text: 'never' }],
+      {},
+      ctl.signal,
+    );
+    await new Promise((r) => setTimeout(r, 50));
+    ctl.abort();
+    const events = await p;
+    const err = errorOf(events);
+    expect(err.kind).toBe('aborted');
+    expect(err.message).toBe('Stopped.');
+    const rows = await store.messages(conversation.id);
+    expect(unpairedToolUses(rows)).toEqual([]);
+    const paired = rows.find((r, i) => r.role === 'user' && i > 2)!.content as {
+      is_error?: boolean;
+      content: string;
+    }[];
+    expect(paired[0]).toMatchObject({ is_error: true });
+    expect(paired[0]!.content).toMatch(/[Cc]ancelled/);
+    expect(readPrefs().lastLlmError).toBeUndefined();
+    expect((await store.getAction('toolu_n'))?.status).toBe('error');
+  });
+
+  it('stops on abort mid-stream and leaves only the user turn stored', async () => {
+    const ctl = new AbortController();
+    const p = turn('hello', [{ text: 'Hel', hang: true }], {}, ctl.signal);
+    await new Promise((r) => setTimeout(r, 50));
+    ctl.abort();
+    const events = await p;
+    expect(errorOf(events).kind).toBe('aborted');
+    const rows = await store.messages(conversation.id);
+    expect(rows.filter((r) => r.role === 'assistant')).toHaveLength(0);
+    const again = await turn('again', [{ text: 'Hi.' }]);
+    expect(kinds(again).at(-1)).toBe('done');
+  });
+
+  it('maps a rejected key to no_key, a server error to network and records the failure for Settings', async () => {
+    const e1 = await turn('a', [
+      { error: { status: 401, type: 'authentication_error', message: 'invalid x-api-key' } },
+    ]);
+    expect(errorOf(e1).kind).toBe('no_key');
+    expect(errorOf(e1).message).not.toMatch(/x-api-key/);
+    expect(readPrefs().lastLlmError?.reason).toBe('auth');
+    const e2 = await turn('b', [{ error: { status: 529, type: 'overloaded_error', message: 'Overloaded' } }]);
+    expect(errorOf(e2).kind).toBe('network');
+    const e3 = await turn('c', [{ error: { status: 429, type: 'rate_limit_error', message: 'slow down' } }]);
+    expect(errorOf(e3).kind).toBe('network');
+    const rows = await store.messages(conversation.id);
+    expect(rows.filter((r) => r.meta === 'error')).toHaveLength(3);
+    // error notes never reach the model
+    const again = await turn('d', [{ text: 'ok' }]);
+    expect(kinds(again).at(-1)).toBe('done');
+    const sent = messageRequests(fake).at(-1)!.body.messages;
+    expect(
+      sent.some((m: { content: { text?: string }[] }) => m.content[0]?.text?.includes('stopped working')),
+    ).toBe(false);
+  });
+});
+
+describe('fallbacks and compaction', () => {
+  it('stores a fallback block, shows who answered and replays the block next turn', async () => {
+    const events = await turn('x', [
+      { fallback: { from: MODEL, to: 'claude-opus-5' }, text: 'Answered by the fallback.' },
+    ]);
+    expect(events.some((e) => e.type === 'progress' && /claude-opus-5/.test(e.text))).toBe(true);
+    const rows = await store.messages(conversation.id);
+    const assistant = rows.find((r) => r.role === 'assistant')!;
+    expect((assistant.content as { type: string }[])[0]!.type).toBe('fallback');
+    expect(assistant.model).toBe('claude-opus-5');
+    await turn('y', [{ text: 'ok' }]);
+    const replayed = messageRequests(fake)[1]!.body.messages.find(
+      (m: { role: string }) => m.role === 'assistant',
+    );
+    expect(replayed.content[0]).toMatchObject({
+      type: 'fallback',
+      from: { model: MODEL },
+      to: { model: 'claude-opus-5' },
+    });
+  });
+
+  it('stores a compaction block whole and replays it', async () => {
+    await turn('long chat', [{ compaction: { content: 'Summary so far.' }, text: 'Continuing.' }]);
+    await turn('next', [{ text: 'ok' }]);
+    const replayed = messageRequests(fake)[1]!.body.messages.find(
+      (m: { role: string }) => m.role === 'assistant',
+    );
+    expect(replayed.content[0]).toMatchObject({ type: 'compaction', content: 'Summary so far.' });
+    expect(replayed.content[0].encrypted_content).toMatch(/^enc/);
+  });
+});
