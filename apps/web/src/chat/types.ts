@@ -26,6 +26,10 @@ export type ResultKind =
   | 'settings'
   | 'import'
   | 'prep'
+  /** tap-to-answer pills under a message: data `{ options: { label: string; message: string }[] }` */
+  | 'choices'
+  /** an inline setup widget (connect Google, import LinkedIn, add a Claude key, upload a resume): data `{ what: SetupWhat }` */
+  | 'setup'
   | 'needs_confirmation'
   | 'error';
 
@@ -37,10 +41,21 @@ export interface ResultEnvelope<D = unknown> {
   summary: string;
   /** in-app route for "Open in app" ("/people/p12", "/map?reach=1&to=p12", "/inbox?draft=out_1") */
   href?: string;
+  /** the UI opens `href` in the side panel by itself (the assistant just made or found the thing the student asked for) */
+  autoOpen?: boolean;
   /** only on needs_confirmation: the single-use token the Approve button presents */
   confirmationId?: string;
   /** on needs_confirmation: the assistant had further planned steps after this action */
   continues?: boolean;
+}
+
+/** Which setup widget a `setup` envelope asks for. */
+export type SetupWhat = 'google' | 'linkedin' | 'claude_key' | 'resume';
+
+/** One tap-to-answer option: `label` is the pill, `message` is sent as the student's turn when tapped. */
+export interface ChoiceOption {
+  label: string;
+  message: string;
 }
 
 /** Third-party text (emails, notes, LinkedIn fields) is wrapped before it reaches the model. */
