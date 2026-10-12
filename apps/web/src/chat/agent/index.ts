@@ -301,7 +301,7 @@ export function createChatEngine(deps: ChatEngineDeps): ChatEngine {
 
     async cancel(actionId) {
       const action = await store.getAction(actionId);
-      if (!action || action.status !== 'pending') return;
+      if (action?.status !== 'pending') return;
       await store.updateAction(actionId, { status: 'cancelled' }, clock());
       await store.append(
         action.conversationId,

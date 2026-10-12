@@ -189,7 +189,7 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
     kind: 'refuse',
     text: `Orbit cannot ${what} from the chat yet. ${HELP_TEXT}`,
   });
-  const useTool = (
+  const viaTool = (
     tool: string,
     input: Record<string, unknown>,
     lead?: string,
@@ -214,7 +214,7 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
   });
   const ambiguous = (name: string, candidates: MatchablePerson[]): RouterIntent =>
     has('search_people')
-      ? useTool('search_people', { query: stripName(name) }, 'More than one person matches. Pick one:')
+      ? viaTool('search_people', { query: stripName(name) }, 'More than one person matches. Pick one:')
       : {
           kind: 'text',
           text: `More than one person matches "${stripName(name)}": ${candidates.map((p) => p.displayName).join(', ')}. Say the full name.`,
@@ -232,7 +232,7 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
       lower,
     )
   )
-    return useTool('get_today_brief', {}, undefined, 'show the brief');
+    return viaTool('get_today_brief', {}, undefined, 'show the brief');
 
   // free-form questions and judgement calls need the model: say so before any pattern could half-match them
   if (NEEDS_MODEL.test(lower) && !/^(who is|who's|show|open|find|look ?up|tell me about)\b/i.test(lower))
@@ -245,7 +245,7 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
     ) &&
     !/^(follow up|bump|nudge|ping|draft|write)\b/i.test(lower)
   )
-    return useTool('list_pipeline', { stage: 'no_response' }, undefined, 'list who went quiet');
+    return viaTool('list_pipeline', { stage: 'no_response' }, undefined, 'list who went quiet');
 
   // follow up with <name>
   {
@@ -253,7 +253,7 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
     if (m) {
       const r = person(m[1]!);
       if (r.person)
-        return useTool('create_draft', { kind: 'bump', personId: r.person.id }, undefined, 'draft a bump');
+        return viaTool('create_draft', { kind: 'bump', personId: r.person.id }, undefined, 'draft a bump');
       if (r.candidates.length) return ambiguous(m[1]!, r.candidates);
       return nobody(m[1]!);
     }
@@ -265,7 +265,7 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
       lower,
     )
   )
-    return useTool('list_drafts', { status: 'draft' }, undefined, 'list drafts');
+    return viaTool('list_drafts', { status: 'draft' }, undefined, 'list drafts');
 
   // move <name> to <stage>
   {
@@ -279,7 +279,7 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
       const stage = findStage(m[2]!);
       const r = person(m[1]!);
       if (stage && r.person)
-        return useTool('move_pipeline_stage', { personId: r.person.id, stage }, undefined, 'move a chat');
+        return viaTool('move_pipeline_stage', { personId: r.person.id, stage }, undefined, 'move a chat');
       if (stage && r.candidates.length) return ambiguous(m[1]!, r.candidates);
       if (stage) return nobody(m[1]!);
       if (r.person || r.candidates.length)
@@ -300,17 +300,17 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
       if (who && body) {
         const r = person(who);
         if (r.person)
-          return useTool(
+          return viaTool(
             'add_note',
             { text: body, personId: r.person.id, source: 'manual' },
             undefined,
             'save a note',
           );
         if (r.candidates.length) return ambiguous(who, r.candidates);
-        return useTool('add_note', { text: `${who}: ${body}`, source: 'manual' }, undefined, 'save a note');
+        return viaTool('add_note', { text: `${who}: ${body}`, source: 'manual' }, undefined, 'save a note');
       }
       const free = onlyText ?? rest;
-      if (free && free.trim()) {
+      if (free?.trim()) {
         const r = person(free);
         if (r.person && !/\s/.test(free.trim()) === false && free.trim().split(' ').length <= 3)
           return {
@@ -318,7 +318,7 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
             text: `What should the note about ${r.person.displayName} say? Write it like: note about ${r.person.firstName}: she suggested the platform team.`,
             href: '/notes/new',
           };
-        return useTool('add_note', { text: free.trim(), source: 'manual' }, undefined, 'save a note');
+        return viaTool('add_note', { text: free.trim(), source: 'manual' }, undefined, 'save a note');
       }
       return {
         kind: 'text',
@@ -337,7 +337,7 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
       const target = stripName(m[1]!);
       const r = person(target);
       if (r.person)
-        return useTool(
+        return viaTool(
           'find_routes_to_person',
           { personId: r.person.id },
           undefined,
@@ -346,7 +346,7 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
       const company = ctx.companies.find((c) => c.toLowerCase() === target.toLowerCase()) ?? target;
       if (r.candidates.length && !ctx.companies.some((c) => c.toLowerCase() === target.toLowerCase()))
         return ambiguous(target, r.candidates);
-      return useTool('find_routes_to_company', { company }, undefined, 'find routes to a company');
+      return viaTool('find_routes_to_company', { company }, undefined, 'find routes to a company');
     }
   }
 
@@ -370,7 +370,7 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
             : 'outreach');
       const r = person(name);
       if (r.person)
-        return useTool('create_draft', { kind, personId: r.person.id }, undefined, 'start a draft');
+        return viaTool('create_draft', { kind, personId: r.person.id }, undefined, 'start a draft');
       if (r.candidates.length) return ambiguous(name, r.candidates);
       return nobody(name);
     }
@@ -396,14 +396,14 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
         lower,
       )
     )
-      return useTool('list_pipeline', {}, undefined, 'list the pipeline');
+      return viaTool('list_pipeline', {}, undefined, 'list the pipeline');
     if (stage && (pipelineWord || lower.split(' ').length <= 4) && !/\bto\b.*\bto\b/.test(lower)) {
       // "who is scheduled", "show replied", "chats in scheduling", "no response"
       const r = person(
         text.replace(new RegExp(`\\b(${STAGE_ALIASES[stage].map(esc).join('|')})\\b`, 'i'), ''),
       );
       if (!r.person || /\b(pipeline|chats?|stage|show|list|who)\b/i.test(lower))
-        return useTool('list_pipeline', { stage }, undefined, 'list a stage');
+        return viaTool('list_pipeline', { stage }, undefined, 'list a stage');
     }
   }
 
@@ -439,11 +439,11 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
     );
     const name = m ? m[1]! : text;
     const r = person(name);
-    if (r.person) return useTool('get_person', { personId: r.person.id }, undefined, 'open a person');
+    if (r.person) return viaTool('get_person', { personId: r.person.id }, undefined, 'open a person');
     if (r.candidates.length) return ambiguous(name, r.candidates);
     if (m) {
       if (has('search_people') && stripName(name).length >= 2)
-        return useTool('search_people', { query: stripName(name) }, undefined, 'search people');
+        return viaTool('search_people', { query: stripName(name) }, undefined, 'search people');
       return nobody(name);
     }
   }

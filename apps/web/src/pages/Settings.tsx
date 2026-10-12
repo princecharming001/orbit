@@ -4,6 +4,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { Check, Download, Trash2 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Navigate, NavLink, useNavigate, useParams } from 'react-router-dom';
+import { chatMode, chatModeNote } from '../chat/agent/mode';
 import { LinkedInImportButton } from '../components/LinkedInImport';
 import { ResumeFacetList } from '../components/ResumeFacets';
 import { db, wipeDatabase } from '../db/schema';
@@ -853,6 +854,12 @@ const AI_FEATURES: { key: LlmFeature; label: string; sends: string }[] = [
     label: 'Summarize people',
     sends: "A person's saved facts and recent interactions are sent to Anthropic.",
   },
+  {
+    key: 'chat',
+    label: 'Chat on the home page',
+    sends:
+      'What you type in the chat, a short summary of your day and pipeline, and whatever Claude looks up with its tools (people, drafts, notes you ask about) are sent to Anthropic. On by default once a key is saved; without it the chat understands a fixed set of commands.',
+  },
 ];
 
 function ClaudeCard() {
@@ -934,6 +941,11 @@ function ClaudeCard() {
           </label>
         ))}
       </fieldset>
+      <p className="text-[12px] text-ink-3 mt-2" data-testid="ai-chat-row">
+        Chat: {chatMode() === 'llm' ? `Claude, ${MODEL}` : 'Orbit commands only'}. Today: {usage.requests} of{' '}
+        {reqCap} requests.
+        {chatModeNote() ? ` ${chatModeNote()!.text}` : ''}
+      </p>
       <details className="mt-4 text-[13px]" data-testid="ai-advanced">
         <summary className="cursor-pointer text-ink-3">Advanced: daily limits, usage and privacy</summary>
         <p className="text-[12px] text-ink-3 mt-2">
