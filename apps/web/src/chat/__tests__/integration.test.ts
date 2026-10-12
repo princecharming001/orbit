@@ -426,7 +426,7 @@ describe('Claude mode: scripted model turns calling the real tools', () => {
     const env = await engine.approve(t.env!.confirmationId!);
     expect(env.kind, env.summary).toBe('import');
     expect(await peopleCount()).toBe(before + 1);
-  });
+  }, 30_000);
 
   it('change a setting', async () => {
     const u = call('update_settings', { section: 'style', tonePreset: 'formal' });

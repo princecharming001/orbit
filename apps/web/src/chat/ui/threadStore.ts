@@ -92,6 +92,13 @@ export function resetThread() {
   set({ conversation: undefined, temporary: false, turns: [], running: false });
 }
 
+const autoOpenListeners = new Set<(href: string) => void>();
+/** Called with the in-app route when a live tool result asks to be shown in the side panel (never for stored history). */
+export function subscribeAutoOpen(l: (href: string) => void): () => void {
+  autoOpenListeners.add(l);
+  return () => autoOpenListeners.delete(l);
+}
+
 function updateTurn(turnId: string, fn: (t: AssistantTurn) => AssistantTurn) {
   set((s) => ({
     turns: s.turns.map((t) => (t.id === turnId && t.role === 'assistant' ? fn(t) : t)),
@@ -130,6 +137,7 @@ export function applyEvent(turnId: string, e: TurnEvent) {
       }));
       break;
     case 'tool_result':
+      if (e.envelope.autoOpen && e.envelope.href) for (const l of autoOpenListeners) l(e.envelope.href);
       updateTurn(turnId, (t) => ({
         ...t,
         blocks: t.blocks.map((b) =>

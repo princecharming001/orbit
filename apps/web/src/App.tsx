@@ -1,7 +1,7 @@
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { ChatEngineProvider } from './chat/engineContext';
 import type { ChatEngine } from './chat/types';
-import { ChatHome } from './chat/ui/ChatHome';
+import { ChatWithPanel } from './chat/ui/ChatWithPanel';
 import { AppShell } from './components/AppShell';
 import { CompanyPage } from './pages/Company';
 import { Discover } from './pages/Discover';
@@ -73,7 +73,7 @@ export function App({ chatEngine }: { chatEngine?: ChatEngine }) {
                 }
               />
               <Route element={<Home />}>
-                <Route index element={<ChatHome />} />
+                <Route index element={<ChatWithPanel />} />
                 <Route path="/today" element={<Today />} />
                 <Route path="/pipeline" element={<Pipeline />} />
                 <Route path="/people" element={<People />} />
