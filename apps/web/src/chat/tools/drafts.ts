@@ -31,6 +31,7 @@ import { z } from '../../zod';
 import type { ToolContext } from '../types';
 import {
   type AnyTool,
+  autoOpen,
   defineTool,
   draftRef,
   firstLine,
@@ -146,12 +147,14 @@ export const createDraft = defineTool({
         reopened: r.existed,
         target: personRef(target),
       };
-      return ok(
-        'draft',
-        out,
-        out,
-        `${r.existed ? 'You already asked' : 'Drafted an intro request to'} ${person.firstName} for an introduction to ${target.displayName}. Read it, then send it when you are happy.`,
-        `/inbox?draft=${r.draft.id}`,
+      return autoOpen(
+        ok(
+          'draft',
+          out,
+          out,
+          `${r.existed ? 'You already asked' : 'Drafted an intro request to'} ${person.firstName} for an introduction to ${target.displayName}. Read it, then send it when you are happy.`,
+          `/inbox?draft=${r.draft.id}`,
+        ),
       );
     }
     let kind = input.kind;
@@ -223,12 +226,14 @@ export const createDraft = defineTool({
     const needs = draft.needsInput?.length
       ? ` It still needs a line only you can give: ${draft.needsInput.join(', ')}.`
       : '';
-    return ok(
-      'draft',
-      out,
-      out,
-      `${r.reopened ? 'Reopened the' : 'Drafted a'} ${MESSAGE_KIND_LABELS[draft.kind].toLowerCase()} to ${person.firstName} (${CHANNEL_LABELS[draft.channel]}).${kindNote}${needs} Nothing is sent until approved.`,
-      `/people/${person.id}?open=${draft.id}`,
+    return autoOpen(
+      ok(
+        'draft',
+        out,
+        out,
+        `${r.reopened ? 'Reopened the' : 'Drafted a'} ${MESSAGE_KIND_LABELS[draft.kind].toLowerCase()} to ${person.firstName} (${CHANNEL_LABELS[draft.channel]}).${kindNote}${needs} Nothing is sent until approved.`,
+        `/people/${person.id}?open=${draft.id}`,
+      ),
     );
   },
   toModel,
@@ -369,12 +374,14 @@ export const redraftWithInputs = defineTool({
     if (!done) throw new Error('Orbit could not redraft this message. The text is unchanged.');
     const fresh = (await db.outbound.get(draft.id)) ?? done;
     const out = { ...(await draftOut(ctx, fresh)), keptYourWords: !!mine };
-    return ok(
-      'draft',
-      out,
-      out,
-      `${mine ? 'Added your line to your message.' : 'Redrafted with your line.'}${fresh.needsInput?.length ? ` It still needs: ${fresh.needsInput.join(', ')}.` : ''}`,
-      `/inbox?draft=${fresh.id}`,
+    return autoOpen(
+      ok(
+        'draft',
+        out,
+        out,
+        `${mine ? 'Added your line to your message.' : 'Redrafted with your line.'}${fresh.needsInput?.length ? ` It still needs: ${fresh.needsInput.join(', ')}.` : ''}`,
+        `/inbox?draft=${fresh.id}`,
+      ),
     );
   },
   toModel,

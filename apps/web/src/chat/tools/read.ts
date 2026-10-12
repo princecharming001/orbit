@@ -73,6 +73,7 @@ import { z } from '../../zod';
 import type { ToolContext } from '../types';
 import {
   type AnyTool,
+  autoOpen,
   cardRef,
   chatRef,
   clip,
@@ -1735,12 +1736,8 @@ export const openPage = defineTool({
       href = `/today?${input.cardId ? `card=${input.cardId}` : `person=${input.personId}`}`;
     if (input.page === 'add_note' && input.personId) href = `/notes/new?person=${input.personId}`;
     const label = input.page.replace(/_/g, ' ');
-    return ok(
-      'text',
-      { href, page: input.page },
-      { href, page: input.page },
-      `Open ${label} in the app.`,
-      href,
+    return autoOpen(
+      ok('text', { href, page: input.page }, { href, page: input.page }, `Open ${label} in the app.`, href),
     );
   },
   toModel,

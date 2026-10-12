@@ -91,6 +91,13 @@ describe('every tool parses and executes its example input against the demo', ()
       get_usage: {},
       explain_stage: { stage: 'followed_up' },
       open_page: { page: 'person', id: ids.person.id, tab: 'prep' },
+      offer_choices: {
+        options: [
+          { label: 'Draft it', message: "Let's do it" },
+          { label: 'What else?', message: 'What else can you do?' },
+        ],
+      },
+      show_setup: { what: 'claude_key' },
       draft_warmup_comment: { postClaim: 'new analysts should ship something in week one' },
       ensure_card_drafts: { scope: 'today_more' },
       manage_suggestion: { suggestionId: ids.snoozable.id, action: 'snooze', days: 3 },
