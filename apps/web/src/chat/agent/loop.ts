@@ -189,7 +189,7 @@ export function buildRunnerTools(
 ): BetaRunnableTool[] {
   const specs = sortedSpecs(registry).filter(modelCallable);
   const strict = strictToolNames(specs);
-  return specs.map((spec) => {
+  const built = specs.map((spec) => {
     const tool = betaZodTool({
       name: spec.name,
       description: spec.description,
@@ -211,6 +211,11 @@ export function buildRunnerTools(
       strict: strict.has(spec.name),
     };
   });
+  // a cache breakpoint after the last tool: the tool list is the same in every conversation, while the system block
+  // carries the conversation's nonce, so without it every new conversation would write the tools to the cache again
+  const last = built.at(-1);
+  if (last) built[built.length - 1] = { ...last, cache_control: { type: 'ephemeral' } };
+  return built;
 }
 
 /** The request params, built once per turn. Everything but `messages` is byte-identical across a conversation. */

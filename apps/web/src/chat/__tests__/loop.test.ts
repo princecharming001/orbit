@@ -95,6 +95,9 @@ describe('request shape', () => {
     expect(names).toEqual([...names].sort());
     // the imports take text or base64 like the real registry, so every tool has a JSON Schema form and is offered
     expect(names).toEqual([...stub.registry.keys()].sort());
+    // one cache breakpoint after the last tool, so every conversation shares the cached tool list
+    expect(body.tools.at(-1).cache_control).toEqual({ type: 'ephemeral' });
+    expect(body.tools.slice(0, -1).some((t: { cache_control?: unknown }) => t.cache_control)).toBe(false);
     for (const t of body.tools) {
       // strict on the risky tools (the API allows twenty strict tools); the rest are validated by Zod before they run
       expect(t.strict).toBe(stub.registry.get(t.name)!.kind === 'risky');

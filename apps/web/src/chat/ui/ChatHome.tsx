@@ -211,12 +211,6 @@ function useAutoScroll(turns: unknown, running: boolean) {
     setPinned(next);
     if (next && !atBottom) el.scrollTop = el.scrollHeight;
   }, []);
-  // a new turn (the student sent something) always brings the thread back to the newest line
-  useEffect(() => {
-    if (!running) return;
-    pinnedRef.current = true;
-    setPinned(true);
-  }, [running]);
   useEffect(toEnd, [turns, running]);
   const jump = useCallback(() => {
     const el = elRef.current;
