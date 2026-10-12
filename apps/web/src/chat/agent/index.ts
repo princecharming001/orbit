@@ -22,6 +22,7 @@ import { type ExecuteFn, runTurn } from './loop';
 import { chatMode, chatModeNote, SETTINGS_ROUTE } from './mode';
 import type { MatchablePerson } from './people-match';
 import { type RouterIntent, routeUtterance } from './router';
+import { peopleWaitingNow } from './setup';
 import { ChatStore, conversationNonce } from './store';
 
 export { CHAT_BETAS, MAX_ITERATIONS, MAX_TOKENS, runTurn } from './loop';
@@ -114,6 +115,8 @@ export function createChatEngine(deps: ChatEngineDeps): ChatEngine {
     const user = getUser();
     const spec = deps.registry.get(tool);
     const toolUseId = newId('run');
+    // what the assistant says comes first, then the card or the choices under it
+    if (lead) onEvent({ type: 'text', delta: lead });
     onEvent({ type: 'tool_start', toolUseId, toolName: tool, progress: spec?.progress });
     let env: ResultEnvelope;
     try {
@@ -125,7 +128,9 @@ export function createChatEngine(deps: ChatEngineDeps): ChatEngine {
         summary: 'The tool could not finish.',
       };
     }
-    const text = [lead, env.summary].filter(Boolean).join(' ');
+    // a row of choices or a setup widget speaks for itself: its summary is for the model, not for the thread
+    const quiet = !!lead && (env.kind === 'choices' || env.kind === 'setup');
+    const text = (quiet ? [lead] : [lead, env.summary]).filter(Boolean).join(' ');
     const row = await store.append(
       conversation.id,
       {
@@ -146,7 +151,6 @@ export function createChatEngine(deps: ChatEngineDeps): ChatEngine {
     });
     if (env.kind === 'needs_confirmation' && env.confirmationId) liveInputs.set(env.confirmationId, input);
     onEvent({ type: 'tool_result', toolUseId, envelope: env });
-    if (lead) onEvent({ type: 'text', delta: lead });
     onEvent({ type: 'done', stopReason: 'end_turn', messageId: row.id });
   };
 
@@ -187,7 +191,7 @@ export function createChatEngine(deps: ChatEngineDeps): ChatEngine {
 
   /** The open cards, unsent drafts and next booked chat the router can name. */
   const routerExtras = async (userId: string, now: Date) => {
-    const [cards, drafts, events] = await Promise.all([
+    const [cards, drafts, events, briefs] = await Promise.all([
       db.suggestions
         .where('userId')
         .equals(userId)
@@ -205,7 +209,9 @@ export function createChatEngine(deps: ChatEngineDeps): ChatEngine {
           (e) => e.status !== 'cancelled' && !!e.chatId && new Date(e.startAt).getTime() > now.getTime(),
         )
         .toArray(),
+      db.briefs.where('userId').equals(userId).toArray(),
     ]);
+    const latestBrief = briefs.sort((a, b) => b.generatedAt.localeCompare(a.generatedAt))[0];
     const next = events.sort((a, b) => a.startAt.localeCompare(b.startAt))[0];
     const nextChat = next?.chatId ? await db.chats.get(next.chatId) : undefined;
     return {
@@ -216,6 +222,7 @@ export function createChatEngine(deps: ChatEngineDeps): ChatEngine {
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
         .map((d) => ({ id: d.id, personId: d.personId, status: d.status, kind: d.kind })),
       nextChat: nextChat ? { personId: nextChat.personId } : undefined,
+      waiting: peopleWaitingNow(cards, latestBrief, now),
     };
   };
 
@@ -236,6 +243,7 @@ export function createChatEngine(deps: ChatEngineDeps): ChatEngine {
       people,
       companies,
       ...extra,
+      firstName: user.firstName,
       modeNote: chatModeNote()?.text ?? '',
       settingsHref: SETTINGS_ROUTE,
     });

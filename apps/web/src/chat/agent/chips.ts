@@ -68,6 +68,49 @@ export const CHIPS: ChipSpec[] = [
   },
 ];
 
+/**
+ * The three chips an empty account starts with, instead of the full set. The first is the registry's own LinkedIn
+ * chip (same id, so it opens the same file picker), the other two just say something: the home sends their
+ * `message` as a normal turn, so the assistant (or the no-key router) answers the way it would if it were typed.
+ */
+export const STARTER_MESSAGE_CHIPS: ChipSpec[] = [
+  {
+    id: 'add-person',
+    label: 'Add someone I met',
+    tool: '',
+    input: {},
+    asUser: 'Add someone I met',
+    message: 'Add someone I met',
+  },
+  {
+    id: 'what-can-you-do',
+    label: 'What can you do?',
+    tool: '',
+    input: {},
+    asUser: 'What can you do?',
+    message: 'What can you do?',
+  },
+];
+
+/** The starter set for an account with nobody in it: bring in LinkedIn, add someone, ask what Orbit does. */
+export function starterChips(all: ChipSpec[]): ChipSpec[] {
+  const linkedin = all.find((c) => c.id === 'linkedin');
+  const [addPerson, whatCanYouDo] = STARTER_MESSAGE_CHIPS as [ChipSpec, ChipSpec];
+  return [...(linkedin ? [{ ...linkedin, label: 'Bring in my LinkedIn' }] : []), addPerson, whatCanYouDo];
+}
+
+/** The chips the home shows: the starter three while there is nobody in the account, else all of them. */
+export function homeChips(all: ChipSpec[], emptyAccount: boolean): ChipSpec[] {
+  return emptyAccount ? starterChips(all) : all;
+}
+
+/** Chips in rows of four (two rows of four for the full set, one row for the starter three). */
+export function chipRows(chips: ChipSpec[], perRow = 4): ChipSpec[][] {
+  const rows: ChipSpec[][] = [];
+  for (let i = 0; i < chips.length; i += perRow) rows.push(chips.slice(i, i + perRow));
+  return rows;
+}
+
 /** What a chip runs once its resolver looked at the data. `lead` is said before the result. */
 export interface ChipRun {
   tool: string;

@@ -3,8 +3,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useSession } from '../../state/session';
 import { cx } from '../../ui';
+import { chipRows, homeChips } from '../agent/chips';
 import { useChatEngine } from '../engineContext';
 import { Composer } from './Composer';
+import { homeStatusLine, useHomeStatus } from './homeStatus';
 import { Thread } from './Thread';
 import { threadActions, useThread } from './threadStore';
 
@@ -17,7 +19,10 @@ export function ChatHome() {
   const engine = useChatEngine();
   const thread = useThread();
   const actions = useMemo(() => threadActions(engine), [engine]);
-  const chips = engine.chips();
+  const status = useHomeStatus();
+  // an account with nobody in it gets three starter chips; the full set comes once there are people
+  const chips = status.ready ? homeChips(engine.chips(), status.empty) : [];
+  const statusLine = homeStatusLine(status);
   const mode = engine.mode();
   const modeNote = engine.modeNote();
   const inConversation = thread.turns.length > 0;
@@ -94,22 +99,38 @@ export function ChatHome() {
           <h1 className="type-greeting text-center mb-6 sm:mb-7 px-2" data-testid="greeting">
             Hey {first}, what&rsquo;s on your mind today?
           </h1>
+          {statusLine && (
+            <p
+              className="text-center text-[14px] text-ink-3 -mt-3 mb-5 sm:-mt-4 sm:mb-6"
+              data-testid="home-status"
+            >
+              {statusLine}
+            </p>
+          )}
           {composer('home')}
           {footer}
           <div className="mt-6 sm:mt-8 space-y-2.5" data-testid="chips">
-            {[chips.slice(0, 4), chips.slice(4, 8)].map((row, i) => (
+            {chipRows(chips).map((row, i) => (
               <div
                 key={i}
                 className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:justify-center sm:gap-2.5"
               >
-                {row.map((c) => (
+                {row.map((c, j) => (
                   <button
                     key={c.id}
                     type="button"
-                    className="glass glass-hover type-chip min-h-11 sm:min-h-10 px-3.5 sm:px-4 rounded-full text-ink-2 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 text-center"
+                    className={cx(
+                      'glass glass-hover type-chip min-h-11 sm:min-h-10 px-3.5 sm:px-4 rounded-full text-ink-2 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 text-center',
+                      // an odd chip out fills its row on a phone
+                      row.length % 2 === 1 && j === row.length - 1 && 'col-span-2 sm:col-auto',
+                    )}
                     onClick={() =>
                       // a chip that needs a file opens the picker; the file then goes in like a "+" attachment
-                      c.tool === 'import_linkedin' ? chipFile.current?.click() : actions.runChip(c.id)
+                      c.message
+                        ? actions.send(c.message)
+                        : c.tool === 'import_linkedin'
+                          ? chipFile.current?.click()
+                          : actions.runChip(c.id)
                     }
                     disabled={thread.running}
                     data-testid={`chip-${c.id}`}

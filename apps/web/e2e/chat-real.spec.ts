@@ -41,6 +41,9 @@ test.describe('Chat home on the real engine (no key)', () => {
     await expect(page.getByTestId('router-note')).toContainText(/Without a Claude key/);
     await expect(page.getByTestId('composer-mode')).toContainText(/Templates/);
 
+    // the demo has people waiting, so the greeting carries one small status line
+    await expect(page.getByTestId('home-status')).toHaveText(/waiting on a message from you\.$/);
+
     // a chip runs a real tool: the brief's cards are the demo's own
     await page.getByTestId('chip-who-today').click();
     await expect(page.getByTestId('turn-user').last()).toHaveText(/Who should I message today/);
@@ -60,6 +63,45 @@ test.describe('Chat home on the real engine (no key)', () => {
     await ask(page, "why hasn't Daniel replied?");
     await expect(lastTurn(page)).toContainText(/needs a Claude key/, { timeout: 20_000 });
     await expect(page.getByText(/[—–]/)).toHaveCount(0);
+  });
+
+  test('a hello is answered like a friend: one line, the one useful thing, no menu', async ({ page }) => {
+    await home(page);
+    await ask(page, 'hey');
+    const turn = lastTurn(page);
+    await expect(turn).toContainText(/Hey Alex\./, { timeout: 20_000 });
+    await expect(turn).toContainText(/waiting on a message today/);
+    const text = (await turn.innerText()).trim();
+    expect(text.split(/\s+/).length).toBeLessThan(60);
+    await expect(turn.locator('ol, ul, h1, h2, h3, strong')).toHaveCount(0);
+    expect(text).not.toMatch(/[—–!]/);
+  });
+
+  test('an empty account starts with three chips and one easy first step, not a manual', async ({ page }) => {
+    await home(page);
+    // nobody in the account: the sample student's people go
+    await page.evaluate(async () => {
+      const db = (window as unknown as { __orbitDb: { people: { clear(): Promise<void> } } }).__orbitDb;
+      await db.people.clear();
+    });
+    await page.goto('');
+    await expect(page.getByTestId('greeting')).toHaveText(/Hey Alex, what.s on your mind today\?/);
+    const chips = page.locator('[data-testid^="chip-"]');
+    await expect(chips).toHaveCount(3);
+    await expect(chips).toHaveText(['Bring in my LinkedIn', 'Add someone I met', 'What can you do?']);
+    await expect(page.getByTestId('home-status')).toHaveText(
+      "Let's get you set up. It takes about two minutes.",
+    );
+    // "What can you do?" is a plain message: a short answer pointing at LinkedIn, no numbered list
+    await page.getByTestId('chip-what-can-you-do').click();
+    await expect(page.getByTestId('turn-user').last()).toHaveText('What can you do?');
+    const turn = lastTurn(page);
+    await expect(turn).toContainText(/LinkedIn/, { timeout: 20_000 });
+    await expect(turn.locator('ol, ul, h1, h2, h3, strong')).toHaveCount(0);
+    expect((await turn.innerText()).trim().split(/\s+/).length).toBeLessThan(60);
+    // "Add someone I met" asks one question
+    await ask(page, 'Add someone I met');
+    await expect(lastTurn(page)).toContainText(/Who did you meet\?/, { timeout: 20_000 });
   });
 
   test('a thank-you draft card: Approve hands the edited text off and the card shows the hand-off', async ({

@@ -77,7 +77,7 @@ const REQUESTS: [string, string, Expect][] = [
   ['nav', 'find Hannah', { tool: 'get_person', kinds: ['person'] }],
   // 1 today and the brief
   ['today', "what's on today", { tool: 'get_today_brief', kinds: ['brief'] }],
-  ['today', 'good morning', { tool: 'get_today_brief', kinds: ['brief'] }],
+  ['today', 'start my day', { tool: 'get_today_brief', kinds: ['brief'] }],
   ['today', 'snooze Diego Silva for a week', { tool: 'manage_suggestion', kinds: ['suggestion'] }],
   ['today', 'refresh my brief', { tool: 'refresh_brief', kinds: ['brief'] }],
   ['today', 'dismiss Victor', { tool: 'dismiss_suggestion', kinds: ['needs_confirmation'] }],
@@ -126,7 +126,14 @@ const REQUESTS: [string, string, Expect][] = [
   ['discover', 'show my recommendations', { tool: 'list_recommendations', kinds: ['people'] }],
   ['discover', 'who should I meet', { tool: 'list_recommendations', kinds: ['people'] }],
   // 8 integrations and imports
-  ['integrations', 'import my linkedin connections', { href: '/settings/integrations' }],
+  [
+    'integrations',
+    'import my linkedin connections',
+    // the drop zone once the setup tool exists, the pointer to Settings before
+    registry.has('show_setup')
+      ? { tool: 'show_setup', kinds: ['setup'] }
+      : { href: '/settings/integrations' },
+  ],
   ['integrations', 'disconnect google', { tool: 'disconnect_google', kinds: ['needs_confirmation'] }],
   ['integrations', 'how many claude requests have I used', { tool: 'get_usage', kinds: ['settings'] }],
   // 9 settings and account

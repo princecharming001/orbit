@@ -1,6 +1,7 @@
 import type { ChatStage, MessageKind } from '@orbit/core';
-import type { ToolSpec } from '../types';
+import type { ChoiceOption, ToolSpec } from '../types';
 import { type MatchablePerson, resolvePerson } from './people-match';
+import { peopleWaiting } from './setup';
 
 /**
  * The no-key path: a deterministic intent router over the same tool registry. It is a table of patterns, not an
@@ -26,6 +27,10 @@ export interface RouterContext {
   drafts?: { id: string; personId: string; status: string; kind: string }[];
   /** the person of the next booked chat, for "prep me for my next chat" */
   nextChat?: { personId: string };
+  /** the student's first name, for a warm greeting */
+  firstName?: string;
+  /** how many people have a message waiting on the student today (default: counted from `cards`) */
+  waiting?: number;
   /** the mode note's sentence about adding a key, appended to refusals */
   modeNote: string;
   settingsHref: string;
@@ -171,6 +176,17 @@ function clean(text: string): string {
     .trim();
 }
 
+/** The utterance as small talk sees it: lower case, straight quotes, no trailing punctuation. */
+function text0(raw: string): string {
+  return raw
+    .replace(/[‘’]/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+    .replace(/[?.!,]+$/, '')
+    .trim();
+}
+
 const CHATTY_PREFIX =
   /^(hey|hi|hello|ok|okay|please|orbit|can you|could you|would you|will you|i want to|i'd like to|i need to|let's|lets|just)[,!.]?\s+/i;
 
@@ -213,6 +229,20 @@ function findKind(text: string): MessageKind | undefined {
 export function stageLabel(stage: ChatStage): string {
   return STAGE_ALIASES[stage][0]!;
 }
+
+const GREETING =
+  /^(hey|hi|hello|yo|howdy|hiya|heya|sup|hey hey|good (morning|afternoon|evening))( there| orbit| friend| everyone)?$/;
+const WHO_ARE_YOU = /^(who are you|what are you|who is orbit|what is orbit|what'?s orbit|what do you do)$/;
+const WHAT_CAN_YOU_DO =
+  /^(help|help me|what can you do|what can you do for me|what can i (say|ask|do)|how does this work|how do i start|where do i start)$/;
+const THANKS = /^(thanks|thank you|thx|ty|cheers|many thanks|thanks a lot|thank you so much|appreciate it)$/;
+const OK = /^(ok|okay|k|kk|cool|great|nice|awesome|perfect|got it|sounds good|alright|sweet|neat)$/;
+const NOT_NOW =
+  /^(not now|maybe later|later|no|nope|no thanks|nah|i'?m good|im good|all good|nothing|never ?mind|not yet|skip)$/;
+const YES =
+  /^(show me|yes|yeah|yep|yup|sure|ok show me|go ahead|let'?s do it|let'?s go|do it|sounds good show me)$/;
+const ADD_SOMEONE =
+  /^(add|new|log) (someone|somebody|a person|a contact|a new person)( (i|we) (met|know|talked to|spoke to))?$|^(i )?(met|know) (someone|somebody)( new)?$/;
 
 /** Patterns that only a model could serve: say so instead of guessing. */
 const NEEDS_MODEL =
@@ -263,15 +293,129 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
           text: `More than one person matches "${stripName(name)}": ${candidates.map((p) => p.displayName).join(', ')}. Say the full name.`,
         };
 
+  // ---- small talk: short, warm, one next step. A tap-to-answer reply when the tool exists, plain words when not. ----
+  const name = ctx.firstName?.trim();
+  const humans = ctx.people.filter((p) => !p.hiddenAt).length;
+  const empty = humans === 0;
+  const waiting = ctx.waiting ?? peopleWaiting(ctx.cards ?? []);
+  const unsent = (ctx.drafts ?? []).filter((d) => d.status === 'draft').length;
+  const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+  const hello = (word: string) => (name ? `${word} ${name}.` : `${word} there.`);
+
+  /** Text first, then the tool's widget under it. Falls back to plain words when the tool is not in the registry. */
+  const withTool = (
+    tool: 'offer_choices' | 'show_setup',
+    input: Record<string, unknown>,
+    lead: string,
+    fallback: string,
+  ): RouterIntent => {
+    const spec = ctx.registry.get(tool);
+    const parsed = spec?.input.safeParse(input);
+    if (parsed?.success) return { kind: 'tool', tool, input: parsed.data as Record<string, unknown>, lead };
+    return { kind: 'text', text: fallback };
+  };
+  const choose = (statement: string, question: string, options: ChoiceOption[]): RouterIntent => {
+    // without the tool, the useful sentence stays and the first pill becomes words to type
+    const kept = question.replace(/\s*[^.?]*\?$/, '').trim();
+    return withTool(
+      'offer_choices',
+      { options },
+      `${statement} ${question}`,
+      `${[statement, kept].filter(Boolean).join(' ')} Say "${options[0]!.message}" and I'll take it from there.`,
+    );
+  };
+  const setupLinkedin = (statement: string): RouterIntent =>
+    withTool(
+      'show_setup',
+      { what: 'linkedin' },
+      statement,
+      `${statement} Use the + button and choose Import LinkedIn connections.`,
+    );
+  /** The one most useful thing to do right now, as a sentence, a question and its answers. */
+  const bestMove = () => {
+    if (waiting > 0)
+      return {
+        statement: `You've got ${plural(waiting, 'person', 'people')} waiting on a message today.`,
+        question: 'Want to start there?',
+        options: [
+          { label: 'Show me', message: "What's on today?" },
+          { label: 'Not now', message: 'Not now' },
+        ],
+      };
+    if (unsent > 0)
+      return {
+        statement: `You've got ${plural(unsent, 'draft', 'drafts')} ready for a look.`,
+        question: 'Want to start there?',
+        options: [
+          { label: 'Show me', message: 'Show my drafts' },
+          { label: 'Not now', message: 'Not now' },
+        ],
+      };
+    return {
+      statement: 'Nothing is waiting on you today.',
+      question: 'Want to see where your chats stand?',
+      options: [
+        { label: 'Show me', message: 'Show my pipeline' },
+        { label: 'Not now', message: 'Not now' },
+      ],
+    };
+  };
+  const EMPTY_START =
+    "Easiest first step is your LinkedIn connections. Drop the export here when you're ready.";
+  const casual = text0(raw);
+
+  if (GREETING.test(casual)) {
+    const word = /^good (morning|afternoon|evening)/.test(casual)
+      ? casual.replace(/ (there|orbit|friend|everyone)$/, '')
+      : 'Hey';
+    const hi = hello(word.charAt(0).toUpperCase() + word.slice(1));
+    if (empty) return setupLinkedin(`${hi} ${EMPTY_START}`);
+    const m = bestMove();
+    return choose(hi, `${m.statement} ${m.question}`, m.options);
+  }
+  if (WHO_ARE_YOU.test(casual)) {
+    const intro =
+      "I'm Orbit, your networking copilot. I help you reach out to people and keep every chat moving.";
+    if (empty) return setupLinkedin(`${intro} ${EMPTY_START}`);
+    const m = bestMove();
+    return choose(intro, `${m.statement} ${m.question}`, m.options);
+  }
+  if (WHAT_CAN_YOU_DO.test(casual)) {
+    const intro = 'I find who to message, write the note, and keep track of every chat.';
+    if (empty) return setupLinkedin(`${intro} ${EMPTY_START}`);
+    return choose(intro, 'What sounds useful?', [
+      { label: "What's on today", message: "What's on today?" },
+      { label: 'Who went quiet', message: 'Who went quiet?' },
+      { label: 'Where my chats stand', message: 'Show my pipeline' },
+    ]);
+  }
+  if (THANKS.test(casual) || OK.test(casual)) {
+    const lead = THANKS.test(casual) ? 'Anytime.' : 'Okay.';
+    if (empty) return setupLinkedin(`${lead} ${EMPTY_START}`);
+    const m = bestMove();
+    return choose(lead, `${m.statement} ${m.question}`, m.options);
+  }
+  if (NOT_NOW.test(casual)) return { kind: 'text', text: "No problem. I'm here whenever you want me." };
+  if (YES.test(casual)) {
+    if (empty) return setupLinkedin("Great. Let's bring in your LinkedIn connections.");
+    if (waiting > 0) return viaTool('get_today_brief', {}, undefined, 'show the brief');
+    if (unsent > 0) return viaTool('list_drafts', { list: 'to_send' }, undefined, 'list drafts');
+    return viaTool('list_pipeline', {}, undefined, 'list the pipeline');
+  }
+  if (ADD_SOMEONE.test(casual))
+    return {
+      kind: 'text',
+      text: 'Nice. Who did you meet? Give me their name and where they work, like: add Jordan Lee at Figma.',
+    };
+
   if (!text) return { kind: 'text', text: HELP_TEXT };
 
   // help
-  if (/^(help|what can you do|what can i (say|ask|do)|commands?|options|menu)$/i.test(lower))
-    return { kind: 'text', text: HELP_TEXT };
+  if (/^(commands?|options|menu|list of commands)$/i.test(lower)) return { kind: 'text', text: HELP_TEXT };
 
   // today's brief
   if (
-    /^(today|brief|my brief|my day|agenda|what'?s? (on|up|new|next)( today| for today)?|what (is|should i do|do i do|do i have)( on| today| for today| now)*|show (me )?(today|my day|the brief)|good (morning|afternoon|evening)|start my day|plan for today|to ?do)$/i.test(
+    /^(today|brief|my brief|my day|agenda|what'?s? (on|up|new|next)( today| for today)?|what (is|should i do|do i do|do i have)( on| today| for today| now)*|show (me )?(today|my day|the brief)|start my day|plan for today|to ?do)$/i.test(
       lower,
     )
   )
@@ -775,12 +919,15 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
   }
 
   // LinkedIn import
-  if (/linkedin/i.test(lower) && /\b(import|export|upload|connections|csv|zip|load|add)\b/i.test(lower))
+  if (/linkedin/i.test(lower) && /\b(import|export|upload|connections|csv|zip|load|add)\b/i.test(lower)) {
+    if (has('show_setup'))
+      return setupLinkedin("Sure. Drop your LinkedIn export here and I'll bring your connections in.");
     return {
       kind: 'text',
       text: 'To import LinkedIn connections, use the + button and choose Import LinkedIn connections, or open Settings, Integrations. Orbit reads Connections.csv or the whole ZIP from your LinkedIn data export.',
       href: ctx.settingsHref,
     };
+  }
 
   // pipeline, optionally by stage
   {
