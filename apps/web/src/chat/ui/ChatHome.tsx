@@ -25,7 +25,7 @@ export function ChatHome() {
   useEffect(() => {
     actions.refresh();
   }, [actions]);
-  const { scrollRef, pinned, jump } = useAutoScroll(thread.turns, thread.running);
+  const { scrollRef, onScroll, pinned, jump } = useAutoScroll(thread.turns, thread.running);
   const first = user?.firstName?.trim() || 'there';
   const cardActions = useMemo(
     () => ({
@@ -87,7 +87,7 @@ export function ChatHome() {
     return (
       <div className="relative h-full flex flex-col px-4 sm:px-6" data-testid="chat-home">
         <div className="absolute right-4 top-3 sm:right-6 sm:top-4 z-10">{temporaryPill}</div>
-        <div className="flex-1 min-h-[56px]" />
+        <div className="flex-[1.25] min-h-[56px]" />
         <div className="w-full max-w-[980px] mx-auto pt-12">
           <h1 className="type-greeting text-center mb-6 sm:mb-7 px-2" data-testid="greeting">
             Hey {first}, what&rsquo;s on your mind today?
@@ -130,6 +130,7 @@ export function ChatHome() {
       <div className="absolute right-4 top-3 sm:right-6 sm:top-4 z-20">{temporaryPill}</div>
       <div
         ref={scrollRef}
+        onScroll={onScroll}
         className="flex-1 min-h-0 overflow-y-auto scroll-thin px-4 sm:px-6"
         data-testid="thread-scroll"
       >
@@ -147,7 +148,7 @@ export function ChatHome() {
           <ArrowDown size={14} aria-hidden /> Latest
         </button>
       )}
-      <div className="absolute inset-x-0 bottom-0 px-4 sm:px-6 pb-3 sm:pb-5 pt-6 bg-gradient-to-t from-[#eef4ff]/90 via-[#eef4ff]/60 to-transparent pointer-events-none">
+      <div className="absolute inset-x-0 bottom-0 px-4 sm:px-6 pb-3 sm:pb-5 pt-6 bg-gradient-to-t from-[#eef4ff] via-[#eef4ff]/95 via-60% to-transparent pointer-events-none">
         <div className="pointer-events-auto max-w-[800px] mx-auto">
           {composer('thread')}
           {footer}
@@ -159,33 +160,37 @@ export function ChatHome() {
 
 /** Keeps the thread scrolled to the newest line while the student stays at the bottom; stops when they scroll up. */
 function useAutoScroll(turns: unknown, running: boolean) {
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const elRef = useRef<HTMLDivElement | null>(null);
+  const observer = useRef<ResizeObserver | undefined>(undefined);
   const [pinned, setPinned] = useState(true);
   const pinnedRef = useRef(true);
+  const toEnd = () => {
+    const el = elRef.current;
+    if (el && pinnedRef.current) el.scrollTop = el.scrollHeight;
+  };
+  // the scroller mounts with the first turn; cards keep growing after their events (an editor sizing itself, a live
+  // query landing), so the column's size is watched, not only the turns
+  const scrollRef = useCallback((el: HTMLDivElement | null) => {
+    observer.current?.disconnect();
+    elRef.current = el;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    observer.current = new ResizeObserver(toEnd);
+    if (el.firstElementChild) observer.current.observe(el.firstElementChild);
+  }, []);
   const onScroll = useCallback(() => {
-    const el = scrollRef.current;
+    const el = elRef.current;
     if (!el) return;
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
     pinnedRef.current = atBottom;
     setPinned(atBottom);
   }, []);
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    el.addEventListener('scroll', onScroll, { passive: true });
-    return () => el.removeEventListener('scroll', onScroll);
-  }, [onScroll]);
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el || !pinnedRef.current) return;
-    el.scrollTop = el.scrollHeight;
-  }, [turns, running]);
+  useEffect(toEnd, [turns, running]);
   const jump = useCallback(() => {
-    const el = scrollRef.current;
+    const el = elRef.current;
     if (!el) return;
     el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
     pinnedRef.current = true;
     setPinned(true);
   }, []);
-  return { scrollRef, pinned, jump };
+  return { scrollRef, onScroll, pinned, jump };
 }

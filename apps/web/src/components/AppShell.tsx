@@ -110,6 +110,13 @@ export function AppShell() {
   useEffect(() => {
     if (user?.onboardingCompletedAt) dailyMaintenance(user).catch(console.error);
   }, [user?.id, user?.onboardingCompletedAt]);
+  // the phone's More sheet closes on Escape like any other sheet
+  useEffect(() => {
+    if (!more) return;
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setMore(false);
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [more]);
   const toggleSidebar = () => {
     setExpanded((v) => {
       try {
