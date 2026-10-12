@@ -1,43 +1,290 @@
 @import "tailwindcss";
 
+/*
+  Orbit's shared theme: liquid glass over a quiet blue gradient, Plus Jakarta Sans, a blue accent.
+  Token names are the ones every page already uses (ink, line, canvas, accent, good, warn, bad), mapped to the new
+  values, so the pages keep working; the glass classes below are what the shell and the chat home are built from.
+*/
 @theme {
-  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --color-ink: #0f1115;
-  --color-ink-2: #3f4650;
-  --color-ink-3: #767d89;
-  --color-line: #e6e8ec;
-  --color-line-2: #f0f1f4;
+  --font-sans:
+    "Plus Jakarta Sans", "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --color-ink: #0e1424;
+  --color-ink-2: #4a5570;
+  --color-ink-3: #637089;
+  --color-line: #dde4f1;
+  --color-line-2: #ebf0f8;
   --color-canvas: #ffffff;
-  --color-canvas-2: #f7f8fa;
-  --color-accent: #5b5bd6;
-  --color-accent-2: #4a4ac2;
-  --color-accent-soft: #eeeefb;
-  --color-good: #1f8a4c;
-  --color-good-soft: #e8f6ee;
-  --color-warn: #b7791f;
-  --color-warn-soft: #fbf3e3;
+  --color-canvas-2: #f3f6fc;
+  --color-accent: #2f6bff;
+  --color-accent-2: #2358e6;
+  --color-accent-soft: #eaf0ff;
+  --color-aqua: #3ec7f2;
+  --color-good: #1b8a4c;
+  --color-good-soft: #e6f6ec;
+  --color-warn: #a86f12;
+  --color-warn-soft: #fbf3e1;
   --color-bad: #c43d3d;
   --color-bad-soft: #fbeaea;
-  --radius-card: 12px;
-  --shadow-card: 0 1px 2px rgba(15, 17, 21, 0.04), 0 8px 24px rgba(15, 17, 21, 0.06);
+  --radius-card: 14px;
+  --shadow-card: 0 1px 2px rgba(30, 60, 120, 0.05), 0 8px 30px rgba(30, 60, 120, 0.08);
 }
 
 :root {
   color-scheme: light;
+  --accent: #2f6bff;
+  --accent-hover: #2358e6;
+  --accent-tint: rgba(47, 107, 255, 0.1);
+  --aqua: #3ec7f2;
+  --glass-bg: rgba(255, 255, 255, 0.66);
+  --glass-bg-strong: rgba(255, 255, 255, 0.74);
+  --glass-tint: rgba(62, 199, 242, 0.07);
+  --glass-border: rgba(255, 255, 255, 0.55);
+  --glass-highlight: rgba(255, 255, 255, 0.85);
+  --glass-shadow: 0 8px 30px rgba(30, 60, 120, 0.1);
+  --glass-shadow-hover: 0 12px 36px rgba(30, 60, 120, 0.14);
+  --glass-blur: 20px;
+  --glass-sat: 160%;
+  --glass-radius: 20px;
 }
 html,
 body,
 #root {
   height: 100%;
 }
-body {
-  @apply bg-canvas text-ink font-sans antialiased text-[14px] leading-[1.5];
+/* the backdrop: near-white to a pale cool blue; it has to carry colour or the blur has nothing to show */
+html {
+  background: linear-gradient(180deg, #fbfcff 0%, #f0f5ff 55%, #e9f1ff 100%) fixed;
 }
+body {
+  @apply text-ink font-sans antialiased text-[14px] leading-[1.5];
+  position: relative;
+  /* Plus Jakarta Sans sets a narrow word space; a touch more keeps small text readable */
+  word-spacing: 0.04em;
+}
+/* two very soft colour blobs (aqua, periwinkle) that drift extremely slowly behind everything */
+body::before,
+body::after {
+  content: "";
+  position: fixed;
+  z-index: -1;
+  pointer-events: none;
+  border-radius: 50%;
+  will-change: transform;
+}
+body::before {
+  width: 62vw;
+  height: 62vw;
+  left: -14vw;
+  top: -22vw;
+  background: radial-gradient(closest-side, rgba(62, 199, 242, 0.14), rgba(62, 199, 242, 0));
+  animation: blob-a 48s ease-in-out infinite alternate;
+}
+body::after {
+  width: 56vw;
+  height: 56vw;
+  right: -16vw;
+  bottom: -20vw;
+  background: radial-gradient(closest-side, rgba(47, 107, 255, 0.12), rgba(47, 107, 255, 0));
+  animation: blob-b 56s ease-in-out infinite alternate;
+}
+@keyframes blob-a {
+  from {
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    transform: translate3d(9vw, 7vw, 0);
+  }
+}
+@keyframes blob-b {
+  from {
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    transform: translate3d(-8vw, -9vw, 0);
+  }
+}
+
+/* Component classes live in the components layer, so a utility on the same element (a radius, a border colour,
+   position: absolute) still wins. */
+@layer components {
+  /* ---- glass surfaces ---------------------------------------------------------------------------------- */
+  .glass {
+    position: relative;
+    isolation: isolate;
+    background: linear-gradient(180deg, var(--glass-tint), transparent 40%), var(--glass-bg);
+    border-radius: var(--glass-radius);
+    border: 1px solid var(--glass-border);
+    box-shadow:
+      inset 0 1px 0 var(--glass-highlight),
+      var(--glass-shadow);
+    transition:
+      background-color 0.18s ease,
+      box-shadow 0.18s ease,
+      transform 0.18s ease;
+  }
+  .glass-strong {
+    background: linear-gradient(180deg, var(--glass-tint), transparent 40%), var(--glass-bg-strong);
+  }
+  .glass-hover:hover {
+    background: linear-gradient(180deg, var(--glass-tint), transparent 40%), rgba(255, 255, 255, 0.8);
+    box-shadow:
+      inset 0 1px 0 var(--glass-highlight),
+      var(--glass-shadow-hover);
+  }
+  .glass-lift:focus-within {
+    box-shadow:
+      inset 0 1px 0 var(--glass-highlight),
+      var(--glass-shadow-hover);
+    transform: translateY(-1px);
+  }
+  @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    .glass {
+      /* literal values in the -webkit- line: custom properties do not resolve there in older Safari */
+      -webkit-backdrop-filter: blur(20px) saturate(160%);
+      backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+    }
+  }
+  /* a gradient edge that reads as a bevel: a 1px ring masked out of a gradient */
+  .glass::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    padding: 1px;
+    background: linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.9),
+      rgba(255, 255, 255, 0.15) 35%,
+      rgba(47, 107, 255, 0.16) 70%,
+      rgba(255, 255, 255, 0.6)
+    );
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+  }
+  /* a soft specular lobe at the top-left, under the content so text never washes out */
+  .glass::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    pointer-events: none;
+    background: radial-gradient(120% 60% at 20% -10%, rgba(255, 255, 255, 0.55), transparent 55%);
+  }
+  /* no backdrop-filter: a solid, readable card */
+  @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    .glass {
+      background: rgba(255, 255, 255, 0.96);
+    }
+  }
+  @media (prefers-reduced-transparency: reduce) {
+    .glass {
+      background: rgba(255, 255, 255, 0.96);
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
+    .glass::after {
+      display: none;
+    }
+  }
+  @media (prefers-contrast: more) {
+    .glass {
+      border: 2px solid currentColor;
+      background: #fff;
+    }
+    .glass::before,
+    .glass::after {
+      display: none;
+    }
+  }
+
+  /* ---- type scale for the chat surface --------------------------------------------------------------- */
+  .type-greeting {
+    font-size: 32px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    line-height: 1.15;
+  }
+  @media (max-width: 767px) {
+    .type-greeting {
+      font-size: 26px;
+    }
+  }
+  .type-body {
+    font-size: 15px;
+    line-height: 1.55;
+    letter-spacing: -0.005em;
+  }
+  .type-chip {
+    font-size: 13.5px;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    line-height: 1.2;
+  }
+
+  /* a tooltip on hover and keyboard focus, for the icon rail */
+  .tip {
+    position: relative;
+  }
+  .tip::after {
+    content: attr(data-tip);
+    position: absolute;
+    left: calc(100% + 10px);
+    top: 50%;
+    transform: translateY(-50%) translateX(-4px);
+    background: #0e1424;
+    color: #fff;
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0;
+    line-height: 1;
+    padding: 7px 9px;
+    border-radius: 8px;
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transition:
+      opacity 0.12s ease,
+      transform 0.12s ease;
+    z-index: 50;
+  }
+  .tip:hover::after,
+  .tip:focus-visible::after {
+    opacity: 1;
+    transform: translateY(-50%) translateX(0);
+  }
+
+  /* the label of a tool that is running: a light sweep across the words */
+  .shimmer {
+    background: linear-gradient(90deg, #0e1424 0%, #0e1424 35%, #9aa6c0 50%, #0e1424 65%, #0e1424 100%);
+    background-size: 200% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: shimmer 1.6s linear infinite;
+  }
+  @keyframes shimmer {
+    from {
+      background-position: 100% 0;
+    }
+    to {
+      background-position: -100% 0;
+    }
+  }
+}
+
 * {
   box-sizing: border-box;
 }
 ::selection {
-  background: #dcdcf7;
+  background: #d6e3ff;
 }
 a {
   color: inherit;
@@ -59,7 +306,7 @@ select {
   height: 8px;
 }
 .scroll-thin::-webkit-scrollbar-thumb {
-  background: #e0e2e7;
+  background: #d7deec;
   border-radius: 8px;
 }
 @keyframes pulse-ring {
@@ -109,7 +356,21 @@ select {
 }
 @media (prefers-reduced-motion: reduce) {
   .fade-up,
-  .shake-x {
+  .shake-x,
+  .shimmer,
+  body::before,
+  body::after {
     animation: none;
+  }
+  .shimmer {
+    color: #0e1424;
+    background: none;
+  }
+  .glass,
+  .tip::after {
+    transition: none;
+  }
+  .glass-lift:focus-within {
+    transform: none;
   }
 }

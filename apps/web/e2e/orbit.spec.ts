@@ -43,7 +43,8 @@ async function landingHeaderStates(page: Page): Promise<string[]> {
   });
   const states: string[] = [];
   for (let i = 0; i < 5; i++) {
-    await page.goto('');
+    // signed in, "/" is the chat home; the landing page keeps its own route
+    await page.goto('welcome');
     await expect(page.getByTestId('landing-actions').getByRole('button').first()).toBeVisible();
     const seen = await page.evaluate(
       () => (window as unknown as { __landingStates: string[] }).__landingStates,
@@ -581,7 +582,11 @@ test.describe('Manual onboarding', () => {
     await expect(page.getByTestId('rec-card').first()).toBeVisible();
     // Coming back to the landing page never offers to wipe this profile, not even while it is being read.
     for (const state of await landingHeaderStates(page)) expect(state).toBe('Open Orbit');
+    // signed in, the home route is the chat, not the landing page
     await page.goto('');
+    await expect(page.getByTestId('greeting')).toContainText(/Hey Sam/);
+    await expect(page.getByRole('button', { name: /try it with demo data|try the demo/i })).toHaveCount(0);
+    await page.goto('welcome');
     await expect(page.getByRole('button', { name: /open orbit/i }).first()).toBeVisible();
     await expect(page.getByRole('button', { name: /try it with demo data|try the demo/i })).toHaveCount(0);
     await page
@@ -609,7 +614,7 @@ test.describe('Manual onboarding', () => {
     // while the stored profile is read, the header never offers the first-visit buttons, not even for one frame
     for (const state of await landingHeaderStates(page))
       expect(state).not.toMatch(/try the demo|get started/i);
-    await page.goto('');
+    await page.goto('welcome');
     const dialogs: string[] = [];
     page.on('dialog', (d) => {
       dialogs.push(d.message());
@@ -931,7 +936,7 @@ test.describe('First-run guidance and plain next steps', () => {
   test('the demo says it is demo data and leads to your own setup', async ({ page }) => {
     await loadDemo(page);
     await expect(page.getByTestId('demo-banner')).toContainText(/made-up student/);
-    await page.goto('');
+    await page.goto('welcome');
     await expect(page.getByRole('button', { name: /set up orbit for me/i }).first()).toBeVisible();
     await page.goto('today');
     await page.getByTestId('demo-start-own').click();
