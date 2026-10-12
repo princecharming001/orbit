@@ -13,7 +13,10 @@ import { converse, judge, SIM_DIR, SIM_ENABLED, saveRun, seed, teardownSim, type
 import { SCENARIOS } from './scenarios';
 
 const only = process.env.SIM_GROUP;
-const list = SCENARIOS.filter((s) => !only || s.group === only || only === 'all');
+const ids = process.env.SIM_ONLY?.split(',').map((x) => x.trim());
+const list = SCENARIOS.filter(
+  (s) => (!only || s.group === only || only === 'all') && (!ids || ids.includes(s.id)),
+);
 const scorecard: { id: string; group: string; verdict: VerdictT; tools: string[] }[] = [];
 
 describe.skipIf(!SIM_ENABLED)(`sim: simulated students${only ? ` (${only})` : ''}`, () => {

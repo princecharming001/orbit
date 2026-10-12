@@ -550,6 +550,9 @@ export const sendDraft = defineTool({
             ? { tool: 'confirm_handoff', input: { draftId: fresh.id } }
             : undefined,
     };
+    // The mailto summary already says it opened in the mail app, so drop the toast that only repeats that
+    // (keep any other toast, e.g. the "browser blocked the tab" fallback).
+    const extraNotes = notes.filter((n) => !/^opened in your mail app\.?$/i.test(n.trim())).join(' ');
     const summary =
       fresh.status === 'queued'
         ? `Sending to ${person.firstName} in 60 seconds through Gmail. Say undo to stop it; after that it is sent.`
@@ -559,7 +562,7 @@ export const sendDraft = defineTool({
             ? fresh.handoffVia === 'copy'
               ? `The text is ready to paste into Gmail${fresh.subject ? ` with the subject "${fresh.subject}"` : ''}. Once it is sent, say so and Orbit logs it.`
               : fresh.channel === 'gmail'
-                ? `Opened in the mail app addressed to ${person.firstName}. Once it is sent, say so and Orbit logs it. ${notes.join(' ')}`
+                ? `Opened in the mail app addressed to ${person.firstName}. Once it is sent, say so and Orbit logs it.${extraNotes ? ` ${extraNotes}` : ''}`
                 : `${notes.join(' ') || 'Copied and opened on LinkedIn.'} Once it is sent, say so and Orbit logs it.`
             : `The message is ${fresh.status}.`;
     return ok('draft', out, out, summary, `/inbox?draft=${fresh.id}`);
