@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import logoUrl from '../assets/logo.webp';
 import { useChatEngine } from '../chat/engineContext';
 import type { ChatConversation } from '../chat/types';
 import { threadActions, useThread } from '../chat/ui/threadStore';
@@ -531,12 +532,18 @@ function Recent({ chat }: { chat: ReturnType<typeof threadActions> }) {
   );
 }
 
-export function Logo({ size = 22 }: { size?: number }) {
+/** Orbit's mark: the glass atom on its dark tile, rounded like an app icon. */
+export function Logo({ size = 26 }: { size?: number }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden>
-      <circle cx="16" cy="16" r="14" fill="none" stroke="#2F6BFF" strokeWidth="2" />
-      <circle cx="16" cy="16" r="4" fill="#2F6BFF" />
-      <circle cx="26" cy="10" r="2.5" fill="#3EC7F2" />
-    </svg>
+    <img
+      src={logoUrl}
+      width={size}
+      height={size}
+      alt=""
+      aria-hidden
+      draggable={false}
+      className="shrink-0 rounded-[24%] shadow-[0_1px_2px_rgba(15,23,42,0.18)]"
+      data-testid="logo"
+    />
   );
 }
