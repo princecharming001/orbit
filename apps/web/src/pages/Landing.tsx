@@ -320,7 +320,7 @@ function HeroMock() {
   ];
   return (
     <div className="relative fade-up" style={{ animationDelay: '80ms' }}>
-      <div className="absolute -inset-6 hidden md:block bg-[radial-gradient(ellipse_at_center,_rgba(91,91,214,0.12),_transparent_60%)]" />
+      <div className="absolute -inset-6 hidden md:block bg-[radial-gradient(ellipse_at_center,_rgba(47,107,255,0.12),_transparent_60%)]" />
       <div className="relative z-10 rounded-[14px] border border-line bg-canvas shadow-[var(--shadow-card)] overflow-hidden">
         <div className="h-10 border-b border-line flex items-center px-4 gap-2 text-[12px] text-ink-3">
           <span className="w-2.5 h-2.5 rounded-full bg-line" />
@@ -364,7 +364,7 @@ function OrbitMini() {
   const dots = Array.from({ length: 14 }, (_, i) => ({
     r: [38, 62, 86][i % 3]!,
     a: (i / 14) * Math.PI * 2 + (i % 2 ? 0.3 : 0),
-    c: ['#5B5BD6', '#1f8a4c', '#b7791f', '#3f4650'][i % 4]!,
+    c: ['#2F6BFF', '#1f8a4c', '#b7791f', '#3f4650'][i % 4]!,
   }));
   return (
     <svg
@@ -377,7 +377,7 @@ function OrbitMini() {
       {[38, 62, 86].map((r) => (
         <circle key={r} cx="100" cy="100" r={r} fill="none" stroke="#eceef2" />
       ))}
-      <circle cx="100" cy="100" r="9" fill="#5B5BD6" />
+      <circle cx="100" cy="100" r="9" fill="#2F6BFF" />
       {dots.map((d, i) => (
         <circle
           key={i}
