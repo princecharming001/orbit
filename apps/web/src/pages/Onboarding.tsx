@@ -1,4 +1,4 @@
-import { newId, yearLabel } from '@orbit/core';
+import { yearLabel } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Check, Minus, Upload } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
@@ -6,12 +6,20 @@ import { Link, Navigate, useLocation, useNavigate, useParams } from 'react-route
 import { Logo } from '../components/AppShell';
 import { ResumeFacetList } from '../components/ResumeFacets';
 import { db } from '../db/schema';
-import { generateBrief, recommendationsRefresh } from '../engine/brief';
+import { finishOnboarding, setOnboardingStep } from '../engine/account';
+import { connectAndSyncGoogle, recordLinkedInImport } from '../engine/integrations';
 import { connectionsText, importConnectionsCsv } from '../engine/linkedin';
 import { saveResume } from '../engine/resume';
-import { syncGoogle } from '../engine/sync';
+import {
+  removeTargetCompany,
+  saveGoals,
+  savePreferences,
+  setTargetPriority,
+  splitList,
+  updateProfile,
+} from '../engine/settings';
 import { addTargetCompanies } from '../engine/targets';
-import { connectGoogle, googleClientId, googleScopeWarning } from '../integrations/google';
+import { googleClientId } from '../integrations/google';
 import { envGoogleClientId, readPrefs, writePrefs } from '../integrations/prefs';
 import { useSession } from '../state/session';
 import { Button, Card, cx, FunctionPicker, Input, Label, Select, Spinner, Textarea } from '../ui';
@@ -83,7 +91,7 @@ export function Onboarding() {
   const after = (s: number) => STEPS.find((x) => x > s) ?? 8;
   const before = (s: number) => [...STEPS].reverse().find((x) => x < s) ?? 2;
   const go = async (next: number) => {
-    await db.users.update(user.id, { onboardingStep: Math.max(user.onboardingStep, next) });
+    await setOnboardingStep(user.id, next);
     nav(onboardingPath(next), { state: { fromStep: step } });
   };
   // Back is the browser's Back when the step before is where the student came from, so the browser's own Back
@@ -93,10 +101,7 @@ export function Onboarding() {
     else nav(onboardingPath(to), { replace: true });
   };
   const finish = async () => {
-    await db.users.update(user.id, { onboardingStep: 11, onboardingCompletedAt: new Date().toISOString() });
-    const fresh = (await db.users.get(user.id))!;
-    await recommendationsRefresh(fresh);
-    await generateBrief(fresh, 'welcome');
+    await finishOnboarding(user.id);
     nav('/today');
   };
   const status = (s: number, i: number): 'done' | 'skipped' | 'current' | 'todo' =>
@@ -261,21 +266,15 @@ function StepAbout({ onNext }: { onNext: () => void }) {
     linkedinUrl: user.linkedinUrl ?? '',
   });
   const save = async () => {
-    const [first, ...rest] = f.fullName.trim().split(/\s+/);
-    await db.users.update(user.id, {
-      fullName: f.fullName.trim(),
-      firstName: first ?? '',
-      lastName: rest.join(' '),
+    await updateProfile(user.id, {
+      fullName: f.fullName,
       email: f.email.trim().toLowerCase(),
-      school: f.school.trim(),
+      school: f.school,
       schoolDomain:
         f.schoolDomain.trim().toLowerCase() || (f.email.includes('@') ? f.email.split('@')[1] : undefined),
       graduationYear: Number(f.graduationYear),
       degree: f.degree || undefined,
-      majors: f.majors
-        .split(',')
-        .map((m) => m.trim())
-        .filter(Boolean),
+      majors: splitList(f.majors),
       currentCity: f.currentCity,
       linkedinUrl: f.linkedinUrl || undefined,
     });
@@ -526,25 +525,23 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
         : '',
     );
   };
-  const split = (x: string) =>
-    x
-      .split(',')
-      .map((v) => v.trim())
-      .filter(Boolean);
+  const split = splitList;
   /** Keep what is on screen, whichever way the student leaves the step (a company typed but not added included). */
   const persist = async () => {
     if (company.trim()) await addCompany();
-    await db.goals.put({
-      userId: user.id,
-      cycleLabel: f.cycleLabel.trim() || 'This cycle',
-      targetRoles: split(f.targetRoles),
-      targetFunctions: f.targetFunctions,
-      targetIndustries: split(f.targetIndustries),
-      targetLocations: split(f.targetLocations),
-      freeText: f.freeText,
-      ambition: f.ambition,
-    });
-    await db.settings.update(user.id, { weeklyOutreachTarget: { 1: 2, 2: 4, 3: 7 }[f.ambition] });
+    await saveGoals(
+      user.id,
+      {
+        cycleLabel: f.cycleLabel,
+        targetRoles: split(f.targetRoles),
+        targetFunctions: f.targetFunctions,
+        targetIndustries: split(f.targetIndustries),
+        targetLocations: split(f.targetLocations),
+        freeText: f.freeText,
+        ambition: f.ambition,
+      },
+      { applyAmbition: true },
+    );
   };
   const ex = GOAL_EXAMPLES[f.targetFunctions[0] ?? ''] ?? GOAL_EXAMPLES.default!;
   return (
@@ -661,14 +658,14 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
                   t.priority === 1 ? `Make ${t.nameRaw} a normal target` : `Mark ${t.nameRaw} as top priority`
                 }
                 aria-pressed={t.priority === 1}
-                onClick={() => db.targetCompanies.update(t.id, { priority: t.priority === 1 ? 2 : 1 })}
+                onClick={() => setTargetPriority(t.id, t.priority === 1 ? 2 : 1)}
               >
                 {t.priority === 1 ? '★' : '☆'}
               </button>
               {t.nameRaw}
               <button
                 className="h-7 w-7 rounded-full text-ink-3 hover:text-ink hover:bg-canvas-2"
-                onClick={() => db.targetCompanies.delete(t.id)}
+                onClick={() => removeTargetCompany(t.id)}
                 aria-label={`Remove ${t.nameRaw}`}
                 title={`Remove ${t.nameRaw}`}
               >
@@ -783,26 +780,14 @@ function StepGoogle({ onNext, onBack }: { onNext: () => void; onBack: () => void
   const connect = async () => {
     setError(undefined);
     try {
-      writePrefs({ googleClientId: clientId.trim() || undefined });
       setBusy('Waiting for Google…');
-      const t = await connectGoogle();
-      await db.integrations.put({
-        id: account?.id ?? newId('int'),
-        userId: user.id,
-        provider: 'google',
-        externalAccountId: t.email,
-        status: 'active',
-        scopes: t.scopes ?? [],
-        syncState: {},
-        connectedAt: new Date().toISOString(),
-      });
-      if (t.email && !user.email) await db.users.update(user.id, { email: t.email });
-      const fresh = (await db.users.get(user.id))!;
-      await syncGoogle(fresh, {
+      const { warning } = await connectAndSyncGoogle(user, {
+        clientId,
+        fresh: true,
         onProgress: (p) => setBusy(`${p.phase} ${p.total > 1 ? `${p.done}/${p.total}` : ''}`),
       });
       setBusy(undefined);
-      setError(googleScopeWarning(t.scopes));
+      setError(warning);
     } catch (e) {
       setBusy(undefined);
       setError(String((e as Error).message ?? e));
@@ -908,16 +893,7 @@ function StepLinkedIn({ onNext, onBack }: { onNext: () => void; onBack: () => vo
         );
         return;
       }
-      await db.integrations.put({
-        id: earlier?.id ?? newId('int'),
-        userId: user.id,
-        provider: 'linkedin_csv',
-        status: 'active',
-        scopes: [],
-        syncState: { rows: r.imported + r.updated },
-        connectedAt: earlier?.connectedAt ?? new Date().toISOString(),
-        lastSyncedAt: new Date().toISOString(),
-      });
+      await recordLinkedInImport(user.id, r.imported + r.updated);
       setResult(
         `${r.imported} people added, ${r.updated} updated${r.skipped ? `, ${r.skipped} rows skipped` : ''}.`,
       );
@@ -1013,7 +989,7 @@ function StepPrefs({ onNext, onBack }: { onNext: () => void; onBack: () => void 
   }, [settings]);
   const save = async () => {
     setBusy(true);
-    await db.settings.update(user.id, {
+    await savePreferences(user.id, {
       briefTimeLocal: f.briefTimeLocal,
       tonePreset: f.tonePreset,
       schedulingLink: f.schedulingLink || undefined,

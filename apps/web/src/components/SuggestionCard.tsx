@@ -4,7 +4,6 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { Check, ChevronUp, Copy, ExternalLink, Sparkles } from 'lucide-react';
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { feedback } from '../db/repo';
 import { db } from '../db/schema';
 import {
   ensureDrafts,
@@ -13,8 +12,10 @@ import {
   needsWarmUp,
   startWarmUpOrOutreach,
 } from '../engine/brief';
+import { markPrepOpened } from '../engine/drafts';
+import { markActionItemDone } from '../engine/facts';
 import { answerIntroductionQuestion } from '../engine/introductions';
-import { mergePeople } from '../engine/people';
+import { decideMerge, mergeEvidence } from '../engine/people';
 import { currentResumeFacets, sharesOrgNow } from '../engine/resume';
 import { dismissSuggestion, restoreSuggestion, snoozeSuggestion } from '../engine/send';
 import { applyStage, decideProposedStage } from '../engine/stages';
@@ -47,23 +48,7 @@ export const KIND_LABEL: Record<
   confirm_intro: { label: 'Introduction?', tone: 'neutral' },
 };
 
-/** What two records have in common and where they differ, in plain words, so the student can judge a merge. */
-export function mergeEvidence(a: Person, b: Person): { same: string[]; differ: string[] } {
-  const same: string[] = [];
-  const differ: string[] = [];
-  const eq = (x?: string, y?: string) => !!x && !!y && x.trim().toLowerCase() === y.trim().toLowerCase();
-  const emailsA = new Set([a.primaryEmail, ...a.emails].filter(Boolean).map((e) => e!.toLowerCase()));
-  if ([b.primaryEmail, ...b.emails].some((e) => e && emailsA.has(e.toLowerCase())))
-    same.push('the same email address');
-  if (eq(a.firstName, b.firstName)) same.push('the same first name');
-  else if (a.firstName && b.firstName) differ.push('different first names');
-  if (eq(a.lastName, b.lastName)) same.push('the same last name');
-  if (eq(a.currentOrganizationRaw, b.currentOrganizationRaw)) same.push('the same company');
-  else if (a.currentOrganizationRaw && b.currentOrganizationRaw) differ.push('different companies');
-  if (eq(a.school, b.school)) same.push('the same school');
-  if (eq(a.linkedinSlug, b.linkedinSlug)) same.push('the same LinkedIn profile');
-  return { same, differ };
-}
+export { mergeEvidence };
 
 /** The "no" to a stage Orbit read from an email, in plain words rather than the stage's name. */
 function stageNoLabel(to: string | undefined, first: string): string {
@@ -210,18 +195,8 @@ export function SuggestionCard({
     });
   };
   const confirmMerge = async (accept: boolean) => {
-    const mergeId = s.payload.mergeId as string;
-    const m = await db.merges.get(mergeId);
-    if (!m) return;
-    if (accept) {
-      await mergePeople(user.id, m.personAId, m.personBId);
-      await db.merges.update(mergeId, { status: 'accepted' });
-      await feedback(user.id, 'merge_accept', { refTable: 'merges', refId: mergeId });
-    } else {
-      await db.merges.update(mergeId, { status: 'rejected' });
-      await feedback(user.id, 'merge_reject', { refTable: 'merges', refId: mergeId });
-    }
-    await db.suggestions.update(s.id, { status: 'done', decidedAt: new Date().toISOString() });
+    const r = await decideMerge(user.id, s.payload.mergeId as string, accept, { suggestionId: s.id });
+    if (r === 'missing') return;
     toast.push({
       text: accept
         ? `Merged into ${person?.displayName ?? 'one record'}.`
@@ -505,7 +480,7 @@ export function SuggestionCard({
               <Button
                 variant="primary"
                 onClick={async () => {
-                  await db.suggestions.update(s.id, { status: 'done', decidedAt: new Date().toISOString() });
+                  await markPrepOpened(s.id);
                   nav(`/people/${person.id}?tab=prep`);
                 }}
               >
@@ -518,8 +493,7 @@ export function SuggestionCard({
               <Button
                 variant="primary"
                 onClick={async () => {
-                  await db.actionItems.update(s.payload.actionItemId as string, { status: 'done' });
-                  await db.suggestions.update(s.id, { status: 'done', decidedAt: new Date().toISOString() });
+                  await markActionItemDone(s.payload.actionItemId as string, s.id);
                   toast.push({ text: 'Marked done.', tone: 'good' });
                 }}
               >

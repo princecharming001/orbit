@@ -8,6 +8,7 @@ import { DraftEditor, OutboxStatus } from '../components/DraftEditor';
 import { KIND_LABEL, SuggestionCard } from '../components/SuggestionCard';
 import { db } from '../db/schema';
 import { ensureDrafts } from '../engine/brief';
+import { discardDraft, restoreDraft, unsnoozeSuggestion } from '../engine/drafts';
 import { draftLists, startedDrafts } from '../engine/today';
 import { useSession } from '../state/session';
 import { Avatar, Button, Chip, EmptyState, PageHeader, relDate, Tabs, useToast } from '../ui';
@@ -146,12 +147,7 @@ export function InboxPage() {
                     <span className="text-ink-3">{s.reasonText}</span>
                   </span>
                   <span className="text-[12px] text-ink-3">back {relDate(s.snoozedUntil)}</span>
-                  <button
-                    className="text-[12px] text-accent"
-                    onClick={() =>
-                      db.suggestions.update(s.id, { status: 'pending', snoozedUntil: undefined })
-                    }
-                  >
+                  <button className="text-[12px] text-accent" onClick={() => unsnoozeSuggestion(s.id)}>
                     Unsnooze
                   </button>
                 </li>
@@ -238,10 +234,10 @@ function StartedItem({ o, person }: { o: OutboundMessage; person?: Person }) {
           size="sm"
           variant="ghost"
           onClick={async () => {
-            await db.outbound.update(o.id, { status: 'cancelled' });
+            await discardDraft(o.id);
             toast.push({
               text: 'Draft discarded.',
-              action: { label: 'Undo', onClick: () => db.outbound.update(o.id, { status: 'draft' }) },
+              action: { label: 'Undo', onClick: () => restoreDraft(o.id) },
               ttl: 7000,
             });
           }}

@@ -1,30 +1,21 @@
-import { interactionCount, type Person, RELATIONSHIP_LABELS, STAGE_LABELS } from '@orbit/core';
+import { RELATIONSHIP_LABELS, STAGE_LABELS } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { AddPersonButton } from '../components/AddPerson';
 import { LinkedInImportButton } from '../components/LinkedInImport';
 import { db } from '../db/schema';
+import { filterPeople, lastTouch, type PeopleFilter, type PeopleSort } from '../engine/search';
 import { useSession } from '../state/session';
 import { Avatar, Chip, EmptyState, Input, PageHeader, relDate, Select } from '../ui';
 import { StrengthDots } from './Pipeline';
-
-/**
- * When the student last actually dealt with them: a message, a meeting, a note. Becoming LinkedIn connections (the
- * date in the LinkedIn file) or sharing a CC line is not a touch.
- */
-function lastTouch(p: Person): string | undefined {
-  const b = p.strengthBreakdown;
-  if (!b) return p.lastInteractionAt;
-  return b.lastConversationAt ?? (interactionCount(b.counts) > 0 ? p.lastInteractionAt : undefined);
-}
 
 export function People() {
   const { userId } = useSession();
   const nav = useNavigate();
   const [q, setQ] = useState('');
-  const [filter, setFilter] = useState<'all' | 'alumni' | 'strong' | 'chats' | 'targets' | 'hidden'>('all');
-  const [sort, setSort] = useState<'strength' | 'recent' | 'name'>('strength');
+  const [filter, setFilter] = useState<PeopleFilter>('all');
+  const [sort, setSort] = useState<PeopleSort>('strength');
   const people =
     useLiveQuery(() => (userId ? db.people.where('userId').equals(userId).toArray() : []), [userId]) ?? [];
   const chats =
@@ -39,37 +30,11 @@ export function People() {
     () => new Map(chats.filter((c) => c.stage !== 'archived').map((c) => [c.personId, c])),
     [chats],
   );
-  const list = useMemo(() => {
-    const s = q.trim().toLowerCase();
-    return people
-      .filter((p) => (filter === 'hidden' ? !!p.hiddenAt : p.isHuman && !p.hiddenAt))
-      .filter(
-        (p) =>
-          !s ||
-          p.displayName.toLowerCase().includes(s) ||
-          (p.currentOrganizationRaw ?? '').toLowerCase().includes(s) ||
-          (p.currentTitle ?? '').toLowerCase().includes(s) ||
-          (p.primaryEmail ?? '').includes(s),
-      )
-      .filter((p) =>
-        filter === 'alumni'
-          ? p.isAlumni
-          : filter === 'strong'
-            ? p.strength >= 0.6
-            : filter === 'chats'
-              ? activeChat.has(p.id)
-              : filter === 'targets'
-                ? targetNames.has((p.currentOrganizationRaw ?? '').toLowerCase())
-                : true,
-      )
-      .sort((a, b) =>
-        sort === 'strength'
-          ? b.strength - a.strength
-          : sort === 'recent'
-            ? (lastTouch(b) ?? '').localeCompare(lastTouch(a) ?? '')
-            : a.displayName.localeCompare(b.displayName),
-      );
-  }, [people, q, filter, sort, activeChat, targetNames]);
+  const list = useMemo(
+    () =>
+      filterPeople(people, { query: q, filter, sort, activeChat: new Set(activeChat.keys()), targetNames }),
+    [people, q, filter, sort, activeChat, targetNames],
+  );
   const total = people.filter((p) => p.isHuman && !p.hiddenAt).length;
   const hiddenCount = people.filter((p) => p.hiddenAt).length;
   const filtered = !!q.trim() || filter !== 'all';

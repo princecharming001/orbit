@@ -138,3 +138,59 @@ export function notYetWritten<
     )
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
+
+/** Stages that mean the person answered the first message, when Orbit cannot see the reply itself. */
+const MOVED_ON: CoffeeChat['stage'][] = [
+  'replied',
+  'scheduling',
+  'scheduled',
+  'completed',
+  'followed_up',
+  'nurturing',
+];
+/** Reply rate needs this many first messages in the window before it says a number. */
+export const REPLY_RATE_MIN_SENT = 3;
+
+/**
+ * Today's "This week" numbers: first messages sent since Monday against the weekly goal, the reply rate over the
+ * last 30 days (a reply by email, or a chat that moved on), chats done and people in orbit.
+ */
+export function weekStats(
+  outbound: Pick<OutboundMessage, 'status' | 'kind' | 'sentAt' | 'personId'>[],
+  chats: Pick<CoffeeChat, 'personId' | 'lastInboundAt' | 'stage' | 'completedAt'>[],
+  people: Pick<Person, 'isHuman' | 'hiddenAt'>[],
+  weeklyTarget: number,
+  now: Date,
+): {
+  sentThisWeek: number;
+  weeklyTarget: number;
+  sent30: number;
+  replied30: number;
+  replyRate?: number;
+  completed: number;
+  peopleInOrbit: number;
+} {
+  const weekStart = new Date(now);
+  weekStart.setDate(now.getDate() - ((now.getDay() + 6) % 7));
+  weekStart.setHours(0, 0, 0, 0);
+  const firsts = outbound.filter((o) => o.status === 'sent' && o.kind === 'outreach' && !!o.sentAt);
+  const sentThisWeek = firsts.filter((o) => new Date(o.sentAt!) >= weekStart).length;
+  const sent30 = firsts.filter((o) => now.getTime() - new Date(o.sentAt!).getTime() < 30 * DAY);
+  const replied30 = sent30.filter((o) =>
+    chats.some(
+      (c) =>
+        c.personId === o.personId &&
+        ((c.lastInboundAt && o.sentAt && c.lastInboundAt > o.sentAt) || MOVED_ON.includes(c.stage)),
+    ),
+  ).length;
+  return {
+    sentThisWeek,
+    weeklyTarget,
+    sent30: sent30.length,
+    replied30,
+    replyRate:
+      sent30.length >= REPLY_RATE_MIN_SENT ? Math.round((replied30 / sent30.length) * 100) : undefined,
+    completed: chats.filter((c) => c.completedAt).length,
+    peopleInOrbit: people.filter((p) => p.isHuman && !p.hiddenAt).length,
+  };
+}

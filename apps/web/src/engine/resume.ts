@@ -239,3 +239,36 @@ export async function saveResume(user: User, file: File): Promise<{ resume: Resu
   await db.resumes.update(resume.id, { parsedAt: now, parseSource: source });
   return { resume: { ...resume, parsedAt: now, parseSource: source }, facets };
 }
+
+/** Tick or untick a line Orbit read from the resume; an unticked line is never used to describe the student. */
+export async function setResumeFacetUsed(facetId: string, used: boolean): Promise<boolean> {
+  return (await db.resumeFacets.update(facetId, { excluded: !used, confirmed: used })) > 0;
+}
+
+/** Facet kinds that have a role (or degree) and a place; the rest are one line of text. */
+export const FACETS_WITH_ROLE = new Set<ResumeFacet['kind']>(['experience', 'education', 'project']);
+
+/** Fix a line Orbit read: the role or degree, where, and what the student did. A fixed line is kept and confirmed. */
+export async function fixResumeFacet(
+  facetId: string,
+  changes: { title?: string; organizationName?: string; text?: string },
+): Promise<ResumeFacet | undefined> {
+  const facet = await db.resumeFacets.get(facetId);
+  if (!facet) return undefined;
+  const role = FACETS_WITH_ROLE.has(facet.kind);
+  const title = role ? (changes.title ?? facet.title ?? '').trim() || undefined : facet.title;
+  const org = role
+    ? (changes.organizationName ?? facet.organizationName ?? '').trim() || undefined
+    : facet.organizationName;
+  const text =
+    (changes.text ?? '').trim() ||
+    (changes.text === undefined ? facet.text : [title, org].filter(Boolean).join(', '));
+  await db.resumeFacets.update(facetId, {
+    title,
+    organizationName: org,
+    text,
+    excluded: false,
+    confirmed: true,
+  });
+  return db.resumeFacets.get(facetId);
+}

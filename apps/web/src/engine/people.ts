@@ -13,6 +13,7 @@ import {
   resolveIdentity,
   SUGGEST_THRESHOLD,
 } from '@orbit/core';
+import { feedback } from '../db/repo';
 import { db } from '../db/schema';
 
 export async function upsertOrganization(
@@ -462,4 +463,86 @@ export async function addPersonByHand(
     source: 'manual',
   });
   return { person: r.person, created: r.created };
+}
+
+// ---------- the student's edits to a person ----------
+
+/** "How you know them": Orbit adjusts the tone of drafts and its suggestions to it. */
+export async function setRelationshipType(
+  personId: string,
+  relationshipType: Person['relationshipType'],
+  now = new Date(),
+): Promise<boolean> {
+  return (await db.people.update(personId, { relationshipType, updatedAt: now.toISOString() })) > 0;
+}
+
+/** Hide a person from People, Today, the Map and Discover; sending to them is refused until they are shown again. */
+export async function hidePerson(personId: string, now = new Date()): Promise<boolean> {
+  return (await db.people.update(personId, { hiddenAt: now.toISOString() })) > 0;
+}
+
+export async function unhidePerson(personId: string): Promise<boolean> {
+  return (await db.people.update(personId, { hiddenAt: undefined })) > 0;
+}
+
+/** The student's own tags and private note on a person. */
+export async function updatePersonDetails(
+  personId: string,
+  changes: { tags?: string[]; notes?: string },
+  now = new Date(),
+): Promise<boolean> {
+  const patch: Partial<Person> = { updatedAt: now.toISOString() };
+  if (changes.tags) patch.tags = [...new Set(changes.tags.map((t) => t.trim()).filter(Boolean))];
+  if (changes.notes !== undefined) patch.notes = changes.notes.trim() || undefined;
+  return (await db.people.update(personId, patch)) > 0;
+}
+
+/** What two records have in common and where they differ, in plain words, so the student can judge a merge. */
+export function mergeEvidence(a: Person, b: Person): { same: string[]; differ: string[] } {
+  const same: string[] = [];
+  const differ: string[] = [];
+  const eq = (x?: string, y?: string) => !!x && !!y && x.trim().toLowerCase() === y.trim().toLowerCase();
+  const emailsA = new Set([a.primaryEmail, ...a.emails].filter(Boolean).map((e) => e!.toLowerCase()));
+  if ([b.primaryEmail, ...b.emails].some((e) => e && emailsA.has(e.toLowerCase())))
+    same.push('the same email address');
+  if (eq(a.firstName, b.firstName)) same.push('the same first name');
+  else if (a.firstName && b.firstName) differ.push('different first names');
+  if (eq(a.lastName, b.lastName)) same.push('the same last name');
+  if (eq(a.currentOrganizationRaw, b.currentOrganizationRaw)) same.push('the same company');
+  else if (a.currentOrganizationRaw && b.currentOrganizationRaw) differ.push('different companies');
+  if (eq(a.school, b.school)) same.push('the same school');
+  if (eq(a.linkedinSlug, b.linkedinSlug)) same.push('the same LinkedIn profile');
+  return { same, differ };
+}
+
+/**
+ * The student's answer to "Possible duplicate": yes merges B into A (the older record) and deletes B; no keeps them
+ * as two people and Orbit never asks about the pair again. The card, if any, is closed either way.
+ */
+export async function decideMerge(
+  userId: string,
+  mergeId: string,
+  accept: boolean,
+  opts: { suggestionId?: string; now?: Date } = {},
+): Promise<'merged' | 'kept' | 'missing'> {
+  const m = await db.merges.get(mergeId);
+  if (!m || m.userId !== userId) return 'missing';
+  const now = (opts.now ?? new Date()).toISOString();
+  if (accept) {
+    await mergePeople(userId, m.personAId, m.personBId);
+    await db.merges.update(mergeId, { status: 'accepted' });
+    await feedback(userId, 'merge_accept', { refTable: 'merges', refId: mergeId });
+  } else {
+    await db.merges.update(mergeId, { status: 'rejected' });
+    await feedback(userId, 'merge_reject', { refTable: 'merges', refId: mergeId });
+  }
+  const cards = opts.suggestionId
+    ? [await db.suggestions.get(opts.suggestionId)]
+    : await db.suggestions
+        .where('userId')
+        .equals(userId)
+        .filter((s) => s.kind === 'confirm_merge' && s.payload.mergeId === mergeId)
+        .toArray();
+  for (const s of cards) if (s) await db.suggestions.update(s.id, { status: 'done', decidedAt: now });
+  return accept ? 'merged' : 'kept';
 }
