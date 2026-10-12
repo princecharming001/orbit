@@ -47,8 +47,12 @@ describe('stable system block', () => {
     expect(text).toMatch(/first name now and then/);
     expect(text).toMatch(/where your chats stand/);
     expect(text).toMatch(/not "pipeline" or stage names/);
-    expect(text).toMatch(/I pulled up Daniel's draft on the right\. Want me to send it\?/);
+    expect(text).toMatch(/I pulled up Daniel's draft\. Want me to send it\?/);
     expect(text).toMatch(/celebrate it in one line/);
+  });
+
+  it('never says where a panel opens', () => {
+    expect(text).not.toMatch(/on the right|to the right|on the left/i);
   });
 
   it('knows the open panel and the setup line', () => {

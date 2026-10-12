@@ -553,6 +553,8 @@ describe('router: small talk when the conversation tools are not in the registry
   it('still names the one thing to do, in words the router understands', () => {
     const r = plain('hey') as { text: string };
     expect(r.text).toContain('Say "What\'s on today?"');
+    expect(r.text).toContain("You've got 2 people waiting on a message today.");
+    expect(r.text).not.toMatch(/Want to start there\?/);
     const e = plain('hey', EMPTY) as { text: string };
     expect(e.text).toContain('+ button');
   });

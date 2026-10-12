@@ -314,13 +314,16 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
     if (parsed?.success) return { kind: 'tool', tool, input: parsed.data as Record<string, unknown>, lead };
     return { kind: 'text', text: fallback };
   };
-  const choose = (statement: string, question: string, options: ChoiceOption[]): RouterIntent =>
-    withTool(
+  const choose = (statement: string, question: string, options: ChoiceOption[]): RouterIntent => {
+    // without the tool, the useful sentence stays and the first pill becomes words to type
+    const kept = question.replace(/\s*[^.?]*\?$/, '').trim();
+    return withTool(
       'offer_choices',
       { options },
       `${statement} ${question}`,
-      `${statement} Say "${options[0]!.message}" and I'll take it from there.`,
+      `${[statement, kept].filter(Boolean).join(' ')} Say "${options[0]!.message}" and I'll take it from there.`,
     );
+  };
   const setupLinkedin = (statement: string): RouterIntent =>
     withTool(
       'show_setup',
