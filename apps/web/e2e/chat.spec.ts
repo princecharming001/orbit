@@ -143,15 +143,18 @@ test.describe('Chat home', () => {
     const row = page.getByTestId('turn-actions');
     for (const name of ['Copy', 'Retry', 'Good answer', 'Bad answer'])
       await expect(row.getByRole('button', { name })).toBeVisible();
-    // Open in app is an in-app link; the thread is still there on the way back
+    // Open in app shows the page in the side panel; the conversation stays beside it
     await card.getByTestId('open-in-app').click();
-    await expect(page).toHaveURL(/\/pipeline$/);
+    await expect(page.getByTestId('panel-title')).toHaveText('Pipeline');
+    await expect(page.getByTestId('result-pipeline')).toBeVisible();
+    await page.getByTestId('panel-close').click();
+    await expect(page).toHaveURL(/\/orbit\/$/);
+    // leaving to a real page via the rail and coming back keeps the thread
     await page
       .getByTestId('rail')
       .getByRole('link', { name: /^today$/i })
       .click();
     await expect(page).toHaveURL(/\/today$/);
-    await page.goBack();
     await page.goBack();
     await expect(page).toHaveURL(/\/orbit\/$/);
     await expect(page.getByTestId('result-pipeline')).toBeVisible();

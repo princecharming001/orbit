@@ -98,7 +98,9 @@ test.describe('Chat home on the real engine (no key)', () => {
     const turn = lastTurn(page);
     await expect(turn).toContainText(/LinkedIn/, { timeout: 20_000 });
     await expect(turn.locator('ol, ul, h1, h2, h3, strong')).toHaveCount(0);
-    expect((await turn.innerText()).trim().split(/\s+/).length).toBeLessThan(60);
+    // the short answer is the prose; the LinkedIn drop-zone widget carries its own how-to text
+    const prose = await turn.getByTestId('md').first().innerText();
+    expect(prose.trim().split(/\s+/).length).toBeLessThan(60);
     // "Add someone I met" asks one question
     await ask(page, 'Add someone I met');
     await expect(lastTurn(page)).toContainText(/Who did you meet\?/, { timeout: 20_000 });

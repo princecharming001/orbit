@@ -77,9 +77,10 @@ test.describe('Chat widgets', () => {
       timeout: 30_000,
     });
     await expect(page.getByRole('link', { name: 'Show the map' })).toBeVisible();
+    // the card's links open in the side panel, so the student stays in the chat
     await page.getByRole('link', { name: 'See my people' }).click();
-    await expect(page).toHaveURL(/\/people$/);
-    await expect(page.getByText('Tara Widgetson').first()).toBeAttached();
+    await expect(page.getByTestId('panel-title')).toHaveText('People');
+    await expect(page.getByTestId('panel').getByText('Tara Widgetson').first()).toBeAttached();
   });
 
   test('the Claude key widget saves and tests a key and never shows it back', async ({ page }) => {

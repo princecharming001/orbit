@@ -4,7 +4,7 @@ import { Fragment, type ReactNode } from 'react';
 export function Markdown({ text, className }: { text: string; className?: string }) {
   const blocks = text.split(/\n{2,}/).filter((b) => b.trim());
   return (
-    <div className={className}>
+    <div className={className} data-testid="md">
       {blocks.map((block, i) => {
         const lines = block.split('\n');
         if (lines.every((l) => /^\s*[-*]\s+/.test(l)))
