@@ -117,7 +117,10 @@ export async function buildSnapshot(userId: string, now: Date): Promise<Snapshot
   const cardLines = cards.slice(0, MAX_CARDS).map((s) => cardLine(s, names));
   const moreCards = Math.max(0, cards.length - MAX_CARDS);
 
-  const drafts = outbound.filter((o) => o.status === 'draft');
+  // oldest first: the longest-waiting drafts are the ones to mention
+  const drafts = outbound
+    .filter((o) => o.status === 'draft')
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
   const draftLine = drafts.length
     ? `${drafts.length} (${drafts
         .slice(0, MAX_DRAFT_IDS)

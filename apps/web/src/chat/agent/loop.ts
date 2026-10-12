@@ -16,6 +16,7 @@ import {
   toLlmError,
 } from '../../integrations/anthropic';
 import type { ChatConversation, ResultEnvelope, ToolContext, ToolSpec, TurnEvent } from '../types';
+import { recordToolAction } from './actions';
 import type { ChatClient } from './client';
 import { buildSnapshot, snapshotIsStale, snapshotKeyOf } from './snapshot';
 import { type ChatStore, conversationNonce, toolResultsOf, toolUsesOf } from './store';
@@ -296,39 +297,16 @@ export async function runTurn(
           env = signal?.aborted ? cancelled('user stopped') : thrownEnvelope(e);
         }
       }
-      const at = clock().toISOString();
-      await store.putAction({
-        id: toolUseId,
+      await recordToolAction(store, {
         conversationId: conversation.id,
         userId: user.id,
-        messageId: pending?.rowId,
+        toolUseId,
         toolName: spec.name,
         input,
-        status: env.kind === 'error' ? 'error' : 'done',
-        envelope: env,
-        createdAt: at,
-        updatedAt: at,
+        env,
+        messageId: pending?.rowId,
+        now: clock(),
       });
-      // the registry stores pending confirmations itself; make sure the Approve button finds one either way
-      if (
-        env.kind === 'needs_confirmation' &&
-        env.confirmationId &&
-        !(await store.getAction(env.confirmationId))
-      ) {
-        await store.putAction({
-          id: env.confirmationId,
-          conversationId: conversation.id,
-          userId: user.id,
-          messageId: pending?.rowId,
-          toolName: spec.name,
-          input,
-          status: 'pending',
-          summary: env.summary,
-          expiresAt: new Date(clock().getTime() + 15 * 60_000).toISOString(),
-          createdAt: at,
-          updatedAt: at,
-        });
-      }
       results.set(toolUseId, { content: projectEnvelope(spec, env), isError: env.kind === 'error' });
       onEvent({ type: 'tool_result', toolUseId, envelope: env });
       // the last tool of the turn to finish writes the tool_result message at once, so a crash right after the
