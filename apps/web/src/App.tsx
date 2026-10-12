@@ -33,16 +33,21 @@ function Gate({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-/** The home route: the chat for someone signed in, the landing page for everyone else. */
+/**
+ * The app's layout route: the shell for someone signed in (with the chat at "/"), the landing page for everyone
+ * else at "/". One shell instance serves every page, so moving between the chat and a page never remounts it.
+ */
 function Home() {
   const { loading, userId } = useSession();
+  const loc = useLocation();
   if (loading)
     return (
       <div className="h-full flex items-center justify-center">
         <Spinner />
       </div>
     );
-  if (!userId) return <Landing />;
+  if (!userId)
+    return loc.pathname === '/' ? <Landing /> : <Navigate to="/" replace state={{ from: loc.pathname }} />;
   return (
     <Gate>
       <AppShell />
@@ -57,9 +62,6 @@ export function App({ chatEngine }: { chatEngine?: ChatEngine }) {
         <ChatEngineProvider engine={chatEngine}>
           <ToastProvider>
             <Routes>
-              <Route element={<Home />}>
-                <Route path="/" element={<ChatHome />} />
-              </Route>
               {/* the landing page stays reachable for someone signed in (a bookmark, the demo's way back) */}
               <Route path="/welcome" element={<Landing />} />
               <Route
@@ -70,13 +72,8 @@ export function App({ chatEngine }: { chatEngine?: ChatEngine }) {
                   </Gate>
                 }
               />
-              <Route
-                element={
-                  <Gate>
-                    <AppShell />
-                  </Gate>
-                }
-              >
+              <Route element={<Home />}>
+                <Route index element={<ChatHome />} />
                 <Route path="/today" element={<Today />} />
                 <Route path="/pipeline" element={<Pipeline />} />
                 <Route path="/people" element={<People />} />

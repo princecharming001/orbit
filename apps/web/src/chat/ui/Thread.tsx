@@ -27,7 +27,7 @@ export function Thread({
         Today <span className="flex-1 h-px bg-line" />
       </div>
       <ol className="space-y-4">
-        {turns.map((t) => (
+        {turns.map((t, i) => (
           <li key={t.id} className="min-w-0">
             {t.role === 'user' ? (
               <div className="flex justify-end">
@@ -39,7 +39,7 @@ export function Thread({
                 </div>
               </div>
             ) : t.role === 'assistant' ? (
-              <Assistant turn={t} actions={actions} running={running} />
+              <Assistant turn={t} actions={actions} running={running} last={i === turns.length - 1} />
             ) : (
               <div
                 className={cx(
@@ -72,10 +72,13 @@ function Assistant({
   turn,
   actions,
   running,
+  last,
 }: {
   turn: AssistantTurn;
   actions: ThreadActions;
   running: boolean;
+  /** the newest turn keeps its action row in view; older ones show it on hover or focus */
+  last: boolean;
 }) {
   const toast = useToast();
   const [vote, setVote] = useState<'up' | 'down'>();
@@ -124,7 +127,10 @@ function Assistant({
       )}
       {!streaming && (
         <div
-          className="mt-1 -ml-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity"
+          className={cx(
+            'mt-1 -ml-1.5 flex items-center gap-0.5 transition-opacity',
+            !last && 'opacity-0 group-hover:opacity-100 focus-within:opacity-100',
+          )}
           data-testid="turn-actions"
         >
           <IconButton

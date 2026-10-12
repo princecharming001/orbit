@@ -138,18 +138,20 @@ export function ChatHome() {
           <Thread turns={thread.turns} actions={cardActions} running={thread.running} />
         </div>
       </div>
-      {!pinned && (
-        <button
-          type="button"
-          onClick={jump}
-          className="glass glass-hover absolute left-1/2 -translate-x-1/2 bottom-[150px] z-10 h-9 px-3 rounded-full inline-flex items-center gap-1.5 text-[13px] font-medium text-ink-2 fade-up"
-          data-testid="jump-latest"
-        >
-          <ArrowDown size={14} aria-hidden /> Latest
-        </button>
-      )}
       <div className="absolute inset-x-0 bottom-0 px-4 sm:px-6 pb-3 sm:pb-5 pt-6 bg-gradient-to-t from-[#eef4ff] via-[#eef4ff]/95 via-60% to-transparent pointer-events-none">
         <div className="pointer-events-auto max-w-[800px] mx-auto">
+          {!pinned && (
+            <div className="flex justify-center mb-2">
+              <button
+                type="button"
+                onClick={jump}
+                className="glass glass-hover h-9 px-3 rounded-full inline-flex items-center gap-1.5 text-[13px] font-medium text-ink-2 fade-up focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                data-testid="jump-latest"
+              >
+                <ArrowDown size={14} aria-hidden /> Latest
+              </button>
+            </div>
+          )}
           {composer('thread')}
           {footer}
         </div>

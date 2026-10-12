@@ -58,7 +58,8 @@ html {
 body {
   @apply text-ink font-sans antialiased text-[14px] leading-[1.5];
   position: relative;
-  letter-spacing: -0.005em;
+  /* Plus Jakarta Sans sets a narrow word space; a touch more keeps small text readable */
+  word-spacing: 0.04em;
 }
 /* two very soft colour blobs (aqua, periwinkle) that drift extremely slowly behind everything */
 body::before,

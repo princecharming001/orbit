@@ -170,9 +170,9 @@ test.describe('Chat home', () => {
     });
     await expect(page.getByTestId('turn-user')).toHaveText('Attached a note: chat-notes.txt');
     await expect(page.getByTestId('result-note')).toBeVisible();
-    const attach = (await calls(page)).find((c) => c.method === 'attach');
-    expect(attach?.args[2]).toBe('note');
-    expect((attach?.args[1] as { name: string }).name).toBe('chat-notes.txt');
+    const attach = (await calls(page)).find((c) => c.method === 'attach')!;
+    expect(attach.args[2]).toBe('note');
+    expect((attach.args[1] as { name: string }).name).toBe('chat-notes.txt');
   });
 
   test('a scripted conversation renders every result kind', async ({ page }) => {
@@ -240,9 +240,9 @@ test.describe('Chat home', () => {
     await approve.click();
     await expect(page.getByTestId('turn-decision')).toContainText(/^\s*Approved: Send the thank-you/);
     await expect(page.getByTestId('result-outcome')).toContainText('Opened in your mail app');
-    const approved = (await calls(page)).find((c) => c.method === 'approve');
-    expect(approved?.args[0]).toMatch(/^conf_/);
-    expect((approved?.args[1] as { body: string }).body).toMatch(/P\.S\. Edited in the chat\.$/);
+    const approved = (await calls(page)).find((c) => c.method === 'approve')!;
+    expect(approved.args[0]).toMatch(/^conf_/);
+    expect((approved.args[1] as { body: string }).body).toMatch(/P\.S\. Edited in the chat\.$/);
     await expect(card).toHaveCount(0);
 
     await ask(page, 'send it again');
