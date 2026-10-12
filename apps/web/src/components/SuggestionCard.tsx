@@ -19,34 +19,14 @@ import { decideMerge, mergeEvidence } from '../engine/people';
 import { currentResumeFacets, sharesOrgNow } from '../engine/resume';
 import { dismissSuggestion, restoreSuggestion, snoozeSuggestion } from '../engine/send';
 import { applyStage, decideProposedStage } from '../engine/stages';
+import { SUGGESTION_KIND_LABELS } from '../engine/today';
 import { useSession } from '../state/session';
 import { Avatar, Button, Chip, cx, useToast } from '../ui';
 import { runApproval } from './approve';
 import { DraftEditor, OutboxStatus } from './DraftEditor';
 
-export const KIND_LABEL: Record<
-  Suggestion['kind'],
-  { label: string; tone: 'neutral' | 'accent' | 'good' | 'warn' | 'bad' }
-> = {
-  new_outreach: { label: 'First message', tone: 'accent' },
-  warm_up_engage: { label: 'LinkedIn warm-up', tone: 'neutral' },
-  follow_up_bump: { label: 'Follow-up', tone: 'warn' },
-  schedule_propose: { label: 'Find a time', tone: 'accent' },
-  schedule_confirm: { label: 'Confirm time', tone: 'accent' },
-  prep_brief: { label: 'Prep', tone: 'good' },
-  thank_you: { label: 'Thank-you', tone: 'good' },
-  action_item_reminder: { label: 'Promise to keep', tone: 'warn' },
-  nurture_checkin: { label: 'Check-in', tone: 'neutral' },
-  reconnect: { label: 'Reconnect', tone: 'neutral' },
-  congratulate: { label: 'Congratulate', tone: 'good' },
-  ask_referral: { label: 'Referral ask', tone: 'accent' },
-  intro_request: { label: 'Intro ask', tone: 'accent' },
-  report_back: { label: 'Close the loop', tone: 'good' },
-  confirm_stage: { label: 'Did this change?', tone: 'neutral' },
-  confirm_merge: { label: 'Possible duplicate', tone: 'neutral' },
-  confirm_note_match: { label: 'Match note', tone: 'neutral' },
-  confirm_intro: { label: 'Introduction?', tone: 'neutral' },
-};
+/** Kept here for older imports; the labels live in the engine so the chat and the cards share them. */
+export const KIND_LABEL = SUGGESTION_KIND_LABELS;
 
 export { mergeEvidence };
 
