@@ -42,6 +42,7 @@ import {
   updatePrefs,
   writePrefs,
 } from '../integrations/prefs';
+import { sharedClaudeUrl } from '../integrations/shared-claude';
 import { useSession } from '../state/session';
 import {
   Button,
@@ -846,6 +847,8 @@ function ClaudeCard() {
   const reqCap = prefs.llmDailyRequestCap ?? DEFAULT_DAILY_REQUEST_CAP;
   const tokCap = prefs.llmDailyTokenCap ?? DEFAULT_DAILY_TOKEN_CAP;
   const keySaved = !!prefs.anthropicApiKey;
+  // without a key, the chat can still run on Orbit's shared access, so its switch stays usable
+  const shared = !keySaved && !!sharedClaudeUrl();
   return (
     <Card>
       <div className="font-medium">Claude (optional)</div>
@@ -883,17 +886,27 @@ function ClaudeCard() {
         </p>
       )}
       {hasLlm() && !keyStatus && <p className="text-[12px] mt-1 text-good">Key saved.</p>}
-      <fieldset className="mt-4 space-y-2" disabled={!keySaved} data-testid="ai-usage">
+      {shared && (
+        <p className="text-[12px] mt-2 text-ink-2" data-testid="ai-shared-note">
+          Until you add a key, the chat uses Orbit's shared Claude access, with a daily limit per visitor.
+          Your own key lifts that limit and lets Claude write drafts too.
+        </p>
+      )}
+      <fieldset className="mt-4 space-y-2" disabled={!keySaved && !shared} data-testid="ai-usage">
         <legend className="text-[13px] font-medium">What Claude may do</legend>
         {/* reading synced email only exists where Google does */}
         {AI_FEATURES.filter((f) => f.key !== 'emailTriage' || sources.google).map((f) => (
           <label
             key={f.key}
-            className={cx('flex items-start gap-2 text-[13.5px]', !keySaved && 'opacity-60')}
+            className={cx(
+              'flex items-start gap-2 text-[13.5px]',
+              !keySaved && !(shared && f.key === 'chat') && 'opacity-60',
+            )}
           >
             <input
               type="checkbox"
               className="mt-1"
+              disabled={!keySaved && !(shared && f.key === 'chat')}
               data-testid={`ai-feature-${f.key}`}
               checked={features[f.key]}
               onChange={(e) => {

@@ -57,6 +57,8 @@ export interface LocalPrefs {
   llmDailyTokenCap?: number;
   llmUsage?: LlmUsage;
   lastLlmError?: LlmErrorRecord;
+  /** Orbit's shared Claude access said stop (daily limit, or not set up): the chat uses commands until `until`. */
+  sharedClaudePause?: { until: string; reason: 'day' | 'global' | 'unconfigured' };
 }
 
 interface PrefsRow {

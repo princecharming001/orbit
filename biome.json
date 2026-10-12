@@ -9,6 +9,7 @@
     "includes": [
       "apps/**",
       "packages/**",
+      "supabase/**",
       "!**/dist",
       "!**/node_modules",
       "!**/playwright-report",

@@ -22,6 +22,7 @@ import {
   updatePrefs,
   writePrefs,
 } from './prefs';
+import { pauseSharedClaude } from './shared-claude';
 
 export const MODEL = 'claude-opus-5-5';
 
@@ -61,6 +62,7 @@ export type LlmFailureReason =
   | 'refusal'
   | 'bad_output'
   | 'cap'
+  | 'shared_limit'
   | 'aborted'
   | 'other';
 
@@ -94,6 +96,24 @@ export function toLlmError(e: unknown): LlmError {
   const detail = e instanceof Error ? e.message : String(e);
   // most specific first: the student's own Stop button, then the typed API errors, then the status code
   if (e instanceof Anthropic.APIUserAbortError) return new LlmError('aborted', 'Stopped.', detail);
+  // Orbit's shared access marks its own refusals; a daily limit or a missing server key pauses it on this device
+  const shared = e instanceof Anthropic.APIError ? e.headers?.get('x-orbit-limit') : undefined;
+  if (shared === 'minute')
+    return new LlmError(
+      'rate_limit',
+      'Too many Claude requests in the last minute. Try again shortly.',
+      detail,
+    );
+  if (shared === 'day' || shared === 'global' || shared === 'unconfigured') {
+    pauseSharedClaude(shared);
+    return new LlmError(
+      'shared_limit',
+      shared === 'unconfigured'
+        ? "Orbit's shared Claude access is unavailable right now."
+        : "Orbit's shared Claude access has reached today's limit.",
+      detail,
+    );
+  }
   if (e instanceof Anthropic.AuthenticationError)
     return new LlmError('auth', 'Anthropic rejected the API key.', detail);
   if (e instanceof Anthropic.PermissionDeniedError)
@@ -154,6 +174,11 @@ export function describeLlmFailure(e: LlmError): { title: string; body: string }
       return {
         title: "Claude's daily limit is reached",
         body: `${e.message} Orbit is using its own templates until tomorrow. You can change the limit in Settings, Integrations.`,
+      };
+    case 'shared_limit':
+      return {
+        title: "Orbit's shared Claude access is paused",
+        body: `${e.message} Until then the chat understands a fixed set of commands. Add your own Anthropic key in Settings, Integrations to keep chatting with Claude.`,
       };
     case 'aborted':
       return { title: 'Stopped', body: 'You stopped this request. Nothing else was changed.' };

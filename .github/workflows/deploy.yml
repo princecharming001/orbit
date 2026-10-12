@@ -33,6 +33,8 @@ jobs:
         run: pnpm build
         env:
           ORBIT_BASE: /${{ github.event.repository.name }}/
+          # Orbit's shared Claude access for visitors without their own key (supabase/functions/orbit-claude)
+          VITE_ORBIT_CLAUDE_PROXY: https://nxibeiykcgxpbmkeadth.supabase.co/functions/v1/orbit-claude
       - name: Install Playwright browsers
         run: pnpm --filter @orbit/web exec playwright install --with-deps chromium
       - name: End-to-end tests

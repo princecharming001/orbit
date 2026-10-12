@@ -102,6 +102,7 @@ export function eventKind(e: LlmError): Extract<TurnEvent, { type: 'error' }>['k
     case 'permission':
       return 'no_key';
     case 'cap':
+    case 'shared_limit':
       return 'cap';
     case 'refusal':
       return 'refusal';

@@ -68,6 +68,7 @@ import {
   readPrefs,
   todaysLlmUsage,
 } from '../../integrations/prefs';
+import { sharedClaudeAvailable } from '../../integrations/shared-claude';
 import { z } from '../../zod';
 import type { ToolContext } from '../types';
 import {
@@ -1560,7 +1561,12 @@ export const getSettings = defineTool({
               })),
             }
           : undefined,
-        claude: { keySaved: !!prefs.anthropicApiKey, model: MODEL, features: llmFeatures(prefs) },
+        claude: {
+          keySaved: !!prefs.anthropicApiKey,
+          sharedAccess: sharedClaudeAvailable(),
+          model: MODEL,
+          features: llmFeatures(prefs),
+        },
         problems: accounts
           .filter((a) => a.status === 'needs_reauth' || a.status === 'error')
           .map((a) => ({ provider: a.provider, error: a.lastError })),

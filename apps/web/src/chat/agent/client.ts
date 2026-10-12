@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { readPrefs } from '../../integrations/prefs';
+import { sharedClaudeAvailable, sharedClaudeUrl } from '../../integrations/shared-claude';
 
 /**
  * The SDK client the chat loop talks to. Built with the student's own key from local prefs, in the browser
@@ -21,9 +22,16 @@ export function setChatClientFactoryForTests(f: ((apiKey: string) => ChatClient)
   factory = f;
 }
 
-export function makeChatClient(apiKey: string, opts: ChatClientOptions = {}): Anthropic {
+/** The placeholder key sent to Orbit's shared access; the server function swaps in the real one. */
+export const SHARED_KEY = 'orbit-shared';
+
+export function makeChatClient(
+  apiKey: string,
+  opts: ChatClientOptions & { baseURL?: string } = {},
+): Anthropic {
   return new Anthropic({
     apiKey,
+    ...(opts.baseURL ? { baseURL: opts.baseURL } : {}),
     dangerouslyAllowBrowser: true,
     maxRetries: opts.maxRetries ?? 2,
     timeout: 120_000,
@@ -31,10 +39,14 @@ export function makeChatClient(apiKey: string, opts: ChatClientOptions = {}): An
   });
 }
 
-/** The client for the saved key, or undefined when no key is saved on this device. */
+/**
+ * The client for the saved key; without one, the client for Orbit's shared access when it is available; else
+ * undefined. The shared client sends a placeholder key to Orbit's server function, never a real one.
+ */
 export function chatClient(opts: ChatClientOptions = {}): ChatClient | undefined {
   const key = readPrefs().anthropicApiKey;
-  if (!key) return undefined;
-  if (factory) return factory(key);
-  return makeChatClient(key, opts);
+  if (key) return factory ? factory(key) : makeChatClient(key, opts);
+  if (!sharedClaudeAvailable()) return undefined;
+  if (factory) return factory(SHARED_KEY);
+  return makeChatClient(SHARED_KEY, { ...opts, baseURL: sharedClaudeUrl() });
 }

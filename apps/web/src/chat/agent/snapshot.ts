@@ -3,6 +3,7 @@ import { STAGE_LABELS, todayKey } from '@orbit/core';
 import { db } from '../../db/schema';
 import { todayCards } from '../../engine/today';
 import { llmFeatures, readPrefs } from '../../integrations/prefs';
+import { sharedClaudeAvailable } from '../../integrations/shared-claude';
 
 /**
  * The volatile context the model needs on every turn, appended to `messages` as a `role: 'system'` message only when
@@ -148,7 +149,9 @@ export async function buildSnapshot(userId: string, now: Date): Promise<Snapshot
         .filter((k) => k !== 'chat')
         .map((k) => `${k} ${feats[k] ? 'on' : 'off'}`)
         .join(', ')
-    : 'no key';
+    : sharedClaudeAvailable()
+      ? "no key of the student's own; the chat runs on Orbit's shared access (daily limit, chat only)"
+      : 'no key';
 
   const lines = [
     `Student: ${student}.${goalBits.length ? ` Goals: ${goalBits.join(', ')}.` : ''}`,
