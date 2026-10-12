@@ -180,7 +180,7 @@ export function Pipeline() {
   };
   const stages: ChatStage[] = showClosed ? [...ACTIVE_STAGES, ...CLOSED_STAGES] : ACTIVE_STAGES;
   const filtering = !!q.trim() || onlyTargets || onlyQuiet;
-  const narrow = useNarrow();
+  const [narrow, rootRef] = useNarrow();
   const sortVal = (r: { chat: CoffeeChat; person: Person }): string | number => {
     switch (sort.key) {
       case 'person':
@@ -222,7 +222,7 @@ export function Pipeline() {
     </th>
   );
   return (
-    <div>
+    <div ref={rootRef}>
       <PageHeader
         title="Pipeline"
         subtitle={
@@ -244,7 +244,7 @@ export function Pipeline() {
       </FirstRunHint>
       <details className="mb-4 text-[13px]" data-testid="stage-legend">
         <summary className="cursor-pointer text-ink-2 w-fit">What the stages mean</summary>
-        <dl className="mt-2 grid sm:grid-cols-2 gap-x-6 gap-y-1.5 rounded-lg bg-canvas-2 p-3">
+        <dl className="mt-2 grid @[40rem]:grid-cols-2 gap-x-6 gap-y-1.5 rounded-lg bg-canvas-2 p-3">
           {[...ACTIVE_STAGES, ...CLOSED_STAGES].map((st) => (
             <div key={st} className="flex gap-2 min-w-0">
               <dt className="font-medium shrink-0 inline-flex items-center gap-1.5">
@@ -266,13 +266,13 @@ export function Pipeline() {
             { value: 'companies', label: 'Companies' },
           ]}
         />
-        <div className="sm:ml-auto flex flex-wrap items-center gap-2 sm:-mt-4 w-full sm:w-auto">
+        <div className="@[40rem]:ml-auto flex flex-wrap items-center gap-2 @[40rem]:-mt-4 w-full @[40rem]:w-auto">
           <Input
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder="Search name or company"
             aria-label="Search chats by name or company"
-            className="w-full sm:w-56"
+            className="w-full @[40rem]:w-56"
           />
           <label className="text-[13px] inline-flex items-center gap-1.5">
             <input type="checkbox" checked={onlyTargets} onChange={(e) => setOnlyTargets(e.target.checked)} />{' '}
@@ -328,7 +328,7 @@ export function Pipeline() {
               <div
                 key={stage}
                 // an empty stage takes less room, so the stages that hold someone fit on screen
-                className={cx('w-full shrink-0', items.length ? 'md:w-[228px]' : 'md:w-[132px]')}
+                className={cx('w-full shrink-0', items.length ? '@3xl:w-[228px]' : '@3xl:w-[132px]')}
                 data-stage={stage}
                 data-needs={items.filter((r) => nextFor(r.chat.id, r.person.id)).length || undefined}
                 onDragOver={(e) => e.preventDefault()}
@@ -593,7 +593,7 @@ function Board({ children, count }: { children: React.ReactNode; count: number }
   return (
     <div className="relative">
       {/* above the columns, never on top of a card; on a phone the stages stack, so there is nothing to scroll to */}
-      <div className="hidden md:flex justify-end items-center gap-2 h-8 -mt-2 mb-1">
+      <div className="hidden @3xl:flex justify-end items-center gap-2 h-8 -mt-2 mb-1">
         {needs.count > 0 && needs.first && (
           <button
             onClick={() => {
@@ -621,14 +621,14 @@ function Board({ children, count }: { children: React.ReactNode; count: number }
       <div
         ref={ref}
         onScroll={measure}
-        className="flex flex-col md:flex-row gap-4 md:gap-3 md:overflow-x-auto pb-4 scroll-thin md:items-start"
+        className="flex flex-col @3xl:flex-row gap-4 @3xl:gap-3 @3xl:overflow-x-auto pb-4 scroll-thin @3xl:items-start"
         role="region"
         aria-label={`Pipeline board, ${count} stages`}
       >
         {children}
       </div>
       {more > 0 && (
-        <div className="hidden md:block pointer-events-none absolute top-9 right-0 bottom-4 w-16 bg-gradient-to-l from-canvas to-transparent" />
+        <div className="hidden @3xl:block pointer-events-none absolute top-9 right-0 bottom-4 w-16 bg-gradient-to-l from-canvas to-transparent" />
       )}
     </div>
   );
@@ -648,18 +648,27 @@ function NextLink({ s }: { s: Suggestion }) {
   );
 }
 
-/** True below the md breakpoint, where the board's stages stack instead of scrolling sideways. */
-function useNarrow(): boolean {
-  const q = '(max-width: 767px)';
-  const [narrow, setNarrow] = useState(() => typeof window !== 'undefined' && window.matchMedia?.(q).matches);
+/**
+ * True when the page's own box is under the md width (768px), where the board's stages stack instead of scrolling
+ * sideways. It follows the box the page sits in, not the window, so the same page stacks inside the chat's side
+ * panel. Attach the returned ref to the page's root element.
+ */
+function useNarrow(): [boolean, React.RefObject<HTMLDivElement | null>] {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [narrow, setNarrow] = useState(
+    () => typeof window !== 'undefined' && !!window.matchMedia?.('(max-width: 767px)').matches,
+  );
   useEffect(() => {
-    const m = window.matchMedia?.(q);
-    if (!m) return;
-    const on = () => setNarrow(m.matches);
-    m.addEventListener('change', on);
-    return () => m.removeEventListener('change', on);
+    const el = ref.current;
+    if (!el) return;
+    const measure = () => setNarrow(el.getBoundingClientRect().width < 768);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
   }, []);
-  return !!narrow;
+  return [narrow, ref];
 }
 
 /**

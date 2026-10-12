@@ -332,6 +332,33 @@ select {
 .fade-up {
   animation: fade-up 0.25s ease-out both;
 }
+/* the side panel slides in from the right; on a phone its sheet rises from the bottom */
+@keyframes panel-in {
+  from {
+    opacity: 0;
+    transform: translateX(18px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.panel-in {
+  animation: panel-in 0.24s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+@keyframes sheet-in {
+  from {
+    opacity: 0;
+    transform: translateY(28px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.sheet-in {
+  animation: sheet-in 0.26s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
 /* a search that found no one: the box shakes once, so the student sees it was heard */
 @keyframes shake-x {
   0%,
@@ -356,6 +383,8 @@ select {
 }
 @media (prefers-reduced-motion: reduce) {
   .fade-up,
+  .panel-in,
+  .sheet-in,
   .shake-x,
   .shimmer,
   body::before,

@@ -154,7 +154,7 @@ export function Discover() {
           onChange={(e) => setQ(e.target.value)}
           placeholder="Search your network"
           aria-label="Search your network"
-          className="w-full sm:w-80"
+          className="w-full @[40rem]:w-80"
         />
         {people.filter((p) => p.isHuman && !p.hiddenAt).length > 1 && (
           <Link
@@ -218,7 +218,7 @@ export function Discover() {
             Match is how well their role and company fit your goals, out of 100. Reach is how easy they are to
             get to: through people you know, a shared school, or a past conversation. The order weighs both.
           </p>
-          <div className="grid md:grid-cols-2 gap-3 [&>*]:min-w-0">
+          <div className="grid @3xl:grid-cols-2 gap-3 [&>*]:min-w-0">
             {list.map((r) => {
               const p = byId.get(r.personId);
               if (!p) return null;

@@ -61,7 +61,7 @@ export function People() {
           onChange={(e) => setQ(e.target.value)}
           placeholder="Search name, company, title"
           aria-label="Search people"
-          className="w-full sm:w-64"
+          className="w-full @[40rem]:w-64"
         />
         <Select
           value={filter}
@@ -85,7 +85,7 @@ export function People() {
         <>
           {/* phones get a list: one person per row, nothing cut mid-word, nothing off to the side */}
           <ul
-            className="md:hidden divide-y divide-line border border-line rounded-[var(--radius-card)]"
+            className="@3xl:hidden divide-y divide-line border border-line rounded-[var(--radius-card)]"
             data-testid="people-list"
           >
             {list.slice(0, 300).map((p) => {
@@ -119,7 +119,7 @@ export function People() {
               );
             })}
           </ul>
-          <div className="hidden md:block border border-line rounded-[var(--radius-card)] overflow-x-auto">
+          <div className="hidden @3xl:block border border-line rounded-[var(--radius-card)] overflow-x-auto">
             <table className="w-full text-[13.5px] min-w-[640px]">
               <thead className="bg-canvas-2 text-ink-3 text-[12px] uppercase tracking-wide">
                 <tr>

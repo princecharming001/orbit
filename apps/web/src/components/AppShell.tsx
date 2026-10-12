@@ -306,7 +306,8 @@ export function AppShell() {
           ) : (
             <div
               className={cx(
-                'max-w-[1120px] mx-auto px-4 md:px-8 py-6 pb-24 md:pb-8',
+                // the page's own layout (columns, side by side or stacked) follows this box, so the same page also fits the chat's side panel
+                '@container max-w-[1120px] mx-auto px-4 md:px-8 py-6 pb-24 md:pb-8',
                 // on a wide screen the map fills exactly the room under the header and the demo banner, so the page
                 // never scrolls under it (focusing the canvas or a route would otherwise jump the page)
                 fillsScreen && 'lg:h-full lg:flex lg:flex-col',

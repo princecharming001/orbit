@@ -314,8 +314,8 @@ export function NotesNew() {
             </div>
           </div>
         )}
-        <div className="grid sm:grid-cols-3 gap-3">
-          <div className="sm:col-span-2">
+        <div className="grid @[40rem]:grid-cols-3 gap-3">
+          <div className="@[40rem]:col-span-2">
             <Label htmlFor="capture-person">Who was this with?</Label>
             {people.length > 12 && (
               <Input

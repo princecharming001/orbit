@@ -226,7 +226,7 @@ export function Today() {
             disabled={busy}
             title="Rebuild today's brief from your latest email, calendar and notes"
             aria-label="Refresh"
-            className="shrink-0 px-2.5 sm:px-3.5"
+            className="shrink-0 px-2.5 @[40rem]:px-3.5"
             data-testid="today-refresh"
           >
             <RefreshCw size={14} className={busy ? 'animate-spin' : ''} /> <span>Refresh</span>
@@ -260,7 +260,7 @@ export function Today() {
           later, or dismiss it if it is wrong.
         </FirstRunHint>
       )}
-      <div className="grid lg:grid-cols-[minmax(0,1fr)_300px] gap-6 items-start">
+      <div className="grid @5xl:grid-cols-[minmax(0,1fr)_300px] gap-6 items-start">
         <div className="space-y-3 min-w-0">
           {handedOff.length > 0 && (
             <div className="space-y-2" data-testid="today-handed-off">

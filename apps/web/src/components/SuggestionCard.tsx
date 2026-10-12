@@ -628,13 +628,16 @@ export function SuggestionCard({
               ].map(([k, l]) => (
                 <button
                   key={k}
-                  className="px-2 h-10 sm:h-8 rounded-md bg-canvas-2 hover:bg-line-2"
+                  className="px-2 h-10 @[40rem]:h-8 rounded-md bg-canvas-2 hover:bg-line-2"
                   onClick={() => dismiss(k!)}
                 >
                   {l}
                 </button>
               ))}
-              <button className="ml-auto px-2 h-10 sm:h-8 text-ink-3" onClick={() => setDismissing(false)}>
+              <button
+                className="ml-auto px-2 h-10 @[40rem]:h-8 text-ink-3"
+                onClick={() => setDismissing(false)}
+              >
                 Cancel
               </button>
             </>
@@ -647,7 +650,7 @@ export function SuggestionCard({
 
 /** The small secondary buttons along a card's foot (Snooze, Dismiss): bordered, so they read as buttons at rest. */
 const CARD_SMALL_BUTTON =
-  'px-2.5 h-10 sm:h-8 rounded-md border border-line text-ink-2 hover:bg-canvas-2 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40';
+  'px-2.5 h-10 @[40rem]:h-8 rounded-md border border-line text-ink-2 hover:bg-canvas-2 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40';
 
 /** "Title · Company" where a long title gives way first: the company is the part that matters. */
 export function RoleLine({ title, company }: { title?: string; company?: string }) {

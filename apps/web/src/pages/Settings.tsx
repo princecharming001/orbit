@@ -90,9 +90,9 @@ export function SettingsPage() {
   return (
     <div>
       <PageHeader title="Settings" />
-      <div className="grid md:grid-cols-[200px_minmax(0,1fr)] gap-6 items-start">
+      <div className="grid @3xl:grid-cols-[200px_minmax(0,1fr)] gap-6 items-start">
         {/* on a phone the six sections are one menu, not three rows of buttons */}
-        <label className="md:hidden">
+        <label className="@3xl:hidden">
           <span className="sr-only">Settings section</span>
           <Select
             value={section}
@@ -107,14 +107,14 @@ export function SettingsPage() {
             ))}
           </Select>
         </label>
-        <nav className="hidden md:flex md:flex-col md:gap-0.5 min-w-0" aria-label="Settings sections">
+        <nav className="hidden @3xl:flex @3xl:flex-col @3xl:gap-0.5 min-w-0" aria-label="Settings sections">
           {SECTIONS.map(([k, l]) => (
             <NavLink
               key={k}
               to={`/settings/${k}`}
               className={({ isActive }) =>
                 cx(
-                  'h-9 px-3 rounded-lg flex items-center text-[14px] whitespace-nowrap border md:border-0',
+                  'h-9 px-3 rounded-lg flex items-center text-[14px] whitespace-nowrap border @3xl:border-0',
                   isActive || (k === 'profile' && section === 'profile')
                     ? 'bg-canvas-2 font-medium border-line'
                     : 'text-ink-2 hover:bg-canvas-2 border-transparent',
@@ -242,11 +242,11 @@ function Profile() {
   const years = Array.from({ length: /PHD/i.test(f.degree) ? 6 : grad ? 2 : 4 }, (_, i) => firstYear + i);
   if (f.graduationYear && !years.includes(f.graduationYear)) years.unshift(f.graduationYear);
   return (
-    <Card className="grid sm:grid-cols-2 gap-4">
-      <div className="sm:col-span-2">
+    <Card className="grid @[40rem]:grid-cols-2 gap-4">
+      <div className="@[40rem]:col-span-2">
         <SaveState state={state} held="Your name is missing, so nothing on this page is saved yet." />
       </div>
-      <div className="sm:col-span-2">
+      <div className="@[40rem]:col-span-2">
         <Label htmlFor="profile-name-input">Full name</Label>
         <Input
           id="profile-name-input"
@@ -461,11 +461,11 @@ function GoalsForm({ goals, tcs }: { goals: UserGoals; tcs: TargetCompany[] }) {
   );
   return (
     <div className="space-y-4">
-      <Card className="grid sm:grid-cols-2 gap-4">
-        <div className="sm:col-span-2">
+      <Card className="grid @[40rem]:grid-cols-2 gap-4">
+        <div className="@[40rem]:col-span-2">
           <SaveState state={state} />
         </div>
-        <div className="sm:col-span-2">
+        <div className="@[40rem]:col-span-2">
           <Label htmlFor="goals-cycle">Recruiting cycle</Label>
           <Input
             id="goals-cycle"
@@ -473,7 +473,7 @@ function GoalsForm({ goals, tcs }: { goals: UserGoals; tcs: TargetCompany[] }) {
             onChange={(e) => setF({ ...f, cycleLabel: e.target.value })}
           />
         </div>
-        <div className="sm:col-span-2">
+        <div className="@[40rem]:col-span-2">
           <Label>What kind of work</Label>
           <FunctionPicker
             value={f.targetFunctions}
@@ -481,7 +481,7 @@ function GoalsForm({ goals, tcs }: { goals: UserGoals; tcs: TargetCompany[] }) {
             testIdPrefix="settings-fn"
           />
         </div>
-        <div className="sm:col-span-2">
+        <div className="@[40rem]:col-span-2">
           <Label htmlFor="goals-roles">Target roles</Label>
           <Input
             id="goals-roles"
@@ -505,7 +505,7 @@ function GoalsForm({ goals, tcs }: { goals: UserGoals; tcs: TargetCompany[] }) {
             onChange={(e) => setF({ ...f, targetLocations: e.target.value })}
           />
         </div>
-        <div className="sm:col-span-2">
+        <div className="@[40rem]:col-span-2">
           <Label htmlFor="goals-free" hint="what matters to you in a team or a firm">
             Anything else?
           </Label>
@@ -936,7 +936,7 @@ function ClaudeCard() {
           export. Any script running on this page could read it, so Orbit only allows its own code
           {sources.google ? " and Google's sign-in script" : ''} to run here.
         </p>
-        <div className="mt-3 grid sm:grid-cols-2 gap-3 max-w-lg items-start">
+        <div className="mt-3 grid @[40rem]:grid-cols-2 gap-3 max-w-lg items-start">
           <div>
             <Label htmlFor="ai-req">Requests per day</Label>
             <Input
@@ -1090,8 +1090,8 @@ function Limits() {
         Changes here save as you make them.
         {savedAt ? <span className="text-good"> Saved.</span> : null}
       </p>
-      <Card className="grid sm:grid-cols-2 gap-4 items-start">
-        <div className="sm:col-span-2 font-medium -mb-1">Weekly goal</div>
+      <Card className="grid @[40rem]:grid-cols-2 gap-4 items-start">
+        <div className="@[40rem]:col-span-2 font-medium -mb-1">Weekly goal</div>
         <div>
           <Label htmlFor="lim-week">First messages a week</Label>
           <Input
@@ -1108,7 +1108,7 @@ function Limits() {
           />
           <p className="text-[12px] text-ink-3 mt-1">Your goal for new people each week, shown on Today.</p>
         </div>
-        <details className="sm:col-span-2 text-[13px]" data-testid="limits-advanced">
+        <details className="@[40rem]:col-span-2 text-[13px]" data-testid="limits-advanced">
           <summary className="cursor-pointer text-ink-2 w-fit">
             Advanced: how often Orbit lets you write (most students never change these)
           </summary>
@@ -1116,7 +1116,7 @@ function Limits() {
             They keep you from writing to someone twice in a row too soon, and from sending more in a day than
             reads as a mass email.
           </p>
-          <div className="grid sm:grid-cols-2 gap-4 items-start">
+          <div className="grid @[40rem]:grid-cols-2 gap-4 items-start">
             <div>
               <Label htmlFor="lim-cool">Hours between messages to the same person</Label>
               <Input
@@ -1149,7 +1149,7 @@ function Limits() {
                 onChange={(e) => upd({ dailySendCapLinkedin: Number(e.target.value) })}
               />
             </div>
-            <div className="sm:col-span-2">
+            <div className="@[40rem]:col-span-2">
               <Label htmlFor="lim-bumps">Follow-ups when someone has not replied</Label>
               <Input
                 id="lim-bumps"
@@ -1165,7 +1165,7 @@ function Limits() {
                 finance and consulting.
               </p>
             </div>
-            <div className="sm:col-span-2 border-t border-line pt-4">
+            <div className="@[40rem]:col-span-2 border-t border-line pt-4">
               <label className="flex items-start gap-2 text-[13.5px]">
                 <input
                   type="checkbox"
@@ -1198,13 +1198,13 @@ function Limits() {
           </div>
         </details>
       </Card>
-      <Card className="grid sm:grid-cols-2 gap-4 items-start">
-        <div className="sm:col-span-2 font-medium -mb-1">Your schedule</div>
-        <p className="sm:col-span-2 text-[13px] text-ink-2">
+      <Card className="grid @[40rem]:grid-cols-2 gap-4 items-start">
+        <div className="@[40rem]:col-span-2 font-medium -mb-1">Your schedule</div>
+        <p className="@[40rem]:col-span-2 text-[13px] text-ink-2">
           Today's list is rebuilt the first time you open Orbit each day. Orbit runs in your browser, so it
           does not send reminders when it is closed.
         </p>
-        <div className="sm:col-span-2">
+        <div className="@[40rem]:col-span-2">
           <Label htmlFor="lim-sched" optional hint="Calendly, Cal.com or a Google booking page">
             Scheduling link
           </Label>

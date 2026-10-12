@@ -663,14 +663,17 @@ export function MapPage() {
                   : `${visible.length} people · inner ring = closest`}
           </p>
         </div>
-        <div className="w-full sm:w-auto sm:ml-auto flex items-center gap-2">
+        <div className="w-full @[40rem]:w-auto @[40rem]:ml-auto flex items-center gap-2">
           <form
             ref={searchForm}
             onSubmit={(e) => {
               e.preventDefault();
               runSearch(query);
             }}
-            className={cx('relative flex-1 sm:flex-none', missed && missed.q === query.trim() && 'shake-x')}
+            className={cx(
+              'relative flex-1 @[40rem]:flex-none',
+              missed && missed.q === query.trim() && 'shake-x',
+            )}
             data-testid="reach-form"
           >
             <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-3" />
@@ -683,7 +686,7 @@ export function MapPage() {
                 if (webMode && !e.target.value) setWebFocus(undefined);
               }}
               placeholder={webMode ? 'Search your introductions…' : 'Reach a person or company…'}
-              className="pl-8 w-full sm:w-64 pointer-coarse:h-11 pointer-coarse:text-[16px]"
+              className="pl-8 w-full @[40rem]:w-64 pointer-coarse:h-11 pointer-coarse:text-[16px]"
               data-testid="reach-input"
             />
           </form>
@@ -722,10 +725,10 @@ export function MapPage() {
           {legend}
         </p>
       </div>
-      <div className="lg:flex-1 lg:min-h-0 grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_340px]">
+      <div className="@5xl:flex-1 @5xl:min-h-0 grid grid-cols-1 @5xl:grid-cols-[minmax(0,1fr)_340px]">
         <div
           className={cx(
-            'relative min-w-0 overflow-hidden lg:h-auto lg:min-h-[420px] bg-[radial-gradient(circle_at_center,_#fff_0%,_#fafafc_70%)]',
+            'relative min-w-0 overflow-hidden @5xl:h-auto @5xl:min-h-[420px] bg-[radial-gradient(circle_at_center,_#fff_0%,_#fafafc_70%)]',
             // on phones the routes sit under the canvas, so in reach mode the canvas leaves room for them
             // a phone's orbit is as wide as the screen, so the canvas is only as tall as that orbit needs (with
             // room for the top and bottom labels): no empty band above it pushing its bottom under the tab bar
@@ -794,7 +797,7 @@ export function MapPage() {
                     // a thumb-sized target that does not make the card any taller
                     touch
                       ? 'inline-flex items-center justify-center min-h-11 min-w-11 -my-2 -mr-2 px-2'
-                      : 'sm:hidden',
+                      : '@[40rem]:hidden',
                   )}
                   data-testid="map-open-person"
                 >
@@ -809,7 +812,7 @@ export function MapPage() {
           )}
         </div>
         <aside
-          className="min-w-0 border-t lg:border-t-0 lg:border-l border-line bg-canvas lg:overflow-y-auto scroll-thin p-4 space-y-3"
+          className="min-w-0 border-t @5xl:border-t-0 @5xl:border-l border-line bg-canvas @5xl:overflow-y-auto scroll-thin p-4 space-y-3"
           data-testid="map-panel"
         >
           {!reachMode && !webMode && (

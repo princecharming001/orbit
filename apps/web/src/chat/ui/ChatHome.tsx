@@ -152,7 +152,7 @@ export function ChatHome() {
         className="flex-1 min-h-0 overflow-y-auto scroll-thin px-4 sm:px-6"
         data-testid="thread-scroll"
       >
-        <div className="max-w-[760px] mx-auto pt-16 sm:pt-6 pb-44">
+        <div className="@container max-w-[760px] mx-auto pt-16 sm:pt-6 pb-44">
           <Thread turns={thread.turns} actions={cardActions} running={thread.running} />
         </div>
       </div>
