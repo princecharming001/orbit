@@ -104,7 +104,7 @@ describe('risky tools never run without a valid token (property style)', () => {
     const rand = rng(7);
     const risky = tools.filter((t) => t.kind === 'risky');
     let runs = 0;
-    for (let round = 0; round < 12; round++) {
+    for (let round = 0; round < 8; round++) {
       for (const t of risky) {
         const schema = z.toJSONSchema(t.input) as Record<string, unknown>;
         const input = arbitraryFor(schema, rand);

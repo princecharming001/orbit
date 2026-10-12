@@ -1,5 +1,6 @@
 /** Imports, integrations and the account: every one of these needs the student's approval. */
 import { z } from 'zod/v4';
+import { setCurrentUserId } from '../../db/repo';
 import { db } from '../../db/schema';
 import { deleteAllData, exportAllData, exportFilename, leaveDemoForOwnSetup } from '../../engine/account';
 import { DEMO_USER_ID, demoResetPrompt, loadDemo } from '../../engine/demo';
@@ -329,7 +330,7 @@ export const leaveDemo = defineTool({
   async execute(_input, ctx) {
     if (ctx.user.id !== DEMO_USER_ID) throw new Error('You are not in the demo.');
     const user = await leaveDemoForOwnSetup();
-    await db.kv.put({ key: 'currentUserId', value: user.id });
+    await setCurrentUserId(user.id);
     const out = { userId: user.id, href: '/onboarding/1' };
     return ok('text', out, out, 'The demo is cleared. Setup starts with your own details.', '/onboarding/1');
   },

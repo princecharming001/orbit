@@ -464,7 +464,7 @@ export const sendDraft = defineTool({
     const draft = await requireDraft(ctx, input.draftId);
     const body = ctx.edited?.body ?? input.body ?? draft.bodyFinal ?? draft.bodyDraft;
     const subject = ctx.edited?.subject ?? input.subject ?? draft.subject;
-    const { text, person } = await sendIntent(ctx, draft, body, subject, input.via === 'copy');
+    const { text } = await sendIntent(ctx, draft, body, subject, input.via === 'copy');
     let blockedReason: string | undefined;
     if (!['draft', 'failed', 'cancelled'].includes(draft.status))
       blockedReason =
@@ -489,7 +489,7 @@ export const sendDraft = defineTool({
         );
         if (!allowed.allowed) blockedReason = allowed.reason;
         else if (WHY_THEM_GAP.test(body))
-          blockedReason = `The "Why them" line is still missing. Ask ${person.firstName === person.displayName ? 'the student' : 'the student'} for it and redraft first.`;
+          blockedReason = `The "Why them" line is still missing. Ask the student for it and redraft first.`;
       }
     }
     return { text, blockedReason };
