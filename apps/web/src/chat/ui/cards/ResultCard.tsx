@@ -3,14 +3,17 @@
  * approval flow for drafts, SuggestionCard for a brief, Avatar, STAGE_LABELS) and falls back to the envelope's
  * summary when the data is not what it expects. "Open in app" is a router Link to the envelope's href.
  */
-import type { Person } from '@orbit/core';
+import type { OutboundMessage, Person, Suggestion } from '@orbit/core';
 import { STAGE_LABELS } from '@orbit/core';
-import { ArrowUpRight, Check, TriangleAlert } from 'lucide-react';
+import { useLiveQuery } from 'dexie-react-hooks';
+import { ArrowUpRight, Check, Copy, Download, TriangleAlert } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
+import { copyText } from '../../../components/approve';
 import { DraftEditor, OutboxStatus } from '../../../components/DraftEditor';
 import { SuggestionCard } from '../../../components/SuggestionCard';
+import { db } from '../../../db/schema';
 import { Avatar, Button, Chip, cx, relDate } from '../../../ui';
 import type { ResultEnvelope } from '../../types';
 import { Markdown } from '../Markdown';
@@ -31,6 +34,7 @@ import {
   readRoutes,
   readSettings,
   readSuggestions,
+  readText,
 } from './shapes';
 
 export interface CardActions {
@@ -147,11 +151,12 @@ function Envelope({ env, block, actions }: { env: ResultEnvelope; block: ToolBlo
   const d = env.data;
   switch (env.kind) {
     case 'text':
-      return <Markdown text={env.summary} className="my-2" />;
+      return <TextResult env={env} />;
     case 'person': {
       const r = readPerson(d);
       if (!r) return <Summary env={env} />;
-      const { person, chat, facts } = r;
+      const { person, chat, facts, lastTouch, stageLabel, questions } = r;
+      const stage = chat ? STAGE_LABELS[chat.stage] : stageLabel;
       return (
         <GlassCard kind="person">
           <div className="flex items-start gap-3">
@@ -160,14 +165,14 @@ function Envelope({ env, block, actions }: { env: ResultEnvelope; block: ToolBlo
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="font-semibold text-[15px]">{person.displayName}</span>
                 <Chip tone="neutral">{closeness(person.strength)}</Chip>
-                {chat && <Chip tone="accent">{STAGE_LABELS[chat.stage]}</Chip>}
+                {stage && <Chip tone="accent">{stage}</Chip>}
               </div>
               <div className="text-[13px] text-ink-2 truncate">
                 {[person.currentTitle, person.currentOrganizationRaw].filter(Boolean).join(' at ')}
               </div>
-              {person.lastInteractionAt && (
+              {(person.lastInteractionAt || lastTouch) && (
                 <div className="text-[12.5px] text-ink-3 mt-0.5">
-                  Last contact {relDate(person.lastInteractionAt)}
+                  Last contact {person.lastInteractionAt ? relDate(person.lastInteractionAt) : lastTouch}
                 </div>
               )}
               {facts.length > 0 && (
@@ -176,6 +181,18 @@ function Envelope({ env, block, actions }: { env: ResultEnvelope; block: ToolBlo
                     <li key={f}>{f}</li>
                   ))}
                 </ul>
+              )}
+              {questions.length > 0 && (
+                <>
+                  <div className="mt-3 text-[12px] font-medium text-ink-3 uppercase tracking-wide">
+                    Questions to ask
+                  </div>
+                  <ol className="mt-1 text-[13.5px] list-decimal pl-5 space-y-1" data-testid="person-prep">
+                    {questions.map((q) => (
+                      <li key={q}>{q}</li>
+                    ))}
+                  </ol>
+                </>
               )}
             </div>
           </div>
@@ -208,29 +225,22 @@ function Envelope({ env, block, actions }: { env: ResultEnvelope; block: ToolBlo
         <GlassCard kind="drafts">
           <CardHead title={env.summary} href={env.href} />
           <ul className="divide-y divide-line-2">
-            {drafts.map(({ draft, person }) => (
-              <li key={draft.id} className="py-2 flex items-start gap-3 min-w-0">
+            {drafts.slice(0, 8).map((r) => (
+              <li key={r.id} className="py-2 flex items-start gap-3 min-w-0">
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-medium truncate">
-                      {person?.displayName ?? draft.toEmail ?? 'Someone'}
-                    </span>
-                    <Chip
-                      tone={draft.status === 'draft' ? 'accent' : draft.status === 'sent' ? 'good' : 'warn'}
-                    >
-                      {draft.status === 'handed_off'
-                        ? 'Waiting for I sent it'
-                        : draft.status === 'draft'
-                          ? 'Draft'
-                          : draft.status}
-                    </Chip>
+                    <span className="font-medium truncate">{r.personName ?? 'Someone'}</span>
+                    {r.kindLabel && <span className="text-[12.5px] text-ink-3">{r.kindLabel}</span>}
+                    {r.status && (
+                      <Chip tone={r.status === 'draft' ? 'accent' : r.status === 'sent' ? 'good' : 'warn'}>
+                        {DRAFT_STATUS[r.status] ?? r.status}
+                      </Chip>
+                    )}
                   </div>
-                  <div className="text-[13px] text-ink-2 line-clamp-2 mt-0.5">
-                    {draft.bodyFinal ?? draft.bodyDraft}
-                  </div>
+                  {r.text && <div className="text-[13px] text-ink-2 line-clamp-2 mt-0.5">{r.text}</div>}
                 </div>
                 <Link
-                  to={`/inbox?draft=${draft.id}`}
+                  to={`/inbox?draft=${r.id}`}
                   className="shrink-0 text-[13px] text-accent font-medium hover:underline"
                 >
                   Open
@@ -246,7 +256,7 @@ function Envelope({ env, block, actions }: { env: ResultEnvelope; block: ToolBlo
       if (!items.length && !Object.keys(counts).length) return <Summary env={env} />;
       return (
         <GlassCard kind="pipeline">
-          <CardHead title="Pipeline" href={env.href ?? '/pipeline'} />
+          <CardHead title={items.length === 1 ? env.summary : 'Pipeline'} href={env.href ?? '/pipeline'} />
           {Object.keys(counts).length > 0 && (
             <div className="flex flex-wrap gap-1.5 mb-2">
               {Object.entries(counts).map(([stage, n]) => (
@@ -258,83 +268,127 @@ function Envelope({ env, block, actions }: { env: ResultEnvelope; block: ToolBlo
             </div>
           )}
           <div className="divide-y divide-line-2">
-            {items.map(({ chat, person, nextStep }) => (
+            {items.slice(0, 12).map(({ person, stage, stageLabel, nextStep }) => (
               <PersonRow
                 key={person.id}
                 person={person}
                 sub={nextStep ? `Next: ${nextStep}` : undefined}
-                aside={chat ? <Chip tone="accent">{STAGE_LABELS[chat.stage]}</Chip> : undefined}
+                aside={
+                  stage || stageLabel ? (
+                    <Chip tone="accent">
+                      {stageLabel ?? (STAGE_LABELS as Record<string, string>)[stage!] ?? stage}
+                    </Chip>
+                  ) : undefined
+                }
               />
             ))}
           </div>
+          {items.length > 12 && (
+            <p className="mt-1 text-[12.5px] text-ink-3">
+              And {items.length - 12} more on the Pipeline page.
+            </p>
+          )}
         </GlassCard>
       );
     }
     case 'routes': {
-      const { to, routes, people } = readRoutes(d);
-      if (!routes.length) return <Summary env={env} />;
-      const name = (id: string) => (id === 'user' ? 'You' : (people[id]?.firstName ?? 'someone'));
+      const { to, routes, stories } = readRoutes(d);
+      if (!routes.length && !stories.length) {
+        const people = readPeople(d);
+        if (!people.length) return <Summary env={env} />;
+        return (
+          <GlassCard kind="routes">
+            <CardHead title={env.summary} href={env.href} />
+            <div className="divide-y divide-line-2">
+              {people.map(({ person }) => (
+                <PersonRow key={person.id} person={person} />
+              ))}
+            </div>
+          </GlassCard>
+        );
+      }
       return (
         <GlassCard kind="routes">
-          <CardHead title={to ? `Routes to ${to.displayName}` : 'Routes'} href={env.href} />
-          <ol className="space-y-2">
-            {routes.map((r, i) => (
-              <li key={i} className="flex items-start gap-3">
-                <span
-                  className="mt-1 shrink-0 w-14 h-1.5 rounded-full bg-line-2 overflow-hidden"
-                  role="meter"
-                  aria-valuenow={Math.round(r.score * 100)}
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-label="Route strength"
-                >
+          <CardHead title={to ? `Routes to ${to.displayName}` : env.summary} href={env.href} />
+          {routes.length > 0 && (
+            <ol className="space-y-2">
+              {routes.map((r, i) => (
+                <li key={i} className="flex items-start gap-3">
                   <span
-                    className="block h-full bg-accent rounded-full"
-                    style={{ width: `${Math.max(8, Math.round(r.score * 100))}%` }}
-                  />
-                </span>
-                <div className="min-w-0">
-                  <div className="font-medium">
-                    {['You', ...r.hops.map((h) => name(h.toId))].join(' → ')}
-                    <span className="ml-2 text-[12px] font-normal text-ink-3">
-                      {r.band === 'strong' ? 'strong' : r.band === 'possible' ? 'possible' : 'long shot'}
-                    </span>
+                    className="mt-1 shrink-0 w-14 h-1.5 rounded-full bg-line-2 overflow-hidden"
+                    role="meter"
+                    aria-valuenow={Math.round(r.score * 100)}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-label="Route strength"
+                  >
+                    <span
+                      className="block h-full bg-accent rounded-full"
+                      style={{ width: `${Math.max(8, Math.round(r.score * 100))}%` }}
+                    />
+                  </span>
+                  <div className="min-w-0">
+                    <div className="font-medium">
+                      {['You', ...r.names].join(' → ')}
+                      <span className="ml-2 text-[12px] font-normal text-ink-3">
+                        {r.bandLabel ??
+                          (r.band === 'strong' ? 'strong' : r.band === 'possible' ? 'possible' : 'long shot')}
+                      </span>
+                    </div>
+                    {r.text.length > 0 && <div className="text-[12.5px] text-ink-3">{r.text.join('. ')}</div>}
                   </div>
-                  <div className="text-[12.5px] text-ink-3">{r.hops.map((h) => h.text).join('. ')}</div>
-                </div>
-              </li>
-            ))}
-          </ol>
+                </li>
+              ))}
+            </ol>
+          )}
+          {stories.length > 0 && (
+            <ul className="text-[13.5px] space-y-1.5">
+              {stories.map((t) => (
+                <li key={t}>{t}</li>
+              ))}
+            </ul>
+          )}
         </GlassCard>
       );
     }
     case 'brief':
-    case 'suggestion': {
-      const suggestions = readSuggestions(d);
-      if (!suggestions.length) return <Summary env={env} />;
-      return (
-        <div className="my-2 space-y-2" data-testid={`result-${env.kind}`}>
-          {suggestions.map((s) => (
-            <SuggestionCard key={s.id} s={s} compact />
-          ))}
-          {env.href && (
-            <div className="flex justify-end">
-              <OpenInApp href={env.href} />
-            </div>
-          )}
-        </div>
-      );
-    }
+    case 'suggestion':
+      return <SuggestionsCard env={env} />;
     case 'note': {
-      const { note, person, facts, summary } = readNote(d);
+      const { note, person, facts, summary, notes, candidates } = readNote(d);
+      if (notes.length)
+        return (
+          <GlassCard kind="note">
+            <CardHead title={env.summary} href={env.href} />
+            <ul className="divide-y divide-line-2 text-[13.5px]">
+              {notes.slice(0, 6).map((n, i) => (
+                <li key={i} className="py-1.5">
+                  <div className="text-[12.5px] text-ink-3">
+                    {[n.when, n.people.join(', ')].filter(Boolean).join(' · ')}
+                  </div>
+                  {n.summary && <div className="line-clamp-2">{n.summary}</div>}
+                </li>
+              ))}
+            </ul>
+          </GlassCard>
+        );
+      if (candidates.length)
+        return (
+          <GlassCard kind="note">
+            <CardHead title={env.summary} href={env.href} />
+            <div className="divide-y divide-line-2">
+              {candidates.map((p) => (
+                <PersonRow key={p.id} person={p} />
+              ))}
+            </div>
+          </GlassCard>
+        );
       return (
         <GlassCard kind="note">
           <CardHead title={person ? `Note on ${person.displayName}` : 'Note saved'} href={env.href} />
-          {(summary || note?.rawText) && (
-            <p className="text-[13.5px] text-ink-2 line-clamp-4 whitespace-pre-line">
-              {summary ?? note?.rawText}
-            </p>
-          )}
+          <p className="text-[13.5px] text-ink-2 line-clamp-4 whitespace-pre-line">
+            {summary ?? note?.rawText ?? env.summary}
+          </p>
           {facts.length > 0 && (
             <ul className="mt-2 text-[13px] space-y-1">
               {facts.map((f) => (
@@ -372,7 +426,7 @@ function Envelope({ env, block, actions }: { env: ResultEnvelope; block: ToolBlo
       );
     }
     case 'company': {
-      const { name, industry, people, target } = readCompany(d);
+      const { name, industry, people, former, target } = readCompany(d);
       if (!name) return <Summary env={env} />;
       return (
         <GlassCard kind="company">
@@ -388,13 +442,19 @@ function Envelope({ env, block, actions }: { env: ResultEnvelope; block: ToolBlo
           />
           {people.length > 0 ? (
             <div className="divide-y divide-line-2">
-              {people.map((p) => (
+              {people.slice(0, 8).map((p) => (
                 <PersonRow key={p.id} person={p} />
               ))}
             </div>
           ) : (
             <p className="text-[13.5px] text-ink-2">{env.summary}</p>
           )}
+          {former.length > 0 && (
+            <p className="mt-2 text-[12.5px] text-ink-3">
+              Used to work there: {former.map((p) => p.displayName).join(', ')}
+            </p>
+          )}
+          {people.length > 0 && <p className="mt-2 text-[12.5px] text-ink-3">{env.summary}</p>}
         </GlassCard>
       );
     }
@@ -403,7 +463,7 @@ function Envelope({ env, block, actions }: { env: ResultEnvelope; block: ToolBlo
       if (!changes.length) return <Summary env={env} />;
       return (
         <GlassCard kind="settings">
-          <CardHead title="Settings changed" href={env.href} />
+          <CardHead title={env.summary} href={env.href} />
           <dl className="text-[13.5px] space-y-1">
             {changes.map((c) => (
               <div key={c.label} className="flex items-baseline gap-2 flex-wrap">
@@ -419,7 +479,7 @@ function Envelope({ env, block, actions }: { env: ResultEnvelope; block: ToolBlo
       );
     }
     case 'import': {
-      const { source, counts } = readImport(d);
+      const { source, counts, lines } = readImport(d);
       return (
         <GlassCard kind="import">
           <CardHead title={source ? `Imported from ${source}` : 'Imported'} href={env.href} />
@@ -435,6 +495,14 @@ function Envelope({ env, block, actions }: { env: ResultEnvelope; block: ToolBlo
           ) : (
             <p className="text-[13.5px] text-ink-2">{env.summary}</p>
           )}
+          {lines.length > 0 && (
+            <ul className="mt-2 text-[13px] text-ink-2 list-disc pl-4 space-y-0.5">
+              {lines.slice(0, 8).map((l) => (
+                <li key={l}>{l}</li>
+              ))}
+            </ul>
+          )}
+          {counts.length > 0 && <p className="mt-2 text-[12.5px] text-ink-3">{env.summary}</p>}
         </GlassCard>
       );
     }
@@ -509,13 +577,113 @@ function Summary({ env }: { env: ResultEnvelope }) {
   );
 }
 
+const DRAFT_STATUS: Record<string, string> = {
+  draft: 'Draft',
+  queued: 'Sending soon',
+  sending: 'Sending',
+  sent: 'Sent',
+  handed_off: 'Waiting for I sent it',
+  failed: 'Not sent',
+  cancelled: 'Discarded',
+};
+
+/** The draft as stored now, so a card shows what happened to it since (edited, handed off, sent). */
+function useLiveDraft(draftId: string | undefined, given?: OutboundMessage): OutboundMessage | undefined {
+  const live = useLiveQuery(
+    async () => (draftId ? ((await db.outbound.get(draftId)) ?? null) : null),
+    [draftId],
+  );
+  return live ?? given;
+}
+
+const OPEN_DRAFT = new Set(['draft', 'failed', 'cancelled']);
+
+/** Today's cards: the existing SuggestionCard for each open one, read live from the database. */
+function SuggestionsCard({ env }: { env: ResultEnvelope }) {
+  const { suggestions, ids, summary } = readSuggestions(env.data);
+  const live = useLiveQuery(
+    async () => (ids.length ? (await db.suggestions.bulkGet(ids)).filter((x): x is Suggestion => !!x) : []),
+    [ids.join(',')],
+  );
+  const open = [...suggestions, ...(live ?? [])].filter(
+    (x) => env.kind === 'brief' || x.status === 'pending' || x.status === 'snoozed',
+  );
+  if (!open.length) return <Summary env={env} />;
+  const shown = open.filter((x) => x.status === 'pending').slice(0, env.kind === 'brief' ? 4 : 1);
+  if (!shown.length) return <Summary env={env} />;
+  const rest = open.filter((x) => x.status === 'pending').length - shown.length;
+  return (
+    <div className="my-2 space-y-2" data-testid={`result-${env.kind}`}>
+      {env.kind === 'brief' && (summary ?? env.summary) && (
+        <p className="text-[14px] text-ink-2">{summary ?? env.summary}</p>
+      )}
+      {shown.map((x) => (
+        <SuggestionCard key={x.id} s={x} compact />
+      ))}
+      <div className="flex items-center justify-between gap-2">
+        {rest > 0 ? <span className="text-[12.5px] text-ink-3">{rest} more on Today.</span> : <span />}
+        <OpenInApp href={env.href} />
+      </div>
+    </div>
+  );
+}
+
+/** A plain answer, with the words to copy or the file to save when the result carries one. */
+function TextResult({ env }: { env: ResultEnvelope }) {
+  const { quote, file } = readText(env.data);
+  const [copied, setCopied] = useState(false);
+  if (!quote && !file && !env.href) return <Markdown text={env.summary} className="my-2" />;
+  return (
+    <GlassCard kind="text">
+      <div className="flex items-start gap-3">
+        <Markdown text={env.summary} className="flex-1 min-w-0 text-[13.5px]" />
+        <OpenInApp href={env.href} className="shrink-0" />
+      </div>
+      {quote && (
+        <div className="mt-2">
+          <blockquote className="whitespace-pre-line rounded-xl bg-canvas/70 px-3 py-2 text-[13.5px]">
+            {quote}
+          </blockquote>
+          <Button
+            size="sm"
+            className="mt-2"
+            onClick={async () => setCopied(await copyText(quote))}
+            data-testid="text-copy"
+          >
+            <Copy size={14} aria-hidden /> {copied ? 'Copied' : 'Copy text'}
+          </Button>
+        </div>
+      )}
+      {file && (
+        <Button
+          size="sm"
+          className="mt-2"
+          onClick={() => {
+            const url = URL.createObjectURL(new Blob([file.json], { type: 'application/json' }));
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = file.name;
+            a.click();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+          }}
+          data-testid="text-download"
+        >
+          <Download size={14} aria-hidden /> Save {file.name}
+        </Button>
+      )}
+    </GlassCard>
+  );
+}
+
 /** What an approval produced, in place of the card that asked. A sent draft draws the Inbox's own status block. */
 function Outcome({ env, block, actions }: { env: ResultEnvelope; block: ToolBlock; actions: CardActions }) {
   const r = env.kind === 'draft' ? readDraft(env.data) : undefined;
-  if (r && r.draft.status !== 'draft')
+  const draft = useLiveDraft(r?.draftId, r?.draft);
+  if (draft && !OPEN_DRAFT.has(draft.status))
     return (
       <div className="my-2" data-testid="result-outcome">
-        <OutboxStatus draft={r.draft} />
+        <p className="text-[13.5px] mb-1">{env.summary}</p>
+        <OutboxStatus draft={draft} />
         {env.href && (
           <div className="mt-1 flex justify-end">
             <OpenInApp href={env.href} />
@@ -533,18 +701,37 @@ function Outcome({ env, block, actions }: { env: ResultEnvelope; block: ToolBloc
 /** The draft card: the existing editor and approval flow; Approve goes through the engine. */
 function DraftCard({ block, env, actions }: { block: ToolBlock; env: ResultEnvelope; actions: CardActions }) {
   const r = readDraft(env.data);
+  const draft = useLiveDraft(r?.draftId, r?.draft);
+  const person = useLiveQuery(
+    async () => (r?.person || !draft ? null : ((await db.people.get(draft.personId)) ?? null)),
+    [draft?.personId, !!r?.person],
+  );
   const [busy, setBusy] = useState(false);
   if (!r) return <Summary env={env} />;
   if (block.status === 'approved' && block.outcome)
     return <Outcome env={block.outcome} block={block} actions={actions} />;
-  const { draft, person } = r;
+  if (!draft) return <Summary env={env} />;
+  const name = r.person?.displayName ?? person?.displayName ?? r.personName;
+  if (!OPEN_DRAFT.has(draft.status))
+    return (
+      <GlassCard kind="draft">
+        <CardHead title={name ? `To ${name}` : 'Draft'} href={env.href} />
+        <p className="text-[13.5px] mb-2">{env.summary}</p>
+        <OutboxStatus draft={draft} />
+      </GlassCard>
+    );
   return (
     <GlassCard kind="draft">
       <CardHead
-        title={person ? `To ${person.displayName}` : 'Draft'}
+        title={name ? `To ${name}` : 'Draft'}
         href={env.href}
         aside={<Chip tone="accent">{draft.channel === 'linkedin' ? 'LinkedIn' : 'Email'}</Chip>}
       />
+      {draft.needsInput?.length ? (
+        <p className="text-[13px] text-warn mb-2" data-testid="draft-needs-input">
+          {env.summary}
+        </p>
+      ) : null}
       <DraftEditor
         draft={draft}
         busy={busy}
@@ -572,12 +759,14 @@ function ConfirmCard({
   actions: CardActions;
 }) {
   const c = readConfirm(env.data);
+  const draft = useLiveDraft(c.draftId, c.draft);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const text = c.text ?? env.summary;
   if (block.status === 'approved' && block.outcome)
     return <Outcome env={block.outcome} block={block} actions={actions} />;
   const decided = block.status === 'cancelled' || block.status === 'approved';
+  const editable = !!draft && OPEN_DRAFT.has(draft.status);
   const approve = async (edited?: { body: string; subject?: string }) => {
     setBusy(true);
     setError(undefined);
@@ -615,10 +804,10 @@ function ConfirmCard({
           )}
         </div>
       </div>
-      {c.draft && !decided && (
+      {editable && !decided && (
         <div className="mt-3">
           <DraftEditor
-            draft={c.draft}
+            draft={draft}
             busy={busy || !!c.blockedReason}
             approveLabel="Approve & send"
             onApprove={(body, subject) => approve({ body, subject })}
@@ -631,7 +820,7 @@ function ConfirmCard({
         </p>
       ) : (
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          {!c.draft && (
+          {!editable && (
             <Button
               variant="primary"
               size="sm"

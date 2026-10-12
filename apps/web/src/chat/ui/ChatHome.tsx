@@ -27,6 +27,7 @@ export function ChatHome() {
   }, [actions]);
   const { scrollRef, onScroll, pinned, jump } = useAutoScroll(thread.turns, thread.running);
   const first = user?.firstName?.trim() || 'there';
+  const chipFile = useRef<HTMLInputElement | null>(null);
   const cardActions = useMemo(
     () => ({
       approve: actions.approve.bind(actions),
@@ -105,7 +106,10 @@ export function ChatHome() {
                     key={c.id}
                     type="button"
                     className="glass glass-hover type-chip min-h-11 sm:min-h-10 px-3.5 sm:px-4 rounded-full text-ink-2 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 text-center"
-                    onClick={() => actions.runChip(c.id)}
+                    onClick={() =>
+                      // a chip that needs a file opens the picker; the file then goes in like a "+" attachment
+                      c.tool === 'import_linkedin' ? chipFile.current?.click() : actions.runChip(c.id)
+                    }
                     disabled={thread.running}
                     data-testid={`chip-${c.id}`}
                   >
@@ -115,6 +119,20 @@ export function ChatHome() {
               </div>
             ))}
           </div>
+          <input
+            ref={chipFile}
+            type="file"
+            accept=".csv,.zip,text/csv"
+            className="sr-only"
+            tabIndex={-1}
+            aria-hidden
+            data-testid="linkedin-chip-file"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              e.target.value = '';
+              if (f) actions.attach(f, 'linkedin');
+            }}
+          />
         </div>
         <div className="flex-1 min-h-[40px]" />
         <p

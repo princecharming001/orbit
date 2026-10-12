@@ -3,8 +3,9 @@ import type { ResultEnvelope, ToolContext, ToolSpec } from '../types';
 
 /**
  * A small fake registry for the engine tests: read, write and risky tools that exercise every path of the loop and
- * the router (parallel reads, a tool that throws, a risky tool that needs confirmation, file-bearing imports). The
- * real registry is built by another track against the same contract.
+ * the router (parallel reads, a tool that throws, a risky tool that needs confirmation, attachment imports). Names and
+ * input schemas mirror the real registry's (chat/registry.ts) for the tools they share, so a test that passes here
+ * calls the real tool the same way; chat/__tests__/integration.test.ts drives the real registry end to end.
  */
 
 export interface StubCall {
@@ -92,12 +93,19 @@ export function makeStubRegistry(): StubRegistry {
       kind: 'read',
       description:
         'Call this when the student asks about their pipeline, a stage, or who went quiet. Lists chats, optionally filtered by stage.',
-      input: z.object({ stage: z.enum(STAGES).optional().describe('only chats in this stage') }),
+      input: z.object({
+        stage: z.enum(STAGES).optional().describe('only chats in this stage'),
+        quietOnly: z.boolean().optional().describe('only chats waiting a week or more for a reply'),
+      }),
       progress: 'Looking at your pipeline',
       execute: async (input) => ({
         kind: 'pipeline',
         data: { stage: input.stage, rows: [] },
-        summary: input.stage ? `No chats in ${input.stage}.` : 'Your pipeline is empty.',
+        summary: input.stage
+          ? `No chats in ${input.stage}.`
+          : input.quietOnly
+            ? 'No chat went quiet.'
+            : 'Your pipeline is empty.',
         href: input.stage ? `/pipeline?stage=${input.stage}` : '/pipeline',
       }),
     }),
@@ -131,37 +139,42 @@ export function makeStubRegistry(): StubRegistry {
       kind: 'read',
       description:
         'Call this when the student asks about drafts or unsent messages. Lists outbound messages by status.',
-      input: z.object({ status: z.enum(['draft', 'queued', 'sent']).optional().describe('status filter') }),
+      input: z.object({
+        list: z
+          .enum(['to_send', 'can_wait', 'started', 'opened', 'snoozed', 'sent', 'all'])
+          .optional()
+          .describe('which list'),
+        personId: z.string().optional().describe('only this person'),
+      }),
       execute: async (input) => ({
         kind: 'drafts',
-        data: { status: input.status, drafts: [] },
+        data: { list: input.list, drafts: [] },
         summary: 'No drafts waiting.',
         href: '/inbox',
       }),
     }),
     tool({
-      name: 'find_routes_to_person',
-      kind: 'read',
-      description: 'Call this when the student asks who can introduce them to a person. Ranks warm routes.',
-      input: z.object({ personId: z.string().describe('the target person id') }),
-      execute: async (input) => ({
-        kind: 'routes',
-        data: { to: input.personId, paths: [] },
-        summary: 'No warm route yet.',
-        href: `/map?reach=1&to=${input.personId}`,
-      }),
-    }),
-    tool({
-      name: 'find_routes_to_company',
+      name: 'find_routes',
       kind: 'read',
       description:
-        'Call this when the student asks how to reach a company. Ranks people who can introduce them there.',
-      input: z.object({ company: z.string().describe('company name') }),
-      execute: async (input) => ({
-        kind: 'routes',
-        data: { company: input.company, paths: [] },
-        summary: `No one at ${input.company} yet.`,
+        'Call this when the student asks who can introduce them to a person, or how to reach a company. Ranks warm routes.',
+      input: z.object({
+        personId: z.string().optional().describe('the target person id'),
+        company: z.string().optional().describe('company name'),
       }),
+      execute: async (input) =>
+        input.company
+          ? {
+              kind: 'company',
+              data: { company: input.company, thereNow: [] },
+              summary: `No one at ${input.company} yet.`,
+            }
+          : {
+              kind: 'routes',
+              data: { target: input.personId, routes: [] },
+              summary: 'No warm route yet.',
+              href: `/map?reach=${input.personId}`,
+            },
     }),
     tool({
       name: 'create_draft',
@@ -186,7 +199,11 @@ export function makeStubRegistry(): StubRegistry {
       input: z.object({
         text: z.string().describe('the note text'),
         personId: z.string().optional().describe('who it is about'),
-        source: z.enum(['manual', 'upload', 'email']).optional().describe('where it came from'),
+        source: z
+          .enum(['manual', 'wispr_capture', 'granola_email', 'upload'])
+          .optional()
+          .describe('where it came from'),
+        title: z.string().optional().describe('a title'),
       }),
       execute: async (input) => ({
         kind: 'note',
@@ -226,10 +243,14 @@ export function makeStubRegistry(): StubRegistry {
       name: 'save_resume',
       kind: 'risky',
       description: 'Call this only when the student attaches a resume file to read.',
-      input: z.object({ file: z.custom<File>((v) => v instanceof Blob).describe('the resume file') }),
+      input: z.object({
+        filename: z.string().min(1).describe('the file name'),
+        base64: z.string().min(1).describe('the file contents, base64'),
+        mimeType: z.string().optional().describe('the file type'),
+      }),
       execute: async (input) => ({
         kind: 'import',
-        data: { fileName: (input.file as File).name },
+        data: { fileName: input.filename },
         summary: 'Resume read.',
         href: '/settings/integrations',
       }),
@@ -238,10 +259,14 @@ export function makeStubRegistry(): StubRegistry {
       name: 'import_linkedin',
       kind: 'risky',
       description: 'Call this only when the student attaches a LinkedIn export to import.',
-      input: z.object({ file: z.custom<File>((v) => v instanceof Blob).describe('the LinkedIn zip or csv') }),
+      input: z.object({
+        csvText: z.string().optional().describe('Connections.csv as text'),
+        base64: z.string().optional().describe('the ZIP as base64'),
+        filename: z.string().optional().describe('the file name'),
+      }),
       execute: async (input) => ({
         kind: 'import',
-        data: { fileName: (input.file as File).name, imported: 0 },
+        data: { fileName: input.filename, imported: 0 },
         summary: 'Imported 0 connections.',
       }),
     }),

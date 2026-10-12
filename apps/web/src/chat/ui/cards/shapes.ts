@@ -1,7 +1,9 @@
 /**
- * What each result kind's `data` is expected to hold. The tool registry is built apart from the UI, so every reader
- * here is lenient: it takes the documented shape, or the bare domain object when there is only one, and never throws.
- * Unknown fields are ignored. A card with nothing it can read falls back to the envelope's summary.
+ * What each result kind's `data` is expected to hold. The registry's tools return `{ ui, forModel }`: `ui` holds
+ * compact references (a person as `{ id, name, title, company }`, a draft as `{ id, person, status, firstLine }`, a
+ * card as `{ id, kind, reason }`) and, where a page needs it, the domain object itself. The scripted engine of the UI
+ * tests hands bare domain objects. Every reader here takes either, ignores fields it does not know and never throws;
+ * a card with nothing it can read falls back to the envelope's summary.
  */
 import type {
   CoffeeChat,
@@ -10,198 +12,433 @@ import type {
   OutboundMessage,
   Person,
   PersonFact,
-  ReachPath,
   Suggestion,
 } from '@orbit/core';
 
 const obj = (d: unknown): Record<string, unknown> =>
-  d && typeof d === 'object' ? (d as Record<string, unknown>) : {};
+  d && typeof d === 'object' && !Array.isArray(d) ? (d as Record<string, unknown>) : {};
+const str = (x: unknown): string | undefined => (typeof x === 'string' && x.trim() ? x : undefined);
+const num = (x: unknown): number | undefined => (typeof x === 'number' && Number.isFinite(x) ? x : undefined);
 const isPerson = (x: unknown): x is Person =>
   !!x && typeof x === 'object' && typeof (x as Person).displayName === 'string';
 const isDraft = (x: unknown): x is OutboundMessage =>
   !!x && typeof x === 'object' && typeof (x as OutboundMessage).bodyDraft === 'string';
-const list = <T>(x: unknown, ok: (v: unknown) => v is T): T[] => (Array.isArray(x) ? x.filter(ok) : []);
+const isSuggestion = (x: unknown): x is Suggestion =>
+  !!x && typeof x === 'object' && typeof (x as Suggestion).reasonText === 'string';
 const present = <T>(x: T | undefined): x is T => x !== undefined;
+const arr = (x: unknown): unknown[] => (Array.isArray(x) ? x : []);
 const strings = (x: unknown): string[] =>
-  Array.isArray(x)
-    ? x
-        .map((v) => (typeof v === 'string' ? v : obj(v).text))
-        .filter((v): v is string => typeof v === 'string')
-    : [];
+  arr(x)
+    .map((v) => (typeof v === 'string' ? v : str(obj(v).text)))
+    .filter((v): v is string => typeof v === 'string');
 
-/** person: `{ person, chat?, facts?, lastContactAt? }` or a bare Person */
-export function readPerson(d: unknown): { person: Person; chat?: CoffeeChat; facts: string[] } | undefined {
+// ---------- unpacking ----------
+
+/** Third-party text reaches the model inside `<untrusted_…>` elements; the student sees the text alone. */
+const UNTRUSTED = /<\/?untrusted_[A-Za-z0-9]+(?:\s[^>]*)?>\n?/g;
+export function unwrapText(s: string): string {
+  return s.includes('<untrusted_') ? s.replace(UNTRUSTED, '').replace(/\n+$/, '').trim() : s;
+}
+function clean(x: unknown, depth = 0): unknown {
+  if (typeof x === 'string') return unwrapText(x);
+  if (depth > 6 || !x || typeof x !== 'object') return x;
+  if (Array.isArray(x)) return x.map((v) => clean(v, depth + 1));
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(x)) out[k] = clean(v, depth + 1);
+  return out;
+}
+
+/** The UI half of a tool's data (`ui` of `{ ui, forModel }`), or the data itself, with untrusted wrappers removed. */
+export function unpack(d: unknown): unknown {
   const o = obj(d);
-  const person = isPerson(o.person) ? o.person : isPerson(d) ? d : undefined;
+  return clean('ui' in o && 'forModel' in o ? o.ui : d);
+}
+
+/** A person from a domain row or a compact reference `{ id, name, title?, company?, closeness? }`. */
+export function personOf(x: unknown): Person | undefined {
+  if (isPerson(x)) return x;
+  const o = obj(x);
+  const id = str(o.id) ?? str(o.personId);
+  const name = str(o.name) ?? (typeof o.person === 'string' ? str(o.person) : undefined);
+  if (!id || !name) return undefined;
+  const [first, ...rest] = name.split(' ');
+  return {
+    id,
+    displayName: name,
+    firstName: first ?? name,
+    lastName: rest.join(' '),
+    currentTitle: str(o.title),
+    currentOrganizationRaw: str(o.company),
+    strength: num(o.closeness) ?? 0,
+  } as unknown as Person;
+}
+
+// ---------- readers ----------
+
+/** person: `{ person, chat?, facts? }`, a get_person view, or a bare Person */
+export function readPerson(d: unknown):
+  | {
+      person: Person;
+      chat?: CoffeeChat;
+      facts: string[];
+      lastTouch?: string;
+      stageLabel?: string;
+      questions: string[];
+      summary?: string;
+    }
+  | undefined {
+  const o = obj(unpack(d));
+  const person = personOf(o.person) ?? personOf(o);
   if (!person) return undefined;
-  return { person, chat: o.chat as CoffeeChat | undefined, facts: strings(o.facts) };
+  const chat = str(obj(o.chat).stage) ? (o.chat as CoffeeChat) : undefined;
+  const prep = obj(o.prep);
+  return {
+    person,
+    chat,
+    facts: strings(o.facts),
+    lastTouch: str(o.lastTouch),
+    stageLabel: str(o.stage),
+    questions: strings(prep.questions).slice(0, 5),
+    summary: str(o.summary),
+  };
 }
 
-/** people: `{ people: (Person | { person, why? })[] }` or a bare array */
+/** people: `{ people | recommendations | candidates }` of Person, `{ person, why }` or references; or a bare array */
 export function readPeople(d: unknown): { person: Person; why?: string }[] {
-  const raw = Array.isArray(d) ? d : obj(d).people;
-  if (!Array.isArray(raw)) return [];
+  const u = unpack(d);
+  const o = obj(u);
+  const raw = Array.isArray(u) ? u : (o.people ?? o.recommendations ?? o.candidates ?? o.thereNow);
+  return arr(raw)
+    .map((x) => {
+      const r = obj(x);
+      const person = personOf(r.person) ?? personOf(x);
+      if (!person) return undefined;
+      const why =
+        str(r.why) ??
+        (strings(r.reasons).length ? strings(r.reasons).slice(0, 2).join('. ') : undefined) ??
+        (str(r.stage) ? `Chat: ${r.stage}` : undefined);
+      return { person, why };
+    })
+    .filter(present);
+}
+
+/** draft: `{ draft, person? }`, a draft reference `{ id, person, firstLine }`, or a bare OutboundMessage */
+export function readDraft(
+  d: unknown,
+): { draft?: OutboundMessage; draftId: string; person?: Person; personName?: string } | undefined {
+  const o = obj(unpack(d));
+  const draft = isDraft(o.draft) ? o.draft : isDraft(o) ? (o as unknown as OutboundMessage) : undefined;
+  const draftId = draft?.id ?? (str(o.kindLabel) || str(o.body) ? str(o.id) : undefined);
+  if (!draftId) return undefined;
+  const person = isPerson(o.person) ? o.person : undefined;
+  return { draft, draftId, person, personName: person?.displayName ?? str(o.person) };
+}
+
+export interface DraftRow {
+  id: string;
+  personName?: string;
+  status?: string;
+  kindLabel?: string;
+  text?: string;
+}
+
+function draftRow(x: unknown): DraftRow | undefined {
+  const r = obj(x);
+  if (isDraft(r.draft))
+    return {
+      id: r.draft.id,
+      personName: isPerson(r.person) ? r.person.displayName : (r.draft.toEmail ?? undefined),
+      status: r.draft.status,
+      text: r.draft.bodyFinal ?? r.draft.bodyDraft,
+    };
+  if (isDraft(x))
+    return { id: x.id, personName: x.toEmail, status: x.status, text: x.bodyFinal ?? x.bodyDraft };
+  // a card row `{ card, draft? }`: the draft when the card has one
+  const ref = r.card || r.draft ? obj(r.draft ?? {}) : r;
+  const card = obj(r.card);
+  const id = str(ref.id);
+  if (!id) return undefined;
+  return {
+    id,
+    personName: str(ref.person) ?? str(card.person),
+    status: str(ref.status),
+    kindLabel: str(ref.kindLabel) ?? str(card.kindLabel),
+    text: str(ref.firstLine) ?? str(card.reason),
+  };
+}
+
+/** drafts: `{ drafts }`, list_drafts sections (`toSend`, `started`, `opened`, ...), or `{ cards: { card, draft }[] }` */
+export function readDrafts(d: unknown): DraftRow[] {
+  const u = unpack(d);
+  const o = obj(u);
+  const raw = Array.isArray(u)
+    ? u
+    : [
+        ...arr(o.drafts),
+        ...arr(o.cards),
+        ...arr(o.toSend),
+        ...arr(o.started),
+        ...arr(o.opened),
+        ...arr(o.canWait),
+        ...arr(o.snoozed),
+        ...arr(o.sent),
+      ];
+  const seen = new Set<string>();
   return raw
-    .map((x) =>
-      isPerson(x)
-        ? { person: x }
-        : isPerson(obj(x).person)
-          ? { person: obj(x).person as Person, why: obj(x).why as string | undefined }
-          : undefined,
-    )
-    .filter((x): x is { person: Person; why?: string } => !!x);
+    .map(draftRow)
+    .filter(present)
+    .filter((r) => {
+      if (seen.has(r.id)) return false;
+      seen.add(r.id);
+      return true;
+    });
 }
 
-/** draft: `{ draft, person? }` or a bare OutboundMessage */
-export function readDraft(d: unknown): { draft: OutboundMessage; person?: Person } | undefined {
-  const o = obj(d);
-  const draft = isDraft(o.draft) ? o.draft : isDraft(d) ? d : undefined;
-  if (!draft) return undefined;
-  return { draft, person: isPerson(o.person) ? o.person : undefined };
-}
-
-/** drafts: `{ drafts: (OutboundMessage | { draft, person? })[] }` or a bare array */
-export function readDrafts(d: unknown): { draft: OutboundMessage; person?: Person }[] {
-  const raw = Array.isArray(d) ? d : obj(d).drafts;
-  if (!Array.isArray(raw)) return [];
-  return raw.map(readDraft).filter((x): x is { draft: OutboundMessage; person?: Person } => !!x);
-}
-
-/** pipeline: `{ items: { chat, person, nextStep? }[], counts?: Record<stage, number> }` */
+/** pipeline: `{ items: { chat, person, nextStep? }[] }`, list_pipeline `{ rows, counts }`, or one moved `{ chat, person }` */
 export interface PipelineItem {
-  chat?: CoffeeChat;
   person: Person;
+  stage?: string;
+  stageLabel?: string;
   nextStep?: string;
 }
 export function readPipeline(d: unknown): { items: PipelineItem[]; counts: Record<string, number> } {
-  const o = obj(d);
-  const raw = Array.isArray(d) ? d : o.items;
-  const items = (Array.isArray(raw) ? raw : [])
+  const u = unpack(d);
+  const o = obj(u);
+  const raw = Array.isArray(u) ? u : (o.items ?? o.rows ?? (o.person ? [o] : []));
+  const items = arr(raw)
     .map((x): PipelineItem | undefined => {
       const r = obj(x);
-      const person = isPerson(r.person) ? r.person : undefined;
-      return person
-        ? { chat: r.chat as CoffeeChat | undefined, person, nextStep: r.nextStep as string | undefined }
-        : undefined;
+      const person = personOf(r.person) ?? personOf({ ...r, id: r.personId, name: r.person });
+      if (!person) return undefined;
+      const chat = obj(r.chat);
+      const next = obj(r.nextCard);
+      return {
+        person,
+        stage: str(chat.stage) ?? str(r.stage),
+        stageLabel: str(chat.stageLabel) ?? str(r.stageLabel),
+        nextStep:
+          str(r.nextStep) ??
+          (str(r.when) ? `Meeting ${r.when}` : undefined) ??
+          (str(r.meetingAt) ? `Meeting ${r.meetingAt}` : undefined) ??
+          str(next.kindLabel),
+      };
     })
     .filter(present);
   const counts = Object.fromEntries(
-    Object.entries(obj(o.counts)).filter(([, v]) => typeof v === 'number'),
+    Object.entries(obj(o.counts)).filter(([, v]) => typeof v === 'number' && v > 0),
   ) as Record<string, number>;
   return { items, counts };
 }
 
-/** routes: `{ to: Person, routes: ReachPath[], people?: Record<id, Person> }` */
-export function readRoutes(d: unknown): { to?: Person; routes: ReachPath[]; people: Record<string, Person> } {
-  const o = obj(d);
-  const routes = list(o.routes, (x): x is ReachPath => Array.isArray(obj(x).hops));
-  const people = Object.fromEntries(Object.entries(obj(o.people)).filter(([, v]) => isPerson(v))) as Record<
-    string,
-    Person
-  >;
-  const to = isPerson(o.to) ? o.to : undefined;
-  if (to) people[to.id] = to;
-  return { to, routes, people };
+/** routes: `{ to | target, routes }` with hops as ReachPath or `{ to, toId, how }`; intro chains as `{ stories }` */
+export interface RouteView {
+  band?: string;
+  bandLabel?: string;
+  score: number;
+  names: string[];
+  text: string[];
+}
+export function readRoutes(d: unknown): { to?: Person; routes: RouteView[]; stories: string[] } {
+  const o = obj(unpack(d));
+  const people = obj(o.people);
+  const to = personOf(o.to) ?? personOf(o.target);
+  const routes = arr(o.routes)
+    .map((x): RouteView | undefined => {
+      const r = obj(x);
+      const hops = arr(r.hops).map(obj);
+      if (!hops.length) return undefined;
+      return {
+        band: str(r.band),
+        bandLabel: str(r.bandLabel),
+        score: num(r.score) ?? 0,
+        names: hops.map((h) => {
+          const id = str(h.toId);
+          const p = id ? people[id] : undefined;
+          return (
+            str(h.to) ??
+            (isPerson(p) ? p.firstName : undefined) ??
+            (id === to?.id ? to?.firstName : 'someone') ??
+            'someone'
+          );
+        }),
+        text: hops.map((h) => str(h.how) ?? str(h.text)).filter(present),
+      };
+    })
+    .filter(present);
+  return {
+    to,
+    routes,
+    stories: arr(o.stories)
+      .map((s) => str(obj(s).text))
+      .filter(present),
+  };
 }
 
-/** brief: `{ suggestions: Suggestion[], summary? }`; suggestion: `{ suggestion }` or a bare Suggestion */
-const isSuggestion = (x: unknown): x is Suggestion =>
-  !!x && typeof x === 'object' && typeof (x as Suggestion).reasonText === 'string';
-export function readSuggestions(d: unknown): Suggestion[] {
-  const o = obj(d);
-  if (isSuggestion(d)) return [d];
-  if (isSuggestion(o.suggestion)) return [o.suggestion];
-  return list(Array.isArray(d) ? d : o.suggestions, isSuggestion);
+/** brief / suggestion: domain Suggestions, or card references `{ id, kind, reason }` (alone or as `{ card }`) */
+export function readSuggestions(d: unknown): { suggestions: Suggestion[]; ids: string[]; summary?: string } {
+  const u = unpack(d);
+  const o = obj(u);
+  if (isSuggestion(u)) return { suggestions: [u], ids: [] };
+  if (isSuggestion(o.suggestion)) return { suggestions: [o.suggestion], ids: [] };
+  const domain = arr(Array.isArray(u) ? u : o.suggestions).filter(isSuggestion);
+  const refs = [o.card, ...arr(o.cards), ...arr(o.more)]
+    .map((x) => {
+      const r = obj(x);
+      return str(obj(r.card).id) ?? (str(r.reason) !== undefined || str(r.kind) ? str(r.id) : undefined);
+    })
+    .filter(present);
+  return { suggestions: domain, ids: [...new Set(refs)], summary: str(o.summary) };
 }
 
-/** note: `{ note, person?, facts? }` */
+/** note: `{ note, person?, facts? }`, an add_note result `{ noteId, person, facts, summary }`, or `{ notes }` */
 export function readNote(d: unknown): {
   note?: MeetingNote;
   person?: Person;
   facts: string[];
   summary?: string;
+  notes: { when?: string; people: string[]; summary?: string }[];
+  candidates: Person[];
 } {
-  const o = obj(d);
+  const o = obj(unpack(d));
   const note = obj(o.note).rawText !== undefined ? (o.note as MeetingNote) : undefined;
   return {
     note,
-    person: isPerson(o.person) ? o.person : undefined,
+    person: personOf(o.person),
     facts: strings(o.facts),
-    summary: typeof o.summary === 'string' ? o.summary : note?.summary,
+    summary: str(o.summary) ?? note?.summary,
+    notes: arr(o.notes).map((n) => {
+      const r = obj(n);
+      return { when: str(r.when), people: strings(r.people), summary: str(r.summary) };
+    }),
+    candidates: arr(o.candidates).map(personOf).filter(present),
   };
 }
 
-/** facts: `{ person?, facts: (PersonFact | string)[] }` */
+/** facts: `{ person?, facts: (PersonFact | string)[] }` or one saved fact `{ person, type, typeLabel, text }` */
 export interface FactItem {
   text: string;
   type?: string;
 }
 export function readFacts(d: unknown): { person?: Person; facts: FactItem[] } {
-  const o = obj(d);
-  const raw = Array.isArray(d) ? d : o.facts;
-  const facts = (Array.isArray(raw) ? raw : [])
+  const u = unpack(d);
+  const o = obj(u);
+  const raw = Array.isArray(u) ? u : Array.isArray(o.facts) ? o.facts : str(o.text) ? [o] : [];
+  const facts = raw
     .map((f): FactItem | undefined =>
       typeof f === 'string'
         ? { text: f }
-        : typeof obj(f).text === 'string'
-          ? { text: (f as PersonFact).text, type: (f as PersonFact).type }
+        : str(obj(f).text)
+          ? { text: (f as PersonFact).text, type: str(obj(f).typeLabel) ?? (f as PersonFact).type }
           : undefined,
     )
     .filter(present);
-  return { person: isPerson(o.person) ? o.person : undefined, facts };
+  return { person: personOf(o.person), facts };
 }
 
-/** company: `{ organization: Organization | { name }, people?: Person[], target?: boolean }` */
+/** company: `{ organization, people?, target? }` or a find_routes company view `{ company, thereNow, former }` */
 export function readCompany(d: unknown): {
   name?: string;
   industry?: string;
   people: Person[];
+  former: Person[];
   target?: boolean;
 } {
-  const o = obj(d);
-  const org = obj(o.organization ?? o.company) as Partial<Organization>;
+  const o = obj(unpack(d));
+  const org = obj(
+    o.organization ?? (typeof o.company === 'object' ? o.company : undefined),
+  ) as Partial<Organization>;
   return {
-    name: typeof org.name === 'string' ? org.name : typeof o.name === 'string' ? o.name : undefined,
-    industry: typeof org.industry === 'string' ? org.industry : undefined,
-    people: list(o.people, isPerson),
-    target: typeof o.target === 'boolean' ? o.target : undefined,
+    name: str(org.name) ?? str(o.company) ?? str(o.name),
+    industry: str(org.industry) ?? str(o.industry),
+    people: arr(o.people ?? o.thereNow)
+      .map(personOf)
+      .filter(present),
+    former: arr(o.former).map(personOf).filter(present),
+    target: typeof o.target === 'boolean' ? o.target : o.target ? true : undefined,
   };
 }
 
-/** settings: `{ section?, changes: { label, from?, to }[] }` */
+/** settings: `{ changes: { label, from?, to }[] }`, or any settings view, shown as its plain values */
 export interface SettingChange {
   label: string;
   from?: string;
   to: string;
 }
+const SKIP = new Set(['href', 'id', 'userId', 'json', 'ranges', 'isDemo', 'model']);
+const human = (k: string) =>
+  k
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/_/g, ' ')
+    .replace(/^./, (c) => c.toUpperCase());
+function valueText(v: unknown): string | undefined {
+  if (typeof v === 'boolean') return v ? 'On' : 'Off';
+  if (typeof v === 'number') return String(v);
+  if (typeof v === 'string') return v.trim() || undefined;
+  if (Array.isArray(v)) {
+    const parts = v
+      .map((x) => (typeof x === 'string' ? x : (str(obj(x).label) ?? str(obj(x).name))))
+      .filter(present);
+    return parts.length ? parts.join(', ') : undefined;
+  }
+  return undefined;
+}
 export function readSettings(d: unknown): SettingChange[] {
-  const raw = Array.isArray(d) ? d : obj(d).changes;
-  return (Array.isArray(raw) ? raw : [])
-    .map((c): SettingChange | undefined => {
-      const r = obj(c);
-      return typeof r.label === 'string'
-        ? { label: r.label, from: r.from === undefined ? undefined : String(r.from), to: String(r.to ?? '') }
-        : undefined;
-    })
-    .filter(present);
+  const u = unpack(d);
+  const o = obj(u);
+  const raw = Array.isArray(u) ? u : o.changes;
+  if (Array.isArray(raw))
+    return raw
+      .map((c): SettingChange | undefined => {
+        const r = obj(c);
+        return typeof r.label === 'string'
+          ? {
+              label: r.label,
+              from: r.from === undefined ? undefined : String(r.from),
+              to: String(r.to ?? ''),
+            }
+          : undefined;
+      })
+      .filter(present);
+  const out: SettingChange[] = [];
+  const walk = (x: Record<string, unknown>, depth: number) => {
+    for (const [k, v] of Object.entries(x)) {
+      if (SKIP.has(k) || out.length >= 14) continue;
+      const t = valueText(v);
+      if (t !== undefined) out.push({ label: human(k), to: t.length > 120 ? `${t.slice(0, 117)}...` : t });
+      else if (v && typeof v === 'object' && !Array.isArray(v) && depth < 1)
+        walk(v as Record<string, unknown>, depth + 1);
+    }
+  };
+  walk(o, 0);
+  return out;
 }
 
-/** import: `{ source?, counts: Record<string, number> | { label, value }[] }` */
-export function readImport(d: unknown): { source?: string; counts: { label: string; value: number }[] } {
-  const o = obj(d);
+/** import: `{ source?, counts }`, a LinkedIn import result `{ imported, updated, ... }`, or a resume `{ facets }` */
+export function readImport(d: unknown): {
+  source?: string;
+  counts: { label: string; value: number }[];
+  lines: string[];
+} {
+  const o = obj(unpack(d));
   const raw = o.counts;
   const counts = Array.isArray(raw)
     ? raw
         .map((c) => obj(c))
         .filter((c) => typeof c.label === 'string' && typeof c.value === 'number')
         .map((c) => ({ label: c.label as string, value: c.value as number }))
-    : Object.entries(obj(raw))
-        .filter(([, v]) => typeof v === 'number')
-        .map(([k, v]) => ({ label: k.replace(/_/g, ' '), value: v as number }));
-  return { source: typeof o.source === 'string' ? o.source : undefined, counts };
+    : Object.entries(raw ? obj(raw) : o)
+        .filter(([k, v]) => typeof v === 'number' && !SKIP.has(k))
+        .map(([k, v]) => ({ label: human(k).toLowerCase(), value: v as number }));
+  const lines = arr(o.facets)
+    .map((f) => {
+      const r = obj(f);
+      return [str(r.title), str(r.organization)].filter(present).join(', ') || str(r.text);
+    })
+    .filter(present);
+  return { source: str(o.source) ?? (lines.length ? str(o.filename) : undefined), counts, lines };
 }
 
-/** prep: `{ person, when?, summary?, questions?, facts? }` */
+/** prep: `{ person, when?, summary?, questions?, facts? }` or picked questions `{ picked }` */
 export function readPrep(d: unknown): {
   person?: Person;
   when?: string;
@@ -209,36 +446,48 @@ export function readPrep(d: unknown): {
   questions: string[];
   facts: string[];
 } {
-  const o = obj(d);
+  const o = obj(unpack(d));
   return {
-    person: isPerson(o.person) ? o.person : undefined,
-    when: typeof o.when === 'string' ? o.when : undefined,
-    summary: typeof o.summary === 'string' ? o.summary : undefined,
-    questions: strings(o.questions),
+    person: personOf(o.person),
+    when: str(o.when),
+    summary: str(o.summary),
+    questions: strings(o.questions).length ? strings(o.questions) : strings(o.picked),
     facts: strings(o.facts),
   };
 }
 
-/** needs_confirmation: `{ toolName?, text?, blockedReason?, draft?, person? }` */
+/** text: the words to copy or the file to save, when a text result carries one */
+export function readText(d: unknown): { quote?: string; file?: { name: string; json: string } } {
+  const o = obj(unpack(d));
+  const quote = str(o.comment) ?? str(o.textToPaste);
+  const file =
+    str(o.json) && str(o.filename) ? { name: o.filename as string, json: o.json as string } : undefined;
+  return { quote, file };
+}
+
+/** needs_confirmation: `{ toolName, input, summary | text, blockedReason?, draft? }` */
 export function readConfirm(d: unknown): {
   toolName?: string;
   text?: string;
   blockedReason?: string;
   draft?: OutboundMessage;
+  draftId?: string;
   person?: Person;
 } {
   const o = obj(d);
+  const toolName = str(o.toolName);
+  const input = obj(o.input);
   return {
-    toolName: typeof o.toolName === 'string' ? o.toolName : undefined,
-    text: typeof o.text === 'string' ? o.text : undefined,
-    blockedReason: typeof o.blockedReason === 'string' ? o.blockedReason : undefined,
+    toolName,
+    text: str(o.text) ?? str(o.summary),
+    blockedReason: str(o.blockedReason),
     draft: isDraft(o.draft) ? o.draft : undefined,
+    draftId: toolName === 'send_draft' ? str(input.draftId) : undefined,
     person: isPerson(o.person) ? o.person : undefined,
   };
 }
 
 /** error: `{ message? }` */
 export function readError(d: unknown): string | undefined {
-  const m = obj(d).message;
-  return typeof m === 'string' ? m : undefined;
+  return str(obj(d).message);
 }

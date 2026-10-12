@@ -670,7 +670,7 @@ export const advanceOnboarding = defineTool({
       }
       if (!user?.fullName.trim() || !user.school.trim())
         throw new Error(
-          'Setup needs at least a name and a school before it can finish. Save them with update_settings first.',
+          'Setup needs at least a name and a school before it can finish. Add them to your profile first.',
         );
       const fresh = await finishOnboarding(ctx.user.id, ctx.now);
       const out = { completed: true, step: fresh?.onboardingStep };

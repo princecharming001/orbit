@@ -93,7 +93,7 @@ export const movePipelineStage = defineTool({
         : input.stage === 'replied'
           ? ' Your reply is on Today.'
           : r.needsTime
-            ? ' When is the chat? Set the time with schedule_chat so it shows under Coming up.'
+            ? ' When is the chat? Say when, and Orbit puts it under Coming up.'
             : '';
     const out = {
       ...base,

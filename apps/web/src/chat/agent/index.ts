@@ -16,7 +16,7 @@ import type {
   TurnEvent,
 } from '../types';
 import { recordToolAction } from './actions';
-import { chipsFor } from './chips';
+import { chipsFor, resolveChip } from './chips';
 import { type ChatClient, chatClient } from './client';
 import { type ExecuteFn, runTurn } from './loop';
 import { chatMode, chatModeNote, SETTINGS_ROUTE } from './mode';
@@ -36,8 +36,8 @@ export interface ChatEngineDeps {
   store?: ChatStore;
   client?: () => ChatClient | undefined;
   now?: () => Date;
-  /** pins effort 'low' instead of 'medium' */
-  quick?: boolean;
+  /** pins effort 'low' instead of 'medium'; a getter follows the composer's Smart / Quick switch */
+  quick?: boolean | (() => boolean);
   prefixMismatch?: 'drop_block' | 'error';
 }
 
@@ -172,6 +172,40 @@ export function createChatEngine(deps: ChatEngineDeps): ChatEngine {
     return [...names];
   };
 
+  /** The open cards, unsent drafts and next booked chat the router can name. */
+  const routerExtras = async (userId: string, now: Date) => {
+    const [cards, drafts, events] = await Promise.all([
+      db.suggestions
+        .where('userId')
+        .equals(userId)
+        .filter((s) => s.status === 'pending')
+        .toArray(),
+      db.outbound
+        .where('userId')
+        .equals(userId)
+        .filter((o) => ['draft', 'failed', 'handed_off'].includes(o.status))
+        .toArray(),
+      db.events
+        .where('userId')
+        .equals(userId)
+        .filter(
+          (e) => e.status !== 'cancelled' && !!e.chatId && new Date(e.startAt).getTime() > now.getTime(),
+        )
+        .toArray(),
+    ]);
+    const next = events.sort((a, b) => a.startAt.localeCompare(b.startAt))[0];
+    const nextChat = next?.chatId ? await db.chats.get(next.chatId) : undefined;
+    return {
+      cards: cards
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .map((c) => ({ id: c.id, personId: c.personId, kind: c.kind })),
+      drafts: drafts
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .map((d) => ({ id: d.id, personId: d.personId, status: d.status, kind: d.kind })),
+      nextChat: nextChat ? { personId: nextChat.personId } : undefined,
+    };
+  };
+
   const routerTurn = async (
     conversation: ChatConversation,
     text: string,
@@ -179,17 +213,74 @@ export function createChatEngine(deps: ChatEngineDeps): ChatEngine {
   ): Promise<void> => {
     const user = getUser();
     await store.append(conversation.id, { role: 'user', content: [{ type: 'text', text }] }, clock());
-    const [people, companies] = await Promise.all([peopleFor(user.id), companiesFor(user.id)]);
+    const [people, companies, extra] = await Promise.all([
+      peopleFor(user.id),
+      companiesFor(user.id),
+      routerExtras(user.id, clock()),
+    ]);
     const intent = routeUtterance(text, {
       registry: deps.registry,
       people,
       companies,
+      ...extra,
       modeNote: chatModeNote()?.text ?? '',
       settingsHref: SETTINGS_ROUTE,
     });
     if (intent.kind === 'tool')
       return runToolDirect(conversation, intent.tool, intent.input, 'router', onEvent, intent.lead);
     return sayText(conversation, intent, onEvent);
+  };
+
+  /** Run a pending confirmation. The registry checks the token and owns the row's status while the tool runs. */
+  const approvePending = async (
+    actionId: string,
+    edited?: { body: string; subject?: string },
+  ): Promise<ResultEnvelope> => {
+    const action = await store.getAction(actionId);
+    const gone = (summary: string): ResultEnvelope => ({ kind: 'error', data: undefined, summary });
+    if (!action) return gone('That approval is no longer available.');
+    if (action.status !== 'pending')
+      return gone(`That was already ${action.status === 'done' ? 'approved' : action.status}.`);
+    if (action.expiresAt && new Date(action.expiresAt).getTime() < clock().getTime()) {
+      await store.updateAction(actionId, { status: 'expired' }, clock());
+      return gone('That approval expired. Ask again to get a fresh one.');
+    }
+    let env: ResultEnvelope;
+    try {
+      env = await deps.execute(
+        action.toolName,
+        liveInputs.get(actionId) ?? action.input,
+        toolContext(action.conversationId, 'ui', { toolUseId: actionId, confirmation: actionId, edited }),
+      );
+    } catch (e) {
+      env = {
+        kind: 'error',
+        data: { detail: e instanceof Error ? e.message : String(e) },
+        summary: 'The tool could not finish.',
+      };
+    }
+    liveInputs.delete(actionId);
+    // the real registry records the run on the row itself; anything still open here gets the result now
+    const after = await store.getAction(actionId);
+    if (after?.status === 'pending' || after?.status === 'running')
+      await store.updateAction(
+        actionId,
+        { status: env.kind === 'error' ? 'error' : 'done', envelope: env },
+        clock(),
+      );
+    // the next model turn sees the decision as a plain line; the UI renders meta 'decision' as a status line
+    await store.append(
+      action.conversationId,
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: `[Orbit] Approved ${actionId}: ${action.toolName} -> ${env.summary}` },
+        ],
+        meta: 'decision',
+      },
+      clock(),
+    );
+    return env;
   };
 
   const engine: ChatEngine = {
@@ -230,7 +321,7 @@ export function createChatEngine(deps: ChatEngineDeps): ChatEngine {
           user: getUser(),
           conversation,
           now: clock,
-          quick: deps.quick,
+          quick: typeof deps.quick === 'function' ? deps.quick() : deps.quick,
           prefixMismatch: deps.prefixMismatch,
         },
         [{ type: 'text', text: trimmed }],
@@ -250,53 +341,46 @@ export function createChatEngine(deps: ChatEngineDeps): ChatEngine {
         { role: 'user', content: [{ type: 'text', text: chip.asUser }] },
         clock(),
       );
-      await runToolDirect(conversation, chip.tool, chip.input, 'ui', onEvent);
+      const run = await resolveChip(chip, deps.registry, getUser().id, clock());
+      await runToolDirect(conversation, run.tool, run.input, 'ui', onEvent, run.lead);
     },
 
     async approve(actionId, edited) {
       const action = await store.getAction(actionId);
       const gone = (summary: string): ResultEnvelope => ({ kind: 'error', data: undefined, summary });
       if (!action) return gone('That approval is no longer available.');
-      if (action.status !== 'pending')
-        return gone(`That was already ${action.status === 'done' ? 'approved' : action.status}.`);
-      if (action.expiresAt && new Date(action.expiresAt).getTime() < clock().getTime()) {
-        await store.updateAction(actionId, { status: 'expired' }, clock());
-        return gone('That approval expired. Ask again to get a fresh one.');
-      }
-      await store.updateAction(actionId, { status: 'running' }, clock());
-      let env: ResultEnvelope;
-      try {
-        env = await deps.execute(
-          action.toolName,
-          liveInputs.get(actionId) ?? action.input,
-          toolContext(action.conversationId, 'ui', { toolUseId: actionId, confirmation: actionId, edited }),
+      // a draft card's own Approve: ask send_draft for a confirmation first, then approve that one with the text
+      // as edited in the card, so the send goes through the same confirmation and approval path as the model's
+      // (never a confirmation that already ran: approving that again must not send twice)
+      const draftId =
+        action.status === 'done' && !action.id.startsWith('conf_') && action.toolName !== 'send_draft'
+          ? draftIdOf(action.envelope)
+          : undefined;
+      if (draftId && deps.registry.has('send_draft')) {
+        const askId = newId('run');
+        const ask = await deps.execute(
+          'send_draft',
+          { draftId },
+          toolContext(action.conversationId, 'ui', { toolUseId: askId, edited }),
         );
-      } catch (e) {
-        env = {
-          kind: 'error',
-          data: { detail: e instanceof Error ? e.message : String(e) },
-          summary: 'The tool could not finish.',
-        };
+        if (ask.kind !== 'needs_confirmation' || !ask.confirmationId) return ask;
+        await recordToolAction(store, {
+          conversationId: action.conversationId,
+          userId: getUser().id,
+          toolUseId: askId,
+          toolName: 'send_draft',
+          input: { draftId },
+          env: ask,
+          now: clock(),
+        });
+        const blocked = (ask.data as { blockedReason?: string } | undefined)?.blockedReason;
+        if (blocked) {
+          await store.updateAction(ask.confirmationId, { status: 'cancelled' }, clock());
+          return gone(blocked);
+        }
+        return approvePending(ask.confirmationId, edited);
       }
-      liveInputs.delete(actionId);
-      await store.updateAction(
-        actionId,
-        { status: env.kind === 'error' ? 'error' : 'done', envelope: env },
-        clock(),
-      );
-      // the next model turn sees the decision as a plain line; the UI renders meta 'decision' as a status line
-      await store.append(
-        action.conversationId,
-        {
-          role: 'user',
-          content: [
-            { type: 'text', text: `[Orbit] Approved ${actionId}: ${action.toolName} -> ${env.summary}` },
-          ],
-          meta: 'decision',
-        },
-        clock(),
-      );
-      return env;
+      return approvePending(actionId, edited);
     },
 
     async cancel(actionId) {
@@ -343,6 +427,21 @@ export function createChatEngine(deps: ChatEngineDeps): ChatEngine {
   return engine;
 }
 
+/** The draft id a done tool result points at (create_draft, get_draft, update_draft_body and the like). */
+export function draftIdOf(env: ResultEnvelope | undefined): string | undefined {
+  if (env?.kind !== 'draft') return undefined;
+  const d = env.data as
+    | {
+        forModel?: { id?: unknown };
+        ui?: { id?: unknown; draft?: { id?: unknown } };
+        id?: unknown;
+        draft?: { id?: unknown };
+      }
+    | undefined;
+  const id = d?.forModel?.id ?? d?.ui?.draft?.id ?? d?.ui?.id ?? d?.draft?.id ?? d?.id;
+  return typeof id === 'string' ? id : undefined;
+}
+
 /** The file's text; some runtimes (and jsdom) have no `File.text()`. */
 export function readText(file: Blob): Promise<string> {
   if (typeof file.text === 'function') return file.text();
@@ -369,10 +468,30 @@ const ATTACH_LABEL: Record<keyof typeof ATTACH_TOOL, string> = {
   linkedin: 'Attached LinkedIn export',
 };
 
+/** The file's bytes as base64 (no data: prefix), chunked so a large file does not overflow the call stack. */
+export async function readBase64(file: Blob): Promise<string> {
+  const buf: ArrayBuffer =
+    typeof file.arrayBuffer === 'function'
+      ? await file.arrayBuffer()
+      : await new Promise<ArrayBuffer>((resolve, reject) => {
+          const r = new FileReader();
+          r.onload = () => resolve(r.result as ArrayBuffer);
+          r.onerror = () => reject(r.error);
+          r.readAsArrayBuffer(file);
+        });
+  const bytes = new Uint8Array(buf);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+
+const TEXT_FILE = /\.(csv|txt|md|markdown|eml)$/i;
+
 /**
- * Build the tool input for an attachment from the tool's own schema keys: a `file` field gets the File, `text` gets
- * the file's text, `source` says where it came from ('email' for a pasted email, 'upload' otherwise), and a file
- * name field gets the name. Fields the schema does not have are left out, so strict schemas still parse.
+ * Build the tool input for an attachment from the tool's own schema keys, so the "+" menu and the tool never drift:
+ * `text` gets the file's text (notes, emails), `csvText` gets a CSV's text and `base64` gets the bytes of anything
+ * else (a LinkedIn ZIP, a PDF or Word resume), `filename` / `mimeType` describe the file, `source` says it came from
+ * a file, and a note gets the file name as its title. Fields the schema does not have are left out.
  */
 export async function attachInput(
   spec: ToolSpec,
@@ -381,10 +500,14 @@ export async function attachInput(
 ): Promise<Record<string, unknown>> {
   const keys = new Set(Object.keys(spec.input.shape ?? {}));
   const input: Record<string, unknown> = {};
+  const isText = TEXT_FILE.test(file.name) || file.type.startsWith('text/') || file.type === 'message/rfc822';
   if (keys.has('file')) input.file = file;
   if (keys.has('text')) input.text = await readText(file);
-  if (keys.has('source')) input.source = kind === 'email' ? 'email' : 'upload';
+  if (keys.has('csvText') && isText) input.csvText = await readText(file);
+  else if (keys.has('base64')) input.base64 = await readBase64(file);
+  if (keys.has('source')) input.source = 'upload';
   for (const k of ['fileName', 'filename', 'name']) if (keys.has(k)) input[k] = file.name;
-  if (keys.has('title') && kind !== 'email') input.title = file.name.replace(/\.[a-z0-9]+$/i, '');
+  if (keys.has('mimeType') && file.type) input.mimeType = file.type;
+  if (keys.has('title') && kind === 'note') input.title = file.name.replace(/\.[a-z0-9]+$/i, '');
   return input;
 }

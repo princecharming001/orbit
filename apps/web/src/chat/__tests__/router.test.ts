@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { MatchablePerson } from '../agent/people-match';
 import { matchPeople, rankPerson, resolvePerson } from '../agent/people-match';
 import { type RouterContext, routeUtterance } from '../agent/router';
-import { makeStubRegistry } from '../test/stubRegistry';
+import { registry as realRegistry } from '../registry';
 
 const person = (
   id: string,
@@ -39,9 +39,18 @@ const MODE_NOTE = 'Add your own key in Settings, Integrations to chat freely.';
 
 function ctx(overrides: Partial<RouterContext> = {}): RouterContext {
   return {
-    registry: makeStubRegistry().registry,
+    registry: realRegistry,
     people: PEOPLE,
     companies: ['Stripe', 'Ramp', 'Notion', 'Goldman Sachs', 'Figma', 'Datadog'],
+    cards: [
+      { id: 's_p1', personId: 'p1', kind: 'thank_you' },
+      { id: 's_p4', personId: 'p4', kind: 'nurture_checkin' },
+    ],
+    drafts: [
+      { id: 'out_p1', personId: 'p1', status: 'draft', kind: 'thank_you' },
+      { id: 'out_p2', personId: 'p2', status: 'handed_off', kind: 'bump' },
+    ],
+    nextChat: { personId: 'p2' },
     modeNote: MODE_NOTE,
     settingsHref: '/settings/integrations',
     ...overrides,
@@ -58,11 +67,11 @@ const HANDLED: [string, string, Record<string, unknown>][] = [
   ['good morning', 'get_today_brief', {}],
   ['my day', 'get_today_brief', {}],
   // who went quiet
-  ['who went quiet', 'list_pipeline', { stage: 'no_response' }],
-  ["who hasn't replied", 'list_pipeline', { stage: 'no_response' }],
-  ['anyone ghosted me?', 'list_pipeline', { stage: 'no_response' }],
-  ['Who went quiet?', 'list_pipeline', { stage: 'no_response' }],
-  ['waiting on a reply', 'list_pipeline', { stage: 'no_response' }],
+  ['who went quiet', 'list_pipeline', { quietOnly: true }],
+  ["who hasn't replied", 'list_pipeline', { quietOnly: true }],
+  ['anyone ghosted me?', 'list_pipeline', { quietOnly: true }],
+  ['Who went quiet?', 'list_pipeline', { quietOnly: true }],
+  ['waiting on a reply', 'list_pipeline', { quietOnly: true }],
   // the pipeline, by stage
   ['show my pipeline', 'list_pipeline', {}],
   ['pipeline', 'list_pipeline', {}],
@@ -75,10 +84,10 @@ const HANDLED: [string, string, Record<string, unknown>][] = [
   ['list declined', 'list_pipeline', { stage: 'declined' }],
   ['show the staying in touch stage', 'list_pipeline', { stage: 'nurturing' }],
   // drafts
-  ['drafts', 'list_drafts', { status: 'draft' }],
-  ['unsent drafts', 'list_drafts', { status: 'draft' }],
-  ['show my drafts', 'list_drafts', { status: 'draft' }],
-  ["what's ready to send", 'list_drafts', { status: 'draft' }],
+  ['drafts', 'list_drafts', { list: 'to_send' }],
+  ['unsent drafts', 'list_drafts', { list: 'to_send' }],
+  ['show my drafts', 'list_drafts', { list: 'to_send' }],
+  ["what's ready to send", 'list_drafts', { list: 'to_send' }],
   // a person by name
   ['who is Priya', 'get_person', { personId: 'p1' }],
   ['who is priya patel', 'get_person', { personId: 'p1' }],
@@ -140,12 +149,65 @@ const HANDLED: [string, string, Record<string, unknown>][] = [
   ['put Lena in declined', 'move_pipeline_stage', { personId: 'p6', stage: 'declined' }],
   ['Dan replied', 'move_pipeline_stage', { personId: 'p3', stage: 'replied' }],
   // routes
-  ['who can introduce me to Stripe', 'find_routes_to_company', { company: 'Stripe' }],
-  ['routes to Priya', 'find_routes_to_person', { personId: 'p1' }],
-  ['how do I reach Ramp', 'find_routes_to_company', { company: 'Ramp' }],
-  ['who do I know at Goldman Sachs', 'find_routes_to_company', { company: 'Goldman Sachs' }],
-  ['anyone at Airbnb', 'find_routes_to_company', { company: 'Airbnb' }],
-  ['warm intro to Mei', 'find_routes_to_person', { personId: 'p4' }],
+  ['who can introduce me to Stripe', 'find_routes', { company: 'Stripe' }],
+  ['routes to Priya', 'find_routes', { personId: 'p1' }],
+  ['how do I reach Ramp', 'find_routes', { company: 'Ramp' }],
+  ['who do I know at Goldman Sachs', 'find_routes', { company: 'Goldman Sachs' }],
+  ['anyone at Airbnb', 'find_routes', { company: 'Airbnb' }],
+  ['warm intro to Mei', 'find_routes', { personId: 'p4' }],
+  // what Orbit knows, prep, and who someone knows
+  ['what do I know about Priya', 'get_person', { personId: 'p1', include: ['facts', 'notes'] }],
+  ['prep me for my chat with Mei', 'get_person', { personId: 'p4', include: ['prep', 'facts'] }],
+  ['prep for Sofia', 'get_person', { personId: 'p5', include: ['prep', 'facts'] }],
+  ['who does Daniel know', 'get_person', { personId: 'p2', include: ['connections'] }],
+  ['prep me for my next chat', 'get_person', { personId: 'p2', include: ['prep', 'facts'] }],
+  // notes on record, Discover, introductions, the stages, the budget
+  ['show my notes', 'list_notes', {}],
+  ['notes about Priya', 'list_notes', { personId: 'p1' }],
+  ['show my recommendations', 'list_recommendations', {}],
+  ['who should I meet', 'list_recommendations', {}],
+  ['who introduced me to Mei', 'get_intro_web', { query: 'mei' }],
+  ['show my introductions', 'get_intro_web', {}],
+  ['what are the stages', 'explain_stage', {}],
+  ['what does scheduling mean', 'explain_stage', { stage: 'scheduling' }],
+  ['how many claude requests have I used', 'get_usage', {}],
+  ['refresh my brief', 'refresh_brief', {}],
+  // pages, people, targets and Today cards
+  ['go to the map', 'open_page', { page: 'map' }],
+  ['go to discover', 'open_page', { page: 'discover' }],
+  ['open discover', 'list_recommendations', {}],
+  ['take me to settings', 'open_page', { page: 'settings' }],
+  ['open Stripe', 'find_routes', { company: 'Stripe' }],
+  [
+    'add a person Jordan Lee at Figma, jordan@figma.com',
+    'add_person',
+    { name: 'Jordan Lee', company: 'Figma', email: 'jordan@figma.com' },
+  ],
+  ['add Evercore to my target companies', 'manage_target_company', { action: 'add', names: 'Evercore' }],
+  ['hide Lena', 'hide_person', { personId: 'p6' }],
+  ['undo the move for Dan', 'undo_stage_move', { personId: 'p3' }],
+  ['snooze Priya', 'manage_suggestion', { suggestionId: 's_p1', action: 'snooze', days: 1 }],
+  [
+    'snooze the card for Priya for a week',
+    'manage_suggestion',
+    { suggestionId: 's_p1', action: 'snooze', days: 7 },
+  ],
+  ['dismiss Mei', 'dismiss_suggestion', { suggestionId: 's_p4', reason: 'not_now' }],
+  // drafts that already exist: send one, read one, log a hand-off
+  ['send my draft to Priya', 'send_draft', { draftId: 'out_p1' }],
+  ['send the thank you to Priya', 'send_draft', { draftId: 'out_p1' }],
+  ['show my draft to Priya', 'get_draft', { draftId: 'out_p1' }],
+  ['send a congrats note to Mei', 'create_draft', { kind: 'congratulate', personId: 'p4' }],
+  ['I sent it to Daniel', 'confirm_handoff', { draftId: 'out_p2' }],
+  // settings that change something: each asks first where it should
+  ['set my tone to direct', 'update_settings', { section: 'style', tonePreset: 'direct' }],
+  ['turn on claude notes', 'set_llm_feature', { feature: 'notes', on: true }],
+  ['set my weekly target to 5', 'update_limits', { weeklyOutreachTarget: 5 }],
+  ['load the demo', 'load_demo', {}],
+  ['export my data', 'export_data', {}],
+  ['delete all my data', 'delete_all_data', {}],
+  ['disconnect google', 'disconnect_google', {}],
+  ['set up orbit for me', 'leave_demo', {}],
 ];
 
 /** utterance, expected href */
@@ -240,7 +302,7 @@ describe('router: handled utterances', () => {
   });
 
   it('never routes to a tool the registry does not have', () => {
-    const registry = new Map(makeStubRegistry().registry);
+    const registry = new Map(realRegistry);
     registry.delete('move_pipeline_stage');
     const r = routeUtterance('move Priya to scheduling', ctx({ registry }));
     expect(r.kind).toBe('refuse');
@@ -248,7 +310,7 @@ describe('router: handled utterances', () => {
   });
 
   it('never hands a tool input that fails its schema', () => {
-    const registry = new Map(makeStubRegistry().registry);
+    const registry = new Map(realRegistry);
     const spec = registry.get('list_pipeline')!;
     registry.set('list_pipeline', {
       ...spec,

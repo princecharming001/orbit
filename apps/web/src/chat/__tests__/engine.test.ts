@@ -96,11 +96,11 @@ describe('router mode', () => {
     const events = await send(c.id, 'who went quiet');
     expect(kinds(events)).toEqual(['tool_start', 'tool_result', 'done']);
     expect(result(events)?.envelope.kind).toBe('pipeline');
-    expect(stub.calls[0]).toMatchObject({ name: 'list_pipeline', input: { stage: 'no_response' } });
+    expect(stub.calls[0]).toMatchObject({ name: 'list_pipeline', input: { quietOnly: true } });
     expect(stub.calls[0]!.ctx.caller).toBe('router');
     const { messages, actions } = await engine.loadConversation(c.id);
     expect(messages.map((m) => m.role)).toEqual(['user', 'assistant']);
-    expect((messages[1]!.content as { text: string }[])[0]!.text).toBe('No chats in no_response.');
+    expect((messages[1]!.content as { text: string }[])[0]!.text).toBe('No chat went quiet.');
     expect(actions).toHaveLength(1);
     expect(actions[0]!.envelope?.kind).toBe('pipeline');
     expect(actions[0]!.messageId).toBe(messages[1]!.id);
@@ -129,15 +129,23 @@ describe('router mode', () => {
   });
 
   it('runs chips directly with fixed input in both modes and stores the chip text as the student turn', async () => {
-    expect(engine.chips().map((ch) => ch.id)).toEqual(['brief', 'drafts', 'quiet', 'pipeline']);
+    // the stub has no open_page, so the two chips that open a page are left out
+    expect(engine.chips().map((ch) => ch.id)).toEqual([
+      'who-today',
+      'thank-you',
+      'quiet',
+      'prep',
+      'linkedin',
+      'pipeline',
+    ]);
     const c = await engine.startConversation({ temporary: false });
     const events: TurnEvent[] = [];
-    await engine.runChip(c.id, 'brief', (e) => events.push(e));
+    await engine.runChip(c.id, 'who-today', (e) => events.push(e));
     expect(kinds(events)).toEqual(['tool_start', 'tool_result', 'done']);
     expect(stub.calls[0]).toMatchObject({ name: 'get_today_brief', input: {} });
     expect(stub.calls[0]!.ctx.caller).toBe('ui');
     const { messages } = await engine.loadConversation(c.id);
-    expect((messages[0]!.content as { text: string }[])[0]!.text).toBe('What is on today?');
+    expect((messages[0]!.content as { text: string }[])[0]!.text).toBe('Who should I message today?');
     writePrefs({ anthropicApiKey: 'sk-ant-test' });
     await engine.runChip(c.id, 'quiet', () => {});
     expect(stub.calls[1]!.name).toBe('list_pipeline');
@@ -291,7 +299,7 @@ describe('attachments', () => {
     expect((messages[0]!.content as { text: string }[])[0]!.text).toBe('Attached notes: coffee.txt');
   });
 
-  it('routes an email to add_note with source email', async () => {
+  it('routes an email to add_note as an uploaded file', async () => {
     const c = await engine.startConversation({ temporary: false });
     await engine.attach(
       c.id,
@@ -299,7 +307,11 @@ describe('attachments', () => {
       'email',
       () => {},
     );
-    expect(stub.calls[0]).toMatchObject({ name: 'add_note', input: { source: 'email' } });
+    expect(stub.calls[0]).toMatchObject({
+      name: 'add_note',
+      input: { text: 'From: priya@stripe.com\nHappy to chat.', source: 'upload' },
+    });
+    expect((stub.calls[0]!.input as { title?: string }).title).toBeUndefined();
   });
 
   it('routes a resume to save_resume and a LinkedIn export to import_linkedin, which ask for approval first', async () => {
@@ -309,14 +321,21 @@ describe('attachments', () => {
     await engine.attach(c.id, resume, 'resume', (e) => events.push(e));
     expect(result(events)?.envelope.kind).toBe('needs_confirmation');
     expect(stub.calls[0]!.name).toBe('save_resume');
-    expect((stub.calls[0]!.input as { file: File }).file.name).toBe('resume.pdf');
+    expect(stub.calls[0]!.input).toEqual({
+      filename: 'resume.pdf',
+      base64: btoa('%PDF-1.4'),
+      mimeType: 'application/pdf',
+    });
     const env = await engine.approve(result(events)!.envelope.confirmationId!);
     expect(env).toMatchObject({ kind: 'import', summary: 'Resume read.' });
     const li: TurnEvent[] = [];
     await engine.attach(c.id, new File(['First Name,Last Name'], 'Connections.csv'), 'linkedin', (e) =>
       li.push(e),
     );
-    expect(stub.calls.at(-1)!.name).toBe('import_linkedin');
+    expect(stub.calls.at(-1)).toMatchObject({
+      name: 'import_linkedin',
+      input: { csvText: 'First Name,Last Name', filename: 'Connections.csv' },
+    });
     expect(result(li)?.envelope.kind).toBe('needs_confirmation');
   });
 

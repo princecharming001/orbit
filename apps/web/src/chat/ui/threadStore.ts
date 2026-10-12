@@ -314,6 +314,12 @@ export function threadActions(engine: ChatEngine) {
       const actionId = block.envelope?.confirmationId ?? toolUseId;
       const result = await engine.approve(actionId, edited);
       if (result.kind === 'error') return result.summary;
+      // these replace or clear this browser's data (the chat included): start the app again where the result points
+      const tool = (block.envelope?.data as { toolName?: string } | undefined)?.toolName ?? block.toolName;
+      if (RESTARTS.has(tool) && typeof window !== 'undefined') {
+        window.location.assign(`${import.meta.env.BASE_URL}${(result.href ?? '/').replace(/^\//, '')}`);
+        return undefined;
+      }
       set((s) => ({
         historyVersion: s.historyVersion + 1,
         turns: [
@@ -398,6 +404,9 @@ export function threadActions(engine: ChatEngine) {
     },
   };
 }
+
+/** Approving one of these wipes or swaps the local data, so the page reloads on the result's route. */
+const RESTARTS = new Set(['load_demo', 'leave_demo', 'delete_all_data']);
 
 function findTool(toolUseId: string): ToolBlock | undefined {
   for (const t of state.turns)

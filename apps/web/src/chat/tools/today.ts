@@ -250,7 +250,7 @@ export const dismissSuggestionTool = defineTool({
     const summary =
       input.reason === 'already_did'
         ? 'Marked as done. Orbit will not offer it back.'
-        : 'Card removed. Restore it with manage_suggestion if that was wrong.';
+        : 'Card removed. Say restore it if that was wrong.';
     return ok('suggestion', out, out, summary, '/today');
   },
   toModel,

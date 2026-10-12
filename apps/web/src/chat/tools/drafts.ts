@@ -443,7 +443,7 @@ export const sendDraft = defineTool({
   name: 'send_draft',
   kind: 'risky',
   description:
-    'Call this only when the student says to send, approve or hand off a specific draft ("send the follow-up to Priya", "ok send it"), to retry a failed send, or asks for the text to paste into Gmail themselves (via copy). It never sends on its own: it returns a confirmation the student approves in the card, and the approved text is bound by the engine. Email goes through Gmail (60 second undo) or opens in the mail app; LinkedIn messages are copied and opened on LinkedIn; both then wait for the student\'s "I sent it" (confirm_handoff). A blocked send explains the engine\'s reason instead.',
+    'Call this only when the student says to send, approve or hand off a specific draft ("send the follow-up to Priya", "ok send it"), to retry a failed send, or asks for the text to paste into Gmail themselves (via copy). It never sends on its own: it returns a confirmation the student approves in the card, and the approved text is bound by the engine. Email goes through Gmail (60 second undo) or opens in the mail app; LinkedIn messages are copied and opened on LinkedIn; both then wait for the student\'s "I sent it". A blocked send explains the engine\'s reason instead.',
   input: z.object({
     draftId: z.string().describe('The draft id.'),
     body: z
@@ -550,10 +550,10 @@ export const sendDraft = defineTool({
           ? `Sent to ${person.firstName}.`
           : fresh.status === 'handed_off'
             ? fresh.handoffVia === 'copy'
-              ? `The text is ready to paste into Gmail${fresh.subject ? ` with the subject "${fresh.subject}"` : ''}. Once it is sent, say so and Orbit logs it (confirm_handoff).`
+              ? `The text is ready to paste into Gmail${fresh.subject ? ` with the subject "${fresh.subject}"` : ''}. Once it is sent, say so and Orbit logs it.`
               : fresh.channel === 'gmail'
-                ? `Opened in the mail app addressed to ${person.firstName}. Once it is sent, say so and Orbit logs it (confirm_handoff). ${notes.join(' ')}`
-                : `${notes.join(' ') || 'Copied and opened on LinkedIn.'} Once it is sent, say so and Orbit logs it (confirm_handoff).`
+                ? `Opened in the mail app addressed to ${person.firstName}. Once it is sent, say so and Orbit logs it. ${notes.join(' ')}`
+                : `${notes.join(' ') || 'Copied and opened on LinkedIn.'} Once it is sent, say so and Orbit logs it.`
             : `The message is ${fresh.status}.`;
     return ok('draft', out, out, summary, `/inbox?draft=${fresh.id}`);
   },

@@ -93,8 +93,8 @@ describe('request shape', () => {
     expect(body.max_iterations).toBeUndefined();
     const names = body.tools.map((t: { name: string }) => t.name);
     expect(names).toEqual([...names].sort());
-    // file-bearing tools have no JSON Schema form: they stay UI-only and are never offered to the model
-    expect(names).toEqual([...stub.registry.keys()].filter((n) => !/resume|linkedin/.test(n)).sort());
+    // the imports take text or base64 like the real registry, so every tool has a JSON Schema form and is offered
+    expect(names).toEqual([...stub.registry.keys()].sort());
     for (const t of body.tools) {
       expect(t.strict).toBe(true);
       expect(t.eager_input_streaming).toBe(true);
@@ -214,7 +214,7 @@ describe('tools', () => {
 
   it('keeps the cached prefix byte-identical across turns and appends the snapshot only when it changed', async () => {
     await turn('first', [
-      { text: 'Looking.', toolCalls: [{ id: 'toolu_1', name: 'list_drafts', input: { status: 'draft' } }] },
+      { text: 'Looking.', toolCalls: [{ id: 'toolu_1', name: 'list_drafts', input: { list: 'to_send' } }] },
       { thinking: ['Nothing waiting.'], text: 'No drafts waiting.' },
     ]);
     await turn('second', [{ text: 'Still nothing.' }]);

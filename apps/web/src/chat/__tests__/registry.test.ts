@@ -30,7 +30,8 @@ async function demoIds() {
   const pending = suggestions.filter((s) => s.status === 'pending');
   const thankYou = pending.find((s) => s.kind === 'thank_you' && s.outboundMessageId)!;
   const warming = chats.find((c) => c.stage === 'warming' && c.warmUp)!;
-  const replied = chats.find((c) => c.stage === 'outreach_sent' || c.stage === 'replied')!;
+  // a chat the example can really move to Replied (one already there is an unchanged move, with nothing to undo)
+  const replied = chats.find((c) => c.stage === 'outreach_sent')!;
   const noChat = people.find(
     (p) => p.isHuman && !p.hiddenAt && !chats.some((c) => c.personId === p.id) && p.primaryEmail,
   )!;
