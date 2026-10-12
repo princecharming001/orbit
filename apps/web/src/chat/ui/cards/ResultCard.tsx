@@ -18,7 +18,10 @@ import { Avatar, Button, Chip, cx, relDate } from '../../../ui';
 import type { ResultEnvelope } from '../../types';
 import { Markdown } from '../Markdown';
 import type { ToolBlock } from '../threadStore';
+import { Choices } from './Choices';
+import { SetupCard } from './Setup';
 import {
+  readChoices,
   readCompany,
   readConfirm,
   readDraft,
@@ -33,6 +36,7 @@ import {
   readPrep,
   readRoutes,
   readSettings,
+  readSetup,
   readSuggestions,
   readText,
 } from './shapes';
@@ -40,6 +44,8 @@ import {
 export interface CardActions {
   approve: (toolUseId: string, edited?: { body: string; subject?: string }) => Promise<string | undefined>;
   cancel: (toolUseId: string) => Promise<void>;
+  /** sends text as the student's next message (a tapped choice) */
+  send: (text: string) => Promise<void> | void;
 }
 
 /** The label of the page an href opens, for the "Open in app" link. */
@@ -215,6 +221,12 @@ function Envelope({ env, block, actions }: { env: ResultEnvelope; block: ToolBlo
           </div>
         </GlassCard>
       );
+    }
+    case 'choices':
+      return <Choices options={readChoices(d)} actions={actions} />;
+    case 'setup': {
+      const { what, status } = readSetup(d);
+      return what ? <SetupCard what={what} status={status} /> : <Summary env={env} />;
     }
     case 'draft':
       return <DraftCard block={block} env={env} actions={actions} />;

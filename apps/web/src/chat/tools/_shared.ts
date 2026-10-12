@@ -38,6 +38,11 @@ export function ok<U, M>(
   return { kind, data: pack(ui, forModel), summary: plain(summary), href };
 }
 
+/** The UI opens the envelope's `href` in the side panel by itself. */
+export function autoOpen<E extends ResultEnvelope>(env: E): E {
+  return { ...env, autoOpen: true };
+}
+
 export function err(message: string, extra: Record<string, unknown> = {}): ResultEnvelope {
   const text = plain(message || 'Something went wrong.');
   return { kind: 'error', data: { message: text, ...extra }, summary: text };

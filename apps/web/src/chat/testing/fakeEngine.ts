@@ -13,6 +13,8 @@
  *   "pipeline"              a pipeline card; "quiet" a people card; "route" routes; "prep" a prep card
  *   "thank-you" / "draft"   a draft card (DraftEditor, approve through engine.approve)
  *   "note"                  a note card; "message today" a brief card; "linkedin" a confirmation then an import card
+ *   "show choices"          a short answer with two tap-to-answer pills ("Show my pipeline", "What else can you do?")
+ *   "setup google" / "setup linkedin" / "setup claude" / "setup resume"   a message with that inline setup widget
  *   "send it"               a needs_confirmation for send_draft with the draft embedded
  *   "wipe"                  a needs_confirmation whose blockedReason disables Approve
  *   "fail no key" / "fail cap" / "fail refusal" / "fail network" / "fail other"   an error of that kind
@@ -28,6 +30,7 @@ import type {
   ChatMessage,
   ChipSpec,
   ResultEnvelope,
+  SetupWhat,
   TurnEvent,
 } from '../types';
 import {
@@ -543,12 +546,30 @@ function envelopes(ctx: Ctx): Record<string, () => ResultEnvelope> {
       confirmationId: `conf_${ctx.nextId()}`,
       continues: true,
     }),
+    choices: () => ({
+      kind: 'choices',
+      data: {
+        options: [
+          { label: 'Show my pipeline', message: 'Show my pipeline' },
+          { label: 'What else can you do?', message: 'What else can you do?' },
+        ],
+      },
+      summary: 'Showed 2 options to tap.',
+    }),
+    setup_google: () => setup('google'),
+    setup_linkedin: () => setup('linkedin'),
+    setup_claude_key: () => setup('claude_key'),
+    setup_resume: () => setup('resume'),
     error: () => ({
       kind: 'error',
       data: { message: 'Orbit could not find a chat with that person.' },
       summary: 'Orbit could not find a chat with that person.',
     }),
   };
+}
+
+function setup(what: SetupWhat): ResultEnvelope {
+  return { kind: 'setup', data: { what }, summary: `Showed the ${what.replace('_', ' ')} setup.` };
 }
 
 const ALL: [kind: string, tool: string, progress: string][] = [
@@ -573,6 +594,9 @@ const ALL: [kind: string, tool: string, progress: string][] = [
 function pick(text: string): Script {
   const t = text.toLowerCase();
   if (t.includes('everything')) return everything;
+  if (t.includes('show choices')) return withChoices;
+  const widget = t.match(/setup (google|linkedin|claude|resume)/);
+  if (widget) return withSetup(widget[1] === 'claude' ? 'claude_key' : (widget[1] as SetupWhat));
   const fail = t.match(/fail (no key|cap|refusal|network|other)/);
   if (fail) return failing(fail[1]!.replace(' ', '_') as 'no_key' | 'cap' | 'refusal' | 'network' | 'other');
   if (t.includes('slow')) return slow;
@@ -670,6 +694,26 @@ const everything: Script = async function* (ctx) {
   yield* say('That is the whole set. Each card opens its page in the app.');
   yield { type: 'done', stopReason: 'end_turn', messageId: '' };
 };
+
+/** A short answer with two pills under it, the way the model ends a reply with offer_choices. */
+const withChoices: Script = async function* (ctx) {
+  yield* say('I can pull up your pipeline or tell you more about what I do. ');
+  yield* tool(`tu_${ctx.nextId()}`, 'offer_choices', 'Adding options', envelopes(ctx).choices!());
+  yield { type: 'done', stopReason: 'end_turn', messageId: '' };
+};
+
+function withSetup(what: SetupWhat): Script {
+  return async function* (ctx) {
+    yield* say('Here is the setup, right in the chat. ');
+    yield* tool(
+      `tu_${ctx.nextId()}`,
+      'show_setup',
+      'Getting the setup ready',
+      envelopes(ctx)[`setup_${what}`]!(),
+    );
+    yield { type: 'done', stopReason: 'end_turn', messageId: '' };
+  };
+}
 
 const plain: Script = async function* () {
   yield* say(

@@ -33,6 +33,7 @@ export function ChatHome() {
       approve: actions.approve.bind(actions),
       cancel: actions.cancel.bind(actions),
       retry: actions.retry.bind(actions),
+      send: actions.send,
     }),
     [actions],
   );

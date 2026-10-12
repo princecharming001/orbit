@@ -16,6 +16,7 @@ import { pipelineTools } from './tools/pipeline';
 import { readTools } from './tools/read';
 import { settingsTools } from './tools/settings';
 import { todayTools } from './tools/today';
+import { widgetTools } from './tools/widgets';
 import type { ChatAction, ResultEnvelope, ToolContext, ToolKind } from './types';
 
 const all: AnyTool[] = [
@@ -27,6 +28,7 @@ const all: AnyTool[] = [
   ...noteTools,
   ...settingsTools,
   ...accountTools,
+  ...widgetTools,
 ].sort((a, b) => a.name.localeCompare(b.name));
 
 for (let i = 1; i < all.length; i++)
