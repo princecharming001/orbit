@@ -16,7 +16,6 @@ import {
   linkedinActivityUrl,
   MESSAGE_KIND_LABELS,
   NOTE_SOURCE_LABELS,
-  newId,
   promiseText,
   RELATIONSHIP_LABELS,
   relTime,
@@ -31,25 +30,28 @@ import { runApproval } from '../components/approve';
 import { DraftEditor, handoffWhere, OutboxStatus } from '../components/DraftEditor';
 import { ConfirmEarlyDone, chatTimeLabel, ScheduleChatDialog } from '../components/ScheduleChat';
 import { SuggestionCard } from '../components/SuggestionCard';
-import { feedback } from '../db/repo';
 import { db } from '../db/schema';
+import { isMessageSuggestion, refreshPersonSummary } from '../engine/brief';
+import { composeDraft, discardDraft as discardDraftRow, restoreDraft } from '../engine/drafts';
 import {
-  draftMessage,
-  isMessageSuggestion,
-  needsWarmUp,
-  refreshPersonSummary,
-  startWarmUpOrOutreach,
-  unsentDraftOf,
-} from '../engine/brief';
+  addFact,
+  deleteFact,
+  MANUAL_FACT_TYPES,
+  type ManualFactType,
+  markActionItemDone,
+  restoreFact,
+  togglePrepQuestion,
+} from '../engine/facts';
 import {
   knownOrganisations,
   readSuggestedNames,
   type SuggestedName,
   saveSuggestedContacts,
 } from '../engine/introductions';
-import { moveChat, upcomingMeeting } from '../engine/move';
+import { moveChat } from '../engine/move';
+import { hidePerson, setRelationshipType, unhidePerson } from '../engine/people';
+import { moveChatGuarded } from '../engine/pipeline';
 import { buildPrep, personSummary, toYou } from '../engine/prep';
-import { sharesOrgNow } from '../engine/resume';
 import { useSession } from '../state/session';
 import { Avatar, Button, Card, Chip, cx, Modal, NotFound, relDate, Select, Tabs, useToast } from '../ui';
 import { STAGE_COLOR, StrengthDots } from './Pipeline';
@@ -192,7 +194,6 @@ export function PersonPage() {
   const [warmUpChoice, setWarmUpChoice] = useState(false);
   const [asking, setAsking] = useState(false);
   const [early, setEarly] = useState<string>();
-  const settings = useSession().settings;
   const events =
     useLiveQuery(
       () =>
@@ -290,39 +291,22 @@ export function PersonPage() {
       .filter((d) => d.kind === kind && d.status === 'draft')
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
   const compose = async (kind: MessageKind, opts: { skipWarmUp?: boolean; confirmed?: boolean } = {}) => {
-    const channel = person.primaryEmail ? 'gmail' : 'linkedin';
-    // read from the database too: a page opened from Discover or Today may not have its drafts loaded yet
-    const started = openDraftFor(kind) ?? (await unsentDraftOf(person.id, kind));
+    // a draft the page already has is reopened without a round trip; the engine reads the database for the rest
+    const started = openDraftFor(kind);
     if (started) {
       setDraftId(started.id);
       setComposing(kind);
       return;
     }
-    // A cold LinkedIn-only contact: explain the warm-up and let the student choose before anything starts.
-    if (
-      kind === 'outreach' &&
-      !chat &&
-      !opts.confirmed &&
-      needsWarmUp(
-        person,
-        channel,
-        settings?.warmUpEnabled ?? true,
-        sharesOrgNow(
-          person,
-          resumeFacets.filter((f) => !f.excluded),
-        ),
-      )
-    ) {
-      setWarmUpChoice(true);
-      return;
-    }
     setBusy(true);
-    if (kind === 'outreach' && (!chat || (chat.stage === 'warming' && opts.skipWarmUp))) {
-      const r = await startWarmUpOrOutreach(user, person.id, channel, 'manual', {
-        skipWarmUp: opts.skipWarmUp,
-      });
-      setBusy(false);
-      if (!r.draft) {
+    try {
+      const r = await composeDraft(user, person.id, kind, { ...opts, chat: chat ?? null });
+      // A cold LinkedIn-only contact: explain the warm-up and let the student choose before anything starts.
+      if (r.kind === 'warmup_choice') {
+        setWarmUpChoice(true);
+        return;
+      }
+      if (r.kind === 'warmup_started') {
         toast.push({
           text: `Warm-up started for ${person.firstName}. The first step is outlined below.`,
           tone: 'good',
@@ -331,24 +315,18 @@ export function PersonPage() {
         nav(`/today?person=${person.id}`);
         return;
       }
+      if (r.kind !== 'draft') return;
       setDraftId(r.draft.id);
-      setComposing(kind);
-      return;
+      // the thread may call for another kind (a bump to someone who answered is the scheduling reply)
+      setComposing(r.draft.kind);
+    } finally {
+      setBusy(false);
     }
-    const d = await draftMessage(user, person.id, kind, channel, chat?.id);
-    setDraftId(d.id);
-    // the thread may call for another kind (a bump to someone who answered is the scheduling reply)
-    setComposing(d.kind);
-    setBusy(false);
   };
   const draft = drafts.find((d) => d.id === draftId);
   /** Drop a draft the student started; `quiet` when nothing of theirs is in it, otherwise with an Undo. */
   const discardDraft = async (id: string, quiet = false) => {
-    await db.outbound
-      .where('id')
-      .equals(id)
-      .filter((m) => m.status === 'draft')
-      .modify({ status: 'cancelled' });
+    await discardDraftRow(id);
     if (id === draftId) {
       setComposing(undefined);
       setDraftId(undefined);
@@ -356,15 +334,7 @@ export function PersonPage() {
     if (!quiet)
       toast.push({
         text: 'Draft discarded.',
-        action: {
-          label: 'Undo',
-          onClick: () =>
-            db.outbound
-              .where('id')
-              .equals(id)
-              .filter((m) => m.status === 'cancelled')
-              .modify({ status: 'draft' }),
-        },
+        action: { label: 'Undo', onClick: () => restoreDraft(id) },
         ttl: 7000,
       });
   };
@@ -520,7 +490,7 @@ export function PersonPage() {
               How you know them
               <Select
                 value={person.relationshipType}
-                onChange={(e) => db.people.update(person.id, { relationshipType: e.target.value as never })}
+                onChange={(e) => setRelationshipType(person.id, e.target.value as never)}
                 className="h-8 text-[13px] text-ink"
                 title="Orbit adjusts the tone of drafts and its suggestions to it."
               >
@@ -568,13 +538,9 @@ export function PersonPage() {
                   onChange={async (e) => {
                     const to = e.target.value as CoffeeChat['stage'];
                     // a chat still ahead is not done yet: ask before drafting a thank-you for it
-                    const ahead = to === 'completed' ? await upcomingMeeting(chat) : undefined;
-                    if (ahead && new Date(ahead.startAt).getTime() > Date.now()) {
-                      setEarly(ahead.startAt);
-                      return;
-                    }
-                    await moveChat(user, chat, to, 'user:select');
-                    if (to === 'scheduled' && !(await upcomingMeeting(chat))) setAsking(true);
+                    const r = await moveChatGuarded(user, chat, to, 'user:select');
+                    if (r.outcome === 'meeting_ahead') setEarly(r.meetingAt);
+                    else if (r.outcome === 'applied' && r.needsTime) setAsking(true);
                   }}
                   className="h-8 text-[12px] text-ink"
                   aria-label="Chat stage"
@@ -614,17 +580,14 @@ export function PersonPage() {
               }
               onClick={async () => {
                 if (person.hiddenAt) {
-                  await db.people.update(person.id, { hiddenAt: undefined });
+                  await unhidePerson(person.id);
                   toast.push({ text: `${person.firstName} is back in People, Today and the map.` });
                   return;
                 }
-                await db.people.update(person.id, { hiddenAt: new Date().toISOString() });
+                await hidePerson(person.id);
                 toast.push({
                   text: `Hid ${person.displayName}. Find them under Hidden in People.`,
-                  action: {
-                    label: 'Undo',
-                    onClick: () => db.people.update(person.id, { hiddenAt: undefined }),
-                  },
+                  action: { label: 'Undo', onClick: () => unhidePerson(person.id) },
                   ttl: 7000,
                 });
                 nav('/people');
@@ -889,14 +852,10 @@ export function PersonPage() {
                           title="Delete this fact (it won't come back)"
                           aria-label={`Delete fact: ${f.text}`}
                           onClick={async () => {
-                            await db.facts.update(f.id, { deletedAt: new Date().toISOString() });
-                            await feedback(user.id, 'fact_delete', { refTable: 'facts', refId: f.id });
+                            await deleteFact(user.id, f.id);
                             toast.push({
                               text: 'Fact deleted. Drafts will not use it.',
-                              action: {
-                                label: 'Undo',
-                                onClick: () => db.facts.update(f.id, { deletedAt: undefined }),
-                              },
+                              action: { label: 'Undo', onClick: () => restoreFact(f.id) },
                               ttl: 6000,
                             });
                           }}
@@ -1071,7 +1030,7 @@ export function PersonPage() {
                         type="checkbox"
                         className="mt-1"
                         aria-label={`Mark done: ${i.text}`}
-                        onChange={() => db.actionItems.update(i.id, { status: 'done' })}
+                        onChange={() => markActionItemDone(i.id)}
                       />
                       <span className="flex-1">
                         {promiseText(i.text, person.firstName)}
@@ -1126,27 +1085,14 @@ export function PersonPage() {
 
 function AddFact({ personId, userId }: { personId: string; userId: string }) {
   const [text, setText] = useState('');
-  const [type, setType] = useState<'hook' | 'advice' | 'offer' | 'personal' | 'role_detail' | 'background'>(
-    'hook',
-  );
+  const [type, setType] = useState<ManualFactType>('hook');
   const add = async () => {
     // Take the text now and clear the box at once: clearing after the save would wipe a fact typed while it ran.
     const value = text.trim();
     if (!value) return;
     setText('');
     try {
-      await db.facts.add({
-        id: newId('f'),
-        userId,
-        personId,
-        type,
-        text: value,
-        sourceTable: 'manual',
-        sourceId: 'manual',
-        confidence: 1,
-        occurredAt: new Date().toISOString(),
-        createdAt: new Date().toISOString(),
-      });
+      await addFact(userId, personId, type, value);
     } catch {
       setText((current) => current || value); // the save failed: give the words back unless new ones were typed
     }
@@ -1159,7 +1105,7 @@ function AddFact({ personId, userId }: { personId: string; userId: string }) {
         className="h-8 text-[13px]"
         aria-label="Kind of fact"
       >
-        {(['hook', 'advice', 'offer', 'personal', 'role_detail', 'background'] as const).map((t) => (
+        {MANUAL_FACT_TYPES.map((t) => (
           <option key={t} value={t}>
             {FACT_TYPE_LABELS[t]}
           </option>
@@ -1233,9 +1179,7 @@ function Prep({
   if (!user || !plan) return null;
   const picked = chat?.prepQuestions ?? [];
   const toggle = async (q: string) => {
-    if (!chat) return;
-    const next = picked.includes(q) ? picked.filter((x) => x !== q) : [...picked, q];
-    await db.chats.update(chat.id, { prepQuestions: next, updatedAt: new Date().toISOString() });
+    if (chat) await togglePrepQuestion(chat.id, q);
   };
   const advice = facts.filter((f) => f.type === 'advice');
   const role = facts.filter((f) => f.type === 'role_detail' || f.type === 'background');

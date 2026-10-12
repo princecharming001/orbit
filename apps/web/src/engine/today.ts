@@ -3,6 +3,31 @@ import { briefSummaryText, isMessageSuggestion } from './brief';
 
 const DAY = 86_400_000;
 
+/** The chip label and tone for each kind of card, as Today, Drafts and the Pipeline show them. */
+export const SUGGESTION_KIND_LABELS: Record<
+  Suggestion['kind'],
+  { label: string; tone: 'neutral' | 'accent' | 'good' | 'warn' | 'bad' }
+> = {
+  new_outreach: { label: 'First message', tone: 'accent' },
+  warm_up_engage: { label: 'LinkedIn warm-up', tone: 'neutral' },
+  follow_up_bump: { label: 'Follow-up', tone: 'warn' },
+  schedule_propose: { label: 'Find a time', tone: 'accent' },
+  schedule_confirm: { label: 'Confirm time', tone: 'accent' },
+  prep_brief: { label: 'Prep', tone: 'good' },
+  thank_you: { label: 'Thank-you', tone: 'good' },
+  action_item_reminder: { label: 'Promise to keep', tone: 'warn' },
+  nurture_checkin: { label: 'Check-in', tone: 'neutral' },
+  reconnect: { label: 'Reconnect', tone: 'neutral' },
+  congratulate: { label: 'Congratulate', tone: 'good' },
+  ask_referral: { label: 'Referral ask', tone: 'accent' },
+  intro_request: { label: 'Intro ask', tone: 'accent' },
+  report_back: { label: 'Close the loop', tone: 'good' },
+  confirm_stage: { label: 'Did this change?', tone: 'neutral' },
+  confirm_merge: { label: 'Possible duplicate', tone: 'neutral' },
+  confirm_note_match: { label: 'Match note', tone: 'neutral' },
+  confirm_intro: { label: 'Introduction?', tone: 'neutral' },
+};
+
 /**
  * A pending card whose moment has passed (a time to confirm or a chat to prep that already started) is hidden at once,
  * even before the engine retires it.
@@ -137,4 +162,60 @@ export function notYetWritten<
         now.getTime() - new Date(p.createdAt).getTime() < NEW_PERSON_DAYS * DAY,
     )
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+/** Stages that mean the person answered the first message, when Orbit cannot see the reply itself. */
+const MOVED_ON: CoffeeChat['stage'][] = [
+  'replied',
+  'scheduling',
+  'scheduled',
+  'completed',
+  'followed_up',
+  'nurturing',
+];
+/** Reply rate needs this many first messages in the window before it says a number. */
+export const REPLY_RATE_MIN_SENT = 3;
+
+/**
+ * Today's "This week" numbers: first messages sent since Monday against the weekly goal, the reply rate over the
+ * last 30 days (a reply by email, or a chat that moved on), chats done and people in orbit.
+ */
+export function weekStats(
+  outbound: Pick<OutboundMessage, 'status' | 'kind' | 'sentAt' | 'personId'>[],
+  chats: Pick<CoffeeChat, 'personId' | 'lastInboundAt' | 'stage' | 'completedAt'>[],
+  people: Pick<Person, 'isHuman' | 'hiddenAt'>[],
+  weeklyTarget: number,
+  now: Date,
+): {
+  sentThisWeek: number;
+  weeklyTarget: number;
+  sent30: number;
+  replied30: number;
+  replyRate?: number;
+  completed: number;
+  peopleInOrbit: number;
+} {
+  const weekStart = new Date(now);
+  weekStart.setDate(now.getDate() - ((now.getDay() + 6) % 7));
+  weekStart.setHours(0, 0, 0, 0);
+  const firsts = outbound.filter((o) => o.status === 'sent' && o.kind === 'outreach' && !!o.sentAt);
+  const sentThisWeek = firsts.filter((o) => new Date(o.sentAt!) >= weekStart).length;
+  const sent30 = firsts.filter((o) => now.getTime() - new Date(o.sentAt!).getTime() < 30 * DAY);
+  const replied30 = sent30.filter((o) =>
+    chats.some(
+      (c) =>
+        c.personId === o.personId &&
+        ((c.lastInboundAt && o.sentAt && c.lastInboundAt > o.sentAt) || MOVED_ON.includes(c.stage)),
+    ),
+  ).length;
+  return {
+    sentThisWeek,
+    weeklyTarget,
+    sent30: sent30.length,
+    replied30,
+    replyRate:
+      sent30.length >= REPLY_RATE_MIN_SENT ? Math.round((replied30 / sent30.length) * 100) : undefined,
+    completed: chats.filter((c) => c.completedAt).length,
+    peopleInOrbit: people.filter((p) => p.isHuman && !p.hiddenAt).length,
+  };
 }

@@ -8,8 +8,7 @@ import { AddPersonButton } from '../components/AddPerson';
 import { ConfirmEarlyDone, chatTimeLabel, ScheduleChatDialog } from '../components/ScheduleChat';
 import { KIND_LABEL } from '../components/SuggestionCard';
 import { db } from '../db/schema';
-import { moveChat, upcomingMeeting } from '../engine/move';
-import { applyStage } from '../engine/stages';
+import { moveChatGuarded, QUIET_DAYS, undoStageMove, wentQuiet } from '../engine/pipeline';
 import { useHints } from '../state/hints';
 import { useSession } from '../state/session';
 import {
@@ -27,19 +26,8 @@ import {
   useToast,
 } from '../ui';
 
-const DAY = 86_400_000;
-/** Days without an answer after the student's last message before a chat counts as gone quiet. */
-export const QUIET_DAYS = 7;
-const WAITING_STAGES: ChatStage[] = ['outreach_sent', 'replied', 'scheduling'];
-
-/** True when the student wrote last, at least a week ago, and the chat is still waiting on the other person. */
-export function wentQuiet(chat: CoffeeChat, now = new Date()): boolean {
-  if (!WAITING_STAGES.includes(chat.stage) || !chat.lastOutboundAt) return false;
-  if (chat.lastInboundAt && chat.lastInboundAt >= chat.lastOutboundAt) return false;
-  // moved on since the student last wrote ("They replied", a move on the board): an answer Orbit cannot see came in
-  if (chat.stage !== 'outreach_sent' && chat.stageEnteredAt > chat.lastOutboundAt) return false;
-  return now.getTime() - new Date(chat.lastOutboundAt).getTime() >= QUIET_DAYS * DAY;
-}
+// kept here for older imports; the rule lives in the engine so the chat and Today share it
+export { QUIET_DAYS, wentQuiet };
 
 type SortKey = 'person' | 'stage' | 'inStage' | 'lastSent' | 'lastReply' | 'closeness';
 
@@ -152,16 +140,16 @@ export function Pipeline() {
     suggestions.find((s) => s.chatId === chatId || (s.personId === personId && !s.chatId));
   const move = async (chat: CoffeeChat, to: ChatStage, sure = false) => {
     if (chat.stage === to || !user) return;
-    const ahead = to === 'completed' && !sure ? await upcomingMeeting(chat) : undefined;
-    if (ahead && new Date(ahead.startAt).getTime() > Date.now()) {
-      setEarly({ chat, at: ahead.startAt });
+    const r = await moveChatGuarded(user, chat, to, 'user:drag', { force: sure });
+    if (r.outcome === 'meeting_ahead') {
+      setEarly({ chat, at: r.meetingAt });
       return;
     }
-    const from = chat.stage;
-    await moveChat(user, chat, to, 'user:drag');
+    if (r.outcome !== 'applied') return;
+    const from = r.from;
     const name = byId.get(chat.personId)?.firstName ?? 'This chat';
     // booked: ask when, unless a calendar already says so
-    if (to === 'scheduled' && !(await upcomingMeeting(chat))) {
+    if (r.needsTime) {
       const fresh = await db.chats.get(chat.id);
       if (fresh) setAsking(fresh);
     }
@@ -185,10 +173,7 @@ export function Pipeline() {
       }`,
       action: {
         label: 'Undo',
-        onClick: async () => {
-          const now = await db.chats.get(chat.id);
-          if (now) await applyStage(now, from, 'user', 'user:undo');
-        },
+        onClick: () => undoStageMove(chat.id, from),
       },
       ttl: 6000,
     });

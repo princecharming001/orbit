@@ -4,7 +4,6 @@ import {
   combinedPairWeights,
   describeIntroChain,
   introStories,
-  newId,
   normalizeCompany,
   orbitGroupKey,
   REACH_BAND_LABELS,
@@ -19,6 +18,7 @@ import type { FocusSpec, WebSpec } from '../components/orbitScene';
 import { LINEAGE } from '../components/orbitScene';
 import { db } from '../db/schema';
 import { draftMessage } from '../engine/brief';
+import { requestIntro } from '../engine/drafts';
 import {
   type CompanyReach,
   isColdDirect,
@@ -545,38 +545,8 @@ export function MapPage() {
   }, [webMode]);
   const askIntro = async (path: ReachPath) => {
     if (!user || !target) return;
-    const connectorId = path.hops[0]!.toId;
-    const connector = await db.people.get(connectorId);
-    if (!connector) return;
-    const s = {
-      id: newId('s'),
-      userId: user.id,
-      kind: 'intro_request' as const,
-      personId: connectorId,
-      priorityScore: 0.55,
-      reasonText: `Ask ${connector.firstName} to introduce you to ${target.displayName}`,
-      signals: { path: path.score },
-      payload: {
-        target: {
-          name: target.displayName,
-          title: target.currentTitle,
-          org: target.currentOrganizationRaw,
-          why: target.currentOrganizationRaw ? `their work at ${target.currentOrganizationRaw}` : undefined,
-        },
-        channel: connector.primaryEmail ? 'gmail' : 'linkedin',
-      },
-      status: 'pending' as const,
-      dedupeKey: `intro:${connectorId}:${target.id}`,
-      carriedOver: 0,
-      expiresAt: new Date(Date.now() + 7 * 86_400_000).toISOString(),
-      createdAt: new Date().toISOString(),
-    };
-    const existing = await db.suggestions.where('dedupeKey').equals(s.dedupeKey).first();
-    if (!existing) {
-      await db.suggestions.add(s);
-      const { draftForSuggestion } = await import('../engine/brief');
-      await draftForSuggestion(user, s);
-    }
+    const r = await requestIntro(user, path.hops[0]!.toId, target.id, { path });
+    if (!r) return;
     toast.push({
       text: `Intro request drafted. It's in Drafts.`,
       tone: 'good',

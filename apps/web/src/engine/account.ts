@@ -1,6 +1,13 @@
 import type { User, UserSettings } from '@orbit/core';
 import { newId } from '@orbit/core';
+import { CURRENT_USER_KEY } from '../db/repo';
 import { db, wipeDatabase } from '../db/schema';
+import { disconnectGoogle } from '../integrations/google';
+import { clearPrefs } from '../integrations/prefs';
+import { generateBrief, recommendationsRefresh } from './brief';
+
+/** The setup is done: the welcome brief and the first recommendations are built, and Today opens. */
+export const ONBOARDING_DONE_STEP = 11;
 
 export async function createLocalUser(partial: Partial<User> = {}): Promise<User> {
   const now = new Date().toISOString();
@@ -44,4 +51,49 @@ export async function createLocalUser(partial: Partial<User> = {}): Promise<User
 export async function leaveDemoForOwnSetup(): Promise<User> {
   await wipeDatabase();
   return createLocalUser();
+}
+
+/** Continue, Back or Skip in setup: the furthest step reached is kept, so a Back never loses progress. */
+export async function setOnboardingStep(userId: string, next: number): Promise<number | undefined> {
+  const user = await db.users.get(userId);
+  if (!user) return undefined;
+  const step = Math.max(user.onboardingStep, next);
+  await db.users.update(userId, { onboardingStep: step });
+  return step;
+}
+
+/** Finish setup: the student's recommendations and welcome brief are built from what they entered. */
+export async function finishOnboarding(userId: string, now = new Date()): Promise<User | undefined> {
+  const user = await db.users.get(userId);
+  if (!user) return undefined;
+  await db.users.update(userId, {
+    onboardingStep: ONBOARDING_DONE_STEP,
+    onboardingCompletedAt: now.toISOString(),
+  });
+  const fresh = (await db.users.get(userId))!;
+  await recommendationsRefresh(fresh, now);
+  await generateBrief(fresh, 'welcome', now);
+  return fresh;
+}
+
+/** Everything Orbit stores about the network, table by table (the browser-local prefs, with the key, are not here). */
+export async function exportAllData(): Promise<Record<string, unknown[]>> {
+  const out: Record<string, unknown[]> = {};
+  for (const t of db.tables.map((x) => x.name)) out[t] = await db.table(t).toArray();
+  return out;
+}
+
+export function exportFilename(now = new Date()): string {
+  return `orbit-export-${now.toISOString().slice(0, 10)}.json`;
+}
+
+/**
+ * Delete all Orbit data from this browser: Google is disconnected, the local prefs (the key) cleared, the database
+ * wiped and the session ended. Cannot be undone.
+ */
+export async function deleteAllData(): Promise<void> {
+  disconnectGoogle();
+  await clearPrefs();
+  await wipeDatabase();
+  await db.kv.delete(CURRENT_USER_KEY);
 }

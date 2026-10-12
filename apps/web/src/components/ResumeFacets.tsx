@@ -1,6 +1,6 @@
 import type { ResumeFacet } from '@orbit/core';
 import { useState } from 'react';
-import { db } from '../db/schema';
+import { FACETS_WITH_ROLE, fixResumeFacet, setResumeFacetUsed } from '../engine/resume';
 import { Button, Input, Label, Textarea } from '../ui';
 
 const FACET_LABELS: Record<string, string> = {
@@ -22,8 +22,6 @@ export function facetDetail(f: { title?: string; organizationName?: string; text
   // what is left of "Treasurer, Club soccer." once the role and the club are shown is a full stop: nothing to show
   return /\w/.test(t) ? t : '';
 }
-
-const HAS_ROLE = new Set(['experience', 'education', 'project']);
 
 /**
  * What Orbit read from the resume, one line each: unchecked lines are not used, and any line can be corrected in
@@ -50,9 +48,7 @@ export function ResumeFacetList({ facets, readBy }: { facets: ResumeFacet[]; rea
                 checked={!f.excluded}
                 aria-label={`Use ${f.title ?? FACET_LABELS[f.kind] ?? 'this line'}`}
                 data-testid="ob-facet-toggle"
-                onChange={(e) =>
-                  db.resumeFacets.update(f.id, { excluded: !e.target.checked, confirmed: e.target.checked })
-                }
+                onChange={(e) => setResumeFacetUsed(f.id, e.target.checked)}
               />
               <span className="min-w-0 flex-1">
                 <span className="text-ink-3 text-[12px] mr-1.5">{FACET_LABELS[f.kind] ?? 'Other'}</span>
@@ -82,18 +78,12 @@ export function ResumeFacetList({ facets, readBy }: { facets: ResumeFacet[]; rea
 }
 
 function FacetEditor({ facet, onDone }: { facet: ResumeFacet; onDone: () => void }) {
-  const role = HAS_ROLE.has(facet.kind);
+  const role = FACETS_WITH_ROLE.has(facet.kind);
   const [title, setTitle] = useState(facet.title ?? '');
   const [org, setOrg] = useState(facet.organizationName ?? '');
   const [text, setText] = useState(role ? facetDetail(facet) : facet.text);
   const save = async () => {
-    await db.resumeFacets.update(facet.id, {
-      title: role ? title.trim() || undefined : facet.title,
-      organizationName: role ? org.trim() || undefined : facet.organizationName,
-      text: text.trim() || [title, org].filter((x) => x.trim()).join(', '),
-      excluded: false,
-      confirmed: true,
-    });
+    await fixResumeFacet(facet.id, { title, organizationName: org, text });
     onDone();
   };
   return (

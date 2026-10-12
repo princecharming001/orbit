@@ -5,9 +5,18 @@ import { Link, useNavigate } from 'react-router-dom';
 import { AddPersonButton } from '../components/AddPerson';
 import { LinkedInImportButton } from '../components/LinkedInImport';
 import { RoleLine } from '../components/SuggestionCard';
-import { feedback } from '../db/repo';
 import { db } from '../db/schema';
 import { recommendationsRefresh, startWarmUpOrOutreach } from '../engine/brief';
+import {
+  dismissRecommendation,
+  introducerIdFor,
+  isColdRecommendation,
+  outreachChannelFor,
+  RECOMMENDATION_DISMISS_REASONS,
+  type RecommendationDismissReason,
+  restoreRecommendation,
+  saveRecommendation,
+} from '../engine/recommend';
 import { useSession } from '../state/session';
 import { Avatar, Button, Chip, cx, EmptyState, Input, PageHeader, useToast } from '../ui';
 import { StrengthDots } from './Pipeline';
@@ -105,7 +114,7 @@ export function Discover() {
     const r = await startWarmUpOrOutreach(
       user,
       personId,
-      p?.primaryEmail ? 'gmail' : 'linkedin',
+      outreachChannelFor(p ?? {}),
       'recommendation',
       opts,
     );
@@ -120,15 +129,11 @@ export function Discover() {
       });
     }
   };
-  const drop = async (id: string, reason: string, label: string) => {
-    await db.recommendations.update(id, { status: 'dismissed', dismissedReason: reason });
-    await feedback(user.id, 'recommendation_dismiss', { reason, refTable: 'recommendations', refId: id });
+  const drop = async (id: string, reason: RecommendationDismissReason, label: string) => {
+    await dismissRecommendation(user.id, id, reason);
     toast.push({
       text: `Removed (${label.toLowerCase()}). Orbit learns from this for the next list.`,
-      action: {
-        label: 'Undo',
-        onClick: () => db.recommendations.update(id, { status: 'new', dismissedReason: undefined }),
-      },
+      action: { label: 'Undo', onClick: () => restoreRecommendation(id) },
       ttl: 6000,
     });
   };
@@ -218,12 +223,8 @@ export function Discover() {
               const p = byId.get(r.personId);
               if (!p) return null;
               // someone the student was pointed to, or in their own club, is written to directly
-              const cold =
-                p.strength < 0.2 &&
-                !p.primaryEmail &&
-                !r.reasons.some((x) => x.code === 'referred' || x.code === 'shared_org_now');
-              const introId =
-                r.bestPath && r.bestPath.hops.length >= 2 ? r.bestPath.hops[0]!.toId : undefined;
+              const cold = isColdRecommendation(p, r);
+              const introId = introducerIdFor(r);
               const introducer = introId ? byId.get(introId) : undefined;
               return (
                 <div
@@ -308,7 +309,7 @@ export function Discover() {
                       <Button
                         size="sm"
                         onClick={async () => {
-                          await db.recommendations.update(r.id, { status: 'saved' });
+                          await saveRecommendation(r.id);
                           toast.push({
                             text: `Saved ${p.firstName}. Saved people stay at the top of Discover until you write to them.`,
                           });
@@ -323,16 +324,16 @@ export function Discover() {
                       aria-label="Not a fit? Tell Orbit why"
                     >
                       <span className="text-ink-3 self-center mr-0.5">Not a fit?</span>
-                      {[
-                        ['wrong_role', 'Wrong role'],
-                        ['wrong_company', 'Wrong company'],
-                        ['know_them', 'Already know them'],
-                        ['not_now', 'Not now'],
-                      ].map(([k, l]) => (
+                      {(
+                        Object.entries(RECOMMENDATION_DISMISS_REASONS) as [
+                          RecommendationDismissReason,
+                          string,
+                        ][]
+                      ).map(([k, l]) => (
                         <button
                           key={k}
                           className="px-2 h-7 rounded-md text-ink-3 hover:bg-canvas-2 hover:text-ink"
-                          onClick={() => drop(r.id, k!, l!)}
+                          onClick={() => drop(r.id, k, l)}
                         >
                           {l}
                         </button>

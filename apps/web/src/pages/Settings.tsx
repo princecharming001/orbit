@@ -1,5 +1,5 @@
 import type { TargetCompany, RecruitingGoals as UserGoals } from '@orbit/core';
-import { buildStyleCard, defaultStyleCard, newId, TARGET_STATUS_LABELS, yearLabel } from '@orbit/core';
+import { defaultStyleCard, TARGET_STATUS_LABELS, yearLabel } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Check, Download, Trash2 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
@@ -7,21 +7,30 @@ import { Navigate, NavLink, useNavigate, useParams } from 'react-router-dom';
 import { chatMode, chatModeNote } from '../chat/agent/mode';
 import { LinkedInImportButton } from '../components/LinkedInImport';
 import { ResumeFacetList } from '../components/ResumeFacets';
-import { db, wipeDatabase } from '../db/schema';
+import { db } from '../db/schema';
+import { deleteAllData, exportAllData, exportFilename } from '../engine/account';
 import { demoResetPrompt, loadDemo } from '../engine/demo';
+import { connectAndSyncGoogle, disconnectGoogleAccount, markGoogleNeedsReauth } from '../engine/integrations';
 import { saveResume } from '../engine/resume';
-import { syncGoogle } from '../engine/sync';
+import {
+  forgetLearnedStyle,
+  learnStyleFromSent,
+  removeTargetCompany,
+  restoreTargetCompany,
+  saveGoals,
+  setSchedulingLink,
+  setTargetDeadline,
+  setTargetPriority,
+  setTargetStatus,
+  setTonePreset,
+  splitList,
+  updateLimits,
+  updateProfile,
+} from '../engine/settings';
 import { addTargetCompanies } from '../engine/targets';
 import { fmtFailureTime, hasLlm, MODEL, testApiKey } from '../integrations/anthropic';
+import { currentGoogleToken, googleClientId } from '../integrations/google';
 import {
-  connectGoogle,
-  currentGoogleToken,
-  disconnectGoogle,
-  googleClientId,
-  googleScopeWarning,
-} from '../integrations/google';
-import {
-  clearPrefs,
   DEFAULT_DAILY_REQUEST_CAP,
   DEFAULT_DAILY_TOKEN_CAP,
   envGoogleClientId,
@@ -214,23 +223,15 @@ function Profile() {
   const nameMissing = !f.fullName.trim();
   const state = useAutosave(
     f,
-    (v) => {
-      const [first, ...rest] = v.fullName.trim().split(/\s+/);
-      return db.users.update(user.id, {
+    (v) =>
+      updateProfile(user.id, {
         ...v,
-        fullName: v.fullName.trim(),
-        firstName: first ?? '',
-        lastName: rest.join(' '),
-        majors: v.majors
-          .split(',')
-          .map((m) => m.trim())
-          .filter(Boolean),
+        majors: splitList(v.majors),
         schoolDomain: v.schoolDomain || undefined,
         linkedinUrl: v.linkedinUrl || undefined,
         graduationYear: v.graduationYear || undefined,
         degree: v.degree || undefined,
-      });
-    },
+      }),
     !nameMissing,
   );
   const zones = timeZones(f.timezone);
@@ -445,25 +446,18 @@ function GoalsForm({ goals, tcs }: { goals: UserGoals; tcs: TargetCompany[] }) {
         text: `${r.duplicates.join(', ')} ${r.duplicates.length === 1 ? 'is' : 'are'} already on your list.`,
       });
   };
-  const split = (s: string) =>
-    s
-      .split(',')
-      .map((x) => x.trim())
-      .filter(Boolean);
-  const state = useAutosave(f, async (v) => {
-    // read fresh: the ambition lives on the same row and may have changed elsewhere
-    const cur = await db.goals.get(user.id);
-    await db.goals.put({
-      userId: user.id,
+  const split = splitList;
+  // the ambition lives on the same row and may have changed elsewhere: saveGoals keeps the stored one
+  const state = useAutosave(f, (v) =>
+    saveGoals(user.id, {
       cycleLabel: v.cycleLabel,
       targetRoles: split(v.targetRoles),
       targetFunctions: v.targetFunctions,
       targetIndustries: split(v.targetIndustries),
       targetLocations: split(v.targetLocations),
       freeText: v.freeText,
-      ambition: cur?.ambition ?? goals.ambition ?? 2,
-    });
-  });
+    }),
+  );
   return (
     <div className="space-y-4">
       <Card className="grid sm:grid-cols-2 gap-4">
@@ -544,9 +538,7 @@ function GoalsForm({ goals, tcs }: { goals: UserGoals; tcs: TargetCompany[] }) {
                 Priority
                 <Select
                   value={t.priority}
-                  onChange={(e) =>
-                    db.targetCompanies.update(t.id, { priority: Number(e.target.value) as 1 | 2 | 3 })
-                  }
+                  onChange={(e) => setTargetPriority(t.id, Number(e.target.value) as 1 | 2 | 3)}
                   className="h-8 text-[12px] text-ink"
                   aria-label={`Priority for ${t.nameRaw}`}
                 >
@@ -559,12 +551,7 @@ function GoalsForm({ goals, tcs }: { goals: UserGoals; tcs: TargetCompany[] }) {
                 Application
                 <Select
                   value={t.status}
-                  onChange={(e) =>
-                    db.targetCompanies.update(t.id, {
-                      status: e.target.value as never,
-                      statusChangedAt: new Date().toISOString(),
-                    })
-                  }
+                  onChange={(e) => setTargetStatus(t.id, e.target.value as never)}
                   className="h-8 text-[12px] text-ink"
                   aria-label={`Application status for ${t.nameRaw}`}
                 >
@@ -580,7 +567,7 @@ function GoalsForm({ goals, tcs }: { goals: UserGoals; tcs: TargetCompany[] }) {
                 <Input
                   type="date"
                   value={t.deadline ?? ''}
-                  onChange={(e) => db.targetCompanies.update(t.id, { deadline: e.target.value || undefined })}
+                  onChange={(e) => setTargetDeadline(t.id, e.target.value || undefined)}
                   className="h-8 text-[12px] w-36 text-ink"
                   aria-label={`Application deadline for ${t.nameRaw}`}
                 />
@@ -588,10 +575,10 @@ function GoalsForm({ goals, tcs }: { goals: UserGoals; tcs: TargetCompany[] }) {
               <button
                 className="text-ink-3 hover:text-bad p-2 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
                 onClick={async () => {
-                  await db.targetCompanies.delete(t.id);
+                  const removed = await removeTargetCompany(t.id);
                   toast.push({
                     text: `Removed ${t.nameRaw} from your targets.`,
-                    action: { label: 'Undo', onClick: () => db.targetCompanies.put(t) },
+                    action: { label: 'Undo', onClick: () => restoreTargetCompany(removed ?? t) },
                     ttl: 7000,
                   });
                 }}
@@ -634,33 +621,17 @@ function Integrations() {
   const builtIn = !!envGoogleClientId();
   const connect = async () => {
     try {
-      writePrefs({ googleClientId: clientId.trim() || undefined });
       setBusy('Waiting for Google…');
-      const t = await connectGoogle();
-      await db.integrations.put({
-        id: google?.id ?? newId('int'),
-        userId: user.id,
-        provider: 'google',
-        externalAccountId: t.email,
-        status: 'active',
-        scopes: t.scopes ?? [],
-        syncState: google?.syncState ?? {},
-        connectedAt: google?.connectedAt ?? new Date().toISOString(),
-      });
-      await syncGoogle(user, {
+      const { warning } = await connectAndSyncGoogle(user, {
+        clientId,
         onProgress: (p) => setBusy(`${p.phase} ${p.total > 1 ? `${p.done}/${p.total}` : ''}`),
       });
-      const missing = googleScopeWarning(t.scopes);
       toast.push(
-        missing ? { text: missing, tone: 'bad', ttl: 10_000 } : { text: 'Google synced.', tone: 'good' },
+        warning ? { text: warning, tone: 'bad', ttl: 10_000 } : { text: 'Google synced.', tone: 'good' },
       );
     } catch (e) {
       toast.push({ text: String((e as Error).message ?? e), tone: 'bad', ttl: 7000 });
-      if (google)
-        await db.integrations.update(google.id, {
-          status: 'needs_reauth',
-          lastError: String((e as Error).message ?? e),
-        });
+      if (google) await markGoogleNeedsReauth(user.id, String((e as Error).message ?? e));
     } finally {
       setBusy(undefined);
     }
@@ -706,8 +677,7 @@ function Integrations() {
               <Button
                 variant="ghost"
                 onClick={async () => {
-                  disconnectGoogle();
-                  await db.integrations.delete(google.id);
+                  await disconnectGoogleAccount(user.id);
                   toast.push({ text: 'Disconnected. Imported mail stays until you delete your data.' });
                 }}
               >
@@ -1060,7 +1030,7 @@ function Style() {
             Style
             <Select
               value={settings?.tonePreset ?? 'warm'}
-              onChange={(e) => db.settings.update(user.id, { tonePreset: e.target.value as never })}
+              onChange={(e) => setTonePreset(user.id, e.target.value as never)}
               disabled={learned}
               title={learned ? 'Drafts follow the style learned from your sent mail' : undefined}
             >
@@ -1072,24 +1042,8 @@ function Style() {
           {google && (
             <Button
               onClick={async () => {
-                const sent = await db.messages
-                  .where('userId')
-                  .equals(user.id)
-                  .filter((m) => m.direction === 'outbound' && !m.isAutomated)
-                  .toArray();
-                if (sent.length < 5)
-                  return toast.push({
-                    text: 'Orbit needs at least 5 emails you sent to learn from. Sync Google again later.',
-                  });
-                await db.styles.put({
-                  userId: user.id,
-                  card: buildStyleCard(
-                    sent.map((m) => m.bodyText),
-                    user.firstName,
-                    settings?.tonePreset,
-                  ),
-                  updatedAt: new Date().toISOString(),
-                });
+                const r = await learnStyleFromSent(user);
+                if (!r.ok) return toast.push({ text: r.reason });
                 toast.push({ text: 'Learned from your sent mail.', tone: 'good' });
               }}
             >
@@ -1097,7 +1051,7 @@ function Style() {
             </Button>
           )}
           {style && (
-            <Button variant="ghost" onClick={() => db.styles.delete(user.id)}>
+            <Button variant="ghost" onClick={() => forgetLearnedStyle(user.id)}>
               Use the picked style instead
             </Button>
           )}
@@ -1113,7 +1067,8 @@ function Limits() {
   const [savedAt, setSavedAt] = useState<number>();
   if (!settings) return null;
   const upd = async (p: Partial<typeof settings>) => {
-    await db.settings.update(user.id, p);
+    if ('schedulingLink' in p) await setSchedulingLink(user.id, p.schedulingLink);
+    else await updateLimits(user.id, p);
     setSavedAt(Date.now());
   };
   return (
@@ -1274,15 +1229,13 @@ function Privacy() {
   const sources = useSources(user?.id ?? '');
   if (!user) return null;
   const exportAll = async () => {
-    const tables = db.tables.map((t) => t.name);
-    const out: Record<string, unknown[]> = {};
-    for (const t of tables) out[t] = await db.table(t).toArray();
+    const out = await exportAllData();
     const blob = new Blob([JSON.stringify(out, null, 1)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     try {
       const a = document.createElement('a');
       a.href = url;
-      a.download = `orbit-export-${new Date().toISOString().slice(0, 10)}.json`;
+      a.download = exportFilename();
       a.click();
     } finally {
       // the click has started the download; release the blob on the next tick
@@ -1335,9 +1288,7 @@ function Privacy() {
             variant="danger"
             onClick={async () => {
               if (!confirm('Delete all Orbit data from this browser? This cannot be undone.')) return;
-              disconnectGoogle();
-              await clearPrefs();
-              await wipeDatabase();
+              await deleteAllData();
               await signOut();
               nav('/');
             }}

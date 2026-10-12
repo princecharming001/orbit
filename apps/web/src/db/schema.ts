@@ -124,7 +124,8 @@ export class OrbitDB extends Dexie {
       styles: 'userId',
       kv: 'key',
     });
-    // the chat on the home page: conversations, their whole content blocks (append-only) and tool executions
+    // the chat on the home page: conversations, their whole content blocks (append-only) and every tool execution
+    // or pending confirmation
     this.version(2).stores({
       chatConversations: 'id, userId, updatedAt',
       chatMessages: 'id, conversationId, [conversationId+seq]',

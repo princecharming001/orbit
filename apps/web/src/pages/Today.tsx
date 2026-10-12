@@ -10,12 +10,12 @@ import { SuggestionCard } from '../components/SuggestionCard';
 import { db } from '../db/schema';
 import { ensureDrafts, generateBrief, revalidatePending } from '../engine/brief';
 import { moveChat } from '../engine/move';
-import { notYetWritten, startedDrafts, todayCards, todaySummaryText } from '../engine/today';
+import { wentQuiet } from '../engine/pipeline';
+import { notYetWritten, startedDrafts, todayCards, todaySummaryText, weekStats } from '../engine/today';
 import { googleClientId } from '../integrations/google';
 import { useHints } from '../state/hints';
 import { useSession } from '../state/session';
 import { Avatar, Button, Card, EmptyState, FirstRunHint, relDate, Spinner, Stat, useToast } from '../ui';
-import { wentQuiet } from './Pipeline';
 
 const PROVIDER_LABELS: Record<string, string> = {
   google: 'Google',
@@ -139,29 +139,7 @@ export function Today() {
       more.map((s) => s.id),
     );
   };
-  const weekStart = new Date(now);
-  weekStart.setDate(now.getDate() - ((now.getDay() + 6) % 7));
-  weekStart.setHours(0, 0, 0, 0);
-  const sentThisWeek = (outbound ?? []).filter(
-    (o) => o.status === 'sent' && o.kind === 'outreach' && o.sentAt && new Date(o.sentAt) >= weekStart,
-  ).length;
-  const sent30 = (outbound ?? []).filter(
-    (o) =>
-      o.status === 'sent' &&
-      o.kind === 'outreach' &&
-      o.sentAt &&
-      now.getTime() - new Date(o.sentAt).getTime() < 30 * 86_400_000,
-  );
-  // a reply by email, or a chat that moved on (a reply Orbit cannot see without Gmail, logged by the student)
-  const MOVED_ON = ['replied', 'scheduling', 'scheduled', 'completed', 'followed_up', 'nurturing'];
-  const replied30 = sent30.filter((o) =>
-    (chats ?? []).some(
-      (c) =>
-        c.personId === o.personId &&
-        ((c.lastInboundAt && o.sentAt && c.lastInboundAt > o.sentAt) || MOVED_ON.includes(c.stage)),
-    ),
-  ).length;
-  const completed = (chats ?? []).filter((c) => c.completedAt).length;
+  const week = weekStats(outbound ?? [], chats ?? [], people, settings?.weeklyOutreachTarget ?? 4, now);
   const visiblePeople = people.filter((p) => p.isHuman && !p.hiddenAt).length;
   // counted from the cards on screen, so the line never disagrees with them
   const baseSummary = latest
@@ -599,21 +577,18 @@ export function Today() {
                 label="First messages"
                 value={
                   <span>
-                    {sentThisWeek}
-                    <span className="text-ink-3 text-[14px] font-normal">
-                      {' '}
-                      of {settings?.weeklyOutreachTarget ?? 4}
-                    </span>
+                    {week.sentThisWeek}
+                    <span className="text-ink-3 text-[14px] font-normal"> of {week.weeklyTarget}</span>
                   </span>
                 }
                 hint="your weekly goal"
               />
               <Stat
                 label="Reply rate"
-                value={sent30.length >= 3 ? `${Math.round((replied30 / sent30.length) * 100)}%` : '—'}
-                hint={sent30.length >= 3 ? 'last 30 days' : 'after 3 first messages'}
+                value={week.replyRate !== undefined ? `${week.replyRate}%` : '—'}
+                hint={week.replyRate !== undefined ? 'last 30 days' : 'after 3 first messages'}
               />
-              <Stat label="Chats done" value={completed} hint="this season" />
+              <Stat label="Chats done" value={week.completed} hint="this season" />
               <Stat label="People" value={visiblePeople} hint="in your orbit" />
             </div>
           </Card>

@@ -12,6 +12,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { db } from '../db/schema';
 import { regenerateDraft } from '../engine/brief';
+import { restoreDraftText, saveDraftEdits as saveEdits } from '../engine/drafts';
 import {
   approveAndSend,
   checkSendAllowed,
@@ -301,15 +302,7 @@ export function DraftEditor({
       action: {
         label: 'Undo changes',
         // written as is: the draft held in this closure still has the text from before, so a diff would skip it
-        onClick: () =>
-          db.outbound
-            .where('id')
-            .equals(draft.id)
-            .filter((m) => m.status === 'draft')
-            .modify({
-              bodyFinal: opened.body.trim() === draft.bodyDraft.trim() ? undefined : opened.body,
-              subject: opened.subject || undefined,
-            }),
+        onClick: () => restoreDraftText(draft, opened),
       },
       ttl: 8000,
     });
@@ -652,22 +645,6 @@ export function DraftEditor({
       )}
     </div>
   );
-}
-
-/** Write the student's edits to a draft that is still a draft; the suggested text itself is never stored twice. */
-function saveEdits(draft: OutboundMessage, body: string, subject: string): Promise<unknown> {
-  const changedBody = body !== (draft.bodyFinal ?? draft.bodyDraft);
-  const changedSubject = subject !== (draft.subject ?? '');
-  if (!changedBody && !changedSubject) return Promise.resolve();
-  return db.outbound
-    .where('id')
-    .equals(draft.id)
-    .filter((m) => m.status === 'draft')
-    .modify({
-      bodyFinal: body.trim() === draft.bodyDraft.trim() ? undefined : body,
-      ...(changedSubject ? { subject: subject || undefined } : {}),
-    })
-    .catch(() => undefined);
 }
 
 /** Where a message waiting for "I sent it" went: "opened in LinkedIn", "opened in your mail app", "copied for Gmail". */
