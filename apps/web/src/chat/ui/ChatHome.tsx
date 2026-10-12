@@ -55,7 +55,7 @@ export function ChatHome() {
       )}
       {mode === 'router' && modeNote && (
         <p data-testid="router-note">
-          {modeNote.text}{' '}
+          {firstSentence(modeNote.text)}{' '}
           {modeNote.href && (
             <Link to={modeNote.href} className="font-medium text-accent hover:underline">
               Open Settings
@@ -197,13 +197,26 @@ function useAutoScroll(turns: unknown, running: boolean) {
     observer.current = new ResizeObserver(toEnd);
     if (el.firstElementChild) observer.current.observe(el.firstElementChild);
   }, []);
+  const lastTop = useRef(0);
   const onScroll = useCallback(() => {
     const el = elRef.current;
     if (!el) return;
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-    pinnedRef.current = atBottom;
-    setPinned(atBottom);
+    // content that grows under a pinned thread (a card's live data landing) is not the student scrolling away:
+    // only a move up unpins it
+    const movedUp = el.scrollTop < lastTop.current - 4;
+    lastTop.current = el.scrollTop;
+    const next = atBottom || (pinnedRef.current && !movedUp);
+    pinnedRef.current = next;
+    setPinned(next);
+    if (next && !atBottom) el.scrollTop = el.scrollHeight;
   }, []);
+  // a new turn (the student sent something) always brings the thread back to the newest line
+  useEffect(() => {
+    if (!running) return;
+    pinnedRef.current = true;
+    setPinned(true);
+  }, [running]);
   useEffect(toEnd, [turns, running]);
   const jump = useCallback(() => {
     const el = elRef.current;
@@ -213,4 +226,10 @@ function useAutoScroll(turns: unknown, running: boolean) {
     setPinned(true);
   }, []);
   return { scrollRef, onScroll, pinned, jump };
+}
+
+/** The mode note's first sentence: the rest (what the commands cover) is in the Templates menu. */
+function firstSentence(text: string): string {
+  const m = text.match(/^.+?[.?](?=\s|$)/);
+  return m ? m[0] : text;
 }

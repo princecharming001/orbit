@@ -1,5 +1,5 @@
 /** Imports, integrations and the account: every one of these needs the student's approval. */
-import { z } from 'zod/v4';
+
 import { setCurrentUserId } from '../../db/repo';
 import { db } from '../../db/schema';
 import { deleteAllData, exportAllData, exportFilename, leaveDemoForOwnSetup } from '../../engine/account';
@@ -10,6 +10,7 @@ import { saveResume } from '../../engine/resume';
 import { syncGoogle } from '../../engine/sync';
 import { currentGoogleToken, googleClientId } from '../../integrations/google';
 import { writePrefs } from '../../integrations/prefs';
+import { z } from '../../zod';
 import { type AnyTool, defineTool, ok, plural, toModel } from './_shared';
 
 function bytesOf(base64: string): Uint8Array<ArrayBuffer> {

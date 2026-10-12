@@ -1,6 +1,5 @@
 /** People writes: add, edit, hide, facts, prep questions, suggested contacts. */
 import { FACT_TYPE_LABELS, RELATIONSHIP_LABELS, type RelationshipType } from '@orbit/core';
-import { z } from 'zod/v4';
 import { db } from '../../db/schema';
 import { refreshPersonSummary } from '../../engine/brief';
 import {
@@ -19,6 +18,7 @@ import {
   unhidePerson,
   updatePersonDetails,
 } from '../../engine/people';
+import { z } from '../../zod';
 import {
   type AnyTool,
   chatFor,

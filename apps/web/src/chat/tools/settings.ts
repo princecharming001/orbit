@@ -1,7 +1,6 @@
 /** Settings writes: targets, recommendations, profile and goals, limits, Claude, resume lines, setup steps. */
 import type { TargetCompany } from '@orbit/core';
 import { FUNCTION_CODES, FUNCTION_LABELS, functionCodeFor, TARGET_STATUS_LABELS } from '@orbit/core';
-import { z } from 'zod/v4';
 import { db } from '../../db/schema';
 import { finishOnboarding, ONBOARDING_DONE_STEP, setOnboardingStep } from '../../engine/account';
 import { recommendationsRefresh } from '../../engine/brief';
@@ -39,6 +38,7 @@ import {
   updatePrefs,
   writePrefs,
 } from '../../integrations/prefs';
+import { z } from '../../zod';
 import { type AnyTool, defineTool, ok, personRef, plural, toModel } from './_shared';
 
 const TARGET_STATUSES = Object.keys(TARGET_STATUS_LABELS) as [

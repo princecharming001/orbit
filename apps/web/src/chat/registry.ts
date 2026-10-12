@@ -2,9 +2,10 @@
  * The tool registry: what the assistant can do, and the one function every path (the model, the no-key router, a
  * chip, an Approve click) goes through to do it.
  */
-import { z } from 'zod/v4';
+
 import { audit } from '../db/repo';
 import { db } from '../db/schema';
+import { z } from '../zod';
 import { bindingKey, CONFIRM_FAILURE_TEXT, checkConfirmation, createConfirmation } from './confirm';
 import { type AnyTool, err, plain, reasonOf, toModel } from './tools/_shared';
 import { accountTools } from './tools/account';

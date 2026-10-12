@@ -1,10 +1,10 @@
 /** Pipeline writes: stage moves with the board's guards, undo, and booking a chat's time. */
 import type { CoffeeChat } from '@orbit/core';
 import { STAGE_LABELS, STAGE_ORDER } from '@orbit/core';
-import { z } from 'zod/v4';
 import { db } from '../../db/schema';
 import { scheduleChatAt } from '../../engine/move';
 import { lastUserMove, moveChatGuarded, undoStageMove } from '../../engine/pipeline';
+import { z } from '../../zod';
 import {
   type AnyTool,
   chatFor,

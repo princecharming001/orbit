@@ -70,6 +70,19 @@ export function createChatEngine(deps: ChatEngineDeps): ChatEngine {
     } satisfies ToolContext;
   };
 
+  /** A new conversation takes its title from the student's first message, so the history reads like Copilot's. */
+  const nameFrom = async (conversation: ChatConversation, text: string) => {
+    if (conversation.title !== 'New chat') return;
+    const clean = text
+      .replace(/\s+/g, ' ')
+      .trim()
+      .replace(/[.?]+$/, '');
+    if (!clean) return;
+    const title = clean.length > 48 ? `${clean.slice(0, 47).trimEnd()}…` : clean;
+    conversation.title = title;
+    await store.renameConversation(conversation.id, title);
+  };
+
   const emitError = (
     onEvent: (e: TurnEvent) => void,
     message: string,
@@ -307,6 +320,7 @@ export function createChatEngine(deps: ChatEngineDeps): ChatEngine {
       if (!conversation) return;
       const trimmed = text.trim();
       if (!trimmed) return emitError(onEvent, 'Type something first.');
+      await nameFrom(conversation, trimmed);
       // another tab may have removed the key, turned the chat off or used up today's budget
       await refreshPrefs();
       if (chatMode() === 'router') return routerTurn(conversation, trimmed, onEvent);
@@ -336,6 +350,7 @@ export function createChatEngine(deps: ChatEngineDeps): ChatEngine {
       if (!conversation) return;
       const chip = chipsFor(deps.registry).find((c) => c.id === chipId);
       if (!chip) return emitError(onEvent, 'That button is not available.');
+      await nameFrom(conversation, chip.asUser);
       await store.append(
         conversation.id,
         { role: 'user', content: [{ type: 'text', text: chip.asUser }] },
@@ -409,6 +424,7 @@ export function createChatEngine(deps: ChatEngineDeps): ChatEngine {
           `Orbit cannot take a ${kind} attachment from the chat yet. Use the app page instead.`,
         );
       const asUser = `${ATTACH_LABEL[kind]}: ${file.name}`;
+      await nameFrom(conversation, asUser);
       await store.append(
         conversation.id,
         { role: 'user', content: [{ type: 'text', text: asUser }] },

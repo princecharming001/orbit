@@ -10,7 +10,7 @@ import type {
 } from '@orbit/core';
 import { fmtWindow, LINKEDIN_NOTE_MAX, LINKEDIN_NOTE_TARGET, MAX_WORDS, tzAbbr } from '@orbit/core';
 // The SDK's zodOutputFormat helper is built on zod/v4 and cannot read zod v3 schemas.
-import { z } from 'zod/v4';
+import { z } from '../zod';
 import {
   DEFAULT_DAILY_REQUEST_CAP,
   DEFAULT_DAILY_TOKEN_CAP,

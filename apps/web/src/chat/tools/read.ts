@@ -24,7 +24,6 @@ import {
   warmUpProgress,
   wordsIn,
 } from '@orbit/core';
-import { z } from 'zod/v4';
 import { db } from '../../db/schema';
 import { DEMO_USER_ID } from '../../engine/demo';
 import { lastInboundOf, liveChatOf, nextMessageKind } from '../../engine/drafts';
@@ -69,6 +68,7 @@ import {
   readPrefs,
   todaysLlmUsage,
 } from '../../integrations/prefs';
+import { z } from '../../zod';
 import type { ToolContext } from '../types';
 import {
   type AnyTool,

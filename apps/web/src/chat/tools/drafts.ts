@@ -1,7 +1,6 @@
 /** Drafts: create, edit, redraft, discard, send (through the same approval as the editor), undo, confirm. */
 import type { MessageKind, OutboundMessage } from '@orbit/core';
 import { CHANNEL_LABELS, MESSAGE_KIND_LABELS, relTime, WHY_THEM_GAP } from '@orbit/core';
-import { z } from 'zod/v4';
 import { runApproval } from '../../components/approve';
 import { db } from '../../db/schema';
 import { type DraftInputs, regenerateDraft } from '../../engine/brief';
@@ -28,6 +27,7 @@ import {
   snapshotPerson,
   undoQueued,
 } from '../../engine/send';
+import { z } from '../../zod';
 import type { ToolContext } from '../types';
 import {
   type AnyTool,

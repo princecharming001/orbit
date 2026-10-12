@@ -1,8 +1,8 @@
 /** Notes: save what was said in a conversation, and say who an unmatched note was with. */
 import { STAGE_LABELS } from '@orbit/core';
-import { z } from 'zod/v4';
 import { db } from '../../db/schema';
 import { ingestNote, rematchNote } from '../../engine/notes';
+import { z } from '../../zod';
 import {
   type AnyTool,
   defineTool,

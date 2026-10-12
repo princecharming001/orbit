@@ -1,7 +1,6 @@
 /** Writes on Today's cards: the brief, drafts for cards, snooze, dismiss, the yes/no cards, warm-up steps. */
 import type { CoffeeChat, OutboundStatus, Suggestion } from '@orbit/core';
 import { STAGE_LABELS, STAGE_ORDER, warmUpProgress } from '@orbit/core';
-import { z } from 'zod/v4';
 import { db } from '../../db/schema';
 import { ensureDrafts, generateBrief, markWarmUpAction, revalidatePending } from '../../engine/brief';
 import { markPrepOpened, unsnoozeSuggestion } from '../../engine/drafts';
@@ -12,6 +11,7 @@ import { dismissSuggestion, restoreSuggestion, sendDueQueued, snoozeSuggestion }
 import { decideProposedStage } from '../../engine/stages';
 import { dailyMaintenance } from '../../engine/sync';
 import { SUGGESTION_KIND_LABELS, todayCards } from '../../engine/today';
+import { z } from '../../zod';
 import {
   type AnyTool,
   cardRef,

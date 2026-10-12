@@ -609,7 +609,7 @@ function SuggestionsCard({ env }: { env: ResultEnvelope }) {
     (x) => env.kind === 'brief' || x.status === 'pending' || x.status === 'snoozed',
   );
   if (!open.length) return <Summary env={env} />;
-  const shown = open.filter((x) => x.status === 'pending').slice(0, env.kind === 'brief' ? 4 : 1);
+  const shown = open.filter((x) => x.status === 'pending').slice(0, env.kind === 'brief' ? 3 : 1);
   if (!shown.length) return <Summary env={env} />;
   const rest = open.filter((x) => x.status === 'pending').length - shown.length;
   return (
