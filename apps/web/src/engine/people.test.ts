@@ -1,7 +1,7 @@
 import type { User } from '@orbit/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { db, wipeDatabase } from '../db/schema';
-import { importConnectionsCsv, importLinkedInExport } from './linkedin';
+import { importConnectionsCsv, importLinkedInExport, importLiveConnections } from './linkedin';
 import { suggestDuplicateMerges, upsertPerson } from './people';
 
 const user: User = {
@@ -316,5 +316,44 @@ describe('a LinkedIn upload from anywhere in the app', () => {
     expect(sanaReasons.join(' ')).not.toMatch(/investment banking/);
     const li = await db.integrations.where('userId').equals(user.id).toArray();
     expect(li.map((i) => i.provider)).toEqual(['linkedin_csv']);
+  });
+
+  it('live connections from Unipile import through the same path as the CSV', async () => {
+    const r = await importLiveConnections(user, [
+      {
+        firstName: 'Priya',
+        lastName: 'Shah',
+        company: 'Figma',
+        position: 'Product Manager',
+        url: 'https://www.linkedin.com/in/priya-shah-1',
+        connectedOn: '2026-03-04',
+      },
+      {
+        firstName: 'Noah',
+        lastName: 'Kim',
+        company: 'Stripe, Inc.',
+        position: 'Software Engineer',
+        url: 'https://www.linkedin.com/in/noah-kim-2',
+        connectedOn: '2026-01-10',
+      },
+    ]);
+    expect(r).toMatchObject({ imported: 2, updated: 0 });
+    const all = await people();
+    expect(all).toHaveLength(2);
+    const priya = all.find((p) => p.linkedinSlug === 'priya-shah-1')!;
+    expect(priya).toMatchObject({ firstName: 'Priya', currentTitle: 'Product Manager' });
+    // a second live sync of the same person updates, not duplicates (a title change is a job change)
+    const r2 = await importLiveConnections(user, [
+      {
+        firstName: 'Priya',
+        lastName: 'Shah',
+        company: 'Figma',
+        position: 'Senior Product Manager',
+        url: 'https://www.linkedin.com/in/priya-shah-1',
+        connectedOn: '2026-03-04',
+      },
+    ]);
+    expect(r2).toMatchObject({ imported: 0, updated: 1 });
+    expect(await people()).toHaveLength(2);
   });
 });

@@ -304,7 +304,7 @@ function Envelope({ env, block, actions }: { env: ResultEnvelope; block: ToolBlo
       );
     }
     case 'routes': {
-      const { to, routes, stories } = readRoutes(d);
+      const { to, routes, stories, warmIntros } = readRoutes(d);
       if (!routes.length && !stories.length) {
         const people = readPeople(d);
         if (!people.length) return <Summary env={env} />;
@@ -359,6 +359,20 @@ function Envelope({ env, block, actions }: { env: ResultEnvelope; block: ToolBlo
                 <li key={t}>{t}</li>
               ))}
             </ul>
+          )}
+          {warmIntros.length > 0 && (
+            <div className="mt-3 pt-3 border-t border-line-2">
+              <div className="text-[12px] font-medium text-ink-3 mb-1.5">Warm intros</div>
+              <ul className="space-y-1.5 text-[13.5px]">
+                {warmIntros.map((w) => (
+                  <li key={w.introducer}>
+                    <span className="font-medium">{w.introducer}</span>
+                    {w.headline ? <span className="text-ink-3"> · {w.headline}</span> : null}
+                    {w.note ? <div className="text-[12.5px] text-ink-3">{w.note}</div> : null}
+                  </li>
+                ))}
+              </ul>
+            </div>
           )}
         </GlassCard>
       );

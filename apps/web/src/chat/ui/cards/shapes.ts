@@ -241,7 +241,20 @@ export interface RouteView {
   names: string[];
   text: string[];
 }
-export function readRoutes(d: unknown): { to?: Person; routes: RouteView[]; stories: string[] } {
+export interface WarmIntro {
+  introducer: string;
+  headline?: string;
+  warmth: number;
+  hops: string[];
+  note?: string;
+}
+
+export function readRoutes(d: unknown): {
+  to?: Person;
+  routes: RouteView[];
+  stories: string[];
+  warmIntros: WarmIntro[];
+} {
   const o = obj(unpack(d));
   const people = obj(o.people);
   const to = personOf(o.to) ?? personOf(o.target);
@@ -268,12 +281,30 @@ export function readRoutes(d: unknown): { to?: Person; routes: RouteView[]; stor
       };
     })
     .filter(present);
+  const warmIntros = arr(o.warmIntros)
+    .map((x): WarmIntro | undefined => {
+      const w = obj(x);
+      const intro = obj(w.introducer);
+      const name = str(intro.name);
+      if (!name) return undefined;
+      return {
+        introducer: name,
+        headline: str(intro.headline),
+        warmth: num(w.warmth) ?? 0,
+        hops: arr(w.hops)
+          .map((h) => str(h) ?? '')
+          .filter(present),
+        note: str(w.note),
+      };
+    })
+    .filter(present);
   return {
     to,
     routes,
     stories: arr(o.stories)
       .map((s) => str(obj(s).text))
       .filter(present),
+    warmIntros,
   };
 }
 

@@ -99,6 +99,43 @@ export async function importConnectionsCsv(
   return { imported, updated, skipped };
 }
 
+/**
+ * Import connections pulled live from Unipile (see integrations/unipile.ts). They carry the same fields the CSV
+ * export does, so they are written to the same tested path: serialise them to LinkedIn's own CSV shape and reuse
+ * importConnectionsCsv. Nothing changes for a student who uploads a file instead.
+ */
+export async function importLiveConnections(
+  user: User,
+  connections: {
+    firstName: string;
+    lastName: string;
+    position?: string;
+    company?: string;
+    url?: string;
+    connectedOn?: string;
+  }[],
+  onProgress?: (done: number, total: number) => void,
+): Promise<{ imported: number; updated: number; skipped: number }> {
+  const esc = (v: string | undefined) => {
+    const t = (v ?? '').replace(/"/g, '""');
+    return /[",\n]/.test(t) ? `"${t}"` : t;
+  };
+  const header = 'First Name,Last Name,URL,Email Address,Company,Position,Connected On';
+  const lines = connections.map((c) =>
+    [
+      esc(c.firstName),
+      esc(c.lastName),
+      esc(c.url),
+      '',
+      esc(c.company),
+      esc(c.position),
+      // LinkedIn's export uses "DD Mon YYYY"; parseConnectedOn also accepts ISO, so pass the date through
+      esc(c.connectedOn),
+    ].join(','),
+  );
+  return importConnectionsCsv(user, `${header}\n${lines.join('\n')}`, onProgress);
+}
+
 /** A title reduced to what a job change would alter: "Sr. Analytics Engineer II" and "senior analytics engineer" match. */
 export function sameTitleKey(title: string): string {
   return title
