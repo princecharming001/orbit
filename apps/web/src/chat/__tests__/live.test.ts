@@ -50,6 +50,7 @@ interface Said {
 async function say(text: string, conversationId?: string): Promise<Said> {
   const id = conversationId ?? (await engine.startConversation({ temporary: false })).id;
   const events: TurnEvent[] = [];
+  expect(engine.mode(), 'still talking to Claude').toBe('llm');
   await engine.send(id, text, (e) => events.push(e));
   const names = new Map<string, string>();
   for (const e of events) if (e.type === 'tool_start') names.set(e.toolUseId, e.toolName);
@@ -116,8 +117,15 @@ describe.skipIf(!KEY)('live: real Claude over the real engine and registry', () 
   beforeAll(async () => {
     await clearPrefs();
     user = await loadDemo({ reset: true, now: NOW });
-    writePrefs({ anthropicApiKey: KEY });
-    setChatClientFactoryForTests((key) => makeChatClient(key, { maxRetries: 2 }));
+    // the run spans many requests: lift the daily budget so it never switches the chat to commands part way
+    writePrefs({ anthropicApiKey: KEY, llmDailyRequestCap: 1000, llmDailyTokenCap: 50_000_000 });
+    // the API's own error body is printed when a request fails (it never holds the key), so a failure is diagnosable
+    const loud: typeof fetch = async (input, init) => {
+      const res = await fetch(input, init);
+      if (!res.ok) console.warn(`[live] ${res.status} ${(await res.clone().text()).slice(0, 600)}`);
+      return res;
+    };
+    setChatClientFactoryForTests((key) => makeChatClient(key, { maxRetries: 2, fetch: loud }));
     engine = createChatEngine({ registry, execute, user: () => user, now: () => NOW });
   }, 120_000);
 
@@ -212,12 +220,13 @@ describe.skipIf(!KEY)('live: real Claude over the real engine and registry', () 
   }, 240_000);
 
   it('(e) move someone to scheduled: the move asks for the time and invents none', async () => {
-    const t = await say('move Jonah Reyes to scheduled');
+    // Hannah replied and no time is on record yet (Jonah stays waiting for scenario j)
+    const t = await say('move Hannah Brooks to scheduled');
     await record('e', [t]);
     done(t);
     expect(t.tools).toContain('move_pipeline_stage');
     expect(t.tools).not.toContain('schedule_chat');
-    expect((await db.chats.where('personId').equals('p10').first())!.stage).toBe('scheduled');
+    expect((await db.chats.where('personId').equals('p2').first())!.stage).toBe('scheduled');
     expect(t.text).toMatch(/when|time|date/i);
     // and an early "completed" for a chat still ahead is not forced through
     const t2 = await say('mark my chat with Ethan Park as completed');
@@ -335,14 +344,18 @@ describe.skipIf(!KEY)('live: real Claude over the real engine and registry', () 
     await record('j', [t]);
     done(t);
     expect(t.tools.length).toBeGreaterThanOrEqual(3);
-    const made = t.envs.filter((e) => e.tool === 'create_draft' && e.env.kind === 'draft');
-    const ids = new Set(
-      made
-        .map((e) => (e.env.data as { forModel?: { id?: string; kind?: string } }).forModel)
-        .filter((m) => m?.kind === 'bump')
-        .map((m) => m!.id!),
-    );
-    expect(ids.size, t.tools.join(',')).toBe(2);
+    expect(t.tools.some((n) => n === 'list_pipeline' || n === 'get_today_brief')).toBe(true);
+    // a follow-up already drafted is reopened (create_draft) or read as it is (get_draft); either way it is one of the two
+    const shown = t.envs
+      .filter((e) => (e.tool === 'create_draft' || e.tool === 'get_draft') && e.env.kind === 'draft')
+      .map((e) => {
+        const d = e.env.data as { ui?: { id?: string; draft?: { id?: string } } } | undefined;
+        return d?.ui?.draft?.id ?? d?.ui?.id;
+      })
+      .filter((id): id is string => !!id);
+    const rows = await db.outbound.bulkGet([...new Set(shown)]);
+    const ids = new Set(rows.filter((o) => o?.kind === 'bump').map((o) => o!.id));
+    expect(ids.size, `${t.tools.join(',')}\n${t.text}`).toBe(2);
     const after = await bumps();
     expect(after.filter((o) => !before.has(o.id)).length).toBeLessThanOrEqual(2);
     for (const id of ids) expect(after.some((o) => o.id === id)).toBe(true);

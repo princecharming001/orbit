@@ -3,6 +3,7 @@ import { betaZodTool } from '@anthropic-ai/sdk/helpers/beta/zod';
 import type { BetaRunnableTool } from '@anthropic-ai/sdk/lib/tools/BetaRunnableTool';
 import type { BetaToolRunnerParams } from '@anthropic-ai/sdk/lib/tools/BetaToolRunner';
 import { ToolError } from '@anthropic-ai/sdk/lib/tools/ToolError';
+import { transformJSONSchema } from '@anthropic-ai/sdk/lib/transform-json-schema';
 import type { User } from '@orbit/core';
 import { newId } from '@orbit/core';
 import {
@@ -145,6 +146,16 @@ export function modelCallable(spec: ToolSpec): boolean {
   }
 }
 
+/**
+ * The input schema in the form strict tools accept: `betaZodTool` sends Zod's JSON Schema as it is, and strict mode
+ * rejects keywords it cannot enforce (`minimum`, `maxLength` and the like). The SDK's own transform moves those into
+ * the description; the runner still validates every input against the full Zod schema before it runs.
+ */
+export function strictSchema<S extends object>(schema: S): S {
+  const { $schema: _drop, ...rest } = schema as Record<string, unknown>;
+  return transformJSONSchema(rest) as unknown as S;
+}
+
 interface ToolHooks {
   onRun: (toolUseId: string, spec: ToolSpec, input: unknown) => Promise<ResultEnvelope>;
   signal?: AbortSignal;
@@ -152,31 +163,54 @@ interface ToolHooks {
 
 /**
  * The runner tools over the registry: `betaZodTool` (the runner validates the input against the Zod schema before
- * `run`), `eager_input_streaming` so long inputs stream, `strict` so the schema is guaranteed. An error envelope is
+ * `run`), `eager_input_streaming` so long inputs stream, `strict` on the risky tools so their input is exact. An error envelope is
  * thrown as a `ToolError` so the runner marks the result `is_error` and the model knows to recover.
  */
+/** The API accepts at most this many strict tools in one request. */
+export const MAX_STRICT_TOOLS = 20;
+
+/**
+ * Which tools are strict. The API caps strict tools at twenty, so strict goes where an exact input matters most: the
+ * risky tools, whose input the Approve token is bound to. Every tool's input is still validated against its full
+ * Zod schema before it runs, strict or not.
+ */
+export function strictToolNames(specs: ToolSpec[]): Set<string> {
+  return new Set(
+    specs
+      .filter((s) => s.kind === 'risky')
+      .map((s) => s.name)
+      .slice(0, MAX_STRICT_TOOLS),
+  );
+}
+
 export function buildRunnerTools(
   registry: ReadonlyMap<string, ToolSpec>,
   hooks: ToolHooks,
 ): BetaRunnableTool[] {
-  return sortedSpecs(registry)
-    .filter(modelCallable)
-    .map((spec) => ({
-      ...betaZodTool({
-        name: spec.name,
-        description: spec.description,
-        inputSchema: spec.input,
-        run: async (input, context) => {
-          const id = context?.toolUse.id ?? newId('toolu');
-          const env = await hooks.onRun(id, spec, input);
-          const content = projectEnvelope(spec, env);
-          if (env.kind === 'error') throw new ToolError(content);
-          return content;
-        },
-      }),
+  const specs = sortedSpecs(registry).filter(modelCallable);
+  const strict = strictToolNames(specs);
+  return specs.map((spec) => {
+    const tool = betaZodTool({
+      name: spec.name,
+      description: spec.description,
+      inputSchema: spec.input,
+      run: async (input, context) => {
+        const id = context?.toolUse.id ?? newId('toolu');
+        const env = await hooks.onRun(id, spec, input);
+        const content = projectEnvelope(spec, env);
+        if (env.kind === 'error') throw new ToolError(content);
+        return content;
+      },
+    });
+    return {
+      ...tool,
+      input_schema: strictSchema(
+        (tool as { input_schema: Anthropic.Beta.BetaTool.InputSchema }).input_schema,
+      ),
       eager_input_streaming: true,
-      strict: true,
-    }));
+      strict: strict.has(spec.name),
+    };
+  });
 }
 
 /** The request params, built once per turn. Everything but `messages` is byte-identical across a conversation. */

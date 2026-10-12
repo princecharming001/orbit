@@ -225,8 +225,13 @@ export interface TokenUsage {
 /** Add a response's tokens to today's usage (input counts the cached and uncached parts alike). */
 export function recordTokens(u: TokenUsage | undefined): void {
   if (!u) return;
+  // the daily token cap is a spending limit: a cache read costs a tenth of a fresh input token, and the chat re-reads
+  // its cached tools and instructions (tens of thousands of tokens) on every request, so counting reads in full would
+  // use the day's budget up after a handful of questions
   const input =
-    (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
+    (u.input_tokens ?? 0) +
+    (u.cache_creation_input_tokens ?? 0) +
+    Math.ceil((u.cache_read_input_tokens ?? 0) / 10);
   const output = u.output_tokens ?? 0;
   updatePrefs((cur) => {
     const usage = todaysLlmUsage(cur);

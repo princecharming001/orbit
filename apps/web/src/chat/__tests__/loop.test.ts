@@ -96,7 +96,9 @@ describe('request shape', () => {
     // the imports take text or base64 like the real registry, so every tool has a JSON Schema form and is offered
     expect(names).toEqual([...stub.registry.keys()].sort());
     for (const t of body.tools) {
-      expect(t.strict).toBe(true);
+      // strict on the risky tools (the API allows twenty strict tools); the rest are validated by Zod before they run
+      expect(t.strict).toBe(stub.registry.get(t.name)!.kind === 'risky');
+      expect(JSON.stringify(t.input_schema)).not.toMatch(/"(minimum|maximum|minLength|maxLength|\$schema)"/);
       expect(t.eager_input_streaming).toBe(true);
       expect(t.input_schema.additionalProperties).toBe(false);
       expect(t.run).toBeUndefined();
@@ -406,7 +408,7 @@ describe('budget, abort and failures', () => {
     expect(await store.messages(conversation.id)).toHaveLength(0);
   });
 
-  it('counts cached tokens and reads the usage of every iteration', async () => {
+  it('counts cached tokens at what they cost (a read is a tenth) and reads the usage of every iteration', async () => {
     await turn('go', [
       {
         toolCalls: [{ id: 'toolu_u', name: 'get_today_brief', input: {} }],
@@ -414,7 +416,7 @@ describe('budget, abort and failures', () => {
       },
       { text: 'ok', usage: { input_tokens: 120, cache_read_input_tokens: 1000, output_tokens: 5 } },
     ]);
-    expect(todaysLlmUsage(readPrefs())).toMatchObject({ requests: 1, inputTokens: 2120, outputTokens: 15 });
+    expect(todaysLlmUsage(readPrefs())).toMatchObject({ requests: 1, inputTokens: 410, outputTokens: 15 });
     const rows = await store.messages(conversation.id);
     expect(rows[2]!.usage).toEqual({ input: 100, output: 10, cacheRead: 900, cacheWrite: 0 });
   });

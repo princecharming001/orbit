@@ -520,6 +520,18 @@ describe('coverage', () => {
     expect(unreachable).toEqual([]);
     // the model is offered every tool: no tool's input needs a File the model could not give
     expect([...offered].sort()).toEqual(tools.map((t) => t.name).sort());
+    // the request the API accepts: at most twenty strict tools, and no schema keyword strict mode rejects
+    const built = buildRunnerTools(registry, {
+      onRun: async () => ({ kind: 'text', data: {}, summary: '' }),
+    }) as unknown as {
+      strict?: boolean;
+      input_schema: unknown;
+    }[];
+    expect(built.filter((t) => t.strict).length).toBeLessThanOrEqual(20);
+    for (const t of built.filter((x) => x.strict))
+      expect(JSON.stringify(t.input_schema)).not.toMatch(
+        /"(minimum|maximum|minLength|maxLength|multipleOf|\$schema)"/,
+      );
     for (const n of ui) expect(registry.has(n), n).toBe(true);
   });
 });
