@@ -270,7 +270,6 @@ export function PanelHost() {
       style={panel.expanded ? undefined : { width }}
     >
       {!panel.expanded && (
-        // biome-ignore lint/a11y/useSemanticElements: a draggable splitter is a separator with a value, not an <hr>
         <div
           role="separator"
           aria-orientation="vertical"

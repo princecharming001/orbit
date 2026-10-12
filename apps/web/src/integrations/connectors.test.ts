@@ -52,7 +52,7 @@ describe('Unipile (live LinkedIn) adapter', () => {
     setUnipileUrlForTests(BASE);
     let page = 0;
     const fn = (async (_url: string, init: RequestInit) => {
-      const body = JSON.parse(init.body as string);
+      void JSON.parse(init.body as string);
       page++;
       const first = page === 1;
       return new Response(

@@ -45,7 +45,7 @@ export function chatUrlWithPanel(href: string): string {
 /** The panel's href from the chat's search string, when it is one the panel can show. */
 export function panelFromSearch(search: string): string | undefined {
   const raw = new URLSearchParams(search).get('panel');
-  if (!raw || !raw.startsWith('/') || !panelizable(raw)) return undefined;
+  if (!raw?.startsWith('/') || !panelizable(raw)) return undefined;
   return raw;
 }
 
