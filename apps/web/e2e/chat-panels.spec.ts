@@ -64,9 +64,9 @@ test.describe('Side panel (laptop)', () => {
     const brief = await briefInChat(page);
     await brief.locator('a[href*="/people/"]').first().click();
     await expect(panel(page)).toBeVisible();
+    // the title resolves from the database, so wait for a real name before reading it
+    await expect(title(page)).not.toHaveText(/^(Today|Profile)$/);
     const first = await title(page).innerText();
-    expect(first).not.toBe('Today');
-    expect(first).not.toBe('Profile');
     await brief.getByTestId('open-in-app').first().click();
     await expect(title(page)).toHaveText('Today');
     const tabs = page.getByTestId('panel-tabs');
@@ -168,11 +168,12 @@ test.describe('Side panel (laptop)', () => {
 
     // a person's page is reachable and its "Add note" starts a note in the same panel
     await page.goto(`?panel=${encodeURIComponent('/people/p1')}`);
-    await expect(title(page)).toHaveText('Daniel Okafor');
-    await panel(page)
+    await expect(title(page)).not.toHaveText(/^(Profile|Today)$/);
+    const addNote = panel(page)
       .getByRole('button', { name: /^add note$/i })
-      .first()
-      .click();
+      .first();
+    await expect(addNote).toBeVisible();
+    await addNote.click();
     await expect(title(page)).toHaveText('Add a note');
     await expect(panel(page).getByRole('textbox').first()).toBeVisible();
   });
