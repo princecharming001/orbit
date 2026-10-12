@@ -9,11 +9,17 @@ import { Check, TriangleAlert, Upload } from 'lucide-react';
 import { type DragEvent, type ReactNode, useCallback, useEffect, useId, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { connectAndSyncGoogle, markGoogleNeedsReauth } from '../../../engine/integrations';
-import { connectionsText, importLinkedInExport } from '../../../engine/linkedin';
+import { connectionsText, importLinkedInExport, importLiveConnections } from '../../../engine/linkedin';
 import { saveResume } from '../../../engine/resume';
 import { testApiKey } from '../../../integrations/anthropic';
 import { googleClientId } from '../../../integrations/google';
 import { subscribePrefs, writePrefs } from '../../../integrations/prefs';
+import {
+  linkedInConnections,
+  linkedInConnectStatus,
+  startLinkedInConnect,
+  unipileConfigured,
+} from '../../../integrations/unipile';
 import { useSession } from '../../../state/session';
 import { Button, cx, Input, relDate, Spinner } from '../../../ui';
 import {
@@ -271,6 +277,39 @@ function LinkedinWidget({ user, initial }: { user: User; initial?: SetupStatus }
     },
     [user],
   );
+  const connectLive = useCallback(async () => {
+    setError(undefined);
+    setDone(undefined);
+    setBusy('Opening LinkedIn…');
+    try {
+      const { url, ref } = await startLinkedInConnect();
+      const win = window.open(url, 'orbit-linkedin', 'width=520,height=680');
+      // wait for the student to finish the hosted sign-in, polling for the account to go live
+      let accountId: string | undefined;
+      for (let i = 0; i < 150 && !accountId; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const st = await linkedInConnectStatus(ref);
+        if (st.status === 'connected') accountId = st.accountId;
+        else if (st.status === 'error') throw new Error(st.message ?? 'LinkedIn sign-in did not finish.');
+      }
+      try {
+        win?.close();
+      } catch {
+        // the popup may already be closed
+      }
+      if (!accountId) throw new Error('LinkedIn sign-in timed out. Try again.');
+      setBusy('Bringing in your connections…');
+      const conns = await linkedInConnections(accountId, {
+        onProgress: (n) => setBusy(`Bringing in your connections… ${n} so far`),
+      });
+      const r = await importLiveConnections(user, conns, (d, t) => setBusy(`Saving ${d} of ${t}…`));
+      setDone({ ...r, recommended: 0 });
+    } catch (e) {
+      setError(String((e as Error)?.message ?? e) || 'Could not connect LinkedIn.');
+    } finally {
+      setBusy(undefined);
+    }
+  }, [user]);
   const onDrop = (e: DragEvent) => {
     e.preventDefault();
     setOver(false);
@@ -285,6 +324,17 @@ function LinkedinWidget({ user, initial }: { user: User; initial?: SetupStatus }
         you a file; drop Connections.csv or the whole ZIP here. Uploading again later is safe, people already
         in Orbit are updated, not doubled.
       </p>
+      {unipileConfigured() && (
+        <div className="mt-3" data-testid="linkedin-live">
+          <Button onClick={() => void connectLive()} disabled={!!busy}>
+            Connect LinkedIn (live, beta)
+          </Button>
+          <p className="mt-1 text-[12px] text-ink-3">
+            Sign in once and Orbit keeps your connections in sync. Read only. You can disconnect any time. Or
+            upload the file below instead.
+          </p>
+        </div>
+      )}
       <label
         className={cx(
           'mt-3 flex flex-col items-center justify-center gap-1 rounded-[14px] border border-dashed px-4 py-5 text-center cursor-pointer transition-colors focus-within:ring-2 focus-within:ring-accent/40',
