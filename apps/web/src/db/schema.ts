@@ -28,6 +28,7 @@ import type {
   UserSettings,
 } from '@orbit/core';
 import Dexie, { type EntityTable } from 'dexie';
+import type { ChatAction, ChatConversation, ChatMessage } from '../chat/types';
 
 export interface IntegrationAccount {
   id: string;
@@ -84,6 +85,9 @@ export class OrbitDB extends Dexie {
   integrations!: EntityTable<IntegrationAccount, 'id'>;
   styles!: EntityTable<StyleProfile, 'userId'>;
   kv!: EntityTable<KV, 'key'>;
+  chatConversations!: EntityTable<ChatConversation, 'id'>;
+  chatMessages!: EntityTable<ChatMessage, 'id'>;
+  chatActions!: EntityTable<ChatAction, 'id'>;
 
   constructor(name = 'orbit') {
     super(name);
@@ -119,6 +123,12 @@ export class OrbitDB extends Dexie {
       integrations: 'id, userId, provider',
       styles: 'userId',
       kv: 'key',
+    });
+    // the chat on the home page: conversations, their whole content blocks (append-only) and tool executions
+    this.version(2).stores({
+      chatConversations: 'id, userId, updatedAt',
+      chatMessages: 'id, conversationId, [conversationId+seq]',
+      chatActions: 'id, conversationId, status, createdAt',
     });
   }
 }

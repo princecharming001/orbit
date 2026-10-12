@@ -78,7 +78,10 @@ export interface ToolSpec<I extends z.ZodObject = z.ZodObject, D = unknown> {
   /** compact projection of `data` for the model; default: the whole data */
   toModel?: (data: D) => unknown;
   /** risky tools: the sentence the Approve card shows (what will happen, and any engine reason it is blocked) */
-  summarizeIntent?: (input: z.infer<I>, ctx: ToolContext) => Promise<{ text: string; blockedReason?: string }>;
+  summarizeIntent?: (
+    input: z.infer<I>,
+    ctx: ToolContext,
+  ) => Promise<{ text: string; blockedReason?: string }>;
   /** short labels the UI shows while the tool runs ("Looking at your pipeline") */
   progress?: string;
 }
@@ -171,16 +174,28 @@ export interface ChatEngine {
   modeNote(): { text: string; href?: string } | undefined;
   startConversation(opts: { temporary: boolean }): Promise<ChatConversation>;
   listConversations(): Promise<ChatConversation[]>;
-  loadConversation(id: string): Promise<{ conversation: ChatConversation; messages: ChatMessage[]; actions: ChatAction[] }>;
+  loadConversation(
+    id: string,
+  ): Promise<{ conversation: ChatConversation; messages: ChatMessage[]; actions: ChatAction[] }>;
   renameConversation(id: string, title: string): Promise<void>;
   archiveConversation(id: string): Promise<void>;
   /** one student turn; events stream to the UI; resolves when the turn ends (done or error event already emitted) */
-  send(conversationId: string, text: string, onEvent: (e: TurnEvent) => void, signal?: AbortSignal): Promise<void>;
+  send(
+    conversationId: string,
+    text: string,
+    onEvent: (e: TurnEvent) => void,
+    signal?: AbortSignal,
+  ): Promise<void>;
   chips(): ChipSpec[];
   runChip(conversationId: string, chipId: string, onEvent: (e: TurnEvent) => void): Promise<void>;
   /** Approve a pending confirmation; for send_draft pass the edited text from the card */
   approve(actionId: string, edited?: { body: string; subject?: string }): Promise<ResultEnvelope>;
   cancel(actionId: string): Promise<void>;
   /** attachments from the "+" menu: the engine routes by kind */
-  attach(conversationId: string, file: File, kind: 'note' | 'resume' | 'linkedin' | 'email', onEvent: (e: TurnEvent) => void): Promise<void>;
+  attach(
+    conversationId: string,
+    file: File,
+    kind: 'note' | 'resume' | 'linkedin' | 'email',
+    onEvent: (e: TurnEvent) => void,
+  ): Promise<void>;
 }
