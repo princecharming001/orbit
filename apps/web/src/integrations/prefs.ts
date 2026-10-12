@@ -17,8 +17,11 @@ import Dexie, { type EntityTable } from 'dexie';
 export const LEGACY_LOCALSTORAGE_KEY = 'orbit.prefs.v1';
 const ROW_KEY = 'prefs';
 
-/** Features that can call Claude. Each is opt-in, except drafting, which is on by default once a key is saved. */
-export type LlmFeature = 'drafts' | 'emailTriage' | 'notes' | 'resume' | 'summaries';
+/**
+ * Features that can call Claude. Each is opt-in, except drafting and the chat on the home page, which are on by
+ * default once a key is saved.
+ */
+export type LlmFeature = 'drafts' | 'emailTriage' | 'notes' | 'resume' | 'summaries' | 'chat';
 
 export const DEFAULT_LLM_FEATURES: Record<LlmFeature, boolean> = {
   drafts: true,
@@ -26,6 +29,7 @@ export const DEFAULT_LLM_FEATURES: Record<LlmFeature, boolean> = {
   notes: false,
   resume: false,
   summaries: false,
+  chat: true,
 };
 export const DEFAULT_DAILY_REQUEST_CAP = 50;
 export const DEFAULT_DAILY_TOKEN_CAP = 300_000;
