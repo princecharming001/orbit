@@ -48,7 +48,7 @@ export const refreshBrief = defineTool({
   capabilities: ['today_refresh_brief', 'daily_maintenance_auto'],
   progress: 'Rebuilding your brief',
   async execute(input, ctx) {
-    await dailyMaintenance(ctx.user).catch(() => undefined);
+    await dailyMaintenance(ctx.user, ctx.now).catch(() => undefined);
     const brief = await generateBrief(ctx.user, input.kind ?? 'daily', ctx.now);
     await revalidatePending(ctx.user.id, ctx.now).catch(() => undefined);
     const due = await sendDueQueued(ctx.user, ctx.now);

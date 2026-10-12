@@ -92,7 +92,7 @@ export const createDraft = defineTool({
   name: 'create_draft',
   kind: 'write',
   description:
-    'Call this when the student asks to write to someone, draft a message, follow up, send a thank-you, ask for a referral or an intro, or start a first message (also from Discover or the Map). Leave kind out and Orbit picks it from where the chat stands (and says when a message should wait). A draft already started for that kind is reopened, never duplicated. For a cold LinkedIn-only stranger the answer is a warm-up choice: call again with warmUp start or skip. For an intro request give targetPersonId (the person to be introduced to) and the connector as personId. Pass the lines only the student can supply (connection, update, role, target) when they gave them. Nothing is sent: that is send_draft.',
+    'Call this when the student asks to write to someone, draft a message, follow up, send a thank-you, ask for a referral or an intro, or start a first message (also from Discover or the Map). Leave kind out and Orbit picks it from where the chat stands (and says when a message should wait). A draft already started for that kind is reopened, never duplicated. For a cold LinkedIn-only stranger the answer is a warm-up choice: call again with warmUp start or skip. For an intro request give targetPersonId (the person to be introduced to) and the connector as personId. Pass the lines only the student can supply (connection, update, role, target) when they gave them. When the result says the draft still needs a line, ask the student for it and call redraft_with_inputs. Nothing is sent: that is send_draft.',
   input: z.object({
     personId: z
       .string()
@@ -221,7 +221,7 @@ export const createDraft = defineTool({
         ? ` Orbit wrote a ${MESSAGE_KIND_LABELS[draft.kind].toLowerCase()} instead: that is what the thread calls for.`
         : '';
     const needs = draft.needsInput?.length
-      ? ` It still needs: ${draft.needsInput.join(', ')}. Ask the student for it and redraft.`
+      ? ` It still needs a line only you can give: ${draft.needsInput.join(', ')}.`
       : '';
     return ok(
       'draft',
@@ -489,7 +489,7 @@ export const sendDraft = defineTool({
         );
         if (!allowed.allowed) blockedReason = allowed.reason;
         else if (WHY_THEM_GAP.test(body))
-          blockedReason = `The "Why them" line is still missing. Ask the student for it and redraft first.`;
+          blockedReason = `The "Why them" line is still missing. Add it and redraft first.`;
       }
     }
     return { text, blockedReason };

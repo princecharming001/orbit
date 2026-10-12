@@ -216,19 +216,19 @@ export function watchMaintenance(onChange: () => void): () => void {
   };
 }
 
-export async function dailyMaintenance(user: User): Promise<void> {
+export async function dailyMaintenance(user: User, now = new Date()): Promise<void> {
   // marked as running before the first await, so a page that mounts with the app already knows to wait
   maintenanceChanged(1);
   try {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = now.toISOString().slice(0, 10);
     const existing = await db.briefs
       .where('userId')
       .equals(user.id)
       .filter((b) => b.kind === 'daily' && b.briefDate === today)
       .first();
     if (existing) return;
-    await recomputeAllStrengths(user.id);
-    await generateBrief(user, 'daily');
+    await recomputeAllStrengths(user.id, now);
+    await generateBrief(user, 'daily', now);
   } finally {
     maintenanceChanged(-1);
   }
