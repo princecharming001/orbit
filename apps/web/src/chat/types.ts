@@ -151,3 +151,36 @@ export type TurnEvent =
   | { type: 'tool_result'; toolUseId: string; envelope: ResultEnvelope }
   | { type: 'done'; stopReason: string; messageId: string }
   | { type: 'error'; message: string; kind: 'no_key' | 'cap' | 'refusal' | 'network' | 'aborted' | 'other' };
+
+// ---- The engine the UI talks to (built by the loop track; faked in UI tests) ----------------------------
+
+export interface ChipSpec {
+  id: string;
+  label: string;
+  /** the tool and input the chip runs directly, without a model call */
+  tool: string;
+  input: Record<string, unknown>;
+  /** the message shown in the thread as the student's turn */
+  asUser: string;
+}
+
+export interface ChatEngine {
+  /** 'llm' when a Claude key is set and the chat feature is on; 'router' otherwise */
+  mode(): 'llm' | 'router';
+  /** why the mode is 'router', in one plain sentence, with the settings route to fix it */
+  modeNote(): { text: string; href?: string } | undefined;
+  startConversation(opts: { temporary: boolean }): Promise<ChatConversation>;
+  listConversations(): Promise<ChatConversation[]>;
+  loadConversation(id: string): Promise<{ conversation: ChatConversation; messages: ChatMessage[]; actions: ChatAction[] }>;
+  renameConversation(id: string, title: string): Promise<void>;
+  archiveConversation(id: string): Promise<void>;
+  /** one student turn; events stream to the UI; resolves when the turn ends (done or error event already emitted) */
+  send(conversationId: string, text: string, onEvent: (e: TurnEvent) => void, signal?: AbortSignal): Promise<void>;
+  chips(): ChipSpec[];
+  runChip(conversationId: string, chipId: string, onEvent: (e: TurnEvent) => void): Promise<void>;
+  /** Approve a pending confirmation; for send_draft pass the edited text from the card */
+  approve(actionId: string, edited?: { body: string; subject?: string }): Promise<ResultEnvelope>;
+  cancel(actionId: string): Promise<void>;
+  /** attachments from the "+" menu: the engine routes by kind */
+  attach(conversationId: string, file: File, kind: 'note' | 'resume' | 'linkedin' | 'email', onEvent: (e: TurnEvent) => void): Promise<void>;
+}
