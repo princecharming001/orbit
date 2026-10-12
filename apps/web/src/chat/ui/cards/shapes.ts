@@ -5,6 +5,7 @@
  * tests hands bare domain objects. Every reader here takes either, ignores fields it does not know and never throws;
  * a card with nothing it can read falls back to the envelope's summary.
  */
+
 import type {
   CoffeeChat,
   MeetingNote,
@@ -14,6 +15,8 @@ import type {
   PersonFact,
   Suggestion,
 } from '@orbit/core';
+import type { SetupStatus } from '../../setupStatus';
+import type { ChoiceOption, SetupWhat } from '../../types';
 
 const obj = (d: unknown): Record<string, unknown> =>
   d && typeof d === 'object' && !Array.isArray(d) ? (d as Record<string, unknown>) : {};
@@ -490,4 +493,19 @@ export function readConfirm(d: unknown): {
 /** error: `{ message? }` */
 export function readError(d: unknown): string | undefined {
   return str(obj(d).message);
+}
+
+/** choices: `{ options: { label, message }[] }`; an option without both words is dropped, and three is the most shown */
+export function readChoices(d: unknown): ChoiceOption[] {
+  return arr(obj(d).options)
+    .map((o) => ({ label: str(obj(o).label), message: str(obj(o).message) }))
+    .filter((o): o is ChoiceOption => !!o.label && !!o.message)
+    .slice(0, 3);
+}
+
+/** setup: `{ what, ...status }` (the status the tool read when it ran); the card reads the live status itself */
+export function readSetup(d: unknown): { what?: SetupWhat; status?: SetupStatus } {
+  const o = obj(d);
+  const what = (['google', 'linkedin', 'claude_key', 'resume'] as const).find((w) => w === o.what);
+  return what ? { what, status: o as unknown as SetupStatus } : {};
 }

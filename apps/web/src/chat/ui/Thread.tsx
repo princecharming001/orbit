@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { copyText } from '../../components/approve';
 import { cx, useToast } from '../../ui';
+import { ChoicesContext } from './cards/Choices';
 import { type CardActions, OpenInApp, ResultCard } from './cards/ResultCard';
 import { Markdown } from './Markdown';
 import type { AssistantTurn, Block, ErrorKind, ToolBlock, Turn } from './threadStore';
@@ -39,7 +40,13 @@ export function Thread({
                 </div>
               </div>
             ) : t.role === 'assistant' ? (
-              <Assistant turn={t} actions={actions} running={running} last={i === turns.length - 1} />
+              <Assistant
+                turn={t}
+                actions={actions}
+                running={running}
+                last={i === turns.length - 1}
+                laterUserText={turns.slice(i + 1).find((x) => x.role === 'user')?.text}
+              />
             ) : (
               <div
                 className={cx(
@@ -73,12 +80,15 @@ function Assistant({
   actions,
   running,
   last,
+  laterUserText,
 }: {
   turn: AssistantTurn;
   actions: ThreadActions;
   running: boolean;
   /** the newest turn keeps its action row in view; older ones show it on hover or focus */
   last: boolean;
+  /** the first thing the student said after this turn: tap-to-answer choices stop once there is one */
+  laterUserText?: string;
 }) {
   const toast = useToast();
   const [vote, setVote] = useState<'up' | 'down'>();
@@ -100,15 +110,17 @@ function Assistant({
   return (
     <div className="group min-w-0" data-testid="turn-assistant" data-status={turn.status}>
       <div aria-live="polite" aria-busy={streaming}>
-        {turn.blocks.map((b, i) =>
-          b.type === 'text' ? (
-            <Markdown key={i} text={b.text} />
-          ) : b.type === 'progress' ? (
-            <ProgressLine key={i} text={b.text} live={streaming && i === turn.blocks.length - 1} />
-          ) : (
-            <ToolView key={b.toolUseId} block={b} actions={actions} />
-          ),
-        )}
+        <ChoicesContext.Provider value={{ running, laterUserText }}>
+          {turn.blocks.map((b, i) =>
+            b.type === 'text' ? (
+              <Markdown key={i} text={b.text} />
+            ) : b.type === 'progress' ? (
+              <ProgressLine key={i} text={b.text} live={streaming && i === turn.blocks.length - 1} />
+            ) : (
+              <ToolView key={b.toolUseId} block={b} actions={actions} />
+            ),
+          )}
+        </ChoicesContext.Provider>
         {waiting && (
           <div className="flex items-center gap-1 h-6 text-ink-3" role="status" aria-label="Working">
             <span className="w-1.5 h-1.5 rounded-full bg-ink-3 animate-pulse" />
