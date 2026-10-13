@@ -207,10 +207,12 @@ describe('orbit-connectors proxy', () => {
 
   it('limits each visitor per minute, by a hashed IP, and only for calls that reach a provider', async () => {
     const seen: Bucket[][] = [];
-    const inner = memoryTake();
+    const at = new Date('2026-10-13T10:00:30Z');
+    // the counter reads the same pinned clock, so the test does not depend on the time of day it runs at
+    const inner = memoryTake(() => at.getTime());
     const { handler, upstream } = harness({
       limits: { perMinute: 2, perDay: 100 },
-      now: () => new Date('2026-10-13T10:00:30Z'),
+      now: () => at,
       take: async (bs) => {
         seen.push(bs);
         return inner(bs);

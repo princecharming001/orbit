@@ -99,11 +99,14 @@ export function buckets(visitor: string, now: Date, limits: Limits): Bucket[] {
   ];
 }
 
-/** Counters in this function instance's memory: the fallback when no shared store is configured. */
-export function memoryTake(): Take {
+/**
+ * Counters in this function instance's memory: the fallback when no shared store is configured. Expiry reads the
+ * same clock the buckets were cut with, so a pinned clock (tests) never sees its own buckets as expired.
+ */
+export function memoryTake(clock: () => number = Date.now): Take {
   const counts = new Map<string, { n: number; expires: number }>();
   return async (bs) => {
-    const now = Date.now();
+    const now = clock();
     for (const [k, v] of counts) if (v.expires < now) counts.delete(k);
     for (const b of bs) {
       const c = counts.get(b.key) ?? { n: 0, expires: Date.parse(b.expires) };
@@ -125,9 +128,9 @@ const UNIPILE_ROUTES = new Set([
 
 export function makeHandler(deps: ConnectorDeps): (req: Request) => Promise<Response> {
   const doFetch = deps.fetch ?? fetch;
-  const take = deps.take ?? memoryTake();
   const limits = deps.limits ?? DEFAULT_LIMITS;
   const now = deps.now ?? (() => new Date());
+  const take = deps.take ?? memoryTake(() => now().getTime());
   return async (req) => {
     const origin = req.headers.get('origin');
     const allowed = !!origin && deps.origins(origin);
