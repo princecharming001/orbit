@@ -183,6 +183,25 @@ export const SCENARIOS: Scenario[] = [
     minGoal: 'partly',
   },
 
+  {
+    id: 'setup-gmail',
+    group: 'settings',
+    persona: 'a new student who wants Orbit to see their email',
+    account: 'empty',
+    goal: 'connect your Gmail so Orbit can use your emails and calendar',
+    expectTools: [['show_setup']],
+    minGoal: 'partly',
+  },
+  {
+    id: 'map-mutuals',
+    group: 'map',
+    persona: 'a student trying to get a warm intro at Stripe',
+    account: 'demo',
+    goal: 'find out who you know who knows Maya Chen or someone else at Stripe, and the warmest way in',
+    expectTools: [['get_mutual_connections', 'find_routes']],
+    minGoal: 'partly',
+  },
+
   // ---- Edge cases and hard entries ------------------------------------------------------------------------
   {
     id: 'edge-empty-who',
