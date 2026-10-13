@@ -1,7 +1,7 @@
 import type { CoffeeChat, Person } from '@orbit/core';
 import { ACTIVE_STAGES, CLOSED_STAGES, normalizeCompany, STAGE_HELP, STAGE_LABELS } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { AddPersonButton } from '../components/AddPerson';
 import { LinkedInImportButton } from '../components/LinkedInImport';
@@ -35,7 +35,6 @@ const VIEWS: { value: PeopleView; label: string }[] = [
 export function People() {
   const { userId } = useSession();
   const [params, setParams] = useSearchParams();
-  const view = peopleViewOf(params);
   const filter = peopleFilterOf(params);
   const [q, setQ] = useState('');
   const [showClosed, setShowClosed] = useState(false);
@@ -49,6 +48,14 @@ export function People() {
     [userId],
   );
   const chats = chatRows ?? [];
+  // the board opens by default, but with no chat yet it would be empty: a plain /people then shows the list of
+  // everyone, so a student who just imported their connections sees them. Derived, never written to the address, so
+  // adding a first person (which moves on to their page) is never pulled back here.
+  const view: PeopleView = params.get('view')
+    ? peopleViewOf(params)
+    : chatRows && people.length > 0 && !chats.some((c) => !c.archivedAt)
+      ? 'list'
+      : 'board';
   const suggestions =
     useLiveQuery(
       () =>
@@ -176,21 +183,6 @@ export function People() {
       },
       { replace: true },
     );
-  // the board opens by default, but with no chat yet it would be empty: a plain /people then opens on the list of
-  // everyone instead, so a student who just imported their connections sees them
-  const askedView = params.get('view');
-  const anyChat = chats.some((c) => !c.archivedAt);
-  const hasPeople = people.length > 0;
-  useEffect(() => {
-    if (askedView || !chatRows || !hasPeople || anyChat) return;
-    setParams(
-      (p) => {
-        p.set('view', 'list');
-        return p;
-      },
-      { replace: true },
-    );
-  }, [askedView, chatRows, hasPeople, anyChat, setParams]);
   const setFilter = (f: PeopleFilter) =>
     setParams(
       (p) => {

@@ -661,7 +661,7 @@ test.describe('Manual onboarding', () => {
     await expect(page).toHaveURL(/\/orbit\/?$/);
     // with no chats yet, People opens on the list, so the people just imported are right there
     await page.goto('people');
-    await expect(page).toHaveURL(/view=list/);
+    await expect(page.getByTestId('people-view-list')).toHaveAttribute('aria-selected', 'true');
     await expect(page.getByRole('link', { name: /priya patel/i })).toBeVisible();
     await page.goto('discover');
     await expect(page.getByTestId('rec-card').first()).toBeVisible();
@@ -1576,6 +1576,8 @@ test.describe('Usability round 5: one draft, kept edits, saved settings, chats t
     // Drafts writes its cards' drafts as it opens, so the badge is read once they are in
     await openDrafts(page);
     const toSend = page.getByTestId('drafts-to-send').locator('[data-testid^="suggestion-"]');
+    // count the cards only once they are drawn
+    await expect(toSend.first()).toBeVisible({ timeout: 15_000 });
     await expect
       .poll(async () => Number(await page.getByTestId('approvals-badge').first().innerText()), {
         timeout: 15_000,
