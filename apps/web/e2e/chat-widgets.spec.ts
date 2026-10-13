@@ -64,6 +64,8 @@ test.describe('Chat widgets', () => {
     await home(page);
     await ask(page, 'setup linkedin');
     const widget = page.getByTestId('setup-linkedin');
+    // the demo can connect live, so the export is the second way in
+    await widget.getByTestId('linkedin-show-upload').click();
     await expect(widget).toContainText('Settings > Data privacy > Get a copy of your data > Connections');
     const csv = [
       'First Name,Last Name,URL,Email Address,Company,Position,Connected On',

@@ -1,7 +1,7 @@
 import type { CoffeeChat, Person } from '@orbit/core';
 import { ACTIVE_STAGES, CLOSED_STAGES, normalizeCompany, STAGE_HELP, STAGE_LABELS } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { AddPersonButton } from '../components/AddPerson';
 import { LinkedInImportButton } from '../components/LinkedInImport';
@@ -44,8 +44,11 @@ export function People() {
   const hints = useHints();
   const people =
     useLiveQuery(() => (userId ? db.people.where('userId').equals(userId).toArray() : []), [userId]) ?? [];
-  const chats =
-    useLiveQuery(() => (userId ? db.chats.where('userId').equals(userId).toArray() : []), [userId]) ?? [];
+  const chatRows = useLiveQuery(
+    () => (userId ? db.chats.where('userId').equals(userId).toArray() : []),
+    [userId],
+  );
+  const chats = chatRows ?? [];
   const suggestions =
     useLiveQuery(
       () =>
@@ -173,6 +176,21 @@ export function People() {
       },
       { replace: true },
     );
+  // the board opens by default, but with no chat yet it would be empty: a plain /people then opens on the list of
+  // everyone instead, so a student who just imported their connections sees them
+  const askedView = params.get('view');
+  const anyChat = chats.some((c) => !c.archivedAt);
+  const hasPeople = people.length > 0;
+  useEffect(() => {
+    if (askedView || !chatRows || !hasPeople || anyChat) return;
+    setParams(
+      (p) => {
+        p.set('view', 'list');
+        return p;
+      },
+      { replace: true },
+    );
+  }, [askedView, chatRows, hasPeople, anyChat, setParams]);
   const setFilter = (f: PeopleFilter) =>
     setParams(
       (p) => {

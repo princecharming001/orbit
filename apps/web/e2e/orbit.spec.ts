@@ -352,7 +352,8 @@ test.describe('Orbit demo flow', () => {
     await expect(
       page
         .getByRole('button', { name: /write to|ask .* for an intro/i })
-        .or(page.getByText(/no route found/i)),
+        .or(page.getByText(/no route found/i))
+        .first(),
     ).toBeVisible({ timeout: 15_000 });
     await page.getByTestId('reach-input').fill('Stripe');
     await page.getByTestId('reach-input').press('Enter');
@@ -549,7 +550,11 @@ test.describe('Map on a touch phone (UI-18)', () => {
     const route = page.getByTestId('reach-path').first();
     await expect(route).toBeVisible({ timeout: 15_000 });
     await expect(route).toBeInViewport();
-    const next = page.getByRole('button', { name: /^(ask .+ for an intro|write to .+ directly)$/i });
+    // the route's own next step, not a warm-intro suggestion listed above the routes
+    const next = page
+      .getByRole('button', { name: /^(ask .+ for an intro|write to .+ directly)$/i })
+      .and(page.locator(':not([data-testid="map-warm-intro-ask"])'))
+      .first();
     await next.scrollIntoViewIfNeeded();
     await expect(next).toBeInViewport();
     const nb = (await next.boundingBox())!;
@@ -654,7 +659,9 @@ test.describe('Manual onboarding', () => {
     // setup ends on the chat home
     await expect(page.getByTestId('greeting')).toContainText(/Hey Sam/, { timeout: 30_000 });
     await expect(page).toHaveURL(/\/orbit\/?$/);
+    // with no chats yet, People opens on the list, so the people just imported are right there
     await page.goto('people');
+    await expect(page).toHaveURL(/view=list/);
     await expect(page.getByRole('link', { name: /priya patel/i })).toBeVisible();
     await page.goto('discover');
     await expect(page.getByTestId('rec-card').first()).toBeVisible();
@@ -1771,8 +1778,8 @@ test.describe('Usability round 5: one draft, kept edits, saved settings, chats t
     await page.getByRole('button', { name: /open orbit/i }).click();
     await expect(page.getByTestId('greeting')).toBeVisible({ timeout: 30_000 });
     await expect(page).toHaveURL(/\/orbit\/?$/);
-    // the address shows as LinkedIn had it, dot included
-    await page.goto('people');
+    // the address shows as LinkedIn had it, dot included (the list shows people without a chat too)
+    await page.goto('people?view=list');
     await page
       .getByRole('link', { name: /marcus bell/i })
       .first()
@@ -1914,6 +1921,7 @@ test.describe('Usability round 5 on a phone', () => {
       .getByTestId('ob-welcome')
       .getByRole('button', { name: /get started/i })
       .click();
+    await expect(page.getByTestId('ob-name')).toBeVisible();
     await fits();
     await fillYou(page, 'Sam Okafor', 'sam@umich.edu');
     await page.getByTestId('ob-fn-pm').click();

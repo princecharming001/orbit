@@ -975,7 +975,6 @@ export function MapPage() {
                   </div>
                 </div>
               </div>
-              {user && <WarmIntrosPanel user={user} target={target} onAsk={askIntroVia} />}
               {paths === undefined && (
                 <p className="text-[13px] text-ink-3" data-testid="reach-loading" aria-busy="true">
                   Finding routes through your network…
@@ -1048,6 +1047,9 @@ export function MapPage() {
                   Write to {target.firstName} directly
                 </Button>
               )}
+              {/* warm intros from outside Orbit come after its own routes and their next step, so on a phone the first
+                  route and its button still show without scrolling */}
+              {user && <WarmIntrosPanel user={user} target={target} onAsk={askIntroVia} />}
             </>
           )}
           {companyFocus && !company && (

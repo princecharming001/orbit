@@ -93,8 +93,8 @@ test.describe('Connect LinkedIn and Gmail, live LinkedIn and warm intros', () =>
     await page.getByTestId('settings-linkedin-live-confirm-disconnect').click();
     await expect(card.getByTestId('settings-linkedin-live-status')).toHaveCount(0);
     await expect(card.getByTestId('settings-linkedin-live-connect')).toBeVisible();
-    // the people stay
-    await page.goto('people');
+    // the people stay (the list shows everyone; the board only people with a chat)
+    await page.goto('people?view=list');
     await expect(page.getByText('Priya Raman').filter({ visible: true }).first()).toBeVisible();
     await page.goto('settings/integrations');
     await expect(page.getByTestId('settings-warm-intros-status')).toHaveText(/On/);
@@ -193,14 +193,24 @@ test.describe('Connect LinkedIn and Gmail, live LinkedIn and warm intros', () =>
     await expect(strip).toBeVisible();
     await expect(strip).toContainText('Connect your apps');
     await expect(page.getByTestId('connect-status-linkedin')).toHaveText(/Not connected/);
-    await expect(page.getByTestId('connect-status-google')).toHaveText(/Not connected/);
+    // this build has no Google sign-in set up: Gmail is coming soon, with nothing to press
+    await expect(page.getByTestId('connect-status-google')).toHaveText(/Coming soon/);
+    await expect(page.getByTestId('connect-gmail')).toHaveCount(0);
     // an empty account's line under the greeting is the gentle setup one
     await expect(page.getByTestId('home-status')).toHaveText(/get you set up/);
     await page.getByTestId('connect-linkedin').click();
     await expect(page.getByTestId('turn-user').last()).toHaveText('Connect my LinkedIn.');
     await expect(page.getByTestId('setup-linkedin')).toBeVisible();
-    // back to the home: Connect Gmail posts the Gmail widget
+    // with a Google client id set, Gmail can be connected, and Connect Gmail posts the Gmail widget
+    await page.evaluate(() =>
+      localStorage.setItem(
+        'orbit.prefs.v1',
+        JSON.stringify({ googleClientId: 'e2e.apps.googleusercontent.com' }),
+      ),
+    );
+    await page.reload();
     await chatHome(page);
+    await expect(page.getByTestId('connect-status-google')).toHaveText(/Not connected/);
     await page.getByTestId('connect-gmail').click();
     await expect(page.getByTestId('setup-google')).toBeVisible();
     // dismissed, it stays away
