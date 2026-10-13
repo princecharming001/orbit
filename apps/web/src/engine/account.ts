@@ -6,7 +6,7 @@ import { disconnectGoogle } from '../integrations/google';
 import { clearPrefs } from '../integrations/prefs';
 import { generateBrief, recommendationsRefresh } from './brief';
 
-/** The setup is done: the welcome brief and the first recommendations are built, and Today opens. */
+/** The setup is done: the welcome brief and the first recommendations are built, and the chat opens. */
 export const ONBOARDING_DONE_STEP = 11;
 
 export async function createLocalUser(partial: Partial<User> = {}): Promise<User> {
@@ -21,7 +21,8 @@ export async function createLocalUser(partial: Partial<User> = {}): Promise<User
     school: partial.school ?? '',
     majors: [],
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/New_York',
-    onboardingStep: 2,
+    // setup opens on its Welcome step (see pages/onboardingSteps.ts)
+    onboardingStep: 1,
     createdAt: now,
     ...partial,
   };
