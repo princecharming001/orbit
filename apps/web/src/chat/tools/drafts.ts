@@ -204,8 +204,8 @@ export const createDraft = defineTool({
         'text',
         out,
         out,
-        `Warm-up started for ${person.firstName}. The first step is on Today; the first message is drafted when the warm-up is done.`,
-        `/today?person=${person.id}`,
+        `Warm-up started for ${person.firstName}. The first step is in Drafts; the first message is drafted when the warm-up is done.`,
+        `/inbox?person=${person.id}`,
       );
     }
     let draft = r.draft;
@@ -644,7 +644,7 @@ export const confirmHandoffTool = defineTool({
     };
     const ui = { ...model, snapshot };
     const summary = r.scheduledAt
-      ? `Logged as sent. Your chat with ${person.firstName} is booked for ${fmtWhen(r.scheduledAt, ctx)}, under Coming up on Today.`
+      ? `Logged as sent. Your chat with ${person.firstName} is booked for ${fmtWhen(r.scheduledAt, ctx)}, under Coming up in Drafts.`
       : `Logged as sent to ${person.firstName}.`;
     return { kind: 'draft' as const, data: { ui, forModel: model }, summary, href: `/people/${person.id}` };
   },

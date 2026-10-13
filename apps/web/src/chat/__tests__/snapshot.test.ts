@@ -262,7 +262,7 @@ describe('snapshot', () => {
     const later = await buildSnapshot(user.id, new Date('2026-10-12T15:01:00Z'));
     expect(snapshotIsStale(snapshotKeyOf(b.text), later)).toBe(false);
     // another panel does
-    setPanelHint({ href: '/pipeline', title: 'Pipeline' });
+    setPanelHint({ href: '/people?view=board', title: 'People' });
     const c = await buildSnapshot(user.id, NOW);
     expect(snapshotIsStale(snapshotKeyOf(b.text), c)).toBe(true);
     // closing it does too

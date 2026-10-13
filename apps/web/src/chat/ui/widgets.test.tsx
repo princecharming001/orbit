@@ -200,7 +200,7 @@ describe('setup: LinkedIn', () => {
     expect(links).toEqual(
       expect.arrayContaining([
         ['Show the map', '/map'],
-        ['See my people', '/people'],
+        ['See my people', '/people?view=list'],
       ]),
     );
     // a second upload updates, never doubles

@@ -84,7 +84,7 @@ export function makeStubRegistry(): StubRegistry {
         kind: 'brief',
         data: { cards: [{ id: 's_1', kind: 'thank_you', person: 'Priya Patel' }] },
         summary: 'One card today: thank Priya Patel.',
-        href: '/today',
+        href: '/inbox',
       }),
       toModel: (d) => ({ cards: (d as { cards: unknown[] }).cards.length }),
     }),
@@ -106,7 +106,7 @@ export function makeStubRegistry(): StubRegistry {
           : input.quietOnly
             ? 'No chat went quiet.'
             : 'Your pipeline is empty.',
-        href: input.stage ? `/pipeline?stage=${input.stage}` : '/pipeline',
+        href: '/people?view=board',
       }),
     }),
     tool({
@@ -223,7 +223,7 @@ export function makeStubRegistry(): StubRegistry {
         kind: 'pipeline',
         data: { personId: input.personId, stage: input.stage },
         summary: `Moved to ${input.stage}.`,
-        href: `/pipeline?stage=${input.stage}`,
+        href: '/people?view=board',
       }),
     }),
     tool({

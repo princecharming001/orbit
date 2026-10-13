@@ -88,10 +88,10 @@ export const movePipelineStage = defineTool({
     const tail =
       input.stage === 'completed'
         ? thanks
-          ? ' Your thank-you draft is on Today.'
+          ? ' Your thank-you draft is in Drafts.'
           : ' Add a note about the chat and Orbit drafts your thank-you from it.'
         : input.stage === 'replied'
-          ? ' Your reply is on Today.'
+          ? ' Your reply is in Drafts.'
           : r.needsTime
             ? ' When is the chat? Say when, and Orbit puts it under Coming up.'
             : '';
@@ -184,7 +184,7 @@ export const scheduleChat = defineTool({
       'pipeline',
       out,
       out,
-      `Saved. Your chat with ${person.firstName} is ${out.when}, under Coming up on Today, with prep the day before.`,
+      `Saved. Your chat with ${person.firstName} is ${out.when}, under Coming up in Drafts, with prep the day before.`,
       `/people/${person.id}?tab=prep`,
     );
   },

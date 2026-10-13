@@ -37,7 +37,7 @@ export const addPerson = defineTool({
   name: 'add_person',
   kind: 'write',
   description:
-    'Call this only when the student asks to add someone to Orbit by hand ("add Priya Shah, analyst at Evercore, priya@evercore.com"). Needs a name and a way to reach them: an email or a LinkedIn profile URL. A record with the same email or profile is updated, not duplicated. Today then lists them under the people to write to; use create_draft to start the first message.',
+    'Call this only when the student asks to add someone to Orbit by hand ("add Priya Shah, analyst at Evercore, priya@evercore.com"). Needs a name and a way to reach them: an email or a LinkedIn profile URL. A record with the same email or profile is updated, not duplicated. Drafts then lists them under the people to write to; use create_draft to start the first message.',
   input: z.object({
     name: z.string().min(1).describe('Full name.'),
     company: z.string().optional().describe('Where they work.'),
@@ -83,7 +83,10 @@ export const updatePerson = defineTool({
       .enum(RELATIONSHIPS)
       .optional()
       .describe('How the student knows them; Orbit adjusts draft tone to it.'),
-    unhide: z.boolean().optional().describe('true: show a hidden person again in People, Today and the Map.'),
+    unhide: z
+      .boolean()
+      .optional()
+      .describe('true: show a hidden person again in People, Drafts and the Map.'),
     tags: z.array(z.string()).optional().describe('Replace their tags.'),
     notes: z
       .string()
@@ -105,7 +108,7 @@ export const updatePerson = defineTool({
     }
     if (input.unhide) {
       await unhidePerson(person.id);
-      did.push('back in People, Today and the map');
+      did.push('back in People, Drafts and the map');
     }
     if (input.tags || input.notes !== undefined) {
       await updatePersonDetails(person.id, { tags: input.tags, notes: input.notes }, ctx.now);
@@ -135,7 +138,7 @@ export const hidePersonTool = defineTool({
   name: 'hide_person',
   kind: 'risky',
   description:
-    "Call this only when the student asks to hide someone from their lists. A hidden person leaves People, Today, the Map and Discover, and Orbit refuses to send to them until they are shown again (update_person with unhide). Needs the student's approval.",
+    "Call this only when the student asks to hide someone from their lists. A hidden person leaves People, Drafts, the Map and Discover, and Orbit refuses to send to them until they are shown again (update_person with unhide). Needs the student's approval.",
   input: z.object({
     personId: z.string().describe('The person id.'),
   }),
@@ -144,7 +147,7 @@ export const hidePersonTool = defineTool({
   async summarizeIntent(input, ctx) {
     const p = await requirePerson(ctx, input.personId);
     return {
-      text: `Hide ${p.displayName} from People, Today, the Map and Discover. They stay in Orbit under Hidden and can be shown again.`,
+      text: `Hide ${p.displayName} from People, Drafts, the Map and Discover. They stay in Orbit under Hidden and can be shown again.`,
       blockedReason: p.hiddenAt ? 'They are already hidden.' : undefined,
     };
   },
@@ -162,7 +165,7 @@ export const hidePersonTool = defineTool({
       out,
       out,
       `Hid ${p.displayName}. Find them under Hidden in People, or ask me to show them again.`,
-      '/people',
+      '/people?view=list&f=hidden',
     );
   },
   toModel,

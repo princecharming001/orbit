@@ -20,9 +20,8 @@ import { applyEvent, resetThread, subscribeAutoOpen } from '../ui/threadStore';
 describe('panel routes', () => {
   it('knows which pages open in the panel', () => {
     for (const ok of [
-      '/today',
-      '/pipeline',
       '/people',
+      '/people?view=list&f=chats',
       '/people/p4',
       '/people/p4?tab=prep',
       '/companies/o1',
@@ -36,7 +35,17 @@ describe('panel routes', () => {
       '/settings/integrations',
     ])
       expect(panelizable(ok), ok).toBe(true);
-    for (const no of ['/', '/welcome', '/onboarding/profile', '/people/p4/extra', '/nope', ''])
+    // Today and the Pipeline are gone: their old links are sent on, never opened as pages of their own
+    for (const no of [
+      '/',
+      '/welcome',
+      '/onboarding/profile',
+      '/people/p4/extra',
+      '/nope',
+      '',
+      '/today',
+      '/pipeline',
+    ])
       expect(panelizable(no), no).toBe(false);
   });
 
@@ -54,6 +63,10 @@ describe('panel routes', () => {
     expect(panelFromSearch('?panel=%2Fwelcome')).toBeUndefined();
     expect(panelFromSearch('?panel=https%3A%2F%2Fevil.example')).toBeUndefined();
     expect(panelFromSearch('')).toBeUndefined();
+    // an old Today or Pipeline link in the address opens what shows it now
+    expect(panelFromSearch('?panel=%2Fpipeline%3Fview%3Dtable')).toBe('/people?view=list&f=chats');
+    expect(panelFromSearch('?panel=%2Ftoday%3Fcard%3Ds_1')).toBe('/inbox?card=s_1');
+    expect(panelFromSearch('?panel=%2Ftoday')).toBeUndefined();
   });
 
   it('turns an in-app anchor into a panel href and leaves other links alone', () => {
@@ -69,10 +82,15 @@ describe('panel routes', () => {
     expect(internalHrefOf(a('mailto:daniel@stripe.com'))).toBeUndefined();
     expect(internalHrefOf(a('https://example.com/people/p4'))).toBeUndefined();
     expect(internalHrefOf(a('#top'))).toBeUndefined();
+    // a link saved in an older chat thread opens where its content lives now
+    expect(internalHrefOf(a('/pipeline?quiet=1'))).toBe('/people?view=board&quiet=1');
+    expect(internalHrefOf(a('/today?person=p4'))).toBe('/inbox?person=p4');
+    expect(internalHrefOf(a('/today'))).toBeUndefined();
   });
 
   it('gives static pages plain titles', () => {
-    expect(staticTitle('/today')).toBe('Today');
+    expect(staticTitle('/people?view=board')).toBe('People');
+    expect(staticTitle('/today')).toBe('Orbit');
     expect(staticTitle('/settings/integrations')).toBe('Connections');
     expect(staticTitle('/inbox?draft=x')).toBe('Drafts');
     expect(staticTitle('/people/p4')).toBe('Profile');
@@ -126,11 +144,11 @@ describe('PanelProvider', () => {
     expect(api.canGoBack).toBe(false);
 
     // another page opens on top; the same page replaces in place
-    await run(() => api.open('/pipeline'));
-    expect(api.href).toBe('/pipeline');
+    await run(() => api.open('/people?view=board'));
+    expect(api.href).toBe('/people?view=board');
     expect(api.canGoBack).toBe(true);
-    expect(api.tabs.map((t) => t.id)).toEqual(['/people/p4', '/pipeline']);
-    await run(() => api.open('/pipeline'));
+    expect(api.tabs.map((t) => t.id)).toEqual(['/people/p4', '/people']);
+    await run(() => api.open('/people?view=list'));
     expect(api.tabs).toHaveLength(2);
 
     await run(() => api.goBack());
@@ -142,15 +160,15 @@ describe('PanelProvider', () => {
 
   it('keeps one tab per page and moves on when a tab closes', async () => {
     await mount();
-    await run(() => api.open('/today'));
+    await run(() => api.open('/inbox'));
     await run(() => api.open('/people/p4'));
     await run(() => api.open('/people/p4?tab=prep'));
-    expect(api.tabs.map((t) => t.id)).toEqual(['/today', '/people/p4']);
+    expect(api.tabs.map((t) => t.id)).toEqual(['/inbox', '/people/p4']);
     expect(api.tabs[1]!.href).toBe('/people/p4?tab=prep');
     await run(() => api.closeTab('/people/p4'));
-    expect(api.href).toBe('/today');
-    expect(api.tabs.map((t) => t.id)).toEqual(['/today']);
-    await run(() => api.closeTab('/today'));
+    expect(api.href).toBe('/inbox');
+    expect(api.tabs.map((t) => t.id)).toEqual(['/inbox']);
+    await run(() => api.closeTab('/inbox'));
     expect(api.href).toBeUndefined();
   });
 
@@ -168,11 +186,11 @@ describe('PanelProvider', () => {
   });
 
   it('restores a panel from the address and tells the assistant what it shows', async () => {
-    await mount('/?panel=%2Fpipeline');
-    expect(api.href).toBe('/pipeline');
+    await mount('/?panel=%2Fpeople%3Fview%3Dboard');
+    expect(api.href).toBe('/people?view=board');
     expect(api.canGoBack).toBe(false);
     await act(async () => new Promise((r) => setTimeout(r, 10)));
-    expect(getPanelHint()).toMatchObject({ href: '/pipeline', title: 'Pipeline' });
+    expect(getPanelHint()).toMatchObject({ href: '/people?view=board', title: 'People' });
     await run(() => api.close());
     expect(getPanelHint()).toBeUndefined();
   });
