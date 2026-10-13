@@ -404,12 +404,17 @@ export async function runTurn(
 
   let lastRowId = '';
   let lastStop = 'end_turn';
+  // every word streamed this turn: a turn that ends without one gets a follow-up asking for the answer in words
+  let spoken = '';
 
   for (let attempt = 0; ; attempt++) {
     try {
       for await (const stream of runner) {
         // listeners go on before anything is awaited: the stream does not replay events emitted before they attach
-        stream.on('text', (delta) => onEvent({ type: 'text', delta }));
+        stream.on('text', (delta) => {
+          spoken += delta;
+          onEvent({ type: 'text', delta });
+        });
         stream.on('streamEvent', (ev, snapshot) => {
           if (ev.type === 'content_block_stop') {
             // display 'updates': a thinking block with text is a progress note before the tool_use it introduces;
@@ -484,5 +489,56 @@ export async function runTurn(
     }
   }
   await flushResults();
+  if (!spoken.trim() && lastStop === 'end_turn' && !signal?.aborted) {
+    const said = await speakUp(deps, runner.params, conversation.id, clock, onEvent, persistAssistant, signal);
+    if (said) lastRowId = said;
+  }
   onEvent({ type: 'done', stopReason: lastStop, messageId: lastRowId });
+}
+
+const SPEAK_UP =
+  "[Orbit] Your reply had no words, only cards or buttons. Answer the student's last message now in one to three plain, warm sentences from what the tools returned. Do not call any tools, and do not repeat what a card already lists.";
+
+/**
+ * A turn must never end on cards alone: the prompt asks for words, and this is the backstop when the model still
+ * gives none. One more request over the same params with tools off; its text streams as the end of this turn, and
+ * the nudge and the answer are stored so the history replays exactly. Best effort: a failure leaves the turn as it was.
+ */
+async function speakUp(
+  deps: TurnDeps,
+  params: BetaToolRunnerParams,
+  conversationId: string,
+  clock: () => Date,
+  onEvent: (e: TurnEvent) => void,
+  persistAssistant: (m: Anthropic.Beta.BetaMessage) => Promise<{ id: string }>,
+  signal?: AbortSignal,
+): Promise<string | undefined> {
+  try {
+    // an empty final assistant message cannot be replayed; the nudge stands between the turn and the answer
+    const messages = params.messages.filter(
+      (m) => !(m.role === 'assistant' && Array.isArray(m.content) && m.content.length === 0),
+    );
+    const nudge: Anthropic.Beta.BetaMessageParam = { role: 'system', content: [{ type: 'text', text: SPEAK_UP }] };
+    const runner = deps.client.beta.messages.toolRunner(
+      { ...params, messages: [...messages, nudge], tool_choice: { type: 'none' }, max_iterations: 1, stream: true },
+      { signal },
+    );
+    let said: string | undefined;
+    for await (const stream of runner) {
+      let text = '';
+      stream.on('text', (delta) => {
+        text += delta;
+        onEvent({ type: 'text', delta });
+      });
+      const message = await stream.finalMessage();
+      recordTokens(message.usage);
+      if (!text.trim()) return undefined;
+      await deps.store.append(conversationId, nudge, clock());
+      said = (await persistAssistant(message)).id;
+    }
+    return said;
+  } catch (e) {
+    console.warn('[orbit chat] the follow-up for a reply with no words failed', e);
+    return undefined;
+  }
 }

@@ -128,6 +128,31 @@ describe('request shape', () => {
   });
 });
 
+describe('never a reply without words', () => {
+  it('asks once more, with tools off, when a turn ends on cards alone, and streams that answer', async () => {
+    const events = await turn('how many replied', [
+      { toolCalls: [{ id: 'toolu_q', name: 'list_pipeline', input: {} }] },
+      { stopReason: 'end_turn' },
+      { text: 'Two replied and three are still waiting.' },
+    ]);
+    expect(text(events)).toBe('Two replied and three are still waiting.');
+    expect(kinds(events).at(-1)).toBe('done');
+    const reqs = messageRequests(fake);
+    const last = reqs.at(-1)!.body;
+    expect(last.tool_choice).toEqual({ type: 'none' });
+    expect(JSON.stringify(last.messages.at(-1))).toMatch(/Your reply had no words/);
+    // the nudge and the answer are stored, so the next turn replays a valid history
+    const rows = await store.history(conversation.id);
+    expect(rows.at(-1)?.role).toBe('assistant');
+    expect(JSON.stringify(rows.at(-2))).toMatch(/Your reply had no words/);
+  });
+
+  it('does not ask again when the turn already said something', async () => {
+    await turn('hi', [{ text: 'Hello Sam.' }]);
+    expect(messageRequests(fake)).toHaveLength(1);
+  });
+});
+
 describe('tools', () => {
   it('runs parallel tool calls and returns every result in one user message, in the model order', async () => {
     const events = await turn('what is on and who went quiet', [
