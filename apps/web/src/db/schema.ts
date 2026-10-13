@@ -33,7 +33,15 @@ import type { ChatAction, ChatConversation, ChatMessage } from '../chat/types';
 export interface IntegrationAccount {
   id: string;
   userId: string;
-  provider: 'google' | 'linkedin_csv' | 'granola' | 'fathom' | 'wispr_export' | 'tracker_import' | 'demo';
+  provider:
+    | 'google'
+    | 'linkedin_csv'
+    | 'linkedin_live'
+    | 'granola'
+    | 'fathom'
+    | 'wispr_export'
+    | 'tracker_import'
+    | 'demo';
   externalAccountId?: string;
   status: 'active' | 'needs_reauth' | 'revoked' | 'error' | 'instructions_shown';
   scopes: string[];

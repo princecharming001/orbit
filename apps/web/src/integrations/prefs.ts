@@ -57,6 +57,8 @@ export interface LocalPrefs {
   llmDailyTokenCap?: number;
   llmUsage?: LlmUsage;
   lastLlmError?: LlmErrorRecord;
+  /** the student turned on warm intro paths from Village (route lookups send a target's name and company there) */
+  warmIntros?: boolean;
   /** Orbit's shared Claude access said stop (daily limit, or not set up): the chat uses commands until `until`. */
   sharedClaudePause?: { until: string; reason: 'day' | 'global' | 'unconfigured' };
 }
