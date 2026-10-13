@@ -19,7 +19,6 @@ import { MapPage } from '../../pages/MapPage';
 import { NotesNew } from '../../pages/NotesNew';
 import { People } from '../../pages/People';
 import { PersonPage } from '../../pages/Person';
-import { Pipeline } from '../../pages/Pipeline';
 import { SettingsPage } from '../../pages/Settings';
 import { panelAnchorHref } from './routes';
 
@@ -92,7 +91,7 @@ export function PanelRoutes() {
   return (
     <Routes>
       <Route path="/today" element={<LegacyRedirect />} />
-      <Route path="/pipeline" element={<Pipeline />} />
+      <Route path="/pipeline" element={<LegacyRedirect />} />
       <Route path="/people" element={<People />} />
       <Route path="/people/:id" element={<PersonPage />} />
       <Route path="/companies/:id" element={<CompanyPage />} />

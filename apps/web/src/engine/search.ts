@@ -1,4 +1,4 @@
-import { interactionCount, type Person } from '@orbit/core';
+import { interactionCount, normalizeCompany, type Person } from '@orbit/core';
 
 /**
  * Rank people for a typed query the way the command palette does: an exact name (or first name) first, then a
@@ -39,10 +39,14 @@ export function lastTouch(p: Person): string | undefined {
   return b.lastConversationAt ?? (interactionCount(b.counts) > 0 ? p.lastInteractionAt : undefined);
 }
 
-export type PeopleFilter = 'all' | 'alumni' | 'strong' | 'chats' | 'targets' | 'hidden';
+export type PeopleFilter = 'all' | 'alumni' | 'strong' | 'chats' | 'targets' | 'quiet' | 'hidden';
 export type PeopleSort = 'strength' | 'recent' | 'name';
 
-/** The People page's list: search, one filter, one sort. `activeChat` is the people with a non-archived chat. */
+/**
+ * The People page's list: search, one filter, one sort. `activeChat` is the people with a non-archived chat, `quiet`
+ * the people whose chat went quiet. A target company matches by its name as typed or normalized ("McKinsey" covers
+ * "McKinsey & Company").
+ */
 export function filterPeople<P extends Person>(
   people: P[],
   opts: {
@@ -51,6 +55,7 @@ export function filterPeople<P extends Person>(
     sort?: PeopleSort;
     activeChat: Set<string>;
     targetNames: Set<string>;
+    quiet?: Set<string>;
   },
 ): P[] {
   const s = (opts.query ?? '').trim().toLowerCase();
@@ -74,8 +79,12 @@ export function filterPeople<P extends Person>(
           : filter === 'chats'
             ? opts.activeChat.has(p.id)
             : filter === 'targets'
-              ? opts.targetNames.has((p.currentOrganizationRaw ?? '').toLowerCase())
-              : true,
+              ? opts.targetNames.has((p.currentOrganizationRaw ?? '').toLowerCase()) ||
+                (!!p.currentOrganizationRaw &&
+                  opts.targetNames.has(normalizeCompany(p.currentOrganizationRaw)))
+              : filter === 'quiet'
+                ? !!opts.quiet?.has(p.id)
+                : true,
     )
     .sort((a, b) =>
       sort === 'strength'
