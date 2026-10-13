@@ -11,6 +11,7 @@ import {
   Routes,
   type To,
 } from 'react-router-dom';
+import { LegacyRedirect } from '../../legacyRoutes';
 import { CompanyPage } from '../../pages/Company';
 import { Discover } from '../../pages/Discover';
 import { InboxPage } from '../../pages/Inbox';
@@ -18,9 +19,7 @@ import { MapPage } from '../../pages/MapPage';
 import { NotesNew } from '../../pages/NotesNew';
 import { People } from '../../pages/People';
 import { PersonPage } from '../../pages/Person';
-import { Pipeline } from '../../pages/Pipeline';
 import { SettingsPage } from '../../pages/Settings';
-import { Today } from '../../pages/Today';
 import { panelAnchorHref } from './routes';
 
 /**
@@ -91,8 +90,8 @@ export function PanelRouter({
 export function PanelRoutes() {
   return (
     <Routes>
-      <Route path="/today" element={<Today />} />
-      <Route path="/pipeline" element={<Pipeline />} />
+      <Route path="/today" element={<LegacyRedirect />} />
+      <Route path="/pipeline" element={<LegacyRedirect />} />
       <Route path="/people" element={<People />} />
       <Route path="/people/:id" element={<PersonPage />} />
       <Route path="/companies/:id" element={<CompanyPage />} />
@@ -103,7 +102,7 @@ export function PanelRoutes() {
       <Route path="/notes/new" element={<NotesNew />} />
       <Route path="/settings" element={<SettingsPage />} />
       <Route path="/settings/:section" element={<SettingsPage />} />
-      <Route path="*" element={<Navigate to="/today" replace />} />
+      <Route path="*" element={<Navigate to="/people" replace />} />
     </Routes>
   );
 }

@@ -27,7 +27,8 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
   const results = useMemo(() => {
     const s = q.trim().toLowerCase();
     const actions = [
-      { kind: 'action', id: 'today', label: 'Go to Today', to: '/today' },
+      { kind: 'action', id: 'people', label: 'Go to People', to: '/people' },
+      { kind: 'action', id: 'drafts', label: 'Go to Drafts', to: '/inbox' },
       { kind: 'action', id: 'note', label: 'Add a note', to: '/notes/new' },
       { kind: 'action', id: 'map', label: 'Open the map', to: '/map' },
       { kind: 'action', id: 'reach', label: 'Find someone who can introduce you', to: '/map?reach=1' },

@@ -2,11 +2,11 @@ import { REACH_BAND_LABELS, TARGET_STATUS_LABELS } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
+import { StrengthDots } from '../components/people/shared';
 import { db } from '../db/schema';
 import { type CompanyReach, reachCompany, WARMER_ROUTES_WHY } from '../engine/graph';
 import { useSession } from '../state/session';
 import { Avatar, Card, Chip, NotFound, PageHeader, Spinner } from '../ui';
-import { StrengthDots } from './Pipeline';
 
 export function CompanyPage() {
   const { id } = useParams();
@@ -39,7 +39,7 @@ export function CompanyPage() {
       <NotFound
         title="We can't find that company"
         body="It may have been merged with another record, or the link is out of date."
-        to="/pipeline?view=companies"
+        to="/people?view=companies"
         linkLabel="Back to companies"
       />
     );

@@ -298,6 +298,14 @@ export const getTodayBrief = defineTool({
       cards: cardsOut,
       more: moreOut,
       upcoming,
+      // the brief card's "Coming up" line: the next chat and who it is with
+      nextUp: upcoming[0]
+        ? {
+            startAt: upcoming[0].startAt,
+            title: upcoming[0].title,
+            person: byId.get(upcoming[0].attendeePersonIds[0]!)?.displayName,
+          }
+        : undefined,
       quiet,
       handedOff,
       started,
@@ -335,7 +343,7 @@ export const getTodayBrief = defineTool({
       draftsBadge: badge,
       isDemo: ui.isDemo,
     };
-    return ok('brief', ui, model, summary, '/today');
+    return ok('brief', ui, model, summary, '/inbox');
   },
   toModel,
 });
@@ -461,7 +469,7 @@ export const listPipeline = defineTool({
           ? `${chat.warmUp.actions.filter((a) => a.doneAt).length} of ${chat.warmUp.actions.length} steps`
           : undefined,
         nextCard: next
-          ? { id: next.id, kind: SUGGESTION_KIND_LABELS[next.kind].label, href: `/today?card=${next.id}` }
+          ? { id: next.id, kind: SUGGESTION_KIND_LABELS[next.kind].label, href: `/inbox?card=${next.id}` }
           : undefined,
         href: `/people/${person.id}`,
       };
@@ -485,7 +493,8 @@ export const listPipeline = defineTool({
           )
         : undefined;
     const view = input.view ?? 'board';
-    const href = `/pipeline?view=${view}${input.quietOnly ? '&quiet=1' : ''}`;
+    // the People page: its board, or its list for the table (companies has its own view there too)
+    const href = `/people?view=${view === 'table' ? 'list' : view}${input.quietOnly ? '&quiet=1' : ''}`;
     const summary = total
       ? `${plural(total, 'chat')} in your pipeline${input.stage ? ` in ${STAGE_LABELS[input.stage]}` : ''}${input.quietOnly ? ' went quiet' : ''}${total > list.length ? `, showing ${list.length}` : ''}.`
       : 'No chats match that in your pipeline.';
@@ -573,7 +582,7 @@ export const searchPeople = defineTool({
       { people: rows, query: q, filter },
       { people: rows, ambiguous: rows.length > 1 },
       summary,
-      '/people',
+      '/people?view=list',
     );
   },
   toModel,
@@ -803,7 +812,7 @@ export const listDrafts = defineTool({
   name: 'list_drafts',
   kind: 'read',
   description:
-    'Call this when the student asks what drafts they have to send, what is waiting on an "I sent it", what is snoozed, what they sent, or for the drafts of one person. Returns compact draft references with ids for get_draft, update_draft_body and send_draft. to_send is what Today asks for now, can_wait the rest, started the drafts the student began themselves, opened the messages handed to the mail app or LinkedIn and not yet confirmed sent (plus failed sends), snoozed the snoozed cards, sent the sent messages.',
+    'Call this when the student asks what drafts they have to send, what is waiting on an "I sent it", what is snoozed, what they sent, or for the drafts of one person. Returns compact draft references with ids for get_draft, update_draft_body and send_draft. to_send is what is worth sending today, can_wait the rest, started the drafts the student began themselves, opened the messages handed to the mail app or LinkedIn and not yet confirmed sent (plus failed sends), snoozed the snoozed cards, sent the sent messages.',
   input: z.object({
     list: z.enum(DRAFT_LISTS).optional().describe('Which list (default to_send plus started).'),
     personId: z.string().optional().describe('Only drafts to this person.'),
@@ -1379,7 +1388,7 @@ export const listNotes = defineTool({
         view,
         view,
         `Note from ${view.when}${view.people.length ? ` with ${view.people.map((p) => p.name).join(', ')}` : ''}: ${plural(facts.length, 'fact')} and ${plural(items.length, 'promise')} taken from it.`,
-        n.personIds[0] ? `/people/${n.personIds[0]}?tab=facts` : '/today',
+        n.personIds[0] ? `/people/${n.personIds[0]}?tab=facts` : '/inbox',
       );
     }
     let notes = await db.notes.where('userId').equals(userId).toArray();
@@ -1630,7 +1639,7 @@ export const getSettings = defineTool({
       out.onboarding = {
         step: user.onboardingStep,
         completed: !!user.onboardingCompletedAt,
-        href: user.onboardingCompletedAt ? '/today' : `/onboarding/${Math.max(1, user.onboardingStep - 1)}`,
+        href: user.onboardingCompletedAt ? '/' : `/onboarding/${Math.max(1, user.onboardingStep - 1)}`,
       };
     out.isDemo = userId === DEMO_USER_ID;
     const summary = section === 'all' ? 'Your settings, by section.' : `Your ${section} settings.`;
@@ -1697,14 +1706,12 @@ export const explainStage = defineTool({
     const summary = input.stage
       ? `${STAGE_LABELS[input.stage]}: ${STAGE_HELP[input.stage]}`
       : `The pipeline has ${ACTIVE_STAGES.length} active stages and ${CLOSED_STAGES.length} closed ones.`;
-    return ok('text', { stages: list }, { stages: list }, summary, '/pipeline');
+    return ok('text', { stages: list }, { stages: list }, summary, '/people?view=board');
   },
   toModel,
 });
 
 const PAGES = {
-  today: '/today',
-  pipeline: '/pipeline',
   people: '/people',
   person: '/people/:id',
   company: '/companies/:id',
@@ -1721,30 +1728,36 @@ const PAGES = {
   settings_limits: '/settings/limits',
   settings_privacy: '/settings/privacy',
   landing: '/',
+  // older names a model or a saved chat may still use: Today's cards are in Drafts, the Pipeline is the People board
+  today: '/inbox',
+  pipeline: '/people?view=board',
 } as const;
 
 export const openPage = defineTool({
   name: 'open_page',
   kind: 'read',
   description:
-    'Call this when the student asks to go to, open or show a page of the app (Today, Pipeline, People, a person, a company, the Map, reach mode, Discover, Drafts, Add note, a Settings section, the landing page), or to change a view the page itself holds (a Pipeline view, a Map filter). Returns the in-app link the UI offers as "Open in app"; nothing else changes.',
+    'Call this when the student asks to go to, open or show a page of the app (People with its board, list and companies views, a person, a company, the Map, reach mode, Discover, Drafts, Add note, a Settings section, the landing page), or to change a view the page itself holds (a People view, a Map filter). Returns the in-app link the UI offers as "Open in app"; nothing else changes.',
   input: z.object({
     page: z.enum(Object.keys(PAGES) as [keyof typeof PAGES, ...(keyof typeof PAGES)[]]).describe('The page.'),
     id: z.string().optional().describe('The person or organization id for a person or company page.'),
     tab: z.enum(['timeline', 'facts', 'connections', 'prep']).optional().describe('A person page tab.'),
-    view: z.enum(['board', 'table', 'companies']).optional().describe('A Pipeline view.'),
+    view: z
+      .enum(['board', 'list', 'companies', 'table'])
+      .optional()
+      .describe('A People view: board (chats by stage), list (everyone), companies. table means list.'),
     filter: z
       .enum(['everyone', 'targets', 'alumni', 'pipeline', 'recent', 'introductions'])
       .optional()
-      .describe('A Map filter, or quiet chats on the Pipeline (use quiet).'),
-    quiet: z.boolean().optional().describe('Pipeline: only chats that went quiet.'),
+      .describe('A Map filter. For quiet chats on People, use quiet.'),
+    quiet: z.boolean().optional().describe('People: only chats that went quiet.'),
     personId: z
       .string()
       .optional()
       .describe(
-        "Map reach mode for this person, or Today focused on this person's card, or Add note for this person.",
+        "Map reach mode for this person, or Drafts focused on this person's newest card, or Add note for this person.",
       ),
-    cardId: z.string().optional().describe('Today focused on this card.'),
+    cardId: z.string().optional().describe('Drafts focused on this card.'),
     company: z.string().optional().describe('Map reach mode for this company name.'),
   }),
   capabilities: [
@@ -1768,8 +1781,16 @@ export const openPage = defineTool({
     if (input.page === 'person')
       href = `/people/${input.id ?? input.personId ?? ''}${input.tab ? `?tab=${input.tab}` : ''}`;
     if (input.page === 'company') href = `/companies/${input.id ?? ''}`;
-    if (input.page === 'pipeline')
-      href = `/pipeline${input.view ? `?view=${input.view}` : ''}${input.quiet ? `${input.view ? '&' : '?'}quiet=1` : ''}`;
+    // "today" and "pipeline" are the older names of Drafts and the People board
+    const page = input.page === 'today' ? 'drafts' : input.page === 'pipeline' ? 'people' : input.page;
+    if (page === 'people' && (input.view || input.quiet || input.page === 'pipeline')) {
+      const params = new URLSearchParams();
+      const view =
+        input.view === 'table' ? 'list' : (input.view ?? (input.page === 'pipeline' ? 'board' : undefined));
+      if (view) params.set('view', view);
+      if (input.quiet) params.set('quiet', '1');
+      href = `/people${params.size ? `?${params}` : ''}`;
+    }
     if (input.page === 'map' || input.page === 'reach') {
       const params = new URLSearchParams();
       if (input.personId) params.set('reach', input.personId);
@@ -1778,13 +1799,11 @@ export const openPage = defineTool({
       if (input.filter && input.filter !== 'everyone') params.set('filter', input.filter);
       href = `/map${params.size ? `?${params}` : ''}`;
     }
-    if (input.page === 'today' && (input.cardId || input.personId))
-      href = `/today?${input.cardId ? `card=${input.cardId}` : `person=${input.personId}`}`;
-    if (input.page === 'add_note' && input.personId) href = `/notes/new?person=${input.personId}`;
-    const label = input.page.replace(/_/g, ' ');
-    return autoOpen(
-      ok('text', { href, page: input.page }, { href, page: input.page }, `Open ${label} in the app.`, href),
-    );
+    if (page === 'drafts' && (input.cardId || input.personId))
+      href = `/inbox?${input.cardId ? `card=${input.cardId}` : `person=${input.personId}`}`;
+    if (page === 'add_note' && input.personId) href = `/notes/new?person=${input.personId}`;
+    const label = page.replace(/_/g, ' ');
+    return autoOpen(ok('text', { href, page }, { href, page }, `Open ${label} in the app.`, href));
   },
   toModel,
 });
@@ -1819,7 +1838,7 @@ export const draftWarmupComment = defineTool({
       r.text
         ? 'A comment to paste under their post. Read it once before posting.'
         : 'Say what the post is about first.',
-      '/today',
+      '/inbox',
     );
   },
   toModel,

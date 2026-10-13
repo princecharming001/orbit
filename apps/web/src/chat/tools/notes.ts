@@ -115,7 +115,7 @@ export const addNote = defineTool({
     };
     if (n.matchStatus === 'unmatched') {
       const summary = n.personIds.length
-        ? 'Saved. Orbit is not sure who this was with; check the match card on Today or say who with rematch_note.'
+        ? 'Saved. Orbit is not sure who this was with; check the match card in Drafts or say who with rematch_note.'
         : 'Saved. Who was this with? Say so with rematch_note, or it stays unfiled.';
       return ok('note', out, out, summary, `/notes/new?note=${n.id}`);
     }
@@ -129,7 +129,7 @@ export const addNote = defineTool({
       out,
       out,
       summary,
-      who ? `/people/${who.id}${facts.length && !thanks ? '?tab=facts' : ''}` : '/today',
+      who ? `/people/${who.id}${facts.length && !thanks ? '?tab=facts' : ''}` : '/inbox',
     );
   },
   toModel,
@@ -162,7 +162,7 @@ export const rematchNoteTool = defineTool({
       out,
       out,
       person ? `Note filed with ${person.displayName} and processed for them.` : 'Saved without a person.',
-      person ? `/people/${person.id}?tab=facts` : '/today',
+      person ? `/people/${person.id}?tab=facts` : '/inbox',
     );
   },
   toModel,

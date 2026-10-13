@@ -495,7 +495,7 @@ function LinkedinWidget({ user, initial }: { user: User; initial?: SetupStatus }
             <Link to="/map" className={linkClass}>
               Show the map
             </Link>
-            <Link to="/people" className={linkClass}>
+            <Link to="/people?view=list" className={linkClass}>
               See my people
             </Link>
             {done.recommended > 0 ? (

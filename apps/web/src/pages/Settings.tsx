@@ -1109,7 +1109,9 @@ function Limits() {
               })
             }
           />
-          <p className="text-[12px] text-ink-3 mt-1">Your goal for new people each week, shown on Today.</p>
+          <p className="text-[12px] text-ink-3 mt-1">
+            Your goal for new people each week. Ask the chat how your week is going to see your count.
+          </p>
         </div>
         <details className="@[40rem]:col-span-2 text-[13px]" data-testid="limits-advanced">
           <summary className="cursor-pointer text-ink-2 w-fit">

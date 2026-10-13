@@ -3,6 +3,7 @@ import { ChatEngineProvider } from './chat/engineContext';
 import type { ChatEngine } from './chat/types';
 import { ChatWithPanel } from './chat/ui/ChatWithPanel';
 import { AppShell } from './components/AppShell';
+import { LegacyRedirect } from './legacyRoutes';
 import { CompanyPage } from './pages/Company';
 import { Discover } from './pages/Discover';
 import { InboxPage } from './pages/Inbox';
@@ -12,9 +13,7 @@ import { NotesNew } from './pages/NotesNew';
 import { Onboarding, onboardingPath } from './pages/Onboarding';
 import { People } from './pages/People';
 import { PersonPage } from './pages/Person';
-import { Pipeline } from './pages/Pipeline';
 import { SettingsPage } from './pages/Settings';
-import { Today } from './pages/Today';
 import { SessionProvider, useSession } from './state/session';
 import { Spinner, ToastProvider } from './ui';
 
@@ -74,8 +73,9 @@ export function App({ chatEngine }: { chatEngine?: ChatEngine }) {
               />
               <Route element={<Home />}>
                 <Route index element={<ChatWithPanel />} />
-                <Route path="/today" element={<Today />} />
-                <Route path="/pipeline" element={<Pipeline />} />
+                {/* Today's cards are in Drafts and its brief in the chat; the Pipeline is the People board */}
+                <Route path="/today" element={<LegacyRedirect />} />
+                <Route path="/pipeline" element={<LegacyRedirect />} />
                 <Route path="/people" element={<People />} />
                 <Route path="/people/:id" element={<PersonPage />} />
                 <Route path="/companies/:id" element={<CompanyPage />} />

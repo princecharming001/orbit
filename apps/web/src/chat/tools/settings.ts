@@ -411,7 +411,7 @@ export const updateSettings = defineTool({
         if (!input.hintId) throw new Error('Say which hint to close.');
         await dismissHint(userId, input.hintId);
         const out = { hint: input.hintId, dismissed: true };
-        return ok('settings', out, out, 'That tip will not show again.', '/today');
+        return ok('settings', out, out, 'That tip will not show again.', '/');
       }
     }
   },
@@ -666,7 +666,7 @@ export const advanceOnboarding = defineTool({
       const user = await db.users.get(ctx.user.id);
       if (user?.onboardingCompletedAt) {
         const out = { completed: true, step: user.onboardingStep };
-        return ok('settings', out, out, 'Setup was already finished.', '/today');
+        return ok('settings', out, out, 'Setup was already finished.', '/');
       }
       if (!user?.fullName.trim() || !user.school.trim())
         throw new Error(
@@ -674,7 +674,7 @@ export const advanceOnboarding = defineTool({
         );
       const fresh = await finishOnboarding(ctx.user.id, ctx.now);
       const out = { completed: true, step: fresh?.onboardingStep };
-      return ok('settings', out, out, 'Setup finished. Your first brief is ready on Today.', '/today');
+      return ok('settings', out, out, 'Setup finished. Your first brief is ready in the chat.', '/');
     }
     if (!input.step) throw new Error('Say which step, or finish.');
     const step = await setOnboardingStep(ctx.user.id, input.step);

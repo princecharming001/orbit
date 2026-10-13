@@ -1,6 +1,5 @@
 import type { IntroWeb, OrbitCluster, OrbitGroup, OrbitLayout, OrbitNode, Person } from '@orbit/core';
 import { ORBIT_PERIOD_MS } from '@orbit/core';
-import { STAGE_COLOR } from '../pages/Pipeline';
 import {
   type Clock,
   clamp01,
@@ -37,6 +36,7 @@ import {
   spreadApart,
   wedgeMid,
 } from './orbitGeometry';
+import { STAGE_COLOR } from './people/shared';
 
 /*
  * The orbit map's scene. Every animated quantity on the canvas lives here as a tween or a spring, and one render

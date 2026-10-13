@@ -21,6 +21,7 @@ import type { ToolBlock } from '../threadStore';
 import { Choices } from './Choices';
 import { SetupCard } from './Setup';
 import {
+  readBriefExtras,
   readChoices,
   readCompany,
   readConfirm,
@@ -55,10 +56,8 @@ export function hrefLabel(href: string): string {
   const path = href.split('?')[0]!.split('#')[0]!;
   if (path.startsWith('/people/')) return 'Open profile';
   if (path.startsWith('/companies/')) return 'Open company';
-  if (path.startsWith('/inbox')) return 'Open in Drafts';
-  if (path.startsWith('/pipeline')) return 'Open pipeline';
+  if (path.startsWith('/inbox')) return 'Open Drafts';
   if (path.startsWith('/map')) return 'Open on map';
-  if (path.startsWith('/today')) return 'Open Today';
   if (path.startsWith('/settings')) return 'Open Settings';
   if (path.startsWith('/people')) return 'Open People';
   if (path.startsWith('/discover')) return 'Open Discover';
@@ -300,7 +299,10 @@ function Envelope({ env, block, actions }: { env: ResultEnvelope; block: ToolBlo
       if (!items.length && !Object.keys(counts).length) return <Summary env={env} />;
       return (
         <GlassCard kind="pipeline">
-          <CardHead title={items.length === 1 ? env.summary : 'Pipeline'} href={env.href ?? '/pipeline'} />
+          <CardHead
+            title={items.length === 1 ? env.summary : 'Pipeline'}
+            href={env.href ?? '/people?view=board'}
+          />
           {Object.keys(counts).length > 0 && (
             <div className="flex flex-wrap gap-1.5 mb-2">
               {Object.entries(counts).map(([stage, n]) => (
@@ -328,9 +330,7 @@ function Envelope({ env, block, actions }: { env: ResultEnvelope; block: ToolBlo
             ))}
           </div>
           {items.length > 12 && (
-            <p className="mt-1 text-[12.5px] text-ink-3">
-              And {items.length - 12} more on the Pipeline page.
-            </p>
+            <p className="mt-1 text-[12.5px] text-ink-3">And {items.length - 12} more on the People board.</p>
           )}
         </GlassCard>
       );
@@ -648,7 +648,7 @@ function useLiveDraft(draftId: string | undefined, given?: OutboundMessage): Out
 
 const OPEN_DRAFT = new Set(['draft', 'failed', 'cancelled']);
 
-/** Today's cards: the existing SuggestionCard for each open one, read live from the database. */
+/** The day's cards: the existing SuggestionCard for each open one, read live from the database. */
 function SuggestionsCard({ env }: { env: ResultEnvelope }) {
   const { suggestions, ids, summary } = readSuggestions(env.data);
   const live = useLiveQuery(
@@ -670,10 +670,47 @@ function SuggestionsCard({ env }: { env: ResultEnvelope }) {
       {shown.map((x) => (
         <SuggestionCard key={x.id} s={x} compact />
       ))}
+      {env.kind === 'brief' && <BriefExtras env={env} />}
       <div className="flex items-center justify-between gap-2">
-        {rest > 0 ? <span className="text-[12.5px] text-ink-3">{rest} more on Today.</span> : <span />}
-        <OpenInApp href={env.href} />
+        {rest > 0 ? (
+          <Link
+            to="/inbox"
+            className="text-[12.5px] text-accent font-medium hover:underline"
+            data-testid="brief-more"
+          >
+            {rest} more in Drafts
+          </Link>
+        ) : (
+          <span />
+        )}
+        {/* the "more" link already opens Drafts */}
+        {!(rest > 0 && env.href === '/inbox') && <OpenInApp href={env.href} />}
       </div>
+    </div>
+  );
+}
+
+/** Under the brief's cards: the next chat coming up, and how many chats wait on a reply. */
+function BriefExtras({ env }: { env: ResultEnvelope }) {
+  const { nextUp, waiting } = readBriefExtras(env.data);
+  if (!nextUp && !waiting) return null;
+  return (
+    <div className="text-[13px] text-ink-2 space-y-0.5" data-testid="brief-extras">
+      {nextUp && (
+        <p data-testid="brief-coming-up">
+          <span className="font-medium">Coming up:</span> {nextUp.person ?? nextUp.title ?? 'A chat'},{' '}
+          {new Date(nextUp.startAt).toLocaleString('en-US', {
+            weekday: 'short',
+            hour: 'numeric',
+            minute: '2-digit',
+          })}
+        </p>
+      )}
+      {waiting > 0 && (
+        <p data-testid="brief-waiting">
+          {waiting === 1 ? '1 chat is' : `${waiting} chats are`} waiting on a reply.
+        </p>
+      )}
     </div>
   );
 }

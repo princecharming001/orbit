@@ -217,7 +217,7 @@ export function cardRef(s: Suggestion, person?: Person): CardRef {
     status: s.status,
     draftId: s.outboundMessageId,
     chatId: s.chatId,
-    href: `/today?card=${s.id}`,
+    href: `/inbox?card=${s.id}`,
   };
 }
 

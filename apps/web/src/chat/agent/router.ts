@@ -21,7 +21,7 @@ export interface RouterContext {
   people: MatchablePerson[];
   /** known company names (target companies and organizations), for "routes to <company>" */
   companies: string[];
-  /** open Today cards, so "snooze Priya's card" can name one */
+  /** open cards (the ones in Drafts), so "snooze Priya's card" can name one */
   cards?: { id: string; personId?: string; kind: string }[];
   /** the student's drafts that are not sent yet (draft, failed, handed_off), newest first */
   drafts?: { id: string; personId: string; status: string; kind: string }[];
@@ -285,7 +285,7 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
   const nobody = (name: string): RouterIntent => ({
     kind: 'text',
     text: `I could not find anyone called "${stripName(name)}" in your people. Check the spelling, or add them from the People page.`,
-    href: '/people',
+    href: '/people?view=list',
   });
   const ambiguous = (name: string, candidates: MatchablePerson[]): RouterIntent =>
     has('search_people')
@@ -735,7 +735,7 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
         return {
           kind: 'text',
           text: 'Say whose move to undo, like: undo the move for Dan.',
-          href: '/pipeline',
+          href: '/people?view=board',
         };
       const r = person(m[1]);
       if (r.person) return viaTool('undo_stage_move', { personId: r.person.id }, undefined, 'undo a move');
@@ -744,7 +744,7 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
     }
   }
 
-  // a Today card: snooze or dismiss it
+  // a card in Drafts: snooze or dismiss it
   {
     const m = text.match(
       /^(snooze|dismiss|skip|remove|hide)(?: the)?(?: card| suggestion)?(?: (?:for|about|on))?\s+(.+?)(?:'s)?(?: card| suggestion)?(?: for (a day|a week|\d+ days?|tomorrow))?$/i,
@@ -756,8 +756,8 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
         if (!card)
           return {
             kind: 'text',
-            text: `There is no card for ${r.person.firstName} on Today right now.`,
-            href: '/today',
+            text: `There is no card for ${r.person.firstName} in Drafts right now.`,
+            href: '/inbox',
           };
         if (/^snooze$/i.test(m[1]!)) {
           const span = m[3]?.toLowerCase();

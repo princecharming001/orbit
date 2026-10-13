@@ -419,7 +419,7 @@ function envelopes(ctx: Ctx): Record<string, () => ResultEnvelope> {
         ],
       },
       summary: 'Two people have gone quiet.',
-      href: '/pipeline?filter=quiet',
+      href: '/people?view=board&quiet=1',
     }),
     draft: () => ({
       kind: 'draft',
@@ -457,7 +457,7 @@ function envelopes(ctx: Ctx): Record<string, () => ResultEnvelope> {
         counts: { completed: 1, outreach_sent: 1, scheduled: 1 },
       },
       summary: 'Three conversations are moving: one to thank, one to bump, one to prep for.',
-      href: '/pipeline',
+      href: '/people?view=board',
     }),
     routes: () => ({
       kind: 'routes',
@@ -469,13 +469,13 @@ function envelopes(ctx: Ctx): Record<string, () => ResultEnvelope> {
       kind: 'brief',
       data: { suggestions: [ctx.suggestion], summary: 'One thing worth doing today.' },
       summary: 'One thing worth doing today.',
-      href: '/today',
+      href: '/inbox',
     }),
     suggestion: () => ({
       kind: 'suggestion',
       data: { suggestion: ctx.suggestion },
       summary: ctx.suggestion.reasonText,
-      href: `/today?card=${ctx.suggestion.id}`,
+      href: `/inbox?card=${ctx.suggestion.id}`,
     }),
     note: () => ({
       kind: 'note',

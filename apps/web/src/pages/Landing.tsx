@@ -33,14 +33,14 @@ export function Landing() {
   const isDemo = user?.id === DEMO_USER_ID;
   const demo = async () => {
     if (resolving) return;
-    if (isDemo && onboarded) return nav('/today');
+    if (isDemo && onboarded) return nav('/');
     // Never wipe what someone has already set up without saying so.
     const prompt = demoResetPrompt(user);
     if (prompt && !window.confirm(prompt)) return;
     setBusy('Preparing demo…');
     const u = await loadDemo({ reset: true, onProgress: (m) => setBusy(`${m}…`) });
     await setUserId(u.id);
-    nav('/today');
+    nav('/');
   };
   const start = async () => {
     if (resolving) return;
@@ -53,7 +53,7 @@ export function Landing() {
       return;
     }
     // An existing user continues where they are; only a first visit creates a new local profile.
-    if (onboarded) return nav('/today');
+    if (onboarded) return nav('/');
     if (midSetup && user) return nav(onboardingPath(user.onboardingStep));
     setBusy('Creating your space…');
     const u = await createLocalUser();
@@ -91,7 +91,7 @@ export function Landing() {
             <>
               {/* on a phone the hero below has this button too; the header keeps only the next step */}
               <span className="hidden sm:inline">
-                <Button variant="ghost" onClick={() => nav('/today')}>
+                <Button variant="ghost" onClick={() => nav('/')}>
                   Back to the demo
                 </Button>
               </span>
@@ -100,7 +100,7 @@ export function Landing() {
               </Button>
             </>
           ) : onboarded ? (
-            <Button variant="primary" onClick={() => nav('/today')}>
+            <Button variant="primary" onClick={() => nav('/')}>
               Open Orbit
             </Button>
           ) : (
@@ -142,7 +142,7 @@ export function Landing() {
               </Button>
             )}
             {isDemo && onboarded && !resolving && (
-              <Button size="lg" variant="secondary" onClick={() => nav('/today')}>
+              <Button size="lg" variant="secondary" onClick={() => nav('/')}>
                 Back to the demo
               </Button>
             )}
@@ -205,7 +205,7 @@ export function Landing() {
                 title: 'Every chat in one place',
                 body: google
                   ? 'See where each conversation stands, from first message to scheduled to thanked, and who has gone quiet.'
-                  : 'See where each conversation stands, from first message to scheduled to thanked, and who has gone quiet. When someone replies, move their card and Today shows your next step, starting with a draft reply.',
+                  : 'See where each conversation stands, from first message to scheduled to thanked, and who has gone quiet. When someone replies, move their card and Orbit lines up your next step, starting with a draft reply.',
               },
               {
                 icon: MapIcon,
@@ -262,8 +262,8 @@ export function Landing() {
               LinkedIn connections. Or just try the demo.
             </li>
             <li>
-              <span className="font-medium text-ink">3.</span> Open Today: it lists the few things to do
-              first, with drafts ready to edit.
+              <span className="font-medium text-ink">3.</span> Ask the chat what is on today: it lists the few
+              things to do first, with drafts ready to edit.
             </li>
           </ol>
           <div className="mt-5 flex gap-2 min-h-9">

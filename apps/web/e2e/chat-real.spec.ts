@@ -50,6 +50,11 @@ test.describe('Chat home on the real engine (no key)', () => {
     const brief = lastTurn(page).getByTestId('result-brief');
     await expect(brief).toBeVisible({ timeout: 20_000 });
     await expect(brief.getByTestId(/^suggestion-/).first()).toBeVisible();
+    // the brief counts the day's cards and says what is coming up; the rest are in Drafts
+    await expect(brief).toContainText(/things for today/);
+    await expect(brief.getByTestId('brief-coming-up')).toContainText(/^Coming up: \S+/);
+    await expect(brief.getByTestId('brief-more')).toHaveText(/^\d+ more in Drafts$/);
+    await expect(brief.getByTestId('brief-more')).toHaveAttribute('href', /\/inbox$/);
 
     // typed: the pipeline card lists real people with their stages
     await ask(page, 'show my pipeline');
@@ -57,7 +62,7 @@ test.describe('Chat home on the real engine (no key)', () => {
     await expect(pipeline).toBeVisible({ timeout: 20_000 });
     await expect(pipeline).toContainText('Daniel Okafor');
     await expect(pipeline).toContainText(/First message sent/);
-    await expect(pipeline.getByTestId('open-in-app')).toHaveAttribute('href', /\/pipeline/);
+    await expect(pipeline.getByTestId('open-in-app')).toHaveAttribute('href', /\/people\?view=board/);
 
     // a request that needs judgement says so plainly, with the way to fix it
     await ask(page, "why hasn't Daniel replied?");
@@ -163,8 +168,6 @@ test.describe('Chat home on the real engine (no key)', () => {
     await home(page);
     const rail = page.getByTestId('rail');
     const pages: [string, RegExp][] = [
-      ['Today', /\/today$/],
-      ['Pipeline', /\/pipeline/],
       ['People', /\/people$/],
       ['Map', /\/map/],
       ['Discover', /\/discover$/],

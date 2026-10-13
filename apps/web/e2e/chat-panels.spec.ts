@@ -27,10 +27,11 @@ test.describe('Side panel (laptop)', () => {
   test('a card opens its page in the panel; refresh, Escape and Back behave', async ({ page }) => {
     await home(page);
     const brief = await briefInChat(page);
-    await brief.getByTestId('open-in-app').first().click();
+    // the brief's "N more in Drafts" opens Drafts, where the rest of the day's cards are
+    await brief.getByTestId('brief-more').click();
     await expect(panel(page)).toBeVisible();
-    await expect(title(page)).toHaveText('Today');
-    expect(page.url()).toContain('panel=%2Ftoday');
+    await expect(title(page)).toHaveText('Drafts');
+    expect(page.url()).toContain('panel=%2Finbox');
     // the conversation stays beside it
     await expect(page.getByTestId('chat-thread')).toBeVisible();
     await expect(page.getByTestId('composer-input')).toBeVisible();
@@ -39,7 +40,7 @@ test.describe('Side panel (laptop)', () => {
     // "/orbit/?panel=" with the query kept; the preview server cannot, so the test goes to that form itself)
     await page.goto(page.url().replace(/\/orbit\?/, '/orbit/?'));
     await expect(panel(page)).toBeVisible();
-    await expect(title(page)).toHaveText('Today');
+    await expect(title(page)).toHaveText('Drafts');
 
     // Escape closes it and the address loses the panel
     await page.locator('body').click({ position: { x: 5, y: 5 } });
@@ -52,7 +53,7 @@ test.describe('Side panel (laptop)', () => {
     await expect(page.getByTestId('greeting')).toBeVisible();
     await page.getByTestId('chip-who-today').click();
     await page.getByTestId('result-brief').waitFor({ timeout: 30_000 });
-    await page.getByTestId('open-in-app').first().click();
+    await page.getByTestId('brief-more').first().click();
     await expect(panel(page)).toBeVisible();
     await page.goBack();
     await expect(panel(page)).toHaveCount(0);
@@ -65,16 +66,16 @@ test.describe('Side panel (laptop)', () => {
     await brief.locator('a[href*="/people/"]').first().click();
     await expect(panel(page)).toBeVisible();
     // the title resolves from the database, so wait for a real name before reading it
-    await expect(title(page)).not.toHaveText(/^(Today|Profile)$/);
+    await expect(title(page)).not.toHaveText(/^(Drafts|Profile)$/);
     const first = await title(page).innerText();
-    await brief.getByTestId('open-in-app').first().click();
-    await expect(title(page)).toHaveText('Today');
+    await brief.getByTestId('brief-more').click();
+    await expect(title(page)).toHaveText('Drafts');
     const tabs = page.getByTestId('panel-tabs');
     await expect(tabs.getByRole('tab')).toHaveCount(2);
     await tabs.getByRole('tab', { name: first }).click();
     await expect(title(page)).toHaveText(first);
     await tabs.getByRole('button', { name: `Close ${first}` }).click();
-    await expect(title(page)).toHaveText('Today');
+    await expect(title(page)).toHaveText('Drafts');
     await expect(page.getByTestId('panel-tabs')).toHaveCount(0);
   });
 
@@ -93,7 +94,7 @@ test.describe('Side panel (laptop)', () => {
 
   test('expand, shrink and resize with the keyboard', async ({ page }) => {
     await home(page);
-    await page.goto(`?panel=${encodeURIComponent('/today')}`);
+    await page.goto(`?panel=${encodeURIComponent('/inbox')}`);
     await expect(panel(page)).toBeVisible();
     const sep = page.getByTestId('panel-resize');
     await sep.focus();
@@ -109,19 +110,22 @@ test.describe('Side panel (laptop)', () => {
 
   test('"open as a page" leaves the chat for the real page', async ({ page }) => {
     await home(page);
-    await page.goto(`?panel=${encodeURIComponent('/pipeline')}`);
-    await expect(title(page)).toHaveText('Pipeline');
+    await page.goto(`?panel=${encodeURIComponent('/people?view=list')}`);
+    await expect(title(page)).toHaveText('People');
     await page.getByTestId('panel-open-page').click();
-    await expect(page).toHaveURL(/\/pipeline$/);
+    await expect(page).toHaveURL(/\/people\?view=list$/);
+    await expect(page.getByTestId('people-view-list')).toHaveAttribute('aria-selected', 'true');
     await expect(panel(page)).toHaveCount(0);
   });
 
   test('every page the student needs opens in the panel', async ({ page }) => {
     await home(page);
     const pages: [string, string][] = [
-      ['/today', 'Today'],
-      ['/pipeline', 'Pipeline'],
       ['/people', 'People'],
+      ['/people?view=list', 'People'],
+      // an old link opens where its content lives now
+      ['/pipeline', 'People'],
+      ['/today?card=nope', 'Drafts'],
       ['/map', 'Map'],
       ['/discover', 'Discover'],
       ['/inbox', 'Drafts'],
@@ -141,8 +145,8 @@ test.describe('Side panel (laptop)', () => {
     page,
   }) => {
     await home(page);
-    await page.goto(`?panel=${encodeURIComponent('/today')}`);
-    await expect(title(page)).toHaveText('Today');
+    await page.goto(`?panel=${encodeURIComponent('/inbox')}`);
+    await expect(title(page)).toHaveText('Drafts');
     const cards = panel(page).locator('[data-testid^="suggestion-"]');
     await expect(cards.first()).toBeVisible();
     const n = await cards.count();
@@ -168,7 +172,7 @@ test.describe('Side panel (laptop)', () => {
 
     // a person's page is reachable and its "Add note" starts a note in the same panel
     await page.goto(`?panel=${encodeURIComponent('/people/p1')}`);
-    await expect(title(page)).not.toHaveText(/^(Profile|Today)$/);
+    await expect(title(page)).not.toHaveText(/^(Profile|Drafts)$/);
     const addNote = panel(page)
       .getByRole('button', { name: /^add note$/i })
       .first();
@@ -187,17 +191,17 @@ test.describe('Side panel (phone)', () => {
   }) => {
     await home(page);
     const brief = await briefInChat(page);
-    await brief.getByTestId('open-in-app').first().click();
+    await brief.getByTestId('brief-more').click();
     const sheet = page.getByTestId('panel-sheet');
     await expect(sheet).toBeVisible();
-    await expect(title(page)).toHaveText('Today');
+    await expect(title(page)).toHaveText('Drafts');
     // no horizontal scroll inside the sheet
     const overflow = await page.getByTestId('panel-body').evaluate((el) => el.scrollWidth - el.clientWidth);
     expect(overflow).toBeLessThanOrEqual(1);
     await page.mouse.click(195, 20);
     await expect(sheet).toHaveCount(0);
     await expect(page.getByTestId('thread-scroll')).toBeVisible();
-    await brief.getByTestId('open-in-app').first().click();
+    await brief.getByTestId('brief-more').click();
     await expect(sheet).toBeVisible();
     await page.getByTestId('panel-close').click();
     await expect(sheet).toHaveCount(0);

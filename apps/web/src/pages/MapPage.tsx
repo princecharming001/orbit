@@ -17,6 +17,7 @@ import { type CardPlace, OrbitMap, useCoarsePointer } from '../components/OrbitM
 import type { FocusSpec, WebSpec } from '../components/orbitScene';
 import { LINEAGE } from '../components/orbitScene';
 import { WarmIntrosPanel } from '../components/WarmIntrosPanel';
+import { StrengthDots } from '../components/people/shared';
 import { db } from '../db/schema';
 import { draftMessage } from '../engine/brief';
 import { requestIntro } from '../engine/drafts';
@@ -34,7 +35,6 @@ import {
 import { maintenanceRunning, watchMaintenance } from '../engine/sync';
 import { useSession } from '../state/session';
 import { Avatar, Button, Card, Chip, cx, Input, useToast } from '../ui';
-import { StrengthDots } from './Pipeline';
 
 type Filter = 'all' | 'targets' | 'alumni' | 'chats' | 'recent' | 'intros';
 
@@ -508,7 +508,7 @@ export function MapPage() {
     if (org) void openCompany(org.id, org.name);
     else if (group.label !== 'Other companies' && g !== 'independent')
       void openCompany(group.label, group.label);
-    else nav('/people');
+    else nav('/people?view=list');
   };
   const exitReach = () => {
     viewReq.current++;

@@ -189,7 +189,7 @@ describe('tools', () => {
       kind: 'brief',
       summary: 'One card today: thank Priya Patel.',
       data: { cards: 1 },
-      href: '/today',
+      href: '/inbox',
     });
     expect(last.content[0].is_error).toBeUndefined();
     // thinking blocks go back unchanged

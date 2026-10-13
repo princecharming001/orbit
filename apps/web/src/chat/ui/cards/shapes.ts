@@ -342,6 +342,20 @@ export function readSuggestions(d: unknown): { suggestions: Suggestion[]; ids: s
   return { suggestions: domain, ids: [...new Set(refs)], summary: str(o.summary) };
 }
 
+/** brief extras: `{ nextUp?: { startAt, title?, person? }, quiet: CoffeeChat[] }`, for the "Coming up" line and the count of chats waiting on a reply */
+export function readBriefExtras(d: unknown): {
+  nextUp?: { startAt: string; title?: string; person?: string };
+  waiting: number;
+} {
+  const o = obj(unpack(d));
+  const n = obj(o.nextUp);
+  const startAt = str(n.startAt);
+  return {
+    nextUp: startAt ? { startAt, title: str(n.title), person: str(n.person) } : undefined,
+    waiting: arr(o.quiet).length,
+  };
+}
+
 /** note: `{ note, person?, facts? }`, an add_note result `{ noteId, person, facts, summary }`, or `{ notes }` */
 export function readNote(d: unknown): {
   note?: MeetingNote;

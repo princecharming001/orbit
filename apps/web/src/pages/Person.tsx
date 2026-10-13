@@ -29,6 +29,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { runApproval } from '../components/approve';
 import { DraftEditor, handoffWhere, OutboxStatus } from '../components/DraftEditor';
 import { MutualConnections } from '../components/MutualConnections';
+import { STAGE_COLOR, StrengthDots } from '../components/people/shared';
 import { ConfirmEarlyDone, chatTimeLabel, ScheduleChatDialog } from '../components/ScheduleChat';
 import { SuggestionCard } from '../components/SuggestionCard';
 import { db } from '../db/schema';
@@ -55,7 +56,6 @@ import { moveChatGuarded } from '../engine/pipeline';
 import { buildPrep, personSummary, toYou } from '../engine/prep';
 import { useSession } from '../state/session';
 import { Avatar, Button, Card, Chip, cx, Modal, NotFound, relDate, Select, Tabs, useToast } from '../ui';
-import { STAGE_COLOR, StrengthDots } from './Pipeline';
 
 /**
  * "Last touch 3 days ago", or "Connected on LinkedIn Mar 27" when accepting a connection is all there has been: a
@@ -313,7 +313,7 @@ export function PersonPage() {
           tone: 'good',
           ttl: 6000,
         });
-        nav(`/today?person=${person.id}`);
+        nav(`/inbox?person=${person.id}`);
         return;
       }
       if (r.kind !== 'draft') return;
@@ -591,7 +591,7 @@ export function PersonPage() {
                   action: { label: 'Undo', onClick: () => unhidePerson(person.id) },
                   ttl: 7000,
                 });
-                nav('/people');
+                nav('/people?view=list');
               }}
             >
               {person.hiddenAt ? 'Show again' : 'Hide from lists'}

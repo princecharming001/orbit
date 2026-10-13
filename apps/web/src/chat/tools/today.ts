@@ -1,4 +1,4 @@
-/** Writes on Today's cards: the brief, drafts for cards, snooze, dismiss, the yes/no cards, warm-up steps. */
+/** Writes on the day's cards: the brief, drafts for cards, snooze, dismiss, the yes/no cards, warm-up steps. */
 import type { CoffeeChat, OutboundStatus, Suggestion } from '@orbit/core';
 import { STAGE_LABELS, STAGE_ORDER, warmUpProgress } from '@orbit/core';
 import { db } from '../../db/schema';
@@ -70,7 +70,7 @@ export const refreshBrief = defineTool({
       view,
       view,
       `Updated from your latest email, calendar and notes. ${brief.summaryText}`,
-      '/today',
+      '/inbox',
     );
   },
   toModel,
@@ -168,12 +168,12 @@ export const manageSuggestion = defineTool({
         if (s.status !== 'snoozed' && s.status !== 'dismissed')
           throw new Error('Only a snoozed or dismissed card can be restored.');
         await restoreSuggestion(s, input.draftWas as OutboundStatus | undefined);
-        summary = `The ${label} card is back on Today.`;
+        summary = `The ${label} card is back in Drafts.`;
         break;
       }
       case 'unsnooze': {
         if (!(await unsnoozeSuggestion(s.id))) throw new Error('That card is not snoozed.');
-        summary = `The ${label} card is back on Today now.`;
+        summary = `The ${label} card is back in Drafts now.`;
         break;
       }
       case 'done': {
@@ -188,7 +188,7 @@ export const manageSuggestion = defineTool({
     }
     const fresh = (await db.suggestions.get(s.id))!;
     const out = await cardOut(fresh);
-    return ok('suggestion', out, out, summary, s.personId ? `/people/${s.personId}` : '/today');
+    return ok('suggestion', out, out, summary, s.personId ? `/people/${s.personId}` : '/inbox');
   },
   toModel,
 });
@@ -251,7 +251,7 @@ export const dismissSuggestionTool = defineTool({
       input.reason === 'already_did'
         ? 'Marked as done. Orbit will not offer it back.'
         : 'Card removed. Say restore it if that was wrong.';
-    return ok('suggestion', out, out, summary, '/today');
+    return ok('suggestion', out, out, summary, '/inbox');
   },
   toModel,
 });
@@ -292,7 +292,7 @@ export const answerStageQuestion = defineTool({
       chat: chat ? { id: chat.id, stage: chat.stage, stageLabel: STAGE_LABELS[chat.stage] } : undefined,
       person: person ? personRef(person) : undefined,
     };
-    return ok('suggestion', out, out, summary, person ? `/people/${person.id}` : '/today');
+    return ok('suggestion', out, out, summary, person ? `/people/${person.id}` : '/inbox');
   },
   toModel,
 });
@@ -362,7 +362,7 @@ export const rejectMerge = defineTool({
     });
     if (r === 'missing') throw new Error('Orbit has no such possible duplicate.');
     const out = { kept: true };
-    return ok('suggestion', out, out, 'Kept as two people. Orbit will not ask again.', '/today');
+    return ok('suggestion', out, out, 'Kept as two people. Orbit will not ask again.', '/inbox');
   },
   toModel,
 });
@@ -397,7 +397,7 @@ export const answerIntroQuestion = defineTool({
     const summary = input.yes
       ? `Added to your pipeline, noting that ${introducer ?? 'they'} introduced you.`
       : 'Got it. Orbit will not ask about this thread again.';
-    return ok('suggestion', out, out, summary, '/today');
+    return ok('suggestion', out, out, summary, '/inbox');
   },
   toModel,
 });
@@ -435,10 +435,10 @@ export const markWarmupStep = defineTool({
     const next = after.warmUp!.actions.find((a) => !a.doneAt && !a.skippedAt);
     const when = next
       ? new Date(next.dueAt) > ctx.now
-        ? ` The next step is on Today on ${fmtDay(next.dueAt, ctx)}.`
-        : ' The next step is on Today.'
+        ? ` The next step shows in Drafts on ${fmtDay(next.dueAt, ctx)}.`
+        : ' The next step is in Drafts.'
       : prog.ready
-        ? ' Your first message is ready on Today.'
+        ? ' Your first message is ready in Drafts.'
         : ` Orbit suggests your first message from ${fmtDay(prog.readyFrom, ctx)}.`;
     const out = {
       chatId: after.id,
@@ -473,7 +473,7 @@ export const completeActionItem = defineTool({
     await markActionItemDone(item.id, input.suggestionId, ctx.now);
     const person = item.personId ? await requirePerson(ctx, item.personId).catch(() => undefined) : undefined;
     const out = { actionItemId: item.id, person: person ? personRef(person) : undefined };
-    return ok('text', out, out, 'Marked done.', person ? `/people/${person.id}` : '/today');
+    return ok('text', out, out, 'Marked done.', person ? `/people/${person.id}` : '/inbox');
   },
   toModel,
 });

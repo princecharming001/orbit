@@ -88,7 +88,7 @@ export function peopleWaiting(cards: { personId?: string }[]): number {
   return new Set(cards.filter((c) => c.personId).map((c) => c.personId)).size;
 }
 
-/** The same count from raw rows, counted the way the Today page counts its cards (live ones, the brief's picks first). */
+/** The same count from raw rows, counted the way Drafts and the brief count the cards (live ones, the brief's picks first). */
 export function peopleWaitingNow(
   pending: Suggestion[],
   latestBrief: Pick<Brief, 'suggestionIds'> | undefined,

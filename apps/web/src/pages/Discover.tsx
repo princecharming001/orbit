@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { AddPersonButton } from '../components/AddPerson';
 import { LinkedInImportButton } from '../components/LinkedInImport';
+import { StrengthDots } from '../components/people/shared';
 import { RoleLine } from '../components/SuggestionCard';
 import { db } from '../db/schema';
 import { recommendationsRefresh, startWarmUpOrOutreach } from '../engine/brief';
@@ -19,7 +20,6 @@ import {
 } from '../engine/recommend';
 import { useSession } from '../state/session';
 import { Avatar, Button, Chip, cx, EmptyState, Input, PageHeader, useToast } from '../ui';
-import { StrengthDots } from './Pipeline';
 
 export function Discover() {
   const { user, userId, goals } = useSession();
@@ -120,12 +120,12 @@ export function Discover() {
     );
     if (r.draft) nav(`/people/${personId}?open=${r.draft.id}`);
     else {
-      // stay on the list: the student is still choosing who to meet, and the first step waits on Today
+      // stay on the list: the student is still choosing who to meet, and the first step waits in Drafts
       toast.push({
-        text: `Warm-up started for ${p?.firstName}. The first step is on Today.`,
+        text: `Warm-up started for ${p?.firstName}. The first step is in Drafts.`,
         tone: 'good',
         ttl: 8000,
-        action: { label: 'Open on Today', onClick: () => nav(`/today?person=${personId}`) },
+        action: { label: 'Open in Drafts', onClick: () => nav(`/inbox?person=${personId}`) },
       });
     }
   };
@@ -205,8 +205,8 @@ export function Discover() {
                 </Link>
               )}
               {!missing.people && !missing.goals && inPipeline > 0 && (
-                <Link to="/pipeline">
-                  <Button variant="secondary">Open Pipeline</Button>
+                <Link to="/people?view=board">
+                  <Button variant="secondary">Open the board</Button>
                 </Link>
               )}
             </div>

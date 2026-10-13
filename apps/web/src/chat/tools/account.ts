@@ -189,7 +189,7 @@ export const syncGoogleTool = defineTool({
         out,
         out,
         `Google synced: ${plural(r.messages, 'message')} and ${plural(r.events, 'event')}${r.failed ? `, ${r.failed} could not be downloaded and will be retried` : ''}.`,
-        '/today',
+        '/inbox',
       );
     } catch (e) {
       await markGoogleNeedsReauth(ctx.user.id, String((e as Error).message ?? e));
@@ -302,13 +302,13 @@ export const loadDemoTool = defineTool({
   },
   async execute(_input, ctx) {
     const user = await loadDemo({ reset: true, now: ctx.now });
-    const out = { userId: user.id, name: user.fullName, href: '/today' };
+    const out = { userId: user.id, name: user.fullName, href: '/' };
     return ok(
       'text',
       out,
       out,
-      `The demo is loaded: ${user.fullName}'s sample network. Open Today to see the first brief.`,
-      '/today',
+      `The demo is loaded: ${user.fullName}'s sample network. Ask what is on today to see the first brief.`,
+      '/',
     );
   },
   toModel,

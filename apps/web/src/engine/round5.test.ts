@@ -1,7 +1,7 @@
 import type { User } from '@orbit/core';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { wentQuiet } from '../components/people/shared';
 import { db } from '../db/schema';
-import { wentQuiet } from '../pages/Pipeline';
 import { buildDraftContext, findReferrerFor, regenerateDraft, startWarmUpOrOutreach } from './brief';
 import { loadDemo } from './demo';
 import { addPersonByHand } from './people';

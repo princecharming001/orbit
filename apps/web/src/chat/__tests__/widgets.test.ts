@@ -124,9 +124,9 @@ describe('show_setup', () => {
 
 describe('auto-open flags', () => {
   it('open_page opens its link in the panel by itself', async () => {
-    const env = await execute('open_page', { page: 'pipeline' }, makeCtx(user));
+    const env = await execute('open_page', { page: 'people', view: 'list' }, makeCtx(user));
     expect(env.autoOpen).toBe(true);
-    expect(env.href).toBe('/pipeline');
+    expect(env.href).toBe('/people?view=list');
   });
 
   it('create_draft and redraft_with_inputs open the draft; a reading tool does not', async () => {
