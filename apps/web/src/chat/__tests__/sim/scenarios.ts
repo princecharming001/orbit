@@ -188,7 +188,7 @@ export const SCENARIOS: Scenario[] = [
     group: 'settings',
     persona: 'a new student who wants Orbit to see their email',
     account: 'empty',
-    goal: 'connect your Gmail so Orbit can use your emails and calendar',
+    goal: 'ask to connect your Gmail; if it cannot be connected on this copy yet, find out plainly and what to do instead',
     expectTools: [['show_setup']],
     minGoal: 'partly',
   },
