@@ -293,7 +293,7 @@ export async function ingestNote(user: User, inp: CaptureInput, now = new Date()
 
 /**
  * The "who was this note with?" card for a note Orbit could not match for sure: it names the person Orbit
- * guessed, or the people the note could be about. Raised as soon as the note is saved (so it is on Today
+ * guessed, or the people the note could be about. Raised as soon as the note is saved (so it is in Drafts
  * right away, not after the next brief) and refreshed by the brief with the same wording.
  */
 export async function noteMatchCandidate(

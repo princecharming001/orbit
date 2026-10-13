@@ -732,7 +732,7 @@ export function OutboxStatus({ draft, onClose }: { draft: OutboundMessage; onClo
                 r.ok
                   ? {
                       text: r.scheduledAt
-                        ? `Logged as sent. Your chat with ${name} is booked for ${new Date(r.scheduledAt).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}, under Coming up on Today.`
+                        ? `Logged as sent. Your chat with ${name} is booked for ${new Date(r.scheduledAt).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}, under Coming up in Drafts.`
                         : `Logged as sent to ${name}.`,
                       tone: 'good',
                       ttl: 8000,

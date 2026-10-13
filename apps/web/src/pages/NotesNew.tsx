@@ -185,7 +185,7 @@ export function NotesNew() {
       if (existing) {
         await rematchNote(user, existing.id, personId || undefined);
         toast.push({ text: personId ? 'Note matched.' : 'Saved without a person.', tone: 'good' });
-        nav(personId ? `/people/${personId}` : '/today');
+        nav(personId ? `/people/${personId}` : '/inbox');
         return;
       }
       const stageOf = async (pid?: string) =>
@@ -246,7 +246,7 @@ export function NotesNew() {
         ttl: 8000,
       });
       // the person page shows the thank-you draft at its top, so the student lands on it
-      nav(n.personIds[0] ? `/people/${n.personIds[0]}${facts && !thanks ? '?tab=facts' : ''}` : '/today');
+      nav(n.personIds[0] ? `/people/${n.personIds[0]}${facts && !thanks ? '?tab=facts' : ''}` : '/inbox');
     } finally {
       setBusy(false);
     }

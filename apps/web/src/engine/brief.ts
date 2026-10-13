@@ -1513,7 +1513,7 @@ async function addConfirmationCards(userId: string, now: Date): Promise<void> {
     const [a, b] = await Promise.all([db.people.get(m.personAId), db.people.get(m.personBId)]);
     if (!a || !b) continue;
     // a guess with little behind it (different first names, no shared address) waits behind "can wait"; it does not
-    // take one of the few spots on Today
+    // take one of the few spots in the brief
     const lower = (x?: string) => (x ?? '').trim().toLowerCase();
     const emails = new Set([a.primaryEmail, ...a.emails].filter(Boolean).map((e) => lower(e)));
     const sharedEmail = [b.primaryEmail, ...b.emails].some((e) => e && emails.has(lower(e)));
@@ -1679,7 +1679,7 @@ export async function generateBrief(user: User, kind: Brief['kind'], now = new D
       'brief',
       kind === 'welcome' ? 'Your first brief is ready' : `Today: ${summaryText}`,
       undefined,
-      '/today',
+      '/inbox',
     );
   return brief;
 }

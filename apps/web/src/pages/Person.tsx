@@ -312,7 +312,7 @@ export function PersonPage() {
           tone: 'good',
           ttl: 6000,
         });
-        nav(`/today?person=${person.id}`);
+        nav(`/inbox?person=${person.id}`);
         return;
       }
       if (r.kind !== 'draft') return;

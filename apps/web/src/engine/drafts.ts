@@ -143,7 +143,7 @@ export async function nextMessageKind(
 export type ComposeOutcome =
   /** a draft to edit and send (a draft already started for this kind is reopened, never written twice) */
   | { kind: 'draft'; draft: OutboundMessage; reopened: boolean }
-  /** a LinkedIn warm-up started instead of a first message; its first step is on Today */
+  /** a LinkedIn warm-up started instead of a first message; its first step is in Drafts */
   | { kind: 'warmup_started'; chat: CoffeeChat }
   /** a cold LinkedIn-only contact: the student chooses between a warm-up and writing now before anything starts */
   | { kind: 'warmup_choice' }

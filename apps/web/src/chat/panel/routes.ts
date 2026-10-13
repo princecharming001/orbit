@@ -3,13 +3,12 @@
  * ("/?panel=/people/p4") and back. The panel embeds the app's own pages, so any page route works; the landing
  * page, onboarding and the chat itself do not.
  */
+import { legacyHref } from '../../legacyRoutes';
 
 /** The router's basename without a trailing slash ("/orbit" on Pages, "" in dev). */
 export const BASENAME = import.meta.env.BASE_URL.replace(/\/$/, '');
 
 const PANEL_ROUTES: RegExp[] = [
-  /^\/today$/,
-  /^\/pipeline$/,
   /^\/people(\/[^/]+)?$/,
   /^\/companies\/[^/]+$/,
   /^\/map$/,
@@ -42,11 +41,17 @@ export function chatUrlWithPanel(href: string): string {
   return `/?panel=${encodeURIComponent(href)}`;
 }
 
+/** An old Today or Pipeline href (a saved thread, a bookmark) as the page that shows it now; any other unchanged. */
+function current(href: string): string {
+  return legacyHref(href) ?? href;
+}
+
 /** The panel's href from the chat's search string, when it is one the panel can show. */
 export function panelFromSearch(search: string): string | undefined {
   const raw = new URLSearchParams(search).get('panel');
-  if (!raw?.startsWith('/') || !panelizable(raw)) return undefined;
-  return raw;
+  if (!raw?.startsWith('/')) return undefined;
+  const href = current(raw);
+  return panelizable(href) ? href : undefined;
 }
 
 /** The full URL (with the app's base path) an anchor inside the panel points to, so middle-click still works. */
@@ -73,12 +78,11 @@ export function internalHrefOf(anchor: HTMLAnchorElement): string | undefined {
     if (path !== BASENAME && !path.startsWith(`${BASENAME}/`)) return undefined;
     path = path.slice(BASENAME.length) || '/';
   }
+  path = current(path);
   return panelizable(path) ? path : undefined;
 }
 
 const STATIC_TITLES: Record<string, string> = {
-  '/today': 'Today',
-  '/pipeline': 'Pipeline',
   '/people': 'People',
   '/map': 'Map',
   '/discover': 'Discover',

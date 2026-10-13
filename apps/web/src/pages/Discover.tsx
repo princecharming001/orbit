@@ -120,12 +120,12 @@ export function Discover() {
     );
     if (r.draft) nav(`/people/${personId}?open=${r.draft.id}`);
     else {
-      // stay on the list: the student is still choosing who to meet, and the first step waits on Today
+      // stay on the list: the student is still choosing who to meet, and the first step waits in Drafts
       toast.push({
-        text: `Warm-up started for ${p?.firstName}. The first step is on Today.`,
+        text: `Warm-up started for ${p?.firstName}. The first step is in Drafts.`,
         tone: 'good',
         ttl: 8000,
-        action: { label: 'Open on Today', onClick: () => nav(`/today?person=${personId}`) },
+        action: { label: 'Open in Drafts', onClick: () => nav(`/inbox?person=${personId}`) },
       });
     }
   };

@@ -59,7 +59,7 @@ export function SuggestionCard({
 }: {
   s: Suggestion;
   compact?: boolean;
-  /** scroll to this card and outline it (Today opened from a link that points at it) */
+  /** scroll to this card and outline it (Drafts opened from a link that points at it) */
   highlight?: boolean;
 }) {
   const { user, settings } = useSession();
@@ -226,13 +226,13 @@ export function SuggestionCard({
     const nextDue = next ? new Date(next.dueAt) : undefined;
     const when = next
       ? nextDue && nextDue.getTime() > Date.now()
-        ? ` The next step is on Today on ${day(next.dueAt)}.`
-        : ' The next step is on Today.'
+        ? ` The next step shows in Drafts on ${day(next.dueAt)}.`
+        : ' The next step is in Drafts.'
       : after?.warmUp
         ? (() => {
             const prog = warmUpProgress(after.warmUp, new Date(), user.timezone);
             return prog.ready
-              ? ' Your first message is ready on Today.'
+              ? ' Your first message is ready in Drafts.'
               : ` Orbit suggests your first message from ${day(prog.readyFrom)}.`;
           })()
         : '';
@@ -260,7 +260,7 @@ export function SuggestionCard({
     try {
       await startWarmUpOrOutreach(user, person.id, 'linkedin', 'recommendation');
       toast.push({
-        text: `Warm-up started for ${person.firstName}. The first step is the new card on Today.`,
+        text: `Warm-up started for ${person.firstName}. The first step is the new card in Drafts.`,
         tone: 'good',
         ttl: 6000,
       });
@@ -603,7 +603,7 @@ export function SuggestionCard({
                   className={CARD_SMALL_BUTTON}
                   onClick={() => snooze(d)}
                   aria-label={`Snooze for ${l}`}
-                  title={`Hide this card for ${l}; it comes back on Today`}
+                  title={`Hide this card for ${l}; it comes back in Drafts`}
                 >
                   {l}
                 </button>

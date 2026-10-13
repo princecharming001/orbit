@@ -4,7 +4,6 @@ import {
   Compass,
   Ellipsis,
   Inbox,
-  LayoutGrid,
   Map as MapIcon,
   MessageSquare,
   NotebookPen,
@@ -13,7 +12,6 @@ import {
   Search,
   Settings,
   SquarePen,
-  Sun,
   Users,
   X,
 } from 'lucide-react';
@@ -32,17 +30,26 @@ import { CommandPalette } from './CommandPalette';
 import { DemoBanner } from './DemoBanner';
 import { OutboxScheduler } from './OutboxScheduler';
 
+// the chat is home (New chat and the logo open it); People holds the board and the list, Drafts what waits to be sent
 const NAV_TOP = [
-  { to: '/today', label: 'Today', icon: Sun },
-  { to: '/pipeline', label: 'Pipeline', icon: LayoutGrid },
   { to: '/people', label: 'People', icon: Users },
+  { to: '/inbox', label: 'Drafts', icon: Inbox },
 ];
 const NAV_MORE = [
   { to: '/map', label: 'Map', icon: MapIcon },
   { to: '/discover', label: 'Discover', icon: Compass },
-  { to: '/inbox', label: 'Drafts', icon: Inbox },
 ];
-const PHONE_TABS = [{ to: '/', label: 'Chat', icon: MessageSquare }, ...NAV_TOP];
+const PHONE_TABS = [
+  { to: '/', label: 'Chat', icon: MessageSquare },
+  ...NAV_TOP,
+  { to: '/map', label: 'Map', icon: MapIcon },
+];
+/** The phone's More sheet: what does not fit in the tab bar. */
+const PHONE_MORE = [
+  { to: '/discover', label: 'Discover', icon: Compass },
+  { to: '/notes/new', label: 'Add note', icon: NotebookPen },
+  { to: '/settings', label: 'Settings', icon: Settings },
+];
 
 const SIDEBAR_KEY = 'orbit:sidebar';
 
@@ -150,7 +157,7 @@ export function AppShell() {
       expanded ? 'h-10 px-2.5 gap-3 text-[14px]' : 'tip w-11 h-11 justify-center',
       active ? 'bg-accent-soft text-accent font-medium' : 'text-ink-2 hover:bg-white/70 hover:text-ink',
     );
-  const railLink = (to: string, label: string, Icon: typeof Sun, extra?: ReactNode) => (
+  const railLink = (to: string, label: string, Icon: typeof Users, extra?: ReactNode) => (
     <NavLink
       key={to}
       to={to}
@@ -163,7 +170,7 @@ export function AppShell() {
       {extra}
     </NavLink>
   );
-  const railButton = (label: string, Icon: typeof Sun, onClick: () => void, testId?: string) => (
+  const railButton = (label: string, Icon: typeof Users, onClick: () => void, testId?: string) => (
     <button
       type="button"
       onClick={onClick}
@@ -213,11 +220,11 @@ export function AppShell() {
         <nav className="flex flex-col gap-1" aria-label="Main">
           {!expanded && railButton('Expand sidebar', PanelLeft, toggleSidebar, 'sidebar-toggle')}
           {railButton('New chat', SquarePen, newChat, 'new-chat')}
-          {NAV_TOP.map(({ to, label, icon }) => railLink(to, label, icon))}
-          <div className="my-1.5 h-px bg-line mx-1" role="separator" />
-          {NAV_MORE.map(({ to, label, icon }) =>
+          {NAV_TOP.map(({ to, label, icon }) =>
             railLink(to, label, icon, label === 'Drafts' ? badge : undefined),
           )}
+          <div className="my-1.5 h-px bg-line mx-1" role="separator" />
+          {NAV_MORE.map(({ to, label, icon }) => railLink(to, label, icon))}
         </nav>
         {expanded && <Recent chat={chat} />}
         <div className={cx('mt-auto pb-3 flex flex-col gap-1', !expanded && 'items-center')}>
@@ -336,11 +343,7 @@ export function AppShell() {
                   <X size={16} />
                 </button>
               </div>
-              {[
-                ...NAV_MORE,
-                { to: '/notes/new', label: 'Add note', icon: NotebookPen },
-                { to: '/settings', label: 'Settings', icon: Settings },
-              ].map(({ to, label, icon: Icon }) => (
+              {PHONE_MORE.map(({ to, label, icon: Icon }) => (
                 <NavLink
                   key={to}
                   to={to}
@@ -353,11 +356,6 @@ export function AppShell() {
                   }
                 >
                   <Icon size={20} aria-hidden className="text-ink-3" /> {label}
-                  {label === 'Drafts' && pending > 0 && (
-                    <span className="ml-auto text-[11px] bg-accent text-white rounded-full px-1.5 h-5 inline-flex items-center tabular">
-                      {pending}
-                    </span>
-                  )}
                 </NavLink>
               ))}
               {user && (
@@ -392,6 +390,14 @@ export function AppShell() {
             >
               <Icon size={20} aria-hidden />
               <span className="truncate max-w-full px-0.5">{label}</span>
+              {label === 'Drafts' && pending > 0 && (
+                <span
+                  className="absolute top-1.5 left-1/2 ml-2 min-w-4 h-4 px-1 rounded-full bg-accent text-white text-[9px] inline-flex items-center justify-center tabular"
+                  data-testid="tab-drafts-badge"
+                >
+                  {pending}
+                </span>
+              )}
             </NavLink>
           ))}
           <button
@@ -399,9 +405,7 @@ export function AppShell() {
             onClick={() => setMore((m) => !m)}
             className={cx(
               'relative min-w-0 min-h-11 flex flex-col items-center justify-center gap-0.5 text-[10.5px]',
-              more || NAV_MORE.some((n) => pathname.startsWith(n.to)) || pathname.startsWith('/settings')
-                ? 'text-accent'
-                : 'text-ink-3',
+              more || PHONE_MORE.some((n) => pathname.startsWith(n.to)) ? 'text-accent' : 'text-ink-3',
             )}
             aria-label="More"
             aria-expanded={more}
@@ -409,11 +413,6 @@ export function AppShell() {
           >
             <Ellipsis size={20} aria-hidden />
             <span>More</span>
-            {pending > 0 && (
-              <span className="absolute top-1.5 left-1/2 ml-2 min-w-4 h-4 px-1 rounded-full bg-accent text-white text-[9px] inline-flex items-center justify-center tabular">
-                {pending}
-              </span>
-            )}
           </button>
         </nav>
       </div>

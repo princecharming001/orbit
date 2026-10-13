@@ -43,7 +43,7 @@ export function ScheduleChatDialog({
     try {
       await scheduleChatAt(user, chat, at, Number(minutes));
       toast.push({
-        text: `Saved. Your chat with ${firstName} is under Coming up on Today, with prep the day before.`,
+        text: `Saved. Your chat with ${firstName} is under Coming up in Drafts, with prep the day before.`,
         tone: 'good',
       });
       onClose();
@@ -55,8 +55,9 @@ export function ScheduleChatDialog({
     <Modal open onClose={onClose} title={`When is your chat with ${firstName}?`}>
       <div className="space-y-3 text-[13.5px]" data-testid="schedule-chat">
         <p className="text-ink-2">
-          Orbit shows it under Coming up on Today, puts prep there the day before, and reminds you to say
-          thank you after. Not booked yet? Set it later from {firstName}'s page or the Pipeline card.
+          Orbit shows it under Coming up in Drafts, puts prep there the day before, and reminds you to say
+          thank you after. Not booked yet? Set it later from {firstName}'s page or their card on the People
+          board.
         </p>
         <div className="grid grid-cols-[1fr_auto] gap-3">
           <div>
@@ -94,7 +95,7 @@ export function ScheduleChatDialog({
   );
 }
 
-/** "Wed, Oct 7, 11:30 AM": when a booked chat is, on the Pipeline card and the person page. */
+/** "Wed, Oct 7, 11:30 AM": when a booked chat is, on the People board's card and the person page. */
 export function chatTimeLabel(iso: string): string {
   return new Date(iso).toLocaleString('en-US', {
     weekday: 'short',
