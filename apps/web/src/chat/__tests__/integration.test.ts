@@ -502,8 +502,8 @@ describe('Claude mode: scripted model turns calling the real tools', () => {
 // ---------------------------------------------------------------------------------------------------------------
 
 describe('coverage', () => {
-  it('every one of the 175 capabilities is claimed by a tool', () => {
-    expect(CAPABILITIES).toHaveLength(175);
+  it('every one of the 181 capabilities is claimed by a tool', () => {
+    expect(CAPABILITIES).toHaveLength(181);
     const claimed = new Set(tools.flatMap((t) => t.capabilities));
     expect(CAPABILITIES.filter((c) => !claimed.has(c.id)).map((c) => c.id)).toEqual([]);
   });

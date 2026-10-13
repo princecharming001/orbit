@@ -36,6 +36,7 @@ import {
   reachPerson,
   WARMER_ROUTES_WHY,
 } from '../../engine/graph';
+import { linkedInLiveStatus } from '../../engine/linkedinLive';
 import { namedPeopleLabel, previewNoteMatch } from '../../engine/notes';
 import { wentQuiet } from '../../engine/pipeline';
 import { buildPrep, personSummary } from '../../engine/prep';
@@ -59,6 +60,7 @@ import {
   todaySummaryText,
   weekStats,
 } from '../../engine/today';
+import { villageAvailable, villageOffered, type WarmIntro, warmIntrosFor } from '../../engine/warmIntros';
 import { hasLlm, MODEL } from '../../integrations/anthropic';
 import { currentGoogleToken, googleClientId } from '../../integrations/google';
 import {
@@ -69,7 +71,6 @@ import {
   todaysLlmUsage,
 } from '../../integrations/prefs';
 import { sharedClaudeAvailable } from '../../integrations/shared-claude';
-import { villageConfigured, villagePaths } from '../../integrations/village';
 import { z } from '../../zod';
 import type { ToolContext } from '../types';
 import {
@@ -993,11 +994,30 @@ function pathView(
   };
 }
 
+/** One sentence on the warm intros found, naming the warmest: empty when there are none. */
+function warmIntroLine(intros: WarmIntro[]): string {
+  const best = intros[0];
+  if (!best) return '';
+  return ` ${intros.length === 1 ? 'One warm intro' : `${plural(intros.length, 'warm intro')}`} too, the best through ${best.introducer.name} (${best.warmthWord}).`;
+}
+
+/** A warm intro as the model reads it: warmth in a word, and Village's text wrapped as third-party content. */
+function warmIntroForModel(w: WarmIntro, ctx: ToolContext) {
+  return {
+    introducer: wrapped(ctx, 'village', w.introducer.name, 120),
+    introducerId: w.introducer.personId,
+    warmth: w.warmthWord,
+    hops: wrapped(ctx, 'village', w.hops.join(' > '), 300),
+    note: wrapped(ctx, 'village', w.note, 240),
+    targetPersonId: w.targetPersonId,
+  };
+}
+
 export const findRoutes = defineTool({
   name: 'find_routes',
   kind: 'read',
   description:
-    'Call this when the student asks how to reach someone, who could introduce them to a person, who they know at a company, which former employees of a company are in their network, or wants a company page. Give a personId for routes to a person (each route names the first hop to ask for an intro) or a company name for the people there now, former employees and two-hop routes. A query that is not a clear person or company returns candidates to choose from.',
+    'Call this when the student asks how to reach someone, who could introduce them to a person, for a warm intro to a person or a company, who they know at a company, which former employees of a company are in their network, or wants a company page. Give a personId for routes to a person (each route names the first hop to ask for an intro) or a company name for the people there now, former employees and two-hop routes. Both include warm intro paths from Village when the student has it (warmth in a word, and the hops). A query that is not a clear person or company returns candidates to choose from.',
   input: z.object({
     personId: z.string().optional().describe('Routes to this person (from search_people).'),
     company: z
@@ -1023,6 +1043,8 @@ export const findRoutes = defineTool({
     'map_find_path_button',
     'map_exit_reach',
     'map_escape',
+    'warm_intro_paths',
+    'warm_intros_company',
   ],
   progress: 'Finding routes',
   async execute(input, ctx) {
@@ -1063,27 +1085,20 @@ export const findRoutes = defineTool({
       people.set(target.id, target);
       const routes = paths.map((p) => pathView(p, people, ctx));
       const direct = routes.find((r) => r.hops.length === 1);
-      // when the student has connected Village, add its real warm-intro paths alongside Orbit's own graph
-      const warmIntros = villageConfigured()
-        ? await villagePaths(
-            {
-              name: target.displayName,
-              company: target.currentOrganizationRaw,
-              linkedinUrl: target.linkedinUrl,
-            },
-            { signal: ctx.signal },
-          )
-        : [];
-      const summary = routes.length
-        ? `${plural(routes.length, 'route')} to ${target.displayName}${direct?.cold ? '. You know them only slightly, so an intro through someone who knows them is likelier to get a reply' : ''}.`
-        : `No route to ${target.displayName} through people you know yet.`;
+      // Village's warm intro paths (the sample student's come from the demo graph) next to Orbit's own routes
+      const warmIntros = await warmIntrosFor(ctx.user, { person: target }, { signal: ctx.signal });
+      const summary = `${
+        routes.length
+          ? `${plural(routes.length, 'route')} to ${target.displayName}${direct?.cold ? '. You know them only slightly, so an intro through someone who knows them is likelier to get a reply' : ''}.`
+          : `No route to ${target.displayName} through people you know yet.`
+      }${warmIntroLine(warmIntros)}`;
       return ok(
         'routes',
         { target: personRef(target), routes, warmIntros, why: WARMER_ROUTES_WHY },
         {
           target: personRef(target),
           routes,
-          warmIntros: warmIntros.length ? warmIntros : undefined,
+          warmIntros: warmIntros.length ? warmIntros.map((w) => warmIntroForModel(w, ctx)) : undefined,
           note: direct?.cold ? WARMER_ROUTES_WHY : undefined,
         },
         summary,
@@ -1110,6 +1125,7 @@ export const findRoutes = defineTool({
         if (p) all.set(p.id, p);
       }
     const name = reach.org?.name ?? company!;
+    const warmIntros = await warmIntrosFor(ctx.user, { company: name }, { signal: ctx.signal });
     const view = {
       company: name,
       organizationId: reach.org?.id,
@@ -1126,11 +1142,14 @@ export const findRoutes = defineTool({
         route: pathView(t.path, all, ctx),
       })),
     };
-    const summary = `${name}: ${plural(reach.direct.length, 'person', 'people')} there now, ${plural(reach.former.length, 'former employee')} you know${reach.twoHop.length ? `, ${plural(reach.twoHop.length, 'route')} through someone closer` : ''}.`;
+    const summary = `${name}: ${plural(reach.direct.length, 'person', 'people')} there now, ${plural(reach.former.length, 'former employee')} you know${reach.twoHop.length ? `, ${plural(reach.twoHop.length, 'route')} through someone closer` : ''}.${warmIntroLine(warmIntros)}`;
     return ok(
       'company',
-      view,
-      view,
+      { ...view, warmIntros },
+      {
+        ...view,
+        warmIntros: warmIntros.length ? warmIntros.map((w) => warmIntroForModel(w, ctx)) : undefined,
+      },
       summary,
       reach.org ? `/companies/${reach.org.id}` : `/map?reach=1&company=${encodeURIComponent(name)}`,
     );
@@ -1544,6 +1563,7 @@ export const getSettings = defineTool({
       ]);
       const google = accounts.find((a) => a.provider === 'google');
       const li = accounts.find((a) => a.provider === 'linkedin_csv');
+      const live = await linkedInLiveStatus(ctx.user, ctx.now);
       const resume = resumes
         .filter((r) => r.isCurrent)
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
@@ -1566,6 +1586,15 @@ export const getSettings = defineTool({
               importedOn: fmtDay(li.lastSyncedAt ?? li.connectedAt, ctx),
             }
           : undefined,
+        linkedinLive: {
+          available: live.available,
+          connected: live.connected,
+          status: live.status,
+          connections: live.rows,
+          lastSync: fmtWhen(live.lastSyncedAt, ctx),
+          error: live.error,
+        },
+        warmIntros: { on: villageAvailable(ctx.user), offered: villageOffered(ctx.user), from: 'Village' },
         resume: resume
           ? {
               filename: resume.filename,

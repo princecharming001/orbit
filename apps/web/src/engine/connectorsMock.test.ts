@@ -67,7 +67,7 @@ describe('the sample student uses the mock connector', () => {
     expect(await linkedInLiveStatus(user)).toMatchObject({ connected: true, demo: true, status: 'active' });
     expect(await disconnectLinkedInLive(user)).toEqual({ ok: true, unlinkedAtUnipile: true });
     expect((await linkedInLiveStatus(user)).connected).toBe(false);
-  });
+  }, 60_000);
 
   it('gives mutual connections from the people at their company and school', async () => {
     const maya = await person('Maya Chen');

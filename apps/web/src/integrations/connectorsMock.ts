@@ -90,7 +90,9 @@ export async function mockLinkedInConnections(userId: string, now = new Date()):
       memberId: `mock_${slug}`,
     };
   });
-  return [...existing, ...fresh];
+  // after the first sync the new connections are among the student's people already: never list anyone twice
+  const seen = new Set(existing.map((c) => c.url));
+  return [...existing, ...fresh.filter((c) => !seen.has(c.url))];
 }
 
 function sameCompany(a: Person, b: Person): boolean {

@@ -372,6 +372,7 @@ export async function mergePeople(userId: string, survivorId: string, mergedId: 
         primaryEmail: s.primaryEmail ?? m.primaryEmail,
         linkedinUrl: s.linkedinUrl ?? m.linkedinUrl,
         linkedinSlug: s.linkedinSlug ?? m.linkedinSlug,
+        linkedinMemberId: s.linkedinMemberId ?? m.linkedinMemberId,
         currentTitle: s.currentTitle ?? m.currentTitle,
         currentOrganizationId: s.currentOrganizationId ?? m.currentOrganizationId,
         currentOrganizationRaw: s.currentOrganizationRaw ?? m.currentOrganizationRaw,

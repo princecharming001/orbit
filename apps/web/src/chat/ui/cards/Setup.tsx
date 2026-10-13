@@ -453,6 +453,11 @@ function LinkedinWidget({ user, initial }: { user: User; initial?: SetupStatus }
           {exportHow}
         </>
       )}
+      {soon && live?.connected && (
+        <p className="mt-2 text-[13px] text-ink-2" role="status" data-testid="linkedin-live-soon">
+          {LIVE_SOON}
+        </p>
+      )}
       {liveOffered && (
         <div className="mt-3">
           {uploadOpen ? (
