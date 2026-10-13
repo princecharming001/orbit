@@ -159,7 +159,7 @@ test.describe('Map motion', () => {
     await expect(mapCanvas(page)).toHaveAttribute('data-labels-clipped', '0');
     // only once per session: back from another page, the people are simply there
     await page
-      .getByRole('link', { name: /^today$/i })
+      .getByRole('link', { name: /^people$/i })
       .first()
       .click();
     await page.getByRole('link', { name: /^map$/i }).first().click();

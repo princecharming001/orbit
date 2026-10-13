@@ -34,7 +34,8 @@ async function loadDemo(page: Page) {
     .getByRole('button', { name: /^try the demo$/i })
     .first()
     .click();
-  await expect(page).toHaveURL(/\/today$/, { timeout: 90_000 });
+  // the demo lands on the chat, its home
+  await expect(page.getByTestId('greeting')).toContainText(/^Hey /, { timeout: 90_000 });
 }
 
 test.describe('security', () => {
@@ -43,13 +44,16 @@ test.describe('security', () => {
   }) => {
     await loadDemo(page);
     for (const path of [
-      'pipeline',
       'people',
+      'people?view=list',
+      'people?view=companies',
       'map',
       'inbox',
       'settings/integrations',
       'settings/privacy',
+      // old addresses redirect without tripping anything
       'today',
+      'pipeline',
     ]) {
       await page.goto(path);
       await page.waitForLoadState('networkidle');

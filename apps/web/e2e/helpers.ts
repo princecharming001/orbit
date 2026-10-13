@@ -23,8 +23,15 @@ export async function loadDemo(page: Page, opts: { clock?: boolean } = {}) {
     .getByRole('button', { name: /^try the demo$/i })
     .first()
     .click();
-  await expect(page).toHaveURL(/\/today$/, { timeout: 90_000 });
-  await expect(page.getByText(/good (morning|afternoon|evening)/i)).toBeVisible();
+  // the demo lands on the chat, its home
+  await expect(page.getByTestId('greeting')).toContainText(/^Hey /, { timeout: 90_000 });
+  await expect(page).toHaveURL(/\/(orbit\/?)?$/);
+}
+
+/** Drafts, where the day's cards live: the messages to send and the other cards that need the student. */
+export async function openDrafts(page: Page) {
+  await page.goto('inbox');
+  await expect(page.getByRole('heading', { name: 'Drafts', level: 1 })).toBeVisible();
 }
 
 /** Add `n` synthetic contacts (Zipf-distributed companies, mostly weak ties) straight into IndexedDB. */

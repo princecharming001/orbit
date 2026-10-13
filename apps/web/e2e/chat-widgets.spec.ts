@@ -12,8 +12,8 @@ async function home(page: Page) {
     .getByRole('button', { name: /^try the demo$/i })
     .first()
     .click();
-  await expect(page).toHaveURL(/\/today$/, { timeout: 90_000 });
-  await expect(page.getByText(/good (morning|afternoon|evening)/i)).toBeVisible();
+  // the demo lands on the chat, its home
+  await expect(page.getByTestId('greeting')).toContainText(/^Hey /, { timeout: 90_000 });
   await page.goto('');
   await expect(page.getByTestId('greeting')).toBeVisible();
 }

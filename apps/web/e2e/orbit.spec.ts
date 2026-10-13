@@ -1,6 +1,6 @@
 import { deflateRawSync } from 'node:zlib';
 import { expect, type Page, type TestInfo, test } from '@playwright/test';
-import { injectPeople } from './helpers';
+import { briefWritten, injectPeople } from './helpers';
 
 async function prep(page: Page) {
   // The demo is laid out on business days relative to "now" (a Monday chat is not "tomorrow" on a Friday), so pin
@@ -23,9 +23,19 @@ async function loadDemo(page: Page) {
     .getByRole('button', { name: /^try the demo$/i })
     .first()
     .click();
-  await expect(page).toHaveURL(/\/today$/, { timeout: 90_000 });
-  await expect(page.getByText(/good (morning|afternoon|evening)/i)).toBeVisible();
+  // the demo lands on the chat, its home
+  await expect(page.getByTestId('greeting')).toContainText(/^Hey /, { timeout: 90_000 });
+  await expect(page).toHaveURL(/\/(orbit\/?)?$/);
 }
+
+/** Drafts, where the day's cards live: the messages to send and the other cards that need the student. */
+async function openDrafts(page: Page) {
+  await page.goto('inbox');
+  await expect(page.getByRole('heading', { name: 'Drafts', level: 1 })).toBeVisible();
+}
+
+/** The "I sent it" step of a message just opened in the mail app or LinkedIn: Drafts lists it under Did these go out? */
+const handedOff = (page: Page) => page.getByTestId('drafts-handed-off');
 
 /** Every state the landing header's buttons go through after a reload, as recorded by a MutationObserver. */
 async function landingHeaderStates(page: Page): Promise<string[]> {
@@ -56,8 +66,11 @@ async function landingHeaderStates(page: Page): Promise<string[]> {
 }
 
 test.describe('Orbit demo flow', () => {
-  test('landing → demo → today shows a brief with the expected cards', async ({ page }) => {
+  test("landing → demo → the chat; Drafts holds the day's cards and the brief counts them", async ({
+    page,
+  }) => {
     await loadDemo(page);
+    await openDrafts(page);
     await expect(page.getByTestId('suggestion-schedule_confirm').first()).toBeVisible();
     await expect(page.getByTestId('suggestion-thank_you').first()).toBeVisible();
     await expect(page.getByTestId('suggestion-prep_brief').first()).toBeVisible();
@@ -67,17 +80,25 @@ test.describe('Orbit demo flow', () => {
       page.getByTestId('suggestion-ask_referral').or(page.getByTestId('suggestion-nurture_checkin')).first(),
     ).toBeVisible();
     await expect(page.getByText('Coming up', { exact: true })).toBeVisible();
-    // the line under the greeting counts the cards on screen, including stage updates raised after the brief
-    const summary = page.getByTestId('today-summary');
-    await expect(summary).toContainText(/coming up this week/);
+    // prep and warm-up steps are not messages: they sit under their own heading, after the drafts
+    await expect(page.getByTestId('drafts-other').getByTestId('suggestion-prep_brief').first()).toBeVisible();
+    await expect(page.getByTestId('drafts-to-send').getByTestId('suggestion-prep_brief')).toHaveCount(0);
+    // the brief in the chat counts the same cards, including stage updates raised after it was built
     const cards = await page.locator('[data-testid^="suggestion-"]').count();
-    await expect(summary).toContainText(`${cards} things for today`);
+    await page.goto('');
+    await page.getByTestId('chip-who-today').click();
+    const brief = page.getByTestId('result-brief');
+    await expect(brief).toContainText(`${cards} things for today`, { timeout: 30_000 });
+    await expect(brief).toContainText(/coming up this week/);
+    await expect(brief.getByTestId('brief-coming-up')).toBeVisible();
+    await expect(brief.getByTestId('brief-more')).toHaveText(/^\d+ more in Drafts$/);
   });
 
-  test('approve a thank-you: approval binds the text, card leaves Today, Sent tab lists it', async ({
+  test('approve a thank-you: approval binds the text, card leaves To send, Sent tab lists it', async ({
     page,
   }) => {
     await loadDemo(page);
+    await openDrafts(page);
     const card = page.getByTestId('suggestion-thank_you').first();
     const name = await card.getByRole('link').nth(1).innerText();
     await card.getByTestId('draft-review').click();
@@ -97,8 +118,15 @@ test.describe('Orbit demo flow', () => {
     // without Gmail sending, the button says what it does and who to: it opens an email to them
     await open.click();
     await expect(page.getByText(/opened in your mail app/i).first()).toBeVisible({ timeout: 15_000 });
-    // a mail-app hand-off is not "sent" until the student says so
-    await card.getByRole('button', { name: /i sent it/i }).click();
+    // a mail-app hand-off is not "sent" until the student says so: it leaves To send and waits under Did these go out?
+    await expect(page.getByRole('tab', { name: /opened, not marked sent/i })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    await handedOff(page)
+      .getByRole('button', { name: /i sent it/i })
+      .first()
+      .click();
     await expect(page.getByText(/logged as sent to/i)).toBeVisible();
     await page.goto('inbox?tab=sent');
     await page.getByRole('tab', { name: /^sent/i }).click();
@@ -116,6 +144,7 @@ test.describe('Orbit demo flow', () => {
     page,
   }) => {
     await loadDemo(page);
+    await openDrafts(page);
     const card = page.getByTestId('suggestion-confirm_intro');
     await expect(card).toHaveCount(1);
     const question = await card.getByText(/^Did \S+ introduce you to \S+\?$/).innerText();
@@ -135,19 +164,20 @@ test.describe('Orbit demo flow', () => {
         new RegExp(`${introducer} introduced you to ${person} .*reply while the intro is fresh`),
       ),
     ).toBeVisible({ timeout: 15_000 });
-    await page.goto('pipeline');
+    await page.goto('people');
     await expect(page.getByTestId('chat-card-identified').filter({ hasText: fullName })).toBeVisible();
   });
 
   test('an introduction question answered no stays answered after a reload', async ({ page }) => {
     await loadDemo(page);
+    await openDrafts(page);
     const card = page.getByTestId('suggestion-confirm_intro');
     await expect(card).toHaveCount(1);
     await card.getByRole('button', { name: 'No', exact: true }).click();
     await expect(page.getByText('Got it. Orbit will not ask about this thread again.')).toBeVisible();
     await expect(card).toHaveCount(0);
     await page.reload();
-    await expect(page.getByText(/good (morning|afternoon|evening)/i)).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Drafts', level: 1 })).toBeVisible();
     await page.getByRole('button', { name: /refresh/i }).click();
     await expect(page.getByRole('button', { name: /refresh/i })).toBeEnabled();
     await expect(page.getByTestId('suggestion-confirm_intro')).toHaveCount(0);
@@ -155,6 +185,7 @@ test.describe('Orbit demo flow', () => {
 
   test('warm-up card: mark done, see progress', async ({ page }) => {
     await loadDemo(page);
+    await openDrafts(page);
     const card = page.getByTestId('suggestion-warm_up_engage').first();
     await expect(card.getByRole('link', { name: /open on linkedin/i })).toHaveAttribute(
       'href',
@@ -164,22 +195,27 @@ test.describe('Orbit demo flow', () => {
     await expect(page.getByText(/logged the warm-up/i)).toBeVisible();
   });
 
-  test('pipeline board renders stages; table lets you change a stage', async ({ page }) => {
+  test('the People board renders stages; the list lets you change a stage', async ({ page }) => {
     await loadDemo(page);
-    await page.goto('pipeline');
+    await page.goto('people');
     await expect(page.getByTestId('chat-card-scheduling').first()).toBeVisible();
     await expect(page.getByTestId('chat-card-warming').first()).toBeVisible();
-    await page.getByRole('tab', { name: 'Table' }).click();
-    const select = page.locator('table select').first();
-    await select.selectOption('nurturing');
+    await page.getByRole('tab', { name: 'List' }).click();
+    const row = page
+      .getByTestId('people-row')
+      .filter({ has: page.getByTestId('list-stage') })
+      .first();
+    const name = await row.getByTestId('person-name').innerText();
+    await row.getByTestId('list-stage').selectOption('nurturing');
     await page.getByRole('tab', { name: 'Board' }).click();
-    await expect(page.getByTestId('chat-card-nurturing').first()).toBeVisible();
+    await expect(page.getByTestId('chat-card-nurturing').filter({ hasText: name })).toBeVisible();
     await page.getByRole('tab', { name: 'Companies' }).click();
     await expect(page.getByRole('cell', { name: /target/i }).first()).toBeVisible();
   });
 
   test('person profile shows summary, facts and prep', async ({ page }) => {
     await loadDemo(page);
+    await openDrafts(page);
     await page.getByTestId('suggestion-thank_you').first().getByRole('link').nth(1).click();
     await expect(page).toHaveURL(/\/people\//);
     await expect(page.getByText(/summary/i).first()).toBeVisible();
@@ -198,6 +234,7 @@ test.describe('Orbit demo flow', () => {
     page,
   }) => {
     await loadDemo(page);
+    await openDrafts(page);
     await page.getByTestId('suggestion-thank_you').first().getByRole('link').nth(1).click();
     await expect(page).toHaveURL(/\/people\//);
     await page.getByRole('tab', { name: /prep/i }).click();
@@ -307,14 +344,8 @@ test.describe('Orbit demo flow', () => {
     await loadDemo(page);
     await page.goto('map');
     await expect(page.getByTestId('orbit-canvas')).toBeVisible();
-    await page.goto('pipeline?view=table');
-    const name = await page
-      .locator('table tbody tr')
-      .nth(2)
-      .locator('td')
-      .first()
-      .getByRole('link')
-      .innerText();
+    await page.goto('people?view=list&f=chats');
+    const name = await page.getByTestId('people-row').nth(2).getByTestId('person-name').innerText();
     await page.goto('map?reach=1');
     await page.getByTestId('reach-input').fill(name.trim());
     await page.getByTestId('reach-input').press('Enter');
@@ -443,14 +474,8 @@ test.describe('Map readability', () => {
     page,
   }) => {
     await loadDemo(page);
-    await page.goto('pipeline?view=table');
-    const name = await page
-      .locator('table tbody tr')
-      .nth(2)
-      .locator('td')
-      .first()
-      .getByRole('link')
-      .innerText();
+    await page.goto('people?view=list&f=chats');
+    const name = await page.getByTestId('people-row').nth(2).getByTestId('person-name').innerText();
     await page.goto('map?reach=1');
     await page.evaluate(() => {
       const w = window as unknown as { __sawNoRoute: boolean };
@@ -639,13 +664,18 @@ test.describe('Keyboard, dead ends and plain words', () => {
     page,
   }) => {
     await loadDemo(page);
+    await openDrafts(page);
     await page.keyboard.press('Control+k');
     const dialog = page.getByRole('dialog');
     await expect(dialog).toBeVisible();
+    // the palette goes to People and Drafts; Today is gone
+    await expect(dialog.getByRole('button', { name: /Go to People$/ })).toBeVisible();
+    await expect(dialog.getByRole('button', { name: /Go to Drafts$/ })).toBeVisible();
+    await expect(dialog.getByRole('button', { name: /Go to Today/ })).toHaveCount(0);
     await page.keyboard.press('Escape');
     await expect(dialog).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Snooze for 3 days' }).first()).toBeVisible();
-    await page.goto('pipeline');
+    await page.goto('people');
     const card = page.getByTestId('chat-card-warming').first();
     // the name link covers the card; the next-step chip is a second, separate link
     const link = card.getByRole('link').first();
@@ -680,10 +710,10 @@ test.describe('Keyboard, dead ends and plain words', () => {
   test('no internal codes on screen', async ({ page }) => {
     await loadDemo(page);
     for (const path of [
-      'today',
-      'pipeline?view=table',
-      'discover',
       'people',
+      'people?view=list',
+      'people?view=companies',
+      'discover',
       'inbox',
       'settings/goals',
       'map',
@@ -741,22 +771,30 @@ for (const vp of [
       expect(over.doc, `${label} page overflow`).toBeLessThanOrEqual(1);
       expect(over.main, `${label} main overflow`).toBeLessThanOrEqual(1);
     };
-    await fits('today');
+    await fits('chat');
     if (vp.width < 768) {
       await expect(page.getByTestId('mobile-settings')).toBeVisible();
       await expect(page.getByTestId('mobile-add-note')).toBeVisible();
     }
+    await openDrafts(page);
     const card = page.getByTestId('suggestion-thank_you').first();
     const box = await card.getByRole('button', { name: /dismiss/i }).boundingBox();
     expect(box && box.x + box.width).toBeLessThanOrEqual(vp.width);
     await card.getByTestId('draft-review').click();
     await expect(card.getByLabel('Message body')).toBeVisible();
-    await fits('today-draft-open');
-    for (const path of ['pipeline', 'pipeline?view=table', 'people', 'discover', 'inbox', 'settings/goals']) {
-      await page.goto(path);
-      await fits(path.replace(/[?=/]/g, '-'));
+    await fits('drafts-draft-open');
+    for (const [path, label] of [
+      ['people?view=board', 'people-board'],
+      ['people?view=list', 'people-list'],
+      ['people?view=companies', 'people-companies'],
+      ['discover', 'discover'],
+      ['inbox', 'inbox'],
+      ['settings/goals', 'settings-goals'],
+    ]) {
+      await page.goto(path!);
+      await fits(label!);
     }
-    await page.goto('people');
+    await page.goto('people?view=list');
     // phones get a list instead of the table
     await page.locator('a[href*="/people/p"]:visible').first().click();
     await expect(page).toHaveURL(/\/people\//);
@@ -784,21 +822,28 @@ for (const vp of [
 }
 
 test.describe('First-run guidance and plain next steps', () => {
-  test('Today explains itself once: the hint closes for good, and each draft card says how to review it', async ({
+  test('Drafts explains itself once: the hint closes for good, and each draft card says how to review it', async ({
     page,
   }) => {
     await loadDemo(page);
-    const hint = page.getByTestId('hint-today');
+    await openDrafts(page);
+    const hint = page.getByTestId('hint-drafts');
     await expect(hint).toBeVisible();
     await expect(hint).toContainText(/nothing goes out until you send it yourself/i);
-    await page.getByTestId('hint-today-dismiss').click();
+    await page.getByTestId('hint-drafts-dismiss').click();
     await expect(hint).toHaveCount(0);
     await page.reload();
     await expect(page.getByTestId('suggestion-thank_you').first()).toBeVisible();
-    await expect(page.getByTestId('hint-today')).toHaveCount(0);
-    // the line under the greeting is a count, not a list of every kind of card
+    await expect(page.getByTestId('hint-drafts')).toHaveCount(0);
+    // the brief in the chat is a count, not a list of every kind of card
     const cards = await page.locator('[data-testid^="suggestion-"]').count();
-    await expect(page.getByTestId('today-summary')).toHaveText(new RegExp(`^${cards} things for today`));
+    await page.goto('');
+    await page.getByTestId('chip-who-today').click();
+    await expect(page.getByTestId('result-brief').locator('p').first()).toHaveText(
+      new RegExp(`^${cards} things for today`),
+      { timeout: 30_000 },
+    );
+    await openDrafts(page);
     // every card with a draft has a visible button that opens it, and the approve button says what it does
     const card = page.getByTestId('suggestion-follow_up_bump').first();
     await card.getByTestId('draft-review').click();
@@ -813,6 +858,7 @@ test.describe('First-run guidance and plain next steps', () => {
     page,
   }) => {
     await loadDemo(page);
+    await openDrafts(page);
     // the demo's only guess (Sana and Alina Ahmed: different first names, different employers) argues against
     // itself, so it is never asked; a pair with the same first name is
     await expect(page.getByTestId('suggestion-confirm_merge')).toHaveCount(0);
@@ -845,9 +891,9 @@ test.describe('First-run guidance and plain next steps', () => {
       });
       idb.close();
     });
-    await page.getByTestId('today-refresh').click();
+    await page.getByTestId('drafts-refresh').click();
     await expect(page.getByTestId('toasts')).toContainText(/updated/i);
-    if (await page.getByTestId('today-more').isVisible()) await page.getByTestId('today-more').click();
+    if (await page.getByTestId('drafts-more').isVisible()) await page.getByTestId('drafts-more').click();
     const merge = page.getByTestId('suggestion-confirm_merge').first();
     await expect(merge.getByTestId('merge-choice')).toContainText(/both have/i);
     await merge.getByTestId('merge-ask').click();
@@ -871,22 +917,24 @@ test.describe('First-run guidance and plain next steps', () => {
     page,
   }) => {
     await loadDemo(page);
+    await openDrafts(page);
     const badgeNow = async () => Number(await page.getByTestId('approvals-badge').first().innerText());
-    // the same drafts as Today's cards, not Today plus everything that can wait (Today writes its cards' drafts a
-    // moment after the page opens, so the two are compared once the page has caught up)
-    const todaysNow = () =>
-      page
+    const toSend = page.getByTestId('drafts-to-send');
+    // the drafts worth sending today, not everything that can wait (Drafts writes its cards' drafts a moment after
+    // the page opens, so the two are compared once the page has caught up)
+    const draftsNow = () =>
+      toSend
         .locator('[data-testid^="suggestion-"]')
         .filter({ has: page.getByTestId('draft-review') })
         .count();
-    await expect.poll(async () => (await badgeNow()) - (await todaysNow()), { timeout: 15_000 }).toBe(0);
+    await expect.poll(async () => (await badgeNow()) - (await draftsNow()), { timeout: 15_000 }).toBe(0);
     const badge = await badgeNow();
     expect(badge).toBeGreaterThan(0);
-    await page.goto('inbox');
-    await expect(page.getByRole('heading', { name: 'Drafts' })).toBeVisible();
     await expect(page.getByRole('tab', { name: /^to send/i })).toContainText(String(badge));
-    await expect(page.locator('[data-testid^="suggestion-"]')).toHaveCount(badge);
-    await expect(page.getByTestId('suggestion-prep_brief')).toHaveCount(0);
+    await expect(toSend.locator('[data-testid^="suggestion-"]')).toHaveCount(badge);
+    // prep is not a message: it waits under its own heading, and the badge does not count it
+    await expect(toSend.getByTestId('suggestion-prep_brief')).toHaveCount(0);
+    await expect(page.getByTestId('drafts-other').getByTestId('suggestion-prep_brief').first()).toBeVisible();
     // opened in the mail app: it moves to "Opened, not marked sent"; the badge still counts it, since it waits on
     // the student's "I sent it"
     const card = page.getByTestId('suggestion-follow_up_bump').first();
@@ -895,14 +943,15 @@ test.describe('First-run guidance and plain next steps', () => {
     await expect(page.getByRole('tab', { name: /^to send/i })).toContainText(String(badge - 1));
     await expect(page.getByRole('tab', { name: /opened, not marked sent/i })).toContainText('1');
     await expect(page.getByTestId('approvals-badge').first()).toHaveText(String(badge));
-    // leaving and coming back keeps the "I sent it" step: the page opens on what is waiting, and Today shows it
-    await page.goto('today');
+    // leaving and coming back keeps the "I sent it" step: the page opens on what is waiting
+    await page.goto('people');
     await page.goto('inbox');
     await expect(page.getByRole('tab', { name: /opened, not marked sent/i })).toHaveAttribute(
       'aria-selected',
       'true',
     );
-    await expect(page.getByRole('button', { name: /i sent it/i })).toBeVisible();
+    await expect(handedOff(page)).toContainText(/did these go out/i);
+    await expect(handedOff(page).getByRole('button', { name: /i sent it/i })).toBeVisible();
     await expect(page.getByTestId('handoff-copy')).toBeVisible();
   });
 
@@ -938,18 +987,19 @@ test.describe('First-run guidance and plain next steps', () => {
     await expect(page.getByTestId('demo-banner')).toContainText(/made-up student/);
     await page.goto('welcome');
     await expect(page.getByRole('button', { name: /set up orbit for me/i }).first()).toBeVisible();
-    await page.goto('today');
+    await page.goto('inbox');
     await page.getByTestId('demo-start-own').click();
     await page.getByTestId('demo-start-confirm').click();
     await expect(page).toHaveURL(/\/onboarding\/1$/, { timeout: 15_000 });
     await expect(page.getByTestId('ob-name')).toHaveValue('');
   });
 
-  test('Pipeline explains its stages and finds who went quiet; the next-step chip opens that card on Today', async ({
+  test('the People board explains its stages and finds who went quiet; the next-step chip opens that card in Drafts', async ({
     page,
   }) => {
     await loadDemo(page);
-    await page.goto('pipeline');
+    await page.goto('people');
+    await expect(page.getByTestId('people-view-board')).toHaveAttribute('aria-selected', 'true');
     await expect(page.getByTestId('hint-pipeline')).toBeVisible();
     await page.getByTestId('stage-legend').locator('summary').click();
     await expect(page.getByTestId('stage-legend')).toContainText(/waiting for a reply/i);
@@ -958,19 +1008,24 @@ test.describe('First-run guidance and plain next steps', () => {
     await page.reload();
     await expect(page.getByTestId('chat-card-warming').first()).toBeVisible();
     await expect(page.getByTestId('hint-pipeline')).toHaveCount(0);
-    await page.getByTestId('filter-quiet').check();
+    const filter = page.getByLabel('Filter people');
+    await expect(filter.getByTestId('filter-quiet')).toHaveText(/^Went quiet \(\d+\)$/);
+    await filter.selectOption('quiet');
+    await expect(page).toHaveURL(/f=quiet/);
     const quiet = page.locator('[data-testid^="chat-card-"]:not([data-testid="chat-card-move"])');
     await expect(quiet.first()).toBeVisible();
     for (const t of await quiet.allInnerTexts()) expect(t).toMatch(/quiet/);
-    await page.getByTestId('filter-quiet').uncheck();
-    // the table sorts from its headers
-    await page.getByRole('tab', { name: 'Table' }).click();
-    await page.locator('thead').getByRole('button', { name: 'Person', exact: true }).click();
-    await expect(page.locator('th[aria-sort="ascending"]')).toContainText(/person/i);
+    await filter.selectOption('all');
+    // the list sorts by name
+    await page.getByRole('tab', { name: 'List' }).click();
+    await page.getByLabel('Sort people').selectOption('name');
+    const names = await page.getByTestId('person-name').allInnerTexts();
+    expect(names.length).toBeGreaterThan(3);
+    expect(names.slice(0, 10)).toEqual([...names.slice(0, 10)].sort((a, b) => a.localeCompare(b)));
     await page.getByRole('tab', { name: 'Board' }).click();
     const next = page.getByTestId('chat-next').first();
     await next.click();
-    await expect(page).toHaveURL(/\/today\?card=/);
+    await expect(page).toHaveURL(/\/inbox\?card=/);
     await expect(page.locator('[data-highlight="true"]')).toBeVisible();
   });
 });
@@ -1148,6 +1203,8 @@ async function addByHand(
   company: string,
   how: { email?: string; linkedin?: string },
 ) {
+  // People's header always has Add a person
+  await page.goto('people');
   await page
     .getByRole('button', { name: /add a person/i })
     .first()
@@ -1160,9 +1217,28 @@ async function addByHand(
   await expect(page).toHaveURL(/\/people\//);
 }
 
+/** Waits until the follow-up draft's stored text ends with this: the editor opens on what is stored. */
+async function bumpSaved(page: Page, ending: string) {
+  await expect
+    .poll(() =>
+      page.evaluate(async (ending) => {
+        type Out = { kind: string; status: string; bodyFinal?: string };
+        const db = (window as unknown as { __orbitDb: { outbound: { toArray(): Promise<Out[]> } } })
+          .__orbitDb;
+        return (await db.outbound.toArray()).some(
+          (o) => o.kind === 'bump' && o.status === 'draft' && !!o.bodyFinal?.endsWith(ending),
+        );
+      }, ending),
+    )
+    .toBe(true);
+  // and the page has drawn it
+  await page.waitForTimeout(300);
+}
+
 test.describe("Never losing the student's work, and honest hand-offs", () => {
   test('Close on an edited draft keeps the words, and Undo changes puts the text back', async ({ page }) => {
     await loadDemo(page);
+    await openDrafts(page);
     const card = page.getByTestId('suggestion-follow_up_bump').first();
     await card.getByTestId('draft-review').click();
     const box = card.getByLabel('Message body');
@@ -1172,6 +1248,7 @@ test.describe("Never losing the student's work, and honest hand-offs", () => {
     await card.getByTestId('draft-cancel').click();
     await expect(box).toBeHidden();
     await expect(page.getByTestId('toasts')).toContainText(/changes are kept/i);
+    await bumpSaved(page, 'PS: loved the retries post.');
     await card.getByTestId('draft-review').click();
     await expect(box).toHaveValue(/PS: loved the retries post\.$/);
     // after a reload too
@@ -1184,6 +1261,8 @@ test.describe("Never losing the student's work, and honest hand-offs", () => {
       .getByTestId('toasts')
       .getByRole('button', { name: /undo changes/i })
       .click();
+    // the editor opens on the stored text, so it is reopened once Undo has written it back
+    await bumpSaved(page, 'PS: loved the retries post.');
     await card.getByTestId('draft-review').click();
     await expect(box).toHaveValue(/PS: loved the retries post\.$/);
     // closing without a change says nothing
@@ -1197,6 +1276,7 @@ test.describe("Never losing the student's work, and honest hand-offs", () => {
   }) => {
     await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
     await loadDemo(page);
+    await openDrafts(page);
     const card = page.getByTestId('suggestion-thank_you').first();
     await card.getByTestId('draft-review').click();
     await expect(card.getByLabel('Message body')).toBeVisible();
@@ -1204,7 +1284,8 @@ test.describe("Never losing the student's work, and honest hand-offs", () => {
     if (await card.getByTestId('draft-attach-resume').isVisible())
       await card.getByTestId('draft-attach-confirm').check();
     await card.getByTestId('draft-copy').click();
-    const waiting = card.getByTestId('outbox-handed_off');
+    // the copied message leaves To send and waits under Did these go out?
+    const waiting = handedOff(page).getByTestId('outbox-handed_off');
     await expect(waiting).toBeVisible();
     await expect(waiting).toContainText(/press I sent it/i);
     // only the message is copied: a "Subject:" line pasted into the body would go out as its first line
@@ -1224,32 +1305,37 @@ test.describe("Never losing the student's work, and honest hand-offs", () => {
 
   test('confirming a time and pressing "I sent it" books the chat under Coming up', async ({ page }) => {
     await loadDemo(page);
+    await openDrafts(page);
     const card = page.getByTestId('suggestion-schedule_confirm').first();
     const name = (await card.locator('a.font-medium').first().innerText()).trim();
     await card.getByTestId('draft-review').click();
     await card.getByRole('button', { name: /open email to/i }).click();
-    await card.getByRole('button', { name: /i sent it/i }).click();
+    await handedOff(page)
+      .getByTestId('outbox-item')
+      .filter({ hasText: name })
+      .getByRole('button', { name: /i sent it/i })
+      .click();
     await expect(page.getByText(/is booked for/i)).toBeVisible();
     await expect(page.getByText('Coming up').locator('..').getByText(name)).toBeVisible();
   });
 
-  test('a first message started on a person page survives leaving it, and is findable on Drafts and Today', async ({
+  test('a first message started on a person page survives leaving it, and is findable on Drafts', async ({
     page,
   }) => {
     await newStudent(page);
     await addByHand(page, 'Daniel Kim', 'Goldman Sachs', {
       linkedin: 'https://www.linkedin.com/in/daniel-kim-gs',
     });
-    // adding someone leads to a next step on Today, not to an empty page
-    await page.goto('today');
-    const next = page.getByTestId('today-to-write');
+    // adding someone leads to a next step in Drafts, not to an empty page
+    await openDrafts(page);
+    const next = page.getByTestId('drafts-to-write');
     await expect(next).toContainText('Daniel Kim');
-    await expect(page.getByTestId('today-summary')).toContainText(/first message to Daniel/i);
+    await expect(next.getByTestId('drafts-write')).toHaveText(/^Write to Daniel$/);
     // Discover is up to date without a Refresh
     await page.goto('discover');
     await expect(page.getByTestId('rec-card').filter({ hasText: 'Daniel Kim' })).toBeVisible();
-    await page.goto('today');
-    await page.getByTestId('today-write').click();
+    await openDrafts(page);
+    await page.getByTestId('drafts-write').click();
     await expect(page.getByTestId('warmup-choice')).toBeVisible();
     await page.getByTestId('warmup-skip').click();
     const box = page.getByLabel('Message body');
@@ -1267,10 +1353,11 @@ test.describe("Never losing the student's work, and honest hand-offs", () => {
     const started = page.getByTestId('started-draft');
     await expect(started).toContainText('Daniel Kim');
     await expect(started).toContainText('Glad to');
-    await page.goto('today');
-    await expect(page.getByTestId('today-started')).toContainText('Daniel Kim');
+    // the draft took the place of the "write to" step
+    await expect(page.getByTestId('drafts-to-write')).toHaveCount(0);
+    await expect(page.getByTestId('drafts-started')).toContainText('Daniel Kim');
     await page
-      .getByTestId('today-started')
+      .getByTestId('drafts-started')
       .getByRole('button', { name: /continue writing/i })
       .click();
     await expect(box).toHaveValue(/Glad to/);
@@ -1295,7 +1382,7 @@ test.describe("Never losing the student's work, and honest hand-offs", () => {
     await expect(page.getByTestId('draft-copy')).toBeEnabled();
   });
 
-  test('the landing page, Settings and Pipeline promise only what a build without Google does', async ({
+  test('the landing page, Settings and the People board promise only what a build without Google does', async ({
     page,
   }) => {
     await prep(page);
@@ -1306,21 +1393,22 @@ test.describe("Never losing the student's work, and honest hand-offs", () => {
     await page.goto('settings/integrations');
     const google = page.getByTestId('google-unavailable');
     await expect(google).toContainText(/not part of this version/i);
-    await page.goto('pipeline');
+    await page.goto('people');
     await expect(page.getByText(/cannot see your inbox/i)).toBeVisible();
   });
 
-  test('the Pipeline table fits a laptop, and the board points at next steps off to the right', async ({
+  test('the People list fits a laptop, and the board points at next steps off to the right', async ({
     page,
   }) => {
     await loadDemo(page);
-    await page.goto('pipeline?view=table');
-    const table = page.locator('table');
+    await page.goto('people?view=list&f=chats');
+    const table = page.getByTestId('people-table');
     await expect(table).toBeVisible();
     const fits = await table.evaluate((t) => t.scrollWidth <= (t.parentElement as HTMLElement).clientWidth);
     expect(fits).toBe(true);
     await expect(table.getByText('Closeness', { exact: true })).toBeInViewport();
-    await page.goto('pipeline');
+    await expect(table.getByText('Next', { exact: true })).toBeInViewport();
+    await page.goto('people');
     const needs = page.getByTestId('board-needs');
     await expect(needs).toBeVisible();
     await needs.click();
@@ -1332,6 +1420,7 @@ test.describe('Phone: the same flows fit 390px', () => {
   test.use({ viewport: { width: 390, height: 844 } });
   test('closing an edited draft and its Undo fit the screen', async ({ page }) => {
     await loadDemo(page);
+    await openDrafts(page);
     const card = page.getByTestId('suggestion-follow_up_bump').first();
     await card.getByTestId('draft-review').click();
     const box = card.getByLabel('Message body');
@@ -1382,6 +1471,14 @@ test.describe('Usability round 5: one draft, kept edits, saved settings, chats t
     page,
   }) => {
     await loadDemo(page);
+    // Drafts writes its cards' drafts as it opens, so the badge is read once they are in
+    await openDrafts(page);
+    const toSend = page.getByTestId('drafts-to-send').locator('[data-testid^="suggestion-"]');
+    await expect
+      .poll(async () => Number(await page.getByTestId('approvals-badge').first().innerText()), {
+        timeout: 15_000,
+      })
+      .toBe(await toSend.count());
     const badge = Number(await page.getByTestId('approvals-badge').first().innerText());
     await page.goto('discover');
     await page
@@ -1402,8 +1499,8 @@ test.describe('Usability round 5: one draft, kept edits, saved settings, chats t
     await expect(page.getByText(/logged as sent to/i)).toBeVisible();
     await expect(page.getByTestId('approvals-badge').first()).toHaveText(String(badge));
     await expect(page.getByTestId('person-started-draft')).toHaveCount(0);
-    await page.goto('today');
-    await expect(page.getByTestId('today-started')).toHaveCount(0);
+    await openDrafts(page);
+    await expect(page.getByTestId('drafts-started')).toHaveCount(0);
   });
 
   test('the "Why them" line drops into an edited message, and a rewrite asks first and can be undone', async ({
@@ -1453,7 +1550,7 @@ test.describe('Usability round 5: one draft, kept edits, saved settings, chats t
     await page.locator('#profile-city').fill('Ann Arbor, MI');
     await expect(page.getByTestId('autosave')).toContainText(/save as you make them/i);
     await page
-      .getByRole('link', { name: /^today$/i })
+      .getByRole('link', { name: /^people$/i })
       .first()
       .click();
     await page.reload();
@@ -1473,21 +1570,21 @@ test.describe('Usability round 5: one draft, kept edits, saved settings, chats t
     await expect(page.getByTestId('resume-on-file')).toContainText(/on file/i);
   });
 
-  test('a card moved to Replied gets a next step on Today; a booked chat shows its time or asks for it', async ({
+  test('a card moved to Replied gets a next step in Drafts; a booked chat shows its time or asks for it', async ({
     page,
   }) => {
     await loadDemo(page);
-    await page.goto('pipeline');
+    await page.goto('people');
     await chatCard(page, 'Jonah Reyes').getByTestId('chat-card-move').selectOption('replied');
-    await expect(page.getByText(/moved jonah to replied/i)).toBeVisible();
-    await page.goto('today');
+    await expect(page.getByText(/moved jonah to replied\. your reply is in drafts\./i)).toBeVisible();
+    await openDrafts(page);
     await expect(
       page
         .getByTestId('suggestion-schedule_propose')
         .filter({ hasText: /Jonah replied\. Orbit cannot see what they wrote/ }),
     ).toBeVisible();
     // Scheduled with the time left for later: the card and the page ask for it
-    await page.goto('pipeline');
+    await page.goto('people');
     await chatCard(page, 'Caleb Weber').getByTestId('chat-card-move').selectOption('scheduled');
     await page.getByRole('button', { name: /^not set yet$/i }).click();
     await expect(chatCard(page, 'Caleb Weber')).toContainText(/time not set/i);
@@ -1495,7 +1592,7 @@ test.describe('Usability round 5: one draft, kept edits, saved settings, chats t
     await page.getByTestId('person-set-time').click();
     await page.getByTestId('schedule-save').click();
     await expect(page.getByTestId('person-chat-time')).toContainText(/^Chat /);
-    await page.goto('pipeline');
+    await page.goto('people');
     await expect(chatCard(page, 'Caleb Weber').getByTestId('chat-card-time')).toContainText(/^Chat /);
     // a chat still ahead is not marked done by a slip of the menu
     await chatCard(page, 'Ethan Park').getByTestId('chat-card-move').selectOption('completed');
@@ -1519,7 +1616,7 @@ test.describe('Usability round 5: one draft, kept edits, saved settings, chats t
     await page.getByTestId('capture-save').click();
     await expect(page).toHaveURL(/\/people\//);
     await expect(page.getByLabel('Chat stage')).toHaveValue('scheduled');
-    await page.goto('today');
+    await openDrafts(page);
     await expect(page.getByText('Coming up').locator('..').getByText('Ethan Park')).toBeVisible();
   });
 
@@ -1598,10 +1695,11 @@ test.describe('Usability round 5: one draft, kept edits, saved settings, chats t
     await expect(page.getByTestId('person-header')).toContainText('marcus.bell@gmail.com');
   });
 
-  test('a tap beside Add a person keeps what was typed; a message opened in the mail app is named on Today', async ({
+  test('a tap beside Add a person keeps what was typed; a message opened in the mail app waits in Drafts', async ({
     page,
   }) => {
     await newStudent(page);
+    await page.goto('people');
     await page
       .getByRole('button', { name: /add a person/i })
       .first()
@@ -1618,11 +1716,15 @@ test.describe('Usability round 5: one draft, kept edits, saved settings, chats t
     await page.getByTestId('draft-redraft').click();
     await page.getByRole('button', { name: /^open email to rachel$/i }).click();
     await expect(page.getByTestId('outbox-handed_off')).toBeVisible();
-    await page.goto('today');
-    await expect(page.getByTestId('today-summary')).toContainText(
-      /waiting for you to say whether it went out/i,
+    // Drafts opens on it: it waits for the student to say whether it went out
+    await openDrafts(page);
+    await expect(page.getByRole('tab', { name: /opened, not marked sent/i })).toHaveAttribute(
+      'aria-selected',
+      'true',
     );
-    await expect(page.getByTestId('today-summary')).not.toContainText(/nothing needs you/i);
+    await expect(handedOff(page)).toContainText(/did these go out/i);
+    await expect(handedOff(page)).toContainText('Rachel Kim');
+    await expect(page.getByText(/no drafts right now|nothing needs you/i)).toHaveCount(0);
   });
 });
 
@@ -1641,13 +1743,13 @@ test.describe('Usability round 5: chats Orbit cannot see, and notes in shorthand
     await page.getByRole('button', { name: /^copy (note )?& open linkedin$/i }).click();
     await page.getByRole('button', { name: /^i sent it to aisha$/i }).click();
     await expect(page.getByText(/logged as sent to aisha/i)).toBeVisible();
-    // twelve days of silence on LinkedIn: no follow-up is due yet, so she waits on Today's side list
+    // twelve days of silence on LinkedIn: no follow-up is due yet, so she waits under Waiting on a reply in Drafts
     await page.clock.fastForward(12 * 86_400_000);
-    await page.goto('today');
-    const quiet = page.getByTestId('today-quiet');
+    await openDrafts(page);
+    const quiet = page.getByTestId('drafts-quiet');
     await expect(quiet).toContainText('Aisha Bello');
-    await quiet.getByTestId('today-quiet-replied').click();
-    await expect(page.getByTestId('today-quiet')).toHaveCount(0);
+    await quiet.getByTestId('drafts-quiet-replied').click();
+    await expect(page.getByTestId('drafts-quiet')).toHaveCount(0);
     const card = page
       .getByTestId('suggestion-schedule_propose')
       .filter({ hasText: /Aisha replied\. Orbit cannot see what they wrote/ });
@@ -1662,8 +1764,8 @@ test.describe('Usability round 5: chats Orbit cannot see, and notes in shorthand
     await expect(body).not.toHaveValue(/would either of these work|\(UTC\)|\d(am|pm)\b/i);
     await page.reload();
     await expect(page.getByTestId('suggestion-schedule_propose')).toBeVisible();
-    await expect(page.getByTestId('today-quiet')).toHaveCount(0);
-    await page.goto('pipeline');
+    await expect(page.getByTestId('drafts-quiet')).toHaveCount(0);
+    await page.goto('people');
     await expect(chatCard(page, 'Aisha Bello')).toHaveAttribute('data-testid', 'chat-card-replied');
     await expect(chatCard(page, 'Aisha Bello')).not.toContainText(/quiet/);
   });
@@ -1684,7 +1786,7 @@ test.describe('Usability round 5: chats Orbit cannot see, and notes in shorthand
       );
     await page.getByTestId('capture-save').click();
     await expect(page).toHaveURL(/\/people\//);
-    await page.goto('today');
+    await openDrafts(page);
     const card = page.getByTestId('suggestion-thank_you').filter({ hasText: 'Rachel Kim' });
     await card.getByTestId('draft-review').click();
     const body = card.getByLabel('Message body');
@@ -1734,10 +1836,10 @@ test.describe('Usability round 6', () => {
     await page.goto('notes/new');
     await page.getByTestId('capture-text').fill('Coffee chat w Lena. She said interns get real ownership.');
     // a stray tap on the nav loses nothing
-    await page.getByRole('link', { name: 'Pipeline' }).first().click();
-    // the Pipeline page is really shown (a route change renders as a transition, so going back before it lands would
+    await page.getByRole('link', { name: 'People' }).first().click();
+    // the People page is really shown (a route change renders as a transition, so going back before it lands would
     // never leave Add note at all)
-    await expect(page.getByRole('heading', { name: 'Pipeline', level: 1 })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'People', level: 1 })).toBeVisible();
     await page.goBack();
     await expect(page.getByTestId('capture-text')).toHaveValue(/Coffee chat w Lena/);
     await expect(page.getByTestId('capture-draft-hint')).toContainText(/unsaved note/i);
@@ -1816,6 +1918,7 @@ test.describe('Usability round 6', () => {
   test('"I sent it" can be undone, putting the message back to waiting', async ({ page }) => {
     await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
     await loadDemo(page);
+    await openDrafts(page);
     const card = page.getByTestId('suggestion-thank_you').first();
     await card.getByTestId('draft-review').click();
     await expect(card.getByLabel('Message body')).toBeVisible();
@@ -1823,8 +1926,10 @@ test.describe('Usability round 6', () => {
     if (await card.getByTestId('draft-attach-resume').isVisible())
       await card.getByTestId('draft-attach-confirm').check();
     await card.getByTestId('draft-copy').click();
-    await expect(card.getByTestId('outbox-handed_off')).toBeVisible();
-    await card.getByRole('button', { name: /i sent it/i }).click();
+    await expect(handedOff(page).getByTestId('outbox-handed_off')).toBeVisible();
+    await handedOff(page)
+      .getByRole('button', { name: /i sent it/i })
+      .click();
     await expect(page.getByTestId('toasts')).toContainText(/logged as sent/i);
     await page
       .getByTestId('toasts')
@@ -1856,12 +1961,167 @@ test.describe('Usability round 6', () => {
   }) => {
     await loadDemo(page);
     await page.clock.setSystemTime(new Date('2026-10-08T10:00:00'));
-    await page.goto('today');
+    await openDrafts(page);
     const lena = page.getByTestId('suggestion-thank_you').filter({ hasText: 'Lena' });
     await lena.getByTestId('draft-review').click();
     await expect(lena.getByLabel('Message body')).toHaveValue(/making time on Monday/);
     await expect(lena.getByLabel('Message body')).not.toHaveValue(/yesterday/);
     // Ethan's chat was yesterday at 11:30 and the demo has no calendar sync: it moved on by itself
     await expect(page.getByTestId('suggestion-thank_you').filter({ hasText: 'Ethan' })).toBeVisible();
+  });
+});
+
+test.describe('People holds the board and the list; Drafts holds the day', () => {
+  test('People switches between Board, List and Companies, and the list has everyone, with or without a chat', async ({
+    page,
+  }) => {
+    await loadDemo(page);
+    await page.goto('people');
+    // the board is the default view
+    await expect(page.getByRole('heading', { name: 'People', level: 1 })).toBeVisible();
+    await expect(page.getByTestId('people-view-board')).toHaveAttribute('aria-selected', 'true');
+    await expect(page.getByTestId('chat-card-warming').first()).toBeVisible();
+    await page.getByTestId('people-view-list').click();
+    await expect(page).toHaveURL(/\/people\?view=list$/);
+    await expect(page.getByTestId('people-view-list')).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('[data-testid^="chat-card-"]')).toHaveCount(0);
+    const rows = page.getByTestId('people-row');
+    await expect(rows.first()).toBeVisible();
+    // someone without a chat is listed too, with a way to start one
+    const noChat = rows.filter({ has: page.getByTestId('list-start-chat') }).first();
+    const name = await noChat.getByTestId('person-name').innerText();
+    const everyone = await rows.count();
+    // "With a chat" narrows the list to the people on the board
+    await page.getByLabel('Filter people').selectOption('chats');
+    await expect(page).toHaveURL(/f=chats/);
+    await expect(page.getByTestId('list-start-chat')).toHaveCount(0);
+    expect(await rows.count()).toBeLessThan(everyone);
+    // one filter serves every view: switching keeps it
+    await page.getByLabel('Filter people').selectOption('alumni');
+    await page.getByTestId('people-view-board').click();
+    await expect(page).toHaveURL(/view=board/);
+    await expect(page).toHaveURL(/f=alumni/);
+    await expect(page.getByLabel('Filter people')).toHaveValue('alumni');
+    await page.getByTestId('people-view-companies').click();
+    await expect(page.getByLabel('Filter people')).toHaveValue('alumni');
+    await page.getByLabel('Filter people').selectOption('all');
+    await expect(page.getByRole('cell', { name: /target/i }).first()).toBeVisible();
+    // Start a chat opens the first message on their page
+    await page.getByTestId('people-view-list').click();
+    await rows.filter({ hasText: name }).getByTestId('list-start-chat').click();
+    await expect(page).toHaveURL(/\/people\/p/);
+    await expect(page.getByRole('heading', { name, level: 1 })).toBeVisible();
+    await expect(
+      page
+        .getByLabel('Message body')
+        .or(page.getByTestId('warmup-choice'))
+        .or(page.getByText(/check-in fits/i)),
+    ).toBeVisible({ timeout: 15_000 });
+  });
+
+  test('a stage changes right in the list, with an Undo', async ({ page }) => {
+    await loadDemo(page);
+    await page.goto('people?view=list&f=chats');
+    const row = page
+      .getByTestId('people-row')
+      .filter({ has: page.getByTestId('list-stage') })
+      .first();
+    const name = await row.getByTestId('person-name').innerText();
+    const stage = page.getByTestId('people-row').filter({ hasText: name }).getByTestId('list-stage');
+    const from = await stage.inputValue();
+    // both stay in the list of people with a chat (a closed stage leaves it unless Show closed is on)
+    const to = from === 'nurturing' ? 'replied' : 'nurturing';
+    await stage.selectOption(to);
+    await expect(page.getByTestId('toasts')).toContainText(`Moved ${name.split(' ')[0]} to`);
+    await expect(stage).toHaveValue(to);
+    await page
+      .getByTestId('toasts')
+      .getByRole('button', { name: /^undo$/i })
+      .click();
+    await expect(stage).toHaveValue(from);
+  });
+
+  test('the list draws 300 people at a time, and Show more draws the rest', async ({ page }) => {
+    await loadDemo(page);
+    await briefWritten(page);
+    await injectPeople(page, 400);
+    await page.goto('people?view=list');
+    const rows = page.getByTestId('people-row');
+    await expect(rows).toHaveCount(300);
+    await expect(page.getByText(/^Showing 300 of \d+\./)).toBeVisible();
+    await page.getByTestId('people-show-more').click();
+    expect(await rows.count()).toBeGreaterThan(400);
+  });
+
+  test('old Today and Pipeline addresses land where their content lives now', async ({ page }) => {
+    await loadDemo(page);
+    await page.goto('today');
+    await expect(page.getByTestId('greeting')).toBeVisible();
+    await expect(page).toHaveURL(/\/(orbit\/?)?$/);
+    // a link to one card or one person opens it in Drafts, outlined
+    const card = await page.evaluate(async () => {
+      const db = (
+        window as unknown as {
+          __orbitDb: {
+            suggestions: {
+              toArray(): Promise<{ id: string; kind: string; status: string; personId?: string }[]>;
+            };
+          };
+        }
+      ).__orbitDb;
+      return (await db.suggestions.toArray()).find((s) => s.status === 'pending' && s.kind === 'thank_you')!;
+    });
+    await page.goto(`today?card=${card.id}`);
+    await expect(page).toHaveURL(new RegExp(`/inbox\\?card=${card.id}$`));
+    await expect(page.locator('[data-highlight="true"]')).toBeVisible();
+    await page.goto(`today?person=${card.personId}`);
+    await expect(page).toHaveURL(new RegExp(`/inbox\\?person=${card.personId}$`));
+    await expect(page.locator('[data-highlight="true"]')).toBeVisible();
+    // the Pipeline is the People board; its table is the list of people with a chat
+    await page.goto('pipeline');
+    await expect(page).toHaveURL(/\/people\?view=board$/);
+    await expect(page.getByTestId('people-view-board')).toHaveAttribute('aria-selected', 'true');
+    await page.goto('pipeline?view=table');
+    await expect(page).toHaveURL(/\/people\?view=list&f=chats$/);
+    await expect(page.getByTestId('people-view-list')).toHaveAttribute('aria-selected', 'true');
+    await expect(page.getByLabel('Filter people')).toHaveValue('chats');
+    await page.goto('pipeline?view=companies');
+    await expect(page).toHaveURL(/\/people\?view=companies$/);
+    await page.goto('pipeline?quiet=1');
+    await expect(page).toHaveURL(/\/people\?view=board&quiet=1$/);
+    await expect(page.getByLabel('Filter people')).toHaveValue('quiet');
+  });
+
+  test('Drafts lists who is waiting on a reply, and "They replied" turns it into a reply to write', async ({
+    page,
+  }) => {
+    await loadDemo(page);
+    await openDrafts(page);
+    // Daniel has not answered in over a week; his follow-up card speaks for the chat until it is dismissed
+    const bump = page.getByTestId('suggestion-follow_up_bump').filter({ hasText: 'Daniel Okafor' });
+    await bump.getByRole('button', { name: /^dismiss$/i }).click();
+    await bump.getByRole('button', { name: /not now/i }).click();
+    await expect(bump).toHaveCount(0);
+    const who = 'Daniel Okafor';
+    const quiet = page.getByTestId('drafts-quiet');
+    await expect(quiet).toContainText('Waiting on a reply');
+    const item = quiet.getByRole('listitem').filter({ hasText: who });
+    await expect(item).toContainText(/You wrote /);
+    await item.getByTestId('drafts-quiet-replied').click();
+    const first = who.split(' ')[0]!;
+    await expect(page.getByTestId('toasts')).toContainText(`Moved ${first} to Replied`);
+    await expect(page.getByTestId('drafts-quiet').filter({ hasText: who })).toHaveCount(0);
+    // the reply to write is a card here, and the toast's Show it outlines it
+    await page
+      .getByTestId('toasts')
+      .getByRole('button', { name: /^show it$/i })
+      .click();
+    await expect(page).toHaveURL(/\/inbox\?person=p/);
+    const reply = page.locator('[data-highlight="true"]');
+    await expect(reply).toBeVisible();
+    await expect(reply).toContainText(who);
+    // and the board agrees
+    await page.goto('people');
+    await expect(chatCard(page, who)).toHaveAttribute('data-testid', 'chat-card-replied');
   });
 });

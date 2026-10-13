@@ -16,8 +16,8 @@ async function loadDemo(page: Page, query = '?fakeEngine=1') {
     .getByRole('button', { name: /^try the demo$/i })
     .first()
     .click();
-  await expect(page).toHaveURL(/\/today$/, { timeout: 90_000 });
-  await expect(page.getByText(/good (morning|afternoon|evening)/i)).toBeVisible();
+  // the demo lands on the chat, its home
+  await expect(page.getByTestId('greeting')).toContainText(/^Hey /, { timeout: 90_000 });
 }
 
 async function home(page: Page, query?: string) {
@@ -72,17 +72,25 @@ test.describe('Chat home', () => {
     await shot(page, 'e2e-laptop-home');
     const rail = page.getByTestId('rail');
     expect((await rail.boundingBox())!.width).toBe(64);
-    // the rail: Orbit mark, sidebar toggle, New chat, Today, Pipeline, People, a divider, Map, Discover, Drafts,
-    // Settings and the avatar at the bottom; every item names itself
+    // the rail: Orbit mark, sidebar toggle, New chat (the chat is home), People, Drafts, a divider, Map, Discover,
+    // Settings and the avatar at the bottom; every item names itself. Today and Pipeline are gone.
     for (const name of ['Expand sidebar', 'New chat'])
       await expect(rail.getByRole('button', { name })).toBeVisible();
-    for (const name of ['Today', 'Pipeline', 'People', 'Map', 'Discover', 'Drafts', 'Settings'])
+    for (const name of ['People', 'Drafts', 'Map', 'Discover', 'Settings'])
       await expect(rail.getByRole('link', { name: new RegExp(`^${name}`) })).toBeVisible();
-    await expect(rail.getByRole('link', { name: /^today$/i })).toHaveAttribute('data-tip', 'Today');
+    for (const name of ['Today', 'Pipeline'])
+      await expect(rail.getByRole('link', { name: new RegExp(`^${name}`) })).toHaveCount(0);
+    await expect(rail.getByRole('link', { name: /^people$/i })).toHaveAttribute('data-tip', 'People');
     await expect(rail.getByRole('link', { name: 'Alex Rivera' })).toBeVisible();
-    expect((await rail.getByRole('link', { name: /^today$/i }).boundingBox())!.height).toBeGreaterThanOrEqual(
-      44,
-    );
+    expect(
+      (await rail.getByRole('link', { name: /^people$/i }).boundingBox())!.height,
+    ).toBeGreaterThanOrEqual(44);
+    // in order: People and Drafts above the divider, Map and Discover under it
+    const order = await rail
+      .getByRole('navigation', { name: 'Main' })
+      .getByRole('link')
+      .evaluateAll((els) => els.map((e) => e.getAttribute('aria-label')));
+    expect(order).toEqual(['People', 'Drafts', 'Map', 'Discover']);
     // the greeting, one line, with the first name
     const greeting = page.getByTestId('greeting');
     await expect(greeting).toHaveText(/^Hey Alex, what’s on your mind today\?$/);
@@ -145,16 +153,16 @@ test.describe('Chat home', () => {
       await expect(row.getByRole('button', { name })).toBeVisible();
     // Open in app shows the page in the side panel; the conversation stays beside it
     await card.getByTestId('open-in-app').click();
-    await expect(page.getByTestId('panel-title')).toHaveText('Pipeline');
+    await expect(page.getByTestId('panel-title')).toHaveText('People');
     await expect(page.getByTestId('result-pipeline')).toBeVisible();
     await page.getByTestId('panel-close').click();
     await expect(page).toHaveURL(/\/orbit\/$/);
     // leaving to a real page via the rail and coming back keeps the thread
     await page
       .getByTestId('rail')
-      .getByRole('link', { name: /^today$/i })
+      .getByRole('link', { name: /^people$/i })
       .click();
-    await expect(page).toHaveURL(/\/today$/);
+    await expect(page).toHaveURL(/\/people$/);
     await page.goBack();
     await expect(page).toHaveURL(/\/orbit\/$/);
     await expect(page.getByTestId('result-pipeline')).toBeVisible();
@@ -385,10 +393,11 @@ test.describe('Chat home', () => {
     await expect(page.getByTestId('rail')).toBeHidden();
     const tabs = page.getByTestId('tab-bar');
     await expect(tabs).toBeVisible();
-    for (const name of ['Chat', 'Today', 'Pipeline', 'People'])
+    for (const name of ['Chat', 'People', 'Drafts', 'Map'])
       await expect(tabs.getByRole('link', { name })).toBeVisible();
+    await expect(tabs.getByRole('link', { name: 'Today' })).toHaveCount(0);
     await expect(tabs.getByRole('button', { name: 'More' })).toBeVisible();
-    expect((await tabs.getByRole('link', { name: 'Today' }).boundingBox())!.height).toBeGreaterThanOrEqual(
+    expect((await tabs.getByRole('link', { name: 'People' }).boundingBox())!.height).toBeGreaterThanOrEqual(
       44,
     );
     expect(await page.getByTestId('greeting').evaluate((el) => getComputedStyle(el).fontSize)).toBe('26px');
@@ -403,11 +412,13 @@ test.describe('Chat home', () => {
     for (const el of await chips.all()) expect((await el.boundingBox())!.height).toBeGreaterThanOrEqual(44);
     await noOverflow(page, 'phone home');
     expect(await clipped(page, '#root')).toEqual([]);
-    // More opens the rest of the app
+    // More opens what does not fit in the bar: Discover, Add note and Settings
     await tabs.getByRole('button', { name: 'More' }).click();
     const sheet = page.getByTestId('more-sheet');
-    for (const name of ['Map', 'Discover', 'Drafts', 'Add note', 'Settings'])
+    for (const name of ['Discover', 'Add note', 'Settings'])
       await expect(sheet.getByRole('link', { name: new RegExp(`^${name}`) })).toBeVisible();
+    for (const name of ['Map', 'Drafts'])
+      await expect(sheet.getByRole('link', { name: new RegExp(`^${name}`) })).toHaveCount(0);
     const sheetBox = (await sheet.locator('[role="dialog"]').boundingBox())!;
     expect(sheetBox.y).toBeGreaterThan(0);
     expect(sheetBox.y + sheetBox.height).toBeLessThanOrEqual(844 - 56);
