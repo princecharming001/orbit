@@ -490,7 +490,15 @@ export async function runTurn(
   }
   await flushResults();
   if (!spoken.trim() && lastStop === 'end_turn' && !signal?.aborted) {
-    const said = await speakUp(deps, runner.params, conversation.id, clock, onEvent, persistAssistant, signal);
+    const said = await speakUp(
+      deps,
+      runner.params,
+      conversation.id,
+      clock,
+      onEvent,
+      persistAssistant,
+      signal,
+    );
     if (said) lastRowId = said;
   }
   onEvent({ type: 'done', stopReason: lastStop, messageId: lastRowId });
@@ -518,9 +526,18 @@ async function speakUp(
     const messages = params.messages.filter(
       (m) => !(m.role === 'assistant' && Array.isArray(m.content) && m.content.length === 0),
     );
-    const nudge: Anthropic.Beta.BetaMessageParam = { role: 'system', content: [{ type: 'text', text: SPEAK_UP }] };
+    const nudge: Anthropic.Beta.BetaMessageParam = {
+      role: 'system',
+      content: [{ type: 'text', text: SPEAK_UP }],
+    };
     const runner = deps.client.beta.messages.toolRunner(
-      { ...params, messages: [...messages, nudge], tool_choice: { type: 'none' }, max_iterations: 1, stream: true },
+      {
+        ...params,
+        messages: [...messages, nudge],
+        tool_choice: { type: 'none' },
+        max_iterations: 1,
+        stream: true,
+      },
       { signal },
     );
     let said: string | undefined;
