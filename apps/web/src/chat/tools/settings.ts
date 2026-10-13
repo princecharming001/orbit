@@ -648,15 +648,15 @@ export const advanceOnboarding = defineTool({
   name: 'advance_onboarding',
   kind: 'write',
   description:
-    'Call this only during setup, when the student asks to go to the next step, skip a step, or finish setup ("I am done, take me to Today"). Finishing builds the recommendations and the welcome brief. The setup steps are 2 about you, 3 goals, 4 resume, 5 Google, 6 LinkedIn, 8 preferences; the profile and goals themselves are saved with update_settings.',
+    'Call this only during setup, when the student asks to go to the next step, skip a step, or finish setup ("I am done, take me to the chat"). Finishing builds the recommendations and the welcome brief. The setup steps are 1 welcome, 2 about you, 3 goals, 4 LinkedIn, 5 Gmail (only when Google sign-in is set up), 6 ready; the profile and goals themselves are saved with update_settings, and the resume, tone and other details are set later in Settings.',
   input: z.object({
     step: z
       .number()
       .int()
-      .min(2)
+      .min(1)
       .max(ONBOARDING_DONE_STEP)
       .optional()
-      .describe('The step to move to (2, 3, 4, 5, 6 or 8).'),
+      .describe('The step to move to (1 to 6).'),
     finish: z.boolean().optional().describe('true: finish setup.'),
   }),
   capabilities: ['onboarding_step_nav', 'onboarding_finish', 'landing_get_started'],
@@ -678,7 +678,7 @@ export const advanceOnboarding = defineTool({
     }
     if (!input.step) throw new Error('Say which step, or finish.');
     const step = await setOnboardingStep(ctx.user.id, input.step);
-    const out = { step, href: `/onboarding/${Math.max(1, (step ?? input.step) - 1)}` };
+    const out = { step, href: `/onboarding/${Math.max(0, (step ?? input.step) - 1)}` };
     return ok('settings', out, out, `Setup is on step ${step}.`, out.href);
   },
   toModel,
