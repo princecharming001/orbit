@@ -8,6 +8,8 @@ import { db } from '../../db/schema';
 import { createLocalUser } from '../../engine/account';
 import { connectAndSyncGoogle } from '../../engine/integrations';
 import { setLlmClientFactoryForTests } from '../../integrations/anthropic';
+import { setConnectorModeForTests } from '../../integrations/connectorOutcome';
+import { setConnectorsMockForTests } from '../../integrations/connectorsMock';
 import { clearPrefs, flushPrefs, readPrefs, writePrefs } from '../../integrations/prefs';
 import { setSharedClaudeUrlForTests } from '../../integrations/shared-claude';
 import { SessionProvider } from '../../state/session';
@@ -227,6 +229,51 @@ describe('setup: LinkedIn', () => {
     );
     await settle(30);
     expect($('[data-testid="linkedin-error"]')?.textContent).toMatch(/not a CSV file/);
+  });
+});
+
+describe('setup: LinkedIn live', () => {
+  afterEach(() => {
+    setConnectorsMockForTests(undefined);
+    setConnectorModeForTests(undefined);
+  });
+
+  it('puts Connect LinkedIn first, connects, then offers Sync now', async () => {
+    setConnectorsMockForTests(true);
+    await showWidget('linkedin');
+    const card = $('[data-testid="setup-linkedin"]')!;
+    expect(card.textContent).toMatch(/Connect your LinkedIn/);
+    expect($('[data-testid="linkedin-live-connect"]')).not.toBeNull();
+    // the export is one tap away, not in the way
+    expect($('[data-testid="linkedin-dropzone"]')).toBeNull();
+    await act(async () => $('[data-testid="linkedin-show-upload"]')!.click());
+    expect($('[data-testid="linkedin-dropzone"]')).not.toBeNull();
+    await act(async () => $('[data-testid="linkedin-live-connect"]')!.click());
+    await settle(80);
+    expect($('[data-testid="linkedin-done"]')?.textContent).toMatch(
+      /4 people added, 0 updated\. Orbit keeps them in sync/,
+    );
+    expect($('[data-testid="linkedin-live-connected"]')?.textContent).toMatch(
+      /Synced live, 4 connections, last sync/,
+    );
+    expect($('[data-testid="setup-linkedin"]')!.textContent).toMatch(/LinkedIn is connected/);
+    await act(async () => $('[data-testid="linkedin-live-sync"]')!.click());
+    await settle(80);
+    expect($('[data-testid="linkedin-done"]')?.textContent).toMatch(/0 people added, 4 updated/);
+    expect(await db.people.where('userId').equals(userId).count()).toBe(4);
+  });
+
+  it('says live sync is switching on soon and keeps the export when the key is not pasted yet', async () => {
+    setConnectorModeForTests('unconfigured');
+    await showWidget('linkedin');
+    await act(async () => $('[data-testid="linkedin-live-connect"]')!.click());
+    await settle(20);
+    expect($('[data-testid="linkedin-live-soon"]')?.textContent).toBe(
+      'Live sync is switching on soon. Upload your export for now.',
+    );
+    expect($('[data-testid="linkedin-live-connect"]')).toBeNull();
+    expect($('[data-testid="linkedin-dropzone"]')).not.toBeNull();
+    expect($('[data-testid="linkedin-error"]')).toBeNull();
   });
 });
 

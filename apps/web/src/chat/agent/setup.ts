@@ -10,12 +10,16 @@ import { todayCards } from '../../engine/today';
 export interface SetupState {
   /** people the student can see (human, not hidden) */
   people: number;
+  /** LinkedIn is in: an export was uploaded, or the account is connected live */
   linkedinImported: boolean;
+  /** LinkedIn is connected live (Unipile) and keeps itself in sync */
+  linkedinLive?: boolean;
+  /** live LinkedIn can be offered here, so the step is "connect" rather than "import" */
+  liveLinkedInAvailable?: boolean;
+  /** Gmail and Calendar (Google) are connected */
   googleConnected: boolean;
   resumeOnFile: boolean;
   targetCompanies: number;
-  /** at least one message draft exists (the moment Google starts to matter) */
-  hasDraft: boolean;
   /** how the chat reaches Claude: the student's own key, Orbit's shared access, or neither */
   claude: 'own_key' | 'shared' | 'none';
   /** the sample student: nothing to set up */
@@ -30,30 +34,30 @@ export interface SetupStep {
   text: string;
 }
 
-/** A LinkedIn import is still the best first step until the student has about this many people. */
-const SMALL_NETWORK = 10;
-
 const STEPS: Record<SetupStepId, string> = {
   linkedin: 'import LinkedIn connections (show_setup linkedin)',
   add_person: 'add one person they met (ask for a name)',
   target_companies: 'add a few target companies (ask which ones)',
-  google: 'connect Google so drafts can go out (show_setup google)',
+  google: 'connect Gmail so Orbit sees who they email and drafts can go out (show_setup google)',
   resume: 'add a resume (show_setup resume)',
   none: 'none, setup is done',
 };
 
 /**
- * The single next setup step, in priority order for a student with nothing set up: LinkedIn import, then a first
- * person or target companies, then Google once there is a draft to send, then the resume. The sample student has
- * nothing to set up.
+ * The single next setup step, in priority order: LinkedIn (connect live where Orbit offers it, else the export)
+ * until it is in, then Gmail until it is connected, then a first person if there is still nobody, then target
+ * companies, then the resume. The sample student has nothing to set up.
  */
 export function nextSetupStep(s: SetupState): SetupStep {
   const pick = (id: SetupStepId): SetupStep => ({ id, text: STEPS[id] });
   if (s.demo) return { id: 'none', text: 'none, this is the sample student' };
-  if (s.people === 0) return pick(s.linkedinImported ? 'add_person' : 'linkedin');
-  if (!s.linkedinImported && s.people < SMALL_NETWORK) return pick('linkedin');
+  if (!s.linkedinImported)
+    return s.liveLinkedInAvailable
+      ? { id: 'linkedin', text: 'connect LinkedIn so their connections stay in sync (show_setup linkedin)' }
+      : pick('linkedin');
+  if (!s.googleConnected) return pick('google');
+  if (s.people === 0) return pick('add_person');
   if (s.targetCompanies === 0) return pick('target_companies');
-  if (s.hasDraft && !s.googleConnected) return pick('google');
   if (!s.resumeOnFile) return pick('resume');
   return pick('none');
 }
@@ -68,8 +72,8 @@ export function setupLine(s: SetupState): string {
   const claude = s.claude === 'own_key' ? 'own key' : s.claude === 'shared' ? 'shared access' : 'no key';
   const facts = [
     `people ${s.people}`,
-    `LinkedIn ${s.linkedinImported ? 'imported' : 'not imported'}`,
-    `Google ${s.googleConnected ? 'connected' : 'not connected'}`,
+    `LinkedIn ${s.linkedinLive ? 'connected live' : s.linkedinImported ? 'imported' : 'not connected'}`,
+    `Gmail ${s.googleConnected ? 'connected' : 'not connected'}`,
     `resume ${s.resumeOnFile ? 'on file' : 'none'}`,
     `target companies ${s.targetCompanies}`,
     `Claude ${claude}`,

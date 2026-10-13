@@ -244,9 +244,43 @@ export interface RouteView {
 export interface WarmIntro {
   introducer: string;
   headline?: string;
+  /** the Orbit person who would introduce, when known */
+  introducerId?: string;
   warmth: number;
+  /** warmth in a word ("warm", "good", "a stretch") */
+  warmthWord: string;
   hops: string[];
   note?: string;
+}
+
+/** Warmth as a word when the tool did not give one. */
+function warmthWordOf(w: number): string {
+  return w >= 0.7 ? 'warm' : w >= 0.45 ? 'good' : 'a stretch';
+}
+
+/** warm intros: `{ warmIntros: [{ introducer: { name, headline?, personId? }, warmth, warmthWord?, hops, note? }] }` */
+export function readWarmIntros(d: unknown): WarmIntro[] {
+  const o = obj(unpack(d));
+  return arr(o.warmIntros)
+    .map((x): WarmIntro | undefined => {
+      const w = obj(x);
+      const intro = obj(w.introducer);
+      const name = str(intro.name);
+      if (!name) return undefined;
+      const warmth = num(w.warmth) ?? 0;
+      return {
+        introducer: name,
+        headline: str(intro.headline),
+        introducerId: str(intro.personId),
+        warmth,
+        warmthWord: str(w.warmthWord) ?? warmthWordOf(warmth),
+        hops: arr(w.hops)
+          .map((h) => str(h) ?? '')
+          .filter(present),
+        note: str(w.note),
+      };
+    })
+    .filter(present);
 }
 
 export function readRoutes(d: unknown): {
@@ -281,23 +315,7 @@ export function readRoutes(d: unknown): {
       };
     })
     .filter(present);
-  const warmIntros = arr(o.warmIntros)
-    .map((x): WarmIntro | undefined => {
-      const w = obj(x);
-      const intro = obj(w.introducer);
-      const name = str(intro.name);
-      if (!name) return undefined;
-      return {
-        introducer: name,
-        headline: str(intro.headline),
-        warmth: num(w.warmth) ?? 0,
-        hops: arr(w.hops)
-          .map((h) => str(h) ?? '')
-          .filter(present),
-        note: str(w.note),
-      };
-    })
-    .filter(present);
+  const warmIntros = readWarmIntros(d);
   return {
     to,
     routes,

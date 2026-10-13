@@ -1,13 +1,21 @@
 /**
  * Village (warm intros): an optional source of real intro paths to a person or company, with a warmth score and the
  * person who could make the introduction. It is reached through Orbit's own server function (supabase/functions/
- * orbit-village), which holds the Village API key; the browser never sees it. Off unless the build sets
- * VITE_ORBIT_VILLAGE_PROXY and the student opted in. When it has nothing, or is not configured, Orbit's own graph
- * answers instead, so the route finder always works.
+ * orbit-connectors), which holds the Village API key; the browser never sees it. Off unless the build sets
+ * VITE_ORBIT_VILLAGE_PROXY. When it has nothing, is not configured, or answers that its key is not pasted yet, Orbit's
+ * own graph answers instead, so the route finder always works. The sample student's paths come from
+ * integrations/connectorsMock.ts (see engine/warmIntros.ts).
  *
  * The request and response are mapped here behind one adapter, so when the founder adds a real Village key and we
  * test live, any shape difference is a change in this file alone.
  */
+import {
+  automationOverride,
+  type ConnectorOutcome,
+  connectorFailure,
+  isUnconfigured,
+} from './connectorOutcome';
+import { UNCONFIGURED_PROXY } from './unipile';
 
 let override: string | null | undefined;
 
@@ -18,7 +26,9 @@ export function setVillageUrlForTests(url: string | null | undefined): void {
 
 export function villageUrl(): string | undefined {
   if (override !== undefined) return override ?? undefined;
-  if (typeof navigator !== 'undefined' && navigator.webdriver) return undefined;
+  const mode = automationOverride();
+  if (mode === 'unconfigured') return UNCONFIGURED_PROXY;
+  if (mode !== 'live') return undefined;
   const url = (import.meta.env.VITE_ORBIT_VILLAGE_PROXY as string | undefined)?.trim();
   return url ? url.replace(/\/+$/, '') : undefined;
 }
@@ -56,20 +66,27 @@ interface VillageResponse {
 }
 
 /**
- * Ask Village for warm paths to a target. Returns an empty array when Village is not configured, has nothing, or
- * errors, so a caller can always fall back to the local graph. A short timeout keeps the chat responsive.
+ * Ask Village for warm paths to a target, as a typed outcome: `unconfigured` when the proxy says the key is not
+ * pasted yet, `timeout` past the deadline, `error` for anything else. A short timeout keeps the chat responsive.
  */
-export async function villagePaths(
+export async function villageLookup(
   target: VillageTarget,
   opts: { signal?: AbortSignal; fetch?: typeof fetch; timeoutMs?: number } = {},
-): Promise<VillagePath[]> {
+): Promise<ConnectorOutcome<VillagePath[]>> {
   const base = villageUrl();
-  if (!base) return [];
-  if (!target.name && !target.company) return [];
+  if (!base) return connectorFailure('unconfigured', 'Warm intros are not set up in this copy of Orbit.');
+  if (base === UNCONFIGURED_PROXY)
+    return connectorFailure('unconfigured', 'Warm intros are not switched on yet.', 503);
+  if (!target.name && !target.company) return { ok: true, value: [] };
   const doFetch = opts.fetch ?? fetch;
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 8000);
-  if (opts.signal) opts.signal.addEventListener('abort', () => ctrl.abort(), { once: true });
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    ctrl.abort();
+  }, opts.timeoutMs ?? 8000);
+  const onAbort = () => ctrl.abort();
+  opts.signal?.addEventListener('abort', onAbort, { once: true });
   try {
     const res = await doFetch(`${base}/paths`, {
       method: 'POST',
@@ -81,9 +98,11 @@ export async function villagePaths(
       }),
       signal: ctrl.signal,
     });
-    if (!res.ok) return [];
+    if (isUnconfigured(res))
+      return connectorFailure('unconfigured', 'Warm intros are not switched on yet.', res.status);
+    if (!res.ok) return connectorFailure('error', `Village did not answer (${res.status}).`, res.status);
     const body = (await res.json()) as VillageResponse;
-    return (body.paths ?? [])
+    const paths = (body.paths ?? [])
       .filter((p) => p.introducer?.name)
       .map((p) => ({
         introducer: {
@@ -96,9 +115,24 @@ export async function villagePaths(
         note: p.note,
       }))
       .sort((a, b) => b.warmth - a.warmth);
-  } catch {
-    return [];
+    return { ok: true, value: paths };
+  } catch (e) {
+    if (timedOut) return connectorFailure('timeout', 'Village took too long to answer.');
+    return connectorFailure('error', e instanceof Error ? e.message : 'Could not reach Village.');
   } finally {
     clearTimeout(timer);
+    opts.signal?.removeEventListener('abort', onAbort);
   }
+}
+
+/**
+ * Warm paths to a target, or an empty array when Village is not configured, not switched on, has nothing, or errors,
+ * so a caller can always fall back to the local graph.
+ */
+export async function villagePaths(
+  target: VillageTarget,
+  opts: { signal?: AbortSignal; fetch?: typeof fetch; timeoutMs?: number } = {},
+): Promise<VillagePath[]> {
+  const r = await villageLookup(target, opts);
+  return r.ok ? r.value : [];
 }

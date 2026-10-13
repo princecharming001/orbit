@@ -152,7 +152,7 @@ describe('snapshot', () => {
       /^Integrations: Google not connected, LinkedIn import 3 d ago\. Claude features: drafts on, emailTriage on, notes off, resume off, summaries off\.$/,
     );
     expect(lines[6]).toBe(
-      'Setup: people 7, LinkedIn imported, Google not connected, resume none, target companies 0, Claude own key. Suggested first step: add a few target companies (ask which ones).',
+      'Setup: people 7, LinkedIn imported, Gmail not connected, resume none, target companies 0, Claude own key. Suggested first step: connect Gmail so Orbit sees who they email and drafts can go out (show_setup google).',
     );
     expect(lines[7]).toMatch(/^Stage names: identified = To contact/);
     expect(s.text).not.toMatch(/Open panel/);
@@ -194,7 +194,7 @@ describe('snapshot', () => {
     expect(s.text).toMatch(/Drafts unsent: 0\./);
     expect(s.text).toMatch(/Claude features: no key\./);
     expect(s.text).toMatch(
-      /Setup: people 0, LinkedIn not imported, Google not connected, resume none, target companies 0, Claude no key\. Suggested first step: import LinkedIn connections \(show_setup linkedin\)\./,
+      /Setup: people 0, LinkedIn not connected, Gmail not connected, resume none, target companies 0, Claude no key\. Suggested first step: import LinkedIn connections \(show_setup linkedin\)\./,
     );
   });
 
@@ -203,8 +203,24 @@ describe('snapshot', () => {
       (await buildSnapshot(user.id, NOW)).text.split('\n').find((l) => l.startsWith('Setup:'));
     expect(await setup()).toMatch(/first step: import LinkedIn/);
     await seed({ cards: 0, drafts: 0 });
-    // LinkedIn is in, people are in, no targets yet
-    expect(await setup()).toMatch(/first step: add a few target companies/);
+    // LinkedIn is in and people are in: Gmail comes next, with no draft needed
+    expect(await setup()).toMatch(
+      /LinkedIn imported, Gmail not connected.*first step: connect Gmail so Orbit sees who they email and drafts can go out \(show_setup google\)/,
+    );
+    // a revoked Google row is not connected (the same rule the setup widget uses)
+    await db.integrations.add({
+      id: 'int_g',
+      userId: user.id,
+      provider: 'google',
+      status: 'revoked',
+      scopes: [],
+      syncState: {},
+      connectedAt: '2026-10-09T15:00:00Z',
+    } as never);
+    expect(await setup()).toMatch(/Gmail not connected/);
+    // one that needs signing in again still counts as connected
+    await db.integrations.update('int_g', { status: 'needs_reauth' });
+    expect(await setup()).toMatch(/Gmail connected.*first step: add a few target companies/);
     await db.targetCompanies.add({
       id: 'tc1',
       userId: user.id,
@@ -213,30 +229,6 @@ describe('snapshot', () => {
       status: 'researching',
     } as never);
     expect(await setup()).toMatch(/target companies 1.*first step: add a resume \(show_setup resume\)/);
-    // a draft exists and Google is not connected: Google comes before the resume
-    await db.outbound.add({
-      id: 'out_x',
-      userId: user.id,
-      personId: 'p0',
-      channel: 'gmail',
-      kind: 'thank_you',
-      bodyDraft: 'x',
-      status: 'sent',
-      generatedBy: 'template',
-      claims: [],
-      createdAt: '2026-10-12T00:00:00Z',
-    } as never);
-    expect(await setup()).toMatch(/first step: connect Google so drafts can go out \(show_setup google\)/);
-    await db.integrations.add({
-      id: 'int_g',
-      userId: user.id,
-      provider: 'google',
-      status: 'active',
-      scopes: [],
-      syncState: {},
-      connectedAt: '2026-10-09T15:00:00Z',
-    } as never);
-    expect(await setup()).toMatch(/Google connected.*first step: add a resume/);
     await db.resumes.add({
       id: 'r1',
       userId: user.id,
@@ -246,6 +238,44 @@ describe('snapshot', () => {
       createdAt: '2026-10-12T00:00:00Z',
     } as never);
     expect(await setup()).toMatch(/resume on file.*first step: none, setup is done/);
+  });
+
+  it('counts a live LinkedIn connection as LinkedIn being in, and lists it with the integrations', async () => {
+    await db.people.add({
+      id: 'p_live',
+      userId: user.id,
+      displayName: 'Live Person',
+      firstName: 'Live',
+      lastName: 'Person',
+      nameNormalized: 'live person',
+      emails: [],
+      relationshipType: 'unknown',
+      strength: 0.2,
+      interactionCount: 0,
+      sources: [],
+      isHuman: true,
+      tags: [],
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+    } as never);
+    await db.integrations.add({
+      id: 'int_live',
+      userId: user.id,
+      provider: 'linkedin_live',
+      externalAccountId: 'acc_1',
+      status: 'active',
+      scopes: [],
+      syncState: { rows: 1 },
+      connectedAt: '2026-10-11T15:00:00Z',
+      lastSyncedAt: '2026-10-11T15:00:00Z',
+    } as never);
+    const text = (await buildSnapshot(user.id, NOW)).text;
+    expect(text).toMatch(
+      /Integrations: Google not connected, LinkedIn import never, LinkedIn live synced 1 d ago\./,
+    );
+    expect(text).toMatch(
+      /Setup: people 1, LinkedIn connected live, Gmail not connected,.*first step: connect Gmail/,
+    );
   });
 
   it('adds an Open panel line only while a panel is open, and a change re-appends the snapshot', async () => {

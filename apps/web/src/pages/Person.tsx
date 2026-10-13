@@ -28,6 +28,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { runApproval } from '../components/approve';
 import { DraftEditor, handoffWhere, OutboxStatus } from '../components/DraftEditor';
+import { MutualConnections } from '../components/MutualConnections';
 import { ConfirmEarlyDone, chatTimeLabel, ScheduleChatDialog } from '../components/ScheduleChat';
 import { SuggestionCard } from '../components/SuggestionCard';
 import { db } from '../db/schema';
@@ -963,6 +964,7 @@ export function PersonPage() {
               Refresh summary
             </button>
           </Card>
+          <MutualConnections user={user} person={person} />
           {chat?.warmUp && (
             <Card>
               <div className="font-medium mb-2">LinkedIn warm-up</div>

@@ -39,6 +39,8 @@ import {
   readSetup,
   readSuggestions,
   readText,
+  readWarmIntros,
+  type WarmIntro,
 } from './shapes';
 
 export interface CardActions {
@@ -111,6 +113,36 @@ function CardHead({ title, href, aside }: { title: ReactNode; href?: string; asi
       <div className="font-semibold text-[14px] min-w-0 truncate">{title}</div>
       {aside}
       <OpenInApp href={href} className="ml-auto shrink-0" />
+    </div>
+  );
+}
+
+/** Village's warm intro paths: who introduces, how warm in a word, and the hops. */
+function WarmIntros({ intros, divided }: { intros: WarmIntro[]; divided?: boolean }) {
+  if (!intros.length) return null;
+  return (
+    <div className={cx(divided && 'mt-3 pt-3 border-t border-line-2')} data-testid="warm-intros">
+      <div className="text-[12px] font-medium text-ink-3 mb-1.5">Warm intros</div>
+      <ul className="space-y-2 text-[13.5px]">
+        {intros.map((w) => (
+          <li key={`${w.introducer}:${w.hops.join('>')}`} data-testid="warm-intro">
+            <div className="flex items-center gap-2 flex-wrap">
+              {w.introducerId ? (
+                <Link to={`/people/${w.introducerId}`} className="font-medium hover:underline">
+                  {w.introducer}
+                </Link>
+              ) : (
+                <span className="font-medium">{w.introducer}</span>
+              )}
+              <Chip tone={w.warmthWord === 'warm' ? 'good' : w.warmthWord === 'good' ? 'accent' : 'neutral'}>
+                {w.warmthWord}
+              </Chip>
+            </div>
+            {w.hops.length > 1 && <div className="text-[12.5px] text-ink-2">{w.hops.join(' → ')}</div>}
+            {w.note && <div className="text-[12.5px] text-ink-3">{w.note}</div>}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -305,7 +337,8 @@ function Envelope({ env, block, actions }: { env: ResultEnvelope; block: ToolBlo
     }
     case 'routes': {
       const { to, routes, stories, warmIntros } = readRoutes(d);
-      if (!routes.length && !stories.length) {
+      // warm intros alone are a result too (Village found paths where Orbit's own graph has none)
+      if (!routes.length && !stories.length && !warmIntros.length) {
         const people = readPeople(d);
         if (!people.length) return <Summary env={env} />;
         return (
@@ -360,20 +393,10 @@ function Envelope({ env, block, actions }: { env: ResultEnvelope; block: ToolBlo
               ))}
             </ul>
           )}
-          {warmIntros.length > 0 && (
-            <div className="mt-3 pt-3 border-t border-line-2">
-              <div className="text-[12px] font-medium text-ink-3 mb-1.5">Warm intros</div>
-              <ul className="space-y-1.5 text-[13.5px]">
-                {warmIntros.map((w) => (
-                  <li key={w.introducer}>
-                    <span className="font-medium">{w.introducer}</span>
-                    {w.headline ? <span className="text-ink-3"> · {w.headline}</span> : null}
-                    {w.note ? <div className="text-[12.5px] text-ink-3">{w.note}</div> : null}
-                  </li>
-                ))}
-              </ul>
-            </div>
+          {routes.length === 0 && stories.length === 0 && (
+            <p className="text-[13.5px] text-ink-2">{env.summary}</p>
           )}
+          <WarmIntros intros={warmIntros} divided={routes.length > 0 || stories.length > 0} />
         </GlassCard>
       );
     }
@@ -481,6 +504,7 @@ function Envelope({ env, block, actions }: { env: ResultEnvelope; block: ToolBlo
             </p>
           )}
           {people.length > 0 && <p className="mt-2 text-[12.5px] text-ink-3">{env.summary}</p>}
+          <WarmIntros intros={readWarmIntros(d)} divided />
         </GlassCard>
       );
     }

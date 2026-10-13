@@ -6,8 +6,8 @@ const DASHES = /[—–]/;
 
 describe('capability manifest', () => {
   it('lists every inventory id once, with an area, a title, a kind and three utterances', () => {
-    expect(CAPABILITIES).toHaveLength(175);
-    expect(CAPABILITY_IDS.size).toBe(175);
+    expect(CAPABILITIES).toHaveLength(181);
+    expect(CAPABILITY_IDS.size).toBe(181);
     for (const c of CAPABILITIES) {
       expect(c.id).toMatch(/^[a-z0-9_]+$/);
       expect(c.area.length).toBeGreaterThan(0);

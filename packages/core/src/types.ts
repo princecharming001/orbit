@@ -4,6 +4,8 @@ export type ID = string;
 export type IntegrationProvider =
   | 'google'
   | 'linkedin_csv'
+  /** the student's own LinkedIn account connected through Unipile, synced live */
+  | 'linkedin_live'
   | 'granola'
   | 'fathom'
   | 'wispr_export'
@@ -287,6 +289,8 @@ export interface Person {
   emails: string[];
   linkedinUrl?: string;
   linkedinSlug?: string;
+  /** LinkedIn's member id, kept from a live (Unipile) sync so mutual-connection lookups can name this person */
+  linkedinMemberId?: string;
   headline?: string;
   currentTitle?: string;
   currentOrganizationId?: ID;

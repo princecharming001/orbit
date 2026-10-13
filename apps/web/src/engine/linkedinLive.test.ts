@@ -1,0 +1,312 @@
+import type { User } from '@orbit/core';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { db, wipeDatabase } from '../db/schema';
+import { setConnectorsMockForTests } from '../integrations/connectorsMock';
+import { setUnipileUrlForTests } from '../integrations/unipile';
+import {
+  autoSyncLinkedInLive,
+  connectLinkedInLive,
+  disconnectLinkedInLive,
+  LIVE_SOON,
+  linkedInLiveStatus,
+  liveLinkedInAccount,
+  liveLinkedInAvailable,
+  mutualsFor,
+  setLivePollForTests,
+  syncLinkedInLive,
+} from './linkedinLive';
+
+const BASE = 'https://proxy.test/functions/v1/orbit-connectors';
+const user: User = {
+  id: 'u1',
+  email: 'ravi.jain@umich.edu',
+  fullName: 'Ravi Jain',
+  firstName: 'Ravi',
+  lastName: 'Jain',
+  school: 'University of Michigan',
+  majors: ['Computer Science'],
+  timezone: 'America/Detroit',
+  onboardingStep: 11,
+  createdAt: '2026-01-01T00:00:00.000Z',
+};
+
+type Answer = { status?: number; body: unknown; headers?: Record<string, string> };
+let routes: Record<string, Answer | (() => Answer)>;
+let calls: { path: string; body: Record<string, unknown> }[];
+const UNCONFIGURED: Answer = {
+  status: 503,
+  body: { error: 'not configured' },
+  headers: { 'x-orbit-connector': 'unconfigured' },
+};
+
+const RELATIONS = {
+  items: [
+    {
+      first_name: 'Daniel',
+      last_name: 'Okafor',
+      position: 'Analyst',
+      company: 'Goldman Sachs',
+      public_profile_url: 'https://www.linkedin.com/in/daniel-okafor',
+      connected_at: '2025-03-12T10:00:00Z',
+      member_id: 'm_daniel',
+    },
+    {
+      first_name: 'Sana',
+      last_name: 'Ahmed',
+      position: 'Business Analyst',
+      company: 'McKinsey & Company',
+      public_profile_url: 'https://www.linkedin.com/in/sana-ahmed',
+      member_id: 'm_sana',
+    },
+  ],
+  cursor: null,
+};
+
+let popup: { closed: boolean; close: () => void };
+
+beforeEach(async () => {
+  await wipeDatabase();
+  await db.users.put(user);
+  await db.goals.put({
+    userId: user.id,
+    cycleLabel: 'Summer 2027',
+    targetRoles: ['Summer analyst'],
+    targetFunctions: ['ib', 'consulting'],
+    targetIndustries: [],
+    targetLocations: [],
+    ambition: 2,
+  });
+  await db.targetCompanies.put({
+    id: 'tc1',
+    userId: user.id,
+    nameRaw: 'Goldman Sachs',
+    priority: 1,
+    status: 'researching',
+  } as never);
+  setUnipileUrlForTests(BASE);
+  setConnectorsMockForTests(false);
+  setLivePollForTests({ everyMs: 1, tries: 6 });
+  calls = [];
+  let polls = 0;
+  routes = {
+    '/connect/start': { body: { url: 'https://unipile/login', ref: 'ref1' } },
+    // the first look is still waiting, the second has the account
+    '/connect/status': () =>
+      ++polls < 2 ? { body: { status: 'pending' } } : { body: { status: 'connected', accountId: 'acc_1' } },
+    '/relations': { body: RELATIONS },
+    '/disconnect': { body: { ok: true } },
+    '/mutuals': {
+      body: { mutuals: [{ name: 'Sana Ahmed', member_id: 'm_sana' }, { name: 'Stranger Person' }] },
+    },
+  };
+  vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
+    const path = url.replace(BASE, '');
+    calls.push({ path, body: JSON.parse((init.body as string) || '{}') });
+    const r = routes[path];
+    const a = typeof r === 'function' ? r() : (r ?? { status: 404, body: {} });
+    return new Response(JSON.stringify(a.body), {
+      status: a.status ?? 200,
+      headers: { 'content-type': 'application/json', ...(a.headers ?? {}) },
+    });
+  });
+  popup = { closed: false, close: vi.fn() };
+  vi.spyOn(window, 'open').mockImplementation(() => popup as unknown as Window);
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  setUnipileUrlForTests(undefined);
+  setConnectorsMockForTests(undefined);
+  setLivePollForTests(undefined);
+});
+
+const people = () => db.people.where('userId').equals(user.id).toArray();
+
+describe('connecting LinkedIn live', () => {
+  it('is offered when the proxy is in the build, and says it is switching on soon when the key is not pasted', async () => {
+    expect(liveLinkedInAvailable(user)).toBe(true);
+    routes['/connect/start'] = UNCONFIGURED;
+    expect(await connectLinkedInLive(user)).toEqual({
+      ok: false,
+      reason: 'unconfigured',
+      message: LIVE_SOON,
+    });
+    expect(window.open).not.toHaveBeenCalled();
+    setUnipileUrlForTests(null);
+    expect(liveLinkedInAvailable(user)).toBe(false);
+    expect(await connectLinkedInLive(user)).toMatchObject({ ok: false, reason: 'unconfigured' });
+    expect(await liveLinkedInAccount(user.id)).toBeUndefined();
+  });
+
+  it('opens the hosted sign-in, waits for it, records the account and imports with member ids', async () => {
+    const progress: number[] = [];
+    const r = await connectLinkedInLive(user, { onProgress: (n) => progress.push(n) });
+    expect(r).toEqual({ ok: true, rows: 2, added: 2 });
+    expect(window.open).toHaveBeenCalledWith('https://unipile/login', 'orbit-linkedin', expect.any(String));
+    expect(popup.close).toHaveBeenCalled();
+    expect(progress.length).toBeGreaterThan(0);
+    const row = await liveLinkedInAccount(user.id);
+    expect(row).toMatchObject({
+      provider: 'linkedin_live',
+      externalAccountId: 'acc_1',
+      status: 'active',
+      syncState: { rows: 2, lastSyncedAt: expect.any(String) },
+    });
+    expect(row!.lastSyncedAt).toBe((row!.syncState as { lastSyncedAt: string }).lastSyncedAt);
+    const all = await people();
+    expect(all.map((p) => [p.displayName, p.linkedinMemberId]).sort()).toEqual([
+      ['Daniel Okafor', 'm_daniel'],
+      ['Sana Ahmed', 'm_sana'],
+    ]);
+    // recommendations are rebuilt at once, like an export upload
+    const recs = await db.recommendations.where('userId').equals(user.id).toArray();
+    expect(recs.some((x) => x.personId === all.find((p) => p.firstName === 'Daniel')!.id)).toBe(true);
+    const st = await linkedInLiveStatus(user);
+    expect(st).toMatchObject({ available: true, connected: true, status: 'active', rows: 2, stale: false });
+  });
+
+  it('stops when the student closes the window, and reports a failed sign-in', async () => {
+    routes['/connect/status'] = { body: { status: 'pending' } };
+    popup.closed = true;
+    expect(await connectLinkedInLive(user)).toMatchObject({ ok: false, reason: 'cancelled' });
+    routes['/connect/status'] = {
+      body: { status: 'error', message: 'LinkedIn did not accept the sign-in.' },
+    };
+    popup.closed = false;
+    expect(await connectLinkedInLive(user)).toEqual({
+      ok: false,
+      reason: 'error',
+      message: 'LinkedIn did not accept the sign-in.',
+    });
+    expect(await liveLinkedInAccount(user.id)).toBeUndefined();
+  });
+
+  it('says so when the browser blocks the popup', async () => {
+    vi.spyOn(window, 'open').mockImplementation(() => null);
+    expect(await connectLinkedInLive(user)).toMatchObject({
+      ok: false,
+      reason: 'error',
+      message: expect.stringMatching(/blocked the LinkedIn window/),
+    });
+  });
+
+  it('a stopped connect is cancelled', async () => {
+    routes['/connect/status'] = { body: { status: 'pending' } };
+    const ctrl = new AbortController();
+    ctrl.abort();
+    expect(await connectLinkedInLive(user, { signal: ctrl.signal })).toMatchObject({
+      ok: false,
+      reason: 'cancelled',
+    });
+  });
+});
+
+describe('syncing, disconnecting and the daily re-sync', () => {
+  it('a re-sync updates instead of doubling, and notices a job change', async () => {
+    await connectLinkedInLive(user);
+    routes['/relations'] = {
+      body: { items: [{ ...RELATIONS.items[0], position: 'Associate' }], cursor: null },
+    };
+    const r = await syncLinkedInLive(user);
+    expect(r).toMatchObject({ ok: true, rows: 1, added: 0, updated: 1 });
+    expect(await people()).toHaveLength(2);
+    const daniel = (await people()).find((p) => p.firstName === 'Daniel')!;
+    expect(daniel.currentTitle).toBe('Associate');
+    expect(daniel.linkedinMemberId).toBe('m_daniel');
+  });
+
+  it('marks the account as needing attention on an error, but not when the key is simply not pasted', async () => {
+    await connectLinkedInLive(user);
+    routes['/relations'] = UNCONFIGURED;
+    expect(await syncLinkedInLive(user)).toMatchObject({ ok: false, reason: 'unconfigured' });
+    expect((await liveLinkedInAccount(user.id))!.status).toBe('active');
+    routes['/relations'] = { status: 502, body: { error: 'unipile 500' } };
+    expect(await syncLinkedInLive(user)).toMatchObject({ ok: false, reason: 'error' });
+    expect(await liveLinkedInAccount(user.id)).toMatchObject({
+      status: 'error',
+      lastError: expect.any(String),
+    });
+    expect((await linkedInLiveStatus(user)).error).toBeTruthy();
+  });
+
+  it('cannot sync before connecting', async () => {
+    expect(await syncLinkedInLive(user)).toMatchObject({ ok: false, reason: 'not_connected' });
+  });
+
+  it('disconnect unlinks at Unipile and keeps everyone imported', async () => {
+    await connectLinkedInLive(user);
+    const r = await disconnectLinkedInLive(user);
+    expect(r).toEqual({ ok: true, unlinkedAtUnipile: true });
+    expect(calls.find((c) => c.path === '/disconnect')!.body).toEqual({ accountId: 'acc_1' });
+    expect(await liveLinkedInAccount(user.id)).toMatchObject({ status: 'revoked' });
+    expect((await liveLinkedInAccount(user.id))!.externalAccountId).toBeUndefined();
+    expect(await people()).toHaveLength(2);
+    expect((await linkedInLiveStatus(user)).connected).toBe(false);
+    expect(await syncLinkedInLive(user)).toMatchObject({ ok: false, reason: 'not_connected' });
+    expect(await disconnectLinkedInLive(user)).toMatchObject({ ok: false, reason: 'not_connected' });
+  });
+
+  it('re-syncs on app open only when the last sync is more than a day old', async () => {
+    await connectLinkedInLive(user);
+    const row = (await liveLinkedInAccount(user.id))!;
+    const before = calls.filter((c) => c.path === '/relations').length;
+    const soon = new Date(Date.parse(row.lastSyncedAt!) + 60 * 60_000);
+    expect(await autoSyncLinkedInLive(user, soon)).toBeUndefined();
+    const later = new Date(Date.parse(row.lastSyncedAt!) + 25 * 60 * 60_000);
+    expect((await linkedInLiveStatus(user, later)).stale).toBe(true);
+    expect(await autoSyncLinkedInLive(user, later)).toMatchObject({ ok: true });
+    expect(calls.filter((c) => c.path === '/relations').length).toBe(before + 1);
+    expect((await liveLinkedInAccount(user.id))!.lastSyncedAt).toBe(later.toISOString());
+  });
+});
+
+describe('mutual connections', () => {
+  it('needs a live connection and the member id from it, then names who Orbit knows', async () => {
+    const outsider = {
+      id: 'px',
+      userId: user.id,
+      displayName: 'Priya Shah',
+      firstName: 'Priya',
+      lastName: 'Shah',
+      nameNormalized: 'priya shah',
+      emails: [],
+      relationshipType: 'unknown',
+      strength: 0.2,
+      interactionCount: 0,
+      sources: ['manual'],
+      isHuman: true,
+      tags: [],
+      createdAt: user.createdAt,
+      updatedAt: user.createdAt,
+    } as const;
+    await db.people.put({ ...outsider, sources: ['manual'], tags: [], emails: [] });
+    expect(await mutualsFor(user, (await db.people.get('px'))!)).toMatchObject({
+      ok: false,
+      reason: 'not_connected',
+    });
+    await connectLinkedInLive(user);
+    expect(await mutualsFor(user, (await db.people.get('px'))!)).toMatchObject({
+      ok: false,
+      reason: 'no_member_id',
+    });
+    const daniel = (await people()).find((p) => p.firstName === 'Daniel')!;
+    const r = await mutualsFor(user, daniel);
+    if (!r.ok) throw new Error(r.message);
+    expect(calls.find((c) => c.path === '/mutuals')!.body).toEqual({
+      accountId: 'acc_1',
+      targetMemberId: 'm_daniel',
+    });
+    const sana = (await people()).find((p) => p.firstName === 'Sana')!;
+    expect(r.mutuals).toEqual([
+      { name: 'Sana Ahmed', memberId: 'm_sana', headline: undefined, url: undefined, personId: sana.id },
+      {
+        name: 'Stranger Person',
+        memberId: undefined,
+        headline: undefined,
+        url: undefined,
+        personId: undefined,
+      },
+    ]);
+  });
+});

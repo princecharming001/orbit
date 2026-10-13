@@ -6,6 +6,7 @@ import { cx } from '../../ui';
 import { chipRows, homeChips } from '../agent/chips';
 import { useChatEngine } from '../engineContext';
 import { Composer } from './Composer';
+import { ConnectStrip, useConnectStripDismissed } from './ConnectStrip';
 import { homeStatusLine, useHomeStatus } from './homeStatus';
 import { Thread } from './Thread';
 import { threadActions, useThread } from './threadStore';
@@ -20,9 +21,12 @@ export function ChatHome() {
   const thread = useThread();
   const actions = useMemo(() => threadActions(engine), [engine]);
   const status = useHomeStatus();
+  const [stripDismissed, dismissStrip] = useConnectStripDismissed(user?.id);
   // an account with nobody in it gets three starter chips; the full set comes once there are people
   const chips = status.ready ? homeChips(engine.chips(), status.empty) : [];
-  const statusLine = homeStatusLine(status);
+  // once the strip is dismissed, the line under the greeting stops asking too
+  const statusLine = homeStatusLine(stripDismissed ? { ...status, linkedin: true, gmail: true } : status);
+  const showStrip = status.ready && !status.demo && !stripDismissed && (!status.linkedin || !status.gmail);
   const mode = engine.mode();
   const modeNote = engine.modeNote();
   const inConversation = thread.turns.length > 0;
@@ -109,6 +113,15 @@ export function ChatHome() {
           )}
           {composer('home')}
           {footer}
+          {showStrip && (
+            <ConnectStrip
+              linkedin={status.linkedin}
+              gmail={status.gmail}
+              onConnect={(what) => void actions.connect(what)}
+              onDismiss={dismissStrip}
+              disabled={thread.running}
+            />
+          )}
           <div className="mt-6 sm:mt-8 space-y-2.5" data-testid="chips">
             {chipRows(chips).map((row, i) => (
               <div

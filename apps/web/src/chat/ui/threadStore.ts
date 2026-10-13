@@ -4,6 +4,7 @@
  * the student looks at Today. The engine stays the source of truth: opening a conversation loads it from there.
  */
 import { useSyncExternalStore } from 'react';
+import { SETUP_CHIPS } from '../agent/setupChips';
 import type {
   ChatAction,
   ChatConversation,
@@ -289,8 +290,12 @@ export function threadActions(engine: ChatEngine) {
     },
     send: (text: string) => turn(text, (cid, on, signal) => engine.send(cid, text, on, signal)),
     runChip(chipId: string) {
-      const chip = engine.chips().find((c) => c.id === chipId);
+      const chip = [...engine.chips(), ...SETUP_CHIPS].find((c) => c.id === chipId);
       return turn(chip?.asUser ?? chipId, (cid, on) => engine.runChip(cid, chipId, on));
+    },
+    /** the home's Connect buttons: post the LinkedIn or Gmail setup widget into the thread */
+    connect(what: 'linkedin' | 'google') {
+      return this.runChip(what === 'linkedin' ? 'connect-linkedin' : 'connect-gmail');
     },
     attach(file: File, kind: 'note' | 'resume' | 'linkedin' | 'email') {
       const label = {

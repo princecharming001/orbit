@@ -5,6 +5,8 @@
 import { db } from '../db/schema';
 import { DEMO_USER_ID } from '../engine/demo';
 import { googleAccount } from '../engine/integrations';
+import { linkedInLiveStatus } from '../engine/linkedinLive';
+import { villageAvailable } from '../engine/warmIntros';
 import { currentGoogleToken, googleClientId } from '../integrations/google';
 import { envGoogleClientId, readPrefs } from '../integrations/prefs';
 import { sharedClaudeUrl } from '../integrations/shared-claude';
@@ -31,9 +33,22 @@ export interface LinkedinSetup {
   what: 'linkedin';
   /** people in Orbit (not hidden) */
   people: number;
-  /** rows in the last import */
+  /** rows in the last export upload */
   lastRows?: number;
   lastImportedAt?: string;
+  /** live LinkedIn through Unipile (the sample student's is the mock connector) */
+  live: {
+    /** live connect can be offered here */
+    available: boolean;
+    connected: boolean;
+    lastSyncedAt?: string;
+    rows?: number;
+    /** the last sync failed */
+    error?: string;
+    demo: boolean;
+  };
+  /** Village warm intros are on for this student */
+  warmIntros: boolean;
 }
 export interface ClaudeKeySetup {
   what: 'claude_key';
@@ -78,11 +93,22 @@ export async function readSetupStatus(userId: string, what: SetupWhat): Promise<
         .filter((p) => p.isHuman && !p.hiddenAt)
         .count();
       const rows = (li?.syncState as { rows?: unknown } | undefined)?.rows;
+      const user = await db.users.get(userId);
+      const live = user ? await linkedInLiveStatus(user) : undefined;
       return {
         what,
         people,
         lastRows: typeof rows === 'number' ? rows : undefined,
         lastImportedAt: li?.lastSyncedAt,
+        live: {
+          available: !!live?.available,
+          connected: !!live?.connected,
+          lastSyncedAt: live?.lastSyncedAt,
+          rows: live?.rows,
+          error: live?.error,
+          demo: !!live?.demo,
+        },
+        warmIntros: villageAvailable({ id: userId }),
       };
     }
     case 'claude_key':

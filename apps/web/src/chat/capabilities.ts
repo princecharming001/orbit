@@ -1,7 +1,7 @@
 import type { Capability } from './types';
 
 /**
- * Every capability a student has in Orbit today, one per id in the capability inventory (175). The registry's
+ * Every capability a student has in Orbit today, one per id in the capability inventory (181). The registry's
  * coverage test checks that every id here is claimed by at least one tool, and that every tool claims at least one.
  * `kind` is how the chat treats it: read, a plain write, or a write that needs an explicit Approve.
  */
@@ -1108,6 +1108,31 @@ export const CAPABILITIES: readonly Capability[] = [
     kind: 'read',
     utterances: ['who introduced me to whom', 'show my introductions', 'which chats came from intros'],
   },
+  {
+    id: 'warm_intro_paths',
+    area: 'Map and Reach',
+    title: 'Warm intro paths to a person (Village), with how warm each is',
+    kind: 'read',
+    utterances: [
+      'warm intro to Daniel Okafor',
+      'who could warmly introduce me to Maya',
+      'warm paths to Priya',
+    ],
+  },
+  {
+    id: 'warm_intros_company',
+    area: 'Map and Reach',
+    title: 'Warm intro paths into a company (Village)',
+    kind: 'read',
+    utterances: ['warm intro to Stripe', 'who can get me a warm intro at Figma', 'warm intros into Ramp'],
+  },
+  {
+    id: 'mutual_connections',
+    area: 'Map and Reach',
+    title: 'Mutual connections with a person (live LinkedIn)',
+    kind: 'read',
+    utterances: ['who knows Maya', 'mutual connections with Daniel Okafor', 'who do I know who knows Priya'],
+  },
   // Area 7. Discover and recommendations
   {
     id: 'discover_refresh',
@@ -1270,6 +1295,31 @@ export const CAPABILITIES: readonly Capability[] = [
       'what integration needs attention',
       'open the integrations that need fixing',
     ],
+  },
+  {
+    id: 'linkedin_live_connect',
+    area: 'Integrations and imports',
+    title: 'Connect LinkedIn live (Unipile) so connections stay in sync',
+    kind: 'write',
+    utterances: ['connect my LinkedIn', 'link my LinkedIn account', 'keep my LinkedIn connections in sync'],
+  },
+  {
+    id: 'linkedin_live_sync',
+    area: 'Integrations and imports',
+    title: 'Sync live LinkedIn now',
+    kind: 'write',
+    utterances: [
+      'sync my LinkedIn',
+      'pull my latest LinkedIn connections',
+      'refresh my LinkedIn connections',
+    ],
+  },
+  {
+    id: 'linkedin_live_disconnect',
+    area: 'Integrations and imports',
+    title: 'Disconnect live LinkedIn (people stay)',
+    kind: 'risky',
+    utterances: ['disconnect LinkedIn', 'unlink my LinkedIn account', 'stop syncing LinkedIn'],
   },
   // Area 9. Settings and account
   {

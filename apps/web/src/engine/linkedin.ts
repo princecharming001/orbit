@@ -1,5 +1,5 @@
-import type { User } from '@orbit/core';
-import { newId, normalizeCompany, parseConnectionsCsv } from '@orbit/core';
+import type { LinkedInConnectionRow, User } from '@orbit/core';
+import { newId, normalizeCompany, parseConnectedOn, parseConnectionsCsv } from '@orbit/core';
 import { addTouchpoint, recomputeAllStrengths } from '../db/repo';
 import { db } from '../db/schema';
 import { generateBrief, recommendationsRefresh } from './brief';
@@ -12,6 +12,21 @@ export async function importConnectionsCsv(
   onProgress?: (done: number, total: number) => void,
 ): Promise<{ imported: number; updated: number; skipped: number }> {
   const { rows, skipped } = parseConnectionsCsv(csvText);
+  const { imported, updated } = await importConnectionRows(user, rows, onProgress);
+  return { imported, updated, skipped };
+}
+
+/**
+ * The shared import path for LinkedIn connections, from the CSV export or a live sync: upsert each person (a
+ * re-import never duplicates), notice job changes, record the connection date, then recompute closeness, the graph
+ * and duplicate suggestions. Returns the person id each row landed on, in row order.
+ */
+async function importConnectionRows(
+  user: User,
+  rows: LinkedInConnectionRow[],
+  onProgress?: (done: number, total: number) => void,
+): Promise<{ imported: number; updated: number; personIds: string[] }> {
+  const personIds: string[] = [];
   let imported = 0;
   let updated = 0;
   let i = 0;
@@ -35,6 +50,7 @@ export async function importConnectionsCsv(
       },
       cache,
     );
+    personIds.push(person.id);
     if (created) imported++;
     else updated++;
     if (r.company) {
@@ -96,13 +112,14 @@ export async function importConnectionsCsv(
   await recomputeAllStrengths(user.id);
   await recomputeEdges(user.id);
   await suggestDuplicateMerges(user.id);
-  return { imported, updated, skipped };
+  return { imported, updated, personIds };
 }
 
 /**
- * Import connections pulled live from Unipile (see integrations/unipile.ts). They carry the same fields the CSV
- * export does, so they are written to the same tested path: serialise them to LinkedIn's own CSV shape and reuse
- * importConnectionsCsv. Nothing changes for a student who uploads a file instead.
+ * Import connections pulled live from Unipile (see integrations/unipile.ts, or the sample student's mock). They go
+ * through the same tested path as the CSV export, and each person keeps LinkedIn's member id, which the CSV cannot
+ * carry, so mutual-connection lookups can name them later. Recording the integration and refreshing the rest of Orbit
+ * is the caller's job (engine/linkedinLive.ts).
  */
 export async function importLiveConnections(
   user: User,
@@ -113,27 +130,31 @@ export async function importLiveConnections(
     company?: string;
     url?: string;
     connectedOn?: string;
+    memberId?: string;
   }[],
   onProgress?: (done: number, total: number) => void,
 ): Promise<{ imported: number; updated: number; skipped: number }> {
-  const esc = (v: string | undefined) => {
-    const t = (v ?? '').replace(/"/g, '""');
-    return /[",\n]/.test(t) ? `"${t}"` : t;
-  };
-  const header = 'First Name,Last Name,URL,Email Address,Company,Position,Connected On';
-  const lines = connections.map((c) =>
-    [
-      esc(c.firstName),
-      esc(c.lastName),
-      esc(c.url),
-      '',
-      esc(c.company),
-      esc(c.position),
-      // LinkedIn's export uses "DD Mon YYYY"; parseConnectedOn also accepts ISO, so pass the date through
-      esc(c.connectedOn),
-    ].join(','),
-  );
-  return importConnectionsCsv(user, `${header}\n${lines.join('\n')}`, onProgress);
+  const kept = connections.filter((c) => c.firstName.trim() || c.lastName.trim());
+  const rows: LinkedInConnectionRow[] = kept.map((c) => ({
+    firstName: c.firstName.trim(),
+    lastName: c.lastName.trim(),
+    url: c.url?.trim() || undefined,
+    company: c.company?.trim() || undefined,
+    position: c.position?.trim() || undefined,
+    // LinkedIn's export uses "DD Mon YYYY"; Unipile gives ISO. Both read the same way.
+    connectedOn: parseConnectedOn(c.connectedOn),
+  }));
+  const r = await importConnectionRows(user, rows, onProgress);
+  const at = new Date().toISOString();
+  for (let i = 0; i < kept.length; i++) {
+    const memberId = kept[i]!.memberId;
+    const id = r.personIds[i];
+    if (!memberId || !id) continue;
+    const p = await db.people.get(id);
+    if (p && p.linkedinMemberId !== memberId)
+      await db.people.update(id, { linkedinMemberId: memberId, updatedAt: at });
+  }
+  return { imported: r.imported, updated: r.updated, skipped: connections.length - kept.length };
 }
 
 /** A title reduced to what a job change would alter: "Sr. Analytics Engineer II" and "senior analytics engineer" match. */

@@ -51,11 +51,17 @@ export const showSetup = defineTool({
   name: 'show_setup',
   kind: 'read',
   description:
-    'Call this when the student needs to connect or add something (Google, their LinkedIn connections, a Claude key, a resume) instead of describing Settings: it shows a small widget in the chat where they do it, with the current status. Pick google for Gmail and Calendar, linkedin for the connections export, claude_key for their own Claude API key, resume for their resume file. Nothing changes until the student acts in the widget.',
+    'Call this when the student needs to connect or add something (Gmail and Google Calendar, LinkedIn, a Claude key, a resume) instead of describing Settings: it shows a small widget in the chat where they do it, with the current status. Pick google for Gmail and Calendar, linkedin to connect LinkedIn live (it keeps their connections in sync) or upload the connections export, claude_key for their own Claude API key, resume for their resume file. Nothing changes until the student acts in the widget.',
   input: z.object({
     what: z.enum(SETUP_WHAT as [SetupWhat, ...SetupWhat[]]).describe('Which widget to show.'),
   }),
-  capabilities: ['google_connect', 'linkedin_import', 'claude_key_save_test', 'resume_upload'],
+  capabilities: [
+    'google_connect',
+    'linkedin_import',
+    'linkedin_live_connect',
+    'claude_key_save_test',
+    'resume_upload',
+  ],
   progress: 'Getting the setup ready',
   async execute(input, ctx) {
     const status = await readSetupStatus(ctx.user.id, input.what);
@@ -78,12 +84,17 @@ const SUMMARIES: Record<SetupWhat, (s: Awaited<ReturnType<typeof readSetupStatus
         : s.clientIdConfigured
           ? 'Google is not connected yet. The widget has the Connect Google button.'
           : 'Google is not set up in this copy of Orbit yet. The widget explains what is needed.',
-  linkedin: (s) =>
-    s.what !== 'linkedin'
-      ? ''
-      : s.people
-        ? `Orbit has ${s.people} ${s.people === 1 ? 'person' : 'people'} so far. The widget takes Connections.csv or the whole export ZIP.`
-        : 'No people yet. The widget takes Connections.csv or the whole LinkedIn export ZIP.',
+  linkedin: (s) => {
+    if (s.what !== 'linkedin') return '';
+    const have = s.people
+      ? `Orbit has ${s.people} ${s.people === 1 ? 'person' : 'people'} so far.`
+      : 'No people yet.';
+    if (s.live.connected)
+      return `LinkedIn is connected live and syncs itself once a day. ${have} The widget can sync it now.`;
+    if (s.live.available)
+      return `${have} The widget has the Connect LinkedIn button, which keeps their connections in sync, and also takes the export.`;
+    return `${have} The widget takes Connections.csv or the whole LinkedIn export ZIP.`;
+  },
   claude_key: (s) =>
     s.what !== 'claude_key'
       ? ''

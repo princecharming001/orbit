@@ -5,6 +5,7 @@ import { Check, Download, Trash2 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Navigate, NavLink, useNavigate, useParams } from 'react-router-dom';
 import { chatMode, chatModeNote } from '../chat/agent/mode';
+import { LinkedInLiveCard, WarmIntrosCard } from '../components/ConnectorCards';
 import { LinkedInImportButton } from '../components/LinkedInImport';
 import { ResumeFacetList } from '../components/ResumeFacets';
 import { db } from '../db/schema';
@@ -717,6 +718,7 @@ function Integrations() {
           </details>
         )}
       </Card>
+      <LinkedInLiveCard user={user} />
       <Card>
         <div className="font-medium">LinkedIn export</div>
         <p className="text-[13px] text-ink-2 mt-0.5">
@@ -732,6 +734,7 @@ function Integrations() {
         )}
         <LinkedInImportButton label="Upload Connections.csv" testId="settings-linkedin" className="mt-3" />
       </Card>
+      <WarmIntrosCard user={user} />
       <Card>
         <div className="font-medium">Resume</div>
         <p className="text-[13px] text-ink-2 mt-0.5">
@@ -1284,7 +1287,9 @@ function Privacy() {
           Nothing leaves your device except:{' '}
           {sources.google ? 'calls you trigger to Google (your own account), ' : ''}calls to Anthropic (with
           your key, only for the features you turned on under {INTEGRATIONS_LABEL}), the emails you open in
-          your own mail app, and the pages you open on LinkedIn.
+          your own mail app, and the pages you open on LinkedIn. Two optional connections add to that, only if
+          you turn them on: live LinkedIn sync goes through Unipile, and warm intro lookups send a name and
+          company to Village.
         </p>
       </Card>
       <Card>

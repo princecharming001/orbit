@@ -1,6 +1,6 @@
 /**
- * Setup widgets inside a chat message: connect Google, import LinkedIn connections, add a Claude key, upload a
- * resume. Each one calls the same engine functions Settings uses and reads its status live, so what the card shows
+ * Setup widgets inside a chat message: connect Google, connect LinkedIn (live, or the export), add a Claude key,
+ * upload a resume. Each one calls the same engine functions Settings uses and reads its status live, so what the card shows
  * is always what Orbit holds now. A saved key is never shown back.
  */
 import type { User } from '@orbit/core';
@@ -9,17 +9,12 @@ import { Check, TriangleAlert, Upload } from 'lucide-react';
 import { type DragEvent, type ReactNode, useCallback, useEffect, useId, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { connectAndSyncGoogle, markGoogleNeedsReauth } from '../../../engine/integrations';
-import { connectionsText, importLinkedInExport, importLiveConnections } from '../../../engine/linkedin';
+import { connectionsText, importLinkedInExport } from '../../../engine/linkedin';
+import { connectLinkedInLive, LIVE_SOON, syncLinkedInLive } from '../../../engine/linkedinLive';
 import { saveResume } from '../../../engine/resume';
 import { testApiKey } from '../../../integrations/anthropic';
 import { googleClientId } from '../../../integrations/google';
 import { subscribePrefs, writePrefs } from '../../../integrations/prefs';
-import {
-  linkedInConnections,
-  linkedInConnectStatus,
-  startLinkedInConnect,
-  unipileConfigured,
-} from '../../../integrations/unipile';
 import { useSession } from '../../../state/session';
 import { Button, cx, Input, relDate, Spinner } from '../../../ui';
 import {
@@ -248,14 +243,18 @@ interface ImportDone {
   updated: number;
   skipped: number;
   recommended: number;
+  /** a live sync rather than an export upload */
+  live?: boolean;
 }
 
 function LinkedinWidget({ user, initial }: { user: User; initial?: SetupStatus }) {
   const status = useSetupStatus('linkedin', initial) as LinkedinSetup | undefined;
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState<string>();
+  const [soon, setSoon] = useState(false);
   const [done, setDone] = useState<ImportDone>();
   const [over, setOver] = useState(false);
+  const [showUpload, setShowUpload] = useState(false);
   const run = useCallback(
     async (file: File) => {
       setError(undefined);
@@ -277,35 +276,49 @@ function LinkedinWidget({ user, initial }: { user: User; initial?: SetupStatus }
     },
     [user],
   );
+  const live = status?.live;
   const connectLive = useCallback(async () => {
     setError(undefined);
     setDone(undefined);
+    setSoon(false);
     setBusy('Opening LinkedIn…');
     try {
-      const { url, ref } = await startLinkedInConnect();
-      const win = window.open(url, 'orbit-linkedin', 'width=520,height=680');
-      // wait for the student to finish the hosted sign-in, polling for the account to go live
-      let accountId: string | undefined;
-      for (let i = 0; i < 150 && !accountId; i++) {
-        await new Promise((r) => setTimeout(r, 2000));
-        const st = await linkedInConnectStatus(ref);
-        if (st.status === 'connected') accountId = st.accountId;
-        else if (st.status === 'error') throw new Error(st.message ?? 'LinkedIn sign-in did not finish.');
-      }
-      try {
-        win?.close();
-      } catch {
-        // the popup may already be closed
-      }
-      if (!accountId) throw new Error('LinkedIn sign-in timed out. Try again.');
-      setBusy('Bringing in your connections…');
-      const conns = await linkedInConnections(accountId, {
+      const r = await connectLinkedInLive(user, {
         onProgress: (n) => setBusy(`Bringing in your connections… ${n} so far`),
       });
-      const r = await importLiveConnections(user, conns, (d, t) => setBusy(`Saving ${d} of ${t}…`));
-      setDone({ ...r, recommended: 0 });
-    } catch (e) {
-      setError(String((e as Error)?.message ?? e) || 'Could not connect LinkedIn.');
+      if (r.ok)
+        setDone({
+          imported: r.added,
+          updated: Math.max(0, r.rows - r.added),
+          skipped: 0,
+          recommended: 0,
+          live: true,
+        });
+      else if (r.reason === 'unconfigured') setSoon(true);
+      else setError(r.message);
+    } finally {
+      setBusy(undefined);
+    }
+  }, [user]);
+  const syncLive = useCallback(async () => {
+    setError(undefined);
+    setDone(undefined);
+    setSoon(false);
+    setBusy('Syncing your connections…');
+    try {
+      const r = await syncLinkedInLive(user, {
+        onProgress: (n) => setBusy(`Syncing your connections… ${n} so far`),
+      });
+      if (r.ok)
+        setDone({
+          imported: r.added,
+          updated: r.updated,
+          skipped: 0,
+          recommended: r.recommended,
+          live: true,
+        });
+      else if (r.reason === 'unconfigured') setSoon(true);
+      else setError(r.message);
     } finally {
       setBusy(undefined);
     }
@@ -317,65 +330,156 @@ function LinkedinWidget({ user, initial }: { user: User; initial?: SetupStatus }
     if (f && !busy) void run(f);
   };
   const people = status?.people ?? 0;
+  const liveOffered = !!live?.available && !soon;
+  // with live connect on offer, the export is the secondary path, one tap away
+  const uploadOpen = !liveOffered || showUpload;
+  const dropzone = (
+    <label
+      className={cx(
+        'mt-3 flex flex-col items-center justify-center gap-1 rounded-[14px] border border-dashed px-4 py-5 text-center cursor-pointer transition-colors focus-within:ring-2 focus-within:ring-accent/40',
+        over ? 'border-accent bg-accent-soft' : 'border-line hover:bg-canvas-2/60',
+        busy && 'opacity-60 pointer-events-none',
+      )}
+      onDragOver={(e) => {
+        e.preventDefault();
+        setOver(true);
+      }}
+      onDragLeave={() => setOver(false)}
+      onDrop={onDrop}
+      data-testid="linkedin-dropzone"
+    >
+      <input
+        type="file"
+        accept=".csv,.zip,text/csv"
+        className="sr-only"
+        disabled={!!busy}
+        data-testid="linkedin-file"
+        aria-label="Connections.csv or the LinkedIn export ZIP"
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          e.target.value = '';
+          if (f) void run(f);
+        }}
+      />
+      {busy ? (
+        <span className="inline-flex items-center gap-2 text-[13.5px]" role="status">
+          <Spinner /> {busy}
+        </span>
+      ) : (
+        <>
+          <Upload size={18} className="text-ink-3" aria-hidden />
+          <span className="text-[13.5px] font-medium">
+            Drop the file here, or <span className="text-accent">choose a file</span>
+          </span>
+          <span className="text-[12px] text-ink-3">Connections.csv or the LinkedIn export ZIP</span>
+        </>
+      )}
+    </label>
+  );
+  const exportHow = (
+    <p className="text-[13.5px] text-ink-2">
+      On LinkedIn: Settings &gt; Data privacy &gt; Get a copy of your data &gt; Connections. LinkedIn emails
+      you a file; drop Connections.csv or the whole ZIP here. Uploading again later is safe, people already in
+      Orbit are updated, not doubled.
+    </p>
+  );
   return (
-    <Shell what="linkedin" title="Import your LinkedIn connections">
-      <p className="text-[13.5px] text-ink-2">
-        On LinkedIn: Settings &gt; Data privacy &gt; Get a copy of your data &gt; Connections. LinkedIn emails
-        you a file; drop Connections.csv or the whole ZIP here. Uploading again later is safe, people already
-        in Orbit are updated, not doubled.
-      </p>
-      {unipileConfigured() && (
-        <div className="mt-3" data-testid="linkedin-live">
-          <Button onClick={() => void connectLive()} disabled={!!busy}>
-            Connect LinkedIn (live, beta)
-          </Button>
-          <p className="mt-1 text-[12px] text-ink-3">
-            Sign in once and Orbit keeps your connections in sync. Read only. You can disconnect any time. Or
-            upload the file below instead.
+    <Shell
+      what="linkedin"
+      title={
+        live?.connected
+          ? 'LinkedIn is connected'
+          : liveOffered
+            ? 'Connect your LinkedIn'
+            : 'Import your LinkedIn connections'
+      }
+    >
+      {live?.connected ? (
+        <div data-testid="linkedin-live-connected">
+          <p className="text-[13.5px] text-ink-2">
+            Synced live{live.rows !== undefined ? `, ${live.rows} connections` : ''}
+            {live.lastSyncedAt ? `, last sync ${relDate(live.lastSyncedAt)}` : ''}. Orbit syncs again by
+            itself once a day when you open it.
+            {live.error ? ' The last sync did not go through.' : ''}
           </p>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <Button
+              variant={live.error ? 'primary' : 'secondary'}
+              size="sm"
+              onClick={() => void syncLive()}
+              disabled={!!busy}
+              data-testid="linkedin-live-sync"
+            >
+              {busy ? (
+                <>
+                  <Spinner /> {busy}
+                </>
+              ) : (
+                'Sync now'
+              )}
+            </Button>
+          </div>
+        </div>
+      ) : liveOffered ? (
+        <div data-testid="linkedin-live">
+          <p className="text-[13.5px] text-ink-2">
+            Sign in to LinkedIn once and Orbit brings in everyone you are connected to, then keeps them in
+            sync. Read only, and you can disconnect any time.
+          </p>
+          <div className="mt-3">
+            <Button
+              variant="primary"
+              onClick={() => void connectLive()}
+              disabled={!!busy}
+              data-testid="linkedin-live-connect"
+            >
+              {busy ? (
+                <>
+                  <Spinner /> {busy}
+                </>
+              ) : (
+                'Connect LinkedIn'
+              )}
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <>
+          {soon && (
+            <p className="text-[13.5px] text-ink-2 mb-2" role="status" data-testid="linkedin-live-soon">
+              {LIVE_SOON}
+            </p>
+          )}
+          {exportHow}
+        </>
+      )}
+      {soon && live?.connected && (
+        <p className="mt-2 text-[13px] text-ink-2" role="status" data-testid="linkedin-live-soon">
+          {LIVE_SOON}
+        </p>
+      )}
+      {liveOffered && (
+        <div className="mt-3">
+          {uploadOpen ? (
+            <>
+              <div className="text-[12.5px] font-medium text-ink-3">
+                Or upload your LinkedIn export instead
+              </div>
+              {exportHow}
+            </>
+          ) : (
+            <button
+              type="button"
+              className="text-[13px] font-medium text-accent hover:underline"
+              onClick={() => setShowUpload(true)}
+              data-testid="linkedin-show-upload"
+            >
+              Upload an export instead
+            </button>
+          )}
         </div>
       )}
-      <label
-        className={cx(
-          'mt-3 flex flex-col items-center justify-center gap-1 rounded-[14px] border border-dashed px-4 py-5 text-center cursor-pointer transition-colors focus-within:ring-2 focus-within:ring-accent/40',
-          over ? 'border-accent bg-accent-soft' : 'border-line hover:bg-canvas-2/60',
-          busy && 'opacity-60 pointer-events-none',
-        )}
-        onDragOver={(e) => {
-          e.preventDefault();
-          setOver(true);
-        }}
-        onDragLeave={() => setOver(false)}
-        onDrop={onDrop}
-        data-testid="linkedin-dropzone"
-      >
-        <input
-          type="file"
-          accept=".csv,.zip,text/csv"
-          className="sr-only"
-          disabled={!!busy}
-          data-testid="linkedin-file"
-          aria-label="Connections.csv or the LinkedIn export ZIP"
-          onChange={(e) => {
-            const f = e.target.files?.[0];
-            e.target.value = '';
-            if (f) void run(f);
-          }}
-        />
-        {busy ? (
-          <span className="inline-flex items-center gap-2 text-[13.5px]" role="status">
-            <Spinner /> {busy}
-          </span>
-        ) : (
-          <>
-            <Upload size={18} className="text-ink-3" aria-hidden />
-            <span className="text-[13.5px] font-medium">
-              Drop the file here, or <span className="text-accent">choose a file</span>
-            </span>
-            <span className="text-[12px] text-ink-3">Connections.csv or the LinkedIn export ZIP</span>
-          </>
-        )}
-      </label>
+      {uploadOpen && dropzone}
       {done && (
         <div data-testid="linkedin-done">
           <Good>
@@ -383,7 +487,9 @@ function LinkedinWidget({ user, initial }: { user: User; initial?: SetupStatus }
             {done.skipped ? `, ${done.skipped} rows skipped` : ''}.
             {done.recommended > 0
               ? ` ${done.recommended} worth a coffee chat ${done.recommended === 1 ? 'is' : 'are'} on Discover.`
-              : ' Add your target companies so Orbit can say who to meet first.'}
+              : done.live
+                ? ' Orbit keeps them in sync from now on.'
+                : ' Add your target companies so Orbit can say who to meet first.'}
           </Good>
           <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[13px]">
             <Link to="/map" className={linkClass}>
@@ -405,7 +511,7 @@ function LinkedinWidget({ user, initial }: { user: User; initial?: SetupStatus }
         </div>
       )}
       {error && <Problem testId="linkedin-error">{error}</Problem>}
-      {!done && !error && !busy && status && people > 0 && (
+      {!done && !error && !busy && status && people > 0 && !live?.connected && (
         <p className="mt-2 text-[12.5px] text-ink-3" data-testid="linkedin-status">
           {people} {people === 1 ? 'person' : 'people'} in Orbit
           {status.lastImportedAt ? `, last import ${relDate(status.lastImportedAt)}` : ''}.

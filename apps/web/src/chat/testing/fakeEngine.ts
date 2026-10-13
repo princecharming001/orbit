@@ -23,6 +23,7 @@
  */
 import type { OutboundMessage, Person, Suggestion } from '@orbit/core';
 import { db } from '../../db/schema';
+import { SETUP_CHIPS } from '../agent/setupChips';
 import type {
   ChatAction,
   ChatConversation,
@@ -315,9 +316,14 @@ export function createFakeChatEngine(opts: { mode?: 'llm' | 'router'; delay?: nu
     chips: () => CHIPS,
     async runChip(conversationId, chipId, onEvent) {
       log('runChip', conversationId, chipId);
-      const chip = CHIPS.find((c) => c.id === chipId);
+      const chip = CHIPS.find((c) => c.id === chipId) ?? SETUP_CHIPS.find((c) => c.id === chipId);
       if (!chip) throw new Error(`No chip ${chipId}`);
-      await run(conversationId, chip.asUser, chipScript(chip), onEvent);
+      // the home's Connect buttons post the setup widget, like "setup linkedin" typed here
+      const script =
+        chip.tool === 'show_setup'
+          ? pick(`setup ${chip.input.what === 'google' ? 'google' : 'linkedin'}`)
+          : chipScript(chip);
+      await run(conversationId, chip.asUser, script, onEvent);
     },
     async approve(actionId, edited) {
       log('approve', actionId, edited);
