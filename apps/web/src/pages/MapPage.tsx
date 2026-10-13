@@ -16,6 +16,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { type CardPlace, OrbitMap, useCoarsePointer } from '../components/OrbitMap';
 import type { FocusSpec, WebSpec } from '../components/orbitScene';
 import { LINEAGE } from '../components/orbitScene';
+import { WarmIntrosPanel } from '../components/WarmIntrosPanel';
 import { db } from '../db/schema';
 import { draftMessage } from '../engine/brief';
 import { requestIntro } from '../engine/drafts';
@@ -544,8 +545,13 @@ export function MapPage() {
     }
   }, [webMode]);
   const askIntro = async (path: ReachPath) => {
-    if (!user || !target) return;
-    const r = await requestIntro(user, path.hops[0]!.toId, target.id, { path });
+    if (!target) return;
+    await askIntroVia(path.hops[0]!.toId, target.id, path.score);
+  };
+  // the same intro request for a warm intro path from Village, which names who introduces and to whom
+  const askIntroVia = async (connectorId: string, targetId: string, score: number) => {
+    if (!user) return;
+    const r = await requestIntro(user, connectorId, targetId, { path: { score } });
     if (!r) return;
     toast.push({
       text: `Intro request drafted. It's in Drafts.`,
@@ -969,6 +975,7 @@ export function MapPage() {
                   </div>
                 </div>
               </div>
+              {user && <WarmIntrosPanel user={user} target={target} onAsk={askIntroVia} />}
               {paths === undefined && (
                 <p className="text-[13px] text-ink-3" data-testid="reach-loading" aria-busy="true">
                   Finding routes through your network…
@@ -1054,6 +1061,13 @@ export function MapPage() {
           {company && (
             <>
               <div className="font-medium">{company.org?.name ?? company.label}</div>
+              {user && (
+                <WarmIntrosPanel
+                  user={user}
+                  company={company.org?.name ?? company.label}
+                  onAsk={askIntroVia}
+                />
+              )}
               {(
                 [
                   ['People there now', company.direct],

@@ -30,6 +30,7 @@ import { useSession } from '../state/session';
 import { Avatar, calendarDaysBetween, cx, modKeyLabel } from '../ui';
 import { CommandPalette } from './CommandPalette';
 import { DemoBanner } from './DemoBanner';
+import { LinkedInAutoSync } from './LinkedInAutoSync';
 import { OutboxScheduler } from './OutboxScheduler';
 
 const NAV_TOP = [
@@ -179,6 +180,7 @@ export function AppShell() {
   return (
     <div className="h-full flex">
       <OutboxScheduler />
+      <LinkedInAutoSync />
       <aside
         className={cx(
           'shrink-0 hidden md:flex flex-col h-full border-r border-white/60 bg-white/45 backdrop-blur-[20px] backdrop-saturate-[160%] transition-[width] duration-200',
