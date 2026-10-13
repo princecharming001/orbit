@@ -326,7 +326,7 @@ function HeroMock() {
           <span className="w-2.5 h-2.5 rounded-full bg-line" />
           <span className="w-2.5 h-2.5 rounded-full bg-line" />
           <span className="w-2.5 h-2.5 rounded-full bg-line" />
-          <span className="ml-3">Today · Tuesday</span>
+          <span className="ml-3">Tuesday</span>
         </div>
         <div className="p-4">
           <div className="text-[13px] text-ink-3">Good morning, Alex</div>

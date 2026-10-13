@@ -307,7 +307,7 @@ export const loadDemoTool = defineTool({
       'text',
       out,
       out,
-      `The demo is loaded: ${user.fullName}'s sample network. Ask what is on today to see the first brief.`,
+      `The demo is loaded: ${user.fullName}'s sample network. Ask who to message today to see the first brief.`,
       '/',
     );
   },

@@ -300,7 +300,7 @@ function Envelope({ env, block, actions }: { env: ResultEnvelope; block: ToolBlo
       return (
         <GlassCard kind="pipeline">
           <CardHead
-            title={items.length === 1 ? env.summary : 'Pipeline'}
+            title={items.length === 1 ? env.summary : 'Your chats'}
             href={env.href ?? '/people?view=board'}
           />
           {Object.keys(counts).length > 0 && (

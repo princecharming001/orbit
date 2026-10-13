@@ -88,7 +88,7 @@ export function Discover() {
     : missing.goals
       ? 'Tell Orbit which functions and companies you are recruiting for, and Discover fills in from your network.'
       : inPipeline
-        ? 'Everyone in your network who fits your goals is already in your Pipeline. Add more people at your target companies, or import your LinkedIn connections, for new suggestions.'
+        ? 'Everyone in your network who fits your goals already has a chat with you on the People board. Add more people at your target companies, or import your LinkedIn connections, for new suggestions.'
         : 'Nobody in your network matches your goals yet. Add people at your target companies or import more connections.';
   const refresh = async () => {
     setBusy(true);

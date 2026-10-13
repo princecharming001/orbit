@@ -629,7 +629,7 @@ export function PersonPage() {
             You only have {person.firstName} on LinkedIn and you haven't talked yet. Cold messages get far
             more replies when your name is already familiar, so Orbit suggests a short warm-up first: view
             their profile, then react to or comment on one of their posts over the next few days. Each step
-            shows up on Today, and the message is drafted when the warm-up is done.
+            shows up in Drafts, and the message is drafted when the warm-up is done.
           </p>
           <p>If you already know {person.firstName}, skip it and write now.</p>
           <div className="flex flex-wrap gap-2 pt-1">

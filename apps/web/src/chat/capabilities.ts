@@ -266,7 +266,7 @@ export const CAPABILITIES: readonly Capability[] = [
   {
     id: 'today_write_to_added_person',
     area: 'Today and the brief',
-    title: 'Write to a person you added (from Today)',
+    title: 'Write to a person you added (from Drafts)',
     kind: 'read',
     utterances: [
       'write to the person I just added',
@@ -277,7 +277,7 @@ export const CAPABILITIES: readonly Capability[] = [
   {
     id: 'today_continue_draft',
     area: 'Today and the brief',
-    title: 'Continue a draft you started (from Today)',
+    title: 'Continue a draft you started (from Drafts)',
     kind: 'read',
     utterances: [
       'continue the draft I started',
@@ -288,7 +288,7 @@ export const CAPABILITIES: readonly Capability[] = [
   {
     id: 'today_open_prep',
     area: 'Today and the brief',
-    title: 'Open prep for a coming chat (from Today)',
+    title: 'Open prep for a coming chat (from Drafts)',
     kind: 'read',
     utterances: ['open the prep for my next chat', 'prep me for tomorrow', 'show the prep from Today'],
   },
@@ -332,28 +332,28 @@ export const CAPABILITIES: readonly Capability[] = [
   {
     id: 'pipeline_view_switch',
     area: 'Pipeline',
-    title: 'Switch the Pipeline view (board, table, companies)',
+    title: 'Switch the People view (board, list, companies)',
     kind: 'read',
     utterances: ['show the pipeline as a table', 'switch to the companies view', 'show me the board'],
   },
   {
     id: 'pipeline_filter',
     area: 'Pipeline',
-    title: 'Filter the Pipeline (search, targets, went quiet, closed)',
+    title: 'Filter People (search, targets, went quiet, closed)',
     kind: 'read',
     utterances: ['only target companies', 'show chats that went quiet', 'include closed chats'],
   },
   {
     id: 'pipeline_sort',
     area: 'Pipeline',
-    title: 'Sort the Pipeline table',
+    title: 'Sort the People list',
     kind: 'read',
     utterances: ['sort by last reply', 'sort the pipeline by closeness', 'order by time in stage'],
   },
   {
     id: 'pipeline_add_person',
     area: 'Pipeline',
-    title: 'Add a person from the Pipeline header',
+    title: 'Add a person from the People header',
     kind: 'write',
     utterances: ['add someone to my pipeline', 'add a new person from the pipeline', 'put Lena in Orbit'],
   },
@@ -371,7 +371,7 @@ export const CAPABILITIES: readonly Capability[] = [
   {
     id: 'pipeline_next_chip',
     area: 'Pipeline',
-    title: "Open a chat's next step on Today",
+    title: "Open a chat's next step in Drafts",
     kind: 'read',
     utterances: [
       "open the next step for Priya's chat",

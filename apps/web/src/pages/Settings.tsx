@@ -651,7 +651,7 @@ function Integrations() {
           <p className="text-[13px] text-ink-2 mt-0.5" data-testid="google-unavailable">
             Not part of this version of Orbit. Everything else works without it: you add people by hand or
             from LinkedIn, send each email from your own mail app or Gmail and press I sent it, and when
-            someone replies you move their chat in Pipeline.
+            someone replies you move their chat on the People board.
           </p>
         )}
         {google && (
