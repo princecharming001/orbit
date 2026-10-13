@@ -7,33 +7,43 @@ const base: SetupState = {
   googleConnected: false,
   resumeOnFile: false,
   targetCompanies: 0,
-  hasDraft: false,
   claude: 'none',
 };
 const state = (o: Partial<SetupState> = {}): SetupState => ({ ...base, ...o });
 const id = (o: Partial<SetupState>) => nextSetupStep(state(o)).id;
 
 describe('nextSetupStep', () => {
-  it('starts an empty account with the LinkedIn import', () => {
+  it('starts an empty account with LinkedIn: the export, or connecting live where Orbit offers it', () => {
     expect(id({})).toBe('linkedin');
-    expect(nextSetupStep(state()).text).toContain('show_setup linkedin');
+    expect(nextSetupStep(state()).text).toBe('import LinkedIn connections (show_setup linkedin)');
+    expect(nextSetupStep(state({ liveLinkedInAvailable: true })).text).toBe(
+      'connect LinkedIn so their connections stay in sync (show_setup linkedin)',
+    );
   });
 
-  it('asks for one person by hand when the import left nobody', () => {
-    expect(id({ linkedinImported: true })).toBe('add_person');
-  });
-
-  it('keeps pushing the import while the network is small, then moves to target companies', () => {
+  it('keeps asking for LinkedIn until it is in, however many people there are', () => {
     expect(id({ people: 3 })).toBe('linkedin');
-    expect(id({ people: 3, linkedinImported: true })).toBe('target_companies');
-    expect(id({ people: 400 })).toBe('target_companies');
+    expect(id({ people: 400, googleConnected: true, targetCompanies: 2 })).toBe('linkedin');
+    // connected live counts as in
+    expect(id({ people: 40, linkedinImported: true, linkedinLive: true })).toBe('google');
   });
 
-  it('suggests Google only once there is a draft', () => {
-    const ready = { people: 40, linkedinImported: true, targetCompanies: 2 };
-    expect(id({ ...ready })).toBe('resume');
-    expect(id({ ...ready, hasDraft: true })).toBe('google');
-    expect(id({ ...ready, hasDraft: true, googleConnected: true })).toBe('resume');
+  it('asks for Gmail next whenever it is not connected, with or without a draft', () => {
+    expect(id({ people: 40, linkedinImported: true })).toBe('google');
+    expect(id({ people: 40, linkedinImported: true, targetCompanies: 2 })).toBe('google');
+    expect(nextSetupStep(state({ people: 40, linkedinImported: true })).text).toBe(
+      'connect Gmail so Orbit sees who they email and drafts can go out (show_setup google)',
+    );
+  });
+
+  it('asks for one person by hand when LinkedIn and Gmail left nobody', () => {
+    expect(id({ linkedinImported: true, googleConnected: true })).toBe('add_person');
+  });
+
+  it('then target companies, then the resume', () => {
+    const ready = { people: 40, linkedinImported: true, googleConnected: true };
+    expect(id(ready)).toBe('target_companies');
+    expect(id({ ...ready, targetCompanies: 2 })).toBe('resume');
   });
 
   it('is done when everything exists', () => {
@@ -42,7 +52,6 @@ describe('nextSetupStep', () => {
         people: 40,
         linkedinImported: true,
         targetCompanies: 2,
-        hasDraft: true,
         googleConnected: true,
         resumeOnFile: true,
       }),
@@ -58,14 +67,24 @@ describe('nextSetupStep', () => {
     const order: SetupState[] = [
       state(),
       state({ people: 5, linkedinImported: true }),
-      state({ people: 5, linkedinImported: true, targetCompanies: 1, hasDraft: true }),
-      state({ people: 5, linkedinImported: true, targetCompanies: 1, hasDraft: true, googleConnected: true }),
+      state({ people: 0, linkedinImported: true, googleConnected: true }),
+      state({ people: 5, linkedinImported: true, googleConnected: true }),
+      state({ people: 5, linkedinImported: true, googleConnected: true, targetCompanies: 1 }),
+      state({
+        people: 5,
+        linkedinImported: true,
+        googleConnected: true,
+        targetCompanies: 1,
+        resumeOnFile: true,
+      }),
     ];
     expect(order.map((s) => nextSetupStep(s).id)).toEqual([
       'linkedin',
-      'target_companies',
       'google',
+      'add_person',
+      'target_companies',
       'resume',
+      'none',
     ]);
   });
 });
@@ -74,9 +93,16 @@ describe('setupLine', () => {
   it('is one line with what exists and the one step', () => {
     const line = setupLine(state({ people: 12, linkedinImported: true, claude: 'shared' }));
     expect(line).toBe(
-      'Setup: people 12, LinkedIn imported, Google not connected, resume none, target companies 0, Claude shared access. Suggested first step: add a few target companies (ask which ones).',
+      'Setup: people 12, LinkedIn imported, Gmail not connected, resume none, target companies 0, Claude shared access. Suggested first step: connect Gmail so Orbit sees who they email and drafts can go out (show_setup google).',
     );
     expect(line).not.toMatch(/\n|[—–!]/);
+  });
+
+  it('says when LinkedIn is missing or connected live', () => {
+    expect(setupLine(state())).toMatch(/^Setup: people 0, LinkedIn not connected, Gmail not connected,/);
+    expect(setupLine(state({ linkedinImported: true, linkedinLive: true }))).toMatch(
+      /LinkedIn connected live/,
+    );
   });
 
   it('names a key of the student own', () => {

@@ -31,6 +31,8 @@ export interface RouterContext {
   firstName?: string;
   /** how many people have a message waiting on the student today (default: counted from `cards`) */
   waiting?: number;
+  /** what is connected (LinkedIn by export or live, Gmail), when known; the sample student has nothing to set up */
+  setup?: { linkedin: boolean; linkedinLive: boolean; google: boolean; demo?: boolean };
   /** the mode note's sentence about adding a key, appended to refusals */
   modeNote: string;
   settingsHref: string;
@@ -360,8 +362,21 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
       ],
     };
   };
+  const setupGmail = (statement: string): RouterIntent =>
+    withTool(
+      'show_setup',
+      { what: 'google' },
+      statement,
+      `${statement} Connect Google under Settings, Integrations.`,
+    );
   const EMPTY_START =
     "Easiest first step is your LinkedIn connections. Drop the export here when you're ready.";
+  const GMAIL_NEXT = 'Next easy step is Gmail, so I can see who you email and send what you approve.';
+  // an empty account starts with LinkedIn; once LinkedIn is in and there is still nobody, Gmail comes next
+  const emptyNext = (lead: string): RouterIntent =>
+    ctx.setup?.linkedin && !ctx.setup.google && !ctx.setup.demo
+      ? setupGmail(`${lead} ${GMAIL_NEXT}`)
+      : setupLinkedin(`${lead} ${EMPTY_START}`);
   const casual = text0(raw);
 
   if (GREETING.test(casual)) {
@@ -369,20 +384,20 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
       ? casual.replace(/ (there|orbit|friend|everyone)$/, '')
       : 'Hey';
     const hi = hello(word.charAt(0).toUpperCase() + word.slice(1));
-    if (empty) return setupLinkedin(`${hi} ${EMPTY_START}`);
+    if (empty) return emptyNext(hi);
     const m = bestMove();
     return choose(hi, `${m.statement} ${m.question}`, m.options);
   }
   if (WHO_ARE_YOU.test(casual)) {
     const intro =
       "I'm Orbit, your networking copilot. I help you reach out to people and keep every chat moving.";
-    if (empty) return setupLinkedin(`${intro} ${EMPTY_START}`);
+    if (empty) return emptyNext(intro);
     const m = bestMove();
     return choose(intro, `${m.statement} ${m.question}`, m.options);
   }
   if (WHAT_CAN_YOU_DO.test(casual)) {
     const intro = 'I find who to message, write the note, and keep track of every chat.';
-    if (empty) return setupLinkedin(`${intro} ${EMPTY_START}`);
+    if (empty) return emptyNext(intro);
     return choose(intro, 'What sounds useful?', [
       { label: "What's on today", message: "What's on today?" },
       { label: 'Who went quiet', message: 'Who went quiet?' },
@@ -391,7 +406,7 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
   }
   if (THANKS.test(casual) || OK.test(casual)) {
     const lead = THANKS.test(casual) ? 'Anytime.' : 'Okay.';
-    if (empty) return setupLinkedin(`${lead} ${EMPTY_START}`);
+    if (empty) return emptyNext(lead);
     const m = bestMove();
     return choose(lead, `${m.statement} ${m.question}`, m.options);
   }
@@ -561,8 +576,70 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
     return viaTool('delete_all_data', {}, undefined, 'delete your data');
   if (/^(?:disconnect|unlink|remove)(?: my)? (?:google|gmail)(?: account)?$/i.test(lower))
     return viaTool('disconnect_google', {}, undefined, 'disconnect Google');
-  if (/^(?:sync|refresh|check)(?: my)? (?:google|gmail|email|inbox|calendar)$/i.test(lower))
-    return viaTool('sync_google', {}, undefined, 'sync Google');
+
+  // connecting Gmail or LinkedIn shows the widget that does it, never a list of steps
+  if (
+    /^(?:how (?:do|can) i )?(?:connect|link|hook up|set up|sign in to|sign into|add)(?: my)? (?:gmail|google|email|e-?mail|mail|inbox|calendar|google calendar|gmail and calendar|email and calendar)(?: account| too)?$/i.test(
+      lower,
+    )
+  )
+    return setupGmail(
+      "Here's Gmail and Calendar. Once it's connected I can see who you email and send what you approve.",
+    );
+  if (/^(?:sync|refresh|check)(?: my)? (?:google|gmail|email|mail|inbox|calendar)$/i.test(lower))
+    return setupGmail(
+      ctx.setup?.google
+        ? 'Reconnect below and I will pull your new mail and meetings.'
+        : "Gmail isn't connected yet. Connect it below and I'll keep your inbox in sync.",
+    );
+  if (
+    /^(?:disconnect|unlink|remove)(?: my)? linkedin(?: account| sync)?$|^stop syncing(?: my)? linkedin$/i.test(
+      lower,
+    )
+  )
+    return viaTool('disconnect_linkedin', {}, undefined, 'disconnect LinkedIn');
+  if (
+    /^(?:sync|re-?sync|refresh|update|pull)(?: my)?(?: latest)? linkedin(?: connections| contacts)?(?: again| now)?$|^(?:pull|get|bring in) my (?:latest|new) linkedin connections$/i.test(
+      lower,
+    )
+  )
+    return ctx.setup && !ctx.setup.linkedinLive
+      ? setupLinkedin("LinkedIn isn't connected live yet. Connect it here and it stays in sync.")
+      : viaTool('sync_linkedin', {}, undefined, 'sync LinkedIn');
+  if (
+    /^(?:how (?:do|can) i )?(?:connect|link|hook up|set up|sign in to|sign into)(?: my)? linkedin(?: account| connections)?$|^keep my linkedin(?: connections)? in sync$/i.test(
+      lower,
+    )
+  )
+    return setupLinkedin("Here's LinkedIn. Connect it and I'll bring your connections in.");
+
+  // who the student knows who knows someone (mutual connections), or anyone at a company
+  {
+    const m = text.match(
+      /^(?:who knows|who (?:else )?do (?:i|we) know (?:who|that) knows|(?:show |find |any |list )?(?:my |our )?mutual(?: connections?| friends)?(?: with| for| to| of)|mutuals (?:with|for)|who are (?:my|our) mutuals with)\s+(.+)$/i,
+    );
+    if (m) {
+      const target = stripName(m[1]!);
+      const at = target.match(/^(?:someone|anyone|somebody|people) (?:at|in|from) (.+)$/i);
+      if (at) {
+        const name = stripName(at[1]!);
+        const company = ctx.companies.find((c) => c.toLowerCase() === name.toLowerCase()) ?? name;
+        return viaTool('find_routes', { company }, undefined, 'find routes to a company');
+      }
+      const r = person(target);
+      if (r.person)
+        return viaTool(
+          'get_mutual_connections',
+          { personId: r.person.id },
+          undefined,
+          'find mutual connections',
+        );
+      if (r.candidates.length) return ambiguous(target, r.candidates);
+      const company = ctx.companies.find((c) => c.toLowerCase() === target.toLowerCase());
+      if (company) return viaTool('find_routes', { company }, undefined, 'find routes to a company');
+      return nobody(target);
+    }
+  }
 
   // the writing tone
   {
@@ -878,7 +955,7 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
   // routes: who can introduce me to <person or company>
   {
     const m = text.match(
-      /^(?:who can (?:introduce|intro|connect) me (?:to|with|at)|(?:find |show |any )?(?:a |the |warm )?(?:routes?|paths?|way|intro|introduction) (?:to|into|at)|how (?:do|can|could|would) i (?:reach|get to|get into|get an intro to|get introduced to|get a warm intro to|connect with)|who do i know at|anyone (?:i know )?at|do i know anyone at|reach|get me (?:to|into))\s+(.+)$/i,
+      /^(?:who (?:can|could) (?:warmly )?(?:introduce|intro|connect) me (?:to|with|at)|who (?:can|could) get me (?:a |an )?(?:warm )?(?:intro|introduction) (?:to|at|into)|(?:find |show |any )?(?:a |the |my )?(?:warm )?(?:routes?|paths?|way|intros?|introductions?) (?:to|into|at)|how (?:do|can|could|would) i (?:reach|get to|get into|get an intro to|get introduced to|get a warm intro to|connect with)|who do i know at|anyone (?:i know )?at|do i know anyone at|reach|get me (?:to|into))\s+(.+)$/i,
     );
     if (m) {
       const target = stripName(m[1]!);

@@ -2,6 +2,7 @@ import type Anthropic from '@anthropic-ai/sdk';
 import type { User } from '@orbit/core';
 import { newId } from '@orbit/core';
 import { db } from '../../db/schema';
+import { DEMO_USER_ID } from '../../engine/demo';
 import { MODEL, makeWrap } from '../../integrations/anthropic';
 import { refreshPrefs } from '../../integrations/prefs';
 import type {
@@ -16,7 +17,7 @@ import type {
   TurnEvent,
 } from '../types';
 import { recordToolAction } from './actions';
-import { chipsFor, resolveChip } from './chips';
+import { chipsFor, resolveChip, setupChipsFor } from './chips';
 import { type ChatClient, chatClient } from './client';
 import { type ExecuteFn, runTurn } from './loop';
 import { chatMode, chatModeNote, SETTINGS_ROUTE } from './mode';
@@ -191,7 +192,7 @@ export function createChatEngine(deps: ChatEngineDeps): ChatEngine {
 
   /** The open cards, unsent drafts and next booked chat the router can name. */
   const routerExtras = async (userId: string, now: Date) => {
-    const [cards, drafts, events, briefs] = await Promise.all([
+    const [cards, drafts, events, briefs, integrations] = await Promise.all([
       db.suggestions
         .where('userId')
         .equals(userId)
@@ -210,7 +211,11 @@ export function createChatEngine(deps: ChatEngineDeps): ChatEngine {
         )
         .toArray(),
       db.briefs.where('userId').equals(userId).toArray(),
+      db.integrations.where('userId').equals(userId).toArray(),
     ]);
+    const live = integrations.some(
+      (i) => i.provider === 'linkedin_live' && i.status !== 'revoked' && !!i.externalAccountId,
+    );
     const latestBrief = briefs.sort((a, b) => b.generatedAt.localeCompare(a.generatedAt))[0];
     const next = events.sort((a, b) => a.startAt.localeCompare(b.startAt))[0];
     const nextChat = next?.chatId ? await db.chats.get(next.chatId) : undefined;
@@ -223,6 +228,13 @@ export function createChatEngine(deps: ChatEngineDeps): ChatEngine {
         .map((d) => ({ id: d.id, personId: d.personId, status: d.status, kind: d.kind })),
       nextChat: nextChat ? { personId: nextChat.personId } : undefined,
       waiting: peopleWaitingNow(cards, latestBrief, now),
+      // what is connected, the same way the snapshot's Setup line counts it
+      setup: {
+        linkedin: live || integrations.some((i) => i.provider === 'linkedin_csv'),
+        linkedinLive: live,
+        google: integrations.some((i) => i.provider === 'google' && i.status !== 'revoked'),
+        demo: userId === DEMO_USER_ID,
+      },
     };
   };
 
@@ -356,7 +368,7 @@ export function createChatEngine(deps: ChatEngineDeps): ChatEngine {
     async runChip(conversationId, chipId, onEvent) {
       const conversation = await conversationFor(conversationId, onEvent);
       if (!conversation) return;
-      const chip = chipsFor(deps.registry).find((c) => c.id === chipId);
+      const chip = [...chipsFor(deps.registry), ...setupChipsFor(deps.registry)].find((c) => c.id === chipId);
       if (!chip) return emitError(onEvent, 'That button is not available.');
       await nameFrom(conversation, chip.asUser);
       await store.append(

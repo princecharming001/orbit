@@ -4,8 +4,8 @@ import { STABLE_SYSTEM_VERSION, stableSystemText, systemBlocks } from '../agent/
 const text = stableSystemText('0123456789abcdef');
 
 describe('stable system block', () => {
-  it('is version 6 and byte-identical for a conversation', () => {
-    expect(STABLE_SYSTEM_VERSION).toBe(6);
+  it('is version 7 and byte-identical for a conversation', () => {
+    expect(STABLE_SYSTEM_VERSION).toBe(7);
     expect(stableSystemText('0123456789abcdef')).toBe(text);
     expect(systemBlocks('0123456789abcdef')).toEqual([
       { type: 'text', text, cache_control: { type: 'ephemeral' } },
@@ -61,8 +61,26 @@ describe('stable system block', () => {
     expect(text).toMatch(/"Setup:" line/);
   });
 
+  it('offers LinkedIn and Gmail once, when the Setup line shows them missing, and never after a decline', () => {
+    expect(text).toMatch(
+      /When the Setup line shows LinkedIn or Gmail not connected, offer the matching show_setup/,
+    );
+    expect(text).toMatch(/once, the first time it would help/);
+    expect(text).toMatch(/who to message, routes or intros, or sending a message/);
+    expect(text).toMatch(/If they decline or ignore it, do not offer it again in this conversation/);
+  });
+
+  it('names Unipile and Village only as connections the student chooses', () => {
+    expect(text).toMatch(
+      /Live LinkedIn sync goes through Unipile, and warm intro paths come from Village, only if the student connects them/,
+    );
+    expect(text).toMatch(/Email and LinkedIn are involved only if the student connects them/);
+  });
+
   it('names the two conversation tools and when to use them', () => {
-    expect(text).toMatch(/show_setup instead of explaining how to connect Google, import LinkedIn/);
+    expect(text).toMatch(
+      /show_setup instead of explaining how to connect Google, import LinkedIn or connect it live/,
+    );
     expect(text).toMatch(/offer_choices at the end of most replies/);
     expect(text).toMatch(/at most 3 options/);
     expect(text).toMatch(/Never write the options out in your text/);

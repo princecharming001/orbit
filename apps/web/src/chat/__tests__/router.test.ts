@@ -210,12 +210,32 @@ const HANDLED: [string, string, Record<string, unknown>][] = [
   ['delete all my data', 'delete_all_data', {}],
   ['disconnect google', 'disconnect_google', {}],
   ['set up orbit for me', 'leave_demo', {}],
+  // connecting Gmail and LinkedIn shows the widget; live LinkedIn, mutuals and warm intros
+  ['connect gmail', 'show_setup', { what: 'google' }],
+  ['connect my Google account', 'show_setup', { what: 'google' }],
+  ['how do I connect google', 'show_setup', { what: 'google' }],
+  ['connect my email', 'show_setup', { what: 'google' }],
+  ['connect calendar', 'show_setup', { what: 'google' }],
+  ['sync my inbox', 'show_setup', { what: 'google' }],
+  ['connect linkedin', 'show_setup', { what: 'linkedin' }],
+  ['link my LinkedIn account', 'show_setup', { what: 'linkedin' }],
+  ['sync my linkedin', 'sync_linkedin', {}],
+  ['refresh my LinkedIn connections', 'sync_linkedin', {}],
+  ['disconnect linkedin', 'disconnect_linkedin', {}],
+  ['stop syncing LinkedIn', 'disconnect_linkedin', {}],
+  ['who knows Mei', 'get_mutual_connections', { personId: 'p4' }],
+  ['mutual connections with Priya', 'get_mutual_connections', { personId: 'p1' }],
+  ['who do I know who knows Sofia', 'get_mutual_connections', { personId: 'p5' }],
+  ['who knows someone at Stripe', 'find_routes', { company: 'Stripe' }],
+  ['warm intro to Stripe', 'find_routes', { company: 'Stripe' }],
+  ['warm intros into Ramp', 'find_routes', { company: 'Ramp' }],
+  ['who could warmly introduce me to Mei', 'find_routes', { personId: 'p4' }],
+  ['who can get me a warm intro at Figma', 'find_routes', { company: 'Figma' }],
 ];
 
 /** utterance, expected href */
 const POINTERS: [string, string][] = [
   ['where do I change my tone', '/settings/style'],
-  ['how do I connect google', '/settings/integrations'],
   ['settings', '/settings'],
   ["what's my daily limit", '/settings/limits'],
   ['add a note', '/notes/new'],
@@ -535,6 +555,52 @@ describe('router: small talk on an empty account', () => {
     const { r, text } = reply('import my linkedin connections', EMPTY);
     expect(r).toMatchObject({ kind: 'tool', tool: 'show_setup', input: { what: 'linkedin' } });
     expectFriendly(text);
+  });
+});
+
+describe('router: LinkedIn, then Gmail', () => {
+  const connected = (o: Partial<NonNullable<RouterContext['setup']>>) => ({
+    setup: { linkedin: false, linkedinLive: false, google: false, ...o },
+  });
+
+  it('an empty account with LinkedIn in greets with Gmail next', () => {
+    const { r, text } = reply('hey', { ...EMPTY, ...connected({ linkedin: true }) });
+    expect(r).toMatchObject({ kind: 'tool', tool: 'show_setup', input: { what: 'google' } });
+    expect(text).toBe(
+      'Hey Alex. Next easy step is Gmail, so I can see who you email and send what you approve.',
+    );
+    expectFriendly(text);
+  });
+
+  it('an empty account without LinkedIn still starts with LinkedIn, and one with both connected stays gentle', () => {
+    expect(reply('hey', { ...EMPTY, ...connected({}) }).r).toMatchObject({ input: { what: 'linkedin' } });
+    expect(reply('hey', { ...EMPTY, ...connected({ linkedin: true, google: true }) }).r).toMatchObject({
+      input: { what: 'linkedin' },
+    });
+    // the sample student is never asked
+    expect(reply('hey', { ...EMPTY, ...connected({ linkedin: true, demo: true }) }).r).toMatchObject({
+      input: { what: 'linkedin' },
+    });
+  });
+
+  it('"sync my linkedin" shows the widget when LinkedIn is not connected live', () => {
+    const r = routeUtterance(
+      'sync my linkedin',
+      ctx({ registry: withTools, ...connected({ linkedin: true }) }),
+    );
+    expect(r).toMatchObject({ kind: 'tool', tool: 'show_setup', input: { what: 'linkedin' } });
+    expect(
+      routeUtterance('sync my linkedin', ctx({ ...connected({ linkedin: true, linkedinLive: true }) })),
+    ).toMatchObject({ tool: 'sync_linkedin' });
+  });
+
+  it('every Gmail and LinkedIn line reads like a friend', () => {
+    for (const u of ['connect gmail', 'sync my inbox', 'connect linkedin']) expectFriendly(reply(u).text);
+    expectFriendly(reply('sync my gmail', connected({ google: true })).text);
+  });
+
+  it('says so when nobody matches a mutual-connections name', () => {
+    expect(routeUtterance('who knows Zed', ctx())).toMatchObject({ kind: 'text' });
   });
 });
 

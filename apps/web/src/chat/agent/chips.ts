@@ -1,5 +1,8 @@
 import { db } from '../../db/schema';
 import type { ChipSpec, ToolSpec } from '../types';
+import { SETUP_CHIPS } from './setupChips';
+
+export { SETUP_CHIPS };
 
 /**
  * Suggestion chips under the composer on the home page. Each one runs a tool directly through `execute()`: no
@@ -67,6 +70,11 @@ export const CHIPS: ChipSpec[] = [
     asUser: 'Show my pipeline.',
   },
 ];
+
+/** The setup chips whose tool exists in this registry. */
+export function setupChipsFor(registry: ReadonlyMap<string, ToolSpec>): ChipSpec[] {
+  return SETUP_CHIPS.filter((c) => !!registry.get(c.tool)?.input.safeParse(c.input).success);
+}
 
 /**
  * The three chips an empty account starts with, instead of the full set. The first is the registry's own LinkedIn

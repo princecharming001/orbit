@@ -69,6 +69,22 @@ async function addCards(count: number) {
     } as never);
 }
 
+/** LinkedIn (the export) and Gmail both in, so the home has nothing to ask for. */
+async function connectBoth() {
+  await db.integrations.bulkPut([
+    {
+      id: 'li',
+      userId,
+      provider: 'linkedin_csv',
+      status: 'active',
+      scopes: [],
+      syncState: {},
+      connectedAt: '',
+    },
+    { id: 'g', userId, provider: 'google', status: 'active', scopes: [], syncState: {}, connectedAt: '' },
+  ]);
+}
+
 describe('the home: gentle for an empty account, the full set once there are people', () => {
   beforeEach(async () => {
     await Promise.all(db.tables.map((t) => t.clear()));
@@ -120,6 +136,7 @@ describe('the home: gentle for an empty account, the full set once there are peo
 
   it('shows the full set of eight chips once there are people, with no status when nothing waits', async () => {
     await db.people.bulkPut([0, 1].map((i) => fixturePerson(i, { userId })));
+    await connectBoth();
     await mount();
     expect(chipIds()).toHaveLength(8);
     expect(chipIds()[0]).toBe('chip-who-today');
@@ -150,6 +167,116 @@ describe('the home: gentle for an empty account, the full set once there are peo
   });
 });
 
+describe('the home: connect your apps', () => {
+  beforeEach(async () => {
+    await Promise.all(db.tables.map((t) => t.clear()));
+    resetThread();
+    resetHomeStatusCache();
+    try {
+      localStorage.clear();
+    } catch {
+      // no storage in this environment
+    }
+    const u = await createLocalUser({
+      fullName: 'Alex Rivera',
+      firstName: 'Alex',
+      onboardingCompletedAt: new Date().toISOString(),
+    });
+    userId = u.id;
+    await setCurrentUserId(u.id);
+    await db.people.bulkPut([0, 1].map((i) => fixturePerson(i, { userId })));
+    engine = createFakeChatEngine({ delay: 0 });
+  });
+  afterEach(() => {
+    if (root) act(() => root!.unmount());
+    host?.remove();
+    root = undefined;
+    resetThread();
+  });
+
+  it('shows LinkedIn and Gmail as not connected, under the composer, with Connect buttons', async () => {
+    await mount();
+    const strip = $('[data-testid="connect-strip"]')!;
+    expect(strip).not.toBeNull();
+    expect(strip.textContent).toMatch(/Connect your apps/);
+    expect($('[data-testid="connect-status-linkedin"]')?.textContent?.trim()).toBe('Not connected');
+    expect($('[data-testid="connect-status-google"]')?.textContent?.trim()).toBe('Not connected');
+    expect($('[data-testid="home-status"]')?.textContent).toBe(
+      'Connect LinkedIn and Gmail so I can see who you know.',
+    );
+    // after the composer, before the chips
+    const order = [
+      ...host.querySelectorAll(
+        '[data-testid="composer-footer"], [data-testid="connect-strip"], [data-testid="chips"]',
+      ),
+    ].map((el) => (el as HTMLElement).dataset.testid);
+    expect(order).toEqual(['composer-footer', 'connect-strip', 'chips']);
+  });
+
+  it('Connect posts the matching setup widget into the thread', async () => {
+    await mount();
+    await act(async () => $('[data-testid="connect-gmail"]')!.click());
+    await settle();
+    expect($('[data-testid="turn-user"]')?.textContent).toBe('Connect my Gmail.');
+    expect(engine.calls.some((c) => c.method === 'runChip' && c.args.includes('connect-gmail'))).toBe(true);
+    expect($('[data-testid="setup-google"]')).not.toBeNull();
+    await act(() => threadActions(engine).newChat());
+    await settle();
+    await act(async () => $('[data-testid="connect-linkedin"]')!.click());
+    await settle();
+    expect($('[data-testid="setup-linkedin"]')).not.toBeNull();
+  });
+
+  it('shows what is connected, and hides once both are', async () => {
+    await db.integrations.put({
+      id: 'li',
+      userId,
+      provider: 'linkedin_csv',
+      status: 'active',
+      scopes: [],
+      syncState: {},
+      connectedAt: '',
+    });
+    await mount();
+    expect($('[data-testid="connect-status-linkedin"]')?.textContent?.trim()).toBe('Connected');
+    expect($('[data-testid="connect-linkedin"]')).toBeNull();
+    expect($('[data-testid="connect-gmail"]')).not.toBeNull();
+    act(() => root!.unmount());
+    host.remove();
+    root = undefined;
+    resetHomeStatusCache();
+    await connectBoth();
+    await mount();
+    expect($('[data-testid="connect-strip"]')).toBeNull();
+  });
+
+  it('stays hidden once dismissed, and the line under the greeting stops asking too', async () => {
+    await mount();
+    await act(async () => $('[data-testid="connect-strip-dismiss"]')!.click());
+    expect($('[data-testid="connect-strip"]')).toBeNull();
+    expect($('[data-testid="home-status"]')).toBeNull();
+    act(() => root!.unmount());
+    host.remove();
+    root = undefined;
+    await mount();
+    expect($('[data-testid="connect-strip"]')).toBeNull();
+  });
+
+  it('never shows for the sample student', async () => {
+    await db.integrations.put({
+      id: 'int_demo',
+      userId,
+      provider: 'demo',
+      status: 'active',
+      scopes: [],
+      syncState: {},
+      connectedAt: '',
+    });
+    await mount();
+    expect($('[data-testid="connect-strip"]')).toBeNull();
+  });
+});
+
 describe('home helpers', () => {
   const all = createFakeChatEngine({ delay: 0 }).chips();
 
@@ -177,15 +304,83 @@ describe('home helpers', () => {
   });
 
   it('homeStatusLine only speaks when there is something to say', () => {
-    expect(homeStatusLine({ ready: false, empty: true, waiting: 0 })).toBeUndefined();
-    expect(homeStatusLine({ ready: true, empty: false, waiting: 0 })).toBeUndefined();
-    expect(homeStatusLine({ ready: true, empty: false, waiting: 1 })).toBe(
+    const all = { linkedin: true, gmail: true, demo: false };
+    expect(homeStatusLine({ ready: false, empty: true, waiting: 0, ...all })).toBeUndefined();
+    expect(homeStatusLine({ ready: true, empty: false, waiting: 0, ...all })).toBeUndefined();
+    expect(homeStatusLine({ ready: true, empty: false, waiting: 1, ...all })).toBe(
       'One person is waiting on a message from you.',
     );
-    expect(homeStatusLine({ ready: true, empty: false, waiting: 12 })).toBe(
+    expect(homeStatusLine({ ready: true, empty: false, waiting: 12, ...all })).toBe(
       '12 people are waiting on a message from you.',
     );
-    expect(homeStatusLine({ ready: true, empty: true, waiting: 0 })).toMatch(/^Let's get you set up\./);
+    expect(homeStatusLine({ ready: true, empty: true, waiting: 0, ...all })).toMatch(
+      /^Let's get you set up\./,
+    );
+  });
+
+  it('homeStatusLine says what is not connected when nothing is waiting', () => {
+    const s = { ready: true, empty: false, waiting: 0, demo: false };
+    expect(homeStatusLine({ ...s, linkedin: false, gmail: false })).toBe(
+      'Connect LinkedIn and Gmail so I can see who you know.',
+    );
+    expect(homeStatusLine({ ...s, linkedin: false, gmail: true })).toBe(
+      'Connect LinkedIn so I can see everyone you know.',
+    );
+    expect(homeStatusLine({ ...s, linkedin: true, gmail: false })).toBe(
+      'Connect Gmail so I can see who you email and send what you approve.',
+    );
+    // someone waiting comes first, and the sample student is never asked
+    expect(homeStatusLine({ ...s, waiting: 2, linkedin: false, gmail: false })).toMatch(/^Two people/);
+    expect(homeStatusLine({ ...s, demo: true, linkedin: false, gmail: false })).toBeUndefined();
+  });
+
+  it('readHomeStatus knows what is connected, the way the Setup line counts it', async () => {
+    await Promise.all(db.tables.map((t) => t.clear()));
+    const u = await createLocalUser({ fullName: 'Pat Doe', firstName: 'Pat' });
+    expect(await readHomeStatus(u.id)).toMatchObject({ linkedin: false, gmail: false, demo: false });
+    await db.integrations.bulkPut([
+      {
+        id: 'i1',
+        userId: u.id,
+        provider: 'linkedin_live',
+        status: 'revoked',
+        scopes: [],
+        syncState: {},
+        connectedAt: '',
+      },
+      {
+        id: 'i2',
+        userId: u.id,
+        provider: 'google',
+        status: 'revoked',
+        scopes: [],
+        syncState: {},
+        connectedAt: '',
+      },
+    ]);
+    expect(await readHomeStatus(u.id)).toMatchObject({ linkedin: false, gmail: false });
+    await db.integrations.bulkPut([
+      {
+        id: 'i1',
+        userId: u.id,
+        provider: 'linkedin_live',
+        externalAccountId: 'acc',
+        status: 'active',
+        scopes: [],
+        syncState: {},
+        connectedAt: '',
+      },
+      {
+        id: 'i2',
+        userId: u.id,
+        provider: 'google',
+        status: 'needs_reauth',
+        scopes: [],
+        syncState: {},
+        connectedAt: '',
+      },
+    ]);
+    expect(await readHomeStatus(u.id)).toMatchObject({ linkedin: true, gmail: true });
   });
 
   it('readHomeStatus ignores hidden people and non-human rows', async () => {
