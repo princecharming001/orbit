@@ -537,20 +537,60 @@ test.describe('Map on a touch phone (UI-18)', () => {
   });
 });
 
+/** From the landing page through setup's Welcome step to the You step. */
+async function startSetup(page: Page) {
+  await page.goto('');
+  await page
+    .getByRole('button', { name: /^get started/i })
+    .first()
+    .click();
+  await expect(page).toHaveURL(/\/onboarding\/0$/);
+  await page
+    .getByTestId('ob-welcome')
+    .getByRole('button', { name: /get started/i })
+    .click();
+  await expect(page).toHaveURL(/\/onboarding\/1$/);
+}
+
+/** The You step, filled in with what every setup test needs. */
+async function fillYou(page: Page, name: string, email: string) {
+  await page.getByTestId('ob-name').fill(name);
+  await page.getByTestId('ob-email').fill(email);
+  await page.getByTestId('ob-school').fill('University of Michigan');
+  await page.getByTestId('ob-year').selectOption({ index: 2 });
+  await page.getByRole('button', { name: /^continue$/i }).click();
+}
+
+/** Writes the stored setup step straight into the browser's database, as an older build of Orbit left it. */
+async function storeOnboardingStep(page: Page, step: number) {
+  await page.evaluate(
+    (n) =>
+      new Promise<void>((resolve, reject) => {
+        const open = indexedDB.open('orbit');
+        open.onerror = () => reject(open.error);
+        open.onsuccess = () => {
+          const tx = open.result.transaction('users', 'readwrite');
+          const users = tx.objectStore('users');
+          const all = users.getAll();
+          all.onsuccess = () => {
+            for (const u of all.result) users.put({ ...u, onboardingStep: n });
+          };
+          tx.oncomplete = () => {
+            open.result.close();
+            resolve();
+          };
+          tx.onerror = () => reject(tx.error);
+        };
+      }),
+    step,
+  );
+}
+
 test.describe('Manual onboarding', () => {
-  test('a new user can set up without any integration and reach an empty Today', async ({ page }) => {
+  test('a new user can set up without any integration and reach the chat home', async ({ page }) => {
     await prep(page);
-    await page.goto('');
-    await page
-      .getByRole('button', { name: /^get started/i })
-      .first()
-      .click();
-    await expect(page).toHaveURL(/\/onboarding\/1$/);
-    await page.getByTestId('ob-name').fill('Sam Okafor');
-    await page.getByTestId('ob-email').fill('sam@umich.edu');
-    await page.getByTestId('ob-school').fill('University of Michigan');
-    await page.getByTestId('ob-year').selectOption({ index: 2 });
-    await page.getByRole('button', { name: /continue/i }).click();
+    await startSetup(page);
+    await fillYou(page, 'Sam Okafor', 'sam@umich.edu');
     await expect(page).toHaveURL(/\/onboarding\/2$/);
     await page.getByTestId('ob-fn-pm').click();
     await page.getByTestId('ob-company').fill('Figma');
@@ -561,21 +601,34 @@ test.describe('Manual onboarding', () => {
     await page.getByRole('button', { name: /^add$/i }).click();
     await expect(page.getByText(/already on your list/i)).toBeVisible();
     await expect(page.getByRole('button', { name: /remove figma/i })).toHaveCount(1);
-    await page.getByRole('button', { name: /continue/i }).click();
+    // a company can be starred as a top priority right in the field
+    await page.getByRole('button', { name: /mark figma as top priority/i }).click();
+    await expect(page.getByRole('button', { name: /make figma a normal target/i })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await page.getByRole('button', { name: /^continue$/i }).click();
+    // LinkedIn (no Gmail step: Google sign-in is not set up on this build): upload a tiny CSV
     await expect(page).toHaveURL(/\/onboarding\/3$/);
-    await page.getByRole('button', { name: /skip for now/i }).click();
-    // linkedin (no Google step: Google sign-in is not set up on this build): upload a tiny CSV
+    // live LinkedIn is not switched on in this build, so there is no button that could only fail
+    await expect(page.getByTestId('ob-linkedin-live')).toHaveCount(0);
     const csv =
       'First Name,Last Name,URL,Email Address,Company,Position,Connected On\nPriya,Patel,https://www.linkedin.com/in/priya-patel,priya@figma.com,Figma,Product Manager,12 Mar 2025\nDaniel,Kim,https://www.linkedin.com/in/daniel-kim,,Stripe,Software Engineer,03 Jan 2024\n';
     await page
       .getByTestId('ob-linkedin')
       .setInputFiles({ name: 'Connections.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) });
     await expect(page.getByText(/2 people added/i)).toBeVisible();
-    await page.getByRole('button', { name: /continue/i }).click();
-    // meeting notes are a tip on the last step, not a step of their own
-    await expect(page.getByTestId('ob-notes-tip')).toBeVisible();
-    await page.getByRole('button', { name: /finish setup/i }).click();
-    await expect(page).toHaveURL(/\/today$/, { timeout: 30_000 });
+    await page.getByRole('button', { name: /^continue$/i }).click();
+    // the last step sums up what is set up
+    await expect(page).toHaveURL(/\/onboarding\/5$/);
+    await expect(page.getByTestId('ob-ready-linkedin')).toHaveAttribute('data-status', 'done');
+    await expect(page.getByTestId('ob-ready-linkedin')).toContainText(/2 connections imported/);
+    await expect(page.getByTestId('ob-ready-goals')).toContainText(/Product management · 1 target company/);
+    await expect(page.getByTestId('ob-ready-gmail')).toHaveCount(0);
+    await page.getByRole('button', { name: /open orbit/i }).click();
+    // setup ends on the chat home
+    await expect(page.getByTestId('greeting')).toContainText(/Hey Sam/, { timeout: 30_000 });
+    await expect(page).toHaveURL(/\/orbit\/?$/);
     await page.goto('people');
     await expect(page.getByRole('link', { name: /priya patel/i })).toBeVisible();
     await page.goto('discover');
@@ -593,23 +646,17 @@ test.describe('Manual onboarding', () => {
       .getByRole('button', { name: /open orbit/i })
       .last()
       .click();
-    await expect(page).toHaveURL(/\/today$/);
+    await expect(page).not.toHaveURL(/welcome|onboarding/);
+    // an address past the end of setup, once it is done, opens the chat
     await page.goto('onboarding/99');
-    await expect(page).toHaveURL(/\/today$/);
+    await expect(page).toHaveURL(/\/orbit\/?$/);
+    await expect(page.getByTestId('greeting')).toBeVisible();
   });
 
   test('landing during setup continues it and asks before loading the demo over it', async ({ page }) => {
     await prep(page);
-    await page.goto('');
-    await page
-      .getByRole('button', { name: /^get started/i })
-      .first()
-      .click();
-    await page.getByTestId('ob-name').fill('Real Person');
-    await page.getByTestId('ob-email').fill('real@umich.edu');
-    await page.getByTestId('ob-school').fill('University of Michigan');
-    await page.getByTestId('ob-year').selectOption({ index: 2 });
-    await page.getByRole('button', { name: /continue/i }).click();
+    await startSetup(page);
+    await fillYou(page, 'Real Person', 'real@umich.edu');
     await expect(page).toHaveURL(/\/onboarding\/2$/);
     // while the stored profile is read, the header never offers the first-visit buttons, not even for one frame
     for (const state of await landingHeaderStates(page))
@@ -631,6 +678,43 @@ test.describe('Manual onboarding', () => {
       .first()
       .click();
     await expect(page).toHaveURL(/\/onboarding\/2$/);
+  });
+
+  test('someone part way through the older, longer setup lands on a step of this one', async ({ page }) => {
+    await prep(page);
+    await startSetup(page);
+    // a typed address cannot skip ahead of the furthest step reached
+    await page.goto('onboarding/4');
+    await expect(page).toHaveURL(/\/onboarding\/1$/);
+    await expect(page.getByTestId('ob-name')).toBeVisible();
+    await fillYou(page, 'Old Setup', 'old@umich.edu');
+    await expect(page).toHaveURL(/\/onboarding\/2$/);
+    // the older setup's step 4 was the resume, gone now: LinkedIn comes next
+    await storeOnboardingStep(page, 4);
+    await page.goto('welcome');
+    await page
+      .getByRole('button', { name: /continue setup/i })
+      .first()
+      .click();
+    await expect(page).toHaveURL(/\/onboarding\/3$/);
+    await expect(page.getByRole('heading', { name: /linkedin/i })).toBeVisible();
+    // its step 7 (meeting notes) and 8 (preferences) are past the last step here: Ready
+    await storeOnboardingStep(page, 7);
+    await page.goto('welcome');
+    await page
+      .getByRole('button', { name: /continue setup/i })
+      .first()
+      .click();
+    await expect(page).toHaveURL(/\/onboarding\/5$/);
+    await expect(page.getByTestId('ob-ready')).toBeVisible();
+    // and a bookmarked address of the older setup moves forward to a step that exists
+    await page.goto('onboarding/7');
+    await expect(page).toHaveURL(/\/onboarding\/5$/);
+    await page.goto('onboarding/4');
+    await expect(page).toHaveURL(/\/onboarding\/5$/);
+    // the steps before it are still there to go back to
+    await page.goto('onboarding/2');
+    await expect(page.getByTestId('ob-fn-pm')).toBeVisible();
   });
 });
 
@@ -941,7 +1025,12 @@ test.describe('First-run guidance and plain next steps', () => {
     await page.goto('today');
     await page.getByTestId('demo-start-own').click();
     await page.getByTestId('demo-start-confirm').click();
-    await expect(page).toHaveURL(/\/onboarding\/1$/, { timeout: 15_000 });
+    // a new profile starts setup at its Welcome step, with nothing of the demo student's in it
+    await expect(page).toHaveURL(/\/onboarding\/0$/, { timeout: 15_000 });
+    await page
+      .getByTestId('ob-welcome')
+      .getByRole('button', { name: /get started/i })
+      .click();
     await expect(page.getByTestId('ob-name')).toHaveValue('');
   });
 
@@ -985,38 +1074,53 @@ test.describe('Setup without Google', () => {
       .getByRole('button', { name: /^get started/i })
       .first()
       .click();
+    // without Google sign-in there are five steps: Welcome, You, Goals, LinkedIn, Ready
     await expect(page.getByTestId('ob-progress')).toHaveText(/step 1 of 5/i);
+    await page
+      .getByTestId('ob-welcome')
+      .getByRole('button', { name: /get started/i })
+      .click();
+    await expect(page.getByTestId('ob-progress')).toHaveText(/step 2 of 5/i);
+    await expect(page.getByTestId('ob-step-1')).toHaveAttribute('data-status', 'done');
     // Continue says what is missing while it is disabled
+    await expect(page.getByRole('button', { name: /^continue$/i })).toBeDisabled();
     await expect(page.getByTestId('ob-missing')).toContainText(
-      /your name, your email, your school and your graduation year/i,
+      /your name, email, school and graduation year/i,
     );
-    // labels belong to their fields, and say which are required
-    await page.getByLabel('Full name Required').fill('Sam Okafor');
-    await page.getByLabel('Email Required').fill('sam@umich.edu');
+    // labels belong to their fields, and the fields say they are required
+    await expect(page.getByLabel('Full name')).toHaveAttribute('aria-required', 'true');
+    await page.getByLabel('Full name').fill('Sam Okafor');
+    await page.getByLabel('Email').fill('sam@umich.edu');
+    // a school address is enough for Orbit to spot alumni: there is no domain field to fill
+    await expect(page.getByTestId('ob-school-domain')).toContainText('umich.edu');
     await page.getByTestId('ob-school').fill('University of Michigan');
     await page.getByTestId('ob-year').selectOption({ index: 2 });
-    await page.getByRole('button', { name: /continue/i }).click();
+    await page.getByRole('button', { name: /^continue$/i }).click();
     await page.getByTestId('ob-fn-consulting').click();
-    await page.getByTestId('ob-roles').fill('Summer analyst');
+    await page.getByTestId('ob-pace-3').click();
     // a company typed but not added is kept, not thrown away
     await page.getByTestId('ob-company').fill('Evercore');
     await page.getByRole('button', { name: /^back$/i }).click();
     await expect(page).toHaveURL(/\/onboarding\/1$/);
-    await page.getByRole('button', { name: /continue/i }).click();
+    await expect(page.getByTestId('ob-name')).toHaveValue('Sam Okafor');
+    await page.getByRole('button', { name: /^continue$/i }).click();
     await expect(page.getByTestId('ob-fn-consulting')).toHaveAttribute('aria-pressed', 'true');
-    await expect(page.getByTestId('ob-roles')).toHaveValue('Summer analyst');
+    await expect(page.getByTestId('ob-pace-3')).toHaveAttribute('aria-checked', 'true');
     await expect(page.getByRole('button', { name: /remove evercore/i })).toBeVisible();
-    await page.getByRole('button', { name: /continue/i }).click();
-    await page.getByRole('button', { name: /skip for now/i }).click(); // resume
-    // without a Google sign-in set up on this build there is no Google step that could only say "not available"
+    await page.getByRole('button', { name: /^continue$/i }).click();
+    // without a Google sign-in set up on this build there is no Gmail step that could only say "not available"
     await expect(page.getByTestId('ob-google-unavailable')).toHaveCount(0);
-    await expect(page.getByRole('heading', { name: 'LinkedIn' })).toBeVisible();
-    await expect(page.getByTestId('ob-step-3')).toHaveAttribute('data-status', 'skipped');
-    await expect(page.getByTestId('ob-step-2')).toHaveAttribute('data-status', 'done');
-    await page.getByRole('button', { name: /skip for now/i }).click(); // linkedin
+    await expect(page.getByRole('heading', { name: /linkedin/i })).toBeVisible();
+    await expect(page.getByTestId('ob-progress')).toHaveText(/step 4 of 5 · optional/i);
+    await expect(page.getByTestId('ob-step-3')).toHaveAttribute('data-status', 'done');
+    await expect(page.getByTestId('ob-step-4')).toHaveAttribute('data-status', 'current');
+    await page.getByTestId('ob-skip').click(); // linkedin
     await expect(page.getByTestId('ob-step-4')).toHaveAttribute('data-status', 'skipped');
-    await page.getByRole('button', { name: /finish setup/i }).click();
-    await expect(page).toHaveURL(/\/today$/, { timeout: 30_000 });
+    await expect(page.getByTestId('ob-ready-linkedin')).toHaveAttribute('data-status', 'skipped');
+    await expect(page.getByTestId('ob-ready-goals')).toContainText(/Consulting · 1 target company/);
+    await page.getByRole('button', { name: /open orbit/i }).click();
+    await expect(page.getByTestId('greeting')).toContainText(/Hey Sam/, { timeout: 30_000 });
+    await page.goto('today');
     const empty = page.getByTestId('today-empty-network');
     await expect(empty).toBeVisible();
     await expect(empty.getByRole('button', { name: /someone at evercore/i })).toBeVisible();
@@ -1044,20 +1148,20 @@ test.describe('Setup without Google', () => {
       .getByRole('button', { name: /^get started/i })
       .first()
       .click();
-    await page.getByTestId('ob-name').fill('Jamie Park');
-    await page.getByTestId('ob-email').fill('jamie@umich.edu');
-    await page.getByTestId('ob-school').fill('University of Michigan');
-    await page.getByTestId('ob-year').selectOption({ index: 2 });
-    await page.getByRole('button', { name: /continue/i }).click();
+    await page
+      .getByTestId('ob-welcome')
+      .getByRole('button', { name: /get started/i })
+      .click();
+    await fillYou(page, 'Jamie Park', 'jamie@umich.edu');
     await page.getByTestId('ob-fn-ib').click();
     await page.getByTestId('ob-company').fill('Goldman Sachs');
-    await page.getByRole('button', { name: /continue/i }).click();
-    // resume and LinkedIn (no Google step on this build, and meeting notes are a tip on the last step)
-    await page.getByRole('button', { name: /skip for now/i }).click();
-    await expect(page.getByRole('heading', { name: 'LinkedIn' })).toBeVisible();
-    await page.getByRole('button', { name: /skip for now/i }).click();
-    await page.getByRole('button', { name: /finish setup/i }).click();
-    await expect(page).toHaveURL(/\/today$/, { timeout: 30_000 });
+    await page.getByRole('button', { name: /^continue$/i }).click();
+    // LinkedIn (no Gmail step on this build)
+    await expect(page.getByRole('heading', { name: /linkedin/i })).toBeVisible();
+    await page.getByTestId('ob-skip').click();
+    await page.getByRole('button', { name: /open orbit/i }).click();
+    await expect(page.getByTestId('greeting')).toContainText(/Hey Jamie/, { timeout: 30_000 });
+    await page.goto('today');
     // the upload is a real control: the keyboard reaches it, and it opens the picker right here
     const upload = page.getByTestId('today-empty-network').getByTestId('linkedin-import');
     await upload.focus();
@@ -1122,24 +1226,17 @@ test.describe('Setup without Google', () => {
 /** A fresh profile set up without Google, recruiting at Goldman Sachs, with nobody in it yet. */
 async function newStudent(page: Page) {
   await prep(page);
-  await page.goto('');
-  await page
-    .getByRole('button', { name: /^get started/i })
-    .first()
-    .click();
-  await page.getByTestId('ob-name').fill('Sam Okafor');
-  await page.getByTestId('ob-email').fill('sam@umich.edu');
-  await page.getByTestId('ob-school').fill('University of Michigan');
-  await page.getByTestId('ob-year').selectOption({ index: 2 });
-  await page.getByRole('button', { name: /continue/i }).click();
+  await startSetup(page);
+  await fillYou(page, 'Sam Okafor', 'sam@umich.edu');
   await page.getByTestId('ob-fn-pm').click();
   await page.getByTestId('ob-company').fill('Goldman Sachs');
   await page.getByRole('button', { name: /^add$/i }).click();
-  await page.getByRole('button', { name: /continue/i }).click();
-  await page.getByRole('button', { name: /skip for now/i }).click(); // resume
-  await page.getByRole('button', { name: /skip for now/i }).click(); // linkedin
-  await page.getByRole('button', { name: /finish setup/i }).click();
-  await expect(page).toHaveURL(/\/today$/, { timeout: 30_000 });
+  await page.getByRole('button', { name: /^continue$/i }).click();
+  await page.getByTestId('ob-skip').click(); // linkedin
+  await page.getByRole('button', { name: /open orbit/i }).click();
+  await expect(page.getByTestId('greeting')).toContainText(/Hey Sam/, { timeout: 30_000 });
+  // the tests that use this start from Today
+  await page.goto('today');
 }
 
 async function addByHand(
@@ -1546,30 +1643,21 @@ test.describe('Usability round 5: one draft, kept edits, saved settings, chats t
     page,
   }) => {
     await prep(page);
-    await page.goto('');
-    await page
-      .getByRole('button', { name: /^get started/i })
-      .first()
-      .click();
-    await page.getByTestId('ob-name').fill('Sam Okafor');
-    await page.getByTestId('ob-email').fill('sam@umich.edu');
-    await page.getByTestId('ob-school').fill('University of Michigan');
-    await page.getByTestId('ob-year').selectOption({ index: 2 });
-    await page.getByRole('button', { name: /continue/i }).click();
+    await startSetup(page);
+    await fillYou(page, 'Sam Okafor', 'sam@umich.edu');
     await page.getByTestId('ob-fn-ib').click();
     await page.getByTestId('ob-company').fill('Evercore, Lazard');
     await page.getByRole('button', { name: /^add$/i }).click();
     await expect(page.getByRole('button', { name: /^remove evercore$/i })).toBeVisible();
     await expect(page.getByRole('button', { name: /^remove lazard$/i })).toBeVisible();
-    await page.getByRole('button', { name: /continue/i }).click();
+    await page.getByRole('button', { name: /^continue$/i }).click();
     await expect(page).toHaveURL(/\/onboarding\/3$/);
     await page.getByRole('button', { name: /^back$/i }).click();
     await expect(page).toHaveURL(/\/onboarding\/2$/);
     await page.goBack();
     await expect(page).toHaveURL(/\/onboarding\/1$/);
-    await page.getByRole('button', { name: /continue/i }).click();
-    await page.getByRole('button', { name: /continue/i }).click();
-    await page.getByRole('button', { name: /skip for now/i }).click(); // resume
+    await page.getByRole('button', { name: /^continue$/i }).click();
+    await page.getByRole('button', { name: /^continue$/i }).click();
     const csv =
       'First Name,Last Name,URL,Email Address,Company,Position,Connected On\nPriya,Patel,https://www.linkedin.com/in/priya-patel-lz,,Lazard,Analyst,12 Mar 2025\nMarcus,Bell,https://www.linkedin.com/in/marcus-bell-ev,marcus.bell@gmail.com,Evercore,Analyst,03 Jan 2024\n';
     await page.getByTestId('ob-linkedin').setInputFiles({
@@ -1580,15 +1668,14 @@ test.describe('Usability round 5: one draft, kept edits, saved settings, chats t
     await expect(page.getByText(/2 people added/i)).toBeVisible();
     // leaving the step and coming back still shows the import
     await page.getByRole('button', { name: /^back$/i }).click();
-    await page
-      .getByRole('button', { name: /continue|skip for now/i })
-      .last()
-      .click();
-    await expect(page.getByTestId('ob-linkedin-done')).toContainText(/2 connections imported/i);
-    await expect(page.getByRole('button', { name: /^continue$/i })).toBeVisible();
+    await expect(page).toHaveURL(/\/onboarding\/2$/);
     await page.getByRole('button', { name: /^continue$/i }).click();
-    await page.getByRole('button', { name: /finish setup/i }).click();
-    await expect(page).toHaveURL(/\/today$/, { timeout: 30_000 });
+    await expect(page.getByTestId('ob-linkedin-done')).toContainText(/2 connections imported/i);
+    await expect(page.getByTestId('ob-skip')).toHaveCount(0);
+    await page.getByRole('button', { name: /^continue$/i }).click();
+    await page.getByRole('button', { name: /open orbit/i }).click();
+    await expect(page.getByTestId('greeting')).toBeVisible({ timeout: 30_000 });
+    await expect(page).toHaveURL(/\/orbit\/?$/);
     // the address shows as LinkedIn had it, dot included
     await page.goto('people');
     await page
@@ -1698,14 +1785,45 @@ test.describe('Usability round 5: chats Orbit cannot see, and notes in shorthand
 
 test.describe('Usability round 5 on a phone', () => {
   test.use({ viewport: { width: 390, height: 844 } });
-  test('setup says which steps are left and which are optional', async ({ page }) => {
+  test('setup fits a phone, shows how far along it is, and says which steps are optional', async ({
+    page,
+  }) => {
     await prep(page);
+    const fits = async () => {
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+      const button = await page
+        .getByRole('button', { name: /^(get started|continue)$/i })
+        .last()
+        .boundingBox();
+      // the one action spans the column, inside the 16px gutters
+      expect(button!.x).toBeGreaterThanOrEqual(15);
+      expect(button!.x + button!.width).toBeLessThanOrEqual(375);
+      expect(button!.width).toBeGreaterThan(340);
+    };
     await page.goto('');
     await page
       .getByRole('button', { name: /^get started/i })
       .first()
       .click();
-    await expect(page.getByTestId('ob-coming-up')).toContainText(/Resume \(optional\)/);
+    const progress = page.getByTestId('ob-progress');
+    await expect(progress).toBeVisible();
+    await expect(progress).toContainText('1 of 5');
+    await expect(page.getByTestId('ob-step-5')).toBeVisible();
+    await fits();
+    await page
+      .getByTestId('ob-welcome')
+      .getByRole('button', { name: /get started/i })
+      .click();
+    await fits();
+    await fillYou(page, 'Sam Okafor', 'sam@umich.edu');
+    await page.getByTestId('ob-fn-pm').click();
+    await page.getByTestId('ob-company').fill('Goldman Sachs');
+    await page.getByRole('button', { name: /^add$/i }).click();
+    await fits();
+    await page.getByRole('button', { name: /^continue$/i }).click();
+    await expect(progress).toContainText(/4 of 5 · optional/i);
+    await expect(page.getByTestId('ob-skip')).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   });
   test("a person's tabs fit one row, so Prep is not left alone on a second line", async ({ page }) => {
     await loadDemo(page);
@@ -1762,29 +1880,21 @@ test.describe('Usability round 6', () => {
     await expect(page.getByTestId('capture-text')).toHaveValue('');
   });
 
-  test('setup reads a one-line resume entry cleanly, and any line can be fixed in place', async ({
+  test('Settings reads a one-line resume entry cleanly, and any line can be fixed in place', async ({
     page,
   }) => {
-    await prep(page);
-    await page.goto('');
-    await page
-      .getByRole('button', { name: /^get started/i })
-      .first()
-      .click();
-    await page.getByTestId('ob-name').fill('Jamie Ortiz');
-    await page.getByTestId('ob-email').fill('jamie@umich.edu');
-    await page.getByTestId('ob-school').fill('University of Michigan');
-    await page.getByTestId('ob-year').selectOption({ index: 2 });
-    await page.getByRole('button', { name: /continue/i }).click();
-    await page.getByTestId('ob-fn-ib').click();
-    await page.getByRole('button', { name: /continue/i }).click();
-    await page.getByTestId('ob-resume').setInputFiles({
+    // the resume is no longer a setup step: it is added in Settings (or when the chat asks for it)
+    await newStudent(page);
+    await page.goto('settings/integrations');
+    await page.locator('input[type="file"][accept=".pdf,.txt,.md,.docx"]').setInputFiles({
       name: 'resume.txt',
       mimeType: 'text/plain',
       buffer: Buffer.from(
         'Jamie Ortiz\njamie.ortiz@umich.edu\n\nExperience\nSummer Analyst Intern, Comerica Bank, Detroit, MI — June 2026 to August 2026. Built a DCF model for a mid-market\nclient; automated a weekly credit report in Excel.\n\nSkills\nExcel, Python\n',
       ),
     });
+    await expect(page.getByTestId('resume-on-file')).toContainText('resume.txt', { timeout: 15_000 });
+    await page.getByTestId('settings-resume-facets').click();
     const job = page.getByTestId('resume-facet').filter({ hasText: 'Comerica Bank' });
     await expect(job).toContainText('Summer Analyst Intern · Comerica Bank');
     await expect(job).toContainText('Built a DCF model for a mid-market client');
