@@ -18,6 +18,8 @@ export interface SetupState {
   liveLinkedInAvailable?: boolean;
   /** Gmail and Calendar (Google) are connected */
   googleConnected: boolean;
+  /** Google sign-in is set up in this copy of Orbit; when false, Gmail is never suggested (it cannot be connected) */
+  googleAvailable?: boolean;
   resumeOnFile: boolean;
   targetCompanies: number;
   /** how the chat reaches Claude: the student's own key, Orbit's shared access, or neither */
@@ -55,7 +57,7 @@ export function nextSetupStep(s: SetupState): SetupStep {
     return s.liveLinkedInAvailable
       ? { id: 'linkedin', text: 'connect LinkedIn so their connections stay in sync (show_setup linkedin)' }
       : pick('linkedin');
-  if (!s.googleConnected) return pick('google');
+  if (!s.googleConnected && s.googleAvailable !== false) return pick('google');
   if (s.people === 0) return pick('add_person');
   if (s.targetCompanies === 0) return pick('target_companies');
   if (!s.resumeOnFile) return pick('resume');
@@ -73,7 +75,7 @@ export function setupLine(s: SetupState): string {
   const facts = [
     `people ${s.people}`,
     `LinkedIn ${s.linkedinLive ? 'connected live' : s.linkedinImported ? 'imported' : 'not connected'}`,
-    `Gmail ${s.googleConnected ? 'connected' : 'not connected'}`,
+    `Gmail ${s.googleConnected ? 'connected' : s.googleAvailable === false ? 'not available in this copy of Orbit yet' : 'not connected'}`,
     `resume ${s.resumeOnFile ? 'on file' : 'none'}`,
     `target companies ${s.targetCompanies}`,
     `Claude ${claude}`,

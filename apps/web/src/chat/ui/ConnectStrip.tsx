@@ -69,19 +69,34 @@ function GmailMark() {
 export function ConnectStrip({
   linkedin,
   gmail,
+  gmailAvailable = true,
   onConnect,
   onDismiss,
   disabled,
 }: {
   linkedin: boolean;
   gmail: boolean;
+  /** false where Google sign-in is not set up yet: Gmail shows as coming soon, with nothing to press */
+  gmailAvailable?: boolean;
   onConnect: (what: 'linkedin' | 'google') => void;
   onDismiss: () => void;
   disabled?: boolean;
 }) {
   const rows = [
-    { what: 'linkedin' as const, name: 'LinkedIn', mark: <LinkedInMark />, connected: linkedin },
-    { what: 'google' as const, name: 'Gmail', mark: <GmailMark />, connected: gmail },
+    {
+      what: 'linkedin' as const,
+      name: 'LinkedIn',
+      mark: <LinkedInMark />,
+      connected: linkedin,
+      available: true,
+    },
+    {
+      what: 'google' as const,
+      name: 'Gmail',
+      mark: <GmailMark />,
+      connected: gmail,
+      available: gmailAvailable,
+    },
   ];
   return (
     <section
@@ -121,13 +136,15 @@ export function ConnectStrip({
                 <>
                   <Check size={12} aria-hidden /> Connected
                 </>
-              ) : (
+              ) : r.available ? (
                 <>
                   <span className="w-1.5 h-1.5 rounded-full bg-ink-3/50" aria-hidden /> Not connected
                 </>
+              ) : (
+                'Coming soon'
               )}
             </span>
-            {!r.connected && (
+            {!r.connected && r.available && (
               <button
                 type="button"
                 className="ml-auto h-7 px-2.5 rounded-[9px] text-[12.5px] font-medium bg-accent text-white hover:bg-accent-2 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"

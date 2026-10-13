@@ -4,8 +4,8 @@ import { STABLE_SYSTEM_VERSION, stableSystemText, systemBlocks } from '../agent/
 const text = stableSystemText('0123456789abcdef');
 
 describe('stable system block', () => {
-  it('is version 7 and byte-identical for a conversation', () => {
-    expect(STABLE_SYSTEM_VERSION).toBe(7);
+  it('is version 8 and byte-identical for a conversation', () => {
+    expect(STABLE_SYSTEM_VERSION).toBe(8);
     expect(stableSystemText('0123456789abcdef')).toBe(text);
     expect(systemBlocks('0123456789abcdef')).toEqual([
       { type: 'text', text, cache_control: { type: 'ephemeral' } },

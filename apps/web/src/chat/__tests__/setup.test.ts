@@ -36,6 +36,13 @@ describe('nextSetupStep', () => {
     );
   });
 
+  it('never suggests Gmail where Google sign-in is not set up, and says so in the Setup line', () => {
+    expect(id({ people: 40, linkedinImported: true, googleAvailable: false })).toBe('target_companies');
+    expect(setupLine(state({ people: 40, linkedinImported: true, googleAvailable: false }))).toMatch(
+      /Gmail not available in this copy of Orbit yet/,
+    );
+  });
+
   it('asks for one person by hand when LinkedIn and Gmail left nobody', () => {
     expect(id({ linkedinImported: true, googleConnected: true })).toBe('add_person');
   });

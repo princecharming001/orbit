@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { db } from '../../db/schema';
 import { DEMO_USER_ID } from '../../engine/demo';
+import { googleClientId } from '../../integrations/google';
 import { useSession } from '../../state/session';
 import { peopleWaitingNow } from '../agent/setup';
 import { useThread } from './threadStore';
@@ -21,6 +22,8 @@ export interface HomeStatus {
   linkedin: boolean;
   /** Gmail (Google) is connected */
   gmail: boolean;
+  /** Google sign-in is set up in this copy of Orbit, so Gmail can be connected at all */
+  gmailAvailable?: boolean;
   /** the sample student: nothing to connect */
   demo: boolean;
 }
@@ -31,6 +34,7 @@ const QUIET: Omit<HomeStatus, 'ready'> = {
   waiting: 0,
   linkedin: true,
   gmail: true,
+  gmailAvailable: true,
   demo: false,
 };
 
@@ -68,6 +72,7 @@ export async function readHomeStatus(userId: string, now: Date = new Date()): Pr
         (i.provider === 'linkedin_live' && i.status !== 'revoked' && !!i.externalAccountId),
     ),
     gmail: integrations.some((i) => i.provider === 'google' && i.status !== 'revoked'),
+    gmailAvailable: !!googleClientId(),
     demo: userId === DEMO_USER_ID || integrations.some((i) => i.provider === 'demo'),
   };
   cache.set(userId, status);
@@ -89,11 +94,15 @@ export function homeStatusLine(status: HomeStatus): string | undefined {
 }
 
 /** What is not connected yet, in one line; undefined when both are (or for the sample student). */
-export function missingAppsLine(status: Pick<HomeStatus, 'linkedin' | 'gmail' | 'demo'>): string | undefined {
+export function missingAppsLine(
+  status: Pick<HomeStatus, 'linkedin' | 'gmail' | 'demo'> & { gmailAvailable?: boolean },
+): string | undefined {
   if (status.demo) return undefined;
-  if (!status.linkedin && !status.gmail) return 'Connect LinkedIn and Gmail so I can see who you know.';
+  // Gmail only counts as missing where it can be connected: never nag about something the student cannot do
+  const gmailMissing = !status.gmail && status.gmailAvailable !== false;
+  if (!status.linkedin && gmailMissing) return 'Connect LinkedIn and Gmail so I can see who you know.';
   if (!status.linkedin) return 'Connect LinkedIn so I can see everyone you know.';
-  if (!status.gmail) return 'Connect Gmail so I can see who you email and send what you approve.';
+  if (gmailMissing) return 'Connect Gmail so I can see who you email and send what you approve.';
   return undefined;
 }
 

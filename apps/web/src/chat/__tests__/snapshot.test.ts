@@ -120,6 +120,8 @@ afterEach(() => setPanelHint(undefined));
 beforeEach(async () => {
   await wipeDatabase();
   await clearPrefs();
+  // Google sign-in set up, so Gmail is something the student can connect
+  writePrefs({ googleClientId: 'test-client.apps.googleusercontent.com' });
   user = await createLocalUser({
     fullName: 'Alex Kim',
     firstName: 'Alex',

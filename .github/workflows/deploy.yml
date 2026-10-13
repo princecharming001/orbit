@@ -39,6 +39,10 @@ jobs:
           # on when its key is set as a function secret, and answers "unconfigured" (the app falls back) until then
           VITE_ORBIT_LINKEDIN_PROXY: https://nxibeiykcgxpbmkeadth.supabase.co/functions/v1/orbit-connectors
           VITE_ORBIT_VILLAGE_PROXY: https://nxibeiykcgxpbmkeadth.supabase.co/functions/v1/orbit-connectors
+          # Google sign-in for Gmail and Calendar: a public OAuth client id, set as the repository variable
+          # VITE_GOOGLE_CLIENT_ID (Settings > Secrets and variables > Actions > Variables). Empty until then, and the app
+          # hides the Gmail step and never asks students to connect it.
+          VITE_GOOGLE_CLIENT_ID: ${{ vars.VITE_GOOGLE_CLIENT_ID }}
       - name: Install Playwright browsers
         run: pnpm --filter @orbit/web exec playwright install --with-deps chromium
       - name: End-to-end tests

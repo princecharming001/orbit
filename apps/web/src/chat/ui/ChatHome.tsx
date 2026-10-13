@@ -26,7 +26,11 @@ export function ChatHome() {
   const chips = status.ready ? homeChips(engine.chips(), status.empty) : [];
   // once the strip is dismissed, the line under the greeting stops asking too
   const statusLine = homeStatusLine(stripDismissed ? { ...status, linkedin: true, gmail: true } : status);
-  const showStrip = status.ready && !status.demo && !stripDismissed && (!status.linkedin || !status.gmail);
+  const showStrip =
+    status.ready &&
+    !status.demo &&
+    !stripDismissed &&
+    (!status.linkedin || (!status.gmail && status.gmailAvailable !== false));
   const mode = engine.mode();
   const modeNote = engine.modeNote();
   const inConversation = thread.turns.length > 0;
@@ -117,6 +121,7 @@ export function ChatHome() {
             <ConnectStrip
               linkedin={status.linkedin}
               gmail={status.gmail}
+              gmailAvailable={status.gmailAvailable !== false}
               onConnect={(what) => void actions.connect(what)}
               onDismiss={dismissStrip}
               disabled={thread.running}

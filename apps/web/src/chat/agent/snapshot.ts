@@ -5,6 +5,7 @@ import { DEMO_USER_ID } from '../../engine/demo';
 import { liveLinkedInAvailable } from '../../engine/linkedinLive';
 import { todayCards } from '../../engine/today';
 import { villageAvailable } from '../../engine/warmIntros';
+import { googleClientId } from '../../integrations/google';
 import { llmFeatures, readPrefs } from '../../integrations/prefs';
 import { sharedClaudeAvailable } from '../../integrations/shared-claude';
 import { getPanelHint } from '../panel/panelHint';
@@ -180,6 +181,7 @@ export async function buildSnapshot(userId: string, now: Date): Promise<Snapshot
     linkedinLive: !!live,
     liveLinkedInAvailable: !!user && liveLinkedInAvailable(user),
     googleConnected,
+    googleAvailable: !!googleClientId(),
     resumeOnFile: resumes > 0,
     targetCompanies: targets.filter((t) => t.status !== 'closed').length,
     claude: claudeAccess,

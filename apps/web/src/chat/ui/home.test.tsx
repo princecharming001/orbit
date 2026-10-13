@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setCurrentUserId } from '../../db/repo';
 import { db } from '../../db/schema';
 import { createLocalUser } from '../../engine/account';
+import { clearPrefs, writePrefs } from '../../integrations/prefs';
 import { SessionProvider } from '../../state/session';
 import { ToastProvider } from '../../ui';
 import { chipRows, homeChips, starterChips } from '../agent/chips';
@@ -177,6 +178,8 @@ describe('the home: connect your apps', () => {
     } catch {
       // no storage in this environment
     }
+    // Google sign-in set up, so Gmail can be connected here
+    writePrefs({ googleClientId: 'test-client.apps.googleusercontent.com' });
     const u = await createLocalUser({
       fullName: 'Alex Rivera',
       firstName: 'Alex',
@@ -248,6 +251,34 @@ describe('the home: connect your apps', () => {
     await connectBoth();
     await mount();
     expect($('[data-testid="connect-strip"]')).toBeNull();
+  });
+
+  it('where Google sign-in is not set up, shows Gmail as coming soon and never asks for it', async () => {
+    await clearPrefs();
+    await mount();
+    expect($('[data-testid="connect-status-google"]')?.textContent?.trim()).toBe('Coming soon');
+    expect($('[data-testid="connect-gmail"]')).toBeNull();
+    expect($('[data-testid="connect-linkedin"]')).not.toBeNull();
+    expect($('[data-testid="home-status"]')?.textContent).toBe(
+      'Connect LinkedIn so I can see everyone you know.',
+    );
+    act(() => root!.unmount());
+    host.remove();
+    root = undefined;
+    resetHomeStatusCache();
+    // with LinkedIn in, nothing is left that can be connected, so the strip goes away
+    await db.integrations.put({
+      id: 'li',
+      userId,
+      provider: 'linkedin_csv',
+      status: 'active',
+      scopes: [],
+      syncState: {},
+      connectedAt: '',
+    });
+    await mount();
+    expect($('[data-testid="connect-strip"]')).toBeNull();
+    expect($('[data-testid="home-status"]')).toBeNull();
   });
 
   it('stays hidden once dismissed, and the line under the greeting stops asking too', async () => {
@@ -332,6 +363,11 @@ describe('home helpers', () => {
     // someone waiting comes first, and the sample student is never asked
     expect(homeStatusLine({ ...s, waiting: 2, linkedin: false, gmail: false })).toMatch(/^Two people/);
     expect(homeStatusLine({ ...s, demo: true, linkedin: false, gmail: false })).toBeUndefined();
+    // Gmail is never asked for where it cannot be connected
+    expect(homeStatusLine({ ...s, linkedin: true, gmail: false, gmailAvailable: false })).toBeUndefined();
+    expect(homeStatusLine({ ...s, linkedin: false, gmail: false, gmailAvailable: false })).toBe(
+      'Connect LinkedIn so I can see everyone you know.',
+    );
   });
 
   it('readHomeStatus knows what is connected, the way the Setup line counts it', async () => {
