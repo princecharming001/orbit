@@ -24,9 +24,21 @@ import {
 } from '../_shared/http.ts';
 import { clientIp } from '../_shared/origins.ts';
 import { ipBuckets, memoryTake, sqlTake, type Take, userBuckets } from '../_shared/ratelimit.ts';
+import { type AgentConfig, makeServices, type Services } from '../_shared/services.ts';
 import { authenticate, type SessionConfig, sessionSecretUsable } from '../_shared/session.ts';
 import { accountDelete, accountExport } from './account.ts';
 import { googleCallback, googleStart, logout, me, refresh, session } from './auth.ts';
+import { cadenceRoutes } from './routes/cadence.ts';
+import { calendarRoutes } from './routes/calendar.ts';
+import { draftRoutes } from './routes/drafts.ts';
+import { goalRoutes } from './routes/goals.ts';
+import { memoryRoutes } from './routes/memory.ts';
+import { pathRoutes } from './routes/paths.ts';
+import { replyRoutes } from './routes/replies.ts';
+import { researchRoutes } from './routes/research.ts';
+import { scoreRoutes } from './routes/scores.ts';
+import { settingsRoutes } from './routes/settings.ts';
+import { sourceRoutes } from './routes/source.ts';
 import { syncPull, syncPush, syncStatus } from './sync.ts';
 
 export const DEFAULT_APP_URL = 'https://princecharming001.github.io/orbit';
@@ -65,6 +77,8 @@ export interface ApiDeps {
   salt?: string;
   /** how far behind "now" /sync/pull reads, so rows from transactions still committing are not skipped */
   pullLagMs?: number;
+  /** provider keys and test fakes for the agent routes (goals … cadence); Google and Unipile default from env */
+  agent?: AgentConfig;
 }
 
 /** What a route handler gets. */
@@ -82,11 +96,13 @@ export interface Ctx {
   /** set once the caller is authenticated */
   userId?: string;
   sessionId?: string;
+  /** the agent services (Claude, providers, Google tokens, embeddings, queue), built on first use */
+  services: () => Services;
 }
 
 type Handler = (ctx: Ctx) => Promise<Response>;
 
-interface Route {
+export interface Route {
   method: 'GET' | 'POST' | 'GET|POST';
   auth: boolean;
   google?: boolean;
@@ -105,6 +121,17 @@ const ROUTES: Record<string, Route> = {
   '/sync/push': { method: 'POST', auth: true, run: syncPush },
   '/account/export': { method: 'POST', auth: true, run: accountExport },
   '/account/delete': { method: 'POST', auth: true, run: accountDelete },
+  ...goalRoutes,
+  ...scoreRoutes,
+  ...researchRoutes,
+  ...sourceRoutes,
+  ...pathRoutes,
+  ...draftRoutes,
+  ...replyRoutes,
+  ...calendarRoutes,
+  ...memoryRoutes,
+  ...settingsRoutes,
+  ...cadenceRoutes,
 };
 
 /** The secrets a route needs that are not set. */
@@ -140,6 +167,18 @@ export function makeApiHandler(deps: ApiDeps): (req: Request) => Promise<Respons
           now,
         }
       : undefined;
+  const agent: AgentConfig = {
+    ...deps.agent,
+    fetch: deps.agent?.fetch ?? deps.fetch,
+    env: {
+      googleClientId: deps.env.googleClientId,
+      googleClientSecret: deps.env.googleClientSecret,
+      googleRedirectUri: deps.env.googleRedirectUri,
+      unipileKey: deps.env.unipileKey,
+      unipileBase: deps.env.unipileBase,
+      ...deps.agent?.env,
+    },
+  };
 
   return async (req) => {
     const started = Date.now();
@@ -193,6 +232,7 @@ export function makeApiHandler(deps: ApiDeps): (req: Request) => Promise<Respons
       const visitor = (await sha256Hex(`${salt}:${clientIp(req)}`)).slice(0, 32);
       await limit(ipBuckets('api', visitor, now(), limits.ipPerMinute));
 
+      let services: Services | undefined;
       const ctx: Ctx = {
         req,
         url,
@@ -204,6 +244,7 @@ export function makeApiHandler(deps: ApiDeps): (req: Request) => Promise<Respons
         now,
         requestId: rid,
         pullLagMs: deps.pullLagMs ?? 2000,
+        services: () => (services ??= makeServices(agent, { db, now })),
       };
       if (r.auth) {
         const claims = await authenticate(db, ctx.session, req.headers.get('authorization'));

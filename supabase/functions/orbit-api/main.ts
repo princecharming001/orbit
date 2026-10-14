@@ -5,6 +5,7 @@
 import { connectDb } from '../_shared/db.ts';
 import { makeLogger } from '../_shared/http.ts';
 import { resolveSecret } from '../_shared/secrets.ts';
+import { agentEnvFrom } from '../_shared/services.ts';
 import { makeApiHandler } from './api.ts';
 
 const env = (name: string) => Deno.env.get(name) || undefined;
@@ -32,6 +33,7 @@ Deno.serve(
       unipileBase: env('UNIPILE_BASE_URL'),
     },
     db,
+    agent: { env: agentEnvFrom(env) },
     log: makeLogger(salt),
     salt,
     limits: {
