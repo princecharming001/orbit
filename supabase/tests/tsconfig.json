@@ -3,7 +3,12 @@
   "compilerOptions": {
     "types": ["node"],
     "allowImportingTsExtensions": true,
-    "noEmit": true
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@orbit/core": ["../../packages/core/src/index.ts"],
+      "@orbit/core/*": ["../../packages/core/src/*"]
+    }
   },
   "include": ["./**/*.ts", "../functions/**/*.ts"],
   "exclude": ["node_modules", "../functions/*/dist/**"]
