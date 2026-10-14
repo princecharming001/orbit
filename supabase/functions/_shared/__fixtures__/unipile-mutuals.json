@@ -1,0 +1,29 @@
+{
+  "object": "LinkedinSearch",
+  "items": [
+    {
+      "type": "PEOPLE",
+      "id": "ACoAAMiaChen",
+      "name": "Mia Chen",
+      "member_urn": "urn:li:member:1001",
+      "public_identifier": "mia-chen",
+      "profile_url": "https://www.linkedin.com/in/mia-chen?miniProfileUrn=urn%3Ali%3Afs_miniProfile%3A1",
+      "network_distance": "DISTANCE_1",
+      "location": "San Francisco Bay Area",
+      "headline": "Product at Figma"
+    },
+    {
+      "type": "PEOPLE",
+      "id": "ACoAAOmarHale",
+      "name": "Omar Hale",
+      "member_urn": "urn:li:member:1002",
+      "profile_url": "https://www.linkedin.com/in/omar-hale",
+      "network_distance": "DISTANCE_1",
+      "location": "New York",
+      "headline": "Investor at Northstar Capital"
+    }
+  ],
+  "config": { "params": { "api": "classic", "category": "people" } },
+  "paging": { "start": 0, "page_count": 2, "total_count": 2 },
+  "cursor": null
+}

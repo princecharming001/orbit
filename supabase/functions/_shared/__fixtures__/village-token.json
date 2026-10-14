@@ -1,0 +1,9 @@
+{
+  "data": {
+    "token": "village-test-token",
+    "expires_in": 31536000,
+    "expires_at": 1900000000,
+    "token_type": "Bearer"
+  },
+  "metadata": { "request_id": "req_token_1" }
+}
