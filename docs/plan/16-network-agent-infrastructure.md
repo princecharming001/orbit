@@ -706,7 +706,7 @@ Stable system prompt (cached) → tools (cached) → conversation (append-only, 
 
 ### 11.3 Schema (migration `20261014_orbit_core.sql`)
 
-All tables: schema `orbit`, RLS enabled, **no policies** (service role only), `revoke all on schema orbit from anon, authenticated`. `updated_at` maintained by trigger `orbit.touch_updated_at()`. Every user-owned table has `user_id uuid not null references orbit.users(id) on delete cascade` and an index on `(user_id, updated_at)` for sync.
+All tables: schema `orbit`, RLS enabled, **no policies** (service role only), `revoke all on schema orbit from anon, authenticated`. The schema is not added to the Data API's exposed schemas; functions reach it with `postgres.js` (`npm:postgres`) over the `SUPABASE_DB_URL` that every Edge Function receives, with `prepare: false`, through one module `supabase/functions/_shared/db.ts`. Business logic takes a small `Db` interface (`sql` tagged template + `begin`) so it runs against PGlite (`@electric-sql/pglite`, with `vector`) in unit tests, where `pgmq`, `vault` and `cron` are replaced by stub schemas in `supabase/tests/stubs.sql`. `updated_at` maintained by trigger `orbit.touch_updated_at()`. Every user-owned table has `user_id uuid not null references orbit.users(id) on delete cascade` and an index on `(user_id, updated_at)` for sync.
 
 ```sql
 create schema if not exists orbit;
