@@ -75,6 +75,10 @@ export const MESSAGE_KIND_LABELS: Record<MessageKind, string> = {
   intro_request: 'Intro ask',
   reply: 'Reply',
   report_back: 'Close the loop',
+  first_touch: 'First message',
+  warm_first_touch: 'First message (warm)',
+  forwardable_blurb: 'Note to forward',
+  reengage: 'Reconnect',
 };
 
 export const CHANNEL_LABELS: Record<Channel, string> = {

@@ -2,7 +2,17 @@ import { extractTimes } from '../email/when';
 import { addBusinessDays } from '../suggestions/calendar';
 import { wordCount } from '../text/email';
 import { normalizeCompany } from '../text/normalize';
-import type { Channel, DraftClaim, DraftNeed, MessageKind, PersonFact, Sector, StyleCard } from '../types';
+import type {
+  Channel,
+  ComposedMessage,
+  DraftClaim,
+  DraftNeed,
+  GoalKind,
+  MessageKind,
+  PersonFact,
+  Sector,
+  StyleCard,
+} from '../types';
 import {
   article,
   cap1,
@@ -334,6 +344,11 @@ export const MAX_WORDS: Record<MessageKind, number> = {
   intro_request: 110,
   reply: 110,
   report_back: 60,
+  // plan 16 §7.1/§7.2: first touches 50–110 words, a forwardable blurb at most 90, a re-engage note short
+  first_touch: 110,
+  warm_first_touch: 110,
+  forwardable_blurb: 90,
+  reengage: 90,
 };
 export const MIN_WORDS: Record<MessageKind, number> = {
   outreach: 45,
@@ -346,6 +361,10 @@ export const MIN_WORDS: Record<MessageKind, number> = {
   intro_request: 55,
   reply: 10,
   report_back: 20,
+  first_touch: 50,
+  warm_first_touch: 50,
+  forwardable_blurb: 35,
+  reengage: 30,
 };
 /** LinkedIn's hard cap on a connection note (Premium). */
 export const LINKEDIN_NOTE_MAX = 300;
@@ -3320,4 +3339,256 @@ export function wordsIn(body: string): number {
   )
     content.pop();
   return wordCount(content.join('\n'));
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// compose v2 fallbacks (plan 16 §7): a valid message for every kind and goal without an LLM
+
+/** The kinds compose v2 writes; `reply` needs the thread and stays with the v1 engine. */
+export const COMPOSE_KINDS = [
+  'first_touch',
+  'warm_first_touch',
+  'intro_request',
+  'forwardable_blurb',
+  'reengage',
+  'bump',
+  'thank_you',
+] as const satisfies readonly MessageKind[];
+export type ComposeKind = (typeof COMPOSE_KINDS)[number];
+
+export const COMPOSE_TEMPLATE_VERSION = 'template-v2';
+
+export interface ComposeTemplateInput {
+  kind: ComposeKind;
+  goal: GoalKind;
+  channel: 'gmail' | 'linkedin';
+  personId: string;
+  goalId?: string | null;
+  user: {
+    firstName: string;
+    school?: string;
+    /** who the student is, as a phrase after their name: "a junior at Cornell studying CS" */
+    about?: string;
+    /** their company, for sales, fundraising, hiring and co-founder goals */
+    company?: string;
+    /** what it does, as a clause after the company name: "helps clinics book patients" */
+    pitch?: string;
+    /** one line of traction, numbers first (fundraising): "We have 40 paying clinics." */
+    traction?: string;
+  };
+  recipient: { firstName: string; org?: string; title?: string };
+  /** the opener from research or history, as a noun phrase: "your post on fraud models" */
+  hook?: { text: string; sourceId: string };
+  /** the role, question, problem, event or paper the message is about, or the student's news (reengage) */
+  topic?: string;
+  /** who the route goes through (warm first touch, intro request) */
+  via?: { introducerId: string; introducerFirstName: string; pathScore?: number };
+  /** the person an intro request or a blurb is about meeting */
+  target?: { firstName: string; org?: string };
+  sendWindow?: { notBefore: string; tz: string };
+  id?: string;
+}
+
+/** Everything a fallback may draw on, as the text `validateComposed` checks names and numbers against. */
+export function composeInputsText(i: ComposeTemplateInput): string {
+  return [
+    i.user.firstName,
+    i.user.school,
+    i.user.about,
+    i.user.company,
+    i.user.pitch,
+    i.user.traction,
+    i.recipient.firstName,
+    i.recipient.org,
+    i.recipient.title,
+    i.hook?.text,
+    i.topic,
+    i.via?.introducerFirstName,
+    i.target?.firstName,
+    i.target?.org,
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+/** The default ask per goal (§7.2), one sentence, in plain words. */
+function goalAsk(i: ComposeTemplateInput): { text: string; kind: ComposedMessage['ask']['kind'] } {
+  const topic = i.topic ?? 'your work';
+  switch (i.goal) {
+    case 'recruiting':
+      return { kind: 'call', text: 'Would you have 15 minutes for a call about your path and your team?' };
+    case 'advice':
+      return { kind: 'call', text: `Could I ask you about ${topic} on a 15 minute call?` };
+    case 'fundraising':
+      return { kind: 'interest', text: 'Would you be open to a look?' };
+    case 'sales':
+      return { kind: 'interest', text: 'Worth a quick look?' };
+    case 'hiring':
+      return { kind: 'interest', text: 'Open to hearing about it?' };
+    case 'cofounder':
+      return { kind: 'call', text: `Would you be up for a 20 minute call to compare notes on ${topic}?` };
+    case 'community':
+      return { kind: 'question', text: 'Would you like to join us at the next one?' };
+    case 'collaboration':
+      return { kind: 'question', text: `Have you tried your method on ${topic}?` };
+  }
+}
+
+/** Why the student writes to this person, per goal: two or three short sentences after the hook. */
+function goalMiddle(i: ComposeTemplateInput): string {
+  const org = i.recipient.org ? ` at ${i.recipient.org}` : '';
+  const co = i.user.company ?? 'our team';
+  const topic = i.topic ?? 'this';
+  switch (i.goal) {
+    case 'recruiting':
+      return `Your team${org} works on ${topic}, which is the work I want to do. It would help to hear how you got there and what a normal week looks like.`;
+    case 'advice':
+      return `Right now I am trying to figure out ${topic}. You have been where I am now, so your view would help me a lot.`;
+    case 'fundraising':
+      return `${co} ${i.user.pitch ?? 'is a new company'}. ${i.user.traction ?? 'We are early, and we are moving fast.'} We are raising a small round now and would value your view on it.`;
+    case 'sales':
+      return `${co} ${i.user.pitch ?? 'saves teams time'}. Teams like yours use it to cut busy work and spend more time on the parts that matter.`;
+    case 'hiring':
+      return `We are hiring for ${topic} at ${co}, and your work fits it well. ${co} ${i.user.pitch ?? 'is a small team'}, and the person in this role will shape how we work.`;
+    case 'cofounder':
+      return `These days I am building ${co}, which ${i.user.pitch ?? 'is still early'}. The cofounder I am looking for knows ${topic} as well as you do.`;
+    case 'community':
+      return `I help run ${topic}. We meet once a month to share what we are working on, and I think you would fit right in.`;
+    case 'collaboration':
+      return `I work on ${i.user.pitch ?? 'a close problem'}. Your work seems close to mine, and I would like to share what I have found so far.`;
+  }
+}
+
+const SUBJECTS: Record<GoalKind, (i: ComposeTemplateInput) => string> = {
+  recruiting: (i) => (i.recipient.org ? `your path at ${i.recipient.org}` : 'your path and your team'),
+  advice: () => 'a question about your work',
+  fundraising: (i) => (i.user.company ? `${i.user.company} and a quick look` : 'a new company to look at'),
+  sales: (i) => (i.recipient.org ? `an idea for ${i.recipient.org}` : 'an idea for your team'),
+  hiring: (i) => (i.user.company ? `a role at ${i.user.company}` : 'a role on our team'),
+  cofounder: (i) => (i.user.company ? `building ${i.user.company}` : 'looking for a cofounder'),
+  community: () => 'join us next month',
+  collaboration: () => 'your paper and my work',
+};
+
+function intro(i: ComposeTemplateInput): string {
+  const about = i.user.about ? `, ${i.user.about}` : '';
+  return `My name is ${i.user.firstName}${about}.`;
+}
+
+/** The hook as its own sentence, opening with it ("Your post on fraud models stuck with me."). */
+function hookLine(i: ComposeTemplateInput): string {
+  return i.hook ? `${i.hook.text[0]!.toUpperCase()}${i.hook.text.slice(1)} stuck with me.` : '';
+}
+
+const paragraphs = (...ps: string[]) => ps.filter((p) => p.trim()).join('\n\n');
+
+/**
+ * A message for one kind and goal, built only from the inputs (§7.2): the plain register the playbook asks for,
+ * one ask, a sourced hook in first touches, and LinkedIn's length limits. Used when there is no LLM, and when an LLM
+ * draft still fails validation after one retry (§7.5); the caller runs `validateComposed` and fills `validator`.
+ */
+export function composeFallback(i: ComposeTemplateInput): Omit<ComposedMessage, 'validator'> {
+  const ask = goalAsk(i);
+  const sign = `Best,\n${i.user.firstName}`;
+  const hi = `Hi ${i.recipient.firstName},`;
+  const via = i.via?.introducerFirstName;
+  const target = i.target?.firstName ?? 'them';
+  const targetAt = i.target?.org ? ` at ${i.target.org}` : '';
+  let subject: string | null = null;
+  let body: string;
+  let outAsk: ComposedMessage['ask'] = { kind: ask.kind, text: ask.text };
+  const hooks = i.hook ? [i.hook] : [];
+  switch (i.kind) {
+    case 'first_touch':
+    case 'warm_first_touch': {
+      const warm = i.kind === 'warm_first_touch' && via ? `${via} said I should write to you.` : '';
+      if (i.channel === 'linkedin') {
+        body = [
+          hi,
+          [warm, intro(i), i.hook ? `I read ${i.hook.text}.` : '', ask.text].filter(Boolean).join(' '),
+        ].join('\n');
+      } else {
+        subject = warm ? `${via} said to write` : SUBJECTS[i.goal](i);
+        body = paragraphs(
+          hi,
+          [warm, intro(i), hookLine(i)].filter(Boolean).join(' '),
+          goalMiddle(i),
+          ask.text,
+          sign,
+        );
+      }
+      break;
+    }
+    case 'intro_request': {
+      subject = `an intro to ${target}`;
+      outAsk = { kind: 'intro', text: `Would you be willing to introduce us?` };
+      body = paragraphs(
+        hi,
+        `I am trying to meet ${target}${targetAt} to talk about ${i.topic ?? 'their work'}. It looks like you two know each other, and a word from you would mean a lot.`,
+        `${outAsk.text} There is a short note below that you can send on as it is. If now is not a good time, no worries at all.`,
+        sign,
+      );
+      break;
+    }
+    case 'forwardable_blurb': {
+      outAsk = { kind: 'none', text: '' };
+      const about = i.user.about ? ` is ${i.user.about}` : ' would like to meet you';
+      body = paragraphs(
+        `${i.user.firstName}${about}. ${i.user.firstName} wants to learn about ${i.topic ?? 'your work'} and would value 15 minutes with ${target}.`,
+        i.hook
+          ? `${i.user.firstName} read ${i.hook.text.replace(/^your\b/, 'the')} and has a few clear questions.`
+          : `${i.user.firstName} has a few clear questions and will keep the call short.`,
+        `If ${target} says yes, ${i.user.firstName} will send times that work.`,
+      );
+      break;
+    }
+    case 'reengage': {
+      subject = i.channel === 'gmail' ? `news from ${i.user.firstName}` : null;
+      outAsk = { kind: 'none', text: '' };
+      body = paragraphs(
+        hi,
+        `It has been a while, so I wanted to share some news. ${i.topic ? `${i.topic.replace(/\.$/, '')}.` : 'I finally found the work I want to do.'}`,
+        i.hook
+          ? `I saw ${i.hook.text}, and it made me think of you.`
+          : 'I thought of you, since you helped me get here.',
+        'No need to reply. I hope things are good on your end.',
+        sign,
+      );
+      break;
+    }
+    case 'bump': {
+      body = paragraphs(
+        hi,
+        `I wanted to bring this back to the top of your inbox. ${ask.text} If now is not a good time, that is fine.`,
+        sign,
+      );
+      break;
+    }
+    case 'thank_you': {
+      subject = i.channel === 'gmail' ? 'thank you' : null;
+      outAsk = { kind: 'none', text: '' };
+      body = paragraphs(
+        hi,
+        `Thank you for taking the time to talk with me. ${i.hook ? `What you said about ${i.hook.text.replace(/^your\b/, 'your')} will stay with me.` : 'It helped me more than you know.'}`,
+        `I am going to act on your advice about ${i.topic ?? 'next steps'} this week, and I will let you know how it goes.`,
+        sign,
+      );
+      break;
+    }
+  }
+  return {
+    id: i.id ?? `cmp-${i.personId}-${i.kind}-${i.goal}`,
+    goalId: i.goalId ?? null,
+    personId: i.personId,
+    kind: i.kind,
+    channel: i.channel,
+    subject: i.channel === 'gmail' ? subject : null,
+    body,
+    ask: outAsk,
+    hooks,
+    ...(i.via ? { via: { introducerId: i.via.introducerId, pathScore: i.via.pathScore ?? 0 } } : {}),
+    sendWindow: i.sendWindow ?? { notBefore: new Date(0).toISOString(), tz: 'America/New_York' },
+    promptVersion: COMPOSE_TEMPLATE_VERSION,
+    variant: null,
+  };
 }

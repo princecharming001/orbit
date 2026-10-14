@@ -148,7 +148,15 @@ export type MessageKind =
   | 'referral_ask'
   | 'intro_request'
   | 'reply'
-  | 'report_back';
+  | 'report_back'
+  /** a first message to someone new (plan 16 §7.2) */
+  | 'first_touch'
+  /** a first message that names the mutual connection */
+  | 'warm_first_touch'
+  /** a third-person note the introducer can forward unchanged (≤ 90 words, double opt-in) */
+  | 'forwardable_blurb'
+  /** a genuine update to a dormant tie (score ≥ 30, no contact in 180 days); no ask unless the student wants one */
+  | 'reengage';
 export type Sector = 'finance' | 'consulting' | 'tech' | 'general';
 export type Seniority = 'junior' | 'mid' | 'senior' | 'exec';
 export type EmailCategory =
@@ -692,6 +700,8 @@ export interface OutboundMessage {
   personId: ID;
   chatId?: ID;
   suggestionId?: ID;
+  /** the goal this draft serves (plan 16 §2.1) */
+  goalId?: ID;
   channel: Channel;
   kind: MessageKind;
   externalThreadId?: string;
@@ -726,6 +736,28 @@ export interface OutboundMessage {
   /** when the draft's words were last written: a draft that says "yesterday" is rewritten the next day */
   draftedAt?: string;
   createdAt: string;
+}
+
+/** A composed message (plan 16 §7.3): what the composer, LLM or template, hands to the validator and the send path. */
+export interface ComposedMessage {
+  id: ID;
+  goalId: ID | null;
+  personId: ID;
+  kind: MessageKind;
+  channel: 'gmail' | 'linkedin';
+  /** gmail only */
+  subject: string | null;
+  body: string;
+  ask: { kind: 'call' | 'question' | 'interest' | 'intro' | 'none'; text: string };
+  /** at least one for first touches, each with the dossier or history item it came from */
+  hooks: { text: string; sourceId: string }[];
+  via?: { introducerId: ID; pathScore: number };
+  sendWindow: { notBefore: string; tz: string };
+  validator: { ok: boolean; issues: string[]; words: number; grade: number };
+  /** e.g. 'compose-v2.0', or 'template-v2' for the fallback */
+  promptVersion: string;
+  /** A/B arm */
+  variant: string | null;
 }
 
 /** What a draft is missing that only the student can supply (the needs-input prompt in the editor). */

@@ -1,4 +1,5 @@
 export * from './demo/seed';
+export * from './drafts/compose';
 export { expandShorthand, promiseText } from './drafts/phrasing';
 export * from './drafts/sector';
 export * from './drafts/templates';
