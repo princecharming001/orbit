@@ -66,6 +66,15 @@ export async function adoptAccountUser(a: AccountUser, now = new Date()): Promis
   // the server's autonomy level is the student's choice; the browser keeps a copy for Settings and the chat
   if (a.autonomyLevel === 0 || a.autonomyLevel === 1 || a.autonomyLevel === 2)
     await db.settings.update(user.id, { autonomyLevel: a.autonomyLevel } as Partial<UserSettings>);
+  // the postal address and booking link the server drafts with, where this browser has none yet
+  const local = (await db.settings.get(user.id)) as (UserSettings & { postalAddress?: string }) | undefined;
+  const fromServer: Record<string, string> = {};
+  if (typeof a.settings?.postal_address === 'string' && !local?.postalAddress)
+    fromServer.postalAddress = a.settings.postal_address;
+  if (typeof a.settings?.scheduling_link === 'string' && !local?.schedulingLink)
+    fromServer.schedulingLink = a.settings.scheduling_link;
+  if (local && Object.keys(fromServer).length)
+    await db.settings.update(user.id, fromServer as Partial<UserSettings>);
   await setCurrentUserId(user.id);
   return user;
 }

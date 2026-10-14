@@ -7,6 +7,7 @@ import type { Goal, User, UserSettings } from '@orbit/core';
 import { db } from '../db/schema';
 import { callApi, isAccountMode, isServerUser, NO_SERVER, SIGN_IN_FIRST } from '../integrations/orbitApi';
 import { writeFromServer } from './serverSync';
+import { pushProfileSettings } from './settings';
 
 export type AutonomyLevel = 0 | 1 | 2;
 
@@ -88,7 +89,10 @@ export async function pauseOutreach(
   return { ok: true, until };
 }
 
-/** Keep the postal address sales emails must carry. */
+/** Keep the postal address sales emails must carry; in account mode the server's copy is the one drafts read. */
 export async function setPostalAddress(userId: string, address: string): Promise<void> {
-  await patch(userId, { postalAddress: address.trim() || undefined });
+  const clean = address.trim() || undefined;
+  const before = (await outreachSettings(userId)).postalAddress;
+  await patch(userId, { postalAddress: clean });
+  if (clean !== before) await pushProfileSettings(userId, { postalAddress: clean ?? null });
 }

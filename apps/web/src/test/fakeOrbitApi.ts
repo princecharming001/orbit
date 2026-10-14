@@ -8,6 +8,8 @@ import type {
   DueItem,
   Goal,
   MemoryItem,
+  MemoryKind,
+  ProposedGoal,
   ReplyItem,
   ServerDraft,
   SourcedCandidate,
@@ -51,6 +53,12 @@ export interface FakeState {
   memories: MemoryItem[];
   autonomy: { level: number; goalId?: string }[];
   pausedUntil: string | null | undefined;
+  /** what /settings/profile keeps (users.settings and users.timezone on the server) */
+  profile: { postalAddress: string | null; schedulingLink: string | null; timezone: string };
+  /** what the next /memory/extract finds (each added like /memory/add) */
+  extractable: { text: string; kind: MemoryKind }[];
+  /** what /goals/infer proposes */
+  proposals: ProposedGoal[];
   due: DueItem[];
   linkedin: { status: string; relations: number };
   deleted: boolean;
@@ -124,6 +132,9 @@ export function createFakeOrbitApi(
     memories: [],
     autonomy: [],
     pausedUntil: undefined,
+    profile: { postalAddress: null, schedulingLink: null, timezone: 'America/New_York' },
+    extractable: [],
+    proposals: [],
     due: [],
     linkedin: { status: 'not_connected', relations: 0 },
     deleted: false,
@@ -152,6 +163,25 @@ export function createFakeOrbitApi(
     const t = h.replace(/^Bearer /, '');
     const exp = state.access.get(t);
     return !!exp && exp > clock;
+  };
+
+  const addMemory = (text: string, kind: MemoryKind, personId?: string) => {
+    const dup = state.memories.find((m) => m.text.toLowerCase() === text.toLowerCase());
+    if (dup) {
+      dup.lastSeenAt = iso(clock);
+      return { memory: dup, deduped: true };
+    }
+    const m: MemoryItem = {
+      id: uuid(),
+      kind,
+      text,
+      personId: personId ?? null,
+      importance: 0.5,
+      createdAt: iso(clock),
+      lastSeenAt: iso(clock),
+    };
+    state.memories.push(m);
+    return { memory: m, deduped: false };
   };
 
   const handle = async (route: string, body: Record<string, unknown>, req: Request): Promise<Response> => {
@@ -478,23 +508,24 @@ export function createFakeOrbitApi(
           .slice(0, Number(body.limit ?? 8));
         return json(200, { memories: hits });
       }
-      case '/memory/add': {
-        const dup = state.memories.find((m) => m.text.toLowerCase() === String(body.text).toLowerCase());
-        if (dup) {
-          dup.lastSeenAt = iso(clock);
-          return json(200, { memory: dup, deduped: true });
-        }
-        const m: MemoryItem = {
-          id: uuid(),
-          kind: body.kind as MemoryItem['kind'],
-          text: String(body.text),
-          personId: (body.personId as string) ?? null,
-          importance: 0.5,
-          createdAt: iso(clock),
-          lastSeenAt: iso(clock),
-        };
-        state.memories.push(m);
-        return json(200, { memory: m, deduped: false });
+      case '/memory/add':
+        return json(200, addMemory(String(body.text), body.kind as MemoryKind, body.personId as string));
+      case '/memory/extract': {
+        const turns = body.turns as { role: string; text: string }[] | undefined;
+        if (!Array.isArray(turns) || !turns.length || turns.length > 6)
+          return error(400, 'bad_request', 'turns');
+        if (turns.reduce((n, t) => n + t.text.length, 0) > 8000) return error(400, 'bad_request', 'too long');
+        const found = state.extractable.splice(0).map((m) => addMemory(m.text, m.kind));
+        return json(200, {
+          memories: found.map((f) => f.memory),
+          added: found.filter((f) => !f.deduped).length,
+        });
+      }
+      case '/goals/infer': {
+        const turns = body.turns as { role: string; text: string }[] | undefined;
+        if (!Array.isArray(turns) || !turns.length || turns.length > 6)
+          return error(400, 'bad_request', 'turns');
+        return json(200, { goals: state.proposals });
       }
       case '/memory/list':
         return json(200, { memories: state.memories });
@@ -511,6 +542,18 @@ export function createFakeOrbitApi(
       case '/settings/pause':
         state.pausedUntil = (body.until as string | null) ?? null;
         return json(200, { ok: true });
+      case '/settings/profile': {
+        const link = body.schedulingLink;
+        if (typeof link === 'string' && link && !/^https:\/\/[^/\s]+/.test(link))
+          return error(400, 'bad_request', 'schedulingLink must be an https link');
+        if (typeof body.postalAddress === 'string' && body.postalAddress.length > 500)
+          return error(400, 'bad_request', 'postalAddress is at most 500 characters');
+        const text = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : null);
+        if ('postalAddress' in body) state.profile.postalAddress = text(body.postalAddress);
+        if ('schedulingLink' in body) state.profile.schedulingLink = text(link);
+        if (typeof body.timezone === 'string') state.profile.timezone = body.timezone;
+        return json(200, state.profile);
+      }
       case '/cadence/due':
         return json(200, { items: state.due });
       default:

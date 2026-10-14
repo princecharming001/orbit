@@ -12,7 +12,8 @@ export const ONBOARDING_DONE_STEP = 11;
 
 export async function createLocalUser(partial: Partial<User> = {}): Promise<User> {
   const now = new Date().toISOString();
-  const id = newId('u');
+  // an Orbit account brings its own id: the settings row is keyed by the same one
+  const id = partial.id ?? newId('u');
   const user: User = {
     id,
     email: partial.email ?? '',

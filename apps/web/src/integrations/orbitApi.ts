@@ -24,6 +24,8 @@ import type {
   DraftIdRequest,
   DraftResponse,
   DueResponse,
+  GoalsInferRequest,
+  GoalsInferResponse,
   GoalsListResponse,
   GoalUpsertRequest,
   GoalUpsertResponse,
@@ -35,12 +37,16 @@ import type {
   LinkedinStatusResponse,
   MemoryAddRequest,
   MemoryAddResponse,
+  MemoryExtractRequest,
+  MemoryExtractResponse,
   MemoryListResponse,
   MemorySearchRequest,
   MemorySearchResponse,
   PathsFindRequest,
   PathsFindResponse,
   PauseRequest,
+  ProfileSettingsRequest,
+  ProfileSettingsResponse,
   QueuedResponse,
   RepliesListResponse,
   ReplyDraftRequest,
@@ -156,6 +162,7 @@ export interface ApiRoutes {
   '/goals/list': [Record<string, never>, GoalsListResponse];
   '/goals/upsert': [GoalUpsertRequest, GoalUpsertResponse];
   '/goals/archive': [IdRequest, unknown];
+  '/goals/infer': [GoalsInferRequest, GoalsInferResponse];
   '/scores/explain': [ScoreExplainRequest, ScoreExplainResponse];
   '/scores/label': [ScoreLabelRequest, unknown];
   '/research/person': [ResearchPersonRequest, ResearchPersonResponse];
@@ -177,8 +184,10 @@ export interface ApiRoutes {
   '/memory/add': [MemoryAddRequest, MemoryAddResponse];
   '/memory/list': [Record<string, never>, MemoryListResponse];
   '/memory/forget': [IdRequest, unknown];
+  '/memory/extract': [MemoryExtractRequest, MemoryExtractResponse];
   '/settings/autonomy': [AutonomyRequest, unknown];
   '/settings/pause': [PauseRequest, unknown];
+  '/settings/profile': [ProfileSettingsRequest, ProfileSettingsResponse];
   '/cadence/due': [Record<string, never>, DueResponse];
 }
 export type ClientRoute = keyof ApiRoutes;

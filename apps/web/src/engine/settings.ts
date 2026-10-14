@@ -1,6 +1,21 @@
-import type { RecruitingGoals, TargetCompany, User, UserSettings } from '@orbit/core';
+import type { ProfileSettingsRequest, RecruitingGoals, TargetCompany, User, UserSettings } from '@orbit/core';
 import { buildStyleCard } from '@orbit/core';
 import { db } from '../db/schema';
+import { callApi, isServerUser } from '../integrations/orbitApi';
+
+// ---------- what the server reads ----------
+
+/**
+ * Account mode: the settings the server's drafting and sending read (the postal address sales email needs, the
+ * booking link, the time zone send windows follow) go to /settings/profile as well as into this browser. Best
+ * effort: the local copy is already saved, and a refusal (an http link, a zone the server does not know) changes
+ * nothing here. Resolves to whether the server took it; false outside account mode.
+ */
+export async function pushProfileSettings(userId: string, p: ProfileSettingsRequest): Promise<boolean> {
+  if (!isServerUser(userId) || !Object.keys(p).length) return false;
+  const r = await callApi('/settings/profile', p);
+  return r.ok;
+}
 
 // ---------- profile ----------
 
@@ -49,6 +64,8 @@ export async function updateProfile(userId: string, patch: ProfilePatch): Promis
   if (patch.majors !== undefined) changes.majors = patch.majors.map((m) => m.trim()).filter(Boolean);
   if (patch.timezone !== undefined && !patch.timezone.trim()) delete changes.timezone;
   await db.users.update(userId, changes);
+  if (changes.timezone && changes.timezone !== user.timezone)
+    await pushProfileSettings(userId, { timezone: changes.timezone });
   return db.users.get(userId);
 }
 
@@ -171,7 +188,10 @@ export async function setTonePreset(userId: string, tonePreset: UserSettings['to
 
 /** The booking link drafts include when proposing times; an empty value removes it. */
 export async function setSchedulingLink(userId: string, link: string | undefined): Promise<void> {
-  await db.settings.update(userId, { schedulingLink: link?.trim() || undefined });
+  const clean = link?.trim() || undefined;
+  const before = (await db.settings.get(userId))?.schedulingLink;
+  await db.settings.update(userId, { schedulingLink: clean });
+  if (clean !== before) await pushProfileSettings(userId, { schedulingLink: clean ?? null });
 }
 
 export async function setBriefTime(userId: string, briefTimeLocal: string): Promise<void> {
@@ -186,6 +206,8 @@ export async function savePreferences(
   const changes: Partial<UserSettings> = { ...prefs };
   if ('schedulingLink' in prefs) changes.schedulingLink = prefs.schedulingLink?.trim() || undefined;
   await db.settings.update(userId, changes);
+  if ('schedulingLink' in prefs)
+    await pushProfileSettings(userId, { schedulingLink: changes.schedulingLink ?? null });
 }
 
 /** Close a first-run hint for good. */
