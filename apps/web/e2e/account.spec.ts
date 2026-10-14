@@ -308,6 +308,56 @@ test.describe('account mode (mocked orbit-api)', () => {
       });
     });
 
+    test('Settings: the postal address and the booking link reach the server', async ({ page }) => {
+      const api = await signedIn(page);
+      await page.goto('settings/outreach');
+      await page.getByTestId('settings-postal').fill('20 Elm St, Ithaca, NY 14850');
+      await page.getByTestId('settings-postal').blur();
+      await expect.poll(() => api.state.profile.postalAddress).toBe('20 Elm St, Ithaca, NY 14850');
+      await page.goto('settings/limits');
+      await page.locator('#lim-sched').fill('https://cal.com/maya/20min');
+      await expect.poll(() => api.state.profile.schedulingLink).toBe('https://cal.com/maya/20min');
+      // what the server holds comes back after a reload too
+      await page.reload();
+      await expect(page.locator('#lim-sched')).toHaveValue('https://cal.com/maya/20min');
+    });
+
+    test('Chat: a goal the student talks about is offered, and tracked on yes', async ({ page }) => {
+      const api = await signedIn(page);
+      api.state.proposals = [
+        {
+          kind: 'fundraising',
+          title: 'Raise a pre-seed round',
+          targets: { organizations: [], roles: ['angel investor'], geographies: [], people: [] },
+          criteria: {},
+          successMetric: null,
+          dueAt: null,
+          isUpdateOf: null,
+          quote: "I'm trying to raise a pre-seed round",
+        },
+      ];
+      api.state.extractable = [
+        { text: 'Is raising a pre-seed round for a climate startup', kind: 'goal_detail' },
+      ];
+      await page
+        .getByTestId('composer-input')
+        .fill("I'm trying to raise a pre-seed round for my climate startup");
+      await page.keyboard.press('Enter');
+      await expect(
+        page.getByText('Want me to track this as a goal? Fundraising: Raise a pre-seed round.'),
+      ).toBeVisible({
+        timeout: 15_000,
+      });
+      await expect
+        .poll(() => api.state.memories.map((m) => m.text))
+        .toContain('Is raising a pre-seed round for a climate startup');
+      // offered, not saved
+      const goals = () => api.state.goals.map((g) => `${g.kind}: ${g.title}`);
+      expect(goals()).not.toContain('fundraising: Raise a pre-seed round');
+      await page.getByTestId('choice-pill').filter({ hasText: 'Yes, track it' }).click();
+      await expect.poll(goals).toContain('fundraising: Raise a pre-seed round');
+    });
+
     test('Settings, Memory: list and delete; Account shows who is signed in', async ({ page }) => {
       const api = await signedIn(page);
       api.state.memories = [
