@@ -15,8 +15,8 @@ export default defineConfig({
     environment: 'node',
     include: ['**/*.test.ts'],
     exclude: ['**/node_modules/**'],
-    // each test file boots its own PGlite (WASM, CPU-heavy): one file at a time leaves the CPU to the core and web
-    // suites that `pnpm -r test` runs alongside, some of which time themselves
+    // each test file boots its own PGlite (WASM, CPU-heavy), one file at a time. package.json lists @orbit/core and
+    // @orbit/web so `pnpm -r test` starts this suite only after theirs, whose timed checks need the CPU to themselves
     fileParallelism: false,
     testTimeout: 30_000,
     hookTimeout: 60_000,
