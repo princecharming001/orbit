@@ -133,10 +133,15 @@ describe('runTick', () => {
   it('dead-letters malformed messages and unknown kinds at once', async () => {
     await send('orbit_sync', { payload: {} });
     await send('orbit_sync', { kind: 'nobody.handles.this', userId: null, payload: {} });
+    await send('orbit_sync', { kind: 'noop', userId: 'not-a-uuid', payload: {} });
     const s = await runTick({ db: t.db });
-    expect(s.deadLettered).toBe(2);
+    expect(s.deadLettered).toBe(3);
     const dl = await t.db.sql<{ error: string }>`select error from orbit.dead_letters order by id`;
-    expect(dl.map((d) => d.error)).toEqual(['malformed message', 'unknown kind nobody.handles.this']);
+    expect(dl.map((d) => d.error)).toEqual([
+      'malformed message',
+      'unknown kind nobody.handles.this',
+      'malformed message',
+    ]);
     expect(await left('orbit_sync')).toBe(0);
   });
 

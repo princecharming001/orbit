@@ -9,7 +9,7 @@
  * dropped as `skipped`, never retried. Every run is a row in orbit.job_runs.
  */
 
-import { timingSafeEqual } from '../_shared/crypto.ts';
+import { isUuid, timingSafeEqual } from '../_shared/crypto.ts';
 import type { Db } from '../_shared/db.ts';
 import { HttpError, json, type Logger, silentLogger, unconfigured } from '../_shared/http.ts';
 import { QUEUES, type Queue, type QueueName, sqlQueue } from '../_shared/queue.ts';
@@ -101,7 +101,9 @@ function parse(message: unknown): Omit<Job, 'queue' | 'msgId' | 'readCt'> | unde
   if (!message || typeof message !== 'object' || Array.isArray(message)) return undefined;
   const m = message as Record<string, unknown>;
   if (typeof m.kind !== 'string' || !m.kind) return undefined;
-  const userId = typeof m.userId === 'string' ? m.userId : null;
+  // a userId that is not a uuid would fail every query below, so the message is malformed
+  if (m.userId != null && !isUuid(m.userId)) return undefined;
+  const userId = (m.userId as string | undefined) ?? null;
   const payload = m.payload && typeof m.payload === 'object' && !Array.isArray(m.payload) ? m.payload : {};
   return {
     kind: m.kind,

@@ -405,7 +405,12 @@ export async function applyChange(db: Db, userId: string, raw: unknown) {
   } catch (e) {
     if (e instanceof ChangeError)
       return { ...ref, ok: false as const, error: { code: e.code, message: e.message } };
-    throw e;
+    // a database refusal (a constraint the checks above did not foresee) fails this change only
+    return {
+      ...ref,
+      ok: false as const,
+      error: { code: 'failed', message: 'this change could not be applied' },
+    };
   }
 }
 

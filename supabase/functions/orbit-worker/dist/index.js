@@ -68,6 +68,9 @@ async function timingSafeEqual(a, b) {
   for (let i = 0; i < x.length; i++) diff |= x[i] ^ y[i];
   return diff === 0;
 }
+function isUuid(v) {
+  return typeof v === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+}
 
 // supabase/functions/_shared/http.ts
 var HttpError = class extends Error {
@@ -208,7 +211,8 @@ function parse(message) {
   if (!message || typeof message !== "object" || Array.isArray(message)) return void 0;
   const m = message;
   if (typeof m.kind !== "string" || !m.kind) return void 0;
-  const userId = typeof m.userId === "string" ? m.userId : null;
+  if (m.userId != null && !isUuid(m.userId)) return void 0;
+  const userId = m.userId ?? null;
   const payload = m.payload && typeof m.payload === "object" && !Array.isArray(m.payload) ? m.payload : {};
   return {
     kind: m.kind,

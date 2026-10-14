@@ -1333,7 +1333,11 @@ async function applyChange(db, userId, raw) {
   } catch (e) {
     if (e instanceof ChangeError)
       return { ...ref, ok: false, error: { code: e.code, message: e.message } };
-    throw e;
+    return {
+      ...ref,
+      ok: false,
+      error: { code: "failed", message: "this change could not be applied" }
+    };
   }
 }
 var shape = (table, row) => {
