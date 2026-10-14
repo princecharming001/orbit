@@ -8,10 +8,16 @@
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
     "e2e": "pnpm --filter @orbit/web e2e",
-    "lint": "biome check ."
+    "lint": "biome check .",
+    "build:functions": "node scripts/build-functions.mjs"
   },
   "devDependencies": {
+    "@anthropic-ai/sdk": "0.133.0",
     "@biomejs/biome": "^2.0.0",
-    "typescript": "^5.7.0"
+    "esbuild": "0.25.12",
+    "jose": "6.2.12",
+    "postgres": "3.4.9",
+    "typescript": "^5.7.0",
+    "zod": "3.25.76"
   }
 }
