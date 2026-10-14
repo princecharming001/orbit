@@ -27,6 +27,7 @@ export * from './pipeline/introductions';
 export * from './pipeline/transitions';
 export * from './recommend/score';
 export * from './resume/parse';
+export * from './safety/rules';
 export * from './scoring/strength';
 export * from './scoring/tieFit';
 export * from './scoring/tieScore';
