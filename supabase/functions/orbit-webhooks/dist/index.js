@@ -145,6 +145,3395 @@ async function resolveSecret(env2, db2, envName, vaultName) {
   }
 }
 
+// packages/core/src/text/normalize.ts
+var HONORIFICS = /* @__PURE__ */ new Set(["dr", "mr", "mrs", "ms", "mx", "prof", "professor", "sir"]);
+var CREDENTIALS = /* @__PURE__ */ new Set([
+  "phd",
+  "mba",
+  "cfa",
+  "cpa",
+  "md",
+  "jd",
+  "pmp",
+  "msc",
+  "bsc",
+  "ba",
+  "bs",
+  "ms",
+  "mfa",
+  "esq",
+  "pe",
+  "rn",
+  "mph",
+  "cfp",
+  "frm",
+  "caia",
+  "dds",
+  "dvm"
+]);
+var isCredentialToken = (t, k) => CREDENTIALS.has(k) && !(k.length <= 2 && /^\p{Lu}\p{Ll}+$/u.test(t));
+var LEGAL_SUFFIXES = /* @__PURE__ */ new Set([
+  "inc",
+  "incorporated",
+  "llc",
+  "ltd",
+  "limited",
+  "corp",
+  "corporation",
+  "co",
+  "plc",
+  "gmbh",
+  "llp",
+  "lp",
+  "sa",
+  "ag",
+  "pbc"
+]);
+function stripDiacritics(s) {
+  return s.normalize("NFKD").replace(/[̀-ͯ]/g, "");
+}
+function normalizeEmail(raw) {
+  let e = raw.trim().toLowerCase();
+  const m = e.match(/<([^>]+)>/);
+  if (m?.[1]) e = m[1].trim().toLowerCase();
+  const at = e.lastIndexOf("@");
+  if (at < 0) return e;
+  let local = e.slice(0, at);
+  let domain = e.slice(at + 1);
+  if (domain === "googlemail.com") domain = "gmail.com";
+  if (domain === "gmail.com") {
+    local = local.split("+")[0].replace(/\./g, "");
+  }
+  return `${local}@${domain}`;
+}
+function emailDomain(email) {
+  const e = normalizeEmail(email);
+  return e.slice(e.lastIndexOf("@") + 1);
+}
+function emailLocalPart(email) {
+  const e = normalizeEmail(email);
+  return e.slice(0, e.lastIndexOf("@"));
+}
+var GENERATIONAL = /* @__PURE__ */ new Set(["jr", "sr", "ii", "iii", "iv"]);
+var PARTICLES = /* @__PURE__ */ new Set([
+  "de",
+  "da",
+  "del",
+  "della",
+  "der",
+  "den",
+  "di",
+  "du",
+  "la",
+  "le",
+  "van",
+  "von",
+  "ter",
+  "bin",
+  "binti",
+  "al",
+  "st"
+]);
+var tokenKey = (t) => stripDiacritics(t).toLowerCase().replace(/[.,]/g, "");
+function isTagPart(part) {
+  const toks = part.split(/\s+/).filter(Boolean);
+  return toks.length > 0 && toks.every((t) => {
+    const k = tokenKey(t);
+    return !k || GENERATIONAL.has(k) || isCredentialToken(t, k) || HONORIFICS.has(k);
+  });
+}
+function capitalizeToken(t, isFirst) {
+  const lower = t.toLowerCase();
+  if (!isFirst && PARTICLES.has(lower)) return lower;
+  return lower.replace(/(^|[-'’])(\p{L})/gu, (_, sep, c) => sep + c.toUpperCase());
+}
+function fixCase(tokens, offset = 0) {
+  const letters = tokens.join("");
+  const allUpper = letters === letters.toUpperCase() && letters !== letters.toLowerCase();
+  return tokens.map((t, i) => {
+    if (t === t.toLowerCase() && t !== t.toUpperCase()) return capitalizeToken(t, i + offset === 0);
+    if (allUpper && t.length > 1) return capitalizeToken(t, i + offset === 0);
+    return t;
+  });
+}
+function cleanTokens(s) {
+  return s.split(/\s+/).map((t) => t.replace(/^['‘’]+|['‘’]+$/g, "").replace(/[.,]+$/g, "")).filter((t) => {
+    const k = tokenKey(t);
+    return !!k && !HONORIFICS.has(k) && !isCredentialToken(t, k) && !GENERATIONAL.has(k) && /\p{L}/u.test(t);
+  });
+}
+function partsFromTokens(tokens) {
+  const fixed = fixCase(tokens);
+  const first = fixed[0] ?? "";
+  let lastStart = fixed.length - 1;
+  while (lastStart > 1 && PARTICLES.has(fixed[lastStart - 1].toLowerCase())) lastStart--;
+  const last = fixed.length > 1 ? fixed.slice(lastStart).join(" ") : "";
+  const full = fixed.join(" ");
+  return { first, last, full, normalized: nameKey(first, last) };
+}
+function nameKey(first, last) {
+  return stripDiacritics([first, last].filter(Boolean).join(" ")).toLowerCase().replace(/['‘’]/g, "");
+}
+function cleanRaw(raw) {
+  return raw.normalize("NFC").replace(/\([^)]*\)|\[[^\]]*\]/g, " ").replace(/\p{Extended_Pictographic}|\u{FE0F}|\u{200D}/gu, " ").replace(/["“”]/g, "").replace(/\s[|•·/].*$/, "").replace(/[|•·].*$/, "").replace(/\s+[-–—]\s+.*$/, "").replace(/\s+/g, " ").trim();
+}
+function parseName(raw) {
+  if (!raw) return { first: "", last: "", full: "", normalized: "" };
+  const s = cleanRaw(raw);
+  const parts = s.split(",").map((p) => p.trim()).filter((p) => p && !isTagPart(p));
+  let tokens;
+  if (parts.length >= 2) {
+    const head = cleanTokens(parts[0]);
+    const tail = cleanTokens(parts[1]);
+    const headIsSurname = head.length === 1 || head.length > 1 && head.slice(0, -1).every((t) => PARTICLES.has(t.toLowerCase()));
+    tokens = headIsSurname && tail.length >= 1 && tail.length <= 2 ? [...tail, ...head] : head;
+  } else tokens = cleanTokens(parts[0] ?? "");
+  return partsFromTokens(tokens);
+}
+function nameFromParts(firstRaw, lastRaw) {
+  const f = (firstRaw ?? "").trim();
+  const l = (lastRaw ?? "").trim();
+  if (!l) return parseName(f);
+  if (!f) return parseName(l);
+  const clean = (x) => {
+    const parts = cleanRaw(x).split(",").map((p) => p.trim()).filter((p) => p && !isTagPart(p));
+    return cleanTokens(parts[0] ?? "");
+  };
+  const ft = clean(f);
+  const lt = clean(l);
+  if (!lt.length) return partsFromTokens(ft);
+  if (!ft.length) return partsFromTokens(lt);
+  const fixedFirst = fixCase(ft);
+  const fixedLast = fixCase(lt, ft.length);
+  const first = fixedFirst[0];
+  const last = fixedLast.join(" ");
+  return { first, last, full: [...fixedFirst, ...fixedLast].join(" "), normalized: nameKey(first, last) };
+}
+var NICKNAMES = {
+  bill: "william",
+  billy: "william",
+  will: "william",
+  willy: "william",
+  bob: "robert",
+  bobby: "robert",
+  rob: "robert",
+  robbie: "robert",
+  bert: "robert",
+  mike: "michael",
+  mikey: "michael",
+  mick: "michael",
+  jim: "james",
+  jimmy: "james",
+  dave: "david",
+  davey: "david",
+  dan: "daniel",
+  danny: "daniel",
+  matt: "matthew",
+  matty: "matthew",
+  topher: "christopher",
+  tom: "thomas",
+  tommy: "thomas",
+  joe: "joseph",
+  joey: "joseph",
+  jon: "jonathan",
+  johnny: "john",
+  nick: "nicholas",
+  nicky: "nicholas",
+  tony: "anthony",
+  ben: "benjamin",
+  benny: "benjamin",
+  andy: "andrew",
+  drew: "andrew",
+  ed: "edward",
+  eddie: "edward",
+  steve: "steven",
+  ken: "kenneth",
+  kenny: "kenneth",
+  josh: "joshua",
+  zach: "zachary",
+  zack: "zachary",
+  jeff: "jeffrey",
+  charlie: "charles",
+  chuck: "charles",
+  greg: "gregory",
+  jake: "jacob",
+  rick: "richard",
+  ricky: "richard",
+  rich: "richard",
+  tim: "timothy",
+  timmy: "timothy",
+  ron: "ronald",
+  don: "donald",
+  larry: "lawrence",
+  liz: "elizabeth",
+  lizzie: "elizabeth",
+  beth: "elizabeth",
+  betty: "elizabeth",
+  kate: "katherine",
+  katie: "katherine",
+  kathy: "katherine",
+  jen: "jennifer",
+  jenny: "jennifer",
+  jess: "jessica",
+  jessie: "jessica",
+  maggie: "margaret",
+  meg: "margaret",
+  peggy: "margaret",
+  sue: "susan",
+  susie: "susan",
+  abby: "abigail",
+  becky: "rebecca",
+  becca: "rebecca",
+  vicky: "victoria",
+  tori: "victoria",
+  mandy: "amanda",
+  patty: "patricia"
+};
+var AMBIGUOUS_NICKNAMES = {
+  alex: ["alexander", "alexandra", "alexis"],
+  sam: ["samuel", "samantha"],
+  chris: ["christopher", "christine", "christina"],
+  pat: ["patrick", "patricia"],
+  jamie: ["james"],
+  nat: ["natalie", "nathan", "nathaniel"],
+  nate: ["nathan", "nathaniel"],
+  ted: ["edward", "theodore"],
+  sasha: ["alexander", "alexandra"],
+  liam: ["william"],
+  john: ["jonathan"],
+  gail: ["abigail"],
+  eliza: ["elizabeth"],
+  max: ["maxwell", "maximilian"],
+  kat: ["katherine", "kathryn"],
+  lexi: ["alexandra", "alexis"],
+  frankie: ["frank", "francis", "francesca"]
+};
+function canonicalFirstName(first) {
+  const f = stripDiacritics(first).toLowerCase();
+  return NICKNAMES[f] ?? f;
+}
+function firstNameRelation(a, b) {
+  const x = stripDiacritics(a).toLowerCase();
+  const y = stripDiacritics(b).toLowerCase();
+  if (!x || !y) return "different";
+  if (x === y) return "same";
+  if (canonicalFirstName(x) === canonicalFirstName(y)) return "nickname";
+  const amb = (s, t) => (AMBIGUOUS_NICKNAMES[s] ?? []).some((n) => n === t || n === canonicalFirstName(t));
+  if (amb(x, y) || amb(y, x)) return "ambiguous";
+  return "different";
+}
+function normalizeLinkedInUrl(raw) {
+  if (!raw) return void 0;
+  let s = raw.trim();
+  if (!s) return void 0;
+  if (!/^https?:\/\//i.test(s)) s = `https://${s}`;
+  try {
+    const u2 = new URL(s);
+    if (!/(^|\.)linkedin\.com$/i.test(u2.hostname)) return void 0;
+    const m = u2.pathname.match(/\/in\/([^/?#]+)/i);
+    if (!m?.[1]) return void 0;
+    const slug = decodeURIComponent(m[1]).toLowerCase().replace(/\/+$/, "");
+    return `https://www.linkedin.com/in/${slug}`;
+  } catch {
+    return void 0;
+  }
+}
+function linkedInSlug(url) {
+  const n = normalizeLinkedInUrl(url);
+  return n ? n.slice(n.lastIndexOf("/") + 1) : void 0;
+}
+var GENERIC_ORG_TAIL = /* @__PURE__ */ new Set([
+  "&",
+  "and",
+  "company",
+  "co",
+  "group",
+  "consulting",
+  "partners",
+  "holdings"
+]);
+var ORG_ALIASES = {
+  bcg: "boston consulting group",
+  "boston consulting group": "boston consulting group",
+  jpmorgan: "jpmorgan chase",
+  "jp morgan": "jpmorgan chase",
+  "j p morgan": "jpmorgan chase",
+  "jpmorgan chase": "jpmorgan chase",
+  "jp morgan chase": "jpmorgan chase",
+  "j p morgan chase": "jpmorgan chase",
+  jpmc: "jpmorgan chase",
+  chase: "jpmorgan chase",
+  pwc: "pwc",
+  pricewaterhousecoopers: "pwc",
+  "price waterhouse coopers": "pwc",
+  "pricewaterhouse coopers": "pwc",
+  ey: "ey",
+  "ernst & young": "ey",
+  "ernst and young": "ey",
+  aws: "amazon web services",
+  "amazon web services": "amazon web services",
+  gs: "goldman sachs",
+  goldman: "goldman sachs",
+  "goldman sachs": "goldman sachs",
+  facebook: "meta",
+  "meta platforms": "meta",
+  meta: "meta",
+  bofa: "bank of america",
+  "bank of america merrill lynch": "bank of america",
+  "bank of america": "bank of america",
+  citi: "citi",
+  citigroup: "citi",
+  citibank: "citi",
+  "morgan stanley": "morgan stanley"
+};
+function normalizeCompany(raw) {
+  if (!raw) return "";
+  let s = stripDiacritics(raw).toLowerCase().replace(/\([^)]*\)/g, " ");
+  s = s.replace(/\band\b/g, "&").replace(/[^a-z0-9&\s]/g, " ").replace(/\s*&\s*/g, " & ");
+  const tokens = s.split(/\s+/).filter(Boolean);
+  while (tokens.length > 1 && LEGAL_SUFFIXES.has(tokens[tokens.length - 1])) tokens.pop();
+  if (tokens[0] === "the" && tokens.length > 1) tokens.shift();
+  const legal = tokens.join(" ");
+  if (ORG_ALIASES[legal]) return ORG_ALIASES[legal];
+  while (tokens.length > 1 && (GENERIC_ORG_TAIL.has(tokens[tokens.length - 1]) || LEGAL_SUFFIXES.has(tokens[tokens.length - 1])))
+    tokens.pop();
+  const core = tokens.join(" ");
+  return ORG_ALIASES[core] ?? (core.replace(/[\s&]/g, "") ? core : legal);
+}
+
+// apps/web/src/zod.ts
+import { z } from "npm:zod@3.25.76/v4";
+z.config({ jitless: true });
+
+// supabase/functions/_shared/providers/unipileSync.ts
+var when = z.union([z.string(), z.number()]).nullish();
+var unipileMeSchema = z.looseObject({
+  provider_id: z.string().nullish(),
+  public_identifier: z.string().nullish(),
+  first_name: z.string().nullish(),
+  last_name: z.string().nullish()
+});
+var unipileRelationSchema = z.looseObject({
+  member_id: z.string().nullish(),
+  member_urn: z.string().nullish(),
+  public_identifier: z.string().nullish(),
+  public_profile_url: z.string().nullish(),
+  first_name: z.string().nullish(),
+  last_name: z.string().nullish(),
+  headline: z.string().nullish(),
+  profile_picture_url: z.string().nullish(),
+  created_at: when
+});
+var unipileChatSchema = z.looseObject({
+  id: z.string(),
+  type: z.union([z.number(), z.string()]).nullish(),
+  name: z.string().nullish(),
+  attendee_provider_id: z.string().nullish(),
+  timestamp: when,
+  content_type: z.string().nullish()
+});
+var unipileAttendeeSchema = z.looseObject({
+  id: z.string().nullish(),
+  provider_id: z.string().nullish(),
+  name: z.string().nullish(),
+  is_self: z.union([z.number(), z.boolean()]).nullish(),
+  profile_url: z.string().nullish(),
+  picture_url: z.string().nullish(),
+  specifics: z.looseObject({ occupation: z.string().nullish(), location: z.string().nullish() }).nullish()
+});
+var unipileMessageSchema = z.looseObject({
+  id: z.string(),
+  chat_id: z.string().nullish(),
+  sender_id: z.string().nullish(),
+  sender_attendee_id: z.string().nullish(),
+  text: z.string().nullish(),
+  timestamp: when,
+  is_sender: z.union([z.number(), z.boolean()]).nullish(),
+  is_event: z.union([z.number(), z.boolean()]).nullish(),
+  hidden: z.union([z.number(), z.boolean()]).nullish(),
+  deleted: z.union([z.number(), z.boolean()]).nullish()
+});
+function unipileTime(v) {
+  if (v === null || v === void 0 || v === "") return void 0;
+  const d = typeof v === "number" ? new Date(v) : /^\d+$/.test(v) ? new Date(Number(v)) : new Date(v);
+  return Number.isNaN(d.getTime()) ? void 0 : d.toISOString();
+}
+function parseHeadline(headline) {
+  const h = (headline ?? "").split("|")[0].trim();
+  const m = /^(.{2,80}?)\s+(?:at|@)\s+(.{2,80})$/i.exec(h);
+  if (!m) return {};
+  return { title: m[1].trim(), company: m[2].replace(/[.,;]+$/, "").trim() };
+}
+
+// packages/core/src/email/when.ts
+var CITY_ZONE = {
+  "new york": "America/New_York",
+  nyc: "America/New_York",
+  boston: "America/New_York",
+  "washington dc": "America/New_York",
+  dc: "America/New_York",
+  philadelphia: "America/New_York",
+  atlanta: "America/New_York",
+  miami: "America/New_York",
+  toronto: "America/Toronto",
+  chicago: "America/Chicago",
+  austin: "America/Chicago",
+  dallas: "America/Chicago",
+  houston: "America/Chicago",
+  denver: "America/Denver",
+  phoenix: "America/Phoenix",
+  "los angeles": "America/Los_Angeles",
+  la: "America/Los_Angeles",
+  "san francisco": "America/Los_Angeles",
+  sf: "America/Los_Angeles",
+  "bay area": "America/Los_Angeles",
+  seattle: "America/Los_Angeles",
+  london: "Europe/London",
+  dublin: "Europe/Dublin",
+  paris: "Europe/Paris",
+  berlin: "Europe/Berlin",
+  amsterdam: "Europe/Amsterdam",
+  zurich: "Europe/Zurich",
+  singapore: "Asia/Singapore",
+  "hong kong": "Asia/Hong_Kong",
+  tokyo: "Asia/Tokyo",
+  sydney: "Australia/Sydney",
+  bangalore: "Asia/Kolkata",
+  bengaluru: "Asia/Kolkata",
+  mumbai: "Asia/Kolkata"
+};
+var CITY_ALT = Object.keys(CITY_ZONE).sort((a, b) => b.length - a.length).map((c) => c.replace(/ /g, "\\s+")).join("|");
+var CITY_TIME_AFTER = new RegExp(`^\\s+(?:${CITY_ALT})\\s+time\\b`, "i");
+var ZONE_ALT = `\\(?\\b(?:ET|EST|EDT|CT|CST|CDT|MT|MST|MDT|PT|PST|PDT|AKST|AKDT|HST|GMT|UTC|BST|CET|CEST|IST|SGT|JST)\\)?(?![A-Za-z])|\\b(?:eastern|central|mountain|pacific)(?:\\s+(?:standard|daylight))?(?:\\s+time)?(?![a-z])|[A-Z][a-z]+\\/[A-Z][A-Za-z_]+(?:\\/[A-Z][A-Za-z_]+)?|\\b(?:${CITY_ALT})\\s+time\\b`;
+var TOKEN_RE = new RegExp(
+  [
+    // 1 m/d(/y)
+    "(?<mdy>(?<![\\d/.])(\\d{1,2})\\/(\\d{1,2})(?:\\/(\\d{2,4}))?(?![\\d/]))",
+    // month name + day
+    "(?<mon>\\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:,?\\s+(20\\d{2}))?(?![\\d:a-z]))",
+    // day + month name
+    "(?<dmon>(?<![\\d/.:])(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:of\\s+)?(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\\b\\.?)",
+    // the 8th
+    "(?<ord>\\bthe\\s+(\\d{1,2})(?:st|nd|rd|th)\\b)",
+    // the day named last: "later that day", "that afternoon", "the same day"
+    "(?<same>\\b(?:(?:later|earlier)\\s+(?:on\\s+|in\\s+)?)?(?:that|the\\s+same)\\s+(day|morning|afternoon|evening|night)\\b)",
+    // weekday
+    "(?<day>\\b(monday|mon|tuesday|tues|tue|wednesday|weds|wed|thursday|thurs|thur|thu|friday|fri|saturday|sat|sunday|sun)\\b\\.?)",
+    // relative day
+    "(?<rel>\\b(today|tonight|tomorrow|tmrw|tmr|this\\s+(?:morning|afternoon|evening))\\b)",
+    // week scope: "next week", "the week after", "week after next"
+    "(?<week>\\b(?:(?:this\\s+coming|this|next|the\\s+following|following|the\\s+coming|coming)\\s+week|(?:the\\s+)?week\\s+after(?:\\s+(?:next|that))?)\\b)",
+    "(?<named>\\b(noon|midday|midnight)\\b)",
+    // clock time
+    "(?<time>(?<![\\d/:.$£€#])(\\d{1,2})(?::([0-5]\\d))?(?:\\s?(a\\.m\\.?|p\\.m\\.?|am|pm)(?![a-z])|([ap])(?![a-z]))?(-?ish|\\s?o'?clock)?(?![\\d/:%a-z]))",
+    `(?<zone>${ZONE_ALT})`,
+    "(?<part>\\b(?:in\\s+the\\s+)?(morning|afternoon|evening|night)\\b)",
+    "(?<mod>(?:\\b(?:any\\s?time\\s+|sometime\\s+)?(at|around|about|after|before|by|from|between|approx(?:imately)?)\\b)|@|~)",
+    "(?<range>\\s-\\s|-|\\b(?:to|through|thru|until|till|til|and)\\b)",
+    "(?<or>\\bor\\b|\\/)",
+    "(?<next>\\b(?:next|this(?:\\s+coming)?|coming)\\b)",
+    "(?<past>\\b(?:last|past|yesterday|ago|earlier|previous)\\b)",
+    "(?<conn>\\b(?:on|the|either|works?|my\\s+time|your\\s+time)\\b)"
+  ].join("|"),
+  "gi"
+);
+var NOT_TIME_AFTER = /^\s*(min(ute)?s?|hours?|hrs?|people|years?|yrs?|days?|weeks?|months?|percent|k\b|x\b|times\b|of\b|interns?|students?|questions?|projects?|teams?|slides?)/i;
+var COUNT_RANGE_AFTER = new RegExp(
+  `^\\s*(?:-|to|through|and|or)\\s*\\d{1,4}(?:\\.\\d+)?\\+?\\s*${NOT_TIME_AFTER.source.replace(/^\^\\s\*/, "")}`,
+  "i"
+);
+var CLAUSE_BREAK = /[.!?;\n,]|\b(?:but|however|though|although|instead|otherwise|whereas|while|so|how about|what about)\b/gi;
+var NEGATION_LEAD = "^\\s*(?:(?:so|well|honestly|actually|hey|hmm|and|or|ok|okay)[\\s,]+)*(?:why\\s+)?(?:can['’]?t|cannot|couldn['’]?t|wouldn['’]?t|won['’]?t|shouldn['’]?t|don['’]?t|doesn['’]?t|didn['’]?t|isn['’]?t|aren['’]?t|wasn['’]?t)";
+var NEGATIVE_QUESTION = new RegExp(`${NEGATION_LEAD}\\s+(?:we|you|i|it|that|this|there|they)\\b`, "i");
+var NEGATIVE_QUESTION_BARE = new RegExp(`${NEGATION_LEAD}\\s*$`, "i");
+var HAS_CLAUSE_BREAK = new RegExp(CLAUSE_BREAK.source, "i");
+
+// packages/core/src/email/triage.ts
+var LATER_WHEN = "(?:(?:in|after|around|by|come|until|closer to|sometime in|once|early|mid|late)\\s+)?(?:the\\s+)?(?:new year|holidays|break|next (?:month|quarter|semester|term|year|fall|spring|summer|winter|cycle)|q[1-4]|january|february|march|april|may|june|july|august|september|october|november|december|spring|summer|fall|autumn|winter|(?:a\\s+)?(?:few|couple(?: of)?|several) (?:weeks|months)|later|then)\\b";
+var LATER_INVITE = new RegExp(
+  `\\b(?:circle back|check back|come back|get back in touch|reach (?:back )?out|reconnect|ping me|hit me up|try me|follow up|revisit|try again|(?:e-?mail|write|message|text) me|ask (?:me )?again)(?: again| back)?(?:[^.?!]{0,20}?\\s)?${LATER_WHEN}`,
+  "i"
+);
+var NAME = "(?!(?:Mon|Tues|Wednes|Thurs|Fri|Satur|Sun)day\\b|(?:January|February|March|April|May|June|July|August|September|October|November|December)\\b|(?:Zoom|Teams|Google|Slack|LinkedIn|Tomorrow|Today|Next|This)\\b)[A-Z][a-z]+\\b";
+var POINT_VERB = "(?:[Tt]alk(?:ing)?|[Ss]peak(?:ing)?|[Cc]hat(?:ting)?|[Rr]each(?:ing)? out|[Cc]onnect(?:ing)?|[Gg]et(?:ting)? in touch|[Aa]sk(?:ing)?|[Cc]ontact(?:ing)?|[Ee]mail(?:ing)?|[Tt]ry)";
+var TARGET = [
+  /\b(my|our) ([a-z]+ ){0,2}?(colleague|teammate|coworker|co-worker|friend|manager|boss|partner|counterpart|director|lead|vp|associate|recruiter|mentor|classmate)s?\b/i,
+  new RegExp(`\\b(?:connect|introduce|intro|put) you (?:in touch )?(?:with|to) ${NAME}`, "i"),
+  /\b(on|in) (my|our) ([a-z]+ ){1,3}?(team|group|desk)\b/i,
+  /\bsomeone (on|in|at|from) (my|our|the)\b/i,
+  /\b(recruiting|recruitment|talent|campus|university|hr|people) team\b/i,
+  /[\w.+-]+@[\w-]+\.[\w.]+/,
+  new RegExp(`\\b${POINT_VERB}(?: to| with)? (?:my friend )?${NAME}`),
+  /\b(talk(ing)?|speak(ing)?|reach(ing)? out|connect(ing)?) (to|with) my (friend|colleague|teammate) [a-z]+\b/i,
+  /\b[A-Z][a-z]+( [A-Z][a-z]+)? \((cc'?d|cc|copied|bcc'?d)\)/
+];
+var RECOMMEND = [
+  /\b(you|u)( should| might| could| may|'d)( (also|def|definitely|really|probably|totally))?( want to)? (talk|speak|chat|reach out|connect|get in touch|meet)( (to|with))?\b/i,
+  /\b(i'?d|i would|i)( also)? (recommend|suggest) (talking|reaching out|speaking|connecting|contacting|chatting|you (talk|reach out|connect))\b/i,
+  new RegExp(`\\b[Tt]ry ${NAME}`),
+  /\b(colleague|teammate|coworker|someone on (my|our) team)\b[^.?!]{0,40}\b(would be|is|might be|could)\b/i,
+  /\b(would|could|might) (also )?be a (good|great) (person|contact) to\b/i
+];
+var INTRO_ACT = [
+  new RegExp(
+    `\\b(?<!(?:nice|great|good|lovely|pleasure|glad|happy|excited|wonderful) to )(?<!(?:let'?s|we could|we can|could we|can we|to) )[Mm]eet ${NAME}`
+  ),
+  new RegExp(`\\b[A-Z][a-z]+,? (please )?meet ${NAME}`),
+  /\bi'?d like you to meet\b/i,
+  /\b(connecting|introducing) (you|the two of you)( two| both)?( as promised| with| to)?\b/i,
+  new RegExp(`\\b(?:[Ww]anted|[Ww]ant|[Ww]ould like|'d like) to introduce (you to )?${NAME}`),
+  new RegExp(`\\b[Ii]ntroducing ${NAME}`)
+];
+var PASS_ALONG = "pass (?:(?:it|this|that|these|them|your resume|your info|your name|your note|your email|the resume|the note) )?along|pass (?:it|this|that|these|them|your resume|your info|your name|your note|your email|the resume|the note) on|pass on your";
+var OFFERER = "(?:i(?:'ll| will| can| could| would|(?:'d| would) be (?:happy|glad|more than happy) to|(?:'m| am) (?:happy|glad) to)|happy to|glad to|more than happy to|let me)\\s+(?:also\\s+|definitely\\s+|gladly\\s+|totally\\s+|happily\\s+)?";
+var OFFER_REFER = new RegExp(
+  `\\b(${OFFERER}(refer|put in (a|an|my) (\\w+ )?referral|put (a|an|my) (\\w+ )?referral in|${PASS_ALONG}|pass (it|this|that|these|them|your \\w+) (on )?to|put in a (good )?word|forward (your|it|this|them)|send (it|your resume)|pass (your|it along|along)|flag (you|your)|submit (you|your|a referral|(a|an|my) (\\w+ )?referral)|put (your name|your resume|your application) (in|forward|through|up)|put you forward|pass this along)|i (passed|forwarded|sent|submitted) your (resume|info|name|application)|forwarded your (resume|info|application)|(just )?submitted (a|my) referral|referred you|put in a (good )?word|${PASS_ALONG})\\b`,
+  "i"
+);
+var OFFER_INTRO = new RegExp(
+  `\\b(${OFFERER}(intro|introduce|connect you|put you in touch|make (an|that|the|a few|some) intros?|do an intro|make (the|a|an|that) (connection|introduction))|(want|like|need) an? intro|intro(duction)? to (anyone|someone|my|our|a few)|connect you (with|two)|put you in touch|(would you like|do you want|did you want|want|would it help( if)?|should|shall|can|could|may) (me to|i) (intro|introduce|introduced|connect|put) you|(interested in|open to) an? intro(duction)?)\\b`,
+  "i"
+);
+var POSTPONE_LATER = new RegExp(
+  `\\bpostpon\\w*\\b[^.?!]{0,30}?\\b(?:until|till|to|into)\\s+${LATER_WHEN}`,
+  "i"
+);
+
+// packages/core/src/pipeline/introductions.ts
+var DESC = "(?:(?:my|our|his|her|their)\\s+)?(?:(?:old|former|good|dear|great|close|wonderful)\\s+)?(?:(?:friend|colleague|teammate|coworker|co-worker|advisor|adviser|mentor|manager|boss|partner|classmate|roommate|cofounder|co-founder|student)\\s+)?(?:(?:professor|prof\\.?|dr\\.?|mr\\.?|ms\\.?|mrs\\.?)\\s+)?";
+var MODAL = "(?:should|must|need\\s+to|have\\s+to|ought\\s+to|gotta|have\\s+got\\s+to|'ve\\s+got\\s+to|will\\s+want\\s+to|'ll\\s+want\\s+to|might\\s+want\\s+to|may\\s+want\\s+to|really\\s+should|definitely\\s+should|would\\s+enjoy|'d\\s+enjoy|will\\s+enjoy|'ll\\s+enjoy|'ll\\s+love|will\\s+love)(?:\\s+(?:really|definitely|absolutely|totally|honestly|probably|also))?";
+var CC_STATE = "(?:cc'?d|cc'?ed|cced|copied|on\\s+cc|in\\s+cc|on\\s+(?:this|the)\\s+(?:thread|email|chain)|added(?:\\s+here)?|included|looped\\s+in|on\\s+here|reading\\s+along(?:\\s+on\\s+cc)?)";
+var STUDENT_WORD = "(?:student|junior|sophomore|senior|freshman|undergrad|mentee|candidate|kid)\\b(?!\\s+(?:engineer|manager|associate|analyst|vp|director|designer|partner|scientist|consultant|developer|researcher|lead|banker|trader|recruiter|product|software|data))";
+var BEFORE_NAME = [
+  // "Meet Sam", "please meet Sam", "you should meet Sam", "I'd like you to meet Sam", "I wanted you to meet my
+  // former colleague Sam"
+  new RegExp(
+    `(?:^\\s*(?:(?:and|also|so|now|hi|hey)\\s+)*(?:please\\s+)?|\\bplease\\s+(?:also\\s+)?|\\byou(?:\\s+(?:two|both|all|guys))?\\s+${MODAL}\\s+(?:to\\s+)?(?:also\\s+)?|\\b(?:like|love|want|wanted|get|getting|invite|encourage|asked?)\\s+(?:for\\s+)?you(?:\\s+(?:two|both))?\\s+to\\s+(?:also\\s+)?)(?:meet|get\\s+to\\s+know)\\s+${DESC}$`
+  ),
+  // "introducing you to Sam", "I'd like to introduce Sam", "an introduction to José", "making an intro to Olu"
+  new RegExp(`\\b(?:introduc(?:e|es|ed|ing)|presenting)\\s+(?:you\\s+(?:both\\s+|two\\s+)?to\\s+)?${DESC}$`),
+  new RegExp(`\\bintro(?:duction)?s?\\s+(?:to|for|with)\\s+${DESC}$`),
+  // "connecting you with Kai", "putting you in touch with Marcus", "you have been matched with José"
+  new RegExp(
+    `\\b(?:connect(?:s|ed|ing)?|put(?:ting)?\\s+(?:you\\s+)?in\\s+touch|match(?:ed)?|hook(?:s|ed|ing)?\\s+(?:you\\s+)?up)\\s+(?:you\\s+(?:both\\s+|two\\s+)?)?(?:with|to)\\s+${DESC}$`
+  ),
+  // "you should talk to Ana", "I'd also suggest you talk to David", "for McKinsey questions talk to Siobhan"
+  new RegExp(
+    `(?:^\\s*(?:(?:and|also|so|definitely|honestly|really)\\s+)*|\\b(?:you|u)\\s+(?:${MODAL}|could|can)\\s+(?:also\\s+)?|\\b(?:suggest|recommend)\\s+(?:that\\s+)?(?:you\\s+)?(?:also\\s+)?|\\bquestions?\\s+|\\bworth\\s+|\\b(?:out\\s+of|from|enjoy|benefit\\s+from|value\\s+in)\\s+)(?:talk(?:ing)?|speak(?:ing)?|chat(?:ting)?|connect(?:ing)?|get(?:ting)?\\s+in\\s+touch)\\s+(?:to|with)\\s+${DESC}$`
+  ),
+  // "looping in Ana", "cc'ing Rui", "I've cc'd Olu", "adding Nadia", "copying eli"
+  new RegExp(
+    `\\b(?:loop(?:s|ed|ing)?\\s+in|add(?:s|ed|ing)?|bring(?:s|ing)?\\s+in|cc(?:'?(?:s|ed|d|ing))?|cc-ing|copy(?:ing)?|copied)\\s+(?:in\\s+)?${DESC}$`
+  ),
+  // "pointing you to Ana", "handing you over to Priya", "I'd refer you to Kofi"
+  new RegExp(
+    `\\b(?:point(?:s|ed|ing)?|send(?:s|ing)?|sent|pass(?:es|ed|ing)?|hand(?:s|ed|ing)?|refer(?:s|red|ring)?|direct(?:s|ed|ing)?)\\s+(?:you|u|this(?:\\s+one)?|it)\\s+(?:along\\s+|over\\s+|on\\s+|off\\s+)?(?:to|toward|towards)\\s+${DESC}$`
+  ),
+  // "you're gonna love eli", "you will like Sam"
+  new RegExp(
+    `\\b(?:you're|you\\s+are|ur|you'll|you\\s+will|u\\s+will|u'll)\\s+(?:gonna\\s+|going\\s+to\\s+|really\\s+)?(?:love|like|enjoy)\\s+(?:meeting\\s+|talking\\s+to\\s+)?${DESC}$`
+  ),
+  // "the person you want for rates questions is Marcus", "the one to ask about fraud is Ana"
+  new RegExp(
+    `\\b(?:person|one|guy|people|folks)\\s+(?:you\\s+(?:want|need|should\\s+(?:talk\\s+to|ask|meet))|to\\s+(?:ask|talk\\s+to|speak\\s+(?:to|with)))\\b[^.!?]{0,40}?\\s(?:is|are)\\s+${DESC}$`
+  ),
+  // "+Marcus"
+  /^\s*\+\s*$/,
+  // "Alex, this is Mark", "here is Sam"
+  new RegExp(`^\\s*(?:(?:and|also)\\s+)?(?:this\\s+is|here\\s+is|here's)\\s+${DESC}$`)
+];
+var AROUND_NAME = [
+  [
+    new RegExp(
+      `\\b(?:loop(?:s|ed|ing)?|bring(?:s|ing)?|brought|add(?:s|ed|ing)?|pull(?:s|ed|ing)?)\\s+${DESC}$`
+    ),
+    /^\s+(?:in|into|here)\b(?!\s+on\s+(?:your|the|our|my)\b)/
+  ],
+  // "Alex, say hello to Kenji"; not "say hi to Kenji for me"
+  [
+    /(?:^|\byou\s+should\s+|\bplease\s+|,\s*)\s*say\s+(?:hi|hello|hey)\s+to\s+$/,
+    /^(?!(?:\s+[\p{L}'-]+)?\s+(?:for|when|if|at|from|tomorrow|tonight|on)\b)/u
+  ],
+  // "I thought you and Nadia should meet", "you and Kai would get along"
+  [
+    /\byou\s+(?:and|&)\s+$/,
+    /^(?:\s+[\p{L}'-]+)?\s+(?:should|must|need\s+to|have\s+to|ought\s+to|would|'d|will|'ll|could)\s+(?:really\s+|definitely\s+|totally\s+|also\s+|absolutely\s+)?(?:meet|talk|connect|chat|speak|get\s+(?:to\s+know|along|together|coffee)|know\s+each\s+other|hit\s+it\s+off|compare\s+notes)\b(?!\s+(?:(?:up\s+)?(?:at|in|outside|by)\s+(?:the|our|a|an|\d|reception)|tomorrow|tonight|today|on\s+(?:mon|tue|wed|thu|fri|sat|sun)))/u
+  ],
+  [
+    new RegExp(`\\b(?:asked|told)\\s+${DESC}$`),
+    /^\s+(?:to\s+(?:help|chat|talk|connect|meet|speak|share|join|jump\s+in|chime\s+in|weigh\s+in|get\s+in\s+touch|reach\s+out|email|contact|write|call)|about\s+you|you(?:'d|\s+would|\s+might)\b)/
+  ]
+];
+var AFTER_NAME = [
+  // "Kai (cc'd)", "Mei Lin (cc)", "Grace (copied)", "talk to Siobhan, cc'd here", "Sam's on cc now",
+  // "(David) is copied"; not "Nadia is cc'd for the paperwork"
+  new RegExp(
+    `^\\)?(?:\\s+[\\p{L}'-]+)?(?:\\s+(?:and|&)\\s+[\\p{L}'-]+)?\\s*(?:\\(\\s*(?:also\\s+)?(?:cc|${CC_STATE})(?:\\s+here)?\\s*\\)|,\\s*(?:who\\s+(?:is|'s)\\s+)?${CC_STATE}(?:\\s+here)?\\b|(?:\\s+is|'s|\\s+has\\s+been)\\s+(?:now\\s+|also\\s+)?${CC_STATE}(?:\\s+(?:here|now))?)(?!\\s*,?\\s*(?:and|&)\\s+(?:i|me|myself)\\s+(?:both\\s+|also\\s+|really\\s+|just\\s+)*(?:enjoyed|loved|liked|appreciated|saw|read|reviewed|watched|attended|noticed|heard|judged|interviewed|will|'ll|are|am|would|'d|can|could|look|wanted|want|need|have\\s+(?:reviewed|read|seen|been\\s+(?:reviewing|reading|looking))|were\\s+(?:so\\s+|really\\s+|both\\s+)*(?:impressed|thrilled|blown|delighted|excited|happy|glad|sorry))\\b)(?!\\s*(?:for|so|since|because|as|in\\s+case|to\\s+(?!share|help|answer|talk|chat|walk|tell|explain|give|offer|introduce|connect|meet))\\b)(?!\\s*(?:and\\s+)?(?:will|can|'ll|is\\s+going\\s+to|would)\\s+(?:send|forward|process|handle|share\\s+the|book|schedule|set\\s+up|confirm|add\\s+you|coordinate|bring|walk\\s+you|run\\s+the|track|file)\\b)(?!\\s*(?:and\\s+)?(?:has|have|had|already|just)\\s+(?:already\\s+)?(?:submitted|sent|signed|approved|confirmed|filed|shared|forwarded|reviewed|booked|scheduled|processed)\\b)`,
+    "u"
+  ),
+  // "you will find Ana on cc", "dana is on here too", "Siobhan's email is on this thread"
+  /^(?:\s+[\p{L}'-]+)?(?:'s\s+(?:email|address)\s+is|\s+is|'s)?\s+(?:also\s+|now\s+)?(?:on\s+cc|on\s+here|reading\s+along|on\s+(?:this|the)\s+(?:thread|email|chain))(?:\s+(?:too|now|as\s+well))?\s*(?:[,.!;]|and\b|$)/u,
+  // "Sam said yes", "Kai is happy to talk to you", "José agreed to a conversation", "Ana said she would be glad",
+  // "I spoke to Marcus and he's happy to chat"
+  /^(?:\s+[\p{L}'-]+)?(?:,?\s+and\s+(?:he|she|they))?\s*(?:(?:is|'s|would\s+be|will\s+be|said\s+(?:she|he|they)(?:'d|\s+would)\s+be|is\s+more\s+than)\s+(?:(?:very|really|super|more\s+than|so)\s+)?(?:happy|glad|keen|willing|open|delighted|excited|game)\s+to\s+(?:talk|chat|help|connect|speak|meet|share|answer|hop|grab)|said\s+yes|agreed\s+to\s+(?:a\s+)?(?:chat|call|talk|conversation|connect|meet|help|speak)|is\s+expecting|knows\s+you\s+(?:might|will|may)|offered\s+to\s+(?:talk|chat|help|speak|meet)|was\s+kind\s+enough\s+to)/u,
+  // "Rui is your person", "Ana is the best person to ask"
+  /^(?:\s+[\p{L}'-]+)?\s*(?:is|'s|would\s+be|will\s+be)\s+(?:your|the\s+(?:right|best|perfect|ideal)|the|a\s+(?:great|good|perfect))\s+(?:person|guy|contact|go-to|one|resource|expert|egg|sounding\s+board)\s*(?:to\s+(?:ask|talk|speak|contact|reach|email)|for\b|i\s+(?:mentioned|told)|$|[,.!;])/u,
+  // "Siobhan is at McKinsey and offered to share her experience"
+  /^[^.!?]{0,60}?\b(?:has\s+(?:kindly\s+)?)?(?:offered|agreed|volunteered)\s+to\s+(?:talk|chat|help|speak|meet|share|answer|walk|run|do|give|be\s+your)/u,
+  // "Rui runs the platform team and is now cc'd", "Marcus has been at Goldman for six years and is on this thread"
+  new RegExp(
+    `^[^.!?]{0,70}?\\band\\s+(?:is|'s|are)\\s+(?:now\\s+|also\\s+)?${CC_STATE}(?:\\s+(?:here|now|on\\s+(?:this|the)\\s+(?:thread|email|chain|note)))?\\s*(?:[.!,;]|$)`,
+    "u"
+  ),
+  // "Sam and Rui are both at Contoso and would be glad to talk", "Mark is our design lead and happy to chat"
+  /^[^.!?]{0,60}?\b(?:(?:would|'d|will|'ll)\s+be|is|are|and)\s+(?:very\s+|more\s+than\s+|really\s+|super\s+)?(?:happy|glad|keen|delighted|willing)\s+to\s+(?:talk|chat|help|connect|speak|meet|share|answer)/u,
+  // "Tom is the person I mentioned", "Olu is the friend I mentioned"
+  /^(?:\s+[\p{L}'-]+)?\s*(?:\([^)]*\)\s*)?(?:is|was)\s+the\s+(?:[\p{L}'-]+\s+){0,3}?(?:i|we)\s+(?:mentioned|told\s+you\s+about|spoke\s+(?:about|of)|was\s+telling\s+you\s+about)/u
+];
+var GENERIC_CUES = [
+  /\bintroduc(?:e|es|ed|ing)\s+(?:you|y'all|both\s+of\s+you|you\s+both|you\s+two|the\s+two\s+of\s+you|each\s+other)\b(?!rsel)/,
+  /\b(?:make|makes|making|made|do|doing)\s+(?:an?\s+|the\s+|this\s+)?(?:quick\s+|brief\s+|virtual\s+|warm\s+|e-?mail\s+)?intro(?:duction)?s?\b/,
+  /\b(?:quick|brief|virtual|warm|e-?mail|double\s+opt-?in)\s+intro(?:duction)?s?\b/,
+  /\bconnect(?:ing)?\s+(?:you\s+(?:two|both|all|here|as\s+promised)\b|the\s+two\s+of\s+you|you\s*$)/,
+  /\bput(?:ting)?\s+you\s+(?:two\s+|both\s+)?in\s+touch\b/,
+  /\byou\s+(?:two|both|all)\s+(?:should|need\s+to|must|have\s+to|gotta|ought\s+to|will|'ll|would|can|could|might)\s+(?:really\s+|definitely\s+|totally\s+|also\s+)?[\p{L}]+/u,
+  /\blet\s+you\s+(?:two|both)\b/,
+  /\bfor\s+you\s+(?:two|both)\s+to\b/,
+  /\b(?:he|she|they)\b[^.!?]{0,60}?\b(?:offered|agreed|volunteered)\s+to\s+(?:talk|chat|help|speak|meet|share|answer|be\s+your)/,
+  /\b(?:he|she|they)\s+(?:said\s+(?:he|she|they)\s+)?(?:would|'d|will|'ll)\s+love\s+to\s+(?:hear|chat|talk|meet|help|connect)\b/,
+  // "He founded Adeyemi & Co. and is copied here", "He is copied on this email"
+  new RegExp(
+    `\\b(?:he|she|they)\\b[^.!?]{0,60}?\\b(?:is|are|'s|'re|has\\s+been)\\s+(?:now\\s+|also\\s+)?${CC_STATE}(?:\\s+(?:here|now|on\\s+(?:this|the)\\s+(?:thread|email|chain|note)))?\\s*(?:and\\b|[,.!:;]|$)`
+  ),
+  /\b(?:person|name|contact)s?\s+for\s+your\s+list\b/,
+  /\bput(?:ting)?\b[^.!?]{0,40}?\bon\s+(?:this|the\s+same|a|one)\s+(?:thread|email|chain)\b/,
+  new RegExp(`\\b(?:he|she|they)\\b[^.!?]{0,60},\\s*${CC_STATE}(?:\\s+here)?\\s*[.!]?\\s*$`),
+  /\b[\p{L}'-]+\s+and\s+you\s+(?:need|should|have|ought)\s+to\s+(?:talk|meet|connect|chat)\b/u,
+  /\b(?:find|see)\s+(?:him|her|them)\s+(?:on\s+cc|copied|cc'?d|here|on\s+(?:this|the)\s+(?:thread|email))\b/,
+  /\b(?:copied|cc'?d|cc'?ing|looped\s+in|added|adding|introducing|meet)\s+(?:two|three|a\s+few|some|a\s+couple\s+of)\s+(?:friends|people|colleagues|folks|contacts|names)\b/,
+  new RegExp(`^\\s*(?:and\\s+)?(?:is|are)\\s+(?:now\\s+|also\\s+)?${CC_STATE}(?:\\s+here)?\\s*[.!]?\\s*$`),
+  /\b(?:you\s+(?:and|&)\s+[\p{L}'-]+|you\s+(?:two|both))\s+(?:would|will|'d|'ll|should)\s+(?:really\s+)?(?:get\s+along|hit\s+it\s+off|click|have\s+(?:a\s+lot|plenty|lots)\s+to\s+(?:talk|discuss))/u,
+  // "he'd be happy to talk", "said she'd make time for you"
+  /\b(?:he|she|they)(?:'d|\s+would|'s|\s+is|\s+are|'re)\s+(?:be\s+)?(?:very\s+|more\s+than\s+|really\s+)?(?:happy|glad|keen|willing|open|delighted)\s+to\s+(?:talk|chat|help|connect|speak|meet|share|answer)|\b(?:he|she|they)(?:'d|\s+would|'ll|\s+will)\s+(?:make|find)\s+(?:some\s+)?time\b/,
+  /\bover\s+to\s+you\s+(?:two|both)\b/,
+  /\btake\s+it\s+from\s+here\b/,
+  /\b(?:i'?ll|i\s+will|let\s+me)\s+(?:now\s+)?(?:step\s+back|bow\s+out|get\s+out\s+of\s+the\s+way|drop\s+off(?:\s+(?:the|this)\s+thread)?)\b/,
+  /\b(?:should|ought\s+to)\s+know\s+each\s+other\b/,
+  /\b(?:people|folks|friends|contacts|someone|somebody|a\s+person|a\s+friend|a\s+colleague)\s+(?:to\s+meet|you\s+should\s+(?:meet|talk\s+to|know|speak\s+(?:to|with))|worth\s+(?:meeting|knowing|talking\s+to)|to\s+(?:know|talk\s+to))\b/,
+  /\bexpecting\s+(?:your|you\b|to\s+hear)/,
+  new RegExp(
+    `\\b(?:both|they|he|she)(?:\\s+(?:are|is|have\\s+been|has\\s+been)|'re|'s)?\\s+(?:now\\s+|also\\s+)?${CC_STATE}(?:\\s+(?:here|now|on\\s+(?:this|the)\\s+(?:thread|email|chain|note)))?\\s*(?:and\\b(?!\\s+(?:will|can|'ll))|[,.!:;]|$)`
+  ),
+  new RegExp(
+    `\\b(?:he|she|they)\\s+(?:is|'s|are)\\s+(?:a|an)\\s+(?:[\\p{L}'&-]+\\s+){0,4}?${STUDENT_WORD}`,
+    "u"
+  ),
+  /\b(?:he|she|they)\s+knows?\s+you\s+(?:might|will|may)\b/,
+  /\bhere\s+is\s+the\s+(?:student|junior|sophomore|senior|freshman|candidate|mentee)\b/,
+  /\b(?:the|a|my|our)\s+(?:[\p{L}'-]+\s+){0,3}?(?:student|junior|sophomore|senior|freshman|undergrad|mentee|candidate|kid)(?:\s+(?:founder|engineer|researcher|designer|developer|builder))?\s+(?:i|we)\s+(?:mentioned|told\s+you\s+about|mentor|spoke\s+(?:about|of))\b/u
+];
+var THANKS = "(?:thanks|thank\\s+(?:you|u|ya)|thanku|thx|thnx|ty|tysm|many\\s+thanks|much\\s+appreciated|appreciate[ds]?|grateful|gracias|merci|danke|grazie|obrigad[oa])";
+var INTRO_OBJECT = "(?:intro(?:duction)?s?\\b(?!\\s+to\\s+(?:the|our|my|a|an|this|that|your)\\b|\\s+(?:request|ask|offer)s?\\b)|introducing\\s+(?:us|me)|presentacion|connection|connecting\\s+(?:us|me)|loop(?:ing)?\\s+me\\s+in|the\\s+cc|cc'?ing\\s+me|thinking\\s+of\\s+me|putting\\s+us\\s+in\\s+touch|(?:the\\s+)?match|pairing|referral|setting\\s+(?:this|it|us)\\s+up|making\\s+this\\s+happen)";
+var INTRO_THANKS = [
+  /\b(?:for|on|re|about)\s+the\s+(?:kind\s+|warm\s+|quick\s+|lovely\s+)?intro(?:duction)?\b(?!\s+to\s+(?:the|our|my|a|an|this|that|your)\b|\s+(?:request|ask|offer)s?\b)/,
+  new RegExp(`\\b${THANKS}\\b[^.!?]{0,40}?\\b${INTRO_OBJECT}`),
+  /\b(?:great|lovely|wonderful|perfect|fantastic|awesome|amazing|kind|nice|thoughtful|generous)\s+(?:intro(?:duction)?|connection)\b/,
+  /\b(?:connected|introduced)\s+us\b|\bput\s+us\s+in\s+touch\b|\bany\s+friend\s+of\b/
+];
+var BARE_THANKS = new RegExp(
+  `^\\s*(?:(?:and|haha|lol|oh|ah|aw+|wow|omg|ok|okay)\\s+)*${THANKS}(?:\\s+(?:so\\s+much|again|a\\s+lot|a\\s+ton|a\\s+million|both|as\\s+always|as\\s+ever|once\\s+again))?(?:\\s+[\\p{L}'-]+)?\\s*[!.]*\\s*$`,
+  "u"
+);
+var ADMIN_PURPOSE = new RegExp(
+  [
+    "\\bfor\\s+(?:the\\s+|your\\s+|any\\s+)?(?:paperwork|visibility|awareness|context|reference|records?|onboarding|logistics|forms?|offer\\s+letter|background\\s+check|benefits|payroll|reimbursements?|expenses?|invoices?|badges?|compliance|approval|sign-?off|fyi)\\b",
+    "\\bfor\\s+(?:the\\s+|your\\s+|any\\s+)?(?:contract|paperwork|legal|visa|tax|payroll|benefits|housing|relocation|logistics|travel|billing|grading)\\s+questions?\\b",
+    "\\bfyi\\b|\\bkeep(?:ing)?\\s+(?:[\\p{L}'-]+\\s+){1,2}in\\s+the\\s+loop\\b",
+    // "so he's in the loop on the judging schedule", "to keep her posted", "so he's aware of the regrade"
+    "\\bso\\s+(?:that\\s+)?(?:he|she|they)(?:'s|'re|\\s+is|\\s+are|\\s+stays?|\\s+can\\s+stay)\\s+(?:also\\s+)?(?:in\\s+the\\s+loop|aware|informed|up\\s+to\\s+speed|in\\s+the\\s+know|across|posted)\\b",
+    "\\bkeep(?:s|ing)?\\s+(?:him|her|them|[\\p{L}'-]+)\\s+(?:posted|informed|updated|in\\s+the\\s+know|up\\s+to\\s+speed|aware)\\b",
+    "\\bso\\s+(?:that\\s+)?(?:he|she|they)\\s+(?:sees?|can\\s+see|gets?|hears?|is\\s+aware)\\b",
+    "\\bsince\\s+(?:he|she|they)(?:'s|'re|\\s+is|\\s+are)\\s+(?:coordinating|organizing|organising|handling|managing|approving|processing|in\\s+charge\\s+of)\\b",
+    "\\b(?:who|that)\\s+(?:handles|processes|manages|coordinates|owns|approves|will\\s+(?:handle|process|send|issue|book|update|file|approve)|can\\s+(?:process|issue|update|file|approve))\\s+(?:(?:our|the|your|all|any)\\s+)?(?:[\\p{L}-]+\\s+){0,2}?(?:applications?|paperwork|onboarding|logistics|forms?|badges?|payroll|benefits|reimbursements?|scheduling|travel|contracts?|i-9|invoices?|expenses?|grades?|access|laptop|accounts?)\\b",
+    "\\bfrom\\s+(?:(?:our|the)\\s+)?(?:hr|human\\s+resources|people\\s+ops|payroll|legal|facilities|benefits|it\\s+(?:team|department|office))\\b|\\b(?:on|in)\\s+(?:our|the)\\s+(?:hr|human\\s+resources|people\\s+ops|payroll|legal|facilities|benefits|it)\\s+(?:team|department|office)\\b",
+    "\\bto\\s+(?:process|sort\\s+out|issue|file|approve|finalize|finalise|update\\s+your)\\b",
+    "\\bso\\s+(?:he|she|they)\\s+(?:has|have|knows|can\\s+(?:update|process|send|issue|book|file|approve|add|track|confirm))\\b",
+    "\\b(?:has|have|holds|needs)\\s+your\\s+(?:[\\p{L}-]+\\s+){0,2}?(?:forms?|paperwork|receipts?|availability|address|documents?|contract|badge|invoices?|expenses?|details)\\b",
+    "\\b(?:cc'?d|copied|looped\\s+in|on\\s+cc|included)\\s+(?:as|since\\s+(?:he|she|they))\\s+(?:the\\s+|our\\s+)?(?:[\\p{L}-]+\\s+)?coordinat\\w*",
+    "\\bfor\\s+your\\s+(?:it\\s+)?(?:setup|set-up|laptop|access|accounts?|equipment)\\b",
+    "\\bquestions?\\s+about\\s+(?:the\\s+|your\\s+)?(?:deadlines?|dates?|logistics|paperwork|forms?|timing|start\\s+dates?|application\\s+(?:process|portal)|reimbursements?|housing|relocation|visas?)\\b"
+  ].join("|"),
+  "u"
+);
+
+// packages/core/src/text/email.ts
+var BULK_LOCAL = /^(no[-_.]?reply|do[-_.]?not[-_.]?reply|donotreply|invitations?|notify|notifications?|newsletters?|mailer|mailer[-_.]daemon|postmaster|bounces?|alerts?|updates?|news|digest|marketing|billing|invoices?|receipts?|dse(_\w+)?|automated|system|calendar|no[-_.]?reply[-_.+].*|.*[-_.+]no[-_.]?reply|.*[-_.]notifications?|.*[-_.]alerts?)$/i;
+var ROLE_TOKEN = /^(recruit|recruits|recruiting|recruitment|recruiter|campus|campusrecruiting|universityrecruiting|collegerecruiting|earlycareers?|careers?|jobs?|talent|talentacquisition|ta|hr|people|hiring|staffing|university|college|early|students?|programs?|internships?|interns|graduates?|grad|admissions|events|relations|ur|acquisition)$/i;
+var GENERIC_LOCAL = /^(team|hello|hi|hey|info|support|contact|help|office|admin|founders|general|inquiries|enquiries)$/i;
+var ROLE_NAME = /\b(recruiting|recruitment|careers?|talent( acquisition)?|admissions|human resources|university relations|campus|early careers|team|notifications?|no-?reply|support|newsletter|digest|alerts?|calendar|via linkedin|hiring)\b/i;
+function isRoleName(displayName) {
+  return Boolean(displayName) && ROLE_NAME.test(displayName);
+}
+function isRoleLocalPart(local) {
+  const tokens = local.toLowerCase().split(/[._+-]+/).filter(Boolean);
+  return tokens.length > 0 && tokens.every((t) => ROLE_TOKEN.test(t));
+}
+var NOTIFICATION_DOMAINS = /* @__PURE__ */ new Set([
+  "facebookmail.com",
+  "mail.instagram.com",
+  "mcsv.net",
+  "mcdlv.net",
+  "list-manage.com",
+  "sendgrid.net",
+  "hubspotemail.net",
+  "amazonses.com",
+  "mandrillapp.com",
+  "mailgun.org",
+  "calendar-notification.google.com",
+  "accounts.google.com",
+  "docs.google.com",
+  "mail.coursera.org",
+  "canvas.instructure.com",
+  "notifications.instructure.com",
+  "greenhouse-mail.io",
+  "hire.lever.co",
+  "myworkday.com",
+  "talent.icims.com",
+  "reddithelp.com",
+  "docusign.net",
+  "beehiiv.com",
+  "convertkit-mail.com",
+  "convertkit-mail2.com",
+  "klaviyomail.com",
+  "ccsend.com",
+  "rsgsv.net",
+  "mailchimpapp.net",
+  "sparkpostmail.com",
+  "mktomail.com",
+  "marketo.org",
+  "salesforce-mail.com",
+  "exacttarget.com"
+]);
+var EMPLOYER_MAIL_DOMAINS = /* @__PURE__ */ new Set([
+  "linkedin.com",
+  "google.com",
+  "capitalone.com",
+  "chase.com",
+  "jpmorgan.com",
+  "jpmchase.com",
+  "paypal.com",
+  "venmo.com",
+  "coinbase.com",
+  "robinhood.com",
+  "doordash.com",
+  "uber.com",
+  "ubereats.com",
+  "indeed.com",
+  "glassdoor.com",
+  "pinterest.com",
+  "tiktok.com",
+  "bytedance.com",
+  "medium.com",
+  "substack.com",
+  "quora.com",
+  "lever.co",
+  "greenhouse.io",
+  "joinhandshake.com",
+  "handshake.com",
+  "ziprecruiter.com",
+  "bankofamerica.com",
+  "wellsfargo.com",
+  "instructure.com",
+  "piazza.com",
+  "gradescope.com",
+  "icims.com",
+  "smartrecruiters.com",
+  "ashbyhq.com",
+  "eventbrite.com",
+  "meetup.com",
+  "ticketmaster.com",
+  "morningbrew.com",
+  "theskimm.com",
+  "mailchimp.com",
+  "coursera.org"
+]);
+function isNotificationDomain(domain) {
+  if (NOTIFICATION_DOMAINS.has(domain)) return true;
+  for (const d of NOTIFICATION_DOMAINS) if (domain.endsWith(`.${d}`)) return true;
+  for (const d of EMPLOYER_MAIL_DOMAINS) if (domain.endsWith(`.${d}`)) return true;
+  return false;
+}
+function isAutomatedSender(fromEmail, headers = {}, labels = [], displayName) {
+  if (headers["list-unsubscribe"] || headers["list-id"]) return true;
+  const prec = (headers.precedence ?? "").toLowerCase();
+  if (prec === "bulk" || prec === "list" || prec === "junk" || prec === "auto_reply") return true;
+  const auto = (headers["auto-submitted"] ?? "").toLowerCase();
+  if (auto && auto !== "no") return true;
+  const xa = (headers["x-autoreply"] ?? headers["x-autorespond"] ?? "").toLowerCase();
+  if (xa && xa !== "no") return true;
+  if (headers.sender) {
+    const sender = parseAddress(headers.sender).email;
+    if (sender.includes("@") && sender !== normalizeEmail(fromEmail)) {
+      if (sender === "calendar-notification@google.com") return true;
+      const sl = emailLocalPart(sender);
+      if (BULK_LOCAL.test(sl) || isRoleLocalPart(sl) || isNotificationDomain(emailDomain(sender)))
+        return true;
+    }
+  }
+  if (labels.some((l) => /CATEGORY_(PROMOTIONS|SOCIAL|FORUMS|UPDATES)/i.test(l))) return true;
+  const local = emailLocalPart(fromEmail);
+  if (BULK_LOCAL.test(local) || isRoleLocalPart(local)) return true;
+  if (GENERIC_LOCAL.test(local)) {
+    const name = (displayName ?? "").trim();
+    const personal = Boolean(name) && !isRoleName(name) && /^[A-Z][a-z'’-]+(\s+[A-Z][A-Za-z'’.-]+){0,3}$/.test(name);
+    if (!personal) return true;
+  }
+  return isNotificationDomain(emailDomain(fromEmail));
+}
+var ATS_DOMAINS = [
+  "greenhouse.io",
+  "greenhouse-mail.io",
+  "lever.co",
+  "myworkday.com",
+  "workday.com",
+  "ashbyhq.com",
+  "icims.com",
+  "smartrecruiters.com",
+  "jobvite.com"
+];
+function isAtsSender(email) {
+  const e = normalizeEmail(email);
+  if (!e.includes("@")) return false;
+  const domain = emailDomain(e);
+  if (ATS_DOMAINS.some((d) => domain === d || domain.endsWith(`.${d}`))) return true;
+  return /^(no[-_.]?reply|do[-_.]?not[-_.]?reply|donotreply)([-_.+].*)?$|[-_.+]no[-_.]?reply$/i.test(
+    emailLocalPart(e)
+  );
+}
+function decodeWordBytes(charset, bytes) {
+  try {
+    return new TextDecoder(charset.toLowerCase().replace(/\*.*$/, ""), { fatal: false }).decode(bytes);
+  } catch {
+    return new TextDecoder("utf-8").decode(bytes);
+  }
+}
+function decodeMimeWords(header) {
+  if (!header.includes("=?")) return header;
+  return header.replace(/(\?=)\s+(?==\?)/g, "$1").replace(/=\?([^?\s]+)\?([BbQq])\?([^?\s]*)\?=/g, (all, charset, enc2, data) => {
+    try {
+      let bytes;
+      if (enc2.toUpperCase() === "B") {
+        const bin = atob(data);
+        bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+      } else {
+        const out = [];
+        const q = data.replace(/_/g, " ");
+        for (let i = 0; i < q.length; i++) {
+          if (q[i] === "=" && /^[0-9a-f]{2}$/i.test(q.slice(i + 1, i + 3))) {
+            out.push(Number.parseInt(q.slice(i + 1, i + 3), 16));
+            i += 2;
+          } else out.push(q.charCodeAt(i) & 255);
+        }
+        bytes = Uint8Array.from(out);
+      }
+      return decodeWordBytes(charset, bytes);
+    } catch {
+      return all;
+    }
+  });
+}
+function parseAddress(raw) {
+  const s = decodeMimeWords(raw.trim());
+  const m = s.match(/^(.*?)\s*<([^>]+)>\s*$/);
+  if (m) {
+    const name = m[1].trim().replace(/^"(.*)"$/, "$1").replace(/\\"/g, '"').trim();
+    return { email: normalizeEmail(m[2]), name: name || void 0 };
+  }
+  return { email: normalizeEmail(s.replace(/^mailto:/i, "")) };
+}
+
+// supabase/functions/_shared/google.ts
+import { createRemoteJWKSet, jwtVerify } from "npm:jose@6.2.12";
+var G = "https://www.googleapis.com/auth/";
+var PHASE1_SCOPES = [
+  "openid",
+  "email",
+  "profile",
+  `${G}gmail.readonly`,
+  `${G}gmail.send`,
+  `${G}calendar.readonly`,
+  `${G}contacts.other.readonly`,
+  `${G}contacts.readonly`
+];
+var CALENDAR_EVENTS_SCOPE = `${G}calendar.events`;
+
+// packages/core/src/text/jaro.ts
+function jaroWinkler(a, b) {
+  if (a === b) return 1;
+  if (!a.length || !b.length) return 0;
+  const matchDistance = Math.max(0, Math.floor(Math.max(a.length, b.length) / 2) - 1);
+  const aMatches = new Array(a.length).fill(false);
+  const bMatches = new Array(b.length).fill(false);
+  let matches = 0;
+  for (let i = 0; i < a.length; i++) {
+    const start = Math.max(0, i - matchDistance);
+    const end = Math.min(i + matchDistance + 1, b.length);
+    for (let j = start; j < end; j++) {
+      if (bMatches[j] || a[i] !== b[j]) continue;
+      aMatches[i] = true;
+      bMatches[j] = true;
+      matches++;
+      break;
+    }
+  }
+  if (!matches) return 0;
+  let t = 0;
+  let k = 0;
+  for (let i = 0; i < a.length; i++) {
+    if (!aMatches[i]) continue;
+    while (!bMatches[k]) k++;
+    if (a[i] !== b[k]) t++;
+    k++;
+  }
+  const m = matches;
+  const jaro = (m / a.length + m / b.length + (m - t / 2) / m) / 3;
+  let prefix = 0;
+  for (let i = 0; i < Math.min(4, a.length, b.length); i++) {
+    if (a[i] === b[i]) prefix++;
+    else break;
+  }
+  return jaro + prefix * 0.1 * (1 - jaro);
+}
+function tokenJaccard(a, b) {
+  const A = new Set(a.toLowerCase().split(/\W+/).filter(Boolean));
+  const B = new Set(b.toLowerCase().split(/\W+/).filter(Boolean));
+  if (!A.size || !B.size) return 0;
+  let inter = 0;
+  for (const x of A) if (B.has(x)) inter++;
+  return inter / (A.size + B.size - inter);
+}
+
+// packages/core/src/entity/nicknames.data.ts
+var NICKNAME_DATA = [
+  "aaron:erin ron ronnie",
+  "abbigail:abbe abbey abbi abbie abby gail nabby",
+  "abbigale:abbe abbey abbi abbie abby gail nabby",
+  "abednego:bedney",
+  "abel:ab abe eb ebbie",
+  "abiel:ab",
+  "abigail:abbe abbey abbi abbie abby gail nabby",
+  "abigale:abbe abbey abbi abbie abby gail nabby",
+  "abijah:ab bige",
+  "abner:ab",
+  "abraham:ab abe",
+  "abram:ab abe",
+  "absalom:ab abbie app",
+  "ada:addy adie",
+  "adaline:ada addy adie delia dell lena",
+  "addison:addie addy",
+  "adela:adie della",
+  "adelaide:addy adele adie dell della heidi",
+  "adelbert:albert bert del delbert",
+  "adele:addy dell",
+  "adeline:ada addy delia dell lena",
+  "adelphia:addy adele dell delphia philly",
+  "adena:adina deena dena dina",
+  "adolphus:ado adolph dolph",
+  "adrian:rian",
+  "adriane:riane",
+  "adrienne:addie enne rienne",
+  "agatha:aga aggy",
+  "agnes:aggy inez nessa",
+  "aileen:allie lena",
+  "alan:al",
+  "alanson:al lanson",
+  "alastair:al",
+  "alazama:ali",
+  "albert:al bert",
+  "alberta:allie bert bertie",
+  "aldo:al",
+  "aldrich:rich riche richie",
+  "aleksandr:alek alex",
+  "aleva:leve levy",
+  "alex:al",
+  "alexa:alex lexi",
+  "alexander:al alec alex sandy",
+  "alexandra:alex alla sandra sandy",
+  "alexandria:alex alexander alla drina sandra",
+  "alexis:alex lexi",
+  "alfonse:al",
+  "alfred:al fred freddy",
+  "alfreda:alfy freda freddy frieda",
+  "algernon:algy",
+  "alice:allie elsie lisa",
+  "alicia:allie elsie lisa",
+  "aline:adeline",
+  "alison:ali allie",
+  "alixandra:alix",
+  "allan:al alan allen",
+  "allen:al alan allan",
+  "allisandra:ali allie ally",
+  "allison:ali allie ally",
+  "allyson:ali allie ally",
+  "allyssa:ali allie ally",
+  "almena:ali allie ally mena",
+  "almina:minnie",
+  "almira:myra",
+  "alonzo:al lon lonzo",
+  "alphinias:alphus",
+  "althea:ally",
+  "alverta:vert virdie",
+  "alyssa:al ally lissia",
+  "alzada:zada",
+  "amanda:manda mandy",
+  "ambrose:brose",
+  "amelia:amy emily mel millie",
+  "amos:moses",
+  "anastasia:ana stacy",
+  "anderson:andy",
+  "andre:drea",
+  "andrea:andi andrew andy drea rea",
+  "andrew:andy drew randy",
+  "andriane:ada adri rienne",
+  "angela:angel angie",
+  "angelica:angel angelika angelique angie",
+  "angelina:angel angie lina",
+  "ann:annie nan",
+  "anna:ann anne annie nan",
+  "anne:ann annie nan",
+  "annette:anna nettie",
+  "annie:ann anna",
+  "anselm:ance anse ansel selma",
+  "anthony:ant tony",
+  "antoinette:ann netta tony",
+  "antonia:ann netta tony",
+  "antonio:ant tony",
+  "appoline:appie appy",
+  "aquilla:quil quillie",
+  "ara:arry belle",
+  "arabella:ara arry bella belle",
+  "arabelle:ara arry bella belle",
+  "araminta:armida middie minty ruminta",
+  "archibald:archie",
+  "archilles:kill killis",
+  "ariadne:ari arie",
+  "ariana:ari",
+  "arianna:ari",
+  "ariel:ari",
+  "arielle:arie",
+  "aristotle:telly",
+  "arizona:ona onie",
+  "arlene:arly lena",
+  "armanda:mandy",
+  "armena:arry mena",
+  "armilda:milly",
+  "arminda:mindie",
+  "arminta:minite minnie",
+  "arnold:arnie",
+  "aron:erin ron ronnie",
+  "artelepsa:epsey",
+  "artemus:art",
+  "arthur:art",
+  "arthusa:thursa",
+  "arzada:zaddi",
+  "asahel:asa",
+  "asaph:asa",
+  "asenath:assene natty sene",
+  "ashley:ash ashly leah lee",
+  "aubrey:bree",
+  "audrey:audree dee",
+  "august:gus",
+  "augusta:aggy gatsy gussie tina",
+  "augustina:aggy gatsy gussie tina",
+  "augustine:august austin gus",
+  "augustus:august austin gus",
+  "aurelia:aurilla ora orilla ree rilly",
+  "aurora:rory",
+  "avarilla:rilla",
+  "axel:ax",
+  "azariah:aze riah",
+  "bab:barby",
+  "babs:bab barbara barby",
+  "barbara:bab babs barbie barby bobbie",
+  "barbery:barbara",
+  "barbie:barbara",
+  "barnabas:barney",
+  "barney:barnabas",
+  "barrett:barry",
+  "bart:bartholomew",
+  "bartholomew:bart bartel bat mees meus",
+  "barticus:bart",
+  "bazaleel:basil",
+  "bea:beatrice",
+  "beatrice:bea trisha trix trixie",
+  "becca:beck",
+  "beck:becky",
+  "bedelia:bridgit delia",
+  "belinda:belle linda",
+  "bella:arabella belle isabella",
+  "ben:benji bennie benny",
+  "benedict:ben bennie",
+  "benjamin:ben benjy bennie benny jamie",
+  "benjy:benjamin",
+  "bennett:ben bennie benny",
+  "bernard:barney berney bernie berny",
+  "berney:bernie",
+  "bert:bertie bob bobby",
+  "bertha:bert bertie birdie",
+  "bertram:bert",
+  "bertrand:randy",
+  "bess:bessie",
+  "bessie:bess",
+  "beth:betsy betty elizabeth",
+  "bethena:beth thaney",
+  "beverly:bev",
+  "bezaleel:zeely",
+  "biddie:biddy",
+  "bill:billy fred robert william willie",
+  "billy:fred robert william",
+  "blanche:bea",
+  "bob:rob robert",
+  "bobby:bob rob",
+  "boetius:bo",
+  "brad:bradford ford",
+  "bradford:brad ford",
+  "bradley:brad",
+  "brady:brody",
+  "breanna:bree bri",
+  "breeanna:bree",
+  "brenda:brandy",
+  "brian:bryan bryant",
+  "briana:bri",
+  "brianna:bri",
+  "bridget:biddie biddy bridgie bridie",
+  "brittany:britt brittnie",
+  "brittney:britt brittnie",
+  "broderick:brady brody rick ricky rod",
+  "brooklyn:brook brooke",
+  "bryanna:ana anna bri briana brianna",
+  "bryant:bry bryan",
+  "caitlin:cait caity",
+  "caitlyn:cait caity",
+  "caldonia:calliedona",
+  "caleb:cal",
+  "california:callie",
+  "calista:kissy",
+  "callie:cal",
+  "calpurnia:cally",
+  "calvin:cal vin vinny",
+  "cameron:cam ron ronny",
+  "camila:cami mila",
+  "camile:cammie",
+  "camille:cammie millie",
+  "campbell:cam",
+  "candace:candy dacey",
+  "carla:carly karla",
+  "carlotta:lottie",
+  "carlton:carl",
+  "carmellia:mellia",
+  "carmelo:melo",
+  "carmon:cammie carm charm",
+  "carol:carolann carole caroline carri carrie cassie kara kari lynn",
+  "carolann:carol carole",
+  "caroline:carol carole carrie cassie lynn",
+  "carolyn:carrie cassie lynn",
+  "carrie:cassie",
+  "carthaette:etta etty",
+  "casper:jasper",
+  "cassandra:cassie sandra sandy",
+  "cassidy:cass cassie",
+  "cassie:cass",
+  "caswell:cass",
+  "catherine:casey cassie cathy kathy katy kay kit kittie lena trina",
+  "cathleen:casey cassie cathy kathy katy kay kit kittie lena trina",
+  "cathy:catherine cathleen kathy",
+  "cecilia:celia cissy",
+  "cedric:ced rick ricky",
+  "celeste:celia lessie",
+  "celinda:linda lindy lynn",
+  "charity:chat",
+  "charles:carl charlie chick chuck",
+  "charlie:charles chuck",
+  "charlotte:char lotta lottie sherry",
+  "chauncey:chan",
+  "chelsea:chels chelsie",
+  "chelsey:chelsie",
+  "cheryl:cher",
+  "chesley:chet",
+  "chester:chet",
+  "chet:chester",
+  "chick:caroline charlotte chuck",
+  "chloe:clo",
+  "chris:kris",
+  "christa:chris",
+  "christian:chris kit",
+  "christiana:ann chris christy crissy kris kristy tina",
+  "christiano:chris",
+  "christina:chris chrissy christy crissy kris kristy tina",
+  "christine:chris chrissy christy crissy kris kristy tina",
+  "christoffer:chris",
+  "christoph:chris",
+  "christopher:chris kit",
+  "christy:crissy",
+  "cicely:cilla",
+  "cinderella:arilla cindy rella rilla",
+  "cindy:cinderella",
+  "claire:clair clara clare",
+  "clara:clarissa",
+  "clare:clara",
+  "clarence:clair clare",
+  "clarinda:clara",
+  "clarissa:cissy clara",
+  "claudia:claud",
+  "cleatus:cleat",
+  "clement:clem",
+  "clementine:clem clement",
+  "cliff:clifford",
+  "clifford:cliff ford",
+  "clifton:cliff tony",
+  "cole:colie",
+  "colton:colt",
+  "columbus:clum",
+  "con:conny",
+  "conrad:con conny",
+  "constance:connie",
+  "cooper:coop",
+  "cordelia:cordy delia",
+  "corey:coco cordy ree",
+  "corinne:cora ora",
+  "cornelia:cornie corny nelia nelle nelly",
+  "cornelius:con conny corny neil niel",
+  "cory:coco cordy ree",
+  "courtney:court curt",
+  "crystal:chris crys stal tal",
+  "curtis:curt",
+  "cynthia:cindy cintha",
+  "cyrenius:cene cy renius serene swene",
+  "cyrus:cy",
+  "dahl:dal",
+  "dalton:dahl dal",
+  "dan:danny",
+  "daniel:dan dann danny",
+  "danielle:dani ellie",
+  "danny:daniel",
+  "daphne:daph daphie",
+  "darlene:darry lena",
+  "dave:davey",
+  "david:dave davey day",
+  "daycia:dacia daisha",
+  "deanna:dee deedee",
+  "deanne:ann dee",
+  "debbie:deb debby deborah debra",
+  "debby:deb",
+  "debora:deb debbie debby",
+  "deborah:deb debbie debby",
+  "debra:deb debbie",
+  "deidre:deedee",
+  "delbert:bert del",
+  "delia:cordelia delius fidelia",
+  "delilah:dell della lil lila",
+  "deliverance:della delly dilly",
+  "della:adela adelaide delilah dell",
+  "delores:dee dell della lola lolly",
+  "delpha:philadelphia",
+  "delphine:del delf delphi",
+  "demaris:dea maris mary",
+  "demerias:dea maris mary",
+  "democrates:mock",
+  "denise:dee",
+  "dennis:dennie denny",
+  "dennison:dennis denny",
+  "derek:derrek rick ricky",
+  "derick:rick ricky",
+  "derrick:eric rick ricky",
+  "deuteronomy:duty",
+  "diana:di dicey didi",
+  "diane:di dian dianne dicey didi",
+  "dicey:dicie",
+  "dick:richard rick",
+  "dickson:dick",
+  "domenic:dom nic",
+  "dominic:dom nic",
+  "dominick:dom nick nicky",
+  "dominico:dom",
+  "don:donnie donny",
+  "donald:don donnie donny dony",
+  "donato:don",
+  "donna:dona",
+  "donovan:don donnie donny dony",
+  "dorcus:darkey",
+  "dorinda:dora dorothea",
+  "doris:dora",
+  "dorothea:doda dora",
+  "dorothy:dolly dora dortha dot dottie dotty",
+  "dotha:dotty",
+  "dotty:dot",
+  "douglas:doug",
+  "drusilla:silla",
+  "duncan:dunk",
+  "dustin:dusty",
+  "earnest:ernestine ernie",
+  "ebbie:eb",
+  "ebenezer:eb ebbie eben",
+  "eddie:ed",
+  "eddy:ed",
+  "edgar:ed eddie eddy",
+  "edith:edie edye",
+  "edmond:ed eddie eddy",
+  "edmund:ed eddie eddy ned ted",
+  "edna:edny",
+  "eduardo:ed eddie eddy",
+  "edward:ed eddie eddy ned ted teddy",
+  "edwin:ed eddie eddy ned win",
+  "edwina:edwin",
+  "edyth:edie edye",
+  "edythe:edie edye",
+  "egbert:bert burt",
+  "eighta:athy",
+  "eileen:helen",
+  "elaine:helen lainie",
+  "elbert:albert bert",
+  "elbertson:bert elbert",
+  "eldora:dora",
+  "eleanor:elaine ellen ellie lanna lenora nelly nora",
+  "eleazer:lazar",
+  "elena:helen",
+  "eliana:ella elle ellie",
+  "elias:eli lee lias",
+  "elijah:eli lige",
+  "eliphalel:life",
+  "eliphalet:left",
+  "elisa:lisa",
+  "elisha:eli lish",
+  "eliza:elizabeth",
+  "elizabeth:bess bessie beth betsy betty eliza lib libby lisa liz liza lizzie lizzy",
+  "ella:el ellen",
+  "ellen:helen nell nellie",
+  "ellender:ellen helen nellie",
+  "ellie:elly",
+  "ellswood:elsey",
+  "elminie:minnie",
+  "elmira:ellie elly mira",
+  "elnora:nora",
+  "eloise:heloise louise",
+  "elouise:louise",
+  "elsie:elsey",
+  "elswood:elsey",
+  "elvira:elvie",
+  "elwood:woody",
+  "elysia:lisa lissa",
+  "elze:elsey",
+  "emanuel:manny manuel",
+  "emeline:em emily emma emmy milly",
+  "emil:em emily",
+  "emilia:em emmy millie",
+  "emily:em emma emmy mel millie",
+  "emma:em emmy",
+  "emmanuel:manny manuel",
+  "epaphroditius:dite ditus dyce dyche eppa",
+  "ephraim:eph",
+  "erasmus:rasmus raze",
+  "eric:rick ricky",
+  "erick:eric rick ricky",
+  "erik:eric rick ricky",
+  "ernest:ernie",
+  "ernestine:erna ernest teeny tina",
+  "erwin:irwin",
+  "eseneth:senie",
+  "essy:es",
+  "estella:essy stella",
+  "estelle:essy stella",
+  "esther:essie hester",
+  "eudicy:dicey",
+  "eudora:dora",
+  "eudoris:dosie dossie",
+  "eugene:gene",
+  "eunice:nicie",
+  "euphemia:effie effy",
+  "eurydice:dicey",
+  "eustacia:stacia stacy",
+  "eva:eve",
+  "evaline:eva eve lena",
+  "evangeline:ev evan vangie",
+  "evelyn:ev eve evelina",
+  "experience:exie",
+  "ezekiel:ez zeke",
+  "ezideen:ez",
+  "ezra:ez",
+  "faith:fay",
+  "fallon:fal falcon fall fallie fally falon lon lonnie",
+  "felicia:fel feli felix",
+  "felicity:flick tick",
+  "feltie:felty",
+  "ferdinand:ferdie fred freddie freddy",
+  "ferdinando:ferdie fred nando",
+  "fidelia:delia",
+  "fionna:fiona",
+  "flora:florence",
+  "florence:flo flora flossy",
+  "floyd:lloyd",
+  "fran:frannie",
+  "frances:cissy fanny fran francie frankie frannie franniey franny sis",
+  "francie:francine",
+  "francine:fran francie frannie franniey franny",
+  "francis:fran frank frankie",
+  "frank:frankie franky",
+  "frankie:francis frank",
+  "franklin:fran frank",
+  "franklind:fran frank",
+  "fred:freddie freddy",
+  "freda:frieda",
+  "frederica:erica erika freddy frederick rickey",
+  "frederick:derick erick fred freddie freddy fritz rick ricky",
+  "fredericka:ericka freda freddy frieda ricka rickey",
+  "frieda:fred freddie freddy",
+  "gabriel:gabby gabe",
+  "gabriella:ella gabby",
+  "gabrielle:ella gabby",
+  "gareth:gare gary",
+  "garrett:barrett gare garratt garret garry gary jerry rhett",
+  "garrick:garri",
+  "genevieve:eve jean jenny",
+  "geoffrey:geoff jeff",
+  "george:georgie",
+  "georgia:georgie",
+  "georgiana:georgia",
+  "georgine:george",
+  "gerald:gerry jerry",
+  "geraldine:dina gerri gerrie gerry jerry",
+  "gerhardt:gay",
+  "gertie:gert gertrude",
+  "gertrude:gert gertie trudy",
+  "gilbert:bert gil wilber",
+  "giovanni:gio",
+  "glenn:glen",
+  "gloria:glory",
+  "governor:govie",
+  "grace:gracie",
+  "grayson:gray",
+  "greenberry:berry green",
+  "greggory:gregg",
+  "gregory:gory greg",
+  "gretchen:margaret",
+  "griselda:grissel",
+  "gum:monty",
+  "gus:gussie",
+  "gustavus:gus gussie",
+  "gwen:wendy",
+  "gwendolyn:gwen wendy",
+  "hailey:haylee hayley",
+  "hamilton:ham",
+  "hannah:anna nan nanny",
+  "harold:hal hap haps harry",
+  "harriet:hattie",
+  "harrison:hap haps harry",
+  "harry:hap haps harold henry",
+  "haseltine:hassie",
+  "haylee:hailey hayley",
+  "hayley:hailey haylee",
+  "heather:hetty",
+  "helen:ella ellen ellie lena",
+  "helena:aileen eileen elaine eleanor ellen lena nell nellie",
+  "helene:ella ellen ellie lena",
+  "heloise:eloise elouise lois",
+  "henrietta:etta etty hank henny nettie retta",
+  "henry:hal hank hap haps harry",
+  "hephsibah:hipsie",
+  "hepsibah:hipsie",
+  "herbert:bert herb",
+  "herman:dutch harman",
+  "hermione:hermie",
+  "hester:esther hessy hetty",
+  "hezekiah:hez hy kiah",
+  "hillary:hilary",
+  "hipsbibah:hipsie",
+  "hiram:hy",
+  "honora:honey nora norah norry",
+  "hopkins:hop hopp",
+  "horace:horry",
+  "hortense:harty tensey",
+  "hosea:hosey hosie",
+  "howard:hal howie",
+  "hubert:bert hub hugh",
+  "ian:john",
+  "ignatius:iggy nace nate natius",
+  "ignatzio:iggy nace naz",
+  "immanuel:emmanuel manuel",
+  "india:indie indy",
+  "inez:agnes",
+  "iona:onnie",
+  "irene:rena",
+  "irvin:irving",
+  "irving:irv",
+  "irwin:erwin",
+  "isaac:ike zeke",
+  "isabel:bell bella belle ib issy nib nibby tibbie",
+  "isabella:bella belle ib issy nib nibby tibbie",
+  "isabelle:bella belle ib issy nib nibby tibbie",
+  "isadora:dora issy",
+  "isadore:izzy",
+  "isaiah:zadie zay",
+  "isidore:izzy",
+  "iva:ivy",
+  "ivan:john",
+  "jack:jackie",
+  "jackson:jack",
+  "jacob:jaap jake jay",
+  "jacobus:jacob",
+  "jacqueline:jack jackie jacqui",
+  "jahoda:hoda hodie hody",
+  "jakob:jake",
+  "jalen:al alen haylen jaelin jaelyn jailyn jay jaye jaylin jaylyn len lennie lenny",
+  "james:jamie jem jim jimmie jimmy",
+  "jamey:james jamie",
+  "jamie:james",
+  "jane:janie jean jennie jessie",
+  "janet:jan jessie",
+  "janice:jan",
+  "jannett:nettie",
+  "jasmine:jas jazz jazzy",
+  "jason:jase jay",
+  "jasper:casper jap",
+  "jayme:jay",
+  "jean:jane jeannie",
+  "jeanette:janet jean jessie nettie",
+  "jeanne:jane jeannie",
+  "jebadiah:jeb",
+  "jedediah:diah dyer jed",
+  "jedidiah:diah dyer jed",
+  "jefferey:jeff",
+  "jefferson:jeff sonny",
+  "jeffery:jeff",
+  "jeffrey:geoff jeff",
+  "jehiel:hiel",
+  "jehu:gee hugh",
+  "jemima:mima",
+  "jennet:jenn jenny jessie",
+  "jennie:jen jenny",
+  "jennifer:jen jenn jenni jennie jenny",
+  "jeremiah:jereme jerry",
+  "jeremy:jez jezza",
+  "jerita:rita",
+  "jerry:geraldine geri gerry jereme",
+  "jesse:jess",
+  "jessica:jess jessie",
+  "jessie:jane janet jess",
+  "jillian:jill",
+  "jim:jimmie",
+  "jimmie:jim jimmy",
+  "jincy:jane",
+  "jinsy:jane",
+  "joan:jo nonie",
+  "joann:jo",
+  "joanna:hannah jo joan jodi jody",
+  "joanne:jo",
+  "jocelyn:jo joss",
+  "jody:jo",
+  "joe:joey",
+  "joey:joe",
+  "johann:john",
+  "johanna:jo",
+  "johannah:hannah jo joan jody nonie",
+  "johannes:john johnny jonathan",
+  "john:ian jack jock johnny jon jonnie jonny",
+  "johnathan:john johnathon johny jon jonathan jonathon jonnie jonny nathan",
+  "johnathon:john johnathan johny jon jonathan jonathon jonnie jonny",
+  "jon:john johnny jonnie jonny",
+  "jonathan:john johnathan johnathon johny jon jonathon jonnie jonny nathan",
+  "jonathon:john johnathan johnathon johny jon jonathan jonnie jonny",
+  "jordan:jordy",
+  "joseph:jody joe joey jos",
+  "josephine:fina jo jody joey josey josie",
+  "josetta:jettie",
+  "josey:josophine",
+  "joshua:joe jos josh",
+  "josiah:jos",
+  "josophine:jo joey josey",
+  "joyce:joy",
+  "juanita:nettie nita",
+  "judah:jude juder",
+  "judith:juda jude judi judie judy",
+  "judson:jud sonny",
+  "judy:judith",
+  "julia:jill jules julie",
+  "julian:jule jules",
+  "julias:jule jules",
+  "julie:jule jules julia",
+  "june:junius",
+  "junior:jr june junie",
+  "justin:justina juston justus",
+  "kaitlin:kait kaitie",
+  "kaitlyn:kait kaitie",
+  "kaitlynn:kait kaitie",
+  "kalli:cali kali",
+  "kameron:kam",
+  "karla:carla carly",
+  "katarina:catherine tina",
+  "kate:kay",
+  "katelin:kate kay kaye",
+  "katelyn:kate kay kaye",
+  "katherine:cassie cathy kate kathy katie katy kay kaye kit kittie lena trina",
+  "kathleen:cassie cathy kathy katy kay kit kittie lena trina",
+  "kathryn:kate kathy katie",
+  "katia:kate katie",
+  "katy:kate kathy katie",
+  "kayla:kay",
+  "kelley:kelli kellie kelly",
+  "kendall:ken kenny",
+  "kendra:kay kenj kenji kenny",
+  "kendrick:ken kenny",
+  "kendrik:ken kenny",
+  "kennedy:ken kenny",
+  "kenneth:ken kendrick kenny",
+  "kenny:ken kenneth",
+  "kent:ken kendrick kenny",
+  "kerry:kerri",
+  "kevin:kev",
+  "keziah:kizza kizzie",
+  "kim:kimmy",
+  "kimberley:kim kimberli kimberly",
+  "kimberly:kim kimberley kimberli",
+  "kingsley:king",
+  "kingston:king",
+  "kit:kittie",
+  "kris:chris",
+  "kristel:kris",
+  "kristen:chris",
+  "kristin:chris",
+  "kristina:christina kris krissy tina",
+  "kristine:chris christy crissy kris kristy tina",
+  "kristofer:chris kris",
+  "kristoffer:chris kris",
+  "kristopher:chris kris",
+  "kristy:chris",
+  "kymberly:kym",
+  "lafayette:fate laffie",
+  "lamont:monty",
+  "laodicia:cenia dicy",
+  "larry:laurence lawrence",
+  "latisha:tish tisha",
+  "laura:laurie lori",
+  "laurel:laurie",
+  "lauren:laurie ren",
+  "laurence:larry lon lonny lorne lorry",
+  "laurinda:laura lawrence",
+  "lauryn:laurie",
+  "laveda:veda",
+  "laverne:verna vernon",
+  "lavina:ina vina viney",
+  "lavinia:ina vina viney",
+  "lavonia:vina viney vonnie wyncha",
+  "lavonne:von",
+  "lawrence:larry lawrie lon lonny lorne lorry",
+  "leanne:annie lea",
+  "lecurgus:curg",
+  "leilani:lani",
+  "lemuel:lem",
+  "lena:ellen",
+  "lenora:lee nora",
+  "leo:leon",
+  "leonard:len lenny leo leon lineau",
+  "leonidas:lee leon",
+  "leonora:nell nellie nora",
+  "leonore:elenor honor nora",
+  "leroy:lee roy",
+  "lesley:les",
+  "leslie:les",
+  "lester:les",
+  "letitia:lettice lettie tish titia",
+  "levi:lee",
+  "levicy:vicy",
+  "levone:von",
+  "lexi:lex",
+  "lib:libby",
+  "lidia:lyddy",
+  "lil:lilly lily",
+  "liliana:lil lilly lily",
+  "lillah:lil lilly lily lolly",
+  "lillian:lil lilly lolly",
+  "lilly:lil lily",
+  "lily:lil lilly",
+  "lincoln:link",
+  "linda:lindy lynn",
+  "lindsay:lindsey lindsie lindsy",
+  "lindy:lynn",
+  "lionel:leon",
+  "lisa:liz",
+  "littleberry:berry little",
+  "lizzie:liz",
+  "lois:lou louise",
+  "lonzo:lon",
+  "lorelei:laurie lori lorrie",
+  "lorenzo:loren",
+  "loretta:etta lorie lorrie retta",
+  "lorraine:lorie lorrie",
+  "lotta:lottie",
+  "lou:louis lu",
+  "louis:lewis lou louie louise",
+  "louisa:eliza lois lou",
+  "louise:eliza lois lou",
+  "louvinia:vina viney vonnie wyncha",
+  "lucas:luke",
+  "lucia:lucius lucy",
+  "lucias:luke",
+  "lucille:cille lou lu lucy",
+  "lucina:sinah",
+  "lucinda:cindy lou lu lucy",
+  "lucretia:creasey",
+  "lucy:lucinda",
+  "luella:ella lu lula",
+  "luke:lucas",
+  "lunetta:nettie",
+  "lurana:lura",
+  "luther:luke",
+  "lydia:lyddy",
+  "lyndon:lindy lynn",
+  "mabel:amabel mehitabel",
+  "mac:mc",
+  "mack:mac mc",
+  "mackenzie:kenzy mac mack",
+  "maddison:maddi maddie",
+  "maddy:madeline madelyn madge",
+  "madeline:lena maddi maddie maddy madge madie magda maggie maud",
+  "madelyn:maddy madie",
+  "madie:madeline madelyn",
+  "madison:maddy mattie",
+  "maegen:meg",
+  "magdalena:lena maggie",
+  "magdelina:lena madge magda maggie",
+  "mahala:hallie",
+  "makayla:kayla",
+  "malachi:mally",
+  "malcolm:mac mal malc",
+  "malinda:lindy",
+  "manda:mandy",
+  "mandie:amanda",
+  "mandy:amanda",
+  "manerva:eve minerva nerva nervie",
+  "manny:manuel",
+  "manoah:noah",
+  "manola:nonnie",
+  "manuel:emanuel manny",
+  "marcus:marc mark",
+  "margaret:daisy gretta madge maggie maggy marge margery margie margy meg midge peg peggy polly rita",
+  "margaretta:daisy gretta madge maggie marge margery margie meg midge peg peggy rita",
+  "margarita:daisy greta madge maggie maisie marge margo meg megan metta midge peggie rita",
+  "marge:margaret margaretta margery",
+  "margie:marjorie",
+  "marguerite:peggy",
+  "maria:mia ria",
+  "mariah:maria mary",
+  "marian:marianna marion",
+  "marie:mae mary",
+  "marietta:mae mamie maria mariah marie marion mary maureen may mercy minnie mitzi mollie molly polly",
+  "marilyn:mary",
+  "marion:mary",
+  "marissa:rissa",
+  "marjorie:margie margy",
+  "marni:marnie",
+  "marsha:marcia marcie mary",
+  "martha:marty mat mattie patsy patty",
+  "martin:marty",
+  "martina:tina",
+  "martine:tine",
+  "marv:marvin",
+  "marvin:marv",
+  "mary:mae mamie marie mitzi molly polly",
+  "masayuki:masa",
+  "mat:mattie",
+  "mathew:mat matt maty",
+  "mathilda:patty tillie",
+  "matilda:matty maud tilla tilly",
+  "matt:matty",
+  "matthew:matt mattie matty thias thys",
+  "matthews:matt mattie matty",
+  "matthias:matt thias thys",
+  "maud:middy",
+  "maureen:mary",
+  "maurice:morey",
+  "mavery:mave",
+  "mavine:mave",
+  "max:maxie",
+  "maximilian:max",
+  "maximillian:max",
+  "maxine:max",
+  "maxwell:max",
+  "may:mae",
+  "mckenna:ken kenna meaka",
+  "medora:dora",
+  "megan:meg",
+  "meghan:meg",
+  "mehitabel:hetty hitty mabel mitty",
+  "melanie:mellie",
+  "melchizedek:dick zadock",
+  "melinda:linda lindy lynn mel mindy",
+  "melissa:lisa lissa mel milly missy",
+  "mellony:mellia",
+  "melody:lodi",
+  "melvin:mel",
+  "melvina:vina",
+  "mercedes:merci mercy sadie",
+  "merv:mervin",
+  "mervin:merv",
+  "mervyn:merv",
+  "micajah:cage",
+  "michael:micah mick mickey micky mike mikey",
+  "micheal:mike mikey miky",
+  "michele:chelle mickey shelley shellie shelly",
+  "michelle:chelle mickey shelley shellie shelly shely",
+  "mick:micky",
+  "miguel:michael miggy miguael miguaell miguail miguaill miguayl miguayll miguell mike",
+  "mike:michael mick micky",
+  "mildred:milly",
+  "millicent:milly missy",
+  "minerva:minnie",
+  "minnie:wilhelmina",
+  "miranda:mandy mira randi randy",
+  "miriam:mimi mitzi mitzie",
+  "missy:melissa",
+  "mitch:mitchell",
+  "mitchell:mitch",
+  "mitzi:mary mittie mitty",
+  "mitzie:mittie mitty",
+  "monet:nettie",
+  "monica:monna monnie",
+  "monte:monty",
+  "monteleon:monte",
+  "montesque:monty",
+  "montgomery:gum monty",
+  "monty:lamont",
+  "morris:morey",
+  "mortimer:mort",
+  "moses:amos mose moss",
+  "muriel:mur",
+  "myrtle:mert myrt myrti",
+  "nadine:deedee nada",
+  "nancy:ann nan nanny",
+  "naomi:omi",
+  "napoleon:leon nap nappy",
+  "natalia:nat talia",
+  "natalie:natty nettie",
+  "natasha:nat tasha",
+  "nathan:nat nate",
+  "nathaniel:nat nate nathan natty than",
+  "nelle:nelly",
+  "nellie:nell",
+  "nelson:nels",
+  "newt:newton",
+  "newton:newt",
+  "nicholas:claas claes nic nick nickie nicky nico",
+  "nichole:cole nicki nicky nikki",
+  "nicholette:cole nichole nickey nicki nicky nicole nikki",
+  "nicodemus:nic nick nickie nicky nico",
+  "nicolas:nic nick nickie nicky nico",
+  "nicole:cole nicki nicky nikki nole",
+  "nikolas:claes nic nick nickie nicky nico",
+  "nikole:nikki",
+  "nora:nonie",
+  "norbert:bert norby",
+  "norbusamte:norbu",
+  "norman:norm",
+  "nowell:noel",
+  "obadiah:diah dyer obed obie",
+  "obediah:obie",
+  "obedience:beda beedy biddie obed",
+  "obie:obediah",
+  "octavia:tave tavia",
+  "odell:odo",
+  "olive:livia nollie ollie",
+  "oliver:ollie",
+  "olivia:livia nollie ollie",
+  "ollie:oliver",
+  "onicyphorous:cy cyphorus one osaforum osaforus syphorous",
+  "orilla:ora rilly",
+  "orlando:roland",
+  "orphelia:phelia",
+  "ossy:ozzy",
+  "oswald:ossy ozzy waldo",
+  "otis:ode ote",
+  "pamela:pam",
+  "pandora:dora",
+  "parmelia:amelia melia milly",
+  "parthenia:parsuny pasoonie phenie teeny",
+  "patience:pat patty",
+  "patricia:pat patsy patti patty tricia trish trisha",
+  "patrick:paddy pat pate patsy peter",
+  "patsy:patty",
+  "patty:patricia",
+  "paul:polly",
+  "paula:lina polly",
+  "paulina:lina polly",
+  "pauline:polly",
+  "peggy:peg",
+  "pelegrine:perry",
+  "penelope:penny",
+  "percival:percy",
+  "peregrine:perry",
+  "permelia:mellie melly milly",
+  "pernetta:nettie",
+  "persephone:seph sephy",
+  "pete:petey",
+  "peter:pate pete",
+  "petronella:nellie",
+  "pheney:josephine",
+  "pheriba:ferbie pherbia",
+  "philadelphia:delphia",
+  "philander:fie",
+  "philetus:leet phil",
+  "philinda:linda lindy lynn",
+  "philip:phil pip",
+  "philipina:penie phoebe pip",
+  "phillip:phil pip",
+  "philly:delphia",
+  "philomena:menaalmena",
+  "phoebe:fifi",
+  "phyllis:phyl",
+  "pinckney:pink",
+  "pleasant:ples",
+  "pocahontas:pokey",
+  "posthuma:humey",
+  "prescott:pres scott scotty",
+  "priscilla:cilla cissy prissy",
+  "providence:provy",
+  "prudence:prudy prue",
+  "prudy:prudence",
+  "rachael:rach",
+  "rachel:rachael shelly",
+  "rafaela:rafa",
+  "ramona:mona",
+  "randall:randy",
+  "randolf:dolph randy",
+  "randolph:dolph randy",
+  "raphael:ralph",
+  "ray:raymond",
+  "raymond:ray",
+  "reba:becca beck",
+  "rebecca:becca beck becky reba",
+  "reggie:reg reginald",
+  "regina:gina reggie",
+  "reginald:naldo reg reggie renny",
+  "relief:leafa",
+  "reuben:rube",
+  "reynold:reginald",
+  "rhoda:rodie",
+  "rhodella:della",
+  "rhyna:rhynie",
+  "ricardo:rick ricky",
+  "rich:dick rick",
+  "richard:dick dickie dickon dicky rich richie rick ricky",
+  "rick:ricky",
+  "ricky:dick rich",
+  "robert:bill billy bob bobby dob dobbin hob hobkin rob robby rupert",
+  "roberta:bert bertie birdie birtie bobbie robbie roby",
+  "roberto:rob",
+  "robin:rob robbie",
+  "roderick:erick rickie rod roddy",
+  "rodger:bobby hodge rod roge roger",
+  "rodney:rod",
+  "roger:bobby hodge rod rodger roge",
+  "roland:lanny orlando rollo rolly",
+  "ron:ronnie ronny",
+  "ronald:naldo ron ronnie ronny",
+  "ronny:ronald",
+  "rosa:rose",
+  "rosabel:belle rosa rose roz",
+  "rosabella:bella belle rosa rose roz",
+  "rosaenn:ann",
+  "rosaenna:ann",
+  "rosalinda:linda rosa rose roz",
+  "rosalyn:linda rosa rose roz",
+  "roscoe:ross",
+  "rose:rosie",
+  "roseann:ann rose rosie roz",
+  "roseanna:ann rose rosie roz",
+  "roseanne:ann",
+  "rosemarie:rose rosie",
+  "rosemary:marie mary rose rosemarie rosey",
+  "rosina:sina",
+  "roxane:rox roxie",
+  "roxanna:ann rose roxie",
+  "roxanne:ann rose roxie",
+  "rudolph:dolph olph rolf rudy",
+  "rudolphus:dolph olph rolf rudy",
+  "russell:russ rusty",
+  "ruth:ruthie",
+  "ryan:ry",
+  "sabrina:brina",
+  "safieel:safie",
+  "salome:loomie",
+  "salvador:sal sally",
+  "sam:sammy",
+  "samantha:mantha sam sammy",
+  "sampson:sam sammy",
+  "samson:sam sammy",
+  "samuel:sam sammy",
+  "samyra:myra sam sammy",
+  "sandra:cassandra sandy",
+  "sandy:sandra",
+  "sanford:sandy",
+  "sarah:sadie sally sara",
+  "sarilla:silla",
+  "savannah:anna savanna vannie",
+  "scott:sceeter scottie scotty squat",
+  "sebastian:seb sebby",
+  "selma:anselm",
+  "serena:rena",
+  "serilla:rilla",
+  "seymour:morey see",
+  "shaina:sha shay",
+  "sharon:sha shay",
+  "shaun:shawn",
+  "shawn:shaun",
+  "sheila:cecilia",
+  "sheldon:shelly",
+  "shelton:shel shelly tony",
+  "sheridan:dan danny sher",
+  "sheryl:cheri cherie sher sheri sherri sherry sherryl",
+  "shirley:lee sherry shirl",
+  "sibbilla:sibbell sibbie sybill",
+  "sidney:sid syd",
+  "sigfired:sid",
+  "sigfrid:sid",
+  "sigismund:sig",
+  "silas:si",
+  "silence:liley",
+  "silvester:si sly syl vest vester",
+  "simeon:si sion",
+  "simon:si sion",
+  "smith:smitty",
+  "socrates:crate",
+  "sofia:sofie sophie",
+  "solomon:sal salmon saul sol solly zolly",
+  "sondra:dre sonnie",
+  "sophia:sophie",
+  "sophronia:frona fronia sophia",
+  "stacey:staci stacie stacy",
+  "stacie:stacey staci stacy",
+  "stacy:staci",
+  "stanley:stan",
+  "stephan:steve",
+  "stephanie:annie steffi steffie steph stephani stephany stephie stephine stevie",
+  "stephen:steph steve",
+  "steve:stevie",
+  "steven:steph steve stevie",
+  "stuart:stu",
+  "sue:susan susie",
+  "sullivan:sully van",
+  "susan:hannah sue sukey susie suzie",
+  "susannah:hannah sue sukey susie",
+  "susie:suzie",
+  "suzanne:sue suki susie",
+  "sybill:sibbie",
+  "sydney:sid",
+  "sylvanus:sly syl",
+  "sylvester:si sly sy syl vessie vester vet",
+  "sylvia:syl sylvie",
+  "tabby:tabitha",
+  "tabitha:tabby",
+  "tamara:tami tammie tammy",
+  "tamarra:tammy",
+  "tammie:tami tammy",
+  "tammy:tami tammie",
+  "tanafra:tanny",
+  "tasha:tash tashie",
+  "ted:teddy",
+  "temperance:tempy",
+  "terence:terry",
+  "teresa:terry tess tessa tessie",
+  "terri:teri terrie terry",
+  "terry:terence",
+  "tess:teresa theresa",
+  "tessa:teresa theresa",
+  "thad:thaddeus",
+  "thaddeus:thad",
+  "theo:theodore",
+  "theodora:dora",
+  "theodore:ted teddy theo",
+  "theodosia:dosia theo theodosius",
+  "theophilus:ophi",
+  "theotha:otha",
+  "theresa:terry tess tessa tessie thirza thursa traci tracie tracy",
+  "thom:thomas tom tommy",
+  "thomas:thom tom tommy",
+  "thomasa:tamzine",
+  "tiffany:tiff tiffy",
+  "tilford:tillie",
+  "tim:timmy",
+  "timothy:tim timmy",
+  "tina:christina",
+  "tisha:tish",
+  "tobias:bias toby",
+  "tom:thomas tommy",
+  "tony:anthony",
+  "tonya:toni",
+  "tracey:traci tracie tracy",
+  "tranquilla:quilla trannie",
+  "travis:trav",
+  "trevor:trev",
+  "tricia:trish",
+  "trish:patricia trisha",
+  "tristan:tris",
+  "trix:trixie",
+  "trudy:gertrude",
+  "tryphena:phena",
+  "tyler:ty",
+  "unice:eunice nicie",
+  "uriah:riah",
+  "ursula:sula sulie",
+  "valentina:felty val vallie",
+  "valentine:felty",
+  "valeri:val valerie",
+  "valeria:val",
+  "valerie:val",
+  "vanburen:buren",
+  "vandalia:vannie",
+  "vanessa:essa nessa vanna",
+  "vernisee:nicey",
+  "vernon:vern",
+  "veronica:franky frony ron ronie ronna ronnie ronny vonnie",
+  "vic:vicki vickie vicky victor",
+  "vicki:vickie vicky victoria",
+  "victor:vic",
+  "victoria:tori torie torri torrie tory vic vicki vickie vicky",
+  "vijay:vij",
+  "vincent:vic vin vince vinnie vinny",
+  "vincenzo:vic vin vince vinnie vinny",
+  "vinson:vin vince vinnie vinny",
+  "viola:ola vi",
+  "violet:vi",
+  "violetta:lettie",
+  "virginia:ginger ginny jane jennie virgy",
+  "vivian:vi viv",
+  "waldo:ossy ozzy",
+  "wallace:wally",
+  "wally:walt",
+  "walter:wally walt",
+  "washington:wash",
+  "webster:webb",
+  "wendy:wen",
+  "wesley:wes",
+  "westley:farmboy wes west",
+  "weston:wes",
+  "wilber:bert will",
+  "wilbur:will willie willy",
+  "wilda:willie",
+  "wilfred:fred wil will willie",
+  "wilhelm:wil willie",
+  "wilhelmina:mina minnie willie wilma",
+  "will:bill fred wilbur willie",
+  "william:bela bell bill billy wil will willie willy",
+  "willie:fred william",
+  "willis:bill willy",
+  "wilma:billiewilhelm william",
+  "wilson:will willie willy",
+  "winfield:field win winny",
+  "winifred:freddie winnet winnie",
+  "winnie:winnifred",
+  "winnifred:fred freddie freddy winnie winny",
+  "winny:winnifred",
+  "winton:wint",
+  "woodrow:drew wood woody",
+  "yeona:ona onie",
+  "yoshihiko:yoshi",
+  "yulan:lan yul",
+  "yvonne:vonna",
+  "zach:zack zak",
+  "zachariah:zac zach zachy zack zak zakk zeke",
+  "zachary:zac zach zachy zack zak zakk zeke",
+  "zachery:zac zach zachy zack zak zakk zeke",
+  "zack:zach zak",
+  "zebedee:zeb",
+  "zedediah:diah dyer zed",
+  "zephaniah:zeph"
+];
+
+// packages/core/src/entity/nicknames.ts
+var NICKNAME_VARIANTS = (() => {
+  const map = /* @__PURE__ */ new Map();
+  const link = (a, b) => {
+    const s = map.get(a) ?? /* @__PURE__ */ new Set();
+    s.add(b);
+    map.set(a, s);
+  };
+  for (const row of NICKNAME_DATA) {
+    const i = row.indexOf(":");
+    const name = row.slice(0, i);
+    for (const nick of row.slice(i + 1).split(" ")) {
+      if (!nick) continue;
+      link(name, nick);
+      link(nick, name);
+    }
+  }
+  return map;
+})();
+var key = (s) => stripDiacritics(s).toLowerCase().trim();
+function nameVariants(first) {
+  return NICKNAME_VARIANTS.get(key(first)) ?? /* @__PURE__ */ new Set();
+}
+function isFirstNameVariant(a, b) {
+  const x = key(a);
+  const y = key(b);
+  if (!x || !y || x === y) return false;
+  return NICKNAME_VARIANTS.get(x)?.has(y) ?? false;
+}
+
+// packages/core/src/entity/resolve.ts
+var RESOLVE_WEIGHTS = {
+  name_sim: 3,
+  last_sim: 1.5,
+  org_match: 2,
+  title_sim: 0.5,
+  email_name_sim: 1.5,
+  domain_org_match: 1.5,
+  school_match: 0.5,
+  // a nickname is real evidence that two spellings are one name, but never enough on its own: auto-merging a
+  // nickname still needs an address or a school (see corroborated)
+  firstNameVariant: 0.5,
+  bias: -3.5
+};
+var NAME_ORG_ONLY_CAP = 0.85;
+var AUTO_MERGE_THRESHOLD = 0.92;
+var SUGGEST_THRESHOLD = 0.6;
+function doNotMergeKey(a, b) {
+  return a < b ? `${a}|${b}` : `${b}|${a}`;
+}
+function rejected(ctx, a, b) {
+  return !!a && !!ctx.doNotMerge?.has(doNotMergeKey(a, b));
+}
+var ROLE_LOCAL_PARTS = /* @__PURE__ */ new Set([
+  "info",
+  "hello",
+  "team",
+  "support",
+  "careers",
+  "recruiting",
+  "jobs",
+  "noreply",
+  "no-reply",
+  "notifications",
+  "billing",
+  "admin",
+  "contact"
+]);
+function isRoleAddress(email) {
+  const e = normalizeEmail(email);
+  if (!e.includes("@")) return false;
+  const local = emailLocalPart(e).replace(/\+.*$/, "");
+  return ROLE_LOCAL_PARTS.has(local) || ROLE_LOCAL_PARTS.has(local.replace(/[._]/g, "-"));
+}
+var PERSONAL_EMAIL_DOMAINS = /* @__PURE__ */ new Set([
+  "gmail.com",
+  "googlemail.com",
+  "outlook.com",
+  "hotmail.com",
+  "live.com",
+  "msn.com",
+  "yahoo.com",
+  "ymail.com",
+  "icloud.com",
+  "me.com",
+  "mac.com",
+  "aol.com",
+  "proton.me",
+  "protonmail.com",
+  "pm.me",
+  "gmx.com",
+  "fastmail.com",
+  "hey.com",
+  "qq.com",
+  "163.com"
+]);
+function sigmoid(x) {
+  return 1 / (1 + Math.exp(-x));
+}
+function incomingName(inc) {
+  return inc.firstName || inc.lastName ? nameFromParts(inc.firstName, inc.lastName) : parseName(inc.displayName);
+}
+var fold = (s) => stripDiacritics(s).toLowerCase();
+function initialMatches(a, b) {
+  const x = fold(a).replace(/\.$/, "");
+  const y = fold(b).replace(/\.$/, "");
+  if (!x || !y || x.length === y.length) return false;
+  const [initial, full] = x.length < y.length ? [x, y] : [y, x];
+  return initial.length === 1 && /^[a-z]$/.test(initial) && full.length > 1 && full.startsWith(initial);
+}
+function isPlaceholderName(p) {
+  if (p.namePlaceholder) return true;
+  if (!p.displayName || p.displayName.includes("@") || p.displayName === "Unknown") return true;
+  if (!p.primaryEmail) return false;
+  if (p.displayName !== p.displayName.toLowerCase()) return false;
+  const squash = (x) => fold(x).replace(/[\s._+-]/g, "");
+  const local = p.primaryEmail.slice(0, p.primaryEmail.lastIndexOf("@")).replace(/\+.*$/, "");
+  return squash(p.displayName) === squash(local);
+}
+function emailEvidence(rawEmail, name, org, orgDomains, fuzzy = true) {
+  const email = normalizeEmail(rawEmail);
+  if (!email.includes("@")) return { nameSim: 0, domainOrg: 0 };
+  const dom = emailDomain(email);
+  const personal = PERSONAL_EMAIL_DOMAINS.has(dom);
+  let nameSim = 0;
+  if (name.first && name.last) {
+    const local = emailLocalPart(email).replace(/\+.*$/, "").replace(/[\d._-]+/g, " ").trim();
+    const compact2 = local.replace(/\s+/g, "");
+    const first = fold(name.first).replace(/[^a-z]/g, "");
+    const canon = canonicalFirstName(name.first).replace(/[^a-z]/g, "");
+    const last = fold(name.last).replace(/[^a-z]/g, "");
+    const forms = /* @__PURE__ */ new Set();
+    const variants = [...nameVariants(first)].map((v) => v.replace(/[^a-z]/g, "")).filter((v) => v.length >= 2);
+    for (const v of variants) {
+      forms.add(`${v}${last}`);
+      forms.add(`${last}${v}`);
+    }
+    for (const f of [first, canon]) {
+      forms.add(`${f}${last}`);
+      forms.add(`${f[0] ?? ""}${last}`);
+      forms.add(`${last}${f}`);
+      forms.add(`${f}${last[0] ?? ""}`);
+    }
+    if (compact2 && forms.has(compact2)) nameSim = 1;
+    else if (compact2 && last.length >= 4 && compact2.includes(last)) nameSim = 0.7;
+    else if (compact2 && fuzzy)
+      nameSim = Math.max(jaroWinkler(compact2, `${first}${last}`), jaroWinkler(compact2, `${first[0] ?? ""}${last}`)) * 0.6;
+    if (personal) nameSim *= 0.5;
+  }
+  let domainOrg = 0;
+  if (!personal) {
+    if (orgDomains.includes(dom)) domainOrg = 1;
+    else {
+      const root = dom.split(".").slice(-2, -1)[0] ?? dom.split(".")[0] ?? "";
+      const orgCompact = org.replace(/[\s&]+/g, "");
+      if (org && root.length >= 2 && (orgCompact.includes(root) || root.length >= 4 && root.includes(orgCompact)))
+        domainOrg = 0.8;
+    }
+  }
+  return { nameSim, domainOrg };
+}
+function computeFeatures(inc, cand, ctx) {
+  const incName = incomingName(inc);
+  const candName = parseName(cand.displayName);
+  const candPlaceholder = isPlaceholderName(cand);
+  const rescale = (jw) => Math.max(0, (jw - 0.75) / 0.25);
+  const rel = firstNameRelation(incName.first, candName.first);
+  let nameSim = 0;
+  let lastSim = 0;
+  if (incName.full && candName.full && !candPlaceholder) {
+    const a = rel === "nickname" ? canonicalFirstName(incName.first) : fold(incName.first);
+    const b = rel === "nickname" ? canonicalFirstName(candName.first) : fold(candName.first);
+    nameSim = rescale(jaroWinkler(`${a} ${fold(incName.last)}`, `${b} ${fold(candName.last)}`));
+    lastSim = incName.last && candName.last ? rescale(jaroWinkler(fold(incName.last), fold(candName.last))) : 0;
+    if (rel === "ambiguous") nameSim = Math.min(0.8, Math.max(nameSim, lastSim === 1 ? 0.8 : 0));
+    if (lastSim === 1 && initialMatches(incName.first, candName.first)) nameSim = Math.max(nameSim, 0.6);
+    if (rel === "different" && lastSim === 1 && isFirstNameVariant(incName.first, candName.first))
+      nameSim = Math.max(nameSim, 0.8);
+  }
+  const firstNameVariant = incName.first && candName.first && !candPlaceholder && (rel === "nickname" || rel === "ambiguous" || isFirstNameVariant(incName.first, candName.first)) ? 1 : 0;
+  const incOrg = normalizeCompany(inc.companyRaw);
+  const candOrg = normalizeCompany(cand.currentOrganizationRaw);
+  let orgMatch = 0;
+  if (incOrg && candOrg) {
+    const [short, long] = incOrg.length <= candOrg.length ? [incOrg, candOrg] : [candOrg, incOrg];
+    if (incOrg === candOrg) orgMatch = 1;
+    else if (short.length >= 4 && long.startsWith(`${short} `)) orgMatch = 0.8;
+    else if (jaroWinkler(incOrg, candOrg) >= 0.9) orgMatch = 0.5;
+    else orgMatch = nameSim === 1 && lastSim === 1 && rel === "same" ? -0.25 : -0.5;
+  }
+  const titleSim = inc.title && cand.currentTitle ? tokenJaccard(inc.title, cand.currentTitle) : 0;
+  let emailNameSim = 0;
+  let domainOrgMatch = 0;
+  const candDomains = cand.currentOrganizationId ? ctx.orgDomains?.get(cand.currentOrganizationId) ?? [] : [];
+  const candNameForEmail = candPlaceholder ? { first: "", last: "", full: "", normalized: "" } : candName;
+  if (inc.email) {
+    const e = emailEvidence(inc.email, candNameForEmail, candOrg, candDomains);
+    emailNameSim = Math.max(emailNameSim, e.nameSim);
+    domainOrgMatch = Math.max(domainOrgMatch, e.domainOrg);
+  }
+  const candEmails = /* @__PURE__ */ new Set([...cand.primaryEmail ? [cand.primaryEmail] : [], ...cand.emails]);
+  for (const ce of candEmails) {
+    const e = emailEvidence(ce, incName, incOrg, [], false);
+    emailNameSim = Math.max(emailNameSim, e.nameSim);
+    if (!candOrg) domainOrgMatch = Math.max(domainOrgMatch, e.domainOrg);
+  }
+  const schoolMatch = inc.school && cand.school && normalizeCompany(inc.school) === normalizeCompany(cand.school) ? 1 : 0;
+  return {
+    name_sim: nameSim,
+    last_sim: lastSim,
+    org_match: orgMatch,
+    title_sim: titleSim,
+    email_name_sim: emailNameSim,
+    domain_org_match: domainOrgMatch,
+    school_match: schoolMatch,
+    firstNameVariant
+  };
+}
+function scoreFeatures(f, w = RESOLVE_WEIGHTS) {
+  const z2 = w.bias + w.name_sim * f.name_sim + w.last_sim * f.last_sim + w.org_match * f.org_match + w.title_sim * f.title_sim + w.email_name_sim * f.email_name_sim + w.domain_org_match * f.domain_org_match + w.school_match * f.school_match + w.firstNameVariant * f.firstNameVariant;
+  return sigmoid(z2);
+}
+function addressOnlyScore(f) {
+  if (f.email_name_sim >= 1 && f.domain_org_match >= 0.8) return 0.93;
+  if (f.email_name_sim >= 0.7 && f.domain_org_match >= 0.8) return 0.75;
+  return 0;
+}
+function corroborated(f, rel, incomingAddressFitsName) {
+  const independent = incomingAddressFitsName >= 0.7 || f.domain_org_match > 0 || f.school_match > 0;
+  if (rel !== "same") return independent;
+  return independent || f.org_match >= 1;
+}
+function employerConflict(inc, cand, ctx, f) {
+  const candOrg = normalizeCompany(cand.currentOrganizationRaw);
+  if (!candOrg) return false;
+  const email = inc.email ? normalizeEmail(inc.email) : "";
+  const dom = email.includes("@") ? emailDomain(email) : "";
+  const work = !!dom && !PERSONAL_EMAIL_DOMAINS.has(dom);
+  if (work) {
+    const known = cand.currentOrganizationId ? ctx.orgDomains?.get(cand.currentOrganizationId) ?? [] : [];
+    const root = dom.split(".").slice(-2, -1)[0] ?? "";
+    if (known.includes(dom) || root === candOrg.replace(/[\s&]+/g, "")) return false;
+  }
+  if (inc.companyRaw && normalizeCompany(inc.companyRaw) && f.org_match < 1) return true;
+  return work;
+}
+function scorePair(inc, cand, ctx) {
+  const f = computeFeatures(inc, cand, ctx);
+  const incName = incomingName(inc);
+  if (!incName.full || isPlaceholderName(cand)) return { score: addressOnlyScore(f), features: f };
+  const scored = f.org_match > 0 && f.domain_org_match > 0 ? { ...f, domain_org_match: 0 } : f;
+  let score = scoreFeatures(scored);
+  if (f.name_sim < 0.5) score = Math.min(score, SUGGEST_THRESHOLD - 0.01);
+  const candName = parseName(cand.displayName);
+  const rel = firstNameRelation(incName.first, candName.first);
+  const incomingAddressFitsName = inc.email ? emailEvidence(inc.email, candName, "", [], true).nameSim : 0;
+  if (score >= AUTO_MERGE_THRESHOLD && // a bare initial fits many colleagues (Priya and Pooja Patel), and a look-alike employer is another firm
+  (!corroborated(f, rel, incomingAddressFitsName) || initialMatches(incName.first, candName.first) || employerConflict(inc, cand, ctx, f)))
+    score = AUTO_MERGE_THRESHOLD - 0.01;
+  if (f.org_match > 0 && incomingAddressFitsName < 0.7 && f.domain_org_match === 0 && f.school_match === 0)
+    score = Math.min(score, NAME_ORG_ONLY_CAP);
+  return { score, features: f };
+}
+function resolveIdentity(inc, ctx) {
+  const email = inc.email ? normalizeEmail(inc.email) : void 0;
+  const slug = linkedInSlug(inc.linkedinUrl);
+  if (email && isRoleAddress(email) && !slug) return { kind: "role" };
+  const people = ctx.people.filter((p) => p.id !== inc.personId && !rejected(ctx, inc.personId, p.id));
+  const incName = incomingName(inc);
+  for (const p of people) {
+    if (email && (p.primaryEmail === email || p.emails.includes(email))) {
+      const mergeWith = sameMailboxOtherName(p, incName, people, ctx);
+      return { kind: "match", personId: p.id, via: "email", ...mergeWith.length ? { mergeWith } : {} };
+    }
+  }
+  if (slug) {
+    for (const p of people)
+      if (p.linkedinSlug === slug) return { kind: "match", personId: p.id, via: "linkedin" };
+  }
+  const incOrg = normalizeCompany(inc.companyRaw);
+  if (incName.normalized && incOrg) {
+    for (const p of people) {
+      if (isPlaceholderName(p)) continue;
+      if (email && (p.primaryEmail || p.emails.length)) continue;
+      if (parseName(p.displayName).normalized === incName.normalized && normalizeCompany(p.currentOrganizationRaw) === incOrg)
+        return { kind: "match", personId: p.id, via: "name_org" };
+    }
+  }
+  if (!incName.full && !email) return { kind: "new" };
+  const lastFold = fold(incName.last);
+  const incDomain = email ? emailDomain(email) : void 0;
+  const candidates = people.filter((p) => {
+    const placeholder = isPlaceholderName(p);
+    const pDomains = [...new Set([p.primaryEmail, ...p.emails].filter(Boolean).map((e) => emailDomain(e)))];
+    if (!incName.full || placeholder) {
+      if (incDomain && pDomains.includes(incDomain)) return true;
+      if (incDomain && !PERSONAL_EMAIL_DOMAINS.has(incDomain)) return true;
+      return placeholder && !!incName.full && pDomains.length > 0;
+    }
+    const pn = parseName(p.displayName);
+    if (lastFold && fold(pn.last) === lastFold) return true;
+    const rel = firstNameRelation(incName.first, pn.first);
+    const related = rel !== "different" || isFirstNameVariant(incName.first, pn.first);
+    if (related && (incOrg ? normalizeCompany(p.currentOrganizationRaw) === incOrg : true)) return true;
+    if (incDomain && pDomains.includes(incDomain) && rel !== "different") return true;
+    return jaroWinkler(pn.normalized, incName.normalized) >= 0.85;
+  });
+  let best;
+  for (const p of candidates) {
+    const { score, features } = scorePair(inc, p, ctx);
+    if (!best || score > best.score) best = { p, score, f: features };
+  }
+  if (!best) return { kind: "new" };
+  if (best.score >= AUTO_MERGE_THRESHOLD)
+    return { kind: "probable", personId: best.p.id, score: best.score, features: best.f };
+  if (best.score >= SUGGEST_THRESHOLD)
+    return { kind: "suggest", personId: best.p.id, score: best.score, features: best.f };
+  return { kind: "new" };
+}
+function sameMailboxOtherName(owner, incName, people, ctx) {
+  if (!incName.full || !incName.first || !incName.last || isPlaceholderName(owner)) return [];
+  const own = parseName(owner.displayName);
+  if (fold(own.last) !== fold(incName.last)) return [];
+  const ownRel = firstNameRelation(own.first, incName.first);
+  if (ownRel === "different" && !isFirstNameVariant(own.first, incName.first)) return [];
+  const out = [];
+  for (const p of people) {
+    if (p.id === owner.id || isPlaceholderName(p) || rejected(ctx, owner.id, p.id)) continue;
+    if (p.primaryEmail || p.emails.length || !(p.linkedinSlug || p.linkedinUrl || p.linkedinMemberId))
+      continue;
+    if (parseName(p.displayName).normalized !== incName.normalized) continue;
+    out.push(p.id);
+  }
+  return out;
+}
+
+// packages/core/src/server/mappers.ts
+var u = (v) => v === null ? void 0 : v;
+function compact(o) {
+  const out = {};
+  for (const [k, v] of Object.entries(o)) if (v !== void 0) out[k] = v;
+  return out;
+}
+function tieScoreFromRow(r) {
+  return {
+    score: r.score,
+    band: r.band,
+    explanation: r.explanation,
+    contributions: r.contributions,
+    features: r.features,
+    modelVersion: r.model_version
+  };
+}
+function personFromRow(r, extra = {}) {
+  const emails = [
+    ...new Set(
+      [
+        r.primary_email,
+        ...(extra.identities ?? []).filter((i) => i.kind === "email").map((i) => i.value_norm)
+      ].filter((e) => !!e)
+    )
+  ];
+  const tie = extra.tieScore ? tieScoreFromRow(extra.tieScore) : void 0;
+  return compact({
+    id: r.id,
+    userId: r.user_id,
+    displayName: r.display_name,
+    firstName: r.first_name ?? "",
+    lastName: r.last_name ?? "",
+    nameNormalized: r.name_norm,
+    primaryEmail: u(r.primary_email),
+    emails,
+    linkedinUrl: u(r.linkedin_url),
+    linkedinSlug: u(r.linkedin_slug),
+    linkedinMemberId: u(r.linkedin_member_id),
+    headline: u(r.headline),
+    currentTitle: u(r.title),
+    currentOrganizationId: u(r.org_id),
+    currentOrganizationRaw: u(r.org_raw),
+    location: u(r.location),
+    photoUrl: u(r.photo_url),
+    school: u(r.school),
+    isAlumni: r.is_alumni,
+    relationshipType: r.relationship_type ?? "unknown",
+    strength: tie ? tie.score / 100 : r.strength,
+    strengthBreakdown: tie ? { raw: 0, recency: 0, counts: {}, tieScore: tie } : void 0,
+    tieScore: tie?.score,
+    tieBand: tie?.band,
+    tieExplanation: tie?.explanation,
+    firstSeenAt: u(r.first_seen_at),
+    lastInteractionAt: u(r.last_interaction_at),
+    interactionCount: extra.interactionCount ?? 0,
+    sources: r.sources,
+    isHuman: true,
+    hiddenAt: u(r.hidden_at),
+    doNotContact: r.do_not_contact || void 0,
+    summary: u(r.summary),
+    tags: r.tags,
+    notes: u(r.notes),
+    createdAt: r.created_at,
+    updatedAt: r.updated_at
+  });
+}
+
+// supabase/functions/_shared/ingest/util.ts
+function iso(v) {
+  if (v === null || v === void 0 || v === "") return null;
+  const d = v instanceof Date ? v : new Date(String(v));
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+async function loadSelf(db2, userId) {
+  const [u2] = await db2.sql`
+    select email, full_name, first_name, last_name, school, current_city, timezone, settings
+      from orbit.users where id = ${userId}::uuid`;
+  if (!u2) throw new Error("user not found");
+  let [self] = await db2.sql`
+    select id from orbit.people where user_id = ${userId}::uuid and is_self`;
+  if (!self) {
+    const name = u2.full_name ?? u2.email;
+    await db2.sql`
+      insert into orbit.people (user_id, is_self, display_name, first_name, last_name, name_norm, primary_email,
+                                sources, first_seen_at)
+      values (${userId}::uuid, true, ${name}, ${u2.first_name}, ${u2.last_name}, ${name.toLowerCase()},
+              ${u2.email}, ${["google"]}::text[], now())
+      on conflict (user_id) where is_self do nothing`;
+    [self] = await db2.sql`
+      select id from orbit.people where user_id = ${userId}::uuid and is_self`;
+  }
+  const ids = await db2.sql`
+    select kind, value_norm from orbit.person_identities
+     where user_id = ${userId}::uuid and person_id = ${self.id}::uuid`;
+  const emails = /* @__PURE__ */ new Set([normalizeEmail(u2.email)]);
+  const memberIds = /* @__PURE__ */ new Set();
+  for (const i of ids) {
+    if (i.kind === "email") emails.add(i.value_norm);
+    if (i.kind === "linkedin_member") memberIds.add(i.value_norm);
+  }
+  return {
+    userId,
+    selfId: self.id,
+    emails,
+    memberIds,
+    fullName: u2.full_name ?? "",
+    firstName: u2.first_name ?? (u2.full_name ?? "").split(" ")[0] ?? "",
+    school: u2.school,
+    currentCity: u2.current_city,
+    timezone: u2.timezone,
+    settings: u2.settings ?? {}
+  };
+}
+var PERSON_COLUMNS = `p.id, p.user_id, p.is_self, p.display_name, p.first_name, p.last_name, p.name_norm,
+  p.primary_email, p.headline, p.title, p.org_id, p.org_raw, p.location, p.timezone, p.school, p.is_alumni,
+  p.photo_url, p.linkedin_url, p.linkedin_slug, p.linkedin_member_id, p.relationship_type, p.sources,
+  p.first_seen_at, p.last_interaction_at, p.strength, p.summary, p.tags, p.notes, p.do_not_contact, p.hidden_at,
+  p.merged_into, p.created_at, p.updated_at, p.deleted_at`;
+function toPerson(row, identities = []) {
+  const r = {
+    ...row,
+    first_seen_at: iso(row.first_seen_at),
+    last_interaction_at: iso(row.last_interaction_at),
+    hidden_at: iso(row.hidden_at),
+    created_at: iso(row.created_at) ?? (/* @__PURE__ */ new Date(0)).toISOString(),
+    updated_at: iso(row.updated_at) ?? (/* @__PURE__ */ new Date(0)).toISOString(),
+    deleted_at: iso(row.deleted_at),
+    strength: Number(row.strength ?? 0),
+    sources: row.sources ?? [],
+    tags: row.tags ?? []
+  };
+  return personFromRow(r, {
+    identities: identities.map((i) => ({ kind: i.kind, value_norm: i.value_norm }))
+  });
+}
+
+// supabase/functions/_shared/ingest/people.ts
+var CORE_SOURCE = {
+  gmail: "gmail",
+  calendar: "calendar",
+  contacts: "gmail",
+  linkedin: "linkedin_csv"
+};
+function isHandle(name, email) {
+  const t = (name ?? "").trim();
+  if (!t || /\s/.test(t)) return false;
+  if (t.includes("@")) return true;
+  if (/^[\p{L}\d]+(?:[._][\p{L}\d]+)+$/u.test(t)) return true;
+  if (!email) return false;
+  const squash = (x) => x.toLowerCase().replace(/[._+-]/g, "");
+  return squash(t) === squash(emailLocalPart(email.toLowerCase()).replace(/\+.*$/, ""));
+}
+function notAPerson(email, name) {
+  if (!email?.includes("@")) return false;
+  return isRoleAddress(email) || isAtsSender(email) || isAutomatedSender(email, {}, [], name) || !!name && isRoleName(name);
+}
+function slugOf(i) {
+  if (i.linkedinSlug) return i.linkedinSlug.toLowerCase();
+  return linkedInSlug(i.linkedinUrl) ?? void 0;
+}
+function urlOf(i) {
+  const slug = slugOf(i);
+  return normalizeLinkedInUrl(i.linkedinUrl) ?? (slug ? `https://www.linkedin.com/in/${slug}` : void 0);
+}
+function nameOf(i) {
+  if (i.firstName || i.lastName) return nameFromParts(i.firstName, i.lastName);
+  if (!i.name || isHandle(i.name, i.email)) return parseName("");
+  return parseName(i.name);
+}
+async function upsertOrganization(db2, userId, name) {
+  const norm = normalizeCompany(name);
+  if (!name || !norm) return null;
+  const [row] = await db2.sql`
+    insert into orbit.organizations (user_id, name, name_norm) values (${userId}::uuid, ${name.trim()}, ${norm})
+    on conflict (user_id, name_norm) do update set name = orbit.organizations.name
+    returning id`;
+  return row?.id ?? null;
+}
+async function resolvePeople(db2, userId, input, opts) {
+  const result = { byKey: /* @__PURE__ */ new Map(), created: /* @__PURE__ */ new Set(), merged: /* @__PURE__ */ new Map() };
+  const create = opts.create ?? true;
+  const items = [];
+  const seenKey = /* @__PURE__ */ new Set();
+  for (const raw of input) {
+    if (seenKey.has(raw.key)) continue;
+    seenKey.add(raw.key);
+    items.push(raw);
+  }
+  if (!items.length) return result;
+  const emails = [...new Set(items.filter((i) => i.email).map((i) => normalizeEmail(i.email)))];
+  const members = [...new Set(items.map((i) => i.linkedinMemberId).filter((x) => !!x))];
+  const slugs = [...new Set(items.map(slugOf).filter((x) => !!x))];
+  const hits = await db2.sql`
+    select pi.kind, pi.value_norm as value, coalesce(p.merged_into, p.id) as person_id
+      from orbit.person_identities pi join orbit.people p on p.id = pi.person_id
+     where pi.user_id = ${userId}::uuid and p.deleted_at is null
+       and ((pi.kind = 'email' and pi.value_norm = any(${emails}::text[]))
+         or (pi.kind = 'linkedin_member' and pi.value_norm = any(${members}::text[]))
+         or (pi.kind = 'linkedin_slug' and pi.value_norm = any(${slugs}::text[])))
+    union all
+    select 'email', p.primary_email, coalesce(p.merged_into, p.id) from orbit.people p
+     where p.user_id = ${userId}::uuid and p.deleted_at is null and p.primary_email = any(${emails}::text[])
+    union all
+    select 'linkedin_member', p.linkedin_member_id, coalesce(p.merged_into, p.id) from orbit.people p
+     where p.user_id = ${userId}::uuid and p.deleted_at is null and p.linkedin_member_id = any(${members}::text[])
+    union all
+    select 'linkedin_slug', p.linkedin_slug, coalesce(p.merged_into, p.id) from orbit.people p
+     where p.user_id = ${userId}::uuid and p.deleted_at is null and p.linkedin_slug = any(${slugs}::text[])`;
+  const byIdentity = new Map(hits.map((h) => [`${h.kind}:${h.value}`, h.person_id]));
+  const found = (i) => i.linkedinMemberId && byIdentity.get(`linkedin_member:${i.linkedinMemberId}`) || i.email && byIdentity.get(`email:${normalizeEmail(i.email)}`) || slugOf(i) && byIdentity.get(`linkedin_slug:${slugOf(i)}`) || void 0;
+  const misses = [];
+  const known = [];
+  for (const i of items) {
+    const pid = found(i);
+    if (pid) known.push({ item: i, personId: pid });
+    else if (!(i.email && notAPerson(i.email, i.name) && !i.linkedinMemberId && !slugOf(i))) misses.push(i);
+  }
+  const names = /* @__PURE__ */ new Set();
+  const lasts = /* @__PURE__ */ new Set();
+  const domains = /* @__PURE__ */ new Set();
+  for (const i of [...misses, ...known.filter((k) => k.item.email).map((k) => k.item)]) {
+    const n = nameOf(i);
+    if (n.normalized) names.add(n.normalized);
+    if (n.last) lasts.add(n.last.toLowerCase());
+    if (i.email) {
+      const d = emailDomain(normalizeEmail(i.email));
+      if (d && !PERSONAL_EMAIL_DOMAINS.has(d)) domains.add(d);
+    }
+  }
+  const knownIds = [...new Set(known.map((k) => k.personId))];
+  const rows = misses.length || knownIds.length ? await db2.query(
+    `select ${PERSON_COLUMNS} from orbit.people p
+          where p.user_id = $1::uuid and p.deleted_at is null and p.merged_into is null and not p.is_self
+            and (p.name_norm = any($2::text[]) or lower(p.last_name) = any($3::text[]) or p.id = any($5::uuid[])
+              or exists (select 1 from orbit.person_identities pi where pi.person_id = p.id and pi.kind = 'email'
+                           and split_part(pi.value_norm, '@', 2) = any($4::text[])))
+          limit 5000`,
+    [userId, [...names], [...lasts], [...domains], knownIds]
+  ) : [];
+  const ids = rows.map((r) => r.id);
+  const idRows = ids.length ? await db2.sql`
+        select person_id, kind, value_norm from orbit.person_identities
+         where user_id = ${userId}::uuid and person_id = any(${ids}::uuid[])` : [];
+  const idsBy = /* @__PURE__ */ new Map();
+  for (const r of idRows) {
+    const arr = idsBy.get(r.person_id) ?? [];
+    arr.push(r);
+    idsBy.set(r.person_id, arr);
+  }
+  const people = rows.map((r) => toPerson(r, idsBy.get(r.id)));
+  const dnm = await db2.sql`
+    select person_a, person_b from orbit.do_not_merge where user_id = ${userId}::uuid`;
+  const orgs = await db2.sql`
+    select id, domains from orbit.organizations
+     where user_id = ${userId}::uuid and cardinality(domains) > 0`;
+  const ctx = {
+    db: db2,
+    userId,
+    now: opts.now,
+    people,
+    doNotMerge: new Set(dnm.map((d) => doNotMergeKey(d.person_a, d.person_b))),
+    orgDomains: new Map(orgs.map((o) => [o.id, o.domains])),
+    result
+  };
+  for (const k of known) {
+    result.byKey.set(k.item.key, k.personId);
+    await attach(ctx, k.personId, k.item);
+    const n = nameOf(k.item);
+    if (!k.item.email || !n.full) continue;
+    const d = resolveIdentity(
+      { email: k.item.email, displayName: n.full, source: CORE_SOURCE[k.item.source] },
+      { people: ctx.people, doNotMerge: ctx.doNotMerge, orgDomains: ctx.orgDomains }
+    );
+    if (d.kind === "match" && d.personId === k.personId)
+      for (const other of d.mergeWith ?? []) await absorb(ctx, k.personId, other);
+  }
+  for (const i of misses) {
+    const again = ctx.people.find(
+      (p) => i.email && p.emails.includes(normalizeEmail(i.email)) || i.linkedinMemberId && p.linkedinMemberId === i.linkedinMemberId
+    );
+    if (again) {
+      result.byKey.set(i.key, again.id);
+      await attach(ctx, again.id, i);
+      continue;
+    }
+    const n = nameOf(i);
+    const inc = {
+      email: i.email,
+      linkedinUrl: urlOf(i),
+      displayName: n.full || void 0,
+      firstName: i.firstName,
+      lastName: i.lastName,
+      companyRaw: i.companyRaw,
+      title: i.title,
+      source: CORE_SOURCE[i.source]
+    };
+    const d = resolveIdentity(inc, {
+      people: ctx.people,
+      doNotMerge: ctx.doNotMerge,
+      orgDomains: ctx.orgDomains
+    });
+    if (d.kind === "role") continue;
+    if (d.kind === "match" || d.kind === "probable") {
+      result.byKey.set(i.key, d.personId);
+      await attach(ctx, d.personId, i);
+      if (d.kind === "match") for (const other of d.mergeWith ?? []) await absorb(ctx, d.personId, other);
+      continue;
+    }
+    if (!create) continue;
+    const pid = await createPerson(ctx, i);
+    result.byKey.set(i.key, pid);
+    if (d.kind === "suggest") await suggestMerge(db2, userId, d.personId, pid, d.score, d.features);
+  }
+  return result;
+}
+async function absorb(ctx, survivor, loser) {
+  if (!await mergePeople(ctx.db, ctx.userId, survivor, loser)) return;
+  ctx.result.merged.set(loser, survivor);
+  const gone = ctx.people.find((p) => p.id === loser);
+  const kept = ctx.people.find((p) => p.id === survivor);
+  if (gone && kept) {
+    kept.linkedinMemberId ??= gone.linkedinMemberId;
+    kept.linkedinSlug ??= gone.linkedinSlug;
+    kept.linkedinUrl ??= gone.linkedinUrl;
+    kept.currentOrganizationRaw ??= gone.currentOrganizationRaw;
+  }
+  ctx.people = ctx.people.filter((p) => p.id !== loser);
+  for (const [k, v] of ctx.result.byKey) if (v === loser) ctx.result.byKey.set(k, survivor);
+}
+async function insertIdentities(ctx, personId, i) {
+  const src = i.identitySource ?? i.source;
+  const at = i.identityAt ?? ctx.now.toISOString();
+  const rows = [];
+  if (i.email?.includes("@")) rows.push(["email", normalizeEmail(i.email), i.email.trim()]);
+  if (i.linkedinMemberId) rows.push(["linkedin_member", i.linkedinMemberId, i.linkedinMemberId]);
+  const slug = slugOf(i);
+  if (slug) rows.push(["linkedin_slug", slug, urlOf(i) ?? slug]);
+  if (i.unipileAttendeeId) rows.push(["unipile_attendee", i.unipileAttendeeId, i.unipileAttendeeId]);
+  for (const [kind, norm, raw] of rows)
+    await ctx.db.sql`
+      insert into orbit.person_identities (user_id, person_id, kind, value_norm, value_raw, source, created_at)
+      values (${ctx.userId}::uuid, ${personId}::uuid, ${kind}, ${norm}, ${raw}, ${src}, ${at}::timestamptz)
+      on conflict (user_id, kind, value_norm) do nothing`;
+}
+async function attach(ctx, personId, i) {
+  await insertIdentities(ctx, personId, i);
+  const p = ctx.people.find((x) => x.id === personId);
+  const n = nameOf(i);
+  const rename = !!p && !!n.full && isPlaceholderName(p);
+  const orgId = i.companyRaw ? await upsertOrganization(ctx.db, ctx.userId, i.companyRaw) : null;
+  const slug = slugOf(i) ?? null;
+  await ctx.db.sql`
+    update orbit.people set
+      display_name = case when ${rename}::boolean then ${n.full} else display_name end,
+      first_name = case when ${rename}::boolean then ${n.first || null} else first_name end,
+      last_name = case when ${rename}::boolean then ${n.last || null} else last_name end,
+      name_norm = case when ${rename}::boolean then ${n.normalized || null} else name_norm end,
+      primary_email = coalesce(primary_email, ${i.email ? normalizeEmail(i.email) : null}),
+      linkedin_member_id = coalesce(linkedin_member_id, ${i.linkedinMemberId ?? null}),
+      linkedin_slug = coalesce(linkedin_slug, ${slug}),
+      linkedin_url = coalesce(linkedin_url, ${urlOf(i) ?? null}),
+      headline = coalesce(headline, ${i.headline ?? null}),
+      title = coalesce(title, ${i.title ?? null}),
+      org_id = coalesce(org_id, ${orgId}::uuid),
+      org_raw = coalesce(org_raw, ${orgId ? i.companyRaw.trim() : null}),
+      location = coalesce(location, ${i.location ?? null}),
+      photo_url = coalesce(photo_url, ${i.photoUrl ?? null}),
+      sources = case when ${i.source} = any(sources) then sources else sources || ${[i.source]}::text[] end,
+      first_seen_at = least(first_seen_at, ${i.seenAt ?? null}::timestamptz)
+    where id = ${personId}::uuid and user_id = ${ctx.userId}::uuid and not is_self`;
+  if (p) {
+    if (i.email && !p.emails.includes(normalizeEmail(i.email))) p.emails.push(normalizeEmail(i.email));
+    if (rename) {
+      p.displayName = n.full;
+      p.firstName = n.first;
+      p.lastName = n.last;
+      p.nameNormalized = n.normalized;
+    }
+    p.linkedinMemberId ??= i.linkedinMemberId;
+    p.linkedinSlug ??= slug ?? void 0;
+  }
+}
+async function createPerson(ctx, i) {
+  const n = nameOf(i);
+  const email = i.email ? normalizeEmail(i.email) : void 0;
+  const handle = i.email ? emailLocalPart(i.email.trim().toLowerCase().replace(/^.*</, "").replace(/>.*$/, "")).replace(
+    /\+.*$/,
+    ""
+  ) : "";
+  const display = n.full || handle || slugOf(i) || "Unknown";
+  const orgId = i.companyRaw ? await upsertOrganization(ctx.db, ctx.userId, i.companyRaw) : null;
+  const slug = slugOf(i) ?? null;
+  const [row] = await ctx.db.sql`
+    insert into orbit.people (user_id, display_name, first_name, last_name, name_norm, primary_email, headline, title,
+                              org_id, org_raw, location, photo_url, linkedin_url, linkedin_slug, linkedin_member_id,
+                              relationship_type, sources, first_seen_at)
+    values (${ctx.userId}::uuid, ${display}, ${n.first || null}, ${n.last || null},
+            ${n.normalized || display.toLowerCase()}, ${email ?? null}, ${i.headline ?? null}, ${i.title ?? null},
+            ${orgId}::uuid, ${orgId ? i.companyRaw.trim() : null}, ${i.location ?? null}, ${i.photoUrl ?? null},
+            ${urlOf(i) ?? null}, ${slug}, ${i.linkedinMemberId ?? null},
+            ${/recruit/i.test(i.title ?? "") ? "recruiter" : null}, ${[i.source]}::text[],
+            ${i.seenAt ?? ctx.now.toISOString()}::timestamptz)
+    returning *`;
+  const id = row.id;
+  await insertIdentities(ctx, id, i);
+  ctx.people.push(toPerson({ ...row, id }, email ? [{ kind: "email", value_norm: email }] : []));
+  ctx.result.created.add(id);
+  return id;
+}
+async function suggestMerge(db2, userId, a, b, score, features) {
+  const open = await db2.sql`
+    select 1 from orbit.merge_suggestions
+     where user_id = ${userId}::uuid and status = 'open'
+       and ((person_a = ${a}::uuid and person_b = ${b}::uuid) or (person_a = ${b}::uuid and person_b = ${a}::uuid))`;
+  if (open.length) return;
+  await db2.sql`
+    insert into orbit.merge_suggestions (user_id, person_a, person_b, score, features)
+    values (${userId}::uuid, ${a}::uuid, ${b}::uuid, ${score}::real, ${features}::jsonb)`;
+}
+var dedupeArray = (col) => `array(select distinct x from unnest(array_replace(${col}, $2::uuid, $3::uuid)) x)`;
+async function mergePeople(db2, userId, survivor, loser) {
+  if (survivor === loser) return false;
+  const [a, b] = survivor < loser ? [survivor, loser] : [loser, survivor];
+  const blocked = await db2.sql`
+    select 1 from orbit.do_not_merge where user_id = ${userId}::uuid
+       and ((person_a = ${a}::uuid and person_b = ${b}::uuid) or (person_a = ${b}::uuid and person_b = ${a}::uuid))`;
+  if (blocked.length) return false;
+  return db2.begin(async (tx) => {
+    const p = [userId, loser, survivor];
+    await tx.query(
+      `update orbit.person_identities set person_id = $3::uuid where user_id = $1::uuid and person_id = $2::uuid`,
+      p
+    );
+    await tx.query(
+      `update orbit.people s set
+         primary_email = coalesce(s.primary_email, l.primary_email), headline = coalesce(s.headline, l.headline),
+         title = coalesce(s.title, l.title), org_id = coalesce(s.org_id, l.org_id), org_raw = coalesce(s.org_raw, l.org_raw),
+         location = coalesce(s.location, l.location), school = coalesce(s.school, l.school),
+         photo_url = coalesce(s.photo_url, l.photo_url), linkedin_url = coalesce(s.linkedin_url, l.linkedin_url),
+         linkedin_slug = coalesce(s.linkedin_slug, l.linkedin_slug),
+         linkedin_member_id = coalesce(s.linkedin_member_id, l.linkedin_member_id),
+         sources = array(select distinct x from unnest(s.sources || l.sources) x),
+         first_seen_at = least(s.first_seen_at, l.first_seen_at),
+         last_interaction_at = greatest(s.last_interaction_at, l.last_interaction_at),
+         do_not_contact = s.do_not_contact or l.do_not_contact
+        from orbit.people l
+       where s.id = $3::uuid and l.id = $2::uuid and s.user_id = $1::uuid and l.user_id = $1::uuid`,
+      p
+    );
+    await tx.query(
+      `update orbit.people set merged_into = $3::uuid, primary_email = null, linkedin_member_id = null,
+         linkedin_slug = null where id = $2::uuid and user_id = $1::uuid`,
+      p
+    );
+    await tx.query(
+      `update orbit.messages set from_person_id = $3::uuid where user_id = $1::uuid and from_person_id = $2::uuid`,
+      p
+    );
+    await tx.query(
+      `update orbit.messages set to_person_ids = ${dedupeArray("to_person_ids")},
+         cc_person_ids = ${dedupeArray("cc_person_ids")}
+       where user_id = $1::uuid and ($2::uuid = any(to_person_ids) or $2::uuid = any(cc_person_ids))`,
+      p
+    );
+    await tx.query(
+      `update orbit.threads set participant_person_ids = ${dedupeArray("participant_person_ids")}
+        where user_id = $1::uuid and $2::uuid = any(participant_person_ids)`,
+      p
+    );
+    await tx.query(
+      `update orbit.calendar_events set attendee_person_ids = ${dedupeArray("attendee_person_ids")}
+        where user_id = $1::uuid and $2::uuid = any(attendee_person_ids)`,
+      p
+    );
+    await tx.query(
+      `update orbit.notes set person_ids = ${dedupeArray("person_ids")}
+        where user_id = $1::uuid and $2::uuid = any(person_ids)`,
+      p
+    );
+    for (const table of ["affiliations", "chats", "drafts", "facts", "recommendations", "memories"])
+      await tx.query(
+        `update orbit.${table} set person_id = $3::uuid where user_id = $1::uuid and person_id = $2::uuid`,
+        p
+      );
+    await tx.query(
+      `delete from orbit.dossiers d where d.user_id = $1::uuid and d.person_id = $2::uuid
+         and exists (select 1 from orbit.dossiers s where s.user_id = $1::uuid and s.person_id = $3::uuid)`,
+      p
+    );
+    await tx.query(
+      `update orbit.dossiers set person_id = $3::uuid where user_id = $1::uuid and person_id = $2::uuid`,
+      p
+    );
+    await tx.query(
+      `update orbit.intro_requests set target_person_id = case when target_person_id = $2::uuid then $3::uuid else target_person_id end,
+         introducer_person_id = case when introducer_person_id = $2::uuid then $3::uuid else introducer_person_id end
+       where user_id = $1::uuid and $2::uuid in (target_person_id, introducer_person_id)`,
+      p
+    );
+    await tx.query(
+      `insert into orbit.tie_labels (user_id, person_id, closeness, created_at)
+       select user_id, $3::uuid, closeness, created_at from orbit.tie_labels where user_id = $1::uuid and person_id = $2::uuid
+       on conflict (user_id, person_id) do nothing`,
+      p
+    );
+    await tx.query(
+      `delete from orbit.tie_labels where user_id = $1::uuid and person_id = $2::uuid`,
+      p.slice(0, 2)
+    );
+    await tx.query(
+      `delete from orbit.tie_scores where user_id = $1::uuid and person_id = $2::uuid`,
+      p.slice(0, 2)
+    );
+    await tx.query(
+      `delete from orbit.ties where user_id = $1::uuid and (a_person_id = $2::uuid or b_person_id = $2::uuid)`,
+      p.slice(0, 2)
+    );
+    await tx.query(
+      `update orbit.merge_suggestions set status = 'merged', decided_at = now()
+        where user_id = $1::uuid and status = 'open'
+          and ((person_a = $2::uuid and person_b = $3::uuid) or (person_a = $3::uuid and person_b = $2::uuid))`,
+      p
+    );
+    await tx.query(
+      `delete from orbit.merge_suggestions where user_id = $1::uuid and status = 'open'
+          and (person_a = $2::uuid or person_b = $2::uuid)`,
+      p.slice(0, 2)
+    );
+    await tx.query(
+      `insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+       values ($1::uuid, 'system', 'people.merge', 'people', $3::text, jsonb_build_object('merged', $2::text))`,
+      p
+    );
+    return true;
+  });
+}
+
+// packages/core/src/graph/orgSize.ts
+var KNOWN_SIZES = {};
+var add = (bucket, names) => {
+  for (const n of names) KNOWN_SIZES[normalizeCompany(n)] = bucket;
+};
+add("10001+", [
+  "Google",
+  "Alphabet",
+  "Meta",
+  "Facebook",
+  "Amazon",
+  "Amazon Web Services",
+  "AWS",
+  "Microsoft",
+  "Apple",
+  "Netflix",
+  "Oracle",
+  "Salesforce",
+  "Adobe",
+  "IBM",
+  "Intel",
+  "NVIDIA",
+  "Cisco",
+  "Uber",
+  "Tesla",
+  "SpaceX",
+  "Qualcomm",
+  "Intuit",
+  "PayPal",
+  "ServiceNow",
+  "Workday",
+  "VMware",
+  "Dell",
+  "HP",
+  "Accenture",
+  "Deloitte",
+  "PwC",
+  "PricewaterhouseCoopers",
+  "EY",
+  "Ernst & Young",
+  "KPMG",
+  "McKinsey & Company",
+  "McKinsey",
+  "Boston Consulting Group",
+  "BCG",
+  "Bain & Company",
+  "Bain",
+  "Booz Allen Hamilton",
+  "Capgemini",
+  "Goldman Sachs",
+  "JPMorgan Chase",
+  "JP Morgan",
+  "J.P. Morgan",
+  "Morgan Stanley",
+  "Bank of America",
+  "Citi",
+  "Citigroup",
+  "Wells Fargo",
+  "Barclays",
+  "UBS",
+  "Deutsche Bank",
+  "HSBC",
+  "BlackRock",
+  "Fidelity Investments",
+  "Vanguard",
+  "Capital One",
+  "American Express",
+  "Visa",
+  "Mastercard",
+  "Charles Schwab",
+  "State Street",
+  "Procter & Gamble",
+  "PepsiCo",
+  "Coca-Cola",
+  "Johnson & Johnson",
+  "Pfizer",
+  "Walmart",
+  "Target",
+  "Nike",
+  "Disney",
+  "The Walt Disney Company",
+  "Comcast",
+  "Verizon",
+  "AT&T",
+  "Boeing",
+  "Lockheed Martin",
+  "General Electric",
+  "GE",
+  "General Motors",
+  "Ford",
+  "ByteDance",
+  "TikTok",
+  "Samsung",
+  "Bloomberg",
+  "LinkedIn",
+  "Shopify",
+  "Booking.com"
+]);
+add("5001-10000", [
+  "Stripe",
+  "Airbnb",
+  "Snap",
+  "Snapchat",
+  "Spotify",
+  "Block",
+  "Square",
+  "DoorDash",
+  "Lyft",
+  "Datadog",
+  "Atlassian",
+  "Palantir",
+  "Coinbase",
+  "Robinhood",
+  "Pinterest",
+  "Dropbox",
+  "Instacart",
+  "Lazard",
+  "Evercore",
+  "Jane Street",
+  "Citadel",
+  "Two Sigma",
+  "Oliver Wyman",
+  "LEK Consulting",
+  "Kearney"
+]);
+add("1001-5000", [
+  "Figma",
+  "Anthropic",
+  "OpenAI",
+  "Ramp",
+  "Brex",
+  "Databricks",
+  "Snowflake",
+  "Plaid",
+  "Notion",
+  "Duolingo",
+  "Reddit",
+  "Discord",
+  "Scale AI",
+  "Asana",
+  "Airtable",
+  "Hudson River Trading",
+  "DE Shaw",
+  "D. E. Shaw",
+  "Point72",
+  "Centerview Partners",
+  "PJT Partners",
+  "Moelis",
+  "Moelis & Company",
+  "Perella Weinberg",
+  "Guggenheim Partners",
+  "Blackstone",
+  "KKR",
+  "Apollo",
+  "Carlyle"
+]);
+add("501-1000", ["Vercel", "Retool", "Rippling", "Mercury", "Jump Trading", "Optiver", "Five Rings"]);
+add("201-500", ["Linear", "Sequoia Capital", "Andreessen Horowitz", "a16z", "Benchmark", "Accel"]);
+
+// packages/core/src/graph/ties.ts
+var YEAR = 365.25 * 864e5;
+
+// supabase/functions/_shared/ingest/ties.ts
+var INTERACTION_KINDS = [
+  "email_exchange",
+  "email_cc",
+  "email_cothread",
+  "meeting_coattendee"
+];
+var AFFILIATION_KINDS = ["co_tenure", "same_school_cohort", "same_current_company", "same_city"];
+var INFERRED_KINDS = [...INTERACTION_KINDS, ...AFFILIATION_KINDS];
+
+// supabase/functions/_shared/ingest/gmail.ts
+async function recountThread(db2, threadId, self) {
+  await db2.sql`
+    update orbit.threads t set
+      message_count = s.n, first_at = s.first_at, last_at = s.last_at, last_direction = s.dir,
+      participant_person_ids = coalesce(s.pids, '{}'),
+      participant_count = greatest(coalesce(s.pc, 0), cardinality(coalesce(s.pids, '{}')))
+    from (
+      select count(*)::int as n, min(m.sent_at) as first_at, max(m.sent_at) as last_at,
+             (array_agg(m.direction order by m.sent_at desc))[1] as dir,
+             (select array_agg(distinct x) from orbit.messages m2,
+                     unnest(array[m2.from_person_id] || m2.to_person_ids || m2.cc_person_ids) x
+               where m2.thread_id = ${threadId}::uuid and x is not null and x <> ${self.selfId}::uuid) as pids,
+             (select count(distinct a)::int from orbit.messages m3,
+                     unnest(array[m3.from_addr] || m3.to_addrs || m3.cc_addrs) a
+               where m3.thread_id = ${threadId}::uuid and a is not null
+                 and not (a = any(${[...self.emails]}::text[]))) as pc
+        from orbit.messages m where m.thread_id = ${threadId}::uuid
+    ) s
+    where t.id = ${threadId}::uuid`;
+}
+
+// supabase/functions/_shared/ingest/linkedin.ts
+var CHAT_MAX_ATTENDEES = 3;
+async function ingestRelations(db2, userId, relations, now) {
+  const items = relations.map((r) => {
+    const { title, company } = parseHeadline(r.headline);
+    return {
+      key: `li:${r.memberId}`,
+      linkedinMemberId: r.memberId,
+      linkedinSlug: r.publicIdentifier ?? void 0,
+      linkedinUrl: normalizeLinkedInUrl(r.profileUrl) ?? void 0,
+      firstName: r.firstName ?? void 0,
+      lastName: r.lastName ?? void 0,
+      name: r.fullName ?? void 0,
+      headline: r.headline ?? void 0,
+      title,
+      companyRaw: company,
+      photoUrl: r.photoUrl ?? void 0,
+      source: "linkedin",
+      seenAt: r.connectedAt ?? now.toISOString(),
+      identitySource: "linkedin_relation",
+      identityAt: r.connectedAt
+    };
+  });
+  const res = await resolvePeople(db2, userId, items, { now });
+  const byMember = /* @__PURE__ */ new Map();
+  const members = relations.map((r) => r.memberId);
+  await db2.sql`
+    update orbit.person_identities set source = 'linkedin_relation'
+     where user_id = ${userId}::uuid and kind = 'linkedin_member' and value_norm = any(${members}::text[])
+       and source <> 'linkedin_relation'`;
+  for (const [i, r] of relations.entries()) {
+    const pid = res.byKey.get(items[i].key);
+    if (!pid) continue;
+    byMember.set(r.memberId, pid);
+    const { title, company } = parseHeadline(r.headline);
+    if (company) await upsertCurrentEmployment(db2, userId, pid, company, title, "linkedin", now);
+  }
+  return { byMember, created: res.created.size };
+}
+async function upsertCurrentEmployment(db2, userId, personId, company, title, source, now) {
+  const orgId = await upsertOrganization(db2, userId, company);
+  if (!orgId) return;
+  const current = await db2.sql`
+    select id, org_id, source from orbit.affiliations
+     where user_id = ${userId}::uuid and person_id = ${personId}::uuid and kind = 'employment' and is_current`;
+  const same = current.find((a) => a.org_id === orgId);
+  if (same) {
+    if (title)
+      await db2.sql`update orbit.affiliations set title = coalesce(title, ${title}) where id = ${same.id}::uuid`;
+    return;
+  }
+  const today = now.toISOString().slice(0, 10);
+  await db2.sql`
+    update orbit.affiliations set is_current = false, end_date = coalesce(end_date, ${today}::date)
+     where user_id = ${userId}::uuid and person_id = ${personId}::uuid and kind = 'employment' and is_current
+       and source = ${source}`;
+  await db2.sql`
+    insert into orbit.affiliations (user_id, person_id, org_id, org_raw, kind, title, is_current, source)
+    values (${userId}::uuid, ${personId}::uuid, ${orgId}::uuid, ${company.trim()}, 'employment', ${title ?? null},
+            true, ${source})`;
+  await db2.sql`
+    update orbit.people set org_id = ${orgId}::uuid, org_raw = ${company.trim()}, title = coalesce(${title ?? null}, title)
+     where id = ${personId}::uuid and user_id = ${userId}::uuid and not is_self`;
+}
+function isOwnMessage(m, ownIds) {
+  return m.isSender === true || m.isSender === 1 || !!m.senderId && ownIds.has(m.senderId);
+}
+async function storeChat(db2, userId, self, chat, messages, now, ownIds) {
+  const others = chat.attendees.filter((a) => !a.isSelf && !(a.providerId && ownIds.has(a.providerId)));
+  const items = others.filter((a) => a.providerId).map((a) => ({
+    key: `li:${a.providerId}`,
+    linkedinMemberId: a.providerId,
+    unipileAttendeeId: a.attendeeId ?? void 0,
+    linkedinUrl: normalizeLinkedInUrl(a.profileUrl) ?? void 0,
+    name: a.name ?? void 0,
+    headline: a.headline ?? void 0,
+    source: "linkedin",
+    identitySource: "linkedin_chat"
+  }));
+  const res = await resolvePeople(db2, userId, items, { now });
+  const personOf = (providerId) => providerId ? res.byKey.get(`li:${providerId}`) : void 0;
+  const otherIds = [...new Set(others.map((a) => personOf(a.providerId)).filter((x) => !!x))];
+  const [thread] = await db2.sql`
+    insert into orbit.threads (user_id, provider, external_id, category, is_networking)
+    values (${userId}::uuid, 'linkedin', ${chat.id}, 'networking', true)
+    on conflict (user_id, provider, external_id) do update set is_networking = true
+    returning id`;
+  const threadId = thread.id;
+  const out = { threadId, inbound: [], inserted: 0, personIds: otherIds };
+  for (const m of messages) {
+    if (m.skip) continue;
+    const text = (m.text ?? "").trim();
+    const sentAt = unipileTime(m.timestamp ?? null);
+    if (!text || !sentAt) continue;
+    const own = isOwnMessage(m, ownIds);
+    const from = own ? null : personOf(m.senderId) ?? (otherIds.length === 1 ? otherIds[0] : null);
+    const to = own ? otherIds : [];
+    const [row] = await db2.sql`
+      insert into orbit.messages (user_id, thread_id, provider, external_id, direction, from_person_id, to_person_ids,
+                                  sent_at, snippet, body_text)
+      values (${userId}::uuid, ${threadId}::uuid, 'linkedin', ${m.id}, ${own ? "out" : "in"}, ${from}::uuid,
+              ${to}::uuid[], ${sentAt}::timestamptz, ${text.slice(0, 200)}, ${text})
+      on conflict (user_id, provider, external_id) do nothing
+      returning id`;
+    if (!row) continue;
+    out.inserted++;
+    if (!own) out.inbound.push({ id: row.id, externalId: m.id, sentAt });
+  }
+  await recountThread(db2, threadId, self);
+  if (otherIds.length)
+    await db2.sql`
+      update orbit.threads set
+        participant_person_ids = array(select distinct x from unnest(participant_person_ids || ${otherIds}::uuid[]) x),
+        participant_count = greatest(participant_count,
+          cardinality(array(select distinct x from unnest(participant_person_ids || ${otherIds}::uuid[]) x)))
+       where id = ${threadId}::uuid`;
+  return out;
+}
+
 // supabase/functions/_shared/queue.ts
 var KIND_QUEUE = {
   "send.draft": "orbit_send",
@@ -220,7 +3609,7 @@ function makeWebhookHandler(deps) {
         if (!deps.unipileSecret || !deps.db) return unconfigured();
         if (!await timingSafeEqual(req.headers.get("x-orbit-webhook"), deps.unipileSecret))
           throw new HttpError(401, "unauthorized", "bad signature");
-        const out = await unipileEvent(deps.db, queue(), await body(req));
+        const out = await unipileEvent(deps.db, (db2) => deps.queue ?? sqlQueue(db2), await body(req));
         userId = out.userId;
         res = json(200, { ok: true, result: out.result });
       } else if (path === "/unipile/account") {
@@ -294,6 +3683,69 @@ function accountStatus(message) {
   if (["ERROR", "STOPPED", "PERMISSIONS"].includes(m)) return "error";
   return void 0;
 }
+async function storeLinkedinMessage(db2, queue, userId, body2, chatId, messageId) {
+  const accountUser = str(body2.account_info?.user_id);
+  const sender = body2.sender ?? {};
+  const senderId = str(sender.attendee_provider_id);
+  const self = await loadSelf(db2, userId);
+  const ownIds = /* @__PURE__ */ new Set([...self.memberIds, ...accountUser ? [accountUser] : []]);
+  const own = !!senderId && ownIds.has(senderId);
+  const raw = Array.isArray(body2.attendees) ? body2.attendees : [];
+  const attendees = [];
+  for (const a of [sender, ...raw]) {
+    const providerId = str(a.attendee_provider_id);
+    if (!providerId || attendees.some((x) => x.providerId === providerId)) continue;
+    attendees.push({
+      providerId,
+      attendeeId: str(a.attendee_id) ?? null,
+      name: str(a.attendee_name) ?? null,
+      profileUrl: str(a.attendee_profile_url) ?? null,
+      isSelf: ownIds.has(providerId)
+    });
+  }
+  const people = attendees.filter((a) => !a.isSelf).length + 1;
+  if (people > CHAT_MAX_ATTENDEES) return own ? "own_message" : "group_chat";
+  const stored = await storeChat(
+    db2,
+    userId,
+    self,
+    { id: chatId, attendees },
+    [
+      {
+        id: messageId,
+        text: str(body2.message) ?? null,
+        senderId: senderId ?? null,
+        timestamp: str(body2.timestamp) ?? (/* @__PURE__ */ new Date()).toISOString(),
+        isSender: own
+      }
+    ],
+    /* @__PURE__ */ new Date(),
+    ownIds
+  );
+  if (own) return "own_message";
+  const row = stored.inbound[0];
+  await queue.enqueue({
+    kind: "classify.message",
+    userId,
+    payload: {
+      provider: "linkedin",
+      accountId: body2.account_id,
+      chatId,
+      messageId,
+      messageRowId: row?.id ?? null,
+      timestamp: str(body2.timestamp) ?? null
+    },
+    dedupeKey: `classify:linkedin:${userId}:${messageId}`
+  });
+  if (stored.personIds.length)
+    await queue.enqueue({
+      kind: "score.person",
+      userId,
+      payload: { personIds: stored.personIds },
+      dedupeKey: `score.person:${userId}:message:${messageId}`
+    });
+  return "queued";
+}
 async function firstSeen(db2, eventId) {
   const rows = await db2.sql`
     insert into orbit.webhook_events (provider, event_id) values ('unipile', ${eventId})
@@ -309,7 +3761,7 @@ async function linkedinUser(db2, accountId) {
   return row?.user_id ?? null;
 }
 var str = (v) => typeof v === "string" && v ? v : void 0;
-async function unipileEvent(db2, queue, body2) {
+async function unipileEvent(db2, queueFor2, body2) {
   const status = body2.AccountStatus;
   if (status && typeof status === "object") {
     const userId = await linkedinUser(db2, status.account_id);
@@ -328,42 +3780,46 @@ async function unipileEvent(db2, queue, body2) {
     if (!messageId || !chatId) return { result: "ignored", userId: null };
     const userId = await linkedinUser(db2, body2.account_id);
     if (!userId) return { result: "unknown_account", userId: null };
-    if (!await firstSeen(db2, messageId)) return { result: "duplicate", userId };
-    const own = body2.account_info?.user_id;
-    const sender = body2.sender?.attendee_provider_id;
-    if (own && sender && own === sender) return { result: "own_message", userId };
-    await queue.enqueue({
-      kind: "classify.message",
-      userId,
-      payload: {
-        provider: "linkedin",
-        accountId: body2.account_id,
-        chatId,
-        messageId,
-        timestamp: str(body2.timestamp) ?? null
-      },
-      dedupeKey: `classify:linkedin:${messageId}`
+    const result = await db2.begin(async (tx) => {
+      if (!await firstSeen(tx, messageId)) return "duplicate";
+      return storeLinkedinMessage(tx, queueFor2(tx), userId, body2, chatId, messageId);
     });
-    return { result: "queued", userId };
+    return { result, userId };
   }
   if (event === "new_relation") {
     const providerId = str(body2.user_provider_id);
     const userId = await linkedinUser(db2, body2.account_id);
     if (!providerId || !userId) return { result: userId ? "ignored" : "unknown_account", userId };
-    if (!await firstSeen(db2, `relation:${body2.account_id}:${providerId}`))
-      return { result: "duplicate", userId };
-    await queue.enqueue({
-      kind: "sync.linkedin",
-      userId,
-      payload: {
-        mode: "relation",
-        providerId,
-        publicIdentifier: str(body2.user_public_identifier) ?? null,
-        profileUrl: str(body2.user_profile_url) ?? null
-      },
-      dedupeKey: `linkedin-relation:${userId}:${providerId}`
+    const result = await db2.begin(async (tx) => {
+      if (!await firstSeen(tx, `relation:${body2.account_id}:${providerId}`)) return "duplicate";
+      const now = /* @__PURE__ */ new Date();
+      const r = await ingestRelations(
+        tx,
+        userId,
+        [
+          {
+            memberId: providerId,
+            publicIdentifier: str(body2.user_public_identifier) ?? null,
+            profileUrl: str(body2.user_profile_url) ?? null,
+            fullName: str(body2.user_full_name) ?? null,
+            headline: str(body2.user_headline) ?? null,
+            photoUrl: str(body2.user_picture_url) ?? null,
+            connectedAt: now.toISOString()
+          }
+        ],
+        now
+      );
+      const personIds = [...r.byMember.values()];
+      if (personIds.length)
+        await queueFor2(tx).enqueue({
+          kind: "score.person",
+          userId,
+          payload: { personIds },
+          dedupeKey: `score.person:${userId}:relation:${providerId}`
+        });
+      return "stored";
     });
-    return { result: "queued", userId };
+    return { result, userId };
   }
   return { result: "ignored", userId: null };
 }
@@ -401,7 +3857,12 @@ var env = (name) => Deno.env.get(name) || void 0;
 var dbUrl = env("SUPABASE_DB_URL");
 var db = dbUrl ? connectDb(dbUrl, 2) : void 0;
 var pubsubToken = await resolveSecret(env, db, "ORBIT_PUBSUB_TOKEN", "orbit_pubsub_token");
-var unipileSecret = await resolveSecret(env, db, "ORBIT_UNIPILE_WEBHOOK_SECRET", "orbit_unipile_webhook_secret");
+var unipileSecret = await resolveSecret(
+  env,
+  db,
+  "ORBIT_UNIPILE_WEBHOOK_SECRET",
+  "orbit_unipile_webhook_secret"
+);
 var salt = env("ORBIT_LOG_SALT") ?? ((env("SUPABASE_SERVICE_ROLE_KEY") ?? "").slice(-16) || "orbit");
 Deno.serve(
   makeWebhookHandler({
