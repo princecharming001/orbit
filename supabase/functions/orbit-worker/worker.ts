@@ -5,14 +5,22 @@
  * `kind`, and starts again from the top after every batch, until the queues are empty or the time budget (110 s by
  * default) is spent. A message whose dedupeKey ran successfully in the last 24 hours is dropped. Success deletes the
  * message; failure hides it for 30·2^(read_ct−1) s (30 s, 1, 2, 4, 8 min); a sixth failed read (read_ct > 5) archives
- * it and copies it to orbit.dead_letters. Kinds that later phases implement throw NotImplemented: those messages are
- * dropped as `skipped`, never retried. Every run is a row in orbit.job_runs.
+ * it and copies it to orbit.dead_letters. Kinds that later phases implement throw NotImplemented, and a handler whose
+ * provider is not configured or connected throws JobSkipped: those messages are dropped as `skipped`, never retried.
+ * Every run is a row in orbit.job_runs.
  */
 
 import { isUuid, timingSafeEqual } from '../_shared/crypto.ts';
 import type { Db } from '../_shared/db.ts';
 import { HttpError, json, type Logger, silentLogger, unconfigured } from '../_shared/http.ts';
 import { QUEUES, type Queue, type QueueName, sqlQueue } from '../_shared/queue.ts';
+import { calendarHandlers } from './handlers/calendar.ts';
+import { classifyHandlers } from './handlers/classify.ts';
+import { contactsHandlers } from './handlers/contacts.ts';
+import { type HandlerDeps, JobSkipped } from './handlers/deps.ts';
+import { gmailHandlers } from './handlers/gmail.ts';
+import { linkedinHandlers } from './handlers/linkedin.ts';
+import { scoreHandlers } from './handlers/score.ts';
 
 export class NotImplemented extends Error {
   constructor(kind: string) {
@@ -39,28 +47,21 @@ export interface JobContext {
 
 export type JobHandler = (job: Job, ctx: JobContext) => Promise<void>;
 
-/** Kinds that P3–P5 implement; until then their messages are skipped. */
-export const PLACEHOLDER_KINDS = [
-  'sync.gmail.backfill',
-  'sync.gmail.incremental',
-  'sync.calendar',
-  'sync.contacts',
-  'sync.linkedin',
-  'score.user',
-  'score.person',
-  'cadence.user',
-  'enrich.dossier',
-  'source.search',
-  'send.draft',
-  'classify.message',
-] as const;
+/** Kinds that P4–P5 implement; until then their messages are skipped. */
+export const PLACEHOLDER_KINDS = ['cadence.user', 'enrich.dossier', 'source.search', 'send.draft'] as const;
 
-export function defaultHandlers(): Record<string, JobHandler> {
+export function defaultHandlers(deps: HandlerDeps = {}): Record<string, JobHandler> {
   const handlers: Record<string, JobHandler> = {
     noop: async () => {},
     'health.snapshot': async (_job, ctx) => {
       await ctx.db.sql`select orbit.health_snapshot()`;
     },
+    ...gmailHandlers(deps),
+    ...calendarHandlers(deps),
+    ...contactsHandlers(deps),
+    ...linkedinHandlers(deps),
+    ...scoreHandlers(deps),
+    ...classifyHandlers(deps),
   };
   for (const kind of PLACEHOLDER_KINDS)
     handlers[kind] = async () => {
@@ -229,9 +230,9 @@ export async function runTick(deps: WorkerDeps): Promise<TickSummary> {
         userId: m.userId,
       });
     } catch (e) {
-      if (e instanceof NotImplemented) {
+      if (e instanceof NotImplemented || e instanceof JobSkipped) {
         await queue.delete(q, msgId);
-        await finish(runId, 'skipped', started, 'not_implemented');
+        await finish(runId, 'skipped', started, e instanceof JobSkipped ? e.reason : 'not_implemented');
         s.skipped++;
         await log.log({
           fn: 'orbit-worker',

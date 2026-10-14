@@ -957,8 +957,376 @@ async function me(ctx) {
   return json(200, { user });
 }
 
-// supabase/functions/orbit-api/sync.ts
+// supabase/functions/_shared/ingest/util.ts
+function slot(d) {
+  return d.toISOString().slice(0, 15);
+}
+
+// supabase/functions/_shared/providers/request.ts
+function unconfigured2(provider, what = "API key") {
+  return { ok: false, kind: "unconfigured", provider, message: `${provider}: no ${what} configured` };
+}
+var defaultSleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function retryAfterMs(header, now) {
+  if (!header) return void 0;
+  const secs = Number(header);
+  if (Number.isFinite(secs) && secs >= 0) return Math.min(3e4, secs * 1e3);
+  const at = Date.parse(header);
+  if (Number.isFinite(at)) return Math.min(3e4, Math.max(0, at - now));
+  return void 0;
+}
+function backoffMs(attempt, random) {
+  const base = 1e3 * 2 ** Math.min(attempt, 2);
+  return Math.round(base * (1 + 0.25 * random()));
+}
+async function requestJson(opts, spec) {
+  const sleep = opts.sleep ?? defaultSleep;
+  const random = opts.random ?? Math.random;
+  const clock = opts.clock ?? Date.now;
+  const timeoutMs = opts.timeoutMs ?? 15e3;
+  const maxRetries = Math.min(3, Math.max(0, opts.maxRetries ?? 3));
+  const headers = { accept: "application/json", ...spec.headers ?? {} };
+  if (spec.body !== void 0) headers["content-type"] = "application/json";
+  let last = { ok: false, kind: "network", provider: spec.provider, message: "not attempted" };
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const ctrl = new AbortController();
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      ctrl.abort();
+    }, timeoutMs);
+    let res;
+    try {
+      res = await opts.fetch(spec.url, {
+        method: spec.method ?? (spec.body === void 0 ? "GET" : "POST"),
+        headers,
+        body: spec.body === void 0 ? void 0 : JSON.stringify(spec.body),
+        signal: ctrl.signal
+      });
+    } catch (e) {
+      clearTimeout(timer);
+      last = timedOut ? { ok: false, kind: "timeout", provider: spec.provider, message: `${spec.provider}: timed out` } : {
+        ok: false,
+        kind: "network",
+        provider: spec.provider,
+        message: `${spec.provider}: ${e instanceof Error ? e.message : "network error"}`
+      };
+      if (attempt < maxRetries) await sleep(backoffMs(attempt, random));
+      continue;
+    }
+    clearTimeout(timer);
+    if (spec.emptyOn?.includes(res.status) && spec.onEmpty) return { ok: true, value: spec.onEmpty() };
+    if (res.status === 429 || res.status >= 500) {
+      last = {
+        ok: false,
+        kind: "http",
+        provider: spec.provider,
+        status: res.status,
+        message: `${spec.provider} ${res.status}`
+      };
+      if (attempt < maxRetries)
+        await sleep(retryAfterMs(res.headers.get("retry-after"), clock()) ?? backoffMs(attempt, random));
+      continue;
+    }
+    if (!res.ok)
+      return {
+        ok: false,
+        kind: "http",
+        provider: spec.provider,
+        status: res.status,
+        message: `${spec.provider} ${res.status}`
+      };
+    let json2;
+    try {
+      json2 = await res.json();
+    } catch {
+      return { ok: false, kind: "invalid", provider: spec.provider, message: `${spec.provider}: not JSON` };
+    }
+    const parsed = spec.schema.safeParse(json2);
+    if (!parsed.success)
+      return {
+        ok: false,
+        kind: "invalid",
+        provider: spec.provider,
+        message: `${spec.provider}: unexpected response (${parsed.error.issues[0]?.path.join(".") ?? "?"})`
+      };
+    return { ok: true, value: parsed.data };
+  }
+  return last;
+}
+function query(params, bracketArrays = false) {
+  const parts = [];
+  for (const [k, v] of Object.entries(params)) {
+    if (v === void 0 || v === null) continue;
+    if (Array.isArray(v)) {
+      for (const x of v)
+        parts.push(`${encodeURIComponent(bracketArrays ? `${k}[]` : k)}=${encodeURIComponent(String(x))}`);
+    } else parts.push(`${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`);
+  }
+  return parts.length ? `?${parts.join("&")}` : "";
+}
+function trimBase(base) {
+  return base.replace(/\/+$/, "");
+}
+
+// apps/web/src/zod.ts
 import { z } from "npm:zod@3.25.76/v4";
+z.config({ jitless: true });
+
+// supabase/functions/_shared/providers/unipileSync.ts
+var when = z.union([z.string(), z.number()]).nullish();
+var unipileMeSchema = z.looseObject({
+  provider_id: z.string().nullish(),
+  public_identifier: z.string().nullish(),
+  first_name: z.string().nullish(),
+  last_name: z.string().nullish()
+});
+var unipileRelationSchema = z.looseObject({
+  member_id: z.string().nullish(),
+  member_urn: z.string().nullish(),
+  public_identifier: z.string().nullish(),
+  public_profile_url: z.string().nullish(),
+  first_name: z.string().nullish(),
+  last_name: z.string().nullish(),
+  headline: z.string().nullish(),
+  profile_picture_url: z.string().nullish(),
+  created_at: when
+});
+var unipileChatSchema = z.looseObject({
+  id: z.string(),
+  type: z.union([z.number(), z.string()]).nullish(),
+  name: z.string().nullish(),
+  attendee_provider_id: z.string().nullish(),
+  timestamp: when,
+  content_type: z.string().nullish()
+});
+var unipileAttendeeSchema = z.looseObject({
+  id: z.string().nullish(),
+  provider_id: z.string().nullish(),
+  name: z.string().nullish(),
+  is_self: z.union([z.number(), z.boolean()]).nullish(),
+  profile_url: z.string().nullish(),
+  picture_url: z.string().nullish(),
+  specifics: z.looseObject({ occupation: z.string().nullish(), location: z.string().nullish() }).nullish()
+});
+var unipileMessageSchema = z.looseObject({
+  id: z.string(),
+  chat_id: z.string().nullish(),
+  sender_id: z.string().nullish(),
+  sender_attendee_id: z.string().nullish(),
+  text: z.string().nullish(),
+  timestamp: when,
+  is_sender: z.union([z.number(), z.boolean()]).nullish(),
+  is_event: z.union([z.number(), z.boolean()]).nullish(),
+  hidden: z.union([z.number(), z.boolean()]).nullish(),
+  deleted: z.union([z.number(), z.boolean()]).nullish()
+});
+var page = (item) => z.looseObject({ items: z.array(item).default([]), cursor: z.string().nullish() });
+var RELATIONS_LIMIT = 1e3;
+var CHATS_LIMIT = 250;
+var MESSAGES_LIMIT = 100;
+function createUnipileSync(opts) {
+  const configured = !!opts.apiKey && !!opts.baseUrl;
+  const base = trimBase(opts.baseUrl ?? "");
+  const headers = () => ({ "X-API-KEY": opts.apiKey ?? "" });
+  const no = () => unconfigured2("unipile", "API key or base URL");
+  const get = (path, schema) => requestJson(opts, { provider: "unipile", url: `${base}${path}`, headers: headers(), schema });
+  return {
+    configured,
+    async me(accountId) {
+      if (!configured) return no();
+      return get(`/api/v1/users/me${query({ account_id: accountId })}`, unipileMeSchema);
+    },
+    async relations(accountId, cursor) {
+      if (!configured) return no();
+      return get(
+        `/api/v1/users/relations${query({ account_id: accountId, limit: RELATIONS_LIMIT, cursor: cursor ?? void 0 })}`,
+        page(unipileRelationSchema)
+      );
+    },
+    async chats(accountId, o) {
+      if (!configured) return no();
+      return get(
+        `/api/v1/chats${query({ account_id: accountId, limit: CHATS_LIMIT, after: o.after, cursor: o.cursor ?? void 0 })}`,
+        page(unipileChatSchema)
+      );
+    },
+    async attendees(chatId) {
+      if (!configured) return no();
+      const r = await get(
+        `/api/v1/chats/${encodeURIComponent(chatId)}/attendees`,
+        page(unipileAttendeeSchema)
+      );
+      return r.ok ? { ok: true, value: r.value.items } : r;
+    },
+    async messages(chatId) {
+      if (!configured) return no();
+      const r = await get(
+        `/api/v1/chats/${encodeURIComponent(chatId)}/messages${query({ limit: MESSAGES_LIMIT })}`,
+        page(unipileMessageSchema)
+      );
+      return r.ok ? { ok: true, value: r.value.items } : r;
+    },
+    async hostedLink(b) {
+      if (!configured) return no();
+      return requestJson(opts, {
+        provider: "unipile",
+        url: `${base}/api/v1/hosted/accounts/link`,
+        method: "POST",
+        headers: headers(),
+        body: {
+          type: "create",
+          providers: ["LINKEDIN"],
+          api_url: base,
+          expiresOn: b.expiresOn,
+          name: b.name,
+          notify_url: b.notifyUrl,
+          success_redirect_url: b.successRedirectUrl,
+          ...b.failureRedirectUrl ? { failure_redirect_url: b.failureRedirectUrl } : {}
+        },
+        schema: z.looseObject({ url: z.string() })
+      });
+    }
+  };
+}
+
+// supabase/functions/orbit-api/routes/integrations.ts
+var queued = (q) => json(200, q);
+async function googleAccount(ctx) {
+  const [a] = await ctx.db.sql`
+    select status, scopes, sync_state from orbit.integration_accounts
+     where user_id = ${ctx.userId}::uuid and provider = 'google'`;
+  return a;
+}
+async function googleSync(ctx) {
+  const body = await readJson(ctx.req, { optional: true });
+  const mode = body.mode ?? "incremental";
+  if (mode !== "backfill" && mode !== "incremental") throw badRequest("mode must be backfill or incremental");
+  const userId = ctx.userId;
+  const acct = await googleAccount(ctx);
+  if (!acct?.scopes.some((s) => s.endsWith("gmail.readonly")))
+    return queued({ queued: false, reason: "not_connected" });
+  if (acct.status !== "active") return queued({ queued: false, reason: acct.status });
+  const q = sqlQueue(ctx.db);
+  if (mode === "backfill") {
+    const phase = acct.sync_state?.gmail?.backfill;
+    if (phase?.phase && phase.phase !== "complete")
+      return queued({ queued: false, reason: "already_running" });
+    const id2 = await q.enqueue({
+      kind: "sync.gmail.backfill",
+      userId,
+      payload: phase?.phase === "complete" ? { phase: "recent", restart: true } : { phase: "recent" },
+      dedupeKey: `gmail-backfill:${userId}:manual:${slot(ctx.now())}`
+    });
+    return queued(id2 === null ? { queued: false, reason: "already_running" } : { queued: true });
+  }
+  const id = await q.enqueue({
+    kind: "sync.gmail.incremental",
+    userId,
+    payload: { reason: "manual" },
+    dedupeKey: `gmail-manual:${userId}:${slot(ctx.now())}`
+  });
+  if (acct.scopes.some((s) => /calendar\.(readonly|events)$/.test(s)))
+    await q.enqueue({
+      kind: "sync.calendar",
+      userId,
+      payload: { reason: "manual" },
+      dedupeKey: `calendar-manual:${userId}:${slot(ctx.now())}`
+    });
+  return queued(id === null ? { queued: false, reason: "already_running" } : { queued: true });
+}
+function unipileFor(ctx) {
+  return createUnipileSync({ fetch: ctx.fetch, apiKey: ctx.env.unipileKey, baseUrl: ctx.env.unipileBase });
+}
+var missingUnipile = (ctx) => [
+  ...ctx.env.unipileKey ? [] : ["UNIPILE_API_KEY"],
+  ...ctx.env.unipileBase ? [] : ["UNIPILE_BASE_URL"]
+];
+function functionsBase(ctx) {
+  if (ctx.env.functionsUrl) return ctx.env.functionsUrl.replace(/\/+$/, "");
+  const fromRedirect = ctx.env.googleRedirectUri?.match(/^(https?:\/\/[^/]+\/functions\/v1)\//)?.[1];
+  if (fromRedirect) return fromRedirect;
+  const href = `${ctx.url.origin}${ctx.url.pathname}`;
+  const i = href.indexOf("/orbit-api");
+  return i > 0 ? href.slice(0, i) : ctx.url.origin;
+}
+async function linkedinConnectStart(ctx) {
+  await readJson(ctx.req, { optional: true });
+  const missing = missingUnipile(ctx);
+  const secret = await resolveSecret(
+    (name) => name === "ORBIT_UNIPILE_WEBHOOK_SECRET" ? ctx.env.unipileWebhookSecret : void 0,
+    ctx.db,
+    "ORBIT_UNIPILE_WEBHOOK_SECRET",
+    "orbit_unipile_webhook_secret"
+  );
+  if (!secret) missing.push("ORBIT_UNIPILE_WEBHOOK_SECRET");
+  if (missing.length) return unconfigured({}, missing);
+  const userId = ctx.userId;
+  const r = await unipileFor(ctx).hostedLink({
+    name: userId,
+    notifyUrl: `${functionsBase(ctx)}/orbit-webhooks/unipile/account?token=${encodeURIComponent(secret)}`,
+    successRedirectUrl: `${ctx.env.appUrl}/settings?linkedin=connected`,
+    failureRedirectUrl: `${ctx.env.appUrl}/settings?linkedin=failed`,
+    expiresOn: new Date(ctx.now().getTime() + 36e5).toISOString()
+  });
+  if (!r.ok) throw new HttpError(502, "upstream", "LinkedIn connection is unavailable right now");
+  await ctx.db.sql`
+    insert into orbit.integration_accounts (user_id, provider, status)
+    values (${userId}::uuid, 'linkedin', 'connecting')
+    on conflict (user_id, provider) do update set
+      status = case when orbit.integration_accounts.status = 'active' then 'active' else 'connecting' end`;
+  await ctx.db.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table)
+    values (${userId}::uuid, 'user', 'linkedin.connect_start', 'integration_accounts')`;
+  const out = { url: r.value.url };
+  return json(200, out);
+}
+async function linkedinStatus(ctx) {
+  const userId = ctx.userId;
+  const [a] = await ctx.db.sql`
+    select status, external_account_id, last_synced_at from orbit.integration_accounts
+     where user_id = ${userId}::uuid and provider = 'linkedin'`;
+  const [n] = await ctx.db.sql`
+    select count(distinct pi.person_id)::int as n from orbit.person_identities pi
+      join orbit.people p on p.id = pi.person_id
+     where pi.user_id = ${userId}::uuid and pi.kind = 'linkedin_member' and pi.source = 'linkedin_relation'
+       and p.merged_into is null and p.deleted_at is null`;
+  const status = !a ? "not_connected" : a.status === "active" || a.status === "connecting" || a.status === "needs_reauth" ? a.status : a.status === "revoked" ? "not_connected" : "error";
+  const out = {
+    status,
+    accountId: a?.external_account_id ?? null,
+    lastSyncedAt: a?.last_synced_at ? new Date(a.last_synced_at).toISOString() : null,
+    relations: n?.n ?? 0
+  };
+  return json(200, out);
+}
+async function linkedinSync(ctx) {
+  await readJson(ctx.req, { optional: true });
+  const missing = missingUnipile(ctx);
+  if (missing.length) return unconfigured({}, missing);
+  const userId = ctx.userId;
+  const [a] = await ctx.db.sql`
+    select status, external_account_id from orbit.integration_accounts
+     where user_id = ${userId}::uuid and provider = 'linkedin'`;
+  if (!a?.external_account_id) return queued({ queued: false, reason: "not_connected" });
+  if (a.status !== "active") return queued({ queued: false, reason: a.status });
+  const id = await sqlQueue(ctx.db).enqueue({
+    kind: "sync.linkedin",
+    userId,
+    payload: { mode: "sync" },
+    dedupeKey: `linkedin-manual:${userId}:${slot(ctx.now())}`
+  });
+  return queued(id === null ? { queued: false, reason: "already_running" } : { queued: true });
+}
+var INTEGRATION_ROUTES = {
+  "/google/sync": { method: "POST", auth: true, run: googleSync },
+  "/linkedin/connect/start": { method: "POST", auth: true, run: linkedinConnectStart },
+  "/linkedin/status": { method: "GET|POST", auth: true, run: linkedinStatus },
+  "/linkedin/sync": { method: "POST", auth: true, run: linkedinSync }
+};
+
+// supabase/functions/orbit-api/sync.ts
+import { z as z2 } from "npm:zod@3.25.76/v4";
 
 // supabase/functions/orbit-api/tables.ts
 var PULL_TABLES = [
@@ -1174,10 +1542,10 @@ async function pull(db2, userId, o) {
   if (lastAudit) next._audit = Number(lastAudit.id);
   return { changes, deleted, cursor: encodeCursor(next), hasMore };
 }
-var uuidS = z.string().refine(isUuid, "must be a uuid");
-var tsS = z.string().refine((s) => !Number.isNaN(Date.parse(s)), "must be a date-time");
-var dateS = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD");
-var obj = (maxBytes) => z.record(z.string(), z.unknown()).refine((v) => JSON.stringify(v).length <= maxBytes, `must be under ${maxBytes} bytes`);
+var uuidS = z2.string().refine(isUuid, "must be a uuid");
+var tsS = z2.string().refine((s) => !Number.isNaN(Date.parse(s)), "must be a date-time");
+var dateS = z2.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD");
+var obj = (maxBytes) => z2.record(z2.string(), z2.unknown()).refine((v) => JSON.stringify(v).length <= maxBytes, `must be under ${maxBytes} bytes`);
 var f = (col, type, schema, owned) => ({
   col,
   type,
@@ -1195,7 +1563,7 @@ var PUSH = {
       kind: f(
         "kind",
         "text",
-        z.enum([
+        z2.enum([
           "recruiting",
           "fundraising",
           "sales",
@@ -1206,26 +1574,26 @@ var PUSH = {
           "collaboration"
         ])
       ),
-      title: f("title", "text", z.string().trim().min(1).max(200)),
-      description: f("description", "text", z.string().max(4e3).nullable()),
+      title: f("title", "text", z2.string().trim().min(1).max(200)),
+      description: f("description", "text", z2.string().max(4e3).nullable()),
       targets: f(
         "targets",
         "jsonb",
-        z.object({
-          organizations: z.array(z.string().max(200)).max(50).default([]),
-          roles: z.array(z.string().max(200)).max(50).default([]),
-          geographies: z.array(z.string().max(200)).max(50).default([]),
-          people: z.array(z.string().max(200)).max(50).default([])
+        z2.object({
+          organizations: z2.array(z2.string().max(200)).max(50).default([]),
+          roles: z2.array(z2.string().max(200)).max(50).default([]),
+          geographies: z2.array(z2.string().max(200)).max(50).default([]),
+          people: z2.array(z2.string().max(200)).max(50).default([])
         })
       ),
       criteria: f("criteria", "jsonb", obj(2e4)),
-      successMetric: f("success_metric", "text", z.string().max(500).nullable()),
-      priority: f("priority", "int", z.number().int().min(1).max(3)),
-      status: f("status", "text", z.enum(["active", "paused", "done"])),
-      autonomyLevel: f("autonomy_level", "int", z.number().int().min(0).max(2).nullable()),
+      successMetric: f("success_metric", "text", z2.string().max(500).nullable()),
+      priority: f("priority", "int", z2.number().int().min(1).max(3)),
+      status: f("status", "text", z2.enum(["active", "paused", "done"])),
+      autonomyLevel: f("autonomy_level", "int", z2.number().int().min(0).max(2).nullable()),
       dueAt: f("due_at", "date", dateS.nullable()),
-      source: f("source", "text", z.enum(["user", "onboarding", "inferred"])),
-      evidence: f("evidence", "text", z.string().max(2e3).nullable())
+      source: f("source", "text", z2.enum(["user", "onboarding", "inferred"])),
+      evidence: f("evidence", "text", z2.string().max(2e3).nullable())
     }
   },
   chats: {
@@ -1237,7 +1605,7 @@ var PUSH = {
       personId: f("person_id", "uuid", uuidS, "people"),
       goalId: f("goal_id", "uuid", uuidS.nullable(), "goals"),
       orgId: f("org_id", "uuid", uuidS.nullable(), "organizations"),
-      stage: f("stage", "text", z.string().min(1).max(40)),
+      stage: f("stage", "text", z2.string().min(1).max(40)),
       stageEnteredAt: f("stage_entered_at", "timestamptz", tsS),
       data: f("data", "jsonb", obj(64e3)),
       archivedAt: f("archived_at", "timestamptz", tsS.nullable())
@@ -1250,13 +1618,13 @@ var PUSH = {
     required: ["chatId", "toStage", "status", "actor"],
     fields: {
       chatId: f("chat_id", "uuid", uuidS, "chats"),
-      fromStage: f("from_stage", "text", z.string().max(40).nullable()),
-      toStage: f("to_stage", "text", z.string().min(1).max(40)),
-      status: f("status", "text", z.string().min(1).max(40)),
-      actor: f("actor", "text", z.enum(["user", "agent", "system"])),
-      reason: f("reason", "text", z.string().max(2e3).nullable()),
+      fromStage: f("from_stage", "text", z2.string().max(40).nullable()),
+      toStage: f("to_stage", "text", z2.string().min(1).max(40)),
+      status: f("status", "text", z2.string().min(1).max(40)),
+      actor: f("actor", "text", z2.enum(["user", "agent", "system"])),
+      reason: f("reason", "text", z2.string().max(2e3).nullable()),
       evidence: f("evidence", "jsonb", obj(2e4).nullable()),
-      confidence: f("confidence", "real", z.number().min(0).max(1).nullable()),
+      confidence: f("confidence", "real", z2.number().min(0).max(1).nullable()),
       decidedAt: f("decided_at", "timestamptz", tsS.nullable())
     }
   },
@@ -1267,12 +1635,12 @@ var PUSH = {
     key: "id",
     required: ["source", "occurredAt", "rawText"],
     fields: {
-      personIds: f("person_ids", "uuid[]", z.array(uuidS).max(50), "people"),
+      personIds: f("person_ids", "uuid[]", z2.array(uuidS).max(50), "people"),
       chatId: f("chat_id", "uuid", uuidS.nullable(), "chats"),
-      source: f("source", "text", z.string().min(1).max(40)),
-      title: f("title", "text", z.string().max(300).nullable()),
+      source: f("source", "text", z2.string().min(1).max(40)),
+      title: f("title", "text", z2.string().max(300).nullable()),
       occurredAt: f("occurred_at", "timestamptz", tsS),
-      rawText: f("raw_text", "text", z.string().max(1e5)),
+      rawText: f("raw_text", "text", z2.string().max(1e5)),
       extraction: f("extraction", "jsonb", obj(64e3).nullable())
     }
   },
@@ -1282,12 +1650,12 @@ var PUSH = {
     key: "id",
     // only what the user edits by hand; everything else is derived on the server
     fields: {
-      displayName: f("display_name", "text", z.string().trim().min(1).max(200)),
-      notes: f("notes", "text", z.string().max(2e4).nullable()),
-      tags: f("tags", "text[]", z.array(z.string().max(60)).max(50)),
-      relationshipType: f("relationship_type", "text", z.string().max(40).nullable()),
+      displayName: f("display_name", "text", z2.string().trim().min(1).max(200)),
+      notes: f("notes", "text", z2.string().max(2e4).nullable()),
+      tags: f("tags", "text[]", z2.array(z2.string().max(60)).max(50)),
+      relationshipType: f("relationship_type", "text", z2.string().max(40).nullable()),
       hiddenAt: f("hidden_at", "timestamptz", tsS.nullable()),
-      doNotContact: f("do_not_contact", "boolean", z.boolean())
+      doNotContact: f("do_not_contact", "boolean", z2.boolean())
     }
   },
   tie_labels: {
@@ -1296,7 +1664,7 @@ var PUSH = {
     del: "hard",
     key: "person_id",
     required: ["closeness"],
-    fields: { closeness: f("closeness", "int", z.number().int().min(1).max(5)) }
+    fields: { closeness: f("closeness", "int", z2.number().int().min(1).max(5)) }
   },
   // drafts: handled by pushDraft (status transitions and edits while still a draft)
   drafts: { table: "drafts", write: "update", key: "id", fields: {} },
@@ -1308,11 +1676,11 @@ var ChangeError = class extends Error {
     this.code = code;
   }
 };
-var ChangeS = z.object({
-  table: z.string(),
-  op: z.enum(["upsert", "delete"]),
+var ChangeS = z2.object({
+  table: z2.string(),
+  op: z2.enum(["upsert", "delete"]),
   id: uuidS,
-  row: z.record(z.string(), z.unknown()).optional()
+  row: z2.record(z2.string(), z2.unknown()).optional()
 });
 var PUSH_MAX_CHANGES = 500;
 async function syncPush(ctx) {
@@ -1452,10 +1820,10 @@ async function remove(db2, userId, spec, id) {
   await audit(db2, userId, "sync.delete", spec.table, id);
   return void 0;
 }
-var DraftPatchS = z.object({
-  status: z.enum(["approved", "discarded", "cancelled"]).optional(),
-  subject: z.string().max(200).nullable().optional(),
-  body: z.string().trim().min(1).max(2e4).optional()
+var DraftPatchS = z2.object({
+  status: z2.enum(["approved", "discarded", "cancelled"]).optional(),
+  subject: z2.string().max(200).nullable().optional(),
+  body: z2.string().trim().min(1).max(2e4).optional()
 });
 async function pushDraft(db2, userId, id, row) {
   const p = DraftPatchS.safeParse({ status: row.status, subject: row.subject, body: row.body });
@@ -1496,7 +1864,8 @@ var ROUTES = {
   "/sync/pull": { method: "POST", auth: true, run: syncPull },
   "/sync/push": { method: "POST", auth: true, run: syncPush },
   "/account/export": { method: "POST", auth: true, run: accountExport },
-  "/account/delete": { method: "POST", auth: true, run: accountDelete }
+  "/account/delete": { method: "POST", auth: true, run: accountDelete },
+  ...INTEGRATION_ROUTES
 };
 function missingSecrets(deps, google) {
   const m = [];
@@ -1643,7 +2012,9 @@ Deno.serve(
       sessionSecret,
       appUrl: env("ORBIT_APP_URL"),
       unipileKey: env("UNIPILE_API_KEY"),
-      unipileBase: env("UNIPILE_BASE_URL")
+      unipileBase: env("UNIPILE_BASE_URL"),
+      unipileWebhookSecret: env("ORBIT_UNIPILE_WEBHOOK_SECRET"),
+      functionsUrl: supabaseUrl ? `${supabaseUrl}/functions/v1` : void 0
     },
     db,
     log: makeLogger(salt),

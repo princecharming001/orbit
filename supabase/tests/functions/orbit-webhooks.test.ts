@@ -16,7 +16,9 @@ afterAll(async () => {
   await t.pg.close();
 });
 beforeEach(async () => {
-  await t.pg.exec('delete from pgmq.q_orbit_sync; delete from pgmq.q_orbit_classify;');
+  await t.pg.exec(
+    'delete from pgmq.q_orbit_sync; delete from pgmq.q_orbit_classify; delete from pgmq.q_orbit_score;',
+  );
 });
 
 const post = (path: string, body: unknown, headers: Record<string, string> = {}) =>
@@ -156,30 +158,38 @@ describe('Unipile webhooks', () => {
     expect(await jobs('orbit_classify')).toHaveLength(0);
   });
 
-  it('queues a LinkedIn sync for a new relation', async () => {
+  it('stores a new relation as a person with LinkedIn identities, once, and re-scores them', async () => {
     const u = await linkedinUser('acc_rel');
-    const r = await handler(
-      post(
-        '/unipile',
-        {
-          event: 'new_relation',
-          account_id: 'acc_rel',
-          account_type: 'LINKEDIN',
-          user_full_name: 'Sam Rivera',
-          user_provider_id: 'sam-provider-id',
-          user_public_identifier: 'samrivera',
-          user_profile_url: 'https://www.linkedin.com/in/samrivera',
-        },
-        hdr,
-      ),
-    );
-    expect(await r.json()).toEqual({ ok: true, result: 'queued' });
-    const q = await jobs('orbit_sync');
-    expect(q[0]!.message).toMatchObject({
-      kind: 'sync.linkedin',
-      userId: u,
-      payload: { mode: 'relation', providerId: 'sam-provider-id', publicIdentifier: 'samrivera' },
+    const rel = {
+      event: 'new_relation',
+      account_id: 'acc_rel',
+      account_type: 'LINKEDIN',
+      user_full_name: 'Sam Rivera',
+      user_provider_id: 'sam-provider-id',
+      user_public_identifier: 'samrivera',
+      user_profile_url: 'https://www.linkedin.com/in/samrivera',
+    };
+    const r = await handler(post('/unipile', rel, hdr));
+    expect(await r.json()).toEqual({ ok: true, result: 'stored' });
+    expect(await (await handler(post('/unipile', rel, hdr))).json()).toEqual({
+      ok: true,
+      result: 'duplicate',
     });
+    const people = await t.db.sql<{ id: string; display_name: string; linkedin_member_id: string }>`
+      select id, display_name, linkedin_member_id from orbit.people where user_id = ${u}::uuid and not is_self`;
+    expect(people).toHaveLength(1);
+    expect(people[0]).toMatchObject({ display_name: 'Sam Rivera', linkedin_member_id: 'sam-provider-id' });
+    const ids = await t.db.sql<{ kind: string; value_norm: string; source: string }>`
+      select kind, value_norm, source from orbit.person_identities
+       where user_id = ${u}::uuid and person_id = ${people[0]!.id}::uuid order by kind`;
+    expect(ids).toEqual([
+      { kind: 'linkedin_member', value_norm: 'sam-provider-id', source: 'linkedin_relation' },
+      { kind: 'linkedin_slug', value_norm: 'samrivera', source: 'linkedin_relation' },
+    ]);
+    const q = await jobs('orbit_score');
+    expect(q.map((j) => j.message)).toEqual([
+      expect.objectContaining({ kind: 'score.person', userId: u, payload: { personIds: [people[0]!.id] } }),
+    ]);
   });
 
   it('applies account status changes to the integration row', async () => {

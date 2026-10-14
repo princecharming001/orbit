@@ -27,6 +27,7 @@ import { ipBuckets, memoryTake, sqlTake, type Take, userBuckets } from '../_shar
 import { authenticate, type SessionConfig, sessionSecretUsable } from '../_shared/session.ts';
 import { accountDelete, accountExport } from './account.ts';
 import { googleCallback, googleStart, logout, me, refresh, session } from './auth.ts';
+import { INTEGRATION_ROUTES } from './routes/integrations.ts';
 import { syncPull, syncPush, syncStatus } from './sync.ts';
 
 export const DEFAULT_APP_URL = 'https://princecharming001.github.io/orbit';
@@ -41,6 +42,10 @@ export interface ApiEnv {
   appUrl?: string;
   unipileKey?: string;
   unipileBase?: string;
+  /** ORBIT_UNIPILE_WEBHOOK_SECRET when set as an environment variable (else read from Vault) */
+  unipileWebhookSecret?: string;
+  /** <SUPABASE_URL>/functions/v1, for the URLs providers call back (Unipile's notify_url) */
+  functionsUrl?: string;
 }
 
 export interface ApiLimits {
@@ -105,6 +110,7 @@ const ROUTES: Record<string, Route> = {
   '/sync/push': { method: 'POST', auth: true, run: syncPush },
   '/account/export': { method: 'POST', auth: true, run: accountExport },
   '/account/delete': { method: 'POST', auth: true, run: accountDelete },
+  ...INTEGRATION_ROUTES,
 };
 
 /** The secrets a route needs that are not set. */
