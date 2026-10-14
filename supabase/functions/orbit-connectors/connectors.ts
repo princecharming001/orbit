@@ -10,8 +10,16 @@
  * A route whose provider key is not set returns 503 with x-orbit-connector: unconfigured, so the app shows the
  * CSV fallback (or its own graph) instead. Pasting the key as a function secret turns it on with no redeploy of
  * the app. The exact upstream request and response mapping lives in the adapter functions, so a live test with real
- * keys only changes this file.
+ * keys only changes this file (Village's lives in _shared/providers/village.ts, shared with the server).
  */
+import {
+  companyIntros,
+  createVillage,
+  personIntros,
+  type Village,
+  type VillageIntro,
+  type VillageUser,
+} from '../_shared/providers/village';
 
 export interface Limits {
   perMinute: number;
@@ -31,8 +39,11 @@ export type Take = (buckets: Bucket[]) => Promise<{ allowed: boolean; over?: str
 export interface ConnectorDeps {
   unipileKey: string | undefined;
   unipileBase: string | undefined; // e.g. https://api{dc}.unipile.com:{port}
+  /** Village app secret key (VILLAGE_SECRET_KEY, or VILLAGE_API_KEY) */
   villageKey: string | undefined;
   villageBase: string | undefined;
+  /** who Village provisions this deployment's paths for (VILLAGE_EXTERNAL_USER_ID, VILLAGE_USER_EMAIL) */
+  villageUser?: VillageUser;
   origins: (origin: string) => boolean;
   /** the request counters; without one, an in-memory counter per function instance is used */
   take?: Take;
@@ -131,6 +142,15 @@ export function makeHandler(deps: ConnectorDeps): (req: Request) => Promise<Resp
   const limits = deps.limits ?? DEFAULT_LIMITS;
   const now = deps.now ?? (() => new Date());
   const take = deps.take ?? memoryTake(() => now().getTime());
+  // one client per instance, so its token (minted per user, kept 50 minutes) is reused across requests
+  const village = createVillage({
+    fetch: doFetch,
+    secretKey: deps.villageKey,
+    baseUrl: deps.villageBase,
+    clock: () => now().getTime(),
+    timeoutMs: 6000,
+    maxRetries: 1,
+  });
   return async (req) => {
     const origin = req.headers.get('origin');
     const allowed = !!origin && deps.origins(origin);
@@ -157,10 +177,11 @@ export function makeHandler(deps: ConnectorDeps): (req: Request) => Promise<Resp
       body = {};
     }
 
-    const village = path === '/paths';
-    if (!village && !UNIPILE_ROUTES.has(path)) return json(404, { error: 'no such route' }, h);
-    if (village && (!deps.villageKey || !deps.villageBase)) return unconfigured(h);
-    if (!village && (!deps.unipileKey || !deps.unipileBase)) return unconfigured(h);
+    const isVillage = path === '/paths';
+    if (!isVillage && !UNIPILE_ROUTES.has(path)) return json(404, { error: 'no such route' }, h);
+    if (isVillage && (!deps.villageKey || !deps.villageBase || !deps.villageUser?.email))
+      return unconfigured(h);
+    if (!isVillage && (!deps.unipileKey || !deps.unipileBase)) return unconfigured(h);
 
     // only calls that would reach a provider count against the visitor's limits
     const visitor = (await sha256(`${deps.salt ?? 'orbit'}:${clientIp(req)}`)).slice(0, 32);
@@ -184,7 +205,7 @@ export function makeHandler(deps: ConnectorDeps): (req: Request) => Promise<Resp
     }
 
     try {
-      if (village) return json(200, await villagePaths(deps, body, doFetch), h);
+      if (isVillage) return json(200, await villagePaths(village, deps.villageUser!, body), h);
       if (path === '/connect/start')
         return json(200, await unipileConnectStart(deps, doFetch, deps.newRef ?? newRef), h);
       if (path === '/connect/status') return json(200, await unipileConnectStatus(deps, body, doFetch), h);
@@ -330,34 +351,62 @@ async function unipileMutuals(deps: ConnectorDeps, body: Record<string, unknown>
   };
 }
 
-// ---- Village adapter --------------------------------------------------------------------------------------
+// ---- Village adapter (v2: token per user, then people/companies paths; see _shared/providers/village.ts) --------
 
-async function villagePaths(deps: ConnectorDeps, body: Record<string, unknown>, doFetch: typeof fetch) {
-  const res = await doFetch(`${deps.villageBase}/v1/paths`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${deps.villageKey}` },
-    body: JSON.stringify({
-      target: { name: body.name, company: body.company, linkedin_url: body.linkedin_url },
-      limit: 5,
-    }),
-  });
-  if (!res.ok) throw new Error(`village ${res.status}`);
-  const b = (await res.json()) as {
-    paths?: {
-      introducer?: { name?: string; headline?: string; linkedin_url?: string };
-      warmth_score?: number;
-      warmth?: number;
-      path?: string[];
-      hops?: string[];
-      reason?: string;
-    }[];
-  };
+function looksLikeDomain(s: string): boolean {
+  return /^(?!-)[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(
+    s
+      .trim()
+      .replace(/^https?:\/\//i, '')
+      .replace(/^www\./i, ''),
+  );
+}
+
+/**
+ * The client's `/paths` contract, answered with Village v2: a LinkedIn URL asks `/v2/people/paths`; a company
+ * domain (`domain`, or a `company` that is one) asks `/v2/companies/paths`. Village has no name-only lookup, so a
+ * bare name or company name gets no paths (and costs no credits).
+ */
+async function villagePaths(village: Village, user: VillageUser, body: Record<string, unknown>) {
+  const linkedinUrl = typeof body.linkedin_url === 'string' ? body.linkedin_url.trim() : '';
+  const company = typeof body.company === 'string' ? body.company.trim() : '';
+  const domain =
+    typeof body.domain === 'string' && body.domain.trim()
+      ? body.domain.trim()
+      : company && looksLikeDomain(company)
+        ? company
+        : '';
+  let intros: VillageIntro[];
+  if (linkedinUrl) {
+    const r = await village.personPaths(user, { linkedin_url: linkedinUrl });
+    if (!r.ok) throw new Error(r.message);
+    intros = personIntros(r.value);
+  } else if (domain) {
+    const clean = domain
+      .replace(/^https?:\/\//i, '')
+      .replace(/^www\./i, '')
+      .replace(/\/.*$/, '')
+      .toLowerCase();
+    const r = await village.companyPaths(user, { domain: clean, limit: 25 });
+    if (!r.ok) throw new Error(r.message);
+    intros = companyIntros(r.value);
+  } else return { paths: [] };
+  const fallbackTarget = typeof body.name === 'string' && body.name ? body.name : company;
   return {
-    paths: (b.paths ?? []).map((p) => ({
-      introducer: p.introducer,
-      warmth: p.warmth ?? p.warmth_score,
-      hops: p.hops ?? p.path,
-      note: p.reason,
+    paths: intros.slice(0, 10).map((i) => ({
+      introducer: {
+        name: i.introducer.name,
+        headline: i.introducer.headline,
+        linkedin_url: i.introducer.linkedinUrl,
+      },
+      warmth: i.warmth,
+      hops: [
+        'You',
+        ...(i.degree >= 3 ? ['a teammate'] : []),
+        i.introducer.name,
+        i.target.name ?? fallbackTarget,
+      ].filter((h): h is string => !!h),
+      note: i.reasons[0] ?? i.scoreLabel,
     })),
   };
 }

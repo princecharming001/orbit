@@ -9,6 +9,57 @@ import {
 } from '../../../../../supabase/functions/orbit-connectors/connectors';
 
 const ORIGIN = 'https://princecharming001.github.io';
+const DANA = { name: 'Dana', linkedin_url: 'https://www.linkedin.com/in/dana-lee' };
+const profile = (first: string, last: string, slug: string) => ({
+  first_name: first,
+  last_name: last,
+  linkedin_url: `https://www.linkedin.com/in/${slug}`,
+  headline: `${first} at Acme`,
+});
+const villagePath = (first: string, last: string, slug: string, score: number, degree = 2) => ({
+  degree,
+  summary: { score, score_label: score > 70 ? 'Strong' : 'Medium' },
+  starters: [],
+  introducer: {
+    profile: profile(first, last, slug),
+    score,
+    score_label: 'Strong',
+    score_meta: [{ title: 'Worked together', description: 'Acme, 2021–2024' }],
+  },
+  score_meta: [],
+});
+const villagePeople = {
+  data: {
+    person: {
+      first_name: 'Dana',
+      last_name: 'Lee',
+      full_name: 'Dana Lee',
+      linkedin_url: 'x',
+      village_url: 'v',
+    },
+    summary: { score: 80 },
+    paths: [villagePath('Mia', 'Chen', 'mia', 55), villagePath('Sam', 'Ortiz', 'sam', 82)],
+    count: 2,
+  },
+  metadata: { request_id: 'r2' },
+};
+const villageCompany = {
+  data: {
+    company: { name: 'Stripe', domain: 'stripe.com' },
+    summary: { score: 70 },
+    target_people: [
+      {
+        target: { first_name: 'Ana', last_name: 'Ruiz', full_name: 'Ana Ruiz', id: 't1', identity_id: 'i1' },
+        paths: [villagePath('Sam', 'Ortiz', 'sam', 64)],
+        summary: { score: 64 },
+        count: 1,
+        degree: 2,
+      },
+    ],
+  },
+  metadata: { request_id: 'r3' },
+  pagination: {},
+};
 const BASE = 'https://proxy.test/functions/v1/orbit-connectors';
 
 type Upstream = (url: string, init: RequestInit) => Response | Promise<Response>;
@@ -43,13 +94,17 @@ function harness(over: Partial<ConnectorDeps> = {}, upstreamOver?: Upstream) {
         { status: 200 },
       );
     if (url.includes('/api/v1/accounts/')) return new Response(JSON.stringify({ object: 'AccountDeleted' }));
-    if (url.includes('/v1/paths'))
+    if (url.endsWith('/v2/auth/tokens'))
       return new Response(
         JSON.stringify({
-          paths: [{ introducer: { name: 'Sam' }, warmth: 0.8, path: ['You', 'Sam', 'T'] }],
+          data: { token: 'tok-1', expires_in: 31536000, expires_at: 1_900_000_000, token_type: 'Bearer' },
+          metadata: { request_id: 'r1' },
         }),
         { status: 200 },
       );
+    if (url.endsWith('/v2/people/paths')) return new Response(JSON.stringify(villagePeople), { status: 200 });
+    if (url.endsWith('/v2/companies/paths'))
+      return new Response(JSON.stringify(villageCompany), { status: 200 });
     return new Response('{}', { status: 404 });
   };
   const deps: ConnectorDeps = {
@@ -57,6 +112,7 @@ function harness(over: Partial<ConnectorDeps> = {}, upstreamOver?: Upstream) {
     unipileBase: 'https://api1.unipile.com:443',
     villageKey: 'v-key',
     villageBase: 'https://api.village.do',
+    villageUser: { externalUserId: 'orbit-local', email: 'founder@orbit.test' },
     origins: defaultOrigins,
     newRef: () => 'ref1',
     fetch: (async (url: string, init: RequestInit = {}) => {
@@ -161,10 +217,103 @@ describe('orbit-connectors proxy', () => {
       mutuals: { name: string }[];
     };
     expect(mut.mutuals[0]!.name).toBe('Mia Chen');
-    const paths = (await (await handler(post('/paths', { name: 'Dana' }))).json()) as {
+    const paths = (await (await handler(post('/paths', DANA))).json()) as {
       paths: { introducer: { name: string }; warmth: number }[];
     };
-    expect(paths.paths[0]).toMatchObject({ introducer: { name: 'Sam' }, warmth: 0.8 });
+    expect(paths.paths[0]).toMatchObject({ introducer: { name: 'Sam Ortiz' }, warmth: 0.82 });
+  });
+
+  it('asks Village v2: a token from the secret key, then people paths by LinkedIn URL, mapped to the client shape', async () => {
+    const { handler, upstream } = harness();
+    const r = await handler(post('/paths', DANA));
+    expect(r.status).toBe(200);
+    expect(await r.json()).toEqual({
+      paths: [
+        {
+          introducer: {
+            name: 'Sam Ortiz',
+            headline: 'Sam at Acme',
+            linkedin_url: 'https://www.linkedin.com/in/sam',
+          },
+          warmth: 0.82,
+          hops: ['You', 'Sam Ortiz', 'Dana Lee'],
+          note: 'Worked together: Acme, 2021–2024',
+        },
+        {
+          introducer: {
+            name: 'Mia Chen',
+            headline: 'Mia at Acme',
+            linkedin_url: 'https://www.linkedin.com/in/mia',
+          },
+          warmth: 0.55,
+          hops: ['You', 'Mia Chen', 'Dana Lee'],
+          note: 'Worked together: Acme, 2021–2024',
+        },
+      ],
+    });
+    expect(upstream.map((u) => u.url)).toEqual([
+      'https://api.village.do/v2/auth/tokens',
+      'https://api.village.do/v2/people/paths',
+    ]);
+    expect(upstream[0]!.body).toEqual({ external_user_id: 'orbit-local', email: 'founder@orbit.test' });
+    expect(upstream[1]!.body).toEqual({ linkedin_url: 'https://www.linkedin.com/in/dana-lee' });
+    // the token is reused by the next request
+    await handler(post('/paths', DANA));
+    expect(upstream.map((u) => u.url).filter((u) => u.endsWith('/auth/tokens'))).toHaveLength(1);
+  });
+
+  it('sends the secret key header and the bearer token to Village', async () => {
+    const seen: { url: string; headers: Record<string, string> }[] = [];
+    const { handler } = harness({
+      fetch: (async (url: string, init: RequestInit = {}) => {
+        seen.push({ url, headers: init.headers as Record<string, string> });
+        if (url.endsWith('/v2/auth/tokens'))
+          return new Response(
+            JSON.stringify({ data: { token: 'tok-9', expires_in: 1, expires_at: 2_000_000_000 } }),
+          );
+        return new Response(JSON.stringify(villagePeople));
+      }) as unknown as typeof fetch,
+    });
+    await handler(post('/paths', DANA));
+    expect(seen[0]!.headers['secret-key']).toBe('v-key');
+    expect(seen[1]!.headers.authorization).toBe('Bearer tok-9');
+  });
+
+  it('asks company paths for a domain, and nothing at all for a bare name', async () => {
+    const { handler, upstream } = harness();
+    const co = (await (await handler(post('/paths', { company: 'stripe.com' }))).json()) as {
+      paths: { introducer: { name: string }; hops: string[]; warmth: number }[];
+    };
+    expect(co.paths).toEqual([
+      expect.objectContaining({ introducer: expect.objectContaining({ name: 'Sam Ortiz' }), warmth: 0.64 }),
+    ]);
+    expect(co.paths[0]!.hops).toEqual(['You', 'Sam Ortiz', 'Ana Ruiz']);
+    expect(upstream.at(-1)).toMatchObject({
+      url: 'https://api.village.do/v2/companies/paths',
+      body: { domain: 'stripe.com', limit: 25 },
+    });
+    const before = upstream.length;
+    expect(await (await handler(post('/paths', { name: 'Dana', company: 'Stripe' }))).json()).toEqual({
+      paths: [],
+    });
+    expect(upstream.length).toBe(before);
+  });
+
+  it('answers 502 when Village fails, and treats a 404 as no paths', async () => {
+    const fails = harness({}, (url) =>
+      url.endsWith('/auth/tokens')
+        ? new Response(JSON.stringify({ data: { token: 't' } }))
+        : new Response('{}', { status: 400 }),
+    );
+    expect((await fails.handler(post('/paths', DANA))).status).toBe(502);
+    const none = harness({}, (url) =>
+      url.endsWith('/auth/tokens')
+        ? new Response(JSON.stringify({ data: { token: 't' } }))
+        : new Response('{}', { status: 404 }),
+    );
+    const r = await none.handler(post('/paths', DANA));
+    expect(r.status).toBe(200);
+    expect(await r.json()).toEqual({ paths: [] });
   });
 
   it('unlinks an account with a DELETE, and an account already gone counts as unlinked', async () => {
@@ -194,6 +343,10 @@ describe('orbit-connectors proxy', () => {
     const r2 = await noVillage.handler(post('/paths', { name: 'X' }));
     expect(r2.status).toBe(503);
     expect(r2.headers.get('x-orbit-connector')).toBe('unconfigured');
+    // a key without the Village user to mint tokens for is not enough either
+    const noUser = harness({ villageUser: undefined });
+    expect((await noUser.handler(post('/paths', DANA))).status).toBe(503);
+    expect(noUser.upstream).toEqual([]);
     // the other provider still works
     expect((await noVillage.handler(post('/relations', { accountId: 'a1' }))).status).toBe(200);
   });
@@ -218,13 +371,14 @@ describe('orbit-connectors proxy', () => {
         return inner(bs);
       },
     });
-    expect((await handler(post('/paths', { name: 'X' }))).status).toBe(200);
-    expect((await handler(post('/paths', { name: 'X' }))).status).toBe(200);
-    const third = await handler(post('/paths', { name: 'X' }));
+    expect((await handler(post('/paths', DANA))).status).toBe(200);
+    expect((await handler(post('/paths', DANA))).status).toBe(200);
+    const third = await handler(post('/paths', DANA));
     expect(third.status).toBe(429);
     expect(third.headers.get('x-orbit-limit')).toBe('minute');
     expect(third.headers.get('retry-after')).toBe('30');
-    expect(upstream).toHaveLength(2);
+    // one token, then one paths call per allowed request; the refused one reaches nothing
+    expect(upstream).toHaveLength(3);
     // another visitor has their own allowance
     expect((await handler(post('/paths', { name: 'X' }, ORIGIN, '198.51.100.4'))).status).toBe(200);
     // the stored keys never hold the raw address
