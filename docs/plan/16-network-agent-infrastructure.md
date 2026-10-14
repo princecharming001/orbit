@@ -519,7 +519,7 @@ Given a target person or company, return the best routes to them, ranked by the 
 3. **Unipile mutuals** (account mode, LinkedIn connected, T's member id known): one `linkedin/search` with `connections_of: [T]` and `network_distance: [1]`, cached for 30 days. Each mutual M gives a candidate user → M → T and a `linkedin_mutual` tie.
 4. **Village** (if configured):
    - token from `POST /v2/auth/tokens`, cached for 50 minutes;
-   - `POST /v2/people/paths` with `{linkedin_url}` or `{name, company}`;
+   - `POST /v2/people/paths` with `{linkedin_url}` (the API takes only `linkedin_url` or `url`; a target with no LinkedIn URL skips Village);
    - each introducer becomes a candidate and a `village_path` tie;
    - cost: 5 credits ($0.10), within the per-user cap (§13.3).
 5. **Merge and rank:**
@@ -535,7 +535,7 @@ Given a target person or company, return the best routes to them, ranked by the 
 2. Otherwise:
    - run PPR from the user: α = 0.15, 30 power iterations, transitions proportional to `p_ask` / `p_know`;
    - take the 10 people at C with the most PPR mass and run the person procedure for each.
-3. Village `POST /v2/companies/paths {domain}` (1 credit) adds introducers.
+3. Village `POST /v2/companies/paths {domain}` (5 credits) adds introducers.
 4. Return the 5 best (person, path) pairs, at most 2 per person.
 
 **Reason text.** Deterministic; no LLM.
@@ -582,9 +582,11 @@ Given a target person or company, return the best routes to them, ranked by the 
 
 **Village v2** (https://docs.village.ai/api-reference/introduction.md)
 - `POST https://api.village.do/v2/auth/tokens`: header `secret-key: sk_…`, body `{external_user_id, email}`, returns a Bearer token.
-- `POST /v2/people/paths`.
-- `POST /v2/companies/paths {"domain": "…"}`.
-- Credits: $0.02 each. Person path: 5. Company path check: 1. No result: 0.
+- `POST /v2/people/paths {linkedin_url}` (or `{url}`); there is no name + company form.
+- `POST /v2/companies/paths {domain}` (or `{linkedin_url}`).
+- Scores are 0–100; Orbit uses warmth = score / 100. A 404 means no paths.
+- Credits: $0.02 each. Paths to a person: 5. Paths to a company: 5. No result: 0. (Confirmed from https://api.village.do/v2/docs/openapi.json.)
+- Tokens last a year; Orbit still re-mints every 50 minutes so a revoked key fails fast.
 - Rate limit: 100 requests/s per key.
 - The `orbit-connectors` v1 call is replaced by these in both modes.
 
@@ -2663,7 +2665,7 @@ The first draft followed the brief's ten capabilities.
 
 **Village API version**
 - Discovered: Orbit calls a v1 path; the public API is v2.
-- Changed: token and paths flow (§4.5).
+- Changed: token and paths flow (§4.5). The v2 OpenAPI file then showed that person paths take only a LinkedIn URL and that company paths cost 5 credits, not 1; §4.3 and §4.5 were corrected.
 
 **Exa API changes**
 - Discovered: `linkedin profile` and `research paper` categories are retired; `livecrawl` is deprecated.
