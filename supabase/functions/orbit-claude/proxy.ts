@@ -11,6 +11,10 @@
  * Responses, including the SSE stream, pass through unchanged. Kept free of Deno APIs so it runs under Node tests.
  */
 
+import { clientIp, defaultOrigins } from '../_shared/origins.ts';
+
+export { clientIp, defaultOrigins };
+
 export const UPSTREAM = 'https://api.anthropic.com/v1/messages';
 export const ALLOWED_MODELS = new Set(['claude-opus-5-5']);
 export const ALLOWED_FALLBACKS = new Set(['claude-opus-5']);
@@ -57,11 +61,6 @@ const EXPOSE = [
   'anthropic-ratelimit-requests-remaining',
   'anthropic-ratelimit-tokens-remaining',
 ].join(', ');
-
-export function defaultOrigins(origin: string): boolean {
-  if (origin === 'https://princecharming001.github.io') return true;
-  return /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
-}
 
 function cors(origin: string | null, allowed: boolean): Record<string, string> {
   if (!origin || !allowed) return { Vary: 'Origin' };
@@ -120,12 +119,6 @@ export function filterBetas(header: string | null): string | undefined {
     .map((s) => s.trim())
     .filter((s) => ALLOWED_BETAS.has(s));
   return kept.length ? kept.join(',') : undefined;
-}
-
-export function clientIp(req: Request): string {
-  const xff = req.headers.get('x-forwarded-for');
-  if (xff) return xff.split(',')[0]!.trim();
-  return req.headers.get('cf-connecting-ip') ?? req.headers.get('x-real-ip') ?? 'unknown';
 }
 
 async function sha256(text: string): Promise<string> {

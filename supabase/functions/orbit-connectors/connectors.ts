@@ -13,6 +13,10 @@
  * keys only changes this file.
  */
 
+import { clientIp, defaultOrigins } from '../_shared/origins.ts';
+
+export { clientIp, defaultOrigins };
+
 export interface Limits {
   perMinute: number;
   perDay: number;
@@ -45,11 +49,6 @@ export interface ConnectorDeps {
   newRef?: () => string;
 }
 
-export function defaultOrigins(origin: string): boolean {
-  if (origin === 'https://princecharming001.github.io') return true;
-  return /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
-}
-
 function cors(origin: string | null, allowed: boolean): Record<string, string> {
   if (!origin || !allowed) return { Vary: 'Origin' };
   return {
@@ -68,12 +67,6 @@ function json(status: number, body: unknown, headers: Record<string, string>): R
 
 const unconfigured = (h: Record<string, string>) =>
   json(503, { error: 'not configured' }, { ...h, 'x-orbit-connector': 'unconfigured' });
-
-export function clientIp(req: Request): string {
-  const xff = req.headers.get('x-forwarded-for');
-  if (xff) return xff.split(',')[0]!.trim();
-  return req.headers.get('cf-connecting-ip') ?? req.headers.get('x-real-ip') ?? 'unknown';
-}
 
 async function sha256(text: string): Promise<string> {
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
