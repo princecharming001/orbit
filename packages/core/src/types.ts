@@ -215,6 +215,54 @@ export interface UserSettings {
   dismissedHints?: string[];
 }
 
+/** What a goal is for (plan 16 §2.1); it changes the register, the ask and the routing rules. */
+export type GoalKind =
+  | 'recruiting'
+  | 'fundraising'
+  | 'sales'
+  | 'hiring'
+  | 'advice'
+  | 'cofounder'
+  | 'community'
+  | 'collaboration';
+
+export const GOAL_KINDS: readonly GoalKind[] = [
+  'recruiting',
+  'fundraising',
+  'sales',
+  'hiring',
+  'advice',
+  'cofounder',
+  'community',
+  'collaboration',
+];
+
+/** A goal the student is working toward (orbit.goals, plan 16 §11.3). A student has 0–5 active goals. */
+export interface Goal {
+  id: ID;
+  userId: ID;
+  kind: GoalKind;
+  title: string;
+  description?: string;
+  targets: { organizations: string[]; roles: string[]; geographies: string[]; people: string[] };
+  /** sourcing filters: sector, stage, seniority, skills, keywords */
+  criteria: Record<string, unknown>;
+  /** "8 coffee chats with PMs by Dec 1" */
+  successMetric?: string;
+  priority: 1 | 2 | 3;
+  status: 'active' | 'paused' | 'done';
+  /** overrides the student's autonomy level for this goal (§8.4) */
+  autonomyLevel?: 0 | 1 | 2;
+  /** YYYY-MM-DD */
+  dueAt?: string;
+  source: 'user' | 'onboarding' | 'inferred';
+  /** the student's words an inferred goal came from */
+  evidence?: string;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt?: string;
+}
+
 export interface RecruitingGoals {
   userId: ID;
   cycleLabel: string;
