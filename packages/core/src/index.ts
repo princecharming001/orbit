@@ -32,6 +32,7 @@ export * from './scoring/strength';
 export * from './scoring/tieFit';
 export * from './scoring/tieScore';
 export * from './server/mappers';
+export * from './server/api';
 export * from './style/card';
 export * from './suggestions/rules';
 export * from './text/email';
