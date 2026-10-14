@@ -26,6 +26,24 @@ export interface SetupState {
   claude: 'own_key' | 'shared' | 'none';
   /** the sample student: nothing to set up */
   demo?: boolean;
+  /** signed in to an Orbit account (plan 16): Google's state and the email import's progress on the server */
+  account?: {
+    google: string;
+    backfill: { phase: string | null; done: number; total: number | null } | null;
+    messages?: number;
+  };
+}
+
+/** The Orbit account part of the Setup line: Google needing a reconnect first, then how far the import is. */
+export function accountFacts(a: NonNullable<SetupState['account']>): string {
+  if (a.google === 'needs_reauth')
+    return 'Orbit account: Google needs reconnecting (Google stopped letting Orbit read email; the student signs in with Google again under Settings, Account)';
+  const bf = a.backfill;
+  if (!bf || bf.phase === 'recent' || bf.phase === null)
+    return `Orbit account: reading the last 90 days of email${a.messages ? `, ${a.messages} messages so far` : ''}`;
+  if (bf.phase === 'deep')
+    return `Orbit account: recent email is in, reading older email${bf.total ? ` (${bf.done} of ${bf.total})` : ''}`;
+  return 'Orbit account: email is in';
 }
 
 export type SetupStepId = 'linkedin' | 'add_person' | 'target_companies' | 'google' | 'resume' | 'none';
@@ -80,7 +98,12 @@ export function setupLine(s: SetupState): string {
     `target companies ${s.targetCompanies}`,
     `Claude ${claude}`,
   ].join(', ');
-  return `Setup: ${facts}. Suggested first step: ${nextSetupStep(s).text}.`;
+  const account = s.account ? ` ${accountFacts(s.account)}.` : '';
+  const step =
+    s.account?.google === 'needs_reauth'
+      ? 'ask them to sign in with Google again (Settings, Account) so Orbit can keep reading their email'
+      : nextSetupStep(s).text;
+  return `Setup: ${facts}.${account} Suggested first step: ${step}.`;
 }
 
 /** How many different people have an open Today card: "three people are waiting on a message from you". */

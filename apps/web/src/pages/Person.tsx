@@ -29,7 +29,9 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { runApproval } from '../components/approve';
 import { DraftEditor, handoffWhere, OutboxStatus } from '../components/DraftEditor';
 import { MutualConnections } from '../components/MutualConnections';
+import { DossierCard } from '../components/people/DossierCard';
 import { STAGE_COLOR, StrengthDots } from '../components/people/shared';
+import { TieScoreCard } from '../components/people/TieScoreCard';
 import { ConfirmEarlyDone, chatTimeLabel, ScheduleChatDialog } from '../components/ScheduleChat';
 import { SuggestionCard } from '../components/SuggestionCard';
 import { db } from '../db/schema';
@@ -54,6 +56,7 @@ import { moveChat } from '../engine/move';
 import { hidePerson, setRelationshipType, unhidePerson } from '../engine/people';
 import { moveChatGuarded } from '../engine/pipeline';
 import { buildPrep, personSummary, toYou } from '../engine/prep';
+import { isServerUser } from '../integrations/orbitApi';
 import { useSession } from '../state/session';
 import { Avatar, Button, Card, Chip, cx, Modal, NotFound, relDate, Select, Tabs, useToast } from '../ui';
 
@@ -941,6 +944,8 @@ export function PersonPage() {
           )}
         </div>
         <div className="space-y-4">
+          <TieScoreCard person={person} userId={user.id} />
+          {isServerUser(user.id) && <DossierCard person={person} userId={user.id} />}
           <Card>
             <div className="font-medium mb-2">Summary</div>
             <p className="text-[13.5px] text-ink-2 leading-relaxed" data-testid="person-summary">

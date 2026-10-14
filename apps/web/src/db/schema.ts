@@ -5,10 +5,12 @@ import type {
   Brief,
   CalendarEvent,
   CoffeeChat,
+  Dossier,
   Edge,
   EmailMessage,
   EmailThread,
   FeedbackEvent,
+  Goal,
   MeetingNote,
   MergeSuggestion,
   Notification,
@@ -62,6 +64,63 @@ export interface KV {
   value: unknown;
 }
 
+/** The student's own closeness rating of a person, 1 ("barely know") to 5 ("very close") (plan 16 §3.5). */
+export interface TieLabelRow {
+  personId: string;
+  userId: string;
+  closeness: 1 | 2 | 3 | 4 | 5;
+  /** the score the model gave before the rating, so the page can say what changed */
+  modelScore?: number;
+  updatedAt: string;
+}
+
+/** A tie score as orbit.tie_scores sends it (account mode); the person row carries the same numbers. */
+export interface TieScoreRow {
+  personId: string;
+  userId: string;
+  score: number;
+  band: string;
+  explanation: string[];
+  contributions?: Record<string, number>;
+  modelVersion?: string;
+  computedAt?: string;
+  [k: string]: unknown;
+}
+
+/** One way to reach a person (orbit.person_identities): an address, a LinkedIn id or slug. */
+export interface PersonIdentityRow {
+  id: string;
+  userId: string;
+  personId: string;
+  kind: string;
+  [k: string]: unknown;
+}
+
+/** An introduction asked for (orbit.intro_requests), kept so the chat can say what came of it. */
+export interface IntroRequestRow {
+  id: string;
+  userId: string;
+  [k: string]: unknown;
+}
+
+/**
+ * A change the student made in account mode that the server has not taken yet: the table and the row's id, read
+ * fresh when it is pushed, so several edits to one row go up as one change (engine/serverSync.ts).
+ */
+export interface OutboxRow {
+  /** `${table}:${id}` */
+  key: string;
+  /** the orbit table the change goes to (chats, stage_events, notes, people, drafts, tie_labels, memories) */
+  table: string;
+  /** the local row's id (for tie_labels, the person's id) */
+  id: string;
+  op: 'upsert' | 'delete';
+  attempts: number;
+  createdAt: string;
+  updatedAt: string;
+  lastError?: string;
+}
+
 export class OrbitDB extends Dexie {
   users!: EntityTable<User, 'id'>;
   settings!: EntityTable<UserSettings, 'userId'>;
@@ -96,6 +155,13 @@ export class OrbitDB extends Dexie {
   chatConversations!: EntityTable<ChatConversation, 'id'>;
   chatMessages!: EntityTable<ChatMessage, 'id'>;
   chatActions!: EntityTable<ChatAction, 'id'>;
+  userGoals!: EntityTable<Goal, 'id'>;
+  tieLabels!: EntityTable<TieLabelRow, 'personId'>;
+  tieScores!: EntityTable<TieScoreRow, 'personId'>;
+  dossiers!: EntityTable<Dossier, 'id'>;
+  personIdentities!: EntityTable<PersonIdentityRow, 'id'>;
+  introRequests!: EntityTable<IntroRequestRow, 'id'>;
+  outbox!: EntityTable<OutboxRow, 'key'>;
 
   constructor(name = 'orbit') {
     super(name);
@@ -138,6 +204,18 @@ export class OrbitDB extends Dexie {
       chatConversations: 'id, userId, updatedAt',
       chatMessages: 'id, conversationId, [conversationId+seq]',
       chatActions: 'id, conversationId, status, createdAt',
+    });
+    // plan 16: goals of every kind (the v1 `goals` row stays: it is the recruiting goal's details), the student's
+    // closeness ratings, and in account mode the server's scores, dossiers, identities and intro requests, plus the
+    // outbox of changes waiting for the server
+    this.version(3).stores({
+      userGoals: 'id, userId, status, kind',
+      tieLabels: 'personId, userId',
+      tieScores: 'personId, userId',
+      dossiers: 'id, userId, personId',
+      personIdentities: 'id, userId, personId',
+      introRequests: 'id, userId',
+      outbox: 'key, table, createdAt',
     });
   }
 }

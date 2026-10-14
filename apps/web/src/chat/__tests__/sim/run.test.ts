@@ -27,7 +27,7 @@ describe.skipIf(!SIM_ENABLED)(`sim: simulated students${only ? ` (${only})` : ''
 
   for (const s of list) {
     it(`${s.group}/${s.id}: ${s.goal}`, async () => {
-      const { engine, user } = await seed(s.account);
+      const { engine, user } = await seed(s.account, s.api);
       const t = await converse(engine, s.persona, s.goal, s.maxTurns ?? 5);
       const v = await judge(t, user.firstName);
       const tools = t.turns.flatMap((x) => x.tools.map((tt) => tt.name));

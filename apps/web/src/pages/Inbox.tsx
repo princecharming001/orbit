@@ -4,6 +4,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { RefreshCw } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { RepliesPanel } from '../components/account/RepliesPanel';
 import { runApproval } from '../components/approve';
 import { DraftEditor, OutboxStatus } from '../components/DraftEditor';
 import { KIND_LABEL, SuggestionCard } from '../components/SuggestionCard';
@@ -13,6 +14,7 @@ import { discardDraft, restoreDraft, unsnoozeSuggestion } from '../engine/drafts
 import { moveChat } from '../engine/move';
 import { wentQuiet } from '../engine/pipeline';
 import { draftLists, notYetWritten, startedDrafts, todayCards } from '../engine/today';
+import { isServerUser } from '../integrations/orbitApi';
 import { useHints } from '../state/hints';
 import { useSession } from '../state/session';
 import {
@@ -47,7 +49,7 @@ const PROVIDER_LABELS: Record<string, string> = {
  */
 export function InboxPage() {
   const { user, userId } = useSession();
-  const [tab, setTab] = useState<'pending' | 'snoozed' | 'outbox' | 'sent'>();
+  const [tab, setTab] = useState<'pending' | 'snoozed' | 'outbox' | 'sent' | 'replies'>();
   const [showLater, setShowLater] = useState(false);
   const [showMore, setShowMore] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -186,13 +188,17 @@ export function InboxPage() {
   const visiblePeople = people.filter((p) => p.isHuman && !p.hiddenAt).length;
   // a message opened in the mail app or LinkedIn and not marked as sent comes first: it is waiting on the student.
   // A link to one card opens the cards instead.
+  // account mode: the server reads replies to the student's outreach and drafts answers (plan 16 §8)
+  const replies = isServerUser(userId);
   const shown =
     tab ??
-    (focusCard || focusPerson
-      ? 'pending'
-      : outbox.some((o) => o.status === 'handed_off' || o.status === 'failed')
-        ? 'outbox'
-        : 'pending');
+    (params.get('tab') === 'replies' && replies
+      ? 'replies'
+      : focusCard || focusPerson
+        ? 'pending'
+        : outbox.some((o) => o.status === 'handed_off' || o.status === 'failed')
+          ? 'outbox'
+          : 'pending');
   const refresh = async () => {
     if (!user) return;
     setBusy(true);
@@ -262,8 +268,10 @@ export function InboxPage() {
               { value: 'outbox', label: 'Opened, not marked sent', count: outbox.length },
               { value: 'snoozed', label: 'Snoozed', count: snoozed.length },
               { value: 'sent', label: 'Sent', count: sent.length },
+              ...(replies ? [{ value: 'replies' as const, label: 'Replies' }] : []),
             ]}
           />
+          {shown === 'replies' && <RepliesPanel />}
           {shown === 'pending' && started.length > 0 && (
             <div className="space-y-2 mb-5" data-testid="drafts-started">
               <div className="text-[12px] uppercase tracking-wide text-ink-3">Started by you</div>

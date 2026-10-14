@@ -207,6 +207,7 @@ test.describe('Chat home', () => {
       'settings',
       'import',
       'prep',
+      'list',
       'needs_confirmation',
       'error',
     ])

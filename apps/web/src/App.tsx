@@ -3,7 +3,9 @@ import { ChatEngineProvider } from './chat/engineContext';
 import type { ChatEngine } from './chat/types';
 import { ChatWithPanel } from './chat/ui/ChatWithPanel';
 import { AppShell } from './components/AppShell';
+import { AccountSync } from './components/account/AccountSync';
 import { LegacyRedirect } from './legacyRoutes';
+import { AuthDone } from './pages/AuthDone';
 import { CompanyPage } from './pages/Company';
 import { Discover } from './pages/Discover';
 import { InboxPage } from './pages/Inbox';
@@ -60,9 +62,12 @@ export function App({ chatEngine }: { chatEngine?: ChatEngine }) {
       <SessionProvider>
         <ChatEngineProvider engine={chatEngine}>
           <ToastProvider>
+            <AccountSync />
             <Routes>
               {/* the landing page stays reachable for someone signed in (a bookmark, the demo's way back) */}
               <Route path="/welcome" element={<Landing />} />
+              {/* Google sign-in comes back here in account mode (orbit-api redirects with #code or #error) */}
+              <Route path="/auth/done" element={<AuthDone />} />
               <Route
                 path="/onboarding/:step"
                 element={

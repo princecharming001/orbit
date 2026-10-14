@@ -11,7 +11,15 @@ import type { User } from '@orbit/core';
 import { wipeDatabase } from '../../../db/schema';
 import { createLocalUser } from '../../../engine/account';
 import { loadDemo } from '../../../engine/demo';
+import {
+  clearSession,
+  completeSignIn,
+  resetSessionForTests,
+  setOrbitApiBaseForTests,
+  setOrbitApiFetchForTests,
+} from '../../../integrations/orbitApi';
 import { clearPrefs, writePrefs } from '../../../integrations/prefs';
+import { createFakeOrbitApi, type FakeOrbitApi, fakeAccountUser } from '../../../test/fakeOrbitApi';
 import { z } from '../../../zod';
 import { createChatEngine } from '../../agent';
 import { makeChatClient, setChatClientFactoryForTests } from '../../agent/client';
@@ -28,6 +36,12 @@ export const SIM_DIR = process.env.SIM_DIR ?? '/tmp/orbit-sim';
 const SIM_MODEL = process.env.SIM_MODEL ?? 'claude-sonnet-5-5';
 
 export type AccountState = 'demo' | 'empty' | ((user: User) => Promise<void>);
+
+/**
+ * Account mode for a scenario: the student is signed in to an Orbit account answered by the in-memory fake orbit-api
+ * (research, sourcing, replies, memory), seeded with what the scenario needs.
+ */
+export type ApiSeed = (api: FakeOrbitApi, user: User) => Promise<void> | void;
 
 /** One recorded exchange: the student's line (or a button they pressed), and what Orbit did. */
 export interface Exchange {
@@ -52,7 +66,10 @@ export interface Transcript {
 let orbitClientFactory: ((key: string) => ReturnType<typeof makeChatClient>) | undefined;
 
 /** Build the engine over a seeded account. Returns the engine and the user. */
-export async function seed(state: AccountState): Promise<{ engine: ChatEngine; user: User }> {
+export async function seed(
+  state: AccountState,
+  apiSeed?: ApiSeed,
+): Promise<{ engine: ChatEngine; user: User; api?: FakeOrbitApi }> {
   // a hand-off opens a mailto in the real UI; jsdom cannot navigate, so make it a no-op for the sim
   try {
     window.open = () => null;
@@ -74,15 +91,37 @@ export async function seed(state: AccountState): Promise<{ engine: ChatEngine; u
     });
     if (typeof state === 'function') await state(user);
   }
+  let api: FakeOrbitApi | undefined;
+  await clearSession();
+  resetSessionForTests();
+  setOrbitApiFetchForTests(undefined);
+  setOrbitApiBaseForTests(undefined);
+  if (apiSeed) {
+    api = createFakeOrbitApi({
+      user: fakeAccountUser({
+        id: user.id,
+        email: user.email || 'student@cornell.edu',
+        firstName: user.firstName,
+      }),
+    });
+    setOrbitApiBaseForTests(api.base);
+    setOrbitApiFetchForTests(api.fetch);
+    const signed = await completeSignIn(`#code=${api.code}`);
+    if (!signed.ok) throw new Error(signed.message);
+    await apiSeed(api, user);
+  }
   writePrefs({ anthropicApiKey: KEY, llmDailyRequestCap: 5000, llmDailyTokenCap: 500_000_000 });
   orbitClientFactory = (key: string) => makeChatClient(key, { maxRetries: 3 });
   setChatClientFactoryForTests(orbitClientFactory);
   const engine = createChatEngine({ registry, execute, user: () => user, now: () => NOW });
-  return { engine, user };
+  return { engine, user, api };
 }
 
 export function teardownSim(): void {
   setChatClientFactoryForTests(undefined);
+  setOrbitApiFetchForTests(undefined);
+  setOrbitApiBaseForTests(undefined);
+  resetSessionForTests();
 }
 
 /** One student turn against Orbit, collecting the tools, prose and any pending confirmation. */

@@ -30,6 +30,9 @@ export type ResultKind =
   | 'choices'
   /** an inline setup widget (connect Google, import LinkedIn, add a Claude key, upload a resume): data `{ what: SetupWhat }` */
   | 'setup'
+  /** a titled list of rows (goals, a score's reasons, research, search results, replies, memories): data
+   * `{ title, items: { text, sub?, chip?, href?, links?: { label, url }[] }[] }` */
+  | 'list'
   | 'needs_confirmation'
   | 'error';
 

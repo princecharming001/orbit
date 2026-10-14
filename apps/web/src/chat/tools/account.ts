@@ -9,6 +9,7 @@ import { connectionsText, importLinkedInExport } from '../../engine/linkedin';
 import { saveResume } from '../../engine/resume';
 import { syncGoogle } from '../../engine/sync';
 import { currentGoogleToken, googleClientId } from '../../integrations/google';
+import { callApi, isServerUser } from '../../integrations/orbitApi';
 import { writePrefs } from '../../integrations/prefs';
 import { z } from '../../zod';
 import { type AnyTool, defineTool, ok, plural, toModel } from './_shared';
@@ -151,6 +152,10 @@ export const syncGoogleTool = defineTool({
   capabilities: ['google_sync', 'google_connect', 'google_client_id_set', 'onboarding_google'],
   progress: 'Syncing Google',
   async summarizeIntent(_input, ctx) {
+    if (isServerUser(ctx.user.id))
+      return {
+        text: "Ask Orbit's server to check Gmail and Google Calendar now, instead of at its next regular check.",
+      };
     const token = currentGoogleToken();
     const account = await googleAccount(ctx.user.id);
     return {
@@ -165,6 +170,21 @@ export const syncGoogleTool = defineTool({
     };
   },
   async execute(input, ctx) {
+    if (isServerUser(ctx.user.id)) {
+      // account mode: the server reads the mail; this asks it to look now
+      const r = await callApi('/google/sync', { mode: 'incremental' });
+      if (!r.ok) throw new Error(r.message);
+      const out = { queued: r.value.queued, server: true };
+      return ok(
+        'import',
+        out,
+        out,
+        r.value.queued
+          ? "Orbit's server is checking Gmail and Calendar now. New people and replies show up in a minute or two."
+          : 'Orbit is already reading your email; new people and replies show up as it goes.',
+        '/inbox',
+      );
+    }
     if (input.clientId !== undefined) writePrefs({ googleClientId: input.clientId.trim() || undefined });
     if (!googleClientId()) throw new Error('Google is not part of this version of Orbit.');
     const token = currentGoogleToken();

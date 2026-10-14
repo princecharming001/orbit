@@ -1,6 +1,7 @@
 import type { ChatStage, MessageKind } from '@orbit/core';
 import type { ChoiceOption, ToolSpec } from '../types';
 import { type MatchablePerson, resolvePerson } from './people-match';
+import { routeNetwork } from './routerNetwork';
 import { peopleWaiting } from './setup';
 
 /**
@@ -33,6 +34,12 @@ export interface RouterContext {
   waiting?: number;
   /** what is connected (LinkedIn by export or live, Gmail), when known; the sample student has nothing to set up */
   setup?: { linkedin: boolean; linkedinLive: boolean; google: boolean; demo?: boolean };
+  /** the student's active goals (plan 16), for "archive my sales goal" */
+  goals?: { id: string; kind: import('@orbit/core').GoalKind; title: string }[];
+  /** routes found in this tab (account mode), for "ask Sam to introduce me to Priya" */
+  paths?: { id: string; firstHopName: string; targetId?: string }[];
+  /** the student is signed in to an Orbit account */
+  account?: boolean;
   /** the mode note's sentence about adding a key, appended to refusals */
   modeNote: string;
   settingsHref: string;
@@ -461,6 +468,20 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
     )
   )
     return viaTool('list_recommendations', {}, undefined, 'list recommendations');
+
+  // the networking agent: goals, scores, research, finding people, intros, replies, autonomy, memory, cadence
+  {
+    const r = routeNetwork(text, lower, {
+      viaTool,
+      person,
+      nobody,
+      ambiguous,
+      goals: ctx.goals ?? [],
+      paths: ctx.paths ?? [],
+      account: !!ctx.account,
+    });
+    if (r) return r;
+  }
 
   // free-form questions and judgement calls need the model: say so before any pattern could half-match them
   if (NEEDS_MODEL.test(lower) && !/^(who is|who's|show|open|find|look ?up|tell me about)\b/i.test(lower))

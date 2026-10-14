@@ -1,8 +1,9 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { RefreshCw } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { type ReactNode, useEffect, useMemo, useState } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { AddPersonButton } from '../components/AddPerson';
+import { FindPeople } from '../components/account/FindPeople';
 import { LinkedInImportButton } from '../components/LinkedInImport';
 import { StrengthDots } from '../components/people/shared';
 import { RoleLine } from '../components/SuggestionCard';
@@ -18,10 +19,43 @@ import {
   restoreRecommendation,
   saveRecommendation,
 } from '../engine/recommend';
+import { isServerUser } from '../integrations/orbitApi';
 import { useSession } from '../state/session';
-import { Avatar, Button, Chip, cx, EmptyState, Input, PageHeader, useToast } from '../ui';
+import { Avatar, Button, Chip, cx, EmptyState, Input, PageHeader, Tabs, useToast } from '../ui';
 
+/**
+ * Discover: people from the student's own network worth a coffee chat, and in account mode a second tab, Find
+ * people, that searches beyond it (plan 16 §6).
+ */
 export function Discover() {
+  const { userId } = useSession();
+  const [params, setParams] = useSearchParams();
+  if (!userId || !isServerUser(userId)) return <NetworkDiscover />;
+  const tab = params.get('tab') === 'find' ? 'find' : 'network';
+  const tabs = (
+    <Tabs
+      value={tab}
+      onChange={(t) => setParams(t === 'find' ? { tab: 'find' } : {}, { replace: true })}
+      items={[
+        { value: 'network', label: 'Your network' },
+        { value: 'find', label: 'Find people' },
+      ]}
+    />
+  );
+  if (tab === 'network') return <NetworkDiscover tabs={tabs} />;
+  return (
+    <div>
+      <PageHeader
+        title="Discover"
+        subtitle="Search beyond your network for investors, customers, candidates, mentors and collaborators. Orbit ranks them by fit and how easy they are to reach."
+      />
+      {tabs}
+      <FindPeople userId={userId} />
+    </div>
+  );
+}
+
+function NetworkDiscover({ tabs }: { tabs?: ReactNode }) {
   const { user, userId, goals } = useSession();
   const nav = useNavigate();
   const toast = useToast();
@@ -148,6 +182,7 @@ export function Discover() {
           </Button>
         }
       />
+      {tabs}
       <div className="mb-4 flex flex-wrap gap-2">
         <Input
           value={q}

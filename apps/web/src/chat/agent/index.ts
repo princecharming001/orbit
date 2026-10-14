@@ -3,7 +3,10 @@ import type { User } from '@orbit/core';
 import { newId } from '@orbit/core';
 import { db } from '../../db/schema';
 import { DEMO_USER_ID } from '../../engine/demo';
+import { activeGoals } from '../../engine/goals';
+import { recentPaths } from '../../engine/paths';
 import { MODEL, makeWrap } from '../../integrations/anthropic';
+import { isServerUser } from '../../integrations/orbitApi';
 import { refreshPrefs } from '../../integrations/prefs';
 import type {
   ChatAction,
@@ -227,6 +230,9 @@ export function createChatEngine(deps: ChatEngineDeps): ChatEngine {
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
         .map((d) => ({ id: d.id, personId: d.personId, status: d.status, kind: d.kind })),
       nextChat: nextChat ? { personId: nextChat.personId } : undefined,
+      goals: (await activeGoals(userId)).map((g) => ({ id: g.id, kind: g.kind, title: g.title })),
+      paths: recentPaths(),
+      account: isServerUser(userId),
       waiting: peopleWaitingNow(cards, latestBrief, now),
       // what is connected, the same way the snapshot's Setup line counts it
       setup: {

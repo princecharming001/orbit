@@ -143,20 +143,21 @@ describe('snapshot', () => {
     expect(lines[1]).toBe(
       "Student: Alex Kim, Cornell '27, CS. Goals: Summer 2027, PM intern, APM, product, fintech.",
     );
-    expect(lines[2]).toMatch(
+    expect(lines[2]).toBe('Active goals (ids): none tracked.');
+    expect(lines[3]).toMatch(
       /^Pipeline \(chats by stage, 7 total\): identified 2, outreach_sent 1, replied 1, scheduled 1, completed 1, no_response 1\. People: 7\.$/,
     );
-    expect(lines[3]).toMatch(
+    expect(lines[4]).toMatch(
       /^Today's brief \(ids\): s_0 thank_you Person0 Lastname \(Met two days ago and promised to send\); s_1 follow_up_bump Person1 Lastname/,
     );
-    expect(lines[4]).toBe('Drafts unsent: 2 (out_0 Person0, out_1 Person1).');
-    expect(lines[5]).toMatch(
+    expect(lines[5]).toBe('Drafts unsent: 2 (out_0 Person0, out_1 Person1).');
+    expect(lines[6]).toMatch(
       /^Integrations: Google not connected, LinkedIn import 3 d ago\. Claude features: drafts on, emailTriage on, notes off, resume off, summaries off\.$/,
     );
-    expect(lines[6]).toBe(
+    expect(lines[7]).toBe(
       'Setup: people 7, LinkedIn imported, Gmail not connected, resume none, target companies 0, Claude own key. Suggested first step: connect Gmail so Orbit sees who they email and drafts can go out (show_setup google).',
     );
-    expect(lines[7]).toMatch(/^Stage names: identified = To contact/);
+    expect(lines[8]).toMatch(/^Stage names: identified = To contact/);
     expect(s.text).not.toMatch(/Open panel/);
     expect(s.text).not.toMatch(/[—–!]/);
   });

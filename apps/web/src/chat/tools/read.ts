@@ -1,5 +1,12 @@
 /** Read tools: a few broad lookups with filters, never one per page. Nothing here changes data. */
-import type { CalendarEvent, CoffeeChat, OutboundMessage, Person, Suggestion } from '@orbit/core';
+import type {
+  CalendarEvent,
+  CoffeeChat,
+  OutboundMessage,
+  PathsFindResponse,
+  Person,
+  Suggestion,
+} from '@orbit/core';
 import {
   ACTIVE_STAGES,
   buildIntroWeb,
@@ -38,6 +45,7 @@ import {
 } from '../../engine/graph';
 import { linkedInLiveStatus } from '../../engine/linkedinLive';
 import { namedPeopleLabel, previewNoteMatch } from '../../engine/notes';
+import { findPathsOnServer, serverPathView } from '../../engine/paths';
 import { wentQuiet } from '../../engine/pipeline';
 import { buildPrep, personSummary } from '../../engine/prep';
 import { introducerIdFor, isColdRecommendation } from '../../engine/recommend';
@@ -63,6 +71,7 @@ import {
 import { villageAvailable, villageOffered, type WarmIntro, warmIntrosFor } from '../../engine/warmIntros';
 import { hasLlm, MODEL } from '../../integrations/anthropic';
 import { currentGoogleToken, googleClientId } from '../../integrations/google';
+import { isServerUser } from '../../integrations/orbitApi';
 import {
   DEFAULT_DAILY_REQUEST_CAP,
   DEFAULT_DAILY_TOKEN_CAP,
@@ -1022,11 +1031,58 @@ function warmIntroForModel(w: WarmIntro, ctx: ToolContext) {
   };
 }
 
+/** find_routes in account mode: the server's routes with their chance in words, reasons and ids for ask_for_intro. */
+function serverRoutes(ctx: ToolContext, target: Person, res: PathsFindResponse) {
+  if (res.direct)
+    return ok(
+      'routes',
+      { target: personRef(target), routes: [] },
+      {
+        target: personRef(target),
+        direct: { score: res.direct.score, band: res.direct.band, text: res.direct.text },
+      },
+      `You know ${target.displayName} directly (${res.direct.score}, ${res.direct.band}), so write to them yourself; no intro needed.`,
+      `/people/${target.id}`,
+    );
+  const routes = res.paths.slice(0, 5).map(serverPathView);
+  const quiet = res.unconfigured?.length
+    ? ' Some sources are not set up yet, so a route may be missing.'
+    : '';
+  if (!routes.length)
+    return ok(
+      'routes',
+      { target: personRef(target), routes: [] },
+      { target: personRef(target), routes: [], fallback: res.fallback ?? 'cold' },
+      `No warm route to ${target.displayName} that is likely to work. A short, specific cold note is the better move; I can draft one.${quiet}`,
+      `/people/${target.id}`,
+    );
+  const best = routes[0]!;
+  return ok(
+    'routes',
+    { target: personRef(target), routes },
+    {
+      target: personRef(target),
+      routes: routes.map((r) => ({
+        pathId: r.id,
+        chance: r.bandLabel,
+        through: r.names.slice(1, -1),
+        firstHopId: r.firstHopId,
+        reason: wrapped(ctx, 'route', r.reason, 300),
+        otherWays: r.otherWays,
+      })),
+      sources: res.sources,
+      next: 'ask_for_intro with a pathId drafts the request; it never sends',
+    },
+    `${plural(routes.length, 'route')} to ${target.displayName}. Best: through ${best.firstHop} (${best.bandLabel.toLowerCase()}).${quiet}`,
+    `/people/${target.id}`,
+  );
+}
+
 export const findRoutes = defineTool({
   name: 'find_routes',
   kind: 'read',
   description:
-    'Call this when the student asks how to reach someone, who could introduce them to a person, for a warm intro to a person or a company, who they know at a company, which former employees of a company are in their network, or wants a company page. Give a personId for routes to a person (each route names the first hop to ask for an intro) or a company name for the people there now, former employees and two-hop routes. Both include warm intro paths from Village when the student has it (warmth in a word, and the hops). A query that is not a clear person or company returns candidates to choose from.',
+    'Call this when the student asks how to reach someone, who could introduce them to a person, for a warm intro to a person or a company, who they know at a company, which former employees of a company are in their network, or wants a company page. Give a personId for routes to a person (each route names the first hop to ask for an intro) or a company name for the people there now, former employees and two-hop routes. Both include warm intro paths from Village when the student has it (warmth in a word, and the hops). A query that is not a clear person or company returns candidates to choose from. With an Orbit account, routes to a person are ranked by the chance the intro happens (likely, possible, long shot), each with a reason and a pathId for ask_for_intro.',
   input: z.object({
     personId: z.string().optional().describe('Routes to this person (from search_people).'),
     company: z
@@ -1086,6 +1142,14 @@ export const findRoutes = defineTool({
         );
       if (cands[0]!.kind === 'person') personId = cands[0]!.id;
       else company = cands[0]!.id;
+    }
+    if (personId && isServerUser(userId)) {
+      // account mode: orbit-api ranks routes by the chance the intro happens, with LinkedIn mutuals and Village
+      const target = await requirePerson(ctx, personId);
+      const r = await findPathsOnServer(ctx.user, { personId });
+      if (r.ok) return serverRoutes(ctx, target, r.value);
+      if (r.reason !== 'network' && r.reason !== 'unconfigured') throw new Error(r.message);
+      // the server cannot be reached: Orbit's own routes from this browser's copy still answer
     }
     if (personId) {
       const target = await requirePerson(ctx, personId);

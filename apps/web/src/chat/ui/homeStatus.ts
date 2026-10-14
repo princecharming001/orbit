@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { db } from '../../db/schema';
 import { DEMO_USER_ID } from '../../engine/demo';
 import { googleClientId } from '../../integrations/google';
+import { isServerUser } from '../../integrations/orbitApi';
 import { useSession } from '../../state/session';
 import { peopleWaitingNow } from '../agent/setup';
 import { useThread } from './threadStore';
@@ -71,8 +72,10 @@ export async function readHomeStatus(userId: string, now: Date = new Date()): Pr
         i.provider === 'linkedin_csv' ||
         (i.provider === 'linkedin_live' && i.status !== 'revoked' && !!i.externalAccountId),
     ),
-    gmail: integrations.some((i) => i.provider === 'google' && i.status !== 'revoked'),
-    gmailAvailable: !!googleClientId(),
+    // an Orbit account connected Google at sign-in: the server reads the mail
+    gmail:
+      isServerUser(userId) || integrations.some((i) => i.provider === 'google' && i.status !== 'revoked'),
+    gmailAvailable: !!googleClientId() || isServerUser(userId),
     demo: userId === DEMO_USER_ID || integrations.some((i) => i.provider === 'demo'),
   };
   cache.set(userId, status);

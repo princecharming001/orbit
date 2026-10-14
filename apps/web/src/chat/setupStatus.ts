@@ -6,8 +6,10 @@ import { db } from '../db/schema';
 import { DEMO_USER_ID } from '../engine/demo';
 import { googleAccount } from '../engine/integrations';
 import { linkedInLiveStatus } from '../engine/linkedinLive';
+import { googleStatus } from '../engine/serverSync';
 import { villageAvailable } from '../engine/warmIntros';
 import { currentGoogleToken, googleClientId } from '../integrations/google';
+import { accountUser, isServerUser } from '../integrations/orbitApi';
 import { envGoogleClientId, readPrefs } from '../integrations/prefs';
 import { sharedClaudeUrl } from '../integrations/shared-claude';
 import type { SetupWhat } from './types';
@@ -67,6 +69,21 @@ export type SetupStatus = GoogleSetup | LinkedinSetup | ClaudeKeySetup | ResumeS
 export async function readSetupStatus(userId: string, what: SetupWhat): Promise<SetupStatus> {
   switch (what) {
     case 'google': {
+      // an Orbit account: Google came with the sign-in, and the server keeps the mail current
+      if (isServerUser(userId)) {
+        const server = googleStatus();
+        return {
+          what,
+          connected: true,
+          signedIn: server?.status !== 'needs_reauth',
+          needsReauth: server?.status === 'needs_reauth',
+          email: accountUser()?.email,
+          lastSyncedAt: server?.lastSyncedAt ?? undefined,
+          clientIdConfigured: true,
+          builtInClient: true,
+          demo: false,
+        };
+      }
       const g = await googleAccount(userId);
       const demoRow = userId === DEMO_USER_ID || !!(await demoAccount(userId));
       return {

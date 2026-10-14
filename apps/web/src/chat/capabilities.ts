@@ -1,7 +1,8 @@
 import type { Capability } from './types';
 
 /**
- * Every capability a student has in Orbit today, one per id in the capability inventory (181). The registry's
+ * Every capability a student has in Orbit today, one per id in the capability inventory (181), plus the networking
+ * agent's 20 (plan 16: goals, scores, research, sourcing, replies, autonomy, memory and cadence). The registry's
  * coverage test checks that every id here is claimed by at least one tool, and that every tool claims at least one.
  * `kind` is how the chat treats it: read, a plain write, or a write that needs an explicit Approve.
  */
@@ -1600,6 +1601,171 @@ export const CAPABILITIES: readonly Capability[] = [
     title: 'Back to the demo',
     kind: 'read',
     utterances: ['back to the demo', 'go back to the sample student', 'open the demo again'],
+  },
+  // Area 12. Networking agent (plan 16): goals, scores, research, sourcing, replies, autonomy, memory
+  {
+    id: 'goal_set',
+    area: 'Networking agent',
+    title: 'Track a goal of any kind',
+    kind: 'write',
+    utterances: [
+      'track my goal of raising a pre-seed',
+      'I want to find customers for my startup',
+      'yes, track that as a goal',
+    ],
+  },
+  {
+    id: 'goal_list',
+    area: 'Networking agent',
+    title: 'See your goals',
+    kind: 'read',
+    utterances: ['what are my goals', 'what am I working toward', 'list my goals'],
+  },
+  {
+    id: 'goal_update',
+    area: 'Networking agent',
+    title: 'Change or pause a goal',
+    kind: 'write',
+    utterances: ['add Ramp to my recruiting goal', 'pause my hiring goal', 'move my deadline to December 1'],
+  },
+  {
+    id: 'goal_archive',
+    area: 'Networking agent',
+    title: 'Archive a goal',
+    kind: 'write',
+    utterances: ["I'm done fundraising", 'drop my sales goal', 'archive the cofounder goal'],
+  },
+  {
+    id: 'score_explain',
+    area: 'Networking agent',
+    title: 'See how close you are to someone, and why',
+    kind: 'read',
+    utterances: ['how close am I to Maya', 'why is Dan a weak tie', "explain Priya's score"],
+  },
+  {
+    id: 'score_rate',
+    area: 'Networking agent',
+    title: 'Rate how close you really are to someone',
+    kind: 'write',
+    utterances: ['Maya is a close friend', 'I barely know Dan', "that score is wrong, we're close"],
+  },
+  {
+    id: 'research_person',
+    area: 'Networking agent',
+    title: 'Research a person before writing to them',
+    kind: 'write',
+    utterances: ['research Priya Shah', 'look up Dan before I email him', 'what is Maya up to lately'],
+  },
+  {
+    id: 'research_read',
+    area: 'Networking agent',
+    title: 'Read what Orbit found about someone',
+    kind: 'read',
+    utterances: ['what did you find on Priya', "show me Dan's research", 'any openers for Maya'],
+  },
+  {
+    id: 'source_find',
+    area: 'Networking agent',
+    title: 'Find new people beyond your network',
+    kind: 'write',
+    utterances: [
+      'find seed investors in climate',
+      'find heads of ops at dental clinics',
+      'find researchers working on graph learning',
+    ],
+  },
+  {
+    id: 'source_add',
+    area: 'Networking agent',
+    title: 'Add people from a search to your pipeline',
+    kind: 'write',
+    utterances: ['add the first two', 'add Maya Chen from that list', 'put them in my pipeline'],
+  },
+  {
+    id: 'intro_ask',
+    area: 'Networking agent',
+    title: 'Ask someone on a route for an introduction',
+    kind: 'risky',
+    utterances: [
+      'ask Sam to introduce me to Priya',
+      'draft the intro request through Maya',
+      'get me an intro to Stripe through Dan',
+    ],
+  },
+  {
+    id: 'replies_list',
+    area: 'Networking agent',
+    title: 'See who replied and what they meant',
+    kind: 'read',
+    utterances: ['who replied', 'any replies I need to answer', 'show the replies picking a time'],
+  },
+  {
+    id: 'replies_draft',
+    area: 'Networking agent',
+    title: 'Draft an answer to a reply in your voice',
+    kind: 'write',
+    utterances: ['draft a reply to Maya', "answer Dan's question", 'reply offering some times'],
+  },
+  {
+    id: 'calendar_book',
+    area: 'Networking agent',
+    title: 'Book an agreed time on your calendar',
+    kind: 'risky',
+    utterances: [
+      'book Tuesday at 10',
+      'put the call with Maya on my calendar',
+      'yes, send the invite for Thursday',
+    ],
+  },
+  {
+    id: 'autonomy_set',
+    area: 'Networking agent',
+    title: 'Change how much Orbit may send on its own',
+    kind: 'risky',
+    utterances: ['send after I approve', 'let Orbit confirm meeting times for me', 'go back to draft only'],
+  },
+  {
+    id: 'outreach_pause',
+    area: 'Networking agent',
+    title: 'Pause outreach until a date',
+    kind: 'write',
+    utterances: ['pause outreach until after finals', "I'm on vacation until the 20th", 'resume my outreach'],
+  },
+  {
+    id: 'cadence_due',
+    area: 'Networking agent',
+    title: 'See which follow-ups are due',
+    kind: 'read',
+    utterances: ['what follow-ups are due', 'who should I check in with', 'what is Orbit about to send'],
+  },
+  {
+    id: 'memory_remember',
+    area: 'Networking agent',
+    title: 'Ask Orbit to remember something',
+    kind: 'write',
+    utterances: [
+      'remember that I prefer morning calls',
+      'our traction is 40 paying clinics',
+      'Maya prefers LinkedIn',
+    ],
+  },
+  {
+    id: 'memory_recall',
+    area: 'Networking agent',
+    title: 'Ask what Orbit remembers',
+    kind: 'read',
+    utterances: [
+      'what do you remember about my calls',
+      'what did I tell you about Maya',
+      'do you remember my traction numbers',
+    ],
+  },
+  {
+    id: 'memory_forget',
+    area: 'Networking agent',
+    title: 'Make Orbit forget something',
+    kind: 'risky',
+    utterances: ['forget that', 'forget everything about Dan', 'delete what you remember about my schedule'],
   },
 ];
 

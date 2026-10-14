@@ -4,12 +4,38 @@ import { STABLE_SYSTEM_VERSION, stableSystemText, systemBlocks } from '../agent/
 const text = stableSystemText('0123456789abcdef');
 
 describe('stable system block', () => {
-  it('is version 8 and byte-identical for a conversation', () => {
-    expect(STABLE_SYSTEM_VERSION).toBe(8);
+  it('is version 9 and byte-identical for a conversation', () => {
+    expect(STABLE_SYSTEM_VERSION).toBe(9);
     expect(stableSystemText('0123456789abcdef')).toBe(text);
     expect(systemBlocks('0123456789abcdef')).toEqual([
       { type: 'text', text, cache_control: { type: 'ephemeral' } },
     ]);
+  });
+
+  it('v9: goals, memory, research and sourcing, autonomy honesty and the hard rules', () => {
+    expect(text).toMatch(/Goals:/);
+    expect(text).toMatch(
+      /recruiting, fundraising, sales, hiring, advice, cofounder, community, collaboration/,
+    );
+    expect(text).toMatch(/Want me to track this as a goal\?/);
+    expect(text).toMatch(/call set_goal only after they say yes/);
+    expect(text).toMatch(/Save durable preferences, constraints, goal details and outcomes with remember/);
+    expect(text).toMatch(
+      /Never store health, religion, politics, sexuality, family or other sensitive details/,
+    );
+    expect(text).toMatch(/"Remembered:"/);
+    expect(text).toMatch(/research_person/);
+    expect(text).toMatch(/find_people/);
+    expect(text).toMatch(/ask_for_intro drafts the request and a note to forward; it never sends/);
+    expect(text).toMatch(/Never imply a message was sent unless the tool says it was sent/);
+    expect(text).toMatch(/LinkedIn messages and first messages always wait for their own tap/);
+    expect(text).toMatch(
+      /You never send, schedule or promise anything on the student's behalf unless a tool confirms the student approved that exact message/,
+    );
+    expect(text).toMatch(/You never contact someone who asked not to be contacted/);
+    expect(text).toMatch(/You never invent facts about the student or anyone else/);
+    expect(text).toMatch(/If a rule blocks an action, say which rule in plain words/);
+    expect(text).toMatch(/Orbit accounts:/);
   });
 
   it('keeps nothing volatile in it', () => {
@@ -84,6 +110,6 @@ describe('stable system block', () => {
     expect(text).toMatch(/offer_choices at the end of most replies/);
     expect(text).toMatch(/at most 3 options/);
     expect(text).toMatch(/Never write the options out in your text/);
-    expect(text).toMatch(/choices, setup, needs_confirmation/);
+    expect(text).toMatch(/choices, setup, list, needs_confirmation/);
   });
 });

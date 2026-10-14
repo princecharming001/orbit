@@ -42,6 +42,7 @@ import {
 import { addTouchpoint, feedback, notify, recomputeAllStrengths } from '../db/repo';
 import { db } from '../db/schema';
 import { describeLlmFailure, hasLlm, llmDraft, llmSummary, toLlmError } from '../integrations/anthropic';
+import { goalRegisterDraft } from './goalDrafts';
 import { bestPathStrength, buildReachGraph, reachPersonIn } from './graph';
 import {
   introductionQuestionCandidate,
@@ -1145,11 +1146,14 @@ export async function draftMessage(
   const kind = out.kind ?? asked;
   const written = writtenChannel(out, channel, person);
   const where = await threadFor(kind, chat, ctx);
+  // a goal other than recruiting writes in its own register (plan 16 §7.3)
+  const forGoal = await goalRegisterDraft(user, person, kind, written, chat?.goalId);
   const msg: OutboundMessage = {
     id: newId('out'),
     userId: user.id,
     personId,
     chatId: chat?.id,
+    ...(forGoal || chat?.goalId ? { goalId: forGoal?.goalId ?? chat?.goalId } : {}),
     channel: written,
     kind,
     bccEmails: await bccFor(out, chat),
@@ -1157,12 +1161,12 @@ export async function draftMessage(
     inReplyToMessageId: where.inReplyTo,
     toEmail: person.primaryEmail,
     toLinkedinUrl: person.linkedinUrl,
-    subject: out.subject,
-    bodyDraft: bodyFor(out, written, kind, !!person.linkedinConnectedOn),
+    subject: forGoal ? (written === 'gmail' ? forGoal.subject : undefined) : out.subject,
+    bodyDraft: forGoal ? forGoal.body : bodyFor(out, written, kind, !!person.linkedinConnectedOn),
     status: 'draft',
-    generatedBy,
-    claims: out.claims,
-    needsInput: out.needsInput.length ? out.needsInput : undefined,
+    generatedBy: forGoal ? 'template' : generatedBy,
+    claims: forGoal ? undefined : out.claims,
+    needsInput: !forGoal && out.needsInput.length ? out.needsInput : undefined,
     opening: out.opening,
     holdUntil: out.holdUntil,
     createdAt: new Date().toISOString(),

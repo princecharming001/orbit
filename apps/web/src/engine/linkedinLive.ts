@@ -16,6 +16,7 @@ import {
   mockMutuals,
   usesMockConnectors,
 } from '../integrations/connectorsMock';
+import { callApi, isServerUser } from '../integrations/orbitApi';
 import {
   disconnectLinkedInAccount,
   type LiveConnection,
@@ -45,7 +46,8 @@ export const AUTO_SYNC_AFTER_MS = 24 * 60 * 60 * 1000;
 
 /** Live connect is offered: the build has the proxy, or this is the sample student (mock connector). */
 export function liveLinkedInAvailable(user: User): boolean {
-  return usesMockConnectors(user.id) || unipileConfigured();
+  // account mode: orbit-api links LinkedIn (POST /linkedin/connect/start) and syncs it on the server
+  return usesMockConnectors(user.id) || unipileConfigured() || isServerUser(user.id);
 }
 
 /** The live LinkedIn row for a user, if any (a disconnected one is kept as `revoked`). */
@@ -109,6 +111,7 @@ export async function connectLinkedInLive(
   user: User,
   opts: { onProgress?: (count: number) => void; signal?: AbortSignal } = {},
 ): Promise<LiveConnectResult> {
+  if (isServerUser(user.id)) return connectViaServer(user, opts);
   let accountId: string | undefined;
   if (usesMockConnectors(user.id)) accountId = MOCK_ACCOUNT_ID;
   else {
@@ -168,6 +171,66 @@ export async function connectLinkedInLive(
   };
 }
 
+/**
+ * Account mode: orbit-api opens Unipile's hosted sign-in (the webhook finishes the link on the server), Orbit waits
+ * for /linkedin/status to say it is active, and the connections arrive with the next pull.
+ */
+async function connectViaServer(
+  user: User,
+  opts: { onProgress?: (count: number) => void; signal?: AbortSignal },
+): Promise<LiveConnectResult> {
+  const start = await callApi('/linkedin/connect/start', {}, { signal: opts.signal });
+  if (!start.ok)
+    return start.reason === 'unconfigured'
+      ? {
+          ok: false,
+          reason: 'unconfigured',
+          message: "Live LinkedIn isn't set up on Orbit's server yet. Upload your export for now.",
+        }
+      : { ok: false, reason: 'error', message: start.message };
+  const win =
+    typeof window !== 'undefined'
+      ? window.open(start.value.url, 'orbit-linkedin', 'width=520,height=680')
+      : null;
+  if (!win)
+    return {
+      ok: false,
+      reason: 'error',
+      message: 'Your browser blocked the LinkedIn window. Allow pop-ups for Orbit and try again.',
+    };
+  let closedChecks = 0;
+  for (let i = 0; i < poll.tries; i++) {
+    await sleep(poll.everyMs, opts.signal);
+    if (opts.signal?.aborted)
+      return { ok: false, reason: 'cancelled', message: 'Stopped connecting LinkedIn.' };
+    const st = await callApi('/linkedin/status', {}, { signal: opts.signal });
+    if (st.ok && st.value.status === 'active') {
+      closeQuietly(win);
+      await saveAccount(user.id, {
+        externalAccountId: st.value.accountId ?? 'orbit-api',
+        status: 'active',
+        lastError: undefined,
+        lastSyncedAt: st.value.lastSyncedAt ?? undefined,
+        syncState: { rows: st.value.relations, server: true },
+      });
+      opts.onProgress?.(st.value.relations);
+      return { ok: true, rows: st.value.relations, added: st.value.relations };
+    }
+    if (st.ok && (st.value.status === 'error' || st.value.status === 'needs_reauth')) {
+      closeQuietly(win);
+      return { ok: false, reason: 'error', message: 'LinkedIn sign-in did not finish. Try again.' };
+    }
+    if (win.closed && ++closedChecks > 2)
+      return {
+        ok: false,
+        reason: 'cancelled',
+        message: 'The LinkedIn window was closed before sign-in finished.',
+      };
+  }
+  closeQuietly(win);
+  return { ok: false, reason: 'error', message: 'LinkedIn sign-in timed out. Try again.' };
+}
+
 function closeQuietly(win: Window | null) {
   try {
     win?.close();
@@ -187,6 +250,18 @@ export async function syncLinkedInLive(
   const row = await liveLinkedInAccount(user.id);
   if (!isConnected(row))
     return { ok: false, reason: 'not_connected', message: 'LinkedIn is not connected live yet.' };
+  if (isServerUser(user.id)) {
+    // account mode: the server syncs; new people arrive with the next pull
+    const r = await callApi('/linkedin/sync', {}, { signal: opts.signal });
+    if (!r.ok)
+      return {
+        ok: false,
+        reason: r.reason === 'unconfigured' ? 'unconfigured' : 'error',
+        message: r.message,
+      };
+    const rows = Number((row.syncState as { rows?: number }).rows ?? 0);
+    return { ok: true, rows, added: 0, updated: 0, recommended: 0 };
+  }
   let conns: LiveConnection[];
   if (usesMockConnectors(user.id)) {
     conns = await mockLinkedInConnections(user.id, opts.now);
