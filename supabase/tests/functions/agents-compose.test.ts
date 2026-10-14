@@ -249,6 +249,36 @@ describe('compose (§7)', () => {
     expect(ap.body.error.code).toBe('needs_postal_address');
   });
 
+  it('a postal address saved through /settings/profile is the one sales first touches read', async () => {
+    const call = api(t, fakeNet(), { env: {} });
+    const { userId, token } = await signedInUser(t, { settings: { company: 'Orbitly' } });
+    const g = await call<{ goal: { id: string } }>('/goals/upsert', token, {
+      goal: { kind: 'sales', title: 'Clinic pilots' },
+    });
+    const buyer = await janeWithDossier(userId);
+    const compose = () =>
+      call<{ draft?: { body: string }; error?: { code: string } }>('/drafts/compose', token, {
+        personId: buyer,
+        kind: 'first_touch',
+        channel: 'gmail',
+        goalId: g.body.goal.id,
+      });
+    expect((await compose()).body.error?.code).toBe('needs_postal_address');
+    const saved = await call<{ postalAddress: string | null }>('/settings/profile', token, {
+      postalAddress: '  20 Elm St, Ithaca, NY 14850 ',
+    });
+    expect(saved.body.postalAddress).toBe('20 Elm St, Ithaca, NY 14850');
+    const [u] = await t.db.sql<{ settings: Record<string, unknown> }>`
+      select settings from orbit.users where id = ${userId}::uuid`;
+    expect(u!.settings).toEqual({ company: 'Orbitly', postal_address: '20 Elm St, Ithaca, NY 14850' });
+    const ok = await compose();
+    expect(ok.status).toBe(200);
+    expect(ok.body.draft!.body).toContain('20 Elm St, Ithaca, NY 14850');
+    // cleared again: the next sales first touch is refused
+    await call('/settings/profile', token, { postalAddress: null });
+    expect((await compose()).body.error?.code).toBe('needs_postal_address');
+  });
+
   it('§7.8 test 3 (offline gate, template path): every kind × goal composed without a model passes the validator', async () => {
     const net = fakeNet();
     const s = makeServices(agentConfig(net, {}), { db: t.db });

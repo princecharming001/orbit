@@ -3,13 +3,16 @@
  *   POST /goals/list                → {goals}
  *   POST /goals/upsert {goal}       → {goal}; no id creates; at most 5 active goals (409 too_many_goals)
  *   POST /goals/archive {id}        → {goal} (soft delete)
+ *   POST /goals/infer {turns}       → {goals}: goals proposed from the last chat turns (§1.6), never saved;
+ *                                     {goals: [], unconfigured: true} without Claude
  */
-import type { GoalUpsertRequest } from '@orbit/core/server/api';
+import type { GoalsInferResponse, GoalUpsertRequest } from '@orbit/core/server/api';
 import { GOAL_KINDS, type Goal } from '@orbit/core/types';
 import { goalFrom } from '../../_shared/cadence/cadence.ts';
+import { inferGoals } from '../../_shared/goals/infer.ts';
 import { badRequest, HttpError, json } from '../../_shared/http.ts';
 import type { Ctx, Route } from '../api.ts';
-import { body, optUuid, uuid } from './body.ts';
+import { body, optUuid, turns, uuid } from './body.ts';
 
 export const MAX_ACTIVE_GOALS = 5;
 
@@ -107,8 +110,24 @@ async function goalsArchive(ctx: Ctx): Promise<Response> {
   return json(200, { goal: goalFrom(r) });
 }
 
+async function goalsInfer(ctx: Ctx): Promise<Response> {
+  const t = turns(await body(ctx));
+  const s = ctx.services();
+  if (!s.claude.configured) {
+    const out: GoalsInferResponse = { goals: [], unconfigured: true };
+    return json(200, out);
+  }
+  const existing = await ctx.db.sql<{ id: string; kind: string; title: string; targets: unknown }>`
+    select id, kind, title, targets from orbit.goals
+     where user_id = ${ctx.userId!}::uuid and deleted_at is null and status = 'active'
+     order by priority, created_at`;
+  const out: GoalsInferResponse = { goals: await inferGoals(s.claude, ctx.userId!, t, existing) };
+  return json(200, out);
+}
+
 export const goalRoutes: Record<string, Route> = {
   '/goals/list': { method: 'POST', auth: true, run: goalsList },
   '/goals/upsert': { method: 'POST', auth: true, run: goalsUpsert },
   '/goals/archive': { method: 'POST', auth: true, run: goalsArchive },
+  '/goals/infer': { method: 'POST', auth: true, run: goalsInfer },
 };

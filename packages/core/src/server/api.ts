@@ -56,6 +56,35 @@ export interface IdRequest {
   id: string;
 }
 
+/** One turn of the chat, as the post-turn passes (memory, goal inference) read it. */
+export interface ChatTurn {
+  role: 'user' | 'assistant';
+  text: string;
+}
+/** POST /goals/infer: at most 6 turns, 8,000 characters in all. Proposes goals (§1.6); nothing is saved. */
+export interface GoalsInferRequest {
+  turns: ChatTurn[];
+}
+export interface ProposedGoal {
+  kind: GoalKind;
+  /** at most 60 characters */
+  title: string;
+  targets: Goal['targets'];
+  criteria: { sector?: string; stage?: string; seniority?: string[]; skills?: string[]; keywords?: string[] };
+  successMetric: string | null;
+  /** YYYY-MM-DD */
+  dueAt: string | null;
+  /** the active goal this refines, when it is one */
+  isUpdateOf: string | null;
+  /** the student's own words it came from (always a substring of what they wrote) */
+  quote: string;
+}
+export interface GoalsInferResponse {
+  goals: ProposedGoal[];
+  /** Claude is not configured on the server: nothing was inferred */
+  unconfigured?: true;
+}
+
 /** POST /scores/explain */
 export interface ScoreExplainRequest {
   personId: string;
@@ -312,6 +341,19 @@ export interface MemoryListResponse {
 }
 /** POST /memory/forget { id } */
 
+/** POST /memory/extract: at most 6 turns, 8,000 characters in all; memories found are added (source 'chat'). */
+export interface MemoryExtractRequest {
+  turns: ChatTurn[];
+}
+export interface MemoryExtractResponse {
+  /** what was found, as stored (a refreshed memory when it matched one already kept) */
+  memories: MemoryItem[];
+  /** how many of them are new */
+  added: number;
+  /** Claude is not configured on the server: nothing was extracted */
+  unconfigured?: true;
+}
+
 /** POST /settings/autonomy */
 export interface AutonomyRequest {
   level: 0 | 1 | 2;
@@ -320,6 +362,21 @@ export interface AutonomyRequest {
 /** POST /settings/pause { until } (quiet_until, §9.3) */
 export interface PauseRequest {
   until: string | null;
+}
+/**
+ * POST /settings/profile: what the server's drafting and sending read from the student's settings. A field left out
+ * is kept; null (or an empty string) removes the address or the link. The address is at most 500 characters, the
+ * link is https, the time zone an IANA zone.
+ */
+export interface ProfileSettingsRequest {
+  postalAddress?: string | null;
+  schedulingLink?: string | null;
+  timezone?: string;
+}
+export interface ProfileSettingsResponse {
+  postalAddress: string | null;
+  schedulingLink: string | null;
+  timezone: string;
 }
 
 export interface DueItem {
@@ -353,6 +410,7 @@ export const API_ROUTES = [
   '/goals/list',
   '/goals/upsert',
   '/goals/archive',
+  '/goals/infer',
   '/scores/explain',
   '/scores/label',
   '/research/person',
@@ -374,8 +432,10 @@ export const API_ROUTES = [
   '/memory/add',
   '/memory/list',
   '/memory/forget',
+  '/memory/extract',
   '/settings/autonomy',
   '/settings/pause',
+  '/settings/profile',
   '/cadence/due',
 ] as const;
 export type ApiRoute = (typeof API_ROUTES)[number];

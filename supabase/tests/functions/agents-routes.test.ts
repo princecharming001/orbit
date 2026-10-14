@@ -1,6 +1,16 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { embeddable, keywordScore } from '../../functions/_shared/memory/memory.ts';
-import { addPerson, api, DAY, fakeNet, iso, signedInUser } from '../helpers/agents.ts';
+import {
+  addPerson,
+  anthropic,
+  api,
+  DAY,
+  fakeNet,
+  iso,
+  signedInUser,
+  systemText,
+  userText,
+} from '../helpers/agents.ts';
 import { freshDb, type TestDb } from '../helpers/pglite.ts';
 
 let t: TestDb;
@@ -248,5 +258,235 @@ describe('cadence/due', () => {
     expect(r.body.items.every((i) => i.personId === p)).toBe(true);
     await call('/settings/pause', token, { until: new Date(Date.now() + DAY).toISOString() });
     expect((await call<{ items: unknown[] }>('/cadence/due', token)).body.items).toEqual([]);
+  });
+});
+
+describe('settings/profile (§14.3)', () => {
+  it('keeps the postal address, the scheduling link and the time zone, and validates each', async () => {
+    const call = api(t, fakeNet(), { env: {} });
+    const { userId, token } = await signedInUser(t, { settings: { quiet_until: '2026-12-01' } });
+    const r = await call<{ postalAddress: string; schedulingLink: string; timezone: string }>(
+      '/settings/profile',
+      token,
+      {
+        postalAddress: '1 Main St, Palo Alto, CA 94301',
+        schedulingLink: 'https://cal.com/sam/20min',
+        timezone: 'America/Los_Angeles',
+      },
+    );
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual({
+      postalAddress: '1 Main St, Palo Alto, CA 94301',
+      schedulingLink: 'https://cal.com/sam/20min',
+      timezone: 'America/Los_Angeles',
+    });
+    const [u] = await t.db.sql<{ settings: Record<string, unknown>; timezone: string }>`
+      select settings, timezone from orbit.users where id = ${userId}::uuid`;
+    expect(u).toEqual({
+      settings: {
+        quiet_until: '2026-12-01',
+        postal_address: '1 Main St, Palo Alto, CA 94301',
+        scheduling_link: 'https://cal.com/sam/20min',
+      },
+      timezone: 'America/Los_Angeles',
+    });
+    // a field left out is kept; null or '' removes it
+    const cleared = await call<{ postalAddress: string | null; schedulingLink: string | null }>(
+      '/settings/profile',
+      token,
+      { schedulingLink: '' },
+    );
+    expect(cleared.body).toMatchObject({
+      postalAddress: '1 Main St, Palo Alto, CA 94301',
+      schedulingLink: null,
+    });
+    await call('/settings/profile', token, { postalAddress: null });
+    const [after] = await t.db.sql<{ settings: Record<string, unknown> }>`
+      select settings from orbit.users where id = ${userId}::uuid`;
+    expect(after!.settings).toEqual({ quiet_until: '2026-12-01' });
+    for (const bad of [
+      { schedulingLink: 'http://cal.com/sam' },
+      { schedulingLink: 'javascript:alert(1)' },
+      { schedulingLink: 'cal.com/sam' },
+      { postalAddress: 'x'.repeat(501) },
+      { postalAddress: 42 },
+      { timezone: 'Mars/Olympus' },
+      { timezone: '+05:00' },
+      { timezone: '' },
+    ])
+      expect((await call('/settings/profile', token, bad)).status).toBe(400);
+    const audit = await t.db.sql<{ details: { fields: string[] } }>`
+      select details from orbit.audit_log where user_id = ${userId}::uuid and action = 'settings.profile' order by id`;
+    expect(audit.map((a) => a.details.fields)).toEqual([
+      ['postal_address', 'scheduling_link', 'timezone'],
+      ['scheduling_link'],
+      ['postal_address'],
+    ]);
+  });
+});
+
+const TURNS = [
+  {
+    role: 'user',
+    text: 'I prefer morning calls, and my advisor Maya Chen says to talk to fintech PMs first.',
+  },
+  { role: 'assistant', text: 'Got it. Want me to find fintech PMs?' },
+  { role: 'user', text: 'Yes please, and never on Fridays.' },
+] as const;
+
+describe('memory/extract (§10.6)', () => {
+  it('adds what the last turns say worth keeping (source chat), dedupes, and drops unquoted memories', async () => {
+    const claude = anthropic(() => ({
+      memories: [
+        {
+          kind: 'preference',
+          text: 'Prefers morning calls',
+          person_name: null,
+          importance: 0.6,
+          quote: 'I prefer morning calls',
+        },
+        {
+          kind: 'person_fact',
+          text: 'Maya Chen advises talking to fintech PMs first',
+          person_name: 'Maya Chen',
+          importance: 0.5,
+          quote: 'my advisor Maya Chen says to talk to fintech PMs first',
+        },
+        {
+          kind: 'constraint',
+          text: 'No calls on Fridays',
+          person_name: null,
+          importance: 0.7,
+          quote: 'never on Fridays',
+        },
+        { kind: 'note', text: 'Likes tea', person_name: null, importance: 0.2, quote: 'I love tea' },
+      ],
+    }));
+    const net = fakeNet(claude.answer);
+    const call = api(t, net);
+    const { userId, token } = await signedInUser(t);
+    const maya = await addPerson(t, userId, { name: 'Maya Chen', email: 'maya@example.com' });
+    // kept already in other words: the extracted one refreshes it (cosine ≥ 0.92) instead of adding a second
+    await call('/memory/add', token, { text: 'Prefers calls in the morning', kind: 'preference' });
+    const r = await call<{
+      memories: { text: string; kind: string; personId: string | null }[];
+      added: number;
+    }>('/memory/extract', token, { turns: TURNS });
+    expect(r.status).toBe(200);
+    expect(r.body.added).toBe(2);
+    expect(r.body.memories.map((m) => [m.kind, m.text, m.personId])).toEqual([
+      ['preference', 'Prefers calls in the morning', null],
+      ['person_fact', 'Maya Chen advises talking to fintech PMs first', maya],
+      ['constraint', 'No calls on Fridays', null],
+    ]);
+    const req = claude.requests[0]!;
+    expect(req.model).toBe('claude-haiku-5-5');
+    expect(systemText(req)).toContain('Extract durable facts worth remembering');
+    // the known memories are in the prompt, so the model skips them
+    expect(userText(req)).toContain('<known>Prefers calls in the morning</known>');
+    const rows = await t.db.sql<{ text: string; source: string; quote: string | null }>`
+      select text, source, quote from orbit.memories where user_id = ${userId}::uuid and deleted_at is null
+       order by created_at, text`;
+    expect(rows.filter((x) => x.source === 'chat').map((x) => x.quote)).toEqual(
+      expect.arrayContaining(['never on Fridays', 'my advisor Maya Chen says to talk to fintech PMs first']),
+    );
+    expect(rows).toHaveLength(3);
+  });
+
+  it('answers unconfigured with 200 and nothing extracted, and validates the turns', async () => {
+    const net = fakeNet();
+    const call = api(t, net, { env: {} });
+    const { token } = await signedInUser(t);
+    const r = await call('/memory/extract', token, { turns: TURNS });
+    expect(r).toEqual({ status: 200, body: { memories: [], added: 0, unconfigured: true } });
+    expect(net.calls).toHaveLength(0);
+    for (const turns of [
+      [],
+      Array.from({ length: 7 }, () => ({ role: 'user', text: 'hi' })),
+      [{ role: 'system', text: 'x' }],
+      [{ role: 'user', text: 'x'.repeat(8001) }],
+      'hello',
+    ])
+      expect((await call('/memory/extract', token, { turns })).status).toBe(400);
+  });
+});
+
+describe('goals/infer (§1.6)', () => {
+  it('proposes the goals the student states, quote-checked, without saving them', async () => {
+    const claude = anthropic(() => ({
+      goals: [
+        {
+          kind: 'fundraising',
+          title: 'Raise a pre-seed round for my climate startup, from angels in the Bay Area',
+          targets: { organizations: [], roles: ['angel investor'], geographies: ['Bay Area'], people: [] },
+          criteria: {
+            sector: 'climate',
+            stage: 'pre-seed',
+            seniority: null,
+            skills: null,
+            keywords: [' carbon ', ''],
+          },
+          success_metric: '5 investor calls by December',
+          due_at: '2026-12-15',
+          is_update_of: null,
+          quote: "I'm trying to raise a pre-seed round",
+        },
+        {
+          kind: 'hiring',
+          title: 'Hire a designer',
+          targets: { organizations: [], roles: ['designer'], geographies: [], people: [] },
+          criteria: { sector: null, stage: null, seniority: null, skills: null, keywords: null },
+          success_metric: null,
+          due_at: 'soon',
+          is_update_of: 'not-a-goal',
+          quote: 'we need to hire a designer',
+        },
+      ],
+    }));
+    const net = fakeNet(claude.answer);
+    const call = api(t, net);
+    const { userId, token } = await signedInUser(t);
+    const g = await call<{ goal: { id: string } }>('/goals/upsert', token, {
+      goal: { kind: 'recruiting', title: 'PM internship', targets: { roles: ['PM'] } },
+    });
+    const r = await call<{ goals: Record<string, unknown>[] }>('/goals/infer', token, {
+      turns: [
+        {
+          role: 'user',
+          text: 'I’m trying to raise a pre-seed round for my climate startup, ideally angels in the Bay Area.',
+        },
+        { role: 'assistant', text: 'That sounds exciting. Who have you talked to so far?' },
+      ],
+    });
+    expect(r.status).toBe(200);
+    expect(r.body.goals).toEqual([
+      {
+        kind: 'fundraising',
+        title: 'Raise a pre-seed round for my climate startup, from angels i',
+        targets: { organizations: [], roles: ['angel investor'], geographies: ['Bay Area'], people: [] },
+        criteria: { sector: 'climate', stage: 'pre-seed', keywords: ['carbon'] },
+        successMetric: '5 investor calls by December',
+        dueAt: '2026-12-15',
+        isUpdateOf: null,
+        quote: "I'm trying to raise a pre-seed round",
+      },
+    ]);
+    const req = claude.requests[0]!;
+    expect(req.model).toBe('claude-haiku-5-5');
+    expect(systemText(req)).toContain('You extract networking goals from a conversation');
+    expect(userText(req)).toContain(`"id":"${g.body.goal.id}"`);
+    expect(userText(req)).toContain('<conversation>user: I’m trying to raise');
+    // nothing is saved
+    const [n] = await t.db.sql<{ n: number }>`
+      select count(*)::int as n from orbit.goals where user_id = ${userId}::uuid`;
+    expect(n!.n).toBe(1);
+  });
+
+  it('answers unconfigured with 200 and no goals', async () => {
+    const call = api(t, fakeNet(), { env: {} });
+    const { token } = await signedInUser(t);
+    const r = await call('/goals/infer', token, { turns: [{ role: 'user', text: 'I want to raise money' }] });
+    expect(r).toEqual({ status: 200, body: { goals: [], unconfigured: true } });
+    expect((await call('/goals/infer', token, { turns: [] })).status).toBe(400);
   });
 });
