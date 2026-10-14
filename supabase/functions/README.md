@@ -55,19 +55,20 @@ supabase functions deploy orbit-webhooks --no-verify-jwt
 | Name | Used by | Required | Notes |
 |---|---|---|---|
 | `ORBIT_SESSION_SECRET` | orbit-api | yes | 32 random bytes, base64 (`openssl rand -base64 32`). Signs Orbit access tokens |
-| `ORBIT_GOOGLE_CLIENT_ID`, `ORBIT_GOOGLE_CLIENT_SECRET` | orbit-api | for `/auth/google/*` (H2) | Web OAuth client with redirect URI below |
+| `ORBIT_GOOGLE_CLIENT_ID`, `ORBIT_GOOGLE_CLIENT_SECRET` | orbit-api, orbit-worker | for `/auth/google/*` (H2) and the Google sync jobs | Web OAuth client with redirect URI below. Without them the worker ends Gmail, Calendar and contacts jobs as `skipped` |
 | `ORBIT_GOOGLE_REDIRECT_URI` | orbit-api | no | Default `<SUPABASE_URL>/functions/v1/orbit-api/auth/google/callback` |
 | `ORBIT_APP_URL` | orbit-api | no | Where sign-in returns (`<app>/auth/done#code=…`). Default `https://princecharming001.github.io/orbit`; `http://localhost:*` is always allowed for development |
-| `UNIPILE_API_KEY`, `UNIPILE_BASE_URL` | orbit-api | no | Only for deleting the Unipile account on account deletion |
+| `UNIPILE_API_KEY`, `UNIPILE_BASE_URL` | orbit-api, orbit-worker | for LinkedIn (H5) | Hosted auth (`/linkedin/connect/start`), `/linkedin/sync`, the `sync.linkedin` job and account deletion. Without them LinkedIn routes answer unconfigured and LinkedIn jobs end `skipped` |
+| `GMAIL_PUBSUB_TOPIC` | orbit-worker | no (H3) | `projects/<gcp project>/topics/orbit-gmail`; without it no Gmail watch is registered and the 10-minute poll keeps mail current |
+| `ORBIT_ANTHROPIC_API_KEY` | orbit-worker | no | Haiku for replies the heuristic classifier is unsure of (§8.6); without it the heuristic answer is kept |
 | `ORBIT_API_IP_PER_MINUTE`, `ORBIT_API_USER_PER_MINUTE`, `ORBIT_API_USER_PER_DAY` | orbit-api | no | Defaults 120, 240, 20000 (counters in `public.orbit_proxy_take`) |
 | `ORBIT_CRON_SECRET` | orbit-worker | yes | Same value as the Vault secret `orbit_cron_secret` |
 | `ORBIT_WORKER_BUDGET_MS` | orbit-worker | no | Default 110000 (free plan); 300000 on a paid plan |
 | `ORBIT_PUBSUB_TOKEN` | orbit-webhooks | for `/gmail` (H3) | Also in the Pub/Sub push URL `…/orbit-webhooks/gmail?token=` |
-| `ORBIT_UNIPILE_WEBHOOK_SECRET` | orbit-webhooks | for `/unipile*` (H5) | Header `x-orbit-webhook` on Unipile webhooks, and `?token=` on the hosted-auth `notify_url` |
+| `ORBIT_UNIPILE_WEBHOOK_SECRET` | orbit-webhooks, orbit-api | for `/unipile*` and `/linkedin/connect/start` (H5) | Header `x-orbit-webhook` on Unipile webhooks, and `?token=` on the hosted-auth `notify_url` |
 | `ORBIT_LOG_SALT` | all three | no | Salt for hashed ids in logs and counters; defaults to the tail of the service key |
 
-Later phases add `ORBIT_ANTHROPIC_API_KEY` (already set for `orbit-claude`; `_shared/claude.ts` answers
-`unconfigured` without it), `GMAIL_PUBSUB_TOPIC`, `EXA_API_KEY`, `APOLLO_API_KEY`, `VILLAGE_SECRET_KEY`,
+Later phases add `EXA_API_KEY`, `APOLLO_API_KEY`, `VILLAGE_SECRET_KEY`,
 `SEMANTIC_SCHOLAR_API_KEY` and `ORBIT_ADMIN_EMAILS` (§21).
 
 ## Database, cron and Vault
