@@ -75,7 +75,8 @@ describe('the sample student uses the mock connector', () => {
     if (!r.ok) throw new Error(r.message);
     expect(r.source).toBe('demo');
     expect(r.mutuals.length).toBeGreaterThan(0);
-    expect(r.mutuals.map((m) => m.name)).toContain('Daniel Okafor');
+    // a Stripe colleague the student knows (tie scores rank a LinkedIn-connected alum above a single unanswered email)
+    expect(r.mutuals.map((m) => m.name)).toContain('Priya Ahmed');
     expect(r.mutuals.map((m) => m.name)).not.toContain('Maya Chen');
     // each is an Orbit person the app can open
     expect(r.mutuals.every((m) => !!m.personId)).toBe(true);

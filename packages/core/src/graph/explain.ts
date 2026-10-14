@@ -134,6 +134,17 @@ function sentence(e: Edge, a: Named, b: Named): string | undefined {
     }
     case 'introduced_by':
       return `${A} introduced ${B} to you`;
+    case 'email_exchange': {
+      const n = num(ev.threads) ?? 1;
+      const when = monthYear(str(ev.lastAt));
+      return `${A} and ${B} both wrote on ${n === 1 ? 'an email thread' : `${n} email threads`} with you${when ? ` (${n === 1 ? '' : 'last in '}${when})` : ''}`;
+    }
+    case 'email_cc':
+      return `${A} and ${B} were on the same email to you`;
+    case 'linkedin_mutual':
+      return `${A} and ${B} are connected on LinkedIn`;
+    case 'village_path':
+      return `${A} knows ${B} (via Village)`;
     default:
       return str(ev.text);
   }
@@ -155,6 +166,10 @@ function clause(e: Edge): string | undefined {
       return 'were on an email thread with you';
     case 'meeting_coattendee':
       return 'were in a meeting with you';
+    case 'email_exchange':
+      return 'both wrote on an email thread with you';
+    case 'linkedin_mutual':
+      return 'are connected on LinkedIn';
     default:
       return undefined;
   }

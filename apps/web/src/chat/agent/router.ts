@@ -64,6 +64,11 @@ export const STAGE_ALIASES: Record<ChatStage, string[]> = {
 
 /** Message kinds as a student says them. */
 export const KIND_ALIASES: Record<MessageKind, string[]> = {
+  // the plan-16 kinds are written by the composer, not asked for by name: "first message" stays `outreach` here
+  first_touch: [],
+  warm_first_touch: [],
+  forwardable_blurb: [],
+  reengage: [],
   thank_you: ['thank you', 'thank-you', 'thanks', 'thank'],
   bump: ['bump', 'follow up', 'follow-up', 'followup', 'nudge', 'reminder', 'ping'],
   intro_request: ['intro request', 'introduction request', 'request for an intro', 'intro', 'introduction'],

@@ -209,6 +209,34 @@ export function isAutomatedSender(
   return isNotificationDomain(emailDomain(fromEmail));
 }
 
+/**
+ * Applicant tracking systems and recruiting automation: "Thanks for applying" and interview-scheduling mail from
+ * these is a system writing, not a relationship (plan 16 §19.1), even when a recruiter's name is on it. Includes the
+ * vendors' own mail-sending domains and subdomains (greenhouse-mail.io, hire.lever.co, wd5.myworkday.com).
+ */
+export const ATS_DOMAINS = [
+  'greenhouse.io',
+  'greenhouse-mail.io',
+  'lever.co',
+  'myworkday.com',
+  'workday.com',
+  'ashbyhq.com',
+  'icims.com',
+  'smartrecruiters.com',
+  'jobvite.com',
+];
+
+/** True for an ATS sender (any address on an ATS domain) or a no-reply style address anywhere. */
+export function isAtsSender(email: string): boolean {
+  const e = normalizeEmail(email);
+  if (!e.includes('@')) return false;
+  const domain = emailDomain(e);
+  if (ATS_DOMAINS.some((d) => domain === d || domain.endsWith(`.${d}`))) return true;
+  return /^(no[-_.]?reply|do[-_.]?not[-_.]?reply|donotreply)([-_.+].*)?$|[-_.+]no[-_.]?reply$/i.test(
+    emailLocalPart(e),
+  );
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // addresses
 

@@ -38,7 +38,15 @@ export type EdgeType =
   | 'email_cothread'
   | 'meeting_coattendee'
   | 'introduced_by'
-  | 'same_current_company';
+  | 'same_current_company'
+  /** both wrote on one thread (plan 16 §4.1) */
+  | 'email_exchange'
+  /** one wrote to the student with the other in To/Cc */
+  | 'email_cc'
+  /** LinkedIn mutual connection (Unipile connections_of) */
+  | 'linkedin_mutual'
+  /** an introducer Village returned */
+  | 'village_path';
 export type TouchpointKind =
   | 'email_in'
   | 'email_out'
@@ -140,7 +148,15 @@ export type MessageKind =
   | 'referral_ask'
   | 'intro_request'
   | 'reply'
-  | 'report_back';
+  | 'report_back'
+  /** a first message to someone new (plan 16 §7.2) */
+  | 'first_touch'
+  /** a first message that names the mutual connection */
+  | 'warm_first_touch'
+  /** a third-person note the introducer can forward unchanged (≤ 90 words, double opt-in) */
+  | 'forwardable_blurb'
+  /** a genuine update to a dormant tie (score ≥ 30, no contact in 180 days); no ask unless the student wants one */
+  | 'reengage';
 export type Sector = 'finance' | 'consulting' | 'tech' | 'general';
 export type Seniority = 'junior' | 'mid' | 'senior' | 'exec';
 export type EmailCategory =
@@ -205,6 +221,54 @@ export interface UserSettings {
   googleClientId?: string;
   /** first-run hints the student closed; they never come back */
   dismissedHints?: string[];
+}
+
+/** What a goal is for (plan 16 §2.1); it changes the register, the ask and the routing rules. */
+export type GoalKind =
+  | 'recruiting'
+  | 'fundraising'
+  | 'sales'
+  | 'hiring'
+  | 'advice'
+  | 'cofounder'
+  | 'community'
+  | 'collaboration';
+
+export const GOAL_KINDS: readonly GoalKind[] = [
+  'recruiting',
+  'fundraising',
+  'sales',
+  'hiring',
+  'advice',
+  'cofounder',
+  'community',
+  'collaboration',
+];
+
+/** A goal the student is working toward (orbit.goals, plan 16 §11.3). A student has 0–5 active goals. */
+export interface Goal {
+  id: ID;
+  userId: ID;
+  kind: GoalKind;
+  title: string;
+  description?: string;
+  targets: { organizations: string[]; roles: string[]; geographies: string[]; people: string[] };
+  /** sourcing filters: sector, stage, seniority, skills, keywords */
+  criteria: Record<string, unknown>;
+  /** "8 coffee chats with PMs by Dec 1" */
+  successMetric?: string;
+  priority: 1 | 2 | 3;
+  status: 'active' | 'paused' | 'done';
+  /** overrides the student's autonomy level for this goal (§8.4) */
+  autonomyLevel?: 0 | 1 | 2;
+  /** YYYY-MM-DD */
+  dueAt?: string;
+  source: 'user' | 'onboarding' | 'inferred';
+  /** the student's words an inferred goal came from */
+  evidence?: string;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt?: string;
 }
 
 export interface RecruitingGoals {
@@ -300,8 +364,14 @@ export interface Person {
   school?: string;
   isAlumni?: boolean;
   relationshipType: RelationshipType;
+  /** tie score / 100 (0 when there is no tie at all) */
   strength: number;
   strengthBreakdown?: StrengthBreakdown;
+  /** tie score 0–100 (plan 16 §3) */
+  tieScore?: number;
+  tieBand?: TieScoreSummary['band'];
+  /** why the score is what it is, in plain sentences */
+  tieExplanation?: string[];
   firstSeenAt?: string;
   lastInteractionAt?: string;
   interactionCount: number;
@@ -313,6 +383,8 @@ export interface Person {
   /** which source last wrote each profile field, for source precedence (manual > enrichment > CSV > ... ) */
   fieldSources?: Partial<Record<PersonField, PersonSource>>;
   hiddenAt?: string;
+  /** they asked not to be contacted (an `unsubscribe` reply, plan 16 §8.1): nothing is drafted or sent to them */
+  doNotContact?: boolean;
   summary?: string;
   summaryUpdatedAt?: string;
   talkingPoints?: string[];
@@ -344,7 +416,12 @@ export interface Edge {
   personAId: ID;
   personBId: ID;
   type: EdgeType;
+  /** w·c for ties inferred with a confidence (graph/ties.ts); w alone for v1 edges */
   weight: number;
+  /** c of the kind (§4.1); absent on v1 edges */
+  confidence?: number;
+  /** kinds behind the edge (one per kind today) */
+  kinds?: EdgeType[];
   evidence: Record<string, unknown> & { text?: string };
 }
 
@@ -368,6 +445,21 @@ export interface StrengthBreakdown {
   lastInteractionAt?: string;
   /** latest email, meeting, logged chat or LinkedIn message: what the student would call talking */
   lastConversationAt?: string;
+  /** the 0–100 tie score behind `strength` (plan 16 §3; strength = score / 100) */
+  tieScore?: TieScoreSummary;
+}
+
+/** What is kept of a tie score on the person (orbit.tie_scores in account mode). */
+export interface TieScoreSummary {
+  score: number;
+  band: 'faint' | 'light' | 'warm' | 'strong' | 'close';
+  explanation: string[];
+  /** w_i · (f_i − baseline_i) per feature */
+  contributions: Record<string, number>;
+  features: Record<string, number>;
+  modelVersion: string;
+  /** the top mutual contacts behind the structural feature, kept so a single-person rescore can reuse them */
+  mutuals?: { name: string; score: number }[];
 }
 
 export interface EmailThread {
@@ -423,6 +515,9 @@ export interface EmailMessage {
   isAutomated: boolean;
   signal?: ReplySignal;
   signalConfidence?: number;
+  /** the reply class (plan 16 §8.1) and its confidence, set by the server's classifier */
+  replyClass?: string;
+  replyConfidence?: number;
   extraction?: MessageExtraction;
   processedAt?: string;
 }
@@ -479,6 +574,8 @@ export interface CoffeeChat {
   stageEnteredAt: string;
   source: ChatSource;
   goalTags: string[];
+  /** the goal this chat serves (plan 16 §2.1: every chat carries one in account mode) */
+  goalId?: ID;
   outreachChannel?: Channel;
   firstOutreachAt?: string;
   lastOutboundAt?: string;
@@ -610,6 +707,8 @@ export interface OutboundMessage {
   personId: ID;
   chatId?: ID;
   suggestionId?: ID;
+  /** the goal this draft serves (plan 16 §2.1) */
+  goalId?: ID;
   channel: Channel;
   kind: MessageKind;
   externalThreadId?: string;
@@ -644,6 +743,28 @@ export interface OutboundMessage {
   /** when the draft's words were last written: a draft that says "yesterday" is rewritten the next day */
   draftedAt?: string;
   createdAt: string;
+}
+
+/** A composed message (plan 16 §7.3): what the composer, LLM or template, hands to the validator and the send path. */
+export interface ComposedMessage {
+  id: ID;
+  goalId: ID | null;
+  personId: ID;
+  kind: MessageKind;
+  channel: 'gmail' | 'linkedin';
+  /** gmail only */
+  subject: string | null;
+  body: string;
+  ask: { kind: 'call' | 'question' | 'interest' | 'intro' | 'none'; text: string };
+  /** at least one for first touches, each with the dossier or history item it came from */
+  hooks: { text: string; sourceId: string }[];
+  via?: { introducerId: ID; pathScore: number };
+  sendWindow: { notBefore: string; tz: string };
+  validator: { ok: boolean; issues: string[]; words: number; grade: number };
+  /** e.g. 'compose-v2.0', or 'template-v2' for the fallback */
+  promptVersion: string;
+  /** A/B arm */
+  variant: string | null;
 }
 
 /** What a draft is missing that only the student can supply (the needs-input prompt in the editor). */
@@ -703,6 +824,24 @@ export interface Brief {
   suggestionIds: ID[];
   summaryText: string;
   stats: Record<string, number>;
+}
+
+/** A research dossier on a person (orbit.dossiers, plan 16 §5). `content` is the synthesis, `sources` its citations. */
+export interface Dossier {
+  id: ID;
+  userId: ID;
+  personId: ID;
+  goalId?: ID;
+  status: 'pending' | 'ready' | 'partial' | 'needs_disambiguation' | 'failed';
+  content?: Record<string, unknown>;
+  sources: { id: string; url?: string; title?: string; [k: string]: unknown }[];
+  candidates?: unknown[];
+  costUsd: number;
+  model?: string;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+  expiresAt: string;
 }
 
 export interface Recommendation {

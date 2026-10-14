@@ -4,7 +4,7 @@
  * summary when the data is not what it expects. "Open in app" is a router Link to the envelope's href.
  */
 import type { OutboundMessage, Person, Suggestion } from '@orbit/core';
-import { STAGE_LABELS } from '@orbit/core';
+import { MEDIUM_TIE, STAGE_LABELS, STRONG_TIE } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { ArrowUpRight, Check, Copy, Download, TriangleAlert } from 'lucide-react';
 import type { ReactNode } from 'react';
@@ -175,7 +175,7 @@ function PersonRow({
 }
 
 function closeness(strength: number): string {
-  return strength >= 0.6 ? 'Close' : strength >= 0.3 ? 'Warm' : 'Weak tie';
+  return strength >= STRONG_TIE ? 'Close' : strength >= MEDIUM_TIE ? 'Warm' : 'Weak tie';
 }
 
 export function ResultCard({ block, actions }: { block: ToolBlock; actions: CardActions }) {

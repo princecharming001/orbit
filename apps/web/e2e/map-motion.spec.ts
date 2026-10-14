@@ -684,7 +684,8 @@ test.describe('Map motion', () => {
     await search(page, 'Felix Garcia');
     const routes = page.getByTestId('reach-path');
     await expect(routes.first()).toBeVisible({ timeout: 15_000 });
-    await expect(routes.first()).toContainText('3 hops');
+    // the best route goes through someone the student knows (ranked by the chance the introduction happens)
+    await expect(routes.first()).toContainText(/[23] hops/);
     const note = page.getByTestId('reach-cold-note');
     await expect(note).toContainText(/connected with Felix on LinkedIn/);
     await expect(note).toContainText(/routes through people you know come first/);
@@ -741,7 +742,7 @@ test.describe('Map motion', () => {
   }) => {
     await loadDemo(page);
     await openMap(page);
-    // a route of three hops through two connectors (the demo has several)
+    // a route of three hops through two connectors (the demo has several; Reach lists them after the shorter ones)
     const names: string[] = await page.evaluate(async () => {
       const db = (
         window as unknown as {
@@ -759,6 +760,8 @@ test.describe('Map motion', () => {
     for (const name of names.slice(0, 25)) {
       await search(page, name);
       await expect(page.getByTestId('reach-path').first()).toBeVisible({ timeout: 15_000 });
+      const threeHops = page.getByTestId('reach-path').filter({ hasText: '3 hops' });
+      if (await threeHops.count()) await threeHops.first().click();
       await mapSettled(page);
       path = (await mapSnapshot(page)).path;
       if (path.length >= 4) break;

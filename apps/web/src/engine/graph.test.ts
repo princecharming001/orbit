@@ -1,5 +1,5 @@
 import type { Organization, Person, User } from '@orbit/core';
-import { addEdge, makeGraph } from '@orbit/core';
+import { addEdge, MEDIUM_TIE, makeGraph } from '@orbit/core';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { db } from '../db/schema';
 import { loadDemo } from './demo';
@@ -130,7 +130,8 @@ describe('with the demo network', () => {
     const twoWay = ['meeting', 'email_in', 'linkedin_in', 'manual_log', 'intro_observed'] as const;
     for (const p of people) {
       const counts = p.strengthBreakdown?.counts ?? {};
-      if (!twoWay.some((k) => (counts[k] ?? 0) > 0)) expect(p.strength).toBeLessThan(0.3);
+      // the medium tier starts at a Warm tie score (40) since plan 16 §3.3
+      if (!twoWay.some((k) => (counts[k] ?? 0) > 0)) expect(p.strength).toBeLessThan(MEDIUM_TIE);
     }
   });
 

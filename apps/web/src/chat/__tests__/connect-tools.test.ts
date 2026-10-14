@@ -62,7 +62,7 @@ describe('live LinkedIn from the chat (the sample student, on the mock connector
     expect(env.kind).toBe('people');
     expect(env.summary).toMatch(/mutual connections? with Maya Chen/);
     const ui = (env.data as { ui: { people: { name: string }[] } }).ui;
-    expect(ui.people.map((p) => p.name)).toContain('Daniel Okafor');
+    expect(ui.people.map((p) => p.name)).toContain('Priya Ahmed');
     const model = JSON.stringify(modelResult('get_mutual_connections', env));
     expect(model).toContain(`<untrusted_${ctx.nonce}`);
     expect(model).not.toContain('"forModel"');

@@ -130,7 +130,8 @@ test.describe('Connect LinkedIn and Gmail, live LinkedIn and warm intros', () =>
     await page.goto('people/p9');
     const mutuals = page.getByTestId('person-mutuals');
     await expect(mutuals).toContainText('Mutual connections');
-    await expect(mutuals.getByTestId('person-mutual').filter({ hasText: 'Daniel Okafor' })).toBeVisible();
+    // her closest Stripe colleagues by tie score: a LinkedIn-connected alum ranks above a single unanswered email
+    await expect(mutuals.getByTestId('person-mutual').filter({ hasText: 'Priya Ahmed' })).toBeVisible();
     // p1 is Daniel Okafor at Stripe
     await page.goto('map?reach=p1');
     const panel = page.getByTestId('map-warm-intros');
