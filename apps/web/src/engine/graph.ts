@@ -1,8 +1,22 @@
-import type { Affiliation, Edge, Organization, Person, ReachPath, TargetCompany } from '@orbit/core';
+import type {
+  Affiliation,
+  CoffeeChat,
+  Edge,
+  Organization,
+  Person,
+  ReachHop,
+  ReachPath,
+  RoutePerson,
+  TargetCompany,
+  TiePair,
+  User,
+  WarmPath,
+} from '@orbit/core';
 import {
   addEdge,
   bestPathsFrom,
   combinedPairWeights,
+  DIRECT_TIE_SCORE,
   describePairHop,
   describeUserTie,
   inferEdges,
@@ -11,7 +25,12 @@ import {
   makeGraph,
   normalizeCompany,
   type PathTable,
+  pairsFromEdges,
+  rankCompanyTargets,
+  rankWarmPaths,
+  responsePrior,
   toReachPath,
+  USER_NODE,
   type WeightedGraph,
 } from '@orbit/core';
 import { db } from '../db/schema';
@@ -76,12 +95,20 @@ export async function recomputeEdges(userId: string): Promise<number> {
 
 export async function buildReachGraph(
   userId: string,
+  now: Date = new Date(),
 ): Promise<{ g: WeightedGraph; people: Map<string, Person>; edges: Edge[] }> {
-  const [people, edges] = await Promise.all([
+  const [people, edges, user, chats, asks] = await Promise.all([
     db.people.where('userId').equals(userId).toArray(),
     db.edges.where('userId').equals(userId).toArray(),
+    db.users.get(userId),
+    db.chats.where('userId').equals(userId).toArray(),
+    db.outbound
+      .where('userId')
+      .equals(userId)
+      .filter((o) => o.kind === 'intro_request')
+      .toArray(),
   ]);
-  return reachGraphFrom(people, edges);
+  return reachGraphFrom(people, edges, now, { user, chats, introAsks: asks });
 }
 
 /** Lowest weight for a LinkedIn connection with no other history: accepted, so not a stranger, but no more. */
@@ -91,10 +118,68 @@ export function userTieWeight(p: Person): number {
   return Math.max(p.strength > 0.02 ? p.strength : 0, p.linkedinConnectedOn ? LINKEDIN_ONLY_WEIGHT : 0);
 }
 
+/** What the v2 route ranking (plan 16 §4.2) needs beyond the graph: the people as routing sees them, and the pairs. */
+interface ReachContext {
+  people: Map<string, Person>;
+  routePeople: Map<string, RoutePerson>;
+  pairs: Map<string, TiePair>;
+  user?: Pick<User, 'school' | 'majors' | 'graduationYear'>;
+  now: Date;
+}
+
+const contexts = new WeakMap<WeightedGraph, ReachContext>();
+
+const DAY = 86_400_000;
+
+function routePeopleFrom(
+  map: Map<string, Person>,
+  edges: Edge[],
+  now: Date,
+  extra: { chats?: CoffeeChat[]; introAsks?: { personId: string; createdAt: string }[] },
+): Map<string, RoutePerson> {
+  // someone who introduced the student before is likelier to do it again (§4.2)
+  const introducers = new Set(
+    edges
+      .filter((e) => e.type === 'introduced_by' && typeof e.evidence.introducerId === 'string')
+      .map((e) => e.evidence.introducerId as string),
+  );
+  // the student owes a reply where the other person wrote last; an intro asked in the last 30 days is not asked again
+  const owes = new Set(
+    (extra.chats ?? [])
+      .filter(
+        (c) => !c.archivedAt && c.lastInboundAt && (!c.lastOutboundAt || c.lastInboundAt > c.lastOutboundAt),
+      )
+      .map((c) => c.personId),
+  );
+  const asked = new Set(
+    (extra.introAsks ?? [])
+      .filter((o) => now.getTime() - new Date(o.createdAt).getTime() < 30 * DAY)
+      .map((o) => o.personId),
+  );
+  const out = new Map<string, RoutePerson>();
+  for (const p of map.values())
+    out.set(p.id, {
+      id: p.id,
+      name: p.firstName || p.displayName,
+      score: Math.round(userTieWeight(p) * 100),
+      reciprocity: p.strengthBreakdown?.tieScore?.features.reciprocity,
+      introducedUserBefore: introducers.has(p.id),
+      owesReply: owes.has(p.id),
+      askedRecently: asked.has(p.id),
+      lastContactAt: p.strengthBreakdown?.lastConversationAt,
+    });
+  return out;
+}
+
 export function reachGraphFrom(
   people: Person[],
   edges: Edge[],
   now: Date = new Date(),
+  extra: {
+    user?: Pick<User, 'school' | 'majors' | 'graduationYear'>;
+    chats?: CoffeeChat[];
+    introAsks?: { personId: string; createdAt: string }[];
+  } = {},
 ): { g: WeightedGraph; people: Map<string, Person>; edges: Edge[] } {
   const g = makeGraph();
   const map = new Map<string, Person>();
@@ -114,6 +199,14 @@ export function reachGraphFrom(
     addEdge(g, a, b, c.weight, type, describePairHop(pa, pb, c.edges), true);
     addEdge(g, b, a, c.weight, type, describePairHop(pb, pa, c.edges), true);
   }
+  const known = edges.filter((e) => map.has(e.personAId) && map.has(e.personBId));
+  contexts.set(g, {
+    people: map,
+    routePeople: routePeopleFrom(map, known, now, extra),
+    pairs: pairsFromEdges(known),
+    user: extra.user,
+    now,
+  });
   return { g, people: map, edges };
 }
 
@@ -134,7 +227,82 @@ export async function reachPerson(userId: string, targetPersonId: string, k = 3)
   return reachPersonIn(g, targetPersonId, k);
 }
 
+/** v2 bands in the v1 words: high is a strong route, medium possible, low a long shot. */
+const BAND: Record<WarmPath['band'], ReachPath['band']> = {
+  high: 'strong',
+  medium: 'possible',
+  low: 'long_shot',
+};
+
+/** A v2 route (§4.2) in the shape the Reach panels read, with the v1 hop texts. */
+function toV2ReachPath(g: WeightedGraph, w: WarmPath): ReachPath {
+  if (w.nodes.length === 2) {
+    const direct = toReachPath(g, [USER_NODE, w.nodes[1]!]);
+    // writing straight to someone the student is tied to is never a long shot
+    return { hops: direct.hops, score: w.p, band: w.band === 'low' ? 'possible' : BAND[w.band] };
+  }
+  const hops: ReachHop[] = w.hops.map((h) => {
+    const e = g.adj.get(h.fromId)?.get(h.toId);
+    return {
+      fromId: h.fromId,
+      toId: h.toId,
+      weight: h.p,
+      type: h.kind === 'strength' ? 'strength' : h.kind,
+      text: e?.text ?? '',
+    };
+  });
+  return { hops, score: w.p, band: BAND[w.band] };
+}
+
+/**
+ * Routes to one person. A graph built from the student's records (reachGraphFrom) is ranked by plan 16 §4.2: the
+ * chance the introduction happens and the best route per first hop. Two placements keep the Reach panels' v1
+ * contract instead of §4.2's: someone the student knows well (a Warm tie or closer) is written to first, with the
+ * other ways in after it (§4.2 would skip routing), and a fainter tie comes after the warmer routes (the panels say
+ * why it is not the first suggestion), scored at the chance they answer; with no route it comes first. A bare graph
+ * keeps the v1 ranking (product of hop weights).
+ */
 export function reachPersonIn(g: WeightedGraph, targetPersonId: string, k = 3): ReachPath[] {
+  const ctx = contexts.get(g);
+  if (!ctx) return reachPersonV1(g, targetPersonId, k);
+  const tie = g.adj.get(USER_NODE)?.get(targetPersonId);
+  const target = ctx.people.get(targetPersonId);
+  const known = !!target && !!tie && Math.round(tie.weight * 100) >= DIRECT_TIE_SCORE;
+  // the core ranking does not route to someone the student knows; the panel still lists the other ways in
+  const people = known
+    ? new Map(ctx.routePeople).set(targetPersonId, { ...ctx.routePeople.get(targetPersonId)!, score: 0 })
+    : ctx.routePeople;
+  const r = rankWarmPaths({
+    targetId: targetPersonId,
+    target: target
+      ? { name: target.firstName || target.displayName, isAlum: target.isAlumni, title: target.currentTitle }
+      : undefined,
+    people,
+    pairs: ctx.pairs,
+    now: ctx.now,
+    limit: Math.max(k, 5),
+  });
+  const routes = r.paths.map((w) => toV2ReachPath(g, w));
+  if (known) return [toReachPath(g, [USER_NODE, targetPersonId]), ...routes.slice(0, k - 1)];
+  if (!tie || !target) return routes.slice(0, k);
+  const pReply = responsePrior(target, {
+    school: ctx.user?.school ?? '',
+    majors: ctx.user?.majors ?? [],
+    gradYear: ctx.user?.graduationYear,
+  });
+  const direct = toV2ReachPath(g, {
+    nodes: [USER_NODE, targetPersonId],
+    hops: [],
+    p: pReply,
+    band: pReply >= 0.35 ? 'high' : pReply >= 0.15 ? 'medium' : 'low',
+    firstHopId: targetPersonId,
+    otherWays: 0,
+    reasonText: '',
+  });
+  return [...routes.slice(0, k), direct];
+}
+
+function reachPersonV1(g: WeightedGraph, targetPersonId: string, k = 3): ReachPath[] {
   const paths = kShortestPaths(g, 'user', targetPersonId, k + 2, 3).map((p) => toReachPath(g, p));
   // dedupe by first hop unless the second hop differs
   const seen = new Set<string>();
@@ -302,7 +470,7 @@ export async function reachCompany(
   const orgs = await db.organizations.toArray();
   const org = resolveOrg(orgs, orgQuery);
   const norm = org?.nameNormalized ?? normalizeCompany(orgQuery);
-  const { g, people } = await buildReachGraph(userId);
+  const { g, people } = await buildReachGraph(userId, now);
   const affs = await db.affiliations.where('userId').equals(userId).toArray();
   const affsByPerson = new Map<string, Affiliation[]>();
   for (const a of affs) {
@@ -347,12 +515,30 @@ export async function reachCompany(
       a.person.displayName.localeCompare(b.person.displayName),
   );
   former.sort((a, b) => b.strength - a.strength || a.person.displayName.localeCompare(b.person.displayName));
-  const table = bestPathsFrom(g, 'user', 3);
+  // routes to the people there the student does not know well: every one of them at a small company; at a big one,
+  // the ones personalized PageRank (plan 16 §4.2) says the student's network reaches best; the route shown is the
+  // one Reach shows for that person
+  let reachable = direct.filter((d) => d.strength < MEDIUM_TIE);
+  const ctx = contexts.get(g);
+  if (ctx && reachable.length > 10) {
+    const ranked = rankCompanyTargets({
+      people: ctx.routePeople,
+      pairs: ctx.pairs,
+      targets: reachable.map((d) => ({
+        id: d.person.id,
+        name: d.person.firstName,
+        title: d.person.currentTitle,
+      })),
+      now: ctx.now,
+      limit: 10,
+    });
+    const chosen = new Set(ranked.map((x) => x.target.id));
+    reachable = reachable.filter((d) => chosen.has(d.person.id));
+  }
   const twoHop: CompanyReach['twoHop'] = [];
-  for (const d of direct) {
-    if (d.strength >= 0.3) continue;
-    const path = table.path(d.person.id);
-    if (path && path.length > 2) twoHop.push({ target: d.person, path: toReachPath(g, path) });
+  for (const d of reachable) {
+    const first = reachPersonIn(g, d.person.id, 1)[0];
+    if (first && first.hops.length > 1) twoHop.push({ target: d.person, path: first });
   }
   twoHop.sort((a, b) => b.path.score - a.path.score);
   const alumni = direct.filter((d) => d.person.isAlumni);
