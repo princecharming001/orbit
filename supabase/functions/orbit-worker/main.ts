@@ -5,7 +5,8 @@
 import { connectDb } from '../_shared/db.ts';
 import { makeLogger } from '../_shared/http.ts';
 import { resolveSecret } from '../_shared/secrets.ts';
-import { DEFAULT_BUDGET_MS, makeWorkerHandler, runTick } from './worker.ts';
+import { agentEnvFrom } from '../_shared/services.ts';
+import { DEFAULT_BUDGET_MS, defaultHandlers, makeWorkerHandler, runTick } from './worker.ts';
 
 const env = (name: string) => Deno.env.get(name) || undefined;
 const dbUrl = env('SUPABASE_DB_URL');
@@ -15,13 +16,19 @@ const log = makeLogger(salt);
 const runtime = typeof EdgeRuntime !== 'undefined' ? EdgeRuntime : undefined;
 const db = dbUrl ? connectDb(dbUrl, 2) : undefined;
 const cronSecret = await resolveSecret(env, db, 'ORBIT_CRON_SECRET', 'orbit_cron_secret');
+const handlers = defaultHandlers({ env: agentEnvFrom(env) });
 
 Deno.serve(
   makeWorkerHandler({
     cronSecret,
     db,
     tick: (db) =>
-      runTick({ db, log, budgetMs: Number.isFinite(budget) && budget > 0 ? budget : DEFAULT_BUDGET_MS }),
+      runTick({
+        db,
+        log,
+        handlers,
+        budgetMs: Number.isFinite(budget) && budget > 0 ? budget : DEFAULT_BUDGET_MS,
+      }),
     waitUntil: runtime ? (p) => runtime.waitUntil(p) : undefined,
     log,
   }),

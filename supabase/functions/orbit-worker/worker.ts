@@ -13,6 +13,8 @@ import { isUuid, timingSafeEqual } from '../_shared/crypto.ts';
 import type { Db } from '../_shared/db.ts';
 import { HttpError, json, type Logger, silentLogger, unconfigured } from '../_shared/http.ts';
 import { QUEUES, type Queue, type QueueName, sqlQueue } from '../_shared/queue.ts';
+import type { AgentConfig } from '../_shared/services.ts';
+import { agentHandlers } from './handlers/agents.ts';
 
 export class NotImplemented extends Error {
   constructor(kind: string) {
@@ -48,19 +50,16 @@ export const PLACEHOLDER_KINDS = [
   'sync.linkedin',
   'score.user',
   'score.person',
-  'cadence.user',
-  'enrich.dossier',
-  'source.search',
-  'send.draft',
   'classify.message',
 ] as const;
 
-export function defaultHandlers(): Record<string, JobHandler> {
+export function defaultHandlers(agents?: AgentConfig): Record<string, JobHandler> {
   const handlers: Record<string, JobHandler> = {
     noop: async () => {},
     'health.snapshot': async (_job, ctx) => {
       await ctx.db.sql`select orbit.health_snapshot()`;
     },
+    ...agentHandlers(agents),
   };
   for (const kind of PLACEHOLDER_KINDS)
     handlers[kind] = async () => {
