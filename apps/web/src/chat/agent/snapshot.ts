@@ -13,6 +13,7 @@ import { isServerUser } from '../../integrations/orbitApi';
 import { llmFeatures, readPrefs } from '../../integrations/prefs';
 import { sharedClaudeAvailable } from '../../integrations/shared-claude';
 import { getPanelHint } from '../panel/panelHint';
+import { offeredGoalLine } from './afterTurn';
 import { setupLine } from './setup';
 
 /**
@@ -224,10 +225,12 @@ export async function buildSnapshot(
     : '';
 
   const memory = await remembered;
+  const offered = account ? offeredGoalLine(userId) : undefined;
   const lines = [
     `Student: ${student}.${goalBits.length ? ` Goals: ${goalBits.join(', ')}.` : ''}`,
     `Active goals (ids): ${goalsV3.length ? goalsV3.map((g) => `${g.id} ${goalLine(g)}`).join('; ') : 'none tracked'}.`,
     ...(memory.length ? [`Remembered (ids): ${memory.join('; ')}.`] : []),
+    ...(offered ? [offered] : []),
     `Pipeline (chats by stage, ${chats.filter((c) => !c.archivedAt).length} total): ${pipeline || 'empty'}. People: ${humans}.`,
     `Today's brief (ids): ${cardLines.length ? cardLines.join('; ') : 'nothing pending'}${moreCards ? `; ${moreCards} more` : ''}.`,
     `Drafts unsent: ${draftLine}.${inFlight ? ` In flight (queued or handed off): ${inFlight}.` : ''}`,

@@ -20,6 +20,7 @@ import type {
   TurnEvent,
 } from '../types';
 import { recordToolAction } from './actions';
+import { learnAfterTurn } from './afterTurn';
 import { chipsFor, resolveChip, setupChipsFor } from './chips';
 import { type ChatClient, chatClient } from './client';
 import { type ExecuteFn, runTurn } from './loop';
@@ -349,25 +350,33 @@ export function createChatEngine(deps: ChatEngineDeps): ChatEngine {
       await nameFrom(conversation, trimmed);
       // another tab may have removed the key, turned the chat off or used up today's budget
       await refreshPrefs();
-      if (chatMode() === 'router') return routerTurn(conversation, trimmed, onEvent);
-      const client = getClient();
-      if (!client) return routerTurn(conversation, trimmed, onEvent);
-      await runTurn(
-        {
-          client,
-          registry: deps.registry,
-          execute: deps.execute,
-          store,
-          user: getUser(),
-          conversation,
-          now: clock,
-          quick: typeof deps.quick === 'function' ? deps.quick() : deps.quick,
-          prefixMismatch: deps.prefixMismatch,
-        },
-        [{ type: 'text', text: trimmed }],
-        onEvent,
-        signal,
-      );
+      let finished = false;
+      const watch = (e: TurnEvent) => {
+        if (e.type === 'done') finished = true;
+        onEvent(e);
+      };
+      const client = chatMode() === 'router' ? undefined : getClient();
+      if (!client) await routerTurn(conversation, trimmed, watch);
+      else
+        await runTurn(
+          {
+            client,
+            registry: deps.registry,
+            execute: deps.execute,
+            store,
+            user: getUser(),
+            conversation,
+            now: clock,
+            quick: typeof deps.quick === 'function' ? deps.quick() : deps.quick,
+            prefixMismatch: deps.prefixMismatch,
+          },
+          [{ type: 'text', text: trimmed }],
+          watch,
+          signal,
+        );
+      // account mode: memories and a possible goal from this turn, on the server, never awaited (afterTurn.ts)
+      if (finished && !signal?.aborted)
+        void learnAfterTurn({ user: getUser(), conversationId: conversation.id, store, onEvent });
     },
 
     chips: (): ChipSpec[] => chipsFor(deps.registry),

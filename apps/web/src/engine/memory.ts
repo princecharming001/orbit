@@ -2,7 +2,7 @@
  * Long-term memory (plan 16 §10): durable things the student told Orbit, kept on the server where the chat can
  * recall them and the student can see and delete them (Settings, Memory). Account mode only.
  */
-import type { MemoryItem, MemoryKind, User } from '@orbit/core';
+import type { ChatTurn, MemoryItem, MemoryKind, User } from '@orbit/core';
 import { callApi, isAccountMode, isServerUser, NO_SERVER, SIGN_IN_FIRST } from '../integrations/orbitApi';
 
 export const MEMORY_KINDS: readonly MemoryKind[] = [
@@ -65,6 +65,19 @@ export async function forget(user: Pick<User, 'id'>, memoryId: string): Promise<
   if (!isServerUser(user.id)) return notHere();
   const r = await callApi('/memory/forget', { id: memoryId });
   return r.ok ? { ok: true } : { ok: false, message: r.message };
+}
+
+/** What the server kept from the last chat turns (§10.6): the memories it found and how many are new. */
+export async function extractFromChat(
+  user: Pick<User, 'id'>,
+  turns: ChatTurn[],
+): Promise<{ ok: true; memories: MemoryItem[]; added: number } | Fail> {
+  if (!isServerUser(user.id)) return notHere();
+  if (!turns.length) return { ok: true, memories: [], added: 0 };
+  const r = await callApi('/memory/extract', { turns });
+  return r.ok
+    ? { ok: true, memories: r.value.memories, added: r.value.added }
+    : { ok: false, message: r.message };
 }
 
 /** "Remembered" for the chat's snapshot: the memories closest to what the student just said, at most ~300 tokens. */

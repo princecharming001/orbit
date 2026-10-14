@@ -3,10 +3,10 @@
  * account mode they live on the server (/goals/*) and the browser keeps a copy; in local mode they live in the
  * browser's `userGoals` table. The v1 recruiting details (functions, pace, cycle) stay in the `goals` row.
  */
-import type { Goal, GoalKind, User } from '@orbit/core';
+import type { ChatTurn, Goal, GoalKind, ProposedGoal, User } from '@orbit/core';
 import { GOAL_KINDS, newId } from '@orbit/core';
 import { db } from '../db/schema';
-import { type ApiFailure, callApi, isAccountMode, isSignedIn } from '../integrations/orbitApi';
+import { type ApiFailure, callApi, isAccountMode, isServerUser, isSignedIn } from '../integrations/orbitApi';
 import { writeFromServer } from './serverSync';
 
 export const MAX_ACTIVE_GOALS = 5;
@@ -161,4 +161,14 @@ export async function goalForPerson(userId: string, chatGoalId?: string): Promis
 export function goalLine(g: Goal): string {
   const targets = [...g.targets.organizations, ...g.targets.roles].slice(0, 3);
   return `${GOAL_KIND_LABELS[g.kind]}: ${g.title}${targets.length ? ` (${targets.join(', ')})` : ''}${g.dueAt ? `, by ${g.dueAt}` : ''}`;
+}
+
+/**
+ * Goals the server reads in the last chat turns (§1.6), never saved: the chat offers each one and calls set_goal
+ * only when the student says yes. Empty outside account mode or when the server has no Claude.
+ */
+export async function inferGoalsFromChat(user: Pick<User, 'id'>, turns: ChatTurn[]): Promise<ProposedGoal[]> {
+  if (!isServerUser(user.id) || !turns.length) return [];
+  const r = await callApi('/goals/infer', { turns });
+  return r.ok ? r.value.goals : [];
 }
