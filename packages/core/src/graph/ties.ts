@@ -424,6 +424,15 @@ export function combineTies(ties: Tie[], now: Date = new Date()): Map<string, Ti
   return out;
 }
 
+/**
+ * Evidence that two people actually know each other (they wrote to each other, met, were introduced, or are
+ * connected on LinkedIn), not just that they could (same employer or school). The structural tie feature (f11)
+ * counts only these as mutual contacts.
+ */
+export function knowEachOther(pair: Pick<TiePair, 'kinds'>): boolean {
+  return pair.kinds.some((k) => ROUTABLE_TIE_KINDS.has(k));
+}
+
 /** A pair routes only with combined confidence ≥ 0.5 or evidence of a real interaction or a LinkedIn connection. */
 export function isRoutable(pair: Pick<TiePair, 'confidence' | 'kinds'>): boolean {
   return pair.confidence >= 0.5 || pair.kinds.some((k) => ROUTABLE_TIE_KINDS.has(k));

@@ -124,9 +124,13 @@ export function isReciprocal(counts: Partial<Record<TouchpointKind, number>> | u
   return false;
 }
 
-/** Tier thresholds (inner ring, middle ring); the product spec's defaults. */
+/**
+ * Tier thresholds (inner ring, middle ring) on `strength` = tie score / 100 (plan 16 §3.3): Close and Strong
+ * (60+) are the strong tier, Warm (40–59) the medium tier, Light and Faint the weak tier. v1 put the middle ring at
+ * 0.3 on the computeStrength scale.
+ */
 export const STRONG_TIE = 0.6;
-export const MEDIUM_TIE = 0.3;
+export const MEDIUM_TIE = 0.4;
 
 export function strengthTier(strength: number): 'strong' | 'medium' | 'weak' {
   if (strength >= STRONG_TIE) return 'strong';

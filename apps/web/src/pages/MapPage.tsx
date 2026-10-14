@@ -4,6 +4,7 @@ import {
   combinedPairWeights,
   describeIntroChain,
   introStories,
+  MEDIUM_TIE,
   normalizeCompany,
   orbitGroupKey,
   REACH_BAND_LABELS,
@@ -570,7 +571,7 @@ export function MapPage() {
     for (const p of visible)
       if (orbitGroupKey(p, orgMap) === companyKey) {
         n++;
-        if (p.strength >= 0.3) warm++;
+        if (p.strength >= MEDIUM_TIE) warm++;
       }
     return [n, warm];
   }, [companyKey, visible, orgMap]);

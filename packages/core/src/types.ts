@@ -356,8 +356,14 @@ export interface Person {
   school?: string;
   isAlumni?: boolean;
   relationshipType: RelationshipType;
+  /** tie score / 100 (0 when there is no tie at all) */
   strength: number;
   strengthBreakdown?: StrengthBreakdown;
+  /** tie score 0–100 (plan 16 §3) */
+  tieScore?: number;
+  tieBand?: TieScoreSummary['band'];
+  /** why the score is what it is, in plain sentences */
+  tieExplanation?: string[];
   firstSeenAt?: string;
   lastInteractionAt?: string;
   interactionCount: number;
@@ -429,6 +435,21 @@ export interface StrengthBreakdown {
   lastInteractionAt?: string;
   /** latest email, meeting, logged chat or LinkedIn message: what the student would call talking */
   lastConversationAt?: string;
+  /** the 0–100 tie score behind `strength` (plan 16 §3; strength = score / 100) */
+  tieScore?: TieScoreSummary;
+}
+
+/** What is kept of a tie score on the person (orbit.tie_scores in account mode). */
+export interface TieScoreSummary {
+  score: number;
+  band: 'faint' | 'light' | 'warm' | 'strong' | 'close';
+  explanation: string[];
+  /** w_i · (f_i − baseline_i) per feature */
+  contributions: Record<string, number>;
+  features: Record<string, number>;
+  modelVersion: string;
+  /** the top mutual contacts behind the structural feature, kept so a single-person rescore can reuse them */
+  mutuals?: { name: string; score: number }[];
 }
 
 export interface EmailThread {

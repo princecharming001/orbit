@@ -52,8 +52,9 @@ describe('usability round 6: a chat moved on by hand counts for the relationship
     }))!;
     const s = await startWarmUpOrOutreach(user, r.person.id, 'linkedin', 'manual', { skipWarmUp: true });
     const body = s.draft!.bodyDraft.replace(/\[[^\]]+\]/g, 'We met at the Ross finance night.');
-    expect((await approveAndSend(user, s.draft!.id, body)).ok).toBe(true);
-    expect((await confirmHandoff(user, s.draft!.id)).ok).toBe(true);
+    // on the demo's clock, so the message the student sent comes before the reply the move records
+    expect((await approveAndSend(user, s.draft!.id, body, undefined, NOW)).ok).toBe(true);
+    expect((await confirmHandoff(user, s.draft!.id, NOW)).ok).toBe(true);
     const chat = () =>
       db.chats
         .where('personId')

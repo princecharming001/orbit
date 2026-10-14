@@ -1,6 +1,15 @@
 import { isAtsSender } from '../text/email';
 import { normalizeCompany } from '../text/normalize';
-import type { Affiliation, CalendarEvent, EmailMessage, EmailThread, Person, Touchpoint } from '../types';
+import type {
+  Affiliation,
+  CalendarEvent,
+  EmailMessage,
+  EmailThread,
+  Person,
+  StrengthBreakdown,
+  Touchpoint,
+} from '../types';
+import { computeStrength } from './strength';
 
 /**
  * Relationship strength 0–100 (plan 16 §3): a logistic model over fourteen features of the history between the
@@ -881,4 +890,52 @@ export function buildTieHistory(input: TieHistoryInput): TieHistory {
 /** Note warmth label → number for f13. */
 export function warmthValue(w: 'warm' | 'neutral' | 'cool' | undefined): number {
   return w === 'warm' ? 1 : w === 'cool' ? -1 : 0;
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// local mode: people.strength from the tie score
+
+export interface TieStrength {
+  /** score / 100, or 0 when there is no tie at all */
+  strength: number;
+  breakdown: StrengthBreakdown;
+  tie: TieScore;
+}
+
+/**
+ * `people.strength` for local mode (§1.2: strength = score / 100), with the v1 breakdown kept (its counts and
+ * conversation dates drive the hop texts and the reconnect rules) and the tie score added to it. Someone the student
+ * has never been in touch with, is not connected to and was never introduced to has no tie: strength 0, as before,
+ * so routing never treats a stranger as someone they know; the score itself is still kept.
+ */
+export function tieStrength(
+  input: TieHistoryInput,
+  now: Date = new Date(),
+  calibration?: TieCalibration,
+): TieStrength {
+  const legacy = computeStrength(input.touchpoints, now);
+  const history = buildTieHistory(input);
+  const tie = scoreTie(history, now, TIE_WEIGHTS, calibration);
+  const exists = !tie.facts.never || history.linkedinConnected || history.intros > 0;
+  const mutuals = (history.mutualNames ?? [])
+    .map((name, i) => ({ name, score: history.mutualScores[i] ?? 0 }))
+    .filter((m) => m.name && m.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 5);
+  return {
+    strength: exists ? tie.score / 100 : 0,
+    breakdown: {
+      ...legacy.breakdown,
+      tieScore: {
+        score: tie.score,
+        band: tie.band,
+        explanation: tie.explanation,
+        contributions: tie.contributions,
+        features: tie.features,
+        modelVersion: tie.modelVersion,
+        ...(mutuals.length ? { mutuals } : {}),
+      },
+    },
+    tie,
+  };
 }

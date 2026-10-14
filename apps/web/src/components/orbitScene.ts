@@ -1,5 +1,5 @@
 import type { IntroWeb, OrbitCluster, OrbitGroup, OrbitLayout, OrbitNode, Person } from '@orbit/core';
-import { ORBIT_PERIOD_MS } from '@orbit/core';
+import { MEDIUM_TIE, ORBIT_PERIOD_MS } from '@orbit/core';
 import {
   type Clock,
   clamp01,
@@ -1140,7 +1140,7 @@ export class OrbitScene {
     if (said) return `${said.count} at ${g.label}${said.warm ? ` · ${said.warm} warm` : ''}`;
     let warm = 0;
     for (const v of this.views)
-      if (!v.temp && v.groupKey === g.key && (v.person?.strength ?? 0) >= 0.3) warm++;
+      if (!v.temp && v.groupKey === g.key && (v.person?.strength ?? 0) >= MEDIUM_TIE) warm++;
     return `${g.count} at ${g.label}${warm ? ` · ${warm} warm` : ''}`;
   }
 
