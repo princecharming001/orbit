@@ -29,6 +29,14 @@ export const PULL_TABLES: PullTable[] = [
     key: 'id',
     cursor: 'updated_at',
     deletedWhen: 't.deleted_at is not null or t.merged_into is not null',
+    // a Person: the columns under the names the browser's screens read
+    map: (r) => ({
+      ...r,
+      nameNormalized: r.nameNorm,
+      currentTitle: r.title,
+      currentOrganizationId: r.orgId,
+      currentOrganizationRaw: r.orgRaw,
+    }),
   },
   { table: 'person_identities', key: 'id', cursor: 'created_at' },
   { table: 'affiliations', key: 'id', cursor: 'updated_at' },
@@ -85,6 +93,7 @@ export const PULL_TABLES: PullTable[] = [
   { table: 'stage_events', key: 'id', cursor: 'updated_at' },
   { table: 'drafts', key: 'id', cursor: 'updated_at' },
   { table: 'notes', key: 'id', cursor: 'updated_at' },
+  { table: 'uploads', key: 'id', cursor: 'updated_at' },
   { table: 'facts', key: 'id', cursor: 'updated_at', deletedWhen: 't.deleted_at is not null' },
   { table: 'dossiers', key: 'id', cursor: 'updated_at' },
   { table: 'recommendations', key: 'id', cursor: 'updated_at' },

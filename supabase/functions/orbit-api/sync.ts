@@ -7,7 +7,13 @@
  *        cursor = base64url JSON {table: {t: last cursor time, k: last key}, _audit: last audit_log id}
  *   POST /sync/push {changes: [{table, op: 'upsert'|'delete', id, row?}]}
  *        → {results: [{table, id, ok, row?, error?}]}; user-authored tables only, every change audited
+ *
+ * People made in the browser are inserted with what the student typed (name, email, title, organization, LinkedIn,
+ * location); the server derives name_norm and sources and adds the email and LinkedIn identities, so imports later
+ * resolve to the same person. After that only the hand-edited fields change from the app.
  */
+import { normalizeEmailForMatch } from '@orbit/core/entity/resolve';
+import { linkedInSlug, normalizeEmail, parseName } from '@orbit/core/text/normalize';
 import { z } from 'zod/v4';
 import { base64url, fromBase64url, isUuid } from '../_shared/crypto.ts';
 import type { Db, Row } from '../_shared/db.ts';
@@ -211,6 +217,13 @@ interface Field {
   owned?: 'people' | 'goals' | 'organizations' | 'chats';
 }
 
+/** A column the server computes from the validated values instead of taking it from the app. */
+interface Derived {
+  col: string;
+  type: ColType;
+  value: unknown;
+}
+
 interface PushSpec {
   table: string;
   /** upsert: insert or update; update: existing rows only */
@@ -219,7 +232,13 @@ interface PushSpec {
   del?: 'soft' | 'hard';
   key: 'id' | 'person_id';
   fields: Record<string, Field>;
+  /** accepted when the row is created; ignored (never an error) on later updates */
+  insertOnly?: Record<string, Field>;
   required?: string[];
+  /** columns computed from the validated values, by field name: on insert, and on update from what changed */
+  derive?: (v: Record<string, unknown>, op: 'insert' | 'update') => Derived[];
+  /** runs in the same transaction right after an insert */
+  afterInsert?: (db: Db, userId: string, id: string, v: Record<string, unknown>) => Promise<void>;
 }
 
 const uuidS = z.string().refine(isUuid, 'must be a uuid');
@@ -330,9 +349,10 @@ export const PUSH: Record<string, PushSpec> = {
   },
   people: {
     table: 'people',
-    write: 'update',
+    write: 'upsert',
     key: 'id',
-    // only what the user edits by hand; everything else is derived on the server
+    required: ['displayName'],
+    // what the user edits by hand; everything else is derived on the server
     fields: {
       displayName: f('display_name', 'text', z.string().trim().min(1).max(200)),
       notes: f('notes', 'text', z.string().max(20_000).nullable()),
@@ -340,6 +360,54 @@ export const PUSH: Record<string, PushSpec> = {
       relationshipType: f('relationship_type', 'text', z.string().max(40).nullable()),
       hiddenAt: f('hidden_at', 'timestamptz', tsS.nullable()),
       doNotContact: f('do_not_contact', 'boolean', z.boolean()),
+    },
+    // a person added in the app: what the student typed, once; imports keep these up to date afterwards
+    insertOnly: {
+      firstName: f('first_name', 'text', z.string().trim().max(100).nullable()),
+      lastName: f('last_name', 'text', z.string().trim().max(100).nullable()),
+      primaryEmail: f(
+        'primary_email',
+        'text',
+        z
+          .string()
+          .trim()
+          .max(320)
+          .regex(/^[^\s@]+@[^\s@]+\.[^\s@]+$/, 'must be an email address')
+          .transform((e) => normalizeEmail(e))
+          .nullable(),
+      ),
+      title: f('title', 'text', z.string().trim().max(300).nullable()),
+      orgRaw: f('org_raw', 'text', z.string().trim().max(300).nullable()),
+      linkedinUrl: f('linkedin_url', 'text', z.string().trim().max(500).nullable()),
+      location: f('location', 'text', z.string().trim().max(200).nullable()),
+    },
+    derive: (v, op) => {
+      const out: Derived[] = [];
+      const name = typeof v.displayName === 'string' ? v.displayName : undefined;
+      if (name !== undefined) {
+        const n = parseName(name);
+        out.push({ col: 'name_norm', type: 'text', value: n.normalized || name.toLowerCase() });
+        if (op === 'insert') {
+          if (!('firstName' in v)) out.push({ col: 'first_name', type: 'text', value: n.first || null });
+          if (!('lastName' in v)) out.push({ col: 'last_name', type: 'text', value: n.last || null });
+        }
+      }
+      if (op === 'insert') {
+        out.push({ col: 'sources', type: 'text[]', value: ['manual'] });
+        const slug = typeof v.linkedinUrl === 'string' ? linkedInSlug(v.linkedinUrl) : undefined;
+        if (slug) out.push({ col: 'linkedin_slug', type: 'text', value: slug });
+      }
+      return out;
+    },
+    afterInsert: async (db, userId, id, v) => {
+      const add = (kind: string, norm: string, raw: string) => db.sql`
+        insert into orbit.person_identities (user_id, person_id, kind, value_norm, value_raw, source)
+        values (${userId}::uuid, ${id}::uuid, ${kind}, ${norm}, ${raw}, 'manual')
+        on conflict (user_id, kind, value_norm) do nothing`;
+      if (typeof v.primaryEmail === 'string' && v.primaryEmail)
+        await add('email', normalizeEmailForMatch(v.primaryEmail), v.primaryEmail);
+      const slug = typeof v.linkedinUrl === 'string' ? linkedInSlug(v.linkedinUrl) : undefined;
+      if (slug) await add('linkedin_slug', slug, v.linkedinUrl as string);
     },
   },
   tie_labels: {
@@ -349,6 +417,20 @@ export const PUSH: Record<string, PushSpec> = {
     key: 'person_id',
     required: ['closeness'],
     fields: { closeness: f('closeness', 'int', z.number().int().min(1).max(5)) },
+  },
+  uploads: {
+    table: 'uploads',
+    write: 'upsert',
+    del: 'hard',
+    key: 'id',
+    required: ['kind', 'text'],
+    fields: {
+      kind: f('kind', 'text', z.enum(['resume', 'note', 'transcript', 'linkedin_export'])),
+      filename: f('filename', 'text', z.string().max(300).nullable()),
+      text: f('text', 'text', z.string().max(500_000)),
+      parsed: f('parsed', 'jsonb', obj(200_000).nullable()),
+      isCurrent: f('is_current', 'boolean', z.boolean()),
+    },
   },
   // drafts: handled by pushDraft (status transitions and edits while still a draft)
   drafts: { table: 'drafts', write: 'update', key: 'id', fields: {} },
@@ -443,10 +525,17 @@ async function checkOwned(db: Db, userId: string, table: string, ids: string[]) 
     throw new ChangeError('not_found', `a referenced ${table} row was not found`);
 }
 
-/** Validates the provided fields of a row against the spec (unknown keys are ignored). */
-async function validFields(db: Db, userId: string, spec: PushSpec, row: Record<string, unknown>) {
+/** Validates the provided fields of a row against the spec (unknown keys, and insert-only ones on update, are ignored). */
+async function validFields(
+  db: Db,
+  userId: string,
+  spec: PushSpec,
+  row: Record<string, unknown>,
+  insert: boolean,
+) {
   const out: { field: Field; name: string; value: unknown }[] = [];
-  for (const [name, field] of Object.entries(spec.fields)) {
+  const all = insert ? { ...spec.fields, ...spec.insertOnly } : spec.fields;
+  for (const [name, field] of Object.entries(all)) {
     if (!(name in row)) continue;
     const r = field.schema.safeParse(row[name]);
     if (!r.success) throw new ChangeError('invalid', `${name}: ${r.error.issues[0]?.message ?? 'invalid'}`);
@@ -466,16 +555,21 @@ async function write(db: Db, userId: string, spec: PushSpec, id: string, row: Re
   const keyCol = spec.key;
   // tie_labels are keyed by the person: the change id is the person's id
   if (keyCol === 'person_id') await checkOwned(db, userId, 'people', [id]);
-  const fields = await validFields(db, userId, spec, row);
   const [existing] = await db.query<{ user_id: string }>(
     `select user_id from orbit.${spec.table} where ${keyCol} = $1::uuid ${keyCol === 'person_id' ? 'and user_id = $2::uuid' : ''}`,
     keyCol === 'person_id' ? [id, userId] : [id],
   );
   if (existing && existing.user_id !== userId)
     throw new ChangeError('not_found', `${spec.table} ${id} was not found`);
+  const insert = !existing && spec.write !== 'update';
+  const fields = await validFields(db, userId, spec, row, insert);
+  const values = Object.fromEntries(fields.map((x) => [x.name, x.value]));
+  const derived = spec.derive?.(values, insert ? 'insert' : 'update') ?? [];
+  const cols = [...fields.map((x) => ({ col: x.field.col, type: x.field.type })), ...derived];
+  const params = [...fields.map((x) => x.value), ...derived.map((d) => d.value)];
   const softDeleted = spec.del === 'soft' ? ' and t.deleted_at is null' : '';
 
-  if (existing || spec.write === 'update') {
+  if (!insert) {
     if (!existing) throw new ChangeError('not_found', `${spec.table} ${id} was not found`);
     if (!fields.length) {
       const [cur] = await db.query<{ row: Row }>(
@@ -484,11 +578,11 @@ async function write(db: Db, userId: string, spec: PushSpec, id: string, row: Re
       );
       return shape(spec.table, cur?.row);
     }
-    const sets = fields.map((x, i) => `${x.field.col} = $${i + 3}::${x.field.type}`).join(', ');
+    const sets = cols.map((c, i) => `${c.col} = $${i + 3}::${c.type}`).join(', ');
     const [r] = await db.query<{ row: Row }>(
       `update orbit.${spec.table} t set ${sets}
         where t.${keyCol} = $1::uuid and t.user_id = $2::uuid${softDeleted} returning to_jsonb(t) as row`,
-      [id, userId, ...fields.map((x) => x.value)],
+      [id, userId, ...params],
     );
     if (!r) throw new ChangeError('not_found', `${spec.table} ${id} was not found`);
     await audit(
@@ -504,12 +598,13 @@ async function write(db: Db, userId: string, spec: PushSpec, id: string, row: Re
 
   for (const name of spec.required ?? [])
     if (!fields.some((x) => x.name === name)) throw new ChangeError('invalid', `${name} is required`);
-  const cols = [keyCol, 'user_id', ...fields.map((x) => x.field.col)];
-  const vals = ['$1::uuid', '$2::uuid', ...fields.map((x, i) => `$${i + 3}::${x.field.type}`)];
+  const names = [keyCol, 'user_id', ...cols.map((c) => c.col)];
+  const vals = ['$1::uuid', '$2::uuid', ...cols.map((c, i) => `$${i + 3}::${c.type}`)];
   const [r] = await db.query<{ row: Row }>(
-    `insert into orbit.${spec.table} as t (${cols.join(', ')}) values (${vals.join(', ')}) returning to_jsonb(t) as row`,
-    [id, userId, ...fields.map((x) => x.value)],
+    `insert into orbit.${spec.table} as t (${names.join(', ')}) values (${vals.join(', ')}) returning to_jsonb(t) as row`,
+    [id, userId, ...params],
   );
+  await spec.afterInsert?.(db, userId, id, values);
   await audit(
     db,
     userId,

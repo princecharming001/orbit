@@ -569,28 +569,205 @@ describe('/sync/push', () => {
     expect(still!.title).toBe('Theirs');
   });
 
-  it('edits only the manual fields of people, never creates them', async () => {
+  it('edits only the manual fields of people, and ignores insert-only fields on update', async () => {
     const { handler } = harness();
     const { token, userId } = await signedIn();
     const [p] = await t.db.sql<{ id: string }>`
-      insert into orbit.people (user_id, display_name, name_norm, strength) values (${userId}::uuid, 'Ann', 'ann', 0.4) returning id`;
+      insert into orbit.people (user_id, display_name, name_norm, strength, title) values (${userId}::uuid, 'Ann', 'ann', 0.4, 'PM') returning id`;
     const r = await push(handler, token, [
       {
         table: 'people',
         op: 'upsert',
         id: p!.id,
-        row: { displayName: 'Ann Lee', tags: ['mentor'], doNotContact: true, strength: 1, summary: 'x' },
+        row: {
+          displayName: 'Ann Lee',
+          tags: ['mentor'],
+          doNotContact: true,
+          strength: 1,
+          summary: 'x',
+          title: 'CEO',
+          primaryEmail: 'ann@example.com',
+        },
       },
-      { table: 'people', op: 'upsert', id: crypto.randomUUID(), row: { displayName: 'New' } },
     ]);
     expect(r.results[0]!.row).toMatchObject({
       displayName: 'Ann Lee',
+      nameNorm: 'ann lee',
       tags: ['mentor'],
       doNotContact: true,
       strength: 0.4,
+      title: 'PM',
+      currentTitle: 'PM',
+      primaryEmail: null,
     });
     expect(r.results[0]!.row!.summary).toBeNull();
-    expect(r.results[1]!.error?.code).toBe('not_found');
+    const ids = await t.db.sql`select 1 from orbit.person_identities where person_id = ${p!.id}::uuid`;
+    expect(ids).toHaveLength(0);
+    // only insert-only fields: nothing changes, nothing is refused
+    const only = await push(handler, token, [
+      { table: 'people', op: 'upsert', id: p!.id, row: { title: 'CEO' } },
+    ]);
+    expect(only.results[0]).toMatchObject({ ok: true, row: { title: 'PM' } });
+  });
+
+  it('creates a person added in the app, with derived name_norm and sources and their identities', async () => {
+    const { handler } = harness();
+    const { token, userId } = await signedIn();
+    const id = crypto.randomUUID();
+    const chatId = crypto.randomUUID();
+    const r = await push(handler, token, [
+      {
+        table: 'people',
+        op: 'upsert',
+        id,
+        row: {
+          displayName: 'Liz Chen',
+          primaryEmail: 'Liz.Chen@Example.com',
+          title: 'Product Lead',
+          orgRaw: 'Stripe',
+          linkedinUrl: 'https://www.linkedin.com/in/liz-chen-42/',
+          location: 'San Francisco',
+          tags: ['fintech'],
+          sources: ['gmail'],
+          strength: 1,
+        },
+      },
+      // a chat that points at the new person, in the same push
+      { table: 'chats', op: 'upsert', id: chatId, row: { personId: id, stage: 'identified' } },
+    ]);
+    expect(r.results.map((x) => x.ok)).toEqual([true, true]);
+    expect(r.results[0]!.row).toMatchObject({
+      id,
+      displayName: 'Liz Chen',
+      firstName: 'Liz',
+      lastName: 'Chen',
+      nameNorm: 'liz chen',
+      nameNormalized: 'liz chen',
+      primaryEmail: 'liz.chen@example.com',
+      title: 'Product Lead',
+      currentTitle: 'Product Lead',
+      orgRaw: 'Stripe',
+      currentOrganizationRaw: 'Stripe',
+      linkedinUrl: 'https://www.linkedin.com/in/liz-chen-42/',
+      linkedinSlug: 'liz-chen-42',
+      location: 'San Francisco',
+      sources: ['manual'],
+      tags: ['fintech'],
+      strength: 0,
+      isSelf: false,
+    });
+    const ids = await t.db.sql<{ kind: string; value_norm: string; source: string }>`
+      select kind, value_norm, source from orbit.person_identities where person_id = ${id}::uuid order by kind`;
+    expect(ids).toEqual([
+      { kind: 'email', value_norm: 'liz.chen@example.com', source: 'manual' },
+      { kind: 'linkedin_slug', value_norm: 'liz-chen-42', source: 'manual' },
+    ]);
+    // a rename re-derives name_norm and leaves the rest alone
+    const renamed = await push(handler, token, [
+      { table: 'people', op: 'upsert', id, row: { displayName: 'Elizabeth Chen', title: 'CEO' } },
+    ]);
+    expect(renamed.results[0]!.row).toMatchObject({
+      nameNorm: 'elizabeth chen',
+      firstName: 'Liz',
+      title: 'Product Lead',
+      sources: ['manual'],
+    });
+    const audit = await t.db.sql<{ action: string }>`
+      select action from orbit.audit_log where user_id = ${userId}::uuid and target_id = ${id} order by id`;
+    expect(audit.map((a) => a.action)).toEqual(['sync.insert', 'sync.update']);
+  });
+
+  it('keeps identities unique: a second person with a known email is created without taking it', async () => {
+    const { handler } = harness();
+    const { token } = await signedIn();
+    const a = crypto.randomUUID();
+    const b = crypto.randomUUID();
+    const r = await push(handler, token, [
+      { table: 'people', op: 'upsert', id: a, row: { displayName: 'Sam Lee', primaryEmail: 'sam@ramp.com' } },
+      {
+        table: 'people',
+        op: 'upsert',
+        id: b,
+        row: { displayName: 'Samuel Lee', primaryEmail: 'sam@ramp.com' },
+      },
+      { table: 'people', op: 'upsert', id: crypto.randomUUID(), row: { tags: ['x'] } },
+      {
+        table: 'people',
+        op: 'upsert',
+        id: crypto.randomUUID(),
+        row: { displayName: 'Bad Email', primaryEmail: 'not an email' },
+      },
+    ]);
+    expect(r.results.map((x) => x.ok)).toEqual([true, true, false, false]);
+    expect(r.results.map((x) => x.error?.code ?? null)).toEqual([null, null, 'invalid', 'invalid']);
+    const owners = await t.db.sql<{ person_id: string }>`
+      select person_id from orbit.person_identities where kind = 'email' and value_norm = 'sam@ramp.com'`;
+    expect(owners.map((o) => o.person_id)).toEqual([a]);
+  });
+
+  it('pushes uploads (a resume with its parsed facets) and hard-deletes them', async () => {
+    const { handler } = harness();
+    const { token, userId } = await signedIn();
+    const id = crypto.randomUUID();
+    const r = await push(handler, token, [
+      {
+        table: 'uploads',
+        op: 'upsert',
+        id,
+        row: {
+          kind: 'resume',
+          filename: 'resume.pdf',
+          text: 'Maya Lin\nCornell University, BS Computer Science',
+          parsed: { facets: [{ kind: 'education', organizationName: 'Cornell University' }] },
+          isCurrent: true,
+        },
+      },
+      { table: 'uploads', op: 'upsert', id: crypto.randomUUID(), row: { kind: 'resume' } },
+      {
+        table: 'uploads',
+        op: 'upsert',
+        id: crypto.randomUUID(),
+        row: { kind: 'photo', text: 'x' },
+      },
+      {
+        table: 'uploads',
+        op: 'upsert',
+        id: crypto.randomUUID(),
+        row: { kind: 'note', text: 'x'.repeat(500_001) },
+      },
+      {
+        table: 'uploads',
+        op: 'upsert',
+        id: crypto.randomUUID(),
+        row: { kind: 'note', text: 'x', parsed: { big: 'y'.repeat(200_001) } },
+      },
+    ]);
+    expect(r.results.map((x) => x.error?.code ?? 'ok')).toEqual([
+      'ok',
+      'invalid',
+      'invalid',
+      'invalid',
+      'invalid',
+    ]);
+    expect(r.results[0]!.row).toMatchObject({ id, kind: 'resume', filename: 'resume.pdf', isCurrent: true });
+    const later = await push(handler, token, [
+      { table: 'uploads', op: 'upsert', id, row: { isCurrent: false } },
+    ]);
+    expect(later.results[0]!.row).toMatchObject({ isCurrent: false, kind: 'resume' });
+    const first = (await (
+      await handler(req('/sync/pull', { token, body: { tables: ['uploads'] } }))
+    ).json()) as {
+      changes: Record<string, Record<string, unknown>[]>;
+      cursor: string;
+    };
+    expect(first.changes.uploads?.map((u) => u.id)).toEqual([id]);
+    const del = await push(handler, token, [{ table: 'uploads', op: 'delete', id }]);
+    expect(del.results[0]!.ok).toBe(true);
+    expect(await t.db.sql`select 1 from orbit.uploads where user_id = ${userId}::uuid`).toHaveLength(0);
+    const next = (await (
+      await handler(req('/sync/pull', { token, body: { cursor: first.cursor, tables: ['uploads'] } }))
+    ).json()) as { deleted: Record<string, string[]> };
+    expect(next.deleted.uploads).toEqual([id]);
   });
 
   it('moves drafts only out of draft, and edits them only while they are drafts', async () => {
