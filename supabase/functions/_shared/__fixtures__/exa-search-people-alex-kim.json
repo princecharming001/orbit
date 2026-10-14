@@ -1,0 +1,18 @@
+{
+  "requestId": "req_people_alex",
+  "results": [
+    {
+      "id": "https://www.linkedin.com/in/alexkim-stripe",
+      "url": "https://www.linkedin.com/in/alexkim-stripe",
+      "title": "Alex Kim - Software Engineer at Stripe | LinkedIn",
+      "highlights": ["Alex Kim works on payments infrastructure at Stripe."]
+    },
+    {
+      "id": "https://www.linkedin.com/in/alex-kim-vc",
+      "url": "https://www.linkedin.com/in/alex-kim-vc",
+      "title": "Alex Kim - Partner - Bluebird Capital | LinkedIn",
+      "highlights": ["Alex Kim invests in developer tools at Bluebird Capital."]
+    }
+  ],
+  "costDollars": { "total": 0.012 }
+}

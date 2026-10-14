@@ -1,0 +1,20 @@
+{
+  "requestId": "req_people_investors",
+  "results": [
+    {
+      "id": "https://www.linkedin.com/in/maya-patel-gv",
+      "url": "https://www.linkedin.com/in/maya-patel-gv",
+      "title": "Maya Patel - Partner - Greenfield Ventures | LinkedIn",
+      "highlights": [
+        "Maya Patel is a partner at Greenfield Ventures, leading seed rounds in climate software."
+      ]
+    },
+    {
+      "id": "https://www.linkedin.com/in/leo-grant",
+      "url": "https://www.linkedin.com/in/leo-grant",
+      "title": "Leo Grant - Principal at Ember Climate Fund | LinkedIn",
+      "highlights": ["Leo Grant backs pre-seed climate founders at Ember Climate Fund."]
+    }
+  ],
+  "costDollars": { "total": 0.0128 }
+}

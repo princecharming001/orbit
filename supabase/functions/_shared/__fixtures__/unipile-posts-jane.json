@@ -1,0 +1,18 @@
+{
+  "object": "PostList",
+  "items": [
+    {
+      "provider": "LINKEDIN",
+      "id": "7380000000000000001",
+      "social_id": "urn:li:activity:7380000000000000001",
+      "share_url": "https://www.linkedin.com/posts/jane-doe-nw_robotics-activity-7380000000000000001",
+      "text": "We are hiring field reliability engineers in Oakland. If you like robots that leave the lab, write to me.",
+      "date": "3w",
+      "parsed_datetime": "2026-09-22T16:00:00.000Z",
+      "reaction_counter": 212,
+      "comment_counter": 18,
+      "is_repost": false
+    }
+  ],
+  "cursor": null
+}

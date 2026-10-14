@@ -1,0 +1,67 @@
+{
+  "data": {
+    "person": {
+      "first_name": "Dana",
+      "last_name": "Lee",
+      "full_name": "Dana Lee",
+      "linkedin_url": "https://www.linkedin.com/in/dana-lee",
+      "village_url": "https://village.do/p/dana-lee"
+    },
+    "summary": { "score": 82, "score_label": "Strong", "description": "Two warm ways in" },
+    "paths": [
+      {
+        "degree": 2,
+        "summary": { "score": 55, "score_label": "Medium" },
+        "starters": [],
+        "introducer": {
+          "profile": {
+            "first_name": "Mia",
+            "last_name": "Chen",
+            "linkedin_url": "https://www.linkedin.com/in/mia-chen",
+            "headline": "Product at Figma"
+          },
+          "score": 55,
+          "score_label": "Medium",
+          "score_meta": [{ "title": "Same school", "description": "Stanford, 2019" }]
+        },
+        "score_meta": []
+      },
+      {
+        "degree": 2,
+        "summary": { "score": 82, "score_label": "Strong" },
+        "starters": [],
+        "introducer": {
+          "profile": {
+            "first_name": "Sam",
+            "last_name": "Ortiz",
+            "linkedin_url": "https://www.linkedin.com/in/sam-ortiz",
+            "headline": "Engineering Manager at Acme Robotics"
+          },
+          "score": 82,
+          "score_label": "Strong",
+          "score_meta": [{ "title": "Worked together", "description": "Acme Robotics, 2021–2024" }]
+        },
+        "score_meta": []
+      },
+      {
+        "degree": 1,
+        "summary": { "score": 40, "score_label": "Weak" },
+        "starters": [],
+        "introducer": {
+          "profile": {
+            "first_name": "Dana",
+            "last_name": "Lee",
+            "linkedin_url": "https://www.linkedin.com/in/dana-lee",
+            "headline": "Partner"
+          },
+          "score": 40,
+          "score_label": "Weak",
+          "score_meta": []
+        },
+        "score_meta": []
+      }
+    ],
+    "count": 3
+  },
+  "metadata": { "request_id": "req_person_1", "counts": { "total": 3 } }
+}

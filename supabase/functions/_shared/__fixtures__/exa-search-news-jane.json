@@ -1,0 +1,26 @@
+{
+  "requestId": "req_news_jane",
+  "results": [
+    {
+      "id": "https://news.example/northwind-series-b",
+      "url": "https://news.example/northwind-series-b",
+      "title": "Northwind Robotics raises $40M Series B to put robots in mid-size warehouses",
+      "publishedDate": "2026-06-02T00:00:00.000Z",
+      "author": "R. Patel",
+      "highlights": [
+        "\"We built the arm around the shelves people already have,\" said Jane Doe, VP Engineering at Northwind Robotics."
+      ],
+      "highlightScores": [0.58]
+    },
+    {
+      "id": "https://local.example/marathon",
+      "url": "https://local.example/marathon",
+      "title": "Jane Doe wins the Riverside half marathon",
+      "publishedDate": "2026-04-11T00:00:00.000Z",
+      "author": null,
+      "highlights": ["Jane Doe crossed the line first in 1:21."],
+      "highlightScores": [0.2]
+    }
+  ],
+  "costDollars": { "total": 0.012 }
+}

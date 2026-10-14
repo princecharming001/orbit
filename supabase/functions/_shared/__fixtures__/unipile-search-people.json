@@ -1,0 +1,37 @@
+{
+  "object": "LinkedinSearch",
+  "items": [
+    {
+      "type": "PEOPLE",
+      "id": "ACoAAPriyaShah",
+      "name": "Priya Shah",
+      "member_urn": "urn:li:member:2001",
+      "profile_url": "https://www.linkedin.com/in/priya-shah-design?miniProfileUrn=x",
+      "network_distance": "DISTANCE_2",
+      "location": "San Francisco Bay Area",
+      "headline": "Product Designer at Figma"
+    },
+    {
+      "type": "PEOPLE",
+      "id": "ACoAAKenIto",
+      "name": "Ken Ito",
+      "member_urn": "urn:li:member:2002",
+      "profile_url": "https://www.linkedin.com/in/ken-ito",
+      "network_distance": "DISTANCE_3",
+      "location": "New York",
+      "headline": "Engineering Manager at Figma"
+    },
+    {
+      "type": "PEOPLE",
+      "id": "ACoAAMiaChen",
+      "name": "Mia Chen",
+      "member_urn": "urn:li:member:1001",
+      "profile_url": "https://www.linkedin.com/in/mia-chen",
+      "network_distance": "DISTANCE_2",
+      "location": "San Francisco Bay Area",
+      "headline": "Product Manager at Figma"
+    }
+  ],
+  "paging": { "start": 0, "page_count": 3, "total_count": 3 },
+  "cursor": null
+}

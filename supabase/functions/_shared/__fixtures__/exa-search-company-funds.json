@@ -1,0 +1,12 @@
+{
+  "requestId": "req_company_funds",
+  "results": [
+    {
+      "id": "https://greenfield.example",
+      "url": "https://greenfield.example",
+      "title": "Greenfield Ventures — Seed fund for climate software",
+      "highlights": ["Greenfield Ventures writes $1–3M seed checks into climate software companies."]
+    }
+  ],
+  "costDollars": { "total": 0.0128 }
+}

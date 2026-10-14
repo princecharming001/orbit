@@ -1,0 +1,47 @@
+{
+  "data": {
+    "company": {
+      "name": "Stripe",
+      "domain": "stripe.com",
+      "linkedin_url": "https://www.linkedin.com/company/stripe"
+    },
+    "summary": { "score": 64, "score_label": "Medium" },
+    "target_people": [
+      {
+        "target": {
+          "first_name": "Ana",
+          "last_name": "Ruiz",
+          "full_name": "Ana Ruiz",
+          "id": "vt_1",
+          "identity_id": "vi_1",
+          "linkedin_url": "https://www.linkedin.com/in/ana-ruiz",
+          "title": "Head of Payments Partnerships"
+        },
+        "paths": [
+          {
+            "degree": 2,
+            "summary": { "score": 64, "score_label": "Medium" },
+            "starters": [],
+            "introducer": {
+              "profile": {
+                "first_name": "Sam",
+                "last_name": "Ortiz",
+                "linkedin_url": "https://www.linkedin.com/in/sam-ortiz",
+                "headline": "Engineering Manager at Acme Robotics"
+              },
+              "score": 64,
+              "score_label": "Medium",
+              "score_meta": []
+            },
+            "score_meta": []
+          }
+        ],
+        "summary": { "score": 64 },
+        "count": 1,
+        "degree": 2
+      }
+    ]
+  },
+  "metadata": { "request_id": "req_company_1" },
+  "pagination": { "next_cursor": null }
+}
