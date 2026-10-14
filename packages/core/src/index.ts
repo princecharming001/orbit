@@ -21,6 +21,8 @@ export * from './pipeline/transitions';
 export * from './recommend/score';
 export * from './resume/parse';
 export * from './scoring/strength';
+export * from './scoring/tieFit';
+export * from './scoring/tieScore';
 export * from './style/card';
 export * from './suggestions/rules';
 export * from './text/email';
