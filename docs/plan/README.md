@@ -23,8 +23,9 @@ Orbit (working name) is a networking copilot for college students who are recrui
 | 13 | [LinkedIn warm-up](13-linkedin-warm-up.md) | engage with a cold target's posts before messaging: stage, plan, cards, stance on automation |
 | 14 | [Static v1 as built](14-static-v1-architecture.md) | what shipped on GitHub Pages, how it maps to the hosted plan, the demo, tests, migration steps |
 | 15 | [Outreach playbook](15-outreach-playbook.md) | what every drafted message must say and must never say: limits per kind, sector notes, subject lines, cadence, anti-patterns (amends 05 §7) |
+| 16 | [Networking agent infrastructure](16-network-agent-infrastructure.md) | **current architecture**: Supabase-only server (schema `orbit`, queues, cron, Vault, pgvector), Orbit accounts, server ingestion, tie score 0–100, warm paths, research, sourcing, outbound for every goal, replies and autonomy, cadence, memory, privacy, evals, phases, human actions |
 
-Precedence when documents disagree: 02 (names) > 03 (schema) > 01 (behaviour) > the subsystem document. File a fix against the lower one.
+Precedence when documents disagree: **16 > 02 (names) > 03 (schema) > 01 (behaviour) > the subsystem document.** 16 retires the Next.js + Inngest stack of 02, 08 and 09 in favour of Supabase Edge Functions, queues and cron. File a fix against the lower one.
 
 ## Confidence legend
 
