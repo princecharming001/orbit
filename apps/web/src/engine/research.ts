@@ -1,0 +1,181 @@
+/**
+ * Research dossiers (plan 16 §5) from the browser's side: ask orbit-api for one, read it, answer "which person did
+ * you mean", and turn the stored synthesis into what the card and the chat show, with numbered source links. Account
+ * mode only: the research runs on the server.
+ */
+import type { Dossier, User } from '@orbit/core';
+import { db } from '../db/schema';
+import {
+  type ApiFailure,
+  callApi,
+  isAccountMode,
+  isServerUser,
+  NO_SERVER,
+  SIGN_IN_FIRST,
+} from '../integrations/orbitApi';
+import { writeFromServer } from './serverSync';
+
+export interface Claim {
+  text: string;
+  /** 1-based numbers of the sources it came from */
+  sources: number[];
+  date?: string;
+}
+
+export interface DossierView {
+  status: Dossier['status'];
+  who?: string;
+  now?: Claim;
+  recently: Claim[];
+  inCommon: Claim[];
+  history?: { firstContact?: string; lastContact?: string; summary?: string };
+  openers: Claim[];
+  careful: string[];
+  confidence?: string;
+  sources: { n: number; url?: string; title?: string }[];
+  /** for needs_disambiguation: the people it might be */
+  candidates: { index: number; label: string; url?: string }[];
+  updatedAt: string;
+}
+
+type Obj = Record<string, unknown>;
+const obj = (v: unknown): Obj | undefined =>
+  v && typeof v === 'object' && !Array.isArray(v) ? (v as Obj) : undefined;
+const str = (v: unknown): string | undefined => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
+const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
+/** a field under its snake_case or camelCase name (the synthesis is stored as the model wrote it) */
+const field = (o: Obj | undefined, snake: string): unknown => {
+  if (!o) return undefined;
+  if (snake in o) return o[snake];
+  const camel = snake.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
+  return o[camel];
+};
+
+/** The synthesis as the card shows it: every claim with the numbers of its sources. */
+export function dossierView(d: Dossier): DossierView {
+  const sources = (d.sources ?? []).map((s, i) => ({
+    n: i + 1,
+    url: str(s.url),
+    title: str(s.title),
+    id: s.id,
+  }));
+  const numberOf = new Map(sources.map((s) => [s.id, s.n]));
+  const refs = (o: Obj | undefined) =>
+    arr(field(o, 'source_ids'))
+      .map((id) => numberOf.get(String(id)))
+      .filter((n): n is number => typeof n === 'number');
+  const claim = (v: unknown, textKey = 'text'): Claim | undefined => {
+    const o = obj(v);
+    if (!o) return str(v) ? { text: str(v)!, sources: [] } : undefined;
+    const text = str(o[textKey]);
+    return text ? { text, sources: refs(o), date: str(o.date) } : undefined;
+  };
+  const c = obj(d.content) ?? {};
+  const now = obj(field(c, 'now'));
+  const nowText = now
+    ? [
+        str(now.role),
+        str(now.org) ? `at ${str(now.org)}` : undefined,
+        str(now.since) ? `since ${str(now.since)}` : undefined,
+      ]
+        .filter(Boolean)
+        .join(' ')
+    : undefined;
+  const history = obj(field(c, 'history'));
+  return {
+    status: d.status,
+    who: str(field(c, 'who')),
+    now: nowText ? { text: nowText, sources: refs(now) } : undefined,
+    recently: arr(field(c, 'recently'))
+      .map((x) => claim(x))
+      .filter((x): x is Claim => !!x)
+      .slice(0, 3),
+    inCommon: arr(field(c, 'in_common'))
+      .map((x) => claim(x))
+      .filter((x): x is Claim => !!x),
+    history: history
+      ? {
+          firstContact: str(field(history, 'first_contact')),
+          lastContact: str(field(history, 'last_contact')),
+          summary: str(history.summary),
+        }
+      : undefined,
+    openers: arr(field(c, 'openers'))
+      .map((x) => claim(x))
+      .filter((x): x is Claim => !!x)
+      .slice(0, 3),
+    careful: arr(field(c, 'careful'))
+      .map(str)
+      .filter((x): x is string => !!x),
+    confidence: str(field(c, 'confidence')),
+    sources: sources.map(({ n, url, title }) => ({ n, url, title })),
+    candidates: arr(d.candidates).map((x, index) => {
+      const o = obj(x) ?? {};
+      const label =
+        [str(o.name), str(o.title), str(o.org) ?? str(o.company), str(o.location)]
+          .filter(Boolean)
+          .join(', ') ||
+        str(x) ||
+        `Person ${index + 1}`;
+      return { index, label, url: str(o.url) ?? str(o.linkedinUrl) };
+    }),
+    updatedAt: d.updatedAt,
+  };
+}
+
+export type ResearchResult =
+  | { ok: true; status: 'queued' | Dossier['status']; dossier: Dossier | null }
+  | { ok: false; message: string; reason?: ApiFailure['reason'] };
+
+function notHere(): ResearchResult {
+  return { ok: false, message: isAccountMode() ? SIGN_IN_FIRST : NO_SERVER, reason: 'signed_out' };
+}
+
+async function keep(userId: string, d: Dossier | null | undefined): Promise<void> {
+  if (d) await writeFromServer('dossiers', [d as unknown as Record<string, unknown>], userId);
+}
+
+/** The newest dossier this browser holds for a person. */
+export async function localDossier(personId: string): Promise<Dossier | undefined> {
+  const rows = await db.dossiers.where('personId').equals(personId).toArray();
+  return rows.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+}
+
+/** Read the person's dossier from the server (and keep a copy). */
+export async function getDossier(user: Pick<User, 'id'>, personId: string): Promise<ResearchResult> {
+  if (!isServerUser(user.id)) return notHere();
+  const r = await callApi('/research/get', { personId });
+  if (!r.ok) {
+    const local = await localDossier(personId);
+    if (local && r.reason === 'network') return { ok: true, status: local.status, dossier: local };
+    return { ok: false, message: r.message, reason: r.reason };
+  }
+  await keep(user.id, r.value.dossier);
+  return { ok: true, status: r.value.dossier?.status ?? 'queued', dossier: r.value.dossier };
+}
+
+/** Ask for research on a person: a fresh dossier comes back at once, otherwise it is queued. */
+export async function researchPerson(
+  user: Pick<User, 'id'>,
+  personId: string,
+  opts: { refresh?: boolean; goalId?: string } = {},
+): Promise<ResearchResult> {
+  if (!isServerUser(user.id)) return notHere();
+  const r = await callApi('/research/person', { personId, refresh: opts.refresh, goalId: opts.goalId });
+  if (!r.ok) return { ok: false, message: r.message, reason: r.reason };
+  await keep(user.id, r.value.dossier);
+  return { ok: true, status: r.value.status, dossier: r.value.dossier };
+}
+
+/** Answer "which of these did you mean" and research that one. */
+export async function chooseCandidate(
+  user: Pick<User, 'id'>,
+  personId: string,
+  candidateIndex: number,
+): Promise<ResearchResult> {
+  if (!isServerUser(user.id)) return notHere();
+  const r = await callApi('/research/choose', { personId, candidateIndex });
+  if (!r.ok) return { ok: false, message: r.message, reason: r.reason };
+  await keep(user.id, r.value.dossier);
+  return { ok: true, status: r.value.status, dossier: r.value.dossier };
+}
