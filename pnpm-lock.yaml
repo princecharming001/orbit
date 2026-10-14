@@ -121,6 +121,9 @@ importers:
       '@electric-sql/pglite-pgvector':
         specifier: 0.0.9
         version: 0.0.9(@electric-sql/pglite@0.5.8)
+      '@orbit/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@types/node':
         specifier: ^22.20.5
         version: 22.20.5
