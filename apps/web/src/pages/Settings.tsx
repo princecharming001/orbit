@@ -5,6 +5,7 @@ import { Check, Download, Trash2 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Navigate, NavLink, useNavigate, useParams } from 'react-router-dom';
 import { chatMode, chatModeNote } from '../chat/agent/mode';
+import { AccountSection, MemorySection, OutreachSection } from '../components/account/AccountSettings';
 import { LinkedInLiveCard, WarmIntrosCard } from '../components/ConnectorCards';
 import { LinkedInImportButton } from '../components/LinkedInImport';
 import { ResumeFacetList } from '../components/ResumeFacets';
@@ -31,6 +32,7 @@ import {
 import { addTargetCompanies } from '../engine/targets';
 import { fmtFailureTime, hasLlm, MODEL, testApiKey } from '../integrations/anthropic';
 import { currentGoogleToken, googleClientId } from '../integrations/google';
+import { isAccountMode, isServerUser } from '../integrations/orbitApi';
 import {
   DEFAULT_DAILY_REQUEST_CAP,
   DEFAULT_DAILY_TOKEN_CAP,
@@ -63,7 +65,7 @@ import {
 /** The section with the LinkedIn import, the resume and the Claude key (its route keeps the older name). */
 const INTEGRATIONS_LABEL = 'LinkedIn, resume & AI';
 
-const SECTIONS = [
+const BASE_SECTIONS = [
   ['profile', 'Profile'],
   ['goals', 'Goals'],
   ['integrations', INTEGRATIONS_LABEL],
@@ -71,6 +73,17 @@ const SECTIONS = [
   ['limits', 'Limits and schedule'],
   ['privacy', 'Data & privacy'],
 ] as const;
+
+/** Account mode adds the Orbit account, outreach rules (autonomy, pause, postal address) and memory. */
+const ACCOUNT_SECTIONS = [
+  ['account', 'Account'],
+  ['outreach', 'Outreach'],
+  ['memory', 'Memory'],
+] as const;
+
+function sections(): readonly (readonly [string, string])[] {
+  return isAccountMode() ? [...BASE_SECTIONS, ...ACCOUNT_SECTIONS] : BASE_SECTIONS;
+}
 
 const SECTION_ALIASES: Record<string, string> = {
   writing: 'style',
@@ -85,6 +98,7 @@ const SECTION_ALIASES: Record<string, string> = {
 export function SettingsPage() {
   const { section = 'profile' } = useParams();
   const nav = useNavigate();
+  const SECTIONS = sections();
   if (!SECTIONS.some(([k]) => k === section))
     // the words a student might guess ("writing", "tone") go to the section that has them
     return <Navigate to={`/settings/${SECTION_ALIASES[section] ?? 'profile'}`} replace />;
@@ -133,6 +147,9 @@ export function SettingsPage() {
           {section === 'style' && <Style />}
           {section === 'limits' && <Limits />}
           {section === 'privacy' && <Privacy />}
+          {section === 'account' && <AccountSection />}
+          {section === 'outreach' && <OutreachSection />}
+          {section === 'memory' && <MemorySection />}
         </div>
       </div>
     </div>
@@ -638,9 +655,23 @@ function Integrations() {
       setBusy(undefined);
     }
   };
+  // an Orbit account connected Google at sign-in: the browser's own Google sign-in is not needed
+  const viaAccount = isServerUser(user.id);
   return (
     <div className="flex flex-col gap-4">
-      <Card className={cx(!builtIn && !google && 'order-last')}>
+      {viaAccount && (
+        <Card data-testid="google-via-account">
+          <div className="font-medium">Google (Gmail and Calendar)</div>
+          <p className="text-[13px] text-ink-2 mt-0.5">
+            Connected through your Orbit account. Orbit's server reads new mail and meetings as they come in,
+            and sends only what you approve.{' '}
+            <NavLink to="/settings/account" className="text-accent hover:underline">
+              Account settings
+            </NavLink>
+          </p>
+        </Card>
+      )}
+      <Card className={cx(!builtIn && !google && 'order-last', viaAccount && 'hidden')}>
         <div className="font-medium">Google (Gmail and Calendar)</div>
         {builtIn || google ? (
           <p className="text-[13px] text-ink-2 mt-0.5">

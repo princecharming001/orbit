@@ -1,9 +1,12 @@
-import { FUNCTION_LABELS, yearLabel } from '@orbit/core';
+import type { GoalKind } from '@orbit/core';
+import { FUNCTION_LABELS, GOAL_KINDS, yearLabel } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Check, Linkedin, Mail, Minus, Star, Upload, X } from 'lucide-react';
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react';
 import { Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { Logo } from '../components/AppShell';
+import { ImportProgress } from '../components/account/ImportProgress';
+import { RatePeople } from '../components/account/RatePeople';
 import {
   ObHeader,
   ObInput,
@@ -17,13 +20,18 @@ import {
 } from '../components/onboarding/OnboardingLayout';
 import { db } from '../db/schema';
 import { finishOnboarding, setOnboardingStep } from '../engine/account';
+import { LINKEDIN_RISK_SENTENCE } from '../engine/consent';
+import { archiveGoal, GOAL_KIND_LABELS, GOAL_KIND_TITLES, listGoals, saveGoal } from '../engine/goals';
 import { connectAndSyncGoogle } from '../engine/integrations';
 import { connectionsText, importLinkedInExport } from '../engine/linkedin';
 import { connectLinkedInLive, liveLinkedInAvailable } from '../engine/linkedinLive';
+import { pullNow } from '../engine/serverSync';
 import { removeTargetCompany, saveGoals, setTargetPriority, updateProfile } from '../engine/settings';
 import { addTargetCompanies } from '../engine/targets';
 import { googleClientId } from '../integrations/google';
+import { isSignedIn, startGoogleSignIn } from '../integrations/orbitApi';
 import { envGoogleClientId } from '../integrations/prefs';
+import { useAccount } from '../state/account';
 import { useSession } from '../state/session';
 import { cx, Spinner } from '../ui';
 import {
@@ -38,7 +46,7 @@ import {
 
 /** The address of a stored onboarding step (Welcome, stored as 1, is /onboarding/0); see `onboardingSteps.ts`. */
 export function onboardingPath(step: number): string {
-  return stepPath(step, !!googleClientId());
+  return stepPath(step, !!googleClientId(), isSignedIn());
 }
 
 /** A LinkedIn import of either kind: the export file, or the live connection once it exists. */
@@ -52,17 +60,22 @@ export function Onboarding() {
   const nav = useNavigate();
   const location = useLocation();
   const { user } = useSession();
+  const account = useAccount();
+  // signed in to an Orbit account: Google came with the sign-in, and the server reads the mail
+  const signedIn = account.signedIn && !!user && account.user?.id === user.id;
   // what the optional steps actually produced, so a skipped step never shows as done
   const did = useLiveQuery(async () => {
     if (!user) return {};
     const ints = await db.integrations.where('userId').equals(user.id).toArray();
+    const rated = await db.tieLabels.where('userId').equals(user.id).count();
     return {
       [STEP.linkedin]: ints.some((i) => isLinkedIn(i.provider)),
       [STEP.gmail]: ints.some((i) => i.provider === 'google'),
+      [STEP.rate]: rated > 0,
     } as Record<number, boolean>;
   }, [user?.id]);
   const google = !!googleClientId();
-  const STEPS = visibleSteps(google);
+  const STEPS = visibleSteps(google, signedIn);
   useEffect(() => {
     // each step opens at its title, not scrolled down to where the last step's button was
     void step;
@@ -77,9 +90,9 @@ export function Onboarding() {
     // a hidden step (Gmail without Google) or a step of the older setup moves forward to the next one shown, but
     // never past the furthest step reached: setup is not skipped by typing an address. A step change made here
     // carries `fromStep`, and the stored step is written before it, so only addresses from outside are checked.
-    const furthest = resolveStep(user.onboardingStep, google);
+    const furthest = resolveStep(user.onboardingStep, google, signedIn);
     const internal = (location.state as { fromStep?: number } | null)?.fromStep !== undefined;
-    let target = resolveStep(step, google);
+    let target = resolveStep(step, google, signedIn);
     if (!internal && target > furthest) target = furthest;
     if (target !== step) return <Navigate to={`/onboarding/${target - 1}`} replace />;
   }
@@ -97,19 +110,34 @@ export function Onboarding() {
   };
   const jump = (to: number) => nav(`/onboarding/${to - 1}`, { state: { fromStep: step } });
   const finish = async () => {
+    // account mode: the first brief is built from what the server has read so far
+    if (signedIn) await pullNow(user.id).catch(() => undefined);
     await finishOnboarding(user.id);
     nav('/');
   };
   const statuses = stepStatuses(STEPS, step, did ?? {});
   const onBack = step === STEP.welcome ? undefined : () => back(before(step));
   let body: ReactNode = null;
-  if (step === STEP.welcome) body = <StepWelcome onNext={() => go(after(STEP.welcome))} />;
+  if (step === STEP.welcome)
+    body = (
+      <StepWelcome accountMode={account.mode} signedIn={signedIn} onNext={() => go(after(STEP.welcome))} />
+    );
   else if (step === STEP.you) body = <StepYou onNext={() => go(after(STEP.you))} />;
   else if (step === STEP.goals)
     body = <StepGoals onNext={() => go(after(STEP.goals))} onBack={() => back(before(STEP.goals))} />;
-  else if (step === STEP.linkedin) body = <StepLinkedIn onNext={() => go(after(STEP.linkedin))} />;
+  else if (step === STEP.linkedin)
+    body = <StepLinkedIn signedIn={signedIn} onNext={() => go(after(STEP.linkedin))} />;
   else if (step === STEP.gmail) body = <StepGmail onNext={() => go(after(STEP.gmail))} />;
-  else if (step === STEP.ready) body = <StepReady google={google} onFinish={finish} onJump={jump} />;
+  else if (step === STEP.rate) body = <StepRate onNext={() => go(after(STEP.rate))} />;
+  else if (step === STEP.ready)
+    body = (
+      <StepReady
+        google={google}
+        account={signedIn ? account.user?.email : undefined}
+        onFinish={finish}
+        onJump={jump}
+      />
+    );
   return (
     <OnboardingLayout
       steps={STEPS.map((s, i) => ({ title: STEP_TITLES[s]!, status: statuses[i]! }))}
@@ -119,6 +147,9 @@ export function Onboarding() {
       // Goals saves what is on screen before it goes back, so it brings its own Back
       onBack={step === STEP.goals ? undefined : onBack}
     >
+      {signedIn && step !== STEP.welcome && step !== STEP.ready ? (
+        <ImportProgress firstName={user.firstName} />
+      ) : null}
       {body}
     </OnboardingLayout>
   );
@@ -177,7 +208,17 @@ function CheckRow({ children }: { children: ReactNode }) {
   );
 }
 
-function StepWelcome({ onNext }: { onNext: () => void }) {
+function StepWelcome({
+  onNext,
+  accountMode,
+  signedIn,
+}: {
+  onNext: () => void;
+  /** this build has an Orbit server: Google sign-in is offered first */
+  accountMode?: boolean;
+  signedIn?: boolean;
+}) {
+  const offerGoogle = accountMode && !signedIn;
   return (
     <div className="text-center pt-[8vh] sm:pt-12" data-testid="ob-welcome">
       <div className="mb-7 flex justify-center">
@@ -192,13 +233,56 @@ function StepWelcome({ onNext }: { onNext: () => void }) {
         Orbit finds the people in your network worth a coffee chat, and helps you write to them, one message
         at a time.
       </p>
-      <ObPrimary className="mt-8" onClick={onNext}>
-        Get started
-      </ObPrimary>
-      <p className="mt-4 text-[13px] text-ink-3">
-        Takes about two minutes. Everything stays in this browser.
-      </p>
+      {offerGoogle ? (
+        <>
+          <ObPrimary className="mt-8" onClick={() => startGoogleSignIn()} data-testid="ob-google-signin">
+            <GoogleMark /> Continue with Google
+          </ObPrimary>
+          <ObQuiet className="mt-3" onClick={onNext} data-testid="ob-without-google">
+            Get started without Google
+          </ObQuiet>
+          <p className="mt-4 text-[13px] text-ink-3 text-balance">
+            Orbit reads your email and calendar to find who you know. You approve every message before it goes
+            anywhere.
+          </p>
+        </>
+      ) : (
+        <>
+          <ObPrimary className="mt-8" onClick={onNext}>
+            {signedIn ? 'Continue' : 'Get started'}
+          </ObPrimary>
+          <p className="mt-4 text-[13px] text-ink-3">
+            {signedIn
+              ? 'Signed in with Google. A few questions and you are in.'
+              : 'Takes about two minutes. Everything stays in this browser.'}
+          </p>
+        </>
+      )}
     </div>
+  );
+}
+
+/** Google's "G", drawn inline (no external image under the CSP). */
+function GoogleMark() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 48 48" aria-hidden className="mr-1 shrink-0">
+      <path
+        fill="#FFC107"
+        d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"
+      />
+      <path
+        fill="#FF3D00"
+        d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"
+      />
+      <path
+        fill="#4CAF50"
+        d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-7.9l-6.5 5C9.5 39.6 16.2 44 24 44z"
+      />
+      <path
+        fill="#1976D2"
+        d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z"
+      />
+    </svg>
   );
 }
 
@@ -359,6 +443,19 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
   const tcs =
     useLiveQuery(() => db.targetCompanies.where('userId').equals(user.id).toArray(), [user.id]) ?? [];
   const [fns, setFns] = useState<string[]>([]);
+  // what the student is working toward (plan 16 §17): recruiting unless they pick otherwise
+  const [kinds, setKinds] = useState<GoalKind[]>(['recruiting']);
+  const [goalError, setGoalError] = useState<string>();
+  const kindsLoaded = useRef(false);
+  useEffect(() => {
+    if (kindsLoaded.current) return;
+    kindsLoaded.current = true;
+    listGoals(user.id).then((gs) => {
+      const active = gs.filter((g) => g.status === 'active').map((g) => g.kind);
+      if (active.length) setKinds([...new Set(active)]);
+    });
+  }, [user.id]);
+  const recruiting = kinds.includes('recruiting');
   const [ambition, setAmbition] = useState<1 | 2 | 3>(2);
   const [company, setCompany] = useState('');
   const [companyNote, setCompanyNote] = useState('');
@@ -393,6 +490,24 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
         : '',
     );
   };
+  /** One goal per kind picked (a kind unpicked again is archived), on the server in account mode. */
+  const saveKinds = async () => {
+    const existing = await listGoals(user.id);
+    const companies = (await db.targetCompanies.where('userId').equals(user.id).toArray()).map(
+      (t) => t.nameRaw,
+    );
+    for (const kind of kinds)
+      if (!existing.some((g) => g.kind === kind && g.status === 'active'))
+        await saveGoal(user, {
+          kind,
+          title: GOAL_KIND_TITLES[kind],
+          source: 'onboarding',
+          targets: { organizations: companies.slice(0, 20), roles: [], geographies: [], people: [] },
+        });
+    for (const g of existing)
+      if (g.source === 'onboarding' && g.status === 'active' && !kinds.includes(g.kind))
+        await archiveGoal(user, g.id);
+  };
   /** Keep what is on screen, whichever way the student leaves the step (a company typed but not added included). */
   const persist = async () => {
     if (company.trim()) await addCompany();
@@ -418,33 +533,59 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
         }}
       />
       <ObHeader
-        title="What are you recruiting for?"
-        subtitle="Orbit uses this to choose who to meet first."
+        title="What are you working toward?"
+        subtitle="Pick all that fit. Orbit uses this to choose who to meet first and how to write to them."
       />
       <div className="space-y-7">
         <div>
-          <ObLabel>What kind of work</ObLabel>
-          <div className="flex flex-wrap gap-2" role="group" aria-label="Kind of work">
-            {[...Object.entries(FUNCTION_LABELS), ...extra.map((x) => [x, x] as const)].map(([k, l]) => {
-              const on = fns.includes(k);
+          <ObLabel>Goals</ObLabel>
+          <div className="flex flex-wrap gap-2" role="group" aria-label="Goals">
+            {GOAL_KINDS.map((k) => {
+              const on = kinds.includes(k);
               return (
                 <button
                   key={k}
                   type="button"
                   aria-pressed={on}
-                  onClick={() => setFns(on ? fns.filter((x) => x !== k) : [...fns, k])}
+                  title={GOAL_KIND_TITLES[k]}
+                  onClick={() => setKinds(on ? kinds.filter((x) => x !== k) : [...kinds, k])}
                   className={cx(
                     'h-9 px-3.5 rounded-full text-[14px] transition-colors focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ink/15',
                     on ? 'bg-ink text-white' : 'bg-[#f1f2f4] text-ink-2 hover:bg-[#e8eaee] hover:text-ink',
                   )}
-                  data-testid={`ob-fn-${k}`}
+                  data-testid={`ob-goal-${k}`}
                 >
-                  {l}
+                  {GOAL_KIND_LABELS[k]}
                 </button>
               );
             })}
           </div>
         </div>
+        {recruiting && (
+          <div>
+            <ObLabel>What kind of work</ObLabel>
+            <div className="flex flex-wrap gap-2" role="group" aria-label="Kind of work">
+              {[...Object.entries(FUNCTION_LABELS), ...extra.map((x) => [x, x] as const)].map(([k, l]) => {
+                const on = fns.includes(k);
+                return (
+                  <button
+                    key={k}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() => setFns(on ? fns.filter((x) => x !== k) : [...fns, k])}
+                    className={cx(
+                      'h-9 px-3.5 rounded-full text-[14px] transition-colors focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ink/15',
+                      on ? 'bg-ink text-white' : 'bg-[#f1f2f4] text-ink-2 hover:bg-[#e8eaee] hover:text-ink',
+                    )}
+                    data-testid={`ob-fn-${k}`}
+                  >
+                    {l}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
         <div>
           <ObLabel htmlFor="ob-company" hint="Optional">
             Target companies
@@ -560,12 +701,16 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
       </div>
       <ObPrimary
         className="mt-8"
-        disabled={!fns.length || busy}
+        disabled={!kinds.length || (recruiting && !fns.length) || busy}
         onClick={async () => {
           setBusy(true);
+          setGoalError(undefined);
           try {
             await persist();
+            await saveKinds();
             onNext();
+          } catch (e) {
+            setGoalError(String((e as Error).message ?? e));
           } finally {
             setBusy(false);
           }
@@ -573,16 +718,25 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
       >
         Continue
       </ObPrimary>
-      {!fns.length && <Missing>Pick at least one kind of work to continue.</Missing>}
+      {goalError && (
+        <p className="mt-3 text-[13px] text-bad text-center" role="alert">
+          {goalError}
+        </p>
+      )}
+      {!kinds.length ? (
+        <Missing>Pick what you're working toward to continue.</Missing>
+      ) : recruiting && !fns.length ? (
+        <Missing>Pick at least one kind of work to continue.</Missing>
+      ) : null}
     </div>
   );
 }
 
-function StepLinkedIn({ onNext }: { onNext: () => void }) {
+function StepLinkedIn({ onNext, signedIn }: { onNext: () => void; signedIn?: boolean }) {
   const user = useSession().user!;
   // once the live sign-in says it is not switched on, the step stops offering it: no button that can only fail
   const [liveOff, setLiveOff] = useState(false);
-  const live = liveLinkedInAvailable(user) && !liveOff;
+  const live = (signedIn || liveLinkedInAvailable(user)) && !liveOff;
   const [showUpload, setShowUpload] = useState(!live);
   const [busy, setBusy] = useState<string>();
   const [upBusy, setUpBusy] = useState<string>();
@@ -668,13 +822,21 @@ function StepLinkedIn({ onNext }: { onNext: () => void }) {
           <span className="text-ink">{result || doneBefore}</span>
         </div>
       ) : live ? (
-        <ObPanel>
-          <ul className="divide-y divide-[#eef0f3]">
-            <CheckRow>Brings in your connections with their companies and titles.</CheckRow>
-            <CheckRow>Keeps them up to date, so new connections show up on their own.</CheckRow>
-            <CheckRow>You approve every message before it goes anywhere.</CheckRow>
-          </ul>
-        </ObPanel>
+        <>
+          <ObPanel>
+            <ul className="divide-y divide-[#eef0f3]">
+              <CheckRow>Brings in your connections with their companies and titles.</CheckRow>
+              <CheckRow>Keeps them up to date, so new connections show up on their own.</CheckRow>
+              <CheckRow>You approve every message before it goes anywhere.</CheckRow>
+            </ul>
+          </ObPanel>
+          <p
+            className="mt-3 text-[13px] leading-[1.5] text-ink-3 text-center text-balance"
+            data-testid="ob-linkedin-risk"
+          >
+            {LINKEDIN_RISK_SENTENCE}
+          </p>
+        </>
       ) : null}
       {note && (
         <p
@@ -902,31 +1064,61 @@ function StepGmail({ onNext }: { onNext: () => void }) {
   );
 }
 
+/** Account mode: rate how close you are to ten people, so the scores learn your sense of closeness (optional). */
+function StepRate({ onNext }: { onNext: () => void }) {
+  const user = useSession().user!;
+  return (
+    <div>
+      <ObHeader
+        title="Rate a few people"
+        subtitle="How close are you to each? Orbit tunes its closeness scores to your answers. Skip anyone, or the whole step."
+      />
+      <RatePeople userId={user.id} />
+      <div className="mt-8 space-y-3">
+        <ObPrimary onClick={onNext} data-testid="ob-rate-done">
+          Continue
+        </ObPrimary>
+        <ObQuiet onClick={onNext} data-testid="ob-skip">
+          Skip this
+        </ObQuiet>
+      </div>
+    </div>
+  );
+}
+
 function StepReady({
   google,
+  account,
   onFinish,
   onJump,
 }: {
   google: boolean;
+  /** signed in to an Orbit account: its Google address */
+  account?: string;
   onFinish: () => Promise<void>;
   onJump: (step: number) => void;
 }) {
   const user = useSession().user!;
   const [busy, setBusy] = useState(false);
   const info = useLiveQuery(async () => {
-    const [goals, companies, ints] = await Promise.all([
+    const [goals, companies, ints, kinds] = await Promise.all([
       db.goals.get(user.id),
       db.targetCompanies.where('userId').equals(user.id).count(),
       db.integrations.where('userId').equals(user.id).toArray(),
+      listGoals(user.id),
     ]);
     return {
       goals,
+      kinds: [...new Set(kinds.filter((g) => g.status === 'active').map((g) => g.kind))],
       companies,
       linkedin: ints.find((i) => isLinkedIn(i.provider)),
       google: ints.find((i) => i.provider === 'google'),
     };
   }, [user.id]);
   const fns = (info?.goals?.targetFunctions ?? []).map((f) => FUNCTION_LABELS[f] ?? f);
+  // other goals than recruiting, by name ("Fundraising, Sales")
+  const otherKinds = (info?.kinds ?? []).filter((k) => k !== 'recruiting').map((k) => GOAL_KIND_LABELS[k]);
+  const goalWords = [...fns, ...otherKinds];
   const rows: { key: string; title: string; detail: string; ok: boolean; step: number }[] = [
     {
       key: 'you',
@@ -941,12 +1133,14 @@ function StepReady({
       key: 'goals',
       title: 'Goals',
       detail: [
-        fns.length > 2 ? `${fns.slice(0, 2).join(', ')} and ${fns.length - 2} more` : fns.join(' and '),
+        goalWords.length > 2
+          ? `${goalWords.slice(0, 2).join(', ')} and ${goalWords.length - 2} more`
+          : goalWords.join(' and '),
         info?.companies ? `${info.companies} target ${info.companies === 1 ? 'company' : 'companies'}` : '',
       ]
         .filter(Boolean)
         .join(' · '),
-      ok: fns.length > 0,
+      ok: goalWords.length > 0,
       step: STEP.goals,
     },
     {
@@ -959,7 +1153,15 @@ function StepReady({
       step: STEP.linkedin,
     },
   ];
-  if (google)
+  if (account)
+    rows.push({
+      key: 'gmail',
+      title: 'Gmail & Calendar',
+      detail: `Connected as ${account}`,
+      ok: true,
+      step: STEP.welcome,
+    });
+  else if (google)
     rows.push({
       key: 'gmail',
       title: 'Gmail & Calendar',
