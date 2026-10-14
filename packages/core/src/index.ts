@@ -6,6 +6,7 @@ export * from './drafts/thread';
 export { whenLabel } from './drafts/time';
 export * from './drafts/validate';
 export * from './email/triage';
+export * from './entity/nicknames';
 export * from './entity/resolve';
 export * from './graph/edges';
 export * from './graph/introWeb';
