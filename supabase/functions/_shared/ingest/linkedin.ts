@@ -215,5 +215,13 @@ export async function storeChat(
     if (!own) out.inbound.push({ id: row.id, externalId: m.id, sentAt });
   }
   await recountThread(db, threadId, self);
+  // everyone in the chat is on the thread, written or not
+  if (otherIds.length)
+    await db.sql`
+      update orbit.threads set
+        participant_person_ids = array(select distinct x from unnest(participant_person_ids || ${otherIds}::uuid[]) x),
+        participant_count = greatest(participant_count,
+          cardinality(array(select distinct x from unnest(participant_person_ids || ${otherIds}::uuid[]) x)))
+       where id = ${threadId}::uuid`;
   return out;
 }

@@ -110,7 +110,7 @@ export async function ingestEvents(
                                          conference_url, is_one_on_one)
       values (${userId}::uuid, ${e.id}, ${e.summary ?? null}, ${e.description ?? null}, ${e.startAt}::timestamptz,
               ${e.endAt}::timestamptz, ${status}, ${e.organizer?.email ? normalizeEmail(e.organizer.email) : null},
-              ${attendees}::jsonb, ${pids}::uuid[], ${attendees.length}::int, ${conference(e)},
+              ${JSON.stringify(attendees)}::jsonb, ${pids}::uuid[], ${attendees.length}::int, ${conference(e)},
               ${going.length === 2 && going.some((a) => a.self)})
       on conflict (user_id, external_id) do update set
         title = excluded.title, description = excluded.description, start_at = excluded.start_at,

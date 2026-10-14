@@ -196,7 +196,9 @@ export async function resolvePeople(
   const names = new Set<string>();
   const lasts = new Set<string>();
   const domains = new Set<string>();
-  for (const i of misses) {
+  // blocking keys for the misses, and for known addresses that arrive under a name (a same-mailbox proof may merge
+  // a LinkedIn-only namesake into the owner)
+  for (const i of [...misses, ...known.filter((k) => k.item.email).map((k) => k.item)]) {
     const n = nameOf(i);
     if (n.normalized) names.add(n.normalized);
     if (n.last) lasts.add(n.last.toLowerCase());
@@ -249,6 +251,14 @@ export async function resolvePeople(
   for (const k of known) {
     result.byKey.set(k.item.key, k.personId);
     await attach(ctx, k.personId, k.item);
+    const n = nameOf(k.item);
+    if (!k.item.email || !n.full) continue;
+    const d = resolveIdentity(
+      { email: k.item.email, displayName: n.full, source: CORE_SOURCE[k.item.source] },
+      { people: ctx.people, doNotMerge: ctx.doNotMerge, orgDomains: ctx.orgDomains },
+    );
+    if (d.kind === 'match' && d.personId === k.personId)
+      for (const other of d.mergeWith ?? []) await absorb(ctx, k.personId, other);
   }
 
   // 3. resolveIdentity, one at a time, so later items see the people earlier ones created
@@ -284,12 +294,7 @@ export async function resolvePeople(
     if (d.kind === 'match' || d.kind === 'probable') {
       result.byKey.set(i.key, d.personId);
       await attach(ctx, d.personId, i);
-      if (d.kind === 'match')
-        for (const other of d.mergeWith ?? []) {
-          await mergePeople(db, userId, d.personId, other);
-          result.merged.set(other, d.personId);
-          ctx.people = ctx.people.filter((p) => p.id !== other);
-        }
+      if (d.kind === 'match') for (const other of d.mergeWith ?? []) await absorb(ctx, d.personId, other);
       continue;
     }
     if (!create) continue;
@@ -298,6 +303,22 @@ export async function resolvePeople(
     if (d.kind === 'suggest') await suggestMerge(db, userId, d.personId, pid, d.score, d.features);
   }
   return result;
+}
+
+/** The same-mailbox proof (core `mergeWith`): the LinkedIn-only namesake becomes the address's owner. */
+async function absorb(ctx: Ctx, survivor: string, loser: string) {
+  if (!(await mergePeople(ctx.db, ctx.userId, survivor, loser))) return;
+  ctx.result.merged.set(loser, survivor);
+  const gone = ctx.people.find((p) => p.id === loser);
+  const kept = ctx.people.find((p) => p.id === survivor);
+  if (gone && kept) {
+    kept.linkedinMemberId ??= gone.linkedinMemberId;
+    kept.linkedinSlug ??= gone.linkedinSlug;
+    kept.linkedinUrl ??= gone.linkedinUrl;
+    kept.currentOrganizationRaw ??= gone.currentOrganizationRaw;
+  }
+  ctx.people = ctx.people.filter((p) => p.id !== loser);
+  for (const [k, v] of ctx.result.byKey) if (v === loser) ctx.result.byKey.set(k, survivor);
 }
 
 async function insertIdentities(ctx: Ctx, personId: string, i: Incoming) {
@@ -499,11 +520,17 @@ export async function mergePeople(db: Db, userId: string, survivor: string, lose
        on conflict (user_id, person_id) do nothing`,
       p,
     );
-    await tx.query(`delete from orbit.tie_labels where user_id = $1::uuid and person_id = $2::uuid`, p);
-    await tx.query(`delete from orbit.tie_scores where user_id = $1::uuid and person_id = $2::uuid`, p);
+    await tx.query(
+      `delete from orbit.tie_labels where user_id = $1::uuid and person_id = $2::uuid`,
+      p.slice(0, 2),
+    );
+    await tx.query(
+      `delete from orbit.tie_scores where user_id = $1::uuid and person_id = $2::uuid`,
+      p.slice(0, 2),
+    );
     await tx.query(
       `delete from orbit.ties where user_id = $1::uuid and (a_person_id = $2::uuid or b_person_id = $2::uuid)`,
-      p,
+      p.slice(0, 2),
     );
     await tx.query(
       `update orbit.merge_suggestions set status = 'merged', decided_at = now()
@@ -514,7 +541,7 @@ export async function mergePeople(db: Db, userId: string, survivor: string, lose
     await tx.query(
       `delete from orbit.merge_suggestions where user_id = $1::uuid and status = 'open'
           and (person_a = $2::uuid or person_b = $2::uuid)`,
-      p,
+      p.slice(0, 2),
     );
     await tx.query(
       `insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)

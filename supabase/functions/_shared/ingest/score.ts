@@ -32,7 +32,7 @@ import { affiliationFromRow, type Row } from '@orbit/core/server/mappers';
 import { isAtsSender } from '@orbit/core/text/email';
 import type { Affiliation, Person } from '@orbit/core/types';
 import type { Db } from '../db.ts';
-import { day, iso, PERSON_COLUMNS, toPerson } from './util.ts';
+import { chunks, day, iso, PERSON_COLUMNS, toPerson } from './util.ts';
 
 const HOUR = 3_600_000;
 const FLOOR_TYPES = new Set(['family', 'partner']);
@@ -293,13 +293,10 @@ export async function scorePeople(
     }
   }
 
-  let scored = 0;
-  for (const p of people) {
+  const rows = people.map((p) => {
     const h = histories.get(p.id)!;
     const tie = scoreTie(h, now, TIE_WEIGHTS, calibration);
-    let score = tie.score;
-    if (FLOOR_TYPES.has(relationship.get(p.id) ?? '')) score = Math.max(80, score);
-    const band = tieBand(score);
+    const score = FLOOR_TYPES.has(relationship.get(p.id) ?? '') ? Math.max(80, tie.score) : tie.score;
     const exists = !tie.facts.never || h.linkedinConnected || h.intros > 0;
     const lastAt = [
       ...h.messages.filter((m) => !m.automated && m.threadParticipants <= 9).map((m) => m.at),
@@ -307,22 +304,38 @@ export async function scorePeople(
     ]
       .sort()
       .pop();
+    return {
+      id: p.id,
+      score,
+      band: tieBand(score),
+      features: tie.features,
+      contributions: tie.contributions,
+      explanation: tie.explanation,
+      model: tie.modelVersion,
+      strength: exists ? score / 100 : 0,
+      last: lastAt ?? null,
+    };
+  });
+  for (const part of chunks(rows, 500)) {
+    const json = JSON.stringify(part);
     await db.sql`
       insert into orbit.tie_scores (user_id, person_id, score, band, features, contributions, explanation,
                                     model_version, computed_at)
-      values (${userId}::uuid, ${p.id}::uuid, ${score}::smallint, ${band}, ${tie.features}::jsonb,
-              ${tie.contributions}::jsonb, ${tie.explanation}::text[], ${tie.modelVersion}, ${now}::timestamptz)
+      select ${userId}::uuid, (r ->> 'id')::uuid, (r ->> 'score')::smallint, r ->> 'band', r -> 'features',
+             r -> 'contributions', array(select jsonb_array_elements_text(r -> 'explanation')), r ->> 'model',
+             ${now}::timestamptz
+        from jsonb_array_elements(${json}::jsonb) r
       on conflict (user_id, person_id) do update set
         score = excluded.score, band = excluded.band, features = excluded.features,
         contributions = excluded.contributions, explanation = excluded.explanation,
         model_version = excluded.model_version, computed_at = excluded.computed_at`;
     await db.sql`
-      update orbit.people set strength = ${exists ? score / 100 : 0}::real,
-             last_interaction_at = coalesce(${lastAt ?? null}::timestamptz, last_interaction_at)
-       where id = ${p.id}::uuid
-         and (strength is distinct from ${exists ? score / 100 : 0}::real
-           or last_interaction_at is distinct from coalesce(${lastAt ?? null}::timestamptz, last_interaction_at))`;
-    scored++;
+      update orbit.people p set strength = (r ->> 'strength')::real,
+             last_interaction_at = coalesce((r ->> 'last')::timestamptz, p.last_interaction_at)
+        from jsonb_array_elements(${json}::jsonb) r
+       where p.id = (r ->> 'id')::uuid and p.user_id = ${userId}::uuid
+         and (p.strength is distinct from (r ->> 'strength')::real
+           or p.last_interaction_at is distinct from coalesce((r ->> 'last')::timestamptz, p.last_interaction_at))`;
   }
-  return { scored, calibration };
+  return { scored: rows.length, calibration };
 }

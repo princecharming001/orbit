@@ -17,7 +17,7 @@ import { decayedTieWeight, inferTies, type Tie, type TieKind } from '@orbit/core
 import { affiliationFromRow, type Row } from '@orbit/core/server/mappers';
 import type { CalendarEvent, EmailMessage, EmailThread, Organization } from '@orbit/core/types';
 import type { Db } from '../db.ts';
-import { day, iso, PERSON_COLUMNS, toPerson } from './util.ts';
+import { chunks, day, iso, PERSON_COLUMNS, toPerson } from './util.ts';
 
 export const INTERACTION_KINDS: TieKind[] = [
   'email_exchange',
@@ -30,6 +30,8 @@ const AFFILIATION_KINDS = ['co_tenure', 'same_school_cohort', 'same_current_comp
 export const INFERRED_KINDS = [...INTERACTION_KINDS, ...AFFILIATION_KINDS];
 
 const GROUP_MAX = 8;
+/** a city with more of the user's contacts than this says nothing about who knows whom */
+export const SAME_CITY_MAX = 60;
 
 export interface TieRow {
   a: string;
@@ -55,7 +57,7 @@ export function sameCityTies(people: { id: string; location?: string }[]): TieRo
   const out: TieRow[] = [];
   for (const [city, ids] of byCity) {
     // a whole metro of contacts is no evidence of anything: cap the pairs one city can produce
-    if (ids.length > 200) continue;
+    if (ids.length > SAME_CITY_MAX) continue;
     const sorted = [...ids].sort();
     for (let i = 0; i < sorted.length; i++)
       for (let j = i + 1; j < sorted.length; j++)
@@ -242,11 +244,8 @@ export async function refreshTies(
     }));
   if (!scoped) out.push(...sameCityTies(people.filter((p) => !p.hiddenAt)));
 
-  let upserted = 0;
-  for (const t of out) {
-    await upsertTie(db, userId, t, now);
-    upserted++;
-  }
+  for (const part of chunks(out, 500)) await upsertTies(db, userId, part, now);
+  const upserted = out.length;
   // evidence that no longer exists (a deleted message, a declined meeting, a job change) loses its row
   const kinds = [...keep];
   const live = out.map((t) => `${t.a}|${t.b}|${t.kind}`);
@@ -257,6 +256,41 @@ export async function refreshTies(
        and not (t.a_person_id::text || '|' || t.b_person_id::text || '|' || t.kind = any(${live}::text[]))
     returning t.id`;
   return { upserted, deleted: gone.length };
+}
+
+/** Many (pair, kind) rows in one statement; see upsertTie. */
+export async function upsertTies(db: Db, userId: string, rows: TieRow[], now: Date): Promise<void> {
+  const payload = rows
+    .map((t) => {
+      const [a, b] = t.a < t.b ? [t.a, t.b] : [t.b, t.a];
+      return {
+        a,
+        b,
+        kind: t.kind,
+        w: Math.min(1, Math.max(0, t.weight)),
+        c: Math.min(1, Math.max(0, t.confidence)),
+        evidence: t.evidence,
+        first: t.firstSeenAt ?? null,
+        last: t.lastSeenAt ?? null,
+      };
+    })
+    .filter((r) => r.a !== r.b);
+  if (!payload.length) return;
+  await db.sql`
+    insert into orbit.ties (user_id, a_person_id, b_person_id, kind, weight, confidence, evidence, first_seen_at,
+                            last_seen_at)
+    select ${userId}::uuid, (r ->> 'a')::uuid, (r ->> 'b')::uuid, r ->> 'kind', (r ->> 'w')::real, (r ->> 'c')::real,
+           r -> 'evidence', coalesce((r ->> 'first')::timestamptz, ${now}::timestamptz),
+           coalesce((r ->> 'last')::timestamptz, ${now}::timestamptz)
+      from jsonb_array_elements(${JSON.stringify(payload)}::jsonb) r
+    on conflict (user_id, a_person_id, b_person_id, kind) do update set
+      weight = excluded.weight, confidence = excluded.confidence, evidence = excluded.evidence,
+      first_seen_at = least(orbit.ties.first_seen_at, excluded.first_seen_at),
+      last_seen_at = excluded.last_seen_at
+    where orbit.ties.weight is distinct from excluded.weight
+       or orbit.ties.confidence is distinct from excluded.confidence
+       or orbit.ties.evidence is distinct from excluded.evidence
+       or orbit.ties.last_seen_at is distinct from excluded.last_seen_at`;
 }
 
 /** One (pair, kind) row; a < b is enforced here. Unchanged rows are left alone so pulls stay small. */
