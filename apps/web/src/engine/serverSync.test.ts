@@ -1,4 +1,4 @@
-import type { CoffeeChat, MeetingNote, Person, User } from '@orbit/core';
+import type { CoffeeChat, MeetingNote, Person, Resume, ResumeFacet, User } from '@orbit/core';
 import { newId } from '@orbit/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { db, wipeDatabase } from '../db/schema';
@@ -192,6 +192,150 @@ describe('push', () => {
       }),
     ]);
     expect(api.state.pushed[0]!.row).not.toHaveProperty('summary');
+  });
+
+  it('pushes a person added in this browser with what was typed, before the chat that points at them', async () => {
+    const localId = newId('p');
+    const person = {
+      id: localId,
+      userId: user.id,
+      displayName: 'Liz Chen',
+      firstName: 'Liz',
+      lastName: 'Chen',
+      nameNormalized: 'liz chen',
+      primaryEmail: 'liz@stripe.com',
+      emails: ['liz@stripe.com'],
+      currentTitle: 'Product Lead',
+      currentOrganizationRaw: 'Stripe',
+      linkedinUrl: 'https://www.linkedin.com/in/liz-chen',
+      location: 'San Francisco',
+      tags: ['fintech'],
+      relationshipType: 'unknown',
+      sources: ['manual'],
+      isHuman: true,
+      strength: 0,
+      interactionCount: 0,
+      createdAt: at,
+      updatedAt: at,
+    } as unknown as Person;
+    await db.people.add(person);
+    const chatId = newId('chat');
+    await db.chats.add({
+      id: chatId,
+      userId: user.id,
+      personId: localId,
+      stage: 'identified',
+      stageEnteredAt: at,
+      createdAt: at,
+      updatedAt: at,
+    } as unknown as CoffeeChat);
+    const out = await pushOutbox();
+    expect(out).toMatchObject({ ok: true, sent: 2, dropped: 0 });
+    expect(api.state.pushed.map((c) => c.table)).toEqual(['people', 'chats']);
+    expect(api.state.pushed[0]).toEqual({
+      table: 'people',
+      op: 'upsert',
+      id: serverIdOf(localId),
+      row: {
+        displayName: 'Liz Chen',
+        tags: ['fintech'],
+        relationshipType: 'unknown',
+        firstName: 'Liz',
+        lastName: 'Chen',
+        primaryEmail: 'liz@stripe.com',
+        title: 'Product Lead',
+        orgRaw: 'Stripe',
+        linkedinUrl: 'https://www.linkedin.com/in/liz-chen',
+        location: 'San Francisco',
+      },
+    });
+    expect(api.state.pushed[1]!.row).toMatchObject({ personId: serverIdOf(localId) });
+    // a later edit goes up under the same id; the copy that comes back keeps the local id and the email
+    await db.people.update(localId, { tags: ['fintech', 'mentor'] });
+    await pushOutbox();
+    expect(api.state.pushed.at(-1)).toMatchObject({
+      id: serverIdOf(localId),
+      row: { tags: ['fintech', 'mentor'] },
+    });
+    api.state.pages.push({
+      changes: {
+        people: [
+          personRow(serverIdOf(localId)!, 'Liz Chen', {
+            primaryEmail: 'liz@stripe.com',
+            currentTitle: 'Product Lead',
+            tags: ['fintech', 'mentor'],
+          }),
+        ],
+      },
+    });
+    await pullNow(user.id);
+    expect(await db.people.get(serverIdOf(localId)!)).toBeUndefined();
+    expect(await db.people.get(localId)).toMatchObject({
+      currentTitle: 'Product Lead',
+      emails: ['liz@stripe.com'],
+    });
+  });
+
+  it('leaves out what the server would refuse about a new person', async () => {
+    const localId = newId('p');
+    await db.people.add({
+      ...(personRow(localId, 'Sam Lee') as unknown as Person),
+      firstName: 'Sam',
+      lastName: 'Lee',
+      primaryEmail: 'not an email',
+      currentTitle: 'x'.repeat(301),
+    });
+    await pushOutbox();
+    expect(api.state.pushed[0]!.row).toEqual({ displayName: 'Sam Lee', firstName: 'Sam', lastName: 'Lee' });
+  });
+
+  it('pushes a resume as an upload, with the facets read from it', async () => {
+    const resumeId = newId('r');
+    await db.resumes.add({
+      id: resumeId,
+      userId: user.id,
+      filename: 'maya.pdf',
+      text: 'Maya Lin\nCornell University',
+      isCurrent: true,
+      createdAt: at,
+    } satisfies Resume);
+    await db.resumeFacets.add({
+      id: newId('f'),
+      resumeId,
+      kind: 'education',
+      organizationName: 'Cornell University',
+      text: 'BS Computer Science',
+      keywords: [],
+      confirmed: false,
+    } satisfies ResumeFacet);
+    await db.resumes.update(resumeId, { parsedAt: at, parseSource: 'heuristic' });
+    await pushOutbox();
+    expect(api.state.pushed).toEqual([
+      {
+        table: 'uploads',
+        op: 'upsert',
+        id: serverIdOf(resumeId),
+        row: {
+          kind: 'resume',
+          filename: 'maya.pdf',
+          text: 'Maya Lin\nCornell University',
+          parsed: {
+            parseSource: 'heuristic',
+            parsedAt: at,
+            facets: [expect.objectContaining({ kind: 'education', organizationName: 'Cornell University' })],
+          },
+          isCurrent: true,
+        },
+      },
+    ]);
+    expect(
+      (api.state.pushed[0]!.row!.parsed as { facets: Record<string, unknown>[] }).facets[0],
+    ).not.toHaveProperty('resumeId');
+    // a newer resume makes this one no longer current; a delete goes up as a delete
+    await db.resumes.update(resumeId, { isCurrent: false });
+    await db.resumes.delete(resumeId);
+    await pushOutbox();
+    expect(api.state.pushed.at(-1)).toEqual({ table: 'uploads', op: 'delete', id: serverIdOf(resumeId) });
   });
 
   it('pushes a draft body edit and a discard, never a local-only draft', async () => {

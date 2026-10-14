@@ -4,16 +4,27 @@
  *
  * - Pull: POST /sync/pull with the cursor kept in `kv`, page by page, writing the rows (already shaped as the core
  *   types) into their tables in dependency order and deleting the ids the server says are gone.
- * - Push: the student's own changes (chats, stage events, notes, the hand-edited fields of people, draft edits and
- *   discards, closeness ratings, forgotten memories) are noted in the `outbox` table by Dexie hooks on the tables they
- *   live in, wherever in the app the write happens, and go up through POST /sync/push every few seconds and when the
- *   tab is hidden. Rows written by a pull are marked, so they never echo back.
+ * - Push: the student's own changes (chats, stage events, notes, people they added and the hand-edited fields of
+ *   people, resumes, draft edits and discards, closeness ratings, forgotten memories) are noted in the `outbox` table
+ *   by Dexie hooks on the tables they live in, wherever in the app the write happens, and go up through POST
+ *   /sync/push every few seconds and when the tab is hidden. Rows written by a pull are marked, so they never echo
+ *   back.
  * - Status: /sync/status every 3 seconds during setup and every minute after; a change in the counts pulls.
  *
  * Ids: the server keys rows by uuid. Rows made in this browser carry a prefixed id ("chat_<uuid>"): they go up under
  * the uuid, and the alias is remembered so the copy that comes back on the next pull keeps the local id.
  */
-import type { CoffeeChat, Goal, MeetingNote, OutboundMessage, Person, StageEvent, User } from '@orbit/core';
+import type {
+  CoffeeChat,
+  Goal,
+  MeetingNote,
+  OutboundMessage,
+  Person,
+  Resume,
+  ResumeFacet,
+  StageEvent,
+  User,
+} from '@orbit/core';
 import { chatToRow, noteToRow, stageEventToRow } from '@orbit/core';
 import Dexie, { type Table, type Transaction } from 'dexie';
 import { db, type OutboxRow, type TieLabelRow } from '../db/schema';
@@ -54,7 +65,17 @@ export const PULL_TARGETS: { table: string; dexie: string }[] = [
 const DEXIE_OF = new Map(PULL_TARGETS.map((t) => [t.table, t.dexie]));
 
 /** The order pushes go up in, so a chat exists before its stage events and notes. */
-const PUSH_ORDER = ['people', 'goals', 'chats', 'stage_events', 'notes', 'tie_labels', 'drafts', 'memories'];
+const PUSH_ORDER = [
+  'people',
+  'goals',
+  'chats',
+  'stage_events',
+  'notes',
+  'uploads',
+  'tie_labels',
+  'drafts',
+  'memories',
+];
 
 const CURSOR_KEY = 'serverSync.cursor';
 const ALIAS_KEY = 'serverSync.aliases';
@@ -140,7 +161,7 @@ function withDefaults(table: string, row: Record<string, unknown>, userId: strin
       firstName: first,
       lastName: last,
       nameNormalized: name.toLowerCase(),
-      emails: [],
+      emails: typeof r.primaryEmail === 'string' && r.primaryEmail ? [r.primaryEmail] : [],
       tags: [],
       sources: [],
       relationshipType: 'unknown',
@@ -277,6 +298,7 @@ const OUTBOX_SOURCES: { dexie: string; table: string; key?: 'personId' }[] = [
   { dexie: 'people', table: 'people' },
   { dexie: 'outbound', table: 'drafts' },
   { dexie: 'tieLabels', table: 'tie_labels', key: 'personId' },
+  { dexie: 'resumes', table: 'uploads' },
 ];
 
 /** Whether a write to this row should go to the server: account mode, signed in, and the student's own row. */
@@ -288,13 +310,20 @@ function outboxWanted(row: { userId?: unknown } | undefined): boolean {
 
 let queued = new Map<string, Pick<OutboxRow, 'table' | 'id' | 'op'>>();
 let queueTimer: ReturnType<typeof setTimeout> | undefined;
+/** the writes to the outbox table, one after another, so a flush waits for one the timer already started */
+let persisting: Promise<void> = Promise.resolve();
+
+function persistSoon(): Promise<void> {
+  persisting = persisting.then(persistQueued, persistQueued);
+  return persisting;
+}
 
 /** Note a change for the outbox; written to the `outbox` table just after the transaction that made it. */
 export function queueChange(table: string, id: string, op: OutboxRow['op'] = 'upsert'): void {
   queued.set(`${table}:${id}`, { table, id, op });
   queueTimer ??= setTimeout(() => {
     queueTimer = undefined;
-    void persistQueued();
+    void persistSoon();
   }, 0);
 }
 
@@ -323,7 +352,7 @@ export async function flushQueue(): Promise<void> {
     clearTimeout(queueTimer);
     queueTimer = undefined;
   }
-  await persistQueued();
+  await persistSoon();
 }
 
 let hooksInstalled = false;
@@ -364,6 +393,39 @@ function pick<T extends Record<string, unknown>>(row: T, keys: string[]): Record
   return out;
 }
 
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** What the student typed about someone they added, in the server's field names; values it would refuse are left out. */
+function typedPersonFields(p: Person): Record<string, string> {
+  const out: Record<string, string> = {};
+  const put = (key: string, v: string | undefined, max: number) => {
+    const t = v?.trim();
+    if (t && t.length <= max) out[key] = t;
+  };
+  put('firstName', p.firstName, 100);
+  put('lastName', p.lastName, 100);
+  if (p.primaryEmail && EMAIL.test(p.primaryEmail.trim())) put('primaryEmail', p.primaryEmail, 320);
+  put('title', p.currentTitle, 300);
+  put('orgRaw', p.currentOrganizationRaw, 300);
+  put('linkedinUrl', p.linkedinUrl, 500);
+  put('location', p.location, 200);
+  return out;
+}
+
+export const UPLOAD_TEXT_MAX = 500_000;
+export const UPLOAD_PARSED_MAX = 200_000;
+
+/** The facets read from a resume, as the upload's `parsed`; the longest lists are cut to stay under the limit. */
+function parsedResume(r: Resume, facets: ResumeFacet[]): Record<string, unknown> | null {
+  let kept = facets.map(({ resumeId: _r, ...f }) => f);
+  for (;;) {
+    const parsed = { parseSource: r.parseSource ?? null, parsedAt: r.parsedAt ?? null, facets: kept };
+    if (JSON.stringify(parsed).length <= UPLOAD_PARSED_MAX) return parsed;
+    if (!kept.length) return null;
+    kept = kept.slice(0, Math.floor(kept.length / 2));
+  }
+}
+
 /**
  * The change for one outbox entry, built from the row as it is now; undefined when it cannot go to the server (a
  * row the server does not keep, a reference to someone only this browser knows) or when nothing is left to send.
@@ -374,8 +436,8 @@ async function buildChange(entry: OutboxRow, pairs: [string, string][]): Promise
   if (sid !== entry.id) pairs.push([sid, entry.id]);
   const ref = (id: string | undefined | null) => (id ? (serverIdOf(id) ?? null) : null);
   if (entry.op === 'delete') {
-    // the server deletes notes, closeness ratings and memories; a chat or a person is never deleted from the app
-    if (!['notes', 'tie_labels', 'memories'].includes(entry.table)) return undefined;
+    // the server deletes notes, uploads, closeness ratings and memories; a chat or a person is never deleted here
+    if (!['notes', 'uploads', 'tie_labels', 'memories'].includes(entry.table)) return undefined;
     return { table: entry.table, op: 'delete', id: sid };
   }
   const at = new Date().toISOString();
@@ -445,22 +507,36 @@ async function buildChange(entry: OutboxRow, pairs: [string, string][]): Promise
       };
     }
     case 'people': {
-      // people are made on the server; only the hand-edited fields go up, and only for people it knows
-      if (sid !== entry.id) return undefined;
       const p = (await db.people.get(entry.id)) as Person | undefined;
       if (!p) return undefined;
+      // the hand-edited fields; everything else about a person the server knows is derived there
+      const row = pick(p as unknown as Record<string, unknown>, [
+        'displayName',
+        'notes',
+        'tags',
+        'relationshipType',
+        'hiddenAt',
+        'doNotContact',
+      ]);
+      // someone added in this browser: the server creates them from what was typed (and ignores these afterwards)
+      if (sid !== entry.id) Object.assign(row, { displayName: p.displayName }, typedPersonFields(p));
+      return { table: 'people', op: 'upsert', id: sid, row };
+    }
+    case 'uploads': {
+      const r = (await db.resumes.get(entry.id)) as Resume | undefined;
+      if (!r) return undefined;
+      const facets = await db.resumeFacets.where('resumeId').equals(entry.id).toArray();
       return {
-        table: 'people',
+        table: 'uploads',
         op: 'upsert',
         id: sid,
-        row: pick(p as unknown as Record<string, unknown>, [
-          'displayName',
-          'notes',
-          'tags',
-          'relationshipType',
-          'hiddenAt',
-          'doNotContact',
-        ]),
+        row: {
+          kind: 'resume',
+          filename: r.filename?.slice(0, 300) || null,
+          text: r.text.slice(0, UPLOAD_TEXT_MAX),
+          parsed: parsedResume(r, facets),
+          isCurrent: r.isCurrent,
+        },
       };
     }
     case 'drafts': {
@@ -661,6 +737,7 @@ export function resetServerSyncForTests(): void {
   queued = new Map();
   if (queueTimer) clearTimeout(queueTimer);
   queueTimer = undefined;
+  persisting = Promise.resolve();
   lastDerived = 0;
   statusListeners.clear();
 }
