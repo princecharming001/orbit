@@ -1,0 +1,23 @@
+{
+  "total_entries": 2,
+  "people": [
+    {
+      "id": "ap_maya",
+      "first_name": "Maya",
+      "last_name_obfuscated": "Pa***l",
+      "title": "Partner",
+      "last_refreshed_at": "2026-09-30T00:00:00.000+00:00",
+      "has_email": true,
+      "has_city": true,
+      "organization": { "name": "Greenfield Ventures", "has_industry": true, "has_employee_count": true }
+    },
+    {
+      "id": "ap_sam",
+      "first_name": "Sam",
+      "last_name_obfuscated": "Ok***r",
+      "title": "Investor",
+      "has_email": false,
+      "organization": { "name": "Cedar Climate Partners" }
+    }
+  ]
+}
