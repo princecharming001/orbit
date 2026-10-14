@@ -80,7 +80,12 @@ export function gmailHandlers(deps: HandlerDeps): Record<string, JobHandler> {
   async function firstRun(api: GmailApi, userId: string, ctx: JobContext) {
     const self = await loadSelf(ctx.db, userId);
     // send-as aliases are the user too (§1.3)
-    for (const s of await api.sendAs()) {
+    const aliases = await api.sendAs().catch((e) => {
+      // an account without access to its settings still syncs; its aliases are just not known
+      if (e instanceof GoogleApiError && e.status === 403) return [];
+      throw e;
+    });
+    for (const s of aliases) {
       if (!s.sendAsEmail || !(s.isPrimary || s.verificationStatus === 'accepted')) continue;
       await ctx.db.sql`
         insert into orbit.person_identities (user_id, person_id, kind, value_norm, value_raw, source)

@@ -47,7 +47,7 @@ export interface JobContext {
 
 export type JobHandler = (job: Job, ctx: JobContext) => Promise<void>;
 
-/** Kinds that P3–P5 implement; until then their messages are skipped. */
+/** Kinds that P4–P5 implement; until then their messages are skipped. */
 export const PLACEHOLDER_KINDS = ['cadence.user', 'enrich.dossier', 'source.search', 'send.draft'] as const;
 
 export function defaultHandlers(deps: HandlerDeps = {}): Record<string, JobHandler> {

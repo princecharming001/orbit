@@ -7826,7 +7826,11 @@ function gmailHandlers(deps) {
   const google = googleFor(deps);
   async function firstRun(api, userId, ctx) {
     const self = await loadSelf(ctx.db, userId);
-    for (const s of await api.sendAs()) {
+    const aliases = await api.sendAs().catch((e) => {
+      if (e instanceof GoogleApiError && e.status === 403) return [];
+      throw e;
+    });
+    for (const s of aliases) {
       if (!s.sendAsEmail || !(s.isPrimary || s.verificationStatus === "accepted")) continue;
       await ctx.db.sql`
         insert into orbit.person_identities (user_id, person_id, kind, value_norm, value_raw, source)
