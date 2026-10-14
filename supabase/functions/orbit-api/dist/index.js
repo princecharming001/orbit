@@ -3,9 +3,9 @@
 // supabase/functions/_shared/db.ts
 import postgres from "npm:postgres@3.4.9";
 function toText(strings) {
-  let text = strings[0] ?? "";
-  for (let i = 1; i < strings.length; i++) text += `$${i}${strings[i]}`;
-  return text;
+  let text2 = strings[0] ?? "";
+  for (let i = 1; i < strings.length; i++) text2 += `$${i}${strings[i]}`;
+  return text2;
 }
 function arrayLiteral(values) {
   const items = values.map((v) => {
@@ -25,13 +25,13 @@ function toParam(v) {
   return v;
 }
 function wrapPostgres(sql, inTx) {
-  const run = async (text, params) => {
-    const rows = await sql.unsafe(text, params.map(toParam));
+  const run = async (text2, params) => {
+    const rows = await sql.unsafe(text2, params.map(toParam));
     return Array.from(rows);
   };
   return {
     sql: (strings, ...values) => run(toText(strings), values),
-    query: (text, params = []) => run(text, params),
+    query: (text2, params = []) => run(text2, params),
     begin: async (fn) => {
       if (inTx)
         return await sql.savepoint(
@@ -60,15 +60,15 @@ function base64url(bytes) {
   for (const b of bytes) s += String.fromCharCode(b);
   return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
-function fromBase64url(text) {
-  const b64 = text.replace(/-/g, "+").replace(/_/g, "/");
+function fromBase64url(text2) {
+  const b64 = text2.replace(/-/g, "+").replace(/_/g, "/");
   const bin = atob(b64 + "=".repeat((4 - b64.length % 4) % 4));
   return Uint8Array.from(bin, (c) => c.charCodeAt(0));
 }
-function fromBase64(text) {
-  if (!/^[A-Za-z0-9+/_-]+={0,2}$/.test(text)) return void 0;
+function fromBase64(text2) {
+  if (!/^[A-Za-z0-9+/_-]+={0,2}$/.test(text2)) return void 0;
   try {
-    return fromBase64url(text.replace(/=+$/, ""));
+    return fromBase64url(text2.replace(/=+$/, ""));
   } catch {
     return void 0;
   }
@@ -76,11 +76,11 @@ function fromBase64(text) {
 function randomToken(n = 32) {
   return base64url(crypto.getRandomValues(new Uint8Array(n)));
 }
-async function sha256Bytes(text) {
-  return new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(text)));
+async function sha256Bytes(text2) {
+  return new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(text2)));
 }
-async function sha256Hex(text) {
-  return Array.from(await sha256Bytes(text), (x) => x.toString(16).padStart(2, "0")).join("");
+async function sha256Hex(text2) {
+  return Array.from(await sha256Bytes(text2), (x) => x.toString(16).padStart(2, "0")).join("");
 }
 function isUuid(v) {
   return typeof v === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
@@ -134,8 +134,8 @@ function preflight(req, h, methods = "GET, POST, OPTIONS") {
     }
   });
 }
-function json(status, body, headers = {}) {
-  return new Response(JSON.stringify(body), {
+function json(status, body2, headers = {}) {
+  return new Response(JSON.stringify(body2), {
     status,
     headers: { "content-type": "application/json", "cache-control": "no-store", ...headers }
   });
@@ -169,15 +169,15 @@ async function readJson(req, { optional = false, maxBytes = 1e6 } = {}) {
     if (optional) return {};
     throw badRequest("a JSON body is required");
   }
-  let body;
+  let body2;
   try {
-    body = JSON.parse(raw);
+    body2 = JSON.parse(raw);
   } catch {
     throw badRequest("the body is not valid JSON");
   }
-  if (!body || typeof body !== "object" || Array.isArray(body))
+  if (!body2 || typeof body2 !== "object" || Array.isArray(body2))
     throw badRequest("the body must be a JSON object");
-  return body;
+  return body2;
 }
 function makeLogger(salt2, sink = (l) => console.log(l), now = () => /* @__PURE__ */ new Date()) {
   return {
@@ -205,158 +205,191 @@ async function resolveSecret(env2, db2, envName, vaultName) {
   }
 }
 
-// supabase/functions/_shared/ratelimit.ts
-function sqlTake(db2) {
-  return async (bs) => {
-    const [row] = await db2.sql`
-      select allowed, over_bucket from public.orbit_proxy_take(
-        ${bs.map((b) => b.key)}::text[], ${bs.map((b) => b.limit)}::int[], ${bs.map((b) => b.expires)}::timestamptz[])`;
-    if (!row) throw new Error("counter store returned nothing");
-    return { allowed: row.allowed, over: row.over_bucket ?? void 0 };
-  };
-}
-function memoryTake(clock = Date.now) {
-  const counts = /* @__PURE__ */ new Map();
-  return async (bs) => {
-    const now = clock();
-    for (const [k, v] of counts) if (v.expires < now) counts.delete(k);
-    for (const b of bs) {
-      const c = counts.get(b.key) ?? { n: 0, expires: Date.parse(b.expires) };
-      c.n++;
-      counts.set(b.key, c);
-      if (c.n > b.limit) return { allowed: false, over: b.key };
-    }
-    return { allowed: true };
-  };
-}
-function windows(now) {
-  const iso = now.toISOString();
-  const day = iso.slice(0, 10);
-  const minute = iso.slice(0, 16);
-  const endOfDay = /* @__PURE__ */ new Date(`${day}T00:00:00Z`);
-  endOfDay.setUTCDate(endOfDay.getUTCDate() + 1);
-  const endOfMinute = /* @__PURE__ */ new Date(`${minute}:00Z`);
-  endOfMinute.setUTCMinutes(endOfMinute.getUTCMinutes() + 1);
-  return { day, minute, endOfDay: endOfDay.toISOString(), endOfMinute: endOfMinute.toISOString() };
-}
-function ipBuckets(prefix, visitor, now, perMinute) {
-  const w = windows(now);
-  return [{ key: `${prefix}:min:${w.minute}:ip:${visitor}`, limit: perMinute, expires: w.endOfMinute }];
-}
-function userBuckets(prefix, user, now, limits) {
-  const w = windows(now);
-  return [
-    { key: `${prefix}:min:${w.minute}:u:${user}`, limit: limits.perMinute, expires: w.endOfMinute },
-    { key: `${prefix}:day:${w.day}:u:${user}`, limit: limits.perDay, expires: w.endOfDay }
-  ];
-}
+// supabase/functions/_shared/claude.ts
+import Anthropic from "npm:@anthropic-ai/sdk@0.133.0";
+import { zodOutputFormat } from "npm:@anthropic-ai/sdk@0.133.0/helpers/zod";
 
-// supabase/functions/_shared/session.ts
-import { jwtVerify, SignJWT } from "npm:jose@6.2.12";
-var ACCESS_TTL_SEC = 3600;
-var REFRESH_TTL_DAYS = 30;
-var LOGIN_CODE_TTL_SEC = 120;
-var AUDIENCE = "orbit";
-function sessionKey(secret) {
-  const decoded = fromBase64(secret.trim());
-  if (decoded && decoded.length >= 32) return decoded;
-  return new TextEncoder().encode(secret);
-}
-function sessionSecretUsable(secret) {
-  return !!secret && secret.trim().length >= 32;
-}
-async function signAccess(cfg, claims) {
-  const now = (cfg.now ?? (() => /* @__PURE__ */ new Date()))();
-  const iat = Math.floor(now.getTime() / 1e3);
-  const exp = iat + ACCESS_TTL_SEC;
-  const token = await new SignJWT({ sid: claims.sessionId }).setProtectedHeader({ alg: "HS256", typ: "JWT" }).setSubject(claims.userId).setAudience(AUDIENCE).setIssuedAt(iat).setExpirationTime(exp).sign(sessionKey(cfg.secret));
-  return { token, expiresAt: new Date(exp * 1e3).toISOString() };
-}
-async function verifyAccess(cfg, token) {
-  try {
-    const { payload } = await jwtVerify(token, sessionKey(cfg.secret), {
-      audience: AUDIENCE,
-      algorithms: ["HS256"],
-      currentDate: (cfg.now ?? (() => /* @__PURE__ */ new Date()))()
-    });
-    if (!isUuid(payload.sub) || !isUuid(payload.sid)) throw new Error("claims");
-    return { userId: payload.sub, sessionId: payload.sid };
-  } catch {
-    throw unauthorized("the access token is not valid");
+// supabase/functions/_shared/budget.ts
+var CAPS = [
+  { id: "claude_daily_usd", provider: "anthropic", measure: "cost_usd", limit: 1.5, window: "day" },
+  { id: "exa_daily_usd", provider: "exa", measure: "cost_usd", limit: 0.5, window: "day" },
+  { id: "village_daily_credits", provider: "village", measure: "units", limit: 50, window: "day" },
+  {
+    id: "apollo_match_daily_credits",
+    provider: "apollo",
+    operation: "match",
+    measure: "units",
+    limit: 10,
+    window: "day"
+  },
+  {
+    id: "unipile_profile_views_daily",
+    provider: "unipile",
+    operation: "profile_view",
+    measure: "units",
+    limit: 40,
+    window: "day"
   }
+];
+var MONTHLY_TOTAL_USD = 25;
+function windowStart(window, now) {
+  return window === "day" ? new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())) : new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
 }
-async function createSession(db2, cfg, userId, userAgent) {
-  const now = (cfg.now ?? (() => /* @__PURE__ */ new Date()))();
-  const refreshToken = randomToken(32);
-  const expires = new Date(now.getTime() + REFRESH_TTL_DAYS * 864e5);
-  const [row] = await db2.sql`
-    insert into orbit.sessions (user_id, refresh_hash, user_agent, created_at, last_used_at, expires_at)
-    values (${userId}::uuid, ${await sha256Hex(refreshToken)}, ${userAgent?.slice(0, 300) ?? null},
-            ${now}::timestamptz, ${now}::timestamptz, ${expires}::timestamptz)
-    returning id`;
-  const access = await signAccess(cfg, { userId, sessionId: row.id });
-  return { accessToken: access.token, refreshToken, expiresAt: access.expiresAt, sessionId: row.id };
+function windowEnd(window, now) {
+  return window === "day" ? new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1)) : new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
 }
-async function refreshSession(db2, cfg, refreshToken) {
-  if (typeof refreshToken !== "string" || refreshToken.length < 20 || refreshToken.length > 200) return null;
-  const now = (cfg.now ?? (() => /* @__PURE__ */ new Date()))();
-  const next = randomToken(32);
-  const expires = new Date(now.getTime() + REFRESH_TTL_DAYS * 864e5);
-  const [row] = await db2.sql`
-    update orbit.sessions s
-       set refresh_hash = ${await sha256Hex(next)}, last_used_at = ${now}::timestamptz, expires_at = ${expires}::timestamptz
-      from orbit.users u
-     where s.refresh_hash = ${await sha256Hex(refreshToken)} and s.revoked_at is null
-       and s.expires_at > ${now}::timestamptz and u.id = s.user_id and u.deleted_at is null
-    returning s.id, s.user_id`;
-  if (!row) return null;
-  const access = await signAccess(cfg, { userId: row.user_id, sessionId: row.id });
-  return {
-    accessToken: access.token,
-    refreshToken: next,
-    expiresAt: access.expiresAt,
-    sessionId: row.id,
-    userId: row.user_id
-  };
-}
-async function revokeSession(db2, refreshToken, now = /* @__PURE__ */ new Date()) {
-  if (typeof refreshToken !== "string" || !refreshToken) return false;
+async function checkBudget(db2, userId, spend, now = /* @__PURE__ */ new Date()) {
+  const day = windowStart("day", now);
+  const month = windowStart("month", now);
   const rows = await db2.sql`
-    update orbit.sessions set revoked_at = ${now}::timestamptz
-     where refresh_hash = ${await sha256Hex(refreshToken)} and revoked_at is null
-    returning id`;
-  return rows.length > 0;
+    select provider, operation,
+           coalesce(sum(units) filter (where created_at >= ${day}::timestamptz), 0)::text as day_units,
+           coalesce(sum(cost_usd) filter (where created_at >= ${day}::timestamptz), 0)::text as day_usd,
+           coalesce(sum(cost_usd), 0)::text as month_usd
+      from orbit.usage_ledger
+     where user_id = ${userId}::uuid and created_at >= ${month}::timestamptz
+     group by provider, operation`;
+  const monthTotal = rows.reduce((s, r) => s + Number(r.month_usd), 0);
+  const adding = spend.costUsd ?? 0;
+  if (monthTotal + adding > MONTHLY_TOTAL_USD || monthTotal >= MONTHLY_TOTAL_USD && adding === 0)
+    return {
+      ok: false,
+      reason: "budget_exceeded",
+      cap: "monthly_total_usd",
+      limit: MONTHLY_TOTAL_USD,
+      used: round(monthTotal),
+      resetsAt: windowEnd("month", now).toISOString()
+    };
+  for (const cap of CAPS) {
+    if (cap.provider !== spend.provider) continue;
+    if (cap.operation && cap.operation !== spend.operation) continue;
+    const used = rows.filter((r) => r.provider === cap.provider && (!cap.operation || r.operation === cap.operation)).reduce((s, r) => s + Number(cap.measure === "units" ? r.day_units : r.day_usd), 0);
+    const add4 = cap.measure === "units" ? spend.units ?? 1 : spend.costUsd ?? 0;
+    if (used + add4 > cap.limit || used >= cap.limit && add4 === 0)
+      return {
+        ok: false,
+        reason: "budget_exceeded",
+        cap: cap.id,
+        limit: cap.limit,
+        used: round(used),
+        resetsAt: windowEnd(cap.window, now).toISOString()
+      };
+  }
+  return { ok: true };
 }
-async function authenticate(db2, cfg, header) {
-  const m = /^Bearer\s+(\S+)$/i.exec(header ?? "");
-  if (!m) throw unauthorized("sign in first");
-  const claims = await verifyAccess(cfg, m[1]);
-  const now = (cfg.now ?? (() => /* @__PURE__ */ new Date()))();
-  const rows = await db2.sql`
-    select 1 from orbit.sessions s join orbit.users u on u.id = s.user_id
-     where s.id = ${claims.sessionId}::uuid and s.user_id = ${claims.userId}::uuid
-       and s.revoked_at is null and s.expires_at > ${now}::timestamptz and u.deleted_at is null`;
-  if (!rows.length) throw unauthorized("the session has ended");
-  return claims;
-}
-async function createLoginCode(db2, userId, now = /* @__PURE__ */ new Date()) {
-  const code = randomToken(32);
+async function recordUsage(db2, entry) {
   await db2.sql`
-    insert into orbit.login_codes (code_hash, user_id, expires_at)
-    values (${await sha256Hex(code)}, ${userId}::uuid, ${new Date(now.getTime() + LOGIN_CODE_TTL_SEC * 1e3)}::timestamptz)`;
-  return code;
+    insert into orbit.usage_ledger (user_id, provider, operation, units, cost_usd)
+    values (${entry.userId}::uuid, ${entry.provider}, ${entry.operation}, ${entry.units}::numeric,
+            ${round(entry.costUsd)}::numeric)`;
 }
-async function redeemLoginCode(db2, code, now = /* @__PURE__ */ new Date()) {
-  if (typeof code !== "string" || code.length < 20 || code.length > 200) return null;
-  const [row] = await db2.sql`
-    update orbit.login_codes set used_at = ${now}::timestamptz
-     where code_hash = ${await sha256Hex(code)} and used_at is null and expires_at > ${now}::timestamptz
-    returning user_id`;
-  return row?.user_id ?? null;
+var round = (n) => Math.round(n * 1e5) / 1e5;
+
+// supabase/functions/_shared/claude.ts
+var TASKS = {
+  compose: { model: "claude-opus-5-5", effort: "medium", maxTokens: 4e3 },
+  reply: { model: "claude-opus-5-5", effort: "medium", maxTokens: 4e3 },
+  dossier: { model: "claude-opus-5-5", effort: "medium", maxTokens: 8e3 },
+  reply_classify: { model: "claude-haiku-5-5", effort: "low", maxTokens: 1e3 },
+  memory_extract: { model: "claude-haiku-5-5", effort: "low", maxTokens: 1500 },
+  goal_infer: { model: "claude-haiku-5-5", effort: "low", maxTokens: 1500 },
+  fit: { model: "claude-haiku-5-5", effort: "low", maxTokens: 3e3 },
+  triage: { model: "claude-haiku-5-5", effort: "low", maxTokens: 1e3 },
+  classify: { model: "claude-haiku-5-5", effort: "low", maxTokens: 1e3 },
+  extract_memory: { model: "claude-haiku-5-5", effort: "low", maxTokens: 1500 },
+  extract_goal: { model: "claude-haiku-5-5", effort: "low", maxTokens: 1500 },
+  judge: { model: "claude-sonnet-5-5", maxTokens: 2e3 }
+};
+var PRICES = {
+  "claude-opus-5-5": { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 },
+  "claude-sonnet-5-5": { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+  "claude-haiku-5-5": { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 }
+};
+function costUsd(model, u2) {
+  const p = PRICES[model];
+  if (!p) return 0;
+  return (u2.input_tokens * p.input + u2.output_tokens * p.output + (u2.cache_read_input_tokens ?? 0) * p.cacheRead + (u2.cache_creation_input_tokens ?? 0) * p.cacheWrite) / 1e6;
+}
+function makeClaude(deps) {
+  const client = deps.apiKey ? deps.client ?? new Anthropic({ apiKey: deps.apiKey, fetch: deps.fetch, maxRetries: 2 }) : void 0;
+  const now = deps.now ?? (() => /* @__PURE__ */ new Date());
+  async function structured(req) {
+    if (!client) return { ok: false, unconfigured: true };
+    const setting = TASKS[req.task];
+    if (deps.db && req.userId) {
+      const verdict = await checkBudget(
+        deps.db,
+        req.userId,
+        { provider: "anthropic", operation: req.task },
+        now()
+      );
+      if (!verdict.ok)
+        return { ok: false, budgetExceeded: true, cap: verdict.cap, resetsAt: verdict.resetsAt };
+    }
+    const base = zodOutputFormat(req.schema);
+    const format = {
+      ...base,
+      parse: (content) => {
+        try {
+          return { ok: true, value: base.parse(content) };
+        } catch (e) {
+          return { ok: false, error: e instanceof Error ? e.message : String(e) };
+        }
+      }
+    };
+    let maxTokens = req.maxTokens ?? setting.maxTokens;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let msg;
+      try {
+        msg = await callParse(maxTokens);
+      } catch (e) {
+        return {
+          ok: false,
+          error: "api_error",
+          detail: e instanceof Error ? e.message.slice(0, 200) : void 0
+        };
+      }
+      const usage = msg.usage;
+      const cost = costUsd(setting.model, usage);
+      if (deps.db)
+        await recordUsage(deps.db, {
+          userId: req.userId,
+          provider: "anthropic",
+          operation: req.task,
+          units: usage.input_tokens + usage.output_tokens,
+          costUsd: cost
+        });
+      if (msg.stop_reason === "refusal") {
+        const details = msg.stop_details;
+        return { ok: false, refused: true, category: details?.category ?? null };
+      }
+      if (msg.stop_reason === "max_tokens") {
+        if (attempt === 0) {
+          maxTokens *= 2;
+          continue;
+        }
+        return { ok: false, error: "max_tokens" };
+      }
+      const parsed = msg.parsed_output;
+      if (!parsed?.ok) return { ok: false, error: "invalid_output", detail: parsed?.error?.slice(0, 200) };
+      return { ok: true, data: parsed.value, model: setting.model, costUsd: cost, usage };
+    }
+    return { ok: false, error: "max_tokens" };
+    function callParse(max) {
+      return client.messages.parse({
+        model: setting.model,
+        max_tokens: max,
+        system: [{ type: "text", text: req.system, cache_control: { type: "ephemeral" } }],
+        messages: [{ role: "user", content: req.user }],
+        output_config: { ...setting.effort ? { effort: setting.effort } : {}, format }
+      });
+    }
+  }
+  return { configured: !!client, structured };
 }
 
 // supabase/functions/_shared/google.ts
-import { createRemoteJWKSet, jwtVerify as jwtVerify2 } from "npm:jose@6.2.12";
+import { createRemoteJWKSet, jwtVerify } from "npm:jose@6.2.12";
 var GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 var GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 var GOOGLE_REVOKE_URL = "https://oauth2.googleapis.com/revoke";
@@ -412,15 +445,15 @@ async function tokenCall(cfg, form) {
     headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
     body: new URLSearchParams(form)
   });
-  let body = {};
+  let body2 = {};
   try {
-    body = await res.json();
+    body2 = await res.json();
   } catch {
-    body = {};
+    body2 = {};
   }
-  if (!res.ok) throw new GoogleError(res.status, String(body.error ?? "token_error"));
-  if (typeof body.access_token !== "string") throw new GoogleError(502, "no_access_token");
-  return body;
+  if (!res.ok) throw new GoogleError(res.status, String(body2.error ?? "token_error"));
+  if (typeof body2.access_token !== "string") throw new GoogleError(502, "no_access_token");
+  return body2;
 }
 function exchangeCode(cfg, code, verifier) {
   return tokenCall(cfg, {
@@ -435,22 +468,22 @@ function exchangeCode(cfg, code, verifier) {
 var googleJwks;
 async function verifyIdToken(cfg, idToken) {
   const keys = cfg.jwks ?? (googleJwks ??= createRemoteJWKSet(new URL(GOOGLE_JWKS_URL)));
-  const { payload } = await jwtVerify2(idToken, keys, {
+  const { payload } = await jwtVerify(idToken, keys, {
     issuer: GOOGLE_ISSUERS,
     audience: cfg.clientId,
     currentDate: (cfg.now ?? (() => /* @__PURE__ */ new Date()))()
   });
   if (typeof payload.sub !== "string" || typeof payload.email !== "string")
     throw new GoogleError(400, "id_token_claims");
-  const str = (v) => typeof v === "string" && v ? v : void 0;
+  const str2 = (v) => typeof v === "string" && v ? v : void 0;
   return {
     sub: payload.sub,
     email: payload.email,
     emailVerified: payload.email_verified === true || payload.email_verified === "true",
-    name: str(payload.name),
-    givenName: str(payload.given_name),
-    familyName: str(payload.family_name),
-    picture: str(payload.picture)
+    name: str2(payload.name),
+    givenName: str2(payload.given_name),
+    familyName: str2(payload.family_name),
+    picture: str2(payload.picture)
   };
 }
 async function refreshAccessToken(cfg, refreshToken) {
@@ -475,491 +508,36 @@ async function revokeToken(cfg, token) {
   await res.body?.cancel();
   return res.ok || res.status === 400;
 }
-
-// supabase/functions/_shared/vault.ts
-function sqlVault(db2) {
+function googleTokenSource(cfg, deps) {
+  const cache = /* @__PURE__ */ new Map();
+  const clock = () => (cfg.now ?? (() => /* @__PURE__ */ new Date()))().getTime();
   return {
-    async put(name, secret) {
-      const [row] = await db2.sql`select orbit.vault_put(${name}, ${secret}) as id`;
-      return row.id;
+    invalidate: (userId) => {
+      cache.delete(userId);
     },
-    async get(id) {
-      const [row] = await db2.sql`select orbit.vault_get(${id}::uuid) as v`;
-      return row?.v ?? null;
-    },
-    async delete(id) {
-      await db2.sql`select orbit.vault_delete(${id}::uuid)`;
-    }
-  };
-}
-var googleRefreshName = (userId) => `google_refresh:${userId}`;
-
-// supabase/functions/orbit-api/account.ts
-var SKIP_TABLES = /* @__PURE__ */ new Set(["login_codes", "oauth_states"]);
-var SKIP_COLUMNS = {
-  "*": ["embedding"],
-  sessions: ["refresh_hash"],
-  integration_accounts: ["token_secret_id"]
-};
-async function exportUser(db2, userId) {
-  const tables = await db2.sql`
-    select c.table_name from information_schema.columns c
-      join information_schema.tables b on b.table_schema = c.table_schema and b.table_name = c.table_name
-     where c.table_schema = 'orbit' and c.column_name = 'user_id' and b.table_type = 'BASE TABLE'
-     order by c.table_name`;
-  const data = {};
-  const [user] = await db2.sql`select to_jsonb(u) as row from orbit.users u where u.id = ${userId}::uuid`;
-  data.users = user ? [user.row] : [];
-  for (const { table_name } of tables) {
-    if (SKIP_TABLES.has(table_name) || !/^[a-z_]+$/.test(table_name)) continue;
-    const drop = [...SKIP_COLUMNS["*"], ...SKIP_COLUMNS[table_name] ?? []].map((c) => ` - '${c}'`).join("");
-    const rows = await db2.query(
-      `select to_jsonb(t)${drop} as row from orbit.${table_name} t where t.user_id = $1::uuid`,
-      [userId]
-    );
-    data[table_name] = rows.map((r) => r.row);
-  }
-  return data;
-}
-async function accountExport(ctx) {
-  const data = await exportUser(ctx.db, ctx.userId);
-  await ctx.db.sql`
-    insert into orbit.audit_log (user_id, actor, action, target_table, target_id)
-    values (${ctx.userId}::uuid, 'user', 'account.export', 'users', ${ctx.userId})`;
-  return json(
-    200,
-    { exportedAt: ctx.now().toISOString(), format: "orbit-export-v1", data },
-    { "content-disposition": 'attachment; filename="orbit-export.json"' }
-  );
-}
-async function providerCleanup(deps, userId) {
-  const out = {
-    gmailStop: "skipped",
-    googleRevoke: "skipped",
-    unipile: "skipped"
-  };
-  const accounts = await deps.db.sql`
-    select provider, token_secret_id, external_account_id from orbit.integration_accounts where user_id = ${userId}::uuid`;
-  const google = accounts.find((a) => a.provider === "google");
-  const linkedin = accounts.find((a) => a.provider === "linkedin");
-  if (google?.token_secret_id) {
-    let refresh2 = null;
-    try {
-      refresh2 = await sqlVault(deps.db).get(google.token_secret_id);
-    } catch {
-      refresh2 = null;
-    }
-    if (refresh2 && deps.google) {
+    async accessToken(userId) {
+      const hit = cache.get(userId);
+      if (hit && hit.until > clock()) return hit.token;
+      const [acct] = await deps.db.sql`
+        select token_secret_id, status from orbit.integration_accounts
+         where user_id = ${userId}::uuid and provider = 'google'`;
+      if (!acct?.token_secret_id || acct.status === "needs_reauth" || acct.status === "revoked")
+        throw new NeedsReauth();
+      const refresh2 = await deps.vault.get(acct.token_secret_id);
+      if (!refresh2) throw new NeedsReauth();
       try {
-        const t = await refreshAccessToken(deps.google, refresh2);
-        const r = await deps.fetch("https://gmail.googleapis.com/gmail/v1/users/me/stop", {
-          method: "POST",
-          headers: { authorization: `Bearer ${t.access_token}` }
-        });
-        await r.body?.cancel();
-        out.gmailStop = r.ok ? "done" : "failed";
-      } catch {
-        out.gmailStop = "failed";
+        const t = await refreshAccessToken(cfg, refresh2);
+        cache.set(userId, { token: t.access_token, until: clock() + Math.max(0, t.expires_in - 300) * 1e3 });
+        return t.access_token;
+      } catch (e) {
+        if (e instanceof NeedsReauth)
+          await deps.db.sql`
+            update orbit.integration_accounts set status = 'needs_reauth', last_error = 'invalid_grant'
+             where user_id = ${userId}::uuid and provider = 'google'`;
+        throw e;
       }
     }
-    if (refresh2) {
-      try {
-        out.googleRevoke = await revokeToken({ fetch: deps.fetch }, refresh2) ? "done" : "failed";
-      } catch {
-        out.googleRevoke = "failed";
-      }
-    }
-  }
-  if (linkedin?.external_account_id && deps.unipileKey && deps.unipileBase) {
-    try {
-      const r = await deps.fetch(
-        `${deps.unipileBase}/api/v1/accounts/${encodeURIComponent(linkedin.external_account_id)}`,
-        { method: "DELETE", headers: { "X-API-KEY": deps.unipileKey, accept: "application/json" } }
-      );
-      await r.body?.cancel();
-      out.unipile = r.ok || r.status === 404 ? "done" : "failed";
-    } catch {
-      out.unipile = "failed";
-    }
-  }
-  return out;
-}
-async function accountDelete(ctx) {
-  const body = await readJson(ctx.req);
-  if (body.confirm !== "DELETE") throw badRequest("send {confirm: 'DELETE'} to delete the account");
-  const cleanup = await providerCleanup(
-    {
-      db: ctx.db,
-      google: ctx.google,
-      fetch: ctx.fetch,
-      unipileKey: ctx.env.unipileKey,
-      unipileBase: ctx.env.unipileBase
-    },
-    ctx.userId
-  );
-  await ctx.db.sql`select orbit.delete_user(${ctx.userId}::uuid)`;
-  return json(200, { deleted: true, cleanup });
-}
-
-// packages/core/src/text/normalize.ts
-var HONORIFICS = /* @__PURE__ */ new Set(["dr", "mr", "mrs", "ms", "mx", "prof", "professor", "sir"]);
-var CREDENTIALS = /* @__PURE__ */ new Set([
-  "phd",
-  "mba",
-  "cfa",
-  "cpa",
-  "md",
-  "jd",
-  "pmp",
-  "msc",
-  "bsc",
-  "ba",
-  "bs",
-  "ms",
-  "mfa",
-  "esq",
-  "pe",
-  "rn",
-  "mph",
-  "cfp",
-  "frm",
-  "caia",
-  "dds",
-  "dvm"
-]);
-var isCredentialToken = (t, k) => CREDENTIALS.has(k) && !(k.length <= 2 && /^\p{Lu}\p{Ll}+$/u.test(t));
-function stripDiacritics(s) {
-  return s.normalize("NFKD").replace(/[̀-ͯ]/g, "");
-}
-function normalizeEmail(raw) {
-  let e = raw.trim().toLowerCase();
-  const m = e.match(/<([^>]+)>/);
-  if (m?.[1]) e = m[1].trim().toLowerCase();
-  const at = e.lastIndexOf("@");
-  if (at < 0) return e;
-  let local = e.slice(0, at);
-  let domain = e.slice(at + 1);
-  if (domain === "googlemail.com") domain = "gmail.com";
-  if (domain === "gmail.com") {
-    local = local.split("+")[0].replace(/\./g, "");
-  }
-  return `${local}@${domain}`;
-}
-var GENERATIONAL = /* @__PURE__ */ new Set(["jr", "sr", "ii", "iii", "iv"]);
-var PARTICLES = /* @__PURE__ */ new Set([
-  "de",
-  "da",
-  "del",
-  "della",
-  "der",
-  "den",
-  "di",
-  "du",
-  "la",
-  "le",
-  "van",
-  "von",
-  "ter",
-  "bin",
-  "binti",
-  "al",
-  "st"
-]);
-var tokenKey = (t) => stripDiacritics(t).toLowerCase().replace(/[.,]/g, "");
-function isTagPart(part) {
-  const toks = part.split(/\s+/).filter(Boolean);
-  return toks.length > 0 && toks.every((t) => {
-    const k = tokenKey(t);
-    return !k || GENERATIONAL.has(k) || isCredentialToken(t, k) || HONORIFICS.has(k);
-  });
-}
-function capitalizeToken(t, isFirst) {
-  const lower = t.toLowerCase();
-  if (!isFirst && PARTICLES.has(lower)) return lower;
-  return lower.replace(/(^|[-'’])(\p{L})/gu, (_, sep, c) => sep + c.toUpperCase());
-}
-function fixCase(tokens, offset = 0) {
-  const letters = tokens.join("");
-  const allUpper = letters === letters.toUpperCase() && letters !== letters.toLowerCase();
-  return tokens.map((t, i) => {
-    if (t === t.toLowerCase() && t !== t.toUpperCase()) return capitalizeToken(t, i + offset === 0);
-    if (allUpper && t.length > 1) return capitalizeToken(t, i + offset === 0);
-    return t;
-  });
-}
-function cleanTokens(s) {
-  return s.split(/\s+/).map((t) => t.replace(/^['‘’]+|['‘’]+$/g, "").replace(/[.,]+$/g, "")).filter((t) => {
-    const k = tokenKey(t);
-    return !!k && !HONORIFICS.has(k) && !isCredentialToken(t, k) && !GENERATIONAL.has(k) && /\p{L}/u.test(t);
-  });
-}
-function partsFromTokens(tokens) {
-  const fixed = fixCase(tokens);
-  const first = fixed[0] ?? "";
-  let lastStart = fixed.length - 1;
-  while (lastStart > 1 && PARTICLES.has(fixed[lastStart - 1].toLowerCase())) lastStart--;
-  const last = fixed.length > 1 ? fixed.slice(lastStart).join(" ") : "";
-  const full = fixed.join(" ");
-  return { first, last, full, normalized: nameKey(first, last) };
-}
-function nameKey(first, last) {
-  return stripDiacritics([first, last].filter(Boolean).join(" ")).toLowerCase().replace(/['‘’]/g, "");
-}
-function cleanRaw(raw) {
-  return raw.normalize("NFC").replace(/\([^)]*\)|\[[^\]]*\]/g, " ").replace(/\p{Extended_Pictographic}|\u{FE0F}|\u{200D}/gu, " ").replace(/["“”]/g, "").replace(/\s[|•·/].*$/, "").replace(/[|•·].*$/, "").replace(/\s+[-–—]\s+.*$/, "").replace(/\s+/g, " ").trim();
-}
-function parseName(raw) {
-  if (!raw) return { first: "", last: "", full: "", normalized: "" };
-  const s = cleanRaw(raw);
-  const parts = s.split(",").map((p) => p.trim()).filter((p) => p && !isTagPart(p));
-  let tokens;
-  if (parts.length >= 2) {
-    const head = cleanTokens(parts[0]);
-    const tail = cleanTokens(parts[1]);
-    const headIsSurname = head.length === 1 || head.length > 1 && head.slice(0, -1).every((t) => PARTICLES.has(t.toLowerCase()));
-    tokens = headIsSurname && tail.length >= 1 && tail.length <= 2 ? [...tail, ...head] : head;
-  } else tokens = cleanTokens(parts[0] ?? "");
-  return partsFromTokens(tokens);
-}
-
-// supabase/functions/_shared/queue.ts
-var QUEUES = [
-  "orbit_send",
-  "orbit_classify",
-  "orbit_sync",
-  "orbit_cadence",
-  "orbit_score",
-  "orbit_enrich"
-];
-var KIND_QUEUE = {
-  "send.draft": "orbit_send",
-  "classify.message": "orbit_classify",
-  "sync.gmail.backfill": "orbit_sync",
-  "sync.gmail.incremental": "orbit_sync",
-  "sync.calendar": "orbit_sync",
-  "sync.contacts": "orbit_sync",
-  "sync.linkedin": "orbit_sync",
-  "cadence.user": "orbit_cadence",
-  "health.snapshot": "orbit_cadence",
-  "score.user": "orbit_score",
-  "score.person": "orbit_score",
-  "enrich.dossier": "orbit_enrich",
-  "source.search": "orbit_enrich",
-  noop: "orbit_enrich"
-};
-function queueFor(kind) {
-  const q = KIND_QUEUE[kind];
-  if (!q) throw new Error(`no queue for job kind ${kind}`);
-  return q;
-}
-function sqlQueue(db2) {
-  return {
-    async enqueue(msg, opts = {}) {
-      const queue = opts.queue ?? queueFor(msg.kind);
-      const [row] = await db2.sql`
-        select orbit.enqueue(${queue}, ${msg}::jsonb, ${Math.max(0, Math.floor(opts.delaySec ?? 0))}::int) as id`;
-      return row?.id == null ? null : Number(row.id);
-    },
-    async read(queue, vtSec, qty) {
-      const rows = await db2.sql`
-        select msg_id, read_ct, enqueued_at, message from pgmq.read(${queue}, ${vtSec}::int, ${qty}::int)`;
-      return rows.map((r) => ({
-        msgId: Number(r.msg_id),
-        readCt: Number(r.read_ct),
-        enqueuedAt: new Date(r.enqueued_at),
-        message: r.message
-      }));
-    },
-    async delete(queue, msgId) {
-      await db2.sql`select pgmq.delete(${queue}, ${msgId}::bigint)`;
-    },
-    async archive(queue, msgId) {
-      await db2.sql`select pgmq.archive(${queue}, ${msgId}::bigint)`;
-    },
-    async setVt(queue, msgId, vtSec) {
-      await db2.sql`select msg_id from pgmq.set_vt(${queue}, ${msgId}::bigint, ${Math.floor(vtSec)}::int)`;
-    }
   };
-}
-
-// supabase/functions/orbit-api/auth.ts
-var STATE_TTL_MS = 10 * 6e4;
-function safeRedirect(raw, appUrl) {
-  if (!raw) return appUrl;
-  let u;
-  try {
-    u = new URL(raw);
-  } catch {
-    return void 0;
-  }
-  const app = new URL(appUrl);
-  const local = u.protocol === "http:" && (u.hostname === "localhost" || u.hostname === "127.0.0.1");
-  if (u.origin !== app.origin && !local) return void 0;
-  if (u.username || u.password) return void 0;
-  return `${u.origin}${u.pathname}`.replace(/\/+$/, "");
-}
-function done(base, fragment) {
-  return redirect(`${base}/auth/done#${new URLSearchParams(fragment)}`);
-}
-async function googleStart(ctx) {
-  const target = safeRedirect(ctx.url.searchParams.get("redirect"), ctx.env.appUrl);
-  if (!target) return done(ctx.env.appUrl, { error: "bad_redirect" });
-  const state = randomToken(32);
-  const { verifier, challenge } = await pkcePair();
-  const now = ctx.now();
-  await ctx.db.sql`
-    insert into orbit.oauth_states (state, code_verifier, redirect_to, scopes, created_at, expires_at)
-    values (${state}, ${verifier}, ${target}, ${PHASE1_SCOPES}::text[], ${now}::timestamptz,
-            ${new Date(now.getTime() + STATE_TTL_MS)}::timestamptz)`;
-  return redirect(authUrl(ctx.google, { state, challenge, scopes: PHASE1_SCOPES }));
-}
-async function googleCallback(ctx) {
-  const q = ctx.url.searchParams;
-  const state = q.get("state");
-  if (!state) return done(ctx.env.appUrl, { error: "invalid_state" });
-  const [st] = await ctx.db.sql`
-    delete from orbit.oauth_states where state = ${state} returning code_verifier, redirect_to, expires_at`;
-  if (!st || new Date(st.expires_at).getTime() < ctx.now().getTime())
-    return done(ctx.env.appUrl, { error: "invalid_state" });
-  const back = st.redirect_to;
-  const googleError = q.get("error");
-  if (googleError)
-    return done(back, { error: /^[a-z_]{1,40}$/.test(googleError) ? googleError : "google_error" });
-  const code = q.get("code");
-  if (!code) return done(back, { error: "no_code" });
-  try {
-    const tokens = await exchangeCode(ctx.google, code, st.code_verifier);
-    if (!tokens.id_token) return done(back, { error: "no_id_token" });
-    const claims = await verifyIdToken(ctx.google, tokens.id_token);
-    if (!claims.emailVerified) return done(back, { error: "email_unverified" });
-    const scopes = (tokens.scope ?? "").split(/\s+/).filter(Boolean);
-    const userId = await ctx.db.begin(
-      (tx) => upsertGoogleUser(tx, { ...claims, scopes, refreshToken: tokens.refresh_token })
-    );
-    if (!userId) return done(back, { error: "account_deleted" });
-    if (scopes.some((s) => s.endsWith("gmail.readonly")))
-      await sqlQueue(ctx.db).enqueue({
-        kind: "sync.gmail.backfill",
-        userId,
-        payload: { phase: "recent" },
-        dedupeKey: `gmail-backfill:${userId}:recent`
-      });
-    const loginCode = await createLoginCode(ctx.db, userId, ctx.now());
-    return done(back, { code: loginCode });
-  } catch {
-    return done(back, { error: "sign_in_failed" });
-  }
-}
-async function upsertGoogleUser(db2, g) {
-  const name = parseName(g.name ?? [g.givenName, g.familyName].filter(Boolean).join(" "));
-  const first = g.givenName ?? (name.first || null);
-  const last = g.familyName ?? (name.last || null);
-  const full = g.name ?? (name.full || null);
-  const [user] = await db2.sql`
-    insert into orbit.users (google_sub, email, full_name, first_name, last_name, avatar_url, last_seen_at)
-    values (${g.sub}, ${g.email}, ${full}, ${first}, ${last}, ${g.picture ?? null}, now())
-    on conflict (google_sub) do update set
-      email = excluded.email,
-      full_name = coalesce(orbit.users.full_name, excluded.full_name),
-      first_name = coalesce(orbit.users.first_name, excluded.first_name),
-      last_name = coalesce(orbit.users.last_name, excluded.last_name),
-      avatar_url = coalesce(excluded.avatar_url, orbit.users.avatar_url),
-      last_seen_at = now()
-    returning id, deleted_at`;
-  if (!user || user.deleted_at) return null;
-  const userId = user.id;
-  const display = full ?? g.email;
-  await db2.sql`
-    insert into orbit.people (user_id, is_self, display_name, first_name, last_name, name_norm, primary_email,
-                              photo_url, sources, first_seen_at)
-    values (${userId}::uuid, true, ${display}, ${first}, ${last}, ${name.normalized || normalizeEmail(g.email)},
-            ${g.email}, ${g.picture ?? null}, ${["google"]}::text[], now())
-    on conflict (user_id) where is_self do nothing`;
-  const [self] = await db2.sql`
-    select id from orbit.people where user_id = ${userId}::uuid and is_self`;
-  await db2.sql`
-    insert into orbit.person_identities (user_id, person_id, kind, value_norm, value_raw, source)
-    values (${userId}::uuid, ${self.id}::uuid, 'email', ${normalizeEmail(g.email)}, ${g.email}, 'google')
-    on conflict (user_id, kind, value_norm) do nothing`;
-  const secretId = g.refreshToken ? await sqlVault(db2).put(googleRefreshName(userId), g.refreshToken) : null;
-  await db2.sql`
-    insert into orbit.integration_accounts (user_id, provider, email, scopes, status, token_secret_id, last_error)
-    values (${userId}::uuid, 'google', ${g.email}, ${g.scopes}::text[],
-            ${secretId ? "active" : "needs_reauth"}, ${secretId}::uuid, null)
-    on conflict (user_id, provider) do update set
-      email = excluded.email,
-      scopes = excluded.scopes,
-      token_secret_id = coalesce(excluded.token_secret_id, orbit.integration_accounts.token_secret_id),
-      status = case when coalesce(excluded.token_secret_id, orbit.integration_accounts.token_secret_id) is null
-                    then 'needs_reauth' else 'active' end,
-      last_error = null`;
-  await db2.sql`
-    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
-    values (${userId}::uuid, 'user', 'auth.sign_in', 'users', ${userId}, ${{ scopes: g.scopes.length }}::jsonb)`;
-  return userId;
-}
-async function loadUser(db2, userId) {
-  const [u] = await db2.sql`
-    select id, email, full_name, first_name, last_name, avatar_url, school, grad_year, timezone, autonomy_level,
-           settings, onboarding, created_at
-      from orbit.users where id = ${userId}::uuid and deleted_at is null`;
-  if (!u) return null;
-  return {
-    id: u.id,
-    email: u.email,
-    fullName: u.full_name ?? null,
-    firstName: u.first_name ?? null,
-    lastName: u.last_name ?? null,
-    avatarUrl: u.avatar_url ?? null,
-    school: u.school ?? null,
-    gradYear: u.grad_year ?? null,
-    timezone: u.timezone,
-    autonomyLevel: Number(u.autonomy_level),
-    settings: u.settings ?? {},
-    onboarding: u.onboarding ?? {},
-    createdAt: new Date(u.created_at).toISOString()
-  };
-}
-async function session(ctx) {
-  const body = await readJson(ctx.req);
-  if (typeof body.code !== "string") throw badRequest("code is required");
-  const userId = await redeemLoginCode(ctx.db, body.code, ctx.now());
-  if (!userId) throw unauthorized("that sign-in link has expired; sign in again");
-  const user = await loadUser(ctx.db, userId);
-  if (!user) throw unauthorized("sign in again");
-  const t = await createSession(ctx.db, ctx.session, userId, ctx.req.headers.get("user-agent"));
-  return json(200, {
-    accessToken: t.accessToken,
-    refreshToken: t.refreshToken,
-    expiresAt: t.expiresAt,
-    user
-  });
-}
-async function refresh(ctx) {
-  const body = await readJson(ctx.req);
-  if (typeof body.refreshToken !== "string") throw badRequest("refreshToken is required");
-  const t = await refreshSession(ctx.db, ctx.session, body.refreshToken);
-  if (!t) throw unauthorized("the session has ended; sign in again");
-  return json(200, { accessToken: t.accessToken, refreshToken: t.refreshToken, expiresAt: t.expiresAt });
-}
-async function logout(ctx) {
-  const body = await readJson(ctx.req, { optional: true });
-  const now = ctx.now();
-  await ctx.db.sql`
-    update orbit.sessions set revoked_at = ${now}::timestamptz
-     where id = ${ctx.sessionId}::uuid and user_id = ${ctx.userId}::uuid and revoked_at is null`;
-  if (typeof body.refreshToken === "string") await revokeSession(ctx.db, body.refreshToken, now);
-  return json(200, { ok: true });
-}
-async function me(ctx) {
-  const user = await loadUser(ctx.db, ctx.userId);
-  if (!user) throw unauthorized();
-  return json(200, { user });
-}
-
-// supabase/functions/_shared/ingest/util.ts
-function slot(d) {
-  return d.toISOString().slice(0, 15);
 }
 
 // supabase/functions/_shared/providers/request.ts
@@ -1068,10 +646,5675 @@ function query(params, bracketArrays = false) {
 function trimBase(base) {
   return base.replace(/\/+$/, "");
 }
+async function sha256Hex2(text2) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text2));
+  return Array.from(new Uint8Array(buf), (x) => x.toString(16).padStart(2, "0")).join("");
+}
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value).filter(([, v]) => v !== void 0).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+    return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableJson(v)}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+function cacheKey(provider, request) {
+  return sha256Hex2(`${provider}:${stableJson(request)}`);
+}
 
 // apps/web/src/zod.ts
 import { z } from "npm:zod@3.25.76/v4";
 z.config({ jitless: true });
+
+// supabase/functions/_shared/providers/apollo.ts
+var APOLLO_BASE = "https://api.apollo.io";
+var apolloPersonSchema = z.looseObject({
+  id: z.string(),
+  first_name: z.string().nullish(),
+  last_name: z.string().nullish(),
+  last_name_obfuscated: z.string().nullish(),
+  name: z.string().nullish(),
+  title: z.string().nullish(),
+  headline: z.string().nullish(),
+  linkedin_url: z.string().nullish(),
+  city: z.string().nullish(),
+  state: z.string().nullish(),
+  country: z.string().nullish(),
+  has_email: z.boolean().nullish(),
+  seniority: z.string().nullish(),
+  organization: z.looseObject({
+    name: z.string().nullish(),
+    primary_domain: z.string().nullish(),
+    website_url: z.string().nullish()
+  }).nullish()
+});
+var apolloSearchResponseSchema = z.looseObject({
+  total_entries: z.number().nullish(),
+  people: z.array(apolloPersonSchema).default([])
+});
+var apolloMatchResponseSchema = z.looseObject({
+  person: apolloPersonSchema.extend({ email: z.string().nullish() }).nullish()
+});
+function createApollo(opts) {
+  const base = trimBase(opts.baseUrl ?? APOLLO_BASE);
+  const headers = () => ({ "x-api-key": opts.apiKey ?? "", "cache-control": "no-cache" });
+  return {
+    configured: !!opts.apiKey,
+    async searchPeople(params) {
+      if (!opts.apiKey) return unconfigured2("apollo");
+      return requestJson(opts, {
+        provider: "apollo",
+        url: `${base}/api/v1/mixed_people/api_search${query({ ...params }, true)}`,
+        method: "POST",
+        headers: headers(),
+        schema: apolloSearchResponseSchema
+      });
+    },
+    async matchPerson(params) {
+      if (!opts.apiKey) return unconfigured2("apollo");
+      return requestJson(opts, {
+        provider: "apollo",
+        url: `${base}/api/v1/people/match${query({ ...params })}`,
+        method: "POST",
+        headers: headers(),
+        schema: apolloMatchResponseSchema
+      });
+    }
+  };
+}
+function apolloName(p) {
+  if (p.last_name) return { first: p.first_name ?? "", last: p.last_name, obfuscated: false };
+  if (p.name && !p.last_name_obfuscated) {
+    const [first = "", ...rest] = p.name.trim().split(/\s+/);
+    return { first, last: rest.join(" "), obfuscated: false };
+  }
+  return { first: p.first_name ?? "", last: p.last_name_obfuscated ?? "", obfuscated: true };
+}
+
+// supabase/functions/_shared/providers/exa.ts
+var EXA_BASE = "https://api.exa.ai";
+var EXA_SEARCH_USD = 7e-3;
+var EXA_PAGE_USD = 1e-3;
+var costSchema = z.looseObject({ total: z.number().nullish() }).nullish();
+var exaResultSchema = z.looseObject({
+  id: z.string().nullish(),
+  url: z.string(),
+  title: z.string().nullish(),
+  publishedDate: z.string().nullish(),
+  author: z.string().nullish(),
+  text: z.string().nullish(),
+  highlights: z.array(z.string()).nullish(),
+  highlightScores: z.array(z.number()).nullish()
+});
+var exaSearchResponseSchema = z.looseObject({
+  requestId: z.string().nullish(),
+  results: z.array(exaResultSchema).default([]),
+  costDollars: costSchema
+});
+var exaContentsResponseSchema = z.looseObject({
+  requestId: z.string().nullish(),
+  results: z.array(exaResultSchema).default([]),
+  statuses: z.array(z.looseObject({ id: z.string().nullish(), status: z.string().nullish() })).nullish(),
+  costDollars: costSchema
+});
+function estimateExaSearchUsd(req) {
+  const pages = req.contents ? req.numResults ?? 10 : 0;
+  return EXA_SEARCH_USD + pages * EXA_PAGE_USD;
+}
+function exaCostUsd(resp, fallback) {
+  const t = resp.costDollars?.total;
+  return typeof t === "number" && Number.isFinite(t) ? t : fallback;
+}
+function createExa(opts) {
+  const base = trimBase(opts.baseUrl ?? EXA_BASE);
+  const headers = () => ({ "x-api-key": opts.apiKey ?? "" });
+  return {
+    configured: !!opts.apiKey,
+    async search(req) {
+      if (!opts.apiKey) return unconfigured2("exa");
+      return requestJson(opts, {
+        provider: "exa",
+        url: `${base}/search`,
+        method: "POST",
+        headers: headers(),
+        body: req,
+        schema: exaSearchResponseSchema
+      });
+    },
+    async contents(req) {
+      if (!opts.apiKey) return unconfigured2("exa");
+      return requestJson(opts, {
+        provider: "exa",
+        url: `${base}/contents`,
+        method: "POST",
+        headers: headers(),
+        body: req,
+        schema: exaContentsResponseSchema
+      });
+    }
+  };
+}
+
+// supabase/functions/_shared/providers/semanticScholar.ts
+var S2_BASE = "https://api.semanticscholar.org";
+var s2AuthorRefSchema = z.looseObject({
+  authorId: z.string().nullish(),
+  name: z.string().nullish()
+});
+var s2PaperSchema = z.looseObject({
+  paperId: z.string(),
+  title: z.string().nullish(),
+  year: z.number().nullish(),
+  venue: z.string().nullish(),
+  authors: z.array(s2AuthorRefSchema).nullish()
+});
+var s2PaperSearchSchema = z.looseObject({
+  total: z.number().nullish(),
+  offset: z.number().nullish(),
+  next: z.number().nullish(),
+  data: z.array(s2PaperSchema).default([])
+});
+var s2AuthorSchema = z.looseObject({
+  authorId: z.string(),
+  name: z.string().nullish(),
+  url: z.string().nullish(),
+  affiliations: z.array(z.string()).nullish(),
+  homepage: z.string().nullish(),
+  paperCount: z.number().nullish(),
+  citationCount: z.number().nullish(),
+  hIndex: z.number().nullish()
+});
+function createSemanticScholar(opts) {
+  const base = trimBase(opts.baseUrl ?? S2_BASE);
+  const configured = !!opts.apiKey || opts.anonymous === true;
+  const headers = () => opts.apiKey ? { "x-api-key": opts.apiKey } : {};
+  return {
+    configured,
+    async searchPapers(q, o = {}) {
+      if (!configured) return unconfigured2("semantic_scholar");
+      const fields = (o.fields ?? ["title", "year", "authors", "venue"]).join(",");
+      return requestJson(opts, {
+        provider: "semantic_scholar",
+        url: `${base}/graph/v1/paper/search${query({ query: q, fields, limit: o.limit ?? 50 })}`,
+        headers: headers(),
+        schema: s2PaperSearchSchema
+      });
+    },
+    async author(id, o = {}) {
+      if (!configured) return unconfigured2("semantic_scholar");
+      const fields = (o.fields ?? ["name", "affiliations", "homepage", "paperCount", "hIndex"]).join(",");
+      return requestJson(opts, {
+        provider: "semantic_scholar",
+        url: `${base}/graph/v1/author/${encodeURIComponent(id)}${query({ fields })}`,
+        headers: headers(),
+        schema: s2AuthorSchema
+      });
+    }
+  };
+}
+
+// supabase/functions/_shared/providers/unipileResearch.ts
+var dateish = z.union([z.string(), z.number(), z.looseObject({})]).nullish();
+var unipileProfileSchema = z.looseObject({
+  provider_id: z.string().nullish(),
+  public_identifier: z.string().nullish(),
+  public_profile_url: z.string().nullish(),
+  first_name: z.string().nullish(),
+  last_name: z.string().nullish(),
+  headline: z.string().nullish(),
+  summary: z.string().nullish(),
+  location: z.string().nullish(),
+  network_distance: z.string().nullish(),
+  websites: z.array(z.string()).nullish(),
+  work_experience: z.array(
+    z.looseObject({
+      position: z.string().nullish(),
+      company: z.string().nullish(),
+      location: z.string().nullish(),
+      description: z.string().nullish(),
+      current: z.boolean().nullish(),
+      start: dateish,
+      end: dateish
+    })
+  ).nullish(),
+  education: z.array(
+    z.looseObject({
+      school: z.string().nullish(),
+      degree: z.string().nullish(),
+      field_of_study: z.string().nullish(),
+      start: dateish,
+      end: dateish
+    })
+  ).nullish(),
+  throttled_sections: z.array(z.string()).nullish()
+});
+var unipilePostSchema = z.looseObject({
+  id: z.string().nullish(),
+  social_id: z.string().nullish(),
+  share_url: z.string().nullish(),
+  text: z.string().nullish(),
+  date: z.string().nullish(),
+  parsed_datetime: z.string().nullish(),
+  is_repost: z.boolean().nullish()
+});
+var unipilePostsSchema = z.looseObject({
+  items: z.array(unipilePostSchema).default([]),
+  cursor: z.string().nullish()
+});
+var unipileSearchItemSchema = z.looseObject({
+  type: z.string().nullish(),
+  id: z.string().nullish(),
+  name: z.string().nullish(),
+  first_name: z.string().nullish(),
+  last_name: z.string().nullish(),
+  member_urn: z.string().nullish(),
+  member_id: z.string().nullish(),
+  provider_id: z.string().nullish(),
+  public_identifier: z.string().nullish(),
+  profile_url: z.string().nullish(),
+  public_profile_url: z.string().nullish(),
+  network_distance: z.string().nullish(),
+  location: z.string().nullish(),
+  headline: z.string().nullish()
+});
+var unipileSearchSchema = z.looseObject({
+  items: z.array(unipileSearchItemSchema).default([]),
+  cursor: z.string().nullish(),
+  paging: z.looseObject({ total_count: z.number().nullish() }).nullish()
+});
+var unipileSearchParamsSchema = z.looseObject({
+  items: z.array(z.looseObject({ id: z.union([z.string(), z.number()]), title: z.string().nullish() })).default([])
+});
+var DOSSIER_SECTIONS = ["*_preview", "experience", "education", "about"];
+function createUnipileResearch(opts) {
+  const configured = !!opts.apiKey && !!opts.baseUrl;
+  const base = trimBase(opts.baseUrl ?? "");
+  const headers = () => ({ "X-API-KEY": opts.apiKey ?? "" });
+  const notConfigured = () => unconfigured2("unipile", "API key or base URL");
+  const api = {
+    configured,
+    async profile(accountId, identifier, o = {}) {
+      if (!configured) return notConfigured();
+      const q = query({
+        account_id: accountId,
+        linkedin_sections: (o.sections ?? DOSSIER_SECTIONS).join(","),
+        linkedin_api: o.linkedinApi,
+        notify: "false"
+      });
+      return requestJson(opts, {
+        provider: "unipile",
+        url: `${base}/api/v1/users/${encodeURIComponent(identifier)}${q}`,
+        headers: headers(),
+        schema: unipileProfileSchema
+      });
+    },
+    async posts(accountId, identifier, o = {}) {
+      if (!configured) return notConfigured();
+      const r = await requestJson(opts, {
+        provider: "unipile",
+        url: `${base}/api/v1/users/${encodeURIComponent(identifier)}/posts${query({ account_id: accountId, limit: o.limit ?? 10 })}`,
+        headers: headers(),
+        schema: unipilePostsSchema
+      });
+      return r.ok ? { ok: true, value: r.value.items } : r;
+    },
+    async me(accountId) {
+      if (!configured) return notConfigured();
+      return requestJson(opts, {
+        provider: "unipile",
+        url: `${base}/api/v1/users/me${query({ account_id: accountId })}`,
+        headers: headers(),
+        schema: z.record(z.string(), z.unknown())
+      });
+    },
+    async searchPeople(accountId, body2, o = {}) {
+      if (!configured) return notConfigured();
+      const max = body2.api === "classic" ? 10 : 100;
+      return requestJson(opts, {
+        provider: "unipile",
+        url: `${base}/api/v1/linkedin/search${query({ account_id: accountId, limit: Math.min(max, o.limit ?? max), cursor: o.cursor })}`,
+        method: "POST",
+        headers: headers(),
+        body: body2,
+        schema: unipileSearchSchema
+      });
+    },
+    async searchParameters(accountId, type, keywords, o = {}) {
+      if (!configured) return notConfigured();
+      const r = await requestJson(opts, {
+        provider: "unipile",
+        url: `${base}/api/v1/linkedin/search/parameters${query({ account_id: accountId, type, keywords, limit: o.limit ?? 5 })}`,
+        headers: headers(),
+        schema: unipileSearchParamsSchema
+      });
+      if (!r.ok) return r;
+      return {
+        ok: true,
+        value: r.value.items.map((i) => ({ id: String(i.id), title: i.title ?? void 0 }))
+      };
+    },
+    async mutuals(accountId, memberId, o = {}) {
+      if (!configured) return notConfigured();
+      const items = [];
+      let cursor;
+      for (let page2 = 0; page2 < (o.maxPages ?? 1); page2++) {
+        const r = await api.searchPeople(
+          accountId,
+          { api: "classic", category: "people", network_distance: [1], connections_of: [memberId] },
+          { cursor }
+        );
+        if (!r.ok) return page2 === 0 ? r : { ok: true, value: items };
+        items.push(...r.value.items);
+        cursor = r.value.cursor ?? void 0;
+        if (!cursor) break;
+      }
+      return { ok: true, value: items };
+    }
+  };
+  return api;
+}
+function networkDistance(v) {
+  if (typeof v === "number") return v;
+  const s = String(v ?? "").toUpperCase();
+  const m = s.match(/DISTANCE_(\d)/);
+  if (m) return Number(m[1]);
+  if (s.startsWith("FIRST")) return 1;
+  if (s.startsWith("SECOND")) return 2;
+  if (s.startsWith("THIRD")) return 3;
+  return void 0;
+}
+function cleanLinkedInUrl(url) {
+  if (!url) return void 0;
+  const m = url.match(/linkedin\.com\/(in|pub)\/([^/?#]+)/i);
+  if (!m) return void 0;
+  return `https://www.linkedin.com/in/${decodeURIComponent(m[2]).toLowerCase()}`;
+}
+function linkedInSlugOf(url) {
+  const clean = cleanLinkedInUrl(url);
+  return clean ? clean.slice(clean.lastIndexOf("/") + 1) : void 0;
+}
+function linkedInPerson(i) {
+  const name = (i.name ?? `${i.first_name ?? ""} ${i.last_name ?? ""}`).trim();
+  const url = cleanLinkedInUrl(i.public_profile_url) ?? cleanLinkedInUrl(i.profile_url) ?? (i.public_identifier ? `https://www.linkedin.com/in/${i.public_identifier.toLowerCase()}` : void 0);
+  return {
+    memberId: i.id ?? i.provider_id ?? i.member_id ?? void 0,
+    name,
+    headline: i.headline ?? void 0,
+    location: i.location ?? void 0,
+    linkedinUrl: url,
+    networkDistance: networkDistance(i.network_distance)
+  };
+}
+function hasSalesNavigator(me2) {
+  const seen = /* @__PURE__ */ new Set();
+  const walk = (v, depth) => {
+    if (!v || typeof v !== "object" || seen.has(v) || depth > 3) return false;
+    seen.add(v);
+    for (const [k, x] of Object.entries(v)) {
+      if (/sales_?navigator/i.test(k) && x && x !== false) return true;
+      if (walk(x, depth + 1)) return true;
+    }
+    return false;
+  };
+  return walk(me2, 0);
+}
+
+// supabase/functions/_shared/providers/village.ts
+var VILLAGE_BASE = "https://api.village.do";
+var VILLAGE_PERSON_CREDITS = 5;
+var VILLAGE_COMPANY_CREDITS = 5;
+var VILLAGE_USD_PER_CREDIT = 0.02;
+var VILLAGE_TOKEN_TTL_MS = 50 * 6e4;
+var scoreMetaSchema = z.looseObject({ title: z.string().nullish(), description: z.string().nullish() });
+var profileSchema = z.looseObject({
+  first_name: z.string().nullish(),
+  last_name: z.string().nullish(),
+  full_name: z.string().nullish(),
+  linkedin_url: z.string().nullish(),
+  headline: z.string().nullish()
+});
+var summarySchema = z.looseObject({
+  score: z.number().nullish(),
+  score_label: z.string().nullish(),
+  description: z.string().nullish()
+}).nullish();
+var villagePathSchema = z.looseObject({
+  degree: z.number().nullish(),
+  summary: summarySchema,
+  starters: z.array(
+    z.looseObject({
+      profile: profileSchema.nullish(),
+      score: z.number().nullish(),
+      is_current_user: z.boolean().nullish()
+    })
+  ).nullish(),
+  introducer: z.looseObject({
+    profile: profileSchema.nullish(),
+    score: z.number().nullish(),
+    score_label: z.string().nullish(),
+    score_meta: z.array(scoreMetaSchema).nullish()
+  }).nullish(),
+  score_meta: z.array(scoreMetaSchema).nullish()
+});
+var targetSchema = z.looseObject({
+  first_name: z.string().nullish(),
+  last_name: z.string().nullish(),
+  full_name: z.string().nullish(),
+  linkedin_url: z.string().nullish(),
+  title: z.string().nullish(),
+  id: z.string().nullish()
+});
+function envelope(inner) {
+  return z.union([z.looseObject({ data: inner }).transform((x) => x.data), inner]);
+}
+var villagePersonPathsSchema = envelope(
+  z.looseObject({
+    person: targetSchema.nullish(),
+    summary: summarySchema,
+    paths: z.array(villagePathSchema).default([]),
+    count: z.number().nullish()
+  })
+);
+var villageCompanyPathsSchema = envelope(
+  z.looseObject({
+    company: z.looseObject({
+      name: z.string().nullish(),
+      domain: z.string().nullish(),
+      linkedin_url: z.string().nullish()
+    }).nullish(),
+    summary: summarySchema,
+    target_people: z.array(
+      z.looseObject({
+        target: targetSchema.nullish(),
+        paths: z.array(villagePathSchema).default([]),
+        degree: z.number().nullish()
+      })
+    ).default([])
+  })
+);
+var villageTokenSchema = envelope(
+  z.looseObject({
+    token: z.string(),
+    expires_in: z.number().nullish(),
+    expires_at: z.number().nullish()
+  })
+);
+function createVillage(opts) {
+  const secret = opts.secretKey ?? opts.apiKey;
+  const base = trimBase(opts.baseUrl ?? VILLAGE_BASE);
+  const clock = opts.clock ?? Date.now;
+  const tokens2 = /* @__PURE__ */ new Map();
+  async function token(user, fresh = false) {
+    if (!secret) return unconfigured2("village", "secret key");
+    const hit = tokens2.get(user.externalUserId);
+    if (!fresh && hit && hit.until > clock()) return { ok: true, value: hit.token };
+    const r = await requestJson(opts, {
+      provider: "village",
+      url: `${base}/v2/auth/tokens`,
+      method: "POST",
+      headers: { "secret-key": secret },
+      body: { external_user_id: user.externalUserId, email: user.email },
+      schema: villageTokenSchema
+    });
+    if (!r.ok) return r;
+    const now = clock();
+    const expiresAt = r.value.expires_at ? r.value.expires_at * 1e3 : Number.POSITIVE_INFINITY;
+    tokens2.set(user.externalUserId, {
+      token: r.value.token,
+      until: Math.min(now + VILLAGE_TOKEN_TTL_MS, expiresAt - 6e4)
+    });
+    return { ok: true, value: r.value.token };
+  }
+  async function authed(user, path, body2, schema, onEmpty) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const t = await token(user, attempt > 0);
+      if (!t.ok) return t;
+      const r = await requestJson(opts, {
+        provider: "village",
+        url: `${base}${path}`,
+        method: "POST",
+        headers: { authorization: `Bearer ${t.value}` },
+        body: body2,
+        schema,
+        emptyOn: [404],
+        onEmpty
+      });
+      if (!r.ok && r.status === 401 && attempt === 0) {
+        tokens2.delete(user.externalUserId);
+        continue;
+      }
+      return r;
+    }
+    return { ok: false, kind: "http", provider: "village", status: 401, message: "village 401" };
+  }
+  return {
+    configured: !!secret,
+    token: (user) => token(user),
+    personPaths: (user, q) => authed(user, "/v2/people/paths", q, villagePersonPathsSchema, () => ({ summary: null, paths: [] })),
+    companyPaths: (user, q) => authed(user, "/v2/companies/paths", q, villageCompanyPathsSchema, () => ({
+      summary: null,
+      target_people: []
+    }))
+  };
+}
+function profileName(p) {
+  if (!p) return "";
+  return (p.full_name ?? `${p.first_name ?? ""} ${p.last_name ?? ""}`).trim();
+}
+function targetName(t) {
+  if (!t) return void 0;
+  return (t.full_name ?? `${t.first_name ?? ""} ${t.last_name ?? ""}`).trim() || void 0;
+}
+var clamp01 = (x) => Math.max(0, Math.min(1, x));
+function villageWarmth(score) {
+  if (typeof score !== "number" || !Number.isFinite(score)) return 0;
+  return clamp01(score > 1 ? score / 100 : score);
+}
+function introFrom(p, target) {
+  const name = profileName(p.introducer?.profile);
+  if (!name || (p.degree ?? 2) < 2) return null;
+  const meta = [...p.introducer?.score_meta ?? [], ...p.score_meta ?? []];
+  return {
+    introducer: {
+      name,
+      headline: p.introducer?.profile?.headline ?? void 0,
+      linkedinUrl: p.introducer?.profile?.linkedin_url ?? void 0
+    },
+    warmth: villageWarmth(p.summary?.score ?? p.introducer?.score),
+    degree: p.degree ?? 2,
+    scoreLabel: p.summary?.score_label ?? p.introducer?.score_label ?? void 0,
+    reasons: meta.map((m) => [m.title, m.description].filter(Boolean).join(": ")).filter((s) => s.length > 0).slice(0, 3),
+    target
+  };
+}
+function personIntros(r) {
+  const target = {
+    name: targetName(r.person),
+    linkedinUrl: r.person?.linkedin_url ?? void 0,
+    title: r.person?.title ?? void 0
+  };
+  return r.paths.map((p) => introFrom(p, target)).filter((x) => !!x).sort((a, b) => b.warmth - a.warmth);
+}
+function companyIntros(r) {
+  return r.target_people.flatMap(
+    (tp) => tp.paths.map(
+      (p) => introFrom(p, {
+        name: targetName(tp.target),
+        linkedinUrl: tp.target?.linkedin_url ?? void 0,
+        title: tp.target?.title ?? void 0
+      })
+    )
+  ).filter((x) => !!x).sort((a, b) => b.warmth - a.warmth);
+}
+
+// supabase/functions/_shared/queue.ts
+var QUEUES = [
+  "orbit_send",
+  "orbit_classify",
+  "orbit_sync",
+  "orbit_cadence",
+  "orbit_score",
+  "orbit_enrich"
+];
+var KIND_QUEUE = {
+  "send.draft": "orbit_send",
+  "classify.message": "orbit_classify",
+  "sync.gmail.backfill": "orbit_sync",
+  "sync.gmail.incremental": "orbit_sync",
+  "sync.calendar": "orbit_sync",
+  "sync.contacts": "orbit_sync",
+  "sync.linkedin": "orbit_sync",
+  "cadence.user": "orbit_cadence",
+  "health.snapshot": "orbit_cadence",
+  "score.user": "orbit_score",
+  "score.person": "orbit_score",
+  "enrich.dossier": "orbit_enrich",
+  "source.search": "orbit_enrich",
+  noop: "orbit_enrich"
+};
+function queueFor(kind) {
+  const q = KIND_QUEUE[kind];
+  if (!q) throw new Error(`no queue for job kind ${kind}`);
+  return q;
+}
+function sqlQueue(db2) {
+  return {
+    async enqueue(msg, opts = {}) {
+      const queue = opts.queue ?? queueFor(msg.kind);
+      const [row] = await db2.sql`
+        select orbit.enqueue(${queue}, ${msg}::jsonb, ${Math.max(0, Math.floor(opts.delaySec ?? 0))}::int) as id`;
+      return row?.id == null ? null : Number(row.id);
+    },
+    async read(queue, vtSec, qty) {
+      const rows = await db2.sql`
+        select msg_id, read_ct, enqueued_at, message from pgmq.read(${queue}, ${vtSec}::int, ${qty}::int)`;
+      return rows.map((r) => ({
+        msgId: Number(r.msg_id),
+        readCt: Number(r.read_ct),
+        enqueuedAt: new Date(r.enqueued_at),
+        message: r.message
+      }));
+    },
+    async delete(queue, msgId) {
+      await db2.sql`select pgmq.delete(${queue}, ${msgId}::bigint)`;
+    },
+    async archive(queue, msgId) {
+      await db2.sql`select pgmq.archive(${queue}, ${msgId}::bigint)`;
+    },
+    async setVt(queue, msgId, vtSec) {
+      await db2.sql`select msg_id from pgmq.set_vt(${queue}, ${msgId}::bigint, ${Math.floor(vtSec)}::int)`;
+    }
+  };
+}
+
+// supabase/functions/_shared/vault.ts
+function sqlVault(db2) {
+  return {
+    async put(name, secret) {
+      const [row] = await db2.sql`select orbit.vault_put(${name}, ${secret}) as id`;
+      return row.id;
+    },
+    async get(id) {
+      const [row] = await db2.sql`select orbit.vault_get(${id}::uuid) as v`;
+      return row?.v ?? null;
+    },
+    async delete(id) {
+      await db2.sql`select orbit.vault_delete(${id}::uuid)`;
+    }
+  };
+}
+var googleRefreshName = (userId) => `google_refresh:${userId}`;
+
+// supabase/functions/_shared/services.ts
+function supabaseEmbed() {
+  let session2;
+  return async (text2) => {
+    const S = globalThis.Supabase;
+    if (!S?.ai) return null;
+    session2 ??= new S.ai.Session("gte-small");
+    const out = await session2.run(text2, { mean_pool: true, normalize: true });
+    if (!out || typeof out.length !== "number") return null;
+    return Array.from(out, Number);
+  };
+}
+function googleConfigOf(env2, doFetch, now) {
+  if (!env2.googleClientId || !env2.googleClientSecret || !env2.googleRedirectUri) return void 0;
+  return {
+    clientId: env2.googleClientId,
+    clientSecret: env2.googleClientSecret,
+    redirectUri: env2.googleRedirectUri,
+    fetch: doFetch,
+    now
+  };
+}
+var tokenSources = /* @__PURE__ */ new WeakMap();
+var villages = /* @__PURE__ */ new WeakMap();
+function makeServices(cfg, base) {
+  const now = base.now ?? (() => /* @__PURE__ */ new Date());
+  const doFetch = cfg.fetch ?? ((...a) => fetch(...a));
+  const p = { fetch: doFetch, sleep: cfg.sleep, random: cfg.random, clock: () => now().getTime() };
+  const env2 = cfg.env;
+  const google = googleConfigOf(env2, doFetch, now);
+  let tokens2 = cfg.tokens;
+  if (!tokens2 && google) {
+    tokens2 = tokenSources.get(cfg) ?? googleTokenSource(google, { db: base.db, vault: sqlVault(base.db) });
+    tokenSources.set(cfg, tokens2);
+  }
+  return {
+    db: base.db,
+    queue: base.queue ?? sqlQueue(base.db),
+    now,
+    fetch: doFetch,
+    random: cfg.random ?? Math.random,
+    env: env2,
+    claude: makeClaude({
+      apiKey: env2.anthropicKey,
+      db: base.db,
+      fetch: cfg.fetch,
+      now,
+      client: cfg.anthropic
+    }),
+    exa: createExa({ ...p, apiKey: env2.exaKey }),
+    unipile: createUnipileResearch({ ...p, apiKey: env2.unipileKey, baseUrl: env2.unipileBase }),
+    apollo: createApollo({ ...p, apiKey: env2.apolloKey }),
+    semanticScholar: createSemanticScholar({ ...p, apiKey: env2.semanticScholarKey, anonymous: true }),
+    village: villageFor(
+      cfg,
+      () => createVillage({ ...p, secretKey: env2.villageKey, baseUrl: env2.villageBase })
+    ),
+    embed: cfg.embed ?? supabaseEmbed(),
+    google,
+    tokens: tokens2
+  };
+}
+function villageFor(cfg, make) {
+  let v = villages.get(cfg);
+  if (!v) {
+    v = make();
+    villages.set(cfg, v);
+  }
+  return v;
+}
+function agentEnvFrom(get2) {
+  const supabaseUrl2 = get2("SUPABASE_URL");
+  return {
+    anthropicKey: get2("ORBIT_ANTHROPIC_API_KEY") ?? get2("ANTHROPIC_API_KEY"),
+    exaKey: get2("EXA_API_KEY"),
+    unipileKey: get2("UNIPILE_API_KEY"),
+    unipileBase: get2("UNIPILE_BASE_URL"),
+    apolloKey: get2("APOLLO_API_KEY"),
+    semanticScholarKey: get2("SEMANTIC_SCHOLAR_API_KEY"),
+    villageKey: get2("VILLAGE_SECRET_KEY"),
+    villageBase: get2("VILLAGE_BASE_URL"),
+    googleClientId: get2("ORBIT_GOOGLE_CLIENT_ID"),
+    googleClientSecret: get2("ORBIT_GOOGLE_CLIENT_SECRET"),
+    googleRedirectUri: get2("ORBIT_GOOGLE_REDIRECT_URI") ?? (supabaseUrl2 ? `${supabaseUrl2}/functions/v1/orbit-api/auth/google/callback` : void 0)
+  };
+}
+
+// supabase/functions/_shared/ratelimit.ts
+function sqlTake(db2) {
+  return async (bs) => {
+    const [row] = await db2.sql`
+      select allowed, over_bucket from public.orbit_proxy_take(
+        ${bs.map((b) => b.key)}::text[], ${bs.map((b) => b.limit)}::int[], ${bs.map((b) => b.expires)}::timestamptz[])`;
+    if (!row) throw new Error("counter store returned nothing");
+    return { allowed: row.allowed, over: row.over_bucket ?? void 0 };
+  };
+}
+function memoryTake(clock = Date.now) {
+  const counts = /* @__PURE__ */ new Map();
+  return async (bs) => {
+    const now = clock();
+    for (const [k, v] of counts) if (v.expires < now) counts.delete(k);
+    for (const b of bs) {
+      const c = counts.get(b.key) ?? { n: 0, expires: Date.parse(b.expires) };
+      c.n++;
+      counts.set(b.key, c);
+      if (c.n > b.limit) return { allowed: false, over: b.key };
+    }
+    return { allowed: true };
+  };
+}
+function windows(now) {
+  const iso2 = now.toISOString();
+  const day = iso2.slice(0, 10);
+  const minute = iso2.slice(0, 16);
+  const endOfDay = /* @__PURE__ */ new Date(`${day}T00:00:00Z`);
+  endOfDay.setUTCDate(endOfDay.getUTCDate() + 1);
+  const endOfMinute = /* @__PURE__ */ new Date(`${minute}:00Z`);
+  endOfMinute.setUTCMinutes(endOfMinute.getUTCMinutes() + 1);
+  return { day, minute, endOfDay: endOfDay.toISOString(), endOfMinute: endOfMinute.toISOString() };
+}
+function ipBuckets(prefix, visitor, now, perMinute) {
+  const w = windows(now);
+  return [{ key: `${prefix}:min:${w.minute}:ip:${visitor}`, limit: perMinute, expires: w.endOfMinute }];
+}
+function userBuckets(prefix, user, now, limits) {
+  const w = windows(now);
+  return [
+    { key: `${prefix}:min:${w.minute}:u:${user}`, limit: limits.perMinute, expires: w.endOfMinute },
+    { key: `${prefix}:day:${w.day}:u:${user}`, limit: limits.perDay, expires: w.endOfDay }
+  ];
+}
+
+// supabase/functions/_shared/session.ts
+import { jwtVerify as jwtVerify2, SignJWT } from "npm:jose@6.2.12";
+var ACCESS_TTL_SEC = 3600;
+var REFRESH_TTL_DAYS = 30;
+var LOGIN_CODE_TTL_SEC = 120;
+var AUDIENCE = "orbit";
+function sessionKey(secret) {
+  const decoded = fromBase64(secret.trim());
+  if (decoded && decoded.length >= 32) return decoded;
+  return new TextEncoder().encode(secret);
+}
+function sessionSecretUsable(secret) {
+  return !!secret && secret.trim().length >= 32;
+}
+async function signAccess(cfg, claims) {
+  const now = (cfg.now ?? (() => /* @__PURE__ */ new Date()))();
+  const iat = Math.floor(now.getTime() / 1e3);
+  const exp = iat + ACCESS_TTL_SEC;
+  const token = await new SignJWT({ sid: claims.sessionId }).setProtectedHeader({ alg: "HS256", typ: "JWT" }).setSubject(claims.userId).setAudience(AUDIENCE).setIssuedAt(iat).setExpirationTime(exp).sign(sessionKey(cfg.secret));
+  return { token, expiresAt: new Date(exp * 1e3).toISOString() };
+}
+async function verifyAccess(cfg, token) {
+  try {
+    const { payload } = await jwtVerify2(token, sessionKey(cfg.secret), {
+      audience: AUDIENCE,
+      algorithms: ["HS256"],
+      currentDate: (cfg.now ?? (() => /* @__PURE__ */ new Date()))()
+    });
+    if (!isUuid(payload.sub) || !isUuid(payload.sid)) throw new Error("claims");
+    return { userId: payload.sub, sessionId: payload.sid };
+  } catch {
+    throw unauthorized("the access token is not valid");
+  }
+}
+async function createSession(db2, cfg, userId, userAgent) {
+  const now = (cfg.now ?? (() => /* @__PURE__ */ new Date()))();
+  const refreshToken = randomToken(32);
+  const expires = new Date(now.getTime() + REFRESH_TTL_DAYS * 864e5);
+  const [row] = await db2.sql`
+    insert into orbit.sessions (user_id, refresh_hash, user_agent, created_at, last_used_at, expires_at)
+    values (${userId}::uuid, ${await sha256Hex(refreshToken)}, ${userAgent?.slice(0, 300) ?? null},
+            ${now}::timestamptz, ${now}::timestamptz, ${expires}::timestamptz)
+    returning id`;
+  const access = await signAccess(cfg, { userId, sessionId: row.id });
+  return { accessToken: access.token, refreshToken, expiresAt: access.expiresAt, sessionId: row.id };
+}
+async function refreshSession(db2, cfg, refreshToken) {
+  if (typeof refreshToken !== "string" || refreshToken.length < 20 || refreshToken.length > 200) return null;
+  const now = (cfg.now ?? (() => /* @__PURE__ */ new Date()))();
+  const next = randomToken(32);
+  const expires = new Date(now.getTime() + REFRESH_TTL_DAYS * 864e5);
+  const [row] = await db2.sql`
+    update orbit.sessions s
+       set refresh_hash = ${await sha256Hex(next)}, last_used_at = ${now}::timestamptz, expires_at = ${expires}::timestamptz
+      from orbit.users u
+     where s.refresh_hash = ${await sha256Hex(refreshToken)} and s.revoked_at is null
+       and s.expires_at > ${now}::timestamptz and u.id = s.user_id and u.deleted_at is null
+    returning s.id, s.user_id`;
+  if (!row) return null;
+  const access = await signAccess(cfg, { userId: row.user_id, sessionId: row.id });
+  return {
+    accessToken: access.token,
+    refreshToken: next,
+    expiresAt: access.expiresAt,
+    sessionId: row.id,
+    userId: row.user_id
+  };
+}
+async function revokeSession(db2, refreshToken, now = /* @__PURE__ */ new Date()) {
+  if (typeof refreshToken !== "string" || !refreshToken) return false;
+  const rows = await db2.sql`
+    update orbit.sessions set revoked_at = ${now}::timestamptz
+     where refresh_hash = ${await sha256Hex(refreshToken)} and revoked_at is null
+    returning id`;
+  return rows.length > 0;
+}
+async function authenticate(db2, cfg, header) {
+  const m = /^Bearer\s+(\S+)$/i.exec(header ?? "");
+  if (!m) throw unauthorized("sign in first");
+  const claims = await verifyAccess(cfg, m[1]);
+  const now = (cfg.now ?? (() => /* @__PURE__ */ new Date()))();
+  const rows = await db2.sql`
+    select 1 from orbit.sessions s join orbit.users u on u.id = s.user_id
+     where s.id = ${claims.sessionId}::uuid and s.user_id = ${claims.userId}::uuid
+       and s.revoked_at is null and s.expires_at > ${now}::timestamptz and u.deleted_at is null`;
+  if (!rows.length) throw unauthorized("the session has ended");
+  return claims;
+}
+async function createLoginCode(db2, userId, now = /* @__PURE__ */ new Date()) {
+  const code = randomToken(32);
+  await db2.sql`
+    insert into orbit.login_codes (code_hash, user_id, expires_at)
+    values (${await sha256Hex(code)}, ${userId}::uuid, ${new Date(now.getTime() + LOGIN_CODE_TTL_SEC * 1e3)}::timestamptz)`;
+  return code;
+}
+async function redeemLoginCode(db2, code, now = /* @__PURE__ */ new Date()) {
+  if (typeof code !== "string" || code.length < 20 || code.length > 200) return null;
+  const [row] = await db2.sql`
+    update orbit.login_codes set used_at = ${now}::timestamptz
+     where code_hash = ${await sha256Hex(code)} and used_at is null and expires_at > ${now}::timestamptz
+    returning user_id`;
+  return row?.user_id ?? null;
+}
+
+// supabase/functions/orbit-api/account.ts
+var SKIP_TABLES = /* @__PURE__ */ new Set(["login_codes", "oauth_states"]);
+var SKIP_COLUMNS = {
+  "*": ["embedding"],
+  sessions: ["refresh_hash"],
+  integration_accounts: ["token_secret_id"]
+};
+async function exportUser(db2, userId) {
+  const tables = await db2.sql`
+    select c.table_name from information_schema.columns c
+      join information_schema.tables b on b.table_schema = c.table_schema and b.table_name = c.table_name
+     where c.table_schema = 'orbit' and c.column_name = 'user_id' and b.table_type = 'BASE TABLE'
+     order by c.table_name`;
+  const data = {};
+  const [user] = await db2.sql`select to_jsonb(u) as row from orbit.users u where u.id = ${userId}::uuid`;
+  data.users = user ? [user.row] : [];
+  for (const { table_name } of tables) {
+    if (SKIP_TABLES.has(table_name) || !/^[a-z_]+$/.test(table_name)) continue;
+    const drop = [...SKIP_COLUMNS["*"], ...SKIP_COLUMNS[table_name] ?? []].map((c) => ` - '${c}'`).join("");
+    const rows = await db2.query(
+      `select to_jsonb(t)${drop} as row from orbit.${table_name} t where t.user_id = $1::uuid`,
+      [userId]
+    );
+    data[table_name] = rows.map((r) => r.row);
+  }
+  return data;
+}
+async function accountExport(ctx) {
+  const data = await exportUser(ctx.db, ctx.userId);
+  await ctx.db.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, target_id)
+    values (${ctx.userId}::uuid, 'user', 'account.export', 'users', ${ctx.userId})`;
+  return json(
+    200,
+    { exportedAt: ctx.now().toISOString(), format: "orbit-export-v1", data },
+    { "content-disposition": 'attachment; filename="orbit-export.json"' }
+  );
+}
+async function providerCleanup(deps, userId) {
+  const out = {
+    gmailStop: "skipped",
+    googleRevoke: "skipped",
+    unipile: "skipped"
+  };
+  const accounts = await deps.db.sql`
+    select provider, token_secret_id, external_account_id from orbit.integration_accounts where user_id = ${userId}::uuid`;
+  const google = accounts.find((a) => a.provider === "google");
+  const linkedin = accounts.find((a) => a.provider === "linkedin");
+  if (google?.token_secret_id) {
+    let refresh2 = null;
+    try {
+      refresh2 = await sqlVault(deps.db).get(google.token_secret_id);
+    } catch {
+      refresh2 = null;
+    }
+    if (refresh2 && deps.google) {
+      try {
+        const t = await refreshAccessToken(deps.google, refresh2);
+        const r = await deps.fetch("https://gmail.googleapis.com/gmail/v1/users/me/stop", {
+          method: "POST",
+          headers: { authorization: `Bearer ${t.access_token}` }
+        });
+        await r.body?.cancel();
+        out.gmailStop = r.ok ? "done" : "failed";
+      } catch {
+        out.gmailStop = "failed";
+      }
+    }
+    if (refresh2) {
+      try {
+        out.googleRevoke = await revokeToken({ fetch: deps.fetch }, refresh2) ? "done" : "failed";
+      } catch {
+        out.googleRevoke = "failed";
+      }
+    }
+  }
+  if (linkedin?.external_account_id && deps.unipileKey && deps.unipileBase) {
+    try {
+      const r = await deps.fetch(
+        `${deps.unipileBase}/api/v1/accounts/${encodeURIComponent(linkedin.external_account_id)}`,
+        { method: "DELETE", headers: { "X-API-KEY": deps.unipileKey, accept: "application/json" } }
+      );
+      await r.body?.cancel();
+      out.unipile = r.ok || r.status === 404 ? "done" : "failed";
+    } catch {
+      out.unipile = "failed";
+    }
+  }
+  return out;
+}
+async function accountDelete(ctx) {
+  const body2 = await readJson(ctx.req);
+  if (body2.confirm !== "DELETE") throw badRequest("send {confirm: 'DELETE'} to delete the account");
+  const cleanup = await providerCleanup(
+    {
+      db: ctx.db,
+      google: ctx.google,
+      fetch: ctx.fetch,
+      unipileKey: ctx.env.unipileKey,
+      unipileBase: ctx.env.unipileBase
+    },
+    ctx.userId
+  );
+  await ctx.db.sql`select orbit.delete_user(${ctx.userId}::uuid)`;
+  return json(200, { deleted: true, cleanup });
+}
+
+// packages/core/src/text/normalize.ts
+var HONORIFICS = /* @__PURE__ */ new Set(["dr", "mr", "mrs", "ms", "mx", "prof", "professor", "sir"]);
+var CREDENTIALS = /* @__PURE__ */ new Set([
+  "phd",
+  "mba",
+  "cfa",
+  "cpa",
+  "md",
+  "jd",
+  "pmp",
+  "msc",
+  "bsc",
+  "ba",
+  "bs",
+  "ms",
+  "mfa",
+  "esq",
+  "pe",
+  "rn",
+  "mph",
+  "cfp",
+  "frm",
+  "caia",
+  "dds",
+  "dvm"
+]);
+var isCredentialToken = (t, k) => CREDENTIALS.has(k) && !(k.length <= 2 && /^\p{Lu}\p{Ll}+$/u.test(t));
+var LEGAL_SUFFIXES = /* @__PURE__ */ new Set([
+  "inc",
+  "incorporated",
+  "llc",
+  "ltd",
+  "limited",
+  "corp",
+  "corporation",
+  "co",
+  "plc",
+  "gmbh",
+  "llp",
+  "lp",
+  "sa",
+  "ag",
+  "pbc"
+]);
+function stripDiacritics(s) {
+  return s.normalize("NFKD").replace(/[̀-ͯ]/g, "");
+}
+function normalizeEmail(raw) {
+  let e = raw.trim().toLowerCase();
+  const m = e.match(/<([^>]+)>/);
+  if (m?.[1]) e = m[1].trim().toLowerCase();
+  const at = e.lastIndexOf("@");
+  if (at < 0) return e;
+  let local = e.slice(0, at);
+  let domain = e.slice(at + 1);
+  if (domain === "googlemail.com") domain = "gmail.com";
+  if (domain === "gmail.com") {
+    local = local.split("+")[0].replace(/\./g, "");
+  }
+  return `${local}@${domain}`;
+}
+var GENERATIONAL = /* @__PURE__ */ new Set(["jr", "sr", "ii", "iii", "iv"]);
+var PARTICLES = /* @__PURE__ */ new Set([
+  "de",
+  "da",
+  "del",
+  "della",
+  "der",
+  "den",
+  "di",
+  "du",
+  "la",
+  "le",
+  "van",
+  "von",
+  "ter",
+  "bin",
+  "binti",
+  "al",
+  "st"
+]);
+var tokenKey = (t) => stripDiacritics(t).toLowerCase().replace(/[.,]/g, "");
+function isTagPart(part) {
+  const toks = part.split(/\s+/).filter(Boolean);
+  return toks.length > 0 && toks.every((t) => {
+    const k = tokenKey(t);
+    return !k || GENERATIONAL.has(k) || isCredentialToken(t, k) || HONORIFICS.has(k);
+  });
+}
+function capitalizeToken(t, isFirst) {
+  const lower = t.toLowerCase();
+  if (!isFirst && PARTICLES.has(lower)) return lower;
+  return lower.replace(/(^|[-'’])(\p{L})/gu, (_, sep, c) => sep + c.toUpperCase());
+}
+function fixCase(tokens2, offset = 0) {
+  const letters = tokens2.join("");
+  const allUpper = letters === letters.toUpperCase() && letters !== letters.toLowerCase();
+  return tokens2.map((t, i) => {
+    if (t === t.toLowerCase() && t !== t.toUpperCase()) return capitalizeToken(t, i + offset === 0);
+    if (allUpper && t.length > 1) return capitalizeToken(t, i + offset === 0);
+    return t;
+  });
+}
+function cleanTokens(s) {
+  return s.split(/\s+/).map((t) => t.replace(/^['‘’]+|['‘’]+$/g, "").replace(/[.,]+$/g, "")).filter((t) => {
+    const k = tokenKey(t);
+    return !!k && !HONORIFICS.has(k) && !isCredentialToken(t, k) && !GENERATIONAL.has(k) && /\p{L}/u.test(t);
+  });
+}
+function partsFromTokens(tokens2) {
+  const fixed = fixCase(tokens2);
+  const first = fixed[0] ?? "";
+  let lastStart = fixed.length - 1;
+  while (lastStart > 1 && PARTICLES.has(fixed[lastStart - 1].toLowerCase())) lastStart--;
+  const last = fixed.length > 1 ? fixed.slice(lastStart).join(" ") : "";
+  const full = fixed.join(" ");
+  return { first, last, full, normalized: nameKey(first, last) };
+}
+function nameKey(first, last) {
+  return stripDiacritics([first, last].filter(Boolean).join(" ")).toLowerCase().replace(/['‘’]/g, "");
+}
+function cleanRaw(raw) {
+  return raw.normalize("NFC").replace(/\([^)]*\)|\[[^\]]*\]/g, " ").replace(/\p{Extended_Pictographic}|\u{FE0F}|\u{200D}/gu, " ").replace(/["“”]/g, "").replace(/\s[|•·/].*$/, "").replace(/[|•·].*$/, "").replace(/\s+[-–—]\s+.*$/, "").replace(/\s+/g, " ").trim();
+}
+function parseName(raw) {
+  if (!raw) return { first: "", last: "", full: "", normalized: "" };
+  const s = cleanRaw(raw);
+  const parts = s.split(",").map((p) => p.trim()).filter((p) => p && !isTagPart(p));
+  let tokens2;
+  if (parts.length >= 2) {
+    const head = cleanTokens(parts[0]);
+    const tail = cleanTokens(parts[1]);
+    const headIsSurname = head.length === 1 || head.length > 1 && head.slice(0, -1).every((t) => PARTICLES.has(t.toLowerCase()));
+    tokens2 = headIsSurname && tail.length >= 1 && tail.length <= 2 ? [...tail, ...head] : head;
+  } else tokens2 = cleanTokens(parts[0] ?? "");
+  return partsFromTokens(tokens2);
+}
+var GENERIC_ORG_TAIL = /* @__PURE__ */ new Set([
+  "&",
+  "and",
+  "company",
+  "co",
+  "group",
+  "consulting",
+  "partners",
+  "holdings"
+]);
+var ORG_ALIASES = {
+  bcg: "boston consulting group",
+  "boston consulting group": "boston consulting group",
+  jpmorgan: "jpmorgan chase",
+  "jp morgan": "jpmorgan chase",
+  "j p morgan": "jpmorgan chase",
+  "jpmorgan chase": "jpmorgan chase",
+  "jp morgan chase": "jpmorgan chase",
+  "j p morgan chase": "jpmorgan chase",
+  jpmc: "jpmorgan chase",
+  chase: "jpmorgan chase",
+  pwc: "pwc",
+  pricewaterhousecoopers: "pwc",
+  "price waterhouse coopers": "pwc",
+  "pricewaterhouse coopers": "pwc",
+  ey: "ey",
+  "ernst & young": "ey",
+  "ernst and young": "ey",
+  aws: "amazon web services",
+  "amazon web services": "amazon web services",
+  gs: "goldman sachs",
+  goldman: "goldman sachs",
+  "goldman sachs": "goldman sachs",
+  facebook: "meta",
+  "meta platforms": "meta",
+  meta: "meta",
+  bofa: "bank of america",
+  "bank of america merrill lynch": "bank of america",
+  "bank of america": "bank of america",
+  citi: "citi",
+  citigroup: "citi",
+  citibank: "citi",
+  "morgan stanley": "morgan stanley"
+};
+function normalizeCompany(raw) {
+  if (!raw) return "";
+  let s = stripDiacritics(raw).toLowerCase().replace(/\([^)]*\)/g, " ");
+  s = s.replace(/\band\b/g, "&").replace(/[^a-z0-9&\s]/g, " ").replace(/\s*&\s*/g, " & ");
+  const tokens2 = s.split(/\s+/).filter(Boolean);
+  while (tokens2.length > 1 && LEGAL_SUFFIXES.has(tokens2[tokens2.length - 1])) tokens2.pop();
+  if (tokens2[0] === "the" && tokens2.length > 1) tokens2.shift();
+  const legal = tokens2.join(" ");
+  if (ORG_ALIASES[legal]) return ORG_ALIASES[legal];
+  while (tokens2.length > 1 && (GENERIC_ORG_TAIL.has(tokens2[tokens2.length - 1]) || LEGAL_SUFFIXES.has(tokens2[tokens2.length - 1])))
+    tokens2.pop();
+  const core = tokens2.join(" ");
+  return ORG_ALIASES[core] ?? (core.replace(/[\s&]/g, "") ? core : legal);
+}
+
+// supabase/functions/orbit-api/auth.ts
+var STATE_TTL_MS = 10 * 6e4;
+function safeRedirect(raw, appUrl) {
+  if (!raw) return appUrl;
+  let u2;
+  try {
+    u2 = new URL(raw);
+  } catch {
+    return void 0;
+  }
+  const app = new URL(appUrl);
+  const local = u2.protocol === "http:" && (u2.hostname === "localhost" || u2.hostname === "127.0.0.1");
+  if (u2.origin !== app.origin && !local) return void 0;
+  if (u2.username || u2.password) return void 0;
+  return `${u2.origin}${u2.pathname}`.replace(/\/+$/, "");
+}
+function done(base, fragment) {
+  return redirect(`${base}/auth/done#${new URLSearchParams(fragment)}`);
+}
+async function googleStart(ctx) {
+  const target = safeRedirect(ctx.url.searchParams.get("redirect"), ctx.env.appUrl);
+  if (!target) return done(ctx.env.appUrl, { error: "bad_redirect" });
+  const state = randomToken(32);
+  const { verifier, challenge } = await pkcePair();
+  const now = ctx.now();
+  await ctx.db.sql`
+    insert into orbit.oauth_states (state, code_verifier, redirect_to, scopes, created_at, expires_at)
+    values (${state}, ${verifier}, ${target}, ${PHASE1_SCOPES}::text[], ${now}::timestamptz,
+            ${new Date(now.getTime() + STATE_TTL_MS)}::timestamptz)`;
+  return redirect(authUrl(ctx.google, { state, challenge, scopes: PHASE1_SCOPES }));
+}
+async function googleCallback(ctx) {
+  const q = ctx.url.searchParams;
+  const state = q.get("state");
+  if (!state) return done(ctx.env.appUrl, { error: "invalid_state" });
+  const [st] = await ctx.db.sql`
+    delete from orbit.oauth_states where state = ${state} returning code_verifier, redirect_to, expires_at`;
+  if (!st || new Date(st.expires_at).getTime() < ctx.now().getTime())
+    return done(ctx.env.appUrl, { error: "invalid_state" });
+  const back = st.redirect_to;
+  const googleError = q.get("error");
+  if (googleError)
+    return done(back, { error: /^[a-z_]{1,40}$/.test(googleError) ? googleError : "google_error" });
+  const code = q.get("code");
+  if (!code) return done(back, { error: "no_code" });
+  try {
+    const tokens2 = await exchangeCode(ctx.google, code, st.code_verifier);
+    if (!tokens2.id_token) return done(back, { error: "no_id_token" });
+    const claims = await verifyIdToken(ctx.google, tokens2.id_token);
+    if (!claims.emailVerified) return done(back, { error: "email_unverified" });
+    const scopes = (tokens2.scope ?? "").split(/\s+/).filter(Boolean);
+    const userId = await ctx.db.begin(
+      (tx) => upsertGoogleUser(tx, { ...claims, scopes, refreshToken: tokens2.refresh_token })
+    );
+    if (!userId) return done(back, { error: "account_deleted" });
+    if (scopes.some((s) => s.endsWith("gmail.readonly")))
+      await sqlQueue(ctx.db).enqueue({
+        kind: "sync.gmail.backfill",
+        userId,
+        payload: { phase: "recent" },
+        dedupeKey: `gmail-backfill:${userId}:recent`
+      });
+    const loginCode = await createLoginCode(ctx.db, userId, ctx.now());
+    return done(back, { code: loginCode });
+  } catch {
+    return done(back, { error: "sign_in_failed" });
+  }
+}
+async function upsertGoogleUser(db2, g) {
+  const name = parseName(g.name ?? [g.givenName, g.familyName].filter(Boolean).join(" "));
+  const first = g.givenName ?? (name.first || null);
+  const last = g.familyName ?? (name.last || null);
+  const full = g.name ?? (name.full || null);
+  const [user] = await db2.sql`
+    insert into orbit.users (google_sub, email, full_name, first_name, last_name, avatar_url, last_seen_at)
+    values (${g.sub}, ${g.email}, ${full}, ${first}, ${last}, ${g.picture ?? null}, now())
+    on conflict (google_sub) do update set
+      email = excluded.email,
+      full_name = coalesce(orbit.users.full_name, excluded.full_name),
+      first_name = coalesce(orbit.users.first_name, excluded.first_name),
+      last_name = coalesce(orbit.users.last_name, excluded.last_name),
+      avatar_url = coalesce(excluded.avatar_url, orbit.users.avatar_url),
+      last_seen_at = now()
+    returning id, deleted_at`;
+  if (!user || user.deleted_at) return null;
+  const userId = user.id;
+  const display = full ?? g.email;
+  await db2.sql`
+    insert into orbit.people (user_id, is_self, display_name, first_name, last_name, name_norm, primary_email,
+                              photo_url, sources, first_seen_at)
+    values (${userId}::uuid, true, ${display}, ${first}, ${last}, ${name.normalized || normalizeEmail(g.email)},
+            ${g.email}, ${g.picture ?? null}, ${["google"]}::text[], now())
+    on conflict (user_id) where is_self do nothing`;
+  const [self] = await db2.sql`
+    select id from orbit.people where user_id = ${userId}::uuid and is_self`;
+  await db2.sql`
+    insert into orbit.person_identities (user_id, person_id, kind, value_norm, value_raw, source)
+    values (${userId}::uuid, ${self.id}::uuid, 'email', ${normalizeEmail(g.email)}, ${g.email}, 'google')
+    on conflict (user_id, kind, value_norm) do nothing`;
+  const secretId = g.refreshToken ? await sqlVault(db2).put(googleRefreshName(userId), g.refreshToken) : null;
+  await db2.sql`
+    insert into orbit.integration_accounts (user_id, provider, email, scopes, status, token_secret_id, last_error)
+    values (${userId}::uuid, 'google', ${g.email}, ${g.scopes}::text[],
+            ${secretId ? "active" : "needs_reauth"}, ${secretId}::uuid, null)
+    on conflict (user_id, provider) do update set
+      email = excluded.email,
+      scopes = excluded.scopes,
+      token_secret_id = coalesce(excluded.token_secret_id, orbit.integration_accounts.token_secret_id),
+      status = case when coalesce(excluded.token_secret_id, orbit.integration_accounts.token_secret_id) is null
+                    then 'needs_reauth' else 'active' end,
+      last_error = null`;
+  await db2.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+    values (${userId}::uuid, 'user', 'auth.sign_in', 'users', ${userId}, ${{ scopes: g.scopes.length }}::jsonb)`;
+  return userId;
+}
+async function loadUser(db2, userId) {
+  const [u2] = await db2.sql`
+    select id, email, full_name, first_name, last_name, avatar_url, school, grad_year, timezone, autonomy_level,
+           settings, onboarding, created_at
+      from orbit.users where id = ${userId}::uuid and deleted_at is null`;
+  if (!u2) return null;
+  return {
+    id: u2.id,
+    email: u2.email,
+    fullName: u2.full_name ?? null,
+    firstName: u2.first_name ?? null,
+    lastName: u2.last_name ?? null,
+    avatarUrl: u2.avatar_url ?? null,
+    school: u2.school ?? null,
+    gradYear: u2.grad_year ?? null,
+    timezone: u2.timezone,
+    autonomyLevel: Number(u2.autonomy_level),
+    settings: u2.settings ?? {},
+    onboarding: u2.onboarding ?? {},
+    createdAt: new Date(u2.created_at).toISOString()
+  };
+}
+async function session(ctx) {
+  const body2 = await readJson(ctx.req);
+  if (typeof body2.code !== "string") throw badRequest("code is required");
+  const userId = await redeemLoginCode(ctx.db, body2.code, ctx.now());
+  if (!userId) throw unauthorized("that sign-in link has expired; sign in again");
+  const user = await loadUser(ctx.db, userId);
+  if (!user) throw unauthorized("sign in again");
+  const t = await createSession(ctx.db, ctx.session, userId, ctx.req.headers.get("user-agent"));
+  return json(200, {
+    accessToken: t.accessToken,
+    refreshToken: t.refreshToken,
+    expiresAt: t.expiresAt,
+    user
+  });
+}
+async function refresh(ctx) {
+  const body2 = await readJson(ctx.req);
+  if (typeof body2.refreshToken !== "string") throw badRequest("refreshToken is required");
+  const t = await refreshSession(ctx.db, ctx.session, body2.refreshToken);
+  if (!t) throw unauthorized("the session has ended; sign in again");
+  return json(200, { accessToken: t.accessToken, refreshToken: t.refreshToken, expiresAt: t.expiresAt });
+}
+async function logout(ctx) {
+  const body2 = await readJson(ctx.req, { optional: true });
+  const now = ctx.now();
+  await ctx.db.sql`
+    update orbit.sessions set revoked_at = ${now}::timestamptz
+     where id = ${ctx.sessionId}::uuid and user_id = ${ctx.userId}::uuid and revoked_at is null`;
+  if (typeof body2.refreshToken === "string") await revokeSession(ctx.db, body2.refreshToken, now);
+  return json(200, { ok: true });
+}
+async function me(ctx) {
+  const user = await loadUser(ctx.db, ctx.userId);
+  if (!user) throw unauthorized();
+  return json(200, { user });
+}
+
+// packages/core/src/drafts/sector.ts
+var FINANCE_TITLE = /\b(investment bank|banking analyst|ib analyst|analyst, (m&a|tmt|healthcare|fig|leveraged)|associate, (m&a|tmt|healthcare|fig)|vice president|managing director|\bvp\b|\bmd\b|private equity|hedge fund|equity research|capital markets|sales and trading|trading|asset management|wealth management|portfolio manager|\bm&a\b|leveraged finance|\bfig\b|\btmt\b|corporate finance|venture capital|investor)\b/i;
+var FINANCE_ORG = /\b(goldman|morgan stanley|jpmorgan|j\.p\. morgan|bank of america|bofa|citi|barclays|ubs|credit suisse|deutsche bank|evercore|lazard|moelis|pjt|centerview|jefferies|rbc|wells fargo|houlihan|guggenheim|perella|rothschild|blackstone|kkr|apollo|carlyle|tpg|bain capital|jane street|citadel|two sigma|de shaw|point72|millennium|bridgewater|sequoia|a16z|andreessen|accel|benchmark|jump trading|hudson river trading|optiver|susquehanna|drw|imc trading|tower research|akuna|lightspeed venture|founders fund|greylock|kleiner|index ventures|general catalyst|insight partners|tiger global|coatue)\b/i;
+var FINANCE_ORG_WORD = /\b(trading|securities|capital|ventures|venture partners|investments|asset management)\b/i;
+var CONSULTING_TITLE = /\b(consultant|engagement manager|business analyst|associate consultant|case team|principal|partner|senior associate)\b/i;
+var CONSULTING_ORG = /\b(mckinsey|bain|bcg|boston consulting|deloitte|accenture|kearney|oliver wyman|l\.?e\.?k\.?|roland berger|strategy&|pwc|ey|kpmg|ey-parthenon|alixpartners|fti)\b/i;
+var TECH_TITLE = /\b(software|engineer|engineering|developer|\bswe\b|\bsde\b|product manager|product lead|\bpm\b|designer|\bux\b|data scientist|machine learning|\bml\b|research scientist|technical program|devops|infrastructure|platform|frontend|backend|full[- ]?stack|security engineer|solutions engineer|founder|cto)\b/i;
+var TECH_ORG = /\b(google|meta|apple|amazon|microsoft|netflix|stripe|figma|notion|anthropic|openai|airbnb|uber|lyft|doordash|snowflake|databricks|datadog|ramp|brex|linear|vercel|coinbase|robinhood|plaid|square|block|shopify|salesforce|adobe|nvidia|palantir|scale ai|rippling|ramp)\b/i;
+function sectorOf(person2, userFunctions = []) {
+  const t = `${person2.title ?? ""}`;
+  const o = `${person2.org ?? ""} ${person2.industry ?? ""}`;
+  if (FINANCE_ORG.test(o) || FINANCE_ORG_WORD.test(person2.org ?? "") || /\b(fintech|investment bank|banking|private equity|trading|asset management|finance|financial)\b/i.test(
+    person2.industry ?? ""
+  )) {
+    const bankingTitle = /\b(analyst|vice president|managing director)\b/i.test(t) || /\bassociate\b(?!\s+(product|software|design|data|engineer|program))/i.test(t);
+    if (TECH_TITLE.test(t) && !bankingTitle) return "tech";
+    return "finance";
+  }
+  if (CONSULTING_ORG.test(o) || /\bconsulting\b/i.test(person2.industry ?? "")) return "consulting";
+  if (FINANCE_TITLE.test(t) && !TECH_TITLE.test(t) && !TECH_ORG.test(o)) return "finance";
+  if (CONSULTING_TITLE.test(t) && !TECH_TITLE.test(t)) return "consulting";
+  if (TECH_TITLE.test(t) || TECH_ORG.test(o) || /\b(software|technology|tech|ai|saas|internet)\b/i.test(person2.industry ?? ""))
+    return "tech";
+  const f2 = userFunctions[0];
+  if (f2 === "ib" || f2 === "finance" || f2 === "vc" || f2 === "quant") return "finance";
+  if (f2 === "consulting") return "consulting";
+  if (f2 === "swe" || f2 === "pm" || f2 === "design" || f2 === "data") return "tech";
+  return "general";
+}
+function maxBumpsFor(sector, settingsMax) {
+  const cap = sector === "finance" || sector === "consulting" ? 2 : 1;
+  return Math.max(0, Math.min(settingsMax, cap));
+}
+
+// packages/core/src/util/ids.ts
+function todayKey(d, tz) {
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    }).format(d);
+    return parts;
+  } catch {
+    return d.toISOString().slice(0, 10);
+  }
+}
+
+// packages/core/src/suggestions/calendar.ts
+var DAY = 864e5;
+var pad = (n) => String(n).padStart(2, "0");
+var keyOf = (y, m, d) => `${y}-${pad(m)}-${pad(d)}`;
+var dayOfKey = (key) => Math.round(Date.parse(`${key}T00:00:00Z`) / DAY);
+var keyOfDay = (n) => new Date(n * DAY).toISOString().slice(0, 10);
+function nthWeekday(year, month, weekday, n) {
+  if (n > 0) {
+    const first = new Date(Date.UTC(year, month - 1, 1)).getUTCDay();
+    return 1 + (weekday - first + 7) % 7 + (n - 1) * 7;
+  }
+  const lastDate = new Date(Date.UTC(year, month, 0));
+  const last = lastDate.getUTCDay();
+  return lastDate.getUTCDate() - (last - weekday + 7) % 7;
+}
+function observed(year, month, day) {
+  const dow = new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+  const shift = dow === 6 ? -1 : dow === 0 ? 1 : 0;
+  return keyOfDay(dayOfKey(keyOf(year, month, day)) + shift);
+}
+var holidayCache = /* @__PURE__ */ new Map();
+function usHolidays(year) {
+  const hit = holidayCache.get(year);
+  if (hit) return hit;
+  const thanksgiving = nthWeekday(year, 11, 4, 4);
+  const set = /* @__PURE__ */ new Set([
+    observed(year, 1, 1),
+    keyOf(year, 1, nthWeekday(year, 1, 1, 3)),
+    // Martin Luther King Jr. Day
+    keyOf(year, 2, nthWeekday(year, 2, 1, 3)),
+    // Washington's Birthday
+    keyOf(year, 5, nthWeekday(year, 5, 1, -1)),
+    // Memorial Day
+    observed(year, 6, 19),
+    observed(year, 7, 4),
+    keyOf(year, 9, nthWeekday(year, 9, 1, 1)),
+    // Labor Day
+    keyOf(year, 10, nthWeekday(year, 10, 1, 2)),
+    // Columbus Day / Indigenous Peoples' Day
+    observed(year, 11, 11),
+    keyOf(year, 11, thanksgiving),
+    keyOf(year, 11, thanksgiving + 1),
+    observed(year, 12, 25)
+  ]);
+  holidayCache.set(year, set);
+  return set;
+}
+function inWinterFreeze(key) {
+  const m = Number(key.slice(5, 7));
+  const d = Number(key.slice(8, 10));
+  return m === 12 && d >= 20 || m === 1 && d <= 2;
+}
+function isBusinessDayKey(key) {
+  const dow = (/* @__PURE__ */ new Date(`${key}T00:00:00Z`)).getUTCDay();
+  if (dow === 0 || dow === 6) return false;
+  if (inWinterFreeze(key)) return false;
+  return !usHolidays(Number(key.slice(0, 4))).has(key);
+}
+function businessDaysBetween(a, b, tz) {
+  const from = dayOfKey(todayKey(a, tz));
+  const to = dayOfKey(todayKey(b, tz));
+  let n = 0;
+  for (let k = from + 1; k <= to; k++) if (isBusinessDayKey(keyOfDay(k))) n++;
+  return n;
+}
+function addBusinessDays(d, n, tz) {
+  const from = dayOfKey(todayKey(d, tz));
+  let k = from;
+  let left = n;
+  while (left > 0) {
+    k++;
+    if (isBusinessDayKey(keyOfDay(k))) left--;
+  }
+  return new Date(d.getTime() + (k - from) * DAY);
+}
+var MONTH_NAME = "(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\\b\\.?";
+var NAMED_DATE = new RegExp(`\\b${MONTH_NAME} (\\d{1,2})(?:st|nd|rd|th)?\\b`);
+var NAMED_DATE_REV = new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)? (?:of )?${MONTH_NAME}`);
+var MONTH_EDGE = new RegExp(
+  `\\b(?:(end|start|beginning) of (?:(the|this|next) month\\b|${MONTH_NAME})|next month\\b)`
+);
+
+// packages/core/src/pipeline/transitions.ts
+var ACTIVE_STAGES = [
+  "identified",
+  "warming",
+  "outreach_sent",
+  "replied",
+  "scheduling",
+  "scheduled",
+  "completed",
+  "followed_up",
+  "nurturing"
+];
+var CLOSED_STAGES = ["declined", "no_response", "archived"];
+var STAGE_ORDER = [...ACTIVE_STAGES, ...CLOSED_STAGES];
+var ALLOWED = {
+  identified: ["warming", "outreach_sent", "replied", "scheduled", "archived", "declined"],
+  warming: ["outreach_sent", "replied", "identified", "archived", "declined"],
+  outreach_sent: ["replied", "scheduling", "scheduled", "declined", "no_response", "archived", "completed"],
+  replied: ["scheduling", "scheduled", "declined", "completed", "archived", "nurturing"],
+  scheduling: ["scheduled", "declined", "completed", "archived", "replied"],
+  scheduled: ["completed", "scheduling", "declined", "archived"],
+  completed: ["followed_up", "nurturing", "archived", "scheduled"],
+  followed_up: ["nurturing", "archived", "scheduled", "scheduling"],
+  nurturing: ["outreach_sent", "scheduling", "scheduled", "declined", "archived"],
+  declined: ["identified", "archived", "outreach_sent"],
+  no_response: ["identified", "outreach_sent", "replied", "archived"],
+  archived: ["identified"]
+};
+function canTransition(from, to, actor = "system") {
+  if (from === to) return false;
+  if (actor === "user") return true;
+  return ALLOWED[from].includes(to);
+}
+function decideTransition(from, trig) {
+  const d = (to, confidence, reason) => canTransition(from, to) ? { to, confidence, reason } : void 0;
+  switch (trig.type) {
+    case "outbound_sent":
+      if (trig.kind === "outreach" && (from === "identified" || from === "warming" || from === "nurturing" || from === "no_response"))
+        return d("outreach_sent", 1, "outbound:outreach");
+      if (trig.kind === "schedule" && ["outreach_sent", "replied"].includes(from))
+        return d("scheduling", 1, "outbound:schedule");
+      if (trig.kind === "thank_you" && from === "completed") return d("followed_up", 1, "outbound:thank_you");
+      return void 0;
+    case "inbound_signal": {
+      const s = trig.signal;
+      if (s === "reply_decline")
+        return [
+          "outreach_sent",
+          "replied",
+          "scheduling",
+          "scheduled",
+          "nurturing",
+          "warming",
+          "identified"
+        ].includes(from) ? {
+          to: "declined",
+          confidence: Math.min(trig.confidence, 0.79),
+          reason: "inbound_signal:reply_decline"
+        } : void 0;
+      if ((s === "scheduling_proposal" || s === "scheduling_confirmation") && ["identified", "warming", "no_response"].includes(from))
+        return d("replied", trig.confidence, `inbound_signal:${s}`);
+      if (s === "scheduling_proposal")
+        return d("scheduling", trig.confidence, "inbound_signal:scheduling_proposal");
+      if (s === "scheduling_confirmation")
+        return d("scheduling", trig.confidence, "inbound_signal:scheduling_confirmation");
+      if (s === "reschedule" && from === "scheduled")
+        return d("scheduling", trig.confidence, "inbound_signal:reschedule");
+      if ([
+        "reply_positive",
+        "reply_neutral",
+        "question",
+        "referral_offer",
+        "intro_offer",
+        "thank_you"
+      ].includes(s) && ["identified", "warming", "outreach_sent", "no_response"].includes(from))
+        return d("replied", trig.confidence, `inbound_signal:${s}`);
+      return void 0;
+    }
+    case "event_scheduled":
+      return [
+        "identified",
+        "warming",
+        "outreach_sent",
+        "replied",
+        "scheduling",
+        "nurturing",
+        "followed_up"
+      ].includes(from) ? d("scheduled", trig.confidence, "calendar:event_scheduled") : void 0;
+    case "event_ended":
+      return from === "scheduled" ? d("completed", trig.confidence, "calendar:event_ended") : void 0;
+    case "event_cancelled":
+      return from === "scheduled" ? d("scheduling", 1, "calendar:event_cancelled") : void 0;
+    case "note_ingested":
+      return ["outreach_sent", "replied", "scheduling", "scheduled"].includes(from) ? d("completed", trig.confidence, "note:ingested") : void 0;
+    case "timer_followed_up_14d":
+      return from === "followed_up" ? d("nurturing", 1, "timer:followed_up_14d") : void 0;
+    case "timer_completed_14d":
+      return from === "completed" ? d("nurturing", 1, "timer:completed_14d") : void 0;
+    case "timer_no_response": {
+      const exhausted = trig.bumps >= trig.maxBumps && (trig.businessDaysSilent !== void 0 ? trig.businessDaysSilent >= NO_RESPONSE_AFTER_BUMPS_BUSINESS_DAYS : trig.daysSilent >= NO_RESPONSE_AFTER_BUMPS_DAYS);
+      const stale = trig.businessDaysSilent !== void 0 ? trig.businessDaysSilent >= NO_RESPONSE_SILENT_BUSINESS_DAYS : trig.daysSilent >= NO_RESPONSE_SILENT_DAYS;
+      return from === "outreach_sent" && (exhausted || stale) ? d("no_response", 1, exhausted ? "timer:no_response" : "timer:no_response_silent") : void 0;
+    }
+    case "warmup_ready":
+      return void 0;
+  }
+}
+var NO_RESPONSE_AFTER_BUMPS_DAYS = 14;
+var NO_RESPONSE_AFTER_BUMPS_BUSINESS_DAYS = 10;
+var NO_RESPONSE_SILENT_DAYS = 21;
+var NO_RESPONSE_SILENT_BUSINESS_DAYS = 15;
+
+// packages/core/src/suggestions/rules.ts
+var DAY2 = 864e5;
+var THANK_YOU_WINDOW_DAYS = 3;
+var BUMP_AFTER_BUSINESS_DAYS = { gmail: [5, 8], linkedin: [10, 12] };
+function bumpDue(chat, person2, inp) {
+  if (chat.stage !== "outreach_sent" || !chat.lastOutboundAt) return void 0;
+  const since = new Date(chat.lastOutboundAt);
+  if (chat.lastInboundAt && new Date(chat.lastInboundAt) >= since) return void 0;
+  const maxBumps = maxBumpsFor(
+    sectorOf({ title: person2.currentTitle, org: person2.currentOrganizationRaw }),
+    inp.settings.maxBumps
+  );
+  if (chat.bumpCount >= maxBumps) return void 0;
+  const steps = BUMP_AFTER_BUSINESS_DAYS[chat.outreachChannel === "linkedin" ? "linkedin" : "gmail"];
+  const threshold = steps[Math.min(chat.bumpCount, steps.length - 1)];
+  const bdays = businessDaysBetween(since, inp.now, inp.timezone);
+  if (bdays < threshold) return void 0;
+  const holds = [
+    chat.bumpNotBefore ? new Date(chat.bumpNotBefore) : void 0,
+    chat.outOfOfficeUntil ? addBusinessDays(/* @__PURE__ */ new Date(`${chat.outOfOfficeUntil}T12:00:00Z`), 2, inp.timezone) : void 0
+  ].filter((d) => !!d && !Number.isNaN(d.getTime()));
+  const notBefore = holds.length ? new Date(Math.max(...holds.map((d) => d.getTime()))) : void 0;
+  if (notBefore && inp.now < notBefore) return void 0;
+  const backFromOoo = !!notBefore && addBusinessDays(since, threshold, inp.timezone).getTime() < notBefore.getTime();
+  return { bdays, threshold, backFromOoo };
+}
+function thankYouDue(chat, now) {
+  if (!chat.completedAt) return false;
+  const completed = new Date(chat.completedAt).getTime();
+  if (now.getTime() - completed >= THANK_YOU_WINDOW_DAYS * DAY2) return false;
+  if (chat.lastOutboundAt && new Date(chat.lastOutboundAt).getTime() > completed) return false;
+  return true;
+}
+var HARD_URGENT = ["schedule_confirm", "thank_you", "prep_brief", "confirm_stage"];
+var QUIET_DAY_KINDS = [
+  ...HARD_URGENT,
+  "schedule_propose",
+  "action_item_reminder",
+  "warm_up_engage"
+];
+
+// packages/core/src/pipeline/cadence.ts
+var DAY3 = 864e5;
+var QUIET_DAYS = 7;
+var WAITING_STAGES = ["outreach_sent", "replied", "scheduling"];
+function wentQuiet(chat, now = /* @__PURE__ */ new Date()) {
+  if (!WAITING_STAGES.includes(chat.stage) || !chat.lastOutboundAt) return false;
+  if (chat.lastInboundAt && chat.lastInboundAt >= chat.lastOutboundAt) return false;
+  if (chat.stage !== "outreach_sent" && chat.stageEnteredAt > chat.lastOutboundAt) return false;
+  return now.getTime() - new Date(chat.lastOutboundAt).getTime() >= QUIET_DAYS * DAY3;
+}
+var SECOND_BUMP_GOALS = /* @__PURE__ */ new Set(["sales", "fundraising", "hiring"]);
+var SECOND_BUMP_AFTER_BUSINESS_DAYS = 7;
+var MAX_UNANSWERED = 3;
+var NURTURE_DAYS = { close: 60, strong: 90, goal: 30 };
+var NURTURE_PER_WEEK = 3;
+var COLD_SCORE = 40;
+function unansweredCount(personId, messages) {
+  const mine = messages.filter((m) => m.personId === personId).sort((a, b) => a.at.localeCompare(b.at));
+  let n = 0;
+  for (const m of mine) n = m.direction === "in" ? 0 : n + 1;
+  return n;
+}
+function cancelIfReplied(draft2, messages) {
+  const newer = messages.filter((m) => m.personId === draft2.personId && m.direction === "in" && m.at > draft2.createdAt).sort((a, b) => b.at.localeCompare(a.at))[0];
+  return newer ? { cancel: true, reason: "replied", at: newer.at } : { cancel: false };
+}
+function isSendDay(d, tz) {
+  return isBusinessDayKey(todayKey(d, tz));
+}
+function nextSendDay(d, tz) {
+  if (isSendDay(d, tz)) return d;
+  const next = addBusinessDays(d, 1, tz);
+  const key = todayKey(next, tz);
+  const offset = zoneOffsetMs(next, tz);
+  return new Date(Date.parse(`${key}T09:00:00Z`) - offset);
+}
+function zoneOffsetMs(d, tz) {
+  if (!tz) return 0;
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  }).formatToParts(d);
+  const get2 = (t) => Number(parts.find((p) => p.type === t)?.value ?? 0);
+  const asUtc = Date.UTC(
+    get2("year"),
+    get2("month") - 1,
+    get2("day"),
+    get2("hour"),
+    get2("minute"),
+    get2("second")
+  );
+  return asUtc - Math.floor(d.getTime() / 1e3) * 1e3;
+}
+var ACTIVE_GOAL = (g) => g.status === "active" && !g.deletedAt;
+function goalOf(chat, goals) {
+  const active = goals.filter(ACTIVE_GOAL);
+  return (chat.goalId ? active.find((g) => g.id === chat.goalId) : void 0) ?? active.find((g) => g.targets.people.includes(chat.personId));
+}
+function sentCount(chat) {
+  return (chat.firstOutreachAt ? 1 : 0) + chat.bumpCount;
+}
+function cadenceActions(inp) {
+  const { now, settings } = inp;
+  const tz = settings.timezone;
+  if (settings.quietUntil && now.getTime() < new Date(settings.quietUntil).getTime()) return [];
+  const out = [];
+  const due2 = (personId) => {
+    const ptz = (personId ? inp.people.get(personId)?.timeZone : void 0) ?? tz;
+    return nextSendDay(now, ptz).toISOString();
+  };
+  const blocked = (personId) => {
+    const p = inp.people.get(personId);
+    return !!p?.person.doNotContact || !!p?.person.hiddenAt;
+  };
+  const room = (personId) => unansweredCount(personId, inp.messages) < MAX_UNANSWERED;
+  for (const chat of inp.chats) {
+    if (chat.archivedAt) continue;
+    const pc = inp.people.get(chat.personId);
+    const person2 = pc?.person ?? { id: chat.personId, firstName: "them" };
+    const goal = goalOf(chat, inp.goals);
+    const base = { chatId: chat.id, personId: chat.personId, ...goal ? { goalId: goal.id } : {} };
+    if (!blocked(chat.personId) && room(chat.personId) && sentCount(chat) < MAX_UNANSWERED) {
+      const v1 = bumpDue(chat, person2, {
+        now,
+        settings: { ...settings, quietDays: [] },
+        timezone: tz
+      });
+      if (v1) {
+        out.push({
+          kind: "bump",
+          ...base,
+          bumpNumber: chat.bumpCount + 1,
+          draftKind: "bump",
+          reason: `No reply in ${v1.bdays} business days${v1.backFromOoo ? ", and they are back from time off" : ""}`,
+          dueAt: due2(chat.personId)
+        });
+      } else if (goal && SECOND_BUMP_GOALS.has(goal.kind) && chat.stage === "outreach_sent" && chat.bumpCount === 1 && (pc?.score ?? 0) < COLD_SCORE && chat.lastOutboundAt && !(chat.lastInboundAt && chat.lastInboundAt >= chat.lastOutboundAt) && maxBumpsFor(
+        sectorOf({ title: person2.currentTitle, org: person2.currentOrganizationRaw }),
+        settings.maxBumps
+      ) < 2) {
+        const bdays = businessDaysBetween(new Date(chat.lastOutboundAt), now, tz);
+        if (bdays >= SECOND_BUMP_AFTER_BUSINESS_DAYS)
+          out.push({
+            kind: "bump",
+            ...base,
+            bumpNumber: 2,
+            draftKind: "bump",
+            reason: `Second and last bump for ${goal.kind}: ${bdays} business days since the first`,
+            dueAt: due2(chat.personId)
+          });
+      }
+    }
+    if (wentQuiet(chat, now))
+      out.push({
+        kind: "went_quiet",
+        ...base,
+        reason: `No answer for ${Math.floor((now.getTime() - new Date(chat.lastOutboundAt).getTime()) / DAY3)} days`,
+        dueAt: now.toISOString()
+      });
+    if ((chat.stage === "completed" || chat.stage === "scheduled") && thankYouDue(chat, now) && !blocked(chat.personId))
+      out.push({
+        kind: "thank_you",
+        ...base,
+        draftKind: "thank_you",
+        reason: "You met in the last three days and have not thanked them yet",
+        dueAt: due2(chat.personId)
+      });
+    const timer = stageTimer(chat, person2, settings, now);
+    if (timer)
+      out.push({
+        kind: "stage_timer",
+        ...base,
+        toStage: timer.to,
+        reason: timer.reason,
+        dueAt: now.toISOString()
+      });
+  }
+  const weekAgo = now.getTime() - 7 * DAY3;
+  const used = (inp.recentNurtureAt ?? []).filter((t) => new Date(t).getTime() > weekAgo).length;
+  const left = Math.max(0, NURTURE_PER_WEEK - used);
+  if (left > 0) {
+    const goalPeople = /* @__PURE__ */ new Map();
+    for (const g of inp.goals.filter(ACTIVE_GOAL)) for (const id of g.targets.people) goalPeople.set(id, g);
+    for (const c of inp.chats) {
+      const g = goalOf(c, inp.goals);
+      if (g && !goalPeople.has(c.personId)) goalPeople.set(c.personId, g);
+    }
+    const busy = new Set(
+      inp.chats.filter((c) => !c.archivedAt && WAITING_STAGES.includes(c.stage)).map((c) => c.personId)
+    );
+    const pending = new Set(
+      inp.drafts.filter((d) => ["draft", "approved", "queued", "scheduled"].includes(d.status)).map((d) => d.personId)
+    );
+    const candidates = [];
+    for (const [id, p] of inp.people) {
+      if (blocked(id) || busy.has(id) || pending.has(id) || !p.nurtureReason || !room(id)) continue;
+      const goal = goalPeople.get(id);
+      const days = goal ? NURTURE_DAYS.goal : p.score >= 80 ? NURTURE_DAYS.close : p.score >= 60 ? NURTURE_DAYS.strong : 0;
+      if (!days) continue;
+      const last = p.lastContactAt ? new Date(p.lastContactAt).getTime() : Number.NEGATIVE_INFINITY;
+      if (now.getTime() - last < days * DAY3) continue;
+      candidates.push({
+        kind: "nurture",
+        personId: id,
+        ...goal ? { goalId: goal.id } : {},
+        draftKind: p.score >= 30 && now.getTime() - last >= 180 * DAY3 ? "reengage" : "nurture",
+        reason: p.nurtureReason,
+        dueAt: due2(id),
+        score: p.score + (goal ? 100 : 0)
+      });
+    }
+    candidates.sort((a, b) => b.score - a.score || a.personId.localeCompare(b.personId));
+    for (const { score: _s, ...c } of candidates.slice(0, left)) out.push(c);
+  }
+  for (const d of inp.drafts) {
+    if (!["approved", "scheduled", "queued"].includes(d.status) || !d.sendAt) continue;
+    if (new Date(d.sendAt).getTime() > now.getTime() || blocked(d.personId)) continue;
+    if (cancelIfReplied(d, inp.messages).cancel || !room(d.personId)) continue;
+    const ptz = inp.people.get(d.personId)?.timeZone ?? tz;
+    if (!isSendDay(now, ptz)) continue;
+    out.push({
+      kind: "send_due",
+      draftId: d.id,
+      personId: d.personId,
+      ...d.chatId ? { chatId: d.chatId } : {},
+      reason: `Scheduled for ${d.sendAt}`,
+      dueAt: d.sendAt
+    });
+  }
+  return out;
+}
+function stageTimer(chat, person2, settings, now) {
+  if (!ACTIVE_STAGES.includes(chat.stage)) return void 0;
+  const entered = new Date(chat.stageEnteredAt).getTime();
+  if (chat.stage === "followed_up" && now.getTime() - entered >= 14 * DAY3)
+    return decideTransition("followed_up", { type: "timer_followed_up_14d" });
+  if (chat.stage === "completed" && now.getTime() - entered >= 14 * DAY3)
+    return decideTransition("completed", { type: "timer_completed_14d" });
+  if (chat.stage !== "outreach_sent" || !chat.lastOutboundAt) return void 0;
+  if (chat.lastInboundAt && chat.lastInboundAt > chat.lastOutboundAt) return void 0;
+  const fromIso = chat.bumpNotBefore && chat.bumpNotBefore > chat.lastOutboundAt ? chat.bumpNotBefore : chat.lastOutboundAt;
+  const from = new Date(fromIso);
+  if (from.getTime() > now.getTime()) return void 0;
+  const maxBumps = maxBumpsFor(
+    sectorOf({ title: person2.currentTitle, org: person2.currentOrganizationRaw }),
+    settings.maxBumps
+  );
+  return decideTransition("outreach_sent", {
+    type: "timer_no_response",
+    bumps: chat.bumpCount,
+    maxBumps,
+    daysSilent: (now.getTime() - from.getTime()) / DAY3,
+    businessDaysSilent: businessDaysBetween(from, now, settings.timezone)
+  });
+}
+
+// packages/core/src/email/when.ts
+var ZONE_ABBR = {
+  ET: "America/New_York",
+  EST: "America/New_York",
+  EDT: "America/New_York",
+  CT: "America/Chicago",
+  CST: "America/Chicago",
+  CDT: "America/Chicago",
+  MT: "America/Denver",
+  MST: "America/Denver",
+  MDT: "America/Denver",
+  PT: "America/Los_Angeles",
+  PST: "America/Los_Angeles",
+  PDT: "America/Los_Angeles",
+  AKST: "America/Anchorage",
+  AKDT: "America/Anchorage",
+  HST: "Pacific/Honolulu",
+  GMT: "UTC",
+  UTC: "UTC",
+  BST: "Europe/London",
+  CET: "Europe/Paris",
+  CEST: "Europe/Paris",
+  IST: "Asia/Kolkata",
+  SGT: "Asia/Singapore",
+  JST: "Asia/Tokyo"
+};
+var ZONE_NAME = {
+  eastern: "America/New_York",
+  central: "America/Chicago",
+  mountain: "America/Denver",
+  pacific: "America/Los_Angeles"
+};
+var CITY_ZONE = {
+  "new york": "America/New_York",
+  nyc: "America/New_York",
+  boston: "America/New_York",
+  "washington dc": "America/New_York",
+  dc: "America/New_York",
+  philadelphia: "America/New_York",
+  atlanta: "America/New_York",
+  miami: "America/New_York",
+  toronto: "America/Toronto",
+  chicago: "America/Chicago",
+  austin: "America/Chicago",
+  dallas: "America/Chicago",
+  houston: "America/Chicago",
+  denver: "America/Denver",
+  phoenix: "America/Phoenix",
+  "los angeles": "America/Los_Angeles",
+  la: "America/Los_Angeles",
+  "san francisco": "America/Los_Angeles",
+  sf: "America/Los_Angeles",
+  "bay area": "America/Los_Angeles",
+  seattle: "America/Los_Angeles",
+  london: "Europe/London",
+  dublin: "Europe/Dublin",
+  paris: "Europe/Paris",
+  berlin: "Europe/Berlin",
+  amsterdam: "Europe/Amsterdam",
+  zurich: "Europe/Zurich",
+  singapore: "Asia/Singapore",
+  "hong kong": "Asia/Hong_Kong",
+  tokyo: "Asia/Tokyo",
+  sydney: "Australia/Sydney",
+  bangalore: "Asia/Kolkata",
+  bengaluru: "Asia/Kolkata",
+  mumbai: "Asia/Kolkata"
+};
+var CITY_ALT = Object.keys(CITY_ZONE).sort((a, b) => b.length - a.length).map((c) => c.replace(/ /g, "\\s+")).join("|");
+var CITY_TIME_AFTER = new RegExp(`^\\s+(?:${CITY_ALT})\\s+time\\b`, "i");
+function isValidTimeZone(tz) {
+  if (!tz) return false;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+function hostTimeZone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  } catch {
+    return "UTC";
+  }
+}
+function resolveZone(token) {
+  const t = token.trim().replace(/^\(|\)$/g, "").trim();
+  const upper = t.toUpperCase();
+  if (ZONE_ABBR[upper] && t === upper) return ZONE_ABBR[upper];
+  const name = t.toLowerCase().replace(/\s+(standard|daylight)/, "").replace(/\s+time$/, "").trim();
+  if (ZONE_NAME[name]) return ZONE_NAME[name];
+  const city = name.replace(/\s+/g, " ");
+  if (CITY_ZONE[city]) return CITY_ZONE[city];
+  if (/^[A-Z][A-Za-z_]+\/[A-Za-z_]+(\/[A-Za-z_]+)?$/.test(t) && isValidTimeZone(t)) return t;
+  return void 0;
+}
+var fmtCache = /* @__PURE__ */ new Map();
+function fmt(tz) {
+  let f2 = fmtCache.get(tz);
+  if (!f2) {
+    f2 = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      hourCycle: "h23",
+      year: "numeric",
+      month: "numeric",
+      day: "numeric",
+      hour: "numeric",
+      minute: "numeric",
+      second: "numeric",
+      weekday: "short"
+    });
+    fmtCache.set(tz, f2);
+  }
+  return f2;
+}
+var DOW_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+function zonedParts(instant, tz) {
+  const parts = fmt(tz).formatToParts(instant);
+  const get2 = (type) => parts.find((p) => p.type === type)?.value ?? "0";
+  return {
+    y: Number(get2("year")),
+    m: Number(get2("month")),
+    d: Number(get2("day")),
+    h: Number(get2("hour")) % 24,
+    min: Number(get2("minute")),
+    s: Number(get2("second")),
+    dow: DOW_SHORT.indexOf(get2("weekday"))
+  };
+}
+function offsetMs(instant, tz) {
+  const p = zonedParts(instant, tz);
+  const asUtc = Date.UTC(p.y, p.m - 1, p.d, p.h, p.min, p.s);
+  return asUtc - Math.floor(instant.getTime() / 1e3) * 1e3;
+}
+function zonedTimeToUtc(y, m, d, h, min, tz) {
+  const guess = Date.UTC(y, m - 1, d, h, min);
+  const off1 = offsetMs(new Date(guess), tz);
+  let t = guess - off1;
+  const off2 = offsetMs(new Date(t), tz);
+  if (off2 !== off1) t = guess - off2;
+  return new Date(t);
+}
+function addDays(c, n) {
+  const t = new Date(Date.UTC(c.y, c.m - 1, c.d + n));
+  return { y: t.getUTCFullYear(), m: t.getUTCMonth() + 1, d: t.getUTCDate() };
+}
+function civilKey(c) {
+  return c.y * 1e4 + c.m * 100 + c.d;
+}
+function civilDow(c) {
+  return new Date(Date.UTC(c.y, c.m - 1, c.d)).getUTCDay();
+}
+var MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+var DAY_WORDS = [
+  [/^sun(day)?$/, 0],
+  [/^mon(day)?$/, 1],
+  [/^tue(s(day)?)?$|^tuesday$/, 2],
+  [/^wed(s|nesday)?$/, 3],
+  [/^thu(r(s(day)?)?)?$|^thursday$/, 4],
+  [/^fri(day)?$/, 5],
+  [/^sat(urday)?$/, 6]
+];
+var AMBIGUOUS_DAY = /^(sun|sat|mon|wed)$/;
+var ZONE_ALT = `\\(?\\b(?:ET|EST|EDT|CT|CST|CDT|MT|MST|MDT|PT|PST|PDT|AKST|AKDT|HST|GMT|UTC|BST|CET|CEST|IST|SGT|JST)\\)?(?![A-Za-z])|\\b(?:eastern|central|mountain|pacific)(?:\\s+(?:standard|daylight))?(?:\\s+time)?(?![a-z])|[A-Z][a-z]+\\/[A-Z][A-Za-z_]+(?:\\/[A-Z][A-Za-z_]+)?|\\b(?:${CITY_ALT})\\s+time\\b`;
+var TOKEN_RE = new RegExp(
+  [
+    // 1 m/d(/y)
+    "(?<mdy>(?<![\\d/.])(\\d{1,2})\\/(\\d{1,2})(?:\\/(\\d{2,4}))?(?![\\d/]))",
+    // month name + day
+    "(?<mon>\\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:,?\\s+(20\\d{2}))?(?![\\d:a-z]))",
+    // day + month name
+    "(?<dmon>(?<![\\d/.:])(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:of\\s+)?(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\\b\\.?)",
+    // the 8th
+    "(?<ord>\\bthe\\s+(\\d{1,2})(?:st|nd|rd|th)\\b)",
+    // the day named last: "later that day", "that afternoon", "the same day"
+    "(?<same>\\b(?:(?:later|earlier)\\s+(?:on\\s+|in\\s+)?)?(?:that|the\\s+same)\\s+(day|morning|afternoon|evening|night)\\b)",
+    // weekday
+    "(?<day>\\b(monday|mon|tuesday|tues|tue|wednesday|weds|wed|thursday|thurs|thur|thu|friday|fri|saturday|sat|sunday|sun)\\b\\.?)",
+    // relative day
+    "(?<rel>\\b(today|tonight|tomorrow|tmrw|tmr|this\\s+(?:morning|afternoon|evening))\\b)",
+    // week scope: "next week", "the week after", "week after next"
+    "(?<week>\\b(?:(?:this\\s+coming|this|next|the\\s+following|following|the\\s+coming|coming)\\s+week|(?:the\\s+)?week\\s+after(?:\\s+(?:next|that))?)\\b)",
+    "(?<named>\\b(noon|midday|midnight)\\b)",
+    // clock time
+    "(?<time>(?<![\\d/:.$£€#])(\\d{1,2})(?::([0-5]\\d))?(?:\\s?(a\\.m\\.?|p\\.m\\.?|am|pm)(?![a-z])|([ap])(?![a-z]))?(-?ish|\\s?o'?clock)?(?![\\d/:%a-z]))",
+    `(?<zone>${ZONE_ALT})`,
+    "(?<part>\\b(?:in\\s+the\\s+)?(morning|afternoon|evening|night)\\b)",
+    "(?<mod>(?:\\b(?:any\\s?time\\s+|sometime\\s+)?(at|around|about|after|before|by|from|between|approx(?:imately)?)\\b)|@|~)",
+    "(?<range>\\s-\\s|-|\\b(?:to|through|thru|until|till|til|and)\\b)",
+    "(?<or>\\bor\\b|\\/)",
+    "(?<next>\\b(?:next|this(?:\\s+coming)?|coming)\\b)",
+    "(?<past>\\b(?:last|past|yesterday|ago|earlier|previous)\\b)",
+    "(?<conn>\\b(?:on|the|either|works?|my\\s+time|your\\s+time)\\b)"
+  ].join("|"),
+  "gi"
+);
+var NOT_TIME_AFTER = /^\s*(min(ute)?s?|hours?|hrs?|people|years?|yrs?|days?|weeks?|months?|percent|k\b|x\b|times\b|of\b|interns?|students?|questions?|projects?|teams?|slides?)/i;
+var COUNT_RANGE_AFTER = new RegExp(
+  `^\\s*(?:-|to|through|and|or)\\s*\\d{1,4}(?:\\.\\d+)?\\+?\\s*${NOT_TIME_AFTER.source.replace(/^\^\\s\*/, "")}`,
+  "i"
+);
+var PROPER_NOUN_AFTER = /^[ \t]+([A-Z][a-z]+)/;
+var DAY_BEFORE = /(?:\b(?:mon|tues?|wed(?:nes)?|thu(?:rs?)?|fri|sat(?:ur)?|sun)(?:day)?\.?|\b(?:today|tomorrow|tonight)|\d{1,2}\/\d{1,2}|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(?:st|nd|rd|th)?|\bthe\s+\d{1,2}(?:st|nd|rd|th))[\s,]*(?:(?:at|around|about|@|~)\s*)?$/i;
+var NOT_A_NAME = /^(your|my|mon(day)?|tue(s(day)?)?|wed(s|nesday)?|thu(r(s(day)?)?)?|fri(day)?|sat(urday)?|sun(day)?|jan(uary)?|feb(ruary)?|mar(ch)?|apr(il)?|may|june?|july?|aug(ust)?|sept?(ember)?|oct(ober)?|nov(ember)?|dec(ember)?|eastern|central|mountain|pacific|morning|afternoon|evening|tonight|tomorrow|today|or|and|to|works?|would|does|is|if|let|thanks|thank|best|cheers|looking|talk|see|ok|okay|sounds|hope|please|either|otherwise|happy)$/i;
+function placeAfterNumber(text2, start, rest) {
+  const m = PROPER_NOUN_AFTER.exec(rest);
+  if (!m || NOT_A_NAME.test(m[1]) || CITY_TIME_AFTER.test(rest)) return false;
+  if (!DAY_BEFORE.test(text2.slice(Math.max(0, start - 40), start))) return true;
+  const next = PROPER_NOUN_AFTER.exec(rest.slice(m[0].length));
+  return !!next && !NOT_A_NAME.test(next[1]);
+}
+var FULL_DAY_OR_MONTH = /(?:day|january|february|march|april|june|july|august|september|october|november|december)\.$/i;
+var SENTENCE_AFTER_DOT = /^\s*\n|^\s+(?!(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\b)[A-Z]/;
+function tokenize(text2) {
+  const out = [];
+  TOKEN_RE.lastIndex = 0;
+  let m;
+  while (m = TOKEN_RE.exec(text2)) {
+    const g = m.groups ?? {};
+    const raw = m[0];
+    const start = m.index;
+    const end = start + raw.length;
+    if (!raw.length) {
+      TOKEN_RE.lastIndex++;
+      continue;
+    }
+    let endsSentence = false;
+    const push = (t) => out.push({ ...t, start, end, ...endsSentence ? { endsSentence } : {} });
+    if (g.mdy) {
+      const parts = g.mdy.split("/").map((x) => Number.parseInt(x, 10));
+      const [mo, d, y] = parts;
+      if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31)
+        push({ k: "date", m: mo, d, y: y === void 0 ? void 0 : y < 100 ? 2e3 + y : y });
+      continue;
+    }
+    if (g.mon) {
+      const mm = /^([a-z]+)\.?\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s+(20\d{2}))?/i.exec(g.mon);
+      const word = mm[1];
+      if (/^may$/i.test(word) && word !== "May") continue;
+      if (/^mar$/i.test(word) && word !== "Mar") continue;
+      const mo = MONTHS.indexOf(word.slice(0, 3).toLowerCase()) + 1;
+      const d = Number.parseInt(mm[2], 10);
+      if (mo >= 1 && d >= 1 && d <= 31)
+        push({ k: "date", m: mo, d, y: mm[3] ? Number.parseInt(mm[3], 10) : void 0 });
+      continue;
+    }
+    if (g.dmon) {
+      endsSentence = FULL_DAY_OR_MONTH.test(raw);
+      const mm = /^(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?([a-z]+)/i.exec(g.dmon);
+      const word = mm[2];
+      if (/^(may|mar)$/i.test(word) && word[0] !== word[0].toUpperCase()) continue;
+      const mo = MONTHS.indexOf(word.slice(0, 3).toLowerCase()) + 1;
+      const d = Number.parseInt(mm[1], 10);
+      if (mo >= 1 && d >= 1 && d <= 31) push({ k: "date", m: mo, d });
+      continue;
+    }
+    if (g.ord) {
+      const d = Number.parseInt(/\d+/.exec(g.ord)[0], 10);
+      if (d >= 1 && d <= 31) push({ k: "ord", d });
+      continue;
+    }
+    if (g.day) {
+      endsSentence = raw.endsWith(".") && (FULL_DAY_OR_MONTH.test(raw) || SENTENCE_AFTER_DOT.test(text2.slice(end)));
+      const word = g.day.replace(/\.$/, "");
+      const lower = word.toLowerCase();
+      if (AMBIGUOUS_DAY.test(lower) && word[0] !== word[0].toUpperCase()) continue;
+      const hit = DAY_WORDS.find(([re]) => re.test(lower));
+      if (hit) push({ k: "day", dow: hit[1] });
+      continue;
+    }
+    if (g.same) {
+      const w = g.same.toLowerCase().split(/\s+/).pop();
+      push(w === "day" ? { k: "same" } : { k: "same", part: w === "night" ? "evening" : w });
+      continue;
+    }
+    if (g.rel) {
+      const w = g.rel.toLowerCase();
+      if (w === "today") push({ k: "rel", offset: 0 });
+      else if (w === "tonight") push({ k: "rel", offset: 0, part: "evening" });
+      else if (w.startsWith("this")) push({ k: "rel", offset: 0, part: w.split(/\s+/)[1] });
+      else push({ k: "rel", offset: 1 });
+      continue;
+    }
+    if (g.week) {
+      const w = g.week.toLowerCase().replace(/\s+/g, " ");
+      if (w.endsWith("after next")) push({ k: "week", offset: 2, relative: false });
+      else if (w.includes("after")) push({ k: "week", offset: 1, relative: true });
+      else push({ k: "week", offset: /^this(?! coming)/.test(w) ? 0 : 1, relative: false });
+      continue;
+    }
+    if (g.named) {
+      const w = g.named.toLowerCase();
+      push({
+        k: "time",
+        h: w === "midnight" ? 0 : 12,
+        min: 0,
+        ap: w === "midnight" ? "am" : "pm",
+        clock: true,
+        ish: false
+      });
+      continue;
+    }
+    if (g.time) {
+      const mm = /^(\d{1,2})(?::([0-5]\d))?(?:\s?(a\.m\.?|p\.m\.?|am|pm)|([ap]))?(-?ish|\s?o'?clock)?/i.exec(
+        g.time
+      );
+      const h = Number.parseInt(mm[1], 10);
+      const min = mm[2] ? Number.parseInt(mm[2], 10) : 0;
+      const apRaw = (mm[3] ?? mm[4] ?? "").toLowerCase();
+      const ap = apRaw.startsWith("a") ? "am" : apRaw.startsWith("p") ? "pm" : void 0;
+      const ish = Boolean(mm[5]);
+      const rest = text2.slice(end);
+      if (NOT_TIME_AFTER.test(rest)) continue;
+      const bare = !ap && !mm[2] && !ish;
+      if (bare && COUNT_RANGE_AFTER.test(rest)) continue;
+      if (bare && placeAfterNumber(text2, start, rest)) continue;
+      if (ap && (h < 1 || h > 12)) continue;
+      if (!ap && !mm[2] && (h < 1 || h > 12)) continue;
+      if (mm[2] && h > 23) continue;
+      push({ k: "time", h, min, ap, clock: Boolean(ap || mm[2]), ish });
+      continue;
+    }
+    if (g.zone) {
+      const tz = resolveZone(g.zone);
+      if (tz) push({ k: "zone", tz });
+      continue;
+    }
+    if (g.part) {
+      const w = g.part.toLowerCase().split(/\s+/).pop();
+      push({ k: "part", part: w === "night" ? "evening" : w });
+      continue;
+    }
+    if (g.mod) {
+      const w = g.mod.toLowerCase().trim().split(/\s+/).pop();
+      const mod = w === "@" || w === "at" ? "at" : w === "~" || w === "around" || w === "about" || w.startsWith("approx") ? "around" : w === "by" || w === "before" ? "before" : w;
+      push({ k: "mod", mod });
+      continue;
+    }
+    if (g.range) {
+      push({ k: "range", word: g.range.trim().toLowerCase() });
+      continue;
+    }
+    if (g.or) {
+      push({ k: "or" });
+      continue;
+    }
+    if (g.next) {
+      push({ k: "next", word: g.next.toLowerCase().split(/\s+/)[0] });
+      continue;
+    }
+    if (g.past) {
+      push({ k: "past" });
+      continue;
+    }
+    if (g.conn) push({ k: "conn" });
+  }
+  return out;
+}
+var ANCHOR_KINDS = /* @__PURE__ */ new Set(["day", "date", "ord", "rel"]);
+function namesOwnDay(text2, toks, i) {
+  const from = toks[i].start;
+  const stop = /[.!?\n]/.exec(text2.slice(from));
+  const end = stop ? from + stop.index : text2.length;
+  for (let j = i; j < toks.length && toks[j].start < end; j++) if (ANCHOR_KINDS.has(toks[j].k)) return true;
+  return false;
+}
+function chunks(text2, toks) {
+  const out = [];
+  let cur = [];
+  for (const [i, t] of toks.entries()) {
+    const prev = cur[cur.length - 1];
+    if (prev && (!/^[\s,:()]*$/.test(text2.slice(prev.end, t.start)) || prev.endsSentence && namesOwnDay(text2, toks, i))) {
+      out.push(cur);
+      cur = [];
+    }
+    cur.push(t);
+  }
+  if (cur.length) out.push(cur);
+  return out;
+}
+function to24(h, ap) {
+  if (ap === "pm" && h < 12) return h + 12;
+  if (ap === "am" && h === 12) return 0;
+  return h;
+}
+function resolveHours(t, part) {
+  const startClock = (ap) => to24(t.h, ap) + t.min / 60;
+  let startAp = t.ap;
+  if (!startAp) {
+    if (t.min && t.h > 12)
+      startAp = void 0;
+    else if (t.end?.ap) {
+      const cand = to24(t.h, t.end.ap) + t.min / 60;
+      const endH = to24(t.end.h, t.end.ap) + t.end.min / 60;
+      startAp = cand <= endH ? t.end.ap : "am";
+    } else if (part === "morning") startAp = "am";
+    else if (part === "afternoon" || part === "evening") startAp = "pm";
+    else if (t.h >= 1 && t.h <= 7) startAp = "pm";
+    else if (t.h === 12) startAp = "pm";
+    else startAp = t.h > 12 ? void 0 : "am";
+  }
+  const start = startClock(startAp);
+  if (!t.end) return { start };
+  let end = to24(t.end.h, t.end.ap) + t.end.min / 60;
+  if (!t.end.ap) {
+    end = to24(t.end.h, start >= 12 && t.end.h < 12 ? "pm" : void 0) + t.end.min / 60;
+    if (end <= start && t.end.h < 12) end += 12;
+  }
+  if (end <= start) return { start };
+  return { start, end };
+}
+function weekScopes(text2, toks) {
+  const scopes = [];
+  for (const t of toks) {
+    if (t.k !== "week") continue;
+    const prev = scopes[scopes.length - 1];
+    scopes.push({
+      start: t.start,
+      end: t.end,
+      offset: t.relative ? (prev?.offset ?? 0) + t.offset : t.offset,
+      blocked: weekIsBlocked(text2, t.start, t.end)
+    });
+  }
+  return (start, end) => {
+    const after = scopes.find((s) => s.start >= end && s.start - end <= 2);
+    if (after) return after.offset;
+    let hit;
+    for (const s of scopes)
+      if (s.end <= start && start - s.end <= 250) hit = s.blocked ? void 0 : s.offset;
+    return hit;
+  };
+}
+var WEEK_BLOCKED = /\b(not|cannot|can'?t|won'?t|isn'?t|doesn'?t|busy|booked|slammed|swamped|packed|hectic|away|out|off|traveling|travelling|vacation|pto|leave|conference|offsite|unavailable)\b/i;
+var WEEK_OPEN = /\b(open|free|available|works?|flexible|better|easier|how about|what about)\b/i;
+function weekIsBlocked(text2, start, end) {
+  const before = text2.slice(Math.max(0, start - 80), start);
+  const after = text2.slice(end, end + 80);
+  const lo = before.split(/[.;!?\n]|,|\bbut\b|\bthough\b|\bhowever\b/i).pop() ?? "";
+  const hi = after.split(/[.;!?\n]|,|\bbut\b|\bthough\b|\bhowever\b/i)[0] ?? "";
+  const clause2 = `${lo} ${hi}`;
+  if (!WEEK_BLOCKED.test(clause2)) return false;
+  return !(WEEK_OPEN.test(clause2) && !/\b(not|cannot)\b|n['’]t\b/i.test(clause2));
+}
+function interpretChunk(text2, chunk, weekAt = () => void 0, ctx = {}) {
+  const proposals = [];
+  const leftover = [];
+  const emitted = [];
+  let d = { anchors: [], anchorSpans: [], times: [], past: false };
+  let pendingNext = false;
+  let pendingNextStart;
+  let pendingPast = false;
+  let mod;
+  let rangeOpen = false;
+  let between = false;
+  const flush = (keepAnchors) => {
+    if (d.anchors.length && d.times.length && !d.past) {
+      for (const [ai, a] of d.anchors.entries())
+        for (const t of d.times) {
+          const stop = d.zoneEnd && d.zoneEnd > t.stop && d.zoneEnd - t.stop < 24 ? d.zoneEnd : t.stop;
+          const timeRaw = text2.slice(t.start, stop);
+          const anchorRaw = text2.slice(d.anchorStart, d.anchorEnd);
+          const raw = d.anchorStart <= t.start && t.start - d.anchorEnd < 24 ? text2.slice(d.anchorStart, stop) : d.anchorStart > t.stop && d.anchorStart - t.stop < 24 ? text2.slice(t.start, Math.max(d.anchorEnd, stop)) : `${anchorRaw} ${timeRaw}`;
+          const p = {
+            anchor: a,
+            time: t,
+            part: d.part,
+            zone: d.zone,
+            raw: raw.trim().replace(/[.,]$/, ""),
+            anchorSpan: d.anchorSpans[ai],
+            timeSpan: { start: t.start, end: stop }
+          };
+          proposals.push(p);
+          emitted.push(p);
+        }
+    } else if ((d.anchors.length || d.times.length) && !d.past) leftover.push(d);
+    const next = {
+      anchors: keepAnchors ? d.anchors : [],
+      anchorSpans: keepAnchors ? d.anchorSpans : [],
+      times: [],
+      past: false
+    };
+    if (keepAnchors) {
+      next.anchorStart = d.anchorStart;
+      next.anchorEnd = d.anchorEnd;
+      next.part = d.part;
+    }
+    d = next;
+    rangeOpen = false;
+    between = false;
+  };
+  const addAnchor = (a, t) => {
+    const last = d.anchors[d.anchors.length - 1];
+    if (last && last.k === "day" && (a.k === "date" || a.k === "ord") && t.start - (d.anchorEnd ?? 0) < 4) {
+      d.anchors[d.anchors.length - 1] = { ...a, dow: last.dow };
+      d.anchorSpans[d.anchorSpans.length - 1].end = t.end;
+    } else {
+      if (d.anchors.length && d.times.length) flush(false);
+      if (!d.anchors.length && d.times.length) d.timeFirst = true;
+      d.anchors.push(a);
+      d.anchorSpans.push({
+        start: pendingNext && pendingNextStart !== void 0 ? pendingNextStart : t.start,
+        end: t.end
+      });
+    }
+    const from = pendingNext && pendingNextStart !== void 0 ? pendingNextStart : t.start;
+    if (d.anchorStart === void 0 || from < d.anchorStart) d.anchorStart = from;
+    d.anchorEnd = Math.max(d.anchorEnd ?? 0, t.end);
+    if (pendingPast) d.past = true;
+    pendingPast = false;
+    pendingNext = false;
+    ctx.lastAnchor = d.anchors[d.anchors.length - 1];
+  };
+  for (let i = 0; i < chunk.length; i++) {
+    const t = chunk[i];
+    const nextTok = chunk[i + 1];
+    switch (t.k) {
+      case "past":
+        pendingPast = true;
+        break;
+      case "next":
+        pendingNext = t.word === "next";
+        pendingNextStart = t.start;
+        break;
+      case "day":
+        addAnchor({ k: "day", dow: t.dow, next: pendingNext, week: weekAt(t.start, t.end) }, t);
+        break;
+      case "date":
+        addAnchor({ k: "date", m: t.m, d: t.d, y: t.y }, t);
+        break;
+      case "ord":
+        addAnchor({ k: "ord", d: t.d }, t);
+        break;
+      case "rel":
+        addAnchor({ k: "rel", offset: t.offset }, t);
+        if (t.part) d.part = t.part;
+        break;
+      case "same":
+        if (!ctx.lastAnchor) break;
+        addAnchor({ ...ctx.lastAnchor }, t);
+        if (t.part) d.part = t.part;
+        break;
+      case "part":
+        d.part = t.part;
+        break;
+      case "zone":
+        d.zone = t.tz;
+        d.zoneEnd = t.end;
+        for (const p of emitted) p.zone ??= t.tz;
+        break;
+      case "mod":
+        mod = t.mod;
+        if (t.mod === "between") between = true;
+        break;
+      case "range": {
+        const last = d.times[d.times.length - 1];
+        if (t.word === "and" && !between) break;
+        if (last && !last.end && nextTok?.k === "time") rangeOpen = true;
+        break;
+      }
+      case "or":
+        mod = void 0;
+        break;
+      case "time": {
+        const prev = chunk[i - 1];
+        const cued = t.clock || t.ish || Boolean(mod) || rangeOpen || // "Thursday at 10 or 11": a bare number offered as the alternative to a time is a time too
+        prev?.k === "or" && d.times.length > 0 || nextTok?.k === "range" && chunk[i + 2]?.k === "time" || nextTok?.k === "part" || prev?.k === "part" || Boolean(d.part);
+        if (!cued) break;
+        if (rangeOpen) {
+          const last = d.times[d.times.length - 1];
+          last.end = { h: t.h, min: t.min, ap: t.ap };
+          last.stop = t.end;
+          rangeOpen = false;
+          break;
+        }
+        if (d.times.length && d.anchors.length) flush(!d.timeFirst);
+        pendingPast = false;
+        d.times.push({
+          h: t.h,
+          min: t.min,
+          ap: t.ap,
+          clock: t.clock,
+          mod,
+          start: mod && prev?.k === "mod" ? prev.start : t.start,
+          stop: t.end
+        });
+        mod = void 0;
+        break;
+      }
+      default:
+        break;
+    }
+  }
+  flush(false);
+  return { proposals, leftover };
+}
+var NEGATING = /\b(not|can'?t|cannot|busy|class|meeting|conflict|except|unless|until|booked|out)\b/i;
+var CLAUSE_BREAK = /[.!?;\n,]|\b(?:but|however|though|although|instead|otherwise|whereas|while|so|how about|what about)\b/gi;
+var BUSY_CLAUSE = /\b(?:not|no|never|cannot|busy|booked|in class|have class|teach(?:ing)? (?:a |my )?class(?:es)?|in a meeting|in meetings|conflict|unavailable|tied up|out of (?:the )?office|traveling|travelling|away|blocked)\b|n['’]t\b|\b(?:i['’]?m|i am|i['’]?ll be|i will be|we['’]?re|we are|we['’]?ll be)\s+(?:(?:also|all|totally|completely|mostly|just|actually|unfortunately|still|both|then)\s+)?(?:out|off)\b(?!\s+work)/i;
+var NEGATION_LEAD = "^\\s*(?:(?:so|well|honestly|actually|hey|hmm|and|or|ok|okay)[\\s,]+)*(?:why\\s+)?(?:can['’]?t|cannot|couldn['’]?t|wouldn['’]?t|won['’]?t|shouldn['’]?t|don['’]?t|doesn['’]?t|didn['’]?t|isn['’]?t|aren['’]?t|wasn['’]?t)";
+var NEGATIVE_QUESTION = new RegExp(`${NEGATION_LEAD}\\s+(?:we|you|i|it|that|this|there|they)\\b`, "i");
+var NEGATIVE_QUESTION_BARE = new RegExp(`${NEGATION_LEAD}\\s*$`, "i");
+var NOT_BUSY_PHRASE = /\b(?:if (?:not|that|this|those|these|none|neither|it|they|you|so)\b.*$|unless\b.*$|no (?:worries|problem|rush|pressure|stress)|not a problem|not sure|can['’]?t wait|(?:don['’]?t|do not) worry|(?:doesn['’]?t|does not) matter|(?:wouldn['’]?t|don['’]?t) mind|(?:don['’]?t|do not) hesitate|why not|no later than)/gi;
+function busyAround(text2, start, end) {
+  let lo = 0;
+  let hi = text2.length;
+  CLAUSE_BREAK.lastIndex = 0;
+  let m;
+  while (m = CLAUSE_BREAK.exec(text2)) {
+    const at = m.index;
+    const stop = at + m[0].length;
+    if (stop <= start) lo = stop;
+    else if (at >= end) {
+      hi = at;
+      break;
+    }
+  }
+  let before = text2.slice(lo, start).replace(NEGATIVE_QUESTION, " ");
+  if (text2[hi] === "?") before = before.replace(NEGATIVE_QUESTION_BARE, " ");
+  const clause2 = `${before} ${text2.slice(end, hi)}`.replace(NOT_BUSY_PHRASE, " ");
+  return BUSY_CLAUSE.test(clause2);
+}
+var HAS_CLAUSE_BREAK = new RegExp(CLAUSE_BREAK.source, "i");
+function isTaken(text2, p) {
+  const a = p.anchorSpan;
+  const t = p.timeSpan;
+  const gapLo = Math.min(a.end, t.end);
+  const gapHi = Math.max(a.start, t.start);
+  if (gapHi <= gapLo || !HAS_CLAUSE_BREAK.test(text2.slice(gapLo, gapHi)))
+    return busyAround(text2, Math.min(a.start, t.start), Math.max(a.end, t.end));
+  return busyAround(text2, a.start, a.end) || busyAround(text2, t.start, t.end);
+}
+function sentenceIndexAt(text2, pos) {
+  let n = 0;
+  const re = /[.!?](?=\s)|\n/g;
+  let m;
+  while ((m = re.exec(text2)) && m.index < pos) n++;
+  return n;
+}
+function statedMessageZone(text2) {
+  const z5 = "(ET|EST|EDT|CT|CST|CDT|MT|MST|MDT|PT|PST|PDT|GMT|UTC|BST|eastern|central|mountain|pacific)(?:\\s+(?:standard|daylight))?(?:\\s+time)?";
+  const res = [
+    new RegExp(
+      `\\b(?:all\\s+)?times?\\s+(?:(?:are|listed|below|above|here)\\s+)*(?:in\\s+)?${z5}(?![A-Za-z])`,
+      "i"
+    ),
+    new RegExp(`\\bi'?m\\s+(?:on|in|based\\s+in)\\s+${z5}(?![A-Za-z])`, "i"),
+    new RegExp(`\\b(?:on|in)\\s+${z5}\\s+time\\b`, "i"),
+    new RegExp(`\\((?:all\\s+)?(?:times?\\s+(?:in\\s+)?)?${z5}\\)`, "i")
+  ];
+  for (const re of res) {
+    const m = re.exec(text2);
+    if (m) {
+      const tz = resolveZone(m[1]);
+      if (tz) return tz;
+    }
+  }
+  return void 0;
+}
+function resolveAnchorDate(a, today, todayDow, sameDayPassed) {
+  switch (a.k) {
+    case "rel":
+      return addDays(today, a.offset);
+    case "day": {
+      const week = a.week ?? (a.next ? 1 : void 0);
+      if (week !== void 0 && week > 0) {
+        const monday = addDays(today, -((todayDow + 6) % 7));
+        return addDays(monday, 7 * week + (a.dow + 6) % 7);
+      }
+      let delta = (a.dow - todayDow + 7) % 7;
+      if (delta === 0 && (a.next || sameDayPassed)) delta = 7;
+      return addDays(today, delta);
+    }
+    case "date": {
+      let c = { y: a.y ?? today.y, m: a.m, d: a.d };
+      if (a.y === void 0 && civilKey(c) < civilKey(addDays(today, -60))) c = { ...c, y: c.y + 1 };
+      return c;
+    }
+    case "ord": {
+      let c = { y: today.y, m: today.m, d: a.d };
+      if (a.d < today.d)
+        c = today.m === 12 ? { y: today.y + 1, m: 1, d: a.d } : { y: today.y, m: today.m + 1, d: a.d };
+      if (a.dow !== void 0 && civilDow(c) !== a.dow) {
+        const alt = c.m === 12 ? { y: c.y + 1, m: 1, d: a.d } : { y: c.y, m: c.m + 1, d: a.d };
+        if (civilDow(alt) === a.dow) c = alt;
+      }
+      return c;
+    }
+  }
+}
+function extractTimes(text2, reference, opts = {}) {
+  const fallbackTz = isValidTimeZone(opts.timeZone) ? opts.timeZone : hostTimeZone();
+  const norm2 = text2.replace(/[–‒]/g, "-").replace(/[—]/g, ", ").replace(/ /g, " ");
+  const messageZone = statedMessageZone(norm2);
+  const toks = tokenize(norm2);
+  const weekAt = weekScopes(norm2, toks);
+  const proposals = [];
+  const leftovers = [];
+  const ctx = {};
+  for (const c of chunks(norm2, toks)) {
+    const r = interpretChunk(norm2, c, weekAt, ctx);
+    proposals.push(...r.proposals);
+    for (const l of r.leftover) {
+      const start = Math.min(l.anchorStart ?? Number.POSITIVE_INFINITY, ...l.times.map((t) => t.start));
+      const end = Math.max(l.anchorEnd ?? 0, ...l.times.map((t) => t.stop));
+      leftovers.push({ draft: l, sentence: sentenceIndexAt(norm2, start), start, end });
+    }
+  }
+  const bySentence = /* @__PURE__ */ new Map();
+  for (const l of leftovers) bySentence.set(l.sentence, [...bySentence.get(l.sentence) ?? [], l]);
+  const anchorsIn = (n) => (bySentence.get(n) ?? []).filter((g) => g.draft.anchors.length && !g.draft.times.length);
+  const sentenceHasAnchor = (n) => toks.some((t) => ANCHOR_KINDS.has(t.k) && sentenceIndexAt(norm2, t.start) === n);
+  for (const [n, group] of bySentence) {
+    const times = group.filter((g) => g.draft.times.length && !g.draft.anchors.length);
+    if (!times.length) continue;
+    let anchors = anchorsIn(n);
+    if (!anchors.length && !sentenceHasAnchor(n)) anchors = anchorsIn(n - 1);
+    if (anchors.length !== 1) continue;
+    const a = anchors[0];
+    for (const t of times) {
+      const lo = Math.min(a.start, t.start);
+      const hi = Math.max(a.end, t.end);
+      const between = norm2.slice(Math.min(a.end, t.end), Math.max(a.start, t.start));
+      if (NEGATING.test(between) || between.length > 60) continue;
+      for (const [ai, anchor] of a.draft.anchors.entries())
+        for (const time of t.draft.times)
+          proposals.push({
+            anchor,
+            time,
+            part: t.draft.part ?? a.draft.part,
+            zone: t.draft.zone ?? a.draft.zone,
+            raw: norm2.slice(lo, hi).trim(),
+            anchorSpan: a.draft.anchorSpans[ai],
+            timeSpan: { start: time.start, end: time.stop }
+          });
+    }
+  }
+  const sentenceZones = /* @__PURE__ */ new Map();
+  for (const p of proposals)
+    if (p.zone) {
+      const n = sentenceIndexAt(norm2, p.timeSpan.start);
+      sentenceZones.set(n, (sentenceZones.get(n) ?? /* @__PURE__ */ new Set()).add(p.zone));
+    }
+  for (const p of proposals) {
+    const zones = sentenceZones.get(sentenceIndexAt(norm2, p.timeSpan.start));
+    if (!p.zone && zones?.size === 1) p.zone = [...zones][0];
+  }
+  const out = [];
+  for (const p of proposals) {
+    if (isTaken(norm2, p)) continue;
+    const statedZone = p.zone ?? messageZone;
+    const tz = statedZone ?? fallbackTz;
+    const now = zonedParts(reference, tz);
+    const today = { y: now.y, m: now.m, d: now.d };
+    const hours = resolveHours(p.time, p.part);
+    const nowHours = now.h + now.min / 60;
+    const date = resolveAnchorDate(p.anchor, today, now.dow, hours.start <= nowHours);
+    if (!date) continue;
+    let startH = hours.start;
+    let endH = hours.end;
+    if (p.time.mod === "before" && endH === void 0) {
+      endH = startH;
+      startH = Math.max(0, startH - 1);
+    }
+    const start = zonedTimeToUtc(
+      date.y,
+      date.m,
+      date.d,
+      Math.floor(startH),
+      Math.round(startH % 1 * 60),
+      tz
+    );
+    if (start.getTime() < reference.getTime()) continue;
+    if (start.getTime() - reference.getTime() > 200 * 864e5) continue;
+    const end = endH === void 0 ? void 0 : zonedTimeToUtc(date.y, date.m, date.d, Math.floor(endH), Math.round(endH % 1 * 60), tz);
+    if (out.some((o) => o.startIso === start.toISOString() && o.endIso === end?.toISOString())) continue;
+    out.push({
+      startIso: start.toISOString(),
+      ...end ? { endIso: end.toISOString() } : {},
+      raw: p.raw,
+      ...statedZone ? { timeZone: statedZone } : {}
+    });
+  }
+  return out.sort((a, b) => a.startIso.localeCompare(b.startIso));
+}
+
+// packages/core/src/text/email.ts
+var QUOTE_MARKERS = [
+  { re: /^On\s[^\n]{5,200}(?:\n[^\n]{0,200}){0,2}?\s*wrote:\s*$/m, needsDateOrAddress: true },
+  { re: /^-{2,}\s*Original Message\s*-{2,}/im },
+  { re: /^-{2,}\s*Forwarded message\s*-{2,}/im },
+  { re: /^\*?From:\*?\s.+\n\*?(Sent|To|Date):\*?\s.+/im },
+  { re: /^_{10,}\s*$/m },
+  { re: /^Le\s[^\n]{5,200}(?:\n[^\n]{0,200})?\sa écrit\s*:/m },
+  { re: /^Am\s[^\n]{5,200}(?:\n[^\n]{0,200})?\sschrieb[^\n]*:\s*$/m, needsDateOrAddress: true },
+  { re: /^El\s[^\n]{5,200}(?:\n[^\n]{0,200})?\sescribió:\s*$/m, needsDateOrAddress: true },
+  { re: /^Op\s[^\n]{5,200}(?:\n[^\n]{0,200})?\sschreef[^\n]*:\s*$/m, needsDateOrAddress: true },
+  { re: /^Em\s[^\n]{5,200}(?:\n[^\n]{0,200})?\sescreveu:\s*$/m, needsDateOrAddress: true }
+];
+var MOBILE_FOOTER = /^(sent from my [\w ]{2,30}|sent from (outlook|mail|yahoo mail|gmail)( for [\w ]+)?|get outlook for (ios|android)|sent via [\w ]{2,30}|sent with [\w ]{2,30})\.?$/i;
+function stripQuotedReply(body2) {
+  let text2 = body2.replace(/\r\n/g, "\n");
+  let cut = text2.length;
+  for (const { re, needsDateOrAddress } of QUOTE_MARKERS) {
+    const m = re.exec(text2);
+    if (m && m.index < cut && (!needsDateOrAddress || /\d|@/.test(m[0]))) cut = m.index;
+  }
+  text2 = text2.slice(0, cut);
+  const lines = text2.split("\n");
+  while (lines.length && /^\s*>/.test(lines[lines.length - 1])) lines.pop();
+  const kept = lines.filter((l) => !/^\s*>/.test(l));
+  while (kept.length && (!kept[kept.length - 1].trim() || MOBILE_FOOTER.test(kept[kept.length - 1].trim())))
+    kept.pop();
+  return kept.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+function wordCount(s) {
+  return s.trim() ? s.trim().split(/\s+/).length : 0;
+}
+
+// packages/core/src/drafts/templates.ts
+var MAX_WORDS = {
+  outreach: 100,
+  bump: 50,
+  schedule: 60,
+  thank_you: 90,
+  nurture: 80,
+  congratulate: 70,
+  referral_ask: 100,
+  intro_request: 110,
+  reply: 110,
+  report_back: 60,
+  // plan 16 §7.1/§7.2: first touches 50–110 words, a forwardable blurb at most 90, a re-engage note short
+  first_touch: 110,
+  warm_first_touch: 110,
+  forwardable_blurb: 90,
+  reengage: 90
+};
+var MIN_WORDS = {
+  outreach: 45,
+  bump: 15,
+  schedule: 20,
+  thank_you: 40,
+  nurture: 25,
+  congratulate: 15,
+  referral_ask: 45,
+  intro_request: 55,
+  reply: 10,
+  report_back: 20,
+  first_touch: 50,
+  warm_first_touch: 50,
+  forwardable_blurb: 35,
+  reengage: 30
+};
+var LINKEDIN_NOTE_MAX = 300;
+var BANNED_PHRASES = [
+  "i hope this email finds you well",
+  "i hope this message finds you well",
+  "hope you are doing well",
+  "hope you're doing well",
+  "i am writing to introduce myself",
+  "i came across your profile and was impressed",
+  "impressed by your background",
+  "i would be honored",
+  "esteemed",
+  "passionate about",
+  "cut my teeth",
+  "lifelong passion",
+  "lean deal teams",
+  "unique culture",
+  "prestigious",
+  "top-tier",
+  "pick your brain",
+  "reach out",
+  "reaching out",
+  "touch base",
+  "circle back",
+  "leverage",
+  "synergy",
+  "at your earliest convenience",
+  "i look forward to hearing from you",
+  "quick learner",
+  "add value",
+  "as an ai",
+  "ignore previous",
+  "grab coffee sometime",
+  "any advice you have",
+  "i would love to learn more about your journey",
+  "thought leader",
+  "in today's fast-paced"
+];
+var BANNED_SUBJECT_PATTERNS = [
+  /informational interview request/i,
+  /networking request/i,
+  /aspiring .* seeking/i,
+  /coffee chat request/i,
+  /^hello$/i,
+  /^following up$/i,
+  /^quick question$/i,
+  /resume attached/i,
+  /\bjob\b/i,
+  /\bopportunit/i
+];
+var WHY_THEM = "Why them";
+var WHY_THEM_GAP = new RegExp(`\\[${WHY_THEM}:[^\\]]*\\]`);
+function wordsIn(body2) {
+  const lines = body2.split("\n").map((l) => l.trim()).filter(Boolean);
+  if (lines.length) {
+    const g = lines[0].match(/^(hi|hey|hello|dear)\b[^,.!?\n]{0,40}[,.!]?\s*/i);
+    if (g) lines[0] = lines[0].slice(g[0].length).trim();
+  }
+  const content = lines.filter(
+    (l) => !!l && !/^(best|thanks|thank you|cheers|regards|warmly|all the best|talk soon|sincerely|take care|thanks so much|many thanks|kind regards|best regards)[,!.]?$/i.test(
+      l
+    )
+  );
+  while (content.length > 1 && /^[^.!?]{1,40}$/.test(content[content.length - 1]) && wordCount(content[content.length - 1]) <= 5)
+    content.pop();
+  return wordCount(content.join("\n"));
+}
+var COMPOSE_KINDS = [
+  "first_touch",
+  "warm_first_touch",
+  "intro_request",
+  "forwardable_blurb",
+  "reengage",
+  "bump",
+  "thank_you"
+];
+var COMPOSE_TEMPLATE_VERSION = "template-v2";
+function goalAsk(i) {
+  const topic = i.topic ?? "your work";
+  switch (i.goal) {
+    case "recruiting":
+      return { kind: "call", text: "Would you have 15 minutes for a call about your path and your team?" };
+    case "advice":
+      return { kind: "call", text: `Could I ask you about ${topic} on a 15 minute call?` };
+    case "fundraising":
+      return { kind: "interest", text: "Would you be open to a look?" };
+    case "sales":
+      return { kind: "interest", text: "Worth a quick look?" };
+    case "hiring":
+      return { kind: "interest", text: "Open to hearing about it?" };
+    case "cofounder":
+      return { kind: "call", text: `Would you be up for a 20 minute call to compare notes on ${topic}?` };
+    case "community":
+      return { kind: "question", text: "Would you like to join us at the next one?" };
+    case "collaboration":
+      return { kind: "question", text: `Have you tried your method on ${topic}?` };
+  }
+}
+function goalMiddle(i) {
+  const org = i.recipient.org ? ` at ${i.recipient.org}` : "";
+  const co = i.user.company ?? "our team";
+  const topic = i.topic ?? "this";
+  switch (i.goal) {
+    case "recruiting":
+      return `Your team${org} works on ${topic}, which is the work I want to do. It would help to hear how you got there and what a normal week looks like.`;
+    case "advice":
+      return `Right now I am trying to figure out ${topic}. You have been where I am now, so your view would help me a lot.`;
+    case "fundraising":
+      return `${co} ${i.user.pitch ?? "is a new company"}. ${i.user.traction ?? "We are early, and we are moving fast."} We are raising a small round now and would value your view on it.`;
+    case "sales":
+      return `${co} ${i.user.pitch ?? "saves teams time"}. Teams like yours use it to cut busy work and spend more time on the parts that matter.`;
+    case "hiring":
+      return `We are hiring for ${topic} at ${co}, and your work fits it well. ${co} ${i.user.pitch ?? "is a small team"}, and the person in this role will shape how we work.`;
+    case "cofounder":
+      return `These days I am building ${co}, which ${i.user.pitch ?? "is still early"}. The cofounder I am looking for knows ${topic} as well as you do.`;
+    case "community":
+      return `I help run ${topic}. We meet once a month to share what we are working on, and I think you would fit right in.`;
+    case "collaboration":
+      return `I work on ${i.user.pitch ?? "a close problem"}. Your work seems close to mine, and I would like to share what I have found so far.`;
+  }
+}
+var SUBJECTS = {
+  recruiting: (i) => i.recipient.org ? `your path at ${i.recipient.org}` : "your path and your team",
+  advice: () => "a question about your work",
+  fundraising: (i) => i.user.company ? `${i.user.company} and a quick look` : "a new company to look at",
+  sales: (i) => i.recipient.org ? `an idea for ${i.recipient.org}` : "an idea for your team",
+  hiring: (i) => i.user.company ? `a role at ${i.user.company}` : "a role on our team",
+  cofounder: (i) => i.user.company ? `building ${i.user.company}` : "looking for a cofounder",
+  community: () => "join us next month",
+  collaboration: () => "your paper and my work"
+};
+function intro(i) {
+  const about = i.user.about ? `, ${i.user.about}` : "";
+  return `My name is ${i.user.firstName}${about}.`;
+}
+function hookLine(i) {
+  return i.hook ? `${i.hook.text[0].toUpperCase()}${i.hook.text.slice(1)} stuck with me.` : "";
+}
+var paragraphs = (...ps) => ps.filter((p) => p.trim()).join("\n\n");
+function composeFallback(i) {
+  const ask2 = goalAsk(i);
+  const sign = `Best,
+${i.user.firstName}`;
+  const hi = `Hi ${i.recipient.firstName},`;
+  const via = i.via?.introducerFirstName;
+  const target = i.target?.firstName ?? "them";
+  const targetAt = i.target?.org ? ` at ${i.target.org}` : "";
+  let subject = null;
+  let body2;
+  let outAsk = { kind: ask2.kind, text: ask2.text };
+  const hooks = i.hook ? [i.hook] : [];
+  switch (i.kind) {
+    case "first_touch":
+    case "warm_first_touch": {
+      const warm = i.kind === "warm_first_touch" && via ? `${via} said I should write to you.` : "";
+      if (i.channel === "linkedin") {
+        body2 = [
+          hi,
+          [warm, intro(i), i.hook ? `I read ${i.hook.text}.` : "", ask2.text].filter(Boolean).join(" ")
+        ].join("\n");
+      } else {
+        subject = warm ? `${via} said to write` : SUBJECTS[i.goal](i);
+        body2 = paragraphs(
+          hi,
+          [warm, intro(i), hookLine(i)].filter(Boolean).join(" "),
+          goalMiddle(i),
+          ask2.text,
+          sign
+        );
+      }
+      break;
+    }
+    case "intro_request": {
+      subject = `an intro to ${target}`;
+      outAsk = { kind: "intro", text: `Would you be willing to introduce us?` };
+      body2 = paragraphs(
+        hi,
+        `I am trying to meet ${target}${targetAt} to talk about ${i.topic ?? "their work"}. It looks like you two know each other, and a word from you would mean a lot.`,
+        `${outAsk.text} There is a short note below that you can send on as it is. If now is not a good time, no worries at all.`,
+        sign
+      );
+      break;
+    }
+    case "forwardable_blurb": {
+      outAsk = { kind: "none", text: "" };
+      const about = i.user.about ? ` is ${i.user.about}` : " would like to meet you";
+      body2 = paragraphs(
+        `${i.user.firstName}${about}. ${i.user.firstName} wants to learn about ${i.topic ?? "your work"} and would value 15 minutes with ${target}.`,
+        i.hook ? `${i.user.firstName} read ${i.hook.text.replace(/^your\b/, "the")} and has a few clear questions.` : `${i.user.firstName} has a few clear questions and will keep the call short.`,
+        `If ${target} says yes, ${i.user.firstName} will send times that work.`
+      );
+      break;
+    }
+    case "reengage": {
+      subject = i.channel === "gmail" ? `news from ${i.user.firstName}` : null;
+      outAsk = { kind: "none", text: "" };
+      body2 = paragraphs(
+        hi,
+        `It has been a while, so I wanted to share some news. ${i.topic ? `${i.topic.replace(/\.$/, "")}.` : "I finally found the work I want to do."}`,
+        i.hook ? `I saw ${i.hook.text}, and it made me think of you.` : "I thought of you, since you helped me get here.",
+        "No need to reply. I hope things are good on your end.",
+        sign
+      );
+      break;
+    }
+    case "bump": {
+      body2 = paragraphs(
+        hi,
+        `I wanted to bring this back to the top of your inbox. ${ask2.text} If now is not a good time, that is fine.`,
+        sign
+      );
+      break;
+    }
+    case "thank_you": {
+      subject = i.channel === "gmail" ? "thank you" : null;
+      outAsk = { kind: "none", text: "" };
+      body2 = paragraphs(
+        hi,
+        `Thank you for taking the time to talk with me. ${i.hook ? `What you said about ${i.hook.text.replace(/^your\b/, "your")} will stay with me.` : "It helped me more than you know."}`,
+        `I am going to act on your advice about ${i.topic ?? "next steps"} this week, and I will let you know how it goes.`,
+        sign
+      );
+      break;
+    }
+  }
+  return {
+    id: i.id ?? `cmp-${i.personId}-${i.kind}-${i.goal}`,
+    goalId: i.goalId ?? null,
+    personId: i.personId,
+    kind: i.kind,
+    channel: i.channel,
+    subject: i.channel === "gmail" ? subject : null,
+    body: body2,
+    ask: outAsk,
+    hooks,
+    ...i.via ? { via: { introducerId: i.via.introducerId, pathScore: i.via.pathScore ?? 0 } } : {},
+    sendWindow: i.sendWindow ?? { notBefore: (/* @__PURE__ */ new Date(0)).toISOString(), tz: "America/New_York" },
+    promptVersion: COMPOSE_TEMPLATE_VERSION,
+    variant: null
+  };
+}
+
+// packages/core/src/drafts/validate.ts
+var NEED_DETAIL = {
+  news: "Say what you are congratulating them on.",
+  target: "Name the person you would like to be introduced to.",
+  answer: "Answer their question in your own words.",
+  role: "Name the role and company you are applying to.",
+  takeaway: "Add one thing they said that stuck with you.",
+  posting: "Add the link to the posting they asked for.",
+  mutual: "Name the person you both know, so they can place the connection."
+};
+var COMMON_CAPS = new Set(
+  `i i'm i'd i'll i've hi hey hello dear thanks thank best kind regards cheers warmly sincerely ps re fwd
+  monday tuesday wednesday thursday friday saturday sunday mon tue wed thu fri sat sun
+  january february march april may june july august september october november december jan feb mar apr jun jul aug sep sept oct nov dec
+  et pt ct mt est edt pst pdt cst cdt mst mdt utc gmt am pm zoom google meet linkedin email ok
+  would could can will should do does did is are was were have has had may might must
+  what which why how when where who whatever whenever however
+  quick small just also and but so or if as at in on for to of from by with about after before since though
+  the a an this that these those there here it its my your our their his her we you they he she
+  no yes not completely totally absolutely happy glad sorry hope hoping looking last one two few next
+  any anything anyone someone something all some most many much more still even only really
+  saw read found noticed met came floating following followed surfacing congratulations congrats well
+  speaking also especially again either neither both each every other another mostly for context
+  resume cv`.split(/\s+/)
+);
+var PHRASE_CHECKS = [
+  {
+    re: /\b(mutual (connection|friend|contact)s?|we('ve| have)? (both )?(know|known)|our (mutual|shared) (friend|contact|connection)|(friend|colleague) of yours)\b/i,
+    anchor: /\b(referr|mutual|introduc|suggested I write)/i,
+    what: "a mutual connection"
+  },
+  {
+    re: /\byour (recent |latest |last )?(post|article|blog|podcast|piece|newsletter|video|essay|op-ed|interview)\b/i,
+    anchor: /\b(post|article|blog|podcast|piece|newsletter|video|essay|interview|warmUpNote)\b/i,
+    what: "a post or article"
+  },
+  {
+    re: /\b(we met|met you|when we met|you spoke at|your talk|your panel|in the audience)\b/i,
+    anchor: /\b(met|panel|spoke|talk|event|session|conference|workshop|fireside|completedAt|meetingAt)\b/i,
+    what: "a meeting or event"
+  },
+  {
+    re: /\b(?:[Mm]y|[Aa]) (?:good |close |old )?(?:friend|colleague|classmate|roommate|cousin|professor|manager|mentor),?\s+[A-Z]/,
+    anchor: /\b(referr|introduc|suggested I write|friend|colleague|classmate|professor|mentor)/i,
+    what: "a mutual connection"
+  },
+  {
+    re: /\b(referred (me )?by|pointed me to you|told me to (write|contact|email)|suggested I (write|contact|email))\b/i,
+    anchor: /\b(referr|introduc|suggested I write)/i,
+    what: "a referral"
+  },
+  { re: /\bGPA\b/i, anchor: /\bGPA\b/i, what: "a GPA" },
+  {
+    re: /\b(top of my class|valedictorian|salutatorian|dean's list|summa cum laude|magna cum laude|perfect score|straight A'?s)\b/i,
+    anchor: /\b(top of (my|the) class|valedictorian|salutatorian|dean's list|cum laude|perfect score|straight A)/i,
+    what: "an academic honor"
+  }
+];
+function unsupportedDetails(body2, context) {
+  const ctx = context.toLowerCase();
+  const has = (w) => {
+    const l = w.toLowerCase();
+    return new RegExp(`(^|[^a-z0-9])${l.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z0-9]|$)`).test(ctx);
+  };
+  const out = [];
+  const re = /[A-Z][A-Za-z&'.-]*(?:\s+(?:&\s+)?[A-Z][A-Za-z&'.-]*)*/g;
+  let m;
+  while (m = re.exec(body2)) {
+    const before = body2.slice(0, m.index);
+    if (/[A-Za-z0-9'@./-]$/.test(before)) continue;
+    const sentenceStart = /(^|[.!?:;"]\s+|\n\s*|\(\s*)$/.test(before);
+    const phrase = m[0].replace(/'s$/, "").replace(/[.'-]+$/, "");
+    if (!phrase || has(phrase)) continue;
+    const words = phrase.split(/\s+/);
+    const unknown = words.filter((w, i) => {
+      const bare = w.replace(/'s$/, "").replace(/[.'-]+$/, "");
+      if (!bare || COMMON_CAPS.has(bare.toLowerCase()) || has(bare)) return false;
+      if (i === 0 && sentenceStart && words.length === 1 && /^[A-Z][a-z]+$/.test(bare)) return false;
+      return true;
+    });
+    if (unknown.length) out.push(phrase);
+  }
+  for (const p of PHRASE_CHECKS) {
+    const hit = body2.match(p.re);
+    if (hit && !p.anchor.test(context)) out.push(`${p.what} ("${hit[0]}")`);
+  }
+  for (const f2 of body2.match(/\$?\d[\d,]*(\.\d+)?%?/g) ?? []) {
+    const plain = f2.replace(/[$,%]/g, "");
+    const interesting = /[%$.]/.test(f2) || Number(plain) >= 100;
+    if (!interesting || /^(19|20)\d\d$/.test(plain)) continue;
+    if (!ctx.includes(plain) && !ctx.includes(f2.toLowerCase())) out.push(f2);
+  }
+  return [...new Set(out)];
+}
+function validateDraft(d, opts) {
+  const issues = [];
+  const body2 = d.body;
+  const lower = body2.toLowerCase();
+  const wc = wordsIn(body2);
+  const limitKind = opts.kind === "schedule" && opts.asks?.length ? "reply" : opts.kind;
+  const max = MAX_WORDS[limitKind];
+  if (wc > max + 25) issues.push({ code: "too_long", detail: `${wc} words, aim for ${max}`, blocking: true });
+  else if (wc > max)
+    issues.push({ code: "too_long", detail: `${wc} words, aim for ${max}`, blocking: false });
+  const note2 = opts.channel === "linkedin" && opts.kind === "outreach" && body2.length <= LINKEDIN_NOTE_MAX;
+  if (note2 ? body2.length < 100 : wc < MIN_WORDS[limitKind])
+    issues.push({
+      code: "too_short",
+      detail: note2 ? `${body2.length} characters` : `${wc} words`,
+      blocking: false
+    });
+  const phraseText = lower.replace(/\bleveraged (finance|loans?|buyouts?|lending|credit)\b/g, " ");
+  for (const p of BANNED_PHRASES)
+    if (phraseText.includes(p)) issues.push({ code: "banned_phrase", detail: p, blocking: true });
+  if (/[—–]/.test(body2))
+    issues.push({
+      code: "em_dash",
+      detail: "dash reads as machine-written; use a comma or a period",
+      blocking: true
+    });
+  if (/\[[^\]]{3,}\]/.test(body2))
+    issues.push({ code: "placeholder", detail: body2.match(/\[[^\]]{3,}\]/)[0], blocking: true });
+  for (const n of d.needsInput ?? []) {
+    if (n === "connection")
+      issues.push({
+        code: "needs_connection",
+        detail: `Add one line only true of ${opts.recipientFirstName}: how you found them, what you share, or what of theirs you read.`,
+        blocking: true
+      });
+    else if (n === "update")
+      issues.push({
+        code: "needs_update",
+        detail: "Add one real update since you last spoke.",
+        blocking: true
+      });
+    else if (n === "resume")
+      issues.push({
+        code: "attach_resume",
+        detail: "Attach your resume before you send; the message says it is attached.",
+        blocking: false
+      });
+    else if (n !== "post")
+      issues.push({
+        code: "needs_input",
+        detail: NEED_DETAIL[n] ?? "Fill in the bracketed line.",
+        blocking: true
+      });
+  }
+  const urls = body2.match(/https?:\/\/[^\s)>"]+/g) ?? [];
+  for (const u2 of urls)
+    if (!opts.allowedUrls.some((a) => a && u2.startsWith(a)) && !opts.context?.includes(u2))
+      issues.push({ code: "unknown_url", detail: u2, blocking: true });
+  const emails = body2.match(/[\w.+-]+@[\w-]+\.[\w.]+/g) ?? [];
+  for (const e of emails)
+    if (e.toLowerCase() !== opts.recipientEmail?.toLowerCase())
+      issues.push({ code: "unknown_email", detail: e, blocking: true });
+  const factIds = new Set(opts.facts.map((f2) => f2.id));
+  for (const c of d.claims)
+    if (c.kind === "about_person" && c.factId && !factIds.has(c.factId))
+      issues.push({ code: "ungrounded_claim", detail: c.text, blocking: true });
+  if (opts.recipientFirstName && !body2.includes(opts.recipientFirstName) && !(opts.recipientFullName && body2.includes(opts.recipientFullName)))
+    issues.push({ code: "missing_name", detail: opts.recipientFirstName, blocking: true });
+  if (/\b(ignore (all )?(previous|prior) instructions|system prompt)\b/i.test(body2))
+    issues.push({ code: "injection", detail: "instruction-like text", blocking: true });
+  if (["outreach", "thank_you", "nurture", "congratulate"].includes(opts.kind) && !d.claims.some(
+    (c) => (c.kind === "about_person" || c.kind === "shared") && c.text !== "connection missing"
+  ))
+    issues.push({
+      code: "no_specific_line",
+      detail: "nothing in this message is only true of the recipient",
+      blocking: opts.kind === "outreach"
+    });
+  const logistics = d.claims.some((c) => c.kind === "logistics" && c.text === "logistics question");
+  if (["outreach", "bump", "intro_request"].includes(opts.kind) && !logistics && !/\b(15|20|30|fifteen|twenty)[- ]?min/i.test(body2) && !/\b(15|20)\b/.test(body2))
+    issues.push({
+      code: "ask_without_number",
+      detail: "the ask should name a length (15 or 20 minutes)",
+      blocking: false
+    });
+  if (d.opening && opts.recentOpenings?.some((o) => o.trim().toLowerCase() === d.opening.trim().toLowerCase()))
+    issues.push({
+      code: "duplicate_opening",
+      detail: "same opening sentence as another message to this company in the last 30 days",
+      blocking: true
+    });
+  if (d.subject && BANNED_SUBJECT_PATTERNS.some((re) => re.test(d.subject)))
+    issues.push({ code: "banned_subject", detail: d.subject, blocking: true });
+  if (d.bodyShort && d.bodyShort.length > LINKEDIN_NOTE_MAX)
+    issues.push({
+      code: "linkedin_note_too_long",
+      detail: `${d.bodyShort.length} characters`,
+      blocking: true
+    });
+  if ((body2.match(/!/g) ?? []).length > 1)
+    issues.push({ code: "exclamations", detail: "more than one exclamation point", blocking: false });
+  const sentences = body2.replace(/\n+/g, " ").split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter((s) => s.length > 2 && !/^(hi|hey|hello|dear|best|thanks|thank you|cheers)\b/i.test(s));
+  if (sentences.length >= 4) {
+    const iStarts = sentences.filter((s) => /^I(\b|')/.test(s)).length;
+    if (iStarts / sentences.length > 0.6)
+      issues.push({
+        code: "i_heavy",
+        detail: `${iStarts} of ${sentences.length} sentences start with "I"`,
+        blocking: false
+      });
+  }
+  const long = sentences.filter((s) => s.split(/\s+/).length > 32);
+  if (long.length)
+    issues.push({
+      code: "long_sentences",
+      detail: `${long.length} sentence${long.length > 1 ? "s" : ""} over 32 words`,
+      blocking: false
+    });
+  if (opts.context !== void 0)
+    for (const u2 of unsupportedDetails(
+      `${d.subject ?? ""}
+${body2}
+${d.bodyShort ?? ""}`.replace(/\[[^\]]*\]/g, " "),
+      opts.context
+    ))
+      issues.push({
+        code: "unsupported_detail",
+        detail: `${u2} is not in anything Orbit knows about this person`,
+        blocking: true
+      });
+  for (const a of opts.asks ?? []) {
+    if (/\b(resume|cv)\b/i.test(a) && !/\b(resume|cv)\b/i.test(body2))
+      issues.push({ code: "ignores_ask", detail: `they asked: ${a}`, blocking: true });
+  }
+  const knowsPersonally = d.claims.some(
+    (c) => c.kind === "shared" && /knows the student personally$/.test(c.text)
+  );
+  if (opts.kind === "referral_ask" && opts.hadConversation === false && !knowsPersonally && /\b(refer me|flag(ging)? my (name|application)|submit my name|put in a word)\b/i.test(body2))
+    issues.push({
+      code: "referral_without_conversation",
+      detail: "ask for a referral only after a real conversation",
+      blocking: true
+    });
+  return issues;
+}
+
+// packages/core/src/email/triage.ts
+function extractProposedTimes(text2, reference, timeZone) {
+  return extractTimes(text2, reference, { timeZone });
+}
+var LATER_WHEN = "(?:(?:in|after|around|by|come|until|closer to|sometime in|once|early|mid|late)\\s+)?(?:the\\s+)?(?:new year|holidays|break|next (?:month|quarter|semester|term|year|fall|spring|summer|winter|cycle)|q[1-4]|january|february|march|april|may|june|july|august|september|october|november|december|spring|summer|fall|autumn|winter|(?:a\\s+)?(?:few|couple(?: of)?|several) (?:weeks|months)|later|then)\\b";
+var LATER_INVITE = new RegExp(
+  `\\b(?:circle back|check back|come back|get back in touch|reach (?:back )?out|reconnect|ping me|hit me up|try me|follow up|revisit|try again|(?:e-?mail|write|message|text) me|ask (?:me )?again)(?: again| back)?(?:[^.?!]{0,20}?\\s)?${LATER_WHEN}`,
+  "i"
+);
+var NAME = "(?!(?:Mon|Tues|Wednes|Thurs|Fri|Satur|Sun)day\\b|(?:January|February|March|April|May|June|July|August|September|October|November|December)\\b|(?:Zoom|Teams|Google|Slack|LinkedIn|Tomorrow|Today|Next|This)\\b)[A-Z][a-z]+\\b";
+var POINT_VERB = "(?:[Tt]alk(?:ing)?|[Ss]peak(?:ing)?|[Cc]hat(?:ting)?|[Rr]each(?:ing)? out|[Cc]onnect(?:ing)?|[Gg]et(?:ting)? in touch|[Aa]sk(?:ing)?|[Cc]ontact(?:ing)?|[Ee]mail(?:ing)?|[Tt]ry)";
+var TARGET = [
+  /\b(my|our) ([a-z]+ ){0,2}?(colleague|teammate|coworker|co-worker|friend|manager|boss|partner|counterpart|director|lead|vp|associate|recruiter|mentor|classmate)s?\b/i,
+  new RegExp(`\\b(?:connect|introduce|intro|put) you (?:in touch )?(?:with|to) ${NAME}`, "i"),
+  /\b(on|in) (my|our) ([a-z]+ ){1,3}?(team|group|desk)\b/i,
+  /\bsomeone (on|in|at|from) (my|our|the)\b/i,
+  /\b(recruiting|recruitment|talent|campus|university|hr|people) team\b/i,
+  /[\w.+-]+@[\w-]+\.[\w.]+/,
+  new RegExp(`\\b${POINT_VERB}(?: to| with)? (?:my friend )?${NAME}`),
+  /\b(talk(ing)?|speak(ing)?|reach(ing)? out|connect(ing)?) (to|with) my (friend|colleague|teammate) [a-z]+\b/i,
+  /\b[A-Z][a-z]+( [A-Z][a-z]+)? \((cc'?d|cc|copied|bcc'?d)\)/
+];
+var RECOMMEND = [
+  /\b(you|u)( should| might| could| may|'d)( (also|def|definitely|really|probably|totally))?( want to)? (talk|speak|chat|reach out|connect|get in touch|meet)( (to|with))?\b/i,
+  /\b(i'?d|i would|i)( also)? (recommend|suggest) (talking|reaching out|speaking|connecting|contacting|chatting|you (talk|reach out|connect))\b/i,
+  new RegExp(`\\b[Tt]ry ${NAME}`),
+  /\b(colleague|teammate|coworker|someone on (my|our) team)\b[^.?!]{0,40}\b(would be|is|might be|could)\b/i,
+  /\b(would|could|might) (also )?be a (good|great) (person|contact) to\b/i
+];
+var INTRO_ACT = [
+  new RegExp(
+    `\\b(?<!(?:nice|great|good|lovely|pleasure|glad|happy|excited|wonderful) to )(?<!(?:let'?s|we could|we can|could we|can we|to) )[Mm]eet ${NAME}`
+  ),
+  new RegExp(`\\b[A-Z][a-z]+,? (please )?meet ${NAME}`),
+  /\bi'?d like you to meet\b/i,
+  /\b(connecting|introducing) (you|the two of you)( two| both)?( as promised| with| to)?\b/i,
+  new RegExp(`\\b(?:[Ww]anted|[Ww]ant|[Ww]ould like|'d like) to introduce (you to )?${NAME}`),
+  new RegExp(`\\b[Ii]ntroducing ${NAME}`)
+];
+var PASS_ALONG = "pass (?:(?:it|this|that|these|them|your resume|your info|your name|your note|your email|the resume|the note) )?along|pass (?:it|this|that|these|them|your resume|your info|your name|your note|your email|the resume|the note) on|pass on your";
+var OFFERER = "(?:i(?:'ll| will| can| could| would|(?:'d| would) be (?:happy|glad|more than happy) to|(?:'m| am) (?:happy|glad) to)|happy to|glad to|more than happy to|let me)\\s+(?:also\\s+|definitely\\s+|gladly\\s+|totally\\s+|happily\\s+)?";
+var OFFER_REFER = new RegExp(
+  `\\b(${OFFERER}(refer|put in (a|an|my) (\\w+ )?referral|put (a|an|my) (\\w+ )?referral in|${PASS_ALONG}|pass (it|this|that|these|them|your \\w+) (on )?to|put in a (good )?word|forward (your|it|this|them)|send (it|your resume)|pass (your|it along|along)|flag (you|your)|submit (you|your|a referral|(a|an|my) (\\w+ )?referral)|put (your name|your resume|your application) (in|forward|through|up)|put you forward|pass this along)|i (passed|forwarded|sent|submitted) your (resume|info|name|application)|forwarded your (resume|info|application)|(just )?submitted (a|my) referral|referred you|put in a (good )?word|${PASS_ALONG})\\b`,
+  "i"
+);
+var OFFER_INTRO = new RegExp(
+  `\\b(${OFFERER}(intro|introduce|connect you|put you in touch|make (an|that|the|a few|some) intros?|do an intro|make (the|a|an|that) (connection|introduction))|(want|like|need) an? intro|intro(duction)? to (anyone|someone|my|our|a few)|connect you (with|two)|put you in touch|(would you like|do you want|did you want|want|would it help( if)?|should|shall|can|could|may) (me to|i) (intro|introduce|introduced|connect|put) you|(interested in|open to) an? intro(duction)?)\\b`,
+  "i"
+);
+var POSTPONE_LATER = new RegExp(
+  `\\bpostpon\\w*\\b[^.?!]{0,30}?\\b(?:until|till|to|into)\\s+${LATER_WHEN}`,
+  "i"
+);
+
+// packages/core/src/safety/rules.ts
+function messageHash(m) {
+  const s = [m.channel, m.subject ?? "", m.body, ...m.attachments ?? []].join("\0");
+  let h1 = 2166136261;
+  let h2 = 16777619;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 16777619) >>> 0;
+    h2 = Math.imul(h2 ^ c, 2246822519) >>> 0;
+  }
+  return `${h1.toString(16).padStart(8, "0")}${h2.toString(16).padStart(8, "0")}`;
+}
+var MAX_UNANSWERED_MESSAGES = 3;
+var MONEY = /(?:[$€£]\s?\d[\d,.]*\s?(?:k|m|mm|bn|million|billion|thousand)?\b)|\b\d[\d,.]*\s?(?:k|m|mm|bn|million|billion|thousand)?\s?(?:dollars|usd|eur|euros|gbp|pounds)\b/i;
+var ATTACHED = /\b(attached|attaching|see the attachment|in the attachment|enclosed)\b/i;
+var URL2 = /https?:\/\/[^\s)>"']+/g;
+var MINOR = /\b(high school|highschool|middle school|hs (freshman|sophomore|junior|senior)|(9|10|11|12)th grade|grade (9|10|11|12)|class of 20(2[7-9]|3\d) at .*high|aged? 1[0-7]\b|1[0-7] years old)\b/i;
+var SENSITIVE = /\b(your|you are|you're|as an? \w+ yourself)\b[^.?!]{0,40}\b(religio\w*|faith|church|mosque|synagogue|diagnos\w*|illness|disease|cancer|pregnan\w*|disabilit\w*|mental health|therapy|sexual\w*|orientation|gay|lesbian|transgender|ethnicit\w*|race|immigration status|visa status|undocumented|political (views|party|affiliation)|union member\w*|criminal record|arrest\w*)\b/i;
+var SENSITIVE_IDENTITY = /\b(?:as an? (?:fellow )?|you are an? |you're an? |since you(?: are|'re) an? )(?:christian|muslim|jewish|jew|hindu|buddhist|sikh|catholic|mormon|atheist|gay|lesbian|bisexual|queer|transgender|immigrant|undocumented|disabled|pregnant|black|latino|latina|latinx|asian|hispanic|democrat|republican)\b/i;
+var approval = (rule, detail) => ({
+  rule,
+  kind: "needs_approval",
+  detail
+});
+var forbid = (rule, detail) => ({ rule, kind: "forbidden", detail });
+function checkLinkedIn(d) {
+  return d.channel === "linkedin" ? [approval("linkedin_needs_approval", "every LinkedIn message is approved")] : [];
+}
+function checkFirstMessage(d, ctx) {
+  if (d.action === "calendar_event") return [];
+  return ctx.history.some((m) => m.direction === "out") ? [] : [approval("first_message_needs_approval", "a first message to anyone is approved")];
+}
+function checkMoney(d) {
+  const hit = `${d.subject ?? ""}
+${d.body}`.match(MONEY);
+  return hit ? [approval("money_needs_approval", `mentions ${hit[0].trim()}`)] : [];
+}
+function checkAttachments(d) {
+  if (d.attachments?.length) return [approval("attachment_needs_approval", d.attachments.join(", "))];
+  return ATTACHED.test(d.body) ? [approval("attachment_needs_approval", "says something is attached")] : [];
+}
+function checkLinks(d, ctx) {
+  const links = (d.body.match(URL2) ?? []).filter(
+    (u2) => !(ctx.schedulingLink && u2.startsWith(ctx.schedulingLink))
+  );
+  return links.length ? [approval("link_needs_approval", links.join(", "))] : [];
+}
+function checkTimeCommitments(d, ctx) {
+  const offered = (ctx.offeredSlots ?? []).map((s) => new Date(s).getTime());
+  const extra = extractProposedTimes(d.body, ctx.now, ctx.timeZone).filter(
+    (t) => !offered.some((o) => Math.abs(o - new Date(t.startIso).getTime()) <= 15 * 6e4)
+  );
+  return extra.length ? [approval("time_commitment_needs_approval", `commits to ${extra.map((t) => t.raw).join(", ")}`)] : [];
+}
+function checkCalendar(d) {
+  return d.action === "calendar_event" ? [approval("calendar_needs_approval", "calendar events are created only after approval")] : [];
+}
+function checkIntroAsk(d) {
+  return d.kind === "intro_request" || d.kind === "forwardable_blurb" ? [approval("intro_ask_needs_approval", "asking a third party for an introduction is approved")] : [];
+}
+function checkCrossThread(d, ctx) {
+  const words = (s) => s.toLowerCase().match(/[a-z0-9']+/g) ?? [];
+  const body2 = ` ${words(d.body).join(" ")} `;
+  for (const t of ctx.otherThreads ?? []) {
+    const w = words(t);
+    for (let i = 0; i + 8 <= w.length; i++) {
+      const run = ` ${w.slice(i, i + 8).join(" ")} `;
+      if (body2.includes(run))
+        return [approval("cross_thread_needs_approval", `repeats another thread: "${run.trim()}"`)];
+    }
+  }
+  return [];
+}
+function checkDoNotContact(ctx) {
+  return ctx.recipient.doNotContact ? [forbid("do_not_contact", "they asked not to be contacted")] : [];
+}
+function unansweredBefore(history) {
+  let n = 0;
+  for (const m of [...history].sort((a, b) => a.at.localeCompare(b.at))) n = m.direction === "in" ? 0 : n + 1;
+  return n;
+}
+function checkUnanswered(d, ctx) {
+  if (d.action === "calendar_event") return [];
+  const n = unansweredBefore(ctx.history);
+  return n >= MAX_UNANSWERED_MESSAGES ? [forbid("unanswered_limit", `${n} messages already without an answer`)] : [];
+}
+function checkImpersonation(d, ctx) {
+  const out = [];
+  const mine = new Set(ctx.userEmails.map(normalizeEmail));
+  if (d.fromEmail && !mine.has(normalizeEmail(d.fromEmail)))
+    out.push(forbid("impersonation", `sent from ${d.fromEmail}, not the student's address`));
+  if (d.signedAs) {
+    const names = ctx.userName.toLowerCase().split(/\s+/);
+    const signed = d.signedAs.toLowerCase().split(/\s+/);
+    if (!signed.every((w) => names.includes(w))) out.push(forbid("impersonation", `signed as ${d.signedAs}`));
+  }
+  return out;
+}
+function checkInventedFacts(d, ctx) {
+  if (ctx.inputs === void 0) return [];
+  return unsupportedDetails(`${d.subject ?? ""}
+${d.body}`, ctx.inputs).map(
+    (u2) => forbid("invented_fact", `${u2} is not in the inputs`)
+  );
+}
+function looksLikeMinor(r) {
+  return !!r.isMinor || MINOR.test(`${r.title ?? ""} ${r.headline ?? ""}`);
+}
+function checkMinor(ctx) {
+  return looksLikeMinor(ctx.recipient) ? [forbid("minor", "the recipient appears to be under 18")] : [];
+}
+function checkSensitive(d) {
+  const hit = d.body.match(SENSITIVE) ?? d.body.match(SENSITIVE_IDENTITY);
+  return hit ? [forbid("sensitive_category", `says something sensitive about them: "${hit[0]}"`)] : [];
+}
+function checkSend(d, ctx) {
+  const all = [
+    ...checkDoNotContact(ctx),
+    ...checkMinor(ctx),
+    ...checkUnanswered(d, ctx),
+    ...checkImpersonation(d, ctx),
+    ...checkInventedFacts(d, ctx),
+    ...checkSensitive(d),
+    ...checkLinkedIn(d),
+    ...checkFirstMessage(d, ctx),
+    ...checkMoney(d),
+    ...checkAttachments(d),
+    ...checkLinks(d, ctx),
+    ...checkTimeCommitments(d, ctx),
+    ...checkCalendar(d),
+    ...checkIntroAsk(d),
+    ...checkCrossThread(d, ctx)
+  ];
+  const approved = !!ctx.approvedHash && ctx.approvedHash === messageHash(d);
+  return approved ? all.filter((v) => v.kind === "forbidden") : all;
+}
+
+// packages/core/src/server/mappers.ts
+var u = (v) => v === null ? void 0 : v;
+function compact(o) {
+  const out = {};
+  for (const [k, v] of Object.entries(o)) if (v !== void 0) out[k] = v;
+  return out;
+}
+function goalFromRow(r) {
+  return compact({
+    id: r.id,
+    userId: r.user_id,
+    kind: r.kind,
+    title: r.title,
+    description: u(r.description),
+    targets: r.targets,
+    criteria: r.criteria,
+    successMetric: u(r.success_metric),
+    priority: r.priority,
+    status: r.status,
+    autonomyLevel: u(r.autonomy_level),
+    dueAt: u(r.due_at),
+    source: r.source,
+    evidence: u(r.evidence),
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+    deletedAt: u(r.deleted_at)
+  });
+}
+function chatFromRow(r) {
+  const data = r.data;
+  return compact({
+    goalTags: [],
+    source: "manual",
+    bumpCount: 0,
+    priority: 2,
+    ...data,
+    id: r.id,
+    userId: r.user_id,
+    personId: r.person_id,
+    goalId: u(r.goal_id),
+    organizationId: u(r.org_id),
+    stage: r.stage,
+    stageEnteredAt: r.stage_entered_at,
+    archivedAt: u(r.archived_at),
+    createdAt: r.created_at,
+    updatedAt: r.updated_at
+  });
+}
+function dossierFromRow(r) {
+  return compact({
+    id: r.id,
+    userId: r.user_id,
+    personId: r.person_id,
+    goalId: u(r.goal_id),
+    status: r.status,
+    content: u(r.content),
+    sources: r.sources,
+    candidates: u(r.candidates),
+    costUsd: Number(r.cost_usd),
+    model: u(r.model),
+    error: u(r.error),
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+    expiresAt: r.expires_at
+  });
+}
+
+// packages/core/src/drafts/compose.ts
+var READING_GRADE_MAX = 7;
+var LINKEDIN_MESSAGE_MAX = 400;
+var CONNECTION_NOTE_MAX = 200;
+var SUBJECT_MAX_CHARS = 45;
+var FIRST_TOUCH_KINDS = /* @__PURE__ */ new Set([
+  "first_touch",
+  "warm_first_touch",
+  "outreach"
+]);
+var ONE_ASK_KINDS = /* @__PURE__ */ new Set([
+  "first_touch",
+  "warm_first_touch",
+  "outreach",
+  "intro_request",
+  "bump",
+  "referral_ask",
+  "schedule"
+]);
+var COMPOSE_BANNED_PHRASES = [
+  "amazing",
+  "incredible",
+  "inspiring",
+  "i hope this finds you well",
+  "hope this finds you well",
+  "quick question"
+];
+function wordRange(kind, goal) {
+  if (FIRST_TOUCH_KINDS.has(kind)) return goal === "sales" ? [40, 90] : [50, 110];
+  if (kind === "bump") return [15, 50];
+  return [MIN_WORDS[kind], MAX_WORDS[kind]];
+}
+function syllables(word) {
+  let w = word.toLowerCase().replace(/[^a-z]/g, "");
+  if (!w) return 0;
+  if (w.length <= 3) return 1;
+  w = w.replace(/(?:[^laeiouy]es|[^laeiouy]ed|[^laeiouy]e)$/, (m) => m[0]).replace(/^y/, "");
+  return Math.max(1, w.match(/[aeiouy]+/g)?.length ?? 0);
+}
+function prose(body2) {
+  const lines = body2.split("\n").map((l) => l.trim()).filter(Boolean).filter(
+    (l, i, all) => !(i === 0 && /^(hi|hey|hello|dear)\b[^.!?]{0,40}[,!]?$/i.test(l)) && !(i >= all.length - 2 && /^(best|thanks|thank you|cheers|regards|warmly|all the best|talk soon|sincerely|take care|[A-Z][a-z]+)[,!.]?$/.test(
+      l
+    ))
+  );
+  const text2 = lines.join(" ");
+  const sentences = text2.split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter((s) => /[A-Za-z]/.test(s));
+  const words = text2.match(/[A-Za-z][A-Za-z'’-]*/g) ?? [];
+  return { words, sentences };
+}
+function fleschKincaidGrade(body2) {
+  const { words, sentences } = prose(body2);
+  if (!words.length || !sentences.length) return 0;
+  const syl = words.reduce((s, w) => s + syllables(w), 0);
+  return 0.39 * (words.length / sentences.length) + 11.8 * (syl / words.length) - 15.59;
+}
+var ASK_PHRASE = /\b(would you|could you|could we|can we|can you|are you open|open to|worth a (quick )?look|happy to (chat|talk|hop)|let me know if|would it be|do you have|are you up for|might you|would love (it )?if you)\b/i;
+function asksIn(body2) {
+  return prose(body2).sentences.filter((s) => s.endsWith("?") || ASK_PHRASE.test(s));
+}
+function wordHit(lower, phrase) {
+  return new RegExp(`(^|[^a-z])${phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z]|$)`).test(lower);
+}
+function validateComposed(msg, ctx) {
+  const issues = [];
+  const block2 = (code, detail) => issues.push({ code, detail, blocking: true });
+  const body2 = msg.body;
+  const lower = body2.toLowerCase();
+  const words = wordsIn(body2);
+  const grade = Math.round(fleschKincaidGrade(body2) * 10) / 10;
+  const v1 = validateDraft(
+    {
+      body: body2,
+      subject: msg.subject ?? void 0,
+      claims: msg.hooks.map((h) => ({ text: h.text, kind: "about_person" }))
+    },
+    {
+      kind: msg.kind,
+      facts: ctx.facts ?? [],
+      allowedUrls: ctx.allowedUrls ?? [],
+      recipientEmail: ctx.recipientEmail,
+      recipientFirstName: msg.kind === "forwardable_blurb" ? "" : ctx.recipientFirstName,
+      recipientFullName: ctx.recipientFullName,
+      channel: msg.channel
+    }
+  );
+  const v1Skip = /* @__PURE__ */ new Set([
+    "too_long",
+    "too_short",
+    "no_specific_line",
+    "ask_without_number",
+    "exclamations",
+    "em_dash"
+  ]);
+  for (const i of v1) if (!v1Skip.has(i.code)) issues.push(i);
+  if (msg.channel === "linkedin") {
+    const max = ctx.connectionNote ? CONNECTION_NOTE_MAX : LINKEDIN_MESSAGE_MAX;
+    if (body2.length > max)
+      block2(
+        ctx.connectionNote ? "connection_note_too_long" : "linkedin_too_long",
+        `${body2.length} characters, at most ${max}`
+      );
+    if (FIRST_TOUCH_KINDS.has(msg.kind) && words < 12) block2("words_out_of_range", `${words} words`);
+  } else {
+    const [min, max] = wordRange(msg.kind, ctx.goal);
+    if (words < min || words > max) block2("words_out_of_range", `${words} words, want ${min}–${max}`);
+  }
+  if (grade > READING_GRADE_MAX) block2("reading_grade", `grade ${grade}, want ${READING_GRADE_MAX} or lower`);
+  const asks = asksIn(body2);
+  const wantsNone = msg.kind === "reengage" && (msg.ask?.kind ?? "none") === "none";
+  if (wantsNone) {
+    if (asks.length) block2("several_asks", `a re-engage note asks nothing: ${asks[0]}`);
+  } else if (ONE_ASK_KINDS.has(msg.kind) || msg.kind === "reengage") {
+    if (!asks.length) block2("no_ask", "no ask");
+    else if (asks.length > 1) block2("several_asks", `${asks.length} asks: ${asks.join(" | ")}`);
+  } else if (asks.length > 1) block2("several_asks", `${asks.length} asks: ${asks.join(" | ")}`);
+  if (msg.channel === "gmail") {
+    const subject = (msg.subject ?? "").trim();
+    if (!subject) {
+      if (FIRST_TOUCH_KINDS.has(msg.kind) || msg.kind === "intro_request")
+        block2("subject_missing", "no subject");
+    } else {
+      const n = subject.split(/\s+/).length;
+      if (n < 2 || n > 6 || subject.length > SUBJECT_MAX_CHARS)
+        block2(
+          "subject_length",
+          `${n} words, ${subject.length} characters (2–6 words, ≤ ${SUBJECT_MAX_CHARS})`
+        );
+      const caps = subject.split(/\s+/).slice(1).filter(
+        (w) => /^[A-Z]/.test(w) && !new RegExp(`\\b${w.replace(/[^A-Za-z0-9]/g, "")}\\b`).test(ctx.inputs)
+      );
+      if (caps.length) block2("subject_case", `capitalised: ${caps.join(", ")}`);
+      if (BANNED_SUBJECT_PATTERNS.some((re) => re.test(subject)) || COMPOSE_BANNED_PHRASES.some((p) => wordHit(subject.toLowerCase(), p)) || /[!?]{2,}|\b(urgent|re:|fwd:)/i.test(subject))
+        block2("subject_banned", subject);
+    }
+  }
+  if (FIRST_TOUCH_KINDS.has(msg.kind) && !msg.hooks.some((h) => h.text.trim() && h.sourceId.trim()))
+    block2("hook_missing", "a first touch needs at least one hook with its source");
+  for (const u2 of unsupportedDetails(`${msg.subject ?? ""}
+${body2}`, ctx.inputs))
+    block2("unknown_detail", `${u2} is not in the inputs`);
+  for (const p of COMPOSE_BANNED_PHRASES) if (wordHit(lower, p)) block2("banned_phrase", p);
+  if (/[—–]/.test(body2)) block2("em_dash", "no dashes; use a comma or a period");
+  const bangs = (body2.match(/!/g) ?? []).length;
+  const allowed = (ctx.style?.exclamationsPerMessage ?? 0) > 0 ? 1 : 0;
+  if (bangs > allowed)
+    block2("exclamation", `${bangs} exclamation marks${allowed ? ", at most one in your voice" : ""}`);
+  if (msg.kind === "forwardable_blurb") {
+    if (/\b(I|I'm|I've|I'd|my|me)\b/.test(body2))
+      block2("third_person", "write it about the student, not as them");
+    if (ctx.userFirstName && !body2.includes(ctx.userFirstName))
+      block2("third_person", `name ${ctx.userFirstName}`);
+  }
+  const seen = /* @__PURE__ */ new Set();
+  const deduped = issues.filter((i) => {
+    const k = `${i.code}|${i.detail}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+  return { ok: !deduped.some((i) => i.blocking), issues: deduped, words, grade };
+}
+
+// supabase/functions/_shared/rows.ts
+function iso(v) {
+  if (v === null || v === void 0 || v === "") return null;
+  const d = v instanceof Date ? v : new Date(String(v));
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+function isoRow(r) {
+  const out = {};
+  for (const [k, v] of Object.entries(r)) out[k] = v instanceof Date ? v.toISOString() : v;
+  return out;
+}
+var num = (v, fallback = 0) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+};
+var vec = (e) => `[${e.map((x) => Number.isFinite(x) ? x : 0).join(",")}]`;
+function firstNameOf(p) {
+  const f2 = typeof p.first_name === "string" && p.first_name.trim() ? p.first_name.trim() : "";
+  if (f2) return f2;
+  const d = typeof p.display_name === "string" ? p.display_name.trim() : "";
+  return d.split(/\s+/)[0] || "there";
+}
+
+// supabase/functions/_shared/zones.ts
+function validZone(tz) {
+  if (!tz) return void 0;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+    return tz;
+  } catch {
+    return void 0;
+  }
+}
+function localParts(d, tz) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    weekday: "short"
+  }).formatToParts(d);
+  const get2 = (t) => parts.find((p) => p.type === t)?.value ?? "";
+  const year = Number(get2("year"));
+  const month = Number(get2("month"));
+  const day = Number(get2("day"));
+  const weekday = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(get2("weekday"));
+  return {
+    key: `${get2("year")}-${get2("month")}-${get2("day")}`,
+    year,
+    month,
+    day,
+    hour: Number(get2("hour")) % 24,
+    minute: Number(get2("minute")),
+    weekday
+  };
+}
+function offsetMs2(d, tz) {
+  const p = localParts(d, tz);
+  const asUtc = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute);
+  return asUtc - Math.floor(d.getTime() / 6e4) * 6e4;
+}
+function zonedTime2(key, hour, minute, tz) {
+  const [y, m, d] = key.split("-").map(Number);
+  const naive = Date.UTC(y, m - 1, d, hour, minute);
+  let t = naive - offsetMs2(new Date(naive), tz);
+  t = naive - offsetMs2(new Date(t), tz);
+  return new Date(t);
+}
+function addDaysKey(key, n) {
+  const t = Date.parse(`${key}T00:00:00Z`) + n * 864e5;
+  return new Date(t).toISOString().slice(0, 10);
+}
+var weekdayOfKey = (key) => (/* @__PURE__ */ new Date(`${key}T00:00:00Z`)).getUTCDay();
+function zoneAbbrev(d, tz) {
+  for (const style of ["shortGeneric", "short"]) {
+    try {
+      const name = new Intl.DateTimeFormat("en-US", { timeZone: tz, timeZoneName: style }).formatToParts(d).find((p) => p.type === "timeZoneName")?.value;
+      if (name && style === "short") return name;
+      if (name && name.length <= 4 && !/^GMT/.test(name)) return name;
+    } catch {
+    }
+  }
+  return tz;
+}
+
+// supabase/functions/_shared/slots/slots.ts
+var SLOT_MINUTES = 30;
+var DAY_START = { hour: 9, minute: 0 };
+var DAY_END = { hour: 17, minute: 30 };
+var BUFFER_MIN = 15;
+var LEAD_HOURS = 18;
+var HORIZON_BUSINESS_DAYS = 10;
+var FREEBUSY_URL = "https://www.googleapis.com/calendar/v3/freeBusy";
+var EVENTS_URL = "https://www.googleapis.com/calendar/v3/calendars/primary/events";
+function slotLabel(start, end, tz) {
+  const day = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    weekday: "short",
+    month: "short",
+    day: "numeric"
+  }).format(start);
+  const hm = (d) => new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23"
+  }).format(d);
+  return `${day}, ${hm(start)}–${hm(end)} ${zoneAbbrev(start, tz)}`;
+}
+function pickSlots(busy, opts) {
+  const count = opts.count ?? 3;
+  const from = opts.now.getTime() + LEAD_HOURS * 36e5;
+  const until = (opts.until ?? addBusinessDays(opts.now, HORIZON_BUSINESS_DAYS, opts.userTz)).getTime();
+  const out = [];
+  const buffer = BUFFER_MIN * 6e4;
+  let key = localParts(new Date(from), opts.userTz).key;
+  for (let i = 0; i < 31 && out.length < count; i++, key = addDaysKey(key, 1)) {
+    const dow = weekdayOfKey(key);
+    if (dow === 0 || dow === 6 || usHolidays(Number(key.slice(0, 4))).has(key)) continue;
+    const dayStart = zonedTime2(key, DAY_START.hour, DAY_START.minute, opts.userTz).getTime();
+    const dayEnd = zonedTime2(key, DAY_END.hour, DAY_END.minute, opts.userTz).getTime();
+    if (dayStart > until) break;
+    for (let s = dayStart; s + SLOT_MINUTES * 6e4 <= dayEnd; s += SLOT_MINUTES * 6e4) {
+      const e = s + SLOT_MINUTES * 6e4;
+      if (s < from || e > until) continue;
+      if (busy.some((b) => s < b.end + buffer && e > b.start - buffer)) continue;
+      out.push({
+        start: new Date(s).toISOString(),
+        end: new Date(e).toISOString(),
+        label: slotLabel(new Date(s), new Date(e), opts.labelTz)
+      });
+      break;
+    }
+  }
+  return out;
+}
+async function googleCall(s, userId, url, body2) {
+  if (!s.tokens) throw new HttpError(503, "unconfigured", "Google is not configured");
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const token = await s.tokens.accessToken(userId);
+    const res = await s.fetch(url, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify(body2)
+    });
+    if (res.status === 401 && attempt === 0) {
+      s.tokens.invalidate(userId);
+      await res.body?.cancel();
+      continue;
+    }
+    let json2 = {};
+    try {
+      json2 = await res.json();
+    } catch {
+      json2 = {};
+    }
+    return { status: res.status, json: json2 };
+  }
+  return { status: 401, json: {} };
+}
+async function freeBusy(s, userId, timeMin, timeMax, tz) {
+  const r = await googleCall(s, userId, FREEBUSY_URL, {
+    timeMin: timeMin.toISOString(),
+    timeMax: timeMax.toISOString(),
+    timeZone: tz,
+    items: [{ id: "primary" }]
+  });
+  if (r.status !== 200) throw new HttpError(502, "upstream", `calendar ${r.status}`);
+  const cal = r.json.calendars?.primary;
+  return (cal?.busy ?? []).map((b) => ({ start: Date.parse(b.start), end: Date.parse(b.end) }));
+}
+async function storedBusy(db2, userId, from, to) {
+  const rows = await db2.sql`
+    select start_at, end_at from orbit.calendar_events
+     where user_id = ${userId}::uuid and coalesce(status, 'confirmed') <> 'cancelled'
+       and start_at < ${to}::timestamptz and coalesce(end_at, start_at + interval '30 minutes') > ${from}::timestamptz`;
+  return rows.map((r) => {
+    const start = new Date(r.start_at).getTime();
+    return { start, end: r.end_at ? new Date(r.end_at).getTime() : start + 30 * 6e4 };
+  });
+}
+async function slotsFor(s, userId, opts = {}) {
+  const [u2] = await s.db.sql`select timezone from orbit.users where id = ${userId}::uuid`;
+  const userTz = validZone(u2?.timezone) ?? "America/New_York";
+  let personTz;
+  if (opts.personId) {
+    const [p] = await s.db.sql`
+      select timezone from orbit.people where id = ${opts.personId}::uuid and user_id = ${userId}::uuid`;
+    personTz = validZone(p?.timezone);
+  }
+  const labelTz = validZone(opts.tz) ?? personTz ?? userTz;
+  const now = s.now();
+  const timeMin = new Date(now.getTime() + LEAD_HOURS * 36e5);
+  const timeMax = addBusinessDays(now, HORIZON_BUSINESS_DAYS, userTz);
+  let busy;
+  let source = "google";
+  try {
+    busy = await freeBusy(s, userId, timeMin, timeMax, userTz);
+  } catch (e) {
+    if (!(e instanceof NeedsReauth) && !(e instanceof HttpError)) throw e;
+    busy = await storedBusy(s.db, userId, timeMin, timeMax);
+    source = "stored";
+  }
+  const count = Math.max(1, Math.min(5, opts.count ?? 3));
+  return { slots: pickSlots(busy, { now, userTz, labelTz, count, until: timeMax }), tz: labelTz, source };
+}
+var STATE_TTL_MS2 = 10 * 6e4;
+async function calendarConsentUrl(s, userId, appUrl) {
+  if (!s.google) throw new HttpError(503, "unconfigured", "Google is not configured");
+  const [u2] = await s.db.sql`select email from orbit.users where id = ${userId}::uuid`;
+  const state = randomToken(32);
+  const { verifier, challenge } = await pkcePair();
+  const now = s.now();
+  const scopes = ["openid", "email", CALENDAR_EVENTS_SCOPE];
+  await s.db.sql`
+    insert into orbit.oauth_states (state, code_verifier, redirect_to, user_id, scopes, created_at, expires_at)
+    values (${state}, ${verifier}, ${appUrl}, ${userId}::uuid, ${scopes}::text[], ${now}::timestamptz,
+            ${new Date(now.getTime() + STATE_TTL_MS2)}::timestamptz)`;
+  return authUrl(s.google, { state, challenge, scopes, loginHint: u2?.email });
+}
+async function bookSlot(s, userId, req, appUrl) {
+  const [d] = await s.db.sql`
+    select id, person_id, chat_id from orbit.drafts where id = ${req.draftId}::uuid and user_id = ${userId}::uuid`;
+  if (!d) throw new HttpError(404, "not_found", "no such draft");
+  const start = new Date(req.slotStart);
+  if (Number.isNaN(start.getTime())) throw new HttpError(400, "bad_request", "slotStart must be an ISO time");
+  if (start.getTime() <= s.now().getTime()) throw new HttpError(409, "slot_past", "that time has passed");
+  const end = new Date(start.getTime() + SLOT_MINUTES * 6e4);
+  const [acct] = await s.db.sql`
+    select scopes, status from orbit.integration_accounts where user_id = ${userId}::uuid and provider = 'google'`;
+  if (!acct?.scopes.some((x) => x.endsWith("calendar.events")))
+    return { needsConsent: { url: await calendarConsentUrl(s, userId, appUrl) } };
+  const [p] = await s.db.sql`
+    select display_name, first_name, primary_email from orbit.people where id = ${d.person_id}::uuid`;
+  const [u2] = await s.db.sql`
+    select first_name, full_name, timezone from orbit.users where id = ${userId}::uuid`;
+  if (!p?.primary_email) throw new HttpError(409, "no_email", "this person has no email address to invite");
+  const tz = validZone(u2?.timezone) ?? "America/New_York";
+  const mine = u2?.first_name ?? u2?.full_name?.split(/\s+/)[0] ?? "Me";
+  const theirs = p.first_name ?? p.display_name.split(/\s+/)[0];
+  const title = `${mine} / ${theirs}`;
+  let r;
+  try {
+    r = await googleCall(s, userId, `${EVENTS_URL}?sendUpdates=all`, {
+      summary: title,
+      start: { dateTime: start.toISOString(), timeZone: tz },
+      end: { dateTime: end.toISOString(), timeZone: tz },
+      attendees: [{ email: p.primary_email }]
+    });
+  } catch (e) {
+    if (e instanceof NeedsReauth) throw new HttpError(409, "needs_reauth", "reconnect Google to book");
+    throw e;
+  }
+  if (r.status === 403) return { needsConsent: { url: await calendarConsentUrl(s, userId, appUrl) } };
+  if (r.status !== 200 || typeof r.json.id !== "string")
+    throw new HttpError(502, "upstream", `calendar ${r.status}`);
+  const eventId = r.json.id;
+  await s.db.sql`
+    insert into orbit.calendar_events (user_id, external_id, title, start_at, end_at, status, attendees,
+                                       attendee_person_ids, attendee_count, is_one_on_one, chat_id)
+    values (${userId}::uuid, ${eventId}, ${title}, ${start}::timestamptz, ${end}::timestamptz, 'confirmed',
+            ${JSON.stringify([{ email: p.primary_email }])}::jsonb, ${[d.person_id]}::uuid[], 2, true,
+            ${d.chat_id}::uuid)
+    on conflict (user_id, external_id) do nothing`;
+  await s.db.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+    values (${userId}::uuid, 'user', 'calendar.book', 'drafts', ${d.id}, ${{ start: iso(start) }}::jsonb)`;
+  if (d.chat_id) await moveChat(s.db, userId, d.chat_id, "scheduled", "call booked", s.now());
+  return { eventId };
+}
+async function moveChat(db2, userId, chatId, to, reason, now, actor = "system") {
+  const [c] = await db2.sql`
+    select stage from orbit.chats where id = ${chatId}::uuid and user_id = ${userId}::uuid`;
+  if (!c || c.stage === to) return;
+  await db2.sql`
+    update orbit.chats set stage = ${to}, stage_entered_at = ${now}::timestamptz
+     where id = ${chatId}::uuid and user_id = ${userId}::uuid`;
+  await db2.sql`
+    insert into orbit.stage_events (user_id, chat_id, from_stage, to_stage, status, actor, reason, decided_at)
+    values (${userId}::uuid, ${chatId}::uuid, ${c.stage}, ${to}, 'applied', ${actor}, ${reason}, ${now}::timestamptz)`;
+}
+
+// packages/core/src/style/card.ts
+function defaultStyleCard(preset, firstName) {
+  const base = {
+    avgSentenceWords: 14,
+    avgMessageWords: 90,
+    contractions: true,
+    exclamationsPerMessage: 0.3,
+    emoji: false,
+    characteristicPhrases: [],
+    avoid: [],
+    builtFromCount: 0,
+    version: 1
+  };
+  if (preset === "formal")
+    return {
+      ...base,
+      greetingPatterns: ["Dear {first},", "Hello {first},"],
+      signoffs: [`Kind regards,
+${firstName}`, `Best regards,
+${firstName}`],
+      formality: 0.85,
+      contractions: false,
+      exclamationsPerMessage: 0,
+      notes: "Formal preset."
+    };
+  if (preset === "direct")
+    return {
+      ...base,
+      greetingPatterns: ["Hi {first},", "{first},"],
+      signoffs: [`Thanks,
+${firstName}`, `Best,
+${firstName}`],
+      formality: 0.5,
+      avgSentenceWords: 11,
+      avgMessageWords: 70,
+      notes: "Direct preset: short sentences, one ask."
+    };
+  return {
+    ...base,
+    greetingPatterns: ["Hi {first},", "Hey {first},"],
+    signoffs: [`Best,
+${firstName}`, `Thanks so much,
+${firstName}`],
+    formality: 0.4,
+    exclamationsPerMessage: 0.6,
+    notes: "Warm preset."
+  };
+}
+
+// supabase/functions/_shared/compose/context.ts
+var USER_CONTEXT_MAX_CHARS = 4800;
+async function loadUserRow(db2, userId) {
+  const [u2] = await db2.sql`
+    select id, email, full_name, first_name, last_name, school, grad_year, degree, majors, current_title,
+           current_org, current_city, timezone, autonomy_level, settings
+      from orbit.users where id = ${userId}::uuid and deleted_at is null`;
+  if (!u2) throw new HttpError(401, "unauthorized", "sign in again");
+  return { ...u2, settings: u2.settings ?? {}, majors: u2.majors ?? [] };
+}
+var userFirstName = (u2) => u2.first_name?.trim() || u2.full_name?.trim().split(/\s+/)[0] || u2.email.split("@")[0];
+async function loadPerson(db2, userId, personId) {
+  if (typeof personId !== "string" || !/^[0-9a-f-]{36}$/i.test(personId))
+    throw new HttpError(400, "bad_request", "personId is required");
+  const [p] = await db2.sql`
+    select p.id, p.user_id, p.is_self, p.display_name, p.first_name, p.last_name, p.primary_email, p.headline,
+           p.title, p.org_raw, o.name as org_name, p.location, p.timezone, p.school, p.is_alumni, p.linkedin_url,
+           p.linkedin_slug, p.linkedin_member_id, p.do_not_contact, p.hidden_at, p.last_interaction_at,
+           ts.score::int as score,
+           coalesce((select array_agg(i.value_norm order by i.created_at) from orbit.person_identities i
+                      where i.person_id = p.id and i.kind = 'email'), '{}') as emails
+      from orbit.people p
+      left join orbit.organizations o on o.id = p.org_id
+      left join orbit.tie_scores ts on ts.user_id = p.user_id and ts.person_id = p.id
+     where p.id = ${personId}::uuid and p.user_id = ${userId}::uuid and p.deleted_at is null`;
+  if (!p) throw new HttpError(404, "not_found", "no such person");
+  const emails = [...new Set([p.primary_email, ...p.emails ?? []].filter((e) => !!e))];
+  return { ...p, emails };
+}
+var personOrg = (p) => p.org_name ?? p.org_raw ?? void 0;
+async function buildUserContext(db2, u2) {
+  const lines = [];
+  const name = u2.full_name ?? userFirstName(u2);
+  const role = [u2.current_title, u2.current_org].filter(Boolean).join(" at ");
+  const school = u2.school ? `${[u2.degree, u2.majors.join(", ")].filter(Boolean).join(" in ") || "Student"} at ${u2.school}${u2.grad_year ? `, class of ${u2.grad_year}` : ""}` : "";
+  lines.push(
+    [name, role, school, u2.current_city ? `based in ${u2.current_city}` : ""].filter(Boolean).join("; ")
+  );
+  const s = u2.settings;
+  for (const [k, label2] of [
+    ["company", "Company"],
+    ["pitch", "What it does"],
+    ["traction", "Traction"],
+    ["bio", "About"]
+  ])
+    if (typeof s[k] === "string" && s[k].trim())
+      lines.push(`${label2}: ${s[k].trim()}`);
+  const goals = await db2.sql`
+    select kind, title, description, targets from orbit.goals
+     where user_id = ${u2.id}::uuid and status = 'active' and deleted_at is null
+     order by priority, created_at limit 5`;
+  for (const g of goals) {
+    const t = g.targets ?? {};
+    const targets = [...t.organizations ?? [], ...t.roles ?? []].slice(0, 6).join(", ");
+    lines.push(
+      `Goal (${g.kind}): ${g.title}${g.description ? `. ${g.description}` : ""}${targets ? ` (targets: ${targets})` : ""}`
+    );
+  }
+  const [resume] = await db2.sql`
+    select parsed, text from orbit.uploads
+     where user_id = ${u2.id}::uuid and kind = 'resume' and is_current
+     order by created_at desc limit 1`;
+  if (resume) {
+    const facets = facetLines(resume.parsed);
+    lines.push(
+      `Resume: ${facets.length ? facets.join("; ") : resume.text.replace(/\s+/g, " ").slice(0, 800)}`
+    );
+  }
+  const memories = await db2.sql`
+    select text from orbit.memories
+     where user_id = ${u2.id}::uuid and deleted_at is null and person_id is null
+     order by importance desc, last_seen_at desc limit 10`;
+  if (memories.length) lines.push(`Remembered: ${memories.map((m) => m.text).join(" | ")}`);
+  const text2 = lines.join("\n");
+  return text2.length > USER_CONTEXT_MAX_CHARS ? `${text2.slice(0, USER_CONTEXT_MAX_CHARS - 1)}…` : text2;
+}
+function facetLines(parsed) {
+  if (!parsed) return [];
+  const out = [];
+  const list4 = (v) => Array.isArray(v) ? v : [];
+  for (const f2 of list4(parsed.facets)) {
+    const o = f2;
+    const t = [o.title ?? o.role, o.org ?? o.organization, o.text].filter((x) => typeof x === "string");
+    if (t.length) out.push(t.join(", "));
+  }
+  for (const e of list4(parsed.experiences ?? parsed.experience)) {
+    const o = e;
+    const t = [o.title, o.org ?? o.company].filter((x) => typeof x === "string");
+    if (t.length) out.push(t.join(" at "));
+  }
+  for (const e of list4(parsed.education)) {
+    const o = e;
+    const t = [o.degree, o.school].filter((x) => typeof x === "string");
+    if (t.length) out.push(t.join(", "));
+  }
+  const skills = list4(parsed.skills).filter((x) => typeof x === "string");
+  if (skills.length) out.push(`Skills: ${skills.slice(0, 12).join(", ")}`);
+  return out.slice(0, 12);
+}
+function styleCardOf(u2) {
+  const card = u2.settings.style_card;
+  if (card && typeof card === "object" && (card.builtFromCount ?? 0) >= 5) return card;
+  const preset = u2.settings.tone_preset;
+  return defaultStyleCard(preset === "direct" || preset === "formal" ? preset : "warm", userFirstName(u2));
+}
+function voiceText(c) {
+  return [
+    `greetings: ${c.greetingPatterns.join(" | ")}`,
+    `sign-offs: ${c.signoffs.map((x) => x.replace(/\n/g, " ")).join(" | ")}`,
+    `average sentence: ${Math.round(c.avgSentenceWords)} words; average message: ${Math.round(c.avgMessageWords)} words`,
+    `contractions: ${c.contractions ? "yes" : "no"}; exclamation marks: ${c.exclamationsPerMessage > 0 ? "sometimes" : "never"}; emoji: ${c.emoji ? "yes" : "no"}`,
+    c.characteristicPhrases.length ? `phrases they use: ${c.characteristicPhrases.join(" | ")}` : "",
+    c.avoid.length ? `never: ${c.avoid.join(" | ")}` : "",
+    c.notes ? `notes: ${c.notes}` : ""
+  ].filter(Boolean).join("\n");
+}
+var escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+async function exemplars(s, userId, personId, situation, opts = {}) {
+  let q = null;
+  try {
+    q = await s.embed(situation);
+  } catch {
+    q = null;
+  }
+  if (!q?.length) return [];
+  const limit = opts.limit ?? 3;
+  const pick = (onlyReplies) => s.db.sql`
+    select m.id, m.body_text, m.to_person_ids from orbit.messages m
+     where m.user_id = ${userId}::uuid and m.direction = 'out' and m.embedding is not null
+       and m.body_text is not null and not (${personId}::uuid = any(m.to_person_ids))
+       and coalesce(array_length(regexp_split_to_array(btrim(m.body_text), '\\s+'), 1), 0) >= 25
+       and (${onlyReplies}::boolean = false or m.in_reply_to is not null)
+     order by m.embedding <=> ${vec(q)}::vector
+     limit ${limit}::int`;
+  let rows = await pick(!!opts.replies);
+  if (opts.replies && rows.length < limit) {
+    const more = await pick(false);
+    rows = [...rows, ...more.filter((m) => !rows.some((r) => r.id === m.id))].slice(0, limit);
+  }
+  const ids = [...new Set(rows.flatMap((r) => r.to_person_ids ?? []))];
+  const names = ids.length ? await s.db.sql`
+        select first_name, last_name, display_name from orbit.people
+         where user_id = ${userId}::uuid and id = any(${ids}::uuid[])` : [];
+  const words = [
+    ...new Set(
+      names.flatMap((n) => [n.display_name, n.first_name, n.last_name]).filter((x) => !!x?.trim())
+    )
+  ].sort((a, b) => b.length - a.length);
+  return rows.map((r) => {
+    let text2 = stripQuotedReply(r.body_text).trim().slice(0, 1200);
+    for (const w of words) text2 = text2.replace(new RegExp(`\\b${escapeRe(w)}\\b`, "g"), "[name]");
+    return text2.replace(/^(hi|hey|hello|dear)\s+[A-Z][a-z]+/i, (m) => `${m.split(/\s+/)[0]} [name]`);
+  });
+}
+async function loadResearch(db2, userId, personId) {
+  const [d] = await db2.sql`
+    select content, status from orbit.dossiers
+     where user_id = ${userId}::uuid and person_id = ${personId}::uuid and status in ('ready', 'partial')`;
+  const facts = await db2.sql`
+    select id, text, type from orbit.facts
+     where user_id = ${userId}::uuid and person_id = ${personId}::uuid and deleted_at is null
+     order by confidence desc, created_at desc limit 8`;
+  const c = d?.content ?? {};
+  const lines = [];
+  const ids = /* @__PURE__ */ new Set();
+  const openers = [];
+  const cite = (xs) => {
+    for (const x of xs ?? []) ids.add(x);
+    return xs?.length ? ` [${xs.join(", ")}]` : "";
+  };
+  if (c.who) lines.push(`who: ${c.who}`);
+  let now;
+  if (c.now?.role || c.now?.org) {
+    now = [c.now.role, c.now.org].filter(Boolean).join(" at ");
+    lines.push(`now: ${now}${c.now.since ? ` since ${c.now.since}` : ""}${cite(c.now.source_ids)}`);
+  }
+  for (const r of c.recently ?? [])
+    lines.push(`recently: ${r.date ? `${r.date}: ` : ""}${r.text}${cite(r.source_ids)}`);
+  for (const r of c.in_common ?? []) lines.push(`in common: ${r.text}${cite(r.source_ids)}`);
+  for (const o of c.openers ?? []) {
+    lines.push(`opener: ${o.text}${cite(o.source_ids)}`);
+    if (o.source_ids?.[0]) openers.push({ id: o.source_ids[0], text: o.text, kind: "opener" });
+  }
+  for (const x of c.careful ?? []) lines.push(`careful: ${x}`);
+  facts.forEach((f2, i) => {
+    const id = `F${i + 1}`;
+    ids.add(id);
+    lines.push(`fact [${id}] (${f2.type}): ${f2.text}`);
+    openers.push({ id, text: f2.text, kind: "fact" });
+  });
+  return {
+    text: lines.join("\n"),
+    ids: [...ids],
+    openers,
+    recently: (c.recently ?? []).map((r) => ({ text: r.text, date: r.date ?? null })),
+    now
+  };
+}
+function recipientText(p) {
+  return [
+    `name: ${p.display_name}`,
+    p.title ? `title: ${p.title}` : "",
+    personOrg(p) ? `organization: ${personOrg(p)}` : "",
+    p.headline ? `headline: ${p.headline}` : "",
+    p.location ? `location: ${p.location}` : "",
+    p.school ? `school: ${p.school}${p.is_alumni ? " (same school as the user)" : ""}` : "",
+    p.score !== null && p.score !== void 0 ? `relationship score: ${p.score}/100` : "",
+    p.last_interaction_at ? `last contact: ${iso(p.last_interaction_at).slice(0, 10)}` : ""
+  ].filter(Boolean).join("\n");
+}
+
+// supabase/functions/_shared/compose/prompts.ts
+import { z as z2 } from "npm:zod@3.25.76/v4";
+var PROMPT_VERSION = "compose-v2.0";
+var composeSchema = z2.object({
+  subject: z2.string().nullable(),
+  body: z2.string(),
+  ask: z2.object({
+    kind: z2.enum(["call", "question", "interest", "intro", "none"]),
+    text: z2.string()
+  }),
+  hooks: z2.array(z2.object({ text: z2.string(), sourceId: z2.string() }))
+});
+var GOAL_ASK = {
+  recruiting: "call",
+  advice: "call",
+  fundraising: "interest",
+  sales: "interest",
+  hiring: "interest",
+  cofounder: "call",
+  community: "question",
+  collaboration: "question"
+};
+function askKindFor(kind, goal, replyWantsCall = false) {
+  switch (kind) {
+    case "intro_request":
+      return "intro";
+    case "forwardable_blurb":
+    case "thank_you":
+    case "reengage":
+    case "nurture":
+    case "congratulate":
+    case "report_back":
+      return "none";
+    case "reply":
+      return replyWantsCall ? "call" : "none";
+    case "schedule":
+      return "call";
+    default:
+      return GOAL_ASK[goal];
+  }
+}
+function composeSystem(p) {
+  const lines = [
+    `You write one message that ${p.userFirstName} will send as themselves. It must sound like them, not like a template or a salesperson.`,
+    "Hard rules:",
+    `- ${p.wordRange} words; one ask: ${p.askKind}; subject 2–6 words.`,
+    "- Use at least one opener from <research> and keep it true; cite its source id in hooks.",
+    "- Never claim familiarity, shared history or a mutual connection that isn't in the inputs.",
+    '- No flattery adjectives (amazing, incredible, inspiring), no "I hope this finds you well", no "quick question", no em-dashes, no exclamation marks unless the voice card uses them.',
+    "- Plain words, short sentences (reading grade ≤ 7).",
+    "- Match <voice> for greeting, sign-off, contractions and sentence length. Borrow rhythm from <examples>, never their content."
+  ];
+  if (p.kind === "forwardable_blurb" && p.blurb)
+    lines.push(
+      "",
+      `Write a third-person blurb of at most 90 words that ${p.blurb.intermediary} can forward unchanged to ${p.blurb.target}: who ${p.userFirstName} is, the one reason they want to talk to ${p.blurb.target}, and the small ask. No flattery. Facts only from the inputs.`
+    );
+  if (p.kind === "reply")
+    lines.push(
+      "",
+      "Answer what they said. If they proposed times, accept one that is free (given in <free_slots>) or offer those. Keep it shorter than their message unless they asked questions. If a fact is needed that is not in the inputs, write [ASK USER: …] instead of guessing."
+    );
+  return lines.join("\n");
+}
+function block(tag, text2) {
+  const clean = (text2 ?? "").replace(/<\/?[a-z_]+[^>]*>/gi, " ").trim();
+  return `<${tag}>${clean ? `
+${clean}
+` : ""}</${tag}>`;
+}
+function composeUser(b) {
+  return [
+    block("task", b.task),
+    block("user_context", b.userContext),
+    block("goal", b.goal),
+    block("recipient", b.recipient),
+    block("research", b.research),
+    block("thread", b.thread),
+    block("via", b.via),
+    block("voice", b.voice),
+    block("examples", b.examples),
+    ...b.freeSlots !== void 0 ? [block("free_slots", b.freeSlots)] : []
+  ].join("\n");
+}
+function retryNote(issues) {
+  return `
+<issues>
+${issues.map((i) => `- ${i}`).join("\n")}
+</issues>
+Rewrite the message so it passes every rule. Keep what was true and fix only these issues.`;
+}
+var ASK_USER = /\[ASK USER:\s*([^\]]*)\]/g;
+function askUserMarkers(text2) {
+  return [...text2.matchAll(ASK_USER)].map((m) => m[1].trim()).filter(Boolean);
+}
+
+// supabase/functions/_shared/compose/window.ts
+var WINDOW_START = { hour: 8, minute: 0 };
+var WINDOW_END = { hour: 10, minute: 30 };
+var JITTER_MAX_MIN = 20;
+function sendDayAllowed(key, channel) {
+  const dow = weekdayOfKey(key);
+  const ok = dow === 2 || dow === 3 || dow === 4 || channel === "linkedin" && dow === 1;
+  return ok && !usHolidays(Number(key.slice(0, 4))).has(key);
+}
+function nextSendWindow(now, tz, channel, random = Math.random) {
+  const zone = validZone(tz) ?? "America/New_York";
+  const jitterMs = Math.floor(random() * (JITTER_MAX_MIN + 1)) * 6e4;
+  let key = localParts(now, zone).key;
+  for (let i = 0; i < 21; i++, key = addDaysKey(key, 1)) {
+    if (!sendDayAllowed(key, channel)) continue;
+    const start = zonedTime2(key, WINDOW_START.hour, WINDOW_START.minute, zone).getTime();
+    const end = zonedTime2(key, WINDOW_END.hour, WINDOW_END.minute, zone).getTime();
+    if (now.getTime() >= end) continue;
+    const at = Math.min(Math.max(now.getTime(), start) + jitterMs, end);
+    return { notBefore: new Date(at).toISOString(), tz: zone };
+  }
+  return { notBefore: now.toISOString(), tz: zone };
+}
+
+// supabase/functions/_shared/compose/compose.ts
+var OPT_OUT_LINE = "If this isn't relevant, just say so and I won't follow up.";
+var DECLINE_COOLDOWN_DAYS = 180;
+var DAY4 = 864e5;
+var GOAL_REGISTER = {
+  recruiting: "ask: a 15-minute call about their path or team; register: warm, curious, specific",
+  advice: "ask: 15–20 minutes on one named question; register: warm, humble",
+  fundraising: 'ask: "Would you be open to a look?" plus one line of traction; register: crisp, numbers first',
+  sales: 'ask: "Worth a quick look?" tied to a trigger; register: short, concrete, no hype',
+  hiring: `ask: "Open to hearing about it?" with the role's one hook; register: direct, respects their current job`,
+  cofounder: "ask: 20 minutes to compare notes on the problem; register: peer-to-peer",
+  community: "ask: an invite to a specific event or group; register: friendly",
+  collaboration: "ask: a specific question about their paper plus the overlap; register: precise, academic"
+};
+async function composeDraft(s, req) {
+  const db2 = s.db;
+  const now = s.now();
+  const user = await loadUserRow(db2, req.userId);
+  const person2 = await loadPerson(db2, req.userId, req.personId);
+  if (person2.is_self) throw new HttpError(400, "bad_request", "that is you");
+  if (person2.do_not_contact)
+    throw new HttpError(
+      409,
+      "do_not_contact",
+      "they asked not to be contacted, so Orbit will not write to them"
+    );
+  let replyTo;
+  if (req.kind === "reply") {
+    if (!req.replyToMessageId) throw new HttpError(400, "bad_request", "a reply needs replyToMessageId");
+    replyTo = await loadReplyMessage(db2, req.userId, req.replyToMessageId);
+    if (replyTo.reply_class === "unsubscribe")
+      throw new HttpError(409, "unsubscribe", "they asked not to be contacted; no reply is drafted");
+  }
+  const goal = await resolveGoal(db2, req.userId, req.goalId ?? null, req.chatId ?? null, person2.id);
+  const goalKind = goal?.kind ?? "advice";
+  const chatId = req.chatId ?? await chatFor(db2, req.userId, person2.id, goal?.id ?? null);
+  const history = await historyWith(db2, req.userId, person2.id);
+  const sendsToThem = req.kind !== "forwardable_blurb";
+  if (sendsToThem && req.kind !== "reply" && unansweredBefore(history) >= 3)
+    throw new HttpError(409, "unanswered_limit", "three messages already went unanswered");
+  const firstTouch = FIRST_TOUCH_KINDS.has(req.kind);
+  if (firstTouch) {
+    const [declined] = await db2.sql`
+      select count(*)::int as n from orbit.chats
+       where user_id = ${req.userId}::uuid and person_id = ${person2.id}::uuid and stage = 'declined'
+         and stage_entered_at > ${new Date(now.getTime() - DECLINE_COOLDOWN_DAYS * DAY4)}::timestamptz`;
+    if ((declined?.n ?? 0) > 0)
+      throw new HttpError(409, "declined_recently", "they declined in the last 180 days");
+  }
+  const newRecipient = !history.some((m) => m.direction === "out");
+  const salesFirstTouch2 = goalKind === "sales" && firstTouch && req.channel === "gmail" && newRecipient;
+  const postal = typeof user.settings.postal_address === "string" ? user.settings.postal_address.trim() : "";
+  if (salesFirstTouch2 && !postal)
+    throw new HttpError(
+      409,
+      "needs_postal_address",
+      "add a postal address in Settings before the first sales email (CAN-SPAM)"
+    );
+  const target = req.targetPersonId ? await loadPerson(db2, req.userId, req.targetPersonId) : void 0;
+  const introducer = req.via && req.via.introducerId !== person2.id ? await loadPerson(db2, req.userId, req.via.introducerId).catch(() => void 0) : req.via ? person2 : void 0;
+  const research = await loadResearch(db2, req.userId, person2.id);
+  const userContext = await buildUserContext(db2, user);
+  const card = styleCardOf(user);
+  const meFirst = userFirstName(user);
+  const tz = validZone(person2.timezone) ?? validZone(user.timezone) ?? "America/New_York";
+  const window = nextSendWindow(now, tz, req.channel, s.random);
+  const thread = await threadContext(db2, req.userId, person2.id, req.kind, replyTo, req.channel);
+  const replyClass = replyTo?.reply_class ?? void 0;
+  const schedulingLink = typeof user.settings.scheduling_link === "string" ? user.settings.scheduling_link : void 0;
+  let slots2 = [];
+  const wantsTimes = replyClass === "interested" || replyClass === "scheduling";
+  if (req.kind === "reply" && wantsTimes) {
+    try {
+      slots2 = (await slotsFor(s, req.userId, { personId: person2.id, count: 3 })).slots;
+    } catch {
+      slots2 = [];
+    }
+  }
+  const askKind = askKindFor(req.kind, goalKind, wantsTimes);
+  const range = req.channel === "linkedin" ? "At most 400 characters," : wordRangeText(req.kind, goalKind);
+  const viaText = introducer ? `${introducer.display_name}${req.via?.pathScore !== void 0 ? ` (path score ${req.via.pathScore.toFixed(2)})` : ""}` : "";
+  const goalText = goal ? `${goal.kind}: ${goal.title}${goal.description ? `. ${goal.description}` : ""}
+${GOAL_REGISTER[goalKind]}` : GOAL_REGISTER[goalKind];
+  const topic = req.topic ?? goalTopic(goal);
+  const task = [
+    `kind: ${req.kind}; channel: ${req.channel}; ask: ${askKind}`,
+    target ? `the introduction is to: ${target.display_name}${personOrg(target) ? ` at ${personOrg(target)}` : ""}` : "",
+    req.kind === "forwardable_blurb" ? `the intermediary reading it first: ${person2.display_name}` : "",
+    topic ? `about: ${topic}` : "",
+    req.reason ? `why now: ${req.reason}` : "",
+    schedulingLink && wantsTimes ? `scheduling link: ${schedulingLink}` : ""
+  ].filter(Boolean).join("\n");
+  const examples = await exemplars(
+    s,
+    req.userId,
+    person2.id,
+    [req.kind, goalKind, person2.title ?? "", thread.lastInbound ?? "", topic ?? ""].join(" "),
+    { replies: req.kind === "reply" }
+  );
+  const slotText = slots2.map((x) => `${x.start} = ${x.label}`).join("\n");
+  const userBlocks = composeUser({
+    task,
+    userContext,
+    goal: goalText,
+    recipient: recipientText(person2),
+    research: research.text,
+    thread: thread.text,
+    via: viaText,
+    voice: voiceText(card),
+    examples: examples.map((e, i) => `Example ${i + 1}:
+${e}`).join("\n\n"),
+    ...req.kind === "reply" ? { freeSlots: slotText } : {}
+  });
+  const system = composeSystem({
+    userFirstName: meFirst,
+    wordRange: range,
+    askKind,
+    kind: req.kind,
+    blurb: req.kind === "forwardable_blurb" ? { intermediary: person2.display_name, target: target?.display_name ?? "them" } : void 0
+  });
+  const inputs = [
+    userContext,
+    goalText,
+    recipientText(person2),
+    research.text,
+    thread.text,
+    viaText,
+    task,
+    slots2.map((x) => x.label).join("\n"),
+    target ? recipientText(target) : "",
+    meFirst,
+    user.full_name ?? ""
+  ].join("\n");
+  const ctx = {
+    goal: goalKind,
+    recipientFirstName: firstNameOf(person2),
+    recipientFullName: person2.display_name,
+    recipientEmail: person2.primary_email ?? void 0,
+    inputs,
+    allowedUrls: schedulingLink ? [schedulingLink] : [],
+    style: card,
+    userFirstName: meFirst
+  };
+  const check = (out) => checkComposed(out, req, ctx, research);
+  let output;
+  let attempts = 0;
+  let generatedBy = "template";
+  let lastIssues = [];
+  if (s.claude.configured) {
+    let turn = userBlocks;
+    for (let i = 0; i < 2; i++) {
+      attempts++;
+      const r = await s.claude.structured({
+        task: req.kind === "reply" ? "reply" : "compose",
+        system,
+        user: turn,
+        schema: composeSchema,
+        userId: req.userId
+      });
+      if (!r.ok) break;
+      const issues2 = check(r.data);
+      if (!issues2.length) {
+        output = r.data;
+        generatedBy = "llm";
+        break;
+      }
+      lastIssues = issues2;
+      turn = userBlocks + retryNote(issues2);
+    }
+  }
+  let composed;
+  let promptVersion = PROMPT_VERSION;
+  if (output) {
+    composed = {
+      id: "",
+      goalId: goal?.id ?? null,
+      personId: person2.id,
+      kind: req.kind,
+      channel: req.channel,
+      subject: req.channel === "gmail" && req.kind !== "reply" ? output.subject?.trim() || null : null,
+      body: output.body.trim(),
+      ask: output.ask,
+      hooks: output.hooks.filter((h) => h.text.trim() && h.sourceId.trim()),
+      ...req.via ? { via: { introducerId: req.via.introducerId, pathScore: req.via.pathScore } } : {},
+      sendWindow: window,
+      promptVersion,
+      variant: null
+    };
+  } else {
+    const t = templateMessage({
+      req,
+      user,
+      person: person2,
+      target,
+      introducer,
+      goalKind,
+      goalId: goal?.id ?? null,
+      research,
+      topic,
+      window,
+      replyClass,
+      slots: slots2
+    });
+    composed = t;
+    promptVersion = t.promptVersion;
+  }
+  let footer;
+  if (salesFirstTouch2) {
+    const company = typeof user.settings.company === "string" ? user.settings.company.trim() : "";
+    footer = [[user.full_name ?? meFirst, company].filter(Boolean).join(", "), postal, OPT_OUT_LINE].filter(Boolean).join("\n");
+  }
+  const forCheck = composed.body.replace(ASK_USER, "").trim();
+  const v = validateComposed({ ...composed, body: forCheck }, ctx);
+  const markers = askUserMarkers(composed.body);
+  const issues = v.issues.filter((i) => i.blocking).map((i) => `${i.code}: ${i.detail}`).concat(markers.map((m) => `needs_input: ${m}`));
+  const validator = { ok: v.ok && markers.length === 0, issues, words: v.words, grade: v.grade };
+  const body2 = footer ? `${composed.body}
+
+${footer}` : composed.body;
+  const meta = {
+    kind: composed.ask.kind,
+    text: composed.ask.text,
+    ...replyTo ? { replyToMessageId: replyTo.id } : {},
+    ...slots2.length ? { slots: slots2.map((x) => x.start) } : {},
+    ...req.reason ? { reason: req.reason } : {},
+    ...footer ? { footer } : {}
+  };
+  const level = goal?.autonomy_level ?? user.autonomy_level ?? 0;
+  const via = req.via ? { ...req.via } : null;
+  const [row] = await db2.sql`
+    insert into orbit.drafts (user_id, person_id, chat_id, goal_id, channel, kind, subject, body, ask, hooks, via,
+                              thread_external_id, in_reply_to, status, autonomy_level, validator, generated_by,
+                              prompt_version, variant)
+    values (${req.userId}::uuid, ${person2.id}::uuid, ${chatId}::uuid, ${goal?.id ?? null}::uuid, ${req.channel},
+            ${req.kind}, ${composed.subject}, ${body2}, ${meta}::jsonb, ${JSON.stringify(composed.hooks)}::jsonb,
+            ${via}::jsonb, ${thread.externalId}, ${replyTo?.rfc_message_id ?? replyTo?.external_id ?? null}, 'draft',
+            ${level}::smallint, ${validator}::jsonb, ${generatedBy}, ${promptVersion}, null)
+    returning *`;
+  await db2.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+    values (${req.userId}::uuid, ${req.actor ?? "user"}, 'draft.compose', 'drafts', ${row.id},
+            ${{ kind: req.kind, channel: req.channel, generated_by: generatedBy, attempts, issues: lastIssues.length }}::jsonb)`;
+  return {
+    draft: row,
+    composed: { ...composed, id: row.id, body: body2, validator },
+    attempts
+  };
+}
+function wordRangeText(kind, goal) {
+  const [min, max] = wordRange(kind, goal);
+  return `${min}–${max}`;
+}
+function goalTopic(goal) {
+  if (!goal) return void 0;
+  const t = goal.targets ?? {};
+  const c = goal.criteria ?? {};
+  if (t.roles?.[0]) return t.roles[0];
+  if (typeof c.topic === "string" && c.topic.trim()) return c.topic.trim();
+  return ["collaboration", "community", "cofounder", "advice"].includes(goal.kind) ? goal.title : void 0;
+}
+var BUSINESS_GOALS = /* @__PURE__ */ new Set(["sales", "fundraising", "hiring", "cofounder"]);
+function checkComposed(out, req, ctx, research) {
+  const body2 = out.body.replace(ASK_USER, "").trim();
+  const v = validateComposed(
+    {
+      kind: req.kind,
+      channel: req.channel,
+      subject: req.channel === "gmail" && req.kind !== "reply" ? out.subject : null,
+      body: body2,
+      hooks: out.hooks,
+      ask: out.ask
+    },
+    ctx
+  );
+  const issues = v.issues.filter((i) => i.blocking).map((i) => `${i.code}: ${i.detail}`);
+  const known = new Set(research.ids);
+  for (const h of out.hooks)
+    if (h.sourceId.trim() && !known.has(h.sourceId.trim()))
+      issues.push(`hook_source: ${h.sourceId} is not a source id in <research>`);
+  return issues;
+}
+async function resolveGoal(db2, userId, goalId, chatId, personId) {
+  if (goalId) {
+    const [g2] = await db2.sql`
+      select id, kind, title, description, targets, criteria, autonomy_level from orbit.goals
+       where id = ${goalId}::uuid and user_id = ${userId}::uuid and deleted_at is null`;
+    if (!g2) throw new HttpError(404, "not_found", "no such goal");
+    return g2;
+  }
+  const [g] = await db2.sql`
+    select g.id, g.kind, g.title, g.description, g.targets, g.criteria, g.autonomy_level
+      from orbit.chats c join orbit.goals g on g.id = c.goal_id
+     where c.user_id = ${userId}::uuid and g.deleted_at is null
+       and (c.id = ${chatId}::uuid or (${chatId}::uuid is null and c.person_id = ${personId}::uuid))
+     order by c.updated_at desc limit 1`;
+  return g;
+}
+async function chatFor(db2, userId, personId, goalId) {
+  const [c] = await db2.sql`
+    select id from orbit.chats
+     where user_id = ${userId}::uuid and person_id = ${personId}::uuid and archived_at is null
+     order by (goal_id is not distinct from ${goalId}::uuid) desc, updated_at desc limit 1`;
+  return c?.id ?? null;
+}
+async function historyWith(db2, userId, personId) {
+  const rows = await db2.sql`
+    select direction, sent_at as at, external_id from orbit.messages
+     where user_id = ${userId}::uuid
+       and (from_person_id = ${personId}::uuid or ${personId}::uuid = any(to_person_ids))
+       and not is_automated
+    union all
+    select 'out' as direction, d.sent_at as at, d.provider_message_id as external_id from orbit.drafts d
+     where d.user_id = ${userId}::uuid and d.person_id = ${personId}::uuid and d.status = 'sent'
+       and d.kind <> 'forwardable_blurb' and d.sent_at is not null
+       and not exists (select 1 from orbit.messages m where m.user_id = d.user_id
+                        and m.external_id = d.provider_message_id)`;
+  return rows.map((r) => ({ direction: r.direction, at: iso(r.at) }));
+}
+async function loadReplyMessage(db2, userId, messageId) {
+  if (!/^[0-9a-f-]{36}$/i.test(messageId)) throw new HttpError(400, "bad_request", "messageId is required");
+  const [m] = await db2.sql`
+    select id, thread_id, provider, external_id, rfc_message_id, from_person_id, reply_class, sent_at
+      from orbit.messages
+     where id = ${messageId}::uuid and user_id = ${userId}::uuid and direction = 'in'`;
+  if (!m) throw new HttpError(404, "not_found", "no such reply");
+  return m;
+}
+async function threadContext(db2, userId, personId, kind, replyTo, channel) {
+  let threadId = replyTo?.thread_id;
+  if (!threadId && (kind === "bump" || kind === "thank_you" || kind === "schedule" || kind === "report_back")) {
+    const [t2] = await db2.sql`
+      select t.id from orbit.threads t
+       where t.user_id = ${userId}::uuid and t.provider = ${channel}
+         and ${personId}::uuid = any(t.participant_person_ids)
+       order by t.last_at desc nulls last limit 1`;
+    threadId = t2?.id;
+  }
+  if (!threadId) return { text: "", externalId: null };
+  const [t] = await db2.sql`
+    select external_id, subject from orbit.threads where id = ${threadId}::uuid`;
+  const msgs = await db2.sql`
+    select direction, sent_at, body_text, snippet from orbit.messages
+     where thread_id = ${threadId}::uuid order by sent_at desc limit ${kind === "reply" ? 8 : 2}::int`;
+  const ordered = msgs.reverse();
+  const lines = ordered.map(
+    (m) => `${iso(m.sent_at).slice(0, 16).replace("T", " ")} ${m.direction === "in" ? "them" : "user"}: ${stripQuotedReply(m.body_text ?? m.snippet ?? "").slice(0, 1500)}`
+  );
+  const lastIn = [...ordered].reverse().find((m) => m.direction === "in");
+  return {
+    text: [t?.subject ? `subject: ${t.subject}` : "", ...lines].filter(Boolean).join("\n"),
+    lastInbound: lastIn ? stripQuotedReply(lastIn.body_text ?? lastIn.snippet ?? "").slice(0, 500) : void 0,
+    externalId: t?.external_id ?? null
+  };
+}
+var TEMPLATE_KIND = {
+  outreach: "first_touch",
+  referral_ask: "intro_request",
+  nurture: "reengage",
+  congratulate: "reengage",
+  report_back: "reengage",
+  schedule: "bump"
+};
+function hookPhrase(text2) {
+  const t = text2.trim().replace(/[.!?]+$/, "").replace(/\s+(stuck with me|caught my eye|resonated with me)$/i, "");
+  return /^(Your|The|A|An|I)\b/.test(t) && !/^I\b/.test(t) ? t[0].toLowerCase() + t.slice(1) : t;
+}
+function templateMessage(p) {
+  const { req, user, person: person2 } = p;
+  const me2 = userFirstName(user);
+  if (req.kind === "reply") return replyTemplate(p, me2);
+  const kind = COMPOSE_KINDS.includes(req.kind) ? req.kind : TEMPLATE_KIND[req.kind] ?? "first_touch";
+  const opener = p.research.openers[0];
+  const s = user.settings;
+  const str2 = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
+  const about = user.current_title && user.current_org ? `${user.current_title} at ${user.current_org}` : user.school ? `a student at ${user.school}` : void 0;
+  const input = {
+    kind,
+    goal: p.goalKind,
+    channel: req.channel,
+    personId: person2.id,
+    goalId: p.goalId,
+    user: {
+      firstName: me2,
+      school: user.school ?? void 0,
+      about,
+      company: BUSINESS_GOALS.has(p.goalKind) ? str2(s.company) : void 0,
+      pitch: BUSINESS_GOALS.has(p.goalKind) ? str2(s.pitch) : p.goalKind === "collaboration" ? str2(s.research_topic) : void 0,
+      traction: p.goalKind === "fundraising" ? str2(s.traction) : void 0
+    },
+    recipient: { firstName: firstNameOf(person2), org: personOrg(person2), title: person2.title ?? void 0 },
+    hook: opener ? { text: hookPhrase(opener.text), sourceId: opener.id } : void 0,
+    topic: p.topic,
+    via: p.introducer && p.req.via ? {
+      introducerId: p.introducer.id,
+      introducerFirstName: firstNameOf(p.introducer),
+      pathScore: p.req.via.pathScore
+    } : void 0,
+    target: p.target ? { firstName: firstNameOf(p.target), org: personOrg(p.target) } : void 0,
+    sendWindow: p.window
+  };
+  const out = composeFallback(input);
+  return { ...out, kind: req.kind, goalId: p.goalId };
+}
+function replyTemplate(p, me2) {
+  const hi = `Hi ${firstNameOf(p.person)},`;
+  const sign = `Best,
+${me2}`;
+  let middle;
+  let ask2 = { kind: "none", text: "" };
+  switch (p.replyClass) {
+    case "interested":
+    case "scheduling":
+      if (p.slots.length) {
+        ask2 = { kind: "call", text: "Would any of these times work for you?" };
+        middle = `Thanks for getting back to me. ${ask2.text}
+
+${p.slots.map((x) => `- ${x.label}`).join("\n")}`;
+      } else middle = "Thanks for getting back to me. [ASK USER: a few times that work for you this week]";
+      break;
+    case "thanks":
+    case "out_of_office":
+      middle = "Thank you, I really appreciate it. I will keep you posted on how things go.";
+      break;
+    case "decline":
+    case "not_now":
+    case "objection":
+      middle = "Thanks for letting me know, I understand. I appreciate you taking the time to reply.";
+      break;
+    case "referral":
+      middle = "Thank you for pointing me in the right direction. [ASK USER: how you will reach out to them]";
+      break;
+    default:
+      middle = "Thanks for your note. [ASK USER: your answer to their message]";
+  }
+  return {
+    id: "",
+    goalId: p.goalId,
+    personId: p.person.id,
+    kind: "reply",
+    channel: p.req.channel,
+    subject: null,
+    body: [hi, middle, sign].join("\n\n"),
+    ask: ask2,
+    hooks: [],
+    sendWindow: p.window,
+    promptVersion: "template-v2",
+    variant: null
+  };
+}
+
+// supabase/functions/_shared/cadence/cadence.ts
+var DAY5 = 864e5;
+function goalFrom(r) {
+  const due2 = r.due_at instanceof Date ? r.due_at.toISOString().slice(0, 10) : r.due_at;
+  return goalFromRow({ ...isoRow(r), due_at: due2 });
+}
+async function loadCadence(db2, userId, now) {
+  const [u2] = await db2.sql`
+    select timezone, settings from orbit.users where id = ${userId}::uuid`;
+  const tz = validZone(u2?.timezone) ?? "America/New_York";
+  const settings = u2?.settings ?? {};
+  const chatRows = await db2.sql`
+    select * from orbit.chats where user_id = ${userId}::uuid and archived_at is null`;
+  const chats = chatRows.map((r) => chatFromRow(isoRow(r)));
+  const goalRows = await db2.sql`
+    select * from orbit.goals where user_id = ${userId}::uuid and deleted_at is null`;
+  const goals = goalRows.map(goalFrom);
+  const draftRows = await db2.sql`
+    select id, person_id, chat_id, kind, status, send_at, created_at from orbit.drafts
+     where user_id = ${userId}::uuid
+       and (status in ('draft', 'approved', 'scheduled', 'sending') or created_at > ${new Date(now.getTime() - 30 * DAY5)}::timestamptz)`;
+  const drafts = draftRows.map((d) => ({
+    id: d.id,
+    personId: d.person_id,
+    chatId: d.chat_id ?? void 0,
+    kind: d.kind,
+    status: d.status,
+    sendAt: iso(d.send_at) ?? void 0,
+    createdAt: iso(d.created_at)
+  }));
+  const msgRows = await db2.sql`
+    select direction, sent_at, provider, from_person_id, to_person_ids from orbit.messages
+     where user_id = ${userId}::uuid and not is_automated
+       and sent_at > ${new Date(now.getTime() - 365 * DAY5)}::timestamptz`;
+  const messages = [];
+  for (const m of msgRows) {
+    const channel = m.provider === "linkedin" ? "linkedin" : "email";
+    const at = iso(m.sent_at);
+    if (m.direction === "in") {
+      if (m.from_person_id) messages.push({ personId: m.from_person_id, direction: "in", at, channel });
+    } else
+      for (const p of m.to_person_ids ?? []) messages.push({ personId: p, direction: "out", at, channel });
+  }
+  const unsynced = await db2.sql`
+    select d.person_id, d.sent_at, d.channel from orbit.drafts d
+     where d.user_id = ${userId}::uuid and d.status = 'sent' and d.sent_at is not null and d.kind <> 'forwardable_blurb'
+       and not exists (select 1 from orbit.messages m where m.user_id = d.user_id and m.external_id = d.provider_message_id)`;
+  for (const d of unsynced)
+    messages.push({
+      personId: d.person_id,
+      direction: "out",
+      at: iso(d.sent_at),
+      channel: d.channel === "linkedin" ? "linkedin" : "email"
+    });
+  const goalPeople = goals.flatMap((g) => g.targets?.people ?? []);
+  const wanted = [
+    .../* @__PURE__ */ new Set([...chats.map((c) => c.personId), ...drafts.map((d) => d.personId), ...goalPeople])
+  ];
+  const peopleRows = await db2.sql`
+    select p.id, p.first_name, p.display_name, p.title, p.org_raw, p.hidden_at, p.do_not_contact, p.timezone,
+           p.last_interaction_at, ts.score::int as score,
+           d.content->'recently' as recently, d.updated_at as dossier_at,
+           (select f.text from orbit.facts f where f.person_id = p.id and f.deleted_at is null
+               and f.created_at > ${new Date(now.getTime() - 30 * DAY5)}::timestamptz
+             order by f.created_at desc limit 1) as fact
+      from orbit.people p
+      left join orbit.tie_scores ts on ts.user_id = p.user_id and ts.person_id = p.id
+      left join orbit.dossiers d on d.user_id = p.user_id and d.person_id = p.id and d.status in ('ready', 'partial')
+     where p.user_id = ${userId}::uuid and not p.is_self and p.deleted_at is null and p.merged_into is null
+       and (ts.score >= 60 or p.id = any(${wanted}::uuid[]))`;
+  const people = /* @__PURE__ */ new Map();
+  for (const p of peopleRows) {
+    const fresh = p.dossier_at && now.getTime() - new Date(p.dossier_at).getTime() < 60 * DAY5;
+    const recent = fresh && Array.isArray(p.recently) ? p.recently[0]?.text : void 0;
+    people.set(p.id, {
+      person: {
+        id: p.id,
+        firstName: p.first_name ?? p.display_name.split(/\s+/)[0],
+        currentTitle: p.title ?? void 0,
+        currentOrganizationRaw: p.org_raw ?? void 0,
+        hiddenAt: iso(p.hidden_at) ?? void 0,
+        doNotContact: p.do_not_contact
+      },
+      score: p.score ?? 0,
+      lastContactAt: iso(p.last_interaction_at) ?? void 0,
+      nurtureReason: recent ?? p.fact ?? void 0,
+      timeZone: validZone(p.timezone)
+    });
+  }
+  const nurtured = draftRows.filter((d) => d.kind === "nurture" || d.kind === "reengage").map((d) => iso(d.created_at));
+  const maxBumps = num(settings.max_bumps, 2);
+  const quiet = typeof settings.quiet_until === "string" ? settings.quiet_until : void 0;
+  return {
+    input: {
+      chats,
+      drafts,
+      messages,
+      people,
+      goals,
+      settings: { maxBumps, timezone: tz, quietUntil: quiet },
+      now,
+      recentNurtureAt: nurtured
+    },
+    timezone: tz,
+    chatsById: new Map(chats.map((c) => [c.id, c])),
+    goalsById: new Map(goals.map((g) => [g.id, g]))
+  };
+}
+var toDue = (a) => ({
+  kind: a.kind,
+  personId: a.personId ?? null,
+  chatId: a.chatId ?? null,
+  draftId: a.draftId ?? null,
+  reason: a.reason,
+  dueAt: a.dueAt
+});
+async function dueItems(db2, userId, now) {
+  const st = await loadCadence(db2, userId, now);
+  return cadenceActions(st.input).map(toDue);
+}
+
+// supabase/functions/orbit-api/routes/cadence.ts
+async function due(ctx) {
+  return json(200, { items: await dueItems(ctx.db, ctx.userId, ctx.now()) });
+}
+var cadenceRoutes = {
+  "/cadence/due": { method: "POST", auth: true, run: due }
+};
+
+// supabase/functions/orbit-api/routes/body.ts
+var UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+async function body(ctx, optional = false) {
+  return readJson(ctx.req, { optional });
+}
+function uuid(b, key) {
+  const v = b[key];
+  if (typeof v !== "string" || !UUID.test(v)) throw badRequest(`${key} is required`);
+  return v;
+}
+function optUuid(b, key) {
+  const v = b[key];
+  if (v === void 0 || v === null) return void 0;
+  if (typeof v !== "string" || !UUID.test(v)) throw badRequest(`${key} must be an id`);
+  return v;
+}
+function text(b, key, max = 2e3) {
+  const v = b[key];
+  if (typeof v !== "string" || !v.trim()) throw badRequest(`${key} is required`);
+  if (v.length > max) throw badRequest(`${key} is too long`);
+  return v.trim();
+}
+
+// supabase/functions/orbit-api/routes/calendar.ts
+async function slots(ctx) {
+  const b = await body(ctx, true);
+  if (b.tz !== void 0 && typeof b.tz !== "string") throw badRequest("tz must be an IANA zone");
+  const count = b.count === void 0 ? void 0 : Number(b.count);
+  const r = await slotsFor(ctx.services(), ctx.userId, {
+    personId: optUuid(b, "personId"),
+    tz: b.tz,
+    count: Number.isFinite(count) ? count : void 0
+  });
+  return json(200, { slots: r.slots, tz: r.tz });
+}
+async function book(ctx) {
+  const b = await body(ctx);
+  if (typeof b.slotStart !== "string") throw badRequest("slotStart is required");
+  const r = await bookSlot(
+    ctx.services(),
+    ctx.userId,
+    { draftId: uuid(b, "draftId"), slotStart: b.slotStart },
+    ctx.env.appUrl
+  );
+  return json(200, r);
+}
+var calendarRoutes = {
+  "/calendar/slots": { method: "POST", auth: true, run: slots },
+  "/calendar/book": { method: "POST", auth: true, run: book }
+};
+
+// supabase/functions/_shared/compose/drafts.ts
+function toServerDraft(r) {
+  return {
+    id: r.id,
+    personId: r.person_id,
+    chatId: r.chat_id ?? null,
+    goalId: r.goal_id ?? null,
+    channel: r.channel,
+    kind: r.kind,
+    subject: r.subject ?? null,
+    body: r.body,
+    status: r.status,
+    sendAt: iso(r.send_at),
+    sentAt: iso(r.sent_at),
+    validator: r.validator ?? null,
+    generatedBy: r.generated_by === "llm" ? "llm" : "template",
+    hooks: Array.isArray(r.hooks) ? r.hooks : [],
+    needsInput: askUserMarkers(`${r.subject ?? ""}
+${r.body}`),
+    createdAt: iso(r.created_at),
+    updatedAt: iso(r.updated_at)
+  };
+}
+async function loadDraft(db2, userId, draftId) {
+  if (typeof draftId !== "string" || !/^[0-9a-f-]{36}$/i.test(draftId))
+    throw new HttpError(400, "bad_request", "draftId is required");
+  const [r] = await db2.sql`
+    select * from orbit.drafts where id = ${draftId}::uuid and user_id = ${userId}::uuid`;
+  if (!r) throw new HttpError(404, "not_found", "no such draft");
+  return r;
+}
+async function draftById(db2, draftId) {
+  const [r] = await db2.sql`select * from orbit.drafts where id = ${draftId}::uuid`;
+  return r;
+}
+
+// supabase/functions/_shared/sending/mime.ts
+var ascii = (s) => /^[\x20-\x7e]*$/.test(s);
+function headerValue(s) {
+  const one = s.replace(/[\r\n]+/g, " ").trim();
+  if (ascii(one)) return one;
+  return `=?UTF-8?B?${btoa(String.fromCharCode(...new TextEncoder().encode(one)))}?=`;
+}
+function address(email, name) {
+  const e = email.replace(/[\r\n<>]/g, "").trim();
+  if (!name) return e;
+  const n = name.replace(/[\r\n"]/g, "").trim();
+  return ascii(n) ? `"${n}" <${e}>` : `${headerValue(n)} <${e}>`;
+}
+function msgIds(raw) {
+  if (!raw) return void 0;
+  const ids = raw.split(/\s+/).map((x) => x.trim()).filter(Boolean).map((x) => x.startsWith("<") ? x : `<${x}>`);
+  return ids.length ? ids.join(" ") : void 0;
+}
+function b64Lines(bytes) {
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return (btoa(bin).match(/.{1,76}/g) ?? []).join("\r\n");
+}
+function buildMime(m) {
+  const lines = [
+    `From: ${address(m.from, m.fromName)}`,
+    `To: ${address(m.to, m.toName)}`,
+    `Subject: ${headerValue(m.subject)}`,
+    `Date: ${(m.date ?? /* @__PURE__ */ new Date()).toUTCString()}`,
+    "MIME-Version: 1.0",
+    'Content-Type: text/plain; charset="UTF-8"',
+    "Content-Transfer-Encoding: base64",
+    `X-Orbit-Draft-Id: ${m.draftId}`
+  ];
+  const irt = msgIds(m.inReplyTo);
+  if (irt) lines.push(`In-Reply-To: ${irt}`);
+  const refs = msgIds(m.references ?? m.inReplyTo);
+  if (refs) lines.push(`References: ${refs}`);
+  const body2 = m.body.replace(/\r?\n/g, "\r\n");
+  return `${lines.join("\r\n")}\r
+\r
+${b64Lines(new TextEncoder().encode(body2))}\r
+`;
+}
+function rawMessage(m) {
+  return base64url(new TextEncoder().encode(buildMime(m)));
+}
+
+// supabase/functions/_shared/sending/transport.ts
+var GMAIL_SEND_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send";
+var GMAIL_THREAD_URL = "https://gmail.googleapis.com/gmail/v1/users/me/threads";
+async function gmailSend(s, userId, raw, threadId) {
+  if (!s.tokens) return { ok: false, retry: false, error: "google_unconfigured" };
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let token;
+    try {
+      token = await s.tokens.accessToken(userId);
+    } catch (e) {
+      if (e instanceof NeedsReauth) return { ok: false, retry: false, error: "needs_reauth" };
+      return { ok: false, retry: true, error: "token_error" };
+    }
+    let res;
+    try {
+      res = await s.fetch(GMAIL_SEND_URL, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify(threadId ? { raw, threadId } : { raw })
+      });
+    } catch {
+      return { ok: false, retry: true, error: "network" };
+    }
+    if (res.status === 401 && attempt === 0) {
+      s.tokens.invalidate(userId);
+      await res.body?.cancel();
+      continue;
+    }
+    if (res.status === 429 || res.status >= 500) {
+      await res.body?.cancel();
+      return { ok: false, retry: true, error: `gmail_${res.status}` };
+    }
+    if (!res.ok) {
+      await res.body?.cancel();
+      return { ok: false, retry: false, error: `gmail_${res.status}` };
+    }
+    const j = await res.json().catch(() => ({}));
+    if (!j.id) return { ok: false, retry: false, error: "gmail_no_id" };
+    return { ok: true, providerMessageId: j.id, threadId: j.threadId };
+  }
+  return { ok: false, retry: false, error: "gmail_401" };
+}
+async function gmailThreadHasNewerInbound(s, userId, threadId, since) {
+  if (!s.tokens) return void 0;
+  try {
+    const token = await s.tokens.accessToken(userId);
+    const res = await s.fetch(
+      `${GMAIL_THREAD_URL}/${encodeURIComponent(threadId)}?format=minimal&fields=messages(id,labelIds,internalDate)`,
+      { headers: { authorization: `Bearer ${token}` } }
+    );
+    if (!res.ok) {
+      await res.body?.cancel();
+      return void 0;
+    }
+    const j = await res.json();
+    return (j.messages ?? []).some(
+      (m) => !(m.labelIds ?? []).includes("SENT") && Number(m.internalDate ?? 0) > since.getTime()
+    );
+  } catch {
+    return void 0;
+  }
+}
+async function linkedinSend(s, p) {
+  const base = (s.env.unipileBase ?? "").replace(/\/+$/, "");
+  if (!s.env.unipileKey || !base) return { ok: false, retry: false, error: "unipile_unconfigured" };
+  const form = new FormData();
+  form.set("account_id", p.accountId);
+  form.set("text", p.text);
+  let url;
+  if (p.chatId) url = `${base}/api/v1/chats/${encodeURIComponent(p.chatId)}/messages`;
+  else if (p.attendeeId) {
+    url = `${base}/api/v1/chats`;
+    form.append("attendees_ids", p.attendeeId);
+  } else return { ok: false, retry: false, error: "no_linkedin_chat" };
+  let res;
+  try {
+    res = await s.fetch(url, {
+      method: "POST",
+      headers: { "X-API-KEY": s.env.unipileKey, accept: "application/json" },
+      body: form
+    });
+  } catch {
+    return { ok: false, retry: true, error: "network" };
+  }
+  if (res.status === 429 || res.status >= 500) {
+    await res.body?.cancel();
+    return { ok: false, retry: true, error: `unipile_${res.status}` };
+  }
+  if (!res.ok) {
+    await res.body?.cancel();
+    return { ok: false, retry: false, error: `unipile_${res.status}` };
+  }
+  const j = await res.json().catch(() => ({}));
+  const id = j.message_id ?? j.id;
+  if (!id) return { ok: false, retry: false, error: "unipile_no_id" };
+  return { ok: true, providerMessageId: id, chatId: j.chat_id ?? p.chatId ?? void 0 };
+}
+
+// supabase/functions/_shared/sending/send.ts
+var CAPS2 = {
+  gmailSalesFirstTouchesPerDay: 30,
+  linkedinMessagesPerDay: 25,
+  linkedinInvitesPerDay: 15,
+  linkedinInvitesPerWeek: 60
+};
+var LINKEDIN_CONFIRM_MS = 15 * 6e4;
+var hashOf = (d) => messageHash({ channel: d.channel, subject: d.subject, body: d.body });
+async function audit(db2, userId, actor, action, draftId, details) {
+  await db2.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+    values (${userId}::uuid, ${actor}, ${action}, 'drafts', ${draftId}, ${details}::jsonb)`;
+}
+async function goalKindOf(db2, goalId) {
+  if (!goalId) return null;
+  const [g] = await db2.sql`select kind from orbit.goals where id = ${goalId}::uuid`;
+  return g?.kind ?? null;
+}
+async function postalAddress(db2, userId) {
+  const [u2] = await db2.sql`
+    select settings from orbit.users where id = ${userId}::uuid`;
+  const v = u2?.settings?.postal_address;
+  return typeof v === "string" ? v.trim() : "";
+}
+async function salesFirstTouch(db2, d) {
+  return d.channel === "gmail" && FIRST_TOUCH_KINDS.has(d.kind) && await goalKindOf(db2, d.goal_id) === "sales";
+}
+async function approveDraft(s, userId, req) {
+  const db2 = s.db;
+  const d = await loadDraft(db2, userId, req.draftId);
+  if (d.status === "sending" || d.status === "sent") return toServerDraft(d);
+  if (!["draft", "approved", "scheduled", "failed"].includes(d.status))
+    throw new HttpError(409, "not_approvable", `a ${d.status} draft cannot be approved`);
+  const needs = askUserMarkers(`${d.subject ?? ""}
+${d.body}`);
+  if (needs.length)
+    throw new HttpError(409, "needs_input", `fill in what the draft asks for first: ${needs.join("; ")}`);
+  const [p] = await db2.sql`
+    select do_not_contact, timezone from orbit.people where id = ${d.person_id}::uuid`;
+  if (p?.do_not_contact) throw new HttpError(409, "do_not_contact", "they asked not to be contacted");
+  if (d.channel === "linkedin" && req.confirm !== true)
+    throw new HttpError(409, "needs_confirmation", "every LinkedIn message needs your tap to send");
+  if (await salesFirstTouch(db2, d) && !await postalAddress(db2, userId))
+    throw new HttpError(
+      409,
+      "needs_postal_address",
+      "add a postal address in Settings before the first sales email"
+    );
+  const now = s.now();
+  let sendAt;
+  if (d.channel === "linkedin") sendAt = now;
+  else if (req.sendAt) {
+    const t = new Date(req.sendAt);
+    if (Number.isNaN(t.getTime())) throw new HttpError(400, "bad_request", "sendAt must be an ISO time");
+    sendAt = t.getTime() < now.getTime() ? now : t;
+  } else {
+    const [u2] = await db2.sql`select timezone from orbit.users where id = ${userId}::uuid`;
+    const tz = validZone(p?.timezone) ?? validZone(u2?.timezone) ?? "America/New_York";
+    sendAt = new Date(nextSendWindow(now, tz, d.channel, s.random).notBefore);
+  }
+  const [row] = await db2.sql`
+    update orbit.drafts set status = 'approved', send_at = ${sendAt}::timestamptz, error = null,
+                            cancel_reason = null
+     where id = ${d.id}::uuid and user_id = ${userId}::uuid and status in ('draft', 'approved', 'scheduled', 'failed')
+    returning *`;
+  if (!row) return toServerDraft(await draftById(db2, d.id));
+  const hash = hashOf(row);
+  await audit(db2, userId, "user", "draft.approve", row.id, {
+    hash,
+    send_at: iso(sendAt),
+    channel: row.channel
+  });
+  if (row.channel === "linkedin") await audit(db2, userId, "user", "draft.confirm", row.id, { hash });
+  if (sendAt.getTime() <= now.getTime()) {
+    try {
+      await sendDraft(s, row.id);
+    } catch (e) {
+      if (!(e instanceof SendRetry)) throw e;
+      await s.queue.enqueue(
+        {
+          kind: "send.draft",
+          userId,
+          payload: { draftId: row.id },
+          dedupeKey: `send:${row.id}:retry:${iso(now)}`
+        },
+        { delaySec: 60 }
+      );
+    }
+  } else {
+    await s.queue.enqueue(
+      {
+        kind: "send.draft",
+        userId,
+        payload: { draftId: row.id },
+        dedupeKey: `send:${row.id}:${iso(sendAt)}`
+      },
+      { delaySec: Math.ceil((sendAt.getTime() - now.getTime()) / 1e3) }
+    );
+  }
+  return toServerDraft(await draftById(db2, row.id));
+}
+async function cancelDraft(db2, userId, draftId) {
+  const d = await loadDraft(db2, userId, draftId);
+  if (d.status === "sending" || d.status === "sent")
+    throw new HttpError(409, "too_late", "it has already gone out");
+  const [row] = await db2.sql`
+    update orbit.drafts set status = 'cancelled', cancel_reason = 'user'
+     where id = ${d.id}::uuid and status in ('draft', 'approved', 'scheduled', 'failed') returning *`;
+  if (row) await audit(db2, userId, "user", "draft.cancel", d.id, {});
+  return toServerDraft(row ?? await draftById(db2, d.id));
+}
+async function discardDraft(db2, userId, draftId) {
+  const d = await loadDraft(db2, userId, draftId);
+  if (d.status === "sending" || d.status === "sent")
+    throw new HttpError(409, "too_late", "it has already gone out");
+  const [row] = await db2.sql`
+    update orbit.drafts set status = 'discarded'
+     where id = ${d.id}::uuid and status in ('draft', 'approved', 'scheduled', 'failed', 'cancelled') returning *`;
+  if (row) await audit(db2, userId, "user", "draft.discard", d.id, {});
+  return toServerDraft(row ?? await draftById(db2, d.id));
+}
+var SendRetry = class extends Error {
+  constructor(code) {
+    super(code);
+    this.name = "SendRetry";
+  }
+};
+async function sendDraft(s, draftId) {
+  const db2 = s.db;
+  const now = s.now();
+  const [d] = await db2.sql`
+    update orbit.drafts set status = 'sending'
+     where id = ${draftId}::uuid and status = 'approved'
+       and (send_at is null or send_at <= ${new Date(now.getTime() + 1e3)}::timestamptz)
+    returning *`;
+  if (!d) return { status: "skipped", reason: "not_claimed" };
+  const userId = d.user_id;
+  const settle = async (status, fields) => {
+    await db2.sql`
+      update orbit.drafts set status = ${status},
+             error = ${fields.error ?? null},
+             cancel_reason = ${fields.cancel_reason ?? null},
+             send_at = coalesce(${fields.send_at ?? null}::timestamptz, send_at)
+       where id = ${d.id}::uuid`;
+  };
+  if (askUserMarkers(`${d.subject ?? ""}
+${d.body}`).length) {
+    await settle("draft", { error: "needs_input" });
+    return { status: "held", reason: "needs_input" };
+  }
+  const [person2] = await db2.sql`
+    select display_name, first_name, primary_email, title, headline, do_not_contact, linkedin_member_id
+      from orbit.people where id = ${d.person_id}::uuid`;
+  if (!person2) {
+    await settle("failed", { error: "no_person" });
+    return { status: "failed", error: "no_person" };
+  }
+  const history = await historyWith(db2, userId, d.person_id);
+  const createdAt = iso(d.created_at);
+  const replied = cancelIfReplied(
+    { personId: d.person_id, createdAt },
+    history.map((h) => ({
+      personId: d.person_id,
+      direction: h.direction,
+      at: h.at,
+      channel: "email"
+    }))
+  );
+  let live;
+  if (!replied.cancel && d.channel === "gmail" && d.thread_external_id)
+    live = await gmailThreadHasNewerInbound(s, userId, d.thread_external_id, new Date(createdAt));
+  if (replied.cancel || live) {
+    await settle("cancelled", { cancel_reason: "replied" });
+    await audit(db2, userId, "system", "draft.cancel", d.id, { reason: "replied" });
+    return { status: "cancelled", reason: "replied" };
+  }
+  const approvals = await db2.sql`
+    select actor, action, details, created_at from orbit.audit_log
+     where user_id = ${userId}::uuid and target_table = 'drafts' and target_id = ${d.id}
+       and action in ('draft.approve', 'draft.confirm', 'draft.auto_approve')
+     order by created_at desc`;
+  const hash = hashOf(d);
+  const userApproved = approvals.some((a) => a.action === "draft.approve" && a.details?.hash === hash);
+  const agentApproved = approvals.some((a) => a.action === "draft.auto_approve" && a.details?.hash === hash);
+  if (d.channel === "linkedin") {
+    const fresh = approvals.some(
+      (a) => a.action === "draft.confirm" && a.actor === "user" && a.details?.hash === hash && now.getTime() - new Date(a.created_at).getTime() <= LINKEDIN_CONFIRM_MS
+    );
+    if (!fresh) {
+      await settle("draft", { error: "linkedin_needs_fresh_approval" });
+      await audit(db2, userId, "system", "draft.hold", d.id, { reason: "linkedin_needs_fresh_approval" });
+      return { status: "held", reason: "linkedin_needs_fresh_approval" };
+    }
+  }
+  if (!userApproved && !agentApproved) {
+    await settle("draft", { error: "not_approved" });
+    return { status: "held", reason: "not_approved" };
+  }
+  const [u2] = await db2.sql`
+    select email, full_name, first_name, timezone, settings from orbit.users where id = ${userId}::uuid`;
+  const meta = d.ask ?? {};
+  const violations = checkSend(
+    { kind: d.kind, channel: d.channel, personId: d.person_id, subject: d.subject, body: d.body },
+    {
+      now,
+      userEmails: [u2.email],
+      userName: u2.full_name ?? u2.first_name ?? "",
+      recipient: {
+        doNotContact: person2.do_not_contact,
+        title: person2.title ?? void 0,
+        headline: person2.headline ?? void 0
+      },
+      history,
+      schedulingLink: typeof u2.settings?.scheduling_link === "string" ? u2.settings.scheduling_link : void 0,
+      offeredSlots: meta.slots,
+      timeZone: u2.timezone,
+      approvedHash: userApproved ? hash : void 0
+    }
+  );
+  const forbidden = violations.find((v) => v.kind === "forbidden");
+  if (forbidden) {
+    await settle("cancelled", { cancel_reason: forbidden.rule });
+    await audit(db2, userId, "system", "draft.blocked", d.id, { rule: forbidden.rule });
+    return { status: "cancelled", reason: forbidden.rule };
+  }
+  if (violations.length) {
+    await settle("draft", { error: `needs_approval:${violations.map((v) => v.rule).join(",")}` });
+    return { status: "held", reason: violations[0].rule };
+  }
+  if (await salesFirstTouch(db2, d) && (!await postalAddress(db2, userId) || !meta.footer)) {
+    await settle("draft", { error: "needs_postal_address" });
+    return { status: "held", reason: "needs_postal_address" };
+  }
+  const cap = await capReached(db2, userId, d, now, u2.timezone);
+  if (cap) {
+    const next = new Date(
+      nextSendWindow(new Date(now.getTime() + 864e5), u2.timezone, d.channel, s.random).notBefore
+    );
+    await settle(d.channel === "linkedin" ? "draft" : "approved", { error: cap, send_at: next });
+    return { status: "held", reason: cap };
+  }
+  let out;
+  if (d.channel === "gmail") {
+    if (!person2.primary_email) {
+      await settle("failed", { error: "no_email" });
+      return { status: "failed", error: "no_email" };
+    }
+    const subject = d.subject ?? await threadSubject(db2, userId, d.thread_external_id) ?? "";
+    const refs = d.in_reply_to ?? await lastMessageId(db2, userId, d.thread_external_id);
+    const raw = rawMessage({
+      from: u2.email,
+      fromName: u2.full_name ?? void 0,
+      to: person2.primary_email,
+      toName: person2.display_name,
+      subject: d.subject ? subject : subject && !/^re:/i.test(subject) ? `Re: ${subject}` : subject,
+      body: d.body,
+      inReplyTo: refs,
+      references: refs,
+      draftId: d.id,
+      date: now
+    });
+    out = await gmailSend(s, userId, raw, d.thread_external_id);
+  } else {
+    const [acct] = await db2.sql`
+      select external_account_id from orbit.integration_accounts
+       where user_id = ${userId}::uuid and provider = 'linkedin' and status = 'active'`;
+    if (!acct?.external_account_id) {
+      await settle("failed", { error: "linkedin_not_connected" });
+      return { status: "failed", error: "linkedin_not_connected" };
+    }
+    const chatId = d.thread_external_id ?? await linkedinChatId(db2, userId, d.person_id);
+    const attendee = chatId ? null : await linkedinAttendee(db2, userId, d.person_id, person2.linkedin_member_id);
+    out = await linkedinSend(s, {
+      accountId: acct.external_account_id,
+      chatId,
+      attendeeId: attendee,
+      text: d.body
+    });
+  }
+  if (!out.ok) {
+    if (out.retry) {
+      await settle("approved", { error: out.error });
+      throw new SendRetry(out.error);
+    }
+    await settle("failed", { error: out.error });
+    await audit(db2, userId, "system", "draft.failed", d.id, { error: out.error });
+    return { status: "failed", error: out.error };
+  }
+  const threadId = out.chatId ?? out.threadId ?? d.thread_external_id;
+  await db2.sql`
+    update orbit.drafts set status = 'sent', sent_at = ${now}::timestamptz, provider_message_id = ${out.providerMessageId},
+                            thread_external_id = ${threadId ?? null}, error = null
+     where id = ${d.id}::uuid`;
+  await audit(
+    db2,
+    userId,
+    userApproved ? "user" : "agent",
+    agentApproved && !userApproved ? "draft.auto_sent" : "draft.sent",
+    d.id,
+    {
+      channel: d.channel,
+      kind: d.kind
+    }
+  );
+  if (d.chat_id) await afterSend(db2, userId, d, now);
+  const via = d.via;
+  if (d.kind === "intro_request" && via?.introRequestId)
+    await db2.sql`update orbit.intro_requests set asked_at = ${now}::timestamptz where id = ${via.introRequestId}::uuid`;
+  return { status: "sent", providerMessageId: out.providerMessageId };
+}
+async function afterSend(db2, userId, d, now) {
+  const [c] = await db2.sql`
+    select stage, data from orbit.chats where id = ${d.chat_id}::uuid`;
+  if (!c) return;
+  const at = now.toISOString();
+  const data = {
+    ...c.data,
+    lastOutboundAt: at,
+    outreachChannel: d.channel === "gmail" ? "email" : "linkedin"
+  };
+  if (!data.firstOutreachAt && d.kind !== "forwardable_blurb" && d.kind !== "intro_request")
+    data.firstOutreachAt = at;
+  if (d.kind === "bump") data.bumpCount = (data.bumpCount ?? 0) + 1;
+  await db2.sql`update orbit.chats set data = ${data}::jsonb where id = ${d.chat_id}::uuid`;
+  if (["identified", "warming"].includes(c.stage) && d.kind !== "forwardable_blurb" && d.kind !== "intro_request")
+    await moveChat(db2, userId, d.chat_id, "outreach_sent", `${d.kind} sent`, now);
+}
+async function capReached(db2, userId, d, now, tz) {
+  const zone = validZone(tz) ?? "America/New_York";
+  const key = new Intl.DateTimeFormat("en-CA", { timeZone: zone }).format(now);
+  const dayStart = zonedTime2(key, 0, 0, zone);
+  if (d.channel === "linkedin") {
+    const [r] = await db2.sql`
+      select count(*)::int as n from orbit.drafts
+       where user_id = ${userId}::uuid and channel = 'linkedin' and status = 'sent'
+         and sent_at >= ${dayStart}::timestamptz`;
+    return (r?.n ?? 0) >= CAPS2.linkedinMessagesPerDay ? "linkedin_daily_cap" : null;
+  }
+  if (await salesFirstTouch(db2, d)) {
+    const [r] = await db2.sql`
+      select count(*)::int as n from orbit.drafts dr join orbit.goals g on g.id = dr.goal_id
+       where dr.user_id = ${userId}::uuid and dr.channel = 'gmail' and dr.status = 'sent' and g.kind = 'sales'
+         and dr.kind in ('first_touch', 'warm_first_touch', 'outreach') and dr.sent_at >= ${dayStart}::timestamptz`;
+    return (r?.n ?? 0) >= CAPS2.gmailSalesFirstTouchesPerDay ? "gmail_sales_daily_cap" : null;
+  }
+  return null;
+}
+async function threadSubject(db2, userId, threadExternalId) {
+  if (!threadExternalId) return null;
+  const [t] = await db2.sql`
+    select subject from orbit.threads where user_id = ${userId}::uuid and external_id = ${threadExternalId}`;
+  return t?.subject ?? null;
+}
+async function lastMessageId(db2, userId, threadExternalId) {
+  if (!threadExternalId) return null;
+  const [m] = await db2.sql`
+    select m.rfc_message_id from orbit.messages m join orbit.threads t on t.id = m.thread_id
+     where t.user_id = ${userId}::uuid and t.external_id = ${threadExternalId} and m.rfc_message_id is not null
+     order by m.sent_at desc limit 1`;
+  return m?.rfc_message_id ?? null;
+}
+async function linkedinChatId(db2, userId, personId) {
+  const [t] = await db2.sql`
+    select external_id from orbit.threads
+     where user_id = ${userId}::uuid and provider = 'linkedin' and ${personId}::uuid = any(participant_person_ids)
+     order by last_at desc nulls last limit 1`;
+  return t?.external_id ?? null;
+}
+async function linkedinAttendee(db2, userId, personId, memberId) {
+  const [i] = await db2.sql`
+    select value_raw, value_norm from orbit.person_identities
+     where user_id = ${userId}::uuid and person_id = ${personId}::uuid and kind in ('unipile_attendee', 'linkedin_member')
+     order by (kind = 'unipile_attendee') desc limit 1`;
+  return i?.value_raw ?? i?.value_norm ?? memberId;
+}
+
+// supabase/functions/orbit-api/routes/drafts.ts
+var KINDS = [
+  "outreach",
+  "bump",
+  "schedule",
+  "thank_you",
+  "nurture",
+  "congratulate",
+  "referral_ask",
+  "intro_request",
+  "reply",
+  "report_back",
+  "first_touch",
+  "warm_first_touch",
+  "forwardable_blurb",
+  "reengage"
+];
+async function compose(ctx) {
+  const b = await body(ctx);
+  const kind = b.kind;
+  if (!KINDS.includes(kind)) throw badRequest("kind is not a message kind");
+  if (b.channel !== "gmail" && b.channel !== "linkedin") throw badRequest("channel is gmail or linkedin");
+  const r = await composeDraft(ctx.services(), {
+    userId: ctx.userId,
+    personId: uuid(b, "personId"),
+    kind,
+    channel: b.channel,
+    goalId: optUuid(b, "goalId") ?? null,
+    replyToMessageId: optUuid(b, "replyToMessageId")
+  });
+  return json(200, { draft: toServerDraft(r.draft) });
+}
+async function approve(ctx) {
+  const b = await body(ctx);
+  const draft2 = await approveDraft(ctx.services(), ctx.userId, {
+    draftId: uuid(b, "draftId"),
+    sendAt: typeof b.sendAt === "string" ? b.sendAt : void 0,
+    confirm: b.confirm === true
+  });
+  return json(200, { draft: draft2 });
+}
+async function cancel(ctx) {
+  return json(200, { draft: await cancelDraft(ctx.db, ctx.userId, uuid(await body(ctx), "draftId")) });
+}
+async function discard(ctx) {
+  return json(200, { draft: await discardDraft(ctx.db, ctx.userId, uuid(await body(ctx), "draftId")) });
+}
+var draftRoutes = {
+  "/drafts/compose": { method: "POST", auth: true, run: compose },
+  "/drafts/approve": { method: "POST", auth: true, run: approve },
+  "/drafts/cancel": { method: "POST", auth: true, run: cancel },
+  "/drafts/discard": { method: "POST", auth: true, run: discard }
+};
+
+// packages/core/src/types.ts
+var GOAL_KINDS = [
+  "recruiting",
+  "fundraising",
+  "sales",
+  "hiring",
+  "advice",
+  "cofounder",
+  "community",
+  "collaboration"
+];
+
+// supabase/functions/orbit-api/routes/goals.ts
+var MAX_ACTIVE_GOALS = 5;
+var strList = (v, max = 25) => Array.isArray(v) ? v.filter((x) => typeof x === "string" && !!x.trim()).map((x) => x.trim().slice(0, 200)).slice(0, max) : [];
+async function goalsList(ctx) {
+  const rows = await ctx.db.sql`
+    select * from orbit.goals where user_id = ${ctx.userId}::uuid and deleted_at is null
+     order by (status = 'active') desc, priority, created_at`;
+  return json(200, { goals: rows.map(goalFrom) });
+}
+async function goalsUpsert(ctx) {
+  const b = await body(ctx);
+  const g = b.goal;
+  if (!g || typeof g !== "object") throw badRequest("goal is required");
+  if (!GOAL_KINDS.includes(g.kind)) throw badRequest("goal.kind is not a goal kind");
+  if (typeof g.title !== "string" || !g.title.trim() || g.title.length > 200)
+    throw badRequest("goal.title is required");
+  const id = optUuid(g, "id");
+  const status = g.status ?? "active";
+  if (!["active", "paused", "done"].includes(status)) throw badRequest("goal.status is not valid");
+  const priority = g.priority ?? 2;
+  if (![1, 2, 3].includes(priority)) throw badRequest("goal.priority is 1, 2 or 3");
+  const autonomy2 = g.autonomyLevel ?? null;
+  if (autonomy2 !== null && ![0, 1, 2].includes(autonomy2)) throw badRequest("goal.autonomyLevel is 0, 1 or 2");
+  if (g.dueAt !== void 0 && g.dueAt !== null && !/^\d{4}-\d{2}-\d{2}$/.test(String(g.dueAt)))
+    throw badRequest("goal.dueAt is YYYY-MM-DD");
+  const t = g.targets ?? {};
+  const targets = {
+    organizations: strList(t.organizations),
+    roles: strList(t.roles),
+    geographies: strList(t.geographies),
+    people: strList(t.people, 200)
+  };
+  const criteria = g.criteria && typeof g.criteria === "object" && !Array.isArray(g.criteria) ? g.criteria : {};
+  const userId = ctx.userId;
+  const row = await ctx.db.begin(async (tx) => {
+    await tx.sql`select pg_advisory_xact_lock(hashtextextended(${`orbit.goals:${userId}`}, 0))`;
+    if (status === "active") {
+      const [n] = await tx.sql`
+        select count(*)::int as n from orbit.goals
+         where user_id = ${userId}::uuid and status = 'active' and deleted_at is null
+           and (${id ?? null}::uuid is null or id <> ${id ?? null}::uuid)`;
+      if ((n?.n ?? 0) >= MAX_ACTIVE_GOALS)
+        throw new HttpError(
+          409,
+          "too_many_goals",
+          `at most ${MAX_ACTIVE_GOALS} active goals; pause or finish one first`
+        );
+    }
+    if (id) {
+      const [r2] = await tx.sql`
+        update orbit.goals set kind = ${g.kind}, title = ${g.title.trim()}, description = ${g.description ?? null},
+               targets = ${targets}::jsonb, criteria = ${criteria}::jsonb, success_metric = ${g.successMetric ?? null},
+               priority = ${priority}::smallint, status = ${status}, autonomy_level = ${autonomy2}::smallint,
+               due_at = ${g.dueAt ?? null}::date, evidence = coalesce(${g.evidence ?? null}, evidence)
+         where id = ${id}::uuid and user_id = ${userId}::uuid and deleted_at is null
+        returning *`;
+      if (!r2) throw new HttpError(404, "not_found", "no such goal");
+      return r2;
+    }
+    const source = g.source && ["user", "onboarding", "inferred"].includes(g.source) ? g.source : "user";
+    const [r] = await tx.sql`
+      insert into orbit.goals (user_id, kind, title, description, targets, criteria, success_metric, priority, status,
+                               autonomy_level, due_at, source, evidence)
+      values (${userId}::uuid, ${g.kind}, ${g.title.trim()}, ${g.description ?? null}, ${targets}::jsonb,
+              ${criteria}::jsonb, ${g.successMetric ?? null}, ${priority}::smallint, ${status},
+              ${autonomy2}::smallint, ${g.dueAt ?? null}::date, ${source}, ${g.evidence ?? null})
+      returning *`;
+    return r;
+  });
+  await ctx.db.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+    values (${userId}::uuid, 'user', ${id ? "goal.update" : "goal.create"}, 'goals', ${row.id},
+            ${{ kind: g.kind, status }}::jsonb)`;
+  return json(200, { goal: goalFrom(row) });
+}
+async function goalsArchive(ctx) {
+  const id = uuid(await body(ctx), "id");
+  const [r] = await ctx.db.sql`
+    update orbit.goals set deleted_at = ${ctx.now()}::timestamptz, status = 'done'
+     where id = ${id}::uuid and user_id = ${ctx.userId}::uuid and deleted_at is null
+    returning *`;
+  if (!r) throw new HttpError(404, "not_found", "no such goal");
+  return json(200, { goal: goalFrom(r) });
+}
+var goalRoutes = {
+  "/goals/list": { method: "POST", auth: true, run: goalsList },
+  "/goals/upsert": { method: "POST", auth: true, run: goalsUpsert },
+  "/goals/archive": { method: "POST", auth: true, run: goalsArchive }
+};
+
+// supabase/functions/_shared/ingest/util.ts
+function slot(d) {
+  return d.toISOString().slice(0, 15);
+}
 
 // supabase/functions/_shared/providers/unipileSync.ts
 var when = z.union([z.string(), z.number()]).nullish();
@@ -1130,30 +6373,30 @@ function createUnipileSync(opts) {
   const base = trimBase(opts.baseUrl ?? "");
   const headers = () => ({ "X-API-KEY": opts.apiKey ?? "" });
   const no = () => unconfigured2("unipile", "API key or base URL");
-  const get = (path, schema) => requestJson(opts, { provider: "unipile", url: `${base}${path}`, headers: headers(), schema });
+  const get2 = (path, schema) => requestJson(opts, { provider: "unipile", url: `${base}${path}`, headers: headers(), schema });
   return {
     configured,
     async me(accountId) {
       if (!configured) return no();
-      return get(`/api/v1/users/me${query({ account_id: accountId })}`, unipileMeSchema);
+      return get2(`/api/v1/users/me${query({ account_id: accountId })}`, unipileMeSchema);
     },
     async relations(accountId, cursor) {
       if (!configured) return no();
-      return get(
+      return get2(
         `/api/v1/users/relations${query({ account_id: accountId, limit: RELATIONS_LIMIT, cursor: cursor ?? void 0 })}`,
         page(unipileRelationSchema)
       );
     },
     async chats(accountId, o) {
       if (!configured) return no();
-      return get(
+      return get2(
         `/api/v1/chats${query({ account_id: accountId, limit: CHATS_LIMIT, after: o.after, cursor: o.cursor ?? void 0 })}`,
         page(unipileChatSchema)
       );
     },
     async attendees(chatId) {
       if (!configured) return no();
-      const r = await get(
+      const r = await get2(
         `/api/v1/chats/${encodeURIComponent(chatId)}/attendees`,
         page(unipileAttendeeSchema)
       );
@@ -1161,7 +6404,7 @@ function createUnipileSync(opts) {
     },
     async messages(chatId) {
       if (!configured) return no();
-      const r = await get(
+      const r = await get2(
         `/api/v1/chats/${encodeURIComponent(chatId)}/messages${query({ limit: MESSAGES_LIMIT })}`,
         page(unipileMessageSchema)
       );
@@ -1199,8 +6442,8 @@ async function googleAccount(ctx) {
   return a;
 }
 async function googleSync(ctx) {
-  const body = await readJson(ctx.req, { optional: true });
-  const mode = body.mode ?? "incremental";
+  const body2 = await readJson(ctx.req, { optional: true });
+  const mode = body2.mode ?? "incremental";
   if (mode !== "backfill" && mode !== "incremental") throw badRequest("mode must be backfill or incremental");
   const userId = ctx.userId;
   const acct = await googleAccount(ctx);
@@ -1325,8 +6568,2841 @@ var INTEGRATION_ROUTES = {
   "/linkedin/sync": { method: "POST", auth: true, run: linkedinSync }
 };
 
+// supabase/functions/_shared/memory/memory.ts
+import { z as z3 } from "npm:zod@3.25.76/v4";
+
+// supabase/functions/_shared/research/guards.ts
+function norm(s) {
+  return (s ?? "").normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[‐-―]/g, "-").replace(/\s+/g, " ").trim();
+}
+var ORG_SUFFIX = /[,.]?\s+(inc|inc\.|llc|ltd|ltd\.|corp|corporation|co|gmbh|plc|sa|ag)\.?$/i;
+function normOrg(s) {
+  return norm(s).replace(ORG_SUFFIX, "").trim();
+}
+function orgFromTitle(title, name) {
+  if (!title) return void 0;
+  const cleaned = title.replace(/\s*[|·]\s*linkedin.*$/i, "").trim();
+  const parts = cleaned.split(/\s+[-–—|·]\s+/).map((p) => p.trim()).filter((p) => p && norm(p) !== norm(name));
+  for (const p of parts) {
+    const at = p.match(/\b(?:at|@)\s+(.+)$/i);
+    if (at) return at[1].trim();
+  }
+  return parts.length >= 2 ? parts[parts.length - 1] : parts[0];
+}
+
+// supabase/functions/_shared/memory/memory.ts
+var DEDUPE_COSINE = 0.92;
+var HALF_LIFE_DAYS = 30;
+var MEMORY_KINDS = [
+  "preference",
+  "constraint",
+  "goal_detail",
+  "outcome",
+  "person_fact",
+  "note"
+];
+var toItem = (r) => ({
+  id: r.id,
+  kind: r.kind,
+  text: r.text,
+  personId: r.person_id,
+  importance: num(r.importance),
+  createdAt: iso(r.created_at),
+  lastSeenAt: iso(r.last_seen_at)
+});
+function embeddable(text2) {
+  const letters = text2.match(/\p{L}/gu) ?? [];
+  if (!letters.length) return false;
+  const latin = letters.filter((c) => /[A-Za-z]/.test(c)).length;
+  return latin / letters.length >= 0.8;
+}
+async function safeEmbed(embed, text2) {
+  if (!embeddable(text2)) return null;
+  try {
+    const e = await embed(text2);
+    return e?.length ? e : null;
+  } catch {
+    return null;
+  }
+}
+async function addMemory(db2, embed, userId, m, now) {
+  const text2 = m.text.replace(/\s+/g, " ").trim().slice(0, 1e3);
+  if (!text2) throw new HttpError(400, "bad_request", "text is required");
+  if (!MEMORY_KINDS.includes(m.kind)) throw new HttpError(400, "bad_request", "unknown memory kind");
+  if (m.personId) {
+    const [p] = await db2.sql`select 1 from orbit.people where id = ${m.personId}::uuid and user_id = ${userId}::uuid`;
+    if (!p) throw new HttpError(404, "not_found", "no such person");
+  }
+  const e = await safeEmbed(embed, text2);
+  const importance = Math.max(0, Math.min(1, m.importance ?? 0.5));
+  if (e) {
+    const [near] = await db2.sql`
+      select id, kind, text, person_id, importance, created_at, last_seen_at,
+             1 - (embedding <=> ${vec(e)}::vector) as sim
+        from orbit.memories
+       where user_id = ${userId}::uuid and deleted_at is null and embedding is not null
+         and person_id is not distinct from ${m.personId ?? null}::uuid
+       order by embedding <=> ${vec(e)}::vector limit 1`;
+    if (near && num(near.sim) >= DEDUPE_COSINE) {
+      const [row2] = await db2.sql`
+        update orbit.memories set last_seen_at = ${now}::timestamptz, importance = greatest(importance, ${importance}::real)
+         where id = ${near.id}::uuid
+        returning id, kind, text, person_id, importance, created_at, last_seen_at`;
+      return { memory: toItem(row2), deduped: true };
+    }
+  } else {
+    const [same] = await db2.sql`
+      update orbit.memories set last_seen_at = ${now}::timestamptz
+       where user_id = ${userId}::uuid and deleted_at is null and lower(text) = lower(${text2})
+         and person_id is not distinct from ${m.personId ?? null}::uuid
+      returning id, kind, text, person_id, importance, created_at, last_seen_at`;
+    if (same) return { memory: toItem(same), deduped: true };
+  }
+  const [row] = await db2.sql`
+    insert into orbit.memories (user_id, person_id, kind, text, embedding, importance, source, quote, created_at,
+                                last_seen_at)
+    values (${userId}::uuid, ${m.personId ?? null}::uuid, ${m.kind}, ${text2}, ${e ? vec(e) : null}::vector,
+            ${importance}::real, ${m.source ?? "remember"}, ${m.quote ?? null}, ${now}::timestamptz, ${now}::timestamptz)
+    returning id, kind, text, person_id, importance, created_at, last_seen_at`;
+  return { memory: toItem(row), deduped: false };
+}
+var tokens = (s) => new Set(
+  s.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length > 2)
+);
+function keywordScore(query2, text2) {
+  const q = tokens(query2);
+  if (!q.size) return 0;
+  const t = tokens(text2);
+  let hit = 0;
+  for (const w of q) if (t.has(w) || [...t].some((x) => x.startsWith(w) || w.startsWith(x))) hit++;
+  return hit / q.size;
+}
+var recency = (lastSeen, now) => 0.5 ** (Math.max(0, now.getTime() - lastSeen.getTime()) / (HALF_LIFE_DAYS * 864e5));
+async function searchMemories(db2, embed, userId, q, now) {
+  const query2 = q.query.trim();
+  if (!query2) throw new HttpError(400, "bad_request", "query is required");
+  const e = await safeEmbed(embed, query2);
+  const rows = await db2.sql`
+    select id, kind, text, person_id, importance, created_at, last_seen_at,
+           case when embedding is null or ${e ? vec(e) : null}::vector is null then null
+                else 1 - (embedding <=> ${e ? vec(e) : null}::vector) end as sim
+      from orbit.memories
+     where user_id = ${userId}::uuid and deleted_at is null
+       and (${q.personId ?? null}::uuid is null or person_id = ${q.personId ?? null}::uuid)
+     order by last_seen_at desc
+     limit 500`;
+  const scored = rows.map((r) => {
+    const cos = r.sim === null || r.sim === void 0 ? keywordScore(query2, r.text) : Math.max(0, num(r.sim));
+    const score = 0.7 * cos + 0.2 * num(r.importance) + 0.1 * recency(new Date(r.last_seen_at), now);
+    return { ...toItem(r), score: Math.round(score * 1e4) / 1e4 };
+  });
+  return scored.sort((a, b) => b.score - a.score).slice(0, Math.max(1, Math.min(50, q.limit ?? 8)));
+}
+async function listMemories(db2, userId, personId) {
+  const rows = await db2.sql`
+    select id, kind, text, person_id, importance, created_at, last_seen_at from orbit.memories
+     where user_id = ${userId}::uuid and deleted_at is null
+       and (${personId ?? null}::uuid is null or person_id = ${personId ?? null}::uuid)
+     order by last_seen_at desc limit 500`;
+  return rows.map(toItem);
+}
+async function forgetMemory(db2, userId, id, now) {
+  const rows = await db2.sql`
+    update orbit.memories set deleted_at = ${now}::timestamptz
+     where id = ${id}::uuid and user_id = ${userId}::uuid and deleted_at is null returning id`;
+  return rows.length > 0;
+}
+var MEMORY_SYSTEM = [
+  'Extract durable facts worth remembering for future conversations: preferences, constraints, details of goals, outcomes, and facts about specific people. Skip small talk and anything already in <known>. Each memory ≤ 200 characters, in third person about the user ("Prefers morning calls").',
+  `Return {"memories": [{kind, text, person_name|null, importance: 0..1, quote}]}; quote must be the user's own words.`
+].join("\n");
+var memorySchema = z3.object({
+  memories: z3.array(
+    z3.object({
+      kind: z3.enum(["preference", "constraint", "goal_detail", "outcome", "person_fact", "note"]),
+      text: z3.string(),
+      person_name: z3.string().nullable(),
+      importance: z3.number(),
+      quote: z3.string()
+    })
+  )
+});
+
+// supabase/functions/orbit-api/routes/memory.ts
+async function search(ctx) {
+  const b = await body(ctx);
+  const s = ctx.services();
+  const memories = await searchMemories(
+    ctx.db,
+    s.embed,
+    ctx.userId,
+    {
+      query: text(b, "query", 1e3),
+      personId: optUuid(b, "personId"),
+      limit: typeof b.limit === "number" ? b.limit : void 0
+    },
+    ctx.now()
+  );
+  return json(200, { memories });
+}
+async function add(ctx) {
+  const b = await body(ctx);
+  const s = ctx.services();
+  const r = await addMemory(
+    ctx.db,
+    s.embed,
+    ctx.userId,
+    {
+      text: text(b, "text", 1e3),
+      kind: b.kind,
+      personId: optUuid(b, "personId"),
+      source: "remember"
+    },
+    ctx.now()
+  );
+  return json(200, r);
+}
+async function list(ctx) {
+  const b = await body(ctx, true);
+  return json(200, { memories: await listMemories(ctx.db, ctx.userId, optUuid(b, "personId")) });
+}
+async function forget(ctx) {
+  const id = uuid(await body(ctx), "id");
+  if (!await forgetMemory(ctx.db, ctx.userId, id, ctx.now()))
+    throw new HttpError(404, "not_found", "no such memory");
+  return json(200, { ok: true });
+}
+var memoryRoutes = {
+  "/memory/search": { method: "POST", auth: true, run: search },
+  "/memory/add": { method: "POST", auth: true, run: add },
+  "/memory/list": { method: "POST", auth: true, run: list },
+  "/memory/forget": { method: "POST", auth: true, run: forget }
+};
+
+// packages/core/src/scoring/tieScore.ts
+var TIE_BAND_LABELS = {
+  faint: "Faint",
+  light: "Light",
+  warm: "Warm",
+  strong: "Strong",
+  close: "Close"
+};
+var TIE_LABEL_MIDPOINTS = { 1: 10, 2: 30, 3: 50, 4: 70, 5: 90 };
+function tieBand(score) {
+  if (score >= 80) return "close";
+  if (score >= 60) return "strong";
+  if (score >= 40) return "warm";
+  if (score >= 20) return "light";
+  return "faint";
+}
+
+// packages/core/src/graph/paths.ts
+function makeGraph() {
+  return { nodes: /* @__PURE__ */ new Set(), adj: /* @__PURE__ */ new Map() };
+}
+function addEdge(g, a, b, weight, type, text2, directed = false) {
+  if (weight <= 0) return;
+  g.nodes.add(a);
+  g.nodes.add(b);
+  const set = (x, y) => {
+    const m = g.adj.get(x) ?? /* @__PURE__ */ new Map();
+    const cur = m.get(y);
+    if (!cur || cur.weight < weight) m.set(y, { weight, type, text: text2 });
+    g.adj.set(x, m);
+  };
+  set(a, b);
+  if (!directed) set(b, a);
+}
+function edgeCost(weight) {
+  return -Math.log(Math.min(weight, 0.999999));
+}
+var MinHeap = class {
+  keys = [];
+  vals = [];
+  get size() {
+    return this.keys.length;
+  }
+  push(key, val) {
+    const k = this.keys;
+    const v = this.vals;
+    let i = k.length;
+    k.push(key);
+    v.push(val);
+    while (i > 0) {
+      const parent = i - 1 >> 1;
+      if (k[parent] <= key) break;
+      k[i] = k[parent];
+      v[i] = v[parent];
+      i = parent;
+    }
+    k[i] = key;
+    v[i] = val;
+  }
+  pop() {
+    const k = this.keys;
+    const v = this.vals;
+    if (!k.length) return void 0;
+    const topK = k[0];
+    const topV = v[0];
+    const lastK = k.pop();
+    const lastV = v.pop();
+    const n = k.length;
+    if (n) {
+      let i = 0;
+      while (true) {
+        const l = 2 * i + 1;
+        if (l >= n) break;
+        const r = l + 1;
+        const c = r < n && k[r] < k[l] ? r : l;
+        if (k[c] >= lastK) break;
+        k[i] = k[c];
+        v[i] = v[c];
+        i = c;
+      }
+      k[i] = lastK;
+      v[i] = lastV;
+    }
+    return [topK, topV];
+  }
+};
+function boundedSearch(g, source, maxHops, target, removedEdges, removedNodes) {
+  const dist = /* @__PURE__ */ new Map();
+  const prev = /* @__PURE__ */ new Map();
+  const minSettledHops = /* @__PURE__ */ new Map();
+  const best = /* @__PURE__ */ new Map();
+  const heap = new MinHeap();
+  const setDist = (node, hops, d, from) => {
+    let arr = dist.get(node);
+    if (!arr) {
+      arr = new Array(maxHops + 1).fill(Number.POSITIVE_INFINITY);
+      dist.set(node, arr);
+      prev.set(node, new Array(maxHops + 1));
+    }
+    arr[hops] = d;
+    prev.get(node)[hops] = from;
+  };
+  setDist(source, 0, 0, void 0);
+  heap.push(0, { node: source, hops: 0 });
+  while (heap.size) {
+    const [d, { node, hops }] = heap.pop();
+    if (d > dist.get(node)[hops]) continue;
+    const settled = minSettledHops.get(node);
+    if (settled !== void 0 && settled <= hops) continue;
+    minSettledHops.set(node, hops);
+    if (!best.has(node)) best.set(node, { cost: d, hops });
+    if (node === target) break;
+    if (hops >= maxHops) continue;
+    for (const [v, e] of g.adj.get(node) ?? []) {
+      if (v === source || removedNodes?.has(v) || removedEdges?.has(`${node}>${v}`)) continue;
+      const s = minSettledHops.get(v);
+      if (s !== void 0 && s <= hops + 1) continue;
+      const nd = d + edgeCost(e.weight);
+      const cur = dist.get(v)?.[hops + 1] ?? Number.POSITIVE_INFINITY;
+      if (nd < cur) {
+        setDist(v, hops + 1, nd, node);
+        heap.push(nd, { node: v, hops: hops + 1 });
+      }
+    }
+  }
+  return { best, prev };
+}
+function reconstruct(search3, node) {
+  const b = search3.best.get(node);
+  if (!b) return void 0;
+  const path = [node];
+  let cur = node;
+  for (let h = b.hops; h > 0; h--) {
+    cur = search3.prev.get(cur)[h];
+    path.unshift(cur);
+  }
+  return path;
+}
+function shortestPath(g, source, target, maxHops, removedEdges, removedNodes) {
+  if (source === target) return [source];
+  const search3 = boundedSearch(g, source, maxHops, target, removedEdges, removedNodes);
+  return reconstruct(search3, target);
+}
+function pathCost(g, path) {
+  let c = 0;
+  for (let i = 0; i < path.length - 1; i++) c += edgeCost(g.adj.get(path[i]).get(path[i + 1]).weight);
+  return c;
+}
+function kShortestPaths(g, source, target, k = 3, maxHops = 3) {
+  if (!g.nodes.has(source) || !g.nodes.has(target)) return source === target ? [[source]] : [];
+  const first = shortestPath(g, source, target, maxHops, /* @__PURE__ */ new Set(), /* @__PURE__ */ new Set());
+  if (!first) return [];
+  const A = [first];
+  if (first.length === 1) return A;
+  const B = [];
+  const seen = /* @__PURE__ */ new Set([first.join(">")]);
+  for (let kk = 1; kk < k; kk++) {
+    const last = A[kk - 1];
+    for (let i = 0; i < last.length - 1; i++) {
+      const spur = last[i];
+      const root = last.slice(0, i + 1);
+      const removedEdges = /* @__PURE__ */ new Set();
+      const removedNodes = /* @__PURE__ */ new Set();
+      for (const p of A) {
+        if (p.length > i + 1 && root.every((n, idx) => p[idx] === n)) removedEdges.add(`${p[i]}>${p[i + 1]}`);
+      }
+      for (const n of root) if (n !== spur) removedNodes.add(n);
+      const spurPath = shortestPath(g, spur, target, maxHops - i, removedEdges, removedNodes);
+      if (!spurPath) continue;
+      const total = [...root.slice(0, -1), ...spurPath];
+      const key = total.join(">");
+      if (seen.has(key)) continue;
+      seen.add(key);
+      B.push({ cost: pathCost(g, total), path: total, key });
+    }
+    if (!B.length) break;
+    B.sort((a, b) => a.cost - b.cost);
+    A.push(B.shift().path);
+  }
+  return A;
+}
+
+// packages/core/src/graph/ppr.ts
+var PPR_ALPHA = 0.15;
+var PPR_ITERATIONS = 30;
+function personalizedPageRank(adj, source, opts = {}) {
+  const alpha = opts.alpha ?? PPR_ALPHA;
+  const iterations = opts.iterations ?? PPR_ITERATIONS;
+  const out = /* @__PURE__ */ new Map();
+  const nodes = /* @__PURE__ */ new Set([source]);
+  for (const [u2, nbrs] of adj) {
+    nodes.add(u2);
+    let total = 0;
+    for (const [v, w] of nbrs) {
+      if (w > 0 && Number.isFinite(w)) total += w;
+      nodes.add(v);
+    }
+    if (total <= 0) continue;
+    const list4 = [];
+    for (const [v, w] of nbrs) if (w > 0 && Number.isFinite(w)) list4.push({ to: v, p: w / total });
+    out.set(u2, list4);
+  }
+  let rank2 = /* @__PURE__ */ new Map([[source, 1]]);
+  for (let it = 0; it < iterations; it++) {
+    const next = /* @__PURE__ */ new Map();
+    let restart = alpha;
+    for (const [u2, r] of rank2) {
+      if (r === 0) continue;
+      const list4 = out.get(u2);
+      if (!list4) {
+        restart += (1 - alpha) * r;
+        continue;
+      }
+      for (const { to, p } of list4) next.set(to, (next.get(to) ?? 0) + (1 - alpha) * r * p);
+    }
+    next.set(source, (next.get(source) ?? 0) + restart);
+    rank2 = next;
+  }
+  for (const n of nodes) if (!rank2.has(n)) rank2.set(n, 0);
+  return rank2;
+}
+
+// packages/core/src/graph/orgSize.ts
+var KNOWN_SIZES = {};
+var add2 = (bucket, names) => {
+  for (const n of names) KNOWN_SIZES[normalizeCompany(n)] = bucket;
+};
+add2("10001+", [
+  "Google",
+  "Alphabet",
+  "Meta",
+  "Facebook",
+  "Amazon",
+  "Amazon Web Services",
+  "AWS",
+  "Microsoft",
+  "Apple",
+  "Netflix",
+  "Oracle",
+  "Salesforce",
+  "Adobe",
+  "IBM",
+  "Intel",
+  "NVIDIA",
+  "Cisco",
+  "Uber",
+  "Tesla",
+  "SpaceX",
+  "Qualcomm",
+  "Intuit",
+  "PayPal",
+  "ServiceNow",
+  "Workday",
+  "VMware",
+  "Dell",
+  "HP",
+  "Accenture",
+  "Deloitte",
+  "PwC",
+  "PricewaterhouseCoopers",
+  "EY",
+  "Ernst & Young",
+  "KPMG",
+  "McKinsey & Company",
+  "McKinsey",
+  "Boston Consulting Group",
+  "BCG",
+  "Bain & Company",
+  "Bain",
+  "Booz Allen Hamilton",
+  "Capgemini",
+  "Goldman Sachs",
+  "JPMorgan Chase",
+  "JP Morgan",
+  "J.P. Morgan",
+  "Morgan Stanley",
+  "Bank of America",
+  "Citi",
+  "Citigroup",
+  "Wells Fargo",
+  "Barclays",
+  "UBS",
+  "Deutsche Bank",
+  "HSBC",
+  "BlackRock",
+  "Fidelity Investments",
+  "Vanguard",
+  "Capital One",
+  "American Express",
+  "Visa",
+  "Mastercard",
+  "Charles Schwab",
+  "State Street",
+  "Procter & Gamble",
+  "PepsiCo",
+  "Coca-Cola",
+  "Johnson & Johnson",
+  "Pfizer",
+  "Walmart",
+  "Target",
+  "Nike",
+  "Disney",
+  "The Walt Disney Company",
+  "Comcast",
+  "Verizon",
+  "AT&T",
+  "Boeing",
+  "Lockheed Martin",
+  "General Electric",
+  "GE",
+  "General Motors",
+  "Ford",
+  "ByteDance",
+  "TikTok",
+  "Samsung",
+  "Bloomberg",
+  "LinkedIn",
+  "Shopify",
+  "Booking.com"
+]);
+add2("5001-10000", [
+  "Stripe",
+  "Airbnb",
+  "Snap",
+  "Snapchat",
+  "Spotify",
+  "Block",
+  "Square",
+  "DoorDash",
+  "Lyft",
+  "Datadog",
+  "Atlassian",
+  "Palantir",
+  "Coinbase",
+  "Robinhood",
+  "Pinterest",
+  "Dropbox",
+  "Instacart",
+  "Lazard",
+  "Evercore",
+  "Jane Street",
+  "Citadel",
+  "Two Sigma",
+  "Oliver Wyman",
+  "LEK Consulting",
+  "Kearney"
+]);
+add2("1001-5000", [
+  "Figma",
+  "Anthropic",
+  "OpenAI",
+  "Ramp",
+  "Brex",
+  "Databricks",
+  "Snowflake",
+  "Plaid",
+  "Notion",
+  "Duolingo",
+  "Reddit",
+  "Discord",
+  "Scale AI",
+  "Asana",
+  "Airtable",
+  "Hudson River Trading",
+  "DE Shaw",
+  "D. E. Shaw",
+  "Point72",
+  "Centerview Partners",
+  "PJT Partners",
+  "Moelis",
+  "Moelis & Company",
+  "Perella Weinberg",
+  "Guggenheim Partners",
+  "Blackstone",
+  "KKR",
+  "Apollo",
+  "Carlyle"
+]);
+add2("501-1000", ["Vercel", "Retool", "Rippling", "Mercury", "Jump Trading", "Optiver", "Five Rings"]);
+add2("201-500", ["Linear", "Sequoia Capital", "Andreessen Horowitz", "a16z", "Benchmark", "Accel"]);
+
+// packages/core/src/graph/ties.ts
+var TIE_KINDS = [
+  "email_exchange",
+  "email_cc",
+  "email_cothread",
+  "meeting_coattendee",
+  "introduced_by",
+  "linkedin_mutual",
+  "village_path",
+  "co_tenure",
+  "same_school_cohort",
+  "same_current_company"
+];
+var INTERACTION_TIE_KINDS = /* @__PURE__ */ new Set([
+  "email_exchange",
+  "email_cc",
+  "email_cothread",
+  "meeting_coattendee",
+  "introduced_by"
+]);
+var ROUTABLE_TIE_KINDS = /* @__PURE__ */ new Set([
+  "email_exchange",
+  "email_cc",
+  "meeting_coattendee",
+  "introduced_by",
+  "linkedin_mutual"
+]);
+var YEAR = 365.25 * 864e5;
+function maxIso(a, b) {
+  if (!a) return b;
+  if (!b) return a;
+  return a > b ? a : b;
+}
+function decayedTieWeight(t, now = /* @__PURE__ */ new Date()) {
+  if (!INTERACTION_TIE_KINDS.has(t.kind) || !t.lastSeenAt) return t.weight;
+  const at = new Date(t.lastSeenAt).getTime();
+  if (Number.isNaN(at)) return t.weight;
+  const years = Math.max(0, now.getTime() - at) / YEAR;
+  return t.weight * 0.5 ** (years / 2);
+}
+function combineTies(ties, now = /* @__PURE__ */ new Date()) {
+  const out = /* @__PURE__ */ new Map();
+  for (const t of ties) {
+    const k = `${t.aId}|${t.bId}`;
+    const cur = out.get(k) ?? { aId: t.aId, bId: t.bId, weight: 0, confidence: 0, kinds: [], ties: [] };
+    const wc = Math.min(1, decayedTieWeight(t, now) * t.confidence);
+    cur.weight = 1 - (1 - cur.weight) * (1 - wc);
+    cur.confidence = 1 - (1 - cur.confidence) * (1 - t.confidence);
+    if (!cur.kinds.includes(t.kind)) cur.kinds.push(t.kind);
+    cur.ties.push(t);
+    cur.lastSeenAt = maxIso(cur.lastSeenAt, t.lastSeenAt);
+    out.set(k, cur);
+  }
+  return out;
+}
+function isRoutable(pair) {
+  return pair.confidence >= 0.5 || pair.kinds.some((k) => ROUTABLE_TIE_KINDS.has(k));
+}
+
+// packages/core/src/graph/route.ts
+var USER_NODE = "user";
+var sigmoid = (x) => 1 / (1 + Math.exp(-x));
+var DAY6 = 864e5;
+function pAsk(f2) {
+  return sigmoid(
+    -2 + 4 * Math.max(0, Math.min(100, f2.score)) / 100 + 0.8 * Math.max(0, Math.min(1, f2.reciprocity ?? 0)) + (f2.introducedUserBefore ? 0.6 : 0) + (f2.sharesGoalTargetOrg ? 0.3 : 0) - (f2.askedRecently ? 0.7 : 0) - (f2.owesReply ? 0.5 : 0)
+  );
+}
+function pKnow(pair) {
+  return Math.max(0, Math.min(1, pair.weight));
+}
+var C_LEVEL = /\b(ceo|cfo|coo|cto|cmo|cpo|cio|ciso|chief|president|partner|managing director|founder|co-founder|cofounder)\b/i;
+var SENIOR = /\b(director|vp|vice president|head of|principal|general manager|svp|evp)\b/i;
+var JUNIOR_OR_MANAGER = /\b(intern|analyst|associate|engineer|developer|designer|scientist|researcher|manager|coordinator|specialist|consultant|representative|recruiter|assistant|lead|student|fellow)\b/i;
+function targetReceptivity(t) {
+  const title = t.title ?? "";
+  const cLevel = C_LEVEL.test(title);
+  const atMostManager = !cLevel && !SENIOR.test(title) && JUNIOR_OR_MANAGER.test(title);
+  const r = 1 + (t.isAlum ? 0.15 : 0) + (atMostManager ? 0.1 : 0) - (cLevel ? 0.15 : 0);
+  return Math.max(0.7, Math.min(1.3, r));
+}
+function firstHopFloor(goal) {
+  if (goal === "fundraising") return 40;
+  if (goal === "recruiting" || goal === "advice") return 20;
+  return 0;
+}
+var HOP_PENALTY = 0.85;
+var OLD_EVIDENCE_YEARS = 3;
+var OLD_EVIDENCE_FACTOR = 0.7;
+var DIRECT_TIE_SCORE = 40;
+var MIN_PATH_P = 0.05;
+function pathBand(p) {
+  if (p >= 0.35) return "high";
+  if (p >= 0.15) return "medium";
+  return "low";
+}
+var pk = (a, b) => a < b ? `${a}|${b}` : `${b}|${a}`;
+function withExternal(pairs, targetId, candidates) {
+  if (!candidates.length) return pairs;
+  const out = new Map(pairs);
+  for (const c of candidates) {
+    if (c.introducerId === targetId) continue;
+    const key = pk(c.introducerId, targetId);
+    const [a, b] = key.split("|");
+    const w = c.kind === "linkedin_mutual" ? 0.3 : Math.max(0, Math.min(1, c.warmth ?? 0));
+    const conf = c.kind === "linkedin_mutual" ? 0.95 : 0.7;
+    const tie = {
+      id: `${key}|${c.kind}`,
+      userId: "",
+      aId: a,
+      bId: b,
+      kind: c.kind,
+      weight: w,
+      confidence: conf,
+      evidence: { source: c.kind === "linkedin_mutual" ? "unipile" : "village" },
+      lastSeenAt: c.seenAt
+    };
+    const cur = out.get(key);
+    if (cur?.kinds.includes(c.kind)) continue;
+    out.set(key, {
+      aId: a,
+      bId: b,
+      weight: 1 - (1 - (cur?.weight ?? 0)) * (1 - w * conf),
+      confidence: 1 - (1 - (cur?.confidence ?? 0)) * (1 - conf),
+      kinds: [...cur?.kinds ?? [], c.kind],
+      ties: [...cur?.ties ?? [], tie],
+      lastSeenAt: cur?.lastSeenAt
+    });
+  }
+  return out;
+}
+function usable(p, now) {
+  if (!p || p.hidden) return false;
+  if (p.declinedIntroAt) {
+    const t = new Date(p.declinedIntroAt).getTime();
+    if (!Number.isNaN(t) && now.getTime() - t < 90 * DAY6) return false;
+  }
+  return true;
+}
+function strongestTie(pair, now) {
+  return [...pair.ties].sort(
+    (x, y) => decayedTieWeight(y, now) * y.confidence - decayedTieWeight(x, now) * x.confidence
+  )[0];
+}
+function pairIsOld(pair, now) {
+  const cutoff = now.getTime() - OLD_EVIDENCE_YEARS * 365.25 * DAY6;
+  let newest = pair.lastSeenAt ? new Date(pair.lastSeenAt).getTime() : Number.NaN;
+  for (const t of pair.ties) {
+    const ev = t.evidence;
+    if (ev.ongoing || Array.isArray(ev.current) && ev.current.length === 2) return false;
+    if (typeof ev.toYear === "number") {
+      const end = Date.UTC(ev.toYear, 11, 31);
+      newest = Number.isNaN(newest) ? end : Math.max(newest, end);
+    }
+  }
+  return !Number.isNaN(newest) && newest < cutoff;
+}
+var MONTHS2 = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function monthYear(iso2) {
+  if (typeof iso2 !== "string") return void 0;
+  const d = new Date(iso2);
+  return Number.isNaN(d.getTime()) ? void 0 : `${MONTHS2[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+}
+function hopEvidence(fromId, tie, toName) {
+  if (!tie) return `knows ${toName}`;
+  const ev = tie.evidence;
+  const org = typeof ev.orgName === "string" ? ev.orgName : void 0;
+  switch (tie.kind) {
+    case "email_exchange":
+      return `emails with ${toName}`;
+    case "email_cc":
+      return `is on email with ${toName}`;
+    case "email_cothread":
+      return `was on an email thread with ${toName}`;
+    case "meeting_coattendee": {
+      const when2 = monthYear(ev.lastAt ?? tie.lastSeenAt);
+      return `met ${toName}${when2 ? ` (${when2})` : ""}`;
+    }
+    case "introduced_by":
+      return ev.introducerId === fromId ? `introduced you to ${toName}` : `was introduced to you by ${toName}`;
+    case "linkedin_mutual":
+      return `is connected to ${toName} on LinkedIn`;
+    case "village_path":
+      return `knows ${toName} (via Village)`;
+    case "co_tenure": {
+      const from = typeof ev.fromYear === "number" ? ev.fromYear : void 0;
+      const to = typeof ev.toYear === "number" ? ev.toYear : void 0;
+      const years = from === void 0 ? "" : ev.ongoing ? ` (since ${from})` : to && to !== from ? ` (${from}–${to})` : ` (${from})`;
+      return `worked with ${toName}${org ? ` at ${org}` : ""}${years}`;
+    }
+    case "same_school_cohort":
+      return `went to ${typeof ev.school === "string" ? ev.school : "school"} with ${toName}`;
+    case "same_current_company":
+      return `works with ${toName}${org ? ` at ${org}` : ""}`;
+    default:
+      return `knows ${toName}`;
+  }
+}
+function routingGraph(input, pairs, now) {
+  const g = makeGraph();
+  const ask2 = /* @__PURE__ */ new Map();
+  const floor = firstHopFloor(input.goal);
+  for (const p of input.people.values()) {
+    if (p.id === input.targetId || !usable(p, now) || p.score <= 0 || p.score < floor) continue;
+    const a = pAsk(p);
+    ask2.set(p.id, a);
+    addEdge(g, USER_NODE, p.id, a, "strength", "", true);
+  }
+  for (const pair of pairs.values()) {
+    if (!isRoutable(pair)) continue;
+    const know = pKnow(pair);
+    if (know <= 0) continue;
+    const ends = [pair.aId, pair.bId];
+    if (ends.some((id) => id !== input.targetId && !usable(input.people.get(id), now))) continue;
+    const top = strongestTie(pair, now)?.kind ?? pair.kinds[0];
+    addEdge(g, pair.aId, pair.bId, Math.min(0.999, know * HOP_PENALTY), top, "");
+  }
+  return { g, ask: ask2 };
+}
+function rankWarmPaths(input) {
+  const now = input.now ?? /* @__PURE__ */ new Date();
+  const target = input.people.get(input.targetId);
+  const tName = input.target?.name ?? target?.name ?? "them";
+  if (target && target.score >= DIRECT_TIE_SCORE) {
+    const band = TIE_BAND_LABELS[tieBand(target.score)];
+    return {
+      paths: [],
+      direct: { score: target.score, band, text: `You know ${tName} (${band} · ${target.score})` }
+    };
+  }
+  const pairs = withExternal(input.pairs, input.targetId, input.candidates ?? []);
+  const { g, ask: ask2 } = routingGraph(input, pairs, now);
+  const rT = targetReceptivity(input.target ?? {});
+  const k = input.k ?? 12;
+  const maxHops = input.maxHops ?? 3;
+  const found = [];
+  for (const nodes of kShortestPaths(g, USER_NODE, input.targetId, k, maxHops)) {
+    if (nodes.length < 3) continue;
+    const hops = [];
+    let p = 1;
+    let old = false;
+    for (let i = 0; i < nodes.length - 1; i++) {
+      const from = nodes[i];
+      const to = nodes[i + 1];
+      if (i === 0) {
+        const a = ask2.get(to);
+        hops.push({ fromId: from, toId: to, p: a, kind: "strength" });
+        p *= a;
+        const last = input.people.get(to)?.lastContactAt;
+        if (last && now.getTime() - new Date(last).getTime() > OLD_EVIDENCE_YEARS * 365.25 * DAY6) old = true;
+        continue;
+      }
+      const pair = pairs.get(pk(from, to));
+      const know = pKnow(pair);
+      hops.push({ fromId: from, toId: to, p: know, kind: strongestTie(pair, now)?.kind ?? pair.kinds[0] });
+      p *= know;
+      if (pairIsOld(pair, now)) old = true;
+    }
+    p *= rT * HOP_PENALTY ** (hops.length - 2);
+    if (old) p *= OLD_EVIDENCE_FACTOR;
+    p = Math.min(1, p);
+    found.push({ nodes, hops, p, band: pathBand(p), firstHopId: nodes[1] });
+  }
+  if (target && target.score > 0 && input.target?.pReply !== void 0) {
+    const p = Math.max(0, Math.min(1, input.target.pReply));
+    found.push({
+      nodes: [USER_NODE, input.targetId],
+      hops: [{ fromId: USER_NODE, toId: input.targetId, p, kind: "strength" }],
+      p,
+      band: pathBand(p),
+      firstHopId: input.targetId
+    });
+  }
+  found.sort(
+    (a, b) => b.p - a.p || a.nodes.length - b.nodes.length || a.nodes.join(">").localeCompare(b.nodes.join(">"))
+  );
+  const viable = found.filter((f2) => f2.p > MIN_PATH_P);
+  if (!viable.length) return { paths: [], fallback: "cold" };
+  const firstHops = new Set(viable.map((f2) => f2.firstHopId));
+  const otherWays = firstHops.size - 1;
+  const chosen = [];
+  const seenFirst = /* @__PURE__ */ new Set();
+  const middle = /* @__PURE__ */ new Map();
+  for (const f2 of viable) {
+    if (chosen.length >= (input.limit ?? 5)) break;
+    if (seenFirst.has(f2.firstHopId)) continue;
+    const mids = f2.nodes.slice(2, -1);
+    if (mids.some((m) => (middle.get(m) ?? 0) >= 2)) continue;
+    seenFirst.add(f2.firstHopId);
+    for (const m of mids) middle.set(m, (middle.get(m) ?? 0) + 1);
+    chosen.push(f2);
+  }
+  return {
+    paths: chosen.map((f2) => ({
+      ...f2,
+      otherWays,
+      reasonText: reasonText(f2, input, pairs, tName, otherWays, now)
+    }))
+  };
+}
+function reasonText(f2, input, pairs, tName, otherWays, now) {
+  const others = otherWays > 0 ? ` ${otherWays} other ${otherWays === 1 ? "way" : "ways"} in.` : "";
+  if (f2.nodes.length === 2) {
+    const t = input.people.get(input.targetId);
+    const band = t ? `${TIE_BAND_LABELS[tieBand(t.score)]} · ${t.score}` : "";
+    return `Write to ${tName} directly${band ? ` (${band})` : ""}.${others}`;
+  }
+  const a = input.people.get(f2.nodes[1]);
+  const nameOf = (id) => id === input.targetId ? tName : input.people.get(id)?.name ?? "someone";
+  const phrases = [];
+  for (let i = 1; i < f2.nodes.length - 1; i++) {
+    const from = f2.nodes[i];
+    const to = f2.nodes[i + 1];
+    const pair = pairs.get(pk(from, to));
+    phrases.push(hopEvidence(from, pair ? strongestTie(pair, now) : void 0, nameOf(to)));
+  }
+  const head = `${a.name} (${TIE_BAND_LABELS[tieBand(a.score)]} · ${a.score}) ${phrases[0]}`;
+  const rest = phrases.slice(1).map((p) => `, who ${p}`).join("");
+  return `${head}${rest}.${others}`;
+}
+function rankCompanyTargets(input) {
+  const now = input.now ?? /* @__PURE__ */ new Date();
+  let targets = input.targets;
+  if (targets.length > 10) {
+    const pairs = withExternal(input.pairs, "", []);
+    const { g } = routingGraph({ ...input, targetId: "" }, pairs, now);
+    const adj = /* @__PURE__ */ new Map();
+    for (const [u2, nbrs] of g.adj) adj.set(u2, new Map([...nbrs].map(([v, e]) => [v, e.weight])));
+    const mass = personalizedPageRank(adj, USER_NODE);
+    targets = [...targets].sort((a, b) => (mass.get(b.id) ?? 0) - (mass.get(a.id) ?? 0) || a.id.localeCompare(b.id)).slice(0, 10);
+  }
+  const out = [];
+  for (const t of targets) {
+    const r = rankWarmPaths({ ...input, targetId: t.id, target: t, limit: 2 });
+    for (const path of r.paths) out.push({ target: t, path });
+  }
+  out.sort((a, b) => b.path.p - a.path.p || a.target.id.localeCompare(b.target.id));
+  const perTarget = /* @__PURE__ */ new Map();
+  const chosen = [];
+  for (const x of out) {
+    if (chosen.length >= (input.limit ?? 5)) break;
+    const n = perTarget.get(x.target.id) ?? 0;
+    if (n >= 2) continue;
+    perTarget.set(x.target.id, n + 1);
+    chosen.push(x);
+  }
+  return chosen;
+}
+
+// packages/core/src/labels.ts
+var FUNCTION_LABELS = {
+  swe: "Software engineering",
+  pm: "Product management",
+  ib: "Investment banking",
+  consulting: "Consulting",
+  data: "Data science and ML",
+  design: "Product design",
+  finance: "Finance",
+  marketing: "Marketing",
+  research: "Research",
+  vc: "Venture capital",
+  ops: "Operations"
+};
+var FUNCTION_CODES = Object.keys(FUNCTION_LABELS);
+
+// packages/core/src/recommend/score.ts
+function responsePrior(p, user) {
+  let z5 = -0.4;
+  if (p.isAlumni) z5 += 0.8;
+  if (p.school && user.majors.some((m) => (p.headline ?? "").toLowerCase().includes(m.toLowerCase())))
+    z5 += 0.5;
+  const title = (p.currentTitle ?? "").toLowerCase();
+  if (/\b(ceo|cfo|coo|cto|partner|managing director|md|founder|chief)\b/.test(title)) z5 -= 0.6;
+  else if (title) z5 += 0.3;
+  if (p.lastInteractionAt && Date.now() - new Date(p.lastInteractionAt).getTime() < 180 * 864e5)
+    z5 += 0.3;
+  if (p.linkedinConnectedOn) z5 += 0.2;
+  return 1 / (1 + Math.exp(-z5));
+}
+
+// supabase/functions/_shared/research/bind.ts
+var UNIPILE_SEARCHES_PER_DAY = 10;
+function ledgerName(p, operation) {
+  switch (p) {
+    case "claude":
+      return { provider: "anthropic", operation: operation ?? "call" };
+    case "apollo_match":
+      return { provider: "apollo", operation: "match" };
+    case "unipile_profile":
+      return { provider: "unipile", operation: "profile_view" };
+    case "unipile_search":
+      return { provider: "unipile", operation: "search" };
+    default:
+      return { provider: p, operation: operation ?? "call" };
+  }
+}
+function spendOf(p, estimate) {
+  const { provider, operation } = ledgerName(p);
+  switch (p) {
+    case "claude":
+    case "exa":
+      return { provider, operation, costUsd: estimate };
+    case "village":
+      return { provider, operation, units: estimate, costUsd: estimate * VILLAGE_USD_PER_CREDIT };
+    default:
+      return { provider, operation, units: estimate };
+  }
+}
+function sqlBudget(db2, now) {
+  return {
+    async check(userId, p, estimate) {
+      const v = await checkBudget(db2, userId, spendOf(p, estimate), now());
+      if (!v.ok) return { ok: false, reason: "budget_exceeded", resetsAt: v.resetsAt };
+      if (p === "unipile_search") {
+        const day = new Date(Date.UTC(now().getUTCFullYear(), now().getUTCMonth(), now().getUTCDate()));
+        const [r] = await db2.sql`
+          select count(*)::int as n from orbit.usage_ledger
+           where user_id = ${userId}::uuid and provider = 'unipile' and operation = 'search'
+             and created_at >= ${day}::timestamptz`;
+        if ((r?.n ?? 0) >= UNIPILE_SEARCHES_PER_DAY)
+          return {
+            ok: false,
+            reason: "budget_exceeded",
+            resetsAt: new Date(day.getTime() + 864e5).toISOString()
+          };
+      }
+      return { ok: true };
+    },
+    async record(userId, e) {
+      const { provider, operation } = ledgerName(e.provider, e.operation);
+      await recordUsage(db2, { userId, provider, operation, units: e.units, costUsd: e.costUsd });
+    }
+  };
+}
+function sqlCache(db2, now) {
+  return {
+    async get(userId, key) {
+      const [r] = await db2.sql`
+        select response from orbit.research_cache
+         where user_id = ${userId}::uuid and key = ${key} and expires_at > ${now()}::timestamptz`;
+      return r?.response;
+    },
+    async put(userId, e) {
+      await db2.sql`
+        insert into orbit.research_cache (user_id, key, provider, response, created_at, expires_at)
+        values (${userId}::uuid, ${e.key}, ${e.provider}, ${JSON.stringify(e.response)}::jsonb, ${now()}::timestamptz,
+                ${e.expiresAt}::timestamptz)
+        on conflict (user_id, key) do update set
+          provider = excluded.provider, response = excluded.response,
+          created_at = excluded.created_at, expires_at = excluded.expires_at`;
+    }
+  };
+}
+function claudeDep(claude, userId) {
+  return {
+    async parse(task, schema, prompt) {
+      const r = await claude.structured({
+        task: task === "dossier" ? "dossier" : "fit",
+        system: prompt.system,
+        user: prompt.user,
+        schema,
+        userId
+      });
+      if (r.ok) return { ok: true, value: r.data, costUsd: r.costUsd, model: r.model };
+      if ("unconfigured" in r) return { ok: false, reason: "error", message: "unconfigured" };
+      if ("budgetExceeded" in r) return { ok: false, reason: "budget_exceeded", message: r.cap };
+      if ("refused" in r) return { ok: false, reason: "refusal" };
+      return { ok: false, reason: r.error === "max_tokens" ? "max_tokens" : "error", message: r.error };
+    }
+  };
+}
+
+// supabase/functions/_shared/paths/externalCandidates.ts
+var EXTERNAL_CACHE_MS = 30 * 864e5;
+var MUTUAL_WEIGHT = 0.3;
+var MUTUAL_CONFIDENCE = 0.95;
+var VILLAGE_CONFIDENCE = 0.7;
+async function gatherExternalCandidates(deps, input) {
+  const out = {
+    candidates: [],
+    ties: [],
+    unconfigured: [],
+    skipped: [],
+    fromCache: { mutuals: false, village: false }
+  };
+  const t = input.target;
+  const targetPersonId = t.kind === "person" ? t.personId ?? null : null;
+  const [mutuals, village] = await Promise.all([mutualsFor(deps, input, out), villageFor2(deps, input, out)]);
+  const resolve = async (p) => deps.resolvePerson ? deps.resolvePerson(p) : null;
+  const seenAt = new Date(deps.clock()).toISOString();
+  if (t.kind === "person") {
+    for (const m of mutuals) {
+      const p = linkedInPerson(m);
+      if (!p.name) continue;
+      const ref = { name: p.name, linkedinUrl: p.linkedinUrl, memberId: p.memberId, headline: p.headline };
+      const personId = await resolve(ref);
+      const evidence = {
+        source: "unipile",
+        via: "connections_of",
+        introducer_member_id: p.memberId ?? null,
+        target_member_id: t.memberId ?? null
+      };
+      out.candidates.push({
+        ...ref,
+        warmth: MUTUAL_WEIGHT,
+        source: "linkedin_mutual",
+        evidence,
+        personId,
+        target: { name: t.name, linkedinUrl: cleanLinkedInUrl(t.linkedinUrl), personId: targetPersonId }
+      });
+      pushTie(
+        out,
+        input.userId,
+        personId,
+        targetPersonId,
+        "linkedin_mutual",
+        MUTUAL_WEIGHT,
+        MUTUAL_CONFIDENCE,
+        evidence,
+        seenAt
+      );
+    }
+  }
+  for (const v of village) {
+    const ref = {
+      name: v.introducer.name,
+      linkedinUrl: cleanLinkedInUrl(v.introducer.linkedinUrl),
+      headline: v.introducer.headline
+    };
+    const personId = await resolve(ref);
+    const vTargetId = t.kind === "person" ? targetPersonId : v.target.name ? await resolve({ name: v.target.name, linkedinUrl: cleanLinkedInUrl(v.target.linkedinUrl) }) : null;
+    const evidence = {
+      source: "village",
+      degree: v.degree,
+      score_label: v.scoreLabel ?? null,
+      reasons: v.reasons
+    };
+    out.candidates.push({
+      ...ref,
+      warmth: v.warmth,
+      source: "village_path",
+      evidence,
+      personId,
+      target: {
+        name: v.target.name ?? (t.kind === "person" ? t.name : void 0),
+        linkedinUrl: cleanLinkedInUrl(
+          v.target.linkedinUrl ?? (t.kind === "person" ? t.linkedinUrl : void 0)
+        ),
+        personId: vTargetId
+      }
+    });
+    pushTie(
+      out,
+      input.userId,
+      personId,
+      vTargetId,
+      "village_path",
+      v.warmth,
+      VILLAGE_CONFIDENCE,
+      evidence,
+      seenAt
+    );
+  }
+  return out;
+}
+function pushTie(out, userId, a, b, kind, weight, confidence, evidence, seenAt) {
+  if (!a || !b || a === b) return;
+  const [lo, hi] = a < b ? [a, b] : [b, a];
+  const dup = out.ties.find((x) => x.a_person_id === lo && x.b_person_id === hi && x.kind === kind);
+  if (dup) {
+    dup.weight = Math.max(dup.weight, weight);
+    return;
+  }
+  out.ties.push({
+    user_id: userId,
+    a_person_id: lo,
+    b_person_id: hi,
+    kind,
+    weight: Math.max(0, Math.min(1, weight)),
+    confidence,
+    evidence,
+    last_seen_at: seenAt
+  });
+}
+async function mutualsFor(deps, input, out) {
+  const t = input.target;
+  if (t.kind !== "person") return [];
+  if (!deps.unipile.configured) {
+    out.unconfigured.push("unipile");
+    return [];
+  }
+  if (!input.unipileAccountId) {
+    out.skipped.push("mutuals: LinkedIn not connected");
+    return [];
+  }
+  if (!t.memberId) {
+    out.skipped.push("mutuals: the target's LinkedIn member id is unknown");
+    return [];
+  }
+  const key = await cacheKey("unipile", {
+    op: "mutuals",
+    accountId: input.unipileAccountId,
+    memberId: t.memberId
+  });
+  const hit = await deps.cache.get(input.userId, key);
+  if (hit) {
+    out.fromCache.mutuals = true;
+    return hit.items;
+  }
+  const r = await deps.unipile.mutuals(input.unipileAccountId, t.memberId);
+  if (!r.ok) {
+    out.skipped.push(`mutuals: ${r.message}`);
+    return [];
+  }
+  await deps.cache.put(input.userId, {
+    key,
+    provider: "unipile",
+    response: { items: r.value },
+    expiresAt: new Date(deps.clock() + EXTERNAL_CACHE_MS)
+  });
+  return r.value;
+}
+async function villageFor2(deps, input, out) {
+  const t = input.target;
+  if (!deps.village.configured) {
+    out.unconfigured.push("village");
+    return [];
+  }
+  if (!input.villageUser) {
+    out.skipped.push("village: no Village user");
+    return [];
+  }
+  let op;
+  let q;
+  if (t.kind === "person") {
+    const url = cleanLinkedInUrl(t.linkedinUrl);
+    if (!url) {
+      out.skipped.push("village: needs the LinkedIn URL");
+      return [];
+    }
+    op = "people/paths";
+    q = { linkedin_url: url };
+  } else {
+    if (t.domain) q = { domain: t.domain.replace(/^www\./i, "").toLowerCase() };
+    else if (t.linkedinUrl) q = { linkedin_url: t.linkedinUrl };
+    else {
+      out.skipped.push("village: needs the company domain");
+      return [];
+    }
+    op = "companies/paths";
+  }
+  const key = await cacheKey("village", { op, user: input.villageUser.externalUserId, q });
+  const hit = await deps.cache.get(input.userId, key);
+  if (hit) {
+    out.fromCache.village = true;
+    return hit.kind === "person" ? personIntros(hit.data) : companyIntros(hit.data);
+  }
+  const credits = op === "people/paths" ? VILLAGE_PERSON_CREDITS : VILLAGE_COMPANY_CREDITS;
+  if (deps.budget) {
+    const v = await deps.budget.check(input.userId, "village", credits);
+    if (!v.ok) {
+      out.skipped.push("village: budget_exceeded");
+      return [];
+    }
+  }
+  let entry;
+  if (op === "people/paths") {
+    const r = await deps.village.personPaths(input.villageUser, q);
+    if (!r.ok) {
+      out.skipped.push(`village: ${r.message}`);
+      return [];
+    }
+    entry = { kind: "person", data: r.value };
+  } else {
+    const r = await deps.village.companyPaths(
+      input.villageUser,
+      "domain" in q ? { domain: q.domain, limit: 25 } : { linkedin_url: q.linkedin_url, limit: 25 }
+    );
+    if (!r.ok) {
+      out.skipped.push(`village: ${r.message}`);
+      return [];
+    }
+    entry = { kind: "company", data: r.value };
+  }
+  await deps.budget?.record(input.userId, {
+    provider: "village",
+    operation: op,
+    units: credits,
+    costUsd: credits * VILLAGE_USD_PER_CREDIT
+  });
+  await deps.cache.put(input.userId, {
+    key,
+    provider: "village",
+    response: entry,
+    expiresAt: new Date(deps.clock() + EXTERNAL_CACHE_MS)
+  });
+  return entry.kind === "person" ? personIntros(entry.data) : companyIntros(entry.data);
+}
+
+// supabase/functions/_shared/paths/find.ts
+var DAY7 = 864e5;
+var TIE_KIND_SET = new Set(TIE_KINDS);
+async function loadGraph(db2, userId, now) {
+  const rows = await db2.sql`
+    select p.id, p.is_self, p.display_name, p.first_name, p.title, p.org_raw, o.name as org_name, p.is_alumni,
+           p.linkedin_url, p.linkedin_member_id, p.hidden_at, p.do_not_contact, p.last_interaction_at,
+           ts.score::int as score, ts.features
+      from orbit.people p
+      left join orbit.organizations o on o.id = p.org_id
+      left join orbit.tie_scores ts on ts.user_id = p.user_id and ts.person_id = p.id
+     where p.user_id = ${userId}::uuid and p.deleted_at is null and p.merged_into is null`;
+  const intros = await db2.sql`
+    select introducer_person_id, status, asked_at, outcome_at from orbit.intro_requests
+     where user_id = ${userId}::uuid and introducer_person_id is not null`;
+  const goals = await db2.sql`
+    select targets from orbit.goals where user_id = ${userId}::uuid and status = 'active' and deleted_at is null`;
+  const targetOrgs = new Set(
+    goals.flatMap((g) => g.targets?.organizations ?? []).map((o) => o.toLowerCase().trim())
+  );
+  const owes = await db2.sql`
+    select distinct m.from_person_id as person_id from orbit.threads t
+      join orbit.messages m on m.thread_id = t.id and m.sent_at = t.last_at
+     where t.user_id = ${userId}::uuid and t.last_direction = 'in' and t.is_networking
+       and m.from_person_id is not null and t.last_at > ${new Date(now.getTime() - 30 * DAY7)}::timestamptz`;
+  const owesSet = new Set(owes.map((o) => o.person_id));
+  let selfId = null;
+  const people = /* @__PURE__ */ new Map();
+  for (const r of rows) {
+    if (r.is_self) {
+      selfId = r.id;
+      continue;
+    }
+    const mine = intros.filter((i) => i.introducer_person_id === r.id);
+    const declined = mine.filter((i) => i.status === "declined").map((i) => iso(i.outcome_at ?? i.asked_at)).sort().pop();
+    const org = r.org_name ?? r.org_raw ?? void 0;
+    people.set(r.id, {
+      id: r.id,
+      name: r.first_name ?? r.display_name.split(/\s+/)[0],
+      displayName: r.display_name,
+      score: r.score ?? 0,
+      reciprocity: num(r.features?.reciprocity),
+      sharesGoalTargetOrg: !!org && targetOrgs.has(org.toLowerCase().trim()),
+      askedRecently: mine.some((i) => now.getTime() - new Date(i.asked_at).getTime() < 30 * DAY7),
+      introducedUserBefore: mine.some((i) => i.status === "intro_made" || i.status === "meeting"),
+      owesReply: owesSet.has(r.id),
+      lastContactAt: iso(r.last_interaction_at) ?? void 0,
+      hidden: !!r.hidden_at || r.do_not_contact,
+      declinedIntroAt: declined,
+      title: r.title ?? void 0,
+      org,
+      isAlumni: r.is_alumni,
+      linkedinUrl: r.linkedin_url ?? void 0,
+      memberId: r.linkedin_member_id ?? void 0,
+      doNotContact: r.do_not_contact
+    });
+  }
+  const tieRows = await db2.sql`
+    select id, a_person_id, b_person_id, kind, weight, confidence, evidence, first_seen_at, last_seen_at
+      from orbit.ties where user_id = ${userId}::uuid`;
+  const ties = [];
+  for (const t of tieRows) {
+    if (!TIE_KIND_SET.has(t.kind) || t.a_person_id === selfId || t.b_person_id === selfId) continue;
+    ties.push({
+      id: `${t.a_person_id}|${t.b_person_id}|${t.kind}`,
+      userId,
+      aId: t.a_person_id,
+      bId: t.b_person_id,
+      kind: t.kind,
+      weight: num(t.weight),
+      confidence: num(t.confidence),
+      evidence: t.evidence ?? {},
+      firstSeenAt: iso(t.first_seen_at) ?? void 0,
+      lastSeenAt: iso(t.last_seen_at) ?? void 0
+    });
+  }
+  return { selfId, people, pairs: combineTies(ties, now) };
+}
+async function resolvePersonRef(db2, userId, p) {
+  const url = cleanLinkedInUrl(p.linkedinUrl);
+  const slug = linkedInSlugOf(url);
+  const [hit] = await db2.sql`
+    select p.id from orbit.people p
+     where p.user_id = ${userId}::uuid and p.deleted_at is null and not p.is_self
+       and ((${p.memberId ?? null}::text is not null and p.linkedin_member_id = ${p.memberId ?? null})
+         or (${slug ?? null}::text is not null and lower(p.linkedin_slug) = ${slug ?? null})
+         or (${url ?? null}::text is not null and lower(rtrim(p.linkedin_url, '/')) = ${url ?? null})
+         or exists (select 1 from orbit.person_identities i where i.person_id = p.id
+                     and ((i.kind = 'linkedin_member' and i.value_norm = ${p.memberId ?? ""})
+                       or (i.kind = 'linkedin_slug' and i.value_norm = ${slug ?? ""}))))
+     order by p.merged_into is null desc limit 1`;
+  if (hit) return hit.id;
+  const name = p.name.trim().toLowerCase();
+  if (!name) return null;
+  const byName = await db2.sql`
+    select id from orbit.people
+     where user_id = ${userId}::uuid and deleted_at is null and not is_self and lower(display_name) = ${name}
+     limit 2`;
+  return byName.length === 1 ? byName[0].id : null;
+}
+async function ensurePerson(db2, userId, p, source) {
+  const found = await resolvePersonRef(db2, userId, p);
+  if (found) return found;
+  const url = cleanLinkedInUrl(p.linkedinUrl);
+  const slug = linkedInSlugOf(url);
+  const name = p.name.trim() || slug || "Unknown";
+  const parsed = parseName(name);
+  const [first, ...rest] = name.split(/\s+/);
+  const [row] = await db2.sql`
+    insert into orbit.people (user_id, display_name, first_name, last_name, name_norm, title, org_raw, headline,
+                              location, linkedin_url, linkedin_slug, linkedin_member_id, primary_email, sources,
+                              first_seen_at)
+    values (${userId}::uuid, ${name}, ${parsed.first || first || null}, ${parsed.last || rest.join(" ") || null},
+            ${parsed.normalized || name.toLowerCase()},
+            ${p.title ?? null}, ${p.org ?? null}, ${p.headline ?? null}, ${p.location ?? null}, ${url ?? null},
+            ${slug ?? null}, ${p.memberId ?? null}, ${p.email ? normalizeEmail(p.email) : null}, ${[source]}::text[],
+            now())
+    returning id`;
+  const id = row.id;
+  if (p.memberId)
+    await db2.sql`
+      insert into orbit.person_identities (user_id, person_id, kind, value_norm, value_raw, source)
+      values (${userId}::uuid, ${id}::uuid, 'linkedin_member', ${p.memberId}, ${p.memberId}, ${source})
+      on conflict (user_id, kind, value_norm) do nothing`;
+  if (slug)
+    await db2.sql`
+      insert into orbit.person_identities (user_id, person_id, kind, value_norm, value_raw, source)
+      values (${userId}::uuid, ${id}::uuid, 'linkedin_slug', ${slug}, ${url ?? slug}, ${source})
+      on conflict (user_id, kind, value_norm) do nothing`;
+  if (p.email)
+    await db2.sql`
+      insert into orbit.person_identities (user_id, person_id, kind, value_norm, value_raw, source)
+      values (${userId}::uuid, ${id}::uuid, 'email', ${normalizeEmail(p.email)}, ${p.email}, ${source})
+      on conflict (user_id, kind, value_norm) do nothing`;
+  return id;
+}
+async function upsertTies(db2, ties) {
+  for (const t of ties)
+    await db2.sql`
+      insert into orbit.ties (user_id, a_person_id, b_person_id, kind, weight, confidence, evidence, first_seen_at,
+                              last_seen_at)
+      values (${t.user_id}::uuid, ${t.a_person_id}::uuid, ${t.b_person_id}::uuid, ${t.kind}, ${t.weight}::real,
+              ${t.confidence}::real, ${t.evidence}::jsonb, ${t.last_seen_at}::timestamptz, ${t.last_seen_at}::timestamptz)
+      on conflict (user_id, a_person_id, b_person_id, kind) do update set
+        weight = greatest(orbit.ties.weight, excluded.weight), confidence = excluded.confidence,
+        evidence = excluded.evidence, last_seen_at = greatest(orbit.ties.last_seen_at, excluded.last_seen_at)`;
+}
+async function externalFor(s, userId, target) {
+  const [acct] = await s.db.sql`
+    select external_account_id from orbit.integration_accounts
+     where user_id = ${userId}::uuid and provider = 'linkedin' and status = 'active'`;
+  const [u2] = await s.db.sql`select email from orbit.users where id = ${userId}::uuid`;
+  return gatherExternalCandidates(
+    {
+      unipile: s.unipile,
+      village: s.village,
+      cache: sqlCache(s.db, s.now),
+      budget: sqlBudget(s.db, s.now),
+      clock: () => s.now().getTime(),
+      resolvePerson: (p) => resolvePersonRef(s.db, userId, p)
+    },
+    {
+      userId,
+      target,
+      unipileAccountId: acct?.external_account_id ?? void 0,
+      villageUser: u2 ? { externalUserId: userId, email: u2.email } : void 0
+    }
+  );
+}
+async function pathId(userId, nodes) {
+  return `path_${(await sha256Hex(`${userId}:${nodes.join(">")}`)).slice(0, 16)}`;
+}
+function namesOf(g, nodes, extra = {}) {
+  const out = {};
+  for (const n of nodes)
+    out[n] = n === "user" ? "You" : g.people.get(n)?.displayName ?? extra[n] ?? "Someone";
+  return out;
+}
+function personLike(p) {
+  return {
+    isAlumni: p.isAlumni,
+    currentTitle: p.title,
+    lastInteractionAt: p.lastContactAt
+  };
+}
+async function findPaths(s, userId, req) {
+  const db2 = s.db;
+  const now = s.now();
+  let goalKind;
+  if (req.goalId) {
+    const [g2] = await db2.sql`
+      select kind from orbit.goals where id = ${req.goalId}::uuid and user_id = ${userId}::uuid`;
+    if (!g2) throw new HttpError(404, "not_found", "no such goal");
+    goalKind = g2.kind;
+  }
+  const t = req.target;
+  const [me2] = await db2.sql`
+    select school, majors from orbit.users where id = ${userId}::uuid`;
+  const user = { school: me2?.school ?? "", majors: me2?.majors ?? [] };
+  if (typeof t.company === "string" && !("personId" in t) && !("linkedinUrl" in t)) {
+    const company = t.company.trim();
+    const domain = typeof t.domain === "string" ? t.domain.trim().toLowerCase() : void 0;
+    if (!company) throw new HttpError(400, "bad_request", "company is required");
+    const ext2 = await externalFor(s, userId, { kind: "company", domain, name: company });
+    for (const c of ext2.candidates) {
+      if (!c.personId || c.target.personId || !c.target.name) continue;
+      const tid = await ensurePerson(
+        db2,
+        userId,
+        { name: c.target.name, linkedinUrl: c.target.linkedinUrl, org: company },
+        "village"
+      );
+      c.target.personId = tid;
+      const [lo, hi] = c.personId < tid ? [c.personId, tid] : [tid, c.personId];
+      if (lo !== hi)
+        ext2.ties.push({
+          user_id: userId,
+          a_person_id: lo,
+          b_person_id: hi,
+          kind: "village_path",
+          weight: c.warmth,
+          confidence: 0.7,
+          evidence: c.evidence,
+          last_seen_at: now.toISOString()
+        });
+    }
+    await upsertTies(db2, ext2.ties);
+    const g2 = await loadGraph(db2, userId, now);
+    const atCompany = await db2.sql`
+      select p.id from orbit.people p left join orbit.organizations o on o.id = p.org_id
+       where p.user_id = ${userId}::uuid and p.deleted_at is null and not p.is_self
+         and (lower(p.org_raw) = lower(${company}) or lower(o.name) = lower(${company})
+              or (${domain ?? null}::text is not null and ${domain ?? ""} = any(o.domains)))`;
+    const villageTargets = ext2.candidates.map((c) => c.target.personId).filter((x) => !!x);
+    const ids = [.../* @__PURE__ */ new Set([...atCompany.map((r2) => r2.id), ...villageTargets])];
+    const targets = ids.map((id) => g2.people.get(id)).filter((p) => !!p && !p.doNotContact && !looksLikeMinor({ title: p.title })).map((p) => ({
+      id: p.id,
+      name: p.name,
+      isAlum: p.isAlumni,
+      title: p.title,
+      pReply: p.score > 0 ? responsePrior(personLike(p), user) : void 0
+    }));
+    const chosen = rankCompanyTargets({ targets, goal: goalKind, people: g2.people, pairs: g2.pairs, now });
+    const paths2 = [];
+    for (const x of chosen)
+      paths2.push({ ...x.path, id: await pathId(userId, x.path.nodes), names: namesOf(g2, x.path.nodes) });
+    return {
+      paths: paths2,
+      ...paths2.length ? {} : { fallback: "cold" },
+      sources: sourcesOf(ext2),
+      unconfigured: ext2.unconfigured
+    };
+  }
+  let targetId;
+  if (typeof t.personId === "string") {
+    const [p] = await db2.sql`
+      select id from orbit.people where id = ${t.personId}::uuid and user_id = ${userId}::uuid and deleted_at is null`;
+    if (!p) throw new HttpError(404, "not_found", "no such person");
+    targetId = p.id;
+  } else if (typeof t.linkedinUrl === "string" && cleanLinkedInUrl(t.linkedinUrl)) {
+    targetId = await ensurePerson(
+      db2,
+      userId,
+      {
+        name: typeof t.name === "string" ? t.name : "",
+        linkedinUrl: t.linkedinUrl,
+        org: typeof t.company === "string" ? t.company : void 0
+      },
+      "paths"
+    );
+  } else throw new HttpError(400, "bad_request", "target needs personId, linkedinUrl or company");
+  let g = await loadGraph(db2, userId, now);
+  const target = g.people.get(targetId);
+  if (!target) throw new HttpError(404, "not_found", "no such person");
+  if (looksLikeMinor({ title: target.title })) return { paths: [], sources: [], unconfigured: [] };
+  const ext = await externalFor(s, userId, {
+    kind: "person",
+    personId: targetId,
+    memberId: target.memberId,
+    linkedinUrl: target.linkedinUrl,
+    name: target.displayName,
+    company: target.org
+  });
+  if (ext.ties.length) {
+    await upsertTies(db2, ext.ties);
+    g = await loadGraph(db2, userId, now);
+  }
+  const r = rankWarmPaths({
+    targetId,
+    target: {
+      name: target.name,
+      isAlum: target.isAlumni,
+      title: target.title,
+      pReply: target.score > 0 ? responsePrior(personLike(target), user) : void 0
+    },
+    goal: goalKind,
+    people: g.people,
+    pairs: g.pairs,
+    now
+  });
+  const paths = [];
+  for (const p of r.paths)
+    paths.push({ ...p, id: await pathId(userId, p.nodes), names: namesOf(g, p.nodes) });
+  return {
+    paths,
+    ...r.fallback ? { fallback: r.fallback } : {},
+    ...r.direct ? { direct: { personId: targetId, ...r.direct } } : {},
+    sources: sourcesOf(ext),
+    unconfigured: ext.unconfigured
+  };
+}
+function sourcesOf(ext) {
+  const out = ["graph"];
+  const asked = (prefix) => !ext.skipped.some((x) => x.startsWith(prefix));
+  if (!ext.unconfigured.includes("unipile") && asked("mutuals")) out.push("linkedin_mutual");
+  if (!ext.unconfigured.includes("village") && asked("village")) out.push("village");
+  return out;
+}
+function bestReach(g, personId, goal, now) {
+  const p = g.people.get(personId);
+  if (!p) return null;
+  const r = rankWarmPaths({
+    targetId: personId,
+    target: { name: p.name, isAlum: p.isAlumni, title: p.title },
+    goal,
+    people: g.people,
+    pairs: g.pairs,
+    now,
+    limit: 1
+  });
+  if (r.direct) return Math.min(1, r.direct.score / 100);
+  return r.paths[0]?.p ?? null;
+}
+
+// supabase/functions/orbit-api/routes/paths.ts
+async function find(ctx) {
+  const b = await body(ctx);
+  const target = b.target;
+  if (!target || typeof target !== "object" || Array.isArray(target)) throw badRequest("target is required");
+  return json(200, await findPaths(ctx.services(), ctx.userId, { target, goalId: optUuid(b, "goalId") }));
+}
+async function ask(ctx) {
+  const b = await body(ctx);
+  const introducerId = uuid(b, "introducerPersonId");
+  const targetId = uuid(b, "targetPersonId");
+  const goalId = optUuid(b, "goalId") ?? null;
+  const pathScore = Number(b.pathScore);
+  if (!Number.isFinite(pathScore) || pathScore < 0 || pathScore > 1) throw badRequest("pathScore is 0–1");
+  if (!b.path || typeof b.path !== "object" || Array.isArray(b.path)) throw badRequest("path is required");
+  if (introducerId === targetId) throw badRequest("the introducer and the target are the same person");
+  const s = ctx.services();
+  const userId = ctx.userId;
+  const introducer = await loadPerson(ctx.db, userId, introducerId);
+  const target = await loadPerson(ctx.db, userId, targetId);
+  if (target.do_not_contact) throw new HttpError(409, "do_not_contact", "they asked not to be contacted");
+  const channel = introducer.primary_email || !introducer.linkedin_member_id ? "gmail" : "linkedin";
+  const [row] = await ctx.db.sql`
+    insert into orbit.intro_requests (user_id, target_person_id, introducer_person_id, goal_id, path, path_score, rank,
+                                      status, asked_at)
+    values (${userId}::uuid, ${targetId}::uuid, ${introducerId}::uuid, ${goalId}::uuid, ${b.path}::jsonb,
+            ${pathScore}::real, 1, 'asked', ${ctx.now()}::timestamptz)
+    returning id`;
+  const via = { introducerId, pathScore, introRequestId: row.id };
+  const common = { userId, personId: introducerId, channel, goalId, targetPersonId: targetId, via };
+  const request = await composeDraft(s, { ...common, kind: "intro_request" });
+  const blurb = await composeDraft(s, { ...common, kind: "forwardable_blurb" });
+  const out = { introRequestId: row.id, draftIds: [request.draft.id, blurb.draft.id] };
+  return json(200, out);
+}
+var pathRoutes = {
+  "/paths/find": { method: "POST", auth: true, run: find },
+  "/intros/ask": { method: "POST", auth: true, run: ask }
+};
+
+// supabase/functions/_shared/replies/replies.ts
+var REPLY_WINDOW_DAYS = 30;
+async function listReplies(db2, userId, now) {
+  const rows = await db2.sql`
+    select m.id, t.external_id as thread_external_id, m.from_person_id, p.display_name, m.from_addr, m.provider,
+           m.reply_class, m.reply_confidence, m.sent_at, m.snippet, m.body_text,
+           (select d.id from orbit.drafts d
+             where d.user_id = m.user_id and d.ask->>'replyToMessageId' = m.id::text
+               and d.status not in ('discarded', 'cancelled')
+             order by d.created_at desc limit 1) as draft_id
+      from orbit.messages m
+      join orbit.threads t on t.id = m.thread_id
+      left join orbit.people p on p.id = m.from_person_id
+     where m.user_id = ${userId}::uuid and m.direction = 'in' and m.reply_class is not null
+       and m.sent_at >= ${new Date(now.getTime() - REPLY_WINDOW_DAYS * 864e5)}::timestamptz
+     order by m.sent_at desc
+     limit 200`;
+  return rows.map((r) => ({
+    messageId: r.id,
+    threadId: r.thread_external_id,
+    personId: r.from_person_id,
+    personName: r.display_name ?? r.from_addr?.split("@")[0] ?? "Someone",
+    channel: r.provider,
+    replyClass: r.reply_class,
+    confidence: num(r.reply_confidence),
+    receivedAt: iso(r.sent_at),
+    snippet: (r.snippet ?? r.body_text ?? "").replace(/\s+/g, " ").trim().slice(0, 200),
+    draftId: r.draft_id
+  }));
+}
+async function draftReply(s, userId, messageId, actor = "user") {
+  const m = await loadReplyMessage(s.db, userId, messageId);
+  if (m.reply_class === "unsubscribe")
+    throw new HttpError(409, "unsubscribe", "they asked not to be contacted; no reply is drafted");
+  if (!m.from_person_id) throw new HttpError(409, "unknown_sender", "Orbit does not know who sent this yet");
+  return composeDraft(s, {
+    userId,
+    personId: m.from_person_id,
+    kind: "reply",
+    channel: m.provider,
+    replyToMessageId: m.id,
+    actor
+  });
+}
+
+// supabase/functions/orbit-api/routes/replies.ts
+async function list2(ctx) {
+  return json(200, { replies: await listReplies(ctx.db, ctx.userId, ctx.now()) });
+}
+async function draft(ctx) {
+  const messageId = uuid(await body(ctx), "messageId");
+  const r = await draftReply(ctx.services(), ctx.userId, messageId);
+  return json(200, { draft: toServerDraft(r.draft) });
+}
+var replyRoutes = {
+  "/replies/list": { method: "POST", auth: true, run: list2 },
+  "/replies/draft": { method: "POST", auth: true, run: draft }
+};
+
+// supabase/functions/_shared/research/prompts.ts
+var sourceIds = z.array(z.string());
+var dossierSchema = z.object({
+  who: z.string(),
+  now: z.object({
+    role: z.string(),
+    org: z.string(),
+    since: z.string().nullable(),
+    source_ids: sourceIds
+  }),
+  recently: z.array(z.object({ date: z.string().nullable(), text: z.string(), source_ids: sourceIds })),
+  in_common: z.array(
+    z.object({
+      text: z.string(),
+      kind: z.enum(["school", "employer", "person", "interest", "place"]),
+      source_ids: sourceIds
+    })
+  ),
+  history: z.object({
+    first_contact: z.string().nullable(),
+    last_contact: z.string().nullable(),
+    summary: z.string().nullable()
+  }),
+  openers: z.array(z.object({ text: z.string(), source_ids: sourceIds })),
+  careful: z.array(z.string()),
+  confidence: z.enum(["high", "medium", "low"])
+});
+
+// supabase/functions/_shared/research/dossier.ts
+var DOSSIER_REUSE_MS = 30 * 864e5;
+var EXA_CACHE_MS = 7 * 864e5;
+var SYNTH_OUT_USD = 2e3 * 2e-5;
+
+// supabase/functions/_shared/research/run.ts
+async function dossierRow(db2, userId, personId) {
+  const [r] = await db2.sql`
+    select * from orbit.dossiers where user_id = ${userId}::uuid and person_id = ${personId}::uuid`;
+  return r;
+}
+var toDossier = (r) => dossierFromRow({ ...isoRow(r), cost_usd: String(r.cost_usd ?? "0") });
+async function ownedPerson(db2, userId, personId) {
+  if (typeof personId !== "string" || !/^[0-9a-f-]{36}$/i.test(personId))
+    throw new HttpError(400, "bad_request", "personId is required");
+  const [p] = await db2.sql`
+    select id from orbit.people where id = ${personId}::uuid and user_id = ${userId}::uuid and deleted_at is null`;
+  if (!p) throw new HttpError(404, "not_found", "no such person");
+  return p.id;
+}
+async function queueDossier(s, userId, personId, payload, key) {
+  await s.queue.enqueue({
+    kind: "enrich.dossier",
+    userId,
+    payload: { personId, ...payload },
+    dedupeKey: key
+  });
+}
+async function requestDossier(s, userId, req) {
+  const personId = await ownedPerson(s.db, userId, req.personId);
+  const goalId = typeof req.goalId === "string" ? req.goalId : null;
+  const refresh2 = req.refresh === true;
+  const now = s.now();
+  const row = await dossierRow(s.db, userId, personId);
+  if (row && !refresh2) {
+    const status = row.status;
+    const fresh = new Date(row.expires_at).getTime() > now.getTime();
+    if ((status === "ready" || status === "partial") && row.content && fresh)
+      return { status, dossier: toDossier(row) };
+    if (status === "needs_disambiguation") return { status, dossier: toDossier(row) };
+    if (status === "pending" && now.getTime() - new Date(row.updated_at).getTime() < 10 * 6e4)
+      return { status: "queued", dossier: toDossier(row) };
+  }
+  await s.db.sql`
+    insert into orbit.dossiers (user_id, person_id, goal_id, status, expires_at)
+    values (${userId}::uuid, ${personId}::uuid, ${goalId}::uuid, 'pending', ${new Date(now.getTime() + 864e5)}::timestamptz)
+    on conflict (user_id, person_id) do update set status = 'pending', goal_id = coalesce(excluded.goal_id, orbit.dossiers.goal_id),
+      error = null`;
+  const key = refresh2 ? `dossier:${personId}:refresh:${now.toISOString().slice(0, 16)}` : `dossier:${personId}`;
+  await queueDossier(s, userId, personId, { goalId, refresh: refresh2 }, key);
+  const after = await dossierRow(s.db, userId, personId);
+  return { status: "queued", dossier: after ? toDossier(after) : null };
+}
+async function getDossier(db2, userId, personId) {
+  const id = await ownedPerson(db2, userId, personId);
+  const row = await dossierRow(db2, userId, id);
+  return row ? toDossier(row) : null;
+}
+async function chooseCandidate(s, userId, req) {
+  const personId = await ownedPerson(s.db, userId, req.personId);
+  const row = await dossierRow(s.db, userId, personId);
+  if (row?.status !== "needs_disambiguation")
+    throw new HttpError(409, "not_ambiguous", "there is no choice to make for this person");
+  const cands = row.candidates ?? [];
+  const i = Number(req.candidateIndex);
+  if (!Number.isInteger(i) || i < 0 || i >= cands.length)
+    throw new HttpError(400, "bad_request", "no such candidate");
+  const c = cands[i];
+  const url = cleanLinkedInUrl(c.url);
+  await s.db.sql`
+    update orbit.people set org_raw = coalesce(${c.org ?? null}, org_raw),
+           linkedin_url = coalesce(${url ?? null}, linkedin_url), linkedin_slug = coalesce(${linkedInSlugOf(url) ?? null}, linkedin_slug)
+     where id = ${personId}::uuid and user_id = ${userId}::uuid`;
+  await s.db.sql`
+    update orbit.dossiers set status = 'pending', error = null
+     where user_id = ${userId}::uuid and person_id = ${personId}::uuid`;
+  await queueDossier(
+    s,
+    userId,
+    personId,
+    { refresh: true, chosen: c },
+    `dossier:${personId}:choose:${s.now().toISOString().slice(0, 16)}`
+  );
+  const after = await dossierRow(s.db, userId, personId);
+  return { status: "queued", dossier: after ? toDossier(after) : null };
+}
+
+// supabase/functions/orbit-api/routes/research.ts
+async function person(ctx) {
+  const r = await requestDossier(ctx.services(), ctx.userId, await body(ctx));
+  return json(r.status === "queued" ? 202 : 200, r);
+}
+async function get(ctx) {
+  const b = await body(ctx);
+  return json(200, { dossier: await getDossier(ctx.db, ctx.userId, b.personId) });
+}
+async function choose(ctx) {
+  return json(202, await chooseCandidate(ctx.services(), ctx.userId, await body(ctx)));
+}
+var researchRoutes = {
+  "/research/person": { method: "POST", auth: true, run: person },
+  "/research/get": { method: "POST", auth: true, run: get },
+  "/research/choose": { method: "POST", auth: true, run: choose }
+};
+
+// supabase/functions/orbit-api/routes/scores.ts
+async function scoreRow(ctx, personId) {
+  const [r] = await ctx.db.sql`
+    select ts.score, ts.band, ts.features, ts.contributions, ts.explanation, ts.model_version, ts.computed_at,
+           tl.closeness
+      from orbit.tie_scores ts
+      left join orbit.tie_labels tl on tl.user_id = ts.user_id and tl.person_id = ts.person_id
+     where ts.user_id = ${ctx.userId}::uuid and ts.person_id = ${personId}::uuid`;
+  return r;
+}
+function explainOf(personId, r) {
+  const contributions = {};
+  for (const [k, v] of Object.entries(r.contributions ?? {})) contributions[k] = num(v);
+  return {
+    personId,
+    score: num(r.score),
+    band: r.band,
+    explanation: r.explanation ?? [],
+    contributions,
+    modelVersion: r.model_version,
+    computedAt: iso(r.computed_at),
+    ...r.closeness ? { labelled: r.closeness } : {}
+  };
+}
+async function ownPerson(ctx, personId) {
+  const [p] = await ctx.db.sql`
+    select 1 from orbit.people where id = ${personId}::uuid and user_id = ${ctx.userId}::uuid and deleted_at is null`;
+  if (!p) throw new HttpError(404, "not_found", "no such person");
+}
+async function explain(ctx) {
+  const personId = uuid(await body(ctx), "personId");
+  await ownPerson(ctx, personId);
+  const r = await scoreRow(ctx, personId);
+  if (!r) throw new HttpError(404, "not_scored", "this person has no score yet");
+  return json(200, explainOf(personId, r));
+}
+async function label(ctx) {
+  const b = await body(ctx);
+  const personId = uuid(b, "personId");
+  const closeness = Number(b.closeness);
+  if (![1, 2, 3, 4, 5].includes(closeness)) throw badRequest("closeness is 1–5");
+  await ownPerson(ctx, personId);
+  const userId = ctx.userId;
+  const now = ctx.now();
+  await ctx.db.sql`
+    insert into orbit.tie_labels (user_id, person_id, closeness)
+    values (${userId}::uuid, ${personId}::uuid, ${closeness}::smallint)
+    on conflict (user_id, person_id) do update set closeness = excluded.closeness`;
+  await ctx.db.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+    values (${userId}::uuid, 'user', 'score.label', 'people', ${personId}, ${{ closeness }}::jsonb)`;
+  const r = await scoreRow(ctx, personId);
+  if (r?.features && Object.keys(r.features).length) {
+    const score = TIE_LABEL_MIDPOINTS[closeness];
+    const line = `You rated this tie ${closeness} of 5`;
+    const explanation = [
+      line,
+      ...(r.explanation ?? []).filter((x) => !x.startsWith("You rated this tie"))
+    ].slice(0, 5);
+    await ctx.db.sql`
+      update orbit.tie_scores set score = ${score}::smallint, band = ${tieBand(score)}, explanation = ${explanation}::text[],
+             computed_at = ${now}::timestamptz
+       where user_id = ${userId}::uuid and person_id = ${personId}::uuid`;
+    await ctx.db.sql`update orbit.people set strength = ${score / 100}::real where id = ${personId}::uuid`;
+    return json(200, explainOf(personId, await scoreRow(ctx, personId)));
+  }
+  const queued2 = await sqlQueue(ctx.db).enqueue({
+    kind: "score.person",
+    userId,
+    payload: { personId, reason: "label" },
+    dedupeKey: `score.person:${personId}:label:${now.toISOString().slice(0, 16)}`
+  });
+  return json(202, { queued: queued2 !== null });
+}
+var scoreRoutes = {
+  "/scores/explain": { method: "POST", auth: true, run: explain },
+  "/scores/label": { method: "POST", auth: true, run: label }
+};
+
+// supabase/functions/orbit-api/routes/settings.ts
+async function autonomy(ctx) {
+  const b = await body(ctx);
+  const level = Number(b.level);
+  if (![0, 1, 2].includes(level)) throw badRequest("level is 0, 1 or 2");
+  const goalId = optUuid(b, "goalId");
+  const userId = ctx.userId;
+  if (goalId) {
+    const r = await ctx.db.sql`
+      update orbit.goals set autonomy_level = ${level}::smallint
+       where id = ${goalId}::uuid and user_id = ${userId}::uuid and deleted_at is null returning id`;
+    if (!r.length) throw new HttpError(404, "not_found", "no such goal");
+  } else
+    await ctx.db.sql`update orbit.users set autonomy_level = ${level}::smallint where id = ${userId}::uuid`;
+  await ctx.db.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+    values (${userId}::uuid, 'user', 'settings.autonomy', ${goalId ? "goals" : "users"}, ${goalId ?? userId},
+            ${{ level }}::jsonb)`;
+  return json(200, { ok: true, level, goalId: goalId ?? null });
+}
+async function pause(ctx) {
+  const b = await body(ctx);
+  let until = null;
+  if (b.until !== null && b.until !== void 0) {
+    const t = new Date(String(b.until));
+    if (typeof b.until !== "string" || Number.isNaN(t.getTime()))
+      throw badRequest("until must be an ISO time or null");
+    until = t.toISOString();
+  }
+  const userId = ctx.userId;
+  await ctx.db.sql`
+    update orbit.users
+       set settings = case when ${until}::text is null then settings - 'quiet_until'
+                           else jsonb_set(settings, '{quiet_until}', to_jsonb(${until}::text)) end
+     where id = ${userId}::uuid`;
+  await ctx.db.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+    values (${userId}::uuid, 'user', 'settings.pause', 'users', ${userId}, ${{ until }}::jsonb)`;
+  return json(200, { ok: true, until });
+}
+var settingsRoutes = {
+  "/settings/autonomy": { method: "POST", auth: true, run: autonomy },
+  "/settings/pause": { method: "POST", auth: true, run: pause }
+};
+
+// supabase/functions/_shared/sourcing/prompts.ts
+var FIT_BATCH = 20;
+function fitSystem(userFirstName2) {
+  return [
+    `Score how well each candidate matches what ${userFirstName2} is looking for. 0 = not a match, 1 = an excellent match.`,
+    "Judge only from the fields given. Do not reward fame. Give at most two short reasons."
+  ].join("\n");
+}
+function fitUser(lookingFor, candidates) {
+  return [
+    `<looking_for>${JSON.stringify({ goal: lookingFor.title, criteria: lookingFor.criteria })}</looking_for>`,
+    `<candidates>${candidates.map((c) => JSON.stringify(c)).join("\n")}</candidates>`
+  ].join("\n");
+}
+var fitSchema = z.object({
+  scores: z.array(z.object({ id: z.string(), fit: z.number(), reasons: z.array(z.string()) }))
+});
+
+// supabase/functions/_shared/sourcing/search.ts
+var WEIGHTS = { fit: 0.45, reach: 0.35, responsiveness: 0.2 };
+var REACH_TOP = 30;
+var LINKEDIN_MAX_RESULTS = 100;
+var LINKEDIN_PAGES = 3;
+var MAX_SCORED = 100;
+async function sourcePeople(deps, input) {
+  const ctx = {
+    deps,
+    input,
+    unconfigured: /* @__PURE__ */ new Set(),
+    errors: /* @__PURE__ */ new Set(),
+    idCache: /* @__PURE__ */ new Map(),
+    seq: 0,
+    ran: false
+  };
+  const batchId = deps.newId?.() ?? crypto.randomUUID();
+  const calls = plan(ctx);
+  const relax = { location: false, seniority: false };
+  const relaxed = [];
+  let merged = await gather(calls, relax);
+  const g = input.goal;
+  const canDropLocation = !!g.location;
+  const canDropSeniority = !!g.seniorities?.length;
+  if (merged.length === 0 && canDropLocation && ctx.ran) {
+    relax.location = true;
+    relaxed.push("location");
+    merged = await gather(calls, relax);
+  }
+  if (merged.length === 0 && canDropSeniority && ctx.ran) {
+    relax.seniority = true;
+    relaxed.push("seniority");
+    merged = await gather(calls, relax);
+  }
+  if (deps.inPipeline) {
+    const keep = [];
+    for (const c of merged) if (!await deps.inPipeline(c)) keep.push(c);
+    merged = keep;
+  }
+  const rows = await rank(ctx, merged.slice(0, MAX_SCORED), batchId);
+  return {
+    results: rows.slice(0, input.limit ?? 50),
+    unconfigured: [...ctx.unconfigured].sort(),
+    relaxed,
+    errors: [...ctx.errors].sort(),
+    batchId
+  };
+}
+async function gather(calls, relax) {
+  const lists = await Promise.all(calls.map((c) => c(relax)));
+  return mergeCandidates(lists.flat());
+}
+function plan(ctx) {
+  const g = ctx.input.goal;
+  const roles = g.roles ?? [];
+  const words = (...xs) => xs.filter((x) => x?.trim()).join(" ");
+  const exaPeople = (q, extra = {}) => (r) => exaCall(ctx, { query: q, category: "people", ...extra }, r, "person");
+  switch (g.kind) {
+    case "recruiting":
+    case "advice":
+      return [
+        (r) => linkedInCall(ctx, r, {
+          keywords: orJoin(roles) || g.keywords?.join(" "),
+          companies: g.orgs,
+          school: ctx.input.user.school,
+          distance: [2, 3]
+        }),
+        (r) => apolloCall(ctx, r, {
+          person_titles: roles.length ? roles : void 0,
+          q_organization_domains_list: g.domains?.length ? g.domains : void 0,
+          q_keywords: g.domains?.length ? g.keywords?.join(" ") : words(...g.orgs ?? [], ...g.keywords ?? [])
+        })
+      ];
+    case "fundraising":
+      return [
+        exaPeople(
+          words(
+            roles[0] ?? "partner",
+            `at a ${words(g.stage) || "venture"} fund investing in`,
+            g.sector ?? g.keywords?.join(" ")
+          ),
+          {}
+        ),
+        (r) => exaCall(
+          ctx,
+          {
+            query: words(g.stage, "venture fund investing in", g.sector ?? g.keywords?.join(" ")),
+            category: "company"
+          },
+          r,
+          "organization"
+        ),
+        (r) => apolloCall(ctx, r, {
+          person_titles: ["Partner", "Principal", "General Partner", "Investor"],
+          q_keywords: words(g.sector, g.stage, ...g.keywords ?? []) || void 0
+        })
+      ];
+    case "sales":
+      return [
+        (r) => apolloCall(ctx, r, {
+          person_titles: roles.length ? roles : void 0,
+          organization_num_employees_ranges: g.employeeRanges,
+          q_keywords: words(g.sector, ...g.keywords ?? []) || void 0,
+          q_organization_domains_list: g.domains?.length ? g.domains : void 0
+        })
+      ];
+    case "hiring": {
+      const calls = [
+        (r) => linkedInCall(ctx, r, {
+          keywords: words(orJoin(roles), ...g.skills ?? []),
+          pastCompanies: g.pastCompanies,
+          school: ctx.input.user.school,
+          distance: [2, 3]
+        }),
+        exaPeople(words(roles[0], ...g.skills ?? []))
+      ];
+      if (roles.some((x) => /engineer|developer|programmer|software|ml|data scientist/i.test(x)))
+        calls.push(
+          (r) => exaCall(
+            ctx,
+            { query: words(roles[0], ...g.skills ?? []), includeDomains: ["github.com"] },
+            r,
+            "person"
+          )
+        );
+      return calls;
+    }
+    case "cofounder":
+      return [
+        exaPeople(words(...g.skills ?? [], g.topic, "founder")),
+        (r) => linkedInCall(ctx, r, { keywords: words(...g.skills ?? [], g.topic), distance: [2] })
+      ];
+    case "collaboration":
+      return [
+        (r) => scholarCall(ctx, r),
+        (r) => exaCall(
+          ctx,
+          { query: words(g.topic, ...g.keywords ?? []), category: "publication" },
+          r,
+          "person"
+        )
+      ];
+    case "community":
+      return [
+        (r) => linkedInCall(ctx, r, { keywords: words(g.topic, ...g.keywords ?? []), distance: [1, 2] })
+      ];
+  }
+}
+function orJoin(xs) {
+  return xs.map((x) => /\s/.test(x) ? `"${x}"` : x).join(" OR ");
+}
+function locationOf(ctx, relax) {
+  return relax.location ? void 0 : ctx.input.goal.location;
+}
+function note(ctx, r) {
+  if (r.ok || r.kind !== "unconfigured") ctx.ran = true;
+  if (r.ok) return true;
+  if (r.kind === "unconfigured") ctx.unconfigured.add(r.provider);
+  else ctx.errors.add(`${r.provider}: ${r.message}`);
+  return false;
+}
+async function exaCall(ctx, base, relax, entity) {
+  const { deps, input } = ctx;
+  if (!deps.exa.configured) {
+    ctx.unconfigured.add("exa");
+    return [];
+  }
+  const loc = locationOf(ctx, relax);
+  const req = {
+    ...base,
+    query: loc && entity === "person" ? `${base.query} ${loc}` : base.query,
+    type: "auto",
+    numResults: 10,
+    contents: { highlights: { query: input.goal.title, maxCharacters: 600 } }
+  };
+  const est = estimateExaSearchUsd(req);
+  if (deps.budget) {
+    const v = await deps.budget.check(input.userId, "exa", est);
+    if (!v.ok) {
+      ctx.errors.add("exa: budget_exceeded");
+      return [];
+    }
+  }
+  const r = await deps.exa.search(req);
+  if (!note(ctx, r) || !r.ok) return [];
+  await deps.budget?.record(input.userId, {
+    provider: "exa",
+    operation: "search",
+    units: 1,
+    costUsd: exaCostUsd(r.value, est)
+  });
+  return r.value.results.map((x) => fromExa(ctx, x, entity)).filter((c) => !!c);
+}
+function fromExa(ctx, r, entity) {
+  const title = (r.title ?? "").replace(/\s*[|·]\s*linkedin.*$/i, "").trim();
+  const parts = title.split(/\s+[-–—|·]\s+/).map((p) => p.trim());
+  const name = (entity === "person" ? parts[0] ?? r.author ?? "" : parts[0] ?? "").trim();
+  if (!name) return null;
+  const org = entity === "person" ? orgFromTitle(r.title, name) : void 0;
+  const role = entity === "person" && parts.length >= 3 ? parts[1] : void 0;
+  const linkedinUrl = cleanLinkedInUrl(r.url);
+  return {
+    key: `c${++ctx.seq}`,
+    entity,
+    name,
+    ...splitName(name),
+    title: role?.replace(/\s+at\s+.+$/i, ""),
+    org,
+    headline: (r.highlights?.[0] ?? "").slice(0, 300) || void 0,
+    linkedinUrl,
+    url: r.url,
+    sources: ["exa"],
+    externalIds: { exa: r.id ?? r.url }
+  };
+}
+async function apolloCall(ctx, relax, params) {
+  const { deps, input } = ctx;
+  if (!deps.apollo.configured) {
+    ctx.unconfigured.add("apollo");
+    return [];
+  }
+  const loc = locationOf(ctx, relax);
+  const g = input.goal;
+  const r = await deps.apollo.searchPeople({
+    ...params,
+    person_locations: loc ? [loc] : void 0,
+    person_seniorities: !relax.seniority && g.seniorities?.length ? g.seniorities : void 0,
+    per_page: 25,
+    page: 1
+  });
+  if (!note(ctx, r) || !r.ok) return [];
+  return r.value.people.map((p) => fromApollo(ctx, p));
+}
+function fromApollo(ctx, p) {
+  const n = apolloName(p);
+  const name = `${n.first} ${n.last}`.trim();
+  return {
+    key: `c${++ctx.seq}`,
+    entity: "person",
+    name,
+    firstName: n.first,
+    lastName: n.last,
+    lastNameObfuscated: n.obfuscated,
+    title: p.title ?? void 0,
+    org: p.organization?.name ?? void 0,
+    headline: p.headline ?? void 0,
+    location: [p.city, p.state, p.country].filter(Boolean).join(", ") || void 0,
+    linkedinUrl: cleanLinkedInUrl(p.linkedin_url),
+    sources: ["apollo"],
+    externalIds: { apollo: p.id }
+  };
+}
+async function paramId(ctx, type, keywords) {
+  const k = `${type}:${norm(keywords)}`;
+  if (ctx.idCache.has(k)) return ctx.idCache.get(k);
+  const r = await ctx.deps.unipile.searchParameters(ctx.input.unipileAccountId, type, keywords, {
+    limit: 1
+  });
+  const id = r.ok ? r.value[0]?.id : void 0;
+  ctx.idCache.set(k, id);
+  return id;
+}
+async function linkedInCall(ctx, relax, q) {
+  const { deps, input } = ctx;
+  if (!deps.unipile.configured || !input.unipileAccountId) {
+    ctx.unconfigured.add("unipile");
+    return [];
+  }
+  const accountId = input.unipileAccountId;
+  if (deps.budget) {
+    const v = await deps.budget.check(input.userId, "unipile_search", 1);
+    if (!v.ok) {
+      ctx.errors.add("unipile: daily search cap reached");
+      return [];
+    }
+  }
+  if (ctx.salesNav === void 0) {
+    if (input.salesNavigator !== void 0) ctx.salesNav = input.salesNavigator;
+    else {
+      const me2 = await deps.unipile.me(accountId);
+      ctx.salesNav = me2.ok ? hasSalesNavigator(me2.value) : false;
+    }
+  }
+  const loc = locationOf(ctx, relax);
+  const ids = async (type, names) => (await Promise.all((names ?? []).slice(0, 3).map((n) => paramId(ctx, type, n)))).filter(
+    (x) => !!x
+  );
+  const locationIds = loc ? await ids("LOCATION", [loc]) : [];
+  const schoolIds = q.school ? await ids("SCHOOL", [q.school]) : [];
+  let body2;
+  if (ctx.salesNav) {
+    const g = input.goal;
+    body2 = {
+      api: "sales_navigator",
+      category: "people",
+      keywords: q.keywords || void 0,
+      network_distance: q.distance,
+      company: q.companies?.length ? { include: q.companies } : void 0,
+      past_company: q.pastCompanies?.length ? { include: q.pastCompanies } : void 0,
+      role: g.roles?.length ? { include: g.roles } : void 0,
+      school: schoolIds.length ? { include: schoolIds } : void 0,
+      location: locationIds.length ? { include: locationIds } : void 0
+    };
+  } else {
+    const companyIds = await ids("COMPANY", q.companies);
+    const pastIds = await ids("COMPANY", q.pastCompanies);
+    body2 = {
+      api: "classic",
+      category: "people",
+      keywords: q.keywords || void 0,
+      network_distance: q.distance,
+      company: companyIds.length ? companyIds : void 0,
+      past_company: pastIds.length ? pastIds : void 0,
+      school: schoolIds.length ? schoolIds : void 0,
+      location: locationIds.length ? locationIds : void 0
+    };
+  }
+  const out = [];
+  let cursor;
+  for (let page2 = 0; page2 < LINKEDIN_PAGES && out.length < LINKEDIN_MAX_RESULTS; page2++) {
+    const r = await deps.unipile.searchPeople(accountId, body2, { cursor });
+    if (!note(ctx, r) || !r.ok) break;
+    for (const item of r.value.items) {
+      if (item.type && item.type !== "PEOPLE") continue;
+      const p = linkedInPerson(item);
+      if (!p.name) continue;
+      const h = p.headline ?? "";
+      const at = h.match(/^(.+?)\s+(?:at|@)\s+(.+)$/i);
+      out.push({
+        key: `c${++ctx.seq}`,
+        entity: "person",
+        name: p.name,
+        ...splitName(p.name),
+        title: at?.[1]?.trim(),
+        org: at?.[2]?.trim(),
+        headline: p.headline,
+        location: p.location,
+        linkedinUrl: p.linkedinUrl,
+        memberId: p.memberId,
+        networkDistance: p.networkDistance,
+        sources: ["unipile"],
+        externalIds: p.memberId ? { unipile: p.memberId } : {}
+      });
+    }
+    cursor = r.value.cursor ?? void 0;
+    if (!cursor) break;
+  }
+  await deps.budget?.record(input.userId, {
+    provider: "unipile_search",
+    operation: "search",
+    units: 1,
+    costUsd: 0
+  });
+  return out.slice(0, LINKEDIN_MAX_RESULTS);
+}
+async function scholarCall(ctx, _relax) {
+  const { deps, input } = ctx;
+  if (!deps.semanticScholar.configured) {
+    ctx.unconfigured.add("semantic_scholar");
+    return [];
+  }
+  const g = input.goal;
+  const r = await deps.semanticScholar.searchPapers(
+    [g.topic, ...g.keywords ?? []].filter(Boolean).join(" "),
+    {
+      limit: 50
+    }
+  );
+  if (!note(ctx, r) || !r.ok) return [];
+  const counts = /* @__PURE__ */ new Map();
+  for (const p of r.value.data)
+    for (const a of p.authors ?? []) {
+      if (!a.authorId || !a.name) continue;
+      const c = counts.get(a.authorId) ?? { name: a.name, n: 0, latest: 0 };
+      c.n++;
+      c.latest = Math.max(c.latest, p.year ?? 0);
+      counts.set(a.authorId, c);
+    }
+  const top = [...counts.entries()].sort((a, b) => b[1].n - a[1].n || b[1].latest - a[1].latest).slice(0, 10);
+  const authors = await Promise.all(top.map(([id]) => deps.semanticScholar.author(id)));
+  return top.map(([id, c], i) => {
+    const a = authors[i]?.ok ? authors[i].value : void 0;
+    const name = a?.name ?? c.name;
+    return {
+      key: `c${++ctx.seq}`,
+      entity: "person",
+      name,
+      ...splitName(name),
+      title: "Researcher",
+      org: a?.affiliations?.[0],
+      headline: a ? `${a.paperCount ?? "?"} papers · h-index ${a.hIndex ?? "?"} · ${c.n} on this topic` : `${c.n} papers on this topic`,
+      url: a?.homepage ?? a?.url ?? void 0,
+      sources: ["semantic_scholar"],
+      externalIds: { semantic_scholar: id }
+    };
+  });
+}
+function splitName(name) {
+  const parts = name.trim().split(/\s+/);
+  return { firstName: parts[0] ?? "", lastName: parts.slice(1).join(" ") };
+}
+var nameKey2 = (s) => norm(s).replace(/[^a-z0-9 ]/g, "").trim();
+function strongKeys(c) {
+  const keys = [];
+  const slug = linkedInSlugOf(c.linkedinUrl);
+  if (slug) keys.push(`li:${slug}`);
+  if (c.memberId) keys.push(`mid:${c.memberId}`);
+  if (c.email) keys.push(`em:${c.email.toLowerCase()}`);
+  if (!c.lastNameObfuscated && c.org && c.lastName)
+    keys.push(`no:${nameKey2(c.firstName)}|${nameKey2(c.lastName)}|${normOrg(c.org)}`);
+  if (c.entity === "organization") keys.push(`org:${normOrg(c.name)}`);
+  return keys;
+}
+function looseKey(c) {
+  if (c.entity !== "person" || !c.org || !c.firstName || !c.lastName) return void 0;
+  const initial = nameKey2(c.lastName).charAt(0);
+  return initial ? `lo:${nameKey2(c.firstName)}|${initial}|${normOrg(c.org)}` : void 0;
+}
+function mergeInto(into, c) {
+  if (into.lastNameObfuscated && !c.lastNameObfuscated && c.lastName) {
+    into.name = c.name;
+    into.firstName = c.firstName;
+    into.lastName = c.lastName;
+    into.lastNameObfuscated = false;
+  }
+  for (const k of [
+    "title",
+    "org",
+    "headline",
+    "location",
+    "linkedinUrl",
+    "memberId",
+    "email",
+    "url"
+  ])
+    if (!into[k] && c[k]) into[k] = c[k];
+  if (c.networkDistance !== void 0)
+    into.networkDistance = Math.min(into.networkDistance ?? c.networkDistance, c.networkDistance);
+  for (const s of c.sources) if (!into.sources.includes(s)) into.sources.push(s);
+  into.externalIds = { ...c.externalIds, ...into.externalIds };
+}
+function mergeCandidates(cands) {
+  const groups = [];
+  const strong = /* @__PURE__ */ new Map();
+  const looseFull = /* @__PURE__ */ new Map();
+  const looseObf = /* @__PURE__ */ new Map();
+  for (const c of cands) {
+    const keys = strongKeys(c);
+    const loose = looseKey(c);
+    let gi;
+    for (const k of keys) {
+      gi = strong.get(k);
+      if (gi !== void 0) break;
+    }
+    if (gi === void 0 && loose) {
+      const found = c.lastNameObfuscated ? looseFull.get(loose) ?? looseObf.get(loose) : looseObf.get(loose);
+      if (found !== void 0 && found >= 0) gi = found;
+    }
+    if (gi === void 0) {
+      groups.push({ ...c, sources: [...c.sources], externalIds: { ...c.externalIds } });
+      gi = groups.length - 1;
+    } else mergeInto(groups[gi], c);
+    for (const k of [...keys, ...strongKeys(groups[gi])]) if (!strong.has(k)) strong.set(k, gi);
+    if (loose) {
+      const map = c.lastNameObfuscated ? looseObf : looseFull;
+      const prev = map.get(loose);
+      map.set(loose, prev === void 0 || prev === gi ? gi : -1);
+    }
+  }
+  return groups;
+}
+var STOP = /* @__PURE__ */ new Set([
+  "the",
+  "and",
+  "for",
+  "with",
+  "who",
+  "that",
+  "are",
+  "from",
+  "into",
+  "any",
+  "has",
+  "have",
+  "a",
+  "an",
+  "of",
+  "in",
+  "at",
+  "on",
+  "or",
+  "to"
+]);
+function candidateText(c) {
+  return norm([c.name, c.title, c.org, c.headline, c.location].filter(Boolean).join(" "));
+}
+function keywordFit(goal, c) {
+  const criteria = goal.criteria.length ? goal.criteria : [...goal.roles ?? [], ...goal.orgs ?? [], goal.sector, ...goal.skills ?? [], goal.topic].filter(
+    (x) => !!x
+  );
+  if (criteria.length === 0) return { fit: 0.5, reasons: [] };
+  const text2 = candidateText(c);
+  const matched = criteria.filter((cr) => {
+    const ws = norm(cr).split(/[^a-z0-9+#]+/).filter((w) => w.length >= 3 && !STOP.has(w));
+    if (ws.length === 0) return false;
+    const hits = ws.filter((w) => text2.includes(w)).length;
+    return hits >= Math.ceil(ws.length / 2);
+  });
+  return {
+    fit: matched.length / criteria.length,
+    reasons: matched.slice(0, 2).map((m) => `Matches "${m}"`)
+  };
+}
+function llmFitScorer(claude) {
+  return async (goal, user, cands) => {
+    const out = /* @__PURE__ */ new Map();
+    for (let i = 0; i < cands.length; i += FIT_BATCH) {
+      const batch = cands.slice(i, i + FIT_BATCH);
+      const payload = batch.map((c) => ({
+        id: c.key,
+        name: c.name,
+        title: c.title,
+        org: c.org,
+        location: c.location,
+        headline: c.headline,
+        source: c.sources.join("+")
+      }));
+      const r = await claude.parse("sourcing_fit", fitSchema, {
+        system: fitSystem(user.firstName),
+        user: fitUser({ title: goal.title, criteria: goal.criteria }, payload)
+      });
+      if (r.ok)
+        for (const s of r.value.scores) {
+          if (!batch.some((c) => c.key === s.id)) continue;
+          const fit = Number.isFinite(s.fit) ? Math.max(0, Math.min(1, s.fit)) : 0;
+          out.set(s.id, { fit, reasons: s.reasons.slice(0, 2) });
+        }
+      for (const c of batch) if (!out.has(c.key)) out.set(c.key, keywordFit(goal, c));
+    }
+    return out;
+  };
+}
+var round4 = (x) => Math.round(x * 1e4) / 1e4;
+async function rank(ctx, cands, batchId) {
+  const { deps, input } = ctx;
+  if (cands.length === 0) return [];
+  const scorer = deps.fitScorer ?? (deps.claude ? llmFitScorer(deps.claude) : async (g, _u, cs) => new Map(cs.map((c) => [c.key, keywordFit(g, c)])));
+  const fits = await scorer(input.goal, input.user, cands);
+  const fitOf = (c) => fits.get(c.key) ?? keywordFit(input.goal, c);
+  const byFit = [...cands].sort((a, b) => fitOf(b).fit - fitOf(a).fit);
+  const reachTop = new Set(byFit.slice(0, REACH_TOP).map((c) => c.key));
+  const rows = [];
+  for (const c of byFit) {
+    const f2 = fitOf(c);
+    const p = reachTop.has(c.key) ? await deps.reachOf(c) : null;
+    const reach = typeof p === "number" && p > 0 ? Math.min(1, p) : c.networkDistance === 2 ? 0.05 : 0;
+    const responsiveness = Math.max(0, Math.min(1, await deps.responsiveness(c)));
+    const known = deps.knownPerson ? await deps.knownPerson(c) : null;
+    const reasons = [...f2.reasons];
+    if (known)
+      reasons.unshift(known.score !== void 0 ? `You know them (${known.score})` : "You know them");
+    else if (c.networkDistance === 2) reasons.push("2nd-degree on LinkedIn");
+    const { key: _key, ...candidate } = c;
+    rows.push({
+      user_id: input.userId,
+      goal_id: input.goal.id,
+      person_id: known?.personId ?? null,
+      candidate,
+      source: c.sources.join("+"),
+      external_id: c.memberId ?? c.externalIds.apollo ?? c.externalIds.semantic_scholar ?? c.linkedinUrl ?? c.url ?? null,
+      rank: round4(WEIGHTS.fit * f2.fit + WEIGHTS.reach * reach + WEIGHTS.responsiveness * responsiveness),
+      fit: round4(f2.fit),
+      reach: round4(reach),
+      responsiveness: round4(responsiveness),
+      reasons,
+      status: "new",
+      batch_id: batchId
+    });
+  }
+  return rows.sort((a, b) => b.rank - a.rank);
+}
+
+// supabase/functions/_shared/sourcing/run.ts
+var strs = (v) => Array.isArray(v) ? v.filter((x) => typeof x === "string" && !!x.trim()).map((x) => x.trim()) : [];
+var str = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
+function sourcingGoal(req, goal) {
+  const f2 = req.filters ?? {};
+  const t = goal?.targets ?? {};
+  const c = goal?.criteria ?? {};
+  const roles = f2.titles?.length ? f2.titles : strs(t.roles);
+  const orgs = f2.organizations?.length ? f2.organizations : strs(t.organizations);
+  const keywords = f2.keywords?.length ? f2.keywords : strs(c.keywords);
+  const location = f2.locations?.[0] ?? strs(t.geographies)[0];
+  const query2 = str(req.query);
+  const criteria = [
+    ...query2 ? [query2] : [],
+    ...strs(c.criteria),
+    ...roles,
+    ...str(c.sector) ? [str(c.sector)] : [],
+    ...strs(c.skills)
+  ].slice(0, 8);
+  return {
+    id: goal?.id ?? null,
+    kind: req.purpose,
+    title: goal?.title ?? query2 ?? req.purpose,
+    criteria,
+    orgs,
+    domains: strs(c.domains),
+    roles,
+    skills: strs(c.skills),
+    keywords: keywords.length ? keywords : query2 ? [query2] : [],
+    sector: str(c.sector),
+    stage: str(c.stage),
+    location,
+    seniorities: f2.seniority?.length ? f2.seniority : strs(c.seniority),
+    employeeRanges: strs(c.employee_ranges ?? c.employeeRanges),
+    pastCompanies: strs(c.past_companies ?? c.pastCompanies),
+    topic: query2 ?? str(c.topic)
+  };
+}
+var toSourced = (id, r) => {
+  const c = r.candidate;
+  return {
+    id,
+    name: c.name,
+    ...c.title ? { title: c.title } : {},
+    ...c.org ? { org: c.org } : {},
+    ...c.location ? { location: c.location } : {},
+    ...c.linkedinUrl ? { linkedinUrl: c.linkedinUrl } : {},
+    source: c.sources[0] ?? "exa",
+    rank: r.rank,
+    fit: r.fit,
+    reach: r.reach,
+    responsiveness: r.responsiveness,
+    reasons: r.reasons,
+    ...r.person_id ? { knownPersonId: r.person_id } : {}
+  };
+};
+async function runSourcing(s, userId, req) {
+  if (!GOAL_KINDS.includes(req.purpose)) throw new HttpError(400, "bad_request", "unknown purpose");
+  const db2 = s.db;
+  const now = s.now();
+  let goal;
+  if (req.goalId) {
+    [goal] = await db2.sql`
+      select id, kind, title, targets, criteria from orbit.goals
+       where id = ${req.goalId}::uuid and user_id = ${userId}::uuid and deleted_at is null`;
+    if (!goal) throw new HttpError(404, "not_found", "no such goal");
+  }
+  const [u2] = await db2.sql`
+    select first_name, full_name, email, school, majors from orbit.users where id = ${userId}::uuid`;
+  const [acct] = await db2.sql`
+    select external_account_id from orbit.integration_accounts
+     where user_id = ${userId}::uuid and provider = 'linkedin' and status = 'active'`;
+  let graph;
+  const g = async () => graph ??= await loadGraph(db2, userId, now);
+  const known = /* @__PURE__ */ new Map();
+  const knownOf = async (c) => {
+    if (known.has(c.key)) return known.get(c.key);
+    let id = await resolvePersonRef(db2, userId, {
+      name: "",
+      linkedinUrl: c.linkedinUrl,
+      memberId: c.memberId
+    });
+    if (!id && c.email) {
+      const [p] = await db2.sql`
+        select person_id from orbit.person_identities
+         where user_id = ${userId}::uuid and kind = 'email' and value_norm = ${normalizeEmail(c.email)}`;
+      id = p?.person_id ?? null;
+    }
+    if (!id && c.org) {
+      const [p] = await db2.sql`
+        select id from orbit.people where user_id = ${userId}::uuid and not is_self and deleted_at is null
+           and lower(display_name) = lower(${c.name}) and lower(coalesce(org_raw, '')) = lower(${c.org}) limit 1`;
+      id = p?.id ?? null;
+    }
+    const v = id ? { personId: id, score: (await g()).people.get(id)?.score } : null;
+    known.set(c.key, v);
+    return v;
+  };
+  const user = { school: u2?.school ?? "", majors: u2?.majors ?? [] };
+  const result = await sourcePeople(
+    {
+      unipile: s.unipile,
+      apollo: s.apollo,
+      exa: s.exa,
+      semanticScholar: s.semanticScholar,
+      claude: s.claude.configured ? claudeDep(s.claude, userId) : void 0,
+      budget: sqlBudget(db2, s.now),
+      clock: () => now.getTime(),
+      knownPerson: knownOf,
+      reachOf: async (c) => {
+        const k = await knownOf(c);
+        return k ? bestReach(await g(), k.personId, req.purpose, now) : null;
+      },
+      responsiveness: (c) => responsePrior(
+        {
+          isAlumni: !!user.school && !!c.headline?.toLowerCase().includes(user.school.toLowerCase()),
+          currentTitle: c.title,
+          headline: c.headline
+        },
+        user
+      ),
+      inPipeline: async (c) => {
+        const k = await knownOf(c);
+        if (!k || !goal) return false;
+        const [x] = await db2.sql`
+          select 1 from orbit.chats where user_id = ${userId}::uuid and person_id = ${k.personId}::uuid
+             and goal_id = ${goal.id}::uuid and archived_at is null limit 1`;
+        return !!x;
+      }
+    },
+    {
+      userId,
+      goal: sourcingGoal(req, goal),
+      user: {
+        firstName: u2?.first_name ?? u2?.full_name?.split(/\s+/)[0] ?? "the user",
+        school: u2?.school ?? void 0
+      },
+      unipileAccountId: acct?.external_account_id ?? void 0,
+      limit: Math.max(1, Math.min(50, req.limit ?? 25))
+    }
+  );
+  const results = [];
+  for (const r of result.results) {
+    const [row] = await db2.sql`
+      insert into orbit.recommendations (user_id, goal_id, person_id, candidate, source, external_id, rank, fit, reach,
+                                         responsiveness, reasons, status, batch_id)
+      values (${userId}::uuid, ${r.goal_id}::uuid, ${r.person_id}::uuid, ${r.candidate}::jsonb, ${r.source},
+              ${r.external_id}, ${r.rank}::real, ${r.fit}::real, ${r.reach}::real, ${r.responsiveness}::real,
+              ${r.reasons}::text[], 'new', ${result.batchId}::uuid)
+      returning id`;
+    results.push(toSourced(row.id, r));
+  }
+  return { batchId: result.batchId, results, unconfigured: result.unconfigured, relaxed: result.relaxed };
+}
+async function addSourced(s, userId, ids) {
+  if (!Array.isArray(ids) || !ids.length || ids.length > 50 || !ids.every((x) => typeof x === "string" && /^[0-9a-f-]{36}$/i.test(x)))
+    throw new HttpError(400, "bad_request", "recommendationIds must be 1–50 ids");
+  const db2 = s.db;
+  const now = s.now();
+  const out = [];
+  for (const id of ids) {
+    const [rec] = await db2.sql`
+      select id, goal_id, person_id, candidate, source from orbit.recommendations
+       where id = ${id}::uuid and user_id = ${userId}::uuid`;
+    if (!rec) throw new HttpError(404, "not_found", "no such recommendation");
+    const c = rec.candidate;
+    const personId = rec.person_id ?? await ensurePerson(
+      db2,
+      userId,
+      {
+        name: c.name,
+        linkedinUrl: cleanLinkedInUrl(c.linkedinUrl),
+        memberId: c.memberId,
+        headline: c.headline,
+        org: c.org,
+        title: c.title,
+        email: c.email,
+        location: c.location
+      },
+      rec.source.split("+")[0] ?? "sourcing"
+    );
+    const chatId = await ensureChat(db2, userId, personId, rec.goal_id, now);
+    await db2.sql`
+      update orbit.recommendations set status = 'added', person_id = ${personId}::uuid where id = ${rec.id}::uuid`;
+    await s.queue.enqueue({
+      kind: "enrich.dossier",
+      userId,
+      payload: { personId, goalId: rec.goal_id },
+      dedupeKey: `dossier:${personId}`
+    });
+    const [p] = await db2.sql`
+      select display_name, first_name from orbit.people where id = ${personId}::uuid`;
+    out.push({ id: personId, displayName: p?.display_name ?? firstNameOf({ display_name: c.name }), chatId });
+  }
+  return { people: out };
+}
+async function ensureChat(db2, userId, personId, goalId, now) {
+  const [c] = await db2.sql`
+    select id from orbit.chats
+     where user_id = ${userId}::uuid and person_id = ${personId}::uuid and archived_at is null
+       and goal_id is not distinct from ${goalId}::uuid
+     order by created_at limit 1`;
+  if (c) return c.id;
+  const [row] = await db2.sql`
+    insert into orbit.chats (user_id, person_id, goal_id, stage, stage_entered_at, data)
+    values (${userId}::uuid, ${personId}::uuid, ${goalId}::uuid, 'identified', ${now}::timestamptz,
+            ${{ source: "recommendation", goalTags: [], bumpCount: 0, priority: 2 }}::jsonb)
+    returning id`;
+  await db2.sql`
+    insert into orbit.stage_events (user_id, chat_id, from_stage, to_stage, status, actor, reason, decided_at)
+    values (${userId}::uuid, ${row.id}::uuid, null, 'identified', 'applied', 'user', 'added from sourcing', ${now}::timestamptz)`;
+  return row.id;
+}
+
+// supabase/functions/orbit-api/routes/source.ts
+var list3 = (v, key) => {
+  if (v === void 0) return void 0;
+  if (!Array.isArray(v) || v.length > 25 || !v.every((x) => typeof x === "string" && x.length <= 200))
+    throw badRequest(`filters.${key} must be a list of short strings`);
+  return v;
+};
+async function search2(ctx) {
+  const b = await body(ctx);
+  const f2 = b.filters ?? {};
+  if (typeof f2 !== "object" || Array.isArray(f2)) throw badRequest("filters must be an object");
+  if (b.query !== void 0 && (typeof b.query !== "string" || b.query.length > 500))
+    throw badRequest("query is too long");
+  const req = {
+    goalId: optUuid(b, "goalId"),
+    purpose: b.purpose,
+    query: typeof b.query === "string" ? b.query : void 0,
+    filters: {
+      organizations: list3(f2.organizations, "organizations"),
+      titles: list3(f2.titles, "titles"),
+      locations: list3(f2.locations, "locations"),
+      schools: list3(f2.schools, "schools"),
+      seniority: list3(f2.seniority, "seniority"),
+      keywords: list3(f2.keywords, "keywords")
+    },
+    limit: typeof b.limit === "number" ? b.limit : void 0
+  };
+  return json(200, await runSourcing(ctx.services(), ctx.userId, req));
+}
+async function add3(ctx) {
+  const b = await body(ctx);
+  return json(200, await addSourced(ctx.services(), ctx.userId, b.recommendationIds));
+}
+var sourceRoutes = {
+  "/source/search": { method: "POST", auth: true, run: search2 },
+  "/source/add": { method: "POST", auth: true, run: add3 }
+};
+
 // supabase/functions/orbit-api/sync.ts
-import { z as z2 } from "npm:zod@3.25.76/v4";
+import { z as z4 } from "npm:zod@3.25.76/v4";
 
 // supabase/functions/orbit-api/tables.ts
 var PULL_TABLES = [
@@ -1435,7 +9511,7 @@ async function statusFor(db2, userId) {
     `select (${QUEUES.map((q) => `(select count(*) from pgmq.q_${q} where message->>'userId' = $1)`).join(" + ")})::int as n`,
     [userId]
   );
-  const iso = (d) => d ? new Date(d).toISOString() : null;
+  const iso2 = (d) => d ? new Date(d).toISOString() : null;
   return {
     counts: counts ?? {},
     integrations: accounts.map((a) => {
@@ -1446,9 +9522,9 @@ async function statusFor(db2, userId) {
         email: a.email,
         scopes: a.scopes,
         linked: a.linked,
-        lastSyncedAt: iso(a.last_synced_at),
+        lastSyncedAt: iso2(a.last_synced_at),
         lastError: a.last_error,
-        watchExpiresAt: iso(a.watch_expires_at),
+        watchExpiresAt: iso2(a.watch_expires_at),
         backfill: bf ? {
           phase: bf.phase ?? null,
           done: Number(bf.done ?? 0),
@@ -1485,17 +9561,17 @@ function decodeCursor(raw) {
 var PULL_DEFAULT_LIMIT = 500;
 var PULL_MAX_LIMIT = 2e3;
 async function syncPull(ctx) {
-  const body = await readJson(ctx.req, { optional: true });
-  const cursor = decodeCursor(body.cursor);
+  const body2 = await readJson(ctx.req, { optional: true });
+  const cursor = decodeCursor(body2.cursor);
   const limit = Math.min(
     PULL_MAX_LIMIT,
-    Math.max(1, Math.floor(Number(body.limit ?? PULL_DEFAULT_LIMIT)) || 1)
+    Math.max(1, Math.floor(Number(body2.limit ?? PULL_DEFAULT_LIMIT)) || 1)
   );
   let tables = PULL_TABLES;
-  if (body.tables !== void 0) {
-    if (!Array.isArray(body.tables) || body.tables.some((t) => typeof t !== "string" || !PULL_BY_NAME.has(t)))
+  if (body2.tables !== void 0) {
+    if (!Array.isArray(body2.tables) || body2.tables.some((t) => typeof t !== "string" || !PULL_BY_NAME.has(t)))
       throw badRequest(`tables must be a list of: ${PULL_TABLES.map((t) => t.table).join(", ")}`);
-    tables = PULL_TABLES.filter((t) => body.tables.includes(t.table));
+    tables = PULL_TABLES.filter((t) => body2.tables.includes(t.table));
   }
   const upTo = new Date(ctx.now().getTime() - ctx.pullLagMs);
   const out = await pull(ctx.db, ctx.userId, { cursor, tables, limit, upTo });
@@ -1542,10 +9618,10 @@ async function pull(db2, userId, o) {
   if (lastAudit) next._audit = Number(lastAudit.id);
   return { changes, deleted, cursor: encodeCursor(next), hasMore };
 }
-var uuidS = z2.string().refine(isUuid, "must be a uuid");
-var tsS = z2.string().refine((s) => !Number.isNaN(Date.parse(s)), "must be a date-time");
-var dateS = z2.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD");
-var obj = (maxBytes) => z2.record(z2.string(), z2.unknown()).refine((v) => JSON.stringify(v).length <= maxBytes, `must be under ${maxBytes} bytes`);
+var uuidS = z4.string().refine(isUuid, "must be a uuid");
+var tsS = z4.string().refine((s) => !Number.isNaN(Date.parse(s)), "must be a date-time");
+var dateS = z4.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD");
+var obj = (maxBytes) => z4.record(z4.string(), z4.unknown()).refine((v) => JSON.stringify(v).length <= maxBytes, `must be under ${maxBytes} bytes`);
 var f = (col, type, schema, owned) => ({
   col,
   type,
@@ -1563,7 +9639,7 @@ var PUSH = {
       kind: f(
         "kind",
         "text",
-        z2.enum([
+        z4.enum([
           "recruiting",
           "fundraising",
           "sales",
@@ -1574,26 +9650,26 @@ var PUSH = {
           "collaboration"
         ])
       ),
-      title: f("title", "text", z2.string().trim().min(1).max(200)),
-      description: f("description", "text", z2.string().max(4e3).nullable()),
+      title: f("title", "text", z4.string().trim().min(1).max(200)),
+      description: f("description", "text", z4.string().max(4e3).nullable()),
       targets: f(
         "targets",
         "jsonb",
-        z2.object({
-          organizations: z2.array(z2.string().max(200)).max(50).default([]),
-          roles: z2.array(z2.string().max(200)).max(50).default([]),
-          geographies: z2.array(z2.string().max(200)).max(50).default([]),
-          people: z2.array(z2.string().max(200)).max(50).default([])
+        z4.object({
+          organizations: z4.array(z4.string().max(200)).max(50).default([]),
+          roles: z4.array(z4.string().max(200)).max(50).default([]),
+          geographies: z4.array(z4.string().max(200)).max(50).default([]),
+          people: z4.array(z4.string().max(200)).max(50).default([])
         })
       ),
       criteria: f("criteria", "jsonb", obj(2e4)),
-      successMetric: f("success_metric", "text", z2.string().max(500).nullable()),
-      priority: f("priority", "int", z2.number().int().min(1).max(3)),
-      status: f("status", "text", z2.enum(["active", "paused", "done"])),
-      autonomyLevel: f("autonomy_level", "int", z2.number().int().min(0).max(2).nullable()),
+      successMetric: f("success_metric", "text", z4.string().max(500).nullable()),
+      priority: f("priority", "int", z4.number().int().min(1).max(3)),
+      status: f("status", "text", z4.enum(["active", "paused", "done"])),
+      autonomyLevel: f("autonomy_level", "int", z4.number().int().min(0).max(2).nullable()),
       dueAt: f("due_at", "date", dateS.nullable()),
-      source: f("source", "text", z2.enum(["user", "onboarding", "inferred"])),
-      evidence: f("evidence", "text", z2.string().max(2e3).nullable())
+      source: f("source", "text", z4.enum(["user", "onboarding", "inferred"])),
+      evidence: f("evidence", "text", z4.string().max(2e3).nullable())
     }
   },
   chats: {
@@ -1605,7 +9681,7 @@ var PUSH = {
       personId: f("person_id", "uuid", uuidS, "people"),
       goalId: f("goal_id", "uuid", uuidS.nullable(), "goals"),
       orgId: f("org_id", "uuid", uuidS.nullable(), "organizations"),
-      stage: f("stage", "text", z2.string().min(1).max(40)),
+      stage: f("stage", "text", z4.string().min(1).max(40)),
       stageEnteredAt: f("stage_entered_at", "timestamptz", tsS),
       data: f("data", "jsonb", obj(64e3)),
       archivedAt: f("archived_at", "timestamptz", tsS.nullable())
@@ -1618,13 +9694,13 @@ var PUSH = {
     required: ["chatId", "toStage", "status", "actor"],
     fields: {
       chatId: f("chat_id", "uuid", uuidS, "chats"),
-      fromStage: f("from_stage", "text", z2.string().max(40).nullable()),
-      toStage: f("to_stage", "text", z2.string().min(1).max(40)),
-      status: f("status", "text", z2.string().min(1).max(40)),
-      actor: f("actor", "text", z2.enum(["user", "agent", "system"])),
-      reason: f("reason", "text", z2.string().max(2e3).nullable()),
+      fromStage: f("from_stage", "text", z4.string().max(40).nullable()),
+      toStage: f("to_stage", "text", z4.string().min(1).max(40)),
+      status: f("status", "text", z4.string().min(1).max(40)),
+      actor: f("actor", "text", z4.enum(["user", "agent", "system"])),
+      reason: f("reason", "text", z4.string().max(2e3).nullable()),
       evidence: f("evidence", "jsonb", obj(2e4).nullable()),
-      confidence: f("confidence", "real", z2.number().min(0).max(1).nullable()),
+      confidence: f("confidence", "real", z4.number().min(0).max(1).nullable()),
       decidedAt: f("decided_at", "timestamptz", tsS.nullable())
     }
   },
@@ -1635,12 +9711,12 @@ var PUSH = {
     key: "id",
     required: ["source", "occurredAt", "rawText"],
     fields: {
-      personIds: f("person_ids", "uuid[]", z2.array(uuidS).max(50), "people"),
+      personIds: f("person_ids", "uuid[]", z4.array(uuidS).max(50), "people"),
       chatId: f("chat_id", "uuid", uuidS.nullable(), "chats"),
-      source: f("source", "text", z2.string().min(1).max(40)),
-      title: f("title", "text", z2.string().max(300).nullable()),
+      source: f("source", "text", z4.string().min(1).max(40)),
+      title: f("title", "text", z4.string().max(300).nullable()),
       occurredAt: f("occurred_at", "timestamptz", tsS),
-      rawText: f("raw_text", "text", z2.string().max(1e5)),
+      rawText: f("raw_text", "text", z4.string().max(1e5)),
       extraction: f("extraction", "jsonb", obj(64e3).nullable())
     }
   },
@@ -1650,12 +9726,12 @@ var PUSH = {
     key: "id",
     // only what the user edits by hand; everything else is derived on the server
     fields: {
-      displayName: f("display_name", "text", z2.string().trim().min(1).max(200)),
-      notes: f("notes", "text", z2.string().max(2e4).nullable()),
-      tags: f("tags", "text[]", z2.array(z2.string().max(60)).max(50)),
-      relationshipType: f("relationship_type", "text", z2.string().max(40).nullable()),
+      displayName: f("display_name", "text", z4.string().trim().min(1).max(200)),
+      notes: f("notes", "text", z4.string().max(2e4).nullable()),
+      tags: f("tags", "text[]", z4.array(z4.string().max(60)).max(50)),
+      relationshipType: f("relationship_type", "text", z4.string().max(40).nullable()),
       hiddenAt: f("hidden_at", "timestamptz", tsS.nullable()),
-      doNotContact: f("do_not_contact", "boolean", z2.boolean())
+      doNotContact: f("do_not_contact", "boolean", z4.boolean())
     }
   },
   tie_labels: {
@@ -1664,7 +9740,7 @@ var PUSH = {
     del: "hard",
     key: "person_id",
     required: ["closeness"],
-    fields: { closeness: f("closeness", "int", z2.number().int().min(1).max(5)) }
+    fields: { closeness: f("closeness", "int", z4.number().int().min(1).max(5)) }
   },
   // drafts: handled by pushDraft (status transitions and edits while still a draft)
   drafts: { table: "drafts", write: "update", key: "id", fields: {} },
@@ -1676,20 +9752,20 @@ var ChangeError = class extends Error {
     this.code = code;
   }
 };
-var ChangeS = z2.object({
-  table: z2.string(),
-  op: z2.enum(["upsert", "delete"]),
+var ChangeS = z4.object({
+  table: z4.string(),
+  op: z4.enum(["upsert", "delete"]),
   id: uuidS,
-  row: z2.record(z2.string(), z2.unknown()).optional()
+  row: z4.record(z4.string(), z4.unknown()).optional()
 });
 var PUSH_MAX_CHANGES = 500;
 async function syncPush(ctx) {
-  const body = await readJson(ctx.req, { maxBytes: 5e6 });
-  if (!Array.isArray(body.changes)) throw badRequest("changes must be a list");
-  if (body.changes.length > PUSH_MAX_CHANGES)
+  const body2 = await readJson(ctx.req, { maxBytes: 5e6 });
+  if (!Array.isArray(body2.changes)) throw badRequest("changes must be a list");
+  if (body2.changes.length > PUSH_MAX_CHANGES)
     throw badRequest(`at most ${PUSH_MAX_CHANGES} changes per push`);
   const results = [];
-  for (const raw of body.changes) results.push(await applyChange(ctx.db, ctx.userId, raw));
+  for (const raw of body2.changes) results.push(await applyChange(ctx.db, ctx.userId, raw));
   return json(200, { results });
 }
 async function applyChange(db2, userId, raw) {
@@ -1725,7 +9801,7 @@ var shape = (table, row) => {
   const t = PULL_BY_NAME.get(table);
   return row && t ? shapeRow(t, row) : row;
 };
-async function audit(db2, userId, action, table, id, fields = []) {
+async function audit2(db2, userId, action, table, id, fields = []) {
   await db2.sql`
     insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
     values (${userId}::uuid, 'user', ${action}, ${table}, ${id}, ${{ fields }}::jsonb)`;
@@ -1784,7 +9860,7 @@ async function write(db2, userId, spec, id, row) {
       [id, userId, ...fields.map((x) => x.value)]
     );
     if (!r2) throw new ChangeError("not_found", `${spec.table} ${id} was not found`);
-    await audit(
+    await audit2(
       db2,
       userId,
       "sync.update",
@@ -1802,7 +9878,7 @@ async function write(db2, userId, spec, id, row) {
     `insert into orbit.${spec.table} as t (${cols.join(", ")}) values (${vals.join(", ")}) returning to_jsonb(t) as row`,
     [id, userId, ...fields.map((x) => x.value)]
   );
-  await audit(
+  await audit2(
     db2,
     userId,
     "sync.insert",
@@ -1817,24 +9893,24 @@ async function remove(db2, userId, spec, id) {
   const sql = spec.del === "soft" ? `update orbit.${spec.table} set deleted_at = now() where ${spec.key} = $1::uuid and user_id = $2::uuid and deleted_at is null returning 1` : `delete from orbit.${spec.table} where ${spec.key} = $1::uuid and user_id = $2::uuid returning 1`;
   const rows = await db2.query(sql, [id, userId]);
   if (!rows.length) throw new ChangeError("not_found", `${spec.table} ${id} was not found`);
-  await audit(db2, userId, "sync.delete", spec.table, id);
+  await audit2(db2, userId, "sync.delete", spec.table, id);
   return void 0;
 }
-var DraftPatchS = z2.object({
-  status: z2.enum(["approved", "discarded", "cancelled"]).optional(),
-  subject: z2.string().max(200).nullable().optional(),
-  body: z2.string().trim().min(1).max(2e4).optional()
+var DraftPatchS = z4.object({
+  status: z4.enum(["approved", "discarded", "cancelled"]).optional(),
+  subject: z4.string().max(200).nullable().optional(),
+  body: z4.string().trim().min(1).max(2e4).optional()
 });
 async function pushDraft(db2, userId, id, row) {
   const p = DraftPatchS.safeParse({ status: row.status, subject: row.subject, body: row.body });
   if (!p.success) throw new ChangeError("invalid", p.error.issues[0]?.message ?? "invalid draft change");
-  const { status, subject, body } = p.data;
+  const { status, subject, body: body2 } = p.data;
   const hasSubject = "subject" in row;
-  if (!status && !hasSubject && body === void 0) throw new ChangeError("invalid", "nothing to change");
+  if (!status && !hasSubject && body2 === void 0) throw new ChangeError("invalid", "nothing to change");
   const [r] = await db2.sql`
     update orbit.drafts t set
       subject = case when ${hasSubject}::boolean then ${subject ?? null}::text else t.subject end,
-      body = coalesce(${body ?? null}::text, t.body),
+      body = coalesce(${body2 ?? null}::text, t.body),
       status = coalesce(${status ?? null}::text, t.status),
       cancel_reason = case when ${status ?? null}::text = 'cancelled' then 'user' else t.cancel_reason end
      where t.id = ${id}::uuid and t.user_id = ${userId}::uuid and t.status = 'draft'
@@ -1846,7 +9922,7 @@ async function pushDraft(db2, userId, id, row) {
     throw new ChangeError("conflict", `the draft is already ${cur.status}`);
   }
   const changed = ["status", "subject", "body"].filter((k) => k in row);
-  await audit(db2, userId, "sync.update", "drafts", id, changed);
+  await audit2(db2, userId, "sync.update", "drafts", id, changed);
   return shape("drafts", r.row);
 }
 
@@ -1865,7 +9941,18 @@ var ROUTES = {
   "/sync/push": { method: "POST", auth: true, run: syncPush },
   "/account/export": { method: "POST", auth: true, run: accountExport },
   "/account/delete": { method: "POST", auth: true, run: accountDelete },
-  ...INTEGRATION_ROUTES
+  ...INTEGRATION_ROUTES,
+  ...goalRoutes,
+  ...scoreRoutes,
+  ...researchRoutes,
+  ...sourceRoutes,
+  ...pathRoutes,
+  ...draftRoutes,
+  ...replyRoutes,
+  ...calendarRoutes,
+  ...memoryRoutes,
+  ...settingsRoutes,
+  ...cadenceRoutes
 };
 function missingSecrets(deps, google) {
   const m = [];
@@ -1895,6 +9982,18 @@ function makeApiHandler(deps) {
     jwks: deps.jwks,
     now
   } : void 0;
+  const agent = {
+    ...deps.agent,
+    fetch: deps.agent?.fetch ?? deps.fetch,
+    env: {
+      googleClientId: deps.env.googleClientId,
+      googleClientSecret: deps.env.googleClientSecret,
+      googleRedirectUri: deps.env.googleRedirectUri,
+      unipileKey: deps.env.unipileKey,
+      unipileBase: deps.env.unipileBase,
+      ...deps.agent?.env
+    }
+  };
   return async (req) => {
     const started = Date.now();
     const rid = requestId(req);
@@ -1943,6 +10042,7 @@ function makeApiHandler(deps) {
       const db2 = deps.db;
       const visitor = (await sha256Hex(`${salt2}:${clientIp(req)}`)).slice(0, 32);
       await limit(ipBuckets("api", visitor, now(), limits.ipPerMinute));
+      let services;
       const ctx = {
         req,
         url,
@@ -1953,7 +10053,8 @@ function makeApiHandler(deps) {
         fetch: doFetch,
         now,
         requestId: rid,
-        pullLagMs: deps.pullLagMs ?? 2e3
+        pullLagMs: deps.pullLagMs ?? 2e3,
+        services: () => services ??= makeServices(agent, { db: db2, now })
       };
       if (r.auth) {
         const claims = await authenticate(db2, ctx.session, req.headers.get("authorization"));
@@ -1994,7 +10095,7 @@ function makeApiHandler(deps) {
 
 // supabase/functions/orbit-api/main.ts
 var env = (name) => Deno.env.get(name) || void 0;
-var num = (name, fallback) => {
+var num2 = (name, fallback) => {
   const v = Number(Deno.env.get(name));
   return Number.isFinite(v) && v > 0 ? v : fallback;
 };
@@ -2002,6 +10103,12 @@ var supabaseUrl = env("SUPABASE_URL");
 var dbUrl = env("SUPABASE_DB_URL");
 var db = dbUrl ? connectDb(dbUrl) : void 0;
 var sessionSecret = await resolveSecret(env, db, "ORBIT_SESSION_SECRET", "orbit_session_secret");
+var unipileWebhookSecret = await resolveSecret(
+  env,
+  db,
+  "ORBIT_UNIPILE_WEBHOOK_SECRET",
+  "orbit_unipile_webhook_secret"
+);
 var salt = env("ORBIT_LOG_SALT") ?? ((env("SUPABASE_SERVICE_ROLE_KEY") ?? "").slice(-16) || "orbit");
 Deno.serve(
   makeApiHandler({
@@ -2013,16 +10120,17 @@ Deno.serve(
       appUrl: env("ORBIT_APP_URL"),
       unipileKey: env("UNIPILE_API_KEY"),
       unipileBase: env("UNIPILE_BASE_URL"),
-      unipileWebhookSecret: env("ORBIT_UNIPILE_WEBHOOK_SECRET"),
+      unipileWebhookSecret,
       functionsUrl: supabaseUrl ? `${supabaseUrl}/functions/v1` : void 0
     },
     db,
+    agent: { env: agentEnvFrom(env) },
     log: makeLogger(salt),
     salt,
     limits: {
-      ipPerMinute: num("ORBIT_API_IP_PER_MINUTE", 120),
-      userPerMinute: num("ORBIT_API_USER_PER_MINUTE", 240),
-      userPerDay: num("ORBIT_API_USER_PER_DAY", 2e4)
+      ipPerMinute: num2("ORBIT_API_IP_PER_MINUTE", 120),
+      userPerMinute: num2("ORBIT_API_USER_PER_MINUTE", 240),
+      userPerDay: num2("ORBIT_API_USER_PER_DAY", 2e4)
     }
   })
 );

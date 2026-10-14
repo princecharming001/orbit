@@ -14,6 +14,8 @@ import { isUuid, timingSafeEqual } from '../_shared/crypto.ts';
 import type { Db } from '../_shared/db.ts';
 import { HttpError, json, type Logger, silentLogger, unconfigured } from '../_shared/http.ts';
 import { QUEUES, type Queue, type QueueName, sqlQueue } from '../_shared/queue.ts';
+import type { AgentConfig } from '../_shared/services.ts';
+import { agentHandlers } from './handlers/agents.ts';
 import { calendarHandlers } from './handlers/calendar.ts';
 import { classifyHandlers } from './handlers/classify.ts';
 import { contactsHandlers } from './handlers/contacts.ts';
@@ -47,10 +49,19 @@ export interface JobContext {
 
 export type JobHandler = (job: Job, ctx: JobContext) => Promise<void>;
 
-/** Kinds that P4–P5 implement; until then their messages are skipped. */
-export const PLACEHOLDER_KINDS = ['cadence.user', 'enrich.dossier', 'source.search', 'send.draft'] as const;
+/** Kinds with no handler yet; every planned kind is implemented, so the list is empty. */
+export const PLACEHOLDER_KINDS: readonly string[] = [];
 
-export function defaultHandlers(deps: HandlerDeps = {}): Record<string, JobHandler> {
+/**
+ * The ingestion handlers take HandlerDeps; the agent handlers (research, sourcing, sending, cadence) take an
+ * AgentConfig, which always carries `env`. Either can be passed alone, or the ingestion deps with `agents`.
+ */
+export function defaultHandlers(
+  opts: (HandlerDeps & { agents?: AgentConfig }) | AgentConfig = {},
+): Record<string, JobHandler> {
+  const agents: AgentConfig | undefined = 'env' in opts ? opts : opts.agents;
+  const deps: HandlerDeps =
+    'env' in opts ? { fetch: opts.fetch, sleep: opts.sleep, random: opts.random } : opts;
   const handlers: Record<string, JobHandler> = {
     noop: async () => {},
     'health.snapshot': async (_job, ctx) => {
@@ -62,6 +73,7 @@ export function defaultHandlers(deps: HandlerDeps = {}): Record<string, JobHandl
     ...linkedinHandlers(deps),
     ...scoreHandlers(deps),
     ...classifyHandlers(deps),
+    ...agentHandlers(agents),
   };
   for (const kind of PLACEHOLDER_KINDS)
     handlers[kind] = async () => {

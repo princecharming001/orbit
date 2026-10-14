@@ -15,12 +15,16 @@ export type Task =
   | 'compose'
   | 'reply'
   | 'dossier'
-  | 'classify'
-  | 'triage'
-  | 'extract_memory'
-  | 'extract_goal'
+  | 'reply_classify'
+  | 'memory_extract'
+  | 'goal_infer'
   | 'fit'
-  | 'judge';
+  | 'triage'
+  | 'judge'
+  /** earlier names of reply_classify, memory_extract and goal_infer, kept for callers that still use them */
+  | 'classify'
+  | 'extract_memory'
+  | 'extract_goal';
 
 export type Effort = 'low' | 'medium' | 'high';
 
@@ -36,11 +40,14 @@ export const TASKS: Record<Task, TaskSetting> = {
   compose: { model: 'claude-opus-5-5', effort: 'medium', maxTokens: 4000 },
   reply: { model: 'claude-opus-5-5', effort: 'medium', maxTokens: 4000 },
   dossier: { model: 'claude-opus-5-5', effort: 'medium', maxTokens: 8000 },
-  classify: { model: 'claude-haiku-5-5', effort: 'low', maxTokens: 1000 },
+  reply_classify: { model: 'claude-haiku-5-5', effort: 'low', maxTokens: 1000 },
+  memory_extract: { model: 'claude-haiku-5-5', effort: 'low', maxTokens: 1500 },
+  goal_infer: { model: 'claude-haiku-5-5', effort: 'low', maxTokens: 1500 },
+  fit: { model: 'claude-haiku-5-5', effort: 'low', maxTokens: 3000 },
   triage: { model: 'claude-haiku-5-5', effort: 'low', maxTokens: 1000 },
+  classify: { model: 'claude-haiku-5-5', effort: 'low', maxTokens: 1000 },
   extract_memory: { model: 'claude-haiku-5-5', effort: 'low', maxTokens: 1500 },
   extract_goal: { model: 'claude-haiku-5-5', effort: 'low', maxTokens: 1500 },
-  fit: { model: 'claude-haiku-5-5', effort: 'low', maxTokens: 3000 },
   judge: { model: 'claude-sonnet-5-5', maxTokens: 2000 },
 };
 

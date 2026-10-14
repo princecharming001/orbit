@@ -5,6 +5,7 @@
 import { connectDb } from '../_shared/db.ts';
 import { makeLogger } from '../_shared/http.ts';
 import { resolveSecret } from '../_shared/secrets.ts';
+import { agentEnvFrom } from '../_shared/services.ts';
 import { makeApiHandler } from './api.ts';
 
 const env = (name: string) => Deno.env.get(name) || undefined;
@@ -16,6 +17,12 @@ const supabaseUrl = env('SUPABASE_URL');
 const dbUrl = env('SUPABASE_DB_URL');
 const db = dbUrl ? connectDb(dbUrl) : undefined;
 const sessionSecret = await resolveSecret(env, db, 'ORBIT_SESSION_SECRET', 'orbit_session_secret');
+const unipileWebhookSecret = await resolveSecret(
+  env,
+  db,
+  'ORBIT_UNIPILE_WEBHOOK_SECRET',
+  'orbit_unipile_webhook_secret',
+);
 const salt = env('ORBIT_LOG_SALT') ?? ((env('SUPABASE_SERVICE_ROLE_KEY') ?? '').slice(-16) || 'orbit');
 
 Deno.serve(
@@ -30,10 +37,11 @@ Deno.serve(
       appUrl: env('ORBIT_APP_URL'),
       unipileKey: env('UNIPILE_API_KEY'),
       unipileBase: env('UNIPILE_BASE_URL'),
-      unipileWebhookSecret: env('ORBIT_UNIPILE_WEBHOOK_SECRET'),
+      unipileWebhookSecret,
       functionsUrl: supabaseUrl ? `${supabaseUrl}/functions/v1` : undefined,
     },
     db,
+    agent: { env: agentEnvFrom(env) },
     log: makeLogger(salt),
     salt,
     limits: {

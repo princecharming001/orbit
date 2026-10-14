@@ -7,6 +7,7 @@ import { connectDb } from '../_shared/db.ts';
 import { googleTokenSource } from '../_shared/google.ts';
 import { makeLogger } from '../_shared/http.ts';
 import { resolveSecret } from '../_shared/secrets.ts';
+import { agentEnvFrom } from '../_shared/services.ts';
 import { sqlVault } from '../_shared/vault.ts';
 import type { HandlerDeps } from './handlers/deps.ts';
 import { DEFAULT_BUDGET_MS, defaultHandlers, makeWorkerHandler, runTick } from './worker.ts';
@@ -35,7 +36,7 @@ const handlerDeps: HandlerDeps = {
   unipile: { apiKey: env('UNIPILE_API_KEY'), baseUrl: env('UNIPILE_BASE_URL') },
   claude: makeClaude({ apiKey: env('ORBIT_ANTHROPIC_API_KEY'), db }),
 };
-const handlers = defaultHandlers(handlerDeps);
+const handlers = defaultHandlers({ ...handlerDeps, agents: { env: agentEnvFrom(env) } });
 
 Deno.serve(
   makeWorkerHandler({
