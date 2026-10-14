@@ -212,7 +212,7 @@ create table if not exists orbit.ties (
   user_id uuid not null references orbit.users(id) on delete cascade,
   a_person_id uuid not null references orbit.people(id) on delete cascade,
   b_person_id uuid not null references orbit.people(id) on delete cascade,
-  kind text not null check (kind in ('email_exchange','email_cc','email_cothread','meeting_coattendee','introduced_by','linkedin_mutual','village_path','co_tenure','same_school_cohort','same_current_company')),
+  kind text not null check (kind in ('email_exchange','email_cc','email_cothread','meeting_coattendee','introduced_by','linkedin_mutual','village_path','co_tenure','same_school_cohort','same_current_company','same_city')),
   weight real not null check (weight between 0 and 1), confidence real not null check (confidence between 0 and 1),
   evidence jsonb not null default '{}'::jsonb,   -- {threadIds[], eventIds[], orgId, overlapMonths, source, count}
   first_seen_at timestamptz not null default now(), last_seen_at timestamptz not null default now(),
@@ -292,6 +292,13 @@ create table if not exists orbit.notes (
   source text not null, title text, occurred_at timestamptz not null, raw_text text not null,
   extraction jsonb, created_at timestamptz not null default now(), updated_at timestamptz not null default now()
 );
+create table if not exists orbit.uploads (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references orbit.users(id) on delete cascade,
+  kind text not null check (kind in ('resume','note','transcript','linkedin_export')),
+  filename text, text text not null, parsed jsonb, is_current boolean not null default true,
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now()
+);
 create table if not exists orbit.facts (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references orbit.users(id) on delete cascade,
@@ -311,7 +318,7 @@ create table if not exists orbit.dossiers (
   goal_id uuid references orbit.goals(id) on delete set null,
   status text not null check (status in ('pending','ready','partial','needs_disambiguation','failed')),
   content jsonb, sources jsonb not null default '[]'::jsonb, candidates jsonb,
-  cost_usd numeric(8,4) not null default 0, model text, error text,
+  cost_usd numeric(8,4) not null default 0, model text, prompt_version text, error text,
   created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
   expires_at timestamptz not null default now() + interval '90 days',
   unique (user_id, person_id)

@@ -13,7 +13,7 @@
  *   node scripts/build-functions.mjs           build
  *   node scripts/build-functions.mjs --check   fail when a committed bundle is stale (CI also runs git diff)
  *
- * orbit-claude and orbit-connectors have no main.ts and are deployed from source, unchanged.
+ * orbit-claude has no main.ts and is deployed from source, unchanged.
  */
 import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';

@@ -5,7 +5,7 @@ Plan: `docs/plan/16-network-agent-infrastructure.md` (§9, §11–§13, §16, §
 | Function | What it is | Source → deployed entry | `verify_jwt` |
 |---|---|---|---|
 | `orbit-claude` | Shared Claude proxy for local mode | `index.ts` + `proxy.ts`, deployed from source | off (origin + per-IP limits) |
-| `orbit-connectors` | Unipile / Village proxy for local mode | `index.ts` + `connectors.ts`, deployed from source | off (origin + per-IP limits) |
+| `orbit-connectors` | Unipile / Village proxy for local mode | `main.ts` + `connectors.ts`, bundled (it imports the shared Village v2 adapter) | off (origin + per-IP limits) |
 | `orbit-api` | Account mode: Google sign-in, Orbit sessions, `/sync/*`, `/account/*` | `main.ts` → `dist/index.js` ← `index.ts` | **off**: Orbit sessions are not Supabase JWTs; the function verifies its own HS256 tokens |
 | `orbit-worker` | Drains the pgmq queues every minute (pg_cron) | `main.ts` → `dist/index.js` ← `index.ts` | **off**: requires `x-orbit-cron` = `ORBIT_CRON_SECRET` |
 | `orbit-webhooks` | Gmail Pub/Sub push, Unipile webhooks | `main.ts` → `dist/index.js` ← `index.ts` | **off**: each route checks its own shared secret |
@@ -44,8 +44,7 @@ supabase functions deploy orbit-worker --no-verify-jwt
 supabase functions deploy orbit-webhooks --no-verify-jwt
 ```
 
-`orbit-claude` and `orbit-connectors` deploy as before (`supabase functions deploy orbit-claude --no-verify-jwt`,
-same for `orbit-connectors`); they now import `../_shared/origins.ts`, which the CLI bundles with them.
+`orbit-claude` deploys as before (`supabase functions deploy orbit-claude --no-verify-jwt`); it imports `../_shared/origins.ts`, which the CLI bundles with it. `orbit-connectors` is bundled like the account-mode functions (run `pnpm build:functions` first) and deploys with `--no-verify-jwt`.
 
 ## Secrets (function environment)
 

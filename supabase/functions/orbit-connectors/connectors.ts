@@ -12,6 +12,8 @@
  * the app. The exact upstream request and response mapping lives in the adapter functions, so a live test with real
  * keys only changes this file (Village's lives in _shared/providers/village.ts, shared with the server).
  */
+
+import { clientIp, defaultOrigins } from '../_shared/origins.ts';
 import {
   companyIntros,
   createVillage,
@@ -20,8 +22,6 @@ import {
   type VillageIntro,
   type VillageUser,
 } from '../_shared/providers/village';
-
-import { clientIp, defaultOrigins } from '../_shared/origins.ts';
 
 export { clientIp, defaultOrigins };
 
