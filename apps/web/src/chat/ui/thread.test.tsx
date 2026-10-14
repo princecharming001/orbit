@@ -101,6 +101,7 @@ describe('the chat thread', () => {
       'settings',
       'import',
       'prep',
+      'list',
       'needs_confirmation',
       'error',
     ];

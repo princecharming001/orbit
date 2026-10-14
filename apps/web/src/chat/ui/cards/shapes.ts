@@ -522,6 +522,42 @@ export function readPrep(d: unknown): {
   };
 }
 
+export interface ListRow {
+  text: string;
+  sub?: string;
+  chip?: string;
+  href?: string;
+  links: { label: string; url: string }[];
+}
+
+/** list: `{ title, items: { text, sub?, chip?, href?, links? }[] }` */
+export function readList(d: unknown): { title?: string; items: ListRow[] } {
+  const o = obj(unpack(d));
+  const items = arr(o.items)
+    .map((x): ListRow | undefined => {
+      const r = obj(x);
+      const text = str(r.text);
+      if (!text) return undefined;
+      const href = str(r.href);
+      return {
+        text,
+        sub: str(r.sub),
+        chip: str(r.chip),
+        // only in-app routes become links here; outside pages come as `links`
+        href: href?.startsWith('/') ? href : undefined,
+        links: arr(r.links)
+          .map((l) => {
+            const lo = obj(l);
+            const url = str(lo.url);
+            return url && /^https?:\/\//.test(url) ? { label: str(lo.label) ?? 'source', url } : undefined;
+          })
+          .filter(present),
+      };
+    })
+    .filter(present);
+  return { title: str(o.title), items };
+}
+
 /** text: the words to copy or the file to save, when a text result carries one */
 export function readText(d: unknown): { quote?: string; file?: { name: string; json: string } } {
   const o = obj(unpack(d));

@@ -2,10 +2,14 @@ import type { ChatStage, Suggestion } from '@orbit/core';
 import { STAGE_LABELS, todayKey } from '@orbit/core';
 import { db } from '../../db/schema';
 import { DEMO_USER_ID } from '../../engine/demo';
+import { activeGoals, goalLine } from '../../engine/goals';
 import { liveLinkedInAvailable } from '../../engine/linkedinLive';
+import { rememberedLines } from '../../engine/memory';
+import { googleStatus, syncStatusNow } from '../../engine/serverSync';
 import { todayCards } from '../../engine/today';
 import { villageAvailable } from '../../engine/warmIntros';
 import { googleClientId } from '../../integrations/google';
+import { isServerUser } from '../../integrations/orbitApi';
 import { llmFeatures, readPrefs } from '../../integrations/prefs';
 import { sharedClaudeAvailable } from '../../integrations/shared-claude';
 import { getPanelHint } from '../panel/panelHint';
@@ -70,8 +74,23 @@ function cardLine(s: Suggestion, names: Map<string, string>): string {
   return `${s.id} ${s.kind}${who ? ` ${who}` : ''}${reason ? ` (${reason})` : ''}`;
 }
 
-export async function buildSnapshot(userId: string, now: Date): Promise<Snapshot> {
-  const [user, goals, chats, suggestions, briefs, outbound, integrations, people, targets, resumes] =
+/** How long the snapshot waits for memory before it goes without it (the turn should not stall on the server). */
+const REMEMBERED_TIMEOUT_MS = 2500;
+const REMEMBERED_MAX_CHARS = 1200;
+
+export async function buildSnapshot(
+  userId: string,
+  now: Date,
+  opts: { lastUserText?: string } = {},
+): Promise<Snapshot> {
+  const account = isServerUser(userId);
+  const remembered = account
+    ? rememberedLines({ id: userId }, opts.lastUserText, {
+        signal: AbortSignal.timeout(REMEMBERED_TIMEOUT_MS),
+        maxChars: REMEMBERED_MAX_CHARS,
+      }).catch(() => [] as string[])
+    : Promise.resolve([] as string[]);
+  const [user, goals, chats, suggestions, briefs, outbound, integrations, people, targets, resumes, goalsV3] =
     await Promise.all([
       db.users.get(userId),
       db.goals.get(userId),
@@ -91,6 +110,7 @@ export async function buildSnapshot(userId: string, now: Date): Promise<Snapshot
       db.people.where('userId').equals(userId).toArray(),
       db.targetCompanies.where('userId').equals(userId).toArray(),
       db.resumes.where('userId').equals(userId).count(),
+      activeGoals(userId),
     ]);
   const tz = user?.timezone || 'UTC';
   const { date, time } = fmtDate(now, tz);
@@ -139,6 +159,8 @@ export async function buildSnapshot(userId: string, now: Date): Promise<Snapshot
     : '0';
   const inFlight = outbound.length - drafts.length;
 
+  // account mode: Google is the account's own sign-in, and the server reports how the import is going
+  const serverGoogle = account ? googleStatus(syncStatusNow()) : undefined;
   const google = integrations.find((i) => i.provider === 'google');
   const linkedin = integrations.find((i) => i.provider === 'linkedin_csv');
   const live = integrations.find(
@@ -146,7 +168,9 @@ export async function buildSnapshot(userId: string, now: Date): Promise<Snapshot
   );
   const demo = integrations.find((i) => i.provider === 'demo');
   // the same "connected" the setup widget reads (setupStatus.ts): a Google row that was not revoked
-  const googleConnected = !!google && google.status !== 'revoked';
+  const googleConnected = account
+    ? serverGoogle?.status !== 'needs_reauth' && serverGoogle?.status !== 'revoked'
+    : !!google && google.status !== 'revoked';
   const daysAgo = (iso?: string) =>
     iso
       ? `${Math.max(0, Math.round((now.getTime() - new Date(iso).getTime()) / 86_400_000))} d ago`
@@ -186,14 +210,24 @@ export async function buildSnapshot(userId: string, now: Date): Promise<Snapshot
     targetCompanies: targets.filter((t) => t.status !== 'closed').length,
     claude: claudeAccess,
     demo: userId === DEMO_USER_ID,
+    account: account
+      ? {
+          google: serverGoogle?.status ?? 'unknown',
+          backfill: serverGoogle?.backfill ?? null,
+          messages: syncStatusNow()?.counts.messages,
+        }
+      : undefined,
   });
   const panel = getPanelHint();
   const panelLine = panel
     ? `Open panel: ${panel.title.replace(/\s+/g, ' ').trim().slice(0, 60)} (${panel.href.slice(0, 80)}). The student can see it next to the chat.`
     : '';
 
+  const memory = await remembered;
   const lines = [
     `Student: ${student}.${goalBits.length ? ` Goals: ${goalBits.join(', ')}.` : ''}`,
+    `Active goals (ids): ${goalsV3.length ? goalsV3.map((g) => `${g.id} ${goalLine(g)}`).join('; ') : 'none tracked'}.`,
+    ...(memory.length ? [`Remembered (ids): ${memory.join('; ')}.`] : []),
     `Pipeline (chats by stage, ${chats.filter((c) => !c.archivedAt).length} total): ${pipeline || 'empty'}. People: ${humans}.`,
     `Today's brief (ids): ${cardLines.length ? cardLines.join('; ') : 'nothing pending'}${moreCards ? `; ${moreCards} more` : ''}.`,
     `Drafts unsent: ${draftLine}.${inFlight ? ` In flight (queued or handed off): ${inFlight}.` : ''}`,

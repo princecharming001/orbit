@@ -296,7 +296,12 @@ export async function runTurn(
   const userMsg: Anthropic.Beta.BetaMessageParam = { role: 'user', content: userBlocks };
   await store.append(conversation.id, userMsg, clock());
   const messages: Anthropic.Beta.BetaMessageParam[] = [...history, userMsg];
-  const snapshot = await buildSnapshot(user.id, clock());
+  // the student's words of this turn pick what "Remembered" holds (account mode)
+  const lastUserText = userBlocks
+    .map((b) => (b.type === 'text' ? b.text : ''))
+    .join(' ')
+    .trim();
+  const snapshot = await buildSnapshot(user.id, clock(), { lastUserText });
   const previous = await store.lastSnapshotText(conversation.id);
   if (snapshotIsStale(previous ? snapshotKeyOf(previous) : undefined, snapshot)) {
     const sys: Anthropic.Beta.BetaMessageParam = {

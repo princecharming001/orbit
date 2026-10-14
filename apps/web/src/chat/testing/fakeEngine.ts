@@ -483,6 +483,22 @@ function envelopes(ctx: Ctx): Record<string, () => ResultEnvelope> {
       summary: `Saved a note on ${p0.firstName} with two facts.`,
       href: `/people/${p0.id}#notes`,
     }),
+    list: () => ({
+      kind: 'list',
+      data: {
+        title: 'Your goals',
+        items: [
+          { text: 'Land a PM internship', chip: 'Recruiting', sub: 'Stripe, Ramp', href: '/settings/goals' },
+          {
+            text: 'Raise a pre-seed',
+            chip: 'Fundraising',
+            links: [{ label: '[1]', url: 'https://example.com' }],
+          },
+        ],
+      },
+      summary: '2 goals: Land a PM internship; Raise a pre-seed.',
+      href: '/settings/goals',
+    }),
     facts: () => ({
       kind: 'facts',
       data: { person: p0, facts: fixtureFacts(p0) },
@@ -593,6 +609,7 @@ const ALL: [kind: string, tool: string, progress: string][] = [
   ['settings', 'update_settings', 'Changing a setting'],
   ['import', 'import_linkedin', 'Importing connections'],
   ['prep', 'get_prep', 'Preparing your brief'],
+  ['list', 'list_goals', 'Reading your goals'],
   ['needs_confirmation', 'send_draft', 'Getting ready to send'],
   ['error', 'get_chat', 'Finding the chat'],
 ];

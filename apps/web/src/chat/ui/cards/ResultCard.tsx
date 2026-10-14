@@ -30,6 +30,7 @@ import {
   readError,
   readFacts,
   readImport,
+  readList,
   readNote,
   readPeople,
   readPerson,
@@ -596,6 +597,47 @@ function Envelope({ env, block, actions }: { env: ResultEnvelope; block: ToolBlo
               </ol>
             </>
           )}
+        </GlassCard>
+      );
+    }
+    case 'list': {
+      const { title, items } = readList(d);
+      if (!items.length) return <Summary env={env} />;
+      return (
+        <GlassCard kind="list">
+          <CardHead title={title ?? env.summary} href={env.href} />
+          <ul className="divide-y divide-line-2" data-testid="list-rows">
+            {items.slice(0, 15).map((it, i) => (
+              <li key={i} className="py-1.5 flex items-start gap-2 min-w-0">
+                {it.chip && (
+                  <Chip tone="neutral" className="mt-0.5">
+                    {it.chip}
+                  </Chip>
+                )}
+                <div className="min-w-0 flex-1 text-[13.5px]">
+                  {it.href ? (
+                    <Link to={it.href} className="hover:underline">
+                      {it.text}
+                    </Link>
+                  ) : (
+                    <span>{it.text}</span>
+                  )}
+                  {it.links.map((l) => (
+                    <a
+                      key={l.url}
+                      href={l.url}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                      className="ml-1 align-super text-[10px] text-accent hover:underline"
+                    >
+                      {l.label}
+                    </a>
+                  ))}
+                  {it.sub && <div className="text-[12.5px] text-ink-3">{it.sub}</div>}
+                </div>
+              </li>
+            ))}
+          </ul>
         </GlassCard>
       );
     }

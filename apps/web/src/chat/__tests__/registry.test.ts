@@ -2,6 +2,7 @@ import type { User } from '@orbit/core';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { db } from '../../db/schema';
 import { loadDemo } from '../../engine/demo';
+import { saveGoal } from '../../engine/goals';
 import { execute, modelResult, registry, tools } from '../registry';
 import type { ResultEnvelope } from '../types';
 import { makeCtx, NOW } from './helpers';
@@ -38,7 +39,10 @@ async function demoIds() {
   const confirmStage = pending.find((s) => s.kind === 'confirm_stage');
   const confirmIntro = pending.find((s) => s.kind === 'confirm_intro');
   const merge = await db.merges.where('userId').equals(uid).first();
+  // a goal of the student's own for update_goal and archive_goal (local mode keeps goals in the browser)
+  const goal = await saveGoal(user, { kind: 'advice', title: 'Get advice on product roles' });
   return {
+    goal,
     people,
     byId,
     person: byId.get(thankYou.personId!)!,
@@ -188,6 +192,27 @@ describe('every tool parses and executes its example input against the demo', ()
       delete_all_data: {},
       load_demo: {},
       leave_demo: {},
+      // plan 16: goals and the tie score work locally; the account tools say they need an Orbit account
+      set_goal: { kind: 'fundraising', title: 'Raise a pre-seed', organizations: ['Sequoia'] },
+      list_goals: {},
+      update_goal: { goalId: ids.goal.id, status: 'paused', roles: ['PM'] },
+      archive_goal: { goalId: ids.goal.id },
+      explain_score: { personId: ids.person.id },
+      rate_closeness: { personId: ids.noChat.id, closeness: 3 },
+      research_person: { personId: ids.person.id },
+      get_dossier: { personId: ids.person.id },
+      find_people: { purpose: 'fundraising', query: 'seed investors in climate' },
+      add_sourced: { recommendationIds: ['rec_1'] },
+      list_replies: {},
+      draft_reply: { messageId: 'msg_1' },
+      pause_outreach: { until: '2026-12-20' },
+      list_due: {},
+      remember: { text: 'Prefers morning calls', kind: 'preference' },
+      recall: { query: 'calls' },
+      ask_for_intro: { pathId: 'path_1' },
+      book_call: { draftId: 'out_1', slotStart: '2026-10-21T14:00:00Z' },
+      set_autonomy: { level: 1 },
+      forget: { memoryId: 'mem_1' },
     };
     const missing = tools.map((t) => t.name).filter((n) => !(n in examples));
     expect(missing, 'tools without an example').toEqual([]);
