@@ -3,19 +3,8 @@ import { db } from '../db/schema';
 import { moveChat, upcomingMeeting } from './move';
 import { applyStage } from './stages';
 
-const DAY = 86_400_000;
-/** Days without an answer after the student's last message before a chat counts as gone quiet. */
-export const QUIET_DAYS = 7;
-const WAITING_STAGES: ChatStage[] = ['outreach_sent', 'replied', 'scheduling'];
-
-/** True when the student wrote last, at least a week ago, and the chat is still waiting on the other person. */
-export function wentQuiet(chat: CoffeeChat, now = new Date()): boolean {
-  if (!WAITING_STAGES.includes(chat.stage) || !chat.lastOutboundAt) return false;
-  if (chat.lastInboundAt && chat.lastInboundAt >= chat.lastOutboundAt) return false;
-  // moved on since the student last wrote ("They replied", a move on the board): an answer Orbit cannot see came in
-  if (chat.stage !== 'outreach_sent' && chat.stageEnteredAt > chat.lastOutboundAt) return false;
-  return now.getTime() - new Date(chat.lastOutboundAt).getTime() >= QUIET_DAYS * DAY;
-}
+// went-quiet is a cadence rule (plan 16 §9.2) and lives in core with the rest of the cadence scan
+export { QUIET_DAYS, wentQuiet } from '@orbit/core';
 
 export type MoveOutcome =
   /** the stage changed; `needsTime` when it is now Scheduled with no meeting on record ("When is the chat?") */

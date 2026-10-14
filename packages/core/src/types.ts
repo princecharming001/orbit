@@ -569,6 +569,8 @@ export interface CoffeeChat {
   stageEnteredAt: string;
   source: ChatSource;
   goalTags: string[];
+  /** the goal this chat serves (plan 16 §2.1: every chat carries one in account mode) */
+  goalId?: ID;
   outreachChannel?: Channel;
   firstOutreachAt?: string;
   lastOutboundAt?: string;

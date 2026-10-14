@@ -22,6 +22,7 @@ export * from './labels';
 export * from './linkedin/csv';
 export * from './notes/conflicts';
 export * from './notes/extract';
+export * from './pipeline/cadence';
 export * from './pipeline/introductions';
 export * from './pipeline/transitions';
 export * from './recommend/score';
