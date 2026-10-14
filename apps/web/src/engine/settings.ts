@@ -5,16 +5,32 @@ import { callApi, isServerUser } from '../integrations/orbitApi';
 
 // ---------- what the server reads ----------
 
+/** Per account: what is still to send, and the sends one after another (typing a link saves on every key). */
+const profileSends = new Map<string, { pending?: ProfileSettingsRequest; chain: Promise<boolean> }>();
+
 /**
  * Account mode: the settings the server's drafting and sending read (the postal address sales email needs, the
- * booking link, the time zone send windows follow) go to /settings/profile as well as into this browser. Best
- * effort: the local copy is already saved, and a refusal (an http link, a zone the server does not know) changes
- * nothing here. Resolves to whether the server took it; false outside account mode.
+ * booking link, the time zone send windows follow) go to /settings/profile as well as into this browser. Changes
+ * made while a send is out are merged into the next one, so the server ends on the latest value. Best effort: the
+ * local copy is already saved, and a refusal (an http link, a zone the server does not know) changes nothing here.
+ * Resolves to whether the server took the send that carried this change; false outside account mode.
  */
-export async function pushProfileSettings(userId: string, p: ProfileSettingsRequest): Promise<boolean> {
-  if (!isServerUser(userId) || !Object.keys(p).length) return false;
-  const r = await callApi('/settings/profile', p);
-  return r.ok;
+export function pushProfileSettings(userId: string, p: ProfileSettingsRequest): Promise<boolean> {
+  if (!isServerUser(userId) || !Object.keys(p).length) return Promise.resolve(false);
+  let q = profileSends.get(userId);
+  if (!q) {
+    q = { chain: Promise.resolve(false) };
+    profileSends.set(userId, q);
+  }
+  const queue = q;
+  queue.pending = { ...queue.pending, ...p };
+  queue.chain = queue.chain.then(async (previous) => {
+    const body = queue.pending;
+    if (!body) return previous;
+    queue.pending = undefined;
+    return (await callApi('/settings/profile', body)).ok;
+  });
+  return queue.chain;
 }
 
 // ---------- profile ----------

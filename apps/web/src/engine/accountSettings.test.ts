@@ -93,3 +93,25 @@ describe('signing in', () => {
     expect((await db.settings.get(user.id))?.schedulingLink).toBe('https://cal.com/maya');
   });
 });
+
+describe('typing a link', () => {
+  beforeEach(async () => {
+    await wipeDatabase();
+  });
+  afterEach(async () => {
+    await leaveFakeApi();
+  });
+
+  it('saves on every key, and the server ends on the last value with the sends in order', async () => {
+    const { api, user } = await signInToFakeApi();
+    const link = 'https://cal.com/maya';
+    await Promise.all([...link].map((_, i) => setSchedulingLink(user.id, link.slice(0, i + 1))));
+    expect(api.state.profile.schedulingLink).toBe(link);
+    const sent = api.calls
+      .filter((c) => c.route === '/settings/profile')
+      .map((c) => String(c.body.schedulingLink ?? ''));
+    // one send at a time, never an older value after a newer one
+    expect(sent.at(-1)).toBe(link);
+    for (let i = 1; i < sent.length; i++) expect(sent[i]!.length).toBeGreaterThan(sent[i - 1]!.length);
+  });
+});
