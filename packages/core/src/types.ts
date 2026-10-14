@@ -38,7 +38,15 @@ export type EdgeType =
   | 'email_cothread'
   | 'meeting_coattendee'
   | 'introduced_by'
-  | 'same_current_company';
+  | 'same_current_company'
+  /** both wrote on one thread (plan 16 §4.1) */
+  | 'email_exchange'
+  /** one wrote to the student with the other in To/Cc */
+  | 'email_cc'
+  /** LinkedIn mutual connection (Unipile connections_of) */
+  | 'linkedin_mutual'
+  /** an introducer Village returned */
+  | 'village_path';
 export type TouchpointKind =
   | 'email_in'
   | 'email_out'
@@ -344,7 +352,12 @@ export interface Edge {
   personAId: ID;
   personBId: ID;
   type: EdgeType;
+  /** w·c for ties inferred with a confidence (graph/ties.ts); w alone for v1 edges */
   weight: number;
+  /** c of the kind (§4.1); absent on v1 edges */
+  confidence?: number;
+  /** kinds behind the edge (one per kind today) */
+  kinds?: EdgeType[];
   evidence: Record<string, unknown> & { text?: string };
 }
 

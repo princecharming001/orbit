@@ -13,6 +13,7 @@ export * from './graph/introWeb';
 export * from './graph/layout';
 export { knownSizeBucket } from './graph/orgSize';
 export * from './graph/paths';
+export * from './graph/ties';
 export * from './labels';
 export * from './linkedin/csv';
 export * from './notes/conflicts';
