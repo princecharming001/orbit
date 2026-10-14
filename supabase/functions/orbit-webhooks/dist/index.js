@@ -401,7 +401,12 @@ var env = (name) => Deno.env.get(name) || void 0;
 var dbUrl = env("SUPABASE_DB_URL");
 var db = dbUrl ? connectDb(dbUrl, 2) : void 0;
 var pubsubToken = await resolveSecret(env, db, "ORBIT_PUBSUB_TOKEN", "orbit_pubsub_token");
-var unipileSecret = await resolveSecret(env, db, "ORBIT_UNIPILE_WEBHOOK_SECRET", "orbit_unipile_webhook_secret");
+var unipileSecret = await resolveSecret(
+  env,
+  db,
+  "ORBIT_UNIPILE_WEBHOOK_SECRET",
+  "orbit_unipile_webhook_secret"
+);
 var salt = env("ORBIT_LOG_SALT") ?? ((env("SUPABASE_SERVICE_ROLE_KEY") ?? "").slice(-16) || "orbit");
 Deno.serve(
   makeWebhookHandler({
