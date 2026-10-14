@@ -12,7 +12,7 @@ import type { WarmPath } from '../graph/route';
 import type { TieBand } from '../scoring/tieScore';
 import type { Dossier, Goal, GoalKind, MessageKind } from '../types';
 
-export type Channel = 'gmail' | 'linkedin';
+export type ApiChannel = 'gmail' | 'linkedin';
 
 // ---- integrations (P3) ---------------------------------------------------------------------------------------------
 
@@ -189,7 +189,7 @@ export interface ServerDraft {
   personId: string;
   chatId: string | null;
   goalId: string | null;
-  channel: Channel;
+  channel: ApiChannel;
   kind: MessageKind;
   subject: string | null;
   body: string;
@@ -209,7 +209,7 @@ export interface DraftComposeRequest {
   personId: string;
   kind: MessageKind;
   goalId?: string;
-  channel: Channel;
+  channel: ApiChannel;
   /** reply drafts point at the inbound message */
   replyToMessageId?: string;
 }
@@ -232,7 +232,7 @@ export interface ReplyItem {
   threadId: string;
   personId: string | null;
   personName: string;
-  channel: Channel;
+  channel: ApiChannel;
   replyClass: ReplyClass;
   confidence: number;
   receivedAt: string;
