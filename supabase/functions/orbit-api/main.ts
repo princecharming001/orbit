@@ -4,6 +4,7 @@
  */
 import { connectDb } from '../_shared/db.ts';
 import { makeLogger } from '../_shared/http.ts';
+import { resolveSecret } from '../_shared/secrets.ts';
 import { makeApiHandler } from './api.ts';
 
 const env = (name: string) => Deno.env.get(name) || undefined;
@@ -13,6 +14,8 @@ const num = (name: string, fallback: number) => {
 };
 const supabaseUrl = env('SUPABASE_URL');
 const dbUrl = env('SUPABASE_DB_URL');
+const db = dbUrl ? connectDb(dbUrl) : undefined;
+const sessionSecret = await resolveSecret(env, db, 'ORBIT_SESSION_SECRET', 'orbit_session_secret');
 const salt = env('ORBIT_LOG_SALT') ?? ((env('SUPABASE_SERVICE_ROLE_KEY') ?? '').slice(-16) || 'orbit');
 
 Deno.serve(
@@ -23,12 +26,12 @@ Deno.serve(
       googleRedirectUri:
         env('ORBIT_GOOGLE_REDIRECT_URI') ??
         (supabaseUrl ? `${supabaseUrl}/functions/v1/orbit-api/auth/google/callback` : undefined),
-      sessionSecret: env('ORBIT_SESSION_SECRET'),
+      sessionSecret,
       appUrl: env('ORBIT_APP_URL'),
       unipileKey: env('UNIPILE_API_KEY'),
       unipileBase: env('UNIPILE_BASE_URL'),
     },
-    db: dbUrl ? connectDb(dbUrl) : undefined,
+    db,
     log: makeLogger(salt),
     salt,
     limits: {

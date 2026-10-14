@@ -20,7 +20,7 @@ begin
   end if;
   foreach n in array array['orbit_cron_secret','orbit_session_secret','orbit_pubsub_token','orbit_unipile_webhook_secret'] loop
     if not exists (select 1 from vault.secrets where name = n) then
-      perform vault.create_secret(encode(extensions.gen_random_bytes(32), 'base64'), n);
+      perform vault.create_secret(replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', ''), n);
     end if;
   end loop;
 end $$;

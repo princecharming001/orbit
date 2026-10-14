@@ -107,6 +107,19 @@ function makeLogger(salt2, sink = (l) => console.log(l), now = () => /* @__PURE_
 var silentLogger = { log: async () => {
 } };
 
+// supabase/functions/_shared/secrets.ts
+async function resolveSecret(env2, db2, envName, vaultName) {
+  const fromEnv = env2(envName);
+  if (fromEnv) return fromEnv;
+  if (!db2) return void 0;
+  try {
+    const rows = await db2.sql`select orbit.secret(${vaultName}) as v`;
+    return rows[0]?.v || void 0;
+  } catch {
+    return void 0;
+  }
+}
+
 // supabase/functions/_shared/queue.ts
 var QUEUES = [
   "orbit_send",
@@ -137,16 +150,16 @@ function queueFor(kind) {
   if (!q) throw new Error(`no queue for job kind ${kind}`);
   return q;
 }
-function sqlQueue(db) {
+function sqlQueue(db2) {
   return {
     async enqueue(msg, opts = {}) {
       const queue = opts.queue ?? queueFor(msg.kind);
-      const [row] = await db.sql`
+      const [row] = await db2.sql`
         select orbit.enqueue(${queue}, ${msg}::jsonb, ${Math.max(0, Math.floor(opts.delaySec ?? 0))}::int) as id`;
       return row?.id == null ? null : Number(row.id);
     },
     async read(queue, vtSec, qty) {
-      const rows = await db.sql`
+      const rows = await db2.sql`
         select msg_id, read_ct, enqueued_at, message from pgmq.read(${queue}, ${vtSec}::int, ${qty}::int)`;
       return rows.map((r) => ({
         msgId: Number(r.msg_id),
@@ -156,13 +169,13 @@ function sqlQueue(db) {
       }));
     },
     async delete(queue, msgId) {
-      await db.sql`select pgmq.delete(${queue}, ${msgId}::bigint)`;
+      await db2.sql`select pgmq.delete(${queue}, ${msgId}::bigint)`;
     },
     async archive(queue, msgId) {
-      await db.sql`select pgmq.archive(${queue}, ${msgId}::bigint)`;
+      await db2.sql`select pgmq.archive(${queue}, ${msgId}::bigint)`;
     },
     async setVt(queue, msgId, vtSec) {
-      await db.sql`select msg_id from pgmq.set_vt(${queue}, ${msgId}::bigint, ${Math.floor(vtSec)}::int)`;
+      await db2.sql`select msg_id from pgmq.set_vt(${queue}, ${msgId}::bigint, ${Math.floor(vtSec)}::int)`;
     }
   };
 }
@@ -223,8 +236,8 @@ function parse(message) {
 }
 var short = (e) => (e instanceof Error ? `${e.name}: ${e.message}` : String(e)).slice(0, 500);
 async function runTick(deps) {
-  const db = deps.db;
-  const queue = deps.queue ?? sqlQueue(db);
+  const db2 = deps.db;
+  const queue = deps.queue ?? sqlQueue(db2);
   const handlers = deps.handlers ?? defaultHandlers();
   const clock = deps.clock ?? Date.now;
   const now = deps.now ?? (() => /* @__PURE__ */ new Date());
@@ -262,12 +275,12 @@ async function runTick(deps) {
   return s;
   async function deadLetter(q, msgId, message, error) {
     await queue.archive(q, msgId);
-    await db.sql`insert into orbit.dead_letters (queue, msg_id, message, error)
+    await db2.sql`insert into orbit.dead_letters (queue, msg_id, message, error)
       values (${q}, ${msgId}::bigint, ${JSON.stringify(message ?? null)}::jsonb, ${error})`;
     s.deadLettered++;
   }
   async function finish(runId, status, started, error) {
-    await db.sql`update orbit.job_runs set status = ${status}, error = ${error ?? null},
+    await db2.sql`update orbit.job_runs set status = ${status}, error = ${error ?? null},
       duration_ms = ${Math.round(clock() - started)}::int, finished_at = ${now()}::timestamptz
       where id = ${runId}::bigint`;
   }
@@ -275,7 +288,7 @@ async function runTick(deps) {
     const started = clock();
     const m = parse(message);
     if (!m) {
-      await db.sql`insert into orbit.job_runs (queue, msg_id, kind, status, attempt, error, finished_at, duration_ms)
+      await db2.sql`insert into orbit.job_runs (queue, msg_id, kind, status, attempt, error, finished_at, duration_ms)
         values (${q}, ${msgId}::bigint, 'invalid', 'error', ${readCt}::int, 'malformed message', ${now()}::timestamptz, 0)`;
       await deadLetter(q, msgId, message, "malformed message");
       s.failed++;
@@ -283,7 +296,7 @@ async function runTick(deps) {
     }
     const job = { ...m, queue: q, msgId, readCt };
     if (m.dedupeKey) {
-      const dup = await db.sql`select 1 from orbit.job_runs where dedupe_key = ${m.dedupeKey} and status = 'ok'
+      const dup = await db2.sql`select 1 from orbit.job_runs where dedupe_key = ${m.dedupeKey} and status = 'ok'
         and finished_at > ${now()}::timestamptz - interval '24 hours' limit 1`;
       if (dup.length) {
         await queue.delete(q, msgId);
@@ -293,7 +306,7 @@ async function runTick(deps) {
       }
     }
     if (m.userId) {
-      const live = await db.sql`select 1 from orbit.users where id = ${m.userId}::uuid and deleted_at is null`;
+      const live = await db2.sql`select 1 from orbit.users where id = ${m.userId}::uuid and deleted_at is null`;
       if (!live.length) {
         await queue.delete(q, msgId);
         await record("skipped", "user_gone");
@@ -308,14 +321,14 @@ async function runTick(deps) {
       s.failed++;
       return;
     }
-    const [run] = await db.sql`
+    const [run] = await db2.sql`
       insert into orbit.job_runs (queue, msg_id, user_id, kind, dedupe_key, status, attempt, started_at)
       values (${q}, ${msgId}::bigint, ${m.userId}::uuid, ${m.kind}, ${m.dedupeKey ?? null}, 'running', ${readCt}::int,
               ${now()}::timestamptz)
       returning id`;
     const runId = Number(run.id);
     try {
-      await handler(job, { db, queue, now });
+      await handler(job, { db: db2, queue, now });
       await queue.delete(q, msgId);
       await finish(runId, "ok", started);
       s.ok++;
@@ -355,7 +368,7 @@ async function runTick(deps) {
       });
     }
     async function record(status, error) {
-      await db.sql`insert into orbit.job_runs (queue, msg_id, user_id, kind, dedupe_key, status, attempt, error,
+      await db2.sql`insert into orbit.job_runs (queue, msg_id, user_id, kind, dedupe_key, status, attempt, error,
           finished_at, duration_ms)
         values (${q}, ${msgId}::bigint, ${m.userId}::uuid, ${m.kind}, ${m.dedupeKey ?? null}, ${status},
                 ${readCt}::int, ${error}, ${now()}::timestamptz, 0)`;
@@ -376,8 +389,8 @@ function makeWorkerHandler(deps) {
       if (!await timingSafeEqual(req.headers.get("x-orbit-cron"), deps.cronSecret))
         throw new HttpError(401, "unauthorized", "not the scheduler");
       await req.body?.cancel();
-      const db = deps.db;
-      const run = deps.tick(db).then(async (summary) => {
+      const db2 = deps.db;
+      const run = deps.tick(db2).then(async (summary) => {
         await log2.log({
           fn: "orbit-worker",
           route: "tick",
@@ -411,11 +424,13 @@ var budget = Number(env("ORBIT_WORKER_BUDGET_MS"));
 var salt = env("ORBIT_LOG_SALT") ?? ((env("SUPABASE_SERVICE_ROLE_KEY") ?? "").slice(-16) || "orbit");
 var log = makeLogger(salt);
 var runtime = typeof EdgeRuntime !== "undefined" ? EdgeRuntime : void 0;
+var db = dbUrl ? connectDb(dbUrl, 2) : void 0;
+var cronSecret = await resolveSecret(env, db, "ORBIT_CRON_SECRET", "orbit_cron_secret");
 Deno.serve(
   makeWorkerHandler({
-    cronSecret: env("ORBIT_CRON_SECRET"),
-    db: dbUrl ? connectDb(dbUrl, 2) : void 0,
-    tick: (db) => runTick({ db, log, budgetMs: Number.isFinite(budget) && budget > 0 ? budget : DEFAULT_BUDGET_MS }),
+    cronSecret,
+    db,
+    tick: (db2) => runTick({ db: db2, log, budgetMs: Number.isFinite(budget) && budget > 0 ? budget : DEFAULT_BUDGET_MS }),
     waitUntil: runtime ? (p) => runtime.waitUntil(p) : void 0,
     log
   })

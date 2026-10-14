@@ -132,6 +132,19 @@ function makeLogger(salt2, sink = (l) => console.log(l), now = () => /* @__PURE_
 var silentLogger = { log: async () => {
 } };
 
+// supabase/functions/_shared/secrets.ts
+async function resolveSecret(env2, db2, envName, vaultName) {
+  const fromEnv = env2(envName);
+  if (fromEnv) return fromEnv;
+  if (!db2) return void 0;
+  try {
+    const rows = await db2.sql`select orbit.secret(${vaultName}) as v`;
+    return rows[0]?.v || void 0;
+  } catch {
+    return void 0;
+  }
+}
+
 // supabase/functions/_shared/queue.ts
 var KIND_QUEUE = {
   "send.draft": "orbit_send",
@@ -154,16 +167,16 @@ function queueFor(kind) {
   if (!q) throw new Error(`no queue for job kind ${kind}`);
   return q;
 }
-function sqlQueue(db) {
+function sqlQueue(db2) {
   return {
     async enqueue(msg, opts = {}) {
       const queue = opts.queue ?? queueFor(msg.kind);
-      const [row] = await db.sql`
+      const [row] = await db2.sql`
         select orbit.enqueue(${queue}, ${msg}::jsonb, ${Math.max(0, Math.floor(opts.delaySec ?? 0))}::int) as id`;
       return row?.id == null ? null : Number(row.id);
     },
     async read(queue, vtSec, qty) {
-      const rows = await db.sql`
+      const rows = await db2.sql`
         select msg_id, read_ct, enqueued_at, message from pgmq.read(${queue}, ${vtSec}::int, ${qty}::int)`;
       return rows.map((r) => ({
         msgId: Number(r.msg_id),
@@ -173,13 +186,13 @@ function sqlQueue(db) {
       }));
     },
     async delete(queue, msgId) {
-      await db.sql`select pgmq.delete(${queue}, ${msgId}::bigint)`;
+      await db2.sql`select pgmq.delete(${queue}, ${msgId}::bigint)`;
     },
     async archive(queue, msgId) {
-      await db.sql`select pgmq.archive(${queue}, ${msgId}::bigint)`;
+      await db2.sql`select pgmq.archive(${queue}, ${msgId}::bigint)`;
     },
     async setVt(queue, msgId, vtSec) {
-      await db.sql`select msg_id from pgmq.set_vt(${queue}, ${msgId}::bigint, ${Math.floor(vtSec)}::int)`;
+      await db2.sql`select msg_id from pgmq.set_vt(${queue}, ${msgId}::bigint, ${Math.floor(vtSec)}::int)`;
     }
   };
 }
@@ -255,10 +268,10 @@ function decodePubSub(body2) {
     return void 0;
   }
 }
-async function gmailPush(db, queue, body2) {
+async function gmailPush(db2, queue, body2) {
   const n = decodePubSub(body2);
   if (!n) return null;
-  const [acct] = await db.sql`
+  const [acct] = await db2.sql`
     select a.user_id from orbit.integration_accounts a join orbit.users u on u.id = a.user_id
      where a.provider = 'google' and lower(a.email) = lower(${n.emailAddress}) and a.status = 'active'
        and u.deleted_at is null
@@ -281,28 +294,28 @@ function accountStatus(message) {
   if (["ERROR", "STOPPED", "PERMISSIONS"].includes(m)) return "error";
   return void 0;
 }
-async function firstSeen(db, eventId) {
-  const rows = await db.sql`
+async function firstSeen(db2, eventId) {
+  const rows = await db2.sql`
     insert into orbit.webhook_events (provider, event_id) values ('unipile', ${eventId})
     on conflict do nothing returning event_id`;
   return rows.length > 0;
 }
-async function linkedinUser(db, accountId) {
+async function linkedinUser(db2, accountId) {
   if (typeof accountId !== "string" || !accountId) return null;
-  const [row] = await db.sql`
+  const [row] = await db2.sql`
     select a.user_id from orbit.integration_accounts a join orbit.users u on u.id = a.user_id
      where a.provider = 'linkedin' and a.external_account_id = ${accountId} and u.deleted_at is null
      limit 1`;
   return row?.user_id ?? null;
 }
 var str = (v) => typeof v === "string" && v ? v : void 0;
-async function unipileEvent(db, queue, body2) {
+async function unipileEvent(db2, queue, body2) {
   const status = body2.AccountStatus;
   if (status && typeof status === "object") {
-    const userId = await linkedinUser(db, status.account_id);
+    const userId = await linkedinUser(db2, status.account_id);
     const next = accountStatus(String(status.message ?? ""));
     if (!userId || !next) return { result: "ignored", userId };
-    await db.sql`
+    await db2.sql`
       update orbit.integration_accounts
          set status = ${next}, last_error = ${next === "active" ? null : String(status.message).slice(0, 40)}
        where user_id = ${userId}::uuid and provider = 'linkedin'`;
@@ -313,9 +326,9 @@ async function unipileEvent(db, queue, body2) {
     const messageId = str(body2.message_id);
     const chatId = str(body2.chat_id);
     if (!messageId || !chatId) return { result: "ignored", userId: null };
-    const userId = await linkedinUser(db, body2.account_id);
+    const userId = await linkedinUser(db2, body2.account_id);
     if (!userId) return { result: "unknown_account", userId: null };
-    if (!await firstSeen(db, messageId)) return { result: "duplicate", userId };
+    if (!await firstSeen(db2, messageId)) return { result: "duplicate", userId };
     const own = body2.account_info?.user_id;
     const sender = body2.sender?.attendee_provider_id;
     if (own && sender && own === sender) return { result: "own_message", userId };
@@ -335,9 +348,9 @@ async function unipileEvent(db, queue, body2) {
   }
   if (event === "new_relation") {
     const providerId = str(body2.user_provider_id);
-    const userId = await linkedinUser(db, body2.account_id);
+    const userId = await linkedinUser(db2, body2.account_id);
     if (!providerId || !userId) return { result: userId ? "ignored" : "unknown_account", userId };
-    if (!await firstSeen(db, `relation:${body2.account_id}:${providerId}`))
+    if (!await firstSeen(db2, `relation:${body2.account_id}:${providerId}`))
       return { result: "duplicate", userId };
     await queue.enqueue({
       kind: "sync.linkedin",
@@ -354,24 +367,24 @@ async function unipileEvent(db, queue, body2) {
   }
   return { result: "ignored", userId: null };
 }
-async function unipileAccount(db, queue, body2) {
+async function unipileAccount(db2, queue, body2) {
   const status = String(body2.status ?? "").toUpperCase();
   const accountId = str(body2.account_id);
   const userId = isUuid(body2.name) ? body2.name : null;
   if (!["CREATION_SUCCESS", "RECONNECTED"].includes(status) || !accountId || !userId)
     return { result: "ignored", userId };
-  const [user] = await db.sql`select 1 from orbit.users where id = ${userId}::uuid and deleted_at is null`;
+  const [user] = await db2.sql`select 1 from orbit.users where id = ${userId}::uuid and deleted_at is null`;
   if (!user) return { result: "unknown_user", userId: null };
-  const taken = await db.sql`
+  const taken = await db2.sql`
     select 1 from orbit.integration_accounts
      where provider = 'linkedin' and external_account_id = ${accountId} and user_id <> ${userId}::uuid`;
   if (taken.length) return { result: "account_in_use", userId };
-  await db.sql`
+  await db2.sql`
     insert into orbit.integration_accounts (user_id, provider, external_account_id, status, last_error)
     values (${userId}::uuid, 'linkedin', ${accountId}, 'active', null)
     on conflict (user_id, provider) do update set
       external_account_id = excluded.external_account_id, status = 'active', last_error = null`;
-  await db.sql`
+  await db2.sql`
     insert into orbit.audit_log (user_id, actor, action, target_table, details)
     values (${userId}::uuid, 'system', 'linkedin.connected', 'integration_accounts', ${{ status }}::jsonb)`;
   await queue.enqueue({
@@ -386,12 +399,15 @@ async function unipileAccount(db, queue, body2) {
 // supabase/functions/orbit-webhooks/main.ts
 var env = (name) => Deno.env.get(name) || void 0;
 var dbUrl = env("SUPABASE_DB_URL");
+var db = dbUrl ? connectDb(dbUrl, 2) : void 0;
+var pubsubToken = await resolveSecret(env, db, "ORBIT_PUBSUB_TOKEN", "orbit_pubsub_token");
+var unipileSecret = await resolveSecret(env, db, "ORBIT_UNIPILE_WEBHOOK_SECRET", "orbit_unipile_webhook_secret");
 var salt = env("ORBIT_LOG_SALT") ?? ((env("SUPABASE_SERVICE_ROLE_KEY") ?? "").slice(-16) || "orbit");
 Deno.serve(
   makeWebhookHandler({
-    db: dbUrl ? connectDb(dbUrl, 2) : void 0,
-    pubsubToken: env("ORBIT_PUBSUB_TOKEN"),
-    unipileSecret: env("ORBIT_UNIPILE_WEBHOOK_SECRET"),
+    db,
+    pubsubToken,
+    unipileSecret,
     log: makeLogger(salt)
   })
 );

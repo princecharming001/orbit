@@ -184,6 +184,8 @@ describe('cron schedules', () => {
   });
 
   it('the worker tick posts to orbit-worker with the cron secret from Vault, and does nothing until both are set', async () => {
+    // the secrets migration generated both; take them away to see the tick stay idle
+    await t.db.sql`delete from vault.secrets where name in ('orbit_functions_url', 'orbit_cron_secret')`;
     const [none] = await t.db.sql<{ id: number | null }>`select orbit.cron_call_worker() as id`;
     expect(none!.id).toBeNull();
     await t.db

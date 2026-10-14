@@ -247,6 +247,7 @@ describe('orbit.delete_user (§10.4 test 4)', () => {
       insert into orbit.stage_events (user_id, chat_id, to_stage, status, actor) values ('${u}', '${chat}', 'warming', 'applied', 'user');
       insert into orbit.drafts (user_id, person_id, channel, kind, body) values ('${u}', '${p2}', 'gmail', 'first_touch', 'hi');
       insert into orbit.notes (user_id, source, occurred_at, raw_text) values ('${u}', 'chat', now(), 'n');
+      insert into orbit.uploads (user_id, kind, text) values ('${u}', 'resume', 'r');
       insert into orbit.facts (user_id, person_id, type, text) values ('${u}', '${p2}', 'role', 'PM');
       insert into orbit.dossiers (user_id, person_id, status) values ('${u}', '${p2}', 'ready');
       insert into orbit.research_cache (user_id, key, provider, response, expires_at) values ('${u}', 'k', 'exa', '{}', now());

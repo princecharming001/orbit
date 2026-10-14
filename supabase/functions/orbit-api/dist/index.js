@@ -192,10 +192,23 @@ function makeLogger(salt2, sink = (l) => console.log(l), now = () => /* @__PURE_
 var silentLogger = { log: async () => {
 } };
 
+// supabase/functions/_shared/secrets.ts
+async function resolveSecret(env2, db2, envName, vaultName) {
+  const fromEnv = env2(envName);
+  if (fromEnv) return fromEnv;
+  if (!db2) return void 0;
+  try {
+    const rows = await db2.sql`select orbit.secret(${vaultName}) as v`;
+    return rows[0]?.v || void 0;
+  } catch {
+    return void 0;
+  }
+}
+
 // supabase/functions/_shared/ratelimit.ts
-function sqlTake(db) {
+function sqlTake(db2) {
   return async (bs) => {
-    const [row] = await db.sql`
+    const [row] = await db2.sql`
       select allowed, over_bucket from public.orbit_proxy_take(
         ${bs.map((b) => b.key)}::text[], ${bs.map((b) => b.limit)}::int[], ${bs.map((b) => b.expires)}::timestamptz[])`;
     if (!row) throw new Error("counter store returned nothing");
@@ -272,11 +285,11 @@ async function verifyAccess(cfg, token) {
     throw unauthorized("the access token is not valid");
   }
 }
-async function createSession(db, cfg, userId, userAgent) {
+async function createSession(db2, cfg, userId, userAgent) {
   const now = (cfg.now ?? (() => /* @__PURE__ */ new Date()))();
   const refreshToken = randomToken(32);
   const expires = new Date(now.getTime() + REFRESH_TTL_DAYS * 864e5);
-  const [row] = await db.sql`
+  const [row] = await db2.sql`
     insert into orbit.sessions (user_id, refresh_hash, user_agent, created_at, last_used_at, expires_at)
     values (${userId}::uuid, ${await sha256Hex(refreshToken)}, ${userAgent?.slice(0, 300) ?? null},
             ${now}::timestamptz, ${now}::timestamptz, ${expires}::timestamptz)
@@ -284,12 +297,12 @@ async function createSession(db, cfg, userId, userAgent) {
   const access = await signAccess(cfg, { userId, sessionId: row.id });
   return { accessToken: access.token, refreshToken, expiresAt: access.expiresAt, sessionId: row.id };
 }
-async function refreshSession(db, cfg, refreshToken) {
+async function refreshSession(db2, cfg, refreshToken) {
   if (typeof refreshToken !== "string" || refreshToken.length < 20 || refreshToken.length > 200) return null;
   const now = (cfg.now ?? (() => /* @__PURE__ */ new Date()))();
   const next = randomToken(32);
   const expires = new Date(now.getTime() + REFRESH_TTL_DAYS * 864e5);
-  const [row] = await db.sql`
+  const [row] = await db2.sql`
     update orbit.sessions s
        set refresh_hash = ${await sha256Hex(next)}, last_used_at = ${now}::timestamptz, expires_at = ${expires}::timestamptz
       from orbit.users u
@@ -306,36 +319,36 @@ async function refreshSession(db, cfg, refreshToken) {
     userId: row.user_id
   };
 }
-async function revokeSession(db, refreshToken, now = /* @__PURE__ */ new Date()) {
+async function revokeSession(db2, refreshToken, now = /* @__PURE__ */ new Date()) {
   if (typeof refreshToken !== "string" || !refreshToken) return false;
-  const rows = await db.sql`
+  const rows = await db2.sql`
     update orbit.sessions set revoked_at = ${now}::timestamptz
      where refresh_hash = ${await sha256Hex(refreshToken)} and revoked_at is null
     returning id`;
   return rows.length > 0;
 }
-async function authenticate(db, cfg, header) {
+async function authenticate(db2, cfg, header) {
   const m = /^Bearer\s+(\S+)$/i.exec(header ?? "");
   if (!m) throw unauthorized("sign in first");
   const claims = await verifyAccess(cfg, m[1]);
   const now = (cfg.now ?? (() => /* @__PURE__ */ new Date()))();
-  const rows = await db.sql`
+  const rows = await db2.sql`
     select 1 from orbit.sessions s join orbit.users u on u.id = s.user_id
      where s.id = ${claims.sessionId}::uuid and s.user_id = ${claims.userId}::uuid
        and s.revoked_at is null and s.expires_at > ${now}::timestamptz and u.deleted_at is null`;
   if (!rows.length) throw unauthorized("the session has ended");
   return claims;
 }
-async function createLoginCode(db, userId, now = /* @__PURE__ */ new Date()) {
+async function createLoginCode(db2, userId, now = /* @__PURE__ */ new Date()) {
   const code = randomToken(32);
-  await db.sql`
+  await db2.sql`
     insert into orbit.login_codes (code_hash, user_id, expires_at)
     values (${await sha256Hex(code)}, ${userId}::uuid, ${new Date(now.getTime() + LOGIN_CODE_TTL_SEC * 1e3)}::timestamptz)`;
   return code;
 }
-async function redeemLoginCode(db, code, now = /* @__PURE__ */ new Date()) {
+async function redeemLoginCode(db2, code, now = /* @__PURE__ */ new Date()) {
   if (typeof code !== "string" || code.length < 20 || code.length > 200) return null;
-  const [row] = await db.sql`
+  const [row] = await db2.sql`
     update orbit.login_codes set used_at = ${now}::timestamptz
      where code_hash = ${await sha256Hex(code)} and used_at is null and expires_at > ${now}::timestamptz
     returning user_id`;
@@ -464,18 +477,18 @@ async function revokeToken(cfg, token) {
 }
 
 // supabase/functions/_shared/vault.ts
-function sqlVault(db) {
+function sqlVault(db2) {
   return {
     async put(name, secret) {
-      const [row] = await db.sql`select orbit.vault_put(${name}, ${secret}) as id`;
+      const [row] = await db2.sql`select orbit.vault_put(${name}, ${secret}) as id`;
       return row.id;
     },
     async get(id) {
-      const [row] = await db.sql`select orbit.vault_get(${id}::uuid) as v`;
+      const [row] = await db2.sql`select orbit.vault_get(${id}::uuid) as v`;
       return row?.v ?? null;
     },
     async delete(id) {
-      await db.sql`select orbit.vault_delete(${id}::uuid)`;
+      await db2.sql`select orbit.vault_delete(${id}::uuid)`;
     }
   };
 }
@@ -488,19 +501,19 @@ var SKIP_COLUMNS = {
   sessions: ["refresh_hash"],
   integration_accounts: ["token_secret_id"]
 };
-async function exportUser(db, userId) {
-  const tables = await db.sql`
+async function exportUser(db2, userId) {
+  const tables = await db2.sql`
     select c.table_name from information_schema.columns c
       join information_schema.tables b on b.table_schema = c.table_schema and b.table_name = c.table_name
      where c.table_schema = 'orbit' and c.column_name = 'user_id' and b.table_type = 'BASE TABLE'
      order by c.table_name`;
   const data = {};
-  const [user] = await db.sql`select to_jsonb(u) as row from orbit.users u where u.id = ${userId}::uuid`;
+  const [user] = await db2.sql`select to_jsonb(u) as row from orbit.users u where u.id = ${userId}::uuid`;
   data.users = user ? [user.row] : [];
   for (const { table_name } of tables) {
     if (SKIP_TABLES.has(table_name) || !/^[a-z_]+$/.test(table_name)) continue;
     const drop = [...SKIP_COLUMNS["*"], ...SKIP_COLUMNS[table_name] ?? []].map((c) => ` - '${c}'`).join("");
-    const rows = await db.query(
+    const rows = await db2.query(
       `select to_jsonb(t)${drop} as row from orbit.${table_name} t where t.user_id = $1::uuid`,
       [userId]
     );
@@ -739,16 +752,16 @@ function queueFor(kind) {
   if (!q) throw new Error(`no queue for job kind ${kind}`);
   return q;
 }
-function sqlQueue(db) {
+function sqlQueue(db2) {
   return {
     async enqueue(msg, opts = {}) {
       const queue = opts.queue ?? queueFor(msg.kind);
-      const [row] = await db.sql`
+      const [row] = await db2.sql`
         select orbit.enqueue(${queue}, ${msg}::jsonb, ${Math.max(0, Math.floor(opts.delaySec ?? 0))}::int) as id`;
       return row?.id == null ? null : Number(row.id);
     },
     async read(queue, vtSec, qty) {
-      const rows = await db.sql`
+      const rows = await db2.sql`
         select msg_id, read_ct, enqueued_at, message from pgmq.read(${queue}, ${vtSec}::int, ${qty}::int)`;
       return rows.map((r) => ({
         msgId: Number(r.msg_id),
@@ -758,13 +771,13 @@ function sqlQueue(db) {
       }));
     },
     async delete(queue, msgId) {
-      await db.sql`select pgmq.delete(${queue}, ${msgId}::bigint)`;
+      await db2.sql`select pgmq.delete(${queue}, ${msgId}::bigint)`;
     },
     async archive(queue, msgId) {
-      await db.sql`select pgmq.archive(${queue}, ${msgId}::bigint)`;
+      await db2.sql`select pgmq.archive(${queue}, ${msgId}::bigint)`;
     },
     async setVt(queue, msgId, vtSec) {
-      await db.sql`select msg_id from pgmq.set_vt(${queue}, ${msgId}::bigint, ${Math.floor(vtSec)}::int)`;
+      await db2.sql`select msg_id from pgmq.set_vt(${queue}, ${msgId}::bigint, ${Math.floor(vtSec)}::int)`;
     }
   };
 }
@@ -837,12 +850,12 @@ async function googleCallback(ctx) {
     return done(back, { error: "sign_in_failed" });
   }
 }
-async function upsertGoogleUser(db, g) {
+async function upsertGoogleUser(db2, g) {
   const name = parseName(g.name ?? [g.givenName, g.familyName].filter(Boolean).join(" "));
   const first = g.givenName ?? (name.first || null);
   const last = g.familyName ?? (name.last || null);
   const full = g.name ?? (name.full || null);
-  const [user] = await db.sql`
+  const [user] = await db2.sql`
     insert into orbit.users (google_sub, email, full_name, first_name, last_name, avatar_url, last_seen_at)
     values (${g.sub}, ${g.email}, ${full}, ${first}, ${last}, ${g.picture ?? null}, now())
     on conflict (google_sub) do update set
@@ -856,20 +869,20 @@ async function upsertGoogleUser(db, g) {
   if (!user || user.deleted_at) return null;
   const userId = user.id;
   const display = full ?? g.email;
-  await db.sql`
+  await db2.sql`
     insert into orbit.people (user_id, is_self, display_name, first_name, last_name, name_norm, primary_email,
                               photo_url, sources, first_seen_at)
     values (${userId}::uuid, true, ${display}, ${first}, ${last}, ${name.normalized || normalizeEmail(g.email)},
             ${g.email}, ${g.picture ?? null}, ${["google"]}::text[], now())
     on conflict (user_id) where is_self do nothing`;
-  const [self] = await db.sql`
+  const [self] = await db2.sql`
     select id from orbit.people where user_id = ${userId}::uuid and is_self`;
-  await db.sql`
+  await db2.sql`
     insert into orbit.person_identities (user_id, person_id, kind, value_norm, value_raw, source)
     values (${userId}::uuid, ${self.id}::uuid, 'email', ${normalizeEmail(g.email)}, ${g.email}, 'google')
     on conflict (user_id, kind, value_norm) do nothing`;
-  const secretId = g.refreshToken ? await sqlVault(db).put(googleRefreshName(userId), g.refreshToken) : null;
-  await db.sql`
+  const secretId = g.refreshToken ? await sqlVault(db2).put(googleRefreshName(userId), g.refreshToken) : null;
+  await db2.sql`
     insert into orbit.integration_accounts (user_id, provider, email, scopes, status, token_secret_id, last_error)
     values (${userId}::uuid, 'google', ${g.email}, ${g.scopes}::text[],
             ${secretId ? "active" : "needs_reauth"}, ${secretId}::uuid, null)
@@ -880,13 +893,13 @@ async function upsertGoogleUser(db, g) {
       status = case when coalesce(excluded.token_secret_id, orbit.integration_accounts.token_secret_id) is null
                     then 'needs_reauth' else 'active' end,
       last_error = null`;
-  await db.sql`
+  await db2.sql`
     insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
     values (${userId}::uuid, 'user', 'auth.sign_in', 'users', ${userId}, ${{ scopes: g.scopes.length }}::jsonb)`;
   return userId;
 }
-async function loadUser(db, userId) {
-  const [u] = await db.sql`
+async function loadUser(db2, userId) {
+  const [u] = await db2.sql`
     select id, email, full_name, first_name, last_name, avatar_url, school, grad_year, timezone, autonomy_level,
            settings, onboarding, created_at
       from orbit.users where id = ${userId}::uuid and deleted_at is null`;
@@ -1033,8 +1046,8 @@ function shapeRow(t, row) {
 async function syncStatus(ctx) {
   return json(200, await statusFor(ctx.db, ctx.userId));
 }
-async function statusFor(db, userId) {
-  const [counts] = await db.sql`
+async function statusFor(db2, userId) {
+  const [counts] = await db2.sql`
     select
       (select count(*) from orbit.people where user_id = ${userId}::uuid and not is_self
          and deleted_at is null and merged_into is null)::int as people,
@@ -1046,11 +1059,11 @@ async function statusFor(db, userId) {
       (select count(*) from orbit.goals where user_id = ${userId}::uuid and deleted_at is null and status = 'active')::int as goals,
       (select count(*) from orbit.chats where user_id = ${userId}::uuid and archived_at is null)::int as chats,
       (select count(*) from orbit.drafts where user_id = ${userId}::uuid and status = 'draft')::int as drafts`;
-  const accounts = await db.sql`
+  const accounts = await db2.sql`
     select provider, status, email, scopes, external_account_id is not null as linked, sync_state,
            last_synced_at, last_error, watch_expires_at
       from orbit.integration_accounts where user_id = ${userId}::uuid order by provider`;
-  const pending = await db.query(
+  const pending = await db2.query(
     `select (${QUEUES.map((q) => `(select count(*) from pgmq.q_${q} where message->>'userId' = $1)`).join(" + ")})::int as n`,
     [userId]
   );
@@ -1120,7 +1133,7 @@ async function syncPull(ctx) {
   const out = await pull(ctx.db, ctx.userId, { cursor, tables, limit, upTo });
   return json(200, out);
 }
-async function pull(db, userId, o) {
+async function pull(db2, userId, o) {
   const changes = {};
   const deleted = {};
   const next = { ...o.cursor };
@@ -1128,7 +1141,7 @@ async function pull(db, userId, o) {
   for (const t of o.tables) {
     const pos = o.cursor[t.table];
     const del = t.deletedWhen ? `(${t.deletedWhen})` : "false";
-    const rows = await db.query(
+    const rows = await db2.query(
       `select to_jsonb(t) as row,
               to_char(t.${t.cursor} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as _ts,
               t.${t.key}::text as _k, ${del} as _del
@@ -1150,7 +1163,7 @@ async function pull(db, userId, o) {
     if (last) next[t.table] = { t: last._ts, k: last._k };
   }
   const names = o.tables.map((t) => t.table);
-  const audits = await db.sql`
+  const audits = await db2.sql`
     select id, target_table, target_id from orbit.audit_log
      where user_id = ${userId}::uuid and action = 'sync.delete' and id > ${o.cursor._audit ?? 0}::bigint
        and target_table = any(${names}::text[])
@@ -1311,7 +1324,7 @@ async function syncPush(ctx) {
   for (const raw of body.changes) results.push(await applyChange(ctx.db, ctx.userId, raw));
   return json(200, { results });
 }
-async function applyChange(db, userId, raw) {
+async function applyChange(db2, userId, raw) {
   const parsed = ChangeS.safeParse(raw);
   const table = raw?.table;
   const id = raw?.id;
@@ -1322,7 +1335,7 @@ async function applyChange(db, userId, raw) {
     const c = parsed.data;
     const spec = PUSH[c.table];
     if (!spec) throw new ChangeError("not_allowed", `${c.table} cannot be changed from the app`);
-    const row = await db.begin(async (tx) => {
+    const row = await db2.begin(async (tx) => {
       if (c.op === "delete") return remove(tx, userId, spec, c.id);
       if (spec.table === "drafts") return pushDraft(tx, userId, c.id, c.row ?? {});
       if (spec.write === "none")
@@ -1344,22 +1357,22 @@ var shape = (table, row) => {
   const t = PULL_BY_NAME.get(table);
   return row && t ? shapeRow(t, row) : row;
 };
-async function audit(db, userId, action, table, id, fields = []) {
-  await db.sql`
+async function audit(db2, userId, action, table, id, fields = []) {
+  await db2.sql`
     insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
     values (${userId}::uuid, 'user', ${action}, ${table}, ${id}, ${{ fields }}::jsonb)`;
 }
-async function checkOwned(db, userId, table, ids) {
+async function checkOwned(db2, userId, table, ids) {
   const unique = [...new Set(ids)];
   if (!unique.length) return;
-  const [r] = await db.query(
+  const [r] = await db2.query(
     `select count(*)::int as n from orbit.${table} where user_id = $1::uuid and id = any($2::uuid[])`,
     [userId, unique]
   );
   if ((r?.n ?? 0) !== unique.length)
     throw new ChangeError("not_found", `a referenced ${table} row was not found`);
 }
-async function validFields(db, userId, spec, row) {
+async function validFields(db2, userId, spec, row) {
   const out = [];
   for (const [name, field] of Object.entries(spec.fields)) {
     if (!(name in row)) continue;
@@ -1367,7 +1380,7 @@ async function validFields(db, userId, spec, row) {
     if (!r.success) throw new ChangeError("invalid", `${name}: ${r.error.issues[0]?.message ?? "invalid"}`);
     if (field.owned && r.data != null)
       await checkOwned(
-        db,
+        db2,
         userId,
         field.owned,
         Array.isArray(r.data) ? r.data : [r.data]
@@ -1376,11 +1389,11 @@ async function validFields(db, userId, spec, row) {
   }
   return out;
 }
-async function write(db, userId, spec, id, row) {
+async function write(db2, userId, spec, id, row) {
   const keyCol = spec.key;
-  if (keyCol === "person_id") await checkOwned(db, userId, "people", [id]);
-  const fields = await validFields(db, userId, spec, row);
-  const [existing] = await db.query(
+  if (keyCol === "person_id") await checkOwned(db2, userId, "people", [id]);
+  const fields = await validFields(db2, userId, spec, row);
+  const [existing] = await db2.query(
     `select user_id from orbit.${spec.table} where ${keyCol} = $1::uuid ${keyCol === "person_id" ? "and user_id = $2::uuid" : ""}`,
     keyCol === "person_id" ? [id, userId] : [id]
   );
@@ -1390,21 +1403,21 @@ async function write(db, userId, spec, id, row) {
   if (existing || spec.write === "update") {
     if (!existing) throw new ChangeError("not_found", `${spec.table} ${id} was not found`);
     if (!fields.length) {
-      const [cur] = await db.query(
+      const [cur] = await db2.query(
         `select to_jsonb(t) as row from orbit.${spec.table} t where t.${keyCol} = $1::uuid and t.user_id = $2::uuid`,
         [id, userId]
       );
       return shape(spec.table, cur?.row);
     }
     const sets = fields.map((x, i) => `${x.field.col} = $${i + 3}::${x.field.type}`).join(", ");
-    const [r2] = await db.query(
+    const [r2] = await db2.query(
       `update orbit.${spec.table} t set ${sets}
         where t.${keyCol} = $1::uuid and t.user_id = $2::uuid${softDeleted} returning to_jsonb(t) as row`,
       [id, userId, ...fields.map((x) => x.value)]
     );
     if (!r2) throw new ChangeError("not_found", `${spec.table} ${id} was not found`);
     await audit(
-      db,
+      db2,
       userId,
       "sync.update",
       spec.table,
@@ -1417,12 +1430,12 @@ async function write(db, userId, spec, id, row) {
     if (!fields.some((x) => x.name === name)) throw new ChangeError("invalid", `${name} is required`);
   const cols = [keyCol, "user_id", ...fields.map((x) => x.field.col)];
   const vals = ["$1::uuid", "$2::uuid", ...fields.map((x, i) => `$${i + 3}::${x.field.type}`)];
-  const [r] = await db.query(
+  const [r] = await db2.query(
     `insert into orbit.${spec.table} as t (${cols.join(", ")}) values (${vals.join(", ")}) returning to_jsonb(t) as row`,
     [id, userId, ...fields.map((x) => x.value)]
   );
   await audit(
-    db,
+    db2,
     userId,
     "sync.insert",
     spec.table,
@@ -1431,12 +1444,12 @@ async function write(db, userId, spec, id, row) {
   );
   return shape(spec.table, r?.row);
 }
-async function remove(db, userId, spec, id) {
+async function remove(db2, userId, spec, id) {
   if (!spec.del) throw new ChangeError("not_allowed", `${spec.table} cannot be deleted from the app`);
   const sql = spec.del === "soft" ? `update orbit.${spec.table} set deleted_at = now() where ${spec.key} = $1::uuid and user_id = $2::uuid and deleted_at is null returning 1` : `delete from orbit.${spec.table} where ${spec.key} = $1::uuid and user_id = $2::uuid returning 1`;
-  const rows = await db.query(sql, [id, userId]);
+  const rows = await db2.query(sql, [id, userId]);
   if (!rows.length) throw new ChangeError("not_found", `${spec.table} ${id} was not found`);
-  await audit(db, userId, "sync.delete", spec.table, id);
+  await audit(db2, userId, "sync.delete", spec.table, id);
   return void 0;
 }
 var DraftPatchS = z.object({
@@ -1444,13 +1457,13 @@ var DraftPatchS = z.object({
   subject: z.string().max(200).nullable().optional(),
   body: z.string().trim().min(1).max(2e4).optional()
 });
-async function pushDraft(db, userId, id, row) {
+async function pushDraft(db2, userId, id, row) {
   const p = DraftPatchS.safeParse({ status: row.status, subject: row.subject, body: row.body });
   if (!p.success) throw new ChangeError("invalid", p.error.issues[0]?.message ?? "invalid draft change");
   const { status, subject, body } = p.data;
   const hasSubject = "subject" in row;
   if (!status && !hasSubject && body === void 0) throw new ChangeError("invalid", "nothing to change");
-  const [r] = await db.sql`
+  const [r] = await db2.sql`
     update orbit.drafts t set
       subject = case when ${hasSubject}::boolean then ${subject ?? null}::text else t.subject end,
       body = coalesce(${body ?? null}::text, t.body),
@@ -1459,13 +1472,13 @@ async function pushDraft(db, userId, id, row) {
      where t.id = ${id}::uuid and t.user_id = ${userId}::uuid and t.status = 'draft'
     returning to_jsonb(t) as row`;
   if (!r) {
-    const [cur] = await db.sql`
+    const [cur] = await db2.sql`
       select status from orbit.drafts where id = ${id}::uuid and user_id = ${userId}::uuid`;
     if (!cur) throw new ChangeError("not_found", `drafts ${id} was not found`);
     throw new ChangeError("conflict", `the draft is already ${cur.status}`);
   }
   const changed = ["status", "subject", "body"].filter((k) => k in row);
-  await audit(db, userId, "sync.update", "drafts", id, changed);
+  await audit(db2, userId, "sync.update", "drafts", id, changed);
   return shape("drafts", r.row);
 }
 
@@ -1558,13 +1571,13 @@ function makeApiHandler(deps) {
       if (!r.method.split("|").includes(req.method)) throw new HttpError(405, "method_not_allowed", r.method);
       const missing = missingSecrets(deps, !!r.google);
       if (missing.length) return unconfigured(h, missing);
-      const db = deps.db;
+      const db2 = deps.db;
       const visitor = (await sha256Hex(`${salt2}:${clientIp(req)}`)).slice(0, 32);
       await limit(ipBuckets("api", visitor, now(), limits.ipPerMinute));
       const ctx = {
         req,
         url,
-        db,
+        db: db2,
         env: { ...deps.env, appUrl },
         session: { secret: deps.env.sessionSecret, now },
         google,
@@ -1574,7 +1587,7 @@ function makeApiHandler(deps) {
         pullLagMs: deps.pullLagMs ?? 2e3
       };
       if (r.auth) {
-        const claims = await authenticate(db, ctx.session, req.headers.get("authorization"));
+        const claims = await authenticate(db2, ctx.session, req.headers.get("authorization"));
         ctx.userId = userId = claims.userId;
         ctx.sessionId = claims.sessionId;
         const who = (await sha256Hex(`${salt2}:${claims.userId}`)).slice(0, 32);
@@ -1618,6 +1631,8 @@ var num = (name, fallback) => {
 };
 var supabaseUrl = env("SUPABASE_URL");
 var dbUrl = env("SUPABASE_DB_URL");
+var db = dbUrl ? connectDb(dbUrl) : void 0;
+var sessionSecret = await resolveSecret(env, db, "ORBIT_SESSION_SECRET", "orbit_session_secret");
 var salt = env("ORBIT_LOG_SALT") ?? ((env("SUPABASE_SERVICE_ROLE_KEY") ?? "").slice(-16) || "orbit");
 Deno.serve(
   makeApiHandler({
@@ -1625,12 +1640,12 @@ Deno.serve(
       googleClientId: env("ORBIT_GOOGLE_CLIENT_ID"),
       googleClientSecret: env("ORBIT_GOOGLE_CLIENT_SECRET"),
       googleRedirectUri: env("ORBIT_GOOGLE_REDIRECT_URI") ?? (supabaseUrl ? `${supabaseUrl}/functions/v1/orbit-api/auth/google/callback` : void 0),
-      sessionSecret: env("ORBIT_SESSION_SECRET"),
+      sessionSecret,
       appUrl: env("ORBIT_APP_URL"),
       unipileKey: env("UNIPILE_API_KEY"),
       unipileBase: env("UNIPILE_BASE_URL")
     },
-    db: dbUrl ? connectDb(dbUrl) : void 0,
+    db,
     log: makeLogger(salt),
     salt,
     limits: {
