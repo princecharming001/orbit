@@ -1,0 +1,17 @@
+{
+  "requestId": "req_talks_jane",
+  "results": [
+    {
+      "id": "https://pod.example/ep-88",
+      "url": "https://pod.example/ep-88",
+      "title": "Ep. 88: Robots that fit the shelves you have, with Jane Doe of Northwind Robotics",
+      "publishedDate": "2026-08-20T00:00:00.000Z",
+      "author": null,
+      "highlights": [
+        "Jane Doe explains why Northwind Robotics designs for retrofits instead of new warehouses."
+      ],
+      "highlightScores": [0.55]
+    }
+  ],
+  "costDollars": { "total": 0.012 }
+}

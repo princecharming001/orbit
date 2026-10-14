@@ -1,0 +1,29 @@
+{
+  "requestId": "req_contents_jane",
+  "results": [
+    {
+      "id": "https://www.linkedin.com/in/jane-doe-nw",
+      "url": "https://www.linkedin.com/in/jane-doe-nw",
+      "title": "Jane Doe - VP Engineering - Northwind Robotics | LinkedIn",
+      "text": "Jane Doe. VP Engineering at Northwind Robotics. Previously robotics lead at Acme Logistics. Stanford MS in Mechanical Engineering."
+    },
+    {
+      "id": "https://news.example/northwind-series-b",
+      "url": "https://news.example/northwind-series-b",
+      "title": "Northwind Robotics raises $40M Series B",
+      "text": "Northwind Robotics raised a $40M Series B led by Harbor Ventures. Jane Doe, VP Engineering at Northwind Robotics, said the company will hire 30 engineers in 2027."
+    },
+    {
+      "id": "https://pod.example/ep-88",
+      "url": "https://pod.example/ep-88",
+      "title": "Ep. 88: Robots that fit the shelves you have",
+      "text": "In this episode Jane Doe of Northwind Robotics talks about retrofitting existing warehouses, hiring for field reliability, and mentoring new grads."
+    }
+  ],
+  "statuses": [
+    { "id": "https://www.linkedin.com/in/jane-doe-nw", "status": "success" },
+    { "id": "https://news.example/northwind-series-b", "status": "success" },
+    { "id": "https://pod.example/ep-88", "status": "success" }
+  ],
+  "costDollars": { "total": 0.003 }
+}

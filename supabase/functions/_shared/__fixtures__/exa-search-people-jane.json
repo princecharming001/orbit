@@ -1,0 +1,26 @@
+{
+  "requestId": "req_people_jane",
+  "results": [
+    {
+      "id": "https://www.linkedin.com/in/jane-doe-nw",
+      "url": "https://www.linkedin.com/in/jane-doe-nw",
+      "title": "Jane Doe - VP Engineering - Northwind Robotics | LinkedIn",
+      "publishedDate": null,
+      "author": "Jane Doe",
+      "highlights": [
+        "Jane Doe leads engineering at Northwind Robotics, where her team builds picking robots for mid-size warehouses."
+      ],
+      "highlightScores": [0.61]
+    },
+    {
+      "id": "https://sweetspot.example/about",
+      "url": "https://sweetspot.example/about",
+      "title": "Jane Doe - Pastry Chef - Sweet Spot Bakery",
+      "publishedDate": null,
+      "author": null,
+      "highlights": ["Jane Doe opened Sweet Spot Bakery in Portland in 2015."],
+      "highlightScores": [0.33]
+    }
+  ],
+  "costDollars": { "total": 0.012, "search": { "neural": 0.007 }, "contents": { "highlights": 0.005 } }
+}
