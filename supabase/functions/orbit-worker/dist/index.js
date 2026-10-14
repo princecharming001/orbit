@@ -4543,6 +4543,33 @@ function checkSend(d, ctx) {
   const approved = !!ctx.approvedHash && ctx.approvedHash === messageHash(d);
   return approved ? all.filter((v) => v.kind === "forbidden") : all;
 }
+var AUTO_SEND_DAILY_CAP = 5;
+var AUTO_SEND_MIN_SCORE = 40;
+var AUTO_SEND_CLASSES = /* @__PURE__ */ new Set(["scheduling", "thanks", "out_of_office"]);
+function localHour(d, tz) {
+  if (!tz) return d.getUTCHours();
+  return Number(
+    new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "numeric", hourCycle: "h23" }).format(d)
+  );
+}
+function autonomyAllows(d, ctx) {
+  const reasons = [];
+  const level = ctx.goalAutonomy ?? ctx.userAutonomy;
+  if (level < 2) reasons.push(`autonomy level ${level}`);
+  if (d.channel !== "gmail") reasons.push("not Gmail");
+  const bothWrote = ctx.history.some((m) => m.direction === "in") && ctx.history.some((m) => m.direction === "out");
+  if (!ctx.inThread || !bothWrote) reasons.push("not a reply in a two-way thread");
+  if (!AUTO_SEND_CLASSES.has(ctx.replyClass)) reasons.push(`reply class ${ctx.replyClass}`);
+  if (ctx.recipientScore < AUTO_SEND_MIN_SCORE)
+    reasons.push(`score ${ctx.recipientScore} below ${AUTO_SEND_MIN_SCORE}`);
+  const holds = checkSend(d, { ...ctx, approvedHash: void 0 });
+  for (const v of holds) reasons.push(v.rule);
+  if (!ctx.validatorOk) reasons.push("validator failed");
+  if (ctx.autoSentToday >= AUTO_SEND_DAILY_CAP) reasons.push(`${ctx.autoSentToday} auto-sends today`);
+  const hour = localHour(ctx.now, ctx.recipientTimeZone ?? ctx.timeZone);
+  if (hour >= 21 || hour < 7) reasons.push(`${hour}:00 in their time zone`);
+  return { allowed: reasons.length === 0, reasons: [...new Set(reasons)] };
+}
 
 // packages/core/src/server/mappers.ts
 var u = (v) => v === null ? void 0 : v;
@@ -12745,8 +12772,145 @@ ${lines.join("\n")}
   return { replyClass: cls, confidence, by };
 }
 
+// supabase/functions/_shared/replies/replies.ts
+async function draftReply(s, userId, messageId, actor = "user") {
+  const m = await loadReplyMessage(s.db, userId, messageId);
+  if (m.reply_class === "unsubscribe")
+    throw new HttpError(409, "unsubscribe", "they asked not to be contacted; no reply is drafted");
+  if (!m.from_person_id) throw new HttpError(409, "unknown_sender", "Orbit does not know who sent this yet");
+  return composeDraft(s, {
+    userId,
+    personId: m.from_person_id,
+    kind: "reply",
+    channel: m.provider,
+    replyToMessageId: m.id,
+    actor
+  });
+}
+var DRAFT_CLASSES = /* @__PURE__ */ new Set([
+  "interested",
+  "scheduling",
+  "question",
+  "objection",
+  "referral",
+  "not_now",
+  "decline"
+]);
+async function maybeAutoReply(db2, userId, messageId, deps = {}) {
+  const s = deps.services ?? makeServices(deps.config ?? { env: {} }, { db: db2, now: deps.now });
+  const now = s.now();
+  const m = await loadReplyMessage(db2, userId, messageId);
+  const cls = m.reply_class;
+  if (!cls) return { action: "none", reason: "not_classified" };
+  if (cls === "unsubscribe") {
+    if (m.from_person_id) {
+      await db2.sql`update orbit.people set do_not_contact = true where id = ${m.from_person_id}::uuid and user_id = ${userId}::uuid`;
+      await db2.sql`
+        update orbit.drafts set status = 'cancelled', cancel_reason = 'unsubscribe'
+         where user_id = ${userId}::uuid and person_id = ${m.from_person_id}::uuid
+           and status in ('draft', 'approved', 'scheduled')`;
+      const chats = await db2.sql`
+        select id from orbit.chats where user_id = ${userId}::uuid and person_id = ${m.from_person_id}::uuid
+           and archived_at is null`;
+      for (const c of chats) await moveChat(db2, userId, c.id, "declined", "asked not to be contacted", now);
+      await db2.sql`
+        insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+        values (${userId}::uuid, 'agent', 'person.do_not_contact', 'people', ${m.from_person_id}, ${{ source: "reply" }}::jsonb)`;
+    }
+    return { action: "unsubscribed" };
+  }
+  if (!m.from_person_id) return { action: "none", reason: "unknown_sender" };
+  if (!DRAFT_CLASSES.has(cls)) return { action: "none", reason: `class ${cls}` };
+  const autoClass = cls === "scheduling";
+  const [existing] = await db2.sql`
+    select * from orbit.drafts
+     where user_id = ${userId}::uuid and ask->>'replyToMessageId' = ${m.id}
+       and status not in ('discarded', 'cancelled')
+     order by created_at desc limit 1`;
+  let draft;
+  if (existing) {
+    if (existing.status !== "draft") return { action: "auto_sent", draftId: existing.id };
+    draft = existing;
+  } else {
+    try {
+      draft = (await draftReply(s, userId, m.id, "agent")).draft;
+    } catch (e) {
+      if (e instanceof HttpError) return { action: "none", reason: e.code };
+      throw e;
+    }
+  }
+  const [u2] = await db2.sql`
+    select email, full_name, autonomy_level, timezone, settings from orbit.users where id = ${userId}::uuid`;
+  const [p] = await db2.sql`
+    select p.timezone, p.title, p.headline, p.do_not_contact, ts.score::int as score
+      from orbit.people p left join orbit.tie_scores ts on ts.person_id = p.id and ts.user_id = p.user_id
+     where p.id = ${draft.person_id}::uuid`;
+  const [g] = draft.goal_id ? await db2.sql`select autonomy_level from orbit.goals where id = ${draft.goal_id}::uuid` : [];
+  const userTz = validZone(u2.timezone) ?? "America/New_York";
+  const dayStart = zonedTime2(
+    new Intl.DateTimeFormat("en-CA", { timeZone: userTz }).format(now),
+    0,
+    0,
+    userTz
+  );
+  const [today] = await db2.sql`
+    select count(*)::int as n from orbit.audit_log
+     where user_id = ${userId}::uuid and action = 'draft.auto_approve' and created_at >= ${dayStart}::timestamptz`;
+  const meta = draft.ask ?? {};
+  const history = await historyWith(db2, userId, draft.person_id);
+  const level = (n) => n === 0 || n === 1 || n === 2 ? n : void 0;
+  const verdict = autonomyAllows(
+    {
+      kind: "reply",
+      channel: draft.channel,
+      personId: draft.person_id,
+      subject: draft.subject,
+      body: draft.body
+    },
+    {
+      now,
+      userEmails: [u2.email],
+      userName: u2.full_name ?? "",
+      recipient: {
+        doNotContact: p?.do_not_contact,
+        title: p?.title ?? void 0,
+        headline: p?.headline ?? void 0
+      },
+      history,
+      schedulingLink: typeof u2.settings?.scheduling_link === "string" ? u2.settings.scheduling_link : void 0,
+      offeredSlots: meta.slots,
+      timeZone: userTz,
+      userAutonomy: level(u2.autonomy_level) ?? 0,
+      goalAutonomy: level(g?.autonomy_level),
+      replyClass: cls,
+      inThread: !!draft.thread_external_id,
+      recipientScore: p?.score ?? 0,
+      validatorOk: !!draft.validator?.ok,
+      autoSentToday: today?.n ?? 0,
+      recipientTimeZone: validZone(p?.timezone) ?? userTz
+    }
+  );
+  if (!autoClass || !verdict.allowed)
+    return { action: "drafted", draftId: draft.id, reasons: autoClass ? verdict.reasons : [`class ${cls}`] };
+  const [approved] = await db2.sql`
+    update orbit.drafts set status = 'approved', send_at = ${now}::timestamptz, autonomy_level = 2
+     where id = ${draft.id}::uuid and status = 'draft' returning id`;
+  if (!approved) return { action: "drafted", draftId: draft.id, reasons: ["changed meanwhile"] };
+  await db2.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+    values (${userId}::uuid, 'agent', 'draft.auto_approve', 'drafts', ${draft.id},
+            ${{ hash: messageHash({ channel: draft.channel, subject: draft.subject, body: draft.body }), reply_class: cls }}::jsonb)`;
+  await s.queue.enqueue({
+    kind: "send.draft",
+    userId,
+    payload: { draftId: draft.id },
+    dedupeKey: `send:${draft.id}`
+  });
+  return { action: "auto_sent", draftId: draft.id };
+}
+
 // supabase/functions/orbit-worker/handlers/classify.ts
-function classifyHandlers(deps) {
+function classifyHandlers(deps, agents = { env: {} }) {
   return {
     "classify.message": async (job, ctx) => {
       const userId = job.userId;
@@ -12760,7 +12924,11 @@ function classifyHandlers(deps) {
         id = row?.id;
       }
       if (!id) return;
-      await classifyMessage(ctx.db, userId, id, { now: ctx.now(), claude: deps.claude });
+      const r = await classifyMessage(ctx.db, userId, id, { now: ctx.now(), claude: deps.claude });
+      if (!r.replyClass) return;
+      await maybeAutoReply(ctx.db, userId, id, {
+        services: makeServices(agents, { db: ctx.db, now: ctx.now, queue: ctx.queue })
+      });
     }
   };
 }
@@ -15206,7 +15374,7 @@ function defaultHandlers(opts = {}) {
     ...contactsHandlers(deps),
     ...linkedinHandlers(deps),
     ...scoreHandlers(deps),
-    ...classifyHandlers(deps),
+    ...classifyHandlers(deps, agents),
     ...agentHandlers(agents)
   };
   for (const kind of PLACEHOLDER_KINDS)

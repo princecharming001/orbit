@@ -55,6 +55,7 @@ export const PLACEHOLDER_KINDS: readonly string[] = [];
 /**
  * The ingestion handlers take HandlerDeps; the agent handlers (research, sourcing, sending, cadence) take an
  * AgentConfig, which always carries `env`. Either can be passed alone, or the ingestion deps with `agents`.
+ * classify.message takes both: the classifier runs on the ingestion deps, the reply it leads to on the AgentConfig.
  */
 export function defaultHandlers(
   opts: (HandlerDeps & { agents?: AgentConfig }) | AgentConfig = {},
@@ -72,7 +73,7 @@ export function defaultHandlers(
     ...contactsHandlers(deps),
     ...linkedinHandlers(deps),
     ...scoreHandlers(deps),
-    ...classifyHandlers(deps),
+    ...classifyHandlers(deps, agents),
     ...agentHandlers(agents),
   };
   for (const kind of PLACEHOLDER_KINDS)

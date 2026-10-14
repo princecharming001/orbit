@@ -1030,8 +1030,8 @@ function cleanLinkedInUrl(url) {
   return `https://www.linkedin.com/in/${decodeURIComponent(m[2]).toLowerCase()}`;
 }
 function linkedInSlugOf(url) {
-  const clean = cleanLinkedInUrl(url);
-  return clean ? clean.slice(clean.lastIndexOf("/") + 1) : void 0;
+  const clean2 = cleanLinkedInUrl(url);
+  return clean2 ? clean2.slice(clean2.lastIndexOf("/") + 1) : void 0;
 }
 function linkedInPerson(i) {
   const name = (i.name ?? `${i.first_name ?? ""} ${i.last_name ?? ""}`).trim();
@@ -1805,6 +1805,26 @@ function parseName(raw) {
     tokens2 = headIsSurname && tail.length >= 1 && tail.length <= 2 ? [...tail, ...head] : head;
   } else tokens2 = cleanTokens(parts[0] ?? "");
   return partsFromTokens(tokens2);
+}
+function normalizeLinkedInUrl(raw) {
+  if (!raw) return void 0;
+  let s = raw.trim();
+  if (!s) return void 0;
+  if (!/^https?:\/\//i.test(s)) s = `https://${s}`;
+  try {
+    const u2 = new URL(s);
+    if (!/(^|\.)linkedin\.com$/i.test(u2.hostname)) return void 0;
+    const m = u2.pathname.match(/\/in\/([^/?#]+)/i);
+    if (!m?.[1]) return void 0;
+    const slug = decodeURIComponent(m[1]).toLowerCase().replace(/\/+$/, "");
+    return `https://www.linkedin.com/in/${slug}`;
+  } catch {
+    return void 0;
+  }
+}
+function linkedInSlug(url) {
+  const n = normalizeLinkedInUrl(url);
+  return n ? n.slice(n.lastIndexOf("/") + 1) : void 0;
 }
 var GENERIC_ORG_TAIL = /* @__PURE__ */ new Set([
   "&",
@@ -3186,15 +3206,15 @@ function sentenceIndexAt(text2, pos) {
   return n;
 }
 function statedMessageZone(text2) {
-  const z5 = "(ET|EST|EDT|CT|CST|CDT|MT|MST|MDT|PT|PST|PDT|GMT|UTC|BST|eastern|central|mountain|pacific)(?:\\s+(?:standard|daylight))?(?:\\s+time)?";
+  const z6 = "(ET|EST|EDT|CT|CST|CDT|MT|MST|MDT|PT|PST|PDT|GMT|UTC|BST|eastern|central|mountain|pacific)(?:\\s+(?:standard|daylight))?(?:\\s+time)?";
   const res = [
     new RegExp(
-      `\\b(?:all\\s+)?times?\\s+(?:(?:are|listed|below|above|here)\\s+)*(?:in\\s+)?${z5}(?![A-Za-z])`,
+      `\\b(?:all\\s+)?times?\\s+(?:(?:are|listed|below|above|here)\\s+)*(?:in\\s+)?${z6}(?![A-Za-z])`,
       "i"
     ),
-    new RegExp(`\\bi'?m\\s+(?:on|in|based\\s+in)\\s+${z5}(?![A-Za-z])`, "i"),
-    new RegExp(`\\b(?:on|in)\\s+${z5}\\s+time\\b`, "i"),
-    new RegExp(`\\((?:all\\s+)?(?:times?\\s+(?:in\\s+)?)?${z5}\\)`, "i")
+    new RegExp(`\\bi'?m\\s+(?:on|in|based\\s+in)\\s+${z6}(?![A-Za-z])`, "i"),
+    new RegExp(`\\b(?:on|in)\\s+${z6}\\s+time\\b`, "i"),
+    new RegExp(`\\((?:all\\s+)?(?:times?\\s+(?:in\\s+)?)?${z6}\\)`, "i")
   ];
   for (const re of res) {
     const m = re.exec(text2);
@@ -4714,23 +4734,23 @@ async function buildUserContext(db2, u2) {
 function facetLines(parsed) {
   if (!parsed) return [];
   const out = [];
-  const list4 = (v) => Array.isArray(v) ? v : [];
-  for (const f2 of list4(parsed.facets)) {
+  const list5 = (v) => Array.isArray(v) ? v : [];
+  for (const f2 of list5(parsed.facets)) {
     const o = f2;
     const t = [o.title ?? o.role, o.org ?? o.organization, o.text].filter((x) => typeof x === "string");
     if (t.length) out.push(t.join(", "));
   }
-  for (const e of list4(parsed.experiences ?? parsed.experience)) {
+  for (const e of list5(parsed.experiences ?? parsed.experience)) {
     const o = e;
     const t = [o.title, o.org ?? o.company].filter((x) => typeof x === "string");
     if (t.length) out.push(t.join(" at "));
   }
-  for (const e of list4(parsed.education)) {
+  for (const e of list5(parsed.education)) {
     const o = e;
     const t = [o.degree, o.school].filter((x) => typeof x === "string");
     if (t.length) out.push(t.join(", "));
   }
-  const skills = list4(parsed.skills).filter((x) => typeof x === "string");
+  const skills = list5(parsed.skills).filter((x) => typeof x === "string");
   if (skills.length) out.push(`Skills: ${skills.slice(0, 12).join(", ")}`);
   return out.slice(0, 12);
 }
@@ -4911,9 +4931,9 @@ function composeSystem(p) {
   return lines.join("\n");
 }
 function block(tag, text2) {
-  const clean = (text2 ?? "").replace(/<\/?[a-z_]+[^>]*>/gi, " ").trim();
-  return `<${tag}>${clean ? `
-${clean}
+  const clean2 = (text2 ?? "").replace(/<\/?[a-z_]+[^>]*>/gi, " ").trim();
+  return `<${tag}>${clean2 ? `
+${clean2}
 ` : ""}</${tag}>`;
 }
 function composeUser(b) {
@@ -5566,6 +5586,23 @@ function text(b, key, max = 2e3) {
   if (typeof v !== "string" || !v.trim()) throw badRequest(`${key} is required`);
   if (v.length > max) throw badRequest(`${key} is too long`);
   return v.trim();
+}
+var MAX_TURNS = 6;
+var MAX_TURN_CHARS = 8e3;
+function turns(b) {
+  const v = b.turns;
+  if (!Array.isArray(v) || !v.length) throw badRequest("turns is required");
+  if (v.length > MAX_TURNS) throw badRequest(`at most ${MAX_TURNS} turns`);
+  let chars = 0;
+  const out = v.map((t) => {
+    const r = t;
+    if (!r || r.role !== "user" && r.role !== "assistant" || typeof r.text !== "string")
+      throw badRequest("each turn is {role: user|assistant, text}");
+    chars += r.text.length;
+    return { role: r.role, text: r.text };
+  });
+  if (chars > MAX_TURN_CHARS) throw badRequest(`turns are at most ${MAX_TURN_CHARS} characters in all`);
+  return out;
 }
 
 // supabase/functions/orbit-api/routes/calendar.ts
@@ -6221,6 +6258,81 @@ var GOAL_KINDS = [
   "collaboration"
 ];
 
+// supabase/functions/_shared/goals/infer.ts
+import { z as z3 } from "npm:zod@3.25.76/v4";
+var GOAL_INFER_SYSTEM = [
+  "You extract networking goals from a conversation with a student or early-career professional.",
+  "Return only goals the user states or clearly implies for themselves. Do not invent targets.",
+  "kind is one of recruiting, fundraising, sales, hiring, advice, cofounder, community, collaboration.",
+  'If nothing new is stated, return {"goals": []}.'
+].join("\n");
+var GOAL_TITLE_MAX = 60;
+var list = z3.array(z3.string());
+var goalInferSchema = z3.object({
+  goals: z3.array(
+    z3.object({
+      kind: z3.enum(GOAL_KINDS),
+      title: z3.string(),
+      targets: z3.object({ organizations: list, roles: list, geographies: list, people: list }),
+      criteria: z3.object({
+        sector: z3.string().nullable(),
+        stage: z3.string().nullable(),
+        seniority: list.nullable(),
+        skills: list.nullable(),
+        keywords: list.nullable()
+      }),
+      success_metric: z3.string().nullable(),
+      due_at: z3.string().nullable(),
+      is_update_of: z3.string().nullable(),
+      quote: z3.string()
+    })
+  )
+});
+var squash = (s) => s.toLowerCase().replace(/[’‘]/g, "'").replace(/[^\p{L}\p{N}']+/gu, " ").trim();
+var clean = (xs, max = 25) => (xs ?? []).map((x) => x.trim().slice(0, 200)).filter(Boolean).slice(0, max);
+async function inferGoals(claude, userId, turns2, existing = []) {
+  const said = squash(
+    turns2.filter((t) => t.role === "user").map((t) => t.text).join("\n")
+  );
+  if (!said) return [];
+  const r = await claude.structured({
+    task: "goal_infer",
+    system: GOAL_INFER_SYSTEM,
+    user: `<existing_goals>${JSON.stringify(
+      existing.map((g) => ({ id: g.id, kind: g.kind, title: g.title, targets: g.targets }))
+    )}</existing_goals>
+<conversation>${turns2.slice(-6).map((t) => `${t.role}: ${t.text.replace(/<\/?conversation>/g, "")}`).join("\n")}</conversation>`,
+    schema: goalInferSchema,
+    userId
+  });
+  if (!r.ok) return [];
+  const ids = new Set(existing.map((g) => g.id));
+  return r.data.goals.filter((g) => g.quote.trim() && said.includes(squash(g.quote))).filter((g) => g.title.trim()).map((g) => {
+    const criteria = {};
+    if (g.criteria.sector?.trim()) criteria.sector = g.criteria.sector.trim().slice(0, 200);
+    if (g.criteria.stage?.trim()) criteria.stage = g.criteria.stage.trim().slice(0, 200);
+    for (const k of ["seniority", "skills", "keywords"]) {
+      const v = clean(g.criteria[k]);
+      if (v.length) criteria[k] = v;
+    }
+    return {
+      kind: g.kind,
+      title: g.title.trim().slice(0, GOAL_TITLE_MAX),
+      targets: {
+        organizations: clean(g.targets.organizations),
+        roles: clean(g.targets.roles),
+        geographies: clean(g.targets.geographies),
+        people: clean(g.targets.people)
+      },
+      criteria,
+      successMetric: g.success_metric?.trim().slice(0, 500) || null,
+      dueAt: g.due_at && /^\d{4}-\d{2}-\d{2}$/.test(g.due_at) ? g.due_at : null,
+      isUpdateOf: g.is_update_of && ids.has(g.is_update_of) ? g.is_update_of : null,
+      quote: g.quote.trim()
+    };
+  });
+}
+
 // supabase/functions/orbit-api/routes/goals.ts
 var MAX_ACTIVE_GOALS = 5;
 var strList = (v, max = 25) => Array.isArray(v) ? v.filter((x) => typeof x === "string" && !!x.trim()).map((x) => x.trim().slice(0, 200)).slice(0, max) : [];
@@ -6305,10 +6417,25 @@ async function goalsArchive(ctx) {
   if (!r) throw new HttpError(404, "not_found", "no such goal");
   return json(200, { goal: goalFrom(r) });
 }
+async function goalsInfer(ctx) {
+  const t = turns(await body(ctx));
+  const s = ctx.services();
+  if (!s.claude.configured) {
+    const out2 = { goals: [], unconfigured: true };
+    return json(200, out2);
+  }
+  const existing = await ctx.db.sql`
+    select id, kind, title, targets from orbit.goals
+     where user_id = ${ctx.userId}::uuid and deleted_at is null and status = 'active'
+     order by priority, created_at`;
+  const out = { goals: await inferGoals(s.claude, ctx.userId, t, existing) };
+  return json(200, out);
+}
 var goalRoutes = {
   "/goals/list": { method: "POST", auth: true, run: goalsList },
   "/goals/upsert": { method: "POST", auth: true, run: goalsUpsert },
-  "/goals/archive": { method: "POST", auth: true, run: goalsArchive }
+  "/goals/archive": { method: "POST", auth: true, run: goalsArchive },
+  "/goals/infer": { method: "POST", auth: true, run: goalsInfer }
 };
 
 // supabase/functions/_shared/ingest/util.ts
@@ -6569,7 +6696,7 @@ var INTEGRATION_ROUTES = {
 };
 
 // supabase/functions/_shared/memory/memory.ts
-import { z as z3 } from "npm:zod@3.25.76/v4";
+import { z as z4 } from "npm:zod@3.25.76/v4";
 
 // supabase/functions/_shared/research/guards.ts
 function norm(s) {
@@ -6589,6 +6716,36 @@ function orgFromTitle(title, name) {
   }
   return parts.length >= 2 ? parts[parts.length - 1] : parts[0];
 }
+var SENSITIVE2 = [
+  {
+    category: "age",
+    re: /\b\d{1,3}[- ]years?[- ]old\b|\baged \d{1,3}\b|\bborn in (19|20)\d\d\b|\bage \d{1,3}\b/i
+  },
+  {
+    category: "ethnicity",
+    re: /\b(ethnicity|ethnic background|racial|race is|caucasian|african[- ]american|asian[- ]american|hispanic|latino|latina|latinx)\b/i
+  },
+  {
+    category: "religion",
+    re: /\b(christian|muslim|jewish|hindu|buddhist|sikh|atheist|catholic|protestant|mormon|religious|religion|his faith|her faith|their faith|attends church)\b/i
+  },
+  {
+    category: "health",
+    re: /\b(diagnos(ed|is)|illness|cancer survivor|chronic (illness|condition)|disabilit(y|ies)|pregnan(t|cy)|surgery|mental illness|in recovery)\b/i
+  },
+  {
+    category: "family",
+    re: /\b(married|divorced|widow(ed|er)?|spouse|wedding|(his|her|their|your) (wife|husband|kids|children|daughter|son|family)|(father|mother|parent) of (two|three|four|\d))\b/i
+  },
+  { category: "sexuality", re: /\b(gay|lesbian|bisexual|transgender|queer|lgbtq?\+?|sexual orientation)\b/i },
+  {
+    category: "politics",
+    re: /\b(democrat(ic)? (voter|supporter)|republican (voter|supporter)|political views?|voted for|votes for|campaigned for|donated to (the )?(campaign|party))\b/i
+  }
+];
+function sensitiveCategory(text2) {
+  return SENSITIVE2.find((s) => s.re.test(text2))?.category;
+}
 
 // supabase/functions/_shared/memory/memory.ts
 var DEDUPE_COSINE = 0.92;
@@ -6601,6 +6758,7 @@ var MEMORY_KINDS = [
   "person_fact",
   "note"
 ];
+var MEMORY_MAX_CHARS = 200;
 var toItem = (r) => ({
   id: r.id,
   kind: r.kind,
@@ -6716,17 +6874,41 @@ var MEMORY_SYSTEM = [
   'Extract durable facts worth remembering for future conversations: preferences, constraints, details of goals, outcomes, and facts about specific people. Skip small talk and anything already in <known>. Each memory ≤ 200 characters, in third person about the user ("Prefers morning calls").',
   `Return {"memories": [{kind, text, person_name|null, importance: 0..1, quote}]}; quote must be the user's own words.`
 ].join("\n");
-var memorySchema = z3.object({
-  memories: z3.array(
-    z3.object({
-      kind: z3.enum(["preference", "constraint", "goal_detail", "outcome", "person_fact", "note"]),
-      text: z3.string(),
-      person_name: z3.string().nullable(),
-      importance: z3.number(),
-      quote: z3.string()
+var memorySchema = z4.object({
+  memories: z4.array(
+    z4.object({
+      kind: z4.enum(["preference", "constraint", "goal_detail", "outcome", "person_fact", "note"]),
+      text: z4.string(),
+      person_name: z4.string().nullable(),
+      importance: z4.number(),
+      quote: z4.string()
     })
   )
 });
+var squash2 = (s) => s.toLowerCase().replace(/[’‘]/g, "'").replace(/[^\p{L}\p{N}']+/gu, " ").trim();
+async function extractMemories(claude, userId, turns2, known = []) {
+  const userTurns = turns2.filter((t) => t.role === "user").slice(-2);
+  if (!userTurns.length) return [];
+  const lastUserIdx = turns2.lastIndexOf(userTurns[0]);
+  const window = turns2.slice(Math.max(0, lastUserIdx));
+  const r = await claude.structured({
+    task: "memory_extract",
+    system: MEMORY_SYSTEM,
+    user: `<known>${known.slice(0, 20).join("\n")}</known><turns>${window.map((t) => `${t.role}: ${t.text.replace(/<\/?turns>/g, "")}`).join("\n")}</turns>`,
+    schema: memorySchema,
+    userId
+  });
+  if (!r.ok) return [];
+  const said = squash2(userTurns.map((t) => t.text).join("\n"));
+  const knownSet = new Set(known.map(squash2));
+  return r.data.memories.filter((m) => m.quote.trim() && said.includes(squash2(m.quote))).filter((m) => !sensitiveCategory(`${m.text} ${m.quote}`)).filter((m) => !knownSet.has(squash2(m.text))).map((m) => ({
+    kind: m.kind,
+    text: m.text.trim().slice(0, MEMORY_MAX_CHARS),
+    personName: m.person_name,
+    importance: Math.max(0, Math.min(1, Number.isFinite(m.importance) ? m.importance : 0.5)),
+    quote: m.quote.trim()
+  }));
+}
 
 // supabase/functions/orbit-api/routes/memory.ts
 async function search(ctx) {
@@ -6762,7 +6944,7 @@ async function add(ctx) {
   );
   return json(200, r);
 }
-async function list(ctx) {
+async function list2(ctx) {
   const b = await body(ctx, true);
   return json(200, { memories: await listMemories(ctx.db, ctx.userId, optUuid(b, "personId")) });
 }
@@ -6772,11 +6954,63 @@ async function forget(ctx) {
     throw new HttpError(404, "not_found", "no such memory");
   return json(200, { ok: true });
 }
+var KNOWN_MEMORIES = 20;
+async function personNamed(db2, userId, name) {
+  const n = name?.trim().toLowerCase();
+  if (!n) return null;
+  const rows = await db2.sql`
+    select id from orbit.people
+     where user_id = ${userId}::uuid and deleted_at is null and merged_into is null and not is_self
+       and lower(display_name) = ${n}
+     limit 2`;
+  return rows.length === 1 ? rows[0].id : null;
+}
+async function extract(ctx) {
+  const t = turns(await body(ctx));
+  const s = ctx.services();
+  const userId = ctx.userId;
+  if (!s.claude.configured) {
+    const out2 = { memories: [], added: 0, unconfigured: true };
+    return json(200, out2);
+  }
+  const known = await ctx.db.sql`
+    select text from orbit.memories where user_id = ${userId}::uuid and deleted_at is null
+     order by importance desc, last_seen_at desc limit ${KNOWN_MEMORIES}::int`;
+  const found = await extractMemories(
+    s.claude,
+    userId,
+    t,
+    known.map((k) => k.text)
+  );
+  const memories = [];
+  let added = 0;
+  for (const m of found) {
+    const r = await addMemory(
+      ctx.db,
+      s.embed,
+      userId,
+      {
+        text: m.text,
+        kind: m.kind,
+        personId: await personNamed(ctx.db, userId, m.personName),
+        importance: m.importance,
+        source: "chat",
+        quote: m.quote
+      },
+      ctx.now()
+    );
+    memories.push(r.memory);
+    if (!r.deduped) added++;
+  }
+  const out = { memories, added };
+  return json(200, out);
+}
 var memoryRoutes = {
   "/memory/search": { method: "POST", auth: true, run: search },
   "/memory/add": { method: "POST", auth: true, run: add },
-  "/memory/list": { method: "POST", auth: true, run: list },
-  "/memory/forget": { method: "POST", auth: true, run: forget }
+  "/memory/list": { method: "POST", auth: true, run: list2 },
+  "/memory/forget": { method: "POST", auth: true, run: forget },
+  "/memory/extract": { method: "POST", auth: true, run: extract }
 };
 
 // packages/core/src/scoring/tieScore.ts
@@ -6977,9 +7211,9 @@ function personalizedPageRank(adj, source, opts = {}) {
       nodes.add(v);
     }
     if (total <= 0) continue;
-    const list4 = [];
-    for (const [v, w] of nbrs) if (w > 0 && Number.isFinite(w)) list4.push({ to: v, p: w / total });
-    out.set(u2, list4);
+    const list5 = [];
+    for (const [v, w] of nbrs) if (w > 0 && Number.isFinite(w)) list5.push({ to: v, p: w / total });
+    out.set(u2, list5);
   }
   let rank2 = /* @__PURE__ */ new Map([[source, 1]]);
   for (let it = 0; it < iterations; it++) {
@@ -6987,12 +7221,12 @@ function personalizedPageRank(adj, source, opts = {}) {
     let restart = alpha;
     for (const [u2, r] of rank2) {
       if (r === 0) continue;
-      const list4 = out.get(u2);
-      if (!list4) {
+      const list5 = out.get(u2);
+      if (!list5) {
         restart += (1 - alpha) * r;
         continue;
       }
-      for (const { to, p } of list4) next.set(to, (next.get(to) ?? 0) + (1 - alpha) * r * p);
+      for (const { to, p } of list5) next.set(to, (next.get(to) ?? 0) + (1 - alpha) * r * p);
     }
     next.set(source, (next.get(source) ?? 0) + restart);
     rank2 = next;
@@ -7527,17 +7761,17 @@ var FUNCTION_CODES = Object.keys(FUNCTION_LABELS);
 
 // packages/core/src/recommend/score.ts
 function responsePrior(p, user) {
-  let z5 = -0.4;
-  if (p.isAlumni) z5 += 0.8;
+  let z6 = -0.4;
+  if (p.isAlumni) z6 += 0.8;
   if (p.school && user.majors.some((m) => (p.headline ?? "").toLowerCase().includes(m.toLowerCase())))
-    z5 += 0.5;
+    z6 += 0.5;
   const title = (p.currentTitle ?? "").toLowerCase();
-  if (/\b(ceo|cfo|coo|cto|partner|managing director|md|founder|chief)\b/.test(title)) z5 -= 0.6;
-  else if (title) z5 += 0.3;
+  if (/\b(ceo|cfo|coo|cto|partner|managing director|md|founder|chief)\b/.test(title)) z6 -= 0.6;
+  else if (title) z6 += 0.3;
   if (p.lastInteractionAt && Date.now() - new Date(p.lastInteractionAt).getTime() < 180 * 864e5)
-    z5 += 0.3;
-  if (p.linkedinConnectedOn) z5 += 0.2;
-  return 1 / (1 + Math.exp(-z5));
+    z6 += 0.3;
+  if (p.linkedinConnectedOn) z6 += 0.2;
+  return 1 / (1 + Math.exp(-z6));
 }
 
 // supabase/functions/_shared/research/bind.ts
@@ -8279,7 +8513,7 @@ async function draftReply(s, userId, messageId, actor = "user") {
 }
 
 // supabase/functions/orbit-api/routes/replies.ts
-async function list2(ctx) {
+async function list3(ctx) {
   return json(200, { replies: await listReplies(ctx.db, ctx.userId, ctx.now()) });
 }
 async function draft(ctx) {
@@ -8288,7 +8522,7 @@ async function draft(ctx) {
   return json(200, { draft: toServerDraft(r.draft) });
 }
 var replyRoutes = {
-  "/replies/list": { method: "POST", auth: true, run: list2 },
+  "/replies/list": { method: "POST", auth: true, run: list3 },
   "/replies/draft": { method: "POST", auth: true, run: draft }
 };
 
@@ -8544,9 +8778,69 @@ async function pause(ctx) {
     values (${userId}::uuid, 'user', 'settings.pause', 'users', ${userId}, ${{ until }}::jsonb)`;
   return json(200, { ok: true, until });
 }
+var POSTAL_ADDRESS_MAX = 500;
+var SCHEDULING_LINK_MAX = 500;
+function optText(b, key) {
+  const v = b[key];
+  if (v === void 0) return void 0;
+  if (v === null) return null;
+  if (typeof v !== "string") throw badRequest(`${key} must be text or null`);
+  return v.trim() || null;
+}
+function ianaZone(tz) {
+  return /^[A-Za-z][A-Za-z0-9_+-]*(?:\/[A-Za-z0-9_+-]+)*$/.test(tz) && tz.length <= 64 ? validZone(tz) : void 0;
+}
+function isHttpsLink(s) {
+  try {
+    const u2 = new URL(s);
+    return u2.protocol === "https:" && !!u2.hostname;
+  } catch {
+    return false;
+  }
+}
+async function profile(ctx) {
+  const b = await body(ctx);
+  const postal = optText(b, "postalAddress");
+  if (postal && postal.length > POSTAL_ADDRESS_MAX)
+    throw badRequest(`postalAddress is at most ${POSTAL_ADDRESS_MAX} characters`);
+  const link = optText(b, "schedulingLink");
+  if (link && (!isHttpsLink(link) || link.length > SCHEDULING_LINK_MAX))
+    throw badRequest("schedulingLink must be an https link");
+  let tz;
+  if (b.timezone !== void 0) {
+    if (typeof b.timezone !== "string" || !ianaZone(b.timezone.trim()))
+      throw badRequest("timezone must be an IANA time zone, like America/New_York");
+    tz = b.timezone.trim();
+  }
+  const userId = ctx.userId;
+  const given = {};
+  if (postal !== void 0) given.postal_address = postal;
+  if (link !== void 0) given.scheduling_link = link;
+  const keep = Object.fromEntries(Object.entries(given).filter(([, v]) => v !== null));
+  const [after] = await ctx.db.sql`
+    update orbit.users
+       set settings = (settings - ${Object.keys(given)}::text[]) || ${keep}::jsonb,
+           timezone = coalesce(${tz ?? null}::text, timezone)
+     where id = ${userId}::uuid
+    returning settings, timezone`;
+  if (!after) throw new HttpError(404, "not_found", "no such user");
+  const changed = [...Object.keys(given), ...tz ? ["timezone"] : []];
+  if (changed.length)
+    await ctx.db.sql`
+      insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+      values (${userId}::uuid, 'user', 'settings.profile', 'users', ${userId}, ${{ fields: changed }}::jsonb)`;
+  const str2 = (v) => typeof v === "string" && v ? v : null;
+  const out = {
+    postalAddress: str2(after.settings?.postal_address),
+    schedulingLink: str2(after.settings?.scheduling_link),
+    timezone: after.timezone
+  };
+  return json(200, out);
+}
 var settingsRoutes = {
   "/settings/autonomy": { method: "POST", auth: true, run: autonomy },
-  "/settings/pause": { method: "POST", auth: true, run: pause }
+  "/settings/pause": { method: "POST", auth: true, run: pause },
+  "/settings/profile": { method: "POST", auth: true, run: profile }
 };
 
 // supabase/functions/_shared/sourcing/prompts.ts
@@ -9364,7 +9658,7 @@ async function ensureChat(db2, userId, personId, goalId, now) {
 }
 
 // supabase/functions/orbit-api/routes/source.ts
-var list3 = (v, key) => {
+var list4 = (v, key) => {
   if (v === void 0) return void 0;
   if (!Array.isArray(v) || v.length > 25 || !v.every((x) => typeof x === "string" && x.length <= 200))
     throw badRequest(`filters.${key} must be a list of short strings`);
@@ -9381,12 +9675,12 @@ async function search2(ctx) {
     purpose: b.purpose,
     query: typeof b.query === "string" ? b.query : void 0,
     filters: {
-      organizations: list3(f2.organizations, "organizations"),
-      titles: list3(f2.titles, "titles"),
-      locations: list3(f2.locations, "locations"),
-      schools: list3(f2.schools, "schools"),
-      seniority: list3(f2.seniority, "seniority"),
-      keywords: list3(f2.keywords, "keywords")
+      organizations: list4(f2.organizations, "organizations"),
+      titles: list4(f2.titles, "titles"),
+      locations: list4(f2.locations, "locations"),
+      schools: list4(f2.schools, "schools"),
+      seniority: list4(f2.seniority, "seniority"),
+      keywords: list4(f2.keywords, "keywords")
     },
     limit: typeof b.limit === "number" ? b.limit : void 0
   };
@@ -9401,8 +9695,1267 @@ var sourceRoutes = {
   "/source/add": { method: "POST", auth: true, run: add3 }
 };
 
+// packages/core/src/entity/nicknames.data.ts
+var NICKNAME_DATA = [
+  "aaron:erin ron ronnie",
+  "abbigail:abbe abbey abbi abbie abby gail nabby",
+  "abbigale:abbe abbey abbi abbie abby gail nabby",
+  "abednego:bedney",
+  "abel:ab abe eb ebbie",
+  "abiel:ab",
+  "abigail:abbe abbey abbi abbie abby gail nabby",
+  "abigale:abbe abbey abbi abbie abby gail nabby",
+  "abijah:ab bige",
+  "abner:ab",
+  "abraham:ab abe",
+  "abram:ab abe",
+  "absalom:ab abbie app",
+  "ada:addy adie",
+  "adaline:ada addy adie delia dell lena",
+  "addison:addie addy",
+  "adela:adie della",
+  "adelaide:addy adele adie dell della heidi",
+  "adelbert:albert bert del delbert",
+  "adele:addy dell",
+  "adeline:ada addy delia dell lena",
+  "adelphia:addy adele dell delphia philly",
+  "adena:adina deena dena dina",
+  "adolphus:ado adolph dolph",
+  "adrian:rian",
+  "adriane:riane",
+  "adrienne:addie enne rienne",
+  "agatha:aga aggy",
+  "agnes:aggy inez nessa",
+  "aileen:allie lena",
+  "alan:al",
+  "alanson:al lanson",
+  "alastair:al",
+  "alazama:ali",
+  "albert:al bert",
+  "alberta:allie bert bertie",
+  "aldo:al",
+  "aldrich:rich riche richie",
+  "aleksandr:alek alex",
+  "aleva:leve levy",
+  "alex:al",
+  "alexa:alex lexi",
+  "alexander:al alec alex sandy",
+  "alexandra:alex alla sandra sandy",
+  "alexandria:alex alexander alla drina sandra",
+  "alexis:alex lexi",
+  "alfonse:al",
+  "alfred:al fred freddy",
+  "alfreda:alfy freda freddy frieda",
+  "algernon:algy",
+  "alice:allie elsie lisa",
+  "alicia:allie elsie lisa",
+  "aline:adeline",
+  "alison:ali allie",
+  "alixandra:alix",
+  "allan:al alan allen",
+  "allen:al alan allan",
+  "allisandra:ali allie ally",
+  "allison:ali allie ally",
+  "allyson:ali allie ally",
+  "allyssa:ali allie ally",
+  "almena:ali allie ally mena",
+  "almina:minnie",
+  "almira:myra",
+  "alonzo:al lon lonzo",
+  "alphinias:alphus",
+  "althea:ally",
+  "alverta:vert virdie",
+  "alyssa:al ally lissia",
+  "alzada:zada",
+  "amanda:manda mandy",
+  "ambrose:brose",
+  "amelia:amy emily mel millie",
+  "amos:moses",
+  "anastasia:ana stacy",
+  "anderson:andy",
+  "andre:drea",
+  "andrea:andi andrew andy drea rea",
+  "andrew:andy drew randy",
+  "andriane:ada adri rienne",
+  "angela:angel angie",
+  "angelica:angel angelika angelique angie",
+  "angelina:angel angie lina",
+  "ann:annie nan",
+  "anna:ann anne annie nan",
+  "anne:ann annie nan",
+  "annette:anna nettie",
+  "annie:ann anna",
+  "anselm:ance anse ansel selma",
+  "anthony:ant tony",
+  "antoinette:ann netta tony",
+  "antonia:ann netta tony",
+  "antonio:ant tony",
+  "appoline:appie appy",
+  "aquilla:quil quillie",
+  "ara:arry belle",
+  "arabella:ara arry bella belle",
+  "arabelle:ara arry bella belle",
+  "araminta:armida middie minty ruminta",
+  "archibald:archie",
+  "archilles:kill killis",
+  "ariadne:ari arie",
+  "ariana:ari",
+  "arianna:ari",
+  "ariel:ari",
+  "arielle:arie",
+  "aristotle:telly",
+  "arizona:ona onie",
+  "arlene:arly lena",
+  "armanda:mandy",
+  "armena:arry mena",
+  "armilda:milly",
+  "arminda:mindie",
+  "arminta:minite minnie",
+  "arnold:arnie",
+  "aron:erin ron ronnie",
+  "artelepsa:epsey",
+  "artemus:art",
+  "arthur:art",
+  "arthusa:thursa",
+  "arzada:zaddi",
+  "asahel:asa",
+  "asaph:asa",
+  "asenath:assene natty sene",
+  "ashley:ash ashly leah lee",
+  "aubrey:bree",
+  "audrey:audree dee",
+  "august:gus",
+  "augusta:aggy gatsy gussie tina",
+  "augustina:aggy gatsy gussie tina",
+  "augustine:august austin gus",
+  "augustus:august austin gus",
+  "aurelia:aurilla ora orilla ree rilly",
+  "aurora:rory",
+  "avarilla:rilla",
+  "axel:ax",
+  "azariah:aze riah",
+  "bab:barby",
+  "babs:bab barbara barby",
+  "barbara:bab babs barbie barby bobbie",
+  "barbery:barbara",
+  "barbie:barbara",
+  "barnabas:barney",
+  "barney:barnabas",
+  "barrett:barry",
+  "bart:bartholomew",
+  "bartholomew:bart bartel bat mees meus",
+  "barticus:bart",
+  "bazaleel:basil",
+  "bea:beatrice",
+  "beatrice:bea trisha trix trixie",
+  "becca:beck",
+  "beck:becky",
+  "bedelia:bridgit delia",
+  "belinda:belle linda",
+  "bella:arabella belle isabella",
+  "ben:benji bennie benny",
+  "benedict:ben bennie",
+  "benjamin:ben benjy bennie benny jamie",
+  "benjy:benjamin",
+  "bennett:ben bennie benny",
+  "bernard:barney berney bernie berny",
+  "berney:bernie",
+  "bert:bertie bob bobby",
+  "bertha:bert bertie birdie",
+  "bertram:bert",
+  "bertrand:randy",
+  "bess:bessie",
+  "bessie:bess",
+  "beth:betsy betty elizabeth",
+  "bethena:beth thaney",
+  "beverly:bev",
+  "bezaleel:zeely",
+  "biddie:biddy",
+  "bill:billy fred robert william willie",
+  "billy:fred robert william",
+  "blanche:bea",
+  "bob:rob robert",
+  "bobby:bob rob",
+  "boetius:bo",
+  "brad:bradford ford",
+  "bradford:brad ford",
+  "bradley:brad",
+  "brady:brody",
+  "breanna:bree bri",
+  "breeanna:bree",
+  "brenda:brandy",
+  "brian:bryan bryant",
+  "briana:bri",
+  "brianna:bri",
+  "bridget:biddie biddy bridgie bridie",
+  "brittany:britt brittnie",
+  "brittney:britt brittnie",
+  "broderick:brady brody rick ricky rod",
+  "brooklyn:brook brooke",
+  "bryanna:ana anna bri briana brianna",
+  "bryant:bry bryan",
+  "caitlin:cait caity",
+  "caitlyn:cait caity",
+  "caldonia:calliedona",
+  "caleb:cal",
+  "california:callie",
+  "calista:kissy",
+  "callie:cal",
+  "calpurnia:cally",
+  "calvin:cal vin vinny",
+  "cameron:cam ron ronny",
+  "camila:cami mila",
+  "camile:cammie",
+  "camille:cammie millie",
+  "campbell:cam",
+  "candace:candy dacey",
+  "carla:carly karla",
+  "carlotta:lottie",
+  "carlton:carl",
+  "carmellia:mellia",
+  "carmelo:melo",
+  "carmon:cammie carm charm",
+  "carol:carolann carole caroline carri carrie cassie kara kari lynn",
+  "carolann:carol carole",
+  "caroline:carol carole carrie cassie lynn",
+  "carolyn:carrie cassie lynn",
+  "carrie:cassie",
+  "carthaette:etta etty",
+  "casper:jasper",
+  "cassandra:cassie sandra sandy",
+  "cassidy:cass cassie",
+  "cassie:cass",
+  "caswell:cass",
+  "catherine:casey cassie cathy kathy katy kay kit kittie lena trina",
+  "cathleen:casey cassie cathy kathy katy kay kit kittie lena trina",
+  "cathy:catherine cathleen kathy",
+  "cecilia:celia cissy",
+  "cedric:ced rick ricky",
+  "celeste:celia lessie",
+  "celinda:linda lindy lynn",
+  "charity:chat",
+  "charles:carl charlie chick chuck",
+  "charlie:charles chuck",
+  "charlotte:char lotta lottie sherry",
+  "chauncey:chan",
+  "chelsea:chels chelsie",
+  "chelsey:chelsie",
+  "cheryl:cher",
+  "chesley:chet",
+  "chester:chet",
+  "chet:chester",
+  "chick:caroline charlotte chuck",
+  "chloe:clo",
+  "chris:kris",
+  "christa:chris",
+  "christian:chris kit",
+  "christiana:ann chris christy crissy kris kristy tina",
+  "christiano:chris",
+  "christina:chris chrissy christy crissy kris kristy tina",
+  "christine:chris chrissy christy crissy kris kristy tina",
+  "christoffer:chris",
+  "christoph:chris",
+  "christopher:chris kit",
+  "christy:crissy",
+  "cicely:cilla",
+  "cinderella:arilla cindy rella rilla",
+  "cindy:cinderella",
+  "claire:clair clara clare",
+  "clara:clarissa",
+  "clare:clara",
+  "clarence:clair clare",
+  "clarinda:clara",
+  "clarissa:cissy clara",
+  "claudia:claud",
+  "cleatus:cleat",
+  "clement:clem",
+  "clementine:clem clement",
+  "cliff:clifford",
+  "clifford:cliff ford",
+  "clifton:cliff tony",
+  "cole:colie",
+  "colton:colt",
+  "columbus:clum",
+  "con:conny",
+  "conrad:con conny",
+  "constance:connie",
+  "cooper:coop",
+  "cordelia:cordy delia",
+  "corey:coco cordy ree",
+  "corinne:cora ora",
+  "cornelia:cornie corny nelia nelle nelly",
+  "cornelius:con conny corny neil niel",
+  "cory:coco cordy ree",
+  "courtney:court curt",
+  "crystal:chris crys stal tal",
+  "curtis:curt",
+  "cynthia:cindy cintha",
+  "cyrenius:cene cy renius serene swene",
+  "cyrus:cy",
+  "dahl:dal",
+  "dalton:dahl dal",
+  "dan:danny",
+  "daniel:dan dann danny",
+  "danielle:dani ellie",
+  "danny:daniel",
+  "daphne:daph daphie",
+  "darlene:darry lena",
+  "dave:davey",
+  "david:dave davey day",
+  "daycia:dacia daisha",
+  "deanna:dee deedee",
+  "deanne:ann dee",
+  "debbie:deb debby deborah debra",
+  "debby:deb",
+  "debora:deb debbie debby",
+  "deborah:deb debbie debby",
+  "debra:deb debbie",
+  "deidre:deedee",
+  "delbert:bert del",
+  "delia:cordelia delius fidelia",
+  "delilah:dell della lil lila",
+  "deliverance:della delly dilly",
+  "della:adela adelaide delilah dell",
+  "delores:dee dell della lola lolly",
+  "delpha:philadelphia",
+  "delphine:del delf delphi",
+  "demaris:dea maris mary",
+  "demerias:dea maris mary",
+  "democrates:mock",
+  "denise:dee",
+  "dennis:dennie denny",
+  "dennison:dennis denny",
+  "derek:derrek rick ricky",
+  "derick:rick ricky",
+  "derrick:eric rick ricky",
+  "deuteronomy:duty",
+  "diana:di dicey didi",
+  "diane:di dian dianne dicey didi",
+  "dicey:dicie",
+  "dick:richard rick",
+  "dickson:dick",
+  "domenic:dom nic",
+  "dominic:dom nic",
+  "dominick:dom nick nicky",
+  "dominico:dom",
+  "don:donnie donny",
+  "donald:don donnie donny dony",
+  "donato:don",
+  "donna:dona",
+  "donovan:don donnie donny dony",
+  "dorcus:darkey",
+  "dorinda:dora dorothea",
+  "doris:dora",
+  "dorothea:doda dora",
+  "dorothy:dolly dora dortha dot dottie dotty",
+  "dotha:dotty",
+  "dotty:dot",
+  "douglas:doug",
+  "drusilla:silla",
+  "duncan:dunk",
+  "dustin:dusty",
+  "earnest:ernestine ernie",
+  "ebbie:eb",
+  "ebenezer:eb ebbie eben",
+  "eddie:ed",
+  "eddy:ed",
+  "edgar:ed eddie eddy",
+  "edith:edie edye",
+  "edmond:ed eddie eddy",
+  "edmund:ed eddie eddy ned ted",
+  "edna:edny",
+  "eduardo:ed eddie eddy",
+  "edward:ed eddie eddy ned ted teddy",
+  "edwin:ed eddie eddy ned win",
+  "edwina:edwin",
+  "edyth:edie edye",
+  "edythe:edie edye",
+  "egbert:bert burt",
+  "eighta:athy",
+  "eileen:helen",
+  "elaine:helen lainie",
+  "elbert:albert bert",
+  "elbertson:bert elbert",
+  "eldora:dora",
+  "eleanor:elaine ellen ellie lanna lenora nelly nora",
+  "eleazer:lazar",
+  "elena:helen",
+  "eliana:ella elle ellie",
+  "elias:eli lee lias",
+  "elijah:eli lige",
+  "eliphalel:life",
+  "eliphalet:left",
+  "elisa:lisa",
+  "elisha:eli lish",
+  "eliza:elizabeth",
+  "elizabeth:bess bessie beth betsy betty eliza lib libby lisa liz liza lizzie lizzy",
+  "ella:el ellen",
+  "ellen:helen nell nellie",
+  "ellender:ellen helen nellie",
+  "ellie:elly",
+  "ellswood:elsey",
+  "elminie:minnie",
+  "elmira:ellie elly mira",
+  "elnora:nora",
+  "eloise:heloise louise",
+  "elouise:louise",
+  "elsie:elsey",
+  "elswood:elsey",
+  "elvira:elvie",
+  "elwood:woody",
+  "elysia:lisa lissa",
+  "elze:elsey",
+  "emanuel:manny manuel",
+  "emeline:em emily emma emmy milly",
+  "emil:em emily",
+  "emilia:em emmy millie",
+  "emily:em emma emmy mel millie",
+  "emma:em emmy",
+  "emmanuel:manny manuel",
+  "epaphroditius:dite ditus dyce dyche eppa",
+  "ephraim:eph",
+  "erasmus:rasmus raze",
+  "eric:rick ricky",
+  "erick:eric rick ricky",
+  "erik:eric rick ricky",
+  "ernest:ernie",
+  "ernestine:erna ernest teeny tina",
+  "erwin:irwin",
+  "eseneth:senie",
+  "essy:es",
+  "estella:essy stella",
+  "estelle:essy stella",
+  "esther:essie hester",
+  "eudicy:dicey",
+  "eudora:dora",
+  "eudoris:dosie dossie",
+  "eugene:gene",
+  "eunice:nicie",
+  "euphemia:effie effy",
+  "eurydice:dicey",
+  "eustacia:stacia stacy",
+  "eva:eve",
+  "evaline:eva eve lena",
+  "evangeline:ev evan vangie",
+  "evelyn:ev eve evelina",
+  "experience:exie",
+  "ezekiel:ez zeke",
+  "ezideen:ez",
+  "ezra:ez",
+  "faith:fay",
+  "fallon:fal falcon fall fallie fally falon lon lonnie",
+  "felicia:fel feli felix",
+  "felicity:flick tick",
+  "feltie:felty",
+  "ferdinand:ferdie fred freddie freddy",
+  "ferdinando:ferdie fred nando",
+  "fidelia:delia",
+  "fionna:fiona",
+  "flora:florence",
+  "florence:flo flora flossy",
+  "floyd:lloyd",
+  "fran:frannie",
+  "frances:cissy fanny fran francie frankie frannie franniey franny sis",
+  "francie:francine",
+  "francine:fran francie frannie franniey franny",
+  "francis:fran frank frankie",
+  "frank:frankie franky",
+  "frankie:francis frank",
+  "franklin:fran frank",
+  "franklind:fran frank",
+  "fred:freddie freddy",
+  "freda:frieda",
+  "frederica:erica erika freddy frederick rickey",
+  "frederick:derick erick fred freddie freddy fritz rick ricky",
+  "fredericka:ericka freda freddy frieda ricka rickey",
+  "frieda:fred freddie freddy",
+  "gabriel:gabby gabe",
+  "gabriella:ella gabby",
+  "gabrielle:ella gabby",
+  "gareth:gare gary",
+  "garrett:barrett gare garratt garret garry gary jerry rhett",
+  "garrick:garri",
+  "genevieve:eve jean jenny",
+  "geoffrey:geoff jeff",
+  "george:georgie",
+  "georgia:georgie",
+  "georgiana:georgia",
+  "georgine:george",
+  "gerald:gerry jerry",
+  "geraldine:dina gerri gerrie gerry jerry",
+  "gerhardt:gay",
+  "gertie:gert gertrude",
+  "gertrude:gert gertie trudy",
+  "gilbert:bert gil wilber",
+  "giovanni:gio",
+  "glenn:glen",
+  "gloria:glory",
+  "governor:govie",
+  "grace:gracie",
+  "grayson:gray",
+  "greenberry:berry green",
+  "greggory:gregg",
+  "gregory:gory greg",
+  "gretchen:margaret",
+  "griselda:grissel",
+  "gum:monty",
+  "gus:gussie",
+  "gustavus:gus gussie",
+  "gwen:wendy",
+  "gwendolyn:gwen wendy",
+  "hailey:haylee hayley",
+  "hamilton:ham",
+  "hannah:anna nan nanny",
+  "harold:hal hap haps harry",
+  "harriet:hattie",
+  "harrison:hap haps harry",
+  "harry:hap haps harold henry",
+  "haseltine:hassie",
+  "haylee:hailey hayley",
+  "hayley:hailey haylee",
+  "heather:hetty",
+  "helen:ella ellen ellie lena",
+  "helena:aileen eileen elaine eleanor ellen lena nell nellie",
+  "helene:ella ellen ellie lena",
+  "heloise:eloise elouise lois",
+  "henrietta:etta etty hank henny nettie retta",
+  "henry:hal hank hap haps harry",
+  "hephsibah:hipsie",
+  "hepsibah:hipsie",
+  "herbert:bert herb",
+  "herman:dutch harman",
+  "hermione:hermie",
+  "hester:esther hessy hetty",
+  "hezekiah:hez hy kiah",
+  "hillary:hilary",
+  "hipsbibah:hipsie",
+  "hiram:hy",
+  "honora:honey nora norah norry",
+  "hopkins:hop hopp",
+  "horace:horry",
+  "hortense:harty tensey",
+  "hosea:hosey hosie",
+  "howard:hal howie",
+  "hubert:bert hub hugh",
+  "ian:john",
+  "ignatius:iggy nace nate natius",
+  "ignatzio:iggy nace naz",
+  "immanuel:emmanuel manuel",
+  "india:indie indy",
+  "inez:agnes",
+  "iona:onnie",
+  "irene:rena",
+  "irvin:irving",
+  "irving:irv",
+  "irwin:erwin",
+  "isaac:ike zeke",
+  "isabel:bell bella belle ib issy nib nibby tibbie",
+  "isabella:bella belle ib issy nib nibby tibbie",
+  "isabelle:bella belle ib issy nib nibby tibbie",
+  "isadora:dora issy",
+  "isadore:izzy",
+  "isaiah:zadie zay",
+  "isidore:izzy",
+  "iva:ivy",
+  "ivan:john",
+  "jack:jackie",
+  "jackson:jack",
+  "jacob:jaap jake jay",
+  "jacobus:jacob",
+  "jacqueline:jack jackie jacqui",
+  "jahoda:hoda hodie hody",
+  "jakob:jake",
+  "jalen:al alen haylen jaelin jaelyn jailyn jay jaye jaylin jaylyn len lennie lenny",
+  "james:jamie jem jim jimmie jimmy",
+  "jamey:james jamie",
+  "jamie:james",
+  "jane:janie jean jennie jessie",
+  "janet:jan jessie",
+  "janice:jan",
+  "jannett:nettie",
+  "jasmine:jas jazz jazzy",
+  "jason:jase jay",
+  "jasper:casper jap",
+  "jayme:jay",
+  "jean:jane jeannie",
+  "jeanette:janet jean jessie nettie",
+  "jeanne:jane jeannie",
+  "jebadiah:jeb",
+  "jedediah:diah dyer jed",
+  "jedidiah:diah dyer jed",
+  "jefferey:jeff",
+  "jefferson:jeff sonny",
+  "jeffery:jeff",
+  "jeffrey:geoff jeff",
+  "jehiel:hiel",
+  "jehu:gee hugh",
+  "jemima:mima",
+  "jennet:jenn jenny jessie",
+  "jennie:jen jenny",
+  "jennifer:jen jenn jenni jennie jenny",
+  "jeremiah:jereme jerry",
+  "jeremy:jez jezza",
+  "jerita:rita",
+  "jerry:geraldine geri gerry jereme",
+  "jesse:jess",
+  "jessica:jess jessie",
+  "jessie:jane janet jess",
+  "jillian:jill",
+  "jim:jimmie",
+  "jimmie:jim jimmy",
+  "jincy:jane",
+  "jinsy:jane",
+  "joan:jo nonie",
+  "joann:jo",
+  "joanna:hannah jo joan jodi jody",
+  "joanne:jo",
+  "jocelyn:jo joss",
+  "jody:jo",
+  "joe:joey",
+  "joey:joe",
+  "johann:john",
+  "johanna:jo",
+  "johannah:hannah jo joan jody nonie",
+  "johannes:john johnny jonathan",
+  "john:ian jack jock johnny jon jonnie jonny",
+  "johnathan:john johnathon johny jon jonathan jonathon jonnie jonny nathan",
+  "johnathon:john johnathan johny jon jonathan jonathon jonnie jonny",
+  "jon:john johnny jonnie jonny",
+  "jonathan:john johnathan johnathon johny jon jonathon jonnie jonny nathan",
+  "jonathon:john johnathan johnathon johny jon jonathan jonnie jonny",
+  "jordan:jordy",
+  "joseph:jody joe joey jos",
+  "josephine:fina jo jody joey josey josie",
+  "josetta:jettie",
+  "josey:josophine",
+  "joshua:joe jos josh",
+  "josiah:jos",
+  "josophine:jo joey josey",
+  "joyce:joy",
+  "juanita:nettie nita",
+  "judah:jude juder",
+  "judith:juda jude judi judie judy",
+  "judson:jud sonny",
+  "judy:judith",
+  "julia:jill jules julie",
+  "julian:jule jules",
+  "julias:jule jules",
+  "julie:jule jules julia",
+  "june:junius",
+  "junior:jr june junie",
+  "justin:justina juston justus",
+  "kaitlin:kait kaitie",
+  "kaitlyn:kait kaitie",
+  "kaitlynn:kait kaitie",
+  "kalli:cali kali",
+  "kameron:kam",
+  "karla:carla carly",
+  "katarina:catherine tina",
+  "kate:kay",
+  "katelin:kate kay kaye",
+  "katelyn:kate kay kaye",
+  "katherine:cassie cathy kate kathy katie katy kay kaye kit kittie lena trina",
+  "kathleen:cassie cathy kathy katy kay kit kittie lena trina",
+  "kathryn:kate kathy katie",
+  "katia:kate katie",
+  "katy:kate kathy katie",
+  "kayla:kay",
+  "kelley:kelli kellie kelly",
+  "kendall:ken kenny",
+  "kendra:kay kenj kenji kenny",
+  "kendrick:ken kenny",
+  "kendrik:ken kenny",
+  "kennedy:ken kenny",
+  "kenneth:ken kendrick kenny",
+  "kenny:ken kenneth",
+  "kent:ken kendrick kenny",
+  "kerry:kerri",
+  "kevin:kev",
+  "keziah:kizza kizzie",
+  "kim:kimmy",
+  "kimberley:kim kimberli kimberly",
+  "kimberly:kim kimberley kimberli",
+  "kingsley:king",
+  "kingston:king",
+  "kit:kittie",
+  "kris:chris",
+  "kristel:kris",
+  "kristen:chris",
+  "kristin:chris",
+  "kristina:christina kris krissy tina",
+  "kristine:chris christy crissy kris kristy tina",
+  "kristofer:chris kris",
+  "kristoffer:chris kris",
+  "kristopher:chris kris",
+  "kristy:chris",
+  "kymberly:kym",
+  "lafayette:fate laffie",
+  "lamont:monty",
+  "laodicia:cenia dicy",
+  "larry:laurence lawrence",
+  "latisha:tish tisha",
+  "laura:laurie lori",
+  "laurel:laurie",
+  "lauren:laurie ren",
+  "laurence:larry lon lonny lorne lorry",
+  "laurinda:laura lawrence",
+  "lauryn:laurie",
+  "laveda:veda",
+  "laverne:verna vernon",
+  "lavina:ina vina viney",
+  "lavinia:ina vina viney",
+  "lavonia:vina viney vonnie wyncha",
+  "lavonne:von",
+  "lawrence:larry lawrie lon lonny lorne lorry",
+  "leanne:annie lea",
+  "lecurgus:curg",
+  "leilani:lani",
+  "lemuel:lem",
+  "lena:ellen",
+  "lenora:lee nora",
+  "leo:leon",
+  "leonard:len lenny leo leon lineau",
+  "leonidas:lee leon",
+  "leonora:nell nellie nora",
+  "leonore:elenor honor nora",
+  "leroy:lee roy",
+  "lesley:les",
+  "leslie:les",
+  "lester:les",
+  "letitia:lettice lettie tish titia",
+  "levi:lee",
+  "levicy:vicy",
+  "levone:von",
+  "lexi:lex",
+  "lib:libby",
+  "lidia:lyddy",
+  "lil:lilly lily",
+  "liliana:lil lilly lily",
+  "lillah:lil lilly lily lolly",
+  "lillian:lil lilly lolly",
+  "lilly:lil lily",
+  "lily:lil lilly",
+  "lincoln:link",
+  "linda:lindy lynn",
+  "lindsay:lindsey lindsie lindsy",
+  "lindy:lynn",
+  "lionel:leon",
+  "lisa:liz",
+  "littleberry:berry little",
+  "lizzie:liz",
+  "lois:lou louise",
+  "lonzo:lon",
+  "lorelei:laurie lori lorrie",
+  "lorenzo:loren",
+  "loretta:etta lorie lorrie retta",
+  "lorraine:lorie lorrie",
+  "lotta:lottie",
+  "lou:louis lu",
+  "louis:lewis lou louie louise",
+  "louisa:eliza lois lou",
+  "louise:eliza lois lou",
+  "louvinia:vina viney vonnie wyncha",
+  "lucas:luke",
+  "lucia:lucius lucy",
+  "lucias:luke",
+  "lucille:cille lou lu lucy",
+  "lucina:sinah",
+  "lucinda:cindy lou lu lucy",
+  "lucretia:creasey",
+  "lucy:lucinda",
+  "luella:ella lu lula",
+  "luke:lucas",
+  "lunetta:nettie",
+  "lurana:lura",
+  "luther:luke",
+  "lydia:lyddy",
+  "lyndon:lindy lynn",
+  "mabel:amabel mehitabel",
+  "mac:mc",
+  "mack:mac mc",
+  "mackenzie:kenzy mac mack",
+  "maddison:maddi maddie",
+  "maddy:madeline madelyn madge",
+  "madeline:lena maddi maddie maddy madge madie magda maggie maud",
+  "madelyn:maddy madie",
+  "madie:madeline madelyn",
+  "madison:maddy mattie",
+  "maegen:meg",
+  "magdalena:lena maggie",
+  "magdelina:lena madge magda maggie",
+  "mahala:hallie",
+  "makayla:kayla",
+  "malachi:mally",
+  "malcolm:mac mal malc",
+  "malinda:lindy",
+  "manda:mandy",
+  "mandie:amanda",
+  "mandy:amanda",
+  "manerva:eve minerva nerva nervie",
+  "manny:manuel",
+  "manoah:noah",
+  "manola:nonnie",
+  "manuel:emanuel manny",
+  "marcus:marc mark",
+  "margaret:daisy gretta madge maggie maggy marge margery margie margy meg midge peg peggy polly rita",
+  "margaretta:daisy gretta madge maggie marge margery margie meg midge peg peggy rita",
+  "margarita:daisy greta madge maggie maisie marge margo meg megan metta midge peggie rita",
+  "marge:margaret margaretta margery",
+  "margie:marjorie",
+  "marguerite:peggy",
+  "maria:mia ria",
+  "mariah:maria mary",
+  "marian:marianna marion",
+  "marie:mae mary",
+  "marietta:mae mamie maria mariah marie marion mary maureen may mercy minnie mitzi mollie molly polly",
+  "marilyn:mary",
+  "marion:mary",
+  "marissa:rissa",
+  "marjorie:margie margy",
+  "marni:marnie",
+  "marsha:marcia marcie mary",
+  "martha:marty mat mattie patsy patty",
+  "martin:marty",
+  "martina:tina",
+  "martine:tine",
+  "marv:marvin",
+  "marvin:marv",
+  "mary:mae mamie marie mitzi molly polly",
+  "masayuki:masa",
+  "mat:mattie",
+  "mathew:mat matt maty",
+  "mathilda:patty tillie",
+  "matilda:matty maud tilla tilly",
+  "matt:matty",
+  "matthew:matt mattie matty thias thys",
+  "matthews:matt mattie matty",
+  "matthias:matt thias thys",
+  "maud:middy",
+  "maureen:mary",
+  "maurice:morey",
+  "mavery:mave",
+  "mavine:mave",
+  "max:maxie",
+  "maximilian:max",
+  "maximillian:max",
+  "maxine:max",
+  "maxwell:max",
+  "may:mae",
+  "mckenna:ken kenna meaka",
+  "medora:dora",
+  "megan:meg",
+  "meghan:meg",
+  "mehitabel:hetty hitty mabel mitty",
+  "melanie:mellie",
+  "melchizedek:dick zadock",
+  "melinda:linda lindy lynn mel mindy",
+  "melissa:lisa lissa mel milly missy",
+  "mellony:mellia",
+  "melody:lodi",
+  "melvin:mel",
+  "melvina:vina",
+  "mercedes:merci mercy sadie",
+  "merv:mervin",
+  "mervin:merv",
+  "mervyn:merv",
+  "micajah:cage",
+  "michael:micah mick mickey micky mike mikey",
+  "micheal:mike mikey miky",
+  "michele:chelle mickey shelley shellie shelly",
+  "michelle:chelle mickey shelley shellie shelly shely",
+  "mick:micky",
+  "miguel:michael miggy miguael miguaell miguail miguaill miguayl miguayll miguell mike",
+  "mike:michael mick micky",
+  "mildred:milly",
+  "millicent:milly missy",
+  "minerva:minnie",
+  "minnie:wilhelmina",
+  "miranda:mandy mira randi randy",
+  "miriam:mimi mitzi mitzie",
+  "missy:melissa",
+  "mitch:mitchell",
+  "mitchell:mitch",
+  "mitzi:mary mittie mitty",
+  "mitzie:mittie mitty",
+  "monet:nettie",
+  "monica:monna monnie",
+  "monte:monty",
+  "monteleon:monte",
+  "montesque:monty",
+  "montgomery:gum monty",
+  "monty:lamont",
+  "morris:morey",
+  "mortimer:mort",
+  "moses:amos mose moss",
+  "muriel:mur",
+  "myrtle:mert myrt myrti",
+  "nadine:deedee nada",
+  "nancy:ann nan nanny",
+  "naomi:omi",
+  "napoleon:leon nap nappy",
+  "natalia:nat talia",
+  "natalie:natty nettie",
+  "natasha:nat tasha",
+  "nathan:nat nate",
+  "nathaniel:nat nate nathan natty than",
+  "nelle:nelly",
+  "nellie:nell",
+  "nelson:nels",
+  "newt:newton",
+  "newton:newt",
+  "nicholas:claas claes nic nick nickie nicky nico",
+  "nichole:cole nicki nicky nikki",
+  "nicholette:cole nichole nickey nicki nicky nicole nikki",
+  "nicodemus:nic nick nickie nicky nico",
+  "nicolas:nic nick nickie nicky nico",
+  "nicole:cole nicki nicky nikki nole",
+  "nikolas:claes nic nick nickie nicky nico",
+  "nikole:nikki",
+  "nora:nonie",
+  "norbert:bert norby",
+  "norbusamte:norbu",
+  "norman:norm",
+  "nowell:noel",
+  "obadiah:diah dyer obed obie",
+  "obediah:obie",
+  "obedience:beda beedy biddie obed",
+  "obie:obediah",
+  "octavia:tave tavia",
+  "odell:odo",
+  "olive:livia nollie ollie",
+  "oliver:ollie",
+  "olivia:livia nollie ollie",
+  "ollie:oliver",
+  "onicyphorous:cy cyphorus one osaforum osaforus syphorous",
+  "orilla:ora rilly",
+  "orlando:roland",
+  "orphelia:phelia",
+  "ossy:ozzy",
+  "oswald:ossy ozzy waldo",
+  "otis:ode ote",
+  "pamela:pam",
+  "pandora:dora",
+  "parmelia:amelia melia milly",
+  "parthenia:parsuny pasoonie phenie teeny",
+  "patience:pat patty",
+  "patricia:pat patsy patti patty tricia trish trisha",
+  "patrick:paddy pat pate patsy peter",
+  "patsy:patty",
+  "patty:patricia",
+  "paul:polly",
+  "paula:lina polly",
+  "paulina:lina polly",
+  "pauline:polly",
+  "peggy:peg",
+  "pelegrine:perry",
+  "penelope:penny",
+  "percival:percy",
+  "peregrine:perry",
+  "permelia:mellie melly milly",
+  "pernetta:nettie",
+  "persephone:seph sephy",
+  "pete:petey",
+  "peter:pate pete",
+  "petronella:nellie",
+  "pheney:josephine",
+  "pheriba:ferbie pherbia",
+  "philadelphia:delphia",
+  "philander:fie",
+  "philetus:leet phil",
+  "philinda:linda lindy lynn",
+  "philip:phil pip",
+  "philipina:penie phoebe pip",
+  "phillip:phil pip",
+  "philly:delphia",
+  "philomena:menaalmena",
+  "phoebe:fifi",
+  "phyllis:phyl",
+  "pinckney:pink",
+  "pleasant:ples",
+  "pocahontas:pokey",
+  "posthuma:humey",
+  "prescott:pres scott scotty",
+  "priscilla:cilla cissy prissy",
+  "providence:provy",
+  "prudence:prudy prue",
+  "prudy:prudence",
+  "rachael:rach",
+  "rachel:rachael shelly",
+  "rafaela:rafa",
+  "ramona:mona",
+  "randall:randy",
+  "randolf:dolph randy",
+  "randolph:dolph randy",
+  "raphael:ralph",
+  "ray:raymond",
+  "raymond:ray",
+  "reba:becca beck",
+  "rebecca:becca beck becky reba",
+  "reggie:reg reginald",
+  "regina:gina reggie",
+  "reginald:naldo reg reggie renny",
+  "relief:leafa",
+  "reuben:rube",
+  "reynold:reginald",
+  "rhoda:rodie",
+  "rhodella:della",
+  "rhyna:rhynie",
+  "ricardo:rick ricky",
+  "rich:dick rick",
+  "richard:dick dickie dickon dicky rich richie rick ricky",
+  "rick:ricky",
+  "ricky:dick rich",
+  "robert:bill billy bob bobby dob dobbin hob hobkin rob robby rupert",
+  "roberta:bert bertie birdie birtie bobbie robbie roby",
+  "roberto:rob",
+  "robin:rob robbie",
+  "roderick:erick rickie rod roddy",
+  "rodger:bobby hodge rod roge roger",
+  "rodney:rod",
+  "roger:bobby hodge rod rodger roge",
+  "roland:lanny orlando rollo rolly",
+  "ron:ronnie ronny",
+  "ronald:naldo ron ronnie ronny",
+  "ronny:ronald",
+  "rosa:rose",
+  "rosabel:belle rosa rose roz",
+  "rosabella:bella belle rosa rose roz",
+  "rosaenn:ann",
+  "rosaenna:ann",
+  "rosalinda:linda rosa rose roz",
+  "rosalyn:linda rosa rose roz",
+  "roscoe:ross",
+  "rose:rosie",
+  "roseann:ann rose rosie roz",
+  "roseanna:ann rose rosie roz",
+  "roseanne:ann",
+  "rosemarie:rose rosie",
+  "rosemary:marie mary rose rosemarie rosey",
+  "rosina:sina",
+  "roxane:rox roxie",
+  "roxanna:ann rose roxie",
+  "roxanne:ann rose roxie",
+  "rudolph:dolph olph rolf rudy",
+  "rudolphus:dolph olph rolf rudy",
+  "russell:russ rusty",
+  "ruth:ruthie",
+  "ryan:ry",
+  "sabrina:brina",
+  "safieel:safie",
+  "salome:loomie",
+  "salvador:sal sally",
+  "sam:sammy",
+  "samantha:mantha sam sammy",
+  "sampson:sam sammy",
+  "samson:sam sammy",
+  "samuel:sam sammy",
+  "samyra:myra sam sammy",
+  "sandra:cassandra sandy",
+  "sandy:sandra",
+  "sanford:sandy",
+  "sarah:sadie sally sara",
+  "sarilla:silla",
+  "savannah:anna savanna vannie",
+  "scott:sceeter scottie scotty squat",
+  "sebastian:seb sebby",
+  "selma:anselm",
+  "serena:rena",
+  "serilla:rilla",
+  "seymour:morey see",
+  "shaina:sha shay",
+  "sharon:sha shay",
+  "shaun:shawn",
+  "shawn:shaun",
+  "sheila:cecilia",
+  "sheldon:shelly",
+  "shelton:shel shelly tony",
+  "sheridan:dan danny sher",
+  "sheryl:cheri cherie sher sheri sherri sherry sherryl",
+  "shirley:lee sherry shirl",
+  "sibbilla:sibbell sibbie sybill",
+  "sidney:sid syd",
+  "sigfired:sid",
+  "sigfrid:sid",
+  "sigismund:sig",
+  "silas:si",
+  "silence:liley",
+  "silvester:si sly syl vest vester",
+  "simeon:si sion",
+  "simon:si sion",
+  "smith:smitty",
+  "socrates:crate",
+  "sofia:sofie sophie",
+  "solomon:sal salmon saul sol solly zolly",
+  "sondra:dre sonnie",
+  "sophia:sophie",
+  "sophronia:frona fronia sophia",
+  "stacey:staci stacie stacy",
+  "stacie:stacey staci stacy",
+  "stacy:staci",
+  "stanley:stan",
+  "stephan:steve",
+  "stephanie:annie steffi steffie steph stephani stephany stephie stephine stevie",
+  "stephen:steph steve",
+  "steve:stevie",
+  "steven:steph steve stevie",
+  "stuart:stu",
+  "sue:susan susie",
+  "sullivan:sully van",
+  "susan:hannah sue sukey susie suzie",
+  "susannah:hannah sue sukey susie",
+  "susie:suzie",
+  "suzanne:sue suki susie",
+  "sybill:sibbie",
+  "sydney:sid",
+  "sylvanus:sly syl",
+  "sylvester:si sly sy syl vessie vester vet",
+  "sylvia:syl sylvie",
+  "tabby:tabitha",
+  "tabitha:tabby",
+  "tamara:tami tammie tammy",
+  "tamarra:tammy",
+  "tammie:tami tammy",
+  "tammy:tami tammie",
+  "tanafra:tanny",
+  "tasha:tash tashie",
+  "ted:teddy",
+  "temperance:tempy",
+  "terence:terry",
+  "teresa:terry tess tessa tessie",
+  "terri:teri terrie terry",
+  "terry:terence",
+  "tess:teresa theresa",
+  "tessa:teresa theresa",
+  "thad:thaddeus",
+  "thaddeus:thad",
+  "theo:theodore",
+  "theodora:dora",
+  "theodore:ted teddy theo",
+  "theodosia:dosia theo theodosius",
+  "theophilus:ophi",
+  "theotha:otha",
+  "theresa:terry tess tessa tessie thirza thursa traci tracie tracy",
+  "thom:thomas tom tommy",
+  "thomas:thom tom tommy",
+  "thomasa:tamzine",
+  "tiffany:tiff tiffy",
+  "tilford:tillie",
+  "tim:timmy",
+  "timothy:tim timmy",
+  "tina:christina",
+  "tisha:tish",
+  "tobias:bias toby",
+  "tom:thomas tommy",
+  "tony:anthony",
+  "tonya:toni",
+  "tracey:traci tracie tracy",
+  "tranquilla:quilla trannie",
+  "travis:trav",
+  "trevor:trev",
+  "tricia:trish",
+  "trish:patricia trisha",
+  "tristan:tris",
+  "trix:trixie",
+  "trudy:gertrude",
+  "tryphena:phena",
+  "tyler:ty",
+  "unice:eunice nicie",
+  "uriah:riah",
+  "ursula:sula sulie",
+  "valentina:felty val vallie",
+  "valentine:felty",
+  "valeri:val valerie",
+  "valeria:val",
+  "valerie:val",
+  "vanburen:buren",
+  "vandalia:vannie",
+  "vanessa:essa nessa vanna",
+  "vernisee:nicey",
+  "vernon:vern",
+  "veronica:franky frony ron ronie ronna ronnie ronny vonnie",
+  "vic:vicki vickie vicky victor",
+  "vicki:vickie vicky victoria",
+  "victor:vic",
+  "victoria:tori torie torri torrie tory vic vicki vickie vicky",
+  "vijay:vij",
+  "vincent:vic vin vince vinnie vinny",
+  "vincenzo:vic vin vince vinnie vinny",
+  "vinson:vin vince vinnie vinny",
+  "viola:ola vi",
+  "violet:vi",
+  "violetta:lettie",
+  "virginia:ginger ginny jane jennie virgy",
+  "vivian:vi viv",
+  "waldo:ossy ozzy",
+  "wallace:wally",
+  "wally:walt",
+  "walter:wally walt",
+  "washington:wash",
+  "webster:webb",
+  "wendy:wen",
+  "wesley:wes",
+  "westley:farmboy wes west",
+  "weston:wes",
+  "wilber:bert will",
+  "wilbur:will willie willy",
+  "wilda:willie",
+  "wilfred:fred wil will willie",
+  "wilhelm:wil willie",
+  "wilhelmina:mina minnie willie wilma",
+  "will:bill fred wilbur willie",
+  "william:bela bell bill billy wil will willie willy",
+  "willie:fred william",
+  "willis:bill willy",
+  "wilma:billiewilhelm william",
+  "wilson:will willie willy",
+  "winfield:field win winny",
+  "winifred:freddie winnet winnie",
+  "winnie:winnifred",
+  "winnifred:fred freddie freddy winnie winny",
+  "winny:winnifred",
+  "winton:wint",
+  "woodrow:drew wood woody",
+  "yeona:ona onie",
+  "yoshihiko:yoshi",
+  "yulan:lan yul",
+  "yvonne:vonna",
+  "zach:zack zak",
+  "zachariah:zac zach zachy zack zak zakk zeke",
+  "zachary:zac zach zachy zack zak zakk zeke",
+  "zachery:zac zach zachy zack zak zakk zeke",
+  "zack:zach zak",
+  "zebedee:zeb",
+  "zedediah:diah dyer zed",
+  "zephaniah:zeph"
+];
+
+// packages/core/src/entity/nicknames.ts
+var NICKNAME_VARIANTS = (() => {
+  const map = /* @__PURE__ */ new Map();
+  const link = (a, b) => {
+    const s = map.get(a) ?? /* @__PURE__ */ new Set();
+    s.add(b);
+    map.set(a, s);
+  };
+  for (const row of NICKNAME_DATA) {
+    const i = row.indexOf(":");
+    const name = row.slice(0, i);
+    for (const nick of row.slice(i + 1).split(" ")) {
+      if (!nick) continue;
+      link(name, nick);
+      link(nick, name);
+    }
+  }
+  return map;
+})();
+
+// packages/core/src/entity/resolve.ts
+function normalizeEmailForMatch(raw) {
+  return normalizeEmail(raw);
+}
+
 // supabase/functions/orbit-api/sync.ts
-import { z as z4 } from "npm:zod@3.25.76/v4";
+import { z as z5 } from "npm:zod@3.25.76/v4";
 
 // supabase/functions/orbit-api/tables.ts
 var PULL_TABLES = [
@@ -9411,7 +10964,15 @@ var PULL_TABLES = [
     table: "people",
     key: "id",
     cursor: "updated_at",
-    deletedWhen: "t.deleted_at is not null or t.merged_into is not null"
+    deletedWhen: "t.deleted_at is not null or t.merged_into is not null",
+    // a Person: the columns under the names the browser's screens read
+    map: (r) => ({
+      ...r,
+      nameNormalized: r.nameNorm,
+      currentTitle: r.title,
+      currentOrganizationId: r.orgId,
+      currentOrganizationRaw: r.orgRaw
+    })
   },
   { table: "person_identities", key: "id", cursor: "created_at" },
   { table: "affiliations", key: "id", cursor: "updated_at" },
@@ -9467,6 +11028,7 @@ var PULL_TABLES = [
   { table: "stage_events", key: "id", cursor: "updated_at" },
   { table: "drafts", key: "id", cursor: "updated_at" },
   { table: "notes", key: "id", cursor: "updated_at" },
+  { table: "uploads", key: "id", cursor: "updated_at" },
   { table: "facts", key: "id", cursor: "updated_at", deletedWhen: "t.deleted_at is not null" },
   { table: "dossiers", key: "id", cursor: "updated_at" },
   { table: "recommendations", key: "id", cursor: "updated_at" },
@@ -9618,10 +11180,10 @@ async function pull(db2, userId, o) {
   if (lastAudit) next._audit = Number(lastAudit.id);
   return { changes, deleted, cursor: encodeCursor(next), hasMore };
 }
-var uuidS = z4.string().refine(isUuid, "must be a uuid");
-var tsS = z4.string().refine((s) => !Number.isNaN(Date.parse(s)), "must be a date-time");
-var dateS = z4.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD");
-var obj = (maxBytes) => z4.record(z4.string(), z4.unknown()).refine((v) => JSON.stringify(v).length <= maxBytes, `must be under ${maxBytes} bytes`);
+var uuidS = z5.string().refine(isUuid, "must be a uuid");
+var tsS = z5.string().refine((s) => !Number.isNaN(Date.parse(s)), "must be a date-time");
+var dateS = z5.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD");
+var obj = (maxBytes) => z5.record(z5.string(), z5.unknown()).refine((v) => JSON.stringify(v).length <= maxBytes, `must be under ${maxBytes} bytes`);
 var f = (col, type, schema, owned) => ({
   col,
   type,
@@ -9639,7 +11201,7 @@ var PUSH = {
       kind: f(
         "kind",
         "text",
-        z4.enum([
+        z5.enum([
           "recruiting",
           "fundraising",
           "sales",
@@ -9650,26 +11212,26 @@ var PUSH = {
           "collaboration"
         ])
       ),
-      title: f("title", "text", z4.string().trim().min(1).max(200)),
-      description: f("description", "text", z4.string().max(4e3).nullable()),
+      title: f("title", "text", z5.string().trim().min(1).max(200)),
+      description: f("description", "text", z5.string().max(4e3).nullable()),
       targets: f(
         "targets",
         "jsonb",
-        z4.object({
-          organizations: z4.array(z4.string().max(200)).max(50).default([]),
-          roles: z4.array(z4.string().max(200)).max(50).default([]),
-          geographies: z4.array(z4.string().max(200)).max(50).default([]),
-          people: z4.array(z4.string().max(200)).max(50).default([])
+        z5.object({
+          organizations: z5.array(z5.string().max(200)).max(50).default([]),
+          roles: z5.array(z5.string().max(200)).max(50).default([]),
+          geographies: z5.array(z5.string().max(200)).max(50).default([]),
+          people: z5.array(z5.string().max(200)).max(50).default([])
         })
       ),
       criteria: f("criteria", "jsonb", obj(2e4)),
-      successMetric: f("success_metric", "text", z4.string().max(500).nullable()),
-      priority: f("priority", "int", z4.number().int().min(1).max(3)),
-      status: f("status", "text", z4.enum(["active", "paused", "done"])),
-      autonomyLevel: f("autonomy_level", "int", z4.number().int().min(0).max(2).nullable()),
+      successMetric: f("success_metric", "text", z5.string().max(500).nullable()),
+      priority: f("priority", "int", z5.number().int().min(1).max(3)),
+      status: f("status", "text", z5.enum(["active", "paused", "done"])),
+      autonomyLevel: f("autonomy_level", "int", z5.number().int().min(0).max(2).nullable()),
       dueAt: f("due_at", "date", dateS.nullable()),
-      source: f("source", "text", z4.enum(["user", "onboarding", "inferred"])),
-      evidence: f("evidence", "text", z4.string().max(2e3).nullable())
+      source: f("source", "text", z5.enum(["user", "onboarding", "inferred"])),
+      evidence: f("evidence", "text", z5.string().max(2e3).nullable())
     }
   },
   chats: {
@@ -9681,7 +11243,7 @@ var PUSH = {
       personId: f("person_id", "uuid", uuidS, "people"),
       goalId: f("goal_id", "uuid", uuidS.nullable(), "goals"),
       orgId: f("org_id", "uuid", uuidS.nullable(), "organizations"),
-      stage: f("stage", "text", z4.string().min(1).max(40)),
+      stage: f("stage", "text", z5.string().min(1).max(40)),
       stageEnteredAt: f("stage_entered_at", "timestamptz", tsS),
       data: f("data", "jsonb", obj(64e3)),
       archivedAt: f("archived_at", "timestamptz", tsS.nullable())
@@ -9694,13 +11256,13 @@ var PUSH = {
     required: ["chatId", "toStage", "status", "actor"],
     fields: {
       chatId: f("chat_id", "uuid", uuidS, "chats"),
-      fromStage: f("from_stage", "text", z4.string().max(40).nullable()),
-      toStage: f("to_stage", "text", z4.string().min(1).max(40)),
-      status: f("status", "text", z4.string().min(1).max(40)),
-      actor: f("actor", "text", z4.enum(["user", "agent", "system"])),
-      reason: f("reason", "text", z4.string().max(2e3).nullable()),
+      fromStage: f("from_stage", "text", z5.string().max(40).nullable()),
+      toStage: f("to_stage", "text", z5.string().min(1).max(40)),
+      status: f("status", "text", z5.string().min(1).max(40)),
+      actor: f("actor", "text", z5.enum(["user", "agent", "system"])),
+      reason: f("reason", "text", z5.string().max(2e3).nullable()),
       evidence: f("evidence", "jsonb", obj(2e4).nullable()),
-      confidence: f("confidence", "real", z4.number().min(0).max(1).nullable()),
+      confidence: f("confidence", "real", z5.number().min(0).max(1).nullable()),
       decidedAt: f("decided_at", "timestamptz", tsS.nullable())
     }
   },
@@ -9711,27 +11273,70 @@ var PUSH = {
     key: "id",
     required: ["source", "occurredAt", "rawText"],
     fields: {
-      personIds: f("person_ids", "uuid[]", z4.array(uuidS).max(50), "people"),
+      personIds: f("person_ids", "uuid[]", z5.array(uuidS).max(50), "people"),
       chatId: f("chat_id", "uuid", uuidS.nullable(), "chats"),
-      source: f("source", "text", z4.string().min(1).max(40)),
-      title: f("title", "text", z4.string().max(300).nullable()),
+      source: f("source", "text", z5.string().min(1).max(40)),
+      title: f("title", "text", z5.string().max(300).nullable()),
       occurredAt: f("occurred_at", "timestamptz", tsS),
-      rawText: f("raw_text", "text", z4.string().max(1e5)),
+      rawText: f("raw_text", "text", z5.string().max(1e5)),
       extraction: f("extraction", "jsonb", obj(64e3).nullable())
     }
   },
   people: {
     table: "people",
-    write: "update",
+    write: "upsert",
     key: "id",
-    // only what the user edits by hand; everything else is derived on the server
+    required: ["displayName"],
+    // what the user edits by hand; everything else is derived on the server
     fields: {
-      displayName: f("display_name", "text", z4.string().trim().min(1).max(200)),
-      notes: f("notes", "text", z4.string().max(2e4).nullable()),
-      tags: f("tags", "text[]", z4.array(z4.string().max(60)).max(50)),
-      relationshipType: f("relationship_type", "text", z4.string().max(40).nullable()),
+      displayName: f("display_name", "text", z5.string().trim().min(1).max(200)),
+      notes: f("notes", "text", z5.string().max(2e4).nullable()),
+      tags: f("tags", "text[]", z5.array(z5.string().max(60)).max(50)),
+      relationshipType: f("relationship_type", "text", z5.string().max(40).nullable()),
       hiddenAt: f("hidden_at", "timestamptz", tsS.nullable()),
-      doNotContact: f("do_not_contact", "boolean", z4.boolean())
+      doNotContact: f("do_not_contact", "boolean", z5.boolean())
+    },
+    // a person added in the app: what the student typed, once; imports keep these up to date afterwards
+    insertOnly: {
+      firstName: f("first_name", "text", z5.string().trim().max(100).nullable()),
+      lastName: f("last_name", "text", z5.string().trim().max(100).nullable()),
+      primaryEmail: f(
+        "primary_email",
+        "text",
+        z5.string().trim().max(320).regex(/^[^\s@]+@[^\s@]+\.[^\s@]+$/, "must be an email address").transform((e) => normalizeEmail(e)).nullable()
+      ),
+      title: f("title", "text", z5.string().trim().max(300).nullable()),
+      orgRaw: f("org_raw", "text", z5.string().trim().max(300).nullable()),
+      linkedinUrl: f("linkedin_url", "text", z5.string().trim().max(500).nullable()),
+      location: f("location", "text", z5.string().trim().max(200).nullable())
+    },
+    derive: (v, op) => {
+      const out = [];
+      const name = typeof v.displayName === "string" ? v.displayName : void 0;
+      if (name !== void 0) {
+        const n = parseName(name);
+        out.push({ col: "name_norm", type: "text", value: n.normalized || name.toLowerCase() });
+        if (op === "insert") {
+          if (!("firstName" in v)) out.push({ col: "first_name", type: "text", value: n.first || null });
+          if (!("lastName" in v)) out.push({ col: "last_name", type: "text", value: n.last || null });
+        }
+      }
+      if (op === "insert") {
+        out.push({ col: "sources", type: "text[]", value: ["manual"] });
+        const slug = typeof v.linkedinUrl === "string" ? linkedInSlug(v.linkedinUrl) : void 0;
+        if (slug) out.push({ col: "linkedin_slug", type: "text", value: slug });
+      }
+      return out;
+    },
+    afterInsert: async (db2, userId, id, v) => {
+      const add4 = (kind, norm2, raw) => db2.sql`
+        insert into orbit.person_identities (user_id, person_id, kind, value_norm, value_raw, source)
+        values (${userId}::uuid, ${id}::uuid, ${kind}, ${norm2}, ${raw}, 'manual')
+        on conflict (user_id, kind, value_norm) do nothing`;
+      if (typeof v.primaryEmail === "string" && v.primaryEmail)
+        await add4("email", normalizeEmailForMatch(v.primaryEmail), v.primaryEmail);
+      const slug = typeof v.linkedinUrl === "string" ? linkedInSlug(v.linkedinUrl) : void 0;
+      if (slug) await add4("linkedin_slug", slug, v.linkedinUrl);
     }
   },
   tie_labels: {
@@ -9740,7 +11345,21 @@ var PUSH = {
     del: "hard",
     key: "person_id",
     required: ["closeness"],
-    fields: { closeness: f("closeness", "int", z4.number().int().min(1).max(5)) }
+    fields: { closeness: f("closeness", "int", z5.number().int().min(1).max(5)) }
+  },
+  uploads: {
+    table: "uploads",
+    write: "upsert",
+    del: "hard",
+    key: "id",
+    required: ["kind", "text"],
+    fields: {
+      kind: f("kind", "text", z5.enum(["resume", "note", "transcript", "linkedin_export"])),
+      filename: f("filename", "text", z5.string().max(300).nullable()),
+      text: f("text", "text", z5.string().max(5e5)),
+      parsed: f("parsed", "jsonb", obj(2e5).nullable()),
+      isCurrent: f("is_current", "boolean", z5.boolean())
+    }
   },
   // drafts: handled by pushDraft (status transitions and edits while still a draft)
   drafts: { table: "drafts", write: "update", key: "id", fields: {} },
@@ -9752,11 +11371,11 @@ var ChangeError = class extends Error {
     this.code = code;
   }
 };
-var ChangeS = z4.object({
-  table: z4.string(),
-  op: z4.enum(["upsert", "delete"]),
+var ChangeS = z5.object({
+  table: z5.string(),
+  op: z5.enum(["upsert", "delete"]),
   id: uuidS,
-  row: z4.record(z4.string(), z4.unknown()).optional()
+  row: z5.record(z5.string(), z5.unknown()).optional()
 });
 var PUSH_MAX_CHANGES = 500;
 async function syncPush(ctx) {
@@ -9816,9 +11435,10 @@ async function checkOwned(db2, userId, table, ids) {
   if ((r?.n ?? 0) !== unique.length)
     throw new ChangeError("not_found", `a referenced ${table} row was not found`);
 }
-async function validFields(db2, userId, spec, row) {
+async function validFields(db2, userId, spec, row, insert) {
   const out = [];
-  for (const [name, field] of Object.entries(spec.fields)) {
+  const all = insert ? { ...spec.fields, ...spec.insertOnly } : spec.fields;
+  for (const [name, field] of Object.entries(all)) {
     if (!(name in row)) continue;
     const r = field.schema.safeParse(row[name]);
     if (!r.success) throw new ChangeError("invalid", `${name}: ${r.error.issues[0]?.message ?? "invalid"}`);
@@ -9836,15 +11456,20 @@ async function validFields(db2, userId, spec, row) {
 async function write(db2, userId, spec, id, row) {
   const keyCol = spec.key;
   if (keyCol === "person_id") await checkOwned(db2, userId, "people", [id]);
-  const fields = await validFields(db2, userId, spec, row);
   const [existing] = await db2.query(
     `select user_id from orbit.${spec.table} where ${keyCol} = $1::uuid ${keyCol === "person_id" ? "and user_id = $2::uuid" : ""}`,
     keyCol === "person_id" ? [id, userId] : [id]
   );
   if (existing && existing.user_id !== userId)
     throw new ChangeError("not_found", `${spec.table} ${id} was not found`);
+  const insert = !existing && spec.write !== "update";
+  const fields = await validFields(db2, userId, spec, row, insert);
+  const values = Object.fromEntries(fields.map((x) => [x.name, x.value]));
+  const derived = spec.derive?.(values, insert ? "insert" : "update") ?? [];
+  const cols = [...fields.map((x) => ({ col: x.field.col, type: x.field.type })), ...derived];
+  const params = [...fields.map((x) => x.value), ...derived.map((d) => d.value)];
   const softDeleted = spec.del === "soft" ? " and t.deleted_at is null" : "";
-  if (existing || spec.write === "update") {
+  if (!insert) {
     if (!existing) throw new ChangeError("not_found", `${spec.table} ${id} was not found`);
     if (!fields.length) {
       const [cur] = await db2.query(
@@ -9853,11 +11478,11 @@ async function write(db2, userId, spec, id, row) {
       );
       return shape(spec.table, cur?.row);
     }
-    const sets = fields.map((x, i) => `${x.field.col} = $${i + 3}::${x.field.type}`).join(", ");
+    const sets = cols.map((c, i) => `${c.col} = $${i + 3}::${c.type}`).join(", ");
     const [r2] = await db2.query(
       `update orbit.${spec.table} t set ${sets}
         where t.${keyCol} = $1::uuid and t.user_id = $2::uuid${softDeleted} returning to_jsonb(t) as row`,
-      [id, userId, ...fields.map((x) => x.value)]
+      [id, userId, ...params]
     );
     if (!r2) throw new ChangeError("not_found", `${spec.table} ${id} was not found`);
     await audit2(
@@ -9872,12 +11497,13 @@ async function write(db2, userId, spec, id, row) {
   }
   for (const name of spec.required ?? [])
     if (!fields.some((x) => x.name === name)) throw new ChangeError("invalid", `${name} is required`);
-  const cols = [keyCol, "user_id", ...fields.map((x) => x.field.col)];
-  const vals = ["$1::uuid", "$2::uuid", ...fields.map((x, i) => `$${i + 3}::${x.field.type}`)];
+  const names = [keyCol, "user_id", ...cols.map((c) => c.col)];
+  const vals = ["$1::uuid", "$2::uuid", ...cols.map((c, i) => `$${i + 3}::${c.type}`)];
   const [r] = await db2.query(
-    `insert into orbit.${spec.table} as t (${cols.join(", ")}) values (${vals.join(", ")}) returning to_jsonb(t) as row`,
-    [id, userId, ...fields.map((x) => x.value)]
+    `insert into orbit.${spec.table} as t (${names.join(", ")}) values (${vals.join(", ")}) returning to_jsonb(t) as row`,
+    [id, userId, ...params]
   );
+  await spec.afterInsert?.(db2, userId, id, values);
   await audit2(
     db2,
     userId,
@@ -9896,10 +11522,10 @@ async function remove(db2, userId, spec, id) {
   await audit2(db2, userId, "sync.delete", spec.table, id);
   return void 0;
 }
-var DraftPatchS = z4.object({
-  status: z4.enum(["approved", "discarded", "cancelled"]).optional(),
-  subject: z4.string().max(200).nullable().optional(),
-  body: z4.string().trim().min(1).max(2e4).optional()
+var DraftPatchS = z5.object({
+  status: z5.enum(["approved", "discarded", "cancelled"]).optional(),
+  subject: z5.string().max(200).nullable().optional(),
+  body: z5.string().trim().min(1).max(2e4).optional()
 });
 async function pushDraft(db2, userId, id, row) {
   const p = DraftPatchS.safeParse({ status: row.status, subject: row.subject, body: row.body });

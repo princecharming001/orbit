@@ -1,9 +1,10 @@
 import { messageHash } from '@orbit/core/safety/rules';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { fromBase64url } from '../../functions/_shared/crypto.ts';
+import { sqlQueue } from '../../functions/_shared/queue.ts';
 import { maybeAutoReply } from '../../functions/_shared/replies/replies.ts';
 import { pickSlots } from '../../functions/_shared/slots/slots.ts';
-import { defaultHandlers, runTick } from '../../functions/orbit-worker/worker.ts';
+import { defaultHandlers, type Job, runTick } from '../../functions/orbit-worker/worker.ts';
 import {
   ALL_KEYS,
   addPerson,
@@ -586,6 +587,112 @@ describe('replies (§8)', () => {
     expect(audit.map((a) => `${a.actor}:${a.action}`)).toEqual(
       expect.arrayContaining(['agent:draft.auto_approve', 'agent:draft.auto_sent']),
     );
+  });
+
+  it('classify.message leads to the reply: level 2 approves and queues a scheduling answer, level 0 only drafts', async () => {
+    const claude = anthropic(() => CONFIRM_REPLY);
+    const net = fakeNet(claude.answer, google());
+    const cfg = agentConfig(net);
+    const at = new Date('2026-10-15T15:00:00Z'); // 11:00 in New York
+    const handlers = defaultHandlers({ agents: cfg });
+    const queue = sqlQueue(t.db);
+    const classify = (userId: string, messageId: string) =>
+      handlers['classify.message']!(
+        {
+          queue: 'orbit_classify',
+          msgId: 0,
+          readCt: 1,
+          kind: 'classify.message',
+          userId,
+          payload: { messageId },
+        } satisfies Job,
+        { db: t.db, queue, now: () => at },
+      );
+    const scheduling = async (level: 0 | 2) => {
+      const { userId } = await signedInUser(t);
+      await t.db.sql`update orbit.users set autonomy_level = ${level}::smallint where id = ${userId}::uuid`;
+      const p = await addPerson(t, userId, {
+        name: 'Maya Chen',
+        email: `maya${Math.random()}@example.com`,
+        score: 55,
+        timezone: 'America/New_York',
+      });
+      const th = await addThread(t, userId, p, [
+        {
+          direction: 'out',
+          at: '2026-10-12T15:00:00Z',
+          body: 'Would you have time for a short call next week?',
+        },
+        { direction: 'in', at: '2026-10-13T15:00:00Z', body: 'Thursday at 2pm works for me.' },
+      ]);
+      const messageId = th.messageIds[1]!;
+      await classify(userId, messageId);
+      const [m] = await t.db.sql<{ reply_class: string }>`
+        select reply_class from orbit.messages where id = ${messageId}::uuid`;
+      expect(m!.reply_class).toBe('scheduling');
+      const drafts = await t.db.sql<{ id: string; status: string; kind: string }>`
+        select id, status, kind from orbit.drafts where user_id = ${userId}::uuid`;
+      const queued = await t.db.sql<{ message: { kind: string; payload: { draftId: string } } }>`
+        select message from pgmq.q_orbit_send where message->>'userId' = ${userId}`;
+      return { userId, drafts, queued };
+    };
+
+    const auto = await scheduling(2);
+    expect(auto.drafts).toEqual([{ id: expect.any(String), status: 'approved', kind: 'reply' }]);
+    expect(auto.queued.map((q) => q.message)).toEqual([
+      expect.objectContaining({ kind: 'send.draft', payload: { draftId: auto.drafts[0]!.id } }),
+    ]);
+    const audit = await t.db.sql<{ actor: string; action: string }>`
+      select actor, action from orbit.audit_log where target_id = ${auto.drafts[0]!.id} order by id`;
+    expect(audit.map((a) => `${a.actor}:${a.action}`)).toContain('agent:draft.auto_approve');
+    await runTick({ db: t.db, handlers, now: () => at });
+    expect(sends(net)).toHaveLength(1);
+
+    const manual = await scheduling(0);
+    expect(manual.drafts).toEqual([{ id: expect.any(String), status: 'draft', kind: 'reply' }]);
+    expect(manual.queued).toEqual([]);
+    // classified again (a retried job): still one draft
+    const [msg] = await t.db.sql<{ id: string }>`
+      select id from orbit.messages where user_id = ${manual.userId}::uuid and direction = 'in'`;
+    await classify(manual.userId, msg!.id);
+    const [n] = await t.db.sql<{ n: number }>`
+      select count(*)::int as n from orbit.drafts where user_id = ${manual.userId}::uuid`;
+    expect(n!.n).toBe(1);
+  });
+
+  it('classify.message on an unsubscribe closes the chat and cancels pending drafts', async () => {
+    const net = fakeNet(google());
+    const handlers = defaultHandlers({ agents: agentConfig(net, {}) });
+    const { userId } = await signedInUser(t);
+    const p = await addPerson(t, userId, { name: 'Uma Bell', email: 'uma2@example.com' });
+    const chat = await chatFor(userId, p, 'outreach_sent');
+    const [d] = await t.db.sql<{ id: string }>`
+      insert into orbit.drafts (user_id, person_id, channel, kind, body, status)
+      values (${userId}::uuid, ${p}::uuid, 'gmail', 'bump', 'Just bumping this.', 'draft') returning id`;
+    const th = await addThread(t, userId, p, [
+      { direction: 'out', at: iso(3 * DAY), body: 'Hi Uma, would you have time for a call?' },
+      { direction: 'in', at: iso(DAY), body: 'Please remove me from your list.' },
+    ]);
+    await handlers['classify.message']!(
+      {
+        queue: 'orbit_classify',
+        msgId: 0,
+        readCt: 1,
+        kind: 'classify.message',
+        userId,
+        payload: { messageId: th.messageIds[1] },
+      },
+      { db: t.db, queue: sqlQueue(t.db), now: () => new Date() },
+    );
+    const [person] = await t.db.sql<{ do_not_contact: boolean }>`
+      select do_not_contact from orbit.people where id = ${p}::uuid`;
+    expect(person!.do_not_contact).toBe(true);
+    const [c] = await t.db.sql<{ stage: string }>`select stage from orbit.chats where id = ${chat}::uuid`;
+    expect(c!.stage).toBe('declined');
+    const [draft] = await t.db.sql<{
+      status: string;
+    }>`select status from orbit.drafts where id = ${d!.id}::uuid`;
+    expect(draft!.status).toBe('cancelled');
   });
 
   it('§8.8 tests 4 and 5: unsubscribe sets do-not-contact and later composes fail; [ASK USER] cannot be approved', async () => {
