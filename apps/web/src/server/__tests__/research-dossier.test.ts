@@ -177,14 +177,20 @@ describe('dossier pipeline (§5.6)', () => {
     const profileCall = s.net.calls.find((c) => c.url.startsWith(`${UNIPILE}/api/v1/users/ACoAAJaneDoe?`))!;
     expect(profileCall.url).toContain('notify=false');
     const searches = s.net.calls.filter((c) => c.url.endsWith('/search'));
-    expect(searches.map((c) => (c.body as { category?: string }).category)).toEqual([
-      'people',
-      'news',
-      undefined,
-    ]);
-    expect(searches[1]!.body).toMatchObject({
+    const byCategory = (cat: string | undefined) =>
+      searches.find((c) => (c.body as { category?: string }).category === cat)!;
+    expect(searches).toHaveLength(3);
+    expect(byCategory('people').body).toMatchObject({
+      query: '"Jane Doe" Northwind Robotics VP Engineering',
+      type: 'auto',
+      numResults: 5,
+    });
+    expect(byCategory('news').body).toMatchObject({
       startPublishedDate: '2025-04-01T00:00:00.000Z',
       numResults: 5,
+    });
+    expect(byCategory(undefined).body).toMatchObject({
+      query: '"Jane Doe" Northwind Robotics podcast OR talk OR interview OR blog',
     });
     const contents = s.net.calls.filter((c) => c.url.endsWith('/contents'));
     expect(contents).toHaveLength(1);
