@@ -4,6 +4,7 @@ import { App } from './App';
 import { fakeEngineRequest } from './chat/testing/flag';
 import type { ChatEngine } from './chat/types';
 import { db } from './db/schema';
+import { isAccountMode, loadSession } from './integrations/orbitApi';
 import { loadPrefs } from './integrations/prefs';
 import './styles/index.css';
 
@@ -21,7 +22,16 @@ async function chatEngine(): Promise<ChatEngine | undefined> {
 
 // Local prefs (API key, client id, AI settings) live in IndexedDB; load them before the first render
 // so synchronous readers see them.
-Promise.all([loadPrefs().catch(() => undefined), chatEngine()]).then(([, engine]) => {
+// Account mode only: the stored Orbit session (its refresh token), and the hooks that queue the student's own changes
+// for the server.
+async function account(): Promise<void> {
+  if (!isAccountMode()) return;
+  await loadSession().catch(() => undefined);
+  const { installOutboxHooks } = await import('./engine/serverSync');
+  installOutboxHooks();
+}
+
+Promise.all([loadPrefs().catch(() => undefined), chatEngine(), account()]).then(([, engine]) => {
   ReactDOM.createRoot(document.getElementById('root')!).render(
     <React.StrictMode>
       <App chatEngine={engine} />

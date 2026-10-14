@@ -3,6 +3,7 @@ import { newId } from '@orbit/core';
 import { CURRENT_USER_KEY } from '../db/repo';
 import { db, wipeDatabase } from '../db/schema';
 import { disconnectGoogle } from '../integrations/google';
+import { clearSession, isSignedIn } from '../integrations/orbitApi';
 import { clearPrefs } from '../integrations/prefs';
 import { generateBrief, recommendationsRefresh } from './brief';
 
@@ -94,6 +95,8 @@ export function exportFilename(now = new Date()): string {
  */
 export async function deleteAllData(): Promise<void> {
   disconnectGoogle();
+  // an Orbit session goes too: this browser forgets the account (the account itself is deleted in Settings, Account)
+  if (isSignedIn()) await clearSession();
   await clearPrefs();
   await wipeDatabase();
   await db.kv.delete(CURRENT_USER_KEY);

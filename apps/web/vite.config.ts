@@ -13,9 +13,32 @@ function stripCspInDev(): Plugin {
   };
 }
 
+/**
+ * Account mode (VITE_ORBIT_API): the page may call that orbit-api, so its origin joins the CSP's connect-src. Without
+ * the variable the policy is left exactly as written.
+ */
+function allowOrbitApi(): Plugin {
+  return {
+    name: 'orbit-allow-orbit-api',
+    transformIndexHtml: (html) => {
+      const raw = process.env.VITE_ORBIT_API?.trim();
+      if (!raw) return html;
+      let origin: string;
+      try {
+        origin = new URL(raw).origin;
+      } catch {
+        return html;
+      }
+      return html.replace(/connect-src ([^;"]*)/, (m, list: string) =>
+        list.split(/\s+/).includes(origin) ? m : `connect-src ${list} ${origin}`,
+      );
+    },
+  };
+}
+
 export default defineConfig(({ mode }) => ({
   base: process.env.ORBIT_BASE ?? (mode === 'production' ? '/orbit/' : '/'),
-  plugins: [react(), tailwindcss(), stripCspInDev()],
+  plugins: [react(), tailwindcss(), stripCspInDev(), allowOrbitApi()],
   resolve: { alias: { '@': path.resolve(__dirname, 'src') } },
   build: { target: 'es2022', sourcemap: false, chunkSizeWarningLimit: 1500 },
   test: {

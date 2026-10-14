@@ -245,6 +245,30 @@ export async function clearPrefs(): Promise<void> {
   await pending;
 }
 
+/**
+ * Another row of `orbit-local`, beside the prefs (the Orbit session's refresh token lives under its own key, so
+ * clearing the prefs never signs the student out by accident). Undefined when IndexedDB is unavailable.
+ */
+export async function readLocalRow<T>(key: string): Promise<T | undefined> {
+  if (key === ROW_KEY) throw new Error('the prefs row is read through readPrefs');
+  try {
+    return (await store().prefs.get(key))?.value as T | undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Write (or, with `undefined`, delete) a row of `orbit-local` other than the prefs. */
+export async function writeLocalRow(key: string, value: unknown): Promise<void> {
+  if (key === ROW_KEY) throw new Error('the prefs row is written through writePrefs');
+  try {
+    if (value === undefined) await store().prefs.delete(key);
+    else await store().prefs.put({ key, value: value as LocalPrefs });
+  } catch {
+    // IndexedDB unavailable: the value lives in memory only, with the caller
+  }
+}
+
 /** Test hook: forget the in-memory copy so the next `loadPrefs()` reads storage again. */
 export function resetPrefsMemoryForTests(): void {
   cache = {};

@@ -9,6 +9,7 @@ import type {
   Touchpoint,
 } from '@orbit/core';
 import { knowEachOther, newId, pairsFromEdges, tieStrength, warmthValue } from '@orbit/core';
+import { isServerUser } from '../integrations/orbitApi';
 import { db } from './schema';
 
 export const CURRENT_USER_KEY = 'currentUserId';
@@ -127,6 +128,8 @@ export async function recomputePersonStrength(
 ): Promise<Person | undefined> {
   const person = await db.people.get(personId);
   if (!person) return undefined;
+  // account mode: orbit-api scores from the whole mailbox; this browser only holds a slice of it
+  if (isServerUser(person.userId)) return person;
   const [tps, affiliations, ctx, notes] = await Promise.all([
     db.touchpoints.where('personId').equals(personId).toArray(),
     db.affiliations.where('personId').equals(personId).toArray(),
@@ -161,6 +164,7 @@ export async function recomputePersonStrength(
  * the five strongest contacts this person is known to know (they wrote, met or were introduced; not colleagues alone).
  */
 export async function recomputeAllStrengths(userId: string, now = new Date()): Promise<void> {
+  if (isServerUser(userId)) return;
   const [people, tps, affs, edges, notes, ctx] = await Promise.all([
     db.people.where('userId').equals(userId).toArray(),
     db.touchpoints.where('userId').equals(userId).toArray(),
