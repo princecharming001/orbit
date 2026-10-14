@@ -5,3 +5,7 @@ test-results/
 .vite/
 *.local
 .DS_Store
+
+# Edge Function bundles are committed (scripts/build-functions.mjs)
+!supabase/functions/*/dist/
+supabase/tests/.bundles/

@@ -26,6 +26,12 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # the Edge Function bundles (supabase/functions/<fn>/dist) are committed; fail when one is out of date
+      - name: Edge Function bundles are current
+        run: |
+          pnpm build:functions
+          git diff --exit-code supabase/functions
+          test -z "$(git status --porcelain --untracked-files=all supabase/functions)"
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
