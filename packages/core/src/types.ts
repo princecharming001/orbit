@@ -383,6 +383,8 @@ export interface Person {
   /** which source last wrote each profile field, for source precedence (manual > enrichment > CSV > ... ) */
   fieldSources?: Partial<Record<PersonField, PersonSource>>;
   hiddenAt?: string;
+  /** they asked not to be contacted (an `unsubscribe` reply, plan 16 §8.1): nothing is drafted or sent to them */
+  doNotContact?: boolean;
   summary?: string;
   summaryUpdatedAt?: string;
   talkingPoints?: string[];
@@ -513,6 +515,9 @@ export interface EmailMessage {
   isAutomated: boolean;
   signal?: ReplySignal;
   signalConfidence?: number;
+  /** the reply class (plan 16 §8.1) and its confidence, set by the server's classifier */
+  replyClass?: string;
+  replyConfidence?: number;
   extraction?: MessageExtraction;
   processedAt?: string;
 }
@@ -819,6 +824,24 @@ export interface Brief {
   suggestionIds: ID[];
   summaryText: string;
   stats: Record<string, number>;
+}
+
+/** A research dossier on a person (orbit.dossiers, plan 16 §5). `content` is the synthesis, `sources` its citations. */
+export interface Dossier {
+  id: ID;
+  userId: ID;
+  personId: ID;
+  goalId?: ID;
+  status: 'pending' | 'ready' | 'partial' | 'needs_disambiguation' | 'failed';
+  content?: Record<string, unknown>;
+  sources: { id: string; url?: string; title?: string; [k: string]: unknown }[];
+  candidates?: unknown[];
+  costUsd: number;
+  model?: string;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+  expiresAt: string;
 }
 
 export interface Recommendation {

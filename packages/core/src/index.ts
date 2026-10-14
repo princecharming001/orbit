@@ -31,6 +31,7 @@ export * from './safety/rules';
 export * from './scoring/strength';
 export * from './scoring/tieFit';
 export * from './scoring/tieScore';
+export * from './server/mappers';
 export * from './style/card';
 export * from './suggestions/rules';
 export * from './text/email';
