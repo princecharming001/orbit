@@ -4,8 +4,10 @@
  * slow happens here.
  *
  *   POST /gmail?token=ORBIT_PUBSUB_TOKEN                Pub/Sub push → sync.gmail.incremental (gmail:<user>:<historyId>)
- *   POST /unipile          x-orbit-webhook: secret      message_received → classify.message (own messages dropped),
- *                                                        new_relation → sync.linkedin, account status → the account row
+ *   POST /unipile          x-orbit-webhook: secret      message_received → the message stored in its LinkedIn thread
+ *                                                        + classify.message (the user's own: stored outbound only),
+ *                                                        new_relation → the person and identities + score.person,
+ *                                                        account status → the account row
  *   POST /unipile/account?token=ORBIT_UNIPILE_WEBHOOK_SECRET
  *                                                        hosted-auth notify: CREATION_SUCCESS | RECONNECTED → the
  *                                                        user's linkedin account (user id = payload.name) + backfill
@@ -21,6 +23,13 @@ import {
   silentLogger,
   unconfigured,
 } from '../_shared/http.ts';
+import {
+  CHAT_MAX_ATTENDEES,
+  type ChatAttendeeInput,
+  ingestRelations,
+  storeChat,
+} from '../_shared/ingest/linkedin.ts';
+import { loadSelf } from '../_shared/ingest/util.ts';
 import { type Queue, sqlQueue } from '../_shared/queue.ts';
 
 export interface WebhookDeps {
@@ -53,7 +62,7 @@ export function makeWebhookHandler(deps: WebhookDeps): (req: Request) => Promise
         if (!deps.unipileSecret || !deps.db) return unconfigured();
         if (!(await timingSafeEqual(req.headers.get('x-orbit-webhook'), deps.unipileSecret)))
           throw new HttpError(401, 'unauthorized', 'bad signature');
-        const out = await unipileEvent(deps.db, queue(), await body(req));
+        const out = await unipileEvent(deps.db, (db) => deps.queue ?? sqlQueue(db), await body(req));
         userId = out.userId;
         res = json(200, { ok: true, result: out.result });
       } else if (path === '/unipile/account') {
@@ -147,6 +156,83 @@ export function accountStatus(
   return undefined;
 }
 
+/**
+ * A message_received event: the message is stored in its LinkedIn thread (chats with more than 3 people are not
+ * relationships and are skipped). The user's own message is stored as outbound and nothing else happens; a message
+ * from someone else is classified and its sender re-scored.
+ */
+async function storeLinkedinMessage(
+  db: Db,
+  queue: Queue,
+  userId: string,
+  body: Record<string, unknown>,
+  chatId: string,
+  messageId: string,
+): Promise<string> {
+  const accountUser = str((body.account_info as { user_id?: unknown } | undefined)?.user_id);
+  const sender = (body.sender ?? {}) as Record<string, unknown>;
+  const senderId = str(sender.attendee_provider_id);
+  const self = await loadSelf(db, userId);
+  const ownIds = new Set([...self.memberIds, ...(accountUser ? [accountUser] : [])]);
+  // the user's own messages come through this hook too (§12.3)
+  const own = !!senderId && ownIds.has(senderId);
+  const raw = Array.isArray(body.attendees) ? (body.attendees as Record<string, unknown>[]) : [];
+  const attendees: ChatAttendeeInput[] = [];
+  for (const a of [sender, ...raw]) {
+    const providerId = str(a.attendee_provider_id);
+    if (!providerId || attendees.some((x) => x.providerId === providerId)) continue;
+    attendees.push({
+      providerId,
+      attendeeId: str(a.attendee_id) ?? null,
+      name: str(a.attendee_name) ?? null,
+      profileUrl: str(a.attendee_profile_url) ?? null,
+      isSelf: ownIds.has(providerId),
+    });
+  }
+  const people = attendees.filter((a) => !a.isSelf).length + 1;
+  if (people > CHAT_MAX_ATTENDEES) return own ? 'own_message' : 'group_chat';
+  const stored = await storeChat(
+    db,
+    userId,
+    self,
+    { id: chatId, attendees },
+    [
+      {
+        id: messageId,
+        text: str(body.message) ?? null,
+        senderId: senderId ?? null,
+        timestamp: str(body.timestamp) ?? new Date().toISOString(),
+        isSender: own,
+      },
+    ],
+    new Date(),
+    ownIds,
+  );
+  if (own) return 'own_message';
+  const row = stored.inbound[0];
+  await queue.enqueue({
+    kind: 'classify.message',
+    userId,
+    payload: {
+      provider: 'linkedin',
+      accountId: body.account_id,
+      chatId,
+      messageId,
+      messageRowId: row?.id ?? null,
+      timestamp: str(body.timestamp) ?? null,
+    },
+    dedupeKey: `classify:linkedin:${userId}:${messageId}`,
+  });
+  if (stored.personIds.length)
+    await queue.enqueue({
+      kind: 'score.person',
+      userId,
+      payload: { personIds: stored.personIds },
+      dedupeKey: `score.person:${userId}:message:${messageId}`,
+    });
+  return 'queued';
+}
+
 async function firstSeen(db: Db, eventId: string): Promise<boolean> {
   const rows = await db.sql`
     insert into orbit.webhook_events (provider, event_id) values ('unipile', ${eventId})
@@ -167,7 +253,7 @@ const str = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
 
 export async function unipileEvent(
   db: Db,
-  queue: Queue,
+  queueFor: (db: Db) => Queue,
   body: Record<string, unknown>,
 ): Promise<{ result: string; userId: string | null }> {
   // account status webhooks wrap their fields in AccountStatus
@@ -190,44 +276,48 @@ export async function unipileEvent(
     if (!messageId || !chatId) return { result: 'ignored', userId: null };
     const userId = await linkedinUser(db, body.account_id);
     if (!userId) return { result: 'unknown_account', userId: null };
-    if (!(await firstSeen(db, messageId))) return { result: 'duplicate', userId };
-    const own = (body.account_info as { user_id?: unknown } | undefined)?.user_id;
-    const sender = (body.sender as { attendee_provider_id?: unknown } | undefined)?.attendee_provider_id;
-    // the user's own messages come through this hook too (§12.4)
-    if (own && sender && own === sender) return { result: 'own_message', userId };
-    await queue.enqueue({
-      kind: 'classify.message',
-      userId,
-      payload: {
-        provider: 'linkedin',
-        accountId: body.account_id,
-        chatId,
-        messageId,
-        timestamp: str(body.timestamp) ?? null,
-      },
-      dedupeKey: `classify:linkedin:${messageId}`,
+    // the event id is recorded in the same transaction as the message, so a failed write is retried, not lost
+    const result = await db.begin(async (tx) => {
+      if (!(await firstSeen(tx, messageId))) return 'duplicate';
+      return storeLinkedinMessage(tx, queueFor(tx), userId, body, chatId, messageId);
     });
-    return { result: 'queued', userId };
+    return { result, userId };
   }
 
   if (event === 'new_relation') {
     const providerId = str(body.user_provider_id);
     const userId = await linkedinUser(db, body.account_id);
     if (!providerId || !userId) return { result: userId ? 'ignored' : 'unknown_account', userId };
-    if (!(await firstSeen(db, `relation:${body.account_id}:${providerId}`)))
-      return { result: 'duplicate', userId };
-    await queue.enqueue({
-      kind: 'sync.linkedin',
-      userId,
-      payload: {
-        mode: 'relation',
-        providerId,
-        publicIdentifier: str(body.user_public_identifier) ?? null,
-        profileUrl: str(body.user_profile_url) ?? null,
-      },
-      dedupeKey: `linkedin-relation:${userId}:${providerId}`,
+    const result = await db.begin(async (tx) => {
+      if (!(await firstSeen(tx, `relation:${body.account_id}:${providerId}`))) return 'duplicate';
+      const now = new Date();
+      const r = await ingestRelations(
+        tx,
+        userId,
+        [
+          {
+            memberId: providerId,
+            publicIdentifier: str(body.user_public_identifier) ?? null,
+            profileUrl: str(body.user_profile_url) ?? null,
+            fullName: str(body.user_full_name) ?? null,
+            headline: str(body.user_headline) ?? null,
+            photoUrl: str(body.user_picture_url) ?? null,
+            connectedAt: now.toISOString(),
+          },
+        ],
+        now,
+      );
+      const personIds = [...r.byMember.values()];
+      if (personIds.length)
+        await queueFor(tx).enqueue({
+          kind: 'score.person',
+          userId,
+          payload: { personIds },
+          dedupeKey: `score.person:${userId}:relation:${providerId}`,
+        });
+      return 'stored';
     });
-    return { result: 'queued', userId };
+    return { result, userId };
   }
 
   return { result: 'ignored', userId: null };

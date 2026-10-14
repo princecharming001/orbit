@@ -30,6 +30,8 @@ Deno.serve(
       appUrl: env('ORBIT_APP_URL'),
       unipileKey: env('UNIPILE_API_KEY'),
       unipileBase: env('UNIPILE_BASE_URL'),
+      unipileWebhookSecret: env('ORBIT_UNIPILE_WEBHOOK_SECRET'),
+      functionsUrl: supabaseUrl ? `${supabaseUrl}/functions/v1` : undefined,
     },
     db,
     log: makeLogger(salt),
