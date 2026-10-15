@@ -10,6 +10,9 @@ export default defineConfig({
     baseURL: `http://localhost:${port}${process.env.ORBIT_BASE ?? '/orbit/'}`,
     headless: true,
     viewport: { width: 1280, height: 800 },
+    // a failure keeps what led to it, so a red CI run can be read rather than re-run
+    trace: 'retain-on-failure',
+    screenshot: 'only-on-failure',
   },
   webServer: {
     command: `pnpm exec vite preview --port ${port} --strictPort`,

@@ -2122,9 +2122,11 @@ test.describe('People holds the board and the list; Drafts holds the day', () =>
     await expect(page.getByLabel('Filter people')).toHaveValue('alumni');
     await page.getByTestId('people-view-companies').click();
     await expect(page.getByLabel('Filter people')).toHaveValue('alumni');
+    // a filter picked straight after the tab click keeps the tab (it once wrote the old view back)
     await page.getByLabel('Filter people').selectOption('all');
-    // on a busy CI runner the demo is still building its first recommendations here, so allow it the suite's usual wait
-    await expect(page.getByRole('cell', { name: /target/i }).first()).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('people-view-companies')).toHaveAttribute('aria-selected', 'true');
+    await expect(page).toHaveURL(/view=companies/);
+    await expect(page.getByRole('cell', { name: /target/i }).first()).toBeVisible();
     // Start a chat opens the first message on their page
     await page.getByTestId('people-view-list').click();
     await rows.filter({ hasText: name }).getByTestId('list-start-chat').click();

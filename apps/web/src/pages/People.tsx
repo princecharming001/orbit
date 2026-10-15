@@ -1,7 +1,7 @@
 import type { CoffeeChat, Person } from '@orbit/core';
 import { ACTIVE_STAGES, CLOSED_STAGES, normalizeCompany, STAGE_HELP, STAGE_LABELS } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { AddPersonButton } from '../components/AddPerson';
 import { LinkedInImportButton } from '../components/LinkedInImport';
@@ -35,6 +35,11 @@ const VIEWS: { value: PeopleView; label: string }[] = [
 export function People() {
   const { userId } = useSession();
   const [params, setParams] = useSearchParams();
+  // The router hands a functional update the params of the last render, so a filter picked right after a tab click
+  // would write the old view back. Changes build on the newest params: the ones last written, until the address moves.
+  const seenParams = useRef(params);
+  const latestParams = useRef(params);
+  if (seenParams.current !== params) seenParams.current = latestParams.current = params;
   const filter = peopleFilterOf(params);
   const [q, setQ] = useState('');
   const [showClosed, setShowClosed] = useState(false);
@@ -175,24 +180,19 @@ export function People() {
     };
     return found.slice().sort((a, b) => rank(a) - rank(b));
   }, [people, chats, chatByPerson, q, filter, sort, showClosed, targetNames]);
-  const setView = (v: PeopleView) =>
-    setParams(
-      (p) => {
-        p.set('view', v);
-        return p;
-      },
-      { replace: true },
-    );
+  const updateParams = (change: (p: URLSearchParams) => void) => {
+    const next = new URLSearchParams(latestParams.current);
+    change(next);
+    latestParams.current = next;
+    setParams(next, { replace: true });
+  };
+  const setView = (v: PeopleView) => updateParams((p) => p.set('view', v));
   const setFilter = (f: PeopleFilter) =>
-    setParams(
-      (p) => {
-        p.delete('quiet');
-        if (f === 'all') p.delete('f');
-        else p.set('f', f);
-        return p;
-      },
-      { replace: true },
-    );
+    updateParams((p) => {
+      p.delete('quiet');
+      if (f === 'all') p.delete('f');
+      else p.set('f', f);
+    });
   const stages = showClosed ? STAGE_ORDER : ACTIVE_STAGES;
   const filtering = !!s || filter !== 'all';
   const boardRows = rows.filter((r) => stages.includes(r.chat.stage));
