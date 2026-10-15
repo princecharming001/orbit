@@ -49,6 +49,10 @@ jobs:
           # VITE_GOOGLE_CLIENT_ID (Settings > Secrets and variables > Actions > Variables). Empty until then, and the app
           # hides the Gmail step and never asks students to connect it.
           VITE_GOOGLE_CLIENT_ID: ${{ vars.VITE_GOOGLE_CLIENT_ID }}
+          # Account mode (server sign-in, sync and the networking agent, plan 16) turns on when the repository variable
+          # VITE_ORBIT_API is set to https://<ref>.supabase.co/functions/v1/orbit-api, after Orbit's Google OAuth client
+          # is configured (plan 16 §21 H2). Empty until then, and the app runs in local mode as before.
+          VITE_ORBIT_API: ${{ vars.VITE_ORBIT_API }}
       - name: Install Playwright browsers
         run: pnpm --filter @orbit/web exec playwright install --with-deps chromium
       - name: End-to-end tests
