@@ -45,6 +45,8 @@ export interface IntegrationAccount {
     | 'tracker_import'
     | 'demo';
   externalAccountId?: string;
+  /** live LinkedIn: the token Orbit's server gave this browser for the account; account calls carry it */
+  accessToken?: string;
   status: 'active' | 'needs_reauth' | 'revoked' | 'error' | 'instructions_shown';
   scopes: string[];
   syncState: Record<string, unknown>;

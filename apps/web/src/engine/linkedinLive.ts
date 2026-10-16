@@ -24,6 +24,7 @@ import {
   linkedInConnectStatus,
   type Mutual,
   mutualConnections,
+  sendLinkedInMessage,
   startLinkedInConnect,
   unipileConfigured,
 } from '../integrations/unipile';
@@ -113,6 +114,7 @@ export async function connectLinkedInLive(
 ): Promise<LiveConnectResult> {
   if (isServerUser(user.id)) return connectViaServer(user, opts);
   let accountId: string | undefined;
+  let accessToken: string | undefined;
   if (usesMockConnectors(user.id)) accountId = MOCK_ACCOUNT_ID;
   else {
     if (!unipileConfigured()) return { ok: false, reason: 'unconfigured', message: LIVE_SOON };
@@ -136,8 +138,10 @@ export async function connectLinkedInLive(
       await sleep(poll.everyMs, opts.signal);
       if (opts.signal?.aborted) break;
       const st = await linkedInConnectStatus(start.value.ref, { signal: opts.signal });
-      if (st.ok && st.value.status === 'connected' && st.value.accountId) accountId = st.value.accountId;
-      else if (st.ok && st.value.status === 'error') {
+      if (st.ok && st.value.status === 'connected' && st.value.accountId) {
+        accountId = st.value.accountId;
+        accessToken = st.value.token;
+      } else if (st.ok && st.value.status === 'error') {
         closeQuietly(win);
         return {
           ok: false,
@@ -161,7 +165,12 @@ export async function connectLinkedInLive(
       return { ok: false, reason: 'cancelled', message: 'Stopped connecting LinkedIn.' };
     if (!accountId) return { ok: false, reason: 'error', message: 'LinkedIn sign-in timed out. Try again.' };
   }
-  await saveAccount(user.id, { externalAccountId: accountId, status: 'active', lastError: undefined });
+  await saveAccount(user.id, {
+    externalAccountId: accountId,
+    accessToken,
+    status: 'active',
+    lastError: undefined,
+  });
   const r = await syncLinkedInLive(user, opts);
   if (r.ok) return { ok: true, rows: r.rows, added: r.added };
   return {
@@ -268,6 +277,7 @@ export async function syncLinkedInLive(
     opts.onProgress?.(conns.length);
   } else {
     const pulled = await linkedInConnections(row.externalAccountId!, {
+      token: row.accessToken,
       signal: opts.signal,
       onProgress: opts.onProgress,
     });
@@ -311,7 +321,7 @@ export async function disconnectLinkedInLive(
     return { ok: false, reason: 'not_connected', message: 'LinkedIn is not connected live.' };
   let unlinked = true;
   if (!usesMockConnectors(user.id)) {
-    const r = await disconnectLinkedInAccount(row.externalAccountId!);
+    const r = await disconnectLinkedInAccount(row.externalAccountId!, { token: row.accessToken });
     unlinked = r.ok;
   }
   await db.integrations.update(row.id, {
@@ -413,7 +423,10 @@ export async function mutualsFor(
       message: `${person.firstName} did not come from your live LinkedIn sync, so LinkedIn cannot look up mutual connections.`,
       mutuals: [],
     };
-  const r = await mutualConnections(row.externalAccountId!, person.linkedinMemberId, { signal: opts.signal });
+  const r = await mutualConnections(row.externalAccountId!, person.linkedinMemberId, {
+    token: row.accessToken,
+    signal: opts.signal,
+  });
   if (!r.ok)
     return {
       ok: false,
@@ -422,4 +435,52 @@ export async function mutualsFor(
       mutuals: [],
     };
   return { ok: true, source: 'linkedin', mutuals: r.value.map(resolve) };
+}
+
+/**
+ * Approved LinkedIn messages go out from Orbit itself: LinkedIn is connected live in this browser (or this is the
+ * sample student), and Orbit knows who on LinkedIn the person is. Otherwise the student sends them on LinkedIn.
+ */
+export async function linkedInSendActive(
+  user: User,
+  person?: Pick<Person, 'linkedinMemberId' | 'linkedinSlug'>,
+): Promise<boolean> {
+  if (isServerUser(user.id)) return false;
+  if (person && !person.linkedinMemberId && !person.linkedinSlug) return false;
+  const row = await liveLinkedInAccount(user.id);
+  if (!isConnected(row)) return false;
+  return usesMockConnectors(user.id) || (unipileConfigured() && !!row.accessToken);
+}
+
+export type LinkedInSendResult =
+  | { ok: true; invited: boolean; messageId?: string; chatId?: string }
+  | { ok: false; error: string };
+
+/**
+ * Send one approved LinkedIn message from the student's own account: a message when they are connected, a
+ * connection request with the text as its note otherwise. The sample student's sends go nowhere: they are recorded
+ * as sent, like everything else in the demo.
+ */
+export async function sendLinkedInLive(
+  user: User,
+  person: Person,
+  text: string,
+  invite: boolean,
+): Promise<LinkedInSendResult> {
+  if (usesMockConnectors(user.id))
+    return { ok: true, invited: invite, messageId: `demo-li-${Date.now().toString(36)}` };
+  const row = await liveLinkedInAccount(user.id);
+  if (!isConnected(row)) return { ok: false, error: 'LinkedIn is not connected. Connect it in Settings.' };
+  const r = await sendLinkedInMessage(
+    row.externalAccountId!,
+    { memberId: person.linkedinMemberId, slug: person.linkedinSlug },
+    text,
+    invite,
+    { token: row.accessToken },
+  );
+  if (!r.ok) return { ok: false, error: r.reason === 'unconfigured' ? LIVE_SOON : r.message };
+  // keep the member id LinkedIn resolved, so the next message and mutual connections need no lookup
+  if (r.value.memberId && !person.linkedinMemberId)
+    await db.people.update(person.id, { linkedinMemberId: r.value.memberId });
+  return { ok: true, invited: r.value.invited, messageId: r.value.messageId, chatId: r.value.chatId };
 }

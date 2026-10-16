@@ -33,6 +33,7 @@ import {
   messageIdTokens,
 } from '../integrations/google';
 import { evaluateImmediateSuggestions, findReferrerFor } from './brief';
+import { linkedInSendActive, sendLinkedInLive } from './linkedinLive';
 import { scheduleChatAt, upcomingMeeting } from './move';
 import { evaluateTrigger, recordAlreadyDone } from './stages';
 
@@ -516,8 +517,11 @@ export async function approveAndSend(
   bodyFinal: string,
   subject?: string,
   now = new Date(),
-  /** `copy`: the student copies the text to paste into Gmail in the browser, so nothing opens and no address is needed */
-  opts: { undoWindowMs?: number; via?: 'copy' } = {},
+  /**
+   * `copy`: the student copies the text to paste into Gmail in the browser, so nothing opens and no address is needed.
+   * `handoff`: open LinkedIn (or the mail app) for the student to send it there, even when Orbit could send it.
+   */
+  opts: { undoWindowMs?: number; via?: 'copy' | 'handoff' } = {},
 ): Promise<ApproveResult> {
   const msg = await db.outbound.get(messageId);
   if (!msg || msg.userId !== user.id) return { ok: false, error: 'Message not found' };
@@ -552,8 +556,15 @@ export async function approveAndSend(
     approvedAt: now.toISOString(),
     error: undefined,
   };
-  if (msg.channel === 'gmail' && opts.via !== 'copy' && (await googleSendActive(user.id))) {
-    if (!msg.toEmail) return { ok: false, error: `There is no email address for ${person.firstName}.` };
+  // Orbit sends it itself, after the undo window: email through Gmail, LinkedIn through the student's own account
+  const direct =
+    !opts.via &&
+    (msg.channel === 'gmail'
+      ? await googleSendActive(user.id)
+      : msg.channel === 'linkedin' && (await linkedInSendActive(user, person)));
+  if (direct) {
+    if (msg.channel === 'gmail' && !msg.toEmail)
+      return { ok: false, error: `There is no email address for ${person.firstName}.` };
     const undoMs = opts.undoWindowMs ?? UNDO_WINDOW_MS;
     const sendAt = new Date(now.getTime() + undoMs).toISOString();
     const claimed = await transition(msg.id, ['draft', 'failed', 'cancelled'], {
@@ -733,7 +744,9 @@ export async function sendDueQueued(
             status: 'failed',
             sendAt: undefined,
             error:
-              'Orbit could not confirm this was sent. Check your Gmail Sent folder before sending it again.',
+              o.channel === 'linkedin'
+                ? 'Orbit could not confirm this was sent. Check your LinkedIn messages before sending it again.'
+                : 'Orbit could not confirm this was sent. Check your Gmail Sent folder before sending it again.',
           });
           if (m) out.push({ id: o.id, ok: false, error: m.error });
         }
@@ -780,6 +793,7 @@ async function deliver(
     return fail('Approval did not match the text. Nothing was sent.');
   const person = await db.people.get(msg.personId);
   if (!person || person.hiddenAt) return fail('This person is hidden.');
+  if (msg.channel === 'linkedin') return deliverLinkedIn(user, msg, person, now, fail);
   if (!msg.toEmail) return fail(`There is no email address for ${person.firstName}.`);
   const env = await envelopeFor(msg, msg.subject);
   if (!env.subject) return fail('This email has no subject.');
@@ -824,6 +838,40 @@ async function deliver(
         chatBehind(e)
           ? 'Orbit sent it but could not update the chat. Check its stage.'
           : 'Orbit sent it and updated the chat, but could not save all of it to their history. Check their page.',
+      );
+    } catch {}
+  }
+  return { ok: true };
+}
+
+/** The LinkedIn half of deliver: a message to a connection, or a connection request with the note. */
+async function deliverLinkedIn(
+  user: User,
+  msg: OutboundMessage,
+  person: Person,
+  now: Date,
+  fail: (error: string) => Promise<{ ok: false; error: string }>,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const invite = await connectionNoteFor(msg, person);
+  const r = await sendLinkedInLive(user, person, msg.bodyFinal!, invite);
+  if (!r.ok) return fail(r.error);
+  try {
+    await finalizeSent(user, msg, { providerMessageId: r.messageId, providerThreadId: r.chatId }, now);
+  } catch (e) {
+    try {
+      await db.outbound.update(msg.id, {
+        status: 'sent',
+        sentAt: now.toISOString(),
+        sendAt: undefined,
+        providerMessageId: r.messageId,
+      });
+      await notify(
+        user.id,
+        'system',
+        'Sent',
+        chatBehind(e)
+          ? 'Orbit sent it on LinkedIn but could not update the chat. Check its stage.'
+          : 'Orbit sent it on LinkedIn and updated the chat, but could not save all of it to their history. Check their page.',
       );
     } catch {}
   }

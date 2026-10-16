@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  accountToken,
   type Bucket,
   type ConnectorDeps,
   defaultOrigins,
@@ -61,6 +62,12 @@ const villageCompany = {
   pagination: {},
 };
 const BASE = 'https://proxy.test/functions/v1/orbit-connectors';
+const SIGNING = 'test-signing-key-not-a-real-one';
+// the tokens /connect/status hands a browser for these accounts
+const TOKEN: Record<string, string> = {
+  a1: await accountToken('a1', SIGNING),
+  acc_1: await accountToken('acc_1', SIGNING),
+};
 
 type Upstream = (url: string, init: RequestInit) => Response | Promise<Response>;
 
@@ -115,11 +122,17 @@ function harness(over: Partial<ConnectorDeps> = {}, upstreamOver?: Upstream) {
     villageUser: { externalUserId: 'orbit-local', email: 'founder@orbit.test' },
     origins: defaultOrigins,
     newRef: () => 'ref1',
+    signingKey: SIGNING,
     fetch: (async (url: string, init: RequestInit = {}) => {
       upstream.push({
         url,
         method: init.method ?? 'GET',
-        body: init.body ? JSON.parse(init.body as string) : undefined,
+        body:
+          typeof init.body === 'string'
+            ? JSON.parse(init.body)
+            : init.body instanceof FormData
+              ? Object.fromEntries(init.body)
+              : undefined,
       });
       return (upstreamOver ?? answer)(url, init);
     }) as unknown as typeof fetch,
@@ -166,6 +179,7 @@ describe('orbit-connectors proxy', () => {
     expect(await (await ok.handler(post('/connect/status', { ref: 'ref1' }))).json()).toEqual({
       status: 'connected',
       accountId: 'acc_1',
+      token: TOKEN.acc_1,
     });
     const waiting = harness(
       {},
@@ -200,19 +214,19 @@ describe('orbit-connectors proxy', () => {
     const broken = harness({}, accounts([], 500));
     expect((await broken.handler(post('/connect/status', { ref: 'ref1' }))).status).toBe(502);
     const down = harness({}, () => new Response('{}', { status: 500 }));
-    const r2 = await down.handler(post('/relations', { accountId: 'a1' }));
+    const r2 = await down.handler(post('/relations', { accountId: 'a1', token: TOKEN.a1 }));
     expect(r2.status).toBe(502);
     expect(await r2.json()).toEqual({ error: 'unipile 500' });
   });
 
   it('maps relations and mutuals, and forwards Village paths', async () => {
     const { handler } = harness();
-    const rel = (await (await handler(post('/relations', { accountId: 'a1' }))).json()) as {
+    const rel = (await (await handler(post('/relations', { accountId: 'a1', token: TOKEN.a1 }))).json()) as {
       items: { first_name: string }[];
     };
     expect(rel.items[0]!.first_name).toBe('Priya');
     const mut = (await (
-      await handler(post('/mutuals', { accountId: 'a1', targetMemberId: 't' }))
+      await handler(post('/mutuals', { accountId: 'a1', token: TOKEN.a1, targetMemberId: 't' }))
     ).json()) as {
       mutuals: { name: string }[];
     };
@@ -316,9 +330,125 @@ describe('orbit-connectors proxy', () => {
     expect(await r.json()).toEqual({ paths: [] });
   });
 
+  it('refuses an account route without the token this browser was given, before reaching Unipile', async () => {
+    const { handler, upstream } = harness();
+    for (const [path, body] of [
+      ['/relations', { accountId: 'a1' }],
+      ['/mutuals', { accountId: 'a1', token: TOKEN.acc_1, targetMemberId: 't' }],
+      ['/disconnect', { accountId: 'acc_1', token: 'forged' }],
+      ['/send', { accountId: 'acc_1', text: 'hi', memberId: 'm1' }],
+    ] as const) {
+      const r = await handler(post(path, body));
+      expect(r.status).toBe(403);
+    }
+    expect(upstream).toHaveLength(0);
+    // and with no signing key at all, no account route is open
+    const unsigned = harness({ signingKey: undefined });
+    expect((await unsigned.handler(post('/relations', { accountId: 'a1', token: TOKEN.a1 }))).status).toBe(
+      403,
+    );
+  });
+
+  it('sends a message to a connection as a new chat from the student’s account', async () => {
+    const { handler, upstream } = harness({}, (url) =>
+      url.endsWith('/api/v1/chats')
+        ? new Response(JSON.stringify({ object: 'ChatStarted', chat_id: 'c1', message_id: 'msg1' }), {
+            status: 201,
+          })
+        : new Response('{}', { status: 404 }),
+    );
+    const r = await handler(
+      post('/send', {
+        accountId: 'acc_1',
+        token: TOKEN.acc_1,
+        memberId: 'm1',
+        text: ' Hi Priya ',
+        invite: false,
+      }),
+    );
+    expect(await r.json()).toEqual({
+      ok: true,
+      invited: false,
+      chatId: 'c1',
+      messageId: 'msg1',
+      memberId: 'm1',
+    });
+    expect(upstream).toEqual([
+      {
+        url: 'https://api1.unipile.com:443/api/v1/chats',
+        method: 'POST',
+        body: { account_id: 'acc_1', text: 'Hi Priya', attendees_ids: 'm1' },
+      },
+    ]);
+  });
+
+  it('sends a connection request with the note to someone not connected, looking them up by profile name', async () => {
+    const { handler, upstream } = harness({}, (url) =>
+      url.includes('/api/v1/users/dana-lee?')
+        ? new Response(JSON.stringify({ provider_id: 'ACoAA1' }), { status: 200 })
+        : url.endsWith('/api/v1/users/invite')
+          ? new Response(JSON.stringify({ object: 'UserInvitationSent', invitation_id: 'inv1' }), {
+              status: 201,
+            })
+          : new Response('{}', { status: 404 }),
+    );
+    const r = await handler(
+      post('/send', {
+        accountId: 'acc_1',
+        token: TOKEN.acc_1,
+        slug: 'dana-lee',
+        text: 'Hi Dana',
+        invite: true,
+      }),
+    );
+    expect(await r.json()).toEqual({ ok: true, invited: true, messageId: 'inv1', memberId: 'ACoAA1' });
+    expect(upstream[0]!.url).toBe('https://api1.unipile.com:443/api/v1/users/dana-lee?account_id=acc_1');
+    expect(upstream[1]).toMatchObject({
+      url: 'https://api1.unipile.com:443/api/v1/users/invite',
+      body: { account_id: 'acc_1', provider_id: 'ACoAA1', message: 'Hi Dana' },
+    });
+    // a note longer than LinkedIn allows never leaves
+    const long = harness();
+    const r2 = await long.handler(
+      post('/send', {
+        accountId: 'acc_1',
+        token: TOKEN.acc_1,
+        slug: 'dana-lee',
+        text: 'x'.repeat(301),
+        invite: true,
+      }),
+    );
+    expect(await r2.json()).toMatchObject({ ok: false, reason: 'bad_request' });
+    expect(long.upstream).toHaveLength(0);
+  });
+
+  it('passes on what LinkedIn says when it refuses, and stops an account at its daily sends', async () => {
+    const refused = harness(
+      {},
+      () =>
+        new Response(JSON.stringify({ title: 'Recipient cannot be reached', status: 422 }), { status: 422 }),
+    );
+    const r = await refused.handler(
+      post('/send', { accountId: 'acc_1', token: TOKEN.acc_1, memberId: 'm1', text: 'Hi' }),
+    );
+    expect(r.status).toBe(200);
+    expect(await r.json()).toEqual({ ok: false, reason: 'refused', message: 'Recipient cannot be reached' });
+    const at = new Date('2026-10-16T09:00:00Z');
+    const capped = harness(
+      { sendsPerDay: 2, now: () => at, take: memoryTake(() => at.getTime()) },
+      () => new Response(JSON.stringify({ chat_id: 'c', message_id: 'm' }), { status: 201 }),
+    );
+    const send = () =>
+      capped.handler(post('/send', { accountId: 'acc_1', token: TOKEN.acc_1, memberId: 'm1', text: 'Hi' }));
+    expect(await (await send()).json()).toMatchObject({ ok: true });
+    expect(await (await send()).json()).toMatchObject({ ok: true });
+    expect(await (await send()).json()).toMatchObject({ ok: false, reason: 'limit' });
+    expect(capped.upstream).toHaveLength(2);
+  });
+
   it('unlinks an account with a DELETE, and an account already gone counts as unlinked', async () => {
     const { handler, upstream } = harness();
-    const r = await handler(post('/disconnect', { accountId: 'acc_1' }));
+    const r = await handler(post('/disconnect', { accountId: 'acc_1', token: TOKEN.acc_1 }));
     expect(r.status).toBe(200);
     expect(await r.json()).toEqual({ ok: true });
     expect(upstream[0]).toMatchObject({
@@ -326,9 +456,13 @@ describe('orbit-connectors proxy', () => {
       url: 'https://api1.unipile.com:443/api/v1/accounts/acc_1',
     });
     const gone = harness({}, () => new Response('{}', { status: 404 }));
-    expect((await gone.handler(post('/disconnect', { accountId: 'acc_1' }))).status).toBe(200);
+    expect((await gone.handler(post('/disconnect', { accountId: 'acc_1', token: TOKEN.acc_1 }))).status).toBe(
+      200,
+    );
     const fails = harness({}, () => new Response('{}', { status: 500 }));
-    expect((await fails.handler(post('/disconnect', { accountId: 'acc_1' }))).status).toBe(502);
+    expect(
+      (await fails.handler(post('/disconnect', { accountId: 'acc_1', token: TOKEN.acc_1 }))).status,
+    ).toBe(502);
   });
 
   it('reports each provider as unconfigured when its key is missing, so the app uses the fallback', async () => {
@@ -348,7 +482,9 @@ describe('orbit-connectors proxy', () => {
     expect((await noUser.handler(post('/paths', DANA))).status).toBe(503);
     expect(noUser.upstream).toEqual([]);
     // the other provider still works
-    expect((await noVillage.handler(post('/relations', { accountId: 'a1' }))).status).toBe(200);
+    expect((await noVillage.handler(post('/relations', { accountId: 'a1', token: TOKEN.a1 }))).status).toBe(
+      200,
+    );
   });
 
   it('refuses unknown routes and other methods', async () => {

@@ -70,6 +70,8 @@ export interface CallOpts {
   fetch?: typeof fetch;
   signal?: AbortSignal;
   timeoutMs?: number;
+  /** the account token /connect/status gave this browser; the server refuses account calls without it */
+  token?: string;
 }
 
 /** One POST to the proxy, as an outcome: never throws. */
@@ -125,6 +127,8 @@ export async function startLinkedInConnect(
 export interface ConnectStatus {
   status: 'pending' | 'connected' | 'error';
   accountId?: string;
+  /** proof this browser finished the sign-in: sent with every later call about the account */
+  token?: string;
   message?: string;
 }
 
@@ -141,6 +145,7 @@ export async function linkedInConnectStatus(
     value: {
       status: status === 'connected' || status === 'error' ? status : 'pending',
       accountId: r.value.accountId,
+      token: r.value.token,
       message: r.value.message,
     },
   };
@@ -173,7 +178,7 @@ export async function linkedInConnections(
   let cursor: string | null | undefined;
   let pages = 0;
   do {
-    const r = await call<RelationsResponse>('/relations', { accountId, cursor }, opts);
+    const r = await call<RelationsResponse>('/relations', { accountId, token: opts.token, cursor }, opts);
     if (!r.ok) return r;
     for (const it of r.value.items ?? []) {
       const name = `${it.first_name ?? ''} ${it.last_name ?? ''}`.trim();
@@ -206,7 +211,7 @@ export async function mutualConnections(
   targetMemberId: string,
   opts: CallOpts = {},
 ): Promise<ConnectorOutcome<Mutual[]>> {
-  const r = await call<MutualResponse>('/mutuals', { accountId, targetMemberId }, opts);
+  const r = await call<MutualResponse>('/mutuals', { accountId, token: opts.token, targetMemberId }, opts);
   if (!r.ok) return r;
   return {
     ok: true,
@@ -221,7 +226,49 @@ export async function disconnectLinkedInAccount(
   accountId: string,
   opts: CallOpts = {},
 ): Promise<ConnectorOutcome<{ disconnected: boolean }>> {
-  const r = await call<{ ok?: boolean }>('/disconnect', { accountId }, opts);
+  const r = await call<{ ok?: boolean }>('/disconnect', { accountId, token: opts.token }, opts);
   if (!r.ok) return r;
   return { ok: true, value: { disconnected: r.value.ok !== false } };
+}
+
+export interface LinkedInSent {
+  /** a connection request went out with the text as its note, rather than a message */
+  invited: boolean;
+  messageId?: string;
+  chatId?: string;
+  /** their LinkedIn member id, as Unipile resolved it */
+  memberId?: string;
+}
+
+/**
+ * Send one approved message from the student's own LinkedIn: a message to a connection, or, with `invite`, a
+ * connection request carrying the text as its note. Who it goes to is their member id when Orbit has it, else their
+ * public profile name.
+ */
+export async function sendLinkedInMessage(
+  accountId: string,
+  to: { memberId?: string; slug?: string },
+  text: string,
+  invite: boolean,
+  opts: CallOpts = {},
+): Promise<ConnectorOutcome<LinkedInSent>> {
+  const r = await call<{
+    ok?: boolean;
+    message?: string;
+    invited?: boolean;
+    messageId?: string;
+    chatId?: string;
+    memberId?: string;
+  }>('/send', { accountId, token: opts.token, memberId: to.memberId, slug: to.slug, text, invite }, opts);
+  if (!r.ok) return r;
+  if (r.value.ok === false) return connectorFailure('error', r.value.message ?? 'LinkedIn did not send it.');
+  return {
+    ok: true,
+    value: {
+      invited: !!r.value.invited,
+      messageId: r.value.messageId,
+      chatId: r.value.chatId,
+      memberId: r.value.memberId,
+    },
+  };
 }

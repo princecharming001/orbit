@@ -13,6 +13,7 @@ import { type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } f
 import { db } from '../db/schema';
 import { regenerateDraft } from '../engine/brief';
 import { restoreDraftText, saveDraftEdits as saveEdits } from '../engine/drafts';
+import { linkedInSendActive } from '../engine/linkedinLive';
 import {
   approveAndSend,
   checkSendAllowed,
@@ -30,7 +31,7 @@ import {
 } from '../engine/send';
 import { useSession } from '../state/session';
 import { Button, cx, Input, relDate, Textarea, useToast } from '../ui';
-import { copyText, openHandoff } from './approve';
+import { copyText, openHandoff, runApproval } from './approve';
 
 type PromptNeed = Exclude<DraftNeed, 'post' | 'resume'>;
 /** Messages that ask a favour: two of them to one person at once is too much. */
@@ -142,10 +143,16 @@ export function DraftEditor({
     threaded: !!draft.externalThreadId,
   });
   const person = useLiveQuery(() => db.people.get(draft.personId), [draft.personId]);
-  // whether approving sends from Orbit (Google connected with send permission) or opens the mail app
+  // whether approving sends from Orbit (Google connected with send permission, or LinkedIn connected live) or opens
+  // the mail app or LinkedIn for the student to send it there
   const direct = useLiveQuery(
-    async () => (user && draft.channel === 'gmail' ? googleSendActive(user.id) : false),
-    [user?.id, draft.channel],
+    async () =>
+      !user
+        ? false
+        : draft.channel === 'gmail'
+          ? googleSendActive(user.id)
+          : linkedInSendActive(user, person ?? undefined),
+    [user?.id, draft.channel, person?.linkedinMemberId, person?.linkedinSlug],
   );
   const chats = useLiveQuery(
     () => db.chats.where('personId').equals(draft.personId).toArray(),
@@ -308,9 +315,13 @@ export function DraftEditor({
     });
   };
   const defaultLabel = isLinkedIn
-    ? connectionNote
-      ? 'Copy note & open LinkedIn'
-      : 'Copy & open LinkedIn'
+    ? direct
+      ? connectionNote
+        ? `Send request to ${first}`
+        : `Send to ${first}`
+      : connectionNote
+        ? 'Copy note & open LinkedIn'
+        : 'Copy & open LinkedIn'
     : direct
       ? `Send to ${first}`
       : `Open email to ${first}`;
@@ -489,8 +500,10 @@ export function DraftEditor({
       {isLinkedIn && (
         <div className="text-[12px] text-ink-3 mb-2" data-testid="draft-linkedin-hint">
           {connectionNote
-            ? `Connection note. You are not connected to ${person?.firstName ?? 'them'} yet, so this goes with your connection request. A free LinkedIn account allows ${LINKEDIN_NOTE_TARGET} characters (Premium allows ${LINKEDIN_NOTE_MAX}).`
-            : 'LinkedIn message. You are connected, so this opens a message to them.'}
+            ? `Connection note. You are not connected to ${person?.firstName ?? 'them'} yet, so this goes with your connection request${direct ? ', sent from your LinkedIn when you press Send' : ''}. A free LinkedIn account allows ${LINKEDIN_NOTE_TARGET} characters (Premium allows ${LINKEDIN_NOTE_MAX}).`
+            : direct
+              ? 'LinkedIn message. It goes from your own LinkedIn when you press Send, with a few seconds to undo.'
+              : 'LinkedIn message. You are connected, so this opens a message to them.'}
         </div>
       )}
       <Textarea
@@ -569,6 +582,31 @@ export function DraftEditor({
               data-testid="draft-copy"
             >
               Copy text
+            </Button>
+          )}
+          {isLinkedIn && direct && !approveLabel && (
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={busy || !body.trim() || blocked}
+              title="Copy the text and send it yourself on LinkedIn"
+              onClick={async () => {
+                if (!user) return;
+                setError(undefined);
+                const e = await runApproval(
+                  user,
+                  draft,
+                  body,
+                  undefined,
+                  toast,
+                  person?.firstName,
+                  'handoff',
+                );
+                if (e) setError(e);
+              }}
+              data-testid="draft-linkedin-handoff"
+            >
+              Open in LinkedIn instead
             </Button>
           )}
           <Button

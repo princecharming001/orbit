@@ -298,6 +298,34 @@ function companyIntros(r) {
 
 // supabase/functions/orbit-connectors/connectors.ts
 var DEFAULT_LIMITS = { perMinute: 120, perDay: 3e3 };
+async function accountToken(accountId, signingKey) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(signingKey),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const sig = new Uint8Array(
+    await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`unipile-account:${accountId}`))
+  );
+  return btoa(String.fromCharCode(...sig)).replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
+}
+async function tokenValid(accountId, token, signingKey) {
+  if (!signingKey || !accountId || typeof token !== "string" || !token) return false;
+  const want = await accountToken(accountId, signingKey);
+  if (want.length !== token.length) return false;
+  let diff = 0;
+  for (let i = 0; i < want.length; i++) diff |= want.charCodeAt(i) ^ token.charCodeAt(i);
+  return diff === 0;
+}
+function sendBucket(accountId, now, perDay) {
+  const day = now.toISOString().slice(0, 10);
+  const end = /* @__PURE__ */ new Date(`${day}T00:00:00Z`);
+  end.setUTCDate(end.getUTCDate() + 1);
+  return { key: `connectors:send:${day}:${accountId}`, limit: perDay, expires: end.toISOString() };
+}
+var INVITE_NOTE_MAX = 300;
 function cors(origin, allowed) {
   if (!origin || !allowed) return { Vary: "Origin" };
   return {
@@ -353,8 +381,10 @@ var UNIPILE_ROUTES = /* @__PURE__ */ new Set([
   "/connect/status",
   "/relations",
   "/mutuals",
-  "/disconnect"
+  "/disconnect",
+  "/send"
 ]);
+var ACCOUNT_ROUTES = /* @__PURE__ */ new Set(["/relations", "/mutuals", "/disconnect", "/send"]);
 function makeHandler(deps) {
   const doFetch = deps.fetch ?? fetch;
   const limits = deps.limits ?? DEFAULT_LIMITS;
@@ -417,11 +447,37 @@ function makeHandler(deps) {
         }
       );
     }
+    if (ACCOUNT_ROUTES.has(path) && !await tokenValid(String(body.accountId ?? ""), body.token, deps.signingKey))
+      return json(403, { error: "this LinkedIn account is not linked to this browser" }, h);
+    if (path === "/send") {
+      let sendVerdict;
+      try {
+        sendVerdict = await take([sendBucket(String(body.accountId), now(), deps.sendsPerDay ?? 25)]);
+      } catch {
+        return json(503, { error: "unavailable right now" }, h);
+      }
+      if (!sendVerdict.allowed)
+        return json(
+          200,
+          {
+            ok: false,
+            reason: "limit",
+            message: "You have sent as many LinkedIn messages as Orbit allows today."
+          },
+          h
+        );
+    }
     try {
       if (isVillage) return json(200, await villagePaths(village, deps.villageUser, body), h);
       if (path === "/connect/start")
         return json(200, await unipileConnectStart(deps, doFetch, deps.newRef ?? newRef), h);
-      if (path === "/connect/status") return json(200, await unipileConnectStatus(deps, body, doFetch), h);
+      if (path === "/connect/status") {
+        const st = await unipileConnectStatus(deps, body, doFetch);
+        if (st.status === "connected" && st.accountId && deps.signingKey)
+          return json(200, { ...st, token: await accountToken(st.accountId, deps.signingKey) }, h);
+        return json(200, st, h);
+      }
+      if (path === "/send") return json(200, await unipileSend(deps, body, doFetch), h);
       if (path === "/relations") return json(200, await unipileRelations(deps, body, doFetch), h);
       if (path === "/mutuals") return json(200, await unipileMutuals(deps, body, doFetch), h);
       return json(200, await unipileDisconnect(deps, body, doFetch), h);
@@ -483,6 +539,70 @@ async function unipileDisconnect(deps, body, doFetch) {
   });
   if (!res.ok && res.status !== 404) throw new Error(`unipile ${res.status}`);
   return { ok: true };
+}
+async function unipileError(res) {
+  try {
+    const b = await res.json();
+    return String(b.detail ?? b.title ?? b.message ?? `LinkedIn refused it (${res.status}).`);
+  } catch {
+    return `LinkedIn refused it (${res.status}).`;
+  }
+}
+async function unipileSend(deps, body, doFetch) {
+  const accountId = String(body.accountId ?? "");
+  const text = typeof body.text === "string" ? body.text.trim() : "";
+  const invite = body.invite === true;
+  if (!text) return { ok: false, reason: "bad_request", message: "The message is empty." };
+  if (invite && text.length > INVITE_NOTE_MAX)
+    return {
+      ok: false,
+      reason: "bad_request",
+      message: `A connection note can be at most ${INVITE_NOTE_MAX} characters.`
+    };
+  let providerId = typeof body.memberId === "string" ? body.memberId.trim() : "";
+  const slug = typeof body.slug === "string" ? body.slug.trim() : "";
+  if (!providerId) {
+    if (!slug)
+      return { ok: false, reason: "bad_request", message: "Orbit has no LinkedIn profile for them." };
+    const res2 = await doFetch(
+      `${deps.unipileBase}/api/v1/users/${encodeURIComponent(slug)}?account_id=${encodeURIComponent(accountId)}`,
+      { headers: uHeaders(deps) }
+    );
+    if (res2.status === 404 || res2.status === 422)
+      return { ok: false, reason: "not_found", message: "LinkedIn could not find that profile." };
+    if (!res2.ok) throw new Error(`unipile ${res2.status}`);
+    const p = await res2.json();
+    if (!p.provider_id)
+      return { ok: false, reason: "not_found", message: "LinkedIn could not find that profile." };
+    providerId = p.provider_id;
+  }
+  if (invite) {
+    const res2 = await doFetch(`${deps.unipileBase}/api/v1/users/invite`, {
+      method: "POST",
+      headers: uHeaders(deps),
+      body: JSON.stringify({ account_id: accountId, provider_id: providerId, message: text })
+    });
+    if (res2.status >= 400 && res2.status < 500)
+      return { ok: false, reason: "refused", message: await unipileError(res2) };
+    if (!res2.ok) throw new Error(`unipile ${res2.status}`);
+    const b2 = await res2.json();
+    return { ok: true, invited: true, messageId: b2.invitation_id, memberId: providerId };
+  }
+  const form = new FormData();
+  form.append("account_id", accountId);
+  form.append("text", text);
+  form.append("attendees_ids", providerId);
+  const res = await doFetch(`${deps.unipileBase}/api/v1/chats`, {
+    method: "POST",
+    // FormData sets its own multipart content type
+    headers: { accept: "application/json", "X-API-KEY": deps.unipileKey },
+    body: form
+  });
+  if (res.status >= 400 && res.status < 500)
+    return { ok: false, reason: "refused", message: await unipileError(res) };
+  if (!res.ok) throw new Error(`unipile ${res.status}`);
+  const b = await res.json();
+  return { ok: true, invited: false, chatId: b.chat_id, messageId: b.message_id, memberId: providerId };
 }
 async function unipileRelations(deps, body, doFetch) {
   const accountId = String(body.accountId ?? "");
@@ -619,6 +739,9 @@ Deno.serve(
     // per-visitor counters in the shared store orbit-claude uses; in memory when it is not reachable from here
     take: url && serviceKey ? postgrestTake(url, serviceKey) : memoryTake(),
     salt: serviceKey.slice(-16) || "orbit",
+    // account tokens are signed with the service role key, which never leaves the server
+    signingKey: serviceKey || void 0,
+    sendsPerDay: num("ORBIT_LINKEDIN_SENDS_PER_DAY", 25),
     limits: {
       perMinute: num("ORBIT_CONNECTORS_PER_MINUTE", 120),
       perDay: num("ORBIT_CONNECTORS_PER_DAY", 3e3)

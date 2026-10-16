@@ -25,6 +25,9 @@ Deno.serve(
     // per-visitor counters in the shared store orbit-claude uses; in memory when it is not reachable from here
     take: url && serviceKey ? postgrestTake(url, serviceKey) : memoryTake(),
     salt: serviceKey.slice(-16) || 'orbit',
+    // account tokens are signed with the service role key, which never leaves the server
+    signingKey: serviceKey || undefined,
+    sendsPerDay: num('ORBIT_LINKEDIN_SENDS_PER_DAY', 25),
     limits: {
       perMinute: num('ORBIT_CONNECTORS_PER_MINUTE', 120),
       perDay: num('ORBIT_CONNECTORS_PER_DAY', 3000),

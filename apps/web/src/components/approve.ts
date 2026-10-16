@@ -62,12 +62,16 @@ export async function runApproval(
   subject: string | undefined,
   toast: Toaster,
   firstName?: string,
+  /** `handoff`: open LinkedIn or the mail app even when Orbit could send it itself */
+  via?: 'handoff',
 ): Promise<string | undefined> {
+  const name = firstName ?? 'them';
+  // the copy starts inside the click (an await first would lose the browser's permission); a LinkedIn message Orbit
+  // sends itself is copied too, which does no harm
   const copying = draft.channel === 'linkedin' ? copyText(body) : Promise.resolve(false);
-  const r = await approveAndSend(user, draft.id, body, subject);
+  const r = await approveAndSend(user, draft.id, body, subject, new Date(), via ? { via } : {});
   const copied = await copying;
   if (!r.ok) return r.error;
-  const name = firstName ?? 'them';
   if (r.status === 'handed_off') {
     const url = r.handoffUrl;
     if (openHandoff(url))
@@ -93,6 +97,10 @@ export async function runApproval(
         },
       },
     });
-  } else toast.push({ text: `Sent to ${name}.`, tone: 'good' });
+  } else
+    toast.push({
+      text: draft.channel === 'linkedin' ? `Sent to ${name} on LinkedIn.` : `Sent to ${name}.`,
+      tone: 'good',
+    });
   return undefined;
 }

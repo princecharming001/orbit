@@ -5,8 +5,13 @@
  * of Deno APIs so it runs under Node tests.
  *
  * Routes (POST, JSON):
- *   /connect/start, /connect/status, /relations, /mutuals, /disconnect  -> Unipile
- *   /paths                                                              -> Village
+ *   /connect/start, /connect/status, /relations, /mutuals, /disconnect, /send  -> Unipile
+ *   /paths                                                                     -> Village
+ *
+ * A connected account's routes need the account token /connect/status handed out (an HMAC of the account id with
+ * the server's signing key), so knowing someone's Unipile account id is not enough to read their connections or
+ * send as them. /send sends one message the student approved: a direct message to a connection, or a connection
+ * request with a note to anyone else, at most ORBIT_LINKEDIN_SENDS_PER_DAY (25) per account per day.
  * A route whose provider key is not set returns 503 with x-orbit-connector: unconfigured, so the app shows the
  * CSV fallback (or its own graph) instead. Pasting the key as a function secret turns it on with no redeploy of
  * the app. The exact upstream request and response mapping lives in the adapter functions, so a live test with real
@@ -58,7 +63,54 @@ export interface ConnectorDeps {
   fetch?: typeof fetch;
   /** the reference for a new hosted connect (tests pin it) */
   newRef?: () => string;
+  /** signs account tokens (the service role key in production); without it account routes are refused */
+  signingKey?: string;
+  /** LinkedIn messages and requests one account may send per day */
+  sendsPerDay?: number;
 }
+
+/** A connected account's token: base64url HMAC-SHA256 of its id with the signing key. */
+export async function accountToken(accountId: string, signingKey: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(signingKey),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const sig = new Uint8Array(
+    await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`unipile-account:${accountId}`)),
+  );
+  return btoa(String.fromCharCode(...sig))
+    .replace(/=+$/, '')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_');
+}
+
+/** Constant-time check of an account token. */
+async function tokenValid(
+  accountId: string,
+  token: unknown,
+  signingKey: string | undefined,
+): Promise<boolean> {
+  if (!signingKey || !accountId || typeof token !== 'string' || !token) return false;
+  const want = await accountToken(accountId, signingKey);
+  if (want.length !== token.length) return false;
+  let diff = 0;
+  for (let i = 0; i < want.length; i++) diff |= want.charCodeAt(i) ^ token.charCodeAt(i);
+  return diff === 0;
+}
+
+/** The per-account send bucket for today. */
+export function sendBucket(accountId: string, now: Date, perDay: number): Bucket {
+  const day = now.toISOString().slice(0, 10);
+  const end = new Date(`${day}T00:00:00Z`);
+  end.setUTCDate(end.getUTCDate() + 1);
+  return { key: `connectors:send:${day}:${accountId}`, limit: perDay, expires: end.toISOString() };
+}
+
+/** LinkedIn caps a connection-request note at this many characters. */
+export const INVITE_NOTE_MAX = 300;
 
 function cors(origin: string | null, allowed: boolean): Record<string, string> {
   if (!origin || !allowed) return { Vary: 'Origin' };
@@ -128,7 +180,10 @@ const UNIPILE_ROUTES = new Set([
   '/relations',
   '/mutuals',
   '/disconnect',
+  '/send',
 ]);
+/** Routes that act on a connected account, so need its token. */
+const ACCOUNT_ROUTES = new Set(['/relations', '/mutuals', '/disconnect', '/send']);
 
 export function makeHandler(deps: ConnectorDeps): (req: Request) => Promise<Response> {
   const doFetch = deps.fetch ?? fetch;
@@ -197,11 +252,42 @@ export function makeHandler(deps: ConnectorDeps): (req: Request) => Promise<Resp
       );
     }
 
+    if (
+      ACCOUNT_ROUTES.has(path) &&
+      !(await tokenValid(String(body.accountId ?? ''), body.token, deps.signingKey))
+    )
+      return json(403, { error: 'this LinkedIn account is not linked to this browser' }, h);
+    if (path === '/send') {
+      let sendVerdict: { allowed: boolean };
+      try {
+        sendVerdict = await take([sendBucket(String(body.accountId), now(), deps.sendsPerDay ?? 25)]);
+      } catch {
+        return json(503, { error: 'unavailable right now' }, h);
+      }
+      if (!sendVerdict.allowed)
+        return json(
+          200,
+          {
+            ok: false,
+            reason: 'limit',
+            message: 'You have sent as many LinkedIn messages as Orbit allows today.',
+          },
+          h,
+        );
+    }
+
     try {
       if (isVillage) return json(200, await villagePaths(village, deps.villageUser!, body), h);
       if (path === '/connect/start')
         return json(200, await unipileConnectStart(deps, doFetch, deps.newRef ?? newRef), h);
-      if (path === '/connect/status') return json(200, await unipileConnectStatus(deps, body, doFetch), h);
+      if (path === '/connect/status') {
+        const st = await unipileConnectStatus(deps, body, doFetch);
+        // the browser that finished signing in gets the token its later calls must carry
+        if (st.status === 'connected' && st.accountId && deps.signingKey)
+          return json(200, { ...st, token: await accountToken(st.accountId, deps.signingKey) }, h);
+        return json(200, st, h);
+      }
+      if (path === '/send') return json(200, await unipileSend(deps, body, doFetch), h);
       if (path === '/relations') return json(200, await unipileRelations(deps, body, doFetch), h);
       if (path === '/mutuals') return json(200, await unipileMutuals(deps, body, doFetch), h);
       return json(200, await unipileDisconnect(deps, body, doFetch), h);
@@ -286,6 +372,78 @@ async function unipileDisconnect(deps: ConnectorDeps, body: Record<string, unkno
   });
   if (!res.ok && res.status !== 404) throw new Error(`unipile ${res.status}`);
   return { ok: true };
+}
+
+/** An error Unipile explains in its body, as one plain line. */
+async function unipileError(res: Response): Promise<string> {
+  try {
+    const b = (await res.json()) as { detail?: string; title?: string; message?: string };
+    return String(b.detail ?? b.title ?? b.message ?? `LinkedIn refused it (${res.status}).`);
+  } catch {
+    return `LinkedIn refused it (${res.status}).`;
+  }
+}
+
+/**
+ * Send one message the student approved, from their own LinkedIn: a direct message when they are connected, else a
+ * connection request with the text as its note (LinkedIn allows only a request to someone they are not connected
+ * to). The recipient is their LinkedIn member id when Orbit has it, else their public profile name, looked up first.
+ */
+async function unipileSend(deps: ConnectorDeps, body: Record<string, unknown>, doFetch: typeof fetch) {
+  const accountId = String(body.accountId ?? '');
+  const text = typeof body.text === 'string' ? body.text.trim() : '';
+  const invite = body.invite === true;
+  if (!text) return { ok: false, reason: 'bad_request', message: 'The message is empty.' };
+  if (invite && text.length > INVITE_NOTE_MAX)
+    return {
+      ok: false,
+      reason: 'bad_request',
+      message: `A connection note can be at most ${INVITE_NOTE_MAX} characters.`,
+    };
+  let providerId = typeof body.memberId === 'string' ? body.memberId.trim() : '';
+  const slug = typeof body.slug === 'string' ? body.slug.trim() : '';
+  if (!providerId) {
+    if (!slug)
+      return { ok: false, reason: 'bad_request', message: 'Orbit has no LinkedIn profile for them.' };
+    const res = await doFetch(
+      `${deps.unipileBase}/api/v1/users/${encodeURIComponent(slug)}?account_id=${encodeURIComponent(accountId)}`,
+      { headers: uHeaders(deps) },
+    );
+    if (res.status === 404 || res.status === 422)
+      return { ok: false, reason: 'not_found', message: 'LinkedIn could not find that profile.' };
+    if (!res.ok) throw new Error(`unipile ${res.status}`);
+    const p = (await res.json()) as { provider_id?: string };
+    if (!p.provider_id)
+      return { ok: false, reason: 'not_found', message: 'LinkedIn could not find that profile.' };
+    providerId = p.provider_id;
+  }
+  if (invite) {
+    const res = await doFetch(`${deps.unipileBase}/api/v1/users/invite`, {
+      method: 'POST',
+      headers: uHeaders(deps),
+      body: JSON.stringify({ account_id: accountId, provider_id: providerId, message: text }),
+    });
+    if (res.status >= 400 && res.status < 500)
+      return { ok: false, reason: 'refused', message: await unipileError(res) };
+    if (!res.ok) throw new Error(`unipile ${res.status}`);
+    const b = (await res.json()) as { invitation_id?: string };
+    return { ok: true, invited: true, messageId: b.invitation_id, memberId: providerId };
+  }
+  const form = new FormData();
+  form.append('account_id', accountId);
+  form.append('text', text);
+  form.append('attendees_ids', providerId);
+  const res = await doFetch(`${deps.unipileBase}/api/v1/chats`, {
+    method: 'POST',
+    // FormData sets its own multipart content type
+    headers: { accept: 'application/json', 'X-API-KEY': deps.unipileKey! },
+    body: form,
+  });
+  if (res.status >= 400 && res.status < 500)
+    return { ok: false, reason: 'refused', message: await unipileError(res) };
+  if (!res.ok) throw new Error(`unipile ${res.status}`);
+  const b = (await res.json()) as { chat_id?: string; message_id?: string };
+  return { ok: true, invited: false, chatId: b.chat_id, messageId: b.message_id, memberId: providerId };
 }
 
 async function unipileRelations(deps: ConnectorDeps, body: Record<string, unknown>, doFetch: typeof fetch) {
