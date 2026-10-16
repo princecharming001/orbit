@@ -7,9 +7,13 @@ import {
   defaultOrigins,
   filterBetas,
   makeHandler,
+  meter,
   rejectBody,
+  type Spend,
+  subjectOf,
   type Take,
   UPSTREAM,
+  verifyOrbitSession,
 } from '../../../../../supabase/functions/orbit-claude/proxy';
 import { describeLlmFailure, toLlmError } from '../../integrations/anthropic';
 import { readPrefs, writePrefs } from '../../integrations/prefs';
@@ -72,12 +76,36 @@ interface Seen {
   body: Record<string, unknown>;
 }
 
-function harness(opts: { take?: Take; apiKey?: string | undefined; upstreamStatus?: number } = {}) {
+function memSpend(start: Record<string, number> = {}) {
+  const totals = new Map(Object.entries(start));
+  const adds: [string, number][] = [];
+  const spend: Spend = {
+    total: async (s) => totals.get(s) ?? 0,
+    add: async (s, usd) => {
+      adds.push([s, usd]);
+      totals.set(s, (totals.get(s) ?? 0) + usd);
+    },
+  };
+  return { spend, totals, adds };
+}
+
+function harness(
+  opts: {
+    take?: Take;
+    apiKey?: string | undefined;
+    upstreamStatus?: number;
+    spend?: Spend;
+    sessionSecret?: string;
+    headers?: Record<string, string>;
+  } = {},
+) {
   const upstream: Seen[] = [];
   const taken: Bucket[][] = [];
   const handler = makeHandler({
     apiKey: 'apiKey' in opts ? opts.apiKey : SERVER_KEY,
     origins: defaultOrigins,
+    spend: opts.spend,
+    sessionSecret: opts.sessionSecret,
     take:
       opts.take ??
       (async (bs) => {
@@ -119,6 +147,7 @@ function harness(opts: { take?: Take; apiKey?: string | undefined; upstreamStatu
     dangerouslyAllowBrowser: true,
     maxRetries: 0,
     fetch: browserFetch,
+    ...(opts.headers ? { defaultHeaders: opts.headers } : {}),
   });
   return { handler, client, upstream, taken };
 }
@@ -333,5 +362,106 @@ describe('the app on shared access', () => {
     expect(err.reason).toBe('rate_limit');
     expect(sharedClaudePause()).toBeUndefined();
     expect(chatMode()).toBe('llm');
+  });
+});
+
+const SECRET = 'a-session-secret-that-is-long-enough-to-sign-with';
+const b64url = (b: Uint8Array | string) =>
+  Buffer.from(b).toString('base64').replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_');
+async function accessToken(claims: Record<string, unknown>, secret = SECRET) {
+  const h = b64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
+  const p = b64url(JSON.stringify(claims));
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const sig = new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`${h}.${p}`)));
+  return `${h}.${p}.${b64url(sig)}`;
+}
+const USER = '0b7f6c2e-8a51-4c1e-9d0a-3f2b1c4d5e6f';
+const CLIENT = 'f00dfeedc0ffee0123456789abcdef01';
+
+describe('the $20 per-user cap on Orbit’s key', () => {
+  afterEach(() => {
+    setSharedClaudeUrlForTests(undefined);
+    writePrefs({ sharedClaudePause: undefined });
+  });
+
+  it('prices each streamed answer at the chat model’s rates and charges this browser', async () => {
+    const m = memSpend();
+    const { client } = harness({ spend: m.spend, headers: { 'x-orbit-client': CLIENT } });
+    const res = await client.beta.messages.create({ ...chatParams, stream: true }).withResponse();
+    expect(res.response.headers.get('x-orbit-budget-remaining')).toBe('20.00');
+    for await (const _ of res.data) {
+      // read the stream through, as the chat does
+    }
+    // 10 input tokens at $4/M at message_start, then 1 output token at $20/M at message_delta
+    expect(m.adds.map(([s]) => s)).toEqual([`client:${CLIENT}`, `client:${CLIENT}`]);
+    expect(m.adds[0]![1]).toBeCloseTo(0.00004, 10);
+    expect(m.adds[1]![1]).toBeCloseTo(0.00002, 10);
+  });
+
+  it('refuses before calling Anthropic once the user has spent $20, and the chat says so and stops asking', async () => {
+    setSharedClaudeUrlForTests(BASE);
+    const m = memSpend({ [`client:${CLIENT}`]: 20.0001 });
+    const { client, upstream } = harness({ spend: m.spend, headers: { 'x-orbit-client': CLIENT } });
+    const raw = await client.beta.messages.create(chatParams).catch((e) => e);
+    expect(raw).toBeInstanceOf(Anthropic.RateLimitError);
+    expect(raw.headers.get('x-orbit-limit')).toBe('budget');
+    expect(upstream).toHaveLength(0);
+    const err = toLlmError(raw);
+    expect(err.reason).toBe('shared_limit');
+    expect(describeLlmFailure(err).title).toBe('Your included Claude is used up');
+    expect(readPrefs().sharedClaudePause?.reason).toBe('budget');
+    expect(chatMode()).toBe('router');
+    expect(chatModeNote()?.text).toMatch(/used all the Claude that Orbit includes/);
+    // not back tomorrow: the allowance does not reset by itself
+    expect(sharedClaudeAvailable(new Date(Date.now() + 2 * 24 * 3600_000))).toBe(false);
+  });
+
+  it('counts a signed-in student by their account, and anyone else by browser, then by IP', async () => {
+    const now = new Date('2026-10-16T12:00:00Z');
+    const exp = Math.floor(now.getTime() / 1000) + 600;
+    const good = await accessToken({ sub: USER, sid: USER, aud: 'orbit', exp });
+    expect(await verifyOrbitSession(good, SECRET, now)).toBe(USER);
+    expect(await verifyOrbitSession(good, `${SECRET}-other`, now)).toBeUndefined();
+    expect(
+      await verifyOrbitSession(await accessToken({ sub: USER, aud: 'orbit', exp: 1 }), SECRET, now),
+    ).toBeUndefined();
+    expect(
+      await verifyOrbitSession(await accessToken({ sub: USER, aud: 'other', exp }), SECRET, now),
+    ).toBeUndefined();
+    const req = (h: Record<string, string>) => new Request('https://x.test/v1/messages', { headers: h });
+    expect(
+      await subjectOf(req({ 'x-orbit-session': good, 'x-orbit-client': CLIENT }), 'iphash', SECRET, now),
+    ).toBe(`user:${USER}`);
+    expect(
+      await subjectOf(req({ 'x-orbit-session': 'junk', 'x-orbit-client': CLIENT }), 'iphash', SECRET, now),
+    ).toBe(`client:${CLIENT}`);
+    expect(await subjectOf(req({ 'x-orbit-client': 'short' }), 'iphash', SECRET, now)).toBe('ip:iphash');
+  });
+
+  it('prices a JSON answer at the end, and never breaks the answer when the spend store fails', async () => {
+    const answer = JSON.stringify({
+      model: 'claude-opus-5-5',
+      usage: { input_tokens: 1000, output_tokens: 500, cache_read_input_tokens: 10_000 },
+    });
+    const charged: number[] = [];
+    const out = await new Response(
+      meter(new Response(answer).body!, false, async (usd) => {
+        charged.push(usd);
+      }),
+    ).text();
+    expect(out).toBe(answer);
+    expect(charged[0]).toBeCloseTo((1000 * 4 + 500 * 20 + 10_000 * 0.2) / 1e6, 10);
+    const still = await new Response(
+      meter(new Response(STREAM).body!, true, async () => {
+        throw new Error('store down');
+      }),
+    ).text();
+    expect(still).toBe(STREAM);
   });
 });

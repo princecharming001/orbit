@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { currentAccessToken } from '../../integrations/orbitApi';
 import { readPrefs } from '../../integrations/prefs';
-import { sharedClaudeAvailable, sharedClaudeUrl } from '../../integrations/shared-claude';
+import { sharedClaudeAvailable, sharedClaudeUrl, sharedClientId } from '../../integrations/shared-claude';
 
 /**
  * The SDK client the chat loop talks to. Built with the student's own key from local prefs, in the browser
@@ -27,11 +28,12 @@ export const SHARED_KEY = 'orbit-shared';
 
 export function makeChatClient(
   apiKey: string,
-  opts: ChatClientOptions & { baseURL?: string } = {},
+  opts: ChatClientOptions & { baseURL?: string; headers?: Record<string, string> } = {},
 ): Anthropic {
   return new Anthropic({
     apiKey,
     ...(opts.baseURL ? { baseURL: opts.baseURL } : {}),
+    ...(opts.headers ? { defaultHeaders: opts.headers } : {}),
     dangerouslyAllowBrowser: true,
     maxRetries: opts.maxRetries ?? 2,
     timeout: 120_000,
@@ -48,5 +50,12 @@ export function chatClient(opts: ChatClientOptions = {}): ChatClient | undefined
   if (key) return factory ? factory(key) : makeChatClient(key, opts);
   if (!sharedClaudeAvailable()) return undefined;
   if (factory) return factory(SHARED_KEY);
-  return makeChatClient(SHARED_KEY, { ...opts, baseURL: sharedClaudeUrl() });
+  // who is asking, so the server holds each student to their own allowance: the account when signed in, else this
+  // browser's id
+  const token = currentAccessToken();
+  return makeChatClient(SHARED_KEY, {
+    ...opts,
+    baseURL: sharedClaudeUrl(),
+    headers: { 'x-orbit-client': sharedClientId(), ...(token ? { 'x-orbit-session': token } : {}) },
+  });
 }

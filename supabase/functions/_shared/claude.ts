@@ -10,6 +10,7 @@ import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import type { z } from 'zod/v4';
 import { checkBudget, recordUsage } from './budget.ts';
 import type { Db } from './db.ts';
+import { costUsd, type Usage } from './prices.ts';
 
 export type Task =
   | 'compose'
@@ -51,34 +52,7 @@ export const TASKS: Record<Task, TaskSetting> = {
   judge: { model: 'claude-sonnet-5-5', maxTokens: 2000 },
 };
 
-/** Dollars per million tokens: input, output, cache read, cache write (5-minute). */
-export const PRICES: Record<
-  string,
-  { input: number; output: number; cacheRead: number; cacheWrite: number }
-> = {
-  'claude-opus-5-5': { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 },
-  'claude-sonnet-5-5': { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
-  'claude-haiku-5-5': { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 },
-};
-
-export interface Usage {
-  input_tokens: number;
-  output_tokens: number;
-  cache_read_input_tokens?: number | null;
-  cache_creation_input_tokens?: number | null;
-}
-
-export function costUsd(model: string, u: Usage): number {
-  const p = PRICES[model];
-  if (!p) return 0;
-  return (
-    (u.input_tokens * p.input +
-      u.output_tokens * p.output +
-      (u.cache_read_input_tokens ?? 0) * p.cacheRead +
-      (u.cache_creation_input_tokens ?? 0) * p.cacheWrite) /
-    1_000_000
-  );
-}
+export { costUsd, PRICES, type Usage } from './prices.ts';
 
 export type ClaudeResult<T> =
   | { ok: true; data: T; model: string; costUsd: number; usage: Usage }

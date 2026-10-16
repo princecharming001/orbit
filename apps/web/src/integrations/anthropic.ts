@@ -104,13 +104,15 @@ export function toLlmError(e: unknown): LlmError {
       'Too many Claude requests in the last minute. Try again shortly.',
       detail,
     );
-  if (shared === 'day' || shared === 'global' || shared === 'unconfigured') {
+  if (shared === 'day' || shared === 'global' || shared === 'unconfigured' || shared === 'budget') {
     pauseSharedClaude(shared);
     return new LlmError(
       'shared_limit',
       shared === 'unconfigured'
         ? "Orbit's shared Claude access is unavailable right now."
-        : "Orbit's shared Claude access has reached today's limit.",
+        : shared === 'budget'
+          ? "You've used all the Claude that Orbit includes for you."
+          : "Orbit's shared Claude access has reached today's limit.",
       detail,
     );
   }
@@ -176,6 +178,11 @@ export function describeLlmFailure(e: LlmError): { title: string; body: string }
         body: `${e.message} Orbit is using its own templates until tomorrow. You can change the limit in Settings, Integrations.`,
       };
     case 'shared_limit':
+      if (/Orbit includes/.test(e.message))
+        return {
+          title: 'Your included Claude is used up',
+          body: `${e.message} The chat now understands a fixed set of commands. Add your own Anthropic key in Settings, Integrations to keep chatting with Claude.`,
+        };
       return {
         title: "Orbit's shared Claude access is paused",
         body: `${e.message} Until then the chat understands a fixed set of commands. Add your own Anthropic key in Settings, Integrations to keep chatting with Claude.`,

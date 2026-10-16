@@ -33,13 +33,40 @@ export function sharedClaudeAvailable(now = new Date()): boolean {
   return !p.anthropicApiKey && !!sharedClaudeUrl() && llmFeatures(p).chat && !sharedClaudePause(now);
 }
 
-/** Pause the shared access after it refused: until the next UTC midnight for a daily limit, an hour otherwise. */
-export function pauseSharedClaude(reason: 'day' | 'global' | 'unconfigured', now = new Date()): void {
+/**
+ * Pause the shared access after it refused: until the next UTC midnight for a daily limit, an hour when the server
+ * is not set up, and for a long while once this student has used their whole allowance ($20 until it is raised;
+ * clearing the pause in Settings, or raising the cap, brings it back).
+ */
+export function pauseSharedClaude(
+  reason: 'day' | 'global' | 'unconfigured' | 'budget',
+  now = new Date(),
+): void {
   const until = new Date(now);
   if (reason === 'unconfigured') until.setTime(now.getTime() + 60 * 60_000);
+  else if (reason === 'budget') until.setTime(now.getTime() + 30 * 24 * 3600_000);
   else {
     until.setUTCHours(0, 0, 0, 0);
     until.setUTCDate(until.getUTCDate() + 1);
   }
   writePrefs({ sharedClaudePause: { until: until.toISOString(), reason } });
+}
+
+const CLIENT_KEY = 'orbit.sharedClient';
+
+/**
+ * This browser's id for Orbit's shared access: random, made once and kept in localStorage, so the server can hold
+ * each student to their own allowance instead of sharing one with everyone behind the same campus network.
+ */
+export function sharedClientId(): string {
+  try {
+    const kept = localStorage.getItem(CLIENT_KEY);
+    if (kept && /^[A-Za-z0-9_-]{16,64}$/.test(kept)) return kept;
+    const bytes = crypto.getRandomValues(new Uint8Array(18));
+    const id = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+    localStorage.setItem(CLIENT_KEY, id);
+    return id;
+  } catch {
+    return 'no-storage-available-0';
+  }
 }

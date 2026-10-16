@@ -2,6 +2,7 @@
  * Per-user spending caps (§13.5), read from orbit.usage_ledger before a paid call:
  *   per day   Claude $1.50, Exa $0.50, Village 50 credits, Apollo match 10 credits, Unipile profile views 40
  *   per month $25 across every provider (calendar month, UTC)
+ *   in total $20 per user, counting the chat's Claude spend too (public.orbit_proxy_spend), until it is raised
  * Over a cap the task gets `budget_exceeded` with the cap and when it resets, and makes no call.
  */
 import type { Db } from './db.ts';
@@ -38,6 +39,10 @@ export const CAPS: Cap[] = [
   },
 ];
 export const MONTHLY_TOTAL_USD = 25;
+/** Everything one user may cost Orbit, server tasks and chat together, until raised (orbit-claude's ORBIT_USER_CAP_USD). */
+export const USER_TOTAL_USD = 20;
+/** When the total cap "resets": it does not, so the verdict names a date far enough out to read as "not soon". */
+const NEVER = '9999-12-31T00:00:00.000Z';
 
 export interface Spend {
   provider: string;
@@ -88,6 +93,19 @@ export async function checkBudget(
      group by provider, operation`;
   const monthTotal = rows.reduce((s, r) => s + Number(r.month_usd), 0);
   const adding = spend.costUsd ?? 0;
+  const [life] = await db.sql<{ usd: string }>`
+    select (coalesce((select sum(cost_usd) from orbit.usage_ledger where user_id = ${userId}::uuid), 0)
+          + coalesce((select usd from public.orbit_proxy_spend where subject = ${`user:${userId}`}), 0))::text as usd`;
+  const lifetime = Number(life?.usd ?? 0);
+  if (lifetime + adding > USER_TOTAL_USD || (lifetime >= USER_TOTAL_USD && adding === 0))
+    return {
+      ok: false,
+      reason: 'budget_exceeded',
+      cap: 'user_total_usd',
+      limit: USER_TOTAL_USD,
+      used: round(lifetime),
+      resetsAt: NEVER,
+    };
   if (monthTotal + adding > MONTHLY_TOTAL_USD || (monthTotal >= MONTHLY_TOTAL_USD && adding === 0))
     return {
       ok: false,

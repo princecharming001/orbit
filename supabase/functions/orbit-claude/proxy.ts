@@ -7,11 +7,16 @@
  * - only Orbit's chat model (and its refusal fallback), only Orbit's betas, max_tokens capped
  * - only client tools (no server tools that bill extra, no MCP servers or containers)
  * - a body size cap, and request counters per visitor (hashed IP) per minute and per day, plus a global daily cap
+ * - a dollar cap per user (ORBIT_USER_CAP_USD, $20 by default): each answer's tokens are priced as they stream past
+ *   and added to the user's total; once the total reaches the cap the proxy answers 429 `x-orbit-limit: budget`.
+ *   The user is the signed-in account when the browser sends a valid Orbit session (`x-orbit-session`), else the
+ *   browser's own id (`x-orbit-client`), else the hashed IP.
  *
  * Responses, including the SSE stream, pass through unchanged. Kept free of Deno APIs so it runs under Node tests.
  */
 
 import { clientIp, defaultOrigins } from '../_shared/origins.ts';
+import { costUsd, PRICES, type Usage } from '../_shared/prices.ts';
 
 export { clientIp, defaultOrigins };
 
@@ -33,6 +38,14 @@ export interface Limits {
   globalPerDay: number;
 }
 export const DEFAULT_LIMITS: Limits = { perMinute: 30, perDay: 250, globalPerDay: 3000 };
+/** Dollars one user may spend on Orbit's key, until it is raised. */
+export const DEFAULT_CAP_USD = 20;
+
+/** Running dollar totals per user (see subjectOf). */
+export interface Spend {
+  total: (subject: string) => Promise<number>;
+  add: (subject: string, usd: number) => Promise<void>;
+}
 
 export interface Bucket {
   key: string;
@@ -51,6 +64,11 @@ export interface ProxyDeps {
   now?: () => Date;
   /** salt for the visitor hash, so stored buckets never hold a raw IP */
   salt?: string;
+  /** the per-user dollar totals; without it nothing is metered (tests that do not need it) */
+  spend?: Spend;
+  capUsd?: number;
+  /** ORBIT_SESSION_SECRET, to recognise a signed-in user's access token */
+  sessionSecret?: string;
 }
 
 const EXPOSE = [
@@ -58,6 +76,7 @@ const EXPOSE = [
   'retry-after',
   'x-should-retry',
   'x-orbit-limit',
+  'x-orbit-budget-remaining',
   'anthropic-ratelimit-requests-remaining',
   'anthropic-ratelimit-tokens-remaining',
 ].join(', ');
@@ -141,8 +160,170 @@ export function buckets(visitor: string, now: Date, limits: Limits): Bucket[] {
   ];
 }
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const CLIENT_ID = /^[A-Za-z0-9_-]{16,64}$/;
+
+function b64urlBytes(s: string): Uint8Array | undefined {
+  try {
+    const b64 = s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4);
+    return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  } catch {
+    return undefined;
+  }
+}
+
+/** The HMAC key the way orbit-api signs with it: base64 of 32+ bytes as bytes, anything else as UTF-8. */
+function sessionKeyBytes(secret: string): Uint8Array {
+  const t = secret.trim();
+  if (/^[A-Za-z0-9+/=_-]+$/.test(t)) {
+    const decoded = b64urlBytes(t.replace(/=+$/, ''));
+    if (decoded && decoded.length >= 32) return decoded;
+  }
+  return new TextEncoder().encode(secret);
+}
+
+/** The user id in a valid Orbit access token (HS256, audience "orbit", not expired), else undefined. */
+export async function verifyOrbitSession(
+  token: string,
+  secret: string,
+  now = new Date(),
+): Promise<string | undefined> {
+  const parts = token.split('.');
+  if (parts.length !== 3 || secret.trim().length < 32) return undefined;
+  const [h, p, sig] = parts as [string, string, string];
+  try {
+    const header = JSON.parse(new TextDecoder().decode(b64urlBytes(h)));
+    if (header?.alg !== 'HS256') return undefined;
+    const key = await crypto.subtle.importKey(
+      'raw',
+      sessionKeyBytes(secret) as BufferSource,
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['verify'],
+    );
+    const sigBytes = b64urlBytes(sig);
+    if (!sigBytes) return undefined;
+    const ok = await crypto.subtle.verify(
+      'HMAC',
+      key,
+      sigBytes as BufferSource,
+      new TextEncoder().encode(`${h}.${p}`),
+    );
+    if (!ok) return undefined;
+    const claims = JSON.parse(new TextDecoder().decode(b64urlBytes(p)));
+    const aud = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
+    if (!aud.includes('orbit')) return undefined;
+    if (typeof claims.exp !== 'number' || claims.exp * 1000 <= now.getTime()) return undefined;
+    return typeof claims.sub === 'string' && UUID.test(claims.sub) ? claims.sub.toLowerCase() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Whose spend a request counts toward: the signed-in user, else this browser, else the hashed IP. */
+export async function subjectOf(
+  req: Request,
+  visitor: string,
+  sessionSecret: string | undefined,
+  now = new Date(),
+): Promise<string> {
+  const token = req.headers.get('x-orbit-session');
+  if (token && sessionSecret) {
+    const uid = await verifyOrbitSession(token, sessionSecret, now);
+    if (uid) return `user:${uid}`;
+  }
+  const client = req.headers.get('x-orbit-client');
+  if (client && CLIENT_ID.test(client)) return `client:${client}`;
+  return `ip:${visitor}`;
+}
+
+/** The price of an answer, at the chat model's rates when the model is not one Orbit knows (a fallback model). */
+export function answerCost(model: string | undefined, u: Usage): number {
+  return costUsd(model && PRICES[model] ? model : 'claude-opus-5-5', u);
+}
+
+/**
+ * Passes the answer through untouched while reading its usage: from a stream, the input tokens at message_start and
+ * the output tokens at message_delta (each charged as it arrives, so an answer cut short still pays for its
+ * prompt); from a JSON answer, everything at the end.
+ */
+export function meter(
+  body: ReadableStream<Uint8Array>,
+  stream: boolean,
+  charge: (usd: number) => Promise<void>,
+): ReadableStream<Uint8Array> {
+  const decoder = new TextDecoder();
+  let pending = '';
+  let model: string | undefined;
+  const safely = async (usd: number) => {
+    if (!(usd > 0)) return;
+    try {
+      await charge(usd);
+    } catch {
+      // metering never breaks the answer
+    }
+  };
+  const onEvent = async (data: string) => {
+    let d: {
+      type?: string;
+      message?: { model?: string; usage?: Partial<Usage> };
+      usage?: Partial<Usage>;
+    };
+    try {
+      d = JSON.parse(data);
+    } catch {
+      return;
+    }
+    if (d.type === 'message_start' && d.message) {
+      model = d.message.model;
+      const u = d.message.usage ?? {};
+      await safely(
+        answerCost(model, {
+          input_tokens: u.input_tokens ?? 0,
+          output_tokens: 0,
+          cache_read_input_tokens: u.cache_read_input_tokens ?? 0,
+          cache_creation_input_tokens: u.cache_creation_input_tokens ?? 0,
+        }),
+      );
+    } else if (d.type === 'message_delta' && d.usage) {
+      await safely(answerCost(model, { input_tokens: 0, output_tokens: d.usage.output_tokens ?? 0 }));
+    }
+  };
+  return body.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      async transform(chunk, controller) {
+        controller.enqueue(chunk);
+        pending += decoder.decode(chunk, { stream: true });
+        if (!stream) return;
+        let nl = pending.indexOf('\n');
+        while (nl >= 0) {
+          const line = pending.slice(0, nl).trim();
+          pending = pending.slice(nl + 1);
+          if (line.startsWith('data:')) await onEvent(line.slice(5).trim());
+          nl = pending.indexOf('\n');
+        }
+      },
+      async flush() {
+        pending += decoder.decode();
+        if (stream) {
+          const line = pending.trim();
+          if (line.startsWith('data:')) await onEvent(line.slice(5).trim());
+          return;
+        }
+        try {
+          const d = JSON.parse(pending) as { model?: string; usage?: Usage };
+          if (d.usage) await safely(answerCost(d.model, d.usage));
+        } catch {
+          // not an answer we can price
+        }
+      },
+    }),
+  );
+}
+
 export function makeHandler(deps: ProxyDeps): (req: Request) => Promise<Response> {
   const limits = deps.limits ?? DEFAULT_LIMITS;
+  const cap = deps.capUsd ?? DEFAULT_CAP_USD;
   const doFetch = deps.fetch ?? fetch;
   const now = deps.now ?? (() => new Date());
   return async (req) => {
@@ -217,6 +398,25 @@ export function makeHandler(deps: ProxyDeps): (req: Request) => Promise<Response
       });
     }
 
+    // the per-user dollar cap: counted before the call, charged as the answer streams back
+    const subject = await subjectOf(req, visitor, deps.sessionSecret, now());
+    let spent = 0;
+    if (deps.spend) {
+      try {
+        spent = await deps.spend.total(subject);
+      } catch {
+        return apiError(503, 'api_error', 'Orbit’s shared Claude access is unavailable right now.', h);
+      }
+      if (spent >= cap)
+        return apiError(
+          429,
+          'rate_limit_error',
+          `You have used the $${cap} of Claude that Orbit includes. Add your own Anthropic key in Settings to keep chatting.`,
+          h,
+          { 'x-orbit-limit': 'budget', 'x-should-retry': 'false', 'x-orbit-budget-remaining': '0' },
+        );
+    }
+
     const headers: Record<string, string> = {
       'content-type': 'application/json',
       'x-api-key': apiKey,
@@ -236,6 +436,7 @@ export function makeHandler(deps: ProxyDeps): (req: Request) => Promise<Response
       return apiError(502, 'api_error', 'Could not reach Anthropic from Orbit’s server.', h);
     }
     const out: Record<string, string> = { ...h };
+    if (deps.spend) out['x-orbit-budget-remaining'] = Math.max(0, cap - spent).toFixed(2);
     for (const k of ['content-type', 'request-id', 'retry-after', 'x-should-retry']) {
       const v = upstream.headers.get(k);
       if (v) out[k] = v;
@@ -248,7 +449,37 @@ export function makeHandler(deps: ProxyDeps): (req: Request) => Promise<Response
         'x-orbit-limit': 'unconfigured',
       });
     }
-    return new Response(upstream.body, { status: upstream.status, headers: out });
+    const spend = deps.spend;
+    if (!spend || !upstream.ok || !upstream.body)
+      return new Response(upstream.body, { status: upstream.status, headers: out });
+    const streamed = (upstream.headers.get('content-type') ?? '').includes('text/event-stream');
+    return new Response(
+      meter(upstream.body, streamed, (usd) => spend.add(subject, usd)),
+      { status: upstream.status, headers: out },
+    );
+  };
+}
+
+/** The dollar totals over PostgREST (orbit_spend_total / orbit_spend_add), with the service role key. */
+export function postgrestSpend(url: string, serviceKey: string, doFetch: typeof fetch = fetch): Spend {
+  const rpc = async (name: string, args: Record<string, unknown>) => {
+    const r = await doFetch(`${url}/rest/v1/rpc/${name}`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        apikey: serviceKey,
+        Authorization: `Bearer ${serviceKey}`,
+      },
+      body: JSON.stringify(args),
+    });
+    if (!r.ok) throw new Error(`spend store ${r.status}`);
+    return r.json();
+  };
+  return {
+    total: async (subject) => Number((await rpc('orbit_spend_total', { p_subject: subject })) ?? 0),
+    add: async (subject, usd) => {
+      await rpc('orbit_spend_add', { p_subject: subject, p_usd: Math.round(usd * 100_000) / 100_000 });
+    },
   };
 }
 

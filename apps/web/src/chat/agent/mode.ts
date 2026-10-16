@@ -42,7 +42,9 @@ export function chatModeNote(): { text: string; href?: string } | undefined {
       text:
         pause.reason === 'unconfigured'
           ? `Orbit's shared Claude access is unavailable right now, so Orbit understands a fixed set of commands and the buttons below. ${ROUTER_ABILITIES} Add your own key in Settings, Integrations to chat freely; it stays on this device.`
-          : `Orbit's shared Claude access has reached today's limit, so until tomorrow Orbit understands a fixed set of commands and the buttons below. ${ROUTER_ABILITIES} Add your own key in Settings, Integrations to keep chatting with Claude; it stays on this device.`,
+          : pause.reason === 'budget'
+            ? `You've used all the Claude that Orbit includes for you, so Orbit now understands a fixed set of commands and the buttons below. ${ROUTER_ABILITIES} Add your own key in Settings, Integrations to keep chatting with Claude; it stays on this device.`
+            : `Orbit's shared Claude access has reached today's limit, so until tomorrow Orbit understands a fixed set of commands and the buttons below. ${ROUTER_ABILITIES} Add your own key in Settings, Integrations to keep chatting with Claude; it stays on this device.`,
       href: SETTINGS_ROUTE,
     };
   const cap = overDailyCap();

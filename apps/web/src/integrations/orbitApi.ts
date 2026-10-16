@@ -439,6 +439,16 @@ export function loadSession(): Promise<void> {
 }
 
 /** Signed in to Orbit in this browser (a refresh token is held). Synchronous: `loadSession()` runs at startup. */
+/** The current access token, when signed in and not yet expired; the chat's shared access counts spend by it. */
+export function currentAccessToken(): string | undefined {
+  return isAccountMode() &&
+    tokens.accessToken &&
+    tokens.expiresAt &&
+    Date.parse(tokens.expiresAt) > Date.now()
+    ? tokens.accessToken
+    : undefined;
+}
+
 export function isSignedIn(): boolean {
   return isAccountMode() && !!(tokens.refreshToken || tokens.accessToken);
 }
