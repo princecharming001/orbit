@@ -27,6 +27,8 @@ var CAPS = [
   }
 ];
 var MONTHLY_TOTAL_USD = 25;
+var USER_TOTAL_USD = 20;
+var NEVER = "9999-12-31T00:00:00.000Z";
 function windowStart(window, now) {
   return window === "day" ? new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())) : new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
 }
@@ -46,6 +48,19 @@ async function checkBudget(db2, userId, spend, now = /* @__PURE__ */ new Date())
      group by provider, operation`;
   const monthTotal = rows.reduce((s, r) => s + Number(r.month_usd), 0);
   const adding = spend.costUsd ?? 0;
+  const [life] = await db2.sql`
+    select (coalesce((select sum(cost_usd) from orbit.usage_ledger where user_id = ${userId}::uuid), 0)
+          + coalesce((select usd from public.orbit_proxy_spend where subject = ${`user:${userId}`}), 0))::text as usd`;
+  const lifetime = Number(life?.usd ?? 0);
+  if (lifetime + adding > USER_TOTAL_USD || lifetime >= USER_TOTAL_USD && adding === 0)
+    return {
+      ok: false,
+      reason: "budget_exceeded",
+      cap: "user_total_usd",
+      limit: USER_TOTAL_USD,
+      used: round(lifetime),
+      resetsAt: NEVER
+    };
   if (monthTotal + adding > MONTHLY_TOTAL_USD || monthTotal >= MONTHLY_TOTAL_USD && adding === 0)
     return {
       ok: false,
@@ -80,6 +95,18 @@ async function recordUsage(db2, entry) {
 }
 var round = (n) => Math.round(n * 1e5) / 1e5;
 
+// supabase/functions/_shared/prices.ts
+var PRICES = {
+  "claude-opus-5-5": { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 },
+  "claude-sonnet-5-5": { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+  "claude-haiku-5-5": { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 }
+};
+function costUsd(model, u2) {
+  const p = PRICES[model];
+  if (!p) return 0;
+  return (u2.input_tokens * p.input + u2.output_tokens * p.output + (u2.cache_read_input_tokens ?? 0) * p.cacheRead + (u2.cache_creation_input_tokens ?? 0) * p.cacheWrite) / 1e6;
+}
+
 // supabase/functions/_shared/claude.ts
 var TASKS = {
   compose: { model: "claude-opus-5-5", effort: "medium", maxTokens: 4e3 },
@@ -95,16 +122,6 @@ var TASKS = {
   extract_goal: { model: "claude-haiku-5-5", effort: "low", maxTokens: 1500 },
   judge: { model: "claude-sonnet-5-5", maxTokens: 2e3 }
 };
-var PRICES = {
-  "claude-opus-5-5": { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 },
-  "claude-sonnet-5-5": { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
-  "claude-haiku-5-5": { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 }
-};
-function costUsd(model, u2) {
-  const p = PRICES[model];
-  if (!p) return 0;
-  return (u2.input_tokens * p.input + u2.output_tokens * p.output + (u2.cache_read_input_tokens ?? 0) * p.cacheRead + (u2.cache_creation_input_tokens ?? 0) * p.cacheWrite) / 1e6;
-}
 function makeClaude(deps) {
   const client = deps.apiKey ? deps.client ?? new Anthropic({ apiKey: deps.apiKey, fetch: deps.fetch, maxRetries: 2 }) : void 0;
   const now = deps.now ?? (() => /* @__PURE__ */ new Date());
