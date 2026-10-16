@@ -45,7 +45,7 @@ export function PeopleList({
     <>
       {/* phones get a list: one person per row, nothing cut mid-word, nothing off to the side */}
       <ul
-        className="@5xl:hidden divide-y divide-line border border-line rounded-[var(--radius-card)]"
+        className="@4xl:hidden divide-y divide-line border border-line rounded-[var(--radius-card)]"
         data-testid="people-list"
       >
         {people.map((p) => {
@@ -80,7 +80,7 @@ export function PeopleList({
           );
         })}
       </ul>
-      <div className="hidden @5xl:block border border-line rounded-[var(--radius-card)] overflow-x-auto">
+      <div className="hidden @4xl:block border border-line rounded-[var(--radius-card)] overflow-x-auto">
         <table className="w-full text-[13.5px]" data-testid="people-table">
           <thead className="bg-canvas-2 text-ink-3 text-[12px] uppercase tracking-wide">
             <tr>
@@ -93,7 +93,7 @@ export function PeopleList({
                 'Last touch',
                 'Next',
               ].map((h) => (
-                <th key={h} className="text-left font-medium px-2.5 py-1.5 leading-tight">
+                <th key={h} className="text-left font-medium px-2 py-1.5 leading-tight">
                   {h}
                 </th>
               ))}
@@ -113,7 +113,7 @@ export function PeopleList({
                     if (!(e.target as HTMLElement).closest('a,button,select')) nav(`/people/${p.id}`);
                   }}
                 >
-                  <td className="px-2.5 h-12">
+                  <td className="px-2 h-12">
                     <Link
                       to={`/people/${p.id}`}
                       className="inline-flex items-center gap-2 font-medium hover:underline whitespace-nowrap"
@@ -127,19 +127,19 @@ export function PeopleList({
                       )}
                     </Link>
                   </td>
-                  <td className="px-2.5 text-ink-2 min-w-[150px]">
+                  <td className="px-2 text-ink-2 min-w-[150px]">
                     {[p.currentTitle, p.currentOrganizationRaw].filter(Boolean).join(' · ') || '—'}
                   </td>
-                  <td className="px-2.5 text-ink-2">{role(p) ?? '—'}</td>
-                  <td className="px-2.5">
+                  <td className="px-2 text-ink-2">{role(p) ?? '—'}</td>
+                  <td className="px-2">
                     <StrengthDots v={p.strength} />
                   </td>
-                  <td className="px-2.5">
+                  <td className="px-2">
                     {c ? (
                       <Select
                         value={c.stage}
                         onChange={(e) => move(c, e.target.value as ChatStage)}
-                        className="h-7 w-[140px] text-[12px]"
+                        className="h-7 w-[148px] text-[12px]"
                         aria-label={`Stage for ${p.displayName}`}
                         data-testid="list-stage"
                       >
@@ -161,10 +161,10 @@ export function PeopleList({
                       </Link>
                     )}
                   </td>
-                  <td className="px-2.5 text-ink-2 whitespace-nowrap">
+                  <td className="px-2 text-ink-2 min-w-[96px] leading-snug">
                     <LastTouch person={p} chat={c} />
                   </td>
-                  <td className="px-2.5">
+                  <td className="px-2">
                     {next ? <NextLink s={next} /> : <span className="text-ink-3">—</span>}
                   </td>
                 </tr>

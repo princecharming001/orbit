@@ -71,20 +71,16 @@ test.describe('Chat home', () => {
     await home(page);
     await shot(page, 'e2e-laptop-home');
     const rail = page.getByTestId('rail');
-    expect((await rail.boundingBox())!.width).toBe(64);
-    // the rail: Orbit mark, sidebar toggle, New chat (the chat is home), People, Drafts, a divider, Map, Discover,
-    // Settings and the avatar at the bottom; every item names itself. Today and Pipeline are gone.
-    for (const name of ['Expand sidebar', 'New chat'])
+    // the sidebar opens labelled (Orbit mark, Collapse, New chat, People, Drafts, a divider, Map, Discover, Settings
+    // and the account card at the bottom); every item names itself. Today and Pipeline are gone.
+    expect((await rail.boundingBox())!.width).toBe(248);
+    for (const name of ['Collapse sidebar', 'New chat'])
       await expect(rail.getByRole('button', { name })).toBeVisible();
     for (const name of ['People', 'Drafts', 'Map', 'Discover', 'Settings'])
       await expect(rail.getByRole('link', { name: new RegExp(`^${name}`) })).toBeVisible();
     for (const name of ['Today', 'Pipeline'])
       await expect(rail.getByRole('link', { name: new RegExp(`^${name}`) })).toHaveCount(0);
-    await expect(rail.getByRole('link', { name: /^people$/i })).toHaveAttribute('data-tip', 'People');
-    await expect(rail.getByRole('link', { name: 'Alex Rivera' })).toBeVisible();
-    expect(
-      (await rail.getByRole('link', { name: /^people$/i }).boundingBox())!.height,
-    ).toBeGreaterThanOrEqual(44);
+    await expect(rail.getByTestId('account-row')).toContainText('Alex Rivera');
     // in order: People and Drafts above the divider, Map and Discover under it
     const order = await rail
       .getByRole('navigation', { name: 'Main' })
@@ -94,7 +90,7 @@ test.describe('Chat home', () => {
     // the greeting, one line, with the first name
     const greeting = page.getByTestId('greeting');
     await expect(greeting).toHaveText(/^Hey Alex, what’s on your mind today\?$/);
-    expect(await greeting.evaluate((el) => getComputedStyle(el).fontSize)).toBe('32px');
+    expect(await greeting.evaluate((el) => getComputedStyle(el).fontSize)).toBe('36px');
     expect((await greeting.boundingBox())!.height).toBeLessThan(50);
     // the composer with its controls
     await expect(composer(page)).toHaveAttribute('placeholder', 'Message Orbit');
@@ -132,6 +128,15 @@ test.describe('Chat home', () => {
     await expect(page.getByTestId('turn-user')).toHaveText('first line\nsecond line');
     await expect(composer(page)).toHaveValue('');
     expect(await clipped(page, '[data-testid="chat-thread"]')).toEqual([]);
+    // collapsed, it is an icon rail with a tooltip on every item and room for a thumb
+    await page.getByTestId('sidebar-toggle').click();
+    await expect.poll(async () => (await rail.boundingBox())!.width).toBe(64);
+    await expect(rail.getByRole('button', { name: 'Expand sidebar' })).toBeVisible();
+    await expect(rail.getByRole('link', { name: /^people$/i })).toHaveAttribute('data-tip', 'People');
+    await expect(rail.getByRole('link', { name: 'Alex Rivera' })).toBeVisible();
+    expect(
+      (await rail.getByRole('link', { name: /^people$/i }).boundingBox())!.height,
+    ).toBeGreaterThanOrEqual(44);
   });
 
   test('a chip runs a tool, shows the status card, renders a card, and the thread survives leaving the page', async ({
@@ -336,10 +341,9 @@ test.describe('Chat home', () => {
     await expect(page.getByTestId('temporary-note')).toContainText('not saved');
     await ask(page, 'secret question');
     await expect(page.getByTestId('turn-assistant')).toContainText('Try one of the chips');
-    await page.getByTestId('sidebar-toggle').click();
     const rail = page.getByTestId('rail');
     await expect(rail).toHaveAttribute('data-expanded', 'true');
-    await expect.poll(async () => (await rail.boundingBox())!.width).toBe(260);
+    await expect.poll(async () => (await rail.boundingBox())!.width).toBe(248);
     await expect(rail.getByText('Orbit', { exact: true })).toBeVisible();
     await expect(rail.getByTestId('account-row')).toContainText('Alex Rivera');
     await expect(rail.getByTestId('account-row')).toContainText('Local data');
@@ -385,7 +389,7 @@ test.describe('Chat home', () => {
     await expect(page.getByTestId('rail')).toHaveAttribute('data-expanded', 'false');
   });
 
-  test('phone layout: bottom tabs, full-width composer, two-column chips, 26px greeting, nothing clipped', async ({
+  test('phone layout: bottom tabs, full-width composer, two-column chips, 28px greeting, nothing clipped', async ({
     page,
   }) => {
     await page.setViewportSize({ width: 390, height: 844 });
@@ -401,7 +405,7 @@ test.describe('Chat home', () => {
     expect((await tabs.getByRole('link', { name: 'People' }).boundingBox())!.height).toBeGreaterThanOrEqual(
       44,
     );
-    expect(await page.getByTestId('greeting').evaluate((el) => getComputedStyle(el).fontSize)).toBe('26px');
+    expect(await page.getByTestId('greeting').evaluate((el) => getComputedStyle(el).fontSize)).toBe('28px');
     const box = (await page.getByTestId('composer').boundingBox())!;
     expect(box.width).toBeGreaterThanOrEqual(350);
     expect(box.x + box.width).toBeLessThanOrEqual(390);
@@ -483,29 +487,16 @@ test.describe('Chat home', () => {
       return { animation: cs.animationName, color: cs.color };
     });
     expect(shimmer.animation).toBe('none');
-    expect(shimmer.color).toBe('rgb(14, 20, 36)');
+    expect(shimmer.color).toBe('rgb(10, 10, 10)');
     await ask(page, 'slow one please');
     await expect(page.getByTestId('composer-stop')).toBeVisible();
     await page.getByTestId('composer-stop').click();
     await expect(page.getByTestId('turn-stopped')).toBeVisible();
   });
 
-  test('the glass stays legible: ink on the composer and the chips over the brightest part of the backdrop', async ({
-    page,
-  }) => {
+  test('the composer stays legible: ink on an opaque white card', async ({ page }) => {
     await home(page);
-    // the composer's own pixels are near white, so the 15px ink keeps its contrast wherever a blob drifts
-    const sample = await page.evaluate(() => {
-      const el = document.querySelector('[data-testid="composer"]') as HTMLElement;
-      const cs = getComputedStyle(el);
-      return {
-        bg: cs.backgroundColor,
-        backdrop:
-          cs.backdropFilter || (cs as unknown as { webkitBackdropFilter: string }).webkitBackdropFilter,
-      };
-    });
-    expect(sample.backdrop).toMatch(/blur\(20px\)/);
-    expect(sample.backdrop).toMatch(/saturate\(1\.6\)|saturate\(160%\)/);
+    // the composer is an opaque white card, so the 15px ink keeps its contrast
     const shotBuf = await page.getByTestId('composer').screenshot();
     // the PNG's centre pixel: decoded by the browser itself
     const [r, g, b] = await page.evaluate(async (b64) => {

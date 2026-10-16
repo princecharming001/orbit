@@ -59,11 +59,12 @@ export function AppShell() {
   const nav = useNavigate();
   const [palette, setPalette] = useState(false);
   const [more, setMore] = useState(false);
+  // labelled by default, as Tsenta's sidebar is; a student who collapses it keeps the icon rail
   const [expanded, setExpanded] = useState(() => {
     try {
-      return localStorage.getItem(SIDEBAR_KEY) === '1';
+      return localStorage.getItem(SIDEBAR_KEY) !== '0';
     } catch {
-      return false;
+      return true;
     }
   });
   const { pathname } = useLocation();
@@ -143,8 +144,10 @@ export function AppShell() {
   const badge = pending > 0 && (
     <span
       className={cx(
-        'text-[10.5px] bg-accent text-white rounded-full min-w-[18px] h-[18px] px-1 inline-flex items-center justify-center tabular font-medium',
-        expanded ? 'ml-auto' : 'absolute top-0.5 right-0.5',
+        'tabular font-medium inline-flex items-center justify-center rounded-full',
+        expanded
+          ? 'ml-auto text-[11px] min-w-[22px] h-[20px] px-1.5 bg-accent-soft text-accent border border-[#d3e5dc]'
+          : 'absolute top-1 right-1 text-[10px] min-w-[16px] h-[16px] px-1 bg-ember text-white',
       )}
       title={`${pending} message${pending === 1 ? '' : 's'} waiting on you: to send, or to mark as sent`}
       data-testid="approvals-badge"
@@ -154,9 +157,16 @@ export function AppShell() {
   );
   const itemClass = (active: boolean) =>
     cx(
-      'relative rounded-xl flex items-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 transition-colors',
-      expanded ? 'h-10 px-2.5 gap-3 text-[14px]' : 'tip w-11 h-11 justify-center',
-      active ? 'bg-accent-soft text-accent font-medium' : 'text-ink-2 hover:bg-white/70 hover:text-ink',
+      'relative rounded-[10px] flex items-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/20 transition-colors duration-150',
+      expanded ? 'h-9 px-2.5 gap-2.5 text-[14px]' : 'tip w-11 h-11 justify-center',
+      // Tsenta's active item: a soft grey fill and a short dark bar at the left edge
+      active
+        ? cx(
+            'bg-[#f0efed] text-ink font-medium',
+            expanded &&
+              "before:content-[''] before:absolute before:-left-3 before:top-2 before:bottom-2 before:w-[3px] before:rounded-r before:bg-ink",
+          )
+        : 'text-ink-2 hover:bg-[#f5f4f2] hover:text-ink',
     );
   const railLink = (to: string, label: string, Icon: typeof Users, extra?: ReactNode) => (
     <NavLink
@@ -166,7 +176,7 @@ export function AppShell() {
       aria-label={label}
       data-tip={expanded ? undefined : label}
     >
-      <Icon size={20} aria-hidden className="shrink-0" />
+      <Icon size={expanded ? 17 : 19} strokeWidth={1.75} aria-hidden className="shrink-0" />
       {expanded && <span className="truncate">{label}</span>}
       {extra}
     </NavLink>
@@ -180,7 +190,7 @@ export function AppShell() {
       data-tip={expanded ? undefined : label}
       data-testid={testId}
     >
-      <Icon size={20} aria-hidden className="shrink-0" />
+      <Icon size={expanded ? 17 : 19} strokeWidth={1.75} aria-hidden className="shrink-0" />
       {expanded && <span className="truncate">{label}</span>}
     </button>
   );
@@ -190,8 +200,8 @@ export function AppShell() {
       <LinkedInAutoSync />
       <aside
         className={cx(
-          'shrink-0 hidden md:flex flex-col h-full border-r border-white/60 bg-white/45 backdrop-blur-[20px] backdrop-saturate-[160%] transition-[width] duration-200',
-          expanded ? 'w-[260px] px-3' : 'w-16 px-2.5',
+          'shrink-0 hidden md:flex flex-col h-full border-r border-line bg-canvas transition-[width] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]',
+          expanded ? 'w-[248px] px-3' : 'w-16 px-2.5',
         )}
         data-testid="rail"
         data-expanded={expanded}
@@ -204,13 +214,13 @@ export function AppShell() {
             aria-label="Orbit home"
           >
             <Logo />
-            {expanded && <span className="font-semibold tracking-tight text-[16px]">Orbit</span>}
+            {expanded && <span className="font-medium tracking-[-0.01em] text-[16px]">Orbit</span>}
           </NavLink>
           {expanded && (
             <button
               type="button"
               onClick={toggleSidebar}
-              className="ml-auto w-9 h-9 rounded-lg inline-flex items-center justify-center text-ink-2 hover:bg-white/70 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+              className="ml-auto w-9 h-9 rounded-lg inline-flex items-center justify-center text-ink-2 hover:bg-canvas-2 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
               aria-label="Collapse sidebar"
               aria-expanded
               data-testid="sidebar-toggle"
@@ -219,17 +229,18 @@ export function AppShell() {
             </button>
           )}
         </div>
-        <nav className="flex flex-col gap-1" aria-label="Main">
+        <nav className="flex flex-col gap-0.5" aria-label="Main">
           {!expanded && railButton('Expand sidebar', PanelLeft, toggleSidebar, 'sidebar-toggle')}
+          {expanded && <div className="label-mono px-2.5 pt-2 pb-1.5">Workspace</div>}
           {railButton('New chat', SquarePen, newChat, 'new-chat')}
           {NAV_TOP.map(({ to, label, icon }) =>
             railLink(to, label, icon, label === 'Drafts' ? badge : undefined),
           )}
-          <div className="my-1.5 h-px bg-line mx-1" role="separator" />
+          <div className="my-2 h-px bg-line mx-2.5" role="separator" />
           {NAV_MORE.map(({ to, label, icon }) => railLink(to, label, icon))}
         </nav>
         {expanded && <Recent chat={chat} />}
-        <div className={cx('mt-auto pb-3 flex flex-col gap-1', !expanded && 'items-center')}>
+        <div className={cx('mt-auto pb-3 pt-2 flex flex-col gap-0.5', !expanded && 'items-center')}>
           {railButton(
             `Search (${modKeyLabel() === 'Ctrl' ? 'Ctrl' : 'Command'} K)`,
             Search,
@@ -239,18 +250,20 @@ export function AppShell() {
           {railLink('/settings', 'Settings', Settings)}
           {user &&
             (expanded ? (
-              <div
-                className="mt-1 px-1.5 h-12 flex items-center gap-2.5 text-[13px]"
+              // Tsenta's account card: the student on a deep green tile at the foot of the sidebar
+              <NavLink
+                to="/settings/profile"
+                className="mt-2 px-3 h-14 rounded-[12px] bg-accent text-white flex items-center gap-2.5 text-[13px] hover:bg-accent-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/30"
                 data-testid="account-row"
               >
                 <Avatar name={user.fullName} src={user.avatarUrl} id={user.id} size={30} />
                 <div className="min-w-0">
                   <div className="font-medium truncate">{user.fullName}</div>
-                  <div className="text-[12px] text-ink-3 truncate">
+                  <div className="text-[12px] text-white/65 truncate">
                     {gmail ? 'Gmail connected' : 'Local data'}
                   </div>
                 </div>
-              </div>
+              </NavLink>
             ) : (
               <NavLink
                 to="/settings/profile"
@@ -264,18 +277,18 @@ export function AppShell() {
         </div>
       </aside>
       <div className="flex-1 min-w-0 flex flex-col">
-        <header className="md:hidden h-12 shrink-0 border-b border-white/60 bg-white/50 backdrop-blur-[20px] flex items-center gap-1 px-3">
+        <header className="md:hidden h-12 shrink-0 border-b border-line bg-canvas/90 backdrop-blur-md flex items-center gap-1 px-3">
           <NavLink
             to="/"
             onClick={chat.newChat}
             className="inline-flex items-center gap-1.5"
             aria-label="Orbit home"
           >
-            <Logo /> <span className="font-semibold">Orbit</span>
+            <Logo /> <span className="font-medium tracking-[-0.01em]">Orbit</span>
           </NavLink>
           <button
             onClick={() => setPalette(true)}
-            className="ml-auto w-11 h-11 rounded-md inline-flex items-center justify-center hover:bg-white/70"
+            className="ml-auto w-11 h-11 rounded-md inline-flex items-center justify-center hover:bg-canvas-2"
             aria-label="Search"
             title="Search people and actions"
           >
@@ -283,7 +296,7 @@ export function AppShell() {
           </button>
           <NavLink
             to="/notes/new"
-            className="h-11 px-2 rounded-md hover:bg-white/70 inline-flex items-center gap-1"
+            className="h-11 px-2 rounded-md hover:bg-canvas-2 inline-flex items-center gap-1"
             aria-label="Add note"
             title="Add a note about a conversation"
             data-testid="mobile-add-note"
@@ -294,7 +307,7 @@ export function AppShell() {
             to="/settings"
             className={({ isActive }) =>
               cx(
-                'w-11 h-11 rounded-md inline-flex items-center justify-center hover:bg-white/70',
+                'w-11 h-11 rounded-md inline-flex items-center justify-center hover:bg-canvas-2',
                 isActive && 'text-accent',
               )
             }
@@ -308,15 +321,19 @@ export function AppShell() {
         <DemoBanner />
         <main
           ref={mainRef}
-          className={cx('flex-1 min-h-0', isChat ? 'overflow-hidden' : 'overflow-y-auto scroll-thin')}
+          className={cx('flex-1 min-h-0 bg-page', isChat ? 'overflow-hidden' : 'overflow-y-auto scroll-thin')}
         >
           {isChat ? (
             <Outlet />
           ) : (
             <div
+              // a soft fade as the student moves between sections (keyed on the section, so a person page to the
+              // next person does not replay it)
+              key={pathname.split('/')[1]}
               className={cx(
+                'page-in',
                 // the page's own layout (columns, side by side or stacked) follows this box, so the same page also fits the chat's side panel
-                '@container max-w-[1120px] mx-auto px-4 md:px-8 py-6 pb-24 md:pb-8',
+                '@container max-w-[1120px] mx-auto px-4 md:px-10 py-6 md:py-9 pb-24 md:pb-10',
                 // on a wide screen the map fills exactly the room under the header and the demo banner, so the page
                 // never scrolls under it (focusing the canvas or a route would otherwise jump the page)
                 fillsScreen && 'lg:h-full lg:flex lg:flex-col',
@@ -328,14 +345,14 @@ export function AppShell() {
         </main>
         {more && (
           <div className="md:hidden fixed inset-0 z-40" data-testid="more-sheet">
-            <div className="absolute inset-0 bg-ink/20" onClick={() => setMore(false)} />
+            <div className="absolute inset-0 bg-black/20" onClick={() => setMore(false)} />
             <div
-              className="glass glass-strong absolute inset-x-2 bottom-16 rounded-[20px] p-2 fade-up"
+              className="glass glass-strong absolute inset-x-2 bottom-16 rounded-[18px] p-2 sheet-in"
               role="dialog"
               aria-label="More"
             >
               <div className="flex items-center justify-between px-2 h-9">
-                <span className="text-[13px] font-medium text-ink-3">More</span>
+                <span className="label-mono">More</span>
                 <button
                   type="button"
                   onClick={() => setMore(false)}
@@ -352,8 +369,8 @@ export function AppShell() {
                   onClick={() => setMore(false)}
                   className={({ isActive }) =>
                     cx(
-                      'h-12 px-3 rounded-xl flex items-center gap-3 text-[15px]',
-                      isActive ? 'bg-accent-soft text-accent' : 'hover:bg-white/70',
+                      'h-12 px-3 rounded-[12px] flex items-center gap-3 text-[15px]',
+                      isActive ? 'bg-[#f0efed] text-ink font-medium' : 'hover:bg-canvas-2',
                     )
                   }
                 >
@@ -373,7 +390,7 @@ export function AppShell() {
           </div>
         )}
         <nav
-          className="md:hidden shrink-0 border-t border-white/60 bg-white/70 backdrop-blur-[20px] grid grid-cols-5 h-14 pb-[env(safe-area-inset-bottom)]"
+          className="md:hidden shrink-0 border-t border-line bg-canvas/95 backdrop-blur-md grid grid-cols-5 h-14 pb-[env(safe-area-inset-bottom)]"
           aria-label="Main"
           data-testid="tab-bar"
         >
@@ -386,7 +403,7 @@ export function AppShell() {
               className={({ isActive }) =>
                 cx(
                   'relative min-w-0 min-h-11 flex flex-col items-center justify-center gap-0.5 text-[10.5px]',
-                  isActive && !more ? 'text-accent' : 'text-ink-3',
+                  isActive && !more ? 'text-ink font-medium' : 'text-ink-3',
                 )
               }
             >
@@ -394,7 +411,7 @@ export function AppShell() {
               <span className="truncate max-w-full px-0.5">{label}</span>
               {label === 'Drafts' && pending > 0 && (
                 <span
-                  className="absolute top-1.5 left-1/2 ml-2 min-w-4 h-4 px-1 rounded-full bg-accent text-white text-[9px] inline-flex items-center justify-center tabular"
+                  className="absolute top-1.5 left-1/2 ml-2 min-w-4 h-4 px-1 rounded-full bg-ember text-white text-[9px] inline-flex items-center justify-center tabular"
                   data-testid="tab-drafts-badge"
                 >
                   {pending}
@@ -407,7 +424,9 @@ export function AppShell() {
             onClick={() => setMore((m) => !m)}
             className={cx(
               'relative min-w-0 min-h-11 flex flex-col items-center justify-center gap-0.5 text-[10.5px]',
-              more || PHONE_MORE.some((n) => pathname.startsWith(n.to)) ? 'text-accent' : 'text-ink-3',
+              more || PHONE_MORE.some((n) => pathname.startsWith(n.to))
+                ? 'text-ink font-medium'
+                : 'text-ink-3',
             )}
             aria-label="More"
             aria-expanded={more}
@@ -465,13 +484,13 @@ function Recent({ chat }: { chat: ReturnType<typeof threadActions> }) {
   };
   return (
     <div className="mt-4 flex-1 min-h-0 overflow-y-auto scroll-thin -mx-1 px-1" data-testid="recent">
-      <div className="px-2.5 text-[12px] font-medium text-ink-3 mb-1">Recent</div>
+      <div className="label-mono px-2.5 mb-1">Recent</div>
       {items.length === 0 && <p className="px-2.5 text-[12.5px] text-ink-3">No conversations yet.</p>}
       {(Object.keys(groups) as (keyof typeof groups)[]).map(
         (k) =>
           groups[k].length > 0 && (
             <div key={k} className="mb-2" data-testid={`recent-${k.toLowerCase()}`}>
-              <div className="px-2.5 text-[11px] uppercase tracking-wide text-ink-3 mt-2 mb-0.5">{k}</div>
+              <div className="px-2.5 text-[11.5px] text-ink-3 mt-2 mb-0.5">{k}</div>
               <ul>
                 {groups[k].map((c) => (
                   <li key={c.id} className="group relative">
@@ -485,7 +504,7 @@ function Recent({ chat }: { chat: ReturnType<typeof threadActions> }) {
                           if (e.key === 'Enter') commitRename();
                           if (e.key === 'Escape') setEditing(undefined);
                         }}
-                        className="w-full h-9 px-2.5 rounded-lg border border-accent bg-canvas text-[13.5px] focus:outline-none"
+                        className="w-full h-9 px-2.5 rounded-[10px] border border-ink/30 bg-canvas text-[13.5px] focus:outline-none"
                         aria-label="Conversation title"
                         data-testid="recent-rename-input"
                       />
@@ -495,8 +514,8 @@ function Recent({ chat }: { chat: ReturnType<typeof threadActions> }) {
                           type="button"
                           onClick={() => open(c.id)}
                           className={cx(
-                            'w-full h-9 px-2.5 pr-16 rounded-lg text-left text-[13.5px] truncate hover:bg-white/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
-                            thread.conversation?.id === c.id && 'bg-white/80 font-medium',
+                            'w-full h-8 px-2.5 pr-16 rounded-[10px] text-left text-[13.5px] text-ink-2 truncate hover:bg-[#f5f4f2] hover:text-ink transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/20',
+                            thread.conversation?.id === c.id && 'bg-[#f0efed] text-ink font-medium',
                           )}
                           data-testid="recent-item"
                         >

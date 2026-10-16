@@ -204,10 +204,10 @@ export function People() {
           ? `${list.length} of ${total} people`
           : `${total} ${total === 1 ? 'person' : 'people'} in your orbit`
       : view === 'companies'
-        ? 'Every company where you have a chat, and where those chats stand.'
+        ? 'Every company where you have a chat.'
         : googleOn
-          ? 'Every coffee chat and where it stands. Orbit moves chats along as emails and meetings happen; you can move one yourself too.'
-          : 'Every coffee chat and where it stands. Orbit cannot see your inbox, so when someone replies, accepts on LinkedIn or meets you, move their card.';
+          ? 'Every coffee chat and where it stands. Replies and meetings move them along.'
+          : 'Every coffee chat and where it stands. Orbit cannot see your inbox: move a card when someone replies.';
   const quietNote = `Nobody has gone quiet: no one has been waiting more than ${QUIET_DAYS} days for a reply to your last message.`;
   return (
     <div ref={rootRef}>
@@ -224,7 +224,7 @@ export function People() {
       </FirstRunHint>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 mb-3">
         <div
-          className="inline-flex items-center rounded-lg bg-canvas-2 p-0.5"
+          className="inline-flex items-center rounded-full border border-line bg-canvas p-0.5 shadow-[var(--shadow-pill)]"
           role="tablist"
           aria-label="How to show your people"
         >
@@ -236,8 +236,8 @@ export function People() {
               aria-selected={view === v.value}
               onClick={() => setView(v.value)}
               className={cx(
-                'h-8 px-3 rounded-md text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
-                view === v.value ? 'bg-canvas text-ink font-medium shadow-sm' : 'text-ink-3 hover:text-ink',
+                'h-8 px-3.5 rounded-full text-[13px] transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/20',
+                view === v.value ? 'bg-ink text-white font-medium' : 'text-ink-2 hover:text-ink',
               )}
               data-testid={`people-view-${v.value}`}
             >

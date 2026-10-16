@@ -30,7 +30,7 @@ function Cited({ claim, sources }: { claim: Claim; sources: { n: number; url?: s
             href={s.url}
             target="_blank"
             rel="noreferrer noopener"
-            className="ml-0.5 align-super text-[10px] text-accent hover:underline"
+            className="ml-0.5 align-super text-[10px] text-ink underline decoration-[#cfcdc9] underline-offset-4 hover:decoration-ink"
             title={s.title ?? s.url}
             data-testid="dossier-source"
           >
@@ -263,7 +263,7 @@ export function DossierCard({ person, userId }: { person: Person; userId: string
                         href={s.url}
                         target="_blank"
                         rel="noreferrer noopener"
-                        className="text-accent hover:underline"
+                        className="text-ink underline decoration-[#cfcdc9] underline-offset-4 hover:decoration-ink"
                       >
                         {s.title ?? s.url}
                       </a>

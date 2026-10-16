@@ -976,7 +976,7 @@ test.describe('Map motion', () => {
       );
     // first a stage of another colour (warming up, amber), so the crossfade to green shows
     await setStage('warming');
-    await stepUntil(page, async () => (await mapStageColor(page, maya)) === 'rgb(183,121,31)');
+    await stepUntil(page, async () => (await mapStageColor(page, maya)) === 'rgb(192,122,20)');
     await stepUntilSettled(page, 3000);
     const before = await mapStageColor(page, maya);
     const rest = (await mapDots(page, [maya]))[maya]!.r;
@@ -989,14 +989,14 @@ test.describe('Map motion', () => {
     await page.clock.runFor(200);
     const mid = await mapStageColor(page, maya);
     expect(mid).not.toBe(before);
-    expect(mid).not.toBe('rgb(31,138,76)');
+    expect(mid).not.toBe('rgb(0,115,58)');
     expect((await mapDots(page, [maya]))[maya]!.r).toBeGreaterThan(rest * 1.1);
     await expect(page.getByTestId('map-legend-line')).toHaveText('Your chat with Maya Chen is booked.');
     // and the map names her where it happens
     expect((await mapSnapshot(page)).tags.some((t) => t.startsWith('Maya'))).toBe(true);
     await stepUntilSettled(page, 3000);
     // and it lands on the scheduled colour
-    expect(await mapStageColor(page, maya)).toBe('rgb(31,138,76)');
+    expect(await mapStageColor(page, maya)).toBe('rgb(0,115,58)');
   });
 
   test('the Introductions view grows outward generation by generation; a chain lights up; search turns to it', async ({

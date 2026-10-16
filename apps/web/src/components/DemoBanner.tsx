@@ -22,17 +22,18 @@ export function DemoBanner() {
   return (
     <>
       <div
-        className="border-b border-line bg-accent-soft text-[12.5px] md:text-[13px] px-4 py-1.5 md:py-2 flex flex-wrap items-center gap-x-3 gap-y-1"
+        className="border-b border-line bg-canvas text-[12.5px] md:text-[13px] px-4 md:px-10 py-1.5 md:py-2 flex flex-wrap items-center gap-x-3 gap-y-1"
         data-testid="demo-banner"
       >
-        <span className="text-ink-2 min-w-0">
+        <span className="text-ink-2 min-w-0 inline-flex items-center gap-2">
+          <span className="w-1.5 h-1.5 rounded-full bg-ember shrink-0" aria-hidden />
           <span className="md:hidden">Demo data for a made-up student.</span>
           <span className="hidden md:inline">
             You are looking at demo data for {user.fullName}, a made-up student. Nothing here is real or sent.
           </span>
         </span>
         <button
-          className="font-medium text-accent underline underline-offset-2 hover:text-ink"
+          className="font-medium text-ink underline decoration-line underline-offset-4 hover:decoration-ink transition-colors"
           onClick={() => setAsking(true)}
           data-testid="demo-start-own"
         >

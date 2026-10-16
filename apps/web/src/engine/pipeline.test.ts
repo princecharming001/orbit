@@ -1,7 +1,13 @@
 import type { CoffeeChat, Person, Suggestion, User } from '@orbit/core';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { db } from '../db/schema';
-import { evaluateImmediateSuggestions, generateBrief, revalidatePending, upsertSuggestions } from './brief';
+import {
+  ensureDrafts,
+  evaluateImmediateSuggestions,
+  generateBrief,
+  revalidatePending,
+  upsertSuggestions,
+} from './brief';
 import { loadDemo } from './demo';
 import { ingestEmails, ingestEvents, type RawEmail, type RawEvent } from './ingest';
 import { ingestNote } from './notes';
@@ -598,7 +604,10 @@ describe('the demo, after the fixes (DR-01, DR-03, EG-08, EG-19)', () => {
     await generateBrief(user, 'daily', new Date(Date.now() + 1000));
     const intro = (await cardsOf(sofia.id)).find((s) => s.kind === 'intro_request' && s.status === 'pending');
     expect(intro?.reasonText).toMatch(/offered to introduce you to Theo/);
-    const draft = intro?.outboundMessageId ? await db.outbound.get(intro.outboundMessageId) : undefined;
+    // on some days the card waits under the day's top five; opening it in Drafts writes its draft
+    await ensureDrafts(user, [intro!.id]);
+    const opened = await db.suggestions.get(intro!.id);
+    const draft = opened?.outboundMessageId ? await db.outbound.get(opened.outboundMessageId) : undefined;
     expect(draft?.bodyDraft).toMatch(/you kindly offered to introduce me to Theo/);
     await db.chats.put(theoChat);
     // no pending card proposes or confirms times for a chat that is already on the calendar or done

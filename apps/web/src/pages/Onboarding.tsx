@@ -50,6 +50,10 @@ export function onboardingPath(step: number): string {
 }
 
 /** A LinkedIn import of either kind: the export file, or the live connection once it exists. */
+function connectionsImported(n: number): string {
+  return `${n} ${n === 1 ? 'connection' : 'connections'} imported`;
+}
+
 function isLinkedIn(provider: string): boolean {
   return provider === 'linkedin_csv' || provider === 'linkedin_live';
 }
@@ -163,11 +167,11 @@ function BackArrow({ onClick }: { onClick: () => void }) {
       onClick={onClick}
       aria-label="Back"
       title="Back"
-      className="-ml-2 mb-4 inline-flex h-9 w-9 items-center justify-center rounded-full text-ink-2 hover:bg-black/[0.04] hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/20"
+      className="-ml-1 mb-5 inline-flex h-8 px-3 gap-1.5 items-center justify-center rounded-full border border-line bg-canvas text-[13px] text-ink-2 shadow-[var(--shadow-pill)] hover:text-ink transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/20"
     >
       <svg
-        width="18"
-        height="18"
+        width="14"
+        height="14"
         viewBox="0 0 24 24"
         fill="none"
         stroke="currentColor"
@@ -176,6 +180,7 @@ function BackArrow({ onClick }: { onClick: () => void }) {
       >
         <path d="m12 19-7-7 7-7M19 12H5" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
+      Back
     </button>
   );
 }
@@ -192,7 +197,7 @@ function Missing({ children }: { children: ReactNode }) {
 /** A round mark above a step's title. */
 function StepMark({ children }: { children: ReactNode }) {
   return (
-    <span className="inline-flex h-12 w-12 items-center justify-center rounded-xl border border-[#e6e8ec] bg-white text-ink shadow-[0_1px_2px_rgba(16,24,40,0.05)]">
+    <span className="inline-flex h-12 w-12 items-center justify-center rounded-xl border border-line bg-white text-ink shadow-[var(--shadow-card)]">
       {children}
     </span>
   );
@@ -222,7 +227,7 @@ function StepWelcome({
   return (
     <div className="text-center pt-[8vh] sm:pt-12" data-testid="ob-welcome">
       <div className="mb-7 flex justify-center">
-        <span className="inline-flex h-[72px] w-[72px] items-center justify-center rounded-[20px] border border-[#e6e8ec] bg-white shadow-[0_1px_2px_rgba(16,24,40,0.05),0_8px_24px_rgba(16,24,40,0.06)]">
+        <span className="inline-flex h-[72px] w-[72px] items-center justify-center rounded-[20px] border border-line bg-white shadow-[0_1px_2px_rgba(16,24,40,0.05),0_8px_24px_rgba(16,24,40,0.06)]">
           <Logo size={44} />
         </span>
       </div>
@@ -398,7 +403,7 @@ function StepYou({ onNext }: { onNext: () => void }) {
               value={f.graduationYear}
               onChange={(e) => setF({ ...f, graduationYear: e.target.value })}
               aria-required="true"
-              className={f.graduationYear ? undefined : 'text-[#9aa1b0]'}
+              className={f.graduationYear ? undefined : 'text-[#a59f97]'}
               data-testid="ob-year"
             >
               <option value="">Choose</option>
@@ -551,7 +556,9 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
                   onClick={() => setKinds(on ? kinds.filter((x) => x !== k) : [...kinds, k])}
                   className={cx(
                     'h-9 px-3.5 rounded-full text-[14px] transition-colors focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ink/15',
-                    on ? 'bg-ink text-white' : 'bg-[#f1f2f4] text-ink-2 hover:bg-[#e8eaee] hover:text-ink',
+                    on
+                      ? 'bg-ink text-white border border-ink'
+                      : 'bg-white border border-line text-ink-2 hover:text-ink hover:border-[#d4d2ce]',
                   )}
                   data-testid={`ob-goal-${k}`}
                 >
@@ -575,7 +582,9 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
                     onClick={() => setFns(on ? fns.filter((x) => x !== k) : [...fns, k])}
                     className={cx(
                       'h-9 px-3.5 rounded-full text-[14px] transition-colors focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ink/15',
-                      on ? 'bg-ink text-white' : 'bg-[#f1f2f4] text-ink-2 hover:bg-[#e8eaee] hover:text-ink',
+                      on
+                        ? 'bg-ink text-white border border-ink'
+                        : 'bg-white border border-line text-ink-2 hover:text-ink hover:border-[#d4d2ce]',
                     )}
                     data-testid={`ob-fn-${k}`}
                   >
@@ -592,7 +601,7 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
           </ObLabel>
           {/* a token field: each company is a chip with its star and remove button, typing adds the next */}
           <div
-            className="min-h-11 w-full rounded-lg border border-[#d9dce3] bg-white px-1.5 py-1.5 flex flex-wrap items-center gap-1.5 transition-[border-color,box-shadow] hover:border-[#c3c8d2] focus-within:border-ink focus-within:ring-[3px] focus-within:ring-ink/[0.08] cursor-text"
+            className="min-h-11 w-full rounded-[10px] border border-line bg-white px-1.5 py-1.5 flex flex-wrap items-center gap-1.5 transition-[border-color,box-shadow] hover:border-[#d4d2ce] focus-within:border-ink focus-within:ring-[3px] focus-within:ring-ink/[0.08] cursor-text"
             onClick={(e) => {
               if (e.target === e.currentTarget) inputRef.current?.focus();
             }}
@@ -600,7 +609,7 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
             {tcs.map((t) => (
               <span
                 key={t.id}
-                className="inline-flex items-center h-7 rounded-md bg-[#f1f2f4] pl-0.5 pr-0.5 text-[13.5px] text-ink"
+                className="inline-flex items-center h-7 rounded-md bg-canvas-2 pl-0.5 pr-0.5 text-[13.5px] text-ink"
               >
                 <button
                   type="button"
@@ -646,7 +655,7 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
                 addCompany();
               }}
               placeholder={tcs.length ? 'Add another' : `${example}, or a few separated by commas`}
-              className="flex-1 min-w-[9rem] h-7 bg-transparent px-2 text-[15px] text-ink placeholder:text-[#9aa1b0] outline-none"
+              className="flex-1 min-w-[9rem] h-7 bg-transparent px-2 text-[15px] text-ink placeholder:text-[#a59f97] outline-none"
               data-testid="ob-company"
             />
             {company.trim() ? (
@@ -669,11 +678,7 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
         </div>
         <div>
           <ObLabel hint="A goal, not a limit">First messages a week</ObLabel>
-          <div
-            role="radiogroup"
-            aria-label="First messages a week"
-            className="grid grid-cols-3 gap-1 rounded-[10px] bg-[#f1f2f4] p-1"
-          >
+          <div role="radiogroup" aria-label="First messages a week" className="grid grid-cols-3 gap-2">
             {PACE.map((p) => {
               const on = ambition === p.value;
               return (
@@ -684,10 +689,10 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
                   aria-checked={on}
                   onClick={() => setAmbition(p.value)}
                   className={cx(
-                    'h-14 rounded-lg flex flex-col items-center justify-center transition-[background-color,box-shadow,color] focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ink/15',
+                    'h-16 rounded-[12px] border bg-white flex flex-col items-center justify-center transition-[border-color,box-shadow,color] duration-200 focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ink/15',
                     on
-                      ? 'bg-white text-ink shadow-[0_1px_2px_rgba(16,24,40,0.08),0_1px_1px_rgba(16,24,40,0.04)]'
-                      : 'text-ink-2 hover:text-ink',
+                      ? 'border-ink text-ink shadow-[0_0_0_1px_#0a0a0a]'
+                      : 'border-line text-ink-2 hover:text-ink hover:border-[#d4d2ce]',
                   )}
                   data-testid={`ob-pace-${p.value}`}
                 >
@@ -761,7 +766,7 @@ function StepLinkedIn({ onNext, signedIn }: { onNext: () => void; signedIn?: boo
       const r = await connectLinkedInLive(user, {
         onProgress: (n) => setBusy(`Importing ${n} connections…`),
       });
-      if (r.ok) setResult(`${r.rows} connections imported, ${r.added} of them new.`);
+      if (r.ok) setResult(`${connectionsImported(r.rows)}, ${r.added} of them new.`);
       else if (r.reason === 'unconfigured') {
         setNote(r.message);
         setLiveOff(true);
@@ -796,9 +801,7 @@ function StepLinkedIn({ onNext, signedIn }: { onNext: () => void; signedIn?: boo
     }
   };
   const doneBefore =
-    !result && earlier
-      ? `${String((earlier.syncState as { rows?: number }).rows ?? 0)} connections imported.`
-      : '';
+    !result && earlier ? `${connectionsImported((earlier.syncState as { rows?: number }).rows ?? 0)}.` : '';
   const done = !!(result || doneBefore);
   return (
     <div>
@@ -813,7 +816,7 @@ function StepLinkedIn({ onNext, signedIn }: { onNext: () => void; signedIn?: boo
       />
       {done ? (
         <div
-          className="flex items-center gap-3 rounded-xl border border-[#e6e8ec] bg-white px-4 py-3.5 text-[14px]"
+          className="flex items-center gap-3 rounded-xl border border-line bg-white px-4 py-3.5 text-[14px]"
           data-testid="ob-linkedin-done"
         >
           <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-good text-white">
@@ -840,7 +843,7 @@ function StepLinkedIn({ onNext, signedIn }: { onNext: () => void; signedIn?: boo
       ) : null}
       {note && (
         <p
-          className="mb-4 rounded-lg bg-[#f1f2f4] px-3.5 py-2.5 text-[13.5px] text-ink-2 text-center"
+          className="mb-4 rounded-[10px] bg-canvas-2 px-3.5 py-2.5 text-[13.5px] text-ink-2 text-center"
           role="status"
         >
           {note}
@@ -864,7 +867,7 @@ function StepLinkedIn({ onNext, signedIn }: { onNext: () => void; signedIn?: boo
               <li>Upload the ZIP as it is, or Connections.csv from inside it.</li>
             </ol>
           </ObPanel>
-          <label className="mt-3 flex h-24 cursor-pointer flex-col items-center justify-center gap-1.5 rounded-xl border border-dashed border-[#cfd3db] bg-white text-ink transition-colors hover:border-ink/40 hover:bg-[#fafbfc] focus-within:border-ink focus-within:ring-[3px] focus-within:ring-ink/[0.08]">
+          <label className="mt-3 flex h-24 cursor-pointer flex-col items-center justify-center gap-1.5 rounded-xl border border-dashed border-[#d4d2ce] bg-white text-ink transition-colors hover:border-ink/40 hover:bg-[#fafbfc] focus-within:border-ink focus-within:ring-[3px] focus-within:ring-ink/[0.08]">
             <input
               type="file"
               accept=".csv,.zip"
@@ -973,7 +976,7 @@ function StepGmail({ onNext }: { onNext: () => void }) {
         </ObPanel>
       ) : (
         <div
-          className="rounded-xl border border-[#e6e8ec] bg-white px-4 py-3.5 text-[14px]"
+          className="rounded-xl border border-line bg-white px-4 py-3.5 text-[14px]"
           data-testid="ob-google-unavailable"
         >
           <p className="font-medium text-ink">Google sign-in is not set up on this copy of Orbit.</p>
@@ -1147,7 +1150,7 @@ function StepReady({
       key: 'linkedin',
       title: 'LinkedIn',
       detail: info?.linkedin
-        ? `${String((info.linkedin.syncState as { rows?: number }).rows ?? 0)} connections imported`
+        ? connectionsImported((info.linkedin.syncState as { rows?: number }).rows ?? 0)
         : 'Skipped for now',
       ok: !!info?.linkedin,
       step: STEP.linkedin,
@@ -1199,7 +1202,7 @@ function StepReady({
               <span
                 className={cx(
                   'inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full',
-                  r.ok ? 'bg-good text-white' : 'bg-[#f1f2f4] text-ink-3',
+                  r.ok ? 'bg-good text-white' : 'bg-canvas-2 text-ink-3',
                 )}
               >
                 {r.ok ? <Check size={14} aria-hidden /> : <Minus size={14} aria-hidden />}

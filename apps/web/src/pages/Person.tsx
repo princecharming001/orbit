@@ -388,7 +388,7 @@ export function PersonPage() {
   const talkingPoints = person.summary ? person.talkingPoints : liveSummary?.talkingPoints;
   return (
     <div>
-      <div className="flex flex-col @5xl:flex-row @5xl:items-start gap-4 mb-5" data-testid="person-header">
+      <div className="flex flex-col @4xl:flex-row @4xl:items-start gap-4 mb-5" data-testid="person-header">
         <div className="flex items-start gap-4 min-w-0 flex-1">
           <Avatar name={person.displayName} src={person.photoUrl} id={person.id} size={56} />
           <div className="min-w-0 flex-1">
@@ -488,8 +488,8 @@ export function PersonPage() {
             )}
           </div>
         </div>
-        <div className="flex flex-col items-stretch @5xl:items-end gap-2 w-full @5xl:w-auto @5xl:shrink-0">
-          <div className="flex flex-wrap items-center gap-2 @5xl:justify-end">
+        <div className="flex flex-col items-stretch @4xl:items-end gap-2 w-full @4xl:w-auto @4xl:shrink-0">
+          <div className="flex flex-wrap items-center gap-2 @4xl:justify-end">
             <label className="inline-flex items-center gap-1.5 text-[12px] text-ink-3">
               How you know them
               <Select
@@ -533,7 +533,7 @@ export function PersonPage() {
               Write to {person.firstName}
             </Button>
           </div>
-          <div className="flex flex-wrap items-center gap-1 text-[12px] @5xl:justify-end">
+          <div className="flex flex-wrap items-center gap-1.5 text-[12px] @4xl:justify-end">
             {chat && (
               <label className="inline-flex items-center gap-1.5 text-ink-3 mr-1">
                 Stage
@@ -559,7 +559,7 @@ export function PersonPage() {
               </label>
             )}
             <Button
-              variant="ghost"
+              variant="secondary"
               size="sm"
               onClick={() => nav(`/notes/new?person=${person.id}`)}
               title={`Add notes from a conversation with ${person.firstName}`}
@@ -567,7 +567,7 @@ export function PersonPage() {
               Add note
             </Button>
             <Button
-              variant="ghost"
+              variant="secondary"
               size="sm"
               onClick={() => nav(`/map?reach=${person.id}`)}
               title={`See who you know that could introduce you to ${person.firstName}`}
@@ -779,7 +779,7 @@ export function PersonPage() {
         </Card>
       )}
 
-      <div className="grid @5xl:grid-cols-[minmax(0,1fr)_320px] gap-6 items-start">
+      <div className="grid @4xl:grid-cols-[minmax(0,1fr)_320px] gap-6 items-start">
         <div className="min-w-0">
           <Tabs
             value={tab}

@@ -210,7 +210,7 @@ export function Composer({
                 key={kind}
                 role="menuitem"
                 type="button"
-                className="w-full h-11 sm:h-10 px-2.5 rounded-lg flex items-center gap-2.5 text-[14px] hover:bg-accent-soft focus-visible:outline-none focus-visible:bg-accent-soft"
+                className="w-full h-11 sm:h-10 px-2.5 rounded-[10px] flex items-center gap-2.5 text-[14px] hover:bg-canvas-2 focus-visible:outline-none focus-visible:bg-accent-soft"
                 onClick={() => pickFile(kind)}
               >
                 <Icon size={16} className="text-ink-3" aria-hidden /> {label}
@@ -232,8 +232,8 @@ export function Composer({
                   aria-checked={chatMode === m}
                   type="button"
                   className={cx(
-                    'w-full px-2.5 py-2 rounded-lg text-left hover:bg-accent-soft focus-visible:outline-none focus-visible:bg-accent-soft',
-                    chatMode === m && 'bg-accent-soft/70',
+                    'w-full px-2.5 py-2 rounded-[10px] text-left hover:bg-canvas-2 focus-visible:outline-none focus-visible:bg-canvas-2',
+                    chatMode === m && 'bg-canvas-2',
                   )}
                   onClick={() => {
                     setMode(m);
@@ -254,7 +254,7 @@ export function Composer({
                 </p>
                 <Link
                   to={modeNote?.href ?? '/settings/integrations'}
-                  className="inline-block mt-1.5 font-medium text-accent hover:underline"
+                  className="inline-block mt-1.5 font-medium text-ink underline decoration-[#cfcdc9] underline-offset-4 hover:decoration-ink"
                 >
                   Add a key in Settings
                 </Link>
@@ -267,7 +267,7 @@ export function Composer({
             <button
               type="button"
               onClick={send}
-              className="w-11 h-11 sm:w-10 sm:h-10 rounded-full bg-accent text-white inline-flex items-center justify-center hover:bg-accent-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 fade-up"
+              className="w-11 h-11 sm:w-10 sm:h-10 rounded-full bg-ink text-white inline-flex items-center justify-center hover:bg-[#262626] transition-transform active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 fade-up"
               aria-label="Send"
               data-testid="composer-send"
             >

@@ -48,17 +48,18 @@ import { STAGE_COLOR } from './people/shared';
  */
 
 // ---------- look ----------
-const ACCENT = '#5B5BD6';
-const ACCENT_RGB = '91,91,214';
-const RING = '#eceef2';
-const LABEL = '#767d89';
-const INK = '#0f1115';
+// Tsenta's palette: a deep green accent on warm neutrals
+const ACCENT = '#0f3d2e';
+const ACCENT_RGB = '15,61,46';
+const RING = '#ebe9e6';
+const LABEL = '#857f77';
+const INK = '#0a0a0a';
 /** One colour per introduction lineage, distinct from the accent and the stage colours. */
-export const LINEAGE = ['#0e9384', '#d97706', '#db2777', '#2563eb', '#65a30d', '#9333ea'];
+export const LINEAGE = ['#0f7a68', '#c2410c', '#be185d', '#2b59ff', '#4d7c0f', '#7c3aed'];
 const STAGE_RGB: Record<string, Rgb> = Object.fromEntries(
   Object.entries(STAGE_COLOR).map(([k, v]) => [k, parseHex(v)]),
 );
-const STAGE_FALLBACK = parseHex('#9aa1ad');
+const STAGE_FALLBACK = parseHex('#a59f97');
 const DIM = 0.16;
 const DASH: number[] = [3, 4];
 const SOLID: number[] = [];
@@ -3010,7 +3011,7 @@ export class OrbitScene {
         this.buildSprite(v, Math.ceil(want), label, photo);
       } else if (!v.sprite) {
         // over this frame's budget: a plain disc stands in until the next frame
-        ctx.fillStyle = v.cluster ? '#eef0f5' : `hsl(${v.hue} 45% 55%)`;
+        ctx.fillStyle = v.cluster ? '#f1f0ee' : `hsl(${v.hue} 30% 56%)`;
         ctx.beginPath();
         ctx.arc(v.x, v.y, v.pr, 0, TAU);
         ctx.fill();
@@ -3102,13 +3103,13 @@ export class OrbitScene {
     if (v.cluster) {
       g.beginPath();
       g.arc(cx, cx, r - 0.5, 0, TAU);
-      g.fillStyle = '#eef0f5';
+      g.fillStyle = '#f1f0ee';
       g.fill();
       g.lineWidth = 1;
-      g.strokeStyle = '#c9cdd6';
+      g.strokeStyle = '#d6d3cf';
       g.stroke();
       if (r >= 5) {
-        g.fillStyle = '#4a505c';
+        g.fillStyle = '#4f4b45';
         g.font = `600 ${Math.max(7, Math.min(r * 0.8, (r * 2.8) / Math.max(1, label.length)))}px Inter, sans-serif`;
         g.fillText(label, cx, cx + 0.5);
       }
@@ -3122,7 +3123,7 @@ export class OrbitScene {
         g.drawImage(photo, cx - r, cx - r, r * 2, r * 2);
         img = true;
       } else {
-        g.fillStyle = `hsl(${v.hue} 45% 55%)`;
+        g.fillStyle = `hsl(${v.hue} 30% 56%)`;
         g.fillRect(cx - r, cx - r, r * 2, r * 2);
         if (r >= 7) {
           g.fillStyle = '#fff';
@@ -3441,7 +3442,7 @@ export class OrbitScene {
     const y = Math.max(v.y - v.pr - 18 + (1 - alpha) * 6, 14);
     ctx.globalAlpha = alpha;
     ctx.fillStyle = '#fff';
-    ctx.strokeStyle = '#e6e8ec';
+    ctx.strokeStyle = '#e5e5e5';
     ctx.lineWidth = 1;
     roundRect(ctx, x - tw / 2, y - 11, tw, 22, 6);
     ctx.fill();

@@ -11,7 +11,7 @@ import {
   STAGE_LABELS,
 } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Search, X } from 'lucide-react';
+import { Building2, Search, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { type CardPlace, OrbitMap, useCoarsePointer } from '../components/OrbitMap';
@@ -70,6 +70,10 @@ export function MapPage() {
   const reachParam = params.get('reach');
   const touch = useCoarsePointer();
   const [query, setQuery] = useState('');
+  // live suggestions under the search box: people and companies as the student types, picked with a click or the
+  // arrow keys and Enter (Enter with none picked runs the search as typed)
+  const [suggestOpen, setSuggestOpen] = useState(false);
+  const [suggestAt, setSuggestAt] = useState(-1);
   const [filter, setFilter] = useState<Filter>('all');
   // undefined while routes are being computed, so the panel never claims "no route" before it knows
   const [paths, setPaths] = useState<ReachPath[] | undefined>([]);
@@ -366,6 +370,42 @@ export function MapPage() {
   })();
   const reachMode = !!reachParam;
   const webMode = filter === 'intros' && !reachMode;
+  const suggestions = useMemo(() => {
+    const q = query.trim();
+    if (q.length < 1 || !peopleQ || !orgsQ) return [];
+    if (webMode) {
+      const low = q.toLowerCase();
+      return [...web.members]
+        .map((id) => byId.get(id))
+        .filter(
+          (p): p is Person =>
+            !!p &&
+            p.displayName
+              .toLowerCase()
+              .split(/\s+/)
+              .some((w) => w.startsWith(low)),
+        )
+        .slice(0, 6)
+        .map(
+          (p): ReachCandidate => ({
+            kind: 'person',
+            id: p.id,
+            label: p.displayName,
+            sub: p.currentOrganizationRaw,
+            score: 1,
+          }),
+        );
+    }
+    return rankReachTargets(q, peopleQ, orgsQ).slice(0, 6);
+  }, [query, peopleQ, orgsQ, webMode, web, byId]);
+  const pickSuggestion = (c: ReachCandidate) => {
+    setSuggestOpen(false);
+    setSuggestAt(-1);
+    setQuery(c.label);
+    clearMiss();
+    if (webMode) return searchWeb(c.label);
+    choose(c);
+  };
   // resolve reach param (person id or '1' = open search)
   useEffect(() => {
     if (!userId || !reachParam || reachParam === '1') {
@@ -657,7 +697,7 @@ export function MapPage() {
     <div className="-my-6 md:-mb-8 -mx-4 md:-mx-8 flex flex-col lg:flex-1 lg:min-h-0" data-testid="map-page">
       <div className="px-4 md:px-8 pt-5 pb-3 flex flex-wrap items-center gap-2 border-b border-line bg-canvas">
         <div className="min-w-0">
-          <h1 className="text-[20px] font-semibold tracking-[-0.01em]">
+          <h1 className="text-[24px] font-normal tracking-[-0.02em]">
             {reachMode ? 'Reach' : webMode ? 'Introductions' : 'Your orbit'}
           </h1>
           <p className="text-[12px] text-ink-3">
@@ -675,6 +715,10 @@ export function MapPage() {
             ref={searchForm}
             onSubmit={(e) => {
               e.preventDefault();
+              const picked = suggestOpen && suggestAt >= 0 ? suggestions[suggestAt] : undefined;
+              setSuggestOpen(false);
+              setSuggestAt(-1);
+              if (picked) return pickSuggestion(picked);
               runSearch(query);
             }}
             className={cx(
@@ -688,14 +732,83 @@ export function MapPage() {
               value={query}
               onChange={(e) => {
                 setQuery(e.target.value);
+                setSuggestOpen(true);
+                setSuggestAt(-1);
                 // typing again takes the miss toast down: on a phone it sits over this box
                 clearMiss();
                 if (webMode && !e.target.value) setWebFocus(undefined);
               }}
+              onKeyDown={(e) => {
+                if (!suggestOpen || !suggestions.length) return;
+                if (e.key === 'ArrowDown') {
+                  e.preventDefault();
+                  setSuggestAt((i) => (i + 1) % suggestions.length);
+                } else if (e.key === 'ArrowUp') {
+                  e.preventDefault();
+                  setSuggestAt((i) => (i <= 0 ? suggestions.length - 1 : i - 1));
+                } else if (e.key === 'Escape') {
+                  e.stopPropagation();
+                  setSuggestOpen(false);
+                }
+              }}
+              onBlur={() => setTimeout(() => setSuggestOpen(false), 120)}
+              role="combobox"
+              aria-expanded={suggestOpen && suggestions.length > 0}
+              aria-controls="map-suggestions"
+              aria-autocomplete="list"
+              aria-activedescendant={suggestAt >= 0 ? `map-suggestion-${suggestAt}` : undefined}
               placeholder={webMode ? 'Search your introductions…' : 'Reach a person or company…'}
-              className="pl-8 w-full @[40rem]:w-64 pointer-coarse:h-11 pointer-coarse:text-[16px]"
+              className="pl-8 w-full @[40rem]:w-72 pointer-coarse:h-11 pointer-coarse:text-[16px] rounded-full"
               data-testid="reach-input"
             />
+            {suggestOpen && suggestions.length > 0 && (
+              <div
+                id="map-suggestions"
+                role="listbox"
+                aria-label="Suggestions"
+                className="pop-in absolute z-30 left-0 right-0 mt-1.5 rounded-[14px] border border-line bg-canvas p-1.5 shadow-[0_16px_40px_-12px_rgba(0,0,0,0.18)]"
+                data-testid="map-suggestions"
+              >
+                {suggestions.map((c, i) => {
+                  const p = c.kind === 'person' ? byId.get(c.id) : undefined;
+                  return (
+                    <div
+                      key={`${c.kind}-${c.id}`}
+                      role="option"
+                      tabIndex={-1}
+                      id={`map-suggestion-${i}`}
+                      aria-selected={i === suggestAt}
+                      // mousedown, so the pick lands before the box loses focus and closes the list
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        pickSuggestion(c);
+                      }}
+                      onMouseEnter={() => setSuggestAt(i)}
+                      className={cx(
+                        'w-full h-11 px-2 rounded-[10px] flex items-center gap-2.5 text-left transition-colors cursor-pointer',
+                        i === suggestAt ? 'bg-canvas-2' : 'hover:bg-canvas-2',
+                      )}
+                      data-testid="map-suggestion"
+                    >
+                      {c.kind === 'person' ? (
+                        <Avatar name={c.label} src={p?.photoUrl} id={c.id} size={26} />
+                      ) : (
+                        <span className="w-[26px] h-[26px] rounded-full border border-line bg-canvas-2 inline-flex items-center justify-center text-ink-2">
+                          <Building2 size={13} />
+                        </span>
+                      )}
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-[13.5px] font-medium truncate">{c.label}</span>
+                        {c.sub && <span className="block text-[12px] text-ink-3 truncate">{c.sub}</span>}
+                      </span>
+                      <span className="label-mono !text-[10px] shrink-0">
+                        {c.kind === 'person' ? 'Person' : 'Company'}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </form>
           {reachMode && (
             <Button variant="ghost" size="sm" className={TAP} onClick={exitReach}>
@@ -732,10 +845,10 @@ export function MapPage() {
           {legend}
         </p>
       </div>
-      <div className="@5xl:flex-1 @5xl:min-h-0 grid grid-cols-1 @5xl:grid-cols-[minmax(0,1fr)_340px]">
+      <div className="@4xl:flex-1 @4xl:min-h-0 grid grid-cols-1 @4xl:grid-cols-[minmax(0,1fr)_340px]">
         <div
           className={cx(
-            'relative min-w-0 overflow-hidden @5xl:h-auto @5xl:min-h-[420px] bg-[radial-gradient(circle_at_center,_#fff_0%,_#fafafc_70%)]',
+            'relative min-w-0 overflow-hidden @4xl:h-auto @4xl:min-h-[420px] bg-[radial-gradient(circle_at_center,_#fff_0%,_#fbfaf9_70%)]',
             // on phones the routes sit under the canvas, so in reach mode the canvas leaves room for them
             // a phone's orbit is as wide as the screen, so the canvas is only as tall as that orbit needs (with
             // room for the top and bottom labels): no empty band above it pushing its bottom under the tab bar
@@ -819,7 +932,9 @@ export function MapPage() {
           )}
         </div>
         <aside
-          className="min-w-0 border-t @5xl:border-t-0 @5xl:border-l border-line bg-canvas @5xl:overflow-y-auto scroll-thin p-4 space-y-3"
+          // keyed on what the panel shows, so its cards cascade in again when the target changes
+          key={`${reachParam ?? ''}|${target?.id ?? ''}|${company?.label ?? ''}|${webFocus?.label ?? ''}|${webMode}`}
+          className="stagger min-w-0 border-t @4xl:border-t-0 @4xl:border-l border-line bg-canvas @4xl:overflow-y-auto scroll-thin p-4 space-y-3"
           data-testid="map-panel"
         >
           {!reachMode && !webMode && (
@@ -1101,7 +1216,10 @@ export function MapPage() {
                   </ul>
                   {list.length > 6 && showAll !== title && (
                     <button
-                      className={cx('mt-1.5 text-[12px] text-accent hover:underline', TAP)}
+                      className={cx(
+                        'mt-1.5 text-[12px] text-ink underline decoration-[#cfcdc9] underline-offset-4 hover:decoration-ink',
+                        TAP,
+                      )}
                       onClick={() => setShowAll(title)}
                       data-testid="company-show-all"
                     >

@@ -66,7 +66,7 @@ export function LinkedInImportButton({
   return (
     <label
       className={cx(
-        'inline-flex items-center justify-center gap-1.5 rounded-lg font-medium h-9 px-3.5 text-[14px] cursor-pointer whitespace-nowrap focus-within:ring-2 focus-within:ring-accent/40',
+        'inline-flex items-center justify-center gap-1.5 rounded-full font-medium h-9 px-4 text-[14px] cursor-pointer whitespace-nowrap focus-within:ring-2 focus-within:ring-accent/40',
         VARIANTS[variant],
         busy && 'opacity-60 pointer-events-none',
         className,

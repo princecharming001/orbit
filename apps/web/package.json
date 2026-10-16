@@ -13,6 +13,8 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.133.0",
+    "@fontsource-variable/inter": "5.2.8",
+    "@fontsource/geist-mono": "5.2.7",
     "@orbit/core": "workspace:*",
     "dexie": "^4.0.10",
     "dexie-react-hooks": "^1.1.7",

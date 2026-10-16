@@ -71,7 +71,10 @@ export function ChatHome() {
         <p data-testid="router-note">
           {firstSentence(modeNote.text)}{' '}
           {modeNote.href && (
-            <Link to={modeNote.href} className="font-medium text-accent hover:underline">
+            <Link
+              to={modeNote.href}
+              className="font-medium text-ink underline decoration-[#cfcdc9] underline-offset-4 hover:decoration-ink"
+            >
               Open Settings
             </Link>
           )}
@@ -79,11 +82,13 @@ export function ChatHome() {
       )}
     </div>
   );
-  const temporaryPill = (
+  // in a conversation the pill floats over the thread, so on phones it shrinks to its icon
+  const temporaryPill = (compact = false) => (
     <button
       type="button"
       className={cx(
-        'glass glass-hover h-10 px-3.5 rounded-full inline-flex items-center gap-2 text-[13.5px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+        'glass glass-hover h-10 rounded-full inline-flex items-center justify-center gap-2 text-[13.5px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+        compact ? 'w-10 sm:w-auto sm:px-3.5' : 'px-3.5',
         thread.temporary ? 'text-accent' : 'text-ink-2',
       )}
       aria-pressed={thread.temporary}
@@ -95,13 +100,14 @@ export function ChatHome() {
       }
       data-testid="temporary-toggle"
     >
-      <CircleDashed size={16} aria-hidden /> Temporary
+      <CircleDashed size={16} aria-hidden />{' '}
+      <span className={compact ? 'max-sm:sr-only' : undefined}>Temporary</span>
     </button>
   );
   if (!inConversation)
     return (
       <div className="relative h-full flex flex-col px-4 sm:px-6" data-testid="chat-home">
-        <div className="absolute right-4 top-3 sm:right-6 sm:top-4 z-10">{temporaryPill}</div>
+        <div className="absolute right-4 top-3 sm:right-6 sm:top-4 z-10">{temporaryPill()}</div>
         <div className="flex-[1.25] min-h-[56px]" />
         <div className="w-full max-w-[980px] mx-auto pt-12">
           <h1 className="type-greeting text-center mb-6 sm:mb-7 px-2" data-testid="greeting">
@@ -185,7 +191,7 @@ export function ChatHome() {
     );
   return (
     <div className="relative h-full flex flex-col" data-testid="chat-thread">
-      <div className="absolute right-4 top-3 sm:right-6 sm:top-4 z-20">{temporaryPill}</div>
+      <div className="absolute right-4 top-3 sm:right-6 sm:top-4 z-20">{temporaryPill(true)}</div>
       <div
         ref={scrollRef}
         onScroll={onScroll}
@@ -196,7 +202,7 @@ export function ChatHome() {
           <Thread turns={thread.turns} actions={cardActions} running={thread.running} />
         </div>
       </div>
-      <div className="absolute inset-x-0 bottom-0 px-4 sm:px-6 pb-3 sm:pb-5 pt-6 bg-gradient-to-t from-[#eef4ff] via-[#eef4ff]/95 via-60% to-transparent pointer-events-none">
+      <div className="absolute inset-x-0 bottom-0 px-4 sm:px-6 pb-3 sm:pb-5 pt-6 bg-gradient-to-t from-page via-page/95 via-60% to-transparent pointer-events-none">
         <div className="pointer-events-auto max-w-[800px] mx-auto">
           {!pinned && (
             <div className="flex justify-center mb-2">

@@ -1,220 +1,132 @@
 @import "tailwindcss";
+@import "@fontsource-variable/inter";
+@import "@fontsource/geist-mono/400.css";
+@import "@fontsource/geist-mono/500.css";
 
 /*
-  Orbit's shared theme: liquid glass over a quiet blue gradient, Plus Jakarta Sans, a blue accent.
-  Token names are the ones every page already uses (ink, line, canvas, accent, good, warn, bad), mapped to the new
-  values, so the pages keep working; the glass classes below are what the shell and the chat home are built from.
+  Orbit's shared theme, after Tsenta: a warm white canvas, Inter at light display weights, Geist Mono for small
+  labels, hairline borders, black pill buttons and a deep green accent. Token names are the ones every page already
+  uses (ink, line, canvas, accent, good, warn, bad), so the pages keep working; `.glass` is now a flat bordered card.
 */
 @theme {
   --font-sans:
-    "Plus Jakarta Sans", "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --color-ink: #0e1424;
-  --color-ink-2: #4a5570;
-  --color-ink-3: #637089;
-  --color-line: #dde4f1;
-  --color-line-2: #ebf0f8;
+    "Inter Variable", "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --color-ink: #0a0a0a;
+  --color-ink-2: #4f4b45;
+  --color-ink-3: #777169;
+  --color-line: #e5e5e5;
+  --color-line-2: #efeeec;
   --color-canvas: #ffffff;
-  --color-canvas-2: #f3f6fc;
-  --color-accent: #2f6bff;
-  --color-accent-2: #2358e6;
-  --color-accent-soft: #eaf0ff;
-  --color-aqua: #3ec7f2;
-  --color-good: #1b8a4c;
-  --color-good-soft: #e6f6ec;
-  --color-warn: #a86f12;
-  --color-warn-soft: #fbf3e1;
-  --color-bad: #c43d3d;
-  --color-bad-soft: #fbeaea;
-  --radius-card: 14px;
-  --shadow-card: 0 1px 2px rgba(30, 60, 120, 0.05), 0 8px 30px rgba(30, 60, 120, 0.08);
+  --color-canvas-2: #f6f5f3;
+  --color-page: #fdfcfc;
+  --color-accent: #0f3d2e;
+  --color-accent-2: #0a2c21;
+  --color-accent-soft: #e9f2ee;
+  --color-aqua: #ff4704;
+  --color-ember: #ff4704;
+  --color-ember-soft: #fdebe2;
+  --color-good: #00733a;
+  --color-good-soft: #e7f5ec;
+  --color-warn: #9a5b00;
+  --color-warn-soft: #fcf2df;
+  --color-bad: #c62a1f;
+  --color-bad-soft: #fdecea;
+  --color-pastel-yellow: #fdf1c7;
+  --color-pastel-mint: #d6f6e5;
+  --color-pastel-lilac: #e7e4fb;
+  --color-pastel-rose: #fde3e0;
+  --radius-card: 12px;
+  --shadow-card: 0 0 0 1px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-pill: 0 0 0 1px rgba(0, 0, 0, 0.06), 0 1px 1px rgba(0, 0, 0, 0.04);
 }
 
 :root {
   color-scheme: light;
-  --accent: #2f6bff;
-  --accent-hover: #2358e6;
-  --accent-tint: rgba(47, 107, 255, 0.1);
-  --aqua: #3ec7f2;
-  --glass-bg: rgba(255, 255, 255, 0.66);
-  --glass-bg-strong: rgba(255, 255, 255, 0.74);
-  --glass-tint: rgba(62, 199, 242, 0.07);
-  --glass-border: rgba(255, 255, 255, 0.55);
-  --glass-highlight: rgba(255, 255, 255, 0.85);
-  --glass-shadow: 0 8px 30px rgba(30, 60, 120, 0.1);
-  --glass-shadow-hover: 0 12px 36px rgba(30, 60, 120, 0.14);
-  --glass-blur: 20px;
-  --glass-sat: 160%;
-  --glass-radius: 20px;
+  --accent: #0f3d2e;
+  --accent-hover: #0a2c21;
+  --accent-tint: rgba(15, 61, 46, 0.08);
+  --aqua: #ff4704;
+  --glass-bg: #ffffff;
+  --glass-border: #e5e5e5;
+  --glass-shadow: 0 0 0 1px rgba(0, 0, 0, 0.02), 0 1px 2px rgba(0, 0, 0, 0.04);
+  --glass-shadow-hover: 0 0 0 1px rgba(0, 0, 0, 0.04), 0 4px 14px rgba(0, 0, 0, 0.06);
+  --glass-radius: 14px;
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
 }
 html,
 body,
 #root {
   height: 100%;
 }
-/* the backdrop: near-white to a pale cool blue; it has to carry colour or the blur has nothing to show */
 html {
-  background: linear-gradient(180deg, #fbfcff 0%, #f0f5ff 55%, #e9f1ff 100%) fixed;
+  background: #fdfcfc;
 }
 body {
   @apply text-ink font-sans antialiased text-[14px] leading-[1.5];
-  position: relative;
-  /* Plus Jakarta Sans sets a narrow word space; a touch more keeps small text readable */
-  word-spacing: 0.04em;
-}
-/* two very soft colour blobs (aqua, periwinkle) that drift extremely slowly behind everything */
-body::before,
-body::after {
-  content: "";
-  position: fixed;
-  z-index: -1;
-  pointer-events: none;
-  border-radius: 50%;
-  will-change: transform;
-}
-body::before {
-  width: 62vw;
-  height: 62vw;
-  left: -14vw;
-  top: -22vw;
-  background: radial-gradient(closest-side, rgba(62, 199, 242, 0.14), rgba(62, 199, 242, 0));
-  animation: blob-a 48s ease-in-out infinite alternate;
-}
-body::after {
-  width: 56vw;
-  height: 56vw;
-  right: -16vw;
-  bottom: -20vw;
-  background: radial-gradient(closest-side, rgba(47, 107, 255, 0.12), rgba(47, 107, 255, 0));
-  animation: blob-b 56s ease-in-out infinite alternate;
-}
-@keyframes blob-a {
-  from {
-    transform: translate3d(0, 0, 0);
-  }
-  to {
-    transform: translate3d(9vw, 7vw, 0);
-  }
-}
-@keyframes blob-b {
-  from {
-    transform: translate3d(0, 0, 0);
-  }
-  to {
-    transform: translate3d(-8vw, -9vw, 0);
-  }
+  letter-spacing: 0.005em;
+  font-feature-settings: "cv11", "ss01";
 }
 
 /* Component classes live in the components layer, so a utility on the same element (a radius, a border colour,
    position: absolute) still wins. */
 @layer components {
-  /* ---- glass surfaces ---------------------------------------------------------------------------------- */
+  /* ---- surfaces: a white card on a hairline border (Tsenta's flat cards; the old glass names stay) ------ */
   .glass {
     position: relative;
-    isolation: isolate;
-    background: linear-gradient(180deg, var(--glass-tint), transparent 40%), var(--glass-bg);
+    background: var(--glass-bg);
     border-radius: var(--glass-radius);
     border: 1px solid var(--glass-border);
-    box-shadow:
-      inset 0 1px 0 var(--glass-highlight),
-      var(--glass-shadow);
+    box-shadow: var(--glass-shadow);
     transition:
       background-color 0.18s ease,
       box-shadow 0.18s ease,
-      transform 0.18s ease;
+      border-color 0.18s ease;
   }
   .glass-strong {
-    background: linear-gradient(180deg, var(--glass-tint), transparent 40%), var(--glass-bg-strong);
+    background: #ffffff;
   }
   .glass-hover:hover {
-    background: linear-gradient(180deg, var(--glass-tint), transparent 40%), rgba(255, 255, 255, 0.8);
-    box-shadow:
-      inset 0 1px 0 var(--glass-highlight),
-      var(--glass-shadow-hover);
+    background: #fbfaf9;
+    box-shadow: var(--glass-shadow-hover);
   }
   .glass-lift:focus-within {
+    border-color: #cfcfcf;
     box-shadow:
-      inset 0 1px 0 var(--glass-highlight),
+      0 0 0 4px rgba(0, 0, 0, 0.04),
       var(--glass-shadow-hover);
-    transform: translateY(-1px);
-  }
-  @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-    .glass {
-      /* literal values in the -webkit- line: custom properties do not resolve there in older Safari */
-      -webkit-backdrop-filter: blur(20px) saturate(160%);
-      backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
-    }
-  }
-  /* a gradient edge that reads as a bevel: a 1px ring masked out of a gradient */
-  .glass::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    border-radius: inherit;
-    pointer-events: none;
-    padding: 1px;
-    background: linear-gradient(
-      135deg,
-      rgba(255, 255, 255, 0.9),
-      rgba(255, 255, 255, 0.15) 35%,
-      rgba(47, 107, 255, 0.16) 70%,
-      rgba(255, 255, 255, 0.6)
-    );
-    -webkit-mask:
-      linear-gradient(#000 0 0) content-box,
-      linear-gradient(#000 0 0);
-    mask:
-      linear-gradient(#000 0 0) content-box,
-      linear-gradient(#000 0 0);
-    -webkit-mask-composite: xor;
-    mask-composite: exclude;
-  }
-  /* a soft specular lobe at the top-left, under the content so text never washes out */
-  .glass::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    z-index: -1;
-    border-radius: inherit;
-    pointer-events: none;
-    background: radial-gradient(120% 60% at 20% -10%, rgba(255, 255, 255, 0.55), transparent 55%);
-  }
-  /* no backdrop-filter: a solid, readable card */
-  @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-    .glass {
-      background: rgba(255, 255, 255, 0.96);
-    }
-  }
-  @media (prefers-reduced-transparency: reduce) {
-    .glass {
-      background: rgba(255, 255, 255, 0.96);
-      -webkit-backdrop-filter: none;
-      backdrop-filter: none;
-    }
-    .glass::after {
-      display: none;
-    }
   }
   @media (prefers-contrast: more) {
     .glass {
       border: 2px solid currentColor;
-      background: #fff;
     }
-    .glass::before,
-    .glass::after {
-      display: none;
-    }
+  }
+
+  /* ---- Tsenta's small type: a mono uppercase label over sections, tables and steps ----------------------- */
+  .label-mono {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--color-ink-3);
+  }
+  .display {
+    font-weight: 400;
+    letter-spacing: -0.022em;
+    line-height: 1.05;
   }
 
   /* ---- type scale for the chat surface --------------------------------------------------------------- */
   .type-greeting {
-    font-size: 32px;
-    font-weight: 600;
-    letter-spacing: -0.02em;
-    line-height: 1.15;
+    font-size: 36px;
+    font-weight: 400;
+    letter-spacing: -0.025em;
+    line-height: 1.1;
   }
   @media (max-width: 767px) {
     .type-greeting {
-      font-size: 26px;
+      font-size: 28px;
     }
   }
   .type-body {
@@ -239,7 +151,7 @@ body::after {
     left: calc(100% + 10px);
     top: 50%;
     transform: translateY(-50%) translateX(-4px);
-    background: #0e1424;
+    background: #0a0a0a;
     color: #fff;
     font-size: 12px;
     font-weight: 500;
@@ -263,7 +175,7 @@ body::after {
 
   /* the label of a tool that is running: a light sweep across the words */
   .shimmer {
-    background: linear-gradient(90deg, #0e1424 0%, #0e1424 35%, #9aa6c0 50%, #0e1424 65%, #0e1424 100%);
+    background: linear-gradient(90deg, #0a0a0a 0%, #0a0a0a 35%, #b1b0b0 50%, #0a0a0a 65%, #0a0a0a 100%);
     background-size: 200% 100%;
     -webkit-background-clip: text;
     background-clip: text;
@@ -280,23 +192,32 @@ body::after {
   }
 }
 
-* {
-  box-sizing: border-box;
+/* a page frame with hairline rules on either side, as on tsenta.com (a utility, so md: works on it) */
+@utility frame-rules {
+  border-left: 1px solid var(--color-line);
+  border-right: 1px solid var(--color-line);
+}
+
+/* resets in the base layer, so a utility on the element (a text colour on a link) always wins */
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+  button {
+    font: inherit;
+  }
+  input,
+  textarea,
+  select {
+    font: inherit;
+  }
 }
 ::selection {
-  background: #d6e3ff;
-}
-a {
-  color: inherit;
-  text-decoration: none;
-}
-button {
-  font: inherit;
-}
-input,
-textarea,
-select {
-  font: inherit;
+  background: #fde3d6;
 }
 .tabular {
   font-variant-numeric: tabular-nums;
@@ -306,7 +227,7 @@ select {
   height: 8px;
 }
 .scroll-thin::-webkit-scrollbar-thumb {
-  background: #d7deec;
+  background: #dcdad6;
   border-radius: 8px;
 }
 @keyframes pulse-ring {
@@ -386,20 +307,125 @@ select {
   .panel-in,
   .sheet-in,
   .shake-x,
-  .shimmer,
-  body::before,
-  body::after {
+  .shimmer {
     animation: none;
   }
   .shimmer {
-    color: #0e1424;
+    color: #0a0a0a;
     background: none;
   }
   .glass,
   .tip::after {
     transition: none;
   }
-  .glass-lift:focus-within {
+}
+/* content that fades up the first time it scrolls into view (the landing page) */
+.reveal {
+  opacity: 0;
+  transform: translateY(14px);
+  transition:
+    opacity 0.7s var(--ease-out-expo),
+    transform 0.7s var(--ease-out-expo);
+}
+.reveal.is-in {
+  opacity: 1;
+  transform: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .reveal {
+    opacity: 1;
     transform: none;
+    transition: none;
+  }
+}
+/* a setup step rises into place and settles */
+@keyframes step-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.step-in {
+  animation: step-in 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .step-in {
+    animation: none;
+  }
+}
+/* a menu or list that opens under a field: grows from its top edge */
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.pop-in {
+  transform-origin: top center;
+  animation: pop-in 0.18s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+/* rows of a panel that arrive one after another */
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.stagger > * {
+  animation: rise-in 0.42s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.stagger > *:nth-child(2) {
+  animation-delay: 40ms;
+}
+.stagger > *:nth-child(3) {
+  animation-delay: 80ms;
+}
+.stagger > *:nth-child(4) {
+  animation-delay: 120ms;
+}
+.stagger > *:nth-child(5) {
+  animation-delay: 160ms;
+}
+.stagger > *:nth-child(6) {
+  animation-delay: 200ms;
+}
+.stagger > *:nth-child(n + 7) {
+  animation-delay: 240ms;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pop-in,
+  .stagger > * {
+    animation: none;
+  }
+}
+/* a section of the app fades in as the student arrives on it */
+@keyframes page-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.page-in {
+  animation: page-in 0.38s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .page-in {
+    animation: none;
   }
 }

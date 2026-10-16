@@ -20,7 +20,7 @@ export function cx(...parts: (string | false | null | undefined)[]): string {
   return parts.filter(Boolean).join(' ');
 }
 
-type Variant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'subtle';
+type Variant = 'primary' | 'dark' | 'secondary' | 'ghost' | 'danger' | 'subtle';
 export function Button({
   variant = 'secondary',
   size = 'md',
@@ -28,16 +28,17 @@ export function Button({
   ...rest
 }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; size?: 'sm' | 'md' | 'lg' }) {
   const base =
-    'inline-flex items-center justify-center gap-1.5 rounded-lg font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 whitespace-nowrap';
-  const sizes = { sm: 'h-8 px-2.5 text-[13px]', md: 'h-9 px-3.5 text-[14px]', lg: 'h-11 px-5 text-[15px]' }[
-    size
-  ];
+    'inline-flex items-center justify-center gap-1.5 rounded-full font-medium tracking-[0.005em] transition-[background-color,border-color,color,transform] duration-150 active:scale-[0.97] disabled:active:scale-100 disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/25 focus-visible:ring-offset-1 whitespace-nowrap';
+  const sizes = { sm: 'h-8 px-3 text-[13px]', md: 'h-9 px-4 text-[14px]', lg: 'h-11 px-5 text-[15px]' }[size];
+  // after Tsenta: a deep green pill for the main action in the app (black on the landing page and setup), a white
+  // pill on a hairline for the rest
   const variants: Record<Variant, string> = {
-    primary: 'bg-accent text-white hover:bg-accent-2',
-    secondary: 'bg-canvas text-ink border border-line hover:bg-canvas-2',
+    primary: 'bg-accent text-[#fdfcfc] hover:bg-accent-2 shadow-[var(--shadow-pill)]',
+    dark: 'bg-ink text-[#fdfcfc] hover:bg-[#262626] shadow-[var(--shadow-pill)]',
+    secondary: 'bg-canvas text-ink border border-line shadow-[var(--shadow-pill)] hover:bg-canvas-2',
     ghost: 'bg-transparent text-ink-2 hover:bg-canvas-2 hover:text-ink',
     subtle: 'bg-canvas-2 text-ink hover:bg-line-2',
-    danger: 'bg-bad-soft text-bad hover:bg-red-100',
+    danger: 'bg-bad-soft text-bad hover:bg-[#fbdcd8]',
   };
   return <button className={cx(base, sizes, variants[variant], className)} {...rest} />;
 }
@@ -55,7 +56,11 @@ export function Card({
 }) {
   return (
     <div
-      className={cx('bg-canvas border border-line rounded-[var(--radius-card)]', padded && 'p-4', className)}
+      className={cx(
+        'bg-canvas border border-line rounded-[var(--radius-card)] shadow-[var(--shadow-card)]',
+        padded && 'p-4',
+        className,
+      )}
       data-testid={testId}
     >
       {children}
@@ -67,7 +72,7 @@ export function Input({ className, ...rest }: InputHTMLAttributes<HTMLInputEleme
   return (
     <input
       className={cx(
-        'h-9 w-full rounded-lg border border-line bg-canvas px-3 text-[14px] placeholder:text-ink-3 focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent',
+        'h-10 w-full rounded-[10px] border border-line bg-canvas px-3 text-[14px] placeholder:text-[#a59f97] focus:outline-none focus:ring-4 focus:ring-ink/[0.06] focus:border-[#bdbab5] transition-shadow',
         className,
       )}
       {...rest}
@@ -78,7 +83,7 @@ export function Textarea({ className, ...rest }: TextareaHTMLAttributes<HTMLText
   return (
     <textarea
       className={cx(
-        'w-full rounded-lg border border-line bg-canvas px-3 py-2 text-[14px] leading-relaxed placeholder:text-ink-3 focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent',
+        'w-full rounded-[10px] border border-line bg-canvas px-3 py-2 text-[14px] leading-relaxed placeholder:text-[#a59f97] focus:outline-none focus:ring-4 focus:ring-ink/[0.06] focus:border-[#bdbab5] transition-shadow',
         className,
       )}
       {...rest}
@@ -89,7 +94,10 @@ export function Select({ className, ...rest }: SelectHTMLAttributes<HTMLSelectEl
   return (
     <select
       className={cx(
-        'h-9 rounded-lg border border-line bg-canvas px-2.5 text-[14px] focus:outline-none focus:ring-2 focus:ring-accent/30',
+        'rounded-[10px] border border-line bg-canvas px-2.5 focus:outline-none focus:ring-4 focus:ring-ink/[0.06] focus:border-[#bdbab5]',
+        // the default size gives way to one the caller sets (a compact select in a table row or on a card)
+        !/(^|\s)h-/.test(className ?? '') && 'h-10',
+        !/(^|\s)text-\[/.test(className ?? '') && 'text-[14px]',
         className,
       )}
       {...rest}
@@ -115,7 +123,7 @@ export function Label({
 }) {
   return (
     <div className="mb-1.5 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
-      <label htmlFor={htmlFor} className="text-[13px] font-medium text-ink-2 shrink-0">
+      <label htmlFor={htmlFor} className="text-[13px] font-medium text-ink shrink-0">
         {children}
         {required && <span className="ml-1 text-[12px] font-normal text-ink-3"> Required</span>}
         {optional && <span className="ml-1 text-[12px] font-normal text-ink-3"> Optional</span>}
@@ -135,16 +143,16 @@ export function Chip({
   className?: string;
 }) {
   const tones = {
-    neutral: 'bg-canvas-2 text-ink-2 border-line',
-    accent: 'bg-accent-soft text-accent border-transparent',
-    good: 'bg-good-soft text-good border-transparent',
-    warn: 'bg-warn-soft text-warn border-transparent',
-    bad: 'bg-bad-soft text-bad border-transparent',
+    neutral: 'bg-canvas text-ink-2 border-line',
+    accent: 'bg-accent-soft text-accent border-[#d3e5dc]',
+    good: 'bg-good-soft text-good border-[#cfe9d8]',
+    warn: 'bg-warn-soft text-warn border-[#f3dfb8]',
+    bad: 'bg-bad-soft text-bad border-[#f6cdc8]',
   }[tone];
   return (
     <span
       className={cx(
-        'inline-flex items-center gap-1 rounded-full border px-2 h-6 text-[12px] font-medium leading-none whitespace-nowrap shrink-0',
+        'inline-flex items-center gap-1 rounded-full border px-2 h-[22px] text-[12px] font-medium leading-none whitespace-nowrap shrink-0',
         tones,
         className,
       )}
@@ -180,7 +188,7 @@ export function Avatar({
       ) : (
         <span
           className="rounded-full w-full h-full inline-flex items-center justify-center font-semibold text-white"
-          style={{ background: `hsl(${hue} 45% 55%)`, fontSize: Math.max(10, size * 0.38) }}
+          style={{ background: `hsl(${hue} 32% 52%)`, fontSize: Math.max(10, size * 0.36) }}
         >
           {initials(name)}
         </span>
@@ -200,10 +208,10 @@ export function PageHeader({
   actions?: ReactNode;
 }) {
   return (
-    <div className="flex items-start justify-between gap-4 mb-5">
-      <div>
-        <h1 className="text-[22px] font-semibold tracking-[-0.01em] leading-tight">{title}</h1>
-        {subtitle && <p className="text-ink-3 mt-1 text-[14px]">{subtitle}</p>}
+    <div className="flex items-start justify-between gap-4 mb-6">
+      <div className="min-w-0">
+        <h1 className="text-[26px] sm:text-[30px] font-normal tracking-[-0.025em] leading-[1.1]">{title}</h1>
+        {subtitle && <p className="text-ink-3 mt-1.5 text-[14px] max-w-[62ch]">{subtitle}</p>}
       </div>
       {actions && <div className="flex items-center gap-2 shrink-0">{actions}</div>}
     </div>
@@ -212,8 +220,8 @@ export function PageHeader({
 
 export function EmptyState({ title, body, action }: { title: string; body?: string; action?: ReactNode }) {
   return (
-    <div className="border border-dashed border-line rounded-[var(--radius-card)] p-8 text-center">
-      <p className="font-medium">{title}</p>
+    <div className="border border-line bg-canvas rounded-[var(--radius-card)] p-10 text-center">
+      <p className="text-[16px] font-medium tracking-[-0.01em]">{title}</p>
       {body && <p className="text-ink-3 mt-1 text-[13px] max-w-md mx-auto">{body}</p>}
       {action && <div className="mt-4 flex justify-center">{action}</div>}
     </div>
@@ -240,7 +248,7 @@ export function NotFound({
         action={
           <Link
             to={to}
-            className="inline-flex items-center h-9 px-3.5 rounded-lg bg-accent text-white text-[14px] font-medium hover:bg-accent-2"
+            className="inline-flex items-center h-9 px-4 rounded-full bg-ink text-white text-[14px] font-medium hover:bg-[#262626]"
           >
             {linkLabel}
           </Link>
@@ -254,7 +262,7 @@ export function Spinner({ className }: { className?: string }) {
   return (
     <span
       className={cx(
-        'inline-block w-4 h-4 border-2 border-line border-t-accent rounded-full animate-spin',
+        'inline-block w-4 h-4 border-2 border-line border-t-ink rounded-full animate-spin',
         className,
       )}
       role="status"
@@ -275,7 +283,7 @@ export function Tabs<T extends string>({
   return (
     <div
       // tabs wrap on a narrow screen instead of hiding the last one off the edge
-      className="flex flex-wrap items-center gap-x-0.5 sm:gap-x-1 border-b border-line mb-4"
+      className="flex flex-wrap items-center gap-1 sm:gap-1.5 mb-4"
       role="tablist"
     >
       {items.map((it) => (
@@ -285,15 +293,22 @@ export function Tabs<T extends string>({
           aria-selected={value === it.value}
           onClick={() => onChange(it.value)}
           className={cx(
-            'px-1.5 sm:px-3 h-9 text-[13px] sm:text-[14px] border-b-2 -mb-px transition-colors shrink-0 whitespace-nowrap',
+            'px-2.5 sm:px-3 h-8 rounded-full border text-[12.5px] sm:text-[13px] transition-colors shrink-0 whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/25',
             value === it.value
-              ? 'border-ink text-ink font-medium'
-              : 'border-transparent text-ink-3 hover:text-ink',
+              ? 'bg-ink border-ink text-white font-medium'
+              : 'bg-canvas border-line text-ink-2 hover:text-ink hover:bg-canvas-2',
           )}
         >
           {it.label}
           {it.count !== undefined && (
-            <span className="ml-1.5 text-[12px] text-ink-3 tabular">{it.count}</span>
+            <span
+              className={cx(
+                'ml-1 sm:ml-1.5 text-[12px] tabular',
+                value === it.value ? 'text-white/70' : 'text-ink-3',
+              )}
+            >
+              {it.count}
+            </span>
           )}
         </button>
       ))}
@@ -363,7 +378,7 @@ export function Drawer({
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-40">
-      <div className="absolute inset-0 bg-ink/20" onClick={onClose} />
+      <div className="absolute inset-0 bg-black/20" onClick={onClose} />
       <aside
         ref={ref}
         tabIndex={-1}
@@ -405,11 +420,11 @@ export function Modal({
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-ink/30" onClick={keepOnBackdrop ? undefined : onClose} />
+      <div className="absolute inset-0 bg-black/25" onClick={keepOnBackdrop ? undefined : onClose} />
       <div
         ref={ref}
         tabIndex={-1}
-        className="relative bg-canvas rounded-[var(--radius-card)] border border-line shadow-xl w-full fade-up focus:outline-none"
+        className="relative bg-canvas rounded-[16px] border border-line shadow-[0_24px_60px_rgba(0,0,0,0.12)] w-full fade-up focus:outline-none"
         style={{ maxWidth: width }}
         role="dialog"
         aria-modal="true"
@@ -479,11 +494,11 @@ export function ToastProvider({ children }: { children: ReactNode }) {
           <div
             key={t.id}
             className={cx(
-              'pointer-events-auto fade-up flex items-center gap-3 rounded-2xl px-4 py-2.5 min-h-10 max-w-full md:max-w-[400px] shadow-lg text-[13px] leading-snug',
+              'pointer-events-auto fade-up flex items-center gap-3 rounded-full px-4 py-2.5 min-h-10 max-w-full md:max-w-[420px] shadow-[0_8px_30px_rgba(0,0,0,0.18)] text-[13px] leading-snug',
               t.tone === 'bad'
                 ? 'bg-bad text-white'
                 : t.tone === 'good'
-                  ? 'bg-good text-white'
+                  ? 'bg-accent text-white'
                   : 'bg-ink text-white',
             )}
             role="status"
@@ -537,8 +552,8 @@ export function Kbd({ children }: { children: ReactNode }) {
 export function Stat({ label, value, hint }: { label: string; value: ReactNode; hint?: string }) {
   return (
     <div className="min-w-0">
-      <div className="text-[12px] text-ink-3">{label}</div>
-      <div className="text-[22px] font-semibold tabular leading-tight mt-0.5">{value}</div>
+      <div className="label-mono">{label}</div>
+      <div className="text-[26px] font-normal tracking-[-0.02em] tabular leading-tight mt-1">{value}</div>
       {hint && <div className="text-[12px] text-ink-3 mt-0.5">{hint}</div>}
     </div>
   );
@@ -596,8 +611,10 @@ export function FunctionPicker({
             aria-pressed={on}
             onClick={() => onChange(on ? value.filter((x) => x !== k) : [...value, k])}
             className={cx(
-              'h-8 px-3 rounded-full border text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
-              on ? 'bg-ink text-white border-ink' : 'border-line text-ink-2 hover:bg-canvas-2',
+              'h-9 px-3.5 rounded-full border text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/25',
+              on
+                ? 'bg-ink text-white border-ink'
+                : 'bg-canvas border-line text-ink-2 hover:bg-canvas-2 hover:text-ink',
             )}
             data-testid={`${testIdPrefix}-${k}`}
           >
@@ -629,14 +646,14 @@ export function FirstRunHint({
   if (dismissed) return null;
   return (
     <div
-      className="mb-4 rounded-[var(--radius-card)] border border-accent/30 bg-accent-soft/60 px-4 py-3 text-[13.5px]"
+      className="mb-5 rounded-[var(--radius-card)] border border-line bg-canvas-2 px-4 py-3 text-[13px]"
       role="note"
       data-testid={`hint-${id}`}
     >
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
-          <div className="font-medium">{title}</div>
-          <div className="text-ink-2 mt-0.5">{children}</div>
+          <div className="label-mono !text-ink-2">{title}</div>
+          <div className="text-ink-2 mt-1 leading-relaxed">{children}</div>
         </div>
         <Button
           size="sm"

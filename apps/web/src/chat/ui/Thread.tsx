@@ -200,8 +200,8 @@ function IconButton({
     <button
       type="button"
       className={cx(
-        'w-8 h-8 rounded-lg inline-flex items-center justify-center text-ink-3 hover:bg-accent-soft hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40',
-        pressed && 'text-accent bg-accent-soft',
+        'w-8 h-8 rounded-full inline-flex items-center justify-center text-ink-3 hover:bg-canvas-2 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40',
+        pressed && 'text-ink bg-canvas-2',
       )}
       aria-label={label}
       title={label}
@@ -271,7 +271,10 @@ function ErrorLine({ kind, message }: { kind: ErrorKind; message: string }) {
         {c.link && (
           <>
             {' '}
-            <Link to={c.link.to} className="font-medium text-accent hover:underline">
+            <Link
+              to={c.link.to}
+              className="font-medium text-ink underline decoration-[#cfcdc9] underline-offset-4 hover:decoration-ink"
+            >
               {c.link.label}
             </Link>
           </>

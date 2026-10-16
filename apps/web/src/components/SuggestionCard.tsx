@@ -375,7 +375,7 @@ export function SuggestionCard({
                 href={s.payload.url as string}
                 target="_blank"
                 rel="noreferrer"
-                className="inline-flex items-center gap-1.5 h-9 px-3.5 rounded-lg bg-accent text-white text-[14px] font-medium hover:bg-accent-2"
+                className="inline-flex items-center gap-1.5 h-9 px-4 rounded-full bg-accent text-white text-[14px] font-medium hover:bg-accent-2"
               >
                 Open on LinkedIn <ExternalLink size={14} />
               </a>

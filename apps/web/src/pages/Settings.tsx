@@ -665,7 +665,10 @@ function Integrations() {
           <p className="text-[13px] text-ink-2 mt-0.5">
             Connected through your Orbit account. Orbit's server reads new mail and meetings as they come in,
             and sends only what you approve.{' '}
-            <NavLink to="/settings/account" className="text-accent hover:underline">
+            <NavLink
+              to="/settings/account"
+              className="text-ink underline decoration-[#cfcdc9] underline-offset-4 hover:decoration-ink"
+            >
               Account settings
             </NavLink>
           </p>
@@ -781,7 +784,7 @@ function Integrations() {
             <span className="text-ink-3">No resume yet.</span>
           )}
         </p>
-        <label className="mt-3 inline-flex rounded-lg focus-within:ring-2 focus-within:ring-accent/40">
+        <label className="mt-3 inline-flex rounded-full focus-within:ring-2 focus-within:ring-accent/40">
           <input
             type="file"
             accept=".pdf,.txt,.md,.docx"
@@ -795,7 +798,7 @@ function Integrations() {
               toast.push({ text: 'Resume updated.', tone: 'good' });
             }}
           />
-          <span className="inline-flex items-center justify-center gap-1.5 rounded-lg font-medium h-9 px-3.5 text-[14px] bg-canvas border border-line hover:bg-canvas-2 cursor-pointer">
+          <span className="inline-flex items-center justify-center gap-1.5 rounded-full font-medium h-9 px-4 text-[14px] bg-canvas border border-line hover:bg-canvas-2 cursor-pointer">
             {resume ? 'Upload a newer resume' : 'Upload resume'}
           </span>
         </label>

@@ -54,7 +54,7 @@ function IconButton({
       aria-label={label}
       title={label}
       data-testid={testId}
-      className="h-8 w-8 shrink-0 rounded-lg inline-flex items-center justify-center text-ink-2 hover:text-ink hover:bg-white/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+      className="h-8 w-8 shrink-0 rounded-lg inline-flex items-center justify-center text-ink-2 hover:text-ink hover:bg-canvas-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
     >
       {children}
     </button>
@@ -86,7 +86,7 @@ function PanelTabButton({ id, href, active }: { id: string; href: string; active
     <div
       className={cx(
         'group inline-flex items-center h-8 rounded-lg text-[13px] max-w-[170px] shrink-0',
-        active ? 'bg-accent-soft text-accent font-medium' : 'text-ink-2 hover:bg-white/70',
+        active ? 'bg-[#f0efed] text-ink font-medium' : 'text-ink-2 hover:bg-canvas-2',
       )}
     >
       <button

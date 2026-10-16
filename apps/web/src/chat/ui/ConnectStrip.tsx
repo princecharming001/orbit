@@ -147,7 +147,7 @@ export function ConnectStrip({
             {!r.connected && r.available && (
               <button
                 type="button"
-                className="ml-auto h-7 px-2.5 rounded-[9px] text-[12.5px] font-medium bg-accent text-white hover:bg-accent-2 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                className="ml-auto h-7 px-3 rounded-full text-[12.5px] font-medium bg-accent text-white hover:bg-accent-2 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
                 onClick={() => onConnect(r.what)}
                 disabled={disabled}
                 data-testid={`connect-${r.what === 'google' ? 'gmail' : 'linkedin'}`}

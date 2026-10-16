@@ -72,7 +72,8 @@ function Problem({ children, testId }: { children: ReactNode; testId?: string })
   );
 }
 
-const linkClass = 'font-medium text-accent hover:underline';
+const linkClass =
+  'font-medium text-ink underline decoration-[#cfcdc9] underline-offset-4 hover:decoration-ink';
 
 export function SetupCard({ what, status }: { what: SetupWhat; status?: SetupStatus }) {
   const { user } = useSession();
@@ -470,7 +471,7 @@ function LinkedinWidget({ user, initial }: { user: User; initial?: SetupStatus }
           ) : (
             <button
               type="button"
-              className="text-[13px] font-medium text-accent hover:underline"
+              className="text-[13px] font-medium text-ink underline decoration-[#cfcdc9] underline-offset-4 hover:decoration-ink"
               onClick={() => setShowUpload(true)}
               data-testid="linkedin-show-upload"
             >
@@ -647,7 +648,7 @@ function ResumeWidget({ user, initial }: { user: User; initial?: SetupStatus }) 
           {status.addedAt ? `, added ${relDate(status.addedAt)}` : ''}.
         </p>
       )}
-      <label className="mt-3 inline-flex rounded-lg focus-within:ring-2 focus-within:ring-accent/40">
+      <label className="mt-3 inline-flex rounded-full focus-within:ring-2 focus-within:ring-accent/40">
         <input
           type="file"
           accept=".pdf,.txt,.md,.docx"
@@ -663,7 +664,7 @@ function ResumeWidget({ user, initial }: { user: User; initial?: SetupStatus }) 
         />
         <span
           className={cx(
-            'inline-flex items-center justify-center gap-1.5 rounded-lg font-medium h-9 px-3.5 text-[14px] bg-accent text-white hover:bg-accent-2 cursor-pointer',
+            'inline-flex items-center justify-center gap-1.5 rounded-full font-medium h-9 px-4 text-[14px] bg-accent text-white hover:bg-accent-2 cursor-pointer',
             busy && 'opacity-60 pointer-events-none',
           )}
         >

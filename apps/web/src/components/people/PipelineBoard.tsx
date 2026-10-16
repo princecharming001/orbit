@@ -122,7 +122,8 @@ function BoardCard({
       draggable
       onDragStart={(e) => e.dataTransfer.setData('text/chat', chat.id)}
       title="Drag to another stage, or use Move to"
-      className="relative bg-canvas border border-line rounded-[10px] p-3 cursor-grab active:cursor-grabbing hover:shadow-[var(--shadow-card)] focus-within:ring-2 focus-within:ring-accent/40 transition-shadow"
+      // pops in on mount, so a card moved to another stage lands visibly in its new column
+      className="pop-in relative bg-canvas border border-line rounded-[10px] p-3 cursor-grab active:cursor-grabbing hover:shadow-[var(--shadow-card)] focus-within:ring-2 focus-within:ring-accent/40 transition-shadow"
       data-testid={`chat-card-${stage}`}
     >
       <div className="flex items-center gap-2">
@@ -242,14 +243,14 @@ function Board({ children, count }: { children: React.ReactNode; count: number }
       <div
         ref={ref}
         onScroll={measure}
-        className="flex flex-col @3xl:flex-row gap-4 @3xl:gap-3 @3xl:overflow-x-auto pb-4 scroll-thin @3xl:items-start"
+        className="stagger flex flex-col @3xl:flex-row gap-4 @3xl:gap-3 @3xl:overflow-x-auto pb-4 scroll-thin @3xl:items-start"
         role="region"
         aria-label={`Board, ${count} stages`}
       >
         {children}
       </div>
       {more > 0 && (
-        <div className="hidden @3xl:block pointer-events-none absolute top-9 right-0 bottom-4 w-16 bg-gradient-to-l from-canvas to-transparent" />
+        <div className="hidden @3xl:block pointer-events-none absolute top-9 right-0 bottom-4 w-16 bg-gradient-to-l from-page to-transparent" />
       )}
     </div>
   );

@@ -6,9 +6,9 @@ import { cx } from '../../ui';
 import { Logo } from '../AppShell';
 
 /**
- * The setup frame: a plain near-white page (the app's drifting colour blobs stay hidden behind it), the logo top
- * left, a thin segmented progress bar top right, and one centred column for the step. The look follows Linear's and
- * TheyDo's web onboarding: no card, big tight title, quiet subtitle, full-width black button, a text link to skip.
+ * The setup frame, after Tsenta: a warm white page under a hairline header (logo left, a mono step count and a thin
+ * segmented bar right) and one centred column for the step: a light display title, a quiet subtitle, full-width black
+ * pill button and a text link to skip.
  */
 export function OnboardingLayout({
   steps,
@@ -30,18 +30,21 @@ export function OnboardingLayout({
 }) {
   return (
     // opaque and positioned, so the body's fixed colour blobs (z-index -1) are covered on these pages
-    <div className="relative z-0 min-h-dvh bg-[#fcfcfd] flex flex-col" data-testid="ob-layout">
-      <header className="h-16 shrink-0 px-4 sm:px-8 flex items-center justify-between gap-4">
+    <div className="relative z-0 min-h-dvh bg-page flex flex-col" data-testid="ob-layout">
+      <header className="h-16 shrink-0 px-4 sm:px-8 flex items-center justify-between gap-4 border-b border-line">
         <Link
           to="/"
           className="inline-flex items-center gap-2 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/20"
           title="Back to the Orbit home page"
         >
           <Logo size={24} />
-          <span className="font-semibold tracking-tight text-[15px]">Orbit</span>
+          <span className="font-medium tracking-[-0.01em] text-[15px]">Orbit</span>
         </Link>
         <div className="flex items-center gap-3 min-w-0">
-          <p className="text-[12.5px] text-ink-3 tabular-nums whitespace-nowrap" data-testid="ob-progress">
+          <p
+            className="font-mono text-[11.5px] tracking-[0.04em] text-ink-3 tabular-nums whitespace-nowrap"
+            data-testid="ob-progress"
+          >
             <span className="sr-only sm:not-sr-only">Step </span>
             {index + 1} of {steps.length}
             {optional ? <span> · Optional</span> : null}
@@ -57,12 +60,12 @@ export function OnboardingLayout({
                 <span
                   aria-hidden
                   className={cx(
-                    'block h-[3px] w-4 sm:w-6 rounded-full transition-colors duration-300',
+                    'block h-[3px] w-4 sm:w-7 rounded-full transition-colors duration-500',
                     s.status === 'done' || s.status === 'current'
                       ? 'bg-ink'
                       : s.status === 'skipped'
                         ? 'bg-ink/25'
-                        : 'bg-[#e4e6eb]',
+                        : 'bg-line',
                   )}
                 />
                 <span className="sr-only">
@@ -74,17 +77,17 @@ export function OnboardingLayout({
           </ol>
         </div>
       </header>
-      <main className="flex-1 flex flex-col items-center px-4 pt-6 pb-16 sm:pt-[9vh]">
-        <div key={stepKey} className="w-full max-w-[440px] fade-up">
+      <main className="flex-1 flex flex-col items-center px-4 pt-8 pb-16 sm:pt-[10vh]">
+        <div key={stepKey} className="w-full max-w-[460px] step-in">
           {onBack ? (
             <button
               type="button"
               onClick={onBack}
               aria-label="Back"
               title="Back"
-              className="-ml-2 mb-4 inline-flex h-9 w-9 items-center justify-center rounded-full text-ink-2 hover:bg-black/[0.04] hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/20"
+              className="-ml-1 mb-5 inline-flex h-8 px-3 gap-1.5 items-center justify-center rounded-full border border-line bg-canvas text-[13px] text-ink-2 shadow-[var(--shadow-pill)] hover:text-ink transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/20"
             >
-              <ArrowLeft size={18} />
+              <ArrowLeft size={14} /> Back
             </button>
           ) : null}
           {children}
@@ -107,11 +110,11 @@ export function ObHeader({
   return (
     <div className="text-center mb-8">
       {icon ? <div className="mb-5 flex justify-center">{icon}</div> : null}
-      <h1 className="text-[26px] sm:text-[28px] leading-[1.15] font-semibold tracking-[-0.02em] text-ink">
+      <h1 className="text-[30px] sm:text-[36px] leading-[1.08] font-normal tracking-[-0.025em] text-ink text-balance">
         {title}
       </h1>
       {subtitle ? (
-        <p className="mt-2.5 text-[15px] leading-[1.55] text-ink-2 text-balance">{subtitle}</p>
+        <p className="mt-3 text-[15px] leading-[1.55] text-ink-3 text-balance">{subtitle}</p>
       ) : null}
     </div>
   );
@@ -137,7 +140,7 @@ export function ObLabel({
 }
 
 const field =
-  'h-11 w-full rounded-lg border border-[#d9dce3] bg-white px-3.5 text-[15px] text-ink placeholder:text-[#9aa1b0] transition-[border-color,box-shadow] hover:border-[#c3c8d2] focus:outline-none focus:border-ink focus:ring-[3px] focus:ring-ink/[0.08]';
+  'h-11 w-full rounded-[10px] border border-line bg-white px-3.5 text-[15px] text-ink placeholder:text-[#a59f97] transition-[border-color,box-shadow] hover:border-[#d4d2ce] focus:outline-none focus:border-[#a8a5a0] focus:ring-4 focus:ring-ink/[0.05]';
 
 export function ObInput({ className, ...rest }: InputHTMLAttributes<HTMLInputElement>) {
   return <input className={cx(field, className)} {...rest} />;
@@ -148,7 +151,7 @@ export function ObSelect({ className, ...rest }: SelectHTMLAttributes<HTMLSelect
     <select
       className={cx(
         field,
-        'appearance-none pr-9 bg-[url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A//www.w3.org/2000/svg%27%20width%3D%2716%27%20height%3D%2716%27%20fill%3D%27none%27%20stroke%3D%27%23637089%27%20stroke-width%3D%272%27%20stroke-linecap%3D%27round%27%20stroke-linejoin%3D%27round%27%3E%3Cpath%20d%3D%27m4%206%204%204%204-4%27/%3E%3C/svg%3E")] bg-no-repeat bg-[position:right_12px_center]',
+        'appearance-none pr-9 bg-[url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A//www.w3.org/2000/svg%27%20width%3D%2716%27%20height%3D%2716%27%20fill%3D%27none%27%20stroke%3D%27%23777169%27%20stroke-width%3D%272%27%20stroke-linecap%3D%27round%27%20stroke-linejoin%3D%27round%27%3E%3Cpath%20d%3D%27m4%206%204%204%204-4%27/%3E%3C/svg%3E")] bg-no-repeat bg-[position:right_12px_center]',
         className,
       )}
       {...rest}
@@ -162,7 +165,7 @@ export function ObPrimary({ className, ...rest }: ButtonHTMLAttributes<HTMLButto
     <button
       type="button"
       className={cx(
-        'h-11 w-full inline-flex items-center justify-center gap-2 rounded-lg bg-ink text-white text-[15px] font-medium transition-colors hover:bg-[#262d3f] disabled:bg-[#c9cdd6] disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ink/25',
+        'h-11 w-full inline-flex items-center justify-center gap-2 rounded-full bg-ink text-[#fdfcfc] text-[15px] font-medium shadow-[var(--shadow-pill)] transition-[background-color,transform] duration-150 hover:bg-[#262626] active:scale-[0.99] disabled:bg-[#d6d4d0] disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ink/25',
         className,
       )}
       {...rest}
@@ -176,7 +179,7 @@ export function ObSecondary({ className, ...rest }: ButtonHTMLAttributes<HTMLBut
     <button
       type="button"
       className={cx(
-        'h-11 w-full inline-flex items-center justify-center gap-2 rounded-lg border border-[#d9dce3] bg-white text-ink text-[15px] font-medium transition-colors hover:bg-[#f5f6f8] disabled:opacity-60 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ink/15',
+        'h-11 w-full inline-flex items-center justify-center gap-2 rounded-full border border-line bg-white text-ink text-[15px] font-medium shadow-[var(--shadow-pill)] transition-colors hover:bg-canvas-2 disabled:opacity-60 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ink/15',
         className,
       )}
       {...rest}
@@ -203,7 +206,7 @@ export function ObPanel({ children, className }: { children: ReactNode; classNam
   return (
     <div
       className={cx(
-        'rounded-xl border border-[#e6e8ec] bg-white shadow-[0_1px_2px_rgba(16,24,40,0.04)] divide-y divide-[#eef0f3]',
+        'rounded-[14px] border border-line bg-white shadow-[var(--shadow-card)] divide-y divide-line',
         className,
       )}
     >

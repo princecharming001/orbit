@@ -8,18 +8,18 @@ export { QUIET_DAYS, wentQuiet };
 
 /** One colour per stage: the board's column dots, the stage legend, the map's stage rings and the person page. */
 export const STAGE_COLOR: Record<ChatStage, string> = {
-  identified: '#9aa1ad',
-  warming: '#b7791f',
-  outreach_sent: '#5b5bd6',
-  replied: '#1f8a4c',
-  scheduling: '#5b5bd6',
-  scheduled: '#1f8a4c',
-  completed: '#1f8a4c',
-  followed_up: '#1f8a4c',
-  nurturing: '#3f4650',
-  declined: '#c43d3d',
-  no_response: '#9aa1ad',
-  archived: '#c7cbd3',
+  identified: '#a59f97',
+  warming: '#c07a14',
+  outreach_sent: '#2b59ff',
+  replied: '#00733a',
+  scheduling: '#2b59ff',
+  scheduled: '#00733a',
+  completed: '#00733a',
+  followed_up: '#00733a',
+  nurturing: '#4f4b45',
+  declined: '#c62a1f',
+  no_response: '#a59f97',
+  archived: '#d6d3cf',
 };
 
 export function StrengthDots({

@@ -151,7 +151,7 @@ export function FindPeople({ userId }: { userId: string }) {
                   {personId ? (
                     <Link
                       to={`/people/${personId}`}
-                      className="text-[13px] font-medium text-accent hover:underline"
+                      className="text-[13px] font-medium text-ink underline decoration-[#cfcdc9] underline-offset-4 hover:decoration-ink"
                     >
                       {added[c.id] ? 'Added, open' : 'Open'}
                     </Link>

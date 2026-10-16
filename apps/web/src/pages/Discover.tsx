@@ -175,7 +175,7 @@ function NetworkDiscover({ tabs }: { tabs?: ReactNode }) {
     <div>
       <PageHeader
         title="Discover"
-        subtitle="People from your network worth a coffee chat. Saved people come first, then the best mix of how well they match your goals and how easy they are to reach."
+        subtitle="People worth a coffee chat: saved first, then the best fit who is easiest to reach."
         actions={
           <Button onClick={refresh} disabled={busy}>
             <RefreshCw size={14} className={busy ? 'animate-spin' : ''} /> Refresh
@@ -253,7 +253,7 @@ function NetworkDiscover({ tabs }: { tabs?: ReactNode }) {
             Match is how well their role and company fit your goals, out of 100. Reach is how easy they are to
             get to: through people you know, a shared school, or a past conversation. The order weighs both.
           </p>
-          <div className="grid @3xl:grid-cols-2 gap-3 [&>*]:min-w-0">
+          <div className="stagger grid @3xl:grid-cols-2 gap-3 [&>*]:min-w-0">
             {list.map((r) => {
               const p = byId.get(r.personId);
               if (!p) return null;
@@ -353,27 +353,33 @@ function NetworkDiscover({ tabs }: { tabs?: ReactNode }) {
                         Save for later
                       </Button>
                     )}
-                    <div
-                      className="w-full flex flex-wrap items-center gap-1 text-[12px]"
-                      role="group"
-                      aria-label="Not a fit? Tell Orbit why"
-                    >
-                      <span className="text-ink-3 self-center mr-0.5">Not a fit?</span>
-                      {(
-                        Object.entries(RECOMMENDATION_DISMISS_REASONS) as [
-                          RecommendationDismissReason,
-                          string,
-                        ][]
-                      ).map(([k, l]) => (
-                        <button
-                          key={k}
-                          className="px-2 h-7 rounded-md text-ink-3 hover:bg-canvas-2 hover:text-ink"
-                          onClick={() => drop(r.id, k, l)}
-                        >
-                          {l}
-                        </button>
-                      ))}
-                    </div>
+                    {/* the reasons stay folded away until the student says the person is not a fit */}
+                    <details className="group ml-auto text-[12px]">
+                      <summary className="list-none cursor-pointer h-8 px-3 rounded-full inline-flex items-center text-ink-3 hover:text-ink hover:bg-canvas-2 transition-colors [&::-webkit-details-marker]:hidden">
+                        Not a fit?
+                      </summary>
+                      <div
+                        className="pop-in mt-1.5 flex flex-wrap items-center gap-1"
+                        role="group"
+                        aria-label="Not a fit? Tell Orbit why"
+                      >
+                        {(
+                          Object.entries(RECOMMENDATION_DISMISS_REASONS) as [
+                            RecommendationDismissReason,
+                            string,
+                          ][]
+                        ).map(([k, l]) => (
+                          <button
+                            key={k}
+                            type="button"
+                            className="px-2.5 h-7 rounded-full border border-line bg-canvas text-ink-2 hover:text-ink hover:border-[#d4d2ce] transition-colors"
+                            onClick={() => drop(r.id, k, l)}
+                          >
+                            {l}
+                          </button>
+                        ))}
+                      </div>
+                    </details>
                   </div>
                 </div>
               );

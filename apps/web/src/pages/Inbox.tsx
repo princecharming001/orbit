@@ -214,7 +214,7 @@ export function InboxPage() {
     <div>
       <PageHeader
         title="Drafts"
-        subtitle="Every message Orbit wrote for you, and the other things worth doing today. Read a draft, edit it, and send it yourself."
+        subtitle="What is worth doing today. Read each draft, edit it, and send it yourself."
         actions={
           // with nobody in Orbit yet there is nothing to refresh
           visiblePeople > 0 && (
@@ -258,7 +258,7 @@ export function InboxPage() {
           later, or dismiss it if it is wrong.
         </FirstRunHint>
       )}
-      <div className="grid @5xl:grid-cols-[minmax(0,1fr)_300px] gap-6 items-start">
+      <div className="grid @4xl:grid-cols-[minmax(0,1fr)_300px] gap-6 items-start">
         <div className="min-w-0">
           <Tabs
             value={shown}
@@ -282,7 +282,7 @@ export function InboxPage() {
           )}
           {shown === 'pending' && toWrite.length > 0 && <ToWrite people={toWrite} />}
           {shown === 'pending' && pending.length > 0 && (
-            <div className="space-y-3" data-testid="drafts-to-send">
+            <div className="stagger space-y-3" data-testid="drafts-to-send">
               {forToday.length === 0 && (
                 <p className="text-[13px] text-ink-3">Nothing to send today. The drafts below can wait.</p>
               )}

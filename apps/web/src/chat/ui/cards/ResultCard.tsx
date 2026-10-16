@@ -71,7 +71,7 @@ export function OpenInApp({ href, className }: { href?: string; className?: stri
     <Link
       to={href}
       className={cx(
-        'inline-flex items-center gap-1 h-8 px-2.5 -ml-1 rounded-lg text-[13px] font-medium text-accent hover:bg-accent-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+        'inline-flex items-center gap-1 h-8 px-3 -ml-1 rounded-full text-[13px] font-medium text-ink border border-line bg-canvas hover:bg-canvas-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
         className,
       )}
       data-testid="open-in-app"
@@ -285,7 +285,7 @@ function Envelope({ env, block, actions }: { env: ResultEnvelope; block: ToolBlo
                 </div>
                 <Link
                   to={`/inbox?draft=${r.id}`}
-                  className="shrink-0 text-[13px] text-accent font-medium hover:underline"
+                  className="shrink-0 text-[13px] text-ink font-medium underline decoration-[#cfcdc9] underline-offset-4 hover:decoration-ink"
                 >
                   Open
                 </Link>
@@ -628,7 +628,7 @@ function Envelope({ env, block, actions }: { env: ResultEnvelope; block: ToolBlo
                       href={l.url}
                       target="_blank"
                       rel="noreferrer noopener"
-                      className="ml-1 align-super text-[10px] text-accent hover:underline"
+                      className="ml-1 align-super text-[10px] text-ink underline decoration-[#cfcdc9] underline-offset-4 hover:decoration-ink"
                     >
                       {l.label}
                     </a>
@@ -717,7 +717,7 @@ function SuggestionsCard({ env }: { env: ResultEnvelope }) {
         {rest > 0 ? (
           <Link
             to="/inbox"
-            className="text-[12.5px] text-accent font-medium hover:underline"
+            className="text-[12.5px] text-ink font-medium underline decoration-[#cfcdc9] underline-offset-4 hover:decoration-ink"
             data-testid="brief-more"
           >
             {rest} more in Drafts
