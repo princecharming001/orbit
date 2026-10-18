@@ -719,6 +719,30 @@ function postgrestTake(url2, serviceKey2, doFetch = fetch) {
 // supabase/functions/orbit-connectors/main.ts
 var url = Deno.env.get("SUPABASE_URL") ?? "";
 var serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+async function providerSecret(name) {
+  const env = Deno.env.get(name);
+  if (env) return env;
+  if (!url || !serviceKey) return void 0;
+  try {
+    const r = await fetch(`${url}/rest/v1/rpc/orbit_secret`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        apikey: serviceKey,
+        Authorization: `Bearer ${serviceKey}`
+      },
+      body: JSON.stringify({ p_name: name })
+    });
+    if (!r.ok) return void 0;
+    return await r.json() || void 0;
+  } catch {
+    return void 0;
+  }
+}
+var [unipileKey, unipileBase] = await Promise.all([
+  providerSecret("UNIPILE_API_KEY"),
+  providerSecret("UNIPILE_BASE_URL")
+]);
 var num = (name, fallback) => {
   const v = Number(Deno.env.get(name));
   return Number.isFinite(v) && v > 0 ? v : fallback;
@@ -726,8 +750,8 @@ var num = (name, fallback) => {
 Deno.serve(
   makeHandler({
     // pasting these as function secrets turns each provider on; until then its routes answer "unconfigured"
-    unipileKey: Deno.env.get("UNIPILE_API_KEY") || void 0,
-    unipileBase: Deno.env.get("UNIPILE_BASE_URL") || void 0,
+    unipileKey,
+    unipileBase,
     // Village v2: the app secret key mints a token per user (POST /v2/auth/tokens); VILLAGE_API_KEY is the old name
     villageKey: Deno.env.get("VILLAGE_SECRET_KEY") || Deno.env.get("VILLAGE_API_KEY") || void 0,
     villageBase: Deno.env.get("VILLAGE_BASE_URL") || "https://api.village.do",

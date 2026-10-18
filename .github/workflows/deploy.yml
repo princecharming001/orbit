@@ -35,24 +35,15 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
-      - name: Build (base path = /<repo>/)
+      # the end-to-end tests run on a build without Google sign-in or account mode, the way they run locally: those
+      # switch on extra setup steps the tests do not expect. The site itself is built with everything below, after.
+      - name: Build for the end-to-end tests
         run: pnpm build
         env:
           ORBIT_BASE: /${{ github.event.repository.name }}/
-          # Orbit's shared Claude access for visitors without their own key (supabase/functions/orbit-claude)
           VITE_ORBIT_CLAUDE_PROXY: https://nxibeiykcgxpbmkeadth.supabase.co/functions/v1/orbit-claude
-          # live LinkedIn (Unipile) and warm intros (Village) through supabase/functions/orbit-connectors; each turns
-          # on when its key is set as a function secret, and answers "unconfigured" (the app falls back) until then
           VITE_ORBIT_LINKEDIN_PROXY: https://nxibeiykcgxpbmkeadth.supabase.co/functions/v1/orbit-connectors
           VITE_ORBIT_VILLAGE_PROXY: https://nxibeiykcgxpbmkeadth.supabase.co/functions/v1/orbit-connectors
-          # Google sign-in for Gmail and Calendar: a public OAuth client id, set as the repository variable
-          # VITE_GOOGLE_CLIENT_ID (Settings > Secrets and variables > Actions > Variables). Empty until then, and the app
-          # hides the Gmail step and never asks students to connect it.
-          VITE_GOOGLE_CLIENT_ID: ${{ vars.VITE_GOOGLE_CLIENT_ID }}
-          # Account mode (server sign-in, sync and the networking agent, plan 16) turns on when the repository variable
-          # VITE_ORBIT_API is set to https://<ref>.supabase.co/functions/v1/orbit-api, after Orbit's Google OAuth client
-          # is configured (plan 16 §21 H2). Empty until then, and the app runs in local mode as before.
-          VITE_ORBIT_API: ${{ vars.VITE_ORBIT_API }}
       - name: Install Playwright browsers
         run: pnpm --filter @orbit/web exec playwright install --with-deps chromium
       - name: End-to-end tests
@@ -73,6 +64,24 @@ jobs:
         run: pnpm --filter @orbit/web exec playwright test --project=perf --no-deps
         env:
           ORBIT_BASE: /${{ github.event.repository.name }}/
+      - name: Build the site (base path = /<repo>/)
+        run: pnpm build
+        env:
+          ORBIT_BASE: /${{ github.event.repository.name }}/
+          # Orbit's shared Claude access for visitors without their own key (supabase/functions/orbit-claude)
+          VITE_ORBIT_CLAUDE_PROXY: https://nxibeiykcgxpbmkeadth.supabase.co/functions/v1/orbit-claude
+          # live LinkedIn (Unipile) and warm intros (Village) through supabase/functions/orbit-connectors; each turns
+          # on when its key is set as a function secret, and answers "unconfigured" (the app falls back) until then
+          VITE_ORBIT_LINKEDIN_PROXY: https://nxibeiykcgxpbmkeadth.supabase.co/functions/v1/orbit-connectors
+          VITE_ORBIT_VILLAGE_PROXY: https://nxibeiykcgxpbmkeadth.supabase.co/functions/v1/orbit-connectors
+          # Google sign-in for Gmail and Calendar: a public OAuth client id, set as the repository variable
+          # VITE_GOOGLE_CLIENT_ID (Settings > Secrets and variables > Actions > Variables). Empty until then, and the app
+          # hides the Gmail step and never asks students to connect it.
+          VITE_GOOGLE_CLIENT_ID: ${{ vars.VITE_GOOGLE_CLIENT_ID }}
+          # Account mode (server sign-in, sync and the networking agent, plan 16) turns on when the repository variable
+          # VITE_ORBIT_API is set to https://<ref>.supabase.co/functions/v1/orbit-api, after Orbit's Google OAuth client
+          # is configured (plan 16 §21 H2). Empty until then, and the app runs in local mode as before.
+          VITE_ORBIT_API: ${{ vars.VITE_ORBIT_API }}
       - uses: actions/configure-pages@v5
         with:
           enablement: true
