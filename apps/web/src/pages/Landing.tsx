@@ -12,7 +12,7 @@ import {
   SquarePen,
   Users,
 } from 'lucide-react';
-import { type ReactNode, useEffect, useRef, useState } from 'react';
+import { lazy, type ReactNode, Suspense, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Logo } from '../components/AppShell';
 import { db } from '../db/schema';
@@ -22,6 +22,9 @@ import { envGoogleClientId } from '../integrations/prefs';
 import { useSession } from '../state/session';
 import { Button, cx, Spinner } from '../ui';
 import { onboardingPath } from './Onboarding';
+
+// the interactive map draws on a canvas with the app's map engine: loaded after the page itself
+const NetworkDemo = lazy(() => import('../components/landing/NetworkDemo'));
 
 export function Landing() {
   const nav = useNavigate();
@@ -111,12 +114,15 @@ export function Landing() {
         </div>
       )}
       <header className="sticky top-0 z-40 bg-page/85 backdrop-blur-md">
-        <div className="max-w-[1152px] mx-auto px-5 md:px-8 h-16 flex items-center gap-3">
+        <div className="max-w-[1280px] mx-auto px-5 md:px-8 h-16 flex items-center gap-3">
           <a href="#top" className="inline-flex items-center gap-2" aria-label="Orbit">
             <Logo size={22} />
             <span className="font-medium tracking-[-0.01em] text-[16px]">Orbit</span>
           </a>
-          <nav className="hidden md:flex items-center gap-7 text-[14px] text-ink-2 absolute left-1/2 -translate-x-1/2">
+          <nav className="hidden lg:flex items-center gap-7 text-[14px] text-ink-2 absolute left-1/2 -translate-x-1/2">
+            <a className="hover:text-ink transition-colors" href="#map">
+              The map
+            </a>
             <a className="hover:text-ink transition-colors" href="#how">
               How it works
             </a>
@@ -163,8 +169,7 @@ export function Landing() {
         </div>
       </header>
 
-      {/* the page sits in a frame with hairline rules down both sides, as on tsenta.com */}
-      <div id="top" className="max-w-[1152px] mx-auto md:frame-rules">
+      <div id="top" className="max-w-[1280px] mx-auto">
         <section className="px-5 md:px-12 pt-14 md:pt-20 pb-12">
           <Reveal>
             <span className="inline-flex items-center gap-2 rounded-full border border-line bg-canvas px-3 h-8 text-[12.5px] text-ink-2 shadow-[var(--shadow-pill)]">
@@ -229,14 +234,50 @@ export function Landing() {
           </Reveal>
         </section>
 
-        <section className="px-3 md:px-12 pb-16 md:pb-24">
+        <section id="map" className="scroll-mt-16 px-3 md:px-8 pb-16 md:pb-24">
           <Reveal delay={120}>
-            <ProductMock />
+            <div className="px-2 md:px-4 mb-6 md:mb-8 grid md:grid-cols-[1fr_auto] gap-3 md:gap-12 items-end">
+              <div>
+                <p className="label-mono mb-3">The map</p>
+                <h2 className="display text-[30px] md:text-[40px] max-w-[640px]">
+                  See who can get you in, before you write a word.
+                </h2>
+              </div>
+              <p className="text-[15px] leading-[1.55] text-ink-3 max-w-[420px]">
+                Search a company or a person. Orbit finds the warmest route through people you already know,
+                says why each hop holds, and drafts the ask. Try it on a sample network.
+              </p>
+            </div>
+          </Reveal>
+          <Reveal delay={160}>
+            <Suspense
+              fallback={
+                <div className="h-[600px] rounded-[20px] border border-line bg-canvas animate-pulse" />
+              }
+            >
+              <NetworkDemo />
+            </Suspense>
           </Reveal>
         </section>
 
         <Rule />
         <HowItWorks />
+        <Rule />
+
+        <section className="px-3 md:px-12 py-16 md:py-24">
+          <Reveal>
+            <div className="px-2 md:px-0 mb-8">
+              <p className="label-mono mb-3">Your week</p>
+              <h2 className="display text-[30px] md:text-[40px] max-w-[640px]">
+                Every chat and every draft, in one place.
+              </h2>
+            </div>
+          </Reveal>
+          <Reveal delay={80}>
+            <ProductMock />
+          </Reveal>
+        </section>
+
         <Rule />
 
         <section id="features" className="scroll-mt-16">
@@ -381,7 +422,7 @@ export function Landing() {
       </div>
 
       <footer className="border-t border-line">
-        <div className="max-w-[1152px] mx-auto px-5 md:px-12 py-12 grid grid-cols-2 md:grid-cols-[1.4fr_1fr_1fr] gap-8 text-[13.5px]">
+        <div className="max-w-[1280px] mx-auto px-5 md:px-12 py-12 grid grid-cols-2 md:grid-cols-[1.4fr_1fr_1fr] gap-8 text-[13.5px]">
           <div className="col-span-2 md:col-span-1">
             <div className="inline-flex items-center gap-2">
               <Logo size={20} />
@@ -422,7 +463,7 @@ export function Landing() {
             </ul>
           </div>
         </div>
-        <div className="max-w-[1152px] mx-auto px-5 md:px-12 py-5 border-t border-line text-[12.5px] text-ink-3">
+        <div className="max-w-[1280px] mx-auto px-5 md:px-12 py-5 border-t border-line text-[12.5px] text-ink-3">
           © {new Date().getFullYear()} Orbit
         </div>
       </footer>
@@ -430,14 +471,9 @@ export function Landing() {
   );
 }
 
-/** A hairline across the framed page, with small marks where it meets the side rules (tsenta.com's dividers). */
+/** A hairline between sections, inset to the page's margins. */
 function Rule() {
-  return (
-    <div className="relative h-px bg-line" aria-hidden>
-      <span className="hidden md:block absolute -left-[3px] -top-[3px] w-[7px] h-[7px] rounded-full border border-line bg-page" />
-      <span className="hidden md:block absolute -right-[3px] -top-[3px] w-[7px] h-[7px] rounded-full border border-line bg-page" />
-    </div>
-  );
+  return <div className="h-px bg-line mx-5 md:mx-12" aria-hidden />;
 }
 
 /** Fades content up the first time it scrolls into view; reduced motion and old browsers show it at once. */

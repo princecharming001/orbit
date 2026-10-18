@@ -42,6 +42,11 @@ export interface MapProps {
   onAggregated?: (n: number) => void;
   /** what the map shows, for screen readers */
   label?: string;
+  /**
+   * `always`: play the arrival on every mount and leave the session's record alone (the landing page's sample map),
+   * so the student's own map still greets them with it the first time they open it.
+   */
+  arrival?: 'session' | 'always';
 }
 
 /**
@@ -267,6 +272,7 @@ export function OrbitMap({
   question,
   onAggregated,
   label,
+  arrival: arrivalMode = 'session',
 }: MapProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -300,8 +306,8 @@ export function OrbitMap({
   useLayoutEffect(() => {
     const canvas = canvasRef.current!;
     scene.recorder = perfRecorder();
-    scene.arrivalPending = !sessionFlag();
-    scene.onArrival = setSessionFlag;
+    scene.arrivalPending = arrivalMode === 'always' || !sessionFlag();
+    scene.onArrival = arrivalMode === 'always' ? () => {} : setSessionFlag;
     scene.attach(canvas);
     if (navigator.webdriver || scene.recorder)
       (window as unknown as { __orbitMap: unknown }).__orbitMap = {

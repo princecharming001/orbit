@@ -1,12 +1,15 @@
 import { act, Profiler } from 'react';
 import { createRoot } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { setCurrentUserId } from '../db/repo';
 import { db } from '../db/schema';
 import { createLocalUser } from '../engine/account';
 import { SessionProvider } from '../state/session';
 import { Landing } from './Landing';
+
+// the landing page's map draws on a canvas, which jsdom does not have; these tests are about the header and buttons
+vi.mock('../components/landing/NetworkDemo', () => ({ default: () => null }));
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
