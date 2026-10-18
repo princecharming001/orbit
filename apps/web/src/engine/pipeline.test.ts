@@ -16,7 +16,13 @@ import { applyStage, decideProposedStage, runTimedStageRules } from './stages';
 
 const H = 3_600_000;
 const D = 86_400_000;
-const now = new Date();
+// the latest weekday at noon: weekends are quiet days, when the brief holds back bumps and other nudges
+const now = (() => {
+  const d = new Date();
+  d.setHours(12, 0, 0, 0);
+  while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() - 1);
+  return d;
+})();
 const ago = (ms: number) => new Date(now.getTime() - ms).toISOString();
 let user: User;
 let seq = 0;
