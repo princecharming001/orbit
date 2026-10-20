@@ -77,7 +77,7 @@ describe('the chat thread', () => {
   it('shows the greeting, the chips and the router note on the home state', async () => {
     await mount();
     expect($('[data-testid="greeting"]')?.textContent).toMatch(/Hey Alex/);
-    expect($$('[data-testid^="chip-"]')).toHaveLength(8);
+    expect($$('[data-testid^="chip-"]')).toHaveLength(4);
     expect($('[data-testid="router-note"]')?.textContent).toMatch(/no Claude key/);
     expect($('[data-testid="composer-mode"]')?.textContent).toMatch(/Templates/);
   });

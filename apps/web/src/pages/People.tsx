@@ -206,8 +206,8 @@ export function People() {
       : view === 'companies'
         ? 'Every company where you have a chat.'
         : googleOn
-          ? 'Every coffee chat and where it stands. Replies and meetings move them along.'
-          : 'Every coffee chat and where it stands. Orbit cannot see your inbox: move a card when someone replies.';
+          ? 'Every coffee chat and where it stands.'
+          : 'Orbit cannot see your inbox: move a card when someone replies.';
   const quietNote = `Nobody has gone quiet: no one has been waiting more than ${QUIET_DAYS} days for a reply to your last message.`;
   return (
     <div ref={rootRef}>
@@ -218,11 +218,9 @@ export function People() {
         dismissed={hints.seen('pipeline') || chats.length === 0 || view !== 'board'}
         onDismiss={hints.dismiss}
       >
-        Each column is a stage, in order: someone to write to, then message sent, replied, chat booked, chat
-        done, thanked and staying in touch. To change a card's stage, drag it or use its Move to menu. When a
-        card has a chip, that is the next thing to do; it opens that card in Drafts.
+        Each column is a stage. Drag a card to move it; a chip on a card is its next step.
       </FirstRunHint>
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 mb-3">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 mb-5">
         <div
           className="inline-flex items-center rounded-full border border-line bg-canvas p-0.5 shadow-[var(--shadow-pill)]"
           role="tablist"
@@ -247,7 +245,7 @@ export function People() {
         </div>
         {view !== 'companies' && (
           <details className="text-[13px] w-full @[40rem]:w-auto" data-testid="stage-legend">
-            <summary className="cursor-pointer text-ink-2 w-fit">What the stages mean</summary>
+            <summary className="cursor-pointer text-ink-3 hover:text-ink w-fit">Stages</summary>
             <dl className="mt-2 grid @[40rem]:grid-cols-2 gap-x-6 gap-y-1.5 rounded-lg bg-canvas-2 p-3">
               {STAGE_ORDER.map((st) => (
                 <div key={st} className="flex gap-2 min-w-0">
@@ -261,58 +259,59 @@ export function People() {
             </dl>
           </details>
         )}
-      </div>
-      <div className="flex flex-wrap items-center gap-2 mb-4" data-testid="people-filters">
-        <Input
-          value={q}
-          onChange={(e) => {
-            setQ(e.target.value);
-            setLimit(PAGE);
-          }}
-          placeholder="Search name, company, title"
-          aria-label="Search people"
-          className="w-full @[40rem]:w-64"
-        />
-        <Select
-          value={filter}
-          onChange={(e) => {
-            setFilter(e.target.value as PeopleFilter);
-            setLimit(PAGE);
-          }}
-          aria-label="Filter people"
-          data-testid="people-filter"
-        >
-          <option value="all">Everyone</option>
-          <option value="alumni">Alumni</option>
-          <option value="strong">Close ties</option>
-          <option value="chats">With a chat</option>
-          <option value="targets">At target companies</option>
-          <option
-            value="quiet"
-            data-testid="filter-quiet"
-            title={`You wrote last, ${QUIET_DAYS} or more days ago, and they have not answered`}
+        {/* views, then search and filters on the same line: one row of controls above the people */}
+        <div className="flex flex-wrap items-center gap-2 @[56rem]:ml-auto" data-testid="people-filters">
+          <Input
+            value={q}
+            onChange={(e) => {
+              setQ(e.target.value);
+              setLimit(PAGE);
+            }}
+            placeholder="Search name, company, title"
+            aria-label="Search people"
+            className="w-full @[40rem]:w-56"
+          />
+          <Select
+            value={filter}
+            onChange={(e) => {
+              setFilter(e.target.value as PeopleFilter);
+              setLimit(PAGE);
+            }}
+            aria-label="Filter people"
+            data-testid="people-filter"
           >
-            Went quiet{quietCount ? ` (${quietCount})` : ''}
-          </option>
-          <option value="hidden">Hidden{hiddenCount ? ` (${hiddenCount})` : ''}</option>
-        </Select>
-        {view === 'list' && (
-          <Select value={sort} onChange={(e) => setSort(e.target.value as never)} aria-label="Sort people">
-            <option value="strength">By closeness</option>
-            <option value="recent">Most recent</option>
-            <option value="name">By name</option>
-            <option value="stage">By stage</option>
+            <option value="all">Everyone</option>
+            <option value="alumni">Alumni</option>
+            <option value="strong">Close ties</option>
+            <option value="chats">With a chat</option>
+            <option value="targets">At target companies</option>
+            <option
+              value="quiet"
+              data-testid="filter-quiet"
+              title={`You wrote last, ${QUIET_DAYS} or more days ago, and they have not answered`}
+            >
+              Went quiet{quietCount ? ` (${quietCount})` : ''}
+            </option>
+            <option value="hidden">Hidden{hiddenCount ? ` (${hiddenCount})` : ''}</option>
           </Select>
-        )}
-        <label className="text-[13px] inline-flex items-center gap-1.5">
-          <input
-            type="checkbox"
-            checked={showClosed}
-            onChange={(e) => setShowClosed(e.target.checked)}
-            data-testid="show-closed"
-          />{' '}
-          Show closed
-        </label>
+          {view === 'list' && (
+            <Select value={sort} onChange={(e) => setSort(e.target.value as never)} aria-label="Sort people">
+              <option value="strength">By closeness</option>
+              <option value="recent">Most recent</option>
+              <option value="name">By name</option>
+              <option value="stage">By stage</option>
+            </Select>
+          )}
+          <label className="text-[13px] inline-flex items-center gap-1.5">
+            <input
+              type="checkbox"
+              checked={showClosed}
+              onChange={(e) => setShowClosed(e.target.checked)}
+              data-testid="show-closed"
+            />{' '}
+            Show closed
+          </label>
+        </div>
       </div>
       {total === 0 && filter !== 'hidden' ? (
         <div data-testid="people-empty-network">

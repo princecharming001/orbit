@@ -107,9 +107,14 @@ export function starterChips(all: ChipSpec[]): ChipSpec[] {
   return [...(linkedin ? [{ ...linkedin, label: 'Bring in my LinkedIn' }] : []), addPerson, whatCanYouDo];
 }
 
-/** The chips the home shows: the starter three while there is nobody in the account, else all of them. */
+/** The four everyday asks the home offers once there are people; the rest are a message (or Templates) away. */
+export const HOME_CHIP_IDS = ['who-today', 'thank-you', 'route', 'pipeline'] as const;
+
+/** The chips the home shows: the starter three while there is nobody in the account, else one row of four. */
 export function homeChips(all: ChipSpec[], emptyAccount: boolean): ChipSpec[] {
-  return emptyAccount ? starterChips(all) : all;
+  if (emptyAccount) return starterChips(all);
+  const picked = HOME_CHIP_IDS.map((id) => all.find((c) => c.id === id)).filter((c): c is ChipSpec => !!c);
+  return picked.length ? picked : all.slice(0, 4);
 }
 
 /** Chips in rows of four (two rows of four for the full set, one row for the starter three). */

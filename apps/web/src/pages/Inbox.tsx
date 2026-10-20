@@ -214,7 +214,7 @@ export function InboxPage() {
     <div>
       <PageHeader
         title="Drafts"
-        subtitle="What is worth doing today. Read each draft, edit it, and send it yourself."
+        subtitle="What is worth doing today."
         actions={
           // with nobody in Orbit yet there is nothing to refresh
           visiblePeople > 0 && (
@@ -253,9 +253,7 @@ export function InboxPage() {
           dismissed={hints.seen('drafts')}
           onDismiss={hints.dismiss}
         >
-          Each card is one thing worth doing, most urgent first, with the reason under the name. Open a draft
-          to read and edit it: nothing goes out until you send it yourself. Snooze a card to see it again
-          later, or dismiss it if it is wrong.
+          Most urgent first. Open a draft to edit it; nothing goes out until you send it yourself.
         </FirstRunHint>
       )}
       <div className="grid @4xl:grid-cols-[minmax(0,1fr)_300px] gap-6 items-start">
@@ -263,13 +261,14 @@ export function InboxPage() {
           <Tabs
             value={shown}
             onChange={setTab}
+            // an empty tab is noise: only To send, tabs with something in them, and the open one show
             items={[
-              { value: 'pending', label: 'To send', count: forToday.length + started.length },
-              { value: 'outbox', label: 'Opened, not marked sent', count: outbox.length },
-              { value: 'snoozed', label: 'Snoozed', count: snoozed.length },
-              { value: 'sent', label: 'Sent', count: sent.length },
-              ...(replies ? [{ value: 'replies' as const, label: 'Replies' }] : []),
-            ]}
+              { value: 'pending' as const, label: 'To send', count: forToday.length + started.length },
+              { value: 'outbox' as const, label: 'Opened, not marked sent', count: outbox.length },
+              { value: 'snoozed' as const, label: 'Snoozed', count: snoozed.length },
+              { value: 'sent' as const, label: 'Sent', count: sent.length },
+              ...(replies ? [{ value: 'replies' as const, label: 'Replies', count: undefined }] : []),
+            ].filter((t) => t.value === 'pending' || t.value === shown || t.count !== 0)}
           />
           {shown === 'replies' && <RepliesPanel />}
           {shown === 'pending' && started.length > 0 && (

@@ -26,15 +26,12 @@ test.describe('Chat home on the real engine (no key)', () => {
     await home(page);
     await expect(page.getByTestId('greeting')).toHaveText(/Hey Alex, what.s on your mind today\?/);
     const chips = page.locator('[data-testid^="chip-"]');
-    await expect(chips).toHaveCount(8);
+    // one row of the four everyday asks; the rest are a message away
+    await expect(chips).toHaveCount(4);
     for (const label of [
       'Who should I message today',
       'Draft a thank-you',
       'Find a route to a company',
-      'Add a note from a chat',
-      'Who went quiet',
-      'Prep for my next chat',
-      'Import my LinkedIn',
       'Show my pipeline',
     ])
       await expect(page.getByRole('button', { name: label })).toBeVisible();

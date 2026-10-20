@@ -262,9 +262,7 @@ export function NotesNew() {
       <PageHeader
         title={existing ? 'Who was this note with?' : 'Add a note'}
         subtitle={
-          existing
-            ? existing.title
-            : 'Right after a chat: what did you learn, what did they offer, what did you promise? Type, dictate or paste notes from another app.'
+          existing ? existing.title : 'What did you learn, what did they offer, what did you promise?'
         }
       />
       <Card className="space-y-4">
@@ -288,7 +286,7 @@ export function NotesNew() {
               <span data-testid="capture-draft-hint">
                 {restored && text.trim()
                   ? 'Your unsaved note from before. Orbit keeps it on this device until you save it.'
-                  : "Tip: your phone's or computer's dictation works in this box. Orbit keeps what you type if you leave the page."}
+                  : 'Saved on this device as you type.'}
               </span>
               {text.trim() && (
                 <button
@@ -468,13 +466,14 @@ export function NotesNew() {
                 {l}
               </button>
             ))}
-            <span className="basis-full text-[12px] text-ink-3">
-              {source === 'wispr_capture'
-                ? "Use your phone's or computer's dictation in the box above. This only tells Orbit the note has no punctuation."
-                : source === 'granola_email'
-                  ? 'Paste the summary your notetaker app wrote. Orbit reads its title line and sections.'
-                  : 'This only helps Orbit read the note. Nothing else changes.'}
-            </span>
+            {/* a typed note needs no explanation; the other two say what Orbit does differently */}
+            {(source === 'wispr_capture' || source === 'granola_email') && (
+              <span className="basis-full text-[12px] text-ink-3">
+                {source === 'wispr_capture'
+                  ? 'Orbit reads it as dictation, without punctuation.'
+                  : 'Paste the summary your notetaker app wrote.'}
+              </span>
+            )}
           </div>
         )}
         <div className="flex items-center gap-3">

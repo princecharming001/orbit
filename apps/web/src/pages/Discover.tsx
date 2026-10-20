@@ -175,7 +175,7 @@ function NetworkDiscover({ tabs }: { tabs?: ReactNode }) {
     <div>
       <PageHeader
         title="Discover"
-        subtitle="People worth a coffee chat: saved first, then the best fit who is easiest to reach."
+        subtitle="People worth a coffee chat, best fit and easiest to reach first."
         actions={
           <Button onClick={refresh} disabled={busy}>
             <RefreshCw size={14} className={busy ? 'animate-spin' : ''} /> Refresh
@@ -249,10 +249,6 @@ function NetworkDiscover({ tabs }: { tabs?: ReactNode }) {
         />
       ) : (
         <>
-          <p className="text-[12px] text-ink-3 mb-3" data-testid="discover-legend">
-            Match is how well their role and company fit your goals, out of 100. Reach is how easy they are to
-            get to: through people you know, a shared school, or a past conversation. The order weighs both.
-          </p>
           <div className="stagger grid @3xl:grid-cols-2 gap-3 [&>*]:min-w-0">
             {list.map((r) => {
               const p = byId.get(r.personId);
@@ -288,7 +284,7 @@ function NetworkDiscover({ tabs }: { tabs?: ReactNode }) {
                       </div>
                       <RoleLine title={p.currentTitle} company={p.currentOrganizationRaw} />
                       <ul className="mt-2 text-[13px] text-ink-2 space-y-0.5">
-                        {r.reasons.slice(0, 3).map((x) => (
+                        {r.reasons.slice(0, 2).map((x) => (
                           <li key={x.code}>· {x.text}</li>
                         ))}
                       </ul>
@@ -303,8 +299,8 @@ function NetworkDiscover({ tabs }: { tabs?: ReactNode }) {
                       {cold && (
                         <p className="mt-1.5 text-[12px] text-warn" data-testid="rec-warmup-why">
                           {introducer
-                            ? `You only have ${p.firstName} on LinkedIn, but ${introducer.firstName} knows them: an intro gets a much warmer reply than a cold note.`
-                            : `You only have ${p.firstName} on LinkedIn and have never talked, so Orbit suggests a short warm-up before your first message.`}
+                            ? `${introducer.firstName} could introduce you, which lands warmer than a cold note.`
+                            : 'You only know them from LinkedIn: a short warm-up first gets a warmer reply.'}
                         </p>
                       )}
                     </div>
@@ -318,7 +314,7 @@ function NetworkDiscover({ tabs }: { tabs?: ReactNode }) {
                           size="sm"
                           className="whitespace-normal! h-auto! min-h-8 py-1 text-left"
                         >
-                          See how {introducer.firstName} can introduce you
+                          Intro through {introducer.firstName}
                         </Button>
                       </Link>
                     ) : null}
@@ -334,15 +330,19 @@ function NetworkDiscover({ tabs }: { tabs?: ReactNode }) {
                       // the same choice Today and the person page give: a student who already knows them writes now
                       <Button
                         size="sm"
+                        variant="ghost"
                         onClick={() => start(p.id, { skipWarmUp: true })}
                         data-testid="rec-write-now"
+                        title="Skip the warm-up and write the first message now"
                       >
-                        Write now instead
+                        Write now
                       </Button>
                     )}
                     {r.status !== 'saved' && (
                       <Button
                         size="sm"
+                        variant="ghost"
+                        title="Keep them at the top of Discover"
                         onClick={async () => {
                           await saveRecommendation(r.id);
                           toast.push({
@@ -350,7 +350,7 @@ function NetworkDiscover({ tabs }: { tabs?: ReactNode }) {
                           });
                         }}
                       >
-                        Save for later
+                        Save
                       </Button>
                     )}
                     {/* the reasons stay folded away until the student says the person is not a fit */}

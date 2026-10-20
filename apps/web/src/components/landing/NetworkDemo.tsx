@@ -1,4 +1,4 @@
-import { ArrowRight, Building2, ChevronRight, MousePointerClick, Search, Sparkles } from 'lucide-react';
+import { ArrowRight, Building2, ChevronRight, Search, Sparkles } from 'lucide-react';
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { Avatar, cx } from '../../ui';
 import { type CardPlace, OrbitMap } from '../OrbitMap';
@@ -395,14 +395,6 @@ export default function NetworkDemo() {
               </div>
             </div>
           )}
-          <div
-            className={cx(
-              'pointer-events-none absolute left-4 top-4 hidden sm:flex items-center gap-1.5 rounded-full border border-line bg-white/85 backdrop-blur px-2.5 py-1 text-[11.5px] text-ink-3 transition-opacity duration-300',
-              shown ? 'opacity-0' : 'opacity-100',
-            )}
-          >
-            <MousePointerClick size={13} /> Hover a dot to see who they know, click to find the way in
-          </div>
         </div>
       </div>
     </div>

@@ -1,6 +1,6 @@
 import type { ChatStage, CoffeeChat, Person, Suggestion } from '@orbit/core';
 import { ACTIVE_STAGES, CLOSED_STAGES, STAGE_HELP, STAGE_LABELS } from '@orbit/core';
-import { ChevronRight } from 'lucide-react';
+import { ChevronRight, MoreHorizontal } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Avatar, cx, relDate } from '../../ui';
@@ -121,14 +121,14 @@ function BoardCard({
     <div
       draggable
       onDragStart={(e) => e.dataTransfer.setData('text/chat', chat.id)}
-      title="Drag to another stage, or use Move to"
+      title="Drag to another stage"
       // pops in on mount, so a card moved to another stage lands visibly in its new column
-      className="pop-in relative bg-canvas border border-line rounded-[10px] p-3 cursor-grab active:cursor-grabbing hover:shadow-[var(--shadow-card)] focus-within:ring-2 focus-within:ring-accent/40 transition-shadow"
+      className="group pop-in relative bg-canvas border border-line rounded-[10px] p-3 cursor-grab active:cursor-grabbing hover:shadow-[var(--shadow-card)] focus-within:ring-2 focus-within:ring-accent/40 transition-shadow"
       data-testid={`chat-card-${stage}`}
     >
       <div className="flex items-center gap-2">
         <Avatar name={person.displayName} src={person.photoUrl} id={person.id} size={28} />
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1 pr-6">
           {/* The name link stretches over the whole card, so the card is one tab stop and opens on Enter. */}
           <Link
             to={`/people/${person.id}`}
@@ -136,13 +136,14 @@ function BoardCard({
           >
             {person.displayName}
           </Link>
-          {person.currentTitle && (
-            <div className="text-[12px] text-ink-3 line-clamp-2 leading-snug" title={person.currentTitle}>
-              {person.currentTitle}
+          {(person.currentTitle || person.currentOrganizationRaw) && (
+            // one meta line, like a Linear card: the company is the part that matters, so it comes first
+            <div
+              className="text-[12px] text-ink-3 truncate"
+              title={[person.currentTitle, person.currentOrganizationRaw].filter(Boolean).join(' · ')}
+            >
+              {[person.currentOrganizationRaw, person.currentTitle].filter(Boolean).join(' · ')}
             </div>
-          )}
-          {person.currentOrganizationRaw && (
-            <div className="text-[12px] text-ink-3 truncate">{person.currentOrganizationRaw}</div>
           )}
         </div>
       </div>
@@ -166,24 +167,29 @@ function BoardCard({
           />
         </div>
       )}
-      <select
-        value=""
-        onChange={(e) => e.target.value && move(chat, e.target.value as ChatStage)}
-        className="relative z-10 mt-2 h-7 w-full rounded-md border border-line bg-canvas px-1.5 text-[12px] text-ink-2 focus:outline-none focus:ring-2 focus:ring-accent/40"
-        aria-label={`Move ${person.displayName} to another stage`}
-        data-testid="chat-card-move"
-      >
-        <option value="" disabled>
-          Move to…
-        </option>
-        {[...ACTIVE_STAGES, ...CLOSED_STAGES]
-          .filter((s) => s !== chat.stage)
-          .map((s) => (
-            <option key={s} value={s}>
-              {STAGE_LABELS[s]}
-            </option>
-          ))}
-      </select>
+      {/* Move to: a quiet menu in the corner, shown on hover (always on touch); dragging the card does the same */}
+      <div className="absolute top-2 right-2 z-10 h-7 w-7 rounded-md text-ink-3 hover:bg-canvas-2 hover:text-ink focus-within:ring-2 focus-within:ring-accent/40 @3xl:opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+        <MoreHorizontal size={16} className="absolute inset-0 m-auto pointer-events-none" aria-hidden />
+        <select
+          value=""
+          onChange={(e) => e.target.value && move(chat, e.target.value as ChatStage)}
+          className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+          aria-label={`Move ${person.displayName} to another stage`}
+          title="Move to another stage"
+          data-testid="chat-card-move"
+        >
+          <option value="" disabled>
+            Move to…
+          </option>
+          {[...ACTIVE_STAGES, ...CLOSED_STAGES]
+            .filter((s) => s !== chat.stage)
+            .map((s) => (
+              <option key={s} value={s}>
+                {STAGE_LABELS[s]}
+              </option>
+            ))}
+        </select>
+      </div>
     </div>
   );
 }
@@ -223,17 +229,16 @@ function Board({ children, count }: { children: React.ReactNode; count: number }
               const col = needs.first;
               if (el && col) el.scrollTo({ left: col.offsetLeft - el.offsetLeft, behavior: 'smooth' });
             }}
-            className="h-8 px-3 rounded-full bg-accent-soft text-accent text-[12px] font-medium inline-flex items-center gap-0.5 hover:bg-accent hover:text-white"
+            className="h-8 px-2 rounded-md text-accent text-[12px] font-medium inline-flex items-center gap-0.5 hover:bg-accent-soft"
             data-testid="board-needs"
           >
-            {needs.count} card{needs.count === 1 ? '' : 's'} with a next step off to the right{' '}
-            <ChevronRight size={14} />
+            {needs.count} next step{needs.count === 1 ? '' : 's'} off to the right <ChevronRight size={14} />
           </button>
         )}
         {more > 0 && (
           <button
             onClick={() => ref.current?.scrollBy({ left: 480, behavior: 'smooth' })}
-            className="h-8 pl-3 pr-2 rounded-full border border-line bg-canvas text-[12px] text-ink-2 shadow-sm inline-flex items-center gap-0.5 hover:text-ink"
+            className="h-8 px-2 rounded-md text-[12px] text-ink-3 inline-flex items-center gap-0.5 hover:text-ink hover:bg-canvas-2"
             data-testid="board-more"
           >
             {more} more stage{more === 1 ? '' : 's'} <ChevronRight size={14} />

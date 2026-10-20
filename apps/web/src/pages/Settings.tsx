@@ -756,9 +756,8 @@ function Integrations() {
       <Card>
         <div className="font-medium">LinkedIn export</div>
         <p className="text-[13px] text-ink-2 mt-0.5">
-          Brings in everyone you are connected to. On LinkedIn: Me, Settings and Privacy, Data privacy, Get a
-          copy of your data, then Connections. LinkedIn emails you a file; upload Connections.csv from it
-          here. Uploading again later is safe: people already in Orbit are updated, not doubled.
+          On LinkedIn: Settings, Data privacy, Get a copy of your data, Connections. Upload the
+          Connections.csv it emails you; uploading again later updates people, never doubles them.
         </p>
         {li && (
           <p className="text-[12px] mt-1 text-good flex items-center gap-1">
@@ -772,8 +771,7 @@ function Integrations() {
       <Card>
         <div className="font-medium">Resume</div>
         <p className="text-[13px] text-ink-2 mt-0.5">
-          Upload a newer resume any time. Orbit reads it again for what you have done, to find people with a
-          shared background and to describe you in first messages.
+          Orbit uses it to find people with a shared background and to describe you in first messages.
         </p>
         <p className="text-[12px] mt-1 flex items-center gap-1" data-testid="resume-on-file">
           {resume ? (

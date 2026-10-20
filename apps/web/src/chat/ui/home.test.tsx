@@ -135,14 +135,13 @@ describe('the home: gentle for an empty account, the full set once there are peo
     expect(engine.calls.some((c) => c.method === 'send' && c.args.includes('What can you do?'))).toBe(true);
   });
 
-  it('shows the full set of eight chips once there are people, with no status when nothing waits', async () => {
+  it('shows one row of four everyday chips once there are people, with no status when nothing waits', async () => {
     await db.people.bulkPut([0, 1].map((i) => fixturePerson(i, { userId })));
     await connectBoth();
     await mount();
-    expect(chipIds()).toHaveLength(8);
-    expect(chipIds()[0]).toBe('chip-who-today');
+    expect(chipIds()).toEqual(['chip-who-today', 'chip-thank-you', 'chip-route', 'chip-pipeline']);
     expect($('[data-testid="home-status"]')).toBeNull();
-    expect($('[data-testid="chips"]')?.children).toHaveLength(2);
+    expect($('[data-testid="chips"]')?.children).toHaveLength(1);
   });
 
   it('says how many people are waiting when there is something real to say', async () => {
@@ -164,7 +163,7 @@ describe('the home: gentle for an empty account, the full set once there are peo
     expect($('[data-testid="chat-thread"]')).not.toBeNull();
     await act(() => threadActions(engine).newChat());
     await settle();
-    expect(chipIds()).toHaveLength(8);
+    expect(chipIds()).toHaveLength(4);
   });
 });
 
@@ -327,7 +326,7 @@ describe('home helpers', () => {
   });
 
   it('homeChips picks the set; chipRows cuts rows of four', () => {
-    expect(homeChips(all, false)).toBe(all);
+    expect(homeChips(all, false).map((c) => c.id)).toEqual(['who-today', 'thank-you', 'route', 'pipeline']);
     expect(homeChips(all, true)).toHaveLength(3);
     expect(chipRows(all).map((r) => r.length)).toEqual([4, 4]);
     expect(chipRows(starterChips(all)).map((r) => r.length)).toEqual([3]);

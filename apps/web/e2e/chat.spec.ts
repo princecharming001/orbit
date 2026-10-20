@@ -99,17 +99,17 @@ test.describe('Chat home', () => {
     await expect(page.getByTestId('composer-mode')).toHaveText(/Templates/);
     await expect(page.getByTestId('composer-mic')).toBeVisible();
     expect((await page.getByTestId('composer').boundingBox())!.width).toBeLessThanOrEqual(980);
-    // two rows of four chips
+    // one row of four chips
     const chips = page.getByTestId('chips').getByRole('button');
-    await expect(chips).toHaveCount(8);
+    await expect(chips).toHaveCount(4);
     await expect(chips.first()).toHaveText('Who should I message today');
     await expect(chips.last()).toHaveText('Show my pipeline');
     const rows = await chips.evaluateAll(
       (els) => new Set(els.map((e) => e.getBoundingClientRect().top)).size,
     );
-    expect(rows).toBe(2);
+    expect(rows).toBe(1);
     await expect(page.getByTestId('disclaimer')).toHaveText(
-      'Orbit drafts with AI and may make mistakes. Nothing is sent without your approval. Your data stays in this browser.',
+      'Orbit can make mistakes. Nothing is sent without your approval.',
     );
     await expect(page.getByTestId('temporary-toggle')).toHaveText(/Temporary/);
     // the + menu lists the four attachments

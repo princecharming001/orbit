@@ -1,17 +1,6 @@
 import type { User } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
-import {
-  Compass,
-  Inbox,
-  Map as MapIcon,
-  MessageSquare,
-  Minus,
-  NotebookPen,
-  Plus,
-  Search,
-  SquarePen,
-  Users,
-} from 'lucide-react';
+import { Compass, Inbox, Map as MapIcon, Minus, Plus, Search, SquarePen, Users } from 'lucide-react';
 import { lazy, type ReactNode, Suspense, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Logo } from '../components/AppShell';
@@ -126,9 +115,6 @@ export function Landing() {
             <a className="hover:text-ink transition-colors" href="#how">
               How it works
             </a>
-            <a className="hover:text-ink transition-colors" href="#features">
-              Features
-            </a>
             <a className="hover:text-ink transition-colors" href="#privacy">
               Privacy
             </a>
@@ -184,29 +170,23 @@ export function Landing() {
               Every coffee chat, without the busywork.
             </h1>
           </Reveal>
-          <div className="mt-8 grid md:grid-cols-[1fr_auto] gap-8 md:gap-16 items-end">
-            <Reveal delay={120}>
-              <p className="text-[16px] md:text-[17px] leading-[1.55] text-ink-3 max-w-[560px]">
-                Orbit finds the people in your network worth a coffee chat, drafts each message in your voice,
-                reminds you when to follow up and say thank you, and keeps track of every conversation.
-                Nothing is ever sent without you.
-              </p>
-            </Reveal>
-            <Reveal delay={160}>
-              <div className="flex flex-col items-start gap-2.5">
-                <div className="flex flex-wrap items-center gap-2 min-h-11">
-                  {resolving ? <Spinner /> : primaryCta('lg')}
-                  {isDemo && onboarded && !resolving && (
-                    <Button size="lg" variant="secondary" onClick={() => nav('/')}>
-                      Back to the demo
-                    </Button>
-                  )}
-                  {demoCta('lg')}
-                </div>
-                <p className="text-[13px] text-ink-3">Free to start. Runs in your browser.</p>
-              </div>
-            </Reveal>
-          </div>
+          <Reveal delay={120}>
+            <p className="mt-6 text-[16px] md:text-[17px] leading-[1.55] text-ink-3 max-w-[540px]">
+              Orbit finds the people worth a coffee chat, drafts every message in your voice, and keeps track
+              of each conversation. Nothing is sent without you.
+            </p>
+          </Reveal>
+          <Reveal delay={160}>
+            <div className="mt-8 flex flex-wrap items-center gap-2 min-h-11">
+              {resolving ? <Spinner /> : primaryCta('lg')}
+              {isDemo && onboarded && !resolving && (
+                <Button size="lg" variant="secondary" onClick={() => nav('/')}>
+                  Back to the demo
+                </Button>
+              )}
+              {demoCta('lg')}
+            </div>
+          </Reveal>
           {isDemo && onboarded && (
             <p className="mt-4 text-[13px] text-ink-2">
               You are in the demo, with a made-up student's data. Setting up your own clears it.
@@ -218,34 +198,16 @@ export function Landing() {
               instead, use Reset to demo in Settings under Data &amp; privacy.
             </p>
           )}
-          <Reveal delay={200}>
-            <div className="mt-8 flex flex-wrap items-center gap-x-5 gap-y-2 text-[13px] text-ink-3">
-              <span>Works with</span>
-              <span className="inline-flex items-center gap-1.5 text-ink-2">
-                <Users size={14} strokeWidth={1.75} /> LinkedIn connections
-              </span>
-              <span className="inline-flex items-center gap-1.5 text-ink-2">
-                <NotebookPen size={14} strokeWidth={1.75} /> Your chat notes
-              </span>
-              <span className="inline-flex items-center gap-1.5 text-ink-2">
-                <MessageSquare size={14} strokeWidth={1.75} /> Your own mail app
-              </span>
-            </div>
-          </Reveal>
         </section>
 
         <section id="map" className="scroll-mt-16 px-3 md:px-8 pb-16 md:pb-24">
           <Reveal delay={120}>
-            <div className="px-2 md:px-4 mb-6 md:mb-8 grid md:grid-cols-[1fr_auto] gap-3 md:gap-12 items-end">
-              <div>
-                <p className="label-mono mb-3">The map</p>
-                <h2 className="display text-[30px] md:text-[40px] max-w-[640px]">
-                  See who can get you in, before you write a word.
-                </h2>
-              </div>
-              <p className="text-[15px] leading-[1.55] text-ink-3 max-w-[420px]">
-                Search a company or a person. Orbit finds the warmest route through people you already know,
-                says why each hop holds, and drafts the ask. Try it on a sample network.
+            <div className="px-2 md:px-4 mb-6 md:mb-8">
+              <h2 className="display text-[30px] md:text-[40px] max-w-[640px]">
+                See who can get you in, before you write a word.
+              </h2>
+              <p className="mt-3 text-[15px] leading-[1.55] text-ink-3 max-w-[520px]">
+                Search a company or a person on a sample network.
               </p>
             </div>
           </Reveal>
@@ -280,62 +242,6 @@ export function Landing() {
 
         <Rule />
 
-        <section id="features" className="scroll-mt-16">
-          <div className="px-5 md:px-12 pt-16 md:pt-20 pb-10">
-            <Reveal>
-              <p className="text-[14px] text-ink-3">Wherever you are in the season.</p>
-              <h2 className="display mt-2 text-[30px] md:text-[36px]">
-                One assistant. Every step of the chat.
-              </h2>
-            </Reveal>
-          </div>
-          <div className="grid md:grid-cols-2 border-t border-line">
-            {[
-              {
-                n: '01 · chat',
-                title: 'Ask, and it is done.',
-                body: 'Who should I message today? Draft a thank-you to Lena. Find a route to Stripe. The chat answers with cards you can act on.',
-              },
-              {
-                n: '02 · people',
-                title: 'Every chat on one board.',
-                body: google
-                  ? 'From first message to thanked, see where each conversation stands and who went quiet. Replies and meetings move cards on their own.'
-                  : 'From first message to thanked, see where each conversation stands and who went quiet. When someone replies, move their card and Orbit lines up your next step.',
-              },
-              {
-                n: '03 · map',
-                title: 'Your network as an orbit.',
-                body: 'You in the centre, people by how well you know them, and the people they know. Search anyone and Orbit shows who could introduce you.',
-              },
-              {
-                n: '04 · drafts',
-                title: 'Drafts in your voice.',
-                body: 'Every line comes from something you actually know about the person. You edit it, send it yourself, or skip it.',
-              },
-            ].map((f, i) => (
-              <Reveal
-                key={f.n}
-                delay={i * 60}
-                className={cx(
-                  'p-6 md:p-10 border-line',
-                  i % 2 === 0 && 'md:border-r',
-                  i < 2 && 'border-b',
-                  i === 2 && 'border-b md:border-b-0',
-                )}
-              >
-                <div className="label-mono">{f.n}</div>
-                <h3 className="mt-3 text-[22px] md:text-[26px] tracking-[-0.02em] leading-tight">
-                  {f.title}
-                </h3>
-                <p className="mt-3 text-[14.5px] leading-relaxed text-ink-3 max-w-[440px]">{f.body}</p>
-              </Reveal>
-            ))}
-          </div>
-        </section>
-
-        <Rule />
-
         <section
           id="privacy"
           className="scroll-mt-16 px-5 md:px-12 py-16 md:py-24 grid md:grid-cols-[1fr_1fr] gap-10"
@@ -346,17 +252,14 @@ export function Landing() {
           </Reveal>
           <Reveal delay={80}>
             <p className="text-[15px] leading-relaxed text-ink-2">
-              This version of Orbit runs entirely in your browser. The people, notes and LinkedIn connections
-              you add are stored in your browser's local database and never uploaded.{' '}
+              The people, notes and drafts you keep in Orbit live in your browser.{' '}
               {google
-                ? "Connecting Gmail and Calendar is optional and uses Google's own sign-in. "
-                : 'It does not connect to your email or calendar: you send each message from your own mail app or LinkedIn, and tell Orbit when it went out. '}
-              Claude drafting is optional and uses an API key you paste in, stored only on your device.
+                ? "Gmail, Calendar and LinkedIn connect only if you choose, through each one's own sign-in."
+                : 'It does not connect to your email or calendar: you send each message yourself.'}
             </p>
             <ul className="mt-6 divide-y divide-line border-y border-line text-[14px]">
               {[
-                ['Nothing is sent without you', 'What goes out is exactly the text you read.'],
-                ['No scraping', 'LinkedIn comes from your own data export.'],
+                ['Nothing is sent without you', 'What goes out is exactly the text you approved.'],
                 ['Yours to take or wipe', 'Export or delete everything from Settings, any time.'],
               ].map(([a, b]) => (
                 <li key={a} className="py-3 flex flex-wrap gap-x-3">
@@ -393,13 +296,13 @@ export function Landing() {
                 ],
                 [
                   'What happens to my LinkedIn data?',
-                  'You upload your own LinkedIn export. It stays in your browser and is only used to find people worth meeting.',
+                  'You upload your LinkedIn export or connect your account. Your connections are kept in your browser and only used to find people worth meeting.',
                 ],
                 [
                   'Do I need an AI key?',
-                  'No. Orbit works with built-in templates. A Claude key, if you add one, lets the chat answer freely and write in your voice.',
+                  'No. Orbit comes with AI drafting to get you started, and you can add your own Claude key any time.',
                 ],
-                ['Is it free?', 'Yes, this version is free and runs entirely in your browser.'],
+                ['Is it free?', 'Yes, it is free to start.'],
               ]}
             />
           </Reveal>
@@ -422,49 +325,23 @@ export function Landing() {
       </div>
 
       <footer className="border-t border-line">
-        <div className="max-w-[1280px] mx-auto px-5 md:px-12 py-12 grid grid-cols-2 md:grid-cols-[1.4fr_1fr_1fr] gap-8 text-[13.5px]">
-          <div className="col-span-2 md:col-span-1">
-            <div className="inline-flex items-center gap-2">
-              <Logo size={20} />
-              <span className="font-medium">Orbit</span>
-            </div>
-            <p className="mt-3 text-ink-3 max-w-[260px]">
-              A networking assistant for students who are recruiting.
-            </p>
-          </div>
-          <div>
-            <div className="font-medium mb-3">Product</div>
-            <ul className="space-y-2 text-ink-3">
-              <li>
-                <a className="hover:text-ink transition-colors" href="#how">
-                  How it works
-                </a>
-              </li>
-              <li>
-                <a className="hover:text-ink transition-colors" href="#features">
-                  Features
-                </a>
-              </li>
-              <li>
-                <a className="hover:text-ink transition-colors" href="#faq">
-                  FAQ
-                </a>
-              </li>
-            </ul>
-          </div>
-          <div>
-            <div className="font-medium mb-3">Trust</div>
-            <ul className="space-y-2 text-ink-3">
-              <li>
-                <a className="hover:text-ink transition-colors" href="#privacy">
-                  Privacy
-                </a>
-              </li>
-            </ul>
-          </div>
-        </div>
-        <div className="max-w-[1280px] mx-auto px-5 md:px-12 py-5 border-t border-line text-[12.5px] text-ink-3">
-          © {new Date().getFullYear()} Orbit
+        <div className="max-w-[1280px] mx-auto px-5 md:px-12 py-8 flex flex-wrap items-center gap-x-6 gap-y-3 text-[13px] text-ink-3">
+          <span className="inline-flex items-center gap-2 text-ink">
+            <Logo size={18} />
+            <span className="font-medium">Orbit</span>
+          </span>
+          <nav className="flex flex-wrap gap-x-5 gap-y-2" aria-label="Footer">
+            <a className="hover:text-ink transition-colors" href="#how">
+              How it works
+            </a>
+            <a className="hover:text-ink transition-colors" href="#privacy">
+              Privacy
+            </a>
+            <a className="hover:text-ink transition-colors" href="#faq">
+              FAQ
+            </a>
+          </nav>
+          <span className="md:ml-auto">© {new Date().getFullYear()} Orbit</span>
         </div>
       </footer>
     </div>
@@ -556,44 +433,28 @@ const STAGES = [
     label: 'Find',
     lead: 'Orbit reads your LinkedIn connections and goals, and ranks who is worth a coffee chat: alumni, people at your target companies, and people one introduction away.',
     title: 'The right people, ranked. You reach out first.',
-    side: [
-      { n: '02 · fit', title: 'Matched to your goals' },
-      { n: '03 · reach', title: 'Who could introduce you' },
-    ],
   },
   {
     key: 'write',
     label: 'Write',
     lead: 'Every draft starts from what you actually know about the person: a post, a shared school, what they said last time. You edit it and send it yourself.',
     title: 'A first message in your voice, not a template.',
-    side: [
-      { n: '02 · checks', title: 'Short, one ask, nothing invented' },
-      { n: '03 · approval', title: 'Nothing goes out without you' },
-    ],
   },
   {
     key: 'follow',
     label: 'Follow up',
     lead: 'A short bump after a week of silence, a thank-you the day after a chat, a reconnect before the referral window. Orbit keeps the timing so you do not have to.',
     title: 'Every follow-up, on time.',
-    side: [
-      { n: '02 · timing', title: 'Bumps after 7 quiet business days' },
-      { n: '03 · limits', title: 'Never more than two bumps' },
-    ],
   },
   {
     key: 'remember',
     label: 'Remember',
     lead: 'Type, dictate or paste notes after a chat. What they said, offered and asked of you lands on their profile, ready for the next message.',
     title: 'Chat fourteen remembers chat one.',
-    side: [
-      { n: '02 · notes', title: 'Facts pulled from your notes' },
-      { n: '03 · promises', title: 'What you owe, and when' },
-    ],
   },
 ] as const;
 
-/** Tsenta's "four stages" block: numbered pill tabs on a line, a dark lead card and two quiet side cards. */
+/** Tsenta's "four stages" block: numbered pill tabs on a line and one dark card for the open step. */
 function HowItWorks() {
   const [i, setI] = useState(0);
   const stage = STAGES[i]!;
@@ -645,31 +506,14 @@ function HowItWorks() {
       >
         {stage.lead}
       </p>
-      <div className="mt-8 grid grid-cols-1 lg:grid-cols-[1.25fr_1fr] gap-4">
-        <div
-          key={stage.key}
-          className="fade-up min-w-0 rounded-[16px] bg-ink text-white p-6 md:p-8 min-h-[300px] flex flex-col"
-        >
-          <div className="font-mono text-[11px] tracking-[0.08em] uppercase text-white/50">
-            01 · {stage.label}
-          </div>
-          <div className="mt-4 text-[22px] md:text-[26px] tracking-[-0.02em] leading-snug max-w-[420px]">
-            {stage.title}
-          </div>
-          <StageVisual stage={stage.key} />
+      <div
+        key={stage.key}
+        className="fade-up mt-8 min-w-0 rounded-[16px] bg-ink text-white p-6 md:p-8 min-h-[260px] flex flex-col max-w-[760px]"
+      >
+        <div className="text-[22px] md:text-[26px] tracking-[-0.02em] leading-snug max-w-[460px]">
+          {stage.title}
         </div>
-        <div className="grid gap-4">
-          {stage.side.map((c, k) => (
-            <div
-              key={`${stage.key}-${c.n}`}
-              className="fade-up rounded-[16px] border border-line bg-canvas p-6"
-              style={{ animationDelay: `${80 + k * 60}ms` }}
-            >
-              <div className="label-mono">{c.n}</div>
-              <div className="mt-2 text-[16px] tracking-[-0.01em]">{c.title}</div>
-            </div>
-          ))}
-        </div>
+        <StageVisual stage={stage.key} />
       </div>
     </section>
   );
@@ -790,7 +634,7 @@ function ProductMock() {
           <Logo size={18} />
           <span className="text-[14px] font-medium">Orbit</span>
         </div>
-        <div className="label-mono px-2 mt-3 mb-1.5">Workspace</div>
+        <div className="h-3" aria-hidden />
         {[
           [SquarePen, 'New chat', ''],
           [Users, 'People', ''],
@@ -817,13 +661,13 @@ function ProductMock() {
             </div>
           );
         })}
-        <div className="mt-auto rounded-[10px] bg-accent text-white px-2.5 h-11 flex items-center gap-2 text-[12px]">
-          <span className="w-6 h-6 rounded-full bg-white/20 inline-flex items-center justify-center text-[10px]">
+        <div className="mt-auto rounded-[10px] px-2 h-11 flex items-center gap-2 text-[12px]">
+          <span className="w-6 h-6 rounded-full bg-[#b5655c] text-white inline-flex items-center justify-center text-[10px]">
             AR
           </span>
           <div>
             <div className="font-medium leading-tight">Alex Rivera</div>
-            <div className="text-white/60 text-[10.5px] leading-tight">Cornell · class of 2028</div>
+            <div className="text-ink-3 text-[10.5px] leading-tight">Cornell · class of 2028</div>
           </div>
         </div>
       </div>

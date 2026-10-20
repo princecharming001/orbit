@@ -231,7 +231,7 @@ export function AppShell() {
         </div>
         <nav className="flex flex-col gap-0.5" aria-label="Main">
           {!expanded && railButton('Expand sidebar', PanelLeft, toggleSidebar, 'sidebar-toggle')}
-          {expanded && <div className="label-mono px-2.5 pt-2 pb-1.5">Workspace</div>}
+          {expanded && <div className="h-2" aria-hidden />}
           {railButton('New chat', SquarePen, newChat, 'new-chat')}
           {NAV_TOP.map(({ to, label, icon }) =>
             railLink(to, label, icon, label === 'Drafts' ? badge : undefined),
@@ -250,16 +250,16 @@ export function AppShell() {
           {railLink('/settings', 'Settings', Settings)}
           {user &&
             (expanded ? (
-              // Tsenta's account card: the student on a deep green tile at the foot of the sidebar
+              // the student at the foot of the sidebar: a quiet row, so the pages above stay the focus
               <NavLink
                 to="/settings/profile"
-                className="mt-2 px-3 h-14 rounded-[12px] bg-accent text-white flex items-center gap-2.5 text-[13px] hover:bg-accent-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/30"
+                className="mt-2 px-2.5 h-12 rounded-[10px] text-ink flex items-center gap-2.5 text-[13px] hover:bg-canvas-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
                 data-testid="account-row"
               >
                 <Avatar name={user.fullName} src={user.avatarUrl} id={user.id} size={30} />
                 <div className="min-w-0">
                   <div className="font-medium truncate">{user.fullName}</div>
-                  <div className="text-[12px] text-white/65 truncate">
+                  <div className="text-[12px] text-ink-3 truncate">
                     {gmail ? 'Gmail connected' : 'Local data'}
                   </div>
                 </div>

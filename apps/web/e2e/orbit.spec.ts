@@ -1731,7 +1731,7 @@ test.describe('Usability round 5: one draft, kept edits, saved settings, chats t
     await page.goto('discover');
     const intro = page.getByTestId('rec-intro').first();
     // it opens the routes on the Map, so it says that, not that it drafts the ask
-    await expect(intro).toHaveText(/^See how \S+ can introduce you$/);
+    await expect(intro).toHaveText(/^Intro through \S+$/);
     const card = page
       .getByTestId('rec-card')
       .filter({ has: page.getByTestId('rec-write-now') })

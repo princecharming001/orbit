@@ -23,7 +23,7 @@ import {
   TOUCHPOINT_LABELS,
 } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { ExternalLink, Linkedin, Mail, Trash2 } from 'lucide-react';
+import { ChevronDown, ExternalLink, Linkedin, Mail, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { runApproval } from '../components/approve';
@@ -488,23 +488,8 @@ export function PersonPage() {
             )}
           </div>
         </div>
-        <div className="flex flex-col items-stretch @4xl:items-end gap-2 w-full @4xl:w-auto @4xl:shrink-0">
-          <div className="flex flex-wrap items-center gap-2 @4xl:justify-end">
-            <label className="inline-flex items-center gap-1.5 text-[12px] text-ink-3">
-              How you know them
-              <Select
-                value={person.relationshipType}
-                onChange={(e) => setRelationshipType(person.id, e.target.value as never)}
-                className="h-8 text-[13px] text-ink"
-                title="Orbit adjusts the tone of drafts and its suggestions to it."
-              >
-                {Object.entries(RELATIONSHIP_LABELS).map(([k, l]) => (
-                  <option key={k} value={k}>
-                    {k === 'unknown' ? 'Not set' : l}
-                  </option>
-                ))}
-              </Select>
-            </label>
+        <div className="flex flex-wrap items-center gap-2 w-full @4xl:w-auto @4xl:shrink-0 @4xl:justify-end">
+          <div className="contents">
             <Button
               variant="primary"
               size="sm"
@@ -533,7 +518,7 @@ export function PersonPage() {
               Write to {person.firstName}
             </Button>
           </div>
-          <div className="flex flex-wrap items-center gap-1.5 text-[12px] @4xl:justify-end">
+          <div className="contents text-[12px]">
             {chat && (
               <label className="inline-flex items-center gap-1.5 text-ink-3 mr-1">
                 Stage
@@ -566,39 +551,67 @@ export function PersonPage() {
             >
               Add note
             </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => nav(`/map?reach=${person.id}`)}
-              title={`See who you know that could introduce you to ${person.firstName}`}
-            >
-              Find an intro
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              title={
-                person.hiddenAt
-                  ? 'Show this person again in People, Today and the map'
-                  : 'Hide this person from People, Today and the map'
-              }
-              onClick={async () => {
-                if (person.hiddenAt) {
-                  await unhidePerson(person.id);
-                  toast.push({ text: `${person.firstName} is back in People, Today and the map.` });
-                  return;
-                }
-                await hidePerson(person.id);
-                toast.push({
-                  text: `Hid ${person.displayName}. Find them under Hidden in People.`,
-                  action: { label: 'Undo', onClick: () => unhidePerson(person.id) },
-                  ttl: 7000,
-                });
-                nav('/people?view=list');
-              }}
-            >
-              {person.hiddenAt ? 'Show again' : 'Hide from lists'}
-            </Button>
+            {/* the less frequent actions wait behind More, so the header leads with writing to them */}
+            <details className="relative group/more" data-testid="person-more">
+              <summary
+                className="list-none cursor-pointer h-8 px-3 rounded-full inline-flex items-center gap-1 text-[13px] text-ink-2 hover:text-ink hover:bg-canvas-2 [&::-webkit-details-marker]:hidden"
+                aria-label="More actions"
+              >
+                More <ChevronDown size={14} aria-hidden />
+              </summary>
+              <div className="pop-in absolute right-0 z-20 mt-1 w-64 rounded-[var(--radius-card)] border border-line bg-canvas p-1.5 shadow-[var(--shadow-card)]">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="w-full justify-start"
+                  onClick={() => nav(`/map?reach=${person.id}`)}
+                  title={`See who you know that could introduce you to ${person.firstName}`}
+                >
+                  Find an intro
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="w-full justify-start"
+                  title={
+                    person.hiddenAt
+                      ? 'Show this person again in People, Today and the map'
+                      : 'Hide this person from People, Today and the map'
+                  }
+                  onClick={async () => {
+                    if (person.hiddenAt) {
+                      await unhidePerson(person.id);
+                      toast.push({ text: `${person.firstName} is back in People, Today and the map.` });
+                      return;
+                    }
+                    await hidePerson(person.id);
+                    toast.push({
+                      text: `Hid ${person.displayName}. Find them under Hidden in People.`,
+                      action: { label: 'Undo', onClick: () => unhidePerson(person.id) },
+                      ttl: 7000,
+                    });
+                    nav('/people?view=list');
+                  }}
+                >
+                  {person.hiddenAt ? 'Show again' : 'Hide from lists'}
+                </Button>
+                <label className="flex items-center justify-between gap-2 px-3 py-1.5 text-[12px] text-ink-3">
+                  How you know them
+                  <Select
+                    value={person.relationshipType}
+                    onChange={(e) => setRelationshipType(person.id, e.target.value as never)}
+                    className="h-8 text-[13px] text-ink"
+                    title="Orbit adjusts the tone of drafts and its suggestions to it."
+                  >
+                    {Object.entries(RELATIONSHIP_LABELS).map(([k, l]) => (
+                      <option key={k} value={k}>
+                        {k === 'unknown' ? 'Not set' : l}
+                      </option>
+                    ))}
+                  </Select>
+                </label>
+              </div>
+            </details>
           </div>
         </div>
       </div>

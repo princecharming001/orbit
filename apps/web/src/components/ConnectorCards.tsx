@@ -67,9 +67,8 @@ export function LinkedInLiveCard({ user }: { user: User }) {
           </p>
         ) : (
           <p className="text-[13px] text-ink-2 mt-0.5">
-            Sign in to LinkedIn once and Orbit keeps your connections in sync, so there is no export to upload
-            again. Read only, through Unipile. Orbit syncs once a day when you open it, and you can disconnect
-            any time.
+            Sign in once and Orbit keeps your connections in sync, and can send the messages you approve.
+            Disconnect any time.
           </p>
         )}
         {status.connected && (
@@ -186,9 +185,8 @@ export function WarmIntrosCard({ user }: { user: User }) {
           </span>
         </div>
         <p className="text-[13px] text-ink-2 mt-0.5">
-          When you look for a way to reach someone or a company, Village adds real warm intro paths: who could
-          introduce you, how warm the path is, and each step. Orbit's own routes from your network always show
-          too. Looking someone up sends their name and company to Village.
+          Adds warm intro paths from Village next to Orbit's own routes. Looking someone up sends their name
+          and company to Village.
         </p>
         {!offered ? (
           <p className="text-[12.5px] text-ink-3 mt-2">Not part of this version of Orbit yet.</p>

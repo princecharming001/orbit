@@ -644,26 +644,23 @@ export function FirstRunHint({
   onDismiss: (id: string) => void;
 }) {
   if (dismissed) return null;
+  // one quiet line under the page title, not a boxed card: the page itself is what the student came for
   return (
     <div
-      className="mb-5 rounded-[var(--radius-card)] border border-line bg-canvas-2 px-4 py-3 text-[13px]"
+      className="mb-5 flex items-start gap-2 text-[13px] text-ink-3 leading-relaxed"
       role="note"
+      aria-label={title}
       data-testid={`hint-${id}`}
     >
-      <div className="flex items-start gap-3">
-        <div className="min-w-0 flex-1">
-          <div className="label-mono !text-ink-2">{title}</div>
-          <div className="text-ink-2 mt-1 leading-relaxed">{children}</div>
-        </div>
-        <Button
-          size="sm"
-          variant="secondary"
-          onClick={() => onDismiss(id)}
-          data-testid={`hint-${id}-dismiss`}
-        >
-          Got it
-        </Button>
-      </div>
+      <p className="min-w-0 max-w-[68ch]">{children}</p>
+      <button
+        type="button"
+        onClick={() => onDismiss(id)}
+        className="shrink-0 -mt-0.5 h-7 px-2 rounded-md text-ink-3 hover:text-ink hover:bg-canvas-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        data-testid={`hint-${id}-dismiss`}
+      >
+        Got it
+      </button>
     </div>
   );
 }

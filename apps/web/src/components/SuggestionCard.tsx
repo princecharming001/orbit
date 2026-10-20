@@ -54,10 +54,10 @@ function sentenceList(xs: string[]): string {
 
 export function SuggestionCard({
   s,
-  compact,
   highlight,
 }: {
   s: Suggestion;
+  /** every card is flat now; callers that ask for the compact look get the same card */
   compact?: boolean;
   /** scroll to this card and outline it (Drafts opened from a link that points at it) */
   highlight?: boolean;
@@ -281,7 +281,6 @@ export function SuggestionCard({
     <div
       className={cx(
         'bg-canvas border border-line rounded-[var(--radius-card)] p-4 fade-up min-w-0 max-w-full break-words',
-        !compact && 'shadow-[var(--shadow-card)]',
         highlight && 'ring-2 ring-accent/50 border-accent/50',
       )}
       data-testid={`suggestion-${s.kind}`}
@@ -361,9 +360,6 @@ export function SuggestionCard({
                   >
                     Review draft
                   </Button>
-                  <span className="text-[12px] text-ink-3">
-                    Edit it if you like. Nothing goes out until you send it yourself.
-                  </span>
                 </div>
               )}
             </>
@@ -585,10 +581,10 @@ export function SuggestionCard({
         </div>
       )}
       {!['confirm_stage', 'confirm_merge', 'confirm_intro'].includes(s.kind) && !inFlight && (
-        <div className="mt-3 pt-3 border-t border-line-2 flex flex-wrap items-center gap-1 text-[12px]">
+        <div className="mt-2 flex flex-wrap items-center gap-0.5 text-[12px]">
           {!dismissing ? (
             <>
-              <span className="text-ink-3 mr-1" id={`snooze-${s.id}`}>
+              <span className="text-ink-3 pl-1 mr-0.5" id={`snooze-${s.id}`}>
                 Snooze
               </span>
               {(
@@ -648,9 +644,9 @@ export function SuggestionCard({
   );
 }
 
-/** The small secondary buttons along a card's foot (Snooze, Dismiss): bordered, so they read as buttons at rest. */
+/** The small secondary buttons along a card's foot (Snooze, Dismiss): quiet text until hovered, so the draft leads. */
 const CARD_SMALL_BUTTON =
-  'px-2.5 h-10 @[40rem]:h-8 rounded-md border border-line text-ink-2 hover:bg-canvas-2 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40';
+  'px-2 h-10 @[40rem]:h-7 rounded-md text-ink-3 hover:bg-canvas-2 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40';
 
 /** "Title · Company" where a long title gives way first: the company is the part that matters. */
 export function RoleLine({ title, company }: { title?: string; company?: string }) {

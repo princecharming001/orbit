@@ -706,8 +706,8 @@ export function MapPage() {
               : webMode
                 ? 'Who introduced you to whom, generation by generation.'
                 : highlightIds
-                  ? `${highlightIds.size} of ${visible.length} people shown · inner ring = closest`
-                  : `${visible.length} people · inner ring = closest`}
+                  ? `${highlightIds.size} of ${visible.length} people shown`
+                  : `${visible.length} people`}
           </p>
         </div>
         <div className="w-full @[40rem]:w-auto @[40rem]:ml-auto flex items-center gap-2">
@@ -934,19 +934,18 @@ export function MapPage() {
         <aside
           // keyed on what the panel shows, so its cards cascade in again when the target changes
           key={`${reachParam ?? ''}|${target?.id ?? ''}|${company?.label ?? ''}|${webFocus?.label ?? ''}|${webMode}`}
-          className="stagger min-w-0 border-t @4xl:border-t-0 @4xl:border-l border-line bg-canvas @4xl:overflow-y-auto scroll-thin p-4 space-y-3"
+          className="stagger min-w-0 min-h-[168px] border-t @4xl:border-t-0 @4xl:border-l border-line bg-canvas @4xl:overflow-y-auto scroll-thin p-4 space-y-3"
           data-testid="map-panel"
         >
           {!reachMode && !webMode && (
             <>
-              <div className="text-[13px] text-ink-2">
-                {touch
-                  ? 'Tap a person to see who they are, and tap again to open their profile.'
-                  : 'Hover over a person to see who they are and who they know, and click to open their profile. Drag to turn the orbit.'}{' '}
-                Companies read as wedges. The thin coloured ring is pipeline stage, and a soft ripple marks
-                the people your most pressing suggestions are about.
-                {aggregated > 0 && ' A grey dot with a number stands for more people at that company.'}
-              </div>
+              <Button
+                variant="primary"
+                className={cx('w-full', TAP)}
+                onClick={() => setParams({ reach: '1' })}
+              >
+                Find a path to someone
+              </Button>
               {targetGroups && (
                 <Card padded>
                   <div className="font-medium text-[13px] mb-2">Target companies</div>
@@ -976,21 +975,19 @@ export function MapPage() {
                   </ul>
                 </Card>
               )}
-              <Card padded>
-                <div className="font-medium text-[13px] mb-2">Legend</div>
-                <ul className="text-[12px] text-ink-2 space-y-1">
-                  <li>Inner ring: close ties (closeness 60 and up)</li>
-                  <li>Middle ring: closeness 30 to 60</li>
-                  <li>Outer: new or cold</li>
-                </ul>
-              </Card>
-              <Button
-                variant="primary"
-                className={cx('w-full', TAP)}
-                onClick={() => setParams({ reach: '1' })}
-              >
-                Find a path to someone
-              </Button>
+              {/* how to read the map: a few quiet lines, not a card */}
+              <div className="text-[12px] text-ink-3 leading-relaxed space-y-1.5 pt-1">
+                <p>
+                  {touch
+                    ? 'Tap a person to see who they are; tap again to open them.'
+                    : 'Hover a person to see who they know; click to open them. Drag to turn the orbit.'}
+                </p>
+                <p>
+                  Companies read as wedges. Inner ring is close ties, outer is new or cold; the thin coloured
+                  ring is pipeline stage.
+                  {aggregated > 0 && ' A grey dot with a number stands for more people at that company.'}
+                </p>
+              </div>
             </>
           )}
           {webMode && (

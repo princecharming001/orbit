@@ -11,8 +11,7 @@ import { homeStatusLine, useHomeStatus } from './homeStatus';
 import { Thread } from './Thread';
 import { threadActions, useThread } from './threadStore';
 
-export const DISCLAIMER =
-  'Orbit drafts with AI and may make mistakes. Nothing is sent without your approval. Your data stays in this browser.';
+export const DISCLAIMER = 'Orbit can make mistakes. Nothing is sent without your approval.';
 
 /** The chat home: greeting, composer and chips, then the thread once the first message is sent. */
 export function ChatHome() {
