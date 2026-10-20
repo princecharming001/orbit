@@ -716,7 +716,7 @@ export function PersonPage() {
               </div>
             ))}
             {cards.map((w) => (
-              <SuggestionCard key={w.id} s={w} compact />
+              <SuggestionCard key={w.id} s={w} compact onPersonPage />
             ))}
             {handedOff.map((d) => (
               <div key={d.id}>

@@ -938,11 +938,10 @@ test.describe('First-run guidance and plain next steps', () => {
     // every card with a draft has a visible button that opens it, and the approve button says what it does
     const card = page.getByTestId('suggestion-follow_up_bump').first();
     await card.getByTestId('draft-review').click();
-    await expect(card.getByTestId('draft-to')).toContainText(/^To: /);
     await expect(card.getByRole('button', { name: /^open email to daniel$/i })).toBeVisible();
-    await expect(card.getByTestId('draft-mail-hint')).toContainText(
-      /opens your mail app with the email to daniel/i,
-    );
+    // the card is Daniel's: no To line, no word count, no "drafted by" under the box
+    await expect(card.getByTestId('draft-to')).toHaveCount(0);
+    await expect(card.getByText(/drafted (by orbit|with claude)/i)).toHaveCount(0);
   });
 
   test('a duplicate is only merged after a second step, and a dismissed card can be brought back', async ({
@@ -1346,7 +1345,7 @@ test.describe("Never losing the student's work, and honest hand-offs", () => {
     const box = card.getByLabel('Message body');
     const original = await box.inputValue();
     await box.fill(`${original} PS: loved the retries post.`);
-    await expect(card.getByText('Edited by you')).toBeVisible();
+    await expect(card.getByRole('button', { name: 'Reset to suggested' })).toBeVisible();
     await card.getByTestId('draft-cancel').click();
     await expect(box).toBeHidden();
     await expect(page.getByTestId('toasts')).toContainText(/changes are kept/i);
@@ -2027,7 +2026,7 @@ test.describe('Usability round 6', () => {
     await expect(skip.or(page.getByLabel('Message body'))).toBeVisible({ timeout: 15_000 });
     if (await skip.isVisible()) await skip.click();
     await expect(page.getByLabel('Message body')).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByTestId('draft-linkedin-hint')).toContainText(/free LinkedIn account allows 200/);
+    await expect(page.getByTestId('draft-linkedin-hint')).toContainText(/connection request/);
     await expect(page.getByTestId('draft-char-count')).toContainText('/ 200 characters');
     await page.getByLabel('Message body').fill('x'.repeat(240));
     await expect(page.getByTestId('draft-char-count')).toContainText(/free account cuts the rest/);

@@ -55,8 +55,11 @@ function sentenceList(xs: string[]): string {
 export function SuggestionCard({
   s,
   highlight,
+  onPersonPage,
 }: {
   s: Suggestion;
+  /** on the person's own page: their face, name and role are already the page, so the card leaves them out */
+  onPersonPage?: boolean;
   /** every card is flat now; callers that ask for the compact look get the same card */
   compact?: boolean;
   /** scroll to this card and outline it (Drafts opened from a link that points at it) */
@@ -288,7 +291,7 @@ export function SuggestionCard({
       ref={ref}
     >
       <div className="flex items-start gap-3">
-        {person ? (
+        {onPersonPage ? null : person ? (
           <Link to={`/people/${person.id}`} className="shrink-0">
             <Avatar name={person.displayName} src={person.photoUrl} id={person.id} size={40} />
           </Link>
@@ -300,12 +303,12 @@ export function SuggestionCard({
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             <Chip tone={meta.tone}>{meta.label}</Chip>
-            {person && (
+            {person && !onPersonPage && (
               <Link to={`/people/${person.id}`} className="font-medium hover:underline truncate">
                 {person.displayName}
               </Link>
             )}
-            {person && (person.currentTitle || person.currentOrganizationRaw) && (
+            {person && !onPersonPage && (person.currentTitle || person.currentOrganizationRaw) && (
               <RoleLine title={person.currentTitle} company={person.currentOrganizationRaw} />
             )}
           </div>

@@ -468,13 +468,10 @@ export function DraftEditor({
           to send this one.
         </div>
       )}
-      {!isLinkedIn && (
-        <div className="text-[12px] text-ink-3 mb-1.5 truncate" data-testid="draft-to">
-          To: {person?.displayName ?? 'them'}
-          {draft.toEmail
-            ? ` <${person?.primaryEmail === draft.toEmail ? (person.primaryEmailAsWritten ?? draft.toEmail) : draft.toEmail}>`
-            : ''}
-          {draft.bccEmails?.length ? ` · Bcc: ${draft.bccEmails.join(', ')}` : ''}
+      {/* who it goes to is the card it sits on; only a Bcc is worth a line */}
+      {!isLinkedIn && !!draft.bccEmails?.length && (
+        <div className="text-[12px] text-ink-3 mb-1.5 truncate" data-testid="draft-bcc">
+          Bcc: {draft.bccEmails.join(', ')}
         </div>
       )}
       {!isLinkedIn && !envelope.threaded && (
@@ -490,20 +487,9 @@ export function DraftEditor({
           />
         </div>
       )}
-      {!isLinkedIn && envelope.threaded && (
-        <div className="text-[12px] text-ink-3 mb-2" data-testid="draft-thread-subject">
-          {direct
-            ? `Goes as a reply in your email thread${envelope.subject ? ` “${envelope.subject}”` : ''}.`
-            : `Opens as a new email${envelope.subject ? ` with the subject “${envelope.subject}”` : ''}, so ${first} sees which conversation it follows.`}
-        </div>
-      )}
-      {isLinkedIn && (
+      {isLinkedIn && connectionNote && (
         <div className="text-[12px] text-ink-3 mb-2" data-testid="draft-linkedin-hint">
-          {connectionNote
-            ? `Connection note. You are not connected to ${person?.firstName ?? 'them'} yet, so this goes with your connection request${direct ? ', sent from your LinkedIn when you press Send' : ''}. A free LinkedIn account allows ${LINKEDIN_NOTE_TARGET} characters (Premium allows ${LINKEDIN_NOTE_MAX}).`
-            : direct
-              ? 'LinkedIn message. It goes from your own LinkedIn when you press Send, with a few seconds to undo.'
-              : 'LinkedIn message. You are connected, so this opens a message to them.'}
+          Goes with your connection request.
         </div>
       )}
       <Textarea
@@ -515,11 +501,12 @@ export function DraftEditor({
         aria-label="Message body"
       />
       <div className="mt-2 flex items-center gap-3 text-[12px] text-ink-3 flex-wrap">
-        <span className={cx('tabular', wc > max && 'text-warn')}>
-          {wc} word{wc === 1 ? '' : 's'}
-          {wc > max ? ` (aim for ${max} or fewer)` : ''}
-        </span>
-        {isLinkedIn && (
+        {wc > max && (
+          <span className="tabular text-warn" data-testid="draft-word-count">
+            {wc} words (aim for {max} or fewer)
+          </span>
+        )}
+        {isLinkedIn && connectionNote && (
           <span
             className={cx(
               'tabular',
@@ -535,16 +522,9 @@ export function DraftEditor({
                 : body.length > LINKEDIN_NOTE_TARGET
                   ? `${body.length} / ${LINKEDIN_NOTE_TARGET} characters. A free account cuts the rest, so trim it unless you have Premium`
                   : `${body.length} / ${LINKEDIN_NOTE_TARGET} characters`
-              : `${body.length} characters`}
+              : null}
           </span>
         )}
-        <span>
-          {edited
-            ? 'Edited by you'
-            : draft.generatedBy === 'llm'
-              ? 'Drafted with Claude'
-              : 'Drafted by Orbit'}
-        </span>
         {edited && (
           <button
             className="underline underline-offset-2"
@@ -634,15 +614,9 @@ export function DraftEditor({
           </Button>
         </span>
       </div>
-      {!isLinkedIn && direct === false && !approveLabel && (
-        <p className="mt-1.5 text-[12px] text-ink-3 text-right" data-testid="draft-mail-hint">
-          Opens your mail app with the email to {first}. Gmail in the browser? Use Copy text.
-        </p>
-      )}
       {!edited && draft.claims?.some((c) => c.factId) && ['thank_you', 'nurture'].includes(draft.kind) && (
         <p className="mt-1.5 text-[12px] text-ink-3" data-testid="draft-from-notes">
-          Parts of this come from your notes. Read it once as {first} will: names, short forms and who "she"
-          or "he" is.
+          Parts come from your notes: read it once as {first} will.
         </p>
       )}
       {otherAsk && (
@@ -746,15 +720,13 @@ export function OutboxStatus({ draft, onClose }: { draft: OutboundMessage; onClo
     line =
       draft.handoffVia === 'copy'
         ? draft.externalThreadId
-          ? `Copied. In Gmail, open your thread "${draft.subject?.replace(/^re:\s*/i, '') ?? 'with them'}" with ${name}, reply with the text, then press I sent it.`
-          : `Copied. In Gmail, start a new email to ${person?.primaryEmail ?? name}, paste the message, add the subject below, send it, then press I sent it.`
+          ? `Copied. Reply in your Gmail thread with ${name}, then press I sent it.`
+          : `Copied. Paste it into a new email to ${person?.primaryEmail ?? name}, then press I sent it.`
         : draft.channel === 'gmail'
-          ? draft.externalThreadId
-            ? `Opened in your mail app as a new email to ${name}. Send it there, then press I sent it. Nothing opened? Copy the text into Gmail.`
-            : `Opened in your mail app, addressed to ${name}. Send it there, then press I sent it. Nothing opened? Copy the text into Gmail.`
+          ? 'Opened in your mail app. Send it there, then press I sent it.'
           : link?.via === 'linkedin_connect'
-            ? `On ${name}'s LinkedIn profile, ${coarse ? 'tap' : 'click'} Connect, then Add a note, and paste the note. In the LinkedIn phone app, tap More, then Personalize invite, so the request does not go out without it. Press I sent it once the request is out.`
-            : `Paste the message into LinkedIn and send it to ${name}, then press I sent it.`;
+            ? `On ${name}'s profile, ${coarse ? 'tap' : 'click'} Connect, then Add a note, and paste it. Then press I sent it.`
+            : `Paste it into LinkedIn and send it, then press I sent it.`;
     actions = (
       <>
         <Button
