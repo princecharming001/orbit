@@ -64,10 +64,12 @@ jobs:
         run: pnpm --filter @orbit/web exec playwright test --project=perf --no-deps
         env:
           ORBIT_BASE: /${{ github.event.repository.name }}/
-      - name: Build the site (base path = /<repo>/)
+      # The site is served from its own domain (tryorbit.today) at the root once the repository variable ORBIT_BASE is
+      # set to "/"; without it, from the GitHub Pages address under /<repo>/.
+      - name: Build the site
         run: pnpm build
         env:
-          ORBIT_BASE: /${{ github.event.repository.name }}/
+          ORBIT_BASE: ${{ vars.ORBIT_BASE || format('/{0}/', github.event.repository.name) }}
           # Orbit's shared Claude access for visitors without their own key (supabase/functions/orbit-claude)
           VITE_ORBIT_CLAUDE_PROXY: https://nxibeiykcgxpbmkeadth.supabase.co/functions/v1/orbit-claude
           # live LinkedIn (Unipile) and warm intros (Village) through supabase/functions/orbit-connectors; each turns

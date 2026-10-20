@@ -3,9 +3,15 @@
  * and the account-mode functions. Kept free of Deno APIs so it runs under Node tests.
  */
 
-/** Orbit's published app and any local dev server. */
+/** Orbit's published app (its own domain and the GitHub Pages address) and any local dev server. */
+const PUBLISHED = new Set([
+  'https://tryorbit.today',
+  'https://www.tryorbit.today',
+  'https://princecharming001.github.io',
+]);
+
 export function defaultOrigins(origin: string): boolean {
-  if (origin === 'https://princecharming001.github.io') return true;
+  if (PUBLISHED.has(origin)) return true;
   return /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
 }
 

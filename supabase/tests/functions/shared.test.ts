@@ -144,6 +144,9 @@ describe('http', () => {
     expect(p('https://orbit.example.com')).toBe(true);
     expect(p('https://evil.example.com')).toBe(false);
     expect(defaultOrigins('https://princecharming001.github.io')).toBe(true);
+    expect(defaultOrigins('https://tryorbit.today')).toBe(true);
+    expect(defaultOrigins('https://www.tryorbit.today')).toBe(true);
+    expect(defaultOrigins('https://tryorbit.today.evil.com')).toBe(false);
   });
 
   it('maps errors to JSON without leaking internals', async () => {

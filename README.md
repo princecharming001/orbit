@@ -6,7 +6,7 @@ Orbit connects Gmail, Google Calendar and your LinkedIn export, learns what you'
 
 "Try it with demo data" on the landing page loads a junior's recruiting season replayed through the real pipeline; see [`docs/plan/14-static-v1-architecture.md`](docs/plan/14-static-v1-architecture.md) §3.
 
-**Live:** https://princecharming001.github.io/orbit/
+**Live:** https://tryorbit.today
 
 ## Run locally
 

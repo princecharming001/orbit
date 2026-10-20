@@ -87,8 +87,13 @@ function isUuid(v) {
 }
 
 // supabase/functions/_shared/origins.ts
+var PUBLISHED = /* @__PURE__ */ new Set([
+  "https://tryorbit.today",
+  "https://www.tryorbit.today",
+  "https://princecharming001.github.io"
+]);
 function defaultOrigins(origin) {
-  if (origin === "https://princecharming001.github.io") return true;
+  if (PUBLISHED.has(origin)) return true;
   return /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
 }
 function clientIp(req) {
