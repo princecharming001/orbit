@@ -482,8 +482,14 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
     if (goals === undefined || loaded.current) return;
     loaded.current = true;
     if (goals) setFns(goals.targetFunctions);
-    if (storedWeekly) setWeekly(storedWeekly);
-  }, [goals, storedWeekly]);
+  }, [goals]);
+  // the weekly goal is read on its own: it lives in the settings, which can arrive after the goals
+  const weeklyLoaded = useRef(false);
+  useEffect(() => {
+    if (storedWeekly === undefined || weeklyLoaded.current) return;
+    weeklyLoaded.current = true;
+    setWeekly(storedWeekly);
+  }, [storedWeekly]);
   // "Evercore, Lazard" adds two companies
   const addCompany = async () => {
     // take the text now and clear the box at once, so a company typed while this one saves is kept
