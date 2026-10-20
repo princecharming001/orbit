@@ -1402,7 +1402,8 @@ test.describe("Never losing the student's work, and honest hand-offs", () => {
       .getByRole('button', { name: /i sent it/i })
       .first()
       .click();
-    await page.getByRole('tab', { name: /sent/i }).last().click();
+    // the Sent tab shows once something is in it
+    await page.getByRole('tab', { name: /^sent/i }).click();
     await expect(page.getByText(/thank-you/i).first()).toBeVisible();
   });
 

@@ -424,9 +424,15 @@ test.describe('Chat home', () => {
       await expect(sheet.getByRole('link', { name: new RegExp(`^${name}`) })).toBeVisible();
     for (const name of ['Map', 'Drafts'])
       await expect(sheet.getByRole('link', { name: new RegExp(`^${name}`) })).toHaveCount(0);
-    const sheetBox = (await sheet.locator('[role="dialog"]').boundingBox())!;
-    expect(sheetBox.y).toBeGreaterThan(0);
-    expect(sheetBox.y + sheetBox.height).toBeLessThanOrEqual(844 - 56);
+    // measured once the sheet has slid into place, not mid-animation
+    const dialog = sheet.locator('[role="dialog"]');
+    await expect
+      .poll(async () => {
+        const b = (await dialog.boundingBox())!;
+        return b.y + b.height;
+      })
+      .toBeLessThanOrEqual(844 - 56);
+    expect((await dialog.boundingBox())!.y).toBeGreaterThan(0);
     await page.keyboard.press('Escape');
     await expect(sheet).toHaveCount(0);
     await tabs.getByRole('button', { name: 'More' }).click();
