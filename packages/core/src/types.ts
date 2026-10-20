@@ -560,6 +560,8 @@ export interface CalendarEvent {
   attendees: { email: string; displayName?: string; responseStatus?: string; self?: boolean }[];
   attendeePersonIds: ID[];
   conferenceUrl?: string;
+  /** when Orbit put it on the student's Google Calendar and Google emailed the invite to the other person */
+  inviteSentAt?: string;
   isCoffeeChat?: boolean;
   coffeeChatConfidence?: number;
   chatId?: ID;

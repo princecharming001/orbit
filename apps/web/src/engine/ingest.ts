@@ -855,6 +855,8 @@ export async function ingestEvents(
       isCoffeeChat,
       coffeeChatConfidence: confidence,
       chatId: existing?.chatId,
+      // an event Orbit created and sent the invite for stays marked as such
+      inviteSentAt: existing?.inviteSentAt,
     };
     await db.events.put(ev);
     count++;

@@ -5,8 +5,9 @@
  * in plain words (never an error) when there is none.
  */
 import type { Goal, GoalKind, MemoryKind, ReplyClass } from '@orbit/core';
-import { GOAL_KINDS, REPLY_CLASSES } from '@orbit/core';
+import { GOAL_KINDS, newId, REPLY_CLASSES } from '@orbit/core';
 import { db } from '../../db/schema';
+import { calendarInvitesAvailable, sendCalendarInvite } from '../../engine/calendarInvite';
 import { CLOSENESS_LABELS, type Closeness, explainScore, rateCloseness } from '../../engine/closeness';
 import {
   archiveGoal,
@@ -723,10 +724,12 @@ export const bookCallTool = defineTool({
   name: 'book_call',
   kind: 'risky',
   description:
-    "Call this when the student agrees to a time someone proposed or picked, and wants it on their calendar (draftId of the reply and the slot start from draft_reply or list_replies). Orbit creates the calendar event and invites the other person. Needs the student's approval and an Orbit account.",
+    "Call this when the student has agreed a time with someone and wants it on their Google Calendar with an invite sent to the other person (with a Meet link). Give personId (from search_people) and the start time; with an Orbit account, a reply's draftId works too. Orbit creates the calendar event and Google emails the invite. The first time, Google asks the student for calendar access. Needs the student's approval.",
   input: z.object({
-    draftId: z.string().describe('The reply draft the time belongs to.'),
+    personId: z.string().optional().describe('Who the call is with (from search_people).'),
+    draftId: z.string().optional().describe('With an Orbit account: the reply draft the time belongs to.'),
     slotStart: z.string().describe('The start time as an ISO date-time.'),
+    minutes: z.number().int().min(10).max(120).optional().describe('How long, in minutes (default 30).'),
     label: z
       .string()
       .max(80)
@@ -739,31 +742,79 @@ export const bookCallTool = defineTool({
     const when =
       input.label ??
       new Date(input.slotStart).toLocaleString('en-US', { timeZone: ctx.user.timezone || undefined });
+    const person = input.personId ? await db.people.get(input.personId) : undefined;
+    const minutes = input.minutes ?? 30;
     return {
-      text: `Put a 30 minute call on your calendar for ${when} and send the invite.`,
-      blockedReason:
-        accountBlock(ctx) ??
-        (Number.isNaN(Date.parse(input.slotStart)) ? 'That time is not a date.' : undefined),
+      text: `Put a ${minutes} minute call${person ? ` with ${person.displayName}` : ''} on your calendar for ${when} and send the invite.`,
+      blockedReason: Number.isNaN(Date.parse(input.slotStart))
+        ? 'That time is not a date.'
+        : accountReady(ctx)
+          ? undefined
+          : !person
+            ? 'Say who the call is with.'
+            : !person.primaryEmail
+              ? `Orbit has no email address for ${person.firstName}, so Google cannot send them an invite.`
+              : !calendarInvitesAvailable(ctx.user)
+                ? 'Calendar invites need Google sign-in, which this copy of Orbit does not have.'
+                : undefined,
     };
   },
   async execute(input, ctx) {
-    if (!accountReady(ctx)) return needsAccount('Booking calls');
-    const r = await bookCall(ctx.user, input.draftId, input.slotStart);
-    if (!r.ok) throw new Error(r.message);
-    if (r.consentUrl)
+    if (accountReady(ctx) && input.draftId) {
+      const r = await bookCall(ctx.user, input.draftId, input.slotStart);
+      if (!r.ok) throw new Error(r.message);
+      if (r.consentUrl)
+        return ok(
+          'text',
+          { consentUrl: r.consentUrl },
+          { booked: false, needsCalendarPermission: true },
+          'Google needs one more permission to add events to your calendar. Open Settings, Account to give it, then ask again.',
+          '/settings/account',
+        );
       return ok(
         'text',
-        { consentUrl: r.consentUrl },
-        { booked: false, needsCalendarPermission: true },
-        'Google needs one more permission to add events to your calendar. Open Settings, Account to give it, then ask again.',
-        '/settings/account',
+        { eventId: r.eventId },
+        { booked: true, eventId: r.eventId },
+        `Booked ${input.label ?? 'the call'} and sent the invite.`,
+        '/inbox?tab=replies',
       );
+    }
+    // this browser: the chat's time is saved, then Google adds the event and emails the invite
+    const person = await requirePerson(ctx, input.personId ?? '');
+    let chat = await db.chats
+      .where('personId')
+      .equals(person.id)
+      .filter((c) => !['declined', 'archived'].includes(c.stage))
+      .first();
+    if (!chat) {
+      const now = new Date().toISOString();
+      chat = {
+        id: newId('c'),
+        userId: ctx.user.id,
+        personId: person.id,
+        organizationId: person.currentOrganizationId,
+        stage: 'scheduling',
+        stageEnteredAt: now,
+        source: 'manual',
+        goalTags: [],
+        bumpCount: 0,
+        priority: 2,
+        createdAt: now,
+        updatedAt: now,
+      };
+      await db.chats.add(chat);
+    }
+    const r = await sendCalendarInvite(ctx.user, chat, {
+      at: new Date(input.slotStart),
+      minutes: input.minutes ?? 30,
+    });
+    if (!r.ok) throw new Error(r.message);
     return ok(
       'text',
-      { eventId: r.eventId },
-      { booked: true, eventId: r.eventId },
-      `Booked ${input.label ?? 'the call'} and sent the invite.`,
-      '/inbox?tab=replies',
+      { eventId: r.event.id, meetUrl: r.meetUrl },
+      { booked: true, eventId: r.event.id, meetUrl: r.meetUrl, demo: r.demo },
+      `Booked ${input.label ?? 'the call'} with ${person.firstName}: it is on your calendar and Google sent the invite${r.meetUrl ? ' with a Meet link' : ''}.`,
+      `/people/${person.id}`,
     );
   },
   toModel,

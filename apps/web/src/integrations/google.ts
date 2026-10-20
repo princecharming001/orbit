@@ -6,8 +6,13 @@ import { envGoogleClientId, readPrefs } from './prefs';
 
 export const GMAIL_READ_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
 export const GMAIL_SEND_SCOPE = 'https://www.googleapis.com/auth/gmail.send';
-/** Orbit only reads calendar events, so it asks for read-only access. */
+/** Orbit reads calendar events with this; connecting Google asks for it. */
 export const CALENDAR_READ_SCOPE = 'https://www.googleapis.com/auth/calendar.events.readonly';
+/**
+ * Adding a coffee chat to the calendar and inviting the other person needs write access to events. It is asked for
+ * only the first time the student sends an invite (incremental consent), not when Google is first connected.
+ */
+export const CALENDAR_EVENTS_SCOPE = 'https://www.googleapis.com/auth/calendar.events';
 
 export const GOOGLE_SCOPES = [
   GMAIL_READ_SCOPE,
@@ -45,7 +50,11 @@ export function googleScopeWarning(scopes: string[] | undefined): string | undef
   if (!has(GMAIL_READ_SCOPE)) missing.push('read your email, so Orbit cannot sync your conversations');
   if (!has(GMAIL_SEND_SCOPE))
     missing.push('send email, so approved emails will open in your mail app instead');
-  if (!has(CALENDAR_READ_SCOPE) && !has('https://www.googleapis.com/auth/calendar.readonly'))
+  if (
+    !has(CALENDAR_READ_SCOPE) &&
+    !has(CALENDAR_EVENTS_SCOPE) &&
+    !has('https://www.googleapis.com/auth/calendar.readonly')
+  )
     missing.push('read your calendar, so Orbit cannot see your coffee chats');
   if (!missing.length) return undefined;
   return `Google did not give Orbit permission to ${missing.join(', or to ')}. Reconnect and allow every permission to fix this.`;
@@ -79,6 +88,7 @@ declare global {
             client_id: string;
             scope: string;
             prompt?: string;
+            include_granted_scopes?: boolean;
             callback: (r: {
               access_token?: string;
               expires_in?: number;
@@ -166,6 +176,63 @@ export async function connectGoogle(opts: { prompt?: 'consent' | '' } = {}): Pro
       error_callback: (e) => reject(new Error(e.message ?? e.type)),
     });
     tc.requestAccessToken({ prompt: opts.prompt ?? (grantedBefore() ? '' : 'consent') });
+  });
+}
+
+/** True when the current token can add events to the calendar. */
+export function canWriteCalendar(): boolean {
+  return !!loadToken()?.scopes?.includes(CALENDAR_EVENTS_SCOPE);
+}
+
+/**
+ * Make sure the token can write calendar events: asks Google for that one permission on top of what was already
+ * granted (the student sees a short consent for the calendar only). Call it from a click, so the popup may open.
+ */
+export async function ensureCalendarWrite(): Promise<TokenState> {
+  const have = loadToken();
+  if (have?.scopes?.includes(CALENDAR_EVENTS_SCOPE)) return have;
+  const clientId = googleClientId();
+  if (!clientId) throw new Error('Google sign-in is not set up in this copy of Orbit.');
+  await loadGis();
+  return new Promise((resolve, reject) => {
+    const tc = window.google!.accounts.oauth2.initTokenClient({
+      client_id: clientId,
+      scope: [CALENDAR_EVENTS_SCOPE, 'openid', 'email'].join(' '),
+      include_granted_scopes: true,
+      callback: async (r) => {
+        if (r.error || !r.access_token)
+          return reject(new Error(r.error_description ?? r.error ?? 'Google did not allow calendar access'));
+        const scopes = parseGrantedScopes(r.scope);
+        if (!scopes?.includes(CALENDAR_EVENTS_SCOPE))
+          return reject(new Error('Google did not give Orbit permission to add events to your calendar.'));
+        const state: TokenState = {
+          accessToken: r.access_token,
+          expiresAt: Date.now() + (r.expires_in ?? 3600) * 1000,
+          scopes,
+          email: have?.email,
+        };
+        if (!state.email)
+          try {
+            const me = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+              headers: { Authorization: `Bearer ${state.accessToken}` },
+            }).then((x) => x.json());
+            state.email = me.email;
+          } catch {}
+        saveToken(state);
+        resolve(state);
+      },
+      error_callback: (e) =>
+        reject(
+          new Error(
+            e.type === 'popup_failed_to_open'
+              ? 'Your browser blocked the Google window. Allow pop-ups for Orbit and try again.'
+              : e.type === 'popup_closed'
+                ? 'The Google window was closed before calendar access was allowed.'
+                : (e.message ?? e.type),
+          ),
+        ),
+    });
+    tc.requestAccessToken({ prompt: '' });
   });
 }
 
@@ -515,4 +582,40 @@ export async function gcalList(timeMin: Date, timeMax: Date): Promise<GcalEventR
     pageToken = r.nextPageToken;
   } while (pageToken);
   return out;
+}
+
+export interface GcalInsert {
+  summary: string;
+  description?: string;
+  startAt: string;
+  endAt: string;
+  timeZone?: string;
+  attendees: { email: string; displayName?: string }[];
+  /** a fresh id per attempt, so Google makes one Meet link, never two */
+  requestId: string;
+}
+
+/**
+ * Create an event on the student's primary calendar with a Google Meet link, and have Google email the invite to
+ * the guests (sendUpdates=all). A POST is never retried on a server error, so an invite cannot go out twice.
+ */
+export async function gcalInsertEvent(e: GcalInsert): Promise<GcalEventRaw> {
+  const url = new URL('https://www.googleapis.com/calendar/v3/calendars/primary/events');
+  url.searchParams.set('sendUpdates', 'all');
+  url.searchParams.set('conferenceDataVersion', '1');
+  return gfetch<GcalEventRaw>(url.toString(), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      summary: e.summary,
+      description: e.description,
+      start: { dateTime: e.startAt, timeZone: e.timeZone },
+      end: { dateTime: e.endAt, timeZone: e.timeZone },
+      attendees: e.attendees,
+      conferenceData: {
+        createRequest: { requestId: e.requestId, conferenceSolutionKey: { type: 'hangoutsMeet' } },
+      },
+      reminders: { useDefault: true },
+    }),
+  });
 }

@@ -1696,8 +1696,12 @@ test.describe('Usability round 5: one draft, kept edits, saved settings, chats t
     await expect(chatCard(page, 'Caleb Weber')).toContainText(/time not set/i);
     await chatCard(page, 'Caleb Weber').getByRole('link', { name: 'Caleb Weber' }).click();
     await page.getByTestId('person-set-time').click();
+    // with an email on file, the time can go out as a Google Calendar invite (in the demo it is marked sent)
+    const invite = page.getByTestId('schedule-invite');
+    const invites = await invite.isVisible();
     await page.getByTestId('schedule-save').click();
     await expect(page.getByTestId('person-chat-time')).toContainText(/^Chat /);
+    if (invites) await expect(page.getByTestId('person-invite-sent')).toContainText(/Invite sent/);
     await page.goto('people');
     await expect(chatCard(page, 'Caleb Weber').getByTestId('chat-card-time')).toContainText(/^Chat /);
     // a chat still ahead is not marked done by a slip of the menu

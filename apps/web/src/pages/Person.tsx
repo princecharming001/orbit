@@ -36,6 +36,7 @@ import { ConfirmEarlyDone, chatTimeLabel, ScheduleChatDialog } from '../componen
 import { SuggestionCard } from '../components/SuggestionCard';
 import { db } from '../db/schema';
 import { isMessageSuggestion, refreshPersonSummary } from '../engine/brief';
+import { calendarInvitesAvailable, canInviteFor, sendCalendarInvite } from '../engine/calendarInvite';
 import { composeDraft, discardDraft as discardDraftRow, restoreDraft } from '../engine/drafts';
 import {
   addFact,
@@ -197,6 +198,7 @@ export function PersonPage() {
   const [busy, setBusy] = useState(false);
   const [warmUpChoice, setWarmUpChoice] = useState(false);
   const [asking, setAsking] = useState(false);
+  const [inviting, setInviting] = useState(false);
   const [early, setEarly] = useState<string>();
   const events =
     useLiveQuery(
@@ -458,6 +460,53 @@ export function PersonPage() {
                     >
                       Change the time
                     </button>
+                    {nextEvent.inviteSentAt ? (
+                      <span className="text-[12px] text-good" data-testid="person-invite-sent">
+                        Invite sent
+                        {nextEvent.conferenceUrl && (
+                          <>
+                            {' · '}
+                            <a
+                              href={nextEvent.conferenceUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="underline underline-offset-2"
+                            >
+                              Meet link
+                            </a>
+                          </>
+                        )}
+                      </span>
+                    ) : (
+                      canInviteFor(nextEvent) &&
+                      !!person.primaryEmail &&
+                      calendarInvitesAvailable(user) && (
+                        <Button
+                          size="sm"
+                          disabled={inviting}
+                          onClick={async () => {
+                            setInviting(true);
+                            try {
+                              const r = await sendCalendarInvite(user, chat);
+                              toast.push(
+                                r.ok
+                                  ? {
+                                      text: `On your calendar, and Google sent ${person.firstName} the invite.`,
+                                      tone: 'good',
+                                    }
+                                  : { text: r.message, tone: 'bad', ttl: 9000 },
+                              );
+                            } finally {
+                              setInviting(false);
+                            }
+                          }}
+                          title={`Add it to your Google Calendar and email ${person.firstName} the invite, with a Meet link`}
+                          data-testid="person-send-invite"
+                        >
+                          {inviting ? 'Sending…' : 'Send invite'}
+                        </Button>
+                      )
+                    )}
                   </>
                 ) : pastEvent ? (
                   <>

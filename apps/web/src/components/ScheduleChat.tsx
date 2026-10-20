@@ -1,5 +1,8 @@
 import type { CoffeeChat } from '@orbit/core';
+import { useLiveQuery } from 'dexie-react-hooks';
 import { useState } from 'react';
+import { db } from '../db/schema';
+import { calendarInvitesAvailable, canInviteFor, sendCalendarInvite } from '../engine/calendarInvite';
 import { scheduleChatAt } from '../engine/move';
 import { useSession } from '../state/session';
 import { Button, Input, Label, Modal, Select, useToast } from '../ui';
@@ -35,17 +38,41 @@ export function ScheduleChatDialog({
   });
   const [minutes, setMinutes] = useState('30');
   const [busy, setBusy] = useState(false);
+  const email = useLiveQuery(
+    async () => (chat ? ((await db.people.get(chat.personId))?.primaryEmail ?? '') : ''),
+    [chat?.personId],
+  );
+  // a meeting already on the calendar (or already invited) is moved there, never invited twice
+  const onCalendar = useLiveQuery(async () => {
+    const ev = chat?.scheduledEventId ? await db.events.get(chat.scheduledEventId) : undefined;
+    return !!ev && !canInviteFor(ev);
+  }, [chat?.scheduledEventId]);
+  // a new time can go out as a Google Calendar invite, ticked by default; an existing time is just moved
+  const [invite, setInvite] = useState(!current);
   if (!chat || !user) return null;
+  const canInvite = !!email && !onCalendar && calendarInvitesAvailable(user);
   const at = new Date(when);
   const past = Number.isNaN(at.getTime()) || at.getTime() < Date.now() - 60_000;
   const save = async () => {
     setBusy(true);
     try {
-      await scheduleChatAt(user, chat, at, Number(minutes));
-      toast.push({
-        text: `Saved. Your chat with ${firstName} is under Coming up in Drafts, with prep the day before.`,
-        tone: 'good',
-      });
+      if (canInvite && invite) {
+        const r = await sendCalendarInvite(user, chat, { at, minutes: Number(minutes) });
+        toast.push(
+          r.ok
+            ? {
+                text: `On your calendar, and Google sent ${firstName} the invite${r.meetUrl ? ' with a Meet link' : ''}.`,
+                tone: 'good',
+              }
+            : { text: `Saved the time, but the invite did not go out: ${r.message}`, tone: 'bad', ttl: 9000 },
+        );
+      } else {
+        await scheduleChatAt(user, chat, at, Number(minutes));
+        toast.push({
+          text: `Saved. Your chat with ${firstName} is under Coming up in Drafts, with prep the day before.`,
+          tone: 'good',
+        });
+      }
       onClose();
     } finally {
       setBusy(false);
@@ -55,9 +82,7 @@ export function ScheduleChatDialog({
     <Modal open onClose={onClose} title={`When is your chat with ${firstName}?`}>
       <div className="space-y-3 text-[13.5px]" data-testid="schedule-chat">
         <p className="text-ink-2">
-          Orbit shows it under Coming up in Drafts, puts prep there the day before, and reminds you to say
-          thank you after. Not booked yet? Set it later from {firstName}'s page or their card on the People
-          board.
+          Orbit puts prep in Drafts the day before and reminds you to say thanks after.
         </p>
         <div className="grid grid-cols-[1fr_auto] gap-3">
           <div>
@@ -81,10 +106,27 @@ export function ScheduleChatDialog({
             </Select>
           </div>
         </div>
+        {canInvite && (
+          <label className="flex items-start gap-2 text-[13px]" data-testid="schedule-invite">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={invite}
+              onChange={(e) => setInvite(e.target.checked)}
+            />
+            <span>
+              Add it to my Google Calendar and send {firstName} the invite, with a Meet link
+              <span className="block text-[12px] text-ink-3">To {email}</span>
+            </span>
+          </label>
+        )}
+        {onCalendar && current && (
+          <p className="text-[12px] text-ink-3">It is on your Google Calendar: move it there too.</p>
+        )}
         {past && <p className="text-[12px] text-warn">Pick a time that has not passed yet.</p>}
         <div className="flex flex-wrap gap-2 pt-1">
           <Button variant="primary" onClick={save} disabled={busy || past} data-testid="schedule-save">
-            Save the time
+            {canInvite && invite ? 'Save and send invite' : 'Save the time'}
           </Button>
           <Button variant="ghost" onClick={onClose}>
             {current ? 'Keep the time' : 'Not set yet'}

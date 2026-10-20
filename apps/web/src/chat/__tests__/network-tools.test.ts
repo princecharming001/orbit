@@ -151,7 +151,6 @@ describe('local mode', () => {
     // risky ones explain on the Approve card why they cannot run
     for (const [name, input] of [
       ['ask_for_intro', { pathId: 'x' }],
-      ['book_call', { draftId: 'd', slotStart: '2026-10-21T14:00:00Z' }],
       ['set_autonomy', { level: 1 }],
       ['forget', { memoryId: 'm' }],
     ] as const) {
@@ -159,6 +158,14 @@ describe('local mode', () => {
       expect(env.kind, name).toBe('needs_confirmation');
       expect((env.data as { blockedReason?: string }).blockedReason, name).toMatch(/Orbit account/);
     }
+    // book_call works in this browser too (Google sends the invite); it only needs to know who the call is with
+    const book = await execute(
+      'book_call',
+      { slotStart: '2026-10-21T14:00:00Z' },
+      makeCtx(user, { toolUseId: nextToolUseId() }),
+    );
+    expect(book.kind).toBe('needs_confirmation');
+    expect((book.data as { blockedReason?: string }).blockedReason).toMatch(/who the call is with/);
   });
 });
 
