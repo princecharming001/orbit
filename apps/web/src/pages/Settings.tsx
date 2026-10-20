@@ -9,6 +9,7 @@ import { AccountSection, MemorySection, OutreachSection } from '../components/ac
 import { LinkedInLiveCard, WarmIntrosCard } from '../components/ConnectorCards';
 import { LinkedInImportButton } from '../components/LinkedInImport';
 import { ResumeFacetList } from '../components/ResumeFacets';
+import { WeeklyTargetSlider } from '../components/WeeklyTargetSlider';
 import { db } from '../db/schema';
 import { deleteAllData, exportAllData, exportFilename } from '../engine/account';
 import { demoResetPrompt, loadDemo } from '../engine/demo';
@@ -1129,17 +1130,11 @@ function Limits() {
         <div className="@[40rem]:col-span-2 font-medium -mb-1">Weekly goal</div>
         <div>
           <Label htmlFor="lim-week">First messages a week</Label>
-          <Input
+          <WeeklyTargetSlider
             id="lim-week"
-            type="number"
-            min={1}
-            max={30}
             value={settings.weeklyOutreachTarget}
-            onChange={(e) =>
-              upd({
-                weeklyOutreachTarget: Math.max(1, Math.min(30, Math.round(Number(e.target.value) || 1))),
-              })
-            }
+            onChange={(v) => upd({ weeklyOutreachTarget: v })}
+            testId="settings-weekly"
           />
           <p className="text-[12px] text-ink-3 mt-1">
             Your goal for new people each week. Ask the chat how your week is going to see your count.

@@ -18,6 +18,7 @@ import {
   ObSelect,
   OnboardingLayout,
 } from '../components/onboarding/OnboardingLayout';
+import { WeeklyTargetSlider } from '../components/WeeklyTargetSlider';
 import { db } from '../db/schema';
 import { finishOnboarding, setOnboardingStep } from '../engine/account';
 import { LINKEDIN_RISK_SENTENCE } from '../engine/consent';
@@ -26,7 +27,13 @@ import { connectAndSyncGoogle } from '../engine/integrations';
 import { connectionsText, importLinkedInExport } from '../engine/linkedin';
 import { connectLinkedInLive, liveLinkedInAvailable } from '../engine/linkedinLive';
 import { pullNow } from '../engine/serverSync';
-import { removeTargetCompany, saveGoals, setTargetPriority, updateProfile } from '../engine/settings';
+import {
+  removeTargetCompany,
+  saveGoals,
+  setTargetPriority,
+  updateLimits,
+  updateProfile,
+} from '../engine/settings';
 import { addTargetCompanies } from '../engine/targets';
 import { googleClientId } from '../integrations/google';
 import { isSignedIn, startGoogleSignIn } from '../integrations/orbitApi';
@@ -435,11 +442,10 @@ const COMPANY_EXAMPLE: Record<string, string> = {
   design: 'Figma',
 };
 
-const PACE: { value: 1 | 2 | 3; count: number; label: string }[] = [
-  { value: 1, count: 2, label: 'Steady' },
-  { value: 2, count: 4, label: 'Focused' },
-  { value: 3, count: 7, label: 'All in' },
-];
+/** The goals' ambition level a weekly target stands for (the brief and the chat still read the level). */
+function ambitionFor(weekly: number): 1 | 2 | 3 {
+  return weekly <= 3 ? 1 : weekly <= 7 ? 2 : 3;
+}
 
 function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void }) {
   const user = useSession().user!;
@@ -461,7 +467,11 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
     });
   }, [user.id]);
   const recruiting = kinds.includes('recruiting');
-  const [ambition, setAmbition] = useState<1 | 2 | 3>(2);
+  const [weekly, setWeekly] = useState(4);
+  const storedWeekly = useLiveQuery(
+    async () => (await db.settings.get(user.id))?.weeklyOutreachTarget,
+    [user.id],
+  );
   const [company, setCompany] = useState('');
   const [companyNote, setCompanyNote] = useState('');
   const [busy, setBusy] = useState(false);
@@ -471,11 +481,9 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
     // fill the form once from what is stored; later saves (Back, Continue) must not reset what is being chosen
     if (goals === undefined || loaded.current) return;
     loaded.current = true;
-    if (goals) {
-      setFns(goals.targetFunctions);
-      setAmbition(goals.ambition);
-    }
-  }, [goals]);
+    if (goals) setFns(goals.targetFunctions);
+    if (storedWeekly) setWeekly(storedWeekly);
+  }, [goals, storedWeekly]);
   // "Evercore, Lazard" adds two companies
   const addCompany = async () => {
     // take the text now and clear the box at once, so a company typed while this one saves is kept
@@ -516,16 +524,13 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
   /** Keep what is on screen, whichever way the student leaves the step (a company typed but not added included). */
   const persist = async () => {
     if (company.trim()) await addCompany();
-    await saveGoals(
-      user.id,
-      {
-        // the rest of the goals (roles, industries, places) are asked later, in Settings or by the chat
-        cycleLabel: goals?.cycleLabel ?? `Summer ${new Date().getFullYear() + 1} internship`,
-        targetFunctions: fns,
-        ambition,
-      },
-      { applyAmbition: true },
-    );
+    await saveGoals(user.id, {
+      // the rest of the goals (roles, industries, places) are asked later, in Settings or by the chat
+      cycleLabel: goals?.cycleLabel ?? `Summer ${new Date().getFullYear() + 1} internship`,
+      targetFunctions: fns,
+      ambition: ambitionFor(weekly),
+    });
+    await updateLimits(user.id, { weeklyOutreachTarget: weekly });
   };
   const extra = fns.filter((v) => !FUNCTION_LABELS[v]);
   const example = COMPANY_EXAMPLE[fns[0] ?? ''] ?? 'Stripe';
@@ -678,30 +683,7 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
         </div>
         <div>
           <ObLabel hint="A goal, not a limit">First messages a week</ObLabel>
-          <div role="radiogroup" aria-label="First messages a week" className="grid grid-cols-3 gap-2">
-            {PACE.map((p) => {
-              const on = ambition === p.value;
-              return (
-                <button
-                  key={p.value}
-                  type="button"
-                  role="radio"
-                  aria-checked={on}
-                  onClick={() => setAmbition(p.value)}
-                  className={cx(
-                    'h-16 rounded-[12px] border bg-white flex flex-col items-center justify-center transition-[border-color,box-shadow,color] duration-200 focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ink/15',
-                    on
-                      ? 'border-ink text-ink shadow-[0_0_0_1px_#0a0a0a]'
-                      : 'border-line text-ink-2 hover:text-ink hover:border-[#d4d2ce]',
-                  )}
-                  data-testid={`ob-pace-${p.value}`}
-                >
-                  <span className="text-[14.5px] font-medium tabular-nums">{p.count} a week</span>
-                  <span className={cx('text-[12px]', on ? 'text-ink-2' : 'text-ink-3')}>{p.label}</span>
-                </button>
-              );
-            })}
-          </div>
+          <WeeklyTargetSlider value={weekly} onChange={setWeekly} testId="ob-pace" />
         </div>
       </div>
       <ObPrimary

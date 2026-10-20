@@ -1158,7 +1158,9 @@ test.describe('Setup without Google', () => {
     await page.getByTestId('ob-year').selectOption({ index: 2 });
     await page.getByRole('button', { name: /^continue$/i }).click();
     await page.getByTestId('ob-fn-consulting').click();
-    await page.getByTestId('ob-pace-3').click();
+    // the weekly goal is a slider from 1 to 350; the last stop is 350
+    await page.getByTestId('ob-pace').fill('58');
+    await expect(page.getByTestId('ob-pace-value')).toHaveText('350 a week');
     // a company typed but not added is kept, not thrown away
     await page.getByTestId('ob-company').fill('Evercore');
     await page.getByRole('button', { name: /^back$/i }).click();
@@ -1166,7 +1168,7 @@ test.describe('Setup without Google', () => {
     await expect(page.getByTestId('ob-name')).toHaveValue('Sam Okafor');
     await page.getByRole('button', { name: /^continue$/i }).click();
     await expect(page.getByTestId('ob-fn-consulting')).toHaveAttribute('aria-pressed', 'true');
-    await expect(page.getByTestId('ob-pace-3')).toHaveAttribute('aria-checked', 'true');
+    await expect(page.getByTestId('ob-pace-value')).toHaveText('350 a week');
     await expect(page.getByRole('button', { name: /remove evercore/i })).toBeVisible();
     await page.getByRole('button', { name: /^continue$/i }).click();
     // without a Google sign-in set up on this build there is no Gmail step that could only say "not available"

@@ -176,7 +176,7 @@ const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v
 
 /** The ranges the Limits page allows for each setting. */
 export const LIMIT_RANGES = {
-  weeklyOutreachTarget: [1, 30],
+  weeklyOutreachTarget: [1, 350],
   perPersonCooldownHours: [0, 24 * 90],
   dailySendCapGmail: [1, 50],
   dailySendCapLinkedin: [1, 30],

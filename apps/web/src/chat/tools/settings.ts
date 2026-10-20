@@ -422,9 +422,9 @@ export const updateLimitsTool = defineTool({
   name: 'update_limits',
   kind: 'risky',
   description:
-    "Call this only when the student asks to change how much Orbit lets them write: first messages a week (1 to 30), hours between messages to the same person, emails per day (1 to 50), LinkedIn messages per day (1 to 30), follow-ups when no reply (0 to 2), warm-ups on or off and their length in working days (2 to 10), or the daily Claude request and token caps. These change what can go out, so they need the student's approval.",
+    "Call this only when the student asks to change how much Orbit lets them write: first messages a week (1 to 350), hours between messages to the same person, emails per day (1 to 50), LinkedIn messages per day (1 to 30), follow-ups when no reply (0 to 2), warm-ups on or off and their length in working days (2 to 10), or the daily Claude request and token caps. These change what can go out, so they need the student's approval.",
   input: z.object({
-    weeklyOutreachTarget: z.number().int().optional().describe('First messages a week.'),
+    weeklyOutreachTarget: z.number().int().optional().describe('First messages a week, 1 to 350.'),
     perPersonCooldownHours: z
       .number()
       .int()
