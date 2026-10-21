@@ -566,8 +566,7 @@ function Recent({ chat }: { chat: ReturnType<typeof threadActions> }) {
   );
 }
 
-/** Orbit's mark: the glass atom on a transparent background, with a soft shadow so it reads on light surfaces. */
-/** Orbit's mark: three orbits round a centre, drawn in plain ink lines (a shape anyone could sketch). */
+/** Orbit's mark: one orbit round a centre, with a single moon on it, in plain ink lines. */
 export function Logo({ size = 26 }: { size?: number }) {
   return (
     <svg
@@ -579,17 +578,17 @@ export function Logo({ size = 26 }: { size?: number }) {
       className="shrink-0 text-ink"
       data-testid="logo"
     >
-      <g stroke="currentColor" strokeWidth="1.6">
-        <ellipse cx="16" cy="16" rx="13.2" ry="5.0" transform="rotate(30 16 16)" />
-        <ellipse cx="16" cy="16" rx="13.2" ry="5.0" transform="rotate(90 16 16)" />
-        <ellipse cx="16" cy="16" rx="13.2" ry="5.0" transform="rotate(150 16 16)" />
-      </g>
-      <g fill="currentColor">
-        <circle cx="16" cy="16" r="3" />
-        <circle cx="5.61" cy="8.50" r="2" />
-        <circle cx="27.60" cy="11.28" r="2" />
-        <circle cx="12.79" cy="26.11" r="2" />
-      </g>
+      <ellipse
+        cx="16"
+        cy="16"
+        rx="13"
+        ry="6.2"
+        transform="rotate(-25 16 16)"
+        stroke="currentColor"
+        strokeWidth="1.8"
+      />
+      <circle cx="16" cy="16" r="3.6" fill="currentColor" />
+      <circle cx="23.4" cy="8.3" r="2.5" fill="currentColor" />
     </svg>
   );
 }
