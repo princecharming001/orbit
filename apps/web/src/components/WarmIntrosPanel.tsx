@@ -8,6 +8,31 @@ import { useEffect, useState } from 'react';
 import { type WarmIntro, warmIntrosFor } from '../engine/warmIntros';
 import { Button, Chip, cx } from '../ui';
 
+/** Warm intro paths to a person or a company (undefined while they load; empty when warm intros are off). */
+export function useWarmIntros(
+  user: User | undefined,
+  target?: Person,
+  company?: string,
+): WarmIntro[] | undefined {
+  const [intros, setIntros] = useState<WarmIntro[]>();
+  const key = target ? `p:${target.id}` : company ? `c:${company}` : '';
+  useEffect(() => {
+    if (!key || !user) return;
+    setIntros(undefined);
+    const ctrl = new AbortController();
+    let live = true;
+    warmIntrosFor(user, target ? { person: target } : { company }, { signal: ctrl.signal })
+      .then((r) => live && setIntros(r))
+      .catch(() => live && setIntros([]));
+    return () => {
+      live = false;
+      ctrl.abort();
+    };
+    // the target object changes on every live read; only who it is matters here
+  }, [key, user?.id]);
+  return intros;
+}
+
 export function WarmIntrosPanel({
   user,
   target,
@@ -22,22 +47,7 @@ export function WarmIntrosPanel({
   onAsk: (connectorId: string, targetId: string, warmth: number) => void;
   className?: string;
 }) {
-  const [intros, setIntros] = useState<WarmIntro[]>();
-  const key = target ? `p:${target.id}` : company ? `c:${company}` : '';
-  useEffect(() => {
-    if (!key) return;
-    setIntros(undefined);
-    const ctrl = new AbortController();
-    let live = true;
-    warmIntrosFor(user, target ? { person: target } : { company }, { signal: ctrl.signal })
-      .then((r) => live && setIntros(r))
-      .catch(() => live && setIntros([]));
-    return () => {
-      live = false;
-      ctrl.abort();
-    };
-    // the target object changes on every live read; only who it is matters here
-  }, [key, user.id]);
+  const intros = useWarmIntros(user, target, company);
   if (!intros?.length) return null;
   return (
     <div className={cx('space-y-1.5', className)} data-testid="map-warm-intros">

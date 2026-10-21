@@ -20,7 +20,7 @@ import type { FocusSpec, WebSpec } from '../components/orbitScene';
 import { LINEAGE } from '../components/orbitScene';
 import { StrengthDots } from '../components/people/shared';
 import { ResizeHandle, useResizableWidth } from '../components/ResizeHandle';
-import { WarmIntrosPanel } from '../components/WarmIntrosPanel';
+import { useWarmIntros, WarmIntrosPanel } from '../components/WarmIntrosPanel';
 import { db } from '../db/schema';
 import { draftMessage } from '../engine/brief';
 import { requestIntro } from '../engine/drafts';
@@ -611,6 +611,17 @@ export function MapPage() {
   };
   const hovered = hover ? byId.get(hover) : undefined;
   const current = paths?.[pathIdx];
+  // Village's warm intros to the target: shown on the route through the same person, or as a route of their own
+  const targetIntros = useWarmIntros(user ?? undefined, target ?? undefined);
+  const villageFor = (personId: string) =>
+    targetIntros?.find((w) => w.introducer.personId === personId && w.targetPersonId === target?.id);
+  const extraIntros = (targetIntros ?? []).filter(
+    (w) =>
+      !!w.introducer.personId &&
+      !!w.targetPersonId &&
+      w.introducer.personId !== w.targetPersonId &&
+      !(paths ?? []).some((p) => p.hops.length > 1 && p.hops[0]!.toId === w.introducer.personId),
+  );
   const companyKey = companyFocus?.key;
   // the legend line and the chip on the map count the same people: those in the company's wedge
   const [companyCount, warmCount] = useMemo(() => {
@@ -1121,71 +1132,132 @@ export function MapPage() {
                   No route found through your network yet. Import more connections or start a warm-up.
                 </p>
               )}
-              {paths?.map((p, i) => (
-                <button
-                  key={i}
-                  onClick={() => setPathIdx(i)}
-                  className={cx(
-                    'w-full text-left border rounded-[12px] p-3 transition-colors',
-                    i === pathIdx ? 'border-accent bg-accent-soft/40' : 'border-line hover:bg-canvas-2',
-                  )}
-                  data-testid="reach-path"
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="text-[12px] font-medium">
-                      Route {i + 1} · {p.hops.length} hop{p.hops.length > 1 ? 's' : ''}
-                    </span>
-                    {isColdDirect(p) ? (
-                      <Chip>Cold tie</Chip>
-                    ) : (
-                      <Chip tone={p.band === 'strong' ? 'good' : p.band === 'possible' ? 'warn' : 'neutral'}>
-                        {REACH_BAND_LABELS[p.band]}
-                      </Chip>
+              {paths?.map((p, i) => {
+                const first = byId.get(p.hops[0]!.toId);
+                // the same introducer in Village's warm intros: said on the route, never listed twice
+                const village = p.hops.length > 1 ? villageFor(p.hops[0]!.toId) : undefined;
+                const selected = i === pathIdx;
+                return (
+                  <div
+                    key={i}
+                    className={cx(
+                      'border rounded-[12px] transition-colors',
+                      selected ? 'border-accent bg-accent-soft/40' : 'border-line hover:bg-canvas-2',
                     )}
+                    data-testid="reach-path"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setPathIdx(i)}
+                      aria-pressed={selected}
+                      className="w-full text-left p-3 pb-2 rounded-[12px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[12px] font-medium">
+                          Route {i + 1} · {p.hops.length} hop{p.hops.length > 1 ? 's' : ''}
+                        </span>
+                        <span className="flex items-center gap-1">
+                          {village && (
+                            <Chip className="h-5" data-testid="reach-village">
+                              Village · {village.warmthWord}
+                            </Chip>
+                          )}
+                          {isColdDirect(p) ? (
+                            <Chip className="h-5">Cold tie</Chip>
+                          ) : (
+                            <Chip
+                              className="h-5"
+                              tone={p.band === 'strong' ? 'good' : p.band === 'possible' ? 'warn' : 'neutral'}
+                            >
+                              {REACH_BAND_LABELS[p.band]}
+                            </Chip>
+                          )}
+                        </span>
+                      </div>
+                      <ol className="mt-2 space-y-1.5 text-[13px]">
+                        {p.hops.map((h, k) => {
+                          const to = byId.get(h.toId);
+                          return (
+                            <li key={k} className="flex items-start gap-2">
+                              <span className="text-ink-3 tabular w-4">{k + 1}.</span>
+                              <span>
+                                <span className="font-medium">{to?.displayName ?? '…'}</span>
+                                <br />
+                                <span className="text-ink-3">{h.text}</span>
+                              </span>
+                            </li>
+                          );
+                        })}
+                      </ol>
+                    </button>
+                    {/* each route carries its own next step */}
+                    <div className="px-3 pb-3">
+                      {p.hops.length > 1 ? (
+                        <Button
+                          size="sm"
+                          variant={selected ? 'primary' : 'secondary'}
+                          className={TAP}
+                          onClick={() => askIntro(p)}
+                          data-testid="reach-path-action"
+                        >
+                          Ask {first?.firstName ?? 'them'} for an intro
+                        </Button>
+                      ) : (
+                        <Button
+                          size="sm"
+                          variant={selected ? 'primary' : 'secondary'}
+                          className={TAP}
+                          onClick={() => nav(`/people/${target.id}?draft=outreach`)}
+                          data-testid="reach-path-action"
+                        >
+                          Write to {target.firstName} directly
+                        </Button>
+                      )}
+                    </div>
                   </div>
-                  <ol className="mt-2 space-y-1.5 text-[13px]">
-                    {p.hops.map((h, k) => {
-                      const to = byId.get(h.toId);
-                      return (
-                        <li key={k} className="flex items-start gap-2">
-                          <span className="text-ink-3 tabular w-4">{k + 1}.</span>
-                          <span>
-                            <span className="font-medium">{to?.displayName ?? '…'}</span>
-                            <br />
-                            <span className="text-ink-3">{h.text}</span>
-                          </span>
-                        </li>
-                      );
-                    })}
-                  </ol>
-                </button>
-              ))}
-              {/* after the routes it explains, so on a phone the first route still shows without scrolling */}
+                );
+              })}
+              {/* warm intros from Village through someone no route above goes through: one more route each */}
+              {extraIntros.length > 0 && (
+                <div className="space-y-2" data-testid="map-warm-intros">
+                  {extraIntros.map((w) => (
+                    <div
+                      key={`${w.introducer.name}:${w.hops.join('>')}`}
+                      className="border border-line rounded-[12px] p-3 text-[13px]"
+                      data-testid="map-warm-intro"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[12px] font-medium">Route via Village</span>
+                        <Chip
+                          className="h-5"
+                          tone={
+                            w.warmthWord === 'warm' ? 'good' : w.warmthWord === 'good' ? 'accent' : 'neutral'
+                          }
+                        >
+                          {w.warmthWord}
+                        </Chip>
+                      </div>
+                      <div className="mt-2 text-ink">{w.hops.join(' → ')}</div>
+                      {w.note && <div className="text-ink-3">{w.note}</div>}
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        className={cx('mt-2', TAP)}
+                        onClick={() => askIntroVia(w.introducer.personId!, w.targetPersonId!, w.warmth)}
+                        data-testid="map-warm-intro-ask"
+                      >
+                        Ask {w.introducer.name.split(' ')[0]} for an intro
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
               {coldDirect && (
-                <p className="text-[13px] text-ink-2" data-testid="reach-cold-note">
-                  {coldDirect.hops[0]!.text}. That tie is faint, so a note from you alone may go unanswered. A
-                  word from someone who knows {target.firstName} carries more weight, which is why the routes
-                  through people you know come first. Writing to {target.firstName} yourself is Route{' '}
-                  {paths!.indexOf(coldDirect) + 1}.
+                <p className="text-[12.5px] text-ink-3" data-testid="reach-cold-note">
+                  Route {paths!.indexOf(coldDirect) + 1} is writing to {target.firstName} yourself.{' '}
+                  {coldDirect.hops[0]!.text}, a faint tie, so the routes through people you know come first.
                 </p>
               )}
-              {current && current.hops.length > 1 && (
-                <Button variant="primary" className={cx('w-full', TAP)} onClick={() => askIntro(current)}>
-                  Ask {byId.get(current.hops[0]!.toId)?.firstName ?? 'them'} for an intro
-                </Button>
-              )}
-              {current && current.hops.length === 1 && (
-                <Button
-                  variant="primary"
-                  className={cx('w-full', TAP)}
-                  onClick={() => nav(`/people/${target.id}?draft=outreach`)}
-                >
-                  Write to {target.firstName} directly
-                </Button>
-              )}
-              {/* warm intros from outside Orbit come after its own routes and their next step, so on a phone the first
-                  route and its button still show without scrolling */}
-              {user && <WarmIntrosPanel user={user} target={target} onAsk={askIntroVia} />}
             </>
           )}
           {companyFocus && !company && (

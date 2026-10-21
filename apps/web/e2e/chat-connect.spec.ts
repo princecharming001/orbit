@@ -136,10 +136,15 @@ test.describe('Connect LinkedIn and Gmail, live LinkedIn and warm intros', () =>
     await expect(mutuals.getByTestId('person-mutual').filter({ hasText: 'Priya Ahmed' })).toBeVisible();
     // p1 is Daniel Okafor at Stripe
     await page.goto('map?reach=p1');
-    const panel = page.getByTestId('map-warm-intros');
-    await expect(panel).toBeVisible({ timeout: 30_000 });
-    await expect(panel.getByTestId('map-warm-intro').first()).toContainText('Daniel Okafor');
-    await panel.getByTestId('map-warm-intro-ask').first().click();
+    // Village's warm intros join the routes: a tag on the route through the same person, or a route of their own
+    const tagged = page.getByTestId('reach-path').filter({ has: page.getByTestId('reach-village') });
+    const extra = page.getByTestId('map-warm-intro');
+    await expect(tagged.or(extra).first()).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText(/^Warm intros/)).toHaveCount(0);
+    const ask = (await tagged.count())
+      ? tagged.first().getByTestId('reach-path-action')
+      : extra.first().getByTestId('map-warm-intro-ask');
+    await ask.click();
     await expect(page.getByTestId('toasts')).toContainText('Intro request drafted');
     await page.goto('map?reach=1&company=Stripe');
     await expect(page.getByTestId('map-warm-intros').getByTestId('map-warm-intro').first()).toContainText(
