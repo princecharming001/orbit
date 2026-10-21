@@ -7,6 +7,8 @@ describe('a company logo domain', () => {
     expect(companyDomain('Goldman Sachs & Co. LLC')).toBe('goldmansachs.com');
     expect(companyDomain('Linear')).toBe('linear.app');
     expect(companyDomain('Notion')).toBe('notion.so');
+    expect(companyDomain('Georgia Tech')).toBe('gatech.edu');
+    expect(companyDomain('Carnegie Mellon University')).toBe('cmu.edu');
   });
 
   it('prefers a stored domain, then a work address, never a free mailbox or a school', () => {

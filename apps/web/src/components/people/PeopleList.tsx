@@ -64,7 +64,7 @@ export function PeopleList({
                       </Chip>
                     )}
                   </span>
-                  <LogoText person={p} className="text-[12.5px] text-ink-2">
+                  <LogoText person={p} className="text-[12.5px] text-ink-2" wrap>
                     {[p.currentTitle, p.currentOrganizationRaw].filter(Boolean).join(' at ') || '—'}
                   </LogoText>
                   <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-ink-3">
@@ -129,7 +129,7 @@ export function PeopleList({
                     </Link>
                   </td>
                   <td className="px-2 text-ink-2 min-w-[150px]">
-                    <LogoText person={p}>
+                    <LogoText person={p} wrap>
                       {[p.currentTitle, p.currentOrganizationRaw].filter(Boolean).join(' · ') || '—'}
                     </LogoText>
                   </td>

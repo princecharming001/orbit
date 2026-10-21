@@ -6,7 +6,7 @@ import { useState } from 'react';
 import { db } from '../db/schema';
 import { cx } from '../ui';
 
-/** Domains whose icon came back empty (the 16px globe): they show their letter, without asking again. */
+/** Domains with no icon of their own: they show their letter, without asking again. */
 const missing = new Set<string>();
 
 /**
@@ -75,7 +75,7 @@ export function CompanyLogo({
   }
   return (
     <img
-      src={companyLogoUrl(d, size <= 16 ? 32 : 64)}
+      src={companyLogoUrl(d)}
       alt={decorative ? '' : label}
       aria-hidden={decorative || undefined}
       title={label}
@@ -86,13 +86,6 @@ export function CompanyLogo({
       className={cx('shrink-0 object-contain bg-white border border-line-2', radius, className)}
       style={box}
       data-testid="company-logo"
-      onLoad={(e) => {
-        // no icon of its own: the service answers with a 16px globe
-        if (e.currentTarget.naturalWidth > 0 && e.currentTarget.naturalWidth <= 16) {
-          missing.add(d);
-          setFailed(true);
-        }
-      }}
       onError={() => {
         missing.add(d);
         setFailed(true);
@@ -132,16 +125,19 @@ export function LogoText({
   children,
   size = 14,
   className,
+  wrap,
 }: {
   person: Pick<Person, 'currentOrganizationRaw' | 'currentOrganizationId' | 'emails' | 'primaryEmail'>;
   children: React.ReactNode;
   size?: number;
   className?: string;
+  /** let the text wrap (a table cell) instead of cutting it off with an ellipsis */
+  wrap?: boolean;
 }) {
   return (
-    <span className={cx('flex items-center gap-1.5 min-w-0', className)}>
-      <PersonCompanyLogo person={person} size={size} decorative />
-      <span className="truncate min-w-0">{children}</span>
+    <span className={cx('flex gap-1.5 min-w-0', wrap ? 'items-start' : 'items-center', className)}>
+      <PersonCompanyLogo person={person} size={size} decorative className={wrap ? 'mt-[3px]' : undefined} />
+      <span className={wrap ? 'min-w-0' : 'truncate min-w-0'}>{children}</span>
     </span>
   );
 }

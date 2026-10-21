@@ -188,6 +188,53 @@ const KNOWN: Record<string, string> = {
   walmart: 'walmart.com',
   target: 'target.com',
   'teach for america': 'teachforamerica.org',
+  // schools, for education lines
+  'cornell university': 'cornell.edu',
+  cornell: 'cornell.edu',
+  'georgia tech': 'gatech.edu',
+  'georgia institute of technology': 'gatech.edu',
+  'carnegie mellon university': 'cmu.edu',
+  'carnegie mellon': 'cmu.edu',
+  mit: 'mit.edu',
+  'massachusetts institute of technology': 'mit.edu',
+  'stanford university': 'stanford.edu',
+  stanford: 'stanford.edu',
+  'harvard university': 'harvard.edu',
+  harvard: 'harvard.edu',
+  'yale university': 'yale.edu',
+  'princeton university': 'princeton.edu',
+  'columbia university': 'columbia.edu',
+  'university of pennsylvania': 'upenn.edu',
+  upenn: 'upenn.edu',
+  wharton: 'upenn.edu',
+  'brown university': 'brown.edu',
+  'dartmouth college': 'dartmouth.edu',
+  'duke university': 'duke.edu',
+  'northwestern university': 'northwestern.edu',
+  'university of chicago': 'uchicago.edu',
+  'new york university': 'nyu.edu',
+  nyu: 'nyu.edu',
+  'uc berkeley': 'berkeley.edu',
+  'university of california berkeley': 'berkeley.edu',
+  'university of california, berkeley': 'berkeley.edu',
+  ucla: 'ucla.edu',
+  'university of michigan': 'umich.edu',
+  'university of texas at austin': 'utexas.edu',
+  'ut austin': 'utexas.edu',
+  'university of washington': 'uw.edu',
+  'university of illinois urbana champaign': 'illinois.edu',
+  uiuc: 'illinois.edu',
+  'university of southern california': 'usc.edu',
+  usc: 'usc.edu',
+  'university of virginia': 'virginia.edu',
+  'georgetown university': 'georgetown.edu',
+  'rice university': 'rice.edu',
+  'vanderbilt university': 'vanderbilt.edu',
+  'johns hopkins university': 'jhu.edu',
+  'boston university': 'bu.edu',
+  'purdue university': 'purdue.edu',
+  'university of waterloo': 'uwaterloo.ca',
+  'university of toronto': 'utoronto.ca',
 };
 
 /** A host as a domain: no scheme, no www, no path. */
@@ -226,7 +273,7 @@ export function companyDomain(
   return undefined;
 }
 
-/** The logo image for a domain: the site's own icon, served at the size asked for (a 16px globe when it has none). */
-export function companyLogoUrl(domain: string, px = 64): string {
-  return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=${px}`;
+/** The logo image for a domain: the site's own icon, from DuckDuckGo's icon service (a 404 when it has none). */
+export function companyLogoUrl(domain: string): string {
+  return `https://icons.duckduckgo.com/ip3/${encodeURIComponent(domain)}.ico`;
 }

@@ -1768,7 +1768,7 @@ function Privacy() {
           </li>
           <li className="py-2 flex justify-between gap-4">
             <span>Company logos</span>
-            <span className="text-ink-3 text-right">a company's web address, to Google's icon service</span>
+            <span className="text-ink-3 text-right">a company's web address, to DuckDuckGo's icon service</span>
           </li>
         </ul>
         <p className="text-[12px] text-ink-3 mt-2">
