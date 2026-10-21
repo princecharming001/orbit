@@ -1724,6 +1724,10 @@ function Privacy() {
             <span>Village</span>
             <span className="text-ink-3 text-right">a name and company per warm-intro lookup</span>
           </li>
+          <li className="py-2 flex justify-between gap-4">
+            <span>Company logos</span>
+            <span className="text-ink-3 text-right">a company's web address, to Google's icon service</span>
+          </li>
         </ul>
         <p className="text-[12px] text-ink-3 mt-2">
           Your Claude key is kept apart from the rest, and only Orbit's own code

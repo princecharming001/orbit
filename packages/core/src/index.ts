@@ -35,6 +35,7 @@ export * from './server/api';
 export * from './server/mappers';
 export * from './style/card';
 export * from './suggestions/rules';
+export * from './text/companyDomain';
 export * from './text/email';
 export * from './text/jaro';
 export * from './text/normalize';

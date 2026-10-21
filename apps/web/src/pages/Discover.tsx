@@ -4,6 +4,7 @@ import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { AddPersonButton } from '../components/AddPerson';
 import { FindPeople } from '../components/account/FindPeople';
+import { LogoText } from '../components/CompanyLogo';
 import { LinkedInImportButton } from '../components/LinkedInImport';
 import { StrengthDots } from '../components/people/shared';
 import { RoleLine } from '../components/SuggestionCard';
@@ -209,9 +210,9 @@ function NetworkDiscover({ tabs }: { tabs?: ReactNode }) {
                 <Link to={`/people/${p.id}`} className="font-medium hover:underline">
                   {p.displayName}
                 </Link>
-                <div className="text-[12px] text-ink-3 truncate">
+                <LogoText person={p} className="text-[12px] text-ink-3">
                   {[p.currentTitle, p.currentOrganizationRaw].filter(Boolean).join(' · ')}
-                </div>
+                </LogoText>
               </div>
               <StrengthDots v={p.strength} />
               <Button size="sm" variant="primary" onClick={() => start(p.id)}>
@@ -282,7 +283,7 @@ function NetworkDiscover({ tabs }: { tabs?: ReactNode }) {
                         )}
                         {r.status === 'saved' && <Chip className="h-5">Saved</Chip>}
                       </div>
-                      <RoleLine title={p.currentTitle} company={p.currentOrganizationRaw} />
+                      <RoleLine title={p.currentTitle} company={p.currentOrganizationRaw} person={p} />
                       <ul className="mt-2 text-[13px] text-ink-2 space-y-0.5">
                         {r.reasons.slice(0, 2).map((x) => (
                           <li key={x.code}>· {x.text}</li>

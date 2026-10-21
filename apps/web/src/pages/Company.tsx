@@ -2,6 +2,7 @@ import { REACH_BAND_LABELS, TARGET_STATUS_LABELS } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
+import { CompanyLogo } from '../components/CompanyLogo';
 import { StrengthDots } from '../components/people/shared';
 import { db } from '../db/schema';
 import { type CompanyReach, reachCompany, WARMER_ROUTES_WHY } from '../engine/graph';
@@ -46,7 +47,12 @@ export function CompanyPage() {
   return (
     <div>
       <PageHeader
-        title={org.name}
+        title={
+          <span className="inline-flex items-center gap-3">
+            <CompanyLogo name={org.name} orgId={org.id} size={32} decorative />
+            {org.name}
+          </span>
+        }
         subtitle={[org.industry, org.sizeBucket ? `${org.sizeBucket} people` : undefined, org.domains[0]]
           .filter(Boolean)
           .join(' · ')}

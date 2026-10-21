@@ -3,6 +3,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { useEffect, useRef } from 'react';
 import { db } from '../db/schema';
 import { Avatar, Chip, cx } from '../ui';
+import { PersonCompanyLogo } from './CompanyLogo';
 import { gapLabel, KIND_LABEL, SuggestionCard } from './SuggestionCard';
 
 export interface DraftGroup {
@@ -130,6 +131,7 @@ function DraftRow({
             <span className={cx('text-[13.5px] truncate', active ? 'font-semibold' : 'font-medium')}>
               {person?.displayName ?? meta.label}
             </span>
+            {person && <PersonCompanyLogo person={person} size={14} />}
           </span>
           <span className="flex items-center gap-1.5 mt-0.5">
             <Chip tone={meta.tone} className="h-[18px] text-[10.5px] px-1.5 shrink-0">

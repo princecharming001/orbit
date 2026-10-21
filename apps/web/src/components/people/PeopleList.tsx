@@ -3,6 +3,7 @@ import { ACTIVE_STAGES, CLOSED_STAGES, RELATIONSHIP_LABELS, STAGE_LABELS } from 
 import { Link, useNavigate } from 'react-router-dom';
 import { lastTouch } from '../../engine/search';
 import { Avatar, Chip, relDate, Select } from '../../ui';
+import { LogoText } from '../CompanyLogo';
 import { NextLink } from './PipelineBoard';
 import { StrengthDots, wentQuiet } from './shared';
 
@@ -63,9 +64,9 @@ export function PeopleList({
                       </Chip>
                     )}
                   </span>
-                  <span className="block text-[12.5px] text-ink-2">
+                  <LogoText person={p} className="text-[12.5px] text-ink-2">
                     {[p.currentTitle, p.currentOrganizationRaw].filter(Boolean).join(' at ') || '—'}
-                  </span>
+                  </LogoText>
                   <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-ink-3">
                     <span className="inline-flex items-center gap-1">
                       Closeness <StrengthDots v={p.strength} />
@@ -128,7 +129,9 @@ export function PeopleList({
                     </Link>
                   </td>
                   <td className="px-2 text-ink-2 min-w-[150px]">
-                    {[p.currentTitle, p.currentOrganizationRaw].filter(Boolean).join(' · ') || '—'}
+                    <LogoText person={p}>
+                      {[p.currentTitle, p.currentOrganizationRaw].filter(Boolean).join(' · ') || '—'}
+                    </LogoText>
                   </td>
                   <td className="px-2 text-ink-2">{role(p) ?? '—'}</td>
                   <td className="px-2">

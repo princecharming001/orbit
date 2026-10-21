@@ -23,6 +23,7 @@ import { SUGGESTION_KIND_LABELS } from '../engine/today';
 import { useSession } from '../state/session';
 import { Avatar, Button, Chip, cx, useToast } from '../ui';
 import { runApproval } from './approve';
+import { CompanyLogo, PersonCompanyLogo } from './CompanyLogo';
 import { DraftEditor, OutboxStatus } from './DraftEditor';
 
 /** Kept here for older imports; the labels live in the engine so the chat and the cards share them. */
@@ -312,7 +313,7 @@ export function SuggestionCard({
               </Link>
             )}
             {person && !onPersonPage && (person.currentTitle || person.currentOrganizationRaw) && (
-              <RoleLine title={person.currentTitle} company={person.currentOrganizationRaw} />
+              <RoleLine title={person.currentTitle} company={person.currentOrganizationRaw} person={person} />
             )}
           </div>
           <p className="text-[13.5px] text-ink-2 mt-1">{s.reasonText}</p>
@@ -655,12 +656,30 @@ const CARD_SMALL_BUTTON =
   'px-2 h-10 @[40rem]:h-7 rounded-md text-ink-3 hover:bg-canvas-2 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40';
 
 /** "Title · Company" where a long title gives way first: the company is the part that matters. */
-export function RoleLine({ title, company }: { title?: string; company?: string }) {
+export function RoleLine({
+  title,
+  company,
+  person,
+}: {
+  title?: string;
+  company?: string;
+  /** their record, so the company's logo can come from a stored domain or their work address */
+  person?: Pick<Person, 'currentOrganizationRaw' | 'currentOrganizationId' | 'emails' | 'primaryEmail'>;
+}) {
   return (
-    <span className="text-ink-3 text-[13px] flex min-w-0 max-w-full">
+    <span className="text-ink-3 text-[13px] flex items-center min-w-0 max-w-full">
       {title && <span className="truncate min-w-0">{title}</span>}
       {title && company && <span className="shrink-0 whitespace-pre"> · </span>}
-      {company && <span className="truncate shrink-0 max-w-full">{company}</span>}
+      {company && (
+        <span className="inline-flex items-center gap-1 shrink-0 max-w-full min-w-0">
+          {person ? (
+            <PersonCompanyLogo person={person} size={14} decorative />
+          ) : (
+            <CompanyLogo name={company} size={14} decorative />
+          )}
+          <span className="truncate">{company}</span>
+        </span>
+      )}
     </span>
   );
 }

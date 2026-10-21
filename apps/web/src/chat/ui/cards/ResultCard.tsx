@@ -11,6 +11,7 @@ import type { ReactNode } from 'react';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { copyText } from '../../../components/approve';
+import { LogoText } from '../../../components/CompanyLogo';
 import { DraftEditor, OutboxStatus } from '../../../components/DraftEditor';
 import { SuggestionCard } from '../../../components/SuggestionCard';
 import { db } from '../../../db/schema';
@@ -205,9 +206,9 @@ function Envelope({ env, block, actions }: { env: ResultEnvelope; block: ToolBlo
                 <Chip tone="neutral">{closeness(person.strength)}</Chip>
                 {stage && <Chip tone="accent">{stage}</Chip>}
               </div>
-              <div className="text-[13px] text-ink-2 truncate">
+              <LogoText person={person} className="text-[13px] text-ink-2">
                 {[person.currentTitle, person.currentOrganizationRaw].filter(Boolean).join(' at ')}
-              </div>
+              </LogoText>
               {(person.lastInteractionAt || lastTouch) && (
                 <div className="text-[12.5px] text-ink-3 mt-0.5">
                   Last contact {person.lastInteractionAt ? relDate(person.lastInteractionAt) : lastTouch}

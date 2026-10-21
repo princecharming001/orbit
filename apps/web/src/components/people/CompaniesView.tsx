@@ -2,6 +2,7 @@ import type { ChatStage } from '@orbit/core';
 import { normalizeCompany, STAGE_LABELS } from '@orbit/core';
 import { Link } from 'react-router-dom';
 import { Chip, EmptyState, relDate } from '../../ui';
+import { CompanyLogo } from '../CompanyLogo';
 import type { ChatRow } from './PipelineBoard';
 import { STAGE_COLOR } from './shared';
 
@@ -46,6 +47,7 @@ export function CompaniesView({ rows, targetNames }: { rows: ChatRow[]; targetNa
             <tr key={g.name}>
               <td className="px-3 py-2 align-top">
                 <span className="flex flex-wrap items-center gap-1.5 font-medium">
+                  <CompanyLogo name={g.name} orgId={g.orgId} size={18} decorative />
                   {g.orgId ? (
                     <Link to={`/companies/${g.orgId}`} className="hover:underline">
                       {g.name}

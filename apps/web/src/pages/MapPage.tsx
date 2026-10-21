@@ -14,6 +14,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { Building2, Search, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { CompanyLogo, LogoText } from '../components/CompanyLogo';
 import { type CardPlace, OrbitMap, useCoarsePointer } from '../components/OrbitMap';
 import type { FocusSpec, WebSpec } from '../components/orbitScene';
 import { LINEAGE } from '../components/orbitScene';
@@ -905,9 +906,9 @@ export function MapPage() {
                     <div className="text-[12px] text-ink-3 truncate">{hovered.currentTitle}</div>
                   )}
                   {hovered.currentOrganizationRaw && (
-                    <div className="text-[12px] text-ink-2 truncate" data-testid="map-tooltip-company">
-                      {hovered.currentOrganizationRaw}
-                    </div>
+                    <LogoText person={hovered} className="text-[12px] text-ink-2">
+                      <span data-testid="map-tooltip-company">{hovered.currentOrganizationRaw}</span>
+                    </LogoText>
                   )}
                 </div>
                 <Link
@@ -965,6 +966,7 @@ export function MapPage() {
                           onClick={() => void openCompany(g.orgId ?? g.label, g.label)}
                           data-testid="map-company-row"
                         >
+                          <CompanyLogo name={g.label} orgId={g.orgId} size={16} decorative />
                           <span className="font-medium truncate">{g.label}</span>
                           <span className="ml-auto text-ink-3 tabular shrink-0">
                             {plural(g.people.length, 'person', 'people')}
@@ -1083,9 +1085,9 @@ export function MapPage() {
                   >
                     {target.displayName}
                   </Link>
-                  <div className="text-[12px] text-ink-3 truncate">
+                  <LogoText person={target} className="text-[12px] text-ink-3">
                     {[target.currentTitle, target.currentOrganizationRaw].filter(Boolean).join(' · ')}
-                  </div>
+                  </LogoText>
                 </div>
               </div>
               {paths === undefined && (
@@ -1175,7 +1177,15 @@ export function MapPage() {
           )}
           {company && (
             <>
-              <div className="font-medium">{company.org?.name ?? company.label}</div>
+              <div className="font-medium flex items-center gap-2">
+                <CompanyLogo
+                  name={company.org?.name ?? company.label}
+                  orgId={company.org?.id}
+                  size={20}
+                  decorative
+                />
+                {company.org?.name ?? company.label}
+              </div>
               {user && (
                 <WarmIntrosPanel
                   user={user}

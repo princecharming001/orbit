@@ -27,6 +27,7 @@ import { ChevronDown, ExternalLink, Linkedin, Mail, Trash2 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { runApproval } from '../components/approve';
+import { PersonCompanyLogo } from '../components/CompanyLogo';
 import { DraftEditor, handoffWhere, OutboxStatus } from '../components/DraftEditor';
 import { MutualConnections } from '../components/MutualConnections';
 import { DossierCard } from '../components/people/DossierCard';
@@ -409,9 +410,12 @@ export function PersonPage() {
                 </Chip>
               )}
             </div>
-            <p className="text-ink-2 mt-0.5">
-              {person.headline ??
-                [person.currentTitle, person.currentOrganizationRaw].filter(Boolean).join(' at ')}
+            <p className="text-ink-2 mt-0.5 flex items-center gap-2 min-w-0">
+              <PersonCompanyLogo person={person} size={18} />
+              <span className="min-w-0">
+                {person.headline ??
+                  [person.currentTitle, person.currentOrganizationRaw].filter(Boolean).join(' at ')}
+              </span>
             </p>
             <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px] text-ink-3">
               {person.location && <span>{person.location}</span>}

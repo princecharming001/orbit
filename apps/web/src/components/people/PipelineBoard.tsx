@@ -4,6 +4,7 @@ import { ChevronRight, MoreHorizontal } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Avatar, cx, relDate } from '../../ui';
+import { LogoText } from '../CompanyLogo';
 import { chatTimeLabel } from '../ScheduleChat';
 import { KIND_LABEL } from '../SuggestionCard';
 import { daysLabel, STAGE_COLOR, wentQuiet } from './shared';
@@ -145,10 +146,12 @@ function BoardCard({
           {(person.currentTitle || person.currentOrganizationRaw) && (
             // one meta line, like a Linear card: the company is the part that matters, so it comes first
             <div
-              className="text-[12px] text-ink-3 truncate"
+              className="text-[12px] text-ink-3"
               title={[person.currentTitle, person.currentOrganizationRaw].filter(Boolean).join(' · ')}
             >
-              {[person.currentOrganizationRaw, person.currentTitle].filter(Boolean).join(' · ')}
+              <LogoText person={person} size={13}>
+                {[person.currentOrganizationRaw, person.currentTitle].filter(Boolean).join(' · ')}
+              </LogoText>
             </div>
           )}
         </div>
