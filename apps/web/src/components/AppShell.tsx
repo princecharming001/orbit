@@ -28,6 +28,7 @@ import { Avatar, calendarDaysBetween, cx, modKeyLabel } from '../ui';
 import { CommandPalette } from './CommandPalette';
 import { DemoBanner } from './DemoBanner';
 import { LinkedInAutoSync } from './LinkedInAutoSync';
+import { MeetingNotesAutoSync } from './MeetingNotesAutoSync';
 import { OutboxScheduler } from './OutboxScheduler';
 
 // the chat is home (New chat and the logo open it); People holds the board and the list, Drafts what waits to be sent
@@ -197,6 +198,7 @@ export function AppShell() {
     <div className="h-full flex">
       <OutboxScheduler />
       <LinkedInAutoSync />
+      <MeetingNotesAutoSync />
       <aside
         className={cx(
           'shrink-0 hidden md:flex flex-col h-full border-r border-line bg-canvas transition-[width] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]',

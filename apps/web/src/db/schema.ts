@@ -41,6 +41,7 @@ export interface IntegrationAccount {
     | 'linkedin_live'
     | 'granola'
     | 'fathom'
+    | 'calcom'
     | 'wispr_export'
     | 'tracker_import'
     | 'demo';

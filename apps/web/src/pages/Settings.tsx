@@ -1,14 +1,17 @@
 import type { StyleCard, TargetCompany, RecruitingGoals as UserGoals } from '@orbit/core';
 import { defaultStyleCard, STYLE_SOURCE_WORDS, TARGET_STATUS_LABELS, yearLabel } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Check, Download, Trash2, X } from 'lucide-react';
+import { Check, Download, FileText, Trash2, X } from 'lucide-react';
 import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { Navigate, NavLink, useNavigate, useParams } from 'react-router-dom';
-import { chatMode, chatModeNote } from '../chat/agent/mode';
+import { chatMode } from '../chat/agent/mode';
 import { AccountSection, MemorySection, OutreachSection } from '../components/account/AccountSettings';
 import { LinkedInLiveCard, WarmIntrosCard } from '../components/ConnectorCards';
+import { AppMark, IntegrationRow, RowGroup, RowStatus } from '../components/IntegrationRow';
 import { LinkedInImportButton } from '../components/LinkedInImport';
+import { CalcomRow, FathomRow } from '../components/NotesAppRows';
 import { ResumeFacetList } from '../components/ResumeFacets';
+import { SchedulingLinkField } from '../components/SchedulingLinkField';
 import { WeeklyTargetSlider } from '../components/WeeklyTargetSlider';
 import { db } from '../db/schema';
 import { deleteAllData, exportAllData, exportFilename } from '../engine/account';
@@ -36,7 +39,7 @@ import {
   updateStyle,
 } from '../engine/style';
 import { addTargetCompanies } from '../engine/targets';
-import { fmtFailureTime, hasLlm, MODEL, testApiKey } from '../integrations/anthropic';
+import { fmtFailureTime, MODEL, testApiKey } from '../integrations/anthropic';
 import { currentGoogleToken, googleClientId } from '../integrations/google';
 import { isAccountMode, isServerUser } from '../integrations/orbitApi';
 import {
@@ -663,182 +666,206 @@ function Integrations() {
   };
   // an Orbit account connected Google at sign-in: the browser's own Google sign-in is not needed
   const viaAccount = isServerUser(user.id);
+  const googleOffered = builtIn || !!google;
   return (
-    <div className="flex flex-col gap-4">
-      {viaAccount && (
-        <Card data-testid="google-via-account">
-          <div className="font-medium">Google (Gmail and Calendar)</div>
-          <p className="text-[13px] text-ink-2 mt-0.5">
-            Connected through your Orbit account. Orbit's server reads new mail and meetings as they come in,
-            and sends only what you approve.{' '}
-            <NavLink
-              to="/settings/account"
-              className="text-ink underline decoration-[#cfcdc9] underline-offset-4 hover:decoration-ink"
-            >
-              Account settings
-            </NavLink>
-          </p>
-        </Card>
-      )}
-      <Card className={cx(!builtIn && !google && 'order-last', viaAccount && 'hidden')}>
-        <div className="font-medium">Google (Gmail and Calendar)</div>
-        {builtIn || google ? (
-          <p className="text-[13px] text-ink-2 mt-0.5">
-            Finds the people you already email and meet, notices replies, and sends the emails you approve.
-            Google asks you to sign in again after about an hour; Orbit reminds you when it needs that.
-          </p>
-        ) : (
-          <p className="text-[13px] text-ink-2 mt-0.5" data-testid="google-unavailable">
-            Not part of this version of Orbit. Everything else works without it: you add people by hand or
-            from LinkedIn, send each email from your own mail app or Gmail and press I sent it, and when
-            someone replies you move their chat on the People board.
-          </p>
-        )}
-        {google && (
-          <p className="text-[12px] mt-1 inline-flex flex-wrap items-center gap-1 text-good">
-            <Check size={13} /> Connected
-            {google.externalAccountId ? ` as ${google.externalAccountId}` : ''} · last sync{' '}
-            {google.lastSyncedAt ? relDate(google.lastSyncedAt) : 'never'}
-            {!token && <span className="text-ink-3"> · signed out, reconnect to sync</span>}
-          </p>
-        )}
-        {(builtIn || google) && (
-          <div className="mt-3 flex gap-2 flex-wrap">
-            <Button variant="primary" onClick={connect} disabled={!!busy || !clientId.trim()}>
-              {busy ? (
-                <>
-                  <Spinner /> {busy}
-                </>
-              ) : google ? (
-                'Reconnect and sync now'
-              ) : (
-                'Connect Google'
-              )}
-            </Button>
-            {google && (
-              <Button
-                variant="ghost"
-                onClick={async () => {
-                  await disconnectGoogleAccount(user.id);
-                  toast.push({ text: 'Disconnected. Imported mail stays until you delete your data.' });
-                }}
-              >
-                Disconnect
-              </Button>
-            )}
-          </div>
-        )}
-        {!builtIn && (
-          <details className="mt-3 text-[13px]">
-            <summary className="cursor-pointer text-ink-3">
-              For developers: connect your own Google Cloud project
-            </summary>
-            <div className="mt-2">
-              <Label
-                htmlFor="settings-client-id"
-                hint="Google Cloud, APIs and Services, Credentials, OAuth client (Web), with this site as an authorised JavaScript origin"
-              >
-                OAuth client ID
-              </Label>
-              <div className="flex flex-wrap gap-2">
-                <Input
-                  id="settings-client-id"
-                  value={clientId}
-                  onChange={(e) => setClientId(e.target.value)}
-                  placeholder="…apps.googleusercontent.com"
-                  className="flex-1 min-w-0"
-                />
-                {!google && (
-                  <Button onClick={connect} disabled={!!busy || !clientId.trim()}>
-                    Connect Google
-                  </Button>
-                )}
-              </div>
-            </div>
-          </details>
-        )}
-      </Card>
-      <LinkedInLiveCard user={user} />
-      <Card>
-        <div className="font-medium">LinkedIn export</div>
-        <p className="text-[13px] text-ink-2 mt-0.5">
-          On LinkedIn: Settings, Data privacy, Get a copy of your data, Connections. Upload the
-          Connections.csv it emails you; uploading again later updates people, never doubles them.
-        </p>
-        {li && (
-          <p className="text-[12px] mt-1 text-good flex items-center gap-1">
-            <Check size={13} /> {String((li.syncState as { rows?: number }).rows ?? 0)} connections ·{' '}
-            {li.lastSyncedAt ? `imported ${relDate(li.lastSyncedAt)}` : ''}
-          </p>
-        )}
-        <LinkedInImportButton label="Upload Connections.csv" testId="settings-linkedin" className="mt-3" />
-      </Card>
-      <WarmIntrosCard user={user} />
-      <Card>
-        <div className="font-medium">Resume</div>
-        <p className="text-[13px] text-ink-2 mt-0.5">
-          Orbit uses it to find people with a shared background and to describe you in first messages.
-        </p>
-        <p className="text-[12px] mt-1 flex items-center gap-1" data-testid="resume-on-file">
-          {resume ? (
-            <span className="text-good inline-flex items-center gap-1">
-              <Check size={13} /> On file: {resume.filename}, added {relDate(resume.createdAt)}
-            </span>
-          ) : (
-            <span className="text-ink-3">No resume yet.</span>
-          )}
-        </p>
-        <label className="mt-3 inline-flex rounded-full focus-within:ring-2 focus-within:ring-accent/40">
-          <input
-            type="file"
-            accept=".pdf,.txt,.md,.docx"
-            className="sr-only"
-            onChange={async (e) => {
-              const f = e.target.files?.[0];
-              if (!f) return;
-              setBusy('Parsing resume…');
-              await saveResume(user, f);
-              setBusy(undefined);
-              toast.push({ text: 'Resume updated.', tone: 'good' });
-            }}
+    <Card className="!p-5">
+      <RowGroup title="Your network">
+        {viaAccount ? (
+          <IntegrationRow
+            testId="google-via-account"
+            mark={<AppMark>G</AppMark>}
+            name="Google"
+            status={
+              <RowStatus>
+                <Check size={12} /> Connected through your Orbit account
+              </RowStatus>
+            }
+            line={
+              <NavLink to="/settings/account" className="underline underline-offset-2 hover:text-ink">
+                Account settings
+              </NavLink>
+            }
           />
-          <span className="inline-flex items-center justify-center gap-1.5 rounded-full font-medium h-9 px-4 text-[14px] bg-canvas border border-line hover:bg-canvas-2 cursor-pointer">
-            {resume ? 'Upload a newer resume' : 'Upload resume'}
-          </span>
-        </label>
-        {facets.length > 0 && (
-          <div className="mt-3">
-            <button
-              type="button"
-              className="text-[13px] underline underline-offset-2 text-ink-2 hover:text-ink"
-              aria-expanded={showFacets}
-              onClick={() => setShowFacets((v) => !v)}
-              data-testid="settings-resume-facets"
-            >
-              {showFacets ? 'Hide what Orbit read' : 'Check or fix what Orbit read from it'}
-            </button>
-            {showFacets && (
-              <ResumeFacetList facets={facets} readBy={resume?.parseSource === 'llm' ? 'Claude' : 'Orbit'} />
+        ) : (
+          <IntegrationRow
+            mark={<AppMark>G</AppMark>}
+            name="Google"
+            status={
+              google ? (
+                <RowStatus tone={token ? 'good' : 'muted'}>
+                  <Check size={12} /> Connected
+                  {google.externalAccountId ? ` as ${google.externalAccountId}` : ''} · synced{' '}
+                  {google.lastSyncedAt ? relDate(google.lastSyncedAt) : 'never'}
+                  {!token && ' · signed out, reconnect to sync'}
+                </RowStatus>
+              ) : undefined
+            }
+            line={
+              googleOffered ? (
+                'Email and meetings you already have'
+              ) : (
+                <span data-testid="google-unavailable">
+                  Not part of this version of Orbit. Send from your own mail app and press I sent it.
+                </span>
+              )
+            }
+            actions={
+              googleOffered ? (
+                <>
+                  <Button
+                    size="sm"
+                    variant={google ? 'secondary' : 'primary'}
+                    onClick={connect}
+                    disabled={!!busy || !clientId.trim()}
+                  >
+                    {busy ? (
+                      <>
+                        <Spinner /> {busy}
+                      </>
+                    ) : google ? (
+                      'Sync now'
+                    ) : (
+                      'Connect'
+                    )}
+                  </Button>
+                  {google && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={async () => {
+                        await disconnectGoogleAccount(user.id);
+                        toast.push({ text: 'Disconnected. Imported mail stays until you delete your data.' });
+                      }}
+                    >
+                      Disconnect
+                    </Button>
+                  )}
+                </>
+              ) : undefined
+            }
+          >
+            {!builtIn && (
+              <details className="text-[12.5px]">
+                <summary className="cursor-pointer text-ink-3 w-fit">
+                  For developers: your own Google Cloud project
+                </summary>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <Input
+                    id="settings-client-id"
+                    aria-label="OAuth client ID"
+                    value={clientId}
+                    onChange={(e) => setClientId(e.target.value)}
+                    placeholder="…apps.googleusercontent.com"
+                    className="flex-1 min-w-0"
+                  />
+                  {!google && (
+                    <Button size="sm" onClick={connect} disabled={!!busy || !clientId.trim()}>
+                      Connect
+                    </Button>
+                  )}
+                </div>
+              </details>
             )}
-          </div>
+          </IntegrationRow>
         )}
-      </Card>
-      <Card>
-        <div className="font-medium">Meeting notes</div>
-        <ul className="text-[13px] text-ink-2 mt-1 space-y-1 list-disc pl-5">
-          <li>
-            <strong className="font-medium text-ink">Type or dictate</strong> in Add note after a chat. Your
-            phone's or computer's dictation works in any Orbit text box.
-          </li>
-          <li>
-            <strong className="font-medium text-ink">Notes from a notetaker app</strong> (Granola, Otter,
-            Fathom and similar): copy the note or export the transcript as text, then paste or upload it in
-            Add note.
-          </li>
-        </ul>
-      </Card>
-      <ClaudeCard />
-    </div>
+        <LinkedInLiveCard user={user} />
+        <IntegrationRow
+          mark={<AppMark>csv</AppMark>}
+          name="LinkedIn export"
+          status={
+            li ? (
+              <RowStatus>
+                <Check size={12} /> {String((li.syncState as { rows?: number }).rows ?? 0)} connections
+                {li.lastSyncedAt ? ` · imported ${relDate(li.lastSyncedAt)}` : ''}
+              </RowStatus>
+            ) : undefined
+          }
+          line={
+            <>
+              Upload Connections.csv{' '}
+              <details className="inline">
+                <summary className="inline cursor-pointer underline underline-offset-2 hover:text-ink">
+                  How?
+                </summary>
+                <span className="block mt-1">
+                  On LinkedIn: Settings, Data privacy, Get a copy of your data, Connections. Upload the file
+                  it emails you; uploading again updates people, never doubles them.
+                </span>
+              </details>
+            </>
+          }
+          actions={<LinkedInImportButton label="Upload" testId="settings-linkedin" />}
+        />
+        <WarmIntrosCard user={user} />
+      </RowGroup>
+      <RowGroup title="Meetings">
+        <FathomRow user={user} />
+        <CalcomRow user={user} />
+      </RowGroup>
+      <RowGroup title="About you">
+        <IntegrationRow
+          mark={
+            <AppMark>
+              <FileText size={15} />
+            </AppMark>
+          }
+          name="Resume"
+          status={
+            <span className="text-[12px]" data-testid="resume-on-file">
+              {resume ? (
+                <span className="text-good inline-flex items-center gap-1">
+                  <Check size={12} /> On file: {resume.filename}, added {relDate(resume.createdAt)}
+                </span>
+              ) : (
+                <span className="text-ink-3">No resume yet</span>
+              )}
+            </span>
+          }
+          line="Finds shared backgrounds and describes you in first messages"
+          actions={
+            <label className="inline-flex rounded-full focus-within:ring-2 focus-within:ring-accent/40">
+              <input
+                type="file"
+                accept=".pdf,.txt,.md,.docx"
+                className="sr-only"
+                onChange={async (e) => {
+                  const f = e.target.files?.[0];
+                  if (!f) return;
+                  setBusy('Parsing resume…');
+                  await saveResume(user, f);
+                  setBusy(undefined);
+                  toast.push({ text: 'Resume updated.', tone: 'good' });
+                }}
+              />
+              <span className="inline-flex items-center justify-center gap-1.5 rounded-full font-medium h-8 px-3 text-[13px] bg-canvas border border-line shadow-[var(--shadow-pill)] hover:bg-canvas-2 cursor-pointer">
+                {resume ? 'Replace' : 'Upload'}
+              </span>
+            </label>
+          }
+        >
+          {facets.length > 0 && (
+            <>
+              <button
+                type="button"
+                className="text-[12.5px] underline underline-offset-2 text-ink-3 hover:text-ink"
+                aria-expanded={showFacets}
+                onClick={() => setShowFacets((v) => !v)}
+                data-testid="settings-resume-facets"
+              >
+                {showFacets ? 'Hide what Orbit read' : 'Check what Orbit read'}
+              </button>
+              {showFacets && (
+                <ResumeFacetList
+                  facets={facets}
+                  readBy={resume?.parseSource === 'llm' ? 'Claude' : 'Orbit'}
+                />
+              )}
+            </>
+          )}
+        </IntegrationRow>
+        <ClaudeCard />
+      </RowGroup>
+    </Card>
   );
 }
 
@@ -891,137 +918,155 @@ function ClaudeCard() {
   // without a key, the chat can still run on Orbit's shared access, so its switch stays usable
   const shared = !keySaved && !!sharedClaudeUrl();
   return (
-    <Card>
-      <div className="font-medium">Claude (optional)</div>
-      <p className="text-[13px] text-ink-2 mt-0.5">
-        You do not need this: Orbit writes every draft on its own, for free. If you already pay for an
-        Anthropic account (the company behind the Claude AI model), add its API key and Claude can write
-        drafts instead; Anthropic bills that account. You choose what Claude may read.
-      </p>
-      <div className="mt-3 flex gap-2">
-        <Input
-          type="password"
-          value={apiKey}
-          onChange={(e) => setApiKey(e.target.value)}
-          placeholder="sk-ant-…"
-          className="max-w-md"
-          aria-label="Anthropic API key"
-        />
-        <Button
-          disabled={!apiKey.trim() && !keySaved}
-          onClick={async () => {
-            update({ anthropicApiKey: apiKey.trim() || undefined });
-            if (!apiKey.trim()) return setKeyStatus('Removed.');
-            setKeyStatus('Testing…');
-            const r = await testApiKey();
-            setPrefs(readPrefs());
-            setKeyStatus(r.ok ? 'Works.' : r.error);
-          }}
-        >
-          {apiKey.trim() || !keySaved ? 'Save and test' : 'Remove key'}
-        </Button>
-      </div>
-      {keyStatus && (
-        <p className={cx('text-[12px] mt-1', keyStatus === 'Works.' ? 'text-good' : 'text-ink-3')}>
-          {keyStatus}
-        </p>
-      )}
-      {hasLlm() && !keyStatus && <p className="text-[12px] mt-1 text-good">Key saved.</p>}
-      {shared && (
-        <p className="text-[12px] mt-2 text-ink-2" data-testid="ai-shared-note">
-          Until you add a key, the chat uses Orbit's shared Claude access, with a daily limit per visitor.
-          Your own key lifts that limit and lets Claude write drafts too.
-        </p>
-      )}
-      <fieldset className="mt-4 space-y-2" disabled={!keySaved && !shared} data-testid="ai-usage">
-        <legend className="text-[13px] font-medium">What Claude may do</legend>
-        {/* reading synced email only exists where Google does */}
-        {AI_FEATURES.filter((f) => f.key !== 'emailTriage' || sources.google).map((f) => (
-          <label
-            key={f.key}
-            className={cx(
-              'flex items-start gap-2 text-[13.5px]',
-              !keySaved && !(shared && f.key === 'chat') && 'opacity-60',
-            )}
-          >
-            <input
-              type="checkbox"
-              className="mt-1"
-              disabled={!keySaved && !(shared && f.key === 'chat')}
-              data-testid={`ai-feature-${f.key}`}
-              checked={features[f.key]}
-              onChange={(e) => {
-                const on = e.target.checked;
-                // only this one switch changes; the others keep whatever is stored, even if set in another tab
-                setPrefs(
-                  updatePrefs((cur) => ({ ...cur, llmFeatures: { ...llmFeatures(cur), [f.key]: on } })),
-                );
+    <IntegrationRow
+      mark={<AppMark>AI</AppMark>}
+      name="Claude"
+      status={
+        keySaved ? (
+          <RowStatus>
+            <Check size={12} /> Key saved.
+          </RowStatus>
+        ) : undefined
+      }
+      line={
+        shared
+          ? 'Included for the chat; your own key lifts the daily limit'
+          : 'Optional: Orbit writes drafts on its own without it'
+      }
+    >
+      <div className="space-y-2">
+        <details className="text-[12.5px]" open={!!keyStatus}>
+          <summary className="cursor-pointer text-ink-3 hover:text-ink w-fit">
+            {keySaved ? 'Change or remove your key' : 'Use your own Anthropic key'}
+          </summary>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <Input
+              type="password"
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              placeholder="sk-ant-…"
+              className="max-w-sm flex-1 min-w-0"
+              aria-label="Anthropic API key"
+            />
+            <Button
+              size="sm"
+              disabled={!apiKey.trim() && !keySaved}
+              onClick={async () => {
+                update({ anthropicApiKey: apiKey.trim() || undefined });
+                if (!apiKey.trim()) return setKeyStatus('Removed.');
+                setKeyStatus('Testing…');
+                const r = await testApiKey();
+                setPrefs(readPrefs());
+                setKeyStatus(r.ok ? 'Works.' : r.error);
               }}
-            />
-            <span>
-              <strong className="font-medium">{f.label}.</strong>{' '}
-              <span className="text-ink-2">{f.sends}</span>
-            </span>
-          </label>
-        ))}
-      </fieldset>
-      <p className="text-[12px] text-ink-3 mt-2" data-testid="ai-chat-row">
-        Chat: {chatMode() === 'llm' ? `Claude, ${MODEL}` : 'Orbit commands only'}. Today: {usage.requests} of{' '}
-        {reqCap} requests.
-        {chatModeNote() ? ` ${chatModeNote()!.text}` : ''}
-      </p>
-      <details className="mt-4 text-[13px]" data-testid="ai-advanced">
-        <summary className="cursor-pointer text-ink-3">Advanced: daily limits, usage and privacy</summary>
-        <p className="text-[12px] text-ink-3 mt-2">
-          Model: {MODEL}. The key is kept in this browser only, separate from your Orbit data and never in the
-          export. Any script running on this page could read it, so Orbit only allows its own code
-          {sources.google ? " and Google's sign-in script" : ''} to run here.
-        </p>
-        <div className="mt-3 grid @[40rem]:grid-cols-2 gap-3 max-w-lg items-start">
-          <div>
-            <Label htmlFor="ai-req">Requests per day</Label>
-            <Input
-              id="ai-req"
-              type="number"
-              min={0}
-              value={reqCap}
-              data-testid="ai-cap-requests"
-              onChange={(e) =>
-                update({ llmDailyRequestCap: Math.max(0, Math.floor(Number(e.target.value) || 0)) })
-              }
-            />
+            >
+              {apiKey.trim() || !keySaved ? 'Save and test' : 'Remove key'}
+            </Button>
           </div>
-          <div>
-            <Label htmlFor="ai-tok">Tokens per day</Label>
-            <Input
-              id="ai-tok"
-              type="number"
-              min={0}
-              step={10000}
-              value={tokCap}
-              onChange={(e) =>
-                update({ llmDailyTokenCap: Math.max(0, Math.floor(Number(e.target.value) || 0)) })
-              }
-            />
+          {keyStatus && (
+            <p className={cx('mt-1', keyStatus === 'Works.' ? 'text-good' : 'text-ink-3')}>{keyStatus}</p>
+          )}
+          {shared && (
+            <p className="mt-1 text-ink-3" data-testid="ai-shared-note">
+              Until you add a key, the chat uses Orbit's shared Claude access, with a daily limit.
+            </p>
+          )}
+        </details>
+        <details className="text-[12.5px]" data-testid="ai-permissions">
+          <summary className="cursor-pointer text-ink-3 hover:text-ink w-fit">What Claude may read</summary>
+          <fieldset className="mt-2 space-y-1.5" disabled={!keySaved && !shared} data-testid="ai-usage">
+            <legend className="sr-only">What Claude may read</legend>
+            {/* reading synced email only exists where Google does */}
+            {AI_FEATURES.filter((f) => f.key !== 'emailTriage' || sources.google).map((f) => (
+              <label
+                key={f.key}
+                className={cx(
+                  'flex items-start gap-2 text-[13px]',
+                  !keySaved && !(shared && f.key === 'chat') && 'opacity-60',
+                )}
+                title={f.sends}
+              >
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  disabled={!keySaved && !(shared && f.key === 'chat')}
+                  data-testid={`ai-feature-${f.key}`}
+                  checked={features[f.key]}
+                  onChange={(e) => {
+                    const on = e.target.checked;
+                    // only this one switch changes; the others keep whatever is stored, even if set in another tab
+                    setPrefs(
+                      updatePrefs((cur) => ({ ...cur, llmFeatures: { ...llmFeatures(cur), [f.key]: on } })),
+                    );
+                  }}
+                />
+                <span>
+                  <span className="font-medium text-ink">{f.label}</span>
+                  <span className="block text-[12px] text-ink-3">{f.sends}</span>
+                </span>
+              </label>
+            ))}
+          </fieldset>
+        </details>
+        <p className="text-[12px] text-ink-3" data-testid="ai-chat-row">
+          Chat: {chatMode() === 'llm' ? `Claude, ${MODEL}` : 'Orbit commands only'} · today {usage.requests}{' '}
+          of {reqCap} requests
+        </p>
+        <details className="text-[12.5px]" data-testid="ai-advanced">
+          <summary className="cursor-pointer text-ink-3 hover:text-ink w-fit">
+            Daily limits and privacy
+          </summary>
+          <p className="text-[12px] text-ink-3 mt-2">
+            Model: {MODEL}. The key is kept in this browser only, separate from your Orbit data and never in
+            the export. Any script running on this page could read it, so Orbit only allows its own code
+            {sources.google ? " and Google's sign-in script" : ''} to run here.
+          </p>
+          <div className="mt-3 grid @[40rem]:grid-cols-2 gap-3 max-w-lg items-start">
+            <div>
+              <Label htmlFor="ai-req">Requests per day</Label>
+              <Input
+                id="ai-req"
+                type="number"
+                min={0}
+                value={reqCap}
+                data-testid="ai-cap-requests"
+                onChange={(e) =>
+                  update({ llmDailyRequestCap: Math.max(0, Math.floor(Number(e.target.value) || 0)) })
+                }
+              />
+            </div>
+            <div>
+              <Label htmlFor="ai-tok">Tokens per day</Label>
+              <Input
+                id="ai-tok"
+                type="number"
+                min={0}
+                step={10000}
+                value={tokCap}
+                onChange={(e) =>
+                  update({ llmDailyTokenCap: Math.max(0, Math.floor(Number(e.target.value) || 0)) })
+                }
+              />
+            </div>
           </div>
-        </div>
-        <p className="text-[12px] text-ink-3 mt-2">
-          Orbit stops calling Claude for the rest of the day at either limit and uses its own drafts instead.
-          A token is roughly three quarters of a word, counting what is sent and what comes back.
-        </p>
-        <p className="text-[12px] text-ink-3 mt-2" data-testid="ai-usage-today">
-          Today: {usage.requests} of {reqCap} requests,{' '}
-          {(usage.inputTokens + usage.outputTokens).toLocaleString('en-US')} of{' '}
-          {tokCap.toLocaleString('en-US')} tokens.
-        </p>
-      </details>
-      {prefs.lastLlmError && (
-        <p className="text-[12px] text-bad mt-1" data-testid="ai-last-error">
-          Last problem, {fmtFailureTime(prefs.lastLlmError.at, tz)}: {prefs.lastLlmError.message} Orbit used
-          its templates instead.
-        </p>
-      )}
-    </Card>
+          <p className="text-[12px] text-ink-3 mt-2">
+            Orbit stops calling Claude for the rest of the day at either limit and uses its own drafts
+            instead.
+          </p>
+          <p className="text-[12px] text-ink-3 mt-2" data-testid="ai-usage-today">
+            Today: {usage.requests} of {reqCap} requests,{' '}
+            {(usage.inputTokens + usage.outputTokens).toLocaleString('en-US')} of{' '}
+            {tokCap.toLocaleString('en-US')} tokens.
+          </p>
+        </details>
+        {prefs.lastLlmError && (
+          <p className="text-[12px] text-bad" data-testid="ai-last-error">
+            Last problem, {fmtFailureTime(prefs.lastLlmError.at, tz)}: {prefs.lastLlmError.message} Orbit used
+            its templates instead.
+          </p>
+        )}
+      </div>
+    </IntegrationRow>
   );
 }
 
@@ -1607,16 +1652,11 @@ function Limits() {
           does not send reminders when it is closed.
         </p>
         <div className="@[40rem]:col-span-2">
-          <Label htmlFor="lim-sched" optional hint="Calendly, Cal.com or a Google booking page">
-            Scheduling link
-          </Label>
-          <Input
-            id="lim-sched"
-            value={settings.schedulingLink ?? ''}
-            onChange={(e) => upd({ schedulingLink: e.target.value || undefined })}
-            placeholder="https://cal.com/you/20min"
+          <SchedulingLinkField
+            user={user}
+            value={settings.schedulingLink}
+            onChange={(link) => upd({ schedulingLink: link })}
           />
-          <p className="text-[12px] text-ink-3 mt-1">Orbit adds it when you propose times for a chat.</p>
         </div>
       </Card>
     </div>

@@ -37,6 +37,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   linkedin_csv: 'LinkedIn import',
   granola: 'Granola',
   fathom: 'Fathom',
+  calcom: 'Cal.com',
   wispr_export: 'Wispr Flow',
   tracker_import: 'Tracker import',
   demo: 'Demo data',

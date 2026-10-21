@@ -8,6 +8,8 @@ export type IntegrationProvider =
   | 'linkedin_live'
   | 'granola'
   | 'fathom'
+  /** the student's Cal.com account: its event types become the booking link drafts offer */
+  | 'calcom'
   | 'wispr_export'
   | 'tracker_import'
   | 'demo';

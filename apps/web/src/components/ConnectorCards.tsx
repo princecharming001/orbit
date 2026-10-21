@@ -1,5 +1,5 @@
 /**
- * Settings, Integrations: live LinkedIn (Unipile) and warm intros (Village). Both use the same engine functions the
+ * Settings, Integrations rows: live LinkedIn (Unipile) and warm intros (Village). Both use the same engine functions the
  * chat does (engine/linkedinLive.ts, engine/warmIntros.ts); the sample student's run on the mock connector.
  */
 import type { User } from '@orbit/core';
@@ -16,7 +16,8 @@ import {
 import { setWarmIntros, villageAvailable, villageOffered } from '../engine/warmIntros';
 import { usesMockConnectors } from '../integrations/connectorsMock';
 import { subscribePrefs } from '../integrations/prefs';
-import { Button, Card, Modal, relDate, Spinner, useToast } from '../ui';
+import { Button, Modal, relDate, Spinner, useToast } from '../ui';
+import { AppMark, IntegrationRow, RowStatus } from './IntegrationRow';
 
 export function LinkedInLiveCard({ user }: { user: User }) {
   const toast = useToast();
@@ -58,83 +59,84 @@ export function LinkedInLiveCard({ user }: { user: User }) {
     if (r.ok) toast.push({ text: 'LinkedIn disconnected. Everyone already imported stays.' });
   };
   return (
-    <Card>
-      <div data-testid="settings-linkedin-live">
-        <div className="font-medium">LinkedIn (live)</div>
-        {!status.available ? (
-          <p className="text-[13px] text-ink-2 mt-0.5" data-testid="settings-linkedin-live-unavailable">
-            Not part of this version of Orbit yet. Upload your LinkedIn export below instead.
-          </p>
-        ) : (
-          <p className="text-[13px] text-ink-2 mt-0.5">
-            Sign in once and Orbit keeps your connections in sync, and can send the messages you approve.
-            Disconnect any time.
-          </p>
-        )}
-        {status.connected && (
-          <p
-            className="text-[12px] mt-1 inline-flex flex-wrap items-center gap-1 text-good"
-            data-testid="settings-linkedin-live-status"
-          >
-            <Check size={13} /> Connected
-            {status.rows !== undefined ? ` · ${status.rows} connections` : ''} · last synced{' '}
-            {status.lastSyncedAt ? relDate(status.lastSyncedAt) : 'never'}
-            {status.error && <span className="text-bad"> · the last sync did not go through</span>}
-          </p>
-        )}
+    <>
+      <IntegrationRow
+        testId="settings-linkedin-live"
+        mark={<AppMark tone="linkedin">in</AppMark>}
+        name="LinkedIn (live)"
+        status={
+          status.connected ? (
+            <RowStatus tone={status.error ? 'bad' : 'good'} testId="settings-linkedin-live-status">
+              <Check size={12} /> Connected
+              {status.rows !== undefined ? ` · ${status.rows} connections` : ''} · last synced{' '}
+              {status.lastSyncedAt ? relDate(status.lastSyncedAt) : 'never'}
+              {status.error && ' · the last sync did not go through'}
+            </RowStatus>
+          ) : undefined
+        }
+        line={
+          status.available ? (
+            'Sync your connections and send the messages you approve'
+          ) : (
+            <span data-testid="settings-linkedin-live-unavailable">
+              Not part of this version of Orbit yet. Upload your export instead.
+            </span>
+          )
+        }
+        actions={
+          !status.available ? undefined : status.connected ? (
+            <>
+              <Button size="sm" onClick={sync} disabled={!!busy} data-testid="settings-linkedin-live-sync">
+                {busy ? (
+                  <>
+                    <Spinner /> {busy}
+                  </>
+                ) : (
+                  'Sync now'
+                )}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setConfirming(true)}
+                disabled={!!busy}
+                data-testid="settings-linkedin-live-disconnect"
+              >
+                Disconnect
+              </Button>
+            </>
+          ) : (
+            !soon && (
+              <Button
+                size="sm"
+                variant="primary"
+                onClick={connect}
+                disabled={!!busy}
+                data-testid="settings-linkedin-live-connect"
+              >
+                {busy ? (
+                  <>
+                    <Spinner /> {busy}
+                  </>
+                ) : (
+                  'Connect'
+                )}
+              </Button>
+            )
+          )
+        }
+      >
         {soon && (
-          <p className="text-[13px] text-ink-2 mt-2" role="status" data-testid="settings-linkedin-live-soon">
+          <p className="text-[12.5px] text-ink-2" role="status" data-testid="settings-linkedin-live-soon">
             {LIVE_SOON}
           </p>
         )}
         {error && (
-          <p className="text-[13px] text-bad mt-2" role="alert" data-testid="settings-linkedin-live-error">
+          <p className="text-[12.5px] text-bad" role="alert" data-testid="settings-linkedin-live-error">
             {error}
           </p>
         )}
-        {status.available && (
-          <div className="mt-3 flex gap-2 flex-wrap">
-            {status.connected ? (
-              <>
-                <Button onClick={sync} disabled={!!busy} data-testid="settings-linkedin-live-sync">
-                  {busy ? (
-                    <>
-                      <Spinner /> {busy}
-                    </>
-                  ) : (
-                    'Sync now'
-                  )}
-                </Button>
-                <Button
-                  variant="ghost"
-                  onClick={() => setConfirming(true)}
-                  disabled={!!busy}
-                  data-testid="settings-linkedin-live-disconnect"
-                >
-                  Disconnect
-                </Button>
-              </>
-            ) : (
-              !soon && (
-                <Button
-                  variant="primary"
-                  onClick={connect}
-                  disabled={!!busy}
-                  data-testid="settings-linkedin-live-connect"
-                >
-                  {busy ? (
-                    <>
-                      <Spinner /> {busy}
-                    </>
-                  ) : (
-                    'Connect LinkedIn'
-                  )}
-                </Button>
-              )
-            )}
-          </div>
-        )}
-      </div>
+      </IntegrationRow>
       <Modal open={confirming} onClose={() => setConfirming(false)} title="Disconnect LinkedIn?" width={440}>
         <div className="space-y-3 text-[13.5px] text-ink-2" data-testid="settings-linkedin-live-confirm">
           <p>
@@ -155,7 +157,7 @@ export function LinkedInLiveCard({ user }: { user: User }) {
           </div>
         </div>
       </Modal>
-    </Card>
+    </>
   );
 }
 
@@ -167,45 +169,40 @@ export function WarmIntrosCard({ user }: { user: User }) {
   const offered = villageOffered(user);
   const on = villageAvailable(user);
   return (
-    <Card>
-      <div data-testid="settings-warm-intros">
-        <div className="flex items-center gap-2">
-          <div className="font-medium">Warm intros (Village)</div>
-          <span
-            className={on ? 'text-[12px] text-good inline-flex items-center gap-1' : 'text-[12px] text-ink-3'}
-            data-testid="settings-warm-intros-status"
+    <IntegrationRow
+      testId="settings-warm-intros"
+      mark={<AppMark>V</AppMark>}
+      name="Warm intros (Village)"
+      status={
+        <RowStatus tone={on ? 'good' : 'muted'} testId="settings-warm-intros-status">
+          {on ? (
+            <>
+              <Check size={12} /> On
+            </>
+          ) : (
+            'Off'
+          )}
+        </RowStatus>
+      }
+      line={
+        !offered
+          ? 'Not part of this version of Orbit yet.'
+          : usesMockConnectors(user.id)
+            ? 'On for the demo, with sample paths.'
+            : 'Intro paths from Village; it sees the names you look up'
+      }
+      actions={
+        offered && !usesMockConnectors(user.id) ? (
+          <Button
+            size="sm"
+            variant={on ? 'ghost' : 'primary'}
+            onClick={() => setWarmIntros(!on)}
+            data-testid="settings-warm-intros-toggle"
           >
-            {on ? (
-              <>
-                <Check size={13} /> On
-              </>
-            ) : (
-              'Off'
-            )}
-          </span>
-        </div>
-        <p className="text-[13px] text-ink-2 mt-0.5">
-          Adds warm intro paths from Village next to Orbit's own routes. Looking someone up sends their name
-          and company to Village.
-        </p>
-        {!offered ? (
-          <p className="text-[12.5px] text-ink-3 mt-2">Not part of this version of Orbit yet.</p>
-        ) : usesMockConnectors(user.id) ? (
-          <p className="text-[12.5px] text-ink-3 mt-2">
-            On for the demo, with sample paths from its network.
-          </p>
-        ) : (
-          <div className="mt-3">
-            <Button
-              variant={on ? 'ghost' : 'primary'}
-              onClick={() => setWarmIntros(!on)}
-              data-testid="settings-warm-intros-toggle"
-            >
-              {on ? 'Turn off warm intros' : 'Turn on warm intros'}
-            </Button>
-          </div>
-        )}
-      </div>
-    </Card>
+            {on ? 'Turn off' : 'Turn on'}
+          </Button>
+        ) : undefined
+      }
+    />
   );
 }

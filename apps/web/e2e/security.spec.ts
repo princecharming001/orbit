@@ -86,6 +86,8 @@ test.describe('security', () => {
     await page.goto('settings/integrations');
     await expect(page.getByText('Key saved.')).toBeVisible();
     expect(await page.evaluate(() => localStorage.getItem('orbit.prefs.v1'))).toBeNull();
+    // what Claude may read sits behind one disclosure on the Claude row
+    await page.getByTestId('ai-permissions').locator('summary').click();
     await expect(page.getByTestId('ai-feature-drafts')).toBeChecked();
     // reading synced email is only offered where Google is part of the build
     await expect(page.getByTestId('ai-feature-emailTriage')).toHaveCount(0);
@@ -102,6 +104,7 @@ test.describe('security', () => {
     await page.getByTestId('ai-cap-requests').fill('20');
     await page.waitForTimeout(200);
     await page.reload();
+    await page.getByTestId('ai-permissions').locator('summary').click();
     await expect(page.getByTestId('ai-feature-notes')).toBeChecked();
     await page.getByTestId('ai-advanced').locator('summary').click();
     await expect(page.getByTestId('ai-cap-requests')).toHaveValue('20');
