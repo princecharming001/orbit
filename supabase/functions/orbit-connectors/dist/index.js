@@ -330,6 +330,10 @@ function sendBucket(accountId, now, perDay) {
   end.setUTCDate(end.getUTCDate() + 1);
   return { key: `connectors:send:${day}:${accountId}`, limit: perDay, expires: end.toISOString() };
 }
+function searchBucket(accountId, now, perDay) {
+  const b = sendBucket(accountId, now, perDay);
+  return { ...b, key: b.key.replace("connectors:send:", "connectors:search:") };
+}
 var INVITE_NOTE_MAX = 300;
 function cors(origin, allowed) {
   if (!origin || !allowed) return { Vary: "Origin" };
@@ -346,8 +350,8 @@ function json(status, body, headers) {
   });
 }
 var unconfigured2 = (h) => json(503, { error: "not configured" }, { ...h, "x-orbit-connector": "unconfigured" });
-async function sha256(text) {
-  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+async function sha256(text2) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text2));
   return Array.from(new Uint8Array(buf), (x) => x.toString(16).padStart(2, "0")).join("");
 }
 function buckets(visitor, now, limits) {
@@ -387,9 +391,11 @@ var UNIPILE_ROUTES = /* @__PURE__ */ new Set([
   "/relations",
   "/mutuals",
   "/disconnect",
-  "/send"
+  "/send",
+  "/inbox",
+  "/search"
 ]);
-var ACCOUNT_ROUTES = /* @__PURE__ */ new Set(["/relations", "/mutuals", "/disconnect", "/send"]);
+var ACCOUNT_ROUTES = /* @__PURE__ */ new Set(["/relations", "/mutuals", "/disconnect", "/send", "/inbox", "/search"]);
 function makeHandler(deps) {
   const doFetch = deps.fetch ?? fetch;
   const limits = deps.limits ?? DEFAULT_LIMITS;
@@ -472,6 +478,24 @@ function makeHandler(deps) {
           h
         );
     }
+    if (path === "/search") {
+      let searchVerdict;
+      try {
+        searchVerdict = await take([searchBucket(String(body.accountId), now(), deps.searchesPerDay ?? 40)]);
+      } catch {
+        return json(503, { error: "unavailable right now" }, h);
+      }
+      if (!searchVerdict.allowed)
+        return json(
+          200,
+          {
+            ok: false,
+            reason: "limit",
+            message: "You have run as many LinkedIn searches as Orbit allows today. Try again tomorrow."
+          },
+          h
+        );
+    }
     try {
       if (isVillage) return json(200, await villagePaths(village, deps.villageUser, body), h);
       if (path === "/connect/start")
@@ -485,6 +509,8 @@ function makeHandler(deps) {
       if (path === "/send") return json(200, await unipileSend(deps, body, doFetch), h);
       if (path === "/relations") return json(200, await unipileRelations(deps, body, doFetch), h);
       if (path === "/mutuals") return json(200, await unipileMutuals(deps, body, doFetch), h);
+      if (path === "/inbox") return json(200, await unipileInbox(deps, body, doFetch), h);
+      if (path === "/search") return json(200, await unipileSearch(deps, body, doFetch), h);
       return json(200, await unipileDisconnect(deps, body, doFetch), h);
     } catch (e) {
       return json(502, { error: e instanceof Error ? e.message : "upstream error" }, h);
@@ -555,10 +581,10 @@ async function unipileError(res) {
 }
 async function unipileSend(deps, body, doFetch) {
   const accountId = String(body.accountId ?? "");
-  const text = typeof body.text === "string" ? body.text.trim() : "";
+  const text2 = typeof body.text === "string" ? body.text.trim() : "";
   const invite = body.invite === true;
-  if (!text) return { ok: false, reason: "bad_request", message: "The message is empty." };
-  if (invite && text.length > INVITE_NOTE_MAX)
+  if (!text2) return { ok: false, reason: "bad_request", message: "The message is empty." };
+  if (invite && text2.length > INVITE_NOTE_MAX)
     return {
       ok: false,
       reason: "bad_request",
@@ -585,7 +611,7 @@ async function unipileSend(deps, body, doFetch) {
     const res2 = await doFetch(`${deps.unipileBase}/api/v1/users/invite`, {
       method: "POST",
       headers: uHeaders(deps),
-      body: JSON.stringify({ account_id: accountId, provider_id: providerId, message: text })
+      body: JSON.stringify({ account_id: accountId, provider_id: providerId, message: text2 })
     });
     if (res2.status >= 400 && res2.status < 500)
       return { ok: false, reason: "refused", message: await unipileError(res2) };
@@ -595,7 +621,7 @@ async function unipileSend(deps, body, doFetch) {
   }
   const form = new FormData();
   form.append("account_id", accountId);
-  form.append("text", text);
+  form.append("text", text2);
   form.append("attendees_ids", providerId);
   const res = await doFetch(`${deps.unipileBase}/api/v1/chats`, {
     method: "POST",
@@ -643,8 +669,8 @@ async function unipileMutuals(deps, body, doFetch) {
       body: JSON.stringify({
         api: "classic",
         category: "people",
-        network_distance: ["DISTANCE_1"],
-        connections_of: target
+        network_distance: [1],
+        connections_of: [target]
       })
     }
   );
@@ -657,6 +683,136 @@ async function unipileMutuals(deps, body, doFetch) {
       url: m.public_profile_url ?? m.profile_url,
       member_id: m.member_id ?? m.id
     }))
+  };
+}
+var INBOX_MAX_PAGES = 4;
+var INBOX_MAX_CHATS = 40;
+var INBOX_DEFAULT_DAYS = 30;
+async function unipileInbox(deps, body, doFetch) {
+  const accountId = String(body.accountId ?? "");
+  const parsed = typeof body.after === "string" ? new Date(body.after) : void 0;
+  const after = parsed && !Number.isNaN(parsed.getTime()) ? parsed : new Date(Date.now() - INBOX_DEFAULT_DAYS * 864e5);
+  const raw = [];
+  let cursor;
+  for (let page = 0; page < INBOX_MAX_PAGES; page++) {
+    const q = new URLSearchParams({ account_id: accountId, after: after.toISOString(), limit: "250" });
+    if (cursor) q.set("cursor", cursor);
+    const res = await doFetch(`${deps.unipileBase}/api/v1/messages?${q}`, { headers: uHeaders(deps) });
+    if (!res.ok) throw new Error(`unipile ${res.status}`);
+    const b = await res.json();
+    raw.push(...b.items ?? []);
+    cursor = typeof b.cursor === "string" && b.cursor ? b.cursor : void 0;
+    if (!cursor) break;
+  }
+  const kept = raw.filter(
+    (m) => !m.hidden && !m.deleted && !m.is_event && typeof m.chat_id === "string" && typeof m.text === "string" && m.text.trim()
+  );
+  const chatIds = [...new Set(kept.map((m) => String(m.chat_id)))].slice(0, INBOX_MAX_CHATS);
+  const chats = /* @__PURE__ */ new Map();
+  for (const id of chatIds) {
+    const res = await doFetch(`${deps.unipileBase}/api/v1/chats/${encodeURIComponent(id)}`, {
+      headers: uHeaders(deps)
+    });
+    if (!res.ok) continue;
+    const c = await res.json();
+    chats.set(id, {
+      providerId: c.attendee_provider_id || void 0,
+      name: c.name || void 0,
+      // 0 is a 1:1 chat; groups and channels are not one person's reply
+      group: typeof c.type === "number" && c.type !== 0
+    });
+  }
+  const messages = kept.filter((m) => {
+    const c = chats.get(String(m.chat_id));
+    return !!c && !c.group && !!c.providerId;
+  }).map((m) => {
+    const c = chats.get(String(m.chat_id));
+    return {
+      id: String(m.id),
+      chatId: String(m.chat_id),
+      text: String(m.text).trim(),
+      at: String(m.timestamp ?? ""),
+      fromMe: m.is_sender === 1 || m.is_sender === true,
+      senderId: typeof m.sender_id === "string" ? m.sender_id : void 0,
+      counterpart: { providerId: c.providerId, name: c.name }
+    };
+  });
+  const latest = raw.map((m) => String(m.timestamp ?? "")).filter((t) => !Number.isNaN(Date.parse(t))).sort().at(-1);
+  return { messages, latest: latest ?? null, more: !!cursor };
+}
+async function searchParameterId(deps, accountId, type, keywords, doFetch) {
+  const q = new URLSearchParams({ account_id: accountId, type, keywords, limit: "1" });
+  const res = await doFetch(`${deps.unipileBase}/api/v1/linkedin/search/parameters?${q}`, {
+    headers: uHeaders(deps)
+  });
+  if (!res.ok) return void 0;
+  const b = await res.json();
+  const id = b.items?.[0]?.id;
+  return id === void 0 || id === null || id === "" ? void 0 : String(id);
+}
+var text = (v, max = 120) => typeof v === "string" && v.trim() ? v.trim().slice(0, max) : void 0;
+async function unipileSearch(deps, body, doFetch) {
+  const accountId = String(body.accountId ?? "");
+  const keywords = [text(body.keywords, 200)];
+  const company = text(body.company);
+  const school = text(body.school);
+  const location = text(body.location);
+  const title = text(body.title);
+  const distance = Array.isArray(body.distance) ? [...new Set(body.distance.map(Number).filter((n) => n === 1 || n === 2 || n === 3))] : [];
+  const search = {
+    api: "classic",
+    category: "people",
+    network_distance: distance.length ? distance : [2, 3]
+  };
+  const advanced = {};
+  if (title) advanced.title = title;
+  if (company) {
+    const id = await searchParameterId(deps, accountId, "COMPANY", company, doFetch);
+    if (id) search.company = [id];
+    else advanced.company = company;
+  }
+  if (school) {
+    const id = await searchParameterId(deps, accountId, "SCHOOL", school, doFetch);
+    if (id) search.school = [id];
+    else advanced.school = school;
+  }
+  if (location) {
+    const id = await searchParameterId(deps, accountId, "LOCATION", location, doFetch);
+    if (id) search.location = [id];
+    else keywords.push(location);
+  }
+  const kw = keywords.filter(Boolean).join(" ");
+  if (kw) search.keywords = kw;
+  if (Object.keys(advanced).length) search.advanced_keywords = advanced;
+  if (!kw && !Object.keys(advanced).length && !search.company && !search.school && !search.location)
+    return { ok: false, reason: "bad_request", message: "Say who to look for: a role, company, school or name." };
+  const q = new URLSearchParams({ account_id: accountId, limit: "10" });
+  if (typeof body.cursor === "string" && body.cursor) q.set("cursor", body.cursor);
+  const res = await doFetch(`${deps.unipileBase}/api/v1/linkedin/search?${q}`, {
+    method: "POST",
+    headers: uHeaders(deps),
+    body: JSON.stringify(search)
+  });
+  if (res.status >= 400 && res.status < 500)
+    return { ok: false, reason: "refused", message: await unipileError(res) };
+  if (!res.ok) throw new Error(`unipile ${res.status}`);
+  const b = await res.json();
+  const degree = (d) => {
+    const m = /(\d)/.exec(String(d ?? ""));
+    return m ? Number(m[1]) : void 0;
+  };
+  return {
+    ok: true,
+    people: (b.items ?? []).filter((p) => typeof p.name === "string" && p.name.trim() && p.id).map((p) => ({
+      memberId: String(p.id),
+      name: String(p.name).trim(),
+      headline: text(p.headline, 220),
+      location: text(p.location),
+      profileUrl: text(p.public_profile_url, 300) ?? text(p.profile_url, 300),
+      distance: degree(p.network_distance)
+    })),
+    cursor: b.cursor ?? null,
+    total: typeof b.paging?.total_count === "number" ? b.paging.total_count : void 0
   };
 }
 function looksLikeDomain(s) {
@@ -771,6 +927,7 @@ Deno.serve(
     // account tokens are signed with the service role key, which never leaves the server
     signingKey: serviceKey || void 0,
     sendsPerDay: num("ORBIT_LINKEDIN_SENDS_PER_DAY", 25),
+    searchesPerDay: num("ORBIT_LINKEDIN_SEARCHES_PER_DAY", 40),
     limits: {
       perMinute: num("ORBIT_CONNECTORS_PER_MINUTE", 120),
       perDay: num("ORBIT_CONNECTORS_PER_DAY", 3e3)

@@ -26,6 +26,7 @@ import { archiveGoal, GOAL_KIND_LABELS, GOAL_KIND_TITLES, listGoals, saveGoal } 
 import { connectAndSyncGoogle } from '../engine/integrations';
 import { connectionsText, importLinkedInExport } from '../engine/linkedin';
 import { connectLinkedInLive, liveLinkedInAvailable } from '../engine/linkedinLive';
+import { saveResume } from '../engine/resume';
 import { pullNow } from '../engine/serverSync';
 import {
   removeTargetCompany,
@@ -313,6 +314,13 @@ function StepYou({ onNext }: { onNext: () => void }) {
     graduationYear: user.graduationYear ? String(user.graduationYear) : '',
   });
   const [busy, setBusy] = useState(false);
+  // the resume is optional and saved as soon as it is picked, so Back and Continue never lose it
+  const resume = useLiveQuery(
+    async () => (await db.resumes.where('userId').equals(user.id).toArray()).find((r) => r.isCurrent) ?? null,
+    [user.id],
+  );
+  const [reading, setReading] = useState(false);
+  const [resumeError, setResumeError] = useState<string>();
   // a school domain typed in Settings (not the one an email implied) is kept; otherwise the email decides it
   const emailDomain = (e: string) => (e.includes('@') ? e.split('@')[1]!.trim().toLowerCase() : '');
   const ownDomain =
@@ -422,8 +430,47 @@ function StepYou({ onNext }: { onNext: () => void }) {
             </ObSelect>
           </div>
         </div>
+        <div>
+          <ObLabel htmlFor="ob-resume" hint="Optional">
+            Resume
+          </ObLabel>
+          <label
+            className="flex items-center gap-3 h-11 px-3.5 rounded-[10px] border border-dashed border-line bg-white cursor-pointer hover:border-[#cfcdc9] focus-within:ring-[3px] focus-within:ring-ink/15"
+            data-testid="ob-resume"
+          >
+            <input
+              id="ob-resume"
+              type="file"
+              accept=".pdf,.txt,.md,.docx"
+              className="sr-only"
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                e.target.value = '';
+                if (!file) return;
+                setResumeError(undefined);
+                setReading(true);
+                try {
+                  await saveResume(user, file);
+                } catch (err) {
+                  setResumeError(err instanceof Error ? err.message : 'Orbit could not read that file.');
+                } finally {
+                  setReading(false);
+                }
+              }}
+            />
+            <Upload size={16} className="text-ink-3 shrink-0" aria-hidden />
+            <span className="text-[14px] text-ink-2 truncate">
+              {reading ? 'Reading your resume…' : resume ? resume.filename : 'Add your resume (PDF or Word)'}
+            </span>
+            {resume && !reading && <Check size={15} className="ml-auto text-good shrink-0" aria-hidden />}
+          </label>
+          <p className="mt-1.5 text-[12.5px] text-ink-3">
+            {resumeError ??
+              'Orbit uses it to describe you in first messages and to spot people with your background.'}
+          </p>
+        </div>
       </div>
-      <ObPrimary type="submit" className="mt-8" disabled={missing.length > 0 || busy}>
+      <ObPrimary type="submit" className="mt-8" disabled={missing.length > 0 || busy || reading}>
         Continue
       </ObPrimary>
       {missing.length > 0 && (

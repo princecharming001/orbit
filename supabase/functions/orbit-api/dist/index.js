@@ -3407,6 +3407,60 @@ function wordCount(s) {
   return s.trim() ? s.trim().split(/\s+/).length : 0;
 }
 
+// packages/core/src/style/card.ts
+function defaultStyleCard(preset, firstName) {
+  const base = {
+    avgSentenceWords: 14,
+    avgMessageWords: 90,
+    contractions: true,
+    exclamationsPerMessage: 0.3,
+    emoji: false,
+    characteristicPhrases: [],
+    avoid: [],
+    builtFromCount: 0,
+    version: 1
+  };
+  if (preset === "formal")
+    return {
+      ...base,
+      greetingPatterns: ["Dear {first},", "Hello {first},"],
+      signoffs: [`Kind regards,
+${firstName}`, `Best regards,
+${firstName}`],
+      formality: 0.85,
+      contractions: false,
+      exclamationsPerMessage: 0,
+      notes: "Formal preset."
+    };
+  if (preset === "direct")
+    return {
+      ...base,
+      greetingPatterns: ["Hi {first},", "{first},"],
+      signoffs: [`Thanks,
+${firstName}`, `Best,
+${firstName}`],
+      formality: 0.5,
+      avgSentenceWords: 11,
+      avgMessageWords: 70,
+      notes: "Direct preset: short sentences, one ask."
+    };
+  return {
+    ...base,
+    greetingPatterns: ["Hi {first},", "Hey {first},"],
+    signoffs: [`Best,
+${firstName}`, `Thanks so much,
+${firstName}`],
+    formality: 0.4,
+    exclamationsPerMessage: 0.6,
+    notes: "Warm preset."
+  };
+}
+var FILLER = new Set(
+  "i hope you|hope you are|let me know|thank you for|thanks for the|i would love|would love to|you have time|have time to|look forward to|i wanted to|to hear from|hear from you|if you have|in the next|for your time".split(
+    "|"
+  )
+);
+
 // packages/core/src/drafts/templates.ts
 var MAX_WORDS = {
   outreach: 100,
@@ -4628,55 +4682,6 @@ async function moveChat(db2, userId, chatId, to, reason, now, actor = "system") 
     values (${userId}::uuid, ${chatId}::uuid, ${c.stage}, ${to}, 'applied', ${actor}, ${reason}, ${now}::timestamptz)`;
 }
 
-// packages/core/src/style/card.ts
-function defaultStyleCard(preset, firstName) {
-  const base = {
-    avgSentenceWords: 14,
-    avgMessageWords: 90,
-    contractions: true,
-    exclamationsPerMessage: 0.3,
-    emoji: false,
-    characteristicPhrases: [],
-    avoid: [],
-    builtFromCount: 0,
-    version: 1
-  };
-  if (preset === "formal")
-    return {
-      ...base,
-      greetingPatterns: ["Dear {first},", "Hello {first},"],
-      signoffs: [`Kind regards,
-${firstName}`, `Best regards,
-${firstName}`],
-      formality: 0.85,
-      contractions: false,
-      exclamationsPerMessage: 0,
-      notes: "Formal preset."
-    };
-  if (preset === "direct")
-    return {
-      ...base,
-      greetingPatterns: ["Hi {first},", "{first},"],
-      signoffs: [`Thanks,
-${firstName}`, `Best,
-${firstName}`],
-      formality: 0.5,
-      avgSentenceWords: 11,
-      avgMessageWords: 70,
-      notes: "Direct preset: short sentences, one ask."
-    };
-  return {
-    ...base,
-    greetingPatterns: ["Hi {first},", "Hey {first},"],
-    signoffs: [`Best,
-${firstName}`, `Thanks so much,
-${firstName}`],
-    formality: 0.4,
-    exclamationsPerMessage: 0.6,
-    notes: "Warm preset."
-  };
-}
-
 // supabase/functions/_shared/compose/context.ts
 var USER_CONTEXT_MAX_CHARS = 4800;
 async function loadUserRow(db2, userId) {
@@ -4778,7 +4783,8 @@ function facetLines(parsed) {
 }
 function styleCardOf(u2) {
   const card = u2.settings.style_card;
-  if (card && typeof card === "object" && (card.builtFromCount ?? 0) >= 5) return card;
+  if (card && typeof card === "object" && ((card.builtFromCount ?? 0) >= 3 || card.custom))
+    return card;
   const preset = u2.settings.tone_preset;
   return defaultStyleCard(preset === "direct" || preset === "formal" ? preset : "warm", userFirstName(u2));
 }

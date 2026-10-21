@@ -5,13 +5,16 @@
  * of Deno APIs so it runs under Node tests.
  *
  * Routes (POST, JSON):
- *   /connect/start, /connect/status, /relations, /mutuals, /disconnect, /send  -> Unipile
+ *   /connect/start, /connect/status, /relations, /mutuals, /disconnect, /send,
+ *   /inbox, /search                                                            -> Unipile
  *   /paths                                                                     -> Village
  *
  * A connected account's routes need the account token /connect/status handed out (an HMAC of the account id with
  * the server's signing key), so knowing someone's Unipile account id is not enough to read their connections or
  * send as them. /send sends one message the student approved: a direct message to a connection, or a connection
- * request with a note to anyone else, at most ORBIT_LINKEDIN_SENDS_PER_DAY (25) per account per day.
+ * request with a note to anyone else, at most ORBIT_LINKEDIN_SENDS_PER_DAY (25) per account per day. /inbox reads
+ * the account's recent LinkedIn messages (so replies reach the pipeline on their own) and /search runs a LinkedIn
+ * people search beyond the student's own network, at most ORBIT_LINKEDIN_SEARCHES_PER_DAY (40) per account per day.
  * A route whose provider key is not set returns 503 with x-orbit-connector: unconfigured, so the app shows the
  * CSV fallback (or its own graph) instead. Pasting the key as a function secret turns it on with no redeploy of
  * the app. The exact upstream request and response mapping lives in the adapter functions, so a live test with real
@@ -67,6 +70,8 @@ export interface ConnectorDeps {
   signingKey?: string;
   /** LinkedIn messages and requests one account may send per day */
   sendsPerDay?: number;
+  /** LinkedIn people searches one account may run per day (LinkedIn throttles heavy searching) */
+  searchesPerDay?: number;
 }
 
 /** A connected account's token: base64url HMAC-SHA256 of its id with the signing key. */
@@ -107,6 +112,12 @@ export function sendBucket(accountId: string, now: Date, perDay: number): Bucket
   const end = new Date(`${day}T00:00:00Z`);
   end.setUTCDate(end.getUTCDate() + 1);
   return { key: `connectors:send:${day}:${accountId}`, limit: perDay, expires: end.toISOString() };
+}
+
+/** The per-account LinkedIn search bucket for today. */
+export function searchBucket(accountId: string, now: Date, perDay: number): Bucket {
+  const b = sendBucket(accountId, now, perDay);
+  return { ...b, key: b.key.replace('connectors:send:', 'connectors:search:') };
 }
 
 /** LinkedIn caps a connection-request note at this many characters. */
@@ -181,9 +192,11 @@ const UNIPILE_ROUTES = new Set([
   '/mutuals',
   '/disconnect',
   '/send',
+  '/inbox',
+  '/search',
 ]);
 /** Routes that act on a connected account, so need its token. */
-const ACCOUNT_ROUTES = new Set(['/relations', '/mutuals', '/disconnect', '/send']);
+const ACCOUNT_ROUTES = new Set(['/relations', '/mutuals', '/disconnect', '/send', '/inbox', '/search']);
 
 export function makeHandler(deps: ConnectorDeps): (req: Request) => Promise<Response> {
   const doFetch = deps.fetch ?? fetch;
@@ -275,6 +288,24 @@ export function makeHandler(deps: ConnectorDeps): (req: Request) => Promise<Resp
           h,
         );
     }
+    if (path === '/search') {
+      let searchVerdict: { allowed: boolean };
+      try {
+        searchVerdict = await take([searchBucket(String(body.accountId), now(), deps.searchesPerDay ?? 40)]);
+      } catch {
+        return json(503, { error: 'unavailable right now' }, h);
+      }
+      if (!searchVerdict.allowed)
+        return json(
+          200,
+          {
+            ok: false,
+            reason: 'limit',
+            message: 'You have run as many LinkedIn searches as Orbit allows today. Try again tomorrow.',
+          },
+          h,
+        );
+    }
 
     try {
       if (isVillage) return json(200, await villagePaths(village, deps.villageUser!, body), h);
@@ -290,6 +321,8 @@ export function makeHandler(deps: ConnectorDeps): (req: Request) => Promise<Resp
       if (path === '/send') return json(200, await unipileSend(deps, body, doFetch), h);
       if (path === '/relations') return json(200, await unipileRelations(deps, body, doFetch), h);
       if (path === '/mutuals') return json(200, await unipileMutuals(deps, body, doFetch), h);
+      if (path === '/inbox') return json(200, await unipileInbox(deps, body, doFetch), h);
+      if (path === '/search') return json(200, await unipileSearch(deps, body, doFetch), h);
       return json(200, await unipileDisconnect(deps, body, doFetch), h);
     } catch (e) {
       return json(502, { error: e instanceof Error ? e.message : 'upstream error' }, h);
@@ -485,8 +518,8 @@ async function unipileMutuals(deps: ConnectorDeps, body: Record<string, unknown>
       body: JSON.stringify({
         api: 'classic',
         category: 'people',
-        network_distance: ['DISTANCE_1'],
-        connections_of: target,
+        network_distance: [1],
+        connections_of: [target],
       }),
     },
   );
@@ -499,6 +532,189 @@ async function unipileMutuals(deps: ConnectorDeps, body: Record<string, unknown>
       url: m.public_profile_url ?? m.profile_url,
       member_id: m.member_id ?? m.id,
     })),
+  };
+}
+
+/** At most this many pages of 250 messages per inbox read, and this many chats looked up for who they are with. */
+export const INBOX_MAX_PAGES = 4;
+export const INBOX_MAX_CHATS = 40;
+/** Without an `after`, the inbox reads back this far. */
+const INBOX_DEFAULT_DAYS = 30;
+
+/**
+ * The account's LinkedIn messages since `after`, newest first as Unipile pages them, each with the person on the
+ * other side of its 1:1 chat (looked up once per chat). Group chats, events and hidden or deleted messages are left
+ * out. `latest` is the newest message time, the next read's `after`.
+ */
+async function unipileInbox(deps: ConnectorDeps, body: Record<string, unknown>, doFetch: typeof fetch) {
+  const accountId = String(body.accountId ?? '');
+  const parsed = typeof body.after === 'string' ? new Date(body.after) : undefined;
+  const after =
+    parsed && !Number.isNaN(parsed.getTime())
+      ? parsed
+      : new Date(Date.now() - INBOX_DEFAULT_DAYS * 86_400_000);
+  const raw: Record<string, unknown>[] = [];
+  let cursor: string | undefined;
+  for (let page = 0; page < INBOX_MAX_PAGES; page++) {
+    const q = new URLSearchParams({ account_id: accountId, after: after.toISOString(), limit: '250' });
+    if (cursor) q.set('cursor', cursor);
+    const res = await doFetch(`${deps.unipileBase}/api/v1/messages?${q}`, { headers: uHeaders(deps) });
+    if (!res.ok) throw new Error(`unipile ${res.status}`);
+    const b = (await res.json()) as { items?: Record<string, unknown>[]; cursor?: string | null };
+    raw.push(...(b.items ?? []));
+    cursor = typeof b.cursor === 'string' && b.cursor ? b.cursor : undefined;
+    if (!cursor) break;
+  }
+  const kept = raw.filter(
+    (m) =>
+      !m.hidden &&
+      !m.deleted &&
+      !m.is_event &&
+      typeof m.chat_id === 'string' &&
+      typeof m.text === 'string' &&
+      m.text.trim(),
+  );
+  // who each chat is with: one lookup per chat, most recent chats first
+  const chatIds = [...new Set(kept.map((m) => String(m.chat_id)))].slice(0, INBOX_MAX_CHATS);
+  const chats = new Map<string, { providerId?: string; name?: string; group: boolean }>();
+  for (const id of chatIds) {
+    const res = await doFetch(`${deps.unipileBase}/api/v1/chats/${encodeURIComponent(id)}`, {
+      headers: uHeaders(deps),
+    });
+    if (!res.ok) continue;
+    const c = (await res.json()) as { attendee_provider_id?: string; name?: string; type?: number };
+    chats.set(id, {
+      providerId: c.attendee_provider_id || undefined,
+      name: c.name || undefined,
+      // 0 is a 1:1 chat; groups and channels are not one person's reply
+      group: typeof c.type === 'number' && c.type !== 0,
+    });
+  }
+  const messages = kept
+    .filter((m) => {
+      const c = chats.get(String(m.chat_id));
+      return !!c && !c.group && !!c.providerId;
+    })
+    .map((m) => {
+      const c = chats.get(String(m.chat_id))!;
+      return {
+        id: String(m.id),
+        chatId: String(m.chat_id),
+        text: String(m.text).trim(),
+        at: String(m.timestamp ?? ''),
+        fromMe: m.is_sender === 1 || m.is_sender === true,
+        senderId: typeof m.sender_id === 'string' ? m.sender_id : undefined,
+        counterpart: { providerId: c.providerId!, name: c.name },
+      };
+    });
+  const latest = raw
+    .map((m) => String(m.timestamp ?? ''))
+    .filter((t) => !Number.isNaN(Date.parse(t)))
+    .sort()
+    .at(-1);
+  return { messages, latest: latest ?? null, more: !!cursor };
+}
+
+/** The first LinkedIn search-parameter id for a name ("Goldman Sachs" -> its company id), if LinkedIn knows it. */
+async function searchParameterId(
+  deps: ConnectorDeps,
+  accountId: string,
+  type: 'COMPANY' | 'SCHOOL' | 'LOCATION',
+  keywords: string,
+  doFetch: typeof fetch,
+): Promise<string | undefined> {
+  const q = new URLSearchParams({ account_id: accountId, type, keywords, limit: '1' });
+  const res = await doFetch(`${deps.unipileBase}/api/v1/linkedin/search/parameters?${q}`, {
+    headers: uHeaders(deps),
+  });
+  if (!res.ok) return undefined;
+  const b = (await res.json()) as { items?: { id?: string | number }[] };
+  const id = b.items?.[0]?.id;
+  return id === undefined || id === null || id === '' ? undefined : String(id);
+}
+
+const text = (v: unknown, max = 120) =>
+  typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : undefined;
+
+/**
+ * A LinkedIn people search (classic) from the student's account: keywords and a title as written, and a company,
+ * school and location by name (each turned into LinkedIn's id first; a name LinkedIn does not know becomes a
+ * keyword instead). By default it looks past the student's own connections (2nd and 3rd degree).
+ */
+async function unipileSearch(deps: ConnectorDeps, body: Record<string, unknown>, doFetch: typeof fetch) {
+  const accountId = String(body.accountId ?? '');
+  const keywords = [text(body.keywords, 200)];
+  const company = text(body.company);
+  const school = text(body.school);
+  const location = text(body.location);
+  const title = text(body.title);
+  const distance = Array.isArray(body.distance)
+    ? [...new Set(body.distance.map(Number).filter((n) => n === 1 || n === 2 || n === 3))]
+    : [];
+  const search: Record<string, unknown> = {
+    api: 'classic',
+    category: 'people',
+    network_distance: distance.length ? distance : [2, 3],
+  };
+  const advanced: Record<string, string> = {};
+  if (title) advanced.title = title;
+  if (company) {
+    const id = await searchParameterId(deps, accountId, 'COMPANY', company, doFetch);
+    if (id) search.company = [id];
+    else advanced.company = company;
+  }
+  if (school) {
+    const id = await searchParameterId(deps, accountId, 'SCHOOL', school, doFetch);
+    if (id) search.school = [id];
+    else advanced.school = school;
+  }
+  if (location) {
+    const id = await searchParameterId(deps, accountId, 'LOCATION', location, doFetch);
+    if (id) search.location = [id];
+    else keywords.push(location);
+  }
+  const kw = keywords.filter(Boolean).join(' ');
+  if (kw) search.keywords = kw;
+  if (Object.keys(advanced).length) search.advanced_keywords = advanced;
+  if (!kw && !Object.keys(advanced).length && !search.company && !search.school && !search.location)
+    return {
+      ok: false,
+      reason: 'bad_request',
+      message: 'Say who to look for: a role, company, school or name.',
+    };
+  const q = new URLSearchParams({ account_id: accountId, limit: '10' });
+  if (typeof body.cursor === 'string' && body.cursor) q.set('cursor', body.cursor);
+  const res = await doFetch(`${deps.unipileBase}/api/v1/linkedin/search?${q}`, {
+    method: 'POST',
+    headers: uHeaders(deps),
+    body: JSON.stringify(search),
+  });
+  if (res.status >= 400 && res.status < 500)
+    return { ok: false, reason: 'refused', message: await unipileError(res) };
+  if (!res.ok) throw new Error(`unipile ${res.status}`);
+  const b = (await res.json()) as {
+    items?: Record<string, unknown>[];
+    cursor?: string | null;
+    paging?: { total_count?: number };
+  };
+  const degree = (d: unknown) => {
+    const m = /(\d)/.exec(String(d ?? ''));
+    return m ? Number(m[1]) : undefined;
+  };
+  return {
+    ok: true,
+    people: (b.items ?? [])
+      .filter((p) => typeof p.name === 'string' && p.name.trim() && p.id)
+      .map((p) => ({
+        memberId: String(p.id),
+        name: String(p.name).trim(),
+        headline: text(p.headline, 220),
+        location: text(p.location),
+        profileUrl: text(p.public_profile_url, 300) ?? text(p.profile_url, 300),
+        distance: degree(p.network_distance),
+      })),
+    cursor: b.cursor ?? null,
+    total: typeof b.paging?.total_count === 'number' ? b.paging.total_count : undefined,
   };
 }
 

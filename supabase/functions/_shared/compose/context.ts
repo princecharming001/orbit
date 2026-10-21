@@ -177,7 +177,8 @@ function facetLines(parsed: Record<string, unknown> | null): string[] {
 /** The user's style card when it was built from ≥ 5 sent messages, else the tone preset (§7.7). */
 export function styleCardOf(u: UserRow): StyleCard {
   const card = u.settings.style_card as Partial<StyleCard> | undefined;
-  if (card && typeof card === 'object' && (card.builtFromCount ?? 0) >= 5) return card as StyleCard;
+  if (card && typeof card === 'object' && ((card.builtFromCount ?? 0) >= 3 || card.custom))
+    return card as StyleCard;
   const preset = u.settings.tone_preset;
   return defaultStyleCard(preset === 'direct' || preset === 'formal' ? preset : 'warm', userFirstName(u));
 }

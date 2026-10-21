@@ -602,7 +602,7 @@ export async function llmDraft(ctx: DraftContext, template: DraftOutput): Promis
   const r = await runParse(
     'drafts',
     [
-      "You write short, specific networking messages on behalf of a college student, in the student's own voice (follow the style card for greeting, sign-off, formality, contractions).",
+      "You write short, specific networking messages on behalf of a college student, in the student's own voice. Follow the style card: its greeting, sign-off, formality, contractions, exclamation marks and emoji, and keep near its avgMessageWords. Work in one of its characteristicPhrases when it fits naturally, never use any phrase in its avoid list, and follow its notes (the student's own instructions about how they write).",
       'Follow the playbook exactly:',
       '1. The connection comes first: the opening sentence states how the student knows of the person (referral, event, alumni, their post, their career move, a shared employer) using only the facts and the `connection` provided. Never invent a link, a mutual contact, or a compliment, and never say how the student found them (an alumni page, a profile, an article) unless the context says so.',
       '2. One line that is only true of this recipient, drawn from the facts (cite fact ids in claims). Praise is not specific; a question about something they did is.',

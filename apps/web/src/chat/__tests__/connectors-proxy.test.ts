@@ -446,6 +446,179 @@ describe('orbit-connectors proxy', () => {
     expect(capped.upstream).toHaveLength(2);
   });
 
+  it('asks LinkedIn for mutual connections with numeric distances and the target in a list', async () => {
+    const { handler, upstream } = harness();
+    await handler(post('/mutuals', { accountId: 'a1', token: TOKEN.a1, targetMemberId: 'ACoT' }));
+    expect(upstream[0]!.body).toEqual({
+      api: 'classic',
+      category: 'people',
+      network_distance: [1],
+      connections_of: ['ACoT'],
+    });
+  });
+
+  it('reads the inbox: 1:1 messages with who they are with, leaving out events, hidden ones and group chats', async () => {
+    const messages = [
+      {
+        id: 'm1',
+        chat_id: 'c1',
+        sender_id: 'ACoP',
+        text: 'Happy to chat Thursday!',
+        timestamp: '2026-10-18T15:00:00.000Z',
+        is_sender: 0,
+      },
+      {
+        id: 'm2',
+        chat_id: 'c1',
+        sender_id: 'ME',
+        text: 'Hi Priya, could we talk?',
+        timestamp: '2026-10-17T15:00:00.000Z',
+        is_sender: 1,
+      },
+      {
+        id: 'm3',
+        chat_id: 'c2',
+        sender_id: 'ACoG',
+        text: 'Group hello',
+        timestamp: '2026-10-18T10:00:00.000Z',
+        is_sender: 0,
+      },
+      {
+        id: 'm4',
+        chat_id: 'c1',
+        sender_id: 'ACoP',
+        text: 'reacted',
+        timestamp: '2026-10-18T16:00:00.000Z',
+        is_sender: 0,
+        is_event: 1,
+      },
+      {
+        id: 'm5',
+        chat_id: 'c1',
+        sender_id: 'ACoP',
+        text: 'gone',
+        timestamp: '2026-10-18T16:30:00.000Z',
+        is_sender: 0,
+        deleted: 1,
+      },
+    ];
+    const { handler, upstream } = harness({}, (url) => {
+      if (url.includes('/api/v1/messages?'))
+        return new Response(JSON.stringify({ items: messages, cursor: null }));
+      if (url.endsWith('/chats/c1'))
+        return new Response(
+          JSON.stringify({ id: 'c1', type: 0, name: 'Priya Shah', attendee_provider_id: 'ACoP' }),
+        );
+      if (url.endsWith('/chats/c2')) return new Response(JSON.stringify({ id: 'c2', type: 1, name: 'Club' }));
+      return new Response('{}', { status: 404 });
+    });
+    const r = (await (
+      await handler(post('/inbox', { accountId: 'a1', token: TOKEN.a1, after: '2026-10-10T00:00:00Z' }))
+    ).json()) as {
+      messages: { id: string; fromMe: boolean; counterpart: { providerId: string } }[];
+      latest: string;
+    };
+    expect(upstream[0]!.url).toContain('account_id=a1');
+    expect(upstream[0]!.url).toContain(`after=${encodeURIComponent('2026-10-10T00:00:00.000Z')}`);
+    expect(r.messages.map((m) => m.id)).toEqual(['m1', 'm2']);
+    expect(r.messages[0]).toMatchObject({
+      fromMe: false,
+      counterpart: { providerId: 'ACoP', name: 'Priya Shah' },
+    });
+    expect(r.messages[1]!.fromMe).toBe(true);
+    expect(r.latest).toBe('2026-10-18T16:30:00.000Z');
+    // each chat is looked up once
+    expect(upstream.filter((u) => u.url.endsWith('/chats/c1'))).toHaveLength(1);
+  });
+
+  it('refuses the inbox and search without the account token', async () => {
+    const { handler, upstream } = harness();
+    expect((await handler(post('/inbox', { accountId: 'a1' }))).status).toBe(403);
+    expect((await handler(post('/search', { accountId: 'a1', keywords: 'x' }))).status).toBe(403);
+    expect(upstream).toHaveLength(0);
+  });
+
+  it('searches LinkedIn past the student’s network, turning a company and school into LinkedIn ids', async () => {
+    const { handler, upstream } = harness({}, (url, init) => {
+      if (url.includes('/search/parameters') && url.includes('type=COMPANY'))
+        return new Response(JSON.stringify({ items: [{ id: '1382', title: 'Goldman Sachs' }] }));
+      if (url.includes('/search/parameters')) return new Response(JSON.stringify({ items: [] }));
+      if (url.includes('/linkedin/search?') && init.method === 'POST')
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                type: 'PEOPLE',
+                id: 'ACoX',
+                name: 'Lena Park',
+                headline: 'Analyst at Goldman Sachs',
+                location: 'New York',
+                profile_url: 'https://www.linkedin.com/in/lena-park',
+                network_distance: 'DISTANCE_2',
+              },
+              { type: 'PEOPLE', id: 'ACoY', name: '', headline: 'LinkedIn Member' },
+            ],
+            cursor: 'next1',
+            paging: { start: 0, page_count: 10, total_count: 240 },
+          }),
+        );
+      return new Response('{}', { status: 404 });
+    });
+    const r = (await (
+      await handler(
+        post('/search', {
+          accountId: 'a1',
+          token: TOKEN.a1,
+          title: 'analyst',
+          company: 'Goldman Sachs',
+          school: 'Nowhere U',
+        }),
+      )
+    ).json()) as { ok: boolean; people: unknown[]; cursor: string; total: number };
+    const search = upstream.find((u) => u.method === 'POST')!;
+    expect(search.url).toContain('limit=10');
+    expect(search.body).toEqual({
+      api: 'classic',
+      category: 'people',
+      network_distance: [2, 3],
+      company: ['1382'],
+      // a school LinkedIn does not know is searched by name
+      advanced_keywords: { title: 'analyst', school: 'Nowhere U' },
+    });
+    expect(r).toEqual({
+      ok: true,
+      people: [
+        {
+          memberId: 'ACoX',
+          name: 'Lena Park',
+          headline: 'Analyst at Goldman Sachs',
+          location: 'New York',
+          profileUrl: 'https://www.linkedin.com/in/lena-park',
+          distance: 2,
+        },
+      ],
+      cursor: 'next1',
+      total: 240,
+    });
+  });
+
+  it('asks for something to search for, and stops an account at its daily searches', async () => {
+    const at = new Date('2026-10-16T09:00:00Z');
+    const { handler, upstream } = harness(
+      { searchesPerDay: 1, now: () => at, take: memoryTake(() => at.getTime()) },
+      () => new Response(JSON.stringify({ items: [], cursor: null })),
+    );
+    const search = (body: Record<string, unknown>) =>
+      handler(post('/search', { accountId: 'a1', token: TOKEN.a1, ...body }));
+    expect(await (await search({ keywords: 'product manager' })).json()).toMatchObject({ ok: true });
+    expect(await (await search({ keywords: 'again' })).json()).toMatchObject({ ok: false, reason: 'limit' });
+    expect(upstream).toHaveLength(1);
+    const empty = harness();
+    expect(
+      await (await empty.handler(post('/search', { accountId: 'a1', token: TOKEN.a1 }))).json(),
+    ).toMatchObject({ ok: false, reason: 'bad_request' });
+  });
+
   it('unlinks an account with a DELETE, and an account already gone counts as unlinked', async () => {
     const { handler, upstream } = harness();
     const r = await handler(post('/disconnect', { accountId: 'acc_1', token: TOKEN.acc_1 }));

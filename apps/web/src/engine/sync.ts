@@ -1,5 +1,5 @@
 import type { User } from '@orbit/core';
-import { buildStyleCard, decodeMimeWords, parseAddressList } from '@orbit/core';
+import { decodeMimeWords, parseAddressList } from '@orbit/core';
 import { notify, recomputeAllStrengths } from '../db/repo';
 import { db } from '../db/schema';
 import {
@@ -13,6 +13,7 @@ import {
 import { generateBrief, recommendationsRefresh } from './brief';
 import { recomputeEdges } from './graph';
 import { ingestEmails, ingestEvents, type RawEmail, type RawEvent } from './ingest';
+import { learnStyle } from './style';
 
 export interface SyncProgress {
   phase: string;
@@ -148,21 +149,8 @@ export async function syncGoogle(
     }));
   const ev = await ingestEvents(user, rawEvents);
   progress('Calendar', 1, 1);
-  // style card from sent mail
-  const sent = await db.messages
-    .where('userId')
-    .equals(user.id)
-    .filter((m) => m.direction === 'outbound' && !m.isAutomated)
-    .toArray();
-  if (sent.length >= 5)
-    await db.styles.put({
-      userId: user.id,
-      card: buildStyleCard(
-        sent.map((m) => m.bodyText),
-        user.firstName,
-      ),
-      updatedAt: new Date().toISOString(),
-    });
+  // the student's voice, from the mail they sent (and anything else Orbit has); what they set by hand is kept
+  await learnStyle(user).catch(() => undefined);
   await recomputeAllStrengths(user.id);
   await recomputeEdges(user.id);
   await recommendationsRefresh(user);

@@ -1,4 +1,5 @@
 import { extractTimes } from '../email/when';
+import { personalStyle, stripAvoided } from '../style/card';
 import { addBusinessDays } from '../suggestions/calendar';
 import { wordCount } from '../text/email';
 import { normalizeCompany } from '../text/normalize';
@@ -472,7 +473,7 @@ function knowsStudent(ctx: DraftContext): boolean {
  */
 function greeting(ctx: DraftContext, sector: Sector, recruiterFirst: boolean): string {
   const first = firstNameOf(ctx.person);
-  const learned = ctx.styleCard.builtFromCount > 0 && ctx.styleCard.greetingPatterns[0];
+  const learned = personalStyle(ctx.styleCard) && ctx.styleCard.greetingPatterns[0];
   if (learned && !/^dear/i.test(learned)) return learned.replace('{first}', first);
   // a LinkedIn message is a chat, not a letter
   if (knowsStudent(ctx) || ctx.channel === 'linkedin') return `Hi ${first},`;
@@ -493,7 +494,7 @@ function greeting(ctx: DraftContext, sector: Sector, recruiterFirst: boolean): s
   return `Hi ${first},`;
 }
 function signoff(ctx: DraftContext, sector: Sector, G: string, recruiter: boolean): string {
-  const learned = ctx.styleCard.builtFromCount > 0 && ctx.styleCard.signoffs[0];
+  const learned = personalStyle(ctx.styleCard) && ctx.styleCard.signoffs[0];
   if (learned) return learned;
   if (ctx.channel === 'linkedin') return `Thanks,\n${ctx.user.firstName}`; // a chat message, not a letter
   if (isFriend(ctx.person)) return `Thanks,\n${ctx.user.firstName}`;
@@ -1648,7 +1649,7 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
   const G = greeting(ctx, sector, recruiter && ctx.kind === 'outreach');
   const S = signoff(ctx, sector, G, recruiter && ctx.kind === 'outreach');
   // a "Dear" letter is formal throughout (no contractions); a formal style preset to a friend or a peer is not
-  const formal = /^Dear\b/.test(G) || (ctx.styleCard.builtFromCount > 0 && isFormalStyle(ctx.styleCard));
+  const formal = /^Dear\b/.test(G) || (personalStyle(ctx.styleCard) && isFormalStyle(ctx.styleCard));
   const register: DraftOutput['register'] =
     formal || ((sector === 'finance' || sector === 'consulting' || recruiter) && !isFriend(ctx.person))
       ? 'formal'
@@ -2918,8 +2919,10 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
   let finalBody = body.replace(/[ \t]+\n/g, '\n').trim();
   // a "Dear" letter is written without contractions throughout, never "Dear Grace, I'm ..."; so is everything from a
   // student whose own sent mail has none (a learned card), but not a preset to a friend
-  if ((ctx.styleCard.builtFromCount > 0 && ctx.styleCard.contractions === false) || /^Dear\b/.test(finalBody))
+  if ((personalStyle(ctx.styleCard) && ctx.styleCard.contractions === false) || /^Dear\b/.test(finalBody))
     finalBody = expandContractions(finalBody);
+  // a phrase the student said they never use does not appear in their name
+  if (ctx.styleCard.avoid?.length) finalBody = stripAvoided(finalBody, ctx.styleCard.avoid);
   return {
     subject,
     body: finalBody,

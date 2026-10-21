@@ -1,7 +1,7 @@
 import type { ProfileSettingsRequest, RecruitingGoals, TargetCompany, User, UserSettings } from '@orbit/core';
-import { buildStyleCard } from '@orbit/core';
 import { db } from '../db/schema';
 import { callApi, isServerUser } from '../integrations/orbitApi';
+import { learnStyle } from './style';
 
 // ---------- what the server reads ----------
 
@@ -237,34 +237,15 @@ export async function dismissHint(userId: string, id: string): Promise<void> {
 export const STYLE_MIN_SENT = 5;
 
 /**
- * Learn the student's style from the emails they sent (Google only). Needs at least five; otherwise says so and
- * changes nothing.
+ * Learn the student's style from what they wrote (sent mail, LinkedIn messages, messages edited in Orbit, pasted
+ * examples). Kept for the chat's update_settings tool; engine/style.ts does the work.
  */
 export async function learnStyleFromSent(
   user: Pick<User, 'id' | 'firstName'>,
   now = new Date(),
 ): Promise<{ ok: true; count: number } | { ok: false; reason: string }> {
-  const sent = await db.messages
-    .where('userId')
-    .equals(user.id)
-    .filter((m) => m.direction === 'outbound' && !m.isAutomated)
-    .toArray();
-  if (sent.length < STYLE_MIN_SENT)
-    return {
-      ok: false,
-      reason: `Orbit needs at least ${STYLE_MIN_SENT} emails you sent to learn from. Sync Google again later.`,
-    };
-  const settings = await db.settings.get(user.id);
-  await db.styles.put({
-    userId: user.id,
-    card: buildStyleCard(
-      sent.map((m) => m.bodyText),
-      user.firstName,
-      settings?.tonePreset,
-    ),
-    updatedAt: now.toISOString(),
-  });
-  return { ok: true, count: sent.length };
+  const r = await learnStyle(user, { now });
+  return r.ok ? { ok: true, count: r.learnedFrom } : r;
 }
 
 /** Forget the learned style card: drafts follow the picked tone again. */

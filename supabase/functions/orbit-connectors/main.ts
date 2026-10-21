@@ -57,6 +57,7 @@ Deno.serve(
     // account tokens are signed with the service role key, which never leaves the server
     signingKey: serviceKey || undefined,
     sendsPerDay: num('ORBIT_LINKEDIN_SENDS_PER_DAY', 25),
+    searchesPerDay: num('ORBIT_LINKEDIN_SEARCHES_PER_DAY', 40),
     limits: {
       perMinute: num('ORBIT_CONNECTORS_PER_MINUTE', 120),
       perDay: num('ORBIT_CONNECTORS_PER_DAY', 3000),

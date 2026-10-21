@@ -889,7 +889,14 @@ export interface StyleCard {
   notes: string;
   builtFromCount: number;
   version: number;
+  /** how many of the samples it was learned from came from each place */
+  sources?: Partial<Record<StyleSource, number>>;
+  /** the student set some of it by hand: their choices win over anything learned later */
+  custom?: boolean;
 }
+
+/** Where a writing sample came from: sent email, LinkedIn messages, messages sent from Orbit, or pasted in. */
+export type StyleSource = 'email' | 'linkedin' | 'orbit' | 'pasted';
 
 export interface FeedbackEvent {
   id: ID;

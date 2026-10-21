@@ -59,6 +59,8 @@ export interface StyleProfile {
   userId: string;
   card: import('@orbit/core').StyleCard;
   updatedAt: string;
+  /** messages the student pasted in as examples of how they write */
+  samples?: string[];
 }
 
 export interface KV {

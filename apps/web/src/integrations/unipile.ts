@@ -272,3 +272,30 @@ export async function sendLinkedInMessage(
     },
   };
 }
+
+interface InboxResponse {
+  messages?: { id?: string; text?: string; at?: string; fromMe?: boolean }[];
+}
+
+/**
+ * The messages the student sent on LinkedIn since `after` (1:1 chats only), newest pages first: what Orbit learns
+ * the student's own voice from. Only the text and time come back; who they were to is not needed here.
+ */
+export async function linkedInSentMessages(
+  accountId: string,
+  after: Date,
+  opts: CallOpts = {},
+): Promise<ConnectorOutcome<{ text: string; at?: string }[]>> {
+  const r = await call<InboxResponse>(
+    '/inbox',
+    { accountId, token: opts.token, after: after.toISOString() },
+    { timeoutMs: 45_000, ...opts },
+  );
+  if (!r.ok) return r;
+  return {
+    ok: true,
+    value: (r.value.messages ?? [])
+      .filter((m) => m.fromMe && typeof m.text === 'string' && m.text.trim())
+      .map((m) => ({ text: m.text!.trim(), at: m.at })),
+  };
+}
