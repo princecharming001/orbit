@@ -99,7 +99,9 @@ test.describe('Connect LinkedIn and Gmail, live LinkedIn and warm intros', () =>
     await page.goto('settings/integrations');
     await expect(page.getByTestId('settings-warm-intros-status')).toHaveText(/On/);
     await page.goto('settings/privacy');
-    await expect(page.getByTestId('privacy-leaves')).toContainText(/LinkedIn\s*through Unipile, if you connect it live/);
+    await expect(page.getByTestId('privacy-leaves')).toContainText(
+      /LinkedIn\s*through Unipile, if you connect it live/,
+    );
     expect(external).toEqual([]);
   });
 
