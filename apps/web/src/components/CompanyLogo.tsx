@@ -22,8 +22,11 @@ export function CompanyLogo({
   size = 16,
   className,
   decorative,
+  label: labelOverride,
 }: {
   name?: string;
+  /** what the hover and screen readers say, when it is more than the name ("Cornell University alum") */
+  label?: string;
   /** the company's name is already written next to it: screen readers skip the logo, the hover still names it */
   decorative?: boolean;
   domain?: string;
@@ -37,7 +40,7 @@ export function CompanyLogo({
   const d = domain ?? companyDomain(name ?? org?.name, { domains: org?.domains, emails });
   const [failed, setFailed] = useState(false);
   if (!name && !org) return null;
-  const label = name ?? org?.name ?? '';
+  const label = labelOverride ?? name ?? org?.name ?? '';
   const box = { width: size, height: size };
   const radius = size <= 18 ? 'rounded-[4px]' : 'rounded-[6px]';
   if (!d || failed || missing.has(d)) {
@@ -47,7 +50,7 @@ export function CompanyLogo({
       className,
     );
     const style = { ...box, fontSize: Math.max(8, size * 0.55) };
-    const letter = label.trim()[0]?.toUpperCase();
+    const letter = (name ?? org?.name ?? label).trim()[0]?.toUpperCase();
     return decorative ? (
       <span
         className={tile}

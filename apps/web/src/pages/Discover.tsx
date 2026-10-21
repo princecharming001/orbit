@@ -4,12 +4,13 @@ import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { AddPersonButton } from '../components/AddPerson';
 import { FindPeople } from '../components/account/FindPeople';
-import { LogoText } from '../components/CompanyLogo';
+import { CompanyLogo, LogoText } from '../components/CompanyLogo';
 import { LinkedInImportButton } from '../components/LinkedInImport';
 import { StrengthDots } from '../components/people/shared';
 import { RoleLine } from '../components/SuggestionCard';
 import { db } from '../db/schema';
 import { recommendationsRefresh, startWarmUpOrOutreach } from '../engine/brief';
+import { loadPointContext, type PersonPoint, POINT_LABELS, personPoints } from '../engine/personPoints';
 import {
   dismissRecommendation,
   introducerIdFor,
@@ -22,7 +23,7 @@ import {
 } from '../engine/recommend';
 import { isServerUser } from '../integrations/orbitApi';
 import { useSession } from '../state/session';
-import { Avatar, Button, Chip, cx, EmptyState, Input, PageHeader, Tabs, useToast } from '../ui';
+import { Avatar, Button, cx, EmptyState, Input, PageHeader, Tabs, useToast } from '../ui';
 
 /**
  * Discover: people from the student's own network worth a coffee chat, and in account mode a second tab, Find
@@ -97,6 +98,12 @@ function NetworkDiscover({ tabs }: { tabs?: ReactNode }) {
   }, [user?.id]);
   const list = recs.sort(
     (a, b) => (b.status === 'saved' ? 1 : 0) - (a.status === 'saved' ? 1 : 0) || b.score - a.score,
+  );
+  // what each card says about the person: read once for everyone on the page
+  const listKey = list.map((r) => r.personId).join();
+  const pointCtx = useLiveQuery(
+    () => (user && listKey ? loadPointContext(user, listKey.split(',')) : undefined),
+    [user?.id, listKey],
   );
   const searchHits = useMemo(() => {
     const s = q.trim().toLowerCase();
@@ -278,10 +285,9 @@ function NetworkDiscover({ tabs }: { tabs?: ReactNode }) {
                         <Link to={`/people/${p.id}`} className="font-medium hover:underline truncate">
                           {p.displayName}
                         </Link>
-                        {p.isAlumni && (
-                          <Chip tone="accent" className="h-5 shrink-0">
-                            Alum
-                          </Chip>
+                        {/* an alum: their school's logo, named on hover */}
+                        {p.isAlumni && p.school && (
+                          <CompanyLogo name={p.school} label={`${p.school} alum`} size={16} />
                         )}
                       </div>
                       <RoleLine title={p.currentTitle} company={p.currentOrganizationRaw} person={p} />
@@ -311,16 +317,15 @@ function NetworkDiscover({ tabs }: { tabs?: ReactNode }) {
                       <Bookmark size={16} fill={r.status === 'saved' ? 'currentColor' : 'none'} />
                     </button>
                   </div>
-                  <ul className="space-y-1 text-[13px] text-ink-2">
-                    {r.reasons.slice(0, 2).map((x) => (
-                      <li key={x.code} className="flex items-start gap-2 min-w-0">
-                        <span className="mt-[7px] w-1 h-1 rounded-full bg-ink-3 shrink-0" />
-                        <span className="line-clamp-1" title={x.text}>
-                          {x.text}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
+                  <RecPoints
+                    points={
+                      pointCtx
+                        ? personPoints(p, r, { ...pointCtx, dossier: pointCtx.dossiers.get(p.id) })
+                        : r.reasons
+                            .filter((x) => x.code !== 'alumni')
+                            .map((x) => ({ kind: 'timing' as const, text: x.text }))
+                    }
+                  />
                   <div className="grid grid-cols-2 gap-4" data-testid="rec-scores">
                     <ScoreBar
                       label="Match"
@@ -449,6 +454,47 @@ function ScoreBar({ label, value, title }: { label: string; value: number; title
           style={{ width: `${pct}%` }}
         />
       </div>
+    </div>
+  );
+}
+
+/**
+ * What is worth knowing about someone, two lines at first: what you share, what stands out, what they do and why
+ * now. More opens the rest in place. The folded lines stay in the page (hidden), so search and screen readers find
+ * them.
+ */
+function RecPoints({ points }: { points: PersonPoint[] }) {
+  const [open, setOpen] = useState(false);
+  if (!points.length) return null;
+  const more = points.length - 2;
+  return (
+    <div data-testid="rec-points">
+      <ul className="space-y-1.5 text-[13px]">
+        {points.map((pt, i) => (
+          <li
+            key={`${pt.kind}-${i}`}
+            className={cx('flex items-baseline gap-2.5 min-w-0', i >= 2 && !open && 'hidden')}
+          >
+            <span className="w-[74px] shrink-0 whitespace-nowrap text-[11.5px] text-ink-3">
+              {POINT_LABELS[pt.kind]}
+            </span>
+            <span className={cx('text-ink-2 min-w-0', !open && 'line-clamp-1')} title={pt.text}>
+              {pt.text}
+            </span>
+          </li>
+        ))}
+      </ul>
+      {more > 0 && (
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          className="mt-1.5 ml-[84px] text-[12px] text-ink-3 hover:text-ink"
+          aria-expanded={open}
+          data-testid="rec-points-more"
+        >
+          {open ? 'Less' : `+${more} more`}
+        </button>
+      )}
     </div>
   );
 }
