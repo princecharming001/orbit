@@ -2,11 +2,12 @@ import type { CalendarEvent, CoffeeChat, OutboundMessage, Person } from '@orbit/
 import { CHANNEL_LABELS, MESSAGE_KIND_LABELS, warmUpProgress } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { RefreshCw } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { RepliesPanel } from '../components/account/RepliesPanel';
 import { runApproval } from '../components/approve';
 import { DraftEditor, OutboxStatus } from '../components/DraftEditor';
+import { DraftsSplit } from '../components/DraftsSplit';
 import { KIND_LABEL, SuggestionCard } from '../components/SuggestionCard';
 import { db } from '../db/schema';
 import { ensureDrafts, generateBrief, isMessageSuggestion, revalidatePending } from '../engine/brief';
@@ -22,6 +23,7 @@ import {
   Button,
   Card,
   Chip,
+  cx,
   EmptyState,
   FirstRunHint,
   PageHeader,
@@ -54,6 +56,20 @@ export function InboxPage() {
   const [showLater, setShowLater] = useState(false);
   const [showMore, setShowMore] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [picked, setPicked] = useState<string>();
+  // wide enough for a list and an open draft side by side (measured on the page, so the chat's side panel counts)
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(0);
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setWidth(el.clientWidth));
+    ro.observe(el);
+    setWidth(el.clientWidth);
+    return () => ro.disconnect();
+  }, []);
+  const split = width >= 1100;
+  const sideBySide = split ? width >= 1300 : width >= 896;
   const [params] = useSearchParams();
   // a link that points at one card (a warm-up just started, a board's next step): show it and outline it
   const focusCard = params.get('card') ?? undefined;
@@ -212,7 +228,7 @@ export function InboxPage() {
   };
   const nothingToSend = !pending.length && !started.length && !toWrite.length && !otherCards.length;
   return (
-    <div>
+    <div ref={rootRef}>
       <PageHeader
         title="Drafts"
         subtitle="What is worth doing today."
@@ -257,7 +273,12 @@ export function InboxPage() {
           Most urgent first. Open a draft to edit it; nothing goes out until you send it yourself.
         </FirstRunHint>
       )}
-      <div className="grid @4xl:grid-cols-[minmax(0,1fr)_300px] gap-6 items-start">
+      <div
+        className={cx(
+          'grid gap-6 items-start',
+          sideBySide && (split ? 'grid-cols-[minmax(0,1fr)_280px]' : 'grid-cols-[minmax(0,1fr)_300px]'),
+        )}
+      >
         <div className="min-w-0">
           <Tabs
             value={shown}
@@ -281,7 +302,21 @@ export function InboxPage() {
             </div>
           )}
           {shown === 'pending' && toWrite.length > 0 && <ToWrite people={toWrite} />}
-          {shown === 'pending' && pending.length > 0 && (
+          {shown === 'pending' &&
+            split &&
+            (pending.length > 0 || otherCards.length + otherMore.length > 0) && (
+              <DraftsSplit
+                groups={[
+                  { label: 'To send', items: forToday },
+                  { label: 'Can wait', items: later },
+                  { label: 'Also worth doing', items: [...otherCards, ...otherMore] },
+                ]}
+                selectedId={picked ?? focused?.id}
+                onSelect={setPicked}
+                byId={byId}
+              />
+            )}
+          {shown === 'pending' && !split && pending.length > 0 && (
             <div className="stagger space-y-3" data-testid="drafts-to-send">
               {forToday.length === 0 && (
                 <p className="text-[13px] text-ink-3">Nothing to send today. The drafts below can wait.</p>
@@ -312,7 +347,7 @@ export function InboxPage() {
                 ))}
             </div>
           )}
-          {shown === 'pending' && (otherCards.length > 0 || otherMore.length > 0) && (
+          {shown === 'pending' && !split && (otherCards.length > 0 || otherMore.length > 0) && (
             <div className="space-y-3 mt-6" data-testid="drafts-other">
               <div className="text-[12px] uppercase tracking-wide text-ink-3">Also worth doing</div>
               {otherCards.map((s) => (

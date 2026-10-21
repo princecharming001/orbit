@@ -694,7 +694,7 @@ export function MapPage() {
   const chainSentence = webLit ? describeIntroChain(web, webLit, nameOf) : '';
   const litSentence = stories.some((s) => s.text === chainSentence) ? '' : chainSentence;
   return (
-    <div className="-my-6 md:-mb-8 -mx-4 md:-mx-8 flex flex-col lg:flex-1 lg:min-h-0" data-testid="map-page">
+    <div className="flex flex-col lg:flex-1 lg:min-h-0" data-testid="map-page">
       <div className="px-4 md:px-8 pt-5 pb-3 flex flex-wrap items-center gap-2 border-b border-line bg-canvas">
         <div className="min-w-0">
           <h1 className="text-[24px] font-normal tracking-[-0.02em]">
@@ -845,7 +845,7 @@ export function MapPage() {
           {legend}
         </p>
       </div>
-      <div className="@4xl:flex-1 @4xl:min-h-0 grid grid-cols-1 @4xl:grid-cols-[minmax(0,1fr)_340px]">
+      <div className="@4xl:flex-1 @4xl:min-h-0 grid grid-cols-1 @4xl:grid-cols-[minmax(0,1fr)_380px]">
         <div
           className={cx(
             'relative min-w-0 overflow-hidden @4xl:h-auto @4xl:min-h-[420px] bg-[radial-gradient(circle_at_center,_#fff_0%,_#fbfaf9_70%)]',

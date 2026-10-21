@@ -249,7 +249,7 @@ function NetworkDiscover({ tabs }: { tabs?: ReactNode }) {
         />
       ) : (
         <>
-          <div className="stagger grid @3xl:grid-cols-2 gap-3 [&>*]:min-w-0">
+          <div className="stagger grid @3xl:grid-cols-2 @7xl:grid-cols-3 @[104rem]:grid-cols-4 gap-3 [&>*]:min-w-0">
             {list.map((r) => {
               const p = byId.get(r.personId);
               if (!p) return null;
@@ -288,13 +288,17 @@ function NetworkDiscover({ tabs }: { tabs?: ReactNode }) {
                           <li key={x.code}>· {x.text}</li>
                         ))}
                       </ul>
-                      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-ink-3">
-                        <span title="How well their role and company fit your goals, out of 100">
-                          Match {Math.round(r.fitScore * 100)}
-                        </span>
-                        <span title="How easy they are to reach, out of 100">
-                          Reach {Math.round(r.reachScore * 100)}
-                        </span>
+                      <div className="mt-3 grid grid-cols-2 gap-3 max-w-[300px]" data-testid="rec-scores">
+                        <ScoreBar
+                          label="Match"
+                          value={r.fitScore}
+                          title="How well their role and company fit your goals, out of 100"
+                        />
+                        <ScoreBar
+                          label="Reach"
+                          value={r.reachScore}
+                          title="How easy they are to reach, out of 100"
+                        />
                       </div>
                       {cold && (
                         <p className="mt-1.5 text-[12px] text-warn" data-testid="rec-warmup-why">
@@ -387,6 +391,35 @@ function NetworkDiscover({ tabs }: { tabs?: ReactNode }) {
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+/** A score out of 100 as a short bar: easier to compare down a list of cards than two numbers. */
+function ScoreBar({ label, value, title }: { label: string; value: number; title: string }) {
+  const pct = Math.max(0, Math.min(100, Math.round(value * 100)));
+  return (
+    <div
+      title={title}
+      role="meter"
+      aria-label={label}
+      aria-valuenow={pct}
+      aria-valuemin={0}
+      aria-valuemax={100}
+    >
+      <div className="flex items-baseline justify-between text-[11.5px] text-ink-3">
+        <span>{label}</span>
+        <span className="tabular text-ink-2">{pct}</span>
+      </div>
+      <div className="mt-1 h-1 rounded-full bg-line-2 overflow-hidden">
+        <div
+          className={cx(
+            'h-full rounded-full',
+            pct >= 70 ? 'bg-accent' : pct >= 50 ? 'bg-accent/60' : 'bg-ink-3/40',
+          )}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
     </div>
   );
 }

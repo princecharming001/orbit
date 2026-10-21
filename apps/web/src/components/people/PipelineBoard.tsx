@@ -54,7 +54,13 @@ export function PipelineBoard({
               <div
                 key={stage}
                 // an empty stage takes less room, so the stages that hold someone fit on screen
-                className={cx('w-full shrink-0', items.length ? '@3xl:w-[228px]' : '@3xl:w-[132px]')}
+                // a stage with people grows to share the board's width, so a wide screen shows every stage at once
+                className={cx(
+                  'w-full',
+                  items.length
+                    ? '@3xl:flex-1 @3xl:min-w-[208px] @3xl:max-w-[320px]'
+                    : '@3xl:w-[124px] @3xl:shrink-0',
+                )}
                 data-stage={stage}
                 data-needs={items.filter((r) => nextFor(r.chat.id, r.person.id)).length || undefined}
                 onDragOver={(e) => e.preventDefault()}

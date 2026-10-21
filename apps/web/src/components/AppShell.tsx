@@ -70,6 +70,10 @@ export function AppShell() {
   const { pathname } = useLocation();
   const mainRef = useRef<HTMLElement>(null);
   const fillsScreen = pathname === '/map';
+  // pages read as text (settings, notes, one person) keep a column you can read across; boards, lists and grids take
+  // the room the screen has, so a wide screen shows more at once instead of margins
+  const reading = /^\/(settings|notes)(\/|$)/.test(pathname);
+  const focused = /^\/(people|companies)\/[^/]+/.test(pathname);
   const isChat = pathname === '/';
   const engine = useChatEngine();
   const chat = useMemo(() => threadActions(engine), [engine]);
@@ -334,7 +338,13 @@ export function AppShell() {
               className={cx(
                 'page-in',
                 // the page's own layout (columns, side by side or stacked) follows this box, so the same page also fits the chat's side panel
-                '@container max-w-[1120px] mx-auto px-4 md:px-10 py-6 md:py-9 pb-24 md:pb-10',
+                // the map takes the whole width, edge to edge: the orbit needs the room; every other page reads in a column
+                fillsScreen
+                  ? '@container pb-24 md:pb-0'
+                  : cx(
+                      '@container mx-auto px-4 md:px-8 xl:px-10 py-6 md:py-9 pb-24 md:pb-10',
+                      reading ? 'max-w-[1120px]' : focused ? 'max-w-[1320px]' : 'max-w-[1800px]',
+                    ),
                 // on a wide screen the map fills exactly the room under the header and the demo banner, so the page
                 // never scrolls under it (focusing the canvas or a route would otherwise jump the page)
                 fillsScreen && 'lg:h-full lg:flex lg:flex-col',

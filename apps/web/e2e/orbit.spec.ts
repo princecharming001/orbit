@@ -2252,3 +2252,38 @@ test.describe('People holds the board and the list; Drafts holds the day', () =>
     await expect(chatCard(page, who)).toHaveAttribute('data-testid', 'chat-card-replied');
   });
 });
+
+test.describe('Wide screens use the room', () => {
+  test('Drafts lists every card and opens one beside it; the board and Discover spread out', async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+    await page.setViewportSize({ width: 1680, height: 1000 });
+    await loadDemo(page);
+    await openDrafts(page);
+    const split = page.getByTestId('drafts-split');
+    await expect(split).toBeVisible();
+    const rows = split.getByTestId('drafts-row');
+    expect(await rows.count()).toBeGreaterThan(3);
+    // the first card is open, its draft ready to edit, without a click
+    const reading = page.getByTestId('drafts-reading');
+    await expect(reading.getByRole('textbox', { name: 'Message body' })).toBeVisible();
+    const first = (await reading.textContent()) ?? '';
+    // the keyboard moves down the list and opens the next card
+    await page.locator('body').click({ position: { x: 5, y: 5 } });
+    await page.keyboard.press('ArrowDown');
+    await expect(rows.nth(1)).toHaveAttribute('aria-selected', 'true');
+    await expect.poll(async () => (await reading.textContent()) ?? '').not.toBe(first);
+    // Coming up sits in its own column, not under the list
+    const coming = page.getByText('Coming up', { exact: true });
+    const cb = (await coming.boundingBox())!;
+    const sb = (await split.boundingBox())!;
+    expect(cb.x).toBeGreaterThan(sb.x + sb.width - 1);
+    // the page is wider than the old 1120px column
+    await page.goto('discover');
+    const scores = page.getByTestId('rec-scores').first();
+    await expect(scores).toBeVisible();
+    await expect(scores.getByRole('meter', { name: 'Match' })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(1680);
+  });
+});

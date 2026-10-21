@@ -56,8 +56,11 @@ export function SuggestionCard({
   s,
   highlight,
   onPersonPage,
+  defaultOpen,
 }: {
   s: Suggestion;
+  /** open the draft at once (Drafts' reading pane, where the card is the thing being looked at) */
+  defaultOpen?: boolean;
   /** on the person's own page: their face, name and role are already the page, so the card leaves them out */
   onPersonPage?: boolean;
   /** every card is flat now; callers that ask for the compact look get the same card */
@@ -68,7 +71,7 @@ export function SuggestionCard({
   const { user, settings } = useSession();
   const nav = useNavigate();
   const toast = useToast();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(!!defaultOpen);
   const [busy, setBusy] = useState(false);
   const [dismissing, setDismissing] = useState(false);
   const [mergeAsk, setMergeAsk] = useState(false);
@@ -671,7 +674,7 @@ const shortDay = (iso: string) =>
   new Date(iso).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
 
 /** The first missing line of a draft, as a short label ("One real update since you last spoke"), if any. */
-function gapLabel(text: string): string | undefined {
+export function gapLabel(text: string): string | undefined {
   const m = text.match(/\[([^\]]{3,})\]/);
   if (!m) return undefined;
   return m[1]!

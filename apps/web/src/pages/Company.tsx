@@ -57,7 +57,7 @@ export function CompanyPage() {
       {!reach ? (
         <Spinner />
       ) : (
-        <div className="grid @3xl:grid-cols-2 gap-4">
+        <div className="grid @3xl:grid-cols-2 @7xl:grid-cols-3 gap-4">
           <Section
             title="People there now"
             items={reach.direct.map((d) => ({
