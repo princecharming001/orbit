@@ -666,3 +666,54 @@ export function FirstRunHint({
     </div>
   );
 }
+
+/**
+ * An on/off switch, the way most apps show a setting or a connection: the track fills when it is on. It is a button
+ * with role switch, so keyboards and screen readers treat it as one.
+ */
+export function Switch({
+  checked,
+  onChange,
+  disabled,
+  label,
+  busy,
+  className,
+  ...rest
+}: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  disabled?: boolean;
+  /** what it turns on or off, for screen readers ("Google") */
+  label: string;
+  /** working: the knob pulses and clicks wait */
+  busy?: boolean;
+  className?: string;
+} & { 'data-testid'?: string; title?: string }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      aria-busy={busy || undefined}
+      disabled={disabled || busy}
+      onClick={() => onChange(!checked)}
+      className={cx(
+        'relative inline-flex h-[22px] w-[38px] shrink-0 items-center rounded-full border transition-colors duration-200',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed',
+        checked ? 'bg-accent border-accent' : 'bg-line-2 border-line',
+        disabled && !busy && 'opacity-50',
+        className,
+      )}
+      {...rest}
+    >
+      <span
+        className={cx(
+          'inline-block h-[16px] w-[16px] rounded-full bg-white shadow-[0_1px_2px_rgba(0,0,0,0.2)] transition-transform duration-200',
+          checked ? 'translate-x-[18px]' : 'translate-x-[2px]',
+          busy && 'animate-pulse',
+        )}
+      />
+    </button>
+  );
+}

@@ -15,7 +15,10 @@ async function prep(page: Page): Promise<string[]> {
   page.on('pageerror', (e) => console.log('PAGEERROR', e.message));
   const external: string[] = [];
   page.on('request', (r) => {
-    if (/orbit-connectors|unipile|village/i.test(r.url())) external.push(r.url());
+    // a call to the providers themselves; an app's logo from the icon service does not reach them
+    const url = r.url();
+    if (/orbit-connectors|unipile|village/i.test(url) && !url.startsWith('https://icons.duckduckgo.com/'))
+      external.push(url);
   });
   return external;
 }

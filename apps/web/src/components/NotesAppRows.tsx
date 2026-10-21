@@ -10,7 +10,7 @@ import { Link } from 'react-router-dom';
 import { calStatus, connectCalcom, disconnectCalcom, refreshCalcom } from '../engine/calcom';
 import { connectFathom, disconnectFathom, fathomStatus, syncFathom } from '../engine/fathom';
 import { usesMockConnectors } from '../integrations/connectorsMock';
-import { Button, Input, relDate, Spinner, useToast } from '../ui';
+import { Button, Input, relDate, Spinner, Switch, useToast } from '../ui';
 import { AppMark, IntegrationRow, RowStatus } from './IntegrationRow';
 
 export const FATHOM_KEY_URL = 'https://fathom.video/customize#api-access-header';
@@ -124,7 +124,11 @@ export function FathomRow({ user }: { user: User }) {
   return (
     <IntegrationRow
       testId="settings-fathom"
-      mark={<AppMark>F</AppMark>}
+      mark={
+        <AppMark logo="fathom.ai" dark>
+          F
+        </AppMark>
+      }
       name="Fathom"
       status={
         status.connected ? (
@@ -149,39 +153,40 @@ export function FathomRow({ user }: { user: User }) {
         )
       }
       actions={
-        !status.available ? undefined : status.connected ? (
+        !status.available ? undefined : (
           <>
-            <Button size="sm" onClick={sync} disabled={!!busy} data-testid="settings-fathom-sync">
-              {busy ? (
-                <>
-                  <Spinner /> {busy}
-                </>
-              ) : (
-                'Sync now'
-              )}
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => disconnectFathom(user)}
-              disabled={!!busy}
-              data-testid="settings-fathom-disconnect"
-            >
-              Disconnect
-            </Button>
+            {status.connected && (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={sync}
+                disabled={!!busy}
+                data-testid="settings-fathom-sync"
+              >
+                {busy ? (
+                  <>
+                    <Spinner /> {busy}
+                  </>
+                ) : (
+                  'Sync now'
+                )}
+              </Button>
+            )}
+            {/* on asks for the key in place (the demo connects straight away); off disconnects */}
+            <Switch
+              checked={status.connected || asking}
+              label="Fathom"
+              busy={!!busy && !status.connected}
+              title={status.connected ? 'Disconnect Fathom' : 'Connect Fathom'}
+              onChange={(on) => {
+                if (status.connected) return void disconnectFathom(user);
+                if (!on) return setAsking(false);
+                if (usesMockConnectors(user.id)) return void connect();
+                setAsking(true);
+              }}
+              data-testid={status.connected ? 'settings-fathom-disconnect' : 'settings-fathom-connect'}
+            />
           </>
-        ) : (
-          !asking && (
-            <Button
-              size="sm"
-              variant="primary"
-              onClick={() => (usesMockConnectors(user.id) ? connect() : setAsking(true))}
-              disabled={!!busy}
-              data-testid="settings-fathom-connect"
-            >
-              {busy ? <Spinner /> : 'Connect'}
-            </Button>
-          )
         )
       }
     >
@@ -260,7 +265,7 @@ export function CalcomRow({ user }: { user: User }) {
   return (
     <IntegrationRow
       testId="settings-calcom"
-      mark={<AppMark>Cal</AppMark>}
+      mark={<AppMark logo="cal.com">Cal</AppMark>}
       name="Cal.com"
       status={
         status.connected ? (
@@ -287,33 +292,33 @@ export function CalcomRow({ user }: { user: User }) {
         )
       }
       actions={
-        !status.available ? undefined : status.connected ? (
+        !status.available ? undefined : (
           <>
-            <Button size="sm" onClick={refresh} disabled={!!busy} data-testid="settings-calcom-refresh">
-              {busy ? <Spinner /> : 'Refresh'}
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => disconnectCalcom(user)}
-              disabled={!!busy}
-              data-testid="settings-calcom-disconnect"
-            >
-              Disconnect
-            </Button>
+            {status.connected && (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={refresh}
+                disabled={!!busy}
+                data-testid="settings-calcom-refresh"
+              >
+                {busy ? <Spinner /> : 'Refresh'}
+              </Button>
+            )}
+            <Switch
+              checked={status.connected || asking}
+              label="Cal.com"
+              busy={!!busy && !status.connected}
+              title={status.connected ? 'Disconnect Cal.com' : 'Connect Cal.com'}
+              onChange={(on) => {
+                if (status.connected) return void disconnectCalcom(user);
+                if (!on) return setAsking(false);
+                if (usesMockConnectors(user.id)) return void connect();
+                setAsking(true);
+              }}
+              data-testid={status.connected ? 'settings-calcom-disconnect' : 'settings-calcom-connect'}
+            />
           </>
-        ) : (
-          !asking && (
-            <Button
-              size="sm"
-              variant="primary"
-              onClick={() => (usesMockConnectors(user.id) ? connect() : setAsking(true))}
-              disabled={!!busy}
-              data-testid="settings-calcom-connect"
-            >
-              {busy ? <Spinner /> : 'Connect'}
-            </Button>
-          )
         )
       }
     >

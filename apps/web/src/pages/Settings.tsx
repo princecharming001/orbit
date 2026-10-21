@@ -69,6 +69,7 @@ import {
   relDate,
   Select,
   Spinner,
+  Switch,
   Textarea,
   useToast,
 } from '../ui';
@@ -675,7 +676,7 @@ function Integrations() {
         {viaAccount ? (
           <IntegrationRow
             testId="google-via-account"
-            mark={<AppMark>G</AppMark>}
+            mark={<AppMark logo="google.com">G</AppMark>}
             name="Google"
             status={
               <RowStatus>
@@ -690,7 +691,7 @@ function Integrations() {
           />
         ) : (
           <IntegrationRow
-            mark={<AppMark>G</AppMark>}
+            mark={<AppMark logo="google.com">G</AppMark>}
             name="Google"
             status={
               google ? (
@@ -714,34 +715,30 @@ function Integrations() {
             actions={
               googleOffered ? (
                 <>
-                  <Button
-                    size="sm"
-                    variant={google ? 'secondary' : 'primary'}
-                    onClick={connect}
-                    disabled={!!busy || !clientId.trim()}
-                  >
-                    {busy ? (
-                      <>
-                        <Spinner /> {busy}
-                      </>
-                    ) : google ? (
-                      'Sync now'
-                    ) : (
-                      'Connect'
-                    )}
-                  </Button>
                   {google && (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={async () => {
-                        await disconnectGoogleAccount(user.id);
-                        toast.push({ text: 'Disconnected. Imported mail stays until you delete your data.' });
-                      }}
-                    >
-                      Disconnect
+                    <Button size="sm" variant="ghost" onClick={connect} disabled={!!busy}>
+                      {busy ? (
+                        <>
+                          <Spinner /> {busy}
+                        </>
+                      ) : (
+                        'Sync now'
+                      )}
                     </Button>
                   )}
+                  <Switch
+                    checked={!!google}
+                    label="Google"
+                    busy={!!busy && !google}
+                    disabled={!google && !clientId.trim()}
+                    title={google ? 'Disconnect Google' : 'Connect Google'}
+                    onChange={async (on) => {
+                      if (on) return connect();
+                      await disconnectGoogleAccount(user.id);
+                      toast.push({ text: 'Disconnected. Imported mail stays until you delete your data.' });
+                    }}
+                    data-testid="settings-google-switch"
+                  />
                 </>
               ) : undefined
             }
@@ -772,7 +769,11 @@ function Integrations() {
         )}
         <LinkedInLiveCard user={user} />
         <IntegrationRow
-          mark={<AppMark>csv</AppMark>}
+          mark={
+            <AppMark logo="linkedin.com" badge="CSV">
+              csv
+            </AppMark>
+          }
           name="LinkedIn export"
           status={
             li ? (
@@ -921,7 +922,7 @@ function ClaudeCard() {
   const shared = !keySaved && !!sharedClaudeUrl();
   return (
     <IntegrationRow
-      mark={<AppMark>AI</AppMark>}
+      mark={<AppMark logo="claude.ai">AI</AppMark>}
       name="Claude"
       status={
         keySaved ? (

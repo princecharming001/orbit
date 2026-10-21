@@ -1,17 +1,58 @@
-import type { ReactNode } from 'react';
+import { companyLogoUrl } from '@orbit/core';
+import { type ReactNode, useState } from 'react';
 import { cx } from '../ui';
 
-/** A small square mark for an app: its initials (or an icon) on a hairline tile; LinkedIn keeps its blue. */
-export function AppMark({ children, tone = 'plain' }: { children: ReactNode; tone?: 'plain' | 'linkedin' }) {
+/**
+ * A small square mark for an app: its own logo on a white tile when it has a web address (`logo`), else its initials
+ * or an icon. A `badge` sits on the corner (the LinkedIn export's file).
+ */
+export function AppMark({
+  children,
+  logo,
+  badge,
+  tone = 'plain',
+  dark,
+}: {
+  children?: ReactNode;
+  logo?: string;
+  /** the logo is drawn in white (Fathom's), so it sits on a dark tile */
+  dark?: boolean;
+  badge?: ReactNode;
+  tone?: 'plain' | 'linkedin';
+}) {
+  const [failed, setFailed] = useState(false);
   return (
     <span
       className={cx(
-        'mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[9px] text-[12px] font-semibold',
-        tone === 'linkedin' ? 'bg-[#0a66c2] text-white' : 'border border-line bg-canvas text-ink-2',
+        'relative mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[9px] text-[12px] font-semibold',
+        logo && !failed
+          ? dark
+            ? 'bg-ink'
+            : 'border border-line bg-white'
+          : tone === 'linkedin'
+            ? 'bg-[#0a66c2] text-white'
+            : 'border border-line bg-canvas text-ink-2',
       )}
       aria-hidden
     >
-      {children}
+      {logo && !failed ? (
+        <img
+          src={companyLogoUrl(logo)}
+          alt=""
+          width={18}
+          height={18}
+          className="h-[18px] w-[18px] object-contain"
+          referrerPolicy="no-referrer"
+          onError={() => setFailed(true)}
+        />
+      ) : (
+        children
+      )}
+      {badge && (
+        <span className="absolute -right-1 -bottom-1 inline-flex h-4 min-w-4 items-center justify-center rounded-[5px] border border-line bg-canvas px-0.5 text-[8px] font-semibold text-ink-2">
+          {badge}
+        </span>
+      )}
     </span>
   );
 }

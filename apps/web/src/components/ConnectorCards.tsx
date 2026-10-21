@@ -16,7 +16,7 @@ import {
 import { setWarmIntros, villageAvailable, villageOffered } from '../engine/warmIntros';
 import { usesMockConnectors } from '../integrations/connectorsMock';
 import { subscribePrefs } from '../integrations/prefs';
-import { Button, Modal, relDate, Spinner, useToast } from '../ui';
+import { Button, Modal, relDate, Spinner, Switch, useToast } from '../ui';
 import { AppMark, IntegrationRow, RowStatus } from './IntegrationRow';
 
 export function LinkedInLiveCard({ user }: { user: User }) {
@@ -62,7 +62,11 @@ export function LinkedInLiveCard({ user }: { user: User }) {
     <>
       <IntegrationRow
         testId="settings-linkedin-live"
-        mark={<AppMark tone="linkedin">in</AppMark>}
+        mark={
+          <AppMark logo="linkedin.com" tone="linkedin">
+            in
+          </AppMark>
+        }
         name="LinkedIn (live)"
         status={
           status.connected ? (
@@ -84,45 +88,39 @@ export function LinkedInLiveCard({ user }: { user: User }) {
           )
         }
         actions={
-          !status.available ? undefined : status.connected ? (
+          !status.available ? undefined : (
             <>
-              <Button size="sm" onClick={sync} disabled={!!busy} data-testid="settings-linkedin-live-sync">
-                {busy ? (
-                  <>
-                    <Spinner /> {busy}
-                  </>
-                ) : (
-                  'Sync now'
-                )}
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setConfirming(true)}
-                disabled={!!busy}
-                data-testid="settings-linkedin-live-disconnect"
-              >
-                Disconnect
-              </Button>
+              {status.connected && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={sync}
+                  disabled={!!busy}
+                  data-testid="settings-linkedin-live-sync"
+                >
+                  {busy ? (
+                    <>
+                      <Spinner /> {busy}
+                    </>
+                  ) : (
+                    'Sync now'
+                  )}
+                </Button>
+              )}
+              {(status.connected || !soon) && (
+                <Switch
+                  checked={status.connected}
+                  label="LinkedIn"
+                  busy={!!busy && !status.connected}
+                  disabled={!!busy && status.connected}
+                  title={status.connected ? 'Disconnect LinkedIn' : 'Connect LinkedIn'}
+                  onChange={(on) => (on ? connect() : setConfirming(true))}
+                  data-testid={
+                    status.connected ? 'settings-linkedin-live-disconnect' : 'settings-linkedin-live-connect'
+                  }
+                />
+              )}
             </>
-          ) : (
-            !soon && (
-              <Button
-                size="sm"
-                variant="primary"
-                onClick={connect}
-                disabled={!!busy}
-                data-testid="settings-linkedin-live-connect"
-              >
-                {busy ? (
-                  <>
-                    <Spinner /> {busy}
-                  </>
-                ) : (
-                  'Connect'
-                )}
-              </Button>
-            )
           )
         }
       >
@@ -171,7 +169,7 @@ export function WarmIntrosCard({ user }: { user: User }) {
   return (
     <IntegrationRow
       testId="settings-warm-intros"
-      mark={<AppMark>V</AppMark>}
+      mark={<AppMark logo="village.do">V</AppMark>}
       name="Warm intros (Village)"
       status={
         <RowStatus tone={on ? 'good' : 'muted'} testId="settings-warm-intros-status">
@@ -192,15 +190,22 @@ export function WarmIntrosCard({ user }: { user: User }) {
             : 'Intro paths from Village; it sees the names you look up'
       }
       actions={
-        offered && !usesMockConnectors(user.id) ? (
-          <Button
-            size="sm"
-            variant={on ? 'ghost' : 'primary'}
-            onClick={() => setWarmIntros(!on)}
+        offered ? (
+          <Switch
+            checked={on}
+            label="Warm intros from Village"
+            // the demo has sample paths and keeps them on
+            disabled={usesMockConnectors(user.id)}
+            title={
+              usesMockConnectors(user.id)
+                ? 'On for the demo'
+                : on
+                  ? 'Turn warm intros off'
+                  : 'Turn warm intros on'
+            }
+            onChange={(next) => setWarmIntros(next)}
             data-testid="settings-warm-intros-toggle"
-          >
-            {on ? 'Turn off' : 'Turn on'}
-          </Button>
+          />
         ) : undefined
       }
     />
