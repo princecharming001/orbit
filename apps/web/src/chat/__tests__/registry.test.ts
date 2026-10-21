@@ -172,6 +172,7 @@ describe('every tool parses and executes its example input against the demo', ()
       send_draft: { draftId: ids.draft.id },
       undo_send: { draftId: ids.draft.id },
       confirm_handoff: { draftId: ids.draft.id },
+      schedule_sends: { draftIds: [ids.draft.id], perDay: 3 },
       delete_target_company: { targetId: ids.target.id },
       update_limits: { weeklyOutreachTarget: 6, dailySendCapGmail: 100 },
       set_claude_key: {},

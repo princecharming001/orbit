@@ -3,6 +3,7 @@ import type { MessageKind, OutboundMessage } from '@orbit/core';
 import { CHANNEL_LABELS, MESSAGE_KIND_LABELS, relTime, WHY_THEM_GAP } from '@orbit/core';
 import { runApproval } from '../../components/approve';
 import { db } from '../../db/schema';
+import { autopilotCanSend, planSchedule, scheduleSends } from '../../engine/autopilot';
 import { type DraftInputs, regenerateDraft } from '../../engine/brief';
 import {
   composeDraft,
@@ -27,6 +28,7 @@ import {
   snapshotPerson,
   undoQueued,
 } from '../../engine/send';
+import { draftLists, startedDrafts } from '../../engine/today';
 import { z } from '../../zod';
 import type { ToolContext } from '../types';
 import {
@@ -651,6 +653,139 @@ export const confirmHandoffTool = defineTool({
   toModel,
 });
 
+/** The drafts autopilot would take when the student names none: today's messages to send and the ones they started. */
+async function readyDrafts(ctx: ToolContext): Promise<OutboundMessage[]> {
+  const [suggestions, outbound, briefs] = await Promise.all([
+    db.suggestions.where('userId').equals(ctx.user.id).toArray(),
+    db.outbound.where('userId').equals(ctx.user.id).toArray(),
+    db.briefs.where('userId').equals(ctx.user.id).toArray(),
+  ]);
+  const latest = briefs.sort((a, b) => b.generatedAt.localeCompare(a.generatedAt))[0];
+  const { forToday } = draftLists(suggestions, outbound, latest, ctx.now);
+  const ids = new Set([
+    ...forToday.map((s) => s.outboundMessageId).filter((x): x is string => !!x),
+    ...startedDrafts(outbound).map((o) => o.id),
+  ]);
+  return outbound.filter((o) => ids.has(o.id) && o.status === 'draft');
+}
+
+const scheduleInput = z.object({
+  draftIds: z
+    .array(z.string())
+    .max(50)
+    .optional()
+    .describe(
+      'The drafts to send (ids from the drafts list). Leave out for every draft ready to send today.',
+    ),
+  perDay: z
+    .number()
+    .int()
+    .min(1)
+    .max(30)
+    .optional()
+    .describe(
+      'At most this many a day, when the student says; default 6, and never above their daily limits.',
+    ),
+  startAt: z
+    .string()
+    .optional()
+    .describe('ISO time to start from, when the student names one ("from tomorrow morning"); default now.'),
+  times: z
+    .array(
+      z
+        .object({
+          draftId: z.string().describe('The draft.'),
+          at: z.string().describe('ISO time the student asked for this one to go.'),
+        })
+        .strict(),
+    )
+    .max(50)
+    .optional()
+    .describe('Exact times the student asked for, one per draft ("send Daniel\'s at 9 tomorrow").'),
+});
+
+async function autopilotPlan(input: z.infer<typeof scheduleInput>, ctx: ToolContext) {
+  const picked = input.draftIds?.length
+    ? await Promise.all(input.draftIds.map((id) => requireDraft(ctx, id)))
+    : await readyDrafts(ctx);
+  const drafts = picked.filter((d) => ['draft', 'failed', 'cancelled'].includes(d.status));
+  const able: OutboundMessage[] = [];
+  const unable: OutboundMessage[] = [];
+  for (const d of drafts) ((await autopilotCanSend(ctx.user, d)) ? able : unable).push(d);
+  const at: Record<string, Date> = {};
+  for (const t of input.times ?? []) {
+    const when = new Date(t.at);
+    if (!Number.isNaN(when.getTime()) && when > ctx.now) at[t.draftId] = when;
+  }
+  const start = input.startAt ? new Date(input.startAt) : undefined;
+  const plan = await planSchedule(ctx.user, able, {
+    perDay: input.perDay,
+    start: start && !Number.isNaN(start.getTime()) ? start : undefined,
+    at,
+    now: ctx.now,
+  });
+  const names = new Map<string, string>();
+  for (const d of drafts) names.set(d.personId, (await db.people.get(d.personId))?.displayName ?? 'them');
+  return { plan, unable, names };
+}
+
+export const scheduleSendsTool = defineTool({
+  name: 'schedule_sends',
+  kind: 'risky',
+  description:
+    'Call this when the student wants Orbit to send drafts for them over time instead of one by one ("send these on autopilot", "spread my emails over the week so they do not look like spam", "send Daniel\'s at 9 tomorrow"). Orbit plans a time for each: weekdays, 9 to 5, a different 25 to 70 minute gap between sends, at most a few a day under their limits. Each one is checked again when its time comes and held back if they replied. Needs Gmail with send permission or live LinkedIn, and the student\'s approval of the plan.',
+  input: scheduleInput,
+  capabilities: ['draft_schedule_autopilot'],
+  progress: 'Planning the sends',
+  async summarizeIntent(input, ctx) {
+    const { plan, unable, names } = await autopilotPlan(input, ctx);
+    const lines = plan
+      .slice(0, 8)
+      .map((p) => `${names.get(p.personId)}: ${fmtWhen(p.at.toISOString(), ctx)}`)
+      .join('; ');
+    const more = plan.length > 8 ? ` and ${plan.length - 8} more` : '';
+    const skipped = unable.length
+      ? ` ${unable.length} cannot go on autopilot until ${unable[0]!.channel === 'gmail' ? 'Gmail can send' : 'live LinkedIn is connected'}.`
+      : '';
+    return {
+      text: plan.length
+        ? `Send ${plan.length} message${plan.length === 1 ? '' : 's'} on autopilot, spaced out so they read like you wrote them one at a time: ${lines}${more}. Each is checked again before it goes, and held back if they replied.${skipped}`
+        : `Nothing to put on autopilot.${skipped}`,
+      blockedReason: plan.length
+        ? undefined
+        : unable.length
+          ? unable[0]!.channel === 'gmail'
+            ? 'Autopilot sends email through Gmail. Connect Google with permission to send, in Settings, Integrations.'
+            : 'Autopilot sends LinkedIn messages through live LinkedIn. Connect it in Settings, Integrations.'
+          : 'There are no drafts ready to send.',
+    };
+  },
+  async execute(input, ctx) {
+    const { plan, unable, names } = await autopilotPlan(input, ctx);
+    const results = await scheduleSends(ctx.user, plan, ctx.now);
+    const okOnes = results.filter((r) => r.ok);
+    const failed = results.filter((r): r is Extract<typeof r, { ok: false }> => !r.ok);
+    const items = results.map((r) => {
+      const p = plan.find((x) => x.id === r.id)!;
+      return {
+        text: names.get(p.personId) ?? 'them',
+        sub: r.ok ? fmtWhen(r.at, ctx) : r.error,
+        chip: r.ok ? 'Scheduled' : 'Not scheduled',
+        href: `/inbox?draft=${r.id}`,
+      };
+    });
+    const model = {
+      scheduled: results.map((r) => (r.ok ? { draftId: r.id, at: r.at } : { draftId: r.id, error: r.error })),
+      cannotSendYet: unable.map((d) => d.id),
+    };
+    const summary = okOnes.length
+      ? `Autopilot has ${okOnes.length} message${okOnes.length === 1 ? '' : 's'}: the first goes ${fmtWhen((okOnes[0] as { at: string }).at, ctx)}. They wait under Scheduled in Drafts, where you can cancel any of them. Orbit sends them while it is open in a tab; one it misses goes at the next free slot.${failed.length ? ` ${failed.length} could not be scheduled: ${failed[0]!.error}` : ''}`
+      : `Nothing was scheduled.${failed.length ? ` ${failed[0]!.error}` : ''}`;
+    return ok('list', { title: 'Autopilot', items }, model, summary, '/inbox?tab=scheduled');
+  },
+  toModel,
+});
+
 export const draftTools: AnyTool[] = [
   createDraft,
   updateDraftBody,
@@ -660,6 +795,7 @@ export const draftTools: AnyTool[] = [
   sendDraft,
   undoSend,
   confirmHandoffTool,
+  scheduleSendsTool,
 ];
 
 export { wrapped };

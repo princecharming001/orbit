@@ -833,6 +833,21 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
     }
   }
 
+  // autopilot: "send these on autopilot", "spread my emails over the week", "schedule my drafts, 4 a day"
+  if (
+    /\bauto ?pilot\b|\bspread (?:them|these|it all|my (?:drafts|emails|messages))(?: out)?\b|\b(?:schedule|space out) (?:my |the |these |all |all my )?(?:drafts|emails|messages)\b|\bsend (?:them|these|my drafts|my emails|all of them) (?:over|across|throughout) /i.test(
+      text,
+    )
+  ) {
+    const perDay = text.match(/\b(\d{1,2}) (?:a|per) day\b/i);
+    return viaTool(
+      'schedule_sends',
+      perDay ? { perDay: Math.min(30, Math.max(1, Number(perDay[1]))) } : {},
+      undefined,
+      'send on autopilot',
+    );
+  }
+
   // send, or read, a draft that already exists
   {
     const send = text.match(

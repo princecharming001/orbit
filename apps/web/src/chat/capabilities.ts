@@ -640,6 +640,17 @@ export const CAPABILITIES: readonly Capability[] = [
     utterances: ["undo, don't send that", 'stop the email to Omar', 'cancel the send'],
   },
   {
+    id: 'draft_schedule_autopilot',
+    area: 'Drafts and sending',
+    title: 'Send drafts on autopilot, spaced out over days',
+    kind: 'risky',
+    utterances: [
+      'send these on autopilot',
+      'spread my emails over the week so they do not look like spam',
+      "send Daniel's at 9 tomorrow",
+    ],
+  },
+  {
     id: 'draft_confirm_sent',
     area: 'Drafts and sending',
     title: 'Confirm you sent a handed-off message',

@@ -737,8 +737,10 @@ export interface OutboundMessage {
   handoffVia?: 'mailto' | 'linkedin_compose' | 'linkedin_connect' | 'copy';
   approvedAt?: string;
   queuedAt?: string;
-  /** end of the undo window for a queued provider send */
+  /** end of the undo window for a queued provider send; for an autopilot send, the time it is planned for */
   sendAt?: string;
+  /** approved for autopilot: Orbit sends it itself at `sendAt`, spaced from the others, after checking it again */
+  autopilot?: boolean;
   sentAt?: string;
   providerMessageId?: string;
   error?: string;

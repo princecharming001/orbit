@@ -2323,3 +2323,29 @@ test.describe('Morning brief', () => {
     await expect(page.getByTestId('morning-brief')).toBeVisible();
   });
 });
+
+test.describe('Autopilot', () => {
+  test('the chat plans the sends, the student approves once, and Drafts lists them under Scheduled', async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+    await loadDemo(page);
+    await page.getByTestId('composer-input').fill('send these on autopilot');
+    await page.keyboard.press('Enter');
+    const card = page.getByTestId('result-needs_confirmation').last();
+    await expect(card).toContainText(/on autopilot, spaced out/, { timeout: 30_000 });
+    await card.getByTestId('confirm-approve').click();
+    // the result lists each one with its time
+    await expect(page.getByText('Scheduled', { exact: true }).first()).toBeVisible({ timeout: 30_000 });
+    await page.goto('inbox?tab=scheduled');
+    const list = page.getByTestId('drafts-scheduled');
+    await expect(list).toBeVisible();
+    const items = list.getByTestId('scheduled-item');
+    const n = await items.count();
+    expect(n).toBeGreaterThan(1);
+    // taken back, one goes to a draft again
+    await items.first().getByTestId('scheduled-cancel').click();
+    await expect(page.getByTestId('toasts')).toContainText('Taken off autopilot');
+    await expect(items).toHaveCount(n - 1);
+  });
+});

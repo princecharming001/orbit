@@ -65,6 +65,10 @@ const HANDLED: [string, string, Record<string, unknown>][] = [
   ["what's on today", 'get_today_brief', {}],
   ['today', 'get_today_brief', {}],
   ['brief', 'get_today_brief', {}],
+  // autopilot
+  ['send these on autopilot', 'schedule_sends', {}],
+  ['spread my emails over the week so they do not look like spam', 'schedule_sends', {}],
+  ['schedule my drafts, 4 a day', 'schedule_sends', { perDay: 4 }],
   ['What should I do today?', 'get_today_brief', {}],
   ['start my day', 'get_today_brief', {}],
   ['my day', 'get_today_brief', {}],

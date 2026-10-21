@@ -24,6 +24,7 @@ import {
 } from '@orbit/core';
 import { addTouchpoint, audit, feedback, notify, recomputePersonStrength } from '../db/repo';
 import { db } from '../db/schema';
+import { usesMockConnectors } from '../integrations/connectorsMock';
 import {
   canSendWith,
   currentGoogleToken,
@@ -32,6 +33,7 @@ import {
   gmailSend,
   messageIdTokens,
 } from '../integrations/google';
+import { AUTOPILOT_GAP_MIN, nextSlotAfter } from './autopilotTime';
 import { evaluateImmediateSuggestions, findReferrerFor } from './brief';
 import { linkedInSendActive, sendLinkedInLive } from './linkedinLive';
 import { scheduleChatAt, upcomingMeeting } from './move';
@@ -521,7 +523,12 @@ export async function approveAndSend(
    * `copy`: the student copies the text to paste into Gmail in the browser, so nothing opens and no address is needed.
    * `handoff`: open LinkedIn (or the mail app) for the student to send it there, even when Orbit could send it.
    */
-  opts: { undoWindowMs?: number; via?: 'copy' | 'handoff' } = {},
+  opts: {
+    undoWindowMs?: number;
+    via?: 'copy' | 'handoff';
+    /** autopilot: send it at this time instead, checked as if it went out then (its day's limits, cooldowns) */
+    scheduleAt?: Date;
+  } = {},
 ): Promise<ApproveResult> {
   const msg = await db.outbound.get(messageId);
   if (!msg || msg.userId !== user.id) return { ok: false, error: 'Message not found' };
@@ -533,10 +540,17 @@ export async function approveAndSend(
   const issues = await reviewDraft(user, msg, bodyFinal, subject);
   const blocking = issues.filter((i) => i.blocking);
   if (blocking.length) return { ok: false, error: blocking[0]!.text, issues };
-  const allowed = await checkSendAllowed(user.id, msg.personId, msg.channel, msg.kind, now, {
-    chatId: msg.chatId,
-    excludeMessageId: msg.id,
-  });
+  const allowed = await checkSendAllowed(
+    user.id,
+    msg.personId,
+    msg.channel,
+    msg.kind,
+    opts.scheduleAt ?? now,
+    {
+      chatId: msg.chatId,
+      excludeMessageId: msg.id,
+    },
+  );
   if (!allowed.allowed) return { ok: false, error: allowed.reason ?? 'Not allowed' };
   const env = await envelopeFor(msg, subject);
   if (msg.channel === 'gmail' && !env.subject)
@@ -560,8 +574,36 @@ export async function approveAndSend(
   const direct =
     !opts.via &&
     (msg.channel === 'gmail'
-      ? await googleSendActive(user.id)
+      ? (await googleSendActive(user.id)) || (!!opts.scheduleAt && usesMockConnectors(user.id))
       : msg.channel === 'linkedin' && (await linkedInSendActive(user, person)));
+  if (opts.scheduleAt && !direct)
+    return {
+      ok: false,
+      error:
+        msg.channel === 'gmail'
+          ? 'Autopilot sends email through Gmail. Connect Google with permission to send first.'
+          : 'Autopilot sends LinkedIn messages through live LinkedIn. Connect it first.',
+    };
+  if (direct && opts.scheduleAt) {
+    if (msg.channel === 'gmail' && !msg.toEmail)
+      return { ok: false, error: `There is no email address for ${person.firstName}.` };
+    // waits in the outbox until its time; it counts toward the limits of the day it goes out
+    const sendAt = opts.scheduleAt.toISOString();
+    const claimed = await transition(msg.id, ['draft', 'failed', 'cancelled'], {
+      ...approval,
+      status: 'queued',
+      queuedAt: sendAt,
+      sendAt,
+      autopilot: true,
+    });
+    if (!claimed) return { ok: false, error: alreadyText((await db.outbound.get(msg.id))?.status) };
+    await audit(user.id, 'message.approved', {
+      objectTable: 'outbound',
+      objectId: msg.id,
+      metadata: { channel: msg.channel, kind: msg.kind, hash, sendAt, autopilot: true },
+    });
+    return { ok: true, status: 'queued', sendAt };
+  }
   if (direct) {
     if (msg.channel === 'gmail' && !msg.toEmail)
       return { ok: false, error: `There is no email address for ${person.firstName}.` };
@@ -735,8 +777,62 @@ export async function sendDueQueued(
       .equals(user.id)
       .filter((o) => (o.status === 'queued' || o.status === 'sending') && !!o.sendAt)
       .toArray();
-    for (const o of due) {
+    // autopilot keeps a gap between its sends: the last one it sent, if any
+    let lastAuto = (
+      await db.outbound
+        .where('userId')
+        .equals(user.id)
+        .filter((o) => !!o.autopilot && o.status === 'sent' && !!o.sentAt)
+        .toArray()
+    )
+      .map((o) => new Date(o.sentAt!))
+      .sort((a, b) => b.getTime() - a.getTime())[0];
+    // the last slot handed out in this run, so the sends it moves line up one after another
+    let cursor: Date | undefined;
+    for (const o of due.sort((a, b) => a.sendAt!.localeCompare(b.sendAt!))) {
       const late = now.getTime() - new Date(o.sendAt!).getTime();
+      if (o.autopilot && o.status === 'queued') {
+        if (late < 0) continue;
+        // missed while Orbit was closed, or too soon after the last one: the next slot, never a burst
+        const tooSoon = !!lastAuto && now.getTime() - lastAuto.getTime() < AUTOPILOT_GAP_MIN.min * 60_000;
+        if (late > STALE_QUEUE_MS || tooSoon) {
+          // each one moved goes a gap after the one before it
+          const next = nextSlotAfter(cursor ?? lastAuto, now, o.id.length * 97 + now.getUTCHours());
+          cursor = next;
+          const at = next.toISOString();
+          if (at !== o.sendAt)
+            await transition(o.id, ['queued'], { status: 'queued', sendAt: at, queuedAt: at });
+          continue;
+        }
+        // checked again now: a reply since, a cooldown, a limit, a hidden person
+        const still = await checkSendAllowed(user.id, o.personId, o.channel, o.kind, now, {
+          chatId: o.chatId,
+          excludeMessageId: o.id,
+        });
+        if (!still.allowed) {
+          const m = await transition(o.id, ['queued'], {
+            status: 'draft',
+            sendAt: undefined,
+            queuedAt: undefined,
+            autopilot: undefined,
+            error: `Autopilot held this back: ${still.reason ?? 'it is not a good time to send it'}`,
+          });
+          if (m) {
+            await notify(user.id, 'system', 'Autopilot held a message back', m.error ?? '');
+            out.push({ id: o.id, ok: false, error: m.error });
+          }
+          continue;
+        }
+        const claimed = await transition(o.id, ['queued'], { status: 'sending' });
+        if (!claimed) continue;
+        const r = await deliver(user, claimed, now);
+        if (r.ok) {
+          lastAuto = now;
+          if (!cursor || cursor < now) cursor = now;
+        }
+        out.push(r.ok ? { id: o.id, ok: true } : { id: o.id, ok: false, error: r.error });
+        continue;
+      }
       if (o.status === 'sending') {
         // a send interrupted mid-flight (tab closed): never resend blindly
         if (late > STALE_QUEUE_MS) {
@@ -797,6 +893,19 @@ async function deliver(
   if (!msg.toEmail) return fail(`There is no email address for ${person.firstName}.`);
   const env = await envelopeFor(msg, msg.subject);
   if (!env.subject) return fail('This email has no subject.');
+  // the demo's autopilot: recorded as sent, like everything else in the demo; nothing leaves the browser
+  if (msg.autopilot && usesMockConnectors(user.id) && !(await googleSendActive(user.id))) {
+    await finalizeSent(
+      user,
+      { ...msg, subject: env.subject },
+      {
+        providerMessageId: `demo-${msg.id}`,
+        providerThreadId: env.externalThreadId ?? `demo-thread-${msg.id}`,
+      },
+      now,
+    );
+    return { ok: true };
+  }
   let r: { id: string; threadId: string };
   try {
     r = await gmailSend({
