@@ -137,11 +137,12 @@ export function Chip({
   children,
   tone = 'neutral',
   className,
+  ...rest
 }: {
   children: ReactNode;
   tone?: 'neutral' | 'accent' | 'good' | 'warn' | 'bad';
   className?: string;
-}) {
+} & Omit<React.HTMLAttributes<HTMLSpanElement>, 'className' | 'children'> & { 'data-testid'?: string }) {
   const tones = {
     neutral: 'bg-canvas text-ink-2 border-line',
     accent: 'bg-accent-soft text-accent border-[#d3e5dc]',
@@ -151,6 +152,7 @@ export function Chip({
   }[tone];
   return (
     <span
+      {...rest}
       className={cx(
         'inline-flex items-center gap-1 rounded-full border px-2 h-[22px] text-[12px] font-medium leading-none whitespace-nowrap shrink-0',
         tones,

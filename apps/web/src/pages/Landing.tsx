@@ -159,7 +159,9 @@ export function Landing() {
         <section className="px-5 md:px-12 pt-14 md:pt-20 pb-12">
           <Reveal delay={60}>
             <h1 className="display text-[44px] sm:text-[56px] md:text-[64px] max-w-[880px]">
-              Every coffee chat, without the busywork.
+              {/* "without" starts the second line on wider screens; a phone wraps it where it fits */}
+              Every coffee chat, <br className="hidden sm:inline" />
+              without the busywork.
             </h1>
           </Reveal>
           <Reveal delay={120}>

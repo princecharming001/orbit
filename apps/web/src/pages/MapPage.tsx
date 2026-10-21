@@ -1220,36 +1220,69 @@ export function MapPage() {
               {/* warm intros from Village through someone no route above goes through: one more route each */}
               {extraIntros.length > 0 && (
                 <div className="space-y-2" data-testid="map-warm-intros">
-                  {extraIntros.map((w) => (
-                    <div
-                      key={`${w.introducer.name}:${w.hops.join('>')}`}
-                      className="border border-line rounded-[12px] p-3 text-[13px]"
-                      data-testid="map-warm-intro"
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-[12px] font-medium">Route via Village</span>
-                        <Chip
-                          className="h-5"
-                          tone={
-                            w.warmthWord === 'warm' ? 'good' : w.warmthWord === 'good' ? 'accent' : 'neutral'
-                          }
-                        >
-                          {w.warmthWord}
-                        </Chip>
-                      </div>
-                      <div className="mt-2 text-ink">{w.hops.join(' → ')}</div>
-                      {w.note && <div className="text-ink-3">{w.note}</div>}
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        className={cx('mt-2', TAP)}
-                        onClick={() => askIntroVia(w.introducer.personId!, w.targetPersonId!, w.warmth)}
-                        data-testid="map-warm-intro-ask"
+                  {extraIntros.map((w, j) => {
+                    // laid out like the routes above: numbered after them, one step per person, the source tagged
+                    const steps = w.hops.slice(1);
+                    return (
+                      <div
+                        key={`${w.introducer.name}:${w.hops.join('>')}`}
+                        className="border border-line rounded-[12px] p-3 hover:bg-canvas-2 transition-colors"
+                        data-testid="map-warm-intro"
                       >
-                        Ask {w.introducer.name.split(' ')[0]} for an intro
-                      </Button>
-                    </div>
-                  ))}
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[12px] font-medium">
+                            Route {(paths?.length ?? 0) + j + 1} · {steps.length} hop
+                            {steps.length > 1 ? 's' : ''}
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <Chip
+                              className="h-5"
+                              title="Found by Village, a warm-intro service that knows connections your own email and LinkedIn do not show"
+                            >
+                              Village
+                            </Chip>
+                            <Chip
+                              className="h-5"
+                              tone={
+                                w.warmthWord === 'warm'
+                                  ? 'good'
+                                  : w.warmthWord === 'good'
+                                    ? 'accent'
+                                    : 'neutral'
+                              }
+                            >
+                              {w.warmthWord}
+                            </Chip>
+                          </span>
+                        </div>
+                        <ol className="mt-2 space-y-1.5 text-[13px]">
+                          {steps.map((name, k) => (
+                            <li key={`${name}-${k}`} className="flex items-start gap-2">
+                              <span className="text-ink-3 tabular w-4">{k + 1}.</span>
+                              <span>
+                                <span className="font-medium">{name}</span>
+                                {k === steps.length - 1 && w.note ? (
+                                  <>
+                                    <br />
+                                    <span className="text-ink-3">{w.note}</span>
+                                  </>
+                                ) : null}
+                              </span>
+                            </li>
+                          ))}
+                        </ol>
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          className={cx('mt-2', TAP)}
+                          onClick={() => askIntroVia(w.introducer.personId!, w.targetPersonId!, w.warmth)}
+                          data-testid="map-warm-intro-ask"
+                        >
+                          Ask {w.introducer.name.split(' ')[0]} for an intro
+                        </Button>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
               {coldDirect && (
