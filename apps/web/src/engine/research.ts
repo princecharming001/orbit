@@ -32,7 +32,13 @@ export interface DossierView {
   openers: Claim[];
   careful: string[];
   confidence?: string;
-  sources: { n: number; url?: string; title?: string }[];
+  /** the full picture (dossier v1.1): empty on a dossier written before it */
+  career: (Claim & { role: string; org: string; start?: string; end?: string })[];
+  education: (Claim & { school: string; degree?: string; years?: string })[];
+  profiles: { kind: string; url: string }[];
+  highlights: (Claim & { kind: string; title: string; url?: string; summary?: string })[];
+  topics: string[];
+  sources: { n: number; url?: string; title?: string; demo?: boolean }[];
   /** for needs_disambiguation: the people it might be */
   candidates: { index: number; label: string; url?: string }[];
   updatedAt: string;
@@ -55,9 +61,11 @@ const field = (o: Obj | undefined, snake: string): unknown => {
 export function dossierView(d: Dossier): DossierView {
   const sources = (d.sources ?? []).map((s, i) => ({
     n: i + 1,
-    url: str(s.url),
+    // a web address only: a source is a link on the page, never anything it could run
+    url: str(s.url) && /^https?:\/\//i.test(str(s.url)!) ? str(s.url) : undefined,
     title: str(s.title),
     id: s.id,
+    demo: s.demo === true,
   }));
   const numberOf = new Map(sources.map((s) => [s.id, s.n]));
   const refs = (o: Obj | undefined) =>
@@ -108,7 +116,59 @@ export function dossierView(d: Dossier): DossierView {
       .map(str)
       .filter((x): x is string => !!x),
     confidence: str(field(c, 'confidence')),
-    sources: sources.map(({ n, url, title }) => ({ n, url, title })),
+    career: arr(field(c, 'career'))
+      .map((x) => {
+        const o = obj(x);
+        const role = str(o?.role);
+        const org = str(o?.org);
+        if (!o || (!role && !org)) return undefined;
+        const text = [role, org && `at ${org}`].filter(Boolean).join(' ');
+        return {
+          text,
+          sources: refs(o),
+          role: role ?? '',
+          org: org ?? '',
+          start: str(o.start),
+          end: str(o.end),
+        };
+      })
+      .filter((x): x is NonNullable<typeof x> => !!x),
+    education: arr(field(c, 'education'))
+      .map((x) => {
+        const o = obj(x);
+        const school = str(o?.school);
+        if (!o || !school) return undefined;
+        return { text: school, sources: refs(o), school, degree: str(o.degree), years: str(o.years) };
+      })
+      .filter((x): x is NonNullable<typeof x> => !!x),
+    profiles: arr(field(c, 'profiles'))
+      .map((x) => {
+        const o = obj(x);
+        const url = str(o?.url);
+        return url && /^https?:\/\//i.test(url) ? { kind: str(o?.kind) ?? 'other', url } : undefined;
+      })
+      .filter((x): x is { kind: string; url: string } => !!x),
+    highlights: arr(field(c, 'highlights'))
+      .map((x) => {
+        const o = obj(x);
+        const title = str(o?.title);
+        if (!o || !title) return undefined;
+        const url = str(o.url);
+        return {
+          text: title,
+          title,
+          sources: refs(o),
+          date: str(o.date),
+          kind: str(o.kind) ?? 'other',
+          url: url && /^https?:\/\//i.test(url) ? url : undefined,
+          summary: str(o.summary),
+        };
+      })
+      .filter((x): x is NonNullable<typeof x> => !!x),
+    topics: arr(field(c, 'topics'))
+      .map(str)
+      .filter((x): x is string => !!x),
+    sources: sources.map(({ n, url, title, demo }) => ({ n, url, title, demo })),
     candidates: arr(d.candidates).map((x, index) => {
       const o = obj(x) ?? {};
       const label =

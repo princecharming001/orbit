@@ -13,7 +13,10 @@ import {
   buildDossier,
   DOSSIER_CAP_USD,
   type DossierInput,
+  dropUncited,
   exaSearches,
+  finish,
+  invalidSourceIds,
 } from '../../../../../supabase/functions/_shared/research/dossier';
 import {
   appearsMinor,
@@ -190,7 +193,8 @@ describe('dossier pipeline (§5.6)', () => {
       numResults: 5,
     });
     expect(byCategory(undefined).body).toMatchObject({
-      query: '"Jane Doe" Northwind Robotics podcast OR talk OR interview OR blog',
+      query:
+        '"Jane Doe" Northwind Robotics podcast OR talk OR interview OR blog OR GitHub OR personal website',
     });
     const contents = s.net.calls.filter((c) => c.url.endsWith('/contents'));
     expect(contents).toHaveLength(1);
@@ -468,7 +472,44 @@ describe('research guards', () => {
       ['publication', '"Jane Doe" soft robotics'],
     ]);
     expect(exaSearches(jane, 0)[2]!.query).toBe(
-      '"Jane Doe" Northwind Robotics podcast OR talk OR interview OR blog',
+      '"Jane Doe" Northwind Robotics podcast OR talk OR interview OR blog OR GitHub OR personal website',
     );
+  });
+
+  it('keeps the full picture only when cited, and the fallback lays out the LinkedIn career', () => {
+    const base = {
+      who: 'x',
+      now: { role: 'VP', org: 'Northwind', since: null, source_ids: ['S1'] },
+      recently: [],
+      in_common: [],
+      history: { first_contact: null, last_contact: null, summary: null },
+      openers: [],
+      careful: [],
+      confidence: 'high' as const,
+      career: [
+        { role: 'VP Engineering', org: 'Northwind', start: '2022', end: null, source_ids: ['S1'] },
+        { role: 'Engineer', org: 'Nowhere', start: null, end: null, source_ids: ['S9'] },
+      ],
+      highlights: [
+        {
+          kind: 'talk' as const,
+          title: 'Robots at scale',
+          date: '2026',
+          url: 'javascript:alert(1)',
+          summary: null,
+          source_ids: ['S1'],
+        },
+      ],
+      profiles: [
+        { kind: 'github' as const, url: 'https://github.com/janedoe' },
+        { kind: 'other' as const, url: 'javascript:alert(1)' },
+      ],
+    };
+    expect(invalidSourceIds(base, ['S1'])).toEqual(['S9']);
+    const dropped = dropUncited(base, ['S1']);
+    expect(dropped.career?.map((c) => c.org)).toEqual(['Northwind']);
+    const done = finish(dropped, { messages: [], notes: [], events: [] } as never, false);
+    expect(done.highlights?.[0]?.url).toBeNull();
+    expect(done.profiles?.map((p) => p.url)).toEqual(['https://github.com/janedoe']);
   });
 });

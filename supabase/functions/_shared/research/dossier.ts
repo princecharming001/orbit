@@ -205,7 +205,7 @@ export async function buildDossier(deps: DossierDeps, input: DossierInput): Prom
   }
 
   // 5. contents for the top 6 kept pages
-  const kept = dedupeByUrl([...keptPeople, ...keptOther]).slice(0, 6);
+  const kept = dedupeByUrl([...keptPeople, ...keptOther]).slice(0, 8);
   const texts = await contentsStep(
     run,
     kept.map((r) => r.url),
@@ -364,7 +364,10 @@ export function exaSearches(input: DossierInput, now: number): ExaSearchRequest[
   const third: ExaSearchRequest =
     input.goalKind === 'collaboration'
       ? { ...base, category: 'publication', query: q(`"${name}"`, input.field ?? org) }
-      : { ...base, query: q(`"${name}"`, org, 'podcast OR talk OR interview OR blog') };
+      : {
+          ...base,
+          query: q(`"${name}"`, org, 'podcast OR talk OR interview OR blog OR GitHub OR personal website'),
+        };
   return [
     { ...base, category: 'people', query: q(`"${name}"`, org, title) },
     {
@@ -555,6 +558,9 @@ export function invalidSourceIds(d: DossierContent, allowed: string[]): string[]
     ...d.recently.flatMap((x) => x.source_ids),
     ...d.in_common.flatMap((x) => x.source_ids),
     ...d.openers.flatMap((x) => x.source_ids),
+    ...(d.career ?? []).flatMap((x) => x.source_ids),
+    ...(d.education ?? []).flatMap((x) => x.source_ids),
+    ...(d.highlights ?? []).flatMap((x) => x.source_ids),
   ];
   return [...new Set(all.filter((id) => !ok.has(id)))];
 }
@@ -604,6 +610,15 @@ export function dropUncited(d: DossierContent, allowed: string[]): DossierConten
       .map((x) => ({ ...x, source_ids: f(x.source_ids) }))
       .filter((x) => x.source_ids.length),
     openers: d.openers.map((x) => ({ ...x, source_ids: f(x.source_ids) })).filter((x) => x.source_ids.length),
+    career: (d.career ?? [])
+      .map((x) => ({ ...x, source_ids: f(x.source_ids) }))
+      .filter((x) => x.source_ids.length),
+    education: (d.education ?? [])
+      .map((x) => ({ ...x, source_ids: f(x.source_ids) }))
+      .filter((x) => x.source_ids.length),
+    highlights: (d.highlights ?? [])
+      .map((x) => ({ ...x, source_ids: f(x.source_ids) }))
+      .filter((x) => x.source_ids.length),
     confidence: 'low',
   };
 }
@@ -626,6 +641,15 @@ export function finish(
       .filter((o) => words(o.text) <= 25)
       .slice(0, 3),
     careful: d.careful.filter((c) => !sensitiveCategory(c)),
+    career: (d.career ?? []).slice(0, 12),
+    education: (d.education ?? []).slice(0, 6),
+    // a profile link has to be a web address, never anything a page could run
+    profiles: (d.profiles ?? []).filter((p) => /^https?:\/\//i.test(p.url)).slice(0, 6),
+    highlights: (d.highlights ?? [])
+      .filter((h) => !sensitiveCategory(`${h.title} ${h.summary ?? ''}`))
+      .map((h) => ({ ...h, url: h.url && /^https?:\/\//i.test(h.url) ? h.url : null }))
+      .slice(0, 8),
+    topics: (d.topics ?? []).filter((t) => !sensitiveCategory(t)).slice(0, 6),
     history: {
       first_contact: d.history.first_contact ?? history.firstContact ?? null,
       last_contact: d.history.last_contact ?? history.lastContact ?? null,
@@ -667,6 +691,24 @@ function fallbackDossier(
     openers: [],
     careful: ['This brief was assembled without web research; check it before relying on it.'],
     confidence: 'low',
+    // the profile's own history, when there is a profile (always source S1)
+    career: profile
+      ? (profile.work_experience ?? []).slice(0, 12).map((w) => ({
+          role: w.position ?? '',
+          org: w.company ?? '',
+          start: fmtDate(w.start) || null,
+          end: w.current ? null : fmtDate(w.end) || null,
+          source_ids: ['S1'],
+        }))
+      : [],
+    education: profile
+      ? (profile.education ?? []).slice(0, 6).map((e) => ({
+          school: e.school ?? '',
+          degree: e.degree ?? null,
+          years: [fmtDate(e.start), fmtDate(e.end)].filter(Boolean).join('–') || null,
+          source_ids: ['S1'],
+        }))
+      : [],
   };
 }
 

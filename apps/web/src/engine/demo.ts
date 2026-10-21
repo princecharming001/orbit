@@ -3,6 +3,7 @@ import { buildDemoDataset, businessDay } from '@orbit/core';
 import { recomputeAllStrengths, setCurrentUserId } from '../db/repo';
 import { db, wipeDatabase } from '../db/schema';
 import { generateBrief, recommendationsRefresh, refreshPersonSummary } from './brief';
+import { demoDossiers } from './demoDossiers';
 import { recomputeEdges } from './graph';
 import { ingestEmails, ingestEvents, type RawEmail, type RawEvent } from './ingest';
 import { ingestNote } from './notes';
@@ -171,6 +172,8 @@ export async function loadDemo(
   await db.resumes.put(ds.resume);
   await db.resumeFacets.bulkPut(ds.resumeFacets);
   await db.organizations.bulkPut(ds.organizations);
+  // sample research briefs, so a person's About tab shows what research finds
+  await db.dossiers.bulkPut(demoDossiers(user.id, now, user.school));
   const connected = ds.people.filter((p) => p.linkedinConnectedOn);
   await db.integrations.put({
     id: 'int_demo',

@@ -204,10 +204,13 @@ test.describe('account mode (mocked orbit-api)', () => {
       // research: queued, then ready, with numbered sources
       await page.getByTestId('dossier-research').click();
       await expect(page.getByTestId('dossier-content')).toBeVisible({ timeout: 20_000 });
-      await expect(page.getByTestId('dossier-content')).toContainText(
+      // the card says who they are; the whole brief, openers and links included, is on About
+      await page.getByTestId('dossier-open-about').click();
+      const debrief = page.getByTestId('research-debrief');
+      await expect(debrief.getByTestId('debrief-openers')).toContainText(
         'Your talk on fraud models stuck with me.',
       );
-      await expect(page.getByTestId('dossier-source').first()).toHaveAttribute('href', /example\.com/);
+      await expect(debrief.getByTestId('debrief-ref').first()).toHaveAttribute('href', /example\.com/);
     });
 
     test('Discover, Find people: search, see who you know, add one', async ({ page }) => {

@@ -31,6 +31,7 @@ import { PersonCompanyLogo } from '../components/CompanyLogo';
 import { DraftEditor, handoffWhere, OutboxStatus } from '../components/DraftEditor';
 import { MutualConnections } from '../components/MutualConnections';
 import { DossierCard } from '../components/people/DossierCard';
+import { ResearchDebrief } from '../components/people/ResearchDebrief';
 import { STAGE_COLOR, StrengthDots } from '../components/people/shared';
 import { TieScoreCard } from '../components/people/TieScoreCard';
 import { ConfirmEarlyDone, chatTimeLabel, ScheduleChatDialog } from '../components/ScheduleChat';
@@ -852,7 +853,7 @@ export function PersonPage() {
             onChange={(v) => setParams({ tab: v })}
             items={[
               { value: 'timeline', label: 'Timeline', count: timeline.length },
-              { value: 'facts', label: 'Facts', count: facts.length },
+              { value: 'facts', label: 'About', count: facts.length || undefined },
               { value: 'connections', label: 'Who they know', count: neighbours.filter(Boolean).length },
               { value: 'prep', label: 'Prep' },
             ]}
@@ -881,6 +882,9 @@ export function PersonPage() {
           )}
           {tab === 'facts' && (
             <div className="space-y-4">
+              {/* the research brief first: who they are, from the web and LinkedIn, with links */}
+              <ResearchDebrief person={person} userId={user.id} />
+              <h2 className="text-[13px] font-medium text-ink pt-2">What you've learned yourself</h2>
               {facts.length === 0 && (
                 <p className="text-ink-3 text-[13px]">
                   Nothing yet. Facts come from emails and meeting notes.

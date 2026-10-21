@@ -1,7 +1,8 @@
 import type { Dossier, Person } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { RefreshCw } from 'lucide-react';
+import { ArrowRight, RefreshCw } from 'lucide-react';
 import { type ReactNode, useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { db } from '../../db/schema';
 import {
   type Claim,
@@ -197,84 +198,14 @@ export function DossierCard({ person, userId }: { person: Person; userId: string
               <Cited claim={v.now} sources={v.sources} />
             </Section>
           ) : null}
-          {v.recently.length ? (
-            <Section title="Recently">
-              <ul className="space-y-1">
-                {v.recently.map((c, i) => (
-                  <li key={i}>
-                    <Cited claim={c} sources={v.sources} />
-                  </li>
-                ))}
-              </ul>
-            </Section>
-          ) : null}
-          {v.inCommon.length ? (
-            <Section title="In common with you">
-              <ul className="space-y-1">
-                {v.inCommon.map((c, i) => (
-                  <li key={i}>
-                    <Cited claim={c} sources={v.sources} />
-                  </li>
-                ))}
-              </ul>
-            </Section>
-          ) : null}
-          {v.history && (v.history.summary || v.history.firstContact) ? (
-            <Section title="Your history">
-              {[
-                v.history.firstContact ? `First contact ${v.history.firstContact}` : '',
-                v.history.lastContact ? `last ${v.history.lastContact}` : '',
-              ]
-                .filter(Boolean)
-                .join(', ')}
-              {v.history.summary ? (
-                <p className={v.history.firstContact ? 'mt-1' : undefined}>{v.history.summary}</p>
-              ) : null}
-            </Section>
-          ) : null}
-          {v.openers.length ? (
-            <Section title="Openers">
-              <ol className="list-decimal pl-4 space-y-1">
-                {v.openers.map((c, i) => (
-                  <li key={i}>
-                    <Cited claim={c} sources={v.sources} />
-                  </li>
-                ))}
-              </ol>
-            </Section>
-          ) : null}
-          {v.careful.length ? (
-            <Section title="Careful">
-              <ul className="list-disc pl-4 space-y-1">
-                {v.careful.map((t, i) => (
-                  <li key={i}>{t}</li>
-                ))}
-              </ul>
-            </Section>
-          ) : null}
-          {v.sources.length ? (
-            <Section title="Sources">
-              <ol className="space-y-0.5 text-[12px]">
-                {v.sources.map((s) => (
-                  <li key={s.n} className="truncate">
-                    [{s.n}]{' '}
-                    {s.url ? (
-                      <a
-                        href={s.url}
-                        target="_blank"
-                        rel="noreferrer noopener"
-                        className="text-ink underline decoration-[#cfcdc9] underline-offset-4 hover:decoration-ink"
-                      >
-                        {s.title ?? s.url}
-                      </a>
-                    ) : (
-                      (s.title ?? 'Your own messages and notes')
-                    )}
-                  </li>
-                ))}
-              </ol>
-            </Section>
-          ) : null}
+          {/* the whole brief (career, highlights, openers, sources) lives on the About tab */}
+          <Link
+            to={`/people/${person.id}?tab=facts`}
+            className="mt-3 inline-flex items-center gap-1 text-[13px] text-accent hover:underline"
+            data-testid="dossier-open-about"
+          >
+            See everything on About <ArrowRight size={13} />
+          </Link>
           {v.status === 'partial' ? (
             <p className="mt-3 text-[12px] text-ink-3">
               Some sources could not be reached, so this is partial.

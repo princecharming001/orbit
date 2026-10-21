@@ -8582,7 +8582,39 @@ var dossierSchema = z.object({
   }),
   openers: z.array(z.object({ text: z.string(), source_ids: sourceIds })),
   careful: z.array(z.string()),
-  confidence: z.enum(["high", "medium", "low"])
+  confidence: z.enum(["high", "medium", "low"]),
+  // the full picture (v1.1); optional so a dossier written before them still reads
+  career: z.array(
+    z.object({
+      role: z.string(),
+      org: z.string(),
+      start: z.string().nullable(),
+      end: z.string().nullable(),
+      source_ids: sourceIds
+    })
+  ).optional(),
+  education: z.array(
+    z.object({
+      school: z.string(),
+      degree: z.string().nullable(),
+      years: z.string().nullable(),
+      source_ids: sourceIds
+    })
+  ).optional(),
+  profiles: z.array(
+    z.object({ kind: z.enum(["linkedin", "x", "github", "website", "scholar", "other"]), url: z.string() })
+  ).optional(),
+  highlights: z.array(
+    z.object({
+      kind: z.enum(["post", "article", "talk", "podcast", "project", "paper", "news", "award", "other"]),
+      title: z.string(),
+      date: z.string().nullable(),
+      url: z.string().nullable(),
+      summary: z.string().nullable(),
+      source_ids: sourceIds
+    })
+  ).optional(),
+  topics: z.array(z.string()).optional()
 });
 
 // supabase/functions/_shared/research/dossier.ts

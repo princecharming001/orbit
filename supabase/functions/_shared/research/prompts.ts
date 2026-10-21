@@ -5,7 +5,7 @@
  */
 import { z } from '../providers/zod';
 
-export const PROMPT_VERSION = 'dossier-v1.0';
+export const PROMPT_VERSION = 'dossier-v1.1';
 
 export function dossierSystem(userFirstName: string, goalSentence: string): string {
   return [
@@ -14,6 +14,7 @@ export function dossierSystem(userFirstName: string, goalSentence: string): stri
     'If sources disagree or might be about a different person with the same name, say so in "careful" and leave the claim out.',
     'Never guess age, ethnicity, religion, health, family, sexuality or politics, and never include them even if a source mentions them.',
     'Openers must be specific, true, and something a thoughtful person would mention; never flattery.',
+    'Also lay out who they are in full, from the sources only: "career" (every role you can source, newest first, with start and end as written, e.g. "2021" or "Mar 2022"), "education", "profiles" (their own pages: LinkedIn, X, GitHub, a personal site, Google Scholar; only URLs that appear in the sources), "highlights" (up to 8 things they made or said that matter: posts, articles, talks, podcasts, projects, papers, news, awards, each with the URL of its source) and "topics" (up to 6 short phrases for what they work on or talk about).',
   ].join('\n');
 }
 
@@ -81,6 +82,46 @@ export const dossierSchema = z.object({
   openers: z.array(z.object({ text: z.string(), source_ids: sourceIds })),
   careful: z.array(z.string()),
   confidence: z.enum(['high', 'medium', 'low']),
+  // the full picture (v1.1); optional so a dossier written before them still reads
+  career: z
+    .array(
+      z.object({
+        role: z.string(),
+        org: z.string(),
+        start: z.string().nullable(),
+        end: z.string().nullable(),
+        source_ids: sourceIds,
+      }),
+    )
+    .optional(),
+  education: z
+    .array(
+      z.object({
+        school: z.string(),
+        degree: z.string().nullable(),
+        years: z.string().nullable(),
+        source_ids: sourceIds,
+      }),
+    )
+    .optional(),
+  profiles: z
+    .array(
+      z.object({ kind: z.enum(['linkedin', 'x', 'github', 'website', 'scholar', 'other']), url: z.string() }),
+    )
+    .optional(),
+  highlights: z
+    .array(
+      z.object({
+        kind: z.enum(['post', 'article', 'talk', 'podcast', 'project', 'paper', 'news', 'award', 'other']),
+        title: z.string(),
+        date: z.string().nullable(),
+        url: z.string().nullable(),
+        summary: z.string().nullable(),
+        source_ids: sourceIds,
+      }),
+    )
+    .optional(),
+  topics: z.array(z.string()).optional(),
 });
 
 export type DossierContent = z.infer<typeof dossierSchema>;
