@@ -219,7 +219,7 @@ test.describe('Orbit demo flow', () => {
     await page.getByTestId('suggestion-thank_you').first().getByRole('link').nth(1).click();
     await expect(page).toHaveURL(/\/people\//);
     await expect(page.getByText(/summary/i).first()).toBeVisible();
-    await page.getByRole('tab', { name: /facts/i }).click();
+    await page.getByRole('tab', { name: /^about/i }).click();
     await expect(page.getByText(/from notes/i).first()).toBeVisible();
     await page.getByRole('tab', { name: /prep/i }).click();
     await expect(page.getByText(/questions to ask/i)).toBeVisible();
@@ -375,7 +375,7 @@ test.describe('Orbit demo flow', () => {
       );
     await page.getByTestId('capture-save').click();
     await expect(page).toHaveURL(/\/people\//, { timeout: 15_000 });
-    await page.getByRole('tab', { name: /facts/i }).click();
+    await page.getByRole('tab', { name: /^about/i }).click();
     // the fact is stored as written ("offered to refer me") and shown to the student as "you"
     await expect(page.getByText(/offered to refer you/i).first()).toBeVisible();
     await expect(page.getByText(/you promised/i).first()).toBeVisible();
@@ -1271,7 +1271,7 @@ test.describe('Setup without Google', () => {
     await loadDemo(page);
     await page.goto('people');
     await page.locator('a[href*="/people/p"]:visible').first().click();
-    await page.getByRole('tab', { name: /facts/i }).click();
+    await page.getByRole('tab', { name: /^about/i }).click();
     for (const t of ['She grew up in Pittsburgh', 'She grew up in Chicago']) {
       await page.getByLabel('Kind of fact').selectOption('personal');
       await page.getByLabel('New fact').fill(t);
