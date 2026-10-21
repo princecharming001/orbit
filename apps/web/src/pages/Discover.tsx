@@ -347,14 +347,10 @@ function NetworkDiscover({ tabs }: { tabs?: ReactNode }) {
                             id={introducer.id}
                             size={18}
                           />
-                          <span className="truncate">
-                            {introducer.firstName} could introduce you
-                          </span>
+                          <span className="truncate">{introducer.firstName} could introduce you</span>
                         </>
                       ) : (
-                        <span className="truncate">
-                          Known from LinkedIn only, so warm up first
-                        </span>
+                        <span className="truncate">Known from LinkedIn only, so warm up first</span>
                       )}
                     </p>
                   )}
