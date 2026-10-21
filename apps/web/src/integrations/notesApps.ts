@@ -101,19 +101,46 @@ async function call<T>(
   }
 }
 
+/** How a call reaches the app: a pasted key (a plain string), or the access token from signing in. */
+export type AppAuth = string | { accessToken: string };
+const authBody = (auth: AppAuth) =>
+  typeof auth === 'string' ? { apiKey: auth } : { accessToken: auth.accessToken };
+
+/** Which apps Orbit can sign in to (its OAuth client ids); null where only a pasted key works. */
+export function oauthClients(): Promise<
+  ConnectorOutcome<{ calcom: string | null; fathom: string | null }> | NotesFailure
+> {
+  return call('/oauth/config', {});
+}
+
+/** Trade the code from the app's sign-in for tokens, or refresh them; the server adds the secret. */
+export function oauthTokens(
+  body:
+    | { provider: 'calcom' | 'fathom'; grant: 'code'; code: string; redirectUri: string }
+    | { provider: 'calcom' | 'fathom'; grant: 'refresh'; refreshToken: string },
+): Promise<
+  ConnectorOutcome<{ accessToken: string; refreshToken?: string; expiresIn?: number }> | NotesFailure
+> {
+  return call('/oauth/token', body);
+}
+
 /** One page of the student's Fathom meetings, newest first. */
 export function fathomMeetingsPage(
-  apiKey: string,
+  auth: AppAuth,
   q: { createdAfter?: string; cursor?: string },
   opts: { fetch?: typeof fetch; signal?: AbortSignal } = {},
 ): Promise<ConnectorOutcome<{ meetings: FathomMeeting[]; nextCursor: string | null }> | NotesFailure> {
-  return call('/fathom/meetings', { apiKey, createdAfter: q.createdAfter, cursor: q.cursor }, opts);
+  return call(
+    '/fathom/meetings',
+    { ...authBody(auth), createdAfter: q.createdAfter, cursor: q.cursor },
+    opts,
+  );
 }
 
 /** The student's Cal.com username and event types, each with its booking link. */
 export function calEventTypes(
-  apiKey: string,
+  auth: AppAuth,
   opts: { fetch?: typeof fetch; signal?: AbortSignal } = {},
 ): Promise<ConnectorOutcome<{ username?: string; eventTypes: CalEventType[] }> | NotesFailure> {
-  return call('/calcom/event-types', { apiKey }, opts);
+  return call('/calcom/event-types', authBody(auth), opts);
 }

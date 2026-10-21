@@ -177,3 +177,61 @@ describe('orbit-notes proxy', () => {
     expect(bookingUrl(undefined, { slug: 'chat' })).toBeUndefined();
   });
 });
+
+describe('signing in to Cal.com and Fathom', () => {
+  const oauth = {
+    calcom: { clientId: 'cal_client', clientSecret: 'cal_secret_value' },
+    fathom: { clientId: 'fathom_client', clientSecret: 'fathom_secret_value' },
+  };
+  const withOAuth = (f: typeof fetch) =>
+    makeHandler({ origins: defaultOrigins, take: memoryTake(), fetch: f, oauth });
+
+  it('says which sign-ins are set up, with the public ids only', async () => {
+    const r = await withOAuth(vi.fn() as unknown as typeof fetch)(post('/oauth/config', {}));
+    const j = await r.json();
+    expect(j).toEqual({ ok: true, calcom: 'cal_client', fathom: 'fathom_client' });
+    expect(JSON.stringify(j)).not.toContain('secret');
+    const off = await handler(vi.fn() as unknown as typeof fetch)(post('/oauth/config', {}));
+    expect(await off.json()).toEqual({ ok: true, calcom: null, fathom: null });
+  });
+
+  it('trades a code for tokens with the secret it holds, only for a redirect back to Orbit', async () => {
+    const f = vi.fn(async () =>
+      ok({ access_token: 'acc_123456789012', refresh_token: 'ref_123456789012', expires_in: 1800 }),
+    ) as unknown as typeof fetch;
+    const h = withOAuth(f);
+    const r = await h(
+      post('/oauth/token', {
+        provider: 'calcom',
+        code: 'code_1',
+        redirectUri: 'https://tryorbit.today/auth/app',
+      }),
+    );
+    expect(await r.json()).toMatchObject({ ok: true, accessToken: 'acc_123456789012', expiresIn: 1800 });
+    const [url, init] = (f as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[0]!;
+    expect(url).toBe('https://api.cal.com/v2/auth/oauth2/token');
+    expect(String(init.body)).toContain('client_secret=cal_secret_value');
+    expect(String(init.body)).toContain('grant_type=authorization_code');
+    // a code meant for somebody else's site is never exchanged
+    const away = await h(
+      post('/oauth/token', { provider: 'calcom', code: 'c', redirectUri: 'https://evil.example.com/cb' }),
+    );
+    expect(await away.json()).toMatchObject({ ok: false, reason: 'refused' });
+    expect((f as unknown as { mock: { calls: unknown[] } }).mock.calls).toHaveLength(1);
+  });
+
+  it('a signed-in Fathom reads each summary from the recording, and sends the token as a bearer', async () => {
+    const calls: string[] = [];
+    const f = vi.fn(async (u: string, init?: RequestInit) => {
+      calls.push(`${u} ${(init?.headers as Record<string, string>)?.Authorization ?? ''}`);
+      if (u.includes('/recordings/4242/summary'))
+        return ok({ summary: { template_name: 'General', markdown_formatted: '## From the recording' } });
+      return ok({ items: [{ ...fathomItem, default_summary: null }], next_cursor: null });
+    }) as unknown as typeof fetch;
+    const r = await handler(f)(post('/fathom/meetings', { accessToken: 'acc_fathom_token_1' }));
+    const j = await r.json();
+    expect(j.meetings[0].summary).toBe('## From the recording');
+    expect(calls[0]).not.toContain('include_summary');
+    expect(calls.every((c) => c.endsWith('Bearer acc_fathom_token_1'))).toBe(true);
+  });
+});

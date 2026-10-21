@@ -1,17 +1,45 @@
 /**
  * Settings, Integrations: Fathom (notes from recorded meetings, filed on each person) and Cal.com (booking links for
- * drafts). Each is connected with the student's own API key, kept in this browser only.
+ * drafts). Each connects by signing in to the app (when Orbit's OAuth client for it is set), or with the student's
+ * own API key; either way the credentials stay in this browser.
  */
 import type { User } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Check } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { calStatus, connectCalcom, disconnectCalcom, refreshCalcom } from '../engine/calcom';
-import { connectFathom, disconnectFathom, fathomStatus, syncFathom } from '../engine/fathom';
+import { signInClients } from '../engine/appSignIn';
+import {
+  calStatus,
+  connectCalcom,
+  connectCalcomSignedIn,
+  disconnectCalcom,
+  refreshCalcom,
+} from '../engine/calcom';
+import {
+  connectFathom,
+  connectFathomSignedIn,
+  disconnectFathom,
+  fathomStatus,
+  syncFathom,
+} from '../engine/fathom';
 import { usesMockConnectors } from '../integrations/connectorsMock';
 import { Button, Input, relDate, Spinner, Switch, useToast } from '../ui';
 import { AppMark, IntegrationRow, RowStatus } from './IntegrationRow';
+
+/** This copy of Orbit can sign in to the app (its OAuth client is set), so Connect opens the app's own sign-in. */
+function useCanSignIn(app: 'calcom' | 'fathom', userId: string): boolean {
+  const [can, setCan] = useState(false);
+  useEffect(() => {
+    if (usesMockConnectors(userId)) return;
+    let live = true;
+    void signInClients().then((c) => live && setCan(!!c[app]));
+    return () => {
+      live = false;
+    };
+  }, [app, userId]);
+  return can;
+}
 
 export const FATHOM_KEY_URL = 'https://fathom.video/customize#api-access-header';
 export const CALCOM_KEY_URL = 'https://app.cal.com/settings/developer/api-keys';
@@ -91,6 +119,7 @@ export function FathomRow({ user }: { user: User }) {
   const [asking, setAsking] = useState(false);
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState<string>();
+  const canSignIn = useCanSignIn('fathom', user.id);
   if (!status) return null;
   const done = (r: Awaited<ReturnType<typeof syncFathom>>) => {
     if (r.ok) {
@@ -108,6 +137,15 @@ export function FathomRow({ user }: { user: User }) {
     setBusy('Importing…');
     try {
       done(await connectFathom(user, key));
+    } finally {
+      setBusy(undefined);
+    }
+  };
+  const signIn = async () => {
+    setError(undefined);
+    setBusy('Waiting for Fathom…');
+    try {
+      done(await connectFathomSignedIn(user));
     } finally {
       setBusy(undefined);
     }
@@ -182,6 +220,8 @@ export function FathomRow({ user }: { user: User }) {
                 if (status.connected) return void disconnectFathom(user);
                 if (!on) return setAsking(false);
                 if (usesMockConnectors(user.id)) return void connect();
+                // Fathom's own sign-in when Orbit has it, else the key field
+                if (canSignIn) return void signIn();
                 setAsking(true);
               }}
               data-testid={status.connected ? 'settings-fathom-disconnect' : 'settings-fathom-connect'}
@@ -190,6 +230,16 @@ export function FathomRow({ user }: { user: User }) {
         )
       }
     >
+      {canSignIn && !status.connected && !asking && (
+        <button
+          type="button"
+          className="text-[12px] text-ink-3 underline underline-offset-2 hover:text-ink"
+          onClick={() => setAsking(true)}
+          data-testid="settings-fathom-use-key"
+        >
+          Use an API key instead
+        </button>
+      )}
       {asking && !status.connected && (
         <KeyField
           id="fathom-key"
@@ -234,12 +284,13 @@ export function CalcomRow({ user }: { user: User }) {
   const [asking, setAsking] = useState(false);
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState<string>();
+  const canSignIn = useCanSignIn('calcom', user.id);
   if (!status) return null;
-  const connect = async (key = '') => {
+  const connect = async (key = '', signedIn = false) => {
     setError(undefined);
-    setBusy('Connecting…');
+    setBusy(signedIn ? 'Waiting for Cal.com…' : 'Connecting…');
     try {
-      const r = await connectCalcom(user, key);
+      const r = signedIn ? await connectCalcomSignedIn(user) : await connectCalcom(user, key);
       if (r.ok) {
         setAsking(false);
         toast.push({
@@ -314,6 +365,8 @@ export function CalcomRow({ user }: { user: User }) {
                 if (status.connected) return void disconnectCalcom(user);
                 if (!on) return setAsking(false);
                 if (usesMockConnectors(user.id)) return void connect();
+                // Cal.com's own sign-in when Orbit has it, else the key field
+                if (canSignIn) return void connect('', true);
                 setAsking(true);
               }}
               data-testid={status.connected ? 'settings-calcom-disconnect' : 'settings-calcom-connect'}
@@ -322,6 +375,16 @@ export function CalcomRow({ user }: { user: User }) {
         )
       }
     >
+      {canSignIn && !status.connected && !asking && (
+        <button
+          type="button"
+          className="text-[12px] text-ink-3 underline underline-offset-2 hover:text-ink"
+          onClick={() => setAsking(true)}
+          data-testid="settings-calcom-use-key"
+        >
+          Use an API key instead
+        </button>
+      )}
       {asking && !status.connected && (
         <KeyField
           id="calcom-key"

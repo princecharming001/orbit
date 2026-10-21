@@ -34,6 +34,12 @@ export interface Bucket {
 }
 export type Take = (buckets: Bucket[]) => Promise<{ allowed: boolean; over?: string }>;
 
+/** An app's OAuth client, registered by Orbit; the secret lives only in the function's settings. */
+export interface OAuthClient {
+  clientId: string;
+  clientSecret: string;
+}
+
 export interface NotesDeps {
   origins: (origin: string) => boolean;
   take: Take;
@@ -41,7 +47,17 @@ export interface NotesDeps {
   now?: () => Date;
   salt?: string;
   limits?: Limits;
+  /** "Connect with Cal.com" and "Connect with Fathom": on once each app's client is set */
+  oauth?: { calcom?: OAuthClient; fathom?: OAuthClient };
 }
+
+export const CALCOM_AUTHORIZE = 'https://app.cal.com/auth/oauth2/authorize';
+export const CALCOM_TOKEN = 'https://api.cal.com/v2/auth/oauth2/token';
+/** what Orbit asks Cal.com for: the event types and the username for their links */
+export const CALCOM_SCOPES = 'EVENT_TYPE_READ PROFILE_READ';
+export const FATHOM_AUTHORIZE = 'https://fathom.video/external/v1/oauth2/authorize';
+export const FATHOM_TOKEN = 'https://api.fathom.ai/external/v1/oauth2/token';
+export const FATHOM_SCOPES = 'public_api';
 
 /** A Fathom meeting, as Orbit files it. */
 export interface FathomMeeting {
@@ -142,9 +158,18 @@ export function postgrestTake(url: string, serviceKey: string, doFetch: typeof f
   };
 }
 
+/** How a call reaches the app: the student's own key, or the access token from signing in. */
+type AppAuth = { apiKey: string } | { accessToken: string };
+
+function authOf(body: Record<string, unknown>): AppAuth | undefined {
+  if (validKey(body.accessToken)) return { accessToken: String(body.accessToken).trim() };
+  if (validKey(body.apiKey)) return { apiKey: String(body.apiKey).trim() };
+  return undefined;
+}
+
 /** A key the student pasted: a plain token, no spaces, of a sane length. */
 export function validKey(k: unknown): k is string {
-  return typeof k === 'string' && /^[A-Za-z0-9._\-~+/=]{10,400}$/.test(k.trim());
+  return typeof k === 'string' && /^[A-Za-z0-9._\-~+/=]{10,4000}$/.test(k.trim());
 }
 
 const str = (v: unknown): string | undefined => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
@@ -183,19 +208,27 @@ async function fathomMeetings(
   body: Record<string, unknown>,
   doFetch: typeof fetch,
 ): Promise<Result<{ meetings: FathomMeeting[]; nextCursor: string | null }>> {
+  const auth = authOf(body)!;
+  const signedIn = 'accessToken' in auth;
+  const headers: Record<string, string> = signedIn
+    ? { Authorization: `Bearer ${auth.accessToken}`, accept: 'application/json' }
+    : { 'X-Api-Key': auth.apiKey, accept: 'application/json' };
   const q = new URL(`${FATHOM_BASE}/meetings`);
-  q.searchParams.set('include_summary', 'true');
+  // a signed-in app may not ask for summaries with the list: it reads each recording's summary after
+  if (!signedIn) q.searchParams.set('include_summary', 'true');
   q.searchParams.set('include_action_items', 'true');
   const after = str(body.createdAfter);
   if (after && !Number.isNaN(Date.parse(after)))
     q.searchParams.set('created_after', new Date(after).toISOString());
   const cursor = str(body.cursor);
   if (cursor) q.searchParams.set('cursor', cursor);
-  const res = await doFetch(q.toString(), {
-    headers: { 'X-Api-Key': String(body.apiKey).trim(), accept: 'application/json' },
-  });
+  const res = await doFetch(q.toString(), { headers });
   if (res.status === 401 || res.status === 403)
-    return { ok: false, reason: 'bad_key', message: 'Fathom did not accept that API key.' };
+    return {
+      ok: false,
+      reason: 'bad_key',
+      message: signedIn ? 'Fathom needs you to connect again.' : 'Fathom did not accept that API key.',
+    };
   if (res.status >= 400 && res.status < 500)
     return { ok: false, reason: 'refused', message: `Fathom refused the request (${res.status}).` };
   if (!res.ok)
@@ -205,7 +238,77 @@ async function fathomMeetings(
     .filter((m): m is Record<string, unknown> => !!m && typeof m === 'object')
     .map(mapFathomMeeting)
     .filter((m): m is FathomMeeting => !!m);
+  if (signedIn)
+    for (const m of meetings) {
+      if (m.summary) continue;
+      try {
+        const r = await doFetch(`${FATHOM_BASE}/recordings/${encodeURIComponent(m.id)}/summary`, { headers });
+        if (!r.ok) continue;
+        const sj = (await r.json()) as {
+          summary?: { markdown_formatted?: unknown };
+          markdown_formatted?: unknown;
+        };
+        const md = sj.summary?.markdown_formatted ?? sj.markdown_formatted;
+        if (typeof md === 'string' && md.trim()) m.summary = md.trim().slice(0, SUMMARY_MAX);
+      } catch {
+        // a meeting without its summary still comes in, with its guests and action items
+      }
+    }
   return { ok: true, meetings, nextCursor: str(j.next_cursor) ?? null };
+}
+
+/** Which "Connect with …" buttons work: the public client ids, never a secret. */
+export function oauthConfig(deps: NotesDeps): { calcom: string | null; fathom: string | null } {
+  return { calcom: deps.oauth?.calcom?.clientId ?? null, fathom: deps.oauth?.fathom?.clientId ?? null };
+}
+
+/**
+ * Trade a sign-in code for tokens, or refresh them, with the secret only this function holds. The redirect address
+ * must be one of Orbit's own, so a code sent elsewhere is never exchanged here.
+ */
+async function oauthToken(
+  deps: NotesDeps,
+  body: Record<string, unknown>,
+  doFetch: typeof fetch,
+): Promise<Result<{ accessToken: string; refreshToken?: string; expiresIn?: number }>> {
+  const provider = body.provider === 'calcom' ? 'calcom' : body.provider === 'fathom' ? 'fathom' : undefined;
+  const client = provider ? deps.oauth?.[provider] : undefined;
+  if (!provider || !client)
+    return { ok: false, reason: 'refused', message: 'Signing in to this app is not set up yet.' };
+  const params: Record<string, string> = { client_id: client.clientId, client_secret: client.clientSecret };
+  if (body.grant === 'refresh') {
+    const rt = str(body.refreshToken);
+    if (!rt) return { ok: false, reason: 'refused', message: 'Nothing to refresh.' };
+    Object.assign(params, { grant_type: 'refresh_token', refresh_token: rt });
+  } else {
+    const code = str(body.code);
+    const redirect = str(body.redirectUri);
+    let origin = '';
+    try {
+      origin = redirect ? new URL(redirect).origin : '';
+    } catch {}
+    if (!code || !redirect || !deps.origins(origin))
+      return { ok: false, reason: 'refused', message: 'That sign-in did not come back to Orbit.' };
+    Object.assign(params, { grant_type: 'authorization_code', code, redirect_uri: redirect });
+  }
+  const res = await doFetch(provider === 'calcom' ? CALCOM_TOKEN : FATHOM_TOKEN, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
+    body: new URLSearchParams(params).toString(),
+  });
+  if (res.status === 400 || res.status === 401)
+    return { ok: false, reason: 'bad_key', message: 'The app needs you to connect again.' };
+  if (!res.ok)
+    return { ok: false, reason: 'upstream', message: `The app is not answering right now (${res.status}).` };
+  const t = (await res.json()) as { access_token?: unknown; refresh_token?: unknown; expires_in?: unknown };
+  const accessToken = str(t.access_token);
+  if (!accessToken) return { ok: false, reason: 'upstream', message: 'The app gave no access.' };
+  return {
+    ok: true,
+    accessToken,
+    refreshToken: str(t.refresh_token),
+    expiresIn: typeof t.expires_in === 'number' ? t.expires_in : undefined,
+  };
 }
 
 /** The booking link for an event type: Cal.com's own when it gives one, else cal.com/{username}/{slug}. */
@@ -239,11 +342,19 @@ async function calEventTypes(
   body: Record<string, unknown>,
   doFetch: typeof fetch,
 ): Promise<Result<{ username?: string; eventTypes: CalEventType[] }>> {
-  const key = String(body.apiKey).trim();
+  const cred = authOf(body)!;
+  const key = 'accessToken' in cred ? cred.accessToken : cred.apiKey;
   const auth = { Authorization: `Bearer ${key}`, accept: 'application/json' };
   const me = await doFetch(`${CALCOM_BASE}/me`, { headers: auth });
   if (me.status === 401 || me.status === 403)
-    return { ok: false, reason: 'bad_key', message: 'Cal.com did not accept that API key.' };
+    return {
+      ok: false,
+      reason: 'bad_key',
+      message:
+        'accessToken' in cred
+          ? 'Cal.com needs you to connect again.'
+          : 'Cal.com did not accept that API key.',
+    };
   if (!me.ok)
     return { ok: false, reason: 'upstream', message: `Cal.com is not answering right now (${me.status}).` };
   const meBody = (await me.json()) as { data?: { username?: unknown } };
@@ -294,16 +405,18 @@ export function makeHandler(deps: NotesDeps): (req: Request) => Promise<Response
     if (!allowed) return json(403, { error: 'origin not allowed' }, h);
     if (req.method !== 'POST') return json(405, { error: 'POST only' }, h);
     const path = new URL(req.url).pathname.replace(/.*\/orbit-notes/, '') || '/';
-    if (path !== '/fathom/meetings' && path !== '/calcom/event-types')
-      return json(404, { error: 'no such route' }, h);
+    const routes = ['/fathom/meetings', '/calcom/event-types', '/oauth/config', '/oauth/token'];
+    if (!routes.includes(path)) return json(404, { error: 'no such route' }, h);
+    // which sign-ins are set up: public ids only, nothing to count
+    if (path === '/oauth/config') return json(200, { ok: true, ...oauthConfig(deps) }, h);
     let body: Record<string, unknown>;
     try {
       body = (await req.json()) as Record<string, unknown>;
     } catch {
       return json(400, { error: 'the body must be JSON' }, h);
     }
-    if (!body || typeof body !== 'object' || !validKey(body.apiKey))
-      return json(400, { error: 'an API key is needed' }, h);
+    if (!body || typeof body !== 'object' || (path !== '/oauth/token' && !authOf(body)))
+      return json(400, { error: 'an API key or a sign-in is needed' }, h);
     const visitor = (await sha256(`${deps.salt ?? 'orbit'}:${clientIp(req)}`)).slice(0, 32);
     let verdict: { allowed: boolean; over?: string };
     try {
@@ -321,9 +434,11 @@ export function makeHandler(deps: NotesDeps): (req: Request) => Promise<Response
     }
     try {
       const out =
-        path === '/fathom/meetings'
-          ? await fathomMeetings(body, doFetch)
-          : await calEventTypes(body, doFetch);
+        path === '/oauth/token'
+          ? await oauthToken(deps, body, doFetch)
+          : path === '/fathom/meetings'
+            ? await fathomMeetings(body, doFetch)
+            : await calEventTypes(body, doFetch);
       return json(200, out, h);
     } catch {
       // never echo an upstream error: it could carry the key back

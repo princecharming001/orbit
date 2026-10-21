@@ -5,6 +5,7 @@ import { ChatWithPanel } from './chat/ui/ChatWithPanel';
 import { AppShell } from './components/AppShell';
 import { AccountSync } from './components/account/AccountSync';
 import { LegacyRedirect } from './legacyRoutes';
+import { AuthApp } from './pages/AuthApp';
 import { AuthDone } from './pages/AuthDone';
 import { CompanyPage } from './pages/Company';
 import { Discover } from './pages/Discover';
@@ -68,6 +69,7 @@ export function App({ chatEngine }: { chatEngine?: ChatEngine }) {
               <Route path="/welcome" element={<Landing />} />
               {/* Google sign-in comes back here in account mode (orbit-api redirects with #code or #error) */}
               <Route path="/auth/done" element={<AuthDone />} />
+              <Route path="/auth/app" element={<AuthApp />} />
               <Route
                 path="/onboarding/:step"
                 element={

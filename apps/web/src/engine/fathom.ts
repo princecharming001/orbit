@@ -12,6 +12,7 @@ import { newId, normalizeEmail } from '@orbit/core';
 import { db, type IntegrationAccount } from '../db/schema';
 import { usesMockConnectors } from '../integrations/connectorsMock';
 import { type FathomMeeting, fathomMeetingsPage, notesAppsAvailable } from '../integrations/notesApps';
+import { appAuth, signInToApp } from './appSignIn';
 import { ingestNote } from './notes';
 
 /** The first import reaches back this far; later ones pick up from the newest meeting already imported. */
@@ -165,11 +166,9 @@ export async function syncFathom(
     const since = state.since ?? new Date(now.getTime() - FATHOM_BACKFILL_DAYS * 86_400_000).toISOString();
     let cursor: string | undefined;
     for (let page = 0; page < MAX_PAGES; page++) {
-      const r = await fathomMeetingsPage(
-        row.accessToken!,
-        { createdAfter: since, cursor },
-        { signal: opts.signal },
-      );
+      const auth = await appAuth('fathom', row);
+      if (!auth) return { ok: false, reason: 'bad_key', message: 'Fathom needs you to connect again.' };
+      const r = await fathomMeetingsPage(auth, { createdAfter: since, cursor }, { signal: opts.signal });
       if (!r.ok) {
         await db.integrations.update(row.id, {
           status: r.reason === 'bad_key' ? 'needs_reauth' : 'error',
@@ -222,7 +221,26 @@ export async function connectFathom(user: User, apiKey: string, now = new Date()
     return { ok: false, reason: probe.reason === 'bad_key' ? 'bad_key' : 'error', message: probe.message };
   await saveRow(
     user,
-    { accessToken: key, externalAccountId: undefined, lastError: undefined, syncState: {} },
+    { accessToken: key, oauth: undefined, externalAccountId: undefined, lastError: undefined, syncState: {} },
+    now,
+  );
+  return syncFathom(user, { now });
+}
+
+/** Connect by signing in to Fathom: its own window, then the meetings import as with a key. */
+export async function connectFathomSignedIn(user: User, now = new Date()): Promise<FathomResult> {
+  if (usesMockConnectors(user.id)) return connectFathom(user, '', now);
+  const s = await signInToApp('fathom');
+  if (!s.ok) return { ok: false, reason: 'error', message: s.message };
+  await saveRow(
+    user,
+    {
+      accessToken: s.accessToken,
+      oauth: { refreshToken: s.refreshToken, expiresAt: s.expiresAt },
+      externalAccountId: undefined,
+      lastError: undefined,
+      syncState: {},
+    },
     now,
   );
   return syncFathom(user, { now });
@@ -235,6 +253,7 @@ export async function disconnectFathom(user: Pick<User, 'id'>): Promise<void> {
   await db.integrations.update(row.id, {
     status: 'revoked',
     accessToken: undefined,
+    oauth: undefined,
     externalAccountId: undefined,
     lastError: undefined,
   });

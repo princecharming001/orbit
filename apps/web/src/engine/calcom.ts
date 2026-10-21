@@ -9,6 +9,7 @@ import { newId } from '@orbit/core';
 import { db, type IntegrationAccount } from '../db/schema';
 import { usesMockConnectors } from '../integrations/connectorsMock';
 import { type CalEventType, calEventTypes, notesAppsAvailable } from '../integrations/notesApps';
+import { appAuth, signInToApp } from './appSignIn';
 import { setSchedulingLink } from './settings';
 
 export type { CalEventType };
@@ -130,6 +131,30 @@ export async function connectCalcom(user: User, apiKey: string, now = new Date()
     user,
     {
       accessToken: key,
+      oauth: undefined,
+      externalAccountId: r.value.username,
+      lastError: undefined,
+      lastSyncedAt: now.toISOString(),
+      syncState: { username: r.value.username, eventTypes: r.value.eventTypes },
+    },
+    now,
+  );
+  await fillLinkIfEmpty(user.id, r.value.eventTypes);
+  return { ok: true, eventTypes: r.value.eventTypes, username: r.value.username };
+}
+
+/** Connect by signing in to Cal.com: its own window, then the event types as with a key. */
+export async function connectCalcomSignedIn(user: User, now = new Date()): Promise<CalResult> {
+  if (usesMockConnectors(user.id)) return connectCalcom(user, '', now);
+  const s = await signInToApp('calcom');
+  if (!s.ok) return { ok: false, reason: 'error', message: s.message };
+  const r = await calEventTypes({ accessToken: s.accessToken });
+  if (!r.ok) return { ok: false, reason: 'error', message: r.message };
+  await saveRow(
+    user,
+    {
+      accessToken: s.accessToken,
+      oauth: { refreshToken: s.refreshToken, expiresAt: s.expiresAt },
       externalAccountId: r.value.username,
       lastError: undefined,
       lastSyncedAt: now.toISOString(),
@@ -146,7 +171,9 @@ export async function refreshCalcom(user: User, now = new Date()): Promise<CalRe
   const row = await calAccount(user.id);
   if (!connected(row)) return { ok: false, reason: 'not_connected', message: 'Cal.com is not connected.' };
   if (row.externalAccountId === 'demo') return { ok: true, eventTypes: storedEventTypes(row) };
-  const r = await calEventTypes(row.accessToken!);
+  const auth = await appAuth('calcom', row);
+  if (!auth) return { ok: false, reason: 'bad_key', message: 'Cal.com needs you to connect again.' };
+  const r = await calEventTypes(auth);
   if (!r.ok) {
     await db.integrations.update(row.id, {
       status: r.reason === 'bad_key' ? 'needs_reauth' : 'error',
@@ -170,6 +197,7 @@ export async function disconnectCalcom(user: Pick<User, 'id'>): Promise<void> {
   await db.integrations.update(row.id, {
     status: 'revoked',
     accessToken: undefined,
+    oauth: undefined,
     lastError: undefined,
   });
 }
