@@ -211,7 +211,7 @@ function NetworkDiscover({ tabs }: { tabs?: ReactNode }) {
                   {p.displayName}
                 </Link>
                 <LogoText person={p} className="text-[12px] text-ink-3">
-                  {[p.currentTitle, p.currentOrganizationRaw].filter(Boolean).join(' · ')}
+                  {p.currentTitle ?? p.currentOrganizationRaw}
                 </LogoText>
               </div>
               <StrengthDots v={p.strength} />

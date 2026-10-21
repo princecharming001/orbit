@@ -150,7 +150,7 @@ function BoardCard({
               title={[person.currentTitle, person.currentOrganizationRaw].filter(Boolean).join(' · ')}
             >
               <LogoText person={person} size={13}>
-                {[person.currentOrganizationRaw, person.currentTitle].filter(Boolean).join(' · ')}
+                {person.currentTitle ?? person.currentOrganizationRaw}
               </LogoText>
             </div>
           )}

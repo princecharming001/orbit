@@ -207,7 +207,7 @@ function Envelope({ env, block, actions }: { env: ResultEnvelope; block: ToolBlo
                 {stage && <Chip tone="accent">{stage}</Chip>}
               </div>
               <LogoText person={person} className="text-[13px] text-ink-2">
-                {[person.currentTitle, person.currentOrganizationRaw].filter(Boolean).join(' at ')}
+                {person.currentTitle ?? person.currentOrganizationRaw}
               </LogoText>
               {(person.lastInteractionAt || lastTouch) && (
                 <div className="text-[12.5px] text-ink-3 mt-0.5">

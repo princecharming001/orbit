@@ -667,19 +667,11 @@ export function RoleLine({
   person?: Pick<Person, 'currentOrganizationRaw' | 'currentOrganizationId' | 'emails' | 'primaryEmail'>;
 }) {
   return (
-    <span className="text-ink-3 text-[13px] flex items-center min-w-0 max-w-full">
-      {title && <span className="truncate min-w-0">{title}</span>}
-      {title && company && <span className="shrink-0 whitespace-pre"> · </span>}
-      {company && (
-        <span className="inline-flex items-center gap-1 shrink-0 max-w-full min-w-0">
-          {person ? (
-            <PersonCompanyLogo person={person} size={14} decorative />
-          ) : (
-            <CompanyLogo name={company} size={14} decorative />
-          )}
-          <span className="truncate">{company}</span>
-        </span>
-      )}
+    // the company is its logo (named on hover); written out only when there is no title to show
+    <span className="text-ink-3 text-[13px] flex items-center gap-1.5 min-w-0 max-w-full">
+      {company &&
+        (person ? <PersonCompanyLogo person={person} size={14} /> : <CompanyLogo name={company} size={14} />)}
+      <span className="truncate min-w-0">{title ?? company}</span>
     </span>
   );
 }

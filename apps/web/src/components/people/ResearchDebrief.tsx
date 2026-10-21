@@ -238,11 +238,10 @@ function Debrief({
               <ol className="space-y-2.5">
                 {v.career.map((c, i) => (
                   <li key={`${c.org}-${i}`} className="flex items-start gap-2.5">
-                    <CompanyLogo name={c.org} size={20} decorative className="mt-0.5" />
+                    <CompanyLogo name={c.org} size={20} className="mt-0.5" />
                     <div className="min-w-0 flex-1">
                       <div className="text-[13.5px] text-ink">
-                        {c.role}
-                        {c.org ? <span className="text-ink-2"> · {c.org}</span> : null}
+                        {c.role || c.org}
                         <Refs ns={c.sources} sources={sources} />
                       </div>
                       {span(c.start, c.end) && (

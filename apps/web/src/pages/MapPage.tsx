@@ -1086,7 +1086,7 @@ export function MapPage() {
                     {target.displayName}
                   </Link>
                   <LogoText person={target} className="text-[12px] text-ink-3">
-                    {[target.currentTitle, target.currentOrganizationRaw].filter(Boolean).join(' · ')}
+                    {target.currentTitle ?? target.currentOrganizationRaw}
                   </LogoText>
                 </div>
               </div>

@@ -414,8 +414,7 @@ export function PersonPage() {
             <p className="text-ink-2 mt-0.5 flex items-center gap-2 min-w-0">
               <PersonCompanyLogo person={person} size={18} />
               <span className="min-w-0">
-                {person.headline ??
-                  [person.currentTitle, person.currentOrganizationRaw].filter(Boolean).join(' at ')}
+                {person.headline ?? person.currentTitle ?? person.currentOrganizationRaw}
               </span>
             </p>
             <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px] text-ink-3">

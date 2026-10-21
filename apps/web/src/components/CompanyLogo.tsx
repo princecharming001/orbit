@@ -119,7 +119,10 @@ export function PersonCompanyLogo({
   );
 }
 
-/** A line of text about someone's job with their company's logo in front of it; the text itself is unchanged. */
+/**
+ * Someone's role with their company's logo in front of it. The company is the logo: its name shows on hover and is
+ * read out by screen readers, so the text is the role alone.
+ */
 export function LogoText({
   person,
   children,
@@ -136,7 +139,7 @@ export function LogoText({
 }) {
   return (
     <span className={cx('flex gap-1.5 min-w-0', wrap ? 'items-start' : 'items-center', className)}>
-      <PersonCompanyLogo person={person} size={size} decorative className={wrap ? 'mt-[3px]' : undefined} />
+      <PersonCompanyLogo person={person} size={size} className={wrap ? 'mt-[3px]' : undefined} />
       <span className={wrap ? 'min-w-0' : 'truncate min-w-0'}>{children}</span>
     </span>
   );
