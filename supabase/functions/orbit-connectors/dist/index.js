@@ -785,7 +785,11 @@ async function unipileSearch(deps, body, doFetch) {
   if (kw) search.keywords = kw;
   if (Object.keys(advanced).length) search.advanced_keywords = advanced;
   if (!kw && !Object.keys(advanced).length && !search.company && !search.school && !search.location)
-    return { ok: false, reason: "bad_request", message: "Say who to look for: a role, company, school or name." };
+    return {
+      ok: false,
+      reason: "bad_request",
+      message: "Say who to look for: a role, company, school or name."
+    };
   const q = new URLSearchParams({ account_id: accountId, limit: "10" });
   if (typeof body.cursor === "string" && body.cursor) q.set("cursor", body.cursor);
   const res = await doFetch(`${deps.unipileBase}/api/v1/linkedin/search?${q}`, {

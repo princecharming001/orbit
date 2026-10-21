@@ -3455,6 +3455,9 @@ ${firstName}`],
     notes: "Warm preset."
   };
 }
+var PLAIN = new Set(
+  "a an the and or but so to of in on at for with from by about as is am are was were be been it its this that i me my you your we our they them he she his her would could can will should do did have has had not if just how what when where who which there here up out any some more very really also than then too all one next week weeks couple time day days minutes min chat call quick talk meet meeting coffee happy free thanks thank hope know let like love get got make sure please best hi hey hello dear".split(" ")
+);
 var FILLER = new Set(
   "i hope you|hope you are|let me know|thank you for|thanks for the|i would love|would love to|you have time|have time to|look forward to|i wanted to|to hear from|hear from you|if you have|in the next|for your time".split(
     "|"
