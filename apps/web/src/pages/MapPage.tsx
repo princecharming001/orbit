@@ -12,13 +12,14 @@ import {
 } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Building2, Search, X } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { type CSSProperties, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { CompanyLogo, LogoText } from '../components/CompanyLogo';
 import { type CardPlace, OrbitMap, useCoarsePointer } from '../components/OrbitMap';
 import type { FocusSpec, WebSpec } from '../components/orbitScene';
 import { LINEAGE } from '../components/orbitScene';
 import { StrengthDots } from '../components/people/shared';
+import { ResizeHandle, useResizableWidth } from '../components/ResizeHandle';
 import { WarmIntrosPanel } from '../components/WarmIntrosPanel';
 import { db } from '../db/schema';
 import { draftMessage } from '../engine/brief';
@@ -65,6 +66,13 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? o
 
 export function MapPage() {
   const { userId, user } = useSession();
+  // the side panel's width, dragged by its edge: at least 300px, and the orbit always keeps 440px
+  const splitRef = useRef<HTMLDivElement>(null);
+  const panel = useResizableWidth(
+    'orbit:map-panel-width',
+    { initial: 380, min: 300, reserve: 440 },
+    splitRef,
+  );
   const [params, setParams] = useSearchParams();
   const nav = useNavigate();
   const toast = useToast();
@@ -846,7 +854,12 @@ export function MapPage() {
           {legend}
         </p>
       </div>
-      <div className="@4xl:flex-1 @4xl:min-h-0 grid grid-cols-1 @4xl:grid-cols-[minmax(0,1fr)_380px]">
+      <div
+        ref={splitRef}
+        // the panel's width is the student's: they drag its edge, and it stays that way next time
+        className="@4xl:flex-1 @4xl:min-h-0 grid grid-cols-1 @4xl:grid-cols-[minmax(0,1fr)_auto_var(--panel-w)]"
+        style={{ '--panel-w': `${panel.width}px` } as CSSProperties}
+      >
         <div
           className={cx(
             'relative min-w-0 overflow-hidden @4xl:h-auto @4xl:min-h-[420px] bg-[radial-gradient(circle_at_center,_#fff_0%,_#fbfaf9_70%)]',
@@ -932,6 +945,14 @@ export function MapPage() {
             </div>
           )}
         </div>
+        <ResizeHandle
+          width={panel.width}
+          onResize={panel.set}
+          onReset={panel.reset}
+          side="right"
+          label="Resize the side panel"
+          className="hidden @4xl:flex"
+        />
         <aside
           // keyed on what the panel shows, so its cards cascade in again when the target changes
           key={`${reachParam ?? ''}|${target?.id ?? ''}|${company?.label ?? ''}|${webFocus?.label ?? ''}|${webMode}`}

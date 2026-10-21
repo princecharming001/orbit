@@ -1,9 +1,10 @@
 import type { Person, Suggestion } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { useEffect, useRef } from 'react';
+import { type CSSProperties, useEffect, useRef } from 'react';
 import { db } from '../db/schema';
 import { Avatar, Chip, cx } from '../ui';
 import { PersonCompanyLogo } from './CompanyLogo';
+import { ResizeHandle, useResizableWidth } from './ResizeHandle';
 import { gapLabel, KIND_LABEL, SuggestionCard } from './SuggestionCard';
 
 export interface DraftGroup {
@@ -30,6 +31,13 @@ export function DraftsSplit({
   const all = groups.flatMap((g) => g.items);
   const selected = all.find((s) => s.id === selectedId) ?? all[0];
   const listRef = useRef<HTMLDivElement>(null);
+  const splitRef = useRef<HTMLDivElement>(null);
+  // the list is 360px unless the student drags it: never under 260px, and the open draft keeps 480px
+  const list = useResizableWidth(
+    'orbit:drafts-list-width',
+    { initial: 360, min: 260, reserve: 480 },
+    splitRef,
+  );
   // the list moves with the keyboard, unless the student is typing in the draft
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -52,7 +60,10 @@ export function DraftsSplit({
   });
   return (
     <div
-      className="grid grid-cols-[minmax(280px,360px)_minmax(0,1fr)] gap-5 items-start"
+      ref={splitRef}
+      // the list's width is the student's: they drag its edge, and it stays that way next time
+      className="grid grid-cols-[var(--list-w)_auto_minmax(0,1fr)] gap-x-2.5 items-start"
+      style={{ '--list-w': `${list.width}px` } as CSSProperties}
       data-testid="drafts-split"
     >
       <div ref={listRef} className="min-w-0 space-y-4" role="listbox" aria-label="Drafts">
@@ -79,6 +90,14 @@ export function DraftsSplit({
           ))}
         <p className="text-[11.5px] text-ink-3 px-1">↑ ↓ or j k to move through them.</p>
       </div>
+      <ResizeHandle
+        width={list.width}
+        onResize={list.set}
+        onReset={list.reset}
+        side="left"
+        label="Resize the list of drafts"
+        className="self-stretch"
+      />
       <div
         // the open card stays in view while the list scrolls
         className="min-w-0 sticky top-4"

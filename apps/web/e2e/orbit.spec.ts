@@ -2349,3 +2349,34 @@ test.describe('Autopilot', () => {
     await expect(items).toHaveCount(n - 1);
   });
 });
+
+test.describe('Resizable side panels', () => {
+  test('the Map panel is dragged wider, keeps its width after a reload, and a double-click puts it back', async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+    await page.setViewportSize({ width: 1600, height: 950 });
+    await loadDemo(page);
+    await page.goto('map');
+    const panel = page.getByTestId('map-panel');
+    const w0 = (await panel.boundingBox())!.width;
+    const handle = page.getByTestId('resize-handle');
+    const h = (await handle.boundingBox())!;
+    await page.mouse.move(h.x + h.width / 2, h.y + 120);
+    await page.mouse.down();
+    await page.mouse.move(h.x + h.width / 2 - 200, h.y + 120, { steps: 8 });
+    await page.mouse.up();
+    await expect.poll(async () => (await panel.boundingBox())!.width).toBeGreaterThan(w0 + 150);
+    const wide = (await panel.boundingBox())!.width;
+    await page.reload();
+    await expect
+      .poll(async () => (await page.getByTestId('map-panel').boundingBox())!.width)
+      .toBeCloseTo(wide, 0);
+    // the orbit still fits beside the wider panel
+    await expect(page.getByTestId('orbit-canvas')).toHaveAttribute('data-labels-clipped', '0');
+    await page.getByTestId('resize-handle').dblclick();
+    await expect
+      .poll(async () => (await page.getByTestId('map-panel').boundingBox())!.width)
+      .toBeCloseTo(w0, 0);
+  });
+});
