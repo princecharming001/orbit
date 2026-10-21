@@ -17,7 +17,6 @@ import {
 } from 'lucide-react';
 import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
-import logoUrl from '../assets/logo.webp';
 import { useChatEngine } from '../chat/engineContext';
 import type { ChatConversation } from '../chat/types';
 import { threadActions, useThread } from '../chat/ui/threadStore';
@@ -554,17 +553,29 @@ function Recent({ chat }: { chat: ReturnType<typeof threadActions> }) {
 }
 
 /** Orbit's mark: the glass atom on a transparent background, with a soft shadow so it reads on light surfaces. */
+/** Orbit's mark: three orbits round a centre, drawn in plain ink lines (a shape anyone could sketch). */
 export function Logo({ size = 26 }: { size?: number }) {
   return (
-    <img
-      src={logoUrl}
+    <svg
+      viewBox="0 0 32 32"
       width={size}
       height={size}
-      alt=""
+      fill="none"
       aria-hidden
-      draggable={false}
-      className="shrink-0 drop-shadow-[0_1px_1.5px_rgba(15,23,42,0.28)]"
+      className="shrink-0 text-ink"
       data-testid="logo"
-    />
+    >
+      <g stroke="currentColor" strokeWidth="1.6">
+        <ellipse cx="16" cy="16" rx="13.2" ry="5.0" transform="rotate(30 16 16)" />
+        <ellipse cx="16" cy="16" rx="13.2" ry="5.0" transform="rotate(90 16 16)" />
+        <ellipse cx="16" cy="16" rx="13.2" ry="5.0" transform="rotate(150 16 16)" />
+      </g>
+      <g fill="currentColor">
+        <circle cx="16" cy="16" r="3" />
+        <circle cx="5.61" cy="8.50" r="2" />
+        <circle cx="27.60" cy="11.28" r="2" />
+        <circle cx="12.79" cy="26.11" r="2" />
+      </g>
+    </svg>
   );
 }

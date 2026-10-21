@@ -157,16 +157,8 @@ export function Landing() {
 
       <div id="top" className="max-w-[1280px] mx-auto">
         <section className="px-5 md:px-12 pt-14 md:pt-20 pb-12">
-          <Reveal>
-            <span className="inline-flex items-center gap-2 rounded-full border border-line bg-canvas px-3 h-8 text-[12.5px] text-ink-2 shadow-[var(--shadow-pill)]">
-              <span className="w-4 h-4 rounded-[4px] bg-ember text-white text-[10px] font-semibold inline-flex items-center justify-center">
-                O
-              </span>
-              Built for students who are recruiting
-            </span>
-          </Reveal>
           <Reveal delay={60}>
-            <h1 className="display mt-6 text-[44px] sm:text-[56px] md:text-[64px] max-w-[880px]">
+            <h1 className="display text-[44px] sm:text-[56px] md:text-[64px] max-w-[880px]">
               Every coffee chat, without the busywork.
             </h1>
           </Reveal>

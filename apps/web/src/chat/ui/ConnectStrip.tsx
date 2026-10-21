@@ -1,7 +1,7 @@
 /**
- * "Connect your apps": a quiet strip under the home composer for the two connections that make Orbit useful, LinkedIn
- * and Gmail. Each row shows its status and a Connect button that posts the matching setup widget into the chat. It
- * hides once both are connected, for the sample student, and for good once dismissed in this browser.
+ * "Connect your apps": one quiet line under the home composer for the two connections that make Orbit useful, LinkedIn
+ * and Gmail. Each app not yet connected is a button that posts the matching setup widget into the chat; a connected
+ * one shows a check. It hides once both are connected, for the sample student, and for good once dismissed here.
  */
 import { Check, Mail, X } from 'lucide-react';
 import { useState } from 'react';
@@ -98,69 +98,56 @@ export function ConnectStrip({
       available: gmailAvailable,
     },
   ];
+  // one quiet line under the composer: each app is its own button, so its name never gets cut short
   return (
     <section
-      className="glass rounded-[16px] mt-4 sm:mt-5 max-w-[680px] mx-auto px-3 py-2 sm:px-3.5 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 fade-up"
+      className="mt-4 sm:mt-5 mx-auto flex flex-wrap items-center justify-center gap-x-2 gap-y-2 fade-up"
       aria-label="Connect your apps"
       data-testid="connect-strip"
     >
-      <div className="flex items-center justify-between gap-2 sm:justify-start">
-        <span className="text-[13px] font-medium text-ink-2 whitespace-nowrap">Connect your apps</span>
-        <button
-          type="button"
-          className="sm:hidden h-7 w-7 inline-flex items-center justify-center rounded-full text-ink-3 hover:text-ink hover:bg-canvas-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-          onClick={onDismiss}
-          aria-label="Hide connect your apps"
-          data-testid="connect-strip-dismiss-phone"
-        >
-          <X size={14} aria-hidden />
-        </button>
-      </div>
-      <ul className="flex flex-col sm:flex-row gap-1.5 sm:gap-2 flex-1 min-w-0">
+      <span className="text-[13px] text-ink-3 whitespace-nowrap">Connect your apps</span>
+      <ul className="contents">
         {rows.map((r) => (
-          <li
-            key={r.what}
-            className="flex items-center gap-2 min-w-0 rounded-[12px] bg-canvas/60 border border-line-2 pl-2 pr-1 h-9 sm:flex-1"
-            data-testid={`connect-row-${r.what}`}
-          >
-            {r.mark}
-            <span className="text-[13px] font-medium truncate">{r.name}</span>
-            <span
-              className={cx(
-                'inline-flex items-center gap-1 text-[12px] whitespace-nowrap',
-                r.connected ? 'text-good' : 'text-ink-3',
-              )}
-              data-testid={`connect-status-${r.what}`}
-            >
-              {r.connected ? (
-                <>
-                  <Check size={12} aria-hidden /> Connected
-                </>
-              ) : r.available ? (
-                <>
-                  <span className="w-1.5 h-1.5 rounded-full bg-ink-3/50" aria-hidden /> Not connected
-                </>
-              ) : (
-                'Coming soon'
-              )}
+          <li key={r.what} className="contents" data-testid={`connect-row-${r.what}`}>
+            {/* the status is said to screen readers; on screen the button or the check says it */}
+            <span className="sr-only" data-testid={`connect-status-${r.what}`}>
+              {r.connected ? 'Connected' : r.available ? 'Not connected' : 'Coming soon'}
             </span>
-            {!r.connected && r.available && (
+            {!r.connected && r.available ? (
               <button
                 type="button"
-                className="ml-auto h-7 px-3 rounded-full text-[12.5px] font-medium bg-accent text-white hover:bg-accent-2 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                className="h-8 pl-1.5 pr-3 rounded-full border border-line bg-canvas inline-flex items-center gap-2 text-[13px] font-medium text-ink shadow-[var(--shadow-pill)] hover:bg-canvas-2 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 transition-colors"
                 onClick={() => onConnect(r.what)}
                 disabled={disabled}
+                aria-label={`Connect ${r.name}`}
                 data-testid={`connect-${r.what === 'google' ? 'gmail' : 'linkedin'}`}
               >
-                Connect
+                {r.mark}
+                {r.name}
               </button>
+            ) : (
+              <span
+                className={cx(
+                  'h-8 pl-1.5 pr-3 rounded-full inline-flex items-center gap-2 text-[13px] text-ink-3',
+                  !r.connected && 'opacity-60',
+                )}
+                aria-hidden
+              >
+                {r.mark}
+                {r.name}
+                {r.connected ? (
+                  <Check size={13} className="text-good" />
+                ) : (
+                  <span className="text-[12px]">soon</span>
+                )}
+              </span>
             )}
           </li>
         ))}
       </ul>
       <button
         type="button"
-        className="hidden sm:inline-flex h-7 w-7 items-center justify-center rounded-full text-ink-3 hover:text-ink hover:bg-canvas-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 shrink-0"
+        className="h-7 w-7 inline-flex items-center justify-center rounded-full text-ink-3 hover:text-ink hover:bg-canvas-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 shrink-0"
         onClick={onDismiss}
         aria-label="Hide connect your apps"
         data-testid="connect-strip-dismiss"
