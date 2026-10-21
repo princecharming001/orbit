@@ -1,9 +1,11 @@
 import { useEffect, useRef } from 'react';
+import { autoSyncLinkedInReplies } from '../engine/linkedinInbox';
 import { autoSyncLinkedInLive } from '../engine/linkedinLive';
 import { useSession } from '../state/session';
 
 /**
- * Re-syncs live LinkedIn when the app opens and the last sync is more than a day old. Mounted once in the app shell,
+ * Re-syncs live LinkedIn when the app opens and the last sync is more than a day old, then reads LinkedIn for
+ * replies (at most every quarter hour). Mounted once in the app shell,
  * next to the outbox scheduler. Quiet: it never toasts, and a failure is recorded on the integration row, where
  * Settings and the chat show it.
  */
@@ -15,7 +17,9 @@ export function LinkedInAutoSync() {
   useEffect(() => {
     const u = userRef.current;
     if (!userId || !u?.onboardingCompletedAt) return;
-    void autoSyncLinkedInLive(u).catch(() => undefined);
+    void autoSyncLinkedInLive(u)
+      .catch(() => undefined)
+      .then(() => autoSyncLinkedInReplies(u));
   }, [userId]);
   return null;
 }

@@ -19,6 +19,12 @@ import {
   refreshGoals,
   saveGoal,
 } from '../../engine/goals';
+import {
+  addLinkedInFound,
+  LINKEDIN_FOUND_PREFIX,
+  linkedInSearchReady,
+  searchLinkedInLive,
+} from '../../engine/linkedinSearch';
 import { forget, listMemories, MEMORY_KINDS, remember, searchMemories } from '../../engine/memory';
 import { AUTONOMY_TEXT, type AutonomyLevel, pauseOutreach, setAutonomy } from '../../engine/outreach';
 import { askForIntro, cachedPath } from '../../engine/paths';
@@ -518,7 +524,7 @@ export const findPeopleTool = defineTool({
   name: 'find_people',
   kind: 'write',
   description:
-    'Call this when the student asks to find new people beyond their network for a purpose: investors, customers, candidates, mentors, alumni, a co-founder or research collaborators. Give the purpose (a goal kind) and what they are looking for; it searches LinkedIn, Apollo, the web and Semantic Scholar and ranks results by fit, how reachable they are and how likely to reply, with reasons. Show the top few and offer add_sourced. Needs an Orbit account.',
+    "Call this when the student asks to find new people beyond their network for a purpose: investors, customers, candidates, mentors, alumni, a co-founder or research collaborators. Give the purpose (a goal kind) and what they are looking for; with an Orbit account it searches LinkedIn, Apollo, the web and Semantic Scholar and ranks results by fit, how reachable they are and how likely to reply, with reasons. Without one, it searches LinkedIn from the student's own account when LinkedIn is connected live. Show the top few and offer add_sourced.",
   input: z.object({
     purpose: z.enum(KINDS).describe('What the people are for.'),
     query: z
@@ -531,7 +537,10 @@ export const findPeopleTool = defineTool({
   capabilities: ['source_find'],
   progress: 'Searching for people',
   async execute(input, ctx) {
-    if (!accountReady(ctx)) return needsAccount('Finding new people');
+    if (!accountReady(ctx)) {
+      if (!(await linkedInSearchReady(ctx.user))) return needsAccount('Finding new people');
+      return findOnLinkedIn(ctx, input.query, input.purpose);
+    }
     const r = await searchPeople(ctx.user, input);
     if (!r.ok) throw new Error(r.message);
     const { results, unconfigured, relaxed } = r.value;
@@ -570,11 +579,46 @@ export const findPeopleTool = defineTool({
   toModel,
 });
 
+/** find_people without an account: the student's own LinkedIn, beyond their connections. */
+async function findOnLinkedIn(
+  ctx: ToolContext,
+  query: string | undefined,
+  purpose: GoalKind,
+): Promise<ResultEnvelope> {
+  const r = await searchLinkedInLive(ctx.user, query || GOAL_KIND_LABELS[purpose]);
+  if (!r.ok) throw new Error(r.message);
+  const top = r.people.slice(0, 10);
+  const degree = (d?: number) => (d === 2 ? '2nd' : d === 3 ? '3rd' : undefined);
+  return list(
+    `On LinkedIn: ${GOAL_KIND_LABELS[purpose].toLowerCase()}`,
+    top.map((p) => ({
+      text: p.name,
+      chip: p.knownPersonId ? 'You know them' : degree(p.distance),
+      sub: [p.headline, p.location].filter(Boolean).join(' · '),
+      href: p.knownPersonId ? `/people/${p.knownPersonId}` : undefined,
+      links: p.profileUrl ? [{ label: 'LinkedIn', url: p.profileUrl }] : undefined,
+    })),
+    {
+      results: top.map((p) => ({
+        recommendationId: p.id,
+        who: wrapped(ctx, 'sourced', [p.name, p.headline].filter(Boolean).join(', '), 200),
+        location: p.location,
+        degree: p.distance,
+        knownPersonId: p.knownPersonId,
+      })),
+      source: 'linkedin',
+    },
+    top.length
+      ? `Found ${plural(top.length, 'person', 'people')} on LinkedIn outside your connections.`
+      : 'LinkedIn found no one for that. Try other words: a role, a company or a school.',
+  );
+}
+
 export const addSourcedTool = defineTool({
   name: 'add_sourced',
   kind: 'write',
   description:
-    'Call this after find_people when the student picks people to add (their recommendationIds). Each becomes a person in Orbit with a chat at "to contact" for the goal, and research on them starts. Never add people the student did not pick. Needs an Orbit account.',
+    'Call this after find_people when the student picks people to add (their recommendationIds). Each becomes a person in Orbit with a chat at "to contact" for the goal, and research on them starts. Never add people the student did not pick.',
   input: z.object({
     recommendationIds: z
       .array(z.string().min(1))
@@ -585,6 +629,18 @@ export const addSourcedTool = defineTool({
   capabilities: ['source_add'],
   progress: 'Adding them',
   async execute(input, ctx) {
+    const fromLinkedIn = input.recommendationIds.every((id) => id.startsWith(LINKEDIN_FOUND_PREFIX));
+    if (fromLinkedIn) {
+      const r = await addLinkedInFound(ctx.user, input.recommendationIds);
+      if (!r.ok) throw new Error(r.message);
+      return list(
+        'Added',
+        r.people.map((p) => ({ text: p.displayName, href: `/people/${p.id}` })),
+        { added: r.people.map((p) => ({ personId: p.id, name: p.displayName, chatId: p.chatId })) },
+        `Added ${r.people.map((p) => p.displayName).join(', ')}, ready to write to on LinkedIn.`,
+        r.people.length === 1 ? `/people/${r.people[0]!.id}` : '/people',
+      );
+    }
     if (!accountReady(ctx)) return needsAccount('Adding people from a search');
     const r = await addSourced(ctx.user, input.recommendationIds);
     if (!r.ok) throw new Error(r.message);

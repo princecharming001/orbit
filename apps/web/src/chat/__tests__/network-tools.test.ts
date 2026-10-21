@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { db, wipeDatabase } from '../../db/schema';
 import { createLocalUser } from '../../engine/account';
 import { clearPathCacheForTests } from '../../engine/paths';
+import { setConnectorsMockForTests } from '../../integrations/connectorsMock';
 import { setOrbitApiBaseForTests } from '../../integrations/orbitApi';
 import { leaveFakeApi, signInToFakeApi } from '../../test/account';
 import { type FakeOrbitApi, fakeDossier } from '../../test/fakeOrbitApi';
@@ -127,6 +128,45 @@ describe('local mode', () => {
       ratedByStudent: 'Very close',
       modelScore: 62,
     });
+  });
+
+  it('with LinkedIn live in this browser, find_people searches it and add_sourced adds who the student picks', async () => {
+    setConnectorsMockForTests(true);
+    try {
+      await db.integrations.put({
+        id: 'int_li',
+        userId: user.id,
+        provider: 'linkedin_live',
+        externalAccountId: 'demo-linkedin-account',
+        status: 'active',
+        scopes: [],
+        syncState: {},
+        connectedAt: at,
+      });
+      const found = await execute(
+        'find_people',
+        { purpose: 'recruiting', query: 'product managers in San Francisco' },
+        makeCtx(user, { toolUseId: nextToolUseId() }),
+      );
+      expect(found.kind).toBe('list');
+      plainSummary(found);
+      expect(found.summary).toMatch(/on LinkedIn outside your connections/);
+      const results = (modelResult('find_people', found).data as { results: { recommendationId: string }[] })
+        .results;
+      expect(results[0]!.recommendationId).toMatch(/^li:/);
+      const added = await execute(
+        'add_sourced',
+        { recommendationIds: [results[0]!.recommendationId] },
+        makeCtx(user, { toolUseId: nextToolUseId() }),
+      );
+      expect(added.summary).toMatch(/ready to write to on LinkedIn/);
+      const person = (await db.people.toArray()).find((p) => p.id !== 'p_priya')!;
+      expect(person.linkedinMemberId).toMatch(/^demo-search-/);
+      const chat = await db.chats.where('personId').equals(person.id).first();
+      expect(chat).toMatchObject({ stage: 'identified', outreachChannel: 'linkedin' });
+    } finally {
+      setConnectorsMockForTests(undefined);
+    }
   });
 
   it('the account tools answer in plain words that they need an Orbit account, never an error', async () => {

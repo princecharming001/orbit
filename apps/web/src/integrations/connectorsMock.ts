@@ -14,7 +14,7 @@ import { db } from '../db/schema';
 import { DEMO_USER_ID } from '../engine/demo';
 import { reachCompany, reachPerson } from '../engine/graph';
 import { automationOverride } from './connectorOutcome';
-import type { LiveConnection, Mutual } from './unipile';
+import type { LinkedInFound, LiveConnection, Mutual } from './unipile';
 import type { VillagePath } from './village';
 
 export const MOCK_ACCOUNT_ID = 'demo-linkedin-account';
@@ -213,4 +213,67 @@ export async function mockVillagePaths(
       note: `Works at ${name}${d.person.isAlumni ? ', and went to your school' : ''}`,
     });
   return out.sort((a, b) => b.warmth - a.warmth);
+}
+
+/** People outside the sample student's network that a LinkedIn search turns up, so search works without keys. */
+const SEARCH_POOL: { first: string; last: string; headline: string; location: string; distance: 2 | 3 }[] = [
+  {
+    first: 'Nadia',
+    last: 'Okafor',
+    headline: 'Product Manager at Notion',
+    location: 'San Francisco',
+    distance: 2,
+  },
+  {
+    first: 'Theo',
+    last: 'Lindqvist',
+    headline: 'Software Engineer at Linear',
+    location: 'New York',
+    distance: 2,
+  },
+  {
+    first: 'Sofia',
+    last: 'Marchetti',
+    headline: 'Investor at Greylock',
+    location: 'Menlo Park',
+    distance: 3,
+  },
+  {
+    first: 'Kenji',
+    last: 'Watanabe',
+    headline: 'Design Lead at Figma',
+    location: 'San Francisco',
+    distance: 2,
+  },
+  { first: 'Amara', last: 'Diallo', headline: 'Data Scientist at Airbnb', location: 'Seattle', distance: 3 },
+  {
+    first: 'Lucas',
+    last: 'Ferreira',
+    headline: 'Founder at Ledgerly (YC W25)',
+    location: 'Boston',
+    distance: 3,
+  },
+];
+
+/** A mock LinkedIn people search: the pool, best matches to the words first. */
+export function mockLinkedInSearch(keywords: string | undefined, limit = 6): LinkedInFound[] {
+  const words = (keywords ?? '')
+    .toLowerCase()
+    .split(/\W+/)
+    .filter((w) => w.length > 2);
+  const score = (s: string) => words.filter((w) => s.toLowerCase().includes(w)).length;
+  return SEARCH_POOL.map((p) => ({ p, s: score(`${p.headline} ${p.location}`) }))
+    .sort((a, b) => b.s - a.s)
+    .slice(0, limit)
+    .map(({ p }) => {
+      const slug = `${p.first}-${p.last}`.toLowerCase();
+      return {
+        memberId: `demo-search-${slug}`,
+        name: `${p.first} ${p.last}`,
+        headline: p.headline,
+        location: p.location,
+        profileUrl: `https://www.linkedin.com/in/${slug}`,
+        distance: p.distance,
+      };
+    });
 }

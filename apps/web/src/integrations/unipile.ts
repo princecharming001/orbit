@@ -273,19 +273,31 @@ export async function sendLinkedInMessage(
   };
 }
 
+/** One message in the student's 1:1 LinkedIn chats, and who the other person is. */
+export interface LinkedInInboxMessage {
+  id: string;
+  chatId: string;
+  text: string;
+  at?: string;
+  /** the student wrote it */
+  fromMe: boolean;
+  counterpart: { providerId?: string; name?: string };
+}
+
 interface InboxResponse {
-  messages?: { id?: string; text?: string; at?: string; fromMe?: boolean }[];
+  messages?: Partial<LinkedInInboxMessage>[];
+  latest?: string | null;
 }
 
 /**
- * The messages the student sent on LinkedIn since `after` (1:1 chats only), newest pages first: what Orbit learns
- * the student's own voice from. Only the text and time come back; who they were to is not needed here.
+ * The student's LinkedIn messages since `after`, both ways, from 1:1 chats only (groups are not one person's reply).
+ * `latest` is the newest message time LinkedIn returned, the checkpoint for the next read.
  */
-export async function linkedInSentMessages(
+export async function linkedInInbox(
   accountId: string,
   after: Date,
   opts: CallOpts = {},
-): Promise<ConnectorOutcome<{ text: string; at?: string }[]>> {
+): Promise<ConnectorOutcome<{ messages: LinkedInInboxMessage[]; latest?: string }>> {
   const r = await call<InboxResponse>(
     '/inbox',
     { accountId, token: opts.token, after: after.toISOString() },
@@ -294,8 +306,78 @@ export async function linkedInSentMessages(
   if (!r.ok) return r;
   return {
     ok: true,
-    value: (r.value.messages ?? [])
-      .filter((m) => m.fromMe && typeof m.text === 'string' && m.text.trim())
-      .map((m) => ({ text: m.text!.trim(), at: m.at })),
+    value: {
+      messages: (r.value.messages ?? [])
+        .filter((m) => typeof m.text === 'string' && m.text.trim() && m.id && m.chatId)
+        .map((m) => ({
+          id: String(m.id),
+          chatId: String(m.chatId),
+          text: m.text!.trim(),
+          at: m.at,
+          fromMe: !!m.fromMe,
+          counterpart: { providerId: m.counterpart?.providerId, name: m.counterpart?.name },
+        })),
+      latest: r.value.latest ?? undefined,
+    },
+  };
+}
+
+/**
+ * The messages the student sent on LinkedIn since `after` (1:1 chats only): what Orbit learns the student's own
+ * voice from. Only the text and time come back; who they were to is not needed here.
+ */
+export async function linkedInSentMessages(
+  accountId: string,
+  after: Date,
+  opts: CallOpts = {},
+): Promise<ConnectorOutcome<{ text: string; at?: string }[]>> {
+  const r = await linkedInInbox(accountId, after, opts);
+  if (!r.ok) return r;
+  return {
+    ok: true,
+    value: r.value.messages.filter((m) => m.fromMe).map((m) => ({ text: m.text, at: m.at })),
+  };
+}
+
+/** One person a LinkedIn search found. */
+export interface LinkedInFound {
+  memberId: string;
+  name: string;
+  headline?: string;
+  location?: string;
+  profileUrl?: string;
+  /** 1 = a connection, 2 = a friend of a friend, 3 = further out */
+  distance?: number;
+}
+
+export interface LinkedInSearchQuery {
+  keywords?: string;
+  title?: string;
+  company?: string;
+  school?: string;
+  location?: string;
+  /** which degrees to search; second and third by default, so the results are people the student does not know */
+  distance?: (1 | 2 | 3)[];
+  cursor?: string;
+}
+
+/** Search LinkedIn people from the student's own account, beyond their connections. */
+export async function searchLinkedIn(
+  accountId: string,
+  q: LinkedInSearchQuery,
+  opts: CallOpts = {},
+): Promise<ConnectorOutcome<{ people: LinkedInFound[]; cursor?: string; total?: number }>> {
+  const r = await call<{
+    ok?: boolean;
+    message?: string;
+    people?: LinkedInFound[];
+    cursor?: string | null;
+    total?: number;
+  }>('/search', { accountId, token: opts.token, ...q }, { timeoutMs: 30_000, ...opts });
+  if (!r.ok) return r;
+  if (r.value.ok === false) return connectorFailure('error', r.value.message ?? 'LinkedIn did not search.');
+  return {
+    ok: true,
+    value: { people: r.value.people ?? [], cursor: r.value.cursor ?? undefined, total: r.value.total },
   };
 }

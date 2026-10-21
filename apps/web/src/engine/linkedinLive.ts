@@ -294,7 +294,8 @@ export async function syncLinkedInLive(
     status: 'active',
     lastError: undefined,
     lastSyncedAt: at,
-    syncState: { rows: conns.length, lastSyncedAt: at },
+    // the reply reader keeps its checkpoint on this row too
+    syncState: { ...row.syncState, rows: conns.length, lastSyncedAt: at },
   });
   let recommended = 0;
   if (r.imported + r.updated > 0) {
