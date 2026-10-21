@@ -212,7 +212,8 @@ describe('http', () => {
 
 describe('rate limits', () => {
   it('counts in memory and in the shared SQL store', async () => {
-    const now = new Date('2026-10-14T10:00:00Z');
+    // the real clock: the SQL store drops counters whose window has passed, so a fixed date stops counting
+    const now = new Date();
     const bs = userBuckets('test', `u${Math.random()}`, now, { perMinute: 2, perDay: 10 });
     for (const take of [memoryTake(() => now.getTime()), sqlTake(t.db)]) {
       expect((await take(bs)).allowed).toBe(true);
