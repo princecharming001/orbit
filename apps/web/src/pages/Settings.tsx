@@ -58,7 +58,6 @@ import { sharedClaudeUrl } from '../integrations/shared-claude';
 import { useSession } from '../state/session';
 import {
   Button,
-  Card,
   cx,
   FunctionPicker,
   Input,
@@ -668,7 +667,7 @@ function Integrations() {
   const viaAccount = isServerUser(user.id);
   const googleOffered = builtIn || !!google;
   return (
-    <Card className="!p-5">
+    <div>
       <RowGroup title="Your network">
         {viaAccount ? (
           <IntegrationRow
@@ -865,7 +864,7 @@ function Integrations() {
         </IntegrationRow>
         <ClaudeCard />
       </RowGroup>
-    </Card>
+    </div>
   );
 }
 
@@ -1541,8 +1540,8 @@ function Limits() {
         Changes here save as you make them.
         {savedAt ? <span className="text-good"> Saved.</span> : null}
       </p>
-      <Card className="grid @[40rem]:grid-cols-2 gap-4 items-start">
-        <div className="@[40rem]:col-span-2 font-medium -mb-1">Weekly goal</div>
+      <section className="grid @[40rem]:grid-cols-2 gap-4 items-start pt-2">
+        <h2 className="@[40rem]:col-span-2 text-[13px] font-medium text-ink -mb-1">Weekly goal</h2>
         <div>
           <Label htmlFor="lim-week">First messages a week</Label>
           <WeeklyTargetSlider
@@ -1644,10 +1643,10 @@ function Limits() {
             </div>
           </div>
         </details>
-      </Card>
-      <Card className="grid @[40rem]:grid-cols-2 gap-4 items-start">
-        <div className="@[40rem]:col-span-2 font-medium -mb-1">Your schedule</div>
-        <p className="@[40rem]:col-span-2 text-[13px] text-ink-2">
+      </section>
+      <section className="grid @[40rem]:grid-cols-2 gap-4 items-start border-t border-line-2 pt-6">
+        <h2 className="@[40rem]:col-span-2 text-[13px] font-medium text-ink -mb-1">Your schedule</h2>
+        <p className="@[40rem]:col-span-2 text-[12.5px] text-ink-3">
           Today's list is rebuilt the first time you open Orbit each day. Orbit runs in your browser, so it
           does not send reminders when it is closed.
         </p>
@@ -1658,7 +1657,7 @@ function Limits() {
             onChange={(link) => upd({ schedulingLink: link })}
           />
         </div>
-      </Card>
+      </section>
     </div>
   );
 }
