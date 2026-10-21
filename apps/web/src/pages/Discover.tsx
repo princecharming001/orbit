@@ -1,5 +1,5 @@
 import { useLiveQuery } from 'dexie-react-hooks';
-import { RefreshCw } from 'lucide-react';
+import { Bookmark, RefreshCw, ThumbsDown } from 'lucide-react';
 import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { AddPersonButton } from '../components/AddPerson';
@@ -261,76 +261,116 @@ function NetworkDiscover({ tabs }: { tabs?: ReactNode }) {
               return (
                 <div
                   key={r.id}
+                  // every card has the same skeleton, so a row of them lines up: who, why, how strong, how to
+                  // reach them, and one row of actions pinned to the bottom
                   className={cx(
-                    'bg-canvas border rounded-[var(--radius-card)] p-4 fade-up flex flex-col',
-                    r.status === 'saved' ? 'border-accent/50' : 'border-line',
+                    'group/card relative bg-canvas border rounded-[var(--radius-card)] p-4 fade-up flex flex-col gap-3 h-full transition-shadow hover:shadow-[var(--shadow-card)]',
+                    r.status === 'saved' ? 'border-accent/40' : 'border-line',
                   )}
                   data-testid="rec-card"
                 >
                   <div className="flex items-start gap-3">
-                    <Link to={`/people/${p.id}`}>
-                      <Avatar name={p.displayName} src={p.photoUrl} id={p.id} size={44} />
+                    <Link to={`/people/${p.id}`} className="shrink-0">
+                      <Avatar name={p.displayName} src={p.photoUrl} id={p.id} size={40} />
                     </Link>
                     <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-1.5 min-w-0">
                         <Link to={`/people/${p.id}`} className="font-medium hover:underline truncate">
                           {p.displayName}
                         </Link>
                         {p.isAlumni && (
-                          <Chip tone="accent" className="h-5">
+                          <Chip tone="accent" className="h-5 shrink-0">
                             Alum
                           </Chip>
                         )}
-                        {r.status === 'saved' && <Chip className="h-5">Saved</Chip>}
                       </div>
                       <RoleLine title={p.currentTitle} company={p.currentOrganizationRaw} person={p} />
-                      <ul className="mt-2 text-[13px] text-ink-2 space-y-0.5">
-                        {r.reasons.slice(0, 2).map((x) => (
-                          <li key={x.code}>· {x.text}</li>
-                        ))}
-                      </ul>
-                      <div className="mt-3 grid grid-cols-2 gap-3 max-w-[300px]" data-testid="rec-scores">
-                        <ScoreBar
-                          label="Match"
-                          value={r.fitScore}
-                          title="How well their role and company fit your goals, out of 100"
-                        />
-                        <ScoreBar
-                          label="Reach"
-                          value={r.reachScore}
-                          title="How easy they are to reach, out of 100"
-                        />
-                      </div>
-                      {cold && (
-                        <p className="mt-1.5 text-[12px] text-warn" data-testid="rec-warmup-why">
-                          {introducer
-                            ? `${introducer.firstName} could introduce you, which lands warmer than a cold note.`
-                            : 'You only know them from LinkedIn: a short warm-up first gets a warmer reply.'}
-                        </p>
-                      )}
                     </div>
+                    <button
+                      type="button"
+                      className={cx(
+                        'shrink-0 -mr-1 -mt-1 w-8 h-8 rounded-full inline-flex items-center justify-center transition-colors',
+                        r.status === 'saved' ? 'text-accent' : 'text-ink-3 hover:text-ink hover:bg-canvas-2',
+                      )}
+                      aria-label={r.status === 'saved' ? `${p.firstName} is saved` : 'Save'}
+                      aria-pressed={r.status === 'saved'}
+                      title={
+                        r.status === 'saved'
+                          ? 'Saved: stays at the top of Discover'
+                          : 'Save: keep them at the top of Discover'
+                      }
+                      disabled={r.status === 'saved'}
+                      onClick={async () => {
+                        await saveRecommendation(r.id);
+                        toast.push({
+                          text: `Saved ${p.firstName}. Saved people stay at the top of Discover until you write to them.`,
+                        });
+                      }}
+                      data-testid="rec-save"
+                    >
+                      <Bookmark size={16} fill={r.status === 'saved' ? 'currentColor' : 'none'} />
+                    </button>
                   </div>
-                  <div className="mt-auto pt-3 flex flex-wrap items-center gap-2">
+                  <ul className="space-y-1 text-[13px] text-ink-2">
+                    {r.reasons.slice(0, 2).map((x) => (
+                      <li key={x.code} className="flex items-start gap-2 min-w-0">
+                        <span className="mt-[7px] w-1 h-1 rounded-full bg-ink-3 shrink-0" />
+                        <span className="line-clamp-1" title={x.text}>
+                          {x.text}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                  <div className="grid grid-cols-2 gap-4" data-testid="rec-scores">
+                    <ScoreBar
+                      label="Match"
+                      value={r.fitScore}
+                      title="How well their role and company fit your goals, out of 100"
+                    />
+                    <ScoreBar
+                      label="Reach"
+                      value={r.reachScore}
+                      title="How easy they are to reach, out of 100"
+                    />
+                  </div>
+                  {/* how to reach them, one quiet line in the same place on every card that needs one */}
+                  {cold && (
+                    <p
+                      className="flex items-center gap-2 text-[12.5px] text-ink-2 min-w-0"
+                      data-testid="rec-warmup-why"
+                    >
+                      {introducer ? (
+                        <>
+                          <Avatar
+                            name={introducer.displayName}
+                            src={introducer.photoUrl}
+                            id={introducer.id}
+                            size={18}
+                          />
+                          <span className="truncate">
+                            {introducer.firstName} could introduce you
+                          </span>
+                        </>
+                      ) : (
+                        <span className="truncate">
+                          Known from LinkedIn only, so warm up first
+                        </span>
+                      )}
+                    </p>
+                  )}
+                  <div className="mt-auto pt-3 border-t border-line-2 flex items-center gap-1.5">
                     {cold && introducer ? (
                       // someone the student knows can introduce them: that beats a warm-up with a stranger
-                      <Link to={`/map?reach=${p.id}`} data-testid="rec-intro" className="max-w-full">
-                        <Button
-                          variant="primary"
-                          size="sm"
-                          className="whitespace-normal! h-auto! min-h-8 py-1 text-left"
-                        >
+                      <Link to={`/map?reach=${p.id}`} data-testid="rec-intro" className="min-w-0">
+                        <Button variant="primary" size="sm" className="max-w-full truncate">
                           Intro through {introducer.firstName}
                         </Button>
                       </Link>
-                    ) : null}
-                    <Button
-                      variant={cold && introducer ? 'secondary' : 'primary'}
-                      size="sm"
-                      onClick={() => start(p.id)}
-                      data-testid="rec-start"
-                    >
-                      {cold ? 'Start warm-up' : 'Write first message'}
-                    </Button>
+                    ) : (
+                      <Button variant="primary" size="sm" onClick={() => start(p.id)} data-testid="rec-start">
+                        {cold ? 'Start warm-up' : 'Write first message'}
+                      </Button>
+                    )}
                     {cold && (
                       // the same choice Today and the person page give: a student who already knows them writes now
                       <Button
@@ -343,46 +383,38 @@ function NetworkDiscover({ tabs }: { tabs?: ReactNode }) {
                         Write now
                       </Button>
                     )}
-                    {r.status !== 'saved' && (
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        title="Keep them at the top of Discover"
-                        onClick={async () => {
-                          await saveRecommendation(r.id);
-                          toast.push({
-                            text: `Saved ${p.firstName}. Saved people stay at the top of Discover until you write to them.`,
-                          });
-                        }}
-                      >
-                        Save
-                      </Button>
-                    )}
                     {/* the reasons stay folded away until the student says the person is not a fit */}
-                    <details className="group ml-auto text-[12px]">
-                      <summary className="list-none cursor-pointer h-8 px-3 rounded-full inline-flex items-center text-ink-3 hover:text-ink hover:bg-canvas-2 transition-colors [&::-webkit-details-marker]:hidden">
-                        Not a fit?
+                    <details className="group ml-auto">
+                      <summary
+                        className="list-none cursor-pointer w-8 h-8 rounded-full inline-flex items-center justify-center text-ink-3 hover:text-ink hover:bg-canvas-2 transition-colors [&::-webkit-details-marker]:hidden"
+                        aria-label="Not a fit?"
+                        title="Not a fit? Tell Orbit why"
+                      >
+                        <ThumbsDown size={15} />
                       </summary>
                       <div
-                        className="pop-in mt-1.5 flex flex-wrap items-center gap-1"
+                        className="pop-in absolute z-20 right-3 bottom-14 w-[min(280px,calc(100%-24px))] rounded-[14px] border border-line bg-canvas p-2 shadow-[0_16px_40px_-12px_rgba(0,0,0,0.18)]"
                         role="group"
                         aria-label="Not a fit? Tell Orbit why"
                       >
-                        {(
-                          Object.entries(RECOMMENDATION_DISMISS_REASONS) as [
-                            RecommendationDismissReason,
-                            string,
-                          ][]
-                        ).map(([k, l]) => (
-                          <button
-                            key={k}
-                            type="button"
-                            className="px-2.5 h-7 rounded-full border border-line bg-canvas text-ink-2 hover:text-ink hover:border-[#d4d2ce] transition-colors"
-                            onClick={() => drop(r.id, k, l)}
-                          >
-                            {l}
-                          </button>
-                        ))}
+                        <div className="px-1.5 pb-1.5 text-[12px] text-ink-3">Not a fit? Tell Orbit why</div>
+                        <div className="flex flex-wrap gap-1">
+                          {(
+                            Object.entries(RECOMMENDATION_DISMISS_REASONS) as [
+                              RecommendationDismissReason,
+                              string,
+                            ][]
+                          ).map(([k, l]) => (
+                            <button
+                              key={k}
+                              type="button"
+                              className="px-2.5 h-7 rounded-full border border-line bg-canvas text-[12px] text-ink-2 hover:text-ink hover:border-[#d4d2ce] transition-colors"
+                              onClick={() => drop(r.id, k, l)}
+                            >
+                              {l}
+                            </button>
+                          ))}
+                        </div>
                       </div>
                     </details>
                   </div>

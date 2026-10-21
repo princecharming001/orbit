@@ -828,9 +828,8 @@ test.describe('Keyboard, dead ends and plain words', () => {
   }) => {
     await loadDemo(page);
     await page.goto('discover');
-    const cold = page
-      .getByTestId('rec-card')
-      .filter({ has: page.getByRole('button', { name: /start warm-up/i }) });
+    // a cold contact: known only from LinkedIn, so the card offers to write now instead of a plain first message
+    const cold = page.getByTestId('rec-card').filter({ has: page.getByTestId('rec-write-now') });
     await expect(cold.first()).toBeVisible();
     await cold.first().getByRole('link').nth(1).click();
     await expect(page).toHaveURL(/\/people\//);
