@@ -59,8 +59,8 @@ export function PipelineBoard({
                 className={cx(
                   'w-full',
                   items.length
-                    ? '@3xl:flex-1 @3xl:min-w-[208px] @3xl:max-w-[320px]'
-                    : '@3xl:w-[124px] @3xl:shrink-0',
+                    ? '@3xl:flex-1 @3xl:min-w-[172px] @3xl:max-w-[320px]'
+                    : '@3xl:w-[108px] @3xl:shrink-0',
                 )}
                 data-stage={stage}
                 data-needs={items.filter((r) => nextFor(r.chat.id, r.person.id)).length || undefined}
