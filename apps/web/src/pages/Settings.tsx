@@ -9,6 +9,7 @@ import { AccountSection, MemorySection, OutreachSection } from '../components/ac
 import { LinkedInLiveCard, WarmIntrosCard } from '../components/ConnectorCards';
 import { AppMark, IntegrationRow, RowGroup, RowStatus } from '../components/IntegrationRow';
 import { LinkedInImportButton } from '../components/LinkedInImport';
+import { openMorningBrief } from '../components/MorningBrief';
 import { CalcomRow, FathomRow } from '../components/NotesAppRows';
 import { ResumeFacetList } from '../components/ResumeFacets';
 import { SchedulingLinkField } from '../components/SchedulingLinkField';
@@ -17,11 +18,13 @@ import { db } from '../db/schema';
 import { deleteAllData, exportAllData, exportFilename } from '../engine/account';
 import { demoResetPrompt, loadDemo } from '../engine/demo';
 import { connectAndSyncGoogle, disconnectGoogleAccount, markGoogleNeedsReauth } from '../engine/integrations';
+import { setMorningBrief } from '../engine/morning';
 import { saveResume } from '../engine/resume';
 import {
   removeTargetCompany,
   restoreTargetCompany,
   saveGoals,
+  setBriefTime,
   setSchedulingLink,
   setTargetDeadline,
   setTargetPriority,
@@ -1650,6 +1653,45 @@ function Limits() {
           Today's list is rebuilt the first time you open Orbit each day. Orbit runs in your browser, so it
           does not send reminders when it is closed.
         </p>
+        <div
+          className="@[40rem]:col-span-2 flex flex-wrap items-end gap-x-6 gap-y-3"
+          data-testid="settings-morning"
+        >
+          <label className="flex items-start gap-2 text-[13.5px] max-w-md">
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={settings.morningBrief !== false}
+              onChange={(e) =>
+                void setMorningBrief(user.id, e.target.checked).then(() => setSavedAt(Date.now()))
+              }
+              data-testid="settings-morning-on"
+            />
+            <span>
+              <strong className="font-medium">Morning brief.</strong>{' '}
+              <span className="text-ink-2">
+                Once a day, a short deck in the corner: your week in numbers, each decision waiting on you,
+                and what is worth doing today.
+              </span>
+            </span>
+          </label>
+          <div>
+            <Label htmlFor="lim-brief">From</Label>
+            <Input
+              id="lim-brief"
+              type="time"
+              value={settings.briefTimeLocal ?? '07:00'}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (v) void setBriefTime(user.id, v).then(() => setSavedAt(Date.now()));
+              }}
+              className="w-[120px]"
+            />
+          </div>
+          <Button size="sm" onClick={openMorningBrief} data-testid="settings-morning-show">
+            Show it now
+          </Button>
+        </div>
         <div className="@[40rem]:col-span-2">
           <SchedulingLinkField
             user={user}

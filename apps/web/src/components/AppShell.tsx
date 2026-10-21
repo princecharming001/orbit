@@ -29,6 +29,7 @@ import { CommandPalette } from './CommandPalette';
 import { DemoBanner } from './DemoBanner';
 import { LinkedInAutoSync } from './LinkedInAutoSync';
 import { MeetingNotesAutoSync } from './MeetingNotesAutoSync';
+import { MorningBrief } from './MorningBrief';
 import { OutboxScheduler } from './OutboxScheduler';
 
 // the chat is home (New chat and the logo open it); People holds the board and the list, Drafts what waits to be sent
@@ -203,6 +204,7 @@ export function AppShell() {
       <OutboxScheduler />
       <LinkedInAutoSync />
       <MeetingNotesAutoSync />
+      <MorningBrief />
       <aside
         className={cx(
           'shrink-0 hidden md:flex flex-col h-full border-r border-line bg-canvas transition-[width] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]',

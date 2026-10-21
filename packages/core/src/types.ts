@@ -223,6 +223,10 @@ export interface UserSettings {
   googleClientId?: string;
   /** first-run hints the student closed; they never come back */
   dismissedHints?: string[];
+  /** the morning debrief in the corner of the screen; on unless turned off */
+  morningBrief?: boolean;
+  /** the local day (YYYY-MM-DD) the debrief was last opened or closed, so it shows once a day */
+  morningSeenOn?: string;
 }
 
 /** What a goal is for (plan 16 §2.1); it changes the register, the ask and the routing rules. */

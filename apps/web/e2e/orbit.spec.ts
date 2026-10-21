@@ -2287,3 +2287,39 @@ test.describe('Wide screens use the room', () => {
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(1680);
   });
 });
+
+test.describe('Morning brief', () => {
+  test('pops up once a day, steps through the day and its decisions, and stays away once closed', async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+    await page.addInitScript(() => {
+      (globalThis as { __ORBIT_MORNING__?: string }).__ORBIT_MORNING__ = 'on';
+    });
+    await loadDemo(page);
+    const brief = page.getByTestId('morning-brief');
+    await expect(brief).toBeVisible({ timeout: 20_000 });
+    await expect(brief.getByTestId('morning-overview')).toContainText(
+      /Good (morning|afternoon|evening), Alex/,
+    );
+    await expect(brief.getByText('First messages this week')).toBeVisible();
+    // the first decision, then Skip moves on; the arrow keys go back and forth
+    await brief.getByTestId('morning-next').click();
+    const decision = brief.getByTestId('morning-decision');
+    await expect(decision).toContainText(/Decision 1 of \d/);
+    await brief.getByTestId('morning-next').click();
+    await expect(decision).toContainText(/Decision 2 of \d/);
+    await page.keyboard.press('ArrowLeft');
+    await expect(decision).toContainText(/Decision 1 of \d/);
+    // closing puts it away for the day: a reload does not bring it back
+    await brief.getByTestId('morning-close').click();
+    await expect(brief).toBeHidden();
+    await openDrafts(page);
+    await page.waitForTimeout(1500);
+    await expect(page.getByTestId('morning-brief')).toBeHidden();
+    // Settings brings it back on request
+    await page.goto('settings/limits');
+    await page.getByTestId('settings-morning-show').click();
+    await expect(page.getByTestId('morning-brief')).toBeVisible();
+  });
+});
