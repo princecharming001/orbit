@@ -188,23 +188,22 @@ export function canWriteCalendar(): boolean {
  * Make sure the token can write calendar events: asks Google for that one permission on top of what was already
  * granted (the student sees a short consent for the calendar only). Call it from a click, so the popup may open.
  */
-export async function ensureCalendarWrite(): Promise<TokenState> {
+/** Ask Google for one more permission on top of what Orbit has (incremental consent); resolves once it is granted. */
+async function ensureScope(scope: string, refused: string, closed: string): Promise<TokenState> {
   const have = loadToken();
-  if (have?.scopes?.includes(CALENDAR_EVENTS_SCOPE)) return have;
+  if (have?.scopes?.includes(scope)) return have;
   const clientId = googleClientId();
   if (!clientId) throw new Error('Google sign-in is not set up in this copy of Orbit.');
   await loadGis();
   return new Promise((resolve, reject) => {
     const tc = window.google!.accounts.oauth2.initTokenClient({
       client_id: clientId,
-      scope: [CALENDAR_EVENTS_SCOPE, 'openid', 'email'].join(' '),
+      scope: [scope, 'openid', 'email'].join(' '),
       include_granted_scopes: true,
       callback: async (r) => {
-        if (r.error || !r.access_token)
-          return reject(new Error(r.error_description ?? r.error ?? 'Google did not allow calendar access'));
+        if (r.error || !r.access_token) return reject(new Error(r.error_description ?? r.error ?? refused));
         const scopes = parseGrantedScopes(r.scope);
-        if (!scopes?.includes(CALENDAR_EVENTS_SCOPE))
-          return reject(new Error('Google did not give Orbit permission to add events to your calendar.'));
+        if (!scopes?.includes(scope)) return reject(new Error(refused));
         const state: TokenState = {
           accessToken: r.access_token,
           expiresAt: Date.now() + (r.expires_in ?? 3600) * 1000,
@@ -227,13 +226,31 @@ export async function ensureCalendarWrite(): Promise<TokenState> {
             e.type === 'popup_failed_to_open'
               ? 'Your browser blocked the Google window. Allow pop-ups for Orbit and try again.'
               : e.type === 'popup_closed'
-                ? 'The Google window was closed before calendar access was allowed.'
+                ? closed
                 : (e.message ?? e.type),
           ),
         ),
     });
     tc.requestAccessToken({ prompt: '' });
   });
+}
+
+/** Permission to add events to the student's calendar (asked for the first time an invite is sent). */
+export function ensureCalendarWrite(): Promise<TokenState> {
+  return ensureScope(
+    CALENDAR_EVENTS_SCOPE,
+    'Google did not give Orbit permission to add events to your calendar.',
+    'The Google window was closed before calendar access was allowed.',
+  );
+}
+
+/** Permission to send email from the student's Gmail, so Orbit sends a message itself instead of opening the mail app. */
+export function ensureGmailSend(): Promise<TokenState> {
+  return ensureScope(
+    GMAIL_SEND_SCOPE,
+    'Google did not give Orbit permission to send email for you.',
+    'The Google window was closed before sending was allowed.',
+  );
 }
 
 export function disconnectGoogle(): void {

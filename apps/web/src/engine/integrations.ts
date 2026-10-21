@@ -1,7 +1,7 @@
 import type { User } from '@orbit/core';
 import { newId } from '@orbit/core';
 import { db, type IntegrationAccount } from '../db/schema';
-import { connectGoogle, disconnectGoogle, googleScopeWarning } from '../integrations/google';
+import { connectGoogle, disconnectGoogle, ensureGmailSend, googleScopeWarning } from '../integrations/google';
 import { writePrefs } from '../integrations/prefs';
 import { type SyncProgress, syncGoogle } from './sync';
 
@@ -88,4 +88,27 @@ export async function recordLinkedInImport(userId: string, rows: number, now = n
     connectedAt: earlier?.connectedAt ?? now.toISOString(),
     lastSyncedAt: now.toISOString(),
   });
+}
+
+/**
+ * Let Orbit send email itself: with Google already connected, ask only for the send permission; without it, connect
+ * Google (which also reads replies). Afterwards a draft's button sends from Orbit, with the usual minute to undo.
+ */
+export async function enableGmailSend(user: User): Promise<{ ok: true } | { ok: false; message: string }> {
+  try {
+    const row = await db.integrations
+      .where('userId')
+      .equals(user.id)
+      .filter((i) => i.provider === 'google' && i.status === 'active')
+      .first();
+    if (!row) {
+      await connectAndSyncGoogle(user);
+      return { ok: true };
+    }
+    const t = await ensureGmailSend();
+    await db.integrations.update(row.id, { scopes: t.scopes ?? row.scopes });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, message: e instanceof Error ? e.message : 'Google did not allow it.' };
+  }
 }

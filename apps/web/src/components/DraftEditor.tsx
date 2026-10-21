@@ -13,6 +13,7 @@ import { type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } f
 import { db } from '../db/schema';
 import { regenerateDraft } from '../engine/brief';
 import { restoreDraftText, saveDraftEdits as saveEdits } from '../engine/drafts';
+import { enableGmailSend } from '../engine/integrations';
 import { linkedInSendActive } from '../engine/linkedinLive';
 import {
   approveAndSend,
@@ -29,6 +30,8 @@ import {
   snapshotPerson,
   undoQueued,
 } from '../engine/send';
+import { usesMockConnectors } from '../integrations/connectorsMock';
+import { googleClientId } from '../integrations/google';
 import { useSession } from '../state/session';
 import { Button, cx, Input, relDate, Textarea, useToast } from '../ui';
 import { copyText, openHandoff, runApproval } from './approve';
@@ -143,6 +146,7 @@ export function DraftEditor({
     threaded: !!draft.externalThreadId,
   });
   const person = useLiveQuery(() => db.people.get(draft.personId), [draft.personId]);
+  const [enabling, setEnabling] = useState(false);
   // whether approving sends from Orbit (Google connected with send permission, or LinkedIn connected live) or opens
   // the mail app or LinkedIn for the student to send it there
   const direct = useLiveQuery(
@@ -154,6 +158,13 @@ export function DraftEditor({
           : linkedInSendActive(user, person ?? undefined),
     [user?.id, draft.channel, person?.linkedinMemberId, person?.linkedinSlug],
   );
+  // email that would open the mail app, in a copy of Orbit that can sign in to Google (never the made-up demo student)
+  const canEnableSend =
+    draft.channel === 'gmail' &&
+    direct === false &&
+    !!user &&
+    !!googleClientId() &&
+    !usesMockConnectors(user.id);
   const chats = useLiveQuery(
     () => db.chats.where('personId').equals(draft.personId).toArray(),
     [draft.personId],
@@ -614,6 +625,35 @@ export function DraftEditor({
           </Button>
         </span>
       </div>
+      {canEnableSend && (
+        // without send permission the button opens the mail app; one click lets Orbit send it itself
+        <p
+          className="mt-1.5 text-[12px] text-ink-3 flex flex-wrap items-center gap-x-1.5"
+          data-testid="draft-enable-send"
+        >
+          <span>Send it from Orbit instead of your mail app?</span>
+          <button
+            type="button"
+            className="text-accent font-medium hover:underline disabled:opacity-50"
+            disabled={enabling}
+            onClick={async () => {
+              if (!user) return;
+              setEnabling(true);
+              const r = await enableGmailSend(user);
+              setEnabling(false);
+              if (r.ok)
+                toast.push({
+                  text: 'Orbit can send email for you now. Each one still waits a minute so you can undo.',
+                  tone: 'good',
+                });
+              else setError(r.message);
+            }}
+            data-testid="draft-enable-send-button"
+          >
+            {enabling ? 'Waiting for Google…' : 'Connect Gmail'}
+          </button>
+        </p>
+      )}
       {!edited && draft.claims?.some((c) => c.factId) && ['thank_you', 'nurture'].includes(draft.kind) && (
         <p className="mt-1.5 text-[12px] text-ink-3" data-testid="draft-from-notes">
           Parts come from your notes: read it once as {first} will.
