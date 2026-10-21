@@ -11,12 +11,15 @@ permissions:
   pages: write
   id-token: write
 
+# A newer push includes an older one, so the older push's checks stop rather than queue; only publishing waits its
+# turn (see deploy).
 concurrency:
-  group: pages
-  cancel-in-progress: false
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  build:
+  # lint, types, unit tests and the committed Edge Function bundles: one machine, alongside the browser tests
+  checks:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -35,8 +38,24 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
+
+  # the browser tests, split four ways and run at once: each machine takes a quarter of them, test by test
+  e2e:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
       # the end-to-end tests run on a build without Google sign-in or account mode, the way they run locally: those
-      # switch on extra setup steps the tests do not expect. The site itself is built with everything below, after.
+      # switch on extra setup steps the tests do not expect. The site itself is built with everything, in build.
       - name: Build for the end-to-end tests
         run: pnpm build
         env:
@@ -46,24 +65,57 @@ jobs:
           VITE_ORBIT_VILLAGE_PROXY: https://nxibeiykcgxpbmkeadth.supabase.co/functions/v1/orbit-connectors
       - name: Install Playwright browsers
         run: pnpm --filter @orbit/web exec playwright install --with-deps chromium
-      - name: End-to-end tests
-        run: pnpm --filter @orbit/web exec playwright test --project=app
+      - name: End-to-end tests (part ${{ matrix.shard }} of 4)
+        run: pnpm --filter @orbit/web exec playwright test --project=app --fully-parallel --shard=${{ matrix.shard }}/4
         env:
           ORBIT_BASE: /${{ github.event.repository.name }}/
       - name: Keep the traces of failed end-to-end tests
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-test-results
+          name: e2e-test-results-${{ matrix.shard }}
           path: apps/web/test-results
           retention-days: 7
-      # Frame times depend on the machine, so on shared CI runners they are measured and reported but do not block
-      # the deploy. Run `pnpm e2e` locally for the enforced limits.
+
+  # Frame times depend on the machine, so on shared CI runners they are measured and reported but never block the
+  # deploy. Run `pnpm e2e` locally for the enforced limits.
+  perf:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build for the frame-time check
+        run: pnpm build
+        env:
+          ORBIT_BASE: /${{ github.event.repository.name }}/
+          VITE_ORBIT_CLAUDE_PROXY: https://nxibeiykcgxpbmkeadth.supabase.co/functions/v1/orbit-claude
+          VITE_ORBIT_LINKEDIN_PROXY: https://nxibeiykcgxpbmkeadth.supabase.co/functions/v1/orbit-connectors
+          VITE_ORBIT_VILLAGE_PROXY: https://nxibeiykcgxpbmkeadth.supabase.co/functions/v1/orbit-connectors
+      - name: Install Playwright browsers
+        run: pnpm --filter @orbit/web exec playwright install --with-deps chromium
       - name: Map frame times (reported)
-        continue-on-error: true
         run: pnpm --filter @orbit/web exec playwright test --project=perf --no-deps
         env:
           ORBIT_BASE: /${{ github.event.repository.name }}/
+
+  # the site, built once every check has passed
+  build:
+    needs: [checks, e2e]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
       # The site is served from its own domain (tryorbit.today) at the root once the repository variable ORBIT_BASE is
       # set to "/"; without it, from the GitHub Pages address under /<repo>/.
       - name: Build the site
@@ -95,6 +147,10 @@ jobs:
     if: github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest
+    # one publish at a time; the checks before it run in parallel
+    concurrency:
+      group: pages
+      cancel-in-progress: false
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
