@@ -46,6 +46,7 @@ export interface IntegrationAccount {
     | 'calcom'
     | 'wispr_export'
     | 'tracker_import'
+    | 'imessage'
     | 'demo';
   externalAccountId?: string;
   /** live LinkedIn: the token Orbit's server gave this browser for the account; account calls carry it */
@@ -133,6 +134,26 @@ export interface OutboxRow {
   lastError?: string;
 }
 
+/**
+ * Someone the student texts, from the Mac's Messages: how much and when, and the last few messages for their page.
+ * Kept in this browser only; the messages themselves are never sent anywhere.
+ */
+export interface TextThread {
+  /** the person's id: one thread per person, whichever numbers or addresses they text from */
+  id: string;
+  userId: string;
+  personId: string;
+  /** the numbers and addresses the texts came from (+15551234567, name@icloud.com) */
+  handles: string[];
+  inCount: number;
+  outCount: number;
+  firstAt: string;
+  lastAt: string;
+  /** the latest messages, oldest first */
+  recent: { at: string; fromMe: boolean; text: string }[];
+  importedAt: string;
+}
+
 export class OrbitDB extends Dexie {
   users!: EntityTable<User, 'id'>;
   settings!: EntityTable<UserSettings, 'userId'>;
@@ -174,6 +195,7 @@ export class OrbitDB extends Dexie {
   personIdentities!: EntityTable<PersonIdentityRow, 'id'>;
   introRequests!: EntityTable<IntroRequestRow, 'id'>;
   outbox!: EntityTable<OutboxRow, 'key'>;
+  textThreads!: EntityTable<TextThread, 'id'>;
 
   constructor(name = 'orbit') {
     super(name);
@@ -228,6 +250,13 @@ export class OrbitDB extends Dexie {
       personIdentities: 'id, userId, personId',
       introRequests: 'id, userId',
       outbox: 'key, table, createdAt',
+    });
+    // phone numbers on people (texts are matched by number), and each person's texting history from the Mac's
+    // Messages: counts, dates and the last few messages, kept in this browser only
+    this.version(4).stores({
+      people:
+        'id, userId, nameNormalized, primaryEmail, linkedinSlug, currentOrganizationId, strength, lastInteractionAt, *emails, *phones',
+      textThreads: 'id, userId, personId',
     });
   }
 }

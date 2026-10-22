@@ -1,4 +1,6 @@
 import { useEffect, useRef } from 'react';
+import { cleanUpGuesses } from '../engine/cleanup';
+import { enrichFromLinkedIn } from '../engine/enrich';
 import { autoSyncFathom } from '../engine/fathom';
 import { autoSyncMeetingApps } from '../engine/meetingApps';
 import { useSession } from '../state/session';
@@ -16,8 +18,15 @@ export function MeetingNotesAutoSync() {
   useEffect(() => {
     const u = userRef.current;
     if (!userId || !u?.onboardingCompletedAt) return;
-    void autoSyncFathom(u).catch(() => undefined);
-    void autoSyncMeetingApps(u).catch(() => undefined);
+    // first, once: clear what older versions saved from guesses (chats from mail never answered, and so on)
+    void cleanUpGuesses(u)
+      .catch(() => undefined)
+      .then(() => {
+        void autoSyncFathom(u).catch(() => undefined);
+        void autoSyncMeetingApps(u).catch(() => undefined);
+        // today's few LinkedIn lookups for people the student knows (a quiet no-op without live LinkedIn)
+        void enrichFromLinkedIn(u).catch(() => undefined);
+      });
   }, [userId]);
   return null;
 }

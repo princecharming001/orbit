@@ -164,8 +164,8 @@ export const syncGoogleTool = defineTool({
         ? 'Google is not part of this version of Orbit.'
         : !token
           ? account
-            ? 'Google is signed out. Reconnect from Settings, LinkedIn, resume & AI, then sync.'
-            : 'Google is not connected. Connect it from Settings, LinkedIn, resume & AI (it needs the sign-in popup).'
+            ? 'Google is signed out. Reconnect from Settings, Integrations, then sync.'
+            : 'Google is not connected. Connect it from Settings, Integrations (it needs the sign-in popup).'
           : undefined,
     };
   },
@@ -196,8 +196,8 @@ export const syncGoogleTool = defineTool({
         out,
         out,
         account
-          ? 'Google is signed out. Reconnect from Settings, LinkedIn, resume & AI, then sync.'
-          : 'Google is not connected yet. Connect it from Settings, LinkedIn, resume & AI; it needs the Google sign-in popup.',
+          ? 'Google is signed out. Reconnect from Settings, Integrations, then sync.'
+          : 'Google is not connected yet. Connect it from Settings, Integrations; it needs the Google sign-in popup.',
         '/settings/integrations',
       );
     }

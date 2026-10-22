@@ -43,6 +43,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   fathom: 'Fathom',
   fireflies: 'Fireflies',
   wispr: 'Wispr Flow',
+  imessage: 'iMessage',
   calcom: 'Cal.com',
   wispr_export: 'Wispr Flow',
   tracker_import: 'Tracker import',

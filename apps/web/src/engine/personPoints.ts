@@ -160,12 +160,13 @@ export function personPoints(person: Person, rec: Recommendation, ctx: PointCont
 
   // ---- why now ----
   if (started && (ctx.now.getTime() - started.getTime()) / YEAR < 1)
-    add('timing', 'Joined in the last year: newer people often have time to chat');
+    add('timing', `Joined ${current?.nameRaw ?? 'their team'} in the last year`);
   for (const r of rec.reasons) {
     // the school is the logo by their name, and warm or path ties say themselves on the card
     if (r.code === 'function_match') add('timing', r.text);
     if (r.code === 'target_company') add('timing', 'Works at a company on your target list');
-    if (r.code === 'resume_overlap') add('common', 'Their work overlaps with your experience');
+    // the reason's own words say what overlaps; a line that would fit anyone is left out
+    if (r.code === 'resume_overlap' && r.text && !/^their work overlaps/i.test(r.text)) add('common', r.text);
   }
 
   const order: PointKind[] = ['common', 'standout', 'does', 'timing'];

@@ -22,6 +22,7 @@ import {
   type LiveConnection,
   linkedInConnections,
   linkedInConnectStatus,
+  linkedInMe,
   type Mutual,
   mutualConnections,
   sendLinkedInMessage,
@@ -152,8 +153,9 @@ export async function connectLinkedInLive(
         closeQuietly(win);
         return { ok: false, reason: 'unconfigured', message: LIVE_SOON };
       }
-      // the student closed the window without finishing: give Unipile two more looks, then stop
-      if (!accountId && win.closed && ++closedChecks > 2)
+      // the window closed: Unipile's report of the new account can land a few seconds after it (the success page
+      // closes itself), so keep looking for about 20 seconds before calling it cancelled
+      if (!accountId && win.closed && ++closedChecks > 10)
         return {
           ok: false,
           reason: 'cancelled',
@@ -163,7 +165,14 @@ export async function connectLinkedInLive(
     closeQuietly(win);
     if (opts.signal?.aborted)
       return { ok: false, reason: 'cancelled', message: 'Stopped connecting LinkedIn.' };
-    if (!accountId) return { ok: false, reason: 'error', message: 'LinkedIn sign-in timed out. Try again.' };
+    if (!accountId)
+      return win.closed
+        ? {
+            ok: false,
+            reason: 'cancelled',
+            message: 'The LinkedIn window was closed before sign-in finished.',
+          }
+        : { ok: false, reason: 'error', message: 'LinkedIn sign-in timed out. Try again.' };
   }
   await saveAccount(user.id, {
     externalAccountId: accountId,
@@ -171,7 +180,13 @@ export async function connectLinkedInLive(
     status: 'active',
     lastError: undefined,
   });
+  // the student's LinkedIn photo becomes their picture in Orbit straight away, before the connections import
+  if (!usesMockConnectors(user.id))
+    await adoptLinkedInPhoto(user.id, accountId, accessToken, { replace: true });
   const r = await syncLinkedInLive(user, opts);
+  // then, in the background, fill in people the student already knows from Gmail with their LinkedIn
+  if (r.ok && !usesMockConnectors(user.id))
+    void import('./enrich').then((m) => m.enrichFromLinkedIn(user)).catch(() => undefined);
   if (r.ok) return { ok: true, rows: r.rows, added: r.added };
   return {
     ok: false,
@@ -281,6 +296,10 @@ export async function syncLinkedInLive(
       signal: opts.signal,
       onProgress: opts.onProgress,
     });
+    // a student who connected before photos were kept gets theirs now
+    // (in the background: the sync does not wait on it)
+    if (pulled.ok)
+      void adoptLinkedInPhoto(user.id, row.externalAccountId!, row.accessToken).catch(() => false);
     if (!pulled.ok) {
       if (pulled.reason === 'unconfigured') return { ok: false, reason: 'unconfigured', message: LIVE_SOON };
       await db.integrations.update(row.id, { status: 'error', lastError: pulled.message });
@@ -484,4 +503,24 @@ export async function sendLinkedInLive(
   if (r.value.memberId && !person.linkedinMemberId)
     await db.people.update(person.id, { linkedinMemberId: r.value.memberId });
   return { ok: true, invited: r.value.invited, messageId: r.value.messageId, chatId: r.value.chatId };
+}
+
+/**
+ * Make the student's LinkedIn photo their picture in Orbit. On connecting it always does; on a later sync it only
+ * fills a missing picture or refreshes one that came from LinkedIn (a kept image, `data:`), never a picture the
+ * student got elsewhere. Quiet when LinkedIn has no photo or does not answer: the initials stay.
+ */
+export async function adoptLinkedInPhoto(
+  userId: string,
+  accountId: string,
+  token: string | undefined,
+  opts: { replace?: boolean; signal?: AbortSignal } = {},
+): Promise<boolean> {
+  const current = (await db.users.get(userId))?.avatarUrl;
+  if (!opts.replace && current && !current.startsWith('data:')) return false;
+  const me = await linkedInMe(accountId, { token, signal: opts.signal }).catch(() => undefined);
+  const picture = me?.ok ? me.value.picture : undefined;
+  if (!picture?.startsWith('data:image/') || picture === current) return false;
+  await db.users.update(userId, { avatarUrl: picture });
+  return true;
 }

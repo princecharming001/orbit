@@ -7,6 +7,9 @@ export const TOUCHPOINT_WEIGHTS: Record<TouchpointKind, number> = {
   email_cc: 0.1,
   linkedin_in: 0.6,
   linkedin_out: 0.5,
+  // a day of texting each way: people who text are close, but a day of texts is lighter than an email thread
+  text_in: 0.6,
+  text_out: 0.45,
   linkedin_connected: 0.2,
   linkedin_engaged: 0.15,
   note: 0.3,
@@ -30,9 +33,13 @@ const TWO_WAY: ReadonlySet<TouchpointKind> = new Set([
   'meeting',
   'email_in',
   'linkedin_in',
+  'text_in',
   'manual_log',
   'intro_observed',
 ]);
+/** Messages from them: only an exchange once the student has written too (a cold email or a newsletter is not). */
+const FROM_THEM: ReadonlySet<TouchpointKind> = new Set(['email_in', 'linkedin_in', 'text_in']);
+const FROM_STUDENT: ReadonlySet<TouchpointKind> = new Set(['email_out', 'linkedin_out', 'text_out']);
 /** Sharing a CC line, a mailing list or a LinkedIn connection is not an interaction. */
 const AMBIENT: ReadonlySet<TouchpointKind> = new Set(['email_cc', 'linkedin_connected']);
 
@@ -44,6 +51,8 @@ const CONVERSATION: ReadonlySet<TouchpointKind> = new Set([
   'email_out',
   'linkedin_in',
   'linkedin_out',
+  'text_in',
+  'text_out',
 ]);
 
 /** Decayed raw evidence that outbound-only touches (cold emails, bumps, likes) can add before any reply. */
@@ -58,6 +67,7 @@ export function computeStrength(
   now: Date = new Date(),
 ): { strength: number; breakdown: StrengthBreakdown } {
   let twoWay = 0;
+  let fromThem = 0;
   let oneWay = 0;
   let cc = 0;
   let connected = 0;
@@ -73,7 +83,8 @@ export function computeStrength(
     const ti = Math.min(at, t);
     const ageDays = (t - ti) / DAY;
     const decayed = tp.weight * Math.exp((-LN2 * ageDays) / HALF_LIFE_DAYS);
-    if (TWO_WAY.has(tp.kind)) twoWay += decayed;
+    if (FROM_THEM.has(tp.kind)) fromThem += decayed;
+    else if (TWO_WAY.has(tp.kind)) twoWay += decayed;
     else if (tp.kind === 'email_cc') cc += decayed;
     else if (tp.kind === 'linkedin_connected') connected += decayed;
     else oneWay += decayed;
@@ -85,6 +96,9 @@ export function computeStrength(
   }
   if (last === undefined) return { strength: 0, breakdown: { raw: 0, recency: 0, counts } };
   const reciprocal = isReciprocal(counts);
+  // what they sent counts in full once it is an exchange; before that it is one-way, like a cold email
+  if (reciprocal) twoWay += fromThem;
+  else oneWay += fromThem;
   const raw =
     twoWay + (reciprocal ? oneWay : Math.min(oneWay, ONE_WAY_RAW_CAP)) + Math.min(cc, CC_RAW_CAP) + connected;
   // "We talked yesterday" only counts for real touches: a CC yesterday says nothing about the tie.
@@ -117,11 +131,15 @@ export function interactionCount(counts: Partial<Record<TouchpointKind, number>>
   return n;
 }
 
-/** True once the person has written back, met the student, or been introduced to them. */
+/**
+ * True once there is a real exchange: they met the student or were introduced to them, or they wrote and the student
+ * wrote too. Mail that only ever came in (a cold pitch, a founder's product update, a recruiter blast) is not one.
+ */
 export function isReciprocal(counts: Partial<Record<TouchpointKind, number>> | undefined): boolean {
   if (!counts) return false;
-  for (const k of TWO_WAY) if ((counts[k] ?? 0) > 0) return true;
-  return false;
+  const has = (k: TouchpointKind) => (counts[k] ?? 0) > 0;
+  for (const k of TWO_WAY) if (!FROM_THEM.has(k) && has(k)) return true;
+  return [...FROM_THEM].some(has) && [...FROM_STUDENT].some(has);
 }
 
 /**

@@ -3437,6 +3437,12 @@ function goalAsk(i: ComposeTemplateInput): { text: string; kind: ComposedMessage
   }
 }
 
+const sentences = (...xs: (string | undefined | false)[]) =>
+  xs
+    .filter((x): x is string => !!x && !!x.trim())
+    .map((x) => (/[.!?]$/.test(x.trim()) ? x.trim() : `${x.trim()}.`))
+    .join(' ');
+
 /** Why the student writes to this person, per goal: two or three short sentences after the hook. */
 function goalMiddle(i: ComposeTemplateInput): string {
   const org = i.recipient.org ? ` at ${i.recipient.org}` : '';
@@ -3447,18 +3453,38 @@ function goalMiddle(i: ComposeTemplateInput): string {
       return `Your team${org} works on ${topic}, which is the work I want to do. It would help to hear how you got there and what a normal week looks like.`;
     case 'advice':
       return `Right now I am trying to figure out ${topic}. You have been where I am now, so your view would help me a lot.`;
+    // only what the student told Orbit: a pitch or traction they did not give is left out, never made up
     case 'fundraising':
-      return `${co} ${i.user.pitch ?? 'is a new company'}. ${i.user.traction ?? 'We are early, and we are moving fast.'} We are raising a small round now and would value your view on it.`;
+      return sentences(
+        i.user.pitch && `${co} ${i.user.pitch}.`,
+        i.user.traction,
+        `I am raising a round for ${co} and would value your view on it.`,
+        'I would be glad to send more detail if it is useful.',
+      );
     case 'sales':
-      return `${co} ${i.user.pitch ?? 'saves teams time'}. Teams like yours use it to cut busy work and spend more time on the parts that matter.`;
+      return sentences(
+        i.user.pitch ? `${co} ${i.user.pitch}.` : `I work on ${co}.`,
+        'I think it could be useful to your team, and I would value your honest view either way.',
+        'If it is not a fit, that is completely fine.',
+      );
     case 'hiring':
-      return `We are hiring for ${topic} at ${co}, and your work fits it well. ${co} ${i.user.pitch ?? 'is a small team'}, and the person in this role will shape how we work.`;
+      return sentences(
+        `We are hiring for ${topic} at ${co}.`,
+        i.user.pitch && `${co} ${i.user.pitch}.`,
+        'I would be glad to tell you more about the role and to hear what you are looking for next.',
+      );
     case 'cofounder':
-      return `These days I am building ${co}, which ${i.user.pitch ?? 'is still early'}. The cofounder I am looking for knows ${topic} as well as you do.`;
+      return sentences(
+        `These days I am building ${co}${i.user.pitch ? `, which ${i.user.pitch}` : ''}.`,
+        `I am looking for a cofounder who knows ${topic}.`,
+      );
     case 'community':
-      return `I help run ${topic}. We meet once a month to share what we are working on, and I think you would fit right in.`;
+      return `I help run ${topic}. It is for people who care about ${topic}, and I would be glad to tell you more about what we do.`;
     case 'collaboration':
-      return `I work on ${i.user.pitch ?? 'a close problem'}. Your work seems close to mine, and I would like to share what I have found so far.`;
+      return sentences(
+        i.user.pitch && `I work on ${i.user.pitch}.`,
+        'Your work seems close to mine, and I would like to share what I have found so far.',
+      );
   }
 }
 
@@ -3504,14 +3530,15 @@ export function composeFallback(i: ComposeTemplateInput): Omit<ComposedMessage, 
   switch (i.kind) {
     case 'first_touch':
     case 'warm_first_touch': {
-      const warm = i.kind === 'warm_first_touch' && via ? `${via} said I should write to you.` : '';
+      // the route is someone they both know, not someone who said anything: say only that
+      const warm = i.kind === 'warm_first_touch' && via ? `I came across you through ${via}.` : '';
       if (i.channel === 'linkedin') {
         body = [
           hi,
           [warm, intro(i), i.hook ? `I read ${i.hook.text}.` : '', ask.text].filter(Boolean).join(' '),
         ].join('\n');
       } else {
-        subject = warm ? `${via} said to write` : SUBJECTS[i.goal](i);
+        subject = warm ? `through ${via}` : SUBJECTS[i.goal](i);
         body = paragraphs(
           hi,
           [warm, intro(i), hookLine(i)].filter(Boolean).join(' '),
@@ -3550,10 +3577,10 @@ export function composeFallback(i: ComposeTemplateInput): Omit<ComposedMessage, 
       outAsk = { kind: 'none', text: '' };
       body = paragraphs(
         hi,
-        `It has been a while, so I wanted to share some news. ${i.topic ? `${i.topic.replace(/\.$/, '')}.` : 'I finally found the work I want to do.'}`,
-        i.hook
-          ? `I saw ${i.hook.text}, and it made me think of you.`
-          : 'I thought of you, since you helped me get here.',
+        i.topic
+          ? `It has been a while, so I wanted to share some news. ${i.topic.replace(/\.$/, '')}.`
+          : 'It has been a while, and I wanted to say hello.',
+        i.hook ? `I saw ${i.hook.text}, and it made me think of you.` : '',
         'No need to reply. I hope things are good on your end.',
         sign,
       );
@@ -3572,8 +3599,11 @@ export function composeFallback(i: ComposeTemplateInput): Omit<ComposedMessage, 
       outAsk = { kind: 'none', text: '' };
       body = paragraphs(
         hi,
-        `Thank you for taking the time to talk with me. ${i.hook ? `What you said about ${i.hook.text.replace(/^your\b/, 'your')} will stay with me.` : 'It helped me more than you know.'}`,
-        `I am going to act on your advice about ${i.topic ?? 'next steps'} this week, and I will let you know how it goes.`,
+        `Thank you for taking the time to talk with me.${i.hook ? ` What you said about ${i.hook.text.replace(/^your\b/, 'your')} will stay with me.` : ''}`,
+        'I know your time is limited, and I appreciated you sharing some of it with me.',
+        i.topic
+          ? `I am going to act on your advice about ${i.topic}, and I will let you know how it goes.`
+          : 'I will let you know how things go, and I hope we can stay in touch.',
         sign,
       );
       break;

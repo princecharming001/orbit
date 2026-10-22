@@ -56,6 +56,8 @@ const PRECEDENCE: Record<PersonSource, number> = {
   manual: 100,
   enrichment: 80,
   linkedin_csv: 70,
+  // a name from the student's own Contacts
+  imessage: 65,
   tracker_import: 60,
   note: 50,
   gmail: 40,

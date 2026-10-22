@@ -15,6 +15,8 @@ export type IntegrationProvider =
   | 'calcom'
   | 'wispr_export'
   | 'tracker_import'
+  /** the Mac's Messages database, imported and read in the browser */
+  | 'imessage'
   | 'demo';
 export type PersonSource =
   | 'gmail'
@@ -25,6 +27,8 @@ export type PersonSource =
   | 'manual'
   | 'note'
   | 'recommendation'
+  /** someone the student texts, named in their Contacts */
+  | 'imessage'
   | 'demo';
 export type RelationshipType =
   | 'unknown'
@@ -59,6 +63,9 @@ export type TouchpointKind =
   | 'meeting'
   | 'linkedin_in'
   | 'linkedin_out'
+  /** an iMessage or SMS from them / to them, one per day each way (imported from the Mac's Messages) */
+  | 'text_in'
+  | 'text_out'
   | 'linkedin_connected'
   | 'linkedin_engaged'
   | 'note'
@@ -363,6 +370,8 @@ export interface Person {
   /** the primary address as the student's source wrote it ("marcus.bell@gmail.com"); `primaryEmail` is the matching key */
   primaryEmailAsWritten?: string;
   emails: string[];
+  /** phone numbers, as +15551234567 (from the student's Contacts when they import their texts) */
+  phones?: string[];
   linkedinUrl?: string;
   linkedinSlug?: string;
   /** LinkedIn's member id, kept from a live (Unipile) sync so mutual-connection lookups can name this person */

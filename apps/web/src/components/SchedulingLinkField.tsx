@@ -1,15 +1,14 @@
 import type { User } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
-import { calAvailable, calStatus, eventTypeLabel } from '../engine/calcom';
+import { calStatus, eventTypeLabel } from '../engine/calcom';
 import { Input, Label, Select } from '../ui';
 
 const OTHER = '__other';
 
 /**
  * The booking link drafts offer when proposing times. With Cal.com connected it is picked from the student's event
- * types (or "Other link…" for any other page); without it, it is typed in, with a quiet way to connect Cal.com.
+ * types (or "Other link…" for any other page); without it, it is typed in.
  */
 export function SchedulingLinkField({
   user,
@@ -67,22 +66,7 @@ export function SchedulingLinkField({
           aria-label={showPicker ? 'Other scheduling link' : undefined}
         />
       )}
-      <p className="text-[12px] text-ink-3 mt-1">
-        Orbit adds it when you propose times for a chat.
-        {status && !status.connected && calAvailable(user) && (
-          <>
-            {' '}
-            <Link
-              to="/settings/integrations"
-              className="underline underline-offset-2 hover:text-ink"
-              data-testid="scheduling-link-connect"
-            >
-              Connect Cal.com
-            </Link>{' '}
-            to pick from your event types.
-          </>
-        )}
-      </p>
+      <p className="text-[12px] text-ink-3 mt-1">Added when you propose times.</p>
     </div>
   );
 }

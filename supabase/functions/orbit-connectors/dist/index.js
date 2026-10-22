@@ -303,6 +303,41 @@ function companyIntros(r) {
 
 // supabase/functions/orbit-connectors/connectors.ts
 var DEFAULT_LIMITS = { perMinute: 120, perDay: 3e3 };
+function memoryLinks() {
+  const m = /* @__PURE__ */ new Map();
+  return {
+    put: async (ref, id) => {
+      m.set(ref, id);
+    },
+    get: async (ref) => m.get(ref)
+  };
+}
+function postgrestLinks(url2, serviceKey2, doFetch = fetch) {
+  const headers = {
+    "content-type": "application/json",
+    apikey: serviceKey2,
+    Authorization: `Bearer ${serviceKey2}`
+  };
+  return {
+    put: async (ref, accountId, status) => {
+      const r = await doFetch(`${url2}/rest/v1/orbit_unipile_links?on_conflict=ref`, {
+        method: "POST",
+        headers: { ...headers, Prefer: "resolution=merge-duplicates,return=minimal" },
+        body: JSON.stringify({ ref, account_id: accountId, status })
+      });
+      if (!r.ok) throw new Error(`links store ${r.status}`);
+    },
+    get: async (ref) => {
+      const r = await doFetch(
+        `${url2}/rest/v1/orbit_unipile_links?ref=eq.${encodeURIComponent(ref)}&select=account_id`,
+        { headers }
+      );
+      if (!r.ok) throw new Error(`links store ${r.status}`);
+      const rows = await r.json();
+      return rows[0]?.account_id || void 0;
+    }
+  };
+}
 async function accountToken(accountId, signingKey) {
   const key = await crypto.subtle.importKey(
     "raw",
@@ -393,9 +428,18 @@ var UNIPILE_ROUTES = /* @__PURE__ */ new Set([
   "/disconnect",
   "/send",
   "/inbox",
-  "/search"
+  "/search",
+  "/me"
 ]);
-var ACCOUNT_ROUTES = /* @__PURE__ */ new Set(["/relations", "/mutuals", "/disconnect", "/send", "/inbox", "/search"]);
+var ACCOUNT_ROUTES = /* @__PURE__ */ new Set([
+  "/relations",
+  "/mutuals",
+  "/disconnect",
+  "/send",
+  "/inbox",
+  "/search",
+  "/me"
+]);
 function makeHandler(deps) {
   const doFetch = deps.fetch ?? fetch;
   const limits = deps.limits ?? DEFAULT_LIMITS;
@@ -410,6 +454,7 @@ function makeHandler(deps) {
     maxRetries: 1
   });
   return async (req) => {
+    if (new URL(req.url).pathname.endsWith("/connect/notify")) return unipileNotify(deps, req);
     const origin = req.headers.get("origin");
     const allowed = !!origin && deps.origins(origin);
     const h = cors(origin, allowed);
@@ -511,6 +556,7 @@ function makeHandler(deps) {
       if (path === "/mutuals") return json(200, await unipileMutuals(deps, body, doFetch), h);
       if (path === "/inbox") return json(200, await unipileInbox(deps, body, doFetch), h);
       if (path === "/search") return json(200, await unipileSearch(deps, body, doFetch), h);
+      if (path === "/me") return json(200, await unipileMe(deps, body, doFetch), h);
       return json(200, await unipileDisconnect(deps, body, doFetch), h);
     } catch (e) {
       return json(502, { error: e instanceof Error ? e.message : "upstream error" }, h);
@@ -523,8 +569,14 @@ function newRef() {
 function uHeaders(deps) {
   return { "content-type": "application/json", accept: "application/json", "X-API-KEY": deps.unipileKey };
 }
+async function notifyUrl(deps, ref) {
+  if (!deps.publicUrl || !deps.signingKey || !deps.links) return void 0;
+  const sig = await accountToken(`link:${ref}`, deps.signingKey);
+  return `${deps.publicUrl}/connect/notify?ref=${encodeURIComponent(ref)}&sig=${encodeURIComponent(sig)}`;
+}
 async function unipileConnectStart(deps, doFetch, makeRef) {
   const ref = makeRef();
+  const notify_url = await notifyUrl(deps, ref);
   const res = await doFetch(`${deps.unipileBase}/api/v1/hosted/accounts/link`, {
     method: "POST",
     headers: uHeaders(deps),
@@ -533,7 +585,9 @@ async function unipileConnectStart(deps, doFetch, makeRef) {
       providers: ["LINKEDIN"],
       api_url: deps.unipileBase,
       expiresOn: new Date(Date.now() + 60 * 6e4).toISOString(),
-      name: ref
+      // Unipile hands this back with the new account's id, to notify_url: that is how the two are matched
+      name: ref,
+      ...notify_url ? { notify_url } : {}
     })
   });
   if (!res.ok) throw new Error(`unipile ${res.status}`);
@@ -545,21 +599,52 @@ var FAILED_SOURCE = /* @__PURE__ */ new Set(["ERROR", "CREDENTIALS", "PERMISSION
 async function unipileConnectStatus(deps, body, doFetch) {
   const ref = String(body.ref ?? "");
   if (!ref) return { status: "error", message: "No connection was started." };
+  const linked = await deps.links?.get(ref).catch(() => void 0);
+  if (linked) {
+    const one = await doFetch(`${deps.unipileBase}/api/v1/accounts/${encodeURIComponent(linked)}`, {
+      headers: uHeaders(deps)
+    });
+    if (one.ok) return accountState(await one.json(), linked);
+    if (one.status !== 404) throw new Error(`unipile ${one.status}`);
+  }
   const res = await doFetch(`${deps.unipileBase}/api/v1/accounts?limit=250`, { headers: uHeaders(deps) });
   if (res.status === 404) return { status: "pending" };
   if (!res.ok) throw new Error(`unipile ${res.status}`);
   const b = await res.json();
   const acc = b.items?.find((a) => a.name === ref);
   if (!acc) return { status: "pending" };
+  return accountState(acc, acc.id);
+}
+function accountState(acc, id) {
   const states = (acc.sources ?? []).map((x) => String(x.status ?? "").toUpperCase());
-  if (states.includes("OK") && acc.id) return { status: "connected", accountId: acc.id };
+  if (states.includes("OK") && id) return { status: "connected", accountId: id };
   if (states.some((x) => FAILED_SOURCE.has(x)))
     return {
       status: "error",
-      accountId: acc.id,
+      accountId: id,
       message: states.includes("CREDENTIALS") ? "LinkedIn did not accept the sign-in. Try again." : "LinkedIn could not be connected. Try again."
     };
   return { status: "pending" };
+}
+async function unipileNotify(deps, req) {
+  const plain = { "content-type": "application/json", "cache-control": "no-store" };
+  const no = (status2) => new Response(JSON.stringify({ ok: false }), { status: status2, headers: plain });
+  if (req.method !== "POST" || !deps.links || !deps.signingKey) return no(404);
+  const q = new URL(req.url).searchParams;
+  const ref = q.get("ref") ?? "";
+  const sig = q.get("sig") ?? "";
+  if (!ref || !sig || sig !== await accountToken(`link:${ref}`, deps.signingKey)) return no(403);
+  let b;
+  try {
+    b = await req.json();
+  } catch {
+    return no(400);
+  }
+  const status = String(b.status ?? "");
+  if (b.name !== ref || typeof b.account_id !== "string" || !b.account_id) return no(400);
+  if (status !== "CREATION_SUCCESS" && status !== "RECONNECTED") return no(400);
+  await deps.links.put(ref, b.account_id, status);
+  return new Response(JSON.stringify({ ok: true }), { status: 200, headers: plain });
 }
 async function unipileDisconnect(deps, body, doFetch) {
   const accountId = String(body.accountId ?? "");
@@ -656,6 +741,51 @@ async function unipileRelations(deps, body, doFetch) {
       member_id: r.member_id ?? r.provider_id ?? r.id
     })),
     cursor: b.cursor ?? null
+  };
+}
+var PHOTO_MAX_BYTES = 4e5;
+function isLinkedInImage(url2) {
+  try {
+    const u = new URL(url2);
+    return u.protocol === "https:" && (u.hostname === "licdn.com" || u.hostname.endsWith(".licdn.com"));
+  } catch {
+    return false;
+  }
+}
+function base64(bytes) {
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 32768) bin += String.fromCharCode(...bytes.subarray(i, i + 32768));
+  return btoa(bin);
+}
+async function unipileMe(deps, body, doFetch) {
+  const accountId = String(body.accountId ?? "");
+  const res = await doFetch(
+    `${deps.unipileBase}/api/v1/users/me?account_id=${encodeURIComponent(accountId)}`,
+    {
+      headers: uHeaders(deps)
+    }
+  );
+  if (!res.ok) throw new Error(`unipile ${res.status}`);
+  const me = await res.json();
+  const str = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
+  const pictureUrl = str(me.profile_picture_url_large) ?? str(me.profile_picture_url);
+  let picture;
+  if (pictureUrl && isLinkedInImage(pictureUrl)) {
+    try {
+      const img = await doFetch(pictureUrl);
+      const type = img.headers.get("content-type") ?? "";
+      const bytes = img.ok && type.startsWith("image/") ? new Uint8Array(await img.arrayBuffer()) : void 0;
+      if (bytes && bytes.length <= PHOTO_MAX_BYTES)
+        picture = `data:${type.split(";")[0]};base64,${base64(bytes)}`;
+    } catch {
+    }
+  }
+  return {
+    firstName: str(me.first_name),
+    lastName: str(me.last_name),
+    headline: str(me.headline) ?? str(me.occupation),
+    publicIdentifier: str(me.public_identifier),
+    picture
   };
 }
 async function unipileMutuals(deps, body, doFetch) {
@@ -813,7 +943,9 @@ async function unipileSearch(deps, body, doFetch) {
       headline: text(p.headline, 220),
       location: text(p.location),
       profileUrl: text(p.public_profile_url, 300) ?? text(p.profile_url, 300),
-      distance: degree(p.network_distance)
+      distance: degree(p.network_distance),
+      // LinkedIn's own photo link (it expires after a few weeks, so it is for showing, not keeping)
+      pictureUrl: [p.profile_picture_url, p.profile_picture_url_large].map((u) => text(u, 1e3)).find((u) => !!u && isLinkedInImage(u))
     })),
     cursor: b.cursor ?? null,
     total: typeof b.paging?.total_count === "number" ? b.paging.total_count : void 0
@@ -930,6 +1062,9 @@ Deno.serve(
     salt: serviceKey.slice(-16) || "orbit",
     // account tokens are signed with the service role key, which never leaves the server
     signingKey: serviceKey || void 0,
+    // Unipile reports each finished LinkedIn sign-in to /connect/notify; the account is kept by the sign-in's reference
+    links: url && serviceKey ? postgrestLinks(url, serviceKey) : memoryLinks(),
+    publicUrl: url ? `${url}/functions/v1/orbit-connectors` : void 0,
     sendsPerDay: num("ORBIT_LINKEDIN_SENDS_PER_DAY", 25),
     searchesPerDay: num("ORBIT_LINKEDIN_SEARCHES_PER_DAY", 40),
     limits: {

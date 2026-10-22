@@ -53,7 +53,14 @@ const REPLIED_OR_LATER: ReadonlySet<ChatStage> = new Set([
 ]);
 const MET: ReadonlySet<ChatStage> = new Set(['completed', 'followed_up', 'nurturing']);
 const BEFORE_REPLY: ReadonlySet<ChatStage> = new Set(['identified', 'warming', 'outreach_sent']);
-const TWO_WAY_KINDS = new Set(['meeting', 'email_in', 'linkedin_in', 'manual_log', 'intro_observed']);
+const TWO_WAY_KINDS = new Set([
+  'meeting',
+  'email_in',
+  'linkedin_in',
+  'text_in',
+  'manual_log',
+  'intro_observed',
+]);
 
 /**
  * A chat the student moved on by hand (a reply Orbit cannot see without Gmail, a chat booked by hand that happened) is

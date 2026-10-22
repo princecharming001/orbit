@@ -130,7 +130,11 @@ export async function morningDeck(
   ).length;
   const sameDay = (iso: string) => localDay(new Date(iso)) === localDay(now);
   const todays: CalendarEvent[] = events
-    .filter((e) => e.status !== 'cancelled' && sameDay(e.startAt) && e.attendeePersonIds.length > 0)
+    // coffee chats only: a class or a team meeting on the calendar is not a chat to prep for
+    .filter(
+      (e) =>
+        e.status !== 'cancelled' && e.isCoffeeChat && sameDay(e.startAt) && e.attendeePersonIds.length > 0,
+    )
     .sort((a, b) => a.startAt.localeCompare(b.startAt));
 
   // what is worth doing today beyond the decisions: chats to prep, warm-up steps due, people to write to, Discover

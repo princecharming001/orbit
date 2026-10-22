@@ -1,4 +1,4 @@
-import type { StyleCard, TargetCompany, RecruitingGoals as UserGoals } from '@orbit/core';
+import type { StyleCard, TargetCompany, User, RecruitingGoals as UserGoals } from '@orbit/core';
 import { defaultStyleCard, STYLE_SOURCE_WORDS, TARGET_STATUS_LABELS, yearLabel } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Check, Download, FileText, Trash2, X } from 'lucide-react';
@@ -75,7 +75,7 @@ import {
 } from '../ui';
 
 /** The section with the LinkedIn import, the resume and the Claude key (its route keeps the older name). */
-const INTEGRATIONS_LABEL = 'LinkedIn, resume & AI';
+const INTEGRATIONS_LABEL = 'Integrations';
 
 const BASE_SECTIONS = [
   ['profile', 'Profile'],
@@ -809,6 +809,7 @@ function Integrations() {
       </RowGroup>
       <RowGroup title="Scheduling">
         <CalcomRow user={user} />
+        <BookingLinkRow user={user} />
       </RowGroup>
       <RowGroup title="About you">
         <IntegrationRow
@@ -1533,6 +1534,21 @@ function Style() {
   );
 }
 
+/** The booking link drafts offer when proposing times: one of the Cal.com event types above, or any link. */
+function BookingLinkRow({ user }: { user: User }) {
+  const settings = useLiveQuery(() => db.settings.get(user.id), [user.id]);
+  if (!settings) return null;
+  return (
+    <div className="py-4 last:pb-1" data-testid="settings-booking-link">
+      <SchedulingLinkField
+        user={user}
+        value={settings.schedulingLink}
+        onChange={(link) => void setSchedulingLink(user.id, link)}
+      />
+    </div>
+  );
+}
+
 function Limits() {
   const user = useSession().user!;
   const settings = useLiveQuery(() => db.settings.get(user.id), [user.id]);
@@ -1545,33 +1561,24 @@ function Limits() {
   };
   return (
     <div className="space-y-4">
-      <p className="text-[13px] text-ink-3" aria-live="polite">
-        Changes here save as you make them.
-        {savedAt ? <span className="text-good"> Saved.</span> : null}
-      </p>
-      <section className="grid @[40rem]:grid-cols-2 gap-4 items-start pt-2">
-        <h2 className="@[40rem]:col-span-2 text-[13px] font-medium text-ink -mb-1">Weekly goal</h2>
+      <section className="grid @[40rem]:grid-cols-2 gap-4 items-start">
+        <div className="@[40rem]:col-span-2 flex items-baseline justify-between -mb-1">
+          <h2 className="text-[13px] font-medium text-ink">First messages a week</h2>
+          <span className="text-[12.5px] text-good" aria-live="polite">
+            {savedAt ? 'Saved' : ''}
+          </span>
+        </div>
         <div>
-          <Label htmlFor="lim-week">First messages a week</Label>
           <WeeklyTargetSlider
             id="lim-week"
             value={settings.weeklyOutreachTarget}
             onChange={(v) => upd({ weeklyOutreachTarget: v })}
             testId="settings-weekly"
           />
-          <p className="text-[12px] text-ink-3 mt-1">
-            Your goal for new people each week. Ask the chat how your week is going to see your count.
-          </p>
         </div>
         <details className="@[40rem]:col-span-2 text-[13px]" data-testid="limits-advanced">
-          <summary className="cursor-pointer text-ink-2 w-fit">
-            Advanced: how often Orbit lets you write (most students never change these)
-          </summary>
-          <p className="text-[12px] text-ink-3 mt-1 mb-3">
-            They keep you from writing to someone twice in a row too soon, and from sending more in a day than
-            reads as a mass email.
-          </p>
-          <div className="grid @[40rem]:grid-cols-2 gap-4 items-start">
+          <summary className="cursor-pointer text-ink-2 w-fit">Sending limits</summary>
+          <div className="grid @[40rem]:grid-cols-2 gap-4 items-start mt-3">
             <div>
               <Label htmlFor="lim-cool">Hours between messages to the same person</Label>
               <Input
@@ -1615,10 +1622,6 @@ function Limits() {
                 onChange={(e) => upd({ maxBumps: Math.max(0, Math.min(2, Number(e.target.value))) })}
                 className="max-w-[120px]"
               />
-              <p className="text-[12px] text-ink-3 mt-1">
-                1 suits most people. With 2, Orbit may suggest a short, polite last note, which is normal in
-                finance and consulting.
-              </p>
             </div>
             <div className="@[40rem]:col-span-2 border-t border-line pt-4">
               <label className="flex items-start gap-2 text-[13.5px]">
@@ -1628,13 +1631,7 @@ function Limits() {
                   checked={settings.warmUpEnabled}
                   onChange={(e) => upd({ warmUpEnabled: e.target.checked })}
                 />
-                <span>
-                  <strong className="font-medium">Warm up before messaging strangers on LinkedIn.</strong>{' '}
-                  <span className="text-ink-2">
-                    A few small steps over a few days, like viewing their profile and reacting to a post. You
-                    do each one yourself; Orbit opens the right page and never acts on LinkedIn for you.
-                  </span>
-                </span>
+                <span>Warm up before messaging strangers on LinkedIn</span>
               </label>
               <div className="mt-3 max-w-xs">
                 <Label htmlFor="lim-wdays" hint="weekends are skipped">
@@ -1654,11 +1651,7 @@ function Limits() {
         </details>
       </section>
       <section className="grid @[40rem]:grid-cols-2 gap-4 items-start border-t border-line-2 pt-6">
-        <h2 className="@[40rem]:col-span-2 text-[13px] font-medium text-ink -mb-1">Your schedule</h2>
-        <p className="@[40rem]:col-span-2 text-[12.5px] text-ink-3">
-          Today's list is rebuilt the first time you open Orbit each day. Orbit runs in your browser, so it
-          does not send reminders when it is closed.
-        </p>
+        <h2 className="@[40rem]:col-span-2 text-[13px] font-medium text-ink -mb-1">Morning brief</h2>
         <div
           className="@[40rem]:col-span-2 flex flex-wrap items-end gap-x-6 gap-y-3"
           data-testid="settings-morning"
@@ -1673,13 +1666,7 @@ function Limits() {
               }
               data-testid="settings-morning-on"
             />
-            <span>
-              <strong className="font-medium">Morning brief.</strong>{' '}
-              <span className="text-ink-2">
-                Once a day, a short deck in the corner: your week in numbers, each decision waiting on you,
-                and what is worth doing today.
-              </span>
-            </span>
+            <span>Show it once a day</span>
           </label>
           <div>
             <Label htmlFor="lim-brief">From</Label>
@@ -1697,13 +1684,6 @@ function Limits() {
           <Button size="sm" onClick={openMorningBrief} data-testid="settings-morning-show">
             Show it now
           </Button>
-        </div>
-        <div className="@[40rem]:col-span-2">
-          <SchedulingLinkField
-            user={user}
-            value={settings.schedulingLink}
-            onChange={(link) => upd({ schedulingLink: link })}
-          />
         </div>
       </section>
     </div>

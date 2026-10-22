@@ -26,7 +26,7 @@ const YEAR_DAYS = 365;
 export interface TieMessage {
   at: string;
   direction: 'in' | 'out';
-  channel: 'email' | 'linkedin';
+  channel: 'email' | 'linkedin' | 'text';
   /** everyone on the thread, the student included (a 1:1 thread has 2) */
   threadParticipants: number;
   threadId: string;
@@ -772,9 +772,15 @@ export function buildTieHistory(input: TieHistoryInput): TieHistory {
       case 'email_in':
       case 'email_out':
       case 'linkedin_in':
-      case 'linkedin_out': {
+      case 'linkedin_out':
+      case 'text_in':
+      case 'text_out': {
         const direction = tp.kind.endsWith('_in') ? 'in' : 'out';
-        const channel = tp.kind.startsWith('email') ? 'email' : 'linkedin';
+        const channel = tp.kind.startsWith('email')
+          ? 'email'
+          : tp.kind.startsWith('text')
+            ? 'text'
+            : 'linkedin';
         const m = tp.refTable === 'messages' ? input.messages?.get(tp.refId) : undefined;
         const th = m ? input.threads?.get(m.threadId) : undefined;
         const automated =

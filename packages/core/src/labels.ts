@@ -147,6 +147,8 @@ export const TOUCHPOINT_LABELS: Record<TouchpointKind, string> = {
   meeting: 'Meeting',
   linkedin_in: 'LinkedIn message from them',
   linkedin_out: 'LinkedIn message from you',
+  text_in: 'Text from them',
+  text_out: 'Text from you',
   linkedin_connected: 'Connected on LinkedIn',
   linkedin_engaged: 'Engaged with their LinkedIn activity',
   note: 'Note',

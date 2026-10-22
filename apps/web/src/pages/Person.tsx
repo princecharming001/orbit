@@ -20,7 +20,9 @@ import {
   RELATIONSHIP_LABELS,
   relTime,
   STAGE_LABELS,
+  TIE_BAND_LABELS,
   TOUCHPOINT_LABELS,
+  tieBand,
 } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { ChevronDown, ExternalLink, Linkedin, Mail, Trash2 } from 'lucide-react';
@@ -1552,7 +1554,7 @@ function Prep({
   );
 }
 
-/** Closeness in words: the score is a rough sense of how well you know them, not a precise number. */
+/** Closeness in words: the same band the closeness card names (Faint, Light, Warm, Strong, Close). */
 export function closenessWord(v: number): string {
-  return v >= 0.6 ? 'Close' : v >= 0.35 ? 'Getting to know' : v > 0.05 ? 'Light' : 'New contact';
+  return TIE_BAND_LABELS[tieBand(Math.round(v * 100))];
 }

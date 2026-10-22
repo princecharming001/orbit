@@ -348,6 +348,8 @@ export interface LinkedInFound {
   profileUrl?: string;
   /** 1 = a connection, 2 = a friend of a friend, 3 = further out */
   distance?: number;
+  /** their LinkedIn photo (a link that expires after a few weeks) */
+  pictureUrl?: string;
 }
 
 export interface LinkedInSearchQuery {
@@ -380,4 +382,17 @@ export async function searchLinkedIn(
     ok: true,
     value: { people: r.value.people ?? [], cursor: r.value.cursor ?? undefined, total: r.value.total },
   };
+}
+
+/** The student's own LinkedIn profile; `picture` is the photo itself (a data: URL), since LinkedIn's links expire. */
+export interface LinkedInMe {
+  firstName?: string;
+  lastName?: string;
+  headline?: string;
+  publicIdentifier?: string;
+  picture?: string;
+}
+
+export function linkedInMe(accountId: string, opts: CallOpts = {}): Promise<ConnectorOutcome<LinkedInMe>> {
+  return call<LinkedInMe>('/me', { accountId, token: opts.token }, opts);
 }

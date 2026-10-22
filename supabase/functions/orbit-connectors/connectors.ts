@@ -72,6 +72,54 @@ export interface ConnectorDeps {
   sendsPerDay?: number;
   /** LinkedIn people searches one account may run per day (LinkedIn throttles heavy searching) */
   searchesPerDay?: number;
+  /** where Unipile reports the account a hosted sign-in produced; without it only the older account-list match runs */
+  links?: LinkStore;
+  /** this function's public address, for Unipile's notify_url */
+  publicUrl?: string;
+}
+
+/** Which account each hosted sign-in produced (by the reference Orbit gave the sign-in link). */
+export interface LinkStore {
+  put(ref: string, accountId: string, status: string): Promise<void>;
+  get(ref: string): Promise<string | undefined>;
+}
+
+export function memoryLinks(): LinkStore {
+  const m = new Map<string, string>();
+  return {
+    put: async (ref, id) => {
+      m.set(ref, id);
+    },
+    get: async (ref) => m.get(ref),
+  };
+}
+
+/** The links table (public.orbit_unipile_links) over PostgREST with the service role key. */
+export function postgrestLinks(url: string, serviceKey: string, doFetch: typeof fetch = fetch): LinkStore {
+  const headers = {
+    'content-type': 'application/json',
+    apikey: serviceKey,
+    Authorization: `Bearer ${serviceKey}`,
+  };
+  return {
+    put: async (ref, accountId, status) => {
+      const r = await doFetch(`${url}/rest/v1/orbit_unipile_links?on_conflict=ref`, {
+        method: 'POST',
+        headers: { ...headers, Prefer: 'resolution=merge-duplicates,return=minimal' },
+        body: JSON.stringify({ ref, account_id: accountId, status }),
+      });
+      if (!r.ok) throw new Error(`links store ${r.status}`);
+    },
+    get: async (ref) => {
+      const r = await doFetch(
+        `${url}/rest/v1/orbit_unipile_links?ref=eq.${encodeURIComponent(ref)}&select=account_id`,
+        { headers },
+      );
+      if (!r.ok) throw new Error(`links store ${r.status}`);
+      const rows = (await r.json()) as { account_id?: string }[];
+      return rows[0]?.account_id || undefined;
+    },
+  };
 }
 
 /** A connected account's token: base64url HMAC-SHA256 of its id with the signing key. */
@@ -194,9 +242,18 @@ const UNIPILE_ROUTES = new Set([
   '/send',
   '/inbox',
   '/search',
+  '/me',
 ]);
 /** Routes that act on a connected account, so need its token. */
-const ACCOUNT_ROUTES = new Set(['/relations', '/mutuals', '/disconnect', '/send', '/inbox', '/search']);
+const ACCOUNT_ROUTES = new Set([
+  '/relations',
+  '/mutuals',
+  '/disconnect',
+  '/send',
+  '/inbox',
+  '/search',
+  '/me',
+]);
 
 export function makeHandler(deps: ConnectorDeps): (req: Request) => Promise<Response> {
   const doFetch = deps.fetch ?? fetch;
@@ -213,6 +270,8 @@ export function makeHandler(deps: ConnectorDeps): (req: Request) => Promise<Resp
     maxRetries: 1,
   });
   return async (req) => {
+    // Unipile's server reports a finished sign-in here: no browser origin, but the link Orbit gave it is signed
+    if (new URL(req.url).pathname.endsWith('/connect/notify')) return unipileNotify(deps, req);
     const origin = req.headers.get('origin');
     const allowed = !!origin && deps.origins(origin);
     const h = cors(origin, allowed);
@@ -323,6 +382,7 @@ export function makeHandler(deps: ConnectorDeps): (req: Request) => Promise<Resp
       if (path === '/mutuals') return json(200, await unipileMutuals(deps, body, doFetch), h);
       if (path === '/inbox') return json(200, await unipileInbox(deps, body, doFetch), h);
       if (path === '/search') return json(200, await unipileSearch(deps, body, doFetch), h);
+      if (path === '/me') return json(200, await unipileMe(deps, body, doFetch), h);
       return json(200, await unipileDisconnect(deps, body, doFetch), h);
     } catch (e) {
       return json(502, { error: e instanceof Error ? e.message : 'upstream error' }, h);
@@ -344,8 +404,16 @@ function uHeaders(deps: ConnectorDeps): Record<string, string> {
  * A hosted sign-in link for a new LinkedIn account. The account is created with our reference as its name, so the
  * status check can find it among the accounts once the student has signed in.
  */
+/** The signed address Unipile calls when a sign-in finishes; only the reference it was made for can use it. */
+async function notifyUrl(deps: ConnectorDeps, ref: string): Promise<string | undefined> {
+  if (!deps.publicUrl || !deps.signingKey || !deps.links) return undefined;
+  const sig = await accountToken(`link:${ref}`, deps.signingKey);
+  return `${deps.publicUrl}/connect/notify?ref=${encodeURIComponent(ref)}&sig=${encodeURIComponent(sig)}`;
+}
+
 async function unipileConnectStart(deps: ConnectorDeps, doFetch: typeof fetch, makeRef: () => string) {
   const ref = makeRef();
+  const notify_url = await notifyUrl(deps, ref);
   const res = await doFetch(`${deps.unipileBase}/api/v1/hosted/accounts/link`, {
     method: 'POST',
     headers: uHeaders(deps),
@@ -354,7 +422,9 @@ async function unipileConnectStart(deps: ConnectorDeps, doFetch: typeof fetch, m
       providers: ['LINKEDIN'],
       api_url: deps.unipileBase,
       expiresOn: new Date(Date.now() + 60 * 60_000).toISOString(),
+      // Unipile hands this back with the new account's id, to notify_url: that is how the two are matched
       name: ref,
+      ...(notify_url ? { notify_url } : {}),
     }),
   });
   if (!res.ok) throw new Error(`unipile ${res.status}`);
@@ -366,33 +436,75 @@ async function unipileConnectStart(deps: ConnectorDeps, doFetch: typeof fetch, m
 /** Unipile's source states that mean the sign-in failed or the account stopped working. */
 const FAILED_SOURCE = new Set(['ERROR', 'CREDENTIALS', 'PERMISSIONS', 'STOPPED']);
 
+/** Where a hosted LinkedIn sign-in stands. */
+type ConnectStatus = { status: 'connected' | 'pending' | 'error'; accountId?: string; message?: string };
+
 async function unipileConnectStatus(
   deps: ConnectorDeps,
   body: Record<string, unknown>,
   doFetch: typeof fetch,
-) {
+): Promise<ConnectStatus> {
   const ref = String(body.ref ?? '');
   if (!ref) return { status: 'error', message: 'No connection was started.' };
+  // the account Unipile reported for this sign-in (notify_url): read its state directly
+  const linked = await deps.links?.get(ref).catch(() => undefined);
+  if (linked) {
+    const one = await doFetch(`${deps.unipileBase}/api/v1/accounts/${encodeURIComponent(linked)}`, {
+      headers: uHeaders(deps),
+    });
+    if (one.ok) return accountState((await one.json()) as UnipileAccount, linked);
+    if (one.status !== 404) throw new Error(`unipile ${one.status}`);
+  }
   const res = await doFetch(`${deps.unipileBase}/api/v1/accounts?limit=250`, { headers: uHeaders(deps) });
   // not there yet is still waiting; anything else is Unipile failing
   if (res.status === 404) return { status: 'pending' };
   if (!res.ok) throw new Error(`unipile ${res.status}`);
-  const b = (await res.json()) as {
-    items?: { id?: string; name?: string; sources?: { status?: string }[] }[];
-  };
+  const b = (await res.json()) as { items?: UnipileAccount[] };
   const acc = b.items?.find((a) => a.name === ref);
   if (!acc) return { status: 'pending' };
+  return accountState(acc, acc.id);
+}
+
+type UnipileAccount = { id?: string; name?: string; sources?: { status?: string }[] };
+
+/** An account's sign-in state from its sources: connected, failed, or still finishing. */
+function accountState(acc: UnipileAccount, id: string | undefined): ConnectStatus {
   const states = (acc.sources ?? []).map((x) => String(x.status ?? '').toUpperCase());
-  if (states.includes('OK') && acc.id) return { status: 'connected', accountId: acc.id };
+  if (states.includes('OK') && id) return { status: 'connected', accountId: id };
   if (states.some((x) => FAILED_SOURCE.has(x)))
     return {
       status: 'error',
-      accountId: acc.id,
+      accountId: id,
       message: states.includes('CREDENTIALS')
         ? 'LinkedIn did not accept the sign-in. Try again.'
         : 'LinkedIn could not be connected. Try again.',
     };
   return { status: 'pending' };
+}
+
+/**
+ * Unipile's report that a hosted sign-in finished: {status, account_id, name}. Kept only when the link's signature
+ * matches its reference and the report names that same reference, so nobody can tie someone else's account to it.
+ */
+async function unipileNotify(deps: ConnectorDeps, req: Request): Promise<Response> {
+  const plain = { 'content-type': 'application/json', 'cache-control': 'no-store' };
+  const no = (status: number) => new Response(JSON.stringify({ ok: false }), { status, headers: plain });
+  if (req.method !== 'POST' || !deps.links || !deps.signingKey) return no(404);
+  const q = new URL(req.url).searchParams;
+  const ref = q.get('ref') ?? '';
+  const sig = q.get('sig') ?? '';
+  if (!ref || !sig || sig !== (await accountToken(`link:${ref}`, deps.signingKey))) return no(403);
+  let b: { status?: unknown; account_id?: unknown; name?: unknown };
+  try {
+    b = (await req.json()) as typeof b;
+  } catch {
+    return no(400);
+  }
+  const status = String(b.status ?? '');
+  if (b.name !== ref || typeof b.account_id !== 'string' || !b.account_id) return no(400);
+  if (status !== 'CREATION_SUCCESS' && status !== 'RECONNECTED') return no(400);
+  await deps.links.put(ref, b.account_id, status);
+  return new Response(JSON.stringify({ ok: true }), { status: 200, headers: plain });
 }
 
 /** Unlink an account at Unipile. One that is already gone counts as unlinked. */
@@ -503,6 +615,62 @@ async function unipileRelations(deps: ConnectorDeps, body: Record<string, unknow
       member_id: r.member_id ?? r.provider_id ?? r.id,
     })),
     cursor: b.cursor ?? null,
+  };
+}
+
+/** A profile photo is at most this big: a small square, kept in the student's browser. */
+export const PHOTO_MAX_BYTES = 400_000;
+
+/** LinkedIn's image hosts: the only places a profile photo is fetched from. */
+export function isLinkedInImage(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return u.protocol === 'https:' && (u.hostname === 'licdn.com' || u.hostname.endsWith('.licdn.com'));
+  } catch {
+    return false;
+  }
+}
+
+function base64(bytes: Uint8Array): string {
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+
+/**
+ * The student's own LinkedIn profile: their name, headline and photo. LinkedIn's photo links expire after a few
+ * weeks, so the photo comes back as the image itself (a data: URL) for the browser to keep.
+ */
+async function unipileMe(deps: ConnectorDeps, body: Record<string, unknown>, doFetch: typeof fetch) {
+  const accountId = String(body.accountId ?? '');
+  const res = await doFetch(
+    `${deps.unipileBase}/api/v1/users/me?account_id=${encodeURIComponent(accountId)}`,
+    {
+      headers: uHeaders(deps),
+    },
+  );
+  if (!res.ok) throw new Error(`unipile ${res.status}`);
+  const me = (await res.json()) as Record<string, unknown>;
+  const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
+  const pictureUrl = str(me.profile_picture_url_large) ?? str(me.profile_picture_url);
+  let picture: string | undefined;
+  if (pictureUrl && isLinkedInImage(pictureUrl)) {
+    try {
+      const img = await doFetch(pictureUrl);
+      const type = img.headers.get('content-type') ?? '';
+      const bytes = img.ok && type.startsWith('image/') ? new Uint8Array(await img.arrayBuffer()) : undefined;
+      if (bytes && bytes.length <= PHOTO_MAX_BYTES)
+        picture = `data:${type.split(';')[0]};base64,${base64(bytes)}`;
+    } catch {
+      // no photo is fine: the initials stay
+    }
+  }
+  return {
+    firstName: str(me.first_name),
+    lastName: str(me.last_name),
+    headline: str(me.headline) ?? str(me.occupation),
+    publicIdentifier: str(me.public_identifier),
+    picture,
   };
 }
 
@@ -712,6 +880,10 @@ async function unipileSearch(deps: ConnectorDeps, body: Record<string, unknown>,
         location: text(p.location),
         profileUrl: text(p.public_profile_url, 300) ?? text(p.profile_url, 300),
         distance: degree(p.network_distance),
+        // LinkedIn's own photo link (it expires after a few weeks, so it is for showing, not keeping)
+        pictureUrl: [p.profile_picture_url, p.profile_picture_url_large]
+          .map((u) => text(u, 1000))
+          .find((u): u is string => !!u && isLinkedInImage(u)),
       })),
     cursor: b.cursor ?? null,
     total: typeof b.paging?.total_count === 'number' ? b.paging.total_count : undefined,

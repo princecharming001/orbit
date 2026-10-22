@@ -54,6 +54,8 @@ export function describeUserTie(p: Person, now: Date = new Date()): string {
   const emailsOut = c.email_out ?? 0;
   const meetings = (c.meeting ?? 0) + (c.manual_log ?? 0);
   const linkedin = (c.linkedin_in ?? 0) + (c.linkedin_out ?? 0);
+  // days with texts both ways: people who text each other
+  const textDays = Math.max(c.text_in ?? 0, c.text_out ?? 0);
   const name = p.firstName || p.displayName;
   // only a real conversation can be "the last one": a CC or a LinkedIn connection is not
   const when = relativeAgo(p.strengthBreakdown?.lastConversationAt, now);
@@ -63,6 +65,7 @@ export function describeUserTie(p: Person, now: Date = new Date()): string {
       return `You've emailed ${name} ${times} and haven't heard back yet`;
     }
     if (c.linkedin_out) return `You've messaged ${name} on LinkedIn and haven't heard back yet`;
+    if (c.text_out) return `You've texted ${name} and haven't heard back yet`;
     if (p.linkedinConnectedOn) {
       const since = monthYear(p.linkedinConnectedOn);
       return `You're connected with ${name} on LinkedIn${since ? ` (since ${since})` : ''}`;
@@ -75,6 +78,8 @@ export function describeUserTie(p: Person, now: Date = new Date()): string {
   if (emails) parts.push(plural(emails, 'email', 'emails'));
   if (meetings) parts.push(plural(meetings, 'meeting', 'meetings'));
   if (linkedin) parts.push(plural(linkedin, 'LinkedIn message', 'LinkedIn messages'));
+  if (textDays && (c.text_in ?? 0) > 0)
+    return `You text ${name}${parts.length ? `, and you've had ${list(parts)}` : ''}${when ? `; the last time was ${when}` : ''}`;
   if (!parts.length) return c.intro_observed ? `You were introduced to ${name}` : `You know ${name}`;
   return `You've had ${list(parts)} with ${name}${when ? `; the last one was ${when}` : ''}`;
 }

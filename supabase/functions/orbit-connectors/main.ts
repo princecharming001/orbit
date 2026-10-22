@@ -1,4 +1,11 @@
-import { defaultOrigins, makeHandler, memoryTake, postgrestTake } from './connectors.ts';
+import {
+  defaultOrigins,
+  makeHandler,
+  memoryLinks,
+  memoryTake,
+  postgrestLinks,
+  postgrestTake,
+} from './connectors.ts';
 
 const url = Deno.env.get('SUPABASE_URL') ?? '';
 const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
@@ -56,6 +63,9 @@ Deno.serve(
     salt: serviceKey.slice(-16) || 'orbit',
     // account tokens are signed with the service role key, which never leaves the server
     signingKey: serviceKey || undefined,
+    // Unipile reports each finished LinkedIn sign-in to /connect/notify; the account is kept by the sign-in's reference
+    links: url && serviceKey ? postgrestLinks(url, serviceKey) : memoryLinks(),
+    publicUrl: url ? `${url}/functions/v1/orbit-connectors` : undefined,
     sendsPerDay: num('ORBIT_LINKEDIN_SENDS_PER_DAY', 25),
     searchesPerDay: num('ORBIT_LINKEDIN_SEARCHES_PER_DAY', 40),
     limits: {

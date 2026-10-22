@@ -4,6 +4,7 @@ import {
   combinedPairWeights,
   describeIntroChain,
   introStories,
+  isKnownContact,
   MEDIUM_TIE,
   normalizeCompany,
   orbitGroupKey,
@@ -221,7 +222,11 @@ export function MapPage() {
     [pending],
   );
   const isTarget = useMemo(() => targetCompanyMatcher(tcs, orgMap), [tcs, orgMap]);
-  const visible = useMemo(() => people.filter((p) => p.isHuman && !p.hiddenAt), [people]);
+  // only people the student knows: named, with real history (a newsletter sender or an address handle is not)
+  const visible = useMemo(
+    () => people.filter((p) => isKnownContact(p, { hasChat: stages.has(p.id) })),
+    [people, stages],
+  );
   const byId = useMemo(() => new Map(visible.map((p) => [p.id, p])), [visible]);
   const highlightIds = useMemo(() => {
     if (filter === 'all' || filter === 'intros') return undefined;

@@ -333,7 +333,7 @@ test.describe('account mode (mocked orbit-api)', () => {
       await page.getByTestId('settings-postal').fill('20 Elm St, Ithaca, NY 14850');
       await page.getByTestId('settings-postal').blur();
       await expect.poll(() => api.state.profile.postalAddress).toBe('20 Elm St, Ithaca, NY 14850');
-      await page.goto('settings/limits');
+      await page.goto('settings/integrations');
       await page.locator('#lim-sched').fill('https://cal.com/maya/20min');
       await expect.poll(() => api.state.profile.schedulingLink).toBe('https://cal.com/maya/20min');
       // what the server holds comes back after a reload too

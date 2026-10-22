@@ -943,6 +943,8 @@ const TOUCH_WORDS: Record<string, string> = {
   email_out: 'emailed',
   linkedin_in: 'messaged on LinkedIn',
   linkedin_out: 'messaged on LinkedIn',
+  text_in: 'texted',
+  text_out: 'texted',
   linkedin_connected: 'connected on LinkedIn',
   linkedin_engaged: 'engaged on LinkedIn',
   manual_log: 'were in touch',

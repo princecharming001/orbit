@@ -62,14 +62,11 @@ const choose = async (select: HTMLSelectElement, v: string) => {
 };
 
 describe('the scheduling link', () => {
-  it('without Cal.com: a text field and a way to connect it', async () => {
+  it('without Cal.com: a text field (Cal.com connects in the row just above it)', async () => {
     await disconnectCalcom(user);
     const f = await mount('https://calendly.com/me');
     expect((f.host.querySelector('#lim-sched') as HTMLInputElement).value).toBe('https://calendly.com/me');
     expect(f.host.querySelector('[data-testid="scheduling-link-select"]')).toBeNull();
-    expect(f.host.querySelector('[data-testid="scheduling-link-connect"]')?.textContent).toBe(
-      'Connect Cal.com',
-    );
     f.unmount();
   });
 

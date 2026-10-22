@@ -5,6 +5,7 @@ import {
   type ConnectorDeps,
   defaultOrigins,
   makeHandler,
+  memoryLinks,
   memoryTake,
   postgrestTake,
 } from '../../../../../supabase/functions/orbit-connectors/connectors';
@@ -174,6 +175,63 @@ describe('orbit-connectors proxy', () => {
     expect(upstream[0]!.body).toMatchObject({ type: 'create', providers: ['LINKEDIN'], name: 'ref1' });
   });
 
+  it("matches a LinkedIn sign-in through Unipile's signed callback, even when the account's name is the person's", async () => {
+    const links = memoryLinks();
+    const accountState = (url: string) =>
+      url.endsWith('/api/v1/accounts/acc_9')
+        ? new Response(JSON.stringify({ id: 'acc_9', name: 'Anish Polakala', sources: [{ status: 'OK' }] }), {
+            status: 200,
+          })
+        : url.includes('/api/v1/accounts?')
+          ? // the account list names the account after the person, not after Orbit's reference
+            new Response(
+              JSON.stringify({
+                items: [{ id: 'acc_9', name: 'Anish Polakala', sources: [{ status: 'OK' }] }],
+              }),
+            )
+          : url.includes('/hosted/accounts/link')
+            ? new Response(JSON.stringify({ url: 'https://unipile/login' }), { status: 200 })
+            : new Response('{}', { status: 404 });
+    const { handler, upstream } = harness(
+      { links, publicUrl: 'https://x.supabase.co/functions/v1/orbit-connectors' },
+      accountState,
+    );
+    await handler(post('/connect/start', {}));
+    const notifyUrl = String((upstream[0]!.body as { notify_url?: string }).notify_url);
+    expect(notifyUrl).toMatch(
+      /^https:\/\/x\.supabase\.co\/functions\/v1\/orbit-connectors\/connect\/notify\?ref=ref1&sig=/,
+    );
+    // before Unipile reports back, still waiting
+    expect(await (await handler(post('/connect/status', { ref: 'ref1' }))).json()).toEqual({
+      status: 'pending',
+    });
+    const report = (url: string, body: unknown) =>
+      handler(
+        new Request(url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        }),
+      );
+    // a forged report: wrong signature, or another sign-in's reference
+    const forged = notifyUrl.replace(/sig=[^&]+/, 'sig=nope');
+    expect(
+      (await report(forged, { status: 'CREATION_SUCCESS', account_id: 'acc_evil', name: 'ref1' })).status,
+    ).toBe(403);
+    expect(
+      (await report(notifyUrl, { status: 'CREATION_SUCCESS', account_id: 'acc_evil', name: 'ref2' })).status,
+    ).toBe(400);
+    // Unipile's real report
+    expect(
+      (await report(notifyUrl, { status: 'CREATION_SUCCESS', account_id: 'acc_9', name: 'ref1' })).status,
+    ).toBe(200);
+    expect(await (await handler(post('/connect/status', { ref: 'ref1' }))).json()).toEqual({
+      status: 'connected',
+      accountId: 'acc_9',
+      token: TOKEN.acc_9 ?? expect.any(String),
+    });
+  });
+
   it('maps the connect status: connected, pending, failed sign-ins as error', async () => {
     const ok = harness();
     expect(await (await ok.handler(post('/connect/status', { ref: 'ref1' }))).json()).toEqual({
@@ -217,6 +275,50 @@ describe('orbit-connectors proxy', () => {
     const r2 = await down.handler(post('/relations', { accountId: 'a1', token: TOKEN.a1 }));
     expect(r2.status).toBe(502);
     expect(await r2.json()).toEqual({ error: 'unipile 500' });
+  });
+
+  it("returns the student's own profile with their photo kept as an image, fetched only from LinkedIn", async () => {
+    const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3]);
+    const seen: string[] = [];
+    const me = harness({}, (url) => {
+      seen.push(url);
+      if (url.includes('/api/v1/users/me'))
+        return new Response(
+          JSON.stringify({
+            first_name: 'Anish',
+            last_name: 'P',
+            headline: 'Student at Berkeley',
+            profile_picture_url: 'https://media.licdn.com/dms/image/abc/profile.jpg',
+          }),
+          { status: 200 },
+        );
+      if (url.startsWith('https://media.licdn.com/'))
+        return new Response(jpeg, { status: 200, headers: { 'content-type': 'image/jpeg' } });
+      return new Response('{}', { status: 404 });
+    });
+    const r = (await (await me.handler(post('/me', { accountId: 'a1', token: TOKEN.a1 }))).json()) as {
+      firstName: string;
+      picture?: string;
+    };
+    expect(r.firstName).toBe('Anish');
+    expect(r.picture).toBe(`data:image/jpeg;base64,${btoa(String.fromCharCode(...jpeg))}`);
+    // a photo link anywhere but LinkedIn's image hosts is never fetched
+    const away = harness({}, (url) =>
+      url.includes('/api/v1/users/me')
+        ? new Response(
+            JSON.stringify({ first_name: 'A', profile_picture_url: 'https://evil.example/x.jpg' }),
+            {
+              status: 200,
+            },
+          )
+        : new Response('nope', { status: 500 }),
+    );
+    const r2 = (await (await away.handler(post('/me', { accountId: 'a1', token: TOKEN.a1 }))).json()) as {
+      picture?: string;
+    };
+    expect(r2.picture).toBeUndefined();
+    // and it needs the account's token, like every account route
+    expect((await me.handler(post('/me', { accountId: 'a1' }))).status).toBeGreaterThanOrEqual(400);
   });
 
   it('maps relations and mutuals, and forwards Village paths', async () => {

@@ -275,7 +275,7 @@ describe('compose v2 template fallbacks', () => {
     expect(re.ask.kind).toBe('none');
     expect(asksIn(re.body)).toEqual([]);
     const warm = composeFallback(input('warm_first_touch', 'fundraising'));
-    expect(warm.body).toMatch(/Lena said I should write to you/);
+    expect(warm.body).toMatch(/I came across you through Lena/);
     expect(warm.via).toEqual({ introducerId: 'p2', pathScore: 0.4 });
     expect(warm.hooks).toEqual([{ text: 'your post on fraud models', sourceId: 'dossier:maya:1' }]);
   });

@@ -223,7 +223,6 @@ export async function ingestEmails(
               source: 'gmail',
               userSchool: user.school,
               firstSeenAt: r.sentAt,
-              school: emailDomain(c.email) === user.schoolDomain ? user.school : undefined,
             },
             cache,
           );
@@ -302,7 +301,10 @@ export async function ingestEmails(
         thread.category = tri.category;
         thread.categoryConfidence = tri.confidence;
         // a thread that introduced the student to someone stays a networking thread: the answers come in it
-        thread.isNetworking = tri.isNetworking || !!thread.introduction;
+        // the student took part (wrote in it, or it belongs to a chat of theirs): an email that only ever came in is
+        // not networking, however warm it reads ("would love to chat", "advice") — that is how cold pitches read
+        const tookPart = all.some((m) => m.direction === 'outbound') || !!thread.chatId;
+        thread.isNetworking = (tri.isNetworking && tookPart) || !!thread.introduction;
         thread.classifiedAt = now.toISOString();
         thread.classifiedBy = llmTri ? 'llm' : 'heuristic';
         if (tri.isNetworking) stats.networking++;
@@ -357,7 +359,9 @@ export async function ingestEmails(
       // a group email that introduces the student to someone opens a card for that person first, so the answers
       // that arrive in the same sync (the person's reply-all with a time, the student's "moving Lena to bcc") reach
       // that card in the networking pass below instead of being lost
-      if (thread.participantPersonIds.length > 1)
+      // an introduction is a short thread (the introducer, the student, the person): a class list or a mailing
+      // thread is not read for one
+      if (thread.participantPersonIds.length > 1 && thread.participantPersonIds.length <= 4)
         await processIntroductions(user, thread, newMessages, [...userEmails], now, {
           repliesReadLater: small,
         });
@@ -469,8 +473,9 @@ async function processNetworkingThread(
           .equals(counterpartId)
           .filter((c) => ACTIVE(c) && c.threadId === thread.id)
           .first();
-  if (!chat && beganOneToOne) {
-    const firstOut = all.find((m) => m.direction === 'outbound');
+  const firstOut = all.find((m) => m.direction === 'outbound');
+  // a chat starts from a thread the student wrote in: mail that only came in (a pitch, a newsletter) never makes one
+  if (!chat && beganOneToOne && firstOut) {
     chat = {
       id: newId('c'),
       userId: user.id,
@@ -796,7 +801,9 @@ export async function ingestEvents(
     const existing = await db.events.where('externalEventId').equals(r.externalEventId).first();
     const others = r.attendees.filter((a) => !a.self && normalizeEmail(a.email) !== userEmail);
     const attendeePersonIds: string[] = [];
-    for (const a of others.slice(0, 8)) {
+    // a meeting with a few people makes them people the student knows; a webinar, a class or an all-hands does not
+    const small = others.length <= 4 && !NOT_CHAT.test(r.title ?? '');
+    for (const a of small ? others : []) {
       if (isAutomatedSender(a.email, {}, [], a.displayName) || isRoleName(a.displayName)) continue;
       const { person } = await upsertPerson(
         {
@@ -806,7 +813,6 @@ export async function ingestEvents(
           source: 'calendar',
           userSchool: user.school,
           firstSeenAt: r.startAt,
-          school: emailDomain(a.email) === user.schoolDomain ? user.school : undefined,
         },
         cache,
       );

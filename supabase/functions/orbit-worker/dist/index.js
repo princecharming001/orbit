@@ -3612,6 +3612,7 @@ function goalAsk(i) {
       return { kind: "question", text: `Have you tried your method on ${topic}?` };
   }
 }
+var sentences = (...xs) => xs.filter((x) => !!x && !!x.trim()).map((x) => /[.!?]$/.test(x.trim()) ? x.trim() : `${x.trim()}.`).join(" ");
 function goalMiddle(i) {
   const org = i.recipient.org ? ` at ${i.recipient.org}` : "";
   const co = i.user.company ?? "our team";
@@ -3621,18 +3622,38 @@ function goalMiddle(i) {
       return `Your team${org} works on ${topic}, which is the work I want to do. It would help to hear how you got there and what a normal week looks like.`;
     case "advice":
       return `Right now I am trying to figure out ${topic}. You have been where I am now, so your view would help me a lot.`;
+    // only what the student told Orbit: a pitch or traction they did not give is left out, never made up
     case "fundraising":
-      return `${co} ${i.user.pitch ?? "is a new company"}. ${i.user.traction ?? "We are early, and we are moving fast."} We are raising a small round now and would value your view on it.`;
+      return sentences(
+        i.user.pitch && `${co} ${i.user.pitch}.`,
+        i.user.traction,
+        `I am raising a round for ${co} and would value your view on it.`,
+        "I would be glad to send more detail if it is useful."
+      );
     case "sales":
-      return `${co} ${i.user.pitch ?? "saves teams time"}. Teams like yours use it to cut busy work and spend more time on the parts that matter.`;
+      return sentences(
+        i.user.pitch ? `${co} ${i.user.pitch}.` : `I work on ${co}.`,
+        "I think it could be useful to your team, and I would value your honest view either way.",
+        "If it is not a fit, that is completely fine."
+      );
     case "hiring":
-      return `We are hiring for ${topic} at ${co}, and your work fits it well. ${co} ${i.user.pitch ?? "is a small team"}, and the person in this role will shape how we work.`;
+      return sentences(
+        `We are hiring for ${topic} at ${co}.`,
+        i.user.pitch && `${co} ${i.user.pitch}.`,
+        "I would be glad to tell you more about the role and to hear what you are looking for next."
+      );
     case "cofounder":
-      return `These days I am building ${co}, which ${i.user.pitch ?? "is still early"}. The cofounder I am looking for knows ${topic} as well as you do.`;
+      return sentences(
+        `These days I am building ${co}${i.user.pitch ? `, which ${i.user.pitch}` : ""}.`,
+        `I am looking for a cofounder who knows ${topic}.`
+      );
     case "community":
-      return `I help run ${topic}. We meet once a month to share what we are working on, and I think you would fit right in.`;
+      return `I help run ${topic}. It is for people who care about ${topic}, and I would be glad to tell you more about what we do.`;
     case "collaboration":
-      return `I work on ${i.user.pitch ?? "a close problem"}. Your work seems close to mine, and I would like to share what I have found so far.`;
+      return sentences(
+        i.user.pitch && `I work on ${i.user.pitch}.`,
+        "Your work seems close to mine, and I would like to share what I have found so far."
+      );
   }
 }
 var SUBJECTS = {
@@ -3668,14 +3689,14 @@ ${i.user.firstName}`;
   switch (i.kind) {
     case "first_touch":
     case "warm_first_touch": {
-      const warm = i.kind === "warm_first_touch" && via ? `${via} said I should write to you.` : "";
+      const warm = i.kind === "warm_first_touch" && via ? `I came across you through ${via}.` : "";
       if (i.channel === "linkedin") {
         body = [
           hi,
           [warm, intro(i), i.hook ? `I read ${i.hook.text}.` : "", ask.text].filter(Boolean).join(" ")
         ].join("\n");
       } else {
-        subject = warm ? `${via} said to write` : SUBJECTS[i.goal](i);
+        subject = warm ? `through ${via}` : SUBJECTS[i.goal](i);
         body = paragraphs(
           hi,
           [warm, intro(i), hookLine(i)].filter(Boolean).join(" "),
@@ -3712,8 +3733,8 @@ ${i.user.firstName}`;
       outAsk = { kind: "none", text: "" };
       body = paragraphs(
         hi,
-        `It has been a while, so I wanted to share some news. ${i.topic ? `${i.topic.replace(/\.$/, "")}.` : "I finally found the work I want to do."}`,
-        i.hook ? `I saw ${i.hook.text}, and it made me think of you.` : "I thought of you, since you helped me get here.",
+        i.topic ? `It has been a while, so I wanted to share some news. ${i.topic.replace(/\.$/, "")}.` : "It has been a while, and I wanted to say hello.",
+        i.hook ? `I saw ${i.hook.text}, and it made me think of you.` : "",
         "No need to reply. I hope things are good on your end.",
         sign
       );
@@ -3732,8 +3753,9 @@ ${i.user.firstName}`;
       outAsk = { kind: "none", text: "" };
       body = paragraphs(
         hi,
-        `Thank you for taking the time to talk with me. ${i.hook ? `What you said about ${i.hook.text.replace(/^your\b/, "your")} will stay with me.` : "It helped me more than you know."}`,
-        `I am going to act on your advice about ${i.topic ?? "next steps"} this week, and I will let you know how it goes.`,
+        `Thank you for taking the time to talk with me.${i.hook ? ` What you said about ${i.hook.text.replace(/^your\b/, "your")} will stay with me.` : ""}`,
+        "I know your time is limited, and I appreciated you sharing some of it with me.",
+        i.topic ? `I am going to act on your advice about ${i.topic}, and I will let you know how it goes.` : "I will let you know how things go, and I hope we can stay in touch.",
         sign
       );
       break;
@@ -3951,17 +3973,17 @@ function validateDraft(d, opts) {
     });
   if ((body.match(/!/g) ?? []).length > 1)
     issues.push({ code: "exclamations", detail: "more than one exclamation point", blocking: false });
-  const sentences2 = body.replace(/\n+/g, " ").split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter((s) => s.length > 2 && !/^(hi|hey|hello|dear|best|thanks|thank you|cheers)\b/i.test(s));
-  if (sentences2.length >= 4) {
-    const iStarts = sentences2.filter((s) => /^I(\b|')/.test(s)).length;
-    if (iStarts / sentences2.length > 0.6)
+  const sentences3 = body.replace(/\n+/g, " ").split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter((s) => s.length > 2 && !/^(hi|hey|hello|dear|best|thanks|thank you|cheers)\b/i.test(s));
+  if (sentences3.length >= 4) {
+    const iStarts = sentences3.filter((s) => /^I(\b|')/.test(s)).length;
+    if (iStarts / sentences3.length > 0.6)
       issues.push({
         code: "i_heavy",
-        detail: `${iStarts} of ${sentences2.length} sentences start with "I"`,
+        detail: `${iStarts} of ${sentences3.length} sentences start with "I"`,
         blocking: false
       });
   }
-  const long = sentences2.filter((s) => s.split(/\s+/).length > 32);
+  const long = sentences3.filter((s) => s.split(/\s+/).length > 32);
   if (long.length)
     issues.push({
       code: "long_sentences",
@@ -4244,8 +4266,8 @@ var SCHED_CUE = /\b(does .{1,40} work|free (on|at|this|next)|available (on|at|th
 var SCHEDULING_QUESTION = /\b(does|do|would|will|could|can|might) [^?]{0,40}\b(work|suit)( for (you|u))?\s*\?|\b(free|available|open) (on|at|this|next|then|that|[a-z]+day)\b|\bwhat (time|day)s?\b|\bwhich (time|day|slot)s?\b|\bhow about\b|\bwhat about\b|\byour (schedule|calendar|availability)\b|\bwhen (works|is good|is best|are you free)\b/i;
 var DAY4 = /\b((mon|tues|wednes|thurs|fri|satur|sun)day|tomorrow)\b/i;
 var DAY_NOT_OFFERED = /\b(not|no|never|can'?t|cannot|won'?t|don'?t|doesn'?t|isn'?t|out|busy|booked|slammed|was|were|did|had|last|still|what|which)\b/i;
-function offersDay(sentences2) {
-  return sentences2.some(
+function offersDay(sentences3) {
+  return sentences3.some(
     (s) => s.question && s.text.split(/[,;:]|\s[-–—]+\s|[–—]|\b(?=but\b)/).some((c) => DAY4.test(c) && !DAY_NOT_OFFERED.test(c))
   );
 }
@@ -4337,9 +4359,9 @@ function clauseStance(clause2, noCallCounts) {
   const notNow = scoped ? 2 : anyOf(NOT_NOW, clause2) ? SHORT_SCOPE.test(clause2) ? 1 : 2 : 0;
   return { yes, hardNo, notNow };
 }
-function stanceOf(sentences2, noCallCounts) {
+function stanceOf(sentences3, noCallCounts) {
   const s = { yes: 0, yesToChat: false, schedAsk: false, hardNo: 0, notNow: 0 };
-  for (const sent of sentences2) {
+  for (const sent of sentences3) {
     const parts = sent.clauses.map((c) => clauseStance(c, noCallCounts));
     parts.forEach((p, i) => {
       const later = parts.slice(i + 1);
@@ -4366,16 +4388,16 @@ function heuristicSignal(text, direction, reference, opts = {}) {
     factsAboutSender: [],
     sentiment: "neutral"
   };
-  const sentences2 = sentencesOf(body);
-  const lines = sentences2.map((s) => s.text);
+  const sentences3 = sentencesOf(body);
+  const lines = sentences3.map((s) => s.text);
   const isOffer = (s) => (OFFER_REFER.test(s.text.replace(PASS_GREETING, " ")) || OFFER_INTRO.test(s.text) || anyOf(ADDED, s.text)) && !isSchedulerLine(s.text) && !(s.question && ASKS_ABOUT.test(s.text));
-  for (const s of sentences2) {
+  for (const s of sentences3) {
     if (s.text.length >= 220) continue;
     if (ASK_OF_USER.test(s.text) && !anyOf(SCHED_ASK, s.text)) extraction.asksOfUser.push(s.text);
     if (isOffer(s)) extraction.offers.push(s.text);
   }
   const schedulerAdded = lines.some(isSchedulerLine);
-  const rest = schedulerAdded ? sentences2.filter((s) => !isSchedulerLine(s.text)) : sentences2;
+  const rest = schedulerAdded ? sentences3.filter((s) => !isSchedulerLine(s.text)) : sentences3;
   const restBody = rest.map((s) => s.text).join("\n");
   const warm = (signal, confidence) => {
     extraction.sentiment = "warm";
@@ -4411,7 +4433,7 @@ function heuristicSignal(text, direction, reference, opts = {}) {
     stance.hardNo = 0;
   }
   const yes = stance.yes > 0;
-  const dayOffered = offersDay(sentences2);
+  const dayOffered = offersDay(sentences3);
   const schedulingCue = times.length > 0 || SCHED_CUE.test(body) || dayOffered;
   const countered = COUNTER.test(body);
   if (OOO.test(body) && (isAutoReplyBody(body) || !times.length && !countered && !SCHED_CUE.test(body))) {
@@ -4466,10 +4488,10 @@ function heuristicSignal(text, direction, reference, opts = {}) {
   }
   if (schedulerAdded) return warm("reply_positive", 0.8);
   const notNow = stance.notNow > 0 && stance.notNow > stance.yes && !countered;
-  const infoQuestion = sentences2.some(
+  const infoQuestion = sentences3.some(
     (s) => s.question && !CHECK_QUESTION.test(s.text) && !SCHEDULING_QUESTION.test(s.text) && !anyOf(SCHED_ASK, s.text)
   );
-  const asksQuestion = sentences2.some((s) => s.question);
+  const asksQuestion = sentences3.some((s) => s.question);
   const thanks = (INBOUND_THANKS.test(body) || THANKS_FOR_NOTE.test(body) && opts.awaitingAnswer !== true) && !REFUSAL.test(body);
   if (!notNow && thanks && !yes && !asksQuestion) return warm("thank_you", 0.7);
   const partingNo = PARTING.test(body) && !yes && !WARM_CLOSE.test(body) && !asksQuestion && (opts.awaitingAnswer === true || DECLINE_CUE.test(body.replace(NOT_A_REFUSAL, " ")));
@@ -4817,15 +4839,15 @@ function prose(body) {
     ))
   );
   const text = lines.join(" ");
-  const sentences2 = text.split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter((s) => /[A-Za-z]/.test(s));
+  const sentences3 = text.split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter((s) => /[A-Za-z]/.test(s));
   const words3 = text.match(/[A-Za-z][A-Za-z'’-]*/g) ?? [];
-  return { words: words3, sentences: sentences2 };
+  return { words: words3, sentences: sentences3 };
 }
 function fleschKincaidGrade(body) {
-  const { words: words3, sentences: sentences2 } = prose(body);
-  if (!words3.length || !sentences2.length) return 0;
+  const { words: words3, sentences: sentences3 } = prose(body);
+  if (!words3.length || !sentences3.length) return 0;
   const syl = words3.reduce((s, w) => s + syllables(w), 0);
-  return 0.39 * (words3.length / sentences2.length) + 11.8 * (syl / words3.length) - 15.59;
+  return 0.39 * (words3.length / sentences3.length) + 11.8 * (syl / words3.length) - 15.59;
 }
 var ASK_PHRASE = /\b(would you|could you|could we|can we|can you|are you open|open to|worth a (quick )?look|happy to (chat|talk|hop)|let me know if|would it be|do you have|are you up for|might you|would love (it )?if you)\b/i;
 function asksIn(body) {
@@ -12686,13 +12708,13 @@ var OBJECTION = [
   /\b(?:too early for us to take a view|proof that customers)\b/
 ];
 var anyOf2 = (res, s) => res.some((r) => r.test(s));
-function sentences(body) {
+function sentences2(body) {
   return body.split(/(?<=[.!?])\s+|\n+/).map((s) => s.trim()).filter(Boolean);
 }
 function isNotNow(body, base) {
   if (base.extraction.decline === "soft" && base.extraction.followUpAfter) return true;
   if (base.extraction.proposedTimes.length || base.signal === "scheduling_confirmation") return false;
-  const sents = sentences(body);
+  const sents = sentences2(body);
   const comeBack = sents.some((s) => COME_BACK.test(s) && LATER.test(s));
   const pushback = PUSHBACK.test(body);
   if (base.signal === "reply_decline") return comeBack || pushback && LATER.test(body);
@@ -12708,7 +12730,7 @@ function classifyReply(text, ctx) {
   });
   const lower = body.toLowerCase();
   const x = base.extraction;
-  const question = sentences(body).find((s) => s.endsWith("?")) ?? null;
+  const question = sentences2(body).find((s) => s.endsWith("?")) ?? null;
   const out = (cls, confidence) => ({
     class: cls,
     confidence,
@@ -12721,7 +12743,7 @@ function classifyReply(text, ctx) {
     offers: x.offers
   });
   if (ctx.direction !== "outbound") {
-    const unsubscribeLines = sentences(lower).filter((s) => !/\bhesitate\b/.test(s));
+    const unsubscribeLines = sentences2(lower).filter((s) => !/\bhesitate\b/.test(s));
     if (unsubscribeLines.some((s) => anyOf2(UNSUB, s))) return out("unsubscribe", 0.95);
     if (base.signal !== "referral_offer" && base.signal !== "intro_offer") {
       if (isNotNow(lower, base)) return out("not_now", x.followUpAfter ? 0.9 : 0.8);
