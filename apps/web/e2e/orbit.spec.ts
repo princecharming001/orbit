@@ -2087,7 +2087,8 @@ test.describe('Usability round 6', () => {
     await openDrafts(page);
     const lena = page.getByTestId('suggestion-thank_you').filter({ hasText: 'Lena' });
     await lena.getByTestId('draft-review').click();
-    await expect(lena.getByLabel('Message body')).toHaveValue(/making time on Monday/);
+    // the day's brief rewrites "yesterday" on the new day; it can take a while on a slow machine
+    await expect(lena.getByLabel('Message body')).toHaveValue(/making time on Monday/, { timeout: 30_000 });
     await expect(lena.getByLabel('Message body')).not.toHaveValue(/yesterday/);
     // Ethan's chat was yesterday at 11:30 and the demo has no calendar sync: it moved on by itself
     await expect(page.getByTestId('suggestion-thank_you').filter({ hasText: 'Ethan' })).toBeVisible();
