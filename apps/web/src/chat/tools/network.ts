@@ -53,6 +53,8 @@ interface Item {
   chip?: string;
   href?: string;
   links?: { label: string; url: string }[];
+  /** a person's photo (or initials) at the start of the row */
+  avatar?: { name: string; src?: string };
 }
 
 function list<M>(title: string, items: Item[], forModel: M, summary: string, href?: string): ResultEnvelope {
@@ -597,6 +599,7 @@ async function findOnLinkedIn(
       sub: [p.headline, p.location].filter(Boolean).join(' · '),
       href: p.knownPersonId ? `/people/${p.knownPersonId}` : undefined,
       links: p.profileUrl ? [{ label: 'LinkedIn', url: p.profileUrl }] : undefined,
+      avatar: { name: p.name, src: p.pictureUrl },
     })),
     {
       results: top.map((p) => ({

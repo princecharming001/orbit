@@ -11,6 +11,7 @@ import {
   normalizeLinkedInUrl,
   parseName,
   resolveIdentity,
+  roleFromHeadline,
   SUGGEST_THRESHOLD,
 } from '@orbit/core';
 import { feedback } from '../db/repo';
@@ -548,4 +549,37 @@ export async function decideMerge(
         .toArray();
   for (const s of cards) if (s) await db.suggestions.update(s.id, { status: 'done', decidedAt: now });
   return accept ? 'merged' : 'kept';
+}
+
+/**
+ * People added from a LinkedIn search by older versions took their company from the headline's last " at ": "Product
+ * @ Google | Growing Ads for SMBs at scale" was filed at "scale". Their company is read again from the headline's
+ * first part. Only a company that came from that misreading is changed.
+ */
+export async function repairHeadlineCompanies(userId: string): Promise<number> {
+  const people = await db.people
+    .where('userId')
+    .equals(userId)
+    .filter((p) => !!p.headline && !!p.currentOrganizationRaw)
+    .toArray();
+  let fixed = 0;
+  for (const p of people) {
+    const parts = p.headline!.split(/\s+at\s+/i);
+    const misread = parts.length > 1 ? parts.slice(1).join(' at ').trim().toLowerCase() : undefined;
+    if (!misread || misread !== p.currentOrganizationRaw!.trim().toLowerCase()) continue;
+    const { title, org } = roleFromHeadline(p.headline);
+    if (org?.toLowerCase() === misread) continue;
+    const o = org ? await upsertOrganization(org) : undefined;
+    await db.people.update(p.id, {
+      currentOrganizationId: o?.id,
+      currentOrganizationRaw: o?.name,
+      currentTitle: title ?? p.currentTitle,
+      // the summary said where they work: it is written again from the corrected company
+      summary: undefined,
+      summaryUpdatedAt: undefined,
+      talkingPoints: undefined,
+    });
+    fixed++;
+  }
+  return fixed;
 }

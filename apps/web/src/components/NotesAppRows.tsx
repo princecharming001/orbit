@@ -8,6 +8,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { Check } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { db } from '../db/schema';
 import { signInClients } from '../engine/appSignIn';
 import {
   calStatus,
@@ -32,9 +33,11 @@ import {
   meetingAppStatus,
   syncMeetingApp,
 } from '../engine/meetingApps';
+import { setSchedulingLink } from '../engine/settings';
 import { usesMockConnectors } from '../integrations/connectorsMock';
 import { Button, Input, relDate, Spinner, Switch, useToast } from '../ui';
 import { AppMark, IntegrationRow, RowStatus } from './IntegrationRow';
+import { SchedulingLinkField } from './SchedulingLinkField';
 
 /** This copy of Orbit can sign in to the app (its OAuth client is set), so Connect opens the app's own sign-in. */
 function useCanSignIn(app: 'calcom' | 'fathom', userId: string): boolean {
@@ -429,6 +432,7 @@ export function MeetingAppRow({ user, app }: { user: User; app: MeetingApp }) {
 }
 
 export function CalcomRow({ user }: { user: User }) {
+  const settings = useLiveQuery(() => db.settings.get(user.id), [user.id]);
   const toast = useToast();
   const status = useLiveQuery(() => calStatus(user), [user.id]);
   const [asking, setAsking] = useState(false);
@@ -479,18 +483,9 @@ export function CalcomRow({ user }: { user: User }) {
         ) : undefined
       }
       line={
-        status.available ? (
-          <>
-            Your booking links in drafts.{' '}
-            {status.connected && (
-              <Link to="/settings/limits" className="underline underline-offset-2 hover:text-ink">
-                Choose the link
-              </Link>
-            )}
-          </>
-        ) : (
-          'Not part of this version of Orbit yet.'
-        )
+        status.available
+          ? 'The booking link your drafts offer when you propose times'
+          : 'Not part of this version of Orbit yet.'
       }
       actions={
         !status.available ? undefined : (
@@ -565,6 +560,17 @@ export function CalcomRow({ user }: { user: User }) {
         <p className="text-[12.5px] text-bad" role="alert" data-testid="settings-calcom-error">
           {error}
         </p>
+      )}
+      {/* the link itself, in the same row: one of the event types above, or any other page */}
+      {settings && (status.connected || !asking) && (
+        <div className="max-w-xl" data-testid="settings-booking-link">
+          <SchedulingLinkField
+            user={user}
+            compact
+            value={settings.schedulingLink}
+            onChange={(link) => void setSchedulingLink(user.id, link)}
+          />
+        </div>
       )}
     </IntegrationRow>
   );

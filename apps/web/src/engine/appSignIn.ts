@@ -2,37 +2,38 @@
  * "Connect with Cal.com", "Fathom", "Granola" and "Wispr Flow": the app's own sign-in in a small window, the way most
  * apps connect. The student approves on the app's site, it sends them to Orbit's /auth/app page, which hands the code
  * back to this tab. For Cal.com and Fathom, Orbit's server trades it for tokens with the secret only it holds.
- * Granola and Wispr Flow open their meeting servers (MCP) to any app that registers itself, so this tab registers
- * Orbit, proves the code is its own (PKCE) and trades it directly; no secret is involved. Either way the tokens stay
- * in this browser, like a pasted key, and are renewed before they run out.
+ * Granola and Wispr Flow open their meeting servers (MCP) to any app that registers itself, so Orbit registers
+ * itself, proves the code is its own (PKCE) and trades it as a public client; no secret is involved. Their sign-in
+ * servers answer without the CORS header a browser needs, so the registration and the token calls go through
+ * Orbit's orbit-notes function, which only forwards them. Either way the tokens stay in this browser, like a pasted
+ * key, and are renewed before they run out.
  */
 import { db, type IntegrationAccount } from '../db/schema';
-import { type AppAuth, oauthClients, oauthTokens } from '../integrations/notesApps';
+import { type AppAuth, oauthClients, oauthRegister, oauthTokens } from '../integrations/notesApps';
 
 export type SignInApp = 'calcom' | 'fathom' | 'granola' | 'wispr';
 /** apps whose meeting server lets Orbit register itself: sign-in needs nothing set up on Orbit's side */
 export type McpApp = 'granola' | 'wispr';
 export const isMcpApp = (app: SignInApp): app is McpApp => app === 'granola' || app === 'wispr';
 
-/** Where each meeting server says its sign-in lives; read again at each sign-in, these are the fallbacks. */
+/**
+ * Where each meeting server says its sign-in lives; read again at each sign-in, these are the fallbacks. Registering
+ * and trading codes go through orbit-notes, which keeps those two addresses itself (MCP_AUTH in notes.ts).
+ */
 export const MCP_APPS: Record<
   McpApp,
-  { resource: string; metadata: string; authorize: string; token: string; register: string; scope: string }
+  { resource: string; metadata: string; authorize: string; scope: string }
 > = {
   granola: {
     resource: 'https://mcp.granola.ai/mcp',
     metadata: 'https://mcp.granola.ai/.well-known/oauth-protected-resource/mcp',
     authorize: 'https://mcp-auth.granola.ai/oauth2/authorize',
-    token: 'https://mcp-auth.granola.ai/oauth2/token',
-    register: 'https://mcp-auth.granola.ai/oauth2/register',
     scope: 'mcp offline_access',
   },
   wispr: {
     resource: 'https://api.wisprflow.ai/connect/mcp',
     metadata: 'https://api.wisprflow.ai/.well-known/oauth-protected-resource/connect/mcp',
     authorize: 'https://mcp-auth.wisprflow.com/oauth2/authorize',
-    token: 'https://mcp-auth.wisprflow.com/oauth2/token',
-    register: 'https://mcp-auth.wisprflow.com/oauth2/register',
     scope: 'openid offline_access',
   },
 };
@@ -170,8 +171,6 @@ async function discover(app: McpApp) {
     if (!issuer) return known;
     const as = (await (await fetch(`${issuer}/.well-known/oauth-authorization-server`)).json()) as {
       authorization_endpoint?: string;
-      token_endpoint?: string;
-      registration_endpoint?: string;
       scopes_supported?: string[];
     };
     // what the meeting server asks for, plus staying signed in when the sign-in server offers it
@@ -181,8 +180,6 @@ async function discover(app: McpApp) {
     return {
       ...known,
       authorize: as.authorization_endpoint ?? known.authorize,
-      token: as.token_endpoint ?? known.token,
-      register: as.registration_endpoint ?? known.register,
       scope: scopes.length ? scopes.join(' ') : known.scope,
     };
   } catch {
@@ -193,35 +190,20 @@ async function discover(app: McpApp) {
 /** Orbit's registration with this meeting server for this address, made once and remembered in this browser. */
 async function registeredClient(
   app: McpApp,
-  register: string,
   redirectUri: string,
   scope: string,
-): Promise<string | undefined> {
+): Promise<{ ok: true; clientId: string } | { ok: false; message: string }> {
   const key = `orbit:mcp-client:${app}:${redirectUri}`;
   try {
     const kept = localStorage.getItem(key);
-    if (kept) return kept;
+    if (kept) return { ok: true, clientId: kept };
   } catch {}
-  const res = await fetch(register, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', accept: 'application/json' },
-    body: JSON.stringify({
-      client_name: 'Orbit',
-      client_uri: 'https://tryorbit.today',
-      redirect_uris: [redirectUri],
-      grant_types: ['authorization_code', 'refresh_token'],
-      response_types: ['code'],
-      token_endpoint_auth_method: 'none',
-      scope,
-    }),
-  }).catch(() => undefined);
-  if (!res?.ok) return undefined;
-  const id = ((await res.json()) as { client_id?: string }).client_id;
-  if (id)
-    try {
-      localStorage.setItem(key, id);
-    } catch {}
-  return id;
+  const r = await oauthRegister({ server: app, redirectUri, scope });
+  if (!r.ok) return r;
+  try {
+    localStorage.setItem(key, r.value.clientId);
+  } catch {}
+  return { ok: true, clientId: r.value.clientId };
 }
 
 /** Forget Orbit's registration with a meeting server (it was refused), so the next sign-in registers again. */
@@ -235,8 +217,10 @@ async function signInToMeetingServer(app: McpApp): Promise<SignInOutcome> {
   const name = app === 'granola' ? 'Granola' : 'Wispr Flow';
   const ep = await discover(app);
   const redirectUri = appRedirectUri();
-  const clientId = await registeredClient(app, ep.register, redirectUri, ep.scope);
-  if (!clientId) return { ok: false, message: `${name} did not let Orbit register. Try again in a minute.` };
+  const reg = await registeredClient(app, redirectUri, ep.scope);
+  // the server's own words: the app refused (with its status), or Orbit could not reach it
+  if (!reg.ok) return { ok: false, message: reg.message };
+  const clientId = reg.clientId;
   const verifier = b64url(crypto.getRandomValues(new Uint8Array(32)));
   const challenge = b64url(
     new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))),
@@ -256,30 +240,24 @@ async function signInToMeetingServer(app: McpApp): Promise<SignInOutcome> {
   if (answer && answer !== 'blocked' && answer.error === 'invalid_client') forgetClient(app, redirectUri);
   const no = refusal(answer);
   if (no || answer === 'blocked' || !answer?.code) return no ?? { ok: false, message: 'Try again.' };
-  const res = await fetch(ep.token, {
-    method: 'POST',
-    headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
-    body: new URLSearchParams({
-      grant_type: 'authorization_code',
-      code: answer.code,
-      redirect_uri: redirectUri,
-      client_id: clientId,
-      code_verifier: verifier,
-      resource: ep.resource,
-    }).toString(),
-  }).catch(() => undefined);
-  const t = res?.ok
-    ? ((await res.json()) as { access_token?: string; refresh_token?: string; expires_in?: number })
-    : undefined;
-  if (!t?.access_token) {
-    if (res?.status === 400 || res?.status === 401) forgetClient(app, redirectUri);
+  const t = await oauthTokens({
+    provider: app,
+    grant: 'code',
+    clientId,
+    code: answer.code,
+    redirectUri,
+    codeVerifier: verifier,
+  });
+  if (!t.ok) {
+    // the sign-in server refused this registration or code: register afresh next time
+    if (t.reason === 'bad_key') forgetClient(app, redirectUri);
     return { ok: false, message: `${name} did not finish signing in. Try again.` };
   }
   return {
     ok: true,
-    accessToken: t.access_token,
-    refreshToken: t.refresh_token,
-    expiresAt: expiry(t.expires_in),
+    accessToken: t.value.accessToken,
+    refreshToken: t.value.refreshToken,
+    expiresAt: expiry(t.value.expiresIn),
     clientId,
   };
 }
@@ -324,7 +302,7 @@ export async function appAuth(app: SignInApp, row: IntegrationAccount): Promise<
   return { accessToken: t.value.accessToken };
 }
 
-/** Renew a meeting server's sign-in in this tab: no secret, just Orbit's registration and the refresh token. */
+/** Renew a meeting server's sign-in: no secret, just Orbit's registration and the refresh token (via orbit-notes). */
 async function refreshMeetingServer(
   app: McpApp,
   refreshToken: string,
@@ -334,24 +312,12 @@ async function refreshMeetingServer(
   | { ok: false; message: string }
 > {
   const name = app === 'granola' ? 'Granola' : 'Wispr Flow';
-  const again = { ok: false as const, message: `${name} needs you to connect again.` };
-  if (!clientId) return again;
-  const res = await fetch(MCP_APPS[app].token, {
-    method: 'POST',
-    headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
-    body: new URLSearchParams({
-      grant_type: 'refresh_token',
-      refresh_token: refreshToken,
-      client_id: clientId,
-      resource: MCP_APPS[app].resource,
-    }).toString(),
-  }).catch(() => undefined);
-  if (!res) return { ok: false, message: `Could not reach ${name}. Try again.` };
-  if (!res.ok) return again;
-  const t = (await res.json()) as { access_token?: string; refresh_token?: string; expires_in?: number };
-  if (!t.access_token) return again;
-  return {
-    ok: true,
-    value: { accessToken: t.access_token, refreshToken: t.refresh_token, expiresIn: t.expires_in },
-  };
+  if (!clientId) return { ok: false, message: `${name} needs you to connect again.` };
+  const t = await oauthTokens({ provider: app, grant: 'refresh', clientId, refreshToken });
+  if (!t.ok)
+    return {
+      ok: false,
+      message: t.reason === 'bad_key' ? `${name} needs you to connect again.` : t.message,
+    };
+  return { ok: true, value: t.value };
 }

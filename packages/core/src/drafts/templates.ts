@@ -185,6 +185,8 @@ export interface DraftContext {
     linkedinConnectedAt?: string;
     previousOrg?: string;
     previousTitle?: string;
+    /** their LinkedIn headline, as they wrote it */
+    headline?: string;
   };
   facts: PersonFact[];
   kind: MessageKind;
@@ -966,6 +968,58 @@ function ownHold(c: Connection, now: Date, tz: string): string | undefined {
  */
 export function whyThemSentence(text: string): string {
   return `${studentSentence(strip(text))}.`;
+}
+
+/** Headline parts that describe the person, not their work: titles, credentials, follower counts, slogans. */
+const NOT_A_FOCUS =
+  /\b(founder|co-?founder|engineer|manager|lead|director|head|advisor|adviser|investor|mentor|speaker|author|ex-?|former|followers?|views|opinions?|own|hiring|open to|she\/her|he\/him|they\/them|school|university|college|mba|phd|alum)\b|[#@]|\d/i;
+
+/**
+ * What their work is about, from their LinkedIn headline: "Sr. Product Manager | Google | AI Infrastructure &
+ * Platform" gives "AI Infrastructure & Platform", "Product @ Google | Growing Ads for SMBs at scale" gives "growing Ads
+ * for SMBs at scale". Only a short plain phrase they wrote themselves; anything else gives nothing.
+ */
+export function headlineFocus(
+  headline: string | undefined,
+  title: string | undefined,
+  org: string | undefined,
+): { phrase: string; doing: boolean } | undefined {
+  if (!headline) return undefined;
+  const low = (x?: string) => (x ?? '').toLowerCase().trim();
+  for (const raw of headline.split(/\s*[|·•]\s*|\s+[-–—]\s+/)) {
+    const seg = raw.replace(/[^\p{L}\p{N}&'’,./+ -]/gu, '').trim();
+    const words = seg.split(/\s+/).filter(Boolean);
+    if (words.length < 2 || words.length > 7) continue;
+    if (low(seg) === low(title) || low(seg) === low(org) || (org && low(seg).includes(` at ${low(org)}`)))
+      continue;
+    if (NOT_A_FOCUS.test(seg) || / at | @ /i.test(` ${seg} `)) continue;
+    const doing = /^\p{L}+ing\b/u.test(seg);
+    return { phrase: doing ? lower1(seg) : seg, doing };
+  }
+  return undefined;
+}
+
+/**
+ * The line only true of them that a first message needs, written by Orbit from what it holds when the student gave
+ * none: what their headline says they work on, else how Orbit found them (their role and company). Nothing is made
+ * up, and nothing is left for the student to fill in.
+ */
+function autoWhyThem(ctx: DraftContext): { text: string; claim: DraftClaim } | undefined {
+  const p = ctx.person;
+  const org = p.org?.trim();
+  const at = org ? ` at ${org}` : '';
+  const focus = headlineFocus(p.headline, p.title, org);
+  if (focus)
+    return {
+      text: focus.doing ? `I saw you're ${focus.phrase}${at}.` : `I saw you work on ${focus.phrase}${at}.`,
+      claim: { text: p.headline!, kind: 'about_person' },
+    };
+  if (org)
+    return {
+      text: `I came across your profile while looking at people at ${org}.`,
+      claim: { text: [p.title, org].filter(Boolean).join(' at '), kind: 'about_person' },
+    };
+  return undefined;
 }
 
 /** The bracketed "Why them" gap in a draft, in the long (email) or short (LinkedIn note) form. */
@@ -1856,7 +1910,10 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       // note is already the line about them
       const useRole = role && !qq.reacted && !hiring ? role : undefined;
       const op = opener(ctx, seed, now, qq, useRole);
-      if (!op) {
+      // without a link the student gave, Orbit writes one from what it holds about them (their headline, their role)
+      const auto = op ? undefined : autoWhyThem(ctx);
+      if (auto) claims.push(auto.claim);
+      if (!op && !auto) {
         needsInput.push('connection');
         claims.push({ text: 'connection missing', kind: 'logistics' });
       }
@@ -1874,6 +1931,7 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
         !!ctx.chat?.commentedOnPost && !['warmup', 'post'].includes(ctx.connection?.kind ?? '');
       const openText =
         op?.text ??
+        auto?.text ??
         (commented
           ? `[What their post was about, e.g. "Read your post on ..." (you commented on it during the warm-up)]`
           : `[${WHY_THEM}: one line only true of ${first}, like how you found them, what you share, or something of theirs you read]`);
@@ -1965,13 +2023,17 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       if (threaded || introReply) subject = reSubject;
       // LinkedIn connection note (not yet connected) or message (connected)
       if (isLinkedIn) {
-        const short = op ? shortConnection(ctx, c!) : `[${WHY_THEM}: one line only true of ${first}]`;
+        const short = op
+          ? shortConnection(ctx, c!)
+          : (auto?.text ?? `[${WHY_THEM}: one line only true of ${first}]`);
         if (o && short.includes(o)) qq = thereFor(qq, o);
         // someone who already knows the student is not told their school and year again
         const known = !!c && (c.kind === 'met' || (c.kind === 'prior_thread' && friend) || !!c.introduced);
         const intro = known
           ? ''
-          : pick([`I'm ${article(yl)} ${yl} at ${school}.`, `${school} ${yl} here.`], seed, 'note-intro');
+          : school
+            ? pick([`I'm ${article(yl)} ${yl} at ${school}.`, `${school} ${yl} here.`], seed, 'note-intro')
+            : `I'm ${article(yl)} ${yl}.`;
         const lead = `Hi ${first}, ${
           intro
             ? `${intro} ${short}`

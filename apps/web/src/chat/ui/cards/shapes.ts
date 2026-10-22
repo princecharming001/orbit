@@ -528,6 +528,7 @@ export interface ListRow {
   chip?: string;
   href?: string;
   links: { label: string; url: string }[];
+  avatar?: { name: string; src?: string };
 }
 
 /** list: `{ title, items: { text, sub?, chip?, href?, links? }[] }` */
@@ -552,6 +553,12 @@ export function readList(d: unknown): { title?: string; items: ListRow[] } {
             return url && /^https?:\/\//.test(url) ? { label: str(lo.label) ?? 'source', url } : undefined;
           })
           .filter(present),
+        avatar: (() => {
+          const a = obj(r.avatar);
+          const name = str(a.name);
+          const src = str(a.src);
+          return name ? { name, src: src && /^https:\/\//.test(src) ? src : undefined } : undefined;
+        })(),
       };
     })
     .filter(present);

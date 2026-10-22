@@ -1,9 +1,11 @@
 import { useEffect, useRef } from 'react';
+import { fillWhyThemGaps } from '../engine/brief';
 import { cleanUpGuesses } from '../engine/cleanup';
 import { enrichFromLinkedIn } from '../engine/enrich';
 import { autoSyncFathom } from '../engine/fathom';
-import { liveLinkedInAccount, syncLinkedInLive } from '../engine/linkedinLive';
+import { liveLinkedInAccount, resumeLinkedInConnect, syncLinkedInLive } from '../engine/linkedinLive';
 import { autoSyncMeetingApps } from '../engine/meetingApps';
+import { repairHeadlineCompanies } from '../engine/people';
 import { useSession } from '../state/session';
 
 /**
@@ -19,8 +21,12 @@ export function MeetingNotesAutoSync() {
   useEffect(() => {
     const u = userRef.current;
     if (!userId || !u?.onboardingCompletedAt) return;
+    // a LinkedIn sign-in that was still finishing when the page closed: keep waiting for it in the background
+    void resumeLinkedInConnect(u).catch(() => undefined);
     // first, once: clear what older versions saved from guesses (chats from mail never answered, and so on)
     void cleanUpGuesses(u)
+      .catch(() => undefined)
+      .then(() => repairHeadlineCompanies(u.id))
       .catch(() => undefined)
       .then(() => {
         void autoSyncFathom(u).catch(() => undefined);
@@ -34,7 +40,14 @@ export function MeetingNotesAutoSync() {
               : undefined,
           )
           .catch(() => undefined)
-          .finally(() => void enrichFromLinkedIn(u).catch(() => undefined));
+          // then drafts still waiting on a "Why them" line get one written from what Orbit now knows
+          .finally(
+            () =>
+              void enrichFromLinkedIn(u)
+                .catch(() => undefined)
+                .then(() => fillWhyThemGaps(u))
+                .catch(() => undefined),
+          );
       });
   }, [userId]);
   return null;

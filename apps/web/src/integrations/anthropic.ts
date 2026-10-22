@@ -6,6 +6,7 @@ import type {
   NoteExtraction,
   ReplySignal,
   ResumeFacet,
+  StyleCard,
   TriageResult,
 } from '@orbit/core';
 import { fmtWindow, LINKEDIN_NOTE_MAX, LINKEDIN_NOTE_TARGET, MAX_WORDS, tzAbbr } from '@orbit/core';
@@ -701,6 +702,81 @@ export async function llmSummary(
     1024,
   );
   return r ? { summary: r.summary, talkingPoints: r.talking_points } : undefined;
+}
+
+/**
+ * The outreach coach: read the student's feedback on their drafts ("sound less like a cover letter") as changes to
+ * their style card. Null means "leave as is". Uses the drafting switch, since it only shapes drafts.
+ */
+export async function llmStyleFeedback(
+  feedback: string,
+  card: Pick<
+    StyleCard,
+    | 'greetingPatterns'
+    | 'signoffs'
+    | 'formality'
+    | 'avgMessageWords'
+    | 'contractions'
+    | 'exclamationsPerMessage'
+    | 'emoji'
+    | 'avoid'
+    | 'notes'
+  >,
+): Promise<
+  | {
+      avgMessageWords: number | null;
+      formality: number | null;
+      contractions: boolean | null;
+      exclamations: boolean | null;
+      emoji: boolean | null;
+      greeting: string | null;
+      signoff: string | null;
+      avoid: string[];
+      note: string | null;
+    }
+  | undefined
+> {
+  const schema = z.object({
+    avg_message_words: z.number().nullable(),
+    formality: z.number().nullable(),
+    contractions: z.boolean().nullable(),
+    exclamations: z.boolean().nullable(),
+    emoji: z.boolean().nullable(),
+    greeting: z.string().nullable(),
+    signoff: z.string().nullable(),
+    avoid: z.array(z.string()),
+    note: z.string().nullable(),
+  });
+  const r = await runParse(
+    'drafts',
+    [
+      "You tune a college student's networking-message style card from their feedback on a sample draft.",
+      'Change only what the feedback asks for; return null (or an empty list) for everything else.',
+      'avg_message_words: target words between greeting and sign-off (30 to 180). formality: 0 casual to 1 formal.',
+      'greeting: a pattern with {first} for their first name, like "Hey {first},". signoff: the closing word only, like "Cheers".',
+      'avoid: exact phrases the student never wants in a draft. note: one short imperative sentence for anything the',
+      'other fields cannot express (structure, content, what to mention or leave out), written as an instruction to',
+      'the drafter. Never invent preferences the feedback does not state.',
+    ].join(' '),
+    (wrap) =>
+      `Current style card:\n${JSON.stringify(card, null, 1)}\n\nThe student's feedback:\n${wrap('student_feedback', feedback.slice(0, 1500))}`,
+    schema,
+    'low',
+    512,
+  );
+  return r
+    ? {
+        avgMessageWords: r.avg_message_words,
+        formality: r.formality,
+        contractions: r.contractions,
+        exclamations: r.exclamations,
+        emoji: r.emoji,
+        greeting: r.greeting,
+        signoff: r.signoff,
+        avoid: r.avoid,
+        note: r.note,
+      }
+    : undefined;
 }
 
 export async function testApiKey(): Promise<{ ok: boolean; error?: string }> {

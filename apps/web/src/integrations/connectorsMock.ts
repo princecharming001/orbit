@@ -116,6 +116,7 @@ export async function mockMutuals(userId: string, target: Person, limit = 6): Pr
       p.headline ?? ([p.currentTitle, p.currentOrganizationRaw].filter(Boolean).join(' at ') || undefined),
     url: p.linkedinUrl,
     memberId: memberIdFor(p),
+    pictureUrl: p.photoUrl,
   }));
 }
 

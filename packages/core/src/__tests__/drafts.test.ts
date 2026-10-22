@@ -184,15 +184,30 @@ describe('outreach', () => {
     );
     expect(s.d.body).toMatch(/We were both in the Cornell Data Science club\./);
   });
-  it('the missing line is named "Why them" in the draft', () => {
+  it('cold outreach writes its own line from where they work; the student never has to fill one in', () => {
     const r = check(base({ person: { ...base().person, isAlumni: false } }));
-    expect(r.d.body).toMatch(/\[Why them: one line only true of /);
+    expect(r.d.body).toMatch(/I came across your profile while looking at people at Figma\./);
+    expect(r.d.body).not.toMatch(/\[Why them/);
+    expect(r.d.needsInput).toEqual([]);
+    expect(r.blocking, JSON.stringify(r.issues)).toEqual([]);
   });
-  it('cold outreach without any link is gated, not drafted generically', () => {
-    const r = check(base({ person: { ...base().person, isAlumni: false } }));
+  it('the line comes from their headline when it says what they work on', () => {
+    const r = check(
+      base({
+        person: {
+          ...base().person,
+          isAlumni: false,
+          headline: 'Product Manager at Figma | Building multiplayer editing',
+        },
+      }),
+    );
+    expect(r.d.body).toMatch(/I saw you're building multiplayer editing at Figma\./);
+    expect(r.blocking, JSON.stringify(r.issues)).toEqual([]);
+  });
+  it('with nothing known about them the missing line is named "Why them", and only then', () => {
+    const r = check(base({ person: { ...base().person, isAlumni: false, org: undefined } }));
+    expect(r.d.body).toMatch(/\[Why them: one line only true of /);
     expect(r.d.needsInput).toContain('connection');
-    expect(isBlocked(r.issues)).toBe(true);
-    expect(r.issues.map((i) => i.code)).toContain('needs_connection');
   });
   it('alumni outreach passes every check and reads as a person', () => {
     const r = check(base());
@@ -1288,7 +1303,8 @@ describe('audit round 1, expert gaps (EG, SND, UI-10)', () => {
         history: { lastAt: '2026-05-05T15:00:00Z', lastInbound: false, repliedEver: false },
       }),
     );
-    expect(ignored.needsInput).toEqual(['connection']);
+    expect(ignored.needsInput).toEqual([]);
+    expect(ignored.body).toMatch(/I came across your profile while looking at people at Stripe\./);
     for (const d of [recruiter, peer]) {
       const ctx = base({ person: dana, history });
       expect(unsupportedDetails(d.body, `${contextText(ctx)} Diego Lopez Ramp Recruiter`)).toEqual([]);
@@ -1419,8 +1435,8 @@ describe('audit round 1, expert gaps (EG, SND, UI-10)', () => {
     );
     expect(noted.bodyShort!.length).toBeLessThanOrEqual(LINKEDIN_NOTE_MAX);
     const bare = generateDraft(base({ person: dana, chat: { warmUpDone: 2, commentedOnPost: true } }));
-    expect(bare.needsInput).toEqual(['connection']);
-    expect(bare.body).toMatch(/\[What their post was about/);
+    expect(bare.needsInput).toEqual([]);
+    expect(bare.body).toMatch(/I came across your profile while looking at people at Stripe\./);
     expect(bare.body).not.toMatch(/enjoyed your recent posts/);
     const alum = generateDraft(base({ chat: { warmUpDone: 2, commentedOnPost: true } }));
     expect(alum.body).toMatch(/I also left a comment on your recent post\./);
@@ -1852,7 +1868,7 @@ describe('usability round 5', () => {
     expect(long.bodyShort!.length).toBeLessThanOrEqual(200);
   });
   it('the "Why them" gap is found in a draft, and a typed line drops into it as a sentence', () => {
-    const d = generateDraft(base({ person: { ...base().person, isAlumni: false } }));
+    const d = generateDraft(base({ person: { ...base().person, isAlumni: false, org: undefined } }));
     expect(WHY_THEM_GAP.test(d.body)).toBe(true);
     expect(d.body.replace(WHY_THEM_GAP, whyThemSentence('read your post on staffing'))).toMatch(
       /I read your post on staffing\./,

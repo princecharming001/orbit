@@ -32,7 +32,7 @@ export function LinkedInLiveCard({ user }: { user: User }) {
     setBusy('Opening LinkedIn…');
     try {
       const r = await connectLinkedInLive(user, {
-        onProgress: (n) => setBusy(`Bringing in your connections… ${n}`),
+        onProgress: (n) => setBusy(`Reading your connections… ${n}`),
       });
       if (r.ok) toast.push({ text: `LinkedIn connected: ${r.added} new, ${r.rows} in all.`, tone: 'good' });
       else if (r.reason === 'unconfigured') setSoon(true);
@@ -75,6 +75,10 @@ export function LinkedInLiveCard({ user }: { user: User }) {
               {status.rows !== undefined ? ` · ${status.rows} connections` : ''} · last synced{' '}
               {status.lastSyncedAt ? relDate(status.lastSyncedAt) : 'never'}
               {status.error && ' · the last sync did not go through'}
+            </RowStatus>
+          ) : busy ? (
+            <RowStatus testId="settings-linkedin-live-status">
+              <Spinner /> {busy}
             </RowStatus>
           ) : undefined
         }

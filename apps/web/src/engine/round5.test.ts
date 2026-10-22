@@ -51,7 +51,6 @@ describe('usability round 5 (engine)', () => {
   it('Add to my message fills only the "Why them" gap and keeps the rest of what the student wrote', async () => {
     const r = (await addPersonByHand(user.id, {
       name: 'Cara Diaz',
-      company: 'Goldman Sachs',
       linkedinUrl: 'https://www.linkedin.com/in/cara-diaz-gs',
     }))!;
     const s = await startWarmUpOrOutreach(user, r.person.id, 'linkedin', 'manual', { skipWarmUp: true });

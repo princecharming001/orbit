@@ -19,6 +19,14 @@ export async function saveRecommendation(id: string): Promise<boolean> {
   return true;
 }
 
+/** Unsave: back among the others, ranked by its score. */
+export async function unsaveRecommendation(id: string): Promise<boolean> {
+  const r = await db.recommendations.get(id);
+  if (r?.status !== 'saved') return false;
+  await db.recommendations.update(id, { status: 'new' });
+  return true;
+}
+
 /** Not a fit: Orbit learns from the reason for the next list. Undo puts it back as new. */
 export async function dismissRecommendation(
   userId: string,

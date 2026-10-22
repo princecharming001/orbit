@@ -185,7 +185,8 @@ export function InboxPage() {
   const outbox = outbound
     .filter((o) => IN_FLIGHT.includes(o.status) && !(o.autopilot && o.status === 'queued'))
     .sort((a, b) => (b.queuedAt ?? b.createdAt).localeCompare(a.queuedAt ?? a.createdAt));
-  const handedOff = outbox.filter((o) => o.status === 'handed_off');
+  // a message opened in the mail app or LinkedIn stays with the other drafts, still sendable, until "I sent it"
+  const handedOff = outbox.filter((o) => o.status === 'handed_off' && !byId.get(o.personId)?.hiddenAt);
   const notSent = outbox.filter((o) => o.status !== 'handed_off');
   // chats waiting on the other person for a week or more; a card here already covers its own chat
   const covered = new Set([...cards, ...more].map((x) => x.chatId).filter(Boolean));
@@ -224,7 +225,7 @@ export function InboxPage() {
         ? 'scheduled'
         : focusCard || focusPerson
           ? 'pending'
-          : outbox.some((o) => o.status === 'handed_off' || o.status === 'failed')
+          : notSent.some((o) => o.status === 'failed')
             ? 'outbox'
             : 'pending');
   const refresh = async () => {
@@ -237,7 +238,8 @@ export function InboxPage() {
       setBusy(false);
     }
   };
-  const nothingToSend = !pending.length && !started.length && !toWrite.length && !otherCards.length;
+  const nothingToSend =
+    !pending.length && !started.length && !handedOff.length && !toWrite.length && !otherCards.length;
   return (
     <div ref={rootRef}>
       <PageHeader
@@ -296,15 +298,26 @@ export function InboxPage() {
             onChange={setTab}
             // an empty tab is noise: only To send, tabs with something in them, and the open one show
             items={[
-              { value: 'pending' as const, label: 'To send', count: forToday.length + started.length },
+              {
+                value: 'pending' as const,
+                label: 'To send',
+                count: forToday.length + started.length + handedOff.length,
+              },
               { value: 'scheduled' as const, label: 'Scheduled', count: scheduled.length },
-              { value: 'outbox' as const, label: 'Opened, not marked sent', count: outbox.length },
+              { value: 'outbox' as const, label: 'Not sent', count: notSent.length },
               { value: 'snoozed' as const, label: 'Snoozed', count: snoozed.length },
               { value: 'sent' as const, label: 'Sent', count: sent.length },
               ...(replies ? [{ value: 'replies' as const, label: 'Replies', count: undefined }] : []),
             ].filter((t) => t.value === 'pending' || t.value === shown || t.count !== 0)}
           />
           {shown === 'replies' && <RepliesPanel />}
+          {shown === 'pending' && handedOff.length > 0 && (
+            <div className="space-y-2 mb-5" data-testid="drafts-handed-off">
+              {handedOff.map((o) => (
+                <OutboxItem key={o.id} o={o} person={byId.get(o.personId)} />
+              ))}
+            </div>
+          )}
           {shown === 'pending' && started.length > 0 && (
             <div className="space-y-2 mb-5" data-testid="drafts-started">
               <div className="text-[12px] uppercase tracking-wide text-ink-3">Started by you</div>
@@ -423,33 +436,16 @@ export function InboxPage() {
               <EmptyState title="Nothing snoozed" />
             ))}
           {shown === 'outbox' &&
-            (outbox.length ? (
-              <div className="space-y-5">
-                {handedOff.length > 0 && (
-                  <div className="space-y-3" data-testid="drafts-handed-off">
-                    <div className="text-[12px] uppercase tracking-wide text-ink-3">Did these go out?</div>
-                    <p className="text-[13px] text-ink-3">
-                      Messages you opened in your mail app or LinkedIn but have not marked as sent. Press I
-                      sent it once a message is out, so Orbit can follow up at the right time.
-                    </p>
-                    {handedOff.map((o) => (
-                      <OutboxItem key={o.id} o={o} person={byId.get(o.personId)} />
-                    ))}
-                  </div>
-                )}
-                {notSent.length > 0 && (
-                  <div className="space-y-3">
-                    <div className="text-[12px] uppercase tracking-wide text-ink-3">Not sent yet</div>
-                    {notSent.map((o) => (
-                      <OutboxItem key={o.id} o={o} person={byId.get(o.personId)} />
-                    ))}
-                  </div>
-                )}
+            (notSent.length ? (
+              <div className="space-y-3">
+                {notSent.map((o) => (
+                  <OutboxItem key={o.id} o={o} person={byId.get(o.personId)} />
+                ))}
               </div>
             ) : (
               <EmptyState
                 title="Nothing waiting"
-                body="A message you open in your mail app or LinkedIn waits here until you press I sent it."
+                body="Messages that could not go out wait here to try again."
               />
             ))}
           {shown === 'scheduled' &&

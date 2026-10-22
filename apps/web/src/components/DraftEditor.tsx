@@ -17,6 +17,7 @@ import { enableGmailSend } from '../engine/integrations';
 import { linkedInSendActive } from '../engine/linkedinLive';
 import {
   approveAndSend,
+  canSendFromOrbit,
   checkSendAllowed,
   confirmHandoff,
   type DraftIssue,
@@ -27,6 +28,7 @@ import {
   restorePerson,
   revertHandoff,
   reviewDraft,
+  sendHandedOffFromOrbit,
   snapshotPerson,
   undoQueued,
 } from '../engine/send';
@@ -715,6 +717,11 @@ export function OutboxStatus({ draft, onClose }: { draft: OutboundMessage; onClo
     async () => (user && draft.status === 'handed_off' ? handoffLink(user, draft.id) : undefined),
     [user?.id, draft.id, draft.status, draft.bodyFinal],
   );
+  // Orbit can still send it itself (Gmail with send permission, live LinkedIn), so opening it elsewhere is not final
+  const sendable = useLiveQuery(
+    async () => (user && draft.status === 'handed_off' ? canSendFromOrbit(user, draft) : false),
+    [user?.id, draft.id, draft.status],
+  );
   const [now, setNow] = useState(() => Date.now());
   const [working, setWorking] = useState(false);
   useEffect(() => {
@@ -769,9 +776,33 @@ export function OutboxStatus({ draft, onClose }: { draft: OutboundMessage; onClo
             : `Paste it into LinkedIn and send it, then press I sent it.`;
     actions = (
       <>
+        {sendable && (
+          <Button
+            size="sm"
+            variant="primary"
+            disabled={working}
+            onClick={() =>
+              act(async () => {
+                const r = await sendHandedOffFromOrbit(user, draft.id);
+                toast.push(
+                  r.ok
+                    ? {
+                        text:
+                          r.status === 'queued' ? `Sending to ${name} in a few seconds.` : `Sent to ${name}.`,
+                        tone: 'good',
+                      }
+                    : { text: r.error, tone: 'bad' },
+                );
+              })
+            }
+            data-testid="handoff-send"
+          >
+            Send from Orbit
+          </Button>
+        )}
         <Button
           size="sm"
-          variant="primary"
+          variant={sendable ? 'secondary' : 'primary'}
           disabled={working}
           onClick={() =>
             act(async () => {

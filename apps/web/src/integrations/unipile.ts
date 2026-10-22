@@ -66,6 +66,8 @@ export interface Mutual {
   headline?: string;
   url?: string;
   memberId?: string;
+  /** LinkedIn's photo link, for showing only (it expires) */
+  pictureUrl?: string;
 }
 
 export interface CallOpts {
@@ -214,7 +216,7 @@ export async function linkedInConnections(
 }
 
 interface MutualResponse {
-  mutuals?: { name?: string; headline?: string; url?: string; member_id?: string }[];
+  mutuals?: { name?: string; headline?: string; url?: string; member_id?: string; picture_url?: string }[];
   count?: number;
 }
 
@@ -230,7 +232,13 @@ export async function mutualConnections(
     ok: true,
     value: (r.value.mutuals ?? [])
       .filter((m) => m.name)
-      .map((m) => ({ name: m.name!, headline: m.headline, url: m.url, memberId: m.member_id })),
+      .map((m) => ({
+        name: m.name!,
+        headline: m.headline,
+        url: m.url,
+        memberId: m.member_id,
+        pictureUrl: m.picture_url?.startsWith('https://') ? m.picture_url : undefined,
+      })),
   };
 }
 

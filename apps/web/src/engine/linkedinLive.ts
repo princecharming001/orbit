@@ -86,10 +86,92 @@ async function saveAccount(
   return row;
 }
 
-// how the hosted sign-in is waited on; tests shorten it
-let poll = { everyMs: 2000, tries: 150 };
+// how the hosted sign-in is waited on; tests shorten it. LinkedIn may ask the student to approve the sign-in in its
+// app, and Unipile reports the new account a while after its window closes, so Orbit keeps waiting for 15 minutes.
+let poll = { everyMs: 2000, tries: 450 };
 export function setLivePollForTests(p: { everyMs: number; tries: number } | undefined): void {
-  poll = p ?? { everyMs: 2000, tries: 150 };
+  poll = p ?? { everyMs: 2000, tries: 450 };
+}
+
+/** Where connecting and reading LinkedIn stands, for the banner every page shows while it runs. */
+export interface LinkedInProgress {
+  phase: 'signin' | 'finishing' | 'reading' | 'analyzing' | 'done' | 'failed';
+  /** connections read so far, or people added */
+  count?: number;
+  message?: string;
+  at: number;
+}
+let progress: LinkedInProgress | undefined;
+const progressListeners = new Set<() => void>();
+export function linkedInProgress(): LinkedInProgress | undefined {
+  return progress;
+}
+export function subscribeLinkedInProgress(fn: () => void): () => void {
+  progressListeners.add(fn);
+  return () => progressListeners.delete(fn);
+}
+function setProgress(p: Omit<LinkedInProgress, 'at'> | undefined): void {
+  progress = p && { ...p, at: Date.now() };
+  for (const fn of progressListeners) fn();
+}
+export function clearLinkedInProgress(): void {
+  setProgress(undefined);
+}
+
+/** A sign-in that was started and not finished, kept so a reload picks the wait back up. */
+const PENDING_KEY = 'orbit.linkedin.pending';
+const PENDING_MAX_MS = 15 * 60_000;
+function savePending(userId: string, ref: string | undefined): void {
+  try {
+    if (ref) localStorage.setItem(PENDING_KEY, JSON.stringify({ userId, ref, at: Date.now() }));
+    else localStorage.removeItem(PENDING_KEY);
+  } catch {
+    // storage may be off; the wait then only lasts this visit
+  }
+}
+function readPending(userId: string): string | undefined {
+  try {
+    const v = JSON.parse(localStorage.getItem(PENDING_KEY) ?? 'null') as {
+      userId?: string;
+      ref?: string;
+      at?: number;
+    } | null;
+    if (!v?.ref || v.userId !== userId || !v.at || Date.now() - v.at > PENDING_MAX_MS) return undefined;
+    return v.ref;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * A sign-in started before a reload: wait for Unipile's report of the account in the background, then finish
+ * connecting and read the connections. Does nothing when no sign-in is pending.
+ */
+export async function resumeLinkedInConnect(user: User): Promise<LiveConnectResult | undefined> {
+  if (isServerUser(user.id) || usesMockConnectors(user.id) || !unipileConfigured()) return undefined;
+  const ref = readPending(user.id);
+  if (!ref) return undefined;
+  if (isConnected(await liveLinkedInAccount(user.id))) {
+    savePending(user.id, undefined);
+    return undefined;
+  }
+  setProgress({ phase: 'finishing' });
+  for (let i = 0; i < poll.tries; i++) {
+    const st = await linkedInConnectStatus(ref);
+    if (st.ok && st.value.status === 'connected' && st.value.accountId) {
+      savePending(user.id, undefined);
+      return finishConnect(user, st.value.accountId, st.value.token, {});
+    }
+    if (st.ok && st.value.status === 'error') break;
+    if (!readPending(user.id)) break;
+    await sleep(poll.everyMs);
+  }
+  savePending(user.id, undefined);
+  setProgress({
+    phase: 'failed',
+    message: 'LinkedIn sign-in did not finish. Turn LinkedIn on again in Settings.',
+  });
+  return undefined;
 }
 
 const sleep = (ms: number, signal?: AbortSignal) =>
@@ -134,46 +216,60 @@ export async function connectLinkedInLive(
         reason: 'error',
         message: 'Your browser blocked the LinkedIn window. Allow pop-ups for Orbit and try again.',
       };
-    let closedChecks = 0;
+    savePending(user.id, start.value.ref);
+    setProgress({ phase: 'signin' });
     for (let i = 0; i < poll.tries && !accountId; i++) {
       await sleep(poll.everyMs, opts.signal);
       if (opts.signal?.aborted) break;
+      // the window closed: LinkedIn may still be waiting on the student's approval in its app, and Unipile reports
+      // the new account a little after its success page closes, so Orbit keeps waiting
+      if (win.closed && progress?.phase === 'signin') setProgress({ phase: 'finishing' });
       const st = await linkedInConnectStatus(start.value.ref, { signal: opts.signal });
       if (st.ok && st.value.status === 'connected' && st.value.accountId) {
         accountId = st.value.accountId;
         accessToken = st.value.token;
       } else if (st.ok && st.value.status === 'error') {
         closeQuietly(win);
-        return {
-          ok: false,
-          reason: 'error',
-          message: st.value.message ?? 'LinkedIn sign-in did not finish.',
-        };
+        return failed(user.id, st.value.message ?? 'LinkedIn sign-in did not finish.');
       } else if (!st.ok && st.reason === 'unconfigured') {
         closeQuietly(win);
+        savePending(user.id, undefined);
+        setProgress(undefined);
         return { ok: false, reason: 'unconfigured', message: LIVE_SOON };
       }
-      // the window closed: Unipile's report of the new account can land a few seconds after it (the success page
-      // closes itself), so keep looking for about 20 seconds before calling it cancelled
-      if (!accountId && win.closed && ++closedChecks > 10)
-        return {
-          ok: false,
-          reason: 'cancelled',
-          message: 'The LinkedIn window was closed before sign-in finished.',
-        };
     }
     closeQuietly(win);
-    if (opts.signal?.aborted)
+    if (opts.signal?.aborted) {
+      savePending(user.id, undefined);
+      setProgress(undefined);
       return { ok: false, reason: 'cancelled', message: 'Stopped connecting LinkedIn.' };
+    }
     if (!accountId)
-      return win.closed
-        ? {
-            ok: false,
-            reason: 'cancelled',
-            message: 'The LinkedIn window was closed before sign-in finished.',
-          }
-        : { ok: false, reason: 'error', message: 'LinkedIn sign-in timed out. Try again.' };
+      return failed(
+        user.id,
+        win.closed
+          ? 'LinkedIn sign-in did not finish. If LinkedIn asked you to approve the sign-in in its app, do that, then turn LinkedIn on again.'
+          : 'LinkedIn sign-in timed out. Try again.',
+      );
+    savePending(user.id, undefined);
   }
+  if (!accountId) return failed(user.id, 'LinkedIn sign-in did not finish. Try again.');
+  return finishConnect(user, accountId, accessToken, opts);
+}
+
+function failed(userId: string, message: string): LiveConnectResult {
+  savePending(userId, undefined);
+  setProgress({ phase: 'failed', message });
+  return { ok: false, reason: 'error', message };
+}
+
+/** The account is linked: save it, take the student's photo, read their connections, then look for who to meet. */
+async function finishConnect(
+  user: User,
+  accountId: string,
+  accessToken: string | undefined,
+  opts: { onProgress?: (count: number) => void; signal?: AbortSignal },
+): Promise<LiveConnectResult> {
   await saveAccount(user.id, {
     externalAccountId: accountId,
     accessToken,
@@ -188,6 +284,7 @@ export async function connectLinkedInLive(
   if (r.ok && !usesMockConnectors(user.id))
     void import('./enrich').then((m) => m.enrichFromLinkedIn(user)).catch(() => undefined);
   if (r.ok) return { ok: true, rows: r.rows, added: r.added };
+  setProgress({ phase: 'failed', message: r.message });
   return {
     ok: false,
     reason: r.reason === 'unconfigured' ? 'unconfigured' : 'error',
@@ -276,6 +373,7 @@ export async function syncLinkedInLive(
   } catch (e) {
     // something LinkedIn sent that Orbit could not read: say so on the row instead of failing silently
     const message = `The sync stopped partway (${e instanceof Error ? e.message : 'unexpected answer'}). Try Sync now.`;
+    setProgress({ phase: 'failed', message });
     const row = await liveLinkedInAccount(user.id);
     if (row) await db.integrations.update(row.id, { lastError: message });
     return { ok: false, reason: 'error', message };
@@ -302,14 +400,19 @@ async function syncLinkedInLiveOnce(
     return { ok: true, rows, added: 0, updated: 0, recommended: 0 };
   }
   let conns: LiveConnection[];
+  setProgress({ phase: 'reading', count: 0 });
+  const reading = (n: number) => {
+    setProgress({ phase: 'reading', count: n });
+    opts.onProgress?.(n);
+  };
   if (usesMockConnectors(user.id)) {
     conns = await mockLinkedInConnections(user.id, opts.now);
-    opts.onProgress?.(conns.length);
+    reading(conns.length);
   } else {
     const pulled = await linkedInConnections(row.externalAccountId!, {
       token: row.accessToken,
       signal: opts.signal,
-      onProgress: opts.onProgress,
+      onProgress: reading,
     });
     // a student who connected before photos were kept gets theirs now
     // (in the background: the sync does not wait on it)
@@ -318,10 +421,12 @@ async function syncLinkedInLiveOnce(
     if (!pulled.ok) {
       if (pulled.reason === 'unconfigured') return { ok: false, reason: 'unconfigured', message: LIVE_SOON };
       await db.integrations.update(row.id, { status: 'error', lastError: pulled.message });
+      setProgress({ phase: 'failed', message: pulled.message });
       return { ok: false, reason: 'error', message: pulled.message };
     }
     conns = pulled.value;
   }
+  setProgress({ phase: 'analyzing', count: conns.length });
   const r = await importLiveConnections(user, conns, (done) => opts.onProgress?.(done));
   const at = (opts.now ?? new Date()).toISOString();
   await db.integrations.update(row.id, {
@@ -342,6 +447,11 @@ async function syncLinkedInLiveOnce(
       .count();
     if (fresh.onboardingCompletedAt) await generateBrief(fresh, 'daily');
   }
+  setProgress({
+    phase: 'done',
+    count: conns.length,
+    message: `${conns.length} connections read${r.imported ? `, ${r.imported} new` : ''}${recommended ? `, ${recommended} people worth meeting` : ''}.`,
+  });
   return { ok: true, rows: conns.length, added: r.imported, updated: r.updated, recommended };
 }
 

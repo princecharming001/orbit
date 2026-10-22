@@ -479,7 +479,8 @@ export function NotesNew() {
         <div className="flex items-center gap-3">
           {person && (
             <span className="inline-flex items-center gap-2 text-[13px] text-ink-2">
-              <Avatar name={person.displayName} id={person.id} size={22} /> {person.displayName}
+              <Avatar name={person.displayName} src={person.photoUrl} id={person.id} size={22} />{' '}
+              {person.displayName}
             </span>
           )}
           <Button

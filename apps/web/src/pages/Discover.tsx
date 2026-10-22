@@ -20,6 +20,7 @@ import {
   type RecommendationDismissReason,
   restoreRecommendation,
   saveRecommendation,
+  unsaveRecommendation,
 } from '../engine/recommend';
 import { isServerUser } from '../integrations/orbitApi';
 import { useSession } from '../state/session';
@@ -298,15 +299,22 @@ function NetworkDiscover({ tabs }: { tabs?: ReactNode }) {
                         'shrink-0 -mr-1 -mt-1 w-8 h-8 rounded-full inline-flex items-center justify-center transition-colors',
                         r.status === 'saved' ? 'text-accent' : 'text-ink-3 hover:text-ink hover:bg-canvas-2',
                       )}
-                      aria-label={r.status === 'saved' ? `${p.firstName} is saved` : 'Save'}
+                      aria-label={r.status === 'saved' ? `Unsave ${p.firstName}` : 'Save'}
                       aria-pressed={r.status === 'saved'}
                       title={
                         r.status === 'saved'
-                          ? 'Saved: stays at the top of Discover'
+                          ? 'Saved: stays at the top of Discover. Click to unsave.'
                           : 'Save: keep them at the top of Discover'
                       }
-                      disabled={r.status === 'saved'}
                       onClick={async () => {
+                        if (r.status === 'saved') {
+                          await unsaveRecommendation(r.id);
+                          toast.push({
+                            text: `Unsaved ${p.firstName}.`,
+                            action: { label: 'Undo', onClick: () => void saveRecommendation(r.id) },
+                          });
+                          return;
+                        }
                         await saveRecommendation(r.id);
                         toast.push({
                           text: `Saved ${p.firstName}. Saved people stay at the top of Discover until you write to them.`,

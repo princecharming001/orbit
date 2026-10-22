@@ -66,6 +66,8 @@ const SCHOOL_SHORT: Record<string, string> = {
 export function schoolShort(school: string | undefined): string {
   const t = (school ?? '').replace(/\s+/g, ' ').trim();
   if (!t) return '';
+  // a company in the school field ("Amma Health Inc.") is not a school: say nothing rather than "Amma Health Inc. junior"
+  if (/\b(inc|llc|ltd|corp|corporation|gmbh|plc|co)\.?$/i.test(t)) return '';
   const known = SCHOOL_SHORT[t.toLowerCase()];
   if (known) return known;
   const uc = t.match(/^(?:The )?University of California,? (?:at )?([A-Z][\w .'-]+)$/);

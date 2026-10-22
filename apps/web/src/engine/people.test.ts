@@ -2,7 +2,7 @@ import type { User } from '@orbit/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { db, wipeDatabase } from '../db/schema';
 import { importConnectionsCsv, importLinkedInExport, importLiveConnections } from './linkedin';
-import { suggestDuplicateMerges, upsertPerson } from './people';
+import { repairHeadlineCompanies, suggestDuplicateMerges, upsertPerson } from './people';
 
 const user: User = {
   id: 'u1',
@@ -355,5 +355,32 @@ describe('a LinkedIn upload from anywhere in the app', () => {
     ]);
     expect(r2).toMatchObject({ imported: 0, updated: 1 });
     expect(await people()).toHaveLength(2);
+  });
+});
+
+describe('a company misread from the end of a LinkedIn headline', () => {
+  it('is read again from the headline’s first part, and nothing else changes', async () => {
+    const misread = await upsertPerson({
+      userId: user.id,
+      displayName: 'Raunaq Akhauri',
+      companyRaw: 'scale',
+      title: 'Product @ Google | Growing Ads for SMBs',
+      headline: 'Product @ Google | Growing Ads for SMBs at scale',
+      source: 'manual',
+    });
+    const fine = await upsertPerson({
+      userId: user.id,
+      displayName: 'Nina Park',
+      companyRaw: 'Stripe',
+      title: 'Engineer',
+      headline: 'Engineer at Stripe',
+      source: 'manual',
+    });
+    expect(await repairHeadlineCompanies(user.id)).toBe(1);
+    const r = (await db.people.get(misread.person.id))!;
+    expect(r.currentOrganizationRaw).toBe('Google');
+    expect(r.currentTitle).toBe('Product');
+    expect((await db.people.get(fine.person.id))!.currentOrganizationRaw).toBe('Stripe');
+    expect(await repairHeadlineCompanies(user.id)).toBe(0);
   });
 });

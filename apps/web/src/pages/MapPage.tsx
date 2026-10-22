@@ -1382,7 +1382,12 @@ export function MapPage() {
                   <ul className="space-y-1.5">
                     {(showAll === title ? list : list.slice(0, 6)).map((d) => (
                       <li key={d.person.id} className="flex items-center gap-2 text-[13px]">
-                        <Avatar name={d.person.displayName} id={d.person.id} size={22} />
+                        <Avatar
+                          name={d.person.displayName}
+                          src={d.person.photoUrl}
+                          id={d.person.id}
+                          size={22}
+                        />
                         <button
                           className={cx('hover:underline truncate text-left', TAP)}
                           onClick={() => setParams({ reach: d.person.id })}

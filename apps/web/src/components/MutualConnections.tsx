@@ -4,10 +4,13 @@
  * not connected live. Looked up once per person per visit to the app.
  */
 import type { Person, User } from '@orbit/core';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { db } from '../db/schema';
 import { type MutualsResult, mutualsFor } from '../engine/linkedinLive';
-import { Avatar, Card } from '../ui';
+import { Avatar, Card, LinkedInMark } from '../ui';
+
+const SHOWN = 6;
 
 const cache = new Map<string, MutualsResult>();
 
@@ -19,6 +22,24 @@ export function resetMutualsCache(): void {
 export function MutualConnections({ user, person }: { user: User; person: Person }) {
   const key = `${user.id}:${person.id}`;
   const [result, setResult] = useState<MutualsResult | undefined>(() => cache.get(key));
+  const [all, setAll] = useState(false);
+  // the photos Orbit keeps for the mutuals it knows, for when LinkedIn sent none
+  const [photos, setPhotos] = useState<Map<string, string>>(new Map());
+  const knownIds = useMemo(
+    () => (result?.mutuals ?? []).map((m) => m.personId).filter((id): id is string => !!id),
+    [result],
+  );
+  useEffect(() => {
+    if (!knownIds.length) return;
+    let live = true;
+    void db.people.bulkGet(knownIds).then((ps) => {
+      if (!live) return;
+      setPhotos(new Map(ps.filter((p) => p?.photoUrl).map((p) => [p!.id, p!.photoUrl!])));
+    });
+    return () => {
+      live = false;
+    };
+  }, [knownIds]);
   useEffect(() => {
     const hit = cache.get(key);
     if (hit) {
@@ -26,6 +47,7 @@ export function MutualConnections({ user, person }: { user: User; person: Person
       return;
     }
     setResult(undefined);
+    setAll(false);
     const ctrl = new AbortController();
     let live = true;
     mutualsFor(user, person, { signal: ctrl.signal })
@@ -59,31 +81,51 @@ export function MutualConnections({ user, person }: { user: User; person: Person
         <div className="font-medium mb-2">
           Mutual connections <span className="text-ink-3 font-normal">· {mutuals.length}</span>
         </div>
-        <ul className="space-y-1.5">
-          {mutuals.slice(0, 6).map((m) => (
-            <li key={`${m.name}:${m.memberId ?? ''}`} className="flex items-center gap-2 text-[13px] min-w-0">
-              <Avatar name={m.name} id={m.personId ?? m.name} size={22} />
-              <div className="min-w-0">
-                {m.personId ? (
-                  <Link
-                    to={`/people/${m.personId}`}
-                    className="font-medium hover:underline"
-                    data-testid="person-mutual"
-                  >
-                    {m.name}
-                  </Link>
-                ) : (
-                  <span className="font-medium" data-testid="person-mutual">
-                    {m.name}
-                  </span>
-                )}
+        <ul className="space-y-2">
+          {(all ? mutuals : mutuals.slice(0, SHOWN)).map((m) => (
+            <li
+              key={`${m.name}:${m.memberId ?? ''}`}
+              className="flex items-center gap-2.5 text-[13px] min-w-0"
+            >
+              <Avatar
+                name={m.name}
+                src={m.pictureUrl ?? (m.personId ? photos.get(m.personId) : undefined)}
+                id={m.personId ?? m.name}
+                size={30}
+              />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1.5 min-w-0">
+                  {m.personId ? (
+                    <Link
+                      to={`/people/${m.personId}`}
+                      className="font-medium hover:underline truncate"
+                      data-testid="person-mutual"
+                    >
+                      {m.name}
+                    </Link>
+                  ) : (
+                    <span className="font-medium truncate" data-testid="person-mutual">
+                      {m.name}
+                    </span>
+                  )}
+                  {m.url && /linkedin\.com/i.test(m.url) && (
+                    <LinkedInMark url={m.url} name={m.name} testId="person-mutual-linkedin" />
+                  )}
+                </div>
                 {m.headline && <div className="text-[12px] text-ink-3 truncate">{m.headline}</div>}
               </div>
             </li>
           ))}
         </ul>
-        {mutuals.length > 6 && (
-          <p className="mt-1.5 text-[12px] text-ink-3">And {mutuals.length - 6} more.</p>
+        {mutuals.length > SHOWN && (
+          <button
+            type="button"
+            className="mt-2 text-[12px] font-medium text-ink-2 hover:text-ink underline-offset-2 hover:underline"
+            onClick={() => setAll((v) => !v)}
+            data-testid="person-mutuals-more"
+          >
+            {all ? 'Show fewer' : `Show all ${mutuals.length}`}
+          </button>
         )}
         <p className="mt-2 text-[12px] text-ink-3">
           {result.ok && result.source === 'demo'

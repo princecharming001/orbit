@@ -96,7 +96,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
               )}
             >
               {r.kind === 'person' && r.person ? (
-                <Avatar name={r.label} id={r.id} size={26} />
+                <Avatar name={r.label} src={r.person.photoUrl} id={r.id} size={26} />
               ) : (
                 <span className="w-[26px] h-[26px] rounded-md bg-accent-soft text-accent inline-flex items-center justify-center text-[12px] font-semibold">
                   →

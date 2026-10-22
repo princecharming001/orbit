@@ -670,6 +670,39 @@ export async function revertHandoff(user: User, messageId: string): Promise<bool
   return !!m;
 }
 
+/** Orbit can send this message itself: Gmail with the send permission, or live LinkedIn knowing who they are. */
+export async function canSendFromOrbit(user: User, msg: Pick<OutboundMessage, 'channel' | 'personId'>) {
+  if (msg.channel === 'gmail') return googleSendActive(user.id);
+  if (msg.channel !== 'linkedin') return false;
+  return linkedInSendActive(user, await db.people.get(msg.personId));
+}
+
+/**
+ * A message the student opened in their mail app or LinkedIn, sent from Orbit after all: it goes back to a draft and
+ * is approved again with the same text, so it is checked and sent like any other. When that cannot go out, it waits
+ * as a draft with the reason.
+ */
+export async function sendHandedOffFromOrbit(
+  user: User,
+  messageId: string,
+  now = new Date(),
+): Promise<ApproveResult> {
+  const m = await db.outbound.get(messageId);
+  if (!m || m.userId !== user.id || m.status !== 'handed_off')
+    return { ok: false, error: 'This message is not waiting to be sent.' };
+  if (!(await canSendFromOrbit(user, m)))
+    return {
+      ok: false,
+      error:
+        m.channel === 'gmail'
+          ? 'Connect Google with permission to send first.'
+          : 'Connect LinkedIn live to send it from Orbit.',
+    };
+  const text = m.bodyFinal ?? m.bodyDraft;
+  await revertHandoff(user, messageId);
+  return approveAndSend(user, messageId, text, m.subject, now);
+}
+
 /** Where a handed-off message opens again (the mail app or LinkedIn), for the "Open again" button. */
 export async function handoffLink(
   user: User,

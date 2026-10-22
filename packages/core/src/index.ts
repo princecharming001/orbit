@@ -1,4 +1,5 @@
 export * from './demo/seed';
+export * from './drafts/coach';
 export * from './drafts/compose';
 export { expandShorthand, promiseText } from './drafts/phrasing';
 export * from './drafts/sector';
@@ -20,6 +21,7 @@ export * from './graph/route';
 export * from './graph/ties';
 export * from './labels';
 export * from './linkedin/csv';
+export * from './linkedin/headline';
 export * from './notes/conflicts';
 export * from './notes/extract';
 export * from './pipeline/cadence';

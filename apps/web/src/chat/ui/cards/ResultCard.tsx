@@ -15,7 +15,7 @@ import { LogoText } from '../../../components/CompanyLogo';
 import { DraftEditor, OutboxStatus } from '../../../components/DraftEditor';
 import { SuggestionCard } from '../../../components/SuggestionCard';
 import { db } from '../../../db/schema';
-import { Avatar, Button, Chip, cx, relDate } from '../../../ui';
+import { Avatar, Button, Chip, cx, LinkedInMark, relDate } from '../../../ui';
 import type { ResultEnvelope } from '../../types';
 import { Markdown } from '../Markdown';
 import type { ToolBlock } from '../threadStore';
@@ -609,33 +609,49 @@ function Envelope({ env, block, actions }: { env: ResultEnvelope; block: ToolBlo
           <CardHead title={title ?? env.summary} href={env.href} />
           <ul className="divide-y divide-line-2" data-testid="list-rows">
             {items.slice(0, 15).map((it, i) => (
-              <li key={i} className="py-1.5 flex items-start gap-2 min-w-0">
-                {it.chip && (
-                  <Chip tone="neutral" className="mt-0.5">
-                    {it.chip}
-                  </Chip>
+              <li
+                key={i}
+                className={cx('flex min-w-0 gap-3', it.avatar ? 'items-center py-2.5' : 'items-start py-1.5')}
+              >
+                {it.avatar ? (
+                  <Avatar name={it.avatar.name} src={it.avatar.src} id={`${it.avatar.name}-${i}`} size={36} />
+                ) : (
+                  it.chip && (
+                    <Chip tone="neutral" className="mt-0.5">
+                      {it.chip}
+                    </Chip>
+                  )
                 )}
                 <div className="min-w-0 flex-1 text-[13.5px]">
-                  {it.href ? (
-                    <Link to={it.href} className="hover:underline">
-                      {it.text}
-                    </Link>
-                  ) : (
-                    <span>{it.text}</span>
-                  )}
-                  {it.links.map((l) => (
-                    <a
-                      key={l.url}
-                      href={l.url}
-                      target="_blank"
-                      rel="noreferrer noopener"
-                      className="ml-1 align-super text-[10px] text-ink underline decoration-[#cfcdc9] underline-offset-4 hover:decoration-ink"
-                    >
-                      {l.label}
-                    </a>
-                  ))}
-                  {it.sub && <div className="text-[12.5px] text-ink-3">{it.sub}</div>}
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    {it.href ? (
+                      <Link to={it.href} className="truncate font-medium hover:underline">
+                        {it.text}
+                      </Link>
+                    ) : (
+                      <span className={cx('truncate', it.avatar && 'font-medium')}>{it.text}</span>
+                    )}
+                    {it.links.map((l) =>
+                      /linkedin\.com/i.test(l.url) ? (
+                        // a LinkedIn profile: its small blue mark beside the name, not a word in the line
+                        <LinkedInMark key={l.url} url={l.url} name={it.text} testId="list-linkedin" />
+                      ) : (
+                        <a
+                          key={l.url}
+                          href={l.url}
+                          target="_blank"
+                          rel="noreferrer noopener"
+                          className="inline-flex shrink-0 items-center gap-0.5 text-[11.5px] text-ink-3 hover:text-ink"
+                        >
+                          {l.label}
+                          <ArrowUpRight size={11} />
+                        </a>
+                      ),
+                    )}
+                  </div>
+                  {it.sub && <div className="line-clamp-2 text-[12.5px] text-ink-3">{it.sub}</div>}
                 </div>
+                {it.avatar && it.chip && <span className="label-mono shrink-0 !text-[10px]">{it.chip}</span>}
               </li>
             ))}
           </ul>

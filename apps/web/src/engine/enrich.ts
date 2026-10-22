@@ -15,6 +15,7 @@ import {
   linkedInSlug,
   normalizeLinkedInUrl,
   PERSONAL_EMAIL_DOMAINS,
+  roleFromHeadline,
   stripDiacritics,
 } from '@orbit/core';
 import { db } from '../db/schema';
@@ -62,10 +63,10 @@ export function pickMatch(
   return sure.length === 1 ? sure[0] : undefined;
 }
 
-/** "Product Manager at Stripe" → its title and company, when the headline says it plainly. */
+/** "Product Manager at Stripe" → its title and company, when the headline's first part says it plainly. */
 function titleAndCompany(headline: string | undefined): { title?: string; company?: string } {
-  const m = headline?.match(/^(.{2,80}?)\s+(?:at|@)\s+([^|·,]{2,60})/i);
-  return m ? { title: m[1]!.trim(), company: m[2]!.trim() } : {};
+  const { title, org } = roleFromHeadline(headline);
+  return org ? { title, company: org } : {};
 }
 
 type Tried = Record<string, string>;

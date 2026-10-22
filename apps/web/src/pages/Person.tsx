@@ -25,7 +25,7 @@ import {
   tieBand,
 } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { ChevronDown, ExternalLink, Linkedin, Mail, Trash2 } from 'lucide-react';
+import { ChevronDown, ExternalLink, Linkedin, Mail, Plus, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { runApproval } from '../components/approve';
@@ -404,13 +404,37 @@ export function PersonPage() {
               </h1>
               {person.isAlumni && <Chip tone="accent">{user.school} alum</Chip>}
               {chat && (
-                <Chip>
+                // the stage, as a chip that opens the stages to move the chat to
+                <label
+                  className="relative inline-flex items-center gap-1 rounded-full border border-line bg-canvas px-2 h-[22px] text-[12px] font-medium leading-none whitespace-nowrap shrink-0 text-ink-2 cursor-pointer hover:bg-canvas-2 hover:text-ink focus-within:ring-2 focus-within:ring-accent/40"
+                  title="Move this chat to another stage"
+                  data-testid="person-stage"
+                >
                   <span
                     className="w-1.5 h-1.5 rounded-full"
                     style={{ background: STAGE_COLOR[chat.stage] }}
                   />
                   {STAGE_LABELS[chat.stage]}
-                </Chip>
+                  <ChevronDown size={12} aria-hidden className="text-ink-3" />
+                  <select
+                    value={chat.stage}
+                    onChange={async (e) => {
+                      const to = e.target.value as CoffeeChat['stage'];
+                      // a chat still ahead is not done yet: ask before drafting a thank-you for it
+                      const r = await moveChatGuarded(user, chat, to, 'user:select');
+                      if (r.outcome === 'meeting_ahead') setEarly(r.meetingAt);
+                      else if (r.outcome === 'applied' && r.needsTime) setAsking(true);
+                    }}
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                    aria-label="Chat stage"
+                  >
+                    {Object.entries(STAGE_LABELS).map(([k, v]) => (
+                      <option key={k} value={k}>
+                        {v}
+                      </option>
+                    ))}
+                  </select>
+                </label>
               )}
             </div>
             <p className="text-ink-2 mt-0.5 flex items-center gap-2 min-w-0">
@@ -574,38 +598,6 @@ export function PersonPage() {
             </Button>
           </div>
           <div className="contents text-[12px]">
-            {chat && (
-              <label className="inline-flex items-center gap-1.5 text-ink-3 mr-1">
-                Stage
-                <Select
-                  value={chat.stage}
-                  onChange={async (e) => {
-                    const to = e.target.value as CoffeeChat['stage'];
-                    // a chat still ahead is not done yet: ask before drafting a thank-you for it
-                    const r = await moveChatGuarded(user, chat, to, 'user:select');
-                    if (r.outcome === 'meeting_ahead') setEarly(r.meetingAt);
-                    else if (r.outcome === 'applied' && r.needsTime) setAsking(true);
-                  }}
-                  className="h-8 text-[12px] text-ink"
-                  aria-label="Chat stage"
-                  title="Move this chat to another stage"
-                >
-                  {Object.entries(STAGE_LABELS).map(([k, v]) => (
-                    <option key={k} value={k}>
-                      {v}
-                    </option>
-                  ))}
-                </Select>
-              </label>
-            )}
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => nav(`/notes/new?person=${person.id}`)}
-              title={`Add notes from a conversation with ${person.firstName}`}
-            >
-              Add note
-            </Button>
             {/* the less frequent actions wait behind More, so the header leads with writing to them */}
             <details className="relative group/more" data-testid="person-more">
               <summary
@@ -861,6 +853,21 @@ export function PersonPage() {
           />
           {tab === 'timeline' && (
             <ol className="relative border-l border-line ml-3 space-y-4">
+              {/* adding a note sits at the top of the timeline, where it will land */}
+              <li className="pl-5">
+                <Link
+                  to={`/notes/new?person=${person.id}`}
+                  className="group/add inline-flex items-center gap-2 text-[13px] text-ink-3 hover:text-ink"
+                  title={`Add notes from a conversation with ${person.firstName}`}
+                  aria-label="Add note"
+                  data-testid="person-add-note"
+                >
+                  <span className="absolute -left-[9px] w-[18px] h-[18px] rounded-full bg-canvas border border-dashed border-ink-3/60 inline-flex items-center justify-center group-hover/add:border-ink group-hover/add:bg-ink group-hover/add:text-canvas">
+                    <Plus size={11} aria-hidden />
+                  </span>
+                  Add a note
+                </Link>
+              </li>
               {timeline.length === 0 && <li className="pl-5 text-ink-3 text-[13px]">No interactions yet.</li>}
               {timeline.slice(0, 100).map((t, i) => (
                 <li key={i} className="pl-5">
@@ -982,7 +989,7 @@ export function PersonPage() {
                     to={`/people/${other.id}`}
                     className="flex items-center gap-3 border border-line rounded-lg p-3 hover:bg-canvas-2/60"
                   >
-                    <Avatar name={other.displayName} id={other.id} size={30} />
+                    <Avatar name={other.displayName} src={other.photoUrl} id={other.id} size={30} />
                     <div className="min-w-0 flex-1">
                       <div className="text-[13.5px] font-medium">
                         {other.displayName}{' '}

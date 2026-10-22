@@ -1,7 +1,7 @@
-import type { StyleCard, TargetCompany, User, RecruitingGoals as UserGoals } from '@orbit/core';
-import { defaultStyleCard, STYLE_SOURCE_WORDS, TARGET_STATUS_LABELS, yearLabel } from '@orbit/core';
+import type { TargetCompany, RecruitingGoals as UserGoals } from '@orbit/core';
+import { TARGET_STATUS_LABELS, yearLabel } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Check, Download, FileText, Trash2, X } from 'lucide-react';
+import { Check, Download, FileText, Trash2 } from 'lucide-react';
 import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { Navigate, NavLink, useNavigate, useParams } from 'react-router-dom';
 import { chatMode } from '../chat/agent/mode';
@@ -12,7 +12,7 @@ import { LinkedInImportButton } from '../components/LinkedInImport';
 import { openMorningBrief } from '../components/MorningBrief';
 import { CalcomRow, FathomRow, MeetingAppRow } from '../components/NotesAppRows';
 import { ResumeFacetList } from '../components/ResumeFacets';
-import { SchedulingLinkField } from '../components/SchedulingLinkField';
+import { OutreachCoach } from '../components/settings/OutreachCoach';
 import { TextsRow } from '../components/TextsRow';
 import { WeeklyTargetSlider } from '../components/WeeklyTargetSlider';
 import { db } from '../db/schema';
@@ -34,31 +34,18 @@ import {
   updateLimits,
   updateProfile,
 } from '../engine/settings';
-import {
-  addStyleSample,
-  applyStylePreset,
-  learnStyle,
-  removeStyleSample,
-  sampleCounts,
-  updateStyle,
-} from '../engine/style';
 import { addTargetCompanies } from '../engine/targets';
-import { fmtFailureTime, MODEL, testApiKey } from '../integrations/anthropic';
+import { fmtFailureTime, MODEL } from '../integrations/anthropic';
 import { currentGoogleToken, googleClientId } from '../integrations/google';
 import { isAccountMode, isServerUser } from '../integrations/orbitApi';
 import {
   DEFAULT_DAILY_REQUEST_CAP,
-  DEFAULT_DAILY_TOKEN_CAP,
   envGoogleClientId,
-  type LlmFeature,
-  llmFeatures,
   readPrefs,
   subscribePrefs,
   todaysLlmUsage,
-  updatePrefs,
   writePrefs,
 } from '../integrations/prefs';
-import { sharedClaudeUrl } from '../integrations/shared-claude';
 import { useSession } from '../state/session';
 import {
   Button,
@@ -157,7 +144,7 @@ export function SettingsPage() {
           {section === 'profile' && <Profile />}
           {section === 'goals' && <Goals />}
           {section === 'integrations' && <Integrations />}
-          {section === 'style' && <Style />}
+          {section === 'style' && <StyleCoach />}
           {section === 'limits' && <Limits />}
           {section === 'privacy' && <Privacy />}
           {section === 'account' && <AccountSection />}
@@ -811,7 +798,6 @@ function Integrations() {
       </RowGroup>
       <RowGroup title="Scheduling">
         <CalcomRow user={user} />
-        <BookingLinkRow user={user} />
       </RowGroup>
       <RowGroup title="About you">
         <IntegrationRow
@@ -880,196 +866,44 @@ function Integrations() {
   );
 }
 
-const AI_FEATURES: { key: LlmFeature; label: string; sends: string }[] = [
-  {
-    key: 'drafts',
-    label: 'Write drafts',
-    sends:
-      'When Orbit drafts a message, your profile and what Orbit knows about the recipient (name, role, saved facts, the last message in the thread) are sent to Anthropic.',
-  },
-  {
-    key: 'emailTriage',
-    label: 'Read synced email',
-    sends:
-      'The text of emails is sent to Anthropic to sort them: threads Orbit cannot place on its own, and each new message in a conversation with someone you are networking with. Off by default.',
-  },
-  {
-    key: 'notes',
-    label: 'Extract meeting notes',
-    sends: 'The full text of each note or transcript you add is sent to Anthropic.',
-  },
-  { key: 'resume', label: 'Parse your resume', sends: 'Your resume text is sent to Anthropic.' },
-  {
-    key: 'summaries',
-    label: 'Summarize people',
-    sends: "A person's saved facts and recent interactions are sent to Anthropic.",
-  },
-  {
-    key: 'chat',
-    label: 'Chat on the home page',
-    sends:
-      'What you type in the chat, a short summary of your day and pipeline, and whatever Claude looks up with its tools (people, drafts, notes you ask about) are sent to Anthropic. On by default once a key is saved; without it the chat understands a fixed set of commands.',
-  },
-];
-
+/** Claude is built in: the row only says so, with today's use. A key saved by an older build can be removed. */
 function ClaudeCard() {
   const tz = useSession().user?.timezone;
-  const sources = useSources(useSession().user?.id ?? '');
   const [prefs, setPrefs] = useState(readPrefs);
-  const [apiKey, setApiKey] = useState(prefs.anthropicApiKey ?? '');
-  const [keyStatus, setKeyStatus] = useState<string>();
   // Stay in step with changes made by Claude calls and by Orbit open in another tab.
   useEffect(() => subscribePrefs(setPrefs), []);
-  const update = (p: Parameters<typeof writePrefs>[0]) => setPrefs(writePrefs(p));
-  const features = llmFeatures(prefs);
   const usage = todaysLlmUsage(prefs);
   const reqCap = prefs.llmDailyRequestCap ?? DEFAULT_DAILY_REQUEST_CAP;
-  const tokCap = prefs.llmDailyTokenCap ?? DEFAULT_DAILY_TOKEN_CAP;
   const keySaved = !!prefs.anthropicApiKey;
-  // without a key, the chat can still run on Orbit's shared access, so its switch stays usable
-  const shared = !keySaved && !!sharedClaudeUrl();
   return (
     <IntegrationRow
       mark={<AppMark logo="claude.ai">AI</AppMark>}
       name="Claude"
       status={
-        keySaved ? (
-          <RowStatus>
-            <Check size={12} /> Key saved.
-          </RowStatus>
-        ) : undefined
+        <RowStatus>
+          <Check size={12} /> {keySaved ? 'Key saved.' : 'Built in.'}
+        </RowStatus>
       }
-      line={
-        shared
-          ? 'Included for the chat; your own key lifts the daily limit'
-          : 'Optional: Orbit writes drafts on its own without it'
-      }
+      line="Writes your drafts and runs the chat"
     >
-      <div className="space-y-2">
-        <details className="text-[12.5px]" open={!!keyStatus}>
-          <summary className="cursor-pointer text-ink-3 hover:text-ink w-fit">
-            {keySaved ? 'Change or remove your key' : 'Use your own Anthropic key'}
-          </summary>
-          <div className="mt-2 flex flex-wrap gap-2">
-            <Input
-              type="password"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder="sk-ant-…"
-              className="max-w-sm flex-1 min-w-0"
-              aria-label="Anthropic API key"
-            />
-            <Button
-              size="sm"
-              disabled={!apiKey.trim() && !keySaved}
-              onClick={async () => {
-                update({ anthropicApiKey: apiKey.trim() || undefined });
-                if (!apiKey.trim()) return setKeyStatus('Removed.');
-                setKeyStatus('Testing…');
-                const r = await testApiKey();
-                setPrefs(readPrefs());
-                setKeyStatus(r.ok ? 'Works.' : r.error);
-              }}
-            >
-              {apiKey.trim() || !keySaved ? 'Save and test' : 'Remove key'}
-            </Button>
-          </div>
-          {keyStatus && (
-            <p className={cx('mt-1', keyStatus === 'Works.' ? 'text-good' : 'text-ink-3')}>{keyStatus}</p>
-          )}
-          {shared && (
-            <p className="mt-1 text-ink-3" data-testid="ai-shared-note">
-              Until you add a key, the chat uses Orbit's shared Claude access, with a daily limit.
-            </p>
-          )}
-        </details>
-        <details className="text-[12.5px]" data-testid="ai-permissions">
-          <summary className="cursor-pointer text-ink-3 hover:text-ink w-fit">What Claude may read</summary>
-          <fieldset className="mt-2 space-y-1.5" disabled={!keySaved && !shared} data-testid="ai-usage">
-            <legend className="sr-only">What Claude may read</legend>
-            {/* reading synced email only exists where Google does */}
-            {AI_FEATURES.filter((f) => f.key !== 'emailTriage' || sources.google).map((f) => (
-              <label
-                key={f.key}
-                className={cx(
-                  'flex items-start gap-2 text-[13px]',
-                  !keySaved && !(shared && f.key === 'chat') && 'opacity-60',
-                )}
-                title={f.sends}
-              >
-                <input
-                  type="checkbox"
-                  className="mt-0.5"
-                  disabled={!keySaved && !(shared && f.key === 'chat')}
-                  data-testid={`ai-feature-${f.key}`}
-                  checked={features[f.key]}
-                  onChange={(e) => {
-                    const on = e.target.checked;
-                    // only this one switch changes; the others keep whatever is stored, even if set in another tab
-                    setPrefs(
-                      updatePrefs((cur) => ({ ...cur, llmFeatures: { ...llmFeatures(cur), [f.key]: on } })),
-                    );
-                  }}
-                />
-                <span>
-                  <span className="font-medium text-ink">{f.label}</span>
-                  <span className="block text-[12px] text-ink-3">{f.sends}</span>
-                </span>
-              </label>
-            ))}
-          </fieldset>
-        </details>
+      <div className="space-y-1">
         <p className="text-[12px] text-ink-3" data-testid="ai-chat-row">
-          Chat: {chatMode() === 'llm' ? `Claude, ${MODEL}` : 'Orbit commands only'} · today {usage.requests}{' '}
-          of {reqCap} requests
+          {chatMode() === 'llm' ? `Claude, ${MODEL}` : 'Orbit commands only'} · today {usage.requests} of{' '}
+          {reqCap} requests
+          {keySaved && (
+            <>
+              {' · '}
+              <button
+                type="button"
+                className="underline underline-offset-2 hover:text-ink"
+                onClick={() => setPrefs(writePrefs({ anthropicApiKey: undefined }))}
+                data-testid="ai-remove-key"
+              >
+                Use built-in instead of your key
+              </button>
+            </>
+          )}
         </p>
-        <details className="text-[12.5px]" data-testid="ai-advanced">
-          <summary className="cursor-pointer text-ink-3 hover:text-ink w-fit">
-            Daily limits and privacy
-          </summary>
-          <p className="text-[12px] text-ink-3 mt-2">
-            Model: {MODEL}. The key is kept in this browser only, separate from your Orbit data and never in
-            the export. Any script running on this page could read it, so Orbit only allows its own code
-            {sources.google ? " and Google's sign-in script" : ''} to run here.
-          </p>
-          <div className="mt-3 grid @[40rem]:grid-cols-2 gap-3 max-w-lg items-start">
-            <div>
-              <Label htmlFor="ai-req">Requests per day</Label>
-              <Input
-                id="ai-req"
-                type="number"
-                min={0}
-                value={reqCap}
-                data-testid="ai-cap-requests"
-                onChange={(e) =>
-                  update({ llmDailyRequestCap: Math.max(0, Math.floor(Number(e.target.value) || 0)) })
-                }
-              />
-            </div>
-            <div>
-              <Label htmlFor="ai-tok">Tokens per day</Label>
-              <Input
-                id="ai-tok"
-                type="number"
-                min={0}
-                step={10000}
-                value={tokCap}
-                onChange={(e) =>
-                  update({ llmDailyTokenCap: Math.max(0, Math.floor(Number(e.target.value) || 0)) })
-                }
-              />
-            </div>
-          </div>
-          <p className="text-[12px] text-ink-3 mt-2">
-            Orbit stops calling Claude for the rest of the day at either limit and uses its own drafts
-            instead.
-          </p>
-          <p className="text-[12px] text-ink-3 mt-2" data-testid="ai-usage-today">
-            Today: {usage.requests} of {reqCap} requests,{' '}
-            {(usage.inputTokens + usage.outputTokens).toLocaleString('en-US')} of{' '}
-            {tokCap.toLocaleString('en-US')} tokens.
-          </p>
-        </details>
         {prefs.lastLlmError && (
           <p className="text-[12px] text-bad" data-testid="ai-last-error">
             Last problem, {fmtFailureTime(prefs.lastLlmError.at, tz)}: {prefs.lastLlmError.message} Orbit used
@@ -1081,474 +915,10 @@ function ClaudeCard() {
   );
 }
 
-const FORMALITY_WORDS = (f: number) =>
-  f >= 0.75 ? 'Formal' : f >= 0.5 ? 'Polite' : f >= 0.3 ? 'Friendly' : 'Casual';
-
-const GREETING_CHOICES = ['Hi {first},', 'Hey {first},', 'Hello {first},', '{first},', 'Dear {first},'];
-const SIGNOFF_WORDS = ['Best', 'Thanks', 'Thanks so much', 'Cheers', 'Best regards', 'Kind regards'];
-const AVOID_SUGGESTIONS = [
-  'I hope this email finds you well',
-  'pick your brain',
-  'circle back',
-  'Dear Sir or Madam',
-];
-
-/** A sample first message in the student's style, so every change shows what it does. */
-function stylePreview(card: StyleCard, user: { firstName: string; school?: string }): string {
-  const greet = (card.greetingPatterns[0] ?? 'Hi {first},').replace('{first}', 'Sarah');
-  const c = (a: string, b: string) => (card.contractions ? a : b);
-  const school = user.school?.trim() || 'school';
-  const lines = [
-    `${c("I'm", 'I am')} a junior at ${school} and ${c("I'd", 'I would')} love to hear how you got into product at Notion.`,
-  ];
-  if (card.avgMessageWords >= 80)
-    lines.push(
-      `Your post on onboarding stuck with me, and ${c("I'm", 'I am')} trying to work out which teams to aim for.`,
-    );
-  if (card.avgMessageWords >= 120)
-    lines.push(`I know your time is valuable, so ${c("I'll", 'I will')} keep it to a few questions.`);
-  lines.push(
-    `Would you have 15 minutes next week?${card.exclamationsPerMessage >= 0.5 ? ' Thanks so much!' : ''}`,
-  );
-  if (card.emoji) lines[lines.length - 1] += ' 🙂';
-  const sign = card.signoffs[0] ?? `Best,\n${user.firstName}`;
-  return `${greet}\n\n${lines.join(' ')}\n\n${sign}`;
-}
-
-/** A row of removable chips with a field to add one. */
-function ChipList({
-  items,
-  onChange,
-  placeholder,
-  suggestions = [],
-  testId,
-}: {
-  items: string[];
-  onChange: (items: string[]) => void;
-  placeholder: string;
-  suggestions?: string[];
-  testId: string;
-}) {
-  const [draft, setDraft] = useState('');
-  const add = (v: string) => {
-    const t = v.trim();
-    if (t && !items.some((i) => i.toLowerCase() === t.toLowerCase())) onChange([...items, t]);
-    setDraft('');
-  };
-  return (
-    <div data-testid={testId}>
-      <div className="flex flex-wrap gap-1.5">
-        {items.map((it) => (
-          <span
-            key={it}
-            className="inline-flex items-center gap-1 h-7 pl-2.5 pr-1 rounded-full bg-canvas-2 text-[12.5px]"
-          >
-            {it}
-            <button
-              type="button"
-              className="h-5 w-5 inline-flex items-center justify-center rounded-full text-ink-3 hover:text-ink hover:bg-line-2"
-              onClick={() => onChange(items.filter((x) => x !== it))}
-              aria-label={`Remove ${it}`}
-            >
-              <X size={12} />
-            </button>
-          </span>
-        ))}
-        <input
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              e.preventDefault();
-              add(draft);
-            }
-          }}
-          onBlur={() => draft.trim() && add(draft)}
-          placeholder={placeholder}
-          className="h-7 min-w-[180px] flex-1 bg-transparent text-[13px] outline-none placeholder:text-ink-3"
-          aria-label={placeholder}
-        />
-      </div>
-      {suggestions.filter((sug) => !items.includes(sug)).length > 0 && (
-        <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-[12px] text-ink-3">
-          {suggestions
-            .filter((sug) => !items.includes(sug))
-            .map((sug) => (
-              <button key={sug} type="button" className="hover:text-ink" onClick={() => add(sug)}>
-                + {sug}
-              </button>
-            ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** One labelled line of the style: the label on the left, the control on the right, no box around it. */
-function StyleRow({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
-  return (
-    <div className="grid @[40rem]:grid-cols-[160px_minmax(0,1fr)] gap-x-6 gap-y-1.5 py-3.5">
-      <div>
-        <div className="text-[13.5px] font-medium">{label}</div>
-        {hint && <div className="text-[12px] text-ink-3 mt-0.5">{hint}</div>}
-      </div>
-      <div className="min-w-0">{children}</div>
-    </div>
-  );
-}
-
-function Style() {
+/** How drafts sound: the outreach coach, tuned by telling it what to change. */
+function StyleCoach() {
   const user = useSession().user!;
-  const profile = useLiveQuery(() => db.styles.get(user.id), [user.id]);
-  const settings = useLiveQuery(() => db.settings.get(user.id), [user.id]);
-  const counts = useLiveQuery(() => sampleCounts(user), [user.id, profile?.updatedAt]);
-  const toast = useToast();
-  const [learning, setLearning] = useState(false);
-  const [pasting, setPasting] = useState(false);
-  const [paste, setPaste] = useState('');
-  const card = profile?.card ?? defaultStyleCard(settings?.tonePreset ?? 'warm', user.firstName);
-  const [notes, setNotes] = useState<string>();
-  const set = (patch: Partial<StyleCard>) => void updateStyle(user, patch);
-  const signWord = (card.signoffs[0] ?? '').split('\n')[0]!.replace(/,$/, '');
-  const signName = (card.signoffs[0] ?? '').split('\n').slice(1).join('\n') || user.firstName;
-  const learned = card.builtFromCount > 0;
-  const from = card.sources
-    ? (Object.entries(card.sources) as [keyof typeof STYLE_SOURCE_WORDS, number][])
-        .filter(([, n]) => n > 0)
-        .map(([k, n]) => `${n} ${STYLE_SOURCE_WORDS[k]}`)
-        .join(', ')
-    : `${card.builtFromCount} sent emails`;
-  const learn = async () => {
-    setLearning(true);
-    try {
-      const r = await learnStyle(user);
-      toast.push(
-        r.ok
-          ? { text: `Learned your voice from ${r.learnedFrom} messages.`, tone: 'good' }
-          : { text: r.reason, ttl: 8000 },
-      );
-    } finally {
-      setLearning(false);
-    }
-  };
-  return (
-    <div className="max-w-[720px]" data-testid="style-page">
-      {/* what a first message sounds like right now */}
-      <section className="pb-6">
-        <div className="flex items-baseline justify-between gap-3">
-          <h2 className="text-[15px] font-medium">How your drafts sound</h2>
-          <span className="text-[12px] text-ink-3" data-testid="style-provenance">
-            {learned ? `Learned from ${from}` : card.custom ? 'Set by you' : 'A starting style'}
-            {card.custom && learned ? ', adjusted by you' : ''}
-          </span>
-        </div>
-        <pre
-          className="mt-3 whitespace-pre-wrap font-sans text-[13.5px] leading-relaxed text-ink-2 border-l-2 border-line pl-4"
-          data-testid="style-preview"
-        >
-          {stylePreview(card, user)}
-        </pre>
-      </section>
-
-      {/* learning */}
-      <section className="py-6 border-t border-line-2">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="text-[15px] font-medium">Learn your voice</h2>
-            <p className="text-[12.5px] text-ink-3 mt-0.5">
-              From messages you actually wrote. Your own changes below are kept.
-            </p>
-          </div>
-          <Button variant="primary" onClick={learn} disabled={learning} data-testid="style-learn">
-            {learning ? 'Learning…' : learned ? 'Learn again' : 'Learn from my messages'}
-          </Button>
-        </div>
-        <ul className="mt-3 text-[13px] divide-y divide-line-2" data-testid="style-sources">
-          <li className="flex items-center justify-between py-2">
-            <span>Sent emails</span>
-            <span className="text-ink-3">
-              {counts?.emailAvailable ? (
-                `${counts.email}`
-              ) : (
-                <NavLink to="/settings/integrations" className="text-accent">
-                  Connect Gmail
-                </NavLink>
-              )}
-            </span>
-          </li>
-          <li className="flex items-center justify-between py-2">
-            <span>LinkedIn messages you sent</span>
-            <span className="text-ink-3">
-              {counts?.linkedinAvailable ? (
-                counts.linkedin ? (
-                  `${counts.linkedin}`
-                ) : (
-                  'read when you learn'
-                )
-              ) : (
-                <NavLink to="/settings/integrations" className="text-accent">
-                  Connect LinkedIn
-                </NavLink>
-              )}
-            </span>
-          </li>
-          <li className="flex items-center justify-between py-2">
-            <span>Drafts you edited and sent</span>
-            <span className="text-ink-3">{counts?.orbit ?? 0}</span>
-          </li>
-          <li className="py-2">
-            <div className="flex items-center justify-between">
-              <span>Examples you paste</span>
-              <span className="flex items-center gap-3 text-ink-3">
-                {profile?.samples?.length ?? 0}
-                <button
-                  type="button"
-                  className="text-accent"
-                  onClick={() => setPasting((v) => !v)}
-                  data-testid="style-paste-open"
-                >
-                  {pasting ? 'Done' : 'Add'}
-                </button>
-              </span>
-            </div>
-            {pasting && (
-              <div className="mt-2 space-y-2">
-                <Textarea
-                  rows={4}
-                  value={paste}
-                  onChange={(e) => setPaste(e.target.value)}
-                  placeholder="Paste an email or LinkedIn message you wrote"
-                  aria-label="Paste an example message"
-                  data-testid="style-paste"
-                />
-                <div className="flex justify-end">
-                  <Button
-                    size="sm"
-                    disabled={!paste.trim()}
-                    onClick={async () => {
-                      const r = await addStyleSample(user, paste);
-                      if (!r.ok) return toast.push({ text: r.reason });
-                      setPaste('');
-                      toast.push({ text: 'Added. Press Learn to use it.', tone: 'good' });
-                    }}
-                    data-testid="style-paste-add"
-                  >
-                    Add example
-                  </Button>
-                </div>
-                {(profile?.samples ?? []).map((sample, i) => (
-                  <div key={sample} className="flex items-start gap-2 text-[12.5px] text-ink-2">
-                    <span className="line-clamp-2 flex-1">{sample}</span>
-                    <button
-                      type="button"
-                      className="text-ink-3 hover:text-ink"
-                      onClick={() => removeStyleSample(user.id, i)}
-                      aria-label="Remove this example"
-                    >
-                      <X size={13} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </li>
-        </ul>
-      </section>
-
-      {/* every part, by hand */}
-      <section className="py-6 border-t border-line-2" data-testid="style-controls">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-[15px] font-medium">Make it yours</h2>
-          <span className="text-[12px] text-ink-3 flex items-center gap-2">
-            Start from
-            {(['warm', 'direct', 'formal'] as const).map((p) => (
-              <button
-                key={p}
-                type="button"
-                className="h-7 px-2.5 rounded-full hover:bg-canvas-2 hover:text-ink capitalize"
-                onClick={async () => {
-                  if (
-                    (card.custom || learned) &&
-                    !confirm(`Start over from the ${p} style? Your "never say" list and notes stay.`)
-                  )
-                    return;
-                  await applyStylePreset(user, p);
-                }}
-                data-testid={`style-preset-${p}`}
-              >
-                {p}
-              </button>
-            ))}
-          </span>
-        </div>
-        <div className="mt-2 divide-y divide-line-2">
-          <StyleRow label="Greeting">
-            <div className="flex flex-wrap gap-1.5">
-              {[...new Set([...GREETING_CHOICES, ...card.greetingPatterns])].map((g) => {
-                const on = card.greetingPatterns[0] === g;
-                return (
-                  <button
-                    key={g}
-                    type="button"
-                    onClick={() =>
-                      set({ greetingPatterns: [g, ...card.greetingPatterns.filter((x) => x !== g)] })
-                    }
-                    className={cx(
-                      'h-8 px-3 rounded-full border text-[13px]',
-                      on ? 'border-ink bg-ink text-white' : 'border-line hover:bg-canvas-2',
-                    )}
-                    aria-pressed={on}
-                  >
-                    {g.replace('{first}', 'Sarah')}
-                  </button>
-                );
-              })}
-            </div>
-          </StyleRow>
-          <StyleRow label="Sign-off">
-            <div className="flex flex-wrap items-center gap-1.5">
-              {[...new Set([...SIGNOFF_WORDS, signWord].filter(Boolean))].map((w) => {
-                const on = signWord === w;
-                return (
-                  <button
-                    key={w}
-                    type="button"
-                    onClick={() => set({ signoffs: [`${w},\n${signName}`, ...card.signoffs.slice(1)] })}
-                    className={cx(
-                      'h-8 px-3 rounded-full border text-[13px]',
-                      on ? 'border-ink bg-ink text-white' : 'border-line hover:bg-canvas-2',
-                    )}
-                    aria-pressed={on}
-                  >
-                    {w}
-                  </button>
-                );
-              })}
-              <input
-                defaultValue={signName}
-                key={signName}
-                onBlur={(e) =>
-                  e.target.value.trim() &&
-                  e.target.value.trim() !== signName &&
-                  set({
-                    signoffs: [`${signWord || 'Best'},\n${e.target.value.trim()}`, ...card.signoffs.slice(1)],
-                  })
-                }
-                className="h-8 w-40 px-3 rounded-full border border-line bg-canvas text-[13px]"
-                aria-label="Name under the sign-off"
-                data-testid="style-sign-name"
-              />
-            </div>
-          </StyleRow>
-          <StyleRow label="Tone" hint={FORMALITY_WORDS(card.formality)}>
-            <input
-              type="range"
-              min={0}
-              max={100}
-              value={Math.round(card.formality * 100)}
-              onChange={(e) => set({ formality: Number(e.target.value) / 100 })}
-              className="w-full accent-ink"
-              aria-label="Tone, from casual to formal"
-              data-testid="style-formality"
-            />
-            <div className="flex justify-between text-[11px] text-ink-3">
-              <span>Casual</span>
-              <span>Formal</span>
-            </div>
-          </StyleRow>
-          <StyleRow label="Length" hint={`About ${card.avgMessageWords} words`}>
-            <input
-              type="range"
-              min={40}
-              max={180}
-              step={10}
-              value={Math.min(180, Math.max(40, card.avgMessageWords))}
-              onChange={(e) => set({ avgMessageWords: Number(e.target.value) })}
-              className="w-full accent-ink"
-              aria-label="Message length in words"
-              data-testid="style-length"
-            />
-            <div className="flex justify-between text-[11px] text-ink-3">
-              <span>Short</span>
-              <span>Detailed</span>
-            </div>
-          </StyleRow>
-          <StyleRow label="Details">
-            <div className="flex flex-wrap gap-x-5 gap-y-2 text-[13px]">
-              <label className="inline-flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={card.contractions}
-                  onChange={(e) => set({ contractions: e.target.checked })}
-                  data-testid="style-contractions"
-                />
-                Contractions ("I'm", "you're")
-              </label>
-              <label className="inline-flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={card.exclamationsPerMessage >= 0.5}
-                  onChange={(e) => set({ exclamationsPerMessage: e.target.checked ? 0.6 : 0 })}
-                />
-                Exclamation points
-              </label>
-              <label className="inline-flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={card.emoji}
-                  onChange={(e) => set({ emoji: e.target.checked })}
-                />
-                Emoji
-              </label>
-            </div>
-          </StyleRow>
-          <StyleRow label="Phrases you use" hint="Orbit's AI works them in">
-            <ChipList
-              items={card.characteristicPhrases}
-              onChange={(characteristicPhrases) => set({ characteristicPhrases })}
-              placeholder="Add a phrase"
-              testId="style-phrases"
-            />
-          </StyleRow>
-          <StyleRow label="Never say" hint="Left out of every draft">
-            <ChipList
-              items={card.avoid}
-              onChange={(avoid) => set({ avoid })}
-              placeholder="Add a phrase"
-              suggestions={AVOID_SUGGESTIONS}
-              testId="style-avoid"
-            />
-          </StyleRow>
-          <StyleRow label="Notes for Orbit" hint="Anything else about how you write">
-            <Textarea
-              rows={3}
-              value={notes ?? (card.custom ? card.notes : '')}
-              onChange={(e) => setNotes(e.target.value)}
-              onBlur={() => notes !== undefined && set({ notes: notes.trim() })}
-              placeholder="e.g. Keep it humble, never mention GPA, mention I'm a first-gen student when it fits"
-              aria-label="Notes for Orbit about how you write"
-              data-testid="style-notes"
-            />
-          </StyleRow>
-        </div>
-      </section>
-    </div>
-  );
-}
-
-/** The booking link drafts offer when proposing times: one of the Cal.com event types above, or any link. */
-function BookingLinkRow({ user }: { user: User }) {
-  const settings = useLiveQuery(() => db.settings.get(user.id), [user.id]);
-  if (!settings) return null;
-  return (
-    <div className="py-4 last:pb-1" data-testid="settings-booking-link">
-      <SchedulingLinkField
-        user={user}
-        value={settings.schedulingLink}
-        onChange={(link) => void setSchedulingLink(user.id, link)}
-      />
-    </div>
-  );
+  return <OutreachCoach user={user} />;
 }
 
 function Limits() {

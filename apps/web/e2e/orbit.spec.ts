@@ -34,7 +34,7 @@ async function openDrafts(page: Page) {
   await expect(page.getByRole('heading', { name: 'Drafts', level: 1 })).toBeVisible();
 }
 
-/** The "I sent it" step of a message just opened in the mail app or LinkedIn: Drafts lists it under Did these go out? */
+/** A message just opened in the mail app or LinkedIn: it stays at the top of To send, with "I sent it". */
 const handedOff = (page: Page) => page.getByTestId('drafts-handed-off');
 
 /** Every state the landing header's buttons go through after a reload, as recorded by a MutationObserver. */
@@ -118,11 +118,8 @@ test.describe('Orbit demo flow', () => {
     // without Gmail sending, the button says what it does and who to: it opens an email to them
     await open.click();
     await expect(page.getByText(/opened in your mail app/i).first()).toBeVisible({ timeout: 15_000 });
-    // a mail-app hand-off is not "sent" until the student says so: it leaves To send and waits under Did these go out?
-    await expect(page.getByRole('tab', { name: /opened, not marked sent/i })).toHaveAttribute(
-      'aria-selected',
-      'true',
-    );
+    // a mail-app hand-off is not "sent" until the student says so: it stays with the other drafts, with I sent it
+    await expect(handedOff(page)).toBeVisible();
     await handedOff(page)
       .getByRole('button', { name: /i sent it/i })
       .first()
@@ -210,7 +207,7 @@ test.describe('Orbit demo flow', () => {
     await page.getByRole('tab', { name: 'Board' }).click();
     await expect(page.getByTestId('chat-card-nurturing').filter({ hasText: name })).toBeVisible();
     await page.getByRole('tab', { name: 'Companies' }).click();
-    await expect(page.getByRole('cell', { name: /target/i }).first()).toBeVisible();
+    await expect(page.getByTestId('company-target').first()).toBeVisible();
   });
 
   test('person profile shows summary, facts and prep', async ({ page }) => {
@@ -320,23 +317,16 @@ test.describe('Orbit demo flow', () => {
       await page.goto(`people/${id}`);
       await page.getByTestId('person-write').click();
       await expect(page.getByLabel('Message body')).toBeVisible({ timeout: 15_000 });
-      // the connection prompt itself: someone with a chat asks for an update instead
-      if (await page.getByTestId('draft-input-connection').isVisible()) {
+      // a stranger: Orbit writes the line itself from where they work, so nothing is left for the student to fill in
+      if (/I (came across your profile|saw you)/.test(await page.getByLabel('Message body').inputValue())) {
         found = true;
         break;
       }
     }
     expect(found).toBe(true);
     const approve = page.getByRole('button', { name: /open email to|send to|copy & open linkedin/i });
-    await expect(approve).toBeDisabled();
-    await expect(page.getByLabel('Message body')).toHaveValue(/\[Why them: one line only true of /);
-    await page
-      .getByTestId('draft-input-connection')
-      .fill('We were both on the Cornell Hyperloop team, a few years apart');
-    await page.getByTestId('draft-redraft').click();
-    await expect(page.getByTestId('draft-needs-input')).toBeHidden({ timeout: 15_000 });
-    await expect(page.getByLabel('Message body')).toHaveValue(/We were both on the Cornell Hyperloop team/);
     await expect(page.getByLabel('Message body')).not.toHaveValue(/\[/);
+    await expect(page.getByTestId('draft-needs-input')).toHaveCount(0);
     await expect(approve).toBeEnabled();
   });
 
@@ -1002,7 +992,7 @@ test.describe('First-run guidance and plain next steps', () => {
     await expect(page.getByTestId('suggestion-thank_you').filter({ hasText: who })).toBeVisible();
   });
 
-  test('the Drafts badge counts the drafts to send today, and an opened draft moves to Opened, not marked sent, still counted', async ({
+  test('the Drafts badge counts the drafts to send today, and an opened draft stays with them, still counted', async ({
     page,
   }) => {
     await loadDemo(page);
@@ -1024,22 +1014,17 @@ test.describe('First-run guidance and plain next steps', () => {
     // prep is not a message: it waits under its own heading, and the badge does not count it
     await expect(toSend.getByTestId('suggestion-prep_brief')).toHaveCount(0);
     await expect(page.getByTestId('drafts-other').getByTestId('suggestion-prep_brief').first()).toBeVisible();
-    // opened in the mail app: it moves to "Opened, not marked sent"; the badge still counts it, since it waits on
-    // the student's "I sent it"
+    // opened in the mail app: it stays in To send, still counted, since it waits on the student's "I sent it"
     const card = page.getByTestId('suggestion-follow_up_bump').first();
     await card.getByTestId('draft-review').click();
     await card.getByRole('button', { name: /^open email to /i }).click();
-    await expect(page.getByRole('tab', { name: /^to send/i })).toContainText(String(badge - 1));
-    await expect(page.getByRole('tab', { name: /opened, not marked sent/i })).toContainText('1');
+    await expect(handedOff(page).getByRole('button', { name: /i sent it/i })).toBeVisible();
+    await expect(page.getByRole('tab', { name: /^to send/i })).toContainText(String(badge));
     await expect(page.getByTestId('approvals-badge').first()).toHaveText(String(badge));
-    // leaving and coming back keeps the "I sent it" step: the page opens on what is waiting
+    // leaving and coming back keeps the "I sent it" step, in the same list
     await page.goto('people');
     await page.goto('inbox');
-    await expect(page.getByRole('tab', { name: /opened, not marked sent/i })).toHaveAttribute(
-      'aria-selected',
-      'true',
-    );
-    await expect(handedOff(page)).toContainText(/did these go out/i);
+    await expect(page.getByRole('tab', { name: /^to send/i })).toHaveAttribute('aria-selected', 'true');
     await expect(handedOff(page).getByRole('button', { name: /i sent it/i })).toBeVisible();
     await expect(page.getByTestId('handoff-copy')).toBeVisible();
   });
@@ -1386,7 +1371,7 @@ test.describe("Never losing the student's work, and honest hand-offs", () => {
     if (await card.getByTestId('draft-attach-resume').isVisible())
       await card.getByTestId('draft-attach-confirm').check();
     await card.getByTestId('draft-copy').click();
-    // the copied message leaves To send and waits under Did these go out?
+    // the copied message stays in To send, waiting for I sent it
     const waiting = handedOff(page).getByTestId('outbox-handed_off');
     await expect(waiting).toBeVisible();
     await expect(waiting).toContainText(/press I sent it/i);
@@ -1443,9 +1428,9 @@ test.describe("Never losing the student's work, and honest hand-offs", () => {
     await page.getByTestId('warmup-skip').click();
     const box = page.getByLabel('Message body');
     await expect(box).toBeVisible({ timeout: 15_000 });
-    // one name for the missing line, everywhere: the gap, the box, the fix
-    await expect(box).toHaveValue(/\[Why them: one line only true of Daniel\]/);
-    await expect(page.getByTestId('draft-needs-input')).toContainText('Why them');
+    // Orbit writes the "why them" line itself: nothing for the student to fill in
+    await expect(box).not.toHaveValue(/\[Why them/);
+    await expect(page.getByTestId('draft-needs-input')).toHaveCount(0);
     // only one kind of message fits: no button that looks like a choice (it used to restart the draft)
     await expect(page.getByRole('group', { name: /kind of message/i })).toHaveCount(0);
     await box.fill(`${await box.inputValue()} Glad to.`);
@@ -1471,9 +1456,11 @@ test.describe("Never losing the student's work, and honest hand-offs", () => {
     await expect(box).toHaveValue(/Glad to/);
   });
 
-  test('Copy text stays off while the "Why them" line is missing', async ({ page }) => {
+  test('Copy text stays off while the "Why them" line is missing (only when Orbit knows nothing about them)', async ({
+    page,
+  }) => {
     await newStudent(page);
-    await addByHand(page, 'Priya Shah', 'Goldman Sachs', { email: 'priya.shah@gs.com' });
+    await addByHand(page, 'Priya Shah', '', { email: 'priya.shah@gs.com' });
     await page.getByTestId('person-write').click();
     await expect(page.getByLabel('Message body')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByTestId('draft-copy')).toBeDisabled();
@@ -1618,7 +1605,8 @@ test.describe('Usability round 5: one draft, kept edits, saved settings, chats t
     page,
   }) => {
     await newStudent(page);
-    await addByHand(page, 'Marcus Lee', 'Goldman Sachs', {
+    // nothing known about him but his name: the one case Orbit asks for the line
+    await addByHand(page, 'Marcus Lee', '', {
       linkedin: 'https://www.linkedin.com/in/marcus-lee-gs',
     });
     await page.getByTestId('person-write').click();
@@ -1722,10 +1710,7 @@ test.describe('Usability round 5: one draft, kept edits, saved settings, chats t
     await loadDemo(page);
     await page.goto('people');
     await page.getByRole('link', { name: 'Ethan Park' }).first().click();
-    await page
-      .getByTestId('person-header')
-      .getByRole('button', { name: /^add note$/i })
-      .click();
+    await page.getByTestId('person-add-note').click();
     await expect(page.getByTestId('capture-booked-later')).toContainText(/keeps the chat booked/i);
     await page.getByTestId('capture-text').fill('Questions for Ethan: how new grads pick a team.');
     await page.getByTestId('capture-save').click();
@@ -1817,17 +1802,10 @@ test.describe('Usability round 5: one draft, kept edits, saved settings, chats t
     await page.getByTestId('add-person-save').click();
     await expect(page).toHaveURL(/\/people\//);
     await page.getByTestId('person-write').click();
-    await page.getByTestId('draft-input-connection').fill('We both played club soccer at Michigan');
-    await page.getByTestId('draft-redraft').click();
     await page.getByRole('button', { name: /^open email to rachel$/i }).click();
     await expect(page.getByTestId('outbox-handed_off')).toBeVisible();
-    // Drafts opens on it: it waits for the student to say whether it went out
+    // Drafts shows it with the others: it waits for the student to say whether it went out
     await openDrafts(page);
-    await expect(page.getByRole('tab', { name: /opened, not marked sent/i })).toHaveAttribute(
-      'aria-selected',
-      'true',
-    );
-    await expect(handedOff(page)).toContainText(/did these go out/i);
     await expect(handedOff(page)).toContainText('Rachel Kim');
     await expect(page.getByText(/no drafts right now|nothing needs you/i)).toHaveCount(0);
   });
@@ -1843,8 +1821,6 @@ test.describe('Usability round 5: chats Orbit cannot see, and notes in shorthand
     });
     await page.getByTestId('person-write').click();
     await page.getByTestId('warmup-skip').click();
-    await page.getByTestId('draft-input-connection').fill('We both played club soccer at Michigan');
-    await page.getByTestId('draft-redraft').click();
     await page.getByRole('button', { name: /^copy (note )?& open linkedin$/i }).click();
     await page.getByRole('button', { name: /^i sent it to aisha$/i }).click();
     await expect(page.getByText(/logged as sent to aisha/i)).toBeVisible();
@@ -2138,7 +2114,7 @@ test.describe('People holds the board and the list; Drafts holds the day', () =>
     await page.getByLabel('Filter people').selectOption('all');
     await expect(page.getByTestId('people-view-companies')).toHaveAttribute('aria-selected', 'true');
     await expect(page).toHaveURL(/view=companies/);
-    await expect(page.getByRole('cell', { name: /target/i }).first()).toBeVisible();
+    await expect(page.getByTestId('company-target').first()).toBeVisible();
     // Start a chat opens the first message on their page
     await page.getByTestId('people-view-list').click();
     await rows.filter({ hasText: name }).getByTestId('list-start-chat').click();
@@ -2410,5 +2386,46 @@ test.describe('Meeting notes: pick one app', () => {
     await expect(page.getByTestId('settings-fireflies-status')).toContainText(/Connected/);
     await expect(page.getByTestId('settings-granola-status')).toHaveCount(0);
     await expect(page.getByTestId('settings-granola-connect')).toBeVisible();
+  });
+});
+
+test.describe('People board: drag a card to another stage', () => {
+  test('picking a card up and dropping it on another column moves the chat; a click still opens the person', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1600, height: 950 });
+    await loadDemo(page);
+    await page.goto('people');
+    const columns = page.locator('[data-testid^="board-column-"]');
+    await expect(columns.first()).toBeVisible();
+    const stages = (await columns.evaluateAll((els) => els.map((e) => e.getAttribute('data-testid')!))).map(
+      (t) => t.replace('board-column-', ''),
+    );
+    expect(stages.length).toBeGreaterThan(1);
+    let fromStage = '';
+    for (const st of stages)
+      if ((await page.getByTestId(`chat-card-${st}`).count()) > 0) {
+        fromStage = st;
+        break;
+      }
+    expect(fromStage).not.toBe('');
+    const toStage = stages.find((st) => st !== fromStage)!;
+    const card = page.getByTestId(`chat-card-${fromStage}`).first();
+    const name = (await card.locator('a').first().innerText()).trim();
+    const target = page.getByTestId(`board-column-${toStage}`);
+    await card.scrollIntoViewIfNeeded();
+    const from = (await card.boundingBox())!;
+    await page.mouse.move(from.x + from.width / 2, from.y + 20);
+    await page.mouse.down();
+    await page.mouse.move(from.x + from.width / 2 + 20, from.y + 30, { steps: 4 });
+    await expect(page.getByTestId('board-drag-ghost')).toBeVisible();
+    const to = (await target.boundingBox())!;
+    await page.mouse.move(to.x + Math.min(to.width / 2, 60), to.y + 40, { steps: 12 });
+    await expect(page.getByTestId('board-drag-ghost')).toContainText('Move to');
+    await page.mouse.up();
+    await expect(target.getByText(name)).toBeVisible();
+    // a plain click on a card still opens the person
+    await target.getByText(name).click();
+    await expect(page).toHaveURL(/\/people\/[^/?]+/);
   });
 });

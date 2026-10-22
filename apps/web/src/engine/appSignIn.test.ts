@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { db, type IntegrationAccount } from '../db/schema';
 import { setNotesProxyUrlForTests } from '../integrations/notesApps';
-import { appAuth, finishAppSignIn, MCP_APPS } from './appSignIn';
+import { appAuth, finishAppSignIn, signInToApp } from './appSignIn';
 
 const row = (patch: Partial<IntegrationAccount>): IntegrationAccount => ({
   id: 'int_cal',
@@ -82,14 +82,17 @@ describe('a connected app, by key or by signing in', () => {
     expect((await db.integrations.get('int_cal'))!.status).toBe('needs_reauth');
   });
 
-  it('Granola renews in this tab with its registration and the refresh token, no secret and no server', async () => {
+  it('Granola renews through orbit-notes with its registration and the refresh token, no secret', async () => {
     const fetchMock = vi.fn(
       async () =>
         new Response(
-          JSON.stringify({ access_token: 'gra_new_123456789', refresh_token: 'gra_ref_2', expires_in: 3600 }),
-          {
-            status: 200,
-          },
+          JSON.stringify({
+            ok: true,
+            accessToken: 'gra_new_123456789',
+            refreshToken: 'gra_ref_2',
+            expiresIn: 3600,
+          }),
+          { status: 200 },
         ),
     );
     vi.stubGlobal('fetch', fetchMock);
@@ -102,16 +105,75 @@ describe('a connected app, by key or by signing in', () => {
     await db.integrations.put(stale);
     expect(await appAuth('granola', stale)).toEqual({ accessToken: 'gra_new_123456789' });
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect(url).toBe(MCP_APPS.granola.token);
-    const sent = new URLSearchParams(String(init.body));
-    expect(Object.fromEntries(sent)).toEqual({
-      grant_type: 'refresh_token',
-      refresh_token: 'gra_ref_1',
-      client_id: 'cli_orbit',
-      resource: 'https://mcp.granola.ai/mcp',
+    // the sign-in server's answer carries no CORS header, so the browser never calls it directly
+    expect(url).toBe('https://x.supabase.co/functions/v1/orbit-notes/oauth/token');
+    expect(JSON.parse(String(init.body))).toEqual({
+      provider: 'granola',
+      grant: 'refresh',
+      clientId: 'cli_orbit',
+      refreshToken: 'gra_ref_1',
     });
     const saved = (await db.integrations.get('int_gra'))!;
     expect(saved.oauth).toMatchObject({ refreshToken: 'gra_ref_2', clientId: 'cli_orbit' });
+  });
+
+  it('signing in to Granola or Wispr Flow registers Orbit through orbit-notes, once per address', async () => {
+    localStorage.clear();
+    const calls: string[] = [];
+    let registerAnswer: unknown = {
+      ok: false,
+      reason: 'refused',
+      message: 'Granola did not let Orbit register (400). Try again in a minute.',
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        calls.push(url);
+        if (url.endsWith('/oauth-protected-resource/mcp'))
+          return new Response(
+            JSON.stringify({
+              authorization_servers: ['https://mcp-auth.granola.ai'],
+              scopes_supported: ['mcp'],
+            }),
+          );
+        if (url.endsWith('/oauth-authorization-server'))
+          return new Response(
+            JSON.stringify({
+              authorization_endpoint: 'https://mcp-auth.granola.ai/oauth2/authorize',
+              scopes_supported: ['openid', 'offline_access'],
+            }),
+          );
+        if (url.endsWith('/orbit-notes/oauth/register')) {
+          expect(JSON.parse(String(init?.body))).toMatchObject({
+            server: 'granola',
+            scope: 'mcp offline_access',
+          });
+          return new Response(JSON.stringify(registerAnswer));
+        }
+        throw new Error(`unexpected ${url}`);
+      }),
+    );
+    const refused = await signInToApp('granola');
+    expect(refused).toEqual({
+      ok: false,
+      message: 'Granola did not let Orbit register (400). Try again in a minute.',
+    });
+    expect(calls.some((u) => u.includes('/oauth2/register'))).toBe(false);
+
+    registerAnswer = { ok: true, clientId: 'client_orbit_1' };
+    const open = vi.fn(() => null);
+    vi.stubGlobal('open', open);
+    // registered: the sign-in window opens (blocked here) with Orbit's client id
+    expect(await signInToApp('granola')).toMatchObject({
+      ok: false,
+      message: expect.stringMatching(/blocked/),
+    });
+    expect(String((open.mock.calls[0] as unknown[])[0])).toContain('client_id=client_orbit_1');
+    // remembered: the next sign-in does not register again
+    const before = calls.filter((u) => u.endsWith('/oauth/register')).length;
+    await signInToApp('granola');
+    expect(calls.filter((u) => u.endsWith('/oauth/register')).length).toBe(before);
+    localStorage.clear();
   });
 
   it('the return page only answers a sign-in Orbit started', () => {

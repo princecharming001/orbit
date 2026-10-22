@@ -9,9 +9,11 @@ import {
   disconnectLinkedInLive,
   LIVE_SOON,
   linkedInLiveStatus,
+  linkedInProgress,
   liveLinkedInAccount,
   liveLinkedInAvailable,
   mutualsFor,
+  resumeLinkedInConnect,
   setLivePollForTests,
   syncLinkedInLive,
 } from './linkedinLive';
@@ -166,10 +168,51 @@ describe('connecting LinkedIn live', () => {
     expect(st).toMatchObject({ available: true, connected: true, status: 'active', rows: 2, stale: false });
   });
 
-  it('stops when the student closes the window, and reports a failed sign-in', async () => {
+  it('a sign-in LinkedIn finishes after its window closed still connects, and the progress says each step', async () => {
+    let polls = 0;
+    const connected = routes['/connect/status'];
+    routes['/connect/status'] = () =>
+      ++polls < 4
+        ? { body: { status: 'pending' } }
+        : typeof connected === 'function'
+          ? connected()
+          : connected!;
+    popup.closed = true;
+    const seen = new Set<string>();
+    const watch = setInterval(() => seen.add(linkedInProgress()?.phase ?? ''), 0);
+    const r = await connectLinkedInLive(user);
+    clearInterval(watch);
+    expect(r).toEqual({ ok: true, rows: 2, added: 2 });
+    expect(seen.has('finishing')).toBe(true);
+    expect(linkedInProgress()).toMatchObject({ phase: 'done', count: 2 });
+    expect(localStorage.getItem('orbit.linkedin.pending')).toBeNull();
+  });
+
+  it('a sign-in still pending when the page closed is picked back up when Orbit opens', async () => {
+    localStorage.setItem(
+      'orbit.linkedin.pending',
+      JSON.stringify({ userId: user.id, ref: 'orbit_ref', at: Date.now() }),
+    );
+    const r = await resumeLinkedInConnect(user);
+    expect(r).toEqual({ ok: true, rows: 2, added: 2 });
+    expect(await liveLinkedInAccount(user.id)).toMatchObject({
+      externalAccountId: 'acc_1',
+      status: 'active',
+    });
+    expect(localStorage.getItem('orbit.linkedin.pending')).toBeNull();
+    // nothing pending: nothing happens
+    expect(await resumeLinkedInConnect(user)).toBeUndefined();
+  });
+
+  it('keeps waiting after the window closes, gives up only after the wait, and reports a failed sign-in', async () => {
     routes['/connect/status'] = { body: { status: 'pending' } };
     popup.closed = true;
-    expect(await connectLinkedInLive(user)).toMatchObject({ ok: false, reason: 'cancelled' });
+    expect(await connectLinkedInLive(user)).toMatchObject({
+      ok: false,
+      reason: 'error',
+      message: expect.stringMatching(/approve the sign-in/),
+    });
+    expect(linkedInProgress()).toMatchObject({ phase: 'failed' });
     routes['/connect/status'] = {
       body: { status: 'error', message: 'LinkedIn did not accept the sign-in.' },
     };

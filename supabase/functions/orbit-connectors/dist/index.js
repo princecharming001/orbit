@@ -832,7 +832,11 @@ async function unipileMutuals(deps, body, doFetch) {
       name: m.name ?? `${m.first_name ?? ""} ${m.last_name ?? ""}`.trim(),
       headline: m.headline,
       url: m.public_profile_url ?? m.profile_url,
-      member_id: m.member_id ?? m.id
+      member_id: m.member_id ?? m.id,
+      // LinkedIn's own photo link, for showing (it expires after a few weeks)
+      picture_url: [m.profile_picture_url, m.profile_picture_url_large].find(
+        (u) => typeof u === "string" && isLinkedInImage(u)
+      )
     }))
   };
 }

@@ -5,12 +5,15 @@
  * phrases they use and phrases they never use, notes for Orbit), and what they set stays theirs when Orbit learns
  * again. The presets are only starting points.
  */
-import type { StyleCard, StyleSource, User } from '@orbit/core';
+import type { CoachType, StyleCard, StyleChange, StyleSource, User } from '@orbit/core';
 import {
+  applyStyleChange,
   buildStyleCard,
   defaultStyleCard,
   mergeStyleCard,
+  newId,
   presetStyleCard,
+  revertStyleChange,
   type StylePreset,
 } from '@orbit/core';
 import { db, type StyleProfile } from '../db/schema';
@@ -203,4 +206,93 @@ export async function removeStyleSample(userId: string, index: number): Promise<
   const style = await db.styles.get(userId);
   if (!style?.samples) return;
   await db.styles.put({ ...style, samples: style.samples.filter((_, i) => i !== index) });
+}
+
+// ---------- the outreach coach's tuning log ----------
+
+/** One change the coach made to the card, with what it was before, so it can be undone on its own. */
+export interface StyleTuningEntry {
+  id: string;
+  at: string;
+  /** who asked for it: the student's own words, a finding in the coach's review, or Claude reading their words */
+  by: 'you' | 'coach' | 'claude';
+  /** what they said ("shorter"), or the finding it fixes */
+  said: string;
+  /** what changed: "about 40 words, was 60" */
+  summary: string;
+  change: StyleChange;
+  /** the card's values for the changed fields before this change */
+  before: Partial<StyleCard>;
+  /** the kind of outreach on screen when it was made */
+  type?: CoachType;
+  undoneAt?: string;
+}
+
+/** Entries kept per student, newest first. */
+export const STYLE_TUNING_MAX = 60;
+export const styleTuningKey = (userId: string) => `styleTuning:${userId}`;
+
+export async function styleTuningLog(userId: string): Promise<StyleTuningEntry[]> {
+  const row = await db.kv.get(styleTuningKey(userId));
+  return Array.isArray(row?.value) ? (row.value as StyleTuningEntry[]) : [];
+}
+
+/**
+ * Apply the coach's changes to the card (as the student's own, so learning again keeps them) and log each one.
+ * Changes the card already reflects are skipped; the result lists only what was logged.
+ */
+export async function tuneStyle(
+  user: Pick<User, 'id' | 'firstName'>,
+  changes: StyleChange[],
+  meta: { by: StyleTuningEntry['by']; said: string; type?: CoachType },
+  now = new Date(),
+): Promise<{ card: StyleCard; entries: StyleTuningEntry[] }> {
+  let card = await currentStyleCard(user);
+  const entries: StyleTuningEntry[] = [];
+  let patch: Partial<StyleCard> = {};
+  for (const change of changes) {
+    const a = applyStyleChange(card, change, user.firstName);
+    if (!a) continue;
+    const before = Object.fromEntries(
+      Object.keys(a.patch).map((k) => [k, card[k as keyof StyleCard]]),
+    ) as Partial<StyleCard>;
+    card = { ...card, ...a.patch };
+    patch = { ...patch, ...a.patch };
+    entries.push({
+      id: newId('tune'),
+      at: now.toISOString(),
+      by: meta.by,
+      said: meta.said.trim().slice(0, 200),
+      summary: a.summary,
+      change,
+      before,
+      type: meta.type,
+    });
+  }
+  if (!entries.length) return { card, entries };
+  card = await updateStyle(user, patch, now);
+  const log = await styleTuningLog(user.id);
+  await db.kv.put({
+    key: styleTuningKey(user.id),
+    value: [...[...entries].reverse(), ...log].slice(0, STYLE_TUNING_MAX),
+  });
+  return { card, entries };
+}
+
+/** Undo one logged change: a phrase or note is taken back out, a setting goes back to what it was. */
+export async function undoStyleTuning(
+  user: Pick<User, 'id' | 'firstName'>,
+  entryId: string,
+  now = new Date(),
+): Promise<boolean> {
+  const log = await styleTuningLog(user.id);
+  const entry = log.find((e) => e.id === entryId);
+  if (!entry || entry.undoneAt) return false;
+  const card = await currentStyleCard(user);
+  await updateStyle(user, revertStyleChange(card, entry.change, entry.before), now);
+  await db.kv.put({
+    key: styleTuningKey(user.id),
+    value: log.map((e) => (e.id === entryId ? { ...e, undoneAt: now.toISOString() } : e)),
+  });
+  return true;
 }

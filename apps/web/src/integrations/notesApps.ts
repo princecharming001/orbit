@@ -114,15 +114,39 @@ export function oauthClients(): Promise<
   return call('/oauth/config', {});
 }
 
-/** Trade the code from the app's sign-in for tokens, or refresh them; the server adds the secret. */
+/**
+ * Trade the code from the app's sign-in for tokens, or refresh them. For Cal.com and Fathom the server adds the
+ * secret; Granola and Wispr Flow use Orbit's registration (client id) and the PKCE verifier, no secret.
+ */
 export function oauthTokens(
   body:
     | { provider: 'calcom' | 'fathom'; grant: 'code'; code: string; redirectUri: string }
-    | { provider: 'calcom' | 'fathom'; grant: 'refresh'; refreshToken: string },
+    | { provider: 'calcom' | 'fathom'; grant: 'refresh'; refreshToken: string }
+    | {
+        provider: 'granola' | 'wispr';
+        grant: 'code';
+        clientId: string;
+        code: string;
+        redirectUri: string;
+        codeVerifier: string;
+      }
+    | { provider: 'granola' | 'wispr'; grant: 'refresh'; clientId: string; refreshToken: string },
 ): Promise<
   ConnectorOutcome<{ accessToken: string; refreshToken?: string; expiresIn?: number }> | NotesFailure
 > {
   return call('/oauth/token', body);
+}
+
+/**
+ * Register Orbit with Granola's or Wispr Flow's sign-in server for this return address. Done by the server: their
+ * sign-in servers leave the CORS header off the answer, so a browser cannot read the client id it is given.
+ */
+export function oauthRegister(body: {
+  server: 'granola' | 'wispr';
+  redirectUri: string;
+  scope: string;
+}): Promise<ConnectorOutcome<{ clientId: string }> | NotesFailure> {
+  return call('/oauth/register', body);
 }
 
 /** One page of the student's Fathom meetings, newest first. */

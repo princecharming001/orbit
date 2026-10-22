@@ -28,6 +28,7 @@ import { Avatar, calendarDaysBetween, cx, modKeyLabel } from '../ui';
 import { CommandPalette } from './CommandPalette';
 import { DemoBanner } from './DemoBanner';
 import { LinkedInAutoSync } from './LinkedInAutoSync';
+import { LinkedInProgressBanner } from './LinkedInProgressBanner';
 import { MeetingNotesAutoSync } from './MeetingNotesAutoSync';
 import { MorningBrief } from './MorningBrief';
 import { OutboxScheduler } from './OutboxScheduler';
@@ -204,6 +205,7 @@ export function AppShell() {
       <OutboxScheduler />
       <LinkedInAutoSync />
       <MeetingNotesAutoSync />
+      <LinkedInProgressBanner />
       <MorningBrief />
       <aside
         className={cx(

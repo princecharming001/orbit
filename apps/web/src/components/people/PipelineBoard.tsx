@@ -1,7 +1,8 @@
 import type { ChatStage, CoffeeChat, Person, Suggestion } from '@orbit/core';
 import { ACTIVE_STAGES, CLOSED_STAGES, STAGE_HELP, STAGE_LABELS } from '@orbit/core';
 import { ChevronRight, MoreHorizontal } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { type PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import { Avatar, cx, relDate } from '../../ui';
 import { LogoText } from '../CompanyLogo';
@@ -11,8 +12,106 @@ import { daysLabel, STAGE_COLOR, wentQuiet } from './shared';
 
 export type ChatRow = { chat: CoffeeChat; person: Person };
 
+/** A card being dragged: it follows the pointer, and the column under it lights up. */
+type Drag = {
+  row: ChatRow;
+  x: number;
+  y: number;
+  /** where on the card it was picked up, so it does not jump under the pointer */
+  dx: number;
+  dy: number;
+  width: number;
+  over?: ChatStage;
+  /** the drag has begun (the pointer moved far enough); before that a press is still a click */
+  live: boolean;
+};
+
+/** A press becomes a drag once the pointer moves this far, so a click still opens the person. */
+const DRAG_START_PX = 6;
+
 /**
- * The board: one column per stage, a card per chat. Drag a card or use its Move to menu to change its stage. On a
+ * Dragging cards between columns with the mouse or a pen. Touch keeps the Move to menu: a finger drag scrolls.
+ * Dropping on another column moves the chat there (with the usual undo); the board scrolls sideways near its edges.
+ */
+function useCardDrag(move: (chat: CoffeeChat, to: ChatStage) => void) {
+  const [drag, setDrag] = useState<Drag>();
+  const dragRef = useRef<Drag | undefined>(undefined);
+  dragRef.current = drag;
+  /** set after a drag, so the click that ends it does not open the person */
+  const justDragged = useRef(false);
+  useEffect(() => {
+    if (!drag) return;
+    const onMove = (e: PointerEvent) => {
+      const d = dragRef.current;
+      if (!d) return;
+      const live = d.live || Math.hypot(e.clientX - (d.x + d.dx), e.clientY - (d.y + d.dy)) > DRAG_START_PX;
+      if (!live) return;
+      e.preventDefault();
+      const col = document
+        .elementsFromPoint(e.clientX, e.clientY)
+        .map((el) => (el as HTMLElement).closest<HTMLElement>('[data-stage]'))
+        .find(Boolean);
+      // near the board's sides, it scrolls to the stages off screen
+      const board = document.querySelector<HTMLElement>('[data-testid="pipeline-board"]');
+      if (board) {
+        const r = board.getBoundingClientRect();
+        if (e.clientX > r.right - 48) board.scrollBy({ left: 18 });
+        else if (e.clientX < r.left + 48) board.scrollBy({ left: -18 });
+      }
+      setDrag({
+        ...d,
+        live: true,
+        x: e.clientX - d.dx,
+        y: e.clientY - d.dy,
+        over: (col?.dataset.stage as ChatStage | undefined) ?? undefined,
+      });
+    };
+    const onUp = () => {
+      const d = dragRef.current;
+      setDrag(undefined);
+      if (!d?.live) return;
+      justDragged.current = true;
+      setTimeout(() => {
+        justDragged.current = false;
+      }, 0);
+      document.body.style.cursor = '';
+      if (d.over && d.over !== d.row.chat.stage) move(d.row.chat, d.over);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+    };
+  }, [!!drag, move]);
+  useEffect(() => {
+    document.body.style.cursor = drag?.live ? 'grabbing' : '';
+    return () => {
+      document.body.style.cursor = '';
+    };
+  }, [drag?.live]);
+  const start = (e: ReactPointerEvent<HTMLElement>, row: ChatRow) => {
+    // a finger scrolls; buttons, the Move to menu and links inside the card keep their own clicks
+    if (e.pointerType === 'touch' || e.button !== 0) return;
+    if ((e.target as HTMLElement).closest('select, button, [data-testid="chat-next"]')) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    setDrag({
+      row,
+      x: r.left,
+      y: r.top,
+      dx: e.clientX - r.left,
+      dy: e.clientY - r.top,
+      width: r.width,
+      live: false,
+    });
+  };
+  return { drag, start, justDragged };
+}
+
+/**
+ * The board: one column per stage, a card per chat. Drag a card to another column, or use its Move to menu. On a
  * narrow box the stages stack, and the empty ones are named in one line above them instead of taking room.
  */
 export function PipelineBoard({
@@ -35,6 +134,8 @@ export function PipelineBoard({
   move: (chat: CoffeeChat, to: ChatStage) => void;
   setTime: (chat: CoffeeChat) => void;
 }) {
+  const { drag, start, justDragged } = useCardDrag(move);
+  const dragging = drag?.live ? drag : undefined;
   return (
     <>
       {narrow && !filtering && (
@@ -64,12 +165,6 @@ export function PipelineBoard({
                 )}
                 data-stage={stage}
                 data-needs={items.filter((r) => nextFor(r.chat.id, r.person.id)).length || undefined}
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={(e) => {
-                  const id = e.dataTransfer.getData('text/chat');
-                  const r = rows.find((x) => x.chat.id === id);
-                  if (r) move(r.chat, stage);
-                }}
               >
                 <div className="flex items-center gap-2 mb-2 px-1" title={STAGE_HELP[stage]}>
                   <span
@@ -86,12 +181,27 @@ export function PipelineBoard({
                   </span>
                   <span className="text-[12px] text-ink-3 tabular">{items.length}</span>
                 </div>
-                <div className="space-y-2 min-h-[80px] rounded-[12px] bg-canvas-2/70 p-2">
+                <div
+                  className={cx(
+                    'space-y-2 min-h-[80px] rounded-[12px] p-2 transition-colors',
+                    dragging && dragging.over === stage && dragging.row.chat.stage !== stage
+                      ? 'bg-accent-soft ring-2 ring-accent/50'
+                      : 'bg-canvas-2/70',
+                  )}
+                  data-testid={`board-column-${stage}`}
+                >
                   {items.map(({ chat, person }) => (
                     <BoardCard
                       key={chat.id}
                       chat={chat}
                       person={person}
+                      lifted={dragging?.row.chat.id === chat.id}
+                      onPointerDown={(e) => start(e, { chat, person })}
+                      onClickCapture={(e) => {
+                        if (!justDragged.current) return;
+                        e.preventDefault();
+                        e.stopPropagation();
+                      }}
                       next={nextFor(chat.id, person.id)}
                       meetingAt={meetingFor(chat)?.startAt}
                       move={move}
@@ -104,6 +214,36 @@ export function PipelineBoard({
           })}
         </Board>
       )}
+      {dragging &&
+        // the card in the hand: a light copy that follows the pointer, over everything (a portal, so no transformed
+        // parent can clip it while it is between columns)
+        createPortal(
+          <div
+            className="pointer-events-none fixed left-0 top-0 z-[100] rounded-[10px] border border-line bg-canvas p-3 shadow-[0_18px_40px_-12px_rgba(0,0,0,0.28)] will-change-transform"
+            style={{
+              width: dragging.width,
+              transform: `translate3d(${dragging.x}px, ${dragging.y}px, 0) rotate(1.5deg)`,
+            }}
+            aria-hidden
+            data-testid="board-drag-ghost"
+          >
+            <div className="flex items-center gap-2">
+              <Avatar
+                name={dragging.row.person.displayName}
+                src={dragging.row.person.photoUrl}
+                id={dragging.row.person.id}
+                size={28}
+              />
+              <div className="min-w-0">
+                <div className="truncate text-[13.5px] font-medium">{dragging.row.person.displayName}</div>
+                {dragging.over && dragging.over !== dragging.row.chat.stage && (
+                  <div className="text-[12px] text-accent">Move to {STAGE_LABELS[dragging.over]}</div>
+                )}
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )}
     </>
   );
 }
@@ -115,9 +255,16 @@ function BoardCard({
   meetingAt,
   move,
   setTime,
+  lifted,
+  onPointerDown,
+  onClickCapture,
 }: {
   chat: CoffeeChat;
   person: Person;
+  /** this card is being dragged: its place stays, faded */
+  lifted?: boolean;
+  onPointerDown: (e: ReactPointerEvent<HTMLElement>) => void;
+  onClickCapture: (e: React.MouseEvent) => void;
   next?: Suggestion;
   meetingAt?: string;
   move: (chat: CoffeeChat, to: ChatStage) => void;
@@ -126,11 +273,16 @@ function BoardCard({
   const stage = chat.stage;
   return (
     <div
-      draggable
-      onDragStart={(e) => e.dataTransfer.setData('text/chat', chat.id)}
+      onPointerDown={onPointerDown}
+      onClickCapture={onClickCapture}
+      // the browser's own drag of the name link would fight the card's drag
+      onDragStart={(e) => e.preventDefault()}
       title="Drag to another stage"
       // pops in on mount, so a card moved to another stage lands visibly in its new column
-      className="group pop-in relative bg-canvas border border-line rounded-[10px] p-3 cursor-grab active:cursor-grabbing hover:shadow-[var(--shadow-card)] focus-within:ring-2 focus-within:ring-accent/40 transition-shadow"
+      className={cx(
+        'group pop-in relative bg-canvas border border-line rounded-[10px] p-3 cursor-grab select-none hover:shadow-[var(--shadow-card)] focus-within:ring-2 focus-within:ring-accent/40 transition-[box-shadow,opacity]',
+        lifted && 'opacity-40',
+      )}
       data-testid={`chat-card-${stage}`}
     >
       <div className="flex items-center gap-2">
@@ -257,6 +409,7 @@ function Board({ children, count }: { children: React.ReactNode; count: number }
       <div
         ref={ref}
         onScroll={measure}
+        data-testid="pipeline-board"
         className="stagger flex flex-col @3xl:flex-row gap-4 @3xl:gap-3 @3xl:overflow-x-auto pb-4 scroll-thin @3xl:items-start"
         role="region"
         aria-label={`Board, ${count} stages`}

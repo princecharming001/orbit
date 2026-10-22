@@ -14,10 +14,13 @@ export function SchedulingLinkField({
   user,
   value,
   onChange,
+  compact,
 }: {
   user: Pick<User, 'id'>;
   value: string | undefined;
   onChange: (link: string | undefined) => void;
+  /** inside the Cal.com row: no heading or hint, the row says what it is */
+  compact?: boolean;
 }) {
   const status = useLiveQuery(() => calStatus(user), [user.id]);
   const types = status?.connected ? status.eventTypes.filter((t) => !t.hidden || t.url === value) : [];
@@ -28,9 +31,11 @@ export function SchedulingLinkField({
   const typing = !showPicker || picked === OTHER;
   return (
     <div>
-      <Label htmlFor={showPicker ? 'lim-sched-pick' : 'lim-sched'} optional>
-        Scheduling link
-      </Label>
+      {compact ? null : (
+        <Label htmlFor={showPicker ? 'lim-sched-pick' : 'lim-sched'} optional>
+          Scheduling link
+        </Label>
+      )}
       {showPicker && (
         <Select
           id="lim-sched-pick"
@@ -45,6 +50,7 @@ export function SchedulingLinkField({
             onChange(v || undefined);
           }}
           className="w-full"
+          aria-label={compact ? 'Booking link in drafts' : undefined}
           data-testid="scheduling-link-select"
         >
           <option value="">None</option>
@@ -63,10 +69,10 @@ export function SchedulingLinkField({
           onChange={(e) => onChange(e.target.value || undefined)}
           placeholder="https://cal.com/you/20min"
           className={showPicker ? 'mt-2' : undefined}
-          aria-label={showPicker ? 'Other scheduling link' : undefined}
+          aria-label={showPicker ? 'Other scheduling link' : compact ? 'Booking link in drafts' : undefined}
         />
       )}
-      <p className="text-[12px] text-ink-3 mt-1">Added when you propose times.</p>
+      {compact ? null : <p className="text-[12px] text-ink-3 mt-1">Added when you propose times.</p>}
     </div>
   );
 }

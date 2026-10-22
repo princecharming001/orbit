@@ -173,9 +173,7 @@ test.describe('Side panel (laptop)', () => {
     // a person's page is reachable and its "Add note" starts a note in the same panel
     await page.goto(`?panel=${encodeURIComponent('/people/p1')}`);
     await expect(title(page)).not.toHaveText(/^(Profile|Drafts)$/);
-    const addNote = panel(page)
-      .getByRole('button', { name: /^add note$/i })
-      .first();
+    const addNote = panel(page).getByTestId('person-add-note');
     await expect(addNote).toBeVisible();
     await addNote.click();
     await expect(title(page)).toHaveText('Add a note');

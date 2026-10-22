@@ -177,22 +177,25 @@ describe('drafting against the demo data', () => {
     }
   });
 
-  it('cold outreach without a connection is gated; a connection line is stored and the redraft passes', async () => {
+  it('cold outreach writes its own line from what Orbit knows; a connection line the student gives replaces it', async () => {
     const chatted = await chattedIds();
+    // a stranger: no thread, no shared school, no fact to open with
     let cold: Person | undefined;
     for (const p of await people((x) => !!x.primaryEmail && !x.isAlumni && !chatted.has(x.id))) {
       const ctx = await buildDraftContext(user, p, 'outreach', 'gmail');
-      if (generateDraft(ctx).needsInput.includes('connection')) {
+      if (/I (came across your profile|saw you)/.test(generateDraft(ctx).body)) {
         cold = p;
         break;
       }
     }
-    expect(cold, 'demo has a cold contact with no checkable link').toBeDefined();
+    expect(cold, 'demo has a cold contact Orbit writes its own line for').toBeDefined();
     const d = await draftMessage(user, cold!.id, 'outreach', 'gmail');
-    expect(d.needsInput).toEqual(['connection']);
-    expect(d.bodyDraft).toMatch(/\[Why them: one line only true of /);
-    const gated = await validateStored(d);
-    expect(gated.some((i) => i.code === 'needs_connection' && i.blocking)).toBe(true);
+    expect(d.needsInput).toBeUndefined();
+    expect(d.bodyDraft).not.toMatch(/\[/);
+    expect(
+      (await validateStored(d)).filter((i) => i.blocking),
+      d.bodyDraft,
+    ).toEqual([]);
     const line = 'We were both on the Cornell Hyperloop team, a few years apart';
     const re = (await regenerateDraft(user, d.id, { connection: line }))!;
     const fact = await db.facts
@@ -203,7 +206,7 @@ describe('drafting against the demo data', () => {
     expect(fact?.text).toBe(line);
     expect(re.needsInput).toBeUndefined();
     expect(re.bodyDraft).toMatch(/We were both on the Cornell Hyperloop team/);
-    expect(re.bodyDraft).not.toMatch(/\[/);
+    expect(re.bodyDraft).not.toMatch(/came across your profile/);
     const issues = await validateStored((await db.outbound.get(d.id))!);
     expect(issues.filter((i) => i.blocking)).toEqual([]);
   });

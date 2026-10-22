@@ -896,6 +896,7 @@ export async function buildDraftContext(
       linkedinConnectedAt: person.linkedinConnectedOn,
       previousOrg: previous?.nameRaw,
       previousTitle: previous?.title,
+      headline: person.headline,
     },
     facts: factList,
     kind,
@@ -1291,6 +1292,54 @@ export async function regenerateDraft(
     reason: `input:${Object.keys(inputs).join(',')}`,
   } as never);
   return { ...msg, ...changes };
+}
+
+/**
+ * Drafts saved by older versions with the bracketed "Why them" gap are redrafted, so Orbit writes that line itself
+ * from where they work or what their headline says. A draft the student edited keeps their words: only a copy of the
+ * suggested text with the gap still in it is replaced. A redraft that still needs the line is left as it was.
+ */
+export async function fillWhyThemGaps(user: User, now = new Date()): Promise<number> {
+  const gapped = await db.outbound
+    .where('userId')
+    .equals(user.id)
+    .filter(
+      (d) =>
+        d.status === 'draft' &&
+        WHY_THEM_GAP.test(d.bodyDraft) &&
+        (d.bodyFinal === undefined || d.bodyFinal === d.bodyDraft),
+    )
+    .toArray();
+  let changed = 0;
+  for (const d of gapped) {
+    const person = await db.people.get(d.personId);
+    if (!person) continue;
+    const s = d.suggestionId ? await db.suggestions.get(d.suggestionId) : undefined;
+    const chat = d.chatId ? await db.chats.get(d.chatId) : undefined;
+    const { out, generatedBy } = await materializeDraft(
+      user,
+      person,
+      d.kind,
+      d.channel as 'gmail' | 'linkedin',
+      s,
+      {},
+      chat,
+      now,
+    );
+    if (out.needsInput.includes('connection')) continue;
+    await db.outbound.update(d.id, {
+      subject: d.externalThreadId ? d.subject : (out.subject ?? d.subject),
+      bodyDraft: bodyFor(out, d.channel as 'gmail' | 'linkedin', d.kind, !!person.linkedinConnectedOn),
+      bodyFinal: undefined,
+      bodyFinalHash: undefined,
+      generatedBy,
+      claims: out.claims,
+      needsInput: out.needsInput.length ? out.needsInput : undefined,
+      opening: out.opening,
+    });
+    changed++;
+  }
+  return changed;
 }
 
 /**

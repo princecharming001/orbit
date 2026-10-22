@@ -127,10 +127,10 @@ test.describe('Chat widgets', () => {
     await expect(input).toHaveValue('');
     expect(await page.content()).not.toContain(KEY);
     await expect(widget.getByTestId('claude-key-remove')).toBeVisible();
-    // the saved key is the one Settings sees, and Settings keeps it hidden as well
+    // the saved key is the one Settings sees, and Settings never shows it
     await page.goto('settings/integrations');
-    await expect(page.getByLabel('Anthropic API key')).toHaveValue(KEY);
-    await expect(page.getByLabel('Anthropic API key')).toHaveAttribute('type', 'password');
+    await expect(page.getByText('Key saved.')).toBeVisible();
+    expect(await page.content()).not.toContain(KEY);
   });
 
   test('the Google widget in the demo explains the sample calendar without offering a sign-in', async ({

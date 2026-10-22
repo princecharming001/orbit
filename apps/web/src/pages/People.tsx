@@ -1,5 +1,12 @@
 import type { CoffeeChat, Person } from '@orbit/core';
-import { ACTIVE_STAGES, CLOSED_STAGES, normalizeCompany, STAGE_HELP, STAGE_LABELS } from '@orbit/core';
+import {
+  ACTIVE_STAGES,
+  CLOSED_STAGES,
+  isKnownContact,
+  normalizeCompany,
+  STAGE_HELP,
+  STAGE_LABELS,
+} from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
@@ -157,14 +164,21 @@ export function People() {
   const visibleChats = chats.filter((c) => byId.get(c.personId) && !byId.get(c.personId)!.hiddenAt);
   const quietCount = visibleChats.filter((c) => wentQuiet(c)).length;
   const hiddenCount = people.filter((p) => p.hiddenAt).length;
-  const total = people.filter((p) => p.isHuman && !p.hiddenAt).length;
+  // the list holds people the student really knows: named, with history both ways or a chat; a brand's account, a
+  // newsletter or someone who only ever wrote in is left out
+  const chatted = useMemo(() => new Set(chats.map((c) => c.personId)), [chats]);
+  const known = useMemo(
+    () => people.filter((p) => isKnownContact(p, { hasChat: chatted.has(p.id) })),
+    [people, chatted],
+  );
+  const total = known.length;
   // the list: everyone, with or without a chat; "With a chat" leaves out closed chats unless they are shown
   const list = useMemo(() => {
     const withChat = new Set(
       chats.filter((c) => (showClosed ? true : !CLOSED_STAGES.includes(c.stage))).map((c) => c.personId),
     );
     const quiet = new Set(chats.filter((c) => wentQuiet(c)).map((c) => c.personId));
-    const found = filterPeople(people, {
+    const found = filterPeople(filter === 'hidden' ? people : known, {
       query: q,
       filter,
       sort: sort === 'stage' ? 'strength' : sort,
@@ -179,7 +193,7 @@ export function People() {
       return c ? STAGE_ORDER.indexOf(c.stage) : STAGE_ORDER.length;
     };
     return found.slice().sort((a, b) => rank(a) - rank(b));
-  }, [people, chats, chatByPerson, q, filter, sort, showClosed, targetNames]);
+  }, [people, known, chats, chatByPerson, q, filter, sort, showClosed, targetNames]);
   const updateParams = (change: (p: URLSearchParams) => void) => {
     const next = new URLSearchParams(latestParams.current);
     change(next);

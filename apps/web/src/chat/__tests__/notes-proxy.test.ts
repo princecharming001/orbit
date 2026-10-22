@@ -3,6 +3,7 @@ import {
   bookingUrl,
   CALCOM_EVENT_TYPES_VERSION,
   defaultOrigins,
+  MCP_AUTH,
   MCP_SERVERS,
   makeHandler,
   mapFathomMeeting,
@@ -335,6 +336,130 @@ describe('orbit-notes: meeting apps over MCP (Granola, Wispr Flow)', () => {
       }),
     );
     expect(await r.json()).toMatchObject({
+      ok: false,
+      reason: 'bad_key',
+      message: 'Wispr Flow needs you to connect again.',
+    });
+  });
+});
+
+describe('orbit-notes: registering with and signing in to Granola and Wispr Flow', () => {
+  const REDIRECT = 'https://tryorbit.today/auth/app';
+  const VERIFIER = 'v'.repeat(43);
+
+  it('registers Orbit at the fixed address as a public client and returns only the client id', async () => {
+    const f = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ client_id: 'client_01ABC', client_secret: 'x' }), { status: 201 }),
+    );
+    const res = await handler(f as unknown as typeof fetch)(
+      post('/oauth/register', { server: 'wispr', redirectUri: REDIRECT, scope: 'openid offline_access' }),
+    );
+    expect(await res.json()).toEqual({ ok: true, clientId: 'client_01ABC' });
+    const [url, init] = f.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe(MCP_AUTH.wispr.register);
+    expect(JSON.parse(String(init.body))).toMatchObject({
+      client_name: 'Orbit',
+      redirect_uris: [REDIRECT],
+      token_endpoint_auth_method: 'none',
+      scope: 'openid offline_access',
+    });
+  });
+
+  it('refuses a return address off Orbit or an unknown app, and says plainly when the app refuses', async () => {
+    const f = vi.fn(async () => new Response('{"error":"invalid_redirect_uri"}', { status: 400 }));
+    const h = handler(f as unknown as typeof fetch);
+    const off = await (
+      await h(post('/oauth/register', { server: 'granola', redirectUri: 'https://evil.example.com/cb' }))
+    ).json();
+    expect(off).toMatchObject({ ok: false, reason: 'refused' });
+    const unknown = await (
+      await h(post('/oauth/register', { server: 'notion', redirectUri: REDIRECT }))
+    ).json();
+    expect(unknown).toMatchObject({ ok: false, reason: 'refused' });
+    expect(f).not.toHaveBeenCalled();
+    const said = await (
+      await h(post('/oauth/register', { server: 'granola', redirectUri: REDIRECT }))
+    ).json();
+    expect(said).toEqual({
+      ok: false,
+      reason: 'refused',
+      message: 'Granola did not let Orbit register (400). Try again in a minute.',
+    });
+  });
+
+  it('trades a code with its PKCE verifier and refreshes, as the public client, at the fixed token address', async () => {
+    const f = vi.fn(async () =>
+      ok({ access_token: 'gra_acc_1', refresh_token: 'gra_ref_1', expires_in: 3600 }),
+    );
+    const h = handler(f as unknown as typeof fetch);
+    const code = await (
+      await h(
+        post('/oauth/token', {
+          provider: 'granola',
+          grant: 'code',
+          clientId: 'client_01ABC',
+          code: 'code_123',
+          redirectUri: REDIRECT,
+          codeVerifier: VERIFIER,
+        }),
+      )
+    ).json();
+    expect(code).toEqual({ ok: true, accessToken: 'gra_acc_1', refreshToken: 'gra_ref_1', expiresIn: 3600 });
+    const [url, init] = f.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe(MCP_AUTH.granola.token);
+    expect(Object.fromEntries(new URLSearchParams(String(init.body)))).toEqual({
+      client_id: 'client_01ABC',
+      resource: MCP_SERVERS.granola,
+      grant_type: 'authorization_code',
+      code: 'code_123',
+      redirect_uri: REDIRECT,
+      code_verifier: VERIFIER,
+    });
+    await h(
+      post('/oauth/token', {
+        provider: 'granola',
+        grant: 'refresh',
+        clientId: 'client_01ABC',
+        refreshToken: 'gra_ref_1',
+      }),
+    );
+    const sent = Object.fromEntries(
+      new URLSearchParams(String((f.mock.calls[1] as unknown as [string, RequestInit])[1].body)),
+    );
+    expect(sent).toEqual({
+      client_id: 'client_01ABC',
+      resource: MCP_SERVERS.granola,
+      grant_type: 'refresh_token',
+      refresh_token: 'gra_ref_1',
+    });
+  });
+
+  it('a code without its verifier or for another site is never traded; a refused code asks to connect again', async () => {
+    const f = vi.fn(async () => new Response('{"error":"invalid_grant"}', { status: 400 }));
+    const h = handler(f as unknown as typeof fetch);
+    const base = { provider: 'wispr', grant: 'code', clientId: 'client_01ABC', code: 'code_123' };
+    expect(await (await h(post('/oauth/token', { ...base, redirectUri: REDIRECT }))).json()).toMatchObject({
+      ok: false,
+      reason: 'refused',
+    });
+    expect(
+      await (
+        await h(
+          post('/oauth/token', {
+            ...base,
+            redirectUri: 'https://evil.example.com/cb',
+            codeVerifier: VERIFIER,
+          }),
+        )
+      ).json(),
+    ).toMatchObject({ ok: false, reason: 'refused' });
+    expect(f).not.toHaveBeenCalled();
+    expect(
+      await (
+        await h(post('/oauth/token', { ...base, redirectUri: REDIRECT, codeVerifier: VERIFIER }))
+      ).json(),
+    ).toEqual({
       ok: false,
       reason: 'bad_key',
       message: 'Wispr Flow needs you to connect again.',

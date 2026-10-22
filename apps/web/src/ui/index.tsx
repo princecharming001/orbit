@@ -5,7 +5,6 @@ import {
   createContext,
   type InputHTMLAttributes,
   type ReactNode,
-  type SelectHTMLAttributes,
   type TextareaHTMLAttributes,
   useCallback,
   useContext,
@@ -90,20 +89,7 @@ export function Textarea({ className, ...rest }: TextareaHTMLAttributes<HTMLText
     />
   );
 }
-export function Select({ className, ...rest }: SelectHTMLAttributes<HTMLSelectElement>) {
-  return (
-    <select
-      className={cx(
-        'rounded-[10px] border border-line bg-canvas px-2.5 focus:outline-none focus:ring-4 focus:ring-ink/[0.06] focus:border-[#bdbab5]',
-        // the default size gives way to one the caller sets (a compact select in a table row or on a card)
-        !/(^|\s)h-/.test(className ?? '') && 'h-10',
-        !/(^|\s)text-\[/.test(className ?? '') && 'text-[14px]',
-        className,
-      )}
-      {...rest}
-    />
-  );
-}
+export { Select } from './Select';
 /**
  * A field label. The label never shrinks: a long hint wraps under it instead of squeezing the label into a column.
  * Pass `htmlFor` so a click (and a screen reader) lands on the field; `required` / `optional` say so in words.
@@ -183,10 +169,19 @@ export function Avatar({
     for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
     return h % 360;
   }, [id, name]);
+  // LinkedIn's photo links expire: a picture that no longer loads falls back to the initials
+  const [broken, setBroken] = useState<string>();
+  const shown = src && src !== broken ? src : undefined;
   return (
     <span className="relative inline-flex shrink-0" style={{ width: size, height: size }}>
-      {src ? (
-        <img src={src} alt="" className="rounded-full object-cover w-full h-full" />
+      {shown ? (
+        <img
+          src={shown}
+          alt=""
+          className="rounded-full object-cover w-full h-full"
+          referrerPolicy="no-referrer"
+          onError={() => setBroken(shown)}
+        />
       ) : (
         <span
           className="rounded-full w-full h-full inline-flex items-center justify-center font-semibold text-white"
@@ -197,6 +192,24 @@ export function Avatar({
       )}
       {ring && <span className="absolute inset-[-2px] rounded-full border-2" style={{ borderColor: ring }} />}
     </span>
+  );
+}
+
+/** A LinkedIn profile, as LinkedIn's small blue mark: opens the profile in a new tab. */
+export function LinkedInMark({ url, name, testId }: { url: string; name: string; testId?: string }) {
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noreferrer noopener"
+      aria-label={`${name} on LinkedIn`}
+      title="Open on LinkedIn"
+      onClick={(e) => e.stopPropagation()}
+      className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-[3px] bg-[#0a66c2] text-[9px] font-bold leading-none text-white hover:opacity-85"
+      data-testid={testId}
+    >
+      in
+    </a>
   );
 }
 

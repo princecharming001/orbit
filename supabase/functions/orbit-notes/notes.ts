@@ -8,6 +8,10 @@
  * - POST /mcp/call {server, accessToken, calls}: up to ten read-only tool calls on Granola's or Wispr Flow's meeting
  *   server (MCP), in one session, with the token the student got by signing in. Wispr Flow's server turns browsers
  *   away, so the calls come through here; only those two servers are reachable.
+ * - POST /oauth/register {server, redirectUri, scope}: registers Orbit with Granola's or Wispr Flow's sign-in server
+ *   (dynamic client registration) and returns the public client id. Their sign-in servers answer a browser's
+ *   preflight but leave the CORS header off the answer itself, so a browser cannot read it; the same goes for their
+ *   token endpoint, which /oauth/token reaches for them (PKCE, no secret).
  *
  * The key comes from the student's browser with each call and is only forwarded: it is never stored, logged or sent
  * anywhere else. Calls come only from Orbit's own origins and are counted per visitor (hashed IP) like the other
@@ -274,6 +278,7 @@ async function oauthToken(
   body: Record<string, unknown>,
   doFetch: typeof fetch,
 ): Promise<Result<{ accessToken: string; refreshToken?: string; expiresIn?: number }>> {
+  if (body.provider === 'granola' || body.provider === 'wispr') return mcpToken(deps, body, doFetch);
   const provider = body.provider === 'calcom' ? 'calcom' : body.provider === 'fathom' ? 'fathom' : undefined;
   const client = provider ? deps.oauth?.[provider] : undefined;
   if (!provider || !client)
@@ -320,6 +325,130 @@ export const MCP_SERVERS = {
   wispr: 'https://api.wisprflow.ai/connect/mcp',
 } as const;
 export type McpServer = keyof typeof MCP_SERVERS;
+/**
+ * Where Granola's and Wispr Flow's sign-in servers register apps and hand out tokens (both WorkOS AuthKit). Fixed
+ * here, never taken from the request, so this function only ever talks to these two.
+ */
+export const MCP_AUTH: Record<McpServer, { register: string; token: string }> = {
+  granola: {
+    register: 'https://mcp-auth.granola.ai/oauth2/register',
+    token: 'https://mcp-auth.granola.ai/oauth2/token',
+  },
+  wispr: {
+    register: 'https://mcp-auth.wisprflow.com/oauth2/register',
+    token: 'https://mcp-auth.wisprflow.com/oauth2/token',
+  },
+};
+const mcpName = (server: McpServer) => (server === 'granola' ? 'Granola' : 'Wispr Flow');
+const mcpServerOf = (v: unknown): McpServer | undefined => (v === 'granola' || v === 'wispr' ? v : undefined);
+/** a client id or a code from the sign-in server: a plain token */
+const plainToken = (v: unknown): string | undefined => {
+  const t = str(v);
+  return t && /^[A-Za-z0-9._\-~+/=]{4,4000}$/.test(t) ? t : undefined;
+};
+
+/** The redirect address, when it comes back to one of Orbit's own origins. */
+function orbitRedirect(deps: NotesDeps, v: unknown): string | undefined {
+  const redirect = str(v);
+  try {
+    return redirect && deps.origins(new URL(redirect).origin) ? redirect : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Register Orbit with a meeting app's sign-in server, for this redirect address; returns the public client id. */
+async function mcpRegister(
+  deps: NotesDeps,
+  body: Record<string, unknown>,
+  doFetch: typeof fetch,
+): Promise<Result<{ clientId: string }>> {
+  const server = mcpServerOf(body.server);
+  if (!server) return { ok: false, reason: 'refused', message: 'That app cannot be signed in to here.' };
+  const name = mcpName(server);
+  const redirect = orbitRedirect(deps, body.redirectUri);
+  if (!redirect)
+    return { ok: false, reason: 'refused', message: 'That sign-in would not come back to Orbit.' };
+  const scope = str(body.scope);
+  const res = await doFetch(MCP_AUTH[server].register, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', accept: 'application/json' },
+    body: JSON.stringify({
+      client_name: 'Orbit',
+      client_uri: 'https://tryorbit.today',
+      redirect_uris: [redirect],
+      grant_types: ['authorization_code', 'refresh_token'],
+      response_types: ['code'],
+      token_endpoint_auth_method: 'none',
+      ...(scope && /^[A-Za-z0-9_:. -]{1,200}$/.test(scope) ? { scope } : {}),
+    }),
+  });
+  if (!res.ok)
+    return {
+      ok: false,
+      reason: res.status >= 500 ? 'upstream' : 'refused',
+      message: `${name} did not let Orbit register (${res.status}). Try again in a minute.`,
+    };
+  const clientId = plainToken(((await res.json()) as { client_id?: unknown }).client_id);
+  if (!clientId)
+    return {
+      ok: false,
+      reason: 'upstream',
+      message: `${name} did not let Orbit register. Try again in a minute.`,
+    };
+  return { ok: true, clientId };
+}
+
+/**
+ * Trade a meeting app's sign-in code (with its PKCE verifier) for tokens, or refresh them, as the public client Orbit
+ * registered: no secret is involved.
+ */
+async function mcpToken(
+  deps: NotesDeps,
+  body: Record<string, unknown>,
+  doFetch: typeof fetch,
+): Promise<Result<{ accessToken: string; refreshToken?: string; expiresIn?: number }>> {
+  const server = mcpServerOf(body.provider)!;
+  const name = mcpName(server);
+  const clientId = plainToken(body.clientId);
+  if (!clientId) return { ok: false, reason: 'bad_key', message: `${name} needs you to connect again.` };
+  const params: Record<string, string> = { client_id: clientId, resource: MCP_SERVERS[server] };
+  if (body.grant === 'refresh') {
+    const rt = str(body.refreshToken);
+    if (!rt) return { ok: false, reason: 'refused', message: 'Nothing to refresh.' };
+    Object.assign(params, { grant_type: 'refresh_token', refresh_token: rt });
+  } else {
+    const code = plainToken(body.code);
+    const verifier = str(body.codeVerifier);
+    const redirect = orbitRedirect(deps, body.redirectUri);
+    if (!code || !redirect || !verifier || !/^[A-Za-z0-9._~-]{43,128}$/.test(verifier))
+      return { ok: false, reason: 'refused', message: 'That sign-in did not come back to Orbit.' };
+    Object.assign(params, {
+      grant_type: 'authorization_code',
+      code,
+      redirect_uri: redirect,
+      code_verifier: verifier,
+    });
+  }
+  const res = await doFetch(MCP_AUTH[server].token, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
+    body: new URLSearchParams(params).toString(),
+  });
+  if (res.status === 400 || res.status === 401)
+    return { ok: false, reason: 'bad_key', message: `${name} needs you to connect again.` };
+  if (!res.ok)
+    return { ok: false, reason: 'upstream', message: `${name} is not answering right now (${res.status}).` };
+  const t = (await res.json()) as { access_token?: unknown; refresh_token?: unknown; expires_in?: unknown };
+  const accessToken = str(t.access_token);
+  if (!accessToken) return { ok: false, reason: 'upstream', message: `${name} gave no access.` };
+  return {
+    ok: true,
+    accessToken,
+    refreshToken: str(t.refresh_token),
+    expiresIn: typeof t.expires_in === 'number' ? t.expires_in : undefined,
+  };
+}
 /** the only tools Orbit calls: reading meetings and who is signed in, never a tool that changes anything */
 export const MCP_TOOLS: Record<McpServer, readonly string[]> = {
   granola: ['list_meetings', 'get_meetings', 'get_account_info'],
@@ -545,7 +674,14 @@ export function makeHandler(deps: NotesDeps): (req: Request) => Promise<Response
     if (!allowed) return json(403, { error: 'origin not allowed' }, h);
     if (req.method !== 'POST') return json(405, { error: 'POST only' }, h);
     const path = new URL(req.url).pathname.replace(/.*\/orbit-notes/, '') || '/';
-    const routes = ['/fathom/meetings', '/calcom/event-types', '/oauth/config', '/oauth/token', '/mcp/call'];
+    const routes = [
+      '/fathom/meetings',
+      '/calcom/event-types',
+      '/oauth/config',
+      '/oauth/token',
+      '/oauth/register',
+      '/mcp/call',
+    ];
     if (!routes.includes(path)) return json(404, { error: 'no such route' }, h);
     // which sign-ins are set up: public ids only, nothing to count
     if (path === '/oauth/config') return json(200, { ok: true, ...oauthConfig(deps) }, h);
@@ -555,7 +691,7 @@ export function makeHandler(deps: NotesDeps): (req: Request) => Promise<Response
     } catch {
       return json(400, { error: 'the body must be JSON' }, h);
     }
-    if (!body || typeof body !== 'object' || (path !== '/oauth/token' && !authOf(body)))
+    if (!body || typeof body !== 'object' || (!path.startsWith('/oauth/') && !authOf(body)))
       return json(400, { error: 'an API key or a sign-in is needed' }, h);
     const visitor = (await sha256(`${deps.salt ?? 'orbit'}:${clientIp(req)}`)).slice(0, 32);
     let verdict: { allowed: boolean; over?: string };
@@ -576,11 +712,13 @@ export function makeHandler(deps: NotesDeps): (req: Request) => Promise<Response
       const out =
         path === '/oauth/token'
           ? await oauthToken(deps, body, doFetch)
-          : path === '/mcp/call'
-            ? await mcpCalls(body, doFetch)
-            : path === '/fathom/meetings'
-              ? await fathomMeetings(body, doFetch)
-              : await calEventTypes(body, doFetch);
+          : path === '/oauth/register'
+            ? await mcpRegister(deps, body, doFetch)
+            : path === '/mcp/call'
+              ? await mcpCalls(body, doFetch)
+              : path === '/fathom/meetings'
+                ? await fathomMeetings(body, doFetch)
+                : await calEventTypes(body, doFetch);
       return json(200, out, h);
     } catch {
       // never echo an upstream error: it could carry the key back

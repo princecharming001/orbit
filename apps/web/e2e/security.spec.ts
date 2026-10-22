@@ -77,7 +77,7 @@ test.describe('security', () => {
     );
   });
 
-  test('a key saved by an older build moves out of localStorage; Claude use is opt-in per feature', async ({
+  test('a key saved by an older build moves out of localStorage; Claude is built in, with no switches', async ({
     page,
   }) => {
     await loadDemo(page);
@@ -87,29 +87,13 @@ test.describe('security', () => {
     await page.goto('settings/integrations');
     await expect(page.getByText('Key saved.')).toBeVisible();
     expect(await page.evaluate(() => localStorage.getItem('orbit.prefs.v1'))).toBeNull();
-    // what Claude may read sits behind one disclosure on the Claude row
-    await page.getByTestId('ai-permissions').locator('summary').click();
-    await expect(page.getByTestId('ai-feature-drafts')).toBeChecked();
-    // reading synced email is only offered where Google is part of the build
-    await expect(page.getByTestId('ai-feature-emailTriage')).toHaveCount(0);
-    await expect(page.getByTestId('ai-feature-notes')).not.toBeChecked();
-    await expect(
-      page.getByText('The full text of each note or transcript you add is sent to Anthropic', {
-        exact: false,
-      }),
-    ).toBeVisible();
-    await page.getByTestId('ai-feature-notes').check();
-    // daily limits and usage are advanced settings, behind a disclosure
-    await expect(page.getByTestId('ai-cap-requests')).toBeHidden();
-    await page.getByTestId('ai-advanced').locator('summary').click();
-    await page.getByTestId('ai-cap-requests').fill('20');
-    await page.waitForTimeout(200);
-    await page.reload();
-    await page.getByTestId('ai-permissions').locator('summary').click();
-    await expect(page.getByTestId('ai-feature-notes')).toBeChecked();
-    await page.getByTestId('ai-advanced').locator('summary').click();
-    await expect(page.getByTestId('ai-cap-requests')).toHaveValue('20');
-    await expect(page.getByTestId('ai-usage-today')).toContainText('of 20 requests');
+    // nothing to set: no key field, no per-feature switches, no limits
+    await expect(page.getByLabel('Anthropic API key')).toHaveCount(0);
+    await expect(page.getByTestId('ai-permissions')).toHaveCount(0);
+    await expect(page.getByTestId('ai-chat-row')).toContainText(/of \d+ requests/);
+    // the old key can be dropped for the built-in Claude
+    await page.getByTestId('ai-remove-key').click();
+    await expect(page.getByText('Built in.')).toBeVisible();
 
     await page.goto('settings/privacy');
     // the demo has sample emails, so the download lists them

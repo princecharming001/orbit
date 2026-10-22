@@ -5,7 +5,7 @@
  * mock pool.
  */
 import type { CoffeeChat, User } from '@orbit/core';
-import { newId } from '@orbit/core';
+import { newId, roleFromHeadline } from '@orbit/core';
 import { db } from '../db/schema';
 import { mockLinkedInSearch, usesMockConnectors } from '../integrations/connectorsMock';
 import { isServerUser } from '../integrations/orbitApi';
@@ -54,13 +54,22 @@ export async function searchLinkedInLive(
     people = r.value.people;
   }
   const mine = await db.people.where('userId').equals(user.id).toArray();
-  const known = new Map(mine.filter((p) => p.linkedinMemberId).map((p) => [p.linkedinMemberId!, p.id]));
+  const known = new Map(mine.filter((p) => p.linkedinMemberId).map((p) => [p.linkedinMemberId!, p]));
+  // someone Orbit already has, found again: their photo and headline fill in where Orbit had none
+  for (const f of people) {
+    const p = known.get(f.memberId);
+    if (p && ((!p.photoUrl && f.pictureUrl) || (!p.headline && f.headline)))
+      await db.people.update(p.id, {
+        photoUrl: p.photoUrl ?? f.pictureUrl,
+        headline: p.headline ?? f.headline,
+      });
+  }
   return {
     ok: true,
     people: people.map((p) => {
       const id = `${LINKEDIN_FOUND_PREFIX}${p.memberId}`;
       found.set(id, p);
-      return { ...p, id, knownPersonId: known.get(p.memberId) };
+      return { ...p, id, knownPersonId: known.get(p.memberId)?.id };
     }),
   };
 }
@@ -79,15 +88,19 @@ export async function addLinkedInFound(
   if (!picked.length) return { ok: false, message: 'Search again, then pick who to add.' };
   const out: { id: string; displayName: string; chatId: string }[] = [];
   for (const f of picked) {
-    const [title, company] = (f.headline ?? '').split(/\s+at\s+/i);
+    const { title, org: company } = roleFromHeadline(f.headline);
     const r = await addPersonByHand(
       user.id,
-      { name: f.name, linkedinUrl: f.profileUrl, title: title?.trim(), company: company?.trim() },
+      { name: f.name, linkedinUrl: f.profileUrl, title, company },
       user.school,
     );
     if (!r) continue;
     const person = r.person;
-    await db.people.update(person.id, { linkedinMemberId: f.memberId });
+    await db.people.update(person.id, {
+      linkedinMemberId: f.memberId,
+      photoUrl: person.photoUrl ?? f.pictureUrl,
+      headline: person.headline ?? f.headline,
+    });
     let chat = await db.chats
       .where('personId')
       .equals(person.id)
