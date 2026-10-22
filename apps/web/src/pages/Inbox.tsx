@@ -41,6 +41,8 @@ const PROVIDER_LABELS: Record<string, string> = {
   linkedin_csv: 'LinkedIn import',
   granola: 'Granola',
   fathom: 'Fathom',
+  fireflies: 'Fireflies',
+  wispr: 'Wispr Flow',
   calcom: 'Cal.com',
   wispr_export: 'Wispr Flow',
   tracker_import: 'Tracker import',

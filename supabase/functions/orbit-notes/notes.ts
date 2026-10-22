@@ -5,6 +5,9 @@
  * - POST /fathom/meetings {apiKey, createdAfter?, cursor?}: the student's recorded meetings from Fathom, each with its
  *   guest list, AI summary and action items, trimmed to what Orbit files as a note.
  * - POST /calcom/event-types {apiKey}: the student's Cal.com username and event types, each with its booking link.
+ * - POST /mcp/call {server, accessToken, calls}: up to ten read-only tool calls on Granola's or Wispr Flow's meeting
+ *   server (MCP), in one session, with the token the student got by signing in. Wispr Flow's server turns browsers
+ *   away, so the calls come through here; only those two servers are reachable.
  *
  * The key comes from the student's browser with each call and is only forwarded: it is never stored, logged or sent
  * anywhere else. Calls come only from Orbit's own origins and are counted per visitor (hashed IP) like the other
@@ -311,6 +314,143 @@ async function oauthToken(
   };
 }
 
+/** The meeting apps whose MCP servers Orbit reads through /mcp/call: nothing else can be reached. */
+export const MCP_SERVERS = {
+  granola: 'https://mcp.granola.ai/mcp',
+  wispr: 'https://api.wisprflow.ai/connect/mcp',
+} as const;
+export type McpServer = keyof typeof MCP_SERVERS;
+/** the only tools Orbit calls: reading meetings and who is signed in, never a tool that changes anything */
+export const MCP_TOOLS: Record<McpServer, readonly string[]> = {
+  granola: ['list_meetings', 'get_meetings', 'get_account_info'],
+  wispr: ['search_meetings', 'get_meeting', 'get_meeting_participants_enriched', 'get_account_info'],
+};
+export const MCP_PROTOCOL = '2025-06-18';
+/** a tool's text is cut here: a meeting's notes, not a transcript archive */
+export const MCP_TEXT_MAX = 60_000;
+const MCP_MAX_CALLS = 10;
+
+export interface McpResult {
+  ok: boolean;
+  text?: string;
+  structured?: unknown;
+}
+
+/** One JSON-RPC answer, whether the server replied with JSON or a short event stream. */
+export function readRpc(body: string, contentType: string, id: number): Record<string, unknown> | undefined {
+  const parse = (t: string) => {
+    try {
+      return JSON.parse(t) as unknown;
+    } catch {
+      return undefined;
+    }
+  };
+  const candidates: unknown[] = [];
+  if (contentType.includes('text/event-stream')) {
+    // events are separated by a blank line; each data line of one event joins with a newline
+    for (const event of body.split(/\r?\n\r?\n/)) {
+      const data = event
+        .split(/\r?\n/)
+        .filter((l) => l.startsWith('data:'))
+        .map((l) => l.slice(5).replace(/^ /, ''))
+        .join('\n');
+      if (data) candidates.push(parse(data));
+    }
+  } else candidates.push(parse(body));
+  for (const c of candidates.flatMap((x) => (Array.isArray(x) ? x : [x])))
+    if (c && typeof c === 'object' && (c as { id?: unknown }).id === id) return c as Record<string, unknown>;
+  return undefined;
+}
+
+async function mcpCalls(
+  body: Record<string, unknown>,
+  doFetch: typeof fetch,
+): Promise<Result<{ tools?: string[]; results: McpResult[] }>> {
+  const server = body.server === 'granola' || body.server === 'wispr' ? body.server : undefined;
+  const auth = authOf(body);
+  const calls = Array.isArray(body.calls) ? body.calls : [];
+  if (!server || !auth || !('accessToken' in auth))
+    return { ok: false, reason: 'refused', message: 'Sign in to the app first.' };
+  if (calls.length > MCP_MAX_CALLS)
+    return { ok: false, reason: 'refused', message: `At most ${MCP_MAX_CALLS} at a time.` };
+  const valid = calls.every(
+    (c) => !!c && typeof c === 'object' && MCP_TOOLS[server].includes(String((c as { name?: unknown }).name)),
+  );
+  if (!valid) return { ok: false, reason: 'refused', message: 'That is not a call Orbit makes.' };
+  const url = MCP_SERVERS[server];
+  const name = server === 'granola' ? 'Granola' : 'Wispr Flow';
+  let session: string | undefined;
+  let nextId = 1;
+  const rpc = async (method: string, params: unknown, notify = false) => {
+    const id = nextId++;
+    const res = await doFetch(url, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        authorization: `Bearer ${auth.accessToken}`,
+        'mcp-protocol-version': MCP_PROTOCOL,
+        ...(session ? { 'mcp-session-id': session } : {}),
+      },
+      body: JSON.stringify(
+        notify ? { jsonrpc: '2.0', method, params } : { jsonrpc: '2.0', id, method, params },
+      ),
+    });
+    session = res.headers.get('mcp-session-id') ?? session;
+    if (res.status === 401 || res.status === 403) return { status: 'auth' as const };
+    if (!res.ok && !notify) return { status: 'down' as const, code: res.status };
+    if (notify) return { status: 'ok' as const, msg: undefined };
+    const msg = readRpc(await res.text(), res.headers.get('content-type') ?? '', id);
+    return { status: 'ok' as const, msg };
+  };
+  const again = {
+    ok: false as const,
+    reason: 'bad_key' as const,
+    message: `${name} needs you to connect again.`,
+  };
+  const init = await rpc('initialize', {
+    protocolVersion: MCP_PROTOCOL,
+    capabilities: {},
+    clientInfo: { name: 'Orbit', version: '1' },
+  });
+  if (init.status === 'auth') return again;
+  if (init.status !== 'ok' || !init.msg?.result)
+    return { ok: false, reason: 'upstream', message: `${name} is not answering right now.` };
+  await rpc('notifications/initialized', {}, true);
+  let tools: string[] | undefined;
+  if (body.list === true) {
+    const l = await rpc('tools/list', {});
+    if (l.status === 'auth') return again;
+    const list = (
+      l.status === 'ok' ? (l.msg?.result as { tools?: { name?: unknown }[] } | undefined) : undefined
+    )?.tools;
+    tools = (list ?? []).map((t) => String(t.name ?? '')).filter(Boolean);
+  }
+  const results: McpResult[] = [];
+  for (const c of calls as { name: string; arguments?: unknown }[]) {
+    const args = c.arguments && typeof c.arguments === 'object' ? c.arguments : {};
+    const r = await rpc('tools/call', { name: c.name, arguments: args });
+    if (r.status === 'auth') return again;
+    const result = r.status === 'ok' ? (r.msg?.result as Record<string, unknown> | undefined) : undefined;
+    if (!result) {
+      results.push({ ok: false });
+      continue;
+    }
+    const content = Array.isArray(result.content) ? result.content : [];
+    const text = content
+      .filter((x): x is { type: string; text: string } => !!x && (x as { type?: unknown }).type === 'text')
+      .map((x) => String(x.text))
+      .join('\n')
+      .slice(0, MCP_TEXT_MAX);
+    results.push({
+      ok: result.isError !== true,
+      text: text || undefined,
+      structured: result.structuredContent ?? undefined,
+    });
+  }
+  return { ok: true, tools, results };
+}
+
 /** The booking link for an event type: Cal.com's own when it gives one, else cal.com/{username}/{slug}. */
 export function bookingUrl(username: string | undefined, e: Record<string, unknown>): string | undefined {
   const given = str(e.bookingUrl) ?? str(e.link);
@@ -405,7 +545,7 @@ export function makeHandler(deps: NotesDeps): (req: Request) => Promise<Response
     if (!allowed) return json(403, { error: 'origin not allowed' }, h);
     if (req.method !== 'POST') return json(405, { error: 'POST only' }, h);
     const path = new URL(req.url).pathname.replace(/.*\/orbit-notes/, '') || '/';
-    const routes = ['/fathom/meetings', '/calcom/event-types', '/oauth/config', '/oauth/token'];
+    const routes = ['/fathom/meetings', '/calcom/event-types', '/oauth/config', '/oauth/token', '/mcp/call'];
     if (!routes.includes(path)) return json(404, { error: 'no such route' }, h);
     // which sign-ins are set up: public ids only, nothing to count
     if (path === '/oauth/config') return json(200, { ok: true, ...oauthConfig(deps) }, h);
@@ -436,9 +576,11 @@ export function makeHandler(deps: NotesDeps): (req: Request) => Promise<Response
       const out =
         path === '/oauth/token'
           ? await oauthToken(deps, body, doFetch)
-          : path === '/fathom/meetings'
-            ? await fathomMeetings(body, doFetch)
-            : await calEventTypes(body, doFetch);
+          : path === '/mcp/call'
+            ? await mcpCalls(body, doFetch)
+            : path === '/fathom/meetings'
+              ? await fathomMeetings(body, doFetch)
+              : await calEventTypes(body, doFetch);
       return json(200, out, h);
     } catch {
       // never echo an upstream error: it could carry the key back

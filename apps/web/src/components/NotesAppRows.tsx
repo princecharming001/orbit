@@ -1,7 +1,7 @@
 /**
- * Settings, Integrations: Fathom (notes from recorded meetings, filed on each person) and Cal.com (booking links for
- * drafts). Each connects by signing in to the app (when Orbit's OAuth client for it is set), or with the student's
- * own API key; either way the credentials stay in this browser.
+ * Settings, Integrations: the meeting notetaker (Fathom, Granola, Fireflies or Wispr Flow: notes from recorded
+ * meetings, filed on each person; the student picks one) and Cal.com (booking links for drafts). Each connects by
+ * signing in to the app, or with the student's own API key; either way the credentials stay in this browser.
  */
 import type { User } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
@@ -23,6 +23,15 @@ import {
   fathomStatus,
   syncFathom,
 } from '../engine/fathom';
+import {
+  connectMeetingApp,
+  disconnectMeetingApp,
+  FIREFLIES_KEY_URL,
+  MEETING_APP_META,
+  type MeetingApp,
+  meetingAppStatus,
+  syncMeetingApp,
+} from '../engine/meetingApps';
 import { usesMockConnectors } from '../integrations/connectorsMock';
 import { Button, Input, relDate, Spinner, Switch, useToast } from '../ui';
 import { AppMark, IntegrationRow, RowStatus } from './IntegrationRow';
@@ -113,6 +122,19 @@ function KeyField({
   );
 }
 
+/** "Granola is on now, so Fathom is off. Imported 3 meetings onto the people in them." */
+function importedText(name: string, r: { imported: number; switchedOff?: string[] }): string {
+  const off = r.switchedOff?.length
+    ? `${name} is on now, so ${r.switchedOff.join(' and ')} ${r.switchedOff.length === 1 ? 'is' : 'are'} off. `
+    : '';
+  return (
+    off +
+    (r.imported
+      ? `Imported ${r.imported} meeting${r.imported === 1 ? '' : 's'} from ${name} onto the people in them.`
+      : `${name} is up to date: no new meetings.`)
+  );
+}
+
 export function FathomRow({ user }: { user: User }) {
   const toast = useToast();
   const status = useLiveQuery(() => fathomStatus(user), [user.id]);
@@ -121,15 +143,10 @@ export function FathomRow({ user }: { user: User }) {
   const [error, setError] = useState<string>();
   const canSignIn = useCanSignIn('fathom', user.id);
   if (!status) return null;
-  const done = (r: Awaited<ReturnType<typeof syncFathom>>) => {
+  const done = (r: Awaited<ReturnType<typeof connectFathom>>) => {
     if (r.ok) {
       setAsking(false);
-      toast.push({
-        text: r.imported
-          ? `Imported ${r.imported} meeting${r.imported === 1 ? '' : 's'} from Fathom onto the people in them.`
-          : 'Fathom is up to date: no new meetings.',
-        tone: 'good',
-      });
+      toast.push({ text: importedText('Fathom', r), tone: 'good' });
     } else setError(r.message);
   };
   const connect = async (key = '') => {
@@ -268,6 +285,139 @@ export function FathomRow({ user }: { user: User }) {
       )}
       {error && (
         <p className="text-[12.5px] text-bad" role="alert" data-testid="settings-fathom-error">
+          {error}
+        </p>
+      )}
+      {status.connected && status.error && !error && (
+        <p className="text-[12.5px] text-bad">The last sync did not go through: {status.error}</p>
+      )}
+    </IntegrationRow>
+  );
+}
+
+const SIGN_IN_HINT: Record<Exclude<MeetingApp, 'fireflies'>, string> = {
+  granola:
+    "Opens Granola's sign-in. Every plan works; on the free plan Granola shares the last 30 days of notes.",
+  wispr: "Opens Wispr Flow's sign-in. Needs Wispr Flow's Notetaker recording your calls.",
+};
+
+/** Granola, Fireflies or Wispr Flow: a meeting notetaker that is not Fathom. */
+export function MeetingAppRow({ user, app }: { user: User; app: MeetingApp }) {
+  const toast = useToast();
+  const meta = MEETING_APP_META[app];
+  const status = useLiveQuery(() => meetingAppStatus(user, app), [user.id, app]);
+  const [asking, setAsking] = useState(false);
+  const [busy, setBusy] = useState<string>();
+  const [error, setError] = useState<string>();
+  if (!status) return null;
+  const testId = `settings-${app}`;
+  const run = async (label: string, work: () => ReturnType<typeof syncMeetingApp>) => {
+    setError(undefined);
+    setBusy(label);
+    try {
+      const r = await work();
+      if (r.ok) {
+        setAsking(false);
+        toast.push({ text: importedText(meta.name, r), tone: 'good' });
+      } else setError(r.message);
+    } finally {
+      setBusy(undefined);
+    }
+  };
+  const connect = (key = '') =>
+    run(
+      meta.connect === 'sign_in' && !usesMockConnectors(user.id) ? `Waiting for ${meta.name}…` : 'Importing…',
+      () => connectMeetingApp(user, app, key),
+    );
+  return (
+    <IntegrationRow
+      testId={testId}
+      mark={<AppMark logo={meta.logo}>{meta.name[0]}</AppMark>}
+      name={meta.name}
+      status={
+        status.connected ? (
+          <RowStatus testId={`${testId}-status`}>
+            <Check size={12} /> Connected · {status.meetings} meeting{status.meetings === 1 ? '' : 's'}
+            {status.lastSyncedAt ? ` · synced ${relDate(status.lastSyncedAt)}` : ''}
+          </RowStatus>
+        ) : status.needsKey ? (
+          <RowStatus tone="bad">{meta.connect === 'key' ? 'Key no longer works' : 'Sign in again'}</RowStatus>
+        ) : undefined
+      }
+      line={
+        status.available
+          ? 'Notes from your recorded meetings, filed on each person.'
+          : 'Not part of this version of Orbit yet. Paste notes in Add note instead.'
+      }
+      actions={
+        !status.available ? undefined : (
+          <>
+            {status.connected && (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => run('Syncing…', () => syncMeetingApp(user, app))}
+                disabled={!!busy}
+                data-testid={`${testId}-sync`}
+              >
+                {busy ? (
+                  <>
+                    <Spinner /> {busy}
+                  </>
+                ) : (
+                  'Sync now'
+                )}
+              </Button>
+            )}
+            {/* on: the app's sign-in, or the key field (the demo connects straight away); off disconnects */}
+            <Switch
+              checked={status.connected || asking}
+              label={meta.name}
+              busy={!!busy && !status.connected}
+              title={status.connected ? `Disconnect ${meta.name}` : `Connect ${meta.name}`}
+              onChange={(on) => {
+                if (status.connected) return void disconnectMeetingApp(user, app);
+                if (!on) return setAsking(false);
+                if (usesMockConnectors(user.id) || meta.connect === 'sign_in') return void connect();
+                setAsking(true);
+              }}
+              data-testid={status.connected ? `${testId}-disconnect` : `${testId}-connect`}
+            />
+          </>
+        )
+      }
+    >
+      {meta.connect === 'sign_in' && status.available && !status.connected && !busy && (
+        <p className="text-[12px] text-ink-3">{SIGN_IN_HINT[app as Exclude<MeetingApp, 'fireflies'>]}</p>
+      )}
+      {asking && !status.connected && (
+        <KeyField
+          id={`${app}-key`}
+          label={`${meta.name} API key`}
+          placeholder={`${meta.name} API key`}
+          submitLabel="Connect and import"
+          busy={busy}
+          testId={testId}
+          onSubmit={(k) => connect(k)}
+          onCancel={() => setAsking(false)}
+          hint={
+            <>
+              In Fireflies: Settings, Developer settings, API key.{' '}
+              <a
+                href={FIREFLIES_KEY_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="underline underline-offset-2"
+              >
+                Open Fireflies
+              </a>
+              . Kept in this browser only. Fireflies must be joining your calls for notes to arrive.
+            </>
+          }
+        />
+      )}
+      {error && (
+        <p className="text-[12.5px] text-bad" role="alert" data-testid={`${testId}-error`}>
           {error}
         </p>
       )}

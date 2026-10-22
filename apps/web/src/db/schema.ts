@@ -41,6 +41,8 @@ export interface IntegrationAccount {
     | 'linkedin_live'
     | 'granola'
     | 'fathom'
+    | 'fireflies'
+    | 'wispr'
     | 'calcom'
     | 'wispr_export'
     | 'tracker_import'
@@ -48,8 +50,11 @@ export interface IntegrationAccount {
   externalAccountId?: string;
   /** live LinkedIn: the token Orbit's server gave this browser for the account; account calls carry it */
   accessToken?: string;
-  /** an app connected by signing in (Cal.com, Fathom): `accessToken` expires and is renewed with this */
-  oauth?: { refreshToken?: string; expiresAt?: string };
+  /**
+   * an app connected by signing in (Cal.com, Fathom, Granola, Wispr Flow): `accessToken` expires and is renewed with
+   * this; `clientId` is the id the app gave Orbit when it registered itself there (Granola, Wispr Flow)
+   */
+  oauth?: { refreshToken?: string; expiresAt?: string; clientId?: string };
   status: 'active' | 'needs_reauth' | 'revoked' | 'error' | 'instructions_shown';
   scopes: string[];
   syncState: Record<string, unknown>;

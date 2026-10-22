@@ -2379,3 +2379,28 @@ test.describe('Resizable side panels', () => {
       .toBeCloseTo(w0, 0);
   });
 });
+
+test.describe('Meeting notes: pick one app', () => {
+  test('turning Granola on turns Fathom off, and Fireflies after it turns Granola off', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 1000 });
+    await loadDemo(page);
+    await page.goto('settings/integrations');
+    await page.getByTestId('settings-fathom-connect').click();
+    await expect(page.getByTestId('settings-fathom-status')).toContainText(/Connected/);
+    await page.getByTestId('settings-granola-connect').click();
+    await expect(page.getByTestId('settings-granola-status')).toContainText(/Connected/);
+    await expect(page.getByText(/Granola is on now, so Fathom is off/)).toBeVisible();
+    await expect(page.getByTestId('settings-fathom-status')).toHaveCount(0);
+    await expect(page.getByTestId('settings-fathom-connect')).toBeVisible();
+    await expect(page.getByTestId('settings-wispr-connect')).toBeVisible();
+    if (process.env.ORBIT_SHOT_DIR)
+      await page
+        .getByTestId('settings-granola')
+        .locator('xpath=ancestor::section[1]')
+        .screenshot({ path: `${process.env.ORBIT_SHOT_DIR}/meeting-apps.png` });
+    // a real student's Fireflies asks for the key; the sample student connects straight away
+    await page.getByTestId('settings-fireflies-connect').click();
+    await expect(page.getByTestId('settings-fireflies-status')).toContainText(/Connected/);
+    await expect(page.getByText(/Fireflies is on now, so Granola is off/)).toBeVisible();
+  });
+});

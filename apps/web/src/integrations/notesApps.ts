@@ -1,8 +1,9 @@
 /**
- * The student's own meeting-notes and scheduling apps (Fathom, Cal.com), reached through Orbit's orbit-notes server
- * function because their APIs are not meant to be called from a browser. The student's key travels with each call
- * and is never kept on the server. The function's address is the shared Claude proxy's, with orbit-notes in place
- * of orbit-claude, so no extra build setting is needed. Off in automated browsers unless a test chooses otherwise.
+ * The student's own meeting-notes and scheduling apps (Fathom, Granola, Wispr Flow, Cal.com), reached through
+ * Orbit's orbit-notes server function because their APIs are not meant to be called from a browser. The student's
+ * key or sign-in travels with each call and is never kept on the server. The function's address is the shared
+ * Claude proxy's, with orbit-notes in place of orbit-claude, so no extra build setting is needed. Off in automated
+ * browsers unless a test chooses otherwise.
  *
  * Every call returns a typed outcome instead of throwing, like the LinkedIn connector.
  */
@@ -143,4 +144,24 @@ export function calEventTypes(
   opts: { fetch?: typeof fetch; signal?: AbortSignal } = {},
 ): Promise<ConnectorOutcome<{ username?: string; eventTypes: CalEventType[] }> | NotesFailure> {
   return call('/calcom/event-types', authBody(auth), opts);
+}
+
+/** What one tool call on a meeting app's MCP server answered: its text, and its structured result when it has one. */
+export interface McpResult {
+  ok: boolean;
+  text?: string;
+  structured?: unknown;
+}
+
+/**
+ * Up to ten read-only tool calls on Granola's or Wispr Flow's meeting server, in one session, with the token from
+ * signing in. `list` also returns the names of the tools the server offers.
+ */
+export function mcpCall(
+  server: 'granola' | 'wispr',
+  accessToken: string,
+  calls: { name: string; arguments?: Record<string, unknown> }[],
+  opts: { list?: boolean; fetch?: typeof fetch; signal?: AbortSignal } = {},
+): Promise<ConnectorOutcome<{ tools?: string[]; results: McpResult[] }> | NotesFailure> {
+  return call('/mcp/call', { server, accessToken, calls, list: opts.list }, opts);
 }

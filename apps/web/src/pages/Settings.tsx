@@ -10,7 +10,7 @@ import { LinkedInLiveCard, WarmIntrosCard } from '../components/ConnectorCards';
 import { AppMark, IntegrationRow, RowGroup, RowStatus } from '../components/IntegrationRow';
 import { LinkedInImportButton } from '../components/LinkedInImport';
 import { openMorningBrief } from '../components/MorningBrief';
-import { CalcomRow, FathomRow } from '../components/NotesAppRows';
+import { CalcomRow, FathomRow, MeetingAppRow } from '../components/NotesAppRows';
 import { ResumeFacetList } from '../components/ResumeFacets';
 import { SchedulingLinkField } from '../components/SchedulingLinkField';
 import { WeeklyTargetSlider } from '../components/WeeklyTargetSlider';
@@ -801,8 +801,13 @@ function Integrations() {
         />
         <WarmIntrosCard user={user} />
       </RowGroup>
-      <RowGroup title="Meetings">
+      <RowGroup title="Meeting notes" hint="Pick the notetaker you use; Orbit imports from one at a time.">
         <FathomRow user={user} />
+        <MeetingAppRow user={user} app="granola" />
+        <MeetingAppRow user={user} app="fireflies" />
+        <MeetingAppRow user={user} app="wispr" />
+      </RowGroup>
+      <RowGroup title="Scheduling">
         <CalcomRow user={user} />
       </RowGroup>
       <RowGroup title="About you">

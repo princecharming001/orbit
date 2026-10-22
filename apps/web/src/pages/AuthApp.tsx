@@ -3,7 +3,7 @@ import { Logo } from '../components/AppShell';
 import { finishAppSignIn } from '../engine/appSignIn';
 
 /**
- * Where Cal.com's and Fathom's sign-in comes back. It hands the code to the Orbit tab that opened the window, wipes
+ * Where Cal.com's, Fathom's, Granola's and Wispr Flow's sign-in comes back. It hands the code to the Orbit tab that opened the window, wipes
  * it from the address bar, and closes itself; if the browser keeps it open, it says so.
  */
 export function AuthApp() {

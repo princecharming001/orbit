@@ -130,6 +130,8 @@ export const NOTE_SOURCE_LABELS: Record<NoteSource, string> = {
   granola_api: 'Granola',
   granola_email: 'Granola',
   fathom: 'Fathom',
+  fireflies: 'Fireflies',
+  wispr_notetaker: 'Wispr Flow',
   wispr_capture: 'Dictated',
   wispr_export: 'Wispr Flow',
   manual: 'Typed',

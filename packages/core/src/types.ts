@@ -8,6 +8,9 @@ export type IntegrationProvider =
   | 'linkedin_live'
   | 'granola'
   | 'fathom'
+  | 'fireflies'
+  /** Wispr Flow's Notetaker, read by signing in */
+  | 'wispr'
   /** the student's Cal.com account: its event types become the booking link drafts offer */
   | 'calcom'
   | 'wispr_export'
@@ -80,6 +83,9 @@ export type NoteSource =
   | 'granola_api'
   | 'granola_email'
   | 'fathom'
+  | 'fireflies'
+  /** a meeting recorded by Wispr Flow's Notetaker */
+  | 'wispr_notetaker'
   | 'wispr_capture'
   | 'wispr_export'
   | 'manual'

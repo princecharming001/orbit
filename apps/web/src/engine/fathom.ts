@@ -7,12 +7,13 @@
  * The student's Fathom API key is kept in this browser only, on the `fathom` integration row. The sample student uses
  * a few made-up meetings instead, like every other connector in the demo.
  */
-import type { User } from '@orbit/core';
+import type { NoteSource, User } from '@orbit/core';
 import { newId, normalizeEmail } from '@orbit/core';
 import { db, type IntegrationAccount } from '../db/schema';
 import { usesMockConnectors } from '../integrations/connectorsMock';
 import { type FathomMeeting, fathomMeetingsPage, notesAppsAvailable } from '../integrations/notesApps';
 import { appAuth, signInToApp } from './appSignIn';
+import { isMeetingAppOn, keepOnlyMeetingApp, MEETING_NOTE_SOURCES } from './meetingAppSwitch';
 import { ingestNote } from './notes';
 
 /** The first import reaches back this far; later ones pick up from the newest meeting already imported. */
@@ -23,7 +24,8 @@ const MAX_PAGES = 15;
 export const FATHOM_AUTO_SYNC_MS = 12 * 60 * 60 * 1000;
 
 export type FathomResult =
-  | { ok: true; imported: number; skipped: number }
+  /** `switchedOff`: the other meeting apps that were on and are off now */
+  | { ok: true; imported: number; skipped: number; switchedOff?: string[] }
   | { ok: false; reason: 'bad_key' | 'unavailable' | 'not_connected' | 'error'; message: string };
 
 export async function fathomAccount(userId: string): Promise<IntegrationAccount | undefined> {
@@ -34,15 +36,14 @@ export async function fathomAccount(userId: string): Promise<IntegrationAccount 
     .first();
 }
 
-const connected = (row: IntegrationAccount | undefined): row is IntegrationAccount =>
-  !!row && row.status !== 'revoked' && (!!row.accessToken || row.externalAccountId === 'demo');
+const connected = isMeetingAppOn;
 
 /** Fathom can be connected here: the sample student, or a build that can reach Orbit's notes function. */
 export function fathomAvailable(user: Pick<User, 'id'>): boolean {
   return usesMockConnectors(user.id) || notesAppsAvailable();
 }
 
-/** A meeting as the note Orbit files: the title, Fathom's summary and the action items, with a link back. */
+/** A meeting as the note Orbit files: the title, the app's summary and the action items, with a link back. */
 export function meetingNoteText(m: FathomMeeting): string {
   const parts = [m.title];
   if (m.summary) parts.push(m.summary);
@@ -71,15 +72,41 @@ export function otherInvitees(
     .map((i) => ({ name: i.name, email: i.email }));
 }
 
-const externalIdOf = (m: FathomMeeting) => `fathom:${m.id}`;
+/** How a meeting is known once filed: the demo's made-up meetings share one id whichever app brought them in. */
+export const meetingExternalId = (source: NoteSource, m: Pick<FathomMeeting, 'id'>) =>
+  m.id.startsWith('demo-') ? `demo:${m.id}` : `${source === 'granola_api' ? 'granola' : source}:${m.id}`;
 
-/** File the meetings not imported before; meetings with nobody else on them (a solo recording) are skipped. */
-async function importMeetings(user: User, meetings: FathomMeeting[], now: Date) {
+/** This meeting is filed already (for the demo's, under any meeting app). */
+export async function meetingSeen(source: NoteSource, m: Pick<FathomMeeting, 'id'>): Promise<boolean> {
+  const externalId = meetingExternalId(source, m);
+  const sources: readonly NoteSource[] = m.id.startsWith('demo-') ? MEETING_NOTE_SOURCES : [source];
+  for (const s of sources)
+    if (await db.notes.where('[source+externalId]').equals([s, externalId]).first()) return true;
+  // the demo's Fathom meetings were filed under Fathom's own id before the other apps came along
+  return (
+    m.id.startsWith('demo-') &&
+    !!(await db.notes
+      .where('[source+externalId]')
+      .equals(['fathom', `fathom:${m.id}`])
+      .first())
+  );
+}
+
+/**
+ * File the meetings not imported before, from Fathom or any other meeting app; meetings with nobody else on them (a
+ * solo recording) are skipped.
+ */
+export async function importMeetings(
+  user: User,
+  meetings: FathomMeeting[],
+  now: Date,
+  source: NoteSource = 'fathom',
+) {
   let imported = 0;
   let skipped = 0;
   for (const m of meetings) {
-    const externalId = externalIdOf(m);
-    const seen = await db.notes.where('[source+externalId]').equals(['fathom', externalId]).first();
+    const externalId = meetingExternalId(source, m);
+    const seen = await meetingSeen(source, m);
     const attendees = otherInvitees(m, user);
     if (seen || !attendees.length) {
       skipped++;
@@ -89,7 +116,7 @@ async function importMeetings(user: User, meetings: FathomMeeting[], now: Date) 
       user,
       {
         text: meetingNoteText(m),
-        source: 'fathom',
+        source,
         title: m.title,
         occurredAt: m.startAt,
         externalId,
@@ -103,7 +130,7 @@ async function importMeetings(user: User, meetings: FathomMeeting[], now: Date) 
 }
 
 /** The sample student's recorded meetings: two finished chats with people who have an email, made up from the demo. */
-async function demoMeetings(user: User): Promise<FathomMeeting[]> {
+export async function demoMeetings(user: User): Promise<FathomMeeting[]> {
   const chats = await db.chats
     .where('userId')
     .equals(user.id)
@@ -208,7 +235,7 @@ export async function syncFathom(
 export async function connectFathom(user: User, apiKey: string, now = new Date()): Promise<FathomResult> {
   if (usesMockConnectors(user.id)) {
     await saveRow(user, { externalAccountId: 'demo', accessToken: undefined, lastError: undefined }, now);
-    return syncFathom(user, { now });
+    return firstSync(user, now);
   }
   const key = apiKey.trim();
   if (!key) return { ok: false, reason: 'bad_key', message: 'Paste your Fathom API key first.' };
@@ -224,7 +251,14 @@ export async function connectFathom(user: User, apiKey: string, now = new Date()
     { accessToken: key, oauth: undefined, externalAccountId: undefined, lastError: undefined, syncState: {} },
     now,
   );
-  return syncFathom(user, { now });
+  return firstSync(user, now);
+}
+
+/** Just connected: the other meeting apps go off, then the first import. */
+async function firstSync(user: User, now: Date): Promise<FathomResult> {
+  const switchedOff = await keepOnlyMeetingApp(user.id, 'fathom');
+  const r = await syncFathom(user, { now });
+  return r.ok ? { ...r, switchedOff } : r;
 }
 
 /** Connect by signing in to Fathom: its own window, then the meetings import as with a key. */
@@ -243,7 +277,7 @@ export async function connectFathomSignedIn(user: User, now = new Date()): Promi
     },
     now,
   );
-  return syncFathom(user, { now });
+  return firstSync(user, now);
 }
 
 /** Stop importing. The key is forgotten here; notes already imported stay on people's pages. */

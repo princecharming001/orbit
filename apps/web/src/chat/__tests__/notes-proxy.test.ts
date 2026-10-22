@@ -3,9 +3,11 @@ import {
   bookingUrl,
   CALCOM_EVENT_TYPES_VERSION,
   defaultOrigins,
+  MCP_SERVERS,
   makeHandler,
   mapFathomMeeting,
   memoryTake,
+  readRpc,
 } from '../../../../../supabase/functions/orbit-notes/notes';
 
 const ORIGIN = 'https://tryorbit.today';
@@ -233,5 +235,109 @@ describe('signing in to Cal.com and Fathom', () => {
     expect(j.meetings[0].summary).toBe('## From the recording');
     expect(calls[0]).not.toContain('include_summary');
     expect(calls.every((c) => c.endsWith('Bearer acc_fathom_token_1'))).toBe(true);
+  });
+});
+
+describe('orbit-notes: meeting apps over MCP (Granola, Wispr Flow)', () => {
+  const sse = (msg: unknown) =>
+    new Response(`event: message\ndata: ${JSON.stringify(msg)}\n\n`, {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream', 'mcp-session-id': 'sess_1' },
+    });
+
+  it('reads a JSON-RPC answer from JSON or from an event stream', () => {
+    expect(readRpc('{"jsonrpc":"2.0","id":3,"result":{"a":1}}', 'application/json', 3)).toMatchObject({
+      result: { a: 1 },
+    });
+    const stream =
+      'event: message\ndata: {"jsonrpc":"2.0","method":"notifications/progress"}\n\nevent: message\ndata: {"jsonrpc":"2.0","id":2,"result":{"b":2}}\n\n';
+    expect(readRpc(stream, 'text/event-stream', 2)).toMatchObject({ result: { b: 2 } });
+    expect(readRpc('nope', 'application/json', 1)).toBeUndefined();
+  });
+
+  it('opens one session, sends the token only to that app, and returns each tool call', async () => {
+    const seen: { url: string; method: string; auth?: string; session?: string }[] = [];
+    const f = vi.fn(async (u: string, init?: RequestInit) => {
+      const h = init?.headers as Record<string, string>;
+      const msg = JSON.parse(String(init?.body)) as {
+        id?: number;
+        method: string;
+        params?: { name?: string };
+      };
+      seen.push({ url: u, method: msg.method, auth: h.authorization, session: h['mcp-session-id'] });
+      if (msg.method === 'initialize')
+        return sse({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: '2025-06-18' } });
+      if (msg.method === 'notifications/initialized') return new Response(null, { status: 202 });
+      if (msg.method === 'tools/list')
+        return sse({
+          jsonrpc: '2.0',
+          id: msg.id,
+          result: { tools: [{ name: 'list_meetings' }, { name: 'get_meetings' }] },
+        });
+      return ok({
+        jsonrpc: '2.0',
+        id: msg.id,
+        result: { content: [{ type: 'text', text: `<meetings_data count="0"></meetings_data>` }] },
+      });
+    }) as unknown as typeof fetch;
+    const r = await handler(f)(
+      post('/mcp/call', {
+        server: 'granola',
+        accessToken: 'gra_token_123456',
+        list: true,
+        calls: [{ name: 'list_meetings', arguments: { time_range: 'last_30_days' } }],
+      }),
+    );
+    const j = await r.json();
+    expect(j).toMatchObject({ ok: true, tools: ['list_meetings', 'get_meetings'] });
+    expect(j.results[0]).toMatchObject({ ok: true, text: '<meetings_data count="0"></meetings_data>' });
+    expect(seen.map((s) => s.method)).toEqual([
+      'initialize',
+      'notifications/initialized',
+      'tools/list',
+      'tools/call',
+    ]);
+    expect(seen.every((s) => s.url === MCP_SERVERS.granola && s.auth === 'Bearer gra_token_123456')).toBe(
+      true,
+    );
+    // every call after the first carries the session the server opened
+    expect(seen.slice(1).every((s) => s.session === 'sess_1')).toBe(true);
+  });
+
+  it('refuses tools that change anything, unknown servers, and a call without a sign-in', async () => {
+    const f = vi.fn() as unknown as typeof fetch;
+    const h = handler(f);
+    const body = { server: 'wispr', accessToken: 'wis_token_123456' };
+    for (const req of [
+      post('/mcp/call', { ...body, calls: [{ name: 'add_task' }] }),
+      post('/mcp/call', { ...body, calls: [{ name: 'update_task' }] }),
+      post('/mcp/call', {
+        server: 'granola',
+        accessToken: 'gra_token_123456',
+        calls: [{ name: 'sign_out' }],
+      }),
+      post('/mcp/call', { server: 'evil', accessToken: 'tok_123456789', calls: [] }),
+    ])
+      expect(await (await h(req)).json()).toMatchObject({ ok: false, reason: 'refused' });
+    expect((await h(post('/mcp/call', { server: 'wispr', calls: [] }))).status).toBe(400);
+    expect((f as unknown as { mock: { calls: unknown[] } }).mock.calls).toHaveLength(0);
+  });
+
+  it('a token the app no longer accepts asks the student to connect again', async () => {
+    const f = vi.fn(
+      async () => new Response('{"error":"invalid_token"}', { status: 401 }),
+    ) as unknown as typeof fetch;
+    const r = await handler(f)(
+      post('/mcp/call', {
+        server: 'wispr',
+        accessToken: 'wis_token_123456',
+        calls: [{ name: 'search_meetings' }],
+      }),
+    );
+    expect(await r.json()).toMatchObject({
+      ok: false,
+      reason: 'bad_key',
+      message: 'Wispr Flow needs you to connect again.',
+    });
   });
 });

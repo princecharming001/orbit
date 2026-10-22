@@ -119,11 +119,22 @@ export function RowStatus({
   );
 }
 
-/** A group heading inside the Integrations card. */
-export function RowGroup({ title, children }: { title: string; children: ReactNode }) {
+/** A group heading inside the Integrations card, with an optional short line beside it. */
+export function RowGroup({
+  title,
+  hint,
+  children,
+}: {
+  title: string;
+  hint?: ReactNode;
+  children: ReactNode;
+}) {
   return (
     <section className="[&:not(:first-child)]:mt-2 [&:not(:first-child)]:border-t [&:not(:first-child)]:border-line [&:not(:first-child)]:pt-4">
-      <div className="label-mono pb-1">{title}</div>
+      <div className="flex flex-wrap items-baseline gap-x-2 pb-1">
+        <span className="label-mono">{title}</span>
+        {hint && <span className="text-[12px] text-ink-3">{hint}</span>}
+      </div>
       <div className="divide-y divide-line-2">{children}</div>
     </section>
   );
