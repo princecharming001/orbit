@@ -323,7 +323,7 @@ describe('orbit-connectors proxy', () => {
     expect((await me.handler(post('/me', { accountId: 'a1' }))).status).toBeGreaterThanOrEqual(400);
   });
 
-  it("reads a relation whichever shape Unipile sends: a numeric date, a name in one field, a slug for the link", () => {
+  it('reads a relation whichever shape Unipile sends: a numeric date, a name in one field, a slug for the link', () => {
     expect(isoDate(1_727_000_000_000)).toBe('2024-09-22T10:13:20.000Z');
     expect(isoDate(1_727_000_000)).toBe('2024-09-22T10:13:20.000Z');
     expect(isoDate('2024-09-22T10:13:20Z')).toBe('2024-09-22T10:13:20.000Z');
