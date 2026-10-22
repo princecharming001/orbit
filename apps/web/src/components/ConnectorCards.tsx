@@ -129,9 +129,9 @@ export function LinkedInLiveCard({ user }: { user: User }) {
             {LIVE_SOON}
           </p>
         )}
-        {error && (
+        {(error ?? (status.connected ? status.error : undefined)) && (
           <p className="text-[12.5px] text-bad" role="alert" data-testid="settings-linkedin-live-error">
-            {error}
+            {error ?? status.error}
           </p>
         )}
       </IntegrationRow>

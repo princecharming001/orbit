@@ -131,6 +131,7 @@ export async function importLiveConnections(
     url?: string;
     connectedOn?: string;
     memberId?: string;
+    photoUrl?: string;
   }[],
   onProgress?: (done: number, total: number) => void,
 ): Promise<{ imported: number; updated: number; skipped: number }> {
@@ -147,12 +148,16 @@ export async function importLiveConnections(
   const r = await importConnectionRows(user, rows, onProgress);
   const at = new Date().toISOString();
   for (let i = 0; i < kept.length; i++) {
-    const memberId = kept[i]!.memberId;
+    const { memberId, photoUrl } = kept[i]!;
     const id = r.personIds[i];
-    if (!memberId || !id) continue;
+    if ((!memberId && !photoUrl) || !id) continue;
     const p = await db.people.get(id);
-    if (p && p.linkedinMemberId !== memberId)
-      await db.people.update(id, { linkedinMemberId: memberId, updatedAt: at });
+    if (!p) continue;
+    const patch: Partial<typeof p> = {};
+    if (memberId && p.linkedinMemberId !== memberId) patch.linkedinMemberId = memberId;
+    // their LinkedIn photo, where Orbit has none (the map and every list show it)
+    if (photoUrl && !p.photoUrl) patch.photoUrl = photoUrl;
+    if (Object.keys(patch).length) await db.people.update(id, { ...patch, updatedAt: at });
   }
   return { imported: r.imported, updated: r.updated, skipped: connections.length - kept.length };
 }

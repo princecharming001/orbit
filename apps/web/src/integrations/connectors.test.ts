@@ -267,3 +267,13 @@ describe('Village (warm intros) adapter', () => {
     });
   });
 });
+
+describe('a LinkedIn connection date', () => {
+  it('reads ISO text and epoch milliseconds or seconds alike', async () => {
+    const { connectedDay } = await import('./unipile');
+    expect(connectedDay('2024-09-22T10:13:20.000Z')).toBe('2024-09-22');
+    expect(connectedDay(1_727_000_000_000)).toBe('2024-09-22');
+    expect(connectedDay('1727000000')).toBe('2024-09-22');
+    expect(connectedDay(undefined)).toBeUndefined();
+  });
+});

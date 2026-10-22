@@ -56,6 +56,8 @@ export interface LiveConnection {
   connectedOn?: string;
   /** Unipile's member id, kept so mutual-connection lookups can reference this person */
   memberId?: string;
+  /** their LinkedIn photo (a link that expires after a few weeks) */
+  photoUrl?: string;
 }
 
 /** One mutual connection: someone in the student's network who is connected to the target. */
@@ -160,10 +162,20 @@ interface RelationsResponse {
     company?: string;
     public_profile_url?: string;
     profile_url?: string;
-    connected_at?: string;
+    /** ISO text from Orbit's server (older servers passed Unipile's value through, sometimes a number) */
+    connected_at?: string | number;
+    picture_url?: string;
     member_id?: string;
   }[];
   cursor?: string | null;
+}
+
+/** "2026-03-27" from an ISO date, or from epoch milliseconds or seconds. */
+export function connectedDay(v: string | number | undefined): string | undefined {
+  if (v === undefined || v === null || v === '') return undefined;
+  const n = typeof v === 'number' ? v : /^\d+$/.test(v) ? Number(v) : Number.NaN;
+  const t = Number.isFinite(n) ? (n > 1e12 ? n : n * 1000) : Date.parse(String(v));
+  return Number.isNaN(t) ? undefined : new Date(t).toISOString().slice(0, 10);
 }
 
 /** At most this many pages (200 connections each) per sync: a runaway cursor never loops for ever. */
@@ -189,8 +201,9 @@ export async function linkedInConnections(
         position: it.position ?? it.headline,
         company: it.company,
         url: it.public_profile_url ?? it.profile_url,
-        connectedOn: it.connected_at ? it.connected_at.slice(0, 10) : undefined,
+        connectedOn: connectedDay(it.connected_at),
         memberId: it.member_id,
+        photoUrl: it.picture_url,
       });
     }
     opts.onProgress?.(out.length);

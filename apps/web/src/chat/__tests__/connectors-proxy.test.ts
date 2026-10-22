@@ -4,7 +4,9 @@ import {
   type Bucket,
   type ConnectorDeps,
   defaultOrigins,
+  isoDate,
   makeHandler,
+  mapRelation,
   memoryLinks,
   memoryTake,
   postgrestTake,
@@ -319,6 +321,29 @@ describe('orbit-connectors proxy', () => {
     expect(r2.picture).toBeUndefined();
     // and it needs the account's token, like every account route
     expect((await me.handler(post('/me', { accountId: 'a1' }))).status).toBeGreaterThanOrEqual(400);
+  });
+
+  it("reads a relation whichever shape Unipile sends: a numeric date, a name in one field, a slug for the link", () => {
+    expect(isoDate(1_727_000_000_000)).toBe('2024-09-22T10:13:20.000Z');
+    expect(isoDate(1_727_000_000)).toBe('2024-09-22T10:13:20.000Z');
+    expect(isoDate('2024-09-22T10:13:20Z')).toBe('2024-09-22T10:13:20.000Z');
+    expect(isoDate('nonsense')).toBeUndefined();
+    expect(
+      mapRelation({
+        display_name: 'Ana de la Cruz',
+        public_identifier: 'ana-dlc',
+        created_at: 1_727_000_000_000,
+        provider_id: 'ACo123',
+        profile_picture_url: 'https://media.licdn.com/dms/image/x.jpg',
+      }),
+    ).toMatchObject({
+      first_name: 'Ana',
+      last_name: 'de la Cruz',
+      public_profile_url: 'https://www.linkedin.com/in/ana-dlc',
+      connected_at: '2024-09-22T10:13:20.000Z',
+      member_id: 'ACo123',
+      picture_url: 'https://media.licdn.com/dms/image/x.jpg',
+    });
   });
 
   it('maps relations and mutuals, and forwards Village paths', async () => {

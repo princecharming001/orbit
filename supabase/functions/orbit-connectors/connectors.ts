@@ -591,6 +591,45 @@ async function unipileSend(deps: ConnectorDeps, body: Record<string, unknown>, d
   return { ok: true, invited: false, chatId: b.chat_id, messageId: b.message_id, memberId: providerId };
 }
 
+/** A date Unipile gives as epoch milliseconds, epoch seconds or text, as ISO text (or nothing). */
+export function isoDate(v: unknown): string | undefined {
+  if (typeof v === 'number' && Number.isFinite(v) && v > 0)
+    return new Date(v > 1e12 ? v : v * 1000).toISOString();
+  if (typeof v === 'string' && v.trim()) {
+    const n = Number(v);
+    if (Number.isFinite(n) && n > 0) return new Date(n > 1e12 ? n : n * 1000).toISOString();
+    const t = Date.parse(v);
+    return Number.isNaN(t) ? undefined : new Date(t).toISOString();
+  }
+  return undefined;
+}
+
+/** One relation as Orbit reads it, whichever of Unipile's field names it came with. */
+export function mapRelation(r: Record<string, unknown>) {
+  const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
+  const full = str(r.display_name) ?? str(r.name) ?? '';
+  const first = str(r.first_name) ?? full.split(/\s+/)[0];
+  const last = str(r.last_name) ?? (full ? full.split(/\s+/).slice(1).join(' ') : undefined);
+  const slug = str(r.public_identifier);
+  const picture = [r.profile_picture_url, r.profile_picture_url_large]
+    .map(str)
+    .find((u): u is string => !!u && isLinkedInImage(u));
+  return {
+    first_name: first,
+    last_name: last,
+    headline: str(r.headline),
+    position: str(r.occupation) ?? str(r.headline),
+    company: str(r.company),
+    public_profile_url:
+      str(r.public_profile_url) ??
+      str(r.profile_url) ??
+      (slug ? `https://www.linkedin.com/in/${slug}` : undefined),
+    connected_at: isoDate(r.created_at ?? r.connected_at ?? r.date),
+    member_id: str(r.member_id) ?? str(r.provider_id) ?? str(r.id),
+    picture_url: picture,
+  };
+}
+
 async function unipileRelations(deps: ConnectorDeps, body: Record<string, unknown>, doFetch: typeof fetch) {
   const accountId = String(body.accountId ?? '');
   const cursor = body.cursor ? `&cursor=${encodeURIComponent(String(body.cursor))}` : '';
@@ -601,20 +640,13 @@ async function unipileRelations(deps: ConnectorDeps, body: Record<string, unknow
   if (!res.ok) throw new Error(`unipile ${res.status}`);
   const b = (await res.json()) as {
     items?: Record<string, unknown>[];
+    data?: Record<string, unknown>[];
     cursor?: string | null;
+    next_cursor?: string | null;
   };
   return {
-    items: (b.items ?? []).map((r) => ({
-      first_name: r.first_name,
-      last_name: r.last_name,
-      headline: r.headline,
-      position: r.occupation ?? r.headline,
-      company: r.company,
-      public_profile_url: r.public_profile_url ?? r.profile_url,
-      connected_at: r.created_at,
-      member_id: r.member_id ?? r.provider_id ?? r.id,
-    })),
-    cursor: b.cursor ?? null,
+    items: (b.items ?? b.data ?? []).filter((r) => !!r && typeof r === 'object').map(mapRelation),
+    cursor: b.cursor ?? b.next_cursor ?? null,
   };
 }
 

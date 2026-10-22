@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { cleanUpGuesses } from '../engine/cleanup';
 import { enrichFromLinkedIn } from '../engine/enrich';
 import { autoSyncFathom } from '../engine/fathom';
+import { liveLinkedInAccount, syncLinkedInLive } from '../engine/linkedinLive';
 import { autoSyncMeetingApps } from '../engine/meetingApps';
 import { useSession } from '../state/session';
 
@@ -24,8 +25,16 @@ export function MeetingNotesAutoSync() {
       .then(() => {
         void autoSyncFathom(u).catch(() => undefined);
         void autoSyncMeetingApps(u).catch(() => undefined);
-        // today's few LinkedIn lookups for people the student knows (a quiet no-op without live LinkedIn)
-        void enrichFromLinkedIn(u).catch(() => undefined);
+        // a LinkedIn connected whose first sync never finished syncs now; then today's few LinkedIn lookups for
+        // people the student knows (both quiet no-ops without live LinkedIn)
+        void liveLinkedInAccount(u.id)
+          .then((row) =>
+            row && row.status !== 'revoked' && row.externalAccountId && !row.lastSyncedAt
+              ? syncLinkedInLive(u)
+              : undefined,
+          )
+          .catch(() => undefined)
+          .finally(() => void enrichFromLinkedIn(u).catch(() => undefined));
       });
   }, [userId]);
   return null;

@@ -271,6 +271,21 @@ export async function syncLinkedInLive(
   user: User,
   opts: { onProgress?: (count: number) => void; signal?: AbortSignal; now?: Date } = {},
 ): Promise<LiveSyncResult> {
+  try {
+    return await syncLinkedInLiveOnce(user, opts);
+  } catch (e) {
+    // something LinkedIn sent that Orbit could not read: say so on the row instead of failing silently
+    const message = `The sync stopped partway (${e instanceof Error ? e.message : 'unexpected answer'}). Try Sync now.`;
+    const row = await liveLinkedInAccount(user.id);
+    if (row) await db.integrations.update(row.id, { lastError: message });
+    return { ok: false, reason: 'error', message };
+  }
+}
+
+async function syncLinkedInLiveOnce(
+  user: User,
+  opts: { onProgress?: (count: number) => void; signal?: AbortSignal; now?: Date } = {},
+): Promise<LiveSyncResult> {
   const row = await liveLinkedInAccount(user.id);
   if (!isConnected(row))
     return { ok: false, reason: 'not_connected', message: 'LinkedIn is not connected live yet.' };

@@ -720,6 +720,36 @@ async function unipileSend(deps, body, doFetch) {
   const b = await res.json();
   return { ok: true, invited: false, chatId: b.chat_id, messageId: b.message_id, memberId: providerId };
 }
+function isoDate(v) {
+  if (typeof v === "number" && Number.isFinite(v) && v > 0)
+    return new Date(v > 1e12 ? v : v * 1e3).toISOString();
+  if (typeof v === "string" && v.trim()) {
+    const n = Number(v);
+    if (Number.isFinite(n) && n > 0) return new Date(n > 1e12 ? n : n * 1e3).toISOString();
+    const t = Date.parse(v);
+    return Number.isNaN(t) ? void 0 : new Date(t).toISOString();
+  }
+  return void 0;
+}
+function mapRelation(r) {
+  const str = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
+  const full = str(r.display_name) ?? str(r.name) ?? "";
+  const first = str(r.first_name) ?? full.split(/\s+/)[0];
+  const last = str(r.last_name) ?? (full ? full.split(/\s+/).slice(1).join(" ") : void 0);
+  const slug = str(r.public_identifier);
+  const picture = [r.profile_picture_url, r.profile_picture_url_large].map(str).find((u) => !!u && isLinkedInImage(u));
+  return {
+    first_name: first,
+    last_name: last,
+    headline: str(r.headline),
+    position: str(r.occupation) ?? str(r.headline),
+    company: str(r.company),
+    public_profile_url: str(r.public_profile_url) ?? str(r.profile_url) ?? (slug ? `https://www.linkedin.com/in/${slug}` : void 0),
+    connected_at: isoDate(r.created_at ?? r.connected_at ?? r.date),
+    member_id: str(r.member_id) ?? str(r.provider_id) ?? str(r.id),
+    picture_url: picture
+  };
+}
 async function unipileRelations(deps, body, doFetch) {
   const accountId = String(body.accountId ?? "");
   const cursor = body.cursor ? `&cursor=${encodeURIComponent(String(body.cursor))}` : "";
@@ -730,17 +760,8 @@ async function unipileRelations(deps, body, doFetch) {
   if (!res.ok) throw new Error(`unipile ${res.status}`);
   const b = await res.json();
   return {
-    items: (b.items ?? []).map((r) => ({
-      first_name: r.first_name,
-      last_name: r.last_name,
-      headline: r.headline,
-      position: r.occupation ?? r.headline,
-      company: r.company,
-      public_profile_url: r.public_profile_url ?? r.profile_url,
-      connected_at: r.created_at,
-      member_id: r.member_id ?? r.provider_id ?? r.id
-    })),
-    cursor: b.cursor ?? null
+    items: (b.items ?? b.data ?? []).filter((r) => !!r && typeof r === "object").map(mapRelation),
+    cursor: b.cursor ?? b.next_cursor ?? null
   };
 }
 var PHOTO_MAX_BYTES = 4e5;
