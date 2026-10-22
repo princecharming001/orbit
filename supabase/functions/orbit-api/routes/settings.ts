@@ -2,8 +2,9 @@
  * Agent settings (§8.4, §9.3, §14.3):
  *   POST /settings/autonomy {level, goalId?}  → the user's autonomy level, or one goal's override
  *   POST /settings/pause {until}              → users.settings.quiet_until (null resumes)
- *   POST /settings/profile {postalAddress?, schedulingLink?, timezone?}
- *        → users.settings.postal_address / scheduling_link (null or '' removes) and users.timezone
+ *   POST /settings/profile {postalAddress?, schedulingLink?, timezone?, onboardingCompletedAt?}
+ *        → users.settings.postal_address / scheduling_link (null or '' removes), users.timezone, and
+ *          users.onboarding.completed_at (set once setup is finished; never cleared)
  */
 import type { ProfileSettingsResponse } from '@orbit/core/server/api';
 import { badRequest, HttpError, json } from '../../_shared/http.ts';
@@ -94,6 +95,13 @@ async function profile(ctx: Ctx): Promise<Response> {
       throw badRequest('timezone must be an IANA time zone, like America/New_York');
     tz = b.timezone.trim();
   }
+  let done: string | undefined;
+  if (b.onboardingCompletedAt !== undefined) {
+    const t = new Date(String(b.onboardingCompletedAt));
+    if (typeof b.onboardingCompletedAt !== 'string' || Number.isNaN(t.getTime()))
+      throw badRequest('onboardingCompletedAt must be an ISO time');
+    done = t.toISOString();
+  }
   const userId = ctx.userId!;
   // the keys given are replaced (or removed when null); the rest of settings is kept
   const given: Record<string, string | null> = {};
@@ -103,11 +111,13 @@ async function profile(ctx: Ctx): Promise<Response> {
   const [after] = await ctx.db.sql<{ settings: Record<string, unknown>; timezone: string }>`
     update orbit.users
        set settings = (settings - ${Object.keys(given)}::text[]) || ${keep}::jsonb,
-           timezone = coalesce(${tz ?? null}::text, timezone)
+           timezone = coalesce(${tz ?? null}::text, timezone),
+           onboarding = case when ${done ?? null}::text is null then onboarding
+                             else coalesce(onboarding, '{}'::jsonb) || jsonb_build_object('completed_at', ${done ?? null}::text) end
      where id = ${userId}::uuid
     returning settings, timezone`;
   if (!after) throw new HttpError(404, 'not_found', 'no such user');
-  const changed = [...Object.keys(given), ...(tz ? ['timezone'] : [])];
+  const changed = [...Object.keys(given), ...(tz ? ['timezone'] : []), ...(done ? ['onboarding'] : [])];
   if (changed.length)
     await ctx.db.sql`
       insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)

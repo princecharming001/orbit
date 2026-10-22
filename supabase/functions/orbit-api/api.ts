@@ -42,7 +42,7 @@ import { settingsRoutes } from './routes/settings.ts';
 import { sourceRoutes } from './routes/source.ts';
 import { syncPull, syncPush, syncStatus } from './sync.ts';
 
-export const DEFAULT_APP_URL = 'https://princecharming001.github.io/orbit';
+export const DEFAULT_APP_URL = 'https://tryorbit.today';
 
 export interface ApiEnv {
   googleClientId?: string;

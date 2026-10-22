@@ -14,7 +14,7 @@ import {
   isSignedIn,
   signOutAccount,
 } from '../integrations/orbitApi';
-import { createLocalUser, deleteAllData } from './account';
+import { createLocalUser, deleteAllData, ONBOARDING_DONE_STEP } from './account';
 import { resetSyncState } from './serverSync';
 
 /** The step setup goes to after Google: You, with the name and email Google gave already filled in. */
@@ -26,11 +26,18 @@ export const AFTER_GOOGLE_STEP = 2;
  */
 export async function adoptAccountUser(a: AccountUser, now = new Date()): Promise<User> {
   const previousId = await getCurrentUserId();
-  const previous = previousId ? await db.users.get(previousId) : undefined;
+  // the demo's sample student is nobody's own profile: nothing of it carries over to the account
+  const previous = previousId && previousId !== 'demo-user' ? await db.users.get(previousId) : undefined;
   const existing = await db.users.get(a.id);
+  // setup finished on another device (or before): this one skips it
+  const doneAt = typeof a.onboarding?.completed_at === 'string' ? a.onboarding.completed_at : undefined;
   let user: User;
   if (existing) {
     const patch: Partial<User> = {};
+    if (doneAt && !existing.onboardingCompletedAt) {
+      patch.onboardingCompletedAt = doneAt;
+      patch.onboardingStep = ONBOARDING_DONE_STEP;
+    }
     if (!existing.email) patch.email = a.email;
     if (!existing.fullName && a.fullName) patch.fullName = a.fullName;
     if (!existing.firstName && a.firstName) patch.firstName = a.firstName;
@@ -50,8 +57,10 @@ export async function adoptAccountUser(a: AccountUser, now = new Date()): Promis
       graduationYear: a.gradYear ?? previous?.graduationYear,
       timezone: a.timezone || previous?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
       avatarUrl: a.avatarUrl ?? undefined,
-      onboardingStep: Math.max(previous?.onboardingStep ?? 1, AFTER_GOOGLE_STEP),
-      onboardingCompletedAt: previous?.onboardingCompletedAt,
+      onboardingStep: doneAt
+        ? ONBOARDING_DONE_STEP
+        : Math.max(previous?.onboardingStep ?? 1, AFTER_GOOGLE_STEP),
+      onboardingCompletedAt: previous?.onboardingCompletedAt ?? doneAt,
       createdAt: now.toISOString(),
     });
   }

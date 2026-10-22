@@ -96,6 +96,22 @@ function seedNetwork(api: FakeOrbitApi) {
 }
 
 test.describe('account mode (mocked orbit-api)', () => {
+  test('Log in on the landing page: an account that finished setup elsewhere goes straight to Orbit', async ({
+    page,
+  }) => {
+    const api = await withFakeApi(page);
+    seedNetwork(api);
+    api.state.user.onboarding = { completed_at: '2026-10-05T12:00:00.000Z' };
+    await page.goto('');
+    await page.getByTestId('landing-login').click();
+    await expect(page).toHaveURL(/\/(orbit\/?)?$/, { timeout: 20_000 });
+    expect(page.url()).not.toContain('code=');
+    expect(api.routes()).toContain('/auth/session');
+    // the chat, Orbit's home, not setup and not the landing page
+    await expect(page.getByTestId('greeting')).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId('landing-login')).toHaveCount(0);
+  });
+
   test('sign in with Google, see the import, pick goals, rate people and land on the first brief', async ({
     page,
   }) => {

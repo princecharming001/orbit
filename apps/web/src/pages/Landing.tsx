@@ -7,7 +7,9 @@ import { Logo } from '../components/AppShell';
 import { db } from '../db/schema';
 import { createLocalUser, leaveDemoForOwnSetup } from '../engine/account';
 import { DEMO_USER_ID, demoResetPrompt, loadDemo } from '../engine/demo';
+import { startGoogleSignIn } from '../integrations/orbitApi';
 import { envGoogleClientId } from '../integrations/prefs';
+import { useAccount } from '../state/account';
 import { useSession } from '../state/session';
 import { Button, cx, Spinner } from '../ui';
 import { onboardingPath } from './Onboarding';
@@ -17,6 +19,7 @@ const NetworkDemo = lazy(() => import('../components/landing/NetworkDemo'));
 
 export function Landing() {
   const nav = useNavigate();
+  const account = useAccount();
   const { loading, userId, setUserId } = useSession();
   // The stored profile for the current session (null when there is none). Until it is known the page shows no
   // buttons: a click in that window would load the demo over real data without asking. The answer carries the id it
@@ -90,6 +93,18 @@ export function Landing() {
         )}
       </Button>
     );
+  // a build with Orbit accounts: someone who has one signs in with Google and lands in their own Orbit
+  const logIn =
+    account.mode && !account.signedIn ? (
+      <Button
+        variant="ghost"
+        onClick={() => startGoogleSignIn()}
+        disabled={!!busy}
+        data-testid="landing-login"
+      >
+        Log in
+      </Button>
+    ) : null;
   return (
     <div className="min-h-full bg-page text-ink">
       {busy && (
@@ -131,6 +146,7 @@ export function Landing() {
                     Back to the demo
                   </Button>
                 </span>
+                {logIn}
                 <Button variant="dark" onClick={start} disabled={!!busy}>
                   Set up Orbit for me
                 </Button>
@@ -141,6 +157,7 @@ export function Landing() {
               </Button>
             ) : (
               <>
+                {logIn}
                 {!midSetup && (
                   <Button variant="secondary" onClick={demo} disabled={!!busy}>
                     Try the demo

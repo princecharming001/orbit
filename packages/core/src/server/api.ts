@@ -372,6 +372,8 @@ export interface ProfileSettingsRequest {
   postalAddress?: string | null;
   schedulingLink?: string | null;
   timezone?: string;
+  /** setup was finished then (users.onboarding.completed_at), so signing in on another device skips it */
+  onboardingCompletedAt?: string;
 }
 export interface ProfileSettingsResponse {
   postalAddress: string | null;

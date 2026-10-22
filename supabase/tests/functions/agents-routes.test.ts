@@ -262,6 +262,17 @@ describe('cadence/due', () => {
 });
 
 describe('settings/profile (§14.3)', () => {
+  it('remembers that setup was finished, so another device skips it', async () => {
+    const call = api(t, fakeNet(), { env: {} });
+    const { userId, token } = await signedInUser(t);
+    const at = '2026-10-21T18:00:00.000Z';
+    expect((await call('/settings/profile', token, { onboardingCompletedAt: at })).status).toBe(200);
+    const [u] = await t.db.sql<{ onboarding: Record<string, unknown> }>`
+      select onboarding from orbit.users where id = ${userId}::uuid`;
+    expect(u!.onboarding).toMatchObject({ completed_at: at });
+    expect((await call('/settings/profile', token, { onboardingCompletedAt: 'soon' })).status).toBe(400);
+  });
+
   it('keeps the postal address, the scheduling link and the time zone, and validates each', async () => {
     const call = api(t, fakeNet(), { env: {} });
     const { userId, token } = await signedInUser(t, { settings: { quiet_until: '2026-12-01' } });

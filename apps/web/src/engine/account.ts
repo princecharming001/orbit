@@ -3,7 +3,7 @@ import { newId } from '@orbit/core';
 import { CURRENT_USER_KEY } from '../db/repo';
 import { db, wipeDatabase } from '../db/schema';
 import { disconnectGoogle } from '../integrations/google';
-import { clearSession, isSignedIn } from '../integrations/orbitApi';
+import { callApi, clearSession, isSignedIn } from '../integrations/orbitApi';
 import { clearPrefs } from '../integrations/prefs';
 import { generateBrief, recommendationsRefresh } from './brief';
 
@@ -74,6 +74,9 @@ export async function finishOnboarding(userId: string, now = new Date()): Promis
     onboardingCompletedAt: now.toISOString(),
   });
   const fresh = (await db.users.get(userId))!;
+  // the account remembers it, so signing in on another device goes straight to Orbit
+  if (isSignedIn())
+    void callApi('/settings/profile', { onboardingCompletedAt: now.toISOString() }).catch(() => {});
   await recommendationsRefresh(fresh, now);
   await generateBrief(fresh, 'welcome', now);
   return fresh;

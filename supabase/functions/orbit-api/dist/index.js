@@ -8875,6 +8875,13 @@ async function profile(ctx) {
       throw badRequest("timezone must be an IANA time zone, like America/New_York");
     tz = b.timezone.trim();
   }
+  let done2;
+  if (b.onboardingCompletedAt !== void 0) {
+    const t = new Date(String(b.onboardingCompletedAt));
+    if (typeof b.onboardingCompletedAt !== "string" || Number.isNaN(t.getTime()))
+      throw badRequest("onboardingCompletedAt must be an ISO time");
+    done2 = t.toISOString();
+  }
   const userId = ctx.userId;
   const given = {};
   if (postal !== void 0) given.postal_address = postal;
@@ -8883,11 +8890,13 @@ async function profile(ctx) {
   const [after] = await ctx.db.sql`
     update orbit.users
        set settings = (settings - ${Object.keys(given)}::text[]) || ${keep}::jsonb,
-           timezone = coalesce(${tz ?? null}::text, timezone)
+           timezone = coalesce(${tz ?? null}::text, timezone),
+           onboarding = case when ${done2 ?? null}::text is null then onboarding
+                             else coalesce(onboarding, '{}'::jsonb) || jsonb_build_object('completed_at', ${done2 ?? null}::text) end
      where id = ${userId}::uuid
     returning settings, timezone`;
   if (!after) throw new HttpError(404, "not_found", "no such user");
-  const changed = [...Object.keys(given), ...tz ? ["timezone"] : []];
+  const changed = [...Object.keys(given), ...tz ? ["timezone"] : [], ...done2 ? ["onboarding"] : []];
   if (changed.length)
     await ctx.db.sql`
       insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
@@ -11616,7 +11625,7 @@ async function pushDraft(db2, userId, id, row) {
 }
 
 // supabase/functions/orbit-api/api.ts
-var DEFAULT_APP_URL = "https://princecharming001.github.io/orbit";
+var DEFAULT_APP_URL = "https://tryorbit.today";
 var DEFAULT_LIMITS = { ipPerMinute: 120, userPerMinute: 240, userPerDay: 2e4 };
 var ROUTES = {
   "/auth/google/start": { method: "GET", auth: false, google: true, run: googleStart },

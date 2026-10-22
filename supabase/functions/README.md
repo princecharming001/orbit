@@ -57,7 +57,7 @@ supabase functions deploy orbit-webhooks --no-verify-jwt
 | `ORBIT_SESSION_SECRET` | orbit-api | yes | 32 random bytes, base64 (`openssl rand -base64 32`). Signs Orbit access tokens |
 | `ORBIT_GOOGLE_CLIENT_ID`, `ORBIT_GOOGLE_CLIENT_SECRET` | orbit-api, orbit-worker | for `/auth/google/*` (H2) and the Google sync jobs | Web OAuth client with redirect URI below. Without them the worker ends Gmail, Calendar and contacts jobs as `skipped` |
 | `ORBIT_GOOGLE_REDIRECT_URI` | orbit-api | no | Default `<SUPABASE_URL>/functions/v1/orbit-api/auth/google/callback` |
-| `ORBIT_APP_URL` | orbit-api | no | Where sign-in returns (`<app>/auth/done#code=…`). Default `https://princecharming001.github.io/orbit`; `http://localhost:*` is always allowed for development |
+| `ORBIT_APP_URL` | orbit-api | no | Where sign-in returns (`<app>/auth/done#code=…`). Default `https://tryorbit.today`; `http://localhost:*` is always allowed for development |
 | `UNIPILE_API_KEY`, `UNIPILE_BASE_URL` | orbit-api, orbit-worker | for LinkedIn (H5) | Hosted auth (`/linkedin/connect/start`), `/linkedin/sync`, the `sync.linkedin` job and account deletion. Without them LinkedIn routes answer unconfigured and LinkedIn jobs end `skipped` |
 | `GMAIL_PUBSUB_TOPIC` | orbit-worker | no (H3) | `projects/<gcp project>/topics/orbit-gmail`; without it no Gmail watch is registered and the 10-minute poll keeps mail current |
 | `ORBIT_ANTHROPIC_API_KEY` | orbit-worker | no | Haiku for replies the heuristic classifier is unsure of (§8.6); without it the heuristic answer is kept |
