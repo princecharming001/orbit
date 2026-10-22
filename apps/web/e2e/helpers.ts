@@ -58,13 +58,15 @@ export async function injectPeople(page: Page, n: number) {
       const c = Math.floor(companies * rnd() ** 2.5);
       const u = rnd();
       const strength = u < 0.03 ? 0.6 + rnd() * 0.3 : u < 0.15 ? 0.3 + rnd() * 0.25 : rnd() * 0.25;
+      // a real name has no digits (the map only shows people it can name): 0 → "Aa", 27 → "Bb", …
+      const tag = `${String.fromCharCode(65 + (Math.floor(i / 26) % 26))}${String.fromCharCode(97 + (i % 26))}${i >= 676 ? String.fromCharCode(97 + Math.floor(i / 676)) : ''}`;
       store.put({
         id: `e2e-${i}`,
         userId,
-        displayName: `Test Person ${i}`,
+        displayName: `Test ${tag}son`,
         firstName: 'Test',
-        lastName: `Person${i}`,
-        nameNormalized: `test person ${i}`,
+        lastName: `${tag}son`,
+        nameNormalized: `test ${tag.toLowerCase()}son`,
         emails: [],
         currentOrganizationRaw: c === 0 ? 'Google' : `Synthetic Company ${c}`,
         relationshipType: 'unknown',

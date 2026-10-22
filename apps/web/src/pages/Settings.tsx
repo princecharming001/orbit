@@ -13,6 +13,7 @@ import { openMorningBrief } from '../components/MorningBrief';
 import { CalcomRow, FathomRow, MeetingAppRow } from '../components/NotesAppRows';
 import { ResumeFacetList } from '../components/ResumeFacets';
 import { SchedulingLinkField } from '../components/SchedulingLinkField';
+import { TextsRow } from '../components/TextsRow';
 import { WeeklyTargetSlider } from '../components/WeeklyTargetSlider';
 import { db } from '../db/schema';
 import { deleteAllData, exportAllData, exportFilename } from '../engine/account';
@@ -800,6 +801,7 @@ function Integrations() {
           actions={<LinkedInImportButton label="Upload" testId="settings-linkedin" />}
         />
         <WarmIntrosCard user={user} />
+        <TextsRow user={user} />
       </RowGroup>
       <RowGroup title="Meeting notes" hint="Pick the notetaker you use; Orbit imports from one at a time.">
         <FathomRow user={user} />

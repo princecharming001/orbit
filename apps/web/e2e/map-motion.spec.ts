@@ -343,9 +343,9 @@ test.describe('Map motion', () => {
       'No one matches “Zzyzx Nobody” in your network yet.',
     );
     await expect(page.getByTestId('reach-form')).toHaveClass(/shake-x/);
-    // typing again puts the line back
+    // typing again takes the miss down (the search stays open in the panel)
     await page.getByTestId('reach-input').fill('Zzy');
-    await expect(page.getByTestId('map-legend-line')).toHaveText(/everyone you know/i);
+    await expect(page.getByTestId('map-legend-line')).toHaveText(/find a way in/i);
     await expect(page.getByTestId('reach-form')).not.toHaveClass(/shake-x/);
   });
 

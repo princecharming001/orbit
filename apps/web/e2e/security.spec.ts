@@ -59,7 +59,8 @@ test.describe('security', () => {
       await page.waitForLoadState('networkidle');
     }
     const csp = await page.locator('meta[http-equiv="Content-Security-Policy"]').getAttribute('content');
-    expect(csp).toContain("script-src 'self' https://accounts.google.com/gsi/client");
+    // 'wasm-unsafe-eval' lets SQLite (WebAssembly) read an imported Messages file; it does not allow eval()
+    expect(csp).toContain("script-src 'self' 'wasm-unsafe-eval' https://accounts.google.com/gsi/client");
     expect(csp).toContain('connect-src');
     expect(await page.evaluate(() => window.__cspViolations)).toEqual([]);
 

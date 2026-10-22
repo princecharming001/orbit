@@ -584,7 +584,12 @@ export function explainTie(
     const h = facts.medianLatencyHours;
     topics.push({
       value: c.latency,
-      positive: h <= 48 ? `Usually replies within ${Math.max(1, Math.round(h))} hours` : undefined,
+      positive:
+        h <= 48
+          ? Math.round(h) <= 1
+            ? 'Usually replies within the hour'
+            : `Usually replies within ${Math.round(h)} hours`
+          : undefined,
       negative: h > 48 ? `Takes about ${Math.round(h / 24)} days to reply` : undefined,
     });
   }

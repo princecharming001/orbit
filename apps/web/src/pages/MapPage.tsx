@@ -3,6 +3,7 @@ import {
   buildIntroWeb,
   combinedPairWeights,
   describeIntroChain,
+  hasRealName,
   introStories,
   isKnownContact,
   MEDIUM_TIE,
@@ -16,6 +17,7 @@ import { Building2, Search, X } from 'lucide-react';
 import { type CSSProperties, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { CompanyLogo, LogoText } from '../components/CompanyLogo';
+import { ReachSearch } from '../components/map/ReachSearch';
 import { type CardPlace, OrbitMap, useCoarsePointer } from '../components/OrbitMap';
 import type { FocusSpec, WebSpec } from '../components/orbitScene';
 import { LINEAGE } from '../components/orbitScene';
@@ -36,6 +38,7 @@ import {
   targetCompanyMatcher,
   WARMER_ROUTES_WHY,
 } from '../engine/graph';
+import { addLinkedInFound, type FoundView } from '../engine/linkedinSearch';
 import { maintenanceRunning, watchMaintenance } from '../engine/sync';
 import { useSession } from '../state/session';
 import { Avatar, Button, Card, Chip, cx, Input, useToast } from '../ui';
@@ -64,6 +67,9 @@ const NEWS_MS = 6000;
 const HOVER_LINKS = 12;
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+/** Someone the search can offer: a person with a real name, not hidden. */
+const named = (p: Person) => p.isHuman && !p.hiddenAt && hasRealName(p);
 
 export function MapPage() {
   const { userId, user } = useSession();
@@ -96,6 +102,17 @@ export function MapPage() {
   /** bumped whenever the view changes, so a lookup that finishes late cannot bring back a view the student left */
   const viewReq = useRef(0);
   const [target, setTarget] = useState<Person>();
+  // the side panel beside the map (a wide screen) holds the search; under the map (a phone) the top bar keeps it, so
+  // the routes stay on screen
+  const panelRef = useRef<HTMLElement>(null);
+  const [sideBySide, setSideBySide] = useState(true);
+  useEffect(() => {
+    const el = panelRef.current?.parentElement;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => setSideBySide(el.clientWidth >= 896));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   const [hover, setHover] = useState<string>();
   // where the person card goes: beside the dot, or at the top or bottom of a narrow map (the map picks it)
   const [hoverPlace, setHoverPlace] = useState<CardPlace>({ at: 'bottom', y: 0 });
@@ -228,6 +245,8 @@ export function MapPage() {
     [people, stages],
   );
   const byId = useMemo(() => new Map(visible.map((p) => [p.id, p])), [visible]);
+  // everyone the search can name (a target need not be someone the student already knows)
+  const peopleById = useMemo(() => new Map(people.map((p) => [p.id, p])), [people]);
   const highlightIds = useMemo(() => {
     if (filter === 'all' || filter === 'intros') return undefined;
     const now = Date.now();
@@ -410,7 +429,8 @@ export function MapPage() {
           }),
         );
     }
-    return rankReachTargets(q, peopleQ, orgsQ).slice(0, 6);
+    // people Orbit can name: an address handle or an initial is no one to reach
+    return rankReachTargets(q, peopleQ.filter(named), orgsQ).slice(0, 6);
   }, [query, peopleQ, orgsQ, webMode, web, byId]);
   const pickSuggestion = (c: ReachCandidate) => {
     setSuggestOpen(false);
@@ -484,6 +504,15 @@ export function MapPage() {
     if (userId && reachParam === '1' && companyParam && !companyFocus && !choices)
       void openCompany(companyParam, companyParam);
   }, [userId, reachParam, companyParam]);
+  /** Someone found on LinkedIn: they join Orbit (a chat at "to contact"), and the map shows the routes to them. */
+  const chooseLinkedIn = async (f: FoundView) => {
+    if (!user) return;
+    const r = await addLinkedInFound(user, [f.id]);
+    if (!r.ok) return void toast.push({ text: r.message, tone: 'neutral' });
+    setQuery(f.name);
+    toast.push({ text: `${f.name} is in your Orbit now.`, tone: 'good' });
+    setParams({ reach: r.people[0]!.id });
+  };
   const choose = (c: ReachCandidate) => {
     setChoices(undefined);
     if (c.kind === 'person') setParams({ reach: c.id });
@@ -525,7 +554,7 @@ export function MapPage() {
         ? [peopleQ, orgsQ]
         : await Promise.all([db.people.where('userId').equals(userId).toArray(), db.organizations.toArray()]);
     if (viewReq.current !== req) return;
-    const cands = rankReachTargets(q, allPeople, allOrgs);
+    const cands = rankReachTargets(q, allPeople.filter(named), allOrgs);
     if (cands.length && isUnambiguous(cands)) return choose(cands[0]!);
     if (cands.length) {
       // several plausible matches ("go" could be Google or Goldman Sachs): let the student pick
@@ -736,105 +765,109 @@ export function MapPage() {
           </p>
         </div>
         <div className="w-full @[40rem]:w-auto @[40rem]:ml-auto flex items-center gap-2">
-          <form
-            ref={searchForm}
-            onSubmit={(e) => {
-              e.preventDefault();
-              const picked = suggestOpen && suggestAt >= 0 ? suggestions[suggestAt] : undefined;
-              setSuggestOpen(false);
-              setSuggestAt(-1);
-              if (picked) return pickSuggestion(picked);
-              runSearch(query);
-            }}
-            className={cx(
-              'relative flex-1 @[40rem]:flex-none',
-              missed && missed.q === query.trim() && 'shake-x',
-            )}
-            data-testid="reach-form"
-          >
-            <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-3" />
-            <Input
-              value={query}
-              onChange={(e) => {
-                setQuery(e.target.value);
-                setSuggestOpen(true);
+          {(!reachMode || !sideBySide) && (
+            <form
+              ref={searchForm}
+              onSubmit={(e) => {
+                e.preventDefault();
+                const picked = suggestOpen && suggestAt >= 0 ? suggestions[suggestAt] : undefined;
+                setSuggestOpen(false);
                 setSuggestAt(-1);
-                // typing again takes the miss toast down: on a phone it sits over this box
-                clearMiss();
-                if (webMode && !e.target.value) setWebFocus(undefined);
+                if (picked) return pickSuggestion(picked);
+                runSearch(query);
               }}
-              onKeyDown={(e) => {
-                if (!suggestOpen || !suggestions.length) return;
-                if (e.key === 'ArrowDown') {
-                  e.preventDefault();
-                  setSuggestAt((i) => (i + 1) % suggestions.length);
-                } else if (e.key === 'ArrowUp') {
-                  e.preventDefault();
-                  setSuggestAt((i) => (i <= 0 ? suggestions.length - 1 : i - 1));
-                } else if (e.key === 'Escape') {
-                  e.stopPropagation();
-                  setSuggestOpen(false);
-                }
-              }}
-              onBlur={() => setTimeout(() => setSuggestOpen(false), 120)}
-              role="combobox"
-              aria-expanded={suggestOpen && suggestions.length > 0}
-              aria-controls="map-suggestions"
-              aria-autocomplete="list"
-              aria-activedescendant={suggestAt >= 0 ? `map-suggestion-${suggestAt}` : undefined}
-              placeholder={webMode ? 'Search your introductions…' : 'Reach a person or company…'}
-              className="pl-8 w-full @[40rem]:w-72 pointer-coarse:h-11 pointer-coarse:text-[16px] rounded-full"
-              data-testid="reach-input"
-            />
-            {suggestOpen && suggestions.length > 0 && (
-              <div
-                id="map-suggestions"
-                role="listbox"
-                aria-label="Suggestions"
-                className="pop-in absolute z-30 left-0 right-0 mt-1.5 rounded-[14px] border border-line bg-canvas p-1.5 shadow-[0_16px_40px_-12px_rgba(0,0,0,0.18)]"
-                data-testid="map-suggestions"
-              >
-                {suggestions.map((c, i) => {
-                  const p = c.kind === 'person' ? byId.get(c.id) : undefined;
-                  return (
-                    <div
-                      key={`${c.kind}-${c.id}`}
-                      role="option"
-                      tabIndex={-1}
-                      id={`map-suggestion-${i}`}
-                      aria-selected={i === suggestAt}
-                      // mousedown, so the pick lands before the box loses focus and closes the list
-                      onMouseDown={(e) => {
-                        e.preventDefault();
-                        pickSuggestion(c);
-                      }}
-                      onMouseEnter={() => setSuggestAt(i)}
-                      className={cx(
-                        'w-full h-11 px-2 rounded-[10px] flex items-center gap-2.5 text-left transition-colors cursor-pointer',
-                        i === suggestAt ? 'bg-canvas-2' : 'hover:bg-canvas-2',
-                      )}
-                      data-testid="map-suggestion"
-                    >
-                      {c.kind === 'person' ? (
-                        <Avatar name={c.label} src={p?.photoUrl} id={c.id} size={26} />
-                      ) : (
-                        <span className="w-[26px] h-[26px] rounded-full border border-line bg-canvas-2 inline-flex items-center justify-center text-ink-2">
-                          <Building2 size={13} />
+              className={cx(
+                'relative flex-1 @[40rem]:flex-none',
+                missed && missed.q === query.trim() && 'shake-x',
+              )}
+              data-testid="reach-form"
+            >
+              <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-3" />
+              <Input
+                value={query}
+                onChange={(e) => {
+                  setQuery(e.target.value);
+                  // outside the introductions view the search goes on in the side panel, where its results have room
+                  if (!webMode && e.target.value.trim()) setParams({ reach: '1' });
+                  setSuggestOpen(true);
+                  setSuggestAt(-1);
+                  // typing again takes the miss toast down: on a phone it sits over this box
+                  clearMiss();
+                  if (webMode && !e.target.value) setWebFocus(undefined);
+                }}
+                onKeyDown={(e) => {
+                  if (!suggestOpen || !suggestions.length) return;
+                  if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    setSuggestAt((i) => (i + 1) % suggestions.length);
+                  } else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    setSuggestAt((i) => (i <= 0 ? suggestions.length - 1 : i - 1));
+                  } else if (e.key === 'Escape') {
+                    e.stopPropagation();
+                    setSuggestOpen(false);
+                  }
+                }}
+                onBlur={() => setTimeout(() => setSuggestOpen(false), 120)}
+                role="combobox"
+                aria-expanded={suggestOpen && suggestions.length > 0}
+                aria-controls="map-suggestions"
+                aria-autocomplete="list"
+                aria-activedescendant={suggestAt >= 0 ? `map-suggestion-${suggestAt}` : undefined}
+                placeholder={webMode ? 'Search your introductions…' : 'Reach a person or company…'}
+                className="pl-8 w-full @[40rem]:w-72 pointer-coarse:h-11 pointer-coarse:text-[16px] rounded-full"
+                data-testid="reach-input"
+              />
+              {suggestOpen && suggestions.length > 0 && (
+                <div
+                  id="map-suggestions"
+                  role="listbox"
+                  aria-label="Suggestions"
+                  className="pop-in absolute z-30 left-0 right-0 mt-1.5 rounded-[14px] border border-line bg-canvas p-1.5 shadow-[0_16px_40px_-12px_rgba(0,0,0,0.18)]"
+                  data-testid="map-suggestions"
+                >
+                  {suggestions.map((c, i) => {
+                    const p = c.kind === 'person' ? byId.get(c.id) : undefined;
+                    return (
+                      <div
+                        key={`${c.kind}-${c.id}`}
+                        role="option"
+                        tabIndex={-1}
+                        id={`map-suggestion-${i}`}
+                        aria-selected={i === suggestAt}
+                        // mousedown, so the pick lands before the box loses focus and closes the list
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          pickSuggestion(c);
+                        }}
+                        onMouseEnter={() => setSuggestAt(i)}
+                        className={cx(
+                          'w-full h-11 px-2 rounded-[10px] flex items-center gap-2.5 text-left transition-colors cursor-pointer',
+                          i === suggestAt ? 'bg-canvas-2' : 'hover:bg-canvas-2',
+                        )}
+                        data-testid="map-suggestion"
+                      >
+                        {c.kind === 'person' ? (
+                          <Avatar name={c.label} src={p?.photoUrl} id={c.id} size={26} />
+                        ) : (
+                          <span className="w-[26px] h-[26px] rounded-full border border-line bg-canvas-2 inline-flex items-center justify-center text-ink-2">
+                            <Building2 size={13} />
+                          </span>
+                        )}
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-[13.5px] font-medium truncate">{c.label}</span>
+                          {c.sub && <span className="block text-[12px] text-ink-3 truncate">{c.sub}</span>}
                         </span>
-                      )}
-                      <span className="min-w-0 flex-1">
-                        <span className="block text-[13.5px] font-medium truncate">{c.label}</span>
-                        {c.sub && <span className="block text-[12px] text-ink-3 truncate">{c.sub}</span>}
-                      </span>
-                      <span className="label-mono !text-[10px] shrink-0">
-                        {c.kind === 'person' ? 'Person' : 'Company'}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </form>
+                        <span className="label-mono !text-[10px] shrink-0">
+                          {c.kind === 'person' ? 'Person' : 'Company'}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </form>
+          )}
           {reachMode && (
             <Button variant="ghost" size="sm" className={TAP} onClick={exitReach}>
               <X size={14} /> Exit reach
@@ -970,11 +1003,29 @@ export function MapPage() {
           className="hidden @4xl:flex"
         />
         <aside
+          ref={panelRef}
           // keyed on what the panel shows, so its cards cascade in again when the target changes
           key={`${reachParam ?? ''}|${target?.id ?? ''}|${company?.label ?? ''}|${webFocus?.label ?? ''}|${webMode}`}
           className="stagger min-w-0 min-h-[168px] border-t @4xl:border-t-0 @4xl:border-l border-line bg-canvas @4xl:overflow-y-auto scroll-thin p-4 space-y-3"
           data-testid="map-panel"
         >
+          {reachMode && sideBySide && user && (
+            <ReachSearch
+              shake={!!missed && missed.q === query.trim()}
+              user={user}
+              query={query}
+              onQuery={(q) => {
+                setQuery(q);
+                clearMiss();
+              }}
+              network={suggestions}
+              byId={peopleById}
+              onPick={pickSuggestion}
+              onPickLinkedIn={(f) => void chooseLinkedIn(f)}
+              onSubmit={(q) => void runSearch(q)}
+              compact={!!(target || companyFocus || choices)}
+            />
+          )}
           {!reachMode && !webMode && (
             <>
               <Button
@@ -1081,13 +1132,6 @@ export function MapPage() {
                 </Card>
               )}
             </>
-          )}
-          {reachMode && !target && !companyFocus && !choices && (
-            <div className="text-[13px] text-ink-2">
-              Type a name (someone in your network) or a company above. Orbit finds up to three routes through
-              people you know, with the reason each hop works, and when you already know the person, a note
-              straight to them as well.
-            </div>
           )}
           {choices && (
             <div>

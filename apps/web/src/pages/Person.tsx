@@ -1016,6 +1016,7 @@ export function PersonPage() {
         </div>
         <div className="space-y-4">
           <TieScoreCard person={person} userId={user.id} />
+          <TextsCard personId={person.id} firstName={person.firstName} />
           {isServerUser(user.id) && <DossierCard person={person} userId={user.id} />}
           <Card>
             <div className="font-medium mb-2">Summary</div>
@@ -1557,4 +1558,38 @@ function Prep({
 /** Closeness in words: the same band the closeness card names (Faint, Light, Warm, Strong, Close). */
 export function closenessWord(v: number): string {
   return TIE_BAND_LABELS[tieBand(Math.round(v * 100))];
+}
+
+/** Texts with them, from the Mac's Messages: how much, how lately, and the last few messages (kept in this browser). */
+function TextsCard({ personId, firstName }: { personId: string; firstName: string }) {
+  const t = useLiveQuery(() => db.textThreads.get(personId), [personId]);
+  if (!t) return null;
+  return (
+    <Card data-testid="person-texts">
+      <div className="flex items-baseline justify-between gap-2">
+        <div className="font-medium">Texts</div>
+        <div className="text-[12.5px] text-ink-3">
+          {t.inCount + t.outCount} · last {relDate(t.lastAt)}
+        </div>
+      </div>
+      <ul className="mt-3 space-y-1.5">
+        {t.recent.slice(-3).map((m) => (
+          <li key={m.at} className={cx('flex', m.fromMe ? 'justify-end' : 'justify-start')}>
+            <span
+              className={cx(
+                'max-w-[85%] rounded-[14px] px-3 py-1.5 text-[13px] leading-snug',
+                m.fromMe ? 'bg-accent text-white' : 'bg-canvas-2 text-ink',
+              )}
+              title={new Date(m.at).toLocaleString()}
+            >
+              {m.text}
+            </span>
+          </li>
+        ))}
+      </ul>
+      <p className="mt-2 text-[11.5px] text-ink-3">
+        {t.inCount} from {firstName || 'them'}, {t.outCount} from you
+      </p>
+    </Card>
+  );
 }

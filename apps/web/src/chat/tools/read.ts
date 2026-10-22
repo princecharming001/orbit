@@ -659,6 +659,8 @@ export const getPerson = defineTool({
     const live = person.summary
       ? undefined
       : personSummary({ user: ctx.user, person, facts, touchpoints: tps, now: ctx.now });
+    // texts from the Mac's Messages: how much and how lately, never what was said
+    const texts = await db.textThreads.get(person.id);
     const header = {
       ...personRef(person),
       headline: person.headline,
@@ -671,6 +673,9 @@ export const getPerson = defineTool({
       relationship: RELATIONSHIP_LABELS[person.relationshipType],
       closeness: Math.round(person.strength * 100) / 100,
       lastTouch: fmtDay(lastTouch(person), ctx),
+      texts: texts
+        ? { fromThem: texts.inCount, fromYou: texts.outCount, last: fmtDay(texts.lastAt, ctx) }
+        : undefined,
       hidden: !!person.hiddenAt,
       tags: person.tags,
       stage: chat ? STAGE_LABELS[chat.stage] : undefined,
