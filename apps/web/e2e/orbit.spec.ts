@@ -2389,7 +2389,7 @@ test.describe('Meeting notes: pick one app', () => {
     await expect(page.getByTestId('settings-fathom-status')).toContainText(/Connected/);
     await page.getByTestId('settings-granola-connect').click();
     await expect(page.getByTestId('settings-granola-status')).toContainText(/Connected/);
-    await expect(page.getByText(/Granola is on now, so Fathom is off/)).toBeVisible();
+    // Fathom went off (the toast saying so is gone after a few seconds, so the rows are what count)
     await expect(page.getByTestId('settings-fathom-status')).toHaveCount(0);
     await expect(page.getByTestId('settings-fathom-connect')).toBeVisible();
     await expect(page.getByTestId('settings-wispr-connect')).toBeVisible();
@@ -2401,6 +2401,7 @@ test.describe('Meeting notes: pick one app', () => {
     // a real student's Fireflies asks for the key; the sample student connects straight away
     await page.getByTestId('settings-fireflies-connect').click();
     await expect(page.getByTestId('settings-fireflies-status')).toContainText(/Connected/);
-    await expect(page.getByText(/Fireflies is on now, so Granola is off/)).toBeVisible();
+    await expect(page.getByTestId('settings-granola-status')).toHaveCount(0);
+    await expect(page.getByTestId('settings-granola-connect')).toBeVisible();
   });
 });
