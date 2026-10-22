@@ -1856,10 +1856,7 @@ test.describe('Usability round 5: chats Orbit cannot see, and notes in shorthand
   }) => {
     await newStudent(page);
     await addByHand(page, 'Rachel Kim', 'McKinsey', { email: 'rachel.kim@mckinsey.com' });
-    await page
-      .getByTestId('person-header')
-      .getByRole('button', { name: /^add note$/i })
-      .click();
+    await page.getByTestId('person-add-note').click();
     await page
       .getByTestId('capture-text')
       .fill(

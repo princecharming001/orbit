@@ -33,11 +33,14 @@ export function isKnownContact(
     | 'strengthBreakdown'
     | 'linkedinConnectedOn'
     | 'sources'
+    | 'tieScore'
   >,
   opts: { hasChat?: boolean } = {},
 ): boolean {
   if (!p.isHuman || p.hiddenAt || !hasRealName(p)) return false;
   if (opts.hasChat || p.linkedinConnectedOn) return true;
   if (p.sources?.some((s) => s === 'manual' || s === 'tracker_import' || s === 'linkedin_csv')) return true;
+  // kept on Orbit's server (account mode): the history lives there, and its tie score is the evidence
+  if (!p.strengthBreakdown && (p.tieScore ?? 0) > 0) return true;
   return isReciprocal(p.strengthBreakdown?.counts);
 }
