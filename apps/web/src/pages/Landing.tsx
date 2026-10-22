@@ -4,6 +4,7 @@ import { Compass, Inbox, Map as MapIcon, Minus, Plus, Search, SquarePen, Users }
 import { lazy, type ReactNode, Suspense, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Logo } from '../components/AppShell';
+import { TrustedBy } from '../components/landing/TrustedBy';
 import { db } from '../db/schema';
 import { createLocalUser, leaveDemoForOwnSetup } from '../engine/account';
 import { DEMO_USER_ID, demoResetPrompt, loadDemo } from '../engine/demo';
@@ -173,42 +174,47 @@ export function Landing() {
       </header>
 
       <div id="top" className="max-w-[1280px] mx-auto">
-        <section className="px-5 md:px-12 pt-14 md:pt-20 pb-12">
-          <Reveal delay={60}>
-            <h1 className="display text-[44px] sm:text-[56px] md:text-[64px] max-w-[880px]">
-              {/* "without" starts the second line on wider screens; a phone wraps it where it fits */}
-              Every coffee chat, <br className="hidden sm:inline" />
-              without the busywork.
-            </h1>
+        <section className="px-5 md:px-12 pt-14 md:pt-20 pb-12 grid gap-12 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)] lg:items-center lg:gap-14">
+          <div className="min-w-0">
+            <Reveal delay={60}>
+              <h1 className="display text-[44px] sm:text-[56px] md:text-[64px] lg:text-[58px] xl:text-[64px] max-w-[880px]">
+                {/* "without" starts the second line on wider screens; a phone wraps it where it fits */}
+                Every coffee chat, <br className="hidden sm:inline" />
+                without the busywork.
+              </h1>
+            </Reveal>
+            <Reveal delay={120}>
+              <p className="mt-6 text-[16px] md:text-[17px] leading-[1.55] text-ink-3 max-w-[540px]">
+                Orbit finds the people worth a coffee chat, drafts every message in your voice, and keeps
+                track of each conversation. Nothing is sent without you.
+              </p>
+            </Reveal>
+            <Reveal delay={160}>
+              <div className="mt-8 flex flex-wrap items-center gap-2 min-h-11">
+                {resolving ? <Spinner /> : primaryCta('lg')}
+                {isDemo && onboarded && !resolving && (
+                  <Button size="lg" variant="secondary" onClick={() => nav('/')}>
+                    Back to the demo
+                  </Button>
+                )}
+                {demoCta('lg')}
+              </div>
+            </Reveal>
+            {isDemo && onboarded && (
+              <p className="mt-4 text-[13px] text-ink-2">
+                You are in the demo, with a made-up student's data. Setting up your own clears it.
+              </p>
+            )}
+            {onboarded && !isDemo && (
+              <p className="mt-4 text-[13px] text-ink-2">
+                Your data on this browser belongs to {user?.fullName || 'your profile'}. To try the demo
+                instead, use Reset to demo in Settings under Data &amp; privacy.
+              </p>
+            )}
+          </div>
+          <Reveal delay={220}>
+            <TrustedBy />
           </Reveal>
-          <Reveal delay={120}>
-            <p className="mt-6 text-[16px] md:text-[17px] leading-[1.55] text-ink-3 max-w-[540px]">
-              Orbit finds the people worth a coffee chat, drafts every message in your voice, and keeps track
-              of each conversation. Nothing is sent without you.
-            </p>
-          </Reveal>
-          <Reveal delay={160}>
-            <div className="mt-8 flex flex-wrap items-center gap-2 min-h-11">
-              {resolving ? <Spinner /> : primaryCta('lg')}
-              {isDemo && onboarded && !resolving && (
-                <Button size="lg" variant="secondary" onClick={() => nav('/')}>
-                  Back to the demo
-                </Button>
-              )}
-              {demoCta('lg')}
-            </div>
-          </Reveal>
-          {isDemo && onboarded && (
-            <p className="mt-4 text-[13px] text-ink-2">
-              You are in the demo, with a made-up student's data. Setting up your own clears it.
-            </p>
-          )}
-          {onboarded && !isDemo && (
-            <p className="mt-4 text-[13px] text-ink-2">
-              Your data on this browser belongs to {user?.fullName || 'your profile'}. To try the demo
-              instead, use Reset to demo in Settings under Data &amp; privacy.
-            </p>
-          )}
         </section>
 
         <section id="map" className="scroll-mt-16 px-3 md:px-8 pb-16 md:pb-24">

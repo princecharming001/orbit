@@ -1490,7 +1490,13 @@ test.describe("Never losing the student's work, and honest hand-offs", () => {
   }) => {
     await prep(page);
     await page.goto('');
-    await expect(page.locator('body')).not.toContainText(/Google/);
+    // what the page says about Orbit; the logo wall's company names (Google among them) promise nothing
+    const promises = await page.evaluate(() => {
+      const copy = document.body.cloneNode(true) as HTMLElement;
+      copy.querySelector('[data-testid="trusted-by"]')?.remove();
+      return copy.innerText;
+    });
+    expect(promises).not.toMatch(/Google/);
     await expect(page.locator('body')).toContainText(/does not connect to your email or calendar/i);
     await loadDemo(page);
     await page.goto('settings/integrations');
