@@ -279,10 +279,8 @@ async function finishConnect(
   // the student's LinkedIn photo becomes their picture in Orbit straight away, before the connections import
   if (!usesMockConnectors(user.id))
     await adoptLinkedInPhoto(user.id, accountId, accessToken, { replace: true });
+  // (a finished sync starts the enrichment waterfall in the background: see syncLinkedInLive)
   const r = await syncLinkedInLive(user, opts);
-  // then, in the background, fill in people the student already knows from Gmail with their LinkedIn
-  if (r.ok && !usesMockConnectors(user.id))
-    void import('./enrich').then((m) => m.enrichFromLinkedIn(user)).catch(() => undefined);
   if (r.ok) return { ok: true, rows: r.rows, added: r.added };
   setProgress({ phase: 'failed', message: r.message });
   return {
@@ -369,7 +367,11 @@ export async function syncLinkedInLive(
   opts: { onProgress?: (count: number) => void; signal?: AbortSignal; now?: Date } = {},
 ): Promise<LiveSyncResult> {
   try {
-    return await syncLinkedInLiveOnce(user, opts);
+    const r = await syncLinkedInLiveOnce(user, opts);
+    // then, in the background: profiles, logos and schools for the people the student knows, and LinkedIn for the
+    // ones known only from mail and texts (engine/enrichment)
+    if (r.ok) void import('./enrichment').then((m) => m.scheduleEnrichment(user)).catch(() => undefined);
+    return r;
   } catch (e) {
     // something LinkedIn sent that Orbit could not read: say so on the row instead of failing silently
     const message = `The sync stopped partway (${e instanceof Error ? e.message : 'unexpected answer'}). Try Sync now.`;

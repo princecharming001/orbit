@@ -18,6 +18,7 @@ import { usesMockConnectors } from '../integrations/connectorsMock';
 import { subscribePrefs } from '../integrations/prefs';
 import { checkVillage, subscribeVillageHealth, villageHealth } from '../integrations/village';
 import { Button, Modal, relDate, Spinner, Switch, useToast } from '../ui';
+import { EnrichmentStatusLine } from './EnrichmentStatus';
 import { AppMark, IntegrationRow, RowStatus } from './IntegrationRow';
 
 export function LinkedInLiveCard({ user }: { user: User }) {
@@ -129,6 +130,7 @@ export function LinkedInLiveCard({ user }: { user: User }) {
           )
         }
       >
+        {status.connected && <EnrichmentStatusLine user={user} />}
         {soon && (
           <p className="text-[12.5px] text-ink-2" role="status" data-testid="settings-linkedin-live-soon">
             {LIVE_SOON}

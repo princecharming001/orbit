@@ -52,6 +52,14 @@ const [
   providerSecret('VILLAGE_EXTERNAL_USER_ID'),
 ]);
 
+// enrichment (plan 17 E): optional web and people-data keys; each one left out keeps its step switched off
+const [exaKey, firecrawlKey, apolloKey, pdlKey] = await Promise.all([
+  providerSecret('EXA_API_KEY'),
+  providerSecret('FIRECRAWL_API_KEY'),
+  providerSecret('APOLLO_API_KEY'),
+  providerSecret('PDL_API_KEY'),
+]);
+
 const num = (name: string, fallback: number) => {
   const v = Number(Deno.env.get(name));
   return Number.isFinite(v) && v > 0 ? v : fallback;
@@ -79,6 +87,15 @@ Deno.serve(
     // Unipile reports each finished LinkedIn sign-in to /connect/notify; the account is kept by the sign-in's reference
     links: url && serviceKey ? postgrestLinks(url, serviceKey) : memoryLinks(),
     publicUrl: url ? `${url}/functions/v1/orbit-connectors` : undefined,
+    enrichment: {
+      profilesPerDay: num('ORBIT_LINKEDIN_PROFILES_PER_DAY', 80),
+      companiesPerDay: num('ORBIT_LINKEDIN_COMPANIES_PER_DAY', 80),
+      webPerDay: num('ORBIT_WEB_LOOKUPS_PER_DAY', 30),
+      exaKey,
+      firecrawlKey,
+      apolloKey,
+      pdlKey,
+    },
     sendsPerDay: num('ORBIT_LINKEDIN_SENDS_PER_DAY', 25),
     searchesPerDay: num('ORBIT_LINKEDIN_SEARCHES_PER_DAY', 40),
     limits: {

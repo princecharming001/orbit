@@ -480,10 +480,12 @@ function makeHandler(deps) {
       body = {};
     }
     const isVillage = path === "/paths";
-    if (!isVillage && !UNIPILE_ROUTES.has(path)) return json(404, { error: "no such route" }, h);
+    const isEnrich = ENRICH_ROUTES.has(path);
+    if (!isVillage && !isEnrich && !UNIPILE_ROUTES.has(path)) return json(404, { error: "no such route" }, h);
+    if (path === "/providers") return json(200, providerStatus(deps), h);
     if (isVillage && (!deps.villageKey || !deps.villageBase || !deps.villageUser?.email))
       return unconfigured2(h);
-    if (!isVillage && (!deps.unipileKey || !deps.unipileBase)) return unconfigured2(h);
+    if (!isVillage && !isEnrich && (!deps.unipileKey || !deps.unipileBase)) return unconfigured2(h);
     const visitor = (await sha256(`${deps.salt ?? "orbit"}:${clientIp(req)}`)).slice(0, 32);
     let verdict;
     try {
@@ -503,6 +505,7 @@ function makeHandler(deps) {
         }
       );
     }
+    if (isEnrich) return enrichmentRoute(deps, path, body, { h, doFetch, take, now, visitor });
     if (ACCOUNT_ROUTES.has(path) && !await tokenValid(String(body.accountId ?? ""), body.token, deps.signingKey))
       return json(403, { error: "this LinkedIn account is not linked to this browser" }, h);
     if (path === "/send") {
@@ -980,6 +983,219 @@ async function unipileSearch(deps, body, doFetch) {
     total: typeof b.paging?.total_count === "number" ? b.paging.total_count : void 0
   };
 }
+var ENRICH_ROUTES = /* @__PURE__ */ new Set(["/profile", "/company", "/web", "/providers"]);
+var PROFILE_SECTIONS = /* @__PURE__ */ new Set([
+  "experience",
+  "education",
+  "about",
+  "skills",
+  "languages",
+  "certifications",
+  "experience_preview",
+  "education_preview",
+  "skills_preview",
+  "languages_preview",
+  "certifications_preview",
+  "*_preview"
+]);
+function providerStatus(deps) {
+  const e = deps.enrichment ?? {};
+  return {
+    linkedin: !!deps.unipileKey && !!deps.unipileBase,
+    exa: !!e.exaKey,
+    firecrawl: !!e.firecrawlKey,
+    apollo: !!e.apolloKey,
+    peopleDataLabs: !!e.pdlKey
+  };
+}
+function enrichBucket(kind, who, now, perDay) {
+  const b = sendBucket(who, now, perDay);
+  return { ...b, key: b.key.replace("connectors:send:", `connectors:${kind}:`) };
+}
+async function enrichmentRoute(deps, path, body, ctx) {
+  const { h, doFetch, take, now } = ctx;
+  const e = deps.enrichment ?? {};
+  const kind = path === "/profile" ? "profile" : path === "/company" ? "company" : "web";
+  if (kind === "web") {
+    if (!e.exaKey) return unconfigured2(h);
+  } else {
+    if (!deps.unipileKey || !deps.unipileBase) return unconfigured2(h);
+    if (!await tokenValid(String(body.accountId ?? ""), body.token, deps.signingKey))
+      return json(403, { error: "this LinkedIn account is not linked to this browser" }, h);
+  }
+  const perDay = kind === "profile" ? e.profilesPerDay ?? 80 : kind === "company" ? e.companiesPerDay ?? 80 : e.webPerDay ?? 30;
+  const who = kind === "web" ? `visitor:${ctx.visitor}` : String(body.accountId);
+  let verdict;
+  try {
+    verdict = await take([enrichBucket(kind, who, now(), perDay)]);
+  } catch {
+    return json(503, { error: "unavailable right now" }, h);
+  }
+  if (!verdict.allowed)
+    return json(
+      200,
+      {
+        ok: false,
+        reason: "limit",
+        message: kind === "web" ? "Orbit has looked up as many people on the web as it allows today." : "Orbit has read as many LinkedIn profiles as it allows today. It carries on tomorrow."
+      },
+      h
+    );
+  try {
+    if (kind === "profile") return json(200, await unipileProfile(deps, body, doFetch), h);
+    if (kind === "company") return json(200, await unipileCompany(deps, body, doFetch), h);
+    return json(200, await exaSearch(e, body, doFetch), h);
+  } catch (err) {
+    return json(502, { error: err instanceof Error ? err.message : "upstream error" }, h);
+  }
+}
+function dateText(v) {
+  if (typeof v === "string" && v.trim()) return v.trim().slice(0, 40);
+  if (typeof v === "number" && Number.isFinite(v)) return String(v);
+  if (v && typeof v === "object") {
+    const d = v;
+    const y = Number(d.year);
+    if (!Number.isFinite(y) || y < 1900) return void 0;
+    const m = Number(d.month);
+    const day = Number(d.day);
+    const pad = (n) => String(n).padStart(2, "0");
+    return m >= 1 && m <= 12 ? `${y}-${pad(m)}${day >= 1 && day <= 31 ? `-${pad(day)}` : ""}` : String(y);
+  }
+  return void 0;
+}
+var licdn = (v) => {
+  const u = text(v, 1e3);
+  return u && isLinkedInImage(u) ? u : void 0;
+};
+function companySlugFromUrl(url2) {
+  const m = /linkedin\.com\/(?:company|school)\/([^/?#]+)/i.exec(typeof url2 === "string" ? url2 : "");
+  const slug = m?.[1] ? decodeURIComponent(m[1]).toLowerCase() : void 0;
+  return slug && !/^\d+$/.test(slug) ? slug : void 0;
+}
+function mapProfile(p) {
+  const str = (v, max = 200) => text(v, max);
+  const degree = String(p.network_distance ?? "");
+  const distance = /FIRST|DISTANCE_1/.test(degree) ? 1 : /SECOND|DISTANCE_2/.test(degree) ? 2 : /THIRD|DISTANCE_3/.test(degree) ? 3 : void 0;
+  const list = (v) => (Array.isArray(v) ? v : []).filter(
+    (x) => !!x && typeof x === "object" && !Array.isArray(x)
+  );
+  const contact = p.contact_info ?? {};
+  const strings = (v, max) => (Array.isArray(v) ? v : []).map((x) => typeof x === "string" ? x.trim() : "").filter(Boolean).slice(0, max);
+  const emails = strings(contact.emails, 5).filter((x) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(x));
+  const phones = strings(contact.phones, 5).filter((x) => /\d{6,}/.test(x.replace(/\D/g, "")));
+  return {
+    providerId: str(p.provider_id),
+    publicIdentifier: str(p.public_identifier),
+    firstName: str(p.first_name),
+    lastName: str(p.last_name),
+    headline: str(p.headline, 220),
+    location: str(p.location, 120),
+    about: str(p.summary, 600),
+    pictureUrl: licdn(p.profile_picture_url_large) ?? licdn(p.profile_picture_url),
+    distance,
+    experience: list(p.work_experience).slice(0, 20).map((x) => ({
+      title: str(x.position, 160),
+      company: str(x.company, 160),
+      companyId: str(x.company_id, 60),
+      companySlug: companySlugFromUrl(x.company_url),
+      logoUrl: licdn(x.company_picture_url),
+      location: str(x.location, 120),
+      current: x.current === true || x.current !== false && !dateText(x.end),
+      start: dateText(x.start),
+      end: dateText(x.end)
+    })).filter((x) => x.company || x.title),
+    education: list(p.education).slice(0, 10).map((x) => ({
+      school: str(x.school, 160),
+      schoolId: str(x.school_id, 60),
+      logoUrl: licdn(x.school_picture_url),
+      degree: str(x.degree, 120),
+      field: str(x.field_of_study, 120),
+      start: dateText(x.start),
+      end: dateText(x.end)
+    })).filter((x) => x.school),
+    contact: emails.length || phones.length ? { emails, phones } : void 0,
+    throttled: strings(p.throttled_sections, 12)
+  };
+}
+async function unipileProfile(deps, body, doFetch) {
+  const accountId = String(body.accountId ?? "");
+  const identifier = text(body.identifier, 200);
+  if (!identifier) return { ok: false, reason: "bad_request", message: "Say whose profile to read." };
+  const sections = (Array.isArray(body.sections) ? body.sections : []).map(String).filter((x) => PROFILE_SECTIONS.has(x));
+  const q = new URLSearchParams({ account_id: accountId });
+  if (sections.length) q.set("linkedin_sections", [...new Set(sections)].join(","));
+  const res = await doFetch(`${deps.unipileBase}/api/v1/users/${encodeURIComponent(identifier)}?${q}`, {
+    headers: uHeaders(deps)
+  });
+  if (res.status === 404 || res.status === 422)
+    return { ok: false, reason: "not_found", message: "LinkedIn could not find that profile." };
+  if (res.status === 429)
+    return {
+      ok: false,
+      reason: "throttled",
+      message: "LinkedIn asked Orbit to slow down. It carries on later."
+    };
+  if (res.status >= 400 && res.status < 500)
+    return { ok: false, reason: "refused", message: await unipileError(res) };
+  if (!res.ok) throw new Error(`unipile ${res.status}`);
+  return { ok: true, profile: mapProfile(await res.json()) };
+}
+async function unipileCompany(deps, body, doFetch) {
+  const accountId = String(body.accountId ?? "");
+  const identifier = text(body.identifier, 200);
+  if (!identifier) return { ok: false, reason: "bad_request", message: "Say which company to read." };
+  const q = new URLSearchParams({ account_id: accountId });
+  const res = await doFetch(
+    `${deps.unipileBase}/api/v1/linkedin/company/${encodeURIComponent(identifier)}?${q}`,
+    { headers: uHeaders(deps) }
+  );
+  if (res.status === 404 || res.status === 422)
+    return { ok: false, reason: "not_found", message: "LinkedIn could not find that company." };
+  if (res.status === 429)
+    return {
+      ok: false,
+      reason: "throttled",
+      message: "LinkedIn asked Orbit to slow down. It carries on later."
+    };
+  if (res.status >= 400 && res.status < 500)
+    return { ok: false, reason: "refused", message: await unipileError(res) };
+  if (!res.ok) throw new Error(`unipile ${res.status}`);
+  const c = await res.json();
+  const industry = Array.isArray(c.industry) ? c.industry.find((x) => typeof x === "string") : c.industry;
+  return {
+    ok: true,
+    company: {
+      id: text(c.id, 60),
+      name: text(c.name, 160),
+      publicIdentifier: text(c.public_identifier, 160),
+      logoUrl: licdn(c.logo),
+      website: text(c.website, 300),
+      industry: text(industry, 120)
+    }
+  };
+}
+async function exaSearch(e, body, doFetch) {
+  const name = text(body.name, 120);
+  if (!name) return { ok: false, reason: "bad_request", message: "Say who to look up." };
+  const query = [`"${name.replace(/"/g, "")}"`, text(body.company), text(body.school)].filter(Boolean).join(" ");
+  const res = await doFetch(`${(e.exaBase ?? "https://api.exa.ai").replace(/\/+$/, "")}/search`, {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json", "x-api-key": e.exaKey },
+    body: JSON.stringify({ query, type: "auto", numResults: 6, contents: { text: { maxCharacters: 600 } } })
+  });
+  if (res.status >= 400 && res.status < 500)
+    return { ok: false, reason: "refused", message: `The web search refused it (${res.status}).` };
+  if (!res.ok) throw new Error(`exa ${res.status}`);
+  const b = await res.json();
+  return {
+    ok: true,
+    results: (b.results ?? []).filter((r) => typeof r.url === "string" && /^https:\/\//.test(r.url)).slice(0, 6).map((r) => ({
+      url: String(r.url).slice(0, 300),
+      title: text(r.title, 200),
+      snippet: text(r.text, 600)
+    }))
+  };
+}
 function looksLikeDomain(s) {
   return /^(?!-)[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(
     s.trim().replace(/^https?:\/\//i, "").replace(/^www\./i, "")
@@ -1083,6 +1299,12 @@ var [
   providerSecret("VILLAGE_USER_EMAIL"),
   providerSecret("VILLAGE_EXTERNAL_USER_ID")
 ]);
+var [exaKey, firecrawlKey, apolloKey, pdlKey] = await Promise.all([
+  providerSecret("EXA_API_KEY"),
+  providerSecret("FIRECRAWL_API_KEY"),
+  providerSecret("APOLLO_API_KEY"),
+  providerSecret("PDL_API_KEY")
+]);
 var num = (name, fallback) => {
   const v = Number(Deno.env.get(name));
   return Number.isFinite(v) && v > 0 ? v : fallback;
@@ -1107,6 +1329,15 @@ Deno.serve(
     // Unipile reports each finished LinkedIn sign-in to /connect/notify; the account is kept by the sign-in's reference
     links: url && serviceKey ? postgrestLinks(url, serviceKey) : memoryLinks(),
     publicUrl: url ? `${url}/functions/v1/orbit-connectors` : void 0,
+    enrichment: {
+      profilesPerDay: num("ORBIT_LINKEDIN_PROFILES_PER_DAY", 80),
+      companiesPerDay: num("ORBIT_LINKEDIN_COMPANIES_PER_DAY", 80),
+      webPerDay: num("ORBIT_WEB_LOOKUPS_PER_DAY", 30),
+      exaKey,
+      firecrawlKey,
+      apolloKey,
+      pdlKey
+    },
     sendsPerDay: num("ORBIT_LINKEDIN_SENDS_PER_DAY", 25),
     searchesPerDay: num("ORBIT_LINKEDIN_SEARCHES_PER_DAY", 40),
     limits: {

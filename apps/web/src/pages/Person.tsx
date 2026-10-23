@@ -42,6 +42,7 @@ import { db } from '../db/schema';
 import { isMessageSuggestion, refreshPersonSummary } from '../engine/brief';
 import { calendarInvitesAvailable, canInviteFor, sendCalendarInvite } from '../engine/calendarInvite';
 import { composeDraft, discardDraft as discardDraftRow, restoreDraft } from '../engine/drafts';
+import { enrichOnView } from '../engine/enrichment';
 import {
   addFact,
   deleteFact,
@@ -65,6 +66,21 @@ import { SUMMARY_RULES_AT } from '../engine/repair';
 import { isServerUser } from '../integrations/orbitApi';
 import { useSession } from '../state/session';
 import { Avatar, Button, Card, Chip, cx, Modal, NotFound, relDate, Select, Tabs, useToast } from '../ui';
+
+/**
+ * The line under their name: their current position as their own LinkedIn profile states it (the truth about where
+ * they work, plan 17 E), else their headline, title or company as Orbit has it.
+ */
+function positionLine(
+  person: Pick<Person, 'headline' | 'currentTitle' | 'currentOrganizationRaw' | 'fieldSources'>,
+): string | undefined {
+  const fromLinkedIn =
+    person.fieldSources?.currentTitle === 'linkedin_profile' ||
+    person.fieldSources?.currentOrganizationId === 'linkedin_profile';
+  if (fromLinkedIn && (person.currentTitle || person.currentOrganizationRaw))
+    return [person.currentTitle, person.currentOrganizationRaw].filter(Boolean).join(' at ');
+  return person.headline ?? person.currentTitle ?? person.currentOrganizationRaw;
+}
 
 /**
  * "Last touch 3 days ago", or "Connected on LinkedIn Mar 27" when accepting a connection is all there has been: a
@@ -257,6 +273,11 @@ export function PersonPage() {
   useEffect(() => {
     if (person && user && (!person.summary || summaryStale)) refreshPersonSummary(user, person.id);
   }, [person?.id, person?.summary, user, summaryStale]);
+  // their LinkedIn profile is read when their page opens, when it is due and today's allowance has room (plan 17 E)
+  useEffect(() => {
+    if (person && user && !isServerUser(user.id)) void enrichOnView(user, person.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [person?.id, user?.id]);
   const wantDraft = params.get('draft') as MessageKind | null;
   // a link to one draft the student started (from Drafts or Today) opens it in the composer
   const wantOpen = params.get('open');
@@ -444,8 +465,8 @@ export function PersonPage() {
             </div>
             <p className="text-ink-2 mt-0.5 flex items-center gap-2 min-w-0">
               <PersonCompanyLogo person={person} size={18} />
-              <span className="min-w-0">
-                {person.headline ?? person.currentTitle ?? person.currentOrganizationRaw}
+              <span className="min-w-0" data-testid="person-position">
+                {positionLine(person)}
               </span>
             </p>
             <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px] text-ink-3">

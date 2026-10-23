@@ -8,6 +8,7 @@
  *   /connect/start, /connect/status, /relations, /mutuals, /disconnect, /send,
  *   /inbox, /search                                                            -> Unipile
  *   /paths                                                                     -> Village
+ *   /profile, /company (Unipile), /web (Exa), /providers   -> enrichment (plan 17 E, block at the end)
  *
  * A connected account's routes need the account token /connect/status handed out (an HMAC of the account id with
  * the server's signing key), so knowing someone's Unipile account id is not enough to read their connections or
@@ -64,6 +65,8 @@ export interface ConnectorDeps {
   salt?: string;
   now?: () => Date;
   fetch?: typeof fetch;
+  /** enrichment (plan 17 E): profile and company budgets, and the optional web and people-data keys */
+  enrichment?: EnrichmentDeps;
   /** the reference for a new hosted connect (tests pin it) */
   newRef?: () => string;
   /** signs account tokens (the service role key in production); without it account routes are refused */
@@ -298,10 +301,12 @@ export function makeHandler(deps: ConnectorDeps): (req: Request) => Promise<Resp
     }
 
     const isVillage = path === '/paths';
-    if (!isVillage && !UNIPILE_ROUTES.has(path)) return json(404, { error: 'no such route' }, h);
+    const isEnrich = ENRICH_ROUTES.has(path);
+    if (!isVillage && !isEnrich && !UNIPILE_ROUTES.has(path)) return json(404, { error: 'no such route' }, h);
+    if (path === '/providers') return json(200, providerStatus(deps), h);
     if (isVillage && (!deps.villageKey || !deps.villageBase || !deps.villageUser?.email))
       return unconfigured(h);
-    if (!isVillage && (!deps.unipileKey || !deps.unipileBase)) return unconfigured(h);
+    if (!isVillage && !isEnrich && (!deps.unipileKey || !deps.unipileBase)) return unconfigured(h);
 
     // only calls that would reach a provider count against the visitor's limits
     const visitor = (await sha256(`${deps.salt ?? 'orbit'}:${clientIp(req)}`)).slice(0, 32);
@@ -324,6 +329,7 @@ export function makeHandler(deps: ConnectorDeps): (req: Request) => Promise<Resp
       );
     }
 
+    if (isEnrich) return enrichmentRoute(deps, path, body, { h, doFetch, take, now, visitor });
     if (
       ACCOUNT_ROUTES.has(path) &&
       !(await tokenValid(String(body.accountId ?? ''), body.token, deps.signingKey))
@@ -927,6 +933,323 @@ async function unipileSearch(deps: ConnectorDeps, body: Record<string, unknown>,
       })),
     cursor: b.cursor ?? null,
     total: typeof b.paging?.total_count === 'number' ? b.paging.total_count : undefined,
+  };
+}
+
+// ---- Enrichment (plan 17 E): a person's full LinkedIn profile, a company's page, optional web lookups -----------
+//
+// Unipile shapes, checked against its API reference and its official SDK (unipile-node-sdk 1.9.3, ISC licence):
+//   GET /api/v1/users/{provider_id | public_identifier}?account_id=…&linkedin_sections=experience,education,about
+//     -> work_experience[] {position, company, company_id, company_url, company_picture_url, current, start, end},
+//        education[] {school, school_id, school_picture_url, degree, field_of_study, start, end}, summary,
+//        contact_info {emails, phones} (1st-degree connections), throttled_sections[], network_distance,
+//        profile_picture_url(_large). The SDK joins several sections with commas, as here.
+//   GET /api/v1/linkedin/company/{id | public_identifier | urn}?account_id=… -> {id, name, public_identifier, logo,
+//     website, industry[]}
+// Payloads back to the browser are trimmed to what Orbit keeps.
+
+/** What enrichment needs from the deployment: daily budgets, and the optional web and people-data keys. */
+export interface EnrichmentDeps {
+  /** full profile reads per LinkedIn account per day (LinkedIn notices heavy profile viewing) */
+  profilesPerDay?: number;
+  /** company page reads per LinkedIn account per day */
+  companiesPerDay?: number;
+  /** web lookups per visitor per day */
+  webPerDay?: number;
+  /** Exa (search plus page text); without it /web answers "unconfigured" */
+  exaKey?: string;
+  exaBase?: string;
+  /** keys Orbit reports as set up or not (/providers); no route uses them yet */
+  firecrawlKey?: string;
+  apolloKey?: string;
+  pdlKey?: string;
+}
+
+const ENRICH_ROUTES = new Set(['/profile', '/company', '/web', '/providers']);
+
+/** The sections a profile read may ask for: full ones, and the lighter previews for what matters less. */
+export const PROFILE_SECTIONS = new Set([
+  'experience',
+  'education',
+  'about',
+  'skills',
+  'languages',
+  'certifications',
+  'experience_preview',
+  'education_preview',
+  'skills_preview',
+  'languages_preview',
+  'certifications_preview',
+  '*_preview',
+]);
+
+/** Which providers this deployment has keys for, so the app can say "not set up" instead of failing. */
+export function providerStatus(deps: ConnectorDeps) {
+  const e = deps.enrichment ?? {};
+  return {
+    linkedin: !!deps.unipileKey && !!deps.unipileBase,
+    exa: !!e.exaKey,
+    firecrawl: !!e.firecrawlKey,
+    apollo: !!e.apolloKey,
+    peopleDataLabs: !!e.pdlKey,
+  };
+}
+
+/** Today's bucket for one kind of enrichment call, per LinkedIn account (or per visitor, for web lookups). */
+export function enrichBucket(
+  kind: 'profile' | 'company' | 'web',
+  who: string,
+  now: Date,
+  perDay: number,
+): Bucket {
+  const b = sendBucket(who, now, perDay);
+  return { ...b, key: b.key.replace('connectors:send:', `connectors:${kind}:`) };
+}
+
+async function enrichmentRoute(
+  deps: ConnectorDeps,
+  path: string,
+  body: Record<string, unknown>,
+  ctx: {
+    h: Record<string, string>;
+    doFetch: typeof fetch;
+    take: Take;
+    now: () => Date;
+    visitor: string;
+  },
+): Promise<Response> {
+  const { h, doFetch, take, now } = ctx;
+  const e = deps.enrichment ?? {};
+  const kind = path === '/profile' ? 'profile' : path === '/company' ? 'company' : 'web';
+  if (kind === 'web') {
+    if (!e.exaKey) return unconfigured(h);
+  } else {
+    if (!deps.unipileKey || !deps.unipileBase) return unconfigured(h);
+    if (!(await tokenValid(String(body.accountId ?? ''), body.token, deps.signingKey)))
+      return json(403, { error: 'this LinkedIn account is not linked to this browser' }, h);
+  }
+  const perDay =
+    kind === 'profile'
+      ? (e.profilesPerDay ?? 80)
+      : kind === 'company'
+        ? (e.companiesPerDay ?? 80)
+        : (e.webPerDay ?? 30);
+  const who = kind === 'web' ? `visitor:${ctx.visitor}` : String(body.accountId);
+  let verdict: { allowed: boolean };
+  try {
+    verdict = await take([enrichBucket(kind, who, now(), perDay)]);
+  } catch {
+    return json(503, { error: 'unavailable right now' }, h);
+  }
+  if (!verdict.allowed)
+    return json(
+      200,
+      {
+        ok: false,
+        reason: 'limit',
+        message:
+          kind === 'web'
+            ? 'Orbit has looked up as many people on the web as it allows today.'
+            : 'Orbit has read as many LinkedIn profiles as it allows today. It carries on tomorrow.',
+      },
+      h,
+    );
+  try {
+    if (kind === 'profile') return json(200, await unipileProfile(deps, body, doFetch), h);
+    if (kind === 'company') return json(200, await unipileCompany(deps, body, doFetch), h);
+    return json(200, await exaSearch(e, body, doFetch), h);
+  } catch (err) {
+    return json(502, { error: err instanceof Error ? err.message : 'upstream error' }, h);
+  }
+}
+
+/** A LinkedIn date as text: "2021-06", "6/2021", or an object {year, month, day}. */
+function dateText(v: unknown): string | undefined {
+  if (typeof v === 'string' && v.trim()) return v.trim().slice(0, 40);
+  if (typeof v === 'number' && Number.isFinite(v)) return String(v);
+  if (v && typeof v === 'object') {
+    const d = v as { year?: unknown; month?: unknown; day?: unknown };
+    const y = Number(d.year);
+    if (!Number.isFinite(y) || y < 1900) return undefined;
+    const m = Number(d.month);
+    const day = Number(d.day);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return m >= 1 && m <= 12 ? `${y}-${pad(m)}${day >= 1 && day <= 31 ? `-${pad(day)}` : ''}` : String(y);
+  }
+  return undefined;
+}
+
+const licdn = (v: unknown) => {
+  const u = text(v, 1000);
+  return u && isLinkedInImage(u) ? u : undefined;
+};
+
+/** "https://www.linkedin.com/company/enactus-berkeley/" -> "enactus-berkeley" (numeric ids are not slugs). */
+export function companySlugFromUrl(url: unknown): string | undefined {
+  const m = /linkedin\.com\/(?:company|school)\/([^/?#]+)/i.exec(typeof url === 'string' ? url : '');
+  const slug = m?.[1] ? decodeURIComponent(m[1]).toLowerCase() : undefined;
+  return slug && !/^\d+$/.test(slug) ? slug : undefined;
+}
+
+/** One LinkedIn profile, trimmed to what Orbit keeps: identity, current and past positions, schools, contact. */
+export function mapProfile(p: Record<string, unknown>) {
+  const str = (v: unknown, max = 200) => text(v, max);
+  const degree = String(p.network_distance ?? '');
+  const distance = /FIRST|DISTANCE_1/.test(degree)
+    ? 1
+    : /SECOND|DISTANCE_2/.test(degree)
+      ? 2
+      : /THIRD|DISTANCE_3/.test(degree)
+        ? 3
+        : undefined;
+  const list = (v: unknown) =>
+    (Array.isArray(v) ? v : []).filter(
+      (x): x is Record<string, unknown> => !!x && typeof x === 'object' && !Array.isArray(x),
+    );
+  const contact = (p.contact_info ?? {}) as { emails?: unknown; phones?: unknown };
+  const strings = (v: unknown, max: number) =>
+    (Array.isArray(v) ? v : [])
+      .map((x) => (typeof x === 'string' ? x.trim() : ''))
+      .filter(Boolean)
+      .slice(0, max);
+  const emails = strings(contact.emails, 5).filter((x) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(x));
+  const phones = strings(contact.phones, 5).filter((x) => /\d{6,}/.test(x.replace(/\D/g, '')));
+  return {
+    providerId: str(p.provider_id),
+    publicIdentifier: str(p.public_identifier),
+    firstName: str(p.first_name),
+    lastName: str(p.last_name),
+    headline: str(p.headline, 220),
+    location: str(p.location, 120),
+    about: str(p.summary, 600),
+    pictureUrl: licdn(p.profile_picture_url_large) ?? licdn(p.profile_picture_url),
+    distance,
+    experience: list(p.work_experience)
+      .slice(0, 20)
+      .map((x) => ({
+        title: str(x.position, 160),
+        company: str(x.company, 160),
+        companyId: str(x.company_id, 60),
+        companySlug: companySlugFromUrl(x.company_url),
+        logoUrl: licdn(x.company_picture_url),
+        location: str(x.location, 120),
+        current: x.current === true || (x.current !== false && !dateText(x.end)),
+        start: dateText(x.start),
+        end: dateText(x.end),
+      }))
+      .filter((x) => x.company || x.title),
+    education: list(p.education)
+      .slice(0, 10)
+      .map((x) => ({
+        school: str(x.school, 160),
+        schoolId: str(x.school_id, 60),
+        logoUrl: licdn(x.school_picture_url),
+        degree: str(x.degree, 120),
+        field: str(x.field_of_study, 120),
+        start: dateText(x.start),
+        end: dateText(x.end),
+      }))
+      .filter((x) => x.school),
+    contact: emails.length || phones.length ? { emails, phones } : undefined,
+    throttled: strings(p.throttled_sections, 12),
+  };
+}
+
+/**
+ * A person's full LinkedIn profile from the student's account, by their member id or public profile name, with the
+ * sections asked for (only the known ones). Not found, throttled and refused come back as reasons, not errors.
+ */
+async function unipileProfile(deps: ConnectorDeps, body: Record<string, unknown>, doFetch: typeof fetch) {
+  const accountId = String(body.accountId ?? '');
+  const identifier = text(body.identifier, 200);
+  if (!identifier) return { ok: false, reason: 'bad_request', message: 'Say whose profile to read.' };
+  const sections = (Array.isArray(body.sections) ? body.sections : [])
+    .map(String)
+    .filter((x) => PROFILE_SECTIONS.has(x));
+  const q = new URLSearchParams({ account_id: accountId });
+  if (sections.length) q.set('linkedin_sections', [...new Set(sections)].join(','));
+  const res = await doFetch(`${deps.unipileBase}/api/v1/users/${encodeURIComponent(identifier)}?${q}`, {
+    headers: uHeaders(deps),
+  });
+  if (res.status === 404 || res.status === 422)
+    return { ok: false, reason: 'not_found', message: 'LinkedIn could not find that profile.' };
+  if (res.status === 429)
+    return {
+      ok: false,
+      reason: 'throttled',
+      message: 'LinkedIn asked Orbit to slow down. It carries on later.',
+    };
+  if (res.status >= 400 && res.status < 500)
+    return { ok: false, reason: 'refused', message: await unipileError(res) };
+  if (!res.ok) throw new Error(`unipile ${res.status}`);
+  return { ok: true, profile: mapProfile((await res.json()) as Record<string, unknown>) };
+}
+
+/** A company's LinkedIn page, by LinkedIn's id or its public name: its name, public name, logo and website. */
+async function unipileCompany(deps: ConnectorDeps, body: Record<string, unknown>, doFetch: typeof fetch) {
+  const accountId = String(body.accountId ?? '');
+  const identifier = text(body.identifier, 200);
+  if (!identifier) return { ok: false, reason: 'bad_request', message: 'Say which company to read.' };
+  const q = new URLSearchParams({ account_id: accountId });
+  const res = await doFetch(
+    `${deps.unipileBase}/api/v1/linkedin/company/${encodeURIComponent(identifier)}?${q}`,
+    { headers: uHeaders(deps) },
+  );
+  if (res.status === 404 || res.status === 422)
+    return { ok: false, reason: 'not_found', message: 'LinkedIn could not find that company.' };
+  if (res.status === 429)
+    return {
+      ok: false,
+      reason: 'throttled',
+      message: 'LinkedIn asked Orbit to slow down. It carries on later.',
+    };
+  if (res.status >= 400 && res.status < 500)
+    return { ok: false, reason: 'refused', message: await unipileError(res) };
+  if (!res.ok) throw new Error(`unipile ${res.status}`);
+  const c = (await res.json()) as Record<string, unknown>;
+  const industry = Array.isArray(c.industry) ? c.industry.find((x) => typeof x === 'string') : c.industry;
+  return {
+    ok: true,
+    company: {
+      id: text(c.id, 60),
+      name: text(c.name, 160),
+      publicIdentifier: text(c.public_identifier, 160),
+      logoUrl: licdn(c.logo),
+      website: text(c.website, 300),
+      industry: text(industry, 120),
+    },
+  };
+}
+
+/**
+ * A web search for one person (Exa: POST /search with the page text): their name in quotes plus a company or school
+ * to tell namesakes apart. Results are links with a short excerpt; the browser decides what is surely them.
+ */
+async function exaSearch(e: EnrichmentDeps, body: Record<string, unknown>, doFetch: typeof fetch) {
+  const name = text(body.name, 120);
+  if (!name) return { ok: false, reason: 'bad_request', message: 'Say who to look up.' };
+  const query = [`"${name.replace(/"/g, '')}"`, text(body.company), text(body.school)]
+    .filter(Boolean)
+    .join(' ');
+  const res = await doFetch(`${(e.exaBase ?? 'https://api.exa.ai').replace(/\/+$/, '')}/search`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', accept: 'application/json', 'x-api-key': e.exaKey! },
+    body: JSON.stringify({ query, type: 'auto', numResults: 6, contents: { text: { maxCharacters: 600 } } }),
+  });
+  if (res.status >= 400 && res.status < 500)
+    return { ok: false, reason: 'refused', message: `The web search refused it (${res.status}).` };
+  if (!res.ok) throw new Error(`exa ${res.status}`);
+  const b = (await res.json()) as { results?: Record<string, unknown>[] };
+  return {
+    ok: true,
+    results: (b.results ?? [])
+      .filter((r) => typeof r.url === 'string' && /^https:\/\//.test(r.url))
+      .slice(0, 6)
+      .map((r) => ({
+        url: String(r.url).slice(0, 300),
+        title: text(r.title, 200),
+        snippet: text(r.text, 600),
+      })),
   };
 }
 

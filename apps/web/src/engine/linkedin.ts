@@ -72,15 +72,23 @@ async function importConnectionRows(
       // change: close the old role, open the new one dated today (drafting reads it as the news for a congratulate
       // note). Case, spacing, punctuation, legal suffixes, a ladder step ("Engineer II"), an abbreviation written out
       // or a team added to the same title ("Software Engineer, Payments") are not
+      // the role their own LinkedIn profile says is current (plan 17 E) is not undone by an older export or a headline
       const changed =
         !!existing &&
+        existing.source !== 'linkedin_profile' &&
         (normalizeCompany(existing.nameRaw) !== normalizeCompany(r.company) ||
           (!!existing.title &&
             !!r.position &&
             sameTitleKey(existing.title) !== sameTitleKey(r.position) &&
             titleChangedMeaningfully(existing.title, r.position)));
       // the same role reworded: the record takes the new wording, and nothing is news
-      if (existing && !changed && r.position && existing.title !== r.position)
+      if (
+        existing &&
+        !changed &&
+        existing.source !== 'linkedin_profile' &&
+        r.position &&
+        existing.title !== r.position
+      )
         await db.affiliations.update(existing.id, { title: r.position });
       if (changed) {
         const today = new Date().toISOString().slice(0, 10);

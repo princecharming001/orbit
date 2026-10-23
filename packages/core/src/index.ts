@@ -48,6 +48,7 @@ export * from './text/companyDomain';
 export * from './text/email';
 export * from './text/jaro';
 export * from './text/normalize';
+export * from './text/school';
 export * from './types';
 export * from './util/ids';
 export * from './warmup/rules';

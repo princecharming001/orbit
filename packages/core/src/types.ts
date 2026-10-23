@@ -29,6 +29,11 @@ export type PersonSource =
   | 'recommendation'
   /** someone the student texts, named in their Contacts */
   | 'imessage'
+  /**
+   * the person's own LinkedIn profile read live (plan 17 E): the source of truth for their current position, below
+   * only the student's own edit
+   */
+  | 'linkedin_profile'
   | 'demo';
 export type RelationshipType =
   | 'unknown'
@@ -346,8 +351,11 @@ export interface Organization {
   nameNormalized: string;
   domains: string[];
   linkedinSlug?: string;
+  /** LinkedIn's own id for the company (from a profile's current position), for looking its page up again */
+  linkedinCompanyId?: string;
   industry?: string;
   sizeBucket?: string;
+  /** the company's logo, from its LinkedIn page; LinkedIn's image links expire, so it is fetched again when it does */
   logoUrl?: string;
 }
 

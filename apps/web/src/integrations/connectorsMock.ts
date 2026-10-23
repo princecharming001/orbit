@@ -14,6 +14,7 @@ import { db } from '../db/schema';
 import { DEMO_USER_ID } from '../engine/demo';
 import { reachCompany, reachPerson } from '../engine/graph';
 import { automationOverride } from './connectorOutcome';
+import type { LinkedInCompany, LinkedInProfile } from './enrichmentProxy';
 import type { LinkedInFound, LiveConnection, Mutual } from './unipile';
 import type { VillagePath } from './village';
 
@@ -554,4 +555,147 @@ export function mockLinkedInSearchPage(
   const page = ranked.slice(from, from + limit);
   const next = from + limit < ranked.length ? `mock:${from + limit}` : undefined;
   return { people: page.map(toFound), cursor: next, total: ranked.length };
+}
+
+// ---------- full profiles and company pages (plan 17 E) ----------
+
+/** The demo companies with a logo in public/logos, by their LinkedIn public name. */
+const MOCK_LOGOS: Record<string, string> = {
+  stripe: 'stripe',
+  figma: 'figma',
+  notion: 'notion',
+  anthropic: 'anthropic',
+  'goldman-sachs': 'goldman',
+  mckinsey: 'mckinsey',
+  ramp: 'ramp',
+  linear: 'linear',
+  bain: 'bain',
+  'jane-street': 'janestreet',
+  google: 'google',
+  meta: 'meta',
+  openai: 'openai',
+  databricks: 'databricks',
+};
+
+const mockLogo = (slug: string | undefined) =>
+  slug && MOCK_LOGOS[slug] ? `${import.meta.env.BASE_URL ?? '/'}logos/${MOCK_LOGOS[slug]}.png` : undefined;
+
+/** What the four people a live sync adds have on their profiles beyond their connection row. */
+const NEW_PROFILES: Record<string, Partial<LinkedInProfile> & { title: string; since: string }> = {
+  'priya-raman-li': {
+    title: 'Product Manager, Payments',
+    since: '2024-07',
+    location: 'San Francisco, California',
+    education: [
+      {
+        school: 'University of Michigan',
+        degree: 'BS',
+        field: 'Computer Science',
+        start: '2019',
+        end: '2023',
+      },
+    ],
+  },
+  'marcus-oyelaran-li': {
+    title: 'Software Engineer',
+    since: '2023-08',
+    location: 'New York, New York',
+    education: [{ school: 'Georgia Institute of Technology', degree: 'BS', start: '2018', end: '2022' }],
+  },
+  'elena-vasquez-li': {
+    title: 'Strategy & Operations Associate',
+    since: '2024-01',
+    location: 'New York, New York',
+    education: [
+      { school: 'Cornell University', degree: 'BA', field: 'Economics', start: '2017', end: '2021' },
+    ],
+  },
+  'jamal-whitfield-li': {
+    title: 'Product Designer',
+    since: '2022-09',
+    location: 'Boston, Massachusetts',
+    education: [{ school: 'Rhode Island School of Design', degree: 'BFA', start: '2016', end: '2020' }],
+  },
+};
+
+/**
+ * A believable full LinkedIn profile for a demo person (by their member id or public name), built from what the demo
+ * holds about them: their current role with its company's id and logo, past roles and schools. Undefined for
+ * someone the demo does not know.
+ */
+export async function mockLinkedInProfile(
+  userId: string,
+  identifier: string,
+): Promise<LinkedInProfile | undefined> {
+  const people = await db.people.where('userId').equals(userId).toArray();
+  const p = people.find(
+    (x) =>
+      memberIdFor(x) === identifier || x.linkedinSlug === identifier || x.linkedinMemberId === identifier,
+  );
+  if (!p) return undefined;
+  const affs = await db.affiliations.where('personId').equals(p.id).toArray();
+  const extra = p.linkedinSlug ? NEW_PROFILES[p.linkedinSlug] : undefined;
+  const orgs = new Map((await db.organizations.toArray()).map((o) => [normalizeCompany(o.name), o]));
+  const company = (name: string | undefined) => {
+    const o = orgs.get(normalizeCompany(name));
+    const slug = o?.linkedinSlug ?? (name ? slugOf(name) : undefined);
+    return {
+      companyId: slug ? `mock_company_${slug}` : undefined,
+      companySlug: slug,
+      logoUrl: mockLogo(slug),
+    };
+  };
+  const current = affs.find((a) => a.kind === 'employment' && a.isCurrent);
+  const experience: LinkedInProfile['experience'] = [];
+  if (p.currentOrganizationRaw)
+    experience.push({
+      title: extra?.title ?? current?.title ?? p.currentTitle,
+      company: p.currentOrganizationRaw,
+      ...company(p.currentOrganizationRaw),
+      current: true,
+      start: extra?.since ?? current?.startDate?.slice(0, 7),
+    });
+  for (const a of affs.filter((x) => x.kind === 'employment' && !x.isCurrent))
+    experience.push({
+      title: a.title,
+      company: a.nameRaw,
+      ...company(a.nameRaw),
+      current: false,
+      start: a.startDate?.slice(0, 7),
+      end: a.endDate?.slice(0, 7),
+    });
+  const education: LinkedInProfile['education'] =
+    extra?.education ??
+    affs
+      .filter((a) => a.kind === 'education')
+      .map((a) => ({
+        school: a.nameRaw,
+        degree: a.degree,
+        field: a.field,
+        start: a.startDate?.slice(0, 4),
+        end: a.endDate?.slice(0, 4),
+      }));
+  return {
+    providerId: memberIdFor(p),
+    publicIdentifier: p.linkedinSlug,
+    firstName: p.firstName,
+    lastName: p.lastName,
+    headline: p.headline,
+    location: extra?.location ?? p.location,
+    pictureUrl: p.photoUrl,
+    distance: p.linkedinConnectedOn ? 1 : 2,
+    experience,
+    education,
+    throttled: [],
+  };
+}
+
+/** A demo company's LinkedIn page: its name, public name and logo. */
+export async function mockLinkedInCompany(identifier: string): Promise<LinkedInCompany | undefined> {
+  const slug = identifier.replace(/^mock_company_/, '');
+  const org = (await db.organizations.toArray()).find(
+    (o) => o.linkedinSlug === slug || o.linkedinCompanyId === identifier,
+  );
+  if (!org) return undefined;
+  return { id: `mock_company_${slug}`, name: org.name, publicIdentifier: slug, logoUrl: mockLogo(slug) };
 }
