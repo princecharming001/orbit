@@ -3,15 +3,18 @@ import { generateDraft } from '../drafts/templates';
 import {
   extractKeywords,
   heuristicResumeParse,
+  resumeHeadingOf,
   resumeOneLiner,
   resumeSectionOf,
   summarySentence,
 } from '../resume/parse';
+import { degreeAndMajors, profileFromResume, resumeProfileChanges } from '../resume/profile';
 import { defaultStyleCard } from '../style/card';
 import { RESUMES } from './fixtures/resumes';
+import { PDF_RESUMES } from './fixtures/resumesPdf';
 
-describe('resume corpus (12 layouts)', () => {
-  for (const r of RESUMES) {
+describe('resume corpus (21 layouts)', () => {
+  for (const r of [...RESUMES, ...PDF_RESUMES]) {
     it(r.name, () => {
       const facets = heuristicResumeParse(r.text, 'r');
       const all = facets.map((f) => [f.text, f.title ?? '', f.organizationName ?? ''].join(' | ')).join('\n');
@@ -262,5 +265,86 @@ Excel, financial modeling
     );
     expect(xs[0]!.startDate).toBe('2026-06-01');
     expect(xs[1]!.text).toBe('Led a 6-person team pitching consumer stocks; managed a $50k student fund.');
+  });
+});
+
+describe('PDF and Word layouts: the school, majors and year, never an employer (plan 17 §G)', () => {
+  for (const r of PDF_RESUMES) {
+    it(r.name, () => {
+      const facets = heuristicResumeParse(r.text, 'r');
+      const schools = facets.filter((f) => f.kind === 'education').map((f) => f.organizationName ?? '');
+      for (const name of r.notSchool ?? []) expect(schools, `${name} read as a school`).not.toContain(name);
+      const p = profileFromResume(facets, new Date('2026-10-22T12:00:00Z'));
+      expect(p.school).toBe(r.profile.school);
+      if (r.profile.degree) expect(p.degree).toBe(r.profile.degree);
+      if (r.profile.majors) expect(p.majors).toEqual(r.profile.majors);
+      if (r.profile.graduationYear) expect(p.graduationYear).toBe(r.profile.graduationYear);
+    });
+  }
+
+  it('reads headings beside their first line, letter-spaced, with rules, and in sentence case', () => {
+    expect(resumeSectionOf('E D U C A T I O N')).toBe('education');
+    expect(resumeSectionOf('W O R K  E X P E R I E N C E')).toBe('experience');
+    expect(resumeSectionOf('EXPERIENCE ______________')).toBe('experience');
+    expect(resumeSectionOf('Work experience')).toBe('experience');
+    expect(resumeSectionOf('Entrepreneurial Experience')).toBe('experience');
+    expect(resumeSectionOf('EXPERIENCE (SELECTED)')).toBe('experience');
+    expect(resumeSectionOf('Dell Technologies')).toBeUndefined();
+    expect(resumeSectionOf('Customer Success Associate')).toBeUndefined();
+    expect(resumeHeadingOf('EXPERIENCE   Amma Health Inc.   San Francisco, CA')).toEqual({
+      section: 'experience',
+      rest: 'Amma Health Inc.   San Francisco, CA',
+    });
+    expect(resumeHeadingOf('EDUCATION\tUniversity of Texas at Austin\tMay 2026')?.section).toBe('education');
+    expect(resumeHeadingOf('Stripe   San Francisco, CA')).toBeUndefined();
+    expect(resumeHeadingOf('MICROSOFT   Redmond, WA')).toBeUndefined();
+    // a labelled line inside a section stays a line
+    expect(resumeHeadingOf('Relevant Coursework: Data Structures, Algorithms')).toBeUndefined();
+  });
+
+  it('splits a degree line into the degree and the majors', () => {
+    expect(degreeAndMajors('B.S.E. in Computer Science')).toEqual({
+      degree: 'B.S.E.',
+      majors: ['Computer Science'],
+    });
+    expect(
+      degreeAndMajors('Bachelor of Science in Business Administration, Concentration in Finance'),
+    ).toEqual({
+      degree: 'Bachelor of Science',
+      majors: ['Business Administration'],
+    });
+    expect(degreeAndMajors('B.A. in Economics and Mathematics; Minor in History').majors).toEqual([
+      'Economics',
+      'Mathematics',
+    ]);
+    expect(degreeAndMajors('BFA Industrial Design')).toEqual({
+      degree: 'BFA',
+      majors: ['Industrial Design'],
+    });
+    expect(degreeAndMajors('MBA')).toEqual({ degree: 'MBA', majors: [] });
+  });
+
+  it('offers only what differs from the profile, and never an employer as the school', () => {
+    const resume = { school: 'University of Michigan', majors: ['Computer Science'], graduationYear: 2027 };
+    expect(
+      resumeProfileChanges(
+        { school: 'University of Michigan', majors: ['Computer Science'], graduationYear: 2027 },
+        resume,
+      ),
+    ).toBeUndefined();
+    expect(
+      resumeProfileChanges({ school: 'Amma Health Inc.', majors: [], graduationYear: undefined }, resume),
+    ).toEqual(resume);
+    expect(
+      resumeProfileChanges(
+        { school: 'University of Michigan, Ann Arbor', majors: ['computer science'] },
+        resume,
+      ),
+    ).toEqual({ graduationYear: 2027 });
+    const employerOnly = profileFromResume([
+      { kind: 'education', organizationName: 'Amma Health Inc.', title: 'Software Engineering Intern' },
+      { kind: 'education', organizationName: 'Lincoln High School', title: 'Diploma', endDate: '2022-06-01' },
+    ]);
+    expect(employerOnly).toEqual({});
   });
 });
