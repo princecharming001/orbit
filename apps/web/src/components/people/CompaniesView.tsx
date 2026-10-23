@@ -4,7 +4,7 @@ import { ChevronRight } from 'lucide-react';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Avatar, Chip, cx, EmptyState, relDate } from '../../ui';
-import { CompanyLogo } from '../CompanyLogo';
+import { CompanyLogo, NoCompanyIcon } from '../CompanyLogo';
 import type { ChatRow } from './PipelineBoard';
 import { STAGE_COLOR } from './shared';
 
@@ -81,7 +81,7 @@ export function CompaniesView({ rows, targetNames }: { rows: ChatRow[]; targetNa
                 className={cx('shrink-0 text-ink-3 transition-transform', expanded && 'rotate-90')}
               />
               {g.key === NO_COMPANY ? (
-                <span className="w-[22px] h-[22px] shrink-0 rounded-md bg-canvas-2" aria-hidden />
+                <NoCompanyIcon size={22} />
               ) : (
                 <CompanyLogo name={g.name} orgId={g.orgId} size={22} decorative />
               )}

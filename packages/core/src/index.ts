@@ -35,6 +35,7 @@ export * from './pipeline/transitions';
 export * from './recommend/discover';
 export * from './recommend/score';
 export * from './recommend/title';
+export * from './recommend/why';
 export * from './resume/parse';
 export * from './resume/profile';
 export * from './resume/schools';

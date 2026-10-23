@@ -1,13 +1,21 @@
 /**
- * Pieces every Discover card shares: the Match and Reach bars, the "not a fit" menu, the LinkedIn degree, the
- * folded details, and the skeleton shown while a page of people loads.
+ * Pieces every Discover card shares: the "Why them" block, the Match and Reach bars, the "not a fit" menu, the
+ * LinkedIn degree, and the skeleton shown while a page of people loads.
  */
+import type { WhyReason } from '@orbit/core';
 import { ThumbsDown } from 'lucide-react';
 import { useState } from 'react';
 import type { PersonPoint } from '../../engine/personPoints';
 import { POINT_LABELS } from '../../engine/personPoints';
 import { RECOMMENDATION_DISMISS_REASONS, type RecommendationDismissReason } from '../../engine/recommend';
 import { cx } from '../../ui';
+
+/** What the two numbers on a card mean, in one line each: the bars' hover text and the legend above the feed. */
+export const SCORE_MEANING = {
+  match: 'Match is how well someone fits your goals: their role, company, industry and school.',
+  reach:
+    'Reach is how warm a path to them is: people you both know, an introducer, what has passed between you.',
+} as const;
 
 /** A score out of 100 as a short bar: easier to compare down a list of cards than two numbers. */
 export function ScoreBar({ label, value, title }: { label: string; value: number; title: string }) {
@@ -42,13 +50,19 @@ export function ScoreBar({ label, value, title }: { label: string; value: number
 export function ScoreBars({ fit, reach, testId }: { fit: number; reach: number; testId: string }) {
   return (
     <div className="grid grid-cols-2 gap-4" data-testid={testId}>
-      <ScoreBar
-        label="Match"
-        value={fit}
-        title="How well their role and company fit your goals, out of 100"
-      />
-      <ScoreBar label="Reach" value={reach} title="How easy they are to reach, out of 100" />
+      <ScoreBar label="Match" value={fit} title={`${SCORE_MEANING.match} Out of 100.`} />
+      <ScoreBar label="Reach" value={reach} title={`${SCORE_MEANING.reach} Out of 100.`} />
     </div>
+  );
+}
+
+/** The legend above the feed: what Match and Reach mean, said once for every card. */
+export function ScoreLegend() {
+  return (
+    <p className="text-[12px] text-ink-3 mb-2.5" data-testid="discover-legend">
+      <span className="font-medium text-ink-2">Match</span> is how well someone fits your goals;{' '}
+      <span className="font-medium text-ink-2">Reach</span> is how warm a path to them is.
+    </p>
   );
 }
 
@@ -112,34 +126,77 @@ export function DismissMenu({
   );
 }
 
+/** How many reasons a card shows before More. */
+const WHY_SHOWN = 2;
+
 /**
- * The rest of what is worth knowing about someone, folded: the card leads with one reason, and More opens these in
- * place. The folded lines stay in the page (hidden), so search and screen readers find them.
+ * Why them: the reasons behind the pick, strongest first, each from a signal in the account (core whyThem). Two
+ * show; More opens the rest in place, with what else is worth knowing about them (the points). A card with little
+ * behind it says so in its last line rather than filling the space. The folded lines stay in the page (hidden), so
+ * search and screen readers find them.
  */
-export function MorePoints({ points }: { points: PersonPoint[] }) {
+export function WhyThem({
+  reasons,
+  points = [],
+  testId,
+}: {
+  reasons: WhyReason[];
+  points?: PersonPoint[];
+  testId: string;
+}) {
   const [open, setOpen] = useState(false);
-  if (!points.length) return null;
+  const lead = reasons.slice(0, WHY_SHOWN);
+  const rest = reasons.slice(WHY_SHOWN);
+  // a point that says what a reason already says is left out
+  const extra = points.filter((pt) => !reasons.some((r) => r.text.toLowerCase() === pt.text.toLowerCase()));
+  const hidden = rest.length + extra.length;
+  const line = (r: WhyReason, i: number, folded: boolean) => (
+    <li
+      key={`${r.kind}-${i}`}
+      className={cx(
+        'flex items-baseline gap-2 min-w-0',
+        folded && !open && 'hidden',
+        r.kind === 'thin' ? 'text-ink-3' : 'text-ink-2',
+      )}
+      data-testid="why-reason"
+      data-kind={r.kind}
+    >
+      <span aria-hidden className="shrink-0 text-ink-3">
+        {r.kind === 'thin' ? '–' : '•'}
+      </span>
+      <span className="min-w-0">{r.text}</span>
+    </li>
+  );
   return (
-    <div data-testid="rec-points">
-      <ul className={cx('space-y-1.5 text-[13px]', !open && 'hidden')}>
-        {points.map((pt, i) => (
-          <li key={`${pt.kind}-${i}`} className="flex items-baseline gap-2.5 min-w-0">
-            <span className="w-[74px] shrink-0 whitespace-nowrap text-[11.5px] text-ink-3">
-              {POINT_LABELS[pt.kind]}
-            </span>
-            <span className="text-ink-2 min-w-0">{pt.text}</span>
-          </li>
-        ))}
+    <div data-testid={testId} className="min-w-0">
+      <p className="text-[11px] font-medium uppercase tracking-[0.06em] text-ink-3 mb-1">Why them</p>
+      <ul className="space-y-1 text-[13px]">
+        {lead.map((r, i) => line(r, i, false))}
+        {rest.map((r, i) => line(r, i + WHY_SHOWN, true))}
       </ul>
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        className={cx('text-[12px] text-ink-3 hover:text-ink', open && 'mt-1.5')}
-        aria-expanded={open}
-        data-testid="rec-points-more"
-      >
-        {open ? 'Less' : `+${points.length} more about them`}
-      </button>
+      {extra.length > 0 && (
+        <ul className={cx('mt-1.5 space-y-1.5 text-[13px]', !open && 'hidden')} data-testid="rec-points">
+          {extra.map((pt, i) => (
+            <li key={`${pt.kind}-${i}`} className="flex items-baseline gap-2.5 min-w-0">
+              <span className="w-[74px] shrink-0 whitespace-nowrap text-[11.5px] text-ink-3">
+                {POINT_LABELS[pt.kind]}
+              </span>
+              <span className="text-ink-2 min-w-0">{pt.text}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {hidden > 0 && (
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          className="mt-1 text-[12px] text-ink-3 hover:text-ink"
+          aria-expanded={open}
+          data-testid="rec-points-more"
+        >
+          {open ? 'Less' : `+${hidden} more`}
+        </button>
+      )}
     </div>
   );
 }

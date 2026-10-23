@@ -378,7 +378,8 @@ function placeKey(s: string | undefined): string {
     .trim();
 }
 
-function placeMatch(candidate: string | undefined, places: string[]): string | undefined {
+/** The first of `places` that names the candidate's place (or that it names): "NYC" meets "New York". */
+export function placeMatch(candidate: string | undefined, places: string[]): string | undefined {
   const c = placeKey(candidate);
   if (!c) return undefined;
   return places.find((p) => {

@@ -2,7 +2,7 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { db, wipeDatabase } from '../db/schema';
-import { CompanyLogo, PersonCompanyLogo } from './CompanyLogo';
+import { CompanyLogo, NoCompanyIcon, PersonCompanyLogo } from './CompanyLogo';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -69,7 +69,7 @@ describe('CompanyLogo', () => {
     const tile = host.querySelector('[data-testid="company-logo"]') as HTMLElement;
     expect(tile.tagName).toBe('SPAN');
     expect(tile.dataset.fallback).toBe('true');
-    expect(tile.textContent).toBe('E');
+    expect(tile.textContent).toBe('EB');
     await unmount();
   });
 
@@ -90,7 +90,46 @@ describe('CompanyLogo', () => {
     await settle();
     const next = host.querySelector('img')!;
     expect(next.getAttribute('src')).not.toBe(fresh);
-    expect(next.getAttribute('src')).toContain('stripe.com');
+    // Stripe's logo ships with the app
+    expect(next.getAttribute('src')).toMatch(/\/logos\/stripe\.png$/);
+    expect(next.dataset.source).toBe('bundled');
+    await unmount();
+  });
+
+  it('shows a university by its own domain, and a school inside one by its own', async () => {
+    const { host, unmount } = await mount(<CompanyLogo name="UC Berkeley" size={22} />);
+    const img = host.querySelector('img')!;
+    expect(img.getAttribute('src')).toMatch(/\/logos\/berkeley\.png$/);
+    await unmount();
+  });
+
+  it('falls back to two initials on a tile whose colour follows the name, never a blank or a chevron', async () => {
+    const a = await mount(<CompanyLogo name="NYU Stern" size={22} />);
+    const tile = a.host.querySelector('[data-testid="company-logo"]') as HTMLElement;
+    // the icon is still being looked for (no network here): the initials show meanwhile and after
+    expect(tile.tagName).toBe('SPAN');
+    expect(tile.textContent).toBe('NS');
+    expect(tile.style.background).toBeTruthy();
+    const b = await mount(<CompanyLogo name="NYU Stern" size={22} />);
+    const same = b.host.querySelector('[data-testid="company-logo"]') as HTMLElement;
+    expect(same.style.background).toBe(tile.style.background);
+    const c = await mount(<CompanyLogo name="Blue Harbor Partners" size={22} />);
+    const other = c.host.querySelector('[data-testid="company-logo"]') as HTMLElement;
+    expect(other.textContent).toBe('BH');
+    expect(other.style.background).not.toBe(tile.style.background);
+    // the smallest tiles keep one letter
+    const d = await mount(<CompanyLogo name="Blue Harbor Partners" size={14} />);
+    expect(d.host.querySelector('[data-testid="company-logo"]')?.textContent).toBe('B');
+    await a.unmount();
+    await b.unmount();
+    await c.unmount();
+    await d.unmount();
+  });
+
+  it('shows a people icon for no company, not an empty square', async () => {
+    const { host, unmount } = await mount(<NoCompanyIcon size={22} />);
+    const tile = host.querySelector('[data-testid="no-company-icon"]')!;
+    expect(tile.querySelector('svg')).not.toBeNull();
     await unmount();
   });
 });

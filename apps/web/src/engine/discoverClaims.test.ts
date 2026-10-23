@@ -2,7 +2,7 @@ import type { Affiliation, Edge, Person, Recommendation, User } from '@orbit/cor
 import { beforeEach, describe, expect, it } from 'vitest';
 import { db, wipeDatabase } from '../db/schema';
 import { importConnectionsCsv } from './linkedin';
-import { loadPointContext, type PointContext, personPoints } from './personPoints';
+import { loadPointContext, type PointContext, personPoints, whyThemFor } from './personPoints';
 
 const NOW = new Date('2026-10-06T15:00:00.000Z');
 const person = (id: string, first: string, extra: Partial<Person> = {}): Person => ({
@@ -45,10 +45,11 @@ const edge = (a: string, b: string, type: Edge['type'], evidence: Edge['evidence
   evidence,
 });
 
-describe('"Knows X, whom you know well" is said only when it is true', () => {
+describe('"You both know X" is said only when it is true', () => {
   const target = person('t', 'Taylor');
   const ctx = (morgan: Person, edges: Edge[], smallThreads: string[] = []): PointContext => ({
     user: { id: 'u', school: 'Cornell University' },
+    targetCompanies: [],
     mine: [],
     people: new Map([
       [target.id, target],
@@ -57,16 +58,17 @@ describe('"Knows X, whom you know well" is said only when it is true', () => {
     affiliations: [],
     facts: [],
     edges,
+    touchpoints: [],
     smallThreads: new Set(smallThreads),
     now: NOW,
   });
   const knows = (c: PointContext) =>
-    personPoints(target, rec(target.id), c).find((p) => p.text.startsWith('Knows'));
+    whyThemFor(target, rec(target.id), c).find((p) => p.text.startsWith('You both know'));
 
   it('a close friend on a small thread with them: yes', () => {
     const morgan = person('m', 'Morgan', { strength: 0.55, tieScore: 55, tieBand: 'warm' });
     expect(knows(ctx(morgan, [edge('m', 't', 'email_cothread')], ['m|t']))?.text).toBe(
-      'Knows Morgan, whom you know well',
+      'You both know Morgan',
     );
   });
 
@@ -81,7 +83,7 @@ describe('"Knows X, whom you know well" is said only when it is true', () => {
     const morgan = person('m', 'Morgan', { strength: 0.7, tieScore: 70, tieBand: 'strong' });
     expect(knows(ctx(morgan, [edge('m', 't', 'co_tenure', { datesUnknown: true })]))).toBeUndefined();
     expect(knows(ctx(morgan, [edge('m', 't', 'co_tenure', { overlapMonths: 14 })]))?.text).toBe(
-      'Knows Morgan, whom you know well',
+      'You both know Morgan',
     );
   });
 });

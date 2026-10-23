@@ -13,7 +13,7 @@ import {
   type NetworkHandlers,
   SuggestedRow,
 } from '../components/discover/cards';
-import { CardSkeleton } from '../components/discover/parts';
+import { CardSkeleton, ScoreLegend } from '../components/discover/parts';
 import { LinkedInImportButton } from '../components/LinkedInImport';
 import { StrengthDots } from '../components/people/shared';
 import { db } from '../db/schema';
@@ -28,7 +28,7 @@ import {
   restoreFound,
 } from '../engine/discoverFeed';
 import { connectLinkedInLive, liveLinkedInAvailable } from '../engine/linkedinLive';
-import { loadPointContext, personPoints } from '../engine/personPoints';
+import { loadPointContext, personPoints, whyThemFor } from '../engine/personPoints';
 import {
   dismissRecommendation,
   outreachChannelFor,
@@ -408,6 +408,7 @@ function DiscoverFeed({ tabs }: { tabs?: ReactNode }) {
           <h2 id="discover-feed-h" className="sr-only">
             People to meet
           </h2>
+          <ScoreLegend />
           <div
             role="feed"
             aria-busy={loading}
@@ -422,6 +423,16 @@ function DiscoverFeed({ tabs }: { tabs?: ReactNode }) {
                   key={c.id}
                   card={c}
                   h={networkH}
+                  why={
+                    pointCtx
+                      ? whyThemFor(
+                          c.person,
+                          c.rec,
+                          { ...pointCtx, dossier: pointCtx.dossiers.get(c.person.id) },
+                          c.introducer,
+                        )
+                      : undefined
+                  }
                   points={
                     pointCtx
                       ? personPoints(c.person, c.rec, {

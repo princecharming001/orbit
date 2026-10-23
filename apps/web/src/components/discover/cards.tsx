@@ -3,7 +3,10 @@
  * (NetworkCardView), and the compact proactive pick in "Suggested for you" (SuggestionCard). Every card leads with
  * one honest reason and one main action.
  */
+import type { WhyReason } from '@orbit/core';
+import { whyFromReasons } from '@orbit/core';
 import { Bookmark, X } from 'lucide-react';
+import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import type { DiscoverCard, FoundAction, FoundCard, NetworkCard } from '../../engine/discoverFeed';
 import type { PersonPoint } from '../../engine/personPoints';
@@ -15,7 +18,7 @@ import {
 import { Avatar, Button, cx } from '../../ui';
 import { CompanyLogo } from '../CompanyLogo';
 import { RoleLine } from '../SuggestionCard';
-import { DegreeBadge, DismissMenu, MorePoints, ScoreBars } from './parts';
+import { DegreeBadge, DismissMenu, ScoreBars, WhyThem } from './parts';
 
 const firstName = (name: string) => name.split(/\s+/)[0] ?? name;
 
@@ -36,6 +39,20 @@ export interface FoundHandlers {
   busy?: string;
 }
 
+/** Why a new person is suggested: the scorer's reasons (each from the data), the colleague's only when named. */
+function foundWhy(card: FoundCard): WhyReason[] {
+  const e = card.entry;
+  const reasons = card.colleague
+    ? card.scored.reasons
+    : card.scored.reasons.filter((r) => r.code !== 'colleague');
+  return whyFromReasons(reasons, {
+    title: e.title,
+    company: e.company,
+    headline: e.headline,
+    mutualCount: e.mutualCount,
+  });
+}
+
 /** A new person from LinkedIn: not in Orbit until the student acts. */
 export function FoundCardView({ card, h }: { card: FoundCard; h: FoundHandlers }) {
   const e = card.entry;
@@ -43,6 +60,7 @@ export function FoundCardView({ card, h }: { card: FoundCard; h: FoundHandlers }
   const busy = h.busy === card.id;
   const headId = `found-${e.memberId}`;
   const profile = e.profileUrl ? { href: e.profileUrl, target: '_blank', rel: 'noreferrer' } : undefined;
+  const why = useMemo(() => foundWhy(card), [card]);
   return (
     <article className={cx(cardShell, 'border-line')} data-testid="found-card" aria-labelledby={headId}>
       <div className="flex items-start gap-3">
@@ -81,9 +99,7 @@ export function FoundCardView({ card, h }: { card: FoundCard; h: FoundHandlers }
           </button>
         )}
       </div>
-      <p className="text-[13px] text-ink-2 line-clamp-2" data-testid="found-reason">
-        {card.reason.text}
-      </p>
+      <WhyThem reasons={why} testId="found-reason" />
       <ScoreBars fit={card.scored.fit} reach={card.scored.reach} testId="found-scores" />
       <div className="mt-auto pt-3 border-t border-line-2 flex items-center gap-1.5 min-w-0">
         <Button
@@ -123,18 +139,29 @@ export interface NetworkHandlers {
 /** Someone already in the student's network, worth reaching now. */
 export function NetworkCardView({
   card,
+  why,
   points,
   h,
 }: {
   card: NetworkCard;
+  /** why they are suggested, read from the account (whyThemFor); until it is read, the recommendation's own reasons */
+  why?: WhyReason[];
   points?: PersonPoint[];
   h: NetworkHandlers;
 }) {
   const { rec: r, person: p, introducer } = card;
   // someone the student was pointed to, or in their own club, is written to directly
   const cold = isColdRecommendation(p, r);
-  // what the folded details add beyond the card's one reason
-  const more = (points ?? []).filter((pt) => pt.text.toLowerCase() !== card.reason?.text.toLowerCase());
+  const reasons = useMemo(
+    () =>
+      why ??
+      whyFromReasons(r.reasons, {
+        title: p.currentTitle,
+        company: p.currentOrganizationRaw,
+        headline: p.headline,
+      }),
+    [why, r.reasons, p.currentTitle, p.currentOrganizationRaw, p.headline],
+  );
   return (
     <div
       // every card has the same skeleton, so a row of them lines up: who, why, how strong, how to reach them, and
@@ -178,24 +205,13 @@ export function NetworkCardView({
           <Bookmark size={16} fill={r.status === 'saved' ? 'currentColor' : 'none'} />
         </button>
       </div>
-      {card.reason && (
-        <p className="text-[13px] text-ink-2 line-clamp-2" data-testid="rec-reason">
-          {card.reason.text}
-        </p>
-      )}
-      <MorePoints points={more} />
+      <WhyThem reasons={reasons} points={points} testId="rec-why" />
       <ScoreBars fit={r.fitScore} reach={r.reachScore} testId="rec-scores" />
-      {/* how to reach them, one quiet line in the same place on every card that needs one */}
-      {cold && (
+      {/* how to reach them, one quiet line in the same place on every card that needs one (an introducer is
+          already among the reasons, and the button below) */}
+      {cold && !introducer && (
         <p className="flex items-center gap-2 text-[12.5px] text-ink-2 min-w-0" data-testid="rec-warmup-why">
-          {introducer ? (
-            <>
-              <Avatar name={introducer.displayName} src={introducer.photoUrl} id={introducer.id} size={18} />
-              <span className="truncate">{introducer.firstName} could introduce you</span>
-            </>
-          ) : (
-            <span className="truncate">Known from LinkedIn only, so warm up first</span>
-          )}
+          <span className="truncate">Known from LinkedIn only, so warm up first</span>
         </p>
       )}
       <div className="mt-auto pt-3 border-t border-line-2 flex items-center gap-1.5 min-w-0">
