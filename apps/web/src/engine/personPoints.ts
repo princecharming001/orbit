@@ -1,8 +1,13 @@
 /**
- * What a Discover card says about someone, beyond their title and company (the logo already says where they work):
- * what you have in common, what makes them stand out, what they actually do, and why now is a good time. Every point
- * comes from what Orbit holds (their work and school history, facts from email and notes, a research brief, who they
- * know that you know, your own resume) and is a short sentence. The strongest come first.
+ * What a Discover card says about someone. Two things, both from what Orbit holds and never guessed:
+ *
+ *  - why they are suggested (whyThemFor): the reasons behind the pick, strongest first, built by core's whyThem from
+ *    signals read here: their company or role against the student's goals, the school and class year, the people
+ *    you both know by name, an employer on both résumés, the city, a recent move, who could introduce you, and what
+ *    has already passed between you (a reply, a meeting). When little is on record the block says so.
+ *  - what else is worth knowing (personPoints): what makes them stand out (where they were before, what they wrote
+ *    or spoke about, their topics), what they actually do (their own headline, how long in the role, details from
+ *    your email and notes), and what the research brief found in common.
  */
 import type {
   Affiliation,
@@ -11,10 +16,24 @@ import type {
   Person,
   PersonFact,
   Recommendation,
+  RecruitingGoals,
   ResumeFacet,
+  TargetCompany,
+  Touchpoint,
   User,
+  WhyReason,
+  WhySignals,
 } from '@orbit/core';
-import { normalizeCompany, tieBand, titleChangedMeaningfully } from '@orbit/core';
+import {
+  functionPhrase,
+  heldRole,
+  matchedFunction,
+  normalizeCompany,
+  placeMatch,
+  tieBand,
+  titleChangedMeaningfully,
+  whyThem,
+} from '@orbit/core';
 import { db } from '../db/schema';
 import { dossierView } from './research';
 
@@ -33,13 +52,18 @@ export const POINT_LABELS: Record<PointKind, string> = {
 };
 
 export interface PointContext {
-  user: Pick<User, 'id' | 'school'>;
+  user: Pick<User, 'id' | 'school'> &
+    Partial<Pick<User, 'graduationYear' | 'majors' | 'currentCity' | 'homeCity'>>;
+  goals?: Pick<RecruitingGoals, 'targetFunctions' | 'targetIndustries' | 'targetLocations'>;
+  targetCompanies: Pick<TargetCompany, 'organizationId' | 'nameRaw' | 'priority' | 'status'>[];
   /** the student's own experience and interests, from their resume */
   mine: ResumeFacet[];
   people: Map<string, Person>;
   affiliations: Affiliation[];
   facts: PersonFact[];
   edges: Edge[];
+  /** what passed between the student and these people, by date */
+  touchpoints: Pick<Touchpoint, 'personId' | 'kind' | 'occurredAt'>[];
   /**
    * Pairs of people on one small email thread (three people or fewer, the student included), as "idA|idB" with
    * idA < idB: being copied together on a big thread does not mean two people know each other
@@ -50,6 +74,7 @@ export interface PointContext {
 }
 
 const YEAR = 365.25 * 86_400_000;
+const MONTH = YEAR / 12;
 const EMAIL_TIES = new Set<Edge['type']>(['email_exchange', 'email_cc', 'email_cothread']);
 
 /**
@@ -83,7 +108,174 @@ const sentence = (s: string) => {
 const listNames = (xs: string[]) =>
   xs.length <= 1 ? (xs[0] ?? '') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`;
 
-/** The points for one person, strongest first, without repeats. */
+/** Their jobs, newest first, and the one they hold now. */
+function jobsOf(person: Person, ctx: Pick<PointContext, 'affiliations'>) {
+  const jobs = ctx.affiliations
+    .filter((a) => a.personId === person.id && a.kind === 'employment')
+    .sort((a, b) => (b.startDate ?? '').localeCompare(a.startDate ?? ''));
+  const current = jobs.find((a) => a.isCurrent) ?? jobs[0];
+  return { jobs, current };
+}
+
+/** The people the student knows well who really know this person (realTie), closest first, by first name. */
+function mutualNames(person: Person, ctx: PointContext): string[] {
+  const known = ctx.edges
+    .filter((e) => (e.personAId === person.id || e.personBId === person.id) && realTie(e, ctx))
+    .map((e) => ctx.people.get(e.personAId === person.id ? e.personBId : e.personAId))
+    .filter((p): p is Person => !!p && !p.hiddenAt && p.id !== person.id && knownWell(p))
+    .sort((a, b) => b.strength - a.strength);
+  return [...new Set(known.map((p) => p.firstName).filter(Boolean))];
+}
+
+/**
+ * The signals behind one network person's card, read from the account, for core's whyThem. A signal the account
+ * does not hold is left out, so no line is written for it.
+ */
+export function whySignalsFor(
+  person: Person,
+  rec: Pick<Recommendation, 'reasons'>,
+  ctx: PointContext,
+  introducer?: Pick<Person, 'firstName'>,
+): WhySignals {
+  const s: WhySignals = {
+    title: person.currentTitle,
+    company: person.currentOrganizationRaw,
+    headline: person.headline,
+    now: ctx.now,
+  };
+  const { jobs, current } = jobsOf(person, ctx);
+  const orgKey = normalizeCompany(person.currentOrganizationRaw);
+
+  // ---- the student's goals ----
+  const tc = ctx.targetCompanies.find(
+    (t) =>
+      t.status !== 'closed' &&
+      ((!!t.organizationId && t.organizationId === person.currentOrganizationId) ||
+        (!!orgKey && normalizeCompany(t.nameRaw) === orgKey)),
+  );
+  const role = heldRole(person);
+  const fn = role
+    ? matchedFunction(`${role} ${person.currentOrganizationRaw ?? ''}`, ctx.goals?.targetFunctions ?? [])
+    : undefined;
+  const roleGoal = role && (fn || rec.reasons.some((r) => r.code === 'function_match'));
+  const text = `${person.headline ?? ''} ${person.currentOrganizationRaw ?? ''}`.toLowerCase();
+  const industry = (ctx.goals?.targetIndustries ?? []).find(
+    (i) => i.trim().length > 1 && text.includes(i.trim().toLowerCase()),
+  );
+  if (tc || roleGoal || industry)
+    s.goal = {
+      company: tc ? { name: person.currentOrganizationRaw ?? tc.nameRaw, priority: tc.priority } : undefined,
+      role: roleGoal
+        ? { title: role, function: fn ? functionPhrase(fn) || undefined : undefined }
+        : undefined,
+      industry: industry?.trim().toLowerCase(),
+    };
+
+  // ---- the school ----
+  if (person.isAlumni && person.school) {
+    const edu = ctx.affiliations
+      .filter((a) => a.personId === person.id && a.kind === 'education')
+      .sort((a, b) => (b.endDate ?? '').localeCompare(a.endDate ?? ''))[0];
+    const gradYear = year(edu?.endDate);
+    const majors = (ctx.user.majors ?? []).map((m) => m.toLowerCase());
+    const field = edu?.field?.trim();
+    const program =
+      field && majors.some((m) => field.toLowerCase().includes(m) || m.includes(field.toLowerCase()))
+        ? field
+        : undefined;
+    s.school = {
+      name: person.school,
+      gradYear: gradYear && !Number.isNaN(gradYear) ? gradYear : undefined,
+      myGradYear: ctx.user.graduationYear,
+      program,
+    };
+  }
+
+  // ---- people you both know, someone who can introduce you ----
+  const names = mutualNames(person, ctx);
+  if (names.length) s.mutuals = { names };
+  if (introducer?.firstName) s.warmPath = { name: introducer.firstName };
+
+  // ---- an employer on both résumés ----
+  const mineByOrg = new Map<string, ResumeFacet>();
+  for (const f of ctx.mine)
+    if (f.kind === 'experience' && f.organizationName && !f.excluded)
+      mineByOrg.set(normalizeCompany(f.organizationName), f);
+  const shared: NonNullable<WhySignals['pastEmployers']> = [];
+  const seenOrg = new Set<string>();
+  for (const j of jobs) {
+    const k = normalizeCompany(j.nameRaw);
+    const f = mineByOrg.get(k);
+    if (!f || seenOrg.has(k)) continue;
+    seenOrg.add(k);
+    shared.push({
+      name: f.organizationName!,
+      mine: f.startDate && !f.endDate ? 'now' : /\bintern/i.test(f.title ?? '') ? 'interned' : 'worked',
+      theirs: j.isCurrent ? 'now' : 'before',
+    });
+  }
+  if (shared.length) s.pastEmployers = shared;
+
+  // ---- the city ----
+  const targets = (ctx.goals?.targetLocations ?? []).filter((l) => !/^remote$/i.test(l.trim()));
+  const target = placeMatch(person.location, targets);
+  const home = placeMatch(
+    person.location,
+    [ctx.user.currentCity, ctx.user.homeCity].filter((c): c is string => !!c),
+  );
+  const place = (p: string) => p.split(',')[0]!.trim();
+  if (target) s.city = { name: place(target), why: 'target' };
+  else if (home) s.city = { name: place(home), why: 'home' };
+
+  // ---- a recent move (a LinkedIn re-import dates a role by when Orbit saw it, not when it began) ----
+  const started = current?.startDate ? new Date(current.startDate) : undefined;
+  if (started && !Number.isNaN(started.getTime()) && current?.source !== 'linkedin_csv') {
+    const monthsAgo = Math.floor((ctx.now.getTime() - started.getTime()) / MONTH);
+    if (monthsAgo >= 0 && monthsAgo < 12)
+      s.roleChange = {
+        monthsAgo,
+        company: current!.nameRaw,
+        title: current!.title,
+        moved: jobs.some(
+          (a) => a !== current && normalizeCompany(a.nameRaw) !== normalizeCompany(current!.nameRaw),
+        ),
+      };
+  }
+
+  // ---- what has passed between you ----
+  const mine = ctx.touchpoints
+    .filter((t) => t.personId === person.id)
+    .sort((a, b) => b.occurredAt.localeCompare(a.occurredAt));
+  const last = (kinds: Touchpoint['kind'][]) => mine.find((t) => kinds.includes(t.kind))?.occurredAt;
+  const inbound = last(['email_in', 'linkedin_in', 'text_in']);
+  const outbound = last(['email_out', 'linkedin_out', 'text_out']);
+  const metAt = last(['meeting']);
+  // an inbound message after one of the student's is a reply; one with none before it is them writing first
+  const firstOut = mine.filter((t) => ['email_out', 'linkedin_out', 'text_out'].includes(t.kind)).at(-1);
+  const replied = inbound && firstOut && firstOut.occurredAt < inbound;
+  const history: NonNullable<WhySignals['history']> = {
+    repliedAt: replied ? inbound : undefined,
+    theyWroteAt: inbound && !replied ? inbound : undefined,
+    wroteAt: outbound,
+    metAt,
+    connectedOn: person.linkedinConnectedOn,
+    knownALittle: person.strength >= 0.3 || rec.reasons.some((r) => r.code === 'warm'),
+  };
+  if (Object.values(history).some(Boolean)) s.history = history;
+  return s;
+}
+
+/** Why this person is suggested: the reasons, strongest first (core whyThem over the signals read here). */
+export function whyThemFor(
+  person: Person,
+  rec: Pick<Recommendation, 'reasons'>,
+  ctx: PointContext,
+  introducer?: Pick<Person, 'firstName'>,
+): WhyReason[] {
+  return whyThem(whySignalsFor(person, rec, ctx, introducer));
+}
+
+/** The points for one person beyond the reasons, strongest first, without repeats. */
 export function personPoints(person: Person, rec: Recommendation, ctx: PointContext): PersonPoint[] {
   const out: PersonPoint[] = [];
   const add = (kind: PointKind, text: string | undefined) => {
@@ -92,11 +284,7 @@ export function personPoints(person: Person, rec: Recommendation, ctx: PointCont
     if (t.length < 4 || out.some((p) => p.text.toLowerCase() === t.toLowerCase())) return;
     out.push({ kind, text: t });
   };
-  const mineAff = ctx.affiliations.filter((a) => a.personId === person.id);
-  const jobs = mineAff
-    .filter((a) => a.kind === 'employment')
-    .sort((a, b) => (b.startDate ?? '').localeCompare(a.startDate ?? ''));
-  const current = jobs.find((a) => a.isCurrent) ?? jobs[0];
+  const { jobs, current } = jobsOf(person, ctx);
   // earlier employers, not an earlier title at the same one
   const past = jobs.filter(
     (a) =>
@@ -108,35 +296,16 @@ export function personPoints(person: Person, rec: Recommendation, ctx: PointCont
       : undefined;
   const facts = ctx.facts.filter((f) => f.personId === person.id);
 
-  // ---- in common ----
-  const myOrgs = new Map(
-    ctx.mine
-      .filter((f) => f.kind === 'experience' && f.organizationName && !f.excluded)
-      .map((f) => [normalizeCompany(f.organizationName), f.organizationName!]),
-  );
-  const sharedOrg = jobs.map((j) => myOrgs.get(normalizeCompany(j.nameRaw))).find(Boolean);
-  if (sharedOrg) add('common', `You both worked at ${sharedOrg}`);
-  // people the student knows who know them: the warmest reason to write
-  const known = ctx.edges
-    // a real tie (introduced, overlapping years at one employer, a small thread together), and someone the student
-    // knows well (Warm or closer), not just the same employer or a big thread
-    .filter((e) => (e.personAId === person.id || e.personBId === person.id) && realTie(e, ctx))
-    .map((e) => ctx.people.get(e.personAId === person.id ? e.personBId : e.personAId))
-    .filter((p): p is Person => !!p && !p.hiddenAt && knownWell(p))
-    .sort((a, b) => b.strength - a.strength);
-  const knownNames = [...new Set(known.map((p) => p.firstName))];
-  if (knownNames.length)
-    add(
-      'common',
-      knownNames.length === 1
-        ? `Knows ${knownNames[0]}, whom you know well`
-        : `Knows ${knownNames[0]} and ${knownNames.length - 1} other${knownNames.length > 2 ? 's' : ''} you know well`,
-    );
+  // ---- in common (the shared employer, the school and the people you both know are reasons, not points) ----
   for (const c of view?.inCommon ?? []) add('common', c.text);
   const myInterests = ctx.mine.filter((f) => f.kind === 'interest' && !f.excluded);
   for (const f of facts.filter((x) => x.type === 'personal')) {
     if (myInterests.some((i) => f.text.toLowerCase().includes(i.text.toLowerCase().slice(0, 12))))
       add('common', f.text);
+  }
+  for (const r of rec.reasons) {
+    // the reason's own words say what overlaps; a line that would fit anyone is left out
+    if (r.code === 'resume_overlap' && r.text && !/^their work overlaps/i.test(r.text)) add('common', r.text);
   }
 
   // ---- stands out ----
@@ -185,26 +354,15 @@ export function personPoints(person: Person, rec: Recommendation, ctx: PointCont
     if (yrs >= 1.5) add('does', `${Math.floor(yrs)} years in the role, since ${year(current!.startDate)}`);
   }
 
-  // ---- why now ----
-  if (started && (ctx.now.getTime() - started.getTime()) / YEAR < 1) {
-    if (!observed) add('timing', `Joined ${current?.nameRaw ?? 'their team'} in the last year`);
-    else {
-      // what a re-import saw: a new company, or a title that changed in earnest
-      const replaced = jobs.find(
-        (a) => !a.isCurrent && a.endDate?.slice(0, 10) === current!.startDate!.slice(0, 10),
-      );
-      if (replaced && normalizeCompany(replaced.nameRaw) !== normalizeCompany(current!.nameRaw))
-        add('timing', `Moved from ${replaced.nameRaw} to ${current!.nameRaw}`);
-      else if (replaced && current!.title && titleChangedMeaningfully(replaced.title, current!.title))
-        add('timing', `New role: ${current!.title}`);
-    }
-  }
-  for (const r of rec.reasons) {
-    // the school is the logo by their name, and warm or path ties say themselves on the card
-    if (r.code === 'function_match') add('timing', r.text);
-    if (r.code === 'target_company') add('timing', 'Works at a company on your target list');
-    // the reason's own words say what overlaps; a line that would fit anyone is left out
-    if (r.code === 'resume_overlap' && r.text && !/^their work overlaps/i.test(r.text)) add('common', r.text);
+  // ---- why now: what a re-import saw (a recent start on record is a reason, "New in the role") ----
+  if (started && observed && (ctx.now.getTime() - started.getTime()) / YEAR < 1) {
+    const replaced = jobs.find(
+      (a) => !a.isCurrent && a.endDate?.slice(0, 10) === current!.startDate!.slice(0, 10),
+    );
+    if (replaced && normalizeCompany(replaced.nameRaw) !== normalizeCompany(current!.nameRaw))
+      add('timing', `Moved from ${replaced.nameRaw} to ${current!.nameRaw}`);
+    else if (replaced && current!.title && titleChangedMeaningfully(replaced.title, current!.title))
+      add('timing', `New role: ${current!.title}`);
   }
 
   const order: PointKind[] = ['common', 'standout', 'does', 'timing'];
@@ -213,14 +371,25 @@ export function personPoints(person: Person, rec: Recommendation, ctx: PointCont
   return [...firsts, ...out.filter((p) => !firsts.includes(p))].slice(0, 7);
 }
 
-/** Everything the points need for a set of people, read once for the whole page. */
+/** Everything the reasons and points need for a set of people, read once for the whole page. */
 export async function loadPointContext(
-  user: Pick<User, 'id' | 'school'>,
+  user: PointContext['user'],
   personIds: string[],
   now = new Date(),
 ): Promise<Omit<PointContext, 'dossier'> & { dossiers: Map<string, Dossier> }> {
   const ids = new Set(personIds);
-  const [people, affiliations, facts, edges, dossiers, resumes, threads] = await Promise.all([
+  const [
+    people,
+    affiliations,
+    facts,
+    edges,
+    dossiers,
+    resumes,
+    threads,
+    goals,
+    targetCompanies,
+    touchpoints,
+  ] = await Promise.all([
     db.people.where('userId').equals(user.id).toArray(),
     db.affiliations
       .where('personId')
@@ -237,6 +406,12 @@ export async function loadPointContext(
       .toArray(),
     db.resumes.where('userId').equals(user.id).toArray(),
     db.threads.where('userId').equals(user.id).toArray(),
+    db.goals.get(user.id),
+    db.targetCompanies.where('userId').equals(user.id).toArray(),
+    db.touchpoints
+      .where('personId')
+      .anyOf([...ids])
+      .toArray(),
   ]);
   // small threads with one of these people on them: who was on a thread of three or fewer with whom
   const smallThreads = new Set<string>();
@@ -251,11 +426,14 @@ export async function loadPointContext(
   const mine = resume ? await db.resumeFacets.where('resumeId').equals(resume.id).toArray() : [];
   return {
     user,
+    goals: goals ?? undefined,
+    targetCompanies,
     mine,
     people: new Map(people.map((p) => [p.id, p])),
     affiliations,
     facts: facts.filter((f) => !f.deletedAt),
     edges: edges.filter((e) => ids.has(e.personAId) || ids.has(e.personBId)),
+    touchpoints,
     smallThreads,
     dossiers: new Map(dossiers.map((d) => [d.personId, d])),
     now,

@@ -82,3 +82,17 @@ export async function schoolDomainFor(name: string): Promise<string | undefined>
   const all = await loadSchools();
   return all.find((s) => s.name === name)?.domain || undefined;
 }
+
+/**
+ * A school's web domain by the name someone wrote, from the full list: its name, or a name students use for it that
+ * belongs to that school alone (a logo for a school the short list in core does not know).
+ */
+export async function findSchoolDomain(name: string): Promise<string | undefined> {
+  const q = fold(name).replace(/^the /, '');
+  if (!q) return undefined;
+  const all = await loadSchools();
+  const byName = all.find((s) => s.domain && fold(s.name).replace(/^the /, '') === q);
+  if (byName) return byName.domain;
+  const byAlias = all.filter((s) => s.domain && s.aliases.some((a) => fold(a) === q));
+  return byAlias.length === 1 ? byAlias[0]!.domain : undefined;
+}

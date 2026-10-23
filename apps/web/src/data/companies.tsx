@@ -2,7 +2,8 @@
  * Companies to suggest as targets: the ones students aim for most, and any company already in the student's own
  * network (someone there is the best way in). Free text still wins; this just saves the typing.
  */
-import { companyDomain, companyLogoUrl, normalizeCompany } from '@orbit/core';
+import { normalizeCompany } from '@orbit/core';
+import { CompanyLogo } from '../components/CompanyLogo';
 import { db } from '../db/schema';
 import type { Suggestion } from '../ui/Suggest';
 
@@ -197,21 +198,9 @@ const fold = (s: string) =>
     .replace(/\s+/g, ' ')
     .trim();
 
+/** The company's logo beside its suggestion: the same tile as everywhere else, initials when there is none. */
 function Logo({ name }: { name: string }) {
-  const domain = companyDomain(name);
-  if (!domain) return <span className="w-5 h-5 shrink-0 rounded-md bg-canvas-2" aria-hidden />;
-  return (
-    <img
-      src={companyLogoUrl(domain)}
-      alt=""
-      className="w-5 h-5 shrink-0 rounded-md object-contain bg-canvas"
-      loading="lazy"
-      referrerPolicy="no-referrer"
-      onError={(e) => {
-        (e.currentTarget as HTMLImageElement).style.visibility = 'hidden';
-      }}
-    />
-  );
+  return <CompanyLogo name={name} size={20} decorative />;
 }
 
 /**
