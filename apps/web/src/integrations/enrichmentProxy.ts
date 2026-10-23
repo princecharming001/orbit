@@ -140,6 +140,28 @@ export async function linkedInProfile(
   };
 }
 
+/** Someone's LinkedIn photo link and who they are on LinkedIn, from the plain profile (engine/photoQueue.ts). */
+export interface LinkedInPhoto {
+  /** a LinkedIn link that expires after a few weeks; none when they have no photo or LinkedIn shows none */
+  pictureUrl?: string;
+  providerId?: string;
+  publicIdentifier?: string;
+}
+
+/** A person's LinkedIn photo link, by their member id or public profile name: the lightest profile read. */
+export async function linkedInPhoto(
+  accountId: string,
+  identifier: string,
+  opts: CallOpts = {},
+): Promise<EnrichOutcome<LinkedInPhoto>> {
+  const r = await unipileProxyCall<Answer<'photo', LinkedInPhoto>>(
+    '/photo',
+    { accountId, token: opts.token, identifier },
+    opts,
+  );
+  return unwrap(r, 'photo');
+}
+
 /** A company's LinkedIn page (its logo, public name and website), by LinkedIn's id or its public name. */
 export async function linkedInCompany(
   accountId: string,

@@ -14,6 +14,8 @@ import {
   useState,
 } from 'react';
 import { Link, useLocation } from 'react-router-dom';
+import { photoBroken, photoWanted } from '../engine/photoSignals';
+import { linkedInImageExpired } from '../engine/photos';
 
 export function cx(...parts: (string | false | null | undefined)[]): string {
   return parts.filter(Boolean).join(' ');
@@ -169,18 +171,27 @@ export function Avatar({
     for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
     return h % 360;
   }, [id, name]);
-  // LinkedIn's photo links expire: a picture that no longer loads falls back to the initials
-  const [broken, setBroken] = useState<string>();
-  const shown = src && src !== broken ? src : undefined;
+  // LinkedIn's photo links expire: one past its date is not even tried, and the photo queue fetches a fresh one
+  // (engine/photoQueue, which hears who is on screen). A picture that fails to load is tried once more, then the
+  // initials show and the queue hears of it; a new link from the queue starts over.
+  const usable = src && !linkedInImageExpired(src) ? src : undefined;
+  const [failed, setFailed] = useState<{ src: string; tries: number }>();
+  const tries = failed && failed.src === usable ? failed.tries : 0;
+  const shown = usable && tries < 2 ? usable : undefined;
+  useEffect(() => (id ? photoWanted(id) : undefined), [id]);
   return (
     <span className="relative inline-flex shrink-0" style={{ width: size, height: size }}>
       {shown ? (
         <img
+          key={tries}
           src={shown}
           alt=""
           className="rounded-full object-cover w-full h-full"
           referrerPolicy="no-referrer"
-          onError={() => setBroken(shown)}
+          onError={() => {
+            setFailed({ src: shown, tries: tries + 1 });
+            if (tries + 1 >= 2 && id) photoBroken(id, shown);
+          }}
         />
       ) : (
         <span

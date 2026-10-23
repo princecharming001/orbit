@@ -224,6 +224,55 @@ describe('enrichment routes of the connector proxy', () => {
     expect(upstream).toHaveLength(1);
   });
 
+  it('fetches a photo link from the plain profile, with no sections, and says who they are on LinkedIn', async () => {
+    const { handler, upstream } = harness();
+    const res = await handler(post('/photo', { accountId: 'a1', token: TOKEN, identifier: 'ACoAAA123' }));
+    expect(res.status).toBe(200);
+    const url = new URL(upstream[0]!.url);
+    expect(url.pathname).toBe('/api/v1/users/ACoAAA123');
+    expect(url.searchParams.get('account_id')).toBe('a1');
+    expect(url.searchParams.has('linkedin_sections')).toBe(false);
+    // the large picture, the link only: no experience, education or contact details travel
+    expect(await res.json()).toEqual({
+      ok: true,
+      photo: { pictureUrl: licdn('large'), providerId: 'ACoAAA123', publicIdentifier: 'omar-haddad' },
+    });
+    // no photo on LinkedIn, or one from elsewhere: no link
+    const none = harness(
+      {},
+      () =>
+        new Response(JSON.stringify({ provider_id: 'x', profile_picture_url: 'https://evil.example/x.png' })),
+    );
+    expect(
+      await (await none.handler(post('/photo', { accountId: 'a1', token: TOKEN, identifier: 'x' }))).json(),
+    ).toEqual({ ok: true, photo: { pictureUrl: undefined, providerId: 'x', publicIdentifier: undefined } });
+    const gone = harness({}, () => new Response('{}', { status: 404 }));
+    expect(
+      await (await gone.handler(post('/photo', { accountId: 'a1', token: TOKEN, identifier: 'x' }))).json(),
+    ).toMatchObject({ ok: false, reason: 'not_found' });
+  });
+
+  it('needs the account token for a photo too, and counts photos apart from profile reads', async () => {
+    const at = new Date('2026-10-22T09:00:00Z');
+    const { handler, upstream } = harness({
+      enrichment: { profilesPerDay: 1, photosPerDay: 2 },
+      now: () => at,
+      take: memoryTake(() => at.getTime()),
+    });
+    expect((await handler(post('/photo', { accountId: 'a1', identifier: 'x' }))).status).toBe(403);
+    expect((await handler(post('/photo', { accountId: 'a1' }))).status).toBe(403);
+    expect(upstream).toHaveLength(0);
+    const photo = () => handler(post('/photo', { accountId: 'a1', token: TOKEN, identifier: 'x' }));
+    const read = () => handler(post('/profile', { accountId: 'a1', token: TOKEN, identifier: 'x' }));
+    expect(await (await read()).json()).toMatchObject({ ok: true });
+    expect(await (await read()).json()).toMatchObject({ ok: false, reason: 'limit' });
+    // the profile allowance being spent leaves the photo allowance alone
+    expect(await (await photo()).json()).toMatchObject({ ok: true });
+    expect(await (await photo()).json()).toMatchObject({ ok: true });
+    expect(await (await photo()).json()).toMatchObject({ ok: false, reason: 'limit' });
+    expect(upstream).toHaveLength(3);
+  });
+
   it("reads a company's page: its LinkedIn id, public name and logo", async () => {
     const { handler, upstream } = harness();
     const b = await (

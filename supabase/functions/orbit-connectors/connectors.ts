@@ -8,7 +8,7 @@
  *   /connect/start, /connect/status, /relations, /mutuals, /disconnect, /send,
  *   /inbox, /search, /me, /chats/history, /posts/activity                      -> Unipile
  *   /paths                                                                     -> Village
- *   /profile, /company (Unipile), /web (Exa), /providers   -> enrichment (plan 17 E, block at the end)
+ *   /profile, /company, /photo (Unipile), /web (Exa), /providers   -> enrichment (plan 17 E, block at the end)
  *
  * A connected account's routes need the account token /connect/status handed out (an HMAC of the account id with
  * the server's signing key), so knowing someone's Unipile account id is not enough to read their connections or
@@ -1459,6 +1459,8 @@ export interface EnrichmentDeps {
   profilesPerDay?: number;
   /** company page reads per LinkedIn account per day */
   companiesPerDay?: number;
+  /** photo link reads (the plain profile, no sections) per LinkedIn account per day */
+  photosPerDay?: number;
   /** web lookups per visitor per day */
   webPerDay?: number;
   /** Exa (search plus page text); without it /web answers "unconfigured" */
@@ -1470,7 +1472,7 @@ export interface EnrichmentDeps {
   pdlKey?: string;
 }
 
-const ENRICH_ROUTES = new Set(['/profile', '/company', '/web', '/providers']);
+const ENRICH_ROUTES = new Set(['/profile', '/company', '/photo', '/web', '/providers']);
 
 /** The sections a profile read may ask for: full ones, and the lighter previews for what matters less. */
 export const PROFILE_SECTIONS = new Set([
@@ -1502,7 +1504,7 @@ export function providerStatus(deps: ConnectorDeps) {
 
 /** Today's bucket for one kind of enrichment call, per LinkedIn account (or per visitor, for web lookups). */
 export function enrichBucket(
-  kind: 'profile' | 'company' | 'web',
+  kind: 'profile' | 'company' | 'photo' | 'web',
   who: string,
   now: Date,
   perDay: number,
@@ -1525,7 +1527,8 @@ async function enrichmentRoute(
 ): Promise<Response> {
   const { h, doFetch, take, now } = ctx;
   const e = deps.enrichment ?? {};
-  const kind = path === '/profile' ? 'profile' : path === '/company' ? 'company' : 'web';
+  const kind =
+    path === '/profile' ? 'profile' : path === '/company' ? 'company' : path === '/photo' ? 'photo' : 'web';
   if (kind === 'web') {
     if (!e.exaKey) return unconfigured(h);
   } else {
@@ -1538,7 +1541,9 @@ async function enrichmentRoute(
       ? (e.profilesPerDay ?? 80)
       : kind === 'company'
         ? (e.companiesPerDay ?? 80)
-        : (e.webPerDay ?? 30);
+        : kind === 'photo'
+          ? (e.photosPerDay ?? 300)
+          : (e.webPerDay ?? 30);
   const who = kind === 'web' ? `visitor:${ctx.visitor}` : String(body.accountId);
   let verdict: { allowed: boolean };
   try {
@@ -1555,13 +1560,16 @@ async function enrichmentRoute(
         message:
           kind === 'web'
             ? 'Orbit has looked up as many people on the web as it allows today.'
-            : 'Orbit has read as many LinkedIn profiles as it allows today. It carries on tomorrow.',
+            : kind === 'photo'
+              ? 'Orbit has fetched as many LinkedIn photos as it allows today. It carries on tomorrow.'
+              : 'Orbit has read as many LinkedIn profiles as it allows today. It carries on tomorrow.',
       },
       h,
     );
   try {
     if (kind === 'profile') return json(200, await unipileProfile(deps, body, doFetch), h);
     if (kind === 'company') return json(200, await unipileCompany(deps, body, doFetch), h);
+    if (kind === 'photo') return json(200, await unipilePhoto(deps, body, doFetch), h);
     return json(200, await exaSearch(e, body, doFetch), h);
   } catch (err) {
     return json(502, { error: err instanceof Error ? err.message : 'upstream error' }, h);
@@ -1676,6 +1684,13 @@ async function unipileProfile(deps: ConnectorDeps, body: Record<string, unknown>
   const res = await doFetch(`${deps.unipileBase}/api/v1/users/${encodeURIComponent(identifier)}?${q}`, {
     headers: uHeaders(deps),
   });
+  const failed = await profileFailure(res);
+  if (failed) return failed;
+  return { ok: true, profile: mapProfile((await res.json()) as Record<string, unknown>) };
+}
+
+/** Why a profile read brought nothing back, as a reason the app knows; undefined when it succeeded. */
+async function profileFailure(res: Response) {
   if (res.status === 404 || res.status === 422)
     return { ok: false, reason: 'not_found', message: 'LinkedIn could not find that profile.' };
   if (res.status === 429)
@@ -1687,7 +1702,33 @@ async function unipileProfile(deps: ConnectorDeps, body: Record<string, unknown>
   if (res.status >= 400 && res.status < 500)
     return { ok: false, reason: 'refused', message: await unipileError(res) };
   if (!res.ok) throw new Error(`unipile ${res.status}`);
-  return { ok: true, profile: mapProfile((await res.json()) as Record<string, unknown>) };
+  return undefined;
+}
+
+/**
+ * Someone's LinkedIn photo link, and who they are on LinkedIn, from the plain profile with no sections: the lightest
+ * read there is. It is how people added from a search, an export or a typed-in link get their picture, and how an
+ * expired link gets a fresh one (engine/photoQueue.ts). The link comes back, not the image: the browser loads it.
+ */
+async function unipilePhoto(deps: ConnectorDeps, body: Record<string, unknown>, doFetch: typeof fetch) {
+  const accountId = String(body.accountId ?? '');
+  const identifier = text(body.identifier, 200);
+  if (!identifier) return { ok: false, reason: 'bad_request', message: 'Say whose photo to fetch.' };
+  const q = new URLSearchParams({ account_id: accountId });
+  const res = await doFetch(`${deps.unipileBase}/api/v1/users/${encodeURIComponent(identifier)}?${q}`, {
+    headers: uHeaders(deps),
+  });
+  const failed = await profileFailure(res);
+  if (failed) return failed;
+  const p = (await res.json()) as Record<string, unknown>;
+  return {
+    ok: true,
+    photo: {
+      pictureUrl: licdn(p.profile_picture_url_large) ?? licdn(p.profile_picture_url),
+      providerId: text(p.provider_id, 200),
+      publicIdentifier: text(p.public_identifier, 200),
+    },
+  };
 }
 
 /** A company's LinkedIn page, by LinkedIn's id or its public name: its name, public name, logo and website. */
