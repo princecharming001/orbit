@@ -6,7 +6,7 @@ import { deleteAllData, exportAllData, exportFilename, leaveDemoForOwnSetup } fr
 import { DEMO_USER_ID, demoResetPrompt, loadDemo } from '../../engine/demo';
 import { disconnectGoogleAccount, googleAccount, markGoogleNeedsReauth } from '../../engine/integrations';
 import { connectionsText, importLinkedInExport } from '../../engine/linkedin';
-import { saveResume } from '../../engine/resume';
+import { describeResumeProfile, saveResume } from '../../engine/resume';
 import { syncGoogle } from '../../engine/sync';
 import { currentGoogleToken, googleClientId } from '../../integrations/google';
 import { callApi, isServerUser } from '../../integrations/orbitApi';
@@ -53,7 +53,7 @@ export const saveResumeTool = defineTool({
           ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
           : 'text/plain');
     const file = new File([bytes], input.filename, { type });
-    const { resume, facets } = await saveResume(ctx.user, file);
+    const { resume, facets, proposal } = await saveResume(ctx.user, file);
     const out = {
       resumeId: resume.id,
       filename: resume.filename,
@@ -66,13 +66,15 @@ export const saveResumeTool = defineTool({
         text: f.text.slice(0, 160),
         used: !f.excluded,
       })),
+      // what the resume says that the profile does not: offer it, and change the profile only on a yes
+      profileFromResume: proposal,
     };
     const unticked = facets.filter((f) => f.excluded).length;
     return ok(
       'import',
       out,
       out,
-      `Saved ${resume.filename} and read ${plural(facets.length, 'line')} from it.${unticked ? ` ${plural(unticked, 'line')} Orbit could not read well ${unticked === 1 ? 'is' : 'are'} unticked until you fix or confirm ${unticked === 1 ? 'it' : 'them'}.` : ''}`,
+      `Saved ${resume.filename} and read ${plural(facets.length, 'line')} from it.${unticked ? ` ${plural(unticked, 'line')} Orbit could not read well ${unticked === 1 ? 'is' : 'are'} unticked until you fix or confirm ${unticked === 1 ? 'it' : 'them'}.` : ''}${proposal ? ` It says ${describeResumeProfile(proposal)}, which your profile does not; use it from Settings, Memory, or say so here.` : ''}`,
       '/settings/integrations',
     );
   },

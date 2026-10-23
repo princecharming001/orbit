@@ -6,7 +6,8 @@ import { useNavigate } from 'react-router-dom';
 import { db } from '../../db/schema';
 import { deleteAccount, exportAccount, signOutHere } from '../../engine/accountMode';
 import { activeGoals, GOAL_KIND_LABELS } from '../../engine/goals';
-import { forget, listMemories, MEMORY_KIND_LABELS } from '../../engine/memory';
+import { forget, listMemories, MEMORY_KIND_LABELS, memoryOnServer } from '../../engine/memory';
+import { localMemories, toMemoryItem } from '../../engine/memoryLocal';
 import {
   AUTONOMY_TEXT,
   type AutonomyLevel,
@@ -15,7 +16,13 @@ import {
   setAutonomy,
   setPostalAddress,
 } from '../../engine/outreach';
-import { startGoogleSignIn } from '../../integrations/orbitApi';
+import {
+  acceptResumeProposal,
+  describeResumeProfile,
+  dismissResumeProposal,
+  resumeProposal,
+} from '../../engine/resume';
+import { isAccountMode, startGoogleSignIn } from '../../integrations/orbitApi';
 import { useAccount } from '../../state/account';
 import { useSession } from '../../state/session';
 import { Button, Card, cx, Input, Label, relDate, Select, Spinner, Textarea, useToast } from '../../ui';
@@ -305,81 +312,137 @@ export function OutreachSection() {
   );
 }
 
-/** Settings, Memory: what Orbit remembers from your chats, each with a delete. */
+/** Settings, Memory: what Orbit remembers from your chats, each with a delete; and what your resume says. */
 export function MemorySection() {
   const { user } = useSession();
   const account = useAccount();
   const toast = useToast();
-  const [items, setItems] = useState<MemoryItem[]>();
+  const onServer = !!user && memoryOnServer(user);
+  const [serverItems, setServerItems] = useState<MemoryItem[]>();
   const [error, setError] = useState<string>();
   const load = useCallback(async () => {
-    if (!user) return;
+    if (!user || !memoryOnServer(user)) return;
     const r = await listMemories(user);
-    if (r.ok) setItems(r.memories);
+    if (r.ok) setServerItems(r.memories);
     else setError(r.message);
   }, [user]);
   useEffect(() => {
     if (account.signedIn) void load();
   }, [load, account.signedIn]);
+  // in this browser the list follows the chat as it remembers things
+  const localItems = useLiveQuery(
+    async () => (user && !onServer ? (await localMemories(user.id)).map(toMemoryItem) : undefined),
+    [user?.id, onServer],
+  );
+  const items = onServer ? serverItems : localItems;
   const people = useLiveQuery(async () => {
     const ids = [...new Set((items ?? []).map((m) => m.personId).filter((x): x is string => !!x))];
     const rows = ids.length ? await db.people.bulkGet(ids) : [];
     return new Map(rows.filter((p) => !!p).map((p) => [p!.id, p!.displayName]));
   }, [items]);
   if (!user) return null;
-  if (!account.signedIn) return <SignInCard />;
+  // signed out of an account-mode build with nothing kept here yet: the account is where memory lives
+  if (isAccountMode() && !account.signedIn && !localItems?.length) return <SignInCard />;
   return (
-    <Card data-testid="settings-memory">
-      <div className="font-medium">What Orbit remembers</div>
-      <p className="text-[13px] text-ink-2 mt-1">
-        Things you told Orbit that it keeps for later chats, like how you like to meet. Delete anything you'd
-        rather it forgot.
-      </p>
-      {error ? (
-        <p className="mt-3 text-[13px] text-bad" role="alert">
-          {error}
+    <div className="space-y-4">
+      <ResumeProfileOffer userId={user.id} />
+      <Card data-testid="settings-memory">
+        <div className="font-medium">What Orbit remembers</div>
+        <p className="text-[13px] text-ink-2 mt-1">
+          Things you told Orbit that it keeps for later chats, like how you like to meet or the roles you are
+          going for. {onServer ? '' : 'Kept in this browser only. '}Delete anything you'd rather it forgot.
         </p>
-      ) : !items ? (
-        <div className="mt-3">
-          <Spinner />
-        </div>
-      ) : !items.length ? (
-        <p className="mt-3 text-[13px] text-ink-3" data-testid="memory-empty">
-          Nothing yet. Tell the chat something like "I prefer morning calls" and it shows up here.
-        </p>
-      ) : (
-        <ul className="mt-3 divide-y divide-line border-t border-line">
-          {items.map((m) => (
-            <li key={m.id} className="py-2.5 flex items-start gap-3" data-testid="memory-item">
-              <div className="min-w-0 flex-1">
-                <div className="text-[13.5px] text-ink">{m.text}</div>
-                <div className="text-[12px] text-ink-3">
-                  {MEMORY_KIND_LABELS[m.kind] ?? 'Note'}
-                  {m.personId && people?.get(m.personId) ? ` · ${people.get(m.personId)}` : ''} ·{' '}
-                  {relDate(m.lastSeenAt ?? m.createdAt)}
+        {error ? (
+          <p className="mt-3 text-[13px] text-bad" role="alert">
+            {error}
+          </p>
+        ) : !items ? (
+          <div className="mt-3">
+            <Spinner />
+          </div>
+        ) : !items.length ? (
+          <p className="mt-3 text-[13px] text-ink-3" data-testid="memory-empty">
+            Nothing yet. Tell the chat something like "I prefer morning calls" or "I'm targeting PM
+            internships in New York" and it shows up here.
+          </p>
+        ) : (
+          <ul className="mt-3 divide-y divide-line border-t border-line">
+            {items.map((m) => (
+              <li key={m.id} className="py-2.5 flex items-start gap-3" data-testid="memory-item">
+                <div className="min-w-0 flex-1">
+                  <div className="text-[13.5px] text-ink">{m.text}</div>
+                  <div className="text-[12px] text-ink-3">
+                    {MEMORY_KIND_LABELS[m.kind] ?? 'Note'}
+                    {m.personId && people?.get(m.personId) ? ` · ${people.get(m.personId)}` : ''} ·{' '}
+                    {relDate(m.lastSeenAt ?? m.createdAt)}
+                  </div>
                 </div>
-              </div>
-              <Button
-                size="sm"
-                variant="ghost"
-                aria-label={`Delete: ${m.text}`}
-                onClick={async () => {
-                  const r = await forget(user, m.id);
-                  if (!r.ok) {
-                    toast.push({ text: r.message });
-                    return;
-                  }
-                  setItems((xs) => xs?.filter((x) => x.id !== m.id));
-                  toast.push({ text: 'Deleted from memory.' });
-                }}
-                data-testid="memory-delete"
-              >
-                <Trash2 size={14} />
-              </Button>
-            </li>
-          ))}
-        </ul>
-      )}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  aria-label={`Delete: ${m.text}`}
+                  onClick={async () => {
+                    const r = await forget(user, m.id);
+                    if (!r.ok) {
+                      toast.push({ text: r.message });
+                      return;
+                    }
+                    setServerItems((xs) => xs?.filter((x) => x.id !== m.id));
+                    toast.push({ text: 'Deleted from memory.' });
+                  }}
+                  data-testid="memory-delete"
+                >
+                  <Trash2 size={14} />
+                </Button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+/**
+ * Your resume names a school, majors or a graduation year your profile does not: use them, or say no. Orbit never
+ * changes the profile on its own, and never offers an employer as the school.
+ */
+export function ResumeProfileOffer({ userId }: { userId: string }) {
+  const toast = useToast();
+  const offer = useLiveQuery(async () => {
+    // read again whenever the resume, the profile or the offer changes
+    await Promise.all([db.kv.get(`resumeProfile:${userId}`), db.users.get(userId)]);
+    return (await resumeProposal(userId)) ?? null;
+  }, [userId]);
+  if (!offer) return null;
+  return (
+    <Card data-testid="resume-profile-offer">
+      <div className="font-medium">From your resume</div>
+      <p className="text-[13px] text-ink-2 mt-1">
+        Your resume says {describeResumeProfile(offer)}. Use that in your profile? Drafts introduce you with
+        it.
+      </p>
+      <div className="mt-3 flex gap-2">
+        <Button
+          size="sm"
+          variant="primary"
+          onClick={async () => {
+            await acceptResumeProposal(userId);
+            toast.push({ text: 'Profile updated from your resume.', tone: 'good' });
+          }}
+          data-testid="resume-profile-accept"
+        >
+          Use it
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => void dismissResumeProposal(userId)}
+          data-testid="resume-profile-dismiss"
+        >
+          Keep my profile
+        </Button>
+      </div>
     </Card>
   );
 }

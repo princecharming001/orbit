@@ -2420,6 +2420,64 @@ test.describe('Morning brief', () => {
   });
 });
 
+test.describe('Chat memory (plan 17 §G)', () => {
+  test('a goal said in chat is remembered under Settings, Memory, reaches Goals, and can be deleted', async ({
+    page,
+  }) => {
+    test.setTimeout(150_000);
+    await newStudent(page);
+    await page
+      .getByTestId('composer-input')
+      .fill("I'm targeting product manager internships at fintech startups in New York");
+    await page.keyboard.press('Enter');
+    // without Claude the router answers, and Orbit's own rules read the statement after the turn
+    await expect(page.getByTestId('turn-assistant').last()).toContainText(
+      'Noted for later: Targeting product manager internships at fintech startups in New York.',
+      { timeout: 30_000 },
+    );
+    await page.goto('settings/memory');
+    const item = page.getByTestId('memory-item');
+    await expect(item).toHaveCount(1);
+    await expect(item).toContainText('Targeting product manager internships at fintech startups in New York');
+    await expect(item).toContainText('About a goal');
+    await page.goto('settings/goals');
+    await expect(page.locator('#goals-industries')).toHaveValue(/Fintech/);
+    await expect(page.locator('#goals-locations')).toHaveValue(/New York City/);
+    await expect(page.locator('#goals-roles')).toHaveValue(/Product Manager/);
+    // deleting it in Settings, Memory removes it for good
+    await page.goto('settings/memory');
+    await page.getByTestId('memory-delete').click();
+    await expect(page.getByTestId('memory-empty')).toBeVisible();
+    await page.reload();
+    await expect(page.getByTestId('memory-empty')).toBeVisible();
+  });
+
+  test('Settings, Memory offers the school and year from a two-column resume, never the employer', async ({
+    page,
+  }) => {
+    await newStudent(page);
+    await page.goto('settings/integrations');
+    await page.locator('input[type="file"][accept=".pdf,.txt,.md,.docx"]').setInputFiles({
+      name: 'resume.txt',
+      mimeType: 'text/plain',
+      buffer: Buffer.from(
+        'Sam Okafor\nsam@msu.edu\n\nEDUCATION   Michigan State University   May 2029\nB.S. in Economics\n\nEXPERIENCE   Amma Health Inc.   San Francisco, CA\nSoftware Engineering Intern   Jun 2025 – Aug 2025\n• Built a FHIR ingestion pipeline for new clinics\n',
+      ),
+    });
+    await expect(page.getByTestId('resume-on-file')).toContainText('resume.txt', { timeout: 15_000 });
+    await page.goto('settings/memory');
+    const offer = page.getByTestId('resume-profile-offer');
+    await expect(offer).toContainText('school Michigan State University');
+    await expect(offer).toContainText('major Economics');
+    await expect(offer).toContainText('class of 2029');
+    await expect(offer).not.toContainText('Amma');
+    await offer.getByTestId('resume-profile-accept').click();
+    await expect(offer).toHaveCount(0);
+    await page.goto('settings/profile');
+    await expect(page.locator('#profile-school')).toHaveValue('Michigan State University');
+  });
+});
+
 test.describe('Autopilot', () => {
   test('the chat plans the sends, the student approves once, and Drafts lists them under Scheduled', async ({
     page,

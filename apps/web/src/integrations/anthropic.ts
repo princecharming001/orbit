@@ -1,8 +1,10 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import type {
+  ChatTurn,
   DraftContext,
   DraftOutput,
+  MemoryKind,
   NoteExtraction,
   ReplySignal,
   ResumeFacet,
@@ -12,6 +14,7 @@ import type {
 import { fmtWindow, LINKEDIN_NOTE_MAX, LINKEDIN_NOTE_TARGET, MAX_WORDS, tzAbbr } from '@orbit/core';
 // The SDK's zodOutputFormat helper is built on zod/v4 and cannot read zod v3 schemas.
 import { z } from '../zod';
+import { currentAccessToken } from './orbitApi';
 import {
   DEFAULT_DAILY_REQUEST_CAP,
   DEFAULT_DAILY_TOKEN_CAP,
@@ -23,7 +26,7 @@ import {
   updatePrefs,
   writePrefs,
 } from './prefs';
-import { pauseSharedClaude } from './shared-claude';
+import { pauseSharedClaude, sharedClaudeAvailable, sharedClaudeUrl, sharedClientId } from './shared-claude';
 
 export const MODEL = 'claude-opus-5-5';
 
@@ -50,6 +53,50 @@ function client(): LlmClient | undefined {
   if (!key) return undefined;
   if (clientFactory) return clientFactory(key);
   return new Anthropic({ apiKey: key, dangerouslyAllowBrowser: true, maxRetries: 2, timeout: 120_000 });
+}
+
+/**
+ * Calls other than the chat that may go through Orbit's shared Claude access (supabase/functions/orbit-claude): reading
+ * what the student said after a chat turn, and reading their resume. The proxy holds each to its own output limit and,
+ * for resumes, its own daily count; both count against the student's daily limit like the chat.
+ */
+export type SharedCall = 'memory' | 'resume';
+export const SHARED_CALL_MAX_TOKENS: Record<SharedCall, number> = { memory: 1024, resume: 8192 };
+/** The placeholder key sent to Orbit's shared access; the server function swaps in the real one. */
+const SHARED_PLACEHOLDER = 'orbit-shared';
+
+let sharedFactory: ((call: SharedCall, headers: Record<string, string>) => LlmClient) | undefined;
+/** Test hook: replace the shared-access client. Pass undefined to restore the real one. */
+export function setSharedLlmClientFactoryForTests(
+  f: ((call: SharedCall, headers: Record<string, string>) => LlmClient) | undefined,
+): void {
+  sharedFactory = f;
+}
+
+/** The client for one call through Orbit's shared access, when the student has no key of their own and it is on. */
+function sharedClient(call: SharedCall): LlmClient | undefined {
+  if (readPrefs().anthropicApiKey || !sharedClaudeAvailable()) return undefined;
+  const token = currentAccessToken();
+  const headers: Record<string, string> = {
+    'x-orbit-client': sharedClientId(),
+    'x-orbit-call': call,
+    ...(token ? { 'x-orbit-session': token } : {}),
+  };
+  if (sharedFactory) return sharedFactory(call, headers);
+  return new Anthropic({
+    apiKey: SHARED_PLACEHOLDER,
+    baseURL: sharedClaudeUrl(),
+    defaultHeaders: headers,
+    dangerouslyAllowBrowser: true,
+    maxRetries: 1,
+    timeout: 90_000,
+  });
+}
+
+/** Whether a call of this kind can reach Claude now: the student's own key with the feature on, or the shared access. */
+export function claudeReachable(feature: LlmFeature, shared?: SharedCall): boolean {
+  if (llmEnabled(feature)) return true;
+  return !!shared && !readPrefs().anthropicApiKey && sharedClaudeAvailable();
 }
 
 // ---------- failures ----------
@@ -99,6 +146,9 @@ export function toLlmError(e: unknown): LlmError {
   if (e instanceof Anthropic.APIUserAbortError) return new LlmError('aborted', 'Stopped.', detail);
   // Orbit's shared access marks its own refusals; a daily limit or a missing server key pauses it on this device
   const shared = e instanceof Anthropic.APIError ? e.headers?.get('x-orbit-limit') : undefined;
+  // one kind of call (resumes) used its own daily count: the chat carries on
+  if (shared === 'call')
+    return new LlmError('shared_limit', "Orbit's shared Claude has done enough of this for today.", detail);
   if (shared === 'minute')
     return new LlmError(
       'rate_limit',
@@ -323,12 +373,16 @@ async function runParse<T extends z.ZodTypeAny>(
   schema: T,
   effort: 'low' | 'medium' | 'high',
   maxTokens: number,
+  /** `shared`: without a key of their own, the call may go through Orbit's shared access; `quiet`: a failure is not
+   * shown in Settings (a background pass the student did not ask for) */
+  opts: { shared?: SharedCall; quiet?: boolean } = {},
 ): Promise<z.infer<T> | undefined> {
   // Another tab may have removed the key, turned this feature off or used up today's budget.
   await refreshPrefs();
-  if (!llmEnabled(feature)) return undefined;
-  const c = client();
+  const own = llmEnabled(feature);
+  const c = own ? client() : opts.shared ? sharedClient(opts.shared) : undefined;
   if (!c) return undefined;
+  if (!own && opts.shared) maxTokens = Math.min(maxTokens, SHARED_CALL_MAX_TOKENS[opts.shared]);
   const { tag, wrap } = makeWrap(newNonce());
   // runtime helper reads zod/v4 schemas; its .d.ts names the root 'zod' export (v3 in zod 3.25)
   const base = zodOutputFormat(schema as never);
@@ -364,7 +418,7 @@ async function runParse<T extends z.ZodTypeAny>(
     return out as z.infer<T>;
   } catch (e) {
     const err = toLlmError(e);
-    recordFailure(err);
+    if (!opts.quiet) recordFailure(err);
     throw err;
   }
 }
@@ -664,11 +718,12 @@ export async function llmResumeParse(text: string, resumeId: string): Promise<Re
   });
   const r = await runParse(
     'resume',
-    'You parse a resume into facets: each experience, education entry, project, skill group, interest, plus a one-paragraph summary facet written in third person. Dates as YYYY-MM-DD (first of month) or null. Keywords are 4 to 10 lowercase domain words per facet.',
+    'You parse a resume into facets: each experience, education entry, project, skill group, interest, plus a one-paragraph summary facet written in third person. An education facet is a school the student attended (organization_name is the school, title the degree and field, end_date the graduation month); a job, internship or club is never an education facet, even when the text puts it under an Education heading (PDF exports often run two columns together). Dates as YYYY-MM-DD (first of month) or null. Keywords are 4 to 10 lowercase domain words per facet.',
     (wrap) => wrap('resume', text.slice(0, 30_000)),
     schema,
     'medium',
     8192,
+    { shared: 'resume' },
   );
   if (!r) return undefined;
   return r.facets.map((f, i) => ({
@@ -777,6 +832,73 @@ export async function llmStyleFeedback(
         note: r.note,
       }
     : undefined;
+}
+
+/** What Claude read in a chat turn: memories, and recruiting targets the student stated. Checked by the caller. */
+export interface LlmMemoryExtraction {
+  memories: {
+    kind: MemoryKind;
+    text: string;
+    person_name: string | null;
+    importance: number;
+    quote: string;
+  }[];
+  recruiting: {
+    functions: string[];
+    industries: string[];
+    locations: string[];
+    organizations: string[];
+    phrase: string | null;
+    quote: string;
+  } | null;
+}
+
+export const MEMORY_EXTRACT_SYSTEM = [
+  'You read the last turns of a chat between a college student and Orbit, their networking assistant, and pick out durable facts about the student worth remembering in later chats: preferences (how they like to meet or write), constraints (when they cannot meet, who they do not want to contact, what they are not interested in), details of their goals (roles, companies, industries, places, deadlines), outcomes (offers, interviews, referrals), their background (school, year, majors, past jobs), and facts about specific people they know.',
+  'Rules: only what the student stated plainly about themselves or people they know, never what Orbit said, never a guess, a question, a maybe or what someone else wants. Skip small talk, requests to Orbit, and anything already in <known>. Never extract health, religion, politics, sexuality, family, age, ethnicity or immigration status.',
+  'Each memory: text in the third person about the student, at most 200 characters ("Prefers morning calls", "Targeting PM internships at fintech startups in New York"); quote copied exactly from the student\'s own words; importance 0 to 1.',
+  'recruiting: when the student said what jobs or internships they are going for, the kinds of work as codes (swe, pm, ib, consulting, data, design, finance, marketing, research, vc, ops), industries, places and company names exactly as they said them, the phrase they used and their quote; otherwise null.',
+].join(' ');
+
+/** Claude's read of the last chat turns (own key with the chat on, or Orbit's shared access). Undefined when neither. */
+export async function llmExtractMemories(
+  turns: ChatTurn[],
+  known: string[],
+): Promise<LlmMemoryExtraction | undefined> {
+  const schema = z.object({
+    memories: z.array(
+      z.object({
+        kind: z.enum(['preference', 'constraint', 'goal_detail', 'outcome', 'person_fact', 'note']),
+        text: z.string(),
+        person_name: z.string().nullable(),
+        importance: z.number(),
+        quote: z.string(),
+      }),
+    ),
+    recruiting: z
+      .object({
+        functions: z.array(z.string()),
+        industries: z.array(z.string()),
+        locations: z.array(z.string()),
+        organizations: z.array(z.string()),
+        phrase: z.string().nullable(),
+        quote: z.string(),
+      })
+      .nullable(),
+  });
+  return runParse(
+    'chat',
+    MEMORY_EXTRACT_SYSTEM,
+    (wrap) =>
+      `<known>\n${known.slice(0, 20).join('\n')}\n</known>\n${wrap(
+        'chat',
+        turns.map((t) => `${t.role === 'user' ? 'student' : 'orbit'}: ${t.text}`).join('\n'),
+      )}`,
+    schema,
+    'low',
+    1024,
+    { shared: 'memory', quiet: true },
+  );
 }
 
 export async function testApiKey(): Promise<{ ok: boolean; error?: string }> {

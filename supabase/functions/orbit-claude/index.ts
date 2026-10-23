@@ -23,6 +23,11 @@ Deno.serve(
       perMinute: num('ORBIT_LIMIT_PER_MINUTE', 30),
       perDay: num('ORBIT_LIMIT_PER_DAY', 250),
       globalPerDay: num('ORBIT_LIMIT_GLOBAL_PER_DAY', 3000),
+      // reading a chat turn for memory, and reading a resume: their own daily counts per visitor
+      perDayCall: {
+        memory: num('ORBIT_LIMIT_MEMORY_PER_DAY', 200),
+        resume: num('ORBIT_LIMIT_RESUME_PER_DAY', 5),
+      },
     },
   }),
 );

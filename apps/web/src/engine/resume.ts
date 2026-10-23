@@ -1,8 +1,18 @@
-import type { Resume, ResumeFacet, User } from '@orbit/core';
-import { heuristicResumeParse, newId, normalizeCompany, summarySentence } from '@orbit/core';
+import type { Resume, ResumeFacet, ResumeProfile, User } from '@orbit/core';
+import {
+  heuristicResumeParse,
+  looksLikeCompany,
+  looksLikeSchool,
+  newId,
+  normalizeCompany,
+  profileFromResume,
+  resumeProfileChanges,
+  summarySentence,
+} from '@orbit/core';
 import { db } from '../db/schema';
-import { hasLlm, llmResumeParse } from '../integrations/anthropic';
+import { claudeReachable, llmResumeParse } from '../integrations/anthropic';
 import { surfaceLlmFailure } from './brief';
+import { updateProfile } from './settings';
 
 export const MAX_RESUME_BYTES = 10 * 1024 * 1024;
 
@@ -203,7 +213,21 @@ export async function currentResumeFacets(userId: string): Promise<ResumeFacet[]
   return facets.filter((f) => !f.excluded);
 }
 
-export async function saveResume(user: User, file: File): Promise<{ resume: Resume; facets: ResumeFacet[] }> {
+/**
+ * A model's education line whose place is an employer (a two-column PDF ran a job into the Education column): it is
+ * read as a job, so the employer never becomes the student's school.
+ */
+function employerNotSchool(f: ResumeFacet): ResumeFacet {
+  if (f.kind !== 'education' || !f.organizationName) return f;
+  return looksLikeCompany(f.organizationName) && !looksLikeSchool(f.organizationName)
+    ? { ...f, kind: 'experience' }
+    : f;
+}
+
+export async function saveResume(
+  user: User,
+  file: File,
+): Promise<{ resume: Resume; facets: ResumeFacet[]; proposal?: ResumeProfile }> {
   const text = await extractTextFromFile(file);
   const now = new Date().toISOString();
   await db.resumes.where('userId').equals(user.id).modify({ isCurrent: false });
@@ -216,11 +240,15 @@ export async function saveResume(user: User, file: File): Promise<{ resume: Resu
     createdAt: now,
   };
   await db.resumes.add(resume);
-  let facets = hasLlm()
+  // Claude reads it with the student's own key (the resume switch on) or through Orbit's shared access; Orbit's own
+  // parser otherwise, or when that fails
+  let facets = claudeReachable('resume', 'resume')
     ? await llmResumeParse(text, resume.id).catch((e) => surfaceLlmFailure(user.id, e))
     : undefined;
   const source: Resume['parseSource'] = facets ? 'llm' : 'heuristic';
-  facets = facets ?? heuristicResumeParse(text, resume.id, { name: user.fullName || undefined });
+  facets =
+    facets?.map(employerNotSchool) ??
+    heuristicResumeParse(text, resume.id, { name: user.fullName || undefined });
   // a model-written summary gets the same rules as the heuristic one: one "<Name> is ..." sentence, or none
   facets = facets.flatMap((f) => {
     if (f.kind !== 'summary') return [f];
@@ -237,7 +265,74 @@ export async function saveResume(user: User, file: File): Promise<{ resume: Resu
   );
   await db.resumeFacets.bulkAdd(facets);
   await db.resumes.update(resume.id, { parsedAt: now, parseSource: source });
-  return { resume: { ...resume, parsedAt: now, parseSource: source }, facets };
+  // the school, majors and year the resume states, offered (never set) where the profile says something else
+  const proposal = resumeProfileChanges(user, profileFromResume(facets));
+  if (proposal) await db.kv.put({ key: proposalKey(user.id), value: { resumeId: resume.id, ...proposal } });
+  else await db.kv.delete(proposalKey(user.id));
+  return { resume: { ...resume, parsedAt: now, parseSource: source }, facets, proposal };
+}
+
+// ---- the profile, from the resume ----------------------------------------------------------------------------------
+
+const proposalKey = (userId: string) => `resumeProfile:${userId}`;
+
+/**
+ * What the current resume says about the student's school, majors, degree and graduation year that their profile
+ * does not, while that is still so and they have not said no. Never an employer as the school.
+ */
+export async function resumeProposal(userId: string): Promise<ResumeProfile | undefined> {
+  const row = (await db.kv.get(proposalKey(userId)))?.value as
+    | (ResumeProfile & { resumeId: string; dismissed?: boolean })
+    | undefined;
+  if (!row || row.dismissed) return undefined;
+  const [user, resume] = await Promise.all([db.users.get(userId), db.resumes.get(row.resumeId)]);
+  if (!user || !resume?.isCurrent) return undefined;
+  const { resumeId: _r, dismissed: _d, ...offer } = row;
+  return resumeProfileChanges(user, offer);
+}
+
+/** Use what the resume says (all of it, or the fields named) in the profile; the offer is then closed. */
+export async function acceptResumeProposal(
+  userId: string,
+  fields?: (keyof ResumeProfile)[],
+): Promise<User | undefined> {
+  const offer = await resumeProposal(userId);
+  if (!offer) return undefined;
+  const pick = <K extends keyof ResumeProfile>(k: K) =>
+    (!fields || fields.includes(k)) && offer[k] !== undefined;
+  const user = await updateProfile(userId, {
+    ...(pick('school') && offer.school && looksLikeSchool(offer.school) ? { school: offer.school } : {}),
+    ...(pick('majors') ? { majors: offer.majors } : {}),
+    ...(pick('graduationYear') ? { graduationYear: offer.graduationYear } : {}),
+    ...(pick('degree') ? { degree: offer.degree } : {}),
+  });
+  await db.kv.delete(proposalKey(userId));
+  return user;
+}
+
+/** The student said no: the offer stays closed until another resume is uploaded. */
+export async function dismissResumeProposal(userId: string): Promise<void> {
+  const row = (await db.kv.get(proposalKey(userId)))?.value as Record<string, unknown> | undefined;
+  if (row) await db.kv.put({ key: proposalKey(userId), value: { ...row, dismissed: true } });
+}
+
+/** "school University of Michigan, majors Computer Science, class of 2027", for the chat and the offer card. */
+export function describeResumeProfile(p: ResumeProfile): string {
+  return [
+    p.school ? `school ${p.school}` : '',
+    p.degree ? `degree ${p.degree}` : '',
+    p.majors?.length ? `${p.majors.length > 1 ? 'majors' : 'major'} ${p.majors.join(', ')}` : '',
+    p.graduationYear ? `class of ${p.graduationYear}` : '',
+  ]
+    .filter(Boolean)
+    .join(', ');
+}
+
+/** The snapshot's line for an open offer, so the chat asks before changing the profile. */
+export async function resumeProposalLine(userId: string): Promise<string | undefined> {
+  const p = await resumeProposal(userId);
+  if (!p) return undefined;
+  return `Their resume says ${describeResumeProfile(p)}, which their profile does not. Offer once to use it in their profile; only on a yes call update_settings (section profile) with those fields.`;
 }
 
 /** Tick or untick a line Orbit read from the resume; an unticked line is never used to describe the student. */

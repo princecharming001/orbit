@@ -5,6 +5,7 @@ import { DEMO_USER_ID } from '../../engine/demo';
 import { activeGoals, goalLine } from '../../engine/goals';
 import { liveLinkedInAvailable } from '../../engine/linkedinLive';
 import { rememberedLines } from '../../engine/memory';
+import { resumeProposalLine } from '../../engine/resume';
 import { googleStatus, syncStatusNow } from '../../engine/serverSync';
 import { todayCards } from '../../engine/today';
 import { villageAvailable } from '../../engine/warmIntros';
@@ -85,12 +86,12 @@ export async function buildSnapshot(
   opts: { lastUserText?: string } = {},
 ): Promise<Snapshot> {
   const account = isServerUser(userId);
-  const remembered = account
-    ? rememberedLines({ id: userId }, opts.lastUserText, {
-        signal: AbortSignal.timeout(REMEMBERED_TIMEOUT_MS),
-        maxChars: REMEMBERED_MAX_CHARS,
-      }).catch(() => [] as string[])
-    : Promise.resolve([] as string[]);
+  // the server's memories in account mode, this browser's otherwise (engine/memory.ts picks)
+  const remembered = rememberedLines({ id: userId }, opts.lastUserText, {
+    signal: AbortSignal.timeout(REMEMBERED_TIMEOUT_MS),
+    maxChars: REMEMBERED_MAX_CHARS,
+  }).catch(() => [] as string[]);
+  const resumeOffer = resumeProposalLine(userId).catch(() => undefined);
   const [user, goals, chats, suggestions, briefs, outbound, integrations, people, targets, resumes, goalsV3] =
     await Promise.all([
       db.users.get(userId),
@@ -226,11 +227,13 @@ export async function buildSnapshot(
 
   const memory = await remembered;
   const offered = account ? offeredGoalLine(userId) : undefined;
+  const resumeLine = await resumeOffer;
   const lines = [
     `Student: ${student}.${goalBits.length ? ` Goals: ${goalBits.join(', ')}.` : ''}`,
     `Active goals (ids): ${goalsV3.length ? goalsV3.map((g) => `${g.id} ${goalLine(g)}`).join('; ') : 'none tracked'}.`,
     ...(memory.length ? [`Remembered (ids): ${memory.join('; ')}.`] : []),
     ...(offered ? [offered] : []),
+    ...(resumeLine ? [resumeLine] : []),
     `Pipeline (chats by stage, ${chats.filter((c) => !c.archivedAt).length} total): ${pipeline || 'empty'}. People: ${humans}.`,
     `Today's brief (ids): ${cardLines.length ? cardLines.join('; ') : 'nothing pending'}${moreCards ? `; ${moreCards} more` : ''}.`,
     `Drafts unsent: ${draftLine}.${inFlight ? ` In flight (queued or handed off): ${inFlight}.` : ''}`,

@@ -1,4 +1,5 @@
 import type { ResumeFacet } from '../types';
+import { looksLikeCompany, looksLikeSchool } from './schools';
 
 const SKILL_SPLIT = /[,;•|·]/;
 const MONTH = '(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\\.?';
@@ -25,7 +26,7 @@ const TITLE_WORDS =
   /\b(intern(ship)?|analyst|engineer(ing)?|developer|associate|president|vice president|vp|founder|co-founder|cofounder|manager|director|consultant|assistant|researcher|research|teaching|ta|fellow|member|lead|leader|chair|chairperson|officer|treasurer|secretary|captain|coordinator|designer|scientist|specialist|representative|tutor|mentor|volunteer|head|owner|contractor|trader|banker|advisor|ambassador|organizer|editor|writer|counselor|instructor)\b/i;
 const SCHOOL_WORDS = /\b(university|college|institute|school|academy|polytechnic|conservatory)\b/i;
 const DEGREE_WORDS =
-  /(^|\s)(b\.?\s?s\.?(e\.?)?|b\.?\s?a\.?|a\.?\s?b\.?|s\.?\s?b\.?|b\.?\s?sc\.?|b\.?\s?eng\.?|b\.?\s?f\.?\s?a\.?|bba|bsba|m\.?\s?s\.?|m\.?\s?a\.?|m\.?\s?eng\.?|mba|mfa|ph\.?\s?d\.?|bachelor|master|minor|major|degree|concentration|candidate)(?=\s|,|$)/i;
+  /(^|\s)(b\.?\s?s\.?(e\.?)?|b\.?\s?a\.?|a\.?\s?b\.?|s\.?\s?b\.?|b\.?\s?sc\.?|b\.?\s?eng\.?|b\.?\s?f\.?\s?a\.?|bba|bsba|m\.?\s?s\.?|m\.?\s?a\.?|m\.?\s?eng\.?|mba|mfa|ph\.?\s?d\.?|bachelor|master|minor|major|degree|concentration|candidate|diploma|certificate)(?=\s|,|$)/i;
 
 const STOP = new Set([
   'the',
@@ -153,13 +154,31 @@ type Section =
   | 'interests'
   | 'other';
 
+/** "E D U C A T I O N" (letter-spaced capitals, as some PDF exports give them) → "EDUCATION". */
+function unspace(line: string): string {
+  if (!/^[A-Z](?: [A-Z&]){2,}(?:\s{2,}[A-Z](?: [A-Z&])+)*\s*:?$/.test(line.trim())) return line;
+  return line
+    .trim()
+    .split(/\s{2,}/)
+    .map((w) => w.replace(/ /g, ''))
+    .join(' ');
+}
+
 /**
  * Recognise a section heading, including headings with extra words ("RELEVANT EXPERIENCE",
- * "LEADERSHIP & ACTIVITIES", "EDUCATION & HONORS"). Honors, awards, certifications, coursework and
+ * "LEADERSHIP & ACTIVITIES", "EDUCATION & HONORS", "Entrepreneurial Experience", "Work experience"), letter-spaced
+ * capitals and a rule after the words ("EXPERIENCE ______"). Honors, awards, certifications, coursework and
  * "additional information" map to 'other', whose lines are not turned into facets.
  */
 export function resumeSectionOf(rawLine: string): Section | undefined {
-  const line = rawLine.replace(/^#+\s*/, '').trim();
+  const line = unspace(
+    rawLine
+      .replace(/^#+\s*/, '')
+      // a rule drawn after the heading, and "(selected)" / "(cont.)" after it
+      .replace(/\s*[_=~.·•–—-]{3,}\s*$/, '')
+      .replace(/\s*\((?:selected|cont(?:inued|'d|\.)?|recent|relevant)\)\s*$/i, '')
+      .trim(),
+  ).trim();
   if (!line || /^[-•*▪◦●]/.test(line)) return undefined;
   const bare = line.replace(/[:\s]+$/, '');
   // "Languages: Go, Python" is a labelled line inside a section, not a heading
@@ -171,12 +190,22 @@ export function resumeSectionOf(rawLine: string): Section | undefined {
   const letters = bare.replace(/[^A-Za-z]/g, '');
   const upper = letters.length > 0 && letters === letters.toUpperCase();
   const titled = words.every((w) => /^[A-Z&/,]|^(and|of|the|for|in)$/.test(w));
-  if (!upper && !titled && !line.endsWith(':')) return undefined;
   const l = bare.toLowerCase();
-  // every word must be heading vocabulary ("Relevant Experience"), so "Dell Technologies" is not a heading;
-  // a line in capitals may carry up to two other words when it has a strong section keyword
   const unknown = l.split(/[\s&/,]+/).filter((w) => w && !HEADING_WORDS.has(w)).length;
-  if (unknown > (upper && STRONG_HEADING.test(l) ? 2 : 0)) return undefined;
+  // "Work experience": sentence case, every word heading vocabulary, a strong section word
+  const sentence = /^[A-Z]/.test(bare) && unknown === 0 && STRONG_HEADING.test(l);
+  if (!upper && !titled && !sentence && !line.endsWith(':')) return undefined;
+  // every word must be heading vocabulary ("Relevant Experience"), so "Dell Technologies" is not a heading;
+  // a line in capitals may carry up to two other words when it has a strong section keyword, and a short title-case
+  // line one ("Entrepreneurial Experience") when it ends with that keyword and names no role
+  const lastStrong = STRONG_HEADING.test(words[words.length - 1]!.toLowerCase());
+  const allowed =
+    upper && STRONG_HEADING.test(l)
+      ? 2
+      : titled && lastStrong && words.length <= 3 && !TITLE_WORDS.test(bare)
+        ? 1
+        : 0;
+  if (unknown > allowed) return undefined;
   if (/\b(projects?|portfolio)\b/.test(l)) return 'project';
   if (/\b(education|academics?)\b/.test(l)) return 'education';
   if (
@@ -195,6 +224,27 @@ export function resumeSectionOf(rawLine: string): Section | undefined {
   )
     return 'other';
   return undefined;
+}
+
+/**
+ * A heading with the section's first line beside it, as two-column PDFs and tab-separated exports give them:
+ * "EXPERIENCE   Amma Health Inc.   San Francisco, CA", "EDUCATION\tUniversity of Texas at Austin   May 2026". Returns the
+ * section and what follows the heading (undefined when the whole line is the heading), or undefined when the line
+ * does not start with a heading.
+ */
+export function resumeHeadingOf(rawLine: string): { section: Section; rest?: string } | undefined {
+  const whole = resumeSectionOf(rawLine);
+  if (whole) return { section: whole };
+  const line = rawLine.replace(/^#+\s*/, '').trim();
+  const m = line.match(/^(.+?)(?:\s{3,}|\t+|\s*[:|]\s{2,})(\S.*)$/);
+  if (!m) return undefined;
+  const head = m[1]!.replace(/:$/, '').trim();
+  const letters = head.replace(/[^A-Za-z]/g, '');
+  // only a heading in capitals, or a strong one ("Experience"), may have the section's first line beside it
+  if (!(letters && letters === letters.toUpperCase()) && !STRONG_HEADING.test(head.toLowerCase()))
+    return undefined;
+  const section = resumeSectionOf(head);
+  return section ? { section, rest: m[2]!.trim() } : undefined;
 }
 
 // the glyphs resumes and PDF-to-text use for a bullet, including the middle dot and the private-use dot from Word
@@ -225,7 +275,14 @@ const isRule = (l: string) => /^[\W_]+$/.test(l);
 function fixCaps(s: string): string {
   const letters = s.replace(/[^A-Za-z]/g, '');
   if (!letters || letters !== letters.toUpperCase()) return s;
-  return s.replace(/[A-Za-z][A-Za-z'’]*/g, (w) => (w.length <= 3 ? w : w[0]! + w.slice(1).toLowerCase()));
+  return s.replace(/[A-Za-z][A-Za-z'’]*/g, (w) =>
+    w.length <= 3
+      ? w
+      : // "MCKINSEY" → "McKinsey", "MCDONALD'S" → "McDonald's"
+        /^MC[A-Z]{2}/.test(w)
+        ? `Mc${w[2]}${w.slice(3).toLowerCase()}`
+        : w[0]! + w.slice(1).toLowerCase(),
+  );
 }
 
 interface Entry {
@@ -242,6 +299,12 @@ interface Entry {
   body: string[];
   /** the entry opened with a role line and no employer (a second role under the same employer) */
   titleOnlyFirst: boolean;
+  /** every header part as read, so an entry filed under Education by mistake can be read again as a job */
+  parts: string[];
+  /** Education: a part that is neither a school nor a degree, kept until a degree shows it is the school's name */
+  schoolGuess?: string;
+  /** Education: a part that reads as an employer or a job title */
+  misfiled: boolean;
 }
 
 const newEntry = (section: Section): Entry => ({
@@ -251,6 +314,8 @@ const newEntry = (section: Section): Entry => ({
   extra: [],
   body: [],
   titleOnlyFirst: false,
+  parts: [],
+  misfiled: false,
 });
 
 /** A line that only carries dates and/or a location belongs to the entry above it. */
@@ -320,14 +385,24 @@ function assignParts(rawParts: string[], e: Entry): void {
       e.location ??= p;
       continue;
     }
+    e.parts.push(p);
     if (e.section === 'education') {
       const degree = DEGREE_WORDS.test(p);
-      if (SCHOOL_WORDS.test(p) && !e.org && !degree) e.org = p;
-      else if (degree && (!e.title || !DEGREE_WORDS.test(e.title))) e.title = p;
+      const school = !degree && (SCHOOL_WORDS.test(p) || looksLikeSchool(p));
+      const employer = !school && !degree && (looksLikeCompany(p) || TITLE_WORDS.test(p));
+      if (school && !e.org) e.org = p;
+      else if (degree && (!e.title || !DEGREE_WORDS.test(e.title))) {
+        // "Wesleyan" then "B.A. Economics": the name before the degree was the school's
+        if (e.title && !e.org && !looksLikeCompany(e.title) && !TITLE_WORDS.test(e.title))
+          e.schoolGuess ??= e.title;
+        e.title = p;
+      }
+      // an employer or a job title under Education (a heading Orbit did not see): never the school
+      else if (employer) e.misfiled = true;
       // "University of California, Berkeley" / "Boston University, Questrom School of Business"
       else if (e.org && !e.title && !degree) e.org = `${e.org}, ${p}`;
       else if (!e.title) e.title = p;
-      else if (!e.org) e.org = p;
+      else if (!e.org && !degree) e.schoolGuess ??= p;
       continue;
     }
     if (e.section === 'project') {
@@ -475,8 +550,24 @@ export function heuristicResumeParse(
 
   const finish = () => {
     if (!e) return;
-    const cur = e;
+    let cur = e;
     e = undefined;
+    if (cur.section === 'education' && !cur.org) {
+      const degree = !!cur.title && DEGREE_WORDS.test(cur.title);
+      if (degree && cur.schoolGuess) cur.org = cur.schoolGuess;
+      else if (!degree && (cur.misfiled || cur.body.length)) {
+        // a job under Education: read its header again as an experience entry, so the employer is never the school
+        const again = newEntry('experience');
+        again.headers = cur.headers;
+        again.range = cur.range;
+        again.single = cur.single;
+        again.location = cur.location;
+        again.body = cur.body;
+        again.details = cur.details;
+        assignParts(cur.parts, again);
+        cur = again;
+      }
+    }
     if (!cur.title && !cur.org && !cur.body.length) return;
     // a role line straight after another role's bullets, with no employer of its own: same employer
     if (!cur.org && cur.title && cur.titleOnlyFirst && cur.section === 'experience' && lastOrg)
@@ -513,14 +604,16 @@ export function heuristicResumeParse(
   };
 
   for (const raw of lines) {
-    const line = raw.trim();
+    let line = raw.trim();
     if (!line || isRule(line)) continue;
-    const sec = resumeSectionOf(line);
-    if (sec) {
+    const heading = resumeHeadingOf(line);
+    if (heading) {
       finish();
-      section = sec;
+      section = heading.section;
       lastOrg = undefined;
-      continue;
+      if (!heading.rest) continue;
+      // the section's first line was beside its heading
+      line = heading.rest;
     }
     if (section === 'header') {
       if (CONTACT.test(line) || /[|·•]/.test(line)) continue;
@@ -625,7 +718,9 @@ export function heuristicResumeParse(
       section === 'education' &&
       e.org &&
       !e.body.length &&
-      /\b(gpa|coursework|honors|dean|minor|thesis)\b/i.test(line)
+      /\b(gpa|coursework|honors|dean|minor|thesis)\b/i.test(line) &&
+      // "B.S. Information Systems, Minor in Statistics" is the degree line, not a detail under it
+      (!!e.title || !DEGREE_WORDS.test(line.split(/,|\s{3,}|\t/)[0]!))
     ) {
       e.details.push(line);
       continue;

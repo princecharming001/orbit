@@ -5259,7 +5259,10 @@ function facetLines(parsed) {
   const list = (v) => Array.isArray(v) ? v : [];
   for (const f of list(parsed.facets)) {
     const o = f;
-    const t = [o.title ?? o.role, o.org ?? o.organization, o.text].filter((x) => typeof x === "string");
+    if (o.excluded === true) continue;
+    const t = [o.title ?? o.role, o.org ?? o.organization ?? o.organizationName, o.text].filter(
+      (x) => typeof x === "string"
+    );
     if (t.length) out.push(t.join(", "));
   }
   for (const e of list(parsed.experiences ?? parsed.experience)) {

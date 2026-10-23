@@ -262,6 +262,54 @@ describe('cadence/due', () => {
 });
 
 describe('settings/profile (§14.3)', () => {
+  it('keeps the student profile the browser sends (plan 17 §G): school, degree, majors, year and city', async () => {
+    const call = api(t, fakeNet(), { env: {} });
+    const { userId, token } = await signedInUser(t);
+    const r = await call<Record<string, unknown>>('/settings/profile', token, {
+      school: 'University of Michigan',
+      degree: 'B.S.E.',
+      majors: ['Computer Science', ' Economics '],
+      graduationYear: 2027,
+      currentCity: 'Ann Arbor',
+    });
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({
+      school: 'University of Michigan',
+      degree: 'B.S.E.',
+      majors: ['Computer Science', 'Economics'],
+      graduationYear: 2027,
+      currentCity: 'Ann Arbor',
+    });
+    const [u] = await t.db.sql<Record<string, unknown>>`
+      select school, degree, majors, grad_year, current_city from orbit.users where id = ${userId}::uuid`;
+    expect(u).toEqual({
+      school: 'University of Michigan',
+      degree: 'B.S.E.',
+      majors: ['Computer Science', 'Economics'],
+      grad_year: 2027,
+      current_city: 'Ann Arbor',
+    });
+    // a field left out is kept; null or '' clears; the time zone alone leaves the profile as it was
+    await call('/settings/profile', token, { currentCity: '', graduationYear: null });
+    await call('/settings/profile', token, { timezone: 'America/Detroit' });
+    const [after] = await t.db.sql<Record<string, unknown>>`
+      select school, majors, grad_year, current_city from orbit.users where id = ${userId}::uuid`;
+    expect(after).toEqual({
+      school: 'University of Michigan',
+      majors: ['Computer Science', 'Economics'],
+      grad_year: null,
+      current_city: null,
+    });
+    for (const bad of [
+      { school: 'x'.repeat(201) },
+      { majors: 'CS' },
+      { majors: Array.from({ length: 7 }, (_, i) => `M${i}`) },
+      { graduationYear: 'next year' },
+      { graduationYear: 3000 },
+    ])
+      expect((await call('/settings/profile', token, bad)).status, JSON.stringify(bad)).toBe(400);
+  });
+
   it('remembers that setup was finished, so another device skips it', async () => {
     const call = api(t, fakeNet(), { env: {} });
     const { userId, token } = await signedInUser(t);
@@ -286,7 +334,7 @@ describe('settings/profile (§14.3)', () => {
       },
     );
     expect(r.status).toBe(200);
-    expect(r.body).toEqual({
+    expect(r.body).toMatchObject({
       postalAddress: '1 Main St, Palo Alto, CA 94301',
       schedulingLink: 'https://cal.com/sam/20min',
       timezone: 'America/Los_Angeles',

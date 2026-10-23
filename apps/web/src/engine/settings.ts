@@ -80,8 +80,21 @@ export async function updateProfile(userId: string, patch: ProfilePatch): Promis
   if (patch.majors !== undefined) changes.majors = patch.majors.map((m) => m.trim()).filter(Boolean);
   if (patch.timezone !== undefined && !patch.timezone.trim()) delete changes.timezone;
   await db.users.update(userId, changes);
-  if (changes.timezone && changes.timezone !== user.timezone)
-    await pushProfileSettings(userId, { timezone: changes.timezone });
+  // account mode: the server's drafts and research introduce the student with their school, degree, majors, year and
+  // city, so those go up with the time zone whenever they change
+  const push: ProfileSettingsRequest = {};
+  if (changes.timezone && changes.timezone !== user.timezone) push.timezone = changes.timezone;
+  if ('school' in changes && (changes.school ?? '') !== (user.school ?? ''))
+    push.school = changes.school || null;
+  if ('degree' in changes && (changes.degree ?? '') !== (user.degree ?? ''))
+    push.degree = changes.degree ?? null;
+  if ('majors' in changes && JSON.stringify(changes.majors ?? []) !== JSON.stringify(user.majors ?? []))
+    push.majors = changes.majors ?? [];
+  if ('graduationYear' in changes && changes.graduationYear !== user.graduationYear)
+    push.graduationYear = changes.graduationYear ?? null;
+  if ('currentCity' in changes && (changes.currentCity ?? '') !== (user.currentCity ?? ''))
+    push.currentCity = changes.currentCity ?? null;
+  if (Object.keys(push).length) await pushProfileSettings(userId, push);
   return db.users.get(userId);
 }
 

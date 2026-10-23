@@ -3,11 +3,12 @@
  * account mode they live on the server (/goals/*) and the browser keeps a copy; in local mode they live in the
  * browser's `userGoals` table. The v1 recruiting details (functions, pace, cycle) stay in the `goals` row.
  */
-import type { ChatTurn, Goal, GoalKind, ProposedGoal, User } from '@orbit/core';
-import { GOAL_KINDS, newId } from '@orbit/core';
+import type { ChatTurn, Goal, GoalKind, ProposedGoal, RecruitingGoals, User } from '@orbit/core';
+import { functionCodeFor, functionsIn, GOAL_KINDS, industriesIn, locationsIn, newId } from '@orbit/core';
 import { db } from '../db/schema';
 import { type ApiFailure, callApi, isAccountMode, isServerUser, isSignedIn } from '../integrations/orbitApi';
 import { writeFromServer } from './serverSync';
+import { addTargetCompany } from './targets';
 
 export const MAX_ACTIVE_GOALS = 5;
 
@@ -127,10 +128,186 @@ export async function saveGoal(user: Pick<User, 'id'>, input: GoalInput, now = n
     });
     if (!r.ok) throw serverError(r);
     await writeFromServer('goals', [r.value.goal], user.id);
-    return (await db.userGoals.get(r.value.goal.id)) ?? r.value.goal;
+    const saved = (await db.userGoals.get(r.value.goal.id)) ?? r.value.goal;
+    await mirrorRecruitingGoal(user.id, saved);
+    return saved;
   }
   await db.userGoals.put(goal);
+  await mirrorRecruitingGoal(user.id, goal);
   return goal;
+}
+
+// ---- one recruiting goal everywhere ----------------------------------------------------------------------------------
+
+/**
+ * Recruiting targets in the names the readers use: function codes, the roles the Goals page shows, industries,
+ * places and companies. Drafts read the cycle and functions from the `goals` row, recommendations its functions and
+ * industries plus the target companies, and the chat the goal records; every write goes to all of them.
+ */
+export interface RecruitingTargets {
+  functions?: string[];
+  roles?: string[];
+  industries?: string[];
+  locations?: string[];
+  organizations?: string[];
+  cycleLabel?: string;
+  /** what the student said they are after, for a new goal's title */
+  phrase?: string;
+  stage?: string;
+}
+
+const lower = (s: string) => s.trim().toLowerCase();
+/** "New York" and "NYC" are one place, "fintech" and "Fintech" one industry. */
+const samePlace = (s: string) => lower(locationsIn(s)[0] ?? s);
+const sameIndustry = (s: string) => lower(industriesIn(s)[0] ?? s);
+
+/** `have` plus whatever in `add` is not already there (by `key`, ignoring case); the new ones listed separately. */
+function joinLists(
+  have: string[],
+  add: string[] | undefined,
+  key: (s: string) => string = lower,
+): { list: string[]; added: string[] } {
+  const seen = new Set(have.map(key));
+  const added: string[] = [];
+  for (const a of add ?? []) {
+    const t = a.trim();
+    if (!t || seen.has(key(t))) continue;
+    seen.add(key(t));
+    added.push(t);
+  }
+  return { list: [...have, ...added], added };
+}
+
+export interface RecruitingChange {
+  goals: RecruitingGoals;
+  /** what was new, by field */
+  added: Required<
+    Pick<RecruitingTargets, 'functions' | 'roles' | 'industries' | 'locations' | 'organizations'>
+  >;
+  cycleChanged: boolean;
+}
+
+/** Add targets to the `goals` row (creating it when missing) and the target companies. Never removes anything. */
+export async function mergeRecruitingRow(userId: string, t: RecruitingTargets): Promise<RecruitingChange> {
+  const cur = await db.goals.get(userId);
+  const functions = joinLists(cur?.targetFunctions ?? [], t.functions);
+  const roles = joinLists(cur?.targetRoles ?? [], t.roles);
+  const industries = joinLists(cur?.targetIndustries ?? [], t.industries, sameIndustry);
+  const locations = joinLists(cur?.targetLocations ?? [], t.locations, samePlace);
+  const cycleChanged = !!t.cycleLabel && t.cycleLabel !== cur?.cycleLabel;
+  const goals: RecruitingGoals = {
+    userId,
+    cycleLabel: (cycleChanged ? t.cycleLabel : cur?.cycleLabel)?.trim() || 'This cycle',
+    targetRoles: roles.list,
+    targetFunctions: functions.list,
+    targetIndustries: industries.list,
+    targetLocations: locations.list,
+    freeText: cur?.freeText,
+    ambition: cur?.ambition ?? 2,
+  };
+  const changed =
+    !cur ||
+    cycleChanged ||
+    functions.added.length + roles.added.length + industries.added.length + locations.added.length > 0;
+  if (changed) await db.goals.put(goals);
+  const organizations: string[] = [];
+  for (const o of t.organizations ?? [])
+    if ((await addTargetCompany(userId, o)) === 'added') organizations.push(o);
+  return {
+    goals,
+    added: {
+      functions: functions.added,
+      roles: roles.added,
+      industries: industries.added,
+      locations: locations.added,
+      organizations,
+    },
+    cycleChanged,
+  };
+}
+
+/**
+ * A recruiting goal record's targets, written into the `goals` row and the target companies that drafts and
+ * recommendations read (set_goal for recruiting, or a goal edited in the chat).
+ */
+export async function mirrorRecruitingGoal(userId: string, g: Goal): Promise<RecruitingChange | undefined> {
+  if (g.kind !== 'recruiting' || g.status !== 'active' || g.deletedAt) return undefined;
+  const c = g.criteria as Record<string, unknown>;
+  const sector = typeof c.sector === 'string' ? c.sector : '';
+  const functions = [
+    ...g.targets.roles.map((r) => functionCodeFor(r)).filter((f): f is string => !!f),
+    ...functionsIn([g.title, ...g.targets.roles].join(' , ')),
+  ];
+  const industries = sector ? (industriesIn(sector).length ? industriesIn(sector) : [sector.trim()]) : [];
+  const locations = g.targets.geographies.flatMap((p) =>
+    locationsIn(p).length ? locationsIn(p) : [p.trim()],
+  );
+  return mergeRecruitingRow(userId, {
+    functions,
+    roles: g.targets.roles,
+    industries,
+    locations,
+    organizations: g.targets.organizations,
+  });
+}
+
+const capFirst = (s: string) => (s ? s[0]!.toUpperCase() + s.slice(1) : s);
+
+/**
+ * Targets the student stated in chat, applied everywhere at once: the `goals` row and target companies (drafts,
+ * recommendations, the Goals page) and the active recruiting goal record (the chat), created when there is none and
+ * fewer than five goals are active. Lists only grow; nothing the student set is removed.
+ */
+export async function applyRecruitingTargets(
+  user: Pick<User, 'id'>,
+  t: RecruitingTargets,
+  opts: { evidence?: string; now?: Date } = {},
+): Promise<RecruitingChange & { goal?: Goal }> {
+  const change = await mergeRecruitingRow(user.id, t);
+  const active = await activeGoals(user.id);
+  const existing = active.find((g) => g.kind === 'recruiting');
+  const criteria: Record<string, unknown> = { ...(existing?.criteria ?? {}) };
+  if (t.industries?.length && typeof criteria.sector !== 'string') criteria.sector = t.industries.join(', ');
+  if (t.stage && typeof criteria.stage !== 'string') criteria.stage = t.stage;
+  let goal: Goal | undefined;
+  try {
+    if (existing) {
+      const targets = {
+        organizations: joinLists(existing.targets.organizations, t.organizations).list,
+        roles: joinLists(existing.targets.roles, t.roles).list,
+        geographies: joinLists(existing.targets.geographies, t.locations, samePlace).list,
+        people: existing.targets.people,
+      };
+      const same =
+        JSON.stringify(targets) === JSON.stringify(existing.targets) &&
+        JSON.stringify(criteria) === JSON.stringify(existing.criteria);
+      goal = same
+        ? existing
+        : await saveGoal(user, { id: existing.id, kind: 'recruiting', targets, criteria }, opts.now);
+    } else if (active.length < MAX_ACTIVE_GOALS) {
+      const title = capFirst((t.phrase ?? '').replace(/\s+/g, ' ').trim()).slice(0, 60) || undefined;
+      goal = await saveGoal(
+        user,
+        {
+          kind: 'recruiting',
+          title,
+          targets: {
+            organizations: t.organizations ?? [],
+            roles: t.roles ?? [],
+            geographies: t.locations ?? [],
+            people: [],
+          },
+          criteria,
+          source: 'inferred',
+          evidence: opts.evidence?.slice(0, 400),
+        },
+        opts.now,
+      );
+    }
+  } catch {
+    // the goal record is a bonus here: the row drafts and recommendations read is already updated
+  }
+  return { ...change, goal };
 }
 
 /** Archive a goal: it stops steering drafts and sourcing; its chats stay. */
