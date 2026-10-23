@@ -959,7 +959,10 @@ function routeInner(raw: string, ctx: RouterContext): RouterIntent {
 
   // hide someone from the lists
   {
-    const m = text.match(/^(?:hide|mute)\s+(.+?)(?:\s+from (?:my )?(?:lists|people|everything))?$/i);
+    // not the chat's own reasoning ("hide the grey text"), which routerMore reads
+    const m = text.match(
+      /^(?:hide|mute)\s+(?!(?:the |your |orbit'?s )?(?:grey|gray|reasoning|thinking|thought))(.+?)(?:\s+from (?:my )?(?:lists|people|everything))?$/i,
+    );
     if (m) {
       const r = person(m[1]!);
       if (r.person) return viaTool('hide_person', { personId: r.person.id }, undefined, 'hide a person');

@@ -153,7 +153,7 @@ const words = (s: string) => s.split(/\s+/).filter(Boolean).length;
 const APP_WORDS =
   `Calendly Jordan Lee Figma Tom example Triage Available Connect Connected Saved Line Lines Unsent Started Opened Snoozed Facts Reset Label Link Local Outreach Person Cooldown Hours Cap Bumps Enabled Days Functions Industries Locations Roles Cycle Ambition Brief Channels Quiet Weekly Daily Max Tone Style Scheduling Learned Domain Graduation ${Object.values(STAGE_LABELS).join(' ')} ${Object.values(MESSAGE_KIND_LABELS).join(' ')} Preset Hidden Orbit Gmail Google LinkedIn Claude Anthropic Calendar Settings Drafts Draft Today Pipeline People Map Discover
 Notes Note Profile Integrations Integration Goals Goal Writing Limits Data Privacy Approve Cancel Reach Inbox Outbox Send Sent
-Open Show Hide Write Thank Follow Check Congratulate Propose Reply Ask Find Add Prep Who Warm Weak Close Recent Questions
+Open Show Hide Reasoning Write Thank Follow Check Congratulate Propose Reply Ask Find Add Prep Who Warm Weak Close Recent Questions
 I I'm I'll I've You You're Your We Here There This That These Those Nothing Nobody Someone Everyone Anytime Okay Sure Great
 Hey Hi Hello Good Morning Afternoon Evening Monday Tuesday Wednesday Thursday Friday Saturday Sunday January February March
 April May June July August September October November December Jan Feb Mar Apr Jun Jul Aug Sep Sept Oct Nov Dec Mon Tue Wed

@@ -1932,7 +1932,7 @@ export function routeMore(
   // ---- the chat itself ----
   {
     const reasoning = lower.match(
-      /^(?:(show|hide)|turn (on|off)) (?:your |the |orbit'?s )?(?:reasoning|thinking(?: notes)?|thought process|grey (?:notes|text|lines))(?: notes| lines)?$/,
+      /^(?:(show|hide)|turn (on|off)) (?:your |the |orbit'?s )?(?:reasoning|thinking(?: notes)?|thought process|gr[ae]y (?:notes|text|lines))(?: notes| lines)?$/,
     );
     if (reasoning) {
       const on = reasoning[1] === 'show' || reasoning[2] === 'on';

@@ -263,11 +263,12 @@ export async function saveResume(
       : f,
   );
   await db.resumeFacets.bulkAdd(facets);
-  await db.resumes.update(resume.id, { parsedAt: now, parseSource: source });
   // the school, majors and year the resume states, offered (never set) where the profile says something else
   const proposal = resumeProfileChanges(user, profileFromResume(facets));
   if (proposal) await db.kv.put({ key: proposalKey(user.id), value: { resumeId: resume.id, ...proposal } });
   else await db.kv.delete(proposalKey(user.id));
+  // last, so a resume shown as read has its lines and its offer in place (Settings waits for parsedAt)
+  await db.resumes.update(resume.id, { parsedAt: now, parseSource: source });
   return { resume: { ...resume, parsedAt: now, parseSource: source }, facets, proposal };
 }
 

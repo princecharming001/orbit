@@ -1518,9 +1518,9 @@ export const CAPABILITIES: readonly Capability[] = [
     title: 'Warm routes to several people at once, picked on a card or named',
     kind: 'read',
     utterances: [
-      'find warm routes to each of: Priya Ahmed and Elena Garcia',
-      'routes to both of them: Priya Ahmed, Elena Garcia',
-      'show the warm routes to all of: Priya Ahmed, Elena Garcia and Yuki Lopez',
+      'find warm routes to each of: Priya and Sam',
+      'routes to both of them: Priya, Tom',
+      'show the warm routes to all of: Priya, Sam and Tom',
     ],
   },
   {

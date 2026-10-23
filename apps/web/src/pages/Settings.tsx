@@ -693,8 +693,9 @@ function Integrations() {
   const li = accounts.find((a) => a.provider === 'linkedin_csv');
   const resume = useLiveQuery(
     async () =>
+      // "on file" once it is read too: the lines and the profile offer are written before parsedAt
       (await db.resumes.where('userId').equals(user.id).toArray())
-        .filter((r) => r.isCurrent)
+        .filter((r) => r.isCurrent && r.parsedAt)
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0],
     [user.id],
   );
