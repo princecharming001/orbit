@@ -4,7 +4,7 @@
  * today. It is built from what Orbit already has (the day's cards, the outbox, chats, the calendar, Discover), so it
  * never says anything Drafts or People would not.
  */
-import type { CalendarEvent, Suggestion, User, UserSettings } from '@orbit/core';
+import type { CalendarEvent, Person, Suggestion, User, UserSettings } from '@orbit/core';
 import { warmUpProgress } from '@orbit/core';
 import { db } from '../db/schema';
 import { isMessageSuggestion } from './brief';
@@ -83,6 +83,19 @@ export async function setMorningBrief(userId: string, on: boolean): Promise<void
   await db.settings.update(userId, { morningBrief: on });
 }
 
+/** A recommendation's saved reason still holds for the person as Orbit knows them now. */
+export function reasonHolds(
+  reason: { code: string; text: string },
+  person: Pick<Person, 'isAlumni' | 'strength' | 'currentTitle'>,
+): boolean {
+  if (reason.code === 'alumni') return !!person.isAlumni;
+  if (reason.code === 'warm') return person.strength >= 0.3;
+  // "Works in investment banking (Analyst)": the title it quotes is still theirs
+  const quoted = reason.code === 'function_match' ? reason.text.match(/\(([^)]+)\)$/)?.[1] : undefined;
+  if (quoted && person.currentTitle !== quoted) return false;
+  return true;
+}
+
 export async function morningDeck(
   user: Pick<User, 'id' | 'firstName' | 'timezone'>,
   now = new Date(),
@@ -139,8 +152,10 @@ export async function morningDeck(
 
   // what is worth doing today beyond the decisions: chats to prep, warm-up steps due, people to write to, Discover
   const moves: MorningMove[] = [];
+  const chatById = new Map(chats.map((c) => [c.id, c]));
   for (const e of todays) {
-    const p = byId.get(e.attendeePersonIds[0]!);
+    // the person the chat is with, not whoever the invite lists first
+    const p = byId.get((e.chatId && chatById.get(e.chatId)?.personId) || e.attendeePersonIds[0]!);
     if (!p) continue;
     moves.push({
       id: `ev:${e.id}`,
@@ -180,17 +195,22 @@ export async function morningDeck(
       href: `/people/${p.id}?draft=outreach`,
       personId: p.id,
     });
-  const decided = new Set(decisions.map((s) => s.personId).filter(Boolean));
+  // one line per person: someone already in a decision or a move above is not suggested again
+  const decided = new Set(
+    [...decisions.map((s) => s.personId), ...moves.map((m) => m.personId)].filter(Boolean),
+  );
   const picks = recs
     .filter((r) => visible(r.personId) && !decided.has(r.personId))
     .sort((a, b) => b.score - a.score)
     .slice(0, Math.max(0, 4 - moves.length));
   for (const r of picks) {
     const p = byId.get(r.personId)!;
+    // a reason saved with the recommendation is said only while it still holds (an alum label taken off since)
+    const reason = r.reasons.find((x) => reasonHolds(x, p));
     moves.push({
       id: `rec:${r.id}`,
       text: `Reach out to ${p.firstName}`,
-      sub: r.reasons[0]?.text ?? [p.currentTitle, p.currentOrganizationRaw].filter(Boolean).join(' at '),
+      sub: reason?.text ?? [p.currentTitle, p.currentOrganizationRaw].filter(Boolean).join(' at '),
       href: '/discover',
       personId: p.id,
     });

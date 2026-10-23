@@ -3,6 +3,7 @@ import {
   findDuplicatePairs,
   incomingName,
   isPlaceholderName,
+  isRecruiter,
   linkedInSlug,
   nameFromEmailLocal,
   newId,
@@ -221,8 +222,8 @@ export async function upsertPerson(
   }
   if (inp.photoUrl && !target.photoUrl) changes.photoUrl = inp.photoUrl;
   if (inp.school && inp.school !== target.school && canWrite('school', target.school)) {
+    // the same school is not evidence they graduated from it (a classmate, a professor): engine/alumni.ts decides
     changes.school = inp.school;
-    changes.isAlumni = !!inp.userSchool && normalizeCompany(inp.userSchool) === normalizeCompany(inp.school);
     wrote('school');
   }
   // a stand-in name derived from the address ("erodriguez") gives way to the first real name we see
@@ -288,9 +289,9 @@ export async function upsertPerson(
       location: inp.location,
       photoUrl: inp.photoUrl,
       school: inp.school,
-      isAlumni:
-        !!inp.school && !!inp.userSchool && normalizeCompany(inp.school) === normalizeCompany(inp.userSchool),
-      relationshipType: /recruit/i.test(title ?? '') ? 'recruiter' : 'unknown',
+      // alumni only from evidence they studied there (engine/alumni.ts), never from the same school string
+      isAlumni: false,
+      relationshipType: isRecruiter(title) ? 'recruiter' : 'unknown',
       strength: 0,
       interactionCount: 0,
       sources: [inp.source],

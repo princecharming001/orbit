@@ -249,6 +249,7 @@ export interface DraftContext {
   history?: {
     lastAt: string;
     lastInbound: boolean;
+    /** a real two-way exchange: they wrote to the student directly (not a group or a CC) and the student wrote to them */
     repliedEver: boolean;
     /** the app's id for the thread the outreach replies in, when it picks that thread back up */
     threadId?: string;
@@ -1067,6 +1068,9 @@ function reconnectLine(ctx: DraftContext, c: Connection, now: Date): string {
   // the student wrote last, recently: say so, never "we traded emails", which hides who is waiting on whom
   const own = ownNoteLabel(c, now, tz);
   if (own) return `Following up on my note ${own}${about}.`;
+  // "we traded emails" only for a real exchange: they wrote to the student and the student wrote to them
+  if (ctx.history && !ctx.history.repliedEver)
+    return `I wrote to you${since ? ` ${since}` : ''}${about}, and wanted to follow up.`;
   return `We traded emails${since ? ` ${since}` : ''}${about}, and I wanted to pick that conversation back up.`;
 }
 

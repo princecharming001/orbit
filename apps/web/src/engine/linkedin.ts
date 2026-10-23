@@ -1,10 +1,17 @@
-import type { LinkedInConnectionRow, User } from '@orbit/core';
-import { newId, normalizeCompany, parseConnectedOn, parseConnectionsCsv } from '@orbit/core';
+import type { LinkedInConnectionRow, Person, PersonField, PersonSource, User } from '@orbit/core';
+import {
+  isRecruiter,
+  newId,
+  normalizeCompany,
+  parseConnectedOn,
+  parseConnectionsCsv,
+  roleFromHeadline,
+} from '@orbit/core';
 import { addTouchpoint, recomputeAllStrengths } from '../db/repo';
 import { db } from '../db/schema';
 import { generateBrief, recommendationsRefresh } from './brief';
 import { recomputeEdges } from './graph';
-import { loadPeopleCache, suggestDuplicateMerges, upsertPerson } from './people';
+import { loadPeopleCache, suggestDuplicateMerges, upsertOrganization, upsertPerson } from './people';
 import { freshPhoto } from './photos';
 
 export async function importConnectionsCsv(
@@ -137,12 +144,17 @@ export async function importLiveConnections(
   onProgress?: (done: number, total: number) => void,
 ): Promise<{ imported: number; updated: number; skipped: number }> {
   const kept = connections.filter((c) => c.firstName.trim() || c.lastName.trim());
-  const rows: LinkedInConnectionRow[] = kept.map((c) => ({
+  // A live connection's "position" is LinkedIn's headline when no company comes with it ("Former Analyst at
+  // Goldman | MBA @ Wharton"): what they wrote about themselves, not their profile's current role. It is kept as
+  // the headline and only fills a missing title or company (below), never overrides one, and never reads as a job
+  // change; a title or company from their profile's experience (enrichment) or the student always wins.
+  const headlines = kept.map((c) => (!c.company?.trim() && c.position?.trim()) || undefined);
+  const rows: LinkedInConnectionRow[] = kept.map((c, i) => ({
     firstName: c.firstName.trim(),
     lastName: c.lastName.trim(),
     url: c.url?.trim() || undefined,
     company: c.company?.trim() || undefined,
-    position: c.position?.trim() || undefined,
+    position: headlines[i] ? undefined : c.position?.trim() || undefined,
     // LinkedIn's export uses "DD Mon YYYY"; Unipile gives ISO. Both read the same way.
     connectedOn: parseConnectedOn(c.connectedOn),
   }));
@@ -150,8 +162,9 @@ export async function importLiveConnections(
   const at = new Date().toISOString();
   for (let i = 0; i < kept.length; i++) {
     const { memberId, photoUrl } = kept[i]!;
+    const headline = headlines[i];
     const id = r.personIds[i];
-    if ((!memberId && !photoUrl) || !id) continue;
+    if ((!memberId && !photoUrl && !headline) || !id) continue;
     const p = await db.people.get(id);
     if (!p) continue;
     const patch: Partial<typeof p> = {};
@@ -159,9 +172,48 @@ export async function importLiveConnections(
     // their LinkedIn photo (the map and every list show it); a newer link replaces an expiring one
     const photo = freshPhoto(p.photoUrl, photoUrl);
     if (photo !== p.photoUrl) patch.photoUrl = photo;
+    if (headline) Object.assign(patch, await roleFromLiveHeadline(p, headline));
     if (Object.keys(patch).length) await db.people.update(id, { ...patch, updatedAt: at });
   }
   return { imported: r.imported, updated: r.updated, skipped: connections.length - kept.length };
+}
+
+/** Fields a written-to-the-student or profile source owns: a headline never overwrites them. */
+const ABOVE_HEADLINE = new Set<PersonSource>(['manual', 'enrichment', 'imessage', 'tracker_import', 'note']);
+
+/**
+ * What a live connection's headline adds to a person: the headline itself, and the role in its first part only where
+ * the person has no title or company yet ("Former Analyst at Goldman" adds neither). A title older versions copied
+ * from the whole headline is replaced by the role it names.
+ */
+export async function roleFromLiveHeadline(
+  p: Pick<
+    Person,
+    'headline' | 'currentTitle' | 'currentOrganizationId' | 'fieldSources' | 'relationshipType' | 'sources'
+  >,
+  headline: string,
+): Promise<Partial<Person>> {
+  const patch: Partial<Person> = {};
+  const owner = (f: PersonField) => p.fieldSources?.[f];
+  const mayWrite = (f: PersonField) => !ABOVE_HEADLINE.has(owner(f) as PersonSource);
+  if (headline !== p.headline && mayWrite('headline')) patch.headline = headline;
+  const role = roleFromHeadline(headline);
+  // a title that is the whole headline came from older syncs: read it again
+  const copied = !!p.currentTitle && p.currentTitle.trim() === headline.trim() && mayWrite('currentTitle');
+  if (copied) patch.currentTitle = role.title;
+  else if (!p.currentTitle && role.title) patch.currentTitle = role.title;
+  if (!p.currentOrganizationId && role.org) {
+    const org = await upsertOrganization(role.org);
+    if (org) {
+      patch.currentOrganizationId = org.id;
+      patch.currentOrganizationRaw = org.name;
+    }
+  }
+  const title = 'currentTitle' in patch ? patch.currentTitle : p.currentTitle;
+  if (p.relationshipType === 'unknown' && isRecruiter(title)) patch.relationshipType = 'recruiter';
+  // a recruiter label that only came from the old headline-as-title reading
+  if (copied && p.relationshipType === 'recruiter' && !isRecruiter(title)) patch.relationshipType = 'unknown';
+  return patch;
 }
 
 /** A title reduced to what a job change would alter: "Sr. Analytics Engineer II" and "senior analytics engineer" match. */

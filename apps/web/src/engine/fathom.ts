@@ -93,6 +93,12 @@ export async function meetingSeen(source: NoteSource, m: Pick<FathomMeeting, 'id
 }
 
 /**
+ * More people than this besides the student and it is not a conversation (a class, a team meeting, a panel): the
+ * recording is a light touch for the people the student already has a chat with, and makes nobody new.
+ */
+export const MAX_CHAT_ATTENDEES = 4;
+
+/**
  * File the meetings not imported before, from Fathom or any other meeting app; meetings with nobody else on them (a
  * solo recording) are skipped.
  */
@@ -121,6 +127,7 @@ export async function importMeetings(
         occurredAt: m.startAt,
         externalId,
         attendees,
+        group: attendees.length > MAX_CHAT_ATTENDEES,
       },
       now,
     );

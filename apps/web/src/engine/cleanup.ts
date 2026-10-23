@@ -4,16 +4,19 @@
  * - chats Orbit opened from mail that only came in (a cold pitch, a newsletter) the student never wrote back to,
  *   with their proposed stage moves, cards, drafts and "replied" notifications;
  * - the alum label given to anyone who emailed from the student's school domain (staff, professors), when nothing
- *   else says they studied there;
+ *   else says they studied there (engine/alumni.ts: the school itself stays);
  * - closeness scores, recomputed under the rule that mail that only came in is not a relationship;
  * - the demo's sample rows, when the student moved from the demo to their own profile by signing in.
  *
- * Runs once per profile per cleanup version, recorded in `kv`.
+ * Runs once per profile per cleanup version, recorded in `kv`; then the later repairs (engine/repair.ts), which have
+ * their own versions.
  */
 import type { User } from '@orbit/core';
 import { recomputePersonStrength } from '../db/repo';
 import { db } from '../db/schema';
+import { recomputeAlumni } from './alumni';
 import { DEMO_USER_ID } from './demo';
+import { repairClaims } from './repair';
 
 export const CLEANUP_VERSION = '2026-10-22';
 const OUTBOUND = new Set(['email_out', 'linkedin_out', 'text_out', 'meeting', 'manual_log']);
@@ -28,7 +31,11 @@ export interface CleanupStats {
 export async function cleanUpGuesses(user: User, now = new Date()): Promise<CleanupStats | undefined> {
   if (user.id === DEMO_USER_ID) return undefined;
   const key = `cleanup:${CLEANUP_VERSION}:${user.id}`;
-  if (await db.kv.get(key)) return undefined;
+  if (await db.kv.get(key)) {
+    // the later repairs (engine/repair.ts) run on every visit, with their own versions
+    await repairClaims(user, now);
+    return undefined;
+  }
   const stats: CleanupStats = { chats: 0, alumni: 0, people: 0, demoRows: 0 };
 
   // 1. chats opened from mail the student never answered
@@ -72,24 +79,9 @@ export async function cleanUpGuesses(user: User, now = new Date()): Promise<Clea
     stats.chats++;
   }
 
-  // 2. the alum label from the school's email domain alone
-  if (user.school) {
-    const labelled = await db.people
-      .where('userId')
-      .equals(user.id)
-      .filter((p) => !!p.isAlumni && p.school === user.school)
-      .toArray();
-    for (const p of labelled) {
-      const studied = await db.affiliations
-        .where('personId')
-        .equals(p.id)
-        .filter((a) => a.kind === 'education')
-        .count();
-      if (studied) continue;
-      await db.people.update(p.id, { isAlumni: false, school: undefined });
-      stats.alumni++;
-    }
-  }
+  // 2. the alum label from the school's email domain alone: set again from evidence (engine/alumni.ts), keeping the
+  // school itself (a classmate or a professor is at the student's school, just not an alum)
+  if (user.school) stats.alumni = (await recomputeAlumni(user, now)).lost.length;
 
   // 3. closeness under the new rule
   const ids = await db.people.where('userId').equals(user.id).primaryKeys();
@@ -110,5 +102,6 @@ export async function cleanUpGuesses(user: User, now = new Date()): Promise<Clea
   }
 
   await db.kv.put({ key, value: { at: now.toISOString(), ...stats } });
+  await repairClaims(user, now);
   return stats;
 }

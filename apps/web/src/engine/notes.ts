@@ -36,6 +36,72 @@ export interface CaptureInput {
   title?: string;
   externalId?: string;
   attendees?: { name?: string; email?: string }[];
+  /**
+   * A recorded meeting with more people than a conversation (a class, a team meeting, a panel): it is filed only with
+   * the attendees the student already has a chat with, as a light touch, and makes nobody new.
+   */
+  group?: boolean;
+}
+
+/** Notetakers that record a meeting: a note from one is a meeting by itself. */
+const RECORDED: ReadonlySet<NoteSource> = new Set([
+  'granola_api',
+  'granola_email',
+  'fathom',
+  'fireflies',
+  'wispr_notetaker',
+]);
+
+/** Past-tense talk: "met", "talked", "she offered to", "walked me through", "had a call". */
+const PAST_MET =
+  /\b(?:met|talked|spoke|chatted|caught up|grabbed (?:a )?(?:coffee|lunch|dinner|drinks)|hopped on|jumped on|had (?:a |an |our |my )?(?:quick |great |good |long |nice )?(?:coffee|call|chat|lunch|dinner|zoom|meeting|conversation|phone call|video call|1:1)|(?:she|he|they) (?:said|says|told|mentioned|recommended|suggested|offered|walked|shared|explained|gave|asked|introduced|thinks|thought)|told me|walked me through|offered to|advised me|promised|agreed to|thanks? for (?:the|your) time)\b/i;
+/** "Lena said ...", "Tom recommended ...": a name and something they said. */
+const NAME_SAID =
+  /\b\p{Lu}\p{Ll}+ (?:said|says|told|mentioned|recommended|suggested|offered|explained|shared)\b/u;
+/** A conversation named as a thing: "Coffee with Maya Wu", "quick call", "coffee chat" (a plan when a time follows). */
+const NOUN_MET =
+  /\b(?:meeting with|(?:coffee|phone|video|zoom|intro|informational) (?:chat|call)|(?:quick|great|good|nice|long|short|helpful|productive|fun|lovely) (?:chat|call|conversation|talk|meeting|catch[ -]?up)|coffee chat|(?:coffee|call|chat|zoom|lunch|dinner|1:1|conversation|talk) with|one[- ]on[- ]one|informational interview|catch(?:ing)?[ -]up with)\b/i;
+/** Words that make what follows a plan or a reminder: "need to set up a call with", "email Sarah about". */
+const PLAN_WORDS =
+  /\b(?:need to|needs to|have to|should|going to|gonna|will|plan(?:ning)? to|want to|hoping to|hope to|let'?s|to-?do|remind me|reminder|set up|book|schedule|reach out|email|e-mail|write to|message|ping|text|ask|invite)\b|'ll\b/i;
+/** A time still to come: "next Tuesday", "tomorrow", "at 3pm". */
+const LATER =
+  /\b(?:next (?:week|month|time|mon|tue|wed|thu|fri|sat|sun)\w*|tomorrow|tonight|upcoming|later today|this (?:afternoon|evening)|on (?:mon|tues|wednes|thurs|fri|satur|sun)day|at \d{1,2}(?::\d\d)?\s*(?:am|pm)|scheduled for)\b/i;
+
+const clausesOf = (text: string) =>
+  text
+    .split(/(?<=[.!?])\s+|\n+|[,;:]\s+|\s+(?:and|but|so|which|also|then)\s+/i)
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+function clauseSaysMet(c: string): boolean {
+  for (const [re, noun] of [
+    [PAST_MET, false],
+    [NAME_SAID, false],
+    [NOUN_MET, true],
+  ] as const) {
+    const m = re.exec(c);
+    if (!m) continue;
+    if (PLAN_WORDS.test(c.slice(0, m.index))) continue;
+    if (noun && LATER.test(c)) continue;
+    return true;
+  }
+  return false;
+}
+
+/**
+ * The note says the student met or talked with someone: a clause with meeting language that is not a plan ("Coffee
+ * with Maya Wu", "she offered to refer me", "just talked to Lena"), or a notetaker transcript. "Need to email Sarah
+ * Chen about a referral" and "Coffee chat with Sarah next Tuesday" do not.
+ */
+export function noteSaysMet(text: string): boolean {
+  if (looksLikeNotetakerText(text)) return true;
+  return clausesOf(text).some(clauseSaysMet);
+}
+
+/** The note is only a plan or a reminder about someone: plan language, and nothing about a conversation. */
+export function noteIsPlanOnly(text: string): boolean {
+  return !noteSaysMet(text) && (PLAN_WORDS.test(text) || LATER.test(text));
 }
 
 /** First names that are also everyday words or months: only a full-name mention counts for them. */
@@ -148,6 +214,11 @@ export function namedPeopleLabel(people: Person[]): string {
   return parts.length <= 2 ? parts.join(' and ') : `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}`;
 }
 
+/** "Chat with Maya Wu" for a conversation, "Note about Maya Wu" for a note that only names her. */
+function noteTitleFor(kind: MeetingNote['noteKind'], p: Pick<Person, 'displayName'>): string {
+  return kind === 'mention' ? `Note about ${p.displayName}` : `Chat with ${p.displayName}`;
+}
+
 /** "Tue, Oct 6" in the student's time zone. */
 function dayLabel(iso: string, timeZone: string): string {
   try {
@@ -177,63 +248,111 @@ export async function ingestNote(user: User, inp: CaptureInput, now = new Date()
   // people the note could be with when Orbit cannot tell on its own; the match card offers them first
   const candidates = new Set<string>();
   let confidence = personIds.size ? 1 : 0;
-  for (const a of attendees) {
-    if (a.email && normalizeEmail(a.email) !== normalizeEmail(user.email)) {
-      const { person } = await upsertPerson({
-        userId: user.id,
-        email: a.email,
-        displayName: a.name,
-        source: 'note',
-        userSchool: user.school,
-      });
-      personIds.add(person.id);
-      confidence = Math.max(confidence, 0.98);
-    } else if (a.name) {
-      const n = parseName(a.name);
-      if (n.normalized === parseName(user.fullName).normalized) continue;
+  // what says they talked: the student picked the person (unless the note is only a plan), a notetaker recording or
+  // a transcript, a small meeting on the calendar that has started, or the words of the note themselves
+  let met = personIds.size > 0 && !noteIsPlanOnly(inp.text);
+  const self = normalizeEmail(user.email);
+  if (inp.group) {
+    // a large recorded meeting: only the attendees the student already has a chat with, and nobody new
+    for (const a of attendees) {
+      if (!a.email || normalizeEmail(a.email) === self) continue;
       const hit = await db.people
-        .where('userId')
-        .equals(user.id)
-        .filter((p) => p.nameNormalized === n.normalized)
-        .toArray();
-      if (hit.length === 1) {
-        personIds.add(hit[0]!.id);
-        confidence = Math.max(confidence, 0.8);
-      } else for (const h of hit) candidates.add(h.id);
+        .where('emails')
+        .equals(normalizeEmail(a.email))
+        .filter((p) => p.userId === user.id)
+        .first();
+      if (!hit) continue;
+      const open = await db.chats
+        .where('personId')
+        .equals(hit.id)
+        .filter((c) => !['declined', 'no_response', 'archived'].includes(c.stage))
+        .first();
+      if (open) personIds.add(hit.id);
     }
-  }
+    confidence = 0.98;
+  } else
+    for (const a of attendees) {
+      if (a.email && normalizeEmail(a.email) !== self) {
+        const { person } = await upsertPerson({
+          userId: user.id,
+          email: a.email,
+          displayName: a.name,
+          source: 'note',
+          userSchool: user.school,
+        });
+        personIds.add(person.id);
+        confidence = Math.max(confidence, 0.98);
+        met = true;
+      } else if (a.name) {
+        const n = parseName(a.name);
+        if (n.normalized === parseName(user.fullName).normalized) continue;
+        const hit = await db.people
+          .where('userId')
+          .equals(user.id)
+          .filter((p) => p.nameNormalized === n.normalized)
+          .toArray();
+        if (hit.length === 1) {
+          personIds.add(hit[0]!.id);
+          confidence = Math.max(confidence, 0.8);
+          met = true;
+        } else for (const h of hit) candidates.add(h.id);
+      }
+    }
+  if (RECORDED.has(inp.source) && attendees.length) met = true;
   let calendarEventId: string | undefined;
   const t = new Date(occurredAt).getTime();
-  const nearby = await db.events
-    .where('userId')
-    .equals(user.id)
-    .filter(
-      (e) => Math.abs(new Date(e.startAt).getTime() - t) < 3 * 3_600_000 && e.attendeePersonIds.length > 0,
-    )
-    .toArray();
-  // a note that names someone in full who was not at the nearby meeting is about them, not the meeting
-  const namedInText =
-    !personIds.size && nearby.length
-      ? mentionedPeople(inp.text, await db.people.where('userId').equals(user.id).toArray(), user.firstName)
-          .full
-      : [];
-  if (
-    nearby.length &&
-    !(namedInText.length && !nearby.some((e) => namedInText.some((p) => e.attendeePersonIds.includes(p.id))))
-  ) {
-    const ev = nearby.sort(
+  const everyone = inp.group ? [] : await db.people.where('userId').equals(user.id).toArray();
+  // a meeting the student went to, with a few people, a few hours either side of the note
+  const nearby = inp.group
+    ? []
+    : await db.events
+        .where('userId')
+        .equals(user.id)
+        .filter(
+          (e) =>
+            e.status !== 'cancelled' &&
+            Math.abs(new Date(e.startAt).getTime() - t) < 3 * 3_600_000 &&
+            e.attendeePersonIds.length > 0 &&
+            e.attendees.filter((a) => !a.self && normalizeEmail(a.email) !== self).length <= 3 &&
+            !e.attendees.some(
+              (a) => (a.self || normalizeEmail(a.email) === self) && a.responseStatus === 'declined',
+            ),
+        )
+        .toArray();
+  if (nearby.length) {
+    // the note goes with a nearby meeting only when it names someone who was there, or the meeting was one-on-one
+    // and the note names nobody else in full
+    const m = mentionedPeople(inp.text, everyone, user.firstName);
+    const named = new Set([...m.full, ...m.byFirstName].map((p) => p.id));
+    const fullElsewhere = (e: (typeof nearby)[number]) =>
+      m.full.some((p) => !e.attendeePersonIds.includes(p.id));
+    const fits = nearby.filter((e) =>
+      personIds.size
+        ? e.attendeePersonIds.some((id) => personIds.has(id))
+        : e.attendeePersonIds.some((id) => named.has(id)) ||
+          (e.attendeePersonIds.length === 1 && !fullElsewhere(e)),
+    );
+    const ev = fits.sort(
       (a, b) => Math.abs(new Date(a.startAt).getTime() - t) - Math.abs(new Date(b.startAt).getTime() - t),
-    )[0]!;
-    if (!personIds.size || ev.attendeePersonIds.some((id) => personIds.has(id))) {
+    )[0];
+    if (ev) {
       calendarEventId = ev.id;
-      for (const id of ev.attendeePersonIds) personIds.add(id);
+      // the person the note names first, then the others who were there
+      const order = [
+        ...ev.attendeePersonIds.filter((id) => personIds.has(id) || named.has(id)),
+        ...ev.attendeePersonIds,
+      ];
+      const before = [...personIds];
+      personIds.clear();
+      for (const id of [...before.filter((id) => order.includes(id)), ...order, ...before]) personIds.add(id);
       confidence = Math.max(confidence, 0.9);
+      // the meeting has started by the time of the note: they met (a note before it is prep)
+      if (new Date(ev.startAt).getTime() <= t + 15 * 60_000 && !noteIsPlanOnly(inp.text)) met = true;
     }
   }
-  if (!personIds.size) {
+  if (!personIds.size && !inp.group) {
     // scan the text for people the student knows: full names, then first names that only one person has
-    const people = await db.people.where('userId').equals(user.id).toArray();
-    const m = mentionedPeople(inp.text, people, user.firstName);
+    const m = mentionedPeople(inp.text, everyone, user.firstName);
     if (m.full.length === 1 && !m.byFirstName.length && !m.ambiguous.length) {
       personIds.add(m.full[0]!.id);
       confidence = 0.8;
@@ -244,15 +363,19 @@ export async function ingestNote(user: User, inp: CaptureInput, now = new Date()
     }
     for (const p of m.ambiguous) candidates.add(p.id);
   }
+  // a name in the text is who the note is about; only the note's own words say they talked
+  if (!met && noteSaysMet(inp.text)) met = true;
+  const noteKind: MeetingNote['noteKind'] = inp.group ? 'group_meeting' : met ? 'meeting' : 'mention';
   const ids = [...personIds];
   const primary = ids[0] ? await db.people.get(ids[0]) : undefined;
-  const chat = primary
-    ? await db.chats
-        .where('personId')
-        .equals(primary.id)
-        .filter((c) => !['declined', 'no_response', 'archived'].includes(c.stage))
-        .first()
-    : undefined;
+  const chat =
+    primary && noteKind === 'meeting'
+      ? await db.chats
+          .where('personId')
+          .equals(primary.id)
+          .filter((c) => !['declined', 'no_response', 'archived'].includes(c.stage))
+          .first()
+      : undefined;
   const sure = ids.length > 0 && confidence >= 0.8;
   // a note dated before the chat booked with them is not from that chat (prep, or an earlier talk): it lands on
   // their page but does not mark the booked chat done, so the chat stays under Coming up
@@ -266,7 +389,7 @@ export async function ingestNote(user: User, inp: CaptureInput, now = new Date()
       inp.title ??
       parsed?.title ??
       (primary && sure
-        ? `Chat with ${primary.displayName}`
+        ? noteTitleFor(noteKind, primary)
         : `Note from ${dayLabel(occurredAt, user.timezone || 'UTC')}`),
     occurredAt,
     rawText: inp.text,
@@ -276,8 +399,10 @@ export async function ingestNote(user: User, inp: CaptureInput, now = new Date()
     // an unconfirmed guess touches nothing in the pipeline until the student confirms it
     chatId: sure && !bookedLater ? chat?.id : undefined,
     calendarEventId,
-    matchStatus: sure ? 'auto' : 'unmatched',
+    // a large meeting with nobody the student has a chat with is filed with nobody, and asks nothing
+    matchStatus: inp.group ? (ids.length ? 'auto' : 'rejected') : sure ? 'auto' : 'unmatched',
     matchConfidence: confidence,
+    noteKind,
     createdAt: now.toISOString(),
   };
   if (inp.externalId) {
@@ -324,8 +449,17 @@ export async function noteMatchCandidate(
     ps.length <= 2
       ? ps.map(label).join(` ${joiner} `)
       : `${ps.slice(0, -1).map(label).join(', ')}, ${joiner} ${label(ps[ps.length - 1]!)}`;
-  const reasonText =
-    guessed.length === 1
+  // a note that only names people (a plan, a reminder) is about them, not with them
+  const about = note.noteKind === 'mention';
+  const reasonText = about
+    ? guessed.length === 1
+      ? `Is your note from ${day} about ${label(guessed[0]!)}?`
+      : guessed.length > 1
+        ? `Who is your note from ${day} about? It mentions ${names(guessed, 'and')}.`
+        : others.length
+          ? `Who is your note from ${day} about? It could be ${names(others, 'or')}.`
+          : `Who is your note from ${day} about?`
+    : guessed.length === 1
       ? `Was your note from ${day} with ${label(guessed[0]!)}?`
       : guessed.length > 1
         ? `Who was your note from ${day} with? It mentions ${names(guessed, 'and')}.`
@@ -376,12 +510,23 @@ export async function rematchNote(
       )?.id
     : undefined;
   const person = personId ? await db.people.get(personId) : undefined;
+  // the student says who it was with: a conversation, unless the note is only a plan or a reminder about them
+  const noteKind: MeetingNote['noteKind'] =
+    note.noteKind === 'group_meeting'
+      ? 'group_meeting'
+      : noteIsPlanOnly(note.rawText) && !note.calendarEventId
+        ? 'mention'
+        : 'meeting';
   await db.notes.update(noteId, {
     personIds: personId ? [personId] : [],
     matchStatus: personId ? 'confirmed' : 'rejected',
     matchConfidence: 1,
-    chatId,
-    title: person && /^Note from /.test(note.title ?? '') ? `Chat with ${person.displayName}` : note.title,
+    chatId: noteKind === 'meeting' ? chatId : undefined,
+    noteKind,
+    title:
+      person && /^(Note from |Chat with |Note about )/.test(note.title ?? '')
+        ? noteTitleFor(noteKind, person)
+        : note.title,
   });
   const fresh = (await db.notes.get(noteId))!;
   if (personId) await processNote(user, fresh, now);
@@ -518,6 +663,68 @@ async function settleDraftsCiting(
   }
 }
 
+/**
+ * A note older versions filed as a meeting although it only names the person (no meeting language, no calendar, no
+ * notetaker): what it said about them stays on their page; the meeting, the chat it completed or opened, its
+ * notification and the thank-you it asked for go. Promises the student already ticked off stay ticked off.
+ */
+export async function refileNoteAsMention(user: User, noteId: string, now = new Date()): Promise<boolean> {
+  const note = await db.notes.get(noteId);
+  if (!note || note.noteKind === 'mention' || !note.personIds.length) return false;
+  const settled = await db.actionItems
+    .where('userId')
+    .equals(user.id)
+    .filter((a) => a.sourceTable === 'notes' && a.sourceId === noteId && a.status !== 'open')
+    .toArray();
+  await retireNoteEffects(note, now);
+  const person = await db.people.get(note.personIds[0]!);
+  await db.notes.update(noteId, {
+    noteKind: 'mention',
+    chatId: undefined,
+    title:
+      person && /^(Chat with |Note from )/.test(note.title ?? '')
+        ? noteTitleFor('mention', person)
+        : note.title,
+  });
+  await processNote(user, (await db.notes.get(noteId))!, now, { reuseExtraction: true });
+  for (const d of settled)
+    await db.actionItems
+      .where('userId')
+      .equals(user.id)
+      .filter((a) => a.sourceTable === 'notes' && a.sourceId === noteId && a.text === d.text)
+      .modify({ status: d.status });
+  for (const id of note.personIds) await recomputePersonStrength(id, now);
+  return true;
+}
+
+/**
+ * A note older versions filed with everyone at a meeting near it, although the meeting had several people and the
+ * note names none of them: it goes back to "Who was this with?", offering the people who were there.
+ */
+export async function unfileNote(user: User, noteId: string, now = new Date()): Promise<boolean> {
+  const note = await db.notes.get(noteId);
+  if (!note?.personIds.length) return false;
+  const was = note.personIds;
+  await retireNoteEffects(note, now);
+  await db.notes.update(noteId, {
+    personIds: [],
+    chatId: undefined,
+    calendarEventId: undefined,
+    matchStatus: 'unmatched',
+    matchConfidence: 0,
+    title: /^Chat with /.test(note.title ?? '')
+      ? `Note from ${dayLabel(note.occurredAt, user.timezone || 'UTC')}`
+      : note.title,
+  });
+  const fresh = (await db.notes.get(noteId))!;
+  await upsertSuggestions(user.id, [await noteMatchCandidate(user, fresh, was)], now);
+  for (const id of was) {
+    await recomputePersonStrength(id, now);
+    await refreshPersonSummary(user, id);
+  }
+  return true;
+}
+
 /** A chat with this person is booked to start after `at`: a note from then is not about that chat. */
 export async function bookedAfter(userId: string, personId: string, at: string): Promise<boolean> {
   const t = new Date(at).getTime() + 15 * 60_000;
@@ -534,10 +741,17 @@ export async function bookedAfter(userId: string, personId: string, at: string):
   return !!later;
 }
 
-export async function processNote(user: User, note: MeetingNote, now = new Date()): Promise<void> {
+export async function processNote(
+  user: User,
+  note: MeetingNote,
+  now = new Date(),
+  /** reuse the extraction the note already has (a repair refiling it), instead of reading the text again */
+  opts: { reuseExtraction?: boolean } = {},
+): Promise<void> {
   const notePeople = (await db.people.bulkGet(note.personIds)).filter((p): p is Person => !!p);
   const primary = notePeople.find((p) => p.id === note.personIds[0]);
   const ext =
+    (opts.reuseExtraction ? note.extraction : undefined) ??
     (hasLlm()
       ? await llmNoteExtraction(note.rawText, primary?.displayName, user.fullName).catch((e) =>
           surfaceLlmFailure(user.id, e),
@@ -553,11 +767,14 @@ export async function processNote(user: User, note: MeetingNote, now = new Date(
   // nothing is written for a guess the student has not confirmed: no facts, no meeting, no chat stage,
   // no notification. Confirming it (rematchNote) processes the note again for the person they chose.
   if (!primary || note.matchStatus === 'unmatched') return;
-  // A note is written after a conversation. Someone the student met without messaging first (a career fair, a club
-  // event, an intro in person) has no chat yet: open one at "completed", so the thank-you comes next, not a cold
-  // first message to the person they just talked to.
+  // notes saved before the kind existed were all filed as meetings
+  const kind = note.noteKind ?? 'meeting';
+  const meeting = kind === 'meeting';
+  // A note about a conversation is written after it. Someone the student met without messaging first (a career fair,
+  // a club event, an intro in person) has no chat yet: open one at "completed", so the thank-you comes next, not a
+  // cold first message to the person they just talked to. A note that only mentions someone opens nothing.
   const early = await bookedAfter(user.id, primary.id, note.occurredAt);
-  if (!note.chatId && !early) {
+  if (meeting && !note.chatId && !early) {
     const open = await db.chats
       .where('personId')
       .equals(primary.id)
@@ -608,18 +825,18 @@ export async function processNote(user: User, note: MeetingNote, now = new Date(
     }
     await db.notes.update(note.id, { chatId: note.chatId });
   }
-  // each fact belongs to the person it is about: an id from the heuristic path, a name from the LLM path
-  const personFor = (about: string | undefined): Person => {
-    if (!about) return primary;
+  // each fact belongs to the person it is about: an id from the heuristic path, a name from the LLM path. A fact
+  // about someone the note was not filed with ("her manager Tom leads payments") is nobody's here: it never lands on
+  // the main person. In a large meeting, only a fact that names one of its people is kept.
+  const personFor = (about: string | undefined): Person | undefined => {
+    const a = about?.toLowerCase().trim();
+    if (!a || /^(she|he|they|them|her|him|their|the person|this person|the contact)$/.test(a))
+      return kind === 'group_meeting' ? undefined : primary;
     const byId = notePeople.find((p) => p.id === about);
     if (byId) return byId;
-    const a = about.toLowerCase().trim();
     return (
       notePeople.find((p) => p.displayName.toLowerCase() === a) ??
-      notePeople.find(
-        (p) => p.firstName.toLowerCase() === a || a.startsWith(`${p.firstName.toLowerCase()} `),
-      ) ??
-      primary
+      notePeople.find((p) => p.firstName.toLowerCase() === a || a.startsWith(`${p.firstName.toLowerCase()} `))
     );
   };
   const norm = (s: string) =>
@@ -663,11 +880,16 @@ export async function processNote(user: User, note: MeetingNote, now = new Date(
     list.push(f);
     touched.add(personId);
   };
-  for (const f of ext.facts) await addFact(personFor(f.about).id, f.type, f.text, f.confidence, f.evidence);
-  for (const o of ext.offers) {
-    if (ext.facts.some((f) => f.type === 'offer' && norm(f.text) === norm(o))) continue;
-    await addFact(primary.id, 'offer', o, 0.75);
+  for (const f of ext.facts) {
+    const who = personFor(f.about);
+    if (who) await addFact(who.id, f.type, f.text, f.confidence, f.evidence);
   }
+  // offers were made in a conversation; a large meeting's are not the student's to file on one person
+  if (kind !== 'group_meeting')
+    for (const o of ext.offers) {
+      if (ext.facts.some((f) => f.type === 'offer' && norm(f.text) === norm(o))) continue;
+      await addFact(primary.id, 'offer', o, 0.75);
+    }
   // the same promise written down twice (the notetaker's summary and the student's own note) is kept once
   const STOP = new Set([
     'i',
@@ -701,7 +923,8 @@ export async function processNote(user: User, note: MeetingNote, now = new Date(
   };
   for (const a of ext.actionItems) {
     if (a.owner !== 'user') continue;
-    const pid = personFor(a.about).id;
+    const pid = (personFor(a.about) ?? (kind === 'group_meeting' ? undefined : primary))?.id;
+    if (!pid) continue;
     const open = await db.actionItems
       .where('personId')
       .equals(pid)
@@ -722,8 +945,8 @@ export async function processNote(user: User, note: MeetingNote, now = new Date(
       createdAt: now.toISOString(),
     });
   }
-  // everyone in the note was in the meeting
-  for (const p of notePeople) {
+  // everyone in a conversation's note was in it; a large meeting is a light touch; a mention is no touch at all
+  for (const p of kind === 'mention' ? [] : notePeople) {
     await addTouchpoint({
       userId: user.id,
       personId: p.id,
@@ -732,9 +955,16 @@ export async function processNote(user: User, note: MeetingNote, now = new Date(
       refTable: 'notes',
       refId: note.id,
       summary: `Notes: ${note.title ?? ''}`,
-      weight: 0.3,
+      weight: kind === 'group_meeting' ? 0.15 : 0.3,
     });
-    if (!note.calendarEventId && !early)
+    // the meeting itself, unless the calendar already recorded it for them
+    const onCalendar =
+      !!note.calendarEventId &&
+      !!(await db.touchpoints
+        .where('[personId+refTable+refId]')
+        .equals([p.id, 'events', note.calendarEventId])
+        .first());
+    if (meeting && !early && !onCalendar)
       await addTouchpoint({
         userId: user.id,
         personId: p.id,
@@ -746,7 +976,7 @@ export async function processNote(user: User, note: MeetingNote, now = new Date(
         weight: 1,
       });
   }
-  const chat = note.chatId ? await db.chats.get(note.chatId) : undefined;
+  const chat = meeting && note.chatId ? await db.chats.get(note.chatId) : undefined;
   if (chat) {
     await evaluateTrigger(
       chat,
@@ -759,13 +989,14 @@ export async function processNote(user: User, note: MeetingNote, now = new Date(
   }
   for (const p of notePeople) await recomputePersonStrength(p.id, now);
   for (const id of touched) await refreshPersonSummary(user, id);
-  await notify(
-    user.id,
-    'system',
-    `Notes from your chat with ${primary.firstName} are in`,
-    ext.suggestedNextStep,
-    `/people/${primary.id}`,
-  );
+  if (meeting)
+    await notify(
+      user.id,
+      'system',
+      `Notes from your chat with ${primary.firstName} are in`,
+      ext.suggestedNextStep,
+      `/people/${primary.id}`,
+    );
   // a thank-you (or check-in) drafted before these notes arrived is redrafted with what they said
   await refreshPendingDrafts(user, { personId: primary.id });
   // and the fact-driven kinds (thank-you, check-in, referral ask) remember which facts they were drafted with, so

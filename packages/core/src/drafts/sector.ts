@@ -78,10 +78,32 @@ export function seniorityOf(title: string | undefined): Seniority {
   return 'mid';
 }
 
+/**
+ * Job titles of people who hire for a company: recruiters, sourcers, talent acquisition, university and campus
+ * recruiting, early careers, HR partners. Whole titles, not words anywhere: a Campus Ambassador, a Strategic Sourcing
+ * Analyst, a Talent Show producer or a sorority's Recruitment Chair is not a recruiter.
+ */
+const RECRUITER_TITLE = new RegExp(
+  [
+    String.raw`\brecruit(?:er|ers|ing|ment)\b`,
+    String.raw`\b(?:talent|technical|tech|recruiting)\s+sourc(?:er|ing)\b`,
+    String.raw`\bsourcer\b`,
+    String.raw`\btalent\s+(?:acquisition|partner|lead|manager|advisor|specialist|team|attraction)\b`,
+    String.raw`\b(?:head|director|vp|vice president|manager)\s*(?:of|,)?\s*talent\b`,
+    String.raw`\b(?:early|emerging)\s+(?:careers?|talent)\b`,
+    String.raw`\b(?:university|campus|college|student)\s+(?:relations|recruiting|programs?\s+(?:lead|manager|coordinator))\b`,
+    String.raw`\b(?:hr|human resources|people)\s+(?:business\s+)?partner\b`,
+    String.raw`\b(?:hr|human resources)\s+(?:generalist|manager|director|lead|specialist|coordinator|associate)\b`,
+    '^(?:hr|human resources)$',
+  ].join('|'),
+  'i',
+);
+/** Student or volunteer roles that use the same words: a fraternity's Recruitment Chair, a Campus Ambassador. */
+const NOT_RECRUITER = /\b(?:chair(?:man|woman|person)?|ambassador|captain|rush|procurement|supply)\b/i;
+
 export function isRecruiter(title: string | undefined): boolean {
-  return /\b(recruit\w*|talent\b|university relations|campus\b|people ops|hr\b|human resources|sourc(er|ing))\b/i.test(
-    title ?? '',
-  );
+  const t = title?.trim() ?? '';
+  return RECRUITER_TITLE.test(t) && !NOT_RECRUITER.test(t);
 }
 
 /** "junior", "sophomore", "first-year MBA student" from graduation year and degree, as of `now`. */

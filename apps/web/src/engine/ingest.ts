@@ -787,6 +787,9 @@ export interface RawEvent {
 
 const NOT_CHAT =
   /\b(standup|stand-up|class|lecture|section|office hours|interview|exam|midterm|final|study|club|meeting of|all[- ]hands|sync|1:1 with manager|dentist|doctor|flight)\b/i;
+/** A title that says the event is a conversation with someone: "Coffee chat", "Call with Maya", "Alex <> Maya". */
+const COFFEE_TITLE =
+  /\b(coffee|chat|call|catch[ -]?up|intro|informational|connect|zoom|meet(?:ing)? with|1:1|one[- ]on[- ]one)\b|<>|\s[x/]\s/i;
 
 export async function ingestEvents(
   user: User,
@@ -797,6 +800,8 @@ export async function ingestEvents(
   let count = 0;
   let chatCount = 0;
   const cache = await loadPeopleCache(user.id);
+  // people met in a small meeting outside a chat, whose closeness is computed again at the end
+  const met = new Set<string>();
   for (const r of raws) {
     const existing = await db.events.where('externalEventId').equals(r.externalEventId).first();
     const others = r.attendees.filter((a) => !a.self && normalizeEmail(a.email) !== userEmail);
@@ -821,6 +826,8 @@ export async function ingestEvents(
     const durationMin = (new Date(r.endAt).getTime() - new Date(r.startAt).getTime()) / 60_000;
     let isCoffeeChat = false;
     let confidence = 0;
+    // the attendee the meeting is with: the one the student has a chat with (not whoever is listed first)
+    let chatPersonId: string | undefined;
     if (
       others.length >= 1 &&
       others.length <= 3 &&
@@ -837,11 +844,16 @@ export async function ingestEvents(
             !['declined', 'no_response', 'archived'].includes(c.stage),
         )
         .first();
-      const external = others.some((a) => emailDomain(a.email) !== user.schoolDomain);
+      // someone from outside the student's school, one-on-one: only knowable when the school's domain is set;
+      // without it, a one-on-one that is called a coffee chat or a call
+      const external = user.schoolDomain
+        ? others.every((a) => emailDomain(a.email) !== user.schoolDomain)
+        : COFFEE_TITLE.test(r.title ?? '');
       if (activeChat) {
         isCoffeeChat = true;
         confidence = 0.9;
-      } else if (external) {
+        chatPersonId = activeChat.personId;
+      } else if (external && others.length === 1) {
         isCoffeeChat = true;
         confidence = 0.7;
       }
@@ -866,8 +878,40 @@ export async function ingestEvents(
     };
     await db.events.put(ev);
     count++;
+    // a small meeting that took place is a meeting with the people in it (the calendar is the evidence): in full
+    // for a one-on-one and for the person the chat is with, lighter for the others in a meeting of three or four
+    const over = r.status !== 'cancelled' && new Date(r.endAt).getTime() + 15 * 60_000 < now.getTime();
+    const declined = (email: string) =>
+      r.attendees.some(
+        (a) => normalizeEmail(a.email) === normalizeEmail(email) && a.responseStatus === 'declined',
+      );
+    if (
+      over &&
+      others.length <= 3 &&
+      !declined(user.email) &&
+      !r.attendees.some((a) => a.self && a.responseStatus === 'declined')
+    ) {
+      const people = await db.people.bulkGet(attendeePersonIds);
+      for (const p of people) {
+        if (!p || p.emails.some((e) => declined(e))) continue;
+        if (
+          p.id !== chatPersonId &&
+          (await addTouchpoint({
+            userId: user.id,
+            personId: p.id,
+            kind: 'meeting',
+            occurredAt: r.startAt,
+            refTable: 'events',
+            refId: ev.id,
+            summary: `Meeting: ${r.title ?? 'Meeting'}`,
+            weight: others.length === 1 ? 1 : 0.5,
+          }))
+        )
+          met.add(p.id);
+      }
+    }
     if (!isCoffeeChat || !attendeePersonIds.length) continue;
-    const pid = attendeePersonIds[0]!;
+    const pid = chatPersonId ?? attendeePersonIds[0]!;
     const person = await db.people.get(pid);
     if (!person) continue;
     let chat = ev.chatId ? await db.chats.get(ev.chatId) : undefined;
@@ -977,6 +1021,7 @@ export async function ingestEvents(
     }
     await evaluateImmediateSuggestions(user.id, { chatId: chat.id, personId: pid }, now);
   }
+  for (const id of met) await recomputePersonStrength(id, now);
   // proposed windows were drafted against the old calendar
   if (count) await refreshPendingDrafts(user, { kinds: ['schedule', 'reply'] });
   return { events: count, chats: chatCount };
