@@ -3,6 +3,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { db } from '../../db/schema';
 import { loadDemo } from '../../engine/demo';
 import { saveGoal } from '../../engine/goals';
+import { suggestDuplicateMerges, upsertPerson } from '../../engine/people';
 import { execute, modelResult, registry, tools } from '../registry';
 import type { ResultEnvelope } from '../types';
 import { makeCtx, NOW } from './helpers';
@@ -38,6 +39,17 @@ async function demoIds() {
   )!;
   const confirmStage = pending.find((s) => s.kind === 'confirm_stage');
   const confirmIntro = pending.find((s) => s.kind === 'confirm_intro');
+  // the demo's people each have their own LinkedIn profile, so none is a duplicate of another: a Gmail-only
+  // namesake of one of them is, the kind of pair Orbit offers to merge
+  if (!(await db.merges.where('userId').equals(uid).count())) {
+    await upsertPerson({
+      userId: uid,
+      displayName: 'Sana Ahmed',
+      email: 'sana.ahmed.home@gmail.com',
+      source: 'gmail',
+    });
+    await suggestDuplicateMerges(uid);
+  }
   const merge = await db.merges.where('userId').equals(uid).first();
   // a goal of the student's own for update_goal and archive_goal (local mode keeps goals in the browser)
   const goal = await saveGoal(user, { kind: 'advice', title: 'Get advice on product roles' });
