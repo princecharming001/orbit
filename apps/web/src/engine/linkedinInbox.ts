@@ -8,8 +8,9 @@
  * no id is ever written from a name). The student's own message is this chat's outreach only when it was sent for
  * it: after the chat was opened, or within two weeks before (they wrote, then added the person); an older one is
  * history. Their message is a reply only when it came after that outreach. A first reply moves the chat on by itself
- * only when Orbit sent the outreach on LinkedIn; otherwise it is proposed (0.7) for the student to confirm. Every
- * message read is also a touch for closeness (engine/linkedinActivity.ts).
+ * when Orbit knows the ask went out on LinkedIn (it sent it, or it read the student's own message there first);
+ * otherwise it is proposed (0.7) for the student to confirm. Every message read is also a touch for closeness
+ * (engine/linkedinActivity.ts). Runs every few minutes while the app is open (engine/checkReplies.ts).
  */
 import type { CoffeeChat, User } from '@orbit/core';
 import { AWAITING_FIRST_REPLY, answersOutreach, heuristicSignal, sentForChat } from '@orbit/core';
@@ -27,8 +28,6 @@ import { evaluateTrigger } from './stages';
 const DAY = 86_400_000;
 /** How far back the first read goes. */
 const FIRST_LOOKBACK_DAYS = 30;
-/** On app open, LinkedIn is read again at most this often. */
-export const REPLY_CHECK_EVERY_MS = 15 * 60_000;
 /** A reply older than this is recorded quietly, without a notification. */
 const NOTIFY_WITHIN_MS = 3 * DAY;
 /** A first reply Orbit is not sure of is proposed at this confidence, for the student to confirm. */
@@ -84,18 +83,6 @@ export async function syncLinkedInReplies(
   };
   await db.integrations.update(row.id, { syncState: { ...(fresh?.syncState ?? row.syncState), ...next } });
   return { ok: true, replies: recorded.length, people: recorded };
-}
-
-/** On app open: read LinkedIn for replies unless it was read in the last quarter hour. Never throws. */
-export async function autoSyncLinkedInReplies(
-  user: Pick<User, 'id' | 'timezone'>,
-  now = new Date(),
-): Promise<ReplySyncResult | undefined> {
-  const row = await liveLinkedInAccount(user.id);
-  if (!row || row.status === 'revoked' || !row.externalAccountId) return undefined;
-  const checked = time((row.syncState as RepliesState).repliesCheckedAt);
-  if (Number.isFinite(checked) && now.getTime() - checked < REPLY_CHECK_EVERY_MS) return undefined;
-  return syncLinkedInReplies(user, { now }).catch(() => undefined);
 }
 
 /** Orbit itself sent this chat a LinkedIn message before `at` (not a hand-off the student sent). */
@@ -192,9 +179,12 @@ export async function recordLinkedInMessages(
       awaitingAnswer: true,
     });
     const evidence = { table: 'linkedin_messages', id: reply.id, at: replyAt };
-    // a first reply moves the chat by itself only when Orbit sent the outreach on LinkedIn (it knows the ask went
-    // out there); otherwise the student confirms it. Later messages keep what the reading says.
-    const sure = firstReply && (await orbitSentOnLinkedIn(chat, replyAt));
+    // a first reply moves the chat by itself when Orbit knows the ask went out on LinkedIn: it sent the outreach
+    // there, or it read the student's own message to this person in this same inbox before the reply came. A
+    // LinkedIn message answering an ask that went out some other way (by email) is proposed for the student to
+    // confirm: it may be about anything. Later messages keep what the reading says.
+    const askedHere = forChat.some((m) => time(m.at) <= time(reply.at));
+    const sure = firstReply && (askedHere || (await orbitSentOnLinkedIn(chat, replyAt)));
     const confidence = !firstReply
       ? read.confidence
       : sure

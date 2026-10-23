@@ -9,6 +9,7 @@ import { runApproval } from '../components/approve';
 import { PersonCompanyLogo } from '../components/CompanyLogo';
 import { DraftEditor, OutboxStatus } from '../components/DraftEditor';
 import { DraftsSplit } from '../components/DraftsSplit';
+import { RepliesChecked } from '../components/RepliesChecked';
 import { KIND_LABEL, SuggestionCard } from '../components/SuggestionCard';
 import { db } from '../db/schema';
 import { cancelScheduled } from '../engine/autopilot';
@@ -244,7 +245,11 @@ export function InboxPage() {
     <div ref={rootRef}>
       <PageHeader
         title="Drafts"
-        subtitle="What is worth doing today."
+        subtitle={
+          <>
+            What is worth doing today. <RepliesChecked />
+          </>
+        }
         actions={
           // with nobody in Orbit yet there is nothing to refresh
           visiblePeople > 0 && (

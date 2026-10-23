@@ -43,15 +43,42 @@ export function messageSentAt(
   return Number.isNaN(d.getTime()) ? now.toISOString() : d.toISOString();
 }
 
+let googleSyncing: Promise<unknown> | undefined;
+
 /**
  * Backfill: sent mail (90d) first, then inbox (90d), then calendar (−180d..+90d). Incremental runs use the stored checkpoint.
  * Messages that failed to download on an earlier run are retried first. The checkpoint moves only
  * when the run completes, and failed ids stay in `syncState.failedIds` until they are stored (or
  * fail `MAX_FETCH_ATTEMPTS` times), so a transient error never silently drops a message.
+ *
+ * Runs are serialised: the reply check (every few minutes while the app is open) and a "Sync now" that overlap wait
+ * for each other instead of ingesting the same mail twice. A `quiet` run (the reply check) downloads only mail Orbit
+ * has not stored yet, says nothing when it finds nothing new, and skips the heavier bookkeeping (style, edges,
+ * recommendations) when no message came in.
  */
 export async function syncGoogle(
   user: User,
-  opts: { onProgress?: (p: SyncProgress) => void; useLlm?: boolean; days?: number } = {},
+  opts: { onProgress?: (p: SyncProgress) => void; useLlm?: boolean; days?: number; quiet?: boolean } = {},
+): Promise<{ messages: number; events: number; failed: number; skipped: number }> {
+  while (googleSyncing) await googleSyncing.catch(() => undefined);
+  const run = syncGoogleOnce(user, opts);
+  googleSyncing = run;
+  try {
+    return await run;
+  } finally {
+    if (googleSyncing === run) googleSyncing = undefined;
+  }
+}
+
+/** A stored message need not be downloaded again, unless it still waits to learn its Message-ID (an Orbit send). */
+async function alreadyStored(id: string): Promise<boolean> {
+  const m = await db.messages.where('externalMessageId').equals(id).first();
+  return !!m && !!m.headers['message-id'];
+}
+
+async function syncGoogleOnce(
+  user: User,
+  opts: { onProgress?: (p: SyncProgress) => void; useLlm?: boolean; days?: number; quiet?: boolean },
 ): Promise<{ messages: number; events: number; failed: number; skipped: number }> {
   const token = currentGoogleToken();
   if (!token) throw new Error('Google is not connected.');
@@ -84,7 +111,10 @@ export async function syncGoogle(
   ];
   for (const [phase, q] of phases) {
     progress(phase, 0, 1);
-    const ids = q ? await gmailListIds(q, 1500) : retryIds;
+    const listed = q ? await gmailListIds(q, 1500) : retryIds;
+    const ids: string[] = [];
+    // a quiet run lists a day or two of mail every few minutes: only what is new is downloaded
+    for (const id of listed) if (!opts.quiet || !(await alreadyStored(id))) ids.push(id);
     const raws: RawEmail[] = [];
     for (let i = 0; i < ids.length; i += 20) {
       const chunk = await Promise.all(
@@ -149,11 +179,13 @@ export async function syncGoogle(
     }));
   const ev = await ingestEvents(user, rawEvents);
   progress('Calendar', 1, 1);
-  // the student's voice, from the mail they sent (and anything else Orbit has); what they set by hand is kept
-  await learnStyle(user).catch(() => undefined);
-  await recomputeAllStrengths(user.id);
-  await recomputeEdges(user.id);
-  await recommendationsRefresh(user);
+  if (!opts.quiet || total > 0) {
+    // the student's voice, from the mail they sent (and anything else Orbit has); what they set by hand is kept
+    await learnStyle(user).catch(() => undefined);
+    await recomputeAllStrengths(user.id);
+    await recomputeEdges(user.id);
+    await recommendationsRefresh(user);
+  }
   const nextState: GoogleSyncState = {
     ...state,
     lastSyncAt: startedAt,
@@ -166,6 +198,9 @@ export async function syncGoogle(
     status: 'active',
   });
   const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`;
+  // the reply check runs every few minutes: it only speaks up when a download failed
+  if (opts.quiet && !failed.size && !gaveUp.size)
+    return { messages: total, events: ev.events, failed: 0, skipped: 0 };
   await notify(
     user.id,
     failed.size || gaveUp.size ? 'integration_problem' : 'system',
