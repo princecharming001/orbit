@@ -165,13 +165,13 @@ const HANDLED: [string, string, Record<string, unknown>][] = [
   [
     'Add to People and find warm routes to each of: Dana Lee [rec li:1] and Kai Ito [rec li:2]',
     'add_sourced',
-    { recommendationIds: ['li:1', 'li:2'], then: 'routes' },
+    { recommendationIds: ['li:1', 'li:2'], next: 'routes' },
   ],
   ['Add to People: Dana Lee [rec li:1]', 'add_sourced', { recommendationIds: ['li:1'] }],
   [
     'Add to People and draft a message to each of: Kai Ito [rec li:2]',
     'add_sourced',
-    { recommendationIds: ['li:2'], then: 'drafts' },
+    { recommendationIds: ['li:2'], next: 'drafts' },
   ],
   [
     'Add to People and draft a message to each of: Priya Patel and Elena Cohen',

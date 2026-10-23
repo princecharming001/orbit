@@ -367,7 +367,7 @@ export const SCENARIOS: Scenario[] = [
     group: 'map',
     persona:
       'a student recruiting for software engineering who has live LinkedIn connected in the demo and wants in at Stripe',
-    account: { demo: true, then: liveLinkedIn },
+    account: { demo: true, seed: liveLinkedIn },
     goal: 'search LinkedIn for engineers at Stripe, then get warm routes to two or three of the people found, not just one, without being made to name them one at a time',
     expectTools: [['find_people'], ['add_sourced', 'find_routes']],
     minGoal: 'partly',
@@ -388,7 +388,7 @@ export const SCENARIOS: Scenario[] = [
     group: 'map',
     persona:
       'a student who added someone at Anthropic from a LinkedIn search yesterday but has never spoken to them',
-    account: { demo: true, then: savedAtAnthropic },
+    account: { demo: true, seed: savedAtAnthropic },
     goal: 'ask who you know at Anthropic and expect Orbit to be honest that the person you merely saved to contact is not someone you know',
     expectTools: [['find_routes']],
     minGoal: 'partly',

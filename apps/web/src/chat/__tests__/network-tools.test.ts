@@ -170,7 +170,7 @@ describe('local mode', () => {
       const more = results.slice(1, 3).map((r) => r.recommendationId);
       const routed = await execute(
         'add_sourced',
-        { recommendationIds: more, then: 'routes' },
+        { recommendationIds: more, next: 'routes' },
         makeCtx(user, { toolUseId: nextToolUseId() }),
       );
       expect(routed.kind).toBe('routes_many');
@@ -186,7 +186,7 @@ describe('local mode', () => {
       // and a draft to each, the same way
       const drafted = await execute(
         'add_sourced',
-        { recommendationIds: [results[3]!.recommendationId], then: 'drafts' },
+        { recommendationIds: [results[3]!.recommendationId], next: 'drafts' },
         makeCtx(user, { toolUseId: nextToolUseId() }),
       );
       expect(drafted.summary).toMatch(/^Added .* to People \(saved to contact\)\./);

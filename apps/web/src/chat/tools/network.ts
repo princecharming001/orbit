@@ -631,14 +631,14 @@ export const addSourcedTool = defineTool({
   name: 'add_sourced',
   kind: 'write',
   description:
-    'Call this after find_people when the student picks people to add (their recommendationIds). Each becomes a person in Orbit with a chat at "to contact" for the goal, and research on them starts. Never add people the student did not pick. With then: "routes" it goes straight on to warm routes to each of them in one card; with then: "drafts" it drafts a message to each. Someone added this way is saved to contact, not someone the student knows.',
+    'Call this after find_people when the student picks people to add (their recommendationIds). Each becomes a person in Orbit with a chat at "to contact" for the goal, and research on them starts. Never add people the student did not pick. With next: "routes" it goes straight on to warm routes to each of them in one card; with next: "drafts" it drafts a message to each. Someone added this way is saved to contact, not someone the student knows.',
   input: z.object({
     recommendationIds: z
       .array(z.string().min(1))
       .min(1)
       .max(20)
       .describe('The recommendationIds from find_people the student chose.'),
-    then: z
+    next: z
       .enum(['routes', 'drafts'])
       .optional()
       .describe(
@@ -652,7 +652,7 @@ export const addSourcedTool = defineTool({
     if (fromLinkedIn) {
       const r = await addLinkedInFound(ctx.user, input.recommendationIds);
       if (!r.ok) throw new Error(r.message);
-      if (input.then) return andThen(ctx, input.then, r.people);
+      if (input.next) return andThen(ctx, input.next, r.people);
       return list(
         'Added',
         r.people.map((p) => ({ text: p.displayName, href: `/people/${p.id}` })),
@@ -664,7 +664,7 @@ export const addSourcedTool = defineTool({
     if (!accountReady(ctx)) return needsAccount('Adding people from a search');
     const r = await addSourced(ctx.user, input.recommendationIds);
     if (!r.ok) throw new Error(r.message);
-    if (input.then) return andThen(ctx, input.then, r.people);
+    if (input.next) return andThen(ctx, input.next, r.people);
     return list(
       'Added',
       r.people.map((p) => ({ text: p.displayName, href: `/people/${p.id}` })),
@@ -682,13 +682,13 @@ export const addSourcedTool = defineTool({
  */
 async function andThen(
   ctx: ToolContext,
-  then: 'routes' | 'drafts',
+  next: 'routes' | 'drafts',
   people: { id: string; displayName: string }[],
 ): Promise<ResultEnvelope> {
   const ids = people.map((p) => p.id);
   const added = `Added ${people.map((p) => p.displayName).join(', ')} to People (saved to contact).`;
   const env =
-    then === 'routes' ? await routesToMany(ctx, ids) : await createDrafts.execute({ personIds: ids }, ctx);
+    next === 'routes' ? await routesToMany(ctx, ids) : await createDrafts.execute({ personIds: ids }, ctx);
   return { ...env, summary: `${added} ${env.summary}` };
 }
 

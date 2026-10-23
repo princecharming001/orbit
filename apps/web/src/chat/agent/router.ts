@@ -1272,7 +1272,7 @@ function routeInner(raw: string, ctx: RouterContext): RouterIntent {
       if (recs.length)
         return viaTool(
           'add_sourced',
-          { recommendationIds: recs, ...(then ? { then } : {}) },
+          { recommendationIds: recs, ...(then ? { next: then } : {}) },
           undefined,
           'add people from a search',
         );
