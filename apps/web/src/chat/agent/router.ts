@@ -1,4 +1,5 @@
 import type { ChatStage, MessageKind } from '@orbit/core';
+import { mayHoldFacts } from '@orbit/core';
 import type { ChoiceOption, ToolSpec } from '../types';
 import { type MatchablePerson, resolvePerson } from './people-match';
 import { followUp, resolveReferences } from './routerFollowUp';
@@ -1440,6 +1441,10 @@ function routeInner(raw: string, ctx: RouterContext): RouterIntent {
       return nobody(name);
     }
   }
+
+  // something the student told Orbit about themselves, not a request: acknowledged, not "I didn't catch that".
+  // What Orbit keeps of it (a memory, a goal to track) is said under the reply, after the turn (afterTurn.ts).
+  if (mayHoldFacts(text)) return { kind: 'text', text: 'Got it.' };
 
   return didYouMean(text, ctx, choose, withTool, HELP);
 }
