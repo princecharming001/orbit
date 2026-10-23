@@ -38,7 +38,23 @@ async function demoIds() {
   )!;
   const confirmStage = pending.find((s) => s.kind === 'confirm_stage');
   const confirmIntro = pending.find((s) => s.kind === 'confirm_intro');
-  const merge = await db.merges.where('userId').equals(uid).first();
+  // the sample student has no possible duplicate since two LinkedIn profiles stopped pairing up (plan 17): one is made
+  // here, between two people with no chat, so reject_merge has a real pair to keep apart
+  let merge = await db.merges.where('userId').equals(uid).first();
+  if (!merge) {
+    const loose = people.filter((p) => p.isHuman && !p.hiddenAt && !chats.some((c) => c.personId === p.id));
+    merge = {
+      id: 'merge_example',
+      userId: uid,
+      personAId: loose[0]!.id,
+      personBId: loose[1]!.id,
+      score: 0.8,
+      features: {},
+      status: 'pending',
+      createdAt: new Date().toISOString(),
+    };
+    await db.merges.put(merge);
+  }
   // a goal of the student's own for update_goal and archive_goal (local mode keeps goals in the browser)
   const goal = await saveGoal(user, { kind: 'advice', title: 'Get advice on product roles' });
   return {

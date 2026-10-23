@@ -22,22 +22,9 @@ import { Markdown } from '../Markdown';
 import type { ToolBlock } from '../threadStore';
 import { Choices } from './Choices';
 import {
-  addTarget,
-  afterStage,
-  askForIntro,
-  introTo,
-  prepFor,
-  showDrafts,
-  warmUpFirst,
-  writeNow,
-  writeTo,
-  writeToEach,
-} from './next';
-import {
   CardHead,
   DraftOwnersContext,
   GlassCard,
-  type NextStep,
   NextSteps,
   OpenInApp,
   PersonRow,
@@ -73,6 +60,7 @@ import {
   readWarmIntros,
   type WarmIntro,
 } from './shapes';
+import { cardSteps } from './steps';
 
 export { GlassCard, hrefLabel, OpenInApp } from './parts';
 
@@ -193,13 +181,7 @@ function PersonCard({ env, r, actions }: { env: ResultEnvelope; r: PersonView; a
   const timeFold = useFold(timeline, 3);
   const whoFold = useFold(connections, 4);
   const noteFold = useFold(notes, 2);
-  const steps: NextStep[] = [];
-  if (!person.hiddenAt) {
-    if (!r.nextMessage?.wait) steps.push(writeTo(person.displayName, r.nextMessage?.kind));
-    if ((chat?.stage === 'scheduled' || chat?.stage === 'scheduling') && !questions.length)
-      steps.push(prepFor(person.displayName));
-    if (!chat && person.strength < MEDIUM_TIE) steps.push(introTo(person.displayName));
-  }
+  const steps = cardSteps('get_person', env);
   return (
     <GlassCard kind="person">
       <CardHead
@@ -293,15 +275,7 @@ function PeopleCard({ env, actions }: { env: ResultEnvelope; actions: CardAction
   if (!people.length) return <Summary env={env} />;
   // rows with a reason under the name keep two lines; a list of names and roles reads on one
   const dense = !!target || !people.some((p) => p.why);
-  const steps: NextStep[] = [];
-  const names = people.map((p) => p.person.displayName);
-  // mutual connections: ask the closest one for the intro
-  if (target && people[0]) steps.push(askForIntro(people[0].person.displayName, target.displayName));
-  // a list (not a name search that needs a pick): one draft each
-  else if (!query || people.length === 1) {
-    const each = people.length === 1 ? writeTo(names[0]!) : writeToEach(names);
-    if (each) steps.push(each);
-  }
+  const steps = cardSteps('search_people', env);
   return (
     <GlassCard kind="people">
       <CardHead
@@ -364,9 +338,7 @@ function DraftsCard({ env, actions }: { env: ResultEnvelope; actions: CardAction
       ? `Drafted ${drafts.length === 1 ? 'a message' : `${drafts.length} messages`}`
       : 'No drafts written'
     : firstSentence(env.summary);
-  const steps: NextStep[] = [];
-  const warmUp = skipped.find((s) => /linkedin only/i.test(s.why));
-  if (warmUp) steps.push(writeTo(warmUp.name));
+  const steps = cardSteps('create_drafts', env);
   return (
     <GlassCard kind="drafts">
       <CardHead title={title} href={env.href} />
@@ -513,29 +485,7 @@ function PipelineCard({ env, actions }: { env: ResultEnvelope; actions: CardActi
   const { items, counts } = readPipeline(env.data);
   const fold = useFold(items);
   if (!items.length && !Object.keys(counts).length) return <Summary env={env} />;
-  const quiet = items.filter((i) => i.quiet);
-  const steps: NextStep[] = [];
-  if (items.length === 1) {
-    const one = items[0]!;
-    const step = one.quiet
-      ? writeTo(one.person.displayName, 'bump')
-      : afterStage(one.person.displayName, one.stage);
-    if (step) steps.push(step);
-  } else if (quiet.length) {
-    const each = writeToEach(
-      quiet.map((q) => q.person.displayName),
-      'bump',
-    );
-    if (each)
-      steps.push(
-        quiet.length === items.length || quiet.length === 1
-          ? each
-          : {
-              label: quiet.length <= 5 ? `Follow up with the ${quiet.length} quiet ones` : each.label,
-              message: each.message,
-            },
-      );
-  }
+  const steps = cardSteps('list_pipeline', env);
   // the stage counts are of every chat: they belong on the whole pipeline, not on a stage or the quiet ones
   const whole = !/ in | went quiet/.test(env.summary.replace(/ in your pipeline/, ''));
   const stageCounts = whole ? Object.entries(counts).sort((a, b) => b[1] - a[1]) : [];
@@ -635,15 +585,7 @@ function RoutesCard({ env, actions }: { env: ResultEnvelope; actions: CardAction
       </GlassCard>
     );
   }
-  const steps: NextStep[] = [];
-  const best = sorted[0];
-  if (to) {
-    if (best && best.names.length > 1) steps.push(askForIntro(best.names[0]!, to.displayName));
-    // a Village introducer only when they are someone in Orbit, so the request has someone to go to
-    else if (!best && rest[0]?.introducerId && rest[0].hops.length > 2)
-      steps.push(askForIntro(rest[0].introducer, to.displayName));
-    else steps.push(writeTo(to.displayName));
-  }
+  const steps = cardSteps('find_routes', env);
   return (
     <GlassCard kind="routes">
       <CardHead
@@ -958,13 +900,7 @@ function NoteCard({ env, actions }: { env: ResultEnvelope; actions: CardActions 
         {candFold.more}
       </GlassCard>
     );
-  const steps: NextStep[] = [];
-  if (n.person && n.thankYouDraftId)
-    steps.push({
-      label: 'Review the thank-you',
-      message: `Open the thank-you draft to ${n.person.displayName}`,
-    });
-  else if (n.person) steps.push(writeTo(n.person.displayName));
+  const steps = cardSteps('add_note', env);
   return (
     <GlassCard kind="note">
       <CardHead
@@ -1060,13 +996,7 @@ function CompanyCard({ env, actions }: { env: ResultEnvelope; actions: CardActio
     former.length ? `${former.length} used to be` : '',
     via.length ? `${via.length} through someone you know` : '',
   ].filter(Boolean);
-  const steps: NextStep[] = [];
-  if (people[0]) steps.push(writeTo(people[0].displayName));
-  if (people.length >= 2 && people.length <= 6) {
-    const each = writeToEach(people.map((p) => p.displayName));
-    if (each) steps.push(each);
-  }
-  if (!target) steps.push(addTarget(name));
+  const steps = cardSteps('find_routes', env);
   return (
     <GlassCard kind="company">
       <CardHead
@@ -1138,9 +1068,7 @@ function SettingsCard({ env }: { env: ResultEnvelope }) {
 function ImportCard({ env, actions }: { env: ResultEnvelope; actions: CardActions }) {
   const { source, counts, lines } = readImport(env.data);
   const fold = useFold(lines);
-  const steps: NextStep[] = /linkedin/i.test(source ?? '')
-    ? [{ label: 'Who should I meet', message: 'Who should I meet?' }]
-    : [];
+  const steps = cardSteps('import_linkedin', env);
   return (
     <GlassCard kind="import">
       <CardHead
@@ -1222,12 +1150,7 @@ function ListCard({ env, block, actions }: { env: ResultEnvelope; block: ToolBlo
   const fold = useFold(items, 6);
   if (!items.length) return <Summary env={env} />;
   const heading = title ?? firstSentence(env.summary);
-  const steps: NextStep[] = [];
-  if (block.toolName === 'find_people')
-    steps.push({ label: 'Add them to People', message: 'Add them all to People' });
-  const researched = heading.match(/^Research on (.+)$/)?.[1];
-  if (researched) steps.push(writeTo(researched));
-  if (block.toolName === 'list_due') steps.push(showDrafts);
+  const steps = cardSteps(block.toolName, env);
   return (
     <GlassCard kind="list">
       <CardHead title={heading} href={env.href} />
@@ -1305,10 +1228,7 @@ function TextResult({ env, actions }: { env: ResultEnvelope; actions: CardAction
           You have not talked yet. Cold notes get far more replies once your name is familiar, so Orbit
           suggests a short warm-up first: a few LinkedIn steps over a few days, then the message.
         </p>
-        <NextSteps
-          steps={[warmUpFirst(warmUpFor.displayName), writeNow(warmUpFor.displayName)]}
-          send={actions.send}
-        />
+        <NextSteps steps={cardSteps('create_draft', env)} send={actions.send} />
       </GlassCard>
     );
   if (wait)
@@ -1323,18 +1243,7 @@ function TextResult({ env, actions }: { env: ResultEnvelope; actions: CardAction
         <p className="text-[13px] text-ink-2">
           {env.summary.replace(/\s*Pass a kind to write anyway\.?$/, '')}
         </p>
-        <NextSteps
-          steps={[
-            {
-              ...writeTo(
-                wait.person.displayName,
-                wait.reason === 'too_soon' || wait.reason === 'away' ? 'bump' : 'nurture',
-              ),
-              label: 'Write anyway',
-            },
-          ]}
-          send={actions.send}
-        />
+        <NextSteps steps={cardSteps('create_draft', env)} send={actions.send} />
       </GlassCard>
     );
   if (!quote && !file && !env.href) return <Markdown text={env.summary} className="my-2" />;

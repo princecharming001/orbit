@@ -1,8 +1,12 @@
 import type { ChatStage, MessageKind } from '@orbit/core';
 import type { ChoiceOption, ToolSpec } from '../types';
 import { type MatchablePerson, resolvePerson } from './people-match';
+import { followUp, resolveReferences } from './routerFollowUp';
+import { mentioned, routeEarly, routeMore } from './routerMore';
 import { routeNetwork } from './routerNetwork';
+import type { ThreadContext } from './routerThread';
 import { peopleWaiting } from './setup';
+import { fixTypos } from './typos';
 
 /**
  * The no-key path: a deterministic intent router over the same tool registry. It is a table of patterns, not an
@@ -13,19 +17,50 @@ import { peopleWaiting } from './setup';
  */
 
 export type RouterIntent =
-  | { kind: 'tool'; tool: string; input: Record<string, unknown>; lead?: string }
+  | {
+      kind: 'tool';
+      tool: string;
+      input: Record<string, unknown>;
+      lead?: string;
+      /** the rest of a message that asked for two things: each runs after this one, read on its own */
+      andThen?: string[];
+    }
   | { kind: 'text'; text: string; href?: string }
   | { kind: 'refuse'; text: string; href?: string };
 
 export interface RouterContext {
   registry: ReadonlyMap<string, ToolSpec>;
   people: MatchablePerson[];
+  /** people the student hid, for "unhide Tom" (never matched by any other phrase) */
+  hidden?: MatchablePerson[];
   /** known company names (target companies and organizations), for "routes to <company>" */
   companies: string[];
   /** open cards (the ones in Drafts), so "snooze Priya's card" can name one */
   cards?: { id: string; personId?: string; kind: string }[];
-  /** the student's drafts that are not sent yet (draft, failed, handed_off), newest first */
-  drafts?: { id: string; personId: string; status: string; kind: string }[];
+  /** the student's drafts that are not sent yet (draft, failed, handed_off), newest first, with their text */
+  drafts?: {
+    id: string;
+    personId: string;
+    status: string;
+    kind: string;
+    body?: string;
+    subject?: string;
+    suggestionId?: string;
+  }[];
+  /** open promises the student made (action items), for "I sent Priya my resume" */
+  actionItems?: { id: string; personId?: string; text: string }[];
+  /** target companies, for "make Evercore top priority" or "drop Figma" */
+  targets?: { id: string; name: string }[];
+  /** Discover's recommendations, for "save Priya for later" */
+  recs?: { id: string; personId: string; status: string }[];
+  /** LinkedIn warm-ups in progress, with the next step's id */
+  warmups?: { chatId: string; personId: string; next?: string }[];
+  /** possible duplicates waiting for the student's answer */
+  merges?: { id: string; personIds: string[] }[];
+  /** notes Orbit could not match to anyone */
+  unmatchedNotes?: { id: string; title?: string; at: string }[];
+  /** the time now (dates like "Thursday at 2pm" are read from it) */
+  now?: Date;
   /** the person of the next booked chat, for "prep me for my next chat" */
   nextChat?: { personId: string };
   /** the student's first name, for a warm greeting */
@@ -40,6 +75,8 @@ export interface RouterContext {
   paths?: { id: string; firstHopName: string; targetId?: string }[];
   /** the student is signed in to an Orbit account */
   account?: boolean;
+  /** what this conversation just showed (routerThread.ts), for follow-ups like "write to her" or "send it" */
+  thread?: ThreadContext;
   /** the mode note's sentence about adding a key, appended to refusals */
   modeNote: string;
   settingsHref: string;
@@ -136,6 +173,21 @@ const SETTINGS_TOPICS: { re: RegExp; section: string; text: string }[] = [
   },
 ];
 
+/** The command list, with the student's own people in the examples (the sample names when there are none). */
+export function helpText(
+  people: { firstName: string; strength: number; isHuman: boolean; hiddenAt?: string }[],
+): string {
+  const names = [...people]
+    .filter((p) => p.isHuman && !p.hiddenAt && p.firstName)
+    .sort((a, b) => b.strength - a.strength)
+    .map((p) => p.firstName)
+    .filter((n, i, all) => all.indexOf(n) === i);
+  const [a, b] = [names[0], names[1] ?? names[0]];
+  if (!a)
+    return 'Try: "what is on today", "show my pipeline", "add Jordan Lee at Figma", "connect Gmail", "import my LinkedIn connections", "set my tone to direct", or a settings question.';
+  return HELP_TEXT.replaceAll('Priya', a).replaceAll('Dan', b!);
+}
+
 const HELP_TEXT =
   'Try: "what is on today", "show my pipeline", "who went quiet", "who is Priya", "draft a thank you to Priya", "send my draft to Priya", "follow up with Dan", "note about Priya: she suggested the PM team", "move Dan to scheduling", "who can introduce me to Stripe", "unsent drafts", "show my recommendations", "set my tone to direct", or a settings question.';
 
@@ -202,12 +254,12 @@ function text0(raw: string): string {
 }
 
 const CHATTY_PREFIX =
-  /^(hey|hi|hello|ok|okay|please|orbit|can you|could you|would you|will you|i want to|i'd like to|i need to|let's|lets|just)[,!.]?\s+/i;
+  /^(hey|hi|hello|ok|okay|please|orbit|can you|could you|would you|will you|i want to|i'd like to|i need to|let's|lets|just|quick question|help me(?= (?:write|draft|find|prep|add|send|follow|reach|get|make|set|move|see)))[,!.:]?\s+/i;
 
 /** "Hey Orbit, can you show my pipeline" -> "show my pipeline". */
 function stripChatter(text: string): string {
-  let t = text;
-  for (let i = 0; i < 4 && CHATTY_PREFIX.test(t); i++) t = t.replace(CHATTY_PREFIX, '');
+  let t = text.replace(/^(?:yes|yeah|yep|sure|ok|okay|alright),\s+(?=\w)/i, '');
+  for (let i = 0; i < 6 && CHATTY_PREFIX.test(t); i++) t = t.replace(CHATTY_PREFIX, '');
   return t.trim();
 }
 
@@ -215,6 +267,7 @@ function stripName(raw: string): string {
   return raw
     .replace(/^(with|to|for|about|on|up with)\s+/i, '')
     .replace(/^(a|an|the|my)\s+/i, '')
+    .replace(/^(?:(?:coffee )?chat|call|meeting|chats) with\s+/i, '')
     .replace(/'s$/i, '')
     .replace(/[?.!,]+$/, '')
     .trim();
@@ -230,7 +283,7 @@ function findStage(text: string): ChatStage | undefined {
   return best?.stage;
 }
 
-function findKind(text: string): MessageKind | undefined {
+export function findKind(text: string): MessageKind | undefined {
   const t = text.toLowerCase();
   let best: { kind: MessageKind; len: number } | undefined;
   for (const [kind, aliases] of Object.entries(KIND_ALIASES) as [MessageKind, string[]][])
@@ -243,6 +296,10 @@ function findKind(text: string): MessageKind | undefined {
 export function stageLabel(stage: ChatStage): string {
   return STAGE_ALIASES[stage][0]!;
 }
+
+/** Words that point at someone shown earlier, never a name on their own. */
+const REFERENCE =
+  /^(?:(?:(?:the|that|this) )?(?:person|contact|card|step|warm-?up|suggestion|new contact|new person)\b.*|(?:the|that|this) (?:one|note|draft|message)\b.*|route \d.*|her|him|them|she|he|they|it|this|that|these|those|me|you|someone|somebody|anyone|everyone|this person|that person|the person|this one|that one|the new contact|the person i just added|(?:the )?(?:top|first|last) (?:\d+|two|three|four|five)|(?:the )?(?:first|second|third|fourth|fifth|last)(?: one)?|all of them|each of them|both(?: of them)?)$/i;
 
 const GREETING =
   /^(hey|hi|hello|yo|howdy|hiya|heya|sup|hey hey|good (morning|afternoon|evening))( there| orbit| friend| everyone)?$/;
@@ -260,21 +317,70 @@ const ADD_SOMEONE =
 
 /** Patterns that only a model could serve: say so instead of guessing. */
 const NEEDS_MODEL =
-  /\b(why|should i(?! (follow up|bump|nudge))|what do you think|do you think|rewrite|reword|shorter|longer|summari[sz]e|explain|compare|which (one|of)|best|recommend|advice|advise|strategy|plan for|help me (decide|think|write|figure)|what would you|how should|is it (ok|okay|fine|rude|too)|improve|polish|translate|make (it|this)|tips?)\b/i;
+  /\b(change the (?:first|second|third|last|opening|closing) (?:sentence|line|paragraph)|why|should i(?! (follow up|bump|nudge))|what do you think|do you think|rewrite|reword|shorter|longer|summari[sz]e|explain|compare|which (one|of)|best|recommend|advice|advise|strategy|plan for|help me (decide|think|write|figure)|what would you|how should|is it (ok|okay|fine|rude|too)|improve|polish|translate|make (it|this)|tips?)\b/i;
 
+/**
+ * Read one message. Example names in the replies ("like: write to {name}") are the student's own people, so an
+ * example never names someone they do not know.
+ */
 export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
-  const text = stripChatter(clean(raw));
-  const lower = text.toLowerCase();
+  const intent = routeInner(raw, ctx);
+  const fill = (t: string) => fillExamples(t, ctx);
+  if (intent.kind === 'tool') return intent.lead ? { ...intent, lead: fill(intent.lead) } : intent;
+  return { ...intent, text: fill(intent.text) };
+}
+
+/** "{name}", "{name2}" and "{company}" in a reply, as the student's closest people and first target company. */
+export function fillExamples(text: string, ctx: Pick<RouterContext, 'people' | 'companies'>): string {
+  if (!text.includes('{')) return text;
+  const names = [...ctx.people]
+    .filter((p) => p.isHuman && !p.hiddenAt && p.firstName)
+    .sort((a, b) => b.strength - a.strength)
+    .map((p) => p.firstName)
+    .filter((n, i, all) => all.indexOf(n) === i);
+  return text
+    .replaceAll('{name}', names[0] ?? 'Lena')
+    .replaceAll('{name2}', names[1] ?? names[0] ?? 'Dan')
+    .replaceAll('{company}', ctx.companies[0] ?? 'Stripe');
+}
+
+function routeInner(raw: string, ctx: RouterContext): RouterIntent {
+  let text = stripChatter(clean(raw));
+  let lower = text.toLowerCase();
+  // a slipped letter in a command word ("piepline") is put right; names and companies stay as typed
+  {
+    const keep = new Set<string>();
+    const words = (s: string) =>
+      s
+        .toLowerCase()
+        .split(/[^a-z']+/)
+        .filter(Boolean);
+    for (const p of ctx.people)
+      for (const w of words(`${p.displayName} ${p.currentOrganizationRaw ?? ''}`)) keep.add(w);
+    for (const c of ctx.companies) for (const w of words(c)) keep.add(w);
+    const fixed = fixTypos(text, keep);
+    if (fixed !== text) {
+      text = fixed;
+      lower = text.toLowerCase();
+    }
+  }
   const has = (tool: string) => ctx.registry.has(tool);
 
+  // one short line on what unlocks it, not the whole mode note (that sits under the composer already)
+  const keyLine = /turned off/i.test(ctx.modeNote)
+    ? 'Turn on chat with Claude in Settings, Integrations for that.'
+    : /limit|used all|unavailable|until tomorrow/i.test(ctx.modeNote)
+      ? 'Claude is paused right now, so that has to wait.'
+      : 'Add a Claude key in Settings, Integrations for that.';
   const refuse = (why: string): RouterIntent => ({
     kind: 'refuse',
-    text: `${why} ${ctx.modeNote}`,
+    text: `${why} ${keyLine}`,
     href: ctx.settingsHref,
   });
+  const HELP = helpText(ctx.people);
   const missing = (what: string): RouterIntent => ({
     kind: 'refuse',
-    text: `Orbit cannot ${what} from the chat yet. ${HELP_TEXT}`,
+    text: `Orbit cannot ${what} from the chat yet. ${HELP}`,
   });
   const viaTool = (
     tool: string,
@@ -289,16 +395,44 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
     if (!parsed.success)
       return {
         kind: 'refuse',
-        text: `Orbit's command list is out of step with its ${tool.replace(/_/g, ' ')} tool, so this cannot run right now. ${HELP_TEXT}`,
+        text: `Orbit's command list is out of step with its ${tool.replace(/_/g, ' ')} tool, so this cannot run right now. ${HELP}`,
       };
     return { kind: 'tool', tool, input: parsed.data as Record<string, unknown>, lead };
   };
-  const person = (name: string) => resolvePerson(ctx.people, stripName(name));
-  const nobody = (name: string): RouterIntent => ({
-    kind: 'text',
-    text: `I could not find anyone called "${stripName(name)}" in your people. Check the spelling, or add them from the People page.`,
-    href: '/people?view=list',
-  });
+  // "her", "them" or "the top 3" are never a name (a prefix match would find "Herrera"): with nothing shown before,
+  // they mean nobody yet, and the reply asks who
+  const person = (name: string): { person?: MatchablePerson; candidates: MatchablePerson[] } => {
+    const n = stripName(name);
+    if (REFERENCE.test(n)) return { candidates: [] };
+    const r = resolvePerson(ctx.people, n);
+    if (r.person || r.candidates.length) return r;
+    // "Tomas for the chat", "Priya, wrong role", "Priya's stage", "Lena directly": the name, without what follows it
+    const cuts = [
+      /^(.+?)\s*,/,
+      /^(.+?)\s+(?:for|about|after|from|on|at|re|regarding|to say|and|with|before|since|because|this|next|tomorrow|today|back)\b/i,
+      /^(.+?)(?:'s)?\s+(?:follow-?up|thank-?you|check-?in|card|chat|call|draft|message|email|note|stage|post|dot|page|profile|linkedin|summary|score|research|deadline|directly|myself|now|first|again|instead|anyway|please|too)\b/i,
+    ];
+    for (const re of cuts) {
+      const cut = n.match(re);
+      if (!cut) continue;
+      const hit = resolvePerson(ctx.people, stripName(cut[1]!));
+      if (hit.person || hit.candidates.length) return hit;
+    }
+    return r;
+  };
+  const nobody = (name: string): RouterIntent =>
+    REFERENCE.test(stripName(name))
+      ? {
+          kind: 'text',
+          text: /top|first|second|third|last|all|each|both/i.test(name)
+            ? 'Which people? Show a list first, like: who do I know at {company}, or who went quiet.'
+            : 'Who do you mean? Say their name, like: write to {name}.',
+        }
+      : {
+          kind: 'text',
+          text: `I could not find anyone called "${stripName(name)}" in your people. Check the spelling, or add them from the People page.`,
+          href: '/people?view=list',
+        };
   const ambiguous = (name: string, candidates: MatchablePerson[]): RouterIntent =>
     has('search_people')
       ? viaTool('search_people', { query: stripName(name) }, 'More than one person matches. Pick one:')
@@ -306,6 +440,30 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
           kind: 'text',
           text: `More than one person matches "${stripName(name)}": ${candidates.map((p) => p.displayName).join(', ')}. Say the full name.`,
         };
+
+  // ---- what the conversation just showed: follow-ups ("send it", "and Dan?") and references ("her", "the top 3") ----
+  if (ctx.thread) {
+    const thread = ctx.thread;
+    const f = followUp(text, thread, {
+      viaTool,
+      person,
+      nobody,
+      ambiguous,
+      findKind,
+      cards: ctx.cards ?? [],
+      reroute: (message) =>
+        routeUtterance(message, {
+          ...ctx,
+          thread: { ...thread, steps: undefined, choices: undefined, pending: undefined },
+        }),
+    });
+    if (f) return f;
+    const resolved = resolveReferences(text, thread);
+    if (resolved !== text) {
+      text = resolved;
+      lower = text.toLowerCase();
+    }
+  }
 
   // ---- small talk: short, warm, one next step. A tap-to-answer reply when the tool exists, plain words when not. ----
   const name = ctx.firstName?.trim();
@@ -381,6 +539,11 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
       statement,
       `${statement} Connect Google under Settings, Integrations.`,
     );
+  const setupWidget = (
+    what: 'google' | 'linkedin' | 'claude_key' | 'resume',
+    statement: string,
+  ): RouterIntent =>
+    withTool('show_setup', { what }, statement, `${statement} Use the + button, or Settings, Integrations.`);
   const EMPTY_START =
     "Easiest first step is your LinkedIn connections. Drop the export here when you're ready.";
   const GMAIL_NEXT = 'Next easy step is Gmail, so I can see who you email and send what you approve.';
@@ -435,14 +598,25 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
       text: 'Nice. Who did you meet? Give me their name and where they work, like: add Jordan Lee at Figma.',
     };
 
-  if (!text) return { kind: 'text', text: HELP_TEXT };
+  if (!text) return { kind: 'text', text: HELP };
 
   // help
-  if (/^(commands?|options|menu|list of commands)$/i.test(lower)) return { kind: 'text', text: HELP_TEXT };
+  if (/^(commands?|options|menu|list of commands)$/i.test(lower)) return { kind: 'text', text: HELP };
+
+  // two asks in one message ("show my pipeline and draft a follow up to Marcus"): the first runs now, the rest after
+  {
+    const parts = splitAsks(text);
+    if (parts.length > 1) {
+      const intents = parts.map((p) => routeUtterance(p, { ...ctx, thread: undefined }));
+      const first = intents[0]!;
+      if (first.kind === 'tool' && intents.slice(1).some((i) => i.kind === 'tool'))
+        return { ...first, andThen: parts.slice(1).filter((_, k) => intents[k + 1]!.kind === 'tool') };
+    }
+  }
 
   // today's brief
   if (
-    /^(today|brief|my brief|my day|agenda|what'?s? (on|up|new|next)( today| for today)?|what (is|should i do|do i do|do i have)( on| today| for today| now)*|show (me )?(today|my day|the brief)|start my day|plan for today|to ?do)$/i.test(
+    /^(today|brief|my brief|my day|agenda|who should i (message|write to|reach out to|contact|email|follow up with|talk to)( today| first| next)?|who'?s next|what'?s? (on|up|new|next)( today| for today)?|what (is|should i do|do i do|do i have)( on| today| for today| now)*|show (me )?(today|my day|the brief)|start my day|plan for today|to ?do)$/i.test(
       lower,
     )
   )
@@ -483,16 +657,58 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
     if (r) return r;
   }
 
+  // requests that sound like judgement calls but are not ("what should I send Omar next", "make my drafts formal")
+  const more = {
+    viaTool,
+    person,
+    nobody,
+    ambiguous,
+    findKind,
+    findStage,
+    choose,
+    setupGmail,
+    setupLinkedin,
+    setup: setupWidget,
+  };
+  {
+    const r = routeEarly(text, lower, ctx, more);
+    if (r) return r;
+  }
+
   // free-form questions and judgement calls need the model: say so before any pattern could half-match them
-  if (NEEDS_MODEL.test(lower) && !/^(who is|who's|show|open|find|look ?up|tell me about)\b/i.test(lower))
+  if (NEEDS_MODEL.test(lower) && !/^(who is|who's|show|open|find|look ?up|tell me about)\b/i.test(lower)) {
+    // a judgement call about someone: say so, then offer what Orbit can do for that person
+    const about = mentioned(text, ctx.people);
+    if (about.person && has('offer_choices')) {
+      const p = about.person;
+      const first = p.firstName || p.displayName;
+      return withTool(
+        'offer_choices',
+        {
+          options: [
+            { label: `Write to ${first}`, message: `Write to ${p.displayName}` },
+            { label: `Open ${first}`, message: `Who is ${p.displayName}` },
+          ],
+        },
+        `That needs a Claude key to weigh up. Here is what I can do with ${first} now:`,
+        `That needs a Claude key: Orbit cannot reason about this on its own. ${keyLine}`,
+      );
+    }
     return refuse('That needs a Claude key: Orbit cannot reason about this on its own.');
+  }
 
   // prep for a chat with someone
   {
     const m = text.match(
-      /^(?:prep(?:are)?(?: me)?(?: for)?(?: my)?(?: (?:coffee )?chat| call| meeting)?(?: with)?|get me ready for(?: my)?(?: chat| call)?(?: with)?|prep notes for)\s+(.+)$/i,
+      /^(?:prep(?:are)?(?: me)?(?: for)?(?: my)?(?: (?:coffee )?chat| call| meeting)?(?: with)?|get me ready for(?: my)?(?: chat| call)?(?: with)?|prep notes for)\s+(?!.*\b(?:message|draft|email|reply|check-?in|follow-?up|thank-?you|note)\b)(.+)$/i,
     );
-    if (m && /^(my )?next( coffee)?( chat| call| meeting)?$/i.test(m[1]!.trim())) {
+    if (
+      m &&
+      /^(?:my )?(?:next|upcoming|tomorrow'?s?|today'?s?)?(?: coffee)?(?: chat| call| meeting)?(?: (?:tomorrow|today|this week|later today|coming up))?$/i.test(
+        m[1]!.trim(),
+      ) &&
+      /\S/.test(m[1]!)
+    ) {
       if (ctx.nextChat)
         return viaTool(
           'get_person',
@@ -524,7 +740,7 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
   // what Orbit knows about someone, and who they know
   {
     const facts = text.match(
-      /^(?:what do (?:i|we) know about|what does orbit know about|facts (?:about|on|for)|notes on|what did (?:i|we) learn from|remind me about)\s+(.+)$/i,
+      /^(?:what do (?:i|we) know about|what does orbit know about|facts (?:about|on|for)|notes on|what did (?:i|we) learn from|remind me about)\s+(?!(?:this|that|it)\b)(.+)$/i,
     );
     const knows = text.match(/^(?:who does|who do(?:es)?)\s+(?!(?:i|we|you)\s+know$)(.+?)\s+know$/i);
     const m = facts ?? knows;
@@ -760,7 +976,7 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
       if (!m[1])
         return {
           kind: 'text',
-          text: 'Say whose move to undo, like: undo the move for Dan.',
+          text: 'Say whose move to undo, like: undo the move for {name}.',
           href: '/people?view=board',
         };
       const r = person(m[1]);
@@ -775,7 +991,14 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
     const m = text.match(
       /^(snooze|dismiss|skip|remove|hide)(?: the)?(?: card| suggestion)?(?: (?:for|about|on))?\s+(.+?)(?:'s)?(?: card| suggestion)?(?: for (a day|a week|\d+ days?|tomorrow))?$/i,
     );
-    if (m && /^(snooze|dismiss|skip)$/i.test(m[1]!)) {
+    const who = m ? person(m[2]!) : undefined;
+    if (
+      m &&
+      /^(snooze|dismiss|skip)$/i.test(m[1]!) &&
+      !REFERENCE.test(stripName(m[2]!)) &&
+      (who?.person || who?.candidates.length) &&
+      !/\b(wrong role|wrong company|discover|recommendation)\b/i.test(text)
+    ) {
       const r = person(m[2]!);
       if (r.person) {
         const card = ctx.cards?.find((c) => c.personId === r.person!.id);
@@ -867,7 +1090,7 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
         const d = mine[0];
         if (d && send) return viaTool('send_draft', { draftId: d.id }, undefined, 'send a draft');
         if (d) return viaTool('get_draft', { draftId: d.id }, undefined, 'open a draft');
-        if (send)
+        if (send || !(ctx.drafts ?? []).some((x) => x.personId === r.person!.id))
           // nothing written yet: start the draft; it still asks before anything is sent
           return viaTool(
             'create_draft',
@@ -899,6 +1122,11 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
       if (at) input.company = at[2]!.trim();
       if (email) input.email = email;
       if (url) input.linkedinUrl = url.startsWith('http') ? url : `https://${url}`;
+      if (name && !email && !url)
+        return {
+          kind: 'text',
+          text: `What's ${name}'s email or LinkedIn link? Orbit needs one to reach them. Add it like: add ${name}${at ? ` at ${at[2]!.trim()}` : ''}, ${name.split(' ')[0]!.toLowerCase()}@example.com.`,
+        };
       if (name) return viaTool('add_person', input, undefined, 'add a person');
     }
   }
@@ -908,13 +1136,15 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
     /\b(went quiet|gone quiet|go quiet|quiet|ghosted|no (reply|replies|response|answer)|not (replied|responded|answered|heard)|haven'?t (replied|responded|heard|answered)|hasn'?t (replied|responded|answered)|never (replied|responded|answered|wrote back)|waiting (on|for) (a )?(reply|response|answer)|unanswered|who should i (follow up|bump|nudge))\b/i.test(
       lower,
     ) &&
-    !/^(follow up|bump|nudge|ping|draft|write)\b/i.test(lower)
+    !/^(follow up|bump|nudge|ping|draft|write|move|put|set|mark|change)\b/i.test(lower)
   )
     return viaTool('list_pipeline', { quietOnly: true }, undefined, 'list who went quiet');
 
   // follow up with <name>
   {
-    const m = lower.match(/^(?:follow up|follow-up|bump|nudge|ping|remind)\s+(?:with |on |to )?(.+)$/i);
+    const m = /^remind me\b/.test(lower)
+      ? null
+      : lower.match(/^(?:follow up|follow-up|bump|nudge|ping|remind)\s+(?:with |on |to )?(.+)$/i);
     if (m) {
       const r = person(m[1]!);
       if (r.person)
@@ -955,7 +1185,9 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
 
   // move <name> to <stage>
   {
-    const explicit = text.match(/^(?:move|put|set|mark|change)\s+(.+?)\s+(?:to|as|into|in|->)\s+(.+)$/i);
+    const explicit = text.match(
+      /^(?:move|put|set|mark|change)\s+(?!(?:my |the |this |that )?(?:promise|note|card|draft|message|email|tone|style|weekly|cooldown|daily|limit|stripe deadline|deadline|target)\b)(.+?)\s+(?:to|as|into|in|->)\s+(.+)$/i,
+    );
     const implicit = text.match(
       /^(.+?)\s+(?:is now\s+|has\s+|just\s+)?(replied|declined|scheduled|booked|said no|went quiet|passed|wrote back|got back to me)$/i,
     );
@@ -967,12 +1199,21 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
       if (stage && r.person)
         return viaTool('move_pipeline_stage', { personId: r.person.id, stage }, undefined, 'move a chat');
       if (stage && r.candidates.length) return ambiguous(m[1]!, r.candidates);
-      if (stage) return nobody(m[1]!);
-      if (r.person || r.candidates.length)
-        return {
-          kind: 'text',
-          text: `I know who, but not which stage. Stages are: ${(Object.keys(STAGE_ALIASES) as ChatStage[]).map(stageLabel).join(', ')}.`,
-        };
+      if (
+        stage &&
+        !/\b(priority|deadline|target|people|orbit|contacts|tone|weekly|cooldown|limit)\b/i.test(m[2]!)
+      )
+        return nobody(m[1]!);
+      if (
+        r.person &&
+        /^(move|put|mark|change)$/i.test(text.split(' ')[0]!) &&
+        /^(?:the )?(?:stage|chat|column)?\s*\w+$/i.test(m[2]!.trim())
+      )
+        return choose(`Where does the chat with ${r.person.firstName} stand now?`, 'Pick a stage:', [
+          { label: 'Replied', message: `Move ${r.person.displayName} to replied` },
+          { label: 'Scheduled', message: `Move ${r.person.displayName} to scheduled` },
+          { label: 'Done', message: `Move ${r.person.displayName} to completed` },
+        ]);
     }
   }
 
@@ -1008,7 +1249,7 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
       }
       return {
         kind: 'text',
-        text: 'What should the note say? Write it like: note about Priya: she suggested the platform team. Or open the note page.',
+        text: 'What should the note say? Write it like: note about {name}: she suggested the platform team. Or open the note page.',
         href: '/notes/new',
       };
     }
@@ -1017,7 +1258,7 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
   // routes: who can introduce me to <person or company>
   {
     const m = text.match(
-      /^(?:who (?:can|could) (?:warmly )?(?:introduce|intro|connect) me (?:to|with|at)|who (?:can|could) get me (?:a |an )?(?:warm )?(?:intro|introduction) (?:to|at|into)|(?:find |show |any )?(?:a |the |my )?(?:warm )?(?:routes?|paths?|way|intros?|introductions?) (?:to|into|at)|how (?:do|can|could|would) i (?:reach|get to|get into|get an intro to|get introduced to|get a warm intro to|connect with)|who do i know at|anyone (?:i know )?at|do i know anyone at|reach|get me (?:to|into))\s+(.+)$/i,
+      /^(?:who (?:can|could) (?:warmly )?(?:introduce|intro|connect) me (?:to|with|at)|who (?:can|could) get me (?:a |an )?(?:warm )?(?:intro|introduction) (?:to|at|into)|(?:find |show |any |get )?(?:a |an |the |my )?(?:warm )?(?:routes?|paths?|way|intros?|introductions?) (?:to|into|at)|how (?:do|can|could|would) i (?:reach|get to|get into|get an intro to|get introduced to|get a warm intro to|connect with)|who do i know at|anyone (?:i know )?at|do i know anyone at|reach|get me (?:to|into))\s+(.+)$/i,
     );
     if (m) {
       const target = stripName(m[1]!);
@@ -1117,6 +1358,12 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
     }
   }
 
+  // the rest of the inventory's phrases (routerMore.ts)
+  {
+    const r = routeMore(text, lower, ctx, more);
+    if (r) return r;
+  }
+
   // LinkedIn import
   if (/linkedin/i.test(lower) && /\b(import|export|upload|connections|csv|zip|load|add)\b/i.test(lower)) {
     if (has('show_setup'))
@@ -1179,7 +1426,7 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
   // find or open a person by name
   {
     const m = text.match(
-      /^(?:who is|who's|whos|show|show me|open|find|look up|lookup|tell me about|pull up|search|search for|get|info on|details on|about)\s+(.+)$/i,
+      /^(?:who is|who's|whos|show me|show|open up|open|find me|find|look up|lookup|tell me about|pull up|search for|search|get me|get|info on|details on|about)\s+(.+)$/i,
     );
     const name = m ? m[1]! : text;
     const r = person(name);
@@ -1194,5 +1441,131 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
     }
   }
 
-  return refuse('I did not understand that. ' + HELP_TEXT);
+  return didYouMean(text, ctx, choose, withTool, HELP);
+}
+
+/** A message that asks for two things, split at "and then", "then", "and also" or "and" before a command word. */
+export function splitAsks(text: string): string[] {
+  const verbs =
+    'draft|write|send|show|add|move|follow up|find|who|what|prep|note|thank|congratulate|snooze|open|ask|check in|tell me|list|remind|save|mark|look up|research';
+  const parts = text
+    .split(
+      new RegExp(
+        `\\s*(?:,\\s*)?(?:and then|then|and also|also|;)\\s+|\\s*,?\\s+and\\s+(?=(?:${verbs})\\b)`,
+        'i',
+      ),
+    )
+    .map((p) => p.trim().replace(/^(?:please|can you|could you)\s+/i, ''))
+    .filter((p) => p.split(/\s+/).length >= 2);
+  return parts.length > 1 && parts.length <= 3 ? parts : [text];
+}
+
+/** Places to go when a message matched nothing: the person it names, or the closest things Orbit can do. */
+const SUGGESTIONS: { label: string; message: string; words: string[] }[] = [
+  {
+    label: "What's on today",
+    message: "What's on today?",
+    words: ['today', 'day', 'do', 'plan', 'cards', 'brief', 'morning', 'agenda'],
+  },
+  {
+    label: 'Show my pipeline',
+    message: 'Show my pipeline',
+    words: ['pipeline', 'chats', 'stage', 'board', 'where', 'stand', 'progress', 'everyone'],
+  },
+  {
+    label: 'Who went quiet',
+    message: 'Who went quiet?',
+    words: ['quiet', 'reply', 'replied', 'ghost', 'heard', 'waiting', 'follow', 'bump'],
+  },
+  {
+    label: 'Show my drafts',
+    message: 'Show my drafts',
+    words: ['draft', 'drafts', 'send', 'message', 'email', 'outbox', 'unsent', 'copy'],
+  },
+  {
+    label: 'Who should I meet',
+    message: 'Who should I meet?',
+    words: ['meet', 'new', 'discover', 'recommend', 'suggest', 'people', 'network'],
+  },
+  {
+    label: 'Find a warm intro',
+    message: 'Who can introduce me to someone',
+    words: ['intro', 'introduce', 'route', 'path', 'reach', 'map', 'connect', 'warm'],
+  },
+  {
+    label: 'Prep for my next chat',
+    message: 'Prep me for my next chat',
+    words: ['prep', 'prepare', 'ready', 'questions', 'ask', 'chat', 'call', 'meeting', 'tomorrow'],
+  },
+  {
+    label: 'Add a note',
+    message: 'Add a note',
+    words: ['note', 'notes', 'wrote', 'learned', 'remember', 'jot'],
+  },
+  {
+    label: 'My goals',
+    message: 'Show my goals',
+    words: ['goal', 'goals', 'target', 'recruiting', 'aim', 'working'],
+  },
+  {
+    label: 'Connect Gmail',
+    message: 'Connect my Gmail',
+    words: ['gmail', 'google', 'email', 'inbox', 'calendar', 'sync'],
+  },
+  {
+    label: 'Import LinkedIn',
+    message: 'Import my LinkedIn connections',
+    words: ['linkedin', 'connections', 'import', 'csv', 'export'],
+  },
+  {
+    label: 'Settings',
+    message: 'Open settings',
+    words: ['settings', 'tone', 'style', 'limit', 'profile', 'privacy', 'key'],
+  },
+];
+
+function didYouMean(
+  text: string,
+  ctx: RouterContext,
+  choose: (statement: string, question: string, options: ChoiceOption[]) => RouterIntent,
+  withTool: (
+    tool: 'offer_choices' | 'show_setup',
+    input: Record<string, unknown>,
+    lead: string,
+    fallback: string,
+  ) => RouterIntent,
+  help: string,
+): RouterIntent {
+  const m = mentioned(text, ctx.people);
+  if (m.person) {
+    const p = m.person;
+    const first = p.firstName || p.displayName;
+    const scheduled = ctx.nextChat?.personId === p.id;
+    return choose(`I didn't catch what to do about ${first}.`, 'Any of these?', [
+      { label: `Open ${first}`, message: `Who is ${p.displayName}` },
+      { label: `Write to ${first}`, message: `Write to ${p.displayName}` },
+      scheduled
+        ? { label: 'Prep for the chat', message: `Prep me for my chat with ${p.displayName}` }
+        : { label: 'Find a warm intro', message: `Who can introduce me to ${p.displayName}` },
+    ]);
+  }
+  const words = new Set(
+    text
+      .toLowerCase()
+      .split(/[^a-z]+/)
+      .filter(Boolean)
+      .flatMap((w) => [w, w.replace(/(ing|ed|es|s)$/, '')]),
+  );
+  const scored = SUGGESTIONS.map((s) => ({ s, n: s.words.filter((w) => words.has(w)).length }))
+    .filter((x) => x.n > 0)
+    .sort((a, b) => b.n - a.n)
+    .slice(0, 3)
+    .map((x) => x.s);
+  const picks = scored.length ? scored : SUGGESTIONS.slice(0, 3);
+  return withTool(
+    'offer_choices',
+    { options: picks.map((s) => ({ label: s.label, message: s.message })) },
+    "I didn't catch that. Did you mean one of these?",
+    `I didn't catch that. ${help}`,
+  );
 }

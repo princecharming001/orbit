@@ -148,7 +148,8 @@ const REQUESTS: [string, string, Expect][] = [
   ['demo', 'delete all my data', { tool: 'delete_all_data', kinds: ['needs_confirmation'] }],
   // judgement calls: an honest "needs a Claude key"
   ['needs a key', "why hasn't Daniel replied?", { needsKey: true }],
-  ['needs a key', 'rewrite my draft to Lena so it is shorter', { needsKey: true }],
+  // shortening is something Orbit does without a key now: the ask stays, the padding goes
+  ['drafts', 'rewrite my draft to Lena so it is shorter', { tool: 'update_draft_body', kinds: ['draft'] }],
   ['needs a key', 'should I email Caleb again?', { needsKey: true }],
   ['needs a key', 'what is the best way to ask Maya for a referral', { needsKey: true }],
 ];
@@ -188,12 +189,14 @@ describe('router mode: the real engine over the real registry, no key', () => {
         expect(row?.status).toBe('pending');
       }
     } else {
-      expect(t.tools, utterance).toEqual([]);
+      // a judgement call about someone says so, then offers what Orbit can do for them as tap-to-answer pills
+      if (want.needsKey) expect(['', 'offer_choices'], utterance).toContain(t.tools.join(','));
+      else expect(t.tools, utterance).toEqual([]);
       expect(t.text).not.toMatch(DASH);
       expect(t.text).not.toMatch(/!/);
       if (want.needsKey) {
         expect(t.text).toMatch(/needs a Claude key/);
-        expect(t.env?.href).toBe('/settings/integrations');
+        if (!t.tools.length) expect(t.env?.href).toBe('/settings/integrations');
       }
       if (want.href) expect(t.env?.href).toBe(want.href);
     }

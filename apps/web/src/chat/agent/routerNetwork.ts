@@ -110,7 +110,7 @@ export function routeNetwork(text: string, lower: string, h: NetworkHelpers): Ro
   }
   {
     const m = lower.match(
-      /^(archive|drop|delete|remove|finish|close)(?: my)? (\S+) goal$|^i'?m done (fundraising|hiring|recruiting)$/,
+      /^(archive|drop|delete|remove|finish|close)(?: my| the)? (\S+) goal$|^i'?m done (fundraising|hiring|recruiting)$/,
     );
     if (m) {
       const word = m[2] ?? m[3]!;
@@ -121,7 +121,7 @@ export function routeNetwork(text: string, lower: string, h: NetworkHelpers): Ro
     }
   }
   {
-    const m = lower.match(/^(pause|resume|restart)(?: my)? (\S+) goal$/);
+    const m = lower.match(/^(pause|resume|restart)(?: my| the)? (\S+) goal$/);
     if (m) {
       const g = goalNamed(m[2]!);
       if (!g)
@@ -226,11 +226,21 @@ export function routeNetwork(text: string, lower: string, h: NetworkHelpers): Ro
           undefined,
           'ask for an intro',
         );
+      // no route found in this tab: the intro request goes straight to the person who would make it
+      const introducer = h.person(m[1]!);
+      if (target.person && introducer.person && introducer.person.id !== target.person.id)
+        return h.viaTool(
+          'create_draft',
+          { kind: 'intro_request', personId: introducer.person.id, targetPersonId: target.person.id },
+          undefined,
+          'draft an intro request',
+        );
+      if (target.person && introducer.candidates.length) return h.ambiguous(m[1]!, introducer.candidates);
       if (target.person)
         return h.viaTool(
           'find_routes',
           { personId: target.person.id },
-          `These are the routes to ${target.person.displayName}. Ask again for the intro once you see the one through ${m[1]}.`,
+          `${m[1]} is not in your people, so here are the routes to ${target.person.displayName}.`,
           'find routes',
         );
       if (target.candidates.length) return h.ambiguous(m[2]!, target.candidates);
@@ -335,7 +345,9 @@ export function routeNetwork(text: string, lower: string, h: NetworkHelpers): Ro
     }
   }
   {
-    const m = text.match(/^forget (?:everything )?(?:about |you know about )?(.+)$/i);
+    const m = /\bstyle\b/i.test(text)
+      ? null
+      : text.match(/^forget (?:everything )?(?:about |you know about )?(.+)$/i);
     if (m && !/^(it|that|this|about it)$/i.test(m[1]!)) {
       const p = h.person(m[1]!);
       if (p.person) return h.viaTool('forget', { personId: p.person.id }, undefined, 'forget');
