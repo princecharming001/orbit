@@ -15,6 +15,7 @@ import { targetMutuals } from '../../engine/externalRoutes';
 import { userTieWeight } from '../../engine/graph';
 import type { MutualsResult, MutualView } from '../../engine/linkedinLive';
 import { isServerUser } from '../../integrations/orbitApi';
+import { useShowReasoning } from '../../state/showReasoning';
 import { Avatar, Button, cx, LinkedInMark } from '../../ui';
 
 const SHOWN = 5;
@@ -61,6 +62,7 @@ export function ReachMutuals({
   /** draft an intro request from this person to the target */
   onAsk: (personId: string, score: number) => void;
 }) {
+  const reasons = useShowReasoning();
   const { result, retry } = useTargetMutuals(user, target);
   const [all, setAll] = useState(false);
   const ids = useMemo(
@@ -205,10 +207,12 @@ export function ReachMutuals({
           {all ? 'Show fewer' : `Show all ${rows.length}`}
         </button>
       )}
-      <p className="mt-1.5 text-[12px] text-ink-3">
-        {result.source === 'demo' ? 'Sample connections from the demo.' : 'From your LinkedIn.'} Closest to
-        you first.
-      </p>
+      {reasons && (
+        <p className="mt-1.5 text-[12px] text-ink-3">
+          {result.source === 'demo' ? 'Sample connections from the demo.' : 'From your LinkedIn.'} Closest to
+          you first.
+        </p>
+      )}
     </div>
   );
 }

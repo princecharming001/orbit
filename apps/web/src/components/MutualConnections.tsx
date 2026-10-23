@@ -8,6 +8,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { db } from '../db/schema';
 import { type MutualsResult, mutualsFor } from '../engine/linkedinLive';
+import { useShowReasoning } from '../state/showReasoning';
 import { Avatar, Card, LinkedInMark } from '../ui';
 
 const SHOWN = 6;
@@ -20,6 +21,7 @@ export function resetMutualsCache(): void {
 }
 
 export function MutualConnections({ user, person }: { user: User; person: Person }) {
+  const reasons = useShowReasoning();
   const key = `${user.id}:${person.id}`;
   const [result, setResult] = useState<MutualsResult | undefined>(() => cache.get(key));
   const [all, setAll] = useState(false);
@@ -127,12 +129,14 @@ export function MutualConnections({ user, person }: { user: User; person: Person
             {all ? 'Show fewer' : `Show all ${mutuals.length}`}
           </button>
         )}
-        <p className="mt-2 text-[12px] text-ink-3">
-          {result.ok && result.source === 'demo'
-            ? 'Sample connections from the demo.'
-            : 'From your LinkedIn.'}{' '}
-          Ask one of them to put in a word.
-        </p>
+        {reasons && (
+          <p className="mt-2 text-[12px] text-ink-3">
+            {result.ok && result.source === 'demo'
+              ? 'Sample connections from the demo.'
+              : 'From your LinkedIn.'}{' '}
+            Ask one of them to put in a word.
+          </p>
+        )}
       </div>
     </Card>
   );

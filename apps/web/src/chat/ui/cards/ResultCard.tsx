@@ -16,6 +16,7 @@ import { CompanyLogo, LogoText } from '../../../components/CompanyLogo';
 import { DraftEditor, OutboxStatus } from '../../../components/DraftEditor';
 import { KIND_LABEL, SuggestionCard } from '../../../components/SuggestionCard';
 import { db } from '../../../db/schema';
+import { useShowReasoning } from '../../../state/showReasoning';
 import { Avatar, Button, Chip, cx, LinkedInMark, relDate } from '../../../ui';
 import type { ResultEnvelope } from '../../types';
 import { Markdown } from '../Markdown';
@@ -673,12 +674,13 @@ function RouteRow({ r, warm }: { r: RouteView; warm?: WarmIntro }) {
   const band =
     r.bandLabel ?? (r.band === 'strong' ? 'strong' : r.band === 'possible' ? 'possible' : 'long shot');
   const why = [warm?.note, ...r.text].filter(Boolean).join('. ');
+  const reasons = useShowReasoning();
   return (
     <li className="flex items-start gap-2.5 min-w-0" data-testid={warm ? 'warm-intro' : 'route'}>
       <RouteMeter score={r.score} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5 min-w-0">
-          <span className="font-medium truncate">
+          <span className="font-medium truncate" title={why || undefined}>
             You
             {r.hops.map((h, k) => (
               <span key={`${h.id ?? h.name}-${k}`}>
@@ -693,7 +695,7 @@ function RouteRow({ r, warm }: { r: RouteView; warm?: WarmIntro }) {
             <span className="text-[12px] text-ink-3 shrink-0 lowercase">{band}</span>
           )}
         </div>
-        {why && (
+        {why && reasons && (
           <div className="text-[12.5px] text-ink-3 line-clamp-1" title={why}>
             {why}
           </div>

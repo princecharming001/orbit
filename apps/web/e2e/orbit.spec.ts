@@ -509,7 +509,8 @@ test.describe('Map reach through LinkedIn mutuals (plan 17 §C)', () => {
     // never "No route found" for him: the routes go through the people LinkedIn says know him
     const route = page.getByTestId('reach-path').first();
     await expect(route).toBeVisible({ timeout: 30_000 });
-    await expect(route).toContainText(/is connected to Kenji on LinkedIn/);
+    // why the route goes through them: on hover by default (the grey line shows only with explanations on)
+    await expect(route.locator('[title*="is connected to Kenji on LinkedIn"]').first()).toBeAttached();
     await expect(route.getByTestId('reach-path-action')).toHaveText(/^Ask \S+ for an intro$/);
     await expect(page.getByText(/no route found/i)).toHaveCount(0);
     // the panel: who knows him, closest to the student first, each with how close and an intro to ask for

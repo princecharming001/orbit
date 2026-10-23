@@ -979,7 +979,8 @@ function ClaudeCard() {
           <span>
             Show Orbit's reasoning
             <span className="block text-[12px] text-ink-3">
-              The grey notes it writes to itself before each step, under its answers.
+              The grey lines that explain how Orbit got there: its notes in the chat, why a route goes through
+              someone, and where a list came from. Off, hovering a name still shows why.
             </span>
           </span>
           <Switch

@@ -684,6 +684,13 @@ test.describe('Map motion', () => {
     await search(page, 'Felix Garcia');
     const routes = page.getByTestId('reach-path');
     await expect(routes.first()).toBeVisible({ timeout: 15_000 });
+    // the grey explanation is off by default; Settings turns it on
+    await expect(page.getByTestId('reach-cold-note')).toHaveCount(0);
+    await page.goto('settings/integrations');
+    await page.getByTestId('ai-reasoning-switch').click();
+    await openMap(page);
+    await search(page, 'Felix Garcia');
+    await expect(routes.first()).toBeVisible({ timeout: 15_000 });
     // the best route goes through someone the student knows (ranked by the chance the introduction happens)
     await expect(routes.first()).toContainText(/[23] hops/);
     const note = page.getByTestId('reach-cold-note');

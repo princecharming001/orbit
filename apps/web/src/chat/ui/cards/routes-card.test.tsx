@@ -85,7 +85,9 @@ describe('the routes card shows warm intros', () => {
     expect(row.textContent).toContain('Maya Chen');
     expect(row.textContent).toContain('warm');
     expect(row.textContent).toContain('You → Maya Chen → Daniel Okafor');
-    expect(row.textContent).toContain('Worked together at Stripe');
+    // why it goes through Maya: a tooltip by default, a grey line once explanations are on
+    expect(row.textContent).not.toContain('Worked together at Stripe');
+    expect(row.querySelector('[title*="Worked together at Stripe"]')).not.toBeNull();
     // the introducer opens their profile; no raw warmth number is shown
     expect(row.querySelector('a')?.getAttribute('href')).toBe('/people/p9');
     expect(card.textContent).not.toMatch(/0\.74|74/);

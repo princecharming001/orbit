@@ -45,6 +45,7 @@ import {
 import { addLinkedInFound, type FoundView } from '../engine/linkedinSearch';
 import { maintenanceRunning, watchMaintenance } from '../engine/sync';
 import { useSession } from '../state/session';
+import { useShowReasoning } from '../state/showReasoning';
 import { Avatar, Button, Card, Chip, cx, Input, LinkedInMark, useToast } from '../ui';
 
 type Filter = 'all' | 'targets' | 'alumni' | 'chats' | 'recent' | 'intros';
@@ -77,6 +78,8 @@ const named = (p: Person) => p.isHuman && !p.hiddenAt && hasRealName(p);
 
 export function MapPage() {
   const { userId, user } = useSession();
+  // why a route goes through someone: hidden unless the student turned explanations on
+  const reasons = useShowReasoning();
   // the side panel's width, dragged by its edge: at least 300px, and the orbit always keeps 440px
   const splitRef = useRef<HTMLDivElement>(null);
   const panel = useResizableWidth(
@@ -1212,15 +1215,21 @@ export function MapPage() {
                             <li key={k} className="flex items-start gap-2">
                               <span className="text-ink-3 tabular w-4">{k + 1}.</span>
                               <span>
-                                <span className="font-medium">{to?.displayName ?? '…'}</span>
-                                <br />
-                                <span className="text-ink-3">{h.text}</span>
+                                <span className="font-medium" title={h.text}>
+                                  {to?.displayName ?? '…'}
+                                </span>
+                                {reasons && (
+                                  <>
+                                    <br />
+                                    <span className="text-ink-3">{h.text}</span>
+                                  </>
+                                )}
                               </span>
                             </li>
                           );
                         })}
                       </ol>
-                      {p.weak && (
+                      {p.weak && reasons && (
                         <p className="mt-1.5 text-[12px] text-ink-3">
                           You know {first?.firstName ?? 'them'} only slightly, but LinkedIn says{' '}
                           {first?.firstName ?? 'they'} knows {target.firstName}: a weaker route, and a real
@@ -1298,8 +1307,13 @@ export function MapPage() {
                             <li key={`${name}-${k}`} className="flex items-start gap-2">
                               <span className="text-ink-3 tabular w-4">{k + 1}.</span>
                               <span>
-                                <span className="font-medium">{name}</span>
-                                {k === steps.length - 1 && w.note ? (
+                                <span
+                                  className="font-medium"
+                                  title={k === steps.length - 1 ? w.note : undefined}
+                                >
+                                  {name}
+                                </span>
+                                {reasons && k === steps.length - 1 && w.note ? (
                                   <>
                                     <br />
                                     <span className="text-ink-3">{w.note}</span>
@@ -1336,7 +1350,7 @@ export function MapPage() {
                   })}
                 </div>
               )}
-              {coldDirect && (
+              {coldDirect && reasons && (
                 <p className="text-[12.5px] text-ink-3" data-testid="reach-cold-note">
                   Route {paths!.indexOf(coldDirect) + 1} is writing to {target.firstName} yourself.{' '}
                   {coldDirect.hops[0]!.text}, a faint tie, so the routes through people you know come first.
