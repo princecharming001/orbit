@@ -1,19 +1,50 @@
-import type { Suggestion, User } from '@orbit/core';
+import type { OutboundMessage, Suggestion, User } from '@orbit/core';
+import { STAGE_LABELS } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { ArrowRight, Check, ChevronLeft, ChevronRight, ExternalLink, Minus, Sun, X } from 'lucide-react';
+import {
+  ArrowUpRight,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  ExternalLink,
+  Minus,
+  Sun,
+  Undo2,
+  X,
+} from 'lucide-react';
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
-import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { db } from '../db/schema';
-import { markWarmUpAction } from '../engine/brief';
+import { ensureDrafts, markWarmUpAction, needsWarmUp, startWarmUpOrOutreach } from '../engine/brief';
+import { composeDraft, markPrepOpened } from '../engine/drafts';
+import { markActionItemDone } from '../engine/facts';
 import { answerIntroductionQuestion } from '../engine/introductions';
-import { type MorningDeck, markMorningSeen, morningDeck, morningDue } from '../engine/morning';
+import {
+  decisionActions,
+  localDay,
+  type MorningAction,
+  type MorningActionId,
+  type MorningDeck,
+  type MorningMove,
+  type MorningOutcome,
+  markMorningSeen,
+  morningDeck,
+  morningDue,
+  morningSummary,
+  snapshotDecision,
+  undoDecision,
+} from '../engine/morning';
 import { decideMerge } from '../engine/people';
+import { currentResumeFacets, sharesOrgNow } from '../engine/resume';
 import { snoozeSuggestion } from '../engine/send';
 import { decideProposedStage } from '../engine/stages';
 import { useSession } from '../state/session';
-import { Avatar, Button, Chip, cx } from '../ui';
+import { Avatar, Button, Chip, cx, LinkedInMark, useToast } from '../ui';
+import { runApproval } from './approve';
 import { PersonCompanyLogo } from './CompanyLogo';
-import { KIND_LABEL } from './SuggestionCard';
+import { DraftEditor } from './DraftEditor';
+import { MergePair, PersonNameLink } from './MergePair';
+import { gapLabel, KIND_LABEL } from './SuggestionCard';
 
 /** Anything can open the debrief again (Settings, the command palette): `openMorningBrief()`. */
 export const MORNING_EVENT = 'orbit:morning-brief';
@@ -21,34 +52,106 @@ export function openMorningBrief(): void {
   window.dispatchEvent(new Event(MORNING_EVENT));
 }
 
-type Slide = { kind: 'overview' } | { kind: 'decide'; s: Suggestion } | { kind: 'moves' } | { kind: 'done' };
-type Outcome = 'done' | 'later' | 'skipped';
+type Slide =
+  | { kind: 'overview' }
+  | { kind: 'decide'; s: Suggestion; n: number }
+  | { kind: 'moves' }
+  | { kind: 'done' };
+/** How a decision ended, and the sentence that says so when the student comes back to it. */
+type Result = { o: MorningOutcome; text?: string };
+/** The last decision, kept so the footer can take it back. */
+type Last = { sid: string; text: string; undo: () => Promise<void> };
+
+const TYPING = ['INPUT', 'TEXTAREA', 'SELECT'];
+const isTyping = (el: Element | null) =>
+  !!el && ((el as HTMLElement).isContentEditable || TYPING.includes(el.tagName));
+/**
+ * A deck waiting as a pill outlives a reload of the tab: which day, and which step it was on (by the card, since a
+ * fresh deck no longer holds the ones already decided). Only this tab's session; losing it only loses the pill.
+ */
+const PILL_KEY = 'orbit:morning-pill';
+type SavedPill = { userId: string; day: string; step: Slide['kind']; sid?: string; away: boolean };
+function readPill(): SavedPill | undefined {
+  try {
+    return (JSON.parse(sessionStorage.getItem(PILL_KEY) ?? 'null') as SavedPill | null) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+function writePill(x: SavedPill | undefined): void {
+  try {
+    if (x) sessionStorage.setItem(PILL_KEY, JSON.stringify(x));
+    else sessionStorage.removeItem(PILL_KEY);
+  } catch {}
+}
+
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 /**
- * The morning debrief: a small deck in the corner, once a day after the brief time. Click, swipe or use the arrow keys
- * to move through it: the day in numbers, each decision on its own with its buttons, what is worth doing today, and
- * a last word. Closing it (or reaching the end) puts it away until tomorrow; the dash keeps it as a pill to come back
- * to.
+ * The morning debrief: once a day, after the brief time, a deck in the middle of the screen (a sheet from the bottom
+ * on a phone). Click, swipe or use the arrow keys to move through it: the day in numbers, each decision on its own
+ * with its buttons, what is worth doing today, and what got done. Every decision is finished inside the deck: drafts
+ * are reviewed and approved here, LinkedIn opens in a new tab. A button that opens another page says so, and the deck
+ * waits as a pill at the bottom of every page that brings the student back to the same step. Closing it (or reaching
+ * the end) puts it away until tomorrow.
  */
 export function MorningBrief() {
-  const { user, userId } = useSession();
-  const settings = useLiveQuery(() => (userId ? db.settings.get(userId) : undefined), [userId]);
+  const { user, userId, settings } = useSession();
   const { pathname } = useLocation();
+  const nav = useNavigate();
   const [mode, setMode] = useState<'hidden' | 'open' | 'pill'>('hidden');
   const [deck, setDeck] = useState<MorningDeck>();
   const [i, setI] = useState(0);
-  const [outcomes, setOutcomes] = useState<Record<string, Outcome>>({});
+  const [results, setResults] = useState<Record<string, Result>>({});
+  const [last, setLast] = useState<Last>();
+  // the student went to another page from the deck: the pill says it brings them back
+  const [away, setAway] = useState(false);
   const ready = !!user?.onboardingCompletedAt && !pathname.startsWith('/onboarding');
   // put away once in this visit: it never comes back by itself before tomorrow, even before the saved day loads
   const putAway = useRef(false);
+  const ref = useRef<HTMLElement>(null);
 
   const open = useCallback(async () => {
     if (!user) return;
+    writePill(undefined);
     setDeck(await morningDeck(user));
     setI(0);
-    setOutcomes({});
+    setResults({});
+    setLast(undefined);
+    setAway(false);
     setMode('open');
   }, [user]);
+
+  // a pill from before a reload comes back as a pill, on the step it was on
+  const restored = useRef(false);
+  useEffect(() => {
+    if (!ready || !user || restored.current) return;
+    restored.current = true;
+    const saved = readPill();
+    if (!saved || saved.userId !== user.id || saved.day !== localDay(new Date())) return;
+    putAway.current = true;
+    void morningDeck(user).then((d) => {
+      const at = saved.sid ? d.decisions.findIndex((x) => x.id === saved.sid) : -1;
+      const moves = 1 + d.decisions.length;
+      const end = moves + (d.moves.length ? 1 : 0);
+      setDeck(d);
+      setI(
+        at >= 0
+          ? 1 + at
+          : saved.step === 'moves' && d.moves.length
+            ? moves
+            : saved.step === 'done'
+              ? end
+              : saved.step === 'decide' && d.decisions.length
+                ? 1
+                : 0,
+      );
+      setResults({});
+      setAway(saved.away);
+      setMode('pill');
+    });
+  }, [ready, user]);
 
   // once a day, after the brief time: checked on load and every few minutes while the app is open
   useEffect(() => {
@@ -65,16 +168,22 @@ export function MorningBrief() {
     return () => clearInterval(t);
   }, [ready, mode, settings, open]);
 
+  // Settings or the palette ask for it: a deck waiting as a pill comes back where it was, otherwise a fresh one
   useEffect(() => {
-    const onAsk = () => void open();
+    const onAsk = () => {
+      if (mode === 'pill' && deck) {
+        setAway(false);
+        setMode('open');
+      } else void open();
+    };
     window.addEventListener(MORNING_EVENT, onAsk);
     return () => window.removeEventListener(MORNING_EVENT, onAsk);
-  }, [open]);
+  }, [open, mode, deck]);
 
   const slides: Slide[] = deck
     ? [
         { kind: 'overview' },
-        ...deck.decisions.map((s) => ({ kind: 'decide' as const, s })),
+        ...deck.decisions.map((s, n) => ({ kind: 'decide' as const, s, n })),
         ...(deck.moves.length ? [{ kind: 'moves' as const }] : []),
         { kind: 'done' },
       ]
@@ -83,35 +192,117 @@ export function MorningBrief() {
   // the day is saved before the card goes, so leaving the page right after never loses it
   const close = useCallback(async () => {
     putAway.current = true;
+    writePill(undefined);
     if (userId) await markMorningSeen(userId).catch(() => undefined);
     setMode('hidden');
   }, [userId]);
-  const minimize = () => {
-    putAway.current = true;
-    if (userId) void markMorningSeen(userId);
-    setMode('pill');
+  const minimize = useCallback(
+    (toPage = false) => {
+      putAway.current = true;
+      if (userId) void markMorningSeen(userId);
+      setAway(toPage);
+      setMode('pill');
+    },
+    [userId],
+  );
+  /** Go to another page of Orbit; the deck waits as a pill that brings the student back to this step. */
+  const leave = useCallback(
+    (to?: string) => {
+      minimize(true);
+      // a link that navigates by itself (a person's page) only needs the deck out of the way
+      if (to) nav(to);
+    },
+    [minimize, nav],
+  );
+  const resume = () => {
+    setAway(false);
+    setMode('open');
   };
 
-  // the arrow keys move through it while it is open, unless the student is typing somewhere
+  // focus moves into the deck when it opens and back to where it was when it goes
+  useEffect(() => {
+    if (mode !== 'open') return;
+    const previous = document.activeElement as HTMLElement | null;
+    return () => {
+      if (previous && document.contains(previous) && previous !== document.body) previous.focus();
+    };
+  }, [mode]);
+  // each step starts with the focus on the deck itself, so Enter presses the step's main button
+  useEffect(() => {
+    void i;
+    if (mode !== 'open') return;
+    const node = ref.current;
+    if (!node || (node.contains(document.activeElement) && isTyping(document.activeElement))) return;
+    node.focus({ preventScroll: true });
+  }, [i, mode]);
+
+  const slide = slides[i];
+  const next = () => go(i + 1);
+  // the pill is kept for a reload of the tab, with the step it is on
+  useEffect(() => {
+    if (mode !== 'pill' || !user || !slide) return;
+    writePill({
+      userId: user.id,
+      day: localDay(new Date()),
+      step: slide.kind,
+      sid: slide.kind === 'decide' ? slide.s.id : undefined,
+      away,
+    });
+  }, [mode, away, slide, user]);
+  // the keyboard while it is open: ← → move, Enter presses the main button, Esc puts it away as a pill, Tab stays
+  // inside
   useEffect(() => {
     if (mode !== 'open') return;
     const onKey = (e: KeyboardEvent) => {
+      const node = ref.current;
+      if (!node || e.defaultPrevented) return;
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        minimize();
+        return;
+      }
+      if (e.key === 'Tab') {
+        const list = [...node.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(
+          (x) => x.offsetParent !== null,
+        );
+        if (!list.length) return e.preventDefault();
+        const first = list[0]!;
+        const lastEl = list[list.length - 1]!;
+        const active = document.activeElement;
+        if (e.shiftKey && (active === first || active === node || !node.contains(active))) {
+          e.preventDefault();
+          lastEl.focus();
+        } else if (!e.shiftKey && (active === lastEl || !node.contains(active))) {
+          e.preventDefault();
+          first.focus();
+        }
+        return;
+      }
       const t = e.target as HTMLElement | null;
-      if (t && (t.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName))) return;
+      if (isTyping(t) || e.altKey || e.ctrlKey || e.metaKey) return;
       if (e.key === 'ArrowRight') go(i + 1);
       else if (e.key === 'ArrowLeft') go(i - 1);
-      else if (e.key === 'Escape') minimize();
-      else return;
+      else if (e.key === 'Enter') {
+        // a focused button or link takes its own Enter
+        if (t && t !== node && t.closest('button, a, [role="button"]')) return;
+        const primary = node.querySelector<HTMLElement>('[data-primary="true"]:not([disabled])');
+        if (!primary) return;
+        primary.click();
+      } else return;
       e.preventDefault();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   });
 
-  // a swipe sideways on a phone (or a drag with the mouse) moves a slide
+  // a swipe sideways on a phone moves a step (not a drag that starts on a button, a link or a text box)
   const start = useRef<{ x: number; y: number } | undefined>(undefined);
   const onPointerDown = (e: React.PointerEvent) => {
-    start.current = { x: e.clientX, y: e.clientY };
+    const t = e.target as HTMLElement;
+    start.current =
+      e.pointerType === 'mouse' || t.closest('button, a, input, textarea, select, [contenteditable="true"]')
+        ? undefined
+        : { x: e.clientX, y: e.clientY };
   };
   const onPointerUp = (e: React.PointerEvent) => {
     const s = start.current;
@@ -121,149 +312,252 @@ export function MorningBrief() {
     if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(e.clientY - s.y) * 1.5) go(i + (dx < 0 ? 1 : -1));
   };
 
-  if (!ready || !user || mode === 'hidden') return null;
-  const left = deck ? deck.decisions.filter((s) => !outcomes[s.id]).length : 0;
+  if (!ready || !user || mode === 'hidden' || !deck || !slide) return null;
+  const outcomes = Object.fromEntries(Object.entries(results).map(([k, v]) => [k, v.o]));
+  // still to decide: not reached, or skipped (it waits in Drafts too)
+  const left = deck.decisions.filter((s) => !results[s.id] || results[s.id]!.o === 'skipped').length;
   if (mode === 'pill')
     return (
-      <button
-        onClick={() => setMode('open')}
-        className="fixed z-40 right-4 bottom-20 md:bottom-5 h-10 pl-3 pr-2 rounded-full glass glass-strong border border-line shadow-[var(--shadow-card)] inline-flex items-center gap-2 text-[13px] pop-in"
+      <div
+        className="fixed z-40 right-3 bottom-[76px] md:bottom-5 md:right-5 h-11 pl-1 pr-1 rounded-full bg-canvas border border-line shadow-[0_12px_32px_-12px_rgba(0,0,0,0.3)] inline-flex items-center gap-0.5 text-[13px] fade-up"
         data-testid="morning-pill"
       >
-        <Sun size={15} className="text-warn" />
-        Morning brief{left ? ` · ${left} to decide` : ''}
-        <span
-          role="button"
-          tabIndex={0}
+        <button
+          onClick={resume}
+          className="h-9 pl-3 pr-2 rounded-full inline-flex items-center gap-2 hover:bg-canvas-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          data-testid="morning-resume"
+          title="Open the morning brief where you left it"
+        >
+          <Sun size={15} className="text-warn" aria-hidden />
+          <span className="font-medium">{away ? 'Back to your morning brief' : 'Morning brief'}</span>
+          {left > 0 && <span className="text-ink-3 tabular">{left} left</span>}
+        </button>
+        <button
+          onClick={() => void close()}
           aria-label="Put the morning brief away until tomorrow"
-          onClick={(e) => {
-            e.stopPropagation();
-            void close();
-          }}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              e.stopPropagation();
-              void close();
-            }
-          }}
-          className="w-6 h-6 rounded-full inline-flex items-center justify-center text-ink-3 hover:bg-canvas-2"
+          title="Put it away until tomorrow"
+          className="w-8 h-8 rounded-full inline-flex items-center justify-center text-ink-3 hover:bg-canvas-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          data-testid="morning-pill-close"
         >
-          <X size={13} />
-        </span>
-      </button>
-    );
-  if (!deck) return null;
-  const slide = slides[i]!;
-  const decide = (s: Suggestion, o: Outcome) => {
-    setOutcomes((x) => ({ ...x, [s.id]: o }));
-    go(i + 1);
-  };
-  const decidedCount = Object.values(outcomes).filter((o) => o === 'done').length;
-  return (
-    <section
-      role="dialog"
-      aria-label="Morning brief"
-      className={cx(
-        'fixed z-40 pop-in flex flex-col bg-canvas border border-line rounded-[20px] shadow-[0_24px_60px_-20px_rgba(0,0,0,0.25)]',
-        'inset-x-2 bottom-[72px] md:inset-x-auto md:right-5 md:bottom-5 md:w-[380px]',
-        'max-h-[min(560px,calc(100dvh-96px))]',
-      )}
-      data-testid="morning-brief"
-      onPointerDown={onPointerDown}
-      onPointerUp={onPointerUp}
-    >
-      <header className="px-4 pt-3 pb-2 flex items-center gap-2">
-        {/* one segment per slide, like stories: where you are and how much is left */}
-        <div className="flex-1 flex gap-1" aria-hidden>
-          {slides.map((_, k) => (
-            <span
-              key={k}
-              className={cx('h-[3px] flex-1 rounded-full transition-colors', k <= i ? 'bg-ink' : 'bg-line')}
-            />
-          ))}
-        </div>
-        <button
-          onClick={minimize}
-          className="w-7 h-7 rounded-full inline-flex items-center justify-center text-ink-3 hover:bg-canvas-2"
-          aria-label="Keep it for later"
-          title="Keep it for later"
-        >
-          <Minus size={15} />
+          <X size={14} />
         </button>
-        <button
-          onClick={close}
-          className="w-7 h-7 rounded-full inline-flex items-center justify-center text-ink-3 hover:bg-canvas-2"
-          aria-label="Close the morning brief until tomorrow"
-          title="Close until tomorrow"
-          data-testid="morning-close"
-        >
-          <X size={15} />
-        </button>
-      </header>
-      <div className="px-5 pb-2 flex-1 min-h-[300px] overflow-y-auto scroll-thin select-none" key={i}>
-        <div className="fade-up">
-          {slide.kind === 'overview' && <Overview deck={deck} />}
-          {slide.kind === 'decide' && (
-            <Decision
-              key={slide.s.id}
-              s={slide.s}
-              user={user}
-              index={deck.decisions.indexOf(slide.s)}
-              total={deck.decisions.length}
-              onOutcome={(o) => decide(slide.s, o)}
-              onOpen={minimize}
-            />
-          )}
-          {slide.kind === 'moves' && <Moves deck={deck} onGo={minimize} />}
-          {slide.kind === 'done' && (
-            <Done
-              decided={decidedCount}
-              later={deck.decisions.filter((s) => outcomes[s.id] !== 'done').length + deck.moreInDrafts}
-              onClose={close}
-            />
-          )}
-        </div>
       </div>
-      <footer className="px-4 py-3 border-t border-line-2 flex items-center gap-2">
-        <button
-          onClick={() => go(i - 1)}
-          disabled={i === 0}
-          className="w-8 h-8 rounded-full inline-flex items-center justify-center text-ink-2 hover:bg-canvas-2 disabled:opacity-30"
-          aria-label="Back"
-        >
-          <ChevronLeft size={16} />
-        </button>
-        <span className="text-[12px] text-ink-3 tabular">
-          {i + 1} / {slides.length}
-        </span>
-        {slide.kind !== 'done' && (
-          <Button
-            size="sm"
-            variant={slide.kind === 'decide' ? 'ghost' : 'primary'}
-            className="ml-auto"
-            onClick={() => (slide.kind === 'decide' ? decide(slide.s, 'skipped') : go(i + 1))}
-            data-testid="morning-next"
-          >
-            {slide.kind === 'overview'
-              ? deck.decisions.length
-                ? 'Start'
-                : 'Next'
-              : slide.kind === 'decide'
-                ? 'Skip'
-                : 'Next'}
-            <ChevronRight size={14} />
-          </Button>
+    );
+
+  const record = (s: Suggestion, o: MorningOutcome, text?: string, undo?: () => Promise<void>) => {
+    setResults((x) => ({ ...x, [s.id]: { o, text } }));
+    // skipping is not a decision: the last one can still be taken back
+    if (o !== 'skipped') setLast(undo && text ? { sid: s.id, text, undo } : undefined);
+  };
+  const unrecord = (sid: string) =>
+    setResults((x) => {
+      const { [sid]: _, ...rest } = x;
+      return rest;
+    });
+  const undoLast = async () => {
+    if (!last) return;
+    const l = last;
+    setLast(undefined);
+    await l.undo();
+    unrecord(l.sid);
+    const at = slides.findIndex((x) => x.kind === 'decide' && x.s.id === l.sid);
+    if (at >= 0) go(at);
+  };
+  const result = slide.kind === 'decide' ? results[slide.s.id] : undefined;
+  const summary = morningSummary(deck, outcomes);
+  const nextLabel =
+    slide.kind === 'overview'
+      ? deck.decisions.length
+        ? 'Start'
+        : 'Next'
+      : slide.kind === 'decide' && !result
+        ? 'Skip'
+        : 'Next';
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-end md:items-center justify-center md:p-6"
+      data-testid="morning-layer"
+    >
+      <div
+        className="absolute inset-0 bg-[rgba(10,10,10,0.38)]"
+        onClick={() => minimize()}
+        aria-hidden
+        data-testid="morning-backdrop"
+      />
+      <section
+        ref={ref}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Morning brief"
+        tabIndex={-1}
+        className={cx(
+          'relative flex flex-col bg-canvas border border-line shadow-[0_32px_80px_-24px_rgba(0,0,0,0.45)] sheet-in focus:outline-none',
+          // a phone: a sheet from the bottom, the full width and at least most of the height, so steps barely move;
+          // a laptop: a card in the middle of the screen
+          'w-full min-h-[min(560px,calc(100dvh-28px))] max-h-[calc(100dvh-28px)] rounded-t-[24px] pb-[env(safe-area-inset-bottom)]',
+          'md:w-[560px] md:min-h-[min(500px,calc(100dvh-48px))] md:max-h-[min(780px,calc(100dvh-48px))] md:rounded-[24px] md:pb-0',
         )}
-      </footer>
-    </section>
+        data-testid="morning-brief"
+        data-step={slide.kind}
+        onPointerDown={onPointerDown}
+        onPointerUp={onPointerUp}
+      >
+        <span className="md:hidden mx-auto mt-2 h-1 w-10 rounded-full bg-line" aria-hidden />
+        <header className="px-4 md:px-5 pt-2.5 md:pt-4 pb-2 flex items-center gap-2">
+          <Progress slides={slides} i={i} results={results} />
+          <button
+            onClick={() => minimize()}
+            className="w-8 h-8 rounded-full inline-flex items-center justify-center text-ink-3 hover:bg-canvas-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            aria-label="Minimize. It waits at the bottom of the screen"
+            title="Minimize (Esc). It waits at the bottom of the screen"
+            data-testid="morning-minimize"
+          >
+            <Minus size={16} />
+          </button>
+          <button
+            onClick={() => void close()}
+            className="w-8 h-8 rounded-full inline-flex items-center justify-center text-ink-3 hover:bg-canvas-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            aria-label="Close the morning brief until tomorrow"
+            title="Close until tomorrow"
+            data-testid="morning-close"
+          >
+            <X size={16} />
+          </button>
+        </header>
+        <div className="px-5 md:px-6 pb-4 flex-1 min-h-0 overflow-y-auto scroll-thin" key={i}>
+          <div className="fade-up">
+            {slide.kind === 'overview' && <Overview deck={deck} onLeave={leave} />}
+            {slide.kind === 'decide' && (
+              <Decision
+                key={slide.s.id}
+                s={slide.s}
+                user={user}
+                index={slide.n}
+                total={deck.decisions.length}
+                result={result}
+                onResolve={(o, text, undo, advance = true) => {
+                  record(slide.s, o, text, undo);
+                  if (advance) next();
+                }}
+                onUnresolve={() => unrecord(slide.s.id)}
+                onLeave={leave}
+              />
+            )}
+            {slide.kind === 'moves' && <Moves deck={deck} user={user} onLeave={leave} />}
+            {slide.kind === 'done' && (
+              <Done
+                summary={summary}
+                onDrafts={() => {
+                  void close();
+                  nav('/inbox');
+                }}
+                onClose={() => void close()}
+              />
+            )}
+          </div>
+        </div>
+        <footer className="px-3 md:px-4 py-3 border-t border-line-2 flex items-center gap-2 min-h-[60px]">
+          <button
+            onClick={() => go(i - 1)}
+            disabled={i === 0}
+            className="w-9 h-9 shrink-0 rounded-full inline-flex items-center justify-center text-ink-2 hover:bg-canvas-2 disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            aria-label="Back"
+            title="Back (←)"
+            data-testid="morning-back"
+          >
+            <ChevronLeft size={17} />
+          </button>
+          {last ? (
+            <div
+              className="min-w-0 flex-1 flex items-center gap-1.5 text-[12.5px]"
+              data-testid="morning-last"
+            >
+              <span className="truncate text-ink-2" title={last.text}>
+                {last.text}
+              </span>
+              <button
+                onClick={() => void undoLast()}
+                className="shrink-0 inline-flex items-center gap-1 h-7 px-2 rounded-full font-medium text-ink hover:bg-canvas-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                data-testid="morning-undo"
+              >
+                <Undo2 size={13} /> Undo
+              </button>
+            </div>
+          ) : (
+            <span className="min-w-0 flex-1 truncate text-[11.5px] text-ink-3 hidden md:block" aria-hidden>
+              ← → to move · Enter for the main button · Esc to minimize
+            </span>
+          )}
+          {!last && <span className="flex-1 md:hidden" />}
+          {slide.kind !== 'done' && (
+            <Button
+              size="sm"
+              variant={slide.kind === 'decide' && !result ? 'ghost' : 'primary'}
+              className="shrink-0"
+              onClick={() => {
+                if (slide.kind === 'decide' && !result) record(slide.s, 'skipped');
+                next();
+              }}
+              data-testid="morning-next"
+              data-primary={slide.kind !== 'decide' || result ? 'true' : undefined}
+              title={
+                slide.kind === 'decide' && !result ? 'Leave it for now; it stays in Drafts (→)' : 'Next (→)'
+              }
+            >
+              {nextLabel}
+              <ChevronRight size={14} />
+            </Button>
+          )}
+        </footer>
+      </section>
+    </div>
   );
 }
 
-function Stat({ label, value, bar }: { label: string; value: ReactNode; bar?: number }) {
+/** One segment per step, like stories; a decision's segment shows how it ended. */
+function Progress({ slides, i, results }: { slides: Slide[]; i: number; results: Record<string, Result> }) {
   return (
-    <div className="rounded-[14px] bg-canvas-2 px-3 py-2.5">
-      <div className="text-[11.5px] text-ink-3">{label}</div>
+    <div
+      className="flex-1 flex gap-1"
+      role="progressbar"
+      aria-label="Morning brief progress"
+      aria-valuemin={1}
+      aria-valuemax={slides.length}
+      aria-valuenow={i + 1}
+      aria-valuetext={`Step ${i + 1} of ${slides.length}`}
+      data-testid="morning-progress"
+    >
+      {slides.map((x, k) => {
+        const r = x.kind === 'decide' ? results[x.s.id]?.o : undefined;
+        return (
+          <span
+            key={k}
+            data-outcome={r}
+            className={cx(
+              'h-[3px] flex-1 rounded-full transition-colors',
+              r === 'sent' || r === 'done'
+                ? 'bg-accent'
+                : r === 'later'
+                  ? 'bg-warn'
+                  : k === i
+                    ? 'bg-ink'
+                    : k < i
+                      ? 'bg-ink-3'
+                      : 'bg-line',
+            )}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+function Stat({ label, value, sub, bar }: { label: string; value: ReactNode; sub?: string; bar?: number }) {
+  return (
+    <div className="rounded-[14px] bg-canvas-2 px-3.5 py-3">
+      <div className="text-[12px] text-ink-3">{label}</div>
       <div className="text-[22px] leading-tight tracking-[-0.02em] tabular mt-0.5">{value}</div>
+      {sub && <div className="text-[11.5px] text-ink-3 mt-0.5">{sub}</div>}
       {bar !== undefined && (
         <div className="mt-1.5 h-1 rounded-full bg-line overflow-hidden">
           <div
@@ -276,32 +570,114 @@ function Stat({ label, value, bar }: { label: string; value: ReactNode; bar?: nu
   );
 }
 
-function Overview({ deck }: { deck: MorningDeck }) {
+function Overview({ deck, onLeave }: { deck: MorningDeck; onLeave: (to?: string) => void }) {
   const { stats } = deck;
   return (
     <div data-testid="morning-overview">
-      <div className="text-[12px] text-ink-3 mt-1">{deck.dateLabel}</div>
-      <h2 className="text-[24px] font-normal tracking-[-0.02em] leading-tight mt-0.5">{deck.greeting}</h2>
-      <p className="text-[13.5px] text-ink-2 mt-1.5">{deck.headline}</p>
-      <div className="grid grid-cols-2 gap-2 mt-4">
+      <div className="text-[12.5px] text-ink-3 mt-2">{deck.dateLabel}</div>
+      <h2 className="text-[26px] font-normal tracking-[-0.02em] leading-tight mt-0.5">{deck.greeting}</h2>
+      <p className="text-[14px] text-ink-2 mt-2" data-testid="morning-headline">
+        {deck.headline}
+      </p>
+      <div className="grid grid-cols-2 gap-2 mt-5">
         <Stat
           label="First messages this week"
           value={
             <>
               {stats.sentThisWeek}
-              <span className="text-[14px] text-ink-3"> / {stats.weeklyTarget}</span>
+              {stats.weeklyTarget > 0 && (
+                <span className="text-[14px] text-ink-3"> / {stats.weeklyTarget}</span>
+              )}
             </>
           }
-          bar={stats.weeklyTarget ? stats.sentThisWeek / stats.weeklyTarget : 0}
+          bar={stats.weeklyTarget ? stats.sentThisWeek / stats.weeklyTarget : undefined}
         />
         <Stat label="Replies since yesterday" value={stats.replies} />
         <Stat label="Chats today" value={stats.chatsToday} />
-        <Stat
-          label="Reply rate, 30 days"
-          value={stats.replyRate === undefined ? '—' : `${stats.replyRate}%`}
-        />
+        {stats.replyRate === undefined ? (
+          <Stat label="Reply rate, 30 days" value="Not yet" sub="Shows after 3 first messages" />
+        ) : (
+          <Stat label="Reply rate, 30 days" value={`${stats.replyRate}%`} />
+        )}
       </div>
+      {deck.peopleCount === 0 && (
+        <div className="mt-5">
+          <Button variant="primary" onClick={() => onLeave('/people')} data-testid="morning-add-people">
+            Add people <ArrowUpRight size={14} />
+          </Button>
+          <p className="text-[12px] text-ink-3 mt-1.5">
+            Opens People. This brief waits at the bottom of the screen.
+          </p>
+        </div>
+      )}
     </div>
+  );
+}
+
+/** What made Orbit ask: the email behind a stage question or an introduction, when there is one. */
+function useEvidence(s: Suggestion) {
+  return useLiveQuery(async () => {
+    if (s.kind === 'confirm_intro' && typeof s.payload.messageId === 'string') {
+      const m = await db.messages.get(s.payload.messageId);
+      return m ? { text: m.bodyText.replace(/\s+/g, ' ').trim(), at: m.sentAt } : undefined;
+    }
+    if (s.kind !== 'confirm_stage' || typeof s.payload.stageEventId !== 'string') return undefined;
+    const e = await db.stageEvents.get(s.payload.stageEventId);
+    if (e?.evidenceRefTable !== 'messages' || !e.evidenceRefId) return undefined;
+    const m = await db.messages.get(e.evidenceRefId);
+    return m ? { text: m.bodyText.replace(/\s+/g, ' ').trim(), at: m.sentAt } : undefined;
+  }, [s.kind, s.payload.stageEventId, s.payload.messageId]);
+}
+
+const shortDay = (iso: string) =>
+  new Date(iso).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+
+/** A button as the engine describes it: the main one filled, a page one with its arrow, LinkedIn as a new-tab link. */
+function ActionButton({
+  a,
+  busy,
+  onClick,
+  href,
+}: {
+  a: MorningAction;
+  busy: boolean;
+  onClick: () => void;
+  href?: string;
+}) {
+  if (a.effect === 'tab' && href)
+    return (
+      <a
+        href={href}
+        target="_blank"
+        rel="noreferrer noopener"
+        onClick={onClick}
+        title={a.hint}
+        data-primary={a.primary ? 'true' : undefined}
+        data-effect={a.effect}
+        data-testid={`morning-action-${a.id}`}
+        className={cx(
+          'inline-flex items-center justify-center gap-1.5 h-9 px-4 rounded-full text-[14px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/25',
+          a.primary
+            ? 'bg-accent text-[#fdfcfc] hover:bg-accent-2 shadow-[var(--shadow-pill)]'
+            : 'bg-canvas text-ink border border-line shadow-[var(--shadow-pill)] hover:bg-canvas-2',
+        )}
+      >
+        {a.label} <ExternalLink size={13} />
+      </a>
+    );
+  return (
+    <Button
+      variant={a.primary ? 'primary' : a.effect === 'snooze' ? 'ghost' : 'secondary'}
+      disabled={busy}
+      onClick={onClick}
+      title={a.hint}
+      data-primary={a.primary ? 'true' : undefined}
+      data-effect={a.effect}
+      data-testid={`morning-action-${a.id}`}
+    >
+      {a.label}
+      {a.effect === 'page' && <ArrowUpRight size={14} />}
+    </Button>
   );
 }
 
@@ -310,210 +686,630 @@ function Decision({
   user,
   index,
   total,
-  onOutcome,
-  onOpen,
+  result,
+  onResolve,
+  onUnresolve,
+  onLeave,
 }: {
   s: Suggestion;
   user: User;
   index: number;
   total: number;
-  onOutcome: (o: Outcome) => void;
-  onOpen: () => void;
+  result?: Result;
+  /** the decision is made: how, the sentence for the footer, how to take it back; `advance` false stays here */
+  onResolve: (o: MorningOutcome, text?: string, undo?: () => Promise<void>, advance?: boolean) => void;
+  onUnresolve: () => void;
+  onLeave: (to?: string) => void;
 }) {
-  const nav = useNavigate();
+  const toast = useToast();
+  const { settings } = useSession();
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const [composing, setComposing] = useState(false);
+  const [askMerge, setAskMerge] = useState(false);
+  const [openedLinkedIn, setOpenedLinkedIn] = useState(false);
   const person = useLiveQuery(() => (s.personId ? db.people.get(s.personId) : undefined), [s.personId]);
-  const draft = useLiveQuery(
-    () => (s.outboundMessageId ? db.outbound.get(s.outboundMessageId) : undefined),
-    [s.outboundMessageId],
+  // the second record of a possible duplicate, so both can be seen before deciding
+  const otherId = s.kind === 'confirm_merge' ? (s.payload.otherPersonId as string | undefined) : undefined;
+  const other = useLiveQuery(() => (otherId ? db.people.get(otherId) : undefined), [otherId]);
+  const introducerId =
+    s.kind === 'confirm_intro' ? (s.payload.introducerId as string | undefined) : undefined;
+  const introducer = useLiveQuery(
+    () => (introducerId ? db.people.get(introducerId) : undefined),
+    [introducerId],
   );
+  // the card as it is now: a draft written in the deck is on it, not on the deck's copy
+  const live = useLiveQuery(() => db.suggestions.get(s.id), [s.id]);
+  const draftId = live?.outboundMessageId ?? s.outboundMessageId;
+  const draft = useLiveQuery(() => (draftId ? db.outbound.get(draftId) : undefined), [draftId]);
+  const chat = useLiveQuery(() => (s.chatId ? db.chats.get(s.chatId) : undefined), [s.chatId]);
+  const stageEvent = useLiveQuery(
+    () =>
+      typeof s.payload.stageEventId === 'string' ? db.stageEvents.get(s.payload.stageEventId) : undefined,
+    [s.payload.stageEventId],
+  );
+  const evidence = useEvidence(s);
+  const sharedOrgNow =
+    useLiveQuery(
+      async () =>
+        s.kind === 'new_outreach' && person
+          ? sharesOrgNow(person, await currentResumeFacets(user.id))
+          : false,
+      [s.kind, person?.currentOrganizationRaw, user.id],
+    ) ?? false;
+  // a message approved here and taken back (Undo) is a decision again
+  useEffect(() => {
+    if (result?.o === 'sent' && draft?.status === 'draft') onUnresolve();
+  }, [result?.o, draft?.status, onUnresolve]);
+
   const meta = KIND_LABEL[s.kind];
-  const run = async (fn: () => Promise<unknown>, o: Outcome = 'done') => {
+  const first = person?.firstName ?? 'them';
+  const toStage = (stageEvent?.toStage ?? s.payload.toStage) as keyof typeof STAGE_LABELS | undefined;
+  const coldStart =
+    s.kind === 'new_outreach' &&
+    !s.chatId &&
+    !!person &&
+    !person.primaryEmail &&
+    needsWarmUp(person, 'linkedin', settings?.warmUpEnabled ?? true, sharedOrgNow);
+  const actions = decisionActions(s, {
+    firstName: person?.firstName,
+    hasDraft: !!draft,
+    coldStart,
+    toStage,
+    openedLinkedIn,
+  });
+  const warmAction = chat?.warmUp?.actions.find((a) => a.id === (s.payload.actionId as string));
+
+  /** Run a decision, keeping what it changes so Undo can put it back (a merge cannot be undone). */
+  const decide = async (
+    fn: () => Promise<unknown>,
+    text: string,
+    opts: { o?: MorningOutcome; undoable?: boolean } = {},
+  ): Promise<boolean> => {
     setBusy(true);
+    setError(undefined);
     try {
+      const snap = opts.undoable === false ? undefined : await snapshotDecision(user.id, s);
       await fn();
-      onOutcome(o);
+      onResolve(opts.o ?? 'done', text, snap ? () => undoDecision(user.id, snap) : undefined);
+      return true;
+    } catch {
+      setError('That did not go through. Try again, or skip it for now.');
+      return false;
     } finally {
       setBusy(false);
     }
   };
-  const openCard = () => {
-    onOpen();
-    nav(`/inbox?card=${s.id}`);
+  const review = async () => {
+    if (!draftId) {
+      setBusy(true);
+      setError(undefined);
+      try {
+        await ensureDrafts(user, [s.id]);
+        const now = await db.suggestions.get(s.id);
+        if (!now?.outboundMessageId) {
+          setError(`Orbit could not draft this one. It stays in Drafts for you.`);
+          return;
+        }
+      } finally {
+        setBusy(false);
+      }
+    }
+    setComposing(true);
   };
+  const run: Record<MorningActionId, () => void> = {
+    yes: () =>
+      s.kind === 'confirm_intro'
+        ? void decide(
+            () => answerIntroductionQuestion(user, s.payload.threadId as string, true),
+            `Added ${first} to your pipeline${introducer ? `, introduced by ${introducer.firstName}` : ''}.`,
+          )
+        : void decide(
+            () => decideProposedStage(s.payload.stageEventId as string, true),
+            toStage ? `Moved ${first} to ${STAGE_LABELS[toStage]}.` : `Moved ${first} on.`,
+          ),
+    no: () =>
+      s.kind === 'confirm_intro'
+        ? void decide(
+            () => answerIntroductionQuestion(user, s.payload.threadId as string, false),
+            'Got it. Orbit will not ask about this thread again.',
+          )
+        : void decide(
+            () => decideProposedStage(s.payload.stageEventId as string, false),
+            `Kept ${first} ${chat ? `in ${STAGE_LABELS[chat.stage]}` : 'where they were'}.`,
+          ),
+    keep: () =>
+      void decide(
+        () => decideMerge(user.id, s.payload.mergeId as string, false, { suggestionId: s.id }),
+        'Kept as two people.',
+      ),
+    merge: () => setAskMerge(true),
+    open_linkedin: () => setOpenedLinkedIn(true),
+    warm_done: () =>
+      void decide(
+        () => markWarmUpAction(user.id, s.chatId!, s.payload.actionId as string, true),
+        `Logged the warm-up step for ${first}.`,
+      ),
+    warm_skip: () =>
+      void decide(
+        () => markWarmUpAction(user.id, s.chatId!, s.payload.actionId as string, false),
+        `Skipped that step for ${first}.`,
+      ),
+    prep_open: () => {
+      void decide(() => markPrepOpened(s.id), `Opened prep for ${first}.`).then(
+        (ok) => ok && person && onLeave(`/people/${person.id}?tab=prep`),
+      );
+    },
+    prep_done: () => void decide(() => markPrepOpened(s.id), `Marked prep for ${first} done.`),
+    item_done: () =>
+      void decide(
+        () => markActionItemDone(s.payload.actionItemId as string, s.id),
+        'Marked the promise kept.',
+      ),
+    pick_person: () => onLeave(`/notes/new?note=${s.payload.noteId as string}`),
+    review: () => void review(),
+    start_warm_up: () =>
+      void decide(
+        () => startWarmUpOrOutreach(user, person!.id, 'linkedin', 'recommendation'),
+        `Warm-up started for ${first}. The first step shows in Drafts.`,
+      ),
+    tomorrow: () =>
+      void decide(() => snoozeSuggestion(user.id, s, 1), `Put off until tomorrow.`, { o: 'later' }),
+  };
+  const approve = async (body: string, subject?: string) => {
+    if (!draft) return;
+    setBusy(true);
+    try {
+      const err = await runApproval(user, draft, body, subject, toast, person?.firstName);
+      if (!err) onResolve('sent', undefined, undefined, false);
+      return err;
+    } finally {
+      setBusy(false);
+    }
+  };
+  const showEditor = !!draft && (composing || result?.o === 'sent');
+  const decided = result && result.o !== 'skipped' && result.o !== 'sent';
   const body = draft ? (draft.bodyFinal ?? draft.bodyDraft) : '';
-  let actions: ReactNode;
-  if (s.kind === 'confirm_stage')
-    actions = (
-      <>
-        <Button
-          variant="primary"
-          disabled={busy}
-          onClick={() => run(() => decideProposedStage(s.payload.stageEventId as string, true))}
-        >
-          Yes
-        </Button>
-        <Button
-          disabled={busy}
-          onClick={() => run(() => decideProposedStage(s.payload.stageEventId as string, false))}
-        >
-          No
-        </Button>
-      </>
-    );
-  else if (s.kind === 'confirm_merge')
-    actions = (
-      <>
-        <Button
-          variant="primary"
-          disabled={busy}
-          onClick={() =>
-            run(() => decideMerge(user.id, s.payload.mergeId as string, true, { suggestionId: s.id }))
-          }
-        >
-          Same person
-        </Button>
-        <Button
-          disabled={busy}
-          onClick={() =>
-            run(() => decideMerge(user.id, s.payload.mergeId as string, false, { suggestionId: s.id }))
-          }
-        >
-          Keep both
-        </Button>
-      </>
-    );
-  else if (s.kind === 'confirm_intro')
-    actions = (
-      <>
-        <Button
-          variant="primary"
-          disabled={busy}
-          onClick={() => run(() => answerIntroductionQuestion(user, s.payload.threadId as string, true))}
-        >
-          Yes
-        </Button>
-        <Button
-          disabled={busy}
-          onClick={() => run(() => answerIntroductionQuestion(user, s.payload.threadId as string, false))}
-        >
-          No
-        </Button>
-      </>
-    );
-  else if (s.kind === 'warm_up_engage' && s.chatId)
-    actions = (
-      <>
-        <a
-          href={s.payload.url as string}
-          target="_blank"
-          rel="noreferrer"
-          className="inline-flex items-center gap-1.5 h-9 px-4 rounded-full bg-accent text-white text-[14px] font-medium hover:bg-accent-2"
-        >
-          Open LinkedIn <ExternalLink size={13} />
-        </a>
-        <Button
-          disabled={busy}
-          onClick={() => run(() => markWarmUpAction(user.id, s.chatId!, s.payload.actionId as string, true))}
-        >
-          <Check size={14} /> Done
-        </Button>
-      </>
-    );
-  else
-    actions = (
-      <>
-        <Button variant="primary" onClick={openCard} data-testid="morning-open">
-          {draft ? 'Review and send' : 'Open'} <ArrowRight size={14} />
-        </Button>
-        <Button disabled={busy} onClick={() => run(() => snoozeSuggestion(user.id, s, 1), 'later')}>
-          Tomorrow
-        </Button>
-      </>
-    );
+  const gap = body ? gapLabel(body) : undefined;
+  const primary = actions.find((a) => a.primary);
+  const role = person
+    ? [person.currentTitle, person.currentOrganizationRaw].filter(Boolean).join(' at ') || person.headline
+    : undefined;
+
   return (
-    <div data-testid="morning-decision">
-      <div className="text-[11.5px] uppercase tracking-wide text-ink-3 mt-1">
-        Decision {index + 1} of {total}
+    <div data-testid="morning-decision" data-kind={s.kind}>
+      <div className="flex items-center gap-2 mt-1.5">
+        <span
+          className="text-[11.5px] uppercase tracking-wide text-ink-3 tabular"
+          data-testid="morning-count"
+        >
+          Decision {index + 1} of {total}
+        </span>
+        <Chip tone={meta.tone} className="h-5">
+          {meta.label}
+        </Chip>
       </div>
       <div className="flex items-center gap-3 mt-3">
-        {person && <Avatar name={person.displayName} src={person.photoUrl} id={person.id} size={40} />}
-        <div className="min-w-0">
-          <div className="flex items-center gap-1.5">
-            <span className="font-medium truncate">{person?.displayName ?? meta.label}</span>
+        {person && <Avatar name={person.displayName} src={person.photoUrl} id={person.id} size={44} />}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5 min-w-0">
+            {person ? (
+              <PersonNameLink
+                person={person}
+                onNavigate={() => onLeave()}
+                className="font-medium truncate text-[15px]"
+                testId="morning-person-name"
+              />
+            ) : (
+              <span className="font-medium truncate text-[15px]">{meta.label}</span>
+            )}
+            {person?.linkedinUrl && <LinkedInMark url={person.linkedinUrl} name={person.displayName} />}
             {person && <PersonCompanyLogo person={person} size={14} />}
           </div>
-          <Chip tone={meta.tone} className="h-5 mt-0.5">
-            {meta.label}
-          </Chip>
+          {role && <div className="text-[12.5px] text-ink-3 truncate">{role}</div>}
         </div>
       </div>
-      <p className="text-[14px] text-ink mt-3 leading-snug">{s.reasonText}</p>
-      {body && (
-        <p className="mt-3 rounded-[12px] bg-canvas-2 px-3 py-2.5 text-[13px] text-ink-2 line-clamp-4 whitespace-pre-line">
-          {body.replace(/\n{2,}/g, '\n')}
+      <p className="text-[14.5px] text-ink mt-3 leading-snug">{s.reasonText}</p>
+
+      {evidence && (
+        <blockquote
+          className="mt-3 rounded-[12px] bg-canvas-2 px-3 py-2.5 text-[13px] text-ink-2"
+          data-testid="morning-evidence"
+        >
+          <span className="text-ink-3">
+            {s.kind === 'confirm_intro'
+              ? `${introducer?.firstName ?? 'They'} wrote to you both ${shortDay(evidence.at)}: `
+              : `${first} wrote ${shortDay(evidence.at)}: `}
+          </span>
+          <span className="line-clamp-3">“{evidence.text}”</span>
+        </blockquote>
+      )}
+      {s.kind === 'confirm_merge' && person && other && (
+        <div className="mt-3">
+          <MergePair a={person} b={other} onNavigate={() => onLeave()} />
+        </div>
+      )}
+      {s.kind === 'warm_up_engage' && warmAction && (
+        <p className="mt-3 rounded-[12px] bg-canvas-2 px-3 py-2.5 text-[13px] text-ink-2">
+          Step {chat!.warmUp!.actions.indexOf(warmAction) + 1} of {chat!.warmUp!.actions.length}:{' '}
+          {warmAction.label}.
+          {openedLinkedIn
+            ? ' When you have done it, mark it done here.'
+            : ' LinkedIn opens in a new tab; this stays open.'}
         </p>
       )}
-      <div className="mt-4 flex flex-wrap items-center gap-2">{actions}</div>
+      {draft && !showEditor && (
+        <button
+          type="button"
+          onClick={() => run.review()}
+          tabIndex={-1}
+          className="mt-3 block w-full text-left rounded-[12px] bg-canvas-2 px-3 py-2.5 text-[13px] text-ink-2 hover:bg-line-2"
+          data-testid="morning-draft-preview"
+          aria-label={`Open the draft to ${first}`}
+        >
+          {gap && <span className="block text-warn font-medium mb-0.5">Needs one line from you: {gap}</span>}
+          {body.trim() ? (
+            <span className="line-clamp-4 whitespace-pre-line">{body.replace(/\n{2,}/g, '\n')}</span>
+          ) : (
+            <span className="text-ink-3">The draft is empty. Open it to write it here.</span>
+          )}
+        </button>
+      )}
+      {!draftId && actions.some((a) => a.id === 'review') && !showEditor && (
+        <p className="mt-3 text-[13px] text-ink-3">
+          Orbit writes the draft when you open it. Nothing is sent until you approve it.
+        </p>
+      )}
+
+      {showEditor && draft && (
+        <div className="mt-3" data-testid="morning-composer">
+          <DraftEditor
+            draft={draft}
+            compact
+            focusOnOpen
+            busy={busy}
+            onApprove={approve}
+            onCancel={() => setComposing(false)}
+            extraActions={
+              result?.o === 'sent' ? undefined : (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setComposing(false)}
+                  data-testid="morning-composer-close"
+                >
+                  Close
+                </Button>
+              )
+            }
+          />
+          {result?.o === 'sent' && (
+            <p className="mt-2 text-[12px] text-ink-3" data-testid="morning-sent-note">
+              Approved. You can still undo it above while it waits; Next moves on.
+            </p>
+          )}
+        </div>
+      )}
+
+      {decided ? (
+        <div
+          className="mt-4 flex items-center gap-2 rounded-[12px] bg-accent-soft px-3 py-2.5 text-[13px] text-accent"
+          data-testid="morning-resolved"
+        >
+          <Check size={15} className="shrink-0" />
+          <span className="min-w-0">{result.text ?? 'Done.'}</span>
+        </div>
+      ) : askMerge && person && other ? (
+        <div
+          className="mt-4 rounded-[12px] border border-line p-3 text-[13px]"
+          role="alertdialog"
+          aria-label="Confirm merge"
+        >
+          <p>
+            Merge {other.displayName} into {person.displayName}? Their emails, notes and chats are combined
+            under {person.displayName}. This cannot be undone.
+          </p>
+          <div className="mt-2.5 flex flex-wrap gap-2">
+            <Button
+              variant="primary"
+              disabled={busy}
+              data-primary="true"
+              data-testid="merge-confirm"
+              onClick={() =>
+                void decide(
+                  () => decideMerge(user.id, s.payload.mergeId as string, true, { suggestionId: s.id }),
+                  `Merged into ${person.displayName}.`,
+                  { undoable: false },
+                )
+              }
+            >
+              Merge them
+            </Button>
+            <Button onClick={() => setAskMerge(false)}>Cancel</Button>
+          </div>
+        </div>
+      ) : (
+        !showEditor && (
+          <>
+            <div className="mt-4 flex flex-wrap items-center gap-2" data-testid="morning-actions">
+              {actions.map((a) => (
+                <ActionButton
+                  key={a.id}
+                  a={a}
+                  busy={busy}
+                  href={
+                    a.id === 'open_linkedin'
+                      ? ((s.payload.url as string | undefined) ?? warmAction?.url)
+                      : undefined
+                  }
+                  onClick={run[a.id]}
+                />
+              ))}
+            </div>
+            {primary && (
+              <p className="text-[12px] text-ink-3 mt-2" data-testid="morning-hint">
+                {primary.hint}.
+              </p>
+            )}
+          </>
+        )
+      )}
+      {error && (
+        <p className="mt-2 text-[12.5px] text-bad" role="alert">
+          {error}
+        </p>
+      )}
     </div>
   );
 }
 
-function Moves({ deck, onGo }: { deck: MorningDeck; onGo: () => void }) {
-  const people = useLiveQuery(
-    () => db.people.bulkGet(deck.moves.map((m) => m.personId ?? '')),
-    [deck.moves.map((m) => m.id).join()],
+/** One line under "Worth doing today", done right there: a warm-up step, a first message, or prep (its own page). */
+function MoveRow({ m, user, onLeave }: { m: MorningMove; user: User; onLeave: (to?: string) => void }) {
+  const toast = useToast();
+  const person = useLiveQuery(() => db.people.get(m.personId), [m.personId]);
+  const [busy, setBusy] = useState(false);
+  const [phase, setPhase] = useState<'idle' | 'choice' | 'composing' | 'done'>('idle');
+  const [doneText, setDoneText] = useState('');
+  const [draftId, setDraftId] = useState<string>();
+  const [opened, setOpened] = useState(false);
+  const draft = useLiveQuery(() => (draftId ? db.outbound.get(draftId) : undefined), [draftId]);
+  const first = person?.firstName ?? 'them';
+  const act = async (fn: () => Promise<void>) => {
+    setBusy(true);
+    try {
+      await fn();
+    } finally {
+      setBusy(false);
+    }
+  };
+  const write = (opts: { confirmed?: boolean; skipWarmUp?: boolean } = {}) =>
+    act(async () => {
+      const r = await composeDraft(user, m.personId, 'outreach', opts);
+      if (r.kind === 'warmup_choice') setPhase('choice');
+      else if (r.kind === 'warmup_started') {
+        setDoneText(`Warm-up started for ${first}. The first step shows in Drafts.`);
+        setPhase('done');
+      } else if (r.kind === 'draft') {
+        setDraftId(r.draft.id);
+        setPhase('composing');
+      }
+    });
+  const approve = async (d: OutboundMessage, body: string, subject?: string) => {
+    setBusy(true);
+    try {
+      return await runApproval(user, d, body, subject, toast, person?.firstName);
+    } finally {
+      setBusy(false);
+    }
+  };
+  let button: ReactNode = null;
+  if (phase === 'idle' || phase === 'choice') {
+    if (m.kind === 'prep')
+      button = (
+        <Button
+          size="sm"
+          onClick={() => onLeave(m.href)}
+          title="Opens their prep page. This brief waits at the bottom of the screen"
+          data-testid="morning-move-action"
+          data-effect="page"
+        >
+          Open prep <ArrowUpRight size={13} />
+        </Button>
+      );
+    else if (m.kind === 'warm_up')
+      button = opened ? (
+        <Button
+          size="sm"
+          variant="primary"
+          disabled={busy}
+          data-testid="morning-move-done"
+          onClick={() =>
+            act(async () => {
+              await markWarmUpAction(user.id, m.chatId!, m.actionId!, true);
+              setDoneText('Logged. The next step shows on its day.');
+              setPhase('done');
+            })
+          }
+        >
+          <Check size={13} /> Mark done
+        </Button>
+      ) : (
+        <a
+          href={m.url}
+          target="_blank"
+          rel="noreferrer noopener"
+          onClick={() => setOpened(true)}
+          className="inline-flex items-center gap-1.5 h-8 px-3 rounded-full text-[13px] font-medium bg-canvas text-ink border border-line shadow-[var(--shadow-pill)] hover:bg-canvas-2"
+          title="Opens LinkedIn in a new tab. This stays open"
+          data-testid="morning-move-action"
+          data-effect="tab"
+        >
+          Open LinkedIn <ExternalLink size={12} />
+        </a>
+      );
+    else if (phase === 'idle')
+      button = (
+        <Button
+          size="sm"
+          disabled={busy}
+          onClick={() => void write()}
+          data-testid="morning-move-action"
+          data-effect="compose"
+          title="Orbit drafts it here. Nothing is sent until you approve it"
+        >
+          {busy ? 'Drafting' : 'Write'}
+        </Button>
+      );
+  }
+  return (
+    <li className="py-3" data-testid="morning-move" data-kind={m.kind}>
+      <div className="flex items-center gap-3">
+        {person ? (
+          <Avatar name={person.displayName} src={person.photoUrl} id={person.id} size={36} />
+        ) : (
+          <span className="w-9 h-9 rounded-full bg-canvas-2" />
+        )}
+        <span className="min-w-0 flex-1">
+          <span className="block text-[13.5px] font-medium line-clamp-2">
+            {person ? (
+              <>
+                {m.text.replace(new RegExp(`${escapeRe(person.firstName)}$`), '')}
+                <PersonNameLink
+                  person={{ ...person, displayName: person.firstName }}
+                  onNavigate={() => onLeave()}
+                  testId="morning-move-name"
+                />
+              </>
+            ) : (
+              m.text
+            )}
+          </span>
+          {m.sub && <span className="block text-[12px] text-ink-3 truncate">{m.sub}</span>}
+        </span>
+        {phase === 'done' ? (
+          <Check size={16} className="text-accent shrink-0" aria-label="Done" />
+        ) : (
+          <span className="shrink-0">{button}</span>
+        )}
+      </div>
+      {phase === 'choice' && (
+        <div
+          className="mt-2 ml-12 rounded-[12px] bg-canvas-2 p-3 text-[12.5px]"
+          data-testid="morning-move-choice"
+        >
+          <p className="text-ink-2">
+            You only have {first} on LinkedIn and have never talked, so Orbit suggests a short warm-up before
+            your first message.
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              variant="primary"
+              disabled={busy}
+              onClick={() =>
+                act(async () => {
+                  await startWarmUpOrOutreach(
+                    user,
+                    m.personId,
+                    'linkedin',
+                    m.kind === 'reach_out' ? 'recommendation' : 'manual',
+                  );
+                  setDoneText(`Warm-up started for ${first}. The first step shows in Drafts.`);
+                  setPhase('done');
+                })
+              }
+            >
+              Start warm-up
+            </Button>
+            <Button
+              size="sm"
+              disabled={busy}
+              onClick={() => void write({ confirmed: true, skipWarmUp: true })}
+            >
+              Write now instead
+            </Button>
+          </div>
+        </div>
+      )}
+      {phase === 'composing' && draft && (
+        <div className="mt-2.5" data-testid="morning-move-composer">
+          <DraftEditor
+            draft={draft}
+            compact
+            focusOnOpen
+            busy={busy}
+            onApprove={(b, subj) => approve(draft, b, subj)}
+            onCancel={() => setPhase('idle')}
+            extraActions={
+              <Button size="sm" variant="ghost" onClick={() => setPhase('idle')}>
+                Close
+              </Button>
+            }
+          />
+        </div>
+      )}
+      {phase === 'done' && <p className="mt-1.5 ml-12 text-[12.5px] text-accent">{doneText}</p>}
+    </li>
   );
+}
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+function Moves({ deck, user, onLeave }: { deck: MorningDeck; user: User; onLeave: (to?: string) => void }) {
   return (
     <div data-testid="morning-moves">
-      <div className="text-[11.5px] uppercase tracking-wide text-ink-3 mt-1">Worth doing today</div>
-      <ul className="mt-3 divide-y divide-line-2">
-        {deck.moves.map((m, k) => {
-          const p = people?.[k];
-          return (
-            <li key={m.id}>
-              <Link to={m.href} onClick={onGo} className="flex items-center gap-3 py-2.5 group">
-                {p ? (
-                  <Avatar name={p.displayName} src={p.photoUrl} id={p.id} size={32} />
-                ) : (
-                  <span className="w-8 h-8 rounded-full bg-canvas-2" />
-                )}
-                <span className="min-w-0 flex-1">
-                  <span className="block text-[13.5px] font-medium truncate group-hover:underline">
-                    {m.text}
-                  </span>
-                  {m.sub && <span className="block text-[12px] text-ink-3 truncate">{m.sub}</span>}
-                </span>
-                <ChevronRight size={15} className="text-ink-3 shrink-0" />
-              </Link>
-            </li>
-          );
-        })}
+      <div className="text-[11.5px] uppercase tracking-wide text-ink-3 mt-1.5">Worth doing today</div>
+      <p className="text-[13px] text-ink-2 mt-1">Each one is done right here. Prep opens its own page.</p>
+      <ul className="mt-2 divide-y divide-line-2">
+        {deck.moves.map((m) => (
+          <MoveRow key={m.id} m={m} user={user} onLeave={onLeave} />
+        ))}
       </ul>
     </div>
   );
 }
 
-function Done({ decided, later, onClose }: { decided: number; later: number; onClose: () => void }) {
+function Done({
+  summary,
+  onDrafts,
+  onClose,
+}: {
+  summary: ReturnType<typeof morningSummary>;
+  onDrafts: () => void;
+  onClose: () => void;
+}) {
   return (
-    <div className="flex flex-col items-center text-center pt-8" data-testid="morning-done">
+    <div className="flex flex-col items-center text-center pt-10" data-testid="morning-done">
       <span className="w-12 h-12 rounded-full bg-accent-soft text-accent inline-flex items-center justify-center">
         <Check size={22} />
       </span>
-      <h2 className="text-[20px] font-normal tracking-[-0.02em] mt-3">You're set for today</h2>
-      <p className="text-[13px] text-ink-3 mt-1.5 max-w-[260px]">
-        {decided ? `${decided} decided. ` : ''}
-        {later
-          ? `${later} more wait${later === 1 ? 's' : ''} in Drafts whenever you are ready.`
-          : 'Nothing else is waiting on you.'}
+      <h2 className="text-[22px] font-normal tracking-[-0.02em] mt-3">You're set for today</h2>
+      {summary.lines.length > 0 && (
+        <ul className="mt-3 flex flex-wrap justify-center gap-1.5" data-testid="morning-summary">
+          {summary.lines.map((l) => (
+            <li
+              key={l}
+              className="rounded-full bg-canvas-2 px-3 h-7 inline-flex items-center text-[12.5px] text-ink-2"
+            >
+              {l}
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="text-[13.5px] text-ink-3 mt-3 max-w-[320px]" data-testid="morning-rest">
+        {summary.rest}
       </p>
-      <div className="mt-5 flex gap-2">
-        {later > 0 && (
-          <Link to="/inbox" onClick={onClose}>
-            <Button variant="primary">Open Drafts</Button>
-          </Link>
+      <div className="mt-6 flex gap-2">
+        {summary.waitingInDrafts > 0 && (
+          <Button
+            onClick={onDrafts}
+            data-testid="morning-drafts"
+            title="Opens Drafts and puts this brief away"
+          >
+            Open Drafts <ArrowUpRight size={14} />
+          </Button>
         )}
-        <Button onClick={onClose} data-testid="morning-finish">
+        <Button variant="primary" onClick={onClose} data-testid="morning-finish" data-primary="true">
           Close
         </Button>
       </div>
