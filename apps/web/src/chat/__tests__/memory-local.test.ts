@@ -98,7 +98,9 @@ describe('the snapshot in this browser', () => {
     const snap = await buildSnapshot(user.id, new Date(), {
       lastUserText: 'who should I meet for PM internships?',
     });
-    expect(snap.text).toMatch(/Remembered \(ids\): mem_\S+ Targeting PM internships in New York\./);
+    // the Remembered line is kept apart from the snapshot text, so it can go out on its own when only it changed
+    expect(snap.memory).toMatch(/^Remembered \(ids\): mem_\S+ Targeting PM internships in New York\.$/);
+    expect(snap.text).not.toMatch(/Remembered/);
     const file = new File(
       [
         'Alex Rivera\nalex@cornell.edu\n\nEDUCATION   Cornell University   May 2027\nB.S. Computer Science\n\nEXPERIENCE   Amma Health Inc.   Remote\nSoftware Engineering Intern   Jun 2025 – Aug 2025\n• Built a pipeline\n',

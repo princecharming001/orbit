@@ -19,17 +19,36 @@ import { setupLine } from './setup';
 
 /**
  * The volatile context the model needs on every turn, appended to `messages` as a `role: 'system'` message only when
- * it changed (so the cached prefix and the thinking-block binding survive). Budget 400 to 700 tokens: the date in the
- * student's timezone, who they are, their goals, pipeline counts, up to six brief cards, pending drafts, integration
- * status and which Claude features are on. No email bodies, no facts, no notes: everything else is a tool call.
+ * it changed (so the cached prefix and the thinking-block binding survive). Budget 400 to 700 estimated tokens (ids
+ * tokenize dearly: the real count is up to twice that): the date in the student's timezone, who they are, their
+ * goals, pipeline counts, up to six brief cards, pending drafts, integration status and which Claude features are on.
+ * No email bodies, no facts, no notes: everything else is a tool call.
+ *
+ * The "Remembered" line (the memories closest to what the student just said) changes with nearly every message, so
+ * it is kept apart from the key: when only it changed, the loop appends that one line (`meta: 'memory'`) instead of
+ * the whole snapshot.
  */
 export interface Snapshot {
-  /** the text sent to the model */
+  /** the text sent to the model, without the Remembered line */
   text: string;
   /** the text without the clock, compared with the last appended copy to decide whether to append again */
   key: string;
   /** YYYY-MM-DD in the student's timezone */
   day: string;
+  /** the "Remembered (ids): ..." line for the student's latest message, when anything was remembered */
+  memory?: string;
+}
+
+const REMEMBERED_PREFIX = 'Remembered (ids): ';
+
+/** The snapshot as one system message: its text and, when there is one, the Remembered line last. */
+export function snapshotText(s: Snapshot): string {
+  return s.memory ? `${s.text}\n${s.memory}` : s.text;
+}
+
+/** The Remembered line inside a stored context message (a snapshot or a memory-only row), if any. */
+export function memoryLineOf(text: string): string | undefined {
+  return text.split('\n').find((l) => l.startsWith(REMEMBERED_PREFIX));
 }
 
 const STAGES: ChatStage[] = [
@@ -231,7 +250,6 @@ export async function buildSnapshot(
   const lines = [
     `Student: ${student}.${goalBits.length ? ` Goals: ${goalBits.join(', ')}.` : ''}`,
     `Active goals (ids): ${goalsV3.length ? goalsV3.map((g) => `${g.id} ${goalLine(g)}`).join('; ') : 'none tracked'}.`,
-    ...(memory.length ? [`Remembered (ids): ${memory.join('; ')}.`] : []),
     ...(offered ? [offered] : []),
     ...(resumeLine ? [resumeLine] : []),
     `Pipeline (chats by stage, ${chats.filter((c) => !c.archivedAt).length} total): ${pipeline || 'empty'}. People: ${humans}.`,
@@ -244,7 +262,12 @@ export async function buildSnapshot(
   ];
   const key = [`Today is ${date}, ${tz}.`, ...lines].join('\n');
   const text = [`Today is ${date}, ${time}, ${tz}.`, ...lines].join('\n');
-  return { text, key, day: todayKey(now, tz) };
+  return {
+    text,
+    key,
+    day: todayKey(now, tz),
+    ...(memory.length ? { memory: `${REMEMBERED_PREFIX}${memory.join('; ')}.` } : {}),
+  };
 }
 
 /** Rough token estimate for the budget test (about four characters a token for English prose). */
@@ -261,9 +284,13 @@ export function snapshotIsStale(previous: { key: string; day: string } | undefin
   return previous.day !== next.day || previous.key !== next.key;
 }
 
-/** The staleness key of a stored snapshot message: its text with the clock removed. */
+/** The staleness key of a stored snapshot message: its text with the clock and the Remembered line removed. */
 export function snapshotKeyOf(text: string): { key: string; day: string } {
-  const key = text.replace(/^(Today is \w{3} \d{4}-\d{2}-\d{2}), \d{2}:\d{2}, /, '$1, ');
+  const key = text
+    .split('\n')
+    .filter((l) => !l.startsWith(REMEMBERED_PREFIX))
+    .join('\n')
+    .replace(/^(Today is \w{3} \d{4}-\d{2}-\d{2}), \d{2}:\d{2}, /, '$1, ');
   const day = text.match(/(\d{4}-\d{2}-\d{2})/)?.[1] ?? '';
   return { key, day };
 }

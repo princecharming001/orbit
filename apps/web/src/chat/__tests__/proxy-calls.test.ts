@@ -176,6 +176,7 @@ describe('the app on shared access: memory and resume reads', () => {
         person_name: null,
         importance: 0.8,
         quote: "I'm targeting PM internships at fintech startups in New York",
+        replaces: [],
       },
     ],
     recruiting: {

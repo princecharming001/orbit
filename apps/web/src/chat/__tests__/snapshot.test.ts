@@ -2,8 +2,16 @@ import type { User } from '@orbit/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { db, wipeDatabase } from '../../db/schema';
 import { createLocalUser } from '../../engine/account';
+import { localRemember } from '../../engine/memoryLocal';
 import { clearPrefs, writePrefs } from '../../integrations/prefs';
-import { buildSnapshot, estimateTokens, snapshotIsStale, snapshotKeyOf } from '../agent/snapshot';
+import {
+  buildSnapshot,
+  estimateTokens,
+  memoryLineOf,
+  snapshotIsStale,
+  snapshotKeyOf,
+  snapshotText,
+} from '../agent/snapshot';
 import { setPanelHint } from '../panel/panelHint';
 
 const NOW = new Date('2026-10-12T15:00:00Z'); // 11:00 in New York, 08:00 in Los Angeles
@@ -188,6 +196,30 @@ describe('snapshot', () => {
     expect(snapshotIsStale(snapshotKeyOf(a.text), moved)).toBe(true);
     // the stored text round-trips to the same key
     expect(snapshotKeyOf(a.text)).toEqual({ key: a.key, day: a.day });
+  });
+
+  it('keeps the Remembered line apart from the text and the key, and reads it back from a stored row', async () => {
+    await seed();
+    await localRemember(user.id, { text: 'Prefers morning calls', kind: 'preference' });
+    await localRemember(user.id, { text: 'Targeting PM internships in New York', kind: 'goal_detail' });
+    const none = await buildSnapshot(user.id, NOW);
+    expect(none.memory).toBeUndefined();
+    const s = await buildSnapshot(user.id, NOW, { lastUserText: 'what times work for calls?' });
+    expect(s.memory).toMatch(/^Remembered \(ids\): mem_\S+ /);
+    expect(s.text).not.toMatch(/Remembered/);
+    expect(s.key).toBe(none.key);
+    const stored = snapshotText(s);
+    expect(stored.endsWith(`\n${s.memory}`)).toBe(true);
+    expect(snapshotKeyOf(stored)).toEqual({ key: s.key, day: s.day });
+    expect(memoryLineOf(stored)).toBe(s.memory);
+    expect(memoryLineOf(s.memory!)).toBe(s.memory);
+    expect(memoryLineOf(none.text)).toBeUndefined();
+    // the same memories in id order whatever the message, so an equal set is an equal line
+    const again = await buildSnapshot(user.id, NOW, { lastUserText: 'PM internships, and calls?' });
+    expect(again.memory).toBe(s.memory);
+    // the line stays inside its budget and the snapshot's estimate inside the snapshot's
+    expect(s.memory!.length).toBeLessThanOrEqual(1200 + 'Remembered (ids): .'.length);
+    expect(estimateTokens(stored)).toBeLessThanOrEqual(700);
   });
 
   it('copes with an empty account', async () => {

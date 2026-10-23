@@ -19,7 +19,7 @@ import {
 import type { ChatConversation, ResultEnvelope, ToolContext, ToolSpec, TurnEvent } from '../types';
 import { recordToolAction } from './actions';
 import type { ChatClient } from './client';
-import { buildSnapshot, snapshotIsStale, snapshotKeyOf } from './snapshot';
+import { buildSnapshot, memoryLineOf, snapshotIsStale, snapshotKeyOf, snapshotText } from './snapshot';
 import { type ChatStore, conversationNonce, toolResultsOf, toolUsesOf } from './store';
 import { systemBlocks } from './system';
 
@@ -296,19 +296,27 @@ export async function runTurn(
   const userMsg: Anthropic.Beta.BetaMessageParam = { role: 'user', content: userBlocks };
   await store.append(conversation.id, userMsg, clock());
   const messages: Anthropic.Beta.BetaMessageParam[] = [...history, userMsg];
-  // the student's words of this turn pick what "Remembered" holds (account mode)
+  // the student's words of this turn pick what "Remembered" holds
   const lastUserText = userBlocks
     .map((b) => (b.type === 'text' ? b.text : ''))
     .join(' ')
     .trim();
   const snapshot = await buildSnapshot(user.id, clock(), { lastUserText });
-  const previous = await store.lastSnapshotText(conversation.id);
-  if (snapshotIsStale(previous ? snapshotKeyOf(previous) : undefined, snapshot)) {
+  const previous = await store.lastContextTexts(conversation.id);
+  const snapshotStale = snapshotIsStale(
+    previous.snapshot ? snapshotKeyOf(previous.snapshot) : undefined,
+    snapshot,
+  );
+  // the Remembered line changes with nearly every message: on its own it goes out as one short row, so the full
+  // snapshot is appended only when the student's state changed
+  const memoryStale =
+    !!snapshot.memory && snapshot.memory !== (previous.memory ? memoryLineOf(previous.memory) : undefined);
+  if (snapshotStale || memoryStale) {
     const sys: Anthropic.Beta.BetaMessageParam = {
       role: 'system',
-      content: [{ type: 'text', text: snapshot.text }],
+      content: [{ type: 'text', text: snapshotStale ? snapshotText(snapshot) : snapshot.memory! }],
     };
-    await store.append(conversation.id, { ...sys, meta: 'snapshot' }, clock());
+    await store.append(conversation.id, { ...sys, meta: snapshotStale ? 'snapshot' : 'memory' }, clock());
     messages.push(sys);
   }
 

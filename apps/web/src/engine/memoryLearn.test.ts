@@ -223,6 +223,7 @@ describe('learning with Claude, through Orbit’s shared access', () => {
           person_name: null,
           importance: 0.6,
           quote: 'I prefer meeting people in person',
+          replaces: [],
         },
         // not the student's words: dropped
         {
@@ -231,9 +232,17 @@ describe('learning with Claude, through Orbit’s shared access', () => {
           person_name: null,
           importance: 0.9,
           quote: 'I want Google',
+          replaces: [],
         },
         // a sensitive topic: dropped
-        { kind: 'note', text: 'Is in therapy', person_name: null, importance: 0.5, quote: "I'm in Ithaca" },
+        {
+          kind: 'note',
+          text: 'Is in therapy',
+          person_name: null,
+          importance: 0.5,
+          quote: "I'm in Ithaca",
+          replaces: [],
+        },
       ],
       recruiting: {
         functions: ['pm', 'ib'],
@@ -254,6 +263,41 @@ describe('learning with Claude, through Orbit’s shared access', () => {
     expect(goals?.targetFunctions).toEqual(['swe', 'pm']);
     expect(goals?.targetLocations).toEqual([]);
     expect((await db.targetCompanies.toArray()).map((t) => t.nameRaw)).toEqual(['Ramp']);
+  });
+
+  it('forgets the memory a new one replaces, but only one it was shown, of the same kind and named exactly', async () => {
+    // two memories from Orbit's own rules first (no model call)
+    const rules = (text: string) =>
+      learnFromTurn(user, [{ role: 'user', text }], { now: NOW, claude: false });
+    await rules('I prefer morning calls, honestly');
+    await rules('I want to work in New York, honestly');
+    const [calls, place] = (await localMemories(user.id)).map((m) => m.text).sort();
+    expect([calls, place]).toEqual(['Prefers morning calls', 'Wants to work in New York']);
+    answer = {
+      memories: [
+        {
+          kind: 'preference',
+          text: 'Prefers evening calls',
+          person_name: null,
+          importance: 0.6,
+          quote: 'I prefer evening calls now',
+          // the same memory in different casing and punctuation still names it; a different kind and an unknown
+          // text do not
+          replaces: ['prefers morning calls.', 'Wants to work in New York', 'Has a dog'],
+        },
+      ],
+      recruiting: null,
+    };
+    const l = await say('Actually I prefer evening calls now');
+    expect(l.via).toBe('claude');
+    expect(l.replaced).toEqual(['Prefers morning calls']);
+    expect((await localMemories(user.id)).map((m) => m.text).sort()).toEqual([
+      'Prefers evening calls',
+      'Wants to work in New York',
+    ]);
+    expect(learnedNote(l)).toBe(
+      'Noted for later: Prefers evening calls. Forgot the old version: Prefers morning calls.',
+    );
   });
 
   it('asks Claude nothing for a question or a request, and falls back to the rules when the read fails', async () => {

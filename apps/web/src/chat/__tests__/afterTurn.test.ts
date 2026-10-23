@@ -18,6 +18,7 @@ import {
   resetGoalOffersForTests,
   textTurns,
   trackMessage,
+  worthRemembering,
 } from '../agent/afterTurn';
 import { buildSnapshot } from '../agent/snapshot';
 import { ChatStore } from '../agent/store';
@@ -88,6 +89,22 @@ describe('turns for the server', () => {
       expect(mentionsPlans(s)).toBe(true);
     expect(mentionsPlans('What is on my calendar today?')).toBe(false);
     expect(trackMessage(PRE_SEED)).toBe('Track a goal: Raise a pre-seed round');
+  });
+
+  it('spends a memory read only on a message that states something', () => {
+    for (const s of [
+      'I prefer morning calls, never on Fridays',
+      "Don't contact Maya Chen again, please",
+      'Maya offered to refer me in March, which was kind',
+    ])
+      expect(worthRemembering(s), s).toBe(true);
+    for (const s of [
+      'ok thanks',
+      'Who should I email about PM roles today?',
+      'Find PMs in New York for me please',
+      'Draft a thank-you to Lena from this morning',
+    ])
+      expect(worthRemembering(s), s).toBe(false);
     expect(trackMessage({ ...PRE_SEED, kind: 'community', title: 'Grow the robotics group' })).toBe(
       'Track a goal: Grow the robotics group (community)',
     );
@@ -128,12 +145,16 @@ describe('after a turn, in account mode', () => {
     expect(turns.slice(1).every((t) => t.role === 'assistant')).toBe(true);
     expect(api.state.memories.map((m) => m.text)).toEqual(['Prefers morning calls']);
     await send(c.id, 'ok thanks');
+    // a question long enough to count still states nothing: no read
+    await send(c.id, 'Who should I email about PM roles today, any ideas?');
+    await new Promise((r) => setTimeout(r, 30));
+    expect(calls('/memory/extract')).toHaveLength(1);
     await send(c.id, 'And I can only meet after 4pm on weekdays');
     await vi.waitFor(() => expect(calls('/memory/extract')).toHaveLength(2));
     // the last two student turns and the replies after them
     const second = calls('/memory/extract')[1]!.body.turns as { role: string; text: string }[];
     expect(second.filter((t) => t.role === 'user').map((t) => t.text)).toEqual([
-      'ok thanks',
+      'Who should I email about PM roles today, any ideas?',
       'And I can only meet after 4pm on weekdays',
     ]);
     const temp = await engine.startConversation({ temporary: true });

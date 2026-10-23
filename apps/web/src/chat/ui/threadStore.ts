@@ -170,7 +170,7 @@ export function hydrate(messages: ChatMessage[], actions: ChatAction[]): Turn[] 
   const byId = new Map(actions.map((a) => [a.id, a]));
   const turns: Turn[] = [];
   for (const m of [...messages].sort((a, b) => a.seq - b.seq)) {
-    if (m.meta === 'snapshot') continue;
+    if (m.meta === 'snapshot' || m.meta === 'memory') continue;
     if (m.meta === 'decision' || m.meta === 'error') {
       turns.push({
         id: m.id,

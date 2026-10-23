@@ -103,8 +103,10 @@ export async function extractFromChat(
 }
 
 /**
- * "Remembered" for the chat's snapshot: the memories closest to what the student just said (and, in this browser,
- * the most important ones when nothing matches), at most ~300 tokens.
+ * "Remembered" for the chat's context: the memories closest to what the student just said (and, in this browser,
+ * the most important ones when nothing matches), within `maxChars`. The closest are picked first, then the lines
+ * are put in id order, so the same set of memories gives the same line whatever the ranking that turn, and the
+ * chat appends the line again only when the set changed.
  */
 export async function rememberedLines(
   user: Pick<User, 'id'>,
@@ -128,5 +130,5 @@ export async function rememberedLines(
     out.push(line);
     used += line.length + 2;
   }
-  return out;
+  return out.sort();
 }
