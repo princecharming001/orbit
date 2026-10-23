@@ -178,6 +178,14 @@ export async function applyStage(
   } = {},
 ): Promise<'applied' | 'proposed' | 'rejected'> {
   const now = opts.now ?? new Date();
+  // the stored row wins over a copy held across other work (two readers at once, the reply check and a sync): a
+  // move Orbit decided from a stale copy is dropped, the student's move continues from where the chat really is
+  const stored = await db.chats.get(chat.id);
+  if (stored && stored.stage !== chat.stage) {
+    if (actor !== 'user') return 'rejected';
+    chat.stage = stored.stage;
+    chat.stageEnteredAt = stored.stageEnteredAt;
+  }
   // stage dates follow the evidence, never the sync clock, and never lie in the future
   const evidenceMs = Math.min(now.getTime(), evidenceTime(opts.at, now));
   const at = new Date(evidenceMs).toISOString();
@@ -225,6 +233,14 @@ export async function applyStage(
     await settleAfterStageChange(chat, to, now, actor);
   }
   return status;
+}
+
+/** The meeting a booked chat is about: the event on the chat, else the latest event the calendar tied to it. */
+async function bookedEvent(chat: CoffeeChat) {
+  const own = chat.scheduledEventId ? await db.events.get(chat.scheduledEventId) : undefined;
+  if (own) return own;
+  const tied = await db.events.where('chatId').equals(chat.id).toArray();
+  return tied.sort((a, b) => b.startAt.localeCompare(a.startAt))[0];
 }
 
 /** The evidence time in ms when it is valid, else now (callers cap it at now). */
@@ -332,27 +348,38 @@ export async function recordAlreadyDone(s: Suggestion, now = new Date()): Promis
   }
 }
 
+/** A meeting counts as over this long after its end, so a chat that runs late is not closed mid-sentence. */
+export const MEETING_OVER_AFTER_MS = 15 * 60_000;
+
 /**
  * Timed rules: followed_up → nurturing after 14 days; completed → nurturing 14 days after a chat whose thank-you
- * never got recorded; outreach_sent → no_response after max bumps + 10 business days of silence, or 15 business
+ * never got recorded; scheduled → completed once the booked meeting ended (plus a quarter hour), whichever calendar
+ * it came from; outreach_sent → no_response after max bumps + 10 business days of silence, or 15 business
  * days (three weeks; holidays and the winter freeze do not count) of silence however many bumps went out. A thread with a reply after the last message is not silent, and an
  * out-of-office return date restarts the clock. The new stage is dated when the timer ran out, not when Orbit
- * noticed.
+ * noticed. Runs after every reply check (engine/checkReplies.ts) and before every brief; every rule is idempotent.
  */
 export async function runTimedStageRules(
   userId: string,
   settingsMaxBumps: number,
   now = new Date(),
 ): Promise<void> {
+  // one run at a time: the reply check and the day's brief both ask on open, and must not both move one chat
+  while (timedRulesRunning) await timedRulesRunning.catch(() => undefined);
+  const run = runTimedStageRulesOnce(userId, settingsMaxBumps, now);
+  timedRulesRunning = run;
+  try {
+    await run;
+  } finally {
+    if (timedRulesRunning === run) timedRulesRunning = undefined;
+  }
+}
+
+let timedRulesRunning: Promise<void> | undefined;
+
+async function runTimedStageRulesOnce(userId: string, settingsMaxBumps: number, now: Date): Promise<void> {
   const chats = await db.chats.where('userId').equals(userId).toArray();
   const tz = (await db.users.get(userId))?.timezone;
-  // without a calendar sync nobody else will notice that a booked chat's time has passed (the demo, or Google
-  // disconnected): such a chat is treated like one booked by hand
-  const syncing = await db.integrations
-    .where('userId')
-    .equals(userId)
-    .filter((i) => i.provider === 'google' && i.status === 'active')
-    .count();
   for (const c of chats) {
     // a warm-up the student fell behind on moves its steps left forward, so no card lists a day already over
     if (c.stage === 'warming' && c.warmUp) {
@@ -391,14 +418,14 @@ export async function runTimedStageRules(
         now,
         new Date(new Date(c.completedAt).getTime() + 14 * 86_400_000),
       );
-    // a chat the student booked by hand (no calendar connected): once its time has passed, it happened
-    if (c.stage === 'scheduled' && c.scheduledEventId) {
-      const ev = await db.events.get(c.scheduledEventId);
+    // a booked chat whose meeting is over happened: the one the student typed in, the one Orbit booked, or the one
+    // read from the calendar (the calendar sync runs first when Google is signed in, so a cancellation is known)
+    if (c.stage === 'scheduled') {
+      const ev = await bookedEvent(c);
       if (
         ev &&
-        (ev.externalEventId.startsWith(MANUAL_EVENT_PREFIX) || !syncing) &&
         ev.status !== 'cancelled' &&
-        new Date(ev.endAt).getTime() + 15 * 60_000 < now.getTime()
+        new Date(ev.endAt).getTime() + MEETING_OVER_AFTER_MS < now.getTime()
       ) {
         await evaluateTrigger(
           c,

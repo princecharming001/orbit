@@ -32,6 +32,7 @@ import { LinkedInProgressBanner } from './LinkedInProgressBanner';
 import { MeetingNotesAutoSync } from './MeetingNotesAutoSync';
 import { MorningBrief } from './MorningBrief';
 import { OutboxScheduler } from './OutboxScheduler';
+import { ReplyWatch } from './ReplyWatch';
 
 // the chat is home (New chat and the logo open it); People holds the board and the list, Drafts what waits to be sent
 const NAV_TOP = [
@@ -203,6 +204,7 @@ export function AppShell() {
   return (
     <div className="h-full flex">
       <OutboxScheduler />
+      <ReplyWatch />
       <LinkedInAutoSync />
       <MeetingNotesAutoSync />
       <LinkedInProgressBanner />

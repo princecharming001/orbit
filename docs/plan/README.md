@@ -24,6 +24,8 @@ Orbit (working name) is a networking copilot for college students who are recrui
 | 14 | [Static v1 as built](14-static-v1-architecture.md) | what shipped on GitHub Pages, how it maps to the hosted plan, the demo, tests, migration steps |
 | 15 | [Outreach playbook](15-outreach-playbook.md) | what every drafted message must say and must never say: limits per kind, sector notes, subject lines, cadence, anti-patterns (amends 05 §7) |
 | 16 | [Networking agent infrastructure](16-network-agent-infrastructure.md) | **current architecture**: Supabase-only server (schema `orbit`, queues, cron, Vault, pgvector), Orbit accounts, server ingestion, tie score 0–100, warm paths, research, sourcing, outbound for every goal, replies and autonomy, cadence, memory, privacy, evals, phases, human actions |
+| 17 | [Network intelligence](17-network-intelligence.md) | one person across Gmail, Messages and LinkedIn, LinkedIn activity in closeness, warm paths, Discover, enrichment, accuracy |
+| 18 | [Automatic stages](18-automatic-stages.md) | cards move on their own: every transition and its trigger, the reply check while the app is open, what is idempotent, the "Checked for replies" line |
 
 Precedence when documents disagree: **16 > 02 (names) > 03 (schema) > 01 (behaviour) > the subsystem document.** 16 retires the Next.js + Inngest stack of 02, 08 and 09 in favour of Supabase Edge Functions, queues and cron. File a fix against the lower one.
 

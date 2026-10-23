@@ -174,18 +174,18 @@ describe('LinkedIn replies', () => {
     ).toHaveLength(1);
   });
 
-  it('a reply to an outreach the student sent by hand is proposed for them to confirm, and both messages are touches', async () => {
+  it('a reply to an outreach the student sent by hand on LinkedIn moves the chat on, and both messages are touches', async () => {
     const r = await syncLinkedInReplies(user, {
       now: NOW,
       fetch: fakeInbox([mine, hers], hers.at).doFetch,
     });
     expect(r).toEqual({ ok: true, replies: 1, people: ['Maya'] });
     const chat = (await db.chats.get('c_maya'))!;
-    // Orbit cannot be sure what her message answers: the student confirms it
-    expect(chat.stage).toBe('outreach_sent');
+    // Orbit read the student's own message to her in this inbox first: her answer after it is the reply
+    expect(chat.stage).toBe('replied');
     expect(chat.lastInboundAt).toBe(hers.at);
     const events = await db.stageEvents.where('chatId').equals('c_maya').toArray();
-    expect(events.map((e) => [e.toStage, e.status, e.confidence])).toEqual([['replied', 'proposed', 0.7]]);
+    expect(events.map((e) => [e.toStage, e.status, e.confidence])).toEqual([['replied', 'applied', 0.85]]);
     // her message and the student's are part of their history, one touch per day each way
     const tps = await db.touchpoints.where('personId').equals('p_maya').toArray();
     expect(tps.map((t) => [t.kind, t.occurredAt]).sort()).toEqual([
@@ -194,6 +194,18 @@ describe('LinkedIn replies', () => {
     ]);
     // nothing invented: no "They replied" touch next to the real message
     expect(tps.some((t) => t.refTable === 'stage_evidence')).toBe(false);
+  });
+
+  it('a LinkedIn message answering an ask that went out by email is proposed for the student to confirm', async () => {
+    await db.chats.update('c_maya', { outreachChannel: 'gmail' });
+    // nothing of the student's in this LinkedIn chat: Orbit cannot be sure what her message answers
+    const r = await syncLinkedInReplies(user, { now: NOW, fetch: fakeInbox([hers], hers.at).doFetch });
+    expect(r).toEqual({ ok: true, replies: 1, people: ['Maya'] });
+    const chat = (await db.chats.get('c_maya'))!;
+    expect(chat.stage).toBe('outreach_sent');
+    expect(chat.lastInboundAt).toBe(hers.at);
+    const events = await db.stageEvents.where('chatId').equals('c_maya').toArray();
+    expect(events.map((e) => [e.toStage, e.status, e.confidence])).toEqual([['replied', 'proposed', 0.7]]);
   });
 
   it('a message from before the outreach is no reply, and an old conversation never starts a chat', async () => {

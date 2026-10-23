@@ -18,6 +18,7 @@ import { type ChatRow, PipelineBoard } from '../components/people/PipelineBoard'
 import { QUIET_DAYS, STAGE_COLOR, useNarrow, wentQuiet } from '../components/people/shared';
 import { useChatMove } from '../components/people/useChatMove';
 import { type PeopleFilter, type PeopleView, peopleFilterOf, peopleViewOf } from '../components/people/view';
+import { RepliesChecked } from '../components/RepliesChecked';
 import { db } from '../db/schema';
 import { filterPeople, type PeopleSort } from '../engine/search';
 import { useHints } from '../state/hints';
@@ -80,17 +81,6 @@ export function People() {
           : [],
       [userId],
     ) ?? [];
-  // with Google connected Orbit reads replies and meetings itself; without it the student moves chats along
-  const googleOn =
-    useLiveQuery(
-      async () =>
-        userId
-          ? (await db.integrations.where('userId').equals(userId).toArray()).some(
-              (i) => i.provider === 'google' && i.status === 'active',
-            )
-          : false,
-      [userId],
-    ) ?? false;
   // booked chats still ahead, so a Scheduled card says when, not how long it has sat there
   const meetings =
     useLiveQuery(
@@ -211,17 +201,24 @@ export function People() {
   const filtering = !!s || filter !== 'all';
   const boardRows = rows.filter((r) => stages.includes(r.chat.stage));
   const subtitle =
-    view === 'list'
-      ? filter === 'hidden'
-        ? `${list.length} hidden ${list.length === 1 ? 'person' : 'people'}. Open one and choose Show again to bring them back.`
-        : filtering
-          ? `${list.length} of ${total} people`
-          : `${total} ${total === 1 ? 'person' : 'people'} in your orbit`
-      : view === 'companies'
-        ? 'Every company where you have a chat.'
-        : googleOn
-          ? 'Every coffee chat and where it stands.'
-          : 'Orbit cannot see your inbox: move a card when someone replies.';
+    view === 'list' ? (
+      filter === 'hidden' ? (
+        `${list.length} hidden ${list.length === 1 ? 'person' : 'people'}. Open one and choose Show again to bring them back.`
+      ) : filtering ? (
+        `${list.length} of ${total} people`
+      ) : (
+        `${total} ${total === 1 ? 'person' : 'people'} in your orbit`
+      )
+    ) : view === 'companies' ? (
+      'Every company where you have a chat.'
+    ) : (
+      // with Gmail or LinkedIn connected Orbit reads replies and meetings itself, every few minutes while the
+      // app is open; without them the student moves chats along
+      <>
+        Every coffee chat and where it stands.{' '}
+        <RepliesChecked fallback="Orbit cannot see your inbox: move a card when someone replies." />
+      </>
+    );
   const quietNote = `Nobody has gone quiet: no one has been waiting more than ${QUIET_DAYS} days for a reply to your last message.`;
   return (
     <div ref={rootRef}>
