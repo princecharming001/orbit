@@ -223,6 +223,34 @@ describe('the Discover feed of new people', () => {
     for (const c of v.found) expect(c.reason.text.length).toBeGreaterThan(3);
   });
 
+  it('a dismissal made while more people are loading stays dismissed', async () => {
+    await loadMoreDiscover(user, { now: NOW });
+    const first = (await discoverView(user, NOW)).found[0]!;
+    // the next search hangs until the dismissal is saved
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const answer = searchAnswer;
+    searchAnswer = (b) => answer(b);
+    vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
+      const path = url.replace(BASE, '');
+      if (path !== '/search') return new Response('{}', { status: 404 });
+      await gate;
+      const a = answer(JSON.parse((init.body as string) || '{}'));
+      return new Response(JSON.stringify(a.body), {
+        status: a.status ?? 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    const loading = loadMoreDiscover(user, { now: NOW });
+    expect(await dismissFound(user.id, first.entry.memberId, 'wrong_role', NOW)).toBe(true);
+    release();
+    await loading;
+    const v = await discoverView(user, NOW);
+    expect(v.found.some((c) => c.entry.memberId === first.entry.memberId)).toBe(false);
+  });
+
   it('adds a person only when the student acts, and a dismissal removes the card and teaches the next pages', async () => {
     await loadMoreDiscover(user, { now: NOW });
     const before = await discoverView(user, NOW);

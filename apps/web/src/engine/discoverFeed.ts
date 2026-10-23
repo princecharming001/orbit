@@ -109,6 +109,29 @@ async function saveFeedState(userId: string, s: FeedState): Promise<void> {
   await db.kv.put({ key: stateKey(userId), value: { ...s, people } });
 }
 
+/** Changes to the feed state, one at a time per student: a write never lands on top of another's half-done one. */
+const writing = new Map<string, Promise<unknown>>();
+function serial<T>(userId: string, fn: () => Promise<T>): Promise<T> {
+  const before = writing.get(userId) ?? Promise.resolve();
+  const next = before.then(fn, fn);
+  writing.set(
+    userId,
+    next.catch(() => undefined),
+  );
+  return next;
+}
+
+/**
+ * Save what a load of more people found. A search takes seconds, and the student may dismiss or act on a card
+ * meanwhile: those lists are theirs, so they are read fresh at save time, never written back from the load's copy.
+ */
+function saveLoaded(userId: string, s: FeedState): Promise<void> {
+  return serial(userId, async () => {
+    const latest = await readFeedState(userId);
+    await saveFeedState(userId, { ...s, dismissed: latest.dismissed, acted: latest.acted });
+  });
+}
+
 const looseName = (s: string | undefined) =>
   stripDiacritics(s ?? '')
     .toLowerCase()
@@ -249,7 +272,7 @@ async function loadMore(user: User, opts: { fetch?: typeof fetch; now?: Date }):
   const at = now.toISOString();
   while (calls < MAX_CALLS_PER_LOAD && added < ENOUGH_NEW) {
     if (state.searches >= DISCOVER_SEARCHES_PER_DAY) {
-      await saveFeedState(user.id, state);
+      await saveLoaded(user.id, state);
       return added ? { status: 'ok', added } : { status: 'budget' };
     }
     const q = nextDiscoverQuery(queries, state.queries);
@@ -264,7 +287,7 @@ async function loadMore(user: User, opts: { fetch?: typeof fetch; now?: Date }):
     state.searches++;
     if (!r.ok) {
       if (r.limit) state.limitDay = today;
-      await saveFeedState(user.id, state);
+      await saveLoaded(user.id, state);
       if (added) return { status: 'ok', added };
       return r.limit ? { status: 'limit', message: r.message } : { status: 'error', message: r.message };
     }
@@ -290,7 +313,7 @@ async function loadMore(user: User, opts: { fetch?: typeof fetch; now?: Date }):
       added++;
     }
   }
-  await saveFeedState(user.id, state);
+  await saveLoaded(user.id, state);
   if (added) return { status: 'ok', added };
   return nextDiscoverQuery(queries, state.queries) ? { status: 'ok', added: 0 } : { status: 'exhausted' };
 }
@@ -516,23 +539,29 @@ export async function dismissFound(
   reason: string,
   now = new Date(),
 ): Promise<boolean> {
-  const s = await readFeedState(userId, now);
-  const e = s.people.find((p) => p.memberId === memberId);
-  if (!e || s.dismissed.some((d) => d.memberId === memberId)) return false;
-  s.dismissed.push({ memberId, reason, title: e.title, company: e.company, at: now.toISOString() });
-  await saveFeedState(userId, s);
+  const done = await serial(userId, async () => {
+    const s = await readFeedState(userId, now);
+    const e = s.people.find((p) => p.memberId === memberId);
+    if (!e || s.dismissed.some((d) => d.memberId === memberId)) return false;
+    s.dismissed.push({ memberId, reason, title: e.title, company: e.company, at: now.toISOString() });
+    await saveFeedState(userId, s);
+    return true;
+  });
+  if (!done) return false;
   await feedback(userId, 'recommendation_dismiss', { reason, refTable: 'discover_found', refId: memberId });
   return true;
 }
 
 /** Undo a dismissal. */
 export async function restoreFound(userId: string, memberId: string, now = new Date()): Promise<boolean> {
-  const s = await readFeedState(userId, now);
-  const n = s.dismissed.length;
-  s.dismissed = s.dismissed.filter((d) => d.memberId !== memberId);
-  if (s.dismissed.length === n) return false;
-  await saveFeedState(userId, s);
-  return true;
+  return serial(userId, async () => {
+    const s = await readFeedState(userId, now);
+    const n = s.dismissed.length;
+    s.dismissed = s.dismissed.filter((d) => d.memberId !== memberId);
+    if (s.dismissed.length === n) return false;
+    await saveFeedState(userId, s);
+    return true;
+  });
 }
 
 export type ActOutcome =
@@ -566,10 +595,12 @@ export async function actOnFound(
   const added = await addLinkedInFound(user, [id], now);
   if (!added.ok) return { ok: false, message: added.message };
   const { id: personId, chatId } = added.people[0]!;
-  const fresh = await readFeedState(user.id, now);
-  if (!fresh.acted.some((a) => a.memberId === memberId))
-    fresh.acted.push({ memberId, personId, action, at: now.toISOString() });
-  await saveFeedState(user.id, fresh);
+  await serial(user.id, async () => {
+    const fresh = await readFeedState(user.id, now);
+    if (!fresh.acted.some((a) => a.memberId === memberId))
+      fresh.acted.push({ memberId, personId, action, at: now.toISOString() });
+    await saveFeedState(user.id, fresh);
+  });
   if (action === 'write') {
     const r = await startWarmUpOrOutreach(user, personId, 'linkedin', 'recommendation', { skipWarmUp: true });
     return { ok: true, personId, chatId: r.chat?.id ?? chatId, draftId: r.draft?.id };
