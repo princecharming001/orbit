@@ -55,6 +55,8 @@ export interface UpsertPersonInput extends IncomingIdentity {
 
 const PRECEDENCE: Record<PersonSource, number> = {
   manual: 100,
+  // their own LinkedIn profile, read live: the truth about their current position, under only the student's own edit
+  linkedin_profile: 90,
   enrichment: 80,
   linkedin_csv: 70,
   // a name from the student's own Contacts
@@ -66,6 +68,23 @@ const PRECEDENCE: Record<PersonSource, number> = {
   recommendation: 20,
   demo: 10,
 };
+
+/**
+ * Whether `source` may write `field` on this person: an empty field always; otherwise only a source at least as
+ * trusted as the one that wrote it (people stored before fieldSources existed: their most trusted source), the rule
+ * upsertPerson applies.
+ */
+export function mayOverwrite(
+  person: Pick<Person, 'fieldSources' | 'sources'>,
+  field: PersonField,
+  source: PersonSource,
+  current: unknown,
+): boolean {
+  if (current === undefined || current === '' || current === null) return true;
+  const writer = person.fieldSources?.[field];
+  const legacyRank = Math.max(...person.sources.map((x) => PRECEDENCE[x] ?? 0), 0);
+  return PRECEDENCE[source] >= (writer ? PRECEDENCE[writer] : legacyRank);
+}
 
 export interface PeopleCache {
   people: Person[];

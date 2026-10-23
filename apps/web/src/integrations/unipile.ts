@@ -114,6 +114,9 @@ async function call<T>(path: string, body: unknown, opts: CallOpts = {}): Promis
   }
 }
 
+/** The same proxy call, for the enrichment routes (integrations/enrichmentProxy.ts). */
+export { call as unipileProxyCall };
+
 /**
  * Begin connecting a LinkedIn account: the server asks Unipile for a hosted-auth link the student opens to sign in.
  * Gives the URL to open and an opaque reference to poll for the account to become ready.

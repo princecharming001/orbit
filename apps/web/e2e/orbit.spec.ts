@@ -2426,3 +2426,34 @@ test.describe('People board: drag a card to another stage', () => {
     await expect(page).toHaveURL(/\/people\/[^/?]+/);
   });
 });
+
+test.describe('LinkedIn profiles fill in people (plan 17 E)', () => {
+  test("live LinkedIn sets a person's current position and company logo from their profile, with their schools", async ({
+    page,
+  }) => {
+    test.setTimeout(150_000);
+    await loadDemo(page);
+    // the demo's LinkedIn connects live on the mock connector: no popup, no network
+    await page.goto('settings/integrations');
+    const card = page.getByTestId('settings-linkedin-live');
+    await card.getByTestId('settings-linkedin-live-connect').click();
+    await expect(card.getByTestId('settings-linkedin-live-status')).toContainText(/Connected/, {
+      timeout: 30_000,
+    });
+    await expect(card.getByTestId('settings-enrichment-status')).toContainText(/filled in from LinkedIn/);
+    // someone the sync just added: their connection row said "Product Manager"; their profile says more
+    await page.goto('people?view=list');
+    await page.getByTestId('people-row').filter({ hasText: 'Priya Raman' }).getByRole('link').first().click();
+    await expect(page.getByRole('heading', { name: 'Priya Raman', level: 1 })).toBeVisible();
+    const header = page.getByTestId('person-header');
+    await expect(header.getByTestId('person-position')).toHaveText('Product Manager, Payments at Stripe', {
+      timeout: 30_000,
+    });
+    // the company's logo is LinkedIn's, kept on the organisation, not a guessed web-address icon
+    const logo = header.getByTestId('company-logo').first();
+    await expect(logo).toHaveAttribute('data-source', 'linkedin');
+    await expect(logo).toHaveAttribute('src', /logos\/stripe\.png$/);
+    // their schools come from the profile's education section
+    await expect(page.getByText('University of Michigan').first()).toBeVisible();
+  });
+});

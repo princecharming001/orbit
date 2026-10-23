@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { fillWhyThemGaps } from '../engine/brief';
 import { cleanUpGuesses } from '../engine/cleanup';
-import { enrichFromLinkedIn } from '../engine/enrich';
+import { runEnrichment } from '../engine/enrichment';
 import { autoSyncFathom } from '../engine/fathom';
 import { liveLinkedInAccount, resumeLinkedInConnect, syncLinkedInLive } from '../engine/linkedinLive';
 import { autoSyncMeetingApps } from '../engine/meetingApps';
@@ -31,8 +31,8 @@ export function MeetingNotesAutoSync() {
       .then(() => {
         void autoSyncFathom(u).catch(() => undefined);
         void autoSyncMeetingApps(u).catch(() => undefined);
-        // a LinkedIn connected whose first sync never finished syncs now; then today's few LinkedIn lookups for
-        // people the student knows (both quiet no-ops without live LinkedIn)
+        // a LinkedIn connected whose first sync never finished syncs now; then today's share of the enrichment
+        // waterfall for people the student knows (engine/enrichment; a quiet no-op with nothing to look up with)
         void liveLinkedInAccount(u.id)
           .then((row) =>
             row && row.status !== 'revoked' && row.externalAccountId && !row.lastSyncedAt
@@ -43,7 +43,7 @@ export function MeetingNotesAutoSync() {
           // then drafts still waiting on a "Why them" line get one written from what Orbit now knows
           .finally(
             () =>
-              void enrichFromLinkedIn(u)
+              void runEnrichment(u)
                 .catch(() => undefined)
                 .then(() => fillWhyThemGaps(u))
                 .catch(() => undefined),

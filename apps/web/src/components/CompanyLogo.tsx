@@ -1,18 +1,21 @@
 import type { Person } from '@orbit/core';
-import { companyDomain, companyLogoUrl } from '@orbit/core';
+import { companyDomain, companyLogoUrl, normalizeCompany } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import type React from 'react';
 import { useState } from 'react';
 import { db } from '../db/schema';
+import { linkedInImageExpired } from '../engine/photos';
 import { cx } from '../ui';
 
 /** Domains with no icon of their own: they show their letter, without asking again. */
 const missing = new Set<string>();
 
 /**
- * A company's logo, small and square, with its name on hover. The domain comes from what Orbit knows (a stored
- * domain, a work address of someone there, the list of well-known companies); without one, or when the site has no
- * icon, it is the company's first letter on a quiet tile, so a row of them still lines up.
+ * A company's logo, small and square, with its name on hover. The company's own logo from LinkedIn comes first (kept
+ * on the organisation by enrichment, plan 17 E; an expired LinkedIn link is skipped until it is fetched again). Then
+ * the icon of its web address, which comes from what Orbit knows (a stored domain, a work address of someone there,
+ * the list of well-known companies); without one, or when the site has no icon, it is the company's first letter on a
+ * quiet tile, so a row of them still lines up.
  */
 export function CompanyLogo({
   name,
@@ -36,13 +39,44 @@ export function CompanyLogo({
   size?: number;
   className?: string;
 }) {
-  const org = useLiveQuery(() => (orgId ? db.organizations.get(orgId) : undefined), [orgId]);
+  // the organisation row: by its id, else by the name (so a logo kept from LinkedIn shows wherever the name does)
+  const org = useLiveQuery(
+    () =>
+      orgId
+        ? db.organizations.get(orgId)
+        : name && normalizeCompany(name)
+          ? db.organizations.where('nameNormalized').equals(normalizeCompany(name)).first()
+          : undefined,
+    [orgId, name],
+  );
   const d = domain ?? companyDomain(name ?? org?.name, { domains: org?.domains, emails });
   const [failed, setFailed] = useState(false);
+  const [ownFailed, setOwnFailed] = useState<string>();
   if (!name && !org) return null;
   const label = labelOverride ?? name ?? org?.name ?? '';
   const box = { width: size, height: size };
   const radius = size <= 18 ? 'rounded-[4px]' : 'rounded-[6px]';
+  // the company's own logo, from LinkedIn
+  const own =
+    org?.logoUrl && ownFailed !== org.logoUrl && !linkedInImageExpired(org.logoUrl) ? org.logoUrl : undefined;
+  if (own)
+    return (
+      <img
+        src={own}
+        alt={decorative ? '' : label}
+        aria-hidden={decorative || undefined}
+        title={label}
+        width={size}
+        height={size}
+        loading="lazy"
+        referrerPolicy="no-referrer"
+        className={cx('shrink-0 object-contain bg-white border border-line-2', radius, className)}
+        style={box}
+        data-testid="company-logo"
+        data-source="linkedin"
+        onError={() => setOwnFailed(own)}
+      />
+    );
   if (!d || failed || missing.has(d)) {
     const tile = cx(
       'inline-flex shrink-0 items-center justify-center bg-canvas-2 text-ink-3 font-semibold border border-line-2',

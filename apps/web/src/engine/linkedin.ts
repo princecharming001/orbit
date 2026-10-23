@@ -63,8 +63,10 @@ async function importConnectionRows(
       // a re-import that shows a new company or title is a job change: close the old role, open the new one
       // dated today (drafting reads it as the news for a congratulate note)
       // differences in case, spacing, punctuation, legal suffixes or a level ("Engineer II") are not a job change
+      // the role their own LinkedIn profile says is current (plan 17 E) is not undone by an older export or a headline
       const changed =
         !!existing &&
+        existing.source !== 'linkedin_profile' &&
         (normalizeCompany(existing.nameRaw) !== normalizeCompany(r.company) ||
           (!!existing.title && !!r.position && sameTitleKey(existing.title) !== sameTitleKey(r.position)));
       if (changed) {
