@@ -206,10 +206,9 @@ export async function currentResumeFacets(userId: string): Promise<ResumeFacet[]
     .equals(userId)
     .filter((r) => r.isCurrent)
     .first();
-  // demo data and older imports may have facets without a resume row; use them all then
-  const facets = resume
-    ? await db.resumeFacets.where('resumeId').equals(resume.id).toArray()
-    : await db.resumeFacets.toArray();
+  // only the student's own: with no resume of theirs there are no facets (never another profile's, like the demo's)
+  if (!resume) return [];
+  const facets = await db.resumeFacets.where('resumeId').equals(resume.id).toArray();
   return facets.filter((f) => !f.excluded);
 }
 

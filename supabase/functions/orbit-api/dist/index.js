@@ -2111,6 +2111,21 @@ function sectorOf(person2, userFunctions = []) {
   if (f2 === "swe" || f2 === "pm" || f2 === "design" || f2 === "data") return "tech";
   return "general";
 }
+var RECRUITER_TITLE = new RegExp(
+  [
+    String.raw`\brecruit(?:er|ers|ing|ment)\b`,
+    String.raw`\b(?:talent|technical|tech|recruiting)\s+sourc(?:er|ing)\b`,
+    String.raw`\bsourcer\b`,
+    String.raw`\btalent\s+(?:acquisition|partner|lead|manager|advisor|specialist|team|attraction)\b`,
+    String.raw`\b(?:head|director|vp|vice president|manager)\s*(?:of|,)?\s*talent\b`,
+    String.raw`\b(?:early|emerging)\s+(?:careers?|talent)\b`,
+    String.raw`\b(?:university|campus|college|student)\s+(?:relations|recruiting|programs?\s+(?:lead|manager|coordinator))\b`,
+    String.raw`\b(?:hr|human resources|people)\s+(?:business\s+)?partner\b`,
+    String.raw`\b(?:hr|human resources)\s+(?:generalist|manager|director|lead|specialist|coordinator|associate)\b`,
+    "^(?:hr|human resources)$"
+  ].join("|"),
+  "i"
+);
 function maxBumpsFor(sector, settingsMax) {
   const cap = sector === "finance" || sector === "consulting" ? 2 : 1;
   return Math.max(0, Math.min(settingsMax, cap));

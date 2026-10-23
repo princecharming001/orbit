@@ -24,6 +24,7 @@ import {
   isRuleSuggestion,
   newId,
   normalizeCompany,
+  normalizeEmail,
   proposeWindows,
   resumeOneLiner,
   STAGE_LABELS,
@@ -652,6 +653,7 @@ export async function buildDraftContext(
   // last message is recent enough to reply to) instead of introducing the student as a stranger
   let history: DraftContext['history'];
   if (kind === 'outreach' && !chat?.threadId) {
+    const mine = normalizeEmail(user.email);
     const theirThreads = await db.threads
       .where('userId')
       .equals(user.id)
@@ -661,15 +663,18 @@ export async function buildDraftContext(
       await Promise.all(theirThreads.map((t) => db.messages.where('threadId').equals(t.id).toArray()))
     )
       .flat()
-      // only what passed between the student and this person: on a group thread (an intro that CC'd them),
-      // the introducer's note is not something they wrote
-      .filter(
-        (m) =>
-          !m.isAutomated &&
-          (m.direction === 'inbound'
-            ? m.fromPersonId === person.id
-            : [...m.toEmails, ...m.ccEmails].some((e) => person.emails.includes(e))),
-      )
+      // only what passed directly between the student and this person: on a group thread (an intro that CC'd
+      // them, a club list) the introducer's note is not something they wrote, and a CC is not a conversation
+      .filter((m) => {
+        if (m.isAutomated) return false;
+        // addresses on stored messages are already normalised
+        const theirs = (e: string) => person.emails.includes(e);
+        const others = [...m.toEmails, ...m.ccEmails].filter((e) => !theirs(e) && e !== mine);
+        if (others.length > 1) return false;
+        return m.direction === 'inbound'
+          ? m.fromPersonId === person.id && !m.ccEmails.includes(mine)
+          : m.toEmails.some(theirs);
+      })
       .sort((a, b) => a.sentAt.localeCompare(b.sentAt));
     const last = msgs.at(-1);
     if (last) {
@@ -678,7 +683,9 @@ export async function buildDraftContext(
       history = {
         lastAt: last.sentAt,
         lastInbound: last.direction === 'inbound',
-        repliedEver: msgs.some((m) => m.direction === 'inbound'),
+        // a real exchange: they wrote to the student and the student wrote to them, each directly
+        repliedEver:
+          msgs.some((m) => m.direction === 'inbound') && msgs.some((m) => m.direction === 'outbound'),
         threadId: recent && lastThread?.externalThreadId ? lastThread.id : undefined,
       };
       if (history.repliedEver && history.threadId && channel === 'gmail')

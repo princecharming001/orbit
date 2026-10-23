@@ -6,6 +6,7 @@ import { autoSyncFathom } from '../engine/fathom';
 import { liveLinkedInAccount, resumeLinkedInConnect, syncLinkedInLive } from '../engine/linkedinLive';
 import { autoSyncMeetingApps } from '../engine/meetingApps';
 import { repairHeadlineCompanies } from '../engine/people';
+import { repairClaims } from '../engine/repair';
 import { useSession } from '../state/session';
 
 /**
@@ -20,7 +21,13 @@ export function MeetingNotesAutoSync() {
   const userId = user?.id;
   useEffect(() => {
     const u = userRef.current;
-    if (!userId || !u?.onboardingCompletedAt) return;
+    if (!userId || !u) return;
+    // before setup ends too: what older versions said without evidence (alum labels, meetings from a mention) is
+    // repaired; after setup, cleanUpGuesses runs it
+    if (!u.onboardingCompletedAt) {
+      void repairClaims(u).catch(() => undefined);
+      return;
+    }
     // a LinkedIn sign-in that was still finishing when the page closed: keep waiting for it in the background
     void resumeLinkedInConnect(u).catch(() => undefined);
     // first, once: clear what older versions saved from guesses (chats from mail never answered, and so on)

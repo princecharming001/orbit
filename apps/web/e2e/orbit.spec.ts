@@ -1299,6 +1299,16 @@ test.describe('Setup without Google', () => {
     await page.goto('inbox');
     await expect(page.getByTestId('suggestion-thank_you').filter({ hasText: 'Sarah Lin' })).toBeVisible();
     await expect(page.getByTestId('suggestion-new_outreach').filter({ hasText: 'Sarah Lin' })).toHaveCount(0);
+    // a note that only mentions someone goes on their page, but is no meeting: no chat, no thank-you
+    await page.goto('notes/new');
+    await page.getByTestId('capture-text').fill('Need to email Marcus Webb about a referral.');
+    await page.getByTestId('capture-save').click();
+    await expect(page).toHaveURL(/\/people\//, { timeout: 15_000 });
+    await expect(page.getByTestId('person-header')).toContainText('Marcus Webb');
+    await expect(page.getByTestId('person-stage')).toHaveCount(0);
+    await expect(page.getByText(/you last met|logged a conversation/i)).toHaveCount(0);
+    await page.goto('inbox');
+    await expect(page.getByTestId('suggestion-thank_you').filter({ hasText: 'Marcus Webb' })).toHaveCount(0);
   });
 
   test('facts that disagree are pointed out, and a deleted fact can be brought back', async ({ page }) => {

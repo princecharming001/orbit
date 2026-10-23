@@ -61,6 +61,7 @@ import { moveChat } from '../engine/move';
 import { hidePerson, setRelationshipType, unhidePerson } from '../engine/people';
 import { moveChatGuarded } from '../engine/pipeline';
 import { buildPrep, personSummary, toYou } from '../engine/prep';
+import { SUMMARY_RULES_AT } from '../engine/repair';
 import { isServerUser } from '../integrations/orbitApi';
 import { useSession } from '../state/session';
 import { Avatar, Button, Card, Chip, cx, Modal, NotFound, relDate, Select, Tabs, useToast } from '../ui';
@@ -247,8 +248,12 @@ export function PersonPage() {
   const newestActivity = [...tps.map((t) => t.occurredAt), ...facts.map((f) => f.createdAt)]
     .filter((at) => at <= new Date().toISOString())
     .reduce((m, at) => (at > m ? at : m), '');
+  // and when it was written under older rules (what counts as a touch, what makes someone an alum)
   const summaryStale =
-    !!person?.summary && !!person.summaryUpdatedAt && newestActivity > person.summaryUpdatedAt;
+    !!person?.summary &&
+    (!person.summaryUpdatedAt ||
+      person.summaryUpdatedAt < SUMMARY_RULES_AT ||
+      newestActivity > person.summaryUpdatedAt);
   useEffect(() => {
     if (person && user && (!person.summary || summaryStale)) refreshPersonSummary(user, person.id);
   }, [person?.id, person?.summary, user, summaryStale]);

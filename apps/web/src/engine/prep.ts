@@ -22,8 +22,20 @@ import {
   seniorityOf,
   yearLabel,
 } from '@orbit/core';
+import { sameSchool } from '../data/schoolMatch';
 
 const DAY = 86_400_000;
+/** Not a touch between the two of them: sharing a CC line, or the LinkedIn connection itself. */
+const NOT_A_TOUCH: ReadonlySet<Touchpoint['kind']> = new Set(['email_cc', 'linkedin_connected']);
+/** Touches that are theirs too: they wrote, they met the student, or someone introduced them. */
+const FROM_THEM_OR_TOGETHER: ReadonlySet<Touchpoint['kind']> = new Set([
+  'meeting',
+  'email_in',
+  'linkedin_in',
+  'text_in',
+  'manual_log',
+  'intro_observed',
+]);
 
 /** "a Consultant", "an Associate Product Manager", "Head of Design" (titles that take no article). */
 export function withArticle(title: string): string {
@@ -82,6 +94,10 @@ function lastTouchSentence(tp: Touchpoint, first: string, when: string): string 
     case 'linkedin_in':
     case 'linkedin_out':
       return `You last messaged on LinkedIn ${when}.`;
+    case 'text_in':
+      return `${first} last texted you ${when}.`;
+    case 'text_out':
+      return `You last texted ${first} ${when}.`;
     case 'linkedin_engaged':
       return `You last engaged with ${first}'s LinkedIn posts ${when}.`;
     case 'note':
@@ -120,7 +136,7 @@ export function personSummary(args: {
   user: Pick<User, 'school' | 'timezone'>;
   person: Person;
   facts: Pick<PersonFact, 'type' | 'text'>[];
-  touchpoints: Pick<Touchpoint, 'kind' | 'occurredAt'>[];
+  touchpoints: (Pick<Touchpoint, 'kind' | 'occurredAt'> & { weight?: number })[];
   now: Date;
 }): { summary: string; talkingPoints: string[] } {
   const { user, person, facts, now } = args;
@@ -138,11 +154,18 @@ export function personSummary(args: {
   } else if (title) parts.push(`${first} is ${withArticle(title)}.`);
   else if (org) parts.push(`${first} works at ${org}.`);
   else if (person.headline) parts.push(`${first}'s LinkedIn headline: ${person.headline}.`);
+  // an alum only on evidence they studied there (engine/alumni.ts); the same school on their record is a classmate,
+  // a professor or staff: "at your school", never "went to"
   if (person.isAlumni && user.school) parts.push(`Like you, ${first} went to ${user.school}.`);
+  else if (user.school && sameSchool(person.school, user.school))
+    parts.push(`${first} is at ${user.school} too.`);
   const tps = [...args.touchpoints]
     .filter((t) => new Date(t.occurredAt).getTime() <= now.getTime() + 60_000)
     .sort((a, b) => b.occurredAt.localeCompare(a.occurredAt));
-  const real = tps.filter((t) => t.kind !== 'linkedin_connected');
+  // touches between the two of them: a CC, the LinkedIn connection and a large meeting's light note are not
+  const real = tps.filter(
+    (t) => !NOT_A_TOUCH.has(t.kind) && !(t.kind === 'note' && t.weight !== undefined && t.weight < 0.3),
+  );
   const connected = tps.find((t) => t.kind === 'linkedin_connected');
   if (real[0]) {
     // A meeting and its notes land at the same time; describe the conversation, not the note about it.
@@ -152,10 +175,19 @@ export function personSummary(args: {
     );
     const last = [...sameDay].sort((a, b) => (RANK[a.kind] ?? 5) - (RANK[b.kind] ?? 5))[0]!;
     parts.push(lastTouchSentence(last as Touchpoint, first, sayWhen(last.occurredAt, now, tz)));
-    const recent = real.filter((t) => now.getTime() - new Date(t.occurredAt).getTime() < 90 * DAY).length;
-    if (recent >= 2)
+    // distinct interactions: a day's back-and-forth (a meeting and its notes, a reply and the answer) is one time in
+    // touch; liking their post is not one
+    const recent = real.filter(
+      (t) => t.kind !== 'linkedin_engaged' && now.getTime() - new Date(t.occurredAt).getTime() < 90 * DAY,
+    );
+    const times = new Set(recent.map((t) => dayKey(new Date(t.occurredAt), tz))).size;
+    const twoWay = recent.some((t) => FROM_THEM_OR_TOGETHER.has(t.kind));
+    const n = times === 2 ? 'twice' : `${times} times`;
+    if (times >= 2)
       parts.push(
-        `You've been in touch ${recent === 2 ? 'twice' : `${recent} times`} in the last three months.`,
+        twoWay
+          ? `You've been in touch ${n} in the last three months.`
+          : `You've written to ${first} ${n} in the last three months.`,
       );
   } else if (connected)
     parts.push(
@@ -565,7 +597,8 @@ export function buildPrep(args: {
         url: `https://www.google.com/search?q=${encodeURIComponent(`${org} careers internship`)}`,
       });
   }
-  if (person.isAlumni && user.school)
+  // an alum, or someone at the student's school now (a classmate, a professor)
+  if (user.school && (person.isAlumni || sameSchool(person.school, user.school)))
     research.push({ label: `Open with your shared ${user.school} connection` });
 
   const followUps = facts

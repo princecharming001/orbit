@@ -674,6 +674,13 @@ export interface MeetingNote {
   calendarEventId?: ID;
   matchStatus: 'auto' | 'confirmed' | 'unmatched' | 'rejected';
   matchConfidence?: number;
+  /**
+   * What the note records about its people: `meeting`, a conversation with them (they met or talked: a meeting
+   * touch, their chat completed, a thank-you next); `group_meeting`, a large recorded meeting (a light touch for
+   * people the student already has a chat with, nothing more); `mention`, a note that only names them (what it says
+   * about them is filed, no meeting). Absent on notes saved before it existed, which were all filed as meetings.
+   */
+  noteKind?: 'meeting' | 'group_meeting' | 'mention';
   extraction?: NoteExtraction;
   summary?: string;
   processedAt?: string;

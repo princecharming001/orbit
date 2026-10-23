@@ -99,7 +99,11 @@ export function NotesNew() {
   const recentEvent = recentEvents.find((e) => Date.now() - new Date(e.endAt).getTime() < 6 * 3_600_000);
   // the picker is never filled in behind the student's back: "Let Orbit figure it out" stays chosen, and the line
   // under it says who Orbit will file the note with (a name in the note, or the chat on the calendar that just ended)
-  const calendarPerson = people.find((p) => p.id === recentEvent?.attendeePersonIds[0]);
+  // only a one-on-one says who on its own: a note after a meeting of several people goes with the one it names
+  const calendarPerson =
+    recentEvent?.attendeePersonIds.length === 1
+      ? people.find((p) => p.id === recentEvent.attendeePersonIds[0])
+      : undefined;
   const recentPeople = useMemo(
     () => people.filter((p) => recentEvents.some((e) => e.attendeePersonIds.includes(p.id))),
     [people, recentEvents],
