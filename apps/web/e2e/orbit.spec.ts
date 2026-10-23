@@ -2335,8 +2335,13 @@ test.describe('Discover: a feed of new people', () => {
     await expect(cards.filter({ hasText: gone })).toHaveCount(0);
     await expect(page.getByTestId('toasts')).toContainText(/removed \(wrong role\)/i);
     // saving a new person adds them to the student's people, and only then
-    const saved = (await cards.first().locator('a[id^="found-"]').innerText()).trim();
-    await cards.filter({ hasText: saved }).getByTestId('found-save').click();
+    // the picks above the feed are recomputed after a dismissal and can lift someone out of the feed, so the card to
+    // save is read again if the one picked moved away before the click
+    let saved = '';
+    await expect(async () => {
+      saved = (await cards.first().locator('a[id^="found-"]').innerText({ timeout: 5_000 })).trim();
+      await cards.filter({ hasText: saved }).getByTestId('found-save').click({ timeout: 5_000 });
+    }).toPass({ timeout: 60_000 });
     await expect(page.getByTestId('toasts')).toContainText(new RegExp(`saved ${saved.split(' ')[0]}`, 'i'));
     await expect(cards.filter({ hasText: saved })).toHaveCount(0);
     await page.goto('people?view=list');
