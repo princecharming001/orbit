@@ -1342,7 +1342,7 @@ async function unipileSearch(deps, body, doFetch) {
     total: typeof b.paging?.total_count === "number" ? b.paging.total_count : void 0
   };
 }
-var ENRICH_ROUTES = /* @__PURE__ */ new Set(["/profile", "/company", "/web", "/providers"]);
+var ENRICH_ROUTES = /* @__PURE__ */ new Set(["/profile", "/company", "/photo", "/web", "/providers"]);
 var PROFILE_SECTIONS = /* @__PURE__ */ new Set([
   "experience",
   "education",
@@ -1374,7 +1374,7 @@ function enrichBucket(kind, who, now, perDay) {
 async function enrichmentRoute(deps, path, body, ctx) {
   const { h, doFetch, take, now } = ctx;
   const e = deps.enrichment ?? {};
-  const kind = path === "/profile" ? "profile" : path === "/company" ? "company" : "web";
+  const kind = path === "/profile" ? "profile" : path === "/company" ? "company" : path === "/photo" ? "photo" : "web";
   if (kind === "web") {
     if (!e.exaKey) return unconfigured2(h);
   } else {
@@ -1382,7 +1382,7 @@ async function enrichmentRoute(deps, path, body, ctx) {
     if (!await tokenValid(String(body.accountId ?? ""), body.token, deps.signingKey))
       return json(403, { error: "this LinkedIn account is not linked to this browser" }, h);
   }
-  const perDay = kind === "profile" ? e.profilesPerDay ?? 80 : kind === "company" ? e.companiesPerDay ?? 80 : e.webPerDay ?? 30;
+  const perDay = kind === "profile" ? e.profilesPerDay ?? 80 : kind === "company" ? e.companiesPerDay ?? 80 : kind === "photo" ? e.photosPerDay ?? 300 : e.webPerDay ?? 30;
   const who = kind === "web" ? `visitor:${ctx.visitor}` : String(body.accountId);
   let verdict;
   try {
@@ -1396,13 +1396,14 @@ async function enrichmentRoute(deps, path, body, ctx) {
       {
         ok: false,
         reason: "limit",
-        message: kind === "web" ? "Orbit has looked up as many people on the web as it allows today." : "Orbit has read as many LinkedIn profiles as it allows today. It carries on tomorrow."
+        message: kind === "web" ? "Orbit has looked up as many people on the web as it allows today." : kind === "photo" ? "Orbit has fetched as many LinkedIn photos as it allows today. It carries on tomorrow." : "Orbit has read as many LinkedIn profiles as it allows today. It carries on tomorrow."
       },
       h
     );
   try {
     if (kind === "profile") return json(200, await unipileProfile(deps, body, doFetch), h);
     if (kind === "company") return json(200, await unipileCompany(deps, body, doFetch), h);
+    if (kind === "photo") return json(200, await unipilePhoto(deps, body, doFetch), h);
     return json(200, await exaSearch(e, body, doFetch), h);
   } catch (err) {
     return json(502, { error: err instanceof Error ? err.message : "upstream error" }, h);
@@ -1486,6 +1487,11 @@ async function unipileProfile(deps, body, doFetch) {
   const res = await doFetch(`${deps.unipileBase}/api/v1/users/${encodeURIComponent(identifier)}?${q}`, {
     headers: uHeaders(deps)
   });
+  const failed = await profileFailure(res);
+  if (failed) return failed;
+  return { ok: true, profile: mapProfile(await res.json()) };
+}
+async function profileFailure(res) {
   if (res.status === 404 || res.status === 422)
     return { ok: false, reason: "not_found", message: "LinkedIn could not find that profile." };
   if (res.status === 429)
@@ -1497,7 +1503,27 @@ async function unipileProfile(deps, body, doFetch) {
   if (res.status >= 400 && res.status < 500)
     return { ok: false, reason: "refused", message: await unipileError(res) };
   if (!res.ok) throw new Error(`unipile ${res.status}`);
-  return { ok: true, profile: mapProfile(await res.json()) };
+  return void 0;
+}
+async function unipilePhoto(deps, body, doFetch) {
+  const accountId = String(body.accountId ?? "");
+  const identifier = text(body.identifier, 200);
+  if (!identifier) return { ok: false, reason: "bad_request", message: "Say whose photo to fetch." };
+  const q = new URLSearchParams({ account_id: accountId });
+  const res = await doFetch(`${deps.unipileBase}/api/v1/users/${encodeURIComponent(identifier)}?${q}`, {
+    headers: uHeaders(deps)
+  });
+  const failed = await profileFailure(res);
+  if (failed) return failed;
+  const p = await res.json();
+  return {
+    ok: true,
+    photo: {
+      pictureUrl: licdn(p.profile_picture_url_large) ?? licdn(p.profile_picture_url),
+      providerId: text(p.provider_id, 200),
+      publicIdentifier: text(p.public_identifier, 200)
+    }
+  };
 }
 async function unipileCompany(deps, body, doFetch) {
   const accountId = String(body.accountId ?? "");
@@ -1691,6 +1717,7 @@ Deno.serve(
     enrichment: {
       profilesPerDay: num("ORBIT_LINKEDIN_PROFILES_PER_DAY", 80),
       companiesPerDay: num("ORBIT_LINKEDIN_COMPANIES_PER_DAY", 80),
+      photosPerDay: num("ORBIT_LINKEDIN_PHOTOS_PER_DAY", 300),
       webPerDay: num("ORBIT_WEB_LOOKUPS_PER_DAY", 30),
       exaKey,
       firecrawlKey,

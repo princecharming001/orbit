@@ -90,6 +90,7 @@ Deno.serve(
     enrichment: {
       profilesPerDay: num('ORBIT_LINKEDIN_PROFILES_PER_DAY', 80),
       companiesPerDay: num('ORBIT_LINKEDIN_COMPANIES_PER_DAY', 80),
+      photosPerDay: num('ORBIT_LINKEDIN_PHOTOS_PER_DAY', 300),
       webPerDay: num('ORBIT_WEB_LOOKUPS_PER_DAY', 30),
       exaKey,
       firecrawlKey,
