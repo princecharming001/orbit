@@ -60,7 +60,7 @@ export function Suggest({
   const wrap = useRef<HTMLDivElement>(null);
   const menu = useRef<HTMLDivElement>(null);
   const latest = useRef(0);
-  const picked = useRef<string>();
+  const picked = useRef<string | undefined>(undefined);
   const listId = useId();
 
   // look up matches when the text changes (never after a pick, which already set the text)

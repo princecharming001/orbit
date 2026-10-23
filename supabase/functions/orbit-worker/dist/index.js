@@ -11852,6 +11852,15 @@ function scorePair(inc, cand, ctx) {
     score = Math.min(score, NAME_ORG_ONLY_CAP);
   return { score, features: f };
 }
+function differentLinkedInProfiles(a, b) {
+  const slugOf2 = (p) => p.linkedinSlug ?? linkedInSlug(p.linkedinUrl) ?? void 0;
+  const sa = slugOf2(a);
+  const sb = slugOf2(b);
+  if (sa && sb) return sa !== sb;
+  const ma = a.linkedinMemberId;
+  const mb = b.linkedinMemberId;
+  return !!ma && !!mb && ma !== mb;
+}
 function resolveIdentity(inc, ctx) {
   const email = inc.email ? normalizeEmail(inc.email) : void 0;
   const slug = linkedInSlug(inc.linkedinUrl);
@@ -11868,9 +11877,10 @@ function resolveIdentity(inc, ctx) {
     for (const p of people)
       if (p.linkedinSlug === slug) return { kind: "match", personId: p.id, via: "linkedin" };
   }
+  const others = slug ? people.filter((p) => !differentLinkedInProfiles({ linkedinSlug: slug }, p)) : people;
   const incOrg = normalizeCompany(inc.companyRaw);
   if (incName.normalized && incOrg) {
-    for (const p of people) {
+    for (const p of others) {
       if (isPlaceholderName(p)) continue;
       if (email && (p.primaryEmail || p.emails.length)) continue;
       if (parseName(p.displayName).normalized === incName.normalized && normalizeCompany(p.currentOrganizationRaw) === incOrg)
@@ -11880,7 +11890,7 @@ function resolveIdentity(inc, ctx) {
   if (!incName.full && !email) return { kind: "new" };
   const lastFold = fold(incName.last);
   const incDomain = email ? emailDomain(email) : void 0;
-  const candidates = people.filter((p) => {
+  const candidates = others.filter((p) => {
     const placeholder = isPlaceholderName(p);
     const pDomains = [...new Set([p.primaryEmail, ...p.emails].filter(Boolean).map((e) => emailDomain(e)))];
     if (!incName.full || placeholder) {
