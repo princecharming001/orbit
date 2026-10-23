@@ -5,7 +5,7 @@ const text = stableSystemText('0123456789abcdef');
 
 describe('stable system block', () => {
   it('is version 9 and byte-identical for a conversation', () => {
-    expect(STABLE_SYSTEM_VERSION).toBe(9);
+    expect(STABLE_SYSTEM_VERSION).toBe(10);
     expect(stableSystemText('0123456789abcdef')).toBe(text);
     expect(systemBlocks('0123456789abcdef')).toEqual([
       { type: 'text', text, cache_control: { type: 'ephemeral' } },

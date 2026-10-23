@@ -11,6 +11,7 @@ import {
   Routes,
   type To,
 } from 'react-router-dom';
+import { InPanel } from '../../components/BackLink';
 import { LegacyRedirect } from '../../legacyRoutes';
 import { CompanyPage } from '../../pages/Company';
 import { Discover } from '../../pages/Discover';
@@ -80,7 +81,9 @@ export function PanelRouter({
   return (
     <NavigationContext.Provider value={navigation}>
       <LocationContext.Provider value={loc}>
-        <RouteContext.Provider value={route}>{children}</RouteContext.Provider>
+        <RouteContext.Provider value={route}>
+          <InPanel.Provider value>{children}</InPanel.Provider>
+        </RouteContext.Provider>
       </LocationContext.Provider>
     </NavigationContext.Provider>
   );

@@ -1,5 +1,7 @@
 import type { User } from '@orbit/core';
 import { db } from '../../../db/schema';
+import { addPersonByHand } from '../../../engine/people';
+import { setConnectorsMockForTests } from '../../../integrations/connectorsMock';
 import { type FakeOrbitApi, fakeDossier } from '../../../test/fakeOrbitApi';
 import type { AccountState, ApiSeed } from './harness';
 
@@ -32,6 +34,36 @@ async function demoPerson(user: User, name: string) {
 }
 
 const nobodyYet: ApiSeed = () => undefined;
+
+/** The demo with live LinkedIn connected (the mock connector), so a LinkedIn search can run. */
+async function liveLinkedIn(user: User): Promise<void> {
+  setConnectorsMockForTests(true);
+  await db.integrations.put({
+    id: 'int_li_sim',
+    userId: user.id,
+    provider: 'linkedin_live',
+    externalAccountId: 'demo-linkedin-account',
+    status: 'active',
+    scopes: [],
+    syncState: {},
+    connectedAt: new Date().toISOString(),
+  });
+}
+
+/** The demo plus someone at Anthropic saved from a LinkedIn search: not someone the student knows. */
+async function savedAtAnthropic(user: User): Promise<void> {
+  await addPersonByHand(
+    user.id,
+    {
+      name: 'Dario Testperson',
+      company: 'Anthropic',
+      title: 'Research Engineer',
+      linkedinUrl: 'https://www.linkedin.com/in/dario-testperson',
+      source: 'linkedin_search',
+    },
+    user.school,
+  );
+}
 
 const investors: ApiSeed = (api: FakeOrbitApi) => {
   api.state.sourced = [
@@ -329,6 +361,38 @@ export const SCENARIOS: Scenario[] = [
     account: 'empty',
     goal: 'ask to connect your Gmail; if it cannot be connected on this copy yet, find out plainly and what to do instead',
     minGoal: 'partly',
+  },
+  {
+    id: 'map-pick-routes',
+    group: 'map',
+    persona:
+      'a student recruiting for software engineering who has live LinkedIn connected in the demo and wants in at Stripe',
+    account: { demo: true, then: liveLinkedIn },
+    goal: 'search LinkedIn for engineers at Stripe, then get warm routes to two or three of the people found, not just one, without being made to name them one at a time',
+    expectTools: [['find_people'], ['add_sourced', 'find_routes']],
+    minGoal: 'partly',
+    maxTurns: 8,
+  },
+  {
+    id: 'map-pick-named',
+    group: 'map',
+    persona: 'a student who says things loosely ("the second and third guy", "those two", "all of them")',
+    account: 'demo',
+    goal: 'ask who you know at Stripe, then ask for warm routes to a couple of them at once in a loose way, and expect one answer covering each of them',
+    expectTools: [['find_routes']],
+    minGoal: 'partly',
+    maxTurns: 8,
+  },
+  {
+    id: 'map-saved-not-known',
+    group: 'map',
+    persona:
+      'a student who added someone at Anthropic from a LinkedIn search yesterday but has never spoken to them',
+    account: { demo: true, then: savedAtAnthropic },
+    goal: 'ask who you know at Anthropic and expect Orbit to be honest that the person you merely saved to contact is not someone you know',
+    expectTools: [['find_routes']],
+    minGoal: 'partly',
+    maxTurns: 6,
   },
   {
     id: 'map-mutuals',

@@ -289,6 +289,8 @@ export interface RouteView {
   bandLabel?: string;
   score: number;
   names: string[];
+  /** the people on the route in order, with the LinkedIn profile to open when Orbit has it */
+  hops: { id?: string; name: string; linkedinUrl?: string }[];
   text: string[];
 }
 export interface WarmIntro {
@@ -347,20 +349,26 @@ export function readRoutes(d: unknown): {
       const r = obj(x);
       const hops = arr(r.hops).map(obj);
       if (!hops.length) return undefined;
+      const views = hops.map((h) => {
+        const id = str(h.toId);
+        const p = id ? people[id] : undefined;
+        const name =
+          str(h.to) ??
+          (isPerson(p) ? p.firstName : undefined) ??
+          (id === to?.id ? to?.firstName : 'someone') ??
+          'someone';
+        const linkedinUrl =
+          str(h.toLinkedin) ??
+          (isPerson(p) ? p.linkedinUrl : undefined) ??
+          (id && id === to?.id ? to?.linkedinUrl : undefined);
+        return { id, name, linkedinUrl };
+      });
       return {
         band: str(r.band),
         bandLabel: str(r.bandLabel),
         score: num(r.score) ?? 0,
-        names: hops.map((h) => {
-          const id = str(h.toId);
-          const p = id ? people[id] : undefined;
-          return (
-            str(h.to) ??
-            (isPerson(p) ? p.firstName : undefined) ??
-            (id === to?.id ? to?.firstName : 'someone') ??
-            'someone'
-          );
-        }),
+        names: views.map((h) => h.name),
+        hops: views,
         text: hops.map((h) => str(h.how) ?? str(h.text)).filter(present),
       };
     })
@@ -374,6 +382,14 @@ export function readRoutes(d: unknown): {
       .filter(present),
     warmIntros,
   };
+}
+
+/** routes_many: `{ people: <routes data each> }`, one entry per person asked about */
+export function readRoutesMany(d: unknown): ReturnType<typeof readRoutes>[] {
+  const o = obj(unpack(d));
+  return arr(o.people)
+    .map((x) => readRoutes(x))
+    .filter((r) => !!r.to);
 }
 
 /** brief / suggestion: domain Suggestions, or card references `{ id, kind, reason }` (alone or as `{ card }`) */
@@ -474,6 +490,8 @@ export function readCompany(d: unknown): {
   people: Person[];
   former: Person[];
   target?: boolean;
+  /** there, but only saved to contact: not someone the student knows yet */
+  saved: Person[];
   /** two-hop routes: someone there, through someone the student knows */
   via: { target: Person; through: string }[];
 } {
@@ -488,6 +506,7 @@ export function readCompany(d: unknown): {
       .map(personOf)
       .filter(present),
     former: arr(o.former).map(personOf).filter(present),
+    saved: arr(o.savedToContact).map(personOf).filter(present),
     target: typeof o.target === 'boolean' ? o.target : o.target ? true : undefined,
     via: arr(o.viaSomeoneYouKnow)
       .map((x) => {
@@ -599,6 +618,10 @@ export function readPrep(d: unknown): {
 }
 
 export interface ListRow {
+  /** a recommendationId: the row can be picked, for add_sourced */
+  id?: string;
+  /** the Orbit person this row already is */
+  known?: string;
   text: string;
   sub?: string;
   chip?: string;
@@ -617,6 +640,8 @@ export function readList(d: unknown): { title?: string; items: ListRow[] } {
       if (!text) return undefined;
       const href = str(r.href);
       return {
+        id: str(r.id),
+        known: str(r.known),
         text,
         sub: str(r.sub),
         chip: str(r.chip),

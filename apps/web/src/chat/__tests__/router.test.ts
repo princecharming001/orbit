@@ -159,6 +159,25 @@ const HANDLED: [string, string, Record<string, unknown>][] = [
   ['routes to Priya', 'find_routes', { personId: 'p1' }],
   ['how do I reach Ramp', 'find_routes', { company: 'Ramp' }],
   ['who do I know at Goldman Sachs', 'find_routes', { company: 'Goldman Sachs' }],
+  // several people picked on a card
+  ['find warm routes to each of: Priya Patel and Elena Cohen', 'find_routes', { personIds: ['p1', 'p7'] }],
+  ['Routes to both of them: Priya Patel, Elena Cohen', 'find_routes', { personIds: ['p1', 'p7'] }],
+  [
+    'Add to People and find warm routes to each of: Dana Lee [rec li:1] and Kai Ito [rec li:2]',
+    'add_sourced',
+    { recommendationIds: ['li:1', 'li:2'], then: 'routes' },
+  ],
+  ['Add to People: Dana Lee [rec li:1]', 'add_sourced', { recommendationIds: ['li:1'] }],
+  [
+    'Add to People and draft a message to each of: Kai Ito [rec li:2]',
+    'add_sourced',
+    { recommendationIds: ['li:2'], then: 'drafts' },
+  ],
+  [
+    'Add to People and draft a message to each of: Priya Patel and Elena Cohen',
+    'create_drafts',
+    { personIds: ['p1', 'p7'] },
+  ],
   ['anyone at Airbnb', 'find_routes', { company: 'Airbnb' }],
   ['warm intro to Mei', 'find_routes', { personId: 'p4' }],
   // what Orbit knows, prep, and who someone knows

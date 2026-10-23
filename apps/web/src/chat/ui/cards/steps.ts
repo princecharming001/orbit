@@ -18,6 +18,7 @@ import {
   writeToEach,
 } from './next';
 import type { NextStep } from './parts';
+import type { RouteView, WarmIntro } from './shapes';
 import {
   readCompany,
   readImport,
@@ -43,6 +44,11 @@ export const chainKey = (names: string[]) =>
 /** A routes card's rows: the routes strongest first, each with the warm intro along the same chain, then the rest. */
 export function routeRows(d: unknown) {
   const { routes, warmIntros } = readRoutes(d);
+  return rowsFrom(routes, warmIntros);
+}
+
+/** The same rows from routes already read (the card for several people reads each person's once). */
+export function rowsFrom(routes: RouteView[], warmIntros: WarmIntro[]) {
   const sorted = [...routes].sort((a, b) => b.score - a.score);
   const warmByChain = new Map(warmIntros.map((w) => [chainKey(w.hops), w]));
   const merged = new Set<(typeof warmIntros)[number]>();

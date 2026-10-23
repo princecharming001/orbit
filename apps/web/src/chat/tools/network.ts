@@ -41,6 +41,8 @@ import { callApi, isAccountMode, isServerUser } from '../../integrations/orbitAp
 import { z } from '../../zod';
 import type { ResultEnvelope, ToolContext } from '../types';
 import { type AnyTool, clip, defineTool, ok, plural, requirePerson, toModel, wrapped } from './_shared';
+import { createDrafts } from './drafts';
+import { routesToMany } from './read';
 
 const KINDS = GOAL_KINDS as unknown as [GoalKind, ...GoalKind[]];
 const MEM_KINDS = MEMORY_KINDS as unknown as [MemoryKind, ...MemoryKind[]];
@@ -48,6 +50,10 @@ const REPLY_KINDS = REPLY_CLASSES as unknown as [ReplyClass, ...ReplyClass[]];
 
 /** A row of a `list` card. */
 interface Item {
+  /** what a tap on the row's checkbox means: a recommendationId for add_sourced, so the card can pick people */
+  id?: string;
+  /** the Orbit person this row already is, when the student knows them */
+  known?: string;
   text: string;
   sub?: string;
   chip?: string;
@@ -558,6 +564,8 @@ export const findPeopleTool = defineTool({
     return list(
       `People for ${GOAL_KIND_LABELS[input.purpose].toLowerCase()}`,
       top.map((c) => ({
+        id: c.id,
+        known: c.knownPersonId,
         text: candidateLine(c),
         chip: c.knownPersonId ? 'You know them' : undefined,
         sub: c.reasons.slice(0, 2).join('. '),
@@ -594,6 +602,8 @@ async function findOnLinkedIn(
   return list(
     `On LinkedIn: ${GOAL_KIND_LABELS[purpose].toLowerCase()}`,
     top.map((p) => ({
+      id: p.id,
+      known: p.knownPersonId,
       text: p.name,
       chip: p.knownPersonId ? 'You know them' : degree(p.distance),
       sub: [p.headline, p.location].filter(Boolean).join(' · '),
@@ -621,21 +631,28 @@ export const addSourcedTool = defineTool({
   name: 'add_sourced',
   kind: 'write',
   description:
-    'Call this after find_people when the student picks people to add (their recommendationIds). Each becomes a person in Orbit with a chat at "to contact" for the goal, and research on them starts. Never add people the student did not pick.',
+    'Call this after find_people when the student picks people to add (their recommendationIds). Each becomes a person in Orbit with a chat at "to contact" for the goal, and research on them starts. Never add people the student did not pick. With then: "routes" it goes straight on to warm routes to each of them in one card; with then: "drafts" it drafts a message to each. Someone added this way is saved to contact, not someone the student knows.',
   input: z.object({
     recommendationIds: z
       .array(z.string().min(1))
       .min(1)
       .max(20)
       .describe('The recommendationIds from find_people the student chose.'),
+    then: z
+      .enum(['routes', 'drafts'])
+      .optional()
+      .describe(
+        'What to do right after adding them: "routes" finds warm routes to each, "drafts" drafts a message to each.',
+      ),
   }),
-  capabilities: ['source_add'],
+  capabilities: ['source_add', 'source_add_then'],
   progress: 'Adding them',
   async execute(input, ctx) {
     const fromLinkedIn = input.recommendationIds.every((id) => id.startsWith(LINKEDIN_FOUND_PREFIX));
     if (fromLinkedIn) {
       const r = await addLinkedInFound(ctx.user, input.recommendationIds);
       if (!r.ok) throw new Error(r.message);
+      if (input.then) return andThen(ctx, input.then, r.people);
       return list(
         'Added',
         r.people.map((p) => ({ text: p.displayName, href: `/people/${p.id}` })),
@@ -647,6 +664,7 @@ export const addSourcedTool = defineTool({
     if (!accountReady(ctx)) return needsAccount('Adding people from a search');
     const r = await addSourced(ctx.user, input.recommendationIds);
     if (!r.ok) throw new Error(r.message);
+    if (input.then) return andThen(ctx, input.then, r.people);
     return list(
       'Added',
       r.people.map((p) => ({ text: p.displayName, href: `/people/${p.id}` })),
@@ -657,6 +675,22 @@ export const addSourcedTool = defineTool({
   },
   toModel,
 });
+
+/**
+ * The step after adding people from a search, in the same turn: warm routes to each of them in one card, or a draft
+ * to each. The card says who was added first, so the add is never silent.
+ */
+async function andThen(
+  ctx: ToolContext,
+  then: 'routes' | 'drafts',
+  people: { id: string; displayName: string }[],
+): Promise<ResultEnvelope> {
+  const ids = people.map((p) => p.id);
+  const added = `Added ${people.map((p) => p.displayName).join(', ')} to People (saved to contact).`;
+  const env =
+    then === 'routes' ? await routesToMany(ctx, ids) : await createDrafts.execute({ personIds: ids }, ctx);
+  return { ...env, summary: `${added} ${env.summary}` };
+}
 
 // ---------- introductions ----------
 

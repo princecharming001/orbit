@@ -228,13 +228,13 @@ export const manageRecommendation = defineTool({
   toModel,
 });
 
-const SECTIONS = ['profile', 'goals', 'style', 'schedule', 'hints'] as const;
+const SECTIONS = ['profile', 'goals', 'style', 'schedule', 'hints', 'chat'] as const;
 
 export const updateSettings = defineTool({
   name: 'update_settings',
   kind: 'write',
   description:
-    'Call this only when the student asks to change their profile (name, email, school, graduation year, degree, majors, city, LinkedIn, timezone), their goals (recruiting cycle, functions, roles, industries, locations, free text, ambition), their writing style (warm, direct or formal; learn from sent mail; forget the learned style), their scheduling link or brief time, or to close a first-run hint. Sending limits and Claude settings are update_limits, set_llm_feature and set_claude_key. Give only the fields that change.',
+    "Call this only when the student asks to change their profile (name, email, school, graduation year, degree, majors, city, LinkedIn, timezone), their goals (recruiting cycle, functions, roles, industries, locations, free text, ambition), their writing style (warm, direct or formal; learn from sent mail; forget the learned style), their scheduling link or brief time, to show or hide Orbit's reasoning (the grey notes under its answers), or to close a first-run hint. Sending limits and Claude settings are update_limits, set_llm_feature and set_claude_key. Give only the fields that change.",
   input: z.object({
     section: z.enum(SECTIONS).describe('Which section the fields belong to.'),
     fullName: z.string().optional().describe('profile'),
@@ -279,6 +279,12 @@ export const updateSettings = defineTool({
       .describe('schedule: the Calendly or Cal.com link drafts include; empty removes it.'),
     briefTimeLocal: z.string().optional().describe('schedule: when the daily brief is built, HH:MM.'),
     hintId: z.string().optional().describe('hints: the first-run hint to close for good (today, pipeline).'),
+    showReasoning: z
+      .boolean()
+      .optional()
+      .describe(
+        "chat: true shows Orbit's own notes to itself (the grey lines before each step) in the thread; false hides them (the default).",
+      ),
   }),
   capabilities: [
     'settings_profile_update',
@@ -288,6 +294,7 @@ export const updateSettings = defineTool({
     'style_use_picked',
     'limits_scheduling_link',
     'hint_dismiss',
+    'chat_reasoning_toggle',
     'onboarding_about',
     'onboarding_goals',
     'onboarding_prefs',
@@ -406,6 +413,20 @@ export const updateSettings = defineTool({
           schedule: { schedulingLink: settings?.schedulingLink, briefTimeLocal: settings?.briefTimeLocal },
         };
         return ok('settings', out, out, `${did.join(', ')}.`, '/settings/limits');
+      }
+      case 'chat': {
+        if (input.showReasoning === undefined) throw new Error('Say whether to show or hide the reasoning.');
+        writePrefs({ showReasoning: input.showReasoning });
+        const out = { chat: { showReasoning: input.showReasoning } };
+        return ok(
+          'settings',
+          out,
+          out,
+          input.showReasoning
+            ? "Orbit's reasoning now shows under its answers."
+            : "Orbit's reasoning is hidden again.",
+          '/settings/integrations',
+        );
       }
       case 'hints': {
         if (!input.hintId) throw new Error('Say which hint to close.');

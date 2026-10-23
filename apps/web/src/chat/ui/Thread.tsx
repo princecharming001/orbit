@@ -1,7 +1,8 @@
 import { Check, Copy, RefreshCw, ThumbsDown, ThumbsUp, TriangleAlert } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useSyncExternalStore } from 'react';
 import { Link } from 'react-router-dom';
 import { copyText } from '../../components/approve';
+import { readPrefs, subscribePrefs } from '../../integrations/prefs';
 import { cx, useToast } from '../../ui';
 import { ChoicesContext } from './cards/Choices';
 import { DraftOwnersContext } from './cards/parts';
@@ -107,6 +108,8 @@ function Assistant({
 }) {
   const toast = useToast();
   const [vote, setVote] = useState<'up' | 'down'>();
+  // the model's notes to itself before each step stay out of the thread unless the student turned them on
+  const showReasoning = useSyncExternalStore(subscribePrefs, readReasoning, readReasoning);
   const streaming = turn.status === 'streaming' && running;
   const text = turn.blocks
     .filter((b): b is Extract<Block, { type: 'text' }> => b.type === 'text')
@@ -126,7 +129,9 @@ function Assistant({
             b.type === 'text' ? (
               <Markdown key={i} text={b.text} />
             ) : b.type === 'progress' ? (
-              <ProgressLine key={i} text={b.text} live={streaming && i === turn.blocks.length - 1} />
+              showReasoning ? (
+                <ProgressLine key={i} text={b.text} live={streaming && i === turn.blocks.length - 1} />
+              ) : null
             ) : (
               <ToolView key={b.toolUseId} block={b} actions={actions} />
             ),
@@ -223,6 +228,8 @@ function IconButton({
     </button>
   );
 }
+
+const readReasoning = () => !!readPrefs().showReasoning;
 
 function ProgressLine({ text, live }: { text: string; live: boolean }) {
   return (

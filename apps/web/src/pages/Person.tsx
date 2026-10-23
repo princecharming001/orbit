@@ -29,6 +29,7 @@ import { ChevronDown, ExternalLink, Linkedin, Mail, Plus, Trash2 } from 'lucide-
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { runApproval } from '../components/approve';
+import { BackLink } from '../components/BackLink';
 import { PersonCompanyLogo } from '../components/CompanyLogo';
 import { DraftEditor, handoffWhere, OutboxStatus } from '../components/DraftEditor';
 import { MutualConnections } from '../components/MutualConnections';
@@ -420,6 +421,7 @@ export function PersonPage() {
   const talkingPoints = person.summary ? person.talkingPoints : liveSummary?.talkingPoints;
   return (
     <div>
+      <BackLink />
       <div className="flex flex-col @4xl:flex-row @4xl:items-start gap-4 mb-5" data-testid="person-header">
         <div className="flex items-start gap-4 min-w-0 flex-1">
           <Avatar name={person.displayName} src={person.photoUrl} id={person.id} size={56} />
@@ -918,10 +920,17 @@ export function PersonPage() {
             <div className="space-y-4">
               {/* the research brief first: who they are, from the web and LinkedIn, with links */}
               <ResearchDebrief person={person} userId={user.id} />
-              <h2 className="text-[13px] font-medium text-ink pt-2">What you've learned yourself</h2>
+              <div className="flex items-baseline justify-between gap-3 pt-2">
+                <h2 className="text-[13px] font-medium text-ink">What you've learned yourself</h2>
+                {facts.length > 0 && (
+                  <span className="text-[12px] text-ink-3">
+                    {facts.length === 1 ? '1 fact' : `${facts.length} facts`}
+                  </span>
+                )}
+              </div>
               {facts.length === 0 && (
-                <p className="text-ink-3 text-[13px]">
-                  Nothing yet. Facts come from emails and meeting notes.
+                <p className="text-ink-3 text-[12.5px] -mt-2" data-testid="facts-empty">
+                  Nothing yet. Facts come in from your emails and meeting notes, or add one below.
                 </p>
               )}
               {[...grouped.entries()].map(([type, fs]) => (
@@ -1209,31 +1218,48 @@ function AddFact({ personId, userId }: { personId: string; userId: string }) {
       setText((current) => current || value); // the save failed: give the words back unless new ones were typed
     }
   };
+  // one quiet field: the kind as a small chip inside it, the words, and Add, which only lights up once there are words
   return (
-    <div className="flex flex-wrap gap-2 items-center">
-      <Select
-        value={type}
-        onChange={(e) => setType(e.target.value as never)}
-        className="h-8 text-[13px]"
-        aria-label="Kind of fact"
-      >
-        {MANUAL_FACT_TYPES.map((t) => (
-          <option key={t} value={t}>
-            {FACT_TYPE_LABELS[t]}
-          </option>
-        ))}
-      </Select>
+    <div
+      className="flex items-center gap-1.5 h-11 pl-1.5 pr-1.5 rounded-full border border-line bg-canvas focus-within:border-ink-3 focus-within:ring-2 focus-within:ring-accent/20 transition-[box-shadow,border-color]"
+      data-testid="add-fact"
+    >
+      <label className="relative shrink-0">
+        <span className="sr-only">Kind of fact</span>
+        <select
+          value={type}
+          onChange={(e) => setType(e.target.value as never)}
+          className="appearance-none h-8 rounded-full bg-canvas-2 pl-3 pr-7 text-[12.5px] font-medium text-ink-2 hover:text-ink cursor-pointer focus-visible:outline-none"
+        >
+          {MANUAL_FACT_TYPES.map((t) => (
+            <option key={t} value={t}>
+              {FACT_TYPE_LABELS[t]}
+            </option>
+          ))}
+        </select>
+        <ChevronDown
+          size={13}
+          aria-hidden
+          className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-ink-3"
+        />
+      </label>
       <input
         value={text}
         onChange={(e) => setText(e.target.value)}
         placeholder="Something you know about them"
         aria-label="New fact"
-        className="flex-1 min-w-[160px] h-8 rounded-lg border border-line px-2.5 text-[13px]"
+        className="flex-1 min-w-0 h-8 bg-transparent px-2 text-[13.5px] placeholder:text-ink-3 focus:outline-none"
         onKeyDown={(e) => {
           if (e.key === 'Enter') add();
         }}
       />
-      <Button size="sm" onClick={add} disabled={!text.trim()}>
+      <Button
+        size="sm"
+        variant={text.trim() ? 'primary' : 'ghost'}
+        onClick={add}
+        disabled={!text.trim()}
+        className="rounded-full"
+      >
         Add
       </Button>
     </div>

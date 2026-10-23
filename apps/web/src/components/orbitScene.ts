@@ -169,6 +169,8 @@ class NodeView {
   pid: string;
   /** a temporary dot (an aggregate dot's member fanned out), not part of the layout */
   temp = false;
+  /** a temporary dot for someone on a route who sits inside a "+N" dot: they step out of it while the route shows */
+  hop = false;
   fromKey = '';
   node?: OrbitNode;
   person?: Person;
@@ -665,6 +667,9 @@ export class OrbitScene {
     this.firstPerson = first ? this.byKey.get(first.id) : undefined;
     if (!initial && born.length) this.welcome(born, prevClusterOf, now);
     if (born.length) this.prebuildAt = 0;
+    // a route asked for before the layout came (the page opened on it): its people inside "+N" dots step out now
+    if (this.reach)
+      this.syncHops(this.reach.status === 'found' ? this.reach.ids : [this.reach.targetId], now);
     this.refit();
     this.sortDrawList();
   }
@@ -1118,7 +1123,7 @@ export class OrbitScene {
     this.chip.text = this.chipText(g);
     this.retarget(now);
     const want = this.clusterMembers(g).map((m) => m.pid);
-    const have = this.views.filter((v) => v.temp && !v.removing).map((v) => v.pid);
+    const have = this.views.filter((v) => v.temp && !v.hop && !v.removing).map((v) => v.pid);
     if (want.join('|') !== have.join('|') || want.length === 0) {
       this.collapseFans(now);
       this.chip.radius = this.chipRadius(this.burst(g, now));
@@ -1126,7 +1131,7 @@ export class OrbitScene {
       const slots = fanSlots(have.length, wedgeMid(g), this.fanBase(), FAN_PITCH, this.fanSpan(g), 3);
       let i = 0;
       for (const v of this.views) {
-        if (!v.temp || v.removing) continue;
+        if (!v.temp || v.hop || v.removing) continue;
         const s = slots[i++];
         if (!s) break;
         this.anim(v.a, nearestAngle(v.a.value(now), s.angle), now, TIMING.flip, easing.inOutCubic);
@@ -1308,6 +1313,76 @@ export class OrbitScene {
     return out;
   }
 
+  /**
+   * People on a route (or a route's target) who sit inside a "+N" dot get a dot of their own while it shows, on top
+   * of the aggregate dot that holds them, with their photo: otherwise the line ends at a dimmed "+4". The "+N" counts
+   * them out while they are out. `ids` empty: everyone goes back in.
+   */
+  private syncHops(ids: string[], now: number): void {
+    const want = new Set<string>();
+    for (const id of ids) {
+      if (id === 'user' || !this.people.has(id)) continue;
+      const own = this.byKey.get(id);
+      if (own && !own.removing && !own.temp) continue;
+      const fan = this.byKey.get(`fan:${id}`);
+      if (fan && !fan.removing) continue;
+      if (this.clusterOf.get(id)) want.add(id);
+    }
+    const homes = new Set<NodeView>();
+    for (const v of this.views) {
+      if (!v.hop || v.removing || want.has(v.pid)) continue;
+      const home = this.byKey.get(v.fromKey);
+      this.retire(v, now, 260);
+      if (home) homes.add(home);
+    }
+    for (const pid of want) {
+      const from = this.clusterOf.get(pid)!;
+      const key = `hop:${pid}`;
+      const old = this.byKey.get(key);
+      if (old && !old.dead) {
+        if (old.removing) this.revive(old, now);
+        // the layout moved the "+N" dot (or another one holds them now): the stepped-out dot goes with it
+        old.fromKey = from.key;
+        this.anim(old.a, nearestAngle(old.a.value(now), from.a.to), now, TIMING.flip, easing.inOutCubic);
+        this.anim(old.r, from.r.to, now, TIMING.flip, easing.inOutCubic);
+        homes.add(from);
+        continue;
+      }
+      const v = new NodeView(key, pid);
+      v.temp = true;
+      v.hop = true;
+      v.fromKey = from.key;
+      v.person = this.people.get(pid);
+      v.groupKey = from.groupKey;
+      v.ring = from.ring;
+      v.hue = hueOf(pid);
+      v.layer = 3;
+      // the size of a person's dot on that ring, never smaller than the "+N" dot it covers
+      const peers = this.views.filter((u) => !u.temp && u.person && u.node && u.ring === from.ring);
+      const size = peers.length ? peers[Math.floor(peers.length / 2)]!.size.to : from.size.to;
+      v.size.snap(Math.max(size, from.size.to));
+      v.a.snap(from.a.value(now));
+      v.r.snap(from.r.value(now));
+      v.appear.snap(this.reduced ? 1 : 0);
+      if (!this.reduced) this.anim(v.appear, 1, now, 220, easing.outQuad);
+      this.views.push(v);
+      this.byKey.set(key, v);
+      homes.add(from);
+    }
+    // each "+N" says how many are still inside it; one that is empty fades away while its people are out
+    for (const c of homes) {
+      if (!c.cluster || c.removing) continue;
+      const out = c.cluster.personIds.filter((pid) => {
+        const h = this.byKey.get(`hop:${pid}`);
+        return !!h && !h.removing;
+      }).length;
+      const left = c.cluster.count - out;
+      c.label = left > 0 ? `+${left}` : clusterLabel(c.cluster);
+      this.anim(c.appear, left > 0 ? 1 : 0, now, 220, easing.outQuad);
+    }
+    this.sortDrawList();
+  }
+
   private clusterMembers(g: OrbitGroup): { pid: string; from: NodeView }[] {
     const out: { pid: string; from: NodeView }[] = [];
     for (const c of this.views) {
@@ -1381,7 +1456,7 @@ export class OrbitScene {
     this.anim(this.fanVeil, 0, now, 300, easing.inOutQuad, 120);
     const homes = new Set<NodeView>();
     for (const v of this.views) {
-      if (!v.temp || v.removing) continue;
+      if (!v.temp || v.hop || v.removing) continue;
       const home = this.byKey.get(v.fromKey);
       if (home && !this.reduced) {
         this.anim(v.a, nearestAngle(v.a.value(now), home.a.to), now, 380, easing.inOutCubic);
@@ -1428,6 +1503,7 @@ export class OrbitScene {
       this.reach = undefined;
       this.reachTurned = undefined;
       this.retractPath(now);
+      this.syncHops([], now);
       // people a route pulled apart go back to their places
       this.retarget(now, 450);
       this.anim(this.radar, 0, now, 200, easing.inQuad);
@@ -1443,6 +1519,8 @@ export class OrbitScene {
     const changed = newTarget || prev.status !== status || prev.ids.join('>') !== ids.join('>');
     this.reach = { targetId: r.targetId, status, ids };
     if (!changed) return;
+    // someone on the route who is folded into a "+N" dot steps out of it, so the route ends at their face
+    this.syncHops(status === 'found' ? ids : [r.targetId], now);
     // people on the route who sit side by side step apart (and step back when the route goes)
     this.retarget(now, 450);
     const target = this.viewFor(r.targetId);
@@ -1827,7 +1905,7 @@ export class OrbitScene {
 
   /** Where a dot is now (CSS px), for tests and keyboard focus. */
   positionOf(id: string): { x: number; y: number; r: number; alpha: number } | undefined {
-    const v = this.byKey.get(id) ?? this.byKey.get(`fan:${id}`);
+    const v = this.byKey.get(id) ?? this.byKey.get(`fan:${id}`) ?? this.byKey.get(`hop:${id}`);
     return v && !v.dead ? { x: v.x, y: v.y, r: v.pr, alpha: v.pa } : undefined;
   }
 
@@ -1842,6 +1920,8 @@ export class OrbitScene {
   private reapplyModes(now: number): void {
     if (this.companyKey) this.refreshCompany(now);
     else this.retarget(now);
+    if (this.reach)
+      this.syncHops(this.reach.status === 'found' ? this.reach.ids : [this.reach.targetId], now);
     if (this.reach?.status === 'found') this.framePath(now);
     if (this.web) {
       this.webChain = this.chainFor(this.web);
@@ -1993,6 +2073,8 @@ export class OrbitScene {
     if (own && !own.removing) return own;
     const fan = this.byKey.get(`fan:${id}`);
     if (fan && !fan.removing) return fan;
+    const hop = this.byKey.get(`hop:${id}`);
+    if (hop && !hop.removing) return hop;
     return this.clusterOf.get(id) ?? own;
   }
 
@@ -2976,7 +3058,7 @@ export class OrbitScene {
       }
       // reach: the target carries an accent ring, and each person on the route gets one as the line arrives
       const hop = route ? route.indexOf(v.pid) : -1;
-      if (!v.temp && (v.pid === target || (hop > 0 && hop <= drawn + 0.02))) {
+      if ((!v.temp || v.hop) && (v.pid === target || (hop > 0 && hop <= drawn + 0.02))) {
         ctx.globalAlpha = pa;
         ctx.strokeStyle = ACCENT;
         ctx.lineWidth = 2;
@@ -3509,7 +3591,7 @@ export class OrbitScene {
         .map((v) => v.pid),
       dimmed: this.views.filter((v) => !v.temp && v.alpha.to < 0.5).length,
       nodes: this.views.filter((v) => !v.temp).length,
-      fans: this.views.filter((v) => v.temp && !v.removing).map((v) => v.pid),
+      fans: this.views.filter((v) => v.temp && !v.hop && !v.removing).map((v) => v.pid),
       webLinks: web ? web.web.links.length : 0,
       webDrawn: web
         ? web.web.links.filter(

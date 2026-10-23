@@ -17,9 +17,11 @@ import {
   addEdge,
   bestPathsFrom,
   combinedPairWeights,
+  contactedStage,
   DIRECT_TIE_SCORE,
   describePairHop,
   describeUserTie,
+  hasHistoryWith,
   inferEdges,
   kShortestPaths,
   MEDIUM_TIE,
@@ -451,8 +453,10 @@ export function isColdDirect(p: ReachPath): boolean {
 
 export interface CompanyReach {
   org?: Organization;
-  /** people there now, strongest first, then alumni of the student's school, then newest connections */
+  /** people there now the student knows, strongest first, then alumni of the student's school, then newest connections */
   direct: { person: Person; strength: number }[];
+  /** people there now saved to contact (added by hand or from a LinkedIn search) with no history yet: not "known" */
+  saved: { person: Person; strength: number }[];
   /** left the company within the last five years; weighted down the longer ago they left */
   former: { person: Person; strength: number; endedAt?: string }[];
   /** alumni among `direct` (same people; the map shows them as a badge rather than a second list) */
@@ -591,14 +595,25 @@ export async function reachCompany(
     arr.push(a);
     affsByPerson.set(a.personId, arr);
   }
+  // a chat past "to contact" is history; one still waiting to be written is not
+  const contacted = new Set(
+    (await db.chats.where('userId').equals(userId).toArray())
+      .filter((c) => contactedStage(c.stage))
+      .map((c) => c.personId),
+  );
   const direct: CompanyReach['direct'] = [];
+  const saved: CompanyReach['saved'] = [];
   const former: CompanyReach['former'] = [];
   for (const p of people.values()) {
     const here =
       (org && p.currentOrganizationId === org.id) ||
       (!!norm && normalizeCompany(p.currentOrganizationRaw) === norm);
     if (here) {
-      direct.push({ person: p, strength: p.strength });
+      // someone the student only saved to contact is there, but is not someone they know
+      (hasHistoryWith(p, { contacted: contacted.has(p.id) }) ? direct : saved).push({
+        person: p,
+        strength: p.strength,
+      });
       continue;
     }
     const past = (affsByPerson.get(p.id) ?? []).filter(
@@ -627,10 +642,11 @@ export async function reachCompany(
       a.person.displayName.localeCompare(b.person.displayName),
   );
   former.sort((a, b) => b.strength - a.strength || a.person.displayName.localeCompare(b.person.displayName));
-  // routes to the people there the student does not know well: every one of them at a small company; at a big one,
-  // the ones personalized PageRank (plan 16 §4.2) says the student's network reaches best; the route shown is the
-  // one Reach shows for that person
-  let reachable = direct.filter((d) => d.strength < MEDIUM_TIE);
+  saved.sort((a, b) => a.person.displayName.localeCompare(b.person.displayName));
+  // routes to the people there the student does not know well (the ones only saved to contact first of all): every
+  // one of them at a small company; at a big one, the ones personalized PageRank (plan 16 §4.2) says the student's
+  // network reaches best; the route shown is the one Reach shows for that person
+  let reachable = [...saved, ...direct.filter((d) => d.strength < MEDIUM_TIE)];
   const ctx = contexts.get(g);
   if (ctx && reachable.length > 10) {
     const ranked = rankCompanyTargets({
@@ -654,5 +670,5 @@ export async function reachCompany(
   }
   twoHop.sort((a, b) => b.path.score - a.path.score);
   const alumni = direct.filter((d) => d.person.isAlumni);
-  return { org, direct, former, alumni, twoHop: twoHop.slice(0, 3) };
+  return { org, direct, saved, former, alumni, twoHop: twoHop.slice(0, 3) };
 }

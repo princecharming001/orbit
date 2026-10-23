@@ -181,7 +181,10 @@ export function hydrate(messages: ChatMessage[], actions: ChatAction[]): Turn[] 
       continue;
     }
     if (m.role === 'user') {
-      turns.push({ id: m.id, role: 'user', text: textOf(m.content), at: m.createdAt });
+      // the agent's own user-role rows (tool results, a follow-up it asked itself for) have no words of the
+      // student's: nothing to draw, not an empty bubble
+      const text = textOf(m.content).trim();
+      if (text) turns.push({ id: m.id, role: 'user', text, at: m.createdAt });
       continue;
     }
     if (m.role !== 'assistant') continue;

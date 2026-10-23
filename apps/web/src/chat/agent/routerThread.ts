@@ -11,6 +11,7 @@ import {
   readPerson,
   readPipeline,
   readRoutes,
+  readRoutesMany,
   readSkipped,
   readText,
 } from '../ui/cards/shapes';
@@ -178,6 +179,10 @@ async function peopleIn(
       const to = readRoutes(d).to;
       const mutuals = readPeople(d).map((p) => ref(p.person));
       return { one: to ? ref(to) : undefined, list: mutuals.length > 1 ? mutuals : undefined };
+    }
+    case 'routes_many': {
+      const list = readRoutesMany(d).map((r) => ref(r.to!));
+      return list.length === 1 ? { one: list[0] } : { list };
     }
     case 'drafts': {
       const ids = await Promise.all(readDrafts(d).map((r) => db.outbound.get(r.id)));

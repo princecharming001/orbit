@@ -914,7 +914,7 @@ describe('hand-offs (SND-07, SND-12, SND-14, UI-09)', () => {
 });
 
 describe('undo window (SND-12)', () => {
-  it('a Gmail send is queued for 60 seconds, can be undone, and the scheduler sends it when due', async () => {
+  it('a Gmail send waits in the undo window, can be undone, and the scheduler sends it when due', async () => {
     await connectGoogle(user);
     const { s, d } = await pendingDraft(user, 'thank_you');
     const t0 = new Date();
@@ -925,7 +925,7 @@ describe('undo window (SND-12)', () => {
       sendAt: new Date(t0.getTime() + UNDO_WINDOW_MS).toISOString(),
     });
     expect((await db.outbound.get(d.id))!.status).toBe('queued');
-    expect(await sendDueQueued(user, new Date(t0.getTime() + 30_000))).toEqual([]);
+    expect(await sendDueQueued(user, new Date(t0.getTime() + UNDO_WINDOW_MS / 2))).toEqual([]);
     expect(sent).toHaveLength(0);
     expect(await undoQueued(user, d.id)).toBe(true);
     expect((await db.outbound.get(d.id))!.status).toBe('draft');

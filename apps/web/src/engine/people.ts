@@ -68,6 +68,8 @@ export interface UpsertPersonInput extends IncomingIdentity {
 
 const PRECEDENCE: Record<PersonSource, number> = {
   manual: 100,
+  // what a LinkedIn search said about them (name, headline, profile), before their profile is read
+  linkedin_search: 85,
   // their own LinkedIn profile, read live: the truth about their current position, under only the student's own edit
   linkedin_profile: 90,
   enrichment: 80,
@@ -720,6 +722,8 @@ export interface ManualPersonInput {
   email?: string;
   linkedinUrl?: string;
   school?: string;
+  /** 'manual' (typed in by the student) unless they were found on LinkedIn and saved to contact */
+  source?: 'manual' | 'linkedin_search';
 }
 
 /**
@@ -743,7 +747,7 @@ export async function addPersonByHand(
     title: clean(inp.title),
     school: clean(inp.school),
     userSchool,
-    source: 'manual',
+    source: inp.source ?? 'manual',
   });
   return { person: r.person, created: r.created };
 }

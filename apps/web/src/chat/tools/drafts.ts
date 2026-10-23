@@ -511,7 +511,7 @@ async function sendIntent(
       ? copy
         ? 'copied for you to paste into Gmail, then marked as waiting for your I sent it'
         : direct
-          ? 'sent by Gmail after a 60 second undo window'
+          ? 'sent by Gmail after a 10 second undo window'
           : `opened in your mail app addressed to ${draft.toEmail ?? person.firstName}, then marked as waiting for your I sent it`
       : 'copied and opened on LinkedIn, then marked as waiting for your I sent it';
   const subj =
@@ -528,7 +528,7 @@ export const sendDraft = defineTool({
   name: 'send_draft',
   kind: 'risky',
   description:
-    'Call this only when the student says to send, approve or hand off a specific draft ("send the follow-up to Priya", "ok send it"), to retry a failed send, or asks for the text to paste into Gmail themselves (via copy). It never sends on its own: it returns a confirmation the student approves in the card, and the approved text is bound by the engine. Email goes through Gmail (60 second undo) or opens in the mail app; LinkedIn messages are copied and opened on LinkedIn; both then wait for the student\'s "I sent it". A blocked send explains the engine\'s reason instead.',
+    'Call this only when the student says to send, approve or hand off a specific draft ("send the follow-up to Priya", "ok send it"), to retry a failed send, or asks for the text to paste into Gmail themselves (via copy). It never sends on its own: it returns a confirmation the student approves in the card, and the approved text is bound by the engine. Email goes through Gmail (10 second undo) or opens in the mail app; LinkedIn messages go from the student\'s own LinkedIn when it is connected live (same undo), else are copied and opened on LinkedIn; hand-offs then wait for the student\'s "I sent it". A blocked send explains the engine\'s reason instead.',
   input: z.object({
     draftId: z.string().describe('The draft id.'),
     body: z
@@ -633,7 +633,7 @@ export const sendDraft = defineTool({
     const extraNotes = notes.filter((n) => !/^opened in your mail app\.?$/i.test(n.trim())).join(' ');
     const summary =
       fresh.status === 'queued'
-        ? `Sending to ${person.firstName} in 60 seconds through Gmail. Say undo to stop it; after that it is sent.`
+        ? `Sending to ${person.firstName} in 10 seconds through Gmail. Say undo to stop it; after that it is sent.`
         : fresh.status === 'sent'
           ? `Sent to ${person.firstName}.`
           : fresh.status === 'handed_off'
@@ -652,7 +652,7 @@ export const undoSend = defineTool({
   name: 'undo_send',
   kind: 'risky',
   description:
-    'Call this only when the student asks to stop or undo a Gmail send that is still inside its 60 second window ("undo, don\'t send that"). The message becomes a draft again. Too late once it went out. Needs the student\'s approval.',
+    'Call this only when the student asks to stop or undo a Gmail send that is still inside its 10 second window ("undo, don\'t send that"). The message becomes a draft again. Too late once it went out. Needs the student\'s approval.',
   input: z.object({
     draftId: z.string().describe('The queued message id.'),
   }),

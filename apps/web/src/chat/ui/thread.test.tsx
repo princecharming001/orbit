@@ -263,6 +263,16 @@ describe('the chat thread', () => {
           meta: 'decision',
           createdAt: '2026-10-01T00:00:02Z',
         },
+        // the tool's result goes back to the model as a user-role row: no words of the student's, no bubble
+        {
+          id: 'm4',
+          conversationId: 'c',
+          userId: 'u',
+          seq: 3,
+          role: 'user',
+          content: [{ type: 'tool_result', tool_use_id: 'tu1', content: 'Three moving.' }],
+          createdAt: '2026-10-01T00:00:03Z',
+        },
       ],
       [
         {

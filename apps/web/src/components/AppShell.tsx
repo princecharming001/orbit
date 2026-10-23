@@ -25,6 +25,7 @@ import { dailyMaintenance } from '../engine/sync';
 import { draftLists, startedDrafts } from '../engine/today';
 import { useSession } from '../state/session';
 import { Avatar, calendarDaysBetween, cx, modKeyLabel } from '../ui';
+import { useTrackPlace } from './BackLink';
 import { CommandPalette } from './CommandPalette';
 import { DemoBanner } from './DemoBanner';
 import { LinkedInAutoSync } from './LinkedInAutoSync';
@@ -70,6 +71,7 @@ export function AppShell() {
     }
   });
   const { pathname } = useLocation();
+  useTrackPlace();
   const mainRef = useRef<HTMLElement>(null);
   const fillsScreen = pathname === '/map';
   // pages read as text (settings, notes, one person) keep a column you can read across; boards, lists and grids take

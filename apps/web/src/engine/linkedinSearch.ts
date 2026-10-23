@@ -138,9 +138,10 @@ export async function addLinkedInFound(
   const out: { id: string; displayName: string; chatId: string }[] = [];
   for (const f of picked) {
     const { title, org: company } = roleFromHeadline(f.headline);
+    // saved to contact, not someone the student knows: the company and reach views say so
     const r = await addPersonByHand(
       user.id,
-      { name: f.name, linkedinUrl: f.profileUrl, title, company },
+      { name: f.name, linkedinUrl: f.profileUrl, title, company, source: 'linkedin_search' },
       user.school,
     );
     if (!r) continue;

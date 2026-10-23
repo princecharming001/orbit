@@ -7,7 +7,7 @@ import type { Person } from '@orbit/core';
 import { ArrowRight, ArrowUpRight, ChevronDown } from 'lucide-react';
 import { createContext, type ReactNode, useContext, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Avatar, cx } from '../../../ui';
+import { Avatar, cx, LinkedInMark } from '../../../ui';
 import { ChoicesContext } from './Choices';
 
 /**
@@ -136,7 +136,8 @@ export function PersonRow({
   size,
   dense,
 }: {
-  person: Pick<Person, 'id' | 'displayName' | 'photoUrl' | 'currentTitle' | 'currentOrganizationRaw'>;
+  person: Pick<Person, 'id' | 'displayName' | 'photoUrl' | 'currentTitle' | 'currentOrganizationRaw'> &
+    Partial<Pick<Person, 'linkedinUrl'>>;
   sub?: ReactNode;
   href?: string;
   aside?: ReactNode;
@@ -161,17 +162,104 @@ export function PersonRow({
           <Link to={to} className="font-medium hover:underline">
             {person.displayName}
           </Link>
+          {person.linkedinUrl && <LinkedInMark url={person.linkedinUrl} name={person.displayName} />}
           {role && <span className="text-[12.5px] text-ink-3"> · {role}</span>}
         </div>
       ) : (
         <div className="min-w-0 flex-1 leading-tight">
-          <Link to={to} className="font-medium hover:underline block truncate">
-            {person.displayName}
-          </Link>
+          <div className="flex items-center gap-1.5 min-w-0">
+            <Link to={to} className="font-medium hover:underline truncate">
+              {person.displayName}
+            </Link>
+            {person.linkedinUrl && <LinkedInMark url={person.linkedinUrl} name={person.displayName} />}
+          </div>
           {role && <div className="text-[12.5px] text-ink-3 truncate mt-0.5">{role}</div>}
         </div>
       )}
       {aside}
+    </div>
+  );
+}
+
+/** A checkbox at the start of a row of people, so the student can pick who the next step is about. */
+export function PickBox({
+  checked,
+  onChange,
+  label,
+}: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  label: string;
+}) {
+  return (
+    <input
+      type="checkbox"
+      checked={checked}
+      onChange={(e) => onChange(e.target.checked)}
+      aria-label={`Pick ${label}`}
+      className="h-4 w-4 shrink-0 accent-accent cursor-pointer"
+      data-testid="pick-person"
+    />
+  );
+}
+
+/**
+ * The bar under a list of people once some are picked: how many, and what to do with them, each a message the chat
+ * handles the same with or without a Claude key. "All" picks every row shown.
+ */
+export function SelectionBar({
+  count,
+  total,
+  onAll,
+  onClear,
+  steps,
+  send,
+}: {
+  count: number;
+  total: number;
+  onAll: () => void;
+  onClear: () => void;
+  steps: NextStep[];
+  send: (text: string) => Promise<void> | void;
+}) {
+  const { running } = useContext(ChoicesContext);
+  if (!total) return null;
+  return (
+    <div
+      className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[12.5px]"
+      role="group"
+      aria-label="Picked people"
+      data-testid="selection-bar"
+    >
+      <span className="text-ink-3" data-testid="selection-count">
+        {count ? `${count} picked` : 'Pick people to act on them'}
+      </span>
+      <button
+        type="button"
+        className="text-ink-3 underline underline-offset-2 hover:text-ink"
+        onClick={count === total ? onClear : onAll}
+        data-testid="selection-all"
+      >
+        {count === total ? 'None' : 'All'}
+      </button>
+      {count > 0 && (
+        <span className="flex flex-wrap gap-1.5">
+          {steps.map((s) => (
+            <button
+              key={s.label}
+              type="button"
+              className="inline-flex items-center gap-1 min-h-7 px-2.5 py-1 rounded-full border border-ink bg-ink text-canvas text-[12.5px] font-medium leading-tight hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 disabled:pointer-events-none"
+              disabled={running}
+              title={s.message}
+              data-testid="selection-step"
+              onClick={() => void send(s.message)}
+            >
+              <ArrowRight size={12} aria-hidden className="shrink-0" />
+              {s.label}
+            </button>
+          ))}
+        </span>
+      )}
     </div>
   );
 }

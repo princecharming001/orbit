@@ -59,6 +59,8 @@ export interface LocalPrefs {
   lastLlmError?: LlmErrorRecord;
   /** the student turned on warm intro paths from Village (route lookups send a target's name and company there) */
   warmIntros?: boolean;
+  /** show the chat model's own notes to itself (the grey lines before each step); off unless the student asks */
+  showReasoning?: boolean;
   /** Orbit's shared Claude access said stop (daily limit, or not set up): the chat uses commands until `until`. */
   sharedClaudePause?: { until: string; reason: 'day' | 'global' | 'unconfigured' | 'budget' };
 }

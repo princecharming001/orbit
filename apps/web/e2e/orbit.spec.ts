@@ -347,7 +347,7 @@ test.describe('Orbit demo flow', () => {
     ).toBeVisible({ timeout: 15_000 });
     await page.getByTestId('reach-input').fill('Stripe');
     await page.getByTestId('reach-input').press('Enter');
-    await expect(page.getByText(/people there now/i)).toBeVisible();
+    await expect(page.getByText(/you know there now/i)).toBeVisible();
   });
 
   test('capture a dictated note: facts land on the profile', async ({ page }) => {
@@ -483,7 +483,7 @@ test.describe('Map readability', () => {
     );
     await page.getByTestId('reach-input').fill('stripe inc');
     await page.getByTestId('reach-input').press('Enter');
-    await expect(page.getByText(/people there now/i)).toBeVisible();
+    await expect(page.getByText(/you know there now/i)).toBeVisible();
   });
 });
 
@@ -533,7 +533,8 @@ test.describe('Map reach through LinkedIn mutuals (plan 17 §C)', () => {
     }
     // asking one of them goes through the same intro draft as a route
     await rows.first().getByTestId('reach-mutual-ask').click();
-    await expect(page.getByTestId('toasts')).toContainText('Intro request drafted');
+    await expect(page.getByTestId('toasts')).toContainText(/for an intro to/);
+    await expect(page).toHaveURL(/\/inbox\?card=/);
   });
 });
 

@@ -1,9 +1,11 @@
 import type { ChatStage, CoffeeChat, Person, Suggestion } from '@orbit/core';
 import { ACTIVE_STAGES, CLOSED_STAGES, STAGE_HELP, STAGE_LABELS } from '@orbit/core';
+import { useLiveQuery } from 'dexie-react-hooks';
 import { ChevronRight, MoreHorizontal } from 'lucide-react';
 import { type PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
+import { db } from '../../db/schema';
 import { Avatar, cx, relDate } from '../../ui';
 import { LogoText } from '../CompanyLogo';
 import { chatTimeLabel } from '../ScheduleChat';
@@ -437,6 +439,29 @@ export function NextLink({ s }: { s: Suggestion }) {
   );
 }
 
+/** "Sending in 8s…" or "Sending…" while an approved message of this chat waits in the outbox; a clock keeps it true. */
+function useSending(chatId: string): string | undefined {
+  const [now, setNow] = useState(() => Date.now());
+  const queued = useLiveQuery(
+    () =>
+      db.outbound
+        .where('chatId')
+        .equals(chatId)
+        .filter((o) => o.status === 'queued' || o.status === 'sending')
+        .first(),
+    [chatId],
+  );
+  useEffect(() => {
+    if (!queued) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [queued]);
+  if (!queued) return undefined;
+  if (queued.autopilot) return undefined;
+  const left = queued.sendAt ? Math.ceil((new Date(queued.sendAt).getTime() - now) / 1000) : 0;
+  return left > 0 ? `Sending in ${left}s…` : 'Sending…';
+}
+
 /**
  * The line at the foot of a board card: when a booked chat is (or a button to set it), who went quiet and since when
  * (the same words as Drafts), otherwise how long the card has sat in its stage.
@@ -450,6 +475,14 @@ function CardWhen({
   meetingAt?: string;
   onSetTime: () => void;
 }) {
+  const sending = useSending(chat.id);
+  // an approved message on its way: the card says so at once, and moves stage the moment it goes out
+  if (sending)
+    return (
+      <span className="whitespace-nowrap text-accent" data-testid="chat-card-sending">
+        {sending}
+      </span>
+    );
   if (chat.stage === 'scheduled')
     return meetingAt ? (
       <span className="relative z-10 inline-flex items-center gap-1" data-testid="chat-card-time">

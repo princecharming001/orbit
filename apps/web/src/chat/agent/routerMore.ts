@@ -1929,6 +1929,22 @@ export function routeMore(
       'show the Claude usage',
     );
 
+  // ---- the chat itself ----
+  {
+    const reasoning = lower.match(
+      /^(?:(show|hide)|turn (on|off)) (?:your |the |orbit'?s )?(?:reasoning|thinking(?: notes)?|thought process|grey (?:notes|text|lines))(?: notes| lines)?$/,
+    );
+    if (reasoning) {
+      const on = reasoning[1] === 'show' || reasoning[2] === 'on';
+      return h.viaTool(
+        'update_settings',
+        { section: 'chat', showReasoning: on },
+        undefined,
+        on ? 'show the reasoning' : 'hide the reasoning',
+      );
+    }
+  }
+
   // ---- profile, goals, targets ----
   {
     const school = text.match(/^(?:change|set|update) my school to (.+)$/i);

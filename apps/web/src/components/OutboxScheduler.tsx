@@ -4,7 +4,7 @@ import { sendDueQueued } from '../engine/send';
 import { useSession } from '../state/session';
 import { useToast } from '../ui';
 
-const TICK_MS = 3000;
+const TICK_MS = 1000;
 
 /**
  * Sends queued Gmail messages once their undo window has ended. Mounted once in the app shell; the engine

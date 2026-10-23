@@ -482,7 +482,7 @@ export const processOutbox = defineTool({
   name: 'process_outbox',
   kind: 'write',
   description:
-    'Call this after a Gmail send was queued and its 60 second undo window has ended, or when the student asks whether a queued email went out. It sends every queued message whose window ended (the app does this itself every few seconds while open) and reports what was sent or failed.',
+    'Call this after a Gmail send was queued and its 10 second undo window has ended, or when the student asks whether a queued email went out. It sends every queued message whose window ended (the app does this itself every few seconds while open) and reports what was sent or failed.',
   input: z.object({}),
   capabilities: ['daily_maintenance_auto'],
   progress: 'Sending what is due',

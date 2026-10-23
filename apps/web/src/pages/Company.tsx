@@ -65,13 +65,23 @@ export function CompanyPage() {
       ) : (
         <div className="grid @3xl:grid-cols-2 @7xl:grid-cols-3 gap-4">
           <Section
-            title="People there now"
+            title="People you know there now"
             items={reach.direct.map((d) => ({
               person: d.person,
               strength: d.strength,
               alum: !!d.person.isAlumni,
             }))}
           />
+          {reach.saved.length > 0 && (
+            <Section
+              title="Saved to contact"
+              items={reach.saved.map((d) => ({
+                person: d.person,
+                strength: d.strength,
+                note: 'not someone you know yet',
+              }))}
+            />
+          )}
           <Section
             title="Former employees you know"
             items={reach.former.map((d) => ({

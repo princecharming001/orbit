@@ -539,7 +539,7 @@ export function DraftEditor({
                 setEnabling(false);
                 if (r.ok)
                   toast.push({
-                    text: 'Orbit can send email for you now. Each one still waits a minute so you can undo.',
+                    text: 'Orbit can send email for you now. Each one still waits a few seconds so you can undo.',
                     tone: 'good',
                   });
                 else setError(r.message);
@@ -963,7 +963,7 @@ export function DraftEditor({
               setEnabling(false);
               if (r.ok)
                 toast.push({
-                  text: 'Orbit can send email for you now. Each one still waits a minute so you can undo.',
+                  text: 'Orbit can send email for you now. Each one still waits a few seconds so you can undo.',
                   tone: 'good',
                 });
               else setError(r.message);

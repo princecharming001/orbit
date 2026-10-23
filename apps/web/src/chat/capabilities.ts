@@ -635,7 +635,7 @@ export const CAPABILITIES: readonly Capability[] = [
   {
     id: 'draft_undo_queued',
     area: 'Drafts and sending',
-    title: 'Undo a Gmail send inside the 60 second window',
+    title: 'Undo a Gmail send inside the 10 second window',
     kind: 'write',
     utterances: ["undo, don't send that", 'stop the email to Omar', 'cancel the send'],
   },
@@ -1504,6 +1504,35 @@ export const CAPABILITIES: readonly Capability[] = [
     title: 'Open a settings section',
     kind: 'read',
     utterances: ['open the goals settings', 'take me to writing style', 'show the privacy section'],
+  },
+  {
+    id: 'chat_reasoning_toggle',
+    area: 'Settings and account',
+    title: "Show or hide Orbit's reasoning (the grey notes under its answers)",
+    kind: 'write',
+    utterances: ['show your reasoning', 'hide the grey text', 'turn off your thinking notes'],
+  },
+  {
+    id: 'routes_many',
+    area: 'Map and Reach',
+    title: 'Warm routes to several people at once, picked on a card or named',
+    kind: 'read',
+    utterances: [
+      'find warm routes to each of: Priya Ahmed and Elena Garcia',
+      'routes to both of them: Priya Ahmed, Elena Garcia',
+      'show the warm routes to all of: Priya Ahmed, Elena Garcia and Yuki Lopez',
+    ],
+  },
+  {
+    id: 'source_add_then',
+    area: 'Discover and recommendations',
+    title: 'Add the people picked from a search, then routes to each or a draft to each',
+    kind: 'write',
+    utterances: [
+      'Add to People and find warm routes to each of: Dana Lee [rec li:1] and Kai Ito [rec li:2]',
+      'Add to People: Dana Lee [rec li:1]',
+      'Add to People and draft a message to each of: Dana Lee [rec li:1], Kai Ito [rec li:2]',
+    ],
   },
   {
     id: 'settings_read',

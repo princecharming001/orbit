@@ -58,7 +58,7 @@ export type CardPlace = { at: 'top' | 'bottom'; y: number } | { x: number; y: nu
 
 /** The person card's size and inset in CSS px (MapPage draws it: 260 px wide from 640 px up, full width below). */
 export const CARD_W = 260;
-const CARD_H = 108;
+const CARD_H = 160;
 const CARD_INSET = 12;
 /** Room the phone's tab bar takes at the bottom of the window. */
 const TAB_BAR = 72;

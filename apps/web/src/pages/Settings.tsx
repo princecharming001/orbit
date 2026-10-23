@@ -974,6 +974,20 @@ function ClaudeCard() {
             </>
           )}
         </p>
+        <label className="flex items-center justify-between gap-3 pt-1 text-[12.5px] text-ink-2">
+          <span>
+            Show Orbit's reasoning
+            <span className="block text-[12px] text-ink-3">
+              The grey notes it writes to itself before each step, under its answers.
+            </span>
+          </span>
+          <Switch
+            checked={!!prefs.showReasoning}
+            label="Show Orbit's reasoning"
+            onChange={(on) => setPrefs(writePrefs({ showReasoning: on }))}
+            data-testid="ai-reasoning-switch"
+          />
+        </label>
         {prefs.lastLlmError && (
           <p className="text-[12px] text-bad" data-testid="ai-last-error">
             Last problem, {fmtFailureTime(prefs.lastLlmError.at, tz)}: {prefs.lastLlmError.message} Orbit used

@@ -164,6 +164,32 @@ describe('local mode', () => {
       expect(person.linkedinMemberId).toMatch(/^demo-search-/);
       const chat = await db.chats.where('personId').equals(person.id).first();
       expect(chat).toMatchObject({ stage: 'identified', outreachChannel: 'linkedin' });
+      // someone saved from a search is not someone the student knows
+      expect(person.sources).toEqual(['linkedin_search']);
+      // two more picked on the card, with the routes to each in the same turn: one card, both named as added
+      const more = results.slice(1, 3).map((r) => r.recommendationId);
+      const routed = await execute(
+        'add_sourced',
+        { recommendationIds: more, then: 'routes' },
+        makeCtx(user, { toolUseId: nextToolUseId() }),
+      );
+      expect(routed.kind).toBe('routes_many');
+      expect(routed.summary).toMatch(/^Added .* to People \(saved to contact\)\. Routes to 2 people\./);
+      const many = (routed.data as { ui: { people: { target: { id: string } }[] } }).ui.people;
+      expect(many).toHaveLength(2);
+      const picked = await execute(
+        'find_routes',
+        { personIds: many.map((m) => m.target.id) },
+        makeCtx(user, { toolUseId: nextToolUseId() }),
+      );
+      expect(picked.kind).toBe('routes_many');
+      // and a draft to each, the same way
+      const drafted = await execute(
+        'add_sourced',
+        { recommendationIds: [results[3]!.recommendationId], then: 'drafts' },
+        makeCtx(user, { toolUseId: nextToolUseId() }),
+      );
+      expect(drafted.summary).toMatch(/^Added .* to People \(saved to contact\)\./);
     } finally {
       setConnectorsMockForTests(undefined);
     }

@@ -1256,6 +1256,69 @@ function routeInner(raw: string, ctx: RouterContext): RouterIntent {
     }
   }
 
+  // the people picked on a card: "Add to People and find warm routes to each of: Dana Lee [rec li:1], Kai Ito"
+  {
+    const m = text.match(
+      /^add (?:them |these |those )?to people(?:,? (?:and |then )?(find (?:warm )?routes to each(?: of(?: them)?)?|draft (?:a )?(?:messages?|notes?) to each(?: of(?: them)?)?))?[:,]?\s+(.+)$/i,
+    );
+    if (m && has('add_sourced')) {
+      const then = m[1] ? (/route/i.test(m[1]) ? 'routes' : 'drafts') : undefined;
+      const recs = [...m[2]!.matchAll(/\[rec ([^\]\s]+)\]/g)].map((x) => x[1]!);
+      const names = m[2]!
+        .replace(/\[rec [^\]]+\]/g, '')
+        .split(/\s*,\s*(?:and\s+)?|\s+and\s+/i)
+        .map((s) => stripName(s))
+        .filter(Boolean);
+      if (recs.length)
+        return viaTool(
+          'add_sourced',
+          { recommendationIds: recs, ...(then ? { then } : {}) },
+          undefined,
+          'add people from a search',
+        );
+      // everyone named is in Orbit already: straight to the routes or the drafts
+      const found = names.map((n) => person(n));
+      if (found.length && found.every((r) => r.person)) {
+        const personIds = [...new Set(found.map((r) => r.person!.id))];
+        if (then === 'drafts' && has('create_drafts'))
+          return viaTool('create_drafts', { personIds }, undefined, 'draft several messages');
+        if (then === 'routes')
+          return viaTool('find_routes', { personIds }, undefined, 'find routes to several people');
+        return {
+          kind: 'text',
+          text: `${names.join(', ')} ${names.length === 1 ? 'is' : 'are'} in your people already.`,
+        };
+      }
+      const at = found.findIndex((r) => !r.person);
+      if (at >= 0 && found[at]!.candidates.length) return ambiguous(names[at]!, found[at]!.candidates);
+      if (at >= 0) return nobody(names[at]!);
+    }
+  }
+
+  // routes to several people at once: "find warm routes to each of: Priya Ahmed and Elena Garcia"
+  {
+    const m = text.match(
+      /^(?:find |show |get )?(?:the )?(?:warm )?(?:routes?|paths?|ways? in|intros?) to (?:each|all|both) of(?: them)?[:,]?\s+(.+)$/i,
+    );
+    if (m) {
+      const names = m[1]!
+        .split(/\s*,\s*(?:and\s+)?|\s+and\s+/i)
+        .map((s) => stripName(s))
+        .filter(Boolean);
+      const found = names.map((n) => person(n));
+      if (names.length && found.every((r) => r.person))
+        return viaTool(
+          'find_routes',
+          { personIds: [...new Set(found.map((r) => r.person!.id))] },
+          undefined,
+          'find routes to several people',
+        );
+      const at = found.findIndex((r) => !r.person);
+      if (found[at]?.candidates.length) return ambiguous(names[at]!, found[at]!.candidates);
+      if (names[at]) return nobody(names[at]!);
+    }
+  }
+
   // routes: who can introduce me to <person or company>
   {
     const m = text.match(

@@ -81,7 +81,7 @@ import {
 } from '../../integrations/prefs';
 import { sharedClaudeAvailable } from '../../integrations/shared-claude';
 import { z } from '../../zod';
-import type { ToolContext } from '../types';
+import type { ResultEnvelope, ToolContext } from '../types';
 import {
   type AnyTool,
   autoOpen,
@@ -93,6 +93,7 @@ import {
   fmtDay,
   fmtWhen,
   ok,
+  type Packed,
   peopleById,
   personRef,
   plural,
@@ -967,7 +968,7 @@ export const getDraft = defineTool({
       howItSends:
         draft.channel === 'gmail'
           ? direct
-            ? 'Gmail sends it after a 60 second undo window.'
+            ? 'Gmail sends it after a 10 second undo window.'
             : 'Opens in the mail app; the student confirms with I sent it.'
           : 'Copied and opened on LinkedIn; the student confirms with I sent it.',
       issues: issues.map((i) => ({ code: i.code, text: i.text, blocking: i.blocking })),
@@ -1009,12 +1010,86 @@ function pathView(
       from: h.fromId === 'user' ? 'you' : people.get(h.fromId)?.displayName,
       to: people.get(h.toId)?.displayName,
       toId: h.toId,
+      toLinkedin: people.get(h.toId)?.linkedinUrl,
       tie: Math.round(h.weight * 100) / 100,
       how: wrapped(ctx, 'edge', h.text, 160),
     })),
     firstHopId: path.hops[0]?.toId,
     firstHop: path.hops[0] ? people.get(path.hops[0].toId)?.displayName : undefined,
   };
+}
+
+/** Routes to one person: ranked on Orbit's server with an account, else from this browser's copy of the graph. */
+export async function routesToPerson(ctx: ToolContext, personId: string): Promise<ResultEnvelope> {
+  const userId = ctx.user.id;
+  if (isServerUser(userId)) {
+    // account mode: orbit-api ranks routes by the chance the intro happens, with LinkedIn mutuals and Village
+    const target = await requirePerson(ctx, personId);
+    const r = await findPathsOnServer(ctx.user, { personId });
+    if (r.ok) return serverRoutes(ctx, target, r.value);
+    if (r.reason !== 'network' && r.reason !== 'unconfigured') throw new Error(r.message);
+    // the server cannot be reached: Orbit's own routes from this browser's copy still answer
+  }
+  {
+    const target = await requirePerson(ctx, personId);
+    const paths = await reachPerson(userId, personId, 3);
+    const people = await peopleById(paths.flatMap((p) => p.hops.map((h) => h.toId)));
+    people.set(target.id, target);
+    const routes = paths.map((p) => pathView(p, people, ctx));
+    const direct = routes.find((r) => r.hops.length === 1);
+    // Village's warm intro paths (the sample student's come from the demo graph) next to Orbit's own routes
+    const warmIntros = await warmIntrosFor(ctx.user, { person: target }, { signal: ctx.signal });
+    const summary = `${
+      routes.length
+        ? `${plural(routes.length, 'route')} to ${target.displayName}${direct?.cold ? '. You know them only slightly, so an intro through someone who knows them is likelier to get a reply' : ''}.`
+        : `No route to ${target.displayName} through people you know yet.`
+    }${warmIntroLine(warmIntros)}`;
+    return ok(
+      'routes',
+      { target: personRef(target), routes, warmIntros, why: WARMER_ROUTES_WHY },
+      {
+        target: personRef(target),
+        routes,
+        warmIntros: warmIntros.length ? warmIntros.map((w) => warmIntroForModel(w, ctx)) : undefined,
+        note: direct?.cold ? WARMER_ROUTES_WHY : undefined,
+      },
+      summary,
+      `/map?reach=${target.id}`,
+    );
+  }
+}
+
+/**
+ * Routes to several people at once (the people picked on a list): one card with the best way in to each, and the
+ * same compact answer per person the single lookup gives.
+ */
+export async function routesToMany(ctx: ToolContext, ids: string[]): Promise<ResultEnvelope> {
+  const unique = [...new Set(ids)].slice(0, 10);
+  if (unique.length === 1) return routesToPerson(ctx, unique[0]!);
+  const envs: ResultEnvelope[] = [];
+  // one after another: each lookup builds the graph, and the student is waiting on all of them together
+  for (const id of unique) envs.push(await routesToPerson(ctx, id));
+  const line = (e: ResultEnvelope) => {
+    const ui = (
+      e.data as Packed<{
+        target?: { name?: string };
+        routes?: { firstHop?: string; bandLabel?: string; hops?: unknown[] }[];
+      }>
+    ).ui;
+    const name = ui.target?.name ?? 'someone';
+    const best = ui.routes?.[0];
+    // one hop is the student's own tie: they know this person, no introduction needed
+    if (best && (best.hops?.length ?? 0) <= 1) return `${name}: you know them, write directly`;
+    if (best?.firstHop) return `${name}: through ${best.firstHop} (${(best.bandLabel ?? '').toLowerCase()})`;
+    return /^You know/.test(e.summary) ? `${name}: you know them, write directly` : `${name}: no route yet`;
+  };
+  return ok(
+    'routes_many',
+    { people: envs.map((e) => (e.data as Packed).ui) },
+    { people: envs.map((e) => toModel(e.data)) },
+    `Routes to ${unique.length} people. ${envs.map(line).join('. ')}.`,
+    envs[0]?.href,
+  );
 }
 
 /** One sentence on the warm intros found, naming the warmest: empty when there are none. */
@@ -1090,6 +1165,14 @@ export const findRoutes = defineTool({
     'Call this when the student asks how to reach someone, who could introduce them to a person, for a warm intro to a person or a company, who they know at a company, which former employees of a company are in their network, or wants a company page. Give a personId for routes to a person (each route names the first hop to ask for an intro) or a company name for the people there now, former employees and two-hop routes. Both include warm intro paths from Village when the student has it (warmth in a word, and the hops). A query that is not a clear person or company returns candidates to choose from. With an Orbit account, routes to a person are ranked by the chance the intro happens (likely, possible, long shot), each with a reason and a pathId for ask_for_intro.',
   input: z.object({
     personId: z.string().optional().describe('Routes to this person (from search_people).'),
+    personIds: z
+      .array(z.string().min(1))
+      .min(1)
+      .max(10)
+      .optional()
+      .describe(
+        "Routes to several people at once (ids from search_people, find_people's knownPersonId or add_sourced): one card with the best way in to each. Use this when the student picks or names more than one person.",
+      ),
     company: z
       .string()
       .optional()
@@ -1103,6 +1186,7 @@ export const findRoutes = defineTool({
     'map_search',
     'map_reach_person',
     'map_reach_company',
+    'routes_many',
     'map_pick_route',
     'company_page',
     'map_open_target_company',
@@ -1119,6 +1203,7 @@ export const findRoutes = defineTool({
   progress: 'Finding routes',
   async execute(input, ctx) {
     const userId = ctx.user.id;
+    if (input.personIds?.length) return routesToMany(ctx, input.personIds);
     let personId = input.personId;
     let company = input.company;
     if (!personId && !company) {
@@ -1148,41 +1233,7 @@ export const findRoutes = defineTool({
       if (cands[0]!.kind === 'person') personId = cands[0]!.id;
       else company = cands[0]!.id;
     }
-    if (personId && isServerUser(userId)) {
-      // account mode: orbit-api ranks routes by the chance the intro happens, with LinkedIn mutuals and Village
-      const target = await requirePerson(ctx, personId);
-      const r = await findPathsOnServer(ctx.user, { personId });
-      if (r.ok) return serverRoutes(ctx, target, r.value);
-      if (r.reason !== 'network' && r.reason !== 'unconfigured') throw new Error(r.message);
-      // the server cannot be reached: Orbit's own routes from this browser's copy still answer
-    }
-    if (personId) {
-      const target = await requirePerson(ctx, personId);
-      const paths = await reachPerson(userId, personId, 3);
-      const people = await peopleById(paths.flatMap((p) => p.hops.map((h) => h.toId)));
-      people.set(target.id, target);
-      const routes = paths.map((p) => pathView(p, people, ctx));
-      const direct = routes.find((r) => r.hops.length === 1);
-      // Village's warm intro paths (the sample student's come from the demo graph) next to Orbit's own routes
-      const warmIntros = await warmIntrosFor(ctx.user, { person: target }, { signal: ctx.signal });
-      const summary = `${
-        routes.length
-          ? `${plural(routes.length, 'route')} to ${target.displayName}${direct?.cold ? '. You know them only slightly, so an intro through someone who knows them is likelier to get a reply' : ''}.`
-          : `No route to ${target.displayName} through people you know yet.`
-      }${warmIntroLine(warmIntros)}`;
-      return ok(
-        'routes',
-        { target: personRef(target), routes, warmIntros, why: WARMER_ROUTES_WHY },
-        {
-          target: personRef(target),
-          routes,
-          warmIntros: warmIntros.length ? warmIntros.map((w) => warmIntroForModel(w, ctx)) : undefined,
-          note: direct?.cold ? WARMER_ROUTES_WHY : undefined,
-        },
-        summary,
-        `/map?reach=${target.id}`,
-      );
-    }
+    if (personId) return routesToPerson(ctx, personId);
     const reach: CompanyReach = await reachCompany(userId, company!, ctx.now);
     const tc = reach.org
       ? await db.targetCompanies
@@ -1196,6 +1247,7 @@ export const findRoutes = defineTool({
       : undefined;
     const all = new Map<string, Person>();
     for (const d of reach.direct) all.set(d.person.id, d.person);
+    for (const s of reach.saved) all.set(s.person.id, s.person);
     for (const f of reach.former) all.set(f.person.id, f.person);
     for (const t of reach.twoHop)
       for (const h of t.path.hops) {
@@ -1215,12 +1267,14 @@ export const findRoutes = defineTool({
         alum: !!d.person.isAlumni,
       })),
       former: reach.former.slice(0, 10).map((f) => ({ ...personRef(f.person), leftOn: f.endedAt })),
+      // there, but only saved to contact: never said to be someone the student knows
+      savedToContact: reach.saved.slice(0, 15).map((s) => ({ ...personRef(s.person), knowsThem: false })),
       viaSomeoneYouKnow: reach.twoHop.map((t) => ({
         target: personRef(t.target),
         route: pathView(t.path, all, ctx),
       })),
     };
-    const summary = `${name}: ${plural(reach.direct.length, 'person', 'people')} there now, ${plural(reach.former.length, 'former employee')} you know${reach.twoHop.length ? `, ${plural(reach.twoHop.length, 'route')} through someone closer` : ''}.${warmIntroLine(warmIntros)}`;
+    const summary = `${name}: ${reach.direct.length ? `${plural(reach.direct.length, 'person', 'people')} you know there now` : 'nobody you know there now'}, ${plural(reach.former.length, 'former employee')} you know${reach.saved.length ? `; ${plural(reach.saved.length, 'person', 'people')} there saved to contact (${reach.saved.map((s) => s.person.displayName).join(', ')}), not someone you know yet` : ''}${reach.twoHop.length ? `, ${plural(reach.twoHop.length, 'route')} through someone closer` : ''}.${warmIntroLine(warmIntros)}`;
     return ok(
       'company',
       { ...view, warmIntros },

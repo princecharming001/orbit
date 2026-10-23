@@ -18,6 +18,8 @@ export type ResultKind =
   | 'drafts'
   | 'pipeline'
   | 'routes'
+  /** routes to several people at once: data `{ people: <a routes card's data each> }` */
+  | 'routes_many'
   | 'brief'
   | 'suggestion'
   | 'note'

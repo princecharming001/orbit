@@ -235,7 +235,7 @@ export function makeStubRegistry(): StubRegistry {
       execute: async (input) => ({
         kind: 'draft',
         data: { id: input.draftId, status: 'queued' },
-        summary: 'Queued. It sends in 60 seconds unless you undo.',
+        summary: 'Queued. It sends in 10 seconds unless you undo.',
         href: `/inbox?draft=${input.draftId}`,
       }),
     }),

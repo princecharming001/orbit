@@ -80,6 +80,40 @@ export function writeToEach(names: string[], kind?: string): NextStep | undefine
   };
 }
 
+/** The way a picked row is named in a message: the name, with its recommendationId when it is not in Orbit yet. */
+export interface Picked {
+  name: string;
+  /** a recommendationId from find_people, for someone not in Orbit yet */
+  rec?: string;
+}
+
+const pickedList = (rows: Picked[]) =>
+  nameList(rows.map((r) => (r.rec ? `${r.name} [rec ${r.rec}]` : r.name)));
+
+/** "Find warm routes to each of: A and B": one card with the best way in to each (people Orbit has). */
+export function routesToEach(names: string[]): NextStep | undefined {
+  const list = [...new Set(names)].slice(0, 10);
+  if (!list.length) return undefined;
+  if (list.length === 1) return { label: 'Find warm routes', message: `Who can introduce me to ${list[0]}` };
+  return { label: 'Find warm routes', message: `Find warm routes to each of: ${nameList(list)}` };
+}
+
+/** "Add to People: A [rec x] and B [rec y]", then routes to each or a draft to each, in the same turn. */
+export function addPicked(rows: Picked[], then?: 'routes' | 'drafts'): NextStep | undefined {
+  const list = rows.slice(0, 20);
+  if (!list.length) return undefined;
+  const head =
+    then === 'routes'
+      ? 'Add to People and find warm routes to each of'
+      : then === 'drafts'
+        ? 'Add to People and draft a message to each of'
+        : 'Add to People';
+  return {
+    label: then === 'routes' ? 'Find warm routes' : then === 'drafts' ? 'Write to them' : 'Add to People',
+    message: `${head}: ${pickedList(list)}`,
+  };
+}
+
 export const prepFor = (name: string): NextStep => ({
   label: 'Prep for the chat',
   message: `Prep me for my chat with ${name}`,

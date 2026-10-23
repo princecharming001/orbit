@@ -6,9 +6,9 @@ const DASHES = /[—–]/;
 
 describe('capability manifest', () => {
   it('lists every inventory id once, with an area, a title, a kind and three utterances', () => {
-    // the 181 of the capability inventory plus the networking agent's 20 (plan 16), and autopilot
-    expect(CAPABILITIES).toHaveLength(202);
-    expect(CAPABILITY_IDS.size).toBe(202);
+    // the 184 of the capability inventory plus the networking agent's 20 (plan 16), and autopilot
+    expect(CAPABILITIES).toHaveLength(205);
+    expect(CAPABILITY_IDS.size).toBe(205);
     for (const c of CAPABILITIES) {
       expect(c.id).toMatch(/^[a-z0-9_]+$/);
       expect(c.area.length).toBeGreaterThan(0);

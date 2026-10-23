@@ -21,14 +21,18 @@ import type { ResultEnvelope } from '../../types';
 import { Markdown } from '../Markdown';
 import type { ToolBlock } from '../threadStore';
 import { Choices } from './Choices';
+import { addPicked, askForIntro, type Picked, routesToEach, writeTo, writeToEach } from './next';
 import {
   CardHead,
   DraftOwnersContext,
   GlassCard,
+  type NextStep,
   NextSteps,
   OpenInApp,
   PersonRow,
+  PickBox,
   Section,
+  SelectionBar,
   useFold,
 } from './parts';
 import { SetupCard } from './Setup';
@@ -52,6 +56,7 @@ import {
   readPipeline,
   readPrep,
   readRoutes,
+  readRoutesMany,
   readSettings,
   readSetup,
   readSkipped,
@@ -60,7 +65,7 @@ import {
   readWarmIntros,
   type WarmIntro,
 } from './shapes';
-import { cardSteps } from './steps';
+import { cardSteps, rowsFrom } from './steps';
 
 export { GlassCard, hrefLabel, OpenInApp } from './parts';
 
@@ -124,6 +129,8 @@ function Envelope({ env, block, actions }: { env: ResultEnvelope; block: ToolBlo
       return <PipelineCard env={env} actions={actions} />;
     case 'routes':
       return <RoutesCard env={env} actions={actions} />;
+    case 'routes_many':
+      return <RoutesManyCard env={env} actions={actions} />;
     case 'brief':
       return <BriefCard env={env} />;
     case 'suggestion':
@@ -272,10 +279,15 @@ function PeopleCard({ env, actions }: { env: ResultEnvelope; actions: CardAction
   const { query } = readPeopleQuery(env.data);
   const target = readRoutes(env.data).to;
   const fold = useFold(people);
+  const picked = usePicked();
   if (!people.length) return <Summary env={env} />;
   // rows with a reason under the name keep two lines; a list of names and roles reads on one
   const dense = !!target || !people.some((p) => p.why);
   const steps = cardSteps('search_people', env);
+  // more than one person: each row can be picked, and the picked ones get routes or a draft together
+  const pickable = people.length > 1;
+  const names = people.filter((p) => picked.has(p.person.id)).map((p) => p.person.displayName);
+  const pickedSteps = [routesToEach(names), writeToEach(names)].filter((s): s is NextStep => !!s);
   return (
     <GlassCard kind="people">
       <CardHead
@@ -288,19 +300,56 @@ function PeopleCard({ env, actions }: { env: ResultEnvelope; actions: CardAction
       />
       <div className={dense ? undefined : 'divide-y divide-line-2'}>
         {fold.shown.map(({ person, why, stage }) => (
-          <PersonRow
-            key={person.id}
-            person={person}
-            sub={why}
-            dense={dense}
-            aside={stage ? <Chip tone="neutral">{stage}</Chip> : undefined}
-          />
+          <div key={person.id} className="flex items-center gap-2.5 min-w-0">
+            {pickable && (
+              <PickBox
+                checked={picked.has(person.id)}
+                onChange={(on) => picked.set(person.id, on)}
+                label={person.displayName}
+              />
+            )}
+            <div className="min-w-0 flex-1">
+              <PersonRow
+                person={person}
+                sub={why}
+                dense={dense}
+                aside={stage ? <Chip tone="neutral">{stage}</Chip> : undefined}
+              />
+            </div>
+          </div>
         ))}
       </div>
       {fold.more}
-      <NextSteps steps={steps} send={actions.send} />
+      {pickable && (
+        <SelectionBar
+          count={names.length}
+          total={fold.shown.length}
+          onAll={() => picked.setAll(fold.shown.map((p) => p.person.id))}
+          onClear={picked.clear}
+          steps={pickedSteps}
+          send={actions.send}
+        />
+      )}
+      {!names.length && <NextSteps steps={steps} send={actions.send} />}
     </GlassCard>
   );
+}
+
+/** Which rows of a card are picked: a set the checkboxes and the bar share. */
+function usePicked() {
+  const [ids, setIds] = useState<Set<string>>(() => new Set());
+  return {
+    has: (id: string) => ids.has(id),
+    set: (id: string, on: boolean) =>
+      setIds((cur) => {
+        const next = new Set(cur);
+        if (on) next.add(id);
+        else next.delete(id);
+        return next;
+      }),
+    setAll: (all: string[]) => setIds(new Set(all)),
+    clear: () => setIds(new Set()),
+  };
 }
 
 // ---------- drafts ----------
@@ -630,15 +679,13 @@ function RouteRow({ r, warm }: { r: RouteView; warm?: WarmIntro }) {
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5 min-w-0">
           <span className="font-medium truncate">
-            You →{' '}
-            {warm?.introducerId ? (
-              <Link to={`/people/${warm.introducerId}`} className="hover:underline">
-                {r.names[0]}
-              </Link>
-            ) : (
-              r.names[0]
-            )}
-            {r.names.length > 1 && ` → ${r.names.slice(1).join(' → ')}`}
+            You
+            {r.hops.map((h, k) => (
+              <span key={`${h.id ?? h.name}-${k}`}>
+                {' → '}
+                <HopName hop={k === 0 && warm?.introducerId ? { ...h, id: warm.introducerId } : h} />
+              </span>
+            ))}
           </span>
           {warm ? (
             <Chip tone={warm.warmthWord === 'warm' ? 'good' : 'neutral'}>{warm.warmthWord}</Chip>
@@ -654,6 +701,89 @@ function RouteRow({ r, warm }: { r: RouteView; warm?: WarmIntro }) {
       </div>
     </li>
   );
+}
+
+/**
+ * Routes to several people at once (the people picked on a list): one block per person with the best way in, the
+ * number of other routes, and the step to take, so nobody has to be asked about one at a time.
+ */
+function RoutesManyCard({ env, actions }: { env: ResultEnvelope; actions: CardActions }) {
+  const entries = readRoutesMany(env.data);
+  if (!entries.length) return <Summary env={env} />;
+  return (
+    <GlassCard kind="routes_many">
+      <CardHead title={`Routes to ${entries.length} people`} href={env.href} />
+      <ol className="divide-y divide-line-2" data-testid="routes-many">
+        {entries.map(({ to, routes, warmIntros }) => {
+          const { rows, rest } = rowsFrom(routes, warmIntros);
+          const best = rows[0];
+          const intro = best && best.r.names.length > 1 ? best.r.names[0] : undefined;
+          const steps = [
+            intro && to ? askForIntro(intro, to.displayName) : undefined,
+            to ? writeTo(to.displayName) : undefined,
+          ].filter((s): s is NextStep => !!s);
+          return (
+            <li key={to!.id} className="py-2 first:pt-0 last:pb-0" data-testid="routes-many-person">
+              <div className="flex items-center gap-2 min-w-0">
+                <Avatar name={to!.displayName} src={to!.photoUrl} id={to!.id} size={22} />
+                <Link to={`/people/${to!.id}`} className="font-medium hover:underline truncate">
+                  {to!.displayName}
+                </Link>
+                {to!.linkedinUrl && <LinkedInMark url={to!.linkedinUrl} name={to!.displayName} />}
+                {to!.currentOrganizationRaw && (
+                  <span className="text-[12.5px] text-ink-3 truncate">· {to!.currentOrganizationRaw}</span>
+                )}
+              </div>
+              {best ? (
+                <ol className="mt-1">
+                  <RouteRow r={best.r} warm={best.w} />
+                </ol>
+              ) : rest[0] ? (
+                <ul className="mt-1">
+                  <WarmIntroRow w={rest[0]} />
+                </ul>
+              ) : (
+                <p className="mt-1 text-[12.5px] text-ink-3">
+                  No route through people you know yet. A short, specific note of your own is the way in.
+                </p>
+              )}
+              {rows.length + rest.length > 1 && (
+                <p className="text-[12px] text-ink-3 mt-0.5">
+                  {rows.length + rest.length - 1} more {rows.length + rest.length - 1 === 1 ? 'way' : 'ways'}{' '}
+                  in on the map
+                </p>
+              )}
+              <NextSteps steps={steps} send={actions.send} />
+            </li>
+          );
+        })}
+      </ol>
+    </GlassCard>
+  );
+}
+
+/** A name on a route: it opens their LinkedIn profile when Orbit has it, else their page in Orbit. */
+function HopName({ hop }: { hop: { id?: string; name: string; linkedinUrl?: string } }) {
+  if (hop.linkedinUrl)
+    return (
+      <a
+        href={hop.linkedinUrl}
+        target="_blank"
+        rel="noreferrer noopener"
+        className="hover:underline"
+        title={`${hop.name} on LinkedIn`}
+        data-testid="route-hop-linkedin"
+      >
+        {hop.name}
+      </a>
+    );
+  if (hop.id)
+    return (
+      <Link to={`/people/${hop.id}`} className="hover:underline" data-testid="route-hop-person">
+        {hop.name}
+      </Link>
+    );
+  return <>{hop.name}</>;
 }
 
 /** One warm intro path from Village: who introduces, how warm in a word, and the hops. */
@@ -969,7 +1099,7 @@ function FactsCard({ env }: { env: ResultEnvelope }) {
 // ---------- company ----------
 
 function CompanyCard({ env, actions }: { env: ResultEnvelope; actions: CardActions }) {
-  const { name, industry, people, former, target, via } = readCompany(env.data);
+  const { name, industry, people, former, saved, target, via } = readCompany(env.data);
   const warm = readWarmIntros(env.data);
   const fold = useFold(people);
   if (!name) return <Summary env={env} />;
@@ -992,7 +1122,8 @@ function CompanyCard({ env, actions }: { env: ResultEnvelope; actions: CardActio
       ),
     }));
   const counts = [
-    people.length ? `${people.length} there now` : '',
+    people.length ? `${people.length} you know there` : saved.length ? 'nobody you know there yet' : '',
+    saved.length ? `${saved.length} saved to contact` : '',
     former.length ? `${former.length} used to be` : '',
     via.length ? `${via.length} through someone you know` : '',
   ].filter(Boolean);
@@ -1021,8 +1152,21 @@ function CompanyCard({ env, actions }: { env: ResultEnvelope; actions: CardActio
           </div>
           {fold.more}
         </>
-      ) : (
+      ) : saved.length === 0 ? (
         <p className="text-ink-2">{env.summary}</p>
+      ) : null}
+      {saved.length > 0 && (
+        <div
+          className={people.length ? 'mt-2 pt-2 border-t border-line-2' : undefined}
+          data-testid="company-saved"
+        >
+          <div className="text-[12px] text-ink-3 mb-0.5">
+            Saved to contact · not someone you know yet, so routes go through others
+          </div>
+          {saved.map((p) => (
+            <PersonRow key={p.id} person={p} sub={p.currentTitle} dense />
+          ))}
+        </div>
       )}
       {former.length > 0 && (
         <p className="mt-1.5 text-[12.5px] text-ink-3 line-clamp-2">
@@ -1148,9 +1292,17 @@ function PrepCard({ env }: { env: ResultEnvelope }) {
 function ListCard({ env, block, actions }: { env: ResultEnvelope; block: ToolBlock; actions: CardActions }) {
   const { title, items } = readList(env.data);
   const fold = useFold(items, 6);
+  const picked = usePicked();
   if (!items.length) return <Summary env={env} />;
   const heading = title ?? firstSentence(env.summary);
   const steps = cardSteps(block.toolName, env);
+  // rows that stand for people found in a search can be picked: added to People, with routes or a draft to each
+  const pickable = items.filter((it) => !!it.id);
+  const chosen = pickable.filter((it) => picked.has(it.id!));
+  const rows: Picked[] = chosen.map((it) => ({ name: it.text, rec: it.known ? undefined : it.id }));
+  const pickedSteps = [addPicked(rows, 'routes'), addPicked(rows), addPicked(rows, 'drafts')].filter(
+    (s): s is NextStep => !!s,
+  );
   return (
     <GlassCard kind="list">
       <CardHead title={heading} href={env.href} />
@@ -1160,6 +1312,13 @@ function ListCard({ env, block, actions }: { env: ResultEnvelope; block: ToolBlo
             key={i}
             className={cx('flex min-w-0 gap-2.5', it.avatar ? 'items-center py-1.5' : 'items-start py-1')}
           >
+            {it.id && (
+              <PickBox
+                checked={picked.has(it.id)}
+                onChange={(on) => picked.set(it.id!, on)}
+                label={it.text}
+              />
+            )}
             {it.avatar ? (
               <Avatar name={it.avatar.name} src={it.avatar.src} id={`${it.avatar.name}-${i}`} size={28} />
             ) : (
@@ -1203,7 +1362,17 @@ function ListCard({ env, block, actions }: { env: ResultEnvelope; block: ToolBlo
         ))}
       </ul>
       {fold.more}
-      <NextSteps steps={steps} send={actions.send} />
+      {pickable.length > 1 && (
+        <SelectionBar
+          count={chosen.length}
+          total={fold.shown.filter((it) => !!it.id).length}
+          onAll={() => picked.setAll(fold.shown.filter((it) => !!it.id).map((it) => it.id!))}
+          onClear={picked.clear}
+          steps={pickedSteps}
+          send={actions.send}
+        />
+      )}
+      {!chosen.length && <NextSteps steps={steps} send={actions.send} />}
     </GlassCard>
   );
 }

@@ -40,7 +40,7 @@ import { scheduleChatAt, upcomingMeeting } from './move';
 import { evaluateTrigger, recordAlreadyDone } from './stages';
 
 /** Provider sends wait this long in `queued` so the student can undo (01 §6, 07 §5, 14 §7). */
-export const UNDO_WINDOW_MS = 60_000;
+export const UNDO_WINDOW_MS = 10_000;
 /** A queued send found this long after its `sendAt` (Orbit was closed) is not sent blindly; it goes back to draft. */
 const STALE_QUEUE_MS = 10 * 60_000;
 

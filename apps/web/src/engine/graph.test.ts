@@ -16,6 +16,7 @@ import {
   targetCompanyMatcher,
 } from './graph';
 import { ingestEmails, type RawEmail } from './ingest';
+import { addPersonByHand } from './people';
 
 const NOW = new Date('2026-06-01T12:00:00Z');
 
@@ -188,6 +189,26 @@ describe('with the demo network', () => {
     }
     for (let i = 1; i < c.direct.length; i++)
       expect(c.direct[i - 1]!.strength).toBeGreaterThanOrEqual(c.direct[i]!.strength);
+  });
+
+  it('someone at the company saved from a LinkedIn search is listed as saved to contact, not as someone you know, and routes to them still go through people you know', async () => {
+    const added = await addPersonByHand(
+      user.id,
+      {
+        name: 'Dario Testperson',
+        company: 'Stripe',
+        title: 'Engineer',
+        linkedinUrl: 'https://www.linkedin.com/in/dario-testperson',
+        source: 'linkedin_search',
+      },
+      user.school,
+    );
+    expect(added?.person.sources).toEqual(['linkedin_search']);
+    const c = await reachCompany(user.id, 'Stripe');
+    expect(c.saved.map((s) => s.person.id)).toContain(added!.person.id);
+    expect(c.direct.map((d) => d.person.id)).not.toContain(added!.person.id);
+    expect(c.alumni.map((d) => d.person.id)).not.toContain(added!.person.id);
+    await db.people.delete(added!.person.id);
   });
 
   it('a company’s routes through people you know are the routes Reach shows from Orbit’s records, hop for hop', async () => {

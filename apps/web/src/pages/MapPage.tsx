@@ -10,13 +10,14 @@ import {
   normalizeCompany,
   orbitGroupKey,
   REACH_BAND_LABELS,
-  STAGE_LABELS,
 } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Building2, Search, X } from 'lucide-react';
 import { type CSSProperties, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { useAskIntro } from '../components/askIntro';
 import { CompanyLogo, LogoText } from '../components/CompanyLogo';
+import { MapPersonCard } from '../components/map/MapPersonCard';
 import { ReachMutuals } from '../components/map/ReachMutuals';
 import { ReachSearch } from '../components/map/ReachSearch';
 import { type CardPlace, OrbitMap, useCoarsePointer } from '../components/OrbitMap';
@@ -27,7 +28,6 @@ import { ResizeHandle, useResizableWidth } from '../components/ResizeHandle';
 import { useWarmIntros, WarmIntrosPanel } from '../components/WarmIntrosPanel';
 import { db } from '../db/schema';
 import { draftMessage } from '../engine/brief';
-import { requestIntro } from '../engine/drafts';
 import {
   buildReachGraph,
   type CompanyReach,
@@ -643,16 +643,7 @@ export function MapPage() {
     await askIntroVia(path.hops[0]!.toId, target.id, path.score);
   };
   // the same intro request for a warm intro path from Village, which names who introduces and to whom
-  const askIntroVia = async (connectorId: string, targetId: string, score: number) => {
-    if (!user) return;
-    const r = await requestIntro(user, connectorId, targetId, { path: { score } });
-    if (!r) return;
-    toast.push({
-      text: `Intro request drafted. It's in Drafts.`,
-      tone: 'good',
-      action: { label: 'Open', onClick: () => nav('/inbox') },
-    });
-  };
+  const askIntroVia = useAskIntro(user);
   const hovered = hover ? byId.get(hover) : undefined;
   const current = paths?.[pathIdx];
   // Village's warm intros to the target: shown on the route through the same person, or as a route of their own
@@ -947,7 +938,7 @@ export function MapPage() {
             introducerOf={introducerOf}
             onSelect={(id) => (reachMode ? setParams({ reach: id }) : nav(`/people/${id}`))}
             onSelectCluster={openCluster}
-            personCard={!reachMode}
+            personCard
             question={webFocus}
             onAggregated={setAggregated}
             onHover={(id, place) => {
@@ -955,7 +946,7 @@ export function MapPage() {
               if (place) setHoverPlace(place);
             }}
           />
-          {hovered && !reachMode && (
+          {hovered && (
             // one card that follows the focus from dot to dot: it fades in when it first shows, not again with
             // each arrow key
             <div
@@ -971,38 +962,13 @@ export function MapPage() {
               data-place={'at' in hoverPlace ? hoverPlace.at : 'beside'}
               data-testid="map-tooltip"
             >
-              <div className="flex items-center gap-2">
-                <Avatar name={hovered.displayName} src={hovered.photoUrl} id={hovered.id} size={32} />
-                <div className="min-w-0 flex-1">
-                  <div className="font-medium truncate">{hovered.displayName}</div>
-                  {/* the company on a line of its own, so a long title never cuts it off */}
-                  {hovered.currentTitle && (
-                    <div className="text-[12px] text-ink-3 truncate">{hovered.currentTitle}</div>
-                  )}
-                  {hovered.currentOrganizationRaw && (
-                    <LogoText person={hovered} className="text-[12px] text-ink-2">
-                      <span data-testid="map-tooltip-company">{hovered.currentOrganizationRaw}</span>
-                    </LogoText>
-                  )}
-                </div>
-                <Link
-                  to={`/people/${hovered.id}`}
-                  className={cx(
-                    'text-[12px] text-accent shrink-0 pointer-events-auto',
-                    // a thumb-sized target that does not make the card any taller
-                    touch
-                      ? 'inline-flex items-center justify-center min-h-11 min-w-11 -my-2 -mr-2 px-2'
-                      : '@[40rem]:hidden',
-                  )}
-                  data-testid="map-open-person"
-                >
-                  Open
-                </Link>
-              </div>
-              <div className="mt-2 flex items-center gap-2 text-[12px] text-ink-3">
-                <StrengthDots v={hovered.strength} />{' '}
-                {stages.get(hovered.id) ? <Chip>{STAGE_LABELS[stages.get(hovered.id)!]}</Chip> : null}
-              </div>
+              <MapPersonCard
+                person={hovered}
+                stage={stages.get(hovered.id)}
+                route={reachMode ? current : undefined}
+                nameOf={(id) => byId.get(id)?.firstName ?? 'them'}
+                touch={touch}
+              />
             </div>
           )}
         </div>
@@ -1414,7 +1380,8 @@ export function MapPage() {
               )}
               {(
                 [
-                  ['People there now', company.direct],
+                  ['People you know there now', company.direct],
+                  ['Saved to contact (not someone you know yet)', company.saved],
                   ['Former employees you know (last five years)', company.former],
                 ] as const
               ).map(([title, list]) => (

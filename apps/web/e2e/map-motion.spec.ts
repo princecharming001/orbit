@@ -1312,6 +1312,52 @@ test.describe('Map motion with a big network', () => {
     await stepUntilSettled(page);
     expect(new Set((await mapSnapshot(page)).fans)).toEqual(new Set(snap.fans));
   });
+
+  test('a route through someone folded into a "+N" dot ends at their own face and name, not at the grey dot', async ({
+    page,
+  }) => {
+    await loadDemo(page);
+    await briefWritten(page);
+    await injectPeople(page, 1910);
+    // p1 is Daniel Okafor at Stripe: the demo has warm routes to him through a colleague
+    await page.goto('map?reach=p1');
+    await expect(page.getByTestId('reach-path').first()).toBeVisible({ timeout: 30_000 });
+    await expect.poll(async () => (await mapSnapshot(page)).path.length).toBeGreaterThan(2);
+    await mapSettled(page, 30_000);
+    const snap = await mapSnapshot(page);
+    const ids = snap.path.filter((id) => id !== 'user');
+    // everyone on the route has a dot of their own on screen, whether or not the layout bundled them
+    const dots = await mapDots(page, ids);
+    for (const id of ids) {
+      expect(dots[id], id).toBeDefined();
+      expect(dots[id]!.alpha, id).toBeGreaterThan(0.5);
+    }
+    // and is named under it, like the panel names them
+    const names = await page.evaluate(async (ids) => {
+      const db = (
+        await new Promise<IDBDatabase>((res) => {
+          const o = indexedDB.open('orbit');
+          o.onsuccess = () => res(o.result);
+        })
+      )
+        .transaction('people')
+        .objectStore('people');
+      return Promise.all(
+        ids.map(
+          (id) =>
+            new Promise<string>((res) => {
+              const r = db.get(id);
+              r.onsuccess = () => res((r.result as { firstName: string }).firstName);
+            }),
+        ),
+      );
+    }, ids);
+    for (const name of names)
+      expect(
+        snap.tags.some((t) => t.startsWith(name)),
+        name,
+      ).toBe(true);
+  });
 });
 
 test.describe('Map motion with reduced motion', () => {

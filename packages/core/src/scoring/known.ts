@@ -22,6 +22,26 @@ export function hasRealName(p: Pick<Person, 'firstName' | 'lastName' | 'displayN
  * are connected on LinkedIn, or the student added them or is working on a chat with them. Mail that only ever came
  * in (a newsletter, a cold pitch) is not history, and neither is someone who only reacts to the student's posts.
  */
+/** A chat stage that means the student has actually been in touch: past "to contact" and the warm-up. */
+export function contactedStage(stage: string | undefined): boolean {
+  return !!stage && stage !== 'identified' && stage !== 'warming';
+}
+
+/**
+ * The student has history with this person: a LinkedIn connection (or their export), mail or messages both ways, a
+ * chat past "to contact", or a tie Orbit's server scored. Someone added by hand or saved from a LinkedIn search has
+ * none until they talk: Orbit never says the student knows them.
+ */
+export function hasHistoryWith(
+  p: Pick<Person, 'strengthBreakdown' | 'linkedinConnectedOn' | 'sources' | 'tieScore'>,
+  opts: { contacted?: boolean } = {},
+): boolean {
+  if (opts.contacted || p.linkedinConnectedOn) return true;
+  if (p.sources?.some((s) => s === 'tracker_import' || s === 'linkedin_csv')) return true;
+  if (!p.strengthBreakdown && (p.tieScore ?? 0) > 0) return true;
+  return isReciprocal(p.strengthBreakdown?.counts) || engagedBothWays(p.strengthBreakdown?.counts);
+}
+
 export function isKnownContact(
   p: Pick<
     Person,

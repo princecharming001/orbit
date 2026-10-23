@@ -70,7 +70,12 @@ export function pointChatAtClaude(): void {
   );
 }
 
-export type AccountState = 'demo' | 'empty' | ((user: User) => Promise<void>);
+/** 'demo', 'empty', a seed over an empty account, or the demo plus a seed on top of it */
+export type AccountState =
+  | 'demo'
+  | 'empty'
+  | ((user: User) => Promise<void>)
+  | { demo: true; then: (user: User) => Promise<void> };
 
 /**
  * Account mode for a scenario: the student is signed in to an Orbit account answered by the in-memory fake orbit-api
@@ -111,8 +116,10 @@ export async function seed(
   }
   await clearPrefs();
   let user: User;
-  if (state === 'demo') user = await loadDemo({ reset: true, now: NOW });
-  else {
+  if (state === 'demo' || (typeof state === 'object' && state.demo)) {
+    user = await loadDemo({ reset: true, now: NOW });
+    if (typeof state === 'object') await state.then(user);
+  } else {
     await wipeDatabase();
     user = await createLocalUser({
       fullName: 'Jordan Lee',

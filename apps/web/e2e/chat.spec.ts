@@ -224,7 +224,8 @@ test.describe('Chat home', () => {
     await expect(draft.getByLabel('Message body')).toBeVisible();
     await expect(draft.getByTestId('draft-copy')).toBeVisible();
     await expect(draft.getByRole('button', { name: /open email to/i })).toBeVisible();
-    await expect(page.getByTestId('progress-line').first()).toBeVisible();
+    // the model's notes to itself stay out of the thread unless turned on in Settings
+    await expect(page.getByTestId('progress-line')).toHaveCount(0);
     await expect(page.getByTestId('result-error')).toContainText('could not find a chat');
     await shot(page, 'e2e-laptop-conversation');
     expect(await clipped(page, '[data-testid="chat-thread"]')).toEqual([]);

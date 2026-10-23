@@ -15,7 +15,7 @@ Status: as-built note for the first shipped version (browser-only, GitHub Pages)
 | Voyage embeddings + pgvector | Not used; fit uses keyword overlap and structured matches (05 §8.2 without the cosine term) |
 | Enrichment (PDL) | Not called; affiliations come from the LinkedIn CSV (current employer) and, in the demo, seeded history. Edges therefore rely on co-thread, co-attendee and same-company signals until enrichment exists |
 | Resend email delivery | In-app only; the brief is a page, not an email |
-| Gmail send via API, delayed 60 s for undo (Inngest) | Gmail API when Google is connected, queued in the browser for the same 60 s undo window; otherwise a `mailto:` hand-off. LinkedIn is always copy-and-open. See §7 |
+| Gmail send via API, delayed 60 s for undo (Inngest) | Gmail API when Google is connected, queued in the browser behind a 10 s undo window; otherwise a `mailto:` hand-off. LinkedIn sends from the student's own account through Unipile when it is connected, else copy-and-open. See §7 |
 | Granola webhook/API | Paste or upload into the capture box (Granola layout recognised); the capture box is the Wispr Flow integration |
 | Drafting rules (05 §7) | Template engine in `packages/core/src/drafts` written to the outreach playbook (15): limits per kind, connection first, sector register, banned phrases; the optional LLM pass must clear the same validator |
 | LinkedIn warm-up (13) | Built as specified, except the cancel action (13 §5) and the reply-rate metric (13 §7), which are hosted only |

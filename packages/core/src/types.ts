@@ -25,6 +25,8 @@ export type PersonSource =
   | 'enrichment'
   | 'tracker_import'
   | 'manual'
+  /** found on LinkedIn beyond the student's connections and saved to contact: not someone they know yet */
+  | 'linkedin_search'
   | 'note'
   | 'recommendation'
   /** someone the student texts, named in their Contacts */

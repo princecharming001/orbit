@@ -148,7 +148,8 @@ test.describe('Connect LinkedIn and Gmail, live LinkedIn and warm intros', () =>
       ? tagged.first().getByTestId('reach-path-action')
       : extra.first().getByTestId('map-warm-intro-ask');
     await ask.click();
-    await expect(page.getByTestId('toasts')).toContainText('Intro request drafted');
+    await expect(page.getByTestId('toasts')).toContainText(/for an intro to/);
+    await expect(page).toHaveURL(/\/inbox\?card=/);
     await page.goto('map?reach=1&company=Stripe');
     await expect(page.getByTestId('map-warm-intros').getByTestId('map-warm-intro').first()).toContainText(
       '→ Stripe',

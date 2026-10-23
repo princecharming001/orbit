@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hasRealName, isKnownContact } from './known';
+import { contactedStage, hasHistoryWith, hasRealName, isKnownContact } from './known';
 
 const person = (patch: Record<string, unknown> = {}) =>
   ({
@@ -43,6 +43,32 @@ describe('people the student knows', () => {
     expect(isKnownContact(person({ strengthBreakdown: undefined, sources: ['manual'] }))).toBe(true);
     expect(isKnownContact(person({ isHuman: false }))).toBe(false);
     expect(isKnownContact(person({ hiddenAt: '2026-01-01' }))).toBe(false);
+  });
+
+  it('someone saved from a LinkedIn search is not known until they talk; history is a connection, both-way mail, a chat past "to contact" or a server tie', () => {
+    const saved = person({ strengthBreakdown: undefined, sources: ['linkedin_search'] });
+    expect(isKnownContact(saved)).toBe(false);
+    // a chat at "to contact" keeps them on People and the map, but is no history
+    expect(isKnownContact(saved, { hasChat: true })).toBe(true);
+    expect(hasHistoryWith(saved)).toBe(false);
+    expect(hasHistoryWith(saved, { contacted: false })).toBe(false);
+    expect(hasHistoryWith(saved, { contacted: true })).toBe(true);
+    expect(hasHistoryWith(person({ strengthBreakdown: undefined, sources: ['manual'] }))).toBe(false);
+    expect(hasHistoryWith(person({ strengthBreakdown: undefined, linkedinConnectedOn: '2025-01-01' }))).toBe(
+      true,
+    );
+    expect(hasHistoryWith(person({ strengthBreakdown: undefined, sources: ['linkedin_csv'] }))).toBe(true);
+    expect(
+      hasHistoryWith(person({ strengthBreakdown: { raw: 1, recency: 1, counts: { email_in: 3 } } })),
+    ).toBe(false);
+    expect(
+      hasHistoryWith(person({ strengthBreakdown: { raw: 1, recency: 1, counts: { meeting: 1 } } })),
+    ).toBe(true);
+    expect(hasHistoryWith(person({ strengthBreakdown: undefined, tieScore: 12 }))).toBe(true);
+    expect(contactedStage('identified')).toBe(false);
+    expect(contactedStage('warming')).toBe(false);
+    expect(contactedStage('outreach_sent')).toBe(true);
+    expect(contactedStage(undefined)).toBe(false);
   });
 
   it('counts LinkedIn comments and reactions only when they go both ways or sit next to messages (plan 17 B)', () => {
