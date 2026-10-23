@@ -76,11 +76,24 @@ Rule for every workstream: use open-source code before writing our own (check th
 - One pipeline, cheapest and most certain first, stops when fields are filled with enough confidence:
   1. What Orbit already has (email signatures, calendar, notes, resume of the student).
   2. Gravatar by email hash (free) for photo/name.
-  3. Unipile full profile (`linkedin_sections`: experience, education, skills) for LinkedIn people → real
-     education history, so alumni status is evidence, not a guess.
-  4. Unipile search by name + company/school for Gmail-only people (joins identity, A).
+  3. Unipile full profile (`GET /api/v1/users/{provider_id or public id}?linkedin_sections=experience,education,
+     skills,about&account_id=…`) for LinkedIn people → real education and job history, so alumni status is
+     evidence, not a guess. For 1st-degree connections the profile also carries `contact_info.emails/phones`:
+     the exact join to the same person's Gmail and iMessage (deterministic in A). LinkedIn throttles section
+     requests (`throttled_sections` in the answer), so a daily budget, random delays, `_preview` sections for
+     the less important ones, and a queue ordered by who matters now (pipeline, Discover picks, close ties).
+  4. Unipile search by name + company/school for every Gmail/iMessage person without a LinkedIn profile, whether
+     or not they already have a photo (student's rule, 2026-10-22: LinkedIn profiles have photos far more often
+     than email accounts, and the lookup enriches the whole profile). Joins identity (A) only on a confident match.
+     Photo priority: one the student set > LinkedIn > Gmail/Gravatar.
   5. Web (Exa search + page contents; Firecrawl as fallback) for bios, personal sites, GitHub, publications.
   6. Paid people-data APIs (Apollo, People Data Labs) only if the student provides keys.
+- LinkedIn is the source of truth for a person's current position (student's rule, 2026-10-22): the current
+  experience entry on their LinkedIn profile sets title and company over Gmail signatures, headline parsing,
+  notes and calendar; only the student's own edit wins over it. A changed current position is a real job change.
+- Company logos come from LinkedIn: the current position's company (LinkedIn company id/slug and its logo) is
+  stored on the organisation (`linkedinSlug`, `logoUrl`), refreshed when the link expires, and CompanyLogo shows it
+  before any guessed domain icon.
 - Every enriched field records its source and confidence; nothing overwrites a field the student set.
 - Budget and rate limits per day; runs in the background with a visible status.
 - Tests: waterfall order, stop conditions, provenance, conflict handling, budget caps, offline fallback.
