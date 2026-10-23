@@ -1,11 +1,13 @@
 import { useEffect, useRef } from 'react';
+import { autoSyncLinkedInActivity } from '../engine/linkedinActivity';
 import { autoSyncLinkedInReplies } from '../engine/linkedinInbox';
 import { autoSyncLinkedInLive } from '../engine/linkedinLive';
 import { useSession } from '../state/session';
 
 /**
- * Re-syncs live LinkedIn when the app opens and the last sync is more than a day old, then reads LinkedIn for
- * replies (at most every quarter hour). Mounted once in the app shell,
+ * Re-syncs live LinkedIn when the app opens and the last sync is more than a day old (which reads the student's
+ * LinkedIn messages and post engagement too), then reads LinkedIn for replies (at most every quarter hour) and
+ * carries on a message history read that was cut short. Mounted once in the app shell,
  * next to the outbox scheduler. Quiet: it never toasts, and a failure is recorded on the integration row, where
  * Settings and the chat show it.
  */
@@ -19,7 +21,10 @@ export function LinkedInAutoSync() {
     if (!userId || !u?.onboardingCompletedAt) return;
     void autoSyncLinkedInLive(u)
       .catch(() => undefined)
-      .then(() => autoSyncLinkedInReplies(u));
+      .then(() => autoSyncLinkedInReplies(u))
+      // a LinkedIn message history read that was cut short carries on
+      .then(() => autoSyncLinkedInActivity(u))
+      .catch(() => undefined);
   }, [userId]);
   return null;
 }

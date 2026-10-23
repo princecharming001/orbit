@@ -15,6 +15,7 @@ import {
   mutualsFor,
   resumeLinkedInConnect,
   setLivePollForTests,
+  subscribeLinkedInProgress,
   syncLinkedInLive,
 } from './linkedinLive';
 
@@ -257,6 +258,44 @@ describe('syncing, disconnecting and the daily re-sync', () => {
     const daniel = (await people()).find((p) => p.firstName === 'Daniel')!;
     expect(daniel.currentTitle).toBe('Associate');
     expect(daniel.linkedinMemberId).toBe('m_daniel');
+  });
+
+  it('after the connections, reads the LinkedIn messages for closeness and says how many (plan 17 B)', async () => {
+    await connectLinkedInLive(user);
+    // the account token /connect/status hands this browser: the message reads need it
+    const row = (await liveLinkedInAccount(user.id))!;
+    await db.integrations.update(row.id, { accessToken: 'tok_1' });
+    routes['/chats/history'] = {
+      body: {
+        chats: [
+          {
+            chatId: 'c1',
+            memberId: 'm_daniel',
+            messages: [
+              { id: 'x1', at: '2026-10-01T10:00:00.000Z', out: true, text: 'Hi Daniel' },
+              { id: 'x2', at: '2026-10-02T10:00:00.000Z', out: false, text: 'Hi!' },
+            ],
+          },
+        ],
+        latest: '2026-10-02T10:00:00.000Z',
+        cursor: null,
+      },
+    };
+    routes['/posts/activity'] = { body: { ok: true, items: [], postsRead: [], ownDone: true, cursor: null } };
+    const seen: string[] = [];
+    const stop = subscribeLinkedInProgress(() => {
+      const p = linkedInProgress();
+      if (p) seen.push(`${p.phase}:${p.messages ?? ''}`);
+    });
+    expect(await syncLinkedInLive(user)).toMatchObject({ ok: true, rows: 2 });
+    stop();
+    // the banner counts the messages while it reads them, then says how many
+    expect(seen).toContain('analyzing:2');
+    expect(linkedInProgress()).toMatchObject({ phase: 'done', message: expect.stringMatching(/2 messages/) });
+    const daniel = (await people()).find((p) => p.firstName === 'Daniel')!;
+    const kinds = (await db.touchpoints.where('personId').equals(daniel.id).toArray()).map((t) => t.kind);
+    expect(kinds).toEqual(expect.arrayContaining(['linkedin_in', 'linkedin_out']));
+    expect(calls.find((c) => c.path === '/chats/history')!.body).toMatchObject({ accountId: 'acc_1' });
   });
 
   it('marks the account as needing attention on an error, but not when the key is simply not pasted', async () => {

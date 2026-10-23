@@ -6,7 +6,7 @@
  *
  * Routes (POST, JSON):
  *   /connect/start, /connect/status, /relations, /mutuals, /disconnect, /send,
- *   /inbox, /search                                                            -> Unipile
+ *   /inbox, /search, /me, /chats/history, /posts/activity                      -> Unipile
  *   /paths                                                                     -> Village
  *
  * A connected account's routes need the account token /connect/status handed out (an HMAC of the account id with
@@ -15,6 +15,10 @@
  * request with a note to anyone else, at most ORBIT_LINKEDIN_SENDS_PER_DAY (25) per account per day. /inbox reads
  * the account's recent LinkedIn messages (so replies reach the pipeline on their own) and /search runs a LinkedIn
  * people search beyond the student's own network, at most ORBIT_LINKEDIN_SEARCHES_PER_DAY (40) per account per day.
+ * /chats/history reads the student's 1:1 LinkedIn chats (full history, or since a checkpoint) and /posts/activity the
+ * comments and reactions on their recent posts and their own comments on others' posts, at most
+ * ORBIT_LINKEDIN_POST_READS_PER_DAY (12) calls per account per day (LinkedIn counts those reads). Both page with a
+ * signed cursor of their own until it comes back null, so nothing is skipped silently.
  * A route whose provider key is not set returns 503 with x-orbit-connector: unconfigured, so the app shows the
  * CSV fallback (or its own graph) instead. Pasting the key as a function secret turns it on with no redeploy of
  * the app. The exact upstream request and response mapping lives in the adapter functions, so a live test with real
@@ -72,6 +76,8 @@ export interface ConnectorDeps {
   sendsPerDay?: number;
   /** LinkedIn people searches one account may run per day (LinkedIn throttles heavy searching) */
   searchesPerDay?: number;
+  /** /posts/activity calls one account may make per day (each reads a few posts' comments and reactions) */
+  postReadsPerDay?: number;
   /** where Unipile reports the account a hosted sign-in produced; without it only the older account-list match runs */
   links?: LinkStore;
   /** this function's public address, for Unipile's notify_url */
@@ -168,6 +174,12 @@ export function searchBucket(accountId: string, now: Date, perDay: number): Buck
   return { ...b, key: b.key.replace('connectors:send:', 'connectors:search:') };
 }
 
+/** The per-account bucket for reading post comments and reactions today. */
+export function postReadsBucket(accountId: string, now: Date, perDay: number): Bucket {
+  const b = sendBucket(accountId, now, perDay);
+  return { ...b, key: b.key.replace('connectors:send:', 'connectors:posts:') };
+}
+
 /** LinkedIn caps a connection-request note at this many characters. */
 export const INVITE_NOTE_MAX = 300;
 
@@ -243,6 +255,8 @@ const UNIPILE_ROUTES = new Set([
   '/inbox',
   '/search',
   '/me',
+  '/chats/history',
+  '/posts/activity',
 ]);
 /** Routes that act on a connected account, so need its token. */
 const ACCOUNT_ROUTES = new Set([
@@ -253,6 +267,8 @@ const ACCOUNT_ROUTES = new Set([
   '/inbox',
   '/search',
   '/me',
+  '/chats/history',
+  '/posts/activity',
 ]);
 
 export function makeHandler(deps: ConnectorDeps): (req: Request) => Promise<Response> {
@@ -366,6 +382,27 @@ export function makeHandler(deps: ConnectorDeps): (req: Request) => Promise<Resp
         );
     }
 
+    if (path === '/posts/activity') {
+      let postsVerdict: { allowed: boolean };
+      try {
+        postsVerdict = await take([
+          postReadsBucket(String(body.accountId), now(), deps.postReadsPerDay ?? 12),
+        ]);
+      } catch {
+        return json(503, { error: 'unavailable right now' }, h);
+      }
+      if (!postsVerdict.allowed)
+        return json(
+          200,
+          {
+            ok: false,
+            reason: 'limit',
+            message: 'Orbit has read as many LinkedIn posts as it allows today. It reads the rest tomorrow.',
+          },
+          h,
+        );
+    }
+
     try {
       if (isVillage) return json(200, await villagePaths(village, deps.villageUser!, body), h);
       if (path === '/connect/start')
@@ -383,6 +420,9 @@ export function makeHandler(deps: ConnectorDeps): (req: Request) => Promise<Resp
       if (path === '/inbox') return json(200, await unipileInbox(deps, body, doFetch), h);
       if (path === '/search') return json(200, await unipileSearch(deps, body, doFetch), h);
       if (path === '/me') return json(200, await unipileMe(deps, body, doFetch), h);
+      if (path === '/chats/history') return json(200, await unipileChatHistory(deps, body, doFetch), h);
+      if (path === '/posts/activity')
+        return json(200, await unipilePostActivity(deps, body, doFetch, now()), h);
       return json(200, await unipileDisconnect(deps, body, doFetch), h);
     } catch (e) {
       return json(502, { error: e instanceof Error ? e.message : 'upstream error' }, h);
@@ -702,6 +742,8 @@ async function unipileMe(deps: ConnectorDeps, body: Record<string, unknown>, doF
     lastName: str(me.last_name),
     headline: str(me.headline) ?? str(me.occupation),
     publicIdentifier: str(me.public_identifier),
+    // the student's own LinkedIn member id: their messages and comments carry it
+    providerId: str(me.provider_id),
     picture,
   };
 }
@@ -739,16 +781,37 @@ async function unipileMutuals(deps: ConnectorDeps, body: Record<string, unknown>
   };
 }
 
-/** At most this many pages of 250 messages per inbox read, and this many chats looked up for who they are with. */
+/** At most this many pages of 250 messages per inbox call, and this many chats looked up one by one per call. */
 export const INBOX_MAX_PAGES = 4;
 export const INBOX_MAX_CHATS = 40;
+/** Pages of 250 chats read per inbox call to learn who each recent chat is with (one call instead of one per chat). */
+const INBOX_CHAT_PAGES = 2;
 /** Without an `after`, the inbox reads back this far. */
 const INBOX_DEFAULT_DAYS = 30;
 
+/** Who a 1:1 chat is with, from Unipile's chat object; undefined for a group, a channel or an ad. */
+function oneToOne(c: Record<string, unknown>): { providerId: string; name?: string } | undefined {
+  // 0 is a 1:1 chat (Unipile's SINGLE); groups (1) and channels (2) are not one person's messages
+  const type = c.type === undefined || c.type === null ? 0 : Number(c.type);
+  if (type !== 0) return undefined;
+  // sponsored messages and LinkedIn's own offers are advertising, not a person writing
+  if (c.content_type === 'sponsored' || c.content_type === 'linkedin_offer') return undefined;
+  const providerId = typeof c.attendee_provider_id === 'string' ? c.attendee_provider_id.trim() : '';
+  if (!providerId) return undefined;
+  return { providerId, name: typeof c.name === 'string' && c.name.trim() ? c.name.trim() : undefined };
+}
+
+/** A message that is a person writing: not an event (a reaction, a call), not hidden or deleted. */
+const isWritten = (m: Record<string, unknown>) => !m.hidden && !m.deleted && !m.is_event;
+
 /**
  * The account's LinkedIn messages since `after`, newest first as Unipile pages them, each with the person on the
- * other side of its 1:1 chat (looked up once per chat). Group chats, events and hidden or deleted messages are left
- * out. `latest` is the newest message time, the next read's `after`.
+ * other side of its 1:1 chat. Group chats, events and hidden or deleted messages are left out. Who each chat is with
+ * comes from the list of chats active since `after` (and a lookup per chat for any it misses).
+ *
+ * Nothing is dropped quietly: when there are more messages than one call reads, `cursor` continues the read (send it
+ * back as `cursor`), and `complete` is false whenever a message's chat could not be looked up. `latest` is the newest
+ * message time; it is the next read's `after` only once a read ends with no cursor and complete.
  */
 async function unipileInbox(deps: ConnectorDeps, body: Record<string, unknown>, doFetch: typeof fetch) {
   const accountId = String(body.accountId ?? '');
@@ -758,10 +821,11 @@ async function unipileInbox(deps: ConnectorDeps, body: Record<string, unknown>, 
       ? parsed
       : new Date(Date.now() - INBOX_DEFAULT_DAYS * 86_400_000);
   const raw: Record<string, unknown>[] = [];
-  let cursor: string | undefined;
+  let cursor = typeof body.cursor === 'string' && body.cursor ? body.cursor : undefined;
   for (let page = 0; page < INBOX_MAX_PAGES; page++) {
-    const q = new URLSearchParams({ account_id: accountId, after: after.toISOString(), limit: '250' });
+    const q = new URLSearchParams({ account_id: accountId, limit: '250' });
     if (cursor) q.set('cursor', cursor);
+    else q.set('after', after.toISOString());
     const res = await doFetch(`${deps.unipileBase}/api/v1/messages?${q}`, { headers: uHeaders(deps) });
     if (!res.ok) throw new Error(`unipile ${res.status}`);
     const b = (await res.json()) as { items?: Record<string, unknown>[]; cursor?: string | null };
@@ -770,29 +834,49 @@ async function unipileInbox(deps: ConnectorDeps, body: Record<string, unknown>, 
     if (!cursor) break;
   }
   const kept = raw.filter(
-    (m) =>
-      !m.hidden &&
-      !m.deleted &&
-      !m.is_event &&
-      typeof m.chat_id === 'string' &&
-      typeof m.text === 'string' &&
-      m.text.trim(),
+    (m) => isWritten(m) && typeof m.chat_id === 'string' && typeof m.text === 'string' && m.text.trim(),
   );
-  // who each chat is with: one lookup per chat, most recent chats first
-  const chatIds = [...new Set(kept.map((m) => String(m.chat_id)))].slice(0, INBOX_MAX_CHATS);
+  // who each chat is with: the chats active since `after`, a page of 250 at a time
   const chats = new Map<string, { providerId?: string; name?: string; group: boolean }>();
-  for (const id of chatIds) {
+  const wanted = new Set(kept.map((m) => String(m.chat_id)));
+  let chatCursor: string | undefined;
+  for (let page = 0; page < INBOX_CHAT_PAGES && wanted.size > 0; page++) {
+    const q = new URLSearchParams({ account_id: accountId, limit: '250' });
+    if (chatCursor) q.set('cursor', chatCursor);
+    else q.set('after', after.toISOString());
+    const res = await doFetch(`${deps.unipileBase}/api/v1/chats?${q}`, { headers: uHeaders(deps) });
+    if (!res.ok) break;
+    const b = (await res.json()) as { items?: Record<string, unknown>[]; cursor?: string | null };
+    for (const c of b.items ?? []) {
+      if (typeof c.id !== 'string') continue;
+      const one = oneToOne(c);
+      chats.set(c.id, one ? { ...one, group: false } : { group: true });
+    }
+    if ([...wanted].every((id) => chats.has(id))) break;
+    chatCursor = typeof b.cursor === 'string' && b.cursor ? b.cursor : undefined;
+    if (!chatCursor) break;
+  }
+  // any chat the list did not name: one lookup each, most recent first, up to the budget
+  let unattributed = 0;
+  let lookups = 0;
+  for (const id of wanted) {
+    if (chats.has(id)) continue;
+    if (lookups >= INBOX_MAX_CHATS) {
+      unattributed += kept.filter((m) => m.chat_id === id).length;
+      continue;
+    }
+    lookups++;
     const res = await doFetch(`${deps.unipileBase}/api/v1/chats/${encodeURIComponent(id)}`, {
       headers: uHeaders(deps),
     });
-    if (!res.ok) continue;
-    const c = (await res.json()) as { attendee_provider_id?: string; name?: string; type?: number };
-    chats.set(id, {
-      providerId: c.attendee_provider_id || undefined,
-      name: c.name || undefined,
-      // 0 is a 1:1 chat; groups and channels are not one person's reply
-      group: typeof c.type === 'number' && c.type !== 0,
-    });
+    if (!res.ok) {
+      // a chat that is gone (404) has nobody to attribute; anything else is LinkedIn failing, and is said
+      if (res.status !== 404) unattributed += kept.filter((m) => m.chat_id === id).length;
+      continue;
+    }
+    const c = (await res.json()) as Record<string, unknown>;
+    const one = oneToOne(c);
+    chats.set(id, one ? { ...one, group: false } : { group: true });
   }
   const messages = kept
     .filter((m) => {
@@ -805,18 +889,439 @@ async function unipileInbox(deps: ConnectorDeps, body: Record<string, unknown>, 
         id: String(m.id),
         chatId: String(m.chat_id),
         text: String(m.text).trim(),
-        at: String(m.timestamp ?? ''),
+        at: isoDate(m.timestamp) ?? String(m.timestamp ?? ''),
         fromMe: m.is_sender === 1 || m.is_sender === true,
         senderId: typeof m.sender_id === 'string' ? m.sender_id : undefined,
         counterpart: { providerId: c.providerId!, name: c.name },
       };
     });
   const latest = raw
-    .map((m) => String(m.timestamp ?? ''))
-    .filter((t) => !Number.isNaN(Date.parse(t)))
+    .map((m) => isoDate(m.timestamp))
+    .filter((t): t is string => !!t)
     .sort()
     .at(-1);
-  return { messages, latest: latest ?? null, more: !!cursor };
+  return {
+    messages,
+    latest: latest ?? null,
+    more: !!cursor,
+    cursor: cursor ?? null,
+    complete: unattributed === 0,
+    unattributed,
+  };
+}
+
+// ---- LinkedIn activity: 1:1 chat history and post engagement, with signed cursors ------------------------------
+
+/** A cursor Orbit hands out for a multi-call read: its state, signed for this account so it cannot be forged. */
+async function sealCursor(deps: ConnectorDeps, accountId: string, state: unknown): Promise<string> {
+  const payload = base64(new TextEncoder().encode(JSON.stringify(state)))
+    .replace(/=+$/, '')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_');
+  const sig = await accountToken(`cursor:${accountId}:${payload}`, deps.signingKey!);
+  return `${payload}.${sig}`;
+}
+
+/** The state inside a cursor this server sealed for this account, or undefined when it is not one. */
+async function openCursor<T>(
+  deps: ConnectorDeps,
+  accountId: string,
+  cursor: unknown,
+): Promise<T | undefined> {
+  if (typeof cursor !== 'string' || !deps.signingKey) return undefined;
+  const dot = cursor.lastIndexOf('.');
+  if (dot <= 0) return undefined;
+  const payload = cursor.slice(0, dot);
+  if (!(await tokenValid(`cursor:${accountId}:${payload}`, cursor.slice(dot + 1), deps.signingKey)))
+    return undefined;
+  try {
+    const bin = atob(payload.replace(/-/g, '+').replace(/_/g, '/'));
+    return JSON.parse(new TextDecoder().decode(Uint8Array.from(bin, (ch) => ch.charCodeAt(0)))) as T;
+  } catch {
+    return undefined;
+  }
+}
+
+/** A short piece of a message or comment: enough to recognise it, never the whole text. */
+export const SNIPPET_MAX = 140;
+const snippet = (v: unknown) =>
+  typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, SNIPPET_MAX) : '';
+
+/** Chats per page of the chat list, and Unipile requests per /chats/history call (the rest continue by cursor). */
+export const HISTORY_CHATS_PAGE = 40;
+export const HISTORY_UPSTREAM_PER_CALL = 24;
+
+interface HistoryState {
+  /** only messages after this (ISO); none reads the whole history */
+  a?: string;
+  /** the chat list's next page: undefined before the first page, null once every page is read */
+  c?: string | null;
+  /** chats from the current page still to read: id, the other person's member id, their name, a message cursor */
+  q: { id: string; m: string; n?: string; k?: string }[];
+}
+
+/**
+ * The student's 1:1 LinkedIn chats and their messages, the whole history or since `after`: per chat the other
+ * person's member id and, per message, its id, time, direction and a short snippet. Groups, channels, ads, events
+ * and hidden or deleted messages are left out. One call makes at most HISTORY_UPSTREAM_PER_CALL requests to Unipile
+ * (whose chats and messages are synced on its side, so reading them costs LinkedIn nothing); `cursor` continues the
+ * read and is null once everything was read. A chat cut off mid-way comes back in the next call with its remaining
+ * messages. `latest` is the newest message time in this call.
+ */
+async function unipileChatHistory(deps: ConnectorDeps, body: Record<string, unknown>, doFetch: typeof fetch) {
+  const accountId = String(body.accountId ?? '');
+  let st: HistoryState;
+  if (body.cursor) {
+    const open = await openCursor<HistoryState>(deps, accountId, body.cursor);
+    if (!open || !Array.isArray(open.q))
+      return { ok: false, reason: 'bad_cursor', message: 'That read cannot be continued. Start it again.' };
+    st = open;
+  } else {
+    const parsed = typeof body.after === 'string' ? new Date(body.after) : undefined;
+    st = { q: [], ...(parsed && !Number.isNaN(parsed.getTime()) ? { a: parsed.toISOString() } : {}) };
+  }
+  const out = new Map<
+    string,
+    {
+      chatId: string;
+      memberId: string;
+      name?: string;
+      messages: { id: string; at: string; out: boolean; text: string }[];
+    }
+  >();
+  let latest: string | undefined;
+  let groups = 0;
+  let budget = HISTORY_UPSTREAM_PER_CALL;
+  while (budget > 0) {
+    if (!st.q.length) {
+      if (st.c === null) break;
+      const q = new URLSearchParams({
+        account_id: accountId,
+        account_type: 'LINKEDIN',
+        limit: String(HISTORY_CHATS_PAGE),
+      });
+      if (st.c) q.set('cursor', st.c);
+      else if (st.a) q.set('after', st.a);
+      budget--;
+      const res = await doFetch(`${deps.unipileBase}/api/v1/chats?${q}`, { headers: uHeaders(deps) });
+      if (!res.ok) throw new Error(`unipile ${res.status}`);
+      const b = (await res.json()) as { items?: Record<string, unknown>[]; cursor?: string | null };
+      st.c = typeof b.cursor === 'string' && b.cursor ? b.cursor : null;
+      for (const c of b.items ?? []) {
+        const one = typeof c.id === 'string' ? oneToOne(c) : undefined;
+        if (!one) {
+          groups++;
+          continue;
+        }
+        st.q.push({ id: c.id as string, m: one.providerId, ...(one.name ? { n: one.name } : {}) });
+      }
+      continue;
+    }
+    const chat = st.q[0]!;
+    const q = new URLSearchParams({ limit: '250' });
+    if (chat.k) q.set('cursor', chat.k);
+    else if (st.a) q.set('after', st.a);
+    budget--;
+    const res = await doFetch(
+      `${deps.unipileBase}/api/v1/chats/${encodeURIComponent(chat.id)}/messages?${q}`,
+      { headers: uHeaders(deps) },
+    );
+    if (res.status === 404) {
+      // the chat is gone: nothing to read
+      st.q.shift();
+      continue;
+    }
+    if (!res.ok) throw new Error(`unipile ${res.status}`);
+    const b = (await res.json()) as { items?: Record<string, unknown>[]; cursor?: string | null };
+    const entry = out.get(chat.id) ?? {
+      chatId: chat.id,
+      memberId: chat.m,
+      ...(chat.n ? { name: chat.n } : {}),
+      messages: [],
+    };
+    for (const m of b.items ?? []) {
+      const at = isoDate(m.timestamp);
+      if (!at || !isWritten(m) || typeof m.id !== 'string') continue;
+      if (!latest || at > latest) latest = at;
+      entry.messages.push({
+        id: m.id,
+        at,
+        out: m.is_sender === 1 || m.is_sender === true,
+        text: snippet(m.text),
+      });
+    }
+    out.set(chat.id, entry);
+    chat.k = typeof b.cursor === 'string' && b.cursor ? b.cursor : undefined;
+    if (!chat.k) st.q.shift();
+  }
+  const done = !st.q.length && st.c === null;
+  return {
+    chats: [...out.values()].filter((c) => c.messages.length),
+    latest: latest ?? null,
+    groups,
+    cursor: done ? null : await sealCursor(deps, accountId, st),
+  };
+}
+
+/** Posts of the student's whose comments and reactions are read: the most recent ones, one page. */
+export const POSTS_MAX = 20;
+/** Unipile requests per /posts/activity call; each is a LinkedIn read, so few. */
+export const POSTS_UPSTREAM_PER_CALL = 8;
+/** Without `commentsSince`, the student's own comments are read back this far. */
+export const OWN_COMMENTS_DAYS = 365;
+
+/**
+ * A comment's date as Unipile gives it: ISO text, epoch time, or LinkedIn's relative form ("3d", "2w", "5mo",
+ * "1yr", "4h", "now"), read against `now`. Undefined when it is none of those.
+ */
+export function postDate(v: unknown, now: Date): string | undefined {
+  const exact = isoDate(v);
+  if (exact) return exact;
+  if (typeof v !== 'string') return undefined;
+  const t = v.trim().toLowerCase();
+  if (t === 'now' || t === 'just now') return now.toISOString();
+  const m = /^(\d+)\s*(s|sec|m|min|h|hr|d|w|wk|mo|y|yr)s?(?:\s+ago)?$/.exec(t);
+  if (!m) return undefined;
+  const n = Number(m[1]);
+  const unit = { s: 1e3, sec: 1e3, m: 6e4, min: 6e4, h: 36e5, hr: 36e5, d: 864e5, w: 6048e5, wk: 6048e5 }[
+    m[2] as 's'
+  ];
+  const d = new Date(now);
+  if (unit) d.setTime(d.getTime() - n * unit);
+  else if (m[2] === 'mo') d.setUTCMonth(d.getUTCMonth() - n);
+  else d.setUTCFullYear(d.getUTCFullYear() - n);
+  return d.toISOString();
+}
+
+/** A post id `GET /posts/{id}` reads: an activity URN becomes its number, other URNs stay as they are. */
+function postLookupId(v: string): string {
+  const m = /^urn:li:activity:(\d+)$/.exec(v);
+  return m ? m[1]! : v;
+}
+
+interface PostTask {
+  /** comments ('c') or reactions ('r') on one of the student's posts, or who wrote a post the student commented on ('a') */
+  t: 'c' | 'r' | 'a';
+  /** the post: its social id (c, r) or the id to look it up by (a) */
+  s: string;
+  /** the post's time (c, r), the fallback date for what is on it */
+  at?: string;
+  /** the post's counters when it was listed: "comments:reactions" */
+  sig?: string;
+  /** Unipile's cursor within the post */
+  k?: string;
+  /** a: the student's comments on that post */
+  cm?: { id: string; at?: string; text: string }[];
+}
+
+interface PostState {
+  /** the student's own member id */
+  me: string;
+  q: PostTask[];
+  /** the student's own comments still to page through (undefined once done); `since` stops paging at older ones */
+  own?: { k?: string; since?: string };
+  /** the student's own posts (social ids), so a comment on one is not read as a comment on someone else's */
+  mine: string[];
+}
+
+type PostItem = {
+  kind: 'comment_in' | 'reaction_in' | 'comment_out';
+  /** the other person's LinkedIn member id */
+  memberId: string;
+  at: string;
+  /** stable per comment, or per post and person for a reaction */
+  id: string;
+  postId: string;
+  text?: string;
+};
+
+/**
+ * Engagement on LinkedIn posts: who commented on and reacted to the student's recent posts (POSTS_MAX, newest
+ * first; a post whose counters match `seen[socialId]` was read before and is skipped), and the student's own comments
+ * on other people's posts (back to `commentsSince`, else a year), each with the post author found by one lookup per
+ * post.
+ * Reactions carry no time on LinkedIn, so they take the post's. Replies under comments are not read. `cursor`
+ * continues the read and is null once everything was read; `postsRead` are the posts finished in this call (with the
+ * counters to pass as `seen` next time) and `ownDone` says the student's comments were read to the end.
+ */
+async function unipilePostActivity(
+  deps: ConnectorDeps,
+  body: Record<string, unknown>,
+  doFetch: typeof fetch,
+  now: Date,
+) {
+  const accountId = String(body.accountId ?? '');
+  const acct = encodeURIComponent(accountId);
+  const get = async (path: string) =>
+    doFetch(`${deps.unipileBase}${path}${path.includes('?') ? '&' : '?'}account_id=${acct}`, {
+      headers: uHeaders(deps),
+    });
+  let budget = POSTS_UPSTREAM_PER_CALL;
+  let st: PostState;
+  let olderPosts = false;
+  /** posts whose comments and reactions were read to the end in this call, with the counters they were listed at */
+  const finished = new Map<string, string>();
+  if (body.cursor) {
+    const open = await openCursor<PostState>(deps, accountId, body.cursor);
+    if (!open || !Array.isArray(open.q) || !open.me)
+      return { ok: false, reason: 'bad_cursor', message: 'That read cannot be continued. Start it again.' };
+    st = open;
+  } else {
+    budget -= 2;
+    const meRes = await get('/api/v1/users/me');
+    if (!meRes.ok) throw new Error(`unipile ${meRes.status}`);
+    const me = String(((await meRes.json()) as { provider_id?: unknown }).provider_id ?? '');
+    if (!me) throw new Error('unipile gave no member id for the account');
+    const postsRes = await get(`/api/v1/users/${encodeURIComponent(me)}/posts?limit=${POSTS_MAX}`);
+    if (!postsRes.ok) throw new Error(`unipile ${postsRes.status}`);
+    const pb = (await postsRes.json()) as { items?: Record<string, unknown>[]; cursor?: string | null };
+    olderPosts = !!pb.cursor;
+    const seen = body.seen && typeof body.seen === 'object' ? (body.seen as Record<string, unknown>) : {};
+    // the student's own comments since the last read; the first read goes back a year
+    const since =
+      typeof body.commentsSince === 'string' && !Number.isNaN(Date.parse(body.commentsSince))
+        ? new Date(body.commentsSince).toISOString()
+        : new Date(now.getTime() - OWN_COMMENTS_DAYS * 86_400_000).toISOString();
+    st = { me, q: [], mine: [], own: { since } };
+    for (const p of pb.items ?? []) {
+      const socialId = typeof p.social_id === 'string' ? p.social_id : undefined;
+      if (!socialId) continue;
+      st.mine.push(socialId);
+      if (typeof p.id === 'string' || typeof p.id === 'number') st.mine.push(String(p.id));
+      const comments = Number(p.comment_counter ?? 0) || 0;
+      const reactions = Number(p.reaction_counter ?? 0) || 0;
+      const sig = `${comments}:${reactions}`;
+      if (seen[socialId] === sig) continue;
+      const at = postDate(p.parsed_datetime, now) ?? postDate(p.date, now);
+      if (comments > 0) st.q.push({ t: 'c', s: socialId, at, sig });
+      if (reactions > 0) st.q.push({ t: 'r', s: socialId, at, sig });
+      // nothing on it yet: read as it is
+      if (!comments && !reactions) finished.set(socialId, sig);
+    }
+  }
+  const items: PostItem[] = [];
+  let ownDone = false;
+  const finish = (task: PostTask) => {
+    st.q.shift();
+    if (task.t !== 'a' && task.sig) finished.set(task.s, task.sig);
+  };
+  while (budget > 0) {
+    const task = st.q[0];
+    if (!task) {
+      if (!st.own) break;
+      // the student's own comments, newest first, back to `since`
+      budget--;
+      const q = new URLSearchParams({ limit: '100' });
+      if (st.own.k) q.set('cursor', st.own.k);
+      const res = await get(`/api/v1/users/${encodeURIComponent(st.me)}/comments?${q}`);
+      if (!res.ok) throw new Error(`unipile ${res.status}`);
+      const b = (await res.json()) as { items?: Record<string, unknown>[]; cursor?: string | null };
+      const byPost = new Map<string, PostTask>();
+      let older = false;
+      for (const c of b.items ?? []) {
+        const at = postDate(c.date, now);
+        if (st.own.since && at && at < st.own.since) {
+          older = true;
+          continue;
+        }
+        const post = [c.post_urn, c.post_id].find((x): x is string => typeof x === 'string' && !!x);
+        if (
+          !post ||
+          typeof c.id !== 'string' ||
+          st.mine.includes(post) ||
+          st.mine.includes(postLookupId(post))
+        )
+          continue;
+        const task = byPost.get(post) ?? { t: 'a' as const, s: post, cm: [] };
+        task.cm!.push({ id: c.id, ...(at ? { at } : {}), text: snippet(c.text) });
+        byPost.set(post, task);
+      }
+      st.q.push(...byPost.values());
+      const next = typeof b.cursor === 'string' && b.cursor ? b.cursor : undefined;
+      if (next && !older) st.own.k = next;
+      else {
+        st.own = undefined;
+        ownDone = true;
+      }
+      continue;
+    }
+    budget--;
+    if (task.t === 'a') {
+      // who wrote the post the student commented on
+      const res = await get(`/api/v1/posts/${encodeURIComponent(postLookupId(task.s))}`);
+      st.q.shift();
+      if (res.status === 404 || res.status === 422) continue;
+      if (!res.ok) throw new Error(`unipile ${res.status}`);
+      const p = (await res.json()) as { author?: Record<string, unknown>; parsed_datetime?: unknown };
+      const author = typeof p.author?.id === 'string' ? p.author.id : '';
+      if (!author || p.author?.is_company === true || author === st.me) continue;
+      const postAt = postDate(p.parsed_datetime, now);
+      for (const c of task.cm ?? []) {
+        const at = c.at ?? postAt;
+        if (!at) continue;
+        items.push({ kind: 'comment_out', memberId: author, at, id: c.id, postId: task.s, text: c.text });
+      }
+      continue;
+    }
+    const q = new URLSearchParams({ limit: '100' });
+    if (task.k) q.set('cursor', task.k);
+    const path = `/api/v1/posts/${encodeURIComponent(task.s)}/${task.t === 'c' ? 'comments' : 'reactions'}?${q}`;
+    const res = await get(path);
+    if (res.status === 404) {
+      finish(task);
+      continue;
+    }
+    if (!res.ok) throw new Error(`unipile ${res.status}`);
+    const b = (await res.json()) as {
+      items?: Record<string, unknown>[];
+      cursor?: string | null;
+      paging?: { cursor?: string | null };
+    };
+    for (const it of b.items ?? []) {
+      if (task.t === 'c') {
+        const d = (it.author_details ?? {}) as Record<string, unknown>;
+        const who = typeof d.id === 'string' ? d.id : '';
+        if (!who || who === st.me || typeof it.id !== 'string') continue;
+        const at = postDate(it.date, now) ?? task.at;
+        if (!at) continue;
+        items.push({
+          kind: 'comment_in',
+          memberId: who,
+          at,
+          id: it.id,
+          postId: task.s,
+          text: snippet(it.text),
+        });
+      } else {
+        const a = (it.author ?? {}) as Record<string, unknown>;
+        const who = typeof a.id === 'string' ? a.id : '';
+        if (!who || who === st.me || String(a.type ?? '').toUpperCase() === 'COMPANY' || !task.at) continue;
+        items.push({
+          kind: 'reaction_in',
+          memberId: who,
+          at: task.at,
+          id: `${task.s}:${who}`,
+          postId: task.s,
+        });
+      }
+    }
+    const next = [b.paging?.cursor, b.cursor].find((x): x is string => typeof x === 'string' && !!x);
+    if (next) task.k = next;
+    else finish(task);
+  }
+  // a post is read once neither its comments nor its reactions are still waiting
+  const postsRead = [...finished]
+    .filter(([s]) => !st.q.some((t) => t.s === s && t.t !== 'a'))
+    .map(([socialId, seen]) => ({ socialId, seen }));
+  const done = !st.q.length && !st.own;
+  return {
+    ok: true,
+    items,
+    postsRead,
+    ownDone,
+    olderPosts,
+    cursor: done ? null : await sealCursor(deps, accountId, st),
+  };
 }
 
 /** The first LinkedIn search-parameter id for a name ("Goldman Sachs" -> its company id), if LinkedIn knows it. */

@@ -59,18 +59,38 @@ async function seed() {
   } satisfies CoffeeChat);
 }
 
-/** The proxy's /inbox answer, and the request bodies it was asked with. */
-function fakeInbox(messages: unknown[], latest: string) {
-  const asked: { after: string; token: string }[] = [];
+/** The proxy's /inbox answers (one per call, the last one repeated), and the request bodies it was asked with. */
+function fakeInbox(messages: unknown[], latest: string, more: Record<string, unknown>[] = []) {
+  const asked: { after: string; token: string; cursor?: string }[] = [];
+  const pages = [{ messages, latest, more: false, cursor: null, complete: true }, ...more];
   const doFetch = (async (url: string, init?: RequestInit) => {
     expect(url).toMatch(/\/inbox$/);
     asked.push(JSON.parse(String(init?.body)));
-    return new Response(JSON.stringify({ messages, latest, more: false }), {
+    const page = pages[Math.min(asked.length - 1, pages.length - 1)];
+    return new Response(JSON.stringify(page), {
       status: 200,
       headers: { 'content-type': 'application/json' },
     });
   }) as typeof fetch;
   return { doFetch, asked };
+}
+
+/** Orbit itself sent the outreach on LinkedIn (through Unipile), before her reply. */
+async function sentByOrbit() {
+  await db.outbound.put({
+    id: 'out_1',
+    userId: user.id,
+    personId: 'p_maya',
+    chatId: 'c_maya',
+    channel: 'linkedin',
+    kind: 'outreach',
+    bodyDraft: mine.text,
+    bodyFinal: mine.text,
+    status: 'sent',
+    sentAt: SENT,
+    providerMessageId: 'li_msg_1',
+    generatedBy: 'template',
+  } as never);
 }
 
 const mine = {
@@ -117,7 +137,8 @@ describe('LinkedIn replies', () => {
     setUnipileUrlForTests(undefined);
   });
 
-  it('a reply from someone the student wrote to moves their chat on, once, and strangers are left alone', async () => {
+  it('a reply to an outreach Orbit sent on LinkedIn moves their chat on, once, and strangers are left alone', async () => {
+    await sentByOrbit();
     const latest = '2026-10-19T10:00:00.000Z';
     const first = fakeInbox([mine, hers, stranger], latest);
     const r = await syncLinkedInReplies(user, { now: NOW, fetch: first.doFetch });
@@ -153,12 +174,110 @@ describe('LinkedIn replies', () => {
     ).toHaveLength(1);
   });
 
-  it('matches by name only for someone the student writes to on LinkedIn, and keeps the member id', async () => {
+  it('a reply to an outreach the student sent by hand is proposed for them to confirm, and both messages are touches', async () => {
+    const r = await syncLinkedInReplies(user, {
+      now: NOW,
+      fetch: fakeInbox([mine, hers], hers.at).doFetch,
+    });
+    expect(r).toEqual({ ok: true, replies: 1, people: ['Maya'] });
+    const chat = (await db.chats.get('c_maya'))!;
+    // Orbit cannot be sure what her message answers: the student confirms it
+    expect(chat.stage).toBe('outreach_sent');
+    expect(chat.lastInboundAt).toBe(hers.at);
+    const events = await db.stageEvents.where('chatId').equals('c_maya').toArray();
+    expect(events.map((e) => [e.toStage, e.status, e.confidence])).toEqual([['replied', 'proposed', 0.7]]);
+    // her message and the student's are part of their history, one touch per day each way
+    const tps = await db.touchpoints.where('personId').equals('p_maya').toArray();
+    expect(tps.map((t) => [t.kind, t.occurredAt]).sort()).toEqual([
+      ['linkedin_in', hers.at],
+      ['linkedin_out', mine.at],
+    ]);
+    // nothing invented: no "They replied" touch next to the real message
+    expect(tps.some((t) => t.refTable === 'stage_evidence')).toBe(false);
+  });
+
+  it('a message from before the outreach is no reply, and an old conversation never starts a chat', async () => {
+    // she wrote first (a day before the student's note): that answers nothing
+    const early = { ...hers, id: 'm0', at: '2026-10-14T09:00:00.000Z' };
+    const r = await syncLinkedInReplies(user, { now: NOW, fetch: fakeInbox([early], early.at).doFetch });
+    expect(r).toEqual({ ok: true, replies: 0, people: [] });
+    const waiting = (await db.chats.get('c_maya'))!;
+    expect(waiting.stage).toBe('outreach_sent');
+    expect(waiting.lastInboundAt).toBeUndefined();
+    expect(await db.notifications.where('userId').equals(user.id).count()).toBe(0);
+    expect(await db.stageEvents.count()).toBe(0);
+    // ...but it is still a message between them, for closeness
+    expect((await db.touchpoints.where('personId').equals('p_maya').toArray()).map((t) => t.kind)).toEqual([
+      'linkedin_in',
+    ]);
+
+    // a chat opened today, "To contact": an exchange from three weeks ago is history, not its outreach or a reply
+    await db.chats.update('c_maya', {
+      stage: 'identified',
+      stageEnteredAt: NOW.toISOString(),
+      firstOutreachAt: undefined,
+      lastOutboundAt: undefined,
+      createdAt: '2026-10-20T08:00:00.000Z',
+    });
+    await db.integrations.update('int_li', { syncState: { rows: 120 } });
+    const oldMine = { ...mine, id: 'o1', at: '2026-09-28T10:00:00.000Z' };
+    const oldHers = { ...hers, id: 'o2', at: '2026-09-29T10:00:00.000Z' };
+    const again = await syncLinkedInReplies(user, {
+      now: NOW,
+      fetch: fakeInbox([oldMine, oldHers], oldHers.at).doFetch,
+    });
+    expect(again).toEqual({ ok: true, replies: 0, people: [] });
+    const fresh = (await db.chats.get('c_maya'))!;
+    expect(fresh.stage).toBe('identified');
+    expect(fresh.firstOutreachAt ?? fresh.lastOutboundAt).toBeUndefined();
+    expect(await db.stageEvents.count()).toBe(0);
+  });
+
+  it('never matches by name: a namesake gets no reply and no member id', async () => {
     await db.people.update('p_maya', { linkedinMemberId: undefined });
     const byName = { ...hers, counterpart: { providerId: 'ACo_new', name: 'Maya  Chen' } };
     const r = await syncLinkedInReplies(user, { now: NOW, fetch: fakeInbox([byName], hers.at).doFetch });
-    expect(r).toMatchObject({ ok: true, replies: 1 });
-    expect((await db.people.get('p_maya'))!.linkedinMemberId).toBe('ACo_new');
+    expect(r).toEqual({ ok: true, replies: 0, people: [] });
+    expect((await db.people.get('p_maya'))!.linkedinMemberId).toBeUndefined();
+    expect((await db.chats.get('c_maya'))!.stage).toBe('outreach_sent');
+    expect(await db.touchpoints.count()).toBe(0);
+  });
+
+  it('reads on with the cursor, and keeps the checkpoint when the read could not finish', async () => {
+    await sentByOrbit();
+    // two calls: the newest messages first, then the older ones through the cursor
+    const paged = fakeInbox([hers], hers.at, [
+      { messages: [mine], latest: mine.at, cursor: null, complete: true },
+    ]);
+    await db.integrations.update('int_li', { syncState: { rows: 120 } });
+    const pages = paged.doFetch;
+    const firstCall = (async (url: string, init?: RequestInit) => {
+      const res = await pages(url, init);
+      const body = await res.json();
+      // the first answer says more are waiting
+      return new Response(JSON.stringify(paged.asked.length === 1 ? { ...body, cursor: 'c2' } : body), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as typeof fetch;
+    expect(await syncLinkedInReplies(user, { now: NOW, fetch: firstCall })).toMatchObject({ replies: 1 });
+    expect(paged.asked.map((a) => a.cursor)).toEqual([undefined, 'c2']);
+    expect((await db.integrations.get('int_li'))!.syncState).toMatchObject({ repliesAfter: hers.at });
+
+    // a read some of whose messages could not be placed: what was read counts, the checkpoint stays put
+    const before = (await db.integrations.get('int_li'))!.syncState as { repliesAfter: string };
+    const partial = fakeInbox([], NOW.toISOString());
+    const broken = (async (url: string, init?: RequestInit) => {
+      await partial.doFetch(url, init);
+      return new Response(
+        JSON.stringify({ messages: [], latest: NOW.toISOString(), cursor: null, complete: false }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    }) as typeof fetch;
+    await syncLinkedInReplies(user, { now: NOW, fetch: broken });
+    expect((await db.integrations.get('int_li'))!.syncState).toMatchObject({
+      repliesAfter: before.repliesAfter,
+    });
   });
 
   it('says LinkedIn is not connected when it is not', async () => {

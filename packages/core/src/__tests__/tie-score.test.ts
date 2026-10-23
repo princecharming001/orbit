@@ -48,7 +48,7 @@ describe('tie score anchors (§3.7)', () => {
     const fit = fitTieWeights(rows, {
       ridge: 0.1,
       rangePenalty: 10,
-      fixed: ['intros', 'structural', 'warmth'],
+      fixed: ['intros', 'structural', 'warmth', 'engagement'],
       bounds: {
         time: [0.2, Number.POSITIVE_INFINITY],
         recency: [0, Number.POSITIVE_INFINITY],

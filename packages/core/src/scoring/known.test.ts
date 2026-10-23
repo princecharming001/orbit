@@ -44,4 +44,17 @@ describe('people the student knows', () => {
     expect(isKnownContact(person({ isHuman: false }))).toBe(false);
     expect(isKnownContact(person({ hiddenAt: '2026-01-01' }))).toBe(false);
   });
+
+  it('counts LinkedIn comments and reactions only when they go both ways or sit next to messages (plan 17 B)', () => {
+    const counts = (c: Record<string, number>) =>
+      person({ strengthBreakdown: { raw: 0.1, recency: 1, counts: c } });
+    // an audience: reacts to and comments on every post, never more
+    expect(isKnownContact(counts({ linkedin_reaction_in: 40, linkedin_comment_in: 3 }))).toBe(false);
+    // the student comments on their posts and nothing comes back
+    expect(isKnownContact(counts({ linkedin_comment_out: 2 }))).toBe(false);
+    // comments both ways, or engagement next to a direct message the other way
+    expect(isKnownContact(counts({ linkedin_comment_in: 1, linkedin_comment_out: 1 }))).toBe(true);
+    expect(isKnownContact(counts({ linkedin_reaction_in: 2, linkedin_out: 1 }))).toBe(true);
+    expect(isKnownContact(counts({ linkedin_comment_out: 1, linkedin_in: 1 }))).toBe(true);
+  });
 });

@@ -1,5 +1,5 @@
 import type { Person } from '../types';
-import { isReciprocal } from './strength';
+import { engagedBothWays, isReciprocal } from './strength';
 
 /** A name part a person really has: two letters or more, letters only (and the odd apostrophe, dash or dot). */
 const NAME_PART = /^[\p{L}][\p{L}'’.-]*[\p{L}]$/u;
@@ -20,7 +20,7 @@ export function hasRealName(p: Pick<Person, 'firstName' | 'lastName' | 'displayN
 /**
  * Someone the student actually knows: named, and with real history: they wrote to each other, met, were introduced,
  * are connected on LinkedIn, or the student added them or is working on a chat with them. Mail that only ever came
- * in (a newsletter, a cold pitch) is not history.
+ * in (a newsletter, a cold pitch) is not history, and neither is someone who only reacts to the student's posts.
  */
 export function isKnownContact(
   p: Pick<
@@ -42,5 +42,6 @@ export function isKnownContact(
   if (p.sources?.some((s) => s === 'manual' || s === 'tracker_import' || s === 'linkedin_csv')) return true;
   // kept on Orbit's server (account mode): the history lives there, and its tie score is the evidence
   if (!p.strengthBreakdown && (p.tieScore ?? 0) > 0) return true;
-  return isReciprocal(p.strengthBreakdown?.counts);
+  // comments and reactions on LinkedIn posts count only when they go both ways or sit next to direct messages
+  return isReciprocal(p.strengthBreakdown?.counts) || engagedBothWays(p.strengthBreakdown?.counts);
 }

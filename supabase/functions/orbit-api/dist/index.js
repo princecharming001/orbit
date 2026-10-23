@@ -7066,6 +7066,14 @@ var memoryRoutes = {
   "/memory/extract": { method: "POST", auth: true, run: extract }
 };
 
+// packages/core/src/scoring/strength.ts
+var ENGAGEMENT = /* @__PURE__ */ new Set([
+  "linkedin_comment_in",
+  "linkedin_comment_out",
+  "linkedin_reaction_in"
+]);
+var AMBIENT = /* @__PURE__ */ new Set(["email_cc", "linkedin_connected", ...ENGAGEMENT]);
+
 // packages/core/src/scoring/tieScore.ts
 var TIE_BAND_LABELS = {
   faint: "Faint",

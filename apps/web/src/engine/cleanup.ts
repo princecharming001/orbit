@@ -14,6 +14,7 @@ import type { User } from '@orbit/core';
 import { recomputePersonStrength } from '../db/repo';
 import { db } from '../db/schema';
 import { DEMO_USER_ID } from './demo';
+import { repairFalseReplies } from './replyRepair';
 
 export const CLEANUP_VERSION = '2026-10-22';
 const OUTBOUND = new Set(['email_out', 'linkedin_out', 'text_out', 'meeting', 'manual_log']);
@@ -27,6 +28,8 @@ export interface CleanupStats {
 
 export async function cleanUpGuesses(user: User, now = new Date()): Promise<CleanupStats | undefined> {
   if (user.id === DEMO_USER_ID) return undefined;
+  // its own once-only repair: false "they replied" moves and the touches they invented (plan 17 B)
+  await repairFalseReplies(user, now).catch(() => undefined);
   const key = `cleanup:${CLEANUP_VERSION}:${user.id}`;
   if (await db.kv.get(key)) return undefined;
   const stats: CleanupStats = { chats: 0, alumni: 0, people: 0, demoRows: 0 };

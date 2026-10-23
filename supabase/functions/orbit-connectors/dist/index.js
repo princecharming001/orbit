@@ -369,6 +369,10 @@ function searchBucket(accountId, now, perDay) {
   const b = sendBucket(accountId, now, perDay);
   return { ...b, key: b.key.replace("connectors:send:", "connectors:search:") };
 }
+function postReadsBucket(accountId, now, perDay) {
+  const b = sendBucket(accountId, now, perDay);
+  return { ...b, key: b.key.replace("connectors:send:", "connectors:posts:") };
+}
 var INVITE_NOTE_MAX = 300;
 function cors(origin, allowed) {
   if (!origin || !allowed) return { Vary: "Origin" };
@@ -429,7 +433,9 @@ var UNIPILE_ROUTES = /* @__PURE__ */ new Set([
   "/send",
   "/inbox",
   "/search",
-  "/me"
+  "/me",
+  "/chats/history",
+  "/posts/activity"
 ]);
 var ACCOUNT_ROUTES = /* @__PURE__ */ new Set([
   "/relations",
@@ -438,7 +444,9 @@ var ACCOUNT_ROUTES = /* @__PURE__ */ new Set([
   "/send",
   "/inbox",
   "/search",
-  "/me"
+  "/me",
+  "/chats/history",
+  "/posts/activity"
 ]);
 function makeHandler(deps) {
   const doFetch = deps.fetch ?? fetch;
@@ -541,6 +549,26 @@ function makeHandler(deps) {
           h
         );
     }
+    if (path === "/posts/activity") {
+      let postsVerdict;
+      try {
+        postsVerdict = await take([
+          postReadsBucket(String(body.accountId), now(), deps.postReadsPerDay ?? 12)
+        ]);
+      } catch {
+        return json(503, { error: "unavailable right now" }, h);
+      }
+      if (!postsVerdict.allowed)
+        return json(
+          200,
+          {
+            ok: false,
+            reason: "limit",
+            message: "Orbit has read as many LinkedIn posts as it allows today. It reads the rest tomorrow."
+          },
+          h
+        );
+    }
     try {
       if (isVillage) return json(200, await villagePaths(village, deps.villageUser, body), h);
       if (path === "/connect/start")
@@ -557,6 +585,9 @@ function makeHandler(deps) {
       if (path === "/inbox") return json(200, await unipileInbox(deps, body, doFetch), h);
       if (path === "/search") return json(200, await unipileSearch(deps, body, doFetch), h);
       if (path === "/me") return json(200, await unipileMe(deps, body, doFetch), h);
+      if (path === "/chats/history") return json(200, await unipileChatHistory(deps, body, doFetch), h);
+      if (path === "/posts/activity")
+        return json(200, await unipilePostActivity(deps, body, doFetch, now()), h);
       return json(200, await unipileDisconnect(deps, body, doFetch), h);
     } catch (e) {
       return json(502, { error: e instanceof Error ? e.message : "upstream error" }, h);
@@ -806,6 +837,8 @@ async function unipileMe(deps, body, doFetch) {
     lastName: str(me.last_name),
     headline: str(me.headline) ?? str(me.occupation),
     publicIdentifier: str(me.public_identifier),
+    // the student's own LinkedIn member id: their messages and comments carry it
+    providerId: str(me.provider_id),
     picture
   };
 }
@@ -842,16 +875,27 @@ async function unipileMutuals(deps, body, doFetch) {
 }
 var INBOX_MAX_PAGES = 4;
 var INBOX_MAX_CHATS = 40;
+var INBOX_CHAT_PAGES = 2;
 var INBOX_DEFAULT_DAYS = 30;
+function oneToOne(c) {
+  const type = c.type === void 0 || c.type === null ? 0 : Number(c.type);
+  if (type !== 0) return void 0;
+  if (c.content_type === "sponsored" || c.content_type === "linkedin_offer") return void 0;
+  const providerId = typeof c.attendee_provider_id === "string" ? c.attendee_provider_id.trim() : "";
+  if (!providerId) return void 0;
+  return { providerId, name: typeof c.name === "string" && c.name.trim() ? c.name.trim() : void 0 };
+}
+var isWritten = (m) => !m.hidden && !m.deleted && !m.is_event;
 async function unipileInbox(deps, body, doFetch) {
   const accountId = String(body.accountId ?? "");
   const parsed = typeof body.after === "string" ? new Date(body.after) : void 0;
   const after = parsed && !Number.isNaN(parsed.getTime()) ? parsed : new Date(Date.now() - INBOX_DEFAULT_DAYS * 864e5);
   const raw = [];
-  let cursor;
+  let cursor = typeof body.cursor === "string" && body.cursor ? body.cursor : void 0;
   for (let page = 0; page < INBOX_MAX_PAGES; page++) {
-    const q = new URLSearchParams({ account_id: accountId, after: after.toISOString(), limit: "250" });
+    const q = new URLSearchParams({ account_id: accountId, limit: "250" });
     if (cursor) q.set("cursor", cursor);
+    else q.set("after", after.toISOString());
     const res = await doFetch(`${deps.unipileBase}/api/v1/messages?${q}`, { headers: uHeaders(deps) });
     if (!res.ok) throw new Error(`unipile ${res.status}`);
     const b = await res.json();
@@ -860,22 +904,46 @@ async function unipileInbox(deps, body, doFetch) {
     if (!cursor) break;
   }
   const kept = raw.filter(
-    (m) => !m.hidden && !m.deleted && !m.is_event && typeof m.chat_id === "string" && typeof m.text === "string" && m.text.trim()
+    (m) => isWritten(m) && typeof m.chat_id === "string" && typeof m.text === "string" && m.text.trim()
   );
-  const chatIds = [...new Set(kept.map((m) => String(m.chat_id)))].slice(0, INBOX_MAX_CHATS);
   const chats = /* @__PURE__ */ new Map();
-  for (const id of chatIds) {
+  const wanted = new Set(kept.map((m) => String(m.chat_id)));
+  let chatCursor;
+  for (let page = 0; page < INBOX_CHAT_PAGES && wanted.size > 0; page++) {
+    const q = new URLSearchParams({ account_id: accountId, limit: "250" });
+    if (chatCursor) q.set("cursor", chatCursor);
+    else q.set("after", after.toISOString());
+    const res = await doFetch(`${deps.unipileBase}/api/v1/chats?${q}`, { headers: uHeaders(deps) });
+    if (!res.ok) break;
+    const b = await res.json();
+    for (const c of b.items ?? []) {
+      if (typeof c.id !== "string") continue;
+      const one = oneToOne(c);
+      chats.set(c.id, one ? { ...one, group: false } : { group: true });
+    }
+    if ([...wanted].every((id) => chats.has(id))) break;
+    chatCursor = typeof b.cursor === "string" && b.cursor ? b.cursor : void 0;
+    if (!chatCursor) break;
+  }
+  let unattributed = 0;
+  let lookups = 0;
+  for (const id of wanted) {
+    if (chats.has(id)) continue;
+    if (lookups >= INBOX_MAX_CHATS) {
+      unattributed += kept.filter((m) => m.chat_id === id).length;
+      continue;
+    }
+    lookups++;
     const res = await doFetch(`${deps.unipileBase}/api/v1/chats/${encodeURIComponent(id)}`, {
       headers: uHeaders(deps)
     });
-    if (!res.ok) continue;
+    if (!res.ok) {
+      if (res.status !== 404) unattributed += kept.filter((m) => m.chat_id === id).length;
+      continue;
+    }
     const c = await res.json();
-    chats.set(id, {
-      providerId: c.attendee_provider_id || void 0,
-      name: c.name || void 0,
-      // 0 is a 1:1 chat; groups and channels are not one person's reply
-      group: typeof c.type === "number" && c.type !== 0
-    });
+    const one = oneToOne(c);
+    chats.set(id, one ? { ...one, group: false } : { group: true });
   }
   const messages = kept.filter((m) => {
     const c = chats.get(String(m.chat_id));
@@ -886,14 +954,305 @@ async function unipileInbox(deps, body, doFetch) {
       id: String(m.id),
       chatId: String(m.chat_id),
       text: String(m.text).trim(),
-      at: String(m.timestamp ?? ""),
+      at: isoDate(m.timestamp) ?? String(m.timestamp ?? ""),
       fromMe: m.is_sender === 1 || m.is_sender === true,
       senderId: typeof m.sender_id === "string" ? m.sender_id : void 0,
       counterpart: { providerId: c.providerId, name: c.name }
     };
   });
-  const latest = raw.map((m) => String(m.timestamp ?? "")).filter((t) => !Number.isNaN(Date.parse(t))).sort().at(-1);
-  return { messages, latest: latest ?? null, more: !!cursor };
+  const latest = raw.map((m) => isoDate(m.timestamp)).filter((t) => !!t).sort().at(-1);
+  return {
+    messages,
+    latest: latest ?? null,
+    more: !!cursor,
+    cursor: cursor ?? null,
+    complete: unattributed === 0,
+    unattributed
+  };
+}
+async function sealCursor(deps, accountId, state) {
+  const payload = base64(new TextEncoder().encode(JSON.stringify(state))).replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
+  const sig = await accountToken(`cursor:${accountId}:${payload}`, deps.signingKey);
+  return `${payload}.${sig}`;
+}
+async function openCursor(deps, accountId, cursor) {
+  if (typeof cursor !== "string" || !deps.signingKey) return void 0;
+  const dot = cursor.lastIndexOf(".");
+  if (dot <= 0) return void 0;
+  const payload = cursor.slice(0, dot);
+  if (!await tokenValid(`cursor:${accountId}:${payload}`, cursor.slice(dot + 1), deps.signingKey))
+    return void 0;
+  try {
+    const bin = atob(payload.replace(/-/g, "+").replace(/_/g, "/"));
+    return JSON.parse(new TextDecoder().decode(Uint8Array.from(bin, (ch) => ch.charCodeAt(0))));
+  } catch {
+    return void 0;
+  }
+}
+var SNIPPET_MAX = 140;
+var snippet = (v) => typeof v === "string" ? v.replace(/\s+/g, " ").trim().slice(0, SNIPPET_MAX) : "";
+var HISTORY_CHATS_PAGE = 40;
+var HISTORY_UPSTREAM_PER_CALL = 24;
+async function unipileChatHistory(deps, body, doFetch) {
+  const accountId = String(body.accountId ?? "");
+  let st;
+  if (body.cursor) {
+    const open = await openCursor(deps, accountId, body.cursor);
+    if (!open || !Array.isArray(open.q))
+      return { ok: false, reason: "bad_cursor", message: "That read cannot be continued. Start it again." };
+    st = open;
+  } else {
+    const parsed = typeof body.after === "string" ? new Date(body.after) : void 0;
+    st = { q: [], ...parsed && !Number.isNaN(parsed.getTime()) ? { a: parsed.toISOString() } : {} };
+  }
+  const out = /* @__PURE__ */ new Map();
+  let latest;
+  let groups = 0;
+  let budget = HISTORY_UPSTREAM_PER_CALL;
+  while (budget > 0) {
+    if (!st.q.length) {
+      if (st.c === null) break;
+      const q2 = new URLSearchParams({
+        account_id: accountId,
+        account_type: "LINKEDIN",
+        limit: String(HISTORY_CHATS_PAGE)
+      });
+      if (st.c) q2.set("cursor", st.c);
+      else if (st.a) q2.set("after", st.a);
+      budget--;
+      const res2 = await doFetch(`${deps.unipileBase}/api/v1/chats?${q2}`, { headers: uHeaders(deps) });
+      if (!res2.ok) throw new Error(`unipile ${res2.status}`);
+      const b2 = await res2.json();
+      st.c = typeof b2.cursor === "string" && b2.cursor ? b2.cursor : null;
+      for (const c of b2.items ?? []) {
+        const one = typeof c.id === "string" ? oneToOne(c) : void 0;
+        if (!one) {
+          groups++;
+          continue;
+        }
+        st.q.push({ id: c.id, m: one.providerId, ...one.name ? { n: one.name } : {} });
+      }
+      continue;
+    }
+    const chat = st.q[0];
+    const q = new URLSearchParams({ limit: "250" });
+    if (chat.k) q.set("cursor", chat.k);
+    else if (st.a) q.set("after", st.a);
+    budget--;
+    const res = await doFetch(
+      `${deps.unipileBase}/api/v1/chats/${encodeURIComponent(chat.id)}/messages?${q}`,
+      { headers: uHeaders(deps) }
+    );
+    if (res.status === 404) {
+      st.q.shift();
+      continue;
+    }
+    if (!res.ok) throw new Error(`unipile ${res.status}`);
+    const b = await res.json();
+    const entry = out.get(chat.id) ?? {
+      chatId: chat.id,
+      memberId: chat.m,
+      ...chat.n ? { name: chat.n } : {},
+      messages: []
+    };
+    for (const m of b.items ?? []) {
+      const at = isoDate(m.timestamp);
+      if (!at || !isWritten(m) || typeof m.id !== "string") continue;
+      if (!latest || at > latest) latest = at;
+      entry.messages.push({
+        id: m.id,
+        at,
+        out: m.is_sender === 1 || m.is_sender === true,
+        text: snippet(m.text)
+      });
+    }
+    out.set(chat.id, entry);
+    chat.k = typeof b.cursor === "string" && b.cursor ? b.cursor : void 0;
+    if (!chat.k) st.q.shift();
+  }
+  const done = !st.q.length && st.c === null;
+  return {
+    chats: [...out.values()].filter((c) => c.messages.length),
+    latest: latest ?? null,
+    groups,
+    cursor: done ? null : await sealCursor(deps, accountId, st)
+  };
+}
+var POSTS_MAX = 20;
+var POSTS_UPSTREAM_PER_CALL = 8;
+var OWN_COMMENTS_DAYS = 365;
+function postDate(v, now) {
+  const exact = isoDate(v);
+  if (exact) return exact;
+  if (typeof v !== "string") return void 0;
+  const t = v.trim().toLowerCase();
+  if (t === "now" || t === "just now") return now.toISOString();
+  const m = /^(\d+)\s*(s|sec|m|min|h|hr|d|w|wk|mo|y|yr)s?(?:\s+ago)?$/.exec(t);
+  if (!m) return void 0;
+  const n = Number(m[1]);
+  const unit = { s: 1e3, sec: 1e3, m: 6e4, min: 6e4, h: 36e5, hr: 36e5, d: 864e5, w: 6048e5, wk: 6048e5 }[m[2]];
+  const d = new Date(now);
+  if (unit) d.setTime(d.getTime() - n * unit);
+  else if (m[2] === "mo") d.setUTCMonth(d.getUTCMonth() - n);
+  else d.setUTCFullYear(d.getUTCFullYear() - n);
+  return d.toISOString();
+}
+function postLookupId(v) {
+  const m = /^urn:li:activity:(\d+)$/.exec(v);
+  return m ? m[1] : v;
+}
+async function unipilePostActivity(deps, body, doFetch, now) {
+  const accountId = String(body.accountId ?? "");
+  const acct = encodeURIComponent(accountId);
+  const get = async (path) => doFetch(`${deps.unipileBase}${path}${path.includes("?") ? "&" : "?"}account_id=${acct}`, {
+    headers: uHeaders(deps)
+  });
+  let budget = POSTS_UPSTREAM_PER_CALL;
+  let st;
+  let olderPosts = false;
+  const finished = /* @__PURE__ */ new Map();
+  if (body.cursor) {
+    const open = await openCursor(deps, accountId, body.cursor);
+    if (!open || !Array.isArray(open.q) || !open.me)
+      return { ok: false, reason: "bad_cursor", message: "That read cannot be continued. Start it again." };
+    st = open;
+  } else {
+    budget -= 2;
+    const meRes = await get("/api/v1/users/me");
+    if (!meRes.ok) throw new Error(`unipile ${meRes.status}`);
+    const me = String((await meRes.json()).provider_id ?? "");
+    if (!me) throw new Error("unipile gave no member id for the account");
+    const postsRes = await get(`/api/v1/users/${encodeURIComponent(me)}/posts?limit=${POSTS_MAX}`);
+    if (!postsRes.ok) throw new Error(`unipile ${postsRes.status}`);
+    const pb = await postsRes.json();
+    olderPosts = !!pb.cursor;
+    const seen = body.seen && typeof body.seen === "object" ? body.seen : {};
+    const since = typeof body.commentsSince === "string" && !Number.isNaN(Date.parse(body.commentsSince)) ? new Date(body.commentsSince).toISOString() : new Date(now.getTime() - OWN_COMMENTS_DAYS * 864e5).toISOString();
+    st = { me, q: [], mine: [], own: { since } };
+    for (const p of pb.items ?? []) {
+      const socialId = typeof p.social_id === "string" ? p.social_id : void 0;
+      if (!socialId) continue;
+      st.mine.push(socialId);
+      if (typeof p.id === "string" || typeof p.id === "number") st.mine.push(String(p.id));
+      const comments = Number(p.comment_counter ?? 0) || 0;
+      const reactions = Number(p.reaction_counter ?? 0) || 0;
+      const sig = `${comments}:${reactions}`;
+      if (seen[socialId] === sig) continue;
+      const at = postDate(p.parsed_datetime, now) ?? postDate(p.date, now);
+      if (comments > 0) st.q.push({ t: "c", s: socialId, at, sig });
+      if (reactions > 0) st.q.push({ t: "r", s: socialId, at, sig });
+      if (!comments && !reactions) finished.set(socialId, sig);
+    }
+  }
+  const items = [];
+  let ownDone = false;
+  const finish = (task) => {
+    st.q.shift();
+    if (task.t !== "a" && task.sig) finished.set(task.s, task.sig);
+  };
+  while (budget > 0) {
+    const task = st.q[0];
+    if (!task) {
+      if (!st.own) break;
+      budget--;
+      const q2 = new URLSearchParams({ limit: "100" });
+      if (st.own.k) q2.set("cursor", st.own.k);
+      const res2 = await get(`/api/v1/users/${encodeURIComponent(st.me)}/comments?${q2}`);
+      if (!res2.ok) throw new Error(`unipile ${res2.status}`);
+      const b2 = await res2.json();
+      const byPost = /* @__PURE__ */ new Map();
+      let older = false;
+      for (const c of b2.items ?? []) {
+        const at = postDate(c.date, now);
+        if (st.own.since && at && at < st.own.since) {
+          older = true;
+          continue;
+        }
+        const post = [c.post_urn, c.post_id].find((x) => typeof x === "string" && !!x);
+        if (!post || typeof c.id !== "string" || st.mine.includes(post) || st.mine.includes(postLookupId(post)))
+          continue;
+        const task2 = byPost.get(post) ?? { t: "a", s: post, cm: [] };
+        task2.cm.push({ id: c.id, ...at ? { at } : {}, text: snippet(c.text) });
+        byPost.set(post, task2);
+      }
+      st.q.push(...byPost.values());
+      const next2 = typeof b2.cursor === "string" && b2.cursor ? b2.cursor : void 0;
+      if (next2 && !older) st.own.k = next2;
+      else {
+        st.own = void 0;
+        ownDone = true;
+      }
+      continue;
+    }
+    budget--;
+    if (task.t === "a") {
+      const res2 = await get(`/api/v1/posts/${encodeURIComponent(postLookupId(task.s))}`);
+      st.q.shift();
+      if (res2.status === 404 || res2.status === 422) continue;
+      if (!res2.ok) throw new Error(`unipile ${res2.status}`);
+      const p = await res2.json();
+      const author = typeof p.author?.id === "string" ? p.author.id : "";
+      if (!author || p.author?.is_company === true || author === st.me) continue;
+      const postAt = postDate(p.parsed_datetime, now);
+      for (const c of task.cm ?? []) {
+        const at = c.at ?? postAt;
+        if (!at) continue;
+        items.push({ kind: "comment_out", memberId: author, at, id: c.id, postId: task.s, text: c.text });
+      }
+      continue;
+    }
+    const q = new URLSearchParams({ limit: "100" });
+    if (task.k) q.set("cursor", task.k);
+    const path = `/api/v1/posts/${encodeURIComponent(task.s)}/${task.t === "c" ? "comments" : "reactions"}?${q}`;
+    const res = await get(path);
+    if (res.status === 404) {
+      finish(task);
+      continue;
+    }
+    if (!res.ok) throw new Error(`unipile ${res.status}`);
+    const b = await res.json();
+    for (const it of b.items ?? []) {
+      if (task.t === "c") {
+        const d = it.author_details ?? {};
+        const who = typeof d.id === "string" ? d.id : "";
+        if (!who || who === st.me || typeof it.id !== "string") continue;
+        const at = postDate(it.date, now) ?? task.at;
+        if (!at) continue;
+        items.push({
+          kind: "comment_in",
+          memberId: who,
+          at,
+          id: it.id,
+          postId: task.s,
+          text: snippet(it.text)
+        });
+      } else {
+        const a = it.author ?? {};
+        const who = typeof a.id === "string" ? a.id : "";
+        if (!who || who === st.me || String(a.type ?? "").toUpperCase() === "COMPANY" || !task.at) continue;
+        items.push({
+          kind: "reaction_in",
+          memberId: who,
+          at: task.at,
+          id: `${task.s}:${who}`,
+          postId: task.s
+        });
+      }
+    }
+    const next = [b.paging?.cursor, b.cursor].find((x) => typeof x === "string" && !!x);
+    if (next) task.k = next;
+    else finish(task);
+  }
+  const postsRead = [...finished].filter(([s]) => !st.q.some((t) => t.s === s && t.t !== "a")).map(([socialId, seen]) => ({ socialId, seen }));
+  const done = !st.q.length && !st.own;
+  return {
+    ok: true,
+    items,
+    postsRead,
+    ownDone,
+    olderPosts,
+    cursor: done ? null : await sealCursor(deps, accountId, st)
+  };
 }
 async function searchParameterId(deps, accountId, type, keywords, doFetch) {
   const q = new URLSearchParams({ account_id: accountId, type, keywords, limit: "1" });

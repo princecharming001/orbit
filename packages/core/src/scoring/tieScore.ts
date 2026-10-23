@@ -36,6 +36,13 @@ export interface TieMessage {
   isReplyLatencyHours?: number;
 }
 
+/** A comment or reaction on a LinkedIn post between them and the student (plan 17 B). */
+export interface TieEngagement {
+  at: string;
+  /** comment_in / reaction_in: on the student's post; comment_out: the student's comment on theirs */
+  kind: 'comment_in' | 'comment_out' | 'reaction_in';
+}
+
 export interface TieMeeting {
   at: string;
   /** everyone invited and not declined, the student included (a 1:1 has 2) */
@@ -73,6 +80,8 @@ export interface TieHistory {
   mutualNames?: string[];
   /** the student's own closeness rating (1–5) and when it was given */
   label?: { closeness: number; at: string };
+  /** comments and reactions on LinkedIn posts, either way: weak, capped attention (f15) */
+  engagement?: TieEngagement[];
 }
 
 export const TIE_FEATURES = [
@@ -90,6 +99,7 @@ export const TIE_FEATURES = [
   'linkedin',
   'warmth',
   'never',
+  'engagement',
 ] as const;
 export type TieFeature = (typeof TIE_FEATURES)[number];
 export type TieFeatures = Record<TieFeature, number>;
@@ -125,6 +135,7 @@ export const TIE_WEIGHTS: TieWeights = {
   linkedin: 0.84,
   warmth: 0.5,
   never: -0.1,
+  engagement: 0.5,
 };
 
 /** The plan's starting weights (§3.3): the prior the fit shrinks toward. */
@@ -144,6 +155,8 @@ export const TIE_START_WEIGHTS: TieWeights = {
   linkedin: 0.55,
   warmth: 0.5,
   never: -0.3,
+  // plan 17 B: comments and reactions lift a tie a little; at full engagement about as much as warm notes
+  engagement: 0.5,
 };
 
 /**
@@ -166,6 +179,8 @@ export const TIE_BASELINE: TieFeatures = {
   linkedin: 0.88,
   warmth: 0,
   never: 0.74,
+  // the demo network had no post engagement when the baseline was taken
+  engagement: 0,
 };
 
 /** Unreciprocated cap (Kossinets & Watts): someone who never wrote back, met or was introduced stays Faint/Light. */
@@ -224,6 +239,10 @@ export interface TieFacts {
   never: boolean;
   /** mean note warmth, 0 without notes */
   warmth: number;
+  /** comments on the student's posts, the student's comments on theirs, reactions to the student's posts */
+  commentsIn: number;
+  commentsOut: number;
+  reactionsIn: number;
 }
 
 export interface TieScore {
@@ -264,8 +283,17 @@ export function meetingWeight(attendees: number): number {
   return 0;
 }
 
+/** How much one comment or reaction counts toward f15: a reaction is a tap, a comment is a sentence. */
+const ENGAGEMENT_WEIGHT: Record<TieEngagement['kind'], number> = {
+  comment_in: 1,
+  comment_out: 1,
+  reaction_in: 0.3,
+};
+/** Decayed engagement at which f15 is full (about eight recent comments, or two dozen reactions). */
+export const ENGAGEMENT_SATURATION = 8;
+
 /**
- * The fourteen features (§3.2) and the raw counts behind them. Events more than a day in the future are ignored;
+ * The fourteen features (§3.2), plus post engagement (f15, plan 17 B), and the raw counts behind them. Events more than a day in the future are ignored;
  * anything a few hours ahead (clock skew, a meeting later today) counts as now.
  */
 export function computeTieFeatures(
@@ -376,6 +404,20 @@ export function computeTieFeatures(
   const structural = top.length ? top.reduce((a, b) => a + b.s, 0) / top.length / 100 : 0;
   const warmthVals = h.noteWarmth.filter((w) => Number.isFinite(w)).map((w) => Math.max(-1, Math.min(1, w)));
   const warmth = warmthVals.length ? warmthVals.reduce((a, b) => a + b, 0) / warmthVals.length : 0;
+  // f15: post engagement, decayed like messages and saturating, so it can only nudge a tie
+  let engaged = 0;
+  let commentsIn = 0;
+  let commentsOut = 0;
+  let reactionsIn = 0;
+  for (const e of h.engagement ?? []) {
+    const x = when(e.at);
+    if (x === undefined) continue;
+    engaged += ENGAGEMENT_WEIGHT[e.kind] * decay(x);
+    if (e.kind === 'comment_in') commentsIn++;
+    else if (e.kind === 'comment_out') commentsOut++;
+    else reactionsIn++;
+  }
+  const engagement = Math.min(1, Math.log(1 + engaged) / Math.log(1 + ENGAGEMENT_SATURATION));
 
   const features: TieFeatures = {
     log_days_last: daysLast === undefined ? 0 : Math.log(1 + daysLast),
@@ -392,6 +434,7 @@ export function computeTieFeatures(
     linkedin: h.linkedinConnected ? 1 : 0,
     warmth,
     never: never ? 1 : 0,
+    engagement,
   };
   const facts: TieFacts = {
     name: h.name,
@@ -410,6 +453,9 @@ export function computeTieFeatures(
     linkedin: h.linkedinConnected,
     never,
     warmth,
+    commentsIn,
+    commentsOut,
+    reactionsIn,
   };
   return { features, facts };
 }
@@ -593,6 +639,20 @@ export function explainTie(
       negative: h > 48 ? `Takes about ${Math.round(h / 24)} days to reply` : undefined,
     });
   }
+  if (facts.commentsIn + facts.commentsOut + facts.reactionsIn > 0)
+    topics.push({
+      value: c.engagement,
+      positive:
+        facts.commentsIn && facts.commentsOut
+          ? "You comment on each other's LinkedIn posts"
+          : facts.commentsIn
+            ? `${plural(facts.commentsIn, 'comment')} on your LinkedIn posts`
+            : facts.commentsOut
+              ? 'You comment on their LinkedIn posts'
+              : facts.reactionsIn === 1
+                ? 'Reacted to one of your LinkedIn posts'
+                : `Reacted to ${facts.reactionsIn} of your LinkedIn posts`,
+    });
   if (facts.warmth !== 0)
     topics.push({
       value: c.warmth,
@@ -748,8 +808,10 @@ export function sharedContext(
 }
 
 /**
- * TieHistory from the records the browser keeps. Touchpoints are the backbone: email/LinkedIn in and out become
- * messages, meetings stay meetings, an observed introduction counts as one, the LinkedIn connection sets f12. A
+ * TieHistory from the records the browser keeps. Touchpoints are the backbone: email, LinkedIn direct messages and
+ * texts in and out become messages (a day of LinkedIn messages each way counts like an email), meetings stay
+ * meetings, an observed introduction counts as one, the LinkedIn connection sets f12, and comments and reactions on
+ * LinkedIn posts become post engagement (f15: weak and capped, never a message). A
  * logged exchange (manual_log) counts as their reply when it carries a reply's weight (≥ 0.5, "they replied"), and
  * as the student's own message otherwise ("I already sent it"). CC lines, notes and post likes are not messages.
  * Messages Orbit cannot place in a thread (no message record) are grouped into exchanges: one per channel, ending
@@ -763,6 +825,7 @@ export function buildTieHistory(input: TieHistoryInput): TieHistory {
     threadParticipants?: number;
   })[] = [];
   const meetings: TieMeeting[] = [];
+  const engagement: TieEngagement[] = [];
   let intros = 0;
   let introRole: TieHistory['introRole'];
   let connectedAt: string | undefined = person.linkedinConnectedOn
@@ -830,6 +893,15 @@ export function buildTieHistory(input: TieHistoryInput): TieHistory {
         intros++;
         introRole = introRole ?? 'introduced_to_you';
         break;
+      case 'linkedin_comment_in':
+        engagement.push({ at: tp.occurredAt, kind: 'comment_in' });
+        break;
+      case 'linkedin_comment_out':
+        engagement.push({ at: tp.occurredAt, kind: 'comment_out' });
+        break;
+      case 'linkedin_reaction_in':
+        engagement.push({ at: tp.occurredAt, kind: 'reaction_in' });
+        break;
       case 'linkedin_connected':
         linkedinConnected = true;
         if (!connectedAt || tp.occurredAt < connectedAt) connectedAt = tp.occurredAt;
@@ -895,6 +967,7 @@ export function buildTieHistory(input: TieHistoryInput): TieHistory {
     mutualScores: input.mutualScores ?? [],
     mutualNames: input.mutualNames,
     label: input.label,
+    ...(engagement.length ? { engagement } : {}),
   };
 }
 

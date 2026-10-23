@@ -308,39 +308,62 @@ export interface LinkedInInboxMessage {
 interface InboxResponse {
   messages?: Partial<LinkedInInboxMessage>[];
   latest?: string | null;
+  /** more messages wait: send `cursor` back for them (an older proxy only says `more`) */
+  more?: boolean;
+  cursor?: string | null;
+  /** false when some messages could not be tied to their chat */
+  complete?: boolean;
 }
 
+/** At most this many /inbox calls per read (each reads up to 1,000 messages); past that the read is incomplete. */
+export const INBOX_MAX_CALLS = 10;
+
 /**
- * The student's LinkedIn messages since `after`, both ways, from 1:1 chats only (groups are not one person's reply).
- * `latest` is the newest message time LinkedIn returned, the checkpoint for the next read.
+ * The student's LinkedIn messages since `after`, both ways, from 1:1 chats only (groups are not one person's reply),
+ * read to the end through the proxy's cursor. `latest` is the newest message time LinkedIn returned; `complete` is
+ * false when the read stopped early or some messages could not be placed, and then `latest` must not become the
+ * next read's checkpoint (the unread messages are older than the ones read).
  */
 export async function linkedInInbox(
   accountId: string,
   after: Date,
   opts: CallOpts = {},
-): Promise<ConnectorOutcome<{ messages: LinkedInInboxMessage[]; latest?: string }>> {
-  const r = await call<InboxResponse>(
-    '/inbox',
-    { accountId, token: opts.token, after: after.toISOString() },
-    { timeoutMs: 45_000, ...opts },
-  );
-  if (!r.ok) return r;
-  return {
-    ok: true,
-    value: {
-      messages: (r.value.messages ?? [])
-        .filter((m) => typeof m.text === 'string' && m.text.trim() && m.id && m.chatId)
-        .map((m) => ({
-          id: String(m.id),
-          chatId: String(m.chatId),
-          text: m.text!.trim(),
-          at: m.at,
-          fromMe: !!m.fromMe,
-          counterpart: { providerId: m.counterpart?.providerId, name: m.counterpart?.name },
-        })),
-      latest: r.value.latest ?? undefined,
-    },
-  };
+): Promise<ConnectorOutcome<{ messages: LinkedInInboxMessage[]; latest?: string; complete: boolean }>> {
+  const messages: LinkedInInboxMessage[] = [];
+  const seen = new Set<string>();
+  let latest: string | undefined;
+  let complete = true;
+  let cursor: string | undefined;
+  for (let i = 0; i < INBOX_MAX_CALLS; i++) {
+    const r = await call<InboxResponse>(
+      '/inbox',
+      { accountId, token: opts.token, after: after.toISOString(), ...(cursor ? { cursor } : {}) },
+      { timeoutMs: 45_000, ...opts },
+    );
+    if (!r.ok) return r;
+    for (const m of r.value.messages ?? []) {
+      if (!(typeof m.text === 'string' && m.text.trim() && m.id && m.chatId) || seen.has(String(m.id)))
+        continue;
+      seen.add(String(m.id));
+      messages.push({
+        id: String(m.id),
+        chatId: String(m.chatId),
+        text: m.text.trim(),
+        at: m.at,
+        fromMe: !!m.fromMe,
+        counterpart: { providerId: m.counterpart?.providerId, name: m.counterpart?.name },
+      });
+    }
+    if (r.value.latest && (!latest || r.value.latest > latest)) latest = r.value.latest;
+    if (r.value.complete === false) complete = false;
+    cursor = r.value.cursor ?? undefined;
+    if (!cursor) {
+      // an older proxy says only that more were left
+      if (r.value.more) complete = false;
+      return { ok: true, value: { messages, latest, complete } };
+    }
+  }
+  return { ok: true, value: { messages, latest, complete: false } };
 }
 
 /**
@@ -411,9 +434,139 @@ export interface LinkedInMe {
   lastName?: string;
   headline?: string;
   publicIdentifier?: string;
+  /** their own LinkedIn member id */
+  providerId?: string;
   picture?: string;
 }
 
 export function linkedInMe(accountId: string, opts: CallOpts = {}): Promise<ConnectorOutcome<LinkedInMe>> {
   return call<LinkedInMe>('/me', { accountId, token: opts.token }, opts);
+}
+
+/** One message of a 1:1 LinkedIn chat, as the history read gives it: when, which way, and a short snippet. */
+export interface LinkedInDm {
+  id: string;
+  at: string;
+  /** the student sent it */
+  out: boolean;
+  text: string;
+}
+
+/** One 1:1 chat's messages (or the part of them one call read), with the other person's member id. */
+export interface LinkedInDmChat {
+  chatId: string;
+  memberId: string;
+  name?: string;
+  messages: LinkedInDm[];
+}
+
+/**
+ * One call of the 1:1 chat history read: the whole history, or since `after`. `cursor` is null once everything was
+ * read; otherwise pass it back for the rest (a chat cut off mid-way continues in the next call).
+ */
+export async function linkedInChatHistory(
+  accountId: string,
+  q: { after?: string; cursor?: string },
+  opts: CallOpts = {},
+): Promise<ConnectorOutcome<{ chats: LinkedInDmChat[]; latest?: string; cursor: string | null }>> {
+  const r = await call<{
+    ok?: boolean;
+    message?: string;
+    chats?: Partial<LinkedInDmChat>[];
+    latest?: string | null;
+    cursor?: string | null;
+  }>('/chats/history', { accountId, token: opts.token, ...q }, { timeoutMs: 45_000, ...opts });
+  if (!r.ok) return r;
+  if (r.value.ok === false)
+    return connectorFailure('error', r.value.message ?? 'LinkedIn did not read the chats.');
+  return {
+    ok: true,
+    value: {
+      chats: (r.value.chats ?? [])
+        .filter((c): c is LinkedInDmChat => !!c.chatId && !!c.memberId && Array.isArray(c.messages))
+        .map((c) => ({
+          chatId: String(c.chatId),
+          memberId: String(c.memberId),
+          name: c.name,
+          messages: c.messages
+            .filter((m) => m?.id && m.at && !Number.isNaN(Date.parse(m.at)))
+            .map((m) => ({ id: String(m.id), at: m.at, out: !!m.out, text: String(m.text ?? '') })),
+        })),
+      latest: r.value.latest ?? undefined,
+      cursor: r.value.cursor ?? null,
+    },
+  };
+}
+
+/** A comment or reaction on a LinkedIn post, between the student and one other member. */
+export interface LinkedInPostItem {
+  kind: 'comment_in' | 'reaction_in' | 'comment_out';
+  memberId: string;
+  at: string;
+  id: string;
+  postId: string;
+  text?: string;
+}
+
+export interface LinkedInPostPage {
+  items: LinkedInPostItem[];
+  /** the student's posts read to the end in this call, with the counters to pass as `seen` next time */
+  postsRead: { socialId: string; seen: string }[];
+  /** the student's own comments were read back to `commentsSince` */
+  ownDone: boolean;
+  cursor: string | null;
+  /** LinkedIn has posts older than the recent ones read */
+  olderPosts?: boolean;
+  /** the account reached today's post reads */
+  limited?: boolean;
+}
+
+/** One call of the post engagement read (see orbit-connectors /posts/activity). */
+export async function linkedInPostActivity(
+  accountId: string,
+  q: { cursor?: string; seen?: Record<string, string>; commentsSince?: string },
+  opts: CallOpts = {},
+): Promise<ConnectorOutcome<LinkedInPostPage>> {
+  const r = await call<{
+    ok?: boolean;
+    reason?: string;
+    message?: string;
+    items?: Partial<LinkedInPostItem>[];
+    postsRead?: { socialId?: string; seen?: string }[];
+    ownDone?: boolean;
+    olderPosts?: boolean;
+    cursor?: string | null;
+  }>('/posts/activity', { accountId, token: opts.token, ...q }, { timeoutMs: 45_000, ...opts });
+  if (!r.ok) return r;
+  if (r.value.ok === false) {
+    if (r.value.reason === 'limit')
+      return {
+        ok: true,
+        value: { items: [], postsRead: [], ownDone: false, cursor: null, limited: true },
+      };
+    return connectorFailure('error', r.value.message ?? 'LinkedIn did not read the posts.');
+  }
+  const kinds = new Set(['comment_in', 'reaction_in', 'comment_out']);
+  return {
+    ok: true,
+    value: {
+      items: (r.value.items ?? [])
+        .filter(
+          (i): i is LinkedInPostItem =>
+            !!i.kind &&
+            kinds.has(i.kind) &&
+            !!i.memberId &&
+            !!i.id &&
+            !!i.at &&
+            !Number.isNaN(Date.parse(i.at)),
+        )
+        .map((i) => ({ ...i, postId: String(i.postId ?? '') })),
+      postsRead: (r.value.postsRead ?? [])
+        .filter((p): p is { socialId: string; seen: string } => !!p.socialId && typeof p.seen === 'string')
+        .map((p) => ({ socialId: p.socialId, seen: p.seen })),
+      ownDone: !!r.value.ownDone,
+      olderPosts: r.value.olderPosts,
+      cursor: r.value.cursor ?? null,
+    },
+  };
 }

@@ -68,6 +68,12 @@ export type TouchpointKind =
   | 'text_out'
   | 'linkedin_connected'
   | 'linkedin_engaged'
+  /** they commented on one of the student's LinkedIn posts (one per comment) */
+  | 'linkedin_comment_in'
+  /** the student commented on one of their LinkedIn posts (one per comment) */
+  | 'linkedin_comment_out'
+  /** they reacted to one of the student's LinkedIn posts (one per post; dated by the post, LinkedIn gives no time) */
+  | 'linkedin_reaction_in'
   | 'note'
   | 'manual_log'
   | 'intro_observed';
