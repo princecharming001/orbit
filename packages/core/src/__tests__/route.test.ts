@@ -4,6 +4,8 @@ import { personalizedPageRank } from '../graph/ppr';
 import {
   firstHopFloor,
   hopEvidence,
+  MIN_PATH_P,
+  MUTUAL_MIN_SCORE,
   pAsk,
   pathBand,
   pKnow,
@@ -270,7 +272,112 @@ describe('rankWarmPaths', () => {
     expect(r.paths.map((p) => p.firstHopId)).toEqual(['v', 'a']);
     expect(r.paths[0]!.p).toBeCloseTo(pAsk({ score: 70 }) * 0.56, 10);
     expect(r.paths[0]!.reasonText).toMatch(/^V \(Strong · 70\) knows T \(via Village\)\./);
-    expect(r.paths[1]!.reasonText).toMatch(/^A \(Strong · 70\) is connected to T on LinkedIn\./);
+    expect(r.paths[1]!.reasonText).toMatch(
+      /^Through A, a strong tie \(70\): A is connected to T on LinkedIn\./,
+    );
+  });
+
+  describe('LinkedIn mutuals are never dropped', () => {
+    const mutual = (id: string) => ({ introducerId: id, kind: 'linkedin_mutual' as const });
+
+    it('keeps a LinkedIn-only mutual under MIN_PATH_P, as a weaker route, explained by the tie to the mutual', () => {
+      // a bare LinkedIn connection (12) asking about a C-level target: 0.18 · 0.285 · 0.85 < 0.05
+      const r = rankWarmPaths(
+        input([rp('mia', 12), rp('t', 0)], [], {
+          candidates: [mutual('mia')],
+          target: { name: 'Kenji', title: 'CEO' },
+        }),
+      );
+      expect(r.fallback).toBeUndefined();
+      const p = r.paths[0]!;
+      expect(p.nodes).toEqual([USER_NODE, 'mia', 't']);
+      expect(p.p).toBeLessThanOrEqual(MIN_PATH_P);
+      expect(p.weak).toBe(true);
+      expect(p.band).toBe('low');
+      expect(p.hops.map((h) => h.kind)).toEqual(['strength', 'linkedin_mutual']);
+      expect(p.reasonText).toBe(
+        'Through Mia, a faint tie (12): Mia is connected to Kenji on LinkedIn. A weaker route, but a real connection.',
+      );
+    });
+
+    it('lifts a mutual Orbit has no score for to a LinkedIn connection, and skips the goal floor for that hop only', () => {
+      const ex2 = (a: string, b: string) =>
+        tie(a, b, 'email_exchange', 0.9, 0.95, {}, '2026-10-01T00:00:00Z');
+      const r = rankWarmPaths(
+        input([rp('mia', 0), rp('b', 0), rp('t', 0)], [ex2('mia', 'b'), ex2('b', 't')], {
+          candidates: [mutual('mia')],
+          goal: 'recruiting',
+        }),
+      );
+      // Mia is asked about the person she is a mutual of, not routed further (under the floor, she would not be)
+      expect(r.paths.map((p) => p.nodes.join('>'))).toEqual(['user>mia>t']);
+      expect(r.paths[0]!.hops[0]!.p).toBeCloseTo(pAsk({ score: MUTUAL_MIN_SCORE }), 10);
+      expect(r.paths[0]!.weak).toBe(true);
+    });
+
+    it('ranks mutual routes by the student’s tie to each mutual, and keeps every one', () => {
+      const r = rankWarmPaths(
+        input([rp('ana', 12), rp('bo', 55), rp('cy', 30), rp('t', 0)], [], {
+          candidates: [mutual('ana'), mutual('bo'), mutual('cy')],
+        }),
+      );
+      expect(r.paths.map((p) => p.firstHopId)).toEqual(['bo', 'cy', 'ana']);
+      expect(r.paths[0]!.reasonText).toMatch(
+        /^Through Bo, a warm tie \(55\): Bo is connected to T on LinkedIn\./,
+      );
+      expect(r.paths[0]!.reasonText).toMatch(/ 2 other ways in\.$/);
+      expect(r.paths[0]!.weak).toBeUndefined();
+    });
+
+    it('treats a stored linkedin_mutual tie (the server’s) like a candidate', () => {
+      const r = rankWarmPaths(
+        input([rp('mia', 12), rp('t', 0)], [tie('mia', 't', 'linkedin_mutual', 0.3, 0.95)], {
+          goal: 'fundraising',
+        }),
+      );
+      expect(r.paths.map((p) => p.nodes.join('>'))).toEqual(['user>mia>t']);
+      expect(r.paths[0]!.weak).toBe(true);
+    });
+
+    it('adds a mutual route that Yen’s k shortest paths never reached', () => {
+      const strong = ['a', 'b', 'c'];
+      const r = rankWarmPaths(
+        input(
+          [...strong.map((x) => rp(x, 90)), rp('mia', 12), rp('t', 0)],
+          strong.map((x) => tie(x, 't', 'email_exchange', 0.9, 0.95, {}, '2026-10-01T00:00:00Z')),
+          { candidates: [mutual('mia')], k: 2 },
+        ),
+      );
+      expect(r.paths.map((p) => p.firstHopId)).toContain('mia');
+    });
+
+    it('says when a mutual also has other evidence with the target', () => {
+      const r = rankWarmPaths(
+        input(
+          [rp('mia', 45), rp('t', 0)],
+          [tie('mia', 't', 'same_current_company', 0.5, 0.9, { orgName: 'Figma' })],
+          { candidates: [mutual('mia')] },
+        ),
+      );
+      expect(r.paths[0]!.reasonText).toBe(
+        'Through Mia, a warm tie (45): Mia works with T at Figma (and is connected to them on LinkedIn).',
+      );
+    });
+
+    it('still skips a hidden mutual or one who declined an intro lately', () => {
+      const r = rankWarmPaths(
+        input(
+          [
+            rp('h', 50, { hidden: true }),
+            rp('d', 50, { declinedIntroAt: '2026-10-01T00:00:00Z' }),
+            rp('t', 0),
+          ],
+          [],
+          { candidates: [mutual('h'), mutual('d')] },
+        ),
+      );
+      expect(r).toEqual({ paths: [], fallback: 'cold' });
+    });
   });
 
   it('discounts routes whose evidence is more than three years old', () => {

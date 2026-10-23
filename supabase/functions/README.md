@@ -71,6 +71,25 @@ supabase functions deploy orbit-webhooks --no-verify-jwt
 Later phases add `EXA_API_KEY`, `APOLLO_API_KEY`, `VILLAGE_SECRET_KEY`,
 `SEMANTIC_SCHOLAR_API_KEY` and `ORBIT_ADMIN_EMAILS` (§21).
 
+### orbit-connectors (local mode's LinkedIn and Village proxy)
+
+Each of these is read from the function secret first, else from the project's private secrets table (the
+service-role-only `orbit_secret` function), once per cold start, so a key can be stored without the dashboard. A route
+whose provider is missing answers 503 with `x-orbit-connector: unconfigured`; the app then says "Village isn't set up"
+(Settings, Integrations) or "Live sync is switching on soon" instead of showing empty results as if it were on.
+
+| Name | Required | Notes |
+|---|---|---|
+| `UNIPILE_API_KEY`, `UNIPILE_BASE_URL` | for live LinkedIn | Connect, sync, mutual connections (warm paths), search, send |
+| `VILLAGE_SECRET_KEY` | for warm intros | Village v2 app secret key (mints a token per user). `VILLAGE_API_KEY` is the old name, still read |
+| `VILLAGE_USER_EMAIL` | for warm intros | The Village account whose network `/paths` searches. **Deployment-wide**: every visitor's lookups return this one person's Village network, so it is only right for a single-student deployment (or the founder's own testing). Per-student Village needs each student's own Village identity (account mode) |
+| `VILLAGE_EXTERNAL_USER_ID` | no | The external user id Village provisions for that email. Default `orbit-local` |
+| `VILLAGE_BASE_URL` | no | Default `https://api.village.do` |
+
+Without `VILLAGE_SECRET_KEY` (or `VILLAGE_API_KEY`) and `VILLAGE_USER_EMAIL`, `/paths` answers unconfigured. An
+empty `/paths` request (`{}`) is the health check the app's Settings row uses: unconfigured, or `{ "paths": [] }` with
+no Village call and no credits spent.
+
 ## Database, cron and Vault
 
 1. Queues: `20261014_orbit_core.sql` runs `create extension if not exists pgmq` (Supabase Queues). Enable it from the

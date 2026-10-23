@@ -190,12 +190,13 @@ describe('with the demo network', () => {
       expect(c.direct[i - 1]!.strength).toBeGreaterThanOrEqual(c.direct[i]!.strength);
   });
 
-  it('a company’s routes through people you know are the routes Reach shows, hop for hop', async () => {
+  it('a company’s routes through people you know are the routes Reach shows from Orbit’s records, hop for hop', async () => {
     let checked = 0;
     for (const name of ['Stripe', 'Google', 'Figma', 'Linear', 'Vercel']) {
       const c = await reachCompany(user.id, name);
       for (const t of c.twoHop) {
-        const first = (await reachPerson(user.id, t.target.id))[0]!;
+        // Reach for one person also asks LinkedIn for their mutuals, which a company's list does not do per person
+        const first = (await reachPerson(user.id, t.target.id, 3, { external: false }))[0]!;
         expect(t.path.hops.map((h) => h.toId)).toEqual(first.hops.map((h) => h.toId));
         checked++;
       }

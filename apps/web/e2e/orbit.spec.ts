@@ -487,6 +487,56 @@ test.describe('Map readability', () => {
   });
 });
 
+test.describe('Map reach through LinkedIn mutuals (plan 17 §C)', () => {
+  test('a second-degree person found on LinkedIn: a route through a mutual, and the people who know them', async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+    await loadDemo(page);
+    // the demo's LinkedIn connects at once (mock), which turns on searching everyone on LinkedIn from the map
+    await page.goto('settings/integrations');
+    const card = page.getByTestId('settings-linkedin-live');
+    await card.getByTestId('settings-linkedin-live-connect').click();
+    await expect(card.getByTestId('settings-linkedin-live-status')).toContainText(/Connected/, {
+      timeout: 60_000,
+    });
+    await page.goto('map?reach=1');
+    await page.getByTestId('reach-input').fill('Kenji');
+    const result = page.getByTestId('map-linkedin-result').filter({ hasText: 'Kenji Watanabe' });
+    await expect(result).toBeVisible({ timeout: 15_000 });
+    await result.dispatchEvent('mousedown');
+    await expect(page.getByTestId('toasts')).toContainText('Kenji Watanabe is in your Orbit now.');
+    // never "No route found" for him: the routes go through the people LinkedIn says know him
+    const route = page.getByTestId('reach-path').first();
+    await expect(route).toBeVisible({ timeout: 30_000 });
+    await expect(route).toContainText(/is connected to Kenji on LinkedIn/);
+    await expect(route.getByTestId('reach-path-action')).toHaveText(/^Ask \S+ for an intro$/);
+    await expect(page.getByText(/no route found/i)).toHaveCount(0);
+    // the panel: who knows him, closest to the student first, each with how close and an intro to ask for
+    const panel = page.getByTestId('reach-mutuals');
+    await expect(panel).toContainText('People who know Kenji');
+    const rows = panel.getByTestId('reach-mutual');
+    await expect(rows.first()).toBeVisible();
+    expect(await rows.count()).toBeGreaterThan(1);
+    const closeness = await panel.getByTestId('reach-mutual-closeness').allInnerTexts();
+    const scores = closeness.map((t) => Number(/· (\d+)/.exec(t)?.[1] ?? -1));
+    expect(scores).toEqual([...scores].sort((a, b) => b - a));
+    await expect(panel).toContainText('Sample connections from the demo.');
+    await panel.scrollIntoViewIfNeeded();
+    await test.info().attach('reach-mutuals', { body: await page.screenshot(), contentType: 'image/png' });
+    if (process.env.REACH_SHOT) {
+      // a picture of the panel for review, without the sync notice and toasts over it
+      await page.addStyleTag({
+        content: '[data-testid="toasts"],[data-testid="linkedin-progress"]{display:none!important}',
+      });
+      await page.screenshot({ path: process.env.REACH_SHOT });
+    }
+    // asking one of them goes through the same intro draft as a route
+    await rows.first().getByTestId('reach-mutual-ask').click();
+    await expect(page.getByTestId('toasts')).toContainText('Intro request drafted');
+  });
+});
+
 test.describe('Map on a touch phone (UI-18)', () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
 

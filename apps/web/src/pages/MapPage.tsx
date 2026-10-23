@@ -17,6 +17,7 @@ import { Building2, Search, X } from 'lucide-react';
 import { type CSSProperties, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { CompanyLogo, LogoText } from '../components/CompanyLogo';
+import { ReachMutuals } from '../components/map/ReachMutuals';
 import { ReachSearch } from '../components/map/ReachSearch';
 import { type CardPlace, OrbitMap, useCoarsePointer } from '../components/OrbitMap';
 import type { FocusSpec, WebSpec } from '../components/orbitScene';
@@ -28,20 +29,23 @@ import { db } from '../db/schema';
 import { draftMessage } from '../engine/brief';
 import { requestIntro } from '../engine/drafts';
 import {
+  buildReachGraph,
   type CompanyReach,
   isColdDirect,
   isUnambiguous,
   type ReachCandidate,
   rankReachTargets,
+  reachCandidates,
   reachCompany,
-  reachPerson,
+  reachPersonIn,
   targetCompanyMatcher,
   WARMER_ROUTES_WHY,
+  type WarmReachPath,
 } from '../engine/graph';
 import { addLinkedInFound, type FoundView } from '../engine/linkedinSearch';
 import { maintenanceRunning, watchMaintenance } from '../engine/sync';
 import { useSession } from '../state/session';
-import { Avatar, Button, Card, Chip, cx, Input, useToast } from '../ui';
+import { Avatar, Button, Card, Chip, cx, Input, LinkedInMark, useToast } from '../ui';
 
 type Filter = 'all' | 'targets' | 'alumni' | 'chats' | 'recent' | 'intros';
 
@@ -92,7 +96,7 @@ export function MapPage() {
   const [suggestAt, setSuggestAt] = useState(-1);
   const [filter, setFilter] = useState<Filter>('all');
   // undefined while routes are being computed, so the panel never claims "no route" before it knows
-  const [paths, setPaths] = useState<ReachPath[] | undefined>([]);
+  const [paths, setPaths] = useState<WarmReachPath[] | undefined>([]);
   const [choices, setChoices] = useState<ReachCandidate[]>();
   const [pathIdx, setPathIdx] = useState(0);
   // the company the map is turned to: set the moment the student asks, from what the map already knows
@@ -471,8 +475,14 @@ export function MapPage() {
       setChoices(undefined);
       setPaths(undefined);
       setPathIdx(0);
-      const ps = await reachPerson(userId, p.id);
-      if (!cancelled) setPaths(ps);
+      // Orbit's own routes show at once; LinkedIn mutuals and Village introducers join them when they answer. With no
+      // route of its own, the panel keeps saying it is looking rather than "No route found" before they have.
+      const { g } = await buildReachGraph(userId);
+      if (cancelled) return;
+      const local = reachPersonIn(g, p.id);
+      if (local.length) setPaths(local);
+      const extra = await reachCandidates(userId, p.id);
+      if (!cancelled) setPaths(extra.length ? reachPersonIn(g, p.id, 3, extra) : local);
     })();
     return () => {
       cancelled = true;
@@ -649,12 +659,14 @@ export function MapPage() {
   const targetIntros = useWarmIntros(user ?? undefined, target ?? undefined);
   const villageFor = (personId: string) =>
     targetIntros?.find((w) => w.introducer.personId === personId && w.targetPersonId === target?.id);
+  // an introducer Orbit does not have yet is shown too, by name and LinkedIn; only someone Orbit has can be asked here
   const extraIntros = (targetIntros ?? []).filter(
     (w) =>
-      !!w.introducer.personId &&
-      !!w.targetPersonId &&
-      w.introducer.personId !== w.targetPersonId &&
-      !(paths ?? []).some((p) => p.hops.length > 1 && p.hops[0]!.toId === w.introducer.personId),
+      w.introducer.personId !== target?.id &&
+      !(
+        w.introducer.personId &&
+        (paths ?? []).some((p) => p.hops.length > 1 && p.hops[0]!.toId === w.introducer.personId)
+      ),
   );
   const companyKey = companyFocus?.key;
   // the legend line and the chip on the map count the same people: those in the company's wedge
@@ -1213,6 +1225,10 @@ export function MapPage() {
                           )}
                           {isColdDirect(p) ? (
                             <Chip className="h-5">Cold tie</Chip>
+                          ) : p.weak ? (
+                            <Chip className="h-5" title={p.reason} data-testid="reach-path-weak">
+                              Weaker route
+                            </Chip>
                           ) : (
                             <Chip
                               className="h-5"
@@ -1238,6 +1254,13 @@ export function MapPage() {
                           );
                         })}
                       </ol>
+                      {p.weak && (
+                        <p className="mt-1.5 text-[12px] text-ink-3">
+                          You know {first?.firstName ?? 'them'} only slightly, but LinkedIn says{' '}
+                          {first?.firstName ?? 'they'} knows {target.firstName}: a weaker route, and a real
+                          one.
+                        </p>
+                      )}
                     </button>
                     {/* each route carries its own next step */}
                     <div className="px-3 pb-3">
@@ -1320,15 +1343,28 @@ export function MapPage() {
                             </li>
                           ))}
                         </ol>
-                        <Button
-                          size="sm"
-                          variant="secondary"
-                          className={cx('mt-2', TAP)}
-                          onClick={() => askIntroVia(w.introducer.personId!, w.targetPersonId!, w.warmth)}
-                          data-testid="map-warm-intro-ask"
-                        >
-                          Ask {w.introducer.name.split(' ')[0]} for an intro
-                        </Button>
+                        {w.introducer.personId && w.targetPersonId ? (
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            className={cx('mt-2', TAP)}
+                            onClick={() => askIntroVia(w.introducer.personId!, w.targetPersonId!, w.warmth)}
+                            data-testid="map-warm-intro-ask"
+                          >
+                            Ask {w.introducer.name.split(' ')[0]} for an intro
+                          </Button>
+                        ) : (
+                          <p
+                            className="mt-2 text-[12px] text-ink-3 flex items-center gap-1.5"
+                            data-testid="map-warm-intro-outside"
+                          >
+                            {w.introducer.linkedinUrl && /linkedin\.com/i.test(w.introducer.linkedinUrl) && (
+                              <LinkedInMark url={w.introducer.linkedinUrl} name={w.introducer.name} />
+                            )}
+                            {w.introducer.name.split(' ')[0]} is not in your Orbit yet; reach them on
+                            LinkedIn.
+                          </p>
+                        )}
                       </div>
                     );
                   })}
@@ -1339,6 +1375,14 @@ export function MapPage() {
                   Route {paths!.indexOf(coldDirect) + 1} is writing to {target.firstName} yourself.{' '}
                   {coldDirect.hops[0]!.text}, a faint tie, so the routes through people you know come first.
                 </p>
+              )}
+              {/* the target's LinkedIn mutuals, whether or not a route clears the bar; not for someone the student knows */}
+              {user && !(paths?.[0]?.hops.length === 1 && !isColdDirect(paths[0])) && (
+                <ReachMutuals
+                  user={user}
+                  target={target}
+                  onAsk={(personId, score) => void askIntroVia(personId, target.id, score)}
+                />
               )}
             </>
           )}
@@ -1432,7 +1476,7 @@ export function MapPage() {
                         >
                           {t.target.displayName}
                         </button>{' '}
-                        {/* the same route, and the same count of hops, that Reach shows for this person */}
+                        {/* the route Reach finds for this person in Orbit's own records (Reach adds LinkedIn mutuals) */}
                         <span className="text-ink-3">
                           {plural(t.path.hops.length, 'hop')}, via{' '}
                           {t.path.hops

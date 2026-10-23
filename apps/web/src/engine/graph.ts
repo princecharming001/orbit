@@ -2,6 +2,7 @@ import type {
   Affiliation,
   CoffeeChat,
   Edge,
+  ExternalCandidate,
   Organization,
   Person,
   ReachHop,
@@ -89,6 +90,37 @@ export async function recomputeEdges(userId: string): Promise<number> {
   await db.transaction('rw', db.edges, async () => {
     await db.edges.where('userId').equals(userId).delete();
     await db.edges.bulkAdd(edges.map((e) => ({ ...e, id: `${userId}:${e.id}` })));
+  });
+  return edges.length;
+}
+
+/**
+ * Edges for a few people only (someone just added from a LinkedIn search, or given a LinkedIn member id): the
+ * inference runs over everyone (it is pure, and a person's company and school edges need the whole group), but only
+ * the edges touching these people are rewritten, so the rest of the stored graph is left as it was.
+ */
+export async function updateEdgesFor(userId: string, personIds: string[]): Promise<number> {
+  const ids = new Set(personIds);
+  if (!ids.size) return 0;
+  const [people, affiliations, orgs, threads, events] = await Promise.all([
+    db.people.where('userId').equals(userId).toArray(),
+    db.affiliations.where('userId').equals(userId).toArray(),
+    db.organizations.toArray(),
+    db.threads.where('userId').equals(userId).toArray(),
+    db.events.where('userId').equals(userId).toArray(),
+  ]);
+  const touches = (e: Pick<Edge, 'personAId' | 'personBId'>) => ids.has(e.personAId) || ids.has(e.personBId);
+  const edges = inferEdges({
+    userId,
+    people,
+    affiliations,
+    organizations: new Map(orgs.map((o) => [o.id, o])),
+    threads,
+    events,
+  }).filter(touches);
+  await db.transaction('rw', db.edges, async () => {
+    await db.edges.where('userId').equals(userId).filter(touches).delete();
+    await db.edges.bulkPut(edges.map((e) => ({ ...e, id: `${userId}:${e.id}` })));
   });
   return edges.length;
 }
@@ -222,9 +254,52 @@ export function bestPathStrength(g: WeightedGraph, personId: string): number {
   return t.score(personId);
 }
 
-export async function reachPerson(userId: string, targetPersonId: string, k = 3): Promise<ReachPath[]> {
-  const { g } = await buildReachGraph(userId);
-  return reachPersonIn(g, targetPersonId, k);
+/** A route as the Reach panels read it, with what the v2 ranking (plan 16 §4.2) says about it. */
+export interface WarmReachPath extends ReachPath {
+  /** core's plain reason, e.g. "Through Mia, a faint tie (12): Mia is connected to Kenji on LinkedIn." */
+  reason?: string;
+  /** kept only because its first hop is a LinkedIn mutual of the target: a weaker route, but a real connection */
+  weak?: boolean;
+  /** where the last hop's evidence came from, when it is from outside Orbit's own records */
+  via?: 'linkedin_mutual' | 'village_path';
+}
+
+/**
+ * Routes to one person, with the ways in Orbit's own records do not show: the target's LinkedIn mutuals (the
+ * student's first-degree connections LinkedIn says know them) and Village's introducers, matched to people Orbit has
+ * (engine/externalRoutes.ts). The Map and the chat's find_routes read this. `external: false` is the graph alone.
+ */
+export async function reachPerson(
+  userId: string,
+  targetPersonId: string,
+  k = 3,
+  opts: { external?: boolean; signal?: AbortSignal } = {},
+): Promise<WarmReachPath[]> {
+  const [{ g }, candidates] = await Promise.all([
+    buildReachGraph(userId),
+    opts.external === false ? [] : reachCandidates(userId, targetPersonId, opts),
+  ]);
+  return reachPersonIn(g, targetPersonId, k, candidates);
+}
+
+/**
+ * LinkedIn mutuals and Village introducers for one target, as route candidates. Never throws: anything that fails
+ * (LinkedIn not connected, Village not set up, a timeout) leaves Orbit's own routes standing alone.
+ */
+export async function reachCandidates(
+  userId: string,
+  targetPersonId: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<ExternalCandidate[]> {
+  try {
+    const [user, target] = await Promise.all([db.users.get(userId), db.people.get(targetPersonId)]);
+    if (!user || !target || target.userId !== userId) return [];
+    // loaded when first needed: it reaches the LinkedIn and Village connectors, which import this file
+    const { externalCandidates } = await import('./externalRoutes');
+    return await externalCandidates(user, target, opts);
+  } catch {
+    return [];
+  }
 }
 
 /** v2 bands in the v1 words: high is a strong route, medium possible, low a long shot. */
@@ -234,24 +309,55 @@ const BAND: Record<WarmPath['band'], ReachPath['band']> = {
   low: 'long_shot',
 };
 
-/** A v2 route (§4.2) in the shape the Reach panels read, with the v1 hop texts. */
-function toV2ReachPath(g: WeightedGraph, w: WarmPath): ReachPath {
+const EXTERNAL = new Set(['linkedin_mutual', 'village_path']);
+
+/**
+ * A v2 route (§4.2) in the shape the Reach panels read, with the v1 hop texts. A hop the graph has no edge for came
+ * from LinkedIn or Village, and says so; a first hop to someone Orbit has no history with is the LinkedIn connection
+ * a mutual is.
+ */
+function toV2ReachPath(g: WeightedGraph, w: WarmPath, ctx?: ReachContext): WarmReachPath {
   if (w.nodes.length === 2) {
     const direct = toReachPath(g, [USER_NODE, w.nodes[1]!]);
     // writing straight to someone the student is tied to is never a long shot
     return { hops: direct.hops, score: w.p, band: w.band === 'low' ? 'possible' : BAND[w.band] };
   }
-  const hops: ReachHop[] = w.hops.map((h) => {
+  const first = (id: string) => {
+    const p = ctx?.people.get(id);
+    return p?.firstName || p?.displayName || 'them';
+  };
+  const lastKind = w.hops[w.hops.length - 1]?.kind;
+  const hops: ReachHop[] = w.hops.map((h, i) => {
     const e = g.adj.get(h.fromId)?.get(h.toId);
+    let text = e?.text ?? '';
+    if (EXTERNAL.has(h.kind))
+      text =
+        h.kind === 'linkedin_mutual'
+          ? `${first(h.fromId)} is connected to ${first(h.toId)} on LinkedIn`
+          : `${first(h.fromId)} knows ${first(h.toId)} (via Village)`;
+    else if (!text && i === 0) {
+      const p = ctx?.people.get(h.toId);
+      text =
+        p && (p.linkedinConnectedOn || lastKind !== 'linkedin_mutual')
+          ? describeUserTie(p, ctx?.now)
+          : `You're connected with ${first(h.toId)} on LinkedIn`;
+    }
     return {
       fromId: h.fromId,
       toId: h.toId,
       weight: h.p,
       type: h.kind === 'strength' ? 'strength' : h.kind,
-      text: e?.text ?? '',
+      text,
     };
   });
-  return { hops, score: w.p, band: BAND[w.band] };
+  return {
+    hops,
+    score: w.p,
+    band: BAND[w.band],
+    reason: w.reasonText,
+    ...(w.weak ? { weak: true } : {}),
+    ...(lastKind && EXTERNAL.has(lastKind) ? { via: lastKind as WarmReachPath['via'] } : {}),
+  };
 }
 
 /**
@@ -262,7 +368,12 @@ function toV2ReachPath(g: WeightedGraph, w: WarmPath): ReachPath {
  * why it is not the first suggestion), scored at the chance they answer; with no route it comes first. A bare graph
  * keeps the v1 ranking (product of hop weights).
  */
-export function reachPersonIn(g: WeightedGraph, targetPersonId: string, k = 3): ReachPath[] {
+export function reachPersonIn(
+  g: WeightedGraph,
+  targetPersonId: string,
+  k = 3,
+  candidates: ExternalCandidate[] = [],
+): WarmReachPath[] {
   const ctx = contexts.get(g);
   if (!ctx) return reachPersonV1(g, targetPersonId, k);
   const tie = g.adj.get(USER_NODE)?.get(targetPersonId);
@@ -279,10 +390,11 @@ export function reachPersonIn(g: WeightedGraph, targetPersonId: string, k = 3): 
       : undefined,
     people,
     pairs: ctx.pairs,
+    candidates,
     now: ctx.now,
     limit: Math.max(k, 5),
   });
-  const routes = r.paths.map((w) => toV2ReachPath(g, w));
+  const routes = r.paths.map((w) => toV2ReachPath(g, w, ctx));
   if (known) return [toReachPath(g, [USER_NODE, targetPersonId]), ...routes.slice(0, k - 1)];
   if (!tie || !target) return routes.slice(0, k);
   const pReply = responsePrior(target, {

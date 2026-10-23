@@ -16,6 +16,7 @@ import {
 import { setWarmIntros, villageAvailable, villageOffered } from '../engine/warmIntros';
 import { usesMockConnectors } from '../integrations/connectorsMock';
 import { subscribePrefs } from '../integrations/prefs';
+import { checkVillage, subscribeVillageHealth, villageHealth } from '../integrations/village';
 import { Button, Modal, relDate, Spinner, Switch, useToast } from '../ui';
 import { AppMark, IntegrationRow, RowStatus } from './IntegrationRow';
 
@@ -163,21 +164,32 @@ export function LinkedInLiveCard({ user }: { user: User }) {
   );
 }
 
-/** Warm intros from Village: what it does, and on or off. */
+/**
+ * Warm intros from Village: what it does, and on or off. Turned on, Orbit asks its server whether Village is set up
+ * there (a key and the account email), and says "Village isn't set up" rather than "On" when it is not.
+ */
 export function WarmIntrosCard({ user }: { user: User }) {
   const [, setTick] = useState(0);
-  // the choice lives in this browser's prefs, which Dexie does not watch
+  // the choice lives in this browser's prefs, which Dexie does not watch; Village's health is kept in memory
   useEffect(() => subscribePrefs(() => setTick((t) => t + 1)), []);
+  useEffect(() => subscribeVillageHealth(() => setTick((t) => t + 1)), []);
   const offered = villageOffered(user);
   const on = villageAvailable(user);
+  const mock = usesMockConnectors(user.id);
+  useEffect(() => {
+    if (on && !mock) void checkVillage();
+  }, [on, mock]);
+  const notSetUp = on && !mock && villageHealth() === 'unconfigured';
   return (
     <IntegrationRow
       testId="settings-warm-intros"
       mark={<AppMark logo="village.do">V</AppMark>}
       name="Warm intros (Village)"
       status={
-        <RowStatus tone={on ? 'good' : 'muted'} testId="settings-warm-intros-status">
-          {on ? (
+        <RowStatus tone={on && !notSetUp ? 'good' : 'muted'} testId="settings-warm-intros-status">
+          {notSetUp ? (
+            "Village isn't set up"
+          ) : on ? (
             <>
               <Check size={12} /> On
             </>
@@ -189,9 +201,11 @@ export function WarmIntrosCard({ user }: { user: User }) {
       line={
         !offered
           ? 'Not part of this version of Orbit yet.'
-          : usesMockConnectors(user.id)
+          : mock
             ? 'On for the demo, with sample paths.'
-            : 'Intro paths from Village; it sees the names you look up'
+            : notSetUp
+              ? "Orbit's server has no Village key yet, so there are no intro paths from it. Your own routes still work."
+              : 'Intro paths from Village; it sees the names you look up'
       }
       actions={
         offered ? (
