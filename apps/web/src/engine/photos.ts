@@ -4,6 +4,8 @@
  *
  * Which photo wins (plan 17 E): one the student set > LinkedIn > Gravatar (found from their email address). A Gravatar
  * only fills a missing photo, and a LinkedIn photo replaces a Gravatar one.
+ *
+ * Who fetches a missing or expired LinkedIn photo: engine/photoQueue.ts, a few calls a minute while the app is open.
  */
 export function isLinkedInPhoto(url: string | undefined): boolean {
   if (!url) return false;
