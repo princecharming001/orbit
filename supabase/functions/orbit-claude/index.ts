@@ -15,9 +15,9 @@ Deno.serve(
     origins: defaultOrigins,
     take: postgrestTake(url, serviceKey),
     salt: serviceKey.slice(-16) || 'orbit',
-    // $20 per user until raised; set ORBIT_USER_CAP_USD to change it
+    // $30 per user until raised; set ORBIT_USER_CAP_USD to change it
     spend: postgrestSpend(url, serviceKey),
-    capUsd: num('ORBIT_USER_CAP_USD', 20),
+    capUsd: num('ORBIT_USER_CAP_USD', 30),
     sessionSecret: Deno.env.get('ORBIT_SESSION_SECRET') || undefined,
     limits: {
       perMinute: num('ORBIT_LIMIT_PER_MINUTE', 30),

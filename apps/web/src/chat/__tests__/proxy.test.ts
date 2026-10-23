@@ -384,7 +384,7 @@ async function accessToken(claims: Record<string, unknown>, secret = SECRET) {
 const USER = '0b7f6c2e-8a51-4c1e-9d0a-3f2b1c4d5e6f';
 const CLIENT = 'f00dfeedc0ffee0123456789abcdef01';
 
-describe('the $20 per-user cap on Orbit’s key', () => {
+describe('the $30 per-user cap on Orbit’s key', () => {
   afterEach(() => {
     setSharedClaudeUrlForTests(undefined);
     writePrefs({ sharedClaudePause: undefined });
@@ -394,7 +394,7 @@ describe('the $20 per-user cap on Orbit’s key', () => {
     const m = memSpend();
     const { client } = harness({ spend: m.spend, headers: { 'x-orbit-client': CLIENT } });
     const res = await client.beta.messages.create({ ...chatParams, stream: true }).withResponse();
-    expect(res.response.headers.get('x-orbit-budget-remaining')).toBe('20.00');
+    expect(res.response.headers.get('x-orbit-budget-remaining')).toBe('30.00');
     for await (const _ of res.data) {
       // read the stream through, as the chat does
     }
@@ -404,9 +404,9 @@ describe('the $20 per-user cap on Orbit’s key', () => {
     expect(m.adds[1]![1]).toBeCloseTo(0.00002, 10);
   });
 
-  it('refuses before calling Anthropic once the user has spent $20, and the chat says so and stops asking', async () => {
+  it('refuses before calling Anthropic once the user has spent $30, and the chat says so and stops asking', async () => {
     setSharedClaudeUrlForTests(BASE);
-    const m = memSpend({ [`client:${CLIENT}`]: 20.0001 });
+    const m = memSpend({ [`client:${CLIENT}`]: 30.0001 });
     const { client, upstream } = harness({ spend: m.spend, headers: { 'x-orbit-client': CLIENT } });
     const raw = await client.beta.messages.create(chatParams).catch((e) => e);
     expect(raw).toBeInstanceOf(Anthropic.RateLimitError);

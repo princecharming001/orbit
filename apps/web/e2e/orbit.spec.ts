@@ -2644,12 +2644,15 @@ test.describe('Morning brief', () => {
         await brief.getByTestId('morning-next').click();
         skipped++;
       }
-      // the deck moved on by itself
+      // the deck moved on by itself (a decision writes to the database first, which a loaded machine can take a
+      // few seconds over)
       await expect
-        .poll(async () =>
-          (await brief.getAttribute('data-step')) !== 'decide'
-            ? 'moved'
-            : await decision.getByTestId('morning-count').textContent(),
+        .poll(
+          async () =>
+            (await brief.getAttribute('data-step')) !== 'decide'
+              ? 'moved'
+              : await decision.getByTestId('morning-count').textContent(),
+          { timeout: 20_000 },
         )
         .not.toBe(count);
       expect(page.url()).toBe(url);

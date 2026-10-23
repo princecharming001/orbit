@@ -35,7 +35,7 @@ export function sharedClaudeAvailable(now = new Date()): boolean {
 
 /**
  * Pause the shared access after it refused: until the next UTC midnight for a daily limit, an hour when the server
- * is not set up, and for a long while once this student has used their whole allowance ($20 until it is raised;
+ * is not set up, and for a long while once this student has used their whole allowance ($30 until it is raised;
  * clearing the pause in Settings, or raising the cap, brings it back).
  */
 export function pauseSharedClaude(

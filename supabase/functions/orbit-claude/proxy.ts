@@ -7,7 +7,7 @@
  * - only Orbit's chat model (and its refusal fallback), only Orbit's betas, max_tokens capped
  * - only client tools (no server tools that bill extra, no MCP servers or containers)
  * - a body size cap, and request counters per visitor (hashed IP) per minute and per day, plus a global daily cap
- * - a dollar cap per user (ORBIT_USER_CAP_USD, $20 by default): each answer's tokens are priced as they stream past
+ * - a dollar cap per user (ORBIT_USER_CAP_USD, $30 by default): each answer's tokens are priced as they stream past
  *   and added to the user's total; once the total reaches the cap the proxy answers 429 `x-orbit-limit: budget`.
  *   The user is the signed-in account when the browser sends a valid Orbit session (`x-orbit-session`), else the
  *   browser's own id (`x-orbit-client`), else the hashed IP.
@@ -62,7 +62,7 @@ export const DEFAULT_LIMITS: Limits = {
   perDayCall: DEFAULT_CALL_PER_DAY,
 };
 /** Dollars one user may spend on Orbit's key, until it is raised. */
-export const DEFAULT_CAP_USD = 20;
+export const DEFAULT_CAP_USD = 30;
 
 /** Running dollar totals per user (see subjectOf). */
 export interface Spend {
