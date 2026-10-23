@@ -170,6 +170,11 @@ function trackStep(r: number, pitch: number): number {
   return 2 * Math.asin(Math.min(1, (pitch + 0.5) / (2 * r)));
 }
 
+/** An empty stretch of a ring wider than this (and than three dots' even share) is lopsided. */
+const LOPSIDED = (30 * Math.PI) / 180;
+/** A layout that had to take dots away but fills less of the circle than this is worked out once more. */
+const REFIT_BELOW = 0.9;
+
 /** Radial jitter (px either way) on a ring that uses a single track; multi-track rings sit exactly on their tracks. */
 const RADIAL_JITTER = 6;
 /** Share of a dot's step that must lie inside its company's wedge (its centre always does). */
@@ -258,7 +263,9 @@ function sweep(entries: Entry[], steps: number[][]): Sweep {
 
 /**
  * Deterministic orbit layout. Rings by strength tier; one contiguous wedge per company, shared by all rings,
- * and every dot's centre sits inside its company's wedge.
+ * and every dot's centre sits inside its company's wedge. Companies go round the orbit strongest first, unless
+ * that leaves a ring empty along a wide stretch of the circle: then they are woven so that every ring's dots reach
+ * all the way round it (see spreadRings).
  *
  * Each ring packs dots on concentric tracks within its own radial band, keeping one step between neighbours on
  * a track. When the wedges do not fit around the circle, the ring that costs the most angle gets room in this
@@ -275,11 +282,49 @@ export function orbitLayout(
     scale?: number;
     /**
      * The wedges the student already sees (the previous layout's groups). Companies keep that order, new ones slot
-     * in by strength, and every wedge stays as close as it can to where it was, so one tie growing stronger moves
-     * that one person rather than swapping and sliding whole companies round the orbit.
+     * in after the company they would follow, and every wedge stays as close as it can to where it was, so one tie
+     * growing stronger moves that one person rather than swapping and sliding whole companies round the orbit. When
+     * the network has changed so much that this would leave a ring empty along a wide stretch, it is laid out
+     * afresh instead.
      */
     previous?: readonly Pick<OrbitGroup, 'key' | 'startAngle' | 'endAngle'>[];
   } = {},
+): OrbitLayout {
+  const plain = layOut(people, orgs, opts, false);
+  if (lopsided(plain) <= 1) return plain;
+  // Strength order, and companies kept where the student saw them, are worth a little, never a lopsided map. Woven,
+  // companies the student has seen still keep their order. After the network has changed a lot (a LinkedIn sync
+  // writing thousands of people in batches, each laid out where the last one was), the order and wedges kept from a
+  // much smaller network can still leave a ring badly empty: then it is laid out afresh, and the next change keeps
+  // that layout. The one that reads markedly best wins, else the one closer to what the student saw.
+  const options = [plain, layOut(people, orgs, opts, true)];
+  if (opts.previous?.length && Math.min(...options.map(lopsided)) > 1.5)
+    options.push(layOut(people, orgs, { scale: opts.scale }, true));
+  let best = options[0]!;
+  for (const l of options.slice(1)) if (lopsided(l) < lopsided(best) * 0.9) best = l;
+  return best;
+}
+
+/**
+ * How lopsided a layout looks: its widest empty stretch on any ring, against what that ring may leave empty (30
+ * degrees, or three dots' even share on a sparse ring). Above 1 is lopsided.
+ */
+function lopsided(l: Pick<OrbitLayout, 'nodes'>): number {
+  let worst = 0;
+  for (let ring = 0; ring < 3; ring++) {
+    const n = l.nodes.filter((x) => x.ring === ring).length;
+    if (!n) continue;
+    worst = Math.max(worst, largestGap(l.nodes, ring) / Math.max(LOPSIDED, (3 * Math.PI * 2) / n));
+  }
+  return worst;
+}
+
+/** One layout; `woven`: companies in the order the rings they show dots on call for, rather than by strength. */
+function layOut(
+  people: Person[],
+  orgs: Map<string, Organization>,
+  opts: { scale?: number; previous?: readonly Pick<OrbitGroup, 'key' | 'startAngle' | 'endAngle'>[] },
+  woven: boolean,
 ): OrbitLayout {
   const scale = opts.scale ?? 1;
   const visible = people.filter((p) => p.isHuman && !p.hiddenAt);
@@ -306,18 +351,9 @@ export function orbitLayout(
     g.members.push(p);
     g.strength += p.strength;
   }
-  const ordered = keepOrder(
-    [...groupsMap.values()].sort(
-      (a, b) =>
-        b.strength - a.strength ||
-        b.members.length - a.members.length ||
-        (a.key < b.key ? -1 : a.key > b.key ? 1 : 0),
-    ),
-    opts.previous?.map((g) => g.key),
-  );
   const byStrength = (a: Person, b: Person) => b.strength - a.strength || (a.id < b.id ? -1 : 1);
   const ringMembers = new Map<string, Person[][]>();
-  for (const g of ordered) {
+  for (const g of groupsMap.values()) {
     const rings: Person[][] = [[], [], []];
     for (const p of g.members) {
       const tier = strengthTier(p.strength);
@@ -326,23 +362,33 @@ export function orbitLayout(
     for (const r of rings) r.sort(byStrength);
     ringMembers.set(g.key, rings);
   }
+  const strongestFirst = [...groupsMap.values()].sort(
+    (a, b) =>
+      b.strength - a.strength ||
+      b.members.length - a.members.length ||
+      (a.key < b.key ? -1 : a.key > b.key ? 1 : 0),
+  );
+  const previousOrder = opts.previous?.map((g) => g.key);
+  let ordered = keepOrder(strongestFirst, previousOrder);
   const RINGS = [0, 1, 2] as const;
-  const present = RINGS.map((ring) => ordered.filter((g) => ringMembers.get(g.key)![ring]!.length > 0));
+  const presentOf = () =>
+    RINGS.map((ring) => ordered.filter((g) => ringMembers.get(g.key)![ring]!.length > 0));
+  let present = presentOf();
   const members = (ring: number) => (g: Group) => ringMembers.get(g.key)![ring]!;
   const repack = (ring: 0 | 1 | 2) => {
     const st = state[ring]!;
     st.pack = packRing(present[ring]!, members(ring), st.caps, st.merged);
   };
 
-  // start from the dot size each ring's head count calls for, on its main track, with everyone shown
-  const state: RingState[] = RINGS.map((ring) => {
+  // start from the dot size each ring's head count calls for, on its main track, with everyone shown (but the
+  // companies already folded into "Other companies", when laying out again)
+  const initial = (ring: 0 | 1 | 2, merged = new Set<string>()): RingState => {
     const demand = present[ring]!.reduce((s, g) => s + members(ring)(g).length, 0);
     const sizes = SIZE_STEPS[ring]!;
     let step = 0;
     while (step < sizes.length - 1 && demand > ringGeometry(ring, sizes[step]!).capacity * FILL) step++;
     const geo = ringGeometry(ring, sizes[step]!);
     const caps = new Map<string, number>();
-    const merged = new Set<string>();
     return {
       step,
       geo,
@@ -351,7 +397,8 @@ export function orbitLayout(
       merged,
       pack: packRing(present[ring]!, members(ring), caps, merged),
     };
-  });
+  };
+  let state: RingState[] = RINGS.map((ring) => initial(ring));
 
   const entriesOf = (): Entry[] => {
     const list: Entry[] = ordered
@@ -381,65 +428,115 @@ export function orbitLayout(
     return st.geo.tracks.slice(0, st.tracks).map((r) => trackStep(r - jitter, st.geo.pitch));
   };
 
+  /**
+   * The companies in the order the rings they show dots on call for (see spreadRings); companies the student has
+   * seen keep their order. Only folding a company away on a ring changes that (a "+N" dot never empties a ring), so
+   * it is worked out again only then. True when the order changed.
+   */
+  let folded = woven;
+  const weave = (): boolean => {
+    if (!folded) return false;
+    folded = false;
+    const next = keepOrder(
+      spreadRings(strongestFirst, (g) => RINGS.map((r) => !!state[r]!.pack.slots.get(g.key)?.length)),
+      previousOrder,
+    );
+    if (next.every((g, i) => g === ordered[i])) return false;
+    ordered = next;
+    // what each company shows does not depend on the order: the rings are packed in the new order from now on
+    present = presentOf();
+    entries = entriesOf();
+    return true;
+  };
+
   let entries = entriesOf();
+  weave();
   let steps = RINGS.map(stepsOf);
   let sw = sweep(entries, steps);
-  for (let iter = 0; iter < 500 && sw.total > Math.PI * 2; iter++) {
-    // the angle each ring is responsible for: the wedges it makes widest
-    const cost = [0, 0, 0];
-    sw.binding.forEach((r, i) => {
-      cost[r]! += sw.bounds[i]![1] - sw.bounds[i]![0];
-    });
-    const byCost = [...RINGS].sort((a, b) => cost[b]! - cost[a]! || b - a);
-    // lossless room first (another track, then smaller dots), on the ring that costs most
-    const roomy = byCost.find(
-      (r) =>
-        cost[r]! > 0 &&
-        (state[r]!.tracks < state[r]!.geo.tracks.length || state[r]!.step < SIZE_STEPS[r]!.length - 1),
-    );
-    if (roomy !== undefined) {
-      const st = state[roomy]!;
-      // close ties stay one clean ring for as long as slightly smaller dots allow: a second inner track would
-      // crowd You, and a tie growing closer would send half the ring to it
-      const shrinkFirst = roomy === 0 && st.step < INNER_SHRINK_FIRST;
-      if (st.tracks < st.geo.tracks.length && !shrinkFirst) st.tracks++;
-      else {
-        st.step++;
-        st.geo = ringGeometry(roomy, SIZE_STEPS[roomy]![st.step]!);
-        st.tracks = Math.min(st.tracks, st.geo.tracks.length);
+  /** Makes room until everything fits round the circle; true when it took dots away to get there. */
+  const makeRoom = (): boolean => {
+    let lossy = false;
+    for (let iter = 0; iter < 500; iter++) {
+      if (sw.total <= Math.PI * 2) {
+        // it fits: once more in the order the dots it now shows call for (folding changes it), or done
+        if (!weave()) break;
+        sw = sweep(entries, steps);
+        continue;
       }
-    } else {
-      // then fewer dots, weak and medium rings before strong ties, and only in the wedges that ring makes widest
-      const binding = (r: number) =>
-        entries.filter((e, i) => sw.binding[i] === r && e.key !== OTHER_GROUP_KEY && e.slots[r]!.length > 0);
-      const ring = byCost.find((r) => r > 0 && binding(r).length) ?? byCost.find((r) => binding(r).length);
-      if (ring === undefined) break;
-      const st = state[ring]!;
-      const wide = binding(ring);
-      const groupOf = new Map(present[ring]!.map((g) => [g.key, g]));
-      let capped = 0;
-      const single: Group[] = [];
-      for (const e of wide) {
-        const g = groupOf.get(e.key)!;
-        const m = members(ring)(g).length;
-        const shown = e.slots[ring]!.length;
-        // keep every "+N" dot a real group: never fewer than MIN_CLUSTER people behind it
-        const q = Math.min(Math.floor(shown * 0.75), m - MIN_CLUSTER + 1);
-        if (shown > 1 && q >= 1) {
-          st.caps.set(e.key, q);
-          capped++;
-        } else single.push(g);
+      // the angle each ring is responsible for: the wedges it makes widest
+      const cost = [0, 0, 0];
+      sw.binding.forEach((r, i) => {
+        cost[r]! += sw.bounds[i]![1] - sw.bounds[i]![0];
+      });
+      const byCost = [...RINGS].sort((a, b) => cost[b]! - cost[a]! || b - a);
+      // lossless room first (another track, then smaller dots), on the ring that costs most
+      const roomy = byCost.find(
+        (r) =>
+          cost[r]! > 0 &&
+          (state[r]!.tracks < state[r]!.geo.tracks.length || state[r]!.step < SIZE_STEPS[r]!.length - 1),
+      );
+      if (roomy !== undefined) {
+        const st = state[roomy]!;
+        // close ties stay one clean ring for as long as slightly smaller dots allow: a second inner track would
+        // crowd You, and a tie growing closer would send half the ring to it
+        const shrinkFirst = roomy === 0 && st.step < INNER_SHRINK_FIRST;
+        if (st.tracks < st.geo.tracks.length && !shrinkFirst) st.tracks++;
+        else {
+          st.step++;
+          st.geo = ringGeometry(roomy, SIZE_STEPS[roomy]![st.step]!);
+          st.tracks = Math.min(st.tracks, st.geo.tracks.length);
+        }
+      } else if (weave()) {
+        // before anyone is folded away: the companies in the order the dots they now show call for, which may be
+        // room enough already
+      } else {
+        // then fewer dots, weak and medium rings before strong ties, and only in the wedges that ring makes widest
+        const binding = (r: number) =>
+          entries.filter(
+            (e, i) => sw.binding[i] === r && e.key !== OTHER_GROUP_KEY && e.slots[r]!.length > 0,
+          );
+        const ring = byCost.find((r) => r > 0 && binding(r).length) ?? byCost.find((r) => binding(r).length);
+        if (ring === undefined) break;
+        const st = state[ring]!;
+        const wide = binding(ring);
+        const groupOf = new Map(present[ring]!.map((g) => [g.key, g]));
+        let capped = 0;
+        const single: Group[] = [];
+        for (const e of wide) {
+          const g = groupOf.get(e.key)!;
+          const m = members(ring)(g).length;
+          const shown = e.slots[ring]!.length;
+          // keep every "+N" dot a real group: never fewer than MIN_CLUSTER people behind it
+          const q = Math.min(Math.floor(shown * 0.75), m - MIN_CLUSTER + 1);
+          if (shown > 1 && q >= 1) {
+            st.caps.set(e.key, q);
+            capped++;
+          } else single.push(g);
+        }
+        if (!capped) {
+          // every wide wedge already shows one dot here: fold the smaller half of them into "Other companies"
+          single.sort((a, b) => members(ring)(a).length - members(ring)(b).length || a.strength - b.strength);
+          for (const g of single.slice(0, Math.max(1, Math.ceil(single.length / 2)))) st.merged.add(g.key);
+          folded = true;
+        }
+        lossy = true;
+        repack(ring);
+        entries = entriesOf();
       }
-      if (!capped) {
-        // every wide wedge already shows one dot here: fold the smaller half of them into "Other companies"
-        single.sort((a, b) => members(ring)(a).length - members(ring)(b).length || a.strength - b.strength);
-        for (const g of single.slice(0, Math.max(1, Math.ceil(single.length / 2)))) st.merged.add(g.key);
-      }
-      repack(ring);
-      entries = entriesOf();
+      steps = RINGS.map(stepsOf);
+      sw = sweep(entries, steps);
     }
+    return lossy;
+  };
+  if (makeRoom() && woven && sw.total < Math.PI * 2 * REFIT_BELOW) {
+    // Dots were taken away while the companies were still in an order that wasted room (the order only settles as
+    // companies fold away), and a lot of the circle is left over: lay out again from full size in the settled order,
+    // keeping only what folded away, so no more people hide in "+N" dots than the circle needs.
+    state = RINGS.map((ring) => initial(ring, state[ring]!.merged));
+    entries = entriesOf();
     steps = RINGS.map(stepsOf);
     sw = sweep(entries, steps);
+    makeRoom();
   }
 
   // spread spare angle in proportion; if nothing fits (cannot happen with at least a few degrees per dot),
@@ -632,8 +729,62 @@ function anchorWedges(
 }
 
 /**
+ * Companies round the orbit so that every ring's dots go all the way round it.
+ *
+ * Rings share each wedge's angle: a wedge is as wide as the ring that needs the most angle in it, and only its own
+ * company's dots sit in it. In plain strength order the big companies (and "Independent"), whose people are mostly
+ * weak ties on the outer ring, come first, and the many small companies that show only a close tie (their weak ties
+ * fold into "Other companies") all come last: the outer ring is crammed many tracks deep into one side of the circle
+ * and the other side has no outer dots at all, a lopsided map. So, ring by ring from the one the fewest companies
+ * show dots on, the companies that show dots there are spread evenly between those that do not, the way Bresenham
+ * spreads steps along a line (each side ordered the same way for the other rings, strongest first otherwise). A run
+ * of wedges with nothing on a ring is then a few dots at most, and the first close tie in a run takes no angle of its
+ * own (it sits in the inner ring's room beside the wedge before), so the orbit also packs tighter.
+ * `rings`: which rings a company shows dots on; one that shows none has no wedge and goes last.
+ */
+function spreadRings<T>(byStrength: T[], rings: (g: T) => boolean[]): T[] {
+  const on = new Map(byStrength.map((g) => [g, rings(g)]));
+  const order = (list: T[], left: number[]): T[] => {
+    if (list.length < 2 || !left.length) return list;
+    // the ring the fewest of these show dots on, whose dots would bunch the most
+    let ring = -1;
+    let fewest = Number.POSITIVE_INFINITY;
+    for (const r of left) {
+      const n = list.filter((g) => on.get(g)![r]).length;
+      if (n > 0 && n < list.length && n < fewest) {
+        fewest = n;
+        ring = r;
+      }
+    }
+    if (ring < 0) return list;
+    const rest = left.filter((r) => r !== ring);
+    const some = order(
+      list.filter((g) => on.get(g)![ring]),
+      rest,
+    );
+    const others = order(
+      list.filter((g) => !on.get(g)![ring]),
+      rest,
+    );
+    // each of `some` in the middle of its even share of the line
+    const out: T[] = [];
+    let k = 0;
+    some.forEach((g, j) => {
+      const before = Math.floor(((j + 0.5) * others.length) / some.length);
+      while (k < before) out.push(others[k++]!);
+      out.push(g);
+    });
+    while (k < others.length) out.push(others[k++]!);
+    return out;
+  };
+  const shown = byStrength.filter((g) => on.get(g)!.some(Boolean));
+  const hidden = byStrength.filter((g) => !on.get(g)!.some(Boolean));
+  return [...order(shown, [0, 1, 2]), ...hidden];
+}
+
+/**
  * Companies the student has already seen keep their order round the orbit; a new company goes right after the
- * known company it follows by strength (or first, when it is the strongest).
+ * known company it follows in `byStrength` (or first, when it comes before them all).
  */
 function keepOrder<T extends { key: string }>(byStrength: T[], order?: readonly string[]): T[] {
   if (!order?.length) return byStrength;
@@ -704,6 +855,22 @@ function separateOnTracks(nodes: OrbitNode[], geometry: RingGeometry[]): void {
       });
     }
   }
+}
+
+/**
+ * The widest stretch of a ring's circle with no dot on it (radians): what makes a map look lopsided. 2π for a ring
+ * with no dots.
+ */
+export function largestGap(nodes: readonly Pick<OrbitNode, 'angle' | 'ring'>[], ring: number): number {
+  const TAU = Math.PI * 2;
+  const a = nodes
+    .filter((n) => n.ring === ring)
+    .map((n) => ((n.angle % TAU) + TAU) % TAU)
+    .sort((x, y) => x - y);
+  if (!a.length) return TAU;
+  let gap = a[0]! + TAU - a[a.length - 1]!;
+  for (let i = 1; i < a.length; i++) gap = Math.max(gap, a[i]! - a[i - 1]!);
+  return gap;
 }
 
 /** Number of dots whose centre lies outside their company's wedge (used by tests and the map's readability check). */
