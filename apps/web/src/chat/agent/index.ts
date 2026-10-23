@@ -1,12 +1,7 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import type { User } from '@orbit/core';
 import { newId } from '@orbit/core';
-import { db } from '../../db/schema';
-import { DEMO_USER_ID } from '../../engine/demo';
-import { activeGoals } from '../../engine/goals';
-import { recentPaths } from '../../engine/paths';
 import { MODEL, makeWrap } from '../../integrations/anthropic';
-import { isServerUser } from '../../integrations/orbitApi';
 import { refreshPrefs } from '../../integrations/prefs';
 import type {
   ChatAction,
@@ -24,10 +19,10 @@ import { learnAfterTurn } from './afterTurn';
 import { chipsFor, resolveChip, setupChipsFor } from './chips';
 import { type ChatClient, chatClient } from './client';
 import { type ExecuteFn, runTurn } from './loop';
-import { chatMode, chatModeNote, SETTINGS_ROUTE } from './mode';
-import type { MatchablePerson } from './people-match';
+import { chatMode, chatModeNote } from './mode';
 import { type RouterIntent, routeUtterance } from './router';
-import { peopleWaitingNow } from './setup';
+import { routerContextFor } from './routerContext';
+import { threadContextFor } from './routerThread';
 import { ChatStore, conversationNonce } from './store';
 
 export { CHAT_BETAS, MAX_ITERATIONS, MAX_TOKENS, runTurn } from './loop';
@@ -116,6 +111,8 @@ export function createChatEngine(deps: ChatEngineDeps): ChatEngine {
     caller: ToolContext['caller'],
     onEvent: (e: TurnEvent) => void,
     lead?: string,
+    /** false while more of the same turn follows (a message that asked for two things) */
+    finish = true,
   ): Promise<void> => {
     const user = getUser();
     const spec = deps.registry.get(tool);
@@ -156,7 +153,7 @@ export function createChatEngine(deps: ChatEngineDeps): ChatEngine {
     });
     if (env.kind === 'needs_confirmation' && env.confirmationId) liveInputs.set(env.confirmationId, input);
     onEvent({ type: 'tool_result', toolUseId, envelope: env });
-    onEvent({ type: 'done', stopReason: 'end_turn', messageId: row.id });
+    if (finish) onEvent({ type: 'done', stopReason: 'end_turn', messageId: row.id });
   };
 
   const sayText = async (
@@ -180,71 +177,6 @@ export function createChatEngine(deps: ChatEngineDeps): ChatEngine {
     onEvent({ type: 'done', stopReason: 'end_turn', messageId: row.id });
   };
 
-  const peopleFor = async (userId: string): Promise<MatchablePerson[]> =>
-    (await db.people.where('userId').equals(userId).toArray()).filter((p) => p.isHuman && !p.hiddenAt);
-
-  const companiesFor = async (userId: string): Promise<string[]> => {
-    const [targets, people] = await Promise.all([
-      db.targetCompanies.where('userId').equals(userId).toArray(),
-      db.people.where('userId').equals(userId).toArray(),
-    ]);
-    const names = new Set<string>();
-    for (const t of targets) names.add(t.nameRaw);
-    for (const p of people) if (p.currentOrganizationRaw) names.add(p.currentOrganizationRaw);
-    return [...names];
-  };
-
-  /** The open cards, unsent drafts and next booked chat the router can name. */
-  const routerExtras = async (userId: string, now: Date) => {
-    const [cards, drafts, events, briefs, integrations] = await Promise.all([
-      db.suggestions
-        .where('userId')
-        .equals(userId)
-        .filter((s) => s.status === 'pending')
-        .toArray(),
-      db.outbound
-        .where('userId')
-        .equals(userId)
-        .filter((o) => ['draft', 'failed', 'handed_off'].includes(o.status))
-        .toArray(),
-      db.events
-        .where('userId')
-        .equals(userId)
-        .filter(
-          (e) => e.status !== 'cancelled' && !!e.chatId && new Date(e.startAt).getTime() > now.getTime(),
-        )
-        .toArray(),
-      db.briefs.where('userId').equals(userId).toArray(),
-      db.integrations.where('userId').equals(userId).toArray(),
-    ]);
-    const live = integrations.some(
-      (i) => i.provider === 'linkedin_live' && i.status !== 'revoked' && !!i.externalAccountId,
-    );
-    const latestBrief = briefs.sort((a, b) => b.generatedAt.localeCompare(a.generatedAt))[0];
-    const next = events.sort((a, b) => a.startAt.localeCompare(b.startAt))[0];
-    const nextChat = next?.chatId ? await db.chats.get(next.chatId) : undefined;
-    return {
-      cards: cards
-        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-        .map((c) => ({ id: c.id, personId: c.personId, kind: c.kind })),
-      drafts: drafts
-        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-        .map((d) => ({ id: d.id, personId: d.personId, status: d.status, kind: d.kind })),
-      nextChat: nextChat ? { personId: nextChat.personId } : undefined,
-      goals: (await activeGoals(userId)).map((g) => ({ id: g.id, kind: g.kind, title: g.title })),
-      paths: recentPaths(),
-      account: isServerUser(userId),
-      waiting: peopleWaitingNow(cards, latestBrief, now),
-      // what is connected, the same way the snapshot's Setup line counts it
-      setup: {
-        linkedin: live || integrations.some((i) => i.provider === 'linkedin_csv'),
-        linkedinLive: live,
-        google: integrations.some((i) => i.provider === 'google' && i.status !== 'revoked'),
-        demo: userId === DEMO_USER_ID,
-      },
-    };
-  };
-
   const routerTurn = async (
     conversation: ChatConversation,
     text: string,
@@ -252,23 +184,34 @@ export function createChatEngine(deps: ChatEngineDeps): ChatEngine {
   ): Promise<void> => {
     const user = getUser();
     await store.append(conversation.id, { role: 'user', content: [{ type: 'text', text }] }, clock());
-    const [people, companies, extra] = await Promise.all([
-      peopleFor(user.id),
-      companiesFor(user.id),
-      routerExtras(user.id, clock()),
+    const [first, thread] = await Promise.all([
+      routerContextFor(user.id, clock()),
+      threadContextFor(store, conversation.id),
     ]);
-    const intent = routeUtterance(text, {
-      registry: deps.registry,
-      people,
-      companies,
-      ...extra,
-      firstName: user.firstName,
-      modeNote: chatModeNote()?.text ?? '',
-      settingsHref: SETTINGS_ROUTE,
-    });
-    if (intent.kind === 'tool')
-      return runToolDirect(conversation, intent.tool, intent.input, 'router', onEvent, intent.lead);
-    return sayText(conversation, intent, onEvent);
+    let ctx = first;
+    const route = (t: string, thread?: Awaited<ReturnType<typeof threadContextFor>>) =>
+      routeUtterance(t, { registry: deps.registry, ...ctx, firstName: user.firstName, thread });
+    const intent = route(text, thread);
+    if (intent.kind !== 'tool') return sayText(conversation, intent, onEvent);
+    const rest = intent.andThen ?? [];
+    await runToolDirect(
+      conversation,
+      intent.tool,
+      intent.input,
+      'router',
+      onEvent,
+      intent.lead,
+      !rest.length,
+    );
+    // the rest of a message that asked for two things, each read with what the first part just did
+    for (const [k, part] of rest.entries()) {
+      ctx = await routerContextFor(user.id, clock());
+      const next = route(part, await threadContextFor(store, conversation.id));
+      const last = k === rest.length - 1;
+      if (next.kind === 'tool')
+        await runToolDirect(conversation, next.tool, next.input, 'router', onEvent, next.lead, last);
+      else if (last) await sayText(conversation, next, onEvent);
+    }
   };
 
   /** Run a pending confirmation. The registry checks the token and owns the row's status while the tool runs. */

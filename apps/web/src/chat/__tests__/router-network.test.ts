@@ -86,7 +86,12 @@ const HANDLED: [string, string, Record<string, unknown>][] = [
   ],
   // introductions
   ['ask Sam to introduce me to Priya', 'ask_for_intro', { pathId: 'path_9', targetPersonId: 'p1' }],
-  ['ask Daniel for an intro to Maya', 'find_routes', { personId: 'p3' }],
+  // no route found in this tab: the request goes straight to the introducer
+  [
+    'ask Daniel for an intro to Maya',
+    'create_draft',
+    { kind: 'intro_request', personId: 'p2', targetPersonId: 'p3' },
+  ],
   // replies
   ['who replied?', 'list_replies', {}],
   ['any new replies', 'list_replies', {}],
@@ -160,7 +165,12 @@ describe('router: the networking agent', () => {
     expect(routeUtterance('find Priya', ctx())).toMatchObject({ kind: 'tool', tool: 'get_person' });
     expect(routeUtterance('show replied', ctx())).toMatchObject({ kind: 'tool', tool: 'list_pipeline' });
     expect(routeUtterance('explain my strength score', ctx()).kind).toBe('refuse');
-    expect(routeUtterance("why hasn't Priya replied?", ctx()).kind).toBe('refuse');
+    // a judgement call about someone: the key line, with what Orbit can do for them
+    expect(routeUtterance("why hasn't Priya replied?", ctx())).toMatchObject({
+      kind: 'tool',
+      tool: 'offer_choices',
+      lead: expect.stringMatching(/needs a Claude key/),
+    });
   });
 
   it('without an Orbit account, "who replied" and "what\'s due" keep their older meaning', () => {

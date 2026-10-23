@@ -115,8 +115,8 @@ export const addNote = defineTool({
     };
     if (n.matchStatus === 'unmatched') {
       const summary = n.personIds.length
-        ? 'Saved. Orbit is not sure who this was with; check the match card in Drafts or say who with rematch_note.'
-        : 'Saved. Who was this with? Say so with rematch_note, or it stays unfiled.';
+        ? 'Saved. Orbit is not sure who this was with: check the match card in Drafts, or tell me who it was with.'
+        : 'Saved. Who was this with? Tell me, or it stays unfiled.';
       return ok('note', out, out, summary, `/notes/new?note=${n.id}`);
     }
     const found = [

@@ -259,13 +259,19 @@ const REFUSED: string[] = [
   'make it more formal',
   'translate my note to Spanish',
   'is it rude to bump twice?',
-  'how should I prepare for my chat with Sofia?',
-  'recommend who to talk to next',
   'compare Priya and Daniel',
-  'asdfgh qwerty',
-  'what is the capital of France',
-  'tell me a joke',
   'plan for this week',
+];
+
+/** Not something Orbit does: it says it did not catch that and offers the closest things it can do. */
+const NOT_UNDERSTOOD: string[] = ['asdfgh qwerty', 'what is the capital of France', 'tell me a joke'];
+
+/** Requests the router once refused as judgement calls and now answers with a tool. */
+const NOW_HANDLED: [string, string][] = [
+  ['how should I prepare for my chat with Sofia?', 'get_person'],
+  ['recommend who to talk to next', 'list_recommendations'],
+  ['what should I send Dan next', 'create_draft'],
+  ['who should I reach out to for PM at Stripe', 'find_routes'],
 ];
 
 describe('people matching (lifted from the command palette)', () => {
@@ -347,17 +353,33 @@ describe('router: handled utterances', () => {
 });
 
 describe('router: honest refusals', () => {
-  it.each(REFUSED)('%s -> refused with the key note', (utterance) => {
+  // a judgement call: said plainly, with the key line, or with what Orbit can do for the person it names
+  const keyRefusal = (r: ReturnType<typeof routeUtterance>) =>
+    (r.kind === 'refuse' && /needs a Claude key/.test(r.text) && r.href === '/settings/integrations') ||
+    (r.kind === 'tool' && r.tool === 'offer_choices' && /needs a Claude key/.test(r.lead ?? ''));
+
+  it.each(REFUSED)('%s -> refused with the key line', (utterance) => {
     const r = routeUtterance(utterance, ctx());
-    expect(r.kind).toBe('refuse');
-    if (r.kind !== 'refuse') return;
-    expect(r.text).toContain(MODE_NOTE);
-    expect(r.href).toBe('/settings/integrations');
-    expect(r.text).not.toMatch(/[—–!]/);
+    expect(keyRefusal(r), JSON.stringify(r)).toBe(true);
+    const words = r.kind === 'tool' ? (r.lead ?? '') : r.text;
+    expect(words).not.toMatch(/[—–!]/);
+    // one short line, not the whole mode note
+    expect(words.split(/\s+/).length).toBeLessThan(30);
+    expect(words).not.toContain(MODE_NOTE);
   });
 
-  it('refuses at least twenty shapes of request', () => {
-    expect(REFUSED.length).toBeGreaterThanOrEqual(20);
+  it('refuses at least twelve shapes of request', () => {
+    expect(REFUSED.length).toBeGreaterThanOrEqual(12);
+  });
+
+  it.each(NOT_UNDERSTOOD)('%s -> says so and offers the closest things it can do', (utterance) => {
+    const r = routeUtterance(utterance, ctx());
+    expect(r).toMatchObject({ kind: 'tool', tool: 'offer_choices' });
+    expect((r as { lead?: string }).lead).toMatch(/didn't catch that/);
+  });
+
+  it.each(NOW_HANDLED)('%s -> once a judgement call, now %s', (utterance, tool) => {
+    expect(routeUtterance(utterance, ctx())).toMatchObject({ kind: 'tool', tool });
   });
 
   it('an empty message gets the command list', () => {
@@ -531,10 +553,14 @@ describe('router: small talk with data', () => {
     expect(add).toMatchObject({ kind: 'text' });
     expect((add as { text: string }).text).toMatch(/Who did you meet\?/);
     expect(add).not.toMatchObject({ tool: 'add_person' });
-    // a real name still adds
+    // a real name asks for a way to reach them, then adds
     expect(routeUtterance('add person Jordan Lee at Figma', ctx({ registry: withTools }))).toMatchObject({
-      tool: 'add_person',
+      kind: 'text',
+      text: expect.stringMatching(/email or LinkedIn link\?/),
     });
+    expect(
+      routeUtterance('add person Jordan Lee at Figma, jordan@figma.com', ctx({ registry: withTools })),
+    ).toMatchObject({ tool: 'add_person' });
   });
 });
 
