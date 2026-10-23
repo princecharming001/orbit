@@ -5,7 +5,7 @@
  * the inbox is not a source of new people.
  */
 import type { CoffeeChat, Person, User } from '@orbit/core';
-import { heuristicSignal } from '@orbit/core';
+import { heuristicSignal, peopleNamed } from '@orbit/core';
 import { notify } from '../db/repo';
 import { db } from '../db/schema';
 import { usesMockConnectors } from '../integrations/connectorsMock';
@@ -38,7 +38,6 @@ export type ReplySyncResult =
 
 const none: ReplySyncResult = { ok: true, replies: 0, people: [] };
 const time = (at: string | undefined) => (at ? Date.parse(at) : Number.NaN);
-const norm = (name: string) => name.trim().replace(/\s+/g, ' ').toLowerCase();
 
 /**
  * Read the student's LinkedIn messages since the last read and record the replies. Does nothing for an Orbit account
@@ -88,12 +87,15 @@ export async function autoSyncLinkedInReplies(
 async function personFor(
   counterpart: LinkedInInboxMessage['counterpart'],
   byMember: Map<string, Person>,
-  byName: Map<string, Person[]>,
+  people: Person[],
 ): Promise<{ person: Person; chat: CoffeeChat } | undefined> {
   let person = counterpart.providerId ? byMember.get(counterpart.providerId) : undefined;
   let byNameOnly = false;
   if (!person && counterpart.name) {
-    const same = byName.get(norm(counterpart.name)) ?? [];
+    // the shared name matcher (accents, scripts, nicknames, middle names), and only someone with no other LinkedIn id
+    const same = peopleNamed(people, counterpart.name).filter(
+      (p) => !p.linkedinMemberId || p.linkedinMemberId === counterpart.providerId,
+    );
     if (same.length === 1) {
       person = same[0];
       byNameOnly = true;
@@ -121,8 +123,6 @@ export async function recordLinkedInMessages(
   if (!messages.length) return [];
   const people = await db.people.where('userId').equals(user.id).toArray();
   const byMember = new Map(people.filter((p) => p.linkedinMemberId).map((p) => [p.linkedinMemberId!, p]));
-  const byName = new Map<string, Person[]>();
-  for (const p of people) byName.set(norm(p.displayName), [...(byName.get(norm(p.displayName)) ?? []), p]);
   const chats = new Map<string, LinkedInInboxMessage[]>();
   for (const m of messages) {
     if (!Number.isFinite(time(m.at))) continue;
@@ -130,7 +130,7 @@ export async function recordLinkedInMessages(
   }
   const replied: string[] = [];
   for (const msgs of chats.values()) {
-    const found = await personFor(msgs[0]!.counterpart, byMember, byName);
+    const found = await personFor(msgs[0]!.counterpart, byMember, people);
     if (!found) continue;
     const { person, chat } = found;
     const sorted = [...msgs].sort((a, b) => time(a.at) - time(b.at));

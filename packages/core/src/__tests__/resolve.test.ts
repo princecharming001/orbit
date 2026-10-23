@@ -115,11 +115,15 @@ describe('org-name variants (NRC-05)', () => {
     );
     expect(withMail).toMatchObject({ kind: 'probable', personId: 'w' });
   });
-  it('matches an accented CSV name against the plain gmail spelling at Bain', () => {
+  it('matches an accented CSV name against the plain gmail spelling at Bain, as a suggestion only', () => {
     const people = [person('j', 'José Núñez-García', { currentOrganizationRaw: 'Bain & Company, Inc.' })];
-    expect(
-      resolveIdentity({ displayName: 'Jose Nunez-Garcia', companyRaw: 'Bain', source: 'gmail' }, { people }),
-    ).toMatchObject({ kind: 'match', personId: 'j', via: 'name_org' });
+    // name and employer alone never merge: two José Núñez-Garcías at Bain would look exactly like this (plan 17 §A)
+    const r = resolveIdentity(
+      { displayName: 'Jose Nunez-Garcia', companyRaw: 'Bain', source: 'gmail' },
+      { people },
+    );
+    expect(r).toMatchObject({ kind: 'suggest', personId: 'j' });
+    if (r.kind === 'suggest') expect(r.features).toMatchObject({ name_sim: 1, org_match: 1 });
   });
   it('scores a prefix-contained org as a partial match, not a contradiction', () => {
     const p = person('g', 'Ana Lima', { currentOrganizationRaw: 'Google DeepMind' });

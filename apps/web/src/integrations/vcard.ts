@@ -2,6 +2,7 @@
  * Contacts exported from the Mac's Contacts app (File, Export, Export vCard): who each phone number and address
  * belongs to, so the texts Orbit imports are filed on named people. Read here; nothing is uploaded.
  */
+import { DEFAULT_PHONE_REGION, toE164 } from '@orbit/core';
 
 export interface VCardContact {
   name: string;
@@ -14,18 +15,16 @@ export interface VCardContact {
 }
 
 /**
- * A phone number in one form: +15551234567. Ten US digits get +1; a leading 00 is an international prefix; short codes
- * (verification texts, 5 or 6 digits) are not people and come back undefined.
+ * A phone number in one form, E.164 (+15551234567), read with libphonenumber-js in `region` (the country the
+ * student's numbers are written for; core `phoneRegionFor`) when it has no country code: "(555) 123-4567" is
+ * +15551234567 in the US and "020 7946 0958" is +442079460958 in the UK. A leading 00 is an international prefix;
+ * short codes (verification texts, 5 or 6 digits) are not people and come back undefined.
  */
-export function normalizePhone(raw: string | undefined): string | undefined {
-  if (!raw) return undefined;
-  const plus = raw.trim().startsWith('+');
-  let d = raw.replace(/\D/g, '');
-  if (d.startsWith('00')) d = d.slice(2);
-  if (d.length < 7) return undefined;
-  if (!plus && d.length === 10) return `+1${d}`;
-  if (!plus && d.length === 11 && d.startsWith('1')) return `+${d}`;
-  return `+${d}`;
+export function normalizePhone(
+  raw: string | undefined,
+  region: string = DEFAULT_PHONE_REGION,
+): string | undefined {
+  return toE164(raw, region);
 }
 
 const vText = (v: string) =>
@@ -34,7 +33,7 @@ const vText = (v: string) =>
     .replace(/\\([,;\\])/g, '$1')
     .trim();
 
-export function parseVCards(text: string): VCardContact[] {
+export function parseVCards(text: string, region: string = DEFAULT_PHONE_REGION): VCardContact[] {
   // folded lines continue with a leading space or tab
   const lines = text
     .replace(/\r\n/g, '\n')
@@ -68,7 +67,7 @@ export function parseVCards(text: string): VCardContact[] {
       cur.lastName = last || undefined;
       cur.firstName = first || undefined;
     } else if (key === 'TEL') {
-      const p = normalizePhone(value);
+      const p = normalizePhone(value, region);
       if (p && !cur.phones.includes(p)) cur.phones.push(p);
     } else if (key === 'EMAIL') {
       const e = vText(value).toLowerCase();

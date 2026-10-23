@@ -1,5 +1,16 @@
-import type { IncomingIdentity, Organization, Person, PersonField, PersonSource } from '@orbit/core';
+import type {
+  Edge,
+  IncomingIdentity,
+  Organization,
+  Person,
+  PersonField,
+  PersonSource,
+  Touchpoint,
+} from '@orbit/core';
 import {
+  compareNames,
+  differentLinkedInProfiles,
+  doNotMergeKey,
   findDuplicatePairs,
   incomingName,
   isPlaceholderName,
@@ -13,9 +24,10 @@ import {
   resolveIdentity,
   roleFromHeadline,
   SUGGEST_THRESHOLD,
+  sharePhone,
 } from '@orbit/core';
-import { feedback } from '../db/repo';
-import { db } from '../db/schema';
+import { feedback, recomputePersonStrength } from '../db/repo';
+import { db, type TextThread } from '../db/schema';
 
 export async function upsertOrganization(
   nameRaw: string | undefined,
@@ -70,13 +82,29 @@ const PRECEDENCE: Record<PersonSource, number> = {
 export interface PeopleCache {
   people: Person[];
   orgDomains: Map<string, string[]>;
+  /** pairs the student said are two people (a rejected "Possible duplicate"): never merged or suggested again */
+  doNotMerge?: Set<string>;
 }
 export async function loadPeopleCache(userId: string): Promise<PeopleCache> {
-  const [people, orgs] = await Promise.all([
+  const [people, orgs, doNotMerge] = await Promise.all([
     db.people.where('userId').equals(userId).toArray(),
     db.organizations.toArray(),
+    loadDoNotMerge(userId),
   ]);
-  return { people, orgDomains: new Map(orgs.map((o) => [o.id, o.domains])) };
+  return { people, orgDomains: new Map(orgs.map((o) => [o.id, o.domains])), doNotMerge };
+}
+
+/**
+ * The pairs the student said are not the same person: in this browser, the "Possible duplicate" cards they answered
+ * no to (the server keeps the same thing as orbit.do_not_merge).
+ */
+export async function loadDoNotMerge(userId: string): Promise<Set<string>> {
+  const rows = await db.merges
+    .where('userId')
+    .equals(userId)
+    .filter((m) => m.status === 'rejected')
+    .toArray();
+  return new Set(rows.map((m) => doNotMergeKey(m.personAId, m.personBId)));
 }
 
 /**
@@ -127,7 +155,10 @@ export async function upsertPerson(
   const c = cache ?? (await loadPeopleCache(inp.userId));
   const people = c.people;
   const orgDomains = c.orgDomains;
-  const decision = resolveIdentity(inp, { people, orgDomains });
+  c.doNotMerge ??= await loadDoNotMerge(inp.userId);
+  // the same rules as the server (supabase/functions/_shared/ingest/people.ts): pairs the student rejected are never
+  // matched, and an address that proves a LinkedIn-only namesake is its owner merges the two
+  const decision = resolveIdentity(inp, { people, orgDomains, doNotMerge: c.doNotMerge });
   const now = new Date().toISOString();
   const email = inp.email ? normalizeEmail(inp.email) : undefined;
   // shown as written: Gmail ignores dots, but a student checking "marcus.bell@gmail.com" expects to see the dot
@@ -137,10 +168,21 @@ export async function upsertPerson(
   const liUrl = normalizeLinkedInUrl(inp.linkedinUrl);
   const name = incomingName(inp);
   const title = inp.title ?? inp.position;
+  const phones = [...new Set((inp.phones ?? []).filter(Boolean))];
   const org = inp.companyRaw ? await upsertOrganization(inp.companyRaw) : undefined;
   let target: Person | undefined;
   if (decision.kind === 'match' || decision.kind === 'probable')
     target = people.find((p) => p.id === decision.personId);
+  if (target && decision.kind === 'match' && decision.mergeWith?.length) {
+    // the same mailbox under a LinkedIn-only person's name: that person is this one
+    for (const other of decision.mergeWith) {
+      await mergePeople(inp.userId, target.id, other);
+      const i = people.findIndex((p) => p.id === other);
+      if (i >= 0) people.splice(i, 1);
+    }
+    const fresh = await db.people.get(target.id);
+    if (fresh) Object.assign(target, fresh);
+  }
   if (decision.kind === 'suggest') {
     // create new, and record a merge suggestion for the user
     const other = people.find((p) => p.id === decision.personId);
@@ -198,6 +240,14 @@ export async function upsertPerson(
     changes.linkedinUrl = liUrl;
     changes.linkedinSlug = linkedInSlug(liUrl);
   }
+  if (
+    inp.linkedinMemberId &&
+    !target.linkedinMemberId &&
+    !differentLinkedInProfiles({ linkedinSlug: linkedInSlug(liUrl) }, target)
+  )
+    changes.linkedinMemberId = inp.linkedinMemberId;
+  if (phones.some((ph) => !(target.phones ?? []).includes(ph)))
+    changes.phones = [...new Set([...(target.phones ?? []), ...phones])];
   if (title && title !== target.currentTitle && canWrite('currentTitle', target.currentTitle)) {
     changes.currentTitle = title;
     wrote('currentTitle');
@@ -234,8 +284,15 @@ export async function upsertPerson(
     changes.namePlaceholder = false;
     wrote('displayName');
   }
-  if (Object.keys(changes).some((k) => k !== 'emails' && k !== 'primaryEmail' && k !== 'linkedinUrl'))
-    changes.fieldSources = fieldSources;
+  const identityOnly = new Set([
+    'emails',
+    'primaryEmail',
+    'linkedinUrl',
+    'linkedinSlug',
+    'linkedinMemberId',
+    'phones',
+  ]);
+  if (Object.keys(changes).some((k) => !identityOnly.has(k))) changes.fieldSources = fieldSources;
   if (inp.connectedOn && !target.linkedinConnectedOn) changes.linkedinConnectedOn = inp.connectedOn;
   if (!target.sources.includes(inp.source)) changes.sources = [...target.sources, inp.source];
   if (inp.firstSeenAt && (!target.firstSeenAt || inp.firstSeenAt < target.firstSeenAt))
@@ -279,8 +336,10 @@ export async function upsertPerson(
       primaryEmail: email,
       primaryEmailAsWritten: writtenField,
       emails: email ? [email] : [],
+      phones: phones.length ? phones : undefined,
       linkedinUrl: liUrl,
       linkedinSlug: linkedInSlug(liUrl),
+      linkedinMemberId: inp.linkedinMemberId,
       headline: inp.headline ?? (title && org ? `${title} at ${org.name}` : title),
       currentTitle: title,
       currentOrganizationId: org?.id,
@@ -307,9 +366,137 @@ export async function upsertPerson(
   }
 }
 
+/** Which source wrote a field, as a rank (people stored before fieldSources: their most trusted source). */
+function fieldRank(p: Person, field: PersonField): number {
+  const writer = p.fieldSources?.[field];
+  return writer ? PRECEDENCE[writer] : Math.max(0, ...p.sources.map((x) => PRECEDENCE[x] ?? 0));
+}
+
+const blank = (v: unknown) => v === undefined || v === null || v === '';
+
+/**
+ * What the survivor of a merge keeps: its own name (unless it is only a stand-in from an address), every address,
+ * number and source of both, and for each profile field the value from the more trusted source (the student's own
+ * edit over LinkedIn over an email signature). The LinkedIn profile, its member id and its photo stay together: they
+ * are one profile, so they come from the same side.
+ */
+export function mergedFields(s: Person, m: Person, now: string): Partial<Person> {
+  const out: Partial<Person> = { updatedAt: now };
+  const fieldSources: Partial<Record<PersonField, PersonSource>> = { ...(s.fieldSources ?? {}) };
+  const take = (field: PersonField, keys: (keyof Person)[]) => {
+    const has = (p: Person) => keys.some((k) => !blank(p[k]));
+    const fromM = has(m) && (!has(s) || fieldRank(m, field) > fieldRank(s, field));
+    if (!fromM) return;
+    for (const k of keys) (out as Record<string, unknown>)[k] = m[k];
+    const w = m.fieldSources?.[field];
+    if (w) fieldSources[field] = w;
+    else delete fieldSources[field];
+  };
+  take('currentTitle', ['currentTitle']);
+  take('currentOrganizationId', ['currentOrganizationId', 'currentOrganizationRaw']);
+  take('headline', ['headline']);
+  take('location', ['location']);
+  take('school', ['school']);
+  if (isPlaceholderName(s) && !isPlaceholderName(m)) {
+    out.displayName = m.displayName;
+    out.firstName = m.firstName;
+    out.lastName = m.lastName;
+    out.nameNormalized = m.nameNormalized;
+    out.namePlaceholder = undefined;
+    if (m.fieldSources?.displayName) fieldSources.displayName = m.fieldSources.displayName;
+  }
+  out.fieldSources = fieldSources;
+  out.emails = [...new Set([...s.emails, ...m.emails])];
+  if (!s.primaryEmail && m.primaryEmail) {
+    out.primaryEmail = m.primaryEmail;
+    out.primaryEmailAsWritten = m.primaryEmailAsWritten;
+  }
+  const phones = [...new Set([...(s.phones ?? []), ...(m.phones ?? [])])];
+  if (phones.length) out.phones = phones;
+  const sHasProfile = !!(s.linkedinSlug || s.linkedinUrl || s.linkedinMemberId);
+  if (!sHasProfile && (m.linkedinSlug || m.linkedinUrl || m.linkedinMemberId)) {
+    out.linkedinUrl = m.linkedinUrl;
+    out.linkedinSlug = m.linkedinSlug;
+    out.linkedinMemberId = m.linkedinMemberId;
+    out.linkedinConnectedOn = s.linkedinConnectedOn ?? m.linkedinConnectedOn;
+    // the photo goes with the profile it came from
+    out.photoUrl = m.photoUrl ?? s.photoUrl;
+  } else {
+    // the same profile seen twice may carry the member id on one side only
+    if (!s.linkedinMemberId && m.linkedinMemberId && !differentLinkedInProfiles(s, m))
+      out.linkedinMemberId = m.linkedinMemberId;
+    out.linkedinConnectedOn = s.linkedinConnectedOn ?? m.linkedinConnectedOn;
+    out.photoUrl = s.photoUrl ?? m.photoUrl;
+  }
+  out.isAlumni = !!(s.isAlumni || m.isAlumni);
+  out.sources = [...new Set([...s.sources, ...m.sources])];
+  out.tags = [...new Set([...(s.tags ?? []), ...(m.tags ?? [])])];
+  if (m.notes && m.notes !== s.notes) out.notes = s.notes ? `${s.notes}\n\n${m.notes}` : m.notes;
+  if (s.relationshipType === 'unknown' && m.relationshipType !== 'unknown')
+    out.relationshipType = m.relationshipType;
+  const first = [s.firstSeenAt, m.firstSeenAt].filter(Boolean).sort()[0];
+  if (first) out.firstSeenAt = first;
+  const last = [s.lastInteractionAt, m.lastInteractionAt].filter(Boolean).sort().at(-1);
+  if (last) out.lastInteractionAt = last;
+  out.interactionCount = (s.interactionCount ?? 0) + (m.interactionCount ?? 0);
+  if (m.doNotContact) out.doNotContact = true;
+  // shown if either was shown: the student hid one record, not the person
+  if (s.hiddenAt && !m.hiddenAt) out.hiddenAt = undefined;
+  if (!s.summary && m.summary) {
+    out.summary = m.summary;
+    out.summaryUpdatedAt = m.summaryUpdatedAt;
+    out.talkingPoints = m.talkingPoints;
+  }
+  return out;
+}
+
+/**
+ * `mergedId` → `survivorId` anywhere in a row: its own fields, lists of people, and inside nested parts (a thread's
+ * introduction, the facts a note read, a card's payload). A list of ids that ends up naming the survivor twice keeps
+ * it once.
+ */
+function repoint<T>(row: T, mergedId: string, survivorId: string): { row: T; changed: boolean } {
+  let changed = false;
+  const fix = (v: unknown, depth: number): unknown => {
+    if (v === mergedId) {
+      changed = true;
+      return survivorId;
+    }
+    if (depth > 6) return v;
+    if (Array.isArray(v)) {
+      const before = changed;
+      changed = false;
+      const mapped = v.map((x) => fix(x, depth + 1));
+      const here = changed;
+      changed = before || here;
+      if (!here) return v;
+      return mapped.every((x) => typeof x === 'string') ? [...new Set(mapped)] : mapped;
+    }
+    // plain objects only: a Date or a Blob is kept as it is
+    if (v && typeof v === 'object' && Object.getPrototypeOf(v) === Object.prototype) {
+      const o = v as Record<string, unknown>;
+      const next: Record<string, unknown> = {};
+      for (const [k, x] of Object.entries(o)) next[k] = fix(x, depth + 1);
+      return next;
+    }
+    return v;
+  };
+  const next = fix(row, 0) as T;
+  return { row: changed ? next : row, changed };
+}
+
+/**
+ * Merge `mergedId` into `survivorId`: everything kept about the merged person moves to the survivor (touches, facts,
+ * chats, drafts, cards, notes, threads, events, text history, affiliations, ties, the student's closeness rating,
+ * research, identities, intro requests, recommendations, merge cards), duplicates are dropped, and the merged
+ * record is deleted. Pairs the student rejected with the merged person stay rejected for the survivor. Ties and the
+ * score are worked out again from what the survivor now has.
+ */
 export async function mergePeople(userId: string, survivorId: string, mergedId: string): Promise<void> {
+  if (survivorId === mergedId) return;
   const [s, m] = await Promise.all([db.people.get(survivorId), db.people.get(mergedId)]);
   if (!s || !m || s.userId !== userId || m.userId !== userId) return;
+  const now = new Date().toISOString();
   await db.transaction(
     'rw',
     [
@@ -328,73 +515,142 @@ export async function mergePeople(userId: string, survivorId: string, mergedId: 
       db.actionItems,
       db.recommendations,
       db.merges,
+      db.dossiers,
+      db.personIdentities,
+      db.introRequests,
+      db.tieLabels,
+      db.tieScores,
+      db.textThreads,
     ],
     async () => {
+      // touches: one per source item and person, so a touch both records have is kept once
+      const tpKey = (t: Touchpoint) => `${t.refTable}|${t.refId}`;
+      const had = new Set((await db.touchpoints.where('personId').equals(survivorId).toArray()).map(tpKey));
+      const moving = await db.touchpoints.where('personId').equals(mergedId).toArray();
+      await db.touchpoints.bulkDelete(moving.filter((t) => had.has(tpKey(t))).map((t) => t.id));
       await db.touchpoints.where('personId').equals(mergedId).modify({ personId: survivorId });
+      // rows that belong to one person move as they are
       await db.facts.where('personId').equals(mergedId).modify({ personId: survivorId });
       await db.chats.where('personId').equals(mergedId).modify({ personId: survivorId });
-      await db.affiliations.where('personId').equals(mergedId).modify({ personId: survivorId });
-      await db.edges.where('personAId').equals(mergedId).delete();
-      await db.edges.where('personBId').equals(mergedId).delete();
-      await db.messages.where('fromPersonId').equals(mergedId).modify({ fromPersonId: survivorId });
       await db.outbound.where('personId').equals(mergedId).modify({ personId: survivorId });
-      await db.suggestions.where('personId').equals(mergedId).modify({ personId: survivorId });
       await db.actionItems.where('personId').equals(mergedId).modify({ personId: survivorId });
-      await db.recommendations.where('personId').equals(mergedId).delete();
-      const threads = await db.threads
-        .where('userId')
-        .equals(userId)
-        .filter((t) => t.participantPersonIds.includes(mergedId))
-        .toArray();
-      for (const t of threads)
-        await db.threads.update(t.id, {
-          participantPersonIds: [
-            ...new Set(t.participantPersonIds.map((x) => (x === mergedId ? survivorId : x))),
-          ],
-        });
-      const events = await db.events
-        .where('userId')
-        .equals(userId)
-        .filter((e) => e.attendeePersonIds.includes(mergedId))
-        .toArray();
-      for (const e of events)
-        await db.events.update(e.id, {
-          attendeePersonIds: [...new Set(e.attendeePersonIds.map((x) => (x === mergedId ? survivorId : x)))],
-        });
-      const notes = await db.notes
-        .where('userId')
-        .equals(userId)
-        .filter((n) => n.personIds.includes(mergedId))
-        .toArray();
-      for (const n of notes)
-        await db.notes.update(n.id, {
-          personIds: [...new Set(n.personIds.map((x) => (x === mergedId ? survivorId : x)))],
-        });
-      await db.people.update(survivorId, {
-        emails: [...new Set([...s.emails, ...m.emails])],
-        primaryEmail: s.primaryEmail ?? m.primaryEmail,
-        linkedinUrl: s.linkedinUrl ?? m.linkedinUrl,
-        linkedinSlug: s.linkedinSlug ?? m.linkedinSlug,
-        linkedinMemberId: s.linkedinMemberId ?? m.linkedinMemberId,
-        currentTitle: s.currentTitle ?? m.currentTitle,
-        currentOrganizationId: s.currentOrganizationId ?? m.currentOrganizationId,
-        currentOrganizationRaw: s.currentOrganizationRaw ?? m.currentOrganizationRaw,
-        headline: s.headline ?? m.headline,
-        school: s.school ?? m.school,
-        isAlumni: s.isAlumni || m.isAlumni,
-        photoUrl: s.photoUrl ?? m.photoUrl,
-        sources: [...new Set([...s.sources, ...m.sources])],
-        linkedinConnectedOn: s.linkedinConnectedOn ?? m.linkedinConnectedOn,
-        updatedAt: new Date().toISOString(),
-      });
-      await db.merges
-        .where('userId')
-        .equals(userId)
-        .filter((x) => x.personAId === mergedId || x.personBId === mergedId)
-        .modify({ status: 'stale' });
+      await db.personIdentities.where('personId').equals(mergedId).modify({ personId: survivorId });
+      await db.messages.where('fromPersonId').equals(mergedId).modify({ fromPersonId: survivorId });
+      // affiliations: the same employer or school on both is kept once
+      const affKey = (a: { kind: string; organizationId?: string; nameRaw: string; title?: string }) =>
+        `${a.kind}|${a.organizationId ?? normalizeCompany(a.nameRaw)}|${(a.title ?? '').toLowerCase()}`;
+      const affs = new Set(
+        (await db.affiliations.where('personId').equals(survivorId).toArray()).map(affKey),
+      );
+      const movingAffs = await db.affiliations.where('personId').equals(mergedId).toArray();
+      await db.affiliations.bulkDelete(movingAffs.filter((a) => affs.has(affKey(a))).map((a) => a.id));
+      await db.affiliations.where('personId').equals(mergedId).modify({ personId: survivorId });
+      // one recommendation and one research dossier per person: the survivor's wins
+      if (await db.recommendations.where('personId').equals(survivorId).count())
+        await db.recommendations.where('personId').equals(mergedId).delete();
+      else await db.recommendations.where('personId').equals(mergedId).modify({ personId: survivorId });
+      if (await db.dossiers.where('personId').equals(survivorId).count())
+        await db.dossiers.where('personId').equals(mergedId).delete();
+      else await db.dossiers.where('personId').equals(mergedId).modify({ personId: survivorId });
+      // the student's closeness rating moves unless the survivor has one; the model's score is worked out again
+      const label = await db.tieLabels.get(mergedId);
+      if (label && !(await db.tieLabels.get(survivorId)))
+        await db.tieLabels.put({ ...label, personId: survivorId, updatedAt: now });
+      await db.tieLabels.delete(mergedId);
+      await db.tieScores.delete(mergedId);
+      // text history (one row per person): the two histories become one
+      const mt = await db.textThreads.get(mergedId);
+      if (mt) {
+        const st = await db.textThreads.get(survivorId);
+        const joined: TextThread = st
+          ? {
+              ...st,
+              handles: [...new Set([...st.handles, ...mt.handles])],
+              inCount: st.inCount + mt.inCount,
+              outCount: st.outCount + mt.outCount,
+              firstAt: st.firstAt < mt.firstAt ? st.firstAt : mt.firstAt,
+              lastAt: st.lastAt > mt.lastAt ? st.lastAt : mt.lastAt,
+              recent: [...st.recent, ...mt.recent].sort((a, b) => a.at.localeCompare(b.at)).slice(-8),
+            }
+          : { ...mt, id: survivorId, personId: survivorId };
+        await db.textThreads.put(joined);
+        await db.textThreads.delete(mergedId);
+      }
+      // ties: pointed at the survivor; a tie between the two is gone, and a tie both had is kept once (the stronger)
+      const edgeKey = (e: Pick<Edge, 'personAId' | 'personBId' | 'type'>) =>
+        `${[e.personAId, e.personBId].sort().join('|')}|${e.type}`;
+      const edges = [
+        ...(await db.edges.where('personAId').anyOf(survivorId, mergedId).toArray()),
+        ...(await db.edges.where('personBId').anyOf(survivorId, mergedId).toArray()),
+      ];
+      const byKey = new Map<string, Edge>();
+      const drop = new Set<string>();
+      for (const e of [...new Map(edges.map((x) => [x.id, x])).values()]) {
+        const a = e.personAId === mergedId ? survivorId : e.personAId;
+        const b = e.personBId === mergedId ? survivorId : e.personBId;
+        if (a === b) {
+          drop.add(e.id);
+          continue;
+        }
+        const next = { ...e, personAId: a, personBId: b };
+        const k = edgeKey(next);
+        const prev = byKey.get(k);
+        if (prev) {
+          const [keep, lose] = prev.weight >= next.weight ? [prev, next] : [next, prev];
+          drop.add(lose.id);
+          byKey.set(k, keep);
+        } else byKey.set(k, next);
+      }
+      await db.edges.bulkDelete([...drop]);
+      await db.edges.bulkPut([...byKey.values()].filter((e) => !drop.has(e.id)));
+      // merge cards: the card about these two is done; the merged person's other cards and the student's "not the
+      // same" answers carry over to the survivor (a rejected pair stays rejected)
+      const merges = await db.merges.where('userId').equals(userId).toArray();
+      const pairKey = (a: string, b: string) => [a, b].sort().join('|');
+      const taken = new Set(
+        merges
+          .filter((x) => x.personAId !== mergedId && x.personBId !== mergedId)
+          .map((x) => pairKey(x.personAId, x.personBId)),
+      );
+      for (const x of merges) {
+        if (x.personAId !== mergedId && x.personBId !== mergedId) continue;
+        const other = x.personAId === mergedId ? x.personBId : x.personAId;
+        if (other === survivorId) {
+          if (x.status === 'pending') await db.merges.update(x.id, { status: 'stale' });
+          continue;
+        }
+        const k = pairKey(survivorId, other);
+        const a = x.personAId === mergedId ? survivorId : x.personAId;
+        const b = x.personBId === mergedId ? survivorId : x.personBId;
+        const status = x.status === 'pending' && taken.has(k) ? 'stale' : x.status;
+        await db.merges.update(x.id, { personAId: a, personBId: b, status });
+        taken.add(k);
+      }
+      // rows that list people: threads (and the introductions in them), events, notes (and the facts they read),
+      // chats' referrer, intro requests, cards' payloads
+      const lists = [
+        db.threads.where('userId').equals(userId),
+        db.events.where('userId').equals(userId),
+        db.notes.where('userId').equals(userId),
+        db.chats.where('userId').equals(userId),
+        db.introRequests.where('userId').equals(userId),
+        db.suggestions.where('userId').equals(userId),
+      ] as const;
+      const tables = [db.threads, db.events, db.notes, db.chats, db.introRequests, db.suggestions] as const;
+      for (let i = 0; i < lists.length; i++) {
+        const rows = (await lists[i]!.toArray()) as unknown as { id: string }[];
+        const table = tables[i]! as unknown as { put: (r: unknown) => Promise<unknown> };
+        for (const r of rows) {
+          const { row, changed } = repoint(r, mergedId, survivorId);
+          if (changed) await table.put(row);
+        }
+      }
+      await db.people.update(survivorId, mergedFields(s, m, now));
       await db.people.delete(mergedId);
     },
   );
+  // the survivor's closeness, from the touches it now has
+  await recomputePersonStrength(survivorId).catch(() => undefined);
 }
 
 /**
@@ -404,7 +660,7 @@ export async function mergePeople(userId: string, survivorId: string, mergedId: 
 export async function suggestDuplicateMerges(userId: string, now = new Date()): Promise<number> {
   const { people, orgDomains } = await loadPeopleCache(userId);
   const visible = people.filter((p) => !p.hiddenAt);
-  const pairs = findDuplicatePairs(visible, { orgDomains });
+  const pairs = findDuplicatePairs(visible, { orgDomains, doNotMerge: await loadDoNotMerge(userId) });
   if (!pairs.length) return 0;
   const known = new Set(
     (await db.merges.where('userId').equals(userId).toArray()).map((m) =>
@@ -509,13 +765,20 @@ export function mergeEvidence(a: Person, b: Person): { same: string[]; differ: s
   const emailsA = new Set([a.primaryEmail, ...a.emails].filter(Boolean).map((e) => e!.toLowerCase()));
   if ([b.primaryEmail, ...b.emails].some((e) => e && emailsA.has(e.toLowerCase())))
     same.push('the same email address');
-  if (eq(a.firstName, b.firstName)) same.push('the same first name');
+  // the shared name matcher: "José"/"Jose", "Bill"/"William" and "王伟"/"Wei Wang" are not different first names
+  const names = compareNames(a.displayName, b.displayName);
+  if (eq(a.firstName, b.firstName) || names.given === 'same') same.push('the same first name');
+  else if (names.given === 'nickname' || names.given === 'variant')
+    same.push('first names that are one name and its nickname');
   else if (a.firstName && b.firstName) differ.push('different first names');
   if (eq(a.lastName, b.lastName)) same.push('the same last name');
   if (eq(a.currentOrganizationRaw, b.currentOrganizationRaw)) same.push('the same company');
   else if (a.currentOrganizationRaw && b.currentOrganizationRaw) differ.push('different companies');
   if (eq(a.school, b.school)) same.push('the same school');
-  if (eq(a.linkedinSlug, b.linkedinSlug)) same.push('the same LinkedIn profile');
+  if (eq(a.linkedinSlug, b.linkedinSlug) || eq(a.linkedinMemberId, b.linkedinMemberId))
+    same.push('the same LinkedIn profile');
+  else if (differentLinkedInProfiles(a, b)) differ.push('different LinkedIn profiles');
+  if (sharePhone(a, b)) same.push('the same phone number');
   return { same, differ };
 }
 

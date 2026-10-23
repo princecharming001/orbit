@@ -8,7 +8,13 @@
  * result, so the UI can offer the export instead.
  */
 import type { Person, User } from '@orbit/core';
-import { linkedInSlug, newId, normalizeLinkedInUrl } from '@orbit/core';
+import {
+  differentLinkedInProfiles,
+  linkedInSlug,
+  newId,
+  normalizeLinkedInUrl,
+  peopleNamed,
+} from '@orbit/core';
 import { db, type IntegrationAccount } from '../db/schema';
 import {
   MOCK_ACCOUNT_ID,
@@ -544,10 +550,12 @@ export async function mutualsFor(
   const people = await db.people.where('userId').equals(user.id).toArray();
   const resolve = (m: Mutual): MutualView => {
     const slug = linkedInSlug(normalizeLinkedInUrl(m.url));
-    const name = m.name.trim().toLowerCase();
     const byMember = m.memberId ? people.find((p) => p.linkedinMemberId === m.memberId) : undefined;
     const bySlug = slug ? people.find((p) => p.linkedinSlug === slug) : undefined;
-    const byName = people.filter((p) => p.nameNormalized === name);
+    // the shared name matcher; someone with another LinkedIn profile is someone else
+    const byName = peopleNamed(people, m.name).filter(
+      (p) => !differentLinkedInProfiles({ linkedinSlug: slug, linkedinMemberId: m.memberId }, p),
+    );
     const match = byMember ?? bySlug ?? (byName.length === 1 ? byName[0] : undefined);
     return { ...m, personId: match && match.id !== person.id ? match.id : undefined };
   };

@@ -114,10 +114,16 @@ importers:
 
   packages/core:
     dependencies:
+      libphonenumber-js:
+        specifier: 1.13.14
+        version: 1.13.14
       zod:
         specifier: ^3.24.0
         version: 3.25.76
     devDependencies:
+      any-ascii:
+        specifier: 0.3.3
+        version: 0.3.3
       typescript:
         specifier: ^5.7.0
         version: 5.9.3
@@ -896,6 +902,10 @@ packages:
     resolution: {integrity: sha512-MnA+YT8fwfJPgBx3m60MNqakm30XOkyIoH1y6huTQvC0PwZG7ki8NacLBcrPbNoo8vEZy7Jpuk7+jMO+CUovTQ==}
     engines: {node: '>= 14'}
 
+  any-ascii@0.3.3:
+    resolution: {integrity: sha512-8hm+zPrc1VnlxD5eRgMo9F9k2wEMZhbZVLKwA/sPKIt6ywuz7bI9uV/yb27uvc8fv8q6Wl2piJT51q1saKX0Jw==}
+    engines: {node: '>=12.20'}
+
   assertion-error@2.0.1:
     resolution: {integrity: sha512-Izi8RQcffqCeNVgFigKli1ssklIbpHnCYc6AknXGYoB6grJqyeby7jv12JUQgmTAnIDnbck1uxksT4dzN3PWBA==}
     engines: {node: '>=12'}
@@ -1090,6 +1100,9 @@ packages:
     resolution: {integrity: sha512-XmOWe7eyHYH14cLdVPoyg+GOH3rYX++KpzrylJwSW98t3Nk+U8XOl8FWKOgwtzdb8lXGf6zYwDUzeHMWfxasyg==}
     engines: {node: '>=6'}
     hasBin: true
+
+  libphonenumber-js@1.13.14:
+    resolution: {integrity: sha512-llihgCcx0BFLksecLP+x1J+6JDE1GsXS1RN/LoPF6qcwpeQcnjj0lcvZxY8AzbEpYwyZWPZW/nDuqkqzm3amiw==}
 
   lightningcss-android-arm64@1.32.0:
     resolution: {integrity: sha512-YK7/ClTt4kAK0vo6w3X+Pnm0D2cf2vPHbhOXdoNti1Ga0al1P4TBZhwjATvjNwLEBCnKvjJc2jQgHXH0NEwlAg==}
@@ -2101,6 +2114,8 @@ snapshots:
 
   agent-base@7.1.4: {}
 
+  any-ascii@0.3.3: {}
+
   assertion-error@2.0.1: {}
 
   baseline-browser-mapping@2.11.27: {}
@@ -2294,6 +2309,8 @@ snapshots:
       ts-algebra: 2.0.0
 
   json5@2.2.3: {}
+
+  libphonenumber-js@1.13.14: {}
 
   lightningcss-android-arm64@1.32.0:
     optional: true

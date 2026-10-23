@@ -1735,8 +1735,37 @@ var LEGAL_SUFFIXES = /* @__PURE__ */ new Set([
   "ag",
   "pbc"
 ]);
+var LATIN_LETTERS = {
+  ø: "o",
+  Ø: "O",
+  ł: "l",
+  Ł: "L",
+  ß: "ss",
+  "ẞ": "SS",
+  æ: "ae",
+  Æ: "Ae",
+  œ: "oe",
+  Œ: "Oe",
+  đ: "d",
+  Đ: "D",
+  ð: "d",
+  Ð: "D",
+  þ: "th",
+  Þ: "Th",
+  ı: "i",
+  ħ: "h",
+  Ħ: "H",
+  ŧ: "t",
+  Ŧ: "T",
+  ŀ: "l",
+  Ŀ: "L",
+  ĸ: "q",
+  ŋ: "ng",
+  Ŋ: "Ng",
+  ſ: "s"
+};
 function stripDiacritics(s) {
-  return s.normalize("NFKD").replace(/[̀-ͯ]/g, "");
+  return s.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[øØłŁßẞæÆœŒđĐðÐþÞıħĦŧŦŀĿĸŋŊſ]/g, (c) => LATIN_LETTERS[c] ?? c);
 }
 function normalizeEmail(raw) {
   let e = raw.trim().toLowerCase();
@@ -1753,7 +1782,7 @@ function normalizeEmail(raw) {
   return `${local}@${domain}`;
 }
 var GENERATIONAL = /* @__PURE__ */ new Set(["jr", "sr", "ii", "iii", "iv"]);
-var PARTICLES = /* @__PURE__ */ new Set([
+var NAME_PARTICLES = /* @__PURE__ */ new Set([
   "de",
   "da",
   "del",
@@ -1782,7 +1811,7 @@ function isTagPart(part) {
 }
 function capitalizeToken(t, isFirst) {
   const lower = t.toLowerCase();
-  if (!isFirst && PARTICLES.has(lower)) return lower;
+  if (!isFirst && NAME_PARTICLES.has(lower)) return lower;
   return lower.replace(/(^|[-'’])(\p{L})/gu, (_, sep, c) => sep + c.toUpperCase());
 }
 function fixCase(tokens2, offset = 0) {
@@ -1804,7 +1833,7 @@ function partsFromTokens(tokens2) {
   const fixed = fixCase(tokens2);
   const first = fixed[0] ?? "";
   let lastStart = fixed.length - 1;
-  while (lastStart > 1 && PARTICLES.has(fixed[lastStart - 1].toLowerCase())) lastStart--;
+  while (lastStart > 1 && NAME_PARTICLES.has(fixed[lastStart - 1].toLowerCase())) lastStart--;
   const last = fixed.length > 1 ? fixed.slice(lastStart).join(" ") : "";
   const full = fixed.join(" ");
   return { first, last, full, normalized: nameKey(first, last) };
@@ -1823,7 +1852,7 @@ function parseName(raw) {
   if (parts.length >= 2) {
     const head = cleanTokens(parts[0]);
     const tail = cleanTokens(parts[1]);
-    const headIsSurname = head.length === 1 || head.length > 1 && head.slice(0, -1).every((t) => PARTICLES.has(t.toLowerCase()));
+    const headIsSurname = head.length === 1 || head.length > 1 && head.slice(0, -1).every((t) => NAME_PARTICLES.has(t.toLowerCase()));
     tokens2 = headIsSurname && tail.length >= 1 && tail.length <= 2 ? [...tail, ...head] : head;
   } else tokens2 = cleanTokens(parts[0] ?? "");
   return partsFromTokens(tokens2);
@@ -11042,6 +11071,12 @@ var NICKNAME_VARIANTS = (() => {
   }
   return map;
 })();
+
+// packages/core/src/entity/translit.data.ts
+var CJK_INDEX_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+
+// packages/core/src/entity/translit.ts
+var digit = new Map([...CJK_INDEX_ALPHABET].map((c, i) => [c, i]));
 
 // packages/core/src/entity/resolve.ts
 function normalizeEmailForMatch(raw) {
