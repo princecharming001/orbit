@@ -2313,14 +2313,16 @@ test.describe('Discover: a feed of new people', () => {
     const names = await cards.locator('a[id^="found-"]').allInnerTexts();
     expect(new Set(names).size).toBe(names.length);
     // not a fit: the card goes
+    // the card is found by its name: the feed may reorder while more people load
     const gone = (await cards.nth(1).locator('a[id^="found-"]').innerText()).trim();
-    await cards.nth(1).getByLabel('Not a fit?', { exact: true }).click();
-    await cards.nth(1).getByTestId('dismiss-wrong_role').click();
+    const goneCard = cards.filter({ hasText: gone });
+    await goneCard.getByLabel('Not a fit?', { exact: true }).click();
+    await goneCard.getByTestId('dismiss-wrong_role').click();
     await expect(cards.filter({ hasText: gone })).toHaveCount(0);
     await expect(page.getByTestId('toasts')).toContainText(/removed \(wrong role\)/i);
     // saving a new person adds them to the student's people, and only then
     const saved = (await cards.first().locator('a[id^="found-"]').innerText()).trim();
-    await cards.first().getByTestId('found-save').click();
+    await cards.filter({ hasText: saved }).getByTestId('found-save').click();
     await expect(page.getByTestId('toasts')).toContainText(new RegExp(`saved ${saved.split(' ')[0]}`, 'i'));
     await expect(cards.filter({ hasText: saved })).toHaveCount(0);
     await page.goto('people?view=list');
