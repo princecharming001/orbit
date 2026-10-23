@@ -522,7 +522,8 @@ test.describe('Map reach through LinkedIn mutuals (plan 17 §C)', () => {
     const closeness = await panel.getByTestId('reach-mutual-closeness').allInnerTexts();
     const scores = closeness.map((t) => Number(/· (\d+)/.exec(t)?.[1] ?? -1));
     expect(scores).toEqual([...scores].sort((a, b) => b - a));
-    await expect(panel).toContainText('Sample connections from the demo.');
+    // where the list came from is an explanation: hidden unless the student turned explanations on
+    await expect(panel).not.toContainText('Sample connections from the demo.');
     await panel.scrollIntoViewIfNeeded();
     await test.info().attach('reach-mutuals', { body: await page.screenshot(), contentType: 'image/png' });
     if (process.env.REACH_SHOT) {
