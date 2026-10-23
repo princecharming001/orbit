@@ -234,9 +234,85 @@ export const createDraft = defineTool({
         out,
         out,
         `${r.reopened ? 'Reopened the' : 'Drafted a'} ${MESSAGE_KIND_LABELS[draft.kind].toLowerCase()} to ${person.firstName} (${CHANNEL_LABELS[draft.channel]}).${kindNote}${needs} Nothing is sent until approved.`,
-        `/people/${person.id}?open=${draft.id}`,
+        `/people/${person.id}`,
       ),
     );
+  },
+  toModel,
+});
+
+export const createDrafts = defineTool({
+  name: 'create_drafts',
+  kind: 'write',
+  description:
+    'Call this when the student asks to write to several people at once ("draft a message to each of them", "follow up with everyone who went quiet"), with their personIds (from search_people or a list just shown). Leave kind out and Orbit picks each message from where that chat stands. Hidden people, people a message should wait for, and LinkedIn-only strangers who first need the warm-up choice are skipped and named; ask about those one at a time with create_draft. A draft already started is reopened, never duplicated. Nothing is sent: each one waits for send_draft.',
+  input: z.object({
+    personIds: z
+      .array(z.string().min(1))
+      .min(1)
+      .max(10)
+      .describe('The recipients (from search_people or a list), at most 10.'),
+    kind: z
+      .enum(KINDS)
+      .optional()
+      .describe('One kind for all of them; leave out to let Orbit pick per person from the chat stage.'),
+  }),
+  capabilities: ['draft_start_message', 'person_write_to'],
+  progress: 'Writing the drafts',
+  async execute(input, ctx) {
+    const drafted: { draft: OutboundMessage; reopened: boolean }[] = [];
+    const skipped: { person: ReturnType<typeof personRef>; why: string }[] = [];
+    for (const id of [...new Set(input.personIds)]) {
+      const person = await requirePerson(ctx, id);
+      if (person.hiddenAt) {
+        skipped.push({ person: personRef(person), why: 'hidden' });
+        continue;
+      }
+      let kind = input.kind;
+      if (!kind) {
+        const next = await nextMessageKind(ctx.user, person.id, ctx.now);
+        if ('wait' in next) {
+          const until = next.wait.until ? fmtDay(next.wait.until, ctx) : undefined;
+          skipped.push({
+            person: personRef(person),
+            why: until ? `a message fits from ${until}` : 'you wrote recently',
+          });
+          continue;
+        }
+        kind = next.kind;
+      }
+      const r = await composeDraft(ctx.user, person.id, kind);
+      if (r.kind === 'warmup_choice') {
+        skipped.push({ person: personRef(person), why: 'LinkedIn only: warm up first, or write now?' });
+        continue;
+      }
+      if (r.kind === 'warmup_started') {
+        skipped.push({ person: personRef(person), why: 'warm-up started' });
+        continue;
+      }
+      if (r.kind !== 'draft') {
+        skipped.push({ person: personRef(person), why: 'not found' });
+        continue;
+      }
+      drafted.push({ draft: r.draft, reopened: r.reopened });
+    }
+    const rows = await Promise.all(
+      drafted.map(async ({ draft, reopened }) => ({ ...(await draftOut(ctx, draft)), reopened })),
+    );
+    const names = (xs: { person?: string }[]) => xs.map((x) => x.person ?? 'someone');
+    const list = (xs: string[]) =>
+      xs.length <= 1 ? (xs[0] ?? '') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`;
+    const summary = [
+      rows.length
+        ? `Drafted ${rows.length === 1 ? 'a message' : `${rows.length} messages`} to ${list(names(rows))}.`
+        : 'No drafts written.',
+      skipped.length ? `Skipped ${list(skipped.map((s) => `${s.person.name} (${s.why})`))}.` : '',
+      rows.length ? 'Nothing is sent until approved.' : '',
+    ]
+      .filter(Boolean)
+      .join(' ');
+    const out = { drafts: rows, skipped };
+    return ok('drafts', out, out, summary, '/inbox');
   },
   toModel,
 });
@@ -788,6 +864,7 @@ export const scheduleSendsTool = defineTool({
 
 export const draftTools: AnyTool[] = [
   createDraft,
+  createDrafts,
   updateDraftBody,
   manageDraft,
   redraftWithInputs,

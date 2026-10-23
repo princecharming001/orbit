@@ -197,7 +197,7 @@ export function routeNetwork(text: string, lower: string, h: NetworkHelpers): Ro
     }
   }
   if (
-    /^add (?:them(?: all)?|those|the first (?:one|two|three|few)|all of them)(?: to my pipeline)?$/.test(
+    /^add (?:them(?: all)?|those|the first (?:one|two|three|few)|all of them)(?: to (?:my pipeline|people|my people|orbit))?$/.test(
       lower,
     )
   )

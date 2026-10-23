@@ -79,22 +79,31 @@ export function personOf(x: unknown): Person | undefined {
 // ---------- readers ----------
 
 /** person: `{ person, chat?, facts? }`, a get_person view, or a bare Person */
-export function readPerson(d: unknown):
-  | {
-      person: Person;
-      chat?: CoffeeChat;
-      facts: string[];
-      lastTouch?: string;
-      stageLabel?: string;
-      questions: string[];
-      summary?: string;
-    }
-  | undefined {
+export interface PersonView {
+  person: Person;
+  chat?: CoffeeChat;
+  facts: string[];
+  lastTouch?: string;
+  stageLabel?: string;
+  questions: string[];
+  summary?: string;
+  /** get_person's timeline section: newest first */
+  timeline: { when?: string; text: string }[];
+  /** get_person's "who they know" section */
+  connections: { person: Person; how?: string }[];
+  notes: { when?: string; summary: string }[];
+  promises: string[];
+  /** the kind of message Orbit would write next, or that a message should wait */
+  nextMessage?: { kind?: string; label?: string; wait: boolean };
+  nextMeeting?: string;
+}
+export function readPerson(d: unknown): PersonView | undefined {
   const o = obj(unpack(d));
   const person = personOf(o.person) ?? personOf(o);
   if (!person) return undefined;
   const chat = str(obj(o.chat).stage) ? (o.chat as CoffeeChat) : undefined;
   const prep = obj(o.prep);
+  const next = obj(o.nextMessage);
   return {
     person,
     chat,
@@ -103,11 +112,29 @@ export function readPerson(d: unknown):
     stageLabel: str(o.stage),
     questions: strings(prep.questions).slice(0, 5),
     summary: str(o.summary),
+    timeline: arr(o.timeline)
+      .map((t) => ({ when: str(obj(t).when), text: str(obj(t).text) ?? '' }))
+      .filter((t) => t.text),
+    connections: arr(o.connections)
+      .map((c) => {
+        const p = personOf(c);
+        return p ? { person: p, how: str(obj(c).how) } : undefined;
+      })
+      .filter(present),
+    notes: arr(o.notes)
+      .map((n) => ({ when: str(obj(n).when), summary: str(obj(n).summary) ?? '' }))
+      .filter((n) => n.summary),
+    promises: strings(o.promises),
+    nextMessage:
+      str(next.kind) || next.wait
+        ? { kind: str(next.kind), label: str(next.label), wait: !!next.wait }
+        : undefined,
+    nextMeeting: str(o.nextMeeting),
   };
 }
 
 /** people: `{ people | recommendations | candidates }` of Person, `{ person, why }` or references; or a bare array */
-export function readPeople(d: unknown): { person: Person; why?: string }[] {
+export function readPeople(d: unknown): { person: Person; why?: string; stage?: string }[] {
   const u = unpack(d);
   const o = obj(u);
   const raw = Array.isArray(u) ? u : (o.people ?? o.recommendations ?? o.candidates ?? o.thereNow);
@@ -117,12 +144,17 @@ export function readPeople(d: unknown): { person: Person; why?: string }[] {
       const person = personOf(r.person) ?? personOf(x);
       if (!person) return undefined;
       const why =
-        str(r.why) ??
-        (strings(r.reasons).length ? strings(r.reasons).slice(0, 2).join('. ') : undefined) ??
-        (str(r.stage) ? `Chat: ${r.stage}` : undefined);
-      return { person, why };
+        str(r.why) ?? (strings(r.reasons).length ? strings(r.reasons).slice(0, 2).join('. ') : undefined);
+      return { person, why, stage: str(r.stage) };
     })
     .filter(present);
+}
+
+/** What a people list was asked for: the search words or the filter, when there were any. */
+export function readPeopleQuery(d: unknown): { query?: string; filter?: string } {
+  const o = obj(unpack(d));
+  const filter = str(o.filter);
+  return { query: str(o.query), filter: filter && filter !== 'all' ? filter : undefined };
 }
 
 /** draft: `{ draft, person? }`, a draft reference `{ id, person, firstLine }`, or a bare OutboundMessage */
@@ -197,12 +229,27 @@ export function readDrafts(d: unknown): DraftRow[] {
     });
 }
 
+/** create_drafts: the people it did not write to, and why */
+export function readSkipped(d: unknown): { name: string; why: string }[] {
+  return arr(obj(unpack(d)).skipped)
+    .map((x) => {
+      const r = obj(x);
+      const name = str(obj(r.person).name) ?? str(r.person);
+      const why = str(r.why);
+      return name && why ? { name, why } : undefined;
+    })
+    .filter(present);
+}
+
 /** pipeline: `{ items: { chat, person, nextStep? }[] }`, list_pipeline `{ rows, counts }`, or one moved `{ chat, person }` */
 export interface PipelineItem {
   person: Person;
   stage?: string;
   stageLabel?: string;
   nextStep?: string;
+  /** waiting a week or more for a reply to the student's last message */
+  quiet?: boolean;
+  youWroteOn?: string;
 }
 export function readPipeline(d: unknown): { items: PipelineItem[]; counts: Record<string, number> } {
   const u = unpack(d);
@@ -223,7 +270,10 @@ export function readPipeline(d: unknown): { items: PipelineItem[]; counts: Recor
           str(r.nextStep) ??
           (str(r.when) ? `Meeting ${r.when}` : undefined) ??
           (str(r.meetingAt) ? `Meeting ${r.meetingAt}` : undefined) ??
-          str(next.kindLabel),
+          str(next.kindLabel) ??
+          str(next.kind),
+        quiet: r.quiet === true,
+        youWroteOn: str(r.youWroteOn),
       };
     })
     .filter(present);
@@ -346,13 +396,19 @@ export function readSuggestions(d: unknown): { suggestions: Suggestion[]; ids: s
 export function readBriefExtras(d: unknown): {
   nextUp?: { startAt: string; title?: string; person?: string };
   waiting: number;
+  /** this week's first messages against the weekly target, and the 30-day reply rate when there is enough to say */
+  week?: { sent: number; target: number; replyRate?: number };
 } {
   const o = obj(unpack(d));
   const n = obj(o.nextUp);
   const startAt = str(n.startAt);
+  const w = obj(o.week);
+  const sent = num(w.sentThisWeek);
+  const target = num(w.weeklyTarget);
   return {
     nextUp: startAt ? { startAt, title: str(n.title), person: str(n.person) } : undefined,
     waiting: arr(o.quiet).length,
+    week: sent !== undefined && target ? { sent, target, replyRate: num(w.replyRate) } : undefined,
   };
 }
 
@@ -364,12 +420,22 @@ export function readNote(d: unknown): {
   summary?: string;
   notes: { when?: string; people: string[]; summary?: string }[];
   candidates: Person[];
+  when?: string;
+  promises: string[];
+  /** Orbit could not tell who the note was with */
+  unmatched: boolean;
+  /** the thank-you Orbit drafted from the note, when there is one */
+  thankYouDraftId?: string;
 } {
   const o = obj(unpack(d));
   const note = obj(o.note).rawText !== undefined ? (o.note as MeetingNote) : undefined;
   return {
+    when: str(o.when),
+    promises: strings(o.promises),
+    unmatched: o.matchStatus === 'unmatched',
+    thankYouDraftId: str(obj(o.thankYou).draftId),
     note,
-    person: personOf(o.person),
+    person: personOf(o.person) ?? personOf(arr(o.people)[0]),
     facts: strings(o.facts),
     summary: str(o.summary) ?? note?.summary,
     notes: arr(o.notes).map((n) => {
@@ -408,6 +474,8 @@ export function readCompany(d: unknown): {
   people: Person[];
   former: Person[];
   target?: boolean;
+  /** two-hop routes: someone there, through someone the student knows */
+  via: { target: Person; through: string }[];
 } {
   const o = obj(unpack(d));
   const org = obj(
@@ -421,6 +489,14 @@ export function readCompany(d: unknown): {
       .filter(present),
     former: arr(o.former).map(personOf).filter(present),
     target: typeof o.target === 'boolean' ? o.target : o.target ? true : undefined,
+    via: arr(o.viaSomeoneYouKnow)
+      .map((x) => {
+        const r = obj(x);
+        const target = personOf(r.target);
+        const through = str(obj(r.route).firstHop);
+        return target && through ? { target, through } : undefined;
+      })
+      .filter(present),
   };
 }
 
@@ -566,12 +642,26 @@ export function readList(d: unknown): { title?: string; items: ListRow[] } {
 }
 
 /** text: the words to copy or the file to save, when a text result carries one */
-export function readText(d: unknown): { quote?: string; file?: { name: string; json: string } } {
+export function readText(d: unknown): {
+  quote?: string;
+  file?: { name: string; json: string };
+  /** create_draft asks first: warm up a LinkedIn-only stranger, or write now */
+  warmUpFor?: Person;
+  /** create_draft says a message should wait: who, from when, and why ("too_soon", "away") */
+  wait?: { person: Person; until?: string; reason?: string };
+} {
   const o = obj(unpack(d));
   const quote = str(o.comment) ?? str(o.textToPaste);
   const file =
     str(o.json) && str(o.filename) ? { name: o.filename as string, json: o.json as string } : undefined;
-  return { quote, file };
+  const person = personOf(o.person);
+  const w = obj(o.wait);
+  return {
+    quote,
+    file,
+    warmUpFor: o.choice === 'warmup' ? person : undefined,
+    wait: person && o.wait ? { person, until: str(w.until), reason: str(w.reason) } : undefined,
+  };
 }
 
 /** needs_confirmation: `{ toolName, input, summary | text, blockedReason?, draft? }` */

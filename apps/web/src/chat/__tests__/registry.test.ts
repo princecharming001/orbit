@@ -145,6 +145,7 @@ describe('every tool parses and executes its example input against the demo', ()
         kind: 'outreach',
         connection: 'I read your post about payments onboarding',
       },
+      create_drafts: { personIds: [ids.person.id, ids.noChat.id] },
       update_draft_body: {
         draftId: ids.draft.id,
         body: 'Hi there, thank you again for the conversation this morning. Your advice to lead with a project story is exactly what I needed.\n\nThanks,\nAlex',

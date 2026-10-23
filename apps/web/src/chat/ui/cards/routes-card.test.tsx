@@ -77,16 +77,20 @@ describe('the routes card shows warm intros', () => {
     });
     const card = $('[data-testid="result-routes"]')!;
     expect(card.textContent).toMatch(/Routes to Daniel/);
-    const warm = $('[data-testid="warm-intros"]')!;
-    expect(warm.textContent).toMatch(/Warm intros/);
-    const row = $$('[data-testid="warm-intro"]')[0]!;
+    // the warm intro runs along the same chain as the route: one row carries both, not two lists saying it twice
+    const rows = $$('[data-testid="warm-intro"]');
+    expect(rows).toHaveLength(1);
+    expect($('[data-testid="warm-intros"]')).toBeNull();
+    const row = rows[0]!;
     expect(row.textContent).toContain('Maya Chen');
     expect(row.textContent).toContain('warm');
     expect(row.textContent).toContain('You → Maya Chen → Daniel Okafor');
     expect(row.textContent).toContain('Worked together at Stripe');
     // the introducer opens their profile; no raw warmth number is shown
     expect(row.querySelector('a')?.getAttribute('href')).toBe('/people/p9');
-    expect(warm.textContent).not.toMatch(/0\.74|74/);
+    expect(card.textContent).not.toMatch(/0\.74|74/);
+    // the next step asks the first person on the best route for the intro
+    expect($('[data-testid="next-step"]')?.textContent).toBe('Ask Maya for an intro');
   });
 
   it('on their own when Orbit has no route (Village found one)', async () => {

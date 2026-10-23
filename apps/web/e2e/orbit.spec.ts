@@ -89,8 +89,8 @@ test.describe('Orbit demo flow', () => {
     await page.getByTestId('chip-who-today').click();
     const brief = page.getByTestId('result-brief');
     await expect(brief).toContainText(`${cards} things for today`, { timeout: 30_000 });
-    await expect(brief).toContainText(/coming up this week/);
-    await expect(brief.getByTestId('brief-coming-up')).toBeVisible();
+    // what is coming up is one line under the cards, with the person and the time
+    await expect(brief.getByTestId('brief-coming-up')).toContainText(/^Coming up: \S+/);
     await expect(brief.getByTestId('brief-more')).toHaveText(/^\d+ more in Drafts$/);
   });
 
@@ -919,7 +919,7 @@ test.describe('First-run guidance and plain next steps', () => {
     const cards = await page.locator('[data-testid^="suggestion-"]').count();
     await page.goto('');
     await page.getByTestId('chip-who-today').click();
-    await expect(page.getByTestId('result-brief').locator('p').first()).toHaveText(
+    await expect(page.getByTestId('result-brief').getByTestId('brief-title')).toHaveText(
       new RegExp(`^${cards} things for today`),
       { timeout: 30_000 },
     );

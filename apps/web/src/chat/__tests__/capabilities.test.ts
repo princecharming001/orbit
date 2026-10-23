@@ -54,8 +54,8 @@ describe('registry coverage', () => {
     for (const n of names) expect(n).toMatch(/^[a-z][a-z0-9_]*$/);
     expect([...names].sort((a, b) => a.localeCompare(b))).toEqual(names);
     expect(names.length).toBeGreaterThanOrEqual(45);
-    // 69 before plan 16's networking agent added 20, then schedule_sends
-    expect(names.length).toBe(90);
+    // 69 before plan 16's networking agent added 20, then schedule_sends and create_drafts
+    expect(names.length).toBe(91);
     expect(names.length).toBeLessThanOrEqual(95);
     expect(registry.size).toBe(names.length);
     const counts = toolCountByKind();

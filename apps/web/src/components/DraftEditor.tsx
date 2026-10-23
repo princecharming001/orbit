@@ -89,6 +89,25 @@ const INPUT_PROMPT: Record<PromptNeed, { label: string; hint: string; placeholde
   },
 };
 
+/** The chat's compact editor: a short label beside the field and one line of help under it. */
+const COMPACT_PROMPT: Record<PromptNeed, { label: string; hint: string }> = {
+  connection: {
+    label: WHY_THEM,
+    hint: 'How you found them, what you share, or something of theirs you read.',
+  },
+  update: { label: 'Your update', hint: 'What you did with their advice, or what changed since you spoke.' },
+  news: { label: 'Congrats on', hint: 'Finish "Just saw the news about ...".' },
+  target: { label: 'Intro to', hint: 'Their name, and title and company if you know them.' },
+  answer: { label: 'Your answer', hint: 'One or two sentences in your own words.' },
+  role: { label: 'Role', hint: 'The role and the company you are applying to.' },
+  mutual: { label: 'Who you both know', hint: 'Their name, so they can place the connection.' },
+  posting: { label: 'Posting', hint: 'The link to the role they asked for.' },
+  takeaway: { label: 'What stuck', hint: 'Their advice, a story or a point they made, in a few words.' },
+};
+
+/** The tallest the chat's editor grows before it scrolls, so a long email does not fill the screen. */
+const COMPACT_MAX_HEIGHT = 232;
+
 /** How the student last used the page: a key press or a pointer (mouse, finger). */
 let lastInput: 'keyboard' | 'pointer' = 'pointer';
 if (typeof window !== 'undefined') {
@@ -103,8 +122,17 @@ export function DraftEditor({
   busy,
   approveLabel,
   focusOnOpen,
+  compact,
+  extraActions,
 }: {
   draft: OutboundMessage;
+  /**
+   * The chat's card: the missing line as one row, the message box capped in height, and at most one status line
+   * (the most urgent; the rest one tap away). The pages keep the full editor.
+   */
+  compact?: boolean;
+  /** more buttons beside the approve button (the chat's approval card puts Cancel there) */
+  extraActions?: ReactNode;
   /** resolves to an error to show inline when the message was not approved */
   onApprove: (body: string, subject?: string) => Promise<string | undefined>;
   /**
@@ -130,8 +158,12 @@ export function DraftEditor({
     const el = document.getElementById(bodyId) as HTMLTextAreaElement | null;
     if (!el) return;
     el.style.height = 'auto';
-    el.style.height = `${el.scrollHeight + 2}px`;
-  }, [body, bodyId, draft.status]);
+    const full = el.scrollHeight + 2;
+    // the chat's card stops growing at a sensible height and scrolls inside; the pages show the whole draft
+    const cap = compact ? COMPACT_MAX_HEIGHT : Number.POSITIVE_INFINITY;
+    el.style.height = `${Math.min(full, cap)}px`;
+    el.style.overflowY = full > cap ? 'auto' : 'hidden';
+  }, [body, bodyId, draft.status, compact]);
   // the button that opened the editor is gone, so focus would fall back to the page: put it in the message instead
   // (only after a key press: a tap on a phone would pop the keyboard up over the draft the student wants to read)
   useEffect(() => {
@@ -202,6 +234,7 @@ export function DraftEditor({
     subject: draft.subject ?? '',
   }));
   const [confirmingRedraft, setConfirmingRedraft] = useState(false);
+  const [showAllLines, setShowAllLines] = useState(false);
   const [copying, setCopying] = useState(false);
   // edits are kept as they are typed, so leaving the page (to check LinkedIn) and coming back loses nothing; the
   // latest text is also written when the editor closes, so a change made just before leaving is never dropped
@@ -277,7 +310,9 @@ export function DraftEditor({
   const copyBlocked = missingLine || (attachResume && !direct && !attached);
   const shownError = error ?? (draft.status === 'failed' || draft.error ? draft.error : undefined);
   if (['queued', 'sending', 'handed_off', 'sent'].includes(draft.status))
-    return <OutboxStatus draft={draft} onClose={onCancel && (() => onCancel({ kept: false }))} />;
+    return (
+      <OutboxStatus draft={draft} onClose={onCancel && (() => onCancel({ kept: false }))} compact={compact} />
+    );
   const first = person?.firstName ?? 'them';
   // Copy text is a hand-off like the mail app: the message waits for "I sent it", so a Gmail user can log the send
   const copyAll = async () => {
@@ -386,6 +421,351 @@ export function DraftEditor({
       ttl: 8000,
     });
   };
+  const copyButton = !isLinkedIn && (!direct || attachResume) && !approveLabel && (
+    <Button
+      size="sm"
+      onClick={copyAll}
+      disabled={busy || copying || !body.trim() || copyBlocked}
+      title={
+        missingLine
+          ? (notAllowed ?? issues.find((i) => i.blocking)?.text ?? 'Add the missing line first')
+          : copyBlocked
+            ? 'Confirm you will attach your resume first'
+            : 'Copy the message to paste into Gmail in your browser'
+      }
+      data-testid="draft-copy"
+    >
+      Copy text
+    </Button>
+  );
+  const handoffButton = isLinkedIn && direct && !approveLabel && (
+    <Button
+      size="sm"
+      variant="ghost"
+      disabled={busy || !body.trim() || blocked}
+      title="Copy the text and send it yourself on LinkedIn"
+      onClick={async () => {
+        if (!user) return;
+        setError(undefined);
+        const e = await runApproval(user, draft, body, undefined, toast, person?.firstName, 'handoff');
+        if (e) setError(e);
+      }}
+      data-testid="draft-linkedin-handoff"
+    >
+      Open in LinkedIn instead
+    </Button>
+  );
+  const primaryButton = (
+    <Button
+      variant="primary"
+      size="sm"
+      disabled={busy || !body.trim() || blocked}
+      title={
+        notAllowed ??
+        issues.find((i) => i.blocking)?.text ??
+        (attachResume && direct
+          ? 'Orbit cannot attach your resume. Copy the text into Gmail instead.'
+          : attachResume && !attached
+            ? 'Confirm you will attach your resume first'
+            : blocked
+              ? 'Add the missing line first'
+              : undefined)
+      }
+      onClick={async () => {
+        setError(undefined);
+        const e = await onApprove(body, subject || undefined);
+        if (e) setError(e);
+      }}
+    >
+      {approveLabel ?? defaultLabel}
+    </Button>
+  );
+  if (compact) {
+    // one status line: the most urgent of what the full editor lists one under another
+    const lines: { key: string; tone: 'bad' | 'warn' | 'muted'; node: ReactNode; testId?: string }[] = [];
+    if (shownError) lines.push({ key: 'error', tone: 'bad', node: `Not sent: ${shownError}` });
+    if (notAllowed && notAllowed !== shownError)
+      lines.push({ key: 'rules', tone: 'bad', node: `Can't send this yet: ${notAllowed}` });
+    for (const i of issues) {
+      // the missing-line row above already says the bracketed line has to go
+      if (needs.length > 0 && i.code === 'placeholder') continue;
+      const fix = i.blocking || (blocked && i.code === 'placeholder');
+      lines.push({
+        key: `${i.code}:${i.text}`,
+        tone: fix ? 'bad' : 'warn',
+        node: `${fix ? 'Fix before sending: ' : 'Worth a look: '}${i.text}`,
+        testId: 'draft-issues',
+      });
+    }
+    if (draft.holdUntil && new Date(draft.holdUntil).getTime() > Date.now())
+      lines.push({
+        key: 'hold',
+        tone: 'warn',
+        testId: 'draft-hold',
+        node: `You wrote to ${first} a few days ago. Wait until ${new Date(
+          draft.holdUntil,
+        ).toLocaleDateString('en-US', {
+          weekday: 'long',
+          month: 'short',
+          day: 'numeric',
+          timeZone: user?.timezone,
+        })} to send this.`,
+      });
+    if (otherAsk)
+      lines.push({
+        key: 'ask',
+        tone: 'warn',
+        testId: 'draft-other-ask',
+        node: `You ${otherAsk.status === 'sent' ? 'just sent' : 'also have'} ${first} a ${MESSAGE_KIND_LABELS[
+          otherAsk.kind
+        ].toLowerCase()}${otherAsk.status === 'sent' ? '' : ' waiting'}. Send one, the other after they answer.`,
+      });
+    if (canEnableSend)
+      lines.push({
+        key: 'gmail',
+        tone: 'muted',
+        testId: 'draft-enable-send',
+        node: (
+          <>
+            Send from Orbit instead of your mail app?{' '}
+            <button
+              type="button"
+              className="text-accent font-medium hover:underline disabled:opacity-50"
+              disabled={enabling}
+              onClick={async () => {
+                if (!user) return;
+                setEnabling(true);
+                const r = await enableGmailSend(user);
+                setEnabling(false);
+                if (r.ok)
+                  toast.push({
+                    text: 'Orbit can send email for you now. Each one still waits a minute so you can undo.',
+                    tone: 'good',
+                  });
+                else setError(r.message);
+              }}
+              data-testid="draft-enable-send-button"
+            >
+              {enabling ? 'Waiting for Google…' : 'Connect Gmail'}
+            </button>
+          </>
+        ),
+      });
+    if (!edited && draft.claims?.some((c) => c.factId) && ['thank_you', 'nurture'].includes(draft.kind))
+      lines.push({
+        key: 'notes',
+        tone: 'muted',
+        testId: 'draft-from-notes',
+        node: `Parts come from your notes: read it once as ${first} will.`,
+      });
+    const rank = { bad: 0, warn: 1, muted: 2 };
+    lines.sort((a, b) => rank[a.tone] - rank[b.tone]);
+    const shownLines = showAllLines ? lines : lines.slice(0, 1);
+    const note = isLinkedIn && connectionNote;
+    return (
+      <div className="text-[13.5px]">
+        {needs.length > 0 && (
+          <div
+            className="mb-2 rounded-[10px] border border-warn/30 bg-warn-soft/60 px-2.5 py-2"
+            data-testid="draft-needs-input"
+          >
+            {needs.map((n) => (
+              <div key={n} className="flex items-center gap-2 mb-1.5 last:mb-0">
+                <label
+                  htmlFor={`need-${draft.id}-${n}`}
+                  className="text-[12.5px] font-medium text-ink shrink-0"
+                >
+                  {COMPACT_PROMPT[n].label}
+                </label>
+                <Input
+                  id={`need-${draft.id}-${n}`}
+                  className="!h-8 !text-[13px] min-w-0 flex-1"
+                  value={inputs[n] ?? ''}
+                  onChange={(e) => setInputs((v) => ({ ...v, [n]: e.target.value }))}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && canRegenerate && !regenerating) {
+                      e.preventDefault();
+                      void regenerate();
+                    }
+                  }}
+                  placeholder={INPUT_PROMPT[n].placeholder}
+                  aria-label={INPUT_PROMPT[n].label}
+                  data-testid={`draft-input-${n}`}
+                />
+                {n === needs[needs.length - 1] && !confirmingRedraft && (
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    className="shrink-0"
+                    disabled={!canRegenerate || regenerating}
+                    onClick={() => regenerate()}
+                    data-testid="draft-redraft"
+                  >
+                    {regenerating ? 'Adding…' : keepsMine ? 'Add to my message' : 'Redraft'}
+                  </Button>
+                )}
+              </div>
+            ))}
+            {confirmingRedraft ? (
+              <div className="mt-1.5" role="alertdialog" aria-label="Rewrite your edited message?">
+                <p className="text-[12px]" data-testid="draft-redraft-confirm">
+                  Redrafting rewrites your edited message. To keep your words, write the line in yourself.
+                </p>
+                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                  <Button size="sm" variant="primary" onClick={() => setConfirmingRedraft(false)}>
+                    Keep my text
+                  </Button>
+                  <Button size="sm" onClick={() => regenerate(true)} data-testid="draft-redraft-anyway">
+                    Redraft anyway
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <p className="text-[12px] text-ink-3" data-testid={`draft-input-hint-${needs[0]}`}>
+                {edited && !hasPlaceholder
+                  ? 'You wrote it in yourself, so it can go. Or add it here and Orbit fits it in.'
+                  : needs.length === 1
+                    ? `${COMPACT_PROMPT[needs[0]!].hint} Or edit the bracketed line.`
+                    : 'Only you can give these. Or edit the bracketed lines below.'}
+              </p>
+            )}
+          </div>
+        )}
+        {attachResume &&
+          (direct ? (
+            <p
+              className="mb-2 rounded-[10px] border border-warn/30 bg-warn-soft/60 px-2.5 py-1.5 text-[12.5px]"
+              data-testid="draft-attach-resume"
+            >
+              It says your resume is attached, and Orbit cannot attach files: copy the text into Gmail and
+              attach it there.
+            </p>
+          ) : (
+            <label
+              className="mb-2 flex items-center gap-2 rounded-[10px] border border-warn/30 bg-warn-soft/60 px-2.5 py-1.5 text-[12.5px] cursor-pointer"
+              data-testid="draft-attach-resume"
+            >
+              <input
+                type="checkbox"
+                checked={attached}
+                onChange={(e) => setAttached(e.target.checked)}
+                data-testid="draft-attach-confirm"
+              />
+              <span>
+                I will attach my resume before sending{' '}
+                <span className="text-ink-3">(it says it is attached; Orbit cannot attach files)</span>
+              </span>
+            </label>
+          ))}
+        {!isLinkedIn && !!draft.bccEmails?.length && (
+          <div className="text-[12px] text-ink-3 mb-1 truncate" data-testid="draft-bcc">
+            Bcc: {draft.bccEmails.join(', ')}
+          </div>
+        )}
+        {!isLinkedIn && !envelope.threaded && (
+          <div className="mb-1.5 flex items-center gap-2">
+            <label htmlFor={`subject-${draft.id}`} className="text-[12px] text-ink-3 shrink-0">
+              Subject
+            </label>
+            <Input
+              id={`subject-${draft.id}`}
+              className="!h-8 !text-[13px]"
+              value={subject}
+              onChange={(e) => setSubject(e.target.value)}
+              placeholder="Subject"
+            />
+          </div>
+        )}
+        <Textarea
+          id={bodyId}
+          value={body}
+          onChange={(e) => setBody(e.target.value)}
+          rows={3}
+          className="resize-none !text-[13.5px] !leading-[1.5] !py-1.5"
+          aria-label="Message body"
+        />
+        <div className="mt-1.5 flex items-center gap-x-2 gap-y-1.5 flex-wrap text-[12px] text-ink-3">
+          <span className="flex items-center gap-2 min-w-0 mr-auto">
+            {note && (
+              <span
+                className={cx(
+                  'tabular',
+                  body.length > LINKEDIN_NOTE_MAX
+                    ? 'text-bad'
+                    : body.length > LINKEDIN_NOTE_TARGET && 'text-warn',
+                )}
+                title={
+                  body.length > LINKEDIN_NOTE_MAX
+                    ? 'Too long for LinkedIn: trim it'
+                    : body.length > LINKEDIN_NOTE_TARGET
+                      ? 'A free LinkedIn account cuts the rest: trim it unless you have Premium'
+                      : 'Goes with your connection request'
+                }
+                data-testid="draft-char-count"
+              >
+                Connection note · {body.length}/{LINKEDIN_NOTE_TARGET}
+              </span>
+            )}
+            {wc > max && (
+              <span className="tabular text-warn" data-testid="draft-word-count">
+                {wc} words, aim for {max}
+              </span>
+            )}
+            {edited && (
+              <button
+                type="button"
+                className="underline underline-offset-2 hover:text-ink"
+                title="Back to the suggested text"
+                onClick={() => {
+                  const mine = body;
+                  setBody(draft.bodyDraft);
+                  toast.push({
+                    text: 'Back to the suggested text.',
+                    action: { label: 'Undo', onClick: () => setBody(mine) },
+                    ttl: 8000,
+                  });
+                }}
+              >
+                Reset
+              </button>
+            )}
+          </span>
+          <span className="ml-auto flex flex-wrap justify-end gap-1.5">
+            {extraActions}
+            {copyButton}
+            {handoffButton}
+            {primaryButton}
+          </span>
+        </div>
+        {shownLines.length > 0 && (
+          <ul className="mt-1.5 space-y-0.5 text-[12px]">
+            {shownLines.map((l, i) => (
+              <li
+                key={l.key}
+                className={cx(
+                  'flex items-start gap-1.5',
+                  l.tone === 'bad' ? 'text-bad' : l.tone === 'warn' ? 'text-warn' : 'text-ink-3',
+                )}
+                data-testid={l.testId}
+              >
+                <span className="min-w-0">{l.node}</span>
+                {i === 0 && lines.length > 1 && !showAllLines && (
+                  <button
+                    type="button"
+                    className="shrink-0 text-ink-3 underline underline-offset-2 hover:text-ink"
+                    onClick={() => setShowAllLines(true)}
+                    data-testid="draft-more-notes"
+                  >
+                    +{lines.length - 1} more
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    );
+  }
   return (
     <div>
       {needs.length > 0 && (
@@ -560,71 +940,9 @@ export function DraftEditor({
               Close
             </Button>
           )}
-          {!isLinkedIn && (!direct || attachResume) && !approveLabel && (
-            <Button
-              size="sm"
-              onClick={copyAll}
-              disabled={busy || copying || !body.trim() || copyBlocked}
-              title={
-                missingLine
-                  ? (notAllowed ?? issues.find((i) => i.blocking)?.text ?? 'Add the missing line first')
-                  : copyBlocked
-                    ? 'Confirm you will attach your resume first'
-                    : 'Copy the message to paste into Gmail in your browser'
-              }
-              data-testid="draft-copy"
-            >
-              Copy text
-            </Button>
-          )}
-          {isLinkedIn && direct && !approveLabel && (
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={busy || !body.trim() || blocked}
-              title="Copy the text and send it yourself on LinkedIn"
-              onClick={async () => {
-                if (!user) return;
-                setError(undefined);
-                const e = await runApproval(
-                  user,
-                  draft,
-                  body,
-                  undefined,
-                  toast,
-                  person?.firstName,
-                  'handoff',
-                );
-                if (e) setError(e);
-              }}
-              data-testid="draft-linkedin-handoff"
-            >
-              Open in LinkedIn instead
-            </Button>
-          )}
-          <Button
-            variant="primary"
-            size="sm"
-            disabled={busy || !body.trim() || blocked}
-            title={
-              notAllowed ??
-              issues.find((i) => i.blocking)?.text ??
-              (attachResume && direct
-                ? 'Orbit cannot attach your resume. Copy the text into Gmail instead.'
-                : attachResume && !attached
-                  ? 'Confirm you will attach your resume first'
-                  : blocked
-                    ? 'Add the missing line first'
-                    : undefined)
-            }
-            onClick={async () => {
-              setError(undefined);
-              const e = await onApprove(body, subject || undefined);
-              if (e) setError(e);
-            }}
-          >
-            {approveLabel ?? defaultLabel}
-          </Button>
+          {copyButton}
+          {handoffButton}
+          {primaryButton}
         </span>
       </div>
       {canEnableSend && (
@@ -708,7 +1026,16 @@ export function handoffWhere(o: Pick<OutboundMessage, 'channel' | 'handoffVia'>)
 }
 
 /** A message that left the editor: queued behind the undo window, handed off, sending or sent. */
-export function OutboxStatus({ draft, onClose }: { draft: OutboundMessage; onClose?: () => void }) {
+export function OutboxStatus({
+  draft,
+  onClose,
+  compact,
+}: {
+  draft: OutboundMessage;
+  onClose?: () => void;
+  /** the chat's card: two lines of the message and one "again" button (it opens and copies) instead of two */
+  compact?: boolean;
+}) {
   const { user } = useSession();
   const toast = useToast();
   const person = useLiveQuery(() => db.people.get(draft.personId), [draft.personId]);
@@ -839,38 +1166,42 @@ export function OutboxStatus({ draft, onClose }: { draft: OutboundMessage; onClo
             size="sm"
             disabled={working}
             onClick={() => {
+              // in the chat this one button also copies the text again, which is what LinkedIn needs pasted
+              if (compact && draft.channel === 'linkedin') void copyText(text);
               if (!openHandoff(link.url))
                 toast.push({
                   text: 'Your browser blocked the new tab. Allow pop-ups for Orbit and try again.',
                 });
             }}
           >
-            {link.via === 'mailto' ? 'Open mail app again' : 'Open LinkedIn again'}
+            {compact ? 'Open again' : link.via === 'mailto' ? 'Open mail app again' : 'Open LinkedIn again'}
           </Button>
         )}
-        <Button
-          size="sm"
-          disabled={working}
-          onClick={async () =>
-            toast.push({
-              text: (await copyText(text))
-                ? draft.channel === 'gmail'
-                  ? `Copied the message. Paste it into the email to ${person?.primaryEmail ?? name}.`
-                  : 'Copied.'
-                : 'Select the text and copy it.',
-            })
-          }
-          data-testid="handoff-copy"
-        >
-          {draft.channel === 'linkedin' ? 'Copy again' : 'Copy text'}
-        </Button>
+        {!(compact && link && draft.channel === 'linkedin') && (
+          <Button
+            size="sm"
+            disabled={working}
+            onClick={async () =>
+              toast.push({
+                text: (await copyText(text))
+                  ? draft.channel === 'gmail'
+                    ? `Copied the message. Paste it into the email to ${person?.primaryEmail ?? name}.`
+                    : 'Copied.'
+                  : 'Select the text and copy it.',
+              })
+            }
+            data-testid="handoff-copy"
+          >
+            {draft.channel === 'linkedin' ? 'Copy again' : 'Copy text'}
+          </Button>
+        )}
         <Button
           size="sm"
           variant="ghost"
           disabled={working}
           onClick={() => act(() => revertHandoff(user, draft.id))}
         >
-          Not sent, edit it
+          {compact ? 'Edit' : 'Not sent, edit it'}
         </Button>
       </>
     );
@@ -883,8 +1214,18 @@ export function OutboxStatus({ draft, onClose }: { draft: OutboundMessage; onClo
     ) : null;
   }
   return (
-    <div className="rounded-lg border border-line bg-canvas-2 p-3" data-testid={`outbox-${draft.status}`}>
-      <p className="text-[13px] text-ink-2 whitespace-pre-line line-clamp-3">{text}</p>
+    <div
+      className={cx('rounded-lg border border-line bg-canvas-2', compact ? 'px-3 py-2' : 'p-3')}
+      data-testid={`outbox-${draft.status}`}
+    >
+      <p
+        className={cx(
+          'text-ink-2 whitespace-pre-line',
+          compact ? 'text-[12.5px] line-clamp-2' : 'text-[13px] line-clamp-3',
+        )}
+      >
+        {text}
+      </p>
       {draft.status === 'handed_off' &&
         draft.channel === 'gmail' &&
         draft.subject &&
@@ -909,7 +1250,12 @@ export function OutboxStatus({ draft, onClose }: { draft: OutboundMessage; onClo
             </button>
           </div>
         )}
-      <div className="mt-2 flex items-center gap-2 flex-wrap text-[13px]">
+      <div
+        className={cx(
+          'flex items-center flex-wrap',
+          compact ? 'mt-1.5 gap-1.5 text-[12.5px]' : 'mt-2 gap-2 text-[13px]',
+        )}
+      >
         <span className="font-medium mr-auto" aria-live="polite">
           {line}
         </span>

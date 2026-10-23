@@ -86,6 +86,16 @@ export function firstLine(text: string | undefined): string | undefined {
   return clip(text?.split(/\n+/).find((l) => l.trim()) ?? '', 140);
 }
 
+/** A greeting on its own line ("Hi Lena,"), which says nothing about what a message is. */
+const GREETING_LINE = /^(?:hi|hey|hello|dear|good (?:morning|afternoon|evening))\b[^.!?\n]{0,40}[,.!]?$/i;
+
+/** The first line of a message that says something: the greeting is skipped. */
+export function openingLine(text: string | undefined): string | undefined {
+  const lines = (text ?? '').split(/\n+/).filter((l) => l.trim());
+  const at = lines.findIndex((l) => !GREETING_LINE.test(l.trim()));
+  return clip(lines[at >= 0 ? at : 0] ?? '', 140);
+}
+
 /** A date for the model in the student's zone, with the weekday. */
 export function fmtWhen(iso: string | undefined, ctx: Pick<ToolContext, 'user'>): string | undefined {
   if (!iso) return undefined;
@@ -188,7 +198,7 @@ export function draftRef(d: OutboundMessage, person?: Person): DraftRef {
     channelLabel: CHANNEL_LABELS[d.channel],
     status: d.status,
     subject: d.subject,
-    firstLine: firstLine(d.bodyFinal ?? d.bodyDraft),
+    firstLine: openingLine(d.bodyFinal ?? d.bodyDraft),
     edited: !!d.bodyFinal,
     needsInput: d.needsInput,
     href: `/inbox?draft=${d.id}`,

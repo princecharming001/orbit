@@ -924,6 +924,27 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
     }
   }
 
+  // the warm-up choice for a LinkedIn-only stranger: "warm up Noah first" or "write to Noah now, skip the warm-up"
+  {
+    const warm = text.match(/^warm up\s+(?:with\s+)?(.+?)(?:\s+first)?$/i);
+    const now = text.match(
+      /^(?:write to|message|email)\s+(.+?)\s+now(?:,?\s*(?:and\s+)?skip(?:ping)? the warm-?\s?up)?$/i,
+    );
+    const m = warm ?? now;
+    if (m) {
+      const r = person(m[1]!);
+      if (r.person)
+        return viaTool(
+          'create_draft',
+          { personId: r.person.id, warmUp: warm ? 'start' : 'skip' },
+          undefined,
+          warm ? 'start a warm-up' : 'start a draft',
+        );
+      if (r.candidates.length) return ambiguous(m[1]!, r.candidates);
+      if (warm) return nobody(m[1]!);
+    }
+  }
+
   // drafts
   if (
     /^(my |the |show |show me |list |open |any )*(unsent( drafts| messages)?|drafts?|outbox|inbox|ready to send|messages to send|what('?s| is) (ready|waiting) to send)$/i.test(
@@ -1010,6 +1031,59 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
     }
   }
 
+  // an intro request through someone: "draft an intro request to Maya Chen for Daniel Okafor"
+  {
+    const m = text.match(
+      /^(?:draft|write)\s+(?:an?\s+)?intro(?:duction)?\s+(?:request|ask)\s+to\s+(.+?)\s+(?:for|about)\s+(?:an\s+intro(?:duction)?\s+to\s+)?(.+)$/i,
+    );
+    if (m) {
+      const via = person(m[1]!);
+      const to = person(m[2]!);
+      if (via.person && to.person)
+        return viaTool(
+          'create_draft',
+          { kind: 'intro_request', personId: via.person.id, targetPersonId: to.person.id },
+          undefined,
+          'draft an intro request',
+        );
+      if (!via.person && via.candidates.length) return ambiguous(m[1]!, via.candidates);
+      if (!to.person && to.candidates.length) return ambiguous(m[2]!, to.candidates);
+      return nobody(via.person ? m[2]! : m[1]!);
+    }
+  }
+
+  // several people at once: "draft a first message to each of: Priya Ahmed, Elena Garcia and Yuki Lopez"
+  {
+    const m = text.match(
+      /^(?:draft|write)\s+(?:a |an )?(.*?)\s*(?:messages?\s+|notes?\s+|emails?\s+)?to\s+(each of(?: them)?[:,]?\s+|all of[:,]?\s+)?(.+)$/i,
+    );
+    if (m && has('create_drafts')) {
+      const names = m[3]!
+        .split(/\s*,\s*(?:and\s+)?|\s+and\s+/i)
+        .map((s) => stripName(s))
+        .filter(Boolean);
+      if (names.length >= 2 || (m[2] && names.length)) {
+        const found = names.map((n) => person(n));
+        if (found.every((r) => r.person)) {
+          const kind = findKind(m[1] ?? '');
+          return viaTool(
+            'create_drafts',
+            {
+              personIds: [...new Set(found.map((r) => r.person!.id))],
+              // a plain "message" lets Orbit pick each one from where that chat stands
+              ...(kind && kind !== 'outreach' ? { kind } : {}),
+            },
+            undefined,
+            'draft several messages',
+          );
+        }
+        const at = found.findIndex((r) => !r.person);
+        if (found[at]!.candidates.length) return ambiguous(names[at]!, found[at]!.candidates);
+        return nobody(names[at]!);
+      }
+    }
+  }
+
   // draft a <kind> to <name>
   {
     const m = text.match(
@@ -1028,9 +1102,16 @@ export function routeUtterance(raw: string, ctx: RouterContext): RouterIntent {
           : /^(reply|answer)/i.test(kindText)
             ? 'reply'
             : 'outreach');
+      // a bare "write to Lena" names no kind: Orbit picks it from where the chat stands (a thank-you after a chat)
+      const pick = /^write\s+to\s/i.test(text) && !kindText.trim();
       const r = person(name);
       if (r.person)
-        return viaTool('create_draft', { kind, personId: r.person.id }, undefined, 'start a draft');
+        return viaTool(
+          'create_draft',
+          pick ? { personId: r.person.id } : { kind, personId: r.person.id },
+          undefined,
+          'start a draft',
+        );
       if (r.candidates.length) return ambiguous(name, r.candidates);
       return nobody(name);
     }

@@ -1,10 +1,11 @@
 import { Check, Copy, RefreshCw, ThumbsDown, ThumbsUp, TriangleAlert } from 'lucide-react';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { copyText } from '../../components/approve';
 import { cx, useToast } from '../../ui';
 import { ChoicesContext } from './cards/Choices';
-import { type CardActions, OpenInApp, ResultCard } from './cards/ResultCard';
+import { DraftOwnersContext } from './cards/parts';
+import { type CardActions, editingDraftId, ResultCard } from './cards/ResultCard';
 import { Markdown } from './Markdown';
 import type { AssistantTurn, Block, ErrorKind, ToolBlock, Turn } from './threadStore';
 
@@ -22,51 +23,65 @@ export function Thread({
   actions: ThreadActions;
   running: boolean;
 }) {
+  // each draft's editor lives in the newest card that shows it; older cards for the same draft fold to a line
+  const owners = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const t of turns)
+      if (t.role === 'assistant')
+        for (const b of t.blocks)
+          if (b.type === 'tool') {
+            const id = editingDraftId(b);
+            if (id) m.set(id, b.toolUseId);
+          }
+    return m;
+  }, [turns]);
   return (
-    <div className="type-body" data-testid="thread">
-      <div className="flex items-center gap-3 text-[13px] font-semibold text-ink-2 mb-4" aria-hidden>
-        Today <span className="flex-1 h-px bg-line" />
-      </div>
-      <ol className="space-y-4">
-        {turns.map((t, i) => (
-          <li key={t.id} className="min-w-0">
-            {t.role === 'user' ? (
-              <div className="flex justify-end">
+    <DraftOwnersContext.Provider value={owners}>
+      <div className="type-body" data-testid="thread">
+        <div className="flex items-center gap-3 text-[13px] font-semibold text-ink-2 mb-4" aria-hidden>
+          Today <span className="flex-1 h-px bg-line" />
+        </div>
+        <ol className="space-y-4">
+          {turns.map((t, i) => (
+            <li key={t.id} className="min-w-0">
+              {t.role === 'user' ? (
+                <div className="flex justify-end">
+                  <div
+                    className="max-w-[85%] rounded-[20px] rounded-br-[8px] px-4 py-2.5 whitespace-pre-wrap break-words bg-[rgba(14,20,36,0.06)]"
+                    data-testid="turn-user"
+                  >
+                    {t.text}
+                  </div>
+                </div>
+              ) : t.role === 'assistant' ? (
+                <Assistant
+                  turn={t}
+                  actions={actions}
+                  running={running}
+                  last={i === turns.length - 1}
+                  laterUserText={turns.slice(i + 1).find((x) => x.role === 'user')?.text}
+                />
+              ) : (
                 <div
-                  className="max-w-[85%] rounded-[20px] rounded-br-[8px] px-4 py-2.5 whitespace-pre-wrap break-words bg-[rgba(14,20,36,0.06)]"
-                  data-testid="turn-user"
+                  className={cx(
+                    'flex items-center justify-center gap-1.5 text-[12.5px] text-ink-3 py-1',
+                    t.role === 'note' && 'text-bad',
+                  )}
+                  data-testid={`turn-${t.role}`}
                 >
+                  {t.role === 'decision' ? (
+                    <Check size={13} aria-hidden />
+                  ) : (
+                    <TriangleAlert size={13} aria-hidden />
+                  )}{' '}
                   {t.text}
                 </div>
-              </div>
-            ) : t.role === 'assistant' ? (
-              <Assistant
-                turn={t}
-                actions={actions}
-                running={running}
-                last={i === turns.length - 1}
-                laterUserText={turns.slice(i + 1).find((x) => x.role === 'user')?.text}
-              />
-            ) : (
-              <div
-                className={cx(
-                  'flex items-center justify-center gap-1.5 text-[12.5px] text-ink-3 py-1',
-                  t.role === 'note' && 'text-bad',
-                )}
-                data-testid={`turn-${t.role}`}
-              >
-                {t.role === 'decision' ? (
-                  <Check size={13} aria-hidden />
-                ) : (
-                  <TriangleAlert size={13} aria-hidden />
-                )}{' '}
-                {t.text}
-              </div>
-            )}
-          </li>
-        ))}
-      </ol>
-    </div>
+              )}
+            </li>
+          ))}
+        </ol>
+      </div>
+    </DraftOwnersContext.Provider>
   );
 }
 
@@ -97,10 +112,6 @@ function Assistant({
     .filter((b): b is Extract<Block, { type: 'text' }> => b.type === 'text')
     .map((b) => b.text)
     .join('\n\n');
-  const lastHref = [...turn.blocks]
-    .reverse()
-    .map((b) => (b.type === 'tool' ? (b.outcome?.href ?? b.envelope?.href) : undefined))
-    .find(Boolean);
   const lastBlock = turn.blocks[turn.blocks.length - 1];
   const waiting =
     streaming &&
@@ -176,7 +187,6 @@ function Assistant({
           >
             <ThumbsDown size={14} aria-hidden />
           </IconButton>
-          {lastHref && <OpenInApp href={lastHref} className="ml-1" />}
         </div>
       )}
     </div>
