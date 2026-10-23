@@ -1,0 +1,214 @@
+/**
+ * Map, Reach: "People who know {first}", the target's LinkedIn mutuals (the student's own connections LinkedIn says
+ * are connected to them), closest to the student first, each with how close the student is to them and an "Ask
+ * {mutual} for an intro" that drafts the request (the same intro draft flow as the routes). Shown whether or not a
+ * route clears the bar, so someone in the student's second degree is never a dead end. Says plainly when LinkedIn is
+ * not connected, is still looking, found no one, or failed (with a retry). The sample student's come from the demo.
+ */
+import type { Person, User } from '@orbit/core';
+import { TIE_BAND_LABELS, tieBand } from '@orbit/core';
+import { useLiveQuery } from 'dexie-react-hooks';
+import { type ReactNode, useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { db } from '../../db/schema';
+import { targetMutuals } from '../../engine/externalRoutes';
+import { userTieWeight } from '../../engine/graph';
+import type { MutualsResult, MutualView } from '../../engine/linkedinLive';
+import { isServerUser } from '../../integrations/orbitApi';
+import { Avatar, Button, cx, LinkedInMark } from '../../ui';
+
+const SHOWN = 5;
+const TAP = 'pointer-coarse:min-h-11';
+
+/** The target's mutuals: undefined while LinkedIn is asked; `retry` asks again after a failure. */
+export function useTargetMutuals(
+  user: User | undefined,
+  target: Person | undefined,
+): { result?: MutualsResult; retry: () => void } {
+  const [state, setState] = useState<{ key: string; result?: MutualsResult }>();
+  const [attempt, setAttempt] = useState(0);
+  const key = user && target ? `${user.id}:${target.id}:${target.linkedinMemberId ?? ''}` : '';
+  useEffect(() => {
+    if (!key || !user || !target) return;
+    let live = true;
+    setState({ key });
+    void targetMutuals(user, target).then((result) => live && setState({ key, result }));
+    return () => {
+      live = false;
+    };
+    // the target object changes on every read; who it is (and their member id) is what matters
+  }, [key, attempt]);
+  return {
+    result: state?.key === key ? state.result : undefined,
+    retry: () => setAttempt((a) => a + 1),
+  };
+}
+
+interface Row {
+  m: MutualView;
+  person?: Person;
+  /** the student's tie to them, 0–100; -1 for someone not in Orbit */
+  score: number;
+}
+
+export function ReachMutuals({
+  user,
+  target,
+  onAsk,
+}: {
+  user: User;
+  target: Person;
+  /** draft an intro request from this person to the target */
+  onAsk: (personId: string, score: number) => void;
+}) {
+  const { result, retry } = useTargetMutuals(user, target);
+  const [all, setAll] = useState(false);
+  const ids = useMemo(
+    () => (result?.mutuals ?? []).map((m) => m.personId).filter((id): id is string => !!id),
+    [result],
+  );
+  const known = useLiveQuery(
+    async () => new Map((await db.people.bulkGet(ids)).filter((p): p is Person => !!p).map((p) => [p.id, p])),
+    [ids.join('|')],
+  );
+  const first = target.firstName || target.displayName;
+  const rows: Row[] = useMemo(() => {
+    const out = (result?.mutuals ?? []).map((m): Row => {
+      const person = m.personId ? known?.get(m.personId) : undefined;
+      // a mutual is one of the student's LinkedIn connections, so at least that close
+      const score = person ? Math.max(Math.round(userTieWeight(person) * 100), 12) : -1;
+      return { m, person, score };
+    });
+    return out.sort((a, b) => b.score - a.score || a.m.name.localeCompare(b.m.name));
+  }, [result, known]);
+
+  const heading = (
+    <div className="text-[12px] uppercase tracking-wide text-ink-3 mb-1.5">
+      People who know {first}
+      {result?.ok && rows.length > 0 ? ` · ${rows.length}` : ''}
+    </div>
+  );
+  const note = (text: string, testId: string, extra?: ReactNode) => (
+    <div data-testid="reach-mutuals">
+      {heading}
+      <p className="text-[12.5px] text-ink-3" data-testid={testId}>
+        {text}
+        {extra}
+      </p>
+    </div>
+  );
+
+  if (!result)
+    return (
+      <div data-testid="reach-mutuals" aria-busy="true">
+        {heading}
+        <p className="text-[12.5px] text-ink-3" data-testid="reach-mutuals-loading">
+          Looking up who you know who knows {first}…
+        </p>
+      </div>
+    );
+  if (!result.ok) {
+    // with an Orbit account LinkedIn is linked on the server, which this browser's lookup cannot see: say nothing
+    if (result.reason === 'not_connected' && isServerUser(user.id)) return null;
+    if (result.reason === 'not_connected')
+      return note(
+        `Connect LinkedIn to see which of your connections know ${first}. `,
+        'reach-mutuals-connect',
+        <Link to="/settings/integrations" className={cx('text-ink underline underline-offset-4', TAP)}>
+          Connect LinkedIn
+        </Link>,
+      );
+    if (result.reason === 'no_member_id')
+      return note(
+        target.linkedinUrl || target.linkedinSlug
+          ? `LinkedIn could not match ${first}'s profile yet, so Orbit cannot list who you both know.`
+          : `Orbit does not have ${first}'s LinkedIn profile, so it cannot look up who you both know.`,
+        'reach-mutuals-no-profile',
+      );
+    if (result.reason === 'unconfigured') return note(result.message, 'reach-mutuals-unconfigured');
+    return note(
+      `${result.message} `,
+      'reach-mutuals-error',
+      <button
+        type="button"
+        className={cx('text-ink underline underline-offset-4', TAP)}
+        onClick={retry}
+        data-testid="reach-mutuals-retry"
+      >
+        Try again
+      </button>,
+    );
+  }
+  if (!rows.length)
+    return note(
+      result.source === 'demo'
+        ? `No one in the sample network knows ${first}.`
+        : `None of your LinkedIn connections is connected to ${first}.`,
+      'reach-mutuals-none',
+    );
+  return (
+    <div data-testid="reach-mutuals">
+      {heading}
+      <ul className="space-y-2">
+        {(all ? rows : rows.slice(0, SHOWN)).map(({ m, person, score }) => {
+          const name = person?.displayName ?? m.name;
+          const mFirst = person?.firstName || name.split(' ')[0] || name;
+          const url = m.url ?? person?.linkedinUrl;
+          return (
+            <li
+              key={`${m.name}:${m.memberId ?? m.personId ?? ''}`}
+              className="flex items-center gap-2.5 text-[13px] min-w-0"
+              data-testid="reach-mutual"
+            >
+              <Avatar name={name} src={m.pictureUrl ?? person?.photoUrl} id={person?.id ?? name} size={30} />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1.5 min-w-0">
+                  {person ? (
+                    <Link to={`/people/${person.id}`} className="font-medium hover:underline truncate">
+                      {name}
+                    </Link>
+                  ) : (
+                    <span className="font-medium truncate">{name}</span>
+                  )}
+                  {url && /linkedin\.com/i.test(url) && <LinkedInMark url={url} name={name} />}
+                </div>
+                <div
+                  className="text-[12px] text-ink-3 truncate"
+                  title="How close you are to them"
+                  data-testid="reach-mutual-closeness"
+                >
+                  {person ? `${TIE_BAND_LABELS[tieBand(score)]} tie · ${score}` : 'Not in your Orbit yet'}
+                </div>
+              </div>
+              {person && (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  className={cx('shrink-0', TAP)}
+                  onClick={() => onAsk(person.id, score / 100)}
+                  data-testid="reach-mutual-ask"
+                >
+                  Ask {mFirst} for an intro
+                </Button>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+      {rows.length > SHOWN && (
+        <button
+          type="button"
+          className={cx('mt-1.5 text-[12px] font-medium text-ink-2 hover:text-ink hover:underline', TAP)}
+          onClick={() => setAll((v) => !v)}
+          data-testid="reach-mutuals-more"
+        >
+          {all ? 'Show fewer' : `Show all ${rows.length}`}
+        </button>
+      )}
+      <p className="mt-1.5 text-[12px] text-ink-3">
+        {result.source === 'demo' ? 'Sample connections from the demo.' : 'From your LinkedIn.'} Closest to
+        you first.
+      </p>
+    </div>
+  );
+}

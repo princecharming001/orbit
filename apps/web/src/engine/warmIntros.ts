@@ -2,15 +2,18 @@
  * Warm intros: real intro paths to a person or a company from Village (integrations/village.ts), with how warm each
  * is and the hops in words, matched to the people Orbit knows so the app can act on them ("Ask Mia for an intro").
  * The sample student's paths come from the demo graph (integrations/connectorsMock.ts). When Village is off (not in
- * the build, or the student has not turned it on), not switched on yet, or has nothing, this returns an empty list and
- * Orbit's own routes stand alone.
+ * the build, or the student has not turned it on), not set up on Orbit's server, or has nothing, this returns an
+ * empty list and Orbit's own routes stand alone; Settings reads `villageHealth` to say which.
+ *
+ * One lookup per target is shared for a few minutes, so the Map's warm intros and its routes (engine/graph.ts
+ * `reachPerson`, which adds Village introducers as candidates) ask Village once.
  */
 import type { Person, User } from '@orbit/core';
 import { linkedInSlug, normalizeCompany, normalizeLinkedInUrl } from '@orbit/core';
 import { db } from '../db/schema';
 import { mockVillagePaths, usesMockConnectors } from '../integrations/connectorsMock';
 import { readPrefs, writePrefs } from '../integrations/prefs';
-import { villageConfigured, villagePaths } from '../integrations/village';
+import { type VillagePath, villageConfigured, villageLookup } from '../integrations/village';
 
 export type WarmthWord = 'warm' | 'good' | 'a stretch';
 
@@ -53,6 +56,31 @@ export function setWarmIntros(on: boolean): void {
   writePrefs({ warmIntros: on });
 }
 
+const SHARE_MS = 5 * 60_000;
+const shared = new Map<string, { at: number; p: Promise<VillagePath[] | undefined> }>();
+
+/** tests only */
+export function resetWarmIntrosCache(): void {
+  shared.clear();
+}
+
+/** Village's paths to a target, one request shared by every caller for a few minutes; undefined when it failed. */
+function sharedLookup(
+  key: string,
+  target: { name?: string; company?: string; linkedinUrl?: string },
+): Promise<VillagePath[] | undefined> {
+  const now = Date.now();
+  const hit = shared.get(key);
+  if (hit && now - hit.at < SHARE_MS) return hit.p;
+  const p = villageLookup(target).then((r) => {
+    // a failure is not kept: the next look asks again
+    if (!r.ok) shared.delete(key);
+    return r.ok ? r.value : undefined;
+  });
+  shared.set(key, { at: now, p });
+  return p;
+}
+
 /** Warm intro paths to a person or a company, warmest first. Never throws; empty when there are none. */
 export async function warmIntrosFor(
   user: Pick<User, 'id'>,
@@ -79,13 +107,14 @@ export async function warmIntrosFor(
     }
     if (!villageAvailable(user)) return [];
     const company = target.person?.currentOrganizationRaw ?? target.company;
-    const paths = await villagePaths(
-      target.person
-        ? { name: target.person.displayName, company, linkedinUrl: target.person.linkedinUrl }
-        : { company },
-      { signal: opts.signal },
-    );
-    if (!paths.length) return [];
+    const paths =
+      (await sharedLookup(
+        target.person ? `${user.id}|p:${target.person.id}` : `${user.id}|c:${normalizeCompany(company)}`,
+        target.person
+          ? { name: target.person.displayName, company, linkedinUrl: target.person.linkedinUrl }
+          : { company },
+      )) ?? [];
+    if (opts.signal?.aborted || !paths.length) return [];
     const people = await db.people.where('userId').equals(user.id).toArray();
     const find = (name: string | undefined, url?: string): Person | undefined => {
       const slug = linkedInSlug(normalizeLinkedInUrl(url));

@@ -1061,9 +1061,23 @@ async function providerSecret(name) {
     return void 0;
   }
 }
-var [unipileKey, unipileBase] = await Promise.all([
+var [
+  unipileKey,
+  unipileBase,
+  villageSecret,
+  villageLegacyKey,
+  villageBase,
+  villageEmail,
+  villageExternalUser
+] = await Promise.all([
   providerSecret("UNIPILE_API_KEY"),
-  providerSecret("UNIPILE_BASE_URL")
+  providerSecret("UNIPILE_BASE_URL"),
+  // Village, the same way: a function secret, else the secrets table
+  providerSecret("VILLAGE_SECRET_KEY"),
+  providerSecret("VILLAGE_API_KEY"),
+  providerSecret("VILLAGE_BASE_URL"),
+  providerSecret("VILLAGE_USER_EMAIL"),
+  providerSecret("VILLAGE_EXTERNAL_USER_ID")
 ]);
 var num = (name, fallback) => {
   const v = Number(Deno.env.get(name));
@@ -1074,13 +1088,12 @@ Deno.serve(
     // pasting these as function secrets turns each provider on; until then its routes answer "unconfigured"
     unipileKey,
     unipileBase,
-    // Village v2: the app secret key mints a token per user (POST /v2/auth/tokens); VILLAGE_API_KEY is the old name
-    villageKey: Deno.env.get("VILLAGE_SECRET_KEY") || Deno.env.get("VILLAGE_API_KEY") || void 0,
-    villageBase: Deno.env.get("VILLAGE_BASE_URL") || "https://api.village.do",
-    villageUser: Deno.env.get("VILLAGE_USER_EMAIL") ? {
-      externalUserId: Deno.env.get("VILLAGE_EXTERNAL_USER_ID") || "orbit-local",
-      email: Deno.env.get("VILLAGE_USER_EMAIL")
-    } : void 0,
+    // Village v2: the app secret key mints a token per user (POST /v2/auth/tokens); VILLAGE_API_KEY is the old name.
+    // Without the key or VILLAGE_USER_EMAIL, /paths answers 503 with x-orbit-connector: unconfigured, which the app
+    // shows as "Village isn't set up". The paths are that one Village user's network, for every visitor.
+    villageKey: villageSecret || villageLegacyKey || void 0,
+    villageBase: villageBase || "https://api.village.do",
+    villageUser: villageEmail ? { externalUserId: villageExternalUser || "orbit-local", email: villageEmail } : void 0,
     origins: defaultOrigins,
     // per-visitor counters in the shared store orbit-claude uses; in memory when it is not reachable from here
     take: url && serviceKey ? postgrestTake(url, serviceKey) : memoryTake(),

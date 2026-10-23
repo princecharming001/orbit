@@ -94,6 +94,12 @@ export const OLD_EVIDENCE_YEARS = 3;
 export const OLD_EVIDENCE_FACTOR = 0.7;
 export const DIRECT_TIE_SCORE = 40;
 export const MIN_PATH_P = 0.05;
+/**
+ * The least tie score a LinkedIn mutual counts as on the first hop. A mutual is, by LinkedIn's own word, one of the
+ * student's first-degree connections, so at least what a bare LinkedIn connection gives (the web's
+ * LINKEDIN_ONLY_WEIGHT, 0.12), even where Orbit has no other history with them.
+ */
+export const MUTUAL_MIN_SCORE = 12;
 
 export interface RoutePerson {
   id: string;
@@ -158,6 +164,11 @@ export interface WarmPath {
   /** routes into the target through other first hops */
   otherWays: number;
   reasonText: string;
+  /**
+   * A route through a LinkedIn mutual kept although it falls under the bar (MIN_PATH_P, or the goal's first-hop
+   * floor): a real connection to the target, so it is shown, labelled a weaker route rather than hidden.
+   */
+  weak?: true;
 }
 
 export interface WarmPathResult {
@@ -297,18 +308,59 @@ export function hopEvidence(fromId: string, tie: Tie | undefined, toName: string
   }
 }
 
+/**
+ * The student's first-degree connections LinkedIn says are connected to the target: introducers offered as
+ * `linkedin_mutual` candidates, and people whose stored pair with the target carries a `linkedin_mutual` tie (the
+ * server keeps them as ties).
+ */
+function mutualIntroducers(
+  pairs: ReadonlyMap<string, TiePair>,
+  targetId: string,
+  candidates: ExternalCandidate[],
+): Set<string> {
+  const out = new Set<string>();
+  if (!targetId) return out;
+  for (const c of candidates)
+    if (c.kind === 'linkedin_mutual' && c.introducerId !== targetId) out.add(c.introducerId);
+  for (const pair of pairs.values()) {
+    if (!pair.kinds.includes('linkedin_mutual')) continue;
+    if (pair.aId === targetId) out.add(pair.bId);
+    else if (pair.bId === targetId) out.add(pair.aId);
+  }
+  return out;
+}
+
+interface RoutingGraph {
+  g: WeightedGraph;
+  /** p_ask per first hop */
+  ask: Map<string, number>;
+  /** the tie score each first hop is asked at (a mutual's is at least MUTUAL_MIN_SCORE) */
+  scores: Map<string, number>;
+  /** mutuals in the graph only because they are mutuals: below the goal's floor, or with no score of their own */
+  lifted: Set<string>;
+}
+
 function routingGraph(
   input: WarmPathInput,
   pairs: ReadonlyMap<string, TiePair>,
   now: Date,
-): { g: WeightedGraph; ask: Map<string, number> } {
+  mutuals: ReadonlySet<string> = new Set(),
+): RoutingGraph {
   const g = makeGraph();
   const ask = new Map<string, number>();
+  const scores = new Map<string, number>();
+  const lifted = new Set<string>();
   const floor = firstHopFloor(input.goal);
   for (const p of input.people.values()) {
-    if (p.id === input.targetId || !usable(p, now) || p.score <= 0 || p.score < floor) continue;
-    const a = pAsk(p);
+    if (p.id === input.targetId || !usable(p, now)) continue;
+    const mutual = mutuals.has(p.id);
+    const score = mutual ? Math.max(p.score, MUTUAL_MIN_SCORE) : p.score;
+    const passes = p.score > 0 && p.score >= floor;
+    if (!passes && !mutual) continue;
+    if (!passes) lifted.add(p.id);
+    const a = pAsk({ ...p, score });
     ask.set(p.id, a);
+    scores.set(p.id, score);
     addEdge(g, USER_NODE, p.id, a, 'strength', '', true);
   }
   for (const pair of pairs.values()) {
@@ -322,13 +374,17 @@ function routingGraph(
     const top = strongestTie(pair, now)?.kind ?? pair.kinds[0]!;
     addEdge(g, pair.aId, pair.bId, Math.min(0.999, know * HOP_PENALTY), top, '');
   }
-  return { g, ask };
+  return { g, ask, scores, lifted };
 }
 
 /**
  * Ranked routes to one person (§4.2): Yen's k = 12 over −ln p, mutual and Village candidates merged in as ties to
  * the target, the best route per first hop, at most two routes through one middle person, the top five, with a
  * band and a plain reason. A target the student already knows (score ≥ 40) is not routed.
+ *
+ * A LinkedIn mutual is never dropped: its first hop counts at least MUTUAL_MIN_SCORE and skips the goal's floor (for
+ * that target only), its route is added even when Yen's k did not reach it, and it is kept under MIN_PATH_P, marked
+ * `weak` and explained "Through Mia, a faint tie (12): …".
  */
 export function rankWarmPaths(input: WarmPathInput): WarmPathResult {
   const now = input.now ?? new Date();
@@ -342,13 +398,15 @@ export function rankWarmPaths(input: WarmPathInput): WarmPathResult {
     };
   }
   const pairs = withExternal(input.pairs, input.targetId, input.candidates ?? []);
-  const { g, ask } = routingGraph(input, pairs, now);
+  const mutuals = mutualIntroducers(pairs, input.targetId, input.candidates ?? []);
+  const rg = routingGraph(input, pairs, now, mutuals);
+  const { g, ask } = rg;
   const rT = targetReceptivity(input.target ?? {});
   const k = input.k ?? 12;
   const maxHops = input.maxHops ?? 3;
-  const found: Omit<WarmPath, 'otherWays' | 'reasonText'>[] = [];
-  for (const nodes of kShortestPaths(g, USER_NODE, input.targetId, k, maxHops)) {
-    if (nodes.length < 3) continue;
+  type Found = Omit<WarmPath, 'otherWays' | 'reasonText'>;
+  const found: Found[] = [];
+  const score = (nodes: string[]): Found => {
     const hops: WarmHop[] = [];
     let p = 1;
     let old = false;
@@ -372,8 +430,24 @@ export function rankWarmPaths(input: WarmPathInput): WarmPathResult {
     p *= rT * HOP_PENALTY ** (hops.length - 2);
     if (old) p *= OLD_EVIDENCE_FACTOR;
     p = Math.min(1, p);
-    found.push({ nodes, hops, p, band: pathBand(p), firstHopId: nodes[1]! });
+    return { nodes, hops, p, band: pathBand(p), firstHopId: nodes[1]! };
+  };
+  /** you → a mutual → the target: the route a LinkedIn mutual stands for */
+  const viaMutual = (nodes: string[]) => nodes.length === 3 && mutuals.has(nodes[1]!);
+  for (const nodes of kShortestPaths(g, USER_NODE, input.targetId, k, maxHops)) {
+    if (nodes.length < 3) continue;
+    // a mutual let in under the goal's floor is asked only about the person they are a mutual of
+    if (rg.lifted.has(nodes[1]!) && !viaMutual(nodes)) continue;
+    found.push(score(nodes));
   }
+  // every mutual is a way in, whether or not Yen's k shortest reached it
+  for (const m of mutuals) {
+    if (!ask.has(m) || !pairs.has(pk(m, input.targetId))) continue;
+    if (found.some((f) => f.nodes.length === 3 && f.firstHopId === m)) continue;
+    found.push(score([USER_NODE, m, input.targetId]));
+  }
+  for (const f of found)
+    if (viaMutual(f.nodes) && (f.p <= MIN_PATH_P || rg.lifted.has(f.firstHopId))) f.weak = true;
   // a faint direct tie is one more way in: writing to them, at the chance they answer
   if (target && target.score > 0 && input.target?.pReply !== undefined) {
     const p = Math.max(0, Math.min(1, input.target.pReply));
@@ -389,7 +463,8 @@ export function rankWarmPaths(input: WarmPathInput): WarmPathResult {
     (a, b) =>
       b.p - a.p || a.nodes.length - b.nodes.length || a.nodes.join('>').localeCompare(b.nodes.join('>')),
   );
-  const viable = found.filter((f) => f.p > MIN_PATH_P);
+  // a real LinkedIn mutual is never dropped for falling under the bar: it is kept, and called a weaker route
+  const viable = found.filter((f) => f.p > MIN_PATH_P || viaMutual(f.nodes));
   if (!viable.length) return { paths: [], fallback: 'cold' };
   const firstHops = new Set(viable.map((f) => f.firstHopId));
   const otherWays = firstHops.size - 1;
@@ -409,7 +484,7 @@ export function rankWarmPaths(input: WarmPathInput): WarmPathResult {
     paths: chosen.map((f) => ({
       ...f,
       otherWays,
-      reasonText: reasonText(f, input, pairs, tName, otherWays, now),
+      reasonText: reasonText(f, input, pairs, tName, otherWays, now, rg.scores),
     })),
   };
 }
@@ -421,6 +496,7 @@ function reasonText(
   tName: string,
   otherWays: number,
   now: Date,
+  scores: ReadonlyMap<string, number> = new Map(),
 ): string {
   const others = otherWays > 0 ? ` ${otherWays} other ${otherWays === 1 ? 'way' : 'ways'} in.` : '';
   if (f.nodes.length === 2) {
@@ -429,6 +505,17 @@ function reasonText(
     return `Write to ${tName} directly${band ? ` (${band})` : ''}.${others}`;
   }
   const a = input.people.get(f.nodes[1]!)!;
+  const aScore = scores.get(a.id) ?? a.score;
+  const last = f.nodes.length === 3 ? pairs.get(pk(f.nodes[1]!, f.nodes[2]!)) : undefined;
+  if (last?.kinds.includes('linkedin_mutual')) {
+    // through a LinkedIn mutual: who they are to the student, then how they know the target
+    const top = strongestTie(last, now);
+    const how = hopEvidence(a.id, top, tName);
+    const also = top && top.kind !== 'linkedin_mutual' ? ' (and is connected to them on LinkedIn)' : '';
+    const closeness = TIE_BAND_LABELS[tieBand(aScore)].toLowerCase();
+    const weak = f.weak ? ' A weaker route, but a real connection.' : '';
+    return `Through ${a.name}, a ${closeness} tie (${aScore}): ${a.name} ${how}${also}.${weak}${others}`;
+  }
   const nameOf = (id: string) => (id === input.targetId ? tName : (input.people.get(id)?.name ?? 'someone'));
   const phrases: string[] = [];
   for (let i = 1; i < f.nodes.length - 1; i++) {
@@ -437,7 +524,7 @@ function reasonText(
     const pair = pairs.get(pk(from, to));
     phrases.push(hopEvidence(from, pair ? strongestTie(pair, now) : undefined, nameOf(to)));
   }
-  const head = `${a.name} (${TIE_BAND_LABELS[tieBand(a.score)]} · ${a.score}) ${phrases[0]}`;
+  const head = `${a.name} (${TIE_BAND_LABELS[tieBand(aScore)]} · ${aScore}) ${phrases[0]}`;
   const rest = phrases
     .slice(1)
     .map((p) => `, who ${p}`)

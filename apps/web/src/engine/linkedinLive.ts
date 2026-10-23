@@ -532,14 +532,18 @@ export type MutualsResult =
       mutuals: [];
     };
 
+/** LinkedIn's answer for a target, kept a day in db.kv under this prefix (plus user and person ids). */
+export const MUTUALS_KV = 'mutuals:';
+
 /**
  * Who the student knows who also knows this person, from LinkedIn (live, through Unipile) or, for the sample
- * student, from the demo's own people.
+ * student, from the demo's own people. LinkedIn's answer is kept for the day per target (and member id), so the Map,
+ * the Person page and the chat ask once; who each mutual is in Orbit is matched again on every read.
  */
 export async function mutualsFor(
   user: User,
   person: Person,
-  opts: { signal?: AbortSignal } = {},
+  opts: { signal?: AbortSignal; now?: Date } = {},
 ): Promise<MutualsResult> {
   const people = await db.people.where('userId').equals(user.id).toArray();
   const resolve = (m: Mutual): MutualView => {
@@ -568,6 +572,13 @@ export async function mutualsFor(
       message: `${person.firstName} did not come from your live LinkedIn sync, so LinkedIn cannot look up mutual connections.`,
       mutuals: [],
     };
+  const day = (opts.now ?? new Date()).toISOString().slice(0, 10);
+  const key = `${MUTUALS_KV}${user.id}:${person.id}`;
+  const kept = (await db.kv.get(key))?.value as
+    | { day?: string; memberId?: string; mutuals?: Mutual[] }
+    | undefined;
+  if (kept?.day === day && kept.memberId === person.linkedinMemberId && kept.mutuals)
+    return { ok: true, source: 'linkedin', mutuals: kept.mutuals.map(resolve) };
   const r = await mutualConnections(row.externalAccountId!, person.linkedinMemberId, {
     token: row.accessToken,
     signal: opts.signal,
@@ -579,6 +590,7 @@ export async function mutualsFor(
       message: r.reason === 'unconfigured' ? LIVE_SOON : r.message,
       mutuals: [],
     };
+  await db.kv.put({ key, value: { day, memberId: person.linkedinMemberId, mutuals: r.value } });
   return { ok: true, source: 'linkedin', mutuals: r.value.map(resolve) };
 }
 

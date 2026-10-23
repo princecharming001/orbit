@@ -8,6 +8,9 @@
  *
  * The request and response are mapped here behind one adapter, so when the founder adds a real Village key and we
  * test live, any shape difference is a change in this file alone.
+ *
+ * What the proxy last said is kept (`villageHealth`), so Settings can say "Village isn't set up" when the server has
+ * no Village key instead of showing warm intros as on while every lookup quietly comes back empty.
  */
 import {
   automationOverride,
@@ -22,6 +25,69 @@ let override: string | null | undefined;
 /** Test hook: a proxy URL to use, null for none, or undefined to restore the build-time setting. */
 export function setVillageUrlForTests(url: string | null | undefined): void {
   override = url;
+  health = undefined;
+  checked = undefined;
+}
+
+/**
+ * What Orbit's server last said about Village: `ready` (it answered), `unconfigured` (no Village key, or no
+ * VILLAGE_USER_EMAIL, on the server), `error` (it did not answer). Undefined until something asked.
+ */
+export type VillageHealth = 'ready' | 'unconfigured' | 'error';
+
+let health: VillageHealth | undefined;
+let checked: { at: number; p: Promise<VillageHealth> } | undefined;
+const listeners = new Set<() => void>();
+
+function setHealth(h: VillageHealth): void {
+  if (h === health) return;
+  health = h;
+  for (const fn of listeners) fn();
+}
+
+export function villageHealth(): VillageHealth | undefined {
+  return health;
+}
+
+export function subscribeVillageHealth(fn: () => void): () => void {
+  listeners.add(fn);
+  return () => listeners.delete(fn);
+}
+
+const HEALTH_TTL_MS = 10 * 60_000;
+
+/**
+ * Ask the proxy whether Village is set up, without looking anyone up: an empty `/paths` request is answered
+ * `unconfigured` when the server has no Village key, and with no paths (and no Village credits spent) when it has one.
+ * Remembered for ten minutes.
+ */
+export function checkVillage(
+  opts: { fetch?: typeof fetch; force?: boolean; now?: number } = {},
+): Promise<VillageHealth> {
+  const now = opts.now ?? Date.now();
+  if (!opts.force && checked && now - checked.at < HEALTH_TTL_MS) return checked.p;
+  const p = (async (): Promise<VillageHealth> => {
+    const base = villageUrl();
+    if (!base || base === UNCONFIGURED_PROXY) {
+      setHealth('unconfigured');
+      return 'unconfigured';
+    }
+    try {
+      const res = await (opts.fetch ?? fetch)(`${base}/paths`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      });
+      const h: VillageHealth = isUnconfigured(res) ? 'unconfigured' : res.ok ? 'ready' : 'error';
+      setHealth(h);
+      return h;
+    } catch {
+      setHealth('error');
+      return 'error';
+    }
+  })();
+  checked = { at: now, p };
+  return p;
 }
 
 export function villageUrl(): string | undefined {
@@ -36,6 +102,10 @@ export function villageUrl(): string | undefined {
 export function villageConfigured(): boolean {
   return !!villageUrl();
 }
+
+/** What the app says when Orbit's server answers that Village has no key (or no account email) yet. */
+export const VILLAGE_NOT_SET_UP =
+  "Village isn't set up on Orbit's server yet, so there are no warm intro paths from it.";
 
 /** Who to reach. A person (by name, and company or LinkedIn URL when known) or a company. */
 export interface VillageTarget {
@@ -75,8 +145,10 @@ export async function villageLookup(
 ): Promise<ConnectorOutcome<VillagePath[]>> {
   const base = villageUrl();
   if (!base) return connectorFailure('unconfigured', 'Warm intros are not set up in this copy of Orbit.');
-  if (base === UNCONFIGURED_PROXY)
-    return connectorFailure('unconfigured', 'Warm intros are not switched on yet.', 503);
+  if (base === UNCONFIGURED_PROXY) {
+    setHealth('unconfigured');
+    return connectorFailure('unconfigured', VILLAGE_NOT_SET_UP, 503);
+  }
   if (!target.name && !target.company) return { ok: true, value: [] };
   const doFetch = opts.fetch ?? fetch;
   const ctrl = new AbortController();
@@ -98,9 +170,15 @@ export async function villageLookup(
       }),
       signal: ctrl.signal,
     });
-    if (isUnconfigured(res))
-      return connectorFailure('unconfigured', 'Warm intros are not switched on yet.', res.status);
-    if (!res.ok) return connectorFailure('error', `Village did not answer (${res.status}).`, res.status);
+    if (isUnconfigured(res)) {
+      setHealth('unconfigured');
+      return connectorFailure('unconfigured', VILLAGE_NOT_SET_UP, res.status);
+    }
+    if (!res.ok) {
+      setHealth('error');
+      return connectorFailure('error', `Village did not answer (${res.status}).`, res.status);
+    }
+    setHealth('ready');
     const body = (await res.json()) as VillageResponse;
     const paths = (body.paths ?? [])
       .filter((p) => p.introducer?.name)
@@ -118,6 +196,7 @@ export async function villageLookup(
     return { ok: true, value: paths };
   } catch (e) {
     if (timedOut) return connectorFailure('timeout', 'Village took too long to answer.');
+    if (!opts.signal?.aborted) setHealth('error');
     return connectorFailure('error', e instanceof Error ? e.message : 'Could not reach Village.');
   } finally {
     clearTimeout(timer);

@@ -9013,6 +9013,7 @@ var OLD_EVIDENCE_YEARS = 3;
 var OLD_EVIDENCE_FACTOR = 0.7;
 var DIRECT_TIE_SCORE = 40;
 var MIN_PATH_P = 0.05;
+var MUTUAL_MIN_SCORE = 12;
 function pathBand(p) {
   if (p >= 0.35) return "high";
   if (p >= 0.15) return "medium";
@@ -9120,14 +9121,34 @@ function hopEvidence(fromId, tie, toName) {
       return `knows ${toName}`;
   }
 }
-function routingGraph(input, pairs, now) {
+function mutualIntroducers(pairs, targetId, candidates) {
+  const out = /* @__PURE__ */ new Set();
+  if (!targetId) return out;
+  for (const c of candidates)
+    if (c.kind === "linkedin_mutual" && c.introducerId !== targetId) out.add(c.introducerId);
+  for (const pair of pairs.values()) {
+    if (!pair.kinds.includes("linkedin_mutual")) continue;
+    if (pair.aId === targetId) out.add(pair.bId);
+    else if (pair.bId === targetId) out.add(pair.aId);
+  }
+  return out;
+}
+function routingGraph(input, pairs, now, mutuals = /* @__PURE__ */ new Set()) {
   const g = makeGraph();
   const ask = /* @__PURE__ */ new Map();
+  const scores = /* @__PURE__ */ new Map();
+  const lifted = /* @__PURE__ */ new Set();
   const floor = firstHopFloor(input.goal);
   for (const p of input.people.values()) {
-    if (p.id === input.targetId || !usable(p, now) || p.score <= 0 || p.score < floor) continue;
-    const a = pAsk(p);
+    if (p.id === input.targetId || !usable(p, now)) continue;
+    const mutual = mutuals.has(p.id);
+    const score = mutual ? Math.max(p.score, MUTUAL_MIN_SCORE) : p.score;
+    const passes = p.score > 0 && p.score >= floor;
+    if (!passes && !mutual) continue;
+    if (!passes) lifted.add(p.id);
+    const a = pAsk({ ...p, score });
     ask.set(p.id, a);
+    scores.set(p.id, score);
     addEdge(g, USER_NODE, p.id, a, "strength", "", true);
   }
   for (const pair of pairs.values()) {
@@ -9139,7 +9160,7 @@ function routingGraph(input, pairs, now) {
     const top = strongestTie(pair, now)?.kind ?? pair.kinds[0];
     addEdge(g, pair.aId, pair.bId, Math.min(0.999, know * HOP_PENALTY), top, "");
   }
-  return { g, ask };
+  return { g, ask, scores, lifted };
 }
 function rankWarmPaths(input) {
   const now = input.now ?? /* @__PURE__ */ new Date();
@@ -9153,13 +9174,14 @@ function rankWarmPaths(input) {
     };
   }
   const pairs = withExternal(input.pairs, input.targetId, input.candidates ?? []);
-  const { g, ask } = routingGraph(input, pairs, now);
+  const mutuals = mutualIntroducers(pairs, input.targetId, input.candidates ?? []);
+  const rg = routingGraph(input, pairs, now, mutuals);
+  const { g, ask } = rg;
   const rT = targetReceptivity(input.target ?? {});
   const k = input.k ?? 12;
   const maxHops = input.maxHops ?? 3;
   const found = [];
-  for (const nodes of kShortestPaths(g, USER_NODE, input.targetId, k, maxHops)) {
-    if (nodes.length < 3) continue;
+  const score = (nodes) => {
     const hops = [];
     let p = 1;
     let old = false;
@@ -9183,8 +9205,21 @@ function rankWarmPaths(input) {
     p *= rT * HOP_PENALTY ** (hops.length - 2);
     if (old) p *= OLD_EVIDENCE_FACTOR;
     p = Math.min(1, p);
-    found.push({ nodes, hops, p, band: pathBand(p), firstHopId: nodes[1] });
+    return { nodes, hops, p, band: pathBand(p), firstHopId: nodes[1] };
+  };
+  const viaMutual = (nodes) => nodes.length === 3 && mutuals.has(nodes[1]);
+  for (const nodes of kShortestPaths(g, USER_NODE, input.targetId, k, maxHops)) {
+    if (nodes.length < 3) continue;
+    if (rg.lifted.has(nodes[1]) && !viaMutual(nodes)) continue;
+    found.push(score(nodes));
   }
+  for (const m of mutuals) {
+    if (!ask.has(m) || !pairs.has(pk(m, input.targetId))) continue;
+    if (found.some((f) => f.nodes.length === 3 && f.firstHopId === m)) continue;
+    found.push(score([USER_NODE, m, input.targetId]));
+  }
+  for (const f of found)
+    if (viaMutual(f.nodes) && (f.p <= MIN_PATH_P || rg.lifted.has(f.firstHopId))) f.weak = true;
   if (target && target.score > 0 && input.target?.pReply !== void 0) {
     const p = Math.max(0, Math.min(1, input.target.pReply));
     found.push({
@@ -9198,7 +9233,7 @@ function rankWarmPaths(input) {
   found.sort(
     (a, b) => b.p - a.p || a.nodes.length - b.nodes.length || a.nodes.join(">").localeCompare(b.nodes.join(">"))
   );
-  const viable = found.filter((f) => f.p > MIN_PATH_P);
+  const viable = found.filter((f) => f.p > MIN_PATH_P || viaMutual(f.nodes));
   if (!viable.length) return { paths: [], fallback: "cold" };
   const firstHops = new Set(viable.map((f) => f.firstHopId));
   const otherWays = firstHops.size - 1;
@@ -9218,11 +9253,11 @@ function rankWarmPaths(input) {
     paths: chosen.map((f) => ({
       ...f,
       otherWays,
-      reasonText: reasonText(f, input, pairs, tName, otherWays, now)
+      reasonText: reasonText(f, input, pairs, tName, otherWays, now, rg.scores)
     }))
   };
 }
-function reasonText(f, input, pairs, tName, otherWays, now) {
+function reasonText(f, input, pairs, tName, otherWays, now, scores = /* @__PURE__ */ new Map()) {
   const others = otherWays > 0 ? ` ${otherWays} other ${otherWays === 1 ? "way" : "ways"} in.` : "";
   if (f.nodes.length === 2) {
     const t = input.people.get(input.targetId);
@@ -9230,6 +9265,16 @@ function reasonText(f, input, pairs, tName, otherWays, now) {
     return `Write to ${tName} directly${band ? ` (${band})` : ""}.${others}`;
   }
   const a = input.people.get(f.nodes[1]);
+  const aScore = scores.get(a.id) ?? a.score;
+  const last = f.nodes.length === 3 ? pairs.get(pk(f.nodes[1], f.nodes[2])) : void 0;
+  if (last?.kinds.includes("linkedin_mutual")) {
+    const top = strongestTie(last, now);
+    const how = hopEvidence(a.id, top, tName);
+    const also = top && top.kind !== "linkedin_mutual" ? " (and is connected to them on LinkedIn)" : "";
+    const closeness = TIE_BAND_LABELS[tieBand(aScore)].toLowerCase();
+    const weak = f.weak ? " A weaker route, but a real connection." : "";
+    return `Through ${a.name}, a ${closeness} tie (${aScore}): ${a.name} ${how}${also}.${weak}${others}`;
+  }
   const nameOf2 = (id) => id === input.targetId ? tName : input.people.get(id)?.name ?? "someone";
   const phrases = [];
   for (let i = 1; i < f.nodes.length - 1; i++) {
@@ -9238,7 +9283,7 @@ function reasonText(f, input, pairs, tName, otherWays, now) {
     const pair = pairs.get(pk(from, to));
     phrases.push(hopEvidence(from, pair ? strongestTie(pair, now) : void 0, nameOf2(to)));
   }
-  const head = `${a.name} (${TIE_BAND_LABELS[tieBand(a.score)]} · ${a.score}) ${phrases[0]}`;
+  const head = `${a.name} (${TIE_BAND_LABELS[tieBand(aScore)]} · ${aScore}) ${phrases[0]}`;
   const rest = phrases.slice(1).map((p) => `, who ${p}`).join("");
   return `${head}${rest}.${others}`;
 }

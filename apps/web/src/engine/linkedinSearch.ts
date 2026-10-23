@@ -10,6 +10,7 @@ import { db } from '../db/schema';
 import { mockLinkedInSearch, usesMockConnectors } from '../integrations/connectorsMock';
 import { isServerUser } from '../integrations/orbitApi';
 import { type LinkedInFound, searchLinkedIn, unipileConfigured } from '../integrations/unipile';
+import { updateEdgesFor } from './graph';
 import { LIVE_SOON, liveLinkedInAccount } from './linkedinLive';
 import { addPersonByHand } from './people';
 import { freshPhoto } from './photos';
@@ -79,7 +80,11 @@ export type AddFoundOutcome =
   | { ok: true; people: { id: string; displayName: string; chatId: string }[] }
   | { ok: false; message: string };
 
-/** Add people a LinkedIn search found: each becomes a person with a chat at "to contact", to write to on LinkedIn. */
+/**
+ * Add people a LinkedIn search found: each becomes a person with a chat at "to contact", to write to on LinkedIn.
+ * Their edges (colleagues, classmates) are worked out at once, so the Map has routes to them straight away; their
+ * member id is kept, so their LinkedIn mutuals can be looked up too.
+ */
 export async function addLinkedInFound(
   user: Pick<User, 'id' | 'school'>,
   ids: string[],
@@ -140,5 +145,9 @@ export async function addLinkedInFound(
     out.push({ id: person.id, displayName: person.displayName, chatId: chat.id });
   }
   if (!out.length) return { ok: false, message: 'None of them could be added.' };
+  await updateEdgesFor(
+    user.id,
+    out.map((p) => p.id),
+  );
   return { ok: true, people: out };
 }
