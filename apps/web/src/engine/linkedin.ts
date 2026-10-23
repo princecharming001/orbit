@@ -5,6 +5,7 @@ import { db } from '../db/schema';
 import { generateBrief, recommendationsRefresh } from './brief';
 import { recomputeEdges } from './graph';
 import { loadPeopleCache, suggestDuplicateMerges, upsertPerson } from './people';
+import { freshPhoto } from './photos';
 
 export async function importConnectionsCsv(
   user: User,
@@ -155,8 +156,9 @@ export async function importLiveConnections(
     if (!p) continue;
     const patch: Partial<typeof p> = {};
     if (memberId && p.linkedinMemberId !== memberId) patch.linkedinMemberId = memberId;
-    // their LinkedIn photo, where Orbit has none (the map and every list show it)
-    if (photoUrl && !p.photoUrl) patch.photoUrl = photoUrl;
+    // their LinkedIn photo (the map and every list show it); a newer link replaces an expiring one
+    const photo = freshPhoto(p.photoUrl, photoUrl);
+    if (photo !== p.photoUrl) patch.photoUrl = photo;
     if (Object.keys(patch).length) await db.people.update(id, { ...patch, updatedAt: at });
   }
   return { imported: r.imported, updated: r.updated, skipped: connections.length - kept.length };

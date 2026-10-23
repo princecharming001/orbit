@@ -235,6 +235,41 @@ describe('job changes and free mailboxes (NRC-15)', () => {
   });
 });
 
+describe('two LinkedIn profiles are two people', () => {
+  it('never pairs namesakes with different profiles, and still joins mail to a LinkedIn profile', () => {
+    const nick = person('nick', 'Nick Wang', {
+      linkedinUrl: 'https://www.linkedin.com/in/nick-wang-talent',
+      linkedinSlug: 'nick-wang-talent',
+      currentOrganizationRaw: 'Stellar Learning',
+    });
+    const nicholas = person('nicholas', 'Nicholas Wang', {
+      linkedinUrl: 'https://www.linkedin.com/in/nicholas-wang-stellar',
+      linkedinSlug: 'nicholas-wang-stellar',
+      currentOrganizationRaw: 'Stellar Learning',
+    });
+    const mail = person('mail', 'Nicholas Wang', {
+      primaryEmail: 'nicholas@stellarlearning.com',
+      emails: ['nicholas@stellarlearning.com'],
+      currentOrganizationRaw: 'Stellar Learning',
+    });
+    const pairs = findDuplicatePairs([nick, nicholas, mail]);
+    const key = (p: { a: Person; b: Person }) => [p.a.id, p.b.id].sort().join('|');
+    expect(pairs.map(key)).not.toContain('nick|nicholas');
+    expect(pairs.map(key)).toContain('mail|nicholas');
+    // the same holds for someone coming in with another profile
+    const r = resolveIdentity(
+      {
+        displayName: 'Nicholas Wang',
+        linkedinUrl: 'https://www.linkedin.com/in/n-wang-3',
+        companyRaw: 'Stellar Learning',
+        source: 'linkedin_csv',
+      },
+      { people: [nicholas] },
+    );
+    expect(r.kind).toBe('new');
+  });
+});
+
 describe('findDuplicatePairs (NRC-20)', () => {
   const list = [
     person('figma', 'Priya Patel', {

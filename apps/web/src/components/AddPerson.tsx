@@ -1,9 +1,11 @@
 import { UserPlus } from 'lucide-react';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { suggestCompanies } from '../data/companies';
 import { addPersonByHand } from '../engine/people';
 import { useSession } from '../state/session';
 import { Button, Input, Label, Modal, useToast } from '../ui';
+import { Suggest } from '../ui/Suggest';
 
 /**
  * "Add a person": the way into Orbit that needs no Google and no LinkedIn export. The student types who they want to
@@ -118,10 +120,11 @@ export function AddPersonDialog({
             <Label htmlFor="ap-company" optional>
               Company
             </Label>
-            <Input
+            <Suggest
               id="ap-company"
               value={f.company}
-              onChange={(e) => setF({ ...f, company: e.target.value })}
+              onChange={(company) => setF({ ...f, company })}
+              suggest={(q) => suggestCompanies(q)}
               placeholder="e.g. Evercore"
               data-testid="add-person-company"
             />

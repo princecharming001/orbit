@@ -644,8 +644,16 @@ export async function adoptLinkedInPhoto(
   const current = (await db.users.get(userId))?.avatarUrl;
   if (!opts.replace && current && !current.startsWith('data:')) return false;
   const me = await linkedInMe(accountId, { token, signal: opts.signal }).catch(() => undefined);
+  if (me?.ok) await adoptLinkedInProfile(userId, me.value);
   const picture = me?.ok ? me.value.picture : undefined;
   if (!picture?.startsWith('data:image/') || picture === current) return false;
   await db.users.update(userId, { avatarUrl: picture });
   return true;
+}
+
+/** The student's own profile link, filled in from LinkedIn where they have not typed one. */
+export async function adoptLinkedInProfile(userId: string, me: { publicIdentifier?: string }): Promise<void> {
+  const u = await db.users.get(userId);
+  if (!u || u.linkedinUrl || !me.publicIdentifier) return;
+  await db.users.update(userId, { linkedinUrl: `https://www.linkedin.com/in/${me.publicIdentifier}` });
 }

@@ -22,6 +22,7 @@ import { db } from '../db/schema';
 import { usesMockConnectors } from '../integrations/connectorsMock';
 import { type LinkedInFound, searchLinkedIn, unipileConfigured } from '../integrations/unipile';
 import { liveLinkedInAccount } from './linkedinLive';
+import { freshPhoto } from './photos';
 
 /** Lookups a day, from the student's LinkedIn. */
 export const ENRICH_PER_DAY = 8;
@@ -126,7 +127,7 @@ export async function enrichFromLinkedIn(
       headline: p.headline ?? hit.headline,
       currentTitle: p.currentTitle ?? title,
       currentOrganizationRaw: p.currentOrganizationRaw ?? company,
-      photoUrl: p.photoUrl ?? hit.pictureUrl,
+      photoUrl: freshPhoto(p.photoUrl, hit.pictureUrl),
       location: p.location ?? hit.location,
       sources: p.sources.includes('enrichment') ? p.sources : [...p.sources, 'enrichment'],
     });

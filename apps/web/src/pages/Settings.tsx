@@ -15,6 +15,16 @@ import { ResumeFacetList } from '../components/ResumeFacets';
 import { OutreachCoach } from '../components/settings/OutreachCoach';
 import { TextsRow } from '../components/TextsRow';
 import { WeeklyTargetSlider } from '../components/WeeklyTargetSlider';
+import { suggestCompanies } from '../data/companies';
+import {
+  cycleOptions,
+  INDUSTRY_OPTIONS,
+  LOCATION_OPTIONS,
+  listField,
+  ROLE_OPTIONS,
+  suggestFrom,
+} from '../data/options';
+import { schoolDomainFor, suggestSchools } from '../data/schools';
 import { db } from '../db/schema';
 import { deleteAllData, exportAllData, exportFilename } from '../engine/account';
 import { demoResetPrompt, loadDemo } from '../engine/demo';
@@ -61,6 +71,7 @@ import {
   Textarea,
   useToast,
 } from '../ui';
+import { Suggest } from '../ui/Suggest';
 
 /** The section with the LinkedIn import, the resume and the Claude key (its route keeps the older name). */
 const INTEGRATIONS_LABEL = 'Integrations';
@@ -239,6 +250,10 @@ function Profile() {
     linkedinUrl: user.linkedinUrl ?? '',
     timezone: user.timezone,
   }));
+  // a profile link or photo LinkedIn fills in while this page is open shows up without a reload
+  useEffect(() => {
+    if (user.linkedinUrl && !f.linkedinUrl) setF((cur) => ({ ...cur, linkedinUrl: user.linkedinUrl! }));
+  }, [user.linkedinUrl]);
   const nameMissing = !f.fullName.trim();
   const state = useAutosave(
     f,
@@ -294,10 +309,19 @@ function Profile() {
       </div>
       <div>
         <Label htmlFor="profile-school">School</Label>
-        <Input
+        <Suggest
           id="profile-school"
           value={f.school}
-          onChange={(e) => setF({ ...f, school: e.target.value })}
+          onChange={(school) => setF({ ...f, school })}
+          suggest={suggestSchools}
+          minChars={2}
+          onPick={(s) =>
+            void schoolDomainFor(s.value).then(
+              (d) => d && !f.schoolDomain && setF((cur) => ({ ...cur, schoolDomain: d })),
+            )
+          }
+          placeholder="Start typing your school"
+          data-testid="profile-school"
         />
       </div>
       <div>
@@ -426,6 +450,11 @@ function timeZones(current: string): string[] {
   return all.includes(current) ? all : [current, ...all];
 }
 
+const roles = listField(ROLE_OPTIONS);
+const industries = listField(INDUSTRY_OPTIONS);
+const locations = listField(LOCATION_OPTIONS);
+const cycles = cycleOptions();
+
 function Goals() {
   const user = useSession().user!;
   const goals = useLiveQuery(() => db.goals.get(user.id), [user.id]);
@@ -484,11 +513,22 @@ function GoalsForm({ goals, tcs }: { goals: UserGoals; tcs: TargetCompany[] }) {
           <SaveState state={state} />
         </div>
         <div className="@[40rem]:col-span-2">
-          <Label htmlFor="goals-cycle">Recruiting cycle</Label>
-          <Input
+          <Label htmlFor="goals-cycle" hint="pick one or write your own">
+            Recruiting cycle
+          </Label>
+          <Suggest
             id="goals-cycle"
             value={f.cycleLabel}
-            onChange={(e) => setF({ ...f, cycleLabel: e.target.value })}
+            onChange={(cycleLabel) => setF({ ...f, cycleLabel })}
+            suggest={(q) =>
+              suggestFrom(
+                cycles.map((c) => c.value),
+                q,
+              ).map((s) => cycles.find((c) => c.value === s.value) ?? s)
+            }
+            initial={cycles}
+            minChars={0}
+            data-testid="goals-cycle"
           />
         </div>
         <div className="@[40rem]:col-span-2">
@@ -500,27 +540,45 @@ function GoalsForm({ goals, tcs }: { goals: UserGoals; tcs: TargetCompany[] }) {
           />
         </div>
         <div className="@[40rem]:col-span-2">
-          <Label htmlFor="goals-roles">Target roles</Label>
-          <Input
+          <Label htmlFor="goals-roles" hint="comma-separated">
+            Target roles
+          </Label>
+          <Suggest
             id="goals-roles"
             value={f.targetRoles}
-            onChange={(e) => setF({ ...f, targetRoles: e.target.value })}
+            onChange={(targetRoles) => setF({ ...f, targetRoles })}
+            suggest={roles.suggest}
+            onPick={(s) => setF((cur) => ({ ...cur, targetRoles: roles.pick(cur.targetRoles, s.value) }))}
+            minChars={0}
+            placeholder="e.g. Product Manager, Software Engineer"
           />
         </div>
         <div>
           <Label htmlFor="goals-industries">Industries</Label>
-          <Input
+          <Suggest
             id="goals-industries"
             value={f.targetIndustries}
-            onChange={(e) => setF({ ...f, targetIndustries: e.target.value })}
+            onChange={(targetIndustries) => setF({ ...f, targetIndustries })}
+            suggest={industries.suggest}
+            onPick={(s) =>
+              setF((cur) => ({ ...cur, targetIndustries: industries.pick(cur.targetIndustries, s.value) }))
+            }
+            minChars={0}
+            placeholder="e.g. Fintech, Consumer"
           />
         </div>
         <div>
           <Label htmlFor="goals-locations">Locations</Label>
-          <Input
+          <Suggest
             id="goals-locations"
             value={f.targetLocations}
-            onChange={(e) => setF({ ...f, targetLocations: e.target.value })}
+            onChange={(targetLocations) => setF({ ...f, targetLocations })}
+            suggest={locations.suggest}
+            onPick={(s) =>
+              setF((cur) => ({ ...cur, targetLocations: locations.pick(cur.targetLocations, s.value) }))
+            }
+            minChars={0}
+            placeholder="e.g. New York City, Remote"
           />
         </div>
         <div className="@[40rem]:col-span-2">
@@ -538,13 +596,22 @@ function GoalsForm({ goals, tcs }: { goals: UserGoals; tcs: TargetCompany[] }) {
       <Section>
         <Label>Target companies</Label>
         <div className="flex gap-2 mb-3">
-          <Input
+          <Suggest
+            className="flex-1 min-w-0"
             value={company}
-            onChange={(e) => setCompany(e.target.value)}
+            onChange={setCompany}
+            suggest={(q) =>
+              suggestCompanies(
+                q,
+                tcs.map((t) => t.nameRaw),
+              )
+            }
+            minChars={1}
             placeholder="Add a company"
             aria-label="Add a target company"
             onKeyDown={(e) => {
-              if (e.key === 'Enter') addCompany();
+              if (e.key === 'Enter' && !(e.target as HTMLInputElement).getAttribute('aria-activedescendant'))
+                addCompany();
             }}
           />
           <Button onClick={addCompany}>Add</Button>

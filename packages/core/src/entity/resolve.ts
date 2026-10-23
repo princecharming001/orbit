@@ -442,6 +442,26 @@ export function scorePair(
   return { score, features: f };
 }
 
+/**
+ * Two different LinkedIn profiles are two people, whatever their names and employers say: namesakes are common, and
+ * LinkedIn gives each person one profile. Matching by name is only for joining someone's mail to their LinkedIn.
+ */
+export function differentLinkedInProfiles(
+  a:
+    | Pick<Person, 'linkedinSlug' | 'linkedinUrl' | 'linkedinMemberId'>
+    | { linkedinSlug?: string; linkedinMemberId?: string },
+  b: Pick<Person, 'linkedinSlug' | 'linkedinUrl' | 'linkedinMemberId'>,
+): boolean {
+  const slugOf = (p: { linkedinSlug?: string; linkedinUrl?: string }) =>
+    p.linkedinSlug ?? linkedInSlug(p.linkedinUrl) ?? undefined;
+  const sa = slugOf(a);
+  const sb = slugOf(b);
+  if (sa && sb) return sa !== sb;
+  const ma = a.linkedinMemberId;
+  const mb = b.linkedinMemberId;
+  return !!ma && !!mb && ma !== mb;
+}
+
 export function resolveIdentity(inc: IncomingIdentity, ctx: ResolveContext): ResolveDecision {
   const email = inc.email ? normalizeEmail(inc.email) : undefined;
   const slug = linkedInSlug(inc.linkedinUrl);
@@ -459,9 +479,11 @@ export function resolveIdentity(inc: IncomingIdentity, ctx: ResolveContext): Res
   if (slug)
     for (const p of people)
       if (p.linkedinSlug === slug) return { kind: 'match', personId: p.id, via: 'linkedin' };
+  // someone with another LinkedIn profile is someone else, however alike the names
+  const others = slug ? people.filter((p) => !differentLinkedInProfiles({ linkedinSlug: slug }, p)) : people;
   const incOrg = normalizeCompany(inc.companyRaw);
   if (incName.normalized && incOrg) {
-    for (const p of people) {
+    for (const p of others) {
       if (isPlaceholderName(p)) continue;
       // an address the stored person does not have may be a namesake at the same company (§2.5): score it instead
       if (email && (p.primaryEmail || p.emails.length)) continue;
@@ -476,7 +498,7 @@ export function resolveIdentity(inc: IncomingIdentity, ctx: ResolveContext): Res
   // blocking: only score people who could plausibly be the same
   const lastFold = fold(incName.last);
   const incDomain = email ? emailDomain(email) : undefined;
-  const candidates = people.filter((p) => {
+  const candidates = others.filter((p) => {
     const placeholder = isPlaceholderName(p);
     const pDomains = [...new Set([p.primaryEmail, ...p.emails].filter(Boolean).map((e) => emailDomain(e!)))];
     if (!incName.full || placeholder) {
@@ -567,6 +589,8 @@ export function findDuplicatePairs(
         const key = a.id < b.id ? `${a.id}|${b.id}` : `${b.id}|${a.id}`;
         if (seen.has(key) || rejected(ctx, a.id, b.id)) continue;
         seen.add(key);
+        // two LinkedIn profiles are two people: a merge is only ever offered to join mail to a LinkedIn profile
+        if (differentLinkedInProfiles(a, b)) continue;
         const emailsA = new Set([a.primaryEmail, ...a.emails].filter(Boolean).map((e) => normalizeEmail(e!)));
         const sharedAddress = [b.primaryEmail, ...b.emails].some((e) => e && emailsA.has(normalizeEmail(e)));
         const sharedProfile = !!a.linkedinSlug && a.linkedinSlug === b.linkedinSlug;

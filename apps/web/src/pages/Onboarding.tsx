@@ -19,6 +19,7 @@ import {
   OnboardingLayout,
 } from '../components/onboarding/OnboardingLayout';
 import { WeeklyTargetSlider } from '../components/WeeklyTargetSlider';
+import { suggestSchools } from '../data/schools';
 import { db } from '../db/schema';
 import { finishOnboarding, setOnboardingStep } from '../engine/account';
 import { LINKEDIN_RISK_SENTENCE } from '../engine/consent';
@@ -42,6 +43,7 @@ import { envGoogleClientId } from '../integrations/prefs';
 import { useAccount } from '../state/account';
 import { useSession } from '../state/session';
 import { cx, Spinner } from '../ui';
+import { Suggest } from '../ui/Suggest';
 import {
   OPTIONAL_STEPS,
   resolveStep,
@@ -401,12 +403,14 @@ function StepYou({ onNext }: { onNext: () => void }) {
         <div className="grid gap-5 sm:grid-cols-[1fr_168px] sm:gap-3">
           <div>
             <ObLabel htmlFor="ob-school">School</ObLabel>
-            <ObInput
+            <Suggest
               id="ob-school"
+              input={ObInput}
               value={f.school}
-              onChange={(e) => setF({ ...f, school: e.target.value })}
-              placeholder="Cornell University"
-              autoComplete="organization"
+              onChange={(school) => setF({ ...f, school })}
+              suggest={suggestSchools}
+              minChars={2}
+              placeholder="Start typing your school"
               aria-required="true"
               data-testid="ob-school"
             />

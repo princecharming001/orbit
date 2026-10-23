@@ -3074,7 +3074,9 @@ export class OrbitScene {
     let img = this.images.get(p.id);
     if (!img) {
       img = new Image();
-      img.crossOrigin = 'anonymous';
+      // no CORS request: LinkedIn's image server sends no CORS header, so an anonymous load fails every photo.
+      // Drawing a cross-origin image only marks the canvas, which Orbit never reads back.
+      img.referrerPolicy = 'no-referrer';
       img.onload = () => {
         this.dirty = true;
         this.wake();

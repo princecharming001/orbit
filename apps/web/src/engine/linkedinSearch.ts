@@ -12,6 +12,7 @@ import { isServerUser } from '../integrations/orbitApi';
 import { type LinkedInFound, searchLinkedIn, unipileConfigured } from '../integrations/unipile';
 import { LIVE_SOON, liveLinkedInAccount } from './linkedinLive';
 import { addPersonByHand } from './people';
+import { freshPhoto } from './photos';
 
 /** Ids of search results start with this, so add_sourced can tell them from the server's recommendations. */
 export const LINKEDIN_FOUND_PREFIX = 'li:';
@@ -55,12 +56,12 @@ export async function searchLinkedInLive(
   }
   const mine = await db.people.where('userId').equals(user.id).toArray();
   const known = new Map(mine.filter((p) => p.linkedinMemberId).map((p) => [p.linkedinMemberId!, p]));
-  // someone Orbit already has, found again: their photo and headline fill in where Orbit had none
+  // someone Orbit already has, found again: a fresh LinkedIn photo, and the headline where Orbit had none
   for (const f of people) {
     const p = known.get(f.memberId);
-    if (p && ((!p.photoUrl && f.pictureUrl) || (!p.headline && f.headline)))
+    if (p && (freshPhoto(p.photoUrl, f.pictureUrl) !== p.photoUrl || (!p.headline && f.headline)))
       await db.people.update(p.id, {
-        photoUrl: p.photoUrl ?? f.pictureUrl,
+        photoUrl: freshPhoto(p.photoUrl, f.pictureUrl),
         headline: p.headline ?? f.headline,
       });
   }
@@ -98,7 +99,7 @@ export async function addLinkedInFound(
     const person = r.person;
     await db.people.update(person.id, {
       linkedinMemberId: f.memberId,
-      photoUrl: person.photoUrl ?? f.pictureUrl,
+      photoUrl: freshPhoto(person.photoUrl, f.pictureUrl),
       headline: person.headline ?? f.headline,
     });
     let chat = await db.chats
