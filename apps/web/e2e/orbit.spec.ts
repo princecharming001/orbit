@@ -1027,6 +1027,12 @@ test.describe('First-run guidance and plain next steps', () => {
     if (await page.getByTestId('drafts-more').isVisible()) await page.getByTestId('drafts-more').click();
     const merge = page.getByTestId('suggestion-confirm_merge').first();
     await expect(merge.getByTestId('merge-choice')).toContainText(/both have/i);
+    // both records are shown, each name a link to see who it is (LinkedIn when known, else their page)
+    const names = merge.getByTestId('merge-record-name');
+    await expect(names).toHaveCount(2);
+    for (const n of await names.all())
+      expect(await n.getAttribute('href')).toMatch(/linkedin\.com|\/people\//);
+    await expect(merge.getByTestId('merge-record-open')).toHaveCount(2);
     await merge.getByTestId('merge-ask').click();
     await expect(merge.getByRole('alertdialog')).toContainText(/cannot be undone/i);
     await merge.getByRole('button', { name: /^cancel$/i }).click();
@@ -2404,17 +2410,51 @@ test.describe('Wide screens use the room', () => {
   });
 });
 
+/** The demo with the morning brief allowed to appear (a browser driven by tests only gets it when asked). */
+async function demoWithMorning(page: Page) {
+  await page.addInitScript(() => {
+    (globalThis as { __ORBIT_MORNING__?: string }).__ORBIT_MORNING__ = 'on';
+  });
+  await loadDemo(page);
+  const brief = page.getByTestId('morning-brief');
+  await expect(brief).toBeVisible({ timeout: 20_000 });
+  return brief;
+}
+
+/** Step forward (Start, then Skip) until a decision matches, or the deck runs out. */
+async function stepToDecision(page: Page, match: (kind: string) => boolean | Promise<boolean>) {
+  const brief = page.getByTestId('morning-brief');
+  for (let i = 0; i < 12; i++) {
+    const kind = await brief
+      .getByTestId('morning-decision')
+      .getAttribute('data-kind', { timeout: 500 })
+      .catch(() => null);
+    if (kind && (await match(kind))) return kind;
+    if ((await brief.getAttribute('data-step')) === 'done') return null;
+    await brief.getByTestId('morning-next').click();
+  }
+  return null;
+}
+
+/** Close the deck for the day, so a test can use the page under it. */
+async function putBriefAway(page: Page) {
+  await page.getByTestId('morning-close').click();
+  await expect(page.getByTestId('morning-brief')).toBeHidden();
+}
+
+/** Settings' "show it again": a fresh deck. */
+async function showBrief(page: Page) {
+  await page.goto('settings/limits');
+  await page.getByTestId('settings-morning-show').click();
+  await expect(page.getByTestId('morning-brief')).toBeVisible();
+}
+
 test.describe('Morning brief', () => {
   test('pops up once a day, steps through the day and its decisions, and stays away once closed', async ({
     page,
   }) => {
     test.setTimeout(180_000);
-    await page.addInitScript(() => {
-      (globalThis as { __ORBIT_MORNING__?: string }).__ORBIT_MORNING__ = 'on';
-    });
-    await loadDemo(page);
-    const brief = page.getByTestId('morning-brief');
-    await expect(brief).toBeVisible({ timeout: 20_000 });
+    const brief = await demoWithMorning(page);
     await expect(brief.getByTestId('morning-overview')).toContainText(
       /Good (morning|afternoon|evening), Alex/,
     );
@@ -2437,6 +2477,318 @@ test.describe('Morning brief', () => {
     await page.goto('settings/limits');
     await page.getByTestId('settings-morning-show').click();
     await expect(page.getByTestId('morning-brief')).toBeVisible();
+  });
+
+  test('a laptop gets a centered dialog over a dimmed page; a phone gets a sheet from the bottom', async ({
+    page,
+  }, info) => {
+    test.setTimeout(180_000);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const brief = await demoWithMorning(page);
+    await expect(brief).toHaveAttribute('role', 'dialog');
+    await expect(brief).toHaveAttribute('aria-modal', 'true');
+    await expect(page.getByTestId('morning-backdrop')).toBeVisible();
+    const box = (await brief.boundingBox())!;
+    expect(Math.abs(box.x + box.width / 2 - 720)).toBeLessThan(3);
+    expect(Math.abs(box.y + box.height / 2 - 450)).toBeLessThan(3);
+    expect(box.width).toBeLessThan(700);
+    await info.attach('morning-desktop', { body: await page.screenshot(), contentType: 'image/png' });
+    // the focus is inside, and Tab stays inside
+    for (let i = 0; i < 12; i++) {
+      await page.keyboard.press('Tab');
+      expect(await brief.evaluate((el) => el.contains(document.activeElement))).toBe(true);
+    }
+    // a click on the dimmed page puts it away as a pill, and the pill brings it back
+    await page.mouse.click(40, 450);
+    await expect(brief).toBeHidden();
+    await page.getByTestId('morning-resume').click();
+    await expect(brief).toBeVisible();
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    // once it has risen into place: the full width, flush with the bottom of the screen
+    await expect
+      .poll(async () => {
+        const b = (await brief.boundingBox())!;
+        return [Math.round(b.x), Math.round(b.width), Math.round(b.y + b.height)];
+      })
+      .toEqual([0, 390, 844]);
+    await info.attach('morning-phone', { body: await page.screenshot(), contentType: 'image/png' });
+  });
+
+  test('a draft is reviewed and sent inside the deck, with the undo window, without leaving the page', async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+    await demoWithMorning(page);
+    await putBriefAway(page);
+    // the demo's live LinkedIn connects at once (mock); Orbit then sends LinkedIn messages itself, after the undo window
+    await page.goto('settings/integrations');
+    const card = page.getByTestId('settings-linkedin-live');
+    await card.getByTestId('settings-linkedin-live-connect').click();
+    await expect(card.getByTestId('settings-linkedin-live-status')).toContainText(/Connected/, {
+      timeout: 60_000,
+    });
+    // the day's messages go to people the student is connected with on LinkedIn
+    await page.evaluate(async () => {
+      const db = (
+        window as unknown as {
+          __orbitDb: {
+            suggestions: {
+              toArray(): Promise<{ status: string; outboundMessageId?: string; personId?: string }[]>;
+            };
+            outbound: { update(id: string, x: unknown): Promise<unknown> };
+            people: { update(id: string, x: unknown): Promise<unknown> };
+          };
+        }
+      ).__orbitDb;
+      for (const s of await db.suggestions.toArray()) {
+        if (s.status !== 'pending' || !s.outboundMessageId || !s.personId) continue;
+        await db.people.update(s.personId, { linkedinConnectedOn: '2025-09-01' });
+        await db.outbound.update(s.outboundMessageId, {
+          channel: 'linkedin',
+          subject: undefined,
+          externalThreadId: undefined,
+          needsInput: undefined,
+        });
+      }
+    });
+    await showBrief(page);
+    const brief = page.getByTestId('morning-brief');
+    await expect(brief).toBeVisible();
+    const url = page.url();
+    // the first message to send in the deck
+    expect(
+      await stepToDecision(page, () => brief.getByTestId('morning-action-review').isVisible()),
+    ).toBeTruthy();
+    const decision = brief.getByTestId('morning-decision');
+    await decision.getByTestId('morning-action-review').click();
+    const composer = decision.getByTestId('morning-composer');
+    await expect(composer.getByRole('textbox', { name: 'Message body' })).toBeVisible();
+    // approving is the student's own click; then it waits out the undo window right here
+    await composer.getByRole('button', { name: /^Send to / }).click();
+    await expect(composer).toContainText(/Sending to \S+ in \d+ seconds/);
+    await expect(brief.getByTestId('morning-progress').locator('[data-outcome="sent"]')).toHaveCount(1);
+    // Undo inside the deck puts the draft back, and the decision is open again
+    await composer.getByRole('button', { name: /^undo$/i }).click();
+    await expect(composer.getByRole('textbox', { name: 'Message body' })).toBeVisible();
+    await expect(brief.getByTestId('morning-progress').locator('[data-outcome="sent"]')).toHaveCount(0);
+    // approve again and let it go: the deck moves on with Next, still on the same page
+    await composer.getByRole('button', { name: /^Send to / }).click();
+    await expect(composer).toContainText(/Sending to/);
+    await expect(brief.getByTestId('morning-sent-note')).toBeVisible();
+    await brief.getByTestId('morning-next').click();
+    await expect(
+      brief
+        .getByTestId('morning-decision')
+        .or(brief.getByTestId('morning-moves'))
+        .or(brief.getByTestId('morning-done')),
+    ).toBeVisible();
+    expect(page.url()).toBe(url);
+  });
+
+  test('a warm-up step is done inside the deck: LinkedIn opens in a new tab and the deck stays', async ({
+    page,
+    context,
+  }) => {
+    test.setTimeout(180_000);
+    const brief = await demoWithMorning(page);
+    const url = page.url();
+    for (let i = 0; i < 12 && (await brief.getAttribute('data-step')) !== 'moves'; i++)
+      await brief.getByTestId('morning-next').click();
+    const row = brief.locator('[data-testid="morning-move"][data-kind="warm_up"]');
+    await expect(row.first()).toBeVisible();
+    const open = row.first().getByTestId('morning-move-action');
+    await expect(open).toHaveAttribute('target', '_blank');
+    const tab = context.waitForEvent('page');
+    await open.click();
+    await (await tab).close();
+    await row.first().getByTestId('morning-move-done').click();
+    await expect(row.first()).toContainText(/Logged/);
+    await expect(brief).toBeVisible();
+    expect(page.url()).toBe(url);
+  });
+
+  test('no decision changes the page unless its button says it opens one; the end adds up and Undo works', async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+    const brief = await demoWithMorning(page);
+    const url = page.url();
+    await brief.getByTestId('morning-next').click();
+    let later = 0;
+    let decided = 0;
+    let skipped = 0;
+    // the button the last decision was made with, to make it again after Undo
+    let lastButton = '';
+    for (let i = 0; i < 10 && (await brief.getAttribute('data-step')) === 'decide'; i++) {
+      const decision = brief.getByTestId('morning-decision');
+      const count = (await decision.getByTestId('morning-count').textContent()) ?? '';
+      const buttons = decision.getByTestId('morning-actions').locator('[data-effect]');
+      // every button that goes to another page says so
+      for (const b of await buttons.all())
+        if ((await b.getAttribute('data-effect')) === 'page') await expect(b).toHaveText(/^(Open|Pick)/);
+      const tomorrow = decision.getByTestId('morning-action-tomorrow');
+      const primary = decision.locator('[data-primary="true"]');
+      const effect = await primary.getAttribute('data-effect');
+      if (effect === 'resolve' && (await primary.getAttribute('data-testid')) !== 'morning-action-merge') {
+        lastButton = (await primary.getAttribute('data-testid'))!;
+        await primary.click();
+        decided++;
+        await expect(brief.getByTestId('morning-undo')).toBeVisible();
+      } else if (await tomorrow.isVisible()) {
+        lastButton = 'morning-action-tomorrow';
+        await tomorrow.click();
+        later++;
+      } else {
+        await brief.getByTestId('morning-next').click();
+        skipped++;
+      }
+      // the deck moved on by itself
+      await expect
+        .poll(async () =>
+          (await brief.getAttribute('data-step')) !== 'decide'
+            ? 'moved'
+            : await decision.getByTestId('morning-count').textContent(),
+        )
+        .not.toBe(count);
+      expect(page.url()).toBe(url);
+    }
+    expect(decided).toBeGreaterThan(0);
+    // Undo the last decision: the deck goes back to it with its buttons, and it can be made again
+    const last = await brief.getByTestId('morning-last').textContent();
+    expect(last).toBeTruthy();
+    await brief.getByTestId('morning-undo').click();
+    await expect(brief.getByTestId('morning-undo')).toHaveCount(0);
+    await expect(brief.getByTestId('morning-actions')).toBeVisible();
+    await brief.getByTestId('morning-actions').getByTestId(lastButton).click();
+    await expect(brief.getByTestId('morning-last')).toHaveText(last!);
+    for (let i = 0; i < 4 && (await brief.getAttribute('data-step')) !== 'done'; i++)
+      await brief.getByTestId('morning-next').click();
+    const done = brief.getByTestId('morning-done');
+    await expect(done).toBeVisible();
+    if (decided) await expect(done.getByTestId('morning-summary')).toContainText(`${decided} decided`);
+    if (later) await expect(done.getByTestId('morning-summary')).toContainText(`${later} for tomorrow`);
+    if (skipped) await expect(done.getByTestId('morning-summary')).toContainText(`${skipped} skipped`);
+    expect(page.url()).toBe(url);
+  });
+
+  test('minimized, it waits on every page and comes back at the same step; a page it opens is one click from it', async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+    const brief = await demoWithMorning(page);
+    await brief.getByTestId('morning-next').click();
+    await brief.getByTestId('morning-next').click();
+    await expect(brief.getByTestId('morning-count')).toHaveText(/^Decision 2 of/);
+    await page.keyboard.press('Escape');
+    await expect(brief).toBeHidden();
+    // the pill stays on every page, and through a reload of the tab
+    await page
+      .getByTestId('rail')
+      .getByRole('link', { name: /^Drafts/ })
+      .click();
+    await expect(page.getByRole('heading', { name: 'Drafts', level: 1 })).toBeVisible();
+    await expect(page.getByTestId('morning-pill')).toBeVisible();
+    await page.getByTestId('morning-resume').click();
+    await expect(brief.getByTestId('morning-count')).toHaveText(/^Decision 2 of/);
+    const second = await brief.getByTestId('morning-decision').getAttribute('data-kind');
+    await page.keyboard.press('Escape');
+    await page.reload();
+    await expect(page.getByTestId('morning-pill')).toBeVisible({ timeout: 20_000 });
+    await page.getByTestId('morning-resume').click();
+    await expect(brief.getByTestId('morning-count')).toHaveText(/^Decision 2 of/);
+    await expect(brief.getByTestId('morning-decision')).toHaveAttribute('data-kind', second!);
+    // prep needs its own page: the button says so, opens it, and the pill brings the student back to the next step
+    await page.keyboard.press('ArrowLeft');
+    if ((await stepToDecision(page, (k) => k === 'prep_brief')) === 'prep_brief') {
+      const at = (await brief.getByTestId('morning-count').textContent())!;
+      const n = Number(/Decision (\d+)/.exec(at)![1]);
+      await brief.getByTestId('morning-action-prep_open').click();
+      await expect(page).toHaveURL(/\/people\/[^?]+\?tab=prep/);
+      await expect(page.getByTestId('morning-pill')).toContainText('Back to your morning brief');
+      await page.getByTestId('morning-resume').click();
+      await expect(brief.getByTestId('morning-count')).toHaveText(new RegExp(`^Decision ${n + 1} of`));
+    }
+  });
+
+  test('a possible duplicate shows both records with links to see who each one is', async ({ page }) => {
+    test.setTimeout(180_000);
+    await demoWithMorning(page);
+    await putBriefAway(page);
+    // two records that share a name, one with a LinkedIn profile, asked about at the top of the deck
+    await page.evaluate(async () => {
+      const db = (
+        window as unknown as {
+          __orbitDb: {
+            people: {
+              toArray(): Promise<{ id: string; userId: string; linkedinUrl?: string }[]>;
+              update(id: string, x: unknown): Promise<unknown>;
+            };
+            merges: { put(x: unknown): Promise<unknown> };
+            suggestions: { put(x: unknown): Promise<unknown> };
+          };
+        }
+      ).__orbitDb;
+      const people = await db.people.toArray();
+      const a = people.find((p) => p.linkedinUrl)!;
+      // the other record has no LinkedIn profile, so its name opens their page in Orbit
+      const b = people.find((p) => p.id !== a.id)!;
+      await db.people.update(b.id, { linkedinUrl: undefined, linkedinSlug: undefined });
+      const now = new Date().toISOString();
+      await db.merges.put({
+        id: 'mrg-morning',
+        userId: a.userId,
+        personAId: a.id,
+        personBId: b.id,
+        score: 0.8,
+        features: {},
+        status: 'pending',
+        createdAt: now,
+      });
+      await db.suggestions.put({
+        id: 'sug-morning-merge',
+        userId: a.userId,
+        kind: 'confirm_merge',
+        personId: a.id,
+        dedupeKey: 'merge:mrg-morning',
+        reasonText: 'Are these the same person?',
+        signals: {},
+        payload: { mergeId: 'mrg-morning', otherPersonId: b.id },
+        urgency: 1,
+        goalRelevance: 1,
+        confidence: 0.8,
+        priorityScore: 10,
+        status: 'pending',
+        createdAt: now,
+        updatedAt: now,
+      });
+    });
+    await showBrief(page);
+    const brief = page.getByTestId('morning-brief');
+    expect(await stepToDecision(page, (k) => k === 'confirm_merge')).toBe('confirm_merge');
+    const decision = brief.getByTestId('morning-decision');
+    const pair = decision.getByTestId('merge-pair');
+    await expect(pair).toBeVisible();
+    const names = pair.getByTestId('merge-record-name');
+    await expect(names).toHaveCount(2);
+    expect(await names.first().getAttribute('href')).toMatch(/linkedin\.com/);
+    expect(await names.first().getAttribute('target')).toBe('_blank');
+    expect(await names.nth(1).getAttribute('href')).toMatch(/\/people\//);
+    // the name at the top of the card is a link too
+    expect(await decision.getByTestId('morning-person-name').getAttribute('href')).toMatch(/linkedin\.com/);
+    // merging asks first, since it cannot be undone; the safe answer is the main button
+    await expect(decision.locator('[data-primary="true"]')).toHaveText('Different people');
+    await decision.getByTestId('morning-action-merge').click();
+    await expect(decision.getByRole('alertdialog')).toContainText(/cannot be undone/i);
+    await decision.getByRole('button', { name: /^cancel$/i }).click();
+    const at = (await decision.getByTestId('morning-count').textContent())!;
+    // opening the second record in Orbit puts the brief away as a pill and shows their page; one click comes back
+    await pair.getByTestId('merge-record-open').nth(1).click();
+    await expect(page).toHaveURL(/\/people\//);
+    await expect(page.getByTestId('morning-pill')).toContainText('Back to your morning brief');
+    await page.getByTestId('morning-resume').click();
+    await expect(brief.getByTestId('morning-count')).toHaveText(at);
+    await expect(brief.getByTestId('merge-pair')).toBeVisible();
   });
 });
 

@@ -15,6 +15,7 @@ import {
 import { markPrepOpened } from '../engine/drafts';
 import { markActionItemDone } from '../engine/facts';
 import { answerIntroductionQuestion } from '../engine/introductions';
+import { stageNoLabel } from '../engine/morning';
 import { decideMerge, mergeEvidence } from '../engine/people';
 import { currentResumeFacets, sharesOrgNow } from '../engine/resume';
 import { dismissSuggestion, restoreSuggestion, snoozeSuggestion } from '../engine/send';
@@ -25,33 +26,12 @@ import { Avatar, Button, Chip, cx, useToast } from '../ui';
 import { runApproval } from './approve';
 import { CompanyLogo, PersonCompanyLogo } from './CompanyLogo';
 import { DraftEditor, OutboxStatus } from './DraftEditor';
+import { MergePair } from './MergePair';
 
 /** Kept here for older imports; the labels live in the engine so the chat and the cards share them. */
 export const KIND_LABEL = SUGGESTION_KIND_LABELS;
 
 export { mergeEvidence };
-
-/** The "no" to a stage Orbit read from an email, in plain words rather than the stage's name. */
-function stageNoLabel(to: string | undefined, first: string): string {
-  switch (to) {
-    case 'declined':
-      return `No, ${first} hasn't said no`;
-    case 'replied':
-      return `No, ${first} hasn't replied`;
-    case 'scheduled':
-      return 'No, nothing is booked yet';
-    case 'scheduling':
-      return 'No, not scheduling yet';
-    case 'completed':
-      return "No, we haven't talked yet";
-    default:
-      return 'No, leave it as it is';
-  }
-}
-
-function sentenceList(xs: string[]): string {
-  return xs.length <= 1 ? (xs[0] ?? '') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`;
-}
 
 export function SuggestionCard({
   s,
@@ -724,30 +704,9 @@ function MergeChoice({
   onAsk: (v: boolean) => void;
   onDecide: (accept: boolean) => void;
 }) {
-  const ev = mergeEvidence(a, b);
-  const row = (p: Person) => (
-    <li className="min-w-0">
-      <Link className="font-medium hover:underline" to={`/people/${p.id}`}>
-        {p.displayName}
-      </Link>
-      <span className="text-ink-3">
-        {[p.currentTitle, p.currentOrganizationRaw].filter(Boolean).length
-          ? ` · ${[p.currentTitle, p.currentOrganizationRaw].filter(Boolean).join(' at ')}`
-          : ''}
-        {p.primaryEmail ? ` · ${p.primaryEmail}` : ''}
-      </span>
-    </li>
-  );
   return (
     <div className="mt-2 text-[13px]" data-testid="merge-choice">
-      <ul className="rounded-lg bg-canvas-2 px-3 py-2 space-y-1">
-        {row(a)}
-        {row(b)}
-      </ul>
-      <p className="text-ink-3 text-[12px] mt-1.5">
-        {ev.same.length ? `Both have ${sentenceList(ev.same)}.` : 'Their names look alike.'}
-        {ev.differ.length ? ` But they have ${sentenceList(ev.differ)}.` : ''}
-      </p>
+      <MergePair a={a} b={b} />
       {asking ? (
         <div className="mt-2 rounded-lg border border-line p-3" role="alertdialog" aria-label="Confirm merge">
           <p>
