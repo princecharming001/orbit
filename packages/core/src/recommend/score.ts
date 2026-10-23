@@ -1,5 +1,6 @@
 import { inOrAt } from '../drafts/phrasing';
 import { functionPhrase } from '../labels';
+import { roleFromHeadline } from '../linkedin/headline';
 import { normalizeCompany } from '../text/normalize';
 import type {
   CoffeeChat,
@@ -9,22 +10,14 @@ import type {
   ResumeFacet,
   TargetCompany,
 } from '../types';
+import {
+  buildDiscoverProfile,
+  type DismissSignal,
+  type OutreachExample,
+  scoreDiscoverCandidate,
+} from './discover';
+import { FUNCTION_TITLE, titleStatus } from './title';
 
-const FUNCTION_TITLE: Record<string, RegExp> = {
-  swe: /\b(software|engineer|developer|swe|sde|backend|frontend|full[- ]?stack|ml engineer|infrastructure|platform)\b/i,
-  pm: /\b(product manager|product lead|\bpm\b|head of product|product owner|associate product)\b/i,
-  ib: /\b(investment bank(ing|er)?|m&a|mergers|capital markets|leveraged finance|ecm|dcm|restructuring)\b/i,
-  consulting:
-    /\b(consult(ant|ing)?|strategy|bain|mckinsey|bcg|boston consulting|deloitte|accenture|oliver wyman|kearney|engagement manager)\b/i,
-  data: /\b(data (scientist|analyst|engineer)|analytics|machine learning|ml|ai research|quant)\b/i,
-  design: /\b(designer|design lead|ux|product design|ui)\b/i,
-  finance:
-    /\b(finance|fp&a|treasury|controller|accounting|private equity|hedge fund|asset management|wealth|credit|lending|underwriting)\b/i,
-  marketing: /\b(marketing|growth|brand|content|communications|demand gen)\b/i,
-  research: /\b(research|scientist|lab|phd|postdoc)\b/i,
-  vc: /\b(venture|vc|investor|principal|partner)\b/i,
-  ops: /\b(operations|ops|chief of staff|bizops|strategy & operations)\b/i,
-};
 /**
  * Titles that only hint at a function. "Analyst" or "Associate" is a banking title at a bank, but a McKinsey
  * "Business Analyst" is a consultant and a Bain "Associate Consultant" too, so a hint counts only when nothing in the
@@ -81,7 +74,7 @@ export function responsePrior(
 
 export interface RecommendInput {
   userId: string;
-  user: { school: string; majors: string[]; gradYear?: number };
+  user: { school: string; majors: string[]; gradYear?: number; currentCity?: string; homeCity?: string };
   goals: RecruitingGoals;
   targetCompanies: TargetCompany[];
   resumeFacets: ResumeFacet[];
@@ -92,6 +85,22 @@ export interface RecommendInput {
   recentlyRecommended: Set<string>;
   now: Date;
   batchSize?: number;
+  /** who the student wrote to, and who replied: people like them rank higher */
+  outreach?: OutreachExample[];
+  /** cards the student turned down, with why: a wrong company or role ranks lower next time */
+  dismissed?: DismissSignal[];
+}
+
+/**
+ * The role a person's record says they hold, and only that: their title, or the first part of a headline when there
+ * is no title and the headline says they work there. "Aspiring Investment Banker" is not a banker.
+ */
+export function heldRole(p: Pick<Person, 'currentTitle' | 'headline'>): string | undefined {
+  if (p.currentTitle?.trim()) return titleStatus(p.currentTitle) === 'working' ? p.currentTitle : undefined;
+  const fromHeadline = roleFromHeadline(p.headline).title;
+  return fromHeadline && titleStatus(fromHeadline) === 'working' && titleStatus(p.headline) === 'working'
+    ? fromHeadline
+    : undefined;
 }
 
 export function recommendPeople(inp: RecommendInput): Recommendation[] {
@@ -110,6 +119,14 @@ export function recommendPeople(inp: RecommendInput): Recommendation[] {
   const resumeKeywords = inp.resumeFacets.flatMap((f) => f.keywords);
   const targetNames = new Map(inp.targetCompanies.map((t) => [normalizeCompany(t.nameRaw), t]));
   const industries = inp.goals.targetIndustries.map((i) => i.toLowerCase());
+  const profile = buildDiscoverProfile({
+    user: inp.user,
+    goals: inp.goals,
+    targetCompanies: inp.targetCompanies,
+    resumeFacets: inp.resumeFacets,
+    outreach: inp.outreach,
+    dismissed: inp.dismissed,
+  });
   const out: Recommendation[] = [];
   for (const p of inp.people) {
     if (
@@ -125,16 +142,14 @@ export function recommendPeople(inp: RecommendInput): Recommendation[] {
       (p.currentOrganizationId &&
         inp.targetCompanies.find((t) => t.organizationId === p.currentOrganizationId)) ||
       (orgNorm ? targetNames.get(orgNorm) : undefined);
-    const companyMatch = tc ? (tc.priority === 1 ? 1 : 0.8) : 0;
-    // the company counts too: an "Analyst" at McKinsey is consulting, at Evercore banking
-    const roleText = `${p.currentTitle ?? ''} ${p.headline ?? ''} ${p.currentOrganizationRaw ?? ''}`;
+    // the function is read from the role they hold and the company (an "Analyst" at McKinsey is consulting, at
+    // Evercore banking), never from a headline that only hopes for the role
+    const role = heldRole(p);
+    const roleText = role ? `${role} ${p.currentOrganizationRaw ?? ''}` : undefined;
     const fnKey = matchedFunction(roleText, inp.goals.targetFunctions);
-    const fnMatch = fnKey ? 1 : 0;
     const indMatch = industries.some(
       (i) => (p.headline ?? '').toLowerCase().includes(i) || orgNorm.includes(i),
-    )
-      ? 1
-      : 0;
+    );
     const kw = keywordOverlap(
       resumeKeywords,
       `${p.headline ?? ''} ${p.currentTitle ?? ''}`.split(/\W+/).filter((w) => w.length > 3),
@@ -148,27 +163,59 @@ export function recommendPeople(inp: RecommendInput): Recommendation[] {
             normalizeCompany(f.organizationName) === orgNorm,
         )
       : undefined;
-    const fit = 0.35 * companyMatch + 0.25 * fnMatch + 0.15 * indMatch + 0.25 * kw + (shared ? 0.3 : 0);
-    if (fit < 0.12 && !p.isAlumni) continue;
     const pathStrength = inp.pathStrength(p.id); // one lookup per candidate; callers pass a precomputed table
-    const reach = Math.max(pathStrength, p.strength, p.isAlumni ? 0.6 : 0.25);
     const prior = responsePrior(p, inp.user);
+    const scored = scoreDiscoverCandidate(
+      {
+        name: p.displayName,
+        title: role ?? p.currentTitle,
+        company: p.currentOrganizationRaw,
+        headline: p.headline,
+        location: p.location,
+        schoolEvidence: !!p.isAlumni,
+        known: { strength: p.strength, pathStrength, linkedinConnected: !!p.linkedinConnectedOn },
+        targetPriority: tc?.priority,
+        prior,
+      },
+      profile,
+    );
+    const like = scored.parts.like;
+    if (
+      !tc &&
+      !fnKey &&
+      scored.parts.role < 0.55 &&
+      !indMatch &&
+      kw < 0.48 &&
+      !shared &&
+      !p.isAlumni &&
+      like < 0.75
+    )
+      continue;
+    // a little for what their work shares with the student's resume
+    const fit = Math.min(1, scored.fit + 0.08 * Math.min(1, kw) * scored.parts.penalty);
+    const reach = scored.reach;
     const score = Math.max(fit, 0.05) ** 0.5 * reach ** 0.3 * prior ** 0.2;
     const reasons: { code: string; text: string }[] = [];
-    if (shared)
+    if (shared) {
+      // "both at X" only when the resume says the student is there now (a range ending in "present"); a resume
+      // line without dates says nothing about when
+      const now = !!shared.startDate && !shared.endDate;
       reasons.push({
-        code: shared.endDate ? 'shared_org' : 'shared_org_now',
-        text: !shared.endDate
+        code: now ? 'shared_org_now' : 'shared_org',
+        text: now
           ? `You're both ${inOrAt(p.currentOrganizationRaw!, shared.title)}`
           : `Works at ${p.currentOrganizationRaw}, where you ${/\bintern/i.test(shared.title ?? '') ? 'interned' : 'worked'}`,
       });
+    }
     if (p.isAlumni) reasons.push({ code: 'alumni', text: `${inp.user.school} alum` });
     if (tc) reasons.push({ code: 'target_company', text: `${tc.nameRaw} is on your target list` });
-    if (fnMatch)
+    if (fnKey && role)
       reasons.push({
         code: 'function_match',
-        text: `Works in ${functionPhrase(fnKey) || 'your target function'}${p.currentTitle ? ` (${p.currentTitle})` : ''}`,
+        text: `Works in ${functionPhrase(fnKey) || 'your target function'} (${role})`,
       });
+    const replied = scored.reasons.find((r) => r.code === 'like_replied');
+    if (replied) reasons.push(replied);
     if (kw >= 0.2 && !shared) reasons.push({ code: 'resume_overlap', text: 'Overlaps with your experience' });
     if (p.strength >= 0.3) reasons.push({ code: 'warm', text: 'You already know each other a little' });
     else if (pathStrength >= 0.15) reasons.push({ code: 'path', text: 'Reachable through someone you know' });
@@ -176,8 +223,8 @@ export function recommendPeople(inp: RecommendInput): Recommendation[] {
       id: `rec-${p.id}-${batchDate}`,
       userId: inp.userId,
       personId: p.id,
-      score,
-      fitScore: fit,
+      score: Math.round(score * 1000) / 1000,
+      fitScore: Math.round(fit * 1000) / 1000,
       reachScore: reach,
       responsePrior: prior,
       reasons,

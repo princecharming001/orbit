@@ -23,6 +23,7 @@ import {
   isQuietDay,
   isRuleSuggestion,
   newId,
+  normalizeCompany,
   proposeWindows,
   resumeOneLiner,
   STAGE_LABELS,
@@ -32,6 +33,7 @@ import {
   shortOrg,
   staleReason,
   suggestionFromCandidate,
+  titleChangedMeaningfully,
   todayKey,
   validateDraft,
   WHY_THEM_GAP,
@@ -51,6 +53,7 @@ import {
 } from './introductions';
 import { noteMatchCandidate } from './notes';
 import { personSummary } from './prep';
+import { loadDiscoverSignals } from './recommend';
 import { currentResumeFacets, sharesOrgNow } from './resume';
 import { retireSuggestions, runTimedStageRules } from './stages';
 
@@ -789,8 +792,15 @@ export async function buildDraftContext(
         (a) => !a.isCurrent && a.endDate && a.endDate.slice(0, 10) === latest.startDate!.slice(0, 10),
       )
     : undefined;
+  // a LinkedIn re-import dates a change by when Orbit saw it, so it is news only if the company changed or the title
+  // did in earnest (a new level or function), never for a team added or a title written another way
+  const realChange =
+    latest?.source !== 'linkedin_csv' ||
+    (!!replaced &&
+      (normalizeCompany(replaced.nameRaw) !== normalizeCompany(latest.nameRaw) ||
+        titleChangedMeaningfully(replaced.title, latest.title)));
   const newAffiliation =
-    latest?.startDate && now.getTime() - new Date(latest.startDate).getTime() <= 120 * DAY
+    latest?.startDate && realChange && now.getTime() - new Date(latest.startDate).getTime() <= 120 * DAY
       ? {
           title: latest.title,
           org: latest.nameRaw,
@@ -1955,15 +1965,25 @@ export async function markWarmUpAction(
   if (user) await evaluateImmediateSuggestions(userId, { chatId, personId: chat.personId });
 }
 
-export async function recommendationsRefresh(user: User, now = new Date()): Promise<number> {
+/**
+ * Rank the student's own network for Discover and the first-message cards: continuous fit and reach (core
+ * recommendPeople), learning from who they wrote to (people who replied count double) and from the cards they turned
+ * down. `batchSize` people are added per run (10 by default; Discover asks for more, since its feed mixes them in).
+ */
+export async function recommendationsRefresh(
+  user: User,
+  now = new Date(),
+  opts: { batchSize?: number } = {},
+): Promise<number> {
   const { recommendPeople } = await import('@orbit/core');
-  const [goals, targetCompanies, resumeFacets, people, chats, existing] = await Promise.all([
+  const [goals, targetCompanies, resumeFacets, people, chats, existing, signals] = await Promise.all([
     db.goals.get(user.id),
     db.targetCompanies.where('userId').equals(user.id).toArray(),
     currentResumeFacets(user.id),
     db.people.where('userId').equals(user.id).toArray(),
     db.chats.where('userId').equals(user.id).toArray(),
     db.recommendations.where('userId').equals(user.id).toArray(),
+    loadDiscoverSignals(user.id),
   ]);
   if (!goals) return 0;
   const { g } = await buildReachGraph(user.id);
@@ -1978,7 +1998,13 @@ export async function recommendationsRefresh(user: User, now = new Date()): Prom
   );
   const recs = recommendPeople({
     userId: user.id,
-    user: { school: user.school, majors: user.majors, gradYear: user.graduationYear },
+    user: {
+      school: user.school,
+      majors: user.majors,
+      gradYear: user.graduationYear,
+      currentCity: user.currentCity,
+      homeCity: user.homeCity,
+    },
     goals,
     targetCompanies,
     resumeFacets,
@@ -1987,6 +2013,9 @@ export async function recommendationsRefresh(user: User, now = new Date()): Prom
     pathStrength: (id) => bestPathStrength(g, id),
     recentlyRecommended: recent,
     now,
+    batchSize: opts.batchSize,
+    outreach: signals.outreach,
+    dismissed: signals.dismissed,
   });
   const named = new Map(people.map((p) => [p.id, p]));
   for (const r of recs) {

@@ -1,39 +1,55 @@
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Bookmark, RefreshCw, ThumbsDown } from 'lucide-react';
-import { type ReactNode, useEffect, useMemo, useState } from 'react';
+import { RefreshCw } from 'lucide-react';
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useInView } from 'react-intersection-observer';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { AddPersonButton } from '../components/AddPerson';
 import { FindPeople } from '../components/account/FindPeople';
-import { CompanyLogo, LogoText } from '../components/CompanyLogo';
+import { LogoText } from '../components/CompanyLogo';
+import {
+  FoundCardView,
+  type FoundHandlers,
+  NetworkCardView,
+  type NetworkHandlers,
+  SuggestedRow,
+} from '../components/discover/cards';
+import { CardSkeleton } from '../components/discover/parts';
 import { LinkedInImportButton } from '../components/LinkedInImport';
 import { StrengthDots } from '../components/people/shared';
-import { RoleLine } from '../components/SuggestionCard';
 import { db } from '../db/schema';
 import { recommendationsRefresh, startWarmUpOrOutreach } from '../engine/brief';
-import { loadPointContext, type PersonPoint, POINT_LABELS, personPoints } from '../engine/personPoints';
+import {
+  actOnFound,
+  type DiscoverCard,
+  discoverView,
+  dismissFound,
+  type LoadMoreOutcome,
+  loadMoreDiscover,
+  restoreFound,
+} from '../engine/discoverFeed';
+import { connectLinkedInLive, liveLinkedInAvailable } from '../engine/linkedinLive';
+import { loadPointContext, personPoints } from '../engine/personPoints';
 import {
   dismissRecommendation,
-  introducerIdFor,
-  isColdRecommendation,
   outreachChannelFor,
-  RECOMMENDATION_DISMISS_REASONS,
-  type RecommendationDismissReason,
   restoreRecommendation,
   saveRecommendation,
   unsaveRecommendation,
 } from '../engine/recommend';
 import { isServerUser } from '../integrations/orbitApi';
 import { useSession } from '../state/session';
-import { Avatar, Button, cx, EmptyState, Input, PageHeader, Tabs, useToast } from '../ui';
+import { Avatar, Button, EmptyState, Input, PageHeader, Tabs, useToast } from '../ui';
 
 /**
- * Discover: people from the student's own network worth a coffee chat, and in account mode a second tab, Find
- * people, that searches beyond it (plan 16 §6).
+ * Discover: an endless feed of people worth a coffee chat. New people first (found on LinkedIn by searches built from
+ * the student's goals, resume and who they write to), with people already in the network worth reaching now mixed
+ * in, and a row of proactive picks at the top. In account mode a second tab, Find people, searches through Orbit's
+ * server (plan 16 §6).
  */
 export function Discover() {
   const { userId } = useSession();
   const [params, setParams] = useSearchParams();
-  if (!userId || !isServerUser(userId)) return <NetworkDiscover />;
+  if (!userId || !isServerUser(userId)) return <DiscoverFeed />;
   const tab = params.get('tab') === 'find' ? 'find' : 'network';
   const tabs = (
     <Tabs
@@ -45,7 +61,7 @@ export function Discover() {
       ]}
     />
   );
-  if (tab === 'network') return <NetworkDiscover tabs={tabs} />;
+  if (tab === 'network') return <DiscoverFeed tabs={tabs} />;
   return (
     <div>
       <PageHeader
@@ -58,29 +74,24 @@ export function Discover() {
   );
 }
 
-function NetworkDiscover({ tabs }: { tabs?: ReactNode }) {
+/** How many network people the page asks the ranker for each time it opens (the feed mixes them in). */
+const NETWORK_BATCH = 20;
+
+function DiscoverFeed({ tabs }: { tabs?: ReactNode }) {
   const { user, userId, goals } = useSession();
   const nav = useNavigate();
   const toast = useToast();
   const [busy, setBusy] = useState(false);
-  // the list is brought up to date each time the page opens, so someone just added shows up without a Refresh
+  // the network list is brought up to date each time the page opens, so someone just added shows up without a Refresh
   const [updating, setUpdating] = useState(true);
   const [q, setQ] = useState('');
-  const recs =
-    useLiveQuery(
-      () =>
-        userId
-          ? db.recommendations
-              .where('userId')
-              .equals(userId)
-              .filter((r) => r.status === 'new' || r.status === 'saved')
-              .toArray()
-          : [],
-      [userId],
-    ) ?? [];
+  const [acting, setActing] = useState<string>();
+  const [loading, setLoading] = useState(false);
+  const [outcome, setOutcome] = useState<LoadMoreOutcome>();
+  const [connecting, setConnecting] = useState(false);
+  const view = useLiveQuery(() => (user ? discoverView(user) : undefined), [user?.id]);
   const people =
     useLiveQuery(() => (userId ? db.people.where('userId').equals(userId).toArray() : []), [userId]) ?? [];
-  const byId = useMemo(() => new Map(people.map((p) => [p.id, p])), [people]);
   const tcCount =
     useLiveQuery(() => (userId ? db.targetCompanies.where('userId').equals(userId).count() : 0), [userId]) ??
     0;
@@ -90,21 +101,52 @@ function NetworkDiscover({ tabs }: { tabs?: ReactNode }) {
   useEffect(() => {
     if (!user) return;
     let live = true;
-    recommendationsRefresh(user)
+    recommendationsRefresh(user, new Date(), { batchSize: NETWORK_BATCH })
       .catch(() => undefined)
       .finally(() => live && setUpdating(false));
     return () => {
       live = false;
     };
   }, [user?.id]);
-  const list = recs.sort(
-    (a, b) => (b.status === 'saved' ? 1 : 0) - (a.status === 'saved' ? 1 : 0) || b.score - a.score,
-  );
-  // what each card says about the person: read once for everyone on the page
-  const listKey = list.map((r) => r.personId).join();
+
+  const loadMore = useCallback(async () => {
+    if (!user || loading) return;
+    setLoading(true);
+    try {
+      setOutcome(await loadMoreDiscover(user));
+    } catch (e) {
+      setOutcome({ status: 'error', message: e instanceof Error ? e.message : 'Could not reach LinkedIn.' });
+    } finally {
+      setLoading(false);
+    }
+  }, [user, loading]);
+
+  // the first page as soon as LinkedIn is ready, when the feed holds few new people
+  const firstLoad = useRef(false);
+  useEffect(() => {
+    if (!view?.connected || firstLoad.current) return;
+    firstLoad.current = true;
+    if (view.found.length < 12) void loadMore();
+  }, [view?.connected, view?.found.length, loadMore]);
+
+  // the next page when the end of the feed comes into view; a load that found nobody new waits for the button
+  const { ref: sentinel, inView } = useInView({ rootMargin: '400px 0px', fallbackInView: false });
+  const canAutoLoad =
+    !!view?.connected &&
+    !loading &&
+    (!outcome || (outcome.status === 'ok' && outcome.added > 0)) &&
+    !view.exhausted &&
+    !view.limitToday &&
+    view.searchesLeft > 0;
+  useEffect(() => {
+    if (inView && canAutoLoad && firstLoad.current) void loadMore();
+  }, [inView, canAutoLoad, loadMore]);
+
+  // what each network card says about the person: read once for everyone on the page
+  const networkIds = (view?.network ?? []).map((c) => c.person.id).join();
   const pointCtx = useLiveQuery(
-    () => (user && listKey ? loadPointContext(user, listKey.split(',')) : undefined),
-    [user?.id, listKey],
+    () => (user && networkIds ? loadPointContext(user, networkIds.split(',')) : undefined),
+    [user?.id, networkIds],
   );
   const searchHits = useMemo(() => {
     const s = q.trim().toLowerCase();
@@ -121,39 +163,9 @@ function NetworkDiscover({ tabs }: { tabs?: ReactNode }) {
       .slice(0, 12);
   }, [q, people]);
   if (!user) return null;
-  // Tell the student what is actually missing instead of a generic checklist.
-  const missing = {
-    people: people.filter((p) => p.isHuman && !p.hiddenAt).length === 0,
-    goals: !goals?.targetFunctions.length && !tcCount,
-  };
-  const emptyHint = missing.people
-    ? 'Orbit recommends people from your own network, and it is empty so far. Add the people you know of by hand, or import your LinkedIn connections, and recommendations follow.'
-    : missing.goals
-      ? 'Tell Orbit which functions and companies you are recruiting for, and Discover fills in from your network.'
-      : inPipeline
-        ? 'Everyone in your network who fits your goals already has a chat with you on the People board. Add more people at your target companies, or import your LinkedIn connections, for new suggestions.'
-        : 'Nobody in your network matches your goals yet. Add people at your target companies or import more connections.';
-  const refresh = async () => {
-    setBusy(true);
-    await recommendationsRefresh(user);
-    // Count what the page will actually show (new and saved), not what the ranker produced this run.
-    const shown = await db.recommendations
-      .where('userId')
-      .equals(user.id)
-      .filter((r) => r.status === 'new' || r.status === 'saved')
-      .count();
-    setBusy(false);
-    toast.push({
-      text: shown
-        ? `${shown} recommendation${shown === 1 ? '' : 's'} ready.`
-        : missing.people
-          ? 'No recommendations yet: your network is empty. Add a person or import your LinkedIn connections first.'
-          : 'No new recommendations. Add people at your target companies or import more connections.',
-      ttl: 6000,
-    });
-  };
+
   const start = async (personId: string, opts: { skipWarmUp?: boolean } = {}) => {
-    const p = byId.get(personId);
+    const p = people.find((x) => x.id === personId);
     const r = await startWarmUpOrOutreach(
       user,
       personId,
@@ -172,19 +184,123 @@ function NetworkDiscover({ tabs }: { tabs?: ReactNode }) {
       });
     }
   };
-  const drop = async (id: string, reason: RecommendationDismissReason, label: string) => {
-    await dismissRecommendation(user.id, id, reason);
+  const networkH: NetworkHandlers = {
+    onStart: (id, opts) => void start(id, opts),
+    onToggleSave: async (card) => {
+      const r = card.rec;
+      if (r.status === 'saved') {
+        await unsaveRecommendation(r.id);
+        toast.push({
+          text: `Unsaved ${card.person.firstName}.`,
+          action: { label: 'Undo', onClick: () => void saveRecommendation(r.id) },
+        });
+        return;
+      }
+      await saveRecommendation(r.id);
+      toast.push({
+        text: `Saved ${card.person.firstName}. Saved people stay at the top of Discover until you write to them.`,
+      });
+    },
+    onDismiss: async (card, reason, label) => {
+      await dismissRecommendation(user.id, card.rec.id, reason);
+      toast.push({
+        text: `Removed (${label.toLowerCase()}). Orbit learns from this for the next list.`,
+        action: { label: 'Undo', onClick: () => restoreRecommendation(card.rec.id) },
+        ttl: 6000,
+      });
+    },
+  };
+  const foundH: FoundHandlers = {
+    busy: acting,
+    onAct: async (card, action) => {
+      setActing(card.id);
+      try {
+        const first = card.entry.name.split(/\s+/)[0];
+        const r = await actOnFound(user, card.entry.memberId, action);
+        if (!r.ok) {
+          toast.push({ text: r.message, tone: 'bad', ttl: 6000 });
+          return;
+        }
+        if (action === 'write' && r.draftId) nav(`/people/${r.personId}?open=${r.draftId}`);
+        else if (action === 'intro') nav(`/map?reach=${r.personId}`);
+        else if (action === 'warm_up')
+          toast.push({
+            text: `Warm-up started for ${first}. The first step is in Drafts.`,
+            tone: 'good',
+            ttl: 8000,
+            action: { label: 'Open in Drafts', onClick: () => nav(`/inbox?person=${r.personId}`) },
+          });
+        else
+          toast.push({
+            text: `Saved ${first}. They are with your people, ready to write to.`,
+            tone: 'good',
+            ttl: 6000,
+            action: { label: 'Open', onClick: () => nav(`/people/${r.personId}`) },
+          });
+      } finally {
+        setActing(undefined);
+      }
+    },
+    onDismiss: async (card, reason, label) => {
+      await dismissFound(user.id, card.entry.memberId, reason);
+      toast.push({
+        text: `Removed (${label.toLowerCase()}). Orbit learns from this for the next people it finds.`,
+        action: { label: 'Undo', onClick: () => void restoreFound(user.id, card.entry.memberId) },
+        ttl: 6000,
+      });
+    },
+  };
+  const refresh = async () => {
+    setBusy(true);
+    try {
+      await recommendationsRefresh(user, new Date(), { batchSize: NETWORK_BATCH });
+      if (view?.connected) await loadMore();
+    } finally {
+      setBusy(false);
+    }
+    const shown = await db.recommendations
+      .where('userId')
+      .equals(user.id)
+      .filter((r) => r.status === 'new' || r.status === 'saved')
+      .count();
     toast.push({
-      text: `Removed (${label.toLowerCase()}). Orbit learns from this for the next list.`,
-      action: { label: 'Undo', onClick: () => restoreRecommendation(id) },
-      ttl: 6000,
+      text:
+        shown || view?.found.length
+          ? 'Discover is up to date.'
+          : 'Nobody new yet. Add goals or connect LinkedIn.',
+      ttl: 5000,
     });
   };
+  const connect = async () => {
+    setConnecting(true);
+    try {
+      const r = await connectLinkedInLive(user);
+      if (r.ok) {
+        toast.push({ text: 'LinkedIn connected. Finding people for you…', tone: 'good' });
+        firstLoad.current = false;
+      } else toast.push({ text: r.message, tone: r.reason === 'cancelled' ? undefined : 'bad', ttl: 8000 });
+    } finally {
+      setConnecting(false);
+    }
+  };
+
+  const humans = people.filter((p) => p.isHuman && !p.hiddenAt).length;
+  const missing = { people: humans === 0, goals: !goals?.targetFunctions.length && !tcCount };
+  const emptyHint = missing.people
+    ? 'Orbit recommends people from your own network, and it is empty so far. Add the people you know of by hand, or import your LinkedIn connections, and recommendations follow.'
+    : missing.goals
+      ? 'Tell Orbit which functions and companies you are recruiting for, and Discover fills in.'
+      : inPipeline
+        ? 'Everyone in your network who fits your goals already has a chat with you on the People board. Connect LinkedIn to find people beyond it.'
+        : 'Nobody in your network matches your goals yet. Add people at your target companies or connect LinkedIn.';
+  const feed: DiscoverCard[] = view?.feed ?? [];
+  const nothing = !!view && !feed.length && !view.suggestions.length;
+  const server = isServerUser(user.id);
   return (
     <div>
       <PageHeader
         title="Discover"
-        subtitle="People worth a coffee chat, best fit and easiest to reach first."
+        subtitle="People worth a coffee chat: new people who fit your goals and the people you write to, and people you already know worth reaching now."
         actions={
           <Button onClick={refresh} disabled={busy}>
             <RefreshCw size={14} className={busy ? 'animate-spin' : ''} /> Refresh
@@ -200,7 +316,7 @@ function NetworkDiscover({ tabs }: { tabs?: ReactNode }) {
           aria-label="Search your network"
           className="w-full @[40rem]:w-80"
         />
-        {people.filter((p) => p.isHuman && !p.hiddenAt).length > 1 && (
+        {humans > 1 && (
           <Link
             to="/map?reach=1"
             title="Opens the Map, where you pick a person and see who could introduce you"
@@ -230,11 +346,24 @@ function NetworkDiscover({ tabs }: { tabs?: ReactNode }) {
           ))}
         </div>
       )}
-      {list.length === 0 && updating ? (
-        <p className="text-[13px] text-ink-3" data-testid="discover-updating">
-          Checking your network…
-        </p>
-      ) : list.length === 0 ? (
+      {view && !view.connected && !server && (
+        <ConnectPrompt available={liveLinkedInAvailable(user)} busy={connecting} onConnect={connect} />
+      )}
+      {view && <SuggestedRow cards={view.suggestions} found={foundH} network={networkH} />}
+      {!view || (nothing && (updating || loading)) ? (
+        <div>
+          {!view || updating ? (
+            <p className="text-[13px] text-ink-3 mb-3" data-testid="discover-updating">
+              Checking your network…
+            </p>
+          ) : null}
+          <div className="grid @3xl:grid-cols-2 @7xl:grid-cols-3 gap-3">
+            <CardSkeleton />
+            <CardSkeleton />
+            <CardSkeleton />
+          </div>
+        </div>
+      ) : nothing && !view.connected ? (
         <EmptyState
           title="No recommendations yet"
           body={emptyHint}
@@ -257,252 +386,149 @@ function NetworkDiscover({ tabs }: { tabs?: ReactNode }) {
           }
         />
       ) : (
-        <>
-          <div className="stagger grid @3xl:grid-cols-2 @7xl:grid-cols-3 @[104rem]:grid-cols-4 gap-3 [&>*]:min-w-0">
-            {list.map((r) => {
-              const p = byId.get(r.personId);
-              if (!p) return null;
-              // someone the student was pointed to, or in their own club, is written to directly
-              const cold = isColdRecommendation(p, r);
-              const introId = introducerIdFor(r);
-              const introducer = introId ? byId.get(introId) : undefined;
-              return (
-                <div
-                  key={r.id}
-                  // every card has the same skeleton, so a row of them lines up: who, why, how strong, how to
-                  // reach them, and one row of actions pinned to the bottom
-                  className={cx(
-                    'group/card relative bg-canvas border rounded-[var(--radius-card)] p-4 fade-up flex flex-col gap-3 h-full transition-shadow hover:shadow-[var(--shadow-card)]',
-                    r.status === 'saved' ? 'border-accent/40' : 'border-line',
-                  )}
-                  data-testid="rec-card"
-                >
-                  <div className="flex items-start gap-3">
-                    <Link to={`/people/${p.id}`} className="shrink-0">
-                      <Avatar name={p.displayName} src={p.photoUrl} id={p.id} size={40} />
-                    </Link>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-1.5 min-w-0">
-                        <Link to={`/people/${p.id}`} className="font-medium hover:underline truncate">
-                          {p.displayName}
-                        </Link>
-                        {/* an alum: their school's logo, named on hover */}
-                        {p.isAlumni && p.school && (
-                          <CompanyLogo name={p.school} label={`${p.school} alum`} size={16} />
-                        )}
-                      </div>
-                      <RoleLine title={p.currentTitle} company={p.currentOrganizationRaw} person={p} />
-                    </div>
-                    <button
-                      type="button"
-                      className={cx(
-                        'shrink-0 -mr-1 -mt-1 w-8 h-8 rounded-full inline-flex items-center justify-center transition-colors',
-                        r.status === 'saved' ? 'text-accent' : 'text-ink-3 hover:text-ink hover:bg-canvas-2',
-                      )}
-                      aria-label={r.status === 'saved' ? `Unsave ${p.firstName}` : 'Save'}
-                      aria-pressed={r.status === 'saved'}
-                      title={
-                        r.status === 'saved'
-                          ? 'Saved: stays at the top of Discover. Click to unsave.'
-                          : 'Save: keep them at the top of Discover'
-                      }
-                      onClick={async () => {
-                        if (r.status === 'saved') {
-                          await unsaveRecommendation(r.id);
-                          toast.push({
-                            text: `Unsaved ${p.firstName}.`,
-                            action: { label: 'Undo', onClick: () => void saveRecommendation(r.id) },
-                          });
-                          return;
-                        }
-                        await saveRecommendation(r.id);
-                        toast.push({
-                          text: `Saved ${p.firstName}. Saved people stay at the top of Discover until you write to them.`,
-                        });
-                      }}
-                      data-testid="rec-save"
-                    >
-                      <Bookmark size={16} fill={r.status === 'saved' ? 'currentColor' : 'none'} />
-                    </button>
-                  </div>
-                  <RecPoints
-                    points={
-                      pointCtx
-                        ? personPoints(p, r, { ...pointCtx, dossier: pointCtx.dossiers.get(p.id) })
-                        : r.reasons
-                            .filter((x) => x.code !== 'alumni')
-                            .map((x) => ({ kind: 'timing' as const, text: x.text }))
-                    }
-                  />
-                  <div className="grid grid-cols-2 gap-4" data-testid="rec-scores">
-                    <ScoreBar
-                      label="Match"
-                      value={r.fitScore}
-                      title="How well their role and company fit your goals, out of 100"
-                    />
-                    <ScoreBar
-                      label="Reach"
-                      value={r.reachScore}
-                      title="How easy they are to reach, out of 100"
-                    />
-                  </div>
-                  {/* how to reach them, one quiet line in the same place on every card that needs one */}
-                  {cold && (
-                    <p
-                      className="flex items-center gap-2 text-[12.5px] text-ink-2 min-w-0"
-                      data-testid="rec-warmup-why"
-                    >
-                      {introducer ? (
-                        <>
-                          <Avatar
-                            name={introducer.displayName}
-                            src={introducer.photoUrl}
-                            id={introducer.id}
-                            size={18}
-                          />
-                          <span className="truncate">{introducer.firstName} could introduce you</span>
-                        </>
-                      ) : (
-                        <span className="truncate">Known from LinkedIn only, so warm up first</span>
-                      )}
-                    </p>
-                  )}
-                  <div className="mt-auto pt-3 border-t border-line-2 flex items-center gap-1.5">
-                    {cold && introducer ? (
-                      // someone the student knows can introduce them: that beats a warm-up with a stranger
-                      <Link to={`/map?reach=${p.id}`} data-testid="rec-intro" className="min-w-0">
-                        <Button variant="primary" size="sm" className="max-w-full truncate">
-                          Intro through {introducer.firstName}
-                        </Button>
-                      </Link>
-                    ) : (
-                      <Button variant="primary" size="sm" onClick={() => start(p.id)} data-testid="rec-start">
-                        {cold ? 'Start warm-up' : 'Write first message'}
-                      </Button>
-                    )}
-                    {cold && (
-                      // the same choice Today and the person page give: a student who already knows them writes now
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => start(p.id, { skipWarmUp: true })}
-                        data-testid="rec-write-now"
-                        title="Skip the warm-up and write the first message now"
-                      >
-                        Write now
-                      </Button>
-                    )}
-                    {/* the reasons stay folded away until the student says the person is not a fit */}
-                    <details className="group ml-auto">
-                      <summary
-                        className="list-none cursor-pointer w-8 h-8 rounded-full inline-flex items-center justify-center text-ink-3 hover:text-ink hover:bg-canvas-2 transition-colors [&::-webkit-details-marker]:hidden"
-                        aria-label="Not a fit?"
-                        title="Not a fit? Tell Orbit why"
-                      >
-                        <ThumbsDown size={15} />
-                      </summary>
-                      <div
-                        className="pop-in absolute z-20 right-3 bottom-14 w-[min(280px,calc(100%-24px))] rounded-[14px] border border-line bg-canvas p-2 shadow-[0_16px_40px_-12px_rgba(0,0,0,0.18)]"
-                        role="group"
-                        aria-label="Not a fit? Tell Orbit why"
-                      >
-                        <div className="px-1.5 pb-1.5 text-[12px] text-ink-3">Not a fit? Tell Orbit why</div>
-                        <div className="flex flex-wrap gap-1">
-                          {(
-                            Object.entries(RECOMMENDATION_DISMISS_REASONS) as [
-                              RecommendationDismissReason,
-                              string,
-                            ][]
-                          ).map(([k, l]) => (
-                            <button
-                              key={k}
-                              type="button"
-                              className="px-2.5 h-7 rounded-full border border-line bg-canvas text-[12px] text-ink-2 hover:text-ink hover:border-[#d4d2ce] transition-colors"
-                              onClick={() => drop(r.id, k, l)}
-                            >
-                              {l}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    </details>
-                  </div>
-                </div>
-              );
-            })}
+        <section aria-labelledby="discover-feed-h">
+          <h2 id="discover-feed-h" className="sr-only">
+            People to meet
+          </h2>
+          <div
+            role="feed"
+            aria-busy={loading}
+            data-testid="discover-feed"
+            className="stagger grid @3xl:grid-cols-2 @7xl:grid-cols-3 @[104rem]:grid-cols-4 gap-3 [&>*]:min-w-0"
+          >
+            {feed.map((c) =>
+              c.kind === 'found' ? (
+                <FoundCardView key={c.id} card={c} h={foundH} />
+              ) : (
+                <NetworkCardView
+                  key={c.id}
+                  card={c}
+                  h={networkH}
+                  points={
+                    pointCtx
+                      ? personPoints(c.person, c.rec, {
+                          ...pointCtx,
+                          dossier: pointCtx.dossiers.get(c.person.id),
+                        })
+                      : undefined
+                  }
+                />
+              ),
+            )}
+            {loading && view.connected && (
+              <>
+                <CardSkeleton />
+                <CardSkeleton />
+              </>
+            )}
           </div>
-        </>
+          <div ref={sentinel} className="h-px" aria-hidden />
+          <FeedFooter
+            connected={view.connected}
+            loading={loading}
+            outcome={outcome}
+            exhausted={view.exhausted}
+            limitToday={view.limitToday}
+            searchesLeft={view.searchesLeft}
+            hasQueries={view.hasQueries}
+            onMore={loadMore}
+          />
+        </section>
       )}
     </div>
   );
 }
 
-/** A score out of 100 as a short bar: easier to compare down a list of cards than two numbers. */
-function ScoreBar({ label, value, title }: { label: string; value: number; title: string }) {
-  const pct = Math.max(0, Math.min(100, Math.round(value * 100)));
+/** LinkedIn is not connected live here: say what connecting adds, and connect in place. */
+function ConnectPrompt({
+  available,
+  busy,
+  onConnect,
+}: {
+  available: boolean;
+  busy: boolean;
+  onConnect: () => void;
+}) {
   return (
     <div
-      title={title}
-      role="meter"
-      aria-label={label}
-      aria-valuenow={pct}
-      aria-valuemin={0}
-      aria-valuemax={100}
+      className="mb-6 border border-line bg-canvas rounded-[var(--radius-card)] p-4 flex flex-col @[40rem]:flex-row @[40rem]:items-center gap-3"
+      data-testid="discover-connect"
     >
-      <div className="flex items-baseline justify-between text-[11.5px] text-ink-3">
-        <span>{label}</span>
-        <span className="tabular text-ink-2">{pct}</span>
+      <div className="min-w-0 flex-1">
+        <p className="font-medium text-[14.5px]">See people beyond your network</p>
+        <p className="text-[13px] text-ink-3 mt-0.5">
+          {available
+            ? 'Connect your LinkedIn and Orbit finds new people who fit your goals and the people you write to, with mutual connections and alumni first. Nobody is added until you choose them.'
+            : 'Live LinkedIn is not switched on in this copy of Orbit yet. Until then, Discover ranks the people you already have.'}
+        </p>
       </div>
-      <div className="mt-1 h-1 rounded-full bg-line-2 overflow-hidden">
-        <div
-          className={cx(
-            'h-full rounded-full',
-            pct >= 70 ? 'bg-accent' : pct >= 50 ? 'bg-accent/60' : 'bg-ink-3/40',
-          )}
-          style={{ width: `${pct}%` }}
-        />
-      </div>
+      {available && (
+        <Button variant="primary" onClick={onConnect} disabled={busy} data-testid="discover-connect-button">
+          {busy ? 'Connecting…' : 'Connect LinkedIn'}
+        </Button>
+      )}
     </div>
   );
 }
 
-/**
- * What is worth knowing about someone, two lines at first: what you share, what stands out, what they do and why
- * now. More opens the rest in place. The folded lines stay in the page (hidden), so search and screen readers find
- * them.
- */
-function RecPoints({ points }: { points: PersonPoint[] }) {
-  const [open, setOpen] = useState(false);
-  if (!points.length) return null;
-  const more = points.length - 2;
-  return (
-    <div data-testid="rec-points">
-      <ul className="space-y-1.5 text-[13px]">
-        {points.map((pt, i) => (
-          <li
-            key={`${pt.kind}-${i}`}
-            className={cx('flex items-baseline gap-2.5 min-w-0', i >= 2 && !open && 'hidden')}
-          >
-            <span className="w-[74px] shrink-0 whitespace-nowrap text-[11.5px] text-ink-3">
-              {POINT_LABELS[pt.kind]}
-            </span>
-            <span className={cx('text-ink-2 min-w-0', !open && 'line-clamp-1')} title={pt.text}>
-              {pt.text}
-            </span>
-          </li>
-        ))}
-      </ul>
-      {more > 0 && (
-        <button
-          type="button"
-          onClick={() => setOpen((o) => !o)}
-          className="mt-1.5 ml-[84px] text-[12px] text-ink-3 hover:text-ink"
-          aria-expanded={open}
-          data-testid="rec-points-more"
-        >
-          {open ? 'Less' : `+${more} more`}
-        </button>
-      )}
+/** The end of the feed: more on request, or why there is no more today. */
+function FeedFooter({
+  connected,
+  loading,
+  outcome,
+  exhausted,
+  limitToday,
+  searchesLeft,
+  hasQueries,
+  onMore,
+}: {
+  connected: boolean;
+  loading: boolean;
+  outcome?: LoadMoreOutcome;
+  exhausted: boolean;
+  limitToday: boolean;
+  searchesLeft: number;
+  hasQueries: boolean;
+  onMore: () => void;
+}) {
+  if (!connected) return null;
+  const line = (text: string, testId: string, action?: ReactNode) => (
+    <div className="mt-6 flex flex-col items-center gap-2 text-center" data-testid={testId}>
+      {text && <p className="text-[13px] text-ink-3 max-w-md">{text}</p>}
+      {action}
     </div>
+  );
+  if (loading) return line('Finding more people…', 'discover-loading');
+  if (!hasQueries || outcome?.status === 'no_queries')
+    return line(
+      'Tell Orbit the roles and companies you are recruiting for, and it finds people who fit.',
+      'discover-no-goals',
+      <Link to="/settings/goals">
+        <Button size="sm">Set your goals</Button>
+      </Link>,
+    );
+  if (limitToday || outcome?.status === 'limit')
+    return line('LinkedIn searches are used up for today. More people tomorrow.', 'discover-limit');
+  if (searchesLeft <= 0 || outcome?.status === 'budget')
+    return line("That's today's new people. More tomorrow.", 'discover-tomorrow');
+  if (exhausted || outcome?.status === 'exhausted')
+    return line(
+      "That's everyone Orbit found for your goals. Add target companies or roles for more.",
+      'discover-exhausted',
+    );
+  if (outcome?.status === 'error')
+    return line(
+      `Could not load more people: ${outcome.message}`,
+      'discover-error',
+      <Button size="sm" onClick={onMore}>
+        Try again
+      </Button>,
+    );
+  return line(
+    outcome?.status === 'ok' && outcome.added === 0 ? 'No one new on that page.' : '',
+    'discover-more',
+    <Button size="sm" onClick={onMore} data-testid="discover-load-more">
+      Load more people
+    </Button>,
   );
 }

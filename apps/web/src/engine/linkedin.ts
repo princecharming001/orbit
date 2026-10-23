@@ -1,5 +1,11 @@
 import type { LinkedInConnectionRow, User } from '@orbit/core';
-import { newId, normalizeCompany, parseConnectedOn, parseConnectionsCsv } from '@orbit/core';
+import {
+  newId,
+  normalizeCompany,
+  parseConnectedOn,
+  parseConnectionsCsv,
+  titleChangedMeaningfully,
+} from '@orbit/core';
 import { addTouchpoint, recomputeAllStrengths } from '../db/repo';
 import { db } from '../db/schema';
 import { generateBrief, recommendationsRefresh } from './brief';
@@ -60,13 +66,20 @@ async function importConnectionRows(
         .equals(person.id)
         .filter((a) => a.kind === 'employment' && a.isCurrent)
         .first();
-      // a re-import that shows a new company or title is a job change: close the old role, open the new one
-      // dated today (drafting reads it as the news for a congratulate note)
-      // differences in case, spacing, punctuation, legal suffixes or a level ("Engineer II") are not a job change
+      // a re-import that shows a new company, or a title that changed in earnest (a new level or function), is a job
+      // change: close the old role, open the new one dated today (drafting reads it as the news for a congratulate
+      // note). Case, spacing, punctuation, legal suffixes, a ladder step ("Engineer II"), an abbreviation written out
+      // or a team added to the same title ("Software Engineer, Payments") are not
       const changed =
         !!existing &&
         (normalizeCompany(existing.nameRaw) !== normalizeCompany(r.company) ||
-          (!!existing.title && !!r.position && sameTitleKey(existing.title) !== sameTitleKey(r.position)));
+          (!!existing.title &&
+            !!r.position &&
+            sameTitleKey(existing.title) !== sameTitleKey(r.position) &&
+            titleChangedMeaningfully(existing.title, r.position)));
+      // the same role reworded: the record takes the new wording, and nothing is news
+      if (existing && !changed && r.position && existing.title !== r.position)
+        await db.affiliations.update(existing.id, { title: r.position });
       if (changed) {
         const today = new Date().toISOString().slice(0, 10);
         await db.affiliations.update(existing!.id, { isCurrent: false, endDate: today });

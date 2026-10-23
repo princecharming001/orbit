@@ -969,6 +969,10 @@ async function unipileSearch(deps, body, doFetch) {
       location: text(p.location),
       profileUrl: text(p.public_profile_url, 300) ?? text(p.profile_url, 300),
       distance: degree(p.network_distance),
+      // how many connections the student shares with them (LinkedIn's count, when it gives one)
+      mutualCount: [p.shared_connections_count, p.mutual_connections_count].find(
+        (n) => typeof n === "number" && Number.isFinite(n) && n >= 0
+      ),
       // LinkedIn's own photo link (it expires after a few weeks, so it is for showing, not keeping)
       pictureUrl: [p.profile_picture_url, p.profile_picture_url_large].map((u) => text(u, 1e3)).find((u) => !!u && isLinkedInImage(u))
     })),

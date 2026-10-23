@@ -371,6 +371,8 @@ export interface LinkedInFound {
   distance?: number;
   /** their LinkedIn photo (a link that expires after a few weeks) */
   pictureUrl?: string;
+  /** how many connections the student shares with them, when LinkedIn says */
+  mutualCount?: number;
 }
 
 export interface LinkedInSearchQuery {
@@ -381,10 +383,17 @@ export interface LinkedInSearchQuery {
   location?: string;
   /** which degrees to search; second and third by default, so the results are people the student does not know */
   distance?: (1 | 2 | 3)[];
+  /** the cursor the previous page of the same search returned: the next page */
   cursor?: string;
 }
 
-/** Search LinkedIn people from the student's own account, beyond their connections. */
+/** The proxy's answer when the account has run all the searches Orbit allows today: a failure with this status. */
+export const SEARCH_LIMIT_STATUS = 429;
+
+/**
+ * Search LinkedIn people from the student's own account, beyond their connections. A page at a time: pass the
+ * returned cursor for the next page. The day's search limit comes back as a failure with SEARCH_LIMIT_STATUS.
+ */
 export async function searchLinkedIn(
   accountId: string,
   q: LinkedInSearchQuery,
@@ -392,13 +401,19 @@ export async function searchLinkedIn(
 ): Promise<ConnectorOutcome<{ people: LinkedInFound[]; cursor?: string; total?: number }>> {
   const r = await call<{
     ok?: boolean;
+    reason?: string;
     message?: string;
     people?: LinkedInFound[];
     cursor?: string | null;
     total?: number;
   }>('/search', { accountId, token: opts.token, ...q }, { timeoutMs: 30_000, ...opts });
   if (!r.ok) return r;
-  if (r.value.ok === false) return connectorFailure('error', r.value.message ?? 'LinkedIn did not search.');
+  if (r.value.ok === false)
+    return connectorFailure(
+      'error',
+      r.value.message ?? 'LinkedIn did not search.',
+      r.value.reason === 'limit' ? SEARCH_LIMIT_STATUS : undefined,
+    );
   return {
     ok: true,
     value: { people: r.value.people ?? [], cursor: r.value.cursor ?? undefined, total: r.value.total },
