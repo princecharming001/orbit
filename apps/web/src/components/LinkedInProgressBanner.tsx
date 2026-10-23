@@ -42,7 +42,9 @@ export function LinkedInProgressBanner() {
             ? `${p.count.toLocaleString('en-US')} connections so far`
             : 'Starting with your connections'
           : p.phase === 'analyzing'
-            ? `Adding ${p.count?.toLocaleString('en-US') ?? 'your'} connections and finding who to meet`
+            ? p.messages
+              ? `Reading your LinkedIn messages: ${p.messages.toLocaleString('en-US')} so far`
+              : `Adding ${p.count?.toLocaleString('en-US') ?? 'your'} connections and finding who to meet`
             : p.message;
   return (
     <div

@@ -132,7 +132,11 @@ export async function importTexts(
   return result;
 }
 
-/** A day of texting each way becomes one touch; a text back after the student's outreach proposes "replied". */
+/**
+ * A day of texting each way becomes one touch, dated by that day's first text that way. A text back after the
+ * student's outreach proposes "replied" (the student confirms) only when the outreach itself went out as a text, or
+ * the text is plainly about the ask; a friend texting about something else after a LinkedIn note is not a reply.
+ */
 async function fileConversation(user: User, p: Person, conv: TextConversation, key: string) {
   for (const d of conv.days) {
     if (d.inCount)
@@ -140,7 +144,7 @@ async function fileConversation(user: User, p: Person, conv: TextConversation, k
         userId: user.id,
         personId: p.id,
         kind: 'text_in',
-        occurredAt: d.firstAt,
+        occurredAt: d.firstInAt ?? d.firstAt,
         refTable: 'texts',
         refId: `${key}:${d.day}:in`,
         summary: `Texts from ${p.firstName || p.displayName}`,
@@ -151,7 +155,7 @@ async function fileConversation(user: User, p: Person, conv: TextConversation, k
         userId: user.id,
         personId: p.id,
         kind: 'text_out',
-        occurredAt: d.firstAt,
+        occurredAt: d.firstOutAt ?? d.firstAt,
         refTable: 'texts',
         refId: `${key}:${d.day}:out`,
         summary: `Texts to ${p.firstName || p.displayName}`,
@@ -163,15 +167,36 @@ async function fileConversation(user: User, p: Person, conv: TextConversation, k
     .equals(p.id)
     .filter((c) => c.stage === 'outreach_sent')
     .toArray();
+  // a text about a networking ask (a chat, a call, a time, the role, a referral), unless plainly about something else
+  const aboutTheAsk =
+    /\b(chat|call|coffee|meet|meeting|zoom|hop on|catch up|happy to (?:help|chat|talk)|would love to|internship|interview|referral|refer you|resume|role|position|recruiting|\d{1,2} ?min(?:ute)?s?|(?:mon|tues|wednes|thurs|fri)day|next week)\b/i;
+  const elsewhere = /\b(dinner|lol|haha|practice|party|game|ride)\b/i;
   for (const chat of waiting) {
     const since = chat.firstOutreachAt ?? chat.stageEnteredAt;
-    const back = conv.days.find((d) => d.inCount > 0 && d.firstAt > since);
+    const sinceMs = Date.parse(since);
+    const inAt = (d: TextConversation['days'][number]) => d.firstInAt ?? d.firstAt;
+    // the outreach went out as a text: not sent by email or LinkedIn, and the student texted them around then
+    const byText =
+      chat.outreachChannel !== 'gmail' &&
+      chat.outreachChannel !== 'linkedin' &&
+      conv.days.some(
+        (d) => d.outCount > 0 && Math.abs(Date.parse(d.firstOutAt ?? d.firstAt) - sinceMs) <= 36 * 3_600_000,
+      );
+    // or one of their texts since then is about the ask (a chat, a call, a time, the role)
+    const about = conv.recent.find(
+      (m) => !m.fromMe && m.at > since && aboutTheAsk.test(m.text) && !elsewhere.test(m.text),
+    );
+    const back = byText
+      ? conv.days.find((d) => d.inCount > 0 && inAt(d) > since)
+      : about
+        ? conv.days.find((d) => d.day === about.at.slice(0, 10))
+        : undefined;
     if (back)
       await evaluateTrigger(
         chat,
         // a text back is a reply, but it may be about anything: the student confirms it
         { type: 'inbound_signal', signal: 'reply_neutral', confidence: 0.7 },
-        { table: 'texts', id: `${key}:${back.day}:in`, at: back.firstAt },
+        { table: 'texts', id: `${key}:${back.day}:in`, at: byText ? inAt(back) : about?.at },
       );
   }
 }

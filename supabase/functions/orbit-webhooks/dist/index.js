@@ -3390,6 +3390,14 @@ add("1001-5000", [
 add("501-1000", ["Vercel", "Retool", "Rippling", "Mercury", "Jump Trading", "Optiver", "Five Rings"]);
 add("201-500", ["Linear", "Sequoia Capital", "Andreessen Horowitz", "a16z", "Benchmark", "Accel"]);
 
+// packages/core/src/scoring/strength.ts
+var ENGAGEMENT = /* @__PURE__ */ new Set([
+  "linkedin_comment_in",
+  "linkedin_comment_out",
+  "linkedin_reaction_in"
+]);
+var AMBIENT = /* @__PURE__ */ new Set(["email_cc", "linkedin_connected", ...ENGAGEMENT]);
+
 // packages/core/src/graph/ties.ts
 var YEAR = 365.25 * 864e5;
 

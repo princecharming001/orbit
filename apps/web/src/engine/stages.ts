@@ -67,8 +67,12 @@ const TWO_WAY_KINDS = new Set([
  * evidence about the relationship, the same as the email or calendar event would have been: without it, someone who
  * replied, met the student and was thanked stays "new or cold", and Reach calls them a long shot. The evidence goes
  * again when the chat is moved back (an undo).
+ *
+ * A move Orbit made itself never invents history (plan 17 B): the message or meeting that moved it is its own touch
+ * already (the email, the LinkedIn message, the text, the calendar event, the notes). The one exception is a meeting
+ * the student put on the calendar by hand whose time has passed: that event is the evidence.
  */
-async function recordStageEvidence(chat: CoffeeChat, to: ChatStage, now: Date): Promise<void> {
+async function recordStageEvidence(chat: CoffeeChat, to: ChatStage, now: Date, actor: Actor): Promise<void> {
   const since = chat.firstOutreachAt ?? chat.createdAt;
   const tps = await db.touchpoints.where('personId').equals(chat.personId).toArray();
   const mine = (kind: string) =>
@@ -97,7 +101,7 @@ async function recordStageEvidence(chat: CoffeeChat, to: ChatStage, now: Date): 
   // moved back (an undo): the evidence goes; a chat that ends (declined, archived) keeps what happened
   const ended = to === 'declined' || to === 'no_response' || to === 'archived';
   if (REPLIED_OR_LATER.has(to)) {
-    if (!tps.some((t) => TWO_WAY_KINDS.has(t.kind) && ofThisChat(t))) {
+    if (actor === 'user' && !tps.some((t) => TWO_WAY_KINDS.has(t.kind) && ofThisChat(t))) {
       // the reply came back the way the student wrote
       const wrote = tps.filter((t) => ofThisChat(t)).sort((a, b) => b.occurredAt.localeCompare(a.occurredAt));
       const via = wrote.find((t) => t.kind === 'email_out' || t.kind === 'linkedin_out')?.kind;
@@ -110,8 +114,10 @@ async function recordStageEvidence(chat: CoffeeChat, to: ChatStage, now: Date): 
   }
   if (MET.has(to) && chat.completedAt) {
     const event = chat.scheduledEventId ? await db.events.get(chat.scheduledEventId) : undefined;
-    const at = event && event.startAt <= now.toISOString() ? event.startAt : chat.completedAt;
-    if (!tps.some((t) => t.kind === 'meeting' && ofThisChat(t)))
+    const happened = !!event && event.status !== 'cancelled' && event.startAt <= now.toISOString();
+    const at = happened ? event.startAt : chat.completedAt;
+    // the student says they met, or the meeting they booked is over; Orbit's own guess alone is not a meeting
+    if ((actor === 'user' || happened) && !tps.some((t) => t.kind === 'meeting' && ofThisChat(t)))
       await evidence('met', 'meeting', at, 'Coffee chat', 1);
   } else if (!MET.has(to) && !ended && mine('met')) {
     await db.touchpoints.delete(mine('met')!.id);
@@ -120,8 +126,13 @@ async function recordStageEvidence(chat: CoffeeChat, to: ChatStage, now: Date): 
   if (changed) await recomputePersonStrength(chat.personId, now);
 }
 
-async function settleAfterStageChange(chat: CoffeeChat, to: ChatStage, now: Date): Promise<void> {
-  await recordStageEvidence(chat, to, now);
+async function settleAfterStageChange(
+  chat: CoffeeChat,
+  to: ChatStage,
+  now: Date,
+  actor: Actor,
+): Promise<void> {
+  await recordStageEvidence(chat, to, now, actor);
   const stale = await db.stageEvents
     .where('chatId')
     .equals(chat.id)
@@ -211,7 +222,7 @@ export async function applyStage(
     if (to === 'archived') changes.archivedAt = at;
     await db.chats.update(chat.id, changes);
     Object.assign(chat, changes);
-    await settleAfterStageChange(chat, to, now);
+    await settleAfterStageChange(chat, to, now, actor);
   }
   return status;
 }

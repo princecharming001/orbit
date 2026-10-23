@@ -31,6 +31,8 @@ import {
 } from '../integrations/unipile';
 import { generateBrief, recommendationsRefresh } from './brief';
 import { importLiveConnections } from './linkedin';
+// (a cycle: linkedinActivity reads the account row from here; neither uses the other while loading)
+import { syncLinkedInActivity } from './linkedinActivity';
 
 export type LiveConnectResult =
   | { ok: true; rows: number; added: number }
@@ -98,6 +100,8 @@ export interface LinkedInProgress {
   phase: 'signin' | 'finishing' | 'reading' | 'analyzing' | 'done' | 'failed';
   /** connections read so far, or people added */
   count?: number;
+  /** while analyzing: LinkedIn messages read so far (the 1:1 chat history, for closeness) */
+  messages?: number;
   message?: string;
   at: number;
 }
@@ -449,10 +453,19 @@ async function syncLinkedInLiveOnce(
       .count();
     if (fresh.onboardingCompletedAt) await generateBrief(fresh, 'daily');
   }
+  // then the student's LinkedIn messages and post engagement, for closeness (a failure there never fails the sync)
+  let messages = 0;
+  if (!usesMockConnectors(user.id)) {
+    const a = await syncLinkedInActivity(user, {
+      now: opts.now,
+      onProgress: (n) => setProgress({ phase: 'analyzing', count: conns.length, messages: n }),
+    }).catch(() => undefined);
+    if (a?.ok) messages = a.messages;
+  }
   setProgress({
     phase: 'done',
     count: conns.length,
-    message: `${conns.length} connections read${r.imported ? `, ${r.imported} new` : ''}${recommended ? `, ${recommended} people worth meeting` : ''}.`,
+    message: `${conns.length} connections read${r.imported ? `, ${r.imported} new` : ''}${messages ? `, ${messages.toLocaleString('en-US')} messages` : ''}${recommended ? `, ${recommended} people worth meeting` : ''}.`,
   });
   return { ok: true, rows: conns.length, added: r.imported, updated: r.updated, recommended };
 }

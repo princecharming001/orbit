@@ -7701,6 +7701,14 @@ var GOAL_KINDS = [
   "collaboration"
 ];
 
+// packages/core/src/scoring/strength.ts
+var ENGAGEMENT = /* @__PURE__ */ new Set([
+  "linkedin_comment_in",
+  "linkedin_comment_out",
+  "linkedin_reaction_in"
+]);
+var AMBIENT = /* @__PURE__ */ new Set(["email_cc", "linkedin_connected", ...ENGAGEMENT]);
+
 // packages/core/src/scoring/tieScore.ts
 var TIE_MODEL_VERSION = "tie-v1";
 var DAY7 = 864e5;
@@ -7719,7 +7727,8 @@ var TIE_FEATURES = [
   "structural",
   "linkedin",
   "warmth",
-  "never"
+  "never",
+  "engagement"
 ];
 var TIE_WEIGHTS = {
   bias: -2.33,
@@ -7736,7 +7745,8 @@ var TIE_WEIGHTS = {
   structural: 0.8,
   linkedin: 0.84,
   warmth: 0.5,
-  never: -0.1
+  never: -0.1,
+  engagement: 0.5
 };
 var TIE_BASELINE = {
   log_days_last: 5.27,
@@ -7752,7 +7762,9 @@ var TIE_BASELINE = {
   structural: 0,
   linkedin: 0.88,
   warmth: 0,
-  never: 0.74
+  never: 0.74,
+  // the demo network had no post engagement when the baseline was taken
+  engagement: 0
 };
 var UNRECIPROCATED_SCORE_CAP = 20;
 var TIE_BAND_LABELS = {
@@ -7787,6 +7799,12 @@ function meetingWeight(attendees) {
   if (attendees <= 8) return 0.3;
   return 0;
 }
+var ENGAGEMENT_WEIGHT = {
+  comment_in: 1,
+  comment_out: 1,
+  reaction_in: 0.3
+};
+var ENGAGEMENT_SATURATION = 8;
 function computeTieFeatures(h, now = /* @__PURE__ */ new Date()) {
   const t = now.getTime();
   const when3 = (iso4) => {
@@ -7865,6 +7883,19 @@ function computeTieFeatures(h, now = /* @__PURE__ */ new Date()) {
   const structural = top.length ? top.reduce((a, b) => a + b.s, 0) / top.length / 100 : 0;
   const warmthVals = h.noteWarmth.filter((w) => Number.isFinite(w)).map((w) => Math.max(-1, Math.min(1, w)));
   const warmth = warmthVals.length ? warmthVals.reduce((a, b) => a + b, 0) / warmthVals.length : 0;
+  let engaged = 0;
+  let commentsIn = 0;
+  let commentsOut = 0;
+  let reactionsIn = 0;
+  for (const e of h.engagement ?? []) {
+    const x = when3(e.at);
+    if (x === void 0) continue;
+    engaged += ENGAGEMENT_WEIGHT[e.kind] * decay(x);
+    if (e.kind === "comment_in") commentsIn++;
+    else if (e.kind === "comment_out") commentsOut++;
+    else reactionsIn++;
+  }
+  const engagement = Math.min(1, Math.log(1 + engaged) / Math.log(1 + ENGAGEMENT_SATURATION));
   const features = {
     log_days_last: daysLast === void 0 ? 0 : Math.log(1 + daysLast),
     log_days_first: daysFirst === void 0 ? 0 : Math.log(1 + daysFirst),
@@ -7879,7 +7910,8 @@ function computeTieFeatures(h, now = /* @__PURE__ */ new Date()) {
     structural,
     linkedin: h.linkedinConnected ? 1 : 0,
     warmth,
-    never: never ? 1 : 0
+    never: never ? 1 : 0,
+    engagement
   };
   const facts = {
     name: h.name,
@@ -7897,7 +7929,10 @@ function computeTieFeatures(h, now = /* @__PURE__ */ new Date()) {
     mutualNames: top.filter((x) => x.name && x.s > 0).map((x) => x.name),
     linkedin: h.linkedinConnected,
     never,
-    warmth
+    warmth,
+    commentsIn,
+    commentsOut,
+    reactionsIn
   };
   return { features, facts };
 }
@@ -8015,6 +8050,11 @@ function explainTie(features, facts, weights = TIE_WEIGHTS) {
       negative: h > 48 ? `Takes about ${Math.round(h / 24)} days to reply` : void 0
     });
   }
+  if (facts.commentsIn + facts.commentsOut + facts.reactionsIn > 0)
+    topics.push({
+      value: c.engagement,
+      positive: facts.commentsIn && facts.commentsOut ? "You comment on each other's LinkedIn posts" : facts.commentsIn ? `${plural(facts.commentsIn, "comment")} on your LinkedIn posts` : facts.commentsOut ? "You comment on their LinkedIn posts" : facts.reactionsIn === 1 ? "Reacted to one of your LinkedIn posts" : `Reacted to ${facts.reactionsIn} of your LinkedIn posts`
+    });
   if (facts.warmth !== 0)
     topics.push({
       value: c.warmth,

@@ -17,6 +17,7 @@ import { db } from '../db/schema';
 import { recomputeAlumni } from './alumni';
 import { DEMO_USER_ID } from './demo';
 import { repairClaims } from './repair';
+import { repairFalseReplies } from './replyRepair';
 
 export const CLEANUP_VERSION = '2026-10-22';
 const OUTBOUND = new Set(['email_out', 'linkedin_out', 'text_out', 'meeting', 'manual_log']);
@@ -30,6 +31,8 @@ export interface CleanupStats {
 
 export async function cleanUpGuesses(user: User, now = new Date()): Promise<CleanupStats | undefined> {
   if (user.id === DEMO_USER_ID) return undefined;
+  // its own once-only repair: false "they replied" moves and the touches they invented (plan 17 B)
+  await repairFalseReplies(user, now).catch(() => undefined);
   const key = `cleanup:${CLEANUP_VERSION}:${user.id}`;
   if (await db.kv.get(key)) {
     // the later repairs (engine/repair.ts) run on every visit, with their own versions

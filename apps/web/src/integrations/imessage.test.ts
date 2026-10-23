@@ -163,4 +163,69 @@ describe('reading texts from Messages', () => {
       chat?.stage === 'replied' || events.some((e) => e.toStage === 'replied' && e.status === 'proposed'),
     ).toBe(true);
   });
+
+  it('dates each direction by its own first text, and a text about something else after a LinkedIn note is no reply', async () => {
+    const SQL = await initSqlJs();
+    const d = new SQL.Database();
+    d.run(`
+      create table handle (ROWID integer primary key, id text);
+      create table chat (ROWID integer primary key, chat_identifier text);
+      create table chat_handle_join (chat_id integer, handle_id integer);
+      create table chat_message_join (chat_id integer, message_id integer);
+      create table message (ROWID integer primary key, date integer, is_from_me integer, text text, attributedBody blob,
+        associated_message_type integer default 0, item_type integer default 0, handle_id integer);
+      insert into handle values (1, '+1 (555) 123-4567');
+      insert into chat values (1, 'ana');
+      insert into chat_handle_join values (1, 1);
+    `);
+    const texts: [string, 0 | 1, string][] = [
+      ['2026-10-05T09:00:00Z', 1, 'Running late to practice lol'],
+      ['2026-10-05T15:00:00Z', 0, 'haha no worries, see you at the game'],
+    ];
+    texts.forEach(([iso, fromMe, text], i) => {
+      d.run('insert into message (ROWID, date, is_from_me, text) values (?, ?, ?, ?)', [
+        i + 1,
+        appleNs(iso),
+        fromMe,
+        text,
+      ]);
+      d.run('insert into chat_message_join values (1, ?)', [i + 1]);
+    });
+    const bytes = d.export();
+    await importTexts(
+      user,
+      { messagesDb: bytes, contactsVcf: VCF },
+      { now: new Date('2026-10-20T12:00:00Z') },
+    );
+    const ana = (await db.people.where('userId').equals(user.id).toArray())[0]!;
+    const tps = await db.touchpoints.where('personId').equals(ana.id).toArray();
+    // her text came six hours after his: not the same instant
+    expect(tps.map((t) => [t.kind, t.occurredAt]).sort()).toEqual([
+      ['text_in', '2026-10-05T15:00:00.000Z'],
+      ['text_out', '2026-10-05T09:00:00.000Z'],
+    ]);
+    // the student wrote to her on LinkedIn on Oct 1; a text about a game is not her answer
+    await db.chats.put({
+      id: 'c_ana',
+      userId: user.id,
+      personId: ana.id,
+      stage: 'outreach_sent',
+      stageEnteredAt: '2026-10-01T12:00:00Z',
+      firstOutreachAt: '2026-10-01T12:00:00Z',
+      source: 'manual',
+      goalTags: [],
+      outreachChannel: 'linkedin',
+      bumpCount: 0,
+      priority: 2,
+      createdAt: '2026-10-01T12:00:00Z',
+      updatedAt: '2026-10-01T12:00:00Z',
+    } as never);
+    await importTexts(
+      user,
+      { messagesDb: bytes, contactsVcf: VCF },
+      { now: new Date('2026-10-20T12:00:00Z') },
+    );
+    expect((await db.chats.get('c_ana'))!.stage).toBe('outreach_sent');
+    expect(await db.stageEvents.where('chatId').equals('c_ana').count()).toBe(0);
+  });
 });

@@ -1,6 +1,7 @@
 import type { CalendarEvent, CoffeeChat, EmailMessage, EmailThread, Person, User } from '@orbit/core';
 import {
   addBusinessDays,
+  answersOutreach,
   detectOutOfOffice,
   emailDomain,
   heuristicSignal,
@@ -15,6 +16,7 @@ import {
   parseAddress,
   parseName,
   parseReturnDate,
+  sentForChat,
   splitSignature,
   stripDiacritics,
   stripQuotedReply,
@@ -637,15 +639,20 @@ async function processNetworkingThread(
           confidence: 0.75,
           createdAt: now.toISOString(),
         });
-      await db.chats.update(c.id, { lastInboundAt: m.sentAt, updatedAt: now.toISOString() });
-      c.lastInboundAt = m.sentAt;
-      await evaluateTrigger(
-        c,
-        { type: 'inbound_signal', signal, confidence },
-        { table: 'messages', id: m.id, at: m.sentAt },
-        now,
-        new Date(m.sentAt),
-      );
+      // their message answers the student only when it came after the ask went out: someone who emailed first, or
+      // the earlier messages of a thread the student wrote into later, has not replied to anything
+      const answers = answersOutreach(c, m.sentAt);
+      if (answers) {
+        await db.chats.update(c.id, { lastInboundAt: m.sentAt, updatedAt: now.toISOString() });
+        c.lastInboundAt = m.sentAt;
+        await evaluateTrigger(
+          c,
+          { type: 'inbound_signal', signal, confidence },
+          { table: 'messages', id: m.id, at: m.sentAt },
+          now,
+          new Date(m.sentAt),
+        );
+      }
       touched.add(sender.id);
       // an intro: the people the sender put on the thread become chats the student can open, credited to the sender
       if (
@@ -683,7 +690,7 @@ async function processNetworkingThread(
           touched.add(target.id);
         }
       }
-      if (now.getTime() - new Date(m.sentAt).getTime() < 3 * 86_400_000)
+      if (answers && now.getTime() - new Date(m.sentAt).getTime() < 3 * 86_400_000)
         await notify(
           user.id,
           'reply_received',
@@ -701,6 +708,9 @@ async function processNetworkingThread(
         ([pid]) => chats.size === 1 || m.toEmails.some((e) => byEmail(e)?.id === pid),
       );
       for (const [pid, c] of targets) {
+        // a chat not yet written to is not started by an old thread: a message from long before the chat was opened
+        // is history with the person, not this chat's outreach (and their answer to it was no reply to this ask)
+        if ((c.stage === 'identified' || c.stage === 'warming') && !sentForChat(c, m.sentAt)) continue;
         // anything sent after the conversation is the thank-you, whatever the wording
         const kind = outboundKind(c, signal);
         const changes: Partial<CoffeeChat> = {

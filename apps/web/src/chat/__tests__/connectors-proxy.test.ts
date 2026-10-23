@@ -9,6 +9,7 @@ import {
   mapRelation,
   memoryLinks,
   memoryTake,
+  postDate,
   postgrestTake,
 } from '../../../../../supabase/functions/orbit-connectors/connectors';
 
@@ -656,6 +657,352 @@ describe('orbit-connectors proxy', () => {
     expect(r.latest).toBe('2026-10-18T16:30:00.000Z');
     // each chat is looked up once
     expect(upstream.filter((u) => u.url.endsWith('/chats/c1'))).toHaveLength(1);
+  });
+
+  it('reads the inbox on with a cursor instead of dropping what one call cannot read, and names chats from one list', async () => {
+    const page = (n: number) =>
+      Array.from({ length: 3 }, (_, i) => ({
+        id: `p${n}m${i}`,
+        chat_id: 'c1',
+        sender_id: 'ACoP',
+        text: `message ${n}.${i}`,
+        timestamp: `2026-10-${String(18 - n).padStart(2, '0')}T1${i}:00:00.000Z`,
+        is_sender: 0,
+      }));
+    const { handler, upstream } = harness({}, (url) => {
+      if (url.includes('/api/v1/messages?')) {
+        const n = Number(new URL(url).searchParams.get('cursor')?.slice(1) ?? 0);
+        return new Response(JSON.stringify({ items: page(n), cursor: `k${n + 1}` }));
+      }
+      if (url.includes('/api/v1/chats?'))
+        return new Response(
+          JSON.stringify({
+            items: [{ id: 'c1', type: 0, name: 'Priya Shah', attendee_provider_id: 'ACoP' }],
+            cursor: null,
+          }),
+        );
+      return new Response('{}', { status: 404 });
+    });
+    const ask = async (extra: Record<string, unknown>) =>
+      (await (
+        await handler(
+          post('/inbox', { accountId: 'a1', token: TOKEN.a1, after: '2026-10-01T00:00:00Z', ...extra }),
+        )
+      ).json()) as { messages: { id: string }[]; cursor: string | null; more: boolean; complete: boolean };
+    const first = await ask({});
+    // four pages, then the cursor for the rest: nothing silently left behind
+    expect(first.messages).toHaveLength(12);
+    expect(first).toMatchObject({ more: true, cursor: 'k4', complete: true });
+    // who the chat is with came from the chat list, not one lookup per chat
+    expect(upstream.filter((u) => u.url.includes('/api/v1/chats?'))).toHaveLength(1);
+    expect(upstream.some((u) => u.url.endsWith('/chats/c1'))).toBe(false);
+    const next = await ask({ cursor: first.cursor });
+    expect(next.messages[0]!.id).toBe('p4m0');
+    const resumed = upstream.filter((u) => u.url.includes('/api/v1/messages?')).at(-4)!.url;
+    expect(resumed).toContain('cursor=k4');
+    expect(resumed).not.toContain('after=');
+  });
+
+  it('says the inbox is incomplete when a chat cannot be looked up, instead of dropping its messages quietly', async () => {
+    const { handler } = harness({}, (url) => {
+      if (url.includes('/api/v1/messages?'))
+        return new Response(
+          JSON.stringify({
+            items: [
+              { id: 'm1', chat_id: 'cx', text: 'hi', timestamp: '2026-10-18T10:00:00.000Z', is_sender: 0 },
+            ],
+            cursor: null,
+          }),
+        );
+      if (url.includes('/api/v1/chats/cx')) return new Response('{}', { status: 500 });
+      if (url.includes('/api/v1/chats?')) return new Response(JSON.stringify({ items: [], cursor: null }));
+      return new Response('{}', { status: 404 });
+    });
+    const r = (await (await handler(post('/inbox', { accountId: 'a1', token: TOKEN.a1 }))).json()) as {
+      messages: unknown[];
+      complete: boolean;
+    };
+    expect(r.messages).toHaveLength(0);
+    expect(r.complete).toBe(false);
+  });
+
+  it('reads the whole 1:1 chat history across calls with a signed cursor: groups, ads and events left out', async () => {
+    const msgs: Record<string, Record<string, unknown>[]> = {
+      // 30 pages of ten: more than one call reads
+      c1: Array.from({ length: 300 }, (_, i) => ({
+        id: `a${i}`,
+        chat_id: 'c1',
+        text: `${'long text '.repeat(30)}${i}`,
+        timestamp: new Date(Date.UTC(2025, 0, 1, i)).toISOString(),
+        is_sender: i % 2,
+      })),
+      c3: [
+        { id: 'b1', chat_id: 'c3', text: 'Hi!', timestamp: '2026-10-18T10:00:00.000Z', is_sender: 0 },
+        { id: 'b2', chat_id: 'c3', text: 'liked', timestamp: '2026-10-18T10:01:00.000Z', is_event: 1 },
+        { id: 'b3', chat_id: 'c3', text: 'gone', timestamp: '2026-10-18T10:02:00.000Z', deleted: 1 },
+        { id: 'b4', chat_id: 'c3', text: null, timestamp: '2026-10-18T10:03:00.000Z', is_sender: true },
+      ],
+    };
+    const { handler, upstream } = harness({}, (url) => {
+      const u = new URL(url);
+      if (u.pathname === '/api/v1/chats')
+        return new Response(
+          JSON.stringify({
+            items: [
+              { id: 'c1', type: 0, name: 'Priya Shah', attendee_provider_id: 'ACoP' },
+              { id: 'c2', type: 1, name: 'Club', attendee_provider_id: 'ACoG' },
+              { id: 'c4', type: 0, content_type: 'sponsored', attendee_provider_id: 'ACoAd' },
+              { id: 'c3', type: 0, name: 'Sam Lee', attendee_provider_id: 'ACoS' },
+            ],
+            cursor: null,
+          }),
+        );
+      const m = /\/chats\/(c\d)\/messages$/.exec(u.pathname);
+      if (m) {
+        // ten a page, newest first, so a chat takes more than one call
+        const all = [...(msgs[m[1]!] ?? [])].reverse();
+        const from = Number(u.searchParams.get('cursor') ?? 0);
+        const items = all.slice(from, from + 10);
+        return new Response(
+          JSON.stringify({ items, cursor: from + 10 < all.length ? String(from + 10) : null }),
+        );
+      }
+      return new Response('{}', { status: 404 });
+    });
+    type Hist = {
+      chats: {
+        chatId: string;
+        memberId: string;
+        messages: { id: string; out: boolean; text: string; at: string }[];
+      }[];
+      cursor: string | null;
+      latest: string | null;
+    };
+    const ask = async (extra: Record<string, unknown>) =>
+      (await (
+        await handler(post('/chats/history', { accountId: 'a1', token: TOKEN.a1, ...extra }))
+      ).json()) as Hist;
+    const got: Hist['chats'] = [];
+    let r = await ask({});
+    got.push(...r.chats);
+    let calls = 1;
+    while (r.cursor && calls < 10) {
+      r = await ask({ cursor: r.cursor });
+      got.push(...r.chats);
+      calls++;
+    }
+    expect(r.cursor).toBeNull();
+    const ids = got.flatMap((c) => c.messages.map((m) => m.id));
+    // every message of both 1:1 chats, each once; the group, the ad, the event and the deleted one left out
+    expect(calls).toBeGreaterThan(1);
+    expect(ids.filter((id) => id.startsWith('a'))).toHaveLength(300);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids.filter((id) => id.startsWith('b')).sort()).toEqual(['b1', 'b4']);
+    expect(new Set(got.map((c) => c.memberId))).toEqual(new Set(['ACoP', 'ACoS']));
+    const sample = got.find((c) => c.chatId === 'c1')!.messages[0]!;
+    expect(sample.text.length).toBeLessThanOrEqual(140);
+    expect(got.find((c) => c.chatId === 'c3')!.messages.find((m) => m.id === 'b4')).toMatchObject({
+      out: true,
+      text: '',
+    });
+    // the whole history: no `after` was sent
+    expect(upstream.some((u) => u.url.includes('after='))).toBe(false);
+    expect(upstream.some((u) => u.url.includes('/chats/c2/'))).toBe(false);
+
+    // since a checkpoint: `after` goes to the chat list and to each chat's messages
+    upstream.length = 0;
+    await ask({ after: '2026-10-01T00:00:00Z' });
+    const after = encodeURIComponent('2026-10-01T00:00:00.000Z');
+    expect(upstream[0]!.url).toContain(`after=${after}`);
+    expect(upstream[0]!.url).toContain('account_type=LINKEDIN');
+    expect(upstream.find((u) => u.url.includes('/messages'))!.url).toContain(`after=${after}`);
+  });
+
+  it('refuses a history cursor it did not sign for this account', async () => {
+    const { handler, upstream } = harness({}, (url) =>
+      url.includes('/api/v1/chats')
+        ? new Response(
+            JSON.stringify({ items: [{ id: 'c1', type: 0, attendee_provider_id: 'ACoP' }], cursor: 'more' }),
+          )
+        : new Response(JSON.stringify({ items: [], cursor: null })),
+    );
+    const forged = `${btoa(JSON.stringify({ q: [{ id: 'someone-elses-chat', m: 'x' }], c: null }))}.bad`;
+    const r = (await (
+      await handler(post('/chats/history', { accountId: 'a1', token: TOKEN.a1, cursor: forged }))
+    ).json()) as {
+      ok: boolean;
+      reason: string;
+    };
+    expect(r).toMatchObject({ ok: false, reason: 'bad_cursor' });
+    expect(upstream).toHaveLength(0);
+    // a real cursor for a1 is no good for acc_1 either
+    const real = (await (
+      await handler(post('/chats/history', { accountId: 'a1', token: TOKEN.a1 }))
+    ).json()) as {
+      cursor: string;
+    };
+    expect(real.cursor).toBeTruthy();
+    const other = (await (
+      await handler(post('/chats/history', { accountId: 'acc_1', token: TOKEN.acc_1, cursor: real.cursor }))
+    ).json()) as { reason: string };
+    expect(other.reason).toBe('bad_cursor');
+  });
+
+  it('reads who commented on and reacted to the student’s posts, and whose posts they commented on', async () => {
+    const NOW = new Date('2026-10-20T12:00:00.000Z');
+    const { handler, upstream } = harness({ now: () => NOW }, (url) => {
+      const u = new URL(url);
+      expect(u.searchParams.get('account_id')).toBe('a1');
+      const p = u.pathname;
+      if (p === '/api/v1/users/me') return new Response(JSON.stringify({ provider_id: 'ACoME' }));
+      if (p === '/api/v1/users/ACoME/posts')
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                id: '71',
+                social_id: 'urn:li:activity:71',
+                parsed_datetime: '2026-10-10T09:00:00.000Z',
+                comment_counter: 2,
+                reaction_counter: 3,
+              },
+              {
+                id: '72',
+                social_id: 'urn:li:activity:72',
+                parsed_datetime: '2026-09-01T09:00:00.000Z',
+                comment_counter: 1,
+                reaction_counter: 1,
+              },
+              {
+                id: '73',
+                social_id: 'urn:li:activity:73',
+                parsed_datetime: '2026-08-01T09:00:00.000Z',
+                comment_counter: 0,
+                reaction_counter: 0,
+              },
+            ],
+            cursor: 'older',
+          }),
+        );
+      if (
+        p === '/api/v1/posts/urn%3Ali%3Aactivity%3A71/comments' ||
+        p === '/api/v1/posts/urn:li:activity:71/comments'
+      )
+        return new Response(
+          JSON.stringify({
+            items: [
+              { id: 'k1', date: '3d', text: 'Congrats!', author_details: { id: 'ACoP' } },
+              {
+                id: 'k2',
+                date: '2026-10-12T08:00:00.000Z',
+                text: 'Thanks all',
+                author_details: { id: 'ACoME' },
+              },
+            ],
+            cursor: null,
+          }),
+        );
+      if (p.endsWith('activity%3A71/reactions') || p.endsWith('activity:71/reactions')) {
+        const page2 = u.searchParams.get('cursor') === 'r2';
+        return new Response(
+          JSON.stringify({
+            items: page2
+              ? [{ value: 'LIKE', author: { id: 'ACoQ', type: 'INDIVIDUAL' } }]
+              : [
+                  { value: 'LIKE', author: { id: 'ACoP', type: 'INDIVIDUAL' } },
+                  { value: 'LIKE', author: { id: '1234', type: 'COMPANY' } },
+                ],
+            paging: { cursor: page2 ? null : 'r2' },
+          }),
+        );
+      }
+      if (p === '/api/v1/users/ACoME/comments')
+        return new Response(
+          JSON.stringify({
+            items: [
+              { id: 'o1', post_id: 'urn:li:activity:99', date: '1w', text: 'Great point' },
+              { id: 'o2', post_id: 'urn:li:activity:71', date: '2d', text: 'reply on my own post' },
+            ],
+            cursor: null,
+          }),
+        );
+      if (p === '/api/v1/posts/99')
+        return new Response(
+          JSON.stringify({
+            author: { id: 'ACoR', is_company: false },
+            parsed_datetime: '2026-10-01T00:00:00.000Z',
+          }),
+        );
+      return new Response('{}', { status: 404 });
+    });
+    type Items = {
+      items: { kind: string; memberId: string; at: string; id: string }[];
+      postsRead: { socialId: string; seen: string }[];
+      ownDone: boolean;
+      olderPosts: boolean;
+      cursor: string | null;
+    };
+    const ask = async (extra: Record<string, unknown>) =>
+      (await (
+        await handler(post('/posts/activity', { accountId: 'a1', token: TOKEN.a1, ...extra }))
+      ).json()) as Items;
+    const all: Items['items'] = [];
+    const read: Items['postsRead'] = [];
+    let ownDone = false;
+    // the post the student already read at these counts is skipped
+    let r = await ask({ seen: { 'urn:li:activity:72': '1:1' } });
+    expect(r.olderPosts).toBe(true);
+    for (;;) {
+      all.push(...r.items);
+      read.push(...r.postsRead);
+      ownDone ||= r.ownDone;
+      if (!r.cursor) break;
+      r = await ask({ cursor: r.cursor });
+    }
+    expect(all.map((i) => [i.kind, i.memberId, i.at]).sort()).toEqual([
+      ['comment_in', 'ACoP', '2026-10-17T12:00:00.000Z'],
+      ['comment_out', 'ACoR', '2026-10-13T12:00:00.000Z'],
+      ['reaction_in', 'ACoP', '2026-10-10T09:00:00.000Z'],
+      ['reaction_in', 'ACoQ', '2026-10-10T09:00:00.000Z'],
+    ]);
+    expect(read.sort((a, b) => a.socialId.localeCompare(b.socialId))).toEqual([
+      { socialId: 'urn:li:activity:71', seen: '2:3' },
+      { socialId: 'urn:li:activity:73', seen: '0:0' },
+    ]);
+    expect(ownDone).toBe(true);
+    expect(upstream.some((u) => u.url.includes('activity%3A72') || u.url.includes('activity:72'))).toBe(
+      false,
+    );
+  });
+
+  it('stops an account at its daily post reads', async () => {
+    const { handler } = harness({ postReadsPerDay: 1 }, (url) =>
+      url.includes('/users/me')
+        ? new Response(JSON.stringify({ provider_id: 'ACoME' }))
+        : new Response(JSON.stringify({ items: [], cursor: null })),
+    );
+    expect(
+      (await (await handler(post('/posts/activity', { accountId: 'a1', token: TOKEN.a1 }))).json()) as object,
+    ).toMatchObject({
+      ok: true,
+    });
+    expect(
+      (await (await handler(post('/posts/activity', { accountId: 'a1', token: TOKEN.a1 }))).json()) as object,
+    ).toMatchObject({
+      ok: false,
+      reason: 'limit',
+    });
+  });
+
+  it('reads LinkedIn’s relative dates on comments', () => {
+    const now = new Date('2026-10-20T12:00:00.000Z');
+    expect(postDate('3d', now)).toBe('2026-10-17T12:00:00.000Z');
+    expect(postDate('2w', now)).toBe('2026-10-06T12:00:00.000Z');
+    expect(postDate('5mo', now)).toBe('2026-05-20T12:00:00.000Z');
+    expect(postDate('1yr', now)).toBe('2025-10-20T12:00:00.000Z');
+    expect(postDate('4h', now)).toBe('2026-10-20T08:00:00.000Z');
+    expect(postDate('2026-10-01T10:00:00Z', now)).toBe('2026-10-01T10:00:00.000Z');
+    expect(postDate('yesterday-ish', now)).toBeUndefined();
   });
 
   it('refuses the inbox and search without the account token', async () => {

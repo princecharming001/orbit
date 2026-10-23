@@ -5,13 +5,18 @@ export const TOUCHPOINT_WEIGHTS: Record<TouchpointKind, number> = {
   email_out: 0.6,
   email_in: 0.7,
   email_cc: 0.1,
-  linkedin_in: 0.6,
-  linkedin_out: 0.5,
+  // a LinkedIn direct message is a message like an email (plan 17 B)
+  linkedin_in: 0.7,
+  linkedin_out: 0.6,
   // a day of texting each way: people who text are close, but a day of texts is lighter than an email thread
   text_in: 0.6,
   text_out: 0.45,
   linkedin_connected: 0.2,
   linkedin_engaged: 0.15,
+  // comments and reactions on posts show attention, not a relationship: light, and capped together below
+  linkedin_comment_in: 0.15,
+  linkedin_comment_out: 0.1,
+  linkedin_reaction_in: 0.03,
   note: 0.3,
   manual_log: 1.0,
   intro_observed: 0.8,
@@ -40,8 +45,14 @@ const TWO_WAY: ReadonlySet<TouchpointKind> = new Set([
 /** Messages from them: only an exchange once the student has written too (a cold email or a newsletter is not). */
 const FROM_THEM: ReadonlySet<TouchpointKind> = new Set(['email_in', 'linkedin_in', 'text_in']);
 const FROM_STUDENT: ReadonlySet<TouchpointKind> = new Set(['email_out', 'linkedin_out', 'text_out']);
-/** Sharing a CC line, a mailing list or a LinkedIn connection is not an interaction. */
-const AMBIENT: ReadonlySet<TouchpointKind> = new Set(['email_cc', 'linkedin_connected']);
+/** Comments and reactions on LinkedIn posts: attention, not a conversation. */
+export const ENGAGEMENT: ReadonlySet<TouchpointKind> = new Set([
+  'linkedin_comment_in',
+  'linkedin_comment_out',
+  'linkedin_reaction_in',
+]);
+/** Sharing a CC line, a mailing list or a LinkedIn connection is not an interaction, and neither is a like. */
+const AMBIENT: ReadonlySet<TouchpointKind> = new Set(['email_cc', 'linkedin_connected', ...ENGAGEMENT]);
 
 /** Touches the student would call a conversation: what "the last one was ..." may refer to. */
 const CONVERSATION: ReadonlySet<TouchpointKind> = new Set([
@@ -59,6 +70,8 @@ const CONVERSATION: ReadonlySet<TouchpointKind> = new Set([
 export const ONE_WAY_RAW_CAP = 0.35;
 /** Decayed raw evidence that CC and group-thread touches can ever add. CC can nudge a tie, never create one. */
 export const CC_RAW_CAP = 0.3;
+/** Decayed raw evidence that comments and reactions on LinkedIn posts can ever add: a nudge, never a tie. */
+export const ENGAGEMENT_RAW_CAP = 0.2;
 /** Without a reply, a meeting or a logged conversation a person stays in the weak tier. */
 export const UNRECIPROCATED_CEILING = 0.29;
 
@@ -70,6 +83,7 @@ export function computeStrength(
   let fromThem = 0;
   let oneWay = 0;
   let cc = 0;
+  let engaged = 0;
   let connected = 0;
   let last: number | undefined;
   let lastActive: number | undefined;
@@ -86,6 +100,7 @@ export function computeStrength(
     if (FROM_THEM.has(tp.kind)) fromThem += decayed;
     else if (TWO_WAY.has(tp.kind)) twoWay += decayed;
     else if (tp.kind === 'email_cc') cc += decayed;
+    else if (ENGAGEMENT.has(tp.kind)) engaged += decayed;
     else if (tp.kind === 'linkedin_connected') connected += decayed;
     else oneWay += decayed;
     counts[tp.kind] = (counts[tp.kind] ?? 0) + 1;
@@ -100,7 +115,11 @@ export function computeStrength(
   if (reciprocal) twoWay += fromThem;
   else oneWay += fromThem;
   const raw =
-    twoWay + (reciprocal ? oneWay : Math.min(oneWay, ONE_WAY_RAW_CAP)) + Math.min(cc, CC_RAW_CAP) + connected;
+    twoWay +
+    (reciprocal ? oneWay : Math.min(oneWay, ONE_WAY_RAW_CAP)) +
+    Math.min(cc, CC_RAW_CAP) +
+    Math.min(engaged, ENGAGEMENT_RAW_CAP) +
+    connected;
   // "We talked yesterday" only counts for real touches: a CC yesterday says nothing about the tie.
   const daysSinceLast = (t - (lastActive ?? last)) / DAY;
   const recency = Math.exp((-LN2 * daysSinceLast) / RECENCY_HALF_LIFE_DAYS);
@@ -122,7 +141,7 @@ export function computeStrength(
   };
 }
 
-/** Number of real interactions: CCs, mailing lists and the LinkedIn connection itself do not count. */
+/** Number of real interactions: CCs, mailing lists, the LinkedIn connection itself and likes do not count. */
 export function interactionCount(counts: Partial<Record<TouchpointKind, number>> | undefined): number {
   if (!counts) return 0;
   let n = 0;
@@ -154,4 +173,17 @@ export function strengthTier(strength: number): 'strong' | 'medium' | 'weak' {
   if (strength >= STRONG_TIE) return 'strong';
   if (strength >= MEDIUM_TIE) return 'medium';
   return 'weak';
+}
+
+/**
+ * LinkedIn comments and reactions that go both ways (they engage with the student's posts and the student comments
+ * on theirs), or that sit next to direct messages the other way: the only time post engagement says the student
+ * knows someone. A stranger who reacts to every post is an audience, not a contact.
+ */
+export function engagedBothWays(counts: Partial<Record<TouchpointKind, number>> | undefined): boolean {
+  if (!counts) return false;
+  const has = (k: TouchpointKind) => (counts[k] ?? 0) > 0;
+  const fromThem = has('linkedin_comment_in') || has('linkedin_reaction_in');
+  const fromStudent = has('linkedin_comment_out');
+  return (fromThem && (fromStudent || has('linkedin_out'))) || (fromStudent && has('linkedin_in'));
 }

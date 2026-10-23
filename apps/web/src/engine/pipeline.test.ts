@@ -163,6 +163,62 @@ describe('stage dates come from the evidence (PS-1, PS-16, EG-01)', () => {
     expect((await chatOf(chat.personId)).stageEnteredAt).toBe(after.stageEnteredAt);
   });
 
+  it('their email before the student ever wrote is no reply; their answer after the outreach is (plan 17 B)', async () => {
+    const who = { name: 'Zuri Okoro', email: 'zuri.okoro@plaid.com' };
+    const repliedNotes = async () =>
+      (await db.notifications.where('userId').equals(user.id).toArray()).filter(
+        (n) => n.kind === 'reply_received' && n.title.startsWith('Zuri'),
+      );
+    // she wrote first; the student's outreach went out in the same thread a day later
+    await ingestEmails(
+      user,
+      [
+        mail(
+          who,
+          'in',
+          ago(3 * D),
+          'Hi Alex, are you around for a call about our ambassador program?',
+          'zuri',
+        ),
+        mail(who, 'out', ago(2 * D), OUTREACH('Zuri'), 'zuri'),
+      ],
+      { useLlm: false, now },
+    );
+    const p = await personByEmail(who.email);
+    const waiting = await chatOf(p.id);
+    expect(waiting.stage).toBe('outreach_sent');
+    expect(waiting.lastInboundAt).toBeUndefined();
+    expect(await repliedNotes()).toEqual([]);
+    // her answer to it is the reply
+    await ingestEmails(user, [mail(who, 'in', ago(1 * D), YES('Zuri'), 'zuri')], { useLlm: false, now });
+    expect((await chatOf(p.id)).stage).toBe('replied');
+    expect((await repliedNotes()).map((n) => n.title)).toEqual(['Zuri replied']);
+  });
+
+  it('a move Orbit makes itself never invents a reply or a meeting; the student saying so does (plan 17 B)', async () => {
+    const who = { name: 'Kai Moreno', email: 'kai.moreno@ramp.com' };
+    await ingestEmails(user, [mail(who, 'out', ago(5 * D), OUTREACH('Kai'), 'kai')], { useLlm: false, now });
+    const p = await personByEmail(who.email);
+    const chat = await chatOf(p.id);
+    const invented = async () =>
+      (await db.touchpoints.where('personId').equals(p.id).toArray())
+        .filter((t) => t.refTable === 'stage_evidence')
+        .map((t) => [t.kind, t.summary]);
+    expect(
+      await applyStage(chat, 'replied', 'system', 'inbound_signal:reply_positive', { confidence: 0.9, now }),
+    ).toBe('applied');
+    expect(await applyStage(chat, 'completed', 'system', 'note:ingested', { confidence: 0.9, now })).toBe(
+      'applied',
+    );
+    expect(await invented()).toEqual([]);
+    // the student moves it on by hand: they say there was a reply and a meeting
+    expect(await applyStage(chat, 'nurturing', 'user', 'user:drag', { now })).toBe('applied');
+    expect((await invented()).sort()).toEqual([
+      ['email_in', 'They replied'],
+      ['meeting', 'Coffee chat'],
+    ]);
+  });
+
   it('a note about a chat three weeks ago completes it then, with no thank-you card', async () => {
     const who = { name: 'Priya Natarajan', email: 'priya.natarajan@stripe.com' };
     await ingestEmails(

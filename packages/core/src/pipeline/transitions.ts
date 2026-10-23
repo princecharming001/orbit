@@ -200,6 +200,62 @@ export function decideTransition(from: ChatStage, trig: StageTrigger): StageDeci
   }
 }
 
+/** Stages in which the student's ask has not been answered yet: a message from them here may be the first reply. */
+export const AWAITING_FIRST_REPLY: ReadonlySet<ChatStage> = new Set([
+  'identified',
+  'warming',
+  'outreach_sent',
+  'no_response',
+]);
+
+/**
+ * When the student's ask for this chat went out: the first outreach, or the introduction that opened the chat (an
+ * introducer's email is the ask), else the last message the student sent; a chat the student marked as sent without
+ * a date counts from that move. Undefined when nothing has gone out yet (a chat still "To contact").
+ */
+export function outreachStartedAt(
+  chat: Pick<CoffeeChat, 'stage' | 'stageEnteredAt' | 'firstOutreachAt' | 'lastOutboundAt' | 'introducedAt'>,
+): string | undefined {
+  const times = [chat.firstOutreachAt, chat.introducedAt]
+    .filter((t): t is string => !!t && !Number.isNaN(Date.parse(t)))
+    .sort();
+  if (times[0]) return times[0];
+  if (chat.lastOutboundAt && !Number.isNaN(Date.parse(chat.lastOutboundAt))) return chat.lastOutboundAt;
+  if (chat.stage === 'outreach_sent' || chat.stage === 'no_response') return chat.stageEnteredAt;
+  return undefined;
+}
+
+/**
+ * A message from them answers the student's ask only when it came after the ask went out: someone who wrote first
+ * (a recruiter's InMail, an email before the student ever wrote, an old conversation) has not replied to anything.
+ * Chats past the first reply are a conversation already, so any message there is part of it.
+ */
+export function answersOutreach(
+  chat: Pick<CoffeeChat, 'stage' | 'stageEnteredAt' | 'firstOutreachAt' | 'lastOutboundAt' | 'introducedAt'>,
+  at: string | undefined,
+): boolean {
+  if (!AWAITING_FIRST_REPLY.has(chat.stage)) return true;
+  const sent = outreachStartedAt(chat);
+  const t = at ? Date.parse(at) : Number.NaN;
+  // (at the same moment: the message that told Orbit about an introduction it did not see, "thanks for the intro")
+  return !!sent && Number.isFinite(t) && t >= Date.parse(sent);
+}
+
+/** The student's message counts as a chat's outreach up to this long before the chat was opened. */
+export const OUTREACH_GRACE_DAYS = 14;
+
+/**
+ * Whether a message the student sent at `at` can be this chat's outreach: sent after the chat was opened, or in the
+ * two weeks before (they wrote, then added the person to Orbit). An older message is history with the person, not
+ * the ask this chat tracks, and must not start it (or make a later answer to it look like a reply).
+ */
+export function sentForChat(chat: Pick<CoffeeChat, 'createdAt'>, at: string | undefined): boolean {
+  const opened = Date.parse(chat.createdAt);
+  const t = at ? Date.parse(at) : Number.NaN;
+  if (!Number.isFinite(t)) return false;
+  return !Number.isFinite(opened) || t >= opened - OUTREACH_GRACE_DAYS * 86_400_000;
+}
+
 export const PROPOSE_THRESHOLD = 0.8;
 /** outreach_sent -> no_response: this many days of silence after the last allowed bump ... */
 export const NO_RESPONSE_AFTER_BUMPS_DAYS = 14;

@@ -19,8 +19,18 @@ export interface TextConversation {
   outCount: number;
   firstAt: string;
   lastAt: string;
-  /** each day with messages, and how many each way (yyyy-mm-dd) */
-  days: { day: string; inCount: number; outCount: number; firstAt: string }[];
+  /**
+   * each day with messages (yyyy-mm-dd), how many each way, the day's first message, and the first message each way
+   * (so a text back at 3pm to one sent at 9am is a six-hour reply, not an instant one)
+   */
+  days: {
+    day: string;
+    inCount: number;
+    outCount: number;
+    firstAt: string;
+    firstInAt?: string;
+    firstOutAt?: string;
+  }[];
   recent: { at: string; fromMe: boolean; text: string }[];
 }
 
@@ -149,8 +159,14 @@ export async function readMessagesDb(
         if (!conv.lastAt || iso > conv.lastAt) conv.lastAt = iso;
         const day = dayOf(at);
         const d = days.get(day) ?? { day, inCount: 0, outCount: 0, firstAt: iso };
-        if (mine) d.outCount++;
-        else d.inCount++;
+        if (iso < d.firstAt) d.firstAt = iso;
+        if (mine) {
+          d.outCount++;
+          if (!d.firstOutAt || iso < d.firstOutAt) d.firstOutAt = iso;
+        } else {
+          d.inCount++;
+          if (!d.firstInAt || iso < d.firstInAt) d.firstInAt = iso;
+        }
         days.set(day, d);
         const words = (text ?? textFromAttributedBody(body))?.replace(/￼/g, '').trim();
         if (words) {
