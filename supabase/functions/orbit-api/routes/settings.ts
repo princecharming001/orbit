@@ -2,9 +2,11 @@
  * Agent settings (§8.4, §9.3, §14.3):
  *   POST /settings/autonomy {level, goalId?}  → the user's autonomy level, or one goal's override
  *   POST /settings/pause {until}              → users.settings.quiet_until (null resumes)
- *   POST /settings/profile {postalAddress?, schedulingLink?, timezone?, onboardingCompletedAt?}
- *        → users.settings.postal_address / scheduling_link (null or '' removes), users.timezone, and
- *          users.onboarding.completed_at (set once setup is finished; never cleared)
+ *   POST /settings/profile {postalAddress?, schedulingLink?, timezone?, onboardingCompletedAt?, school?, degree?,
+ *                          majors?, graduationYear?, currentCity?}
+ *        → users.settings.postal_address / scheduling_link (null or '' removes), users.timezone,
+ *          users.onboarding.completed_at (set once setup is finished; never cleared), and the student's profile:
+ *          users.school, degree, majors, grad_year, current_city (null or '' clears)
  */
 import type { ProfileSettingsResponse } from '@orbit/core/server/api';
 import { badRequest, HttpError, json } from '../../_shared/http.ts';
@@ -55,6 +57,7 @@ async function pause(ctx: Ctx): Promise<Response> {
 
 export const POSTAL_ADDRESS_MAX = 500;
 export const SCHEDULING_LINK_MAX = 500;
+export const PROFILE_TEXT_MAX = 200;
 
 /** A setting to keep, to remove (null), or to leave alone (undefined). */
 function optText(b: Record<string, unknown>, key: string): string | null | undefined {
@@ -95,6 +98,36 @@ async function profile(ctx: Ctx): Promise<Response> {
       throw badRequest('timezone must be an IANA time zone, like America/New_York');
     tz = b.timezone.trim();
   }
+  // the student's own profile: what the drafts and research say about who they are
+  const profileText = (key: string, max: number): string | null | undefined => {
+    const v = optText(b, key);
+    if (v && v.length > max) throw badRequest(`${key} is at most ${max} characters`);
+    return v;
+  };
+  const school = profileText('school', PROFILE_TEXT_MAX);
+  const degree = profileText('degree', 100);
+  const city = profileText('currentCity', 200);
+  let majors: string[] | undefined;
+  if (b.majors !== undefined) {
+    if (
+      !Array.isArray(b.majors) ||
+      b.majors.length > 6 ||
+      !b.majors.every((m) => typeof m === 'string' && m.trim().length <= 100)
+    )
+      throw badRequest('majors must be a list of at most 6 names');
+    majors = (b.majors as string[]).map((m) => m.trim()).filter(Boolean);
+  }
+  let gradYear: number | null | undefined;
+  if (b.graduationYear !== undefined) {
+    if (
+      b.graduationYear !== null &&
+      (!Number.isInteger(b.graduationYear) ||
+        Number(b.graduationYear) < 1950 ||
+        Number(b.graduationYear) > 2100)
+    )
+      throw badRequest('graduationYear must be a year or null');
+    gradYear = b.graduationYear as number | null;
+  }
   let done: string | undefined;
   if (b.onboardingCompletedAt !== undefined) {
     const t = new Date(String(b.onboardingCompletedAt));
@@ -108,16 +141,45 @@ async function profile(ctx: Ctx): Promise<Response> {
   if (postal !== undefined) given.postal_address = postal;
   if (link !== undefined) given.scheduling_link = link;
   const keep = Object.fromEntries(Object.entries(given).filter(([, v]) => v !== null));
-  const [after] = await ctx.db.sql<{ settings: Record<string, unknown>; timezone: string }>`
+  const [after] = await ctx.db.sql<{
+    settings: Record<string, unknown>;
+    timezone: string;
+    school: string | null;
+    degree: string | null;
+    majors: string[];
+    grad_year: number | null;
+    current_city: string | null;
+  }>`
     update orbit.users
        set settings = (settings - ${Object.keys(given)}::text[]) || ${keep}::jsonb,
            timezone = coalesce(${tz ?? null}::text, timezone),
            onboarding = case when ${done ?? null}::text is null then onboarding
-                             else coalesce(onboarding, '{}'::jsonb) || jsonb_build_object('completed_at', ${done ?? null}::text) end
+                             else coalesce(onboarding, '{}'::jsonb) || jsonb_build_object('completed_at', ${done ?? null}::text) end,
+           school = case when ${school !== undefined} then ${school ?? null}::text else school end,
+           degree = case when ${degree !== undefined} then ${degree ?? null}::text else degree end,
+           majors = case when ${majors !== undefined} then ${majors ?? []}::text[] else majors end,
+           grad_year = case when ${gradYear !== undefined} then ${gradYear ?? null}::int else grad_year end,
+           current_city = case when ${city !== undefined} then ${city ?? null}::text else current_city end
      where id = ${userId}::uuid
-    returning settings, timezone`;
+    returning settings, timezone, school, degree, majors, grad_year, current_city`;
   if (!after) throw new HttpError(404, 'not_found', 'no such user');
-  const changed = [...Object.keys(given), ...(tz ? ['timezone'] : []), ...(done ? ['onboarding'] : [])];
+  const profileFields = (
+    [
+      ['school', school],
+      ['degree', degree],
+      ['majors', majors],
+      ['graduationYear', gradYear],
+      ['currentCity', city],
+    ] as const
+  )
+    .filter(([, v]) => v !== undefined)
+    .map(([k]) => k);
+  const changed = [
+    ...Object.keys(given),
+    ...(tz ? ['timezone'] : []),
+    ...(done ? ['onboarding'] : []),
+    ...profileFields,
+  ];
   if (changed.length)
     await ctx.db.sql`
       insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
@@ -127,6 +189,11 @@ async function profile(ctx: Ctx): Promise<Response> {
     postalAddress: str(after.settings?.postal_address),
     schedulingLink: str(after.settings?.scheduling_link),
     timezone: after.timezone,
+    school: after.school,
+    degree: after.degree,
+    majors: after.majors ?? [],
+    graduationYear: after.grad_year,
+    currentCity: after.current_city,
   };
   return json(200, out);
 }

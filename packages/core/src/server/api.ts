@@ -374,11 +374,23 @@ export interface ProfileSettingsRequest {
   timezone?: string;
   /** setup was finished then (users.onboarding.completed_at), so signing in on another device skips it */
   onboardingCompletedAt?: string;
+  /** who the student is, for the server's drafts and research (users.school, degree, majors, grad_year,
+   * current_city); null or empty clears */
+  school?: string | null;
+  degree?: string | null;
+  majors?: string[];
+  graduationYear?: number | null;
+  currentCity?: string | null;
 }
 export interface ProfileSettingsResponse {
   postalAddress: string | null;
   schedulingLink: string | null;
   timezone: string;
+  school?: string | null;
+  degree?: string | null;
+  majors?: string[];
+  graduationYear?: number | null;
+  currentCity?: string | null;
 }
 
 export interface DueItem {

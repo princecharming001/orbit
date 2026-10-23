@@ -1,6 +1,12 @@
 /**
- * What the chat learns after a turn, in account mode (plan 16 §10.6, §1.6). Both passes run on the server once the
- * reply is done, and never hold up or fail the chat: they are not awaited, and any failure is dropped.
+ * What the chat learns after a turn (plan 16 §10.6, §1.6; plan 17 §G). Every pass runs once the reply is done and
+ * never holds up or fails the chat: none is awaited by the turn, and any failure is dropped.
+ *
+ * In this browser (no Orbit account): engine/memoryLearn.ts reads the student's last message (Claude when it is
+ * reachable, Orbit's own rules otherwise), keeps what they said about themselves in local memory, adds recruiting
+ * targets they stated to their goals, and says so in one short line under the reply.
+ *
+ * In account mode, on the server:
  *
  * - Memory: a turn whose message is at least 20 characters sends the last two student turns and the replies after
  *   them to /memory/extract, which keeps what is worth remembering (Settings, Memory lists it).
@@ -15,6 +21,7 @@ import type { ChatTurn, ProposedGoal, User } from '@orbit/core';
 import { newId } from '@orbit/core';
 import { activeGoals, GOAL_KIND_LABELS, inferGoalsFromChat } from '../../engine/goals';
 import { extractFromChat } from '../../engine/memory';
+import { learnedNote, learnFromTurn } from '../../engine/memoryLearn';
 import { isServerUser } from '../../integrations/orbitApi';
 import type { ChatMessage, TurnEvent } from '../types';
 import { kindFrom } from './routerNetwork';
@@ -145,7 +152,8 @@ const lastSeq = (messages: ChatMessage[]) => messages.reduce((n, m) => Math.max(
 /** Run the memory and goal passes for the turn that just finished. Resolves when both are done; never rejects. */
 export async function learnAfterTurn(o: AfterTurn): Promise<void> {
   try {
-    if (!isServerUser(o.user.id) || o.store.isTemporary(o.conversationId)) return;
+    if (o.store.isTemporary(o.conversationId)) return;
+    if (!isServerUser(o.user.id)) return await learnHere(o);
     const messages = await o.store.messages(o.conversationId);
     const seq = lastSeq(messages);
     // an offer from an earlier turn of this chat has had its answer
@@ -165,6 +173,29 @@ export async function learnAfterTurn(o: AfterTurn): Promise<void> {
   } catch {
     // learning is a bonus: the chat goes on without it
   }
+}
+
+/** A message shorter than this holds no statement Orbit's rules read ("ok", "thanks"). */
+export const LOCAL_MIN_CHARS = 8;
+
+/** This browser: learn from the student's last message and say in one line what was kept. */
+async function learnHere(o: AfterTurn): Promise<void> {
+  const messages = await o.store.messages(o.conversationId);
+  const seq = lastSeq(messages);
+  const turns = textTurns(messages);
+  const last = [...turns].reverse().find((t) => t.role === 'user');
+  if (!last || last.text.trim().length < LOCAL_MIN_CHARS) return;
+  // the student's own message, not a tool result or a decision note
+  const userSeq = [...messages]
+    .sort((a, b) => b.seq - a.seq)
+    .find((m) => m.role === 'user' && !m.meta && textOf(m.content).trim())?.seq;
+  const learned = await learnFromTurn(o.user, lastTurns(turns, 2), {
+    sourceTurn: userSeq !== undefined ? { conversationId: o.conversationId, seq: userSeq } : undefined,
+  });
+  const note = learnedNote(learned);
+  // the student has already said something else: the line belongs to a reply they have moved past
+  if (!note || lastSeq(await o.store.messages(o.conversationId)) !== seq) return;
+  o.onEvent({ type: 'text', delta: `\n\n${note}` });
 }
 
 async function offerGoal(o: AfterTurn, turns: ChatTurn[], seq: number): Promise<void> {

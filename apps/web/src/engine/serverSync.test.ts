@@ -322,7 +322,8 @@ describe('push', () => {
           parsed: {
             parseSource: 'heuristic',
             parsedAt: at,
-            facets: [expect.objectContaining({ kind: 'education', organizationName: 'Cornell University' })],
+            // the server's drafting reads `org`
+            facets: [expect.objectContaining({ kind: 'education', org: 'Cornell University' })],
           },
           isCurrent: true,
         },
@@ -331,6 +332,24 @@ describe('push', () => {
     expect(
       (api.state.pushed[0]!.row!.parsed as { facets: Record<string, unknown>[] }).facets[0],
     ).not.toHaveProperty('resumeId');
+    // a line the student fixes goes up with the upload; a line they untick is left out
+    const facetId = (await db.resumeFacets.where('resumeId').equals(resumeId).first())!.id;
+    await db.resumeFacets.add({
+      id: newId('f'),
+      resumeId,
+      kind: 'experience',
+      title: 'Intern',
+      organizationName: 'Amma Health Inc.',
+      text: 'Built a pipeline',
+      keywords: [],
+      confirmed: false,
+    } satisfies ResumeFacet);
+    await db.resumeFacets.update(facetId, { excluded: true });
+    await pushOutbox();
+    const facets = (api.state.pushed.at(-1)!.row!.parsed as { facets: Record<string, unknown>[] }).facets;
+    expect(facets.map((f) => f.org)).toEqual(['Amma Health Inc.']);
+    expect(facets[0]).not.toHaveProperty('organizationName');
+    expect(facets[0]).not.toHaveProperty('excluded');
     // a newer resume makes this one no longer current; a delete goes up as a delete
     await db.resumes.update(resumeId, { isCurrent: false });
     await db.resumes.delete(resumeId);

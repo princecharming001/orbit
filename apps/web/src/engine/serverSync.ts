@@ -290,8 +290,13 @@ export async function resetSyncState(): Promise<void> {
 
 // ---- push ---------------------------------------------------------------------------------------------------------
 
-/** Which Dexie tables feed the outbox, and the orbit table each goes to. */
-const OUTBOX_SOURCES: { dexie: string; table: string; key?: 'personId' }[] = [
+/**
+ * Which Dexie tables feed the outbox, and the orbit table each goes to. `key` names the field that holds the id the
+ * change goes up under: a closeness rating goes up as its person, a resume line as its resume (the whole upload is
+ * sent again with the line as edited; `owned: false` because a line carries no user id, so the upload's own row is
+ * checked when it is built).
+ */
+const OUTBOX_SOURCES: { dexie: string; table: string; key?: 'personId' | 'resumeId'; owned?: false }[] = [
   { dexie: 'chats', table: 'chats' },
   { dexie: 'stageEvents', table: 'stage_events' },
   { dexie: 'notes', table: 'notes' },
@@ -299,13 +304,15 @@ const OUTBOX_SOURCES: { dexie: string; table: string; key?: 'personId' }[] = [
   { dexie: 'outbound', table: 'drafts' },
   { dexie: 'tieLabels', table: 'tie_labels', key: 'personId' },
   { dexie: 'resumes', table: 'uploads' },
+  { dexie: 'resumeFacets', table: 'uploads', key: 'resumeId', owned: false },
 ];
 
 /** Whether a write to this row should go to the server: account mode, signed in, and the student's own row. */
-function outboxWanted(row: { userId?: unknown } | undefined): boolean {
+function outboxWanted(row: { userId?: unknown } | undefined, owned = true): boolean {
   if (!isAccountMode() || !isSignedIn()) return false;
   const me = accountUser()?.id;
-  return !!me && !!row && row.userId === me;
+  if (!me || !row) return false;
+  return !owned || row.userId === me;
 }
 
 let queued = new Map<string, Pick<OutboxRow, 'table' | 'id' | 'op'>>();
@@ -365,17 +372,19 @@ export function installOutboxHooks(): void {
     const t = dexieTable(src.dexie);
     const idOf = (obj: Record<string, unknown>, key: unknown) =>
       String(src.key ? (obj[src.key] ?? key) : (obj.id ?? key));
+    // a resume line changed or removed: its upload goes up again, never deleted for one line
+    const delOp: OutboxRow['op'] = src.dexie === 'resumeFacets' ? 'upsert' : 'delete';
     t.hook('creating', function (key, obj, trans) {
-      if (fromServer(trans) || !outboxWanted(obj)) return;
+      if (fromServer(trans) || !outboxWanted(obj, src.owned ?? true)) return;
       this.onsuccess = () => queueChange(src.table, idOf(obj, key));
     });
     t.hook('updating', function (_mods, key, obj, trans) {
-      if (fromServer(trans) || !outboxWanted(obj)) return;
+      if (fromServer(trans) || !outboxWanted(obj, src.owned ?? true)) return;
       this.onsuccess = () => queueChange(src.table, idOf(obj, key));
     });
     t.hook('deleting', function (key, obj, trans) {
-      if (fromServer(trans) || !outboxWanted(obj)) return;
-      this.onsuccess = () => queueChange(src.table, idOf(obj, key), 'delete');
+      if (fromServer(trans) || !outboxWanted(obj, src.owned ?? true)) return;
+      this.onsuccess = () => queueChange(src.table, idOf(obj, key), delOp);
     });
   }
 }
@@ -415,9 +424,18 @@ function typedPersonFields(p: Person): Record<string, string> {
 export const UPLOAD_TEXT_MAX = 500_000;
 export const UPLOAD_PARSED_MAX = 200_000;
 
-/** The facets read from a resume, as the upload's `parsed`; the longest lists are cut to stay under the limit. */
-function parsedResume(r: Resume, facets: ResumeFacet[]): Record<string, unknown> | null {
-  let kept = facets.map(({ resumeId: _r, ...f }) => f);
+/**
+ * The facets read from a resume, as the upload's `parsed`, in the server's field names (`org`, which its drafting
+ * reads); lines the student unticked are left out, since they must never describe the student. The longest lists are
+ * cut to stay under the limit.
+ */
+export function parsedResume(r: Resume, facets: ResumeFacet[]): Record<string, unknown> | null {
+  let kept = facets
+    .filter((f) => !f.excluded)
+    .map(({ resumeId: _r, organizationName, excluded: _e, ...f }) => ({
+      ...f,
+      ...(organizationName ? { org: organizationName } : {}),
+    }));
   for (;;) {
     const parsed = { parseSource: r.parseSource ?? null, parsedAt: r.parsedAt ?? null, facets: kept };
     if (JSON.stringify(parsed).length <= UPLOAD_PARSED_MAX) return parsed;
@@ -524,7 +542,8 @@ async function buildChange(entry: OutboxRow, pairs: [string, string][]): Promise
     }
     case 'uploads': {
       const r = (await db.resumes.get(entry.id)) as Resume | undefined;
-      if (!r) return undefined;
+      // a resume line's change names its upload: only the student's own goes up
+      if (!r || r.userId !== accountUser()?.id) return undefined;
       const facets = await db.resumeFacets.where('resumeId').equals(entry.id).toArray();
       return {
         table: 'uploads',

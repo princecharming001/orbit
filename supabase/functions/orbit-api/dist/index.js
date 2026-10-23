@@ -4789,7 +4789,10 @@ function facetLines(parsed) {
   const list5 = (v) => Array.isArray(v) ? v : [];
   for (const f2 of list5(parsed.facets)) {
     const o = f2;
-    const t = [o.title ?? o.role, o.org ?? o.organization, o.text].filter((x) => typeof x === "string");
+    if (o.excluded === true) continue;
+    const t = [o.title ?? o.role, o.org ?? o.organization ?? o.organizationName, o.text].filter(
+      (x) => typeof x === "string"
+    );
     if (t.length) out.push(t.join(", "));
   }
   for (const e of list5(parsed.experiences ?? parsed.experience)) {
@@ -8865,6 +8868,7 @@ async function pause(ctx) {
 }
 var POSTAL_ADDRESS_MAX = 500;
 var SCHEDULING_LINK_MAX = 500;
+var PROFILE_TEXT_MAX = 200;
 function optText(b, key) {
   const v = b[key];
   if (v === void 0) return void 0;
@@ -8897,6 +8901,26 @@ async function profile(ctx) {
       throw badRequest("timezone must be an IANA time zone, like America/New_York");
     tz = b.timezone.trim();
   }
+  const profileText = (key, max) => {
+    const v = optText(b, key);
+    if (v && v.length > max) throw badRequest(`${key} is at most ${max} characters`);
+    return v;
+  };
+  const school = profileText("school", PROFILE_TEXT_MAX);
+  const degree = profileText("degree", 100);
+  const city = profileText("currentCity", 200);
+  let majors;
+  if (b.majors !== void 0) {
+    if (!Array.isArray(b.majors) || b.majors.length > 6 || !b.majors.every((m) => typeof m === "string" && m.trim().length <= 100))
+      throw badRequest("majors must be a list of at most 6 names");
+    majors = b.majors.map((m) => m.trim()).filter(Boolean);
+  }
+  let gradYear;
+  if (b.graduationYear !== void 0) {
+    if (b.graduationYear !== null && (!Number.isInteger(b.graduationYear) || Number(b.graduationYear) < 1950 || Number(b.graduationYear) > 2100))
+      throw badRequest("graduationYear must be a year or null");
+    gradYear = b.graduationYear;
+  }
   let done2;
   if (b.onboardingCompletedAt !== void 0) {
     const t = new Date(String(b.onboardingCompletedAt));
@@ -8914,11 +8938,28 @@ async function profile(ctx) {
        set settings = (settings - ${Object.keys(given)}::text[]) || ${keep}::jsonb,
            timezone = coalesce(${tz ?? null}::text, timezone),
            onboarding = case when ${done2 ?? null}::text is null then onboarding
-                             else coalesce(onboarding, '{}'::jsonb) || jsonb_build_object('completed_at', ${done2 ?? null}::text) end
+                             else coalesce(onboarding, '{}'::jsonb) || jsonb_build_object('completed_at', ${done2 ?? null}::text) end,
+           school = case when ${school !== void 0} then ${school ?? null}::text else school end,
+           degree = case when ${degree !== void 0} then ${degree ?? null}::text else degree end,
+           majors = case when ${majors !== void 0} then ${majors ?? []}::text[] else majors end,
+           grad_year = case when ${gradYear !== void 0} then ${gradYear ?? null}::int else grad_year end,
+           current_city = case when ${city !== void 0} then ${city ?? null}::text else current_city end
      where id = ${userId}::uuid
-    returning settings, timezone`;
+    returning settings, timezone, school, degree, majors, grad_year, current_city`;
   if (!after) throw new HttpError(404, "not_found", "no such user");
-  const changed = [...Object.keys(given), ...tz ? ["timezone"] : [], ...done2 ? ["onboarding"] : []];
+  const profileFields = [
+    ["school", school],
+    ["degree", degree],
+    ["majors", majors],
+    ["graduationYear", gradYear],
+    ["currentCity", city]
+  ].filter(([, v]) => v !== void 0).map(([k]) => k);
+  const changed = [
+    ...Object.keys(given),
+    ...tz ? ["timezone"] : [],
+    ...done2 ? ["onboarding"] : [],
+    ...profileFields
+  ];
   if (changed.length)
     await ctx.db.sql`
       insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
@@ -8927,7 +8968,12 @@ async function profile(ctx) {
   const out = {
     postalAddress: str2(after.settings?.postal_address),
     schedulingLink: str2(after.settings?.scheduling_link),
-    timezone: after.timezone
+    timezone: after.timezone,
+    school: after.school,
+    degree: after.degree,
+    majors: after.majors ?? [],
+    graduationYear: after.grad_year,
+    currentCity: after.current_city
   };
   return json(200, out);
 }

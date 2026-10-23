@@ -12,6 +12,7 @@ import type {
   FeedbackEvent,
   Goal,
   MeetingNote,
+  MemoryKind,
   MergeSuggestion,
   Notification,
   Organization,
@@ -154,6 +155,33 @@ export interface TextThread {
   importedAt: string;
 }
 
+/**
+ * Something the student told Orbit that it keeps for later chats, in this browser (local mode; account mode keeps
+ * memories on the server). The same shape as the server's memories: what to remember in the third person, the
+ * student's own words it came from, a kind, an importance and the chat turn it came from. Forgetting one blanks its
+ * words and marks it deleted.
+ */
+export interface LocalMemory {
+  id: string;
+  userId: string;
+  kind: MemoryKind;
+  /** at most 200 characters, in the third person ("Prefers morning calls") */
+  text: string;
+  /** the student's own words it came from */
+  quote?: string;
+  /** the person it is about */
+  personId?: string;
+  /** 0..1 */
+  importance: number;
+  /** 'remember': the student asked; 'chat': read from a chat turn by Claude; 'rules': read by Orbit's own rules */
+  source: 'remember' | 'chat' | 'rules';
+  /** the conversation and message it came from */
+  sourceTurn?: { conversationId: string; seq: number };
+  createdAt: string;
+  lastSeenAt: string;
+  deletedAt?: string;
+}
+
 export class OrbitDB extends Dexie {
   users!: EntityTable<User, 'id'>;
   settings!: EntityTable<UserSettings, 'userId'>;
@@ -196,6 +224,7 @@ export class OrbitDB extends Dexie {
   introRequests!: EntityTable<IntroRequestRow, 'id'>;
   outbox!: EntityTable<OutboxRow, 'key'>;
   textThreads!: EntityTable<TextThread, 'id'>;
+  memories!: EntityTable<LocalMemory, 'id'>;
 
   constructor(name = 'orbit') {
     super(name);
@@ -257,6 +286,11 @@ export class OrbitDB extends Dexie {
       people:
         'id, userId, nameNormalized, primaryEmail, linkedinSlug, currentOrganizationId, strength, lastInteractionAt, *emails, *phones',
       textThreads: 'id, userId, personId',
+    });
+    // plan 17 §G: what the student told the chat, kept in this browser in local mode (account mode keeps it on the
+    // server)
+    this.version(5).stores({
+      memories: 'id, userId, personId, kind',
     });
   }
 }

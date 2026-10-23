@@ -154,7 +154,11 @@ function facetLines(parsed: Record<string, unknown> | null): string[] {
   const list = (v: unknown) => (Array.isArray(v) ? v : []);
   for (const f of list(parsed.facets)) {
     const o = f as Record<string, unknown>;
-    const t = [o.title ?? o.role, o.org ?? o.organization, o.text].filter((x) => typeof x === 'string');
+    // a line the student unticked is never used to describe them; older browsers sent organizationName
+    if (o.excluded === true) continue;
+    const t = [o.title ?? o.role, o.org ?? o.organization ?? o.organizationName, o.text].filter(
+      (x) => typeof x === 'string',
+    );
     if (t.length) out.push(t.join(', '));
   }
   for (const e of list(parsed.experiences ?? parsed.experience)) {

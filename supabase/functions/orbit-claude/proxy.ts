@@ -12,6 +12,12 @@
  *   The user is the signed-in account when the browser sends a valid Orbit session (`x-orbit-session`), else the
  *   browser's own id (`x-orbit-client`), else the hashed IP.
  *
+ * - a call type in `x-orbit-call`: the chat (no header, or `chat`) as above; `memory` (reading what the student said
+ *   after a chat turn) and `resume` (reading their resume) are structured-output calls with one message, no tools, no
+ *   thinking, a small max_tokens and body, counted in the same minute, day and global counters as the chat and in a
+ *   daily counter of their own (resumes 5 a day, memory reads 200, until raised); over that one the proxy answers 429
+ *   `x-orbit-limit: call`, which leaves the chat alone
+ *
  * Responses, including the SSE stream, pass through unchanged. Kept free of Deno APIs so it runs under Node tests.
  */
 
@@ -32,12 +38,29 @@ export const ALLOWED_BETAS = new Set([
 export const MAX_TOKENS = 16_000;
 export const MAX_BODY_BYTES = 1_500_000;
 
+/** The kinds of call the proxy forwards: the chat, and two small structured reads. */
+export type CallType = 'chat' | 'memory' | 'resume';
+export const CALL_TYPES: readonly CallType[] = ['chat', 'memory', 'resume'];
+/** Per call type: the largest max_tokens and request body allowed (the chat keeps MAX_TOKENS and MAX_BODY_BYTES). */
+export const CALL_LIMITS: Record<Exclude<CallType, 'chat'>, { maxTokens: number; maxBytes: number }> = {
+  memory: { maxTokens: 1024, maxBytes: 60_000 },
+  resume: { maxTokens: 8192, maxBytes: 200_000 },
+};
+
 export interface Limits {
   perMinute: number;
   perDay: number;
   globalPerDay: number;
+  /** each visitor's daily count for one kind of call, on top of perDay */
+  perDayCall?: Partial<Record<Exclude<CallType, 'chat'>, number>>;
 }
-export const DEFAULT_LIMITS: Limits = { perMinute: 30, perDay: 250, globalPerDay: 3000 };
+export const DEFAULT_CALL_PER_DAY: Record<Exclude<CallType, 'chat'>, number> = { memory: 200, resume: 5 };
+export const DEFAULT_LIMITS: Limits = {
+  perMinute: 30,
+  perDay: 250,
+  globalPerDay: 3000,
+  perDayCall: DEFAULT_CALL_PER_DAY,
+};
 /** Dollars one user may spend on Orbit's key, until it is raised. */
 export const DEFAULT_CAP_USD = 20;
 
@@ -131,6 +154,28 @@ export function rejectBody(body: unknown): string | undefined {
   return undefined;
 }
 
+/** The call type a request names, or undefined for one the proxy does not know. */
+export function callOf(req: Request): CallType | undefined {
+  const raw = req.headers.get('x-orbit-call')?.trim().toLowerCase();
+  if (!raw) return 'chat';
+  return (CALL_TYPES as readonly string[]).includes(raw) ? (raw as CallType) : undefined;
+}
+
+/** Why a memory or resume read may not be forwarded (on top of rejectBody), or undefined when it may. */
+export function rejectCall(call: CallType, body: unknown, bytes: number): string | undefined {
+  if (call === 'chat') return undefined;
+  const limit = CALL_LIMITS[call];
+  const b = body as Record<string, unknown>;
+  if (bytes > limit.maxBytes) return `A ${call} request is at most ${limit.maxBytes} bytes.`;
+  if (typeof b.max_tokens !== 'number' || b.max_tokens > limit.maxTokens)
+    return `max_tokens for a ${call} request is at most ${limit.maxTokens}.`;
+  if (b.tools !== undefined || b.tool_choice !== undefined) return `A ${call} request takes no tools.`;
+  const thinking = b.thinking as { type?: unknown } | undefined;
+  if (thinking !== undefined && thinking?.type !== 'disabled') return `A ${call} request takes no thinking.`;
+  if (!Array.isArray(b.messages) || b.messages.length !== 1) return `A ${call} request is one message.`;
+  return undefined;
+}
+
 export function filterBetas(header: string | null): string | undefined {
   if (!header) return undefined;
   const kept = header
@@ -145,7 +190,7 @@ async function sha256(text: string): Promise<string> {
   return Array.from(new Uint8Array(buf), (x) => x.toString(16).padStart(2, '0')).join('');
 }
 
-export function buckets(visitor: string, now: Date, limits: Limits): Bucket[] {
+export function buckets(visitor: string, now: Date, limits: Limits, call: CallType = 'chat'): Bucket[] {
   const iso = now.toISOString();
   const day = iso.slice(0, 10);
   const minute = iso.slice(0, 16);
@@ -153,11 +198,18 @@ export function buckets(visitor: string, now: Date, limits: Limits): Bucket[] {
   endOfDay.setUTCDate(endOfDay.getUTCDate() + 1);
   const endOfMinute = new Date(`${minute}:00Z`);
   endOfMinute.setUTCMinutes(endOfMinute.getUTCMinutes() + 1);
-  return [
+  const out: Bucket[] = [
     { key: `orbit:min:${minute}:${visitor}`, limit: limits.perMinute, expires: endOfMinute.toISOString() },
     { key: `orbit:day:${day}:${visitor}`, limit: limits.perDay, expires: endOfDay.toISOString() },
     { key: `orbit:global:${day}`, limit: limits.globalPerDay, expires: endOfDay.toISOString() },
   ];
+  if (call !== 'chat')
+    out.push({
+      key: `orbit:${call}:${day}:${visitor}`,
+      limit: limits.perDayCall?.[call] ?? DEFAULT_CALL_PER_DAY[call],
+      expires: endOfDay.toISOString(),
+    });
+  return out;
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -371,13 +423,15 @@ export function makeHandler(deps: ProxyDeps): (req: Request) => Promise<Response
     } catch {
       return apiError(400, 'invalid_request_error', 'The request body is not valid JSON.', h);
     }
-    const why = rejectBody(body);
+    const call = callOf(req);
+    if (!call) return apiError(400, 'invalid_request_error', 'That call type is not available here.', h);
+    const why = rejectBody(body) ?? rejectCall(call, body, raw.length);
     if (why) return apiError(400, 'invalid_request_error', why, h);
 
     const visitor = (await sha256(`${deps.salt ?? 'orbit'}:${clientIp(req)}`)).slice(0, 32);
     let verdict: { allowed: boolean; over?: string };
     try {
-      verdict = await deps.take(buckets(visitor, now(), limits));
+      verdict = await deps.take(buckets(visitor, now(), limits, call));
     } catch {
       return apiError(503, 'api_error', 'Orbit’s shared Claude access is unavailable right now.', h);
     }
@@ -386,11 +440,15 @@ export function makeHandler(deps: ProxyDeps): (req: Request) => Promise<Response
         ? 'minute'
         : verdict.over?.includes(':global:')
           ? 'global'
-          : 'day';
+          : /^orbit:(?:memory|resume):/.test(verdict.over ?? '')
+            ? 'call'
+            : 'day';
       const message =
         kind === 'minute'
           ? 'Too many requests in the last minute on Orbit’s shared Claude access. Try again shortly.'
-          : 'Orbit’s shared Claude access has reached today’s limit.';
+          : kind === 'call'
+            ? `Orbit’s shared Claude has done enough ${call} reads for today.`
+            : 'Orbit’s shared Claude access has reached today’s limit.';
       return apiError(429, 'rate_limit_error', message, h, {
         'x-orbit-limit': kind,
         'x-should-retry': 'false',

@@ -57,6 +57,29 @@ describe('profile settings reach the server in account mode', () => {
     expect((await db.users.get(user.id))?.timezone).toBe('America/Los_Angeles');
     expect(profileCalls()).toEqual([{ timezone: 'America/Los_Angeles' }]);
   });
+
+  it('school, degree, majors, graduation year and city go up when they change (plan 17 §G)', async () => {
+    await updateProfile(user.id, {
+      school: 'Georgia Institute of Technology',
+      degree: 'BSE',
+      majors: ['Computer Science'],
+      graduationYear: 2028,
+      currentCity: 'Ann Arbor',
+    });
+    expect(profileCalls()).toEqual([
+      {
+        school: 'Georgia Institute of Technology',
+        degree: 'BSE',
+        majors: ['Computer Science'],
+        graduationYear: 2028,
+        currentCity: 'Ann Arbor',
+      },
+    ]);
+    // the same values again send nothing; a cleared city goes up as null
+    await updateProfile(user.id, { school: 'Georgia Institute of Technology', majors: ['Computer Science'] });
+    await updateProfile(user.id, { currentCity: '' });
+    expect(profileCalls().slice(1)).toEqual([{ currentCity: null }]);
+  });
 });
 
 describe('profile settings in local mode', () => {

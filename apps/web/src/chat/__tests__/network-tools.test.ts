@@ -179,8 +179,6 @@ describe('local mode', () => {
       ['draft_reply', { messageId: 'm1' }],
       ['pause_outreach', { until: '2026-12-20' }],
       ['list_due', {}],
-      ['remember', { text: 'Prefers morning calls', kind: 'preference' }],
-      ['recall', { query: 'calls' }],
     ];
     for (const [name, input] of reads) {
       const env = await execute(name, input, makeCtx(user, { toolUseId: nextToolUseId() }));
@@ -192,7 +190,6 @@ describe('local mode', () => {
     for (const [name, input] of [
       ['ask_for_intro', { pathId: 'x' }],
       ['set_autonomy', { level: 1 }],
-      ['forget', { memoryId: 'm' }],
     ] as const) {
       const env = await execute(name, input, makeCtx(user, { toolUseId: nextToolUseId() }));
       expect(env.kind, name).toBe('needs_confirmation');

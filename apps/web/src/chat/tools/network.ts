@@ -1,8 +1,8 @@
 /**
  * The networking agent's tools (plan 16): goals, the tie score and the student's own rating of it, research
  * dossiers, finding new people, asking for an introduction, replies and booking, autonomy, memory, a pause and what
- * is due. Goals, explain_score and rate_closeness work in local mode too; the rest need an Orbit account and say so
- * in plain words (never an error) when there is none.
+ * is due. Goals, explain_score, rate_closeness and memory work in local mode too (memory is then kept in this
+ * browser); the rest need an Orbit account and say so in plain words (never an error) when there is none.
  */
 import type { Goal, GoalKind, MemoryKind, ReplyClass } from '@orbit/core';
 import { GOAL_KINDS, newId, REPLY_CLASSES } from '@orbit/core';
@@ -1014,7 +1014,7 @@ export const rememberTool = defineTool({
   name: 'remember',
   kind: 'write',
   description:
-    'Call this when the student states a durable preference, constraint, goal detail or outcome worth keeping for later chats ("I prefer morning calls", "our traction is 40 paying clinics", "Maya offered to refer me in March"), or asks you to remember something. Write it in third person about the student, at most 200 characters. Never save health, religion, politics, sexuality, family or other sensitive details unless the student explicitly asked you to remember that. Needs an Orbit account.',
+    'Call this when the student states a durable preference, constraint, goal detail or outcome worth keeping for later chats ("I prefer morning calls", "our traction is 40 paying clinics", "Maya offered to refer me in March"), or asks you to remember something. Write it in third person about the student, at most 200 characters. Never save health, religion, politics, sexuality, family or other sensitive details unless the student explicitly asked you to remember that. Kept on their Orbit account when signed in, else in this browser.',
   input: z.object({
     text: z.string().min(1).max(300).describe('What to remember, in third person ("Prefers morning calls").'),
     kind: z.enum(MEM_KINDS).describe('preference, constraint, goal_detail, outcome, person_fact or note.'),
@@ -1023,7 +1023,6 @@ export const rememberTool = defineTool({
   capabilities: ['memory_remember'],
   progress: 'Saving to memory',
   async execute(input, ctx) {
-    if (!accountReady(ctx)) return needsAccount('Remembering things between chats');
     if (input.personId) await requirePerson(ctx, input.personId);
     const r = await remember(ctx.user, input);
     if (!r.ok) throw new Error(r.message);
@@ -1042,7 +1041,7 @@ export const recallTool = defineTool({
   name: 'recall',
   kind: 'read',
   description:
-    'Call this when you need what the student told Orbit before and it is not in the Remembered context: their preferences, constraints, goal details, or what they said about a person. Search with a few words; optionally for one person. Needs an Orbit account.',
+    'Call this when you need what the student told Orbit before and it is not in the Remembered context: their preferences, constraints, goal details, or what they said about a person. Search with a few words; optionally for one person.',
   input: z.object({
     query: z.string().min(1).max(300).describe('What to look for, in a few words.'),
     personId: z.string().optional().describe('Only memories about this person.'),
@@ -1050,7 +1049,6 @@ export const recallTool = defineTool({
   capabilities: ['memory_recall'],
   progress: 'Checking memory',
   async execute(input, ctx) {
-    if (!accountReady(ctx)) return needsAccount('Memory');
     const r = await searchMemories(ctx.user, input.query, { personId: input.personId, limit: 8 });
     if (!r.ok) throw new Error(r.message);
     return list(
@@ -1070,26 +1068,23 @@ export const forgetTool = defineTool({
   name: 'forget',
   kind: 'risky',
   description:
-    "Call this when the student asks Orbit to forget something it remembered (memoryId from recall), or everything it remembers about a person (personId). Deleted memories are gone for good. Needs the student's approval and an Orbit account.",
+    "Call this when the student asks Orbit to forget something it remembered (memoryId from recall), or everything it remembers about a person (personId). Deleted memories are gone for good. Needs the student's approval.",
   input: z.object({
     memoryId: z.string().optional().describe('One memory to delete (from recall).'),
     personId: z.string().optional().describe('Delete every memory about this person.'),
   }),
   capabilities: ['memory_forget'],
   progress: 'Deleting from memory',
-  async summarizeIntent(input, ctx) {
+  async summarizeIntent(input) {
     const who = input.personId ? (await db.people.get(input.personId))?.displayName : undefined;
     return {
       text: input.personId
         ? `Delete everything Orbit remembers about ${who ?? 'that person'}. This cannot be undone.`
         : 'Delete that memory. This cannot be undone.',
-      blockedReason:
-        accountBlock(ctx) ??
-        (!input.memoryId && !input.personId ? 'Say which memory or which person.' : undefined),
+      blockedReason: !input.memoryId && !input.personId ? 'Say which memory or which person.' : undefined,
     };
   },
   async execute(input, ctx) {
-    if (!accountReady(ctx)) return needsAccount('Memory');
     let ids: string[] = [];
     if (input.memoryId) ids = [input.memoryId];
     else if (input.personId) {

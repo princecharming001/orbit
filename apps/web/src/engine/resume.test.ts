@@ -1,7 +1,16 @@
 import type { User } from '@orbit/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { db, wipeDatabase } from '../db/schema';
-import { currentResumeFacets, docxToText, extractTextFromFile, looksBinary, saveResume } from './resume';
+import {
+  acceptResumeProposal,
+  currentResumeFacets,
+  dismissResumeProposal,
+  docxToText,
+  extractTextFromFile,
+  looksBinary,
+  resumeProposal,
+  saveResume,
+} from './resume';
 
 const user: User = {
   id: 'u1',
@@ -170,5 +179,53 @@ describe('resume facet review (NRC-21)', () => {
     expect(used.find((f) => f.kind === 'summary')?.text).toBe(
       'Ravi Jain is a junior studying computer science at Michigan.',
     );
+  });
+});
+
+describe('the profile from the resume (plan 17 §G)', () => {
+  const twoColumn = new File(
+    [
+      'Ravi Jain\nravi@umich.edu\n\nEDUCATION   University of Michigan   May 2027\nB.S.E. in Computer Science\n\nEXPERIENCE   Amma Health Inc.   San Francisco, CA\nSoftware Engineering Intern   Jun 2025 – Aug 2025\n• Built a FHIR ingestion pipeline for new clinics\n',
+    ],
+    'resume.txt',
+    { type: 'text/plain' },
+  );
+
+  it('offers what differs, never sets it alone, and never offers the employer as the school', async () => {
+    const stale = { ...user, school: 'Amma Health Inc.', majors: [], graduationYear: undefined };
+    await db.users.put(stale);
+    const { facets, proposal } = await saveResume(stale, twoColumn);
+    expect(facets.filter((f) => f.kind === 'education').map((f) => f.organizationName)).toEqual([
+      'University of Michigan',
+    ]);
+    expect(facets.find((f) => f.organizationName === 'Amma Health Inc.')?.kind).toBe('experience');
+    expect(proposal).toEqual({
+      school: 'University of Michigan',
+      degree: 'B.S.E.',
+      majors: ['Computer Science'],
+      graduationYear: 2027,
+    });
+    // nothing changed until the student says yes
+    expect((await db.users.get(user.id))?.school).toBe('Amma Health Inc.');
+    expect(await resumeProposal(user.id)).toEqual(proposal);
+    await acceptResumeProposal(user.id, ['school', 'graduationYear']);
+    expect(await db.users.get(user.id)).toMatchObject({
+      school: 'University of Michigan',
+      graduationYear: 2027,
+    });
+    expect(await resumeProposal(user.id)).toBeUndefined();
+  });
+
+  it('a "no" keeps the profile, and an offer the profile already matches is not shown', async () => {
+    await db.users.put({ ...user, graduationYear: 2026 });
+    await saveResume((await db.users.get(user.id))!, twoColumn);
+    expect(await resumeProposal(user.id)).toMatchObject({ graduationYear: 2027 });
+    await dismissResumeProposal(user.id);
+    expect(await resumeProposal(user.id)).toBeUndefined();
+    expect((await db.users.get(user.id))?.graduationYear).toBe(2026);
+    // the student fixes the year themselves: nothing left to offer after the next upload either
+    await db.users.update(user.id, { graduationYear: 2027, degree: 'B.S.E.' });
+    const { proposal } = await saveResume((await db.users.get(user.id))!, twoColumn);
+    expect(proposal).toBeUndefined();
   });
 });

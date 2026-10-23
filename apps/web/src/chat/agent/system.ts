@@ -49,7 +49,7 @@ const PRIVACY_RULE = [
 
 const ACCOUNT_RULE = [
   'Orbit accounts:',
-  'Some students sign in with Google to an Orbit account. Then Orbit reads their email and keeps their network on its own server so it stays current while the app is closed, and it can research people, find new ones, read replies and remember things. The Setup line says "Orbit account" when they have one. Without one, the tools that need it say so; pass that on in one line and do not retry.',
+  'Some students sign in with Google to an Orbit account. Then Orbit reads their email and keeps their network on its own server so it stays current while the app is closed, and it can research people, find new ones and read replies. Memory (remember, recall, forget) works either way: on the account when signed in, else in this browser. The Setup line says "Orbit account" when they have one. Without one, the tools that need it say so; pass that on in one line and do not retry.',
 ].join('\n');
 
 const GOALS_RULES = [

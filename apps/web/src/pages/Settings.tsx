@@ -92,8 +92,11 @@ const ACCOUNT_SECTIONS = [
   ['memory', 'Memory'],
 ] as const;
 
+/** What Orbit remembers from the chat: on the account when signed in, in this browser otherwise. */
+const MEMORY_SECTION = ['memory', 'Memory'] as const;
+
 function sections(): readonly (readonly [string, string])[] {
-  return isAccountMode() ? [...BASE_SECTIONS, ...ACCOUNT_SECTIONS] : BASE_SECTIONS;
+  return isAccountMode() ? [...BASE_SECTIONS, ...ACCOUNT_SECTIONS] : [...BASE_SECTIONS, MEMORY_SECTION];
 }
 
 const SECTION_ALIASES: Record<string, string> = {
