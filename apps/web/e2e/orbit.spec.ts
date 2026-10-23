@@ -2651,7 +2651,11 @@ test.describe('Morning brief', () => {
           async () =>
             (await brief.getAttribute('data-step')) !== 'decide'
               ? 'moved'
-              : await decision.getByTestId('morning-count').textContent(),
+              : // the step can change between the two reads: a counter that is gone means the deck moved on
+                await decision
+                  .getByTestId('morning-count')
+                  .textContent({ timeout: 1_000 })
+                  .catch(() => 'moved'),
           { timeout: 20_000 },
         )
         .not.toBe(count);
