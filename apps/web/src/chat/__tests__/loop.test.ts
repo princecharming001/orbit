@@ -10,7 +10,8 @@ import { CHAT_BETAS, runTurn, type TurnDeps } from '../agent/loop';
 import { ChatStore, unpairedToolUses } from '../agent/store';
 import { type FakeAnthropic, messageRequests, type ScriptTurn, scriptedFetch } from '../test/fakeAnthropic';
 import { makeStubRegistry, type StubRegistry } from '../test/stubRegistry';
-import type { ChatConversation, TurnEvent } from '../types';
+import { offerChoices } from '../tools/widgets';
+import type { ChatConversation, ToolSpec, TurnEvent } from '../types';
 
 let user: User;
 let store: ChatStore;
@@ -112,7 +113,7 @@ describe('request shape', () => {
     expect(body.system[0].text).toMatch(/untrusted_[0-9a-f]{16}/);
     expect(body.system[0].text).toMatch(/needs_confirmation/);
     expect(body.system[0].text).toMatch(/[Nn]ever claim an action happened/);
-    expect(body.system[0].text).toMatch(/Talking like a friend/);
+    expect(body.system[0].text).toMatch(/Voice:/);
     expect(body.system[0].text).toMatch(/offer_choices/);
     expect(body.system[0].text).toMatch(/show_setup/);
     expect(body.system[0].text).not.toMatch(/[—–!]/);
@@ -605,5 +606,71 @@ describe('fallbacks and compaction', () => {
     );
     expect(replayed.content[0]).toMatchObject({ type: 'compaction', content: 'Summary so far.' });
     expect(replayed.content[0].encrypted_content).toMatch(/^enc/);
+  });
+});
+
+describe('a turn ends on the pills', () => {
+  const pills = {
+    id: 'toolu_pills',
+    name: 'offer_choices',
+    input: {
+      options: [
+        { label: 'Show me', message: 'Show my drafts' },
+        { label: 'Not now', message: 'Not now' },
+      ],
+    },
+  };
+  /** the stub registry plus the real offer_choices, which only draws the pills */
+  const withPills = (): Partial<TurnDeps> => {
+    const spec = offerChoices as unknown as ToolSpec;
+    return {
+      registry: new Map<string, ToolSpec>([...stub.registry, ['offer_choices', spec]]),
+      execute: (name, input, ctx) =>
+        name === 'offer_choices'
+          ? spec.execute(spec.input.parse(input), ctx)
+          : stub.execute(name, input, ctx),
+    };
+  };
+
+  it('drops the line the model adds after offer_choices when it already spoke, and keeps it out of the history', async () => {
+    const events = await turn(
+      'wsp',
+      [
+        { text: 'hey, not much. Lena is waiting on a thank-you. want to start there?', toolCalls: [pills] },
+        { text: "hey. Lena's thank-you is ready to go." },
+      ],
+      withPills(),
+    );
+    expect(text(events)).toBe('hey, not much. Lena is waiting on a thank-you. want to start there?');
+    expect(kinds(events).at(-1)).toBe('done');
+    expect(messageRequests(fake)).toHaveLength(2);
+    const rows = await store.history(conversation.id);
+    expect(JSON.stringify(rows)).not.toMatch(/ready to go/);
+    // the stored history still answers the tool_use, so the next turn replays
+    expect(rows.at(-1)?.role).toBe('user');
+    expect(JSON.stringify(rows.at(-1))).toMatch(/toolu_pills/);
+    expect(unpairedToolUses(rows)).toEqual([]);
+  });
+
+  it('keeps the answer when the pills were called next to a read tool, since the answer comes after', async () => {
+    const events = await turn(
+      'who replied',
+      [
+        { text: 'Let me check.', toolCalls: [{ id: 'toolu_r', name: 'list_pipeline', input: {} }, pills] },
+        { text: 'Two replied, Lena and Omar.' },
+      ],
+      withPills(),
+    );
+    expect(text(events)).toBe('Let me check.Two replied, Lena and Omar.');
+    const rows = await store.history(conversation.id);
+    expect(JSON.stringify(rows)).toMatch(/Two replied/);
+  });
+
+  it('keeps the line when nothing was said before the pills', async () => {
+    const events = await turn('wsp', [{ toolCalls: [pills] }, { text: 'hey, not much.' }], withPills());
+    expect(text(events)).toBe('hey, not much.');
+    expect(messageRequests(fake)).toHaveLength(2);
+    const rows = await store.history(conversation.id);
+    expect(rows.at(-1)?.role).toBe('assistant');
   });
 });

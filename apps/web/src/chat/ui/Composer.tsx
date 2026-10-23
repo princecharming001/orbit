@@ -156,7 +156,7 @@ export function Composer({
       data-testid="composer"
     >
       <label htmlFor={`${menuId}-input`} className="sr-only">
-        Message Orbit
+        Message Orbi
       </label>
       <textarea
         id={`${menuId}-input`}
@@ -165,10 +165,10 @@ export function Composer({
         onChange={(e) => setText(e.target.value)}
         onKeyDown={onKeyDown}
         rows={1}
-        placeholder="Message Orbit"
+        placeholder="Message Orbi"
         className="block w-full resize-none bg-transparent border-0 outline-none text-[16px] leading-[1.5] placeholder:text-ink-3 px-1 py-1 max-h-[200px] overflow-y-auto scroll-thin"
         data-testid="composer-input"
-        aria-label="Message Orbit"
+        aria-label="Message Orbi"
         enterKeyHint="send"
       />
       <div className="mt-2 flex items-center gap-2 relative">

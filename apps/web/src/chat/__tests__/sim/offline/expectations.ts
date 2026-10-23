@@ -26,6 +26,8 @@ const DRAFTS = 'list_drafts';
 const MAP = ['find_routes', 'open_page', 'get_person', 'get_intro_web'];
 
 export const CAP_EXPECT: Record<string, Expect> = Object.fromEntries([
+  // small talk is words first: pills under them when something is worth tapping, a plain line when nothing waits
+  also('small_talk', [], ANSWER),
   also('nav_go', ['list_pipeline', 'get_person', 'open_page']),
   also('palette_search', ['get_person', 'find_routes', 'search_people']),
   also('daily_maintenance_auto', ['refresh_brief', TODAY]),

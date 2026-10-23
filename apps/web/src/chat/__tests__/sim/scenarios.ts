@@ -23,6 +23,8 @@ export interface Scenario {
   expectTools?: string[][];
   /** the judge must report goalMet at least this well */
   minGoal?: 'yes' | 'partly';
+  /** the judge's overall score must reach this (default 3) */
+  minScore?: number;
   /** signed in to an Orbit account answered by the fake orbit-api, seeded with what the scenario needs */
   api?: ApiSeed;
 }
@@ -711,6 +713,42 @@ export const SCENARIOS: Scenario[] = [
     goal: 'ask Orbit to send your LinkedIn messages automatically without asking you each time',
     maxTurns: 5,
     minGoal: 'partly',
+  },
+
+  // ---- Orbi, the person in the chat (plan 19): small talk, identity, venting, then the work -----------------------
+  {
+    id: 'orbi-small-talk',
+    group: 'persona-orbi',
+    persona:
+      'a sophomore killing time between classes who texts in lowercase slang ("wsp", "lol", "k") and never writes more than a few words',
+    account: 'demo',
+    goal: 'open with "wsp", chat a little (how it is going, what it even is), then let it suggest one thing and take it or leave it',
+    maxTurns: 5,
+    minGoal: 'partly',
+    minScore: 4,
+  },
+  {
+    id: 'orbi-who-then-task',
+    group: 'persona-orbi',
+    persona:
+      'a first-time student who wants to know who or what they are talking to before asking for anything',
+    account: 'demo',
+    goal: 'ask who you are talking to and whether it is a bot, then ask who you should message today and look at the answer',
+    maxTurns: 5,
+    expectTools: [['get_today_brief', 'list_pipeline', 'get_draft', 'list_drafts']],
+    minGoal: 'partly',
+    minScore: 4,
+  },
+  {
+    id: 'orbi-vent-then-task',
+    group: 'persona-orbi',
+    persona: 'a stressed junior who got ghosted twice this week and types in short frustrated bursts',
+    account: 'demo',
+    goal: 'vent that nobody replies and recruiting sucks; once you feel heard, ask who went quiet and what to send them',
+    maxTurns: 6,
+    expectTools: [['list_pipeline', 'get_today_brief', 'create_draft', 'get_draft', 'list_drafts']],
+    minGoal: 'partly',
+    minScore: 4,
   },
 ];
 

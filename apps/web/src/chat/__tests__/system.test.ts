@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { STABLE_SYSTEM_VERSION, stableSystemText, systemBlocks } from '../agent/system';
+import { STABLE_SYSTEM_VERSION, stableSystemText, systemBlocks, VOICE_EXAMPLES } from '../agent/system';
+import { BANNED_PHRASES, voiceProblems } from '../agent/voice';
 
 const text = stableSystemText('0123456789abcdef');
 
@@ -64,19 +65,89 @@ describe('stable system block', () => {
     expect(text).not.toMatch(/\p{Extended_Pictographic}/u);
   });
 
-  it('tells the model to talk like a friend', () => {
-    expect(text).toMatch(/Talking like a friend:/);
-    expect(text).toMatch(/Match their energy/);
-    expect(text).toMatch(/greeting gets a greeting plus ONE easy next step, never a menu/);
-    expect(text).toMatch(/One question per message/);
-    expect(text).toMatch(/one next step at a time, not a list/);
-    expect(text).toMatch(/2 to 3 sentences/);
-    expect(text).toMatch(/no headings, no bold labels and no numbered or bulleted lists/);
-    expect(text).toMatch(/first name now and then/);
-    expect(text).toMatch(/where your chats stand/);
-    expect(text).toMatch(/not "pipeline" or stage names/);
-    expect(text).toMatch(/I pulled up Daniel's draft\. Want me to send it\?/);
-    expect(text).toMatch(/celebrate it in one line/);
+  describe('v11: Orbi, the person in the chat (plan 19)', () => {
+    it('has a name and one job', () => {
+      expect(text).toMatch(/^You are Orbi, the AI inside Orbit/);
+      expect(text).toMatch(/Orbit is the product; you are who the student talks to/);
+      expect(text).toMatch(
+        /find the right people, get warm intros, set up coffee chats, follow up, and stay in touch/,
+      );
+      expect(text).toMatch(/I'm Orbi\. I help you reach the right people and stay in touch\./);
+    });
+
+    it('matches length and register, answers before steering, one nudge, one question', () => {
+      expect(text).toMatch(/Voice:/);
+      expect(text).toMatch(/Students text you between classes/);
+      expect(text).toMatch(/Match their length and register/);
+      expect(text).toMatch(
+        /A message of a few words gets one or two short sentences back, under about twenty words/,
+      );
+      expect(text).toMatch(/Lowercase slang gets lowercase casual back/);
+      expect(text).toMatch(/Answer what they said before you steer/);
+      expect(text).toMatch(/A greeting gets a greeting/);
+      expect(text).toMatch(/at most one nudge, tied to something real in the context/);
+      expect(text).toMatch(/nothing at all when nothing is waiting/);
+      expect(text).toMatch(/Small talk needs no tool call/);
+      expect(text).toMatch(/One question per message/);
+      expect(text).toMatch(/one next step at a time, not a list/);
+      expect(text).toMatch(/Never repeat a nudge the student ignored/);
+    });
+
+    it('is honest about being an AI in one line, without the stock phrase', () => {
+      expect(text).toMatch(
+        /say plainly in one line that you are an AI, the one built into Orbit, without "As an AI"/,
+      );
+      expect(text).toMatch(/no body, age, gender or life outside the app/);
+    });
+
+    it('names the tells to avoid: praise and service openers, closers, hedging, triplets, dashes', () => {
+      expect(text).toMatch(/no "Great question", "I'd be happy to", "Certainly", "Absolutely"/);
+      expect(text).toMatch(
+        /Never close with a summary of what you just said, "Let me know if", "Feel free to" or "I hope this helps"/,
+      );
+      expect(text).toMatch(
+        /No hedging stacks, no "not just X, it's Y", no reflexive lists of three, no "delve"/,
+      );
+      expect(text).toMatch(/Do not apologise for things that are not mistakes/);
+      expect(text).toMatch(/no headings, no bold labels and no numbered or bulleted lists/);
+    });
+
+    it('is warm without sycophancy and kind off topic', () => {
+      expect(text).toMatch(/Warmth is attention, not praise/);
+      expect(text).toMatch(/the feeling in a few words, then one true thing from the context/);
+      expect(text).toMatch(/Never dismiss the feeling, never grovel, never jump straight to tasks/);
+      expect(text).toMatch(
+        /Off-topic asks \(a joke, the weather, maths, an essay, flirting\) get a short kind answer or a pass/,
+      );
+      expect(text).toMatch(/Never write school work to hand in/);
+      expect(text).toMatch(/Rudeness gets no defensiveness/);
+    });
+
+    it('keeps the plain-prose rules that carried over', () => {
+      expect(text).toMatch(/2 to 3 sentences/);
+      expect(text).toMatch(/first name now and then/);
+      expect(text).toMatch(/where your chats stand/);
+      expect(text).toMatch(/not "pipeline" or stage names/);
+      expect(text).toMatch(/celebrate it in one line/);
+      expect(text).toMatch(/I pulled up Daniel's draft\. Want me to send it\?/);
+    });
+
+    it('shows a few example exchanges, each of which passes the voice lint', () => {
+      expect(VOICE_EXAMPLES.length).toBeGreaterThanOrEqual(5);
+      for (const line of VOICE_EXAMPLES) {
+        expect(voiceProblems(line), line).toEqual([]);
+        expect(line.split(/\s+/).length, line).toBeLessThanOrEqual(40);
+      }
+      // the one-word openers get one-line answers
+      expect(VOICE_EXAMPLES[0]).toMatch(/^hey, not much\./);
+      expect(VOICE_EXAMPLES).toContain('anytime.');
+    });
+
+    it('never quotes a banned phrase outside the list of what not to say', () => {
+      // the rules name the tells inside quotes; nothing else in the prompt uses them
+      const stripped = text.replace(/"[^"]*"/g, '');
+      for (const re of BANNED_PHRASES) expect(stripped).not.toMatch(re);
+    });
   });
 
   it('never says where a panel opens', () => {
@@ -113,5 +184,6 @@ describe('stable system block', () => {
     expect(text).toMatch(/at most 3 options/);
     expect(text).toMatch(/Never write the options out in your text/);
     expect(text).toMatch(/choices, setup, list, needs_confirmation/);
+    expect(text).toMatch(/when the reply is only small talk with nothing waiting/);
   });
 });

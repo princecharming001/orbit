@@ -7,6 +7,7 @@ import { mentioned, routeEarly, routeMore } from './routerMore';
 import { routeNetwork } from './routerNetwork';
 import type { ThreadContext } from './routerThread';
 import { peopleWaiting } from './setup';
+import { answerSocial, isNoise, readSocial, type SmallTalkKit, soundsFrustrated } from './smallTalk';
 import { fixTypos } from './typos';
 
 /**
@@ -255,7 +256,7 @@ function text0(raw: string): string {
 }
 
 const CHATTY_PREFIX =
-  /^(hey|hi|hello|ok|okay|please|orbit|can you|could you|would you|will you|i want to|i'd like to|i need to|let's|lets|just|quick question|help me(?= (?:write|draft|find|prep|add|send|follow|reach|get|make|set|move|see)))[,!.:]?\s+/i;
+  /^(hey|hi|hello|ok|okay|please|pls|plz|orbit|orbi|can you|could you|would you|will you|can u|could u|would u|will u|i want to|i'd like to|i need to|let's|lets|just|quick question|help me(?= (?:write|draft|find|prep|add|send|follow|reach|get|make|set|move|see)))[,!.:]?\s+/i;
 
 /** "Hey Orbit, can you show my pipeline" -> "show my pipeline". */
 function stripChatter(text: string): string {
@@ -302,15 +303,8 @@ export function stageLabel(stage: ChatStage): string {
 const REFERENCE =
   /^(?:(?:(?:the|that|this) )?(?:person|contact|card|step|warm-?up|suggestion|new contact|new person)\b.*|(?:the|that|this) (?:one|note|draft|message)\b.*|route \d.*|her|him|them|she|he|they|it|this|that|these|those|me|you|someone|somebody|anyone|everyone|this person|that person|the person|this one|that one|the new contact|the person i just added|(?:the )?(?:top|first|last) (?:\d+|two|three|four|five)|(?:the )?(?:first|second|third|fourth|fifth|last)(?: one)?|all of them|each of them|both(?: of them)?)$/i;
 
-const GREETING =
-  /^(hey|hi|hello|yo|howdy|hiya|heya|sup|hey hey|good (morning|afternoon|evening))( there| orbit| friend| everyone)?$/;
-const WHO_ARE_YOU = /^(who are you|what are you|who is orbit|what is orbit|what'?s orbit|what do you do)$/;
-const WHAT_CAN_YOU_DO =
-  /^(help|help me|what can you do|what can you do for me|what can i (say|ask|do)|how does this work|how do i start|where do i start)$/;
-const THANKS = /^(thanks|thank you|thx|ty|cheers|many thanks|thanks a lot|thank you so much|appreciate it)$/;
-const OK = /^(ok|okay|k|kk|cool|great|nice|awesome|perfect|got it|sounds good|alright|sweet|neat)$/;
 const NOT_NOW =
-  /^(not now|maybe later|later|no|nope|no thanks|nah|i'?m good|im good|all good|nothing|never ?mind|not yet|skip)$/;
+  /^(not now|maybe later|later|no|nope|no thanks|nah|nah i'?m good|i'?m good|im good|all good|nothing|never ?mind|nvm|not yet|skip|pass)$/;
 const YES =
   /^(show me|yes|yeah|yep|yup|sure|ok show me|go ahead|let'?s do it|let'?s go|do it|sounds good show me)$/;
 const ADD_SOMEONE =
@@ -346,6 +340,9 @@ export function fillExamples(text: string, ctx: Pick<RouterContext, 'people' | '
 }
 
 function routeInner(raw: string, ctx: RouterContext): RouterIntent {
+  // small talk is read on the whole message first; a greeting in front of an ask ("yo show my pipeline") drops off
+  const social = readSocial(raw);
+  if (social.rest) raw = social.rest;
   let text = stripChatter(clean(raw));
   let lower = text.toLowerCase();
   // a slipped letter in a command word ("piepline") is put right; names and companies stay as typed
@@ -381,7 +378,7 @@ function routeInner(raw: string, ctx: RouterContext): RouterIntent {
   const HELP = helpText(ctx.people);
   const missing = (what: string): RouterIntent => ({
     kind: 'refuse',
-    text: `Orbit cannot ${what} from the chat yet. ${HELP}`,
+    text: `I can't ${what} from the chat yet. ${HELP}`,
   });
   const viaTool = (
     tool: string,
@@ -473,7 +470,6 @@ function routeInner(raw: string, ctx: RouterContext): RouterIntent {
   const waiting = ctx.waiting ?? peopleWaiting(ctx.cards ?? []);
   const unsent = (ctx.drafts ?? []).filter((d) => d.status === 'draft').length;
   const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
-  const hello = (word: string) => (name ? `${word} ${name}.` : `${word} there.`);
 
   /** Text first, then the tool's widget under it. Falls back to plain words when the tool is not in the registry. */
   const withTool = (
@@ -493,8 +489,10 @@ function routeInner(raw: string, ctx: RouterContext): RouterIntent {
     return withTool(
       'offer_choices',
       { options },
-      `${statement} ${question}`,
-      `${[statement, kept].filter(Boolean).join(' ')} Say "${options[0]!.message}" and I'll take it from there.`,
+      [statement, question].filter(Boolean).join(' '),
+      [statement, kept, `Say "${options[0]!.message}" and I'll take it from there.`]
+        .filter(Boolean)
+        .join(' '),
     );
   };
   const setupLinkedin = (statement: string): RouterIntent =>
@@ -506,18 +504,26 @@ function routeInner(raw: string, ctx: RouterContext): RouterIntent {
     );
   /** The one most useful thing to do right now, as a sentence, a question and its answers. */
   const bestMove = () => {
-    if (waiting > 0)
+    if (waiting > 0) {
+      // one person waiting, and the card says who: their name, the way a friend would say it
+      const ids = [...new Set((ctx.cards ?? []).map((c) => c.personId).filter(Boolean))];
+      const one = waiting === 1 && ids.length === 1 ? ctx.people.find((p) => p.id === ids[0]) : undefined;
       return {
-        statement: `You've got ${plural(waiting, 'person', 'people')} waiting on a message today.`,
+        statement: one?.firstName
+          ? `${one.firstName} is waiting to hear from you.`
+          : waiting === 1
+            ? 'Someone is waiting to hear from you.'
+            : `${waiting} people are waiting to hear from you.`,
         question: 'Want to start there?',
         options: [
           { label: 'Show me', message: "What's on today?" },
           { label: 'Not now', message: 'Not now' },
         ],
       };
+    }
     if (unsent > 0)
       return {
-        statement: `You've got ${plural(unsent, 'draft', 'drafts')} ready for a look.`,
+        statement: `You've got ${plural(unsent, 'draft', 'drafts')} ready to look at.`,
         question: 'Want to start there?',
         options: [
           { label: 'Show me', message: 'Show my drafts' },
@@ -525,7 +531,7 @@ function routeInner(raw: string, ctx: RouterContext): RouterIntent {
         ],
       };
     return {
-      statement: 'Nothing is waiting on you today.',
+      statement: "Nothing's waiting on you today.",
       question: 'Want to see where your chats stand?',
       options: [
         { label: 'Show me', message: 'Show my pipeline' },
@@ -554,39 +560,33 @@ function routeInner(raw: string, ctx: RouterContext): RouterIntent {
       ? setupGmail(`${lead} ${GMAIL_NEXT}`)
       : setupLinkedin(`${lead} ${EMPTY_START}`);
   const casual = text0(raw);
-
-  if (GREETING.test(casual)) {
-    const word = /^good (morning|afternoon|evening)/.test(casual)
-      ? casual.replace(/ (there|orbit|friend|everyone)$/, '')
-      : 'Hey';
-    const hi = hello(word.charAt(0).toUpperCase() + word.slice(1));
-    if (empty) return emptyNext(hi);
-    const m = bestMove();
-    return choose(hi, `${m.statement} ${m.question}`, m.options);
+  const closest = [...ctx.people]
+    .filter((p) => p.isHuman && !p.hiddenAt && p.firstName)
+    .sort((x, y) => y.strength - x.strength);
+  const move = bestMove();
+  const kit: SmallTalkKit = {
+    firstName: name,
+    empty,
+    nudge: move,
+    idle: waiting === 0 && unsent === 0,
+    nudged:
+      !!ctx.thread?.choices?.length &&
+      move.options.every((o) => ctx.thread!.choices!.some((c) => c.message === o.message)),
+    topName: closest[0]?.firstName,
+    names: [...(name ? [name] : []), ...ctx.people.map((p) => p.firstName).filter((n): n is string => !!n)],
+    now: ctx.now ?? new Date(),
+    choose,
+    offer: (lead, options, fallback) => withTool('offer_choices', { options }, lead, fallback),
+    emptyNext,
+  };
+  {
+    const r = answerSocial(social, kit);
+    if (r) return r;
   }
-  if (WHO_ARE_YOU.test(casual)) {
-    const intro =
-      "I'm Orbit, your networking copilot. I help you reach out to people and keep every chat moving.";
-    if (empty) return emptyNext(intro);
-    const m = bestMove();
-    return choose(intro, `${m.statement} ${m.question}`, m.options);
+  if (NOT_NOW.test(casual)) {
+    const r = answerSocial({ act: 'notnow', casual: social.casual, said: casual }, kit);
+    if (r) return r;
   }
-  if (WHAT_CAN_YOU_DO.test(casual)) {
-    const intro = 'I find who to message, write the note, and keep track of every chat.';
-    if (empty) return emptyNext(intro);
-    return choose(intro, 'What sounds useful?', [
-      { label: "What's on today", message: "What's on today?" },
-      { label: 'Who went quiet', message: 'Who went quiet?' },
-      { label: 'Where my chats stand', message: 'Show my pipeline' },
-    ]);
-  }
-  if (THANKS.test(casual) || OK.test(casual)) {
-    const lead = THANKS.test(casual) ? 'Anytime.' : 'Okay.';
-    if (empty) return emptyNext(lead);
-    const m = bestMove();
-    return choose(lead, `${m.statement} ${m.question}`, m.options);
-  }
-  if (NOT_NOW.test(casual)) return { kind: 'text', text: "No problem. I'm here whenever you want me." };
   if (YES.test(casual)) {
     if (empty) return setupLinkedin("Great. Let's bring in your LinkedIn connections.");
     if (waiting > 0) return viaTool('get_today_brief', {}, undefined, 'show the brief');
@@ -692,10 +692,10 @@ function routeInner(raw: string, ctx: RouterContext): RouterIntent {
           ],
         },
         `That needs a Claude key to weigh up. Here is what I can do with ${first} now:`,
-        `That needs a Claude key: Orbit cannot reason about this on its own. ${keyLine}`,
+        `That needs a Claude key: I can't think this one through on my own. ${keyLine}`,
       );
     }
-    return refuse('That needs a Claude key: Orbit cannot reason about this on its own.');
+    return refuse("That needs a Claude key: I can't think this one through on my own.");
   }
 
   // prep for a chat with someone
@@ -1512,6 +1512,23 @@ function routeInner(raw: string, ctx: RouterContext): RouterIntent {
   // What Orbit keeps of it (a memory, a goal to track) is said under the reply, after the turn (afterTurn.ts).
   if (mayHoldFacts(text)) return { kind: 'text', text: 'Got it.' };
 
+  // a keyboard mash, or frustration inside a longer message: a person would answer it, not offer a menu
+  {
+    const keep = new Set(
+      [
+        ...ctx.people.flatMap((p) => `${p.displayName} ${p.currentOrganizationRaw ?? ''}`.split(/\s+/)),
+        ...ctx.companies,
+      ]
+        .map((w) => w.toLowerCase())
+        .filter(Boolean),
+    );
+    const late = isNoise(raw, keep) ? 'noise' : soundsFrustrated(raw) ? 'frustrated' : undefined;
+    if (late) {
+      const r = answerSocial({ ...social, act: late }, kit);
+      if (r) return r;
+    }
+  }
+
   return didYouMean(text, ctx, choose, withTool, HELP);
 }
 
@@ -1530,6 +1547,11 @@ export function splitAsks(text: string): string[] {
     .filter((p) => p.split(/\s+/).length >= 2);
   return parts.length > 1 && parts.length <= 3 ? parts : [text];
 }
+
+/** How Orbi says it did not follow a message, before the closest things it can do. */
+export const NOT_FOLLOWED = "Hmm, I'm not sure what you mean.";
+/** The router's "did not follow" lines, for tests and the offline suite to count. */
+export const NOT_FOLLOWED_LEAD = /^(?:Hmm, I'm not sure what you mean|What should we do about )/;
 
 /** Places to go when a message matched nothing: the person it names, or the closest things Orbit can do. */
 const SUGGESTIONS: { label: string; message: string; words: string[] }[] = [
@@ -1612,7 +1634,7 @@ function didYouMean(
     const p = m.person;
     const first = p.firstName || p.displayName;
     const scheduled = ctx.nextChat?.personId === p.id;
-    return choose(`I didn't catch what to do about ${first}.`, 'Any of these?', [
+    return choose('', `What should we do about ${first}?`, [
       { label: `Open ${first}`, message: `Who is ${p.displayName}` },
       { label: `Write to ${first}`, message: `Write to ${p.displayName}` },
       scheduled
@@ -1636,7 +1658,7 @@ function didYouMean(
   return withTool(
     'offer_choices',
     { options: picks.map((s) => ({ label: s.label, message: s.message })) },
-    "I didn't catch that. Did you mean one of these?",
-    `I didn't catch that. ${help}`,
+    `${NOT_FOLLOWED} Is it one of these?`,
+    `${NOT_FOLLOWED} ${help}`,
   );
 }

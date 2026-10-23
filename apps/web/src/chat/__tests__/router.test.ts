@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod/v4';
 import type { MatchablePerson } from '../agent/people-match';
 import { matchPeople, rankPerson, resolvePerson } from '../agent/people-match';
-import { type RouterContext, routeUtterance } from '../agent/router';
+import { NOT_FOLLOWED_LEAD, type RouterContext, routeUtterance } from '../agent/router';
 import { registry as realRegistry } from '../registry';
 import type { ChoiceOption, ToolSpec } from '../types';
 
@@ -283,7 +283,11 @@ const REFUSED: string[] = [
 ];
 
 /** Not something Orbit does: it says it did not catch that and offers the closest things it can do. */
-const NOT_UNDERSTOOD: string[] = ['asdfgh qwerty', 'what is the capital of France', 'tell me a joke'];
+const NOT_UNDERSTOOD: string[] = [
+  'purple monkey dishwasher',
+  'the mitochondria is the powerhouse of the cell',
+  'blorp the flanges',
+];
 
 /** Requests the router once refused as judgement calls and now answers with a tool. */
 const NOW_HANDLED: [string, string][] = [
@@ -355,7 +359,7 @@ describe('router: handled utterances', () => {
     registry.delete('move_pipeline_stage');
     const r = routeUtterance('move Priya to scheduling', ctx({ registry }));
     expect(r.kind).toBe('refuse');
-    expect((r as { text: string }).text).toMatch(/cannot move a chat/);
+    expect((r as { text: string }).text).toMatch(/can't move a chat/);
   });
 
   it('never hands a tool input that fails its schema', () => {
@@ -394,7 +398,7 @@ describe('router: honest refusals', () => {
   it.each(NOT_UNDERSTOOD)('%s -> says so and offers the closest things it can do', (utterance) => {
     const r = routeUtterance(utterance, ctx());
     expect(r).toMatchObject({ kind: 'tool', tool: 'offer_choices' });
-    expect((r as { lead?: string }).lead).toMatch(/didn't catch that/);
+    expect((r as { lead?: string }).lead).toMatch(NOT_FOLLOWED_LEAD);
   });
 
   it.each(NOW_HANDLED)('%s -> once a judgement call, now %s', (utterance, tool) => {
@@ -463,25 +467,80 @@ function expectFriendly(text: string) {
 }
 
 describe('router: small talk with data', () => {
-  it.each(['hey', 'Hi', 'hello!', 'yo', 'hey orbit', 'hi there', 'Hey!!'])(
-    '%s gets a greeting, the one most useful thing, and two choices',
-    (g) => {
-      const { r, text, options } = reply(g, { waiting: undefined });
-      expect(r).toMatchObject({ kind: 'tool', tool: 'offer_choices' });
-      expect(text).toBe("Hey Alex. You've got 2 people waiting on a message today. Want to start there?");
-      expect(options.map((o) => o.label)).toEqual(['Show me', 'Not now']);
-      expectFriendly(text);
-    },
-  );
+  it.each([
+    // a capitalised hello gets a capitalised reply; a lowercase one gets lowercase back; the lines vary by message
+    [
+      'Hi',
+      /^(?:Hey|Hi) Alex(?:, good to see you)?\. /,
+      '2 people are waiting to hear from you. Want to start there?',
+    ],
+    [
+      'Hey!!',
+      /^(?:Hey|Hi) Alex(?:, good to see you)?\. /,
+      '2 people are waiting to hear from you. Want to start there?',
+    ],
+    [
+      'hey',
+      /^(?:hey|hi) Alex(?:, good to see you)?\. /,
+      '2 people are waiting to hear from you. want to start there?',
+    ],
+    [
+      'hello!',
+      /^(?:hey|hi) Alex(?:, good to see you)?\. /,
+      '2 people are waiting to hear from you. want to start there?',
+    ],
+    [
+      'hey orbit',
+      /^(?:hey|hi) Alex(?:, good to see you)?\. /,
+      '2 people are waiting to hear from you. want to start there?',
+    ],
+    [
+      'hi there',
+      /^(?:hey|hi) Alex(?:, good to see you)?\. /,
+      '2 people are waiting to hear from you. want to start there?',
+    ],
+    ['yo', /^(?:yo|hey) Alex\. /, '2 people are waiting to hear from you. want to start there?'],
+    [
+      'wsp',
+      /^(?:hey Alex, not (?:much|a lot)|not much, Alex)\. /,
+      '2 people are waiting to hear from you. want to start there?',
+    ],
+    [
+      'sup',
+      /^(?:hey Alex, not (?:much|a lot)|not much, Alex)\. /,
+      '2 people are waiting to hear from you. want to start there?',
+    ],
+  ])('%s gets a greeting in the same register, the one most useful thing, and two choices', (g, hi, rest) => {
+    const { r, text, options } = reply(g, { waiting: undefined });
+    expect(r).toMatchObject({ kind: 'tool', tool: 'offer_choices' });
+    expect(text).toMatch(hi);
+    expect(text.endsWith(rest), text).toBe(true);
+    expect(options.map((o) => o.label)).toEqual(['Show me', 'Not now']);
+    expectFriendly(text);
+  });
+
+  it('varies the greeting line between messages, never one fixed string', () => {
+    const lines = new Set(
+      ['hi', 'hey', 'hello', 'hey there', 'heyy', 'hiii', 'hey orbi', 'hello orbi', 'hiya'].map(
+        (g) => reply(g).text.split('. ')[0],
+      ),
+    );
+    expect(lines.size).toBeGreaterThanOrEqual(2);
+  });
 
   it('greets by the time of day and without a name', () => {
-    expect(reply('good morning').text).toMatch(/^Good morning Alex\. /);
-    expect(reply('Good evening', { firstName: undefined }).text).toMatch(/^Good evening there\. /);
+    expect(reply('Good morning').text).toMatch(/^Good morning Alex\. /);
+    expect(reply('gm').text).toMatch(/^morning Alex\. /);
+    expect(reply('Good evening', { firstName: undefined }).text).toMatch(/^Good evening\. /);
   });
 
   it('counts people waiting from the engine when it says so, and says one person in the singular', () => {
-    expect(reply('hey', { waiting: 3 }).text).toContain("You've got 3 people waiting");
-    expect(reply('hey', { waiting: 1 }).text).toContain("You've got 1 person waiting");
+    expect(reply('hey', { waiting: 3 }).text).toContain('3 people are waiting to hear from you');
+    expect(reply('hey', { waiting: 1 }).text).toMatch(/someone is waiting to hear from you/i);
+    // one card, one person: their name
+    expect(
+      reply('hey', { waiting: 1, cards: [{ id: 's', personId: 'p1', kind: 'thank_you' }] }).text,
+    ).toContain('Priya is waiting to hear from you');
   });
 
   it('falls back to unsent drafts, then to where the chats stand', () => {
@@ -490,20 +549,27 @@ describe('router: small talk with data', () => {
       ...noCards,
       drafts: [{ id: 'd1', personId: 'p1', status: 'draft', kind: 'thank_you' }],
     });
-    expect(drafts.text).toBe("Hey Alex. You've got 1 draft ready for a look. Want to start there?");
+    expect(drafts.text).toMatch(
+      /^(?:hey|hi) Alex(?:, good to see you)?\. you've got 1 draft ready to look at\. want to start there\?$/,
+    );
     expect(drafts.options[0]).toEqual({ label: 'Show me', message: 'Show my drafts' });
-    const none = reply('hey', { ...noCards, drafts: [] });
-    expect(none.text).toBe('Hey Alex. Nothing is waiting on you today. Want to see where your chats stand?');
+    const none = reply('Hey', { ...noCards, drafts: [] });
+    expect(none.text).toMatch(
+      /^(?:Hey|Hi) Alex(?:, good to see you)?\. Nothing's waiting on you today\. Want to see where your chats stand\?$/,
+    );
     expect(none.options[0]).toEqual({ label: 'Show me', message: 'Show my pipeline' });
   });
 
   it.each([
-    ['who are you', /^I'm Orbit/],
-    ['What can you do?', /^I find who to message/],
-    ['help', /^I find who to message/],
-    ['thanks', /^Anytime\. /],
-    ['ok', /^Okay\. /],
-    ['Thank you!', /^Anytime\. /],
+    [
+      'who are you',
+      /^(?:I'm Orbi, the AI in Orbit|Orbi, the AI inside Orbit)\. I help you reach the right people/,
+    ],
+    ['What can you do?', /^I help you find who to reach out to/],
+    ['help', /^I help you find who to reach out to/],
+    ['thanks', /^(?:anytime|of course|sure thing|you got it)\. /],
+    ['ok', /^(?:okay|cool)\. /],
+    ['Thank you!', /^(?:Anytime|Of course|Sure thing|You got it)\. /],
   ])('%s gets a short warm reply with choices', (u, re) => {
     const { r, text, options } = reply(u);
     expect(r).toMatchObject({ kind: 'tool', tool: 'offer_choices' });
@@ -597,7 +663,7 @@ describe('router: small talk on an empty account', () => {
   );
 
   it('keeps the greeting personal', () => {
-    expect(reply('hey', EMPTY).text).toMatch(/^Hey Alex\. /);
+    expect(reply('Hey', EMPTY).text).toMatch(/^(?:Hey|Hi) Alex(?:, good to see you)?\. /);
   });
 
   it('"I want to connect my LinkedIn" shows the drop zone instead of explaining steps', () => {
@@ -613,10 +679,10 @@ describe('router: LinkedIn, then Gmail', () => {
   });
 
   it('an empty account with LinkedIn in greets with Gmail next', () => {
-    const { r, text } = reply('hey', { ...EMPTY, ...connected({ linkedin: true }) });
+    const { r, text } = reply('Hey', { ...EMPTY, ...connected({ linkedin: true }) });
     expect(r).toMatchObject({ kind: 'tool', tool: 'show_setup', input: { what: 'google' } });
-    expect(text).toBe(
-      'Hey Alex. Next easy step is Gmail, so I can see who you email and send what you approve.',
+    expect(text).toMatch(
+      /^(?:Hey|Hi) Alex(?:, good to see you)?\. Next easy step is Gmail, so I can see who you email and send what you approve\.$/,
     );
     expectFriendly(text);
   });
@@ -666,9 +732,9 @@ describe('router: small talk when the conversation tools are not in the registry
   });
 
   it('still names the one thing to do, in words the router understands', () => {
-    const r = plain('hey') as { text: string };
+    const r = plain('Hey') as { text: string };
     expect(r.text).toContain('Say "What\'s on today?"');
-    expect(r.text).toContain("You've got 2 people waiting on a message today.");
+    expect(r.text).toContain('2 people are waiting to hear from you.');
     expect(r.text).not.toMatch(/Want to start there\?/);
     const e = plain('hey', EMPTY) as { text: string };
     expect(e.text).toContain('+ button');

@@ -2,12 +2,20 @@ import type { Capability } from './types';
 
 /**
  * Every capability a student has in Orbit today, one per id in the capability inventory (181), plus the networking
- * agent's 20 (plan 16: goals, scores, research, sourcing, replies, autonomy, memory and cadence). The registry's
- * coverage test checks that every id here is claimed by at least one tool, and that every tool claims at least one.
- * `kind` is how the chat treats it: read, a plain write, or a write that needs an explicit Approve.
+ * agent's 20 (plan 16: goals, scores, research, sourcing, replies, autonomy, memory and cadence) and small talk with
+ * Orbi (plan 19). The registry's coverage test checks that every id here is claimed by at least one tool, and that
+ * every tool claims at least one. `kind` is how the chat treats it: read, a plain write, or a write that needs an
+ * explicit Approve.
  */
 export const CAPABILITIES: readonly Capability[] = [
   // Area 0. Shell and navigation
+  {
+    id: 'small_talk',
+    area: 'Shell and navigation',
+    title: 'Talk to Orbi like a person (greetings, who are you, thanks, venting, off-topic asks)',
+    kind: 'read',
+    utterances: ['wsp', 'who are you', 'thanks'],
+  },
   {
     id: 'nav_go',
     area: 'Shell and navigation',
