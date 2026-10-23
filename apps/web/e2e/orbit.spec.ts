@@ -1550,8 +1550,10 @@ test.describe("Never losing the student's work, and honest hand-offs", () => {
     await page.goto('settings/integrations');
     const google = page.getByTestId('google-unavailable');
     await expect(google).toContainText(/not part of this version/i);
+    // the demo's replies are simulated, so the board says when it last looked rather than "cannot see your inbox"
     await page.goto('people');
-    await expect(page.getByText(/cannot see your inbox/i)).toBeVisible();
+    await expect(page.getByTestId('replies-checked')).toBeVisible();
+    await expect(page.getByText(/cannot see your inbox/i)).toHaveCount(0);
   });
 
   test('the People list fits a laptop, and the board points at next steps off to the right', async ({

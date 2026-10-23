@@ -86,6 +86,10 @@ function DiscoverFeed({ tabs }: { tabs?: ReactNode }) {
   const [updating, setUpdating] = useState(true);
   const [q, setQ] = useState('');
   const [acting, setActing] = useState<string>();
+  // people acted on or dismissed here leave the page at once: the feed is rebuilt from the database, which can lag a
+  // few seconds behind while a LinkedIn sync is writing people
+  const [goneHere, setGoneHere] = useState<Set<string>>(() => new Set());
+  const goHere = (memberId: string) => setGoneHere((cur) => new Set(cur).add(memberId));
   const [loading, setLoading] = useState(false);
   const [outcome, setOutcome] = useState<LoadMoreOutcome>();
   const [connecting, setConnecting] = useState(false);
@@ -221,6 +225,7 @@ function DiscoverFeed({ tabs }: { tabs?: ReactNode }) {
           toast.push({ text: r.message, tone: 'bad', ttl: 6000 });
           return;
         }
+        goHere(card.entry.memberId);
         if (action === 'write' && r.draftId) nav(`/people/${r.personId}?open=${r.draftId}`);
         else if (action === 'intro') nav(`/map?reach=${r.personId}`);
         else if (action === 'warm_up')
@@ -243,9 +248,20 @@ function DiscoverFeed({ tabs }: { tabs?: ReactNode }) {
     },
     onDismiss: async (card, reason, label) => {
       await dismissFound(user.id, card.entry.memberId, reason);
+      goHere(card.entry.memberId);
       toast.push({
         text: `Removed (${label.toLowerCase()}). Orbit learns from this for the next people it finds.`,
-        action: { label: 'Undo', onClick: () => void restoreFound(user.id, card.entry.memberId) },
+        action: {
+          label: 'Undo',
+          onClick: () => {
+            setGoneHere((cur) => {
+              const next = new Set(cur);
+              next.delete(card.entry.memberId);
+              return next;
+            });
+            void restoreFound(user.id, card.entry.memberId);
+          },
+        },
         ttl: 6000,
       });
     },
@@ -293,8 +309,10 @@ function DiscoverFeed({ tabs }: { tabs?: ReactNode }) {
       : inPipeline
         ? 'Everyone in your network who fits your goals already has a chat with you on the People board. Connect LinkedIn to find people beyond it.'
         : 'Nobody in your network matches your goals yet. Add people at your target companies or connect LinkedIn.';
-  const feed: DiscoverCard[] = view?.feed ?? [];
-  const nothing = !!view && !feed.length && !view.suggestions.length;
+  const shownHere = (c: DiscoverCard) => c.kind !== 'found' || !goneHere.has(c.entry.memberId);
+  const feed: DiscoverCard[] = (view?.feed ?? []).filter(shownHere);
+  const suggestions = (view?.suggestions ?? []).filter(shownHere);
+  const nothing = !!view && !feed.length && !suggestions.length;
   const server = isServerUser(user.id);
   return (
     <div>
@@ -349,7 +367,7 @@ function DiscoverFeed({ tabs }: { tabs?: ReactNode }) {
       {view && !view.connected && !server && (
         <ConnectPrompt available={liveLinkedInAvailable(user)} busy={connecting} onConnect={connect} />
       )}
-      {view && <SuggestedRow cards={view.suggestions} found={foundH} network={networkH} />}
+      {view && <SuggestedRow cards={suggestions} found={foundH} network={networkH} />}
       {!view || (nothing && (updating || loading)) ? (
         <div>
           {!view || updating ? (
