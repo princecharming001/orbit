@@ -17,7 +17,7 @@ import type {
   User,
   UserSettings,
 } from '@orbit/core';
-import { STAGE_LABELS, warmUpProgress } from '@orbit/core';
+import { cardReason, STAGE_LABELS, warmUpProgress } from '@orbit/core';
 import { db } from '../db/schema';
 import { isMessageSuggestion } from './brief';
 import { type PersonSnapshot, restorePerson, snapshotPerson } from './send';
@@ -124,9 +124,16 @@ export function reasonHolds(
 ): boolean {
   if (reason.code === 'alumni') return !!person.isAlumni;
   if (reason.code === 'warm') return person.strength >= 0.3;
-  // "Works in investment banking (Analyst)": the title it quotes is still theirs
-  const quoted = reason.code === 'function_match' ? reason.text.match(/\(([^)]+)\)$/)?.[1] : undefined;
-  if (quoted && person.currentTitle !== quoted) return false;
+  // "Cornell alum, now an Analyst at Evercore": still an alum, still in that role
+  if (reason.code === 'alumni_field')
+    return !!person.isAlumni && !!person.currentTitle && reason.text.includes(` ${person.currentTitle}`);
+  // "Analyst at Evercore, the role you're targeting" (or, saved before, "Works in investment banking (Analyst)"):
+  // the title it names is still theirs
+  if (reason.code === 'function_match' || reason.code === 'role_industry') {
+    const quoted =
+      reason.text.match(/\(([^)]+)\)$/)?.[1] ?? reason.text.match(/^(.+?)(?: at .+)?, (?:the role|in )/)?.[1];
+    if (quoted && person.currentTitle !== quoted) return false;
+  }
   return true;
 }
 
@@ -290,7 +297,8 @@ export async function morningDeck(
     if (moves.length >= MORNING_MAX_MOVES) break;
     const p = byId.get(r.personId)!;
     // a reason saved with the recommendation is said only while it still holds (an alum label taken off since)
-    const reason = r.reasons.find((x) => reasonHolds(x, p));
+    // the most specific one first (a target company or an alum in the field before the role alone)
+    const reason = cardReason(r.reasons.filter((x) => reasonHolds(x, p)));
     add({
       id: `rec:${r.id}`,
       kind: 'reach_out',

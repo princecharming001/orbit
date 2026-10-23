@@ -1,5 +1,5 @@
-import { inOrAt } from '../drafts/phrasing';
-import { functionPhrase } from '../labels';
+import { article, inOrAt } from '../drafts/phrasing';
+import { isRecruiter } from '../drafts/sector';
 import { roleFromHeadline } from '../linkedin/headline';
 import { normalizeCompany } from '../text/normalize';
 import type {
@@ -16,7 +16,8 @@ import {
   type OutreachExample,
   scoreDiscoverCandidate,
 } from './discover';
-import { FUNCTION_TITLE, titleStatus } from './title';
+import { cleanName, rankScore, replyOdds } from './quality';
+import { FUNCTION_TITLE, normalizeTitle, titleSimilarity, titleStatus } from './title';
 
 /**
  * Titles that only hint at a function. "Analyst" or "Associate" is a banking title at a bank, but a McKinsey
@@ -33,7 +34,9 @@ const NOT_A_HINT =
 /** The student's target function this person works in, from their title and company (undefined when none). */
 export function matchedFunction(text: string | undefined, functions: string[]): string | undefined {
   if (!text) return undefined;
-  const strong = functions.find((f) => FUNCTION_TITLE[f]?.test(text));
+  // "APM" and "SWE II" are read written out too ("Associate Product Manager")
+  const full = `${text} ${normalizeTitle(text)}`;
+  const strong = functions.find((f) => FUNCTION_TITLE[f]?.test(full));
   if (strong) return strong;
   // a hint only when the title is not plainly another function (a consulting "Business Analyst" is not banking)
   const other = Object.entries(FUNCTION_TITLE).some(([f, re]) => !functions.includes(f) && re.test(text));
@@ -89,6 +92,8 @@ export interface RecommendInput {
   outreach?: OutreachExample[];
   /** cards the student turned down, with why: a wrong company or role ranks lower next time */
   dismissed?: DismissSignal[];
+  /** people the student already wrote to outside a chat and who have not answered: not suggested again */
+  contacted?: Set<string>;
 }
 
 /**
@@ -103,19 +108,25 @@ export function heldRole(p: Pick<Person, 'currentTitle' | 'headline'>): string |
     : undefined;
 }
 
+/** A reason code that is enough on its own to suggest someone from the network (see quality.worthSuggesting). */
+const GOAL_ANCHORS = new Set([
+  'target_company',
+  'alumni_field',
+  'role_industry',
+  'shared_org',
+  'shared_org_now',
+]);
+
+/**
+ * The people in the student's own network worth a coffee chat now, best first. Only people with a specific reason:
+ * their company is on the target list, an alum in the student's field, an employer on both resumes, the role in an
+ * industry on the list, or a real tie (they know each other a little, or someone can introduce them). Never anyone
+ * the student is already in a chat with (any stage: to contact, waiting, declined, archived), already wrote to,
+ * hid, or who asked not to be contacted; never a profile without a real name or with neither title nor company.
+ */
 export function recommendPeople(inp: RecommendInput): Recommendation[] {
   const batchDate = inp.now.toISOString().slice(0, 10);
-  const activeChatPeople = new Set(
-    inp.chats.filter((c) => !['archived', 'no_response'].includes(c.stage)).map((c) => c.personId),
-  );
-  const declined = new Set(
-    inp.chats
-      .filter(
-        (c) =>
-          c.stage === 'declined' && inp.now.getTime() - new Date(c.updatedAt).getTime() < 180 * 86_400_000,
-      )
-      .map((c) => c.personId),
-  );
+  const inChat = new Set(inp.chats.map((c) => c.personId));
   const resumeKeywords = inp.resumeFacets.flatMap((f) => f.keywords);
   const targetNames = new Map(inp.targetCompanies.map((t) => [normalizeCompany(t.nameRaw), t]));
   const industries = inp.goals.targetIndustries.map((i) => i.toLowerCase());
@@ -132,11 +143,16 @@ export function recommendPeople(inp: RecommendInput): Recommendation[] {
     if (
       !p.isHuman ||
       p.hiddenAt ||
-      activeChatPeople.has(p.id) ||
-      declined.has(p.id) ||
+      p.doNotContact ||
+      inChat.has(p.id) ||
+      inp.contacted?.has(p.id) ||
       inp.recentlyRecommended.has(p.id)
     )
       continue;
+    const name = cleanName(p.displayName);
+    if (name.quality === 'junk' || (!p.currentTitle?.trim() && !p.currentOrganizationRaw?.trim())) continue;
+    const status = titleStatus(p.currentTitle || p.headline);
+    if (status === 'student' || status === 'aspiring') continue;
     const orgNorm = normalizeCompany(p.currentOrganizationRaw);
     const tc =
       (p.currentOrganizationId &&
@@ -165,6 +181,19 @@ export function recommendPeople(inp: RecommendInput): Recommendation[] {
       : undefined;
     const pathStrength = inp.pathStrength(p.id); // one lookup per candidate; callers pass a precomputed table
     const prior = responsePrior(p, inp.user);
+    const likeTitle = role ?? p.currentTitle;
+    const odds = replyOdds({
+      title: likeTitle,
+      status,
+      recruiter: isRecruiter(likeTitle),
+      alum: !!p.isAlumni,
+      sharedOrg: shared ? (shared.startDate && !shared.endDate ? 'now' : 'past') : undefined,
+      strength: p.strength,
+      connected: !!p.linkedinConnectedOn,
+      likeReplied: inp.outreach?.some(
+        (ex) => ex.replied && !!ex.title && !!likeTitle && titleSimilarity(ex.title, likeTitle) >= 0.75,
+      ),
+    });
     const scored = scoreDiscoverCandidate(
       {
         name: p.displayName,
@@ -176,6 +205,7 @@ export function recommendPeople(inp: RecommendInput): Recommendation[] {
         known: { strength: p.strength, pathStrength, linkedinConnected: !!p.linkedinConnectedOn },
         targetPriority: tc?.priority,
         prior,
+        odds,
       },
       profile,
     );
@@ -194,7 +224,7 @@ export function recommendPeople(inp: RecommendInput): Recommendation[] {
     // a little for what their work shares with the student's resume
     const fit = Math.min(1, scored.fit + 0.08 * Math.min(1, kw) * scored.parts.penalty);
     const reach = scored.reach;
-    const score = Math.max(fit, 0.05) ** 0.5 * reach ** 0.3 * prior ** 0.2;
+    const score = rankScore({ match: fit, reach, odds, initialName: name.quality === 'initial' });
     const reasons: { code: string; text: string }[] = [];
     if (shared) {
       // "both at X" only when the resume says the student is there now (a range ending in "present"); a resume
@@ -207,18 +237,36 @@ export function recommendPeople(inp: RecommendInput): Recommendation[] {
           : `Works at ${p.currentOrganizationRaw}, where you ${/\bintern/i.test(shared.title ?? '') ? 'interned' : 'worked'}`,
       });
     }
+    const where = p.currentOrganizationRaw ? ` at ${p.currentOrganizationRaw}` : '';
+    if (p.isAlumni && fnKey && role && !tc)
+      reasons.push({
+        code: 'alumni_field',
+        text: `${inp.user.school} alum, now ${article(role)} ${role}${where}`,
+      });
+    if (fnKey && role && indMatch && !tc && p.currentOrganizationRaw) {
+      const ind = inp.goals.targetIndustries.find(
+        (i) =>
+          !role.toLowerCase().includes(i.toLowerCase()) &&
+          ((p.headline ?? '').toLowerCase().replace(role.toLowerCase(), '').includes(i.toLowerCase()) ||
+            orgNorm.includes(i.toLowerCase())),
+      );
+      if (ind)
+        reasons.push({
+          code: 'role_industry',
+          text: `${role}${where}, in ${ind}, an industry on your list`,
+        });
+    }
     if (p.isAlumni) reasons.push({ code: 'alumni', text: `${inp.user.school} alum` });
     if (tc) reasons.push({ code: 'target_company', text: `${tc.nameRaw} is on your target list` });
     if (fnKey && role)
-      reasons.push({
-        code: 'function_match',
-        text: `Works in ${functionPhrase(fnKey) || 'your target function'} (${role})`,
-      });
+      reasons.push({ code: 'function_match', text: `${role}${where}, the role you're targeting` });
     const replied = scored.reasons.find((r) => r.code === 'like_replied');
     if (replied) reasons.push(replied);
     if (kw >= 0.2 && !shared) reasons.push({ code: 'resume_overlap', text: 'Overlaps with your experience' });
     if (p.strength >= 0.3) reasons.push({ code: 'warm', text: 'You already know each other a little' });
     else if (pathStrength >= 0.15) reasons.push({ code: 'path', text: 'Reachable through someone you know' });
+    // a role true of thousands, a school, a LinkedIn connection: not enough without a specific reason or a real tie
+    if (!reasons.some((r) => GOAL_ANCHORS.has(r.code) || r.code === 'warm' || r.code === 'path')) continue;
     out.push({
       id: `rec-${p.id}-${batchDate}`,
       userId: inp.userId,
@@ -226,7 +274,8 @@ export function recommendPeople(inp: RecommendInput): Recommendation[] {
       score: Math.round(score * 1000) / 1000,
       fitScore: Math.round(fit * 1000) / 1000,
       reachScore: reach,
-      responsePrior: prior,
+      // the reply odds: how likely they are to answer the student (Discover's third meter)
+      responsePrior: odds,
       reasons,
       status: 'new',
       batchDate,
@@ -238,7 +287,9 @@ export function recommendPeople(inp: RecommendInput): Recommendation[] {
   const perCompany = new Map<string, number>();
   const chosen: Recommendation[] = [];
   const peopleById = new Map(inp.people.map((p) => [p.id, p]));
-  const alumniFirst = out.filter((r) => peopleById.get(r.personId)?.isAlumni).slice(0, 3);
+  const alumniFirst = out
+    .filter((r) => peopleById.get(r.personId)?.isAlumni && r.reasons.some((x) => GOAL_ANCHORS.has(x.code)))
+    .slice(0, 3);
   for (const r of [...alumniFirst, ...out]) {
     if (chosen.length >= batch) break;
     if (chosen.includes(r)) continue;

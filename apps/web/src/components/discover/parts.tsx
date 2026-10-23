@@ -1,6 +1,6 @@
 /**
- * Pieces every Discover card shares: the "Why them" block, the Match and Reach bars, the "not a fit" menu, the
- * LinkedIn degree, and the skeleton shown while a page of people loads.
+ * Pieces every Discover card shares: the "Why them" block, the Match, Reach and Reply odds meters, the "not a fit"
+ * menu, the LinkedIn degree, and the skeleton shown while a page of people loads.
  */
 import type { WhyReason } from '@orbit/core';
 import { ThumbsDown } from 'lucide-react';
@@ -10,58 +10,87 @@ import { POINT_LABELS } from '../../engine/personPoints';
 import { RECOMMENDATION_DISMISS_REASONS, type RecommendationDismissReason } from '../../engine/recommend';
 import { cx } from '../../ui';
 
-/** What the two numbers on a card mean, in one line each: the bars' hover text and the legend above the feed. */
+/** What each meter on a card means, in one line: the meters' hover text. */
 export const SCORE_MEANING = {
-  match: 'Match is how well someone fits your goals: their role, company, industry and school.',
-  reach:
-    'Reach is how warm a path to them is: people you both know, an introducer, what has passed between you.',
+  match: 'Match: how well they fit your goals (role, company, school).',
+  reach: 'Reach: how warm your path to them is (people you both know, an introducer, your history).',
+  odds: 'Reply odds: how likely they are to answer you (seniority, what you share, a warm path, who replied before).',
 } as const;
 
-/** A score out of 100 as a short bar: easier to compare down a list of cards than two numbers. */
-export function ScoreBar({ label, value, title }: { label: string; value: number; title: string }) {
+/** How many segments a meter has, and the band a score falls in: one segment per fifth, like a signal meter. */
+export const METER_SEGMENTS = 5;
+const BAND_WORDS = ['Very low', 'Low', 'Fair', 'Good', 'Strong'] as const;
+
+/** The segments lit for a score out of 100: at least one for anything above zero. */
+export function litSegments(pct: number): number {
+  if (pct <= 0) return 0;
+  return Math.max(1, Math.min(METER_SEGMENTS, Math.ceil(pct / (100 / METER_SEGMENTS))));
+}
+
+/**
+ * A score out of 100 as a segmented meter: five segments lit by band, like a signal-strength meter, so a row of
+ * cards compares at a glance. The number is in the hover text and read out by screen readers.
+ */
+export function SegmentMeter({ label, value, title }: { label: string; value: number; title: string }) {
   const pct = Math.max(0, Math.min(100, Math.round(value * 100)));
+  const lit = litSegments(pct);
+  const word = BAND_WORDS[Math.max(0, lit - 1)]!;
+  const tone = lit >= 4 ? 'bg-accent' : lit === 3 ? 'bg-accent/55' : 'bg-ink-3/45';
   return (
     <div
-      title={title}
+      title={`${title} ${pct} out of 100.`}
       role="meter"
       aria-label={label}
       aria-valuenow={pct}
       aria-valuemin={0}
       aria-valuemax={100}
+      aria-valuetext={`${pct} out of 100, ${word.toLowerCase()}`}
+      data-lit={lit}
+      className="min-w-0"
     >
-      <div className="flex items-baseline justify-between text-[11.5px] text-ink-3">
-        <span>{label}</span>
-        <span className="tabular text-ink-2">{pct}</span>
-      </div>
-      <div className="mt-1 h-1 rounded-full bg-line-2 overflow-hidden">
-        <div
-          className={cx(
-            'h-full rounded-full',
-            pct >= 70 ? 'bg-accent' : pct >= 50 ? 'bg-accent/60' : 'bg-ink-3/40',
-          )}
-          style={{ width: `${pct}%` }}
-        />
+      <div className="text-[11.5px] text-ink-3 truncate">{label}</div>
+      <div className="mt-1 grid grid-cols-5 gap-[3px]" aria-hidden>
+        {Array.from({ length: METER_SEGMENTS }, (_, i) => (
+          <span
+            key={i}
+            className={cx('h-1.5 rounded-[2px]', i < lit ? tone : 'bg-line-2')}
+            data-testid="meter-segment"
+            data-lit={i < lit}
+          />
+        ))}
       </div>
     </div>
   );
 }
 
-/** Match and Reach side by side. */
-export function ScoreBars({ fit, reach, testId }: { fit: number; reach: number; testId: string }) {
+/** Match, Reach and Reply odds side by side, the same on every card. */
+export function ScoreBars({
+  fit,
+  reach,
+  odds,
+  testId,
+}: {
+  fit: number;
+  reach: number;
+  odds: number;
+  testId: string;
+}) {
   return (
-    <div className="grid grid-cols-2 gap-4" data-testid={testId}>
-      <ScoreBar label="Match" value={fit} title={`${SCORE_MEANING.match} Out of 100.`} />
-      <ScoreBar label="Reach" value={reach} title={`${SCORE_MEANING.reach} Out of 100.`} />
+    <div className="grid grid-cols-3 gap-3" data-testid={testId}>
+      <SegmentMeter label="Match" value={fit} title={SCORE_MEANING.match} />
+      <SegmentMeter label="Reach" value={reach} title={SCORE_MEANING.reach} />
+      <SegmentMeter label="Reply odds" value={odds} title={SCORE_MEANING.odds} />
     </div>
   );
 }
 
-/** The legend above the feed: what Match and Reach mean, said once for every card. */
+/** The legend above the feed: the three meters, said once for every card, on one line. */
 export function ScoreLegend() {
   return (
     <p className="text-[12px] text-ink-3 mb-2.5" data-testid="discover-legend">
-      <span className="font-medium text-ink-2">Match</span> is how well someone fits your goals;{' '}
-      <span className="font-medium text-ink-2">Reach</span> is how warm a path to them is.
+      <span className="font-medium text-ink-2">Match</span> your goals ·{' '}
+      <span className="font-medium text-ink-2">Reach</span> your way in ·{' '}
+      <span className="font-medium text-ink-2">Reply odds</span> will they answer
     </p>
   );
 }
@@ -130,10 +159,10 @@ export function DismissMenu({
 const WHY_SHOWN = 2;
 
 /**
- * Why them: the reasons behind the pick, strongest first, each from a signal in the account (core whyThem). Two
- * show; More opens the rest in place, with what else is worth knowing about them (the points). A card with little
- * behind it says so in its last line rather than filling the space. The folded lines stay in the page (hidden), so
- * search and screen readers find them.
+ * Why them: the reasons behind the pick, the most specific first, each from a signal in the account (core whyThem).
+ * Two show; More opens the rest in place, with what else is worth knowing about them (the points). Discover shows
+ * nobody without a specific reason, so no card fills the space with how little is known. The folded lines stay in
+ * the page (hidden), so search and screen readers find them.
  */
 export function WhyThem({
   reasons,
@@ -217,7 +246,8 @@ export function CardSkeleton() {
         </div>
       </div>
       <div className="h-3 w-4/5 rounded bg-line-2" />
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-3 gap-3">
+        <div className="h-2 rounded bg-line-2" />
         <div className="h-2 rounded bg-line-2" />
         <div className="h-2 rounded bg-line-2" />
       </div>

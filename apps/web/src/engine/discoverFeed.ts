@@ -18,27 +18,45 @@ import type {
   Person,
   Recommendation,
   User,
+  WhyReason,
 } from '@orbit/core';
 import {
   buildDiscoverProfile,
   buildWarmUpPlan,
-  cardReason,
+  cleanName,
+  cleanRole,
+  DISCOVER_MIN_MATCH,
+  DISCOVER_MIN_SCORE,
+  directorOrAbove,
   discoverQueries,
+  junkProfile,
   linkedInSlug,
   newId,
   nextDiscoverQuery,
   normalizeCompany,
+  rankScore,
   roleFromHeadline,
   scoreDiscoverCandidate,
   stripDiacritics,
   tieBand,
+  titleStatus,
+  whyFromReasons,
+  whyThem,
+  worthSuggesting,
 } from '@orbit/core';
 import { feedback } from '../db/repo';
 import { db } from '../db/schema';
 import type { LinkedInFound } from '../integrations/unipile';
 import { evaluateImmediateSuggestions, startWarmUpOrOutreach } from './brief';
 import { addLinkedInFound, linkedInSearchReady, rememberFound, searchLinkedInLive } from './linkedinSearch';
-import { introducerIdFor, loadDiscoverSignals } from './recommend';
+import {
+  type LoadedPointContext,
+  loadPointContext,
+  type PersonPoint,
+  personPoints,
+  whySignalsFor,
+} from './personPoints';
+import { introducerIdFor, isColdRecommendation, loadDiscoverSignals, waitingOnThem } from './recommend';
 import { currentResumeFacets } from './resume';
 
 /** LinkedIn searches Discover may run per account per day (the proxy allows 40 for everything). */
@@ -169,9 +187,10 @@ const sameSchool = (a: string | undefined, b: string | undefined) => {
   return !!x && !!y && (x === y || x.includes(y) || y.includes(x));
 };
 
-function entryFrom(
+/** A search result as the feed keeps it (exported for the simulation, which stores pages the way a search does). */
+export function entryFrom(
   f: LinkedInFound,
-  q: { key: string; why: string; school?: string },
+  q: { key: string; why: string; school?: string; company?: string; title?: string },
   school: string,
   at: string,
 ) {
@@ -180,8 +199,10 @@ function entryFrom(
     memberId: f.memberId,
     name: f.name,
     headline: f.headline,
-    title,
-    company: org,
+    // a role, never a self-description ("Experienced and versatile Product Manager" is a Product Manager)
+    title: cleanRole(title),
+    // LinkedIn's company filter matched their current company: it stands when the headline names none
+    company: org ?? (q.company?.trim() || undefined),
     location: f.location,
     profileUrl: f.profileUrl,
     pictureUrl: f.pictureUrl,
@@ -320,12 +341,30 @@ async function loadMore(user: User, opts: { fetch?: typeof fetch; now?: Date }):
 
 // ---- the view ----------------------------------------------------------------------------------------------------
 
+/** The three meters on a card and the score the page ranks by (core rankScore), each 0..1. */
+export interface CardMetrics {
+  /** how well they fit the student's goals */
+  match: number;
+  /** how warm the path to them is */
+  reach: number;
+  /** how likely they are to answer the student */
+  odds: number;
+  score: number;
+}
+
 export interface FoundCard {
   kind: 'found';
   /** the add id ("li:" + member id) */
   id: string;
   entry: FoundEntry;
+  /** their name as a card shows it ("CHAYA M." reads "Chaya M.") */
+  name: string;
+  /** their role, never a self-description from the headline */
+  role?: string;
   scored: DiscoverScore;
+  /** why them, strongest first: a specific reason leads */
+  why: WhyReason[];
+  metrics: CardMetrics;
   reason: DiscoverReason;
   /** the one action the card leads with */
   action: FoundAction;
@@ -338,6 +377,14 @@ export interface NetworkCard {
   id: string;
   rec: Recommendation;
   person: Person;
+  name: string;
+  why: WhyReason[];
+  /** what else is worth knowing about them (personPoints) */
+  points: PersonPoint[];
+  metrics: CardMetrics;
+  /** an intro when someone on the route can introduce them, a warm-up when they know the student only from
+   * LinkedIn, a first message when they know each other */
+  action: 'intro' | 'warm_up' | 'write';
   reason?: { code: string; text: string };
   introducer?: Person;
 }
@@ -345,13 +392,13 @@ export interface NetworkCard {
 export type DiscoverCard = FoundCard | NetworkCard;
 
 export interface DiscoverView {
-  /** new people, best first */
+  /** new people worth meeting, best first */
   found: FoundCard[];
   /** people in the network worth reaching now: saved first, then by score */
   network: NetworkCard[];
-  /** the proactive picks at the top, each with one action */
+  /** the proactive picks at the top: the strongest few, each with one action */
   suggestions: DiscoverCard[];
-  /** everything else, new people first with network people mixed in */
+  /** everything else, best first (saved people lead) */
   feed: DiscoverCard[];
   connected: boolean;
   searchesLeft: number;
@@ -368,54 +415,49 @@ function knowsWell(p: Person): boolean {
   return band === 'warm' || band === 'strong' || band === 'close';
 }
 
-/** After every `every` new people, one person from the network; saved network people lead. */
-export function mixFeed<T extends DiscoverCard>(found: T[], network: T[], every = 3): T[] {
-  const saved = network.filter((c) => c.kind === 'network' && c.rec.status === 'saved');
-  const rest = network.filter((c) => !saved.includes(c));
-  const out: T[] = [...saved];
-  let n = 0;
-  for (const f of found) {
-    out.push(f);
-    if (++n % every === 0 && rest.length) out.push(rest.shift()!);
-  }
-  return [...out, ...rest];
-}
+/** How many picks "Suggested for you" holds at most, and how many from one company. */
+const PICKS = 4;
+const PICKS_PER_COMPANY = 2;
 
-const PROACTIVE = new Set([
-  'colleague',
-  'mutuals',
-  'alumni_target',
-  'shared_org_now',
-  'like_replied',
-  'referred',
-  'path',
-]);
+const cardCompany = (c: DiscoverCard) =>
+  normalizeCompany(c.kind === 'found' ? c.entry.company : c.person.currentOrganizationRaw);
+const cardRole = (c: DiscoverCard) => (c.kind === 'found' ? c.role : c.person.currentTitle);
+/** The person who is the way in: the friend at their company, or the introducer on the route. */
+const wayIn = (c: DiscoverCard) => (c.kind === 'found' ? c.colleague?.personId : c.introducer?.id);
 
 /**
- * The proactive picks: people with a reason to write now (someone who can introduce them, mutual connections, an
- * alum at a target company, someone like the people who replied), best first, at most `n`, new people first.
+ * Could this card be a pick: worth writing to now with one clear action. Not someone far out on LinkedIn with no way
+ * in, a director or VP with no one to introduce them, a name with only an initial, or a card whose action is to save.
  */
-export function pickSuggestions(found: FoundCard[], network: NetworkCard[], n = 4): DiscoverCard[] {
-  const why = (c: DiscoverCard) =>
-    c.kind === 'found'
-      ? c.scored.reasons.some(
-          (r) => PROACTIVE.has(r.code) && (r.code !== 'mutuals' || (c.entry.mutualCount ?? 0) >= 3),
-        )
-      : !!c.introducer || c.rec.reasons.some((r) => PROACTIVE.has(r.code));
-  // different reasons and different people to ask, not four intros through one friend
-  const byAsk = new Set<string>();
-  const f = found
-    .filter(why)
-    .filter((c) => {
-      if (!c.colleague) return true;
-      if (byAsk.has(c.colleague.personId)) return false;
-      byAsk.add(c.colleague.personId);
-      return true;
-    })
-    .slice(0, n);
-  const room = Math.max(0, Math.min(2, n - f.length));
-  const net = network.filter((c) => c.rec.status !== 'saved' && why(c)).slice(0, room);
-  return [...f, ...net].slice(0, n);
+export function pickable(c: DiscoverCard): boolean {
+  if (c.kind === 'network' && c.rec.status === 'saved') return false;
+  if (c.action === 'save') return false;
+  if (cleanName(c.name).quality !== 'full') return false;
+  if (c.kind === 'found' && (c.entry.distance ?? 3) >= 3 && !c.colleague) return false;
+  if (directorOrAbove(cardRole(c)) && !wayIn(c)) return false;
+  return !!c.why[0]?.anchor;
+}
+
+/**
+ * The proactive picks: the strongest few by the score the feed is ranked by, at most two at one company and one per
+ * friend asked for an intro, so the row is four different reasons to write today.
+ */
+export function pickSuggestions(cards: DiscoverCard[], n = PICKS): DiscoverCard[] {
+  const perCompany = new Map<string, number>();
+  const asked = new Set<string>();
+  const out: DiscoverCard[] = [];
+  for (const c of [...cards].sort((a, b) => b.metrics.score - a.metrics.score)) {
+    if (out.length >= n) break;
+    if (!pickable(c)) continue;
+    const co = cardCompany(c);
+    const via = wayIn(c);
+    if (co && (perCompany.get(co) ?? 0) >= PICKS_PER_COMPANY) continue;
+    if (via && asked.has(via)) continue;
+    if (co) perCompany.set(co, (perCompany.get(co) ?? 0) + 1);
+    if (via) asked.add(via);
+    out.push(c);
+  }
+  return out;
 }
 
 function foundAction(scored: DiscoverScore, colleague: boolean, warmUpEnabled: boolean): FoundAction {
@@ -424,9 +466,34 @@ function foundAction(scored: DiscoverScore, colleague: boolean, warmUpEnabled: b
   return warmUpEnabled ? 'warm_up' : 'write';
 }
 
-/** Score every kept person and lay out the page: picks, then the mixed feed. Read inside a live query. */
-export async function discoverView(user: User, now = new Date()): Promise<DiscoverView> {
-  const [ctx, connected, settings, recs] = await Promise.all([
+/** One person, once: by name and company. The stronger card stays. */
+function dedupe<T extends DiscoverCard>(cards: T[]): T[] {
+  const seen = new Set<string>();
+  return cards.filter((c) => {
+    const co = cardCompany(c);
+    const k = `${looseName(c.name)}|${co}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
+/**
+ * Score every kept person and lay out the page. Only people with a specific reason to meet them are shown (core
+ * worthSuggesting), with a Match and a rank above the floor: when that leaves few, the page says that's everyone
+ * rather than padding. Read inside a live query.
+ */
+export async function discoverView(
+  user: User,
+  now = new Date(),
+  /**
+   * `pointCtx`: what the network cards say about their people, when the page read it in its own live query (it reads
+   * many tables a LinkedIn sync writes to, so the page keeps it out of this one and passes `readContext: false`:
+   * someone it does not cover yet is shown once it does). Without it the view reads it here.
+   */
+  opts: { pointCtx?: LoadedPointContext; readContext?: boolean } = {},
+): Promise<DiscoverView> {
+  const [ctx, connected, settings, recs, chats] = await Promise.all([
     loadContext(user, now),
     linkedInSearchReady(user),
     db.settings.get(user.id),
@@ -435,6 +502,7 @@ export async function discoverView(user: User, now = new Date()): Promise<Discov
       .equals(user.id)
       .filter((r) => r.status === 'new' || r.status === 'saved')
       .toArray(),
+    db.chats.where('userId').equals(user.id).toArray(),
   ]);
   const { profile, people, state } = ctx;
   const warmUpEnabled = settings?.warmUpEnabled ?? true;
@@ -446,14 +514,13 @@ export async function discoverView(user: User, now = new Date()): Promise<Discov
     const k = normalizeCompany(p.currentOrganizationRaw);
     if (k) byOrg.set(k, [...(byOrg.get(k) ?? []), p]);
   }
-  const found: FoundCard[] = [];
-  for (const e of state.people) {
-    if (gone.has(e.memberId) || known(e)) continue;
-    const mate = (byOrg.get(normalizeCompany(e.company)) ?? []).sort((a, b) => b.strength - a.strength)[0];
-    const scored = scoreDiscoverCandidate(
+
+  // ---- new people ----
+  const score = (e: FoundEntry, role: string | undefined, mate?: Person) =>
+    scoreDiscoverCandidate(
       {
         name: e.name,
-        title: e.title,
+        title: role,
         company: e.company,
         headline: e.headline,
         location: e.location,
@@ -465,60 +532,156 @@ export async function discoverView(user: User, now = new Date()): Promise<Discov
       },
       profile,
     );
+  const candidates: {
+    e: FoundEntry;
+    role?: string;
+    name: string;
+    initial: boolean;
+    mate?: Person;
+    s: DiscoverScore;
+  }[] = [];
+  for (const e of state.people) {
+    if (gone.has(e.memberId) || known(e)) continue;
+    // a role read again on every view: a page kept from before keeps a self-description ("Experienced and
+    // versatile Product Manager") as its title
+    const role = cleanRole(e.title);
+    if (junkProfile({ name: e.name, title: role, company: e.company, headline: e.headline })) continue;
+    const status = titleStatus(role ?? e.headline);
+    if (status === 'student' || status === 'aspiring') continue;
+    const n = cleanName(e.name);
+    const mate = (byOrg.get(normalizeCompany(e.company)) ?? []).sort((a, b) => b.strength - a.strength)[0];
+    candidates.push({
+      e,
+      role,
+      name: n.name,
+      initial: n.quality === 'initial',
+      mate,
+      s: score(e, role, mate),
+    });
+  }
+  candidates.sort((a, b) => b.s.score - a.s.score);
+  // one friend at a big company is not an introduction to all of it: each is named as the way in for their
+  // INTROS_PER_COLLEAGUE best matches; the others are scored and reasoned without them
+  const asked = new Map<string, number>();
+  for (const c of candidates) {
+    if (!c.mate) continue;
+    const n = (asked.get(c.mate.id) ?? 0) + 1;
+    asked.set(c.mate.id, n);
+    if (n <= INTROS_PER_COLLEAGUE) continue;
+    c.mate = undefined;
+    c.s = score(c.e, c.role);
+  }
+  const found: FoundCard[] = [];
+  for (const { e, role, name, initial, mate, s } of candidates) {
+    const why = whyFromReasons(
+      s.reasons,
+      { title: role, company: e.company, headline: e.headline, mutualCount: e.mutualCount },
+      { filler: false },
+    );
+    const metrics: CardMetrics = {
+      match: s.fit,
+      reach: s.reach,
+      odds: s.odds,
+      score: rankScore({ match: s.fit, reach: s.reach, odds: s.odds, initialName: initial }),
+    };
+    if (!worthSuggesting(why, s.goalLink) || s.fit < DISCOVER_MIN_MATCH || metrics.score < DISCOVER_MIN_SCORE)
+      continue;
     found.push({
       kind: 'found',
       id: `li:${e.memberId}`,
       entry: e,
-      scored,
-      reason: scored.reasons[0] ?? { code: 'search', text: e.why },
-      action: foundAction(scored, !!mate, warmUpEnabled),
+      name,
+      role,
+      scored: s,
+      why,
+      metrics,
+      reason: { code: why[0]!.kind, text: why[0]!.text },
+      action: foundAction(s, !!mate, warmUpEnabled),
       colleague: mate ? { personId: mate.id, firstName: mate.firstName } : undefined,
     });
   }
-  found.sort((a, b) => b.scored.score - a.scored.score);
-  // one friend at a big company is not an introduction to all of it: each is named as the way in for their
-  // INTROS_PER_COLLEAGUE best matches; the others lead with their next reason and a warm-up
-  const asked = new Map<string, number>();
-  for (const c of found) {
-    if (!c.colleague) continue;
-    const n = (asked.get(c.colleague.personId) ?? 0) + 1;
-    asked.set(c.colleague.personId, n);
-    if (n <= INTROS_PER_COLLEAGUE) continue;
-    const rest = c.scored.reasons.filter((r) => r.code !== 'colleague');
-    c.reason = rest[0] ?? { code: 'search', text: c.entry.why };
-    c.action = foundAction(c.scored, false, warmUpEnabled);
-    c.colleague = undefined;
-  }
+  found.sort((a, b) => b.metrics.score - a.metrics.score);
+
+  // ---- people in the network ----
   const byId = new Map(people.map((p) => [p.id, p]));
-  const network: NetworkCard[] = recs
-    .map((rec): NetworkCard | undefined => {
-      const person = byId.get(rec.personId);
-      if (!person || person.hiddenAt) return undefined;
-      const introId = introducerIdFor(rec);
-      return {
-        kind: 'network',
-        id: rec.id,
-        rec,
-        person,
-        reason: cardReason(rec.reasons.filter((r) => r.code !== 'alumni')),
-        introducer: introId ? byId.get(introId) : undefined,
-      };
-    })
-    .filter((c): c is NetworkCard => !!c)
-    .sort(
-      (a, b) =>
-        (b.rec.status === 'saved' ? 1 : 0) - (a.rec.status === 'saved' ? 1 : 0) || b.rec.score - a.rec.score,
+  const inChat = new Set(chats.map((c) => c.personId));
+  const candidatesNet = recs
+    .map((rec) => ({ rec, person: byId.get(rec.personId) }))
+    .filter(
+      (x): x is { rec: Recommendation; person: Person } =>
+        !!x.person &&
+        !x.person.hiddenAt &&
+        !x.person.doNotContact &&
+        x.person.isHuman &&
+        // already in a chat (to contact, waiting, declined, archived): the board has them, Discover does not
+        !inChat.has(x.person.id),
     );
-  const suggestions = pickSuggestions(found, network);
+  const given = opts.pointCtx;
+  const covered = (id: string) => opts.readContext !== false || !!given?.forIds.has(id);
+  const pointCtx = !candidatesNet.length
+    ? undefined
+    : opts.readContext === false || (given && candidatesNet.every((x) => given.forIds.has(x.person.id)))
+      ? given
+      : await loadPointContext(
+          user,
+          candidatesNet.map((x) => x.person.id),
+          now,
+          people,
+        );
+  const network: NetworkCard[] = [];
+  for (const { rec, person } of candidatesNet) {
+    if (!pointCtx) break;
+    if (!covered(person.id)) continue;
+    if (waitingOnThem(person.id, pointCtx.touchpoints, now)) continue;
+    const n = cleanName(person.displayName);
+    if (n.quality === 'junk' || (!person.currentTitle?.trim() && !person.currentOrganizationRaw?.trim()))
+      continue;
+    const introId = introducerIdFor(rec);
+    const introducer = introId ? byId.get(introId) : undefined;
+    const pctx = { ...pointCtx, dossier: pointCtx.dossiers.get(person.id) };
+    const why = whyThem(whySignalsFor(person, rec, pctx, introducer), { filler: false });
+    const saved = rec.status === 'saved';
+    if (!saved && (!worthSuggesting(why, true) || rec.fitScore < DISCOVER_MIN_MATCH)) continue;
+    const metrics: CardMetrics = {
+      match: rec.fitScore,
+      reach: rec.reachScore,
+      odds: rec.responsePrior,
+      score: rankScore({
+        match: rec.fitScore,
+        reach: rec.reachScore,
+        odds: rec.responsePrior,
+        initialName: n.quality === 'initial',
+      }),
+    };
+    if (!saved && metrics.score < DISCOVER_MIN_SCORE) continue;
+    const cold = isColdRecommendation(person, rec);
+    network.push({
+      kind: 'network',
+      id: rec.id,
+      rec,
+      person,
+      name: n.name,
+      why,
+      points: personPoints(person, rec, pctx),
+      metrics,
+      action: cold && introducer ? 'intro' : cold && warmUpEnabled ? 'warm_up' : 'write',
+      reason: why[0] ? { code: why[0].kind, text: why[0].text } : undefined,
+      introducer,
+    });
+  }
+  const isSaved = (c: DiscoverCard) => c.kind === 'network' && c.rec.status === 'saved';
+  const byRank = (a: DiscoverCard, b: DiscoverCard) =>
+    (isSaved(b) ? 1 : 0) - (isSaved(a) ? 1 : 0) || b.metrics.score - a.metrics.score;
+  const net = dedupe(network.sort(byRank));
+  const all = dedupe<DiscoverCard>([...found, ...net].sort(byRank));
+  // a short list keeps its full cards: one pick for every three people, four at most
+  const suggestions = pickSuggestions(all, Math.min(PICKS, Math.floor(all.length / 3)));
   const picked = new Set(suggestions.map((c) => c.id));
-  const feed = mixFeed<DiscoverCard>(
-    found.filter((c) => !picked.has(c.id)),
-    network.filter((c) => !picked.has(c.id)),
-  );
+  const feed = all.filter((c) => !picked.has(c.id));
   const queries = discoverQueries(profile);
   return {
-    found,
-    network,
+    found: all.filter((c): c is FoundCard => c.kind === 'found'),
+    network: net,
     suggestions,
     feed,
     connected,

@@ -14,6 +14,7 @@ import type {
 import {
   buildWarmUpPlan,
   type Candidate,
+  cleanName,
   contextText,
   defaultStyleCard,
   earliestFor,
@@ -22,10 +23,12 @@ import {
   isBlocked,
   isQuietDay,
   isRuleSuggestion,
+  liftOdds,
   newId,
   normalizeCompany,
   normalizeEmail,
   proposeWindows,
+  rankScore,
   resumeOneLiner,
   STAGE_LABELS,
   schoolShort,
@@ -54,7 +57,7 @@ import {
 } from './introductions';
 import { noteMatchCandidate } from './notes';
 import { personSummary } from './prep';
-import { loadDiscoverSignals } from './recommend';
+import { loadDiscoverSignals, waitingSet } from './recommend';
 import { currentResumeFacets, sharesOrgNow } from './resume';
 import { retireSuggestions, runTimedStageRules } from './stages';
 
@@ -1983,15 +1986,18 @@ export async function recommendationsRefresh(
   opts: { batchSize?: number } = {},
 ): Promise<number> {
   const { recommendPeople } = await import('@orbit/core');
-  const [goals, targetCompanies, resumeFacets, people, chats, existing, signals] = await Promise.all([
-    db.goals.get(user.id),
-    db.targetCompanies.where('userId').equals(user.id).toArray(),
-    currentResumeFacets(user.id),
-    db.people.where('userId').equals(user.id).toArray(),
-    db.chats.where('userId').equals(user.id).toArray(),
-    db.recommendations.where('userId').equals(user.id).toArray(),
-    loadDiscoverSignals(user.id),
-  ]);
+  const [goals, targetCompanies, resumeFacets, people, chats, existing, signals, touches] = await Promise.all(
+    [
+      db.goals.get(user.id),
+      db.targetCompanies.where('userId').equals(user.id).toArray(),
+      currentResumeFacets(user.id),
+      db.people.where('userId').equals(user.id).toArray(),
+      db.chats.where('userId').equals(user.id).toArray(),
+      db.recommendations.where('userId').equals(user.id).toArray(),
+      loadDiscoverSignals(user.id),
+      db.touchpoints.where('userId').equals(user.id).toArray(),
+    ],
+  );
   if (!goals) return 0;
   const { g } = await buildReachGraph(user.id);
   const recent = new Set(
@@ -2023,15 +2029,29 @@ export async function recommendationsRefresh(
     batchSize: opts.batchSize,
     outreach: signals.outreach,
     dismissed: signals.dismissed,
+    // written to lately with no answer yet: not suggested again
+    contacted: waitingSet(touches, now),
   });
   const named = new Map(people.map((p) => [p.id, p]));
+  // a way in found after ranking raises the reply odds, and the rank with them
+  const lift = (r: (typeof recs)[number], by: number) => {
+    r.responsePrior = liftOdds(r.responsePrior, by);
+    r.score = rankScore({
+      match: r.fitScore,
+      reach: r.reachScore,
+      odds: r.responsePrior,
+      initialName: cleanName(named.get(r.personId)?.displayName).quality === 'initial',
+    });
+  };
   for (const r of recs) {
     r.bestPath = undefined;
     // someone the student met pointed them at this person: that comes first, and no warm-up is needed
     const person = named.get(r.personId);
     const referrer = person ? await findReferrerFor(user.id, person) : undefined;
-    if (referrer && !r.reasons.some((x) => x.code === 'referred'))
+    if (referrer && !r.reasons.some((x) => x.code === 'referred')) {
       r.reasons.unshift({ code: 'referred', text: `${referrer.firstName} suggested you get in touch` });
+      lift(r, 1.5);
+    }
     // "Reachable through someone you know" names who: the first person on the best route, who could introduce them
     const via = r.reasons.find((x) => x.code === 'path');
     if (via) {
@@ -2040,6 +2060,7 @@ export async function recommendationsRefresh(
       if (introducer) {
         r.bestPath = route;
         via.text = `${introducer.firstName} knows them and could introduce you`;
+        lift(r, 1.0);
       }
     }
     const prev = existing.find((e) => e.personId === r.personId && e.status === 'saved');

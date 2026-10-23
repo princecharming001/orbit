@@ -22,7 +22,8 @@ describe('the student voice', () => {
     const after = await learnStyle(user);
     expect(after.ok && after.sources.linkedin).toBeGreaterThan(0);
     expect((await sampleCounts(user)).linkedinAvailable).toBe(true);
-  });
+    // connecting runs the sample student's whole LinkedIn sync (83 connections): seconds of work on a busy machine
+  }, 20_000);
 
   it('keeps what the student set by hand when it learns again', async () => {
     await updateStyle(user, {

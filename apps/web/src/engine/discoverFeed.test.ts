@@ -31,6 +31,8 @@ const user: User = {
 };
 
 /** A LinkedIn of 30 people: a third at Stripe, the rest elsewhere; five a page, cursor = the next offset. */
+const FIRSTS = ['Maya', 'Omar', 'Lena', 'Caleb', 'Priya', 'Jordan'];
+const LASTS = ['Haddad', 'Novak', 'Weber', 'Shah', 'Okafor'];
 const POOL = Array.from({ length: 30 }, (_, i) => {
   const company = i % 3 === 0 ? 'Stripe' : i % 3 === 1 ? 'Figma' : 'Acme';
   const title = ['Software Engineer', 'Product Manager', 'Senior Software Engineer', 'Engineering Manager'][
@@ -38,7 +40,8 @@ const POOL = Array.from({ length: 30 }, (_, i) => {
   ]!;
   return {
     id: `m${i}`,
-    name: `Person ${String.fromCharCode(65 + (i % 26))}${i}`,
+    // real names (Discover never suggests a profile without one): six first names by five last names, all different
+    name: `${FIRSTS[i % 6]} ${LASTS[Math.floor(i / 6)]}`,
     headline: `${title} at ${company}`,
     location: i % 2 ? 'New York' : 'Seattle',
     public_profile_url: `https://www.linkedin.com/in/person-${i}`,
@@ -303,7 +306,10 @@ describe('the Discover feed of new people', () => {
     expect(atStripe.length).toBeGreaterThan(2);
     const intros = v.found.filter((c) => c.action === 'intro');
     expect(intros.length).toBe(2);
-    expect(intros[0]!.reason.text).toBe('Maya, whom you know, works at Stripe too');
+    // the card leads with why to meet them (their role at a target company); Maya is the way in, named among the
+    // reasons and on the button
+    expect(intros[0]!.why[0]!.text).toMatch(/at Stripe, on your target list$/);
+    expect(intros[0]!.why.map((w) => w.text)).toContain('Maya, whom you know, works at Stripe too');
     // the picks ask Maya once at most
     expect(v.suggestions.filter((c) => c.kind === 'found' && c.colleague).length).toBeLessThanOrEqual(1);
     // someone the student barely knows is never offered as the way in

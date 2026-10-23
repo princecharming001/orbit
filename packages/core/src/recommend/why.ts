@@ -4,6 +4,7 @@
  * (a target company matched by name, people you both know by name, a date they replied), and when there is little,
  * the card says so instead of filling the space.
  */
+import { article } from '../drafts/phrasing';
 
 export type WhyKind =
   /** their role or company is what the student is aiming for */
@@ -33,6 +34,13 @@ export interface WhyReason {
   text: string;
   /** 0..100, what the line is worth against the others on the card */
   strength: number;
+  /**
+   * A specific reason to meet them, enough on its own to put them on Discover: `goal` ties them to what the student is
+   * aiming for (a target company, an alum in the field, an employer on both resumes), `tie` is a real way in (someone
+   * named who can introduce them, people the student knows, a reply). A line without it (a role true of thousands, a
+   * count of mutual connections, a LinkedIn connection, the city) only adds to one that has it.
+   */
+  anchor?: 'goal' | 'tie';
 }
 
 /** The signals one person's reasons are built from. A field left out is a signal the account does not have. */
@@ -138,10 +146,22 @@ const yearsApart = (mine: number, theirs: number): string => {
 
 const monthsAgo = (n: number): string => (n <= 0 ? 'this month' : n === 1 ? '1 month' : `${n} months`);
 
+/** Specific reasons first (a card always leads with why to meet them), then by strength. */
 function order(reasons: WhyReason[]): WhyReason[] {
   return [...reasons].sort(
-    (a, b) => b.strength - a.strength || KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind),
+    (a, b) =>
+      (b.anchor ? 1 : 0) - (a.anchor ? 1 : 0) ||
+      b.strength - a.strength ||
+      KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind),
   );
+}
+
+/**
+ * Options for a reasons block. `filler: false` (Discover) leaves out the lines that only fill space: the honest
+ * "little known" line (Discover shows nobody it would fit) and the search that found them.
+ */
+export interface WhyOptions {
+  filler?: boolean;
 }
 
 /** The honest line for a card with little behind it: what is actually on record. */
@@ -162,54 +182,77 @@ function thinLine(
  * The reasons for one person, strongest first, at most WHY_MAX; with fewer than two real ones, a last line says how
  * little is on record. Every line is written from a signal in `s`; a signal absent is a line absent.
  */
-export function whyThem(s: WhySignals): WhyReason[] {
+export function whyThem(s: WhySignals, opts: WhyOptions = {}): WhyReason[] {
   const out: WhyReason[] = [];
-  const say = (kind: WhyKind, text: string, strength: number) => out.push({ kind, text, strength });
+  const say = (kind: WhyKind, text: string, strength: number, anchor?: 'goal' | 'tie') =>
+    out.push(anchor ? { kind, text, strength, anchor } : { kind, text, strength });
 
   // ---- goals: the role and company the student is aiming for ----
   const g = s.goal;
+  // an alum in the role the student wants: one line says both (the school's own line then adds the class year)
+  const alumInField = !!(g?.role && !g.company && s.school);
   if (g?.company && g.role) {
-    say('goal', `${g.role.title} at ${g.company.name}, on your target list`, 100);
+    say('goal', `${g.role.title} at ${g.company.name}, on your target list`, 100, 'goal');
   } else if (g?.company) {
     const top = g.company.priority === 1 ? 'at the top of' : 'on';
-    say('goal', `Works at ${g.company.name}, ${top} your target list`, g.company.priority === 1 ? 90 : 85);
+    say(
+      'goal',
+      `Works at ${g.company.name}, ${top} your target list`,
+      g.company.priority === 1 ? 90 : 85,
+      'goal',
+    );
+  } else if (alumInField && g?.role) {
+    const where = s.company ? ` at ${s.company}` : '';
+    say('goal', `${s.school!.name} alum, now ${article(g.role.title)} ${g.role.title}${where}`, 92, 'goal');
+  } else if (g?.role && g.industry) {
+    const where = s.company ? ` at ${s.company}` : '';
+    say('goal', `${g.role.title}${where}, in ${g.industry}, an industry on your list`, 84, 'goal');
   } else if (g?.role) {
     const where = s.company ? ` at ${s.company}` : '';
-    say('goal', `${g.role.title}${where}, a role you're targeting`, 80);
+    say('goal', `${g.role.title}${where}, the role you're targeting`, 62);
   }
-  if (g?.industry && !g.company) say('industry', `Works in ${g.industry}, an industry on your list`, 40);
+  if (g?.industry && !g.company && !g.role)
+    say('industry', `Works in ${g.industry}, an industry on your list`, 40);
 
   // ---- a way in: someone who can introduce them, people you both know ----
-  if (s.warmPath) say('warm_path', `${s.warmPath.name} could introduce you`, 88);
+  if (s.warmPath) say('warm_path', `${s.warmPath.name} could introduce you`, 88, 'tie');
+  // "Chaya could introduce you" already says the student knows Chaya
   const names = (s.mutuals?.names ?? []).filter(Boolean);
-  if (names.length) say('mutuals', mutualsLine(names), Math.min(96, 86 + 2 * names.length));
+  if (s.warmPath && names.length === 1 && names[0] === s.warmPath.name) names.length = 0;
+  if (names.length) say('mutuals', mutualsLine(names), Math.min(96, 86 + 2 * names.length), 'tie');
   else if (s.mutuals?.count)
     say(
       'mutuals',
-      `${s.mutuals.count} mutual connection${s.mutuals.count === 1 ? '' : 's'} on LinkedIn`,
-      60 + Math.min(20, 2 * s.mutuals.count),
+      `${s.mutuals.count} mutual connection${s.mutuals.count === 1 ? '' : 's'}`,
+      35 + Math.min(15, s.mutuals.count),
     );
   if (s.colleague)
-    say('colleague', `${s.colleague.name}, whom you know, works at ${s.colleague.company} too`, 86);
+    say('colleague', `${s.colleague.name}, whom you know, works at ${s.colleague.company} too`, 86, 'tie');
 
   // ---- what has already passed between you ----
   const h = s.history;
-  if (h?.metAt && monthOf(h.metAt, s.now)) say('history', `You met in ${monthOf(h.metAt, s.now)}`, 80);
+  if (h?.metAt && monthOf(h.metAt, s.now)) say('history', `You met in ${monthOf(h.metAt, s.now)}`, 80, 'tie');
   else if (h?.repliedAt && monthOf(h.repliedAt, s.now))
-    say('history', `Replied to you in ${monthOf(h.repliedAt, s.now)}`, 78);
+    say('history', `Replied to you in ${monthOf(h.repliedAt, s.now)}`, 78, 'tie');
   else if (h?.theyWroteAt && monthOf(h.theyWroteAt, s.now))
-    say('history', `Wrote to you in ${monthOf(h.theyWroteAt, s.now)}`, 74);
+    say('history', `Wrote to you in ${monthOf(h.theyWroteAt, s.now)}`, 74, 'tie');
   else if (h?.wroteAt && monthOf(h.wroteAt, s.now))
     say('history', `You wrote to them in ${monthOf(h.wroteAt, s.now)}`, 55);
+  else if (h?.knownALittle) say('history', 'You already know each other a little', 45, 'tie');
   else if (h?.connectedOn && !Number.isNaN(new Date(h.connectedOn).getTime()))
-    say('history', `Connected on LinkedIn since ${new Date(h.connectedOn).getFullYear()}`, 40);
-  else if (h?.knownALittle) say('history', 'You already know each other a little', 45);
+    say('history', `Connected on LinkedIn since ${new Date(h.connectedOn).getFullYear()}`, 30);
 
   // ---- shared ground: an employer, the school, the city ----
   for (const e of s.pastEmployers ?? []) {
-    if (e.mine === 'now' && e.theirs === 'now') say('past_employer', `You're both at ${e.name}`, 82);
-    else if (e.theirs === 'now') say('past_employer', `Works at ${e.name}, where you ${e.mine}`, 76);
-    else say('past_employer', `Also ${e.mine === 'interned' ? 'was' : 'worked'} at ${e.name}, like you`, 72);
+    if (e.mine === 'now' && e.theirs === 'now') say('past_employer', `You're both at ${e.name}`, 82, 'goal');
+    else if (e.theirs === 'now') say('past_employer', `Works at ${e.name}, where you ${e.mine}`, 76, 'goal');
+    else
+      say(
+        'past_employer',
+        `Also ${e.mine === 'interned' ? 'was' : 'worked'} at ${e.name}, like you`,
+        72,
+        'goal',
+      );
   }
   if (s.school) {
     const { name, gradYear, myGradYear, program } = s.school;
@@ -217,7 +260,7 @@ export function whyThem(s: WhySignals): WhyReason[] {
     if (gradYear && myGradYear) say('school', `${name} ${short}, ${yearsApart(myGradYear, gradYear)}`, 76);
     else if (program) say('school', `Also studied ${program} at ${name}`, 75);
     else if (gradYear) say('school', `${name} ${short}, like you`, 72);
-    else say('school', `Went to ${name}, like you`, 70);
+    else if (!alumInField) say('school', `Went to ${name}, like you`, 70);
     if (program && gradYear && myGradYear) say('school', `Also studied ${program}`, 50);
   }
   if (s.city)
@@ -239,24 +282,26 @@ export function whyThem(s: WhySignals): WhyReason[] {
   }
 
   const kept = order(out).slice(0, WHY_MAX);
-  const thin = thinLine(kept.length, s);
+  const thin = opts.filler === false ? undefined : thinLine(kept.length, s);
   return thin ? [...kept, thin] : kept;
 }
 
 /** What each of Discover's reason codes (scoreDiscoverCandidate, recommendPeople) is, and what it is worth. */
-const CODE: Record<string, { kind: WhyKind; strength: number }> = {
-  referred: { kind: 'warm_path', strength: 92 },
+const CODE: Record<string, { kind: WhyKind; strength: number; anchor?: 'goal' | 'tie' }> = {
+  referred: { kind: 'warm_path', strength: 92, anchor: 'tie' },
   path: { kind: 'warm_path', strength: 60 },
-  colleague: { kind: 'colleague', strength: 86 },
-  alumni_target: { kind: 'goal', strength: 95 },
-  target_company: { kind: 'goal', strength: 85 },
-  function_match: { kind: 'goal', strength: 80 },
-  shared_org_now: { kind: 'past_employer', strength: 82 },
-  shared_org: { kind: 'past_employer', strength: 75 },
-  mutuals: { kind: 'mutuals', strength: 60 },
-  like_replied: { kind: 'like', strength: 70 },
-  alumni: { kind: 'school', strength: 70 },
-  warm: { kind: 'history', strength: 45 },
+  colleague: { kind: 'colleague', strength: 86, anchor: 'tie' },
+  alumni_target: { kind: 'goal', strength: 95, anchor: 'goal' },
+  alumni_field: { kind: 'goal', strength: 92, anchor: 'goal' },
+  target_company: { kind: 'goal', strength: 85, anchor: 'goal' },
+  role_industry: { kind: 'goal', strength: 84, anchor: 'goal' },
+  function_match: { kind: 'goal', strength: 62 },
+  shared_org_now: { kind: 'past_employer', strength: 82, anchor: 'goal' },
+  shared_org: { kind: 'past_employer', strength: 75, anchor: 'goal' },
+  mutuals: { kind: 'mutuals', strength: 35 },
+  like_replied: { kind: 'like', strength: 66 },
+  alumni: { kind: 'school', strength: 58 },
+  warm: { kind: 'history', strength: 45, anchor: 'tie' },
   like_reached: { kind: 'like', strength: 50 },
   resume_overlap: { kind: 'like', strength: 40 },
   location: { kind: 'city', strength: 45 },
@@ -273,31 +318,45 @@ const CODE: Record<string, { kind: WhyKind; strength: number }> = {
 export function whyFromReasons(
   reasons: { code: string; text: string }[],
   c: Pick<WhySignals, 'title' | 'company' | 'headline'> & { mutualCount?: number },
+  opts: WhyOptions = {},
 ): WhyReason[] {
   const out: WhyReason[] = [];
   const has = (code: string) => reasons.some((r) => r.code === code);
   const hasTarget = has('target_company');
   const hasRole = has('function_match');
-  // "Cornell alum at Stripe, on your target list" already says the school and the company
+  // "Cornell alum at Stripe, on your target list" already says the school and the company; "Cornell alum, now a PM
+  // at Acme" the school and the role; "PM at Plaid, in fintech" the role and the industry
   const alumniTarget = has('alumni_target');
+  const said = new Set<string>();
+  if (alumniTarget) said.add('target_company').add('alumni');
+  if (has('alumni_field')) said.add('function_match').add('alumni');
+  if (has('role_industry')) said.add('function_match').add('industry');
   for (const r of reasons) {
     const c0 = CODE[r.code];
-    if (!c0) continue;
-    if (alumniTarget && (r.code === 'target_company' || r.code === 'alumni')) continue;
+    if (!c0 || (r.code === 'search' && opts.filler === false)) continue;
+    if (said.has(r.code)) continue;
     if (!alumniTarget && hasTarget && hasRole && c.title && c.company) {
       if (r.code === 'target_company') {
-        out.push({ kind: 'goal', text: `${c.title} at ${c.company}, on your target list`, strength: 100 });
+        out.push({
+          kind: 'goal',
+          text: `${c.title} at ${c.company}, on your target list`,
+          strength: 100,
+          anchor: 'goal',
+        });
         continue;
       }
       if (r.code === 'function_match') continue;
     }
     let strength = c0.strength;
-    if (r.code === 'mutuals') strength += Math.min(20, 2 * (c.mutualCount ?? 0));
+    if (r.code === 'mutuals') strength += Math.min(15, c.mutualCount ?? 0);
     const text = r.code === 'search' ? `Found by the search: ${r.text}` : r.text;
-    if (!out.some((x) => x.kind === c0.kind && x.text === text)) out.push({ kind: c0.kind, text, strength });
+    // "Reachable through someone you know" says nobody; once a route names the introducer it is a way in
+    const anchor = r.code === 'path' ? (/could introduce/.test(r.text) ? 'tie' : undefined) : c0.anchor;
+    if (!out.some((x) => x.kind === c0.kind && x.text === text))
+      out.push(anchor ? { kind: c0.kind, text, strength, anchor } : { kind: c0.kind, text, strength });
   }
   const kept = order(out).slice(0, WHY_MAX);
   const real = kept.filter((r) => r.kind !== 'search').length;
-  const thin = thinLine(real, c);
+  const thin = opts.filler === false ? undefined : thinLine(real, c);
   return thin ? [...kept, thin] : kept;
 }
