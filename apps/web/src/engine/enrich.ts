@@ -1,8 +1,11 @@
 /**
  * Filling in people the student knows from LinkedIn. Someone found in Gmail is a name and an address; with LinkedIn
- * connected live, Orbit looks them up by name and keeps the profile only when it is surely them: the exact name, and
- * either a direct connection or their company (from their record or their work address) in the LinkedIn headline. A
- * wrong match would be worse than none, so anything less certain is left alone.
+ * connected live, Orbit looks them up by name and keeps the profile only when it is surely them: the same name (by the
+ * shared name matcher: accents, scripts, nicknames and middle names forgiven; core entity/names.ts), and something
+ * that is not the name: their company (from their record or their work address) or their school in the LinkedIn
+ * headline, or, for a direct connection, the same city. A direct connection with the same name and nothing else is
+ * not enough: the student can know two Michael Chens. A wrong match would be worse than none, so anything less
+ * certain is left alone.
  *
  * A few lookups a day (LinkedIn throttles heavy searching), closest people first, each person at most once a month.
  * The demo student is never looked up.
@@ -13,10 +16,13 @@ import {
   hasRealName,
   isKnownContact,
   linkedInSlug,
+  nameAgreement,
+  newId,
+  normalizeCompany,
   normalizeLinkedInUrl,
   PERSONAL_EMAIL_DOMAINS,
   roleFromHeadline,
-  stripDiacritics,
+  transliterate,
 } from '@orbit/core';
 import { db } from '../db/schema';
 import { usesMockConnectors } from '../integrations/connectorsMock';
@@ -28,12 +34,15 @@ import { freshPhoto } from './photos';
 export const ENRICH_PER_DAY = 8;
 const RETRY_AFTER_MS = 30 * 86_400_000;
 
+/** Words in lower-case Latin letters and digits, for finding a company or school inside a headline. */
 const norm = (s: string) =>
-  stripDiacritics(s)
+  transliterate(s)
     .toLowerCase()
-    .replace(/[^a-z ]/g, ' ')
+    .replace(/[^a-z0-9 ]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+/** True when `phrase` appears in `text` as whole words ("meta" is in "PM at Meta", not in "metadata"). */
+const hasWords = (text: string, phrase: string) => !!phrase && ` ${text} `.includes(` ${phrase} `);
 
 /** "corgi.com" → "corgi", "mail.stripe.com" → "stripe": the name a work address points at. */
 export function companyFromEmail(email: string | undefined): string | undefined {
@@ -44,22 +53,33 @@ export function companyFromEmail(email: string | undefined): string | undefined 
 }
 
 /**
- * The one search result that is surely this person, or nothing: the same first and last name, and a direct LinkedIn
- * connection or a headline naming their company.
+ * The one search result that is surely this person, or nothing: the same name, and their company or school in the
+ * headline, or a direct LinkedIn connection in the same city. A headline naming another employer than the one Orbit
+ * knows rules a result out (unless the school agrees: they may have moved on).
  */
 export function pickMatch(
-  p: Pick<Person, 'firstName' | 'lastName' | 'currentOrganizationRaw' | 'primaryEmail' | 'emails'>,
+  p: Pick<Person, 'firstName' | 'lastName' | 'currentOrganizationRaw' | 'primaryEmail' | 'emails'> &
+    Partial<Pick<Person, 'displayName' | 'school' | 'location'>>,
   results: LinkedInFound[],
 ): LinkedInFound | undefined {
-  const want = norm(`${p.firstName} ${p.lastName}`);
+  const want = p.displayName?.trim() || `${p.firstName} ${p.lastName}`;
   const companies = [p.currentOrganizationRaw, ...[p.primaryEmail, ...(p.emails ?? [])].map(companyFromEmail)]
     .filter((c): c is string => !!c && c.trim().length >= 3)
-    .map(norm);
+    .flatMap((c) => [norm(c), norm(normalizeCompany(c))])
+    .filter((c) => c.length >= 3);
+  const school = p.school ? norm(p.school) : '';
+  const city = (l: string | undefined) => norm((l ?? '').split(',')[0] ?? '');
   const sure = results.filter((r) => {
-    if (norm(r.name) !== want) return false;
-    if (r.distance === 1) return true;
+    // the shared matcher: "José"/"Jose", "Bill"/"William", "Łukasz"/"Lukasz", never two names that fold to nothing
+    if (!nameAgreement(want, r.name)) return false;
     const head = norm(r.headline ?? '');
-    return companies.some((c) => c && head.includes(c));
+    const atCompany = companies.some((c) => hasWords(head, c));
+    const atSchool = school.length >= 3 && hasWords(head, school);
+    const elsewhere = !!companies.length && !atCompany && !!roleFromHeadline(r.headline).org;
+    if (elsewhere && !atSchool) return false;
+    if (atCompany || atSchool) return true;
+    const here = city(p.location);
+    return r.distance === 1 && here.length >= 3 && here === city(r.location);
   });
   return sure.length === 1 ? sure[0] : undefined;
 }
@@ -119,6 +139,37 @@ export async function enrichFromLinkedIn(
     const hit = pickMatch(p, r.value.people);
     const url = normalizeLinkedInUrl(hit?.profileUrl);
     if (!hit || !url) continue;
+    // the profile is already someone in Orbit (from the LinkedIn export or the live sync): the two are probably one
+    // person, which the student confirms; the profile is not copied onto a second record
+    const slug = linkedInSlug(url);
+    const owner = await db.people
+      .where('userId')
+      .equals(user.id)
+      .filter(
+        (o) =>
+          o.id !== p.id &&
+          (o.linkedinSlug === slug || (!!hit.memberId && o.linkedinMemberId === hit.memberId)),
+      )
+      .first();
+    if (owner) {
+      const asked = await db.merges
+        .where('userId')
+        .equals(user.id)
+        .filter((m) => [m.personAId, m.personBId].sort().join('|') === [owner.id, p.id].sort().join('|'))
+        .first();
+      if (!asked)
+        await db.merges.add({
+          id: newId('mrg'),
+          userId: user.id,
+          personAId: owner.createdAt <= p.createdAt ? owner.id : p.id,
+          personBId: owner.createdAt <= p.createdAt ? p.id : owner.id,
+          score: 0.85,
+          features: { name_sim: 1, linkedin_lookup: 1 },
+          status: 'pending',
+          createdAt: now.toISOString(),
+        });
+      continue;
+    }
     const { title, company } = titleAndCompany(hit.headline);
     await db.people.update(p.id, {
       linkedinUrl: url,

@@ -44,8 +44,47 @@ const LEGAL_SUFFIXES = new Set([
   'pbc',
 ]);
 
+/**
+ * Latin letters that are not a base letter plus a mark, so NFKD leaves them alone: ø is not o + a mark, nor ł l, nor
+ * ß ss. Their plain forms are any-ascii's (entity/translit.ts), so "Søren", "Łukasz" and "Straße" fold like
+ * "Soren", "Lukasz" and "Strasse".
+ */
+const LATIN_LETTERS: Record<string, string> = {
+  ø: 'o',
+  Ø: 'O',
+  ł: 'l',
+  Ł: 'L',
+  ß: 'ss',
+  ẞ: 'SS',
+  æ: 'ae',
+  Æ: 'Ae',
+  œ: 'oe',
+  Œ: 'Oe',
+  đ: 'd',
+  Đ: 'D',
+  ð: 'd',
+  Ð: 'D',
+  þ: 'th',
+  Þ: 'Th',
+  ı: 'i',
+  ħ: 'h',
+  Ħ: 'H',
+  ŧ: 't',
+  Ŧ: 'T',
+  ŀ: 'l',
+  Ŀ: 'L',
+  ĸ: 'q',
+  ŋ: 'ng',
+  Ŋ: 'Ng',
+  ſ: 's',
+};
+
+/** Letters without their accents ("José Núñez" → "Jose Nunez", "Søren Łukasz" → "Soren Lukasz"); case is kept. */
 export function stripDiacritics(s: string): string {
-  return s.normalize('NFKD').replace(/[̀-ͯ]/g, '');
+  return s
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[øØłŁßẞæÆœŒđĐðÐþÞıħĦŧŦŀĿĸŋŊſ]/g, (c) => LATIN_LETTERS[c] ?? c);
 }
 
 export function normalizeEmail(raw: string): string {
@@ -82,7 +121,8 @@ export interface NameParts {
 }
 
 const GENERATIONAL = new Set(['jr', 'sr', 'ii', 'iii', 'iv']);
-const PARTICLES = new Set([
+/** Surname particles ("de la Cruz", "van der Berg"): part of the surname, not a name of their own. */
+export const NAME_PARTICLES: ReadonlySet<string> = new Set([
   'de',
   'da',
   'del',
@@ -118,7 +158,7 @@ function isTagPart(part: string): boolean {
 
 function capitalizeToken(t: string, isFirst: boolean): string {
   const lower = t.toLowerCase();
-  if (!isFirst && PARTICLES.has(lower)) return lower;
+  if (!isFirst && NAME_PARTICLES.has(lower)) return lower;
   return lower.replace(/(^|[-'’])(\p{L})/gu, (_, sep: string, c: string) => sep + c.toUpperCase());
 }
 
@@ -150,7 +190,7 @@ function partsFromTokens(tokens: string[]): NameParts {
   const first = fixed[0] ?? '';
   let lastStart = fixed.length - 1;
   // keep particles with the surname: "Ana de la Cruz" -> last "de la Cruz"
-  while (lastStart > 1 && PARTICLES.has(fixed[lastStart - 1]!.toLowerCase())) lastStart--;
+  while (lastStart > 1 && NAME_PARTICLES.has(fixed[lastStart - 1]!.toLowerCase())) lastStart--;
   const last = fixed.length > 1 ? fixed.slice(lastStart).join(' ') : '';
   const full = fixed.join(' ');
   return { first, last, full, normalized: nameKey(first, last) };
@@ -192,7 +232,7 @@ export function parseName(raw: string | undefined | null): NameParts {
     const tail = cleanTokens(parts[1]!);
     const headIsSurname =
       head.length === 1 ||
-      (head.length > 1 && head.slice(0, -1).every((t) => PARTICLES.has(t.toLowerCase())));
+      (head.length > 1 && head.slice(0, -1).every((t) => NAME_PARTICLES.has(t.toLowerCase())));
     // "Patel, Priya" -> "Priya Patel"; "Priya Patel, Figma" -> "Priya Patel" (the tail is not a name part)
     tokens = headIsSurname && tail.length >= 1 && tail.length <= 2 ? [...tail, ...head] : head;
   } else tokens = cleanTokens(parts[0] ?? '');

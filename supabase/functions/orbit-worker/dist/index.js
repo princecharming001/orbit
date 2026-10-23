@@ -182,9 +182,9 @@ function makeClaude(deps) {
         }
         return { ok: false, error: "max_tokens" };
       }
-      const parsed = msg.parsed_output;
-      if (!parsed?.ok) return { ok: false, error: "invalid_output", detail: parsed?.error?.slice(0, 200) };
-      return { ok: true, data: parsed.value, model: setting.model, costUsd: cost, usage };
+      const parsed2 = msg.parsed_output;
+      if (!parsed2?.ok) return { ok: false, error: "invalid_output", detail: parsed2?.error?.slice(0, 200) };
+      return { ok: true, data: parsed2.value, model: setting.model, costUsd: cost, usage };
     }
     return { ok: false, error: "max_tokens" };
     function callParse(max) {
@@ -336,14 +336,14 @@ async function refreshAccessToken(cfg, refreshToken) {
   }
 }
 function googleTokenSource(cfg, deps) {
-  const cache = /* @__PURE__ */ new Map();
+  const cache2 = /* @__PURE__ */ new Map();
   const clock = () => (cfg.now ?? (() => /* @__PURE__ */ new Date()))().getTime();
   return {
     invalidate: (userId) => {
-      cache.delete(userId);
+      cache2.delete(userId);
     },
     async accessToken(userId) {
-      const hit = cache.get(userId);
+      const hit = cache2.get(userId);
       if (hit && hit.until > clock()) return hit.token;
       const [acct] = await deps.db.sql`
         select token_secret_id, status from orbit.integration_accounts
@@ -354,7 +354,7 @@ function googleTokenSource(cfg, deps) {
       if (!refresh) throw new NeedsReauth();
       try {
         const t = await refreshAccessToken(cfg, refresh);
-        cache.set(userId, { token: t.access_token, until: clock() + Math.max(0, t.expires_in - 300) * 1e3 });
+        cache2.set(userId, { token: t.access_token, until: clock() + Math.max(0, t.expires_in - 300) * 1e3 });
         return t.access_token;
       } catch (e) {
         if (e instanceof NeedsReauth)
@@ -495,15 +495,15 @@ async function requestJson(opts, spec) {
     } catch {
       return { ok: false, kind: "invalid", provider: spec.provider, message: `${spec.provider}: not JSON` };
     }
-    const parsed = spec.schema.safeParse(json2);
-    if (!parsed.success)
+    const parsed2 = spec.schema.safeParse(json2);
+    if (!parsed2.success)
       return {
         ok: false,
         kind: "invalid",
         provider: spec.provider,
-        message: `${spec.provider}: unexpected response (${parsed.error.issues[0]?.path.join(".") ?? "?"})`
+        message: `${spec.provider}: unexpected response (${parsed2.error.issues[0]?.path.join(".") ?? "?"})`
       };
-    return { ok: true, value: parsed.data };
+    return { ok: true, value: parsed2.data };
   }
   return last;
 }
@@ -2612,8 +2612,37 @@ var LEGAL_SUFFIXES = /* @__PURE__ */ new Set([
   "ag",
   "pbc"
 ]);
+var LATIN_LETTERS = {
+  ø: "o",
+  Ø: "O",
+  ł: "l",
+  Ł: "L",
+  ß: "ss",
+  "ẞ": "SS",
+  æ: "ae",
+  Æ: "Ae",
+  œ: "oe",
+  Œ: "Oe",
+  đ: "d",
+  Đ: "D",
+  ð: "d",
+  Ð: "D",
+  þ: "th",
+  Þ: "Th",
+  ı: "i",
+  ħ: "h",
+  Ħ: "H",
+  ŧ: "t",
+  Ŧ: "T",
+  ŀ: "l",
+  Ŀ: "L",
+  ĸ: "q",
+  ŋ: "ng",
+  Ŋ: "Ng",
+  ſ: "s"
+};
 function stripDiacritics(s) {
-  return s.normalize("NFKD").replace(/[̀-ͯ]/g, "");
+  return s.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[øØłŁßẞæÆœŒđĐðÐþÞıħĦŧŦŀĿĸŋŊſ]/g, (c) => LATIN_LETTERS[c] ?? c);
 }
 function normalizeEmail(raw) {
   let e = raw.trim().toLowerCase();
@@ -2638,7 +2667,7 @@ function emailLocalPart(email) {
   return e.slice(0, e.lastIndexOf("@"));
 }
 var GENERATIONAL = /* @__PURE__ */ new Set(["jr", "sr", "ii", "iii", "iv"]);
-var PARTICLES = /* @__PURE__ */ new Set([
+var NAME_PARTICLES = /* @__PURE__ */ new Set([
   "de",
   "da",
   "del",
@@ -2667,7 +2696,7 @@ function isTagPart(part) {
 }
 function capitalizeToken(t, isFirst) {
   const lower = t.toLowerCase();
-  if (!isFirst && PARTICLES.has(lower)) return lower;
+  if (!isFirst && NAME_PARTICLES.has(lower)) return lower;
   return lower.replace(/(^|[-'’])(\p{L})/gu, (_, sep, c) => sep + c.toUpperCase());
 }
 function fixCase(tokens, offset = 0) {
@@ -2689,7 +2718,7 @@ function partsFromTokens(tokens) {
   const fixed = fixCase(tokens);
   const first = fixed[0] ?? "";
   let lastStart = fixed.length - 1;
-  while (lastStart > 1 && PARTICLES.has(fixed[lastStart - 1].toLowerCase())) lastStart--;
+  while (lastStart > 1 && NAME_PARTICLES.has(fixed[lastStart - 1].toLowerCase())) lastStart--;
   const last = fixed.length > 1 ? fixed.slice(lastStart).join(" ") : "";
   const full = fixed.join(" ");
   return { first, last, full, normalized: nameKey(first, last) };
@@ -2708,7 +2737,7 @@ function parseName(raw) {
   if (parts.length >= 2) {
     const head = cleanTokens(parts[0]);
     const tail = cleanTokens(parts[1]);
-    const headIsSurname = head.length === 1 || head.length > 1 && head.slice(0, -1).every((t) => PARTICLES.has(t.toLowerCase()));
+    const headIsSurname = head.length === 1 || head.length > 1 && head.slice(0, -1).every((t) => NAME_PARTICLES.has(t.toLowerCase()));
     tokens = headIsSurname && tail.length >= 1 && tail.length <= 2 ? [...tail, ...head] : head;
   } else tokens = cleanTokens(parts[0] ?? "");
   return partsFromTokens(tokens);
@@ -5268,11 +5297,11 @@ async function buildUserContext(db2, u2) {
   const text = lines.join("\n");
   return text.length > USER_CONTEXT_MAX_CHARS ? `${text.slice(0, USER_CONTEXT_MAX_CHARS - 1)}…` : text;
 }
-function facetLines(parsed) {
-  if (!parsed) return [];
+function facetLines(parsed2) {
+  if (!parsed2) return [];
   const out = [];
   const list = (v) => Array.isArray(v) ? v : [];
-  for (const f of list(parsed.facets)) {
+  for (const f of list(parsed2.facets)) {
     const o = f;
     if (o.excluded === true) continue;
     const t = [o.title ?? o.role, o.org ?? o.organization ?? o.organizationName, o.text].filter(
@@ -5280,17 +5309,17 @@ function facetLines(parsed) {
     );
     if (t.length) out.push(t.join(", "));
   }
-  for (const e of list(parsed.experiences ?? parsed.experience)) {
+  for (const e of list(parsed2.experiences ?? parsed2.experience)) {
     const o = e;
     const t = [o.title, o.org ?? o.company].filter((x) => typeof x === "string");
     if (t.length) out.push(t.join(" at "));
   }
-  for (const e of list(parsed.education)) {
+  for (const e of list(parsed2.education)) {
     const o = e;
     const t = [o.degree, o.school].filter((x) => typeof x === "string");
     if (t.length) out.push(t.join(", "));
   }
-  const skills = list(parsed.skills).filter((x) => typeof x === "string");
+  const skills = list(parsed2.skills).filter((x) => typeof x === "string");
   if (skills.length) out.push(`Skills: ${skills.slice(0, 12).join(", ")}`);
   return out.slice(0, 12);
 }
@@ -6270,9 +6299,9 @@ function sqlCache(db2, now) {
   };
 }
 function sqlResearchDb(db2, now) {
-  const cache = sqlCache(db2, now);
+  const cache2 = sqlCache(db2, now);
   return {
-    ...cache,
+    ...cache2,
     internalHistory: (userId, personId) => internalHistory(db2, userId, personId),
     async getDossier(userId, personId) {
       const [r] = await db2.sql`
@@ -10458,6 +10487,612 @@ function calendarApi(client, userId) {
   };
 }
 
+// packages/core/src/entity/doubleMetaphone.ts
+var vowels = /[AEIOUY]/;
+var slavoGermanic = /W|K|CZ|WITZ/;
+var germanic = /^(VAN |VON |SCH)/;
+var initialExceptions = /^(GN|KN|PN|WR|PS)/;
+var initialGreekCh = /^CH(IA|EM|OR([^E])|YM|ARAC|ARIS)/;
+var greekCh = /ORCHES|ARCHIT|ORCHID/;
+var chForKh = /[ BFHLMNRVW]/;
+var gForF = /[CGLRT]/;
+var initialGForKj = /Y[\s\S]|E[BILPRSY]|I[BELN]/;
+var initialAngerException = /^[DMR]ANGER/;
+var gForKj = /[EGIR]/;
+var jForJException = /[LTKSNMBZ]/;
+var alle = /AS|OS/;
+var hForS = /EIM|OEK|OLM|OLZ/;
+var dutchSch = /E[DMNR]|UY|OO/;
+function doubleMetaphone(value) {
+  let primary = "";
+  let secondary = "";
+  let index = 0;
+  const length = value.length;
+  const last = length - 1;
+  const normalized = String(value).toUpperCase() + "     ";
+  const isSlavoGermanic = slavoGermanic.test(normalized);
+  const isGermanic = germanic.test(normalized);
+  const characters = normalized.split("");
+  if (initialExceptions.test(normalized)) {
+    index++;
+  }
+  if (characters[0] === "X") {
+    primary += "S";
+    secondary += "S";
+    index++;
+  }
+  while (index < length) {
+    const previous = characters[index - 1];
+    const next = characters[index + 1];
+    const nextnext = characters[index + 2];
+    let subvalue;
+    switch (characters[index]) {
+      case "A":
+      case "E":
+      case "I":
+      case "O":
+      case "U":
+      case "Y":
+      case "À":
+      case "Ê":
+      case "É":
+        if (index === 0) {
+          primary += "A";
+          secondary += "A";
+        }
+        index++;
+        break;
+      case "B":
+        primary += "P";
+        secondary += "P";
+        if (next === "B") {
+          index++;
+        }
+        index++;
+        break;
+      case "Ç":
+        primary += "S";
+        secondary += "S";
+        index++;
+        break;
+      case "C":
+        if (previous === "A" && next === "H" && nextnext !== "I" && !vowels.test(characters[index - 2]) && (nextnext !== "E" || (subvalue = normalized.slice(index - 2, index + 4)) && (subvalue === "BACHER" || subvalue === "MACHER"))) {
+          primary += "K";
+          secondary += "K";
+          index += 2;
+          break;
+        }
+        if (index === 0 && normalized.slice(index + 1, index + 6) === "AESAR") {
+          primary += "S";
+          secondary += "S";
+          index += 2;
+          break;
+        }
+        if (normalized.slice(index + 1, index + 4) === "HIA") {
+          primary += "K";
+          secondary += "K";
+          index += 2;
+          break;
+        }
+        if (next === "H") {
+          if (index > 0 && nextnext === "A" && characters[index + 3] === "E") {
+            primary += "K";
+            secondary += "X";
+            index += 2;
+            break;
+          }
+          if (index === 0 && initialGreekCh.test(normalized)) {
+            primary += "K";
+            secondary += "K";
+            index += 2;
+            break;
+          }
+          if (isGermanic || // Such as 'architect' but not 'arch', orchestra', 'orchid'.
+          greekCh.test(normalized.slice(index - 2, index + 4)) || nextnext === "T" || nextnext === "S" || (index === 0 || previous === "A" || previous === "E" || previous === "O" || previous === "U") && // Such as `wachtler`, `weschsler`, but not `tichner`.
+          chForKh.test(nextnext)) {
+            primary += "K";
+            secondary += "K";
+          } else if (index === 0) {
+            primary += "X";
+            secondary += "X";
+          } else if (normalized.slice(0, 2) === "MC") {
+            primary += "K";
+            secondary += "K";
+          } else {
+            primary += "X";
+            secondary += "K";
+          }
+          index += 2;
+          break;
+        }
+        if (next === "Z" && normalized.slice(index - 2, index) !== "WI") {
+          primary += "S";
+          secondary += "X";
+          index += 2;
+          break;
+        }
+        if (normalized.slice(index + 1, index + 4) === "CIA") {
+          primary += "X";
+          secondary += "X";
+          index += 3;
+          break;
+        }
+        if (next === "C" && !(index === 1 && characters[0] === "M")) {
+          if ((nextnext === "I" || nextnext === "E" || nextnext === "H") && normalized.slice(index + 2, index + 4) !== "HU") {
+            subvalue = normalized.slice(index - 1, index + 4);
+            if (index === 1 && previous === "A" || subvalue === "UCCEE" || subvalue === "UCCES") {
+              primary += "KS";
+              secondary += "KS";
+            } else {
+              primary += "X";
+              secondary += "X";
+            }
+            index += 3;
+            break;
+          } else {
+            primary += "K";
+            secondary += "K";
+            index += 2;
+            break;
+          }
+        }
+        if (next === "G" || next === "K" || next === "Q") {
+          primary += "K";
+          secondary += "K";
+          index += 2;
+          break;
+        }
+        if (next === "I" && // Bug: The original algorithm also calls for A (as in CIA), which is
+        // already taken care of above.
+        (nextnext === "E" || nextnext === "O")) {
+          primary += "S";
+          secondary += "X";
+          index += 2;
+          break;
+        }
+        if (next === "I" || next === "E" || next === "Y") {
+          primary += "S";
+          secondary += "S";
+          index += 2;
+          break;
+        }
+        primary += "K";
+        secondary += "K";
+        if (next === " " && (nextnext === "C" || nextnext === "G" || nextnext === "Q")) {
+          index += 3;
+          break;
+        }
+        index++;
+        break;
+      case "D":
+        if (next === "G") {
+          if (nextnext === "E" || nextnext === "I" || nextnext === "Y") {
+            primary += "J";
+            secondary += "J";
+            index += 3;
+          } else {
+            primary += "TK";
+            secondary += "TK";
+            index += 2;
+          }
+          break;
+        }
+        if (next === "T" || next === "D") {
+          primary += "T";
+          secondary += "T";
+          index += 2;
+          break;
+        }
+        primary += "T";
+        secondary += "T";
+        index++;
+        break;
+      case "F":
+        if (next === "F") {
+          index++;
+        }
+        index++;
+        primary += "F";
+        secondary += "F";
+        break;
+      case "G":
+        if (next === "H") {
+          if (index > 0 && !vowels.test(previous)) {
+            primary += "K";
+            secondary += "K";
+            index += 2;
+            break;
+          }
+          if (index === 0) {
+            if (nextnext === "I") {
+              primary += "J";
+              secondary += "J";
+            } else {
+              primary += "K";
+              secondary += "K";
+            }
+            index += 2;
+            break;
+          }
+          if (
+            // Such as `Hugh`. (Upstream writes these three with the comma operator; same logic.)
+            (subvalue = characters[index - 2]) === "B" || subvalue === "H" || subvalue === "D" || // Such as `bough`.
+            (subvalue = characters[index - 3]) === "B" || subvalue === "H" || subvalue === "D" || // Such as `Broughton`.
+            (subvalue = characters[index - 4]) === "B" || subvalue === "H"
+          ) {
+            index += 2;
+            break;
+          }
+          if (index > 2 && previous === "U" && gForF.test(characters[index - 3])) {
+            primary += "F";
+            secondary += "F";
+          } else if (index > 0 && previous !== "I") {
+            primary += "K";
+            secondary += "K";
+          }
+          index += 2;
+          break;
+        }
+        if (next === "N") {
+          if (index === 1 && vowels.test(characters[0]) && !isSlavoGermanic) {
+            primary += "KN";
+            secondary += "N";
+          } else if (normalized.slice(index + 2, index + 4) !== "EY" && normalized.slice(index + 1) !== "Y" && !isSlavoGermanic) {
+            primary += "N";
+            secondary += "KN";
+          } else {
+            primary += "KN";
+            secondary += "KN";
+          }
+          index += 2;
+          break;
+        }
+        if (normalized.slice(index + 1, index + 3) === "LI" && !isSlavoGermanic) {
+          primary += "KL";
+          secondary += "L";
+          index += 2;
+          break;
+        }
+        if (index === 0 && initialGForKj.test(normalized.slice(1, 3))) {
+          primary += "K";
+          secondary += "J";
+          index += 2;
+          break;
+        }
+        if (normalized.slice(index + 1, index + 3) === "ER" && previous !== "I" && previous !== "E" && !initialAngerException.test(normalized.slice(0, 6)) || next === "Y" && !gForKj.test(previous)) {
+          primary += "K";
+          secondary += "J";
+          index += 2;
+          break;
+        }
+        if (next === "E" || next === "I" || next === "Y" || (previous === "A" || previous === "O") && next === "G" && nextnext === "I") {
+          if (normalized.slice(index + 1, index + 3) === "ET" || isGermanic) {
+            primary += "K";
+            secondary += "K";
+          } else {
+            primary += "J";
+            secondary += normalized.slice(index + 1, index + 5) === "IER " ? "J" : "K";
+          }
+          index += 2;
+          break;
+        }
+        if (next === "G") {
+          index++;
+        }
+        index++;
+        primary += "K";
+        secondary += "K";
+        break;
+      case "H":
+        if (vowels.test(next) && (index === 0 || vowels.test(previous))) {
+          primary += "H";
+          secondary += "H";
+          index++;
+        }
+        index++;
+        break;
+      case "J":
+        if (normalized.slice(index, index + 4) === "JOSE" || normalized.slice(0, 4) === "SAN ") {
+          if (normalized.slice(0, 4) === "SAN " || index === 0 && characters[index + 4] === " ") {
+            primary += "H";
+            secondary += "H";
+          } else {
+            primary += "J";
+            secondary += "H";
+          }
+          index++;
+          break;
+        }
+        if (index === 0) {
+          primary += "J";
+          secondary += "A";
+        } else if (!isSlavoGermanic && (next === "A" || next === "O") && vowels.test(previous)) {
+          primary += "J";
+          secondary += "H";
+        } else if (index === last) {
+          primary += "J";
+        } else if (previous !== "S" && previous !== "K" && previous !== "L" && !jForJException.test(next)) {
+          primary += "J";
+          secondary += "J";
+        } else if (next === "J") {
+          index++;
+        }
+        index++;
+        break;
+      case "K":
+        if (next === "K") {
+          index++;
+        }
+        primary += "K";
+        secondary += "K";
+        index++;
+        break;
+      case "L":
+        if (next === "L") {
+          if (index === length - 3 && (previous === "A" && nextnext === "E" || previous === "I" && (nextnext === "O" || nextnext === "A")) || previous === "A" && nextnext === "E" && (characters[last] === "A" || characters[last] === "O" || alle.test(normalized.slice(last - 1, length)))) {
+            primary += "L";
+            index += 2;
+            break;
+          }
+          index++;
+        }
+        primary += "L";
+        secondary += "L";
+        index++;
+        break;
+      case "M":
+        if (next === "M" || // Such as `dumb`, `thumb`.
+        previous === "U" && next === "B" && (index + 1 === last || normalized.slice(index + 2, index + 4) === "ER")) {
+          index++;
+        }
+        index++;
+        primary += "M";
+        secondary += "M";
+        break;
+      case "N":
+        if (next === "N") {
+          index++;
+        }
+        index++;
+        primary += "N";
+        secondary += "N";
+        break;
+      case "Ñ":
+        index++;
+        primary += "N";
+        secondary += "N";
+        break;
+      case "P":
+        if (next === "H") {
+          primary += "F";
+          secondary += "F";
+          index += 2;
+          break;
+        }
+        subvalue = next;
+        if (subvalue === "P" || subvalue === "B") {
+          index++;
+        }
+        index++;
+        primary += "P";
+        secondary += "P";
+        break;
+      case "Q":
+        if (next === "Q") {
+          index++;
+        }
+        index++;
+        primary += "K";
+        secondary += "K";
+        break;
+      case "R":
+        if (index === last && !isSlavoGermanic && previous === "E" && characters[index - 2] === "I" && characters[index - 4] !== "M" && characters[index - 3] !== "E" && characters[index - 3] !== "A") {
+          secondary += "R";
+        } else {
+          primary += "R";
+          secondary += "R";
+        }
+        if (next === "R") {
+          index++;
+        }
+        index++;
+        break;
+      case "S":
+        if (next === "L" && (previous === "I" || previous === "Y")) {
+          index++;
+          break;
+        }
+        if (index === 0 && normalized.slice(1, 5) === "UGAR") {
+          primary += "X";
+          secondary += "S";
+          index++;
+          break;
+        }
+        if (next === "H") {
+          if (hForS.test(normalized.slice(index + 1, index + 5))) {
+            primary += "S";
+            secondary += "S";
+          } else {
+            primary += "X";
+            secondary += "X";
+          }
+          index += 2;
+          break;
+        }
+        if (next === "I" && (nextnext === "O" || nextnext === "A")) {
+          if (isSlavoGermanic) {
+            primary += "S";
+            secondary += "S";
+          } else {
+            primary += "S";
+            secondary += "X";
+          }
+          index += 3;
+          break;
+        }
+        if (next === "Z" || index === 0 && (next === "L" || next === "M" || next === "N" || next === "W")) {
+          primary += "S";
+          secondary += "X";
+          if (next === "Z") {
+            index++;
+          }
+          index++;
+          break;
+        }
+        if (next === "C") {
+          if (nextnext === "H") {
+            subvalue = normalized.slice(index + 3, index + 5);
+            if (dutchSch.test(subvalue)) {
+              if (subvalue === "ER" || subvalue === "EN") {
+                primary += "X";
+                secondary += "SK";
+              } else {
+                primary += "SK";
+                secondary += "SK";
+              }
+              index += 3;
+              break;
+            }
+            if (index === 0 && !vowels.test(characters[3]) && characters[3] !== "W") {
+              primary += "X";
+              secondary += "S";
+            } else {
+              primary += "X";
+              secondary += "X";
+            }
+            index += 3;
+            break;
+          }
+          if (nextnext === "I" || nextnext === "E" || nextnext === "Y") {
+            primary += "S";
+            secondary += "S";
+            index += 3;
+            break;
+          }
+          primary += "SK";
+          secondary += "SK";
+          index += 3;
+          break;
+        }
+        subvalue = normalized.slice(index - 2, index);
+        if (index === last && (subvalue === "AI" || subvalue === "OI")) {
+          secondary += "S";
+        } else {
+          primary += "S";
+          secondary += "S";
+        }
+        if (next === "S") {
+          index++;
+        }
+        index++;
+        break;
+      case "T":
+        if (next === "I" && nextnext === "O" && characters[index + 3] === "N") {
+          primary += "X";
+          secondary += "X";
+          index += 3;
+          break;
+        }
+        subvalue = normalized.slice(index + 1, index + 3);
+        if (next === "I" && nextnext === "A" || next === "C" && nextnext === "H") {
+          primary += "X";
+          secondary += "X";
+          index += 3;
+          break;
+        }
+        if (next === "H" || next === "T" && nextnext === "H") {
+          if (isGermanic || (nextnext === "O" || nextnext === "A") && characters[index + 3] === "M") {
+            primary += "T";
+            secondary += "T";
+          } else {
+            primary += "0";
+            secondary += "T";
+          }
+          index += 2;
+          break;
+        }
+        if (next === "T" || next === "D") {
+          index++;
+        }
+        index++;
+        primary += "T";
+        secondary += "T";
+        break;
+      case "V":
+        if (next === "V") {
+          index++;
+        }
+        primary += "F";
+        secondary += "F";
+        index++;
+        break;
+      case "W":
+        if (next === "R") {
+          primary += "R";
+          secondary += "R";
+          index += 2;
+          break;
+        }
+        if (index === 0) {
+          if (vowels.test(next)) {
+            primary += "A";
+            secondary += "F";
+          } else if (next === "H") {
+            primary += "A";
+            secondary += "A";
+          }
+        }
+        if ((previous === "E" || previous === "O") && next === "S" && nextnext === "K" && (characters[index + 3] === "I" || characters[index + 3] === "Y") || // Maybe a bug? Shouldn't this be general Germanic?
+        normalized.slice(0, 3) === "SCH" || index === last && vowels.test(previous)) {
+          secondary += "F";
+          index++;
+          break;
+        }
+        if (next === "I" && (nextnext === "C" || nextnext === "T") && characters[index + 3] === "Z") {
+          primary += "TS";
+          secondary += "FX";
+          index += 4;
+          break;
+        }
+        index++;
+        break;
+      case "X":
+        if (!(index === last && // Bug: IAU and EAU also match by AU
+        // (/IAU|EAU/.test(normalized.slice(index - 3, index))) ||
+        previous === "U" && (characters[index - 2] === "A" || characters[index - 2] === "O"))) {
+          primary += "KS";
+          secondary += "KS";
+        }
+        if (next === "C" || next === "X") {
+          index++;
+        }
+        index++;
+        break;
+      case "Z":
+        if (next === "H") {
+          primary += "J";
+          secondary += "J";
+          index += 2;
+          break;
+        } else if (next === "Z" && (nextnext === "A" || nextnext === "I" || nextnext === "O") || isSlavoGermanic && index > 0 && previous !== "T") {
+          primary += "S";
+          secondary += "TS";
+        } else {
+          primary += "S";
+          secondary += "S";
+        }
+        if (next === "Z") {
+          index++;
+        }
+        index++;
+        break;
+      default:
+        index++;
+    }
+  }
+  return [primary, secondary];
+}
+
 // packages/core/src/entity/nicknames.data.ts
 var NICKNAME_DATA = [
   "aaron:erin ron ronnie",
@@ -11722,6 +12357,476 @@ function isFirstNameVariant(a, b) {
   return NICKNAME_VARIANTS.get(x)?.has(y) ?? false;
 }
 
+// packages/core/src/entity/translit.data.ts
+var TRANSLIT_BLOCKS = {
+  0: `																																																																																																																																																																 	!	c	GBP	$	Y	|	S	"	(C)	a	<<	!		(R)	-	deg	+-	2	3	'	u	P	-	,	1	o	>>	1/4	1/2	3/4	?	A	A	A	A	A	A	Ae	C	E	E	E	E	I	I	I	I	D	N	O	O	O	O	O	*	O	U	U	U	U	Y	Th	ss	a	a	a	a	a	a	ae	c	e	e	e	e	i	i	i	i	d	n	o	o	o	o	o	/	o	u	u	u	u	y	th	y`,
+  1: "A	a	A	a	A	a	C	c	C	c	C	c	C	c	D	d	D	d	E	e	E	e	E	e	E	e	E	e	G	g	G	g	G	g	G	g	H	h	H	h	I	i	I	i	I	i	I	i	I	i	IJ	ij	J	j	K	k	q	L	l	L	l	L	l	L	l	L	l	N	n	N	n	N	n	'n	Ng	ng	O	o	O	o	O	o	Oe	oe	R	r	R	r	R	r	S	s	S	s	S	s	S	s	T	t	T	t	T	t	U	u	U	u	U	u	U	u	U	u	U	u	W	w	Y	y	Y	Z	z	Z	z	Z	z	s	b	B	B	b	6	6	O	C	c	D	D	D	d	z	E	E	E	F	f	G	G	hw	I	I	K	k	l	l	W	N	n	O	O	o	Gh	gh	P	p	R	2	2	Sh	sh	t	T	t	T	U	u	U	V	Y	y	Z	z	Zh	`	`	zh	dz	5	5	ts	w	c	x	qc	q	DZ	Dz	dz	LJ	Lj	lj	NJ	Nj	nj	A	a	I	i	O	o	U	u	U	u	U	u	U	u	U	u	e	A	a	A	a	Ae	ae	G	g	G	g	K	k	O	o	O	o	Zh	zh	j	DZ	Dz	dz	G	g	Hw	W	N	n	A	a	Ae	ae	O	o",
+  2: "A	a	A	a	E	e	E	e	I	i	I	i	O	o	O	o	R	r	R	r	U	u	U	u	S	s	T	t	Y	y	H	h	N	d	Ou	ou	Z	z	A	a	E	e	O	o	O	o	O	o	O	o	Y	y	l	n	t	j	db	qp	A	C	c	L	T	s	z	'	'	B	U	A	E	e	J	j	Q	q	R	r	Y	y	a	a	a	b	o	c	d	d	e	e	er	e	e	er	o	j	g	g	g	g	u	y	h	h	i	i	i	l	l	l	lzh	w	w	m	n	n	n	o	oe	u	f	r	r	r	r	r	r	i	r	r	s	sh	j	i	sh	t	t	u	u	v	a	w	y	y	z	z	zh	zh	'	`	x	q	pc	b	oe	g	h	j	k	l	q	'	`	dz	dzh	dz	ts	tsh	tc	fng	ls	lz	ww	]]	y	y	h	h	j	r	r	r	r	w	y	'	''	`	'	`	'	`	'	`	<	>	^	v	^	^	'	-	'	`	,	_	`	'	:	-	'	`	+	+	+	-	^	.	.	,	~	\"	r	x	g	l	s	x	`	5	4	3	2	1	3	7	_	=	''	v	^	<	>	.	`	``	''	~	:	'	'	,	,	_	_	<",
+  3: `																																																																																																			a	e	i	o	u	c	d	h	m	r	t	v	x	H	h	S	s	'	,	W	w			i	s	s.	s.	;	J					'	"'	A	;	E	I	I		O		Y	O	i	A	V	G	D	E	Z	I	Th	I	K	L	M	N	X	O	P	R		S	T	Y	F	Ch	Ps	O	I	Y	a	e	i	i	y	a	v	g	d	e	z	i	th	i	k	l	m	n	x	o	p	r	s	s	t	y	f	ch	ps	o	i	y	o	y	o	&	b	th	Y	Y	Y	ph	p	&	Q	q	St	st	W	w	Q	q	S	s	Sh	sh	F	f	X	x	H	h	J	j	C	c	Ti	ti	k	r	s	j	Th	e	e	Sh	sh	S	S	s	r.	S	S.	S.`,
+  4: "E	E	Dj	G	Ie	Dz	I	I	J	Lj	Nj	C	K	I	U	Dzh	A	B	V	G	D	E	Zh	Z	I	Y	K	L	M	N	O	P	R	S	T	U	F	Kh	Ts	Ch	Sh	Shch	'	Y	'	E	Yu	Ya	a	b	v	g	d	e	zh	z	i	y	k	l	m	n	o	p	r	s	t	u	f	kh	ts	ch	sh	shch	'	y	'	e	yu	ya	e	e	dj	g	ie	dz	i	i	j	lj	nj	c	k	i	u	dzh	O	o	E	e	Ie	ie	E	e	Ie	ie	O	o	Io	io	Ks	ks	Ps	ps	F	f	Y	y	Y	y	U	u	O	o	O	o	Ot	ot	Q	q	1000	.				.	100000	1000000	Jh	jh	'	'	Rh	rh	G	g	Gh	gh	Gh	gh	J	j	Z	z	Q	q	G	g	Q	q	Q	q	Ng	ng	Ng	ng	Ph	ph	W	w	S	s	Th	th	U	u	U	u	H	h	Ts	ts	J	j	C	c	H	h	Ch	ch	Ch	ch	H	Gi	gi	Q	q	Lh	lh	Ng	ng	Nh	nh	Dzh	dzh	Mh	mh	h	A	a	A	a	Ae	ae	E	e	A	a	E	e	Dzh	dzh	J	j	Dz	dz	I	i	I	i	O	o	O	o	Y	y	A	a	U	u	U	u	U	u	Tsh	tsh	Gh	gh	Y	y	Xh	xh	X	x	H	h",
+  5: "D	d	Dj	dj	Zj	zj	Dz	dz	Lj	lj	Nj	nj	Sj	sj	Tj	tj	A	a	L	l	Lkh	lkh	Rkh	rkh	A	a	Q	q	W	w	Q	q	L	l	N	n	Ph	ph	'	'	Ny	ny	Dzh	dzh	Dch	dch	L	l		A	B	G	D	E	Z	E	Y	T'	Zh	I	L	Kh	Ts	K	H	Dz	Gh	Ch	M	Y	N	Sh	O	Ch'	P	J	Rr	S	V	T	R	Ts'	W	P'	K'	O	F			`	'	*	!	,	?	.	a	a	b	g	d	e	z	e	y	t'	zh	i	l	kh	ts	k	h	dz	gh	ch	m	y	n	sh	o	ch'	p	j	rr	s	v	t	r	ts'	w	p'	k'	o	f	ev	h	.	-			*	*	Dram																																	e	e	a	o	i	e	e	a	a	o	o	u			-		|	h		.	`	`	^	o									'	v	g	d	h	v	z	h	t	y	kh	kh	l	m	m	n	n	s	'	f	f	ts	ts	k	r	s	t					YYY	v	oy	ey	'	\"",
+  6: "#	sn.	^	#	sm.	#	cbrt	4rt	r	%0	%00	Af	,	/	^	*							i					;		.	.	?	y	'	a	'	u'	'	i'		b	h	t	th	j	h	kh	d	dh	r	z	s	sh	s	d	t	dh	`	gh	g	g	y	i	i		f	q	k	l	m	n	h	w	a	y				a	u	i			a	'	'	i		e	e	o	e	e	o	a	u'	0	1	2	3	4	5	6	7	8	9	%	.	,	*	b	q	a	'	a	u'	e	a	o	u	i	t	th	b	t	t	p	th	bh	dz	dz	n	j	ts	ch	ch	d	d	d	dd	dh	dh	dh	d	d	r	r	r	r	r	zh	d	zh	r	sh	s	ch	ts	ch	th	ng	f	f	p	v	v	ph	q	g	k	k	g	g	ng	kp	g	gg	n	g	g	g	l	l	l	l	n	n	n	n	ny	h	n	e	h	h	h	o	o	o	u	u	u	u	v	y	ey	e	v	e	ny	e	e'	.	e								#	#											^					d	r	0	1	2	3	4	5	6	7	8	9	s	l	n	&	m.	h",
+  7: "*	.	.	!	!	:	:	:	;	?	.	/	\\	+		.	'	'	b	g	j	d	d	h	w	z	h	t	d	y	yh	k	l	m	n	s	s	`	p	p	s	q	r	sh	t	bh	gh	dh	a	a	a	o	u	a	e	e	i	e	i	i	i	u	u	o			h			h	h							zh	kh	ph	'y	p	p	c	ny	p	c	ng	c	dd	d	r	s	ng	ng	g	p	v	g	g	k	b	mb	n	n	n	sl	r	z	s	j	c	s	z	j	a	aa	i	ii	y	o	oo	e	ee	ch	s	s	g	h	sh	n	r	b	lh	k		v	m	f	dh	th	l	g	gn	s	d	z	t	y	p	j	ch	th'	h'	kh	dh'	x	sh'	s'	l'	t'	z'	'	gh	q	w	a	aa	i	ee	u	oo	e	ey	o	oa		n															0	1	2	3	4	5	6	7	8	9	a	e	i	e	u	o	o		n	b	p	t	j	c	d	r	rr	s	gb	f	k	l	n	m	ny	n	h	w	y	ny	j	c	r								n		'	`	o	*	,	!	-			.	D	T",
+  8: "'	b	g	d	h	w	z	h	t	y	k	l	m	n	s	`	f	s	q	r	sh	t	`	`			y	y	e	e	a	a	a	a	a	a	a	a	u	u	i	i	i	o					;	:	..	<.	<:	?	.	-<	-.	-:	=:	|:	/	.	...		a	b	g	d	h	u	z	h	t	i	k	l	m	n	s	`	p	s	q	r	sh	t	d	kd	`	'					,		n	j	n	t	n	n	bh	r	l	l	s						'	'	'	'	'	'	'	'	'	'	'	'	'	'	'	'	'	'	'	'	u	y	y	.	.	nj	c	th	th	g	.		LE	pt						e							a	a	b	b	c	t	vb	gb	zl	mv	y	ny	r	w	y		dz	ts	kh	u	z	n	k	q	mb	mp	tt	nr	ny	f	q	n	ph	th	th	ch	kh	gy	ky	n	n	l	gr																										#	e	o	ou	e	on	oun	en							a	u	i	u	e	a	i	o	u	e	e	un	on	o	o",
+  9: "m	m	m	h	a	a	a	i	i	u	u	r	l	e	e	e	ai	o	o	o	au	k	kh	g	gh	n	c	ch	j	jh	n	t	th	d	dh	n	t	th	d	dh	n	n	p	ph	b	bh	m	y	r	r	l	l	l	v	s	s	s	h	o	o	'	'	a	i	i	u	u	r	r	e	e	e	ai	o	o	o	au		e	a	Om					e	u	u	q	kh	g	z	r	rh	f	y	r	l	l	l	,	.	0	1	2	3	4	5	6	7	8	9	.	'	a	o	o	a	u	u	d	zh	y	g	j	'	d	b	*	m	m	h		a	a	i	i	u	u	r	l			e	ai			o	au	k	kh	g	gh	n	c	ch	j	jh	n	t	th	d	dh	n	t	th	d	dh	n		p	ph	b	bh	m	y	r		l				s	s	s	h			'	'	a	i	i	u	u	r	r			e	ai			o	au		t									u					r	rh		y	r	l	l	l			0	1	2	3	4	5	6	7	8	9	r	v	Rs	Rs	1	2	3	1	3	/	^	g	m	.	'",
+  10: "	m	m	h		a	a	i	i	u	u					e	ai			o	au	k	kh	g	gh	n	c	ch	j	jh	n	t	th	d	dh	n	t	th	d	dh	n		p	ph	b	bh	m	y	r		l	l		v	s		s	h			'		a	i	i	u	u					e	ai			o	au													kh	g	z	r		ph								0	1	2	3	4	5	6	7	8	9	m	'			*	y	.											m	m	h		a	a	i	i	u	u	r	l	e		e	ai	o		o	au	k	kh	g	gh	n	c	ch	j	jh	n	t	th	d	dh	n	t	th	d	dh	n		p	ph	b	bh	m	y	r		l	l		v	s	s	s	h			'	'	a	i	i	u	u	r	r	e		e	ai	o		o	au				Om																r	l	l	l			0	1	2	3	4	5	6	7	8	9	.	Rs								zh				'	'	'",
+  11: "	m	m	h		a	a	i	i	u	u	r	l			e	ai			o	au	k	kh	g	gh	n	c	ch	j	jh	n	t	th	d	dh	n	t	th	d	dh	n		p	ph	b	bh	m	y	r		l	l		v	s	s	s	h			'	'	a	i	i	u	u	r	r			e	ai			o	au										i	u					r	rh		y	r	l	l	l			0	1	2	3	4	5	6	7	8	9	^	w	1	2	3	1	2	3											m	k		a	a	i	i	u	u				e	e	ai		o	o	au	k				n	c		j		n	t				n	t				n	n	p				m	y	r	r	l	l	l	v	s	s	s	h					a	i	i	u	u				e	e	ai		o	o	au				Om							u															0	1	2	3	4	5	6	7	8	9	10	100	1000	N	M	V	-	+	-	Rs	#",
+  12: "m	n	m	h	m	a	a	i	i	u	u	r	l		e	e	ai		o	o	au	k	kh	g	gh	n	c	ch	j	jh	n	t	th	d	dh	n	t	th	d	dh	n		p	ph	b	bh	m	y	r	r	l	l	l	v	s	s	s	h			'	'	a	i	i	u	u	r	r		e	e	ai		o	o	au									'	i		c	z	r			n			r	l	l	l			0	1	2	3	4	5	6	7	8	9								*	0	1	2	3	1	2	3	t	m	m	m	h	*	a	a	i	i	u	u	r	l		e	e	ai		o	o	au	k	kh	g	gh	n	c	ch	j	jh	n	t	th	d	dh	n	t	th	d	dh	n		p	ph	b	bh	m	y	r	r	l	l		v	s	s	s	h			'	'	a	i	i	u	u	r	r		e	e	ai		o	o	au									'	i							n	l		r	l	l	l			0	1	2	3	4	5	6	7	8	9		h	h	m",
+  13: "m	m	m	h	m	a	a	i	i	u	u	r	l		e	e	ai		o	o	au	k	kh	g	gh	n	c	ch	j	jh	n	t	th	d	dh	n	t	th	d	dh	n	n	p	ph	b	bh	m	y	r	r	l	l	l	v	s	s	s	h	t			'	a	i	i	u	u	r	r		e	e	ai		o	o	au		r	p					m	y	l	u	2	4	12	16	32	48	64	i	r	l	l	l			0	1	2	3	4	5	6	7	8	9	10	100	1000	80	160	240	20	40	60	d	n	n	r	l	l	k		m	m	h		a	a	ae	ae	i	i	u	u	r	r	l	l	e	e	ai	o	o	au				k	kh	g	gh	n	ng	c	ch	j	jh	n	jn	nj	t	th	d	dh	n	nd	t	th	d	dh	n		nd	p	ph	b	bh	m	mb	y	r		l			v	s	s	s	h	l	f									a	ae	ae	i	i	u		u		r	e	e	ai	o	o	au	u							0	1	2	3	4	5	6	7	8	9			r	l	~",
+  14: "	k	kh	kh	kh	kh	kh	ng	ch	ch	ch	s	ch	y	d	t	th	th	th	n	d	t	th	th	th	n	b	p	ph	f	ph	f	ph	m	y	r	rue	l	lue	w	s	s	s	h	l	o	h	.	a	a	a	am	i	i	ue	ue	u	u						B	e	ae	o	ai	ai		-							m		*	0	1	2	3	4	5	6	7	8	9	#	@																																						k	kh		kh		gh	ng	ch	ch	x		jh	gn	n	t	th	d	dh	n	d	t	th	th	dh	n	b	p	ph	f	ph	f	bh	m	y	r		l		v	s	s	s	h	l		h	...	a	a	a	am	i	i	u	u	ou	ou		o	l	y			e	e	o	ai	ai		-							o			0	1	2	3	4	5	6	7	8	9			n	m	g	gn",
+  15: "Om	@	@	@	@	#	$	%	!	*	*	-	-	,	.	;	|	|	/	*	:	*	*	*			o	oo	ooo	x	xx	ox	0	1	2	3	4	5	6	7	8	9	1-	2-	3-	4-	5-	6-	7-	8-	9-	0-	=		^		*		<	>	(	)			k	kh	g	gh	ng	c	ch	j		ny	t	th	d	dh	n	t	th	d	dh	n	p	ph	b	bh	m	ts	tsh	dz	dzh	w	zh	z	'	y	r	l	sh	s	s	h		ks	r	q	r						i	i	u	u	r	r	l	l	e	ai	o	au	m	h	i	i	m	m		`			h	h			h	h	h	h	k	kh	g	gh	ng	c	ch	j		ny	t	th	d	dh	n	t	th	d	dh	n	p	ph	b	bh	m	ts	tsh	dz	dzh	w	zh	z	'	y	r	l	sh	s	s	h		ks	w	y	r		*	*	*	*	*	*	*	*		*	*	*	*	*	*		xo	xxx	*	*	:	@	#	+	+	+	+	~	~",
+  16: "k	kh	g	gh	n	c	ch	j	jh	n	nn	t	th	d	dh	n	t	th	d	dh	n	p	ph	b	bh	m	y	r	l	v	s	h	l	'	'	i	i	u	u	e	e	o	o	a	a	i	i	u	u	e	ai	i	ao	e	m					y	r	v	h	ss	0	1	2	3	4	5	6	7	8	9	,	.	n*	r*	l*	e*	s	s	r	r	l	l	r	r	l	l	n	jh	b	b	n	m	l	sh	o			s	pw	o	u						n	yw	ghw	i	o	u	e	k	kh	g	c	z	n	d	n	ph	f	b	x	h	v	a	e	e	ai								f		0	1	2	3	4	5	6	7	8	9			a	ai	1	!	A	B	G	D	E	V	Z	T	I	K'	L	M	N	O	P'	Zh	R	S	T'	U	P	K	Gh	Q'	Sh	Ch	Ts	Dz	Ts'	Ch'	Kh	J	H	E	Y	W	X	O		E						Ae			a	b	g	d	e	v	z	t	i	k'	l	m	n	o	p'	zh	r	s	t'	u	p	k	gh	q'	sh	ch	ts	dz	ts'	ch'	kh	j	h	e	y	w	x	o	f	e	`	g	`	*	n	ae	`	w",
+  17: "g	kk	n	d	tt	l	m	b	pp	s	ss		j	jj	ch	k	t	p	h	ng	nn	nd	nb	dg	ln	ll	lh	r	mb	w	bg	bn	bd	bs	bsg	bsd	bsb	bss	bsj	bj	bch	bt	bp	v	ff	sg	sn	sd	sl	sm	sb	sbg	sss	s	sj	sch	sk	st	sp	sh	s	ss	s	ss	z	g	d	m	b	s	z		j	ch	t	p	ng	j	j	jj	j	jj	chk	chh	ch	ch	pb	f	hh	q	gd	ns	nj	nh	dl			a	ae	ya	yae	eo	e	yeo	ye	o	wa	wae	oe	yo	u	wo	we	wi	yu	eu	ui	i	ao	au	yao	yayo	eoo	eou	eoeu	yeoo	yeou	oeo	oe	oye	oo	ou	yoya	yoyae	yoyeo	yoo	yoi	ua	uae	ueoeu	uye	uu	yua	yueo	yue	yuyeo	yuye	yuu	yui	euu	eueu	uiu	ia	iya	io	iu	ieu	io	o	oeo	ou	oi	yo	aeu	yau	yeoya	oya	oyae	g	kk	gs	n	nj	nh	d	l	lg	lm	lb	ls	lt	lp	lh	m	b	bs	s	ss	ng	j	ch	k	t	p	h	gl	gsg	ng	nd	ns	nz	nt	dg	dl	lgs	ln	ld	ldh	ll	lmg	lms	lbs	lbh	lv	lss	lz	lk	lq	mg	ml	mb	ms	mss	mz	mch	mh	w	bl	bp	bh	v	sg	sd	sl	sb	z	ngg	ngkk	ngng	ngk	ng	ngs	ngz	pb	f	hn	hl	hm	hb	q	gn	gb	gch	gk	gh	nn",
+  18: "ha	hu	hi	ha	he	h	ho	hoa	le	lu	li	la	le	l	lo	lwa	ha	hu	hi	ha	he	h	ho	hwa	me	mu	mi	ma	me	m	mo	mwa	se	su	si	sa	se	s	so	swa	re	ru	ri	ra	re	r	ro	rwa	se	su	si	sa	se	s	so	swa	she	shu	shi	sha	she	sh	sho	shwa	k'e	k'u	k'i	k'a	k'e	k'	k'o	k'oa	k'we		k'wi	k'wa	k'we	k'wi			k'e	k'u	k'i	k'a	k'e	k'	k'o		k'we		k'wi	k'wa	k'we	k'wi			be	bu	bi	ba	be	b	bo	bwa	ve	vu	vi	va	ve	v	vo	vwa	te	tu	ti	ta	te	t	to	twa	che	chu	chi	cha	che	ch	cho	chwa	ha	hu	hi	ha	he	h	ho	hoa	hwe		hwi	hwa	hwe	hwi			ne	nu	ni	na	ne	n	no	nwa	nye	nyu	nyi	nya	nye	ny	nyo	nywa	'a	'u	'i	'a	'e	'	'o	'wa	ke	ku	ki	ka	ke	k	ko	koa	kwe		kwi	kwa	kwe	kwi			he	hu	hi	ha	he	h	ho		hwe		hwi	hwa	hwe	hwi			we	wu	wi	wa	we	w	wo	woa	`a	`u	`i	`a	`e	`	`o		ze	zu	zi	za	ze	z	zo	zwa	zhe	zhu	zhi	zha	zhe	zh	zho	zhwa	ye	yu	yi	ya	ye	y	yo	yoa	de	du	di	da	de	d	do	dwa	d'e	d'u	d'i	d'a	d'e	d'	d'o	d'wa",
+  19: "je	ju	ji	ja	je	j	jo	jwa	ge	gu	gi	ga	ge	g	go	goa	gwe		gwi	gwa	gwe	gwi			nge	ngu	ngi	nga	nge	ng	ngo	ngwa	t'e	t'u	t'i	t'a	t'e	t'	t'o	t'wa	ch'e	ch'u	ch'i	ch'a	ch'e	ch'	ch'o	ch'wa	p'e	p'u	p'i	p'a	p'e	p'	p'o	p'wa	ts'e	ts'u	ts'i	ts'a	ts'e	ts'	ts'o	ts'wa	ts'e	ts'u	ts'i	ts'a	ts'e	ts'	ts'o	ts'oa	fe	fu	fi	fa	fe	f	fo	fwa	pe	pu	pi	pa	pe	p	po	pwa	rya	mya	fya						+	 	.	,	;	,	:	?	#	1	2	3	4	5	6	7	8	9	10	20	30	40	50	60	70	80	90	100	10000				mwe	mwi	mwe	mwi	bwe	bwi	bwe	bwi	fwe	fwi	fwe	fwi	pwe	pwi	pwe	pwi																	A	E	I	O	U	V	Ga	Ka	Ge	Gi	Go	Gu	Gv	Ha	He	Hi	Ho	Hu	Hv	La	Le	Li	Lo	Lu	Lv	Ma	Me	Mi	Mo	Mu	Na	Hna	Nah	Ne	Ni	No	Nu	Nv	Qua	Que	Qui	Quo	Quu	Quv	Sa	S	Se	Si	So	Su	Sv	Da	Ta	De	Te	Di	Ti	Do	Du	Dv	Dla	Tla	Tle	Tli	Tlo	Tlu	Tlv	Tsa	Tse	Tsi	Tso	Tsu	Tsv	Wa	We	Wi	Wo	Wu	Wv	Ya	Ye	Yi	Yo	Yu	Yv	Mv			ye	yi	yo	yu	yv	mv",
+  20: "-	e	iy	i	ii	o	oo	oo	e	i	a	aa	we	we	wi	wi	wii	wii	wo	wo	woo	woo	wo	wa	wa	waa	waa	wa	ai	w	'	t	k	sh	s	n	w	'	h	w	c	n	l	e	i	o	a	pe	piy	pi	pii	po	poo	poo	he	hi	pa	paa	pwe	pwe	pwi	pwi	pwii	pwii	pwo	pwo	pwoo	pwoo	pwa	pwa	pwaa	pwaa	pwa	p	p	h	te	tiy	ti	tii	to	too	too	de	di	ta	taa	twe	twe	twi	twi	twii	twii	two	two	twoo	twoo	twa	twa	twaa	twaa	twa	t	t'e	t'i	t'o	t'a	ke	kiy	ki	kii	ko	koo	koo	ka	kaa	kwe	kwe	kwi	kwi	kwii	kwii	kwo	kwo	kwoo	kwoo	kwa	kwa	kwaa	kwaa	kwa	k	kw	k'e	k'i	k'o	k'a	ce	ciy	ci	cii	co	coo	coo	ca	caa	cwe	cwe	cwi	cwi	cwii	cwii	cwo	cwo	cwoo	cwoo	cwa	cwa	cwaa	cwaa	cwa	c	c	me	miy	mi	mii	mo	moo	moo	ma	maa	mwe	mwe	mwi	mwi	mwii	mwii	mwo	mwo	mwoo	mwoo	mwa	mwa	mwaa	mwaa	mwa	m	m	mw	m	m	ne	niy	ni	nii	no	noo	noo	na	naa	nwe	nwe	nwa	nwa	nwaa	nwaa	nwa	n	ng	nw	le	liy	li	lii	lo	loo	loo	la	laa	lwe	lwe	lwi	lwi	lwii	lwii	lwo	lwo	lwoo	lwoo	lwa	lwa	lwaa	lwaa	l	l	l	se	siy	si	sii	so	soo	soo	sa	saa	swe	swe	swi	swi	swii	swii	swo	swo	swoo	swoo",
+  21: "swa	swa	swaa	swaa	swa	s	s	sw	s	sk	skw	sw	spwa	stwa	skwa	scwa	she	shi	shii	sho	shoo	sha	shaa	shwe	shwe	shwi	shwi	shwii	shwii	shwo	shwo	shwoo	shwoo	shwa	shwa	shwaa	shwaa	sh	ye	yiy	yi	yii	yo	yoo	yoo	ya	yaa	ywe	ywe	ywi	ywi	ywii	ywii	ywo	ywo	ywoo	ywoo	ywa	ywa	ywaa	ywaa	ywa	y	y	y	yi	re	re	li	riy	ri	rii	ro	roo	lo	ra	raa	la	rwaa	rwaa	r	r	r	fe	fiy	fi	fii	fo	foo	fa	faa	fwaa	fwaa	f	the	the	thi	thi	thii	thii	tho	thoo	tha	thaa	thwaa	thwaa	th	tthe	tthi	ttho	ttha	**	te	ti	to	ta	hai	hi	hii	hu	huu	ha	haa	h	h	hk	qiy	qi	qii	qu	quu	qa	qaa	q	tle	tli	tlo	tla	re	ri	ro	ra	ngiy	ngi	ngii	ngu	nguu	nga	ngaa	ng	nng	she	shi	sho	sha	the	thi	tho	tha	th	hli	hlii	hlu	hluu	hla	hlaa	hl	the	thi	thii	tho	thoo	tha	thaa	th	b	e	i	o	a	we	wi	wo	wa	ne	ni	no	na	ke	ki	ko	ka	ge	gi	go	ga	khoo	kho	khu	khe	khi	kha	ghoo	gho	ghu	ghe	ghi	gha	woo	wo	wu	we	wi	wa	whoo	who	whu	whe	whi	wha	too	to	tu	te	ti	ta	t'oo	t'o	t'u	t'e	t'i	t'a	boo	bo	bu	be	bi	ba	p	goo	go	gu	ge	gi	ga	koo	ko	ku	ke	ki	ka	k'oo	k'o	k'u	k'e	k'i",
+  22: "k'a	k'	noo	no	nu	ne	ni	na	moo	mo	mu	me	mi	ma	yoo	yo	yu	ye	yi	ya	joo	jo	jo	ju	je	ji	ji	ja	ch'oo	ch'o	ch'u	ch'e	ch'i	ch'a	loo	lo	lu	le	li	la	dloo	dlo	dlu	dle	dli	dla	lhoo	lho	lhu	lhe	lhi	lha	tloo	tlo	tlu	tle	tli	tla	tl'oo	tl'o	tl'u	tl'e	tl'i	tl'a	zoo	zo	zu	ze	zi	za	z	z	dzoo	dzo	dzu	dze	dzi	dza	soo	so	su	se	si	sa	shoo	sho	shu	she	shi	sha	sh	choo	cho	chu	che	chi	cha	tsoo	tso	tsu	tse	tsi	tsa	ts'oo	ts'o	ts'u	ts'e	ts'i	ts'a	X	.	qai	ngai	nngi	nngii	nngu	nnguu	nnga	nngaa	thwe	thwi	thwii	thwo	thwoo	thwa	thwaa	th	w	 	b	l	f	s	n	h	d	t	c	q	m	g	ng	z	r	a	o	u	e	i	ea	oi	ui	ia	ae	p	>	<				f	v	u	y	y	w	th	dh	a	o	a	ae	a	a	o	o	o	r	k	c	k	g	ng	g	g	w	h	h	h	h	n	n	n	i	e	j	j	a	a	i	p	z	s	s	s	c	z	t	t	d	b	b	p	p	e	m	m	m	l	l	ng	ng	d	o	ea	io	q	k	k	st	r	r	y	q	x	.	:	+	17	18	19	k	sh	oo	o	i	e	a	ae",
+  23: "a	i	u	k	g	ng	t	d	n	p	b	m	y	r	l	w	s	h	i	u												r	a	i	u	k	g	ng	t	d	n	p	b	m	y	r	l	w	s	h	i	u		,	.										a	i	u	k	g	ng	t	d	n	p	b	m	y	r	l	w	s	h	i	u													a	i	u	k	g	ng	t	d	n	p	b	m	y		l	w	s		i	u													k	kh	k	kh	ng	ch	chh	ch	chh	nh	d	th	d	th	n	t	th	t	th	n	b	ph	p	ph	m	y	r	l	v	s	s	s	h	l	'	'	'a	e	ei	o	o	ou	au	rue	rueu	lue	lueu	ae	ai	ao	ao	ov			a	e	ei	oe	eu	o	ou	uo	aeu	oea	ie	e	ae	ai	ao	au	am	ah	ak			a	r		!		a				.	#	:	-	-Lo-	*	@	CR	'				0	1	2	3	4	5	6	7	8	9							0	1	2	3	4	5	6	7	8	9",
+  24: "@	...	,	.	:	*	-	-	,	.	-						0	1	2	3	4	5	6	7	8	9							a	e	i	o	u	o	u	e	n	ng	b	p	h	g	m	l	s	x	t	d	q	j	y	r	w	f	k	k	c	z	h	r	lh	zh	ch		e	i	o	u	o	u	ng	b	p	h	g	m	t	d	q	j	c	y	v	k	g	h	j	ny	z	e	i	y	u	u	ng	k	g	h	p	x	t	d	j	f	g	h	c	z	r	ch	zh	i	k	r	f	zh	x								m	h	h	h	h	3	9	a	i	k	ng	ts	t	th	d	n	t	d	p	ph	s	zh	z	'	t	zh	gh	ng	ts	dzh	t	dh	t	dh	s	c	zh	z	w	y	bh		lh						oy	ay	aay	way	poy	pay	pwoy	tay	kay	kway	may	noy	nay	lay	soy	say	shoy	shay	shwoy	yoy	yay	ray	nwi	nwi	nwii	nwii	nwo	nwo	nwoo	nwoo	rwe	rwi	rwii	rwo	rwoo	rwa	p	t	k	c	m	n	s	sh	w	w	y	'	rwe	loo	laa	thwe	thwa	tthwe	tthoo	tthaa	tlwe	tloo	shwe	shoo	goo	gwo	goo	gaa	gwa	joo	jwe	l	r	s",
+  25: "	k	kh	g	gh	n	c	ch	j	jh	n	t	th	d	dh	n	p	ph	b	bh	m	y	r	l	v	s	s	s	h	jn	tr		a	i	u	e	ai	o	au	e	o	y	r	v					k	n	m	t	n	p	m	r	l	h	'						lo				!	?	0	1	2	3	4	5	6	7	8	9	g	h	ng	z	s	y	d	t	l	b	p	m	f	w	hh	'	k	c	n	aa	i	e	ae	u	o	oa	ue	oe	aue	ai																					g	k	ng	g	k	ng	z	s	y	z	s	y	d	t	n	d	t	n	b	p	m	b	p	m	f	w	l	f	w	l	h	dd	bb	h	dd	bb	gw	kw	gw	kw	sw	sw					'	aa	i	u	u	e	ae	o	oa	ue	ai	aai	ui	oi	oai	uei	ii	w	ng	n	m	k	t	p									0	1	2	3	4	5	6	7	8	9	1				lae	laew	08	1.	2.	3.	4.	5.	6.	7.	8.	9.	10.	11.	12.	13.	14.	15.	88	.1	.2	.3	.4	.5	.6	.7	.8	.9	.10	.11	.12	.13	.14	.15",
+  26: "k	g	ng	ngk	p	b	m	mp	t	d	n	nr	c	j	ny	nc	y	r	l	w	s		h	i	u	e	o	e			\\	*	k	kh	kh	k	kh	kh	ng	ch	s	ch	s	s	ny	t	th	d	th	n	t	th	t	th	n	b	p	ph	f	p	f	ph	m	ny	y	h	lue	l	lue	w	s	s	s	h	l		h	i	i	u	u	e	o	lae	th	r	l	lng	ng	ng	p	th	m	b	s			a	a	a	a	i	i	ue	ue	u	u	o	o	oy	e	ae	o	ai	ai	o	m							-				.	0	1	2	3	4	5	6	7	8	9							0	1	2	3	4	5	6	7	8	9							w.	ww.	s.	*	*	*	^	-	,	.	;	:	@	ch.																		w	w												g	r	t",
+  27: "m	ng	ng	r	h	a	a	i	i	u	u	re	ro	le	lo	e	ai	o	au	k	kh	g	gh	ng	c	ch	j	jh	ny	t	th	d	dh	n	t	th	d	dh	n	p	ph	b	bh	m	y	r	l	w	s	s	s	h	'	a	i	i	u	u	re	ro	le	lo	e	ai	o	au	e	o		q	x	ts	f	v	z	sy	jny		,	.	0	1	2	3	4	5	6	7	8	9	*	@	.	:	,	.	-	a	e	u	ng	r	i	e	u	ai	h										^	^	^	^	^	^	^	^	^	**	@@	~	ng	r	h	a	i	u	e	o	e	eu	k	q	g	ng	c	j	z	ny	t	d	n	p	f	v	b	m	y	r	l	w	s	x	h	y	r	l	i	u	e	o	e	eu			m	w	kh	sy	0	1	2	3	4	5	6	7	8	9	'	reu	leu	bh	k	m			h	h	h	b	b	p	p	n	n	w	w	w	g	g	j	d	r	r	m	m	t	t	s	s	s	y	y	ng	l	l	ny	c	nd	mb	i	u	'	e	e	e	i	i	o	o	u	u	ng	h											*	+	|	)",
+  28: "k	kl	kh	g	gl	ng	c	ch	j	ny	t	th	d	n	p	pl	ph	f	fl	b	bl	m	ml	ts	tsh	z	y	r	l	h	hl	v	s	sh	w		y	r	a	i	o	o	u	u	e	k	m	l	n	p	r	t	ng	ng		'				,	.	.	.	.	0	1	2	3	4	5	6	7	8	9				t	th	d	0	1	2	3	4	5	6	7	8	9	a	t	g	m	l	a	k	j	m	w	i	s	h	n	r	u	c	d	n	y	e	p	d	n	r	o	t	b	n	h	m		m			'	,	.	v	d	o	s	t	t	'	e	u	Tj	tj						A	B	G	D	E	V	Z	T	I	K'	L	M	N	O	P'	Zh	R	S	T'	U	P	K	Gh	Q'	Sh	Ch	Ts	Dz	Ts'	Ch'	Kh	J	H	E	Y	W	X	O	F	E	`	G	`			Ae	`	W	.	*	;	,	L	K	D	B												\"															h	h	h	h	h	h	h	m	m	m	m	m	m	m	m	m	h	h		h	h",
+  29: "a	ae	ae	b	c	d	d	e	e	i	j	k	l	m	n	o	o	o	o	o	oe	ou	o	o	p	r	r	t	u	u	u	w	v	w	z	zh	`	`	g	l	p	r	ps	l	A	Ae	B	B	D	E	E	G	H	I	J	K	L	M	N	N	O	Ou	P	R	T	U	W	a	a	a	ae	b	d	e	e	e	e	g	i	k	m	ng	o	o	o	o	p	t	u	u	w	v	`	v	g	d	f	ch	i	r	u	v	v	g	r	f	ch	ue	b	d	f	m	n	p	r	r	s	t	z	g	n	g	th	i	i	p	u	u	b	d	f	g	k	l	m	n	p	r	s	sh	v	x	z	a	a	d	e	e	e	e	i	o	sh	u	zh	a	c	c	d	e	f	j	g	y	i	i	i	i	j	l	l	l	m	w	n	n	n	o	f	s	sh	t	u	u	u	v	a	z	z	z	zh	th											r									a	ae	ao	av	c	d	d	g	g	k	l	l	m	n	n	r	r	s	s	z	a	b	b	e	f	l	o	p	sh	u	w	a	o	u",
+  30: "A	a	B	b	B	b	B	b	C	c	D	d	D	d	D	d	D	d	D	d	E	e	E	e	E	e	E	e	E	e	F	f	G	g	H	h	H	h	H	h	H	h	H	h	I	i	I	i	K	k	K	k	K	k	L	l	L	l	L	l	L	l	M	m	M	m	M	m	N	n	N	n	N	n	N	n	O	o	O	o	O	o	O	o	P	p	P	p	R	r	R	r	R	r	R	r	S	s	S	s	S	s	S	s	S	s	T	t	T	t	T	t	T	t	U	u	U	u	U	u	U	u	U	u	V	v	V	v	W	w	W	w	W	w	W	w	W	w	X	x	X	x	Y	y	Z	z	Z	z	Z	z	h	t	w	y	a'	s	s.	s.	Ss	d	A	a	A	a	A	a	A	a	A	a	A	a	A	a	A	a	A	a	A	a	A	a	A	a	E	e	E	e	E	e	E	e	E	e	E	e	E	e	E	e	I	i	I	i	O	o	O	o	O	o	O	o	O	o	O	o	O	o	O	o	O	o	O	o	O	o	O	o	U	u	U	u	U	u	U	u	U	u	U	u	U	u	Y	y	Y	y	Y	y	Y	y	Ll	ll	V	v	Y	y",
+  31: "a	ha	a	ha	a	ha	a	ha	A	Ha	A	Ha	A	Ha	A	Ha	e	he	e	he	e	he			E	He	E	He	E	He			i	hi	i	hi	i	hi	i	hi	I	Hi	I	Hi	I	Hi	I	Hi	i	hi	i	hi	i	hi	i	hi	I	Hi	I	Hi	I	Hi	I	Hi	o	ho	o	ho	o	ho			O	Ho	O	Ho	O	Ho			y	hy	y	hy	y	hy	y	hy		Hy		Hy		Hy		Hy	o	ho	o	ho	o	ho	o	ho	O	Ho	O	Ho	O	Ho	O	Ho	a	a	e	e	i	i	i	i	o	o	y	y	o	o			a	ha	a	ha	a	ha	a	ha	A	Ha	A	Ha	A	Ha	A	Ha	i	hi	i	hi	i	hi	i	hi	I	Hi	I	Hi	I	Hi	I	Hi	o	ho	o	ho	o	ho	o	ho	O	Ho	O	Ho	O	Ho	O	Ho	a	a	a	a	a		a	a	A	A	A	A	A	'	i	'	~	\"~	i	i	i		i	i	E	E	I	I	I	'`	''	'~	i	i	i	i			i	i	I	I	I	I		h`	h'	h~	y	y	y	y	r	rh	y	y	Y	Y	Y	Y	Rh	\"`	\"'	`			o	o	o		o	o	O	O	O	O	O	'	h",
+  32: " 	 	 	 	 	 	 	 	 	 	 						-	-	-	-	-	-	||	_	'	'	'	'	\"	\"	\"	\"	+	++	*	*	.	..	...	-	 	 						 	%0	%00	'	''	'''	`	``	```	^	<	>	*	!!	!?	-	_	-	^	***	-	/	[	]	??	?!	!?	&	P	<	>	*	;	_	**	./.	~	_	*	:	''''	:	*	:	:	+	:	:	 																	0	i			4	5	6	7	8	9	+	-	=	(	)	n	0	1	2	3	4	5	6	7	8	9	+	-	=	(	)		a	e	o	x	e	h	k	l	m	n	p	s	t				CE	C	Cr	F	L	m	N	Pts	Rs	W	NIS	d	EUR	K	T	Dr	Pf	P	G	A	HRN	C	lt	Sm	T	Rs	TL	M	Manat	Rb	Lari	BTC	Som",
+  48: ` 	,	.	"	(JIS)	-	/	0	<	>	<<	>>	[	]	[	]	[(	)]	@	=	[	]	[(	)]	[	]	[	]	~	"	"	"	@	1	2	3	4	5	6	7	8	9							:wavy_dash:	<	<'	/	/'	\\	@	XX	10	20	30	-	Masu	:part_alternation_mark:	~	#		a	a	i	i	u	u	e	e	o	o	ka	ga	ki	gi	ku	gu	ke	ge	ko	go	sa	za	shi	ji	su	zu	se	ze	so	zo	ta	da	chi	ji	t	tsu	zu	te	de	to	do	na	ni	nu	ne	no	ha	ba	pa	hi	bi	pi	fu	bu	pu	he	be	pe	ho	bo	po	ma	mi	mu	me	mo	ya	ya	yu	yu	yo	yo	ra	ri	ru	re	ro	wa	wa	i	e	o	n	vu	ka	ka			'	\`	'	\`	-	-'	yori	=	a	a	i	i	u	u	e	e	o	o	ka	ga	ki	gi	ku	gu	ke	ge	ko	go	sa	za	shi	ji	su	zu	se	ze	so	zo	ta	da	chi	ji	t	tsu	zu	te	de	to	do	na	ni	nu	ne	no	ha	ba	pa	hi	bi	pi	fu	bu	pu	he	be	pe	ho	bo	po	ma	mi	mu	me	mo	ya	ya	yu	yu	yo	yo	ra	ri	ru	re	ro	wa	wa	i	e	o	n	vu	ka	ka	va	vi	ve	vo	-		-	-'	koto`,
+  49: "					b	p	m	f	d	t	n	l	g	k	h	j	q	x	zh	ch	sh	r	z	c	s	a	o	e	e	ai	ei	ao	ou	an	en	ang	eng	er	i	u	u	v	ng	gn	i	e	n		g	kk	gs	n	nj	nh	d	tt	l	lg	lm	lb	ls	lt	lp	lh	m	b	pp	bs	s	ss		j	jj	ch	k	t	p	h	a	ae	ya	yae	eo	e	yeo	ye	o	wa	wae	oe	yo	u	wo	we	wi	yu	eu	ui	i		nn	nd	ns	nz	lgs	ld	lbs	lz	lq	mb	ms	mz	w	bg	bd	bsg	bsd	bj	bt	v	ff	sg	sn	sd	sb	sj	z		ng	ngs	ngz	f	hh	q	yoya	yoyae	yoi	yuyeo	yuye	yui	o	oi		-	re	1	2	3	4	A	B	C	I	II	III	IV	a	b	c	b	j	ji	g	e	enn	oo	onn	ir	ann	inn	unn	m	ng	ainn	aunn	am	om	ong	inn	p	t	k	h	v	dl	y	k	gw	kw	eu	a	T	WG	XG	BXG	SW	HZZ	HZG	HP	HZWG	SZWG	HZT	HZZP	HPWG	HZW	HZZZ	N	H	S	P	SP	D	HZ	HG	SZ	SWZ	ST	SG	PD	PZ	TN	SZZ	SWG	HXWG	HZZZG	PG	Q	HXG	SZP										-	k	s	s	t	n	h	h	h	h	h	m	r	r	r	r	r",
+  255: "	!	\"	#	$	%	&	'	(	)	*	+	,	-	.	/	0	1	2	3	4	5	6	7	8	9	:	;	<	=	>	?	@	A	B	C	D	E	F	G	H	I	J	K	L	M	N	O	P	Q	R	S	T	U	V	W	X	Y	Z	[	\\	]	^	_	`	a	b	c	d	e	f	g	h	i	j	k	l	m	n	o	p	q	r	s	t	u	v	w	x	y	z	{	|	}	~	(	)	.	[	]	,	-	o	a	i	u	e	o	ya	yu	yo	t		a	i	u	e	o	ka	ki	ku	ke	ko	sa	shi	su	se	so	ta	chi	tsu	te	to	na	ni	nu	ne	no	ha	hi	fu	he	ho	ma	mi	mu	me	mo	ya	yu	yo	ra	ri	ru	re	ro	wa	n	'	`		g	kk	gs	n	nj	nh	d	tt	l	lg	lm	lb	ls	lt	lp	lh	m	b	pp	bs	s	ss		j	jj	ch	k	t	p	h				a	ae	ya	yae	eo	e			yeo	ye	o	wa	wae	oe			yo	u	wo	we	wi	yu			eu	ui	i				c	GBP	!	-	|	Y	W		|	<	^	>	v	#	*											{	|	}	?	?"
+};
+var CJK_READINGS = "Yi|Ding|Kao|Qi|Shang|Xia|Han|Wan|Zhang|San|Ji|Bu|Yu|Mian|Gai|Chou|Zhuan|Qie|Pi|Shi|Qiu|Bing|Ye|Cong|Dong|Si|Cheng|Diu|Liang|You|Yan|Sang|Gun|Jiu|Ge|Ya|Qiang|Zhong|Jie|Feng|Guan|Chuan|Chan|Lin|Zhuo|Zhu|Ba|Dan|Wei|Jing|Li|Ju|Pie|Fu|Nai|Wu|Tuo|Me|Zhi|Zha|Hu|Fa|Le|Yin|Ping|Pang|Qiao|Guai|Mie|Xi|Xiang|Shu|Dou|Nang|Jia|Mao|Mai|Luan|Zi|Ru|Xue|Sha|Na|Gan|Suo|Cui|Zhe|Qian|Gui|Jue|Ma|Zheng|Er|Chu|Kui|Yun|Sui|Gen|Xie|Tou|Wang|Kang|Da|Jiao|Hai|Heng|Mu|Ting|Qin|Bo|Lian|Duo|Ren|Shen|Ze|Jin|Pu|Reng|Fo|Lun|Cang|Ta|Xian|Hong|Tong|Dai|Ling|Chao|Chang|Sa|Men|Fan|Yang|Wo|Jian|Yao|Fen|Di|Fang|Pei|Diao|Dun|Xin|Ai|Xiu|Tang|Huo|Hui|Che|Xun|Nu|Gu|Ni|Ban|Xu|Zhou|Qu|Ci|Beng|Dian|Bi|Zhao|Zuo|Ti|Zhan|He|She|Gou|Ning|Yong|Wa|Ka|Bao|Lao|Bai|Ming|Hen|Quan|Tiao|Xing|Kan|Lai|Chi|Kua|Guang|Mi|An|Lu|Mou|Cha|Gong|Cun|Zhen|Ce|Kuai|Chai|Nong|Hou|Jiong|Tui|Nan|Xiao|Bian|Cu|E|Ku|Jun|Zu|Hun|Su|Lia|Pai|Biao|Fei|Bei|Zong|Tian|Dao|Tan|Chui|Peng|Kong|Juan|Luo|Song|Leng|Ben|Cai|Zhai|Qing|Ying|Ruan|Chun|Ruo|Pian|Sheng|Huang|Duan|Ou|Za|Lou|Sou|Yuan|Rong|Jiang|Bang|Hao|Shan|Zai|Bin|Nuo|Can|Lei|Zao|Ao|Chuang|Piao|Man|Zun|Liao|Tie|Seng|Min|Sai|Dang|Xuan|Tai|Lan|Meng|Qiong|Lie|Kuang|Zan|Chen|Teng|Long|Rang|Xiong|Chong|Dui|Ke|Tu|Sap|Baak|Nei|Liu|Shou|Ran|Gang|Gua|Kou|Pan|Qia|Mei|Zhun|Cou|Du|Kai|Deng|Wen|Hua|Yue|Bie|Pao|Geng|Shua|Cuo|Kei|La|Pou|Tuan|Mo|Keng|Shao|Gao|Lang|Weng|Tao|Nao|Zang|Suan|Nian|Shuai|Ang|Que|Mang|Zui|Rou|Shuang|Die|Rui|Po|A|Tun|Fou|Shun|M|Guo|Pen|Ne|Huai|Pin|Ha|Yo|O|Shuo|Huan|Nou|Ken|Chuai|Pa|Se|Nie|Wai|Miao|Gaa|Ng|Dia|Cao|Ga|De|Hei|Ceng|Hm|Ca|Chuo|Zen|Lo|Nin|Kun|Qun|Ri|Lue|Zhui|Hang|Sao|Zeng|Zhuang|En|Zou|Nuan|Niu|Rao|Niang|Niao|Nen|Sun|Kuan|Cen|Cuan|Shui|Kuo|Te|Re|Zei|Den|Zhua|Shuan|Zhuai|Rua|Zuan|Shai|Lung|Sen|Run|Chua|Gwaan|Nue|Gei|Neng|Fiao|Ei|Miu|Shei|Eng|Nun|Soeng|Syu|Zeoi|Gon|Jik||Hung|Kashidori|Futsu|Zau|Seki";
+var CJK_INDEX = "0001020304050607080904050A0B0C0D0E0F0F0G0H0I0J0J0K0L0M0N0O0P0Q0R0K0S0R0T0S0U0L0V0W0X0Y0Z0a0b0A0c0d0e0f0g0h0i0j0k070l0m0j0n0o0p0q0r00000s0t0X0X0u0v00000w0t0x0y0z10111213140y150Q0Q00110Z160X030M17180E0X050y191A0J0A1B1C0p0J1D0y1E1F1G1H1I0U0r1J1K1L1M0C1N1O1P0w1Q1L1F0h001R101S0C1T0J0J1U1V0C1W0C1X0y030t0n0P1Y1Z1Z0Z1a0Z030Z0A1b1c1d1e1f1g000g1h1i0M180n1j0S180n0M1k1l0T1a0l1m1n0m1o1o0A0A1c001p1o10011q1r1s0F0k081r0c0L1t0N1u091v0L1w1G0J1x080r1y1y0u1z201o1P1L0Y1l21220023242524001i261o2723281P0b0I290t2A1C2B0d1w1o1c2C2D2E0b032F0C2G2H0t002I1d000A2J0t0A0r0z2K1r0I0l0r2L0b0T2M2N0C1N1X090m0f2O0Z1P04241v1w2P2I0m0j1q1y2Q1l2R2S2S1a2T2U222V1p2W2X2Y0P1C0I000P001T2Z061E0l0j0B2W2a2b2X0m2D0j2c0T282d2e2f2a0u2g0C000r2c2h2i202S1y2W2j2k1P0J2l2m2F2N2f2n180Y282o0z2p1C0s0L0A2q2M1Q2r2s1f2X000J2t1p0u2u0w0E2v002w2x2y0o110J2z0j2U0T3031321U1v0O332w2P342V001H35050P21311x1f36371438392i3A1r0t3B3C0Q362c0F1k310p191j1p3D1l3E3F3G3D0C173H3I0K2U2y3J0t3K000r0S3L140o2j3M0n1P092F3N0r170o0r122m0C03052I2K0C2D2O0F0w0U3O0o2v0P2A2K0r2M0p3F3P2A3Q1V3R0d0Z303S0C2I2a0y240w0L0X2B1N3O072v1w3T0Y0e3S3U1919263V3W1R3X2t3Y2L3B00032d1L0n0c1Y240c2E0w3Z3a3T0p1P2S1v0i293b3c3d3M0O1G3e0t0p0s3f2A3g0M0w1J3h2i3i0Q1P0U3j0b3k1C0A0m0C0L3l2d0m3m0U0d2L293I1a2O3n2u2D2c331j3S1a3o2B2e0F0U0T2A2U0x2X0r2a0w3T0D0A001a2P3f3p37363q1b1b3S3r3s0c0m2C241W3t0w3N050r3u3v0o2Q1X3w1S3x2Z2L3y0c173z1P1R1w1V093S3F2j2B3W1M280z0L1C21402L2R411V4243441N2j453T2Y3c460f0C3g3L04470n2w1J06083h0U2D1a3s3S481r1m31491P1y3W3i0O0G183z143C3D4A1s172n242y4B030Q0g0m0A1l2N0f4C0l1f0X4D2C1y0p3I1f2A200h1l2R1y3N1y3w4E0M1r1C140I0d2V2J4F003K3A0g004G0n4H382A1V0l1f1J404341301H4I0F394J2S1r1P4K0t2i4L2S244M44314N2m0C3Q4O0w0P0T3y3h4P0o4Q0m4R1V0g4S192N0o3b4O422L0U441B1U0t1X4O3u4T4U2b4T1y2y4V4W4V0D4X241U4V1U1r4X0P0U0U0J4Y4G1P1A2C1D1p1A4Z0n0o3o1H1c4a2r0S0C0k344b17064J343U0e2t0L030p2Z1G2C282A4c0A000A0g3C1D4d4a3u1D4e4d373C37404f3C1D2V1D2h2U0D2z3v111a2u3K3A002z0J0e4K0b0p3u2p4g0h0r1a2z0L0O4I4e0d0L0y4U1R0y4N0M3d4h0r4E0O1y4M4i2A0n3t4j4X032R4k3c0n0S3h2G220O1L2A114l2J0o472p4k1N0P1n1r0h0h2i174m0A2727270d0p1V1T0d1i0w0r0d120d4n3o4n1L4o121P4T384X461V0A4G0606453V2G3V1o1o472C0H000A2u1P351V4p0A0l2t4q071R0o4r4M4b1q4e470r1V2W2G3z4E220b4h4s0c0c4t0o3z4s0g0n4f4u3V471W3J1n1U0w4v2r1J2X4W0c1Q2X1Q4n1n0A2d0n3s3b1q3u4w1I4x4y1P1J474f2A4w0o2d3R4z0g03471G4e071l0A1n3h3z4m2A0A1l0U0p2M3n2A1n3p0t4f0r3n2A0Y1e4n470f0g50310o3Y3z484g1f4f141R4q0x0i1m0p0I4b1Q1f1Q2A2A2L2M0A2A002A0w0g2A510o0j0o0Z2r2T341C0t1E4M1r521a0w0O0j2Q0c2W53000j510o1r2n2n3a4g282k3F324N0c4M2f0J4W1r541l4E2w552j2j0D4W2P3a3h310B4K2w444n0D0O2U2U2u0t002P563n2n1i31480J0A1k3w232r18001R273a200p0l1a1E2P2P310o2O4S2r2m531X0X2m2h0t1X4p4T0E0E2m0N004T3Y0p570Y1s3I4t0r341e0X342a4q3S580J2E0X003r3w1d3w4N0y052W271Q0H594N3R0y0C1Q1W2N0l1Q1m1m5A4m0X1R170I2W004W0U3G2S2W0J2P1P5B253L3n0t2N2T0J17074q1a073S3L0i1a0l1E3E0l0A1l5C1l4N3G0B2e2l310T31174f291a0c0c0m5D4L0w1D110m530A5E1F2w3a1a2U1r5E0t0A3I3h1709240m3I1j0o1O060o0Z0Z0U2g2D0x130Z0H0Z0w375F2d0o2g3B1j5G4w3R3u373u180U0o1R1J2Z1V0X1r461Q0U0P0o244J0o0U0U3u0P340h5H2W2W1U444m1y0G09434343432J210T330A0T5I274c150k0z3l0J190i2W4c3G2U054h3t0A0m3t5J5K0N4g2R0p224f3V4g0w1f2b0k014W4I2w0J0T0K5L0M3y0P3W2w102G0A4B1z162U5F2w0Y4H2B1G2f0A2G35202p3B0o4X180x050M315M1S3q2M003K0F0h5N113R2a1k1k0c0B5O0k2H2C3I061j525P031z0w110t0t231K1I173X1A4p3B1z0t540Z3K313I0Y4j21260Q0t540r1f1z2w3n1K5N5Q00213q0o3S3u5R4p0a0t3I0J3a5S4p5T5Q224d0T2D2V0J2V4C170003121G2R2X0m2U2f58052F003F1p0y2p1e2W0p063r0u1n4z4t2a0r282f3r2f1g0X2j0r1e2V2k2l2R2l2c0B4R0O2i1x0P1y2M031U3I2y0x17004M1G162z0w2B0A2V0Y194O3F1g2N2x5U571y3I4H2K5R0U2n002J5V1p201z4T1n2k5W400T5J3P182J1Z4N0Z1e3F2a2N5B4q2t381n2C0A3A325X3y3u4R4z5F0Y5Y2w530o1K3L2f3J3F1y2n1l1O0x0S0k164M1Y0r0B061h4u5Z0Y0T0U2R2R3S061M3k002J1C4X1y070o172L2c0K2O0t450Z1A032D1k1E511z1A2W2n0S1M455a551J0A3L290d1r0y034c0m4v241U0o0a301q5X5B0C3U2v1J170u0y2J2b5b5c0i0i042D1h0h5M3f185N0t4p1N1J2R0303570l0l0M1G2a1N5d2f0Z031O3R0S1y0I1J4y1q3i4f5e1O5f0G5g5R3b0U2D2r0g1l01553F0p2L2w2d300X0l2l2j0m3E3z0C1O4y0c3B065J2V395h420C113r2B5Y0D0y1X0f2N5a5a172f0A1W0b0m1J2U3o1n5g4H0S0C0V2w140U0l5S430o5X0x0m5i3i5S0B1W170C0c3s3J450y2d2B2f1J2K0a5f2j3N1z1a2J1M1S331g4W1e0V4P1H3t2k0A130t1P0J0Y1G0c2n562k0P2w3y1M5j1g1M1k5g2f0w4F5k0Y1K5l2J0a202a46461m5G1O513t3t3W2D031f4U1f4n3W3z5m1C2J3F483s5n2R3F0y2N5R3q1y1q242U5L5o1S1S0y444m5n2L0M2Y3i4F1f2z3F4q1E4d2c3Y2n3F0A0j231W5G3F0P3y0r4B14171V0g0l5p2P3I4A272w2N4O473H0l0C5N5q1f0M17033y1m2U4o2N111s1R1k2P5g310P0U3i1e2e5Y2V1r3A2N1a033I45000J1f3u2J2j1I380C5S3V5n5r2H4G2I4F0I0I115G2i2D4J1x2M1H3y050M1n0I0F0A1r3y2d242P0v5s2d312N1l0T5g110y0v1z1O0o4b1g1B3F510U0o314R510l4P5V0I182M51171n3J0U0g3i4S2Z4y1x3F1R5t5a2M0G5g3F5s0o0g390o003b1B3r3N175u2A3r0j4J5g1B4J5v0m2N110K0P5w2A2N2I113E50502H1d3u3C3m1X0N0y2N3u3I5R5x0N204X0m1v5R5y5z222R5R4I5R4X0T5R113M1s0C063u1v2r0C3h5R3X0m3u2r3J1s3u3u0Z4X4X4X50602N005a1F1F4X0Z4X1j3n1s31380Z400m0Y0u0t1Q0I005o1P1P360i4G4i053z4N24035g510A1C0w0w2T2P001k4j3K3v5N2E3e3e3W2u5U2c522a0n2D0n0A382D0n2A3W0o0k0t2C615L2T2L5x2W3W0w0u1L122Z4f2S4I0I3C281u46310K1i4W2h1I0k2D2O220j0r0y0w3X4y4R4R3146214t4E2t0O0A2f312X2w440E113B4V2b0r2y2B1n1n1Q3328110z2h3u5J1a5c044c3I0L2Z1z0Z2x1e2l4G4n6258302t1y3u3x0r0k0011062U3X1k4u2J2Y2E5E2j3K1C2D1E553a0Q3z1r1O4M4M0B0Q4q0B0J2P5R3C0M5B2D0C0B0Z2r1Y0I3h070p1v1T3Z2L0O213W303f1V2Y2u0w1n000w002F0A4k03630p2S3J4W2L5x2S2A4V1r4e0C3I3Y2R4X3d2E0Z1P5x301p1n584X0Q113M2a1m5R5J0G3B2m2m0C2D1D0c3j3I4u2u3T0C3o3I2B0U2m0A4j244m0u110d0b0c1r1h4e3k2A1244183o3d3p074H0A0A383i1x0Q2j4n3N3N0J2z1x560Q4X2L5E0b0o0b3x4F594V3U0t1T2P0Y362J340U2u3U3u4p1a4b1g55243Y2Y4P31313q1P4j510G5I193s2w493Q0n37190w082u2j2Z4P0w175R0a1r2D041i1N0U1x641P0a0S0m6114642U3z3z0k1s380O275E512H2H4A2D3n1n1n3W4o1i2C3o3W1e0M0j2A460a0A145c000I2a2Z3w0M2j1I3W4J0p5U4G4S1P2P1y172f2J0Z3V3y3j1r444N310U3W0m5U4R4R5K0o0h4S0g2P0U440k070J1o0965653n001E4W0j650y0y5x000y2U5x4c5F4A4c000w2R1V3w0d3S3g3G1Y5y220r4w054T1a58051W175h3u1D3N1n1n0M3h5h2h2h034K4K112M4P1e1q3U4I0r152B2862540J574I1b0U2a002x1C1n4q4N1X1C0k661m5a2D0U4t3a030s0d1a2C2Z2r1W675a034n0x3e003w57593e173o3R2G2P2Y2Z462g565W460t463w1m1n1X3w0J2C2M2a1F1n2Q2Q010s1P2A1x0X68333y1y270A5Z1H3R1c1z650r1S0l1o0r0n0U1g4p0b5e4m0A520b2B1r1X5i5O2w4r65690U1K2I2C2a0C0u0d3u2E0t0C1Q4m0k2S2V0i2b1e0s3u1b1y0w3I4j51032a1p0H3I2f2U0z1T4E2T1i0r221G1G0J4d3z28490c2R0P2t0m1G0p3z5V1o2B0O3w190A0E184q3a1f2h2n2A2A005B0w0A0A1y1h2y3K2x0U2p4M2F3I0T0U331p110J1Q2r1G3c0m1z2k3s0Z6A1f1F121y530o0Q1a5F0r1M4j0m4W5t5t1j6B2t3E0C1K4z4a3a1p0w062D653I5V3D1y0D0t0U0t2J0U0C0P0C2k0o1y0p2W61031y0i0O24312J3I3I3s0D0N4z0p5L3f22073Q3F19032N27295K3W3R3R0c3U2S2r0n3M0n1P2Z2t0y072v2a112V5t0r0n1v304J5x110Z0p0o2Z1y4q4q3i0g1p1j4G2B0t3E3l1C1b2U0C0m2D5H4j0l3j1k2N291P3k5i0r0c3p000b4j3o0D303i4H0c0m4j3u1T0K0J1a0u1m1D4d0P3m0m2k3H0y460c2m2U1b1Q1V2B0I173u3i3v1H2w4b4j4h461S2h1W1k1C63363u0c3v2p3i0A3N6C1y571355582m2J0I5V00480C444H4900081d2j2S0o2D1Q0U1r0G241q066D2n511O0y0y466D0a1S0q2R0t140u2e5i1y1y514B1m4q1Q4o0w2U004q171W6A170U0g1f4j27271y002N1f0r0J2a3z1Y0a1m5a2I6C0O00432J6B2i1S2s0F1r2X0C5V3v1H0s0U4I3i1P6C4r3i0D2a511p2t2S4m4b3u4J0U5I221f6B4J1y3i5I2N2r2z0o1F0U0j4J1G0c1R1R3Z1X1S1G356E0r3S1G3F2I4K0P4I2m0A2R2Q1I0T0G1g1F6E58160N1P190g0Z1G2S0r1G0o1I1l1H0s5g5g3i1F0D2i3v1x1Q3g4L0C4c304X3c075H2B1z000n4k2z0j4G1z3T0e2V0107002m0J0J4U1p4W4H0J0T5a002s0J1y340Q5y343F400x2m1g0U3F1C1p4P3v3o2z4g6F413N3f4O0A3u0A112z4g3h2f362A0r2i0L5a4j1k060C0J2i1r2i0w0C2m6F2i1k51330p4f1k0y0t4B0J2i3g1p0m1a6F2N4B3K5a00002m1k4U2m0d354V0P2P3V314V4c5L0d0G0r2g4W3w3w0G0m4A2P194V3V3F0c531U1U1U5n2A194P0404515n244B1y1y5x1c1c0T4B4B2B5F1c1c1c5n2B1n1W0b0X1L2R1L3D1L1L0J112w022S1r0m6C0p0I5q172a0p0c3U2W2d0c0t2G0J0J120A1a361a2S2e170m493I3s122d3R191a4X3131175q310p1a0p1R4B1R19172O5N2S3z2k1y0o3I2N2N4R00031o0t061p0C1V1Y031o4r2T2B5D0Z0t0c3I0A1P2C07036G1P03330c2W4e1y464J3V0k2c2c280p4e4W2h1I5L0o2s2W0U0r2K1C220u0I46214N4r2W0y5L4E302s222w120O061W2K1D201I003G2f0k3b3I0r2P5J31661U0E2r0O001i0J300m5a0w2z4M0A200m0T4i050o2B1f1T1F1f3I3I0C1a0B145y0d0d580o0T1y3v3V1p0Q4X4u3K5405110t552u2n2v1y5E3Z4U4U1x0h4q0p2v034E5x5x3L2R1N0Z0Z4e1v1v3d1R1n1T5R110O061T0m3F0I0U3c0c2Y3L3J0O2e2R111G1q3o0C5h280d0K282d000w0J402B3I0j2u310U4j060A0A5a1j3n4j1P0t0C3T4J4W0U0U0m3T331Y3v4W1k0C033s4X4V17561w4G3v0c4n4b0t3c141G0m2Y2Z4w1P2j5g4w0A0J3l3c3T3w4B1d0g5J6G014X3s082e2e465m2W0a1N5G3V3V170C2F4R185q1l1k1f0U2n2e0h4B4B1r4o1n4A1f1Q2B1f2B1R3z001I580M0M005g1y0A1a4W172D465G0m003v3V220c0C4r111H0c0o1Q4R4R2Z3v170p0g3i1W0U0m582r236H1F2Z2Z5g0U0U0U1W0U0f380f2V3o0n2P23234M342c140p340p0t1s1s330K0K0A000P0k0w2b18001r2P3a0k2P1r0r3r2a0J0B015C275g0J2C5e0w170y0l0m082L21512F5e4C1l1m0w2V1l0w2D510000124i3a1H5C21366I14360J5y173x211Q0F12080907210m241J031q5R1D4m3B1T2U2z0m290r003x125J344h3o572z1C4Q2N0b3z491i3Q5R1q1i3x080n0g0r0w0y27472a2a082z140g2C4K3x0F161V0c1y4J1L125B2A0L0L2t1L2B5a0T0T0A2y0I1j1q2y65513h2a1k2H471Q0Z2o0c2U310t653J3i2D4t2Z0Z5i4u2X0r20133R18000w2s0w2K4m2c3F4X1Q3J5F1j0T0B0L0Q2v2a0A30191d2j0u3c193h0C0C5i3t37183R0X3I0m4b1J1m553t0w0B3h0X0X1r466J3s114B2131001V0g4X0P2I5i240t3R2y3J382a0a1a0h0h4B310A3i1y1j2j0o1j112P0U1j2D3P2A2N0s2N345B4n3G00033A2C0p0U00592a00001U090J1U0J0J342G110y0r1z0t3D2w3w0k1p2D081R570r2D2z1y0y232Q0n36002z2r07533l4H0n2G083w0a3Y0l0a2a2a2g0l2A2h0Y0z2a4g2A4s3F0l5R3w1z2z5R071R0A0A1Q4G3131502N0w2N2N000000004r4r3z2t4p200U0U0C2w3f3Q2G413Y2j48083i2w2w0i0u0A130b001c2O2a2D220r1c1T3H1c0n21172P2q285U313B1c0Q0w2U0n4X0N0w2v0N5o3P170O0A240w0N2V2v0C1a0c2A0J1C3G3o0r2P0m132B0m171T482d5o1T0w4s5o4U2O1f2N1f2N4j4R182m2W2I2I2a00101o3V010E0A1o1o0g3W6K6K1L030J350w1c5F17273i3U4E4p0b4U0t0A0t171C0T070N3c380C3G0w031N4P4I5N1P5B3M4T694N1y2I1d0y4n2C5U4I3c0t3q24470p002m234E2F2c5u280p2T2Q581T5e0B4C0y0y0p1e1m0P0F2D21004X0T0r0A3Y2t3u2S150r172a0T0H4H0N0L3o2U1V2a19173W2j3T4V510w000J6D2P0J172n1h4N320w1a1m2s3o5J3y3Z1Q1h171f190P0y0K282N2N2w1C004T150h2N1G2U2w042Q2q664W0O3U342r174i4r3Y5c5o2N3I3F200U4n37581X5F2j2j3u0I5x144r0C4X0c171O0h2d063y0H2d0B001P2N173S49001h3c2r0Q1W0t0t0T0o0S5a0N004r0o5w583I5E4H1P0t4E0N3R3S5o1N24260o0A0e0e2t3V033Z3U1v172u0W2S3h0F2H5R2e0n073u1r0A4J0C2M2f2r3W2d2d5g1c5t0y3M17242I0m2N3I1M3T2A2j2Z0p430Q5o3S0H430l0e1n581X18615J3o3k4L6L2t373G4E3T2d140F3S4H0m0Y1P0m0C0C2a4H5a4E2a000D2j4n4G113I4P1D4i4W0C2J0H0U421L1X3T4F3d2C3i1W1W5E341X3N3N032B3c3o0A2R0p472S1a4n1T2j5m2P1p1l4n3u173M2j280o6357112X2U1P4I3o1X1p2p342g0N481i1i5R2w4343431N4E6K0820465I490e5E450X2N4n1m3q3c1k1131040m50491P2g2j3h1d2D0w3s3a03030C124B0N0T4U0w200Q032W3Y3S4s4L1f642w1m121W2N140Q111117170l3W1n4V4V3N1R373F272C2n2n4U06031y4E0n4B0t431R3H1y3W3n0I001V1y580l3W0n3c061f0m4H0O1k1k0p5m5c1a3i461D000h5f3K5U264J2J0h0U6J052w0C11214K2J4K4V03514J260F0w42420U281l0w4N4N0T0r4b160Q2N0g4K4J5U4H4S0g0A0p5a2g001m3E2z2L1R4e4e650Y4r0t2A2U193v170Q290c0Y2A0a2M0a2e0O031C5J6M1C0A0w2u0A1W0E4o2e0a0Y2A0c0C2A0U310y2e17175t212W0y0y0y3I0J2d1D0y0o2E1M3G2Z3C0400003z0y3R0U4c4c3f0x0K101s0k1e1t271H400u082G1d0C3J061p330u2R4g0t6N1P0w1o6J266328692T2O6A171P2T1C0C0r46170I0w0w3I6N2b0Q0A0U4N3G230p4p0y4r1R0k1k0l1T1X075T00196O4z1b1A1d1O4z0r4t0k461q504g1v0a1X0y2m0L0w3Y3E0B0I4I2B360x282m2f2S0M2D2w0I1C514j4P0Z0F2W4E1V1C0r0x0j0l391i5B4y0r4t2T3P0h1K151P0p1x0k0u0u460p0i4h2b2o2o2D2S0p6J4R2A4i2j4J2i1l1q1P2q6J0J0c1T5w34342r6P353r02001a372N5V6Q0J1K2o2w4f0w6J1n1n0w0H303A360Y1f2x0O1K2s4M0x315J2k1R4M0p0w1F0Z291x1a584G1f1T0A2N1y0C2J0u424w1l4u2d360Q2525524j3A0p3Y2A001j3z6R071a330d1f0t3K0X205x2M4X0i4z310k06535g3a1q190M1R0B070B4A0M3g313t0u2n6E3x2A5a3V0m071k3Y2g4M4E260r2o0p3V292J3a4r3T4P3X0c4X3e1K5B3l2c29031y0Q2Z631v3h4e1n4c2G4z2D083M0A574i033P191P220M0Z1R1T0S4f002M0U1T603f3W2O0L0c2d3Z3D0U4w2V0p3U1P5c2o5e0c31152p0c0w0l4K0g630e3Y3u422A1T0X2A0C0U1W3E1z5H0I0m4F674H5i2d5g330J3T36002P2j3G285a0U4O302U0Z294W5d0A2d4y4y4P4n0X0X4X0c2N1Z4U3F5J1a3u1P0M330x3S2B0m2Y4J4p1k0g0Y3s3T1Z1f2h1k3v5E0F5d2e6E6E1l1V3v3x4w634W2B3V0w2Q4y2A3t0K541y5Z0V1r163I3X423z1x0x2L4h2T1e0o570y0w2k4q1P4p0a3U363I1a422r330x0Y0t662g1d2g192o2B413t3W250g1M0X4U47150L0d5C2D033t3g1m0Q2w0e313b3s3T0E0y0x472L4q1N0s513w1Q3i0w460w5g490g4g1V2g501f51511O43523Q3w2B2h1P4B0A3i1R0q0q2n2H1y3j1Q4O001y0Q0Q25581z0P062y1e4A5B0h1T2N651f0A5m0l0l2O1l2O1R0r4B3e0r141l4w0i0G0m1s1k2H5B4q1a311f6H1x0614292A1L2j441B313z0i1q1s5t0A4G5f5m3h3h5a0c1k380l1a2l0I1l460p0M3I4K3t2z0A4I0i3V2t4J5s0p0M1H0M0M2S290c412i0Y0w0w6J512A1a4M3W2o3t31606A2d4h28445s194O5B1y3K2M0o4y5a3i314R1P1P4O1P4J1y3i4j4S0g566H1a2g3b3K2z2w4O1F3W6S0o2Z2k4G1f1R4J0o1B0w1Q1Q032P1s1s4c020T0E00341L2T2E1T5L2Z4g4E0t2R2f373F2z1V0Y2D2U1f4E4P0X1p1n0C2w462o2U1f1n1m5g2a242Z1n001L094W0U2H0A1b3F1n1f0n28054E192J142J1T2D360r194B2W4T001f3z1f0i001m2a0o3F3F4p1I03033g411R3g553R2T2T4J0C4J0m1A3n4B1C0y1a1C0C361f292s1A1r2w110r0a2e2W0i2e3p4w0P2I0i0i1k0h0i1V3p0j2E0g620C0J2F0T4j13032e1D312F0I4b0r2E4H0n0n2S3L2b004b532A0C00030w2748272e381Y0C0t0A0A0A2M5z0l0X0w451a2s2P2U5n4y1L064I2D2U0g0J4N280J1c4E4E5N3k0t1X3S5D1q2T0c5x3n0y2E3y1Q244H2p3M2C1k0y00172I0U1q2E3W1p0p284O0L2t3i4H5L36223k3y4j2c513G2U3M2b3T0J0J0C3R5J1D2S244p0O2J0L5D2V4R1y4N2s230J3o3o4H1W2U1f1r0w1r04201z0U0E186T3F0M1X2N06063K071y5x2V170Q3n0B1O1O0t072N3y4P073U0i5G2V1s0n173z2S173h030n1Q1T000w30070h0S241c3F4O3R4H4u00051X2N2U4E1W0M3i190m193h1D3E2A6830283k2B1M1s2p1f4n545624033y0U0o2J0A0A264O1a3y1i510N2S082N2m064H0f4B1y3W0n0q0h5N17000A3o210M0M0o3W203F3R1p2b3y00182t1p1f2m0n0U2J0M1H194K2P2B1s0o4P4N5J4B0U2M31173v4R1B3b1F6T2L0U0j4r4r2W0M4u0M0y2f195m5m3n495q5q2d5G432U2N110H2C0I4r0T3j3Y2C0r223R2W2d2Q2s5Z3655555G2p3o1c5N230A033i3T1c20552n4K4R1i4o0m513e0x19191i0j1o0k1s1n1n3V0o1Q0A0X2a2K0Q2X1J1H3r2r1P0C1L0t333z2P270t1G0o2t3f351o3Q0u2D085F2w000E344m0o03194e2s0c0D072v0X5F281S5i0P3u623R3S0c0O542B1y1V3k5e194q2I0F0j0F3c2T3c0A291r2h0A1D0I2a1c5D2E2C000r3E170y0Z1A2I362B0h5K3I4j2b5R0w0N1X4q3n19452D0o312A0Q3c0a0d2e3F1y3J124I170w153F1C1C2h2m51000M0M0J5g2a0u00220L2S4y2f2T270b212X280r2o321L034d5H1D533c1O050T1p1Q0u0x3E2i2j2D0w0x330l2R0B0X460r2A0k1n4W0s0j2a4b393z0P0j2F0J150x2B0Q0X0J0w4b4j0o3v0x453Q2e0w4R0O313n0o4J2j192P6P0336030o0018360o5f4f2u3e1o3F2o1o0L1G0F002X2U0j2A5G1U1U0T0z34022n2e4M11282f1Z000J0Y401F0r0c1h1Q572y0m4N1H30303a000i3J0w4L200V0V5a0c0X1I1n610C4O6U3i0c4b2e0Z6A364G03144q1Q3w652P1M1J363S1j6J0n5L3e0r5K201R17554b0d034p3K1L3N0S0K1j0T4j3x4R3Y652D4H4X45462R2a2D061G0w1o3S4u2A5a07421C2s0A3F313M534P2C3c4K0t0o0o1A1k3i1M0p2d1a5x0i190g270m0n0o41051u570w2v1m2A0i220o030L1v0N1P0D03033f0W0g5o3R3P3x3S3M3T0Q450A0o3Y0C0C2R3K0O2L4e1c2D4w270Q2e033u0U0C2r006V1o3X3d030i0r4W2v67672b0e2C2C1p3h2S075R313y0c000F0p0p0Q2c0S0a0w610Z0p3S1f0i1G413Y011V24264q2A1Q174m1P3V1Q2Z3b0w2r2p0r4u3Y3z000u6V1n0M0r0m0m3p1C3T2A001p170U0U0f2A3k0C2f0x293m2a2B2M2U3l284y0U3e2N1W0c1W0P0d1a0u0w2A1i1D1V0y0y1m3d1j3E0C0T4j3c4H4H28363m5J0A0c0M1V2H0C670m4j2d0A0c4n0K3i5H3o3s102r185V0J0E3W4J4p0C4P310p1p1V2a1a1C002e0r422z553v2R2A0p1x2B363x1J3u1G2p3N1C2B0c3o1L3R0x1P1S6E3u1a3v0J0w1N4p1j4b3v2L5E3g0P3n1x4W172R0354546E4h570Y3k2Z5b0A5Z2h3X0a331P5U4j2U4e540i0u14282Z1C2u5G3V4R410j0V170A1m2N2j1P5R0E0E504q036V1N3Y0T0y3w0y5a1Q5g00541d1Q1Q5m491r2D6510554P0N0o2K3h5I27200e1q3N44310S2z3s233N4W1V2L3Q310X1O0x190849516C282s3Y0j1J172r1h2A0N0A0U0a1I3i1U2P0w145G0N1s194q1W364A4r3z173k2Z0z1L510t146A0h4b141y6W272e0u4B1X5P2H0Q2L4K0p0Q3N1R1R2Z2N0A42180u2i5K0j20642C4L4d1h1P2R4b2n541V173n1G090A1A0n312A1V3u1x193w3W0h3A11172N3z5G4H0Q1L0p5G001k1s0U440d2N4G0A1Y1l120Q1V6O1Q0A0c1C3h3g2A0a3V003Q3c2g0h0o334K11574I0D0350412M0A1P2S2i00542u115b3h0U032z2b1Q3k0A1W5L4o1V0Y0D0T0w3o1P444425310o6H31162N3q310w544m3u0o3R0i3t1m3w1V3h0j310U0o0j4P0c3I3N5U5g0C4R2v1f1y1Q0p3F223i2A110T3i183A1l0g4J0p5I2g0m0N2r2W1w0X0C3b0o6H1F4G1R0U4J4J0j440o0k1B0C222y1P2X5a2I0C001P3q2U231V034n001R172U2f0C1W556F5Z172J03032U2w1k6F2u6F2u0f1J4f112I1a0C1P3F0M0Y0t3W1r3q0y2d5a2U5S173F6X2g3z061V003I0C5t5a0w1T2X0B0t030B0B5h0p1P2w5f2w5f0b1Y1Y0o1q0C0o1Q213I0P2A1O51512B513H283U3n21042U2P19431R484i0K3N3h1X1m005O0w0M433M0l0A5J361X4p0F412d1r04112G0X2N6H000l4m3w1m414m2A2A193q3p0j113h001J144W3F2P2Z2N2N2R140A003q2N3p003F0t0e1i4j4j2J0c4m0C2a2a2a0I0I2a0g1D3y3f0I4M1C2e4F1i0u2P1U3v1y0p1i3y0K1A1J3W2F0p1n1N2a09091D4F19190u2f2A1x09311i1D203v241s312e632e4K312W5J0J2D4E1R5F030q0s033V1y0f2C284a410r1p0O3h0311171g28300Z4W3h0Z0O0l313h281X1X6I6I1T0L2j4G6I102S5N270X1j0w0K411q0D6H2N2G06330i0f07271e170u5F0K033z5V061P0t0t2P0P1H343w2w0t4X0X2L0w0w1P2z2R1c0n0n5K3K1z4I2r0A3G3G1L4p0b2E4T1R0y69032C2U2U1k00291X3u620U1p4P0l0T2H0y2M031i2Q4j1e0D2z4U132a1J0w2F4h613r2h4b4j1q0d3q0o1v1w0d0m0y514j190p3r0u0u0u2f0o2z000z3R0T3U0w2b2R2e0U0P4N3C0p1a0K001C0b2r5L2N2z3e1q0j100T2R1z1L0z1D0P0y122X270w3N2i0Q224t1l030P2S0p250j3n444H1R0r4h4E4I280A2j0e2Y1I4R310l3b1a5L1q0n114h0c0M2N2N400Q110m3B2A284M0P0A1U2t0r25030w110t17020j3w3b3b300O2d3244002z2r1r5L0m3F1a1z2U3N4N570H0p1U2V1H122P4T0w2y5a2p2M2k4i3P0t2W4b001C0n1P3w1f360J0i370z2N0A4b0g3M0y3A2P1r4M0K0m1O3K063x5F0i0T171l1A5a1z001s3i4J3y55060o4u0r0t1m3k0d000C202n1g1r1C4U3C4j1Y0Q2F1y1p4X5x125g060n3F2g5B4X2j3F1y1j3I3N5N3a6G2d0o6I0P446I574m2n2v1m0m291X5a2D1h6W2A085f0r0e2t4c6P0Z5t080M3Z29060u0O2f290p2g0S3M1x0i2Z0H5o3a1G173F032R5R0U0h2L2V3Y3y2419032E0w31580p570N441O3Y3R3c3U0I0l0C2S0C311L2z0n221v111N2W5U0C5B1p3Q3k0y3u2v3M3h0U1P3U5i0w111l3e3u4p3l3R3h3u4W0A2g3u5f311G4m002A0D3P170C3u1p1p5H5a0j2A680C0K1j2W4m270x1l29292D0m4p1H1a370m2f4e0U1z4H2z4W1D3i0U0T1z5i3n4j403M0s1Q2w3I3P4j1m03034j3U4l0m43500D2N512U0A5S2A2A0y0d1800112e0J0c0Q3o3W0C2a4E0J4X3n2j0p0O501f1f0K0U2L4R2M3u3E2T0T2r650S0g1y3k5g1G070J493i4y1W0d2A2U3s0m0E1l3i5L1r0U2L3u1M3u1m2B4K4k0Q4W4I1e2k4b2h632p0x0J001v1S1s0m0o400t174p0a1q0J3N2J1k3t1X2K113v3M3N1M2S1x0J1H2J4h1V1V13561w160Y2Z3y3o171G2D0w2t0r0c4q0Y1G574Q1Y2a1f2N0W11544R0w0U2g493i3k314J1F2B413W0C2K0y2a3Q0w3w4g1p042D2z46310y0y0T0g272j0W493h0C480A0Z2303170A313s4R1r5R0N3s0w0E0a0o0U5m1f0N3k503q4Q0M172z2L5104061m4J2k2w1L0d4H00491G5F1d3b3Y1908084U2U5a2M2A0U5I4B1N2d283w0N3i1z2K190e3i3F3T5x2U1m0w0m0I0C1f5L4G2N0c0t5e0A4h0m3N1P1P1731172P2H3o4E6W3N4B360N001O073z3W232P1W0M534X0j255p2a3z0g0g19201s0h0m5f5f0Q3C0Q4q1f2n2O1L351z0P193Y061X4b1z0r3y2f1y2A3z170C314J2i0C0h0D454G5a1q1a0C0o0J1I22071G2j2N431m2Z0M465a360g490l0l001Y0I0p1x1k0A0i1m3A5R1r2C5f0A1Y2N1V1x3c015f0j2v411m2z0J192z2i3i3i4K1r032a0A3y1H1N295711114V2X2M3h4J3K2J1s0i0m412R1P3i416J3R1w0v2A0m3b4O310o0T28310P0w3i4m1c2N1a4h1p3Q0g514b2A1s5f0Q2R412M1y311k063i3v0o0n3F3i1Y0m1a5U1I0j4R2v4V270y2v19223i2z0A1m2A3i2C0h002A4r0g214S2A4J275I3u0i0d2g444J0N2W2j1P0z0e1R0U3y3i254O1F0U0o2z3z3W4G1f0g3i3y0k0j4J4J1B071F2P1y0U1L0U0C2M3Q162y4o2N3F3F2N1z22450G0X0x1a2w0i40404328030b2C693C4p1s00313X0I4n4h0U4n131i234B5E1d2H2y2I0w2y2y0m0a3G1e051T0j4W2b0r0k1a1a220i4H0p3W4t3C4t4I4I0L28203z0j0x2Z0m0J1m2w3o2V0y5Z4J1j1f2U1h2r4M5a282K2K1y110t2V2B0J0m2016404n1z2n050j4H1T5L0U2N2y2O2N020p27530M2N6Y2L1r6L4M170r3C1a1s1j0i1j071g3Y550U2U0d2w3v0y17192f2P3J3a3F170U06653K2D1a0A0t0U31060U5a260p573S2C0h5x3M5N171N0t1z230r291f0N0d124L3l174L2I230U0U001R0C4e4d0I4T4e3n24534T5B4u0m4P2f1W0b3p052N0d1m4H2t3o1f2A2a3i0j0m503z1768680g0U3C3C0C4j1J0m0x1r4L5H4j5a2U2b0m270K1Y284M0j0c454f2m0y1X3E0J0S3G2h3D2L233z661l3o1a170t171X2f2f171X4T0s3z4L2B2P2z1m3i0t3v340U0a4b172a3Q0N312A19003s3Y1Y004Q1R3T1X0y000w460m4b063q6L3C495x046H642A171717003F2w3o0g0M3W4d0U2P143K4o2H1p1f2C0P4B0C0h20532C270U2P4J4j2L003C260n1f3i0C001I4J4I45431Y175E3T1m2N0j1a220m001a2b2N1e3A4J1H1y2f2P1r0F3V2B2f4J3Q3v0o512m3l314y462P4N5Z4B0o311R4B0U171a4R0M434S4r4J0N1R4U0e0p2O2z2L4J0j4J226H0C2b2b5e1T4t0Q3u2J0m061R1R0r0M0k5J0M2B3L5I1U4h474W595J0a2j0a3m2T4h232A3P4m470C0x3G5J3x1l470T0T4m0Z0Q69695V0X321x1i2n1o5F2E1D1i4e0t0U0Y3S0P2A2R0T0Y3n1i2D1P2r2r1G6K175F521P0t2R170o0o4z0A4e0w3e2r3k4m0p1C2A0d3m4W0p021V173S3b0c1S090m1D2H20143w170o4m4M3P481l170F0m1W0F2r2r0k270K0A390i300Y652y1S0T1d1l3B0Z115a651X4N692D4N0b1i3S0I0p003n4t050u0y223R0I2S2B0T2h1I0p0l1l3J1y2i5a2q1f2f2b0A2P3z1x3v4c202n4m050J381T0C6E0C2a5F173a0o05115A553S0w0U1J0o061y0n3P3R3F2o032S3Q112v4M2A0a5x0U5R3T2z24000w1T0Z4K3f3H2g4M2Z3b0y3T1Q0m0d293u2t0j1D0m0f1y500Z581a1C3B3G0T0T4j332B6E1l2p4q3u3t1S3u210C0J3y0a00361w3y490n3w51080g46463y1N3e1R2a2a3o1s0h2U202B4B5Z3F4c2H1f0Y3a4m2N381y1a1x1y2P2i3G2M5b4K4M582y4c311x1y2z4S5a583b1y031R4H5i1G31310C3N1c0K5n01100k0A1z2D0f1L0X0C030C281S1z0t0r4p0c0Z413G3x4r1R261R072A4j0l5V0m5a1y0a22210030122Z0r4H171l2X2h1C535L2X4W4d3n1p003L1C4E3z4b2a36361R0z4R1r1f2A0o2y1y2V340U2K282U3b3N0j1k112P2m1U182B051h1Q4U2U2T2F2n4G3i3M4p3I0Q2D0t0t0Q3K4j3S1j1y1V064H0U0K4H550o2K0r4b0Z17220o1r1m1M1M0d072Z5V2e5f4E0C0p4P2v4E3n0m3U1V2c2Y0Q0y033I5x24032Y07310N0e0U2G3S0h1k0I5e5E0i1k0z1r4L4m0c3M0C1D4j3k4H2d2t215H4E2A0m3j5a1a0f2A0G241m2r053p3u0Z580y3i0C3o5K5f4b0J3v1M2B4p0t361r3i1S574b2L0o551Q3U0a4w1R2b2B2J4119245x0G0N1r001N0N030o0n1M0K4H461m2608110M3i0m310t4o2K642P2W4G0h4B4L3N3o1Q1s0n271r4b0A2N0n2J2a432W454G1f0W3W2N5a5f1Y3U1V0C1r3141194p5G4J171G4H3j290E444m0o0w5H0o4O4L2d1Q1Y4y4R310o4O4J3i2z184L0e3V4O5a4f1l5J1l0y0w482T4S0o2k4Y181P2T5S2E0l563q273B2k0y2200122X2o3a242w444G4K0B61123G2V36442X3i031y3s2D3q4K0G2Y0h640t0I0l563i0U1L211p3U3U06243n3h1p0g0g5K3n3N1p2j5C310r2j2Y0d2i3U0T1C1p0x2Z0r3E2Z121j4q1j36404K2a2a4b2P4b241i1X270r4u3U0c0c2r0m0r3U1i1n4h3w2k1e3E4b3e361V1i1i373U0E2a1e0w6003604h00274q2g0C1i3K004b2g5J0F4q4G610A073w0Q245N440A334b5J500h3w3w0F0I5J5J0I0c0l19190w005T0s012a0c4B4e0Y0X2V053z2U6Z0o284P0T0k0c1R03051N2a000o3T470d0j4t0I1L4W2X1I0w0l360z0w4Q0p0A3R0p3z1C4H0x0L5g1T2j0n2r4Q20000c0m2N3W282w0w2q0Z4j1A0n3F204X5F0I3F5A0r0o0w4w1n0t1J2n4c5a1y002Y080e3W3R1S0h2w0A3U302w2a2a4E2R4V3I0m0C1N0Z0j3H0l1p0b2w0C3B0d4y284P4X0C5R4p5a3J1C11003s631R2w170e004p0A472T2N4b394c6Z2Z1e4s3W083Q1p3H3b003T0F083g3t5f5E2G3s3s511k113i3o0r4B4R144b2n1y3R0l112f2J2T1y0e1Q3A0C0m002j0I440o190l0h2Z0h2v4s0A2w284H0c1T0v0o2M2v0A2Z4H3i112W2j3W2Z3b1F1F1l1l1Q0k0z4o0z2o2o4s0A45451D5o5e0c3o1Q2X2254510A1f3Y542J3I3y062a070F1P172J3F3y3o3y1q1N3y3F0M5L3y1f2J2t3o0o482f1f0I1L4t2V3K0K355E0x2R3K3K2V0x2R2b4m4E033i0C3S2b0b5S2f3i2f001l072f5D2e0U2A2f0C1W270E3V4h0r0K3n3V312e4K0o1r2U2A4h0e30312U2V4G302R0o1i011L2U5F1c0w033u3U182H2I174h0d2H4E2p3n0J1X0D4h2E5i0l4j1D2u1y4g0J281T2B1p2M1e364N0p1p003n4j510j36360D0J3u5J2S1G1G230x4H0L2z4R1Y202z5J2D5T2p4H2w4N3a32362s280U510b511O1T4j1M53065a2D0Q4w3a3I491y175x2v2A3z3U0W073d0J4L4M0Z0n1T0o2v1Y3a6I1Y4m2a0I1i3M2S31000c3f2V0C3M1S052t2N0W403k2A4j4m3B4H3U1W545K1D2U0z295i0F1W2z564g4G4P4W3t054L512p492C1q08002G4g515P0N3s2w49480Q1Q4K076W0q17141s0j4o1p5P4B2O1y2u0M2U20320h1Q2A0M2J2N2e2A2R2b2W4j0F632i2P2B2M4K0D5V0D444N1R4H0D2M314K4R0e49171V2L2u0j1D1r1r0C5Z1q1R0J001p0w3B1p3i0p2V1f4w3p2J1f644r0k0J01030A1G1L0t1O3J4e17274N4G1S1J0l1R0o0r4E3I4q1d0w032u0c413I0Z0I1O0U1Y0G2O2H2k0U1r0d0z510x0p0C4W0u0u2D3g363I0r1i0j4y3G2Q123Y224t105L1l5L1p3r2J0o4R202j0o4N1V522r0j4N1Q3I584i312N2J0Y112t0U0O3Y172n1z5Z05143h0m1400523F5E0g551z0C3F055F3b2j2O2O294b3i5F5E0U1J5x0C2w4q314P2A6Z3c0i523Y0U613Z0Q033T3h0h3K1l013M2G2A2f312J1Y5E3d3S114V0t031v072Z583S034P3j0U5J012V0u0c3i3G4W2a0m5Z363p054G2d583Y2A2D3W333U032H0d4H5E5E1S345B3N3I2X4b0P2L3x4q0I0m0V444w3U05171m4h0m1X4V1O4W4y0G2B0W0G0g03463Y4b312u474P11443Q0351031N3T3h5t1v0A3z2n2W644o2A170h013W3o4h3r142D0o2A1f1708142H2A0C612f4W1q440c1V0M5E4G003w0I0I0C5V3I2J4W2A0C3j4K4t2X1l281S5s1y4N44440w0o0o275E4t3i0o4R4R511l5I0e4J5s0U0J0J0o1t2g4r0P031x1S1a2B1y03030w2Y4V0b1o000J0T0w2s0r0r2z3L0w5A4j2c2W0y0j1p1Y2X392z310C180t2s480j1Q050w0A5436546I1r1p0E5x2D3V2M57032R0e5G22310L1r3V0w310g2a1O2N0T17111G2M360r3u0t1y280w004j0P2D3S0i362j0A542L0P1S1x0r4H030C170A0P0g0l1Q1Y0o3A2z3V0o4S4r2d4O445H0C0C0o1a1k2f4X2K0P1o4X1G331L001y0L5B0K0K0b2C3y1X4W5i0w0n2a0w0C2z3J2T0I2S0o0T3L0I1l22510Q5B1k282c0w0w190p1G2M0A0Q200w2M2f111G0w0c1o4m000j2N3A0r1754550r2P6I315x1L0n2d0Q4X536I0Z1v312R2c1o4k3x2o0A0w0w5x3d3Y4W0L0F5G0C3N601800173G0A0r0I420c0b3T2U0Q3V4p1y1G0C0A2U360w3V1C0A54542R3v1Y3v0A1d1i434j0w0A313N0A3i4p0K5f2f003o0H0A1Y3F1s1f0i205G311Y3A5f2N4S420C5V0A3D4p0Q2M4N313Q5f4S0i0o6H1I2k0X4L174L3Z0C1p0n2B0f4k4X2n0H3g2B3G2m2B0L2k0j1f142G0t1Q2B0w472B2s1f473C3F0Q4g6H290l3J4W0i2U3N0e1W1A0i11292k0Z0C0p4L2B2B2s230C3U2G0p4B170t1W472b6F6F4R0Q1N4B456H144L1A454R0H0o1V0J0r1P1V1z033y3n2C195i2W2e0j224R0L0n0n082o0P3K1z203c0n2G00190n2W0c123p0o0G5q4o355h0n2u0n0j0j103Y0C2w1L5F0j074m0A1f0k5A0A1k2b6E0Z613u0y623F6G2a2a2A000O3z3n1e2D0j1K2w2R0o0H4E2m2s0P0r373e0z1e1G2D221q2Q0r2h271C1L270J1D5L2d2A4L4R4E3G3b1Q2W2w112B1y2a4L6J4o3F1r2r6E1H0z4N0j200A1e62370b4g2v2a6T4G1T370r1X4X5e0o550p0e2A0620050w0Q5A0J0j2c3F531j370U54381L0F4N4e1X3q1P3F2A4z2v672a2a2a0Y4I150C2A3V2R2w1T3h1J2V311l0A0h5A3K0r0x2R3Z1P1P3K3X0e3u373L1l1q0H0u3b0l3F3l2A4H3G6E181y12362t0y000j4r3k310t0O5Z0A0c3o2t4j270f0G3m0d0j3o0H3B0K5i1P2R1W0J3s1X2f2L4r0F543R3l1T2h5g1P3F6H4R3Y4m0o2a0i1V6T2w0j0a4R4J2A0B0o2N2a2D0N0U3Y430G0I481A0C16501q6T1Q000y0g4g3H12450A1Q3N3s37315B1M6H2G1M103p0j3F1l2z6T4G4B0l2Z0r2A4E1W211f4o3o6E2n4O3F310J4O033P033P1L0p31310U1l4G4F6O2h1P1m0B2V2v0J4J1W0C4r3y364I2d5g0F0A00034Q0G2V273t2V1P0i4Q31312A0u3i0C2v4R0H1m4J1P4r0b2W1m3G3p6S0o0P3b3i4r0i0C2z2D271p1O1p2Q2f441y1G2S35081P3g2a2T0t1J1d5H2C2a1N111O2z4I0y0k0o1L0p5L513H2e2V2w3N2s0o173N1z201G374r2V0h652o2n2C1U2W2f0S1y0r0S430n0o4r310p031N2o080h3T0n5R4q09092L3G5H0D3B2U3T0y2A4O2X0o1a0r423S2R2K542L0K1C5m652L2z092C451d3w51090942170S3w381l5a193T1y42505g0o2c2D5g2s4J2z0P0X17341T0X0T0A332V2P4r1z0C2f071o4p4p0K1K1G1b695O0A193k0I361J1z0w0A2C1X1o0l1r3N2E1M1N0X3r0k1r0r0w031G0F1z3r44170r1a1p1l0j2W220j531L280r0u36211V0J0b1y3L3C2T2W51195G4N0n1o621a0c0j0F4f2o1R4N0y2X5a4u570c3J1f2r0E3b4H2Y1y0r6a0O3v2s11441a3a2U0E5J200P3w182N1R0w2A3a2w0D36310Q0K193x203F5a1k4u2K2d1b1a1z170r1j1Y4V5x0r0n0y0w0U3C0d0A2U1o3T4P1n0o310S0F2r5303034k03071P1y4c0m3h57074e1c2Y613f5R1N1v4b032e2a5t220D030H3U3T0W67171G2t0S1r3R5K4E0C3T27312U3i04032U182A4W1y3j0D0A3p4U2D4E5i3u1a2m0P0K3G5a4u0N0D0m0r0m1b2h5i1a1m3T3G1X112d4f0w1X0Q0g21053u3T2U3n0m4u4H3i1r00612S3x2R4h2V2A2X2r5I1X051N173v570r1X4P541H0y404Q1y3N363T573o3f2a0d3H0o1M0U173T443a1P490w311i481m2z4H3T0A3z1Y27312Y0063322B0a3M1y0A1J2K4d4H1Y14642c0w3z090h0C274B5t4A2A6A0g5K2K2N4q6S170a1X1e3n2N175f2A3w5a450N1a1f2a0l003A1Y006T2U0A411P4J1s2P6S033Y2B51441a6S4N0T2U441y0g1f310g3i3f4S1y5G6S3b0o3V4J441m0P0X0C1z2V1y2f4r0A074N0A1o0m1X1z3k0I1J4e1K1o3T1v2C0w4p2E0j3669191y1L1a0r1m3L1p170w0b2V2T0r1V53000n213x3v0c3J6A5J622N6a4H3w3b1R1f204u3F3a2K171Y570A2d0A2U223i2U033R5t040W3n0m0D4c2Y0F574b2r3T2e0731611G4W182A0D4J2d5i0A1X2N0P1n3p3G1y2h615a2D313G4E3u1r0r1H360d1N540g0o002A414849443i1M32631a4B3z643w1P145a1f6S5O1a4e5O5E5O031l12182b4e3i3i3h050e4A3W0Q03563i443W310e1c1c4e1c063b3b0r1p0z2R0j0p1D2R4E4e0k4f2d3a0r1p0U2b5G4f0i0C0w300z4J190P0I1S4b0k0z0o230m2a0A644U4b0A3a2z2b3b0I0A0A1F282z0a1e4j280T0T2C0k54282R0a595422000j2D2K0a001y3v5y5y0a5a1M1y00280a1P0C4u0c2L3u17273z2C3z1m444u5b0a0g0C34004U562C1z2w2w1N0r053e004y000I224b0w2W171a1817174W142N2N3F1J1z3w2D1N3R3V1J2w0j2A4H2w3m3T072N3B2f2f064648001m3B460h5S144627002N4H3V2B2n2n021D1O032h2h2h5J5J1U4v3j0s0s3p441j1G4u233y1X0k0I000P2W1C0p2M1V2n1v0A2L3q3s5b3w130x3s0A2n2M0T515U1U00010M1e3c1k1X2w0l0l1z4u0w4h5g0l362O221T0T2k4B4R0w2i2s1U0Z4C5R2U1m3y3n4M5V0n0p2a2D5R4p2U120N012S1j0p0N1W1m1W0N1m561W1m1m0N463n3c1j1W5g0w0l2i0H2S1j1j4R0C0C2b0P3N003N0P2b2b5H00440A0K5c5m0Y1l5a3o2w1o3F1H2V3u4m4e3v1L3329242R0w060r3R2C2F132A2E4k0T1K5D5c4d340C4p2B030I1P17173R5c0n4I1p0b081a1p0m2V5J0l3R0k1l2W3U3S4f4I1G3R0w2S121G0r13361y2c2F1C3n0w2m1i2W0y4W2w112U284R0O2l310n2Q0U132x002y1g0Y0O2w1f4T4T1U301h3m6b1G1Q0Q2s0w1N4j1a1N1a1E1E0A1a5w38255903582z3A1F071l4p072K1f0n0T1h4w4M3z1j4j3k1p1P5o3a3H2K2I0u4t0Q4a1s1A0u6C580I2R3b0o1m081N0c0S6I0I3Q1v3m441W3X0l3U4a0n0s4y0M0U1o1p5t0r0r0p3R0a070O0I5R3T01294j2S0G2w4l3b3q2D302t58196P3E1X0b5H3I4F4X2B2A0m1f0C1C3p2a240r1y2S0D2k4Q3D3x1P312k4c2L3N610Y001l4B0A0I1a5431413q24315R135d3Q3w0r2L51170G311f3i310w1I350h203Y2S5d4B1N1Q3F4Q270w1f3z0y1N6W181Y2C3i3z6O0l383A5N1m2a2j1R1V003a4y1m635N2R031N412P5829591y3Q2t6F4y0U312M3r3b2W591F2S3r4P1P292y590h2y1G1f5g0F0A540F0D5g0w0w0Y2A5J0w2K4I360X1y0C332B0C4U17170X0C0C2t0p0X2I2g2g2g0X0J3W190J3U3W1s1s0e4q3U0f5P050t2V3V0f3z00275e4I272T0f622E2T2a310b2A1w220j1q1n1l1y0Y0f05314L13172x0r450d0o530C551j0C0m1l4K5B0p3o4c4W3G1i5J3V3x33003t1w5m3s211I2B4U4o4G0a31000A2A2M4K0331310g5I1Z0S2A2A5f0U0r120U0U5m5m00101j1f2J0s2s1f0c3Y0700390D2z1L1P0C0C534T4m0y035F1G2N1Y0w182a0r5N0m0t0w033z4p1P1o0r4g0c312U0A1k030U2C0k5K2I0A4q4q2E0t1R2h0w1X1k461V1D0Z3R1t620N110T3G000H0m0o0I3I1y241w0j3N2d3u4d224I532D5i3h0o2j4W1i3S2m2h4E00000p0q3l3J2i2S1l0L3z2K2B1y3e1z3i0x0O0p5J5g1L0y124j0r3n2R2a0m0r0i1D271C1D1D0k2X511G2D2w0A0n4R0N6C3u1I3i4L0Y2p0o3v111Z1P394P0C3y1G4M0t0A1Q2X2A2X2h2y5F331f1f0r0C0j1G3w2N11330z3v1H4U5F200b1P0j2P5a0r2r0E1e0n2t0f5m0n1U30142w1o2A2d3o120o1r2n19651e1C6A2a37142N0A4G1G3v3M2t3b3i2P1r6E111E1z2V2B4m0m0o1A0r1o112f2a0B1X2D4X1Y1Y0Q4P0t4s174u0o1s0j510o652c0u0K1J1M4P3Y0p4j4K2t0n2O1p3K0U1j0T4w0e060T4w1C1c3N69531y550r3I514p0c3E1i2u2v1m0J294X1y2M0T3i3i343k5F5F2X070n2D2W0O2A672R4y310p0m3K5g5x2f1s40545R0r1v240F3c3X2e263f0k0o4X1l062m1k3a171k2D0c1s4G1r144I4u4q2R223R1k301c2Y2V0U3L2A0h3W193U3V0y032f1N573k2a245a3R2v034K120m0l1J5a0U002s0307370s360u0X4C3b2a004h1l4t013i3i3i3F250K4W18070C0C0r1m4H4H3E37293k3F0C3G1D303I3b3i6J6J3w0D2c2c3L2m5H170M302W2A0r310n5S0d1z1z3B0U4X0j1G181o0Y4i3h2z3o1p1s0E0O2V2A0m1l0m5e0A0y591C3p2B3K0N2r0m361W1j3M170J034J3T2B3u4j1X192D0G0e4d1I0g4n1W4q3w3s0m3P0T3t110J3k0J1X36551H4K0o5E5A3u0o0p173x1V2U4X4b2M2Z1P3L5L4w3u1V0C384h1s1s1K5Z172C1X1T2A0A3l1w662z3y6E362p3t2U4b172R553v560E4w0J2L3b1H1M4H3S2B1Q2a3T0W2c2s372F4J0l0A0o1p550C223i512G2s1D201V3Y301m0N17120K1r3k0c0m3D5m0C001G4B2a312U0B08440a490U220A480W062D3N312g042D162P491l2D4w1O1p4H0m0y462z3s3H0b3f5L3w2z0N6C2N3a112A5B19115R4P0y1J4g1P1S591q0a1A1m0h4g2J2a0o0m0A1P3n1l4K3q0g2Z2P1f5K5K440C141V4q2A1E1X2m0T2W316A2N3I2d3R1R5G0z1H2C1W5P5K0Z2U0r1R4G0t0O0P3F174R4p53032A1X6E220C05560A1z0P3A444H1X46173y2m3y2J0m2N2N0A2X180716003d3w431p0a1m4W3u1e2d2L1I2a2e6E1y27011a2R1a192A3y1z252I2P2B2o3t192P4V5V0m2i0F1E1H484I0A454P361U2S3i540N3F030z2A2U1W0A3G2G2z4J1r1w5i4L0H1y4B3q1y3N31002U1a0o004y441f2D0w3S4Q2B515a3Q273t3W3D4L140m4b2N3q541X2m0o191V2J0h454H1k2v2M0u0t5K5K031h313N3D4K1X120C2P0A3C4H510K3N3C3Y5g1l4S001y0C0p1m1m110a3i4R1b4q4r222W2B274j061W4J0A4G4944442N0d0w0m1W2e5U0o0A2z445U3b0A1W312A254Q442r3F001F264s0y0y316Z310P3F1P1V0y2U4w0r2U2U310y0C3y1f0p5R2m0U2e2e1W4117194U0K2G0A0K010J051R1O2g0C061G1z2N4K0Y1Y05390J001S182E3I0k2w1P4p4p5K3x0I4r4r3K03201103433u1R2N1k030b0Z3y1i1c2C2C6234450r4d0c0r2w1A2m1y2S210K0T0x122w0T2f060p0o0r4d0x2h0I0I1y0j2G4s0L2R2e2W2g4C222R0l2R3i0o0Q2W320Y2X2N2N5F0r282k4M0j001y6J1f0o0012035W2g001c514L0H1Q4L0w492n1O1C580P032t0c0K532j1C3D2O3S3I06194H0d1p1p0r1y1O0t0r0o552a1V3u0T0c0l0U1j2Z3D2N290w3c3R0p2z03030C3K4y4K0a0P171v0o5J2s575x06060C3x3R0I0m2H003u1M2r1P5K2S3h0m0S5R070O3I2T2D1c43283i5R0g014y4W0c1a1j1D2U0D0C0c0J4H3o0U3G5H0m0r3u4j0m0r1H1a0T0K1D053i0J4U2L0j3T2d0r3u1W4K4y4m0y0K5J0o291X2W3E3s3k3v3i3w2T55130P172X173u561m3t2T3v3v0A0t2K061k002a4q2L004m0s2f0y1Q1S2p004p3i4Q0b1w6303492s040J5m2w2D46310m0w2L4P482W0I0C2A3b3s1k0b113w5C4p3F071O1O1S1S5R4b1D170N0o493F24085F18515G0P0K6K0w3Y3Y1f2W4s4B4h1Q170A0G3o3R2n1R1R2N110g1f3z583F0t4U2P0P1V0Q4G0o1a3z000n1e0g032X182g3b1k3i390o6M4H1m0j1q1a5F1a033v2A4K3y1H2M0i0c5V2f1627440c4y4E0o3k0o0K5g314m3F0j4R0o4R0d0M0I1B2R3a3i1917432W2r4m43492W0c0j0i1I3o2Q2F2Q2I0b1E1U2l16172t0U2u3u2W224H191y20180c1y0Z0y0m3V4U0m3V4k1h2W00000B1L0C3Q33003z4P0r0W2C5C0c1K0b0l000b0b0c0w1a4d0w1o1k1r3K3u4j39466C2N4d1C0u22212m4t2B2c2a533W0p2f1I2K36005e1l2D2k0r0W0w0w4d4h001D0u1K2h4H1O2W3S0C172z1l1l0r2w2w3J1o3w4i2A1l0c1U0Y1H0j1Q113f4M2l2t654G2U5x5c6C191C5x0Q0o3a1p4z0Y000C364b0K5y0A000B656I1J5y0o1m1m3J2A5O0g2a5x573u222w240F1n3Q0S042F2F3R3u3b5R0U4m2d0w0p00035R4f5c032d2d0r4U1a3G5J5x3p2K2K2f3u2m2m0r0C500U2N3S1V314t0l1X1x2h1e5U3v3u1H0s3C1M2T3D2w0V6C3i0c1P5U3J1m4J0o1O0J31005J1a1y0m3Q5m0A0a6V2m182a0r2A0G2A1N0A0l3r271l182I4s6A494J461q1Q5m1Y3A0g1m2a1r4G193W2a4J0r1H0w4V192k0J2o1a1l4P2v4R171y4J1O210p4O0J2A4h004J0Z17172B0d3W0r6c0r0k2f0A0A2A0e3G0U1Q1R3m1D2z2z160J0P0g3b1R2z2s1m2B0w3K173z0m173U0C4J3I4m1k130A2p3i2h2W2e1r0e4o2A3b2W2A0m1R2W3b4J1p2D0e2A0e0U1Q2z0J0g4J1R0A172D3U0C2h1r2W1f0K1r3H1R0w230A2R0l1G2D044q2r0Y0J0c1Q341V0c3M0K2t3N2S0A310w0x2a2t0y04340w1I1V17000o1R170U170U0U010r0K0K1f1z0A272P2G1z39572U0c001o2P113z030u0A2P113I2C0Z2B3c1p112I1R3F5T4P0T0w4T2E2I232g0U254k2U00003N2w2f1p2f2U360j1T2h1G1G2e2R0r2A5J222D280o584h2V1L000p2B0x00002W2b122a4T2W0k1e3L570j2X1O2j2U2P003o2f0J333F0J2q332h1Q2r2N0c4q0E180m1p2V202z2e2p3I2N0U4T4f1U0L2s00440j4N2x0t0C4Q0A0w1o3H553I4N6d0J1j0l3S0g0T52141k4v300C3F0Q0c1y0t0t543c0B2N0n5Z365Z4m4q246I0c4W2W0N3F1Y1c1y3R2w1x002S112G0I0i0g4P4k0A033W610m0p3h0O1T1q671P0i0S2A1V3y1v1p3Q4q3m0C5J2U3m0J4H0J3M4q3I0b2D1a0r1s1j2A030C1G0G172N11301y3E4P0d0j280U3o4H0Y4203320M0m2t4Q2V3z2A5L1W3o2M0Y3i2z3F2z170a4P1I2d3N3x2w1P0J3w3u1a2f572B2B310C3Q0N3h0o5151041O6e2A1q0c1m3s433q0W170i46461r1O000y3w4923064q0g2U645f170x4V1T584J3I3i1R0A4A1f1l2N0G0t5u0x0J143W5u1s3n4H453W4G1Y1y0A1f0n2e1B002J2e0I2N4q00003z4S5b1P4V1x0y2V3y2J3i2A0C2A2N4m1O4H4O441p0m0g0o003G1O0U3I0F0m0F2B0g4S114J4P1a5g5a4O004G2e0U4m0U0A010r1o0A0c1z574S3z030u2P002P0A1o3w2N3q0p0Z5T2U3I1v4T3c0d2g2E1R1T2R2f123L0J4T0x3N362D2V2X2W2b2a00004N440J4f0J0c2N0Q0j1p4q0l2h2r1Q2P001T0E18333M2U2V0c0t0C140t540T2N4N5Z3c6d3h0j67424m0i3R4W0m0C6f1p2G0g0S4k1Y3W1p00324P5J3o2A1a1I0M0m3I0C4H0g1G300U2D2z3m2U514G3N1a2B3x0J1P2z1r491O2A6e3W5u144J1s1R0U1P2e4P2R1P1z050A1z061z17172M4B064m4R1A3w032w0o4o072a191y0d0w0w0U0U0J1V2N5N005N002A0k3B3I1V185a2A5c0E0p0r17413y0C0j1C2C171l4p5a412D3T2C000w2m39300I1K0I2h1K0T2G510P2K5a5x2f3y51301D0o2S2a0C1C501D0I17000p511V3W5a1R3S363u0r3f346K0062075V2M273W0e1q0w1U0j0J2a1G1U1Q3m3G1E213n4N3R4C002w1D2f2a310h2N0E3m1G1C2U6M1f0E592A3i2P362g41410K2g0f592V2v4O2X4P043U2F4u1y1E2A1Y0r3W0N0N0w0A084m1r4T3k1X2m402v0d1w0A3n000G0r2h4F1q4B002o4P070w613Q1X640l4O0U1s3z073i1r1L1y592a4m190U044H4R1L593S360r3u343f1q1y2o082M0w273W5V3G2h0j0e1U2A3e0J4C1Q4N211D3R2f006M0w1C2N1G0h31591G0E1r0K362v2g0r4m0A19042X2a2V4u2F0l2v0d610r0G4F1q0U4O1X643z3i1L2w172g3E20170Q2f0Q1O052L67670o0X0r2b1L033z4L111y1G1R1k2w2X4P4P5J0p232D172e1R4r2W0A2w1V4f1I1G2s1n4M1L1M3H172b3N110p2A5E2L5t1N312W4G0K1G2d2W2w3o14141f452d1U4O4O3L5e2m3J4W2H1R0r4P2A2E0w1x4r0k034r0a0u4I005B224j0k5J3J0u1C2X4t4i0j0p2Z0w0r4h0p3z1l2S0p0o1Z000A1n1y1f1n0j2r2x6Q1Q4L1W182w313m0w1C2s3f2A1e142a1y1n0A0p0A194X1V0n5g3F0B1I351i190S2j1f0F14321x2A03290m5t0c0A5g0p5g1v313d5U0p2w072r2d1l3L0H003H3T3f3T3Y0w1T2Z0w0C1n2H0f2j0b2D0x4P5d2A4f2L0p0r3L5J3m5H422d333D2A3V4w031x0a5B2Z2d0A5g4h4b4O2a4U314B3H2L213N171W0A0w0a2D4h3T1m2Y455B4s3D0p4o5q1y271V0b2H1l3H3H1R1R0h1x141R1s4B2H6H0e451e2a2a0j0p1V142H0F0A0t4r5B0h4M0w0o0w0g1V3p0m4R0h1y0m6S4J1a4S255g1x2W0A6H4w171W1R0h1p340l2C2W2d1n1n34551o3b2J0A0p2L3Z2n0U4j1d2W3s2n1n0w0U2d3V3i0C2O0Z1Q3K0m4r2I214H271o3z4N195N4P213I1K031D3j4N1P0G1z0y2W4N2D22214636274N283Y3S2R2R4t0j3v3I0k2V0w2B4W000w0J121U340p1f2y314n2r2V400w2g0S0C530T07111O070r3h2V2S3d1O2e0S1G2N1c5t5R2u003Y1P0W5B120e3S1v3P0S3j5H0A281y0f4l3k0Y0T1z190r1G0r4p3e2e0C4p572R36053u311f230G0m3M1I1O1f2e0B2n2C270h0Y5f2u5a000A611U0C2A1z442F0o0o310h2O0Z1Q4H211o0G3I1v3j1z2R4W312V0w000y360o2B3h0J400w1f2V2r311f1O0r0S5B3S2N0W1c0S5t1G4l0r0A4p192F3u052e311O0h2I2R2X2X0I5G3G4y4y2X1I2T3G3G3G1I3G2T2X3G3G4P1H3A3A0g5t5t001t3G3G0J0C4B1e0g1L1P0C0C032P005R1E033r1c4X4k3i1e1X1r620Z270t1e3I1g1O1e1r3u0m1m2w2O2S2s0w003C1C4P211U2D5L0j5J1q57190u2W0n2N0O0T2z2Y0A0s000c614M2P3D3c0J57133B2S2H3C4H2P0B0T3F0K1b0j0K2D2D4X0n2d1A001O202y0t0J0Q3N455y0d1m1M2N0o2R2v3e4w1R2Y5a21310T2V1r0C5t1W0m2d001e3u3b2a420C4G1Y2H1Y0U0f2w2d0C0J360T1X3I3G5R3I053o0K3V1e0m3E002h2B0F4b2P1x2D2w3u3N1x1P1S2B0e08460J5s2w3N451O2H2D3s2w4w0h4A6A1P4H0C003I4B0p0J2a2B1E1a1Y1g2e4Q1U5i3G3G4y0o3u2B3b0o001j4o032j3z060C5F1H4L174N0r1d412E2t1K2I1p3x3u352M1a3x0t0p0T064I0K2a0I0L533S2k2D670M0h4N1Q0j0J3J0C0E2f0H0w0A5a3B2t1f171Q42551C381T551X0U0Q1A17310r0t0r543y551C4u3K3i1l173S0o1X0B3F030I3h5R2V3W67122v2S4P0T0B180l0p2j14001A0U4j3l3S3I193a0C1X3B1W18183t2L2p171H1V1G670M0t181X3y2j2a1D230r4B110G0y140U0849142U4o2a2P2a640m1T1D3z0h5L0l4K0M5m380d4K674N1m4O0g0T0A0U0g4O225a170d4O0o0T010K0i2F2V001L0C0X0U5G1D362U1A362C3u0r1X4I3U4i0u2c062R3N5L0F402p2n5t0F0T200w1y3w0Q114X1f4j3J5A441s5G1g0U0J6B0m314J0U572F2e3k3W5G613H5x2d1y4m0y2U2t3W0K3k1X5L4W3t2z2r0F4w1X2j5D0x1g2L3w484P0C0o452n003w0B1f173W0z3A000o0p0U006B1H2P0F0U222z2z6B2I1f6T2z0U3G3f0J0T0J0J0o0b0M0S171r1r5n004B3V2b015L0K0k0r360w0k1F0r0s2G3z144g0f1G274q4q064e035F5z2D0P1700390J4X172Q1P0K2A0I0M1r0k2E4P2t1A4r1P0r0B1K2I3I1R2H2h111P2T251o23692C1X001k0I5R1z113K2G000b170E5z2M4I1d3u313I1k1n1G2S4X0J4E2R4W220L0P2R1l0I0C0P2c0B0T3U1C360J0J0w0p0g0J0J4H2b2m2f2a3n1V0J1l0j2w3r5L201P0r3g1D1P0r0o4r0I282T1l0c2h191T1i17172D1C1i3W5a000P4N2l3S2A202t1z1f2w1U0Y0L0J321C113K2V4U182051440A0C2U1o4A0w4L3z2w1y2t2r0I4C0j182p2x2B1y1y2K3K332n0A0I1H2z00112y300R0T5f021P1F0P2J2G065K0J520K3F1O2K592d4w4f1z0b1b314j55072I1X3S0t3N0C0g011l061C1z6H0d0g070w0P4H4q0C2s4N0i602t1k1p06600M1V640p1y3I5F1s0o4h5K0Q540o6K0L0j364X4b5G0p243u2A4e2G57241v5R220I310o0a4z3a4E5G3Y300I1y0Z61445M3Z1x5x4m4a3X1G1T3e5g3T3k3W01031P610A0C1r0e1D243U171m572R4w1936314K314q3Q5n2v5c2E0t0s074O0y5o1y3m2M0S0z264n3i2D1m5R1y4m4X0m3T0r5H0A3I3K4P2d0x0y283p050C523n3o0m0r2b330H0J1z1W3U3214143B1b0N5a0M4E2A3p2A3c1W0y4H1O0c363G0b1G2K0M4j3P2J0c1P4j1M1e3x051m1M4n4b2B0M5b563v2L1M0a0o5Z3X1l4h1e2a0V4e1G0t3i3o2s4b4n6E1J3t073y363655003u2L5g171C0Y1S3a3c3L1M050d4p1K311M3q3L502K0e4H1m4c4649513b2a0m4b2D093T003146520a1N03242L492j0g0d0n3Q193s2K0N4R4O2A5m0o05171d5I2Y081P0Q314q0A1s2N0a5L0h5f2K090Q1W0P4b583o0q1Y27142r282L181R1f4A4B0H2n4V2I4O0A2A0b4o0Z3i4V1R5b4O1s4C270Q013z4n2A3R1Y313a2N0C1m0i142A0i442a4C5a0M1n5R4G0p2C1e3S002J3T2P2G0j1h610A5g2f2M3h413i1W2i2U2A2A1P330w160o440A6S4N043Y4y4m5Z5t313Q2m311y6F4R3I312I2A4J1l2A2B0g182A170e1w5g446H2W4h3b6S1F455g1R2L0j4J1r5n0036012b5L4B4X1P0f3z25272G262Q28392t0E0B4I0p2H230b1K3S4e2T1P2B1k3K0t2h1d2E2M1A690k0C1P1T1P2R1l4W5L0B1l4r6S1i3W1C2Z0T4C1l225Z1P1D2m0J4H1x2a2S0I1n2t022n1U5F0Z0T0Q1C0M580w4G20312G114n0x0j171j0R1y4q2r1J5W2G0Y2p1T5f1f000g4U2L30111H0j2n1s0t2v6K1m523F1M0o641V5R543I2K4w600d2I4b4n2A5K2d551k0p5M0a1O424w1D3e035o4W5x24172R3b3X611r0w1y3a2M2F3W012A0p4K1G0H3i4n0a0P3I33140b3p3t3o5a2J4m4j3s1G3R4j51361l0Y5g2L3a5g1K4b543x001C413v3Q2L493b2Y2j0n2D3L4H4b0g1R4B1s312H4J1s6H0a4o2M445a0i1m00333Q4y0g1808240X465J2W4B2z08261S6P3z2M260U2a062a3z4n1d2Y1z6W091y1y2A4E056I1A0x582e3Y05223G2a6W2J0e0Y0Y0z1V1z1Q4E5f5x55311j1J0p4r4r0g2W0h246T5x0U4p0U3I3M0C4p1z2m1z2W2B4p2T300m116J5E4J4m2r0d3U5g1x4n2f5E470e1A031W2L0e482u172N0g0I4G5a1x4p1x266P3z0U062a4p476W0m1y1z2A4E1d260x581Q4p1x4E314n0z0Y2f5x0X4r554m0C0U24174p3M0U0U0g4J2W2N6J5E2f3U1x5E2u5a0r0r104V2I1P0t0E0w11281A3I3n2T2F521X3j0w0I0n2E2811360c0Q3I2W2D3L2c2Z225M0u0u0I0L0r0A314R4P2t1n3s513w191n1y1U1Q0C0E3z3K142t3k0r2a053z3n0w1s1A3u361V1y3V5g1X1y2F3R67004V1v110p3X4P0I22571y313n1y110j281t054U0U11192D0C4R0m0m5g4V1Y303o0c1Y110E0U2N0Y1X0t0m2J172L0A083V461711256A0h3D4o1f1Y1Y461y2C2S1U0A3V17110w2N4R170o0o0o612f0w6E3a3E005E0U1k1P4T0Z0A2R5a0w2h3a2X2j0p1V0y3r3b0C0F2G1Y06295I0e1V3r2j0A170F4b0o3E1I3r0A0A0C0C1I1K5O5f1i4p2C131X0o2w282244302m0t2Z4G0y0t2G2U0A1i4P3F0x1j362F4j22032V2M1J3R1z2e112S0j5N0h220O3i0t225I22051z111E1E1X4b4K410t0m6J1117002J0l4Q1y0C314R210A13280k0I0m0d170A1E4K4K440o2M2J3R214R222J0d0o2m2f2f2f0L3h3h0n3U360n0Q3h0n0n2Z0n3U3R3R022z0D0D2m0M3U2N0M0Y01331P1o2D4m0t1o1k1r1I690k11251K513L1e2T002B573S0c1z4t280L110Y570c1a30302q344i1e141j493i1Y2s144H3Z2Y1x040L6J0p4y1a5H3x6g0K0K2f141i0p2A3G2D2A4p572h1x3S1a4h0Y2a6J2L3s1Q141I0A2A3w0g1e0y1y1P4m2k2A4J0m1o0r4j2r0Y0m1406246J5H1X2g0m0Y2o572h1X542a0m1Y4m2k4m0m1o0r060m1X570X0X1y1a1y0A113r1X53103Y3o3i1X3Y3011180y0M013h1W185P062U002U3I3c1W03620C072T2H2D0l4h5L222O0n442f143I3I0m1a6J1p00001g4V0C12440r1C1b2N1W1C3b1j0Q3i1X0y060n3D3D5V2v3D1G1G3X012v3W061P4W1N4H1k004F2d3I3I0U4p2u2j0G0U1y2I003u0V2Z2Z3w1W442n485h493H2B3y142R2P0U2N0g1H4K411y5V314J5g2r0M013h06185P2U2U072R2H032T3c620C31225L0n0c1C1j2f3i3C4W005V2N3D063i3i4W2d2j3I0G0U3I5g492Z0V3y440g1H5V2r0d3Q4f0r052e3Q250k4I4M4f4H530p3Q0P0m282B3t4n3t274b174b48484b3Q3Q3Q4B3Q5f0d2K0d282e3Q250p0P3t2B4b483Q3Q3R273R3R0J0J430A010P0u2e6E185N1o0C3a2w1127276E111b002c2a0c572m2X4C0P2m0J1n1g1o3U1f1C0L2B202X18283a1U0U1017431l4a3I0B3K1A3N0C0J2B3M5R0J2A610L1y0B0M3W3R080m0e3I681X0y3o4C2N2A3B2J2L2C0m2R333c2L1l54171W4b3t570M4p512L492a0C2K1r091W0G3z2w0l000A6A0Q2j570m182e2C1g4K0U510g183b4O1B0J010A0u2t5N171o0C2w27112A0J2m0P1n001U6A182f101f170L1l1A3I0C4a3K5R3M1y0e331W2R3t0g0M511l4b2K1r49090G1B4c1W5R182C1l2S2a1l4X063R2A302J0r1y1X2I2C5V2I1S0C0d062D0u1O2w2P0j0w2F2I5z251X4p0w0l310T1l2m1R0u002W4p2W3C5L2b3u2F2V0p0j2Q0p0I591C22364I0r280J2a0u0u0P4b1S3m570w3v4Q0O2P2r1p3C1U1g1l0j113b2V0l1g4b0p3c1k5F55064X4H3D3K3I0Q2t2J31612V2g3m5x572v3T4W03030U3R630U0Y2B0t3m0N3m1P3R3o1P2M0C2d2r053T1W5H0P4f0u1Q3t1P0Q0w4b3Y4Q175m4m0U3u67633z030w5I31173b085146433Q0N2W2a0w0C2U4q1l3N3F0h2e2H4b0u5q2Z1f4C0U3b2e0n000M0u5V2V0U4R314Q180A5I0p175a0o3Q1S0C0u2P2w2W5z1l31590J0P0r0p670j0u2Q1C00213F1S111f4q3b1g3m3Q0o0Q0U2t1k3K03034W613T3N433m0w1W630t464b1P3z3Q3b0N0g2V0A5I182R0m0m0m0C1L005D1b0c2m3S2X2d2D3J1g143B2x0Y3D4u3m2a4W4i0C1Y3s1l3F3x1l2X6F41514B3s3F4m591Y2d416F3154541402142n633Q5x5x2D2E2K4d1D0l5x410z2s0I1G0z4d2d2m2a1D0r1U3v2W342K6J0A3Y6O531M2d0o413T2D3Y3c1T2r3T5P2A0u0y4y0X031m36413Y1S0949494D2U4M1P1P1B5a6J2i414M4S1A1A581z171A061A1A0X240C0C0Y0U0r1k1Q3T4b1Q040C1Q4j0A035n1W3M0k5L4j2U0U3F0S0C3D031c0S0m1L2w482a510A2U0F0U2e0C3V1o0c0k1z0u2G0A2U3I3I1J625N510c1p2T3u0I314p0y313r2E2C1K0T3m512f052W060I220u1l0K120r2a2X0m0p2G0k0T0W0I5B2t4I2m0r0x0p2R0J0O211x0c193B181U300m2b0j114M3b202d000L0m1f3J1Q1y0Y2N2n0r022K1n3K2d0D530x1M1k0C4a1O0W4u3N0t0K3z1s5a2s0o1J1J024K0Q0o67172j1p1G031T184a3k0A2G0H2R2V0O2v3R2S005x310X240n1v22670o4K3T0w5B0y0C2D0J1p5a2d3B2t0j4y3T6M3G3G5a2r6M0m0m0C3k5H5J3o1m0U0K0K2A2a3I280r4F1L050u0y0J3l4H4p1P3y0t2E634b1S0J0J0e1G4Q1x2B3I2j1P034p3l1p1m46102N4E0A2s2W2A1p49170K3Q0A0A0j3w2K0G2j081d1I4s0C2W181l1f2P3N3o4A3z3z271Q0h2P5i1764182C0e3B386M632e1L1Q3i0o2444192J1H0A2U0y190o4M0o1636183I310e0o1y0C3V0A0T5N312E0k2f0k125B310T0x0r1l2m3B0I4I1Q0c020m1U206M3B380A1f1y0x182P4u0o1m2A0o0J2s0W1J5a3K0A2j3h2203673R5x242R2S5B2G0n1p0J1G2C5J2a242d4p0m4F3I0K0r3o2r3w3G6346031x0e2B132A103Q1I4s494E2j0m171Q3z0h4A0y1L0o2e0e6C000r0o0X0B0U0r2G0A0d1H1L0J0d2p2m3u0w0y1k0r2T4p2A0J0C5O2B1R1R0I5a362m0U0Z1T2E0d4p3q210Y1H22160r0u4E0o3G0w0Y3u2X2W3F2w0l0p2B2R0b0C280C0Z4C0C3U3i4V0t1U4f2J0w0U1h3F1C4M0j282d1z3b1H320Y1o1f2K2V2w3b1h5B3I1F1C0A4X5a0u0B0t3a0C1l3K3K2a173K0p4X0n2d3I3I4N0y0t1p2v1f4h310I190r300i3Y1k1P3S2G315E2A0p4X0Z3u030o0M613Z1n5x3n030n00000n1G2v0O033k4u0p1R004A0A193i2w5i5H300K2d0y2d3I0c1D0r3k4X0U2f3u3m5x4j0y3i0f0t0p0O1w2E2f3i3u1y560J2f1V2L053l4b0A2R2A6E062X2X002B0U0A0o3U4g2d2d004X1S3F543U4P0A501O462B003q2w0w4b2j312a5I0i0C0t1R112d0P1f004q2a3i3N3o271f4B0U540X1y1y4X1E4A0C3i31501y1I000I193b17000A1q0C2e0M280I2i0y2z3i4K2D4r0C440B312f4R5I4r3i0e2W0o1F6C0X0A3u2p0J3q0Z1w2m362R0O310Z3F28222w2W3u1I0u0P0w1U4f2K1h2V0Y1F1z0t1l0o3a2R3I0C1y2d0t5E5i305x3S3Y1P3k4u3u3N0y2f3I2R0K2X4j0t002B564b0A002A2f003i1O4b4B1f0X0C315a2e3i0y4K0e5I311r222A1y4w2A2A0U4w310T3H0A4t3H4t0j3K0j2A2z2z0C4b4P3K0h2S03310X3K0n0o181y1C2z0o2g080h0n03220U3H1E1E2f230r0D0D0r4t2W2W320r1y2v2W0D2w0d0r2W0D1S0v512N51676h2C3o3o1r2y3U1b1z4q4N1z190o5B2w5p5p001P0l175N51511P211V0T2Z00050U2W4j0U3h4r0o4G4m430U0U0U0l30362143004j2e0U4m310w2C0r0r0D4E3u3H2W232k0j0w4K464s0u2a3u230u012z0s011G2R2R0O2C573u0I2454033u2L4Q19192C3R4p0k2G0u0b2W3n0J0T0J1j0t0p0n3M0p0U4X0P171y0U442a2B0K060t0t3B1a3I0x2K560x3A1B033g0A1G0A0A030A2w4P4P2f0Z111a2m1q1a392w0U0p2s22221V2r1a5c5g0X2B5t1X0C1V002S1q672W1X0U3q3I29002X672Z1V1r0Z2w4P2f110p222m2s1G110C5t2W294R1334130U4R4R342u1e221e4R342u1Q0K4s1Q4r3X2f1R1a0C6i6j6k1L2e6l1c0A6m32670p0r6n6n4c6n6n6n6n6n1F6V6n6n6n6n6o6p3z0S6n6q1T370t1G5p0S4e1x1E6r6n6n6n0Y0l6n6n6n6n6n6n6n6n6n6n6n6n6n6n6n6n6n6n6n6n6n463U2S6s6n060k2n0u0O0w55300u2z1E0B1C6n552t";
+var CJK_INDEX_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+var HANGUL_INITIALS = [
+  "g",
+  "kk",
+  "n",
+  "d",
+  "tt",
+  "l",
+  "m",
+  "b",
+  "pp",
+  "s",
+  "ss",
+  "",
+  "j",
+  "jj",
+  "ch",
+  "k",
+  "t",
+  "p",
+  "h"
+];
+var HANGUL_VOWELS = [
+  "a",
+  "ae",
+  "ya",
+  "yae",
+  "eo",
+  "e",
+  "yeo",
+  "ye",
+  "o",
+  "wa",
+  "wae",
+  "oe",
+  "yo",
+  "u",
+  "wo",
+  "we",
+  "wi",
+  "yu",
+  "eu",
+  "ui",
+  "i"
+];
+var HANGUL_FINALS = [
+  "",
+  "g",
+  "kk",
+  "gs",
+  "n",
+  "nj",
+  "nh",
+  "d",
+  "l",
+  "lg",
+  "lm",
+  "lb",
+  "ls",
+  "lt",
+  "lp",
+  "lh",
+  "m",
+  "b",
+  "bs",
+  "s",
+  "ss",
+  "ng",
+  "j",
+  "ch",
+  "k",
+  "t",
+  "p",
+  "h"
+];
+
+// packages/core/src/entity/translit.ts
+var blocks = /* @__PURE__ */ new Map();
+var readings;
+var digit = new Map([...CJK_INDEX_ALPHABET].map((c, i) => [c, i]));
+function isSyllableChar(cp) {
+  return cp >= 19968 && cp <= 40959 || cp >= 44032 && cp <= 55203;
+}
+function transliterateChar(cp) {
+  if (cp <= 127) return String.fromCodePoint(cp);
+  if (cp >= 19968 && cp <= 40959) {
+    readings ??= CJK_READINGS.split("|");
+    const i = (cp - 19968) * 2;
+    const n = (digit.get(CJK_INDEX[i]) ?? 0) * CJK_INDEX_ALPHABET.length + (digit.get(CJK_INDEX[i + 1]) ?? 0);
+    return readings[n] ?? "";
+  }
+  if (cp >= 44032 && cp <= 55203) {
+    const s = cp - 44032;
+    const t = s % 28;
+    const v = Math.floor(s / 28) % 21;
+    const l = Math.floor(s / 28 / 21);
+    const out = `${HANGUL_INITIALS[l]}${HANGUL_VOWELS[v]}${HANGUL_FINALS[t]}`;
+    return out.charAt(0).toUpperCase() + out.slice(1);
+  }
+  const num2 = cp >>> 8;
+  let b = blocks.get(num2);
+  if (!b) {
+    const raw = TRANSLIT_BLOCKS[num2];
+    if (raw === void 0) return "";
+    b = raw.split("	");
+    blocks.set(num2, b);
+  }
+  return b[cp & 255] ?? "";
+}
+function transliterate(s, opts = {}) {
+  let out = "";
+  for (const c of s) {
+    const cp = c.codePointAt(0);
+    const t = transliterateChar(cp);
+    out += opts.syllables && isSyllableChar(cp) && t ? ` ${t} ` : t;
+  }
+  return opts.syllables ? out.replace(/\s+/g, " ").trim() : out;
+}
+function writtenSurnameFirst(s) {
+  for (const c of s) if (isSyllableChar(c.codePointAt(0))) return true;
+  return false;
+}
+
+// packages/core/src/entity/names.ts
+var NONE = { given: "different", surname: "different", swapped: false, score: 0 };
+function foldWord(s) {
+  return transliterate(s).toLowerCase().replace(/[^a-z]/g, "");
+}
+function foldWords(s) {
+  return transliterate(s).toLowerCase().split(/[\s\-‐–—_]+/).map((w) => w.replace(/[^a-z]/g, "")).filter(Boolean);
+}
+var cache = /* @__PURE__ */ new Map();
+function foldName(name) {
+  const key2 = typeof name === "string" || !name ? `w\0${name ?? ""}` : `p\0${name.first}\0${name.last}\0${name.full}`;
+  const hit = cache.get(key2);
+  if (hit) return hit;
+  const folded = fold(typeof name === "string" || !name ? parseName(name) : name);
+  if (cache.size > 5e4) cache.clear();
+  cache.set(key2, folded);
+  return folded;
+}
+function fold(parts) {
+  if (writtenSurnameFirst(parts.full)) {
+    const syl = transliterate(parts.full, { syllables: true }).toLowerCase().split(/[^a-z]+/).filter(Boolean);
+    if (syl.length < 2)
+      return { given: syl[0] ?? "", givenParts: syl, middles: [], surnames: [], eastAsian: true };
+    return {
+      given: syl.slice(1).join(""),
+      givenParts: syl.slice(1),
+      middles: [],
+      surnames: [syl[0]],
+      eastAsian: true
+    };
+  }
+  const givenParts = foldWords(parts.first);
+  const lastWords = parts.last ? parts.last.split(/\s+/).filter(Boolean) : [];
+  const all = parts.full.split(/\s+/).filter(Boolean);
+  const middles = all.length > 1 + lastWords.length ? all.slice(1, all.length - lastWords.length).map(foldWord).filter(Boolean) : [];
+  const surnameWords = foldWords(parts.last);
+  const core = surnameWords.filter((w) => !NAME_PARTICLES.has(w));
+  return {
+    given: givenParts.join(""),
+    givenParts,
+    middles,
+    surnames: core.length ? core : surnameWords,
+    eastAsian: false
+  };
+}
+var EAST_ASIAN_SURNAMES = {
+  // Korean (Revised Romanization → common spellings)
+  gim: ["kim"],
+  i: ["lee", "yi", "rhee", "li", "rhie"],
+  bag: ["park", "pak", "bak", "bahk"],
+  bak: ["park", "pak"],
+  choe: ["choi", "choy", "chey"],
+  jeong: ["jung", "chung", "jeung", "cheong"],
+  jo: ["cho", "joe"],
+  gang: ["kang"],
+  yun: ["yoon", "youn"],
+  jang: ["chang"],
+  im: ["lim", "yim", "rim"],
+  sin: ["shin", "sheen"],
+  o: ["oh"],
+  seo: ["suh", "seoh", "so"],
+  gwon: ["kwon"],
+  an: ["ahn"],
+  yu: ["yoo", "you", "ryu", "yoo"],
+  jeon: ["jun", "chun", "chon"],
+  go: ["ko", "koh"],
+  mun: ["moon"],
+  son: ["sohn"],
+  baeg: ["baek", "paik", "baik", "back"],
+  heo: ["huh", "hur", "her"],
+  sim: ["shim"],
+  no: ["noh", "roh"],
+  gu: ["koo", "ku"],
+  gwag: ["kwak"],
+  seong: ["sung"],
+  ju: ["joo", "chu"],
+  u: ["woo", "wu"],
+  ryu: ["ryu", "yoo", "yu"],
+  jin: ["chin"],
+  gil: ["kil"],
+  eom: ["um", "uhm"],
+  hyeon: ["hyun"],
+  byeon: ["byun"],
+  gong: ["kong"],
+  // Chinese (pinyin → Cantonese, Wade-Giles and other common spellings)
+  chen: ["chan", "tan", "chin"],
+  zhang: ["chang", "cheung", "cheong", "teo"],
+  huang: ["wong", "hwang", "ng", "ooi"],
+  wang: ["wong", "ong"],
+  li: ["lee", "lei", "lai", "ly"],
+  zhou: ["chow", "chou", "chau", "chew"],
+  liu: ["lau", "lew", "lowe", "liew"],
+  wu: ["ng", "woo", "goh", "ong"],
+  he: ["ho", "hoh", "hor"],
+  lin: ["lam", "lim", "ling"],
+  xu: ["hsu", "tsui", "hui", "koh"],
+  zheng: ["cheng", "chang", "tay", "teh"],
+  guo: ["kwok", "kuo", "kok", "quek"],
+  xie: ["tse", "hsieh", "chia", "seah"],
+  cai: ["tsai", "choi", "chua", "tsoi"],
+  yang: ["yeung", "yong", "yeo"],
+  liang: ["leung", "liong", "neo"],
+  luo: ["law", "lo", "loh"],
+  zhu: ["chu", "chew", "choo", "gee"],
+  hu: ["woo", "hoo", "oh"],
+  gao: ["ko", "kao", "koh"],
+  ye: ["yip", "yeh", "yap"],
+  deng: ["tang", "teng"],
+  zeng: ["tsang", "tseng", "chan"],
+  peng: ["pang", "phang"],
+  cao: ["tsao", "cho", "tso"],
+  jiang: ["chiang", "kong", "keung"],
+  su: ["so", "soh"],
+  lu: ["lo", "lui", "loo", "lou"],
+  xiao: ["siu", "hsiao", "seow"],
+  qiu: ["yau", "chiu", "khoo"],
+  feng: ["fung", "foong"],
+  tang: ["tong", "teng"],
+  du: ["to", "tu", "doo"],
+  shen: ["shum", "sham", "sim"],
+  zhao: ["chiu", "chao", "chew"],
+  sun: ["suen", "soon"],
+  han: ["hon"],
+  ma: ["mah"],
+  song: ["sung"],
+  wei: ["ngai"],
+  ou: ["au", "ow"],
+  ouyang: ["auyeung", "auyang", "owyang"]
+};
+function eastAsianSurnamesAgree(a, b) {
+  return a === b || !!EAST_ASIAN_SURNAMES[a]?.includes(b) || !!EAST_ASIAN_SURNAMES[b]?.includes(a);
+}
+var dmCache = /* @__PURE__ */ new Map();
+function dm(w) {
+  let codes = dmCache.get(w);
+  if (!codes) {
+    codes = doubleMetaphone(w);
+    if (dmCache.size > 2e4) dmCache.clear();
+    dmCache.set(w, codes);
+  }
+  return codes;
+}
+function soundsAlike(a, b) {
+  if (!a || !b || a.length < 2 || b.length < 2) return false;
+  if (jaroWinkler(a, b) < 0.8) return false;
+  const [p1, s1] = dm(a);
+  const [p2, s2] = dm(b);
+  return !!p1 && (p1 === p2 || p1 === s2 || !!s1 && (s1 === p2 || s1 === s2));
+}
+function compareGiven(x, y) {
+  const a = x.given;
+  const b = y.given;
+  if (!a || !b) return "different";
+  if (a === b) return "same";
+  if (a + x.middles.join("") === b || b + y.middles.join("") === a) return "same";
+  if (a.length === 1 || b.length === 1) {
+    const [initial, full] = a.length === 1 ? [a, b] : [b, a];
+    if (full.length > 1 && full.startsWith(initial)) return "initial";
+  }
+  const rel = firstNameRelation(a, b);
+  if (rel === "nickname") return "nickname";
+  if (rel === "ambiguous") return "ambiguous";
+  if (isFirstNameVariant(a, b)) return "variant";
+  if (b.length > 1 && x.middles.includes(b) || a.length > 1 && y.middles.includes(a)) return "middle";
+  if (soundsAlike(a, b)) return "phonetic";
+  return "different";
+}
+function compareSurname(x, y) {
+  if (!x.surnames.length || !y.surnames.length) return "missing";
+  const a = x.surnames.join("");
+  const b = y.surnames.join("");
+  if (a === b) return "same";
+  if ((x.eastAsian || y.eastAsian) && eastAsianSurnamesAgree(a, b)) return "same";
+  const inOther = (s, o) => s.every((w) => o.surnames.includes(w) || o.middles.includes(w));
+  if (inOther(x.surnames, y) || inOther(y.surnames, x)) return "partial";
+  const la = x.surnames[x.surnames.length - 1];
+  const lb = y.surnames[y.surnames.length - 1];
+  if (soundsAlike(la, lb) || soundsAlike(a, b)) return "phonetic";
+  if (Math.min(a.length, b.length) >= 5 && jaroWinkler(a, b) >= 0.93) return "phonetic";
+  return "different";
+}
+var SCORES = {
+  same: {
+    same: 1,
+    nickname: 1,
+    variant: 0.8,
+    ambiguous: 0.8,
+    phonetic: 0.8,
+    middle: 0.75,
+    initial: 0.6
+  },
+  partial: {
+    same: 0.85,
+    nickname: 0.8,
+    variant: 0.65,
+    ambiguous: 0.65,
+    phonetic: 0.65,
+    middle: 0.6,
+    initial: 0.5
+  },
+  phonetic: {
+    same: 0.85,
+    nickname: 0.8,
+    variant: 0.6,
+    ambiguous: 0.6,
+    phonetic: 0.6,
+    middle: 0.55,
+    initial: 0.5
+  },
+  // a lone first name ("Priya") is a name, but a weak one
+  missing: { same: 0.5, nickname: 0.45 },
+  different: {}
+};
+var runCache = /* @__PURE__ */ new WeakMap();
+function runTogether(n) {
+  let hit = runCache.get(n);
+  if (!hit) {
+    hit = permutations(n);
+    runCache.set(n, hit);
+  }
+  return hit;
+}
+function permutations(n) {
+  const parts = [n.given, ...n.middles, n.surnames.join("")].filter(Boolean);
+  if (parts.length < 2 || parts.length > 4) return [parts.join("")];
+  const out = /* @__PURE__ */ new Set();
+  const permute = (rest, acc) => {
+    if (!rest.length) out.add(acc);
+    for (let i = 0; i < rest.length; i++) permute([...rest.slice(0, i), ...rest.slice(i + 1)], acc + rest[i]);
+  };
+  permute(parts, "");
+  return [...out];
+}
+function compareNames(a, b) {
+  const x = isFolded(a) ? a : foldName(a);
+  const y = isFolded(b) ? b : foldName(b);
+  if (!x.given && !x.surnames.length) return NONE;
+  if (!y.given && !y.surnames.length) return NONE;
+  const given = compareGiven(x, y);
+  const surname = compareSurname(x, y);
+  const straight = SCORES[surname][given] ?? 0;
+  if (straight >= 0.95) return { given, surname, swapped: false, score: straight };
+  const east = x.eastAsian || y.eastAsian;
+  const xs = x.surnames.join("");
+  const ys = y.surnames.join("");
+  const swappedGiven = !!x.given && !!ys && x.given === ys;
+  const swappedSurname = !!xs && !!y.given && (xs === y.given || east && eastAsianSurnamesAgree(xs, y.given));
+  let swapped = swappedGiven && swappedSurname ? east ? 0.95 : 0.8 : 0;
+  if (!swapped) {
+    const ay = new Set(runTogether(y));
+    const same = runTogether(x).some((s) => s.length >= 4 && ay.has(s));
+    if (same) swapped = east ? 0.9 : 0.8;
+  }
+  if (swapped > straight) return { given: "same", surname: "same", swapped: true, score: swapped };
+  return { given, surname, swapped: false, score: straight };
+}
+function isFolded(v) {
+  return !!v && typeof v === "object" && "givenParts" in v;
+}
+function nameAgreement(a, b) {
+  const c = compareNames(a, b);
+  if (c.surname !== "same" && c.surname !== "partial") return void 0;
+  if (c.given === "same") return "same";
+  if (c.given === "nickname" || c.given === "variant") return c.surname === "same" ? "nickname" : void 0;
+  return void 0;
+}
+function givenNamesRelated(x, y) {
+  const g = compareGivenCheap(x, y);
+  return g !== "different";
+}
+function compareGivenCheap(x, y) {
+  const a = x.given;
+  const b = y.given;
+  if (!a || !b) return "different";
+  if (a === b) return "same";
+  if (a[0] !== b[0] && a.length > 1 && b.length > 1 && !x.middles.length && !y.middles.length) {
+    const rel = firstNameRelation(a, b);
+    if (rel === "nickname" || rel === "ambiguous") return rel;
+    return isFirstNameVariant(a, b) ? "variant" : "different";
+  }
+  const g = compareGiven(x, y);
+  return g === "phonetic" ? "different" : g;
+}
+var keyCache = /* @__PURE__ */ new Map();
+function nameBlockKeys(n) {
+  const hit = keyCache.get(n);
+  if (hit) return hit;
+  const out = blockKeys(n);
+  if (keyCache.size > 5e4) keyCache.clear();
+  keyCache.set(n, out);
+  return out;
+}
+function blockKeys(n) {
+  const keys = /* @__PURE__ */ new Set();
+  const sur = n.surnames.join("");
+  if (sur) {
+    keys.add(`s:${sur}`);
+    for (const w of n.surnames) keys.add(`s:${w}`);
+    const [p] = dm(n.surnames[n.surnames.length - 1]);
+    if (p) keys.add(`d:${p}`);
+    if (n.eastAsian) for (const v of EAST_ASIAN_SURNAMES[sur] ?? []) keys.add(`s:${v}`);
+  }
+  if (n.given && sur) keys.add(`w:${[n.given, sur].sort().join(" ")}`);
+  return [...keys];
+}
+
 // packages/core/src/entity/resolve.ts
 var RESOLVE_WEIGHTS = {
   name_sim: 3,
@@ -11791,23 +12896,27 @@ var PERSONAL_EMAIL_DOMAINS = /* @__PURE__ */ new Set([
 function sigmoid3(x) {
   return 1 / (1 + Math.exp(-x));
 }
+var parsedNames = /* @__PURE__ */ new Map();
+function parsed(raw) {
+  const key2 = raw ?? "";
+  let n = parsedNames.get(key2);
+  if (!n) {
+    n = parseName(raw);
+    if (parsedNames.size > 5e4) parsedNames.clear();
+    parsedNames.set(key2, n);
+  }
+  return n;
+}
 function incomingName(inc) {
-  return inc.firstName || inc.lastName ? nameFromParts(inc.firstName, inc.lastName) : parseName(inc.displayName);
+  return inc.firstName || inc.lastName ? nameFromParts(inc.firstName, inc.lastName) : parsed(inc.displayName);
 }
-var fold = (s) => stripDiacritics(s).toLowerCase();
-function initialMatches(a, b) {
-  const x = fold(a).replace(/\.$/, "");
-  const y = fold(b).replace(/\.$/, "");
-  if (!x || !y || x.length === y.length) return false;
-  const [initial, full] = x.length < y.length ? [x, y] : [y, x];
-  return initial.length === 1 && /^[a-z]$/.test(initial) && full.length > 1 && full.startsWith(initial);
-}
+var fold2 = (s) => transliterate(s).toLowerCase();
 function isPlaceholderName(p) {
   if (p.namePlaceholder) return true;
   if (!p.displayName || p.displayName.includes("@") || p.displayName === "Unknown") return true;
   if (!p.primaryEmail) return false;
   if (p.displayName !== p.displayName.toLowerCase()) return false;
-  const squash = (x) => fold(x).replace(/[\s._+-]/g, "");
+  const squash = (x) => fold2(x).replace(/[\s._+-]/g, "");
   const local = p.primaryEmail.slice(0, p.primaryEmail.lastIndexOf("@")).replace(/\+.*$/, "");
   return squash(p.displayName) === squash(local);
 }
@@ -11820,20 +12929,28 @@ function emailEvidence(rawEmail, name, org, orgDomains, fuzzy = true) {
   if (name.first && name.last) {
     const local = emailLocalPart(email).replace(/\+.*$/, "").replace(/[\d._-]+/g, " ").trim();
     const compact2 = local.replace(/\s+/g, "");
-    const first = fold(name.first).replace(/[^a-z]/g, "");
+    const first = fold2(name.first).replace(/[^a-z]/g, "");
     const canon = canonicalFirstName(name.first).replace(/[^a-z]/g, "");
-    const last = fold(name.last).replace(/[^a-z]/g, "");
+    const last = fold2(name.last).replace(/[^a-z]/g, "");
+    const folded = foldName(name);
+    const lasts = [
+      ...new Set([last, folded.surnames.join(""), ...folded.surnames].filter((l) => l.length >= 2))
+    ];
+    const middles = folded.middles.filter((m) => m.length >= 2);
     const forms = /* @__PURE__ */ new Set();
     const variants = [...nameVariants(first)].map((v) => v.replace(/[^a-z]/g, "")).filter((v) => v.length >= 2);
-    for (const v of variants) {
-      forms.add(`${v}${last}`);
-      forms.add(`${last}${v}`);
-    }
-    for (const f of [first, canon]) {
-      forms.add(`${f}${last}`);
-      forms.add(`${f[0] ?? ""}${last}`);
-      forms.add(`${last}${f}`);
-      forms.add(`${f}${last[0] ?? ""}`);
+    for (const l of lasts) {
+      for (const v of variants) {
+        forms.add(`${v}${l}`);
+        forms.add(`${l}${v}`);
+      }
+      for (const f of [first, canon, ...middles]) {
+        if (!f) continue;
+        forms.add(`${f}${l}`);
+        forms.add(`${f[0] ?? ""}${l}`);
+        forms.add(`${l}${f}`);
+        forms.add(`${f}${l[0] ?? ""}`);
+      }
     }
     if (compact2 && forms.has(compact2)) nameSim = 1;
     else if (compact2 && last.length >= 4 && compact2.includes(last)) nameSim = 0.7;
@@ -11853,25 +12970,28 @@ function emailEvidence(rawEmail, name, org, orgDomains, fuzzy = true) {
   }
   return { nameSim, domainOrg };
 }
+function namesOf(inc, cand) {
+  const incName = incomingName(inc);
+  const candName = parsed(cand.displayName);
+  if (!incName.full || !candName.full || isPlaceholderName(cand))
+    return { given: "different", surname: "different", swapped: false, score: 0 };
+  return compareNames(incName, candName);
+}
+var LAST_SIM = {
+  same: 1,
+  phonetic: 0.85,
+  partial: 0.8,
+  missing: 0,
+  different: 0
+};
 function computeFeatures(inc, cand, ctx) {
   const incName = incomingName(inc);
-  const candName = parseName(cand.displayName);
+  const candName = parsed(cand.displayName);
   const candPlaceholder = isPlaceholderName(cand);
-  const rescale = (jw) => Math.max(0, (jw - 0.75) / 0.25);
-  const rel = firstNameRelation(incName.first, candName.first);
-  let nameSim = 0;
-  let lastSim = 0;
-  if (incName.full && candName.full && !candPlaceholder) {
-    const a = rel === "nickname" ? canonicalFirstName(incName.first) : fold(incName.first);
-    const b = rel === "nickname" ? canonicalFirstName(candName.first) : fold(candName.first);
-    nameSim = rescale(jaroWinkler(`${a} ${fold(incName.last)}`, `${b} ${fold(candName.last)}`));
-    lastSim = incName.last && candName.last ? rescale(jaroWinkler(fold(incName.last), fold(candName.last))) : 0;
-    if (rel === "ambiguous") nameSim = Math.min(0.8, Math.max(nameSim, lastSim === 1 ? 0.8 : 0));
-    if (lastSim === 1 && initialMatches(incName.first, candName.first)) nameSim = Math.max(nameSim, 0.6);
-    if (rel === "different" && lastSim === 1 && isFirstNameVariant(incName.first, candName.first))
-      nameSim = Math.max(nameSim, 0.8);
-  }
-  const firstNameVariant = incName.first && candName.first && !candPlaceholder && (rel === "nickname" || rel === "ambiguous" || isFirstNameVariant(incName.first, candName.first)) ? 1 : 0;
+  const names = namesOf(inc, cand);
+  const nameSim = names.score;
+  const lastSim = names.swapped ? 1 : LAST_SIM[names.surname];
+  const firstNameVariant = !candPlaceholder && incName.first && candName.first && (names.given === "nickname" || names.given === "variant" || names.given === "ambiguous") ? 1 : 0;
   const incOrg = normalizeCompany(inc.companyRaw);
   const candOrg = normalizeCompany(cand.currentOrganizationRaw);
   let orgMatch = 0;
@@ -11880,7 +13000,7 @@ function computeFeatures(inc, cand, ctx) {
     if (incOrg === candOrg) orgMatch = 1;
     else if (short2.length >= 4 && long.startsWith(`${short2} `)) orgMatch = 0.8;
     else if (jaroWinkler(incOrg, candOrg) >= 0.9) orgMatch = 0.5;
-    else orgMatch = nameSim === 1 && lastSim === 1 && rel === "same" ? -0.25 : -0.5;
+    else orgMatch = nameSim === 1 && lastSim === 1 && names.given === "same" ? -0.25 : -0.5;
   }
   const titleSim = inc.title && cand.currentTitle ? tokenJaccard(inc.title, cand.currentTitle) : 0;
   let emailNameSim = 0;
@@ -11919,10 +13039,27 @@ function addressOnlyScore(f) {
   if (f.email_name_sim >= 0.7 && f.domain_org_match >= 0.8) return 0.75;
   return 0;
 }
-function corroborated(f, rel, incomingAddressFitsName) {
-  const independent = incomingAddressFitsName >= 0.7 || f.domain_org_match > 0 || f.school_match > 0;
-  if (rel !== "same") return independent;
-  return independent || f.org_match >= 1;
+function numberedAddress(e) {
+  return /\d/.test(emailLocalPart(normalizeEmail(e)).replace(/\+.*$/, ""));
+}
+function workAddressFits(inc, cand, ctx) {
+  const incName = incomingName(inc);
+  const candName = parsed(cand.displayName);
+  const candOrg = normalizeCompany(cand.currentOrganizationRaw);
+  const candDomains = cand.currentOrganizationId ? ctx.orgDomains?.get(cand.currentOrganizationId) ?? [] : [];
+  if (inc.email) {
+    if (isPlaceholderName(cand) || numberedAddress(inc.email)) return false;
+    const e = emailEvidence(inc.email, candName, candOrg, candDomains, false);
+    return e.domainOrg > 0 && e.nameSim >= 0.7;
+  }
+  const incOrg = normalizeCompany(inc.companyRaw);
+  if (!incOrg || !incName.full) return false;
+  for (const ce of /* @__PURE__ */ new Set([...cand.primaryEmail ? [cand.primaryEmail] : [], ...cand.emails])) {
+    if (numberedAddress(ce)) continue;
+    const e = emailEvidence(ce, incName, incOrg, [], false);
+    if (e.domainOrg > 0 && e.nameSim >= 0.7) return true;
+  }
+  return false;
 }
 function employerConflict(inc, cand, ctx, f) {
   const candOrg = normalizeCompany(cand.currentOrganizationRaw);
@@ -11941,18 +13078,20 @@ function employerConflict(inc, cand, ctx, f) {
 function scorePair(inc, cand, ctx) {
   const f = computeFeatures(inc, cand, ctx);
   const incName = incomingName(inc);
-  if (!incName.full || isPlaceholderName(cand)) return { score: addressOnlyScore(f), features: f };
+  if (!incName.full || isPlaceholderName(cand)) {
+    const sc = addressOnlyScore(f);
+    const numbered = [inc.email, cand.primaryEmail].some((e) => !!e && numberedAddress(e));
+    return { score: numbered ? Math.min(sc, AUTO_MERGE_THRESHOLD - 0.01) : sc, features: f };
+  }
   const scored = f.org_match > 0 && f.domain_org_match > 0 ? { ...f, domain_org_match: 0 } : f;
   let score = scoreFeatures(scored);
   if (f.name_sim < 0.5) score = Math.min(score, SUGGEST_THRESHOLD - 0.01);
-  const candName = parseName(cand.displayName);
-  const rel = firstNameRelation(incName.first, candName.first);
-  const incomingAddressFitsName = inc.email ? emailEvidence(inc.email, candName, "", [], true).nameSim : 0;
+  const names = namesOf(inc, cand);
+  const independent = workAddressFits(inc, cand, ctx) || f.school_match > 0;
   if (score >= AUTO_MERGE_THRESHOLD && // a bare initial fits many colleagues (Priya and Pooja Patel), and a look-alike employer is another firm
-  (!corroborated(f, rel, incomingAddressFitsName) || initialMatches(incName.first, candName.first) || employerConflict(inc, cand, ctx, f)))
+  (!independent || names.given === "initial" || employerConflict(inc, cand, ctx, f)))
     score = AUTO_MERGE_THRESHOLD - 0.01;
-  if (f.org_match > 0 && incomingAddressFitsName < 0.7 && f.domain_org_match === 0 && f.school_match === 0)
-    score = Math.min(score, NAME_ORG_ONLY_CAP);
+  if (f.org_match > 0 && !independent) score = Math.min(score, NAME_ORG_ONLY_CAP);
   return { score, features: f };
 }
 function differentLinkedInProfiles(a, b) {
@@ -11964,12 +13103,26 @@ function differentLinkedInProfiles(a, b) {
   const mb = b.linkedinMemberId;
   return !!ma && !!mb && ma !== mb;
 }
+function differentPhones(a, b, aVerified = true) {
+  if (!aVerified || !a.phones?.length || !b.phones?.length) return false;
+  return !a.phones.some((x) => b.phones.includes(x));
+}
+function sharePhone(a, b) {
+  return !!a.phones?.length && !!b.phones?.length && a.phones.some((x) => b.phones.includes(x));
+}
+function namesConflict(a, b) {
+  const c = compareNames(a, b);
+  return c.score === 0 && c.given === "different";
+}
 function resolveIdentity(inc, ctx) {
   const email = inc.email ? normalizeEmail(inc.email) : void 0;
   const slug = linkedInSlug(inc.linkedinUrl);
-  if (email && isRoleAddress(email) && !slug) return { kind: "role" };
+  const memberId = inc.linkedinMemberId || void 0;
+  const phones = [...new Set((inc.phones ?? []).filter(Boolean))];
+  if (email && isRoleAddress(email) && !slug && !memberId) return { kind: "role" };
   const people = ctx.people.filter((p) => p.id !== inc.personId && !rejected(ctx, inc.personId, p.id));
   const incName = incomingName(inc);
+  const profile = { linkedinSlug: slug, linkedinMemberId: memberId };
   for (const p of people) {
     if (email && (p.primaryEmail === email || p.emails.includes(email))) {
       const mergeWith = sameMailboxOtherName(p, incName, people, ctx);
@@ -11980,19 +13133,34 @@ function resolveIdentity(inc, ctx) {
     for (const p of people)
       if (p.linkedinSlug === slug) return { kind: "match", personId: p.id, via: "linkedin" };
   }
-  const others = slug ? people.filter((p) => !differentLinkedInProfiles({ linkedinSlug: slug }, p)) : people;
-  const incOrg = normalizeCompany(inc.companyRaw);
-  if (incName.normalized && incOrg) {
-    for (const p of others) {
-      if (isPlaceholderName(p)) continue;
-      if (email && (p.primaryEmail || p.emails.length)) continue;
-      if (parseName(p.displayName).normalized === incName.normalized && normalizeCompany(p.currentOrganizationRaw) === incOrg)
-        return { kind: "match", personId: p.id, via: "name_org" };
+  if (memberId) {
+    for (const p of people)
+      if (p.linkedinMemberId === memberId && !differentLinkedInProfiles(profile, p))
+        return { kind: "match", personId: p.id, via: "linkedin" };
+  }
+  if (phones.length) {
+    const owners = people.filter((p) => sharePhone(p, { phones }) && !differentLinkedInProfiles(profile, p));
+    const owner = owners.find((p) => !incName.full || isPlaceholderName(p) || !namesConflict(incName, p.displayName)) ?? owners[0];
+    if (owner) {
+      if (incName.full && !isPlaceholderName(owner) && namesConflict(incName, owner.displayName))
+        return {
+          kind: "suggest",
+          personId: owner.id,
+          score: SUGGEST_THRESHOLD + 0.1,
+          features: computeFeatures(inc, owner, ctx)
+        };
+      return { kind: "match", personId: owner.id, via: "phone" };
     }
   }
+  const others = people.filter(
+    (p) => !differentLinkedInProfiles(profile, p) && !differentPhones({ phones }, p, !!inc.phonesVerified)
+  );
   if (!incName.full && !email) return { kind: "new" };
-  const lastFold = fold(incName.last);
+  const incOrg = normalizeCompany(inc.companyRaw);
   const incDomain = email ? emailDomain(email) : void 0;
+  const incKeys = incName.full ? new Set(nameBlockKeys(foldName(incName))) : /* @__PURE__ */ new Set();
+  const incFolded = incName.full ? foldName(incName) : void 0;
+  const foldedKey = (f) => [f.given, ...f.surnames].join(" ");
   const candidates = others.filter((p) => {
     const placeholder = isPlaceholderName(p);
     const pDomains = [...new Set([p.primaryEmail, ...p.emails].filter(Boolean).map((e) => emailDomain(e)))];
@@ -12001,38 +13169,38 @@ function resolveIdentity(inc, ctx) {
       if (incDomain && !PERSONAL_EMAIL_DOMAINS.has(incDomain)) return true;
       return placeholder && !!incName.full && pDomains.length > 0;
     }
-    const pn = parseName(p.displayName);
-    if (lastFold && fold(pn.last) === lastFold) return true;
-    const rel = firstNameRelation(incName.first, pn.first);
-    const related = rel !== "different" || isFirstNameVariant(incName.first, pn.first);
+    const pf = foldName(p.displayName);
+    if (nameBlockKeys(pf).some((k) => incKeys.has(k))) return true;
+    const related = givenNamesRelated(incFolded, pf);
     if (related && (incOrg ? normalizeCompany(p.currentOrganizationRaw) === incOrg : true)) return true;
-    if (incDomain && pDomains.includes(incDomain) && rel !== "different") return true;
-    return jaroWinkler(pn.normalized, incName.normalized) >= 0.85;
+    if (incDomain && pDomains.includes(incDomain) && related) return true;
+    return jaroWinkler(foldedKey(pf), foldedKey(incFolded)) >= 0.85;
   });
-  let best;
-  for (const p of candidates) {
-    const { score, features } = scorePair(inc, p, ctx);
-    if (!best || score > best.score) best = { p, score, f: features };
-  }
+  const scored = candidates.map((p) => ({ p, ...scorePair(inc, p, ctx) })).sort((a, b) => b.score - a.score);
+  const best = scored[0];
   if (!best) return { kind: "new" };
-  if (best.score >= AUTO_MERGE_THRESHOLD)
-    return { kind: "probable", personId: best.p.id, score: best.score, features: best.f };
+  const tied = (scored[1]?.score ?? 0) >= AUTO_MERGE_THRESHOLD;
+  if (best.score >= AUTO_MERGE_THRESHOLD && !tied)
+    return { kind: "probable", personId: best.p.id, score: best.score, features: best.features };
   if (best.score >= SUGGEST_THRESHOLD)
-    return { kind: "suggest", personId: best.p.id, score: best.score, features: best.f };
+    return {
+      kind: "suggest",
+      personId: best.p.id,
+      score: Math.min(best.score, AUTO_MERGE_THRESHOLD - 0.01),
+      features: best.features
+    };
   return { kind: "new" };
 }
 function sameMailboxOtherName(owner, incName, people, ctx) {
   if (!incName.full || !incName.first || !incName.last || isPlaceholderName(owner)) return [];
-  const own = parseName(owner.displayName);
-  if (fold(own.last) !== fold(incName.last)) return [];
-  const ownRel = firstNameRelation(own.first, incName.first);
-  if (ownRel === "different" && !isFirstNameVariant(own.first, incName.first)) return [];
+  if (!nameAgreement(owner.displayName, incName)) return [];
   const out = [];
   for (const p of people) {
     if (p.id === owner.id || isPlaceholderName(p) || rejected(ctx, owner.id, p.id)) continue;
     if (p.primaryEmail || p.emails.length || !(p.linkedinSlug || p.linkedinUrl || p.linkedinMemberId))
       continue;
-    if (parseName(p.displayName).normalized !== incName.normalized) continue;
+    if (differentLinkedInProfiles(owner, p) || differentPhones(owner, p)) continue;
+    if (nameAgreement(p.displayName, incName) !== "same") continue;
     out.push(p.id);
   }
   return out;
@@ -13360,7 +14528,7 @@ function findBody(part) {
 var STRONG = 3;
 var GENERIC = 2;
 var THRESHOLD = 2;
-var fold2 = (s) => s.normalize("NFD").replace(/\p{M}/gu, "").replace(/[‘’]/g, "'");
+var fold3 = (s) => s.normalize("NFD").replace(/\p{M}/gu, "").replace(/[‘’]/g, "'");
 var escapeRe2 = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 var wordRe = (alt, flags) => new RegExp(`(?<![\\p{L}\\p{N}'])(?:${alt})(?![\\p{L}\\p{N}])`, `${flags}u`);
 var sentencesOf2 = (text) => text.split(/(?<!\b(?:Co|Inc|Ltd|Corp|Dr|Prof|Mr|Ms|Mrs|Jr|Sr|St|vs|etc|e\.g|i\.e))(?<=[.!?])\s+|\n+/).map((s) => s.trim()).filter(Boolean);
@@ -13649,7 +14817,7 @@ function readIntroduction(msg, people, userEmails, ctx = {}) {
     if (mine.has(e) || e === from) continue;
     const p = people.find((x) => x.emails.some((y) => lower(y) === e));
     if (!p?.isHuman || p.id === msg.fromPersonId || candidates.some((c) => c.person.id === p.id)) continue;
-    const first = fold2(p.firstName.trim());
+    const first = fold3(p.firstName.trim());
     if (first.length < 2) continue;
     candidates.push({
       person: p,
@@ -13665,12 +14833,12 @@ function readIntroduction(msg, people, userEmails, ctx = {}) {
     });
   }
   const isCandidateWord = (w) => candidates.some((c) => c.name.toLowerCase() === w.toLowerCase());
-  const students = (ctx.studentNames ?? []).map((n) => fold2(n.trim())).filter((n) => n.length >= 2).sort((a, b) => b.length - a.length);
+  const students = (ctx.studentNames ?? []).map((n) => fold3(n.trim())).filter((n) => n.length >= 2).sort((a, b) => b.length - a.length);
   const studentAlt = students.length ? students.map(escapeRe2).join("|") : void 0;
   const isStudentWord = (w) => !!studentAlt && new RegExp(`^(?:${studentAlt})$`, "i").test(w);
   const namesStudent = (text) => !!studentAlt && wordRe(studentAlt, "i").test(text);
   const byTitle = (text) => candidates.reduce((t, c) => {
-    const last = fold2(c.person.lastName?.trim() ?? "");
+    const last = fold3(c.person.lastName?.trim() ?? "");
     return last.length < 2 ? t : t.replace(
       new RegExp(
         `\\b(?:professor|prof\\.?|dr\\.?|mr\\.?|ms\\.?|mrs\\.?)\\s+${escapeRe2(last)}\\b`,
@@ -13679,11 +14847,11 @@ function readIntroduction(msg, people, userEmails, ctx = {}) {
       c.name
     );
   }, text);
-  const body = byTitle(fold2(msg.bodyText ?? ""));
+  const body = byTitle(fold3(msg.bodyText ?? ""));
   const caseless = !/[A-Z]/.test(body.replace(/\bI\b/g, "").replace(/\n[^\n]*$/, ""));
   const lowerOnly = new Set(
     candidates.filter(
-      (c) => !COMMON_WORD_NAMES.has(c.name.toLowerCase()) && !wordRe(escapeRe2(c.name), "").test(fold2(msg.bodyText ?? "")) && wordRe(escapeRe2(c.name.toLowerCase()), "").test(fold2(msg.bodyText ?? ""))
+      (c) => !COMMON_WORD_NAMES.has(c.name.toLowerCase()) && !wordRe(escapeRe2(c.name), "").test(fold3(msg.bodyText ?? "")) && wordRe(escapeRe2(c.name.toLowerCase()), "").test(fold3(msg.bodyText ?? ""))
     ).map((c) => c.person.id)
   );
   const mentions = (text, c, anyCase) => {
@@ -13713,13 +14881,13 @@ function readIntroduction(msg, people, userEmails, ctx = {}) {
     if (score >= STRONG && adminSentence) c.admin = true;
     else if (score >= STRONG) c.plainStrong = true;
   };
-  const rawSubject = byTitle(fold2(msg.subject ?? ""));
+  const rawSubject = byTitle(fold3(msg.subject ?? ""));
   const isReplySubject = REPLY_PREFIX.test(rawSubject);
   const subject = rawSubject.replace(REPLY_PREFIX, "").replace(FORWARD_PREFIX, "").trim();
   const subjectLower = subject.toLowerCase();
   const introTo = /\bintro(?:duction)?\s+to\s+([\p{L}'-]+)/u.exec(subjectLower);
   const subjectIntro = SUBJECT_INTRO.test(subjectLower) && !/\b(?:thanks|thank\s+you)\b/.test(subjectLower) && // "Connecting" over "Having trouble connecting to the Zoom?" is about a link, not people
-  !(!/\b(?:intro(?:duction)?s?|introducing)\b/.test(subjectLower) && TECH_CONNECT.test(fold2(msg.bodyText ?? "").toLowerCase())) && // "Intro to Systems": "intro to" counts only before a person
+  !(!/\b(?:intro(?:duction)?s?|introducing)\b/.test(subjectLower) && TECH_CONNECT.test(fold3(msg.bodyText ?? "").toLowerCase())) && // "Intro to Systems": "intro to" counts only before a person
   (!introTo || isCandidateWord(introTo[1]) || isStudentWord(introTo[1]));
   const pairNames = /* @__PURE__ */ new Set();
   for (const m of subject.matchAll(SUBJECT_PAIR)) {
@@ -14410,8 +15578,8 @@ async function ingestGmail(d, refs) {
       if (e instanceof GoogleApiError && e.status === 404) return;
       throw e;
     }
-    const parsed = (full.messages ?? []).map((m) => parseMail(m, self)).filter((m) => !!m);
-    if (parsed.length) byThread.set(tid, parsed);
+    const parsed2 = (full.messages ?? []).map((m) => parseMail(m, self)).filter((m) => !!m);
+    if (parsed2.length) byThread.set(tid, parsed2);
   });
   const items = [];
   for (const ms2 of byThread.values())

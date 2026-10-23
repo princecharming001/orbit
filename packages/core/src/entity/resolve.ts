@@ -3,17 +3,25 @@ import {
   canonicalFirstName,
   emailDomain,
   emailLocalPart,
-  firstNameRelation,
   linkedInSlug,
   type NameParts,
   nameFromParts,
   normalizeCompany,
   normalizeEmail,
   parseName,
-  stripDiacritics,
 } from '../text/normalize';
 import type { Affiliation, Person, PersonSource } from '../types';
-import { isFirstNameVariant, nameVariants } from './nicknames';
+import {
+  compareNames,
+  type FoldedName,
+  foldName,
+  givenNamesRelated,
+  type NameComparison,
+  nameAgreement,
+  nameBlockKeys,
+} from './names';
+import { nameVariants } from './nicknames';
+import { transliterate } from './translit';
 
 export interface IncomingIdentity {
   email?: string;
@@ -22,6 +30,18 @@ export interface IncomingIdentity {
   /** Separate name fields when the source has them (LinkedIn CSV); they win over `displayName`. */
   firstName?: string;
   lastName?: string;
+  /**
+   * Phone numbers in E.164 (+15551234567; entity/phone.ts `toE164` writes them). A number is one person's: a shared
+   * one is a match, like a shared address.
+   */
+  phones?: string[];
+  /**
+   * The numbers come from the student's Contacts, so they are this person's numbers: someone else in Orbit whose own
+   * numbers are all different is someone else (a hard negative), however alike the names.
+   */
+  phonesVerified?: boolean;
+  /** LinkedIn's member id (a live sync or a search result): one profile, so one person, like the profile URL */
+  linkedinMemberId?: string;
   companyRaw?: string;
   title?: string;
   school?: string;
@@ -63,8 +83,8 @@ export const RESOLVE_WEIGHTS: Record<keyof ResolveFeatures, number> & { bias: nu
 };
 
 /**
- * §2.5: two people with the same name at the same company are never merged on name and employer alone; without an
- * address or a school that fits, the score stops at 0.85 (a suggestion the student confirms).
+ * §2.5: two people with the same name at the same company are never merged on name and employer alone; without a
+ * work address that fits or a school, the score stops at 0.85 (a suggestion the student confirms).
  */
 export const NAME_ORG_ONLY_CAP = 0.85;
 
@@ -75,7 +95,8 @@ export type ResolveDecision =
   | {
       kind: 'match';
       personId: string;
-      via: 'email' | 'linkedin' | 'name_org';
+      /** the evidence: a shared address, LinkedIn profile (URL or member id) or phone number */
+      via: 'email' | 'linkedin' | 'phone';
       /**
        * Other people this identity proves to be the same person: the address belongs to `personId` and arrives under
        * the exact full name of someone known only from LinkedIn whose first name is a nickname of the owner's (Liz
@@ -167,14 +188,26 @@ function sigmoid(x: number): number {
   return 1 / (1 + Math.exp(-x));
 }
 
-/** The incoming name, from separate first/last fields when present, otherwise the display name. */
-export function incomingName(inc: IncomingIdentity): NameParts {
-  return inc.firstName || inc.lastName
-    ? nameFromParts(inc.firstName, inc.lastName)
-    : parseName(inc.displayName);
+const parsedNames = new Map<string, NameParts>();
+/** parseName, remembered: resolution reads the same stored names for every incoming record of an import. */
+function parsed(raw: string | undefined): NameParts {
+  const key = raw ?? '';
+  let n = parsedNames.get(key);
+  if (!n) {
+    n = parseName(raw);
+    if (parsedNames.size > 50_000) parsedNames.clear();
+    parsedNames.set(key, n);
+  }
+  return n;
 }
 
-const fold = (s: string) => stripDiacritics(s).toLowerCase();
+/** The incoming name, from separate first/last fields when present, otherwise the display name. */
+export function incomingName(inc: IncomingIdentity): NameParts {
+  return inc.firstName || inc.lastName ? nameFromParts(inc.firstName, inc.lastName) : parsed(inc.displayName);
+}
+
+/** Lower-case Latin letters, whatever the script ("Łukasz" → "lukasz", "Иван" → "ivan"). */
+const fold = (s: string) => transliterate(s).toLowerCase();
 
 /** True when one first name is a bare initial ("P." or "P") and the other is a full name starting with it. */
 export function initialMatches(a: string, b: string): boolean {
@@ -225,20 +258,30 @@ function emailEvidence(
     const first = fold(name.first).replace(/[^a-z]/g, '');
     const canon = canonicalFirstName(name.first).replace(/[^a-z]/g, '');
     const last = fold(name.last).replace(/[^a-z]/g, '');
+    // the whole surname and each of its parts (garcia.marquez@ or garcia@ for Gabriel García Márquez), and a middle
+    // name the person may go by (robert.oppenheimer@ for J. Robert Oppenheimer)
+    const folded = foldName(name);
+    const lasts = [
+      ...new Set([last, folded.surnames.join(''), ...folded.surnames].filter((l) => l.length >= 2)),
+    ];
+    const middles = folded.middles.filter((m) => m.length >= 2);
     const forms = new Set<string>();
     // the address may spell a nickname of the name (lizchen@ for Elizabeth Chen): §2.1's first-name-variant key
     const variants = [...nameVariants(first)]
       .map((v) => v.replace(/[^a-z]/g, ''))
       .filter((v) => v.length >= 2);
-    for (const v of variants) {
-      forms.add(`${v}${last}`);
-      forms.add(`${last}${v}`);
-    }
-    for (const f of [first, canon]) {
-      forms.add(`${f}${last}`);
-      forms.add(`${f[0] ?? ''}${last}`);
-      forms.add(`${last}${f}`);
-      forms.add(`${f}${last[0] ?? ''}`);
+    for (const l of lasts) {
+      for (const v of variants) {
+        forms.add(`${v}${l}`);
+        forms.add(`${l}${v}`);
+      }
+      for (const f of [first, canon, ...middles]) {
+        if (!f) continue;
+        forms.add(`${f}${l}`);
+        forms.add(`${f[0] ?? ''}${l}`);
+        forms.add(`${l}${f}`);
+        forms.add(`${f}${l[0] ?? ''}`);
+      }
     }
     if (compact && forms.has(compact)) nameSim = 1;
     else if (compact && last.length >= 4 && compact.includes(last)) nameSim = 0.7;
@@ -266,34 +309,37 @@ function emailEvidence(
   return { nameSim, domainOrg };
 }
 
+/** How the names compare (none when either side has no real name). */
+function namesOf(inc: IncomingIdentity, cand: Person): NameComparison {
+  const incName = incomingName(inc);
+  const candName = parsed(cand.displayName);
+  if (!incName.full || !candName.full || isPlaceholderName(cand))
+    return { given: 'different', surname: 'different', swapped: false, score: 0 };
+  return compareNames(incName, candName);
+}
+
+const LAST_SIM: Record<NameComparison['surname'], number> = {
+  same: 1,
+  phonetic: 0.85,
+  partial: 0.8,
+  missing: 0,
+  different: 0,
+};
+
 export function computeFeatures(inc: IncomingIdentity, cand: Person, ctx: ResolveContext): ResolveFeatures {
   const incName = incomingName(inc);
-  const candName = parseName(cand.displayName);
+  const candName = parsed(cand.displayName);
   const candPlaceholder = isPlaceholderName(cand);
-  // Jaro-Winkler is generous (two different names often score 0.7); rescale so only near-identical names count.
-  const rescale = (jw: number) => Math.max(0, (jw - 0.75) / 0.25);
-  const rel = firstNameRelation(incName.first, candName.first);
-  let nameSim = 0;
-  let lastSim = 0;
-  if (incName.full && candName.full && !candPlaceholder) {
-    const a = rel === 'nickname' ? canonicalFirstName(incName.first) : fold(incName.first);
-    const b = rel === 'nickname' ? canonicalFirstName(candName.first) : fold(candName.first);
-    nameSim = rescale(jaroWinkler(`${a} ${fold(incName.last)}`, `${b} ${fold(candName.last)}`));
-    lastSim =
-      incName.last && candName.last ? rescale(jaroWinkler(fold(incName.last), fold(candName.last))) : 0;
-    // a shared short form (Alex: Alexander or Alexandra) is a weaker match than a real nickname
-    if (rel === 'ambiguous') nameSim = Math.min(0.8, Math.max(nameSim, lastSim === 1 ? 0.8 : 0));
-    // "P. Patel" and "Priya Patel": a matching initial with the same surname is a partial name match
-    if (lastSim === 1 && initialMatches(incName.first, candName.first)) nameSim = Math.max(nameSim, 0.6);
-    // a nickname only the vendored table knows (Kit/Christopher): as strong as a shared short form
-    if (rel === 'different' && lastSim === 1 && isFirstNameVariant(incName.first, candName.first))
-      nameSim = Math.max(nameSim, 0.8);
-  }
+  // one matcher for every name comparison (entity/names.ts): scripts, accents, nicknames, middle names, initials,
+  // double surnames and surname-first order
+  const names = namesOf(inc, cand);
+  const nameSim = names.score;
+  const lastSim = names.swapped ? 1 : LAST_SIM[names.surname];
   const firstNameVariant =
+    !candPlaceholder &&
     incName.first &&
     candName.first &&
-    !candPlaceholder &&
-    (rel === 'nickname' || rel === 'ambiguous' || isFirstNameVariant(incName.first, candName.first))
+    (names.given === 'nickname' || names.given === 'variant' || names.given === 'ambiguous')
       ? 1
       : 0;
   const incOrg = normalizeCompany(inc.companyRaw);
@@ -306,7 +352,7 @@ export function computeFeatures(inc: IncomingIdentity, cand: Person, ctx: Resolv
     else if (jaroWinkler(incOrg, candOrg) >= 0.9) orgMatch = 0.5;
     // An identical full name at another employer is most often the same person after a job change:
     // keep it in the suggestion band instead of ruling it out.
-    else orgMatch = nameSim === 1 && lastSim === 1 && rel === 'same' ? -0.25 : -0.5;
+    else orgMatch = nameSim === 1 && lastSim === 1 && names.given === 'same' ? -0.25 : -0.5;
   }
   const titleSim = inc.title && cand.currentTitle ? tokenJaccard(inc.title, cand.currentTitle) : 0;
   // email evidence in both directions: incoming address vs the stored person, and stored addresses vs the incoming name
@@ -367,22 +413,41 @@ function addressOnlyScore(f: ResolveFeatures): number {
   return 0;
 }
 
+/** An address with a number in its name part (michael.chen2@, mchen88@): often a namesake's. */
+function numberedAddress(e: string): boolean {
+  return /\d/.test(emailLocalPart(normalizeEmail(e)).replace(/\+.*$/, ''));
+}
+
 /**
- * Evidence that does not come from the name itself. Auto-merging always needs some; when the first names
- * differ in writing (Bill/William, Alex/Alexandra) it must come from the address or the school, because a
- * shared employer is not enough to tell two colleagues apart.
+ * A work address that fits the name, at the employer the other record names: the one piece of address evidence that
+ * is not the name over again. Either the incoming address (jnunez@bain.com for a stored José Núñez at Bain), or, when
+ * the incoming record has no address of its own (a LinkedIn CSV row), a stored address at the incoming employer
+ * (dkim@stripe.com for "Daniel Kim, Stripe"). A free mailbox or a school address that spells the name is not
+ * evidence: anyone can be michaelchen@gmail.com, and it does not tie them to this Michael Chen. An incoming address
+ * that differs from the stored person's is not explained by a stored one either (a namesake writes from their own).
+ * A numbered address (michael.chen2@google.com) says the employer has more than one of that name, so it is no
+ * evidence of which one this is.
  */
-function corroborated(
-  f: ResolveFeatures,
-  rel: ReturnType<typeof firstNameRelation>,
-  incomingAddressFitsName: number,
-): boolean {
-  // Only the incoming address can say something new: the stored person's own address fitting the incoming
-  // name repeats the name match, so it never corroborates on its own.
-  const independent = incomingAddressFitsName >= 0.7 || f.domain_org_match > 0 || f.school_match > 0;
-  if (rel !== 'same') return independent;
-  // only the very same employer counts: "Bain" and "Bain Capital" look alike but are different firms
-  return independent || f.org_match >= 1;
+function workAddressFits(inc: IncomingIdentity, cand: Person, ctx: ResolveContext): boolean {
+  const incName = incomingName(inc);
+  const candName = parsed(cand.displayName);
+  const candOrg = normalizeCompany(cand.currentOrganizationRaw);
+  const candDomains = cand.currentOrganizationId
+    ? (ctx.orgDomains?.get(cand.currentOrganizationId) ?? [])
+    : [];
+  if (inc.email) {
+    if (isPlaceholderName(cand) || numberedAddress(inc.email)) return false;
+    const e = emailEvidence(inc.email, candName, candOrg, candDomains, false);
+    return e.domainOrg > 0 && e.nameSim >= 0.7;
+  }
+  const incOrg = normalizeCompany(inc.companyRaw);
+  if (!incOrg || !incName.full) return false;
+  for (const ce of new Set([...(cand.primaryEmail ? [cand.primaryEmail] : []), ...cand.emails])) {
+    if (numberedAddress(ce)) continue;
+    const e = emailEvidence(ce, incName, incOrg, [], false);
+    if (e.domainOrg > 0 && e.nameSim >= 0.7) return true;
+  }
+  return false;
 }
 
 /**
@@ -410,6 +475,16 @@ function employerConflict(
   return work;
 }
 
+/**
+ * The probability that an incoming identity is a stored person, with the evidence rules on top of the weights
+ * (Fellegi-Sunter style, plan 17 §A). Only a deterministic key (a shared address, LinkedIn profile or phone number;
+ * resolveIdentity) matches on its own. Otherwise:
+ * - the names have to agree first (Priya Patel and Arjun Patel at Figma are two people);
+ * - auto-merging (≥ AUTO_MERGE_THRESHOLD) needs evidence that is not the name: a work address that fits the name at
+ *   the employer the other record names, or the same school. A shared employer alone, or a name spelled in a free
+ *   mailbox address, stays a suggestion the student confirms: namesakes are common, at big employers most of all;
+ * - an initial (P. Patel) never auto-merges, nor does a look-alike employer (Bain Capital for Bain & Company).
+ */
 export function scorePair(
   inc: IncomingIdentity,
   cand: Person,
@@ -417,28 +492,28 @@ export function scorePair(
 ): { score: number; features: ResolveFeatures } {
   const f = computeFeatures(inc, cand, ctx);
   const incName = incomingName(inc);
-  if (!incName.full || isPlaceholderName(cand)) return { score: addressOnlyScore(f), features: f };
+  if (!incName.full || isPlaceholderName(cand)) {
+    // a numbered address (mchen2@) at the employer may be any of its Michael Chens: asked, not merged
+    const sc = addressOnlyScore(f);
+    const numbered = [inc.email, cand.primaryEmail].some((e) => !!e && numberedAddress(e));
+    return { score: numbered ? Math.min(sc, AUTO_MERGE_THRESHOLD - 0.01) : sc, features: f };
+  }
   // an address at the employer both already list is the employer again, not a second piece of evidence:
   // colleagues share it
   const scored = f.org_match > 0 && f.domain_org_match > 0 ? { ...f, domain_org_match: 0 } : f;
   let score = scoreFeatures(scored);
   // the names have to agree before anything else counts (Priya Patel and Arjun Patel at Figma are two people)
   if (f.name_sim < 0.5) score = Math.min(score, SUGGEST_THRESHOLD - 0.01);
-  const candName = parseName(cand.displayName);
-  const rel = firstNameRelation(incName.first, candName.first);
-  const incomingAddressFitsName = inc.email ? emailEvidence(inc.email, candName, '', [], true).nameSim : 0;
+  const names = namesOf(inc, cand);
+  const independent = workAddressFits(inc, cand, ctx) || f.school_match > 0;
   if (
     score >= AUTO_MERGE_THRESHOLD &&
     // a bare initial fits many colleagues (Priya and Pooja Patel), and a look-alike employer is another firm
-    (!corroborated(f, rel, incomingAddressFitsName) ||
-      initialMatches(incName.first, candName.first) ||
-      employerConflict(inc, cand, ctx, f))
+    (!independent || names.given === 'initial' || employerConflict(inc, cand, ctx, f))
   )
     score = AUTO_MERGE_THRESHOLD - 0.01;
-  // Name and employer alone never tell two namesakes at one company apart (§2.5). The stored person's own address
-  // fitting the name repeats the name match, so only the incoming address, a domain or a school lifts the cap.
-  if (f.org_match > 0 && incomingAddressFitsName < 0.7 && f.domain_org_match === 0 && f.school_match === 0)
-    score = Math.min(score, NAME_ORG_ONLY_CAP);
+  // Name and employer alone never tell two namesakes at one company apart (§2.5)
+  if (f.org_match > 0 && !independent) score = Math.min(score, NAME_ORG_ONLY_CAP);
   return { score, features: f };
 }
 
@@ -462,14 +537,46 @@ export function differentLinkedInProfiles(
   return !!ma && !!mb && ma !== mb;
 }
 
+/**
+ * Two people whose phone numbers are all different, each set from the student's Contacts, are two people (plan 17
+ * §A hard negatives): a Contacts card is one person, and two cards with their own numbers are two. `aVerified` says
+ * whether the first side's numbers come from Contacts (a stored person's numbers always do: Orbit files a number on
+ * someone only from Contacts or a number already theirs).
+ */
+export function differentPhones(
+  a: { phones?: readonly string[] },
+  b: { phones?: readonly string[] },
+  aVerified = true,
+): boolean {
+  if (!aVerified || !a.phones?.length || !b.phones?.length) return false;
+  return !a.phones.some((x) => b.phones!.includes(x));
+}
+
+/** True when two people share a phone number. */
+export function sharePhone(a: { phones?: readonly string[] }, b: { phones?: readonly string[] }): boolean {
+  return !!a.phones?.length && !!b.phones?.length && a.phones.some((x) => b.phones!.includes(x));
+}
+
+/**
+ * A number shared by people whose names say otherwise ("Mom" and "Jane Doe" on one home line; a phone passed on):
+ * the number is not enough on its own, the student is asked.
+ */
+function namesConflict(a: string | NameParts, b: string | NameParts): boolean {
+  const c = compareNames(a, b);
+  return c.score === 0 && c.given === 'different';
+}
+
 export function resolveIdentity(inc: IncomingIdentity, ctx: ResolveContext): ResolveDecision {
   const email = inc.email ? normalizeEmail(inc.email) : undefined;
   const slug = linkedInSlug(inc.linkedinUrl);
-  if (email && isRoleAddress(email) && !slug) return { kind: 'role' };
+  const memberId = inc.linkedinMemberId || undefined;
+  const phones = [...new Set((inc.phones ?? []).filter(Boolean))];
+  if (email && isRoleAddress(email) && !slug && !memberId) return { kind: 'role' };
   // the student said these are not the same person: never offered again, whatever the evidence
   const people = ctx.people.filter((p) => p.id !== inc.personId && !rejected(ctx, inc.personId, p.id));
   const incName = incomingName(inc);
-  // deterministic
+  const profile = { linkedinSlug: slug, linkedinMemberId: memberId };
+  // deterministic: an address, a LinkedIn profile (URL or member id), a phone number
   for (const p of people) {
     if (email && (p.primaryEmail === email || p.emails.includes(email))) {
       const mergeWith = sameMailboxOtherName(p, incName, people, ctx);
@@ -479,25 +586,38 @@ export function resolveIdentity(inc: IncomingIdentity, ctx: ResolveContext): Res
   if (slug)
     for (const p of people)
       if (p.linkedinSlug === slug) return { kind: 'match', personId: p.id, via: 'linkedin' };
-  // someone with another LinkedIn profile is someone else, however alike the names
-  const others = slug ? people.filter((p) => !differentLinkedInProfiles({ linkedinSlug: slug }, p)) : people;
-  const incOrg = normalizeCompany(inc.companyRaw);
-  if (incName.normalized && incOrg) {
-    for (const p of others) {
-      if (isPlaceholderName(p)) continue;
-      // an address the stored person does not have may be a namesake at the same company (§2.5): score it instead
-      if (email && (p.primaryEmail || p.emails.length)) continue;
-      if (
-        parseName(p.displayName).normalized === incName.normalized &&
-        normalizeCompany(p.currentOrganizationRaw) === incOrg
-      )
-        return { kind: 'match', personId: p.id, via: 'name_org' };
+  if (memberId)
+    for (const p of people)
+      if (p.linkedinMemberId === memberId && !differentLinkedInProfiles(profile, p))
+        return { kind: 'match', personId: p.id, via: 'linkedin' };
+  if (phones.length) {
+    const owners = people.filter((p) => sharePhone(p, { phones }) && !differentLinkedInProfiles(profile, p));
+    // several people on one number (a family line): the one whose name agrees, if any
+    const owner =
+      owners.find((p) => !incName.full || isPlaceholderName(p) || !namesConflict(incName, p.displayName)) ??
+      owners[0];
+    if (owner) {
+      if (incName.full && !isPlaceholderName(owner) && namesConflict(incName, owner.displayName))
+        return {
+          kind: 'suggest',
+          personId: owner.id,
+          score: SUGGEST_THRESHOLD + 0.1,
+          features: computeFeatures(inc, owner, ctx),
+        };
+      return { kind: 'match', personId: owner.id, via: 'phone' };
     }
   }
+  // hard negatives: someone with another LinkedIn profile, or with their own Contacts numbers, is someone else
+  const others = people.filter(
+    (p) => !differentLinkedInProfiles(profile, p) && !differentPhones({ phones }, p, !!inc.phonesVerified),
+  );
   if (!incName.full && !email) return { kind: 'new' };
   // blocking: only score people who could plausibly be the same
-  const lastFold = fold(incName.last);
+  const incOrg = normalizeCompany(inc.companyRaw);
   const incDomain = email ? emailDomain(email) : undefined;
+  const incKeys = incName.full ? new Set(nameBlockKeys(foldName(incName))) : new Set<string>();
+  const incFolded = incName.full ? foldName(incName) : undefined;
+  const foldedKey = (f: FoldedName) => [f.given, ...f.surnames].join(' ');
   const candidates = others.filter((p) => {
     const placeholder = isPlaceholderName(p);
     const pDomains = [...new Set([p.primaryEmail, ...p.emails].filter(Boolean).map((e) => emailDomain(e!)))];
@@ -507,38 +627,43 @@ export function resolveIdentity(inc: IncomingIdentity, ctx: ResolveContext): Res
       if (incDomain && !PERSONAL_EMAIL_DOMAINS.has(incDomain)) return true;
       return placeholder && !!incName.full && pDomains.length > 0;
     }
-    const pn = parseName(p.displayName);
-    if (lastFold && fold(pn.last) === lastFold) return true;
-    const rel = firstNameRelation(incName.first, pn.first);
-    const related = rel !== 'different' || isFirstNameVariant(incName.first, pn.first);
+    const pf = foldName(p.displayName);
+    if (nameBlockKeys(pf).some((k) => incKeys.has(k))) return true;
+    const related = givenNamesRelated(incFolded!, pf);
     if (related && (incOrg ? normalizeCompany(p.currentOrganizationRaw) === incOrg : true)) return true;
-    if (incDomain && pDomains.includes(incDomain) && rel !== 'different') return true;
-    return jaroWinkler(pn.normalized, incName.normalized) >= 0.85;
+    if (incDomain && pDomains.includes(incDomain) && related) return true;
+    return jaroWinkler(foldedKey(pf), foldedKey(incFolded!)) >= 0.85;
   });
-  let best: { p: Person; score: number; f: ResolveFeatures } | undefined;
-  for (const p of candidates) {
-    const { score, features } = scorePair(inc, p, ctx);
-    if (!best || score > best.score) best = { p, score, f: features };
-  }
+  const scored = candidates.map((p) => ({ p, ...scorePair(inc, p, ctx) })).sort((a, b) => b.score - a.score);
+  const best = scored[0];
   if (!best) return { kind: 'new' };
-  if (best.score >= AUTO_MERGE_THRESHOLD)
-    return { kind: 'probable', personId: best.p.id, score: best.score, features: best.f };
+  // two people fit as well as each other: which one is a question for the student (they may be one person too)
+  const tied = (scored[1]?.score ?? 0) >= AUTO_MERGE_THRESHOLD;
+  if (best.score >= AUTO_MERGE_THRESHOLD && !tied)
+    return { kind: 'probable', personId: best.p.id, score: best.score, features: best.features };
   if (best.score >= SUGGEST_THRESHOLD)
-    return { kind: 'suggest', personId: best.p.id, score: best.score, features: best.f };
+    return {
+      kind: 'suggest',
+      personId: best.p.id,
+      score: Math.min(best.score, AUTO_MERGE_THRESHOLD - 0.01),
+      features: best.features,
+    };
   return { kind: 'new' };
 }
 
 /**
  * Pairwise duplicate detection across an existing people list (run after imports). Only pairs whose names
- * agree (or that share an address or profile) are scored, so colleagues who share a surname and an employer
- * are not mistaken for one person; each pair is scored in both directions and the stronger reading wins.
+ * agree (or that share an address, profile or phone number) are scored, so colleagues who share a surname and an
+ * employer are not mistaken for one person; each pair is scored in both directions and the stronger reading wins.
+ * Two LinkedIn profiles, two sets of Contacts numbers, and pairs the student rejected are never paired.
  */
 export function findDuplicatePairs(
   people: Person[],
   ctx: Omit<ResolveContext, 'people'> = {},
 ): { a: Person; b: Person; score: number; features: ResolveFeatures }[] {
   const out: { a: Person; b: Person; score: number; features: ResolveFeatures }[] = [];
-  // blocking: same folded surname, or a shared address
+  // blocking: the name's keys (surname, its usual spellings and sound, both word orders), a shared address, phone
+  // number or LinkedIn member id
   const blocks = new Map<string, Person[]>();
   const add = (key: string, p: Person) => {
     const arr = blocks.get(key) ?? [];
@@ -547,10 +672,11 @@ export function findDuplicatePairs(
   };
   for (const p of people) {
     if (!p.isHuman) continue;
-    const l = fold(parseName(p.displayName).last);
-    if (l && !isPlaceholderName(p)) add(`last:${l}`, p);
+    if (!isPlaceholderName(p)) for (const k of nameBlockKeys(foldName(p.displayName))) add(`name:${k}`, p);
     for (const e of new Set([p.primaryEmail, ...p.emails].filter(Boolean)))
       add(`email:${normalizeEmail(e!)}`, p);
+    for (const ph of new Set(p.phones ?? [])) add(`phone:${ph}`, p);
+    if (p.linkedinMemberId) add(`member:${p.linkedinMemberId}`, p);
     if (isPlaceholderName(p) && p.primaryEmail) {
       // a bare address can only be linked through its domain
       const dom = emailDomain(normalizeEmail(p.primaryEmail));
@@ -575,6 +701,9 @@ export function findDuplicatePairs(
     displayName: isPlaceholderName(p) ? undefined : p.displayName,
     email: p.primaryEmail,
     linkedinUrl: p.linkedinUrl,
+    linkedinMemberId: p.linkedinMemberId,
+    phones: p.phones,
+    phonesVerified: true,
     companyRaw: p.currentOrganizationRaw,
     title: p.currentTitle,
     school: p.school,
@@ -591,13 +720,25 @@ export function findDuplicatePairs(
         seen.add(key);
         // two LinkedIn profiles are two people: a merge is only ever offered to join mail to a LinkedIn profile
         if (differentLinkedInProfiles(a, b)) continue;
+        // two people with their own, different numbers from Contacts are two people
+        if (differentPhones(a, b)) continue;
         const emailsA = new Set([a.primaryEmail, ...a.emails].filter(Boolean).map((e) => normalizeEmail(e!)));
         const sharedAddress = [b.primaryEmail, ...b.emails].some((e) => e && emailsA.has(normalizeEmail(e)));
-        const sharedProfile = !!a.linkedinSlug && a.linkedinSlug === b.linkedinSlug;
-        if (sharedAddress || sharedProfile) {
-          out.push({ a, b, score: 1, features: computeFeatures(asIncoming(a), b, full) });
+        const sharedProfile =
+          (!!a.linkedinSlug && a.linkedinSlug === b.linkedinSlug) ||
+          (!!a.linkedinMemberId && a.linkedinMemberId === b.linkedinMemberId);
+        const named = !isPlaceholderName(a) && !isPlaceholderName(b);
+        const nameScore = named ? compareNames(foldName(a.displayName), foldName(b.displayName)).score : 1;
+        if (sharedAddress || sharedProfile || sharePhone(a, b)) {
+          const features = computeFeatures(asIncoming(a), b, full);
+          // one number under two names that disagree (a home line): a question, not a certainty
+          const conflict =
+            !sharedAddress && !sharedProfile && named && namesConflict(a.displayName, b.displayName);
+          out.push({ a, b, score: conflict ? SUGGEST_THRESHOLD + 0.1 : 1, features });
           continue;
         }
+        // names that do not agree are never a suggestion (scorePair caps them below the bar): not scored at all
+        if (nameScore < 0.5) continue;
         let best: { score: number; features: ResolveFeatures } | undefined;
         for (const [x, y] of [
           [a, b],
@@ -615,10 +756,11 @@ export function findDuplicatePairs(
 }
 
 /**
- * People an address proves to be its owner under another name: the incoming name is a full name, it is the exact
- * name of someone known only from LinkedIn (no address of their own to disagree), and the owner's own first name is
- * that name or a nickname of it with the same surname. The same mailbox writing as "Liz Chen" and as "Elizabeth Chen"
- * is one person; a LinkedIn-only "Elizabeth Chen" is then that person too.
+ * People an address proves to be its owner under another name: the incoming name is a full name, it is the name of
+ * someone known only from LinkedIn (no address of their own to disagree, no other LinkedIn profile or numbers than
+ * the owner's), and the owner's own first name is that name or a nickname of it with the same surname. The same
+ * mailbox writing as "Liz Chen" and as "Elizabeth Chen" is one person; a LinkedIn-only "Elizabeth Chen" is then that
+ * person too.
  */
 function sameMailboxOtherName(
   owner: Person,
@@ -627,16 +769,14 @@ function sameMailboxOtherName(
   ctx: Pick<ResolveContext, 'doNotMerge'>,
 ): string[] {
   if (!incName.full || !incName.first || !incName.last || isPlaceholderName(owner)) return [];
-  const own = parseName(owner.displayName);
-  if (fold(own.last) !== fold(incName.last)) return [];
-  const ownRel = firstNameRelation(own.first, incName.first);
-  if (ownRel === 'different' && !isFirstNameVariant(own.first, incName.first)) return [];
+  if (!nameAgreement(owner.displayName, incName)) return [];
   const out: string[] = [];
   for (const p of people) {
     if (p.id === owner.id || isPlaceholderName(p) || rejected(ctx, owner.id, p.id)) continue;
     if (p.primaryEmail || p.emails.length || !(p.linkedinSlug || p.linkedinUrl || p.linkedinMemberId))
       continue;
-    if (parseName(p.displayName).normalized !== incName.normalized) continue;
+    if (differentLinkedInProfiles(owner, p) || differentPhones(owner, p)) continue;
+    if (nameAgreement(p.displayName, incName) !== 'same') continue;
     out.push(p.id);
   }
   return out;
