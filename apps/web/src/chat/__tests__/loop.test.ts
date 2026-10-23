@@ -2,6 +2,7 @@ import type { User } from '@orbit/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { wipeDatabase } from '../../db/schema';
 import { createLocalUser } from '../../engine/account';
+import { localRemember } from '../../engine/memoryLocal';
 import { MODEL } from '../../integrations/anthropic';
 import { clearPrefs, readPrefs, todaysLlmUsage, writePrefs } from '../../integrations/prefs';
 import { makeChatClient, setChatClientFactoryForTests } from '../agent/client';
@@ -276,6 +277,64 @@ describe('tools', () => {
     expect(tail[1].content).toEqual([{ type: 'text', text: 'second' }]);
     // one snapshot in the whole history: the second turn's was identical but for the clock
     expect(r3.body.messages.filter((m: { role: string }) => m.role === 'system')).toHaveLength(1);
+  });
+
+  it('appends only the Remembered line when the memories changed and nothing else did', async () => {
+    await localRemember(user.id, { text: 'Prefers morning calls', kind: 'preference' });
+    await turn('what times work for calls?', [{ text: 'Mornings.' }]);
+    await localRemember(user.id, { text: 'Targeting PM internships in New York', kind: 'goal_detail' });
+    await turn('who should I meet for PM internships?', [{ text: 'A few people.' }]);
+    // the same memories, in whatever order they rank for this message: nothing new to say
+    await turn('calls or internships first?', [{ text: 'Calls.' }]);
+    const rows = await store.messages(conversation.id);
+    expect(rows.map((r) => [r.role, r.meta ?? ''])).toEqual([
+      ['user', ''],
+      ['system', 'snapshot'],
+      ['assistant', ''],
+      ['user', ''],
+      ['system', 'memory'],
+      ['assistant', ''],
+      ['user', ''],
+      ['assistant', ''],
+    ]);
+    const textOf = (row: { content: unknown }) => (row.content as { text: string }[])[0]!.text;
+    // the snapshot carries the Remembered line last; the memory row is that line alone, in id order
+    expect(textOf(rows[1]!)).toMatch(/\nRemembered \(ids\): mem_\S+ Prefers morning calls\.$/);
+    expect(textOf(rows[4]!)).toMatch(/^Remembered \(ids\): mem_\S+ [^;]+; mem_\S+ [^;]+\.$/);
+    expect(textOf(rows[4]!)).not.toMatch(/Today is/);
+    const ids = textOf(rows[4]!).match(/mem_\S+/g)!;
+    expect(ids).toEqual([...ids].sort());
+    // every request replays the one before it unchanged
+    const reqs = messageRequests(fake);
+    expect(reqs).toHaveLength(3);
+    for (let i = 1; i < reqs.length; i++) {
+      const prev = reqs[i - 1]!.body.messages;
+      expect(JSON.stringify(reqs[i]!.body.messages.slice(0, prev.length))).toBe(JSON.stringify(prev));
+    }
+    expect(reqs[1]!.body.messages.slice(-3).map((m: { role: string }) => m.role)).toEqual([
+      'assistant',
+      'user',
+      'system',
+    ]);
+    expect(reqs[2]!.body.messages.slice(-2).map((m: { role: string }) => m.role)).toEqual([
+      'assistant',
+      'user',
+    ]);
+  });
+
+  it('sends a fresh snapshot after a compaction block, which stands in for the earlier one', async () => {
+    await turn('long chat', [{ compaction: { content: 'Summary so far.' }, text: 'Continuing.' }]);
+    await turn('and now?', [{ text: 'Still here.' }]);
+    const rows = await store.messages(conversation.id);
+    expect(rows.map((r) => [r.role, r.meta ?? ''])).toEqual([
+      ['user', ''],
+      ['system', 'snapshot'],
+      ['assistant', ''],
+      ['user', ''],
+      ['system', 'snapshot'],
+      ['assistant', ''],
+    ]);
+    expect(unpairedToolUses(rows)).toEqual([]);
   });
 
   it('answers a tool that throws with an is_error result and an error envelope, without the raw error in the copy', async () => {

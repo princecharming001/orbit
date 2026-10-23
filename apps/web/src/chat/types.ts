@@ -138,8 +138,11 @@ export interface ChatMessage {
   seq: number;
   role: 'user' | 'assistant' | 'system';
   content: unknown;
-  /** 'decision' = an Approve/Cancel line; 'snapshot' = an appended context block; 'error' = a failed turn note */
-  meta?: 'decision' | 'snapshot' | 'error';
+  /**
+   * 'decision' = an Approve/Cancel line; 'snapshot' = an appended context block; 'memory' = an appended context block
+   * holding only the Remembered line; 'error' = a failed turn note
+   */
+  meta?: 'decision' | 'snapshot' | 'memory' | 'error';
   model?: string;
   usage?: { input: number; output: number; cacheRead?: number; cacheWrite?: number };
   stopReason?: string;

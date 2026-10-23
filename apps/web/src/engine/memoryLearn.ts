@@ -4,6 +4,8 @@
  * fails, Orbit's own rules read clear statements (core/memory/extract.ts). Either way:
  *
  * - every memory's quote must be the student's own words, and nothing touching a sensitive topic is kept;
+ * - when Claude says a new memory replaces one it was shown ("Prefers evening calls" after "Prefers morning calls"),
+ *   the old one is forgotten, but only a memory of the same kind, about the same person, named by its exact text;
  * - recruiting targets they stated ("I'm targeting PM internships at fintech startups in New York") go to the goals
  *   that drafts and recommendations read and to the recruiting goal record (engine/goals.ts), and only targets that
  *   are in their words;
@@ -16,6 +18,7 @@ import {
   looksLikeCompany,
   looksLikeSchool,
   mayHoldFacts,
+  memoryKey,
   mergeHints,
   quoteIsFrom,
   sensitiveTopic,
@@ -25,13 +28,15 @@ import { claudeReachable, llmExtractMemories, overDailyCap } from '../integratio
 import { DEFAULT_DAILY_REQUEST_CAP, readPrefs, todaysLlmUsage } from '../integrations/prefs';
 import { applyRecruitingTargets, type RecruitingChange } from './goals';
 import { MEMORY_KINDS } from './memory';
-import { localMemories, localRemember } from './memoryLocal';
+import { localForget, localMemories, localRemember } from './memoryLocal';
 import { updateProfile } from './settings';
 
 export interface Learned {
   /** memories added this turn (not ones that were only refreshed) */
   memories: LocalMemory[];
   refreshed: number;
+  /** the texts of memories forgotten because a new one replaced them */
+  replaced: string[];
   goals?: RecruitingChange & { goal?: Goal };
   /** profile fields filled because they were empty */
   profile: string[];
@@ -60,8 +65,11 @@ async function personNamed(userId: string, name: string | null | undefined): Pro
   return first.length === 1 ? first[0]!.id : undefined;
 }
 
+/** A memory read from the turn, with the known memories (by text) it makes outdated. */
+type ReadMemory = StatedMemory & { replaces?: string[] };
+
 interface Found {
-  memories: StatedMemory[];
+  memories: ReadMemory[];
   recruiting?: RecruitingHints;
   profile?: ReturnType<typeof extractStatements>['profile'];
   via: 'claude' | 'rules';
@@ -71,7 +79,7 @@ interface Found {
 async function claudeRead(turns: ChatTurn[], said: string, known: string[]): Promise<Found | undefined> {
   const r = await llmExtractMemories(turns, known);
   if (!r) return undefined;
-  const memories: StatedMemory[] = [];
+  const memories: ReadMemory[] = [];
   for (const m of r.memories) {
     const text = m.text.replace(/\s+/g, ' ').trim().slice(0, 200);
     if (!text || !m.quote?.trim() || !quoteIsFrom(m.quote, said)) continue;
@@ -83,6 +91,7 @@ async function claudeRead(turns: ChatTurn[], said: string, known: string[]): Pro
       quote: m.quote.trim(),
       importance: Number.isFinite(m.importance) ? Math.max(0, Math.min(1, m.importance)) : 0.5,
       personName: m.person_name ?? undefined,
+      replaces: (m.replaces ?? []).filter((s) => typeof s === 'string' && s.trim()),
     });
   }
   const rec =
@@ -114,18 +123,20 @@ export async function learnFromTurn(
   const now = opts.now ?? new Date();
   const userTurns = turns.filter((t) => t.role === 'user');
   const last = userTurns[userTurns.length - 1]?.text ?? '';
-  const out: Learned = { memories: [], refreshed: 0, profile: [], via: 'rules' };
+  const out: Learned = { memories: [], refreshed: 0, replaced: [], profile: [], via: 'rules' };
   if (!last.trim()) return out;
   const rules = extractStatements(last);
   let found: Found = { ...rules, via: 'rules' };
   const tryClaude =
     (opts.claude ?? true) && mayHoldFacts(last) && claudeReachable('chat', 'memory') && budgetLeft();
+  // the memories Claude is shown, so it does not find them again and can say which one a new one replaces
+  const shown: LocalMemory[] = tryClaude ? (await localMemories(user.id)).slice(0, 20) : [];
   if (tryClaude) {
     const said = userTurns
       .slice(-2)
       .map((t) => t.text)
       .join('\n');
-    const known = (await localMemories(user.id)).slice(0, 20).map((m) => m.text);
+    const known = shown.map((m) => m.text);
     const read = await claudeRead(turns, said, known).catch(() => undefined);
     if (read)
       found = {
@@ -160,6 +171,18 @@ export async function learnFromTurn(
     if (!r) continue;
     if (r.deduped) out.refreshed++;
     else out.memories.push(r.memory);
+    // the student changed their mind: the memory this one replaces goes, when it is one Claude was shown, of the
+    // same kind, about the same person and named by its exact words (never the one the new text was merged into)
+    for (const old of m.replaces ?? []) {
+      const gone = shown.find(
+        (x) =>
+          x.id !== r.memory.id &&
+          x.kind === m.kind &&
+          (x.personId ?? null) === (personId ?? null) &&
+          memoryKey(x.text) === memoryKey(old),
+      );
+      if (gone && (await localForget(user.id, gone.id, now))) out.replaced.push(gone.text);
+    }
   }
 
   if (found.recruiting) {
@@ -214,6 +237,13 @@ export function learnedNote(l: Learned): string | undefined {
       `Noted for later: ${l.memories
         .slice(0, 3)
         .map((m) => m.text.replace(/[.\s]+$/, ''))
+        .join('; ')}.`,
+    );
+  if (l.replaced.length)
+    parts.push(
+      `Forgot the old version: ${l.replaced
+        .slice(0, 3)
+        .map((t) => t.replace(/[.\s]+$/, ''))
         .join('; ')}.`,
     );
   const a = l.goals?.added;

@@ -6966,7 +6966,8 @@ async function listMemories(db2, userId, personId) {
 }
 async function forgetMemory(db2, userId, id, now) {
   const rows = await db2.sql`
-    update orbit.memories set deleted_at = ${now}::timestamptz
+    update orbit.memories
+       set deleted_at = ${now}::timestamptz, text = '', quote = null, embedding = null, updated_at = ${now}::timestamptz
      where id = ${id}::uuid and user_id = ${userId}::uuid and deleted_at is null returning id`;
   return rows.length > 0;
 }

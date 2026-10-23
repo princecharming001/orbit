@@ -842,6 +842,8 @@ export interface LlmMemoryExtraction {
     person_name: string | null;
     importance: number;
     quote: string;
+    /** texts from <known> this memory makes outdated (the student changed their mind) */
+    replaces: string[];
   }[];
   recruiting: {
     functions: string[];
@@ -856,7 +858,7 @@ export interface LlmMemoryExtraction {
 export const MEMORY_EXTRACT_SYSTEM = [
   'You read the last turns of a chat between a college student and Orbit, their networking assistant, and pick out durable facts about the student worth remembering in later chats: preferences (how they like to meet or write), constraints (when they cannot meet, who they do not want to contact, what they are not interested in), details of their goals (roles, companies, industries, places, deadlines), outcomes (offers, interviews, referrals), their background (school, year, majors, past jobs), and facts about specific people they know.',
   'Rules: only what the student stated plainly about themselves or people they know, never what Orbit said, never a guess, a question, a maybe or what someone else wants. Skip small talk, requests to Orbit, and anything already in <known>. Never extract health, religion, politics, sexuality, family, age, ethnicity or immigration status.',
-  'Each memory: text in the third person about the student, at most 200 characters ("Prefers morning calls", "Targeting PM internships at fintech startups in New York"); quote copied exactly from the student\'s own words; importance 0 to 1.',
+  'Each memory: text in the third person about the student, at most 200 characters ("Prefers morning calls", "Targeting PM internships at fintech startups in New York"); quote copied exactly from the student\'s own words; importance 0 to 1; replaces: the exact texts from <known> that this memory makes outdated because the student changed their mind ("Prefers evening calls" replaces "Prefers morning calls"), else an empty list. Never list a known memory the new one merely adds to.',
   'recruiting: when the student said what jobs or internships they are going for, the kinds of work as codes (swe, pm, ib, consulting, data, design, finance, marketing, research, vc, ops), industries, places and company names exactly as they said them, the phrase they used and their quote; otherwise null.',
 ].join(' ');
 
@@ -873,6 +875,7 @@ export async function llmExtractMemories(
         person_name: z.string().nullable(),
         importance: z.number(),
         quote: z.string(),
+        replaces: z.array(z.string()),
       }),
     ),
     recruiting: z

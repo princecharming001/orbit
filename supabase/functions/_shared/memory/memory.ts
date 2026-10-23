@@ -180,9 +180,11 @@ export async function listMemories(db: Db, userId: string, personId?: string): P
   return rows.map(toItem);
 }
 
+/** Forget one memory: its words, quote and embedding are blanked and it is marked deleted (as the browser does). */
 export async function forgetMemory(db: Db, userId: string, id: string, now: Date): Promise<boolean> {
   const rows = await db.sql`
-    update orbit.memories set deleted_at = ${now}::timestamptz
+    update orbit.memories
+       set deleted_at = ${now}::timestamptz, text = '', quote = null, embedding = null, updated_at = ${now}::timestamptz
      where id = ${id}::uuid and user_id = ${userId}::uuid and deleted_at is null returning id`;
   return rows.length > 0;
 }

@@ -174,14 +174,22 @@ export class ChatStore {
     return rows.map((r) => ({ role: r.role, content: r.content as BetaMessageParam['content'] }));
   }
 
-  /** The text of the last snapshot the model will see again, if any (an orphaned one does not count). */
+  /**
+   * The context the model still sees: the text of the last snapshot row and of the last context row of either kind
+   * (a snapshot, or a memory-only row), among the rows that replay after the last compaction block. A compaction
+   * block stands in for everything before it, so a snapshot appended before one is gone for the model and a fresh
+   * one must go out; an orphaned snapshot does not count either.
+   */
+  async lastContextTexts(conversationId: string): Promise<{ snapshot?: string; memory?: string }> {
+    const rows = sinceCompaction(await this.replayableRows(conversationId)).reverse();
+    const snapshot = rows.find((r) => r.meta === 'snapshot');
+    const context = rows.find((r) => r.meta === 'snapshot' || r.meta === 'memory');
+    return { snapshot: snapshot && textOfRow(snapshot), memory: context && textOfRow(context) };
+  }
+
+  /** The text of the last snapshot the model will see again, if any. */
   async lastSnapshotText(conversationId: string): Promise<string | undefined> {
-    const rows = await this.replayableRows(conversationId);
-    const snap = [...rows].reverse().find((r) => r.meta === 'snapshot');
-    if (!snap) return undefined;
-    const content = snap.content as BetaContentBlockParam[] | string;
-    if (typeof content === 'string') return content;
-    return content.find((b) => b.type === 'text')?.text;
+    return (await this.lastContextTexts(conversationId)).snapshot;
   }
 
   // ---- actions (tool executions and pending confirmations) ----
@@ -223,6 +231,21 @@ export class ChatStore {
 }
 
 // ---- helpers over stored content ----
+
+function textOfRow(row: Pick<ChatMessage, 'content'>): string | undefined {
+  const content = row.content as BetaContentBlockParam[] | string;
+  if (typeof content === 'string') return content;
+  return content.find((b) => b.type === 'text')?.text;
+}
+
+/** The rows from the last one holding a server-side compaction block on; all of them when there is none. */
+export function sinceCompaction<R extends Pick<ChatMessage, 'content'>>(rows: R[]): R[] {
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const c = rows[i]!.content;
+    if (Array.isArray(c) && c.some((b) => b?.type === 'compaction')) return rows.slice(i);
+  }
+  return rows;
+}
 
 /** The `tool_use` blocks of an assistant message's content, in order. */
 export function toolUsesOf(content: unknown): Anthropic.Beta.BetaToolUseBlockParam[] {

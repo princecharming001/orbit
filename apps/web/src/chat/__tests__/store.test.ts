@@ -115,6 +115,47 @@ describe('append-only messages', () => {
     expect(await store.messages(c.id)).toHaveLength(6);
   });
 
+  it('forgets a snapshot that a compaction block stands in for, and reads the last Remembered line', async () => {
+    const c = await store.createConversation({ userId: 'u1', model: 'm', temporary: false });
+    const snap = (clock: string, more: string) =>
+      store.append(c.id, {
+        role: 'system',
+        content: [{ type: 'text', text: `Today is Mon 2026-10-12, ${clock}, UTC.\nA\n${more}` }],
+        meta: 'snapshot',
+      });
+    await store.append(c.id, { role: 'user', content: [{ type: 'text', text: 'one' }] });
+    await snap('09:41', 'Remembered (ids): mem_1 Prefers morning calls.');
+    await store.append(c.id, { role: 'assistant', content: [{ type: 'text', text: 'ok' }] });
+    await store.append(c.id, { role: 'user', content: [{ type: 'text', text: 'two' }] });
+    await store.append(c.id, {
+      role: 'system',
+      content: [{ type: 'text', text: 'Remembered (ids): mem_2 Targeting PM internships.' }],
+      meta: 'memory',
+    });
+    await store.append(c.id, { role: 'assistant', content: [{ type: 'text', text: 'sure' }] });
+    // the snapshot is the last one; the memory row is the newest context of either kind
+    expect(await store.lastContextTexts(c.id)).toEqual({
+      snapshot: 'Today is Mon 2026-10-12, 09:41, UTC.\nA\nRemembered (ids): mem_1 Prefers morning calls.',
+      memory: 'Remembered (ids): mem_2 Targeting PM internships.',
+    });
+    // a compaction block replaces everything before it: the model no longer sees that snapshot
+    await store.append(c.id, { role: 'user', content: [{ type: 'text', text: 'three' }] });
+    await store.append(c.id, {
+      role: 'assistant',
+      content: [
+        { type: 'compaction', content: 'Summary so far.', encrypted_content: 'enc' },
+        { type: 'text', text: 'Continuing.' },
+      ],
+    });
+    expect(await store.lastContextTexts(c.id)).toEqual({ snapshot: undefined, memory: undefined });
+    expect(await store.lastSnapshotText(c.id)).toBeUndefined();
+    await store.append(c.id, { role: 'user', content: [{ type: 'text', text: 'four' }] });
+    await snap('10:05', 'B');
+    await store.append(c.id, { role: 'assistant', content: [{ type: 'text', text: 'yes' }] });
+    expect(await store.lastSnapshotText(c.id)).toMatch(/10:05/);
+    expect((await store.history(c.id)).length).toBe(11);
+  });
+
   it('finds tool_use blocks without a tool_result in the next row', () => {
     const rows = [
       { role: 'user' as const, content: 'x' },

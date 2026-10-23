@@ -8,8 +8,9 @@
  *
  * In account mode, on the server:
  *
- * - Memory: a turn whose message is at least 20 characters sends the last two student turns and the replies after
- *   them to /memory/extract, which keeps what is worth remembering (Settings, Memory lists it).
+ * - Memory: a turn whose message is at least 20 characters and states something (not only a question or a request)
+ *   sends the last two student turns and the replies after them to /memory/extract, which keeps what is worth
+ *   remembering (Settings, Memory lists it).
  * - Goals: a turn whose message mentions plans (the §1.6 keywords) sends the last six turns to /goals/infer. The
  *   first proposal that is not already a goal is offered under the reply: "Want me to track this as a goal?" with
  *   tap-to-answer choices (the offer_choices widget). The offer is shown live and not stored, so the history the
@@ -18,7 +19,7 @@
  *   Yes choice ("Track a goal: <title>") as set_goal too. An offer lasts for the next turn of its conversation only.
  */
 import type { ChatTurn, ProposedGoal, User } from '@orbit/core';
-import { newId } from '@orbit/core';
+import { extractStatements, mayHoldFacts, newId } from '@orbit/core';
 import { activeGoals, GOAL_KIND_LABELS, inferGoalsFromChat } from '../../engine/goals';
 import { extractFromChat } from '../../engine/memory';
 import { learnedNote, learnFromTurn } from '../../engine/memoryLearn';
@@ -40,6 +41,17 @@ const OFFER_TTL_MS = 30 * 60_000;
 
 export function mentionsPlans(text: string): boolean {
   return PLAN_WORDS.test(text);
+}
+
+/**
+ * Worth a memory read on the server (§10.6, "a turn in which the user stated something"): long enough, and either a
+ * first-person statement that is not only a question or a request to Orbit, or a statement Orbit's own rules read
+ * ("don't contact Maya Chen"). A question like "who should I email about PM roles today?" costs no model call.
+ */
+export function worthRemembering(text: string): boolean {
+  const t = text.trim();
+  if (t.length < MEMORY_MIN_CHARS) return false;
+  return mayHoldFacts(t) || extractStatements(t).memories.length > 0;
 }
 
 function textOf(content: unknown): string {
@@ -163,7 +175,7 @@ export async function learnAfterTurn(o: AfterTurn): Promise<void> {
     const last = [...turns].reverse().find((t) => t.role === 'user');
     if (!last) return;
     await Promise.all([
-      last.text.trim().length >= MEMORY_MIN_CHARS
+      worthRemembering(last.text)
         ? extractFromChat(o.user, lastTurns(turns, 2)).catch(() => undefined)
         : undefined,
       mentionsPlans(last.text)

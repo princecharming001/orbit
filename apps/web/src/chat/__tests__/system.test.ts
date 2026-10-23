@@ -4,8 +4,8 @@ import { STABLE_SYSTEM_VERSION, stableSystemText, systemBlocks } from '../agent/
 const text = stableSystemText('0123456789abcdef');
 
 describe('stable system block', () => {
-  it('is version 9 and byte-identical for a conversation', () => {
-    expect(STABLE_SYSTEM_VERSION).toBe(10);
+  it('is version 11 and byte-identical for a conversation', () => {
+    expect(STABLE_SYSTEM_VERSION).toBe(11);
     expect(stableSystemText('0123456789abcdef')).toBe(text);
     expect(systemBlocks('0123456789abcdef')).toEqual([
       { type: 'text', text, cache_control: { type: 'ephemeral' } },
@@ -24,6 +24,8 @@ describe('stable system block', () => {
       /Never store health, religion, politics, sexuality, family or other sensitive details/,
     );
     expect(text).toMatch(/"Remembered:"/);
+    expect(text).toMatch(/The latest one is current; earlier ones are history/);
+    expect(text).toMatch(/holds only a "Remembered:" line updates that line/);
     expect(text).toMatch(/research_person/);
     expect(text).toMatch(/find_people/);
     expect(text).toMatch(/ask_for_intro drafts the request and a note to forward; it never sends/);
