@@ -7,14 +7,20 @@ import type { z } from '../providers/zod';
 /** Milliseconds since the epoch. */
 export type Clock = () => number;
 
-/** Model routing is by task (§13.1): `dossier` → Opus 5.5 medium, `sourcing_fit` → Haiku 5.5 low. */
-export type ClaudeTask = 'dossier' | 'sourcing_fit';
+/**
+ * Model routing is by task (§13.1): `dossier` → the writing model at medium effort, `sourcing_fit` → the fast model at
+ * low effort, `support` (deep research's check that each claim says what its source says) → the fast model at high
+ * effort.
+ */
+export type ClaudeTask = 'dossier' | 'sourcing_fit' | 'support';
 
 export interface ClaudePrompt {
   /** the stable, versioned instruction block (cached by the helper) */
   system: string;
   /** the per-call data, after the cache breakpoint */
   user: string;
+  /** give up after this long (deep research's deadline) */
+  timeoutMs?: number;
 }
 
 export type ClaudeParseResult<T> =

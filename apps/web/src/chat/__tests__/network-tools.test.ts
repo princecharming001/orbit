@@ -197,8 +197,6 @@ describe('local mode', () => {
 
   it('the account tools answer in plain words that they need an Orbit account, never an error', async () => {
     const reads: [string, Record<string, unknown>][] = [
-      ['research_person', { personId: 'p_priya' }],
-      ['get_dossier', { personId: 'p_priya' }],
       ['find_people', { purpose: 'sales' }],
       ['add_sourced', { recommendationIds: ['r1'] }],
       ['list_replies', {}],
@@ -270,11 +268,16 @@ describe('account mode, against a fake orbit-api', () => {
     expect(await db.tieLabels.get(P1)).toMatchObject({ closeness: 2 });
   });
 
-  it('research_person queues, then get_dossier shows the cited brief', async () => {
+  it('show_research never starts research: it says where the button is, then shows a brief once there is one', async () => {
     api.state.researchQueue.set(P1, fakeDossier(user.id, P1));
-    const queued = await execute('research_person', { personId: P1 }, ctx());
-    expect(queued.kind).toBe('text');
-    expect(queued.summary).toMatch(/Started researching Priya Shah/);
+    const where = await execute('show_research', { personId: P1 }, ctx());
+    expect(where.kind).toBe('text');
+    expect(where.summary).toMatch(/Deep research button on Priya Shah's About tab, not from the chat/);
+    expect(where.href).toBe(`/people/${P1}?tab=facts`);
+    // nothing was asked of the server: no research was queued
+    expect(api.state.dossiers.get(P1)).toBeUndefined();
+    // a brief the student ran on their page reads back, with its openers and sources
+    api.state.dossiers.set(P1, fakeDossier(user.id, P1));
     const got = await execute('get_dossier', { personId: P1 }, ctx());
     expect(got.kind).toBe('list');
     expect(got.summary).toMatch(/1 opener, 2 sources/);
@@ -284,9 +287,11 @@ describe('account mode, against a fake orbit-api', () => {
     const items = (got.data as { ui: { items: { chip?: string; links: { url: string }[] }[] } }).ui.items;
     expect(items.find((i) => i.chip === 'Opener')?.links[0]?.url).toBe('https://example.com/talk');
     expect(await db.dossiers.where('personId').equals(P1).count()).toBe(1);
+    const shown = await execute('show_research', { personId: P1 }, ctx());
+    expect(shown.kind).toBe('list');
   });
 
-  it('research_person asks which person when two match', async () => {
+  it('a "which one?" brief points to the About tab, where the student picks', async () => {
     api.state.dossiers.set(
       P1,
       fakeDossier(user.id, P1, {
@@ -297,12 +302,10 @@ describe('account mode, against a fake orbit-api', () => {
         ],
       }),
     );
-    const env = await execute('research_person', { personId: P1 }, ctx());
-    expect(env.kind).toBe('choices');
-    expect((env.data as { ui: { options: { label: string }[] } }).ui.options.map((o) => o.label)).toEqual([
-      'Priya Shah, Stripe',
-      'Priya Shah, Ramp',
-    ]);
+    const env = await execute('show_research', { personId: P1 }, ctx());
+    expect(env.kind).toBe('text');
+    expect(env.summary).toMatch(/Pick which one on their About tab/);
+    expect(JSON.stringify(modelResult('show_research', env))).toContain('Priya Shah, Ramp');
   });
 
   it('find_people ranks with reasons, says who you know, and add_sourced pulls the new people in', async () => {

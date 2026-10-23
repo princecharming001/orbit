@@ -1,12 +1,24 @@
 import type { Dossier, Person } from '@orbit/core';
 import { companyLogoUrl } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Copy, ExternalLink, Globe, RefreshCw } from 'lucide-react';
+import { Copy, ExternalLink, Globe, RefreshCw, Search, Trash2 } from 'lucide-react';
 import { type ReactNode, useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { db } from '../../db/schema';
+import {
+  type Allowance,
+  allowanceLine,
+  briefStale,
+  deleteBrief,
+  RESEARCH_FOOTER,
+  readAllowance,
+  researchBlocker,
+  startResearch,
+} from '../../engine/deepResearch';
 import { type Claim, type DossierView, dossierView, getDossier, researchPerson } from '../../engine/research';
 import { isServerUser } from '../../integrations/orbitApi';
-import { Button, Chip, cx, relDate, useToast } from '../../ui';
+import { useSession } from '../../state/session';
+import { Button, Chip, cx, relDate, Spinner, useToast } from '../../ui';
 import { CompanyLogo } from '../CompanyLogo';
 import { DossierCard } from './DossierCard';
 
@@ -105,8 +117,11 @@ const span = (start?: string, end?: string) =>
 /**
  * Everything Orbit found about someone, laid out to skim: who they are, their pages, their career with each
  * company's logo, school, the things they made or said (posts, talks, papers, news) with links, what you have in
- * common, good openers, what to be careful about, and every source. The research runs on the server (account mode);
- * the demo carries a few sample briefs.
+ * common, good openers, their company's news (Go deeper), what to be careful about, and every source.
+ *
+ * Research starts only here: the Deep research button (and Go deeper on the finished brief). With LinkedIn connected
+ * through Orbit the brief comes from orbit-research; the sample student gets sample briefs; account mode keeps the
+ * server's own queue (DossierCard).
  */
 export function ResearchDebrief({ person, userId }: { person: Person; userId: string }) {
   const stored = useLiveQuery(
@@ -117,6 +132,20 @@ export function ResearchDebrief({ person, userId }: { person: Person; userId: st
     [person.id],
   );
   const server = isServerUser(userId);
+  if (!server) return <DeepResearch person={person} stored={stored ?? null} />;
+  return <ServerDebrief person={person} userId={userId} stored={stored ?? null} />;
+}
+
+/** Account mode: the server researches through its queue; the card asks for it and waits. */
+function ServerDebrief({
+  person,
+  userId,
+  stored,
+}: {
+  person: Person;
+  userId: string;
+  stored: Dossier | null;
+}) {
   const [busy, setBusy] = useState(false);
   const alive = useRef(true);
   useEffect(() => {
@@ -127,10 +156,7 @@ export function ResearchDebrief({ person, userId }: { person: Person; userId: st
   }, []);
   const ready = stored && (stored.status === 'ready' || stored.status === 'partial');
   // anything but a finished brief (none yet, being researched, which one did you mean) is the research card's job
-  if (!ready) {
-    if (server) return <DossierCard person={person} userId={userId} />;
-    return null;
-  }
+  if (!ready) return <DossierCard person={person} userId={userId} />;
   const refresh = async () => {
     setBusy(true);
     try {
@@ -145,8 +171,156 @@ export function ResearchDebrief({ person, userId }: { person: Person; userId: st
       if (alive.current) setBusy(false);
     }
   };
+  return <Debrief d={stored as Dossier} person={person} onRefresh={refresh} busy={busy} />;
+}
+
+/**
+ * Deep research on the live site and in the demo: the Deep research button when there is no brief, the brief with Go
+ * deeper when there is. The month's count shows next to the buttons; dollars stay in Settings.
+ */
+function DeepResearch({ person, stored }: { person: Person; stored: Dossier | null }) {
+  const { user } = useSession();
+  const toast = useToast();
+  const [busy, setBusy] = useState<'quick' | 'deeper' | undefined>();
+  const [error, setError] = useState<string>();
+  const [blocker, setBlocker] = useState<string | null>();
+  const [left, setLeft] = useState<Allowance>();
+  const [stale, setStale] = useState(false);
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+  // what the card may offer: never a research call, only whether one is possible and how many are left
+  useEffect(() => {
+    if (!user) return;
+    void researchBlocker(user, person).then((b) => alive.current && setBlocker(b ?? null));
+    void readAllowance(user)
+      .then((a) => alive.current && setLeft(a))
+      .catch(() => undefined);
+  }, [user?.id, person.id, person.doNotContact, stored?.updatedAt]);
+  useEffect(() => {
+    if (stored) void briefStale(person, stored).then((s) => alive.current && setStale(s));
+  }, [stored?.updatedAt, person.headline, person.currentOrganizationRaw]);
+  if (!user || blocker === undefined) return null;
+  const first = person.firstName || 'them';
+  const run = async (kind: 'quick' | 'deeper', candidateIndex?: number) => {
+    setBusy(kind);
+    setError(undefined);
+    try {
+      const r = await startResearch(user, person.id, { kind, candidateIndex });
+      if (!alive.current) return;
+      if (!r.ok) setError(r.message);
+      setLeft(await readAllowance(user));
+    } finally {
+      if (alive.current) setBusy(undefined);
+    }
+  };
+  const ready = stored && (stored.status === 'ready' || stored.status === 'partial');
+  if (ready)
+    return (
+      <Debrief
+        d={stored}
+        person={person}
+        busy={busy === 'quick'}
+        onRefresh={stale ? () => void run('quick') : undefined}
+        stale={stale}
+        deeper={
+          !blocker && !(stored.content as { deeper?: unknown } | undefined)?.deeper
+            ? { run: () => void run('deeper'), busy: busy === 'deeper' }
+            : undefined
+        }
+        allowance={left}
+        error={error}
+        onDelete={async () => {
+          await deleteBrief(stored.id);
+          toast.push({ text: `Deleted the brief on ${first}, and the facts it added.` });
+        }}
+      />
+    );
+  const choosing = stored?.status === 'needs_disambiguation';
+  const v = choosing ? dossierView(stored) : undefined;
   return (
-    <Debrief d={stored as Dossier} person={person} onRefresh={server ? refresh : undefined} busy={busy} />
+    <div
+      className="rounded-[var(--radius-card)] border border-line bg-canvas p-5"
+      data-testid="research-card"
+    >
+      <div className="flex items-center gap-2">
+        <Search size={15} className="text-ink-3" aria-hidden />
+        <h2 className="text-[15px] font-medium">Deep research</h2>
+      </div>
+      {busy ? (
+        <p
+          className="mt-2 flex items-center gap-2 text-[13px] text-ink-3"
+          role="status"
+          data-testid="research-pending"
+        >
+          <Spinner /> Researching {first}. This takes about a minute.
+        </p>
+      ) : choosing && v ? (
+        <div className="mt-2" data-testid="research-choices">
+          <p className="text-[13px] text-ink-2">
+            More than one person matches {person.displayName}. Which one is yours?
+          </p>
+          <div className="mt-2 flex flex-col gap-1.5">
+            {v.candidates.map((c) => (
+              <Button
+                key={c.index}
+                size="sm"
+                variant="secondary"
+                className="justify-start whitespace-normal text-left h-auto py-1.5"
+                onClick={() => void run('quick', c.index)}
+                data-testid="research-choice"
+              >
+                {c.label}
+              </Button>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <>
+          <p className="mt-1.5 text-[13px] text-ink-3 leading-relaxed">
+            Orbit looks {first} up on LinkedIn and the public web: what they work on now, what they said or
+            made lately, what you have in common, and a few openers, every line with its source.
+          </p>
+          {blocker ? (
+            <p className="mt-3 text-[13px] text-ink-2" data-testid="research-blocked">
+              {blocker}{' '}
+              {/connect your linkedin/i.test(blocker) && (
+                <Link to="/settings/integrations" className="text-accent hover:underline">
+                  Open Settings
+                </Link>
+              )}
+            </p>
+          ) : (
+            <div className="mt-3 flex flex-wrap items-center gap-3">
+              <Button
+                size="sm"
+                variant="primary"
+                onClick={() => void run('quick')}
+                disabled={!!busy || left?.left === 0}
+                data-testid="research-start"
+              >
+                Deep research
+              </Button>
+              {left && (
+                <span className="text-[12px] text-ink-3" data-testid="research-allowance">
+                  {allowanceLine(left)}
+                </span>
+              )}
+            </div>
+          )}
+        </>
+      )}
+      {error && (
+        <p className="mt-2 text-[12.5px] text-bad" role="alert" data-testid="research-error">
+          {error}
+        </p>
+      )}
+      <p className="mt-3 text-[11.5px] text-ink-3">{RESEARCH_FOOTER}</p>
+    </div>
   );
 }
 
@@ -155,11 +329,23 @@ function Debrief({
   person,
   onRefresh,
   busy,
+  stale,
+  deeper,
+  allowance,
+  error,
+  onDelete,
 }: {
   d: Dossier;
   person: Person;
   onRefresh?: () => void;
   busy: boolean;
+  /** their LinkedIn changed since the brief (a new job or headline): the one time Refresh is offered */
+  stale?: boolean;
+  /** Go deeper, when it has not run yet */
+  deeper?: { run: () => void; busy: boolean };
+  allowance?: Allowance;
+  error?: string;
+  onDelete?: () => void;
 }) {
   const toast = useToast();
   const v = dossierView(d);
@@ -176,7 +362,7 @@ function Debrief({
   // what they did recently that is not already a highlight
   const titles = new Set(v.highlights.map((h) => h.title.toLowerCase()));
   const recently = v.recently.filter((r) => !titles.has(r.text.toLowerCase()));
-  const side = v.inCommon.length > 0 || v.openers.length > 0 || v.careful.length > 0;
+  const side = v.inCommon.length > 0 || v.openers.length > 0 || v.carefulClaims.length > 0;
   return (
     <div
       className="rounded-[var(--radius-card)] border border-line bg-canvas p-5"
@@ -208,6 +394,11 @@ function Debrief({
           </Button>
         )}
       </div>
+      {stale && (
+        <p className="mt-2 text-[12.5px] text-warn" data-testid="research-stale">
+          {first}'s LinkedIn shows a new job or headline since this brief. Refresh to research them again.
+        </p>
+      )}
       {(v.topics.length > 0 || v.profiles.length > 0) && (
         <div className="mt-3 flex flex-wrap items-center gap-1.5" data-testid="debrief-topics">
           {v.profiles.map((p) => (
@@ -331,6 +522,17 @@ function Debrief({
               </ul>
             </Block>
           )}
+          {v.company.length > 0 && (
+            <Block title={`At ${person.currentOrganizationRaw ?? 'their company'}`} testId="debrief-company">
+              <ul className="space-y-1.5 text-[13.5px] text-ink-2">
+                {v.company.map((c, i) => (
+                  <li key={i}>
+                    <ClaimLine claim={c} sources={sources} />
+                  </li>
+                ))}
+              </ul>
+            </Block>
+          )}
         </div>
         {side ? (
           <div className="min-w-0">
@@ -370,11 +572,14 @@ function Debrief({
                 </ul>
               </Block>
             )}
-            {v.careful.length > 0 && (
+            {v.carefulClaims.length > 0 && (
               <Block title="Be careful" testId="debrief-careful">
                 <ul className="space-y-1.5 text-[13px] text-warn">
-                  {v.careful.map((c, i) => (
-                    <li key={i}>{c}</li>
+                  {v.carefulClaims.map((c, i) => (
+                    <li key={i}>
+                      {c.text}
+                      <Refs ns={c.sources} sources={sources} />
+                    </li>
                   ))}
                 </ul>
               </Block>
@@ -419,6 +624,51 @@ function Debrief({
           )}
         </details>
       )}
+      {(deeper || error) && (
+        <div className="mt-4 flex flex-wrap items-center gap-3" data-testid="research-deeper-row">
+          {deeper && (
+            <Button
+              size="sm"
+              onClick={deeper.run}
+              disabled={deeper.busy || busy}
+              data-testid="research-deeper"
+            >
+              {deeper.busy ? <Spinner /> : null} {deeper.busy ? 'Going deeper' : 'Go deeper'}
+            </Button>
+          )}
+          {deeper && !deeper.busy && (
+            <span className="text-[12px] text-ink-3">
+              {(d.research?.strongPages ?? 1) > 0
+                ? `More about ${first}, and what is happening at their company.`
+                : `Their company's recent news and hiring.`}
+            </span>
+          )}
+          {deeper?.busy && (
+            <span className="text-[12px] text-ink-3" role="status" data-testid="research-deeper-pending">
+              Looking further. This takes about a minute.
+            </span>
+          )}
+          {error && (
+            <span className="text-[12.5px] text-bad" role="alert" data-testid="research-error">
+              {error}
+            </span>
+          )}
+        </div>
+      )}
+      <div className="mt-4 pt-3 border-t border-line-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11.5px] text-ink-3">
+        <span data-testid="research-footer">{RESEARCH_FOOTER}</span>
+        {allowance && <span data-testid="research-allowance">{allowanceLine(allowance)}</span>}
+        {onDelete && (
+          <button
+            type="button"
+            className="ml-auto inline-flex items-center gap-1 hover:text-bad"
+            onClick={onDelete}
+            data-testid="research-delete"
+          >
+            <Trash2 size={12} aria-hidden /> Delete brief
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -429,6 +679,21 @@ function ClaimLine({ claim, sources }: { claim: Claim; sources: Source[] }) {
       {claim.date ? <span className="text-ink-3">{claim.date} · </span> : null}
       {claim.text}
       <Refs ns={claim.sources} sources={sources} />
+      <Partly claim={claim} />
     </>
+  );
+}
+
+/** A claim its source only partly says: shown, marked, never used in a draft or a fact. */
+function Partly({ claim }: { claim: Pick<Claim, 'support'> }) {
+  if (claim.support !== 'partial') return null;
+  return (
+    <span
+      className="ml-1 text-[11px] text-ink-3"
+      title="Its source says only part of this, so Orbit does not use it in drafts or facts."
+      data-testid="claim-partly"
+    >
+      (partly supported)
+    </span>
   );
 }

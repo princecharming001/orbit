@@ -632,7 +632,7 @@ export const SCENARIOS: Scenario[] = [
     api: lenaResearch,
     goal: 'learn what Lena Novak works on now and get a good opener before writing',
     maxTurns: 5,
-    expectTools: [['research_person', 'get_dossier']],
+    expectTools: [['show_research', 'get_dossier']],
     minGoal: 'partly',
   },
   {
@@ -679,7 +679,7 @@ export const SCENARIOS: Scenario[] = [
     api: lenaResearch,
     goal: 'research Lena Novak before writing to her and pick an opener',
     maxTurns: 5,
-    expectTools: [['research_person', 'get_dossier']],
+    expectTools: [['show_research', 'get_dossier']],
     minGoal: 'partly',
   },
   {

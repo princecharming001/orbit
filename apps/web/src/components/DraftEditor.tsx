@@ -4,6 +4,7 @@ import {
   LINKEDIN_NOTE_TARGET,
   MAX_WORDS,
   MESSAGE_KIND_LABELS,
+  researchLine,
   WHY_THEM,
   WHY_THEM_GAP,
   wordsIn,
@@ -12,6 +13,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { db } from '../db/schema';
 import { regenerateDraft } from '../engine/brief';
+import { researchOpeners } from '../engine/deepResearch';
 import { restoreDraftText, saveDraftEdits as saveEdits } from '../engine/drafts';
 import { enableGmailSend } from '../engine/integrations';
 import { linkedInSendActive } from '../engine/linkedinLive';
@@ -684,6 +686,7 @@ export function DraftEditor({
           className="resize-none !text-[13.5px] !leading-[1.5] !py-1.5"
           aria-label="Message body"
         />
+        <ResearchChip personId={draft.personId} body={body} setBody={setBody} firstName={first} />
         <div className="mt-1.5 flex items-center gap-x-2 gap-y-1.5 flex-wrap text-[12px] text-ink-3">
           <span className="flex items-center gap-2 min-w-0 mr-auto">
             {note && (
@@ -893,6 +896,7 @@ export function DraftEditor({
         className="resize-none overflow-hidden"
         aria-label="Message body"
       />
+      <ResearchChip personId={draft.personId} body={body} setBody={setBody} firstName={first} />
       <div className="mt-2 flex items-center gap-3 text-[12px] text-ink-3 flex-wrap">
         {wc > max && (
           <span className="tabular text-warn" data-testid="draft-word-count">
@@ -1261,6 +1265,62 @@ export function OutboxStatus({
         </span>
         {actions}
       </div>
+    </div>
+  );
+}
+
+/**
+ * The draft's line from research (docs/plan/20 §6): when the message opens with the top opener of the brief the
+ * student ran on them, a chip says so, "from research [1]", linking to its source. Swap puts in the next opener the
+ * support check backed fully, and after the last, the student's own line.
+ */
+function ResearchChip({
+  personId,
+  body,
+  setBody,
+  firstName,
+}: {
+  personId: string;
+  body: string;
+  setBody: (b: string) => void;
+  firstName: string;
+}) {
+  const openers = useLiveQuery(() => researchOpeners(personId), [personId]) ?? [];
+  const lines = openers.map((o) => researchLine(o.text) ?? o.text);
+  const i = lines.findIndex((l) => body.includes(l));
+  if (i < 0) return null;
+  const o = openers[i]!;
+  const next = i + 1 < openers.length ? lines[i + 1]! : undefined;
+  const swap = () =>
+    setBody(body.replace(lines[i]!, next ?? `[${WHY_THEM}: one line only true of ${firstName}]`));
+  return (
+    <div
+      className="mt-1.5 flex flex-wrap items-center gap-2 text-[12px] text-ink-3"
+      data-testid="draft-research-chip"
+    >
+      {o.url ? (
+        <a
+          href={o.url}
+          target="_blank"
+          rel="noreferrer noopener"
+          className="inline-flex items-center h-6 px-2 rounded-full border border-line hover:text-ink"
+          title="The opening line comes from the research brief; this is its source"
+        >
+          from research [{o.ref}]
+        </a>
+      ) : (
+        <span className="inline-flex items-center h-6 px-2 rounded-full border border-line">
+          from research [{o.ref}]
+        </span>
+      )}
+      <button
+        type="button"
+        className="underline underline-offset-2 hover:text-ink"
+        onClick={swap}
+        data-testid="draft-research-swap"
+      >
+        {next ? 'Swap' : 'Write my own'}
+      </button>
     </div>
   );
 }

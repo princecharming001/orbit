@@ -262,12 +262,8 @@ export async function addSourced(s: Services, userId: string, ids: unknown): Pro
     const chatId = await ensureChat(db, userId, personId, rec.goal_id, now);
     await db.sql`
       update orbit.recommendations set status = 'added', person_id = ${personId}::uuid where id = ${rec.id}::uuid`;
-    await s.queue.enqueue({
-      kind: 'enrich.dossier',
-      userId,
-      payload: { personId, goalId: rec.goal_id },
-      dedupeKey: `dossier:${personId}`,
-    });
+    // no research is queued here: research on a person starts only when the student asks for it on their page
+    // (docs/plan/20, the founder's decision: no automatic or background research)
     const [p] = await db.sql<{ display_name: string; first_name: string | null }>`
       select display_name, first_name from orbit.people where id = ${personId}::uuid`;
     out.push({ id: personId, displayName: p?.display_name ?? firstNameOf({ display_name: c.name }), chatId });

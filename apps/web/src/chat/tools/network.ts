@@ -9,6 +9,7 @@ import { GOAL_KINDS, newId, REPLY_CLASSES } from '@orbit/core';
 import { db } from '../../db/schema';
 import { calendarInvitesAvailable, sendCalendarInvite } from '../../engine/calendarInvite';
 import { CLOSENESS_LABELS, type Closeness, explainScore, rateCloseness } from '../../engine/closeness';
+import { allowanceLine, readAllowance, researchMode } from '../../engine/deepResearch';
 import {
   archiveGoal,
   GOAL_KIND_LABELS,
@@ -35,7 +36,7 @@ import {
   listReplies,
   REPLY_CLASS_LABELS,
 } from '../../engine/replies';
-import { chooseCandidate, dossierView, getDossier, researchPerson } from '../../engine/research';
+import { dossierView, getDossier, localDossier } from '../../engine/research';
 import { addSourced, candidateLine, providerNames, searchPeople } from '../../engine/sourcing';
 import { callApi, isAccountMode, isServerUser } from '../../integrations/orbitApi';
 import { z } from '../../zod';
@@ -444,55 +445,57 @@ function disambiguation(
 ): ResultEnvelope {
   const v = dossierView(d);
   return ok(
-    'choices',
-    {
-      options: v.candidates.slice(0, 3).map((c) => ({
-        label: clip(c.label, 40) ?? `Person ${c.index + 1}`,
-        message: `Research the ${name} who is ${c.label} (candidate ${c.index + 1}).`,
-      })),
-    },
+    'text',
+    { status: 'needs_disambiguation', href: `/people/${personId}?tab=facts` },
     {
       status: 'needs_disambiguation',
       candidates: v.candidates.map((c) => ({ index: c.index, who: c.label })),
     },
-    `More than one ${name} matches. Ask which one they mean; then call research_person with candidateIndex.`,
-    `/people/${personId}`,
+    `More than one ${name} matches. Pick which one on their About tab, under Deep research.`,
+    `/people/${personId}?tab=facts`,
   );
 }
 
-export const researchPersonTool = defineTool({
-  name: 'research_person',
-  kind: 'write',
+/** Where research starts: the Deep research button on the person's About tab, never the chat. */
+const aboutTab = (personId: string) => `/people/${personId}?tab=facts`;
+
+/** The person's brief: the server's in account mode, this browser's otherwise. */
+async function briefOf(
+  ctx: ToolContext,
+  personId: string,
+): Promise<Parameters<typeof dossierView>[0] | null> {
+  if (accountReady(ctx)) {
+    const r = await getDossier(ctx.user, personId);
+    if (!r.ok) throw new Error(r.message);
+    return r.dossier ?? null;
+  }
+  return (await localDossier(personId)) ?? null;
+}
+
+export const showResearchTool = defineTool({
+  name: 'show_research',
+  kind: 'read',
   description:
-    'Call this when the student asks to research someone, look them up, find out what they are up to, or get openers before writing to them (personId from search_people). Orbit builds a short cited brief from their messages, LinkedIn and the web: who they are, what they do now, recent items, what you share, and three openers. A fresh brief comes back at once; otherwise it is queued. When two people share the name, ask which one and call again with candidateIndex. Needs an Orbit account.',
-  input: z.object({
-    personId: z.string().describe('The person to research (from search_people).'),
-    refresh: z.boolean().optional().describe('Research again even if a recent brief exists.'),
-    candidateIndex: z
-      .number()
-      .int()
-      .min(0)
-      .max(9)
-      .optional()
-      .describe('After a "which one did you mean" answer: the index of the person the student picked.'),
-  }),
+    "Call this when the student asks to research someone, look them up, or find out what they are up to (personId from search_people). Orbit never starts research from the chat: research starts only when the student presses Deep research on the person's About tab. This returns the brief if one exists, otherwise says where the button is and links the About tab. Never claim research was started.",
+  input: z.object({ personId: z.string().describe('The person (from search_people).') }),
   capabilities: ['research_person'],
-  progress: 'Researching',
+  progress: 'Checking the research',
   async execute(input, ctx) {
     const person = await requirePerson(ctx, input.personId);
-    if (!accountReady(ctx)) return needsAccount('Research');
-    const r =
-      input.candidateIndex !== undefined
-        ? await chooseCandidate(ctx.user, person.id, input.candidateIndex)
-        : await researchPerson(ctx.user, person.id, { refresh: input.refresh });
-    if (!r.ok) throw new Error(r.message);
-    if (r.dossier?.status === 'needs_disambiguation')
-      return disambiguation(person.displayName, person.id, r.dossier);
-    if (!r.dossier || r.status === 'queued' || r.dossier.status === 'pending')
-      return pendingEnvelope(person.displayName, person.id, true);
-    if (r.dossier.status === 'failed')
-      throw new Error(`Research on ${person.displayName} did not work this time.`);
-    return dossierEnvelope(ctx, person.displayName, person.id, r.dossier);
+    const d = await briefOf(ctx, person.id);
+    if (d && (d.status === 'ready' || d.status === 'partial'))
+      return dossierEnvelope(ctx, person.displayName, person.id, d);
+    if (d?.status === 'needs_disambiguation') return disambiguation(person.displayName, person.id, d);
+    const why = person.doNotContact
+      ? ` You marked ${person.firstName || 'them'} do-not-contact, so Orbit does not research them.`
+      : '';
+    return ok(
+      'text',
+      { research: 'about_tab', href: aboutTab(person.id) },
+      { started: false, where: 'the Deep research button on their About tab', href: aboutTab(person.id) },
+      `Research starts from the Deep research button on ${person.displayName}'s About tab, not from the chat. Open their About tab to run it.${why}`,
+      aboutTab(person.id),
+    );
   },
   toModel,
 });
@@ -501,27 +504,63 @@ export const getDossierTool = defineTool({
   name: 'get_dossier',
   kind: 'read',
   description:
-    'Call this when the student asks what Orbit found about someone it already researched, or before drafting a first message to use their openers (personId from search_people). Returns the cited brief if there is one; if there is none, offer research_person. Needs an Orbit account.',
+    'Call this when the student asks what Orbit found about someone it already researched, what to know before a call with them, or before drafting a first message to use their openers (personId from search_people). Returns the cited brief if there is one. If there is none, say research starts from the Deep research button on their About tab; never start it.',
   input: z.object({ personId: z.string().describe('The person (from search_people).') }),
   capabilities: ['research_read'],
   progress: 'Reading the research',
   async execute(input, ctx) {
     const person = await requirePerson(ctx, input.personId);
-    if (!accountReady(ctx)) return needsAccount('Research');
-    const r = await getDossier(ctx.user, person.id);
-    if (!r.ok) throw new Error(r.message);
-    if (!r.dossier)
+    const d = await briefOf(ctx, person.id);
+    if (!d)
       return ok(
         'text',
         { dossier: null },
-        { dossier: null },
-        `No research on ${person.displayName} yet. research_person can look them up.`,
-        `/people/${person.id}`,
+        { dossier: null, where: 'the Deep research button on their About tab' },
+        `No research on ${person.displayName} yet. It starts from the Deep research button on their About tab.`,
+        aboutTab(person.id),
       );
-    if (r.dossier.status === 'pending') return pendingEnvelope(person.displayName, person.id, false);
-    if (r.dossier.status === 'needs_disambiguation')
-      return disambiguation(person.displayName, person.id, r.dossier);
-    return dossierEnvelope(ctx, person.displayName, person.id, r.dossier);
+    if (d.status === 'pending') return pendingEnvelope(person.displayName, person.id, false);
+    if (d.status === 'needs_disambiguation') return disambiguation(person.displayName, person.id, d);
+    return dossierEnvelope(ctx, person.displayName, person.id, d);
+  },
+  toModel,
+});
+
+export const researchLeftTool = defineTool({
+  name: 'research_left',
+  kind: 'read',
+  description:
+    'Call this when the student asks how many research briefs they have left, or whether they can research people (deep research has its own monthly allowance, apart from the chat). Says the count; dollars live in Settings.',
+  input: z.object({}),
+  capabilities: ['research_allowance'],
+  progress: 'Checking research',
+  async execute(_input, ctx) {
+    const mode = await researchMode(ctx.user);
+    if (mode.kind === 'off')
+      return ok(
+        'text',
+        { available: false },
+        { available: false, reason: mode.reason },
+        mode.reason === 'connect_linkedin'
+          ? "Deep research needs your LinkedIn connected to Orbit. Connect it in Settings, then press Deep research on a person's About tab."
+          : 'Deep research is not set up in this copy of Orbit.',
+        '/settings/integrations',
+      );
+    if (mode.kind === 'server')
+      return ok(
+        'text',
+        { available: true },
+        { available: true, account: true },
+        "Research runs on your Orbit account: press Research on a person's page.",
+      );
+    const a = await readAllowance(ctx.user, ctx.now);
+    return ok(
+      'text',
+      { allowance: a },
+      { left: a.left, limit: a.limit, month: a.month },
+      `${allowanceLine(a)}. A brief starts when you press the research button on a person's About tab.`,
+      '/settings/integrations',
+    );
   },
   toModel,
 });
@@ -1150,7 +1189,8 @@ export const networkTools: AnyTool[] = [
   archiveGoalTool,
   explainScoreTool,
   rateClosenessTool,
-  researchPersonTool,
+  showResearchTool,
+  researchLeftTool,
   getDossierTool,
   findPeopleTool,
   addSourcedTool,

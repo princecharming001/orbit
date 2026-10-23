@@ -1,9 +1,12 @@
 /**
- * Sample research briefs for three of the demo's made-up people, so the About tab shows what research looks like
- * without an account. Every source is marked `demo`: the page names the site but links nowhere, because these
+ * Sample research briefs for the demo's made-up people, made when the sample student presses Deep research on a
+ * person's About tab (engine/deepResearch.ts), with no network call. Three people have a full sample; everyone else
+ * gets the honest brief most real people get: not much public beyond LinkedIn. Go deeper adds a sample of the
+ * company context it finds. Every source is marked `demo`: the page names the site but links nowhere, because these
  * people do not exist.
  */
-import type { Dossier } from '@orbit/core';
+import type { Dossier, Person } from '@orbit/core';
+import { db } from '../db/schema';
 
 const src = (id: string, url: string, title: string) => ({ id, url, title, demo: true });
 
@@ -223,4 +226,124 @@ export function demoDossiers(userId: string, now = new Date(), school = 'Cornell
       },
     },
   ];
+}
+
+type Obj = Record<string, unknown>;
+
+/** Every claim of a sample brief counts as supported: the sample is its own source. */
+function supported(content: Obj): Obj {
+  const out: Obj = { ...content };
+  for (const k of ['recently', 'in_common', 'openers', 'highlights', 'company', 'career', 'education'])
+    if (Array.isArray(out[k])) out[k] = (out[k] as Obj[]).map((x) => ({ ...x, support: 'full' }));
+  if (out.now && typeof out.now === 'object') out.now = { ...(out.now as Obj), support: 'full' };
+  return out;
+}
+
+/** What Go deeper adds in the demo: their company's recent news and hiring, as a sample. */
+function companySample(org: string, first: number): { sources: Dossier['sources']; company: Obj[] } {
+  const slug = org.toLowerCase().replace(/[^a-z0-9]+/g, '');
+  return {
+    sources: [
+      src(`S${first}`, `https://${slug}.com/newsroom`, `Sample: ${org} newsroom`),
+      src(`S${first + 1}`, `https://${slug}.com/careers`, `Sample: ${org} careers`),
+    ],
+    company: [
+      {
+        text: `What ${org} announced lately, launches and team news, shows here with its source.`,
+        source_ids: [`S${first}`],
+      },
+      {
+        text: `Where ${org} is hiring, internships and new-grad roles, from its careers page.`,
+        source_ids: [`S${first + 1}`],
+      },
+    ],
+  };
+}
+
+/**
+ * The sample brief for one demo person: the full sample for the three that have one, otherwise the honest
+ * LinkedIn-only brief. `deeper` adds the company sample.
+ */
+export async function demoBriefFor(
+  userId: string,
+  person: Person,
+  kind: 'quick' | 'deeper',
+  now = new Date(),
+  school = 'Cornell University',
+): Promise<Dossier> {
+  const at = now.toISOString();
+  const expiresAt = new Date(now.getTime() + 90 * 86_400_000).toISOString();
+  const sample = demoDossiers(userId, now, school).find((d) => d.personId === person.id);
+  let d: Dossier;
+  if (sample) d = { ...sample, id: `brief_${person.id}`, content: supported(sample.content as Obj) };
+  else {
+    const affs = await db.affiliations.where('personId').equals(person.id).toArray();
+    const jobs = affs.filter((a) => a.kind === 'employment' && a.nameRaw);
+    const schools = affs.filter((a) => a.kind === 'education' && a.nameRaw);
+    const role = person.currentTitle ?? '';
+    const org = person.currentOrganizationRaw ?? '';
+    const where = role && org ? `${role} at ${org}` : role || org;
+    d = {
+      id: `brief_${person.id}`,
+      userId,
+      personId: person.id,
+      status: 'ready',
+      costUsd: 0,
+      model: 'sample',
+      createdAt: at,
+      updatedAt: at,
+      expiresAt,
+      sources: [src('S1', 'https://www.linkedin.com/', 'LinkedIn profile')],
+      content: supported({
+        who: `${person.displayName}${where ? `, ${where}` : ''}. Not much is public about ${person.firstName || 'them'} beyond LinkedIn.`,
+        now: { role, org, since: null, source_ids: ['S1'] },
+        recently: [],
+        in_common: person.isAlumni
+          ? [{ text: `You both went to ${school}`, kind: 'school', source_ids: ['S1'] }]
+          : [],
+        history: { first_contact: null, last_contact: null, summary: null },
+        openers: [],
+        careful: [],
+        confidence: 'low',
+        career: jobs.slice(0, 6).map((a) => ({
+          role: a.title ?? '',
+          org: a.nameRaw,
+          start: a.startDate?.slice(0, 4) ?? null,
+          end: a.isCurrent ? null : (a.endDate?.slice(0, 4) ?? null),
+          source_ids: ['S1'],
+        })),
+        education: schools.slice(0, 3).map((a) => ({
+          school: a.nameRaw,
+          degree: a.degree ?? null,
+          years: null,
+          source_ids: ['S1'],
+        })),
+        profiles: [{ kind: 'linkedin', url: 'https://www.linkedin.com/' }],
+        highlights: [],
+        topics: [],
+      }),
+    };
+  }
+  d = {
+    ...d,
+    createdAt: at,
+    updatedAt: at,
+    expiresAt,
+    research: { kind: 'quick', sample: true, checked: true },
+  };
+  const org = person.currentOrganizationRaw;
+  if (kind === 'deeper' && org) {
+    const extra = companySample(org, d.sources.length + 1);
+    d = {
+      ...d,
+      sources: [...d.sources, ...extra.sources],
+      content: {
+        ...(d.content as Obj),
+        company: supported({ company: extra.company }).company,
+        deeper: 'company',
+      },
+      research: { ...d.research!, kind: 'deeper', deeperAt: at },
+    };
+  }
+  return d;
 }

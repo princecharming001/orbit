@@ -49,6 +49,7 @@ import { findPathsOnServer, serverPathView } from '../../engine/paths';
 import { wentQuiet } from '../../engine/pipeline';
 import { buildPrep, personSummary } from '../../engine/prep';
 import { introducerIdFor, isColdRecommendation } from '../../engine/recommend';
+import { dossierView, localDossier } from '../../engine/research';
 import { currentResumeFacets } from '../../engine/resume';
 import { filterPeople, lastTouch, rankPeople } from '../../engine/search';
 import {
@@ -606,7 +607,7 @@ export const getPerson = defineTool({
   name: 'get_person',
   kind: 'read',
   description:
-    'Call this when the student asks about one person: who they are, what Orbit knows about them, when they last talked, their chat stage and booked time, their drafts, who they know, their warm-up, their promises, or prep for a chat with them (goal, ask, questions, logistics, a 30 second intro). Needs a personId from search_people. Choose the sections you need; facts and prep are the most useful for writing.',
+    'Call this when the student asks about one person: who they are, what Orbit knows about them, when they last talked, their chat stage and booked time, their drafts, who they know, their warm-up, their promises, or prep for a chat with them (goal, ask, questions, logistics, a 30 second intro, and with prep what their research brief says they did lately and its openers). Needs a personId from search_people. Choose the sections you need; facts and prep are the most useful for writing.',
   input: z.object({
     personId: z.string().describe('The person id (from search_people).'),
     include: z
@@ -618,6 +619,7 @@ export const getPerson = defineTool({
   }),
   capabilities: [
     'person_prep_view',
+    'research_call_prep',
     'person_open_linkedin',
     'person_email_link',
     'person_continue_draft',
@@ -803,6 +805,21 @@ export const getPerson = defineTool({
           chat?.completedAt || ['completed', 'followed_up', 'nurturing'].includes(chat?.stage ?? '')
         ),
       };
+      // what the research brief says they have been up to, and its openers (never started from here)
+      const brief = await localDossier(person.id);
+      if (brief && (brief.status === 'ready' || brief.status === 'partial')) {
+        const v = dossierView(brief);
+        out.research = {
+          lately: v.recently
+            .slice(0, 3)
+            .map((c) => ({ text: wrapped(ctx, 'dossier', c.text, 300), date: c.date })),
+          openers: v.openers
+            .filter((o) => o.support !== 'partial')
+            .map((o) => wrapped(ctx, 'dossier', o.text, 300)),
+          company: v.company.slice(0, 3).map((c) => wrapped(ctx, 'dossier', c.text, 300)),
+          sources: v.sources.length,
+        };
+      } else out.research = { none: true, where: 'the Deep research button on their About tab' };
     }
     const next = await nextMessageKind(ctx.user, person.id, ctx.now);
     out.nextMessage =

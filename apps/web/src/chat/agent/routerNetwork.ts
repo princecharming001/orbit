@@ -165,12 +165,32 @@ export function routeNetwork(text: string, lower: string, h: NetworkHelpers): Ro
       );
   }
 
-  // ---- research ----
+  // ---- what to know before a call: their page's prep with what the research brief says (never starts research) ----
   {
-    const m = text.match(/^(?:research|do (?:some )?research on|dig into)\s+(.+?)(?: before .*)?$/i);
+    const m = text.match(
+      /^(?:what should i know|what do i need to know|what has (.+?) been up to)\s*(?:before|ahead of)\s+(?:my |our |the )?(?:coffee )?(?:chat|call|meeting)(?:\s+with\s+(.+?))?\??$/i,
+    );
+    const who = (m?.[2] ?? m?.[1])?.trim();
+    if (m && who)
+      return withPerson(who, (id) =>
+        h.viaTool('get_person', { personId: id, include: ['prep', 'facts'] }, undefined, 'prep for a call'),
+      );
+  }
+
+  // ---- research: the chat never starts it; it says where the Deep research button is, or shows the brief ----
+  if (
+    /^(?:how many|how much) (?:research|researches|research briefs|briefs)\b|^(?:can i (?:still )?research|research (?:left|allowance))\b|^how much research is left\b/i.test(
+      text,
+    )
+  )
+    return h.viaTool('research_left', {}, undefined, 'research left');
+  {
+    const m = text.match(
+      /^(?:research|do (?:some )?research on|dig into|deep research(?: on)?)\s+(.+?)(?: before .*)?$/i,
+    );
     if (m)
       return withPerson(m[1]!, (id) =>
-        h.viaTool('research_person', { personId: id }, undefined, 'research a person'),
+        h.viaTool('show_research', { personId: id }, undefined, 'where research starts'),
       );
   }
   {

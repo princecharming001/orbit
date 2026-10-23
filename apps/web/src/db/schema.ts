@@ -182,6 +182,22 @@ export interface LocalMemory {
   deletedAt?: string;
 }
 
+/**
+ * One deep-research call this browser made (docs/plan/20 §7): what kind, what it cost and when, for the month's count
+ * and the dollars Settings shows. No brief content: that is the dossier row.
+ */
+export interface ResearchRun {
+  id: string;
+  userId: string;
+  personId: string;
+  kind: 'quick' | 'deeper';
+  /** YYYY-MM, the allowance month */
+  month: string;
+  status: string;
+  costUsd: number;
+  createdAt: string;
+}
+
 export class OrbitDB extends Dexie {
   users!: EntityTable<User, 'id'>;
   settings!: EntityTable<UserSettings, 'userId'>;
@@ -225,6 +241,7 @@ export class OrbitDB extends Dexie {
   outbox!: EntityTable<OutboxRow, 'key'>;
   textThreads!: EntityTable<TextThread, 'id'>;
   memories!: EntityTable<LocalMemory, 'id'>;
+  researchRuns!: EntityTable<ResearchRun, 'id'>;
 
   constructor(name = 'orbit') {
     super(name);
@@ -291,6 +308,12 @@ export class OrbitDB extends Dexie {
     // server)
     this.version(5).stores({
       memories: 'id, userId, personId, kind',
+    });
+    // deep research (docs/plan/20): each call's cost for the month's count and Settings, and the facts a brief wrote
+    // found by the brief, so deleting the brief (or its 90 days running out) deletes them too
+    this.version(6).stores({
+      researchRuns: 'id, userId, personId, month, createdAt',
+      facts: 'id, userId, personId, type, [sourceTable+sourceId]',
     });
   }
 }

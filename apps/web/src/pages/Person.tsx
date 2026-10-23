@@ -64,6 +64,7 @@ import { hidePerson, setRelationshipType, unhidePerson } from '../engine/people'
 import { moveChatGuarded } from '../engine/pipeline';
 import { buildPrep, personSummary, toYou } from '../engine/prep';
 import { SUMMARY_RULES_AT } from '../engine/repair';
+import { dossierView } from '../engine/research';
 import { isServerUser } from '../integrations/orbitApi';
 import { useSession } from '../state/session';
 import { Avatar, Button, Card, Chip, cx, Modal, NotFound, relDate, Select, Tabs, useToast } from '../ui';
@@ -222,6 +223,17 @@ export function PersonPage() {
   const [asking, setAsking] = useState(false);
   const [inviting, setInviting] = useState(false);
   const [early, setEarly] = useState<string>();
+  // a finished brief on them: the first message's composer then needs no "Research them first" link
+  const hasBrief =
+    useLiveQuery(
+      async () =>
+        id
+          ? (await db.dossiers.where('personId').equals(id).toArray()).some(
+              (d) => d.status === 'ready' || d.status === 'partial',
+            )
+          : false,
+      [id],
+    ) ?? false;
   const events =
     useLiveQuery(
       () =>
@@ -818,6 +830,15 @@ export function PersonPage() {
                   ? ' Pick another and it rewrites the draft.'
                   : ''}
               </div>
+              {composing === 'outreach' && !hasBrief && !tps.some((t) => t.kind !== 'linkedin_connected') && (
+                <Link
+                  to={`/people/${person.id}?tab=facts`}
+                  className="text-[12px] text-ink-3 underline underline-offset-2 hover:text-ink mt-0.5 inline-block"
+                  data-testid="compose-research-first"
+                >
+                  Research them first
+                </Link>
+              )}
               {composing === 'outreach' && chat?.stage === 'warming' && chat.warmUp && (
                 <div className="text-[12px] text-warn mt-0.5" data-testid="compose-warmup-early">
                   Your warm-up is {chat.warmUp.actions.filter((a) => a.doneAt).length} of{' '}
@@ -955,7 +976,9 @@ export function PersonPage() {
                                   ? 'from a message you wrote'
                                   : f.sourceTable === 'messages'
                                     ? 'from email'
-                                    : 'from Orbit'}
+                                    : f.sourceTable === 'dossiers'
+                                      ? 'from research'
+                                      : 'from Orbit'}
                             {f.occurredAt ? ` · ${shortDate(f.occurredAt)}` : ''}
                           </span>
                           {conflicts.has(f.id) && (
@@ -1413,6 +1436,7 @@ function Prep({
           </ul>
         )}
       </Card>
+      <PrepResearch person={person} />
       <Card>
         <div className="font-medium">Questions to ask</div>
         <p className="text-ink-3 text-[12px] mt-0.5">
@@ -1649,6 +1673,92 @@ function TextsCard({ personId, firstName }: { personId: string; firstName: strin
       <p className="mt-2 text-[11.5px] text-ink-3">
         {t.inCount} from {firstName || 'them'}, {t.outCount} from you
       </p>
+    </Card>
+  );
+}
+
+/**
+ * The Prep tab's view of the research brief: what they have been up to lately and the openers, each with its source.
+ * With no brief yet it only points to the About tab, where the student starts research; it never starts any.
+ */
+function PrepResearch({ person }: { person: Person }) {
+  const d = useLiveQuery(
+    async () =>
+      (await db.dossiers.where('personId').equals(person.id).toArray())
+        .filter((x) => x.status === 'ready' || x.status === 'partial')
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0] ?? null,
+    [person.id],
+  );
+  if (d === undefined) return null;
+  const v = d ? dossierView(d) : undefined;
+  const recently = v?.recently.slice(0, 3) ?? [];
+  // a partly supported opener is never offered
+  const openers = v?.openers.filter((o) => o.support !== 'partial') ?? [];
+  const src = (ns: number[]) =>
+    ns.map((n) => {
+      const s = v?.sources.find((x) => x.n === n);
+      return s?.url && !s.demo ? (
+        <a
+          key={n}
+          href={s.url}
+          target="_blank"
+          rel="noreferrer noopener"
+          className="ml-0.5 align-super text-[10px] text-ink-3 hover:text-ink"
+        >
+          [{n}]
+        </a>
+      ) : (
+        <span key={n} className="ml-0.5 align-super text-[10px] text-ink-3">
+          [{n}]
+        </span>
+      );
+    });
+  return (
+    <Card data-testid="prep-research">
+      <div className="font-medium">From research</div>
+      {!v ? (
+        <p className="text-ink-3 mt-1">
+          No research on {person.firstName || 'them'} yet.{' '}
+          <Link
+            to={`/people/${person.id}?tab=facts`}
+            className="underline underline-offset-2 hover:text-ink"
+            data-testid="prep-research-link"
+          >
+            Deep research is on the About tab.
+          </Link>
+        </p>
+      ) : (
+        <>
+          {recently.length > 0 ? (
+            <>
+              <div className="text-[12px] uppercase tracking-wide text-ink-3 mt-2">Lately</div>
+              <ul className="mt-1 space-y-1 text-ink-2">
+                {recently.map((r, i) => (
+                  <li key={i}>
+                    {r.date ? <span className="text-ink-3">{r.date} · </span> : null}
+                    {r.text}
+                    {src(r.sources)}
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : (
+            <p className="text-ink-3 mt-1">Nothing recent on the public web; the brief leans on LinkedIn.</p>
+          )}
+          {openers.length > 0 && (
+            <>
+              <div className="text-[12px] uppercase tracking-wide text-ink-3 mt-3">Openers</div>
+              <ul className="mt-1 space-y-1 text-ink-2" data-testid="prep-openers">
+                {openers.map((o, i) => (
+                  <li key={i}>
+                    “{o.text}”{src(o.sources)}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </>
+      )}
     </Card>
   );
 }

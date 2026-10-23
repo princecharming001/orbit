@@ -2318,7 +2318,7 @@ export function routeMore(
     )
   ) {
     const r = withPerson((p) =>
-      h.viaTool('research_person', { personId: p.id }, undefined, 'research a person'),
+      h.viaTool('show_research', { personId: p.id }, undefined, 'where research starts'),
     );
     if (r) return r;
   }

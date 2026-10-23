@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { fillWhyThemGaps } from '../engine/brief';
 import { cleanUpGuesses } from '../engine/cleanup';
+import { expireBriefs } from '../engine/deepResearch';
 import { runEnrichment } from '../engine/enrichment';
 import { autoSyncFathom } from '../engine/fathom';
 import { liveLinkedInAccount, resumeLinkedInConnect, syncLinkedInLive } from '../engine/linkedinLive';
@@ -31,6 +32,8 @@ export function MeetingNotesAutoSync() {
     // a LinkedIn sign-in that was still finishing when the page closed: keep waiting for it in the background
     void resumeLinkedInConnect(u).catch(() => undefined);
     // first, once: clear what older versions saved from guesses (chats from mail never answered, and so on)
+    // research briefs past their 90 days go, with the facts they wrote
+    void expireBriefs(u.id).catch(() => undefined);
     void cleanUpGuesses(u)
       .catch(() => undefined)
       .then(() => repairHeadlineCompanies(u.id))

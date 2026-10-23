@@ -199,7 +199,16 @@ describe('dossier pipeline (§5.6)', () => {
     const contents = s.net.calls.filter((c) => c.url.endsWith('/contents'));
     expect(contents).toHaveLength(1);
     expect(contents[0]!.body).toMatchObject({ text: { maxCharacters: 6000 }, maxAgeHours: 720 });
-    expect((contents[0]!.body as { urls: string[] }).urls).toHaveLength(3);
+    // the news story and the podcast name her and Northwind; her LinkedIn page never counts as a web source (the profile
+    // itself is the LinkedIn source), and the namesake baker and runner are not her
+    expect((contents[0]!.body as { urls: string[] }).urls).toEqual([
+      'https://news.example/northwind-series-b',
+      'https://pod.example/ep-88',
+    ]);
+    // blocked sources never reach the search
+    expect((byCategory('people').body as { excludeDomains: string[] }).excludeDomains).toContain(
+      'spokeo.com',
+    );
 
     // the exact §5.4 instructions went out, and the stored row carries the prompt version and a 30-day expiry
     expect(llm.calls[0]!.prompt.system).toContain(

@@ -300,7 +300,8 @@ describe('sourcing (§6)', () => {
     ).toBe(true);
     expect(claude.requests.length).toBeGreaterThan(0);
 
-    // §6.8 test 2: add creates one person, one chat with the goal, one dossier job, however often it is pressed
+    // §6.8 test 2: add creates one person and one chat with the goal however often it is pressed, and starts no
+    // research (docs/plan/20: research starts only when the student asks for it on the person's page)
     for (let i = 0; i < 2; i++) {
       const add = await call<{ people: { id: string; chatId: string }[] }>('/source/add', token, {
         recommendationIds: [mayas[0]!.id],
@@ -316,7 +317,7 @@ describe('sourcing (§6)', () => {
     expect(chats).toEqual([{ stage: 'identified', goal_id: g.body.goal.id }]);
     const jobs = await t.db.sql<{ message: { kind: string } }>`
       select message from pgmq.q_orbit_enrich where message->>'userId' = ${userId}`;
-    expect(jobs.map((j) => j.message.kind)).toEqual(['enrich.dossier']);
+    expect(jobs.map((j) => j.message.kind)).toEqual([]);
   });
 
   it('§6.8 test 3: with no keys the search answers {results: [], unconfigured} without an error', async () => {

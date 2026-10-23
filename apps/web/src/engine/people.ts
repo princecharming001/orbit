@@ -544,6 +544,7 @@ export async function mergePeople(userId: string, survivorId: string, mergedId: 
       db.tieScores,
       db.textThreads,
       db.memories,
+      db.researchRuns,
     ],
     async () => {
       // touches: one per source item and person, so a touch both records have is kept once
@@ -558,6 +559,8 @@ export async function mergePeople(userId: string, survivorId: string, mergedId: 
       await db.outbound.where('personId').equals(mergedId).modify({ personId: survivorId });
       await db.actionItems.where('personId').equals(mergedId).modify({ personId: survivorId });
       await db.personIdentities.where('personId').equals(mergedId).modify({ personId: survivorId });
+      // the month's research log counts people: the merged one's briefs count as the survivor's
+      await db.researchRuns.where('personId').equals(mergedId).modify({ personId: survivorId });
       // what the student told the chat about them stays with them
       await db.memories.where('personId').equals(mergedId).modify({ personId: survivorId });
       await db.messages.where('fromPersonId').equals(mergedId).modify({ fromPersonId: survivorId });
@@ -574,9 +577,16 @@ export async function mergePeople(userId: string, survivorId: string, mergedId: 
       if (await db.recommendations.where('personId').equals(survivorId).count())
         await db.recommendations.where('personId').equals(mergedId).delete();
       else await db.recommendations.where('personId').equals(mergedId).modify({ personId: survivorId });
-      if (await db.dossiers.where('personId').equals(survivorId).count())
+      if (await db.dossiers.where('personId').equals(survivorId).count()) {
+        // the merged record's brief goes, and with it the facts that brief wrote
+        const gone = await db.dossiers.where('personId').equals(mergedId).primaryKeys();
+        if (gone.length)
+          await db.facts
+            .where('[sourceTable+sourceId]')
+            .anyOf(gone.map((g) => ['dossiers', g]))
+            .delete();
         await db.dossiers.where('personId').equals(mergedId).delete();
-      else await db.dossiers.where('personId').equals(mergedId).modify({ personId: survivorId });
+      } else await db.dossiers.where('personId').equals(mergedId).modify({ personId: survivorId });
       // the student's closeness rating moves unless the survivor has one; the model's score is worked out again
       const label = await db.tieLabels.get(mergedId);
       if (label && !(await db.tieLabels.get(survivorId)))

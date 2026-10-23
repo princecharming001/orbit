@@ -20,6 +20,11 @@ export interface Claim {
   /** 1-based numbers of the sources it came from */
   sources: number[];
   date?: string;
+  /**
+   * what the support check said (deep research): 'full' when the cited page says it, 'partial' when it says only part
+   * of it (shown, never used in a draft or a fact), 'unchecked' when the check could not run; absent on older briefs
+   */
+  support?: 'full' | 'partial' | 'unchecked';
 }
 
 export interface DossierView {
@@ -31,6 +36,12 @@ export interface DossierView {
   history?: { firstContact?: string; lastContact?: string; summary?: string };
   openers: Claim[];
   careful: string[];
+  /** the same, with their sources (deep research cites every line) */
+  carefulClaims: Claim[];
+  /** what is happening at their company (Go deeper) */
+  company: Claim[];
+  /** Go deeper ran: 'person' (more about them) or 'company' (their company's news and hiring) */
+  deeper?: string;
   confidence?: string;
   /** the full picture (dossier v1.1): empty on a dossier written before it */
   career: (Claim & { role: string; org: string; start?: string; end?: string })[];
@@ -76,7 +87,9 @@ export function dossierView(d: Dossier): DossierView {
     const o = obj(v);
     if (!o) return str(v) ? { text: str(v)!, sources: [] } : undefined;
     const text = str(o[textKey]);
-    return text ? { text, sources: refs(o), date: str(o.date) } : undefined;
+    const support =
+      o.support === 'full' || o.support === 'partial' || o.support === 'unchecked' ? o.support : undefined;
+    return text ? { text, sources: refs(o), date: str(o.date), ...(support ? { support } : {}) } : undefined;
   };
   const c = obj(d.content) ?? {};
   const now = obj(field(c, 'now'));
@@ -93,7 +106,7 @@ export function dossierView(d: Dossier): DossierView {
   return {
     status: d.status,
     who: str(field(c, 'who')),
-    now: nowText ? { text: nowText, sources: refs(now) } : undefined,
+    now: nowText ? (claim({ ...now, text: nowText }) ?? { text: nowText, sources: refs(now) }) : undefined,
     recently: arr(field(c, 'recently'))
       .map((x) => claim(x))
       .filter((x): x is Claim => !!x)
@@ -113,8 +126,15 @@ export function dossierView(d: Dossier): DossierView {
       .filter((x): x is Claim => !!x)
       .slice(0, 3),
     careful: arr(field(c, 'careful'))
-      .map(str)
+      .map((x) => claim(x)?.text)
       .filter((x): x is string => !!x),
+    carefulClaims: arr(field(c, 'careful'))
+      .map((x) => claim(x))
+      .filter((x): x is Claim => !!x),
+    company: arr(field(c, 'company'))
+      .map((x) => claim(x))
+      .filter((x): x is Claim => !!x),
+    deeper: str(field(c, 'deeper')),
     confidence: str(field(c, 'confidence')),
     career: arr(field(c, 'career'))
       .map((x) => {

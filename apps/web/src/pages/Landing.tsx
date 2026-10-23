@@ -2,7 +2,7 @@ import type { User } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Compass, Inbox, Map as MapIcon, Minus, Plus, Search, SquarePen, Users } from 'lucide-react';
 import { lazy, type ReactNode, Suspense, useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { Logo } from '../components/AppShell';
 import { TrustedBy } from '../components/landing/TrustedBy';
 import { db } from '../db/schema';
@@ -357,6 +357,13 @@ export function Landing() {
             <a className="hover:text-ink transition-colors" href="#faq">
               FAQ
             </a>
+            <Link
+              className="hover:text-ink transition-colors"
+              to="/remove-me"
+              data-testid="landing-remove-me"
+            >
+              Remove me from research
+            </Link>
           </nav>
           <span className="md:ml-auto">© {new Date().getFullYear()} Orbit</span>
         </div>

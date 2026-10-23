@@ -64,8 +64,10 @@ const HANDLED: [string, string, Record<string, unknown>][] = [
   ['Maya is a close friend', 'rate_closeness', { personId: 'p3', closeness: 5 }],
   ['rate Priya 4', 'rate_closeness', { personId: 'p1', closeness: 4 }],
   // research
-  ['research Priya', 'research_person', { personId: 'p1' }],
-  ['do some research on Daniel Kim before I email him', 'research_person', { personId: 'p2' }],
+  // the chat never starts research: it points to the Deep research button on their About tab
+  ['research Priya', 'show_research', { personId: 'p1' }],
+  ['do some research on Daniel Kim before I email him', 'show_research', { personId: 'p2' }],
+  ['how many research briefs do I have left', 'research_left', {}],
   ['what did you find on Maya', 'get_dossier', { personId: 'p3' }],
   ["show me Priya's research", 'get_dossier', { personId: 'p1' }],
   // finding people
@@ -137,7 +139,7 @@ describe('router: the networking agent', () => {
       'archive_goal',
       'explain_score',
       'rate_closeness',
-      'research_person',
+      'show_research',
       'get_dossier',
       'find_people',
       'ask_for_intro',

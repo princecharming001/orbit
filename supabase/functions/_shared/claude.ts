@@ -22,6 +22,8 @@ export type Task =
   | 'fit'
   | 'triage'
   | 'judge'
+  /** deep research: does each claim of a brief say what its cited page says (docs/plan/20 §4) */
+  | 'support'
   /** earlier names of reply_classify, memory_extract and goal_infer, kept for callers that still use them */
   | 'classify'
   | 'extract_memory'
@@ -34,13 +36,20 @@ export interface TaskSetting {
   /** undefined leaves the model's default */
   effort?: Effort;
   maxTokens: number;
+  /**
+   * Send `string | null` fields as plain strings ("" for none). Structured outputs compile each nullable into a
+   * branch of the grammar, and a schema as large as the research brief's goes over the grammar limit with them
+   * (400 "The compiled grammar is too large"). The Zod schema still accepts the strings; the caller turns blanks back
+   * into nulls.
+   */
+  flatNullable?: boolean;
 }
 
 /** §13.1. Claude Opus 5.5 and Haiku 5.5 think adaptively on their own; effort is the only dial. */
 export const TASKS: Record<Task, TaskSetting> = {
   compose: { model: 'claude-opus-5-5', effort: 'medium', maxTokens: 4000 },
   reply: { model: 'claude-opus-5-5', effort: 'medium', maxTokens: 4000 },
-  dossier: { model: 'claude-opus-5-5', effort: 'medium', maxTokens: 8000 },
+  dossier: { model: 'claude-opus-5-5', effort: 'medium', maxTokens: 8000, flatNullable: true },
   reply_classify: { model: 'claude-haiku-5-5', effort: 'low', maxTokens: 1000 },
   memory_extract: { model: 'claude-haiku-5-5', effort: 'low', maxTokens: 1500 },
   goal_infer: { model: 'claude-haiku-5-5', effort: 'low', maxTokens: 1500 },
@@ -50,6 +59,8 @@ export const TASKS: Record<Task, TaskSetting> = {
   extract_memory: { model: 'claude-haiku-5-5', effort: 'low', maxTokens: 1500 },
   extract_goal: { model: 'claude-haiku-5-5', effort: 'low', maxTokens: 1500 },
   judge: { model: 'claude-sonnet-5-5', maxTokens: 2000 },
+  // high effort: against the writing model as the reference it agreed on 14 of 16 claims (low effort: 8 of 16), for $0.003
+  support: { model: 'claude-haiku-5-5', effort: 'high', maxTokens: 4000 },
 };
 
 export { costUsd, PRICES, type Usage } from './prices.ts';
@@ -81,6 +92,8 @@ export interface StructuredRequest<S extends z.ZodType> {
   /** whose budget pays; null for system work */
   userId: string | null;
   maxTokens?: number;
+  /** give up on the call after this long (a deadline-bound caller, such as a 90-second research brief) */
+  timeoutMs?: number;
 }
 
 type Safe<T> = { ok: true; value: T } | { ok: false; error: string };
@@ -108,7 +121,10 @@ export function makeClaude(deps: ClaudeDeps) {
     }
     // parse never throws on the model's text: a truncated or invalid answer comes back as an error value, so
     // stop_reason and usage are still read and recorded
-    const base = zodOutputFormat(req.schema);
+    const zf = zodOutputFormat(req.schema);
+    const base = setting.flatNullable
+      ? { ...zf, schema: flattenNullable(zf.schema) as typeof zf.schema }
+      : zf;
     const format = {
       ...base,
       parse: (content: string): Safe<z.infer<S>> => {
@@ -159,13 +175,17 @@ export function makeClaude(deps: ClaudeDeps) {
     return { ok: false, error: 'max_tokens' };
 
     function callParse(max: number) {
-      return client!.messages.parse({
-        model: setting.model,
-        max_tokens: max,
-        system: [{ type: 'text', text: req.system, cache_control: { type: 'ephemeral' } }],
-        messages: [{ role: 'user', content: req.user }],
-        output_config: { ...(setting.effort ? { effort: setting.effort } : {}), format },
-      });
+      return client!.messages.parse(
+        {
+          model: setting.model,
+          max_tokens: max,
+          system: [{ type: 'text', text: req.system, cache_control: { type: 'ephemeral' } }],
+          messages: [{ role: 'user', content: req.user }],
+          output_config: { ...(setting.effort ? { effort: setting.effort } : {}), format },
+        },
+        // a caller with a deadline gets one attempt within it, never a retry that runs past it
+        req.timeoutMs ? { timeout: req.timeoutMs, maxRetries: 0 } : undefined,
+      );
     }
   }
 
@@ -173,3 +193,21 @@ export function makeClaude(deps: ClaudeDeps) {
 }
 
 export type Claude = ReturnType<typeof makeClaude>;
+
+/** `anyOf: [{type: X}, {type: "null"}]` → `{type: X}`, everywhere in a JSON schema (see TaskSetting.flatNullable). */
+export function flattenNullable(schema: unknown): unknown {
+  if (Array.isArray(schema)) return schema.map(flattenNullable);
+  if (!schema || typeof schema !== 'object') return schema;
+  const o = schema as Record<string, unknown>;
+  const any = o.anyOf;
+  if (Array.isArray(any) && any.length === 2) {
+    const rest = any.filter(
+      (x) => !(x && typeof x === 'object' && (x as { type?: unknown }).type === 'null'),
+    );
+    if (rest.length === 1) {
+      const { anyOf: _a, ...others } = o;
+      return flattenNullable({ ...others, ...(rest[0] as object) });
+    }
+  }
+  return Object.fromEntries(Object.entries(o).map(([k, v]) => [k, flattenNullable(v)]));
+}

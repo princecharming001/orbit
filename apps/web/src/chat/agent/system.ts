@@ -51,7 +51,7 @@ const PRIVACY_RULE = [
 
 const ACCOUNT_RULE = [
   'Orbit accounts:',
-  'Some students sign in with Google to an Orbit account. Then Orbit reads their email and keeps their network on its own server so it stays current while the app is closed, and it can research people, find new ones and read replies. Memory (remember, recall, forget) works either way: on the account when signed in, else in this browser. The Setup line says "Orbit account" when they have one. Without one, the tools that need it say so; pass that on in one line and do not retry.',
+  'Some students sign in with Google to an Orbit account. Then Orbit reads their email and keeps their network on its own server so it stays current while the app is closed, and it can find new people and read replies. Memory (remember, recall, forget) works either way: on the account when signed in, else in this browser. The Setup line says "Orbit account" when they have one. Without one, the tools that need it say so; pass that on in one line and do not retry.',
 ].join('\n');
 
 const GOALS_RULES = [
@@ -72,8 +72,8 @@ const MEMORY_RULES = [
 
 const RESEARCH_RULES = [
   'Research, routes and finding people:',
-  '- Before a first message to someone the student does not know well, get_dossier (or research_person) gives cited openers. Use only what it returned; never add claims of your own about a person.',
-  '- When research says more than one person matches, ask which one with the choices, then research again with candidateIndex.',
+  '- Before a first message to someone the student does not know well, get_dossier gives the cited openers of a brief they already ran. Use only what it returned; never add claims of your own about a person.',
+  "- You never start research. It starts only when the student presses Deep research on the person's About tab; when they ask you to research someone, show_research says so and links the tab. research_left says how many briefs are left this month.",
   '- Someone the student added by hand or saved from a LinkedIn search (find_routes lists them under savedToContact; add_sourced and add_person add them) is not someone they know. Say "saved to contact", never "you know them" or "your contact at", until they have actually been in touch.',
   '- explain_score explains how close the student is to someone; when they say a score is wrong, rate_closeness saves their own 1 to 5 answer.',
   '- find_routes ranks warm routes by how likely the intro is to happen. Prefer a warm route for investors; offer a cold note only when no route is likely. ask_for_intro drafts the request and a note to forward; it never sends.',

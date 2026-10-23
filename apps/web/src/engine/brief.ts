@@ -45,6 +45,7 @@ import {
 import { addTouchpoint, feedback, notify, recomputeAllStrengths } from '../db/repo';
 import { db } from '../db/schema';
 import { describeLlmFailure, hasLlm, llmDraft, llmSummary, toLlmError } from '../integrations/anthropic';
+import { researchOpeners } from './deepResearch';
 import { goalRegisterDraft } from './goalDrafts';
 import { bestPathStrength, buildReachGraph, reachPersonIn } from './graph';
 import {
@@ -865,9 +866,14 @@ export async function buildDraftContext(
     .map((f) => ({ name: f.organizationName!, title: f.title, current: !f.endDate }));
   const reportBack = s?.payload.reportBack as DraftContext['reportBack'] | undefined;
   const userConnection = inputs.connection?.trim();
+  // facts a research brief wrote reach a draft only as its opener chip (researchOpener below), never through the
+  // template's own fact picking, which words facts as notes the student took
   const factList: PersonFact[] = facts
+    .filter((f) => f.sourceTable !== 'dossiers')
     .sort((a, b) => (b.occurredAt ?? '').localeCompare(a.occurredAt ?? ''))
     .slice(0, 15);
+  // the top opener of a brief the student ran on them, fully supported by its source, for a first message
+  const researchOpener = kind === 'outreach' ? (await researchOpeners(person.id))[0]?.text : undefined;
   if (userConnection && !factList.some((f) => f.type === 'connection' && f.text === userConnection))
     factList.unshift({
       id: `input-connection`,
@@ -951,6 +957,7 @@ export async function buildDraftContext(
     history,
     promises: promises?.length ? promises : undefined,
     newAffiliation,
+    researchOpener,
     targetCompany: tc
       ? {
           name: tc.nameRaw,

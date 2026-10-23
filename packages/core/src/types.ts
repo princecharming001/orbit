@@ -890,6 +890,26 @@ export interface Dossier {
   createdAt: string;
   updatedAt: string;
   expiresAt: string;
+  /** deep research (docs/plan/20): how a brief made in the browser came to be, kept with it */
+  research?: DossierResearch;
+}
+
+/** How a deep-research brief was made: quick or deeper, what LinkedIn said then, and what the run skipped. */
+export interface DossierResearch {
+  kind: 'quick' | 'deeper';
+  /** their LinkedIn as the brief saw it: a new job or headline since then makes Refresh worth it */
+  snapshot?: { headline?: string; title?: string; org?: string };
+  notes?: string[];
+  /** the support check ran: only then do its claims become facts and draft lines */
+  checked?: boolean;
+  /** web pages surely about them, beyond LinkedIn */
+  strongPages?: number;
+  provider?: string;
+  /** the person picked from "which one?" */
+  chosen?: { org?: string; url?: string };
+  deeperAt?: string;
+  /** a sample brief in the demo */
+  sample?: boolean;
 }
 
 export interface Recommendation {

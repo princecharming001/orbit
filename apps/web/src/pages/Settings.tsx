@@ -27,6 +27,7 @@ import {
 import { schoolDomainFor, suggestSchools } from '../data/schools';
 import { db } from '../db/schema';
 import { deleteAllData, exportAllData, exportFilename } from '../engine/account';
+import { type Allowance, readAllowance, researchSpend } from '../engine/deepResearch';
 import { demoResetPrompt, loadDemo } from '../engine/demo';
 import { connectAndSyncGoogle, disconnectGoogleAccount, markGoogleNeedsReauth } from '../engine/integrations';
 import { setMorningBrief } from '../engine/morning';
@@ -932,8 +933,40 @@ function Integrations() {
           )}
         </IntegrationRow>
         <ClaudeCard />
+        <ResearchCard />
       </RowGroup>
     </div>
+  );
+}
+
+/**
+ * Deep research (docs/plan/20): how many people the student researched this month and what it cost. The About tab
+ * shows only the count left; the dollars live here.
+ */
+function ResearchCard() {
+  const { user } = useSession();
+  const spend = useLiveQuery(() => (user ? researchSpend(user.id) : undefined), [user?.id]);
+  const [left, setLeft] = useState<Allowance>();
+  useEffect(() => {
+    if (user)
+      void readAllowance(user)
+        .then(setLeft)
+        .catch(() => undefined);
+  }, [user?.id, spend?.runs]);
+  if (!user) return null;
+  return (
+    <IntegrationRow
+      mark={<AppMark>R</AppMark>}
+      name="Deep research"
+      status={<RowStatus>{left ? `${left.left} of ${left.limit} left this month` : 'Built in.'}</RowStatus>}
+      line="Looks a person up when you press Deep research on their About tab"
+    >
+      <p className="text-[12px] text-ink-3" data-testid="research-spend">
+        This month: {spend?.briefs ?? 0} {spend?.briefs === 1 ? 'person' : 'people'} researched, $
+        {(spend?.usd ?? 0).toFixed(2)}. Each brief is capped at $0.30, or $0.50 with Go deeper. Research has
+        its own allowance, apart from the chat's.
+      </p>
+    </IntegrationRow>
   );
 }
 

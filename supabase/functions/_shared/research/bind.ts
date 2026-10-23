@@ -188,15 +188,16 @@ export async function internalHistory(db: Db, userId: string, personId: string):
 }
 
 /** deps.ts's ClaudeDep over claude.ts: `dossier` → Opus 5.5, `sourcing_fit` → Haiku 5.5 (task `fit`). */
-export function claudeDep(claude: Claude, userId: string): ClaudeDep {
+export function claudeDep(claude: Claude, userId: string | null): ClaudeDep {
   return {
     async parse(task, schema, prompt) {
       const r = await claude.structured({
-        task: task === 'dossier' ? 'dossier' : 'fit',
+        task: task === 'dossier' ? 'dossier' : task === 'support' ? 'support' : 'fit',
         system: prompt.system,
         user: prompt.user,
         schema,
         userId,
+        timeoutMs: prompt.timeoutMs,
       });
       if (r.ok) return { ok: true, value: r.data, costUsd: r.costUsd, model: r.model };
       if ('unconfigured' in r) return { ok: false, reason: 'error', message: 'unconfigured' };

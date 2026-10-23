@@ -27,7 +27,8 @@ describe('stable system block', () => {
     expect(text).toMatch(/"Remembered:"/);
     expect(text).toMatch(/The latest one is current; earlier ones are history/);
     expect(text).toMatch(/holds only a "Remembered:" line updates that line/);
-    expect(text).toMatch(/research_person/);
+    expect(text).toMatch(/You never start research. It starts only when the student presses Deep research/);
+    expect(text).toMatch(/show_research/);
     expect(text).toMatch(/find_people/);
     expect(text).toMatch(/ask_for_intro drafts the request and a note to forward; it never sends/);
     expect(text).toMatch(/Never imply a message was sent unless the tool says it was sent/);

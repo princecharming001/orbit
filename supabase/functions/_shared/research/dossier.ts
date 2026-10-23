@@ -3,8 +3,9 @@
  * internal history → LinkedIn profile and posts → three Exa searches → identity check (or stop and ask) → contents
  * for the top 6 kept pages → Opus synthesis with source-id validation (one retry) → cache.
  *
- * Money: everything paid counts toward a $0.25 cap per dossier; a step that would cross it is skipped and the
- * dossier is marked partial. Exa responses are cached by request hash for 7 days, the dossier for 30.
+ * Money: everything paid counts toward a $0.30 cap per dossier (the quick brief's cap, docs/plan/20); a step that
+ * would cross it is skipped and the dossier is marked partial. Exa responses are cached by request hash for 7 days,
+ * the dossier for 30. Pages are kept only when identity.ts scores them strong, never from a blocked site.
  */
 import {
   EXA_PAGE_USD,
@@ -15,23 +16,20 @@ import {
   exaCostUsd,
 } from '../providers/exa';
 import { cacheKey } from '../providers/request';
-import {
-  linkedInSlugOf,
-  type UnipilePost,
-  type UnipileProfile,
-  type UnipileResearch,
-} from '../providers/unipileResearch';
+import type { UnipilePost, UnipileProfile, UnipileResearch } from '../providers/unipileResearch';
 import type { BudgetDep, ClaudeDep, Clock, DossierRow, InternalHistory, ResearchDb } from './deps';
 import {
   appearsMinor,
+  BLOCKED_SOURCE_DOMAINS,
+  carefulAllowed,
+  isBlockedSource,
   norm,
   normOrg,
   orgFromTitle,
-  passesIdentity,
   sensitiveCategory,
   stripSensitiveSentences,
-  workDomains,
 } from './guards';
+import { type IdentityCard, identityCard, scorePage } from './identity';
 import {
   type DossierContent,
   dossierSchema,
@@ -41,7 +39,7 @@ import {
   retryNote,
 } from './prompts';
 
-export const DOSSIER_CAP_USD = 0.25;
+export const DOSSIER_CAP_USD = 0.3;
 export const DOSSIER_REUSE_MS = 30 * 86_400_000;
 export const EXA_CACHE_MS = 7 * 86_400_000;
 export const DOSSIER_MODEL = 'claude-opus-5-5';
@@ -185,8 +183,11 @@ export async function buildDossier(deps: DossierDeps, input: DossierInput): Prom
       cached: false,
     };
   }
+  // a page is used only when it is surely them: their name plus a second signal (identity.ts), never a blocked site
   const keep = (r: ExaResult) =>
-    identity.kind === 'anchored' && passesIdentity(resultText(r), identity.anchors);
+    identity.kind === 'anchored' &&
+    !isBlockedSource(r.url) &&
+    scorePage({ url: r.url, title: r.title, text: resultText(r) }, identity.card).strength === 'strong';
   const keptPeople = (peopleResults ?? []).filter(keep);
   const keptOther = otherResults.flat().filter(keep);
 
@@ -282,6 +283,8 @@ export async function buildDossier(deps: DossierDeps, input: DossierInput): Prom
     run.partial = true;
   }
   dossier = finish(dossier, history, thin && !linkedin.profile);
+  if (model === null)
+    run.notes.push('assembled without web research or the model; check it before relying on it');
 
   const storedSources: DossierSource[] = sources.map(({ text: _t, ...s }) => s);
   const status = run.partial ? 'partial' : 'ready';
@@ -360,7 +363,12 @@ export function exaSearches(input: DossierInput, now: number): ExaSearchRequest[
       maxCharacters: 1200,
     },
   };
-  const base = { type: 'auto' as const, numResults: 5, contents };
+  const base = {
+    type: 'auto' as const,
+    numResults: 5,
+    contents,
+    excludeDomains: [...BLOCKED_SOURCE_DOMAINS],
+  };
   const third: ExaSearchRequest =
     input.goalKind === 'collaboration'
       ? { ...base, category: 'publication', query: q(`"${name}"`, input.field ?? org) }
@@ -440,50 +448,90 @@ function resultText(r: ExaResult): string {
 }
 
 type IdentityVerdict =
-  | { kind: 'anchored'; anchors: { fullName: string; anchors: string[] } }
+  | { kind: 'anchored'; card: IdentityCard }
   | { kind: 'ambiguous'; candidates: DisambiguationCandidate[] }
   | { kind: 'none' };
 
-export function identityStep(
-  input: DossierInput,
-  profile: UnipileProfile | null,
-  people: ExaResult[],
-): IdentityVerdict {
-  const fullName = input.person.name;
-  const anchors = new Set<string>();
-  const org = normOrg(input.person.org);
-  if (org) anchors.add(org);
-  const slug = linkedInSlugOf(input.person.linkedinUrl) ?? profile?.public_identifier?.toLowerCase();
-  if (slug) anchors.add(norm(slug));
-  for (const d of workDomains(input.person.emails)) anchors.add(d);
-  const current = profile?.work_experience?.find((w) => w.current) ?? profile?.work_experience?.[0];
-  if (current?.company) anchors.add(normOrg(current.company));
+export interface CandidatePage {
+  url: string;
+  title?: string | null;
+  text?: string | null;
+  highlights?: string[] | null;
+  author?: string | null;
+}
 
-  const named = people.filter((r) => norm(resultText(r)).includes(norm(fullName)));
+const pageText = (r: CandidatePage) =>
+  [r.url, r.title, r.author, r.text, ...(r.highlights ?? [])].filter(Boolean).join(' \n ');
+
+/**
+ * Who the pages are about (§2 of docs/plan/20): with their LinkedIn profile or public name, that is who they are and
+ * Orbit never asks. With only an employer, Orbit asks "which one?" when the pages name the person at two or more other
+ * places and none at theirs. With nothing at all, one employer the pages agree on becomes the anchor; two or more ask.
+ */
+export function pickIdentity(card: IdentityCard, people: CandidatePage[]): IdentityVerdict {
+  const named = people.filter(
+    (r) => !isBlockedSource(r.url) && scorePage({ ...r, text: pageText(r) }, card).signals.includes('name'),
+  );
   const byOrg = new Map<string, DisambiguationCandidate>();
   for (const r of named) {
-    const o = orgFromTitle(r.title, fullName);
+    const o = orgFromTitle(r.title, card.fullName);
     const k = o ? normOrg(o) : norm(r.url);
     if (!byOrg.has(k))
       byOrg.set(k, {
-        name: fullName,
+        name: card.fullName,
         org: o,
         title: r.title ?? undefined,
         url: r.url,
         snippet: (r.highlights?.[0] ?? r.text ?? '').slice(0, 240) || undefined,
       });
   }
-
-  const a = { fullName, anchors: [...anchors].filter(Boolean) };
-  if (a.anchors.length > 0) {
-    if (named.some((r) => passesIdentity(resultText(r), a))) return { kind: 'anchored', anchors: a };
+  const linkedIn = !!card.slug;
+  if (linkedIn) return { kind: 'anchored', card };
+  if (card.employers.length > 0 || card.domains.length > 0) {
+    if (named.some((r) => scorePage({ ...r, text: pageText(r) }, card).strength === 'strong'))
+      return { kind: 'anchored', card };
     if (byOrg.size >= 2) return { kind: 'ambiguous', candidates: [...byOrg.values()].slice(0, 5) };
-    return { kind: 'anchored', anchors: a };
+    return { kind: 'anchored', card };
   }
   if (byOrg.size >= 2) return { kind: 'ambiguous', candidates: [...byOrg.values()].slice(0, 5) };
   const only = [...byOrg.values()][0];
-  if (only?.org) return { kind: 'anchored', anchors: { fullName, anchors: [normOrg(only.org)] } };
+  if (only?.org)
+    return {
+      kind: 'anchored',
+      card: { ...card, employers: [{ name: only.org, aliases: [only.org], current: true }], anchored: true },
+    };
   return { kind: 'none' };
+}
+
+export function identityStep(
+  input: DossierInput,
+  profile: UnipileProfile | null,
+  people: ExaResult[],
+): IdentityVerdict {
+  const card = identityCard({
+    name: input.person.name,
+    org: input.person.org,
+    title: input.person.title,
+    location: input.person.location,
+    linkedinUrl:
+      input.person.linkedinUrl ??
+      (profile?.public_identifier ? `https://www.linkedin.com/in/${profile.public_identifier}` : undefined),
+    emails: input.person.emails,
+    profile: profile
+      ? {
+          headline: profile.headline,
+          location: profile.location,
+          publicIdentifier: profile.public_identifier,
+          experience: (profile.work_experience ?? []).map((w) => ({
+            title: w.position,
+            company: w.company,
+            current: w.current,
+          })),
+          education: (profile.education ?? []).map((e) => ({ school: e.school })),
+        }
+      : null,
+  });
+  return pickIdentity(card, people);
 }
 
 function dedupeByUrl(rs: ExaResult[]): ExaResult[] {
@@ -558,11 +606,97 @@ export function invalidSourceIds(d: DossierContent, allowed: string[]): string[]
     ...d.recently.flatMap((x) => x.source_ids),
     ...d.in_common.flatMap((x) => x.source_ids),
     ...d.openers.flatMap((x) => x.source_ids),
+    ...carefulItems(d.careful).flatMap((x) => x.source_ids),
     ...(d.career ?? []).flatMap((x) => x.source_ids),
     ...(d.education ?? []).flatMap((x) => x.source_ids),
     ...(d.highlights ?? []).flatMap((x) => x.source_ids),
+    ...(d.company ?? []).flatMap((x) => x.source_ids),
   ];
   return [...new Set(all.filter((id) => !ok.has(id)))];
+}
+
+/** "careful" as cited items; a brief written before v2 held plain strings, which carry no source. */
+export function carefulItems(c: unknown): { text: string; source_ids: string[] }[] {
+  return (Array.isArray(c) ? c : [])
+    .map((x) =>
+      typeof x === 'string'
+        ? { text: x, source_ids: [] as string[] }
+        : x && typeof x === 'object' && typeof (x as { text?: unknown }).text === 'string'
+          ? {
+              text: (x as { text: string }).text,
+              source_ids: Array.isArray((x as { source_ids?: unknown }).source_ids)
+                ? ((x as { source_ids: unknown[] }).source_ids.filter(
+                    (i) => typeof i === 'string',
+                  ) as string[])
+                : [],
+            }
+          : undefined,
+    )
+    .filter((x): x is { text: string; source_ids: string[] } => !!x);
+}
+
+/** What one writing call needs to stay within a brief's money. */
+export interface WriteBudget {
+  /** spent so far on this brief, updated as the model is paid */
+  spent: number;
+  cap: number;
+  notes: string[];
+}
+
+/** The writing model's pre-call estimate for the brief: the prompt at $4/M plus ~2k tokens out at $20/M. */
+export const writeEstimateUsd = synthEstimateUsd;
+
+/**
+ * Write the brief (the writing model, structured output) and check its source ids. An answer that cites ids that do not exist
+ * is asked again once with the valid ids; when that retry would cost more than the brief has left, or the retry
+ * fails, the first answer (already paid for) is kept with only its uncited lines removed. It used to be thrown away
+ * for a bare fallback, losing a paid, mostly good brief.
+ */
+export async function writeBrief(
+  claude: ClaudeDep,
+  prompt: { system: string; user: string },
+  allowed: string[],
+  budget: WriteBudget,
+): Promise<{ content: DossierContent | null; partial: boolean }> {
+  let user = prompt.user;
+  let first: DossierContent | undefined;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const est = synthEstimateUsd(prompt.system.length + user.length);
+    if (budget.spent + est > budget.cap) {
+      if (first) {
+        budget.notes.push(
+          'source-id retry skipped: cost cap; kept the first answer without its uncited lines',
+        );
+        return { content: dropUncited(first, allowed), partial: true };
+      }
+      budget.notes.push('synthesis skipped: cost cap');
+      return { content: null, partial: true };
+    }
+    const r = await claude.parse('dossier', dossierSchema, { system: prompt.system, user });
+    budget.spent += r.costUsd ?? 0;
+    if (!r.ok) {
+      if (first) {
+        budget.notes.push(
+          `source-id retry failed (${r.reason}); kept the first answer without its uncited lines`,
+        );
+        return { content: dropUncited(first, allowed), partial: true };
+      }
+      budget.notes.push(
+        `synthesis unavailable (${r.reason}${r.message ? `: ${r.message.slice(0, 160)}` : ''})`,
+      );
+      return { content: null, partial: true };
+    }
+    const value = blankToNull(r.value);
+    const bad = invalidSourceIds(value, allowed);
+    if (bad.length === 0) return { content: value, partial: false };
+    if (attempt === 1) {
+      budget.notes.push('uncited claims removed');
+      return { content: dropUncited(value, allowed), partial: true };
+    }
+    first = value;
+    user = prompt.user + retryNote(bad, allowed);
+  }
+  return { content: first ? dropUncited(first, allowed) : null, partial: true };
 }
 
 async function synthesize(
@@ -570,55 +704,59 @@ async function synthesize(
   prompt: { system: string; user: string },
   allowed: string[],
 ): Promise<DossierContent | null> {
-  const { deps } = run;
-  let user = prompt.user;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const est = synthEstimateUsd(prompt.system.length + user.length);
-    if (run.spent + est > DOSSIER_CAP_USD) {
-      run.notes.push(attempt === 0 ? 'synthesis skipped: cost cap' : 'source-id retry skipped: cost cap');
-      return null;
-    }
-    const r = await deps.claude.parse('dossier', dossierSchema, { system: prompt.system, user });
-    run.spent += r.costUsd ?? 0;
-    if (!r.ok) {
-      run.notes.push(`synthesis unavailable (${r.reason})`);
-      return null;
-    }
-    const bad = invalidSourceIds(r.value, allowed);
-    if (bad.length === 0) return r.value;
-    if (attempt === 1) {
-      run.partial = true;
-      run.notes.push('uncited claims removed');
-      return dropUncited(r.value, allowed);
-    }
-    user = prompt.user + retryNote(bad, allowed);
-  }
-  return null;
+  const budget: WriteBudget = { spent: run.spent, cap: DOSSIER_CAP_USD, notes: run.notes };
+  const out = await writeBrief(run.deps.claude, prompt, allowed, budget);
+  run.spent = budget.spent;
+  if (out.partial && out.content) run.partial = true;
+  return out.content;
+}
+
+/** The model writes "" for a field it has nothing for (claude.ts flatNullable); the brief stores null. */
+export function blankToNull(d: DossierContent): DossierContent {
+  const n = (v: string | null | undefined) => (typeof v === 'string' && v.trim() ? v : null);
+  return {
+    ...d,
+    now: { ...d.now, since: n(d.now.since) },
+    recently: d.recently.map((x) => ({ ...x, date: n(x.date) })),
+    history: {
+      first_contact: n(d.history.first_contact),
+      last_contact: n(d.history.last_contact),
+      summary: n(d.history.summary),
+    },
+    ...(d.career ? { career: d.career.map((x) => ({ ...x, start: n(x.start), end: n(x.end) })) } : {}),
+    ...(d.education
+      ? { education: d.education.map((x) => ({ ...x, degree: n(x.degree), years: n(x.years) })) }
+      : {}),
+    ...(d.highlights
+      ? {
+          highlights: d.highlights.map((x) => ({
+            ...x,
+            date: n(x.date),
+            url: n(x.url),
+            summary: n(x.summary),
+          })),
+        }
+      : {}),
+  };
 }
 
 /** Remove ids that are not in the input; claims left with no source go too. */
 export function dropUncited(d: DossierContent, allowed: string[]): DossierContent {
   const ok = new Set(allowed);
   const f = (ids: string[]) => ids.filter((i) => ok.has(i));
+  const keep = <T extends { source_ids: string[] }>(xs: T[] | undefined) =>
+    (xs ?? []).map((x) => ({ ...x, source_ids: f(x.source_ids) })).filter((x) => x.source_ids.length);
   return {
     ...d,
     now: { ...d.now, source_ids: f(d.now.source_ids) },
-    recently: d.recently
-      .map((x) => ({ ...x, source_ids: f(x.source_ids) }))
-      .filter((x) => x.source_ids.length),
-    in_common: d.in_common
-      .map((x) => ({ ...x, source_ids: f(x.source_ids) }))
-      .filter((x) => x.source_ids.length),
-    openers: d.openers.map((x) => ({ ...x, source_ids: f(x.source_ids) })).filter((x) => x.source_ids.length),
-    career: (d.career ?? [])
-      .map((x) => ({ ...x, source_ids: f(x.source_ids) }))
-      .filter((x) => x.source_ids.length),
-    education: (d.education ?? [])
-      .map((x) => ({ ...x, source_ids: f(x.source_ids) }))
-      .filter((x) => x.source_ids.length),
-    highlights: (d.highlights ?? [])
-      .map((x) => ({ ...x, source_ids: f(x.source_ids) }))
-      .filter((x) => x.source_ids.length),
+    recently: keep(d.recently),
+    in_common: keep(d.in_common),
+    openers: keep(d.openers),
+    careful: keep(carefulItems(d.careful)),
+    career: keep(d.career),
+    education: keep(d.education),
+    highlights: keep(d.highlights),
+    company: keep(d.company),
     confidence: 'low',
   };
 }
@@ -640,16 +778,22 @@ export function finish(
     openers: clean(d.openers)
       .filter((o) => words(o.text) <= 25)
       .slice(0, 3),
-    careful: d.careful.filter((c) => !sensitiveCategory(c)),
+    // company context only, each line cited; nothing about the person's own life (guards.ts)
+    careful: carefulItems(d.careful).filter((c) => carefulAllowed(c.text) && c.source_ids.length > 0),
     career: (d.career ?? []).slice(0, 12),
     education: (d.education ?? []).slice(0, 6),
-    // a profile link has to be a web address, never anything a page could run
-    profiles: (d.profiles ?? []).filter((p) => /^https?:\/\//i.test(p.url)).slice(0, 6),
+    // a profile link has to be a web address, never anything a page could run, and never a blocked site
+    profiles: (d.profiles ?? [])
+      .filter((p) => /^https?:\/\//i.test(p.url) && !isBlockedSource(p.url))
+      .slice(0, 6),
     highlights: (d.highlights ?? [])
       .filter((h) => !sensitiveCategory(`${h.title} ${h.summary ?? ''}`))
+      // a highlight on a blocked site goes; one with a link that is not a web address keeps its text, without the link
+      .filter((h) => !h.url || !/^https?:\/\//i.test(h.url) || !isBlockedSource(h.url))
       .map((h) => ({ ...h, url: h.url && /^https?:\/\//i.test(h.url) ? h.url : null }))
       .slice(0, 8),
     topics: (d.topics ?? []).filter((t) => !sensitiveCategory(t)).slice(0, 6),
+    company: clean(d.company ?? []).slice(0, 5),
     history: {
       first_contact: d.history.first_contact ?? history.firstContact ?? null,
       last_contact: d.history.last_contact ?? history.lastContact ?? null,
@@ -689,7 +833,8 @@ function fallbackDossier(
         : null,
     },
     openers: [],
-    careful: ['This brief was assembled without web research; check it before relying on it.'],
+    // nothing to be careful about that a source says; the brief's status (partial) says it had no web research
+    careful: [],
     confidence: 'low',
     // the profile's own history, when there is a profile (always source S1)
     career: profile

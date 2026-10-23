@@ -268,6 +268,12 @@ export interface DraftContext {
    * application is one clause in it ("I've applied for Google's software engineering internship.").
    */
   applicationLine?: string;
+  /**
+   * The top opener of a deep-research brief the student ran on them, fully supported by its source (docs/plan/20 §6):
+   * a first message with no human link (a referral, a meeting, a shared school) opens with it as its one line only
+   * true of them. The app shows it as a chip ("from research [1]") the student can swap.
+   */
+  researchOpener?: string;
   /** the name of the mutual tie a connection line mentions without one ("my roommate"), from the student */
   mutualName?: string;
   /**
@@ -1021,6 +1027,13 @@ function autoWhyThem(ctx: DraftContext): { text: string; claim: DraftClaim } | u
       claim: { text: [p.title, org].filter(Boolean).join(' at '), kind: 'about_person' },
     };
   return undefined;
+}
+
+/** A research opener as the sentence a first message opens with: one sentence, ending in a full stop. */
+export function researchLine(text: string | undefined): string | undefined {
+  const t = text?.trim().replace(/\s+/g, ' ');
+  if (!t || t.split(' ').length > 30 || /[[\]]/.test(t)) return undefined;
+  return /[.!?]$/.test(t) ? t : `${t}.`;
 }
 
 /** The bracketed "Why them" gap in a draft, in the long (email) or short (LinkedIn note) form. */
@@ -1914,10 +1927,13 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       // note is already the line about them
       const useRole = role && !qq.reacted && !hiring ? role : undefined;
       const op = opener(ctx, seed, now, qq, useRole);
+      // the student's own research on them comes before what Orbit can say from their headline
+      const research = op ? undefined : researchLine(ctx.researchOpener);
+      if (research) claims.push({ text: research, kind: 'about_person' });
       // without a link the student gave, Orbit writes one from what it holds about them (their headline, their role)
-      const auto = op ? undefined : autoWhyThem(ctx);
+      const auto = op || research ? undefined : autoWhyThem(ctx);
       if (auto) claims.push(auto.claim);
-      if (!op && !auto) {
+      if (!op && !auto && !research) {
         needsInput.push('connection');
         claims.push({ text: 'connection missing', kind: 'logistics' });
       }
@@ -1935,6 +1951,7 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
         !!ctx.chat?.commentedOnPost && !['warmup', 'post'].includes(ctx.connection?.kind ?? '');
       const openText =
         op?.text ??
+        research ??
         auto?.text ??
         (commented
           ? `[What their post was about, e.g. "Read your post on ..." (you commented on it during the warm-up)]`
@@ -2029,7 +2046,7 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       if (isLinkedIn) {
         const short = op
           ? shortConnection(ctx, c!)
-          : (auto?.text ?? `[${WHY_THEM}: one line only true of ${first}]`);
+          : (research ?? auto?.text ?? `[${WHY_THEM}: one line only true of ${first}]`);
         if (o && short.includes(o)) qq = thereFor(qq, o);
         // someone who already knows the student is not told their school and year again
         const known = !!c && (c.kind === 'met' || (c.kind === 'prior_thread' && friend) || !!c.introduced);

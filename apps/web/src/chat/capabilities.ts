@@ -2,8 +2,8 @@ import type { Capability } from './types';
 
 /**
  * Every capability a student has in Orbit today, one per id in the capability inventory (181), plus the networking
- * agent's 20 (plan 16: goals, scores, research, sourcing, replies, autonomy, memory and cadence) and small talk with
- * Orbi (plan 19). The registry's coverage test checks that every id here is claimed by at least one tool, and that
+ * agent's 22 (plan 16: goals, scores, research, sourcing, replies, autonomy, memory and cadence; plan 20 added the
+ * research brief before a call and the month's research count) and small talk with Orbi (plan 19). The registry's coverage test checks that every id here is claimed by at least one tool, and that
  * every tool claims at least one. `kind` is how the chat treats it: read, a plain write, or a write that needs an
  * explicit Approve.
  */
@@ -1700,8 +1700,9 @@ export const CAPABILITIES: readonly Capability[] = [
   {
     id: 'research_person',
     area: 'Networking agent',
-    title: 'Research a person before writing to them',
-    kind: 'write',
+    title:
+      'Ask to research someone (the chat points to the Deep research button on their About tab, never starts it)',
+    kind: 'read',
     utterances: ['research Priya Shah', 'look up Dan before I email him', 'what is Maya up to lately'],
   },
   {
@@ -1710,6 +1711,28 @@ export const CAPABILITIES: readonly Capability[] = [
     title: 'Read what Orbit found about someone',
     kind: 'read',
     utterances: ['what did you find on Priya', "show me Dan's research", 'any openers for Maya'],
+  },
+  {
+    id: 'research_call_prep',
+    area: 'Networking agent',
+    title: 'What to know before a call: the brief, prep questions and facts',
+    kind: 'read',
+    utterances: [
+      'what should I know before my call with Maya',
+      'what should I know before my chat with Daniel',
+      'what has Lena been up to before our call',
+    ],
+  },
+  {
+    id: 'research_allowance',
+    area: 'Networking agent',
+    title: 'How many research briefs are left this month',
+    kind: 'read',
+    utterances: [
+      'how many research briefs do I have left',
+      'how much research is left this month',
+      'can I still research people',
+    ],
   },
   {
     id: 'source_find',

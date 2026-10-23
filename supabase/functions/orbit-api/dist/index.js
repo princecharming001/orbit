@@ -321,7 +321,7 @@ function costUsd(model, u2) {
 var TASKS = {
   compose: { model: "claude-opus-5-5", effort: "medium", maxTokens: 4e3 },
   reply: { model: "claude-opus-5-5", effort: "medium", maxTokens: 4e3 },
-  dossier: { model: "claude-opus-5-5", effort: "medium", maxTokens: 8e3 },
+  dossier: { model: "claude-opus-5-5", effort: "medium", maxTokens: 8e3, flatNullable: true },
   reply_classify: { model: "claude-haiku-5-5", effort: "low", maxTokens: 1e3 },
   memory_extract: { model: "claude-haiku-5-5", effort: "low", maxTokens: 1500 },
   goal_infer: { model: "claude-haiku-5-5", effort: "low", maxTokens: 1500 },
@@ -330,7 +330,9 @@ var TASKS = {
   classify: { model: "claude-haiku-5-5", effort: "low", maxTokens: 1e3 },
   extract_memory: { model: "claude-haiku-5-5", effort: "low", maxTokens: 1500 },
   extract_goal: { model: "claude-haiku-5-5", effort: "low", maxTokens: 1500 },
-  judge: { model: "claude-sonnet-5-5", maxTokens: 2e3 }
+  judge: { model: "claude-sonnet-5-5", maxTokens: 2e3 },
+  // high effort: against the writing model as the reference it agreed on 14 of 16 claims (low effort: 8 of 16), for $0.003
+  support: { model: "claude-haiku-5-5", effort: "high", maxTokens: 4e3 }
 };
 function makeClaude(deps) {
   const client = deps.apiKey ? deps.client ?? new Anthropic({ apiKey: deps.apiKey, fetch: deps.fetch, maxRetries: 2 }) : void 0;
@@ -348,7 +350,8 @@ function makeClaude(deps) {
       if (!verdict.ok)
         return { ok: false, budgetExceeded: true, cap: verdict.cap, resetsAt: verdict.resetsAt };
     }
-    const base = zodOutputFormat(req.schema);
+    const zf = zodOutputFormat(req.schema);
+    const base = setting.flatNullable ? { ...zf, schema: flattenNullable(zf.schema) } : zf;
     const format = {
       ...base,
       parse: (content) => {
@@ -398,16 +401,36 @@ function makeClaude(deps) {
     }
     return { ok: false, error: "max_tokens" };
     function callParse(max) {
-      return client.messages.parse({
-        model: setting.model,
-        max_tokens: max,
-        system: [{ type: "text", text: req.system, cache_control: { type: "ephemeral" } }],
-        messages: [{ role: "user", content: req.user }],
-        output_config: { ...setting.effort ? { effort: setting.effort } : {}, format }
-      });
+      return client.messages.parse(
+        {
+          model: setting.model,
+          max_tokens: max,
+          system: [{ type: "text", text: req.system, cache_control: { type: "ephemeral" } }],
+          messages: [{ role: "user", content: req.user }],
+          output_config: { ...setting.effort ? { effort: setting.effort } : {}, format }
+        },
+        // a caller with a deadline gets one attempt within it, never a retry that runs past it
+        req.timeoutMs ? { timeout: req.timeoutMs, maxRetries: 0 } : void 0
+      );
     }
   }
   return { configured: !!client, structured };
+}
+function flattenNullable(schema) {
+  if (Array.isArray(schema)) return schema.map(flattenNullable);
+  if (!schema || typeof schema !== "object") return schema;
+  const o = schema;
+  const any = o.anyOf;
+  if (Array.isArray(any) && any.length === 2) {
+    const rest = any.filter(
+      (x) => !(x && typeof x === "object" && x.type === "null")
+    );
+    if (rest.length === 1) {
+      const { anyOf: _a, ...others } = o;
+      return flattenNullable({ ...others, ...rest[0] });
+    }
+  }
+  return Object.fromEntries(Object.entries(o).map(([k, v]) => [k, flattenNullable(v)]));
 }
 
 // supabase/functions/_shared/google.ts
@@ -6840,7 +6863,37 @@ var SENSITIVE2 = [
   { category: "sexuality", re: /\b(gay|lesbian|bisexual|transgender|queer|lgbtq?\+?|sexual orientation)\b/i },
   {
     category: "politics",
-    re: /\b(democrat(ic)? (voter|supporter)|republican (voter|supporter)|political views?|voted for|votes for|campaigned for|donated to (the )?(campaign|party))\b/i
+    re: /\b(democrat(ic)? (voter|supporter)|republican (voter|supporter)|political views?|voted for|votes for|campaigned for|donated to (the )?(campaign|party)|political donations?)\b/i
+  },
+  {
+    // a street address, as written ("1200 Market Street"): case kept, so "5 years to drive growth" is not one
+    category: "home",
+    re: /\b\d{1,6}\s+[A-Z][a-z]+(\s+[A-Z][a-z]+){0,2}\s+(Street|St|Avenue|Ave|Road|Rd|Lane|Ln|Drive|Dr|Boulevard|Blvd|Court|Ct|Way|Place|Pl|Terrace|Circle)\b/
+  },
+  {
+    category: "home",
+    re: /\b(home address|lives (at|on) \d|zip code|apartment \d|apt\.? \d|neighbou?rhood (where|in which) (he|she|they) lives?|(his|her|their) (house|home) (in|on|at))\b/i
+  },
+  {
+    category: "pay",
+    re: /\b(salary|salaries|compensation package|total compensation|base pay|net worth|earns? \$|makes \$|paid \$|\$\s?\d[\d,.]*\s?k?\s+(a|per) year|annual pay|stock (grants?|options?) worth)\b/i
+  },
+  {
+    category: "personality",
+    re: /\b(personality|communication style|introvert(ed)?|extrovert(ed)?|myers[- ]briggs|mbti|enneagram|(intj|intp|entj|entp|infj|infp|enfj|enfp|istj|isfj|estj|esfj|istp|isfp|estp|esfp)\b|temperament|(is|seems|comes across as) (shy|arrogant|abrasive|difficult|blunt|awkward|cold|aloof|intense))\b/i
+  },
+  {
+    category: "legal",
+    // what happened to someone in court, not the practice area of a lawyer ("litigation associate" stays)
+    re: /\b(lawsuits?|sued|suing|indicted|indictment|arrested|arrest record|convicted|conviction|charged with|felony|misdemeanou?r|dui|restraining order|filed for bankruptcy|pleaded guilty|settled (a|the) (suit|case))\b/i
+  },
+  {
+    category: "immigration",
+    re: /\b(visa status|green card|immigration status|h-?1b status|undocumented|deport(ed|ation)|citizenship status)\b/i
+  },
+  {
+    category: "job_loss",
+    re: /\b((he|she|they) (was|were|got) (laid off|fired|let go)|lost (his|her|their) job|on (parental|maternity|paternity|medical|family) leave)\b/i
   }
 ];
 function sensitiveCategory(text2) {
@@ -8005,11 +8058,12 @@ function claudeDep(claude, userId) {
   return {
     async parse(task, schema, prompt) {
       const r = await claude.structured({
-        task: task === "dossier" ? "dossier" : "fit",
+        task: task === "dossier" ? "dossier" : task === "support" ? "support" : "fit",
         system: prompt.system,
         user: prompt.user,
         schema,
-        userId
+        userId,
+        timeoutMs: prompt.timeoutMs
       });
       if (r.ok) return { ok: true, value: r.data, costUsd: r.costUsd, model: r.model };
       if ("unconfigured" in r) return { ok: false, reason: "error", message: "unconfigured" };
@@ -8680,6 +8734,46 @@ var replyRoutes = {
   "/replies/draft": { method: "POST", auth: true, run: draft }
 };
 
+// supabase/functions/_shared/research/identity.ts
+var COMMON_WORD_ORGS = new Set(
+  [
+    "meta",
+    "block",
+    "square",
+    "apple",
+    "amazon",
+    "ramp",
+    "notion",
+    "target",
+    "visa",
+    "oracle",
+    "box",
+    "chase",
+    "merrill",
+    "bain",
+    "snap",
+    "slack",
+    "shell",
+    "intel",
+    "citadel",
+    "sequoia",
+    "goldman",
+    "plaid",
+    "scale",
+    "mercury",
+    "figure",
+    "gap",
+    "ford",
+    "discord",
+    "zoom",
+    "uber",
+    "lyft",
+    "ey",
+    "yc",
+    "x"
+  ].map((s) => s.toLowerCase())
+);
+
 // supabase/functions/_shared/research/prompts.ts
 var sourceIds = z.array(z.string());
 var dossierSchema = z.object({
@@ -8704,7 +8798,8 @@ var dossierSchema = z.object({
     summary: z.string().nullable()
   }),
   openers: z.array(z.object({ text: z.string(), source_ids: sourceIds })),
-  careful: z.array(z.string()),
+  // v2: each item cited like every other line (v1 wrote plain strings; readers accept both)
+  careful: z.array(z.object({ text: z.string(), source_ids: sourceIds })),
   confidence: z.enum(["high", "medium", "low"]),
   // the full picture (v1.1); optional so a dossier written before them still reads
   career: z.array(
@@ -8737,7 +8832,20 @@ var dossierSchema = z.object({
       source_ids: sourceIds
     })
   ).optional(),
-  topics: z.array(z.string()).optional()
+  topics: z.array(z.string()).optional(),
+  // v2: what is happening at their company, from company pages (Go deeper)
+  company: z.array(z.object({ text: z.string(), source_ids: sourceIds })).optional()
+});
+var supportSystem = [
+  "You check a research brief against its sources. For each numbered claim, read the sources it cites and give one verdict:",
+  '"supported": the cited sources state it, or it is a fair summary or paraphrase of what they state.',
+  '"partial": the sources back only part of it, or it says more than they do: a stronger verb ("led" where they say "joined"), a different date or number, or a role, place or detail they do not give.',
+  '"unsupported": the cited sources do not say it, or say something else.',
+  `Each claim says what kind it is. An opener is a line the student would say to them: judge only what it states about them or their work; the student's own reaction ("stuck with me", "I liked") is not a claim. A highlight names something of theirs (a post, talk, article, project): supported when the cited source is that item or describes it.`,
+  "Judge only against the cited source text given here, never what you know."
+].join("\n");
+var supportSchema = z.object({
+  verdicts: z.array(z.object({ id: z.string(), verdict: z.enum(["supported", "partial", "unsupported"]) }))
 });
 
 // supabase/functions/_shared/research/dossier.ts
@@ -9865,12 +9973,6 @@ async function addSourced(s, userId, ids) {
     const chatId = await ensureChat(db2, userId, personId, rec.goal_id, now);
     await db2.sql`
       update orbit.recommendations set status = 'added', person_id = ${personId}::uuid where id = ${rec.id}::uuid`;
-    await s.queue.enqueue({
-      kind: "enrich.dossier",
-      userId,
-      payload: { personId, goalId: rec.goal_id },
-      dedupeKey: `dossier:${personId}`
-    });
     const [p] = await db2.sql`
       select display_name, first_name from orbit.people where id = ${personId}::uuid`;
     out.push({ id: personId, displayName: p?.display_name ?? firstNameOf({ display_name: c.name }), chatId });

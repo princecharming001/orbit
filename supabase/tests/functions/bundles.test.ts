@@ -38,7 +38,7 @@ async function load(fn: string): Promise<(req: Request) => Promise<Response>> {
 
 describe('function bundles', () => {
   it('every bundled function imports only npm: packages pinned in its deno.json', () => {
-    for (const fn of ['orbit-api', 'orbit-worker', 'orbit-webhooks']) {
+    for (const fn of ['orbit-api', 'orbit-worker', 'orbit-webhooks', 'orbit-research']) {
       const src = readFileSync(join(functions, fn, 'dist/index.js'), 'utf8');
       const imports = JSON.parse(readFileSync(join(functions, fn, 'deno.json'), 'utf8')).imports as Record<
         string,
@@ -77,6 +77,19 @@ describe('function bundles', () => {
     const r = await h(
       new Request('https://ref.supabase.co/functions/v1/orbit-webhooks/gmail?token=x', {
         method: 'POST',
+        body: '{}',
+      }),
+    );
+    expect(r.status).toBe(503);
+    expect(r.headers.get('x-orbit-connector')).toBe('unconfigured');
+  });
+
+  it('orbit-research answers unconfigured', async () => {
+    const h = await load('orbit-research');
+    const r = await h(
+      new Request('https://ref.supabase.co/functions/v1/orbit-research/quick', {
+        method: 'POST',
+        headers: { origin: 'https://tryorbit.today', 'content-type': 'application/json' },
         body: '{}',
       }),
     );
