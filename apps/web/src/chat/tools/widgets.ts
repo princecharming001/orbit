@@ -31,7 +31,8 @@ export const offerChoices = defineTool({
       .max(3)
       .describe('Two or three next steps, most useful first.'),
   }),
-  capabilities: [],
+  // small talk is answered in words; the pills under it are what this tool draws
+  capabilities: ['small_talk'],
   progress: 'Adding options',
   async execute(input) {
     const options: ChoiceOption[] = input.options.map((o) => ({

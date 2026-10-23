@@ -135,7 +135,8 @@ describe('router mode', () => {
     const events = await send(c.id, 'hey');
     expect(kinds(events)).toEqual(['text', 'tool_start', 'tool_result', 'done']);
     const line = (events[0] as { delta: string }).delta;
-    expect(line).toMatch(/^Hey Sam\. /);
+    // the greeting varies by message, in the student's register (lowercase "hey" gets lowercase back)
+    expect(line).toMatch(/^(?:hey|hi) Sam(?:, good to see you)?\. /);
     expect(result(events)?.envelope.kind).toBe('choices');
     const { messages } = await engine.loadConversation(c.id);
     expect((messages[1]!.content as { text: string }[])[0]!.text).toBe(line);

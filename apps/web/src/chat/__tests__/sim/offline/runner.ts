@@ -12,7 +12,7 @@ import { createRoot } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
 import { db } from '../../../../db/schema';
 import { createChatEngine } from '../../../agent';
-import { type RouterIntent, routeUtterance } from '../../../agent/router';
+import { NOT_FOLLOWED_LEAD, type RouterIntent, routeUtterance } from '../../../agent/router';
 import { routerContextFor } from '../../../agent/routerContext';
 import { CAPABILITIES } from '../../../capabilities';
 import { execute, registry } from '../../../registry';
@@ -430,8 +430,8 @@ export class Session {
       /\?/.test(lead || env?.summary || '') ||
       env?.kind === 'choices' ||
       (tools.at(-1) === 'search_people' && /pick|which|more than one/i.test(said));
-    // "I didn't catch that" with a row of guesses is a dead end dressed as a question: it never counts as one
-    if (/^I didn'?t catch (that|what)/.test(lead) && !ex.cold) failures.push(`not understood: "${student}"`);
+    // "I'm not sure what you mean" with a row of guesses is a dead end dressed as a question: it never counts as one
+    if (NOT_FOLLOWED_LEAD.test(lead) && !ex.cold) failures.push(`not understood: "${student}"`);
     if (REFUSAL.test(said) && !ex.needsKey)
       failures.push(`refused: "${said.replace(/\s+/g, ' ').slice(0, 140)}"`);
     if (ex.needsKey && !KEY_REFUSAL.test(said) && !(ex.tool || ex.answer || ex.ask))

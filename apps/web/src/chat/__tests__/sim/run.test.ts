@@ -55,8 +55,12 @@ describe.skipIf(!SIM_ENABLED)(`sim: simulated students${only ? ` (${only})` : ''
         expect(ok, `goal ${v.goalMet} (<${s.minGoal}): ${v.worst}`).toBe(true);
       }
 
-      // a quality floor: nothing scores below 3, and the friendly/overwhelming checks hold
-      expect(v.score, `low score: ${v.worst}`).toBeGreaterThanOrEqual(3);
+      // a quality floor: nothing scores below 3 (or the scenario's own floor), and the voice checks hold for Orbi
+      expect(v.score, `low score: ${v.worst}`).toBeGreaterThanOrEqual(s.minScore ?? 3);
+      if (s.group === 'persona-orbi') {
+        expect(v.soundsHuman, `sounds like a bot: ${v.worst}`).toBe(true);
+        expect(v.staysOrbi, `lost the persona: ${v.worst}`).toBe(true);
+      }
     }, 180_000);
   }
 });

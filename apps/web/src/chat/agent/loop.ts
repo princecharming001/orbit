@@ -315,6 +315,13 @@ export async function runTurn(
   // tool executions of this turn, by tool_use id, so stopped turns can still be answered in the stored history
   const results = new Map<string, { content: string; isError: boolean }>();
   let pending: { message: Anthropic.Beta.BetaMessage; rowId: string } | undefined;
+  // every word streamed this turn: a turn that ends without one gets a follow-up asking for the answer in words
+  let spoken = '';
+  // the words said before a presentation tool (pills, a setup card) closed the turn: the prompt makes those tools
+  // the last thing in a turn, and a line the model adds after them reads as a doubled reply, so when words came
+  // before them the words after are neither shown nor stored
+  let closedAfter: string | undefined;
+  let muted = '';
 
   const tools = buildRunnerTools(registry, {
     signal,
@@ -353,6 +360,14 @@ export async function runTurn(
         now: clock(),
       });
       results.set(toolUseId, { content: projectEnvelope(spec, env), isError: env.kind === 'error' });
+      // the pills close the turn only when they were the whole round: next to a read tool, the answer is still to come
+      if (
+        CLOSING_TOOLS.has(spec.name) &&
+        closedAfter === undefined &&
+        pending &&
+        toolUsesOf(pending.message.content).every((u) => CLOSING_TOOLS.has(u.name))
+      )
+        closedAfter = spoken;
       onEvent({ type: 'tool_result', toolUseId, envelope: env });
       // the last tool of the turn to finish writes the tool_result message at once, so a crash right after the
       // tools ran still leaves every stored tool_use answered
@@ -409,14 +424,16 @@ export async function runTurn(
 
   let lastRowId = '';
   let lastStop = 'end_turn';
-  // every word streamed this turn: a turn that ends without one gets a follow-up asking for the answer in words
-  let spoken = '';
 
   for (let attempt = 0; ; attempt++) {
     try {
       for await (const stream of runner) {
         // listeners go on before anything is awaited: the stream does not replay events emitted before they attach
         stream.on('text', (delta) => {
+          if (closedAfter?.trim()) {
+            muted += delta;
+            return;
+          }
           spoken += delta;
           onEvent({ type: 'text', delta });
         });
@@ -454,6 +471,19 @@ export async function runTurn(
         const hasToolUse = message.content.some((b) => b.type === 'tool_use');
         // a truncated tool input often parses as a valid partial object: never run it, and keep it out of history
         if (message.stop_reason === 'max_tokens' && hasToolUse) throw new TruncatedToolInput();
+        if (closedAfter?.trim() && muted) {
+          if (hasToolUse) {
+            // the turn went on to another tool after the pills: the words were not a doubled reply after all
+            spoken += muted;
+            onEvent({ type: 'text', delta: muted });
+            muted = '';
+          } else {
+            // the line after the pills: not shown, and not stored, so a reload does not bring it back
+            muted = '';
+            lastStop = message.stop_reason ?? 'end_turn';
+            continue;
+          }
+        }
         const row = await persistAssistant(message);
         lastRowId = row.id;
         lastStop = message.stop_reason ?? 'end_turn';
@@ -508,6 +538,9 @@ export async function runTurn(
   }
   onEvent({ type: 'done', stopReason: lastStop, messageId: lastRowId });
 }
+
+/** The tools that end a turn: words come before them, and a line after them would read as a doubled reply. */
+const CLOSING_TOOLS = new Set(['offer_choices', 'show_setup']);
 
 const SPEAK_UP =
   "[Orbit] Your reply had no words, only cards or buttons. Answer the student's last message now in one to three plain, warm sentences from what the tools returned. Do not call any tools, and do not repeat what a card already lists.";

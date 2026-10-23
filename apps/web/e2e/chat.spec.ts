@@ -93,7 +93,7 @@ test.describe('Chat home', () => {
     expect(await greeting.evaluate((el) => getComputedStyle(el).fontSize)).toBe('36px');
     expect((await greeting.boundingBox())!.height).toBeLessThan(50);
     // the composer with its controls
-    await expect(composer(page)).toHaveAttribute('placeholder', 'Message Orbit');
+    await expect(composer(page)).toHaveAttribute('placeholder', 'Message Orbi');
     await expect(composer(page)).toBeFocused();
     await expect(page.getByTestId('composer-add')).toBeVisible();
     await expect(page.getByTestId('composer-mode')).toHaveText(/Templates/);
