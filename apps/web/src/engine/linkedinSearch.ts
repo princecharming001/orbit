@@ -7,9 +7,15 @@
 import type { CoffeeChat, User } from '@orbit/core';
 import { newId, roleFromHeadline } from '@orbit/core';
 import { db } from '../db/schema';
-import { mockLinkedInSearch, usesMockConnectors } from '../integrations/connectorsMock';
+import { mockLinkedInSearchPage, usesMockConnectors } from '../integrations/connectorsMock';
 import { isServerUser } from '../integrations/orbitApi';
-import { type LinkedInFound, searchLinkedIn, unipileConfigured } from '../integrations/unipile';
+import {
+  type LinkedInFound,
+  type LinkedInSearchQuery,
+  SEARCH_LIMIT_STATUS,
+  searchLinkedIn,
+  unipileConfigured,
+} from '../integrations/unipile';
 import { LIVE_SOON, liveLinkedInAccount } from './linkedinLive';
 import { addPersonByHand } from './people';
 import { freshPhoto } from './photos';
@@ -34,25 +40,50 @@ export async function linkedInSearchReady(user: Pick<User, 'id'>): Promise<boole
   return usesMockConnectors(user.id) || (unipileConfigured() && !!row.accessToken);
 }
 
-export type LinkedInSearchOutcome = { ok: true; people: FoundView[] } | { ok: false; message: string };
+export type LinkedInSearchOutcome =
+  | { ok: true; people: FoundView[]; cursor?: string; total?: number }
+  | { ok: false; message: string; limit?: boolean };
 
+/** The filters a structured search can add to (or use instead of) keywords; LinkedIn ANDs them. */
+export type LinkedInSearchFilters = Pick<LinkedInSearchQuery, 'title' | 'company' | 'school' | 'location'>;
+
+/**
+ * One page of a LinkedIn people search from the student's own account (second and third degree). Keywords alone
+ * (chat, the Map) or with filters (Discover); `cursor` asks for the page after the one that returned it.
+ */
 export async function searchLinkedInLive(
   user: Pick<User, 'id'>,
   keywords: string | undefined,
-  opts: { fetch?: typeof fetch } = {},
+  opts: { fetch?: typeof fetch; filters?: LinkedInSearchFilters; cursor?: string } = {},
 ): Promise<LinkedInSearchOutcome> {
   const row = await liveLinkedInAccount(user.id);
   if (!row?.externalAccountId) return { ok: false, message: 'Connect LinkedIn in Settings first.' };
   let people: LinkedInFound[];
-  if (usesMockConnectors(user.id)) people = mockLinkedInSearch(keywords);
-  else {
+  let cursor: string | undefined;
+  let total: number | undefined;
+  const filters = Object.fromEntries(
+    Object.entries(opts.filters ?? {}).filter(([, v]) => typeof v === 'string' && v.trim()),
+  ) as LinkedInSearchFilters;
+  if (usesMockConnectors(user.id)) {
+    const page = mockLinkedInSearchPage({ keywords, ...filters }, opts.cursor);
+    people = page.people;
+    cursor = page.cursor;
+    total = page.total;
+  } else {
     const r = await searchLinkedIn(
       row.externalAccountId,
-      { keywords: keywords?.trim() || undefined, distance: [2, 3] },
+      { keywords: keywords?.trim() || undefined, ...filters, distance: [2, 3], cursor: opts.cursor },
       { token: row.accessToken, fetch: opts.fetch },
     );
-    if (!r.ok) return { ok: false, message: r.reason === 'unconfigured' ? LIVE_SOON : r.message };
+    if (!r.ok)
+      return {
+        ok: false,
+        message: r.reason === 'unconfigured' ? LIVE_SOON : r.message,
+        limit: r.status === SEARCH_LIMIT_STATUS || undefined,
+      };
     people = r.value.people;
+    cursor = r.value.cursor;
+    total = r.value.total;
   }
   const mine = await db.people.where('userId').equals(user.id).toArray();
   const known = new Map(mine.filter((p) => p.linkedinMemberId).map((p) => [p.linkedinMemberId!, p]));
@@ -72,7 +103,19 @@ export async function searchLinkedInLive(
       found.set(id, p);
       return { ...p, id, knownPersonId: known.get(p.memberId)?.id };
     }),
+    cursor,
+    total,
   };
+}
+
+/**
+ * Make a result found earlier (Discover keeps its pages in this browser) addable again in this session: the add
+ * reads this session's results, and a reload starts with none.
+ */
+export function rememberFound(f: LinkedInFound): string {
+  const id = `${LINKEDIN_FOUND_PREFIX}${f.memberId}`;
+  if (!found.has(id)) found.set(id, f);
+  return id;
 }
 
 export type AddFoundOutcome =

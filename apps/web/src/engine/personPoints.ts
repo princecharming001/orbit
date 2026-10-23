@@ -14,7 +14,7 @@ import type {
   ResumeFacet,
   User,
 } from '@orbit/core';
-import { normalizeCompany } from '@orbit/core';
+import { normalizeCompany, tieBand, titleChangedMeaningfully } from '@orbit/core';
 import { db } from '../db/schema';
 import { dossierView } from './research';
 
@@ -40,21 +40,41 @@ export interface PointContext {
   affiliations: Affiliation[];
   facts: PersonFact[];
   edges: Edge[];
+  /**
+   * Pairs of people on one small email thread (three people or fewer, the student included), as "idA|idB" with
+   * idA < idB: being copied together on a big thread does not mean two people know each other
+   */
+  smallThreads?: Set<string>;
   dossier?: Dossier;
   now: Date;
 }
 
 const YEAR = 365.25 * 86_400_000;
-/** Ties that mean two people actually know each other. */
-const REAL_TIES = new Set<Edge['type']>([
-  'email_exchange',
-  'email_cc',
-  'email_cothread',
-  'meeting_coattendee',
-  'introduced_by',
-  'linkedin_mutual',
-  'co_tenure',
-]);
+const EMAIL_TIES = new Set<Edge['type']>(['email_exchange', 'email_cc', 'email_cothread']);
+
+/**
+ * A tie that shows two people really know each other: an introduction, overlapping years at one employer (dates on
+ * record), or a small email thread with both on it. Not the same employer with unknown dates, a big thread, or a
+ * LinkedIn connection.
+ */
+function realTie(e: Edge, ctx: Pick<PointContext, 'smallThreads'>): boolean {
+  if (e.type === 'introduced_by') return true;
+  if (e.type === 'co_tenure')
+    return (
+      !e.evidence.datesUnknown && typeof e.evidence.overlapMonths === 'number' && e.evidence.overlapMonths > 0
+    );
+  if (EMAIL_TIES.has(e.type)) {
+    const [a, b] = e.personAId < e.personBId ? [e.personAId, e.personBId] : [e.personBId, e.personAId];
+    return !!ctx.smallThreads?.has(`${a}|${b}`);
+  }
+  return false;
+}
+
+/** Warm or closer to the student: "whom you know well" is only said of them. */
+function knownWell(p: Person): boolean {
+  const band = p.tieBand ?? tieBand(p.tieScore ?? p.strength * 100);
+  return band === 'warm' || band === 'strong' || band === 'close';
+}
 const year = (iso?: string) => (iso ? new Date(iso).getFullYear() : undefined);
 const sentence = (s: string) => {
   const t = s.trim().replace(/\s+/g, ' ');
@@ -77,7 +97,11 @@ export function personPoints(person: Person, rec: Recommendation, ctx: PointCont
     .filter((a) => a.kind === 'employment')
     .sort((a, b) => (b.startDate ?? '').localeCompare(a.startDate ?? ''));
   const current = jobs.find((a) => a.isCurrent) ?? jobs[0];
-  const past = jobs.filter((a) => a !== current && !a.isCurrent);
+  // earlier employers, not an earlier title at the same one
+  const past = jobs.filter(
+    (a) =>
+      a !== current && !a.isCurrent && normalizeCompany(a.nameRaw) !== normalizeCompany(current?.nameRaw),
+  );
   const view =
     ctx.dossier && (ctx.dossier.status === 'ready' || ctx.dossier.status === 'partial')
       ? dossierView(ctx.dossier)
@@ -94,10 +118,11 @@ export function personPoints(person: Person, rec: Recommendation, ctx: PointCont
   if (sharedOrg) add('common', `You both worked at ${sharedOrg}`);
   // people the student knows who know them: the warmest reason to write
   const known = ctx.edges
-    // a real tie (they wrote, met, were introduced, are connected or overlapped at work), not just the same employer
-    .filter((e) => (e.personAId === person.id || e.personBId === person.id) && REAL_TIES.has(e.type))
+    // a real tie (introduced, overlapping years at one employer, a small thread together), and someone the student
+    // knows well (Warm or closer), not just the same employer or a big thread
+    .filter((e) => (e.personAId === person.id || e.personBId === person.id) && realTie(e, ctx))
     .map((e) => ctx.people.get(e.personAId === person.id ? e.personBId : e.personAId))
-    .filter((p): p is Person => !!p && p.strength >= 0.3 && !p.hiddenAt)
+    .filter((p): p is Person => !!p && !p.hiddenAt && knownWell(p))
     .sort((a, b) => b.strength - a.strength);
   const knownNames = [...new Set(known.map((p) => p.firstName))];
   if (knownNames.length)
@@ -105,7 +130,7 @@ export function personPoints(person: Person, rec: Recommendation, ctx: PointCont
       'common',
       knownNames.length === 1
         ? `Knows ${knownNames[0]}, whom you know well`
-        : `Knows ${knownNames[0]} and ${knownNames.length - 1} other${knownNames.length > 2 ? 's' : ''} you know`,
+        : `Knows ${knownNames[0]} and ${knownNames.length - 1} other${knownNames.length > 2 ? 's' : ''} you know well`,
     );
   for (const c of view?.inCommon ?? []) add('common', c.text);
   const myInterests = ctx.mine.filter((f) => f.kind === 'interest' && !f.excluded);
@@ -153,14 +178,27 @@ export function personPoints(person: Person, rec: Recommendation, ctx: PointCont
   const role = facts.find((f) => f.type === 'role_detail');
   if (role) add('does', role.text);
   const started = current?.startDate ? new Date(current.startDate) : undefined;
-  if (started && !Number.isNaN(started.getTime())) {
+  // a LinkedIn re-import dates a role by when Orbit saw it, not when it began: no "since" or "joined" from that date
+  const observed = current?.source === 'linkedin_csv';
+  if (started && !observed && !Number.isNaN(started.getTime())) {
     const yrs = (ctx.now.getTime() - started.getTime()) / YEAR;
     if (yrs >= 1.5) add('does', `${Math.floor(yrs)} years in the role, since ${year(current!.startDate)}`);
   }
 
   // ---- why now ----
-  if (started && (ctx.now.getTime() - started.getTime()) / YEAR < 1)
-    add('timing', `Joined ${current?.nameRaw ?? 'their team'} in the last year`);
+  if (started && (ctx.now.getTime() - started.getTime()) / YEAR < 1) {
+    if (!observed) add('timing', `Joined ${current?.nameRaw ?? 'their team'} in the last year`);
+    else {
+      // what a re-import saw: a new company, or a title that changed in earnest
+      const replaced = jobs.find(
+        (a) => !a.isCurrent && a.endDate?.slice(0, 10) === current!.startDate!.slice(0, 10),
+      );
+      if (replaced && normalizeCompany(replaced.nameRaw) !== normalizeCompany(current!.nameRaw))
+        add('timing', `Moved from ${replaced.nameRaw} to ${current!.nameRaw}`);
+      else if (replaced && current!.title && titleChangedMeaningfully(replaced.title, current!.title))
+        add('timing', `New role: ${current!.title}`);
+    }
+  }
   for (const r of rec.reasons) {
     // the school is the logo by their name, and warm or path ties say themselves on the card
     if (r.code === 'function_match') add('timing', r.text);
@@ -182,7 +220,7 @@ export async function loadPointContext(
   now = new Date(),
 ): Promise<Omit<PointContext, 'dossier'> & { dossiers: Map<string, Dossier> }> {
   const ids = new Set(personIds);
-  const [people, affiliations, facts, edges, dossiers, resumes] = await Promise.all([
+  const [people, affiliations, facts, edges, dossiers, resumes, threads] = await Promise.all([
     db.people.where('userId').equals(user.id).toArray(),
     db.affiliations
       .where('personId')
@@ -198,7 +236,16 @@ export async function loadPointContext(
       .anyOf([...ids])
       .toArray(),
     db.resumes.where('userId').equals(user.id).toArray(),
+    db.threads.where('userId').equals(user.id).toArray(),
   ]);
+  // small threads with one of these people on them: who was on a thread of three or fewer with whom
+  const smallThreads = new Set<string>();
+  for (const t of threads) {
+    const on = [...new Set(t.participantPersonIds)];
+    // three people at most, the student included: the two of them and the student (whose address is among them)
+    if (on.length !== 2 || t.participantEmails.length > 3 || !on.some((id) => ids.has(id))) continue;
+    for (const a of on) for (const b of on) if (a < b) smallThreads.add(`${a}|${b}`);
+  }
   const resume =
     resumes.find((r) => r.isCurrent) ?? resumes.sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
   const mine = resume ? await db.resumeFacets.where('resumeId').equals(resume.id).toArray() : [];
@@ -209,6 +256,7 @@ export async function loadPointContext(
     affiliations,
     facts: facts.filter((f) => !f.deletedAt),
     edges: edges.filter((e) => ids.has(e.personAId) || ids.has(e.personBId)),
+    smallThreads,
     dossiers: new Map(dossiers.map((d) => [d.personId, d])),
     now,
   };

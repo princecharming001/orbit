@@ -1579,8 +1579,10 @@ test.describe('Usability round 5: one draft, kept edits, saved settings, chats t
       .toBe(await toSend.count());
     const badge = Number(await page.getByTestId('approvals-badge').first().innerText());
     await page.goto('discover');
+    // someone with an email address: the first message is an email (data-channel says which)
     await page
       .getByTestId('rec-card')
+      .filter({ has: page.locator('[data-testid="rec-start"][data-channel="gmail"]') })
       .filter({ has: page.getByRole('button', { name: /^write first message$/i }) })
       .first()
       .getByTestId('rec-start')
@@ -2229,6 +2231,69 @@ test.describe('People holds the board and the list; Drafts holds the day', () =>
     // and the board agrees
     await page.goto('people');
     await expect(chatCard(page, who)).toHaveAttribute('data-testid', 'chat-card-replied');
+  });
+});
+
+test.describe('Discover: a feed of new people', () => {
+  test('Discover connects LinkedIn, loads more people on scroll, suggests picks, and a dismissal or an action takes a card away', async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+    await loadDemo(page);
+    await page.goto('discover');
+    // the sample student has no live LinkedIn yet: the page says what connecting adds and connects in place
+    await page.getByTestId('discover-connect-button').click();
+    const cards = page.getByTestId('found-card');
+    await expect(cards.first()).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId('discover-connect')).toHaveCount(0);
+    // proactive picks, each with one action
+    const picks = page.getByTestId('suggest-card');
+    await expect(picks.first()).toBeVisible();
+    await expect(picks.first().getByTestId('suggest-action')).toHaveCount(1);
+    // new people have photos, a reason and their scores
+    const first = cards.first();
+    await expect(first.locator('img').first()).toBeVisible();
+    await expect(first.getByTestId('found-reason')).not.toBeEmpty();
+    await expect(first.getByRole('meter', { name: 'Match' })).toBeVisible();
+    // reaching the end of the feed loads the next page
+    const before = await cards.count();
+    await page.locator('main').evaluate((m) => m.scrollTo(0, m.scrollHeight));
+    await expect.poll(async () => cards.count(), { timeout: 30_000 }).toBeGreaterThan(before);
+    // no one twice
+    const names = await cards.locator('a[id^="found-"]').allInnerTexts();
+    expect(new Set(names).size).toBe(names.length);
+    // not a fit: the card goes
+    const gone = (await cards.nth(1).locator('a[id^="found-"]').innerText()).trim();
+    await cards.nth(1).getByLabel('Not a fit?', { exact: true }).click();
+    await cards.nth(1).getByTestId('dismiss-wrong_role').click();
+    await expect(cards.filter({ hasText: gone })).toHaveCount(0);
+    await expect(page.getByTestId('toasts')).toContainText(/removed \(wrong role\)/i);
+    // saving a new person adds them to the student's people, and only then
+    const saved = (await cards.first().locator('a[id^="found-"]').innerText()).trim();
+    await cards.first().getByTestId('found-save').click();
+    await expect(page.getByTestId('toasts')).toContainText(new RegExp(`saved ${saved.split(' ')[0]}`, 'i'));
+    await expect(cards.filter({ hasText: saved })).toHaveCount(0);
+    await page.goto('people?view=list');
+    await expect(page.getByRole('link', { name: saved }).first()).toBeVisible();
+  });
+
+  test('Discover on a phone: one column, picks swipe sideways, nothing wider than the screen', async ({
+    page,
+  }) => {
+    test.setTimeout(150_000);
+    await page.setViewportSize({ width: 375, height: 812 });
+    await loadDemo(page);
+    await page.goto('discover');
+    await page.getByTestId('discover-connect-button').click();
+    await expect(page.getByTestId('found-card').first()).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId('suggest-card').first()).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
+    const card = (await page.getByTestId('found-card').first().boundingBox())!;
+    expect(card.x).toBeGreaterThanOrEqual(0);
+    expect(card.x + card.width).toBeLessThanOrEqual(376);
+    // the keyboard reaches a card's actions
+    await page.getByTestId('found-card').first().getByTestId('found-primary').focus();
+    await expect(page.getByTestId('found-card').first().getByTestId('found-primary')).toBeFocused();
   });
 });
 
