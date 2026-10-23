@@ -71,8 +71,9 @@ test.describe('Chat home on the real engine (no key)', () => {
     await home(page);
     await ask(page, 'hey');
     const turn = lastTurn(page);
-    await expect(turn).toContainText(/Hey Alex\./, { timeout: 20_000 });
-    await expect(turn).toContainText(/waiting on a message today/);
+    // Orbi answers a greeting as a greeting, then the one thing waiting in the account (plan 19)
+    await expect(turn).toContainText(/^(hi|hey) Alex\./i, { timeout: 20_000 });
+    await expect(turn).toContainText(/waiting to hear from you/);
     const text = (await turn.innerText()).trim();
     expect(text.split(/\s+/).length).toBeLessThan(60);
     await expect(turn.locator('ol, ul, h1, h2, h3, strong')).toHaveCount(0);
