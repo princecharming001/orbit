@@ -354,7 +354,8 @@ function normalizeClause(t: string): string {
 
 // ---- rules --------------------------------------------------------------------------------------------------------
 
-const ADV = String.raw`(?:(?:currently|now|mainly|mostly|primarily|really|only|also|actively|definitely|seriously|still|very|super|most|honestly|basically|just|totally) )*`;
+const ADV =
+  '(?:(?:currently|now|mainly|mostly|primarily|really|only|also|actively|definitely|seriously|still|very|super|most|honestly|basically|just|totally) )*';
 
 /** I'm + a verb of looking: "I'm targeting X", "I'm recruiting for X". The verb decides the memory's wording. */
 const IM_SEEKING = new RegExp(
