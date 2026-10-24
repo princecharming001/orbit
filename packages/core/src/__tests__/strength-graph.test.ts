@@ -8,7 +8,7 @@ import {
   knownSizeBucket,
   sizeFactor,
 } from '../graph/edges';
-import { countOutsideWedges, countOverlaps, orbitLayout, ringRotation } from '../graph/layout';
+import { countOutsideWedges, countOverlaps, largestGap, orbitLayout, ringRotation } from '../graph/layout';
 import { addEdge, bestPathsFrom, kShortestPaths, makeGraph, toReachPath } from '../graph/paths';
 import { computeStrength, interactionCount, isReciprocal, strengthTier } from '../scoring/strength';
 import { endOfNextBusinessDay } from '../suggestions/rules';
@@ -585,7 +585,63 @@ function zipfPeople(n: number, seed = 1): Person[] {
   });
 }
 
+/**
+ * A network after a LinkedIn import: a third with no company ("Independent"), a quarter at a handful of big companies,
+ * and the rest each at a company of their own, where a close or warm tie is often the only person the student knows.
+ */
+function linkedInPeople(n: number, seed = 1): Person[] {
+  const r = rng(seed);
+  return Array.from({ length: n }, (_, i) => {
+    const u = r();
+    const org = u < 0.35 ? '' : u < 0.6 ? `Big ${Math.floor(r() ** 1.6 * 20)}` : `Startup ${i}`;
+    const t = r();
+    const strength = t < 0.04 ? 0.6 + r() * 0.3 : t < 0.12 ? 0.4 + r() * 0.19 : r() * 0.39;
+    return person(`p${i}`, org, { strength });
+  });
+}
+
+/** The widest empty stretch of each ring that has a dozen dots or more, in degrees. */
+const ringGaps = (l: ReturnType<typeof orbitLayout>) =>
+  ([0, 1, 2] as const)
+    .filter((ring) => l.nodes.filter((x) => x.ring === ring).length >= 12)
+    .map((ring) => (largestGap(l.nodes, ring) * 180) / Math.PI);
+
 describe('orbitLayout at scale (GRL-05, GRL-07)', () => {
+  it('reaches all the way round on every ring when most small companies show only a close tie', {
+    timeout: 60_000,
+  }, () => {
+    // in strength order the big companies' weak ties filled one half of the outer ring, many tracks deep, and the
+    // small companies' close ties the other half, with no outer dots at all (a 150 to 220 degree empty arc)
+    for (const seed of [1, 2])
+      for (const n of [1500, 3000, 5000]) {
+        const l = orbitLayout(linkedInPeople(n, seed), new Map());
+        const gaps = ringGaps(l);
+        expect(gaps.length, `seed ${seed}, ${n} people`).toBe(3);
+        for (const g of gaps)
+          expect(g, `seed ${seed}, ${n} people: ${gaps.map(Math.round)}`).toBeLessThan(45);
+        expect(countOverlaps(l.nodes)).toBe(0);
+        expect(countOutsideWedges(l)).toBe(0);
+        const total = l.groups.reduce((s, g) => s + (g.endAngle - g.startAngle), 0);
+        expect(total).toBeCloseTo(Math.PI * 2, 5);
+      }
+  });
+  it('still reaches all the way round after growing in batches, each laid out where the last one was', {
+    timeout: 60_000,
+  }, () => {
+    // a LinkedIn sync writes people in batches while the map keeps companies where the student saw them: the order
+    // and wedges kept from the small network must not leave a stretch of the bigger one empty
+    const people = linkedInPeople(4000, 3);
+    let l = orbitLayout(people.slice(0, 300), new Map());
+    for (let n = 550; n <= 4000; n += 250) {
+      l = orbitLayout(people.slice(0, n), new Map(), { previous: l.groups });
+      expect(countOverlaps(l.nodes), `${n} people`).toBe(0);
+      expect(countOutsideWedges(l), `${n} people`).toBe(0);
+    }
+    const gaps = ringGaps(l);
+    expect(gaps.length).toBe(3);
+    for (const g of gaps) expect(g, gaps.map(Math.round).join(', ')).toBeLessThan(45);
+  });
+
   for (const n of [90, 300, 1000, 2000]) {
     it(`has no overlapping dots and accounts for everyone at ${n} people`, () => {
       const people = zipfPeople(n);

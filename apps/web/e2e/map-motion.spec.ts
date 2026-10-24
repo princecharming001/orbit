@@ -140,6 +140,107 @@ function meanAngle(dots: { x: number; y: number }[], centre: [number, number]): 
   return (Math.atan2(sy, sx) * 180) / Math.PI;
 }
 
+/**
+ * Writes `count` people through the app's database (so the map's live queries see them), in batches like a LinkedIn
+ * sync, as a network after a LinkedIn import looks: a third with no company, a quarter at twenty big companies, and
+ * the rest each at a company of their own, where a close or warm tie is often the only person the student knows.
+ */
+async function syncLinkedIn(page: Page, from: number, count: number, batch = count) {
+  await page.evaluate(
+    async ({ from, count, batch }) => {
+      const db = (
+        window as unknown as {
+          __orbitDb: {
+            users: { toArray(): Promise<{ id: string }[]> };
+            people: { bulkPut(rows: unknown[]): Promise<unknown> };
+          };
+        }
+      ).__orbitDb;
+      const userId = (await db.users.toArray())[0]!.id;
+      let seed = 17;
+      const rnd = () => {
+        seed = (seed * 1664525 + 1013904223) >>> 0;
+        return seed / 2 ** 32;
+      };
+      for (let i = 0; i < from * 4; i++) rnd();
+      const letter = (k: number) => String.fromCharCode(97 + (k % 26));
+      for (let s = 0; s < count; s += batch) {
+        const rows: unknown[] = [];
+        for (let i = from + s; i < from + Math.min(count, s + batch); i++) {
+          const u = rnd();
+          const org =
+            u < 0.35 ? undefined : u < 0.6 ? `Big Co ${Math.floor(rnd() ** 1.6 * 20)}` : `Startup ${i}`;
+          const t = rnd();
+          const strength = t < 0.04 ? 0.6 + rnd() * 0.3 : t < 0.12 ? 0.4 + rnd() * 0.19 : rnd() * 0.39;
+          // a real name has no digits (the map only shows people it can name)
+          const tag = `${letter(i)}${letter(Math.floor(i / 26))}${letter(Math.floor(i / 676))}`;
+          const now = new Date().toISOString();
+          rows.push({
+            id: `li-${i}`,
+            userId,
+            displayName: `Sync ${tag}`,
+            firstName: 'Sync',
+            lastName: tag,
+            nameNormalized: `sync ${tag}`,
+            emails: [],
+            currentOrganizationRaw: org,
+            relationshipType: 'unknown',
+            strength,
+            interactionCount: 0,
+            sources: ['manual'],
+            isHuman: true,
+            tags: [],
+            createdAt: now,
+            updatedAt: now,
+          });
+        }
+        await db.people.bulkPut(rows);
+        await new Promise((r) => setTimeout(r, 120));
+      }
+    },
+    { from, count, batch },
+  );
+}
+
+/**
+ * The widest stretch of the circle, in degrees, with no dot drawn on it, per ring (close ties, warm ties, the rest),
+ * from where the dots are on the canvas. A ring with nothing on it counts as 360.
+ */
+async function ringGaps(page: Page): Promise<number[]> {
+  return page.evaluate(() => {
+    const m = (
+      window as unknown as {
+        __orbitMap: {
+          snapshot(): { centre: [number, number] };
+          positions(): Record<string, { x: number; y: number; alpha: number }>;
+          slot(id: string): { radius: number } | undefined;
+        };
+      }
+    ).__orbitMap;
+    const [cx, cy] = m.snapshot().centre;
+    // the rings' radial bands in layout units
+    const bands = [
+      [60, 232],
+      [232, 372],
+      [372, 520],
+    ];
+    const angles: number[][] = [[], [], []];
+    for (const [id, d] of Object.entries(m.positions())) {
+      const radius = m.slot(id)?.radius;
+      const ring = bands.findIndex(([lo, hi]) => radius !== undefined && radius >= lo! && radius < hi!);
+      if (ring < 0 || d.alpha < 0.5) continue;
+      angles[ring]!.push(((((Math.atan2(d.y - cy, d.x - cx) * 180) / Math.PI) % 360) + 360) % 360);
+    }
+    return angles.map((a) => {
+      a.sort((x, y) => x - y);
+      if (!a.length) return 360;
+      let gap = a[0]! + 360 - a[a.length - 1]!;
+      for (let i = 1; i < a.length; i++) gap = Math.max(gap, a[i]! - a[i - 1]!);
+      return gap;
+    });
+  });
+}
+
 test.describe('Map motion', () => {
   test('the first visit of a session plays the arrival once; a click finishes it at once', async ({
     page,
@@ -1364,6 +1465,32 @@ test.describe('Map motion with a big network', () => {
         snap.tags.some((t) => t.startsWith(name)),
         name,
       ).toBe(true);
+  });
+
+  test('a big LinkedIn network synced while the map is open settles all the way round, and so does a fresh open', async ({
+    page,
+  }) => {
+    // the founder's map: thousands of LinkedIn connections, most of them at a company of their own. It used to put
+    // every outer-ring company on one side, crammed many tracks deep, and leave the other side's outer rings empty
+    await loadDemo(page);
+    await briefWritten(page);
+    await syncLinkedIn(page, 0, 900);
+    await openMap(page);
+    // the sync goes on while the map is open: hundreds of people at a time, each batch laid out where the last was
+    await syncLinkedIn(page, 900, 2400, 300);
+    await mapSettled(page, 60_000);
+    const open = await ringGaps(page);
+    for (const g of open)
+      expect(g, `outer rings while open: ${open.map(Math.round).join(', ')}`).toBeLessThan(45);
+    // the next visit lays the whole network out at once
+    await page.reload();
+    await expect(mapCanvas(page)).toBeVisible();
+    await mapSettled(page, 60_000);
+    expect(Number(await mapCanvas(page).getAttribute('data-nodes'))).toBeGreaterThan(200);
+    const fresh = await ringGaps(page);
+    for (const g of fresh) expect(g, `fresh open: ${fresh.map(Math.round).join(', ')}`).toBeLessThan(45);
+    await expect(mapCanvas(page)).toHaveAttribute('data-overlaps', '0');
+    await expect(mapCanvas(page)).toHaveAttribute('data-outside-wedges', '0');
   });
 });
 
