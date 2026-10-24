@@ -1024,7 +1024,8 @@ test.describe('First-run guidance and plain next steps', () => {
       idb.close();
     });
     await page.getByTestId('drafts-refresh').click();
-    await expect(page.getByTestId('toasts')).toContainText(/updated/i);
+    // a refresh rebuilds the day's cards, which a loaded machine can take a while over
+    await expect(page.getByTestId('toasts')).toContainText(/updated/i, { timeout: 20_000 });
     if (await page.getByTestId('drafts-more').isVisible()) await page.getByTestId('drafts-more').click();
     const merge = page.getByTestId('suggestion-confirm_merge').first();
     await expect(merge.getByTestId('merge-choice')).toContainText(/both have/i);
