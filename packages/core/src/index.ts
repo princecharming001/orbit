@@ -33,6 +33,7 @@ export * from './pipeline/cadence';
 export * from './pipeline/introductions';
 export * from './pipeline/transitions';
 export * from './recommend/discover';
+export * from './recommend/quality';
 export * from './recommend/score';
 export * from './recommend/title';
 export * from './recommend/why';

@@ -63,7 +63,8 @@ describe('sending LinkedIn messages from Orbit', () => {
     const sent = await db.outbound.get(draft.id);
     expect(sent).toMatchObject({ status: 'sent', channel: 'linkedin' });
     expect(sent?.providerMessageId).toMatch(/^demo-li-/);
-  });
+    // connecting runs the sample student's whole LinkedIn sync (83 connections): seconds of work on a busy machine
+  }, 20_000);
 
   it('can still be opened in LinkedIn instead, and goes back to hand-off after a disconnect', async () => {
     const { draft } = await freshLinkedInDraft(true);

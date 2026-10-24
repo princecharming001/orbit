@@ -225,10 +225,14 @@ describe('Discover scores', () => {
     const fits = scored.map((s) => Math.round(s.fit * 100));
     const reaches = scored.map((s) => Math.round(s.reach * 100));
     const most = (xs: number[]) => Math.max(...[...new Set(xs)].map((v) => xs.filter((x) => x === v).length));
+    const odds = scored.map((s) => Math.round(s.odds * 100));
     expect(most(fits)).toBeLessThanOrEqual(2);
-    expect(most(reaches)).toBeLessThanOrEqual(3);
+    // third degree with nothing else on record is one reach: no path tells them apart (their reply odds do)
+    expect(most(reaches)).toBeLessThanOrEqual(4);
     expect(new Set(fits).size).toBeGreaterThanOrEqual(12);
     expect(Math.max(...fits) - Math.min(...fits)).toBeGreaterThan(35);
+    expect(new Set(odds).size).toBeGreaterThanOrEqual(10);
+    expect(Math.max(...odds) - Math.min(...odds)).toBeGreaterThan(30);
   });
 
   it('rank an alum in a target role at a target company with mutuals above a founder far out', () => {
@@ -238,7 +242,14 @@ describe('Discover scores', () => {
     expect(by('B').score).toBeGreaterThan(by('J').score);
     expect(by('D').fit).toBeGreaterThan(by('F').fit); // an APM beats a director for a student's coffee chat
     expect(by('A').reasons[0]!.code).toBe('alumni_target');
-    expect(by('B').reasons[0]!.text).toBe('3 mutual connections on LinkedIn');
+    // the target company is the reason; three mutual connections only say the path is warm
+    expect(by('B').reasons[0]!.text).toBe('Works at Figma, on your target list');
+    const texts = by('B').reasons.map((r) => r.text);
+    expect(texts.indexOf('3 mutual connections')).toBeGreaterThan(
+      texts.indexOf('Works at Figma, on your target list'),
+    );
+    // a junior answers a student more often than a director does
+    expect(by('D').odds).toBeGreaterThan(by('F').odds);
   });
 
   it('reach: mutual connections above a shared school above third degree', () => {
@@ -302,7 +313,11 @@ describe('Discover scores', () => {
       { name: 'X', title: 'Software Engineer', company: 'Acme', distance: 3 },
       p,
     );
-    expect(working.reasons.map((r) => r.text)).toContain('Works in software engineering (Software Engineer)');
+    expect(working.reasons.map((r) => r.text)).toContain(
+      "Software Engineer at Acme, the role you're targeting",
+    );
+    // a role true of thousands is never a reason on its own (quality.worthSuggesting needs a specific one)
+    expect(working.reasons.every((r) => r.code !== 'target_company' && r.code !== 'alumni_field')).toBe(true);
   });
 
   it('a card leads with its strongest reason', () => {
@@ -316,13 +331,16 @@ describe('Discover scores', () => {
   });
 });
 
+/** A real-looking name for an id ("p3" is "Alex Pdson"): Discover never suggests a profile without one. */
+const nameOf = (id: string) =>
+  `${id.replace(/\d/g, (d) => 'abcdefghij'[Number(d)]!).replace(/^./, (c) => c.toUpperCase())}son`;
 const person = (id: string, extra: Partial<Person>): Person => ({
   id,
   userId: 'u',
-  displayName: id,
-  firstName: id,
-  lastName: '',
-  nameNormalized: id,
+  displayName: `Alex ${nameOf(id)}`,
+  firstName: 'Alex',
+  lastName: nameOf(id),
+  nameNormalized: `alex ${nameOf(id).toLowerCase()}`,
   emails: [],
   relationshipType: 'unknown' as Person['relationshipType'],
   strength: 0.05,
@@ -353,12 +371,20 @@ describe('network recommendations (recommendPeople)', () => {
       resumeFacets: [],
       people: [
         person('hopeful', { headline: 'Aspiring Investment Banker | Finance at Michigan', isAlumni: true }),
-        person('banker', { currentTitle: 'Investment Banking Analyst', currentOrganizationRaw: 'Evercore' }),
+        person('banker', {
+          currentTitle: 'Investment Banking Analyst',
+          currentOrganizationRaw: 'Evercore',
+          isAlumni: true,
+        }),
+        // the same role with nothing specific behind it: true of thousands, so not suggested
+        person('stranger', { currentTitle: 'Investment Banking Analyst', currentOrganizationRaw: 'Lazard' }),
       ],
     });
     const why = (id: string) => recs.find((r) => r.personId === id)?.reasons.map((x) => x.text) ?? [];
-    expect(why('hopeful').join(' ')).not.toMatch(/Works in/);
-    expect(why('banker')).toContain('Works in investment banking (Investment Banking Analyst)');
+    expect(why('hopeful')).toEqual([]);
+    expect(why('banker')).toContain('Cornell University alum, now an Investment Banking Analyst at Evercore');
+    expect(why('banker')).toContain("Investment Banking Analyst at Evercore, the role you're targeting");
+    expect(why('stranger')).toEqual([]);
   });
 
   it('says "you are both at X" only when the resume says the student is there now', () => {

@@ -8,9 +8,12 @@
  * the data proves: a role match is read from the person's title, never from a headline that only hopes for the role,
  * and a school is claimed only with education evidence.
  */
-import { functionPhrase } from '../labels';
+
+import { article } from '../drafts/phrasing';
+import { isRecruiter } from '../drafts/sector';
 import { normalizeCompany, stripDiacritics } from '../text/normalize';
 import type { RecruitingGoals, ResumeFacet, TargetCompany } from '../types';
+import { rankScore, replyOdds } from './quality';
 import {
   FUNCTION_SEARCH_TITLE,
   LEVEL_ANSWERS,
@@ -335,6 +338,8 @@ export interface DiscoverCandidate {
   prior?: number;
   /** the search that found them, as a last-resort reason */
   why?: string;
+  /** reply odds worked out by the caller with more than this knows (recommendPeople) */
+  odds?: number;
 }
 
 export interface DiscoverReason {
@@ -343,10 +348,17 @@ export interface DiscoverReason {
 }
 
 export interface DiscoverScore {
+  /** Match: how well they fit the student's goals */
   fit: number;
+  /** Reach: how warm the path to them is */
   reach: number;
   prior: number;
+  /** Reply odds: how likely they are to answer the student */
+  odds: number;
+  /** what Discover ranks by (quality rankScore) */
   score: number;
+  /** something ties them to the student's goals (a role in the target function, a wanted company, the school) */
+  goalLink: boolean;
   /** strongest first: the first is the card's one line */
   reasons: DiscoverReason[];
   parts: {
@@ -432,6 +444,9 @@ export function scoreDiscoverCandidate(c: DiscoverCandidate, profile: DiscoverPr
   // ---- fit ----
   let role = 0;
   for (const t of profile.targetTitles) role = Math.max(role, titleSimilarity(c.title, t));
+  // a title in a target function is the role, however it is written ("M&A Associate" is investment banking)
+  const fnHit = [...titleFunctions(c.title)].some((f) => profile.targetFunctions.includes(f));
+  if (fnHit) role = Math.max(role, 0.65);
   if (!inRole) role *= status === 'incoming' ? 0.6 : 0.3;
   const key = normalizeCompany(c.company);
   let like = 0;
@@ -466,11 +481,14 @@ export function scoreDiscoverCandidate(c: DiscoverCandidate, profile: DiscoverPr
   const pastOrg = key ? profile.pastOrgs.find((o) => o.key === key) : undefined;
   const text = `${c.headline ?? ''} ${c.company ?? ''} ${c.title ?? ''}`.toLowerCase();
   const industry = profile.industries.find((i) => i.length > 1 && text.includes(i.toLowerCase()));
+  // an industry the role's own words name ("Software" in "Software Engineer") says nothing about where they work
+  const industryOfWork =
+    industry && !(c.title ?? '').toLowerCase().includes(industry.toLowerCase()) ? industry : undefined;
   const company = Math.max(
     priority ? PRIORITY_FIT[priority] : 0,
     repliedHere ? 0.6 : wroteHere ? 0.45 : 0,
     pastOrg ? 0.65 : 0,
-    industry ? 0.35 : 0,
+    industryOfWork ? 0.35 : 0,
   );
   const targetPlace = placeMatch(c.location, profile.locations);
   const place = targetPlace ? 1 : placeMatch(c.location, profile.homeLocations) ? 0.5 : 0;
@@ -503,9 +521,26 @@ export function scoreDiscoverCandidate(c: DiscoverCandidate, profile: DiscoverPr
             : 0.15;
     reach = noisyOr(degree, school ? 0.28 : 0, c.colleague ? 0.5 * c.colleague.strength : 0);
   }
-  reach = clamp01(Math.max(0.05, reach) * (0.8 + 0.2 * answers));
+  // reach is the path alone; whether they answer is the reply odds
+  reach = clamp01(Math.max(0.05, reach));
   const prior = clamp01(c.prior ?? answers + (school ? 0.05 : 0));
-  const score = Math.max(fit, 0.02) ** 0.55 * reach ** 0.3 * Math.max(prior, 0.05) ** 0.15;
+  const odds =
+    c.odds ??
+    replyOdds({
+      title: c.title,
+      status,
+      recruiter: isRecruiter(c.title),
+      alum: !!school,
+      sharedOrg: pastOrg ? (pastOrg.current ? 'now' : 'past') : undefined,
+      warmPath: c.colleague ? 'colleague' : undefined,
+      strength: c.known?.strength,
+      distance: c.known ? undefined : c.distance,
+      mutualCount: c.mutualCount,
+      connected: c.known?.linkedinConnected,
+      likeReplied: !!likeEx?.replied && like >= 0.75,
+    });
+  const score = rankScore({ match: fit, reach, odds });
+  const goalLink = (inRole && role >= 0.5) || company > 0 || !!school || like >= 0.75;
 
   // ---- reasons, strongest first; each one the data proves ----
   const reasons: DiscoverReason[] = [];
@@ -516,8 +551,12 @@ export function scoreDiscoverCandidate(c: DiscoverCandidate, profile: DiscoverPr
     say('colleague', `${c.colleague.firstName}, whom you know, works at ${c.company} too`);
   if (school && priority && c.company)
     say('alumni_target', `${profile.school} alum at ${c.company}, on your target list`);
-  if (!c.known && c.mutualCount && c.mutualCount > 0)
-    say('mutuals', `${c.mutualCount} mutual connection${c.mutualCount === 1 ? '' : 's'} on LinkedIn`);
+  const roleHeld = inRole && !!c.title && role >= 0.6;
+  const where = c.company ? ` at ${c.company}` : '';
+  if (school && !priority && roleHeld)
+    say('alumni_field', `${profile.school} alum, now ${article(c.title!)} ${c.title}${where}`);
+  if (!priority && roleHeld && industryOfWork && c.company)
+    say('role_industry', `${c.title}${where}, in ${industryOfWork}, an industry on your list`);
   if (pastOrg && c.company) {
     const r = sharedOrgReason(pastOrg, c.company);
     say(r.code, r.text);
@@ -526,16 +565,13 @@ export function scoreDiscoverCandidate(c: DiscoverCandidate, profile: DiscoverPr
     say('like_replied', `Same kind of role as ${likeEx.name}, who replied to you`);
   if (school) say('alumni', `Went to ${profile.school}, like you`);
   if (priority && c.company) say('target_company', `Works at ${c.company}, on your target list`);
-  if (inRole && c.title && role >= 0.6) {
-    const fn = [...titleFunctions(c.title)].find((f) => profile.targetFunctions.includes(f));
-    say(
-      'function_match',
-      fn ? `Works in ${functionPhrase(fn)} (${c.title})` : `${c.title}, a role you are targeting`,
-    );
-  }
+  if (roleHeld) say('function_match', `${c.title}${where}, the role you're targeting`);
+  // a count of mutual connections says how warm the path is, not why to meet them: it comes after the reasons that do
+  if (!c.known && c.mutualCount && c.mutualCount > 0)
+    say('mutuals', `${c.mutualCount} mutual connection${c.mutualCount === 1 ? '' : 's'}`);
   if (like >= 0.75 && !likeEx?.replied) say('like_reached', 'In a role like people you have written to');
   if (targetPlace) say('location', `Based in ${targetPlace}, where you want to work`);
-  if (industry && c.company) say('industry', `Works in ${industry}`);
+  if (industryOfWork && c.company) say('industry', `Works in ${industryOfWork}`);
   if (!c.known && c.distance === 2 && !c.mutualCount)
     say('second_degree', 'Second degree connection on LinkedIn');
   if (c.why) say('search', c.why);
@@ -543,7 +579,9 @@ export function scoreDiscoverCandidate(c: DiscoverCandidate, profile: DiscoverPr
     fit: round(fit),
     reach: round(reach),
     prior: round(prior),
-    score: round(score),
+    odds,
+    score,
+    goalLink,
     reasons,
     parts: {
       role: round(role),
@@ -566,13 +604,15 @@ const REASON_ORDER = [
   'colleague',
   'shared_org_now',
   'alumni_target',
-  'mutuals',
-  'shared_org',
-  'like_replied',
-  'warm',
   'target_company',
+  'alumni_field',
+  'role_industry',
+  'shared_org',
+  'warm',
+  'like_replied',
   'function_match',
   'alumni',
+  'mutuals',
   'like_reached',
   'resume_overlap',
   'location',

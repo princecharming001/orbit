@@ -33,9 +33,12 @@ describe('why someone is suggested', () => {
       'You both know Nitin, Ana, Lee and 2 others',
     );
     const count = whyThem({ mutuals: { count: 12 }, headline: 'PM at Ramp', now });
-    expect(count[0]!.text).toBe('12 mutual connections on LinkedIn');
+    expect(count[0]!.text).toBe('12 mutual connections');
+    // a count is not a reason to meet a stranger; people the student knows by name are
+    expect(count[0]!.anchor).toBeUndefined();
     const named = whyThem({ mutuals: { names: ['Nitin'], count: 12 }, headline: 'PM at Ramp', now });
     expect(named[0]!.text).toBe('You both know Nitin');
+    expect(named[0]!.anchor).toBe('tie');
     // three named friends outrank a count of many
     expect(whyThem({ mutuals: { names: ['A', 'B', 'C'] }, now })[0]!.strength).toBeGreaterThan(
       whyThem({ mutuals: { count: 40 }, now })[0]!.strength,
@@ -113,7 +116,7 @@ describe('why someone is suggested', () => {
       'Works at Stripe, at the top of your target list',
     );
     expect(texts({ goal: { role: { title: 'Software Engineer' } }, company: 'Figma', now })[0]).toBe(
-      "Software Engineer at Figma, a role you're targeting",
+      "Software Engineer at Figma, the role you're targeting",
     );
     expect(texts({ goal: { industry: 'fintech' }, now })[0]).toBe(
       'Works in fintech, an industry on your list',
@@ -133,10 +136,21 @@ describe('why someone is suggested', () => {
     );
     expect(r.map((x) => x.text)).toEqual([
       'Software Engineer at Stripe, on your target list',
-      '4 mutual connections on LinkedIn',
       'Based in New York, where you want to work',
+      '4 mutual connections on LinkedIn',
       'Found by the search: Cornell alumni at Stripe',
     ]);
+    expect(r[0]!.anchor).toBe('goal');
+    // on Discover the search that found them is not a reason
+    const plain = whyFromReasons(
+      [
+        { code: 'target_company', text: 'Works at Stripe, on your target list' },
+        { code: 'search', text: 'Cornell alumni at Stripe' },
+      ],
+      { company: 'Stripe' },
+      { filler: false },
+    );
+    expect(plain.map((x) => x.text)).toEqual(['Works at Stripe, on your target list']);
     // an alum at a target company: one line says both, the company and the school are not said again
     const alum = whyFromReasons(
       [
@@ -157,6 +171,61 @@ describe('why someone is suggested', () => {
     });
     expect(thin.map((x) => x.kind)).toEqual(['search', 'thin']);
     expect(thin[1]!.text).toBe('Only their LinkedIn headline so far');
+  });
+
+  it('says an alum in the field, or the role in an industry on the list, in one specific line', () => {
+    const alum = whyThem({
+      title: 'Product Manager',
+      company: 'Acme',
+      goal: { role: { title: 'Product Manager' } },
+      school: { name: 'UC Berkeley' },
+      history: { connectedOn: '2025-01-01' },
+      now,
+    });
+    expect(alum[0]).toMatchObject({
+      text: 'UC Berkeley alum, now a Product Manager at Acme',
+      anchor: 'goal',
+    });
+    // neither the plain role line nor "Went to UC Berkeley" repeats it
+    expect(alum.some((x) => /the role you're targeting|^Went to/.test(x.text))).toBe(false);
+    const ind = whyThem({
+      company: 'Plaid',
+      goal: { role: { title: 'Product Manager' }, industry: 'fintech' },
+      now,
+    });
+    expect(ind[0]).toMatchObject({
+      text: 'Product Manager at Plaid, in fintech, an industry on your list',
+      anchor: 'goal',
+    });
+    // the role alone, a LinkedIn connection and the city are true of thousands: none is an anchor
+    const generic = whyThem(
+      {
+        company: 'Acme',
+        goal: { role: { title: 'Product Manager' } },
+        history: { connectedOn: '2025-01-01' },
+        city: { name: 'New York', why: 'target' },
+        now,
+      },
+      { filler: false },
+    );
+    expect(generic.some((x) => x.anchor)).toBe(false);
+    expect(generic.some((x) => x.kind === 'thin')).toBe(false);
+  });
+
+  it('says who could introduce them once: not again as the one person you both know', () => {
+    const r = whyThem({ warmPath: { name: 'Chaya' }, mutuals: { names: ['Chaya'] }, now }).map((x) => x.text);
+    expect(r).toContain('Chaya could introduce you');
+    expect(r).not.toContain('You both know Chaya');
+    const two = whyThem({ warmPath: { name: 'Chaya' }, mutuals: { names: ['Chaya', 'Ana'] }, now });
+    expect(two.map((x) => x.text)).toContain('You both know Chaya and Ana');
+    expect(
+      whyThem({
+        title: 'M&A Associate',
+        goal: { role: { title: 'M&A Associate' } },
+        school: { name: 'NYU' },
+        now,
+      })[0]!.text,
+    ).toBe('NYU alum, now an M&A Associate');
   });
 
   it('names a month, with the year once it is more than eleven months back', () => {

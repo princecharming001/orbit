@@ -93,7 +93,7 @@ describe('copy that used to leak codes', () => {
       now: new Date('2026-10-01T12:00:00Z'),
     });
     const texts = recs.flatMap((r) => r.reasons.map((x) => x.text));
-    expect(texts).toContain('Works in product management (Product Manager)');
+    expect(texts).toContain("Product Manager at Figma, the role you're targeting");
     expect(texts.join(' ')).not.toMatch(/\b(swe|pm)\b/);
   });
   it('a direct connection is never banded a long shot', () => {

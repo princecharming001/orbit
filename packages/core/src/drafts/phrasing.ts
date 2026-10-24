@@ -166,8 +166,15 @@ export function roleNoun(title: string | undefined): string | undefined {
     .trim();
   return t ? lowerPhrase(t) : undefined;
 }
-export const article = (noun: string) =>
-  /^[aeiou]/i.test(noun) && !/^(uni|eu|one)/i.test(noun) ? 'an' : 'a';
+/**
+ * "a" or "an" by sound: "an analyst", "a university recruiter", and an initialism read letter by letter, "an M&A
+ * associate", "an SDE", "a PM" (F, H, L, M, N, R, S and X start with a vowel sound).
+ */
+export const article = (noun: string): 'a' | 'an' => {
+  const first = noun.trim().split(/[\s,]+/)[0] ?? '';
+  if (/^[A-Z&]{2,}$/.test(first) || first.includes('&')) return /^[AEFHILMNORSX]/.test(first) ? 'an' : 'a';
+  return /^[aeiou]/i.test(noun) && !/^(uni|eu|one|use)/i.test(noun) ? 'an' : 'a';
+};
 
 // ---------------------------------------------------------------------------------------------------------------
 // Fact clauses

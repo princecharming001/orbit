@@ -158,7 +158,10 @@ export function whySignalsFor(
     ? matchedFunction(`${role} ${person.currentOrganizationRaw ?? ''}`, ctx.goals?.targetFunctions ?? [])
     : undefined;
   const roleGoal = role && (fn || rec.reasons.some((r) => r.code === 'function_match'));
-  const text = `${person.headline ?? ''} ${person.currentOrganizationRaw ?? ''}`.toLowerCase();
+  // the role's own words ("Software" in "Software Engineer") are not the industry they work in
+  const text = `${person.headline ?? ''} ${person.currentOrganizationRaw ?? ''}`
+    .toLowerCase()
+    .replace((role ?? person.currentTitle ?? '').toLowerCase() || '\u0000', ' ');
   const industry = (ctx.goals?.targetIndustries ?? []).find(
     (i) => i.trim().length > 1 && text.includes(i.trim().toLowerCase()),
   );
@@ -376,8 +379,11 @@ export async function loadPointContext(
   user: PointContext['user'],
   personIds: string[],
   now = new Date(),
-): Promise<Omit<PointContext, 'dossier'> & { dossiers: Map<string, Dossier> }> {
+  /** the student's people when the caller has them already (Discover's view reads them once) */
+  known?: Person[],
+): Promise<LoadedPointContext> {
   const ids = new Set(personIds);
+  const list = [...ids];
   const [
     people,
     affiliations,
@@ -390,28 +396,16 @@ export async function loadPointContext(
     targetCompanies,
     touchpoints,
   ] = await Promise.all([
-    db.people.where('userId').equals(user.id).toArray(),
-    db.affiliations
-      .where('personId')
-      .anyOf([...ids])
-      .toArray(),
-    db.facts
-      .where('personId')
-      .anyOf([...ids])
-      .toArray(),
+    known ?? db.people.where('userId').equals(user.id).toArray(),
+    db.affiliations.where('personId').anyOf(list).toArray(),
+    db.facts.where('personId').anyOf(list).toArray(),
     db.edges.where('userId').equals(user.id).toArray(),
-    db.dossiers
-      .where('personId')
-      .anyOf([...ids])
-      .toArray(),
+    db.dossiers.where('personId').anyOf(list).toArray(),
     db.resumes.where('userId').equals(user.id).toArray(),
     db.threads.where('userId').equals(user.id).toArray(),
     db.goals.get(user.id),
     db.targetCompanies.where('userId').equals(user.id).toArray(),
-    db.touchpoints
-      .where('personId')
-      .anyOf([...ids])
-      .toArray(),
+    db.touchpoints.where('personId').anyOf(list).toArray(),
   ]);
   // small threads with one of these people on them: who was on a thread of three or fewer with whom
   const smallThreads = new Set<string>();
@@ -437,5 +431,12 @@ export async function loadPointContext(
     smallThreads,
     dossiers: new Map(dossiers.map((d) => [d.personId, d])),
     now,
+    forIds: ids,
   };
 }
+
+/** A point context read for a set of people (`forIds`), with each one's research brief. */
+export type LoadedPointContext = Omit<PointContext, 'dossier'> & {
+  dossiers: Map<string, Dossier>;
+  forIds: Set<string>;
+};

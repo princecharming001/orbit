@@ -1,4 +1,11 @@
-import type { ChatStage, DismissSignal, OutreachExample, Person, Recommendation } from '@orbit/core';
+import type {
+  ChatStage,
+  DismissSignal,
+  OutreachExample,
+  Person,
+  Recommendation,
+  Touchpoint,
+} from '@orbit/core';
 import { feedback } from '../db/repo';
 import { db } from '../db/schema';
 
@@ -138,4 +145,33 @@ export async function loadDiscoverSignals(
     ...extraDismissed,
   ];
   return { outreach, dismissed };
+}
+
+/** The student wrote to them (outside a chat) lately and they have not answered: they are not suggested again. */
+const WAITING_DAYS = 90;
+export function waitingOnThem(
+  personId: string,
+  touches: Pick<Touchpoint, 'personId' | 'kind' | 'occurredAt'>[],
+  now: Date,
+): boolean {
+  const mine = touches.filter((t) => t.personId === personId);
+  const out = mine
+    .filter((t) => t.kind === 'email_out' || t.kind === 'linkedin_out' || t.kind === 'text_out')
+    .map((t) => t.occurredAt)
+    .sort()
+    .at(-1);
+  if (!out || now.getTime() - new Date(out).getTime() > WAITING_DAYS * 86_400_000) return false;
+  return !mine.some(
+    (t) => (t.kind === 'email_in' || t.kind === 'linkedin_in' || t.kind === 'text_in') && t.occurredAt > out,
+  );
+}
+
+/** Everyone the student is waiting on (waitingOnThem), from all their touches at once. */
+export function waitingSet(
+  touches: Pick<Touchpoint, 'personId' | 'kind' | 'occurredAt'>[],
+  now: Date,
+): Set<string> {
+  const byPerson = new Map<string, typeof touches>();
+  for (const t of touches) byPerson.set(t.personId, [...(byPerson.get(t.personId) ?? []), t]);
+  return new Set([...byPerson].filter(([id, ts]) => waitingOnThem(id, ts, now)).map(([id]) => id));
 }

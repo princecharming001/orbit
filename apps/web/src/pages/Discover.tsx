@@ -28,7 +28,7 @@ import {
   restoreFound,
 } from '../engine/discoverFeed';
 import { connectLinkedInLive, liveLinkedInAvailable } from '../engine/linkedinLive';
-import { loadPointContext, personPoints, whyThemFor } from '../engine/personPoints';
+import { loadPointContext } from '../engine/personPoints';
 import {
   dismissRecommendation,
   outreachChannelFor,
@@ -93,7 +93,29 @@ function DiscoverFeed({ tabs }: { tabs?: ReactNode }) {
   const [loading, setLoading] = useState(false);
   const [outcome, setOutcome] = useState<LoadMoreOutcome>();
   const [connecting, setConnecting] = useState(false);
-  const view = useLiveQuery(() => (user ? discoverView(user) : undefined), [user?.id]);
+  // what the network cards say about their people is read in its own live query: it reads tables a LinkedIn sync
+  // writes to all the time, and the feed should not wait on them (discoverView reads it itself if this is behind)
+  const recIds =
+    useLiveQuery(
+      () =>
+        userId
+          ? db.recommendations
+              .where('userId')
+              .equals(userId)
+              .filter((r) => r.status === 'new' || r.status === 'saved')
+              .toArray()
+              .then((rs) => [...new Set(rs.map((r) => r.personId))].sort().join())
+          : '',
+      [userId],
+    ) ?? '';
+  const pointCtx = useLiveQuery(
+    () => (user && recIds ? loadPointContext(user, recIds.split(',')) : undefined),
+    [user?.id, recIds],
+  );
+  const view = useLiveQuery(
+    () => (user ? discoverView(user, new Date(), { pointCtx, readContext: false }) : undefined),
+    [user?.id, pointCtx],
+  );
   const people =
     useLiveQuery(() => (userId ? db.people.where('userId').equals(userId).toArray() : []), [userId]) ?? [];
   const tcCount =
@@ -146,12 +168,6 @@ function DiscoverFeed({ tabs }: { tabs?: ReactNode }) {
     if (inView && canAutoLoad && firstLoad.current) void loadMore();
   }, [inView, canAutoLoad, loadMore]);
 
-  // what each network card says about the person: read once for everyone on the page
-  const networkIds = (view?.network ?? []).map((c) => c.person.id).join();
-  const pointCtx = useLiveQuery(
-    () => (user && networkIds ? loadPointContext(user, networkIds.split(',')) : undefined),
-    [user?.id, networkIds],
-  );
   const searchHits = useMemo(() => {
     const s = q.trim().toLowerCase();
     if (!s) return [];
@@ -419,29 +435,7 @@ function DiscoverFeed({ tabs }: { tabs?: ReactNode }) {
               c.kind === 'found' ? (
                 <FoundCardView key={c.id} card={c} h={foundH} />
               ) : (
-                <NetworkCardView
-                  key={c.id}
-                  card={c}
-                  h={networkH}
-                  why={
-                    pointCtx
-                      ? whyThemFor(
-                          c.person,
-                          c.rec,
-                          { ...pointCtx, dossier: pointCtx.dossiers.get(c.person.id) },
-                          c.introducer,
-                        )
-                      : undefined
-                  }
-                  points={
-                    pointCtx
-                      ? personPoints(c.person, c.rec, {
-                          ...pointCtx,
-                          dossier: pointCtx.dossiers.get(c.person.id),
-                        })
-                      : undefined
-                  }
-                />
+                <NetworkCardView key={c.id} card={c} h={networkH} />
               ),
             )}
             {loading && view.connected && (
@@ -520,7 +514,13 @@ function FeedFooter({
   hasQueries: boolean;
   onMore: () => void;
 }) {
-  if (!connected) return null;
+  // only people with a specific reason to meet them are shown: the end of the list says so instead of padding it
+  if (!connected)
+    return (
+      <p className="mt-6 text-center text-[13px] text-ink-3" data-testid="discover-end">
+        That's everyone in your network worth a coffee chat right now.
+      </p>
+    );
   const line = (text: string, testId: string, action?: ReactNode) => (
     <div className="mt-6 flex flex-col items-center gap-2 text-center" data-testid={testId}>
       {text && <p className="text-[13px] text-ink-3 max-w-md">{text}</p>}

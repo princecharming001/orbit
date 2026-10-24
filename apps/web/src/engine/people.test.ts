@@ -310,7 +310,7 @@ describe('a LinkedIn upload from anywhere in the app', () => {
     const recs = await db.recommendations.where('userId').equals(user.id).toArray();
     const daniel = (await people()).find((p) => p.firstName === 'Daniel')!;
     const rec = recs.find((x) => x.personId === daniel.id)!;
-    expect(rec.reasons.map((x) => x.text)).toContain('Works in investment banking (Analyst)');
+    expect(rec.reasons.map((x) => x.text)).toContain("Analyst at Goldman Sachs, the role you're targeting");
     const sana = (await people()).find((p) => p.firstName === 'Sana')!;
     const sanaReasons = recs.find((x) => x.personId === sana.id)?.reasons.map((x) => x.text) ?? [];
     expect(sanaReasons.join(' ')).not.toMatch(/investment banking/);

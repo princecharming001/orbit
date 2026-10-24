@@ -2327,6 +2327,29 @@ test.describe('Discover: a feed of new people', () => {
     await expect(first.locator('img').first()).toBeVisible();
     await expect(first.getByTestId('found-reason')).not.toBeEmpty();
     await expect(first.getByRole('meter', { name: 'Match' })).toBeVisible();
+    // three meters on every card, each five segments lit by band like a signal meter, the number for screen readers
+    for (const name of ['Match', 'Reach', 'Reply odds']) {
+      const meter = first.getByRole('meter', { name });
+      await expect(meter).toBeVisible();
+      await expect(meter.getByTestId('meter-segment')).toHaveCount(5);
+      const value = Number(await meter.getAttribute('aria-valuenow'));
+      expect(value).toBeGreaterThanOrEqual(0);
+      expect(value).toBeLessThanOrEqual(100);
+      const lit = await meter.locator('[data-testid="meter-segment"][data-lit="true"]').count();
+      expect(lit).toBe(value > 0 ? Math.min(5, Math.max(1, Math.ceil(value / 20))) : 0);
+      await expect(meter).toHaveAttribute('aria-valuetext', new RegExp(`^${value} out of 100`));
+    }
+    await expect(page.getByTestId('discover-legend')).toContainText('Reply odds');
+    // nobody is suggested with nothing behind them, and no pick is justified by a count of mutual connections
+    await expect(page.getByTestId('discover-feed')).not.toContainText(
+      /That's all Orbit knows|Not much known/,
+    );
+    await expect(page.getByTestId('discover-suggestions')).not.toContainText(/That's all Orbit knows/);
+    for (const line of await picks.getByTestId('suggest-reason').allInnerTexts())
+      expect(line).not.toMatch(/mutual connection|Connected on LinkedIn/);
+    // names read as names: never in capitals
+    for (const name of await cards.locator('a[id^="found-"]').allInnerTexts())
+      expect(name.trim()).not.toMatch(/^[A-Z][A-Z .'-]{3,}$/);
     // reaching the end of the feed loads the next page
     const before = await cards.count();
     await page.locator('main').evaluate((m) => m.scrollTo(0, m.scrollHeight));
@@ -2350,7 +2373,10 @@ test.describe('Discover: a feed of new people', () => {
       saved = (await cards.first().locator('a[id^="found-"]').innerText({ timeout: 5_000 })).trim();
       await cards.filter({ hasText: saved }).getByTestId('found-save').click({ timeout: 5_000 });
     }).toPass({ timeout: 60_000 });
-    await expect(page.getByTestId('toasts')).toContainText(new RegExp(`saved ${saved.split(' ')[0]}`, 'i'));
+    // the save writes them into Orbit while the LinkedIn sync started on connect may still be writing: allow for it
+    await expect(page.getByTestId('toasts')).toContainText(new RegExp(`saved ${saved.split(' ')[0]}`, 'i'), {
+      timeout: 15_000,
+    });
     await expect(cards.filter({ hasText: saved })).toHaveCount(0);
     await page.goto('people?view=list');
     await expect(page.getByRole('link', { name: saved }).first()).toBeVisible();
@@ -2370,6 +2396,12 @@ test.describe('Discover: a feed of new people', () => {
     const card = (await page.getByTestId('found-card').first().boundingBox())!;
     expect(card.x).toBeGreaterThanOrEqual(0);
     expect(card.x + card.width).toBeLessThanOrEqual(376);
+    // the three meters sit side by side inside the card, with their labels whole
+    const meters = page.getByTestId('found-card').first().getByTestId('found-scores');
+    const mb = (await meters.boundingBox())!;
+    expect(mb.x + mb.width).toBeLessThanOrEqual(card.x + card.width);
+    await expect(meters.getByRole('meter')).toHaveCount(3);
+    await expect(meters.getByText('Reply odds', { exact: true })).toBeVisible();
     // the keyboard reaches a card's actions
     await page.getByTestId('found-card').first().getByTestId('found-primary').focus();
     await expect(page.getByTestId('found-card').first().getByTestId('found-primary')).toBeFocused();
@@ -2407,6 +2439,12 @@ test.describe('Wide screens use the room', () => {
     const scores = page.getByTestId('rec-scores').first();
     await expect(scores).toBeVisible();
     await expect(scores.getByRole('meter', { name: 'Match' })).toBeVisible();
+    await expect(scores.getByRole('meter', { name: 'Reach' })).toBeVisible();
+    await expect(scores.getByRole('meter', { name: 'Reply odds' })).toBeVisible();
+    // people in the network are on Discover only for a specific reason: never with "that's all Orbit knows"
+    await expect(page.getByTestId('rec-card').first()).toBeVisible();
+    for (const t of await page.getByTestId('rec-card').allInnerTexts())
+      expect(t).not.toMatch(/That's all Orbit knows|Not much known/);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(1680);
   });
 });
