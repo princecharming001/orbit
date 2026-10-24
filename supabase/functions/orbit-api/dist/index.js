@@ -7950,22 +7950,6 @@ function rankCompanyTargets(input) {
   return chosen;
 }
 
-// packages/core/src/labels.ts
-var FUNCTION_LABELS = {
-  swe: "Software engineering",
-  pm: "Product management",
-  ib: "Investment banking",
-  consulting: "Consulting",
-  data: "Data science and ML",
-  design: "Product design",
-  finance: "Finance",
-  marketing: "Marketing",
-  research: "Research",
-  vc: "Venture capital",
-  ops: "Operations"
-};
-var FUNCTION_CODES = Object.keys(FUNCTION_LABELS);
-
 // packages/core/src/recommend/score.ts
 function responsePrior(p, user) {
   let z6 = -0.4;
