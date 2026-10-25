@@ -404,7 +404,7 @@ describe('hopEvidence', () => {
       'met Bo (Mar 2026)',
     );
     expect(hopEvidence('a', t('co_tenure', { orgName: 'Stripe', fromYear: 2021, toYear: 2023 }), 'Bo')).toBe(
-      'worked with Bo at Stripe (2021–2023)',
+      'worked with Bo at Stripe (2021 to 2023)',
     );
     expect(hopEvidence('a', t('introduced_by', { introducerId: 'a' }), 'Bo')).toBe('introduced you to Bo');
     expect(hopEvidence('b', t('introduced_by', { introducerId: 'a' }), 'Al')).toBe(

@@ -11523,7 +11523,7 @@ function hopEvidence(fromId, tie, toName) {
     case "co_tenure": {
       const from = typeof ev.fromYear === "number" ? ev.fromYear : void 0;
       const to = typeof ev.toYear === "number" ? ev.toYear : void 0;
-      const years = from === void 0 ? "" : ev.ongoing ? ` (since ${from})` : to && to !== from ? ` (${from}–${to})` : ` (${from})`;
+      const years = from === void 0 ? "" : ev.ongoing ? ` (since ${from})` : to && to !== from ? ` (${from} to ${to})` : ` (${from})`;
       return `worked with ${toName}${org ? ` at ${org}` : ""}${years}`;
     }
     case "same_school_cohort":

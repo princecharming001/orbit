@@ -351,7 +351,7 @@ export function hopEvidence(fromId: string, tie: Tie | undefined, toName: string
           : ev.ongoing
             ? ` (since ${from})`
             : to && to !== from
-              ? ` (${from}–${to})`
+              ? ` (${from} to ${to})`
               : ` (${from})`;
       return `worked with ${toName}${org ? ` at ${org}` : ''}${years}`;
     }
