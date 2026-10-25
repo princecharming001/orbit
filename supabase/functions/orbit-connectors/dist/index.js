@@ -365,13 +365,38 @@ function sendBucket(accountId, now, perDay) {
   end.setUTCDate(end.getUTCDate() + 1);
   return { key: `connectors:send:${day}:${accountId}`, limit: perDay, expires: end.toISOString() };
 }
-function searchBucket(accountId, now, perDay) {
-  const b = sendBucket(accountId, now, perDay);
-  return { ...b, key: b.key.replace("connectors:send:", "connectors:search:") };
+var DEFAULT_LEDGER = { profile: 100, posts: 100, search: 100 };
+var LEDGER_CEILINGS = {
+  profile: { route: 1, photo: 0.8, enrich: 0.7 },
+  posts: { engagement: 1, activity: 0.85 },
+  search: { mutuals: 1, discover: 0.8 }
+};
+function ledgerLimit(kind, caller, total) {
+  const share = LEDGER_CEILINGS[kind][caller] ?? 0;
+  return Math.max(0, Math.round(total * share));
 }
-function postReadsBucket(accountId, now, perDay) {
-  const b = sendBucket(accountId, now, perDay);
-  return { ...b, key: b.key.replace("connectors:send:", "connectors:posts:") };
+function ledgerBucket(kind, accountId, now, limit) {
+  const b = sendBucket(accountId, now, limit);
+  return { ...b, key: b.key.replace("connectors:send:", `connectors:li:${kind}:`) };
+}
+var LEDGER_LIMIT = {
+  ok: false,
+  reason: "limit",
+  message: "Orbit has read as much from LinkedIn as it allows today. It carries on tomorrow."
+};
+var StoreDown = class extends Error {
+};
+async function spendLedger(take, totals, kind, caller, accountId, now) {
+  const b = ledgerBucket(kind, accountId, now, ledgerLimit(kind, caller, totals[kind]));
+  try {
+    if (take.peek) {
+      const [used = 0] = await take.peek([b.key]);
+      if (used >= b.limit) return false;
+    }
+    return (await take([b])).allowed;
+  } catch {
+    throw new StoreDown("counter store unavailable");
+  }
 }
 var INVITE_NOTE_MAX = 300;
 function cors(origin, allowed) {
@@ -412,9 +437,12 @@ function buckets(visitor, now, limits) {
 }
 function memoryTake(clock = Date.now) {
   const counts = /* @__PURE__ */ new Map();
-  return async (bs) => {
+  const sweep = () => {
     const now = clock();
     for (const [k, v] of counts) if (v.expires < now) counts.delete(k);
+  };
+  const take = async (bs) => {
+    sweep();
     for (const b of bs) {
       const c = counts.get(b.key) ?? { n: 0, expires: Date.parse(b.expires) };
       c.n++;
@@ -423,6 +451,11 @@ function memoryTake(clock = Date.now) {
     }
     return { allowed: true };
   };
+  take.peek = async (keys) => {
+    sweep();
+    return keys.map((k) => counts.get(k)?.n ?? 0);
+  };
+  return take;
 }
 var UNIPILE_ROUTES = /* @__PURE__ */ new Set([
   "/connect/start",
@@ -435,7 +468,9 @@ var UNIPILE_ROUTES = /* @__PURE__ */ new Set([
   "/search",
   "/me",
   "/chats/history",
-  "/posts/activity"
+  "/posts/activity",
+  "/engagement",
+  "/ledger"
 ]);
 var ACCOUNT_ROUTES = /* @__PURE__ */ new Set([
   "/relations",
@@ -446,7 +481,9 @@ var ACCOUNT_ROUTES = /* @__PURE__ */ new Set([
   "/search",
   "/me",
   "/chats/history",
-  "/posts/activity"
+  "/posts/activity",
+  "/engagement",
+  "/ledger"
 ]);
 function makeHandler(deps) {
   const doFetch = deps.fetch ?? fetch;
@@ -513,13 +550,16 @@ function makeHandler(deps) {
         }
       );
     }
-    if (isEnrich) return enrichmentRoute(deps, path, body, { h, doFetch, take, now, visitor });
-    if (ACCOUNT_ROUTES.has(path) && !await tokenValid(String(body.accountId ?? ""), body.token, deps.signingKey))
+    const totals = { ...DEFAULT_LEDGER, ...deps.ledger };
+    const accountId = String(body.accountId ?? "");
+    const spend = (kind, caller) => spendLedger(take, totals, kind, caller, accountId, now());
+    if (isEnrich) return enrichmentRoute(deps, path, body, { h, doFetch, take, now, visitor, spend });
+    if (ACCOUNT_ROUTES.has(path) && !await tokenValid(accountId, body.token, deps.signingKey))
       return json(403, { error: "this LinkedIn account is not linked to this browser" }, h);
     if (path === "/send") {
       let sendVerdict;
       try {
-        sendVerdict = await take([sendBucket(String(body.accountId), now(), deps.sendsPerDay ?? 25)]);
+        sendVerdict = await take([sendBucket(accountId, now(), deps.sendsPerDay ?? 25)]);
       } catch {
         return json(503, { error: "unavailable right now" }, h);
       }
@@ -534,43 +574,22 @@ function makeHandler(deps) {
           h
         );
     }
-    if (path === "/search") {
-      let searchVerdict;
-      try {
-        searchVerdict = await take([searchBucket(String(body.accountId), now(), deps.searchesPerDay ?? 40)]);
-      } catch {
-        return json(503, { error: "unavailable right now" }, h);
-      }
-      if (!searchVerdict.allowed)
-        return json(
-          200,
-          {
-            ok: false,
-            reason: "limit",
-            message: "You have run as many LinkedIn searches as Orbit allows today. Try again tomorrow."
-          },
-          h
-        );
+    if (path === "/ledger") return ledgerReport(take, totals, accountId, now(), h);
+    let engagement;
+    if (path === "/engagement") {
+      const parsed = engagementRequest(body);
+      if ("message" in parsed) return json(200, parsed, h);
+      engagement = parsed;
     }
-    if (path === "/posts/activity") {
-      let postsVerdict;
+    const ledgerSpend = path === "/search" ? () => spend("search", "discover") : path === "/posts/activity" ? () => spend("posts", "activity") : path === "/engagement" ? () => spend("posts", "engagement") : void 0;
+    if (ledgerSpend) {
+      let within;
       try {
-        postsVerdict = await take([
-          postReadsBucket(String(body.accountId), now(), deps.postReadsPerDay ?? 12)
-        ]);
+        within = await ledgerSpend();
       } catch {
         return json(503, { error: "unavailable right now" }, h);
       }
-      if (!postsVerdict.allowed)
-        return json(
-          200,
-          {
-            ok: false,
-            reason: "limit",
-            message: "Orbit has read as many LinkedIn posts as it allows today. It reads the rest tomorrow."
-          },
-          h
-        );
+      if (!within) return json(200, LEDGER_LIMIT, h);
     }
     try {
       if (isVillage) return json(200, await villagePaths(village, deps.villageUser, body), h);
@@ -584,15 +603,21 @@ function makeHandler(deps) {
       }
       if (path === "/send") return json(200, await unipileSend(deps, body, doFetch), h);
       if (path === "/relations") return json(200, await unipileRelations(deps, body, doFetch), h);
-      if (path === "/mutuals") return json(200, await unipileMutuals(deps, body, doFetch), h);
+      if (path === "/mutuals") return json(200, await unipileMutuals(deps, body, doFetch, spend), h);
       if (path === "/inbox") return json(200, await unipileInbox(deps, body, doFetch), h);
       if (path === "/search") return json(200, await unipileSearch(deps, body, doFetch), h);
       if (path === "/me") return json(200, await unipileMe(deps, body, doFetch), h);
       if (path === "/chats/history") return json(200, await unipileChatHistory(deps, body, doFetch), h);
       if (path === "/posts/activity")
         return json(200, await unipilePostActivity(deps, body, doFetch, now()), h);
+      if (engagement) {
+        const sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+        await sleep(jitterMs(deps.random ?? Math.random));
+        return json(200, await unipileEngagement(deps, accountId, engagement, doFetch, now()), h);
+      }
       return json(200, await unipileDisconnect(deps, body, doFetch), h);
     } catch (e) {
+      if (e instanceof StoreDown) return json(503, { error: "unavailable right now" }, h);
       return json(502, { error: e instanceof Error ? e.message : "upstream error" }, h);
     }
   };
@@ -868,17 +893,24 @@ async function sharedConnectionCount(deps, accountId, target, doFetch) {
   const n = p.shared_connections_count;
   return typeof n === "number" && Number.isFinite(n) && n >= 0 ? n : void 0;
 }
-async function unipileMutuals(deps, body, doFetch) {
+async function unipileMutuals(deps, body, doFetch, spend) {
   const accountId = String(body.accountId ?? "");
   const target = String(body.targetMemberId ?? "").trim();
   if (!target) return { mutuals: [], verified: false, reason: "no_target" };
+  if (!await spend("profile", "route")) return LEDGER_LIMIT;
   const shared = await sharedConnectionCount(deps, accountId, target, doFetch);
   if (shared === void 0) return { mutuals: [], verified: false, reason: "no_shared_count" };
   if (shared === 0) return { mutuals: [], verified: true, count: 0 };
   const mutuals = [];
   let cursor;
   let total;
+  let limited = false;
   for (let page = 0; page < MUTUALS_MAX_PAGES; page++) {
+    if (!await spend("search", "mutuals")) {
+      if (page === 0) return LEDGER_LIMIT;
+      limited = true;
+      break;
+    }
     const q = new URLSearchParams({ account_id: accountId });
     if (cursor) q.set("cursor", cursor);
     const res = await doFetch(`${deps.unipileBase}/api/v1/linkedin/search?${q}`, {
@@ -913,6 +945,7 @@ async function unipileMutuals(deps, body, doFetch) {
   return {
     verified: true,
     count: shared,
+    ...limited ? { limited: true } : {},
     mutuals: mutuals.map((m) => ({
       name: m.name ?? `${m.first_name ?? ""} ${m.last_name ?? ""}`.trim(),
       headline: m.headline,
@@ -1306,6 +1339,139 @@ async function unipilePostActivity(deps, body, doFetch, now) {
     cursor: done ? null : await sealCursor(deps, accountId, st)
   };
 }
+var ENGAGEMENT_WANTS = /* @__PURE__ */ new Set(["posts", "reactions", "comments", "thread"]);
+var ENGAGEMENT_LIMITS = {
+  posts: 20,
+  reactions: 100,
+  comments: 100,
+  thread: 50
+};
+var JITTER_MIN_MS = 400;
+var JITTER_MAX_MS = 1500;
+function jitterMs(random) {
+  const r = Math.min(Math.max(random(), 0), 0.999999);
+  return JITTER_MIN_MS + Math.floor(r * (JITTER_MAX_MS - JITTER_MIN_MS + 1));
+}
+function engagementRequest(body) {
+  const bad = (message) => ({ ok: false, reason: "bad_request", message });
+  const want = String(body.want ?? "");
+  if (!ENGAGEMENT_WANTS.has(want)) return bad("Say what to read: posts, reactions, comments or thread.");
+  const memberId = text(body.memberId, 200);
+  const postId = text(body.postId, 200);
+  const cursor = text(body.cursor, 2e3);
+  if (want === "thread" ? !postId : !memberId)
+    return bad(want === "thread" ? "Say which post to read." : "Say whose activity to read.");
+  return { want, memberId, postId, cursor };
+}
+function threadPostId(v) {
+  return /^\d+$/.test(v) ? `urn:li:activity:${v}` : v;
+}
+function mentionMemberId(m) {
+  for (const k of ["provider_id", "profile_id", "member_id", "id", "urn", "profile_urn", "entity_urn"]) {
+    const v = m[k];
+    if (typeof v !== "string" || !v.trim()) continue;
+    const t = v.trim();
+    if (/^https?:|\//.test(t)) continue;
+    const urn = /^urn:li:(?:fsd_profile|fs_miniProfile|member|person|profile):([^,()\s]+)$/.exec(t);
+    if (urn) return urn[1];
+    if (t.startsWith("urn:")) continue;
+    if (/^[A-Za-z0-9_-]{6,}$/.test(t)) return t;
+  }
+  return void 0;
+}
+var isCompany = (a) => a.is_company === true || /^(COMPANY|ORGANIZATION)$/i.test(String(a.type ?? ""));
+async function unipileEngagement(deps, accountId, r, doFetch, now) {
+  const q = new URLSearchParams({ account_id: accountId, limit: String(ENGAGEMENT_LIMITS[r.want]) });
+  if (r.cursor) q.set("cursor", r.cursor);
+  const path = r.want === "thread" ? `/api/v1/posts/${encodeURIComponent(threadPostId(r.postId))}/comments` : `/api/v1/users/${encodeURIComponent(r.memberId)}/${r.want}`;
+  const res = await doFetch(`${deps.unipileBase}${path}?${q}`, { headers: uHeaders(deps) });
+  if (res.status === 404 || res.status === 422)
+    return { ok: false, reason: "unavailable", message: "LinkedIn wouldn't show this person's activity." };
+  if (!res.ok) throw await upstreamError(res);
+  const b = await res.json();
+  const cursor = [b.cursor, b.paging?.cursor].find((x) => typeof x === "string" && !!x) ?? null;
+  const rows = (Array.isArray(b.items) ? b.items : []).filter(
+    (x) => !!x && typeof x === "object" && !Array.isArray(x)
+  );
+  const id = (v) => typeof v === "string" && v.trim() ? v.trim() : typeof v === "number" ? String(v) : void 0;
+  const obj = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : {};
+  const count = (v) => {
+    const n = Number(v ?? 0);
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+  };
+  if (r.want === "posts") {
+    const items2 = rows.flatMap((p) => {
+      const socialId = id(p.social_id);
+      const own = id(p.id);
+      const postId = socialId && /^urn:li:activity:\d+$/.test(socialId) ? postLookupId(socialId) : own ?? socialId;
+      if (!postId) return [];
+      const people = (Array.isArray(p.mentions) ? p.mentions : []).map(obj).filter((m) => Object.keys(m).length && !isCompany(m));
+      const mentions = [...new Set(people.map(mentionMemberId).filter((x) => !!x))];
+      const repostOf = p.is_repost === true ? id(obj(obj(p.repost_content).author).id) : void 0;
+      const at = postDate(p.parsed_datetime, now) ?? postDate(p.date, now);
+      return [
+        {
+          id: postLookupId(postId),
+          ...socialId ? { socialId } : {},
+          ...at ? { at } : {},
+          reactions: count(p.reaction_counter),
+          comments: count(p.comment_counter),
+          ...repostOf ? { repostOf } : {},
+          mentions,
+          tagged: people.length
+        }
+      ];
+    });
+    return { ok: true, want: "posts", items: items2, cursor };
+  }
+  if (r.want === "reactions") {
+    const items2 = rows.flatMap((x) => {
+      const postId = id(x.post_id);
+      const author = obj(x.author);
+      const authorId = id(author.id);
+      if (!postId || !authorId || isCompany(author)) return [];
+      return [{ postId: postLookupId(postId), authorId, onComment: !!id(x.comment_id) }];
+    });
+    return { ok: true, want: "reactions", items: items2, cursor };
+  }
+  if (r.want === "comments") {
+    const items2 = rows.flatMap((c) => {
+      const cid = id(c.id);
+      const post = id(c.post_urn) ?? id(c.post_id);
+      if (!cid || !post) return [];
+      const at = postDate(c.date, now);
+      const threadId = id(c.thread_id);
+      return [
+        { id: cid, postId: postLookupId(post), ...at ? { at } : {}, ...threadId ? { threadId } : {} }
+      ];
+    });
+    return { ok: true, want: "comments", items: items2, cursor };
+  }
+  const items = rows.flatMap((c) => {
+    const cid = id(c.id);
+    const who = Object.keys(obj(c.author_details)).length ? obj(c.author_details) : obj(c.author);
+    const commenterId = id(who.id) ?? id(who.provider_id);
+    if (!cid || !commenterId || isCompany(who)) return [];
+    const at = postDate(c.date, now);
+    return [{ id: cid, commenterId, ...at ? { at } : {} }];
+  });
+  return { ok: true, want: "thread", items, cursor };
+}
+async function ledgerReport(take, totals, accountId, now, h) {
+  if (!take.peek) return json(503, { error: "unavailable right now" }, h);
+  const kinds = ["profile", "posts", "search"];
+  let used;
+  try {
+    used = await take.peek(kinds.map((k) => ledgerBucket(k, accountId, now, totals[k]).key));
+  } catch {
+    return json(503, { error: "unavailable right now" }, h);
+  }
+  const out = { ok: true, day: now.toISOString().slice(0, 10) };
+  kinds.forEach((k, i) => {
+    out[k] = { used: Math.min(Math.max(used[i] ?? 0, 0), totals[k]), limit: totals[k] };
+  });
+  return json(200, out, h);
+}
 async function searchParameterId(deps, accountId, type, keywords, doFetch) {
   const q = new URLSearchParams({ account_id: accountId, type, keywords, limit: "1" });
   const res = await doFetch(`${deps.unipileBase}/api/v1/linkedin/search/parameters?${q}`, {
@@ -1416,9 +1582,9 @@ function providerStatus(deps) {
     peopleDataLabs: !!e.pdlKey
   };
 }
-function enrichBucket(kind, who, now, perDay) {
-  const b = sendBucket(who, now, perDay);
-  return { ...b, key: b.key.replace("connectors:send:", `connectors:${kind}:`) };
+function webBucket(visitor, now, perDay) {
+  const b = sendBucket(`visitor:${visitor}`, now, perDay);
+  return { ...b, key: b.key.replace("connectors:send:", "connectors:web:") };
 }
 async function enrichmentRoute(deps, path, body, ctx) {
   const { h, doFetch, take, now } = ctx;
@@ -1426,29 +1592,35 @@ async function enrichmentRoute(deps, path, body, ctx) {
   const kind = path === "/profile" ? "profile" : path === "/company" ? "company" : path === "/photo" ? "photo" : "web";
   if (kind === "web") {
     if (!e.exaKey) return unconfigured2(h);
+    let verdict;
+    try {
+      verdict = await take([webBucket(ctx.visitor, now(), e.webPerDay ?? 30)]);
+    } catch {
+      return json(503, { error: "unavailable right now" }, h);
+    }
+    if (!verdict.allowed)
+      return json(
+        200,
+        {
+          ok: false,
+          reason: "limit",
+          message: "Orbit has looked up as many people on the web as it allows today."
+        },
+        h
+      );
   } else {
     if (!deps.unipileKey || !deps.unipileBase) return unconfigured2(h);
     if (!await tokenValid(String(body.accountId ?? ""), body.token, deps.signingKey))
       return json(403, { error: "this LinkedIn account is not linked to this browser" }, h);
+    const caller = kind === "photo" ? "photo" : kind === "profile" && body.purpose === "route" ? "route" : "enrich";
+    let within;
+    try {
+      within = await ctx.spend("profile", caller);
+    } catch {
+      return json(503, { error: "unavailable right now" }, h);
+    }
+    if (!within) return json(200, LEDGER_LIMIT, h);
   }
-  const perDay = kind === "profile" ? e.profilesPerDay ?? 80 : kind === "company" ? e.companiesPerDay ?? 80 : kind === "photo" ? e.photosPerDay ?? 300 : e.webPerDay ?? 30;
-  const who = kind === "web" ? `visitor:${ctx.visitor}` : String(body.accountId);
-  let verdict;
-  try {
-    verdict = await take([enrichBucket(kind, who, now(), perDay)]);
-  } catch {
-    return json(503, { error: "unavailable right now" }, h);
-  }
-  if (!verdict.allowed)
-    return json(
-      200,
-      {
-        ok: false,
-        reason: "limit",
-        message: kind === "web" ? "Orbit has looked up as many people on the web as it allows today." : kind === "photo" ? "Orbit has fetched as many LinkedIn photos as it allows today. It carries on tomorrow." : "Orbit has read as many LinkedIn profiles as it allows today. It carries on tomorrow."
-      },
-      h
-    );
   try {
     if (kind === "profile") return json(200, await unipileProfile(deps, body, doFetch), h);
     if (kind === "company") return json(200, await unipileCompany(deps, body, doFetch), h);
@@ -1481,7 +1653,41 @@ function companySlugFromUrl(url2) {
   const slug = m?.[1] ? decodeURIComponent(m[1]).toLowerCase() : void 0;
   return slug && !/^\d+$/.test(slug) ? slug : void 0;
 }
-function mapProfile(p) {
+var RECOMMENDATION_CAPTION_MAX = 80;
+function mapRecommendations(p) {
+  const nested = p.recommendations ?? {};
+  const lists = [
+    ["received", Array.isArray(nested.received) ? nested.received : p.recommendations_received],
+    ["given", Array.isArray(nested.given) ? nested.given : p.recommendations_given]
+  ];
+  const out = [];
+  for (const [direction, list] of lists) {
+    for (const r of Array.isArray(list) ? list : []) {
+      if (!r || typeof r !== "object") continue;
+      const rec = r;
+      const actor = rec.actor && typeof rec.actor === "object" ? rec.actor : {};
+      const actorId = text(actor.provider_id, 200) ?? text(actor.id, 200);
+      if (!actorId) continue;
+      const name = [text(actor.first_name, 80), text(actor.last_name, 80)].filter(Boolean).join(" ");
+      const caption = text(rec.caption, RECOMMENDATION_CAPTION_MAX);
+      const year = Number(/\b(19[5-9]\d|20\d\d)\b/.exec(caption ?? "")?.[1] ?? rec.year ?? Number.NaN);
+      out.push({
+        direction,
+        actorId,
+        ...name ? { actorName: name } : {},
+        ...Number.isInteger(year) && year > 1950 ? { year } : {},
+        ...caption ? { caption } : {}
+      });
+      if (out.length >= 100) return out;
+    }
+  }
+  return out;
+}
+function mapProfile(p, opts = {}) {
+  const num2 = (v) => {
+    const n = typeof v === "string" ? Number(v.replace(/[,+\s]/g, "")) : Number(v);
+    return v !== null && v !== void 0 && v !== "" && Number.isFinite(n) && n >= 0 ? Math.floor(n) : void 0;
+  };
   const str = (v, max = 200) => text(v, max);
   const degree = String(p.network_distance ?? "");
   const distance = /FIRST|DISTANCE_1/.test(degree) ? 1 : /SECOND|DISTANCE_2/.test(degree) ? 2 : /THIRD|DISTANCE_3/.test(degree) ? 3 : void 0;
@@ -1523,7 +1729,10 @@ function mapProfile(p) {
       end: dateText(x.end)
     })).filter((x) => x.school),
     contact: emails.length || phones.length ? { emails, phones } : void 0,
-    throttled: strings(p.throttled_sections, 12)
+    throttled: strings(p.throttled_sections, 12),
+    followerCount: num2(p.follower_count),
+    connectionsCount: num2(p.connections_count),
+    recommendations: opts.recommendations ? mapRecommendations(p) : void 0
   };
 }
 async function unipileProfile(deps, body, doFetch) {
@@ -1531,6 +1740,8 @@ async function unipileProfile(deps, body, doFetch) {
   const identifier = text(body.identifier, 200);
   if (!identifier) return { ok: false, reason: "bad_request", message: "Say whose profile to read." };
   const sections = (Array.isArray(body.sections) ? body.sections : []).map(String).filter((x) => PROFILE_SECTIONS.has(x));
+  const recommendations = body.recommendations === true;
+  if (recommendations) sections.push("recommendations_received", "recommendations_given");
   const q = new URLSearchParams({ account_id: accountId });
   if (sections.length) q.set("linkedin_sections", [...new Set(sections)].join(","));
   const res = await doFetch(`${deps.unipileBase}/api/v1/users/${encodeURIComponent(identifier)}?${q}`, {
@@ -1538,7 +1749,10 @@ async function unipileProfile(deps, body, doFetch) {
   });
   const failed = await profileFailure(res);
   if (failed) return failed;
-  return { ok: true, profile: mapProfile(await res.json()) };
+  return {
+    ok: true,
+    profile: mapProfile(await res.json(), { recommendations })
+  };
 }
 async function profileFailure(res) {
   if (res.status === 404 || res.status === 422)
@@ -1669,15 +1883,16 @@ async function villagePaths(village, user, body) {
     }))
   };
 }
-function postgrestTake(url2, serviceKey2, doFetch = fetch) {
-  return async (bs) => {
+function postgrestTake(url2, serviceKey2, doFetch = fetch, clock = Date.now) {
+  const headers = {
+    "content-type": "application/json",
+    apikey: serviceKey2,
+    Authorization: `Bearer ${serviceKey2}`
+  };
+  const take = async (bs) => {
     const r = await doFetch(`${url2}/rest/v1/rpc/orbit_proxy_take`, {
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-        apikey: serviceKey2,
-        Authorization: `Bearer ${serviceKey2}`
-      },
+      headers,
       body: JSON.stringify({
         p_buckets: bs.map((b) => b.key),
         p_limits: bs.map((b) => b.limit),
@@ -1690,6 +1905,22 @@ function postgrestTake(url2, serviceKey2, doFetch = fetch) {
     if (!row) throw new Error("counter store returned nothing");
     return { allowed: row.allowed, over: row.over_bucket ?? void 0 };
   };
+  take.peek = async (keys) => {
+    if (!keys.length) return [];
+    const list = keys.map((k) => `"${k.replace(/["\\]/g, "")}"`).join(",");
+    const r = await doFetch(
+      `${url2}/rest/v1/orbit_proxy_counters?select=bucket,count,expires_at&bucket=in.(${encodeURIComponent(list)})`,
+      { headers }
+    );
+    if (!r.ok) throw new Error(`counter store ${r.status}`);
+    const rows = await r.json();
+    const now = clock();
+    const live = new Map(
+      rows.filter((x) => Date.parse(x.expires_at) >= now).map((x) => [x.bucket, Number(x.count) || 0])
+    );
+    return keys.map((k) => live.get(k) ?? 0);
+  };
+  return take;
 }
 
 // supabase/functions/orbit-connectors/main.ts
@@ -1764,9 +1995,6 @@ Deno.serve(
     links: url && serviceKey ? postgrestLinks(url, serviceKey) : memoryLinks(),
     publicUrl: url ? `${url}/functions/v1/orbit-connectors` : void 0,
     enrichment: {
-      profilesPerDay: num("ORBIT_LINKEDIN_PROFILES_PER_DAY", 80),
-      companiesPerDay: num("ORBIT_LINKEDIN_COMPANIES_PER_DAY", 80),
-      photosPerDay: num("ORBIT_LINKEDIN_PHOTOS_PER_DAY", 300),
       webPerDay: num("ORBIT_WEB_LOOKUPS_PER_DAY", 30),
       exaKey,
       firecrawlKey,
@@ -1774,7 +2002,12 @@ Deno.serve(
       pdlKey
     },
     sendsPerDay: num("ORBIT_LINKEDIN_SENDS_PER_DAY", 25),
-    searchesPerDay: num("ORBIT_LINKEDIN_SEARCHES_PER_DAY", 40),
+    // LinkedIn reads per Unipile account per day, one ledger per kind (plan 21 §6; ceilings per caller in connectors.ts)
+    ledger: {
+      profile: num("ORBIT_LINKEDIN_PROFILE_READS_PER_DAY", 100),
+      posts: num("ORBIT_LINKEDIN_POST_READS_PER_DAY", 100),
+      search: num("ORBIT_LINKEDIN_SEARCH_CALLS_PER_DAY", 100)
+    },
     limits: {
       perMinute: num("ORBIT_CONNECTORS_PER_MINUTE", 120),
       perDay: num("ORBIT_CONNECTORS_PER_DAY", 3e3)

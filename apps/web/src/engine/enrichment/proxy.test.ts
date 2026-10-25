@@ -212,7 +212,7 @@ describe('enrichment routes of the connector proxy', () => {
   it('needs the account token, and stops an account at its daily profile reads', async () => {
     const at = new Date('2026-10-22T09:00:00Z');
     const { handler, upstream } = harness({
-      enrichment: { profilesPerDay: 1 },
+      ledger: { profile: 1 },
       now: () => at,
       take: memoryTake(() => at.getTime()),
     });
@@ -222,6 +222,64 @@ describe('enrichment routes of the connector proxy', () => {
     expect(await (await read()).json()).toMatchObject({ ok: true });
     expect(await (await read()).json()).toMatchObject({ ok: false, reason: 'limit' });
     expect(upstream).toHaveLength(1);
+  });
+
+  it('reads follower and connection counts, and recommendations when asked: who and when, never the text', async () => {
+    const withRecs = {
+      ...UNIPILE_PROFILE,
+      follower_count: 1234,
+      connections_count: '500+',
+      recommendations: {
+        received: [
+          {
+            text: 'SECRET_RECOMMENDATION_TEXT Omar is a brilliant operator.',
+            caption:
+              'June 12, 2023, Ana managed Omar directly and this caption keeps going well past eighty chars',
+            actor: { provider_id: 'ACoAna', first_name: 'Ana', last_name: 'Ruiz', public_identifier: 'ana' },
+          },
+          { text: 'no actor at all' },
+        ],
+      },
+      recommendations_given: [{ text: 'SECRET_GIVEN_TEXT', actor: { provider_id: 'ACoSam' } }],
+    };
+    const { handler, upstream } = harness({}, () => new Response(JSON.stringify(withRecs)));
+    const raw = await (
+      await handler(
+        post('/profile', {
+          accountId: 'a1',
+          token: TOKEN,
+          identifier: 'omar-haddad',
+          sections: ['experience'],
+          recommendations: true,
+          purpose: 'route',
+        }),
+      )
+    ).text();
+    expect(raw).not.toContain('SECRET_');
+    const b = JSON.parse(raw) as { profile: Record<string, unknown> };
+    expect(new URL(upstream[0]!.url).searchParams.get('linkedin_sections')).toBe(
+      'experience,recommendations_received,recommendations_given',
+    );
+    expect(b.profile.followerCount).toBe(1234);
+    expect(b.profile.connectionsCount).toBe(500);
+    expect(b.profile.recommendations).toEqual([
+      {
+        direction: 'received',
+        actorId: 'ACoAna',
+        actorName: 'Ana Ruiz',
+        year: 2023,
+        caption: 'June 12, 2023, Ana managed Omar directly and this caption keeps going well past ',
+      },
+      { direction: 'given', actorId: 'ACoSam' },
+    ]);
+    // not asked: no recommendation sections, and none come back
+    const plain = harness({}, () => new Response(JSON.stringify(withRecs)));
+    const p2 = (await (
+      await plain.handler(post('/profile', { accountId: 'a1', token: TOKEN, identifier: 'omar-haddad' }))
+    ).json()) as { profile: Record<string, unknown> };
+    expect(new URL(plain.upstream[0]!.url).searchParams.has('linkedin_sections')).toBe(false);
+    expect(p2.profile.recommendations).toBeUndefined();
+    expect(p2.profile.followerCount).toBe(1234);
   });
 
   it('fetches a photo link from the plain profile, with no sections, and says who they are on LinkedIn', async () => {
@@ -252,10 +310,11 @@ describe('enrichment routes of the connector proxy', () => {
     ).toMatchObject({ ok: false, reason: 'not_found' });
   });
 
-  it('needs the account token for a photo too, and counts photos apart from profile reads', async () => {
+  it('needs the account token for a photo too, and shares one profile ledger by priority', async () => {
     const at = new Date('2026-10-22T09:00:00Z');
+    // a ledger of 10: enrichment may fill it to 7, photos to 8, a route the student is looking at to all 10
     const { handler, upstream } = harness({
-      enrichment: { profilesPerDay: 1, photosPerDay: 2 },
+      ledger: { profile: 10 },
       now: () => at,
       take: memoryTake(() => at.getTime()),
     });
@@ -264,13 +323,25 @@ describe('enrichment routes of the connector proxy', () => {
     expect(upstream).toHaveLength(0);
     const photo = () => handler(post('/photo', { accountId: 'a1', token: TOKEN, identifier: 'x' }));
     const read = () => handler(post('/profile', { accountId: 'a1', token: TOKEN, identifier: 'x' }));
-    expect(await (await read()).json()).toMatchObject({ ok: true });
-    expect(await (await read()).json()).toMatchObject({ ok: false, reason: 'limit' });
-    // the profile allowance being spent leaves the photo allowance alone
-    expect(await (await photo()).json()).toMatchObject({ ok: true });
+    const company = () => handler(post('/company', { accountId: 'a1', token: TOKEN, identifier: '777' }));
+    const route = () =>
+      handler(post('/profile', { accountId: 'a1', token: TOKEN, identifier: 'x', purpose: 'route' }));
+    for (let i = 0; i < 6; i++) expect(await (await read()).json()).toMatchObject({ ok: true });
+    expect(await (await company()).json()).toMatchObject({ ok: true });
+    expect(await (await read()).json()).toEqual({
+      ok: false,
+      reason: 'limit',
+      message: 'Orbit has read as much from LinkedIn as it allows today. It carries on tomorrow.',
+    });
+    expect(await (await company()).json()).toMatchObject({ ok: false, reason: 'limit' });
+    // photos go a little further, and a refused one costs the route reads nothing
     expect(await (await photo()).json()).toMatchObject({ ok: true });
     expect(await (await photo()).json()).toMatchObject({ ok: false, reason: 'limit' });
-    expect(upstream).toHaveLength(3);
+    expect(await (await photo()).json()).toMatchObject({ ok: false, reason: 'limit' });
+    expect(await (await route()).json()).toMatchObject({ ok: true });
+    expect(await (await route()).json()).toMatchObject({ ok: true });
+    expect(await (await route()).json()).toMatchObject({ ok: false, reason: 'limit' });
+    expect(upstream).toHaveLength(10);
   });
 
   it("reads a company's page: its LinkedIn id, public name and logo", async () => {

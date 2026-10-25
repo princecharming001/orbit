@@ -51,6 +51,24 @@ export interface LinkedInProfile {
   contact?: { emails: string[]; phones: string[] };
   /** sections LinkedIn held back this time (they came back empty, not because the person has none) */
   throttled: string[];
+  /** how many people follow them on LinkedIn (to discount engagement with popular people) */
+  followerCount?: number;
+  /** how many connections they have, as LinkedIn states it (500 for "500+") */
+  connectionsCount?: number;
+  /** who recommended them and whom they recommended, when asked for: never the recommendation's text */
+  recommendations?: LinkedInRecommendation[];
+}
+
+/** One LinkedIn recommendation on a profile: who and when, never what was written. */
+export interface LinkedInRecommendation {
+  /** received: the other person recommended them; given: they recommended the other person */
+  direction: 'received' | 'given';
+  /** the other person's LinkedIn member id */
+  actorId: string;
+  actorName?: string;
+  year?: number;
+  /** LinkedIn's one-line caption ("June 2023, Ana managed Omar directly"), at most 80 characters */
+  caption?: string;
 }
 
 export interface LinkedInCompany {
@@ -114,16 +132,27 @@ function unwrap<K extends string, T>(r: ConnectorOutcome<Answer<K, T>>, key: K):
 export const FULL_SECTIONS = ['experience', 'education', 'about'];
 export const PREVIEW_SECTIONS = ['experience_preview', 'education_preview'];
 
-/** A person's LinkedIn profile, by their member id or public profile name. */
+/**
+ * A person's LinkedIn profile, by their member id or public profile name. `recommendations` also reads who
+ * recommended them and whom they recommended; `purpose: 'route'` marks a read for a route the student is looking at,
+ * which may use the whole day's profile reads (enrichment stops at 70% of them).
+ */
 export async function linkedInProfile(
   accountId: string,
   identifier: string,
   sections: string[],
-  opts: CallOpts = {},
+  opts: CallOpts & { recommendations?: boolean; purpose?: 'route' } = {},
 ): Promise<EnrichOutcome<LinkedInProfile>> {
   const r = await unipileProxyCall<Answer<'profile', LinkedInProfile>>(
     '/profile',
-    { accountId, token: opts.token, identifier, sections },
+    {
+      accountId,
+      token: opts.token,
+      identifier,
+      sections,
+      ...(opts.recommendations ? { recommendations: true } : {}),
+      ...(opts.purpose ? { purpose: opts.purpose } : {}),
+    },
     { timeoutMs: 30_000, ...opts },
   );
   const out = unwrap(r, 'profile');

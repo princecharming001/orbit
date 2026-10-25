@@ -1,10 +1,14 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { setConnectorModeForTests } from './connectorOutcome';
+import { linkedInProfile } from './enrichmentProxy';
 import {
   disconnectLinkedInAccount,
   linkedInConnections,
   linkedInConnectStatus,
+  linkedInEngagement,
+  linkedInLedger,
   mutualConnections,
+  SEARCH_LIMIT_STATUS,
   setUnipileUrlForTests,
   startLinkedInConnect,
   unipileConfigured,
@@ -195,6 +199,205 @@ describe('Unipile (live LinkedIn) adapter', () => {
     expect(await mutualConnections('acc_1', 'm_target', { fetch: bad.fn })).toMatchObject({
       ok: false,
       reason: 'error',
+    });
+  });
+
+  it('says when mutual connections stopped at the day’s LinkedIn reads', async () => {
+    setUnipileUrlForTests(BASE);
+    const { fn } = stub({
+      '/mutuals': {
+        body: {
+          ok: false,
+          reason: 'limit',
+          message: 'Orbit has read as much from LinkedIn as it allows today. It carries on tomorrow.',
+        },
+      },
+    });
+    expect(await mutualConnections('acc_1', 'm_target', { fetch: fn })).toEqual({
+      ok: false,
+      reason: 'error',
+      message: 'Orbit has read as much from LinkedIn as it allows today. It carries on tomorrow.',
+      status: SEARCH_LIMIT_STATUS,
+    });
+  });
+
+  it('reads one page of engagement with the token, keeping only well-formed items', async () => {
+    setUnipileUrlForTests(BASE);
+    const { fn, calls } = stub({
+      '/engagement': {
+        body: {
+          ok: true,
+          want: 'posts',
+          items: [
+            {
+              id: '725',
+              socialId: 'urn:li:activity:725',
+              at: '2026-10-01T09:00:00.000Z',
+              reactions: 4,
+              comments: 1,
+              mentions: ['ACoAna', 7],
+              tagged: 2,
+              text: 'never kept',
+            },
+            { id: '726', at: 'not a date', reactions: -1 },
+            { reactions: 3 },
+          ],
+          cursor: 'c2',
+        },
+      },
+    });
+    const r = await linkedInEngagement(
+      'acc_1',
+      { memberId: 'ACoB', want: 'posts', cursor: 'c1' },
+      { token: 'tok', fetch: fn },
+    );
+    expect(r).toEqual({
+      ok: true,
+      value: {
+        want: 'posts',
+        items: [
+          {
+            id: '725',
+            socialId: 'urn:li:activity:725',
+            at: '2026-10-01T09:00:00.000Z',
+            reactions: 4,
+            comments: 1,
+            mentions: ['ACoAna'],
+            tagged: 2,
+          },
+          { id: '726', reactions: 0, comments: 0, mentions: [], tagged: 0 },
+        ],
+        cursor: 'c2',
+      },
+    });
+    expect(calls[0]).toEqual({
+      url: `${BASE}/engagement`,
+      body: { accountId: 'acc_1', token: 'tok', memberId: 'ACoB', want: 'posts', cursor: 'c1' },
+    });
+  });
+
+  it('maps reactions, comments and threads, and passes the post for a thread', async () => {
+    setUnipileUrlForTests(BASE);
+    const page = (want: string, items: unknown[]) =>
+      stub({ '/engagement': { body: { ok: true, want, items, cursor: null } } });
+    const reactions = page('reactions', [
+      { postId: '1', authorId: 'ACoB', onComment: true },
+      { postId: '2' },
+    ]);
+    expect(
+      await linkedInEngagement('acc_1', { memberId: 'ACoA', want: 'reactions' }, { fetch: reactions.fn }),
+    ).toEqual({
+      ok: true,
+      value: { want: 'reactions', items: [{ postId: '1', authorId: 'ACoB', onComment: true }], cursor: null },
+    });
+    const comments = page('comments', [{ id: 'c1', postId: '1', threadId: 'c0', text: 'x' }, { id: 'c2' }]);
+    expect(
+      await linkedInEngagement('acc_1', { memberId: 'ACoA', want: 'comments' }, { fetch: comments.fn }),
+    ).toEqual({
+      ok: true,
+      value: { want: 'comments', items: [{ id: 'c1', postId: '1', threadId: 'c0' }], cursor: null },
+    });
+    const thread = page('thread', [{ id: 'k1', commenterId: 'ACoA', at: '2026-10-19T10:00:00.000Z' }]);
+    expect(
+      await linkedInEngagement(
+        'acc_1',
+        { memberId: 'ACoB', want: 'thread', postId: '725' },
+        { fetch: thread.fn },
+      ),
+    ).toEqual({
+      ok: true,
+      value: {
+        want: 'thread',
+        items: [{ id: 'k1', commenterId: 'ACoA', at: '2026-10-19T10:00:00.000Z' }],
+        cursor: null,
+      },
+    });
+    expect(thread.calls[0]!.body).toMatchObject({ want: 'thread', postId: '725' });
+  });
+
+  it('says limit and unavailable apart from errors, and unconfigured when off', async () => {
+    setUnipileUrlForTests(BASE);
+    for (const reason of ['limit', 'unavailable'] as const) {
+      const { fn } = stub({ '/engagement': { body: { ok: false, reason, message: `m-${reason}` } } });
+      expect(await linkedInEngagement('acc_1', { memberId: 'ACoB', want: 'posts' }, { fetch: fn })).toEqual({
+        ok: false,
+        reason,
+        message: `m-${reason}`,
+      });
+    }
+    const down = stub({ '/engagement': { status: 502, body: { error: 'unipile 500' } } });
+    expect(
+      await linkedInEngagement('acc_1', { memberId: 'ACoB', want: 'posts' }, { fetch: down.fn }),
+    ).toMatchObject({ ok: false, reason: 'error', status: 502 });
+    setUnipileUrlForTests(null);
+    expect(await linkedInEngagement('acc_1', { memberId: 'ACoB', want: 'posts' })).toMatchObject({
+      ok: false,
+      reason: 'unconfigured',
+    });
+  });
+
+  it("reads today's LinkedIn ledgers", async () => {
+    setUnipileUrlForTests(BASE);
+    const { fn, calls } = stub({
+      '/ledger': {
+        body: {
+          ok: true,
+          day: '2026-10-20',
+          profile: { used: 31, limit: 100 },
+          posts: { used: 4, limit: 100 },
+          search: { used: 0, limit: 100 },
+        },
+      },
+    });
+    expect(await linkedInLedger('acc_1', { token: 'tok', fetch: fn })).toEqual({
+      ok: true,
+      value: {
+        day: '2026-10-20',
+        profile: { used: 31, limit: 100 },
+        posts: { used: 4, limit: 100 },
+        search: { used: 0, limit: 100 },
+      },
+    });
+    expect(calls[0]).toEqual({ url: `${BASE}/ledger`, body: { accountId: 'acc_1', token: 'tok' } });
+    const bad = stub({ '/ledger': { status: 503, body: { error: 'unavailable right now' } } });
+    expect(await linkedInLedger('acc_1', { fetch: bad.fn })).toMatchObject({ ok: false, reason: 'error' });
+  });
+
+  it('asks a profile for recommendations and marks a route read, and keeps the new counts', async () => {
+    setUnipileUrlForTests(BASE);
+    const { fn, calls } = stub({
+      '/profile': {
+        body: {
+          ok: true,
+          profile: {
+            providerId: 'ACoB',
+            experience: [],
+            education: [],
+            throttled: [],
+            followerCount: 1200,
+            connectionsCount: 500,
+            recommendations: [{ direction: 'received', actorId: 'ACoA', year: 2023 }],
+          },
+        },
+      },
+    });
+    const r = await linkedInProfile('acc_1', 'ACoB', ['experience'], {
+      fetch: fn,
+      recommendations: true,
+      purpose: 'route',
+    });
+    expect(r).toMatchObject({
+      ok: true,
+      value: {
+        followerCount: 1200,
+        connectionsCount: 500,
+        recommendations: [{ direction: 'received', actorId: 'ACoA', year: 2023 }],
+      },
+    });
+    expect(calls[0]!.body).toMatchObject({
+      recommendations: true,
+      purpose: 'route',
+      sections: ['experience'],
     });
   });
 
