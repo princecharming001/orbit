@@ -393,7 +393,9 @@ describe('inferEdges (GRL-09, GRL-10, GRL-16)', () => {
     const edges = infer(people, [], orgs);
     const tiny = edges.find((e) => e.personAId === 'a' && e.personBId === 'b')!;
     const google = edges.find((e) => e.personAId === 'c' && e.personBId === 'd')!;
-    expect(tiny.weight).toBeCloseTo(0.35, 5);
+    // plan 21 §3.6: two people at a company under 50 almost certainly know each other
+    expect(tiny.weight).toBeCloseTo(0.7, 5);
+    expect(tiny.evidence).toMatchObject({ sizeBucket: '11-50' });
     expect(google.weight).toBeCloseTo(0.35 * 0.4, 5);
     expect(sizeFactor(undefined, 'Some Unknown LLC')).toBe(0.5);
     expect(sizeFactor(undefined, 'Some Unknown LLC', 40)).toBe(0.4);

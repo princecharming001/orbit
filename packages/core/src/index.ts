@@ -22,6 +22,7 @@ export * from './graph/paths';
 export * from './graph/ppr';
 export * from './graph/route';
 export * from './graph/ties';
+export * from './graph/titles';
 export * from './labels';
 export * from './linkedin/csv';
 export * from './linkedin/headline';

@@ -226,7 +226,8 @@ describe('inferTies (§4.1)', () => {
     const c = (a: string) => ties.find((t) => t.aId === a && t.kind === 'co_tenure')!.confidence;
     // 18 months of overlap: 0.3 + 0.9, capped at 0.8
     expect(c('ann')).toBeCloseTo(0.8, 10);
-    expect(c('cal')).toBeCloseTo(0.4, 10);
+    // Google: halved over 5,000 people and ×0.7 again over 10,000 (plan 21 §3.6)
+    expect(c('cal')).toBeCloseTo(0.8 * 0.5 * 0.7, 10);
     expect(c('eve')).toBeCloseTo(0.8 * 0.6, 10);
   });
 
@@ -281,11 +282,23 @@ describe('combining ties', () => {
     const back = pairsFromEdges(edges).get('a|b')!;
     expect(back.weight).toBeCloseTo(w, 10);
     expect(back.confidence).toBeCloseTo(1 - 0.05 * 0.6, 10);
-    // a v1 edge (no confidence) takes its kind's typical confidence
+    // a v1 edge (no confidence) takes its confidence from its evidence, as the server does: no overlap known is 0.3,
+    // 12 months at a 30-person company between peers is (0.3 + 0.6) capped 0.8, ×1.3 small, ×1.15 peers, capped 0.9
     const v1 = pairsFromEdges([{ ...edges[1]!, confidence: undefined, kinds: undefined, weight: 0.5 }]).get(
       'a|b',
     )!;
-    expect(v1.weight).toBeCloseTo(0.5 * TIE_CONFIDENCE.co_tenure, 10);
+    expect(v1.weight).toBeCloseTo(0.5 * 0.3, 10);
+    const sharp = pairsFromEdges([
+      {
+        ...edges[1]!,
+        confidence: undefined,
+        kinds: undefined,
+        weight: 0.5,
+        evidence: { overlapMonths: 12, sizeBucket: '11-50', peers: 'same' },
+      },
+    ]).get('a|b')!;
+    expect(sharp.confidence).toBeCloseTo(0.9, 10);
+    expect(TIE_CONFIDENCE.co_tenure).toBe(0.5);
   });
 
   it('describes the new kinds in hop texts', () => {

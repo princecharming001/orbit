@@ -2,7 +2,18 @@ import { TIE_BAND_LABELS, tieBand } from '../scoring/tieScore';
 import type { GoalKind } from '../types';
 import { addEdge, kShortestPaths, makeGraph, type WeightedGraph } from './paths';
 import { personalizedPageRank } from './ppr';
-import { decayedTieWeight, isRoutable, type Tie, type TieKind, type TiePair } from './ties';
+import {
+  decayedTieWeight,
+  HOP_WEIGHTS,
+  isRoutable,
+  pairFading,
+  SUPPORT_ONLY_TIE_KINDS,
+  type Tie,
+  type TieKind,
+  type TiePair,
+  withCommonContacts,
+} from './ties';
+import { seniorityClass } from './titles';
 
 /**
  * Warm path ranking v2 (plan 16 §4.2): routes are ranked by the chance the introduction actually happens. The first
@@ -54,12 +65,6 @@ export function pKnow(pair: Pick<TiePair, 'weight'>): number {
   return Math.max(0, Math.min(1, pair.weight));
 }
 
-const C_LEVEL =
-  /\b(ceo|cfo|coo|cto|cmo|cpo|cio|ciso|chief|president|partner|managing director|founder|co-founder|cofounder)\b/i;
-const SENIOR = /\b(director|vp|vice president|head of|principal|general manager|svp|evp)\b/i;
-const JUNIOR_OR_MANAGER =
-  /\b(intern|analyst|associate|engineer|developer|designer|scientist|researcher|manager|coordinator|specialist|consultant|representative|recruiter|assistant|lead|student|fellow)\b/i;
-
 export interface TargetInfo {
   id: string;
   name?: string;
@@ -72,9 +77,9 @@ export interface TargetInfo {
 
 /** How receptive the target is to an introduction (§4.2), from school and title keywords, in [0.7, 1.3]. */
 export function targetReceptivity(t: Pick<TargetInfo, 'isAlum' | 'title'>): number {
-  const title = t.title ?? '';
-  const cLevel = C_LEVEL.test(title);
-  const atMostManager = !cLevel && !SENIOR.test(title) && JUNIOR_OR_MANAGER.test(title);
+  const level = seniorityClass(t.title);
+  const cLevel = level === 2;
+  const atMostManager = level === 0;
   const r = 1 + (t.isAlum ? 0.15 : 0) + (atMostManager ? 0.1 : 0) - (cLevel ? 0.15 : 0);
   return Math.max(0.7, Math.min(1.3, r));
 }
@@ -138,6 +143,11 @@ export interface WarmPathInput {
   /** pairs between contacts, keyed `${a}|${b}` with a < b (combineTies / pairsFromEdges) */
   pairs: ReadonlyMap<string, TiePair>;
   candidates?: ExternalCandidate[];
+  /**
+   * Pairs the student said do not really know each other (plan 21 §3.5), keyed `${a}|${b}` with a < b: never a hop,
+   * whatever the evidence says, until the student undoes it.
+   */
+  blockedPairs?: ReadonlySet<string>;
   now?: Date;
   /** Yen's k */
   k?: number;
@@ -145,12 +155,33 @@ export interface WarmPathInput {
   limit?: number;
 }
 
+export type HopBand = 'close' | 'know' | 'connected' | 'unclear';
+
+/** How well two people know each other, in a word (plan 21 §3.7), from p_know. */
+export function hopBand(p: number): HopBand {
+  if (p >= 0.65) return 'close';
+  if (p >= 0.5) return 'know';
+  if (p >= 0.2) return 'connected';
+  return 'unclear';
+}
+
+export const HOP_BAND_LABELS: Record<HopBand, string> = {
+  close: 'close',
+  know: 'know each other',
+  connected: 'connected',
+  unclear: 'unclear',
+};
+
 export interface WarmHop {
   fromId: string;
   toId: string;
   p: number;
   /** the strongest evidence on this hop; 'strength' for the student's own tie */
   kind: TieKind | 'strength';
+  /** every hop after the first: how well the two know each other (plan 21 §3.7) */
+  band?: HopBand;
+  /** the pair's evidence has gone quiet (no new sign in eight times its usual gap) */
+  fading?: true;
 }
 
 export interface WarmPath {
@@ -186,6 +217,19 @@ export function pathBand(p: number): WarmPath['band'] {
 
 const pk = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
 
+/** The pair key routing uses (`${a}|${b}` with a < b), for blocked pairs. */
+export const pairKeyOf = pk;
+
+function dropBlocked(
+  pairs: ReadonlyMap<string, TiePair>,
+  blocked: ReadonlySet<string> | undefined,
+): ReadonlyMap<string, TiePair> {
+  if (!blocked?.size) return pairs;
+  const out = new Map(pairs);
+  for (const k of blocked) out.delete(k);
+  return out;
+}
+
 function withExternal(
   pairs: ReadonlyMap<string, TiePair>,
   targetId: string,
@@ -197,7 +241,7 @@ function withExternal(
     if (c.introducerId === targetId) continue;
     const key = pk(c.introducerId, targetId);
     const [a, b] = key.split('|') as [string, string];
-    const w = c.kind === 'linkedin_mutual' ? 0.3 : Math.max(0, Math.min(1, c.warmth ?? 0));
+    const w = c.kind === 'linkedin_mutual' ? HOP_WEIGHTS.mutual : Math.max(0, Math.min(1, c.warmth ?? 0));
     const conf = c.kind === 'linkedin_mutual' ? 0.95 : 0.7;
     const tie: Tie = {
       id: `${key}|${c.kind}`,
@@ -234,10 +278,19 @@ function usable(p: RoutePerson | undefined, now: Date): boolean {
   return true;
 }
 
+const strength = (t: Tie, now: Date) => decayedTieWeight(t, now) * t.confidence;
+
+/** The evidence a hop is named by: the strongest kind that can carry a route, else the strongest at all. */
 function strongestTie(pair: TiePair, now: Date): Tie | undefined {
-  return [...pair.ties].sort(
-    (x, y) => decayedTieWeight(y, now) * y.confidence - decayedTieWeight(x, now) * x.confidence,
-  )[0];
+  const sorted = [...pair.ties].sort((x, y) => strength(y, now) - strength(x, now));
+  return sorted.find((t) => !SUPPORT_ONLY_TIE_KINDS.has(t.kind)) ?? sorted[0];
+}
+
+/** The strongest support-only evidence on a pair (engagement, a mention, common contacts), if any. */
+function strongestSupport(pair: TiePair, now: Date): Tie | undefined {
+  return [...pair.ties]
+    .filter((t) => SUPPORT_ONLY_TIE_KINDS.has(t.kind))
+    .sort((x, y) => strength(y, now) - strength(x, now))[0];
 }
 
 function pairIsOld(pair: TiePair, now: Date): boolean {
@@ -303,9 +356,72 @@ export function hopEvidence(fromId: string, tie: Tie | undefined, toName: string
       return `went to ${typeof ev.school === 'string' ? ev.school : 'school'} with ${toName}`;
     case 'same_current_company':
       return `works with ${toName}${org ? ` at ${org}` : ''}`;
+    case 'linkedin_recommendation':
+      return ev.authorId === fromId
+        ? `recommended ${toName} on LinkedIn`
+        : `was recommended on LinkedIn by ${toName}`;
+    case 'linkedin_mention':
+      return ev.authorId === fromId
+        ? `mentioned ${toName} in a LinkedIn post`
+        : `was mentioned by ${toName} in a LinkedIn post`;
+    case 'student_says_close':
+      return `is close to ${toName} (you said)`;
+    case 'common_contacts': {
+      const n = typeof ev.n === 'number' ? ev.n : 0;
+      return n === 1
+        ? `has a contact in common with ${toName}`
+        : `has ${n} contacts in common with ${toName}`;
+    }
+    case 'linkedin_engagement':
+      return engagementPhrase(fromId, ev, toName);
     default:
       return `knows ${toName}`;
   }
+}
+
+const times = (n: number, one: string, many: string) => (n === 1 ? one : many.replace('{n}', String(n)));
+
+/** What a pair's LinkedIn engagement says, from `fromId`'s side (plan 21 §7's fixed vocabulary). */
+function engagementPhrase(fromId: string, ev: Record<string, unknown>, toName: string): string {
+  const counts = (ev.counts ?? {}) as Record<
+    string,
+    { comments?: number; replies?: number; reposts?: number; reactions?: number }
+  >;
+  const mine = counts[fromId] ?? {};
+  const theirs = Object.entries(counts).find(([id]) => id !== fromId)?.[1] ?? {};
+  if (ev.reciprocal) return `trades comments with ${toName} on LinkedIn`;
+  if (theirs.replies)
+    return `has had ${times(theirs.replies, 'a reply', '{n} replies')} from ${toName} on LinkedIn`;
+  if (mine.comments)
+    return `has left ${times(mine.comments, 'a comment', '{n} comments')} on ${toName}’s posts`;
+  if (mine.replies) return `has replied to ${toName}’s ${times(mine.replies, 'comment', 'comments')}`;
+  if (theirs.comments)
+    return `has had ${times(theirs.comments, 'a comment', '{n} comments')} from ${toName} on their posts`;
+  if (mine.reposts) return `has reposted ${toName}`;
+  if (theirs.reposts) return `has been reposted by ${toName}`;
+  if (mine.reactions) return `has reacted to ${times(mine.reactions, 'a post', '{n} posts')} by ${toName}`;
+  if (theirs.reactions)
+    return `has had ${times(theirs.reactions, 'a reaction', '{n} reactions')} from ${toName} on LinkedIn`;
+  return `follows ${toName}’s posts on LinkedIn`;
+}
+
+/**
+ * What a hop says, in full (plan 21 §7): the evidence that carries it, and the strongest support behind it, e.g.
+ * "is connected to Arlan on LinkedIn, and has left 3 comments on Arlan’s posts". A pair with nothing but a mutual
+ * reads as today.
+ */
+export function pairPhrase(
+  fromId: string,
+  pair: TiePair | undefined,
+  toName: string,
+  now: Date = new Date(),
+): string {
+  if (!pair) return `knows ${toName}`;
+  const top = strongestTie(pair, now);
+  const head = hopEvidence(fromId, top, toName);
+  const support = strongestSupport(pair, now);
+  if (!support || support === top) return head;
+  return `${head}, and ${hopEvidence(fromId, support, toName)}`;
 }
 
 /**
@@ -397,8 +513,16 @@ export function rankWarmPaths(input: WarmPathInput): WarmPathResult {
       direct: { score: target.score, band, text: `You know ${tName} (${band} · ${target.score})` },
     };
   }
-  const pairs = withExternal(input.pairs, input.targetId, input.candidates ?? []);
-  const mutuals = mutualIntroducers(pairs, input.targetId, input.candidates ?? []);
+  // a pair the student blocked is no hop, and no mutual of the target either
+  const blocked = input.blockedPairs;
+  const candidates = (input.candidates ?? []).filter(
+    (c) => !blocked?.has(pk(c.introducerId, input.targetId)),
+  );
+  const pairs = withCommonContacts(
+    dropBlocked(withExternal(dropBlocked(input.pairs, blocked), input.targetId, candidates), blocked),
+    now,
+  );
+  const mutuals = mutualIntroducers(pairs, input.targetId, candidates);
   const rg = routingGraph(input, pairs, now, mutuals);
   const { g, ask } = rg;
   const rT = targetReceptivity(input.target ?? {});
@@ -423,7 +547,14 @@ export function rankWarmPaths(input: WarmPathInput): WarmPathResult {
       }
       const pair = pairs.get(pk(from, to))!;
       const know = pKnow(pair);
-      hops.push({ fromId: from, toId: to, p: know, kind: strongestTie(pair, now)?.kind ?? pair.kinds[0]! });
+      hops.push({
+        fromId: from,
+        toId: to,
+        p: know,
+        kind: strongestTie(pair, now)?.kind ?? pair.kinds[0]!,
+        band: hopBand(know),
+        ...(pairFading(pair, now) ? { fading: true as const } : {}),
+      });
       p *= know;
       if (pairIsOld(pair, now)) old = true;
     }
@@ -510,7 +641,7 @@ function reasonText(
   if (last?.kinds.includes('linkedin_mutual')) {
     // through a LinkedIn mutual: who they are to the student, then how they know the target
     const top = strongestTie(last, now);
-    const how = hopEvidence(a.id, top, tName);
+    const how = pairPhrase(a.id, last, tName, now);
     const also = top && top.kind !== 'linkedin_mutual' ? ' (and is connected to them on LinkedIn)' : '';
     const closeness = TIE_BAND_LABELS[tieBand(aScore)].toLowerCase();
     const weak = f.weak ? ' A weaker route, but a real connection.' : '';
@@ -521,15 +652,36 @@ function reasonText(
   for (let i = 1; i < f.nodes.length - 1; i++) {
     const from = f.nodes[i]!;
     const to = f.nodes[i + 1]!;
-    const pair = pairs.get(pk(from, to));
-    phrases.push(hopEvidence(from, pair ? strongestTie(pair, now) : undefined, nameOf(to)));
+    phrases.push(pairPhrase(from, pairs.get(pk(from, to)), nameOf(to), now));
   }
   const head = `${a.name} (${TIE_BAND_LABELS[tieBand(aScore)]} · ${aScore}) ${phrases[0]}`;
   const rest = phrases
     .slice(1)
     .map((p) => `, who ${p}`)
     .join('');
-  return `${head}${rest}.${others}`;
+  return `${head}${rest}.${weakLink(f, input, pairs, nameOf)}${others}`;
+}
+
+/**
+ * On a route with two or more hops past the student's own, the weakest of them when it is only a connection or
+ * unclear (plan 21 §5.1): the student should know which link the intro rests on.
+ */
+function weakLink(
+  f: Pick<WarmPath, 'hops'>,
+  input: WarmPathInput,
+  pairs: ReadonlyMap<string, TiePair>,
+  nameOf: (id: string) => string,
+): string {
+  const later = f.hops.slice(1);
+  if (later.length < 2) return '';
+  const weakest = [...later].sort((x, y) => x.p - y.p)[0]!;
+  const band = hopBand(weakest.p);
+  if (band !== 'connected' && band !== 'unclear') return '';
+  if (later.every((h) => hopBand(h.p) === band)) return '';
+  const from = input.people.get(weakest.fromId)?.name ?? nameOf(weakest.fromId);
+  const pair = pairs.get(pk(weakest.fromId, weakest.toId));
+  const top = pair ? strongestTie(pair, input.now ?? new Date()) : undefined;
+  return ` The weak link: ${from} ${hopEvidence(weakest.fromId, top, nameOf(weakest.toId))}.`;
 }
 
 export interface CompanyTargetInput extends Omit<WarmPathInput, 'targetId' | 'target'> {
@@ -546,7 +698,7 @@ export function rankCompanyTargets(input: CompanyTargetInput): { target: TargetI
   const now = input.now ?? new Date();
   let targets = input.targets;
   if (targets.length > 10) {
-    const pairs = withExternal(input.pairs, '', []);
+    const pairs = dropBlocked(input.pairs, input.blockedPairs);
     const { g } = routingGraph({ ...input, targetId: '' }, pairs, now);
     const adj = new Map<string, Map<string, number>>();
     for (const [u, nbrs] of g.adj) adj.set(u, new Map([...nbrs].map(([v, e]) => [v, e.weight])));

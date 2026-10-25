@@ -62,7 +62,17 @@ export type EdgeType =
   /** LinkedIn mutual connection (Unipile connections_of) */
   | 'linkedin_mutual'
   /** an introducer Village returned */
-  | 'village_path';
+  | 'village_path'
+  /** one recommended the other on LinkedIn (plan 21) */
+  | 'linkedin_recommendation'
+  /** comments, replies, reposts and reactions on each other's LinkedIn posts (plan 21; supports, never creates, a route) */
+  | 'linkedin_engagement'
+  /** one named the other in a LinkedIn post (plan 21; support only) */
+  | 'linkedin_mention'
+  /** people with a real tie to both (plan 21; support only) */
+  | 'common_contacts'
+  /** the student said these two are close (plan 21) */
+  | 'student_says_close';
 export type TouchpointKind =
   | 'email_in'
   | 'email_out'

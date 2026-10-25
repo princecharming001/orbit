@@ -1,6 +1,7 @@
 import { normalizeCompany } from '../text/normalize';
 import type { Affiliation, CalendarEvent, Edge, EmailThread, Organization, Person } from '../types';
-import { sizeFactor } from './orgSize';
+import { knownSizeBucket, sizeFactor } from './orgSize';
+import { functionOf, seniorityFit } from './titles';
 
 const DAY = 86_400_000;
 
@@ -73,6 +74,7 @@ export function inferEdges(input: EdgeInput): Edge[] {
   const people = input.people.filter((p) => p.isHuman && !p.hiddenAt);
   const peopleIds = new Set(people.map((p) => p.id));
   const strengthOf = new Map(people.map((p) => [p.id, p.strength ?? 0]));
+  const titleOf = new Map(people.map((p) => [p.id, p.currentTitle]));
   const byPerson = new Map<string, Affiliation[]>();
   for (const a of input.affiliations) {
     if (!peopleIds.has(a.personId)) continue;
@@ -151,17 +153,33 @@ export function inferEdges(input: EdgeInput): Edge[] {
       if (isEmployment) {
         const orgName = org?.name ?? A.aff.nameRaw;
         const sf = sizeFactor(org?.sizeBucket, orgName, distinct);
+        // plan 21 §3.6: the employer's size and how the two titles relate, for the tie's confidence
+        const sizeBucket = org?.sizeBucket ?? knownSizeBucket(orgName);
+        const titleA = A.aff.title ?? (A.aff.isCurrent ? titleOf.get(A.personId) : undefined);
+        const titleB = B.aff.title ?? (B.aff.isCurrent ? titleOf.get(B.personId) : undefined);
+        const peers = seniorityFit(titleA, titleB);
+        const fa = functionOf(titleA);
+        const sameFunction = !!fa && fa === functionOf(titleB);
+        const shape = {
+          ...(sizeBucket ? { sizeBucket } : {}),
+          ...(peers ? { peers } : {}),
+          ...(sameFunction ? { sameFunction } : {}),
+        };
         const bothCurrent = A.aff.isCurrent && B.aff.isCurrent;
         const current = [A, B].filter((m) => m.aff.isCurrent).map((m) => m.personId);
         // A stint's span is known only with a start date and, unless it is current, an end date. Without both
         // spans we cannot say since when (or whether) two people worked side by side.
         const spanKnown = (a: Affiliation) => !!a.startDate && (a.isCurrent || !!a.endDate);
         if (bothCurrent && !(spanKnown(A.aff) && spanKnown(B.aff))) {
-          put(A.personId, B.personId, 'same_current_company', 0.35 * sf, {
-            orgName,
-            current,
-            text: `Both currently at ${orgName}`,
-          });
+          // two people at a 12-person startup almost certainly know each other; at a big employer it says little
+          const size = sizeClass(sizeBucket);
+          put(
+            A.personId,
+            B.personId,
+            'same_current_company',
+            size === 'small' ? 0.7 : size === 'mid' ? 0.45 : 0.35 * sf,
+            { orgName, current, ...shape, text: `Both currently at ${orgName}` },
+          );
         } else if (!spanKnown(A.aff) || !spanKnown(B.aff)) {
           // A past stint with unknown dates: they may well have overlapped, but we cannot say when.
           if (provablyDisjoint(A.aff, B.aff)) continue;
@@ -169,6 +187,7 @@ export function inferEdges(input: EdgeInput): Edge[] {
             orgName,
             datesUnknown: true,
             current,
+            ...shape,
             text: current.length ? `Both have worked at ${orgName}` : `Both previously at ${orgName}`,
           });
         } else {
@@ -187,6 +206,7 @@ export function inferEdges(input: EdgeInput): Edge[] {
             toYear,
             ongoing,
             current,
+            ...shape,
             text: `Worked together at ${orgName}${yearSpan(fromYear, toYear, ongoing)}`,
           });
         }
@@ -290,6 +310,14 @@ function yearSpan(from: number | undefined, to: number | undefined, ongoing: boo
 type Member = { personId: string; aff: Affiliation };
 
 /** All pairs for normal groups; for large groups, every member paired with the group's strongest connectors. */
+/** Employers by headcount, for plan 21 §3.6: under 50, 51–500, or larger (undefined when unknown). */
+export function sizeClass(bucket: string | undefined): 'small' | 'mid' | 'large' | undefined {
+  if (!bucket) return undefined;
+  if (['1-10', '2-10', '11-50'].includes(bucket)) return 'small';
+  if (['51-200', '201-500'].includes(bucket)) return 'mid';
+  return 'large';
+}
+
 function groupPairs(members: Member[], strengthOf: Map<string, number>): [Member, Member][] {
   const out: [Member, Member][] = [];
   if (members.length <= FULL_PAIRING_MAX) {
