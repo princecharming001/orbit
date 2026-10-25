@@ -10,6 +10,8 @@ import {
   normalizeCompany,
   orbitGroupKey,
   REACH_BAND_LABELS,
+  TIE_BAND_LABELS,
+  tieBand,
 } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Building2, Search, X } from 'lucide-react';
@@ -41,6 +43,7 @@ import {
   reachCompany,
   reachPersonIn,
   targetCompanyMatcher,
+  userTieWeight,
   WARMER_ROUTES_WHY,
   type WarmReachPath,
 } from '../engine/graph';
@@ -79,6 +82,18 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? o
 
 /** Someone the search can offer: a person with a real name, not hidden. */
 const named = (p: Person) => p.isHuman && !p.hiddenAt && hasRealName(p);
+
+/** A route's strength out of 100: the chance the introduction happens, from every hop. */
+const routeScore = (p: { score: number }) => Math.round(Math.max(0, Math.min(1, p.score)) * 100);
+
+const ROUTE_SCORE_WHY =
+  'Strength out of 100: how likely this intro is to happen. Your tie to the first person, times how well each pair along the way knows each other, a little less for each extra hop.';
+
+/** The student's tie to someone on a route, as on their card: "warm tie · 48". */
+function tieWords(p: Person): string {
+  const s = Math.round(userTieWeight(p) * 100);
+  return `${TIE_BAND_LABELS[tieBand(s)].toLowerCase()} tie · ${s}`;
+}
 
 /** How well two people on a route know each other, in the route card's words (plan 21 §3.7). */
 const HOP_WORDS = {
@@ -1275,18 +1290,27 @@ export function MapPage() {
                               Village · {village.warmthWord}
                             </Chip>
                           )}
+                          {/* the route's strength out of 100: the chance the intro happens, every hop counted */}
                           {isColdDirect(p) ? (
-                            <Chip className="h-5">Cold tie</Chip>
+                            <Chip className="h-5" title={ROUTE_SCORE_WHY} data-testid="reach-path-score">
+                              Cold tie · {routeScore(p)}
+                            </Chip>
                           ) : p.weak ? (
-                            <Chip className="h-5" title={p.reason} data-testid="reach-path-weak">
-                              Weaker route
+                            <Chip
+                              className="h-5"
+                              title={`${p.reason ?? ''} ${ROUTE_SCORE_WHY}`.trim()}
+                              data-testid="reach-path-weak"
+                            >
+                              Weaker route · {routeScore(p)}
                             </Chip>
                           ) : (
                             <Chip
                               className="h-5"
                               tone={p.band === 'strong' ? 'good' : p.band === 'possible' ? 'warn' : 'neutral'}
+                              title={ROUTE_SCORE_WHY}
+                              data-testid="reach-path-score"
                             >
-                              {REACH_BAND_LABELS[p.band]}
+                              {REACH_BAND_LABELS[p.band]} · {routeScore(p)}
                             </Chip>
                           )}
                         </span>
@@ -1308,10 +1332,17 @@ export function MapPage() {
                                 <span className="font-medium" title={h.text}>
                                   {to?.displayName ?? '…'}
                                 </span>
+                                {/* the student's own tie to the first person, with its score */}
+                                {k === 0 && to && (
+                                  <span className="text-ink-3" data-testid="reach-hop-tie">
+                                    {' · '}your {tieWords(to)}
+                                  </span>
+                                )}
+                                {/* past it, how well the two know each other, out of 100 */}
                                 {k > 0 && h.band && (
                                   <span className="text-ink-3" data-testid="reach-hop-band">
                                     {' · '}
-                                    {HOP_WORDS[h.band]}
+                                    {HOP_WORDS[h.band]} · {Math.round(h.weight * 100)}
                                     {h.fading ? ', quiet lately' : ''}
                                   </span>
                                 )}
@@ -1351,6 +1382,7 @@ export function MapPage() {
                             aName={byId.get(h.fromId)?.firstName ?? 'They'}
                             bName={byId.get(h.toId)?.firstName ?? 'them'}
                             className="block"
+                            named={p.hops.length > 2}
                           />
                         ))}
                       </div>

@@ -252,7 +252,9 @@ export function ReachMutuals({
                 >
                   {person
                     ? `You: ${TIE_BAND_LABELS[tieBand(score)].toLowerCase()} · ${score}${
-                        standing ? ` · ${knowWords(standing.band, first)}` : ''
+                        standing
+                          ? ` · ${knowWords(standing.band, first)} · ${Math.round(standing.know * 100)}`
+                          : ''
                       }`
                     : 'Not in your Orbit yet'}
                 </div>

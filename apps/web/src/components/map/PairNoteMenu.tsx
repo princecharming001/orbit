@@ -19,6 +19,7 @@ export function PairNoteMenu({
   aName,
   bName,
   className,
+  named,
 }: {
   userId: string;
   aId: string;
@@ -26,6 +27,8 @@ export function PairNoteMenu({
   aName: string;
   bName: string;
   className?: string;
+  /** say which pair on the closed link (a route with several hops shows one per hop) */
+  named?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [x, y] = aId < bId ? [aId, bId] : [bId, aId];
@@ -63,7 +66,7 @@ export function PairNoteMenu({
         aria-expanded={false}
         data-testid="pair-note-open"
       >
-        Not right?
+        {named ? `Not right about ${aName} and ${bName}?` : 'Not right?'}
       </button>
     );
   return (
