@@ -512,6 +512,10 @@ test.describe('Map reach through LinkedIn mutuals (plan 17 §C)', () => {
     // why the route goes through them: on hover by default (the grey line shows only with explanations on)
     await expect(route.locator('[title*="is connected to Kenji on LinkedIn"]').first()).toBeAttached();
     await expect(route.getByTestId('reach-path-action')).toHaveText(/^Ask \S+ for an intro$/);
+    // plan 21: past the student's own tie, each hop says how well the two know each other
+    await expect(route.getByTestId('reach-hop-band').first()).toHaveText(
+      /^ · (close|know each other|connected|unclear)/,
+    );
     await expect(page.getByText(/no route found/i)).toHaveCount(0);
     // the panel: who knows him, closest to the student first, each with how close and an intro to ask for
     const panel = page.getByTestId('reach-mutuals');
@@ -522,9 +526,9 @@ test.describe('Map reach through LinkedIn mutuals (plan 17 §C)', () => {
     // plan 21: the best way in first — how close the student is to them and how well they know Kenji — so a row
     // never puts someone who knows Kenji less well above someone who knows him better
     const closeness = await panel.getByTestId('reach-mutual-closeness').allInnerTexts();
-    const KNOW = ['unclear', 'connected', 'knows them', 'close'];
+    const KNOW = ['unclear with', 'connected to', 'knows', 'close to'];
     const bands = closeness.map((t) =>
-      KNOW.indexOf(/· (unclear|connected|knows them|close)$/.exec(t)?.[1] ?? ''),
+      KNOW.indexOf(/· (unclear with|connected to|knows|close to) Kenji$/.exec(t)?.[1] ?? ''),
     );
     expect(bands.every((b) => b >= 0)).toBe(true);
     expect(bands).toEqual([...bands].sort((a, b) => b - a));

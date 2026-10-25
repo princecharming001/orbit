@@ -57,12 +57,15 @@ interface Row {
   standing?: MutualStanding;
 }
 
-const KNOW_WORDS = {
-  close: 'close',
-  know: 'knows them',
-  connected: 'connected',
-  unclear: 'unclear',
-} as const;
+/** How well a mutual knows the target, in the row's words (plan 21 §3.7). */
+const knowWords = (band: MutualStanding['band'], first: string) =>
+  band === 'close'
+    ? `close to ${first}`
+    : band === 'know'
+      ? `knows ${first}`
+      : band === 'connected'
+        ? `connected to ${first}`
+        : `unclear with ${first}`;
 
 /**
  * Each mutual's standing (plan 21 §3.7): how close the student is to them and how well they know the target, from
@@ -227,7 +230,7 @@ export function ReachMutuals({
           return (
             <li
               key={`${m.name}:${m.memberId ?? m.personId ?? ''}`}
-              className="flex items-center gap-2.5 text-[13px] min-w-0"
+              className="group flex items-center gap-2.5 text-[13px] min-w-0"
               data-testid="reach-mutual"
             >
               <Avatar name={name} src={m.pictureUrl ?? person?.photoUrl} id={person?.id ?? name} size={30} />
@@ -243,13 +246,13 @@ export function ReachMutuals({
                   {url && /linkedin\.com/i.test(url) && <LinkedInMark url={url} name={name} />}
                 </div>
                 <div
-                  className="text-[12px] text-ink-3 truncate"
+                  className="text-[12px] text-ink-3"
                   title={`How close you are to them, and how well they know ${first}`}
                   data-testid="reach-mutual-closeness"
                 >
                   {person
                     ? `You: ${TIE_BAND_LABELS[tieBand(score)].toLowerCase()} · ${score}${
-                        standing ? ` · ${KNOW_WORDS[standing.band]}` : ''
+                        standing ? ` · ${knowWords(standing.band, first)}` : ''
                       }`
                     : 'Not in your Orbit yet'}
                 </div>
@@ -265,7 +268,8 @@ export function ReachMutuals({
                     bId={target.id}
                     aName={mFirst}
                     bName={first}
-                    className="block"
+                    // on hover or focus with a mouse, always on touch: one correction per row without the clutter
+                    className="block transition-opacity pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:group-focus-within:opacity-100"
                   />
                 )}
               </div>
