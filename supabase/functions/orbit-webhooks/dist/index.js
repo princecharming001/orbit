@@ -4567,7 +4567,8 @@ var ENGAGEMENT = /* @__PURE__ */ new Set([
 var AMBIENT = /* @__PURE__ */ new Set(["email_cc", "linkedin_connected", ...ENGAGEMENT]);
 
 // packages/core/src/graph/ties.ts
-var YEAR = 365.25 * 864e5;
+var DAY = 864e5;
+var YEAR = 365.25 * DAY;
 
 // supabase/functions/_shared/ingest/ties.ts
 var INTERACTION_KINDS = [
@@ -4735,6 +4736,7 @@ var KIND_QUEUE = {
   "score.person": "orbit_score",
   "enrich.dossier": "orbit_enrich",
   "source.search": "orbit_enrich",
+  hop_evidence: "orbit_enrich",
   noop: "orbit_enrich"
 };
 function queueFor(kind) {

@@ -30,6 +30,7 @@ export const KIND_QUEUE: Record<string, QueueName> = {
   'score.person': 'orbit_score',
   'enrich.dossier': 'orbit_enrich',
   'source.search': 'orbit_enrich',
+  hop_evidence: 'orbit_enrich',
   noop: 'orbit_enrich',
 };
 

@@ -241,6 +241,7 @@ describe('orbit.delete_user (§10.4 test 4)', () => {
       insert into orbit.calendar_events (user_id, external_id, start_at) values ('${u}', 'e', now());
       insert into orbit.ties (user_id, a_person_id, b_person_id, kind, weight, confidence)
         values ('${u}', '${a}', '${b}', 'email_cc', 0.5, 0.8);
+      insert into orbit.blocked_pairs (user_id, a_person_id, b_person_id) values ('${u}', '${a}', '${b}');
       insert into orbit.tie_scores (user_id, person_id, score, band, features, contributions, model_version)
         values ('${u}', '${p2}', 50, 'Warm', '{}', '{}', 'tie-v1');
       insert into orbit.tie_labels (user_id, person_id, closeness) values ('${u}', '${p2}', 4);

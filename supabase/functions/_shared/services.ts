@@ -10,6 +10,7 @@ import type { Db } from './db.ts';
 import { type GoogleConfig, googleTokenSource, type TokenSource } from './google.ts';
 import { type Apollo, createApollo } from './providers/apollo';
 import { createExa, type Exa } from './providers/exa';
+import { defaultSleep } from './providers/request';
 import { createSemanticScholar, type SemanticScholar } from './providers/semanticScholar';
 import { createUnipileResearch, type UnipileResearch } from './providers/unipileResearch';
 import { createVillage, type Village } from './providers/village';
@@ -60,6 +61,8 @@ export interface Services {
   now: () => Date;
   fetch: typeof fetch;
   random: () => number;
+  /** waits (pacing between provider reads; tests pass an instant one) */
+  sleep: (ms: number) => Promise<void>;
   env: AgentEnv;
   claude: Claude;
   exa: Exa;
@@ -128,6 +131,7 @@ export function makeServices(cfg: AgentConfig, base: { db: Db; now?: () => Date;
     now,
     fetch: doFetch,
     random: cfg.random ?? Math.random,
+    sleep: cfg.sleep ?? defaultSleep,
     env,
     claude: makeClaude({
       apiKey: env.anthropicKey,

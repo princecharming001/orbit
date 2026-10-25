@@ -246,12 +246,12 @@ function windowEnd(window, now) {
   return window === "day" ? new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1)) : new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
 }
 async function checkBudget(db2, userId, spend, now = /* @__PURE__ */ new Date()) {
-  const day = windowStart("day", now);
+  const day2 = windowStart("day", now);
   const month = windowStart("month", now);
   const rows = await db2.sql`
     select provider, operation,
-           coalesce(sum(units) filter (where created_at >= ${day}::timestamptz), 0)::text as day_units,
-           coalesce(sum(cost_usd) filter (where created_at >= ${day}::timestamptz), 0)::text as day_usd,
+           coalesce(sum(units) filter (where created_at >= ${day2}::timestamptz), 0)::text as day_units,
+           coalesce(sum(cost_usd) filter (where created_at >= ${day2}::timestamptz), 0)::text as day_usd,
            coalesce(sum(cost_usd), 0)::text as month_usd
       from orbit.usage_ledger
      where user_id = ${userId}::uuid and created_at >= ${month}::timestamptz
@@ -520,15 +520,15 @@ async function verifyIdToken(cfg, idToken) {
   });
   if (typeof payload.sub !== "string" || typeof payload.email !== "string")
     throw new GoogleError(400, "id_token_claims");
-  const str2 = (v) => typeof v === "string" && v ? v : void 0;
+  const str3 = (v) => typeof v === "string" && v ? v : void 0;
   return {
     sub: payload.sub,
     email: payload.email,
     emailVerified: payload.email_verified === true || payload.email_verified === "true",
-    name: str2(payload.name),
-    givenName: str2(payload.given_name),
-    familyName: str2(payload.family_name),
-    picture: str2(payload.picture)
+    name: str3(payload.name),
+    givenName: str3(payload.given_name),
+    familyName: str3(payload.family_name),
+    picture: str3(payload.picture)
   };
 }
 async function refreshAccessToken(cfg, refreshToken) {
@@ -932,7 +932,15 @@ var unipileProfileSchema = z.looseObject({
       end: dateish
     })
   ).nullish(),
-  throttled_sections: z.array(z.string()).nullish()
+  throttled_sections: z.array(z.string()).nullish(),
+  follower_count: z.number().nullish(),
+  connections_count: z.number().nullish(),
+  // plan 21: who recommended whom (`linkedin_sections` recommendations_received / recommendations_given); the body of a
+  // recommendation is never kept, only the actor, a short caption and its year
+  recommendations: z.looseObject({
+    received: z.array(z.looseObject({})).nullish(),
+    given: z.array(z.looseObject({})).nullish()
+  }).nullish()
 });
 var unipilePostSchema = z.looseObject({
   id: z.string().nullish(),
@@ -945,6 +953,56 @@ var unipilePostSchema = z.looseObject({
 });
 var unipilePostsSchema = z.looseObject({
   items: z.array(unipilePostSchema).default([]),
+  cursor: z.string().nullish()
+});
+var idish = z.union([z.string(), z.number()]).nullish();
+var actorish = z.looseObject({ id: idish, provider_id: idish, member_id: idish }).nullish();
+var unipileActivityPostSchema = z.looseObject({
+  id: idish,
+  social_id: idish,
+  date: z.string().nullish(),
+  parsed_datetime: z.string().nullish(),
+  reaction_counter: z.number().nullish(),
+  comment_counter: z.number().nullish(),
+  is_repost: z.boolean().nullish(),
+  repost_content: z.looseObject({ author: actorish }).nullish(),
+  mentions: z.array(z.union([z.string(), z.looseObject({})])).nullish()
+});
+var unipileActivityPostsSchema = z.looseObject({
+  items: z.array(unipileActivityPostSchema).default([]),
+  cursor: z.string().nullish()
+});
+var unipileReactionSchema = z.looseObject({
+  value: z.string().nullish(),
+  post_id: idish,
+  post_urn: idish,
+  comment_id: idish,
+  author: z.looseObject({ id: idish, provider_id: idish, type: z.string().nullish() }).nullish()
+});
+var unipileReactionsSchema = z.looseObject({
+  items: z.array(unipileReactionSchema).default([]),
+  cursor: z.string().nullish()
+});
+var unipileUserCommentSchema = z.looseObject({
+  id: idish,
+  post_id: idish,
+  post_urn: idish,
+  thread_id: idish,
+  date: z.string().nullish(),
+  parsed_datetime: z.string().nullish()
+});
+var unipileUserCommentsSchema = z.looseObject({
+  items: z.array(unipileUserCommentSchema).default([]),
+  cursor: z.string().nullish()
+});
+var unipilePostCommentSchema = z.looseObject({
+  id: idish,
+  date: z.string().nullish(),
+  parsed_datetime: z.string().nullish(),
+  author_details: actorish
+});
+var unipilePostCommentsSchema = z.looseObject({
+  items: z.array(unipilePostCommentSchema).default([]),
   cursor: z.string().nullish()
 });
 var unipileSearchItemSchema = z.looseObject({
@@ -1004,6 +1062,76 @@ function createUnipileResearch(opts) {
         schema: unipilePostsSchema
       });
       return r.ok ? { ok: true, value: r.value.items } : r;
+    },
+    async postsOf(accountId, memberId, o = {}) {
+      if (!configured) return notConfigured();
+      const r = await requestJson(opts, {
+        provider: "unipile",
+        url: `${base}/api/v1/users/${encodeURIComponent(memberId)}/posts${query({ account_id: accountId, limit: o.limit ?? 100 })}`,
+        headers: headers(),
+        schema: unipileActivityPostsSchema
+      });
+      if (!r.ok) return r;
+      const items = r.value.items.map(activityPost).filter((p) => !!p);
+      return { ok: true, value: { items, cursor: r.value.cursor ?? void 0 } };
+    },
+    async reactionsOf(accountId, memberId, o = {}) {
+      if (!configured) return notConfigured();
+      const r = await requestJson(opts, {
+        provider: "unipile",
+        url: `${base}/api/v1/users/${encodeURIComponent(memberId)}/reactions${query({ account_id: accountId, limit: o.limit ?? 100 })}`,
+        headers: headers(),
+        schema: unipileReactionsSchema
+      });
+      if (!r.ok) return r;
+      const items = r.value.items.map(
+        (x) => ({
+          postKeys: postKeys(x.post_id, x.post_urn),
+          authorId: str(x.author?.id) ?? str(x.author?.provider_id),
+          onComment: x.comment_id != null && x.comment_id !== ""
+        })
+      ).filter((x) => x.postKeys.length > 0);
+      return { ok: true, value: { items, cursor: r.value.cursor ?? void 0 } };
+    },
+    async commentsOf(accountId, memberId, o = {}) {
+      if (!configured) return notConfigured();
+      const r = await requestJson(opts, {
+        provider: "unipile",
+        url: `${base}/api/v1/users/${encodeURIComponent(memberId)}/comments${query({ account_id: accountId, limit: o.limit ?? 100 })}`,
+        headers: headers(),
+        schema: unipileUserCommentsSchema
+      });
+      if (!r.ok) return r;
+      const items = r.value.items.map(
+        (x) => ({
+          id: str(x.id),
+          postKeys: postKeys(x.post_id, x.post_urn),
+          threadId: str(x.thread_id),
+          at: isoDate(x.parsed_datetime ?? x.date)
+        })
+      ).filter((x) => x.postKeys.length > 0);
+      return { ok: true, value: { items, cursor: r.value.cursor ?? void 0 } };
+    },
+    async postComments(accountId, postId, o = {}) {
+      if (!configured) return notConfigured();
+      const r = await requestJson(opts, {
+        provider: "unipile",
+        url: `${base}/api/v1/posts/${encodeURIComponent(postId)}/comments${query({ account_id: accountId, limit: o.limit ?? 100 })}`,
+        headers: headers(),
+        schema: unipilePostCommentsSchema
+      });
+      if (!r.ok) return r;
+      const items = [];
+      for (const x of r.value.items) {
+        const id = str(x.id);
+        if (!id) continue;
+        items.push({
+          id,
+          authorId: str(x.author_details?.id) ?? str(x.author_details?.provider_id) ?? str(x.author_details?.member_id),
+          at: isoDate(x.parsed_datetime ?? x.date)
+        });
+      }
+      return { ok: true, value: { items, cursor: r.value.cursor ?? void 0 } };
     },
     async me(accountId) {
       if (!configured) return notConfigured();
@@ -1086,6 +1214,47 @@ function createUnipileResearch(opts) {
     }
   };
   return api;
+}
+function str(v) {
+  if (typeof v === "number" && Number.isFinite(v)) return String(v);
+  return typeof v === "string" && v.trim() ? v.trim() : void 0;
+}
+function isoDate(v) {
+  if (typeof v !== "string" || !/\d{4}-\d{2}-\d{2}/.test(v)) return void 0;
+  const t = Date.parse(v);
+  return Number.isFinite(t) ? new Date(t).toISOString() : void 0;
+}
+function postKeys(...ids) {
+  const out = /* @__PURE__ */ new Set();
+  for (const v of ids) {
+    const s = str(v);
+    if (!s) continue;
+    out.add(s);
+    const m = s.match(/(\d{6,})\)?$/);
+    if (m) out.add(m[1]);
+  }
+  return [...out];
+}
+function memberOf(v) {
+  if (typeof v === "string") return str(v);
+  if (!v || typeof v !== "object") return void 0;
+  const o = v;
+  return str(o.id) ?? str(o.provider_id) ?? str(o.member_id) ?? str(o.author_id);
+}
+function activityPost(x) {
+  const keys = postKeys(x.id, x.social_id);
+  const id = keys[0];
+  if (!id) return void 0;
+  const mentions = [...new Set((x.mentions ?? []).map(memberOf).filter((m) => !!m))];
+  return {
+    id,
+    keys,
+    at: isoDate(x.parsed_datetime ?? x.date),
+    reactions: x.reaction_counter ?? void 0,
+    comments: x.comment_counter ?? void 0,
+    repostOf: x.is_repost ? memberOf(x.repost_content?.author) : void 0,
+    mentions
+  };
 }
 function networkDistance(v) {
   if (typeof v === "number") return v;
@@ -1344,6 +1513,7 @@ var KIND_QUEUE = {
   "score.person": "orbit_score",
   "enrich.dossier": "orbit_enrich",
   "source.search": "orbit_enrich",
+  hop_evidence: "orbit_enrich",
   noop: "orbit_enrich"
 };
 function queueFor(kind) {
@@ -1440,6 +1610,7 @@ function makeServices(cfg, base) {
     now,
     fetch: doFetch,
     random: cfg.random ?? Math.random,
+    sleep: cfg.sleep ?? defaultSleep,
     env: env2,
     claude: makeClaude({
       apiKey: env2.anthropicKey,
@@ -1511,14 +1682,14 @@ function memoryTake(clock = Date.now) {
   };
 }
 function windows(now) {
-  const iso2 = now.toISOString();
-  const day = iso2.slice(0, 10);
-  const minute = iso2.slice(0, 16);
-  const endOfDay = /* @__PURE__ */ new Date(`${day}T00:00:00Z`);
+  const iso3 = now.toISOString();
+  const day2 = iso3.slice(0, 10);
+  const minute = iso3.slice(0, 16);
+  const endOfDay = /* @__PURE__ */ new Date(`${day2}T00:00:00Z`);
   endOfDay.setUTCDate(endOfDay.getUTCDate() + 1);
   const endOfMinute = /* @__PURE__ */ new Date(`${minute}:00Z`);
   endOfMinute.setUTCMinutes(endOfMinute.getUTCMinutes() + 1);
-  return { day, minute, endOfDay: endOfDay.toISOString(), endOfMinute: endOfMinute.toISOString() };
+  return { day: day2, minute, endOfDay: endOfDay.toISOString(), endOfMinute: endOfMinute.toISOString() };
 }
 function ipBuckets(prefix, visitor, now, perMinute) {
   const w = windows(now);
@@ -2242,10 +2413,10 @@ function nthWeekday(year, month, weekday, n) {
   const last = lastDate.getUTCDay();
   return lastDate.getUTCDate() - (last - weekday + 7) % 7;
 }
-function observed(year, month, day) {
-  const dow = new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+function observed(year, month, day2) {
+  const dow = new Date(Date.UTC(year, month - 1, day2)).getUTCDay();
   const shift = dow === 6 ? -1 : dow === 0 ? 1 : 0;
-  return keyOfDay(dayOfKey(keyOf(year, month, day)) + shift);
+  return keyOfDay(dayOfKey(keyOf(year, month, day2)) + shift);
 }
 var holidayCache = /* @__PURE__ */ new Map();
 function usHolidays(year) {
@@ -3397,13 +3568,13 @@ function extractTimes(text2, reference, opts = {}) {
   const anchorsIn = (n) => (bySentence.get(n) ?? []).filter((g) => g.draft.anchors.length && !g.draft.times.length);
   const sentenceHasAnchor = (n) => toks.some((t) => ANCHOR_KINDS.has(t.k) && sentenceIndexAt(norm2, t.start) === n);
   for (const [n, group] of bySentence) {
-    const times = group.filter((g) => g.draft.times.length && !g.draft.anchors.length);
-    if (!times.length) continue;
+    const times2 = group.filter((g) => g.draft.times.length && !g.draft.anchors.length);
+    if (!times2.length) continue;
     let anchors = anchorsIn(n);
     if (!anchors.length && !sentenceHasAnchor(n)) anchors = anchorsIn(n - 1);
     if (anchors.length !== 1) continue;
     const a = anchors[0];
-    for (const t of times) {
+    for (const t of times2) {
       const lo = Math.min(a.start, t.start);
       const hi = Math.max(a.end, t.end);
       const between = norm2.slice(Math.min(a.end, t.end), Math.max(a.start, t.start));
@@ -4420,7 +4591,7 @@ function wordHit(lower, phrase) {
 }
 function validateComposed(msg, ctx) {
   const issues = [];
-  const block2 = (code, detail) => issues.push({ code, detail, blocking: true });
+  const block3 = (code, detail) => issues.push({ code, detail, blocking: true });
   const body2 = msg.body;
   const lower = body2.toLowerCase();
   const words = wordsIn(body2);
@@ -4453,60 +4624,60 @@ function validateComposed(msg, ctx) {
   if (msg.channel === "linkedin") {
     const max = ctx.connectionNote ? CONNECTION_NOTE_MAX : LINKEDIN_MESSAGE_MAX;
     if (body2.length > max)
-      block2(
+      block3(
         ctx.connectionNote ? "connection_note_too_long" : "linkedin_too_long",
         `${body2.length} characters, at most ${max}`
       );
-    if (FIRST_TOUCH_KINDS.has(msg.kind) && words < 12) block2("words_out_of_range", `${words} words`);
+    if (FIRST_TOUCH_KINDS.has(msg.kind) && words < 12) block3("words_out_of_range", `${words} words`);
   } else {
     const [min, max] = wordRange(msg.kind, ctx.goal);
-    if (words < min || words > max) block2("words_out_of_range", `${words} words, want ${min}–${max}`);
+    if (words < min || words > max) block3("words_out_of_range", `${words} words, want ${min}–${max}`);
   }
-  if (grade > READING_GRADE_MAX) block2("reading_grade", `grade ${grade}, want ${READING_GRADE_MAX} or lower`);
+  if (grade > READING_GRADE_MAX) block3("reading_grade", `grade ${grade}, want ${READING_GRADE_MAX} or lower`);
   const asks = asksIn(body2);
   const wantsNone = msg.kind === "reengage" && (msg.ask?.kind ?? "none") === "none";
   if (wantsNone) {
-    if (asks.length) block2("several_asks", `a re-engage note asks nothing: ${asks[0]}`);
+    if (asks.length) block3("several_asks", `a re-engage note asks nothing: ${asks[0]}`);
   } else if (ONE_ASK_KINDS.has(msg.kind) || msg.kind === "reengage") {
-    if (!asks.length) block2("no_ask", "no ask");
-    else if (asks.length > 1) block2("several_asks", `${asks.length} asks: ${asks.join(" | ")}`);
-  } else if (asks.length > 1) block2("several_asks", `${asks.length} asks: ${asks.join(" | ")}`);
+    if (!asks.length) block3("no_ask", "no ask");
+    else if (asks.length > 1) block3("several_asks", `${asks.length} asks: ${asks.join(" | ")}`);
+  } else if (asks.length > 1) block3("several_asks", `${asks.length} asks: ${asks.join(" | ")}`);
   if (msg.channel === "gmail") {
     const subject = (msg.subject ?? "").trim();
     if (!subject) {
       if (FIRST_TOUCH_KINDS.has(msg.kind) || msg.kind === "intro_request")
-        block2("subject_missing", "no subject");
+        block3("subject_missing", "no subject");
     } else {
       const n = subject.split(/\s+/).length;
       if (n < 2 || n > 6 || subject.length > SUBJECT_MAX_CHARS)
-        block2(
+        block3(
           "subject_length",
           `${n} words, ${subject.length} characters (2–6 words, ≤ ${SUBJECT_MAX_CHARS})`
         );
       const caps = subject.split(/\s+/).slice(1).filter(
         (w) => /^[A-Z]/.test(w) && !new RegExp(`\\b${w.replace(/[^A-Za-z0-9]/g, "")}\\b`).test(ctx.inputs)
       );
-      if (caps.length) block2("subject_case", `capitalised: ${caps.join(", ")}`);
+      if (caps.length) block3("subject_case", `capitalised: ${caps.join(", ")}`);
       if (BANNED_SUBJECT_PATTERNS.some((re) => re.test(subject)) || COMPOSE_BANNED_PHRASES.some((p) => wordHit(subject.toLowerCase(), p)) || /[!?]{2,}|\b(urgent|re:|fwd:)/i.test(subject))
-        block2("subject_banned", subject);
+        block3("subject_banned", subject);
     }
   }
   if (FIRST_TOUCH_KINDS.has(msg.kind) && !msg.hooks.some((h) => h.text.trim() && h.sourceId.trim()))
-    block2("hook_missing", "a first touch needs at least one hook with its source");
+    block3("hook_missing", "a first touch needs at least one hook with its source");
   for (const u2 of unsupportedDetails(`${msg.subject ?? ""}
 ${body2}`, ctx.inputs))
-    block2("unknown_detail", `${u2} is not in the inputs`);
-  for (const p of COMPOSE_BANNED_PHRASES) if (wordHit(lower, p)) block2("banned_phrase", p);
-  if (/[—–]/.test(body2)) block2("em_dash", "no dashes; use a comma or a period");
+    block3("unknown_detail", `${u2} is not in the inputs`);
+  for (const p of COMPOSE_BANNED_PHRASES) if (wordHit(lower, p)) block3("banned_phrase", p);
+  if (/[—–]/.test(body2)) block3("em_dash", "no dashes; use a comma or a period");
   const bangs = (body2.match(/!/g) ?? []).length;
   const allowed = (ctx.style?.exclamationsPerMessage ?? 0) > 0 ? 1 : 0;
   if (bangs > allowed)
-    block2("exclamation", `${bangs} exclamation marks${allowed ? ", at most one in your voice" : ""}`);
+    block3("exclamation", `${bangs} exclamation marks${allowed ? ", at most one in your voice" : ""}`);
   if (msg.kind === "forwardable_blurb") {
     if (/\b(I|I'm|I've|I'd|my|me)\b/.test(body2))
-      block2("third_person", "write it about the student, not as them");
+      block3("third_person", "write it about the student, not as them");
     if (ctx.userFirstName && !body2.includes(ctx.userFirstName))
-      block2("third_person", `name ${ctx.userFirstName}`);
+      block3("third_person", `name ${ctx.userFirstName}`);
   }
   const seen = /* @__PURE__ */ new Set();
   const deduped = issues.filter((i) => {
@@ -4565,13 +4736,13 @@ function localParts(d, tz) {
   const get2 = (t) => parts.find((p) => p.type === t)?.value ?? "";
   const year = Number(get2("year"));
   const month = Number(get2("month"));
-  const day = Number(get2("day"));
+  const day2 = Number(get2("day"));
   const weekday = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(get2("weekday"));
   return {
     key: `${get2("year")}-${get2("month")}-${get2("day")}`,
     year,
     month,
-    day,
+    day: day2,
     hour: Number(get2("hour")) % 24,
     minute: Number(get2("minute")),
     weekday
@@ -4616,7 +4787,7 @@ var HORIZON_BUSINESS_DAYS = 10;
 var FREEBUSY_URL = "https://www.googleapis.com/calendar/v3/freeBusy";
 var EVENTS_URL = "https://www.googleapis.com/calendar/v3/calendars/primary/events";
 function slotLabel(start, end, tz) {
-  const day = new Intl.DateTimeFormat("en-US", {
+  const day2 = new Intl.DateTimeFormat("en-US", {
     timeZone: tz,
     weekday: "short",
     month: "short",
@@ -4628,7 +4799,7 @@ function slotLabel(start, end, tz) {
     minute: "2-digit",
     hourCycle: "h23"
   }).format(d);
-  return `${day}, ${hm(start)}–${hm(end)} ${zoneAbbrev(start, tz)}`;
+  return `${day2}, ${hm(start)}–${hm(end)} ${zoneAbbrev(start, tz)}`;
 }
 function pickSlots(busy, opts) {
   const count = opts.count ?? 3;
@@ -5511,7 +5682,7 @@ function templateMessage(p) {
   const kind = COMPOSE_KINDS.includes(req.kind) ? req.kind : TEMPLATE_KIND[req.kind] ?? "first_touch";
   const opener = p.research.openers[0];
   const s = user.settings;
-  const str2 = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
+  const str3 = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
   const about = user.current_title && user.current_org ? `${user.current_title} at ${user.current_org}` : user.school ? `a student at ${user.school}` : void 0;
   const input = {
     kind,
@@ -5523,9 +5694,9 @@ function templateMessage(p) {
       firstName: me2,
       school: user.school ?? void 0,
       about,
-      company: BUSINESS_GOALS.has(p.goalKind) ? str2(s.company) : void 0,
-      pitch: BUSINESS_GOALS.has(p.goalKind) ? str2(s.pitch) : p.goalKind === "collaboration" ? str2(s.research_topic) : void 0,
-      traction: p.goalKind === "fundraising" ? str2(s.traction) : void 0
+      company: BUSINESS_GOALS.has(p.goalKind) ? str3(s.company) : void 0,
+      pitch: BUSINESS_GOALS.has(p.goalKind) ? str3(s.pitch) : p.goalKind === "collaboration" ? str3(s.research_topic) : void 0,
+      traction: p.goalKind === "fundraising" ? str3(s.traction) : void 0
     },
     recipient: { firstName: firstNameOf(person2), org: personOrg(person2), title: person2.title ?? void 0 },
     hook: opener ? { text: hookPhrase(opener.text), sourceId: opener.id } : void 0,
@@ -7196,6 +7367,178 @@ var memoryRoutes = {
   "/memory/extract": { method: "POST", auth: true, run: extract }
 };
 
+// packages/core/src/graph/orgSize.ts
+var KNOWN_SIZES = {};
+var add2 = (bucket, names) => {
+  for (const n of names) KNOWN_SIZES[normalizeCompany(n)] = bucket;
+};
+add2("10001+", [
+  "Google",
+  "Alphabet",
+  "Meta",
+  "Facebook",
+  "Amazon",
+  "Amazon Web Services",
+  "AWS",
+  "Microsoft",
+  "Apple",
+  "Netflix",
+  "Oracle",
+  "Salesforce",
+  "Adobe",
+  "IBM",
+  "Intel",
+  "NVIDIA",
+  "Cisco",
+  "Uber",
+  "Tesla",
+  "SpaceX",
+  "Qualcomm",
+  "Intuit",
+  "PayPal",
+  "ServiceNow",
+  "Workday",
+  "VMware",
+  "Dell",
+  "HP",
+  "Accenture",
+  "Deloitte",
+  "PwC",
+  "PricewaterhouseCoopers",
+  "EY",
+  "Ernst & Young",
+  "KPMG",
+  "McKinsey & Company",
+  "McKinsey",
+  "Boston Consulting Group",
+  "BCG",
+  "Bain & Company",
+  "Bain",
+  "Booz Allen Hamilton",
+  "Capgemini",
+  "Goldman Sachs",
+  "JPMorgan Chase",
+  "JP Morgan",
+  "J.P. Morgan",
+  "Morgan Stanley",
+  "Bank of America",
+  "Citi",
+  "Citigroup",
+  "Wells Fargo",
+  "Barclays",
+  "UBS",
+  "Deutsche Bank",
+  "HSBC",
+  "BlackRock",
+  "Fidelity Investments",
+  "Vanguard",
+  "Capital One",
+  "American Express",
+  "Visa",
+  "Mastercard",
+  "Charles Schwab",
+  "State Street",
+  "Procter & Gamble",
+  "PepsiCo",
+  "Coca-Cola",
+  "Johnson & Johnson",
+  "Pfizer",
+  "Walmart",
+  "Target",
+  "Nike",
+  "Disney",
+  "The Walt Disney Company",
+  "Comcast",
+  "Verizon",
+  "AT&T",
+  "Boeing",
+  "Lockheed Martin",
+  "General Electric",
+  "GE",
+  "General Motors",
+  "Ford",
+  "ByteDance",
+  "TikTok",
+  "Samsung",
+  "Bloomberg",
+  "LinkedIn",
+  "Shopify",
+  "Booking.com"
+]);
+add2("5001-10000", [
+  "Stripe",
+  "Airbnb",
+  "Snap",
+  "Snapchat",
+  "Spotify",
+  "Block",
+  "Square",
+  "DoorDash",
+  "Lyft",
+  "Datadog",
+  "Atlassian",
+  "Palantir",
+  "Coinbase",
+  "Robinhood",
+  "Pinterest",
+  "Dropbox",
+  "Instacart",
+  "Lazard",
+  "Evercore",
+  "Jane Street",
+  "Citadel",
+  "Two Sigma",
+  "Oliver Wyman",
+  "LEK Consulting",
+  "Kearney"
+]);
+add2("1001-5000", [
+  "Figma",
+  "Anthropic",
+  "OpenAI",
+  "Ramp",
+  "Brex",
+  "Databricks",
+  "Snowflake",
+  "Plaid",
+  "Notion",
+  "Duolingo",
+  "Reddit",
+  "Discord",
+  "Scale AI",
+  "Asana",
+  "Airtable",
+  "Hudson River Trading",
+  "DE Shaw",
+  "D. E. Shaw",
+  "Point72",
+  "Centerview Partners",
+  "PJT Partners",
+  "Moelis",
+  "Moelis & Company",
+  "Perella Weinberg",
+  "Guggenheim Partners",
+  "Blackstone",
+  "KKR",
+  "Apollo",
+  "Carlyle"
+]);
+add2("501-1000", ["Vercel", "Retool", "Rippling", "Mercury", "Jump Trading", "Optiver", "Five Rings"]);
+add2("201-500", ["Linear", "Sequoia Capital", "Andreessen Horowitz", "a16z", "Benchmark", "Accel"]);
+
+// packages/core/src/graph/titles.ts
+var C_LEVEL = /\b(ceo|cfo|coo|cto|cmo|cpo|cio|ciso|chief|president|partner|managing director|founder|co-founder|cofounder)\b/i;
+var SENIOR = /\b(director|vp|vice president|head of|principal|general manager|svp|evp)\b/i;
+var JUNIOR_OR_MANAGER = /\b(intern|analyst|associate|engineer|developer|designer|scientist|researcher|manager|coordinator|specialist|consultant|representative|recruiter|assistant|lead|student|fellow)\b/i;
+function seniorityClass(title) {
+  const t = title ?? "";
+  if (!t.trim()) return void 0;
+  if (C_LEVEL.test(t)) return 2;
+  if (SENIOR.test(t)) return 1;
+  if (JUNIOR_OR_MANAGER.test(t)) return 0;
+  return void 0;
+}
+
 // packages/core/src/scoring/strength.ts
 var ENGAGEMENT = /* @__PURE__ */ new Set([
   "linkedin_comment_in",
@@ -7203,6 +7546,432 @@ var ENGAGEMENT = /* @__PURE__ */ new Set([
   "linkedin_reaction_in"
 ]);
 var AMBIENT = /* @__PURE__ */ new Set(["email_cc", "linkedin_connected", ...ENGAGEMENT]);
+
+// packages/core/src/graph/ties.ts
+var TIE_KINDS = [
+  "email_exchange",
+  "email_cc",
+  "email_cothread",
+  "meeting_coattendee",
+  "introduced_by",
+  "linkedin_mutual",
+  "village_path",
+  "co_tenure",
+  "same_school_cohort",
+  "same_current_company",
+  "linkedin_recommendation",
+  "linkedin_engagement",
+  "linkedin_mention",
+  "common_contacts",
+  "student_says_close"
+];
+var HOP_WEIGHTS = {
+  /** a LinkedIn connection with nothing more known (plan 16 §4.2) */
+  mutual: 0.3,
+  recommendation: 0.85,
+  /** divided by (people tagged − 1) beyond two */
+  mention: 0.6,
+  studentSaysClose: 0.8,
+  engagement: {
+    /** kind weights in E */
+    comment: 1,
+    reply: 1.5,
+    repost: 1,
+    reaction: 0.1,
+    /** w = scale · (1 − e^(−E/saturation)), then capped */
+    scale: 0.75,
+    saturation: 3,
+    /**
+     * one-way engagement counts only toward a hop whose second person did the engaging (they know the first, so the
+     * intro lands), never the other way, which is how fans look (`pKnowDirected`)
+     */
+    oneWayCap: 0.25,
+    reciprocalCap: 0.5,
+    /** reactions alone add at most this much E */
+    reactionCap: 1,
+    /** below this audience, no popularity discount */
+    audience: 2e3,
+    /** popularity when the post author's followers are not known yet */
+    unknownPopularity: 0.25,
+    /** a reactions page this full marks a serial liker, whose reactions count this much */
+    serialLiker: 60,
+    serialLikerFactor: 0.5,
+    /** recency of an item: within 12 months, within 24, older or undated */
+    recent: 1,
+    lastYear: 0.6,
+    old: 0.35
+  },
+  /** w = scale · (1 − e^(−S/saturation)), S = Σ the weaker tie of each common contact */
+  commonContacts: { scale: 0.5, saturation: 2 },
+  /** a pair is "fading" when its newest evidence is older than this many times its usual gap (and 90 days) */
+  fadingGaps: 8
+};
+var TIE_HALF_LIFE_YEARS = {
+  email_exchange: 2,
+  email_cc: 2,
+  email_cothread: 2,
+  meeting_coattendee: 2,
+  introduced_by: 2,
+  linkedin_recommendation: 5,
+  linkedin_mention: 2
+};
+var ROUTABLE_TIE_KINDS = /* @__PURE__ */ new Set([
+  "email_exchange",
+  "email_cc",
+  "meeting_coattendee",
+  "introduced_by",
+  "linkedin_mutual",
+  "linkedin_recommendation",
+  "student_says_close"
+]);
+var SUPPORT_ONLY_TIE_KINDS = /* @__PURE__ */ new Set([
+  "linkedin_engagement",
+  "linkedin_mention",
+  "common_contacts"
+]);
+var TIE_CONFIDENCE = {
+  email_exchange: 0.95,
+  email_cc: 0.85,
+  email_cothread: 0.5,
+  meeting_coattendee: 0.8,
+  introduced_by: 0.95,
+  linkedin_mutual: 0.95,
+  village_path: 0.7,
+  // the affiliation kinds depend on the overlap and the employer's size; these are their typical values, used for
+  // edges stored before confidences existed
+  co_tenure: 0.5,
+  same_school_cohort: 0.25,
+  same_current_company: 0.35,
+  linkedin_recommendation: 0.95,
+  linkedin_engagement: 0.9,
+  linkedin_mention: 0.9,
+  common_contacts: 0.6,
+  student_says_close: 0.9
+};
+var DAY6 = 864e5;
+var YEAR = 365.25 * DAY6;
+var pairKey = (a, b) => a < b ? [a, b] : [b, a];
+function maxIso(a, b) {
+  if (!a) return b;
+  if (!b) return a;
+  return a > b ? a : b;
+}
+function minIso(a, b) {
+  if (!a) return b;
+  if (!b) return a;
+  return a < b ? a : b;
+}
+function decayedTieWeight(t, now = /* @__PURE__ */ new Date()) {
+  const halfLife = TIE_HALF_LIFE_YEARS[t.kind];
+  if (!halfLife || !t.lastSeenAt) return t.weight;
+  const at = new Date(t.lastSeenAt).getTime();
+  if (Number.isNaN(at)) return t.weight;
+  const years = Math.max(0, now.getTime() - at) / YEAR;
+  return t.weight * 0.5 ** (years / halfLife);
+}
+var zeroCounts = () => ({ comments: 0, replies: 0, reposts: 0, reactions: 0 });
+function engagementScore(items, ctx = {}) {
+  const W = HOP_WEIGHTS.engagement;
+  const now = (ctx.now ?? /* @__PURE__ */ new Date()).getTime();
+  const seen = /* @__PURE__ */ new Set();
+  const counts = {};
+  const reactionsE = {};
+  const otherE = {};
+  let popularityKnown = true;
+  let newestAt;
+  let firstAt;
+  let dated = 0;
+  const writers = /* @__PURE__ */ new Set();
+  for (const it of items) {
+    const ref = `${it.actorId}|${it.kind}|${it.commentId ?? it.postId}`;
+    if (seen.has(ref) || it.actorId === it.otherId) continue;
+    seen.add(ref);
+    const followers = ctx.followers?.get(it.postAuthorId);
+    if (followers === void 0) popularityKnown = false;
+    const share = followers === void 0 ? W.unknownPopularity : W.audience / Math.max(W.audience, followers);
+    const t = it.at ? Date.parse(it.at) : Number.NaN;
+    const months = Number.isFinite(t) ? (now - t) / (30.44 * DAY6) : Number.POSITIVE_INFINITY;
+    const recency2 = months <= 12 ? W.recent : months <= 24 ? W.lastYear : W.old;
+    if (Number.isFinite(t)) {
+      dated++;
+      const iso3 = new Date(t).toISOString();
+      newestAt = maxIso(newestAt, iso3);
+      firstAt = minIso(firstAt, iso3);
+    }
+    const c = counts[it.actorId] ??= zeroCounts();
+    if (it.kind === "reaction") {
+      c.reactions++;
+      const volume = ctx.reactionVolume?.get(it.actorId) ?? 0;
+      const liker = volume >= W.serialLiker ? W.serialLikerFactor : 1;
+      reactionsE[it.actorId] = (reactionsE[it.actorId] ?? 0) + W.reaction * share * recency2 * liker;
+      continue;
+    }
+    if (it.kind === "comment") c.comments++;
+    else if (it.kind === "reply") c.replies++;
+    else c.reposts++;
+    writers.add(it.actorId);
+    otherE[it.actorId] = (otherE[it.actorId] ?? 0) + W[it.kind] * Math.sqrt(share) * recency2;
+  }
+  const curve = (e) => W.scale * (1 - Math.exp(-e / W.saturation));
+  const eBy = {};
+  const wBy = {};
+  for (const a of Object.keys(counts)) {
+    eBy[a] = (otherE[a] ?? 0) + Math.min(W.reactionCap, reactionsE[a] ?? 0);
+    wBy[a] = Math.min(W.oneWayCap, curve(eBy[a]));
+  }
+  const E = Object.values(eBy).reduce((acc, e) => acc + e, 0);
+  const reciprocal = writers.size >= 2;
+  const w = reciprocal ? Math.min(popularityKnown ? W.reciprocalCap : W.oneWayCap, curve(E)) : 0;
+  return { E, w, wBy, reciprocal, popularityKnown, counts, newestAt, firstAt, dated };
+}
+function pKnowDirected(pair, fromId, toId) {
+  let p = Math.max(0, Math.min(1, pair.weight));
+  for (const t of pair.ties) {
+    if (t.kind !== "linkedin_engagement") continue;
+    const ev = t.evidence;
+    if (ev.reciprocal) continue;
+    const w = ev.wBy?.[toId] ?? 0;
+    if (w > 0) p = 1 - (1 - p) * (1 - Math.min(1, w * t.confidence));
+  }
+  return p;
+}
+function pairEvidenceTies(input) {
+  const now = input.now ?? /* @__PURE__ */ new Date();
+  const out = /* @__PURE__ */ new Map();
+  const ok = (a, b) => a !== b && input.people.has(a) && input.people.has(b);
+  const put = (t, a, b) => {
+    if (!ok(a, b)) return;
+    const [x, y] = pairKey(a, b);
+    const id = `${x}|${y}|${t.kind}`;
+    const cur = out.get(id);
+    if (cur && cur.weight * cur.confidence >= t.weight * t.confidence) return;
+    out.set(id, { ...t, id, userId: input.userId, aId: x, bId: y });
+  };
+  const byPair = /* @__PURE__ */ new Map();
+  for (const it of input.engagement ?? []) {
+    if (!ok(it.actorId, it.otherId)) continue;
+    const [x, y] = pairKey(it.actorId, it.otherId);
+    const k = `${x}|${y}`;
+    const arr = byPair.get(k) ?? [];
+    arr.push(it);
+    byPair.set(k, arr);
+  }
+  for (const [k, items] of byPair) {
+    const [x, y] = k.split("|");
+    const sc = engagementScore(items, {
+      followers: input.followers,
+      reactionVolume: input.reactionVolume,
+      now
+    });
+    if (sc.E <= 0) continue;
+    put(
+      {
+        kind: "linkedin_engagement",
+        // the pair as a whole: reciprocal engagement only; one-way acts count per direction (pKnowDirected)
+        weight: sc.w,
+        confidence: TIE_CONFIDENCE.linkedin_engagement,
+        evidence: {
+          source: "linkedin",
+          counts: sc.counts,
+          wBy: Object.fromEntries(Object.entries(sc.wBy).map(([id, w]) => [id, Math.round(w * 1e4) / 1e4])),
+          reciprocal: sc.reciprocal,
+          popularityKnown: sc.popularityKnown,
+          E: Math.round(sc.E * 1e3) / 1e3,
+          items: sc.dated,
+          firstAt: sc.firstAt,
+          lastAt: sc.newestAt,
+          text: sc.reciprocal ? "Comment on each other’s LinkedIn posts" : "Engage with each other on LinkedIn"
+        },
+        firstSeenAt: sc.firstAt,
+        lastSeenAt: sc.newestAt
+      },
+      x,
+      y
+    );
+  }
+  for (const r of input.recommendations ?? []) {
+    const at = r.year ? `${r.year}-07-01T00:00:00.000Z` : void 0;
+    put(
+      {
+        kind: "linkedin_recommendation",
+        weight: HOP_WEIGHTS.recommendation,
+        confidence: TIE_CONFIDENCE.linkedin_recommendation,
+        evidence: {
+          source: "linkedin",
+          authorId: r.authorId,
+          subjectId: r.subjectId,
+          ...r.year ? { year: r.year } : {},
+          ...r.caption ? { caption: r.caption.slice(0, 80) } : {},
+          text: "Recommended on LinkedIn"
+        },
+        firstSeenAt: at,
+        lastSeenAt: at
+      },
+      r.authorId,
+      r.subjectId
+    );
+  }
+  for (const m of input.mentions ?? []) {
+    const tagged = Math.max(1, m.tagged);
+    put(
+      {
+        kind: "linkedin_mention",
+        weight: HOP_WEIGHTS.mention / Math.max(1, tagged - 1),
+        confidence: TIE_CONFIDENCE.linkedin_mention,
+        evidence: {
+          source: "linkedin",
+          authorId: m.authorId,
+          mentionedId: m.mentionedId,
+          postId: m.postId,
+          tagged,
+          lastAt: m.at,
+          text: "Mentioned in a LinkedIn post"
+        },
+        firstSeenAt: m.at,
+        lastSeenAt: m.at
+      },
+      m.authorId,
+      m.mentionedId
+    );
+  }
+  for (const s of input.studentSays ?? [])
+    put(
+      {
+        kind: "student_says_close",
+        weight: HOP_WEIGHTS.studentSaysClose,
+        confidence: TIE_CONFIDENCE.student_says_close,
+        evidence: { source: "student", at: s.at, text: "You said they’re close" },
+        firstSeenAt: s.at,
+        lastSeenAt: s.at
+      },
+      s.aId,
+      s.bId
+    );
+  return [...out.values()];
+}
+function combineTies(ties, now = /* @__PURE__ */ new Date()) {
+  return mergeTies(/* @__PURE__ */ new Map(), ties, now);
+}
+function mergeTies(pairs, ties, now = /* @__PURE__ */ new Date()) {
+  const out = new Map(pairs);
+  for (const t of ties) {
+    const [a, b] = pairKey(t.aId, t.bId);
+    const k = `${a}|${b}`;
+    const prev = out.get(k);
+    if (prev?.ties.some((x) => x.id === t.id)) continue;
+    const cur = prev ? { ...prev, kinds: [...prev.kinds], ties: [...prev.ties] } : { aId: a, bId: b, weight: 0, confidence: 0, kinds: [], ties: [] };
+    const wc = Math.min(1, decayedTieWeight(t, now) * t.confidence);
+    cur.weight = 1 - (1 - cur.weight) * (1 - wc);
+    cur.confidence = 1 - (1 - cur.confidence) * (1 - t.confidence);
+    if (!cur.kinds.includes(t.kind)) cur.kinds.push(t.kind);
+    cur.ties.push(t);
+    cur.lastSeenAt = maxIso(cur.lastSeenAt, t.lastSeenAt);
+    out.set(k, cur);
+  }
+  return out;
+}
+function withCommonContacts(pairs, now = /* @__PURE__ */ new Date()) {
+  const adj = /* @__PURE__ */ new Map();
+  const link = (a, b, w) => {
+    let m = adj.get(a);
+    if (!m) adj.set(a, m = /* @__PURE__ */ new Map());
+    m.set(b, w);
+  };
+  for (const p of pairs.values()) {
+    const real = p.ties.filter((t) => ROUTABLE_TIE_KINDS.has(t.kind));
+    if (!real.length) continue;
+    const w = 1 - real.reduce((acc, t) => acc * (1 - Math.min(1, decayedTieWeight(t, now) * t.confidence)), 1);
+    link(p.aId, p.bId, w);
+    link(p.bId, p.aId, w);
+  }
+  const C = HOP_WEIGHTS.commonContacts;
+  const add4 = [];
+  for (const p of pairs.values()) {
+    if (p.kinds.includes("common_contacts") || !isRoutable(p)) continue;
+    const na = adj.get(p.aId);
+    const nb = adj.get(p.bId);
+    if (!na || !nb) continue;
+    const [small, big] = na.size <= nb.size ? [na, nb] : [nb, na];
+    const common = [];
+    for (const [c, wa] of small) {
+      if (c === p.aId || c === p.bId) continue;
+      const wb = big.get(c);
+      if (wb !== void 0) common.push({ id: c, w: Math.min(wa, wb) });
+    }
+    if (!common.length) continue;
+    const S = common.reduce((acc, c) => acc + c.w, 0);
+    common.sort((x, y) => y.w - x.w || x.id.localeCompare(y.id));
+    add4.push({
+      id: `${p.aId}|${p.bId}|common_contacts`,
+      userId: p.ties[0]?.userId ?? "",
+      aId: p.aId,
+      bId: p.bId,
+      kind: "common_contacts",
+      weight: C.scale * (1 - Math.exp(-S / C.saturation)),
+      confidence: TIE_CONFIDENCE.common_contacts,
+      evidence: {
+        n: common.length,
+        ids: common.slice(0, 5).map((c) => c.id),
+        S: Math.round(S * 1e3) / 1e3,
+        text: common.length === 1 ? "One contact in common" : `${common.length} contacts in common`
+      }
+    });
+  }
+  return add4.length ? mergeTies(pairs, add4, now) : pairs;
+}
+function pairFading(pair, now = /* @__PURE__ */ new Date()) {
+  let fading = false;
+  for (const t of pair.ties) {
+    if (!TIE_HALF_LIFE_YEARS[t.kind] && t.kind !== "linkedin_engagement") continue;
+    const ev = t.evidence;
+    const n = [ev.threads, ev.events, ev.messages, ev.items].find((x) => typeof x === "number");
+    const first = Date.parse(t.firstSeenAt ?? (typeof ev.firstAt === "string" ? ev.firstAt : ""));
+    const last = Date.parse(t.lastSeenAt ?? (typeof ev.lastAt === "string" ? ev.lastAt : ""));
+    if (!n || n < 3 || !Number.isFinite(first) || !Number.isFinite(last) || last <= first) continue;
+    const gap = (last - first) / (n - 1);
+    const quiet = now.getTime() - last;
+    if (quiet <= Math.max(90 * DAY6, HOP_WEIGHTS.fadingGaps * gap)) return false;
+    fading = true;
+  }
+  return fading;
+}
+function isRoutable(pair) {
+  if (pair.kinds.some((k) => ROUTABLE_TIE_KINDS.has(k))) return true;
+  if (!pair.kinds.some((k) => SUPPORT_ONLY_TIE_KINDS.has(k))) return pair.confidence >= 0.5;
+  if (!pair.ties) return false;
+  const c = pair.ties.filter((t) => !SUPPORT_ONLY_TIE_KINDS.has(t.kind)).reduce((acc, t) => acc * (1 - t.confidence), 1);
+  return 1 - c >= 0.5;
+}
+
+// supabase/functions/_shared/ingest/ties.ts
+var INTERACTION_KINDS = [
+  "email_exchange",
+  "email_cc",
+  "email_cothread",
+  "meeting_coattendee"
+];
+var AFFILIATION_KINDS = ["co_tenure", "same_school_cohort", "same_current_company", "same_city"];
+var INFERRED_KINDS = [...INTERACTION_KINDS, ...AFFILIATION_KINDS];
+async function upsertTie(db2, userId, t, now) {
+  const [a, b] = t.a < t.b ? [t.a, t.b] : [t.b, t.a];
+  if (a === b) return;
+  const w = Math.min(1, Math.max(0, t.weight));
+  const c = Math.min(1, Math.max(0, t.confidence));
+  await db2.sql`
+    insert into orbit.ties (user_id, a_person_id, b_person_id, kind, weight, confidence, evidence, first_seen_at,
+                            last_seen_at)
+    values (${userId}::uuid, ${a}::uuid, ${b}::uuid, ${t.kind}, ${w}::real, ${c}::real, ${t.evidence}::jsonb,
+            coalesce(${t.firstSeenAt ?? null}::timestamptz, ${now}::timestamptz),
+            coalesce(${t.lastSeenAt ?? null}::timestamptz, ${now}::timestamptz))
+    on conflict (user_id, a_person_id, b_person_id, kind) do update set
+      weight = excluded.weight, confidence = excluded.confidence, evidence = excluded.evidence,
+      first_seen_at = least(orbit.ties.first_seen_at, excluded.first_seen_at),
+      last_seen_at = excluded.last_seen_at
+    where orbit.ties.weight is distinct from excluded.weight
+       or orbit.ties.confidence is distinct from excluded.confidence
+       or orbit.ties.evidence is distinct from excluded.evidence
+       or orbit.ties.last_seen_at is distinct from excluded.last_seen_at`;
+}
 
 // packages/core/src/scoring/tieScore.ts
 var TIE_BAND_LABELS = {
@@ -7426,228 +8195,10 @@ function personalizedPageRank(adj, source, opts = {}) {
   return rank2;
 }
 
-// packages/core/src/graph/orgSize.ts
-var KNOWN_SIZES = {};
-var add2 = (bucket, names) => {
-  for (const n of names) KNOWN_SIZES[normalizeCompany(n)] = bucket;
-};
-add2("10001+", [
-  "Google",
-  "Alphabet",
-  "Meta",
-  "Facebook",
-  "Amazon",
-  "Amazon Web Services",
-  "AWS",
-  "Microsoft",
-  "Apple",
-  "Netflix",
-  "Oracle",
-  "Salesforce",
-  "Adobe",
-  "IBM",
-  "Intel",
-  "NVIDIA",
-  "Cisco",
-  "Uber",
-  "Tesla",
-  "SpaceX",
-  "Qualcomm",
-  "Intuit",
-  "PayPal",
-  "ServiceNow",
-  "Workday",
-  "VMware",
-  "Dell",
-  "HP",
-  "Accenture",
-  "Deloitte",
-  "PwC",
-  "PricewaterhouseCoopers",
-  "EY",
-  "Ernst & Young",
-  "KPMG",
-  "McKinsey & Company",
-  "McKinsey",
-  "Boston Consulting Group",
-  "BCG",
-  "Bain & Company",
-  "Bain",
-  "Booz Allen Hamilton",
-  "Capgemini",
-  "Goldman Sachs",
-  "JPMorgan Chase",
-  "JP Morgan",
-  "J.P. Morgan",
-  "Morgan Stanley",
-  "Bank of America",
-  "Citi",
-  "Citigroup",
-  "Wells Fargo",
-  "Barclays",
-  "UBS",
-  "Deutsche Bank",
-  "HSBC",
-  "BlackRock",
-  "Fidelity Investments",
-  "Vanguard",
-  "Capital One",
-  "American Express",
-  "Visa",
-  "Mastercard",
-  "Charles Schwab",
-  "State Street",
-  "Procter & Gamble",
-  "PepsiCo",
-  "Coca-Cola",
-  "Johnson & Johnson",
-  "Pfizer",
-  "Walmart",
-  "Target",
-  "Nike",
-  "Disney",
-  "The Walt Disney Company",
-  "Comcast",
-  "Verizon",
-  "AT&T",
-  "Boeing",
-  "Lockheed Martin",
-  "General Electric",
-  "GE",
-  "General Motors",
-  "Ford",
-  "ByteDance",
-  "TikTok",
-  "Samsung",
-  "Bloomberg",
-  "LinkedIn",
-  "Shopify",
-  "Booking.com"
-]);
-add2("5001-10000", [
-  "Stripe",
-  "Airbnb",
-  "Snap",
-  "Snapchat",
-  "Spotify",
-  "Block",
-  "Square",
-  "DoorDash",
-  "Lyft",
-  "Datadog",
-  "Atlassian",
-  "Palantir",
-  "Coinbase",
-  "Robinhood",
-  "Pinterest",
-  "Dropbox",
-  "Instacart",
-  "Lazard",
-  "Evercore",
-  "Jane Street",
-  "Citadel",
-  "Two Sigma",
-  "Oliver Wyman",
-  "LEK Consulting",
-  "Kearney"
-]);
-add2("1001-5000", [
-  "Figma",
-  "Anthropic",
-  "OpenAI",
-  "Ramp",
-  "Brex",
-  "Databricks",
-  "Snowflake",
-  "Plaid",
-  "Notion",
-  "Duolingo",
-  "Reddit",
-  "Discord",
-  "Scale AI",
-  "Asana",
-  "Airtable",
-  "Hudson River Trading",
-  "DE Shaw",
-  "D. E. Shaw",
-  "Point72",
-  "Centerview Partners",
-  "PJT Partners",
-  "Moelis",
-  "Moelis & Company",
-  "Perella Weinberg",
-  "Guggenheim Partners",
-  "Blackstone",
-  "KKR",
-  "Apollo",
-  "Carlyle"
-]);
-add2("501-1000", ["Vercel", "Retool", "Rippling", "Mercury", "Jump Trading", "Optiver", "Five Rings"]);
-add2("201-500", ["Linear", "Sequoia Capital", "Andreessen Horowitz", "a16z", "Benchmark", "Accel"]);
-
-// packages/core/src/graph/ties.ts
-var TIE_KINDS = [
-  "email_exchange",
-  "email_cc",
-  "email_cothread",
-  "meeting_coattendee",
-  "introduced_by",
-  "linkedin_mutual",
-  "village_path",
-  "co_tenure",
-  "same_school_cohort",
-  "same_current_company"
-];
-var INTERACTION_TIE_KINDS = /* @__PURE__ */ new Set([
-  "email_exchange",
-  "email_cc",
-  "email_cothread",
-  "meeting_coattendee",
-  "introduced_by"
-]);
-var ROUTABLE_TIE_KINDS = /* @__PURE__ */ new Set([
-  "email_exchange",
-  "email_cc",
-  "meeting_coattendee",
-  "introduced_by",
-  "linkedin_mutual"
-]);
-var YEAR = 365.25 * 864e5;
-function maxIso(a, b) {
-  if (!a) return b;
-  if (!b) return a;
-  return a > b ? a : b;
-}
-function decayedTieWeight(t, now = /* @__PURE__ */ new Date()) {
-  if (!INTERACTION_TIE_KINDS.has(t.kind) || !t.lastSeenAt) return t.weight;
-  const at = new Date(t.lastSeenAt).getTime();
-  if (Number.isNaN(at)) return t.weight;
-  const years = Math.max(0, now.getTime() - at) / YEAR;
-  return t.weight * 0.5 ** (years / 2);
-}
-function combineTies(ties, now = /* @__PURE__ */ new Date()) {
-  const out = /* @__PURE__ */ new Map();
-  for (const t of ties) {
-    const k = `${t.aId}|${t.bId}`;
-    const cur = out.get(k) ?? { aId: t.aId, bId: t.bId, weight: 0, confidence: 0, kinds: [], ties: [] };
-    const wc = Math.min(1, decayedTieWeight(t, now) * t.confidence);
-    cur.weight = 1 - (1 - cur.weight) * (1 - wc);
-    cur.confidence = 1 - (1 - cur.confidence) * (1 - t.confidence);
-    if (!cur.kinds.includes(t.kind)) cur.kinds.push(t.kind);
-    cur.ties.push(t);
-    cur.lastSeenAt = maxIso(cur.lastSeenAt, t.lastSeenAt);
-    out.set(k, cur);
-  }
-  return out;
-}
-function isRoutable(pair) {
-  return pair.confidence >= 0.5 || pair.kinds.some((k) => ROUTABLE_TIE_KINDS.has(k));
-}
-
 // packages/core/src/graph/route.ts
 var USER_NODE = "user";
 var sigmoid = (x) => 1 / (1 + Math.exp(-x));
-var DAY6 = 864e5;
+var DAY7 = 864e5;
 function pAsk(f2) {
   return sigmoid(
     -2 + 4 * Math.max(0, Math.min(100, f2.score)) / 100 + 0.8 * Math.max(0, Math.min(1, f2.reciprocity ?? 0)) + (f2.introducedUserBefore ? 0.6 : 0) + (f2.sharesGoalTargetOrg ? 0.3 : 0) - (f2.askedRecently ? 0.7 : 0) - (f2.owesReply ? 0.5 : 0)
@@ -7656,13 +8207,10 @@ function pAsk(f2) {
 function pKnow(pair) {
   return Math.max(0, Math.min(1, pair.weight));
 }
-var C_LEVEL = /\b(ceo|cfo|coo|cto|cmo|cpo|cio|ciso|chief|president|partner|managing director|founder|co-founder|cofounder)\b/i;
-var SENIOR = /\b(director|vp|vice president|head of|principal|general manager|svp|evp)\b/i;
-var JUNIOR_OR_MANAGER = /\b(intern|analyst|associate|engineer|developer|designer|scientist|researcher|manager|coordinator|specialist|consultant|representative|recruiter|assistant|lead|student|fellow)\b/i;
 function targetReceptivity(t) {
-  const title = t.title ?? "";
-  const cLevel = C_LEVEL.test(title);
-  const atMostManager = !cLevel && !SENIOR.test(title) && JUNIOR_OR_MANAGER.test(title);
+  const level = seniorityClass(t.title);
+  const cLevel = level === 2;
+  const atMostManager = level === 0;
   const r = 1 + (t.isAlum ? 0.15 : 0) + (atMostManager ? 0.1 : 0) - (cLevel ? 0.15 : 0);
   return Math.max(0.7, Math.min(1.3, r));
 }
@@ -7677,12 +8225,25 @@ var OLD_EVIDENCE_FACTOR = 0.7;
 var DIRECT_TIE_SCORE = 40;
 var MIN_PATH_P = 0.05;
 var MUTUAL_MIN_SCORE = 12;
+function hopBand(p) {
+  if (p >= 0.65) return "close";
+  if (p >= 0.5) return "know";
+  if (p >= 0.2) return "connected";
+  return "unclear";
+}
 function pathBand(p) {
   if (p >= 0.35) return "high";
   if (p >= 0.15) return "medium";
   return "low";
 }
 var pk = (a, b) => a < b ? `${a}|${b}` : `${b}|${a}`;
+var pairKeyOf = pk;
+function dropBlocked(pairs, blocked) {
+  if (!blocked?.size) return pairs;
+  const out = new Map(pairs);
+  for (const k of blocked) out.delete(k);
+  return out;
+}
 function withExternal(pairs, targetId, candidates) {
   if (!candidates.length) return pairs;
   const out = new Map(pairs);
@@ -7690,7 +8251,7 @@ function withExternal(pairs, targetId, candidates) {
     if (c.introducerId === targetId) continue;
     const key = pk(c.introducerId, targetId);
     const [a, b] = key.split("|");
-    const w = c.kind === "linkedin_mutual" ? 0.3 : Math.max(0, Math.min(1, c.warmth ?? 0));
+    const w = c.kind === "linkedin_mutual" ? HOP_WEIGHTS.mutual : Math.max(0, Math.min(1, c.warmth ?? 0));
     const conf = c.kind === "linkedin_mutual" ? 0.95 : 0.7;
     const tie = {
       id: `${key}|${c.kind}`,
@@ -7721,17 +8282,20 @@ function usable(p, now) {
   if (!p || p.hidden) return false;
   if (p.declinedIntroAt) {
     const t = new Date(p.declinedIntroAt).getTime();
-    if (!Number.isNaN(t) && now.getTime() - t < 90 * DAY6) return false;
+    if (!Number.isNaN(t) && now.getTime() - t < 90 * DAY7) return false;
   }
   return true;
 }
+var strength = (t, now) => decayedTieWeight(t, now) * t.confidence;
 function strongestTie(pair, now) {
-  return [...pair.ties].sort(
-    (x, y) => decayedTieWeight(y, now) * y.confidence - decayedTieWeight(x, now) * x.confidence
-  )[0];
+  const sorted = [...pair.ties].sort((x, y) => strength(y, now) - strength(x, now));
+  return sorted.find((t) => !SUPPORT_ONLY_TIE_KINDS.has(t.kind)) ?? sorted[0];
+}
+function strongestSupport(pair, now) {
+  return [...pair.ties].filter((t) => SUPPORT_ONLY_TIE_KINDS.has(t.kind)).sort((x, y) => strength(y, now) - strength(x, now))[0];
 }
 function pairIsOld(pair, now) {
-  const cutoff = now.getTime() - OLD_EVIDENCE_YEARS * 365.25 * DAY6;
+  const cutoff = now.getTime() - OLD_EVIDENCE_YEARS * 365.25 * DAY7;
   let newest = pair.lastSeenAt ? new Date(pair.lastSeenAt).getTime() : Number.NaN;
   for (const t of pair.ties) {
     const ev = t.evidence;
@@ -7744,9 +8308,9 @@ function pairIsOld(pair, now) {
   return !Number.isNaN(newest) && newest < cutoff;
 }
 var MONTHS2 = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-function monthYear(iso2) {
-  if (typeof iso2 !== "string") return void 0;
-  const d = new Date(iso2);
+function monthYear(iso3) {
+  if (typeof iso3 !== "string") return void 0;
+  const d = new Date(iso3);
   return Number.isNaN(d.getTime()) ? void 0 : `${MONTHS2[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
 }
 function hopEvidence(fromId, tie, toName) {
@@ -7780,9 +8344,49 @@ function hopEvidence(fromId, tie, toName) {
       return `went to ${typeof ev.school === "string" ? ev.school : "school"} with ${toName}`;
     case "same_current_company":
       return `works with ${toName}${org ? ` at ${org}` : ""}`;
+    case "linkedin_recommendation":
+      return ev.authorId === fromId ? `recommended ${toName} on LinkedIn` : `was recommended on LinkedIn by ${toName}`;
+    case "linkedin_mention":
+      return ev.authorId === fromId ? `mentioned ${toName} in a LinkedIn post` : `was mentioned by ${toName} in a LinkedIn post`;
+    case "student_says_close":
+      return `is close to ${toName} (you said)`;
+    case "common_contacts": {
+      const n = typeof ev.n === "number" ? ev.n : 0;
+      return n === 1 ? `has a contact in common with ${toName}` : `has ${n} contacts in common with ${toName}`;
+    }
+    case "linkedin_engagement":
+      return engagementPhrase(fromId, ev, toName);
     default:
       return `knows ${toName}`;
   }
+}
+var times = (n, one, many) => n === 1 ? one : many.replace("{n}", String(n));
+function engagementPhrase(fromId, ev, toName) {
+  const counts = ev.counts ?? {};
+  const mine = counts[fromId] ?? {};
+  const theirs = Object.entries(counts).find(([id]) => id !== fromId)?.[1] ?? {};
+  if (ev.reciprocal) return `trades comments with ${toName} on LinkedIn`;
+  if (theirs.replies)
+    return `has had ${times(theirs.replies, "a reply", "{n} replies")} from ${toName} on LinkedIn`;
+  if (mine.comments)
+    return `has left ${times(mine.comments, "a comment", "{n} comments")} on ${toName}’s posts`;
+  if (mine.replies) return `has replied to ${toName}’s ${times(mine.replies, "comment", "comments")}`;
+  if (theirs.comments)
+    return `has had ${times(theirs.comments, "a comment", "{n} comments")} from ${toName} on their posts`;
+  if (mine.reposts) return `has reposted ${toName}`;
+  if (theirs.reposts) return `has been reposted by ${toName}`;
+  if (mine.reactions) return `has reacted to ${times(mine.reactions, "a post", "{n} posts")} by ${toName}`;
+  if (theirs.reactions)
+    return `has had ${times(theirs.reactions, "a reaction", "{n} reactions")} from ${toName} on LinkedIn`;
+  return `follows ${toName}’s posts on LinkedIn`;
+}
+function pairPhrase(fromId, pair, toName, now = /* @__PURE__ */ new Date()) {
+  if (!pair) return `knows ${toName}`;
+  const top = strongestTie(pair, now);
+  const head = hopEvidence(fromId, top, toName);
+  const support = strongestSupport(pair, now);
+  if (!support || support === top) return head;
+  return `${head}, and ${hopEvidence(fromId, support, toName)}`;
 }
 function mutualIntroducers(pairs, targetId, candidates) {
   const out = /* @__PURE__ */ new Set();
@@ -7821,7 +8425,13 @@ function routingGraph(input, pairs, now, mutuals = /* @__PURE__ */ new Set()) {
     const ends = [pair.aId, pair.bId];
     if (ends.some((id) => id !== input.targetId && !usable(input.people.get(id), now))) continue;
     const top = strongestTie(pair, now)?.kind ?? pair.kinds[0];
-    addEdge(g, pair.aId, pair.bId, Math.min(0.999, know * HOP_PENALTY), top, "");
+    const ab = pKnowDirected(pair, pair.aId, pair.bId);
+    const ba = pKnowDirected(pair, pair.bId, pair.aId);
+    if (ab === ba) addEdge(g, pair.aId, pair.bId, Math.min(0.999, ab * HOP_PENALTY), top, "");
+    else {
+      addEdge(g, pair.aId, pair.bId, Math.min(0.999, ab * HOP_PENALTY), top, "", true);
+      addEdge(g, pair.bId, pair.aId, Math.min(0.999, ba * HOP_PENALTY), top, "", true);
+    }
   }
   return { g, ask: ask2, scores, lifted };
 }
@@ -7836,8 +8446,15 @@ function rankWarmPaths(input) {
       direct: { score: target.score, band, text: `You know ${tName} (${band} · ${target.score})` }
     };
   }
-  const pairs = withExternal(input.pairs, input.targetId, input.candidates ?? []);
-  const mutuals = mutualIntroducers(pairs, input.targetId, input.candidates ?? []);
+  const blocked = input.blockedPairs;
+  const candidates = (input.candidates ?? []).filter(
+    (c) => !blocked?.has(pk(c.introducerId, input.targetId))
+  );
+  const pairs = withCommonContacts(
+    dropBlocked(withExternal(dropBlocked(input.pairs, blocked), input.targetId, candidates), blocked),
+    now
+  );
+  const mutuals = mutualIntroducers(pairs, input.targetId, candidates);
   const rg = routingGraph(input, pairs, now, mutuals);
   const { g, ask: ask2 } = rg;
   const rT = targetReceptivity(input.target ?? {});
@@ -7856,12 +8473,19 @@ function rankWarmPaths(input) {
         hops.push({ fromId: from, toId: to, p: a, kind: "strength" });
         p *= a;
         const last = input.people.get(to)?.lastContactAt;
-        if (last && now.getTime() - new Date(last).getTime() > OLD_EVIDENCE_YEARS * 365.25 * DAY6) old = true;
+        if (last && now.getTime() - new Date(last).getTime() > OLD_EVIDENCE_YEARS * 365.25 * DAY7) old = true;
         continue;
       }
       const pair = pairs.get(pk(from, to));
-      const know = pKnow(pair);
-      hops.push({ fromId: from, toId: to, p: know, kind: strongestTie(pair, now)?.kind ?? pair.kinds[0] });
+      const know = pKnowDirected(pair, from, to);
+      hops.push({
+        fromId: from,
+        toId: to,
+        p: know,
+        kind: strongestTie(pair, now)?.kind ?? pair.kinds[0],
+        band: hopBand(know),
+        ...pairFading(pair, now) ? { fading: true } : {}
+      });
       p *= know;
       if (pairIsOld(pair, now)) old = true;
     }
@@ -7912,9 +8536,13 @@ function rankWarmPaths(input) {
     for (const m of mids) middle.set(m, (middle.get(m) ?? 0) + 1);
     chosen.push(f2);
   }
+  const nameOf = (id) => id === input.targetId ? tName : input.people.get(id)?.name ?? "someone";
   return {
     paths: chosen.map((f2) => ({
       ...f2,
+      hops: f2.hops.map(
+        (h, i) => i === 0 ? h : { ...h, phrase: pairPhrase(h.fromId, pairs.get(pk(h.fromId, h.toId)), nameOf(h.toId), now) }
+      ),
       otherWays,
       reasonText: reasonText(f2, input, pairs, tName, otherWays, now, rg.scores)
     }))
@@ -7932,7 +8560,7 @@ function reasonText(f2, input, pairs, tName, otherWays, now, scores = /* @__PURE
   const last = f2.nodes.length === 3 ? pairs.get(pk(f2.nodes[1], f2.nodes[2])) : void 0;
   if (last?.kinds.includes("linkedin_mutual")) {
     const top = strongestTie(last, now);
-    const how = hopEvidence(a.id, top, tName);
+    const how = pairPhrase(a.id, last, tName, now);
     const also = top && top.kind !== "linkedin_mutual" ? " (and is connected to them on LinkedIn)" : "";
     const closeness = TIE_BAND_LABELS[tieBand(aScore)].toLowerCase();
     const weak = f2.weak ? " A weaker route, but a real connection." : "";
@@ -7943,18 +8571,29 @@ function reasonText(f2, input, pairs, tName, otherWays, now, scores = /* @__PURE
   for (let i = 1; i < f2.nodes.length - 1; i++) {
     const from = f2.nodes[i];
     const to = f2.nodes[i + 1];
-    const pair = pairs.get(pk(from, to));
-    phrases.push(hopEvidence(from, pair ? strongestTie(pair, now) : void 0, nameOf(to)));
+    phrases.push(pairPhrase(from, pairs.get(pk(from, to)), nameOf(to), now));
   }
   const head = `${a.name} (${TIE_BAND_LABELS[tieBand(aScore)]} · ${aScore}) ${phrases[0]}`;
   const rest = phrases.slice(1).map((p) => `, who ${p}`).join("");
-  return `${head}${rest}.${others}`;
+  return `${head}${rest}.${weakLink(f2, input, pairs, nameOf)}${others}`;
+}
+function weakLink(f2, input, pairs, nameOf) {
+  const later = f2.hops.slice(1);
+  if (later.length < 2) return "";
+  const weakest = [...later].sort((x, y) => x.p - y.p)[0];
+  const band = hopBand(weakest.p);
+  if (band !== "connected" && band !== "unclear") return "";
+  if (later.every((h) => hopBand(h.p) === band)) return "";
+  const from = input.people.get(weakest.fromId)?.name ?? nameOf(weakest.fromId);
+  const pair = pairs.get(pk(weakest.fromId, weakest.toId));
+  const top = pair ? strongestTie(pair, input.now ?? /* @__PURE__ */ new Date()) : void 0;
+  return ` The weak link: ${from} ${hopEvidence(weakest.fromId, top, nameOf(weakest.toId))}.`;
 }
 function rankCompanyTargets(input) {
   const now = input.now ?? /* @__PURE__ */ new Date();
   let targets = input.targets;
   if (targets.length > 10) {
-    const pairs = withExternal(input.pairs, "", []);
+    const pairs = dropBlocked(input.pairs, input.blockedPairs);
     const { g } = routingGraph({ ...input, targetId: "" }, pairs, now);
     const adj = /* @__PURE__ */ new Map();
     for (const [u2, nbrs] of g.adj) adj.set(u2, new Map([...nbrs].map(([v, e]) => [v, e.weight])));
@@ -8028,16 +8667,16 @@ function sqlBudget(db2, now) {
       const v = await checkBudget(db2, userId, spendOf(p, estimate), now());
       if (!v.ok) return { ok: false, reason: "budget_exceeded", resetsAt: v.resetsAt };
       if (p === "unipile_search") {
-        const day = new Date(Date.UTC(now().getUTCFullYear(), now().getUTCMonth(), now().getUTCDate()));
+        const day2 = new Date(Date.UTC(now().getUTCFullYear(), now().getUTCMonth(), now().getUTCDate()));
         const [r] = await db2.sql`
           select count(*)::int as n from orbit.usage_ledger
            where user_id = ${userId}::uuid and provider = 'unipile' and operation = 'search'
-             and created_at >= ${day}::timestamptz`;
+             and created_at >= ${day2}::timestamptz`;
         if ((r?.n ?? 0) >= UNIPILE_SEARCHES_PER_DAY)
           return {
             ok: false,
             reason: "budget_exceeded",
-            resetsAt: new Date(day.getTime() + 864e5).toISOString()
+            resetsAt: new Date(day2.getTime() + 864e5).toISOString()
           };
       }
       return { ok: true };
@@ -8315,8 +8954,47 @@ async function villageFor2(deps, input, out) {
   return entry.kind === "person" ? personIntros(entry.data) : companyIntros(entry.data);
 }
 
+// supabase/functions/_shared/paths/hopEvidence.ts
+var HOP_CACHE_MS = 30 * 864e5;
+
+// supabase/functions/_shared/paths/hopJob.ts
+var HOP_EVIDENCE_JOB = "hop_evidence";
+var HOP_JOB_MUTUALS = 25;
+var doneKey = (accountId, memberId) => cacheKey("unipile", { op: "hop_done", accountId, memberId });
+async function hopEvidenceFresh(cache, userId, accountId, memberId) {
+  return await cache.get(userId, await doneKey(accountId, memberId)) !== void 0;
+}
+async function linkedinAccountOf(db2, userId) {
+  const [a] = await db2.sql`
+    select external_account_id from orbit.integration_accounts
+     where user_id = ${userId}::uuid and provider = 'linkedin' and status = 'active'`;
+  return a?.external_account_id ?? void 0;
+}
+async function enqueueHopEvidence(s, userId, targetPersonId, mutualPersonIds) {
+  const id = await s.queue.enqueue({
+    kind: HOP_EVIDENCE_JOB,
+    userId,
+    payload: { targetPersonId, mutualPersonIds: mutualPersonIds.slice(0, HOP_JOB_MUTUALS) },
+    dedupeKey: `${HOP_EVIDENCE_JOB}:${userId}:${targetPersonId}`
+  });
+  return id !== null;
+}
+async function deleteTies(db2, userId, aId, bId, kinds, keep = [], by = { actor: "system", reason: "hop_evidence" }) {
+  const [lo, hi] = aId < bId ? [aId, bId] : [bId, aId];
+  const gone = await db2.sql`
+    delete from orbit.ties
+     where user_id = ${userId}::uuid and a_person_id = ${lo}::uuid and b_person_id = ${hi}::uuid
+       and kind = any(${[...kinds]}::text[]) and not (kind = any(${[...keep]}::text[]))
+    returning id`;
+  for (const g of gone)
+    await db2.sql`
+      insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+      values (${userId}::uuid, ${by.actor}, 'sync.delete', 'ties', ${g.id}, ${{ reason: by.reason }}::jsonb)`;
+  return gone.length;
+}
+
 // supabase/functions/_shared/paths/find.ts
-var DAY7 = 864e5;
+var DAY8 = 864e5;
 var TIE_KIND_SET = new Set(TIE_KINDS);
 async function loadGraph(db2, userId, now) {
   const rows = await db2.sql`
@@ -8339,7 +9017,7 @@ async function loadGraph(db2, userId, now) {
     select distinct m.from_person_id as person_id from orbit.threads t
       join orbit.messages m on m.thread_id = t.id and m.sent_at = t.last_at
      where t.user_id = ${userId}::uuid and t.last_direction = 'in' and t.is_networking
-       and m.from_person_id is not null and t.last_at > ${new Date(now.getTime() - 30 * DAY7)}::timestamptz`;
+       and m.from_person_id is not null and t.last_at > ${new Date(now.getTime() - 30 * DAY8)}::timestamptz`;
   const owesSet = new Set(owes.map((o) => o.person_id));
   let selfId = null;
   const people = /* @__PURE__ */ new Map();
@@ -8358,7 +9036,7 @@ async function loadGraph(db2, userId, now) {
       score: r.score ?? 0,
       reciprocity: num(r.features?.reciprocity),
       sharesGoalTargetOrg: !!org && targetOrgs.has(org.toLowerCase().trim()),
-      askedRecently: mine.some((i) => now.getTime() - new Date(i.asked_at).getTime() < 30 * DAY7),
+      askedRecently: mine.some((i) => now.getTime() - new Date(i.asked_at).getTime() < 30 * DAY8),
       introducedUserBefore: mine.some((i) => i.status === "intro_made" || i.status === "meeting"),
       owesReply: owesSet.has(r.id),
       lastContactAt: iso(r.last_interaction_at) ?? void 0,
@@ -8391,7 +9069,10 @@ async function loadGraph(db2, userId, now) {
       lastSeenAt: iso(t.last_seen_at) ?? void 0
     });
   }
-  return { selfId, people, pairs: combineTies(ties, now) };
+  const blockedRows = await db2.sql`
+    select a_person_id, b_person_id from orbit.blocked_pairs where user_id = ${userId}::uuid`;
+  const blocked = new Set(blockedRows.map((b) => pairKeyOf(b.a_person_id, b.b_person_id)));
+  return { selfId, people, pairs: combineTies(ties, now), blocked };
 }
 async function resolvePersonRef(db2, userId, p) {
   const url = cleanLinkedInUrl(p.linkedinUrl);
@@ -8451,7 +9132,7 @@ async function ensurePerson(db2, userId, p, source) {
       on conflict (user_id, kind, value_norm) do nothing`;
   return id;
 }
-async function upsertTies(db2, ties) {
+async function upsertTies2(db2, ties) {
   for (const t of ties)
     await db2.sql`
       insert into orbit.ties (user_id, a_person_id, b_person_id, kind, weight, confidence, evidence, first_seen_at,
@@ -8463,9 +9144,7 @@ async function upsertTies(db2, ties) {
         evidence = excluded.evidence, last_seen_at = greatest(orbit.ties.last_seen_at, excluded.last_seen_at)`;
 }
 async function externalFor(s, userId, target) {
-  const [acct] = await s.db.sql`
-    select external_account_id from orbit.integration_accounts
-     where user_id = ${userId}::uuid and provider = 'linkedin' and status = 'active'`;
+  const accountId = await linkedinAccountOf(s.db, userId);
   const [u2] = await s.db.sql`select email from orbit.users where id = ${userId}::uuid`;
   return gatherExternalCandidates(
     {
@@ -8479,7 +9158,7 @@ async function externalFor(s, userId, target) {
     {
       userId,
       target,
-      unipileAccountId: acct?.external_account_id ?? void 0,
+      unipileAccountId: accountId,
       villageUser: u2 ? { externalUserId: userId, email: u2.email } : void 0
     }
   );
@@ -8541,7 +9220,7 @@ async function findPaths(s, userId, req) {
           last_seen_at: now.toISOString()
         });
     }
-    await upsertTies(db2, ext2.ties);
+    await upsertTies2(db2, ext2.ties);
     const g2 = await loadGraph(db2, userId, now);
     const atCompany = await db2.sql`
       select p.id from orbit.people p left join orbit.organizations o on o.id = p.org_id
@@ -8557,7 +9236,14 @@ async function findPaths(s, userId, req) {
       title: p.title,
       pReply: p.score > 0 ? responsePrior(personLike(p), user) : void 0
     }));
-    const chosen = rankCompanyTargets({ targets, goal: goalKind, people: g2.people, pairs: g2.pairs, now });
+    const chosen = rankCompanyTargets({
+      targets,
+      goal: goalKind,
+      people: g2.people,
+      pairs: g2.pairs,
+      blockedPairs: g2.blocked,
+      now
+    });
     const paths2 = [];
     for (const x of chosen)
       paths2.push({ ...x.path, id: await pathId(userId, x.path.nodes), names: namesOf(g2, x.path.nodes) });
@@ -8598,8 +9284,9 @@ async function findPaths(s, userId, req) {
     name: target.displayName,
     company: target.org
   });
-  if (ext.ties.length) {
-    await upsertTies(db2, ext.ties);
+  const learned = await learnMemberIds(db2, userId, ext);
+  if (ext.ties.length || learned) {
+    await upsertTies2(db2, ext.ties);
     g = await loadGraph(db2, userId, now);
   }
   const r = rankWarmPaths({
@@ -8613,18 +9300,74 @@ async function findPaths(s, userId, req) {
     goal: goalKind,
     people: g.people,
     pairs: g.pairs,
+    blockedPairs: g.blocked,
     now
   });
   const paths = [];
   for (const p of r.paths)
     paths.push({ ...p, id: await pathId(userId, p.nodes), names: namesOf(g, p.nodes) });
+  const hopEvidence2 = r.direct ? void 0 : await queueHopEvidence(s, userId, g, targetId, r.paths, ext);
   return {
     paths,
     ...r.fallback ? { fallback: r.fallback } : {},
     ...r.direct ? { direct: { personId: targetId, ...r.direct } } : {},
     sources: sourcesOf(ext),
-    unconfigured: ext.unconfigured
+    unconfigured: ext.unconfigured,
+    ...hopEvidence2 ? { hopEvidence: hopEvidence2 } : {}
   };
+}
+async function learnMemberIds(db2, userId, ext) {
+  let n = 0;
+  for (const c of ext.candidates) {
+    const slug = linkedInSlugOf(c.linkedinUrl);
+    if (c.source !== "linkedin_mutual" || !c.personId || !c.memberId || !slug) continue;
+    const rows = await db2.sql`
+      update orbit.people set linkedin_member_id = ${c.memberId}
+       where id = ${c.personId}::uuid and user_id = ${userId}::uuid and linkedin_member_id is null
+         and lower(linkedin_slug) = ${slug}
+         and not exists (select 1 from orbit.people q where q.user_id = ${userId}::uuid
+                          and q.linkedin_member_id = ${c.memberId} and q.id <> ${c.personId}::uuid)
+         and not exists (select 1 from orbit.person_identities i where i.user_id = ${userId}::uuid
+                          and i.kind = 'linkedin_member' and i.value_norm = ${c.memberId}
+                          and i.person_id <> ${c.personId}::uuid)
+      returning 1`;
+    if (!rows.length) continue;
+    n++;
+    await db2.sql`
+      insert into orbit.person_identities (user_id, person_id, kind, value_norm, value_raw, source)
+      values (${userId}::uuid, ${c.personId}::uuid, 'linkedin_member', ${c.memberId}, ${c.memberId}, 'unipile')
+      on conflict (user_id, kind, value_norm) do nothing`;
+  }
+  return n;
+}
+function mutualsToWeigh(g, targetId, paths, candidateIds) {
+  const ids = /* @__PURE__ */ new Set();
+  for (const id of candidateIds) ids.add(id);
+  for (const p of g.pairs.values()) {
+    if (!p.kinds.includes("linkedin_mutual")) continue;
+    if (p.aId === targetId) ids.add(p.bId);
+    else if (p.bId === targetId) ids.add(p.aId);
+  }
+  const ok = (id) => id !== targetId && !!g.people.get(id)?.memberId && !g.blocked.has(pairKeyOf(id, targetId));
+  const out = [];
+  for (const p of paths) {
+    const before = p.nodes[p.nodes.length - 2];
+    if (before && ids.has(before) && ok(before) && !out.includes(before)) out.push(before);
+  }
+  const rest = [...ids].filter((id) => ok(id) && !out.includes(id)).sort((a, b) => (g.people.get(b)?.score ?? 0) - (g.people.get(a)?.score ?? 0) || a.localeCompare(b));
+  return [...out, ...rest];
+}
+async function queueHopEvidence(s, userId, g, targetId, paths, ext) {
+  const target = g.people.get(targetId);
+  if (!target?.memberId || !s.unipile.configured) return void 0;
+  const accountId = await linkedinAccountOf(s.db, userId);
+  if (!accountId) return void 0;
+  const fromSearch = ext.candidates.filter((c) => c.source === "linkedin_mutual" && c.personId).map((c) => c.personId);
+  const mutuals = mutualsToWeigh(g, targetId, paths, fromSearch);
+  if (!mutuals.length) return void 0;
+  if (await hopEvidenceFresh(sqlCache(s.db, s.now), userId, accountId, target.memberId)) return "checked";
+  await enqueueHopEvidence(s, userId, targetId, mutuals);
+  return "queued";
 }
 function sourcesOf(ext) {
   const out = ["graph"];
@@ -8642,11 +9385,37 @@ function bestReach(g, personId, goal, now) {
     goal,
     people: g.people,
     pairs: g.pairs,
+    blockedPairs: g.blocked,
     now,
     limit: 1
   });
   if (r.direct) return Math.min(1, r.direct.score / 100);
   return r.paths[0]?.p ?? null;
+}
+
+// supabase/functions/_shared/paths/outcomes.ts
+var KINDS2 = /* @__PURE__ */ new Set([...TIE_KINDS, "strength"]);
+var MAX_HOPS = 6;
+var clamp012 = (n) => typeof n === "number" && Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0;
+function introHopFeatures(path, pathScore) {
+  const hops = path?.hops;
+  const out = { p: clamp012(pathScore), hops: [] };
+  if (!Array.isArray(hops)) return out;
+  for (const [i, h] of hops.slice(0, MAX_HOPS).entries()) {
+    if (!h || typeof h !== "object") continue;
+    const o = h;
+    if (typeof o.fromId !== "string" || typeof o.toId !== "string") continue;
+    const p = clamp012(o.p);
+    const kind = typeof o.kind === "string" && KINDS2.has(o.kind) ? o.kind : "unknown";
+    out.hops.push({
+      fromId: o.fromId.slice(0, 64),
+      toId: o.toId.slice(0, 64),
+      p: Math.round(p * 1e4) / 1e4,
+      kind,
+      ...i > 0 && kind !== "strength" ? { band: hopBand(p) } : {}
+    });
+  }
+  return out;
 }
 
 // supabase/functions/orbit-api/routes/paths.ts
@@ -8673,9 +9442,10 @@ async function ask(ctx) {
   const channel = introducer.primary_email || !introducer.linkedin_member_id ? "gmail" : "linkedin";
   const [row] = await ctx.db.sql`
     insert into orbit.intro_requests (user_id, target_person_id, introducer_person_id, goal_id, path, path_score, rank,
-                                      status, asked_at)
+                                      status, asked_at, hop_features)
     values (${userId}::uuid, ${targetId}::uuid, ${introducerId}::uuid, ${goalId}::uuid, ${b.path}::jsonb,
-            ${pathScore}::real, 1, 'asked', ${ctx.now()}::timestamptz)
+            ${pathScore}::real, 1, 'asked', ${ctx.now()}::timestamptz,
+            ${introHopFeatures(b.path, pathScore)}::jsonb)
     returning id`;
   const via = { introducerId, pathScore, introRequestId: row.id };
   const common = { userId, personId: introducerId, channel, goalId, targetPersonId: targetId, via };
@@ -8684,9 +9454,90 @@ async function ask(ctx) {
   const out = { introRequestId: row.id, draftIds: [request.draft.id, blurb.draft.id] };
   return json(200, out);
 }
+var STUDENT = { actor: "user", reason: "pair_correction" };
+async function pairOf(ctx) {
+  const b = await body(ctx);
+  const a = uuid(b, "aPersonId");
+  const c = uuid(b, "bPersonId");
+  if (a === c) throw badRequest("a pair is two different people");
+  const rows = await ctx.db.sql`
+    select id from orbit.people
+     where user_id = ${ctx.userId}::uuid and id = any(${[a, c]}::uuid[]) and deleted_at is null
+       and merged_into is null and not is_self`;
+  if (rows.length !== 2) throw new HttpError(404, "not_found", "no such person");
+  return a < c ? [a, c] : [c, a];
+}
+async function pairState(db2, userId, a, b) {
+  const [r] = await db2.sql`
+    select exists (select 1 from orbit.blocked_pairs
+                    where user_id = ${userId}::uuid and a_person_id = ${a}::uuid and b_person_id = ${b}::uuid) as blocked,
+           exists (select 1 from orbit.ties
+                    where user_id = ${userId}::uuid and a_person_id = ${a}::uuid and b_person_id = ${b}::uuid
+                      and kind = 'student_says_close') as close`;
+  return { aPersonId: a, bPersonId: b, blocked: !!r?.blocked, close: !!r?.close };
+}
+async function block2(ctx) {
+  const [a, b] = await pairOf(ctx);
+  const userId = ctx.userId;
+  await ctx.db.sql`
+    insert into orbit.blocked_pairs (user_id, a_person_id, b_person_id, created_at)
+    values (${userId}::uuid, ${a}::uuid, ${b}::uuid, ${ctx.now()}::timestamptz)
+    on conflict do nothing`;
+  await deleteTies(ctx.db, userId, a, b, ["student_says_close"], [], STUDENT);
+  return json(200, await pairState(ctx.db, userId, a, b));
+}
+async function unblock(ctx) {
+  const [a, b] = await pairOf(ctx);
+  const userId = ctx.userId;
+  await ctx.db.sql`
+    delete from orbit.blocked_pairs
+     where user_id = ${userId}::uuid and a_person_id = ${a}::uuid and b_person_id = ${b}::uuid`;
+  return json(200, await pairState(ctx.db, userId, a, b));
+}
+async function close(ctx) {
+  const [a, b] = await pairOf(ctx);
+  const userId = ctx.userId;
+  const now = ctx.now();
+  const at = now.toISOString();
+  const [t] = pairEvidenceTies({
+    userId,
+    people: /* @__PURE__ */ new Set([a, b]),
+    studentSays: [{ aId: a, bId: b, at }],
+    now
+  });
+  await upsertTie(
+    ctx.db,
+    userId,
+    {
+      a,
+      b,
+      kind: t.kind,
+      weight: t.weight,
+      confidence: t.confidence,
+      evidence: t.evidence,
+      firstSeenAt: at,
+      lastSeenAt: at
+    },
+    now
+  );
+  await ctx.db.sql`
+    delete from orbit.blocked_pairs
+     where user_id = ${userId}::uuid and a_person_id = ${a}::uuid and b_person_id = ${b}::uuid`;
+  return json(200, await pairState(ctx.db, userId, a, b));
+}
+async function unclose(ctx) {
+  const [a, b] = await pairOf(ctx);
+  const userId = ctx.userId;
+  await deleteTies(ctx.db, userId, a, b, ["student_says_close"], [], STUDENT);
+  return json(200, await pairState(ctx.db, userId, a, b));
+}
 var pathRoutes = {
   "/paths/find": { method: "POST", auth: true, run: find },
-  "/intros/ask": { method: "POST", auth: true, run: ask }
+  "/intros/ask": { method: "POST", auth: true, run: ask },
+  "/pairs/block": { method: "POST", auth: true, run: block2 },
+  "/pairs/unblock": { method: "POST", auth: true, run: unblock },
+  "/pairs/close": { method: "POST", auth: true, run: close },
+  "/pairs/unclose": { method: "POST", auth: true, run: unclose }
 };
 
 // supabase/functions/_shared/replies/replies.ts
@@ -9184,10 +10035,10 @@ async function profile(ctx) {
     await ctx.db.sql`
       insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
       values (${userId}::uuid, 'user', 'settings.profile', 'users', ${userId}, ${{ fields: changed }}::jsonb)`;
-  const str2 = (v) => typeof v === "string" && v ? v : null;
+  const str3 = (v) => typeof v === "string" && v ? v : null;
   const out = {
-    postalAddress: str2(after.settings?.postal_address),
-    schedulingLink: str2(after.settings?.scheduling_link),
+    postalAddress: str3(after.settings?.postal_address),
+    schedulingLink: str3(after.settings?.scheduling_link),
     timezone: after.timezone,
     school: after.school,
     degree: after.degree,
@@ -9805,7 +10656,7 @@ async function rank(ctx, cands, batchId) {
 
 // supabase/functions/_shared/sourcing/run.ts
 var strs = (v) => Array.isArray(v) ? v.filter((x) => typeof x === "string" && !!x.trim()).map((x) => x.trim()) : [];
-var str = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
+var str2 = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
 function sourcingGoal(req, goal) {
   const f2 = req.filters ?? {};
   const t = goal?.targets ?? {};
@@ -9814,12 +10665,12 @@ function sourcingGoal(req, goal) {
   const orgs = f2.organizations?.length ? f2.organizations : strs(t.organizations);
   const keywords = f2.keywords?.length ? f2.keywords : strs(c.keywords);
   const location = f2.locations?.[0] ?? strs(t.geographies)[0];
-  const query2 = str(req.query);
+  const query2 = str2(req.query);
   const criteria = [
     ...query2 ? [query2] : [],
     ...strs(c.criteria),
     ...roles,
-    ...str(c.sector) ? [str(c.sector)] : [],
+    ...str2(c.sector) ? [str2(c.sector)] : [],
     ...strs(c.skills)
   ].slice(0, 8);
   return {
@@ -9832,13 +10683,13 @@ function sourcingGoal(req, goal) {
     roles,
     skills: strs(c.skills),
     keywords: keywords.length ? keywords : query2 ? [query2] : [],
-    sector: str(c.sector),
-    stage: str(c.stage),
+    sector: str2(c.sector),
+    stage: str2(c.stage),
     location,
     seniorities: f2.seniority?.length ? f2.seniority : strs(c.seniority),
     employeeRanges: strs(c.employee_ranges ?? c.employeeRanges),
     pastCompanies: strs(c.past_companies ?? c.pastCompanies),
-    topic: query2 ?? str(c.topic)
+    topic: query2 ?? str2(c.topic)
   };
 }
 var toSourced = (id, r) => {
@@ -11433,7 +12284,7 @@ async function statusFor(db2, userId) {
     `select (${QUEUES.map((q) => `(select count(*) from pgmq.q_${q} where message->>'userId' = $1)`).join(" + ")})::int as n`,
     [userId]
   );
-  const iso2 = (d) => d ? new Date(d).toISOString() : null;
+  const iso3 = (d) => d ? new Date(d).toISOString() : null;
   return {
     counts: counts ?? {},
     integrations: accounts.map((a) => {
@@ -11444,9 +12295,9 @@ async function statusFor(db2, userId) {
         email: a.email,
         scopes: a.scopes,
         linked: a.linked,
-        lastSyncedAt: iso2(a.last_synced_at),
+        lastSyncedAt: iso3(a.last_synced_at),
         lastError: a.last_error,
-        watchExpiresAt: iso2(a.watch_expires_at),
+        watchExpiresAt: iso3(a.watch_expires_at),
         backfill: bf ? {
           phase: bf.phase ?? null,
           done: Number(bf.done ?? 0),

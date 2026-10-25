@@ -785,7 +785,15 @@ var unipileProfileSchema = z.looseObject({
       end: dateish
     })
   ).nullish(),
-  throttled_sections: z.array(z.string()).nullish()
+  throttled_sections: z.array(z.string()).nullish(),
+  follower_count: z.number().nullish(),
+  connections_count: z.number().nullish(),
+  // plan 21: who recommended whom (`linkedin_sections` recommendations_received / recommendations_given); the body of a
+  // recommendation is never kept, only the actor, a short caption and its year
+  recommendations: z.looseObject({
+    received: z.array(z.looseObject({})).nullish(),
+    given: z.array(z.looseObject({})).nullish()
+  }).nullish()
 });
 var unipilePostSchema = z.looseObject({
   id: z.string().nullish(),
@@ -798,6 +806,56 @@ var unipilePostSchema = z.looseObject({
 });
 var unipilePostsSchema = z.looseObject({
   items: z.array(unipilePostSchema).default([]),
+  cursor: z.string().nullish()
+});
+var idish = z.union([z.string(), z.number()]).nullish();
+var actorish = z.looseObject({ id: idish, provider_id: idish, member_id: idish }).nullish();
+var unipileActivityPostSchema = z.looseObject({
+  id: idish,
+  social_id: idish,
+  date: z.string().nullish(),
+  parsed_datetime: z.string().nullish(),
+  reaction_counter: z.number().nullish(),
+  comment_counter: z.number().nullish(),
+  is_repost: z.boolean().nullish(),
+  repost_content: z.looseObject({ author: actorish }).nullish(),
+  mentions: z.array(z.union([z.string(), z.looseObject({})])).nullish()
+});
+var unipileActivityPostsSchema = z.looseObject({
+  items: z.array(unipileActivityPostSchema).default([]),
+  cursor: z.string().nullish()
+});
+var unipileReactionSchema = z.looseObject({
+  value: z.string().nullish(),
+  post_id: idish,
+  post_urn: idish,
+  comment_id: idish,
+  author: z.looseObject({ id: idish, provider_id: idish, type: z.string().nullish() }).nullish()
+});
+var unipileReactionsSchema = z.looseObject({
+  items: z.array(unipileReactionSchema).default([]),
+  cursor: z.string().nullish()
+});
+var unipileUserCommentSchema = z.looseObject({
+  id: idish,
+  post_id: idish,
+  post_urn: idish,
+  thread_id: idish,
+  date: z.string().nullish(),
+  parsed_datetime: z.string().nullish()
+});
+var unipileUserCommentsSchema = z.looseObject({
+  items: z.array(unipileUserCommentSchema).default([]),
+  cursor: z.string().nullish()
+});
+var unipilePostCommentSchema = z.looseObject({
+  id: idish,
+  date: z.string().nullish(),
+  parsed_datetime: z.string().nullish(),
+  author_details: actorish
+});
+var unipilePostCommentsSchema = z.looseObject({
+  items: z.array(unipilePostCommentSchema).default([]),
   cursor: z.string().nullish()
 });
 var unipileSearchItemSchema = z.looseObject({
@@ -826,6 +884,7 @@ var unipileSearchParamsSchema = z.looseObject({
   items: z.array(z.looseObject({ id: z.union([z.string(), z.number()]), title: z.string().nullish() })).default([])
 });
 var DOSSIER_SECTIONS = ["*_preview", "experience", "education", "about"];
+var HOP_PROFILE_SECTIONS = ["recommendations_received", "recommendations_given"];
 function createUnipileResearch(opts) {
   const configured = !!opts.apiKey && !!opts.baseUrl;
   const base = trimBase(opts.baseUrl ?? "");
@@ -857,6 +916,76 @@ function createUnipileResearch(opts) {
         schema: unipilePostsSchema
       });
       return r.ok ? { ok: true, value: r.value.items } : r;
+    },
+    async postsOf(accountId, memberId, o = {}) {
+      if (!configured) return notConfigured();
+      const r = await requestJson(opts, {
+        provider: "unipile",
+        url: `${base}/api/v1/users/${encodeURIComponent(memberId)}/posts${query({ account_id: accountId, limit: o.limit ?? 100 })}`,
+        headers: headers(),
+        schema: unipileActivityPostsSchema
+      });
+      if (!r.ok) return r;
+      const items = r.value.items.map(activityPost).filter((p) => !!p);
+      return { ok: true, value: { items, cursor: r.value.cursor ?? void 0 } };
+    },
+    async reactionsOf(accountId, memberId, o = {}) {
+      if (!configured) return notConfigured();
+      const r = await requestJson(opts, {
+        provider: "unipile",
+        url: `${base}/api/v1/users/${encodeURIComponent(memberId)}/reactions${query({ account_id: accountId, limit: o.limit ?? 100 })}`,
+        headers: headers(),
+        schema: unipileReactionsSchema
+      });
+      if (!r.ok) return r;
+      const items = r.value.items.map(
+        (x) => ({
+          postKeys: postKeys(x.post_id, x.post_urn),
+          authorId: str(x.author?.id) ?? str(x.author?.provider_id),
+          onComment: x.comment_id != null && x.comment_id !== ""
+        })
+      ).filter((x) => x.postKeys.length > 0);
+      return { ok: true, value: { items, cursor: r.value.cursor ?? void 0 } };
+    },
+    async commentsOf(accountId, memberId, o = {}) {
+      if (!configured) return notConfigured();
+      const r = await requestJson(opts, {
+        provider: "unipile",
+        url: `${base}/api/v1/users/${encodeURIComponent(memberId)}/comments${query({ account_id: accountId, limit: o.limit ?? 100 })}`,
+        headers: headers(),
+        schema: unipileUserCommentsSchema
+      });
+      if (!r.ok) return r;
+      const items = r.value.items.map(
+        (x) => ({
+          id: str(x.id),
+          postKeys: postKeys(x.post_id, x.post_urn),
+          threadId: str(x.thread_id),
+          at: isoDate(x.parsed_datetime ?? x.date)
+        })
+      ).filter((x) => x.postKeys.length > 0);
+      return { ok: true, value: { items, cursor: r.value.cursor ?? void 0 } };
+    },
+    async postComments(accountId, postId, o = {}) {
+      if (!configured) return notConfigured();
+      const r = await requestJson(opts, {
+        provider: "unipile",
+        url: `${base}/api/v1/posts/${encodeURIComponent(postId)}/comments${query({ account_id: accountId, limit: o.limit ?? 100 })}`,
+        headers: headers(),
+        schema: unipilePostCommentsSchema
+      });
+      if (!r.ok) return r;
+      const items = [];
+      for (const x of r.value.items) {
+        const id = str(x.id);
+        if (!id) continue;
+        items.push({
+          id,
+          authorId: str(x.author_details?.id) ?? str(x.author_details?.provider_id) ?? str(x.author_details?.member_id),
+          at: isoDate(x.parsed_datetime ?? x.date)
+        });
+      }
+      return { ok: true, value: { items, cursor: r.value.cursor ?? void 0 } };
     },
     async me(accountId) {
       if (!configured) return notConfigured();
@@ -939,6 +1068,83 @@ function createUnipileResearch(opts) {
     }
   };
   return api;
+}
+function str(v) {
+  if (typeof v === "number" && Number.isFinite(v)) return String(v);
+  return typeof v === "string" && v.trim() ? v.trim() : void 0;
+}
+function isoDate(v) {
+  if (typeof v !== "string" || !/\d{4}-\d{2}-\d{2}/.test(v)) return void 0;
+  const t = Date.parse(v);
+  return Number.isFinite(t) ? new Date(t).toISOString() : void 0;
+}
+function postKeys(...ids) {
+  const out = /* @__PURE__ */ new Set();
+  for (const v of ids) {
+    const s = str(v);
+    if (!s) continue;
+    out.add(s);
+    const m = s.match(/(\d{6,})\)?$/);
+    if (m) out.add(m[1]);
+  }
+  return [...out];
+}
+function memberOf(v) {
+  if (typeof v === "string") return str(v);
+  if (!v || typeof v !== "object") return void 0;
+  const o = v;
+  return str(o.id) ?? str(o.provider_id) ?? str(o.member_id) ?? str(o.author_id);
+}
+function activityPost(x) {
+  const keys = postKeys(x.id, x.social_id);
+  const id = keys[0];
+  if (!id) return void 0;
+  const mentions = [...new Set((x.mentions ?? []).map(memberOf).filter((m) => !!m))];
+  return {
+    id,
+    keys,
+    at: isoDate(x.parsed_datetime ?? x.date),
+    reactions: x.reaction_counter ?? void 0,
+    comments: x.comment_counter ?? void 0,
+    repostOf: x.is_repost ? memberOf(x.repost_content?.author) : void 0,
+    mentions
+  };
+}
+function yearOf(v) {
+  if (typeof v === "number") return v > 1900 && v < 3e3 ? v : void 0;
+  if (typeof v === "string") {
+    const m = v.match(/\b(19|20)\d{2}\b/);
+    return m ? Number(m[0]) : void 0;
+  }
+  if (v && typeof v === "object") {
+    const o = v;
+    return yearOf(o.year) ?? yearOf(o.date);
+  }
+  return void 0;
+}
+function recommendationsFrom(list) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (const r of list) {
+    if (!r || typeof r !== "object") continue;
+    const o = r;
+    const actorId = memberOf(o.actor) ?? memberOf(o.author) ?? memberOf(o.recommender);
+    if (!actorId) continue;
+    const caption = typeof o.caption === "string" ? o.caption.trim().slice(0, 80) : void 0;
+    const year = yearOf(o.year) ?? yearOf(o.date) ?? yearOf(o.created_at) ?? yearOf(o.caption);
+    out.push({ actorId, ...year ? { year } : {}, ...caption ? { caption } : {} });
+  }
+  return out;
+}
+function profileSignals(p) {
+  const throttled = (p.throttled_sections ?? []).some((s) => /recommendation/i.test(s));
+  return {
+    followers: typeof p.follower_count === "number" ? p.follower_count : void 0,
+    connections: typeof p.connections_count === "number" ? p.connections_count : void 0,
+    received: recommendationsFrom(p.recommendations?.received),
+    given: recommendationsFrom(p.recommendations?.given),
+    recommendationsThrottled: throttled
+  };
 }
 function networkDistance(v) {
   if (typeof v === "number") return v;
@@ -1146,6 +1352,7 @@ var KIND_QUEUE = {
   "score.person": "orbit_score",
   "enrich.dossier": "orbit_enrich",
   "source.search": "orbit_enrich",
+  hop_evidence: "orbit_enrich",
   noop: "orbit_enrich"
 };
 function queueFor(kind) {
@@ -1241,6 +1448,7 @@ function makeServices(cfg, base) {
     now,
     fetch: doFetch,
     random: cfg.random ?? Math.random,
+    sleep: cfg.sleep ?? defaultSleep,
     env: env2,
     claude: makeClaude({
       apiKey: env2.anthropicKey,
@@ -2524,13 +2732,13 @@ function extractTimes(text, reference, opts = {}) {
   const anchorsIn = (n) => (bySentence.get(n) ?? []).filter((g) => g.draft.anchors.length && !g.draft.times.length);
   const sentenceHasAnchor = (n) => toks.some((t) => ANCHOR_KINDS.has(t.k) && sentenceIndexAt(norm2, t.start) === n);
   for (const [n, group] of bySentence) {
-    const times = group.filter((g) => g.draft.times.length && !g.draft.anchors.length);
-    if (!times.length) continue;
+    const times2 = group.filter((g) => g.draft.times.length && !g.draft.anchors.length);
+    if (!times2.length) continue;
     let anchors = anchorsIn(n);
     if (!anchors.length && !sentenceHasAnchor(n)) anchors = anchorsIn(n - 1);
     if (anchors.length !== 1) continue;
     const a = anchors[0];
-    for (const t of times) {
+    for (const t of times2) {
       const lo = Math.min(a.start, t.start);
       const hi = Math.max(a.end, t.end);
       const between = norm2.slice(Math.min(a.end, t.end), Math.max(a.start, t.start));
@@ -4476,9 +4684,9 @@ function stanceOf(sentences3, noCallCounts) {
 function heuristicSignal(text, direction, reference, opts = {}) {
   const body = text.replace(/[\u2018\u2019\u02bc]/g, "'");
   const t = body.toLowerCase();
-  const times = extractProposedTimes(body, reference, opts.timeZone);
+  const times2 = extractProposedTimes(body, reference, opts.timeZone);
   const extraction = {
-    proposedTimes: times,
+    proposedTimes: times2,
     asksOfUser: [],
     offers: [],
     factsAboutSender: [],
@@ -4512,10 +4720,10 @@ function heuristicSignal(text, direction, reference, opts = {}) {
     const explicitAsk = /\b(would .{1,40} work|does .{1,40} work|how about|are you free|what (time|day)s? work|here are a few times|my availability)\b/.test(
       t
     );
-    const acceptsTime = times.length > 0 && (CONFIRM.test(body) || WEAK_CONFIRM.test(body));
+    const acceptsTime = times2.length > 0 && (CONFIRM.test(body) || WEAK_CONFIRM.test(body));
     if (OUTBOUND_THANKS.test(body) && !explicitAsk && !acceptsTime)
       return { signal: "thank_you", confidence: 0.9, extraction };
-    if (times.length || /\b(would (any of )?(these|those|the following) (times|work)|does .* work for you|here are a few times|my availability)\b/.test(
+    if (times2.length || /\b(would (any of )?(these|those|the following) (times|work)|does .* work for you|here are a few times|my availability)\b/.test(
       t
     ))
       return { signal: "scheduling_proposal", confidence: 0.8, extraction };
@@ -4530,9 +4738,9 @@ function heuristicSignal(text, direction, reference, opts = {}) {
   }
   const yes = stance.yes > 0;
   const dayOffered = offersDay(sentences3);
-  const schedulingCue = times.length > 0 || SCHED_CUE.test(body) || dayOffered;
+  const schedulingCue = times2.length > 0 || SCHED_CUE.test(body) || dayOffered;
   const countered = COUNTER.test(body);
-  if (OOO.test(body) && (isAutoReplyBody(body) || !times.length && !countered && !SCHED_CUE.test(body))) {
+  if (OOO.test(body) && (isAutoReplyBody(body) || !times2.length && !countered && !SCHED_CUE.test(body))) {
     const rd = returnDate(body, reference, opts.timeZone);
     if (rd) extraction.returnDate = rd;
     return { signal: "out_of_office", confidence: 0.9, extraction };
@@ -4551,27 +4759,27 @@ function heuristicSignal(text, direction, reference, opts = {}) {
   }
   const vagueLater = DEFER.test(body) && !RESCHEDULE.test(body) || POSTPONE_LATER.test(body);
   if (RESCHEDULE.test(body) || DEFER.test(body) && !yes) {
-    if (times.length && MOVED_INVITE.test(body)) return warm("scheduling_confirmation", 0.8);
-    if (times.length) return warm("scheduling_proposal", 0.85);
+    if (times2.length && MOVED_INVITE.test(body)) return warm("scheduling_confirmation", 0.8);
+    if (times2.length) return warm("scheduling_proposal", 0.85);
     if (dayOffered && !RESCHEDULE.test(body)) return warm("scheduling_proposal", 0.75);
     if (!(vagueLater && stance.notNow > stance.yes))
       return { signal: "reschedule", confidence: 0.75, extraction };
   }
-  if (DEFER.test(body) && yes && !times.length) return warm("reply_positive", 0.75);
+  if (DEFER.test(body) && yes && !times2.length) return warm("reply_positive", 0.75);
   if (noCall && emailOk) {
     extraction.prefersEmail = true;
     return warm("question", 0.7);
   }
-  if (schedulerAdded && !times.length) return warm("reply_positive", 0.8);
+  if (schedulerAdded && !times2.length) return warm("reply_positive", 0.8);
   const weakConfirm = WEAK_CONFIRM.test(body) && !stance.schedAsk && !FIND_TIME.test(body) && !schedulerAdded;
   if (CONFIRM.test(body) || weakConfirm) {
-    if (times.length && (body.includes("?") || SCHED_CUE.test(body))) return warm("scheduling_proposal", 0.8);
+    if (times2.length && (body.includes("?") || SCHED_CUE.test(body))) return warm("scheduling_proposal", 0.8);
     return warm("scheduling_confirmation", 0.8);
   }
   const hardNo = stance.hardNo > 0 && stance.hardNo >= stance.yes && !countered;
   if (schedulingCue) {
-    if (hardNo && !times.length) return decline("hard", 0.75);
-    return warm("scheduling_proposal", times.length ? 0.85 : 0.7);
+    if (hardNo && !times2.length) return decline("hard", 0.75);
+    return warm("scheduling_proposal", times2.length ? 0.85 : 0.7);
   }
   if (hardNo) return decline("hard", 0.75);
   if (extraction.offers.some((o) => OFFER_REFER.test(o.replace(PASS_GREETING, " "))))
@@ -5173,10 +5381,10 @@ function pickSlots(busy, opts) {
   for (let i = 0; i < 31 && out.length < count; i++, key2 = addDaysKey(key2, 1)) {
     const dow = weekdayOfKey(key2);
     if (dow === 0 || dow === 6 || usHolidays(Number(key2.slice(0, 4))).has(key2)) continue;
-    const dayStart = zonedTime2(key2, DAY_START.hour, DAY_START.minute, opts.userTz).getTime();
+    const dayStart2 = zonedTime2(key2, DAY_START.hour, DAY_START.minute, opts.userTz).getTime();
     const dayEnd = zonedTime2(key2, DAY_END.hour, DAY_END.minute, opts.userTz).getTime();
-    if (dayStart > until) break;
-    for (let s = dayStart; s + SLOT_MINUTES * 6e4 <= dayEnd; s += SLOT_MINUTES * 6e4) {
+    if (dayStart2 > until) break;
+    for (let s = dayStart2; s + SLOT_MINUTES * 6e4 <= dayEnd; s += SLOT_MINUTES * 6e4) {
       const e = s + SLOT_MINUTES * 6e4;
       if (s < from || e > until) continue;
       if (busy.some((b) => s < b.end + buffer && e > b.start - buffer)) continue;
@@ -5981,7 +6189,7 @@ function templateMessage(p) {
   const kind = COMPOSE_KINDS.includes(req.kind) ? req.kind : TEMPLATE_KIND[req.kind] ?? "first_touch";
   const opener = p.research.openers[0];
   const s = user.settings;
-  const str3 = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
+  const str4 = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
   const about = user.current_title && user.current_org ? `${user.current_title} at ${user.current_org}` : user.school ? `a student at ${user.school}` : void 0;
   const input = {
     kind,
@@ -5993,9 +6201,9 @@ function templateMessage(p) {
       firstName: me,
       school: user.school ?? void 0,
       about,
-      company: BUSINESS_GOALS.has(p.goalKind) ? str3(s.company) : void 0,
-      pitch: BUSINESS_GOALS.has(p.goalKind) ? str3(s.pitch) : p.goalKind === "collaboration" ? str3(s.research_topic) : void 0,
-      traction: p.goalKind === "fundraising" ? str3(s.traction) : void 0
+      company: BUSINESS_GOALS.has(p.goalKind) ? str4(s.company) : void 0,
+      pitch: BUSINESS_GOALS.has(p.goalKind) ? str4(s.pitch) : p.goalKind === "collaboration" ? str4(s.research_topic) : void 0,
+      traction: p.goalKind === "fundraising" ? str4(s.traction) : void 0
     },
     recipient: { firstName: firstNameOf(person), org: personOrg(person), title: person.title ?? void 0 },
     hook: opener ? { text: hookPhrase(opener.text), sourceId: opener.id } : void 0,
@@ -6493,12 +6701,12 @@ function appearsMinor(input) {
   if (HS_PHRASE.test(input.title ?? "") || HS_PHRASE.test(input.headline ?? "")) return true;
   for (const e of input.education ?? []) {
     if (!/\bhigh[- ]school\b|\bsecondary school\b/i.test(e.school ?? "")) continue;
-    const end = yearOf(e.end);
+    const end = yearOf2(e.end);
     if (end === void 0 || end >= input.year) return true;
   }
   return (input.profileTexts ?? []).some((t) => HS_PHRASE.test(t));
 }
-function yearOf(v) {
+function yearOf2(v) {
   if (v === null || v === void 0) return void 0;
   if (typeof v === "number") return v > 3e3 ? new Date(v).getUTCFullYear() : v;
   if (typeof v === "string") {
@@ -7040,10 +7248,10 @@ function scorePage(page2, card) {
   const conflict = inTitle && !card.employers.some((e) => mentionsOrg(inTitle, e.aliases)) && !card.schools.some((s) => mentionsSchool(inTitle, s.aliases)) ? inTitle : void 0;
   const named = signals.includes("name");
   const others = signals.filter((s) => s !== "name" && s !== "city" && s !== "personal_site");
-  let strength = "none";
-  if (named) strength = "weak";
-  if (named && others.length >= 1 && !conflict && !linkedinCopy && !blocked) strength = "strong";
-  return { strength, signals, conflict, linkedinCopy, blocked };
+  let strength2 = "none";
+  if (named) strength2 = "weak";
+  if (named && others.length >= 1 && !conflict && !linkedinCopy && !blocked) strength2 = "strong";
+  return { strength: strength2, signals, conflict, linkedinCopy, blocked };
 }
 
 // supabase/functions/_shared/research/prompts.ts
@@ -7860,6 +8068,2211 @@ function enrichDossier(config) {
   };
 }
 
+// packages/core/src/graph/orgSize.ts
+var KNOWN_SIZES = {};
+var add = (bucket, names) => {
+  for (const n of names) KNOWN_SIZES[normalizeCompany(n)] = bucket;
+};
+add("10001+", [
+  "Google",
+  "Alphabet",
+  "Meta",
+  "Facebook",
+  "Amazon",
+  "Amazon Web Services",
+  "AWS",
+  "Microsoft",
+  "Apple",
+  "Netflix",
+  "Oracle",
+  "Salesforce",
+  "Adobe",
+  "IBM",
+  "Intel",
+  "NVIDIA",
+  "Cisco",
+  "Uber",
+  "Tesla",
+  "SpaceX",
+  "Qualcomm",
+  "Intuit",
+  "PayPal",
+  "ServiceNow",
+  "Workday",
+  "VMware",
+  "Dell",
+  "HP",
+  "Accenture",
+  "Deloitte",
+  "PwC",
+  "PricewaterhouseCoopers",
+  "EY",
+  "Ernst & Young",
+  "KPMG",
+  "McKinsey & Company",
+  "McKinsey",
+  "Boston Consulting Group",
+  "BCG",
+  "Bain & Company",
+  "Bain",
+  "Booz Allen Hamilton",
+  "Capgemini",
+  "Goldman Sachs",
+  "JPMorgan Chase",
+  "JP Morgan",
+  "J.P. Morgan",
+  "Morgan Stanley",
+  "Bank of America",
+  "Citi",
+  "Citigroup",
+  "Wells Fargo",
+  "Barclays",
+  "UBS",
+  "Deutsche Bank",
+  "HSBC",
+  "BlackRock",
+  "Fidelity Investments",
+  "Vanguard",
+  "Capital One",
+  "American Express",
+  "Visa",
+  "Mastercard",
+  "Charles Schwab",
+  "State Street",
+  "Procter & Gamble",
+  "PepsiCo",
+  "Coca-Cola",
+  "Johnson & Johnson",
+  "Pfizer",
+  "Walmart",
+  "Target",
+  "Nike",
+  "Disney",
+  "The Walt Disney Company",
+  "Comcast",
+  "Verizon",
+  "AT&T",
+  "Boeing",
+  "Lockheed Martin",
+  "General Electric",
+  "GE",
+  "General Motors",
+  "Ford",
+  "ByteDance",
+  "TikTok",
+  "Samsung",
+  "Bloomberg",
+  "LinkedIn",
+  "Shopify",
+  "Booking.com"
+]);
+add("5001-10000", [
+  "Stripe",
+  "Airbnb",
+  "Snap",
+  "Snapchat",
+  "Spotify",
+  "Block",
+  "Square",
+  "DoorDash",
+  "Lyft",
+  "Datadog",
+  "Atlassian",
+  "Palantir",
+  "Coinbase",
+  "Robinhood",
+  "Pinterest",
+  "Dropbox",
+  "Instacart",
+  "Lazard",
+  "Evercore",
+  "Jane Street",
+  "Citadel",
+  "Two Sigma",
+  "Oliver Wyman",
+  "LEK Consulting",
+  "Kearney"
+]);
+add("1001-5000", [
+  "Figma",
+  "Anthropic",
+  "OpenAI",
+  "Ramp",
+  "Brex",
+  "Databricks",
+  "Snowflake",
+  "Plaid",
+  "Notion",
+  "Duolingo",
+  "Reddit",
+  "Discord",
+  "Scale AI",
+  "Asana",
+  "Airtable",
+  "Hudson River Trading",
+  "DE Shaw",
+  "D. E. Shaw",
+  "Point72",
+  "Centerview Partners",
+  "PJT Partners",
+  "Moelis",
+  "Moelis & Company",
+  "Perella Weinberg",
+  "Guggenheim Partners",
+  "Blackstone",
+  "KKR",
+  "Apollo",
+  "Carlyle"
+]);
+add("501-1000", ["Vercel", "Retool", "Rippling", "Mercury", "Jump Trading", "Optiver", "Five Rings"]);
+add("201-500", ["Linear", "Sequoia Capital", "Andreessen Horowitz", "a16z", "Benchmark", "Accel"]);
+function knownSizeBucket(name) {
+  const n = normalizeCompany(name);
+  return n ? KNOWN_SIZES[n] : void 0;
+}
+function sizeFactor(sizeBucket, name, networkCount = 0) {
+  const b = sizeBucket ?? knownSizeBucket(name);
+  if (b) {
+    if (["1-10", "2-10", "11-50", "51-200"].includes(b)) return 1;
+    if (["201-500", "501-1000", "1001-5000"].includes(b)) return 0.7;
+    return 0.4;
+  }
+  if (networkCount >= 30) return 0.4;
+  if (networkCount >= 12) return 0.6;
+  return 0.5;
+}
+
+// packages/core/src/graph/titles.ts
+var C_LEVEL = /\b(ceo|cfo|coo|cto|cmo|cpo|cio|ciso|chief|president|partner|managing director|founder|co-founder|cofounder)\b/i;
+var SENIOR = /\b(director|vp|vice president|head of|principal|general manager|svp|evp)\b/i;
+var JUNIOR_OR_MANAGER = /\b(intern|analyst|associate|engineer|developer|designer|scientist|researcher|manager|coordinator|specialist|consultant|representative|recruiter|assistant|lead|student|fellow)\b/i;
+function seniorityClass(title) {
+  const t = title ?? "";
+  if (!t.trim()) return void 0;
+  if (C_LEVEL.test(t)) return 2;
+  if (SENIOR.test(t)) return 1;
+  if (JUNIOR_OR_MANAGER.test(t)) return 0;
+  return void 0;
+}
+var FUNCTIONS = [
+  ["engineering", /\b(engineer\w*|developer|software|swe|devops|sre|programmer)\b/i],
+  ["product", /\b(product manager|product lead|head of product|pm|product owner)\b/i],
+  ["design", /\b(design\w*|ux|ui)\b/i],
+  ["data", /\b(data|machine learning|ml|analytics)\b/i],
+  ["research", /\b(research\w*|scientist|phd)\b/i],
+  ["sales", /\b(sales|account executive|business development|bdr|sdr)\b/i],
+  ["marketing", /\b(marketing|growth|brand|content)\b/i],
+  [
+    "finance",
+    /\b(finance|financial|investment|investor|banking|banker|private equity|venture|vc|trader|accountant)\b/i
+  ],
+  ["operations", /\b(operations|ops|supply chain|logistics)\b/i],
+  ["recruiting", /\b(recruit\w*|talent|people ops|hr)\b/i],
+  ["legal", /\b(legal|counsel|attorney|lawyer|paralegal)\b/i],
+  ["consulting", /\b(consult\w*)\b/i]
+];
+function functionOf(title) {
+  const t = title ?? "";
+  for (const [name, re] of FUNCTIONS) if (re.test(t)) return name;
+  return void 0;
+}
+function seniorityFit(a, b) {
+  const x = seniorityClass(a);
+  const y = seniorityClass(b);
+  if (x === void 0 || y === void 0) return void 0;
+  if (x === y) return "same";
+  return Math.abs(x - y) >= 2 ? "gap" : void 0;
+}
+
+// packages/core/src/scoring/strength.ts
+var ENGAGEMENT = /* @__PURE__ */ new Set([
+  "linkedin_comment_in",
+  "linkedin_comment_out",
+  "linkedin_reaction_in"
+]);
+var AMBIENT = /* @__PURE__ */ new Set(["email_cc", "linkedin_connected", ...ENGAGEMENT]);
+
+// packages/core/src/graph/edges.ts
+var DAY7 = 864e5;
+var FULL_PAIRING_MAX = 150;
+var CONNECTORS_PER_LARGE_GROUP = 20;
+function time(d) {
+  if (!d) return void 0;
+  const t = new Date(d).getTime();
+  return Number.isNaN(t) ? void 0 : t;
+}
+function utcYear(t) {
+  return new Date(t).getUTCFullYear();
+}
+function monthsOverlap(a, b, now) {
+  const aStart = time(a.startDate) ?? Number.NEGATIVE_INFINITY;
+  const bStart = time(b.startDate) ?? Number.NEGATIVE_INFINITY;
+  const aEnd = a.isCurrent || !a.endDate ? now.getTime() : time(a.endDate) ?? Number.NaN;
+  const bEnd = b.isCurrent || !b.endDate ? now.getTime() : time(b.endDate) ?? Number.NaN;
+  const start = Math.max(aStart, bStart);
+  const end = Math.min(aEnd, bEnd);
+  if (!Number.isFinite(start)) return a.isCurrent && b.isCurrent ? 12 : 0;
+  if (Number.isNaN(end)) return 0;
+  return Math.max(0, (end - start) / (30 * DAY7));
+}
+function provablyDisjoint(a, b) {
+  const aStart = time(a.startDate);
+  const bStart = time(b.startDate);
+  const aEnd = a.isCurrent ? void 0 : time(a.endDate);
+  const bEnd = b.isCurrent ? void 0 : time(b.endDate);
+  if (aEnd !== void 0 && bStart !== void 0 && aEnd < bStart) return true;
+  if (bEnd !== void 0 && aStart !== void 0 && bEnd < aStart) return true;
+  if (a.startDate && aStart === void 0 || b.startDate && bStart === void 0) return true;
+  return false;
+}
+function yearRange(a) {
+  const st = time(a.startDate);
+  const et = time(a.endDate);
+  const s = st === void 0 ? void 0 : utcYear(st);
+  const e = et === void 0 ? void 0 : utcYear(et);
+  if (s === void 0 && e === void 0) return void 0;
+  return [s ?? e - 4, e ?? s + 4];
+}
+function inferEdges(input) {
+  const now = input.now ?? /* @__PURE__ */ new Date();
+  const people = input.people.filter((p) => p.isHuman && !p.hiddenAt);
+  const peopleIds = new Set(people.map((p) => p.id));
+  const strengthOf = new Map(people.map((p) => [p.id, p.strength ?? 0]));
+  const titleOf = new Map(people.map((p) => [p.id, p.currentTitle]));
+  const byPerson = /* @__PURE__ */ new Map();
+  for (const a of input.affiliations) {
+    if (!peopleIds.has(a.personId)) continue;
+    const arr = byPerson.get(a.personId) ?? [];
+    arr.push(a);
+    byPerson.set(a.personId, arr);
+  }
+  for (const p of people) {
+    const arr = byPerson.get(p.id) ?? [];
+    if (p.currentOrganizationRaw && !arr.some((a) => a.kind === "employment" && a.isCurrent)) {
+      arr.push({
+        id: `virt-${p.id}`,
+        userId: input.userId,
+        personId: p.id,
+        kind: "employment",
+        organizationId: p.currentOrganizationId,
+        nameRaw: p.currentOrganizationRaw,
+        title: p.currentTitle,
+        isCurrent: true,
+        source: "manual"
+      });
+    }
+    if (p.school && !arr.some((a) => a.kind === "education")) {
+      arr.push({
+        id: `virts-${p.id}`,
+        userId: input.userId,
+        personId: p.id,
+        kind: "education",
+        nameRaw: p.school,
+        isCurrent: false,
+        source: "manual"
+      });
+    }
+    byPerson.set(p.id, arr);
+  }
+  const edges = /* @__PURE__ */ new Map();
+  const put = (a, b, type, weight, evidence) => {
+    if (a === b) return;
+    const [x, y] = a < b ? [a, b] : [b, a];
+    const key2 = `${x}|${y}|${type}`;
+    const existing = edges.get(key2);
+    if (existing && existing.weight >= weight) return;
+    edges.set(key2, {
+      id: key2,
+      userId: input.userId,
+      personAId: x,
+      personBId: y,
+      type,
+      weight: Math.min(1, weight),
+      evidence
+    });
+  };
+  const groups = /* @__PURE__ */ new Map();
+  for (const [pid, affs] of byPerson) {
+    for (const a of affs) {
+      const org = a.organizationId ? input.organizations.get(a.organizationId) : void 0;
+      const norm2 = org?.nameNormalized || normalizeCompany(a.nameRaw);
+      if (!norm2) continue;
+      const key2 = `${a.kind}:${norm2}`;
+      const arr = groups.get(key2) ?? [];
+      arr.push({ personId: pid, aff: a });
+      groups.set(key2, arr);
+    }
+  }
+  for (const [key2, members] of groups) {
+    if (members.length < 2) continue;
+    const isEmployment = key2.startsWith("employment:");
+    const pairs = groupPairs(members, strengthOf);
+    const orgRef = members.find((m) => m.aff.organizationId)?.aff.organizationId;
+    const org = orgRef ? input.organizations.get(orgRef) : void 0;
+    const distinct = new Set(members.map((m) => m.personId)).size;
+    for (const [A, B] of pairs) {
+      if (A.personId === B.personId) continue;
+      if (isEmployment) {
+        const orgName = org?.name ?? A.aff.nameRaw;
+        const sf = sizeFactor(org?.sizeBucket, orgName, distinct);
+        const sizeBucket = org?.sizeBucket ?? knownSizeBucket(orgName);
+        const titleA = A.aff.title ?? (A.aff.isCurrent ? titleOf.get(A.personId) : void 0);
+        const titleB = B.aff.title ?? (B.aff.isCurrent ? titleOf.get(B.personId) : void 0);
+        const peers = seniorityFit(titleA, titleB);
+        const fa = functionOf(titleA);
+        const sameFunction = !!fa && fa === functionOf(titleB);
+        const shape = {
+          ...sizeBucket ? { sizeBucket } : {},
+          ...peers ? { peers } : {},
+          ...sameFunction ? { sameFunction } : {}
+        };
+        const bothCurrent = A.aff.isCurrent && B.aff.isCurrent;
+        const current = [A, B].filter((m) => m.aff.isCurrent).map((m) => m.personId);
+        const spanKnown = (a) => !!a.startDate && (a.isCurrent || !!a.endDate);
+        if (bothCurrent && !(spanKnown(A.aff) && spanKnown(B.aff))) {
+          const size = sizeClass(sizeBucket);
+          put(
+            A.personId,
+            B.personId,
+            "same_current_company",
+            size === "small" ? 0.7 : size === "mid" ? 0.45 : 0.35 * sf,
+            { orgName, current, ...shape, text: `Both currently at ${orgName}` }
+          );
+        } else if (!spanKnown(A.aff) || !spanKnown(B.aff)) {
+          if (provablyDisjoint(A.aff, B.aff)) continue;
+          put(A.personId, B.personId, "co_tenure", 0.15 * sf, {
+            orgName,
+            datesUnknown: true,
+            current,
+            ...shape,
+            text: current.length ? `Both have worked at ${orgName}` : `Both previously at ${orgName}`
+          });
+        } else {
+          const overlap = monthsOverlap(A.aff, B.aff, now);
+          if (overlap <= 0) continue;
+          const starts = [time(A.aff.startDate), time(B.aff.startDate)].filter((t) => t !== void 0);
+          const ends = [A.aff, B.aff].map((a) => a.isCurrent || !a.endDate ? void 0 : time(a.endDate));
+          const fromYear = starts.length ? utcYear(Math.max(...starts)) : void 0;
+          const ongoing = bothCurrent;
+          const endKnown = ends.filter((t) => t !== void 0);
+          const toYear = ongoing ? void 0 : endKnown.length ? utcYear(Math.min(...endKnown)) : void 0;
+          put(A.personId, B.personId, "co_tenure", Math.min(1, 0.25 + 0.05 * overlap) * sf, {
+            orgName,
+            overlapMonths: Math.round(overlap),
+            fromYear,
+            toYear,
+            ongoing,
+            current,
+            ...shape,
+            text: `Worked together at ${orgName}${yearSpan(fromYear, toYear, ongoing)}`
+          });
+        }
+      } else {
+        const ra = yearRange(A.aff);
+        const rb = yearRange(B.aff);
+        const school = A.aff.nameRaw;
+        if (ra && rb) {
+          const overlap = Math.min(ra[1], rb[1]) - Math.max(ra[0], rb[0]);
+          if (overlap >= 0)
+            put(A.personId, B.personId, "same_school_cohort", 0.3, {
+              school,
+              year: Math.max(ra[0], rb[0]),
+              text: `Both at ${school} around ${Math.max(ra[0], rb[0])}`
+            });
+          else if (Math.abs(ra[1] - rb[1]) <= 2)
+            put(A.personId, B.personId, "same_school_cohort", 0.15, {
+              school,
+              withinTwoYears: true,
+              text: `Both went to ${school}, graduating within two years of each other`
+            });
+        } else {
+          put(A.personId, B.personId, "same_school_cohort", 0.12, {
+            school,
+            text: `Both went to ${school}`
+          });
+        }
+      }
+    }
+  }
+  const threadCount = /* @__PURE__ */ new Map();
+  for (const t of input.threads) {
+    const ids = [...new Set(t.participantPersonIds.filter((id) => peopleIds.has(id)))];
+    if (ids.length < 2 || ids.length > 8) continue;
+    for (let i = 0; i < ids.length; i++)
+      for (let j = i + 1; j < ids.length; j++) {
+        const [x, y] = ids[i] < ids[j] ? [ids[i], ids[j]] : [ids[j], ids[i]];
+        const cur = threadCount.get(`${x}|${y}`) ?? { n: 0 };
+        cur.n++;
+        if (t.lastMessageAt && (!cur.last || t.lastMessageAt > cur.last)) cur.last = t.lastMessageAt;
+        threadCount.set(`${x}|${y}`, cur);
+      }
+  }
+  for (const [k, { n, last }] of threadCount) {
+    const [x, y] = k.split("|");
+    put(x, y, "email_cothread", Math.min(0.8, 0.5 + 0.1 * (n - 1)), {
+      threads: n,
+      lastAt: last,
+      text: n === 1 ? "On the same email thread with you" : `On ${n} email threads with you`
+    });
+  }
+  const byId = new Map(people.map((p) => [p.id, p]));
+  for (const t of input.threads) {
+    const intro2 = t.introduction;
+    if (!intro2) continue;
+    const from = byId.get(intro2.introducerId);
+    if (!from) continue;
+    for (const id of intro2.introducedIds) {
+      const to = byId.get(id);
+      if (!to) continue;
+      put(from.id, to.id, "introduced_by", 0.85, {
+        introducerId: from.id,
+        at: intro2.at,
+        text: `${from.firstName} introduced you to ${to.firstName}`
+      });
+    }
+  }
+  const eventCount = /* @__PURE__ */ new Map();
+  for (const e of input.events) {
+    const ids = [...new Set(e.attendeePersonIds.filter((id) => peopleIds.has(id)))];
+    if (ids.length < 2 || ids.length > 8) continue;
+    for (let i = 0; i < ids.length; i++)
+      for (let j = i + 1; j < ids.length; j++) {
+        const [x, y] = ids[i] < ids[j] ? [ids[i], ids[j]] : [ids[j], ids[i]];
+        const cur = eventCount.get(`${x}|${y}`) ?? { n: 0 };
+        cur.n++;
+        if (e.startAt && (!cur.last || e.startAt > cur.last)) cur.last = e.startAt;
+        eventCount.set(`${x}|${y}`, cur);
+      }
+  }
+  for (const [k, { n, last }] of eventCount) {
+    const [x, y] = k.split("|");
+    put(x, y, "meeting_coattendee", Math.min(0.9, 0.6 + 0.1 * (n - 1)), {
+      events: n,
+      lastAt: last,
+      text: n === 1 ? "In a meeting with you together" : `In ${n} meetings with you together`
+    });
+  }
+  return [...edges.values()];
+}
+function yearSpan(from, to, ongoing) {
+  if (from === void 0) return "";
+  if (ongoing) return ` since ${from}`;
+  if (to === void 0 || to === from) return ` in ${from}`;
+  return ` from ${from} to ${to}`;
+}
+function sizeClass(bucket) {
+  if (!bucket) return void 0;
+  if (["1-10", "2-10", "11-50"].includes(bucket)) return "small";
+  if (["51-200", "201-500"].includes(bucket)) return "mid";
+  return "large";
+}
+function groupPairs(members, strengthOf) {
+  const out = [];
+  if (members.length <= FULL_PAIRING_MAX) {
+    for (let i = 0; i < members.length; i++)
+      for (let j = i + 1; j < members.length; j++) out.push([members[i], members[j]]);
+    return out;
+  }
+  const ranked = [...members].sort(
+    (a, b) => (strengthOf.get(b.personId) ?? 0) - (strengthOf.get(a.personId) ?? 0) || (a.personId < b.personId ? -1 : 1)
+  );
+  const connectors = /* @__PURE__ */ new Set();
+  const seenPeople = /* @__PURE__ */ new Set();
+  for (const m of ranked) {
+    if (connectors.size >= CONNECTORS_PER_LARGE_GROUP) break;
+    if (seenPeople.has(m.personId)) continue;
+    seenPeople.add(m.personId);
+    connectors.add(m);
+  }
+  const list = [...connectors];
+  for (let i = 0; i < list.length; i++)
+    for (let j = i + 1; j < list.length; j++) out.push([list[i], list[j]]);
+  for (const m of members) {
+    if (connectors.has(m)) continue;
+    for (const c of list) out.push([c, m]);
+  }
+  return out;
+}
+
+// packages/core/src/graph/ties.ts
+var TIE_KINDS = [
+  "email_exchange",
+  "email_cc",
+  "email_cothread",
+  "meeting_coattendee",
+  "introduced_by",
+  "linkedin_mutual",
+  "village_path",
+  "co_tenure",
+  "same_school_cohort",
+  "same_current_company",
+  "linkedin_recommendation",
+  "linkedin_engagement",
+  "linkedin_mention",
+  "common_contacts",
+  "student_says_close"
+];
+var HOP_WEIGHTS = {
+  /** a LinkedIn connection with nothing more known (plan 16 §4.2) */
+  mutual: 0.3,
+  recommendation: 0.85,
+  /** divided by (people tagged − 1) beyond two */
+  mention: 0.6,
+  studentSaysClose: 0.8,
+  engagement: {
+    /** kind weights in E */
+    comment: 1,
+    reply: 1.5,
+    repost: 1,
+    reaction: 0.1,
+    /** w = scale · (1 − e^(−E/saturation)), then capped */
+    scale: 0.75,
+    saturation: 3,
+    /**
+     * one-way engagement counts only toward a hop whose second person did the engaging (they know the first, so the
+     * intro lands), never the other way, which is how fans look (`pKnowDirected`)
+     */
+    oneWayCap: 0.25,
+    reciprocalCap: 0.5,
+    /** reactions alone add at most this much E */
+    reactionCap: 1,
+    /** below this audience, no popularity discount */
+    audience: 2e3,
+    /** popularity when the post author's followers are not known yet */
+    unknownPopularity: 0.25,
+    /** a reactions page this full marks a serial liker, whose reactions count this much */
+    serialLiker: 60,
+    serialLikerFactor: 0.5,
+    /** recency of an item: within 12 months, within 24, older or undated */
+    recent: 1,
+    lastYear: 0.6,
+    old: 0.35
+  },
+  /** w = scale · (1 − e^(−S/saturation)), S = Σ the weaker tie of each common contact */
+  commonContacts: { scale: 0.5, saturation: 2 },
+  /** a pair is "fading" when its newest evidence is older than this many times its usual gap (and 90 days) */
+  fadingGaps: 8
+};
+var TIE_HALF_LIFE_YEARS = {
+  email_exchange: 2,
+  email_cc: 2,
+  email_cothread: 2,
+  meeting_coattendee: 2,
+  introduced_by: 2,
+  linkedin_recommendation: 5,
+  linkedin_mention: 2
+};
+var ROUTABLE_TIE_KINDS = /* @__PURE__ */ new Set([
+  "email_exchange",
+  "email_cc",
+  "meeting_coattendee",
+  "introduced_by",
+  "linkedin_mutual",
+  "linkedin_recommendation",
+  "student_says_close"
+]);
+var SUPPORT_ONLY_TIE_KINDS = /* @__PURE__ */ new Set([
+  "linkedin_engagement",
+  "linkedin_mention",
+  "common_contacts"
+]);
+var TIE_CONFIDENCE = {
+  email_exchange: 0.95,
+  email_cc: 0.85,
+  email_cothread: 0.5,
+  meeting_coattendee: 0.8,
+  introduced_by: 0.95,
+  linkedin_mutual: 0.95,
+  village_path: 0.7,
+  // the affiliation kinds depend on the overlap and the employer's size; these are their typical values, used for
+  // edges stored before confidences existed
+  co_tenure: 0.5,
+  same_school_cohort: 0.25,
+  same_current_company: 0.35,
+  linkedin_recommendation: 0.95,
+  linkedin_engagement: 0.9,
+  linkedin_mention: 0.9,
+  common_contacts: 0.6,
+  student_says_close: 0.9
+};
+function affiliationConfidence(kind, ev, now = /* @__PURE__ */ new Date(), bigOrg) {
+  const bucket = typeof ev.sizeBucket === "string" ? ev.sizeBucket : void 0;
+  const size = sizeClass(bucket);
+  const big = bigOrg ?? (!!bucket && BIG_ORG.has(bucket));
+  if (kind === "co_tenure") {
+    const months = typeof ev.overlapMonths === "number" ? ev.overlapMonths : 0;
+    let c = Math.min(0.8, 0.3 + 0.05 * months);
+    if (big) c *= 0.5;
+    if (bucket === "10001+") c *= 0.7;
+    if (size === "small") c *= 1.3;
+    else if (bucket === "51-200") c *= 1.1;
+    if (typeof ev.toYear === "number" && ev.toYear < now.getUTCFullYear() - 10) c *= 0.6;
+    if (ev.peers === "same") c *= 1.15;
+    else if (ev.peers === "gap") c *= 0.8;
+    if (ev.sameFunction === true) c *= 1.1;
+    return Math.min(0.9, c);
+  }
+  if (kind === "same_current_company") {
+    if (size === "small") return 0.8;
+    if (size === "mid") return 0.45;
+    return big ? 0.175 : 0.35;
+  }
+  if (kind === "same_school_cohort")
+    return typeof ev.year === "number" ? 0.4 : ev.withinTwoYears ? 0.25 : 0.1;
+  return TIE_CONFIDENCE[kind];
+}
+var DAY8 = 864e5;
+var YEAR = 365.25 * DAY8;
+var GROUP_MAX = 8;
+var BIG_ORG = /* @__PURE__ */ new Set(["5001-10000", "10001+"]);
+var pairKey = (a, b) => a < b ? [a, b] : [b, a];
+function maxIso(a, b) {
+  if (!a) return b;
+  if (!b) return a;
+  return a > b ? a : b;
+}
+function minIso(a, b) {
+  if (!a) return b;
+  if (!b) return a;
+  return a < b ? a : b;
+}
+function inferTies(input) {
+  const now = input.now ?? /* @__PURE__ */ new Date();
+  const people = input.people.filter((p) => p.isHuman && !p.hiddenAt);
+  const ids = new Set(people.map((p) => p.id));
+  const byEmail = /* @__PURE__ */ new Map();
+  for (const p of people)
+    for (const e of [p.primaryEmail, ...p.emails]) if (e) byEmail.set(normalizeEmail(e), p.id);
+  const ties = /* @__PURE__ */ new Map();
+  const put = (a, b, kind, weight, confidence, evidence, firstSeenAt, lastSeenAt) => {
+    if (a === b || !ids.has(a) || !ids.has(b)) return;
+    const [x, y] = pairKey(a, b);
+    const id = `${x}|${y}|${kind}`;
+    const cur = ties.get(id);
+    if (cur && cur.weight * cur.confidence >= weight * confidence) return;
+    ties.set(id, {
+      id,
+      userId: input.userId,
+      aId: x,
+      bId: y,
+      kind,
+      weight: Math.min(1, Math.max(0, weight)),
+      confidence: Math.min(1, Math.max(0, confidence)),
+      evidence,
+      firstSeenAt,
+      lastSeenAt
+    });
+  };
+  const orgByName = /* @__PURE__ */ new Map();
+  for (const o of input.organizations.values())
+    orgByName.set(o.nameNormalized || normalizeCompany(o.name), o.sizeBucket);
+  const big = (orgName) => {
+    const name = typeof orgName === "string" ? orgName : "";
+    const bucket = orgByName.get(normalizeCompany(name)) ?? knownSizeBucket(name);
+    return !!bucket && BIG_ORG.has(bucket);
+  };
+  for (const e of inferEdges({ ...input, threads: [], events: [] })) {
+    const ev = e.evidence;
+    if (e.type === "co_tenure" || e.type === "same_current_company") {
+      const isBig = typeof ev.sizeBucket === "string" ? void 0 : big(ev.orgName);
+      put(e.personAId, e.personBId, e.type, e.weight, affiliationConfidence(e.type, ev, now, isBig), ev);
+    } else if (e.type === "same_school_cohort") {
+      put(
+        e.personAId,
+        e.personBId,
+        "same_school_cohort",
+        e.weight,
+        affiliationConfidence(e.type, ev, now),
+        ev
+      );
+    }
+  }
+  const msgsByThread = /* @__PURE__ */ new Map();
+  for (const m of input.messages ?? []) {
+    if (m.isAutomated) continue;
+    const arr = msgsByThread.get(m.threadId) ?? [];
+    arr.push(m);
+    msgsByThread.set(m.threadId, arr);
+  }
+  const bump = (map, a, b, at, thread) => {
+    if (a === b || !ids.has(a) || !ids.has(b)) return;
+    const [x, y] = pairKey(a, b);
+    const k = `${x}|${y}`;
+    const c = map.get(k) ?? { n: 0, threads: /* @__PURE__ */ new Set() };
+    if (thread) {
+      if (c.threads.has(thread)) {
+        c.last = maxIso(c.last, at);
+        return;
+      }
+      c.threads.add(thread);
+    }
+    c.n++;
+    c.first = minIso(c.first, at);
+    c.last = maxIso(c.last, at);
+    map.set(k, c);
+  };
+  const exchange = /* @__PURE__ */ new Map();
+  const cc = /* @__PURE__ */ new Map();
+  const cothread = /* @__PURE__ */ new Map();
+  for (const t of input.threads) {
+    const parts = [...new Set(t.participantPersonIds.filter((id) => ids.has(id)))];
+    if (parts.length > GROUP_MAX) continue;
+    const msgs = msgsByThread.get(t.id);
+    if (!msgs?.length) {
+      for (let i = 0; i < parts.length; i++)
+        for (let j = i + 1; j < parts.length; j++)
+          bump(cothread, parts[i], parts[j], t.lastMessageAt, t.id);
+      continue;
+    }
+    const senders = /* @__PURE__ */ new Set();
+    for (const m of msgs) {
+      if (m.direction !== "inbound") continue;
+      const from = m.fromPersonId ?? byEmail.get(normalizeEmail(m.fromEmail));
+      if (!from || !ids.has(from)) continue;
+      senders.add(from);
+      const recipients = [...m.toEmails, ...m.ccEmails];
+      if (recipients.length > GROUP_MAX) continue;
+      for (const r of recipients) {
+        const to = byEmail.get(normalizeEmail(r));
+        if (to) bump(cc, from, to, m.sentAt);
+      }
+    }
+    const lastAt = msgs.reduce((a, m) => maxIso(a, m.sentAt), t.lastMessageAt);
+    const s = [...senders];
+    for (let i = 0; i < s.length; i++)
+      for (let j = i + 1; j < s.length; j++) bump(exchange, s[i], s[j], lastAt, t.id);
+    const receivers = parts.filter((p) => !senders.has(p));
+    for (let i = 0; i < receivers.length; i++)
+      for (let j = i + 1; j < receivers.length; j++)
+        bump(cothread, receivers[i], receivers[j], lastAt, t.id);
+  }
+  for (const [k, c] of exchange) {
+    const [x, y] = k.split("|");
+    put(
+      x,
+      y,
+      "email_exchange",
+      Math.min(0.9, 0.6 + 0.1 * (c.n - 1)),
+      TIE_CONFIDENCE.email_exchange,
+      {
+        threads: c.n,
+        lastAt: c.last,
+        text: c.n === 1 ? "Both wrote on an email thread with you" : `Both wrote on ${c.n} email threads with you`
+      },
+      c.first,
+      c.last
+    );
+  }
+  for (const [k, c] of cc) {
+    const [x, y] = k.split("|");
+    put(
+      x,
+      y,
+      "email_cc",
+      Math.min(0.7, 0.45 + 0.05 * (c.n - 1)),
+      TIE_CONFIDENCE.email_cc,
+      {
+        messages: c.n,
+        lastAt: c.last,
+        text: c.n === 1 ? "Copied on an email to you" : `Copied on ${c.n} emails to you`
+      },
+      c.first,
+      c.last
+    );
+  }
+  for (const [k, c] of cothread) {
+    const [x, y] = k.split("|");
+    put(
+      x,
+      y,
+      "email_cothread",
+      Math.min(0.5, 0.3 + 0.1 * (c.n - 1)),
+      TIE_CONFIDENCE.email_cothread,
+      {
+        threads: c.n,
+        lastAt: c.last,
+        text: c.n === 1 ? "On the same email thread with you" : `On ${c.n} email threads with you`
+      },
+      c.first,
+      c.last
+    );
+  }
+  const byId = new Map(people.map((p) => [p.id, p]));
+  for (const t of input.threads) {
+    const intro2 = t.introduction;
+    if (!intro2) continue;
+    const from = byId.get(intro2.introducerId);
+    if (!from) continue;
+    for (const id of intro2.introducedIds) {
+      const to = byId.get(id);
+      if (!to) continue;
+      put(
+        from.id,
+        to.id,
+        "introduced_by",
+        0.85,
+        TIE_CONFIDENCE.introduced_by,
+        {
+          introducerId: from.id,
+          at: intro2.at,
+          lastAt: intro2.at,
+          text: `${from.firstName} introduced you to ${to.firstName}`
+        },
+        intro2.at,
+        intro2.at
+      );
+    }
+  }
+  const meetings = /* @__PURE__ */ new Map();
+  for (const e of input.events) {
+    if (e.status === "cancelled") continue;
+    const size = e.attendees.length || e.attendeePersonIds.length;
+    if (size > GROUP_MAX) continue;
+    const declined = new Set(
+      e.attendees.filter((a) => a.responseStatus === "declined").map((a) => byEmail.get(normalizeEmail(a.email))).filter((x) => !!x)
+    );
+    const att = [...new Set(e.attendeePersonIds.filter((id) => ids.has(id) && !declined.has(id)))];
+    for (let i = 0; i < att.length; i++)
+      for (let j = i + 1; j < att.length; j++) bump(meetings, att[i], att[j], e.startAt, e.id);
+  }
+  for (const [k, c] of meetings) {
+    const [x, y] = k.split("|");
+    put(
+      x,
+      y,
+      "meeting_coattendee",
+      Math.min(0.9, 0.6 + 0.1 * (c.n - 1)),
+      TIE_CONFIDENCE.meeting_coattendee,
+      {
+        events: c.n,
+        lastAt: c.last,
+        text: c.n === 1 ? "In a meeting with you together" : `In ${c.n} meetings with you together`
+      },
+      c.first,
+      c.last
+    );
+  }
+  for (const m of input.mutuals ?? [])
+    put(
+      m.aId,
+      m.bId,
+      "linkedin_mutual",
+      HOP_WEIGHTS.mutual,
+      TIE_CONFIDENCE.linkedin_mutual,
+      {
+        source: "unipile",
+        text: "Connected on LinkedIn"
+      },
+      m.seenAt,
+      m.seenAt
+    );
+  for (const v of input.villagePaths ?? [])
+    put(
+      v.introducerId,
+      v.targetId,
+      "village_path",
+      Math.min(1, Math.max(0, v.warmth)),
+      TIE_CONFIDENCE.village_path,
+      {
+        source: "village",
+        introducerId: v.introducerId,
+        warmth: v.warmth,
+        text: "Know each other (via Village)"
+      },
+      v.seenAt,
+      v.seenAt
+    );
+  if (input.evidence)
+    for (const t of pairEvidenceTies({ ...input.evidence, userId: input.userId, people: ids, now }))
+      put(t.aId, t.bId, t.kind, t.weight, t.confidence, t.evidence, t.firstSeenAt, t.lastSeenAt);
+  return [...ties.values()];
+}
+function decayedTieWeight(t, now = /* @__PURE__ */ new Date()) {
+  const halfLife = TIE_HALF_LIFE_YEARS[t.kind];
+  if (!halfLife || !t.lastSeenAt) return t.weight;
+  const at = new Date(t.lastSeenAt).getTime();
+  if (Number.isNaN(at)) return t.weight;
+  const years = Math.max(0, now.getTime() - at) / YEAR;
+  return t.weight * 0.5 ** (years / halfLife);
+}
+var zeroCounts = () => ({ comments: 0, replies: 0, reposts: 0, reactions: 0 });
+function engagementScore(items, ctx = {}) {
+  const W = HOP_WEIGHTS.engagement;
+  const now = (ctx.now ?? /* @__PURE__ */ new Date()).getTime();
+  const seen = /* @__PURE__ */ new Set();
+  const counts = {};
+  const reactionsE = {};
+  const otherE = {};
+  let popularityKnown = true;
+  let newestAt;
+  let firstAt;
+  let dated = 0;
+  const writers = /* @__PURE__ */ new Set();
+  for (const it of items) {
+    const ref = `${it.actorId}|${it.kind}|${it.commentId ?? it.postId}`;
+    if (seen.has(ref) || it.actorId === it.otherId) continue;
+    seen.add(ref);
+    const followers = ctx.followers?.get(it.postAuthorId);
+    if (followers === void 0) popularityKnown = false;
+    const share = followers === void 0 ? W.unknownPopularity : W.audience / Math.max(W.audience, followers);
+    const t = it.at ? Date.parse(it.at) : Number.NaN;
+    const months = Number.isFinite(t) ? (now - t) / (30.44 * DAY8) : Number.POSITIVE_INFINITY;
+    const recency = months <= 12 ? W.recent : months <= 24 ? W.lastYear : W.old;
+    if (Number.isFinite(t)) {
+      dated++;
+      const iso4 = new Date(t).toISOString();
+      newestAt = maxIso(newestAt, iso4);
+      firstAt = minIso(firstAt, iso4);
+    }
+    const c = counts[it.actorId] ??= zeroCounts();
+    if (it.kind === "reaction") {
+      c.reactions++;
+      const volume = ctx.reactionVolume?.get(it.actorId) ?? 0;
+      const liker = volume >= W.serialLiker ? W.serialLikerFactor : 1;
+      reactionsE[it.actorId] = (reactionsE[it.actorId] ?? 0) + W.reaction * share * recency * liker;
+      continue;
+    }
+    if (it.kind === "comment") c.comments++;
+    else if (it.kind === "reply") c.replies++;
+    else c.reposts++;
+    writers.add(it.actorId);
+    otherE[it.actorId] = (otherE[it.actorId] ?? 0) + W[it.kind] * Math.sqrt(share) * recency;
+  }
+  const curve = (e) => W.scale * (1 - Math.exp(-e / W.saturation));
+  const eBy = {};
+  const wBy = {};
+  for (const a of Object.keys(counts)) {
+    eBy[a] = (otherE[a] ?? 0) + Math.min(W.reactionCap, reactionsE[a] ?? 0);
+    wBy[a] = Math.min(W.oneWayCap, curve(eBy[a]));
+  }
+  const E = Object.values(eBy).reduce((acc, e) => acc + e, 0);
+  const reciprocal = writers.size >= 2;
+  const w = reciprocal ? Math.min(popularityKnown ? W.reciprocalCap : W.oneWayCap, curve(E)) : 0;
+  return { E, w, wBy, reciprocal, popularityKnown, counts, newestAt, firstAt, dated };
+}
+function pKnowDirected(pair, fromId, toId) {
+  let p = Math.max(0, Math.min(1, pair.weight));
+  for (const t of pair.ties) {
+    if (t.kind !== "linkedin_engagement") continue;
+    const ev = t.evidence;
+    if (ev.reciprocal) continue;
+    const w = ev.wBy?.[toId] ?? 0;
+    if (w > 0) p = 1 - (1 - p) * (1 - Math.min(1, w * t.confidence));
+  }
+  return p;
+}
+function pairEvidenceTies(input) {
+  const now = input.now ?? /* @__PURE__ */ new Date();
+  const out = /* @__PURE__ */ new Map();
+  const ok = (a, b) => a !== b && input.people.has(a) && input.people.has(b);
+  const put = (t, a, b) => {
+    if (!ok(a, b)) return;
+    const [x, y] = pairKey(a, b);
+    const id = `${x}|${y}|${t.kind}`;
+    const cur = out.get(id);
+    if (cur && cur.weight * cur.confidence >= t.weight * t.confidence) return;
+    out.set(id, { ...t, id, userId: input.userId, aId: x, bId: y });
+  };
+  const byPair = /* @__PURE__ */ new Map();
+  for (const it of input.engagement ?? []) {
+    if (!ok(it.actorId, it.otherId)) continue;
+    const [x, y] = pairKey(it.actorId, it.otherId);
+    const k = `${x}|${y}`;
+    const arr = byPair.get(k) ?? [];
+    arr.push(it);
+    byPair.set(k, arr);
+  }
+  for (const [k, items] of byPair) {
+    const [x, y] = k.split("|");
+    const sc = engagementScore(items, {
+      followers: input.followers,
+      reactionVolume: input.reactionVolume,
+      now
+    });
+    if (sc.E <= 0) continue;
+    put(
+      {
+        kind: "linkedin_engagement",
+        // the pair as a whole: reciprocal engagement only; one-way acts count per direction (pKnowDirected)
+        weight: sc.w,
+        confidence: TIE_CONFIDENCE.linkedin_engagement,
+        evidence: {
+          source: "linkedin",
+          counts: sc.counts,
+          wBy: Object.fromEntries(Object.entries(sc.wBy).map(([id, w]) => [id, Math.round(w * 1e4) / 1e4])),
+          reciprocal: sc.reciprocal,
+          popularityKnown: sc.popularityKnown,
+          E: Math.round(sc.E * 1e3) / 1e3,
+          items: sc.dated,
+          firstAt: sc.firstAt,
+          lastAt: sc.newestAt,
+          text: sc.reciprocal ? "Comment on each other’s LinkedIn posts" : "Engage with each other on LinkedIn"
+        },
+        firstSeenAt: sc.firstAt,
+        lastSeenAt: sc.newestAt
+      },
+      x,
+      y
+    );
+  }
+  for (const r of input.recommendations ?? []) {
+    const at = r.year ? `${r.year}-07-01T00:00:00.000Z` : void 0;
+    put(
+      {
+        kind: "linkedin_recommendation",
+        weight: HOP_WEIGHTS.recommendation,
+        confidence: TIE_CONFIDENCE.linkedin_recommendation,
+        evidence: {
+          source: "linkedin",
+          authorId: r.authorId,
+          subjectId: r.subjectId,
+          ...r.year ? { year: r.year } : {},
+          ...r.caption ? { caption: r.caption.slice(0, 80) } : {},
+          text: "Recommended on LinkedIn"
+        },
+        firstSeenAt: at,
+        lastSeenAt: at
+      },
+      r.authorId,
+      r.subjectId
+    );
+  }
+  for (const m of input.mentions ?? []) {
+    const tagged = Math.max(1, m.tagged);
+    put(
+      {
+        kind: "linkedin_mention",
+        weight: HOP_WEIGHTS.mention / Math.max(1, tagged - 1),
+        confidence: TIE_CONFIDENCE.linkedin_mention,
+        evidence: {
+          source: "linkedin",
+          authorId: m.authorId,
+          mentionedId: m.mentionedId,
+          postId: m.postId,
+          tagged,
+          lastAt: m.at,
+          text: "Mentioned in a LinkedIn post"
+        },
+        firstSeenAt: m.at,
+        lastSeenAt: m.at
+      },
+      m.authorId,
+      m.mentionedId
+    );
+  }
+  for (const s of input.studentSays ?? [])
+    put(
+      {
+        kind: "student_says_close",
+        weight: HOP_WEIGHTS.studentSaysClose,
+        confidence: TIE_CONFIDENCE.student_says_close,
+        evidence: { source: "student", at: s.at, text: "You said they’re close" },
+        firstSeenAt: s.at,
+        lastSeenAt: s.at
+      },
+      s.aId,
+      s.bId
+    );
+  return [...out.values()];
+}
+function combineTies(ties, now = /* @__PURE__ */ new Date()) {
+  return mergeTies(/* @__PURE__ */ new Map(), ties, now);
+}
+function mergeTies(pairs, ties, now = /* @__PURE__ */ new Date()) {
+  const out = new Map(pairs);
+  for (const t of ties) {
+    const [a, b] = pairKey(t.aId, t.bId);
+    const k = `${a}|${b}`;
+    const prev = out.get(k);
+    if (prev?.ties.some((x) => x.id === t.id)) continue;
+    const cur = prev ? { ...prev, kinds: [...prev.kinds], ties: [...prev.ties] } : { aId: a, bId: b, weight: 0, confidence: 0, kinds: [], ties: [] };
+    const wc = Math.min(1, decayedTieWeight(t, now) * t.confidence);
+    cur.weight = 1 - (1 - cur.weight) * (1 - wc);
+    cur.confidence = 1 - (1 - cur.confidence) * (1 - t.confidence);
+    if (!cur.kinds.includes(t.kind)) cur.kinds.push(t.kind);
+    cur.ties.push(t);
+    cur.lastSeenAt = maxIso(cur.lastSeenAt, t.lastSeenAt);
+    out.set(k, cur);
+  }
+  return out;
+}
+function withCommonContacts(pairs, now = /* @__PURE__ */ new Date()) {
+  const adj = /* @__PURE__ */ new Map();
+  const link = (a, b, w) => {
+    let m = adj.get(a);
+    if (!m) adj.set(a, m = /* @__PURE__ */ new Map());
+    m.set(b, w);
+  };
+  for (const p of pairs.values()) {
+    const real = p.ties.filter((t) => ROUTABLE_TIE_KINDS.has(t.kind));
+    if (!real.length) continue;
+    const w = 1 - real.reduce((acc, t) => acc * (1 - Math.min(1, decayedTieWeight(t, now) * t.confidence)), 1);
+    link(p.aId, p.bId, w);
+    link(p.bId, p.aId, w);
+  }
+  const C = HOP_WEIGHTS.commonContacts;
+  const add2 = [];
+  for (const p of pairs.values()) {
+    if (p.kinds.includes("common_contacts") || !isRoutable(p)) continue;
+    const na = adj.get(p.aId);
+    const nb = adj.get(p.bId);
+    if (!na || !nb) continue;
+    const [small, big] = na.size <= nb.size ? [na, nb] : [nb, na];
+    const common = [];
+    for (const [c, wa] of small) {
+      if (c === p.aId || c === p.bId) continue;
+      const wb = big.get(c);
+      if (wb !== void 0) common.push({ id: c, w: Math.min(wa, wb) });
+    }
+    if (!common.length) continue;
+    const S = common.reduce((acc, c) => acc + c.w, 0);
+    common.sort((x, y) => y.w - x.w || x.id.localeCompare(y.id));
+    add2.push({
+      id: `${p.aId}|${p.bId}|common_contacts`,
+      userId: p.ties[0]?.userId ?? "",
+      aId: p.aId,
+      bId: p.bId,
+      kind: "common_contacts",
+      weight: C.scale * (1 - Math.exp(-S / C.saturation)),
+      confidence: TIE_CONFIDENCE.common_contacts,
+      evidence: {
+        n: common.length,
+        ids: common.slice(0, 5).map((c) => c.id),
+        S: Math.round(S * 1e3) / 1e3,
+        text: common.length === 1 ? "One contact in common" : `${common.length} contacts in common`
+      }
+    });
+  }
+  return add2.length ? mergeTies(pairs, add2, now) : pairs;
+}
+function pairFading(pair, now = /* @__PURE__ */ new Date()) {
+  let fading = false;
+  for (const t of pair.ties) {
+    if (!TIE_HALF_LIFE_YEARS[t.kind] && t.kind !== "linkedin_engagement") continue;
+    const ev = t.evidence;
+    const n = [ev.threads, ev.events, ev.messages, ev.items].find((x) => typeof x === "number");
+    const first = Date.parse(t.firstSeenAt ?? (typeof ev.firstAt === "string" ? ev.firstAt : ""));
+    const last = Date.parse(t.lastSeenAt ?? (typeof ev.lastAt === "string" ? ev.lastAt : ""));
+    if (!n || n < 3 || !Number.isFinite(first) || !Number.isFinite(last) || last <= first) continue;
+    const gap = (last - first) / (n - 1);
+    const quiet = now.getTime() - last;
+    if (quiet <= Math.max(90 * DAY8, HOP_WEIGHTS.fadingGaps * gap)) return false;
+    fading = true;
+  }
+  return fading;
+}
+function isRoutable(pair) {
+  if (pair.kinds.some((k) => ROUTABLE_TIE_KINDS.has(k))) return true;
+  if (!pair.kinds.some((k) => SUPPORT_ONLY_TIE_KINDS.has(k))) return pair.confidence >= 0.5;
+  if (!pair.ties) return false;
+  const c = pair.ties.filter((t) => !SUPPORT_ONLY_TIE_KINDS.has(t.kind)).reduce((acc, t) => acc * (1 - t.confidence), 1);
+  return 1 - c >= 0.5;
+}
+
+// supabase/functions/_shared/ingest/util.ts
+function iso3(v) {
+  if (v === null || v === void 0 || v === "") return null;
+  const d = v instanceof Date ? v : new Date(String(v));
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+function day(v) {
+  if (v === null || v === void 0 || v === "") return null;
+  if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
+  return iso3(v)?.slice(0, 10) ?? null;
+}
+async function loadAccount(db2, userId, provider) {
+  const [a] = await db2.sql`
+    select id, status, email, scopes, external_account_id, sync_state from orbit.integration_accounts
+     where user_id = ${userId}::uuid and provider = ${provider}`;
+  if (!a) return null;
+  return {
+    id: a.id,
+    status: a.status,
+    email: a.email,
+    scopes: a.scopes ?? [],
+    externalAccountId: a.external_account_id,
+    syncState: a.sync_state ?? {}
+  };
+}
+async function patchSyncState(db2, userId, provider, section, patch, extra = {}) {
+  await db2.sql`
+    update orbit.integration_accounts
+       set sync_state = coalesce(sync_state, '{}'::jsonb)
+             || jsonb_build_object(${section}::text,
+                  coalesce(sync_state -> ${section}::text, '{}'::jsonb) || ${patch}::jsonb),
+           last_synced_at = coalesce(${extra.lastSyncedAt ?? null}::timestamptz, last_synced_at),
+           last_error = case when ${extra.lastError !== void 0}::boolean then ${extra.lastError ?? null}::text
+                             else last_error end
+     where user_id = ${userId}::uuid and provider = ${provider}`;
+}
+async function loadSelf(db2, userId) {
+  const [u2] = await db2.sql`
+    select email, full_name, first_name, last_name, school, current_city, timezone, settings
+      from orbit.users where id = ${userId}::uuid`;
+  if (!u2) throw new Error("user not found");
+  let [self] = await db2.sql`
+    select id from orbit.people where user_id = ${userId}::uuid and is_self`;
+  if (!self) {
+    const name = u2.full_name ?? u2.email;
+    await db2.sql`
+      insert into orbit.people (user_id, is_self, display_name, first_name, last_name, name_norm, primary_email,
+                                sources, first_seen_at)
+      values (${userId}::uuid, true, ${name}, ${u2.first_name}, ${u2.last_name}, ${name.toLowerCase()},
+              ${u2.email}, ${["google"]}::text[], now())
+      on conflict (user_id) where is_self do nothing`;
+    [self] = await db2.sql`
+      select id from orbit.people where user_id = ${userId}::uuid and is_self`;
+  }
+  const ids = await db2.sql`
+    select kind, value_norm from orbit.person_identities
+     where user_id = ${userId}::uuid and person_id = ${self.id}::uuid`;
+  const emails = /* @__PURE__ */ new Set([normalizeEmail(u2.email)]);
+  const memberIds = /* @__PURE__ */ new Set();
+  for (const i of ids) {
+    if (i.kind === "email") emails.add(i.value_norm);
+    if (i.kind === "linkedin_member") memberIds.add(i.value_norm);
+  }
+  return {
+    userId,
+    selfId: self.id,
+    emails,
+    memberIds,
+    fullName: u2.full_name ?? "",
+    firstName: u2.first_name ?? (u2.full_name ?? "").split(" ")[0] ?? "",
+    school: u2.school,
+    currentCity: u2.current_city,
+    timezone: u2.timezone,
+    settings: u2.settings ?? {}
+  };
+}
+var PERSON_COLUMNS = `p.id, p.user_id, p.is_self, p.display_name, p.first_name, p.last_name, p.name_norm,
+  p.primary_email, p.headline, p.title, p.org_id, p.org_raw, p.location, p.timezone, p.school, p.is_alumni,
+  p.photo_url, p.linkedin_url, p.linkedin_slug, p.linkedin_member_id, p.relationship_type, p.sources,
+  p.first_seen_at, p.last_interaction_at, p.strength, p.summary, p.tags, p.notes, p.do_not_contact, p.hidden_at,
+  p.merged_into, p.created_at, p.updated_at, p.deleted_at`;
+function toPerson(row, identities = []) {
+  const r = {
+    ...row,
+    first_seen_at: iso3(row.first_seen_at),
+    last_interaction_at: iso3(row.last_interaction_at),
+    hidden_at: iso3(row.hidden_at),
+    created_at: iso3(row.created_at) ?? (/* @__PURE__ */ new Date(0)).toISOString(),
+    updated_at: iso3(row.updated_at) ?? (/* @__PURE__ */ new Date(0)).toISOString(),
+    deleted_at: iso3(row.deleted_at),
+    strength: Number(row.strength ?? 0),
+    sources: row.sources ?? [],
+    tags: row.tags ?? []
+  };
+  return personFromRow(r, {
+    identities: identities.map((i) => ({ kind: i.kind, value_norm: i.value_norm }))
+  });
+}
+function chunks2(xs, n) {
+  const out = [];
+  for (let i = 0; i < xs.length; i += n) out.push(xs.slice(i, i + n));
+  return out;
+}
+
+// supabase/functions/_shared/ingest/ties.ts
+var INTERACTION_KINDS = [
+  "email_exchange",
+  "email_cc",
+  "email_cothread",
+  "meeting_coattendee"
+];
+var AFFILIATION_KINDS = ["co_tenure", "same_school_cohort", "same_current_company", "same_city"];
+var INFERRED_KINDS = [...INTERACTION_KINDS, ...AFFILIATION_KINDS];
+var GROUP_MAX2 = 8;
+var SAME_CITY_MAX = 60;
+function sameCityTies(people) {
+  const byCity = /* @__PURE__ */ new Map();
+  for (const p of people) {
+    const city = (p.location ?? "").toLowerCase().split(",")[0].replace(/\s+/g, " ").trim();
+    if (!city || city.length < 2) continue;
+    const arr = byCity.get(city) ?? [];
+    arr.push(p.id);
+    byCity.set(city, arr);
+  }
+  const out = [];
+  for (const [city, ids] of byCity) {
+    if (ids.length > SAME_CITY_MAX) continue;
+    const sorted = [...ids].sort();
+    for (let i = 0; i < sorted.length; i++)
+      for (let j = i + 1; j < sorted.length; j++)
+        out.push({
+          a: sorted[i],
+          b: sorted[j],
+          kind: "same_city",
+          weight: 0.05,
+          confidence: 0.1,
+          evidence: { city, text: "Live in the same city" }
+        });
+  }
+  return out;
+}
+async function refreshTies(db2, userId, now, scope = {}) {
+  const scoped = !!scope.personIds;
+  const focus = scope.personIds ?? [];
+  if (scoped && !focus.length) return { upserted: 0, deleted: 0 };
+  const rows = await db2.query(
+    `select ${PERSON_COLUMNS} from orbit.people p
+      where p.user_id = $1::uuid and p.deleted_at is null and p.merged_into is null and not p.is_self`,
+    [userId]
+  );
+  const idRows = await db2.sql`
+    select pi.person_id, pi.kind, pi.value_norm from orbit.person_identities pi
+      join orbit.people p on p.id = pi.person_id
+     where pi.user_id = ${userId}::uuid and pi.kind = 'email' and not p.is_self`;
+  const idsBy = /* @__PURE__ */ new Map();
+  for (const r of idRows) {
+    const arr = idsBy.get(r.person_id) ?? [];
+    arr.push(r);
+    idsBy.set(r.person_id, arr);
+  }
+  const people = rows.map((r) => toPerson(r, idsBy.get(r.id)));
+  const threadRows = await db2.sql`
+    select id, participant_person_ids, last_at, first_at from orbit.threads
+     where user_id = ${userId}::uuid and cardinality(participant_person_ids) between 2 and ${GROUP_MAX2}::int
+       and (not ${scoped}::boolean or participant_person_ids && ${focus}::uuid[])`;
+  const threads = threadRows.map((t) => ({
+    id: t.id,
+    userId,
+    externalThreadId: t.id,
+    messageCount: 0,
+    participantEmails: [],
+    participantPersonIds: t.participant_person_ids,
+    isNetworking: false,
+    lastMessageAt: iso3(t.last_at) ?? void 0,
+    firstMessageAt: iso3(t.first_at) ?? void 0
+  }));
+  const threadIds = threads.map((t) => t.id);
+  const msgRows = threadIds.length ? await db2.sql`
+        select id, thread_id, direction, from_person_id, from_addr, to_addrs, cc_addrs, sent_at,
+               is_automated or list_unsubscribe as is_automated
+          from orbit.messages where user_id = ${userId}::uuid and thread_id = any(${threadIds}::uuid[])` : [];
+  const messages = msgRows.map((m) => ({
+    id: m.id,
+    userId,
+    threadId: m.thread_id,
+    externalMessageId: m.id,
+    direction: m.direction === "out" ? "outbound" : "inbound",
+    fromEmail: m.from_addr ?? "",
+    fromPersonId: m.from_person_id ?? void 0,
+    toEmails: m.to_addrs ?? [],
+    ccEmails: m.cc_addrs ?? [],
+    sentAt: iso3(m.sent_at),
+    bodyText: "",
+    headers: {},
+    isAutomated: m.is_automated
+  }));
+  const eventRows = await db2.sql`
+    select id, start_at, end_at, status, attendees, attendee_person_ids from orbit.calendar_events
+     where user_id = ${userId}::uuid and start_at <= ${now}::timestamptz
+       and cardinality(attendee_person_ids) >= 2 and attendee_count <= ${GROUP_MAX2}::int
+       and (not ${scoped}::boolean or attendee_person_ids && ${focus}::uuid[])`;
+  const events = eventRows.map((e) => ({
+    id: e.id,
+    userId,
+    externalEventId: e.id,
+    startAt: iso3(e.start_at),
+    endAt: iso3(e.end_at) ?? iso3(e.start_at),
+    status: e.status === "cancelled" ? "cancelled" : e.status === "tentative" ? "tentative" : "confirmed",
+    attendees: (e.attendees ?? []).map((a) => ({
+      email: a.email ?? "",
+      responseStatus: a.responseStatus,
+      self: a.self
+    })),
+    attendeePersonIds: e.attendee_person_ids
+  }));
+  const affiliations = scoped ? [] : (await db2.sql`
+          select a.* from orbit.affiliations a join orbit.people p on p.id = a.person_id
+           where a.user_id = ${userId}::uuid and p.merged_into is null and p.deleted_at is null and not p.is_self`).map(
+    (a) => affiliationFromRow({
+      ...a,
+      start_date: day(a.start_date),
+      end_date: day(a.end_date)
+    })
+  );
+  const organizations = /* @__PURE__ */ new Map();
+  if (!scoped)
+    for (const o of await db2.sql`
+      select id, name, name_norm, domains, size_bucket from orbit.organizations where user_id = ${userId}::uuid`)
+      organizations.set(o.id, {
+        id: o.id,
+        name: o.name,
+        nameNormalized: o.name_norm,
+        domains: o.domains,
+        sizeBucket: o.size_bucket ?? void 0
+      });
+  const inferred = inferTies({
+    userId,
+    people,
+    affiliations,
+    organizations,
+    threads,
+    events,
+    messages,
+    now
+  });
+  const keep = new Set(scoped ? INTERACTION_KINDS : INFERRED_KINDS);
+  const inFocus = (t) => !scoped || focus.includes(t.a) || focus.includes(t.b);
+  const out = inferred.filter((t) => keep.has(t.kind) && inFocus({ a: t.aId, b: t.bId })).map((t) => ({
+    a: t.aId,
+    b: t.bId,
+    kind: t.kind,
+    weight: decayedTieWeight(t, now),
+    confidence: t.confidence,
+    evidence: { ...t.evidence, source: "orbit" },
+    firstSeenAt: t.firstSeenAt,
+    lastSeenAt: t.lastSeenAt
+  }));
+  if (!scoped) out.push(...sameCityTies(people.filter((p) => !p.hiddenAt)));
+  for (const part of chunks2(out, 500)) await upsertTies(db2, userId, part, now);
+  const upserted = out.length;
+  const kinds = [...keep];
+  const live = out.map((t) => `${t.a}|${t.b}|${t.kind}`);
+  const gone = await db2.sql`
+    delete from orbit.ties t
+     where t.user_id = ${userId}::uuid and t.kind = any(${kinds}::text[])
+       and (not ${scoped}::boolean or t.a_person_id = any(${focus}::uuid[]) or t.b_person_id = any(${focus}::uuid[]))
+       and not (t.a_person_id::text || '|' || t.b_person_id::text || '|' || t.kind = any(${live}::text[]))
+    returning t.id`;
+  return { upserted, deleted: gone.length };
+}
+async function upsertTies(db2, userId, rows, now) {
+  const payload = rows.map((t) => {
+    const [a, b] = t.a < t.b ? [t.a, t.b] : [t.b, t.a];
+    return {
+      a,
+      b,
+      kind: t.kind,
+      w: Math.min(1, Math.max(0, t.weight)),
+      c: Math.min(1, Math.max(0, t.confidence)),
+      evidence: t.evidence,
+      first: t.firstSeenAt ?? null,
+      last: t.lastSeenAt ?? null
+    };
+  }).filter((r) => r.a !== r.b);
+  if (!payload.length) return;
+  await db2.sql`
+    insert into orbit.ties (user_id, a_person_id, b_person_id, kind, weight, confidence, evidence, first_seen_at,
+                            last_seen_at)
+    select ${userId}::uuid, (r ->> 'a')::uuid, (r ->> 'b')::uuid, r ->> 'kind', (r ->> 'w')::real, (r ->> 'c')::real,
+           r -> 'evidence', coalesce((r ->> 'first')::timestamptz, ${now}::timestamptz),
+           coalesce((r ->> 'last')::timestamptz, ${now}::timestamptz)
+      from jsonb_array_elements(${JSON.stringify(payload)}::jsonb) r
+    on conflict (user_id, a_person_id, b_person_id, kind) do update set
+      weight = excluded.weight, confidence = excluded.confidence, evidence = excluded.evidence,
+      first_seen_at = least(orbit.ties.first_seen_at, excluded.first_seen_at),
+      last_seen_at = excluded.last_seen_at
+    where orbit.ties.weight is distinct from excluded.weight
+       or orbit.ties.confidence is distinct from excluded.confidence
+       or orbit.ties.evidence is distinct from excluded.evidence
+       or orbit.ties.last_seen_at is distinct from excluded.last_seen_at`;
+}
+async function upsertTie(db2, userId, t, now) {
+  const [a, b] = t.a < t.b ? [t.a, t.b] : [t.b, t.a];
+  if (a === b) return;
+  const w = Math.min(1, Math.max(0, t.weight));
+  const c = Math.min(1, Math.max(0, t.confidence));
+  await db2.sql`
+    insert into orbit.ties (user_id, a_person_id, b_person_id, kind, weight, confidence, evidence, first_seen_at,
+                            last_seen_at)
+    values (${userId}::uuid, ${a}::uuid, ${b}::uuid, ${t.kind}, ${w}::real, ${c}::real, ${t.evidence}::jsonb,
+            coalesce(${t.firstSeenAt ?? null}::timestamptz, ${now}::timestamptz),
+            coalesce(${t.lastSeenAt ?? null}::timestamptz, ${now}::timestamptz))
+    on conflict (user_id, a_person_id, b_person_id, kind) do update set
+      weight = excluded.weight, confidence = excluded.confidence, evidence = excluded.evidence,
+      first_seen_at = least(orbit.ties.first_seen_at, excluded.first_seen_at),
+      last_seen_at = excluded.last_seen_at
+    where orbit.ties.weight is distinct from excluded.weight
+       or orbit.ties.confidence is distinct from excluded.confidence
+       or orbit.ties.evidence is distinct from excluded.evidence
+       or orbit.ties.last_seen_at is distinct from excluded.last_seen_at`;
+}
+async function upsertIntroTie(db2, userId, i, now) {
+  await upsertTie(
+    db2,
+    userId,
+    {
+      a: i.introducerId,
+      b: i.introducedId,
+      kind: "introduced_by",
+      weight: 0.85,
+      confidence: 0.95,
+      evidence: {
+        introducerId: i.introducerId,
+        threadIds: [i.threadId],
+        messageId: i.messageId,
+        at: i.at,
+        source: "gmail",
+        text: "Introduced you"
+      },
+      firstSeenAt: i.at,
+      lastSeenAt: i.at
+    },
+    now
+  );
+}
+
+// supabase/functions/_shared/ratelimit.ts
+function sqlTake(db2) {
+  return async (bs) => {
+    const [row] = await db2.sql`
+      select allowed, over_bucket from public.orbit_proxy_take(
+        ${bs.map((b) => b.key)}::text[], ${bs.map((b) => b.limit)}::int[], ${bs.map((b) => b.expires)}::timestamptz[])`;
+    if (!row) throw new Error("counter store returned nothing");
+    return { allowed: row.allowed, over: row.over_bucket ?? void 0 };
+  };
+}
+
+// supabase/functions/_shared/paths/hopEvidence.ts
+var HOP_CACHE_MS = 30 * 864e5;
+var HOP_READS_PER_DAY = 40;
+var HOP_TOP_MUTUALS = 5;
+var HOP_THREAD_POSTS = 3;
+var HOP_READ_OPERATION = "hop_read";
+function normId(v) {
+  if (!v) return void 0;
+  const keys = postKeys(v);
+  return keys[keys.length - 1];
+}
+var byDateDesc = (a, b) => (b.at ?? "").localeCompare(a.at ?? "");
+async function gatherHopEvidence(deps, input) {
+  const now = new Date(deps.clock());
+  const acct = input.unipileAccountId;
+  const T = input.target;
+  const mutuals = dedupeRefs(input.mutuals.filter((m) => m.personId !== T.personId));
+  const out = {
+    evidence: { userId: input.userId, people: /* @__PURE__ */ new Set(), now },
+    ties: [],
+    checked: [],
+    target: {},
+    reads: 0,
+    cached: 0,
+    errors: [],
+    complete: false,
+    steps: []
+  };
+  async function page2(op, id, network, fetcher) {
+    out.steps.push(`${op}:${id}`);
+    const key2 = await cacheKey("unipile", { op: `hop_${op}`, accountId: acct, id });
+    const hit = await deps.cache.get(input.userId, key2);
+    if (hit !== void 0) {
+      out.cached++;
+      return hit;
+    }
+    if (!network || out.stoppedBy) return void 0;
+    if (!await deps.budget.take(acct, input.userId, op === "profile" ? "profile" : "posts")) {
+      out.stoppedBy = "budget";
+      return void 0;
+    }
+    if (out.reads > 0) await deps.pace?.();
+    const r = await fetcher();
+    out.reads++;
+    if (!r.ok && r.kind === "unconfigured") {
+      out.errors.push(`${op}: ${r.message}`);
+      return void 0;
+    }
+    let value;
+    if (r.ok) value = r.value;
+    else if (r.kind === "http" && (r.status === 403 || r.status === 422)) {
+      value = { items: [], received: [], given: [], throttled: true, failed: true };
+    } else {
+      out.errors.push(`${op}: ${r.message}`);
+      return void 0;
+    }
+    await deps.cache.put(input.userId, {
+      key: key2,
+      provider: "unipile",
+      response: value,
+      expiresAt: new Date(deps.clock() + HOP_CACHE_MS)
+    });
+    return value;
+  }
+  const profile = await page2("profile", T.memberId, true, async () => {
+    const r = await deps.unipile.profile(acct, T.memberId, { sections: HOP_PROFILE_SECTIONS });
+    if (!r.ok) return r;
+    const s = profileSignals(r.value);
+    return {
+      ok: true,
+      value: {
+        ...s.followers !== void 0 ? { followers: s.followers } : {},
+        ...s.connections !== void 0 ? { connections: s.connections } : {},
+        received: s.received,
+        given: s.given,
+        throttled: s.recommendationsThrottled
+      }
+    };
+  });
+  const pages = (op, memberId, network, read) => page2(op, memberId, network, async () => {
+    const r = await read();
+    return r.ok ? { ok: true, value: { items: r.value.items } } : r;
+  });
+  const tPosts = await pages(
+    "posts",
+    T.memberId,
+    true,
+    () => deps.unipile.postsOf(acct, T.memberId)
+  );
+  const tReactions = await pages(
+    "reactions",
+    T.memberId,
+    true,
+    () => deps.unipile.reactionsOf(acct, T.memberId)
+  );
+  const tComments = await pages(
+    "comments",
+    T.memberId,
+    true,
+    () => deps.unipile.commentsOf(acct, T.memberId)
+  );
+  const mPages = /* @__PURE__ */ new Map();
+  for (const [i, m] of mutuals.entries()) {
+    const network = i < HOP_TOP_MUTUALS;
+    const reactions = await pages(
+      "reactions",
+      m.memberId,
+      network,
+      () => deps.unipile.reactionsOf(acct, m.memberId)
+    );
+    const comments = await pages(
+      "comments",
+      m.memberId,
+      network,
+      () => deps.unipile.commentsOf(acct, m.memberId)
+    );
+    mPages.set(m.personId, { reactions, comments });
+  }
+  const posts = tPosts?.items ?? [];
+  const postBy = /* @__PURE__ */ new Map();
+  for (const p of posts) for (const k of p.keys) postBy.set(k, p);
+  const postOf = (keys) => keys.map((k) => postBy.get(k)).find((p) => !!p);
+  const ownReplies = (tComments?.items ?? []).filter((c) => c.threadId && postOf(c.postKeys));
+  const repliedPosts = new Set(ownReplies.map((c) => postOf(c.postKeys).id));
+  const threadPosts = posts.filter((p) => !p.repostOf && p.comments !== 0).sort((a, b) => Number(repliedPosts.has(b.id)) - Number(repliedPosts.has(a.id)) || byDateDesc(a, b)).slice(0, HOP_THREAD_POSTS);
+  const threads = /* @__PURE__ */ new Map();
+  for (const p of threadPosts) {
+    const th = await pages("thread", p.id, true, () => deps.unipile.postComments(acct, p.id));
+    if (th) threads.set(p.id, th);
+  }
+  const personOf = /* @__PURE__ */ new Map([[T.memberId, T.personId]]);
+  for (const m of mutuals) if (!personOf.has(m.memberId)) personOf.set(m.memberId, m.personId);
+  const isMutual = (memberId) => !!memberId && memberId !== T.memberId && personOf.has(memberId);
+  const engagement = [];
+  const reactionVolume = /* @__PURE__ */ new Map();
+  if (tReactions && !tReactions.failed) reactionVolume.set(T.personId, tReactions.items.length);
+  for (const m of mutuals) {
+    const pg = mPages.get(m.personId);
+    if (pg.reactions && !pg.reactions.failed) reactionVolume.set(m.personId, pg.reactions.items.length);
+    for (const r of pg.reactions?.items ?? []) {
+      if (r.onComment || r.authorId !== T.memberId) continue;
+      const post = postOf(r.postKeys);
+      engagement.push({
+        actorId: m.personId,
+        otherId: T.personId,
+        kind: "reaction",
+        postAuthorId: T.personId,
+        postId: post?.id ?? r.postKeys[0],
+        ...post?.at ? { at: post.at } : {}
+      });
+    }
+    for (const c of pg.comments?.items ?? []) {
+      const post = postOf(c.postKeys);
+      if (!post) continue;
+      engagement.push({
+        actorId: m.personId,
+        otherId: T.personId,
+        kind: "comment",
+        postAuthorId: T.personId,
+        postId: post.id,
+        commentId: normId(c.id) ?? `${post.id}:${c.at ?? ""}`,
+        ...c.at ? { at: c.at } : {}
+      });
+    }
+  }
+  for (const r of tReactions?.items ?? []) {
+    if (r.onComment || !isMutual(r.authorId)) continue;
+    const other = personOf.get(r.authorId);
+    engagement.push({
+      actorId: T.personId,
+      otherId: other,
+      kind: "reaction",
+      postAuthorId: other,
+      postId: r.postKeys[0]
+    });
+  }
+  const threadAuthor = /* @__PURE__ */ new Map();
+  for (const [postId, th] of threads) {
+    const post = postBy.get(postId);
+    for (const c of th.items) {
+      const id = normId(c.id);
+      if (id && c.authorId) threadAuthor.set(id, c.authorId);
+      if (!isMutual(c.authorId)) continue;
+      engagement.push({
+        actorId: personOf.get(c.authorId),
+        otherId: T.personId,
+        kind: "comment",
+        postAuthorId: T.personId,
+        postId,
+        commentId: id ?? c.id,
+        ...c.at ?? post?.at ? { at: c.at ?? post?.at } : {}
+      });
+    }
+  }
+  for (const c of ownReplies) {
+    const author = threadAuthor.get(normId(c.threadId) ?? "");
+    if (!isMutual(author)) continue;
+    const post = postOf(c.postKeys);
+    engagement.push({
+      actorId: T.personId,
+      otherId: personOf.get(author),
+      kind: "reply",
+      postAuthorId: T.personId,
+      postId: post.id,
+      commentId: normId(c.id) ?? `${post.id}:${c.threadId}`,
+      ...c.at ? { at: c.at } : {}
+    });
+  }
+  const mentions = [];
+  for (const p of posts) {
+    if (isMutual(p.repostOf)) {
+      const other = personOf.get(p.repostOf);
+      engagement.push({
+        actorId: T.personId,
+        otherId: other,
+        kind: "repost",
+        postAuthorId: other,
+        postId: p.id,
+        ...p.at ? { at: p.at } : {}
+      });
+    }
+    if (p.repostOf) continue;
+    for (const mm of p.mentions) {
+      if (!isMutual(mm)) continue;
+      mentions.push({
+        authorId: T.personId,
+        mentionedId: personOf.get(mm),
+        postId: p.id,
+        ...p.at ? { at: p.at } : {},
+        tagged: p.mentions.length
+      });
+    }
+  }
+  const recommendations = [];
+  if (profile && !profile.failed) {
+    for (const r of profile.received)
+      if (isMutual(r.actorId))
+        recommendations.push({
+          authorId: personOf.get(r.actorId),
+          subjectId: T.personId,
+          year: r.year,
+          caption: r.caption
+        });
+    for (const r of profile.given)
+      if (isMutual(r.actorId))
+        recommendations.push({
+          authorId: T.personId,
+          subjectId: personOf.get(r.actorId),
+          year: r.year,
+          caption: r.caption
+        });
+  }
+  const followers = /* @__PURE__ */ new Map();
+  for (const [id, n] of Object.entries(input.followers ?? {}))
+    if (typeof n === "number" && Number.isFinite(n)) followers.set(id, n);
+  if (profile?.followers !== void 0) {
+    followers.set(T.personId, profile.followers);
+    out.target.followers = profile.followers;
+  }
+  if (profile?.connections !== void 0) out.target.connections = profile.connections;
+  out.evidence = {
+    userId: input.userId,
+    people: /* @__PURE__ */ new Set([T.personId, ...mutuals.map((m) => m.personId)]),
+    engagement,
+    followers,
+    reactionVolume,
+    recommendations,
+    mentions,
+    now
+  };
+  out.ties = pairEvidenceTies(out.evidence);
+  const seen = (p) => !!p && !p.failed;
+  const tSide = seen(tPosts) && seen(tReactions) && seen(tComments);
+  const recChecked = seen(profile) && !profile.throttled;
+  for (const m of mutuals) {
+    const pg = mPages.get(m.personId);
+    const kinds = [];
+    if (tSide && seen(pg.reactions) && seen(pg.comments)) kinds.push("linkedin_engagement");
+    if (seen(tPosts)) kinds.push("linkedin_mention");
+    if (recChecked) kinds.push("linkedin_recommendation");
+    if (!kinds.length) continue;
+    const [aId, bId] = m.personId < T.personId ? [m.personId, T.personId] : [T.personId, m.personId];
+    out.checked.push({ aId, bId, kinds });
+  }
+  out.complete = !out.stoppedBy && !!profile && !!tPosts && !!tReactions && !!tComments && mutuals.slice(0, HOP_TOP_MUTUALS).every((m) => {
+    const pg = mPages.get(m.personId);
+    return !!pg.reactions && !!pg.comments;
+  }) && threadPosts.every((p) => threads.has(p.id));
+  return out;
+}
+function dedupeRefs(refs) {
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  for (const r of refs) {
+    if (!r.personId || !r.memberId || seen.has(r.personId)) continue;
+    seen.add(r.personId);
+    out.push(r);
+  }
+  return out;
+}
+
+// supabase/functions/_shared/paths/hopJob.ts
+var HOP_JOB_MUTUALS = 25;
+var HOP_PACE_MS = [400, 1500];
+var dayStart = (d) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+var SHARED_LEDGER_PER_DAY = { profile: 100, posts: 100 };
+function sharedLedgerBucket(kind, accountId, now, limit) {
+  const day2 = now.toISOString().slice(0, 10);
+  const end = /* @__PURE__ */ new Date(`${day2}T00:00:00Z`);
+  end.setUTCDate(end.getUTCDate() + 1);
+  return { key: `connectors:li:${kind}:${day2}:${accountId}`, limit, expires: end.toISOString() };
+}
+function sqlHopBudget(db2, now, opts = {}) {
+  const limit = opts.limit ?? HOP_READS_PER_DAY;
+  const shared = opts.shared ?? SHARED_LEDGER_PER_DAY;
+  const take = sqlTake(db2);
+  return {
+    async take(accountId, userId, ledger) {
+      const t = now();
+      const [r] = await db2.sql`
+        select coalesce(sum(units), 0)::int as n from orbit.usage_ledger
+         where account_id = ${accountId} and provider = 'unipile' and operation = ${HOP_READ_OPERATION}
+           and created_at >= ${dayStart(t)}::timestamptz`;
+      if ((r?.n ?? 0) >= limit) return false;
+      const b = sharedLedgerBucket(ledger, accountId, t, shared[ledger]);
+      const [used] = await db2.sql`
+        select count from public.orbit_proxy_counters where bucket = ${b.key} and expires_at >= ${t}::timestamptz`;
+      if ((used?.count ?? 0) >= b.limit) return false;
+      if (!(await take([b])).allowed) return false;
+      await db2.sql`
+        insert into orbit.usage_ledger (user_id, provider, operation, units, cost_usd, account_id, created_at)
+        values (${userId}::uuid, 'unipile', ${HOP_READ_OPERATION}, 1, 0, ${accountId}, ${t}::timestamptz)`;
+      return true;
+    }
+  };
+}
+var doneKey = (accountId, memberId) => cacheKey("unipile", { op: "hop_done", accountId, memberId });
+async function linkedinAccountOf(db2, userId) {
+  const [a] = await db2.sql`
+    select external_account_id from orbit.integration_accounts
+     where user_id = ${userId}::uuid and provider = 'linkedin' and status = 'active'`;
+  return a?.external_account_id ?? void 0;
+}
+var tieRow = (t) => ({
+  a: t.aId,
+  b: t.bId,
+  kind: t.kind,
+  weight: t.weight,
+  confidence: t.confidence,
+  evidence: t.evidence,
+  firstSeenAt: t.firstSeenAt,
+  lastSeenAt: t.lastSeenAt
+});
+async function storeHopEvidence(db2, userId, r, now) {
+  const checked = new Map(r.checked.map((c) => [`${c.aId}|${c.bId}`, new Set(c.kinds)]));
+  const replace = [];
+  const add2 = [];
+  for (const t of r.ties) (checked.get(`${t.aId}|${t.bId}`)?.has(t.kind) ? replace : add2).push(t);
+  await upsertTies(db2, userId, replace.map(tieRow), now);
+  let added = 0;
+  for (const t of add2) {
+    const rows = await db2.sql`
+      insert into orbit.ties (user_id, a_person_id, b_person_id, kind, weight, confidence, evidence, first_seen_at,
+                              last_seen_at)
+      values (${userId}::uuid, ${t.aId}::uuid, ${t.bId}::uuid, ${t.kind}, ${t.weight}::real, ${t.confidence}::real,
+              ${t.evidence}::jsonb, coalesce(${t.firstSeenAt ?? null}::timestamptz, ${now}::timestamptz),
+              coalesce(${t.lastSeenAt ?? null}::timestamptz, ${now}::timestamptz))
+      on conflict (user_id, a_person_id, b_person_id, kind) do nothing
+      returning 1`;
+    added += rows.length;
+  }
+  let deleted = 0;
+  for (const c of r.checked) {
+    const keep = replace.filter((t) => t.aId === c.aId && t.bId === c.bId).map((t) => t.kind);
+    deleted += await deleteTies(db2, userId, c.aId, c.bId, c.kinds, keep);
+  }
+  return { upserted: replace.length, added, deleted };
+}
+async function deleteTies(db2, userId, aId, bId, kinds, keep = [], by = { actor: "system", reason: "hop_evidence" }) {
+  const [lo, hi] = aId < bId ? [aId, bId] : [bId, aId];
+  const gone = await db2.sql`
+    delete from orbit.ties
+     where user_id = ${userId}::uuid and a_person_id = ${lo}::uuid and b_person_id = ${hi}::uuid
+       and kind = any(${[...kinds]}::text[]) and not (kind = any(${[...keep]}::text[]))
+    returning id`;
+  for (const g of gone)
+    await db2.sql`
+      insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+      values (${userId}::uuid, ${by.actor}, 'sync.delete', 'ties', ${g.id}, ${{ reason: by.reason }}::jsonb)`;
+  return gone.length;
+}
+async function runHopEvidenceJob(s, userId, payload) {
+  const targetId = typeof payload.targetPersonId === "string" ? payload.targetPersonId : "";
+  const mutualIds = Array.isArray(payload.mutualPersonIds) ? payload.mutualPersonIds.filter((x) => typeof x === "string").slice(0, HOP_JOB_MUTUALS) : [];
+  if (!/^[0-9a-f-]{36}$/i.test(targetId)) return { status: "skipped", reason: "no target" };
+  if (!s.unipile.configured) return { status: "skipped", reason: "unconfigured" };
+  const accountId = await linkedinAccountOf(s.db, userId);
+  if (!accountId) return { status: "skipped", reason: "LinkedIn not connected" };
+  const ids = [targetId, ...mutualIds.filter((x) => /^[0-9a-f-]{36}$/i.test(x))];
+  const rows = await s.db.sql`
+    select id, linkedin_member_id, linkedin_follower_count from orbit.people
+     where user_id = ${userId}::uuid and id = any(${ids}::uuid[]) and deleted_at is null and merged_into is null
+       and not is_self`;
+  const byId = new Map(rows.map((r2) => [r2.id, r2]));
+  const t = byId.get(targetId);
+  if (!t?.linkedin_member_id) return { status: "skipped", reason: "the target's member id is unknown" };
+  const mutuals = [];
+  for (const id of mutualIds) {
+    const m = byId.get(id);
+    if (m?.linkedin_member_id && id !== targetId)
+      mutuals.push({ personId: id, memberId: m.linkedin_member_id });
+  }
+  if (!mutuals.length) return { status: "skipped", reason: "no mutual with a member id" };
+  const followers = {};
+  for (const r2 of rows)
+    if (typeof r2.linkedin_follower_count === "number") followers[r2.id] = r2.linkedin_follower_count;
+  const cache2 = sqlCache(s.db, s.now);
+  const [lo, hi] = HOP_PACE_MS;
+  const r = await gatherHopEvidence(
+    {
+      unipile: s.unipile,
+      cache: cache2,
+      budget: sqlHopBudget(s.db, s.now),
+      clock: () => s.now().getTime(),
+      pace: () => s.sleep(lo + Math.floor(s.random() * (hi - lo)))
+    },
+    {
+      userId,
+      unipileAccountId: accountId,
+      target: { personId: targetId, memberId: t.linkedin_member_id },
+      mutuals,
+      followers
+    }
+  );
+  const now = s.now();
+  const stored = await storeHopEvidence(s.db, userId, r, now);
+  if (r.target.followers !== void 0 || r.target.connections !== void 0)
+    await s.db.sql`
+      update orbit.people set
+        linkedin_follower_count = coalesce(${r.target.followers ?? null}::int, linkedin_follower_count),
+        linkedin_connections_count = coalesce(${r.target.connections ?? null}::int, linkedin_connections_count)
+       where id = ${targetId}::uuid and user_id = ${userId}::uuid`;
+  if (r.complete)
+    await cache2.put(userId, {
+      key: await doneKey(accountId, t.linkedin_member_id),
+      provider: "unipile",
+      response: { at: now.toISOString(), reads: r.reads },
+      expiresAt: new Date(now.getTime() + HOP_CACHE_MS)
+    });
+  return {
+    status: "ok",
+    reads: r.reads,
+    cached: r.cached,
+    ties: r.ties.length,
+    deleted: stored.deleted,
+    complete: r.complete,
+    ...r.stoppedBy ? { stoppedBy: r.stoppedBy } : {},
+    errors: r.errors
+  };
+}
+
+// supabase/functions/_shared/googleApi.ts
+var UNITS_PER_SECOND = 90;
+var MAX_IN_FLIGHT = 5;
+var MAX_RETRIES = 3;
+var GoogleApiError = class extends Error {
+  constructor(status, reason2) {
+    super(`google ${status} ${reason2}`);
+    this.status = status;
+    this.reason = reason2;
+    this.name = "GoogleApiError";
+  }
+};
+var realSleep = (ms2) => new Promise((r) => setTimeout(r, ms2));
+var QuotaPacer = class {
+  rate;
+  max;
+  clock;
+  sleep;
+  spent = [];
+  inFlight = 0;
+  waiting = [];
+  constructor(o = {}) {
+    this.rate = o.unitsPerSecond ?? UNITS_PER_SECOND;
+    this.max = o.maxInFlight ?? MAX_IN_FLIGHT;
+    this.clock = o.clock ?? Date.now;
+    this.sleep = o.sleep ?? realSleep;
+  }
+  async run(units, fn) {
+    await this.acquire();
+    try {
+      return await this.spend(units, fn);
+    } finally {
+      this.release();
+    }
+  }
+  acquire() {
+    if (this.inFlight < this.max) {
+      this.inFlight++;
+      return Promise.resolve();
+    }
+    return new Promise((r) => this.waiting.push(r));
+  }
+  release() {
+    const next = this.waiting.shift();
+    if (next) next();
+    else this.inFlight--;
+  }
+  /** Records the spend and starts the request in one synchronous step, so the recorded time is the start time. */
+  async spend(units, fn) {
+    const u2 = Math.min(Math.max(0, units), this.rate);
+    for (; ; ) {
+      const now = this.clock();
+      this.spent = this.spent.filter((e) => e.t > now - 1e3);
+      const used = this.spent.reduce((s, e) => s + e.u, 0);
+      if (used + u2 <= this.rate) {
+        this.spent.push({ t: now, u: u2 });
+        return fn();
+      }
+      let over = used + u2 - this.rate;
+      let wait = 1;
+      for (const e of this.spent) {
+        over -= e.u;
+        wait = e.t + 1e3 - now;
+        if (over <= 0) break;
+      }
+      await this.sleep(Math.max(1, wait));
+    }
+  }
+};
+async function reason(res) {
+  try {
+    const body = await res.json();
+    if (typeof body.error === "string") return body.error;
+    return body.error?.errors?.[0]?.reason ?? body.error?.status ?? "error";
+  } catch {
+    return "error";
+  }
+}
+var RATE_REASONS = /* @__PURE__ */ new Set(["rateLimitExceeded", "userRateLimitExceeded", "RESOURCE_EXHAUSTED"]);
+function googleClient(deps) {
+  const doFetch = deps.fetch ?? fetch;
+  const clock = deps.clock ?? Date.now;
+  const sleep = deps.sleep ?? realSleep;
+  const random = deps.random ?? Math.random;
+  const pacers = deps.pacers ?? /* @__PURE__ */ new Map();
+  const pacer = (userId) => {
+    let p = pacers.get(userId);
+    if (!p) {
+      p = new QuotaPacer({ clock, sleep });
+      pacers.set(userId, p);
+    }
+    return p;
+  };
+  return {
+    async request(userId, r) {
+      let refreshed = false;
+      let attempt = 0;
+      for (; ; ) {
+        const token = await deps.tokens.accessToken(userId);
+        const res = await pacer(userId).run(
+          r.units,
+          () => doFetch(r.url, {
+            method: r.method ?? (r.body === void 0 ? "GET" : "POST"),
+            headers: {
+              authorization: `Bearer ${token}`,
+              accept: "application/json",
+              ...r.body === void 0 ? {} : { "content-type": "application/json" }
+            },
+            body: r.body === void 0 ? void 0 : JSON.stringify(r.body)
+          })
+        );
+        if (res.status === 401) {
+          await res.body?.cancel();
+          if (!refreshed) {
+            deps.tokens.invalidate(userId);
+            refreshed = true;
+            continue;
+          }
+          if (deps.db)
+            await deps.db.sql`
+              update orbit.integration_accounts set status = 'needs_reauth', last_error = 'unauthorized'
+               where user_id = ${userId}::uuid and provider = 'google'`;
+          throw new NeedsReauth();
+        }
+        if (res.ok) return await res.json();
+        const why = res.status === 429 || res.status >= 500 ? "retry" : await reason(res);
+        const retryable = why === "retry" || res.status === 403 && RATE_REASONS.has(why);
+        if (retryable && attempt < MAX_RETRIES) {
+          const wait = retryAfterMs(res.headers.get("retry-after"), clock()) ?? backoffMs(attempt, random);
+          if (why === "retry") await res.body?.cancel();
+          attempt++;
+          await sleep(wait);
+          continue;
+        }
+        if (why === "retry") await res.body?.cancel();
+        throw new GoogleApiError(res.status, why === "retry" ? `http_${res.status}` : why);
+      }
+    }
+  };
+}
+function qs(params) {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v === void 0 || v === null) continue;
+    if (Array.isArray(v)) for (const x of v) q.append(k, x);
+    else q.set(k, String(v));
+  }
+  const s = q.toString();
+  return s ? `?${s}` : "";
+}
+
+// supabase/functions/orbit-worker/handlers/deps.ts
+var JobSkipped = class extends Error {
+  constructor(reason2) {
+    super(reason2);
+    this.reason = reason2;
+    this.name = "JobSkipped";
+  }
+};
+function googleFor(deps) {
+  const pacers = /* @__PURE__ */ new Map();
+  return (db2) => {
+    if (!deps.google) throw new JobSkipped("unconfigured");
+    return googleClient({
+      tokens: deps.google,
+      db: db2,
+      fetch: deps.fetch,
+      clock: deps.clock,
+      sleep: deps.sleep,
+      random: deps.random,
+      pacers
+    });
+  };
+}
+var LONG_VT_SEC = 300;
+
+// supabase/functions/orbit-worker/handlers/hops.ts
+function hopEvidenceHandler(config) {
+  return async (job, ctx) => {
+    if (!job.userId) throw new Error("hop_evidence needs a user");
+    const s = makeServices(config, { db: ctx.db, now: ctx.now, queue: ctx.queue });
+    const r = await runHopEvidenceJob(s, job.userId, job.payload);
+    if (r.status === "skipped") throw new JobSkipped(r.reason);
+  };
+}
+
 // supabase/functions/_shared/sending/mime.ts
 var ascii = (s) => /^[\x20-\x7e]*$/.test(s);
 function headerValue(s) {
@@ -8243,19 +10656,19 @@ async function afterSend(db2, userId, d, now) {
 async function capReached(db2, userId, d, now, tz) {
   const zone = validZone(tz) ?? "America/New_York";
   const key2 = new Intl.DateTimeFormat("en-CA", { timeZone: zone }).format(now);
-  const dayStart = zonedTime2(key2, 0, 0, zone);
+  const dayStart2 = zonedTime2(key2, 0, 0, zone);
   if (d.channel === "linkedin") {
     const [r] = await db2.sql`
       select count(*)::int as n from orbit.drafts
        where user_id = ${userId}::uuid and channel = 'linkedin' and status = 'sent'
-         and sent_at >= ${dayStart}::timestamptz`;
+         and sent_at >= ${dayStart2}::timestamptz`;
     return (r?.n ?? 0) >= CAPS2.linkedinMessagesPerDay ? "linkedin_daily_cap" : null;
   }
   if (await salesFirstTouch(db2, d)) {
     const [r] = await db2.sql`
       select count(*)::int as n from orbit.drafts dr join orbit.goals g on g.id = dr.goal_id
        where dr.user_id = ${userId}::uuid and dr.channel = 'gmail' and dr.status = 'sent' and g.kind = 'sales'
-         and dr.kind in ('first_touch', 'warm_first_touch', 'outreach') and dr.sent_at >= ${dayStart}::timestamptz`;
+         and dr.kind in ('first_touch', 'warm_first_touch', 'outreach') and dr.sent_at >= ${dayStart2}::timestamptz`;
     return (r?.n ?? 0) >= CAPS2.gmailSalesFirstTouchesPerDay ? "gmail_sales_daily_cap" : null;
   }
   return null;
@@ -8373,17 +10786,9 @@ var GOAL_KINDS = [
   "collaboration"
 ];
 
-// packages/core/src/scoring/strength.ts
-var ENGAGEMENT = /* @__PURE__ */ new Set([
-  "linkedin_comment_in",
-  "linkedin_comment_out",
-  "linkedin_reaction_in"
-]);
-var AMBIENT = /* @__PURE__ */ new Set(["email_cc", "linkedin_connected", ...ENGAGEMENT]);
-
 // packages/core/src/scoring/tieScore.ts
 var TIE_MODEL_VERSION = "tie-v1";
-var DAY7 = 864e5;
+var DAY9 = 864e5;
 var YEAR_DAYS = 365;
 var TIE_FEATURES = [
   "log_days_last",
@@ -8481,7 +10886,7 @@ function computeTieFeatures(h, now = /* @__PURE__ */ new Date()) {
   const t = now.getTime();
   const when3 = (iso4) => {
     const x = ms(iso4);
-    if (x === void 0 || x > t + DAY7) return void 0;
+    if (x === void 0 || x > t + DAY9) return void 0;
     return Math.min(x, t);
   };
   const messages = h.messages.filter((m) => !m.automated && m.threadParticipants <= 8).map((m) => ({ ...m, t: when3(m.at) })).filter((m) => m.t !== void 0);
@@ -8512,9 +10917,9 @@ function computeTieFeatures(h, now = /* @__PURE__ */ new Date()) {
   if (connectedAt !== void 0) seen(connectedAt);
   const never = messages.length === 0 && meetings.length === 0;
   const lastRef = lastTwoWay ?? lastAny;
-  const daysLast = lastRef === void 0 ? void 0 : (t - lastRef) / DAY7;
-  const daysFirst = firstAny === void 0 ? void 0 : (t - firstAny) / DAY7;
-  const decay = (x) => 0.5 ** ((t - x) / DAY7 / YEAR_DAYS);
+  const daysLast = lastRef === void 0 ? void 0 : (t - lastRef) / DAY9;
+  const daysFirst = firstAny === void 0 ? void 0 : (t - firstAny) / DAY9;
+  const decay = (x) => 0.5 ** ((t - x) / DAY9 / YEAR_DAYS);
   let outD = 0;
   let inD = 0;
   let outCount = 0;
@@ -8537,7 +10942,7 @@ function computeTieFeatures(h, now = /* @__PURE__ */ new Date()) {
   let meetingSum = 0;
   let meetingCount = 0;
   for (const m of meetings) {
-    if (t - m.t > 2 * YEAR_DAYS * DAY7) continue;
+    if (t - m.t > 2 * YEAR_DAYS * DAY9) continue;
     meetingSum += meetingWeight(m.attendees);
     meetingCount++;
   }
@@ -8653,7 +11058,7 @@ function scoreTie(history, now = /* @__PURE__ */ new Date(), weights = TIE_WEIGH
   };
 }
 function anyMeeting(h, now) {
-  const t = now.getTime() + DAY7;
+  const t = now.getTime() + DAY9;
   return h.meetings.some((m) => m.attendees <= 8 && (ms(m.at) ?? Number.POSITIVE_INFINITY) <= t);
 }
 var plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
@@ -8765,7 +11170,7 @@ function fitCalibration(labels) {
   }
   return { a, c };
 }
-var yearOf2 = (iso4) => iso4 ? Number(iso4.slice(0, 4)) || void 0 : void 0;
+var yearOf3 = (iso4) => iso4 ? Number(iso4.slice(0, 4)) || void 0 : void 0;
 function sharedContext(input) {
   const { person, user } = input;
   const school = user?.school ? normalizeCompany(user.school) : "";
@@ -8788,8 +11193,8 @@ function sharedContext(input) {
       const ae = a.isCurrent ? Number.POSITIVE_INFINITY : ms(a.endDate) ?? Number.POSITIVE_INFINITY;
       if (Math.max(us, as) > Math.min(ue, ae)) continue;
       employer = a.nameRaw;
-      const from = Math.max(yearOf2(u2.startDate) ?? 0, yearOf2(a.startDate) ?? 0) || void 0;
-      const to = Math.min(yearOf2(u2.endDate) ?? 9999, a.isCurrent ? 9999 : yearOf2(a.endDate) ?? 9999);
+      const from = Math.max(yearOf3(u2.startDate) ?? 0, yearOf3(a.startDate) ?? 0) || void 0;
+      const to = Math.min(yearOf3(u2.endDate) ?? 9999, a.isCurrent ? 9999 : yearOf3(a.endDate) ?? 9999);
       overlapYears = from ? to === 9999 ? `since ${from}` : to === from ? `${from}` : `${from}–${to}` : void 0;
       break;
     }
@@ -8976,791 +11381,10 @@ function kShortestPaths(g, source, target, k = 3, maxHops = 3) {
   return A;
 }
 
-// packages/core/src/graph/orgSize.ts
-var KNOWN_SIZES = {};
-var add = (bucket, names) => {
-  for (const n of names) KNOWN_SIZES[normalizeCompany(n)] = bucket;
-};
-add("10001+", [
-  "Google",
-  "Alphabet",
-  "Meta",
-  "Facebook",
-  "Amazon",
-  "Amazon Web Services",
-  "AWS",
-  "Microsoft",
-  "Apple",
-  "Netflix",
-  "Oracle",
-  "Salesforce",
-  "Adobe",
-  "IBM",
-  "Intel",
-  "NVIDIA",
-  "Cisco",
-  "Uber",
-  "Tesla",
-  "SpaceX",
-  "Qualcomm",
-  "Intuit",
-  "PayPal",
-  "ServiceNow",
-  "Workday",
-  "VMware",
-  "Dell",
-  "HP",
-  "Accenture",
-  "Deloitte",
-  "PwC",
-  "PricewaterhouseCoopers",
-  "EY",
-  "Ernst & Young",
-  "KPMG",
-  "McKinsey & Company",
-  "McKinsey",
-  "Boston Consulting Group",
-  "BCG",
-  "Bain & Company",
-  "Bain",
-  "Booz Allen Hamilton",
-  "Capgemini",
-  "Goldman Sachs",
-  "JPMorgan Chase",
-  "JP Morgan",
-  "J.P. Morgan",
-  "Morgan Stanley",
-  "Bank of America",
-  "Citi",
-  "Citigroup",
-  "Wells Fargo",
-  "Barclays",
-  "UBS",
-  "Deutsche Bank",
-  "HSBC",
-  "BlackRock",
-  "Fidelity Investments",
-  "Vanguard",
-  "Capital One",
-  "American Express",
-  "Visa",
-  "Mastercard",
-  "Charles Schwab",
-  "State Street",
-  "Procter & Gamble",
-  "PepsiCo",
-  "Coca-Cola",
-  "Johnson & Johnson",
-  "Pfizer",
-  "Walmart",
-  "Target",
-  "Nike",
-  "Disney",
-  "The Walt Disney Company",
-  "Comcast",
-  "Verizon",
-  "AT&T",
-  "Boeing",
-  "Lockheed Martin",
-  "General Electric",
-  "GE",
-  "General Motors",
-  "Ford",
-  "ByteDance",
-  "TikTok",
-  "Samsung",
-  "Bloomberg",
-  "LinkedIn",
-  "Shopify",
-  "Booking.com"
-]);
-add("5001-10000", [
-  "Stripe",
-  "Airbnb",
-  "Snap",
-  "Snapchat",
-  "Spotify",
-  "Block",
-  "Square",
-  "DoorDash",
-  "Lyft",
-  "Datadog",
-  "Atlassian",
-  "Palantir",
-  "Coinbase",
-  "Robinhood",
-  "Pinterest",
-  "Dropbox",
-  "Instacart",
-  "Lazard",
-  "Evercore",
-  "Jane Street",
-  "Citadel",
-  "Two Sigma",
-  "Oliver Wyman",
-  "LEK Consulting",
-  "Kearney"
-]);
-add("1001-5000", [
-  "Figma",
-  "Anthropic",
-  "OpenAI",
-  "Ramp",
-  "Brex",
-  "Databricks",
-  "Snowflake",
-  "Plaid",
-  "Notion",
-  "Duolingo",
-  "Reddit",
-  "Discord",
-  "Scale AI",
-  "Asana",
-  "Airtable",
-  "Hudson River Trading",
-  "DE Shaw",
-  "D. E. Shaw",
-  "Point72",
-  "Centerview Partners",
-  "PJT Partners",
-  "Moelis",
-  "Moelis & Company",
-  "Perella Weinberg",
-  "Guggenheim Partners",
-  "Blackstone",
-  "KKR",
-  "Apollo",
-  "Carlyle"
-]);
-add("501-1000", ["Vercel", "Retool", "Rippling", "Mercury", "Jump Trading", "Optiver", "Five Rings"]);
-add("201-500", ["Linear", "Sequoia Capital", "Andreessen Horowitz", "a16z", "Benchmark", "Accel"]);
-function knownSizeBucket(name) {
-  const n = normalizeCompany(name);
-  return n ? KNOWN_SIZES[n] : void 0;
-}
-function sizeFactor(sizeBucket, name, networkCount = 0) {
-  const b = sizeBucket ?? knownSizeBucket(name);
-  if (b) {
-    if (["1-10", "2-10", "11-50", "51-200"].includes(b)) return 1;
-    if (["201-500", "501-1000", "1001-5000"].includes(b)) return 0.7;
-    return 0.4;
-  }
-  if (networkCount >= 30) return 0.4;
-  if (networkCount >= 12) return 0.6;
-  return 0.5;
-}
-
-// packages/core/src/graph/edges.ts
-var DAY8 = 864e5;
-var FULL_PAIRING_MAX = 150;
-var CONNECTORS_PER_LARGE_GROUP = 20;
-function time(d) {
-  if (!d) return void 0;
-  const t = new Date(d).getTime();
-  return Number.isNaN(t) ? void 0 : t;
-}
-function utcYear(t) {
-  return new Date(t).getUTCFullYear();
-}
-function monthsOverlap(a, b, now) {
-  const aStart = time(a.startDate) ?? Number.NEGATIVE_INFINITY;
-  const bStart = time(b.startDate) ?? Number.NEGATIVE_INFINITY;
-  const aEnd = a.isCurrent || !a.endDate ? now.getTime() : time(a.endDate) ?? Number.NaN;
-  const bEnd = b.isCurrent || !b.endDate ? now.getTime() : time(b.endDate) ?? Number.NaN;
-  const start = Math.max(aStart, bStart);
-  const end = Math.min(aEnd, bEnd);
-  if (!Number.isFinite(start)) return a.isCurrent && b.isCurrent ? 12 : 0;
-  if (Number.isNaN(end)) return 0;
-  return Math.max(0, (end - start) / (30 * DAY8));
-}
-function provablyDisjoint(a, b) {
-  const aStart = time(a.startDate);
-  const bStart = time(b.startDate);
-  const aEnd = a.isCurrent ? void 0 : time(a.endDate);
-  const bEnd = b.isCurrent ? void 0 : time(b.endDate);
-  if (aEnd !== void 0 && bStart !== void 0 && aEnd < bStart) return true;
-  if (bEnd !== void 0 && aStart !== void 0 && bEnd < aStart) return true;
-  if (a.startDate && aStart === void 0 || b.startDate && bStart === void 0) return true;
-  return false;
-}
-function yearRange(a) {
-  const st = time(a.startDate);
-  const et = time(a.endDate);
-  const s = st === void 0 ? void 0 : utcYear(st);
-  const e = et === void 0 ? void 0 : utcYear(et);
-  if (s === void 0 && e === void 0) return void 0;
-  return [s ?? e - 4, e ?? s + 4];
-}
-function inferEdges(input) {
-  const now = input.now ?? /* @__PURE__ */ new Date();
-  const people = input.people.filter((p) => p.isHuman && !p.hiddenAt);
-  const peopleIds = new Set(people.map((p) => p.id));
-  const strengthOf = new Map(people.map((p) => [p.id, p.strength ?? 0]));
-  const byPerson = /* @__PURE__ */ new Map();
-  for (const a of input.affiliations) {
-    if (!peopleIds.has(a.personId)) continue;
-    const arr = byPerson.get(a.personId) ?? [];
-    arr.push(a);
-    byPerson.set(a.personId, arr);
-  }
-  for (const p of people) {
-    const arr = byPerson.get(p.id) ?? [];
-    if (p.currentOrganizationRaw && !arr.some((a) => a.kind === "employment" && a.isCurrent)) {
-      arr.push({
-        id: `virt-${p.id}`,
-        userId: input.userId,
-        personId: p.id,
-        kind: "employment",
-        organizationId: p.currentOrganizationId,
-        nameRaw: p.currentOrganizationRaw,
-        title: p.currentTitle,
-        isCurrent: true,
-        source: "manual"
-      });
-    }
-    if (p.school && !arr.some((a) => a.kind === "education")) {
-      arr.push({
-        id: `virts-${p.id}`,
-        userId: input.userId,
-        personId: p.id,
-        kind: "education",
-        nameRaw: p.school,
-        isCurrent: false,
-        source: "manual"
-      });
-    }
-    byPerson.set(p.id, arr);
-  }
-  const edges = /* @__PURE__ */ new Map();
-  const put = (a, b, type, weight, evidence) => {
-    if (a === b) return;
-    const [x, y] = a < b ? [a, b] : [b, a];
-    const key2 = `${x}|${y}|${type}`;
-    const existing = edges.get(key2);
-    if (existing && existing.weight >= weight) return;
-    edges.set(key2, {
-      id: key2,
-      userId: input.userId,
-      personAId: x,
-      personBId: y,
-      type,
-      weight: Math.min(1, weight),
-      evidence
-    });
-  };
-  const groups = /* @__PURE__ */ new Map();
-  for (const [pid, affs] of byPerson) {
-    for (const a of affs) {
-      const org = a.organizationId ? input.organizations.get(a.organizationId) : void 0;
-      const norm2 = org?.nameNormalized || normalizeCompany(a.nameRaw);
-      if (!norm2) continue;
-      const key2 = `${a.kind}:${norm2}`;
-      const arr = groups.get(key2) ?? [];
-      arr.push({ personId: pid, aff: a });
-      groups.set(key2, arr);
-    }
-  }
-  for (const [key2, members] of groups) {
-    if (members.length < 2) continue;
-    const isEmployment = key2.startsWith("employment:");
-    const pairs = groupPairs(members, strengthOf);
-    const orgRef = members.find((m) => m.aff.organizationId)?.aff.organizationId;
-    const org = orgRef ? input.organizations.get(orgRef) : void 0;
-    const distinct = new Set(members.map((m) => m.personId)).size;
-    for (const [A, B] of pairs) {
-      if (A.personId === B.personId) continue;
-      if (isEmployment) {
-        const orgName = org?.name ?? A.aff.nameRaw;
-        const sf = sizeFactor(org?.sizeBucket, orgName, distinct);
-        const bothCurrent = A.aff.isCurrent && B.aff.isCurrent;
-        const current = [A, B].filter((m) => m.aff.isCurrent).map((m) => m.personId);
-        const spanKnown = (a) => !!a.startDate && (a.isCurrent || !!a.endDate);
-        if (bothCurrent && !(spanKnown(A.aff) && spanKnown(B.aff))) {
-          put(A.personId, B.personId, "same_current_company", 0.35 * sf, {
-            orgName,
-            current,
-            text: `Both currently at ${orgName}`
-          });
-        } else if (!spanKnown(A.aff) || !spanKnown(B.aff)) {
-          if (provablyDisjoint(A.aff, B.aff)) continue;
-          put(A.personId, B.personId, "co_tenure", 0.15 * sf, {
-            orgName,
-            datesUnknown: true,
-            current,
-            text: current.length ? `Both have worked at ${orgName}` : `Both previously at ${orgName}`
-          });
-        } else {
-          const overlap = monthsOverlap(A.aff, B.aff, now);
-          if (overlap <= 0) continue;
-          const starts = [time(A.aff.startDate), time(B.aff.startDate)].filter((t) => t !== void 0);
-          const ends = [A.aff, B.aff].map((a) => a.isCurrent || !a.endDate ? void 0 : time(a.endDate));
-          const fromYear = starts.length ? utcYear(Math.max(...starts)) : void 0;
-          const ongoing = bothCurrent;
-          const endKnown = ends.filter((t) => t !== void 0);
-          const toYear = ongoing ? void 0 : endKnown.length ? utcYear(Math.min(...endKnown)) : void 0;
-          put(A.personId, B.personId, "co_tenure", Math.min(1, 0.25 + 0.05 * overlap) * sf, {
-            orgName,
-            overlapMonths: Math.round(overlap),
-            fromYear,
-            toYear,
-            ongoing,
-            current,
-            text: `Worked together at ${orgName}${yearSpan(fromYear, toYear, ongoing)}`
-          });
-        }
-      } else {
-        const ra = yearRange(A.aff);
-        const rb = yearRange(B.aff);
-        const school = A.aff.nameRaw;
-        if (ra && rb) {
-          const overlap = Math.min(ra[1], rb[1]) - Math.max(ra[0], rb[0]);
-          if (overlap >= 0)
-            put(A.personId, B.personId, "same_school_cohort", 0.3, {
-              school,
-              year: Math.max(ra[0], rb[0]),
-              text: `Both at ${school} around ${Math.max(ra[0], rb[0])}`
-            });
-          else if (Math.abs(ra[1] - rb[1]) <= 2)
-            put(A.personId, B.personId, "same_school_cohort", 0.15, {
-              school,
-              withinTwoYears: true,
-              text: `Both went to ${school}, graduating within two years of each other`
-            });
-        } else {
-          put(A.personId, B.personId, "same_school_cohort", 0.12, {
-            school,
-            text: `Both went to ${school}`
-          });
-        }
-      }
-    }
-  }
-  const threadCount = /* @__PURE__ */ new Map();
-  for (const t of input.threads) {
-    const ids = [...new Set(t.participantPersonIds.filter((id) => peopleIds.has(id)))];
-    if (ids.length < 2 || ids.length > 8) continue;
-    for (let i = 0; i < ids.length; i++)
-      for (let j = i + 1; j < ids.length; j++) {
-        const [x, y] = ids[i] < ids[j] ? [ids[i], ids[j]] : [ids[j], ids[i]];
-        const cur = threadCount.get(`${x}|${y}`) ?? { n: 0 };
-        cur.n++;
-        if (t.lastMessageAt && (!cur.last || t.lastMessageAt > cur.last)) cur.last = t.lastMessageAt;
-        threadCount.set(`${x}|${y}`, cur);
-      }
-  }
-  for (const [k, { n, last }] of threadCount) {
-    const [x, y] = k.split("|");
-    put(x, y, "email_cothread", Math.min(0.8, 0.5 + 0.1 * (n - 1)), {
-      threads: n,
-      lastAt: last,
-      text: n === 1 ? "On the same email thread with you" : `On ${n} email threads with you`
-    });
-  }
-  const byId = new Map(people.map((p) => [p.id, p]));
-  for (const t of input.threads) {
-    const intro2 = t.introduction;
-    if (!intro2) continue;
-    const from = byId.get(intro2.introducerId);
-    if (!from) continue;
-    for (const id of intro2.introducedIds) {
-      const to = byId.get(id);
-      if (!to) continue;
-      put(from.id, to.id, "introduced_by", 0.85, {
-        introducerId: from.id,
-        at: intro2.at,
-        text: `${from.firstName} introduced you to ${to.firstName}`
-      });
-    }
-  }
-  const eventCount = /* @__PURE__ */ new Map();
-  for (const e of input.events) {
-    const ids = [...new Set(e.attendeePersonIds.filter((id) => peopleIds.has(id)))];
-    if (ids.length < 2 || ids.length > 8) continue;
-    for (let i = 0; i < ids.length; i++)
-      for (let j = i + 1; j < ids.length; j++) {
-        const [x, y] = ids[i] < ids[j] ? [ids[i], ids[j]] : [ids[j], ids[i]];
-        const cur = eventCount.get(`${x}|${y}`) ?? { n: 0 };
-        cur.n++;
-        if (e.startAt && (!cur.last || e.startAt > cur.last)) cur.last = e.startAt;
-        eventCount.set(`${x}|${y}`, cur);
-      }
-  }
-  for (const [k, { n, last }] of eventCount) {
-    const [x, y] = k.split("|");
-    put(x, y, "meeting_coattendee", Math.min(0.9, 0.6 + 0.1 * (n - 1)), {
-      events: n,
-      lastAt: last,
-      text: n === 1 ? "In a meeting with you together" : `In ${n} meetings with you together`
-    });
-  }
-  return [...edges.values()];
-}
-function yearSpan(from, to, ongoing) {
-  if (from === void 0) return "";
-  if (ongoing) return ` since ${from}`;
-  if (to === void 0 || to === from) return ` in ${from}`;
-  return ` from ${from} to ${to}`;
-}
-function groupPairs(members, strengthOf) {
-  const out = [];
-  if (members.length <= FULL_PAIRING_MAX) {
-    for (let i = 0; i < members.length; i++)
-      for (let j = i + 1; j < members.length; j++) out.push([members[i], members[j]]);
-    return out;
-  }
-  const ranked = [...members].sort(
-    (a, b) => (strengthOf.get(b.personId) ?? 0) - (strengthOf.get(a.personId) ?? 0) || (a.personId < b.personId ? -1 : 1)
-  );
-  const connectors = /* @__PURE__ */ new Set();
-  const seenPeople = /* @__PURE__ */ new Set();
-  for (const m of ranked) {
-    if (connectors.size >= CONNECTORS_PER_LARGE_GROUP) break;
-    if (seenPeople.has(m.personId)) continue;
-    seenPeople.add(m.personId);
-    connectors.add(m);
-  }
-  const list = [...connectors];
-  for (let i = 0; i < list.length; i++)
-    for (let j = i + 1; j < list.length; j++) out.push([list[i], list[j]]);
-  for (const m of members) {
-    if (connectors.has(m)) continue;
-    for (const c of list) out.push([c, m]);
-  }
-  return out;
-}
-
-// packages/core/src/graph/ties.ts
-var TIE_KINDS = [
-  "email_exchange",
-  "email_cc",
-  "email_cothread",
-  "meeting_coattendee",
-  "introduced_by",
-  "linkedin_mutual",
-  "village_path",
-  "co_tenure",
-  "same_school_cohort",
-  "same_current_company"
-];
-var INTERACTION_TIE_KINDS = /* @__PURE__ */ new Set([
-  "email_exchange",
-  "email_cc",
-  "email_cothread",
-  "meeting_coattendee",
-  "introduced_by"
-]);
-var ROUTABLE_TIE_KINDS = /* @__PURE__ */ new Set([
-  "email_exchange",
-  "email_cc",
-  "meeting_coattendee",
-  "introduced_by",
-  "linkedin_mutual"
-]);
-var TIE_CONFIDENCE = {
-  email_exchange: 0.95,
-  email_cc: 0.85,
-  email_cothread: 0.5,
-  meeting_coattendee: 0.8,
-  introduced_by: 0.95,
-  linkedin_mutual: 0.95,
-  village_path: 0.7,
-  // the affiliation kinds depend on the overlap and the employer's size; these are their typical values, used for
-  // edges stored before confidences existed
-  co_tenure: 0.5,
-  same_school_cohort: 0.25,
-  same_current_company: 0.35
-};
-var YEAR = 365.25 * 864e5;
-var GROUP_MAX = 8;
-var BIG_ORG = /* @__PURE__ */ new Set(["5001-10000", "10001+"]);
-var pairKey = (a, b) => a < b ? [a, b] : [b, a];
-function maxIso(a, b) {
-  if (!a) return b;
-  if (!b) return a;
-  return a > b ? a : b;
-}
-function minIso(a, b) {
-  if (!a) return b;
-  if (!b) return a;
-  return a < b ? a : b;
-}
-function inferTies(input) {
-  const now = input.now ?? /* @__PURE__ */ new Date();
-  const people = input.people.filter((p) => p.isHuman && !p.hiddenAt);
-  const ids = new Set(people.map((p) => p.id));
-  const byEmail = /* @__PURE__ */ new Map();
-  for (const p of people)
-    for (const e of [p.primaryEmail, ...p.emails]) if (e) byEmail.set(normalizeEmail(e), p.id);
-  const ties = /* @__PURE__ */ new Map();
-  const put = (a, b, kind, weight, confidence, evidence, firstSeenAt, lastSeenAt) => {
-    if (a === b || !ids.has(a) || !ids.has(b)) return;
-    const [x, y] = pairKey(a, b);
-    const id = `${x}|${y}|${kind}`;
-    const cur = ties.get(id);
-    if (cur && cur.weight * cur.confidence >= weight * confidence) return;
-    ties.set(id, {
-      id,
-      userId: input.userId,
-      aId: x,
-      bId: y,
-      kind,
-      weight: Math.min(1, Math.max(0, weight)),
-      confidence: Math.min(1, Math.max(0, confidence)),
-      evidence,
-      firstSeenAt,
-      lastSeenAt
-    });
-  };
-  const orgByName = /* @__PURE__ */ new Map();
-  for (const o of input.organizations.values())
-    orgByName.set(o.nameNormalized || normalizeCompany(o.name), o.sizeBucket);
-  const big = (orgName) => {
-    const name = typeof orgName === "string" ? orgName : "";
-    const bucket = orgByName.get(normalizeCompany(name)) ?? knownSizeBucket(name);
-    return !!bucket && BIG_ORG.has(bucket);
-  };
-  for (const e of inferEdges({ ...input, threads: [], events: [] })) {
-    const ev = e.evidence;
-    if (e.type === "co_tenure") {
-      const months = typeof ev.overlapMonths === "number" ? ev.overlapMonths : 0;
-      let c = Math.min(0.8, 0.3 + 0.05 * months);
-      if (big(ev.orgName)) c *= 0.5;
-      if (typeof ev.toYear === "number" && ev.toYear < now.getUTCFullYear() - 10) c *= 0.6;
-      put(e.personAId, e.personBId, "co_tenure", e.weight, c, ev);
-    } else if (e.type === "same_school_cohort") {
-      const c = typeof ev.year === "number" ? 0.4 : ev.withinTwoYears ? 0.25 : 0.1;
-      put(e.personAId, e.personBId, "same_school_cohort", e.weight, c, ev);
-    } else if (e.type === "same_current_company") {
-      put(e.personAId, e.personBId, "same_current_company", e.weight, big(ev.orgName) ? 0.175 : 0.35, ev);
-    }
-  }
-  const msgsByThread = /* @__PURE__ */ new Map();
-  for (const m of input.messages ?? []) {
-    if (m.isAutomated) continue;
-    const arr = msgsByThread.get(m.threadId) ?? [];
-    arr.push(m);
-    msgsByThread.set(m.threadId, arr);
-  }
-  const bump = (map, a, b, at, thread) => {
-    if (a === b || !ids.has(a) || !ids.has(b)) return;
-    const [x, y] = pairKey(a, b);
-    const k = `${x}|${y}`;
-    const c = map.get(k) ?? { n: 0, threads: /* @__PURE__ */ new Set() };
-    if (thread) {
-      if (c.threads.has(thread)) {
-        c.last = maxIso(c.last, at);
-        return;
-      }
-      c.threads.add(thread);
-    }
-    c.n++;
-    c.first = minIso(c.first, at);
-    c.last = maxIso(c.last, at);
-    map.set(k, c);
-  };
-  const exchange = /* @__PURE__ */ new Map();
-  const cc = /* @__PURE__ */ new Map();
-  const cothread = /* @__PURE__ */ new Map();
-  for (const t of input.threads) {
-    const parts = [...new Set(t.participantPersonIds.filter((id) => ids.has(id)))];
-    if (parts.length > GROUP_MAX) continue;
-    const msgs = msgsByThread.get(t.id);
-    if (!msgs?.length) {
-      for (let i = 0; i < parts.length; i++)
-        for (let j = i + 1; j < parts.length; j++)
-          bump(cothread, parts[i], parts[j], t.lastMessageAt, t.id);
-      continue;
-    }
-    const senders = /* @__PURE__ */ new Set();
-    for (const m of msgs) {
-      if (m.direction !== "inbound") continue;
-      const from = m.fromPersonId ?? byEmail.get(normalizeEmail(m.fromEmail));
-      if (!from || !ids.has(from)) continue;
-      senders.add(from);
-      const recipients = [...m.toEmails, ...m.ccEmails];
-      if (recipients.length > GROUP_MAX) continue;
-      for (const r of recipients) {
-        const to = byEmail.get(normalizeEmail(r));
-        if (to) bump(cc, from, to, m.sentAt);
-      }
-    }
-    const lastAt = msgs.reduce((a, m) => maxIso(a, m.sentAt), t.lastMessageAt);
-    const s = [...senders];
-    for (let i = 0; i < s.length; i++)
-      for (let j = i + 1; j < s.length; j++) bump(exchange, s[i], s[j], lastAt, t.id);
-    const receivers = parts.filter((p) => !senders.has(p));
-    for (let i = 0; i < receivers.length; i++)
-      for (let j = i + 1; j < receivers.length; j++)
-        bump(cothread, receivers[i], receivers[j], lastAt, t.id);
-  }
-  for (const [k, c] of exchange) {
-    const [x, y] = k.split("|");
-    put(
-      x,
-      y,
-      "email_exchange",
-      Math.min(0.9, 0.6 + 0.1 * (c.n - 1)),
-      TIE_CONFIDENCE.email_exchange,
-      {
-        threads: c.n,
-        lastAt: c.last,
-        text: c.n === 1 ? "Both wrote on an email thread with you" : `Both wrote on ${c.n} email threads with you`
-      },
-      c.first,
-      c.last
-    );
-  }
-  for (const [k, c] of cc) {
-    const [x, y] = k.split("|");
-    put(
-      x,
-      y,
-      "email_cc",
-      Math.min(0.7, 0.45 + 0.05 * (c.n - 1)),
-      TIE_CONFIDENCE.email_cc,
-      {
-        messages: c.n,
-        lastAt: c.last,
-        text: c.n === 1 ? "Copied on an email to you" : `Copied on ${c.n} emails to you`
-      },
-      c.first,
-      c.last
-    );
-  }
-  for (const [k, c] of cothread) {
-    const [x, y] = k.split("|");
-    put(
-      x,
-      y,
-      "email_cothread",
-      Math.min(0.5, 0.3 + 0.1 * (c.n - 1)),
-      TIE_CONFIDENCE.email_cothread,
-      {
-        threads: c.n,
-        lastAt: c.last,
-        text: c.n === 1 ? "On the same email thread with you" : `On ${c.n} email threads with you`
-      },
-      c.first,
-      c.last
-    );
-  }
-  const byId = new Map(people.map((p) => [p.id, p]));
-  for (const t of input.threads) {
-    const intro2 = t.introduction;
-    if (!intro2) continue;
-    const from = byId.get(intro2.introducerId);
-    if (!from) continue;
-    for (const id of intro2.introducedIds) {
-      const to = byId.get(id);
-      if (!to) continue;
-      put(
-        from.id,
-        to.id,
-        "introduced_by",
-        0.85,
-        TIE_CONFIDENCE.introduced_by,
-        {
-          introducerId: from.id,
-          at: intro2.at,
-          lastAt: intro2.at,
-          text: `${from.firstName} introduced you to ${to.firstName}`
-        },
-        intro2.at,
-        intro2.at
-      );
-    }
-  }
-  const meetings = /* @__PURE__ */ new Map();
-  for (const e of input.events) {
-    if (e.status === "cancelled") continue;
-    const size = e.attendees.length || e.attendeePersonIds.length;
-    if (size > GROUP_MAX) continue;
-    const declined = new Set(
-      e.attendees.filter((a) => a.responseStatus === "declined").map((a) => byEmail.get(normalizeEmail(a.email))).filter((x) => !!x)
-    );
-    const att = [...new Set(e.attendeePersonIds.filter((id) => ids.has(id) && !declined.has(id)))];
-    for (let i = 0; i < att.length; i++)
-      for (let j = i + 1; j < att.length; j++) bump(meetings, att[i], att[j], e.startAt, e.id);
-  }
-  for (const [k, c] of meetings) {
-    const [x, y] = k.split("|");
-    put(
-      x,
-      y,
-      "meeting_coattendee",
-      Math.min(0.9, 0.6 + 0.1 * (c.n - 1)),
-      TIE_CONFIDENCE.meeting_coattendee,
-      {
-        events: c.n,
-        lastAt: c.last,
-        text: c.n === 1 ? "In a meeting with you together" : `In ${c.n} meetings with you together`
-      },
-      c.first,
-      c.last
-    );
-  }
-  for (const m of input.mutuals ?? [])
-    put(
-      m.aId,
-      m.bId,
-      "linkedin_mutual",
-      0.3,
-      TIE_CONFIDENCE.linkedin_mutual,
-      {
-        source: "unipile",
-        text: "Connected on LinkedIn"
-      },
-      m.seenAt,
-      m.seenAt
-    );
-  for (const v of input.villagePaths ?? [])
-    put(
-      v.introducerId,
-      v.targetId,
-      "village_path",
-      Math.min(1, Math.max(0, v.warmth)),
-      TIE_CONFIDENCE.village_path,
-      {
-        source: "village",
-        introducerId: v.introducerId,
-        warmth: v.warmth,
-        text: "Know each other (via Village)"
-      },
-      v.seenAt,
-      v.seenAt
-    );
-  return [...ties.values()];
-}
-function decayedTieWeight(t, now = /* @__PURE__ */ new Date()) {
-  if (!INTERACTION_TIE_KINDS.has(t.kind) || !t.lastSeenAt) return t.weight;
-  const at = new Date(t.lastSeenAt).getTime();
-  if (Number.isNaN(at)) return t.weight;
-  const years = Math.max(0, now.getTime() - at) / YEAR;
-  return t.weight * 0.5 ** (years / 2);
-}
-function combineTies(ties, now = /* @__PURE__ */ new Date()) {
-  const out = /* @__PURE__ */ new Map();
-  for (const t of ties) {
-    const k = `${t.aId}|${t.bId}`;
-    const cur = out.get(k) ?? { aId: t.aId, bId: t.bId, weight: 0, confidence: 0, kinds: [], ties: [] };
-    const wc = Math.min(1, decayedTieWeight(t, now) * t.confidence);
-    cur.weight = 1 - (1 - cur.weight) * (1 - wc);
-    cur.confidence = 1 - (1 - cur.confidence) * (1 - t.confidence);
-    if (!cur.kinds.includes(t.kind)) cur.kinds.push(t.kind);
-    cur.ties.push(t);
-    cur.lastSeenAt = maxIso(cur.lastSeenAt, t.lastSeenAt);
-    out.set(k, cur);
-  }
-  return out;
-}
-function isRoutable(pair) {
-  return pair.confidence >= 0.5 || pair.kinds.some((k) => ROUTABLE_TIE_KINDS.has(k));
-}
-
 // packages/core/src/graph/route.ts
 var USER_NODE = "user";
 var sigmoid2 = (x) => 1 / (1 + Math.exp(-x));
-var DAY9 = 864e5;
+var DAY10 = 864e5;
 function pAsk(f) {
   return sigmoid2(
     -2 + 4 * Math.max(0, Math.min(100, f.score)) / 100 + 0.8 * Math.max(0, Math.min(1, f.reciprocity ?? 0)) + (f.introducedUserBefore ? 0.6 : 0) + (f.sharesGoalTargetOrg ? 0.3 : 0) - (f.askedRecently ? 0.7 : 0) - (f.owesReply ? 0.5 : 0)
@@ -9769,13 +11393,10 @@ function pAsk(f) {
 function pKnow(pair) {
   return Math.max(0, Math.min(1, pair.weight));
 }
-var C_LEVEL = /\b(ceo|cfo|coo|cto|cmo|cpo|cio|ciso|chief|president|partner|managing director|founder|co-founder|cofounder)\b/i;
-var SENIOR = /\b(director|vp|vice president|head of|principal|general manager|svp|evp)\b/i;
-var JUNIOR_OR_MANAGER = /\b(intern|analyst|associate|engineer|developer|designer|scientist|researcher|manager|coordinator|specialist|consultant|representative|recruiter|assistant|lead|student|fellow)\b/i;
 function targetReceptivity(t) {
-  const title = t.title ?? "";
-  const cLevel = C_LEVEL.test(title);
-  const atMostManager = !cLevel && !SENIOR.test(title) && JUNIOR_OR_MANAGER.test(title);
+  const level = seniorityClass(t.title);
+  const cLevel = level === 2;
+  const atMostManager = level === 0;
   const r = 1 + (t.isAlum ? 0.15 : 0) + (atMostManager ? 0.1 : 0) - (cLevel ? 0.15 : 0);
   return Math.max(0.7, Math.min(1.3, r));
 }
@@ -9790,12 +11411,25 @@ var OLD_EVIDENCE_FACTOR = 0.7;
 var DIRECT_TIE_SCORE = 40;
 var MIN_PATH_P = 0.05;
 var MUTUAL_MIN_SCORE = 12;
+function hopBand(p) {
+  if (p >= 0.65) return "close";
+  if (p >= 0.5) return "know";
+  if (p >= 0.2) return "connected";
+  return "unclear";
+}
 function pathBand(p) {
   if (p >= 0.35) return "high";
   if (p >= 0.15) return "medium";
   return "low";
 }
 var pk = (a, b) => a < b ? `${a}|${b}` : `${b}|${a}`;
+var pairKeyOf = pk;
+function dropBlocked(pairs, blocked) {
+  if (!blocked?.size) return pairs;
+  const out = new Map(pairs);
+  for (const k of blocked) out.delete(k);
+  return out;
+}
 function withExternal(pairs, targetId, candidates) {
   if (!candidates.length) return pairs;
   const out = new Map(pairs);
@@ -9803,7 +11437,7 @@ function withExternal(pairs, targetId, candidates) {
     if (c.introducerId === targetId) continue;
     const key2 = pk(c.introducerId, targetId);
     const [a, b] = key2.split("|");
-    const w = c.kind === "linkedin_mutual" ? 0.3 : Math.max(0, Math.min(1, c.warmth ?? 0));
+    const w = c.kind === "linkedin_mutual" ? HOP_WEIGHTS.mutual : Math.max(0, Math.min(1, c.warmth ?? 0));
     const conf = c.kind === "linkedin_mutual" ? 0.95 : 0.7;
     const tie = {
       id: `${key2}|${c.kind}`,
@@ -9834,17 +11468,20 @@ function usable(p, now) {
   if (!p || p.hidden) return false;
   if (p.declinedIntroAt) {
     const t = new Date(p.declinedIntroAt).getTime();
-    if (!Number.isNaN(t) && now.getTime() - t < 90 * DAY9) return false;
+    if (!Number.isNaN(t) && now.getTime() - t < 90 * DAY10) return false;
   }
   return true;
 }
+var strength = (t, now) => decayedTieWeight(t, now) * t.confidence;
 function strongestTie(pair, now) {
-  return [...pair.ties].sort(
-    (x, y) => decayedTieWeight(y, now) * y.confidence - decayedTieWeight(x, now) * x.confidence
-  )[0];
+  const sorted = [...pair.ties].sort((x, y) => strength(y, now) - strength(x, now));
+  return sorted.find((t) => !SUPPORT_ONLY_TIE_KINDS.has(t.kind)) ?? sorted[0];
+}
+function strongestSupport(pair, now) {
+  return [...pair.ties].filter((t) => SUPPORT_ONLY_TIE_KINDS.has(t.kind)).sort((x, y) => strength(y, now) - strength(x, now))[0];
 }
 function pairIsOld(pair, now) {
-  const cutoff = now.getTime() - OLD_EVIDENCE_YEARS * 365.25 * DAY9;
+  const cutoff = now.getTime() - OLD_EVIDENCE_YEARS * 365.25 * DAY10;
   let newest = pair.lastSeenAt ? new Date(pair.lastSeenAt).getTime() : Number.NaN;
   for (const t of pair.ties) {
     const ev = t.evidence;
@@ -9893,9 +11530,49 @@ function hopEvidence(fromId, tie, toName) {
       return `went to ${typeof ev.school === "string" ? ev.school : "school"} with ${toName}`;
     case "same_current_company":
       return `works with ${toName}${org ? ` at ${org}` : ""}`;
+    case "linkedin_recommendation":
+      return ev.authorId === fromId ? `recommended ${toName} on LinkedIn` : `was recommended on LinkedIn by ${toName}`;
+    case "linkedin_mention":
+      return ev.authorId === fromId ? `mentioned ${toName} in a LinkedIn post` : `was mentioned by ${toName} in a LinkedIn post`;
+    case "student_says_close":
+      return `is close to ${toName} (you said)`;
+    case "common_contacts": {
+      const n = typeof ev.n === "number" ? ev.n : 0;
+      return n === 1 ? `has a contact in common with ${toName}` : `has ${n} contacts in common with ${toName}`;
+    }
+    case "linkedin_engagement":
+      return engagementPhrase(fromId, ev, toName);
     default:
       return `knows ${toName}`;
   }
+}
+var times = (n, one, many) => n === 1 ? one : many.replace("{n}", String(n));
+function engagementPhrase(fromId, ev, toName) {
+  const counts = ev.counts ?? {};
+  const mine = counts[fromId] ?? {};
+  const theirs = Object.entries(counts).find(([id]) => id !== fromId)?.[1] ?? {};
+  if (ev.reciprocal) return `trades comments with ${toName} on LinkedIn`;
+  if (theirs.replies)
+    return `has had ${times(theirs.replies, "a reply", "{n} replies")} from ${toName} on LinkedIn`;
+  if (mine.comments)
+    return `has left ${times(mine.comments, "a comment", "{n} comments")} on ${toName}’s posts`;
+  if (mine.replies) return `has replied to ${toName}’s ${times(mine.replies, "comment", "comments")}`;
+  if (theirs.comments)
+    return `has had ${times(theirs.comments, "a comment", "{n} comments")} from ${toName} on their posts`;
+  if (mine.reposts) return `has reposted ${toName}`;
+  if (theirs.reposts) return `has been reposted by ${toName}`;
+  if (mine.reactions) return `has reacted to ${times(mine.reactions, "a post", "{n} posts")} by ${toName}`;
+  if (theirs.reactions)
+    return `has had ${times(theirs.reactions, "a reaction", "{n} reactions")} from ${toName} on LinkedIn`;
+  return `follows ${toName}’s posts on LinkedIn`;
+}
+function pairPhrase(fromId, pair, toName, now = /* @__PURE__ */ new Date()) {
+  if (!pair) return `knows ${toName}`;
+  const top = strongestTie(pair, now);
+  const head = hopEvidence(fromId, top, toName);
+  const support = strongestSupport(pair, now);
+  if (!support || support === top) return head;
+  return `${head}, and ${hopEvidence(fromId, support, toName)}`;
 }
 function mutualIntroducers(pairs, targetId, candidates) {
   const out = /* @__PURE__ */ new Set();
@@ -9934,7 +11611,13 @@ function routingGraph(input, pairs, now, mutuals = /* @__PURE__ */ new Set()) {
     const ends = [pair.aId, pair.bId];
     if (ends.some((id) => id !== input.targetId && !usable(input.people.get(id), now))) continue;
     const top = strongestTie(pair, now)?.kind ?? pair.kinds[0];
-    addEdge(g, pair.aId, pair.bId, Math.min(0.999, know * HOP_PENALTY), top, "");
+    const ab = pKnowDirected(pair, pair.aId, pair.bId);
+    const ba = pKnowDirected(pair, pair.bId, pair.aId);
+    if (ab === ba) addEdge(g, pair.aId, pair.bId, Math.min(0.999, ab * HOP_PENALTY), top, "");
+    else {
+      addEdge(g, pair.aId, pair.bId, Math.min(0.999, ab * HOP_PENALTY), top, "", true);
+      addEdge(g, pair.bId, pair.aId, Math.min(0.999, ba * HOP_PENALTY), top, "", true);
+    }
   }
   return { g, ask, scores, lifted };
 }
@@ -9949,8 +11632,15 @@ function rankWarmPaths(input) {
       direct: { score: target.score, band, text: `You know ${tName} (${band} · ${target.score})` }
     };
   }
-  const pairs = withExternal(input.pairs, input.targetId, input.candidates ?? []);
-  const mutuals = mutualIntroducers(pairs, input.targetId, input.candidates ?? []);
+  const blocked = input.blockedPairs;
+  const candidates = (input.candidates ?? []).filter(
+    (c) => !blocked?.has(pk(c.introducerId, input.targetId))
+  );
+  const pairs = withCommonContacts(
+    dropBlocked(withExternal(dropBlocked(input.pairs, blocked), input.targetId, candidates), blocked),
+    now
+  );
+  const mutuals = mutualIntroducers(pairs, input.targetId, candidates);
   const rg = routingGraph(input, pairs, now, mutuals);
   const { g, ask } = rg;
   const rT = targetReceptivity(input.target ?? {});
@@ -9969,12 +11659,19 @@ function rankWarmPaths(input) {
         hops.push({ fromId: from, toId: to, p: a, kind: "strength" });
         p *= a;
         const last = input.people.get(to)?.lastContactAt;
-        if (last && now.getTime() - new Date(last).getTime() > OLD_EVIDENCE_YEARS * 365.25 * DAY9) old = true;
+        if (last && now.getTime() - new Date(last).getTime() > OLD_EVIDENCE_YEARS * 365.25 * DAY10) old = true;
         continue;
       }
       const pair = pairs.get(pk(from, to));
-      const know = pKnow(pair);
-      hops.push({ fromId: from, toId: to, p: know, kind: strongestTie(pair, now)?.kind ?? pair.kinds[0] });
+      const know = pKnowDirected(pair, from, to);
+      hops.push({
+        fromId: from,
+        toId: to,
+        p: know,
+        kind: strongestTie(pair, now)?.kind ?? pair.kinds[0],
+        band: hopBand(know),
+        ...pairFading(pair, now) ? { fading: true } : {}
+      });
       p *= know;
       if (pairIsOld(pair, now)) old = true;
     }
@@ -10025,9 +11722,13 @@ function rankWarmPaths(input) {
     for (const m of mids) middle.set(m, (middle.get(m) ?? 0) + 1);
     chosen.push(f);
   }
+  const nameOf2 = (id) => id === input.targetId ? tName : input.people.get(id)?.name ?? "someone";
   return {
     paths: chosen.map((f) => ({
       ...f,
+      hops: f.hops.map(
+        (h, i) => i === 0 ? h : { ...h, phrase: pairPhrase(h.fromId, pairs.get(pk(h.fromId, h.toId)), nameOf2(h.toId), now) }
+      ),
       otherWays,
       reasonText: reasonText(f, input, pairs, tName, otherWays, now, rg.scores)
     }))
@@ -10045,7 +11746,7 @@ function reasonText(f, input, pairs, tName, otherWays, now, scores = /* @__PURE_
   const last = f.nodes.length === 3 ? pairs.get(pk(f.nodes[1], f.nodes[2])) : void 0;
   if (last?.kinds.includes("linkedin_mutual")) {
     const top = strongestTie(last, now);
-    const how = hopEvidence(a.id, top, tName);
+    const how = pairPhrase(a.id, last, tName, now);
     const also = top && top.kind !== "linkedin_mutual" ? " (and is connected to them on LinkedIn)" : "";
     const closeness = TIE_BAND_LABELS[tieBand(aScore)].toLowerCase();
     const weak = f.weak ? " A weaker route, but a real connection." : "";
@@ -10056,19 +11757,30 @@ function reasonText(f, input, pairs, tName, otherWays, now, scores = /* @__PURE_
   for (let i = 1; i < f.nodes.length - 1; i++) {
     const from = f.nodes[i];
     const to = f.nodes[i + 1];
-    const pair = pairs.get(pk(from, to));
-    phrases.push(hopEvidence(from, pair ? strongestTie(pair, now) : void 0, nameOf2(to)));
+    phrases.push(pairPhrase(from, pairs.get(pk(from, to)), nameOf2(to), now));
   }
   const head = `${a.name} (${TIE_BAND_LABELS[tieBand(aScore)]} · ${aScore}) ${phrases[0]}`;
   const rest = phrases.slice(1).map((p) => `, who ${p}`).join("");
-  return `${head}${rest}.${others}`;
+  return `${head}${rest}.${weakLink(f, input, pairs, nameOf2)}${others}`;
+}
+function weakLink(f, input, pairs, nameOf2) {
+  const later = f.hops.slice(1);
+  if (later.length < 2) return "";
+  const weakest = [...later].sort((x, y) => x.p - y.p)[0];
+  const band = hopBand(weakest.p);
+  if (band !== "connected" && band !== "unclear") return "";
+  if (later.every((h) => hopBand(h.p) === band)) return "";
+  const from = input.people.get(weakest.fromId)?.name ?? nameOf2(weakest.fromId);
+  const pair = pairs.get(pk(weakest.fromId, weakest.toId));
+  const top = pair ? strongestTie(pair, input.now ?? /* @__PURE__ */ new Date()) : void 0;
+  return ` The weak link: ${from} ${hopEvidence(weakest.fromId, top, nameOf2(weakest.toId))}.`;
 }
 
 // supabase/functions/_shared/paths/externalCandidates.ts
 var EXTERNAL_CACHE_MS = 30 * 864e5;
 
 // supabase/functions/_shared/paths/find.ts
-var DAY10 = 864e5;
+var DAY11 = 864e5;
 var TIE_KIND_SET = new Set(TIE_KINDS);
 async function loadGraph(db2, userId, now) {
   const rows = await db2.sql`
@@ -10091,7 +11803,7 @@ async function loadGraph(db2, userId, now) {
     select distinct m.from_person_id as person_id from orbit.threads t
       join orbit.messages m on m.thread_id = t.id and m.sent_at = t.last_at
      where t.user_id = ${userId}::uuid and t.last_direction = 'in' and t.is_networking
-       and m.from_person_id is not null and t.last_at > ${new Date(now.getTime() - 30 * DAY10)}::timestamptz`;
+       and m.from_person_id is not null and t.last_at > ${new Date(now.getTime() - 30 * DAY11)}::timestamptz`;
   const owesSet = new Set(owes.map((o) => o.person_id));
   let selfId = null;
   const people = /* @__PURE__ */ new Map();
@@ -10110,7 +11822,7 @@ async function loadGraph(db2, userId, now) {
       score: r.score ?? 0,
       reciprocity: num(r.features?.reciprocity),
       sharesGoalTargetOrg: !!org && targetOrgs.has(org.toLowerCase().trim()),
-      askedRecently: mine.some((i) => now.getTime() - new Date(i.asked_at).getTime() < 30 * DAY10),
+      askedRecently: mine.some((i) => now.getTime() - new Date(i.asked_at).getTime() < 30 * DAY11),
       introducedUserBefore: mine.some((i) => i.status === "intro_made" || i.status === "meeting"),
       owesReply: owesSet.has(r.id),
       lastContactAt: iso(r.last_interaction_at) ?? void 0,
@@ -10143,7 +11855,10 @@ async function loadGraph(db2, userId, now) {
       lastSeenAt: iso(t.last_seen_at) ?? void 0
     });
   }
-  return { selfId, people, pairs: combineTies(ties, now) };
+  const blockedRows = await db2.sql`
+    select a_person_id, b_person_id from orbit.blocked_pairs where user_id = ${userId}::uuid`;
+  const blocked = new Set(blockedRows.map((b) => pairKeyOf(b.a_person_id, b.b_person_id)));
+  return { selfId, people, pairs: combineTies(ties, now), blocked };
 }
 async function resolvePersonRef(db2, userId, p) {
   const url = cleanLinkedInUrl(p.linkedinUrl);
@@ -10176,6 +11891,7 @@ function bestReach(g, personId, goal, now) {
     goal,
     people: g.people,
     pairs: g.pairs,
+    blockedPairs: g.blocked,
     now,
     limit: 1
   });
@@ -10785,7 +12501,7 @@ async function rank(ctx, cands, batchId) {
 
 // supabase/functions/_shared/sourcing/run.ts
 var strs = (v) => Array.isArray(v) ? v.filter((x) => typeof x === "string" && !!x.trim()).map((x) => x.trim()) : [];
-var str = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
+var str2 = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
 function sourcingGoal(req, goal) {
   const f = req.filters ?? {};
   const t = goal?.targets ?? {};
@@ -10794,12 +12510,12 @@ function sourcingGoal(req, goal) {
   const orgs = f.organizations?.length ? f.organizations : strs(t.organizations);
   const keywords = f.keywords?.length ? f.keywords : strs(c.keywords);
   const location = f.locations?.[0] ?? strs(t.geographies)[0];
-  const query2 = str(req.query);
+  const query2 = str2(req.query);
   const criteria = [
     ...query2 ? [query2] : [],
     ...strs(c.criteria),
     ...roles,
-    ...str(c.sector) ? [str(c.sector)] : [],
+    ...str2(c.sector) ? [str2(c.sector)] : [],
     ...strs(c.skills)
   ].slice(0, 8);
   return {
@@ -10812,13 +12528,13 @@ function sourcingGoal(req, goal) {
     roles,
     skills: strs(c.skills),
     keywords: keywords.length ? keywords : query2 ? [query2] : [],
-    sector: str(c.sector),
-    stage: str(c.stage),
+    sector: str2(c.sector),
+    stage: str2(c.stage),
     location,
     seniorities: f.seniority?.length ? f.seniority : strs(c.seniority),
     employeeRanges: strs(c.employee_ranges ?? c.employeeRanges),
     pastCompanies: strs(c.past_companies ?? c.pastCompanies),
-    topic: query2 ?? str(c.topic)
+    topic: query2 ?? str2(c.topic)
   };
 }
 var toSourced = (id, r) => {
@@ -10958,159 +12674,9 @@ function agentHandlers(config = { env: {} }) {
     "enrich.dossier": enrichDossier(config),
     "source.search": sourceSearch(config),
     "send.draft": sendDraftHandler(config),
-    "cadence.user": cadenceUser(config)
+    "cadence.user": cadenceUser(config),
+    hop_evidence: hopEvidenceHandler(config)
   };
-}
-
-// supabase/functions/_shared/googleApi.ts
-var UNITS_PER_SECOND = 90;
-var MAX_IN_FLIGHT = 5;
-var MAX_RETRIES = 3;
-var GoogleApiError = class extends Error {
-  constructor(status, reason2) {
-    super(`google ${status} ${reason2}`);
-    this.status = status;
-    this.reason = reason2;
-    this.name = "GoogleApiError";
-  }
-};
-var realSleep = (ms2) => new Promise((r) => setTimeout(r, ms2));
-var QuotaPacer = class {
-  rate;
-  max;
-  clock;
-  sleep;
-  spent = [];
-  inFlight = 0;
-  waiting = [];
-  constructor(o = {}) {
-    this.rate = o.unitsPerSecond ?? UNITS_PER_SECOND;
-    this.max = o.maxInFlight ?? MAX_IN_FLIGHT;
-    this.clock = o.clock ?? Date.now;
-    this.sleep = o.sleep ?? realSleep;
-  }
-  async run(units, fn) {
-    await this.acquire();
-    try {
-      return await this.spend(units, fn);
-    } finally {
-      this.release();
-    }
-  }
-  acquire() {
-    if (this.inFlight < this.max) {
-      this.inFlight++;
-      return Promise.resolve();
-    }
-    return new Promise((r) => this.waiting.push(r));
-  }
-  release() {
-    const next = this.waiting.shift();
-    if (next) next();
-    else this.inFlight--;
-  }
-  /** Records the spend and starts the request in one synchronous step, so the recorded time is the start time. */
-  async spend(units, fn) {
-    const u2 = Math.min(Math.max(0, units), this.rate);
-    for (; ; ) {
-      const now = this.clock();
-      this.spent = this.spent.filter((e) => e.t > now - 1e3);
-      const used = this.spent.reduce((s, e) => s + e.u, 0);
-      if (used + u2 <= this.rate) {
-        this.spent.push({ t: now, u: u2 });
-        return fn();
-      }
-      let over = used + u2 - this.rate;
-      let wait = 1;
-      for (const e of this.spent) {
-        over -= e.u;
-        wait = e.t + 1e3 - now;
-        if (over <= 0) break;
-      }
-      await this.sleep(Math.max(1, wait));
-    }
-  }
-};
-async function reason(res) {
-  try {
-    const body = await res.json();
-    if (typeof body.error === "string") return body.error;
-    return body.error?.errors?.[0]?.reason ?? body.error?.status ?? "error";
-  } catch {
-    return "error";
-  }
-}
-var RATE_REASONS = /* @__PURE__ */ new Set(["rateLimitExceeded", "userRateLimitExceeded", "RESOURCE_EXHAUSTED"]);
-function googleClient(deps) {
-  const doFetch = deps.fetch ?? fetch;
-  const clock = deps.clock ?? Date.now;
-  const sleep = deps.sleep ?? realSleep;
-  const random = deps.random ?? Math.random;
-  const pacers = deps.pacers ?? /* @__PURE__ */ new Map();
-  const pacer = (userId) => {
-    let p = pacers.get(userId);
-    if (!p) {
-      p = new QuotaPacer({ clock, sleep });
-      pacers.set(userId, p);
-    }
-    return p;
-  };
-  return {
-    async request(userId, r) {
-      let refreshed = false;
-      let attempt = 0;
-      for (; ; ) {
-        const token = await deps.tokens.accessToken(userId);
-        const res = await pacer(userId).run(
-          r.units,
-          () => doFetch(r.url, {
-            method: r.method ?? (r.body === void 0 ? "GET" : "POST"),
-            headers: {
-              authorization: `Bearer ${token}`,
-              accept: "application/json",
-              ...r.body === void 0 ? {} : { "content-type": "application/json" }
-            },
-            body: r.body === void 0 ? void 0 : JSON.stringify(r.body)
-          })
-        );
-        if (res.status === 401) {
-          await res.body?.cancel();
-          if (!refreshed) {
-            deps.tokens.invalidate(userId);
-            refreshed = true;
-            continue;
-          }
-          if (deps.db)
-            await deps.db.sql`
-              update orbit.integration_accounts set status = 'needs_reauth', last_error = 'unauthorized'
-               where user_id = ${userId}::uuid and provider = 'google'`;
-          throw new NeedsReauth();
-        }
-        if (res.ok) return await res.json();
-        const why = res.status === 429 || res.status >= 500 ? "retry" : await reason(res);
-        const retryable = why === "retry" || res.status === 403 && RATE_REASONS.has(why);
-        if (retryable && attempt < MAX_RETRIES) {
-          const wait = retryAfterMs(res.headers.get("retry-after"), clock()) ?? backoffMs(attempt, random);
-          if (why === "retry") await res.body?.cancel();
-          attempt++;
-          await sleep(wait);
-          continue;
-        }
-        if (why === "retry") await res.body?.cancel();
-        throw new GoogleApiError(res.status, why === "retry" ? `http_${res.status}` : why);
-      }
-    }
-  };
-}
-function qs(params) {
-  const q = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) {
-    if (v === void 0 || v === null) continue;
-    if (Array.isArray(v)) for (const x of v) q.append(k, x);
-    else q.set(k, String(v));
-  }
-  const s = q.toString();
-  return s ? `?${s}` : "";
 }
 
 // supabase/functions/_shared/calendar.ts
@@ -13849,110 +15415,6 @@ function sameMailboxOtherName(owner, incName, people, ctx) {
   return out;
 }
 
-// supabase/functions/_shared/ingest/util.ts
-function iso3(v) {
-  if (v === null || v === void 0 || v === "") return null;
-  const d = v instanceof Date ? v : new Date(String(v));
-  return Number.isNaN(d.getTime()) ? null : d.toISOString();
-}
-function day(v) {
-  if (v === null || v === void 0 || v === "") return null;
-  if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
-  return iso3(v)?.slice(0, 10) ?? null;
-}
-async function loadAccount(db2, userId, provider) {
-  const [a] = await db2.sql`
-    select id, status, email, scopes, external_account_id, sync_state from orbit.integration_accounts
-     where user_id = ${userId}::uuid and provider = ${provider}`;
-  if (!a) return null;
-  return {
-    id: a.id,
-    status: a.status,
-    email: a.email,
-    scopes: a.scopes ?? [],
-    externalAccountId: a.external_account_id,
-    syncState: a.sync_state ?? {}
-  };
-}
-async function patchSyncState(db2, userId, provider, section, patch, extra = {}) {
-  await db2.sql`
-    update orbit.integration_accounts
-       set sync_state = coalesce(sync_state, '{}'::jsonb)
-             || jsonb_build_object(${section}::text,
-                  coalesce(sync_state -> ${section}::text, '{}'::jsonb) || ${patch}::jsonb),
-           last_synced_at = coalesce(${extra.lastSyncedAt ?? null}::timestamptz, last_synced_at),
-           last_error = case when ${extra.lastError !== void 0}::boolean then ${extra.lastError ?? null}::text
-                             else last_error end
-     where user_id = ${userId}::uuid and provider = ${provider}`;
-}
-async function loadSelf(db2, userId) {
-  const [u2] = await db2.sql`
-    select email, full_name, first_name, last_name, school, current_city, timezone, settings
-      from orbit.users where id = ${userId}::uuid`;
-  if (!u2) throw new Error("user not found");
-  let [self] = await db2.sql`
-    select id from orbit.people where user_id = ${userId}::uuid and is_self`;
-  if (!self) {
-    const name = u2.full_name ?? u2.email;
-    await db2.sql`
-      insert into orbit.people (user_id, is_self, display_name, first_name, last_name, name_norm, primary_email,
-                                sources, first_seen_at)
-      values (${userId}::uuid, true, ${name}, ${u2.first_name}, ${u2.last_name}, ${name.toLowerCase()},
-              ${u2.email}, ${["google"]}::text[], now())
-      on conflict (user_id) where is_self do nothing`;
-    [self] = await db2.sql`
-      select id from orbit.people where user_id = ${userId}::uuid and is_self`;
-  }
-  const ids = await db2.sql`
-    select kind, value_norm from orbit.person_identities
-     where user_id = ${userId}::uuid and person_id = ${self.id}::uuid`;
-  const emails = /* @__PURE__ */ new Set([normalizeEmail(u2.email)]);
-  const memberIds = /* @__PURE__ */ new Set();
-  for (const i of ids) {
-    if (i.kind === "email") emails.add(i.value_norm);
-    if (i.kind === "linkedin_member") memberIds.add(i.value_norm);
-  }
-  return {
-    userId,
-    selfId: self.id,
-    emails,
-    memberIds,
-    fullName: u2.full_name ?? "",
-    firstName: u2.first_name ?? (u2.full_name ?? "").split(" ")[0] ?? "",
-    school: u2.school,
-    currentCity: u2.current_city,
-    timezone: u2.timezone,
-    settings: u2.settings ?? {}
-  };
-}
-var PERSON_COLUMNS = `p.id, p.user_id, p.is_self, p.display_name, p.first_name, p.last_name, p.name_norm,
-  p.primary_email, p.headline, p.title, p.org_id, p.org_raw, p.location, p.timezone, p.school, p.is_alumni,
-  p.photo_url, p.linkedin_url, p.linkedin_slug, p.linkedin_member_id, p.relationship_type, p.sources,
-  p.first_seen_at, p.last_interaction_at, p.strength, p.summary, p.tags, p.notes, p.do_not_contact, p.hidden_at,
-  p.merged_into, p.created_at, p.updated_at, p.deleted_at`;
-function toPerson(row, identities = []) {
-  const r = {
-    ...row,
-    first_seen_at: iso3(row.first_seen_at),
-    last_interaction_at: iso3(row.last_interaction_at),
-    hidden_at: iso3(row.hidden_at),
-    created_at: iso3(row.created_at) ?? (/* @__PURE__ */ new Date(0)).toISOString(),
-    updated_at: iso3(row.updated_at) ?? (/* @__PURE__ */ new Date(0)).toISOString(),
-    deleted_at: iso3(row.deleted_at),
-    strength: Number(row.strength ?? 0),
-    sources: row.sources ?? [],
-    tags: row.tags ?? []
-  };
-  return personFromRow(r, {
-    identities: identities.map((i) => ({ kind: i.kind, value_norm: i.value_norm }))
-  });
-}
-function chunks2(xs, n) {
-  const out = [];
-  for (let i = 0; i < xs.length; i += n) out.push(xs.slice(i, i + n));
-  return out;
-}
-
 // supabase/functions/_shared/ingest/people.ts
 var CORE_SOURCE = {
   gmail: "gmail",
@@ -14463,33 +15925,8 @@ async function ingestEvents(d, events) {
   return out;
 }
 
-// supabase/functions/orbit-worker/handlers/deps.ts
-var JobSkipped = class extends Error {
-  constructor(reason2) {
-    super(reason2);
-    this.reason = reason2;
-    this.name = "JobSkipped";
-  }
-};
-function googleFor(deps) {
-  const pacers = /* @__PURE__ */ new Map();
-  return (db2) => {
-    if (!deps.google) throw new JobSkipped("unconfigured");
-    return googleClient({
-      tokens: deps.google,
-      db: db2,
-      fetch: deps.fetch,
-      clock: deps.clock,
-      sleep: deps.sleep,
-      random: deps.random,
-      pacers
-    });
-  };
-}
-var LONG_VT_SEC = 300;
-
 // supabase/functions/orbit-worker/handlers/calendar.ts
-var DAY11 = 864e5;
+var DAY12 = 864e5;
 var PAGES_MAX = 20;
 function calendarHandlers(deps) {
   const google = googleFor(deps);
@@ -14517,8 +15954,8 @@ function calendarHandlers(deps) {
           try {
             page2 = await api.events(
               syncToken ? { syncToken, pageToken } : {
-                timeMin: new Date(now.getTime() - 730 * DAY11).toISOString(),
-                timeMax: new Date(now.getTime() + 90 * DAY11).toISOString(),
+                timeMin: new Date(now.getTime() - 730 * DAY12).toISOString(),
+                timeMax: new Date(now.getTime() + 90 * DAY12).toISOString(),
                 pageToken
               }
             );
@@ -14881,7 +16318,7 @@ async function maybeAutoReply(db2, userId, messageId, deps = {}) {
      where p.id = ${draft.person_id}::uuid`;
   const [g] = draft.goal_id ? await db2.sql`select autonomy_level from orbit.goals where id = ${draft.goal_id}::uuid` : [];
   const userTz = validZone(u2.timezone) ?? "America/New_York";
-  const dayStart = zonedTime2(
+  const dayStart2 = zonedTime2(
     new Intl.DateTimeFormat("en-CA", { timeZone: userTz }).format(now),
     0,
     0,
@@ -14889,7 +16326,7 @@ async function maybeAutoReply(db2, userId, messageId, deps = {}) {
   );
   const [today] = await db2.sql`
     select count(*)::int as n from orbit.audit_log
-     where user_id = ${userId}::uuid and action = 'draft.auto_approve' and created_at >= ${dayStart}::timestamptz`;
+     where user_id = ${userId}::uuid and action = 'draft.auto_approve' and created_at >= ${dayStart2}::timestamptz`;
   const meta = draft.ask ?? {};
   const history = await historyWith(db2, userId, draft.person_id);
   const level = (n) => n === 0 || n === 1 || n === 2 ? n : void 0;
@@ -15852,248 +17289,6 @@ function detectIntroduction(msg, people, userEmails, ctx = {}) {
   };
 }
 
-// supabase/functions/_shared/ingest/ties.ts
-var INTERACTION_KINDS = [
-  "email_exchange",
-  "email_cc",
-  "email_cothread",
-  "meeting_coattendee"
-];
-var AFFILIATION_KINDS = ["co_tenure", "same_school_cohort", "same_current_company", "same_city"];
-var INFERRED_KINDS = [...INTERACTION_KINDS, ...AFFILIATION_KINDS];
-var GROUP_MAX2 = 8;
-var SAME_CITY_MAX = 60;
-function sameCityTies(people) {
-  const byCity = /* @__PURE__ */ new Map();
-  for (const p of people) {
-    const city = (p.location ?? "").toLowerCase().split(",")[0].replace(/\s+/g, " ").trim();
-    if (!city || city.length < 2) continue;
-    const arr = byCity.get(city) ?? [];
-    arr.push(p.id);
-    byCity.set(city, arr);
-  }
-  const out = [];
-  for (const [city, ids] of byCity) {
-    if (ids.length > SAME_CITY_MAX) continue;
-    const sorted = [...ids].sort();
-    for (let i = 0; i < sorted.length; i++)
-      for (let j = i + 1; j < sorted.length; j++)
-        out.push({
-          a: sorted[i],
-          b: sorted[j],
-          kind: "same_city",
-          weight: 0.05,
-          confidence: 0.1,
-          evidence: { city, text: "Live in the same city" }
-        });
-  }
-  return out;
-}
-async function refreshTies(db2, userId, now, scope = {}) {
-  const scoped = !!scope.personIds;
-  const focus = scope.personIds ?? [];
-  if (scoped && !focus.length) return { upserted: 0, deleted: 0 };
-  const rows = await db2.query(
-    `select ${PERSON_COLUMNS} from orbit.people p
-      where p.user_id = $1::uuid and p.deleted_at is null and p.merged_into is null and not p.is_self`,
-    [userId]
-  );
-  const idRows = await db2.sql`
-    select pi.person_id, pi.kind, pi.value_norm from orbit.person_identities pi
-      join orbit.people p on p.id = pi.person_id
-     where pi.user_id = ${userId}::uuid and pi.kind = 'email' and not p.is_self`;
-  const idsBy = /* @__PURE__ */ new Map();
-  for (const r of idRows) {
-    const arr = idsBy.get(r.person_id) ?? [];
-    arr.push(r);
-    idsBy.set(r.person_id, arr);
-  }
-  const people = rows.map((r) => toPerson(r, idsBy.get(r.id)));
-  const threadRows = await db2.sql`
-    select id, participant_person_ids, last_at, first_at from orbit.threads
-     where user_id = ${userId}::uuid and cardinality(participant_person_ids) between 2 and ${GROUP_MAX2}::int
-       and (not ${scoped}::boolean or participant_person_ids && ${focus}::uuid[])`;
-  const threads = threadRows.map((t) => ({
-    id: t.id,
-    userId,
-    externalThreadId: t.id,
-    messageCount: 0,
-    participantEmails: [],
-    participantPersonIds: t.participant_person_ids,
-    isNetworking: false,
-    lastMessageAt: iso3(t.last_at) ?? void 0,
-    firstMessageAt: iso3(t.first_at) ?? void 0
-  }));
-  const threadIds = threads.map((t) => t.id);
-  const msgRows = threadIds.length ? await db2.sql`
-        select id, thread_id, direction, from_person_id, from_addr, to_addrs, cc_addrs, sent_at,
-               is_automated or list_unsubscribe as is_automated
-          from orbit.messages where user_id = ${userId}::uuid and thread_id = any(${threadIds}::uuid[])` : [];
-  const messages = msgRows.map((m) => ({
-    id: m.id,
-    userId,
-    threadId: m.thread_id,
-    externalMessageId: m.id,
-    direction: m.direction === "out" ? "outbound" : "inbound",
-    fromEmail: m.from_addr ?? "",
-    fromPersonId: m.from_person_id ?? void 0,
-    toEmails: m.to_addrs ?? [],
-    ccEmails: m.cc_addrs ?? [],
-    sentAt: iso3(m.sent_at),
-    bodyText: "",
-    headers: {},
-    isAutomated: m.is_automated
-  }));
-  const eventRows = await db2.sql`
-    select id, start_at, end_at, status, attendees, attendee_person_ids from orbit.calendar_events
-     where user_id = ${userId}::uuid and start_at <= ${now}::timestamptz
-       and cardinality(attendee_person_ids) >= 2 and attendee_count <= ${GROUP_MAX2}::int
-       and (not ${scoped}::boolean or attendee_person_ids && ${focus}::uuid[])`;
-  const events = eventRows.map((e) => ({
-    id: e.id,
-    userId,
-    externalEventId: e.id,
-    startAt: iso3(e.start_at),
-    endAt: iso3(e.end_at) ?? iso3(e.start_at),
-    status: e.status === "cancelled" ? "cancelled" : e.status === "tentative" ? "tentative" : "confirmed",
-    attendees: (e.attendees ?? []).map((a) => ({
-      email: a.email ?? "",
-      responseStatus: a.responseStatus,
-      self: a.self
-    })),
-    attendeePersonIds: e.attendee_person_ids
-  }));
-  const affiliations = scoped ? [] : (await db2.sql`
-          select a.* from orbit.affiliations a join orbit.people p on p.id = a.person_id
-           where a.user_id = ${userId}::uuid and p.merged_into is null and p.deleted_at is null and not p.is_self`).map(
-    (a) => affiliationFromRow({
-      ...a,
-      start_date: day(a.start_date),
-      end_date: day(a.end_date)
-    })
-  );
-  const organizations = /* @__PURE__ */ new Map();
-  if (!scoped)
-    for (const o of await db2.sql`
-      select id, name, name_norm, domains, size_bucket from orbit.organizations where user_id = ${userId}::uuid`)
-      organizations.set(o.id, {
-        id: o.id,
-        name: o.name,
-        nameNormalized: o.name_norm,
-        domains: o.domains,
-        sizeBucket: o.size_bucket ?? void 0
-      });
-  const inferred = inferTies({
-    userId,
-    people,
-    affiliations,
-    organizations,
-    threads,
-    events,
-    messages,
-    now
-  });
-  const keep = new Set(scoped ? INTERACTION_KINDS : INFERRED_KINDS);
-  const inFocus = (t) => !scoped || focus.includes(t.a) || focus.includes(t.b);
-  const out = inferred.filter((t) => keep.has(t.kind) && inFocus({ a: t.aId, b: t.bId })).map((t) => ({
-    a: t.aId,
-    b: t.bId,
-    kind: t.kind,
-    weight: decayedTieWeight(t, now),
-    confidence: t.confidence,
-    evidence: { ...t.evidence, source: "orbit" },
-    firstSeenAt: t.firstSeenAt,
-    lastSeenAt: t.lastSeenAt
-  }));
-  if (!scoped) out.push(...sameCityTies(people.filter((p) => !p.hiddenAt)));
-  for (const part of chunks2(out, 500)) await upsertTies(db2, userId, part, now);
-  const upserted = out.length;
-  const kinds = [...keep];
-  const live = out.map((t) => `${t.a}|${t.b}|${t.kind}`);
-  const gone = await db2.sql`
-    delete from orbit.ties t
-     where t.user_id = ${userId}::uuid and t.kind = any(${kinds}::text[])
-       and (not ${scoped}::boolean or t.a_person_id = any(${focus}::uuid[]) or t.b_person_id = any(${focus}::uuid[]))
-       and not (t.a_person_id::text || '|' || t.b_person_id::text || '|' || t.kind = any(${live}::text[]))
-    returning t.id`;
-  return { upserted, deleted: gone.length };
-}
-async function upsertTies(db2, userId, rows, now) {
-  const payload = rows.map((t) => {
-    const [a, b] = t.a < t.b ? [t.a, t.b] : [t.b, t.a];
-    return {
-      a,
-      b,
-      kind: t.kind,
-      w: Math.min(1, Math.max(0, t.weight)),
-      c: Math.min(1, Math.max(0, t.confidence)),
-      evidence: t.evidence,
-      first: t.firstSeenAt ?? null,
-      last: t.lastSeenAt ?? null
-    };
-  }).filter((r) => r.a !== r.b);
-  if (!payload.length) return;
-  await db2.sql`
-    insert into orbit.ties (user_id, a_person_id, b_person_id, kind, weight, confidence, evidence, first_seen_at,
-                            last_seen_at)
-    select ${userId}::uuid, (r ->> 'a')::uuid, (r ->> 'b')::uuid, r ->> 'kind', (r ->> 'w')::real, (r ->> 'c')::real,
-           r -> 'evidence', coalesce((r ->> 'first')::timestamptz, ${now}::timestamptz),
-           coalesce((r ->> 'last')::timestamptz, ${now}::timestamptz)
-      from jsonb_array_elements(${JSON.stringify(payload)}::jsonb) r
-    on conflict (user_id, a_person_id, b_person_id, kind) do update set
-      weight = excluded.weight, confidence = excluded.confidence, evidence = excluded.evidence,
-      first_seen_at = least(orbit.ties.first_seen_at, excluded.first_seen_at),
-      last_seen_at = excluded.last_seen_at
-    where orbit.ties.weight is distinct from excluded.weight
-       or orbit.ties.confidence is distinct from excluded.confidence
-       or orbit.ties.evidence is distinct from excluded.evidence
-       or orbit.ties.last_seen_at is distinct from excluded.last_seen_at`;
-}
-async function upsertTie(db2, userId, t, now) {
-  const [a, b] = t.a < t.b ? [t.a, t.b] : [t.b, t.a];
-  if (a === b) return;
-  const w = Math.min(1, Math.max(0, t.weight));
-  const c = Math.min(1, Math.max(0, t.confidence));
-  await db2.sql`
-    insert into orbit.ties (user_id, a_person_id, b_person_id, kind, weight, confidence, evidence, first_seen_at,
-                            last_seen_at)
-    values (${userId}::uuid, ${a}::uuid, ${b}::uuid, ${t.kind}, ${w}::real, ${c}::real, ${t.evidence}::jsonb,
-            coalesce(${t.firstSeenAt ?? null}::timestamptz, ${now}::timestamptz),
-            coalesce(${t.lastSeenAt ?? null}::timestamptz, ${now}::timestamptz))
-    on conflict (user_id, a_person_id, b_person_id, kind) do update set
-      weight = excluded.weight, confidence = excluded.confidence, evidence = excluded.evidence,
-      first_seen_at = least(orbit.ties.first_seen_at, excluded.first_seen_at),
-      last_seen_at = excluded.last_seen_at
-    where orbit.ties.weight is distinct from excluded.weight
-       or orbit.ties.confidence is distinct from excluded.confidence
-       or orbit.ties.evidence is distinct from excluded.evidence
-       or orbit.ties.last_seen_at is distinct from excluded.last_seen_at`;
-}
-async function upsertIntroTie(db2, userId, i, now) {
-  await upsertTie(
-    db2,
-    userId,
-    {
-      a: i.introducerId,
-      b: i.introducedId,
-      kind: "introduced_by",
-      weight: 0.85,
-      confidence: 0.95,
-      evidence: {
-        introducerId: i.introducerId,
-        threadIds: [i.threadId],
-        messageId: i.messageId,
-        at: i.at,
-        source: "gmail",
-        text: "Introduced you"
-      },
-      firstSeenAt: i.at,
-      lastSeenAt: i.at
-    },
-    now
-  );
-}
-
 // supabase/functions/_shared/ingest/gmail.ts
 var SKIP_LABELS = /* @__PURE__ */ new Set(["DRAFT", "SPAM", "TRASH", "CHAT"]);
 var IN_FLIGHT = 5;
@@ -16117,7 +17312,7 @@ async function pool(items, n, fn) {
 }
 var GROUP_MAX3 = 8;
 var CLASSIFY_WINDOW_DAYS = 180;
-var DAY12 = 864e5;
+var DAY13 = 864e5;
 var addrs = (raw) => parseAddressList(raw).map(parseAddress).filter((a) => a.email.includes("@"));
 function parseMail(m, self) {
   const labels = m.labelIds ?? [];
@@ -16309,7 +17504,7 @@ async function ingestGmail(d, refs) {
       if (row) {
         inserted++;
         stats.stored++;
-        if (networking && !m.outbound && !m.automated && d.now.getTime() - new Date(m.sentAt).getTime() < CLASSIFY_WINDOW_DAYS * DAY12)
+        if (networking && !m.outbound && !m.automated && d.now.getTime() - new Date(m.sentAt).getTime() < CLASSIFY_WINDOW_DAYS * DAY13)
           classify.push({ id: row.id, externalId: m.id });
       } else if (body !== null)
         await db2.sql`
@@ -16428,7 +17623,7 @@ var DEEP_CAP = 5e4;
 var CHAIN_DELAY_SEC = 5;
 var RECOVERY_DAYS = 30;
 var HISTORY_PAGES_MAX = 20;
-var DAY13 = 864e5;
+var DAY14 = 864e5;
 var GMAIL_SCOPE = /gmail\.readonly$/;
 async function account(job, ctx) {
   const userId = job.userId;
@@ -16443,7 +17638,7 @@ function phaseQuery(bf, now) {
   if (bf.phase === "recent") return `newer_than:${bf.days ?? 90}d -in:chats`;
   const sec = (ms2) => Math.floor(ms2 / 1e3);
   const t = now.getTime();
-  return `after:${sec(t - 730 * DAY13)} before:${sec(t - 90 * DAY13)} -in:chats`;
+  return `after:${sec(t - 730 * DAY14)} before:${sec(t - 90 * DAY14)} -in:chats`;
 }
 var reauth = async (fn) => {
   try {
@@ -16933,8 +18128,8 @@ async function storeChat(db2, userId, self, chat, messages, now, ownIds) {
 
 // supabase/functions/orbit-worker/handlers/linkedin.ts
 var REQUESTS_PER_JOB = 60;
-var DAY14 = 864e5;
-var str2 = (v) => typeof v === "string" && v ? v : void 0;
+var DAY15 = 864e5;
+var str3 = (v) => typeof v === "string" && v ? v : void 0;
 function linkedinHandlers(deps) {
   const sleep = deps.sleep ?? ((ms2) => new Promise((r) => setTimeout(r, ms2)));
   const unipile = createUnipileSync({
@@ -16957,7 +18152,7 @@ function linkedinHandlers(deps) {
       const now = ctx.now();
       const touched = /* @__PURE__ */ new Set();
       if (job.payload.mode === "relation") {
-        const memberId = str2(job.payload.providerId);
+        const memberId = str3(job.payload.providerId);
         if (!memberId) return;
         const r = await ingestRelations(
           ctx.db,
@@ -16965,10 +18160,10 @@ function linkedinHandlers(deps) {
           [
             {
               memberId,
-              publicIdentifier: str2(job.payload.publicIdentifier),
-              profileUrl: str2(job.payload.profileUrl),
-              fullName: str2(job.payload.name),
-              headline: str2(job.payload.headline),
+              publicIdentifier: str3(job.payload.publicIdentifier),
+              profileUrl: str3(job.payload.profileUrl),
+              fullName: str3(job.payload.name),
+              headline: str3(job.payload.headline),
               connectedAt: now.toISOString()
             }
           ],
@@ -17031,7 +18226,7 @@ function linkedinHandlers(deps) {
           });
           continue;
         }
-        const after = new Date(now.getTime() - 730 * DAY14).toISOString();
+        const after = new Date(now.getTime() - 730 * DAY15).toISOString();
         const page2 = await call(() => unipile.chats(accountId, { after, cursor: state.chatsCursor }));
         if (!page2.ok) throw new Error(`unipile chats ${page2.status ?? page2.kind}`);
         const chats = page2.value.items;
@@ -17077,7 +18272,7 @@ function linkedinHandlers(deps) {
           );
           if (stored.inserted) for (const p of stored.personIds) touched.add(p);
           for (const m of stored.inbound)
-            if (now.getTime() - new Date(m.sentAt).getTime() < CLASSIFY_WINDOW_DAYS * DAY14)
+            if (now.getTime() - new Date(m.sentAt).getTime() < CLASSIFY_WINDOW_DAYS * DAY15)
               await ctx.queue.enqueue({
                 kind: "classify.message",
                 userId,
