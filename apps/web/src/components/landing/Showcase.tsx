@@ -1,4 +1,4 @@
-import { ArrowLeft, ArrowRight, Check, Clock, X } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, X } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { demoFace } from '../../engine/demoFaces';
 import { Avatar, Chip, cx } from '../../ui';
@@ -320,41 +320,53 @@ export function BoardPreview() {
 
 /** The Prep deck, open on its intro card, with the cards still to come stacked behind. */
 export function PrepPreview() {
+  const at = 5;
   return (
     <div className="relative mx-auto w-full max-w-[460px] pt-5 text-left" data-testid="lp-prep">
       <div className="absolute inset-x-8 top-0 h-full rounded-[16px] border border-line bg-canvas/70" />
       <div className="absolute inset-x-4 top-2.5 h-full rounded-[16px] border border-line bg-canvas/90" />
-      <div className={cx('relative rounded-[16px] border border-line bg-canvas p-5 sm:p-6', lift)}>
-        <div className="flex items-center gap-3">
-          <Avatar name="Omar Haddad" src={demoFace('Omar')} size={40} />
-          <div className="min-w-0">
-            <div className="text-[14px] font-medium">Omar Haddad</div>
-            <div className="flex flex-wrap items-center gap-x-1.5 text-[12px] text-ink-3">
-              <Clock size={12} /> Tue 2:00 pm · 30 min
-            </div>
-          </div>
-          <span className="ml-auto w-7 h-7 rounded-full border border-line inline-flex items-center justify-center text-ink-3 shrink-0">
-            <X size={13} />
-          </span>
-        </div>
-        <div className="mt-5 label-mono">Your 30-second intro</div>
-        <p className="mt-2 text-[16px] sm:text-[17px] leading-[1.5] tracking-[-0.01em] text-ink">
-          "I'm a CS junior at Cornell. I spent the summer at Brex on the payments team, and I'm choosing
-          between engineering and product for next summer. The APM path is the one I know least about."
-        </p>
-        <p className="mt-3 text-[12.5px] text-ink-3">Say it out loud once.</p>
-        <div className="mt-5 pt-4 border-t border-line-2 flex items-center gap-3">
-          <span className="w-8 h-8 rounded-full border border-line inline-flex items-center justify-center text-ink-3">
-            <ArrowLeft size={14} />
-          </span>
-          <span className="flex items-center gap-1" aria-hidden>
-            {Array.from({ length: 9 }, (_, i) => (
-              <span key={i} className={cx('h-1.5 rounded-full', i === 5 ? 'w-4 bg-ink' : 'w-1.5 bg-line')} />
+      <div className={cx('relative rounded-[16px] border border-line bg-canvas overflow-hidden', lift)}>
+        <div className="px-4 md:px-5 pt-4 pb-2 flex items-center gap-2">
+          <span className="flex-1 flex gap-1">
+            {PREP_CARDS.map((c, k) => (
+              <span
+                key={c}
+                className={cx(
+                  'h-[3px] flex-1 rounded-full',
+                  k === at ? 'bg-ink' : k < at ? 'bg-ink-3' : 'bg-line',
+                )}
+              />
             ))}
           </span>
-          <span className="text-[12px] text-ink-3 tabular">6 of 9</span>
-          <span className="ml-auto h-8 px-3.5 rounded-full bg-ink text-white inline-flex items-center gap-1.5 text-[12.5px]">
-            Next <ArrowRight size={13} />
+          <span className="text-[12px] text-ink-3 tabular shrink-0">
+            {at + 1} of {PREP_CARDS.length}
+          </span>
+          <span className="w-8 h-8 rounded-full inline-flex items-center justify-center text-ink-3">
+            <X size={16} />
+          </span>
+        </div>
+        <div className="px-5 md:px-6 pb-5">
+          <div className="flex items-center gap-2 text-[12px] text-ink-3 mb-2">
+            <Avatar name="Omar Haddad" src={demoFace('Omar')} size={20} />
+            Omar Haddad
+          </div>
+          <div className="text-[22px] leading-tight font-medium tracking-[-0.01em]">Your 30-second intro</div>
+          <p className="mt-1.5 text-[14px] text-ink-2">Say it out loud once before the call.</p>
+          <p className="mt-4 text-[16px] sm:text-[17px] leading-relaxed text-ink">
+            I'm a CS junior at Cornell. I spent the summer at Brex on the payments team, and I'm choosing
+            between engineering and product for next summer. The APM path is the one I know least about.
+          </p>
+        </div>
+        <div className="px-3 md:px-4 py-3 border-t border-line-2 flex items-center gap-2">
+          <span className="w-9 h-9 rounded-full inline-flex items-center justify-center text-ink-2">
+            <ChevronLeft size={17} />
+          </span>
+          <span className="min-w-0 flex-1 text-[11.5px] text-ink-3 hidden sm:block">
+            ← → to move · Esc to close
+          </span>
+          <span className="flex-1 sm:hidden" />
+          <span className="h-8 px-3 rounded-full bg-accent text-white inline-flex items-center gap-1 text-[13px] font-medium">
+            Next <ChevronRight size={14} />
           </span>
         </div>
       </div>
@@ -362,7 +374,7 @@ export function PrepPreview() {
   );
 }
 
-/** What else is in the deck, as the small list beside it. */
+/** The deck's cards, in the order a call runs. */
 export const PREP_CARDS = [
   'The call',
   'Who they are',
@@ -372,6 +384,7 @@ export const PREP_CARDS = [
   'Your 30-second intro',
   'Openers',
   'Questions',
+  'Keep in mind',
   'After the call',
 ] as const;
 
