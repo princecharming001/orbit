@@ -274,7 +274,12 @@ export default function NetworkDemo() {
                           <Building2 size={14} />
                         </span>
                       ) : (
-                        <Avatar name={s.person.displayName} src={s.person.photoUrl} id={s.person.id} size={28} />
+                        <Avatar
+                          name={s.person.displayName}
+                          src={s.person.photoUrl}
+                          id={s.person.id}
+                          size={28}
+                        />
                       )}
                       <span className="min-w-0 flex-1">
                         <span className="block text-[13.5px] text-ink truncate">

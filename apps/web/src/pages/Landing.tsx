@@ -1,18 +1,27 @@
 import type { User } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Compass, Inbox, Map as MapIcon, Minus, Plus, Search, SquarePen, Users } from 'lucide-react';
+import { ChevronRight, Gauge, HardDrive, Minus, Plus, ShieldCheck, Trash2 } from 'lucide-react';
 import { lazy, type ReactNode, Suspense, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Logo } from '../components/AppShell';
+import {
+  BoardPreview,
+  DraftsPreview,
+  Point,
+  PREP_CARDS,
+  PrepPreview,
+  Stage,
+} from '../components/landing/Showcase';
 import { TrustedBy } from '../components/landing/TrustedBy';
 import { db } from '../db/schema';
 import { createLocalUser, leaveDemoForOwnSetup, savedProfiles } from '../engine/account';
 import { DEMO_USER_ID, demoResetPrompt, loadDemo } from '../engine/demo';
+import { demoFace } from '../engine/demoFaces';
 import { startGoogleSignIn } from '../integrations/orbitApi';
 import { envGoogleClientId } from '../integrations/prefs';
 import { useAccount } from '../state/account';
 import { useSession } from '../state/session';
-import { Button, cx, Spinner } from '../ui';
+import { Avatar, Button, Chip, cx, Spinner } from '../ui';
 import { onboardingPath } from './Onboarding';
 
 // the interactive map draws on a canvas with the app's map engine: loaded after the page itself
@@ -74,16 +83,16 @@ export function Landing() {
       : midSetup
         ? 'Continue setup'
         : 'Get started';
-  const primaryCta = (size: 'md' | 'lg' = 'md') =>
+  const primaryCta = (size: 'md' | 'lg' = 'md', variant: 'dark' | 'secondary' = 'dark') =>
     resolving ? null : (
-      <Button size={size} variant="dark" onClick={start} disabled={!!busy}>
+      <Button size={size} variant={variant} onClick={start} disabled={!!busy}>
         {startLabel}
       </Button>
     );
   // offered mid-setup too: demo() asks before it discards the setup
-  const demoCta = (size: 'md' | 'lg' = 'md') =>
+  const demoCta = (size: 'md' | 'lg' = 'md', className?: string) =>
     resolving || onboarded ? null : (
-      <Button size={size} variant="secondary" onClick={demo} disabled={!!busy}>
+      <Button size={size} variant="secondary" onClick={demo} disabled={!!busy} className={className}>
         {/* the full progress message is in the status pill at the bottom; the button stays its own width */}
         {busy ? (
           <>
@@ -131,11 +140,11 @@ export function Landing() {
             <span className="font-medium tracking-[-0.01em] text-[16px]">Orbit</span>
           </a>
           <nav className="hidden lg:flex items-center gap-7 text-[14px] text-ink-2 absolute left-1/2 -translate-x-1/2">
-            <a className="hover:text-ink transition-colors" href="#map">
-              The map
-            </a>
             <a className="hover:text-ink transition-colors" href="#how">
               How it works
+            </a>
+            <a className="hover:text-ink transition-colors" href="#map">
+              The map
             </a>
             <a className="hover:text-ink transition-colors" href="#privacy">
               Privacy
@@ -223,18 +232,20 @@ export function Landing() {
           </Reveal>
         </section>
 
-        <section id="map" className="scroll-mt-16 px-3 md:px-8 pb-16 md:pb-24">
-          <Reveal delay={120}>
-            <div className="px-2 md:px-4 mb-6 md:mb-8">
-              <h2 className="display text-[30px] md:text-[40px] max-w-[640px]">
-                See who can get you in, before you write a word.
-              </h2>
-              <p className="mt-3 text-[15px] leading-[1.55] text-ink-3 max-w-[520px]">
-                Search a company or a person on a sample network.
-              </p>
-            </div>
-          </Reveal>
-          <Reveal delay={160}>
+        <HowItWorks google={google} />
+
+        <div id="features" className="scroll-mt-16">
+          <Feature
+            id="map"
+            n="01"
+            kicker="Find the way in"
+            title="See who can get you in, before you write a word."
+            points={[
+              'Everyone you know, ranked by how well they fit your goals and how easy they are to reach.',
+              'The warmest route to anyone, through people you already know, with a score for every hop.',
+              'Try it below on a sample network: type a company or a person.',
+            ]}
+          >
             <Suspense
               fallback={
                 <div className="h-[600px] rounded-[20px] border border-line bg-canvas animate-pulse" />
@@ -242,55 +253,109 @@ export function Landing() {
             >
               <NetworkDemo />
             </Suspense>
-          </Reveal>
-        </section>
+          </Feature>
 
-        <Rule />
-        <HowItWorks />
-        <Rule />
+          <Feature
+            n="02"
+            kicker="Write"
+            title="Every message drafted in your voice. Sent only when you say."
+            points={[
+              'Each draft starts from what you know about them: a post, a shared school, what they said last time.',
+              'Thank-yous, follow-ups and times to meet are waiting for you each morning, most urgent first.',
+              'You read it, change what you like and send it yourself.',
+            ]}
+          >
+            <Stage tone="sand" testId="lp-stage-drafts">
+              <div className="p-3 sm:p-8 lg:p-12">
+                <DraftsPreview />
+              </div>
+            </Stage>
+          </Feature>
 
-        <section className="px-3 md:px-12 py-16 md:py-24">
+          <Feature
+            n="03"
+            kicker="Track"
+            title="Every chat on one board, each with its next step."
+            points={[
+              'Replies move a chat along by themselves: replied, scheduling, scheduled.',
+              'A chat that goes quiet is flagged, with one short follow-up ready.',
+              'After a call, the thank-you is drafted and the next nudge is on the calendar.',
+            ]}
+          >
+            <Stage tone="mist" testId="lp-stage-board">
+              <div className="p-3 sm:p-8 lg:p-10">
+                <BoardPreview />
+              </div>
+            </Stage>
+          </Feature>
+
+          <Feature
+            n="04"
+            kicker="Prep"
+            title="Walk into every call ready."
+            points={[
+              'A short deck for the minute before a call: who they are, what you share, where you left off.',
+              'Your 30-second intro, openers and three questions worth asking.',
+              'Deep research on a person when you want more, with every claim linked to its source.',
+            ]}
+          >
+            <Stage tone="mint" testId="lp-stage-prep">
+              <div className="p-4 sm:p-10 lg:p-14 grid lg:grid-cols-[460px_180px] justify-center gap-8 lg:gap-20 items-center">
+                <PrepPreview />
+                <ol className="hidden lg:block space-y-2 text-[13px]">
+                  {PREP_CARDS.map((c, i) => (
+                    <li
+                      key={c}
+                      className={cx(
+                        'flex items-center gap-3',
+                        i === 5 ? 'text-ink font-medium' : 'text-ink-3',
+                      )}
+                    >
+                      <span className="font-mono text-[11px] w-5 tabular">
+                        {String(i + 1).padStart(2, '0')}
+                      </span>
+                      {c}
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            </Stage>
+          </Feature>
+        </div>
+
+        <section id="privacy" className="scroll-mt-16 px-5 md:px-12 py-20 md:py-28">
           <Reveal>
-            <div className="px-2 md:px-0 mb-8">
-              <p className="label-mono mb-3">Your week</p>
-              <h2 className="display text-[30px] md:text-[40px] max-w-[640px]">
-                Every chat and every draft, in one place.
-              </h2>
+            <div className="grid lg:grid-cols-2 gap-6 lg:gap-12 items-end">
+              <div>
+                <p className="label-mono">Privacy and safety</p>
+                <h2 className="display text-balance mt-3 text-[34px] md:text-[44px] max-w-[560px]">
+                  You stay in charge of every word.
+                </h2>
+              </div>
+              <p className="text-[15px] md:text-[16px] leading-[1.6] text-ink-3 max-w-[520px]">
+                The people, notes and drafts you keep in Orbit live in your browser.{' '}
+                {google
+                  ? "Gmail, Calendar and LinkedIn connect only if you choose, through each one's own sign-in."
+                  : 'It does not connect to your email or calendar: you send each message yourself.'}
+              </p>
             </div>
           </Reveal>
           <Reveal delay={80}>
-            <ProductMock />
-          </Reveal>
-        </section>
-
-        <Rule />
-
-        <section
-          id="privacy"
-          className="scroll-mt-16 px-5 md:px-12 py-16 md:py-24 grid md:grid-cols-[1fr_1fr] gap-10"
-        >
-          <Reveal>
-            <p className="text-[14px] text-ink-3">Privacy.</p>
-            <h2 className="display mt-2 text-[30px] md:text-[36px]">Your inbox stays yours.</h2>
-          </Reveal>
-          <Reveal delay={80}>
-            <p className="text-[15px] leading-relaxed text-ink-2">
-              The people, notes and drafts you keep in Orbit live in your browser.{' '}
-              {google
-                ? "Gmail, Calendar and LinkedIn connect only if you choose, through each one's own sign-in."
-                : 'It does not connect to your email or calendar: you send each message yourself.'}
-            </p>
-            <ul className="mt-6 divide-y divide-line border-y border-line text-[14px]">
-              {[
-                ['Nothing is sent without you', 'What goes out is exactly the text you approved.'],
-                ['Yours to take or wipe', 'Export or delete everything from Settings, any time.'],
-              ].map(([a, b]) => (
-                <li key={a} className="py-3 flex flex-wrap gap-x-3">
-                  <span className="font-medium">{a}</span>
-                  <span className="text-ink-3">{b}</span>
-                </li>
+            <div className="mt-10 grid sm:grid-cols-2 lg:grid-cols-4 gap-3" data-testid="lp-promises">
+              {PROMISES.map(({ icon: Icon, title, text }) => (
+                <div
+                  key={title}
+                  className="rounded-[16px] border border-line bg-canvas p-5 md:p-6"
+                  data-testid="lp-promise"
+                >
+                  <span className="w-9 h-9 rounded-full bg-accent-soft text-accent inline-flex items-center justify-center">
+                    <Icon size={17} strokeWidth={1.75} />
+                  </span>
+                  <h3 className="mt-5 text-[16px] font-medium tracking-[-0.01em]">{title}</h3>
+                  <p className="mt-2 text-[14px] leading-[1.55] text-ink-3">{text}</p>
+                </div>
               ))}
-            </ul>
+            </div>
           </Reveal>
         </section>
 
@@ -298,11 +363,11 @@ export function Landing() {
 
         <section
           id="faq"
-          className="scroll-mt-16 px-5 md:px-12 py-16 md:py-24 grid md:grid-cols-[1fr_1.3fr] gap-10"
+          className="scroll-mt-16 px-5 md:px-12 py-20 md:py-28 grid md:grid-cols-[1fr_1.3fr] gap-10"
         >
           <Reveal>
-            <p className="text-[14px] text-ink-3">Frequently asked.</p>
-            <h2 className="display mt-2 text-[34px] md:text-[44px] max-w-[360px]">
+            <p className="label-mono">Questions</p>
+            <h2 className="display text-balance mt-3 text-[34px] md:text-[44px] max-w-[360px]">
               What students ask before starting.
             </h2>
           </Reveal>
@@ -318,8 +383,16 @@ export function Landing() {
                   'Orbit ranks people by how well their role and company fit your goals and how easy they are to reach: alumni, people you already know, and people one introduction away.',
                 ],
                 [
+                  'Is it safe for my LinkedIn account?',
+                  "Orbit keeps to a person's pace: at most 10 LinkedIn messages a day unless you change it, three days between messages to one person, and it slows down the moment LinkedIn asks.",
+                ],
+                [
                   'What happens to my LinkedIn data?',
                   'You upload your LinkedIn export or connect your account. Your connections are kept in your browser and only used to find people worth meeting.',
+                ],
+                [
+                  'Can I look around before connecting anything?',
+                  "Yes. Try the demo opens Orbit on a made-up student's season: their network, drafts, board and prep, with nothing real in it.",
                 ],
                 [
                   'Do I need an AI key?',
@@ -331,47 +404,90 @@ export function Landing() {
           </Reveal>
         </section>
 
-        <Rule />
-
-        <section className="px-5 md:px-12 py-16 md:py-24">
+        <section className="px-3 md:px-8 pb-16 md:pb-24">
           <Reveal>
-            <p className="text-[14px] text-ink-3">Five minutes a day. The rest is on Orbit.</p>
-            <h2 className="display mt-3 text-[40px] sm:text-[56px] md:text-[64px] max-w-[820px]">
-              Your next coffee chat, drafted by tonight.
-            </h2>
-            <div className="mt-8 flex flex-wrap gap-2 min-h-11">
-              {primaryCta('lg')}
-              {demoCta('lg')}
+            <div className="relative overflow-hidden rounded-[28px] bg-accent text-white px-6 py-14 sm:px-12 md:py-20">
+              <div
+                className="absolute inset-0 opacity-[0.12] bg-[radial-gradient(rgba(255,255,255,0.9)_1px,transparent_1px)] [background-size:20px_20px] [mask-image:radial-gradient(ellipse_at_80%_20%,black,transparent_70%)]"
+                aria-hidden
+              />
+              <div className="relative grid lg:grid-cols-[minmax(0,1fr)_auto] gap-10 items-end">
+                <div>
+                  <p className="text-[14px] text-white/70">Five minutes a day. The rest is on Orbit.</p>
+                  <h2 className="display text-balance mt-3 text-[38px] sm:text-[52px] md:text-[60px] max-w-[760px]">
+                    Your next coffee chat, drafted by tonight.
+                  </h2>
+                  <div className="mt-8 flex flex-wrap gap-2 min-h-11">
+                    {primaryCta('lg', 'secondary')}
+                    {demoCta('lg', 'border-white/25 bg-white/10 text-white hover:bg-white/15 shadow-none')}
+                  </div>
+                </div>
+                <DemoFaces />
+              </div>
             </div>
           </Reveal>
         </section>
       </div>
 
       <footer className="border-t border-line">
-        <div className="max-w-[1280px] mx-auto px-5 md:px-12 py-8 flex flex-wrap items-center gap-x-6 gap-y-3 text-[13px] text-ink-3">
-          <span className="inline-flex items-center gap-2 text-ink">
-            <Logo size={18} />
-            <span className="font-medium">Orbit</span>
-          </span>
-          <nav className="flex flex-wrap gap-x-5 gap-y-2" aria-label="Footer">
-            <a className="hover:text-ink transition-colors" href="#how">
-              How it works
-            </a>
-            <a className="hover:text-ink transition-colors" href="#privacy">
-              Privacy
-            </a>
-            <a className="hover:text-ink transition-colors" href="#faq">
-              FAQ
-            </a>
-            <Link
-              className="hover:text-ink transition-colors"
-              to="/remove-me"
-              data-testid="landing-remove-me"
-            >
-              Remove me from research
-            </Link>
+        <div className="max-w-[1280px] mx-auto px-5 md:px-12 pt-12 pb-10 grid gap-10 sm:grid-cols-[1.4fr_1fr_1fr]">
+          <div>
+            <span className="inline-flex items-center gap-2 text-ink">
+              <Logo size={20} />
+              <span className="font-medium text-[16px]">Orbit</span>
+            </span>
+            <p className="mt-3 text-[14px] leading-[1.55] text-ink-3 max-w-[300px]">
+              Coffee chats for college recruiting: who to meet, how to get in, and every message in your
+              voice.
+            </p>
+          </div>
+          <nav className="text-[14px]" aria-label="Product">
+            <p className="label-mono mb-3">Product</p>
+            <ul className="space-y-2 text-ink-2">
+              <li>
+                <a className="hover:text-ink transition-colors" href="#how">
+                  How it works
+                </a>
+              </li>
+              <li>
+                <a className="hover:text-ink transition-colors" href="#map">
+                  The map
+                </a>
+              </li>
+              <li>
+                <a className="hover:text-ink transition-colors" href="#features">
+                  Drafts, board and prep
+                </a>
+              </li>
+            </ul>
           </nav>
-          <span className="md:ml-auto">© {new Date().getFullYear()} Orbit</span>
+          <nav className="text-[14px]" aria-label="Footer">
+            <p className="label-mono mb-3">Trust</p>
+            <ul className="space-y-2 text-ink-2">
+              <li>
+                <a className="hover:text-ink transition-colors" href="#privacy">
+                  Privacy
+                </a>
+              </li>
+              <li>
+                <a className="hover:text-ink transition-colors" href="#faq">
+                  FAQ
+                </a>
+              </li>
+              <li>
+                <Link
+                  className="hover:text-ink transition-colors"
+                  to="/remove-me"
+                  data-testid="landing-remove-me"
+                >
+                  Remove me from research
+                </Link>
+              </li>
+            </ul>
+          </nav>
+        </div>
+        <div className="max-w-[1280px] mx-auto px-5 md:px-12 pb-8 text-[13px] text-ink-3">
+          © {new Date().getFullYear()} Orbit
         </div>
       </footer>
     </div>
@@ -457,366 +573,206 @@ function Faq({ items }: { items: [string, string][] }) {
   );
 }
 
-const STAGES = [
-  {
-    key: 'find',
-    label: 'Find',
-    lead: 'Orbit reads your LinkedIn connections and goals, and ranks who is worth a coffee chat: alumni, people at your target companies, and people one introduction away.',
-    title: 'The right people, ranked. You reach out first.',
-  },
-  {
-    key: 'write',
-    label: 'Write',
-    lead: 'Every draft starts from what you actually know about the person: a post, a shared school, what they said last time. You edit it and send it yourself.',
-    title: 'A first message in your voice, not a template.',
-  },
-  {
-    key: 'follow',
-    label: 'Follow up',
-    lead: 'A short bump after a week of silence, a thank-you the day after a chat, a reconnect before the referral window. Orbit keeps the timing so you do not have to.',
-    title: 'Every follow-up, on time.',
-  },
-  {
-    key: 'remember',
-    label: 'Remember',
-    lead: 'Type, dictate or paste notes after a chat. What they said, offered and asked of you lands on their profile, ready for the next message.',
-    title: 'Chat fourteen remembers chat one.',
-  },
-] as const;
-
-/** Tsenta's "four stages" block: numbered pill tabs on a line and one dark card for the open step. */
-function HowItWorks() {
-  const [i, setI] = useState(0);
-  const stage = STAGES[i]!;
+/** One feature: its number and title on the left, what it does on the right, and the product itself below. */
+function Feature({
+  id,
+  n,
+  kicker,
+  title,
+  points,
+  children,
+}: {
+  id?: string;
+  n: string;
+  kicker: string;
+  title: string;
+  points: string[];
+  children: ReactNode;
+}) {
   return (
-    <section id="how" className="scroll-mt-16 px-5 md:px-12 py-16 md:py-24">
+    <section id={id} className="scroll-mt-16 px-3 md:px-8 pt-16 md:pt-24">
       <Reveal>
-        <p className="text-[14px] text-ink-3">How it works.</p>
-        <h2 className="display mt-2 text-[30px] md:text-[40px] max-w-[620px]">
-          Four steps. One assistant. Zero spreadsheets.
-        </h2>
+        <div className="px-2 md:px-4 grid lg:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)] gap-6 lg:gap-16 items-start">
+          <div>
+            <p className="label-mono">
+              <span className="text-ink">{n}</span> <span className="mx-1.5 text-line">/</span> {kicker}
+            </p>
+            <h2 className="display text-balance mt-3 text-[30px] sm:text-[36px] md:text-[42px] max-w-[600px]">
+              {title}
+            </h2>
+          </div>
+          <ul className="space-y-3 lg:pt-8 max-w-[520px]">
+            {points.map((p) => (
+              <Point key={p}>{p}</Point>
+            ))}
+          </ul>
+        </div>
       </Reveal>
-      <div className="mt-10 relative">
-        <div className="absolute left-0 right-0 top-1/2 h-px bg-line hidden sm:block" aria-hidden />
-        <div
-          className="absolute left-0 top-1/2 h-px bg-ink hidden sm:block transition-[width] duration-500 ease-[cubic-bezier(0.16,1,0.3,1)]"
-          style={{ width: `${(i / (STAGES.length - 1)) * 100}%` }}
-          aria-hidden
-        />
-        <div
-          className="relative flex flex-wrap sm:flex-nowrap justify-between gap-2"
-          role="tablist"
-          aria-label="How it works"
-        >
-          {STAGES.map((s, k) => (
-            <button
-              key={s.key}
-              type="button"
-              role="tab"
-              aria-selected={k === i}
-              onClick={() => setI(k)}
-              className={cx(
-                'h-10 px-4 rounded-full border inline-flex items-center gap-2 text-[14px] transition-colors duration-300',
-                k === i
-                  ? 'bg-ink border-ink text-white'
-                  : 'bg-page border-line text-ink-2 hover:text-ink hover:border-[#cfcfcf]',
-              )}
-            >
-              <span className={cx('font-mono text-[11px]', k === i ? 'text-white/60' : 'text-ink-3')}>
-                {String(k + 1).padStart(2, '0')}
-              </span>
-              {s.label}
-            </button>
-          ))}
-        </div>
-      </div>
-      <p
-        key={`${stage.key}-lead`}
-        className="fade-up mt-8 text-[15px] leading-relaxed text-ink-3 max-w-[640px]"
-      >
-        {stage.lead}
-      </p>
-      <div
-        key={stage.key}
-        className="fade-up mt-8 min-w-0 rounded-[16px] bg-ink text-white p-6 md:p-8 min-h-[260px] flex flex-col max-w-[760px]"
-      >
-        <div className="text-[22px] md:text-[26px] tracking-[-0.02em] leading-snug max-w-[460px]">
-          {stage.title}
-        </div>
-        <StageVisual stage={stage.key} />
-      </div>
+      <Reveal delay={100} className="mt-8 md:mt-10">
+        {children}
+      </Reveal>
     </section>
   );
 }
 
-function StageVisual({ stage }: { stage: (typeof STAGES)[number]['key'] }) {
-  const line = (a: string, b: string, hot?: boolean) => (
-    <div
-      className={cx(
-        'flex items-center justify-between gap-3 rounded-[8px] px-3 h-9 font-mono text-[12px]',
-        hot ? 'bg-ember/15 text-[#ffb08f]' : 'text-white/45',
-      )}
-    >
-      <span className="min-w-0 truncate">{a}</span>
-      <span className="shrink-0">{b}</span>
-    </div>
-  );
-  return (
-    <div className="mt-auto pt-6 rounded-[12px] border border-white/10 bg-white/[0.03] p-3 space-y-1">
-      {stage === 'find' && (
-        <>
-          {line('Maya Chen · Software Engineer · Stripe', 'reach 72')}
-          {line('Priya Ahmed · Cornell alum · Stripe', 'reach 81', true)}
-          {line('Diego Mehta · Anthropic · via Sana', 'reach 64')}
-        </>
-      )}
-      {stage === 'write' && (
-        <>
-          {line('Hi Priya, I saw your post on payments onboarding', 'hook')}
-          {line('Would you have 15 minutes in the next two weeks?', 'one ask', true)}
-          {line('62 words · reading grade 6', 'checks ok')}
-        </>
-      )}
-      {stage === 'follow' && (
-        <>
-          {line('Daniel Okafor · no reply in 7 business days', 'bump', true)}
-          {line('Lena Novak · spoke yesterday', 'thank-you')}
-          {line('Omar Haddad · proposed Thursday 2pm', 'confirm')}
-        </>
-      )}
-      {stage === 'remember' && (
-        <>
-          {line('Lena offered to pass your name to the recruiter', 'offer', true)}
-          {line('You promised the project link by Friday', 'to do')}
-          {line('She recommended applying before October', 'fact')}
-        </>
-      )}
-    </div>
-  );
-}
-
-/** The product, drawn after Tsenta's hero dashboard: Orbit's sidebar, today's cards on pastel tiles and the chats. */
-function ProductMock() {
-  const cards = [
-    { co: 'Figma', who: 'Mei Chen · Prep', reach: 82, tone: 'bg-pastel-yellow', action: 'Open notes' },
-    { co: 'Ramp', who: 'Lena Novak · Thank-you', reach: 74, tone: 'bg-pastel-mint', action: 'Review' },
-    { co: 'Stripe', who: 'Daniel Okafor · Follow-up', reach: 61, tone: 'bg-pastel-lilac', action: 'Review' },
-    { co: 'Linear', who: 'Jordan Lee · Warm-up', reach: 48, tone: 'bg-pastel-rose', action: 'Next step' },
-  ];
-  const rows: { name: string; role: string; stage: string; tone: string; when: string }[] = [
+/** The four steps, from a LinkedIn export to a booked call, each with a small piece of the product. */
+function HowItWorks({ google }: { google: boolean }) {
+  const sources = google ? ['LinkedIn', 'Gmail', 'Calendar'] : ['LinkedIn', 'Your notes'];
+  const steps: { title: string; text: string; visual: ReactNode }[] = [
     {
-      name: 'Priya Ahmed',
-      role: 'Software Engineer · Stripe',
-      stage: 'Replied',
-      tone: 'good',
-      when: '2 days ago',
-    },
-    {
-      name: 'Omar Haddad',
-      role: 'Associate PM · Notion',
-      stage: 'Scheduling',
-      tone: 'accent',
-      when: 'today',
-    },
-    {
-      name: 'Caleb Weber',
-      role: 'Software Engineer · Notion',
-      stage: 'First message sent',
-      tone: 'neutral',
-      when: '7 days ago',
-    },
-    {
-      name: 'Daniel Okafor',
-      role: 'Software Engineer · Stripe',
-      stage: 'Went quiet',
-      tone: 'bad',
-      when: '11 days ago',
-    },
-    {
-      name: 'Hannah Brooks',
-      role: 'Product Manager · Figma',
-      stage: 'Scheduled',
-      tone: 'warn',
-      when: 'Thu 2:00 pm',
-    },
-  ];
-  const dot = {
-    good: 'bg-good',
-    accent: 'bg-accent',
-    neutral: 'bg-ink-3',
-    bad: 'bg-bad',
-    warn: 'bg-warn',
-  } as const;
-  const pill = {
-    good: 'bg-good-soft text-good',
-    accent: 'bg-accent-soft text-accent',
-    neutral: 'bg-canvas-2 text-ink-2',
-    bad: 'bg-bad-soft text-bad',
-    warn: 'bg-warn-soft text-warn',
-  } as const;
-  return (
-    <div
-      className="rounded-[18px] border border-line bg-canvas shadow-[0_30px_80px_-30px_rgba(0,0,0,0.18)] overflow-hidden flex text-left"
-      aria-hidden
-    >
-      <div className="hidden md:flex w-[200px] shrink-0 flex-col border-r border-line p-3">
-        <div className="flex items-center gap-2 px-1.5 h-9">
-          <Logo size={18} />
-          <span className="text-[14px] font-medium">Orbit</span>
-        </div>
-        <div className="h-3" aria-hidden />
-        {[
-          [SquarePen, 'New chat', ''],
-          [Users, 'People', ''],
-          [Inbox, 'Drafts', '5'],
-          [MapIcon, 'Map', ''],
-          [Compass, 'Discover', ''],
-        ].map(([Icon, label, count], k) => {
-          const I = Icon as typeof Users;
-          return (
-            <div
-              key={label as string}
-              className={cx(
-                'relative h-8 px-2 rounded-[8px] flex items-center gap-2 text-[12.5px]',
-                k === 1 ? 'bg-[#f0efed] text-ink font-medium' : 'text-ink-2',
-              )}
+      title: 'Connect',
+      text: google
+        ? 'Bring your LinkedIn connections, and Gmail and Calendar if you like. Orbit learns who you know and how well.'
+        : 'Bring your LinkedIn connections and notes. Orbit learns who you know and how well.',
+      visual: (
+        <div className="flex flex-wrap gap-1.5">
+          {sources.map((s) => (
+            <span
+              key={s}
+              className="h-7 px-2.5 rounded-full border border-line bg-canvas inline-flex items-center gap-1.5 text-[12px] text-ink-2"
             >
-              <I size={14} strokeWidth={1.75} />
-              {label as string}
-              {count && (
-                <span className="ml-auto text-[10px] min-w-[18px] h-[16px] rounded-full bg-accent-soft text-accent inline-flex items-center justify-center">
-                  {count as string}
-                </span>
-              )}
-            </div>
-          );
-        })}
-        <div className="mt-auto rounded-[10px] px-2 h-11 flex items-center gap-2 text-[12px]">
-          <span className="w-6 h-6 rounded-full bg-[#b5655c] text-white inline-flex items-center justify-center text-[10px]">
-            AR
-          </span>
-          <div>
-            <div className="font-medium leading-tight">Alex Rivera</div>
-            <div className="text-ink-3 text-[10.5px] leading-tight">Cornell · class of 2028</div>
-          </div>
-        </div>
-      </div>
-      <div className="flex-1 min-w-0">
-        <div className="h-12 border-b border-line flex items-center px-4 gap-3">
-          <span className="text-[14px] font-medium">People</span>
-          <span className="hidden sm:flex ml-auto w-[260px] h-8 rounded-full bg-canvas-2 items-center gap-2 px-3 text-[12px] text-ink-3">
-            <Search size={13} /> Search people, companies…
-          </span>
-        </div>
-        <div className="p-4">
-          <div className="flex items-center justify-between">
-            <span className="text-[13px] font-medium">Worth doing today</span>
-            <span className="text-[12px] text-ink-3">Open Drafts ›</span>
-          </div>
-          <div className="mt-3 grid grid-cols-2 lg:grid-cols-4 gap-2.5">
-            {cards.map((c) => (
-              <div key={c.co} className="rounded-[12px] border border-line p-1.5">
-                <div
-                  className={cx('rounded-[9px] p-3 h-[92px] flex items-start justify-between gap-2', c.tone)}
-                >
-                  <div className="min-w-0">
-                    <div className="text-[11px] text-ink-3">{c.co}</div>
-                    <div className="text-[12.5px] font-medium leading-snug">{c.who}</div>
-                  </div>
-                  <Ring value={c.reach} />
-                </div>
-                <div className="flex items-center justify-between px-1.5 pt-2 pb-0.5">
-                  <span className="text-[11px] text-ink-3">{c.co}</span>
-                  <span className="h-6 px-2.5 rounded-full bg-accent text-white text-[11px] inline-flex items-center">
-                    {c.action}
-                  </span>
-                </div>
-              </div>
-            ))}
-          </div>
-          <div className="mt-5 flex items-center justify-between gap-3">
-            <span className="text-[13px] font-medium">All chats</span>
-            <span className="h-7 px-3 rounded-full bg-accent text-white text-[11.5px] inline-flex items-center">
-              Add a person
+              <span className="w-1.5 h-1.5 rounded-full bg-good" />
+              {s}
             </span>
-          </div>
-          <div className="mt-2.5 flex gap-1.5">
-            {['All', 'Waiting', 'Booked', 'Went quiet'].map((f, k) => (
-              <span
-                key={f}
-                className={cx(
-                  'h-7 px-3 rounded-full border text-[11.5px] inline-flex items-center',
-                  k === 0 ? 'bg-ink border-ink text-white' : 'border-line text-ink-2',
-                )}
-              >
-                {f}
-              </span>
-            ))}
-          </div>
-          <div className="mt-3 rounded-[12px] border border-line overflow-hidden">
-            <div className="hidden sm:grid grid-cols-[1.6fr_1fr_0.8fr] bg-[#fafaf9] border-b border-line px-3 h-8 items-center label-mono !text-[10px]">
-              <span>Person</span>
-              <span>Stage</span>
-              <span className="text-right">Last touch</span>
-            </div>
-            {rows.map((r) => (
-              <div
-                key={r.name}
-                className="grid grid-cols-[1fr_auto] sm:grid-cols-[1.6fr_1fr_0.8fr] items-center px-3 h-12 border-b border-line last:border-b-0 text-[12px]"
-              >
-                <div className="flex items-center gap-2.5 min-w-0">
-                  <span className="w-7 h-7 rounded-full bg-canvas-2 border border-line inline-flex items-center justify-center text-[10px] font-medium shrink-0">
-                    {r.name
-                      .split(' ')
-                      .map((x) => x[0])
-                      .join('')}
-                  </span>
-                  <div className="min-w-0">
-                    <div className="font-medium truncate">{r.name}</div>
-                    <div className="text-ink-3 text-[11px] truncate">{r.role}</div>
-                  </div>
-                </div>
-                <span>
-                  <span
-                    className={cx(
-                      'inline-flex items-center gap-1.5 h-5 px-2 rounded-full text-[10.5px]',
-                      pill[r.tone as keyof typeof pill],
-                    )}
-                  >
-                    <span className={cx('w-1.5 h-1.5 rounded-full', dot[r.tone as keyof typeof dot])} />
-                    {r.stage}
-                  </span>
-                </span>
-                <span className="hidden sm:block text-right text-ink-3">{r.when}</span>
-              </div>
-            ))}
-          </div>
+          ))}
         </div>
-      </div>
-    </div>
+      ),
+    },
+    {
+      title: 'Find the way in',
+      text: 'See who is worth a coffee chat and the warmest route to them, scored, through people you already know.',
+      visual: (
+        <div className="flex flex-wrap items-center gap-1.5 text-[12px]">
+          <span className="h-6 px-2 rounded-full bg-ink text-white inline-flex items-center text-[11px] font-medium">
+            You
+          </span>
+          <ChevronRight size={12} className="text-ink-3" />
+          <Avatar name="Maya Chen" src={demoFace('Maya')} size={22} />
+          <ChevronRight size={12} className="text-ink-3" />
+          <Avatar name="Priya Ahmed" src={demoFace('Priya')} size={22} />
+          <Chip tone="good" className="ml-1 h-[20px] text-[11px]">
+            Strong route · 45
+          </Chip>
+        </div>
+      ),
+    },
+    {
+      title: 'Write and approve',
+      text: 'Every message drafted in your voice from what you know. Nothing goes out until you approve it.',
+      visual: (
+        <div className="flex items-center gap-2">
+          <span className="h-7 px-3 rounded-full bg-accent text-white inline-flex items-center text-[12px] font-medium">
+            Open email to Lena
+          </span>
+          <span className="text-[12px] text-ink-3">you send it</span>
+        </div>
+      ),
+    },
+    {
+      title: 'Prep and follow up',
+      text: 'A prep deck before each call, the thank-you after it, and a nudge when a chat goes quiet.',
+      visual: (
+        <div className="flex flex-wrap gap-1.5">
+          <Chip tone="accent">Open prep</Chip>
+          <Chip tone="good">Thank-you</Chip>
+          <Chip tone="warn">Follow-up</Chip>
+        </div>
+      ),
+    },
+  ];
+  return (
+    <section id="how" className="scroll-mt-16 px-5 md:px-12 pt-8 md:pt-12 pb-4">
+      <Reveal>
+        <div className="grid lg:grid-cols-2 gap-6 lg:gap-12 items-end">
+          <div>
+            <p className="label-mono">How it works</p>
+            <h2 className="display text-balance mt-3 text-[32px] md:text-[44px] max-w-[560px]">
+              From a LinkedIn export to a booked call.
+            </h2>
+          </div>
+          <p className="text-[15px] md:text-[16px] leading-[1.6] text-ink-3 max-w-[480px]">
+            Orbit does the finding, the writing and the remembering. You decide who to meet and press send.
+          </p>
+        </div>
+      </Reveal>
+      <Reveal delay={80}>
+        <ol
+          className="mt-10 grid sm:grid-cols-2 lg:grid-cols-4 rounded-[18px] border border-line bg-canvas overflow-hidden"
+          data-testid="lp-steps"
+        >
+          {steps.map((s, i) => (
+            <li
+              key={s.title}
+              className={cx(
+                'p-5 md:p-6 flex flex-col gap-4 border-line',
+                i > 0 && 'border-t sm:border-t-0',
+                i % 2 === 1 && 'sm:border-l',
+                i >= 2 && 'sm:border-t lg:border-t-0',
+                i === 2 && 'lg:border-l',
+              )}
+              data-testid="lp-step"
+            >
+              <span className="font-mono text-[11px] text-ink-3 tabular">
+                {String(i + 1).padStart(2, '0')}
+              </span>
+              <div>
+                <h3 className="text-[17px] font-medium tracking-[-0.01em]">{s.title}</h3>
+                <p className="mt-1.5 text-[14px] leading-[1.55] text-ink-3">{s.text}</p>
+              </div>
+              <div className="mt-auto pt-2 min-h-8 flex items-end">{s.visual}</div>
+            </li>
+          ))}
+        </ol>
+      </Reveal>
+    </section>
   );
 }
 
-function Ring({ value }: { value: number }) {
-  const r = 14;
-  const c = 2 * Math.PI * r;
+const PROMISES = [
+  {
+    icon: ShieldCheck,
+    title: 'Nothing is sent without you',
+    text: 'Orbit drafts; you read, edit and send. What goes out is exactly the text you approved.',
+  },
+  {
+    icon: Gauge,
+    title: 'LinkedIn-safe pace',
+    text: 'At most 10 LinkedIn messages a day unless you change it, three days between messages to one person, and a warm-up before writing to a stranger.',
+  },
+  {
+    icon: HardDrive,
+    title: 'Kept in your browser',
+    text: 'Your people, notes and drafts stay on this device. Orbit reads your network only to find people worth meeting.',
+  },
+  {
+    icon: Trash2,
+    title: 'Yours to take or wipe',
+    text: 'Export or delete everything from Settings, any time. Anyone can ask to be left out of research.',
+  },
+] as const;
+
+/** The demo's made-up people, as a row of faces beside the last call to action. */
+function DemoFaces() {
+  const people: [string, string][] = [
+    ['Maya', 'Maya Chen'],
+    ['Daniel', 'Daniel Okafor'],
+    ['Priya', 'Priya Ahmed'],
+    ['Lena', 'Lena Novak'],
+    ['Omar', 'Omar Haddad'],
+    ['Hannah', 'Hannah Brooks'],
+  ];
   return (
-    <span className="relative w-9 h-9 shrink-0 inline-flex items-center justify-center">
-      <svg width="36" height="36" viewBox="0 0 36 36" className="-rotate-90">
-        <circle cx="18" cy="18" r={r} fill="none" stroke="rgba(0,0,0,0.08)" strokeWidth="2.5" />
-        <circle
-          cx="18"
-          cy="18"
-          r={r}
-          fill="none"
-          stroke="#0a0a0a"
-          strokeWidth="2.5"
-          strokeDasharray={c}
-          strokeDashoffset={c * (1 - value / 100)}
-          strokeLinecap="round"
-        />
-      </svg>
-      <span className="absolute text-[9px] font-semibold">{value}</span>
-    </span>
+    <div className="lg:text-right" aria-hidden>
+      <div className="flex lg:justify-end -space-x-2.5">
+        {people.map(([first, name]) => (
+          <span key={name} className="rounded-full ring-[3px] ring-accent">
+            <Avatar name={name} src={demoFace(first)} size={44} />
+          </span>
+        ))}
+      </div>
+      <p className="mt-3 text-[13px] text-white/65 max-w-[260px] lg:ml-auto">
+        Maya, Daniel, Priya and 87 more are in the demo. Made-up people with generated faces.
+      </p>
+    </div>
   );
 }
