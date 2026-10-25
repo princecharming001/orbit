@@ -1798,7 +1798,10 @@ async function unipilePhoto(deps, body, doFetch) {
   };
 }
 function companyNameKey(name) {
-  return String(name ?? "").toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/&/g, " and ").replace(/[^a-z0-9]+/g, " ").replace(/\b(the|inc|incorporated|llc|ltd|limited|corp|corporation|co|company|gmbh|plc|sa|ag|bv|lp|llp)\b/g, " ").replace(/\s+/g, " ").trim();
+  return String(name ?? "").toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/&/g, " and ").replace(/[^a-z0-9]+/g, " ").replace(
+    /\b(the|inc|incorporated|llc|ltd|limited|corp|corporation|co|company|gmbh|plc|sa|ag|bv|lp|llp)\b/g,
+    " "
+  ).replace(/\s+/g, " ").trim();
 }
 async function companyByName(deps, accountId, name, doFetch) {
   const q = new URLSearchParams({ account_id: accountId, limit: "10" });
@@ -1808,12 +1811,19 @@ async function companyByName(deps, accountId, name, doFetch) {
     body: JSON.stringify({ api: "classic", category: "companies", keywords: name })
   });
   if (res.status === 429)
-    return { ok: false, reason: "throttled", message: "LinkedIn asked Orbit to slow down. It carries on later." };
-  if (res.status >= 400 && res.status < 500) return { ok: false, reason: "refused", message: await unipileError(res) };
+    return {
+      ok: false,
+      reason: "throttled",
+      message: "LinkedIn asked Orbit to slow down. It carries on later."
+    };
+  if (res.status >= 400 && res.status < 500)
+    return { ok: false, reason: "refused", message: await unipileError(res) };
   if (!res.ok) throw new Error(`unipile ${res.status}`);
   const items = (await res.json()).items ?? [];
   const key = companyNameKey(name);
-  const same = items.filter((c) => companyNameKey(c.name) === key && (typeof c.id === "string" || typeof c.id === "number"));
+  const same = items.filter(
+    (c) => companyNameKey(c.name) === key && (typeof c.id === "string" || typeof c.id === "number")
+  );
   if (same.length === 1) return { id: String(same[0].id) };
   return same.length ? { ok: false, reason: "ambiguous", message: "LinkedIn has more than one company of that name." } : { ok: false, reason: "not_found", message: "LinkedIn could not find that company." };
 }
