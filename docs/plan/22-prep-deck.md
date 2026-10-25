@@ -1,6 +1,7 @@
 # 22. The Prep deck: everything for the call, swiped through from About
 
-Status: proposed. Nothing in this plan is built yet.
+Status: built (2026-10-25), with the three decisions taken as proposed: After the call lives in the deck, the header
+button shows from a day before a scheduled chat to two hours after it, and Lately reads only posts Orbit already has.
 
 ## Why
 
@@ -140,3 +141,19 @@ About a day. Ten files touched, four new.
 2. The header button shows for 24 hours before a scheduled chat (my pick) or always.
 3. Lately reads their latest LinkedIn posts from the engagement rows the map already fetches (my pick, no new reads)
    or asks the connector for posts when the deck opens (one more read per open against the daily ledger).
+
+## What building it changed
+
+- **The deck shell is shared mechanics, not one component.** The morning brief has a minimize-to-pill mode and its
+  own footer, so `ui/Deck.tsx` exports the pieces both decks use (`useDeckKeys`, `useDeckFocus`, `useDeckSwipe`,
+  `DeckLayer`, `DeckProgress`) and each deck draws its own header and footer. The morning brief's behaviour and tests
+  are unchanged.
+- **The layer renders into `document.body`.** Drawn inside the person page, a transformed ancestor pinned the fixed
+  layer to the page instead of the screen (cut off on a laptop, off screen on a phone).
+- **The deck remembers its card by kind, not by number.** Cards arrive after the first draw (the mutuals, a fact
+  saved from After the call adds Where you left off), so a stored index moved the student to another card and
+  remounted the card they were typing in.
+- **Role dates are one helper** (`engine/roleDates.ts`), shared with About's LinkedIn history, so the two never
+  disagree.
+- **Old links still work.** `?tab=prep` opens About with the deck; every in-app link now points at
+  `?tab=facts&prep=1`.

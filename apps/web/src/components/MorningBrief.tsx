@@ -40,6 +40,7 @@ import { snoozeSuggestion } from '../engine/send';
 import { decideProposedStage } from '../engine/stages';
 import { useSession } from '../state/session';
 import { Avatar, Button, Chip, cx, LinkedInMark, useToast } from '../ui';
+import { DeckLayer, useDeckFocus, useDeckKeys, useDeckSwipe } from '../ui/Deck';
 import { runApproval } from './approve';
 import { PersonCompanyLogo } from './CompanyLogo';
 import { DraftEditor } from './DraftEditor';
@@ -62,9 +63,6 @@ type Result = { o: MorningOutcome; text?: string };
 /** The last decision, kept so the footer can take it back. */
 type Last = { sid: string; text: string; undo: () => Promise<void> };
 
-const TYPING = ['INPUT', 'TEXTAREA', 'SELECT'];
-const isTyping = (el: Element | null) =>
-  !!el && ((el as HTMLElement).isContentEditable || TYPING.includes(el.tagName));
 /**
  * A deck waiting as a pill outlives a reload of the tab: which day, and which step it was on (by the card, since a
  * fresh deck no longer holds the ones already decided). Only this tab's session; losing it only loses the pill.
@@ -84,9 +82,6 @@ function writePill(x: SavedPill | undefined): void {
     else sessionStorage.removeItem(PILL_KEY);
   } catch {}
 }
-
-const FOCUSABLE =
-  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 /**
  * The morning debrief: once a day, after the brief time, a deck in the middle of the screen (a sheet from the bottom
@@ -219,22 +214,7 @@ export function MorningBrief() {
     setMode('open');
   };
 
-  // focus moves into the deck when it opens and back to where it was when it goes
-  useEffect(() => {
-    if (mode !== 'open') return;
-    const previous = document.activeElement as HTMLElement | null;
-    return () => {
-      if (previous && document.contains(previous) && previous !== document.body) previous.focus();
-    };
-  }, [mode]);
-  // each step starts with the focus on the deck itself, so Enter presses the step's main button
-  useEffect(() => {
-    void i;
-    if (mode !== 'open') return;
-    const node = ref.current;
-    if (!node || (node.contains(document.activeElement) && isTyping(document.activeElement))) return;
-    node.focus({ preventScroll: true });
-  }, [i, mode]);
+  useDeckFocus(ref, mode === 'open', i);
 
   const slide = slides[i];
   const next = () => go(i + 1);
@@ -251,66 +231,9 @@ export function MorningBrief() {
   }, [mode, away, slide, user]);
   // the keyboard while it is open: ← → move, Enter presses the main button, Esc puts it away as a pill, Tab stays
   // inside
-  useEffect(() => {
-    if (mode !== 'open') return;
-    const onKey = (e: KeyboardEvent) => {
-      const node = ref.current;
-      if (!node || e.defaultPrevented) return;
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        minimize();
-        return;
-      }
-      if (e.key === 'Tab') {
-        const list = [...node.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(
-          (x) => x.offsetParent !== null,
-        );
-        if (!list.length) return e.preventDefault();
-        const first = list[0]!;
-        const lastEl = list[list.length - 1]!;
-        const active = document.activeElement;
-        if (e.shiftKey && (active === first || active === node || !node.contains(active))) {
-          e.preventDefault();
-          lastEl.focus();
-        } else if (!e.shiftKey && (active === lastEl || !node.contains(active))) {
-          e.preventDefault();
-          first.focus();
-        }
-        return;
-      }
-      const t = e.target as HTMLElement | null;
-      if (isTyping(t) || e.altKey || e.ctrlKey || e.metaKey) return;
-      if (e.key === 'ArrowRight') go(i + 1);
-      else if (e.key === 'ArrowLeft') go(i - 1);
-      else if (e.key === 'Enter') {
-        // a focused button or link takes its own Enter
-        if (t && t !== node && t.closest('button, a, [role="button"]')) return;
-        const primary = node.querySelector<HTMLElement>('[data-primary="true"]:not([disabled])');
-        if (!primary) return;
-        primary.click();
-      } else return;
-      e.preventDefault();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  });
+  useDeckKeys(ref, { open: mode === 'open', i, go, onEscape: () => minimize() });
 
-  // a swipe sideways on a phone moves a step (not a drag that starts on a button, a link or a text box)
-  const start = useRef<{ x: number; y: number } | undefined>(undefined);
-  const onPointerDown = (e: React.PointerEvent) => {
-    const t = e.target as HTMLElement;
-    start.current =
-      e.pointerType === 'mouse' || t.closest('button, a, input, textarea, select, [contenteditable="true"]')
-        ? undefined
-        : { x: e.clientX, y: e.clientY };
-  };
-  const onPointerUp = (e: React.PointerEvent) => {
-    const s = start.current;
-    start.current = undefined;
-    if (!s) return;
-    const dx = e.clientX - s.x;
-    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(e.clientY - s.y) * 1.5) go(i + (dx < 0 ? 1 : -1));
-  };
+  const swipe = useDeckSwipe(i, go);
 
   if (!ready || !user || mode === 'hidden' || !deck || !slide) return null;
   const outcomes = Object.fromEntries(Object.entries(results).map(([k, v]) => [k, v.o]));
@@ -374,143 +297,120 @@ export function MorningBrief() {
         ? 'Skip'
         : 'Next';
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-end md:items-center justify-center md:p-6"
-      data-testid="morning-layer"
+    <DeckLayer
+      deckRef={ref}
+      label="Morning brief"
+      testId="morning-brief"
+      layerTestId="morning-layer"
+      backdropTestId="morning-backdrop"
+      step={slide.kind}
+      onBackdrop={() => minimize()}
+      swipe={swipe}
     >
-      <div
-        className="absolute inset-0 bg-[rgba(10,10,10,0.38)]"
-        onClick={() => minimize()}
-        aria-hidden
-        data-testid="morning-backdrop"
-      />
-      <section
-        ref={ref}
-        role="dialog"
-        aria-modal="true"
-        aria-label="Morning brief"
-        tabIndex={-1}
-        className={cx(
-          'relative flex flex-col bg-canvas border border-line shadow-[0_32px_80px_-24px_rgba(0,0,0,0.45)] sheet-in focus:outline-none',
-          // a phone: a sheet from the bottom, the full width and at least most of the height, so steps barely move;
-          // a laptop: a card in the middle of the screen
-          'w-full min-h-[min(560px,calc(100dvh-28px))] max-h-[calc(100dvh-28px)] rounded-t-[24px] pb-[env(safe-area-inset-bottom)]',
-          'md:w-[560px] md:min-h-[min(500px,calc(100dvh-48px))] md:max-h-[min(780px,calc(100dvh-48px))] md:rounded-[24px] md:pb-0',
-        )}
-        data-testid="morning-brief"
-        data-step={slide.kind}
-        onPointerDown={onPointerDown}
-        onPointerUp={onPointerUp}
-      >
-        <span className="md:hidden mx-auto mt-2 h-1 w-10 rounded-full bg-line" aria-hidden />
-        <header className="px-4 md:px-5 pt-2.5 md:pt-4 pb-2 flex items-center gap-2">
-          <Progress slides={slides} i={i} results={results} />
-          <button
-            onClick={() => minimize()}
-            className="w-8 h-8 rounded-full inline-flex items-center justify-center text-ink-3 hover:bg-canvas-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-            aria-label="Minimize. It waits at the bottom of the screen"
-            title="Minimize (Esc). It waits at the bottom of the screen"
-            data-testid="morning-minimize"
-          >
-            <Minus size={16} />
-          </button>
-          <button
-            onClick={() => void close()}
-            className="w-8 h-8 rounded-full inline-flex items-center justify-center text-ink-3 hover:bg-canvas-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-            aria-label="Close the morning brief until tomorrow"
-            title="Close until tomorrow"
-            data-testid="morning-close"
-          >
-            <X size={16} />
-          </button>
-        </header>
-        <div className="px-5 md:px-6 pb-4 flex-1 min-h-0 overflow-y-auto scroll-thin" key={i}>
-          <div className="fade-up">
-            {slide.kind === 'overview' && <Overview deck={deck} onLeave={leave} />}
-            {slide.kind === 'decide' && (
-              <Decision
-                key={slide.s.id}
-                s={slide.s}
-                user={user}
-                index={slide.n}
-                total={deck.decisions.length}
-                result={result}
-                onResolve={(o, text, undo, advance = true) => {
-                  record(slide.s, o, text, undo);
-                  if (advance) next();
-                }}
-                onUnresolve={() => unrecord(slide.s.id)}
-                onLeave={leave}
-              />
-            )}
-            {slide.kind === 'moves' && <Moves deck={deck} user={user} onLeave={leave} />}
-            {slide.kind === 'done' && (
-              <Done
-                summary={summary}
-                onDrafts={() => {
-                  void close();
-                  nav('/inbox');
-                }}
-                onClose={() => void close()}
-              />
-            )}
-          </div>
-        </div>
-        <footer className="px-3 md:px-4 py-3 border-t border-line-2 flex items-center gap-2 min-h-[60px]">
-          <button
-            onClick={() => go(i - 1)}
-            disabled={i === 0}
-            className="w-9 h-9 shrink-0 rounded-full inline-flex items-center justify-center text-ink-2 hover:bg-canvas-2 disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-            aria-label="Back"
-            title="Back (←)"
-            data-testid="morning-back"
-          >
-            <ChevronLeft size={17} />
-          </button>
-          {last ? (
-            <div
-              className="min-w-0 flex-1 flex items-center gap-1.5 text-[12.5px]"
-              data-testid="morning-last"
-            >
-              <span className="truncate text-ink-2" title={last.text}>
-                {last.text}
-              </span>
-              <button
-                onClick={() => void undoLast()}
-                className="shrink-0 inline-flex items-center gap-1 h-7 px-2 rounded-full font-medium text-ink hover:bg-canvas-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-                data-testid="morning-undo"
-              >
-                <Undo2 size={13} /> Undo
-              </button>
-            </div>
-          ) : (
-            <span className="min-w-0 flex-1 truncate text-[11.5px] text-ink-3 hidden md:block" aria-hidden>
-              ← → to move · Enter for the main button · Esc to minimize
-            </span>
-          )}
-          {!last && <span className="flex-1 md:hidden" />}
-          {slide.kind !== 'done' && (
-            <Button
-              size="sm"
-              variant={slide.kind === 'decide' && !result ? 'ghost' : 'primary'}
-              className="shrink-0"
-              onClick={() => {
-                if (slide.kind === 'decide' && !result) record(slide.s, 'skipped');
-                next();
+      <header className="px-4 md:px-5 pt-2.5 md:pt-4 pb-2 flex items-center gap-2">
+        <Progress slides={slides} i={i} results={results} />
+        <button
+          onClick={() => minimize()}
+          className="w-8 h-8 rounded-full inline-flex items-center justify-center text-ink-3 hover:bg-canvas-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          aria-label="Minimize. It waits at the bottom of the screen"
+          title="Minimize (Esc). It waits at the bottom of the screen"
+          data-testid="morning-minimize"
+        >
+          <Minus size={16} />
+        </button>
+        <button
+          onClick={() => void close()}
+          className="w-8 h-8 rounded-full inline-flex items-center justify-center text-ink-3 hover:bg-canvas-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          aria-label="Close the morning brief until tomorrow"
+          title="Close until tomorrow"
+          data-testid="morning-close"
+        >
+          <X size={16} />
+        </button>
+      </header>
+      <div className="px-5 md:px-6 pb-4 flex-1 min-h-0 overflow-y-auto scroll-thin" key={i}>
+        <div className="fade-up">
+          {slide.kind === 'overview' && <Overview deck={deck} onLeave={leave} />}
+          {slide.kind === 'decide' && (
+            <Decision
+              key={slide.s.id}
+              s={slide.s}
+              user={user}
+              index={slide.n}
+              total={deck.decisions.length}
+              result={result}
+              onResolve={(o, text, undo, advance = true) => {
+                record(slide.s, o, text, undo);
+                if (advance) next();
               }}
-              data-testid="morning-next"
-              data-primary={slide.kind !== 'decide' || result ? 'true' : undefined}
-              title={
-                slide.kind === 'decide' && !result ? 'Leave it for now; it stays in Drafts (→)' : 'Next (→)'
-              }
-            >
-              {nextLabel}
-              <ChevronRight size={14} />
-            </Button>
+              onUnresolve={() => unrecord(slide.s.id)}
+              onLeave={leave}
+            />
           )}
-        </footer>
-      </section>
-    </div>
+          {slide.kind === 'moves' && <Moves deck={deck} user={user} onLeave={leave} />}
+          {slide.kind === 'done' && (
+            <Done
+              summary={summary}
+              onDrafts={() => {
+                void close();
+                nav('/inbox');
+              }}
+              onClose={() => void close()}
+            />
+          )}
+        </div>
+      </div>
+      <footer className="px-3 md:px-4 py-3 border-t border-line-2 flex items-center gap-2 min-h-[60px]">
+        <button
+          onClick={() => go(i - 1)}
+          disabled={i === 0}
+          className="w-9 h-9 shrink-0 rounded-full inline-flex items-center justify-center text-ink-2 hover:bg-canvas-2 disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          aria-label="Back"
+          title="Back (←)"
+          data-testid="morning-back"
+        >
+          <ChevronLeft size={17} />
+        </button>
+        {last ? (
+          <div className="min-w-0 flex-1 flex items-center gap-1.5 text-[12.5px]" data-testid="morning-last">
+            <span className="truncate text-ink-2" title={last.text}>
+              {last.text}
+            </span>
+            <button
+              onClick={() => void undoLast()}
+              className="shrink-0 inline-flex items-center gap-1 h-7 px-2 rounded-full font-medium text-ink hover:bg-canvas-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+              data-testid="morning-undo"
+            >
+              <Undo2 size={13} /> Undo
+            </button>
+          </div>
+        ) : (
+          <span className="min-w-0 flex-1 truncate text-[11.5px] text-ink-3 hidden md:block" aria-hidden>
+            ← → to move · Enter for the main button · Esc to minimize
+          </span>
+        )}
+        {!last && <span className="flex-1 md:hidden" />}
+        {slide.kind !== 'done' && (
+          <Button
+            size="sm"
+            variant={slide.kind === 'decide' && !result ? 'ghost' : 'primary'}
+            className="shrink-0"
+            onClick={() => {
+              if (slide.kind === 'decide' && !result) record(slide.s, 'skipped');
+              next();
+            }}
+            data-testid="morning-next"
+            data-primary={slide.kind !== 'decide' || result ? 'true' : undefined}
+            title={
+              slide.kind === 'decide' && !result ? 'Leave it for now; it stays in Drafts (→)' : 'Next (→)'
+            }
+          >
+            {nextLabel}
+            <ChevronRight size={14} />
+          </Button>
+        )}
+      </footer>
+    </DeckLayer>
   );
 }
 
@@ -837,7 +737,7 @@ function Decision({
       ),
     prep_open: () => {
       void decide(() => markPrepOpened(s.id), `Opened prep for ${first}.`).then(
-        (ok) => ok && person && onLeave(`/people/${person.id}?tab=prep`),
+        (ok) => ok && person && onLeave(`/people/${person.id}?tab=facts&prep=1`),
       );
     },
     prep_done: () => void decide(() => markPrepOpened(s.id), `Marked prep for ${first} done.`),

@@ -1,5 +1,5 @@
 import { expect, type Page, test } from '@playwright/test';
-import { loadDemo } from './helpers';
+import { loadDemo, prepDeckTo } from './helpers';
 
 /**
  * Deep research on a person (docs/plan/20) in the demo, where sample briefs stand in for orbit-research: research
@@ -77,11 +77,14 @@ test.describe('Research', () => {
     // Go deeper upgrades the same brief: not another one of the month's
     await expect(debrief.getByTestId('research-allowance')).toHaveText('Research · 14 left this month');
 
-    // the Prep tab shows what they did lately and the openers
+    // the Prep deck shows what they did lately and the openers, with their sources (an old Prep link opens it)
     await page.goto('people/p5?tab=prep');
-    const prepCard = page.getByTestId('prep-research');
-    await expect(prepCard).toContainText('new-grad program');
-    await expect(prepCard.getByTestId('prep-openers')).toContainText('new grads should ship in week one');
+    const lately = await prepDeckTo(page, 'lately');
+    await expect(lately).toContainText('new-grad program');
+    const openers = await prepDeckTo(page, 'openers');
+    await expect(openers).toContainText('new grads should ship in week one');
+    await expect(openers).toContainText('Public professional sources only');
+    await page.getByTestId('prep-close').click();
 
     // Settings has the dollars; the About tab only the count
     await page.goto('settings/integrations');

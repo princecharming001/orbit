@@ -19,7 +19,7 @@ const PANEL_ROUTES: RegExp[] = [
   /^\/settings(\/[^/]+)?$/,
 ];
 
-/** The path part of an in-app href ("/people/p4?tab=prep" gives "/people/p4"). */
+/** The path part of an in-app href ("/people/p4?tab=facts&prep=1" gives "/people/p4"). */
 export function pathOf(href: string): string {
   return href.split('#')[0]!.split('?')[0]!;
 }

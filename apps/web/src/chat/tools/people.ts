@@ -289,7 +289,7 @@ export const pickPrepQuestions = defineTool({
       picked?.length
         ? `${plural(picked.length, 'question')} picked for this chat.`
         : 'No questions picked for this chat.',
-      `/people/${chat.personId}?tab=prep`,
+      `/people/${chat.personId}?tab=facts&prep=1`,
     );
   },
   toModel,

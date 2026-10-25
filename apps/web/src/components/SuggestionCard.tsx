@@ -444,7 +444,7 @@ export function SuggestionCard({
                 variant="primary"
                 onClick={async () => {
                   await markPrepOpened(s.id);
-                  nav(`/people/${person.id}?tab=prep`);
+                  nav(`/people/${person.id}?tab=facts&prep=1`);
                 }}
               >
                 Open prep

@@ -590,7 +590,7 @@ function ComingUp({
                 {p && <Avatar name={p.displayName} src={p.photoUrl} id={p.id} size={28} />}
                 <div className="min-w-0 flex-1">
                   <Link
-                    to={p ? `/people/${p.id}?tab=prep` : '#'}
+                    to={p ? `/people/${p.id}?tab=facts&prep=1` : '#'}
                     className="block text-[13.5px] font-medium truncate hover:underline"
                   >
                     {p?.displayName ?? e.title}

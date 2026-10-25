@@ -185,7 +185,7 @@ export const scheduleChat = defineTool({
       out,
       out,
       `Saved. Your chat with ${person.firstName} is ${out.when}, under Coming up in Drafts, with prep the day before.`,
-      `/people/${person.id}?tab=prep`,
+      `/people/${person.id}?tab=facts&prep=1`,
     );
   },
   toModel,

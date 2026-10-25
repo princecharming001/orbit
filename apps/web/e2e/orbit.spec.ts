@@ -1,6 +1,6 @@
 import { deflateRawSync } from 'node:zlib';
 import { expect, type Page, type TestInfo, test } from '@playwright/test';
-import { briefWritten, injectPeople } from './helpers';
+import { briefWritten, clippedLabels, injectPeople, prepDeckTo } from './helpers';
 
 async function prep(page: Page) {
   // The demo is laid out on business days relative to "now" (a Monday chat is not "tomorrow" on a Friday), so pin
@@ -224,23 +224,45 @@ test.describe('Orbit demo flow', () => {
     await expect(history.getByTestId('linkedin-role').first()).toBeVisible();
     await expect(history.getByTestId('linkedin-role').first()).toContainText(/Now/);
     await expect(history).not.toHaveText(/[–—]/);
-    await page.getByRole('tab', { name: /prep/i }).click();
-    await expect(page.getByText(/questions to ask/i)).toBeVisible();
-    await expect(page.getByText(/your goal for this chat/i)).toBeVisible();
-    await expect(page.getByText(/anyone else you'd suggest I talk to/i)).toBeVisible();
+    // Prep is a deck over About: the cover first, a card at a time, the arrow keys move it, Esc closes it
+    await expect(page.getByRole('tab', { name: /^prep/i })).toHaveCount(0);
+    await page.getByTestId('prep-open').click();
+    await expect(page).toHaveURL(/prep=1/);
+    const deck = page.getByTestId('prep-deck');
+    // they already had the chat: it opens on what to do now, and the cover is a few cards back
+    await expect(deck).toHaveAttribute('data-step', 'after');
+    await prepDeckTo(page, 'call');
+    await expect(deck.getByTestId('prep-counter')).toHaveText(/^1 of \d+$/);
+    await expect(deck).toContainText(/your goal/i);
+    await page.keyboard.press('ArrowRight');
+    await expect(deck).toHaveAttribute('data-step', 'who');
+    await prepDeckTo(page, 'questions');
+    await expect(deck.getByTestId('prep-card-title')).toHaveText('Questions to ask');
+    await expect(deck).toContainText(/anyone else you'd suggest I talk to/i);
+    await expect(deck).not.toHaveText(/[–—]/);
+    await page.keyboard.press('Escape');
+    await expect(deck).toBeHidden();
+    await expect(page).not.toHaveURL(/prep=1/);
+    // it opens again on the card the student left it on
+    await page.getByTestId('prep-open').click();
+    await expect(page.getByTestId('prep-deck')).toHaveAttribute('data-step', 'questions');
+    await page.getByTestId('prep-close').click();
     await expect(page.getByTestId('person-summary')).not.toHaveText(/\d{4}-\d{2}-\d{2}|building/i);
     await page.getByTestId('person-write').click();
     await expect(page.getByLabel('Message body')).toBeVisible();
   });
 
-  test('prep tab: clear names are saved, unsure ones wait for a yes, roles stay unsaved', async ({
+  test('prep after the call: clear names are saved, unsure ones wait for a yes, roles stay unsaved', async ({
     page,
   }) => {
     await loadDemo(page);
     await openDrafts(page);
     await page.getByTestId('suggestion-thank_you').first().getByRole('link').nth(1).click();
     await expect(page).toHaveURL(/\/people\//);
-    await page.getByRole('tab', { name: /prep/i }).click();
+    // a chat that happened: the deck opens on After the call
+    await page.getByRole('tab', { name: /^about/i }).click();
+    await page.getByTestId('prep-open').click();
+    await expect(page.getByTestId('prep-deck')).toHaveAttribute('data-step', 'after');
     const field = page.getByTestId('prep-suggested');
     await field.fill('Priya Shah at Stripe, will park, career services');
     await field.press('Enter');
@@ -2040,12 +2062,36 @@ test.describe('Usability round 5 on a phone', () => {
     await expect(page.getByTestId('ob-skip')).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   });
-  test("a person's tabs fit one row, so Prep is not left alone on a second line", async ({ page }) => {
+  test("a person's tabs fit one row, and the Prep deck is a sheet that fits the phone", async ({ page }) => {
     await loadDemo(page);
     await page.goto('people');
     await page.getByRole('link', { name: 'Ethan Park' }).first().click();
     const tabs = page.getByRole('tablist');
-    await expect(tabs.getByRole('tab', { name: /^prep/i })).toBeVisible();
+    await expect(tabs.getByRole('tab', { name: /^about/i })).toBeVisible();
+    await tabs.getByRole('tab', { name: /^about/i }).click();
+    await page.getByTestId('prep-open').click();
+    const deck = page.getByTestId('prep-deck');
+    await expect(deck).toBeVisible();
+    const sheet = await deck.boundingBox();
+    expect(sheet!.width).toBeLessThanOrEqual(390);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+    expect(await clippedLabels(page, '[data-testid="prep-deck"]')).toEqual([]);
+    // a swipe to the left moves to the next card
+    const step = await deck.getAttribute('data-step');
+    await deck.dispatchEvent('pointerdown', {
+      pointerType: 'touch',
+      clientX: 300,
+      clientY: 400,
+      bubbles: true,
+    });
+    await deck.dispatchEvent('pointerup', {
+      pointerType: 'touch',
+      clientX: 120,
+      clientY: 410,
+      bubbles: true,
+    });
+    await expect(deck).not.toHaveAttribute('data-step', step!);
+    await page.getByTestId('prep-close').click();
     const box = await tabs.boundingBox();
     expect(box!.height).toBeLessThan(44);
   });
@@ -2797,8 +2843,11 @@ test.describe('Morning brief', () => {
       const at = (await brief.getByTestId('morning-count').textContent())!;
       const n = Number(/Decision (\d+)/.exec(at)![1]);
       await brief.getByTestId('morning-action-prep_open').click();
-      await expect(page).toHaveURL(/\/people\/[^?]+\?tab=prep/);
+      await expect(page).toHaveURL(/\/people\/[^?]+\?tab=facts&prep=1/);
+      await expect(page.getByTestId('prep-deck')).toBeVisible();
       await expect(page.getByTestId('morning-pill')).toContainText('Back to your morning brief');
+      // done with prep: the deck closes and the pill brings the student back to the brief
+      await page.getByTestId('prep-close').click();
       await page.getByTestId('morning-resume').click();
       await expect(brief.getByTestId('morning-count')).toHaveText(new RegExp(`^Decision ${n + 1} of`));
     }

@@ -35,7 +35,7 @@ export function PanelRouter({
   onGo,
   children,
 }: {
-  /** the route the panel shows, e.g. "/people/p4?tab=prep" */
+  /** the route the panel shows, e.g. "/people/p4?tab=facts&prep=1" */
   href: string;
   onNavigate: (to: string, mode: 'push' | 'replace') => void;
   onGo: (delta: number) => void;

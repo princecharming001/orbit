@@ -244,7 +244,7 @@ export async function morningDeck(
       kind: 'prep',
       text: `Prep for ${p.firstName}`,
       sub: `Chat at ${new Date(e.startAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`,
-      href: `/people/${p.id}?tab=prep`,
+      href: `/people/${p.id}?tab=facts&prep=1`,
       personId: p.id,
     });
   }

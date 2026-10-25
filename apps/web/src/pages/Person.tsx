@@ -1,12 +1,4 @@
-import type {
-  ActionItem,
-  CalendarEvent,
-  CoffeeChat,
-  MessageKind,
-  Person,
-  FactType as PersonFactType,
-  ResumeFacet,
-} from '@orbit/core';
+import type { CoffeeChat, MessageKind, Person } from '@orbit/core';
 import {
   CHANNEL_LABELS,
   composeKindFor,
@@ -35,6 +27,8 @@ import { DraftEditor, handoffWhere, OutboxStatus } from '../components/DraftEdit
 import { MutualConnections } from '../components/MutualConnections';
 import { DossierCard } from '../components/people/DossierCard';
 import { LinkedInHistory } from '../components/people/LinkedInHistory';
+import { PrepButton, prepIsDue } from '../components/people/PrepButton';
+import { PrepDeck } from '../components/people/PrepDeck';
 import { ResearchDebrief } from '../components/people/ResearchDebrief';
 import { STAGE_COLOR, StrengthDots } from '../components/people/shared';
 import { TieScoreCard } from '../components/people/TieScoreCard';
@@ -52,20 +46,12 @@ import {
   type ManualFactType,
   markActionItemDone,
   restoreFact,
-  togglePrepQuestion,
 } from '../engine/facts';
-import {
-  knownOrganisations,
-  readSuggestedNames,
-  type SuggestedName,
-  saveSuggestedContacts,
-} from '../engine/introductions';
 import { moveChat } from '../engine/move';
 import { hidePerson, setRelationshipType, unhidePerson } from '../engine/people';
 import { moveChatGuarded } from '../engine/pipeline';
-import { buildPrep, personSummary, toYou } from '../engine/prep';
+import { personSummary, toYou } from '../engine/prep';
 import { SUMMARY_RULES_AT } from '../engine/repair';
-import { dossierView } from '../engine/research';
 import { isServerUser } from '../integrations/orbitApi';
 import { useSession } from '../state/session';
 import { Avatar, Button, Card, Chip, cx, Modal, NotFound, relDate, Select, Tabs, useToast } from '../ui';
@@ -121,7 +107,11 @@ export function PersonPage() {
   const { id } = useParams();
   const { user } = useSession();
   const [params, setParams] = useSearchParams();
-  const tab = (params.get('tab') as 'timeline' | 'facts' | 'connections' | 'prep') ?? 'timeline';
+  // Prep is a deck over About now (docs/plan/22): an old link to the Prep tab opens it there
+  const rawTab = params.get('tab');
+  const tab =
+    (rawTab === 'prep' ? 'facts' : (rawTab as 'timeline' | 'facts' | 'connections' | null)) ?? 'timeline';
+  const prepOpen = params.get('prep') === '1' || rawTab === 'prep';
   const nav = useNavigate();
   const toast = useToast();
   // null: looked it up and it is not there (merged, deleted, bad link); undefined: still loading.
@@ -637,6 +627,9 @@ export function PersonPage() {
             >
               Write to {person.firstName}
             </Button>
+            {prepIsDue(nextEvent ?? pastEvent) && (
+              <PrepButton event={nextEvent ?? pastEvent} variant="ghost" testId="person-prep" />
+            )}
           </div>
           <div className="contents text-[12px]">
             {/* the less frequent actions wait behind More, so the header leads with writing to them */}
@@ -704,6 +697,24 @@ export function PersonPage() {
         </div>
       </div>
 
+      {prepOpen && (
+        <PrepDeck
+          person={person}
+          chat={chat}
+          chats={chats}
+          event={nextEvent ?? pastEvent}
+          facts={facts}
+          timeline={timeline}
+          items={items}
+          resumeFacets={resumeFacets}
+          onClose={() => {
+            const next = new URLSearchParams(params);
+            next.delete('prep');
+            if (next.get('tab') === 'prep') next.set('tab', 'facts');
+            setParams(next);
+          }}
+        />
+      )}
       {asking && chat && (
         <ScheduleChatDialog
           chat={chat}
@@ -898,7 +909,6 @@ export function PersonPage() {
               { value: 'timeline', label: 'Timeline', count: timeline.length },
               { value: 'facts', label: 'About', count: facts.length || undefined },
               { value: 'connections', label: 'Who they know', count: neighbours.filter(Boolean).length },
-              { value: 'prep', label: 'Prep' },
             ]}
           />
           {tab === 'timeline' && (
@@ -941,6 +951,12 @@ export function PersonPage() {
           {tab === 'facts' && (
             <div className="space-y-4">
               {/* who they are, straight from LinkedIn (everyone), then Deep research, a step further, from the web */}
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1" data-testid="about-prep">
+                <PrepButton event={nextEvent} />
+                <span className="text-[12.5px] text-ink-3">
+                  Who they are, what you share, your intro and questions, one card at a time.
+                </span>
+              </div>
               <LinkedInHistory person={person} />
               <ResearchDebrief person={person} userId={user.id} />
               <div className="flex items-baseline justify-between gap-3 pt-2">
@@ -1066,19 +1082,6 @@ export function PersonPage() {
                 );
               })}
             </div>
-          )}
-          {tab === 'prep' && (
-            <Prep
-              person={person}
-              facts={facts}
-              timeline={timeline}
-              items={items}
-              chat={chat}
-              chats={chats}
-              event={nextEvent}
-              resumeFacets={resumeFacets}
-              userId={user.id}
-            />
           )}
         </div>
         <div className="space-y-4">
@@ -1291,355 +1294,6 @@ function AddFact({ personId, userId }: { personId: string; userId: string }) {
   );
 }
 
-function Prep({
-  person,
-  facts,
-  timeline,
-  items,
-  chat,
-  chats,
-  event,
-  resumeFacets,
-  userId,
-}: {
-  person: Person;
-  facts: { type: string; text: string }[];
-  timeline: { at: string; text: string }[];
-  items: Pick<ActionItem, 'text' | 'status'>[];
-  chat?: CoffeeChat;
-  chats: CoffeeChat[];
-  event?: CalendarEvent;
-  resumeFacets: ResumeFacet[];
-  userId: string;
-}) {
-  const [suggested, setSuggested] = useState('');
-  const [added, setAdded] = useState<string[]>([]);
-  const [notSaved, setNotSaved] = useState<string[]>([]);
-  // names the reader is not sure are people ("will park", "Dr. Patel"): nothing is saved until the student says so
-  const [unsure, setUnsure] = useState<SuggestedName[]>([]);
-  const { user, goals } = useSession();
-  const keep = async (list: SuggestedName[]) => {
-    const people = await saveSuggestedContacts(userId, person.id, list);
-    if (people.length) setAdded((a) => [...a, ...people.map((p) => p.displayName)]);
-  };
-  const label = (s: SuggestedName) => (s.org ? `${s.name} at ${s.org}` : s.name);
-  const plan = useMemo(
-    () =>
-      user
-        ? buildPrep({
-            user,
-            goals,
-            person,
-            facts: facts as { type: PersonFactType; text: string }[],
-            chats,
-            event,
-            resumeFacets,
-            now: new Date(),
-          })
-        : undefined,
-    [user, goals, person, facts, chats, event, resumeFacets],
-  );
-  if (!user || !plan) return null;
-  const picked = chat?.prepQuestions ?? [];
-  const toggle = async (q: string) => {
-    if (chat) await togglePrepQuestion(chat.id, q);
-  };
-  const advice = facts.filter((f) => f.type === 'advice');
-  const role = facts.filter((f) => f.type === 'role_detail' || f.type === 'background');
-  const personal = facts.filter((f) => f.type === 'personal');
-  const open = items.filter((i) => i.status === 'open');
-  const tz = user.timezone || undefined;
-  // the same email subject five times says nothing: one line per thing, newest first
-  const lastTimes = timeline.filter((t, i) => timeline.findIndex((x) => x.text === t.text) === i).slice(0, 4);
-  return (
-    <div className="space-y-4 text-[13.5px]" data-testid="prep">
-      <Card>
-        <div className="font-medium">Your goal for this chat</div>
-        <p className="text-ink-2 mt-1">{plan.goal}</p>
-        <div className="font-medium mt-3">Your one ask</div>
-        <p className="text-ink-2 mt-1">{plan.ask}</p>
-      </Card>
-      <Card>
-        <div className="font-medium">When and where</div>
-        {plan.logistics ? (
-          <p className="text-ink-2 mt-1">
-            {plan.logistics.when}
-            {plan.logistics.link && (
-              <>
-                {' · '}
-                <a className="underline" href={plan.logistics.link} target="_blank" rel="noreferrer">
-                  Join link
-                </a>
-              </>
-            )}
-          </p>
-        ) : (
-          <p className="text-ink-3 mt-1">Nothing on your calendar with {person.firstName} yet.</p>
-        )}
-        <ul className="list-disc pl-4 mt-2 text-ink-2 space-y-1">
-          {plan.logisticsTips.map((t) => (
-            <li key={t}>{t}</li>
-          ))}
-        </ul>
-      </Card>
-      <Card>
-        <div className="font-medium">Before the call</div>
-        <ul className="mt-2 space-y-1.5 text-ink-2">
-          {plan.research.map((r) => (
-            <li key={r.label} className="flex items-start gap-2">
-              <span aria-hidden className="text-ink-3">
-                •
-              </span>
-              {r.url ? (
-                <a
-                  className="underline-offset-2 hover:underline"
-                  href={r.url}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  {r.label}
-                </a>
-              ) : (
-                <span>{r.label}</span>
-              )}
-            </li>
-          ))}
-          <li className="flex items-start gap-2">
-            <span aria-hidden className="text-ink-3">
-              •
-            </span>
-            <span>Practice your 30-second intro out loud once.</span>
-          </li>
-        </ul>
-        {plan.intro && (
-          <blockquote className="mt-3 rounded-lg bg-canvas-2 px-3 py-2 text-ink-2" data-testid="prep-intro">
-            {plan.intro}
-          </blockquote>
-        )}
-        {plan.introMissing && <p className="text-ink-3 text-[12px] mt-2">{plan.introMissing}</p>}
-      </Card>
-      <Card>
-        <div className="font-medium">Who they are</div>
-        <p className="text-ink-2 mt-1">
-          {[
-            person.headline ??
-              [person.currentTitle, person.currentOrganizationRaw].filter(Boolean).join(' at '),
-            person.isAlumni ? `${user.school} alum` : undefined,
-            person.location,
-          ]
-            .filter(Boolean)
-            .join(' · ')}
-        </p>
-        {role.length > 0 && (
-          <ul className="list-disc pl-4 mt-2 text-ink-2 space-y-1">
-            {role.slice(0, 4).map((f, i) => (
-              <li key={i}>{f.text}</li>
-            ))}
-          </ul>
-        )}
-      </Card>
-      <PrepResearch person={person} />
-      <Card>
-        <div className="font-medium">Questions to ask</div>
-        <p className="text-ink-3 text-[12px] mt-0.5">
-          {chat
-            ? 'Tick up to three you most want answered. Orbit keeps them with this chat.'
-            : 'Pick three to lead with.'}
-        </p>
-        <ol className="mt-2 space-y-1.5 text-ink-2">
-          {plan.questions.map((q, i) => (
-            <li key={q} className="flex items-start gap-2">
-              {chat ? (
-                <input
-                  type="checkbox"
-                  className="mt-1"
-                  checked={picked.includes(q)}
-                  // three is the point: more than that and nothing gets asked properly
-                  disabled={!picked.includes(q) && picked.length >= 3}
-                  onChange={() => toggle(q)}
-                  aria-label={`Pick question ${i + 1}`}
-                />
-              ) : (
-                <span className="text-ink-3 tabular w-4">{i + 1}.</span>
-              )}
-              <span>{q}</span>
-            </li>
-          ))}
-          <li className="flex items-start gap-2">
-            <span className="text-ink-3 w-4" aria-hidden>
-              ↳
-            </span>
-            <span>
-              <span className="font-medium text-ink">Always close with:</span> {plan.closing}
-            </span>
-          </li>
-        </ol>
-        {picked.length > 0 && (
-          <p className="text-[12px] text-ink-3 mt-2" data-testid="prep-picked">
-            {picked.length} picked for this chat.
-          </p>
-        )}
-        {(chat?.completedAt || ['completed', 'followed_up', 'nurturing'].includes(chat?.stage ?? '')) && (
-          <>
-            <label className="block mt-3 text-ink-2" htmlFor="prep-suggested">
-              Who did {person.firstName} suggest you talk to?
-            </label>
-            <input
-              id="prep-suggested"
-              data-testid="prep-suggested"
-              value={suggested}
-              onChange={(e) => setSuggested(e.target.value)}
-              placeholder="Priya Shah at Stripe, Tom Lee"
-              className="mt-1 w-full h-8 rounded-lg border border-line px-2.5 text-[13px]"
-              onKeyDown={async (e) => {
-                if (e.key !== 'Enter' || !suggested.trim()) return;
-                // clear names are saved; unsure ones wait for a yes; what is not a name stays in the field with a note
-                // an organisation the student already has ("Wilson Sonsini") is a company, never a person
-                const knownOrgs = await knownOrganisations(userId);
-                const { names, confirm, skipped } = readSuggestedNames(suggested, { knownOrgs });
-                await keep(names);
-                setUnsure((u) => [
-                  ...u,
-                  ...confirm.filter((c) => !u.some((x) => x.name.toLowerCase() === c.name.toLowerCase())),
-                ]);
-                setNotSaved(skipped);
-                setSuggested(skipped.join(', '));
-              }}
-            />
-            {unsure.length > 0 && (
-              <div className="mt-2 rounded-lg border border-line p-2.5" data-testid="prep-suggested-confirm">
-                <p className="text-ink-2">
-                  Are these people {person.firstName} suggested? Nothing is saved until you say yes.
-                </p>
-                <ul className="mt-1.5 space-y-1.5">
-                  {unsure.map((s) => (
-                    <li
-                      key={label(s)}
-                      className="flex flex-wrap items-center gap-2"
-                      data-testid="prep-confirm-row"
-                    >
-                      <span className="flex-1 min-w-0 font-medium">{label(s)}</span>
-                      <Button
-                        size="sm"
-                        data-testid="prep-confirm-save"
-                        onClick={async () => {
-                          setUnsure((u) => u.filter((x) => x !== s));
-                          await keep([s]);
-                        }}
-                      >
-                        Save
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        data-testid="prep-confirm-skip"
-                        onClick={() => setUnsure((u) => u.filter((x) => x !== s))}
-                      >
-                        Not a person
-                      </Button>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-            {notSaved.length > 0 && (
-              <p className="mt-1.5 text-ink-2" data-testid="prep-suggested-skipped">
-                Not saved: {notSaved.join(', ')}. Write each as a full name, like Priya Shah at Stripe or Tom
-                Lee.
-              </p>
-            )}
-            {added.length > 0 && (
-              <p className="mt-1.5 text-ink-3">
-                Saved to Discover as suggested by {person.firstName}: {added.join(', ')}
-              </p>
-            )}
-          </>
-        )}
-      </Card>
-      <Card>
-        <div className="font-medium">From last time</div>
-        {lastTimes.length ? (
-          <ul className="list-disc pl-4 mt-2 text-ink-2 space-y-1">
-            {lastTimes.map((t, i) => (
-              <li key={i}>
-                {t.text}{' '}
-                <span className="text-ink-3 text-[12px]">
-                  ·{' '}
-                  {new Date(t.at).toLocaleDateString('en-US', {
-                    month: 'short',
-                    day: 'numeric',
-                    year: 'numeric',
-                    timeZone: tz,
-                  })}
-                </span>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="text-ink-3 mt-1">This is your first conversation.</p>
-        )}
-        {plan.followUps.length > 0 && (
-          <>
-            <div className="font-medium mt-3">Follow up on</div>
-            <ul className="list-disc pl-4 mt-1 text-ink-2 space-y-1">
-              {plan.followUps.map((f, i) => (
-                <li key={i}>{f}</li>
-              ))}
-            </ul>
-          </>
-        )}
-        {advice.length > 0 && (
-          <>
-            <div className="font-medium mt-3">Advice they gave</div>
-            <ul className="list-disc pl-4 mt-1 text-ink-2 space-y-1">
-              {advice.map((f, i) => (
-                <li key={i}>{f.text}</li>
-              ))}
-            </ul>
-          </>
-        )}
-        {open.length > 0 && (
-          <>
-            <div className="font-medium mt-3">You promised</div>
-            <ul className="list-disc pl-4 mt-1 text-ink-2 space-y-1">
-              {open.map((i, k) => (
-                <li key={k}>{promiseText(i.text, person.firstName)}</li>
-              ))}
-            </ul>
-          </>
-        )}
-        {personal.length > 0 && (
-          <>
-            <div className="font-medium mt-3">Personal</div>
-            <ul className="list-disc pl-4 mt-1 text-ink-2 space-y-1">
-              {personal.slice(0, 3).map((f, i) => (
-                <li key={i}>{f.text}</li>
-              ))}
-            </ul>
-          </>
-        )}
-      </Card>
-      <Card>
-        <div className="font-medium">Things to avoid</div>
-        <ul className="list-disc pl-4 mt-2 text-ink-2 space-y-1">
-          {plan.audience === 'recruiter' ? (
-            <>
-              <li>Asking a recruiter for a coffee chat or a referral. Keep it to the process.</li>
-              <li>Asking anything the careers page already answers.</li>
-            </>
-          ) : (
-            <>
-              <li>Asking for a job or a referral in a first conversation.</li>
-              <li>Generic praise. Mention something specific they said or did.</li>
-            </>
-          )}
-          <li>Going over the time you asked for.</li>
-        </ul>
-      </Card>
-    </div>
-  );
-}
-
 /** Closeness in words: the same band the closeness card names (Faint, Light, Warm, Strong, Close). */
 export function closenessWord(v: number): string {
   return TIE_BAND_LABELS[tieBand(Math.round(v * 100))];
@@ -1675,92 +1329,6 @@ function TextsCard({ personId, firstName }: { personId: string; firstName: strin
       <p className="mt-2 text-[11.5px] text-ink-3">
         {t.inCount} from {firstName || 'them'}, {t.outCount} from you
       </p>
-    </Card>
-  );
-}
-
-/**
- * The Prep tab's view of the research brief: what they have been up to lately and the openers, each with its source.
- * With no brief yet it only points to the About tab, where the student starts research; it never starts any.
- */
-function PrepResearch({ person }: { person: Person }) {
-  const d = useLiveQuery(
-    async () =>
-      (await db.dossiers.where('personId').equals(person.id).toArray())
-        .filter((x) => x.status === 'ready' || x.status === 'partial')
-        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0] ?? null,
-    [person.id],
-  );
-  if (d === undefined) return null;
-  const v = d ? dossierView(d) : undefined;
-  const recently = v?.recently.slice(0, 3) ?? [];
-  // a partly supported opener is never offered
-  const openers = v?.openers.filter((o) => o.support !== 'partial') ?? [];
-  const src = (ns: number[]) =>
-    ns.map((n) => {
-      const s = v?.sources.find((x) => x.n === n);
-      return s?.url && !s.demo ? (
-        <a
-          key={n}
-          href={s.url}
-          target="_blank"
-          rel="noreferrer noopener"
-          className="ml-0.5 align-super text-[10px] text-ink-3 hover:text-ink"
-        >
-          [{n}]
-        </a>
-      ) : (
-        <span key={n} className="ml-0.5 align-super text-[10px] text-ink-3">
-          [{n}]
-        </span>
-      );
-    });
-  return (
-    <Card data-testid="prep-research">
-      <div className="font-medium">From research</div>
-      {!v ? (
-        <p className="text-ink-3 mt-1">
-          No research on {person.firstName || 'them'} yet.{' '}
-          <Link
-            to={`/people/${person.id}?tab=facts`}
-            className="underline underline-offset-2 hover:text-ink"
-            data-testid="prep-research-link"
-          >
-            Deep research is on the About tab.
-          </Link>
-        </p>
-      ) : (
-        <>
-          {recently.length > 0 ? (
-            <>
-              <div className="text-[12px] uppercase tracking-wide text-ink-3 mt-2">Lately</div>
-              <ul className="mt-1 space-y-1 text-ink-2">
-                {recently.map((r, i) => (
-                  <li key={i}>
-                    {r.date ? <span className="text-ink-3">{r.date} · </span> : null}
-                    {r.text}
-                    {src(r.sources)}
-                  </li>
-                ))}
-              </ul>
-            </>
-          ) : (
-            <p className="text-ink-3 mt-1">Nothing recent on the public web; the brief leans on LinkedIn.</p>
-          )}
-          {openers.length > 0 && (
-            <>
-              <div className="text-[12px] uppercase tracking-wide text-ink-3 mt-3">Openers</div>
-              <ul className="mt-1 space-y-1 text-ink-2" data-testid="prep-openers">
-                {openers.map((o, i) => (
-                  <li key={i}>
-                    “{o.text}”{src(o.sources)}
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
-        </>
-      )}
     </Card>
   );
 }

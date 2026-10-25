@@ -5,54 +5,14 @@
  * schools. Orbit reads the full profile when their page opens (engine/enrichment, a bounded number a day); until then
  * it says it is reading, and someone Orbit has not matched to a LinkedIn profile says so plainly.
  */
-import type { Affiliation, Person } from '@orbit/core';
+import type { Person } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useState } from 'react';
 import { db } from '../../db/schema';
 import { readRecord } from '../../engine/enrichment/store';
+import { byRecency, roleSpan } from '../../engine/roleDates';
 import { relDate } from '../../ui';
 import { CompanyLogo } from '../CompanyLogo';
-
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
-/** "2023-06" → "Jun 2023", "2021" → "2021". */
-function monthYear(d: string | undefined): string | undefined {
-  if (!d) return undefined;
-  const m = /^(\d{4})(?:-(\d{1,2}))?/.exec(d);
-  if (!m) return undefined;
-  const month = m[2] ? MONTHS[Number(m[2]) - 1] : undefined;
-  return month ? `${month} ${m[1]}` : m[1];
-}
-
-/** How long a stint lasted (or has lasted): "2 yrs 3 mos", "8 mos". */
-function duration(start: string | undefined, end: string | undefined, now: Date): string | undefined {
-  const a = start ? /^(\d{4})(?:-(\d{1,2}))?/.exec(start) : null;
-  if (!a) return undefined;
-  const b = end ? /^(\d{4})(?:-(\d{1,2}))?/.exec(end) : null;
-  const from = Number(a[1]) * 12 + (a[2] ? Number(a[2]) - 1 : 0);
-  const to = b
-    ? Number(b[1]) * 12 + (b[2] ? Number(b[2]) - 1 : 11)
-    : now.getUTCFullYear() * 12 + now.getUTCMonth();
-  const months = Math.max(1, to - from + 1);
-  const y = Math.floor(months / 12);
-  const mo = months % 12;
-  return [y ? `${y} yr${y > 1 ? 's' : ''}` : '', mo ? `${mo} mo${mo > 1 ? 's' : ''}` : '']
-    .filter(Boolean)
-    .join(' ');
-}
-
-const span = (a: Affiliation, now: Date) => {
-  const from = monthYear(a.startDate);
-  const to = a.isCurrent || !a.endDate ? (a.isCurrent ? 'Present' : undefined) : monthYear(a.endDate);
-  const dates = from && to ? `${from} to ${to}` : (from ?? to);
-  const long =
-    a.kind === 'employment' ? duration(a.startDate, a.isCurrent ? undefined : a.endDate, now) : undefined;
-  return [dates, long].filter(Boolean).join(' · ');
-};
-
-/** Current roles first, then by when they started, newest first. */
-const byRecency = (x: Affiliation, y: Affiliation) =>
-  Number(y.isCurrent) - Number(x.isCurrent) || (y.startDate ?? '').localeCompare(x.startDate ?? '');
 
 export function LinkedInHistory({ person }: { person: Person }) {
   const now = new Date();
@@ -123,7 +83,7 @@ export function LinkedInHistory({ person }: { person: Person }) {
                   )}
                 </div>
                 {a.title && <div className="text-[13px] text-ink-2">{a.nameRaw}</div>}
-                {span(a, now) && <div className="text-[12px] text-ink-3">{span(a, now)}</div>}
+                {roleSpan(a, now) && <div className="text-[12px] text-ink-3">{roleSpan(a, now)}</div>}
               </li>
             ))}
           </ol>
@@ -143,7 +103,7 @@ export function LinkedInHistory({ person }: { person: Person }) {
                       {[a.degree, a.field].filter(Boolean).join(', ')}
                     </div>
                   )}
-                  {span(a, now) && <div className="text-[12px] text-ink-3">{span(a, now)}</div>}
+                  {roleSpan(a, now) && <div className="text-[12px] text-ink-3">{roleSpan(a, now)}</div>}
                 </div>
               </li>
             ))}

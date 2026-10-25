@@ -538,7 +538,7 @@ function envelopes(ctx: Ctx): Record<string, () => ResultEnvelope> {
           .map((f) => f.text),
       },
       summary: `Prep for your chat with ${p2.firstName} on Wednesday.`,
-      href: `/people/${p2.id}?tab=prep`,
+      href: `/people/${p2.id}?tab=facts&prep=1`,
     }),
     needs_confirmation: () => ({
       kind: 'needs_confirmation',

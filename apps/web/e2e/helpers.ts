@@ -257,3 +257,23 @@ export async function clippedLabels(page: Page, cards: string, maxChars = 40): P
     { cards, maxChars },
   );
 }
+
+/** In the open Prep deck, step with the arrow keys to the card of this kind (the deck says its card in data-step). */
+export async function prepDeckTo(page: Page, kind: string) {
+  const deck = page.getByTestId('prep-deck');
+  await expect(deck).toBeVisible();
+  await expect(deck.getByTestId('prep-card-title')).toBeVisible();
+  for (const key of ['ArrowLeft', 'ArrowRight']) {
+    for (let n = 0; n < 12; n++) {
+      if ((await deck.getAttribute('data-step')) === kind) return deck;
+      const before = await deck.getAttribute('data-step');
+      await page.keyboard.press(key);
+      await expect(deck)
+        .not.toHaveAttribute('data-step', before ?? '', { timeout: 1_000 })
+        .catch(() => undefined);
+      if ((await deck.getAttribute('data-step')) === before) break;
+    }
+  }
+  await expect(deck).toHaveAttribute('data-step', kind);
+  return deck;
+}
