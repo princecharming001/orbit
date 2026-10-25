@@ -424,6 +424,16 @@ export interface Person {
   interactionCount: number;
   sources: PersonSource[];
   linkedinConnectedOn?: string;
+  /** LinkedIn followers, from their profile (plan 21: how much their posts' engagement means) */
+  linkedinFollowers?: number;
+  /** LinkedIn recommendations they gave or received, by the other person's member id; no text but a short caption */
+  linkedinRecommendations?: {
+    direction: 'given' | 'received';
+    actorMemberId: string;
+    actorName?: string;
+    year?: number;
+    caption?: string;
+  }[];
   isHuman: boolean;
   /** displayName is only a stand-in derived from the email address; the first real name replaces it */
   namePlaceholder?: boolean;
@@ -943,6 +953,10 @@ export interface ReachHop {
   weight: number;
   type: EdgeType | 'strength' | 'alumni' | 'former';
   text: string;
+  /** hops after the first: how well the two know each other (plan 21 §3.7) */
+  band?: 'close' | 'know' | 'connected' | 'unclear';
+  /** the pair's evidence has gone quiet */
+  fading?: boolean;
 }
 
 export interface ReachPath {

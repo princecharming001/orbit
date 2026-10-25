@@ -15,6 +15,7 @@ export * from './entity/phone';
 export * from './entity/resolve';
 export { transliterate } from './entity/translit';
 export * from './graph/edges';
+export * from './graph/hopFit';
 export * from './graph/introWeb';
 export * from './graph/layout';
 export { knownSizeBucket } from './graph/orgSize';

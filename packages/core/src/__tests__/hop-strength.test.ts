@@ -111,10 +111,12 @@ describe('engagement (plan 21 §3.3)', () => {
     engagementScore(items, { followers, now: NOW });
 
   it('matches the worked values', () => {
-    expect(score(acts('a', 'b', 'reaction', 1)).w).toBeCloseTo(0.025, 3);
-    expect(score(acts('a', 'b', 'reaction', 6)).w).toBeCloseTo(0.136, 3);
-    expect(score(acts('a', 'b', 'comment', 1)).w).toBeCloseTo(0.213, 3);
-    expect(score(acts('a', 'b', 'comment', 3)).w).toBe(HOP_WEIGHTS.engagement.oneWayCap);
+    // one-way: nothing for the pair as a whole, and what a's own acts say, per direction
+    expect(score(acts('a', 'b', 'reaction', 1)).w).toBe(0);
+    expect(score(acts('a', 'b', 'reaction', 1)).wBy.a).toBeCloseTo(0.025, 3);
+    expect(score(acts('a', 'b', 'reaction', 6)).wBy.a).toBeCloseTo(0.136, 3);
+    expect(score(acts('a', 'b', 'comment', 1)).wBy.a).toBeCloseTo(0.213, 3);
+    expect(score(acts('a', 'b', 'comment', 3)).wBy.a).toBe(HOP_WEIGHTS.engagement.oneWayCap);
     const replied = score([...acts('a', 'b', 'comment', 1), ...acts('b', 'a', 'reply', 1)]);
     expect(replied.reciprocal).toBe(true);
     expect(replied.E).toBeCloseTo(2.5, 10);
@@ -125,8 +127,9 @@ describe('engagement (plan 21 §3.3)', () => {
   it('caps reactions, one-way and reciprocal engagement (acceptance 5)', () => {
     const likes = score(acts('a', 'b', 'reaction', 20));
     expect(likes.E).toBe(HOP_WEIGHTS.engagement.reactionCap);
-    expect(likes.w).toBeCloseTo(0.213, 3);
-    expect(score(acts('a', 'b', 'comment', 10)).w).toBe(0.25);
+    expect(likes.wBy.a).toBeCloseTo(0.213, 3);
+    expect(score(acts('a', 'b', 'comment', 10)).wBy.a).toBe(0.25);
+    expect(score(acts('a', 'b', 'comment', 10)).w).toBe(0);
     expect(score([...acts('a', 'b', 'comment', 10), ...acts('b', 'a', 'comment', 10)]).w).toBe(0.5);
     // reactions both ways are not reciprocity: only something written is
     expect(score([...acts('a', 'b', 'reaction', 9), ...acts('b', 'a', 'reaction', 9)]).reciprocal).toBe(
@@ -137,12 +140,12 @@ describe('engagement (plan 21 §3.3)', () => {
   it('discounts popular authors: likes linearly, comments by the square root (acceptance 3)', () => {
     const small = MUTUAL;
     const lift = (followers: number) =>
-      nor(MUTUAL, score(acts('a', 'b', 'reaction', 6), followersOf([['b', followers]])).w * 0.9) - small;
+      nor(MUTUAL, score(acts('a', 'b', 'reaction', 6), followersOf([['b', followers]])).wBy.a! * 0.9) - small;
     expect(lift(1000)).toBeGreaterThanOrEqual(0.08);
     expect(lift(100_000)).toBeLessThan(0.01);
     const comments = score(acts('a', 'b', 'comment', 3), followersOf([['b', 30_000]]));
     expect(comments.E).toBeCloseTo(3 * Math.sqrt(2000 / 30_000), 10);
-    expect(comments.w).toBeCloseTo(0.171, 3);
+    expect(comments.wBy.a).toBeCloseTo(0.171, 3);
   });
 
   it('never lets an unknown audience lift a hop past "connected"', () => {
@@ -331,9 +334,24 @@ describe('routes weigh every hop (plan 21 §11)', () => {
     );
     expect(r.paths.map((p) => p.firstHopId)).toEqual(['noah', 'jai']);
     const jai = r.paths[1]!;
-    expect(jai.p).toBeCloseTo(0.179, 3);
+    // Jai commenting on Arlan's posts is shown, and weighs nothing: it is how fans look
+    expect(jai.p).toBeCloseTo(pAsk({ score: 40 }) * MUTUAL, 10);
     expect(jai.hops[1]!.band).toBe('connected');
     expect(jai.reasonText).toContain('has left 3 comments on Arlan’s posts');
+  });
+
+  it('the target engaging with the introducer’s posts counts: it says the target knows them', () => {
+    const arlanOnJai = evidence(
+      { engagement: acts('arlan', 'jai', 'comment', 2), followers: followersOf([['jai', 900]]) },
+      ['arlan', 'jai'],
+    );
+    const r = rankWarmPaths(
+      routeInput(people, combineTies(arlanOnJai, NOW), { candidates: [mutual('jai')] }),
+    );
+    const hop = r.paths[0]!.hops[1]!;
+    expect(hop.p).toBeCloseTo(nor(MUTUAL, 0.25 * 0.9), 10);
+    expect(hop.p).toBeGreaterThan(MUTUAL + 0.15);
+    expect(r.paths[0]!.reasonText).toContain('has had 2 comments from Arlan on their posts');
   });
 
   it('a long route names its weak link and ranks below a sound short one (acceptance 6)', () => {

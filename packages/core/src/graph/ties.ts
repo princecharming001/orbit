@@ -49,6 +49,10 @@ export const HOP_WEIGHTS = {
     /** w = scale · (1 − e^(−E/saturation)), then capped */
     scale: 0.75,
     saturation: 3,
+    /**
+     * one-way engagement counts only toward a hop whose second person did the engaging (they know the first, so the
+     * intro lands), never the other way, which is how fans look (`pKnowDirected`)
+     */
     oneWayCap: 0.25,
     reciprocalCap: 0.5,
     /** reactions alone add at most this much E */
@@ -557,8 +561,13 @@ export interface EngagementCounts {
 export interface EngagementScore {
   /** the evidence total of §3.3 */
   E: number;
-  /** w before the noisy-OR, capped one-way, reciprocal, or by an unknown audience */
+  /**
+   * w before the noisy-OR for the pair as a whole: reciprocal engagement only (capped as one-way while an audience is
+   * unknown); 0 when only one side engaged
+   */
   w: number;
+  /** per actor, w from their own acts alone (capped one-way): those acts say they know the other */
+  wBy: Record<string, number>;
   /** both wrote something (a comment, a reply or a repost) on the other's posts */
   reciprocal: boolean;
   /** every post author's audience was known */
@@ -584,8 +593,8 @@ export function engagementScore(items: EngagementItem[], ctx: EngagementContext 
   const now = (ctx.now ?? new Date()).getTime();
   const seen = new Set<string>();
   const counts: Record<string, EngagementCounts> = {};
-  let reactionsE = 0;
-  let otherE = 0;
+  const reactionsE: Record<string, number> = {};
+  const otherE: Record<string, number> = {};
   let popularityKnown = true;
   let newestAt: string | undefined;
   let firstAt: string | undefined;
@@ -613,20 +622,45 @@ export function engagementScore(items: EngagementItem[], ctx: EngagementContext 
       c.reactions++;
       const volume = ctx.reactionVolume?.get(it.actorId) ?? 0;
       const liker = volume >= W.serialLiker ? W.serialLikerFactor : 1;
-      reactionsE += W.reaction * share * recency * liker;
+      reactionsE[it.actorId] = (reactionsE[it.actorId] ?? 0) + W.reaction * share * recency * liker;
       continue;
     }
     if (it.kind === 'comment') c.comments++;
     else if (it.kind === 'reply') c.replies++;
     else c.reposts++;
     writers.add(it.actorId);
-    otherE += W[it.kind] * Math.sqrt(share) * recency;
+    otherE[it.actorId] = (otherE[it.actorId] ?? 0) + W[it.kind] * Math.sqrt(share) * recency;
   }
-  const E = otherE + Math.min(W.reactionCap, reactionsE);
+  const curve = (e: number) => W.scale * (1 - Math.exp(-e / W.saturation));
+  const eBy: Record<string, number> = {};
+  const wBy: Record<string, number> = {};
+  for (const a of Object.keys(counts)) {
+    // reactions alone add at most reactionCap, per person
+    eBy[a] = (otherE[a] ?? 0) + Math.min(W.reactionCap, reactionsE[a] ?? 0);
+    wBy[a] = Math.min(W.oneWayCap, curve(eBy[a]));
+  }
+  const E = Object.values(eBy).reduce((acc, e) => acc + e, 0);
   const reciprocal = writers.size >= 2;
-  const cap = !popularityKnown ? W.oneWayCap : reciprocal ? W.reciprocalCap : W.oneWayCap;
-  const w = Math.min(cap, W.scale * (1 - Math.exp(-E / W.saturation)));
-  return { E, w, reciprocal, popularityKnown, counts, newestAt, firstAt, dated };
+  const w = reciprocal ? Math.min(popularityKnown ? W.reciprocalCap : W.oneWayCap, curve(E)) : 0;
+  return { E, w, wBy, reciprocal, popularityKnown, counts, newestAt, firstAt, dated };
+}
+
+/**
+ * How well `toId` knows `fromId`, for a hop where `fromId` would introduce the student to `toId` (plan 21 §3.3): the
+ * pair's weight, plus — when their engagement is only one-way — what `toId`'s own acts toward `fromId` say. The target
+ * reacting to and commenting on a mutual's posts means the target knows them; a mutual doing that to the target's
+ * posts is how fans look, so it adds nothing (it is still shown, as evidence).
+ */
+export function pKnowDirected(pair: Pick<TiePair, 'weight' | 'ties'>, fromId: string, toId: string): number {
+  let p = Math.max(0, Math.min(1, pair.weight));
+  for (const t of pair.ties) {
+    if (t.kind !== 'linkedin_engagement') continue;
+    const ev = t.evidence as { reciprocal?: boolean; wBy?: Record<string, number> };
+    if (ev.reciprocal) continue;
+    const w = ev.wBy?.[toId] ?? 0;
+    if (w > 0) p = 1 - (1 - p) * (1 - Math.min(1, w * t.confidence));
+  }
+  return p;
 }
 
 /** Everything plan 21 adds about two of the student's contacts, from LinkedIn and from the student. */
@@ -679,15 +713,17 @@ export function pairEvidenceTies(input: PairEvidenceInput): Tie[] {
       reactionVolume: input.reactionVolume,
       now,
     });
-    if (sc.w <= 0) continue;
+    if (sc.E <= 0) continue;
     put(
       {
         kind: 'linkedin_engagement',
+        // the pair as a whole: reciprocal engagement only; one-way acts count per direction (pKnowDirected)
         weight: sc.w,
         confidence: TIE_CONFIDENCE.linkedin_engagement,
         evidence: {
           source: 'linkedin',
           counts: sc.counts,
+          wBy: Object.fromEntries(Object.entries(sc.wBy).map(([id, w]) => [id, Math.round(w * 1e4) / 1e4])),
           reciprocal: sc.reciprocal,
           popularityKnown: sc.popularityKnown,
           E: Math.round(sc.E * 1000) / 1000,

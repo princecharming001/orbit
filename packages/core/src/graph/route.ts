@@ -7,6 +7,7 @@ import {
   HOP_WEIGHTS,
   isRoutable,
   pairFading,
+  pKnowDirected,
   SUPPORT_ONLY_TIE_KINDS,
   type Tie,
   type TieKind,
@@ -182,6 +183,8 @@ export interface WarmHop {
   band?: HopBand;
   /** the pair's evidence has gone quiet (no new sign in eight times its usual gap) */
   fading?: true;
+  /** every hop after the first: what the evidence says, after the first person's name (plan 21 §7) */
+  phrase?: string;
 }
 
 export interface WarmPath {
@@ -486,9 +489,16 @@ function routingGraph(
     const ends = [pair.aId, pair.bId];
     // anyone but the target must be someone the student may route through
     if (ends.some((id) => id !== input.targetId && !usable(input.people.get(id), now))) continue;
-    // every A → B hop carries the 0.85 hop discount; one is given back for the route's first such hop
+    // every A → B hop carries the 0.85 hop discount; one is given back for the route's first such hop. One-way
+    // engagement makes the two directions differ (plan 21 §3.3), so each direction gets its own edge then.
     const top = strongestTie(pair, now)?.kind ?? pair.kinds[0]!;
-    addEdge(g, pair.aId, pair.bId, Math.min(0.999, know * HOP_PENALTY), top, '');
+    const ab = pKnowDirected(pair, pair.aId, pair.bId);
+    const ba = pKnowDirected(pair, pair.bId, pair.aId);
+    if (ab === ba) addEdge(g, pair.aId, pair.bId, Math.min(0.999, ab * HOP_PENALTY), top, '');
+    else {
+      addEdge(g, pair.aId, pair.bId, Math.min(0.999, ab * HOP_PENALTY), top, '', true);
+      addEdge(g, pair.bId, pair.aId, Math.min(0.999, ba * HOP_PENALTY), top, '', true);
+    }
   }
   return { g, ask, scores, lifted };
 }
@@ -546,7 +556,7 @@ export function rankWarmPaths(input: WarmPathInput): WarmPathResult {
         continue;
       }
       const pair = pairs.get(pk(from, to))!;
-      const know = pKnow(pair);
+      const know = pKnowDirected(pair, from, to);
       hops.push({
         fromId: from,
         toId: to,
@@ -611,9 +621,15 @@ export function rankWarmPaths(input: WarmPathInput): WarmPathResult {
     for (const m of mids) middle.set(m, (middle.get(m) ?? 0) + 1);
     chosen.push(f);
   }
+  const nameOf = (id: string) => (id === input.targetId ? tName : (input.people.get(id)?.name ?? 'someone'));
   return {
     paths: chosen.map((f) => ({
       ...f,
+      hops: f.hops.map((h, i) =>
+        i === 0
+          ? h
+          : { ...h, phrase: pairPhrase(h.fromId, pairs.get(pk(h.fromId, h.toId)), nameOf(h.toId), now) },
+      ),
       otherWays,
       reasonText: reasonText(f, input, pairs, tName, otherWays, now, rg.scores),
     })),
