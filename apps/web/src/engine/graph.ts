@@ -509,7 +509,9 @@ export function reachPersonIn(
     limit: Math.max(k, 5),
   });
   const routes = r.paths.map((w) => toV2ReachPath(g, w, ctx));
-  if (known) return [toReachPath(g, [USER_NODE, targetPersonId]), ...routes.slice(0, k - 1)];
+  // the student asked for a way in: warm routes first, writing to them directly after (they know them, so it is
+  // offered, never the only answer)
+  if (known) return [...routes.slice(0, k), toReachPath(g, [USER_NODE, targetPersonId])];
   if (!tie || !target) return routes.slice(0, k);
   const pReply = responsePrior(target, {
     school: ctx.user?.school ?? '',

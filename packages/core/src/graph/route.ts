@@ -208,7 +208,7 @@ export interface WarmPath {
 export interface WarmPathResult {
   paths: WarmPath[];
   fallback?: 'cold';
-  /** the target is already a direct tie (score ≥ 40): write to them; no routing */
+  /** the target is already a direct tie (score ≥ 40): they can be written to, and `paths` still has the warm routes */
   direct?: { score: number; band: string; text: string };
 }
 
@@ -506,7 +506,7 @@ function routingGraph(
 /**
  * Ranked routes to one person (§4.2): Yen's k = 12 over −ln p, mutual and Village candidates merged in as ties to
  * the target, the best route per first hop, at most two routes through one middle person, the top five, with a
- * band and a plain reason. A target the student already knows (score ≥ 40) is not routed.
+ * band and a plain reason. A target the student already knows (score ≥ 40) is still routed, with `direct` beside.
  *
  * A LinkedIn mutual is never dropped: its first hop counts at least MUTUAL_MIN_SCORE and skips the goal's floor (for
  * that target only), its route is added even when Yen's k did not reach it, and it is kept under MIN_PATH_P, marked
@@ -516,13 +516,15 @@ export function rankWarmPaths(input: WarmPathInput): WarmPathResult {
   const now = input.now ?? new Date();
   const target = input.people.get(input.targetId);
   const tName = input.target?.name ?? target?.name ?? 'them';
-  if (target && target.score >= DIRECT_TIE_SCORE) {
-    const band = TIE_BAND_LABELS[tieBand(target.score)];
-    return {
-      paths: [],
-      direct: { score: target.score, band, text: `You know ${tName} (${band} · ${target.score})` },
-    };
-  }
+  // someone the student knows is still routed (a warm intro can land better than a note out of the blue, and the
+  // student asked for a way in): the direct tie is reported beside the routes, never instead of them
+  const direct: WarmPathResult['direct'] =
+    target && target.score >= DIRECT_TIE_SCORE
+      ? (() => {
+          const band = TIE_BAND_LABELS[tieBand(target.score)];
+          return { score: target.score, band, text: `You know ${tName} (${band} · ${target.score})` };
+        })()
+      : undefined;
   // a pair the student blocked is no hop, and no mutual of the target either
   const blocked = input.blockedPairs;
   const candidates = (input.candidates ?? []).filter(
@@ -589,8 +591,8 @@ export function rankWarmPaths(input: WarmPathInput): WarmPathResult {
   }
   for (const f of found)
     if (viaMutual(f.nodes) && (f.p <= MIN_PATH_P || rg.lifted.has(f.firstHopId))) f.weak = true;
-  // a faint direct tie is one more way in: writing to them, at the chance they answer
-  if (target && target.score > 0 && input.target?.pReply !== undefined) {
+  // a faint direct tie is one more way in: writing to them, at the chance they answer (a strong one is `direct`)
+  if (!direct && target && target.score > 0 && input.target?.pReply !== undefined) {
     const p = Math.max(0, Math.min(1, input.target.pReply));
     found.push({
       nodes: [USER_NODE, input.targetId],
@@ -606,7 +608,7 @@ export function rankWarmPaths(input: WarmPathInput): WarmPathResult {
   );
   // a real LinkedIn mutual is never dropped for falling under the bar: it is kept, and called a weaker route
   const viable = found.filter((f) => f.p > MIN_PATH_P || viaMutual(f.nodes));
-  if (!viable.length) return { paths: [], fallback: 'cold' };
+  if (!viable.length) return direct ? { paths: [], direct } : { paths: [], fallback: 'cold' };
   const firstHops = new Set(viable.map((f) => f.firstHopId));
   const otherWays = firstHops.size - 1;
   const chosen: typeof viable = [];
@@ -623,6 +625,7 @@ export function rankWarmPaths(input: WarmPathInput): WarmPathResult {
   }
   const nameOf = (id: string) => (id === input.targetId ? tName : (input.people.get(id)?.name ?? 'someone'));
   return {
+    ...(direct ? { direct } : {}),
     paths: chosen.map((f) => ({
       ...f,
       hops: f.hops.map((h, i) =>

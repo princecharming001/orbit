@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { autoSyncLinkedInActivity } from '../engine/linkedinActivity';
 import { autoSyncLinkedInLive } from '../engine/linkedinLive';
+import { startLogoQueue } from '../engine/logoQueue';
 import { startPhotoQueue } from '../engine/photoQueue';
 import { useSession } from '../state/session';
 
@@ -8,7 +9,8 @@ import { useSession } from '../state/session';
  * Re-syncs live LinkedIn when the app opens and the last sync is more than a day old (which reads the student's
  * LinkedIn messages and post engagement too), then carries on a message history read that was cut short. Replies
  * are read by the reply check (ReplyWatch), every few minutes. Keeps the photo queue going while the app is open
- * (engine/photoQueue: missing and expired LinkedIn photos, a few a minute). Mounted once in the app shell, next to
+ * (engine/photoQueue: missing and expired LinkedIn photos, a few a minute) and the logo queue (engine/logoQueue:
+ * company logos from LinkedIn). Mounted once in the app shell, next to
  * the outbox scheduler. Quiet: it never toasts, and a failure is recorded on the integration row, where Settings
  * and the chat show it.
  */
@@ -25,7 +27,13 @@ export function LinkedInAutoSync() {
       // a LinkedIn message history read that was cut short carries on
       .then(() => autoSyncLinkedInActivity(u))
       .catch(() => undefined);
-    return startPhotoQueue(u);
+    const stopPhotos = startPhotoQueue(u);
+    // company logos from LinkedIn for the tiles that have none yet (engine/logoQueue)
+    const stopLogos = startLogoQueue(u);
+    return () => {
+      stopPhotos();
+      stopLogos();
+    };
   }, [userId]);
   return null;
 }

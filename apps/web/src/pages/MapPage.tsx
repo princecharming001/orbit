@@ -1473,8 +1473,9 @@ export function MapPage() {
                   {coldDirect.hops[0]!.text}, a faint tie, so the routes through people you know come first.
                 </p>
               )}
-              {/* the target's LinkedIn mutuals, whether or not a route clears the bar; not for someone the student knows */}
-              {user && !(paths?.[0]?.hops.length === 1 && !isColdDirect(paths[0])) && (
+              {/* the target's LinkedIn mutuals, whether or not a route clears the bar, and for someone the student
+                  knows too: they asked for a way in */}
+              {user && (
                 <ReachMutuals
                   user={user}
                   target={target}

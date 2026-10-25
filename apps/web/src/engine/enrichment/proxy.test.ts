@@ -344,6 +344,57 @@ describe('enrichment routes of the connector proxy', () => {
     expect(upstream).toHaveLength(10);
   });
 
+  it('finds a company by its name only when exactly one LinkedIn company has that name', async () => {
+    const search = (items: { id: string; name: string }[]) => (url: string, init: RequestInit) => {
+      if (url.includes('/api/v1/linkedin/search'))
+        return new Response(JSON.stringify({ items, cursor: null }));
+      if (url.includes('/api/v1/linkedin/company/'))
+        return new Response(
+          JSON.stringify({
+            id: url.split('/company/')[1]!.split('?')[0],
+            name: 'Enactus Berkeley',
+            logo: licdn('e'),
+          }),
+        );
+      return new Response(String(init.method), { status: 404 });
+    };
+    const byName = async (items: { id: string; name: string }[], name: string) => {
+      const h = harness({}, search(items));
+      const body = await (await h.handler(post('/company', { accountId: 'a1', token: TOKEN, name }))).json();
+      return { body, upstream: h.upstream };
+    };
+    // one company of that name (suffixes and case set aside): its page is read for the logo
+    const one = await byName(
+      [
+        { id: '777', name: 'Enactus Berkeley, Inc.' },
+        { id: '778', name: 'Enactus Berkeley Alumni' },
+      ],
+      'enactus berkeley',
+    );
+    expect(one.upstream[0]!.body).toEqual({
+      api: 'classic',
+      category: 'companies',
+      keywords: 'enactus berkeley',
+    });
+    expect(new URL(one.upstream[1]!.url).pathname).toBe('/api/v1/linkedin/company/777');
+    expect(one.body).toMatchObject({ ok: true, company: { id: '777', logoUrl: licdn('e') } });
+    // two of that name: neither is guessed, and no page is read
+    const two = await byName(
+      [
+        { id: '1', name: 'Nova' },
+        { id: '2', name: 'NOVA' },
+      ],
+      'Nova',
+    );
+    expect(two.body).toMatchObject({ ok: false, reason: 'ambiguous' });
+    expect(two.upstream).toHaveLength(1);
+    // only a near name: not found
+    expect((await byName([{ id: '3', name: 'Nozomio Labs' }], 'Nozomio')).body).toMatchObject({
+      ok: false,
+      reason: 'not_found',
+    });
+  });
+
   it("reads a company's page: its LinkedIn id, public name and logo", async () => {
     const { handler, upstream } = harness();
     const b = await (

@@ -431,7 +431,7 @@ export async function findPaths(
   const paths: PathsFindResponse['paths'] = [];
   for (const p of r.paths as WarmPath[])
     paths.push({ ...p, id: await pathId(userId, p.nodes), names: namesOf(g, p.nodes) });
-  const hopEvidence = r.direct ? undefined : await queueHopEvidence(s, userId, g, targetId, r.paths, ext);
+  const hopEvidence = await queueHopEvidence(s, userId, g, targetId, r.paths, ext);
   return {
     paths,
     ...(r.fallback ? { fallback: r.fallback } : {}),

@@ -3,11 +3,12 @@ import { companyDomain, companyInitials, looksLikeSchool, normalizeCompany } fro
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Users } from 'lucide-react';
 import type React from 'react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useInView } from 'react-intersection-observer';
 import { findSchoolDomain } from '../data/schools';
 import { db } from '../db/schema';
-import { forgetLogo, isBundledLogo, knownLogo, resolveLogo } from '../engine/logoImage';
+import { bundledLogo, forgetLogo, isBundledLogo, knownLogo, resolveLogo } from '../engine/logoImage';
+import { wantCompanyLogo } from '../engine/logoQueue';
 import { linkedInImageExpired } from '../engine/photos';
 import { cx } from '../ui';
 
@@ -16,19 +17,19 @@ const usableLogo = (o: Organization | undefined, failed?: string) =>
   o?.logoUrl && o.logoUrl !== failed && !linkedInImageExpired(o.logoUrl) ? o.logoUrl : undefined;
 
 /**
- * A company's logo, small and square, with its name on hover. The company's own logo from LinkedIn comes first (kept
- * on the organisation by enrichment, plan 17 E; an expired LinkedIn link is skipped until it is fetched again), from
- * the organisation by id or any organisation of the same name. Then the icon of its web address, which comes from what
- * Orbit knows (a stored domain, the list of well-known companies and universities and their schools, a work address
- * of someone there): a logo shipped with the app when there is one, else the icon services, each answer judged
- * before it shows (engine/logoImage), so a service's stand-in picture never passes for a logo. Without one it is the
- * company's initials on a tile coloured by its name, so a row of them still lines up and the same company always
- * looks the same.
+ * A company's logo, small and square, with its name on hover. Logos come from LinkedIn (the student's rule: never a
+ * guessed one). The company's own LinkedIn logo comes first (kept on the organisation by enrichment and by the logo
+ * queue, which looks a company up on LinkedIn when a tile shows it without one; an expired link is skipped until it
+ * is fetched again), from the organisation by id or any organisation of the same name. Until LinkedIn has answered,
+ * only a logo shipped with the app stands in, and only for a web address Orbit knows for certain (a stored domain,
+ * the list of well-known companies and universities): never a name turned into a ".com", never a work address, never
+ * an icon service's answer for a company. A school's official address may still show its own site icon. Otherwise
+ * it is the company's initials on a tile coloured by its name, so a row of them still lines up and the same company
+ * always looks the same.
  */
 export function CompanyLogo({
   name,
   domain,
-  emails,
   orgId,
   size = 16,
   className,
@@ -41,6 +42,7 @@ export function CompanyLogo({
   /** the company's name is already written next to it: screen readers skip the logo, the hover still names it */
   decorative?: boolean;
   domain?: string;
+  /** work addresses of people there: no longer used for the logo (a work address is not proof of a company's logo) */
   emails?: (string | undefined)[];
   /** the organisation row, for a domain stored on it */
   orgId?: string;
@@ -57,18 +59,24 @@ export function CompanyLogo({
     return [...(byId ? [byId] : []), ...byName.filter((o) => o.id !== byId?.id)];
   }, [orgId, name]);
   const org = orgs?.[0];
+  const inViewRef = useRef(false);
   const [ownFailed, setOwnFailed] = useState<string>();
   const ownOrg = orgs?.find((o) => usableLogo(o, ownFailed));
   const own = usableLogo(ownOrg, ownFailed);
   const companyName = name ?? org?.name;
   // cheap (core caches by name), so it is computed each render rather than memoised on a list rebuilt by callers
   const known =
-    domain ?? companyDomain(companyName, { domains: orgs?.flatMap((o) => o.domains ?? []), emails });
+    domain ?? companyDomain(companyName, { domains: orgs?.flatMap((o) => o.domains ?? []), guess: false });
+  const school = !!companyName && looksLikeSchool(companyName);
+  // no LinkedIn logo yet: ask LinkedIn (engine/logoQueue), once the orgs are read and the tile is near the screen
+  useEffect(() => {
+    if (orgs && !own && companyName && inViewRef.current) wantCompanyLogo(companyName);
+  });
   // a school the short list does not know: the full school list, loaded only for names that read like a school
   const [schoolDomain, setSchoolDomain] = useState<string>();
   useEffect(() => {
     setSchoolDomain(undefined);
-    if (known || !companyName || !looksLikeSchool(companyName)) return;
+    if (known || !companyName || !school) return;
     let live = true;
     findSchoolDomain(companyName)
       .then((d) => live && setSchoolDomain(d))
@@ -80,9 +88,15 @@ export function CompanyLogo({
   const d = known ?? schoolDomain;
   // the icon is looked for once the tile is near the screen
   const { ref, inView } = useInView({ triggerOnce: true, rootMargin: '200px', fallbackInView: true });
+  inViewRef.current = inView;
   const [found, setFound] = useState<{ domain: string; src: string | null }>();
   useEffect(() => {
     if (!d || own || !inView) return;
+    // a company: the logo shipped with the app for its known address, or nothing (no icon services)
+    if (!school) {
+      setFound({ domain: d, src: bundledLogo(d) ?? null });
+      return;
+    }
     const k = knownLogo(d);
     if (k !== undefined) {
       setFound({ domain: d, src: k });
@@ -93,7 +107,7 @@ export function CompanyLogo({
     return () => {
       live = false;
     };
-  }, [d, own, inView]);
+  }, [d, own, inView, school]);
   if (!companyName && !org) return null;
   const label = labelOverride ?? companyName ?? '';
   const box = { width: size, height: size };

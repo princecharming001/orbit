@@ -239,11 +239,15 @@ describe('rankWarmPaths', () => {
     expect(r.paths[0]!.p).toBeGreaterThanOrEqual(r.paths[4]!.p);
   });
 
-  it('does not route to someone the student knows, and falls back to cold without a decent route', () => {
+  it('routes to someone the student knows too, with the direct tie beside, and falls back to cold without a route', () => {
     const known = rankWarmPaths(
       input([rp('a', 80), rp('t', 72)], [ex('a', 't')], { target: { name: 'Priya' } }),
     );
-    expect(known).toEqual({
+    expect(known.direct).toEqual({ score: 72, band: 'Strong', text: 'You know Priya (Strong · 72)' });
+    expect(known.paths.map((p) => p.nodes)).toEqual([[USER_NODE, 'a', 't']]);
+    expect(known.fallback).toBeUndefined();
+    // the student knows them and no one is a way in: the direct tie alone, not "cold"
+    expect(rankWarmPaths(input([rp('t', 72)], [], { target: { name: 'Priya' } }))).toEqual({
       paths: [],
       direct: { score: 72, band: 'Strong', text: 'You know Priya (Strong · 72)' },
     });

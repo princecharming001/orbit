@@ -1,7 +1,8 @@
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { db, wipeDatabase } from '../db/schema';
+import * as logoQueue from '../engine/logoQueue';
 import { CompanyLogo, NoCompanyIcon, PersonCompanyLogo } from './CompanyLogo';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -124,6 +125,58 @@ describe('CompanyLogo', () => {
     await b.unmount();
     await c.unmount();
     await d.unmount();
+  });
+
+  it('never makes a logo up: no name turned into a ".com", no work address, no icon service for a company', async () => {
+    const asked = vi.spyOn(logoQueue, 'wantCompanyLogo');
+    const images: string[] = [];
+    const real = globalThis.Image;
+    globalThis.Image = class extends real {
+      set src(v: string) {
+        images.push(v);
+      }
+    } as typeof Image;
+    try {
+      const { host, unmount } = await mount(
+        <PersonCompanyLogo
+          person={{
+            currentOrganizationRaw: 'Nozomio',
+            emails: ['arlan@nozomio.com'],
+            primaryEmail: 'arlan@nozomio.com',
+          }}
+        />,
+      );
+      const tile = host.querySelector('[data-testid="company-logo"]') as HTMLElement;
+      expect(tile.tagName).toBe('SPAN');
+      expect(tile.textContent).toBe('N');
+      expect(images).toEqual([]);
+      // the tile asks LinkedIn for the real one
+      expect(asked).toHaveBeenCalledWith('Nozomio');
+      await unmount();
+    } finally {
+      globalThis.Image = real;
+      asked.mockRestore();
+    }
+  });
+
+  it('a LinkedIn logo found later replaces the initials, and wins over a shipped logo', async () => {
+    const { host, unmount } = await mount(<CompanyLogo name="Stripe" size={22} />);
+    expect(host.querySelector('img')?.getAttribute('src')).toMatch(/\/logos\/stripe\.png$/);
+    await act(async () => {
+      await db.organizations.put({
+        id: 'org_stripe',
+        name: 'Stripe',
+        nameNormalized: 'stripe',
+        domains: [],
+        linkedinCompanyId: '2135371',
+        logoUrl: fresh,
+      });
+    });
+    await settle();
+    const img = host.querySelector('img')!;
+    expect(img.getAttribute('src')).toBe(fresh);
+    expect(img.dataset.source).toBe('linkedin');
+    await unmount();
   });
 
   it('shows a people icon for no company, not an empty square', async () => {

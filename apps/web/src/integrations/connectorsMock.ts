@@ -690,6 +690,16 @@ export async function mockLinkedInProfile(
   };
 }
 
+/** A demo company found by its name, as LinkedIn's company search would find it: one with a demo logo. */
+export async function mockCompanyByName(name: string): Promise<LinkedInCompany | undefined> {
+  const norm = normalizeCompany(name);
+  const org = (await db.organizations.toArray()).find((o) => normalizeCompany(o.name) === norm);
+  const slug = org?.linkedinSlug ?? slugOf(name);
+  const logoUrl = mockLogo(slug);
+  if (!logoUrl) return undefined;
+  return { id: `mock_company_${slug}`, name: org?.name ?? name, publicIdentifier: slug, logoUrl };
+}
+
 /** A demo company's LinkedIn page: its name, public name and logo. */
 export async function mockLinkedInCompany(identifier: string): Promise<LinkedInCompany | undefined> {
   const slug = identifier.replace(/^mock_company_/, '');

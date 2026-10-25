@@ -1130,7 +1130,8 @@ function warmIntroForModel(w: WarmIntro, ctx: ToolContext) {
 
 /** find_routes in account mode: the server's routes with their chance in words, reasons and ids for ask_for_intro. */
 function serverRoutes(ctx: ToolContext, target: Person, res: PathsFindResponse) {
-  if (res.direct)
+  // someone the student knows: their warm routes when there are any, and saying they can write directly
+  if (res.direct && !res.paths.length)
     return ok(
       'routes',
       { target: personRef(target), routes: [] },
@@ -1168,9 +1169,12 @@ function serverRoutes(ctx: ToolContext, target: Person, res: PathsFindResponse) 
         otherWays: r.otherWays,
       })),
       sources: res.sources,
+      ...(res.direct
+        ? { direct: { score: res.direct.score, band: res.direct.band, text: res.direct.text } }
+        : {}),
       next: 'ask_for_intro with a pathId drafts the request; it never sends',
     },
-    `${plural(routes.length, 'route')} to ${target.displayName}. Best: through ${best.firstHop} (${best.bandLabel.toLowerCase()}).${quiet}`,
+    `${res.direct ? `You know ${target.displayName} directly (${res.direct.score}, ${res.direct.band}), and ` : ''}${plural(routes.length, 'route')} to ${target.displayName}. Best: through ${best.firstHop} (${best.bandLabel.toLowerCase()}).${quiet}`,
     `/people/${target.id}`,
   );
 }

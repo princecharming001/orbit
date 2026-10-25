@@ -205,6 +205,23 @@ export async function linkedInCompany(
   return unwrap(r, 'company');
 }
 
+/**
+ * A company's LinkedIn page found by its name: LinkedIn's company search, answered only when exactly one company there
+ * has that name (`ambiguous` when several do, so a namesake's logo is never taken).
+ */
+export async function linkedInCompanyByName(
+  accountId: string,
+  name: string,
+  opts: CallOpts = {},
+): Promise<EnrichOutcome<LinkedInCompany>> {
+  const r = await unipileProxyCall<Answer<'company', LinkedInCompany>>(
+    '/company',
+    { accountId, token: opts.token, name },
+    opts,
+  );
+  return unwrap(r, 'company');
+}
+
 /** Web pages about a person (Exa), when Orbit's server has a key for it; `unconfigured` otherwise. */
 export async function webLookup(
   q: { name: string; company?: string; school?: string },

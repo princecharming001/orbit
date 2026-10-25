@@ -307,7 +307,8 @@ function findSchool(name: string): string | undefined {
 
 export function companyDomain(
   name: string | undefined,
-  hints: { domains?: string[]; emails?: (string | undefined)[] } = {},
+  /** `guess: false` answers only from what is known (a stored domain, the well-known list, a school's address) */
+  hints: { domains?: string[]; emails?: (string | undefined)[]; guess?: boolean } = {},
 ): string | undefined {
   for (const d of hints.domains ?? []) {
     const b = bare(d);
@@ -317,6 +318,7 @@ export function companyDomain(
   if (norm && BY_NAME.has(norm)) return BY_NAME.get(norm);
   const school = schoolDomain(name);
   if (school) return school;
+  if (hints.guess === false) return undefined;
   // a work address (not a free mailbox, not a school) names the employer's domain
   for (const e of hints.emails ?? []) {
     const d = e?.split('@')[1]?.toLowerCase().trim();

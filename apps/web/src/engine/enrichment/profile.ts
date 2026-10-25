@@ -235,6 +235,22 @@ export async function applyLinkedInProfile(
     if (rec) noteField(rec, 'photoUrl', { source: 'linkedin_profile', confidence }, now, true);
   }
 
+  // 4b. every company and school on the profile, as LinkedIn names them: their LinkedIn id and logo on the
+  // organisation, so a past employer or a school shows its real logo too (logos come from LinkedIn only)
+  for (const x of [
+    ...(held(profile, 'experience') ? [] : profile.experience.filter((e) => e !== cur)),
+    ...(held(profile, 'education') ? [] : profile.education),
+  ]) {
+    const name = 'school' in x ? x.school : x.company;
+    const facts =
+      'school' in x
+        ? { companyId: x.schoolId, logoUrl: x.logoUrl }
+        : { companyId: x.companyId, companySlug: x.companySlug, logoUrl: x.logoUrl };
+    if (!name || (!facts.logoUrl && !facts.companyId)) continue;
+    const org = await upsertOrganization(name);
+    if (org && (await adoptCompany(org, facts, now))?.logoUrl) logo = true;
+  }
+
   // 5. experience and education as affiliations
   if (!held(profile, 'experience') && profile.experience.length)
     await replaceEmployment(
