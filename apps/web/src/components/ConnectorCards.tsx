@@ -7,6 +7,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { Check } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import {
+  checkLinkedInAccount,
   connectLinkedInLive,
   disconnectLinkedInLive,
   LIVE_SOON,
@@ -59,6 +60,10 @@ export function LinkedInLiveCard({ user }: { user: User }) {
   const [soon, setSoon] = useState(false);
   const [error, setError] = useState<string>();
   const [confirming, setConfirming] = useState(false);
+  // the switch says what Unipile says: signed out by LinkedIn, or gone, is shown as such (the row updates itself)
+  useEffect(() => {
+    void checkLinkedInAccount(user).catch(() => undefined);
+  }, [user.id]);
   if (!status) return null;
   const connect = async () => {
     setError(undefined);
@@ -103,12 +108,19 @@ export function LinkedInLiveCard({ user }: { user: User }) {
         name="LinkedIn (live)"
         status={
           status.connected ? (
-            <RowStatus tone={status.error ? 'bad' : 'good'} testId="settings-linkedin-live-status">
-              <Check size={12} /> Connected
-              {status.rows !== undefined ? ` · ${status.rows} connections` : ''} · last synced{' '}
-              {status.lastSyncedAt ? relDate(status.lastSyncedAt) : 'never'}
-              {status.error && ' · the last sync did not go through'}
-            </RowStatus>
+            status.signedOut ? (
+              <RowStatus tone="bad" testId="settings-linkedin-live-status">
+                Signed out by LinkedIn · last synced{' '}
+                {status.lastSyncedAt ? relDate(status.lastSyncedAt) : 'never'}
+              </RowStatus>
+            ) : (
+              <RowStatus tone={status.error ? 'bad' : 'good'} testId="settings-linkedin-live-status">
+                <Check size={12} /> Connected
+                {status.rows !== undefined ? ` · ${status.rows} connections` : ''} · last synced{' '}
+                {status.lastSyncedAt ? relDate(status.lastSyncedAt) : 'never'}
+                {status.error && ' · the last sync did not go through'}
+              </RowStatus>
+            )
           ) : busy ? (
             <RowStatus testId="settings-linkedin-live-status">
               <Spinner /> {busy}
@@ -127,7 +139,24 @@ export function LinkedInLiveCard({ user }: { user: User }) {
         actions={
           !status.available ? undefined : (
             <>
-              {status.connected && (
+              {status.signedOut && (
+                <Button
+                  size="sm"
+                  variant="primary"
+                  onClick={connect}
+                  disabled={!!busy}
+                  data-testid="settings-linkedin-live-signin"
+                >
+                  {busy ? (
+                    <>
+                      <Spinner /> {busy}
+                    </>
+                  ) : (
+                    'Sign in again'
+                  )}
+                </Button>
+              )}
+              {status.connected && !status.signedOut && (
                 <Button
                   size="sm"
                   variant="ghost"

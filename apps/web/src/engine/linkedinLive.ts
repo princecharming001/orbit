@@ -25,7 +25,9 @@ import {
 import { callApi, isServerUser } from '../integrations/orbitApi';
 import {
   disconnectLinkedInAccount,
+  type LinkedInAccountHealth,
   type LiveConnection,
+  linkedInAccountHealth,
   linkedInConnections,
   linkedInConnectStatus,
   linkedInMe,
@@ -500,6 +502,35 @@ export async function disconnectLinkedInLive(
   return { ok: true, unlinkedAtUnipile: unlinked };
 }
 
+/** What Settings says when LinkedIn signed the account out and Orbit can no longer read or send with it. */
+export const LINKEDIN_SIGNED_OUT = 'LinkedIn signed Orbit out. Sign in again to keep it current.';
+
+/**
+ * Ask Unipile whether the connected account still works, so the switch in Settings tells the truth: signed out by
+ * LinkedIn marks the row with LINKEDIN_SIGNED_OUT (the switch stays on, with Sign in again), an account Unipile no
+ * longer has turns the switch off, and a working one clears an earlier signed-out mark. A failed check changes
+ * nothing. The demo and an Orbit account (whose server holds the account) are not checked from here.
+ */
+export async function checkLinkedInAccount(user: User): Promise<LinkedInAccountHealth | undefined> {
+  if (isServerUser(user.id) || usesMockConnectors(user.id) || !unipileConfigured()) return undefined;
+  const row = await liveLinkedInAccount(user.id);
+  if (!isConnected(row) || !row.accessToken) return undefined;
+  const r = await linkedInAccountHealth(row.externalAccountId!, { token: row.accessToken });
+  if (!r.ok) return undefined;
+  if (r.value === 'signin')
+    await db.integrations.update(row.id, { status: 'error', lastError: LINKEDIN_SIGNED_OUT });
+  else if (r.value === 'gone') {
+    await db.integrations.update(row.id, {
+      status: 'revoked',
+      externalAccountId: undefined,
+      lastError: undefined,
+    });
+    await db.engagement.where('userId').equals(user.id).delete();
+  } else if (r.value === 'connected' && row.lastError === LINKEDIN_SIGNED_OUT)
+    await db.integrations.update(row.id, { status: 'active', lastError: undefined });
+  return r.value;
+}
+
 export interface LinkedInLiveStatus {
   /** live connect can be offered here */
   available: boolean;
@@ -508,6 +539,8 @@ export interface LinkedInLiveStatus {
   lastSyncedAt?: string;
   rows?: number;
   error?: string;
+  /** LinkedIn signed the account out (checkLinkedInAccount): Settings offers Sign in again */
+  signedOut?: boolean;
   /** the sample student's mock connector */
   demo: boolean;
   /** connected and the last sync is more than a day old */
@@ -526,6 +559,7 @@ export async function linkedInLiveStatus(user: User, now = new Date()): Promise<
     lastSyncedAt: last,
     rows: connected && typeof rows === 'number' ? rows : undefined,
     error: connected ? row.lastError : undefined,
+    signedOut: connected && row.lastError === LINKEDIN_SIGNED_OUT,
     demo: usesMockConnectors(user.id),
     stale: connected && (!last || now.getTime() - Date.parse(last) > AUTO_SYNC_AFTER_MS),
   };

@@ -32,6 +32,7 @@ import { demoResetPrompt, loadDemo } from '../engine/demo';
 import { connectAndSyncGoogle, disconnectGoogleAccount, markGoogleNeedsReauth } from '../engine/integrations';
 import { setMorningBrief } from '../engine/morning';
 import { saveResume } from '../engine/resume';
+import { googleStatus, refreshSyncStatus, subscribeSyncStatus, syncStatusNow } from '../engine/serverSync';
 import {
   removeTargetCompany,
   restoreTargetCompany,
@@ -48,7 +49,7 @@ import {
 import { addTargetCompanies } from '../engine/targets';
 import { fmtFailureTime, MODEL } from '../integrations/anthropic';
 import { currentGoogleToken, googleClientId } from '../integrations/google';
-import { isAccountMode, isServerUser } from '../integrations/orbitApi';
+import { isAccountMode, isServerUser, startGoogleSignIn } from '../integrations/orbitApi';
 import {
   DEFAULT_DAILY_REQUEST_CAP,
   envGoogleClientId,
@@ -685,6 +686,62 @@ function GoalsForm({ goals, tcs }: { goals: UserGoals; tcs: TargetCompany[] }) {
   );
 }
 
+/**
+ * Google for an Orbit account: the server holds the connection, so the row says what the server says (asked again when
+ * Settings opens): connected with the address and the last sync, or signed out by Google with Sign in again, which
+ * signs in with Google once more and puts the server's access back.
+ */
+function GoogleAccountRow() {
+  const [status, setStatus] = useState(() => syncStatusNow());
+  useEffect(() => subscribeSyncStatus(setStatus), []);
+  useEffect(() => {
+    void refreshSyncStatus().catch(() => undefined);
+  }, []);
+  const g = googleStatus(status);
+  const signedOut = !!g && ['needs_reauth', 'revoked', 'error'].includes(g.status);
+  return (
+    <IntegrationRow
+      testId="google-via-account"
+      mark={<AppMark logo="google.com">G</AppMark>}
+      name="Google"
+      status={
+        signedOut ? (
+          <RowStatus tone="bad" testId="google-via-account-status">
+            {g.status === 'error' ? 'The last sync did not go through' : 'Signed out by Google'}
+            {g.lastSyncedAt ? ` · synced ${relDate(g.lastSyncedAt)}` : ''}
+          </RowStatus>
+        ) : (
+          <RowStatus tone={g ? 'good' : 'muted'} testId="google-via-account-status">
+            <Check size={12} /> Connected{g?.email ? ` as ${g.email}` : ' through your Orbit account'}
+            {g?.lastSyncedAt ? ` · synced ${relDate(g.lastSyncedAt)}` : ''}
+          </RowStatus>
+        )
+      }
+      line={
+        signedOut ? (
+          'Orbit cannot read your email or calendar until you sign in with Google again'
+        ) : (
+          <NavLink to="/settings/account" className="underline underline-offset-2 hover:text-ink">
+            Account settings
+          </NavLink>
+        )
+      }
+      actions={
+        signedOut ? (
+          <Button
+            size="sm"
+            variant="primary"
+            onClick={() => startGoogleSignIn()}
+            data-testid="google-via-account-signin"
+          >
+            Sign in again
+          </Button>
+        ) : undefined
+      }
+    />
+  );
+}
+
 function Integrations() {
   const user = useSession().user!;
   const toast = useToast();
@@ -734,21 +791,7 @@ function Integrations() {
     <div>
       <RowGroup title="Your network">
         {viaAccount ? (
-          <IntegrationRow
-            testId="google-via-account"
-            mark={<AppMark logo="google.com">G</AppMark>}
-            name="Google"
-            status={
-              <RowStatus>
-                <Check size={12} /> Connected through your Orbit account
-              </RowStatus>
-            }
-            line={
-              <NavLink to="/settings/account" className="underline underline-offset-2 hover:text-ink">
-                Account settings
-              </NavLink>
-            }
-          />
+          <GoogleAccountRow />
         ) : (
           <IntegrationRow
             mark={<AppMark logo="google.com">G</AppMark>}

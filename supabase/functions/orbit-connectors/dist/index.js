@@ -471,9 +471,11 @@ var UNIPILE_ROUTES = /* @__PURE__ */ new Set([
   "/chats/history",
   "/posts/activity",
   "/engagement",
-  "/ledger"
+  "/ledger",
+  "/account"
 ]);
 var ACCOUNT_ROUTES = /* @__PURE__ */ new Set([
+  "/account",
   "/relations",
   "/mutuals",
   "/disconnect",
@@ -602,6 +604,7 @@ function makeHandler(deps) {
           return json(200, { ...st, token: await accountToken(st.accountId, deps.signingKey) }, h);
         return json(200, st, h);
       }
+      if (path === "/account") return json(200, await unipileAccountHealth(deps, accountId, doFetch), h);
       if (path === "/send") return json(200, await unipileSend(deps, body, doFetch), h);
       if (path === "/relations") return json(200, await unipileRelations(deps, body, doFetch), h);
       if (path === "/mutuals") return json(200, await unipileMutuals(deps, body, doFetch, spend), h);
@@ -674,6 +677,15 @@ async function unipileConnectStatus(deps, body, doFetch) {
   const acc = b.items?.find((a) => a.name === ref);
   if (!acc) return { status: "pending" };
   return accountState(acc, acc.id);
+}
+async function unipileAccountHealth(deps, accountId, doFetch) {
+  const res = await doFetch(`${deps.unipileBase}/api/v1/accounts/${encodeURIComponent(accountId)}`, {
+    headers: uHeaders(deps)
+  });
+  if (res.status === 404) return { status: "gone" };
+  if (!res.ok) throw new Error(`unipile ${res.status}`);
+  const st = accountState(await res.json(), accountId);
+  return { status: st.status === "error" ? "signin" : st.status };
 }
 function accountState(acc, id) {
   const states = (acc.sources ?? []).map((x) => String(x.status ?? "").toUpperCase());

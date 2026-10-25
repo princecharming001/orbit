@@ -6,7 +6,7 @@
  *
  * Routes (POST, JSON):
  *   /connect/start, /connect/status, /relations, /mutuals, /disconnect, /send,
- *   /inbox, /search, /me, /chats/history, /posts/activity, /engagement, /ledger -> Unipile
+ *   /inbox, /search, /me, /chats/history, /posts/activity, /engagement, /ledger, /account -> Unipile
  *   /paths                                                                     -> Village
  *   /profile, /company, /photo (Unipile), /web (Exa), /providers   -> enrichment (plan 17 E, block at the end)
  *
@@ -343,9 +343,11 @@ const UNIPILE_ROUTES = new Set([
   '/posts/activity',
   '/engagement',
   '/ledger',
+  '/account',
 ]);
 /** Routes that act on a connected account, so need its token. */
 const ACCOUNT_ROUTES = new Set([
+  '/account',
   '/relations',
   '/mutuals',
   '/disconnect',
@@ -493,6 +495,7 @@ export function makeHandler(deps: ConnectorDeps): (req: Request) => Promise<Resp
           return json(200, { ...st, token: await accountToken(st.accountId, deps.signingKey) }, h);
         return json(200, st, h);
       }
+      if (path === '/account') return json(200, await unipileAccountHealth(deps, accountId, doFetch), h);
       if (path === '/send') return json(200, await unipileSend(deps, body, doFetch), h);
       if (path === '/relations') return json(200, await unipileRelations(deps, body, doFetch), h);
       if (path === '/mutuals') return json(200, await unipileMutuals(deps, body, doFetch, spend), h);
@@ -591,6 +594,25 @@ async function unipileConnectStatus(
 }
 
 type UnipileAccount = { id?: string; name?: string; sources?: { status?: string }[] };
+
+/**
+ * Whether a connected account still works, for Settings' LinkedIn switch: Unipile still has it signed in
+ * ('connected'), LinkedIn signed it out and the student must sign in again ('signin'), it is still finishing
+ * ('pending'), or Unipile no longer has it at all ('gone').
+ */
+async function unipileAccountHealth(
+  deps: ConnectorDeps,
+  accountId: string,
+  doFetch: typeof fetch,
+): Promise<{ status: 'connected' | 'signin' | 'pending' | 'gone' }> {
+  const res = await doFetch(`${deps.unipileBase}/api/v1/accounts/${encodeURIComponent(accountId)}`, {
+    headers: uHeaders(deps),
+  });
+  if (res.status === 404) return { status: 'gone' };
+  if (!res.ok) throw new Error(`unipile ${res.status}`);
+  const st = accountState((await res.json()) as UnipileAccount, accountId);
+  return { status: st.status === 'error' ? 'signin' : st.status };
+}
 
 /** An account's sign-in state from its sources: connected, failed, or still finishing. */
 function accountState(acc: UnipileAccount, id: string | undefined): ConnectStatus {

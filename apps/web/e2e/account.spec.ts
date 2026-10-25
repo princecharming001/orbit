@@ -341,6 +341,20 @@ test.describe('account mode (mocked orbit-api)', () => {
       await expect(page.locator('#lim-sched')).toHaveValue('https://cal.com/maya/20min');
     });
 
+    test('Settings: the Google row says what the server says, and offers Sign in again when signed out', async ({
+      page,
+    }) => {
+      const api = await signedIn(page);
+      await page.goto('settings/integrations');
+      await expect(page.getByTestId('google-via-account-status')).toContainText(
+        'Connected as maya@cornell.edu',
+      );
+      api.state.status.google.status = 'needs_reauth';
+      await page.reload();
+      await expect(page.getByTestId('google-via-account-status')).toContainText('Signed out by Google');
+      await expect(page.getByTestId('google-via-account-signin')).toBeVisible();
+    });
+
     test('Chat: a goal the student talks about is offered, and tracked on yes', async ({ page }) => {
       const api = await signedIn(page);
       api.state.proposals = [

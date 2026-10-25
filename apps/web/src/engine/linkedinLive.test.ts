@@ -5,6 +5,7 @@ import { setConnectorsMockForTests } from '../integrations/connectorsMock';
 import { setUnipileUrlForTests } from '../integrations/unipile';
 import {
   autoSyncLinkedInLive,
+  checkLinkedInAccount,
   connectLinkedInLive,
   disconnectLinkedInLive,
   LIVE_SOON,
@@ -330,6 +331,37 @@ describe('syncing, disconnecting and the daily re-sync', () => {
     expect((await linkedInLiveStatus(user)).connected).toBe(false);
     expect(await syncLinkedInLive(user)).toMatchObject({ ok: false, reason: 'not_connected' });
     expect(await disconnectLinkedInLive(user)).toMatchObject({ ok: false, reason: 'not_connected' });
+  });
+
+  it('the switch follows Unipile: signed out by LinkedIn, back again, and gone', async () => {
+    routes['/connect/status'] = { body: { status: 'connected', accountId: 'acc_1', token: 'tok_1' } };
+    await connectLinkedInLive(user);
+    // nothing to say yet: a working account stays as it is
+    routes['/account'] = { body: { status: 'connected' } };
+    expect(await checkLinkedInAccount(user)).toBe('connected');
+    expect(calls.find((c) => c.path === '/account')!.body).toEqual({ accountId: 'acc_1', token: 'tok_1' });
+    expect(await linkedInLiveStatus(user)).toMatchObject({ connected: true, signedOut: false });
+    routes['/account'] = { body: { status: 'signin' } };
+    await checkLinkedInAccount(user);
+    expect(await linkedInLiveStatus(user)).toMatchObject({ connected: true, signedOut: true });
+    // a check that fails says nothing new
+    routes['/account'] = { status: 502, body: { error: 'unipile 500' } };
+    expect(await checkLinkedInAccount(user)).toBeUndefined();
+    expect((await linkedInLiveStatus(user)).signedOut).toBe(true);
+    routes['/account'] = { body: { status: 'connected' } };
+    await checkLinkedInAccount(user);
+    expect((await liveLinkedInAccount(user.id))!.status).toBe('active');
+    expect((await linkedInLiveStatus(user)).signedOut).toBe(false);
+    routes['/account'] = { body: { status: 'gone' } };
+    await checkLinkedInAccount(user);
+    expect((await linkedInLiveStatus(user)).connected).toBe(false);
+    expect(await people()).toHaveLength(2);
+  });
+
+  it('does not check the demo or an account without its token', async () => {
+    await connectLinkedInLive(user);
+    expect(await checkLinkedInAccount(user)).toBeUndefined();
+    expect(calls.some((c) => c.path === '/account')).toBe(false);
   });
 
   it('re-syncs on app open only when the last sync is more than a day old', async () => {

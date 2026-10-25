@@ -277,6 +277,35 @@ describe('orbit-connectors proxy', () => {
     });
   });
 
+  it('/account says whether a connected account still works, only to the browser holding its token', async () => {
+    const one =
+      (status: number, body: unknown): Upstream =>
+      (url) =>
+        url.includes('/api/v1/accounts/acc_1')
+          ? new Response(JSON.stringify(body), { status })
+          : new Response('{}', { status: 404 });
+    const ask = async (h: ReturnType<typeof harness>, token = TOKEN.acc_1) =>
+      (await h.handler(post('/account', { accountId: 'acc_1', token }))).json();
+    expect(await ask(harness({}, one(200, { id: 'acc_1', sources: [{ status: 'OK' }] })))).toEqual({
+      status: 'connected',
+    });
+    expect(await ask(harness({}, one(200, { id: 'acc_1', sources: [{ status: 'CREDENTIALS' }] })))).toEqual({
+      status: 'signin',
+    });
+    expect(await ask(harness({}, one(200, { id: 'acc_1', sources: [{ status: 'CONNECTING' }] })))).toEqual({
+      status: 'pending',
+    });
+    expect(await ask(harness({}, one(404, {})))).toEqual({ status: 'gone' });
+    const refused = await harness({}, one(200, {})).handler(
+      post('/account', { accountId: 'acc_1', token: TOKEN.a1 }),
+    );
+    expect(refused.status).toBe(403);
+    expect(
+      (await harness({}, one(500, {})).handler(post('/account', { accountId: 'acc_1', token: TOKEN.acc_1 })))
+        .status,
+    ).toBe(502);
+  });
+
   it('reads a 404 from Unipile as still waiting and any other failure as a 502', async () => {
     const missing = harness({}, accounts([], 404));
     const r1 = await missing.handler(post('/connect/status', { ref: 'ref1' }));

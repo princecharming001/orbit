@@ -822,3 +822,19 @@ export async function linkedInLedger(
     },
   };
 }
+
+/** Whether the connected account still works: signed in, signed out by LinkedIn, still finishing, or gone. */
+export type LinkedInAccountHealth = 'connected' | 'signin' | 'pending' | 'gone';
+
+/** Ask Unipile whether the student's LinkedIn account is still signed in (Settings checks it when it opens). */
+export async function linkedInAccountHealth(
+  accountId: string,
+  opts: CallOpts = {},
+): Promise<ConnectorOutcome<LinkedInAccountHealth>> {
+  const r = await call<{ status?: string }>('/account', { accountId, token: opts.token }, opts);
+  if (!r.ok) return r;
+  const s = r.value.status;
+  return s === 'connected' || s === 'signin' || s === 'pending' || s === 'gone'
+    ? { ok: true, value: s }
+    : connectorFailure('error', 'LinkedIn did not say how the account is.');
+}
