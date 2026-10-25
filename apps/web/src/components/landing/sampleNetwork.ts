@@ -1,5 +1,6 @@
 import type { Organization, Person, RelationshipType } from '@orbit/core';
 import { MEDIUM_TIE, orbitGroupKey } from '@orbit/core';
+import { withDemoFaces } from '../../engine/demoFaces';
 
 /**
  * The made-up network the landing page's map searches: a student's ~60 connections across ten companies, who
@@ -128,31 +129,33 @@ export const SAMPLE_ORGS = new Map<string, Organization>(
   ]),
 );
 
-export const SAMPLE_PEOPLE: Person[] = ROWS.map(([name, company, title, strength, how]) => {
-  const [firstName, ...rest] = name.split(' ');
-  return {
-    id: `p-${slug(name)}`,
-    userId: 'landing',
-    displayName: name,
-    firstName: firstName!,
-    lastName: rest.join(' '),
-    nameNormalized: name.toLowerCase(),
-    emails: [],
-    currentTitle: title,
-    currentOrganizationId: `org-${slug(company)}`,
-    currentOrganizationRaw: company,
-    school: how === 'alumni' ? 'Cornell University' : undefined,
-    isAlumni: how === 'alumni',
-    relationshipType: how ?? 'peer',
-    strength,
-    interactionCount: Math.round(strength * 12),
-    sources: ['linkedin_csv'],
-    isHuman: true,
-    tags: [],
-    createdAt: STAMP,
-    updatedAt: STAMP,
-  };
-});
+export const SAMPLE_PEOPLE: Person[] = withDemoFaces(
+  ROWS.map(([name, company, title, strength, how]) => {
+    const [firstName, ...rest] = name.split(' ');
+    return {
+      id: `p-${slug(name)}`,
+      userId: 'landing',
+      displayName: name,
+      firstName: firstName!,
+      lastName: rest.join(' '),
+      nameNormalized: name.toLowerCase(),
+      emails: [],
+      currentTitle: title,
+      currentOrganizationId: `org-${slug(company)}`,
+      currentOrganizationRaw: company,
+      school: how === 'alumni' ? 'Cornell University' : undefined,
+      isAlumni: how === 'alumni',
+      relationshipType: how ?? 'peer',
+      strength,
+      interactionCount: Math.round(strength * 12),
+      sources: ['linkedin_csv'],
+      isHuman: true,
+      tags: [],
+      createdAt: STAMP,
+      updatedAt: STAMP,
+    };
+  }),
+);
 
 export const SAMPLE_BY_ID = new Map(SAMPLE_PEOPLE.map((p) => [p.id, p]));
 const idOf = (name: string) => `p-${slug(name)}`;

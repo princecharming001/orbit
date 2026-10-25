@@ -3,6 +3,7 @@ import { buildDemoDataset, businessDay } from '@orbit/core';
 import { recomputeAllStrengths, setCurrentUserId } from '../db/repo';
 import { db, wipeDatabase } from '../db/schema';
 import { generateBrief, recommendationsRefresh, refreshPersonSummary } from './brief';
+import { DEMO_STUDENT_FACE, withDemoFaces } from './demoFaces';
 import { recomputeEdges } from './graph';
 import { ingestEmails, ingestEvents, type RawEmail, type RawEvent } from './ingest';
 import { ingestNote } from './notes';
@@ -163,6 +164,9 @@ export async function loadDemo(
   const ds = buildDemoDataset({ now });
   const user = ds.user;
   user.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || user.timezone; // seeded times are in the browser's clock
+  // made-up people, with generated portraits
+  user.avatarUrl = DEMO_STUDENT_FACE;
+  withDemoFaces(ds.people);
   log('Setting up a made-up student, Alex');
   await db.users.put(user);
   await db.settings.put(ds.settings);

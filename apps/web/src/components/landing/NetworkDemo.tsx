@@ -274,7 +274,7 @@ export default function NetworkDemo() {
                           <Building2 size={14} />
                         </span>
                       ) : (
-                        <Avatar name={s.person.displayName} id={s.person.id} size={28} />
+                        <Avatar name={s.person.displayName} src={s.person.photoUrl} id={s.person.id} size={28} />
                       )}
                       <span className="min-w-0 flex-1">
                         <span className="block text-[13.5px] text-ink truncate">
@@ -382,7 +382,7 @@ export default function NetworkDemo() {
               }
             >
               <div className="flex items-center gap-2">
-                <Avatar name={hovered.displayName} id={hovered.id} size={30} />
+                <Avatar name={hovered.displayName} src={hovered.photoUrl} id={hovered.id} size={30} />
                 <div className="min-w-0">
                   <div className="text-[13.5px] font-medium text-ink truncate">{hovered.displayName}</div>
                   <div className="text-[12px] text-ink-3 truncate">
@@ -446,7 +446,7 @@ function Chain({ hops, size = 22 }: { hops: Route['hops']; size?: number }) {
         <span key={h.id} className="inline-flex items-center gap-1">
           <ChevronRight size={13} className="text-ink-3" />
           <span className="inline-flex items-center gap-1.5">
-            <Avatar name={nameOf(h.id)} id={h.id} size={size} />
+            <Avatar name={nameOf(h.id)} src={SAMPLE_BY_ID.get(h.id)?.photoUrl} id={h.id} size={size} />
             <span className="text-ink">{first(nameOf(h.id))}</span>
           </span>
         </span>
@@ -532,7 +532,7 @@ function PersonPanel({
   return (
     <div>
       <div className="flex items-center gap-2.5 fade-up">
-        <Avatar name={p.displayName} id={p.id} size={36} />
+        <Avatar name={p.displayName} src={p.photoUrl} id={p.id} size={36} />
         <div className="min-w-0">
           <div className="text-[16px] text-ink truncate">{p.displayName}</div>
           <div className="text-[12.5px] text-ink-3 truncate">

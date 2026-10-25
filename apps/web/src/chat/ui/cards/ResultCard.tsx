@@ -1255,7 +1255,7 @@ function PrepCard({ env }: { env: ResultEnvelope }) {
   return (
     <GlassCard kind="prep">
       <CardHead
-        lead={person ? <Avatar name={person.displayName} id={person.id} size={24} /> : undefined}
+        lead={person ? <Avatar name={person.displayName} src={person.photoUrl} id={person.id} size={24} /> : undefined}
         title={person ? `Prep for ${person.displayName}` : 'Prep'}
         chip={
           when ? (
@@ -1390,7 +1390,7 @@ function TextResult({ env, actions }: { env: ResultEnvelope; actions: CardAction
     return (
       <GlassCard kind="text">
         <CardHead
-          lead={<Avatar name={warmUpFor.displayName} id={warmUpFor.id} size={24} />}
+          lead={<Avatar name={warmUpFor.displayName} src={warmUpFor.photoUrl} id={warmUpFor.id} size={24} />}
           title={warmUpFor.displayName}
           chip={<Chip tone="neutral">LinkedIn only</Chip>}
           href={env.href}
@@ -1406,7 +1406,7 @@ function TextResult({ env, actions }: { env: ResultEnvelope; actions: CardAction
     return (
       <GlassCard kind="text">
         <CardHead
-          lead={<Avatar name={wait.person.displayName} id={wait.person.id} size={24} />}
+          lead={<Avatar name={wait.person.displayName} src={wait.person.photoUrl} id={wait.person.id} size={24} />}
           title={wait.person.displayName}
           chip={wait.until ? <Chip tone="neutral">From {wait.until}</Chip> : undefined}
           href={env.href}
