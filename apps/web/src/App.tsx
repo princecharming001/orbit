@@ -7,6 +7,7 @@ import { AccountSync } from './components/account/AccountSync';
 import { LegacyRedirect } from './legacyRoutes';
 import { AuthApp } from './pages/AuthApp';
 import { AuthDone } from './pages/AuthDone';
+import { ChatsPage } from './pages/Chats';
 import { CompanyPage } from './pages/Company';
 import { Discover } from './pages/Discover';
 import { InboxPage } from './pages/Inbox';
@@ -95,6 +96,7 @@ export function App({ chatEngine }: { chatEngine?: ChatEngine }) {
                 <Route path="/map" element={<MapPage />} />
                 <Route path="/discover" element={<Discover />} />
                 <Route path="/inbox" element={<InboxPage />} />
+                <Route path="/chats" element={<ChatsPage />} />
                 {/* the nav calls this page Drafts: a typed or bookmarked /drafts lands there too */}
                 <Route path="/drafts" element={<Navigate to="/inbox" replace />} />
                 <Route path="/notes/new" element={<NotesNew />} />

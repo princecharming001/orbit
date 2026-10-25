@@ -2,7 +2,16 @@ export * from './demo/seed';
 export * from './drafts/coach';
 export * from './drafts/compose';
 export * from './drafts/neverDo';
-export { expandShorthand, promiseText } from './drafts/phrasing';
+export {
+  article,
+  expandShorthand,
+  isInternCycle,
+  promiseText,
+  roleNoun,
+  schoolShort,
+  shortOrg,
+  softLower,
+} from './drafts/phrasing';
 export * from './drafts/sector';
 export * from './drafts/templates';
 export * from './drafts/thread';

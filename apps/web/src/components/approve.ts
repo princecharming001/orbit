@@ -1,5 +1,5 @@
 import type { OutboundMessage, User } from '@orbit/core';
-import { approveAndSend, type HandoffVia, UNDO_WINDOW_MS, undoQueued } from '../engine/send';
+import { approveAndSend, type HandoffVia, UNDO_WINDOW_MS, undoQueued, withNote } from '../engine/send';
 import type { useToast } from '../ui';
 
 type Toaster = ReturnType<typeof useToast>;
@@ -68,7 +68,10 @@ export async function runApproval(
   const name = firstName ?? 'them';
   // the copy starts inside the click (an await first would lose the browser's permission); a LinkedIn message Orbit
   // sends itself is copied too, which does no harm
-  const copying = draft.channel === 'linkedin' ? copyText(body) : Promise.resolve(false);
+  const copying =
+    draft.channel === 'linkedin'
+      ? copyText(draft.kind === 'intro_request' ? withNote(body, draft.forwardNote) : body)
+      : Promise.resolve(false);
   const r = await approveAndSend(user, draft.id, body, subject, new Date(), via ? { via } : {});
   const copied = await copying;
   if (!r.ok) return r.error;

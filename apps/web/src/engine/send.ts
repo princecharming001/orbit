@@ -35,6 +35,7 @@ import {
 } from '../integrations/google';
 import { AUTOPILOT_GAP_MIN, nextSlotAfter } from './autopilotTime';
 import { evaluateImmediateSuggestions, findReferrerFor } from './brief';
+import { checkIntroNote } from './introNote';
 import { linkedInSendActive, sendLinkedInLive } from './linkedinLive';
 import { scheduleChatAt, upcomingMeeting } from './move';
 import { evaluateTrigger, recordAlreadyDone } from './stages';
@@ -49,7 +50,14 @@ const HOUR = 3_600_000;
  * Kinds the per-person cooldown never holds back: answers to them, scheduling, thank-yous and congratulations. Every
  * other message (outreach, bumps, check-ins, updates, referral and intro asks) waits until they answer the last one.
  */
-const COOLDOWN_EXEMPT: OutboundMessage['kind'][] = ['reply', 'schedule', 'thank_you', 'congratulate'];
+// the note to forward is the second half of an intro ask the student just sent, so it never waits out the cooldown
+const COOLDOWN_EXEMPT: OutboundMessage['kind'][] = [
+  'reply',
+  'schedule',
+  'thank_you',
+  'congratulate',
+  'forwardable_blurb',
+];
 /** Chat stages that mean the person has answered at least once. */
 const ANSWERED_STAGES: CoffeeChat['stage'][] = [
   'replied',
@@ -438,6 +446,14 @@ export async function reviewDraft(
 
 // ---------- approval ----------
 
+/** Between an intro ask and the note under it, in one email: a plain rule, so the introducer can see where to cut. */
+export const NOTE_RULE = '\n\n----\n\n';
+
+/** An intro ask and the note to forward as one text (email, and anything the student pastes themselves). */
+export function withNote(ask: string, note: string | undefined): string {
+  return note?.trim() ? `${ask.trimEnd()}${NOTE_RULE}${note.trim()}` : ask;
+}
+
 export type HandoffVia = 'mailto' | 'linkedin_compose' | 'linkedin_connect' | 'copy';
 
 export type ApproveResult =
@@ -557,6 +573,12 @@ export async function approveAndSend(
     },
   );
   if (!allowed.allowed) return { ok: false, error: allowed.reason ?? 'Not allowed' };
+  // plan 23 §4.3: an intro ask carries the note the introducer can forward, checked as hard as anything Orbit writes
+  const note = msg.kind === 'intro_request' ? msg.forwardNote?.trim() || undefined : undefined;
+  if (note) {
+    const problems = checkIntroNote(note, user);
+    if (problems.length) return { ok: false, error: `The note to forward: ${problems[0]}` };
+  }
   const env = await envelopeFor(msg, subject);
   if (msg.channel === 'gmail' && !env.subject)
     return {
@@ -565,9 +587,19 @@ export async function approveAndSend(
         ? 'Orbit could not find the subject of this thread. Reply from Gmail instead.'
         : 'Add a subject line.',
     };
-  const hash = await sha256Hex(bodyFinal);
+  // Orbit sends it itself, after the undo window: email through Gmail, LinkedIn through the student's own account
+  const direct =
+    !opts.via &&
+    (msg.channel === 'gmail'
+      ? (await googleSendActive(user.id)) || (!!opts.scheduleAt && usesMockConnectors(user.id))
+      : msg.channel === 'linkedin' && (await linkedInSendActive(user, person)));
+  // the note goes in the same text by email and in anything handed off; a LinkedIn message Orbit sends itself goes
+  // alone, and the note waits as a second message for the student's tap (every LinkedIn send is a tap)
+  const noteApart = !!note && msg.channel === 'linkedin' && !!direct;
+  const sent = note && !noteApart ? withNote(bodyFinal, note) : bodyFinal;
+  const hash = await sha256Hex(sent);
   const approval: Partial<OutboundMessage> = {
-    bodyFinal,
+    bodyFinal: sent,
     bodyFinalHash: hash,
     subject: env.subject,
     externalThreadId: env.externalThreadId,
@@ -575,12 +607,7 @@ export async function approveAndSend(
     approvedAt: now.toISOString(),
     error: undefined,
   };
-  // Orbit sends it itself, after the undo window: email through Gmail, LinkedIn through the student's own account
-  const direct =
-    !opts.via &&
-    (msg.channel === 'gmail'
-      ? (await googleSendActive(user.id)) || (!!opts.scheduleAt && usesMockConnectors(user.id))
-      : msg.channel === 'linkedin' && (await linkedInSendActive(user, person)));
+  if (noteApart) await queueNoteMessage(user, msg, note!, now);
   if (opts.scheduleAt && !direct)
     return {
       ok: false,
@@ -633,7 +660,7 @@ export async function approveAndSend(
   const h: { url: string; via: HandoffVia } | { error: string } =
     opts.via === 'copy'
       ? { url: '', via: 'copy' }
-      : handoffFor(msg, person, bodyFinal, env, await connectionNoteFor(msg, person));
+      : handoffFor(msg, person, sent, env, await connectionNoteFor(msg, person));
   if ('error' in h) return { ok: false, error: h.error };
   const claimed = await transition(msg.id, ['draft', 'failed', 'cancelled'], {
     ...approval,
@@ -649,6 +676,58 @@ export async function approveAndSend(
     metadata: { channel: msg.channel, kind: msg.kind, hash, via: h.via },
   });
   return { ok: true, status: 'handed_off', handoffUrl: h.url, via: h.via, threaded: env.threaded };
+}
+
+/**
+ * The note to forward as its own LinkedIn message, waiting for the student's tap once the ask has gone (one per ask:
+ * approving the ask again after an undo keeps the same note).
+ */
+async function queueNoteMessage(user: User, ask: OutboundMessage, note: string, now: Date): Promise<void> {
+  const had = await db.outbound
+    .where('personId')
+    .equals(ask.personId)
+    .filter(
+      (o) => o.kind === 'forwardable_blurb' && o.suggestionId === ask.suggestionId && o.status === 'draft',
+    )
+    .first();
+  if (had) {
+    await db.outbound.update(had.id, { bodyDraft: note });
+    return;
+  }
+  await db.outbound.add({
+    id: newId('out'),
+    userId: user.id,
+    personId: ask.personId,
+    chatId: ask.chatId,
+    suggestionId: ask.suggestionId,
+    channel: 'linkedin',
+    kind: 'forwardable_blurb',
+    toLinkedinUrl: ask.toLinkedinUrl,
+    bodyDraft: note,
+    status: 'draft',
+    generatedBy: 'template',
+    createdAt: now.toISOString(),
+  });
+}
+
+/** The note to forward waiting for its tap after a LinkedIn intro ask, if there is one. */
+export async function pendingNoteFor(ask: Pick<OutboundMessage, 'personId' | 'suggestionId'>) {
+  if (!ask.suggestionId) return undefined;
+  return db.outbound
+    .where('personId')
+    .equals(ask.personId)
+    .filter(
+      (o) => o.kind === 'forwardable_blurb' && o.suggestionId === ask.suggestionId && o.status === 'draft',
+    )
+    .first();
+}
+
+/** The ask alone, from text that may carry the note under it (a send that came back to be edited). */
+export function withoutNote(body: string, note: string | undefined): string {
+  const i = body.indexOf(NOTE_RULE);
+  return note?.trim() && i >= 0 && body.slice(i + NOTE_RULE.length).trim() === note.trim()
+    ? body.slice(0, i)
+    : body;
 }
 
 /** Undo a queued send inside the window: back to an editable draft; the suggestion stays where it was. */

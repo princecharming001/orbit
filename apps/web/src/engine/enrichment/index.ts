@@ -35,6 +35,7 @@ import {
 } from '../../integrations/enrichmentProxy';
 import { isServerUser } from '../../integrations/orbitApi';
 import type { LinkedInFound } from '../../integrations/unipile';
+import { endActivity, progressActivity, startActivity } from '../activity';
 import { mayOverwrite, mergePeople } from '../people';
 import { freshPhoto, isLinkedInPhoto, linkedInImageExpired } from '../photos';
 import { type SchoolAlias, schoolAlias } from './education';
@@ -670,6 +671,8 @@ export async function runEnrichment(user: User, opts: RunOptions = {}): Promise<
     return await job;
   } finally {
     running.delete(user.id);
+    endActivity('enrich');
+    endActivity('enrich-logos');
   }
 }
 
@@ -683,6 +686,10 @@ async function runOnce(user: User, opts: RunOptions): Promise<RunResult> {
   const limit = opts.limit ?? Number.POSITIVE_INFINITY;
   const touched: string[] = [];
   let done = 0;
+  // the status line: a background run says how far it is through today's share; a look at one person stays quiet
+  const total = Math.min(queue.length, limit);
+  if (!opts.only && total > 0)
+    startActivity('enrich', ctx.linkedin ? 'Reading LinkedIn profiles' : 'Filling in profiles', { total });
   while (done < limit) {
     if (opts.signal?.aborted) break;
     const id = urgent.get(user.id)?.shift() ?? queue.shift();
@@ -695,6 +702,7 @@ async function runOnce(user: User, opts: RunOptions): Promise<RunResult> {
     const landed = await enrichOne(ctx, id, chats).catch(() => undefined);
     if (landed) touched.push(landed);
     done++;
+    if (!opts.only) progressActivity('enrich', Math.min(done, total));
     if (!opts.only && (await exhausted(ctx))) break;
   }
   // logos: the current companies of the people looked at, then everyone's, missing or expired ones fetched again
@@ -704,6 +712,8 @@ async function runOnce(user: User, opts: RunOptions): Promise<RunResult> {
       const people = await db.people.bulkGet(touched);
       const all = opts.only ? [] : await db.people.where('userId').equals(user.id).toArray();
       const orgIds = [...people, ...all].map((p) => p?.currentOrganizationId).filter((x): x is string => !!x);
+      endActivity('enrich');
+      if (orgIds.length) startActivity('enrich-logos', 'Fetching company logos');
       ctx.out.logos = await refreshLogos(
         orgIds,
         async (identifier) => {

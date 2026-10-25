@@ -37,6 +37,7 @@ import {
   startLinkedInConnect,
   unipileConfigured,
 } from '../integrations/unipile';
+import { endActivity, progressActivity, startActivity } from './activity';
 import { generateBrief, recommendationsRefresh } from './brief';
 import { importLiveConnections } from './linkedin';
 // (a cycle: linkedinActivity reads the account row from here; neither uses the other while loading)
@@ -378,8 +379,15 @@ export async function syncLinkedInLive(
   user: User,
   opts: { onProgress?: (count: number) => void; signal?: AbortSignal; now?: Date } = {},
 ): Promise<LiveSyncResult> {
+  startActivity('linkedin-sync', 'Reading your LinkedIn');
   try {
-    const r = await syncLinkedInLiveOnce(user, opts);
+    const r = await syncLinkedInLiveOnce(user, {
+      ...opts,
+      onProgress: (count) => {
+        progressActivity('linkedin-sync', count, { text: 'Reading your LinkedIn connections' });
+        opts.onProgress?.(count);
+      },
+    });
     // then, in the background: profiles, logos and schools for the people the student knows, and LinkedIn for the
     // ones known only from mail and texts (engine/enrichment)
     if (r.ok) void import('./enrichment').then((m) => m.scheduleEnrichment(user)).catch(() => undefined);
@@ -391,6 +399,8 @@ export async function syncLinkedInLive(
     const row = await liveLinkedInAccount(user.id);
     if (row) await db.integrations.update(row.id, { lastError: message });
     return { ok: false, reason: 'error', message };
+  } finally {
+    endActivity('linkedin-sync');
   }
 }
 

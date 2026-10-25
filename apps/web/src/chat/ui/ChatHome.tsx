@@ -1,6 +1,8 @@
 import { ArrowDown, CircleDashed } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { ActivityLine } from '../../components/ActivityLine';
+import { NextChatLine } from '../../components/NextChatLine';
 import { useSession } from '../../state/session';
 import { cx } from '../../ui';
 import { chipRows, homeChips } from '../agent/chips';
@@ -120,6 +122,11 @@ export function ChatHome() {
               {statusLine}
             </p>
           )}
+          <NextChatLine />
+          {/* on a phone the status line has no sidebar: it sits here, quietly (plan 23 §4.7) */}
+          <div className="md:hidden flex justify-center -mt-2 mb-3">
+            <ActivityLine below className="max-w-[320px]" />
+          </div>
           {composer('home')}
           {footer}
           {showStrip && (

@@ -27,18 +27,22 @@ import {
   googleSendActive,
   handoffLink,
   isConnectionNote,
+  pendingNoteFor,
   restorePerson,
   revertHandoff,
   reviewDraft,
   sendHandedOffFromOrbit,
   snapshotPerson,
   undoQueued,
+  withNote,
+  withoutNote,
 } from '../engine/send';
 import { usesMockConnectors } from '../integrations/connectorsMock';
 import { googleClientId } from '../integrations/google';
 import { useSession } from '../state/session';
 import { Button, cx, Input, relDate, Textarea, useToast } from '../ui';
 import { copyText, openHandoff, runApproval } from './approve';
+import { ForwardNote } from './ForwardNote';
 
 type PromptNeed = Exclude<DraftNeed, 'post' | 'resume'>;
 /** Messages that ask a favour: two of them to one person at once is too much. */
@@ -149,7 +153,7 @@ export function DraftEditor({
 }) {
   const { user } = useSession();
   const toast = useToast();
-  const [body, setBody] = useState(draft.bodyFinal ?? draft.bodyDraft);
+  const [body, setBody] = useState(() => withoutNote(draft.bodyFinal ?? draft.bodyDraft, draft.forwardNote));
   const bodyId = useId();
   // the box grows with the message, so the whole draft (sign-off included) is visible without scrolling inside it,
   // which matters on a phone where every line wraps
@@ -227,12 +231,12 @@ export function DraftEditor({
   );
   // a new draft (or a redraft) replaces the text; the student's own saved edits do not reset what they are typing
   useEffect(() => {
-    setBody(draft.bodyFinal ?? draft.bodyDraft);
+    setBody(withoutNote(draft.bodyFinal ?? draft.bodyDraft, draft.forwardNote));
     setSubject(draft.subject ?? '');
   }, [draft.id, draft.bodyDraft]);
   // what the editor showed when it opened, so Cancel knows whether anything changed since
   const [opened] = useState(() => ({
-    body: draft.bodyFinal ?? draft.bodyDraft,
+    body: withoutNote(draft.bodyFinal ?? draft.bodyDraft, draft.forwardNote),
     subject: draft.subject ?? '',
   }));
   const [confirmingRedraft, setConfirmingRedraft] = useState(false);
@@ -322,7 +326,7 @@ export function DraftEditor({
     // the message alone: a "Subject:" line pasted into the body would go out as its first line. The subject is
     // shown next to the I sent it step with its own Copy button.
     // the clipboard write starts inside the click; browsers drop clipboard access after a long async gap
-    const copied = copyText(body);
+    const copied = copyText(draft.kind === 'intro_request' ? withNote(body, draft.forwardNote) : body);
     setCopying(true);
     setError(undefined);
     try {
@@ -687,6 +691,7 @@ export function DraftEditor({
           aria-label="Message body"
         />
         <ResearchChip personId={draft.personId} body={body} setBody={setBody} firstName={first} />
+        <ForwardNote draft={draft} introducer={first} />
         <div className="mt-1.5 flex items-center gap-x-2 gap-y-1.5 flex-wrap text-[12px] text-ink-3">
           <span className="flex items-center gap-2 min-w-0 mr-auto">
             {note && (
@@ -897,6 +902,7 @@ export function DraftEditor({
         aria-label="Message body"
       />
       <ResearchChip personId={draft.personId} body={body} setBody={setBody} firstName={first} />
+      <ForwardNote draft={draft} introducer={first} />
       <div className="mt-2 flex items-center gap-3 text-[12px] text-ink-3 flex-wrap">
         {wc > max && (
           <span className="tabular text-warn" data-testid="draft-word-count">
@@ -1265,6 +1271,46 @@ export function OutboxStatus({
         </span>
         {actions}
       </div>
+      {draft.kind === 'intro_request' && draft.channel === 'linkedin' && (
+        <NoteToSend ask={draft} name={name} />
+      )}
+    </div>
+  );
+}
+
+/**
+ * A LinkedIn intro ask went alone: the note to forward waits as a second message, sent with its own tap (every
+ * LinkedIn send is a tap, plan 16 §8.3).
+ */
+function NoteToSend({ ask, name }: { ask: OutboundMessage; name: string }) {
+  const { user } = useSession();
+  const toast = useToast();
+  const note = useLiveQuery(() => pendingNoteFor(ask), [ask.id, ask.status]);
+  const [working, setWorking] = useState(false);
+  if (!user || !note || ask.status === 'queued') return null;
+  return (
+    <div
+      className="mt-2 pt-2 border-t border-line flex items-center gap-2 flex-wrap text-[13px]"
+      data-testid="note-to-send"
+    >
+      <span className="mr-auto text-ink-2">The note {name} can forward is ready as a second message.</span>
+      <Button
+        size="sm"
+        variant="primary"
+        disabled={working}
+        onClick={async () => {
+          setWorking(true);
+          try {
+            const err = await runApproval(user, note, note.bodyDraft, undefined, toast, name);
+            if (err) toast.push({ text: err, tone: 'bad' });
+          } finally {
+            setWorking(false);
+          }
+        }}
+        data-testid="note-to-send-button"
+      >
+        Send the note to {name}
+      </Button>
     </div>
   );
 }

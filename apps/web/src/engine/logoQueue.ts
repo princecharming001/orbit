@@ -17,6 +17,7 @@ import {
 } from '../integrations/enrichmentProxy';
 import { isServerUser } from '../integrations/orbitApi';
 import { unipileConfigured } from '../integrations/unipile';
+import { endActivity, startActivity } from './activity';
 import { adoptCompany } from './enrichment/logos';
 import { linkedInPaused, pauseLinkedIn, readBudget } from './enrichment/store';
 import { liveLinkedInAccount } from './linkedinLive';
@@ -155,6 +156,8 @@ export function startLogoQueue(user: Pick<User, 'id'>): () => void {
       busy = true;
       const r = await fetchOneLogo(user).catch(() => ({ step: 'off' as const }));
       busy = false;
+      if (r.step === 'asked') startActivity('logos', 'Fetching company logos', { quiet: true });
+      else if (r.step !== 'wait') endActivity('logos');
       wait = r.step === 'asked' || r.step === 'wait' ? GAP_MS : r.step === 'idle' ? 60_000 : 10 * 60_000;
     }
     if (!stopped) schedule(wait);
@@ -167,6 +170,7 @@ export function startLogoQueue(user: Pick<User, 'id'>): () => void {
   schedule(4000);
   return () => {
     stopped = true;
+    endActivity('logos');
     listeners.delete(onWant);
     if (timer) clearTimeout(timer);
   };

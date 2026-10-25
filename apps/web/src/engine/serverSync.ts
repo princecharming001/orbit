@@ -36,6 +36,7 @@ import {
   type PushChange,
   type SyncStatus,
 } from '../integrations/orbitApi';
+import { endActivity, startActivity } from './activity';
 
 // ---- tables -------------------------------------------------------------------------------------------------------
 
@@ -667,6 +668,14 @@ export function subscribeSyncStatus(fn: (s: SyncStatus | undefined) => void): ()
 
 function setStatus(s: SyncStatus | undefined): void {
   lastStatus = s;
+  // the status line: what the server still has queued for this account (the import, the reads it runs)
+  const pending = s?.jobs.pending ?? 0;
+  if (pending > 0)
+    startActivity(
+      'server-jobs',
+      `Orbit's server is reading your accounts · ${pending} ${pending === 1 ? 'job' : 'jobs'} left`,
+    );
+  else endActivity('server-jobs');
   for (const l of statusListeners) l(s);
 }
 

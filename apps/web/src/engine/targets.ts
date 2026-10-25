@@ -1,5 +1,7 @@
 import { newId, normalizeCompany, type TargetCompany } from '@orbit/core';
 import { db } from '../db/schema';
+import { wantCompanyLogo } from './logoQueue';
+import { upsertOrganization } from './people';
 
 /** True when `name` names a company already on the list ("figma" vs "Figma", "Stripe, Inc." vs "Stripe"). */
 export function isDuplicateTarget(name: string, existing: Pick<TargetCompany, 'nameRaw'>[]): boolean {
@@ -12,18 +14,45 @@ export async function addTargetCompany(
   userId: string,
   raw: string,
 ): Promise<'added' | 'duplicate' | 'empty'> {
+  return (await addTarget(userId, raw)).status;
+}
+
+/**
+ * Add a target company once, tied to its organization (made when Orbit has none, with its LinkedIn logo asked for),
+ * so the company page and the map match it by id. A target already there keeps its row; what the posting adds (the
+ * role, the team, the link, a deadline) fills in what it does not have yet.
+ */
+export async function addTarget(
+  userId: string,
+  raw: string,
+  extra: Partial<Pick<TargetCompany, 'role' | 'team' | 'postingUrl' | 'postingSeenAt' | 'deadline'>> = {},
+): Promise<{ status: 'added' | 'duplicate' | 'empty'; target?: TargetCompany }> {
   const name = raw.trim().replace(/\s+/g, ' ');
-  if (!name) return 'empty';
+  if (!name) return { status: 'empty' };
   const existing = await db.targetCompanies.where('userId').equals(userId).toArray();
-  if (isDuplicateTarget(name, existing)) return 'duplicate';
-  await db.targetCompanies.add({
+  const key = normalizeCompany(name) || name.toLowerCase();
+  const had = existing.find((t) => (normalizeCompany(t.nameRaw) || t.nameRaw.trim().toLowerCase()) === key);
+  const org = await upsertOrganization(name);
+  if (org && !org.logoUrl) wantCompanyLogo(org.name);
+  if (had) {
+    const patch: Partial<TargetCompany> = {};
+    if (org && !had.organizationId) patch.organizationId = org.id;
+    for (const k of ['role', 'team', 'postingUrl', 'postingSeenAt', 'deadline'] as const)
+      if (extra[k] && (k === 'postingSeenAt' || !had[k])) patch[k] = extra[k];
+    if (Object.keys(patch).length) await db.targetCompanies.update(had.id, patch);
+    return { status: 'duplicate', target: { ...had, ...patch } };
+  }
+  const target: TargetCompany = {
     id: newId('tc'),
     userId,
+    organizationId: org?.id,
     nameRaw: name,
     priority: 2,
     status: 'researching',
-  });
-  return 'added';
+    ...Object.fromEntries(Object.entries(extra).filter(([, v]) => !!v)),
+  };
+  await db.targetCompanies.add(target);
+  return { status: 'added', target };
 }
 
 /**

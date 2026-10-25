@@ -18,6 +18,7 @@ import { db } from '../db/schema';
 import { usesMockConnectors } from '../integrations/connectorsMock';
 import { currentGoogleToken } from '../integrations/google';
 import { isServerUser } from '../integrations/orbitApi';
+import { countActivity, endActivity, startActivity } from './activity';
 import { evaluateImmediateSuggestions } from './brief';
 import { syncLinkedInReplies } from './linkedinInbox';
 import { runTimedStageRules } from './stages';
@@ -102,10 +103,17 @@ export function checkReplies(
   opts: { now?: Date; reason?: ReplyCheckState['reason']; fetch?: typeof fetch } = {},
 ): Promise<ReplyCheckState> {
   if (running) return running;
-  const run = checkOnce(user, opts).finally(() => {
-    running = undefined;
-    changed();
-  });
+  startActivity('replies', 'Checking for replies');
+  const run = checkOnce(user, opts)
+    .then(async (s) => {
+      await countActivity(user.id, 'repliesChecked', 1, opts.now).catch(() => undefined);
+      return s;
+    })
+    .finally(() => {
+      running = undefined;
+      endActivity('replies');
+      changed();
+    });
   running = run;
   changed();
   return run;

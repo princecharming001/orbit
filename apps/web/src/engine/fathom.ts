@@ -12,9 +12,10 @@ import { newId, normalizeEmail } from '@orbit/core';
 import { db, type IntegrationAccount } from '../db/schema';
 import { usesMockConnectors } from '../integrations/connectorsMock';
 import { type FathomMeeting, fathomMeetingsPage, notesAppsAvailable } from '../integrations/notesApps';
+import { countActivity, endActivity, startActivity } from './activity';
 import { appAuth, signInToApp } from './appSignIn';
 import { isMeetingAppOn, keepOnlyMeetingApp, MEETING_NOTE_SOURCES } from './meetingAppSwitch';
-import { ingestNote } from './notes';
+import { type CaptureInput, ingestNote } from './notes';
 
 /** The first import reaches back this far; later ones pick up from the newest meeting already imported. */
 export const FATHOM_BACKFILL_DAYS = 60;
@@ -79,6 +80,8 @@ export const meetingExternalId = (source: NoteSource, m: Pick<FathomMeeting, 'id
 /** This meeting is filed already (for the demo's, under any meeting app). */
 export async function meetingSeen(source: NoteSource, m: Pick<FathomMeeting, 'id'>): Promise<boolean> {
   const externalId = meetingExternalId(source, m);
+  // a meeting held back to ask whether it was a networking chat is seen too, until the student answers
+  if (await db.suggestions.where('dedupeKey').equals(heldKey(externalId)).first()) return true;
   const sources: readonly NoteSource[] = m.id.startsWith('demo-') ? MEETING_NOTE_SOURCES : [source];
   for (const s of sources)
     if (await db.notes.where('[source+externalId]').equals([s, externalId]).first()) return true;
@@ -118,22 +121,124 @@ export async function importMeetings(
       skipped++;
       continue;
     }
-    await ingestNote(
-      user,
-      {
-        text: meetingNoteText(m),
-        source,
-        title: m.title,
-        occurredAt: m.startAt,
-        externalId,
-        attendees,
-        group: attendees.length > MAX_CHAT_ATTENDEES,
-      },
-      now,
-    );
+    const input: CaptureInput = {
+      text: meetingNoteText(m),
+      source,
+      title: m.title,
+      occurredAt: m.startAt,
+      externalId,
+      attendees,
+      group: attendees.length > MAX_CHAT_ATTENDEES,
+    };
+    // plan 23 §4.5: a recording of people Orbit cannot tie to a networking chat (a standup, a class project) is not
+    // filed as one; the student is asked first
+    if (!input.group && !(await isNetworkingMeeting(user, m, attendees))) {
+      await holdMeeting(user, input, m, now);
+      skipped++;
+      continue;
+    }
+    await ingestNote(user, input, now);
     imported++;
   }
+  if (imported) await countActivity(user.id, 'notes', imported, now).catch(() => undefined);
   return { imported, skipped };
+}
+
+const heldKey = (externalId: string) => `heldmeeting:${externalId}`;
+
+/**
+ * A recorded meeting is a networking chat when it lines up with a coffee chat on the calendar (within three hours,
+ * with someone on it) or someone on it is already a person the student has a chat with.
+ */
+export async function isNetworkingMeeting(
+  user: Pick<User, 'id'>,
+  m: Pick<FathomMeeting, 'startAt'>,
+  attendees: { name?: string; email?: string }[],
+): Promise<boolean> {
+  const emails = new Set(attendees.map((a) => (a.email ? normalizeEmail(a.email) : '')).filter(Boolean));
+  const people = (await Promise.all([...emails].map((e) => db.people.where('emails').equals(e).toArray())))
+    .flat()
+    .filter((p) => p.userId === user.id);
+  const ids = new Set(people.map((p) => p.id));
+  if (m.startAt) {
+    const t = Date.parse(m.startAt);
+    const chatEvent = await db.events
+      .where('userId')
+      .equals(user.id)
+      .filter(
+        (e) =>
+          e.status !== 'cancelled' &&
+          (!!e.isCoffeeChat || !!e.chatId) &&
+          Math.abs(Date.parse(e.startAt) - t) <= 3 * 3_600_000 &&
+          (e.attendeePersonIds.some((id) => ids.has(id)) ||
+            e.attendees.some((a) => emails.has(normalizeEmail(a.email)))),
+      )
+      .first();
+    if (chatEvent) return true;
+  }
+  for (const id of ids)
+    if (
+      await db.chats
+        .where('personId')
+        .equals(id)
+        .filter((c) => c.stage !== 'archived')
+        .first()
+    )
+      return true;
+  return false;
+}
+
+/** "Was your 2 pm meeting with Priya and Sam a networking chat?": the meeting waits on a card for the answer. */
+async function holdMeeting(user: User, input: CaptureInput, m: FathomMeeting, now: Date): Promise<void> {
+  const names = (input.attendees ?? []).map((a) => (a.name || a.email || '').split(' ')[0]).filter(Boolean);
+  const who =
+    names.length <= 2
+      ? names.join(' and ')
+      : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+  const when = m.startAt
+    ? new Date(m.startAt)
+        .toLocaleTimeString('en-US', {
+          hour: 'numeric',
+          minute: m.startAt.slice(14, 16) === '00' ? undefined : '2-digit',
+          timeZone: user.timezone || 'UTC',
+        })
+        .replace(/\s?([AP])M$/i, (_, x: string) => ` ${x.toLowerCase()}m`)
+    : undefined;
+  const { upsertSuggestions } = await import('./brief');
+  await upsertSuggestions(
+    user.id,
+    [
+      {
+        kind: 'confirm_note_match',
+        dedupeKey: heldKey(input.externalId!),
+        reasonText: `Was your ${when ? `${when} ` : ''}meeting${who ? ` with ${who}` : ''} a networking chat?`,
+        signals: {},
+        payload: { held: input },
+        urgency: 0.5,
+        goalRelevance: 0.3,
+        confidence: 1,
+        priorityScore: 0.5,
+      },
+    ],
+    now,
+  );
+}
+
+/**
+ * The student's answer about a held meeting: yes files it as a networking chat (the people, the chat completed, the
+ * thank-you), no files it with nobody, so it is never asked about again.
+ */
+export async function answerHeldMeeting(
+  user: User,
+  suggestionId: string,
+  networking: boolean,
+  now = new Date(),
+): Promise<void> {
+  const s = await db.suggestions.get(suggestionId);
+  const held = s?.payload.held as CaptureInput | undefined;
+  if (!s || !held) return;
+  await db.suggestions.update(s.id, { status: 'done', decidedAt: now.toISOString() });
+  await ingestNote(user, networking ? { ...held, group: false } : { ...held, group: true }, now);
 }
 
 /** The sample student's recorded meetings: two finished chats with people who have an email, made up from the demo. */
@@ -188,7 +293,19 @@ async function saveRow(
 /** Bring in recorded meetings since the last import (the first time, the last 60 days). */
 export async function syncFathom(
   user: User,
-  opts: { now?: Date; signal?: AbortSignal } = {},
+  opts: { now?: Date; signal?: AbortSignal; since?: string } = {},
+): Promise<FathomResult> {
+  startActivity('notes:fathom', 'Checking Fathom for notes');
+  try {
+    return await syncFathomOnce(user, opts);
+  } finally {
+    endActivity('notes:fathom');
+  }
+}
+
+async function syncFathomOnce(
+  user: User,
+  opts: { now?: Date; signal?: AbortSignal; since?: string },
 ): Promise<FathomResult> {
   const now = opts.now ?? new Date();
   const row = await fathomAccount(user.id);
@@ -197,7 +314,9 @@ export async function syncFathom(
   let meetings: FathomMeeting[] = [];
   if (row.externalAccountId === 'demo') meetings = await demoMeetings(user);
   else {
-    const since = state.since ?? new Date(now.getTime() - FATHOM_BACKFILL_DAYS * 86_400_000).toISOString();
+    // the notes check after a chat asks from the meeting's start only, so one check is one call
+    const since =
+      opts.since ?? state.since ?? new Date(now.getTime() - FATHOM_BACKFILL_DAYS * 86_400_000).toISOString();
     let cursor: string | undefined;
     for (let page = 0; page < MAX_PAGES; page++) {
       const auth = await appAuth('fathom', row);
@@ -230,8 +349,13 @@ export async function syncFathom(
     lastError: undefined,
     lastSyncedAt: now.toISOString(),
     // the next import starts a little before the newest meeting, so one finished late is not missed
+    // (a notes check, which asked from one meeting's start, leaves the regular import's place where it was)
     syncState: {
-      since: newest ? new Date(Date.parse(newest) - 86_400_000).toISOString() : (state.since ?? undefined),
+      since: opts.since
+        ? state.since
+        : newest
+          ? new Date(Date.parse(newest) - 86_400_000).toISOString()
+          : (state.since ?? undefined),
       meetings: (state.meetings ?? 0) + imported,
     },
   });

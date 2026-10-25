@@ -9,12 +9,11 @@ import {
   MEDIUM_TIE,
   normalizeCompany,
   orbitGroupKey,
-  REACH_BAND_LABELS,
   TIE_BAND_LABELS,
   tieBand,
 } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Building2, Search, X } from 'lucide-react';
+import { X } from 'lucide-react';
 import { type CSSProperties, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAskIntro } from '../components/askIntro';
@@ -23,11 +22,13 @@ import { MapPersonCard } from '../components/map/MapPersonCard';
 import { PairNoteMenu } from '../components/map/PairNoteMenu';
 import { ReachMutuals } from '../components/map/ReachMutuals';
 import { ReachSearch } from '../components/map/ReachSearch';
+import { RouteBadge } from '../components/map/RouteBadge';
 import { type CardPlace, OrbitMap, useCoarsePointer } from '../components/OrbitMap';
 import type { FocusSpec, WebSpec } from '../components/orbitScene';
 import { LINEAGE } from '../components/orbitScene';
 import { StrengthDots } from '../components/people/shared';
 import { ResizeHandle, useResizableWidth } from '../components/ResizeHandle';
+import { TargetPlanCard } from '../components/TargetPlanCard';
 import { useWarmIntros, WarmIntrosPanel } from '../components/WarmIntrosPanel';
 import { db } from '../db/schema';
 import { draftMessage } from '../engine/brief';
@@ -51,9 +52,11 @@ import { checkHops, checkState, hopEvidenceVersion, subscribeHopEvidence } from 
 import { addLinkedInFound, type FoundView } from '../engine/linkedinSearch';
 import { subscribePairNotes } from '../engine/pairNotes';
 import { maintenanceRunning, watchMaintenance } from '../engine/sync';
+import { planFromInput } from '../engine/targetPlan';
+import { isJobLink, linkIn } from '../integrations/postings';
 import { useSession } from '../state/session';
 import { useShowReasoning } from '../state/showReasoning';
-import { Avatar, Button, Card, Chip, cx, Input, LinkedInMark, useToast } from '../ui';
+import { Avatar, Button, Card, Chip, cx, LinkedInMark, useToast } from '../ui';
 
 type Filter = 'all' | 'targets' | 'alumni' | 'chats' | 'recent' | 'intros';
 
@@ -82,12 +85,6 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? o
 
 /** Someone the search can offer: a person with a real name, not hidden. */
 const named = (p: Person) => p.isHuman && !p.hiddenAt && hasRealName(p);
-
-/** A route's strength out of 100: the chance the introduction happens, from every hop. */
-const routeScore = (p: { score: number }) => Math.round(Math.max(0, Math.min(1, p.score)) * 100);
-
-const ROUTE_SCORE_WHY =
-  'Strength out of 100: how likely this intro is to happen. Your tie to the first person, times how well each pair along the way knows each other, a little less for each extra hop.';
 
 /** The student's tie to someone on a route, as on their card: "warm tie · 48". */
 function tieWords(p: Person): string {
@@ -120,10 +117,6 @@ export function MapPage() {
   const reachParam = params.get('reach');
   const touch = useCoarsePointer();
   const [query, setQuery] = useState('');
-  // live suggestions under the search box: people and companies as the student types, picked with a click or the
-  // arrow keys and Enter (Enter with none picked runs the search as typed)
-  const [suggestOpen, setSuggestOpen] = useState(false);
-  const [suggestAt, setSuggestAt] = useState(-1);
   const [filter, setFilter] = useState<Filter>('all');
   // undefined while routes are being computed, so the panel never claims "no route" before it knows
   const [paths, setPaths] = useState<WarmReachPath[] | undefined>([]);
@@ -142,23 +135,19 @@ export function MapPage() {
   /** bumped whenever the view changes, so a lookup that finishes late cannot bring back a view the student left */
   const viewReq = useRef(0);
   const [target, setTarget] = useState<Person>();
-  // the side panel beside the map (a wide screen) holds the search; under the map (a phone) the top bar keeps it, so
-  // the routes stay on screen
-  const panelRef = useRef<HTMLElement>(null);
-  const [sideBySide, setSideBySide] = useState(true);
-  useEffect(() => {
-    const el = panelRef.current?.parentElement;
-    if (!el || typeof ResizeObserver === 'undefined') return;
-    const ro = new ResizeObserver(() => setSideBySide(el.clientWidth >= 896));
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
+  // plan 23 §4.1: a pasted job link becomes a plan in the panel
+  const [job, setJob] = useState<
+    { state: 'reading' } | { state: 'plan'; planId: string } | { state: 'error'; message: string }
+  >();
+  const jobPlan = useLiveQuery(
+    () => (job?.state === 'plan' ? db.targetPlans.get(job.planId) : undefined),
+    [job?.state === 'plan' ? job.planId : ''],
+  );
   const [hover, setHover] = useState<string>();
   // where the person card goes: beside the dot, or at the top or bottom of a narrow map (the map picks it)
   const [hoverPlace, setHoverPlace] = useState<CardPlace>({ at: 'bottom', y: 0 });
   // a search that found no one: the line under the filters says so and the search box shakes once
   const [missed, setMissed] = useState<{ q: string; n: number }>();
-  const searchForm = useRef<HTMLFormElement>(null);
   // the toast a search that found no one left up: the next search takes it down, so the screen never contradicts itself
   const missToast = useRef(0);
   const clearMiss = () => {
@@ -170,14 +159,6 @@ export function MapPage() {
     clearMiss();
     missToast.current = toast.push({ text, ttl });
   };
-  // each search that finds no one replays the shake, without remounting the box (the cursor stays in it)
-  useEffect(() => {
-    const el = searchForm.current;
-    if (!el || !missed) return;
-    el.classList.remove('shake-x');
-    el.getBoundingClientRect();
-    el.classList.add('shake-x');
-  }, [missed]);
   /** company lists in the panel show six people until the student asks for all of them */
   const [showAll, setShowAll] = useState<string>();
   // a search inside the introductions view: a person or a company the map turns to
@@ -473,8 +454,6 @@ export function MapPage() {
     return rankReachTargets(q, peopleQ.filter(named), orgsQ).slice(0, 6);
   }, [query, peopleQ, orgsQ, webMode, web, byId]);
   const pickSuggestion = (c: ReachCandidate) => {
-    setSuggestOpen(false);
-    setSuggestAt(-1);
     setQuery(c.label);
     clearMiss();
     if (webMode) return searchWeb(c.label);
@@ -506,6 +485,7 @@ export function MapPage() {
         return;
       }
       setTarget(p);
+      setJob(undefined);
       setCompanyFocus(undefined);
       setCompany(undefined);
       setChoices(undefined);
@@ -578,6 +558,7 @@ export function MapPage() {
     const req = ++viewReq.current;
     clearMiss();
     setShowAll(undefined);
+    setJob(undefined);
     // the map turns at once, from the layout it already has; the panel's lists arrive when the lookup is done
     const norm = normalizeCompany(orgIdOrName);
     const org = orgMap.get(orgIdOrName) ?? orgs.find((o) => !!norm && o.nameNormalized === norm);
@@ -638,10 +619,33 @@ export function MapPage() {
       });
     sayMiss(q, 'No one by that name or company in your introductions yet.', 4000);
   };
+  /** A job link (or "Software Engineer Intern at Stripe"): the posting read, the plan built, shown in the panel. */
+  const openJob = async (q: string) => {
+    if (!user) return;
+    const req = ++viewReq.current;
+    setTarget(undefined);
+    setCompany(undefined);
+    setChoices(undefined);
+    setPaths([]);
+    setJob({ state: 'reading' });
+    if (reachParam !== '1') setParams({ reach: '1' });
+    const r = await planFromInput(user, q).catch(() => ({
+      ok: false as const,
+      message: "Orbit couldn't build a plan just now.",
+    }));
+    if (viewReq.current !== req) return;
+    if (!r.ok) return setJob({ state: 'error', message: r.message });
+    setJob({ state: 'plan', planId: r.plan.id });
+    // the map turns to the company the plan is for
+    const norm = normalizeCompany(r.plan.posting.company);
+    setCompanyFocus({ key: `n:${norm}`, label: r.plan.posting.company });
+  };
   const runSearch = async (q: string) => {
     if (!userId || !q.trim()) return;
     clearMiss();
     if (webMode) return searchWeb(q);
+    if (linkIn(q) && isJobLink(q)) return openJob(q);
+    setJob(undefined);
     const req = ++viewReq.current;
     // what the map already holds; a search typed before the map finished loading reads the database
     const [allPeople, allOrgs] =
@@ -694,6 +698,7 @@ export function MapPage() {
     clearMiss();
     setParams({});
     setQuery('');
+    setJob(undefined);
     setCompanyFocus(undefined);
     setCompany(undefined);
     setChoices(undefined);
@@ -790,6 +795,9 @@ export function MapPage() {
       return `No one matches “${missed.q}” ${webMode ? 'in your introductions' : 'in your network'} yet.`;
     if (newsLine && !reachMode) return newsLine;
     if (reachMode) {
+      if (job?.state === 'reading') return 'Reading the posting.';
+      if (job?.state === 'plan' && jobPlan)
+        return `Your plan for ${jobPlan.posting.company}, lit on the map.`;
       if (companyFocus)
         return `Showing ${plural(companyCount, 'person', 'people')} at ${companyFocus.label}${
           warmCount ? `, ${warmCount} warm` : ''
@@ -853,109 +861,6 @@ export function MapPage() {
           </p>
         </div>
         <div className="w-full @[40rem]:w-auto @[40rem]:ml-auto flex items-center gap-2">
-          {(!reachMode || !sideBySide) && (
-            <form
-              ref={searchForm}
-              onSubmit={(e) => {
-                e.preventDefault();
-                const picked = suggestOpen && suggestAt >= 0 ? suggestions[suggestAt] : undefined;
-                setSuggestOpen(false);
-                setSuggestAt(-1);
-                if (picked) return pickSuggestion(picked);
-                runSearch(query);
-              }}
-              className={cx(
-                'relative flex-1 @[40rem]:flex-none',
-                missed && missed.q === query.trim() && 'shake-x',
-              )}
-              data-testid="reach-form"
-            >
-              <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-3" />
-              <Input
-                value={query}
-                onChange={(e) => {
-                  setQuery(e.target.value);
-                  // outside the introductions view the search goes on in the side panel, where its results have room
-                  if (!webMode && e.target.value.trim()) setParams({ reach: '1' });
-                  setSuggestOpen(true);
-                  setSuggestAt(-1);
-                  // typing again takes the miss toast down: on a phone it sits over this box
-                  clearMiss();
-                  if (webMode && !e.target.value) setWebFocus(undefined);
-                }}
-                onKeyDown={(e) => {
-                  if (!suggestOpen || !suggestions.length) return;
-                  if (e.key === 'ArrowDown') {
-                    e.preventDefault();
-                    setSuggestAt((i) => (i + 1) % suggestions.length);
-                  } else if (e.key === 'ArrowUp') {
-                    e.preventDefault();
-                    setSuggestAt((i) => (i <= 0 ? suggestions.length - 1 : i - 1));
-                  } else if (e.key === 'Escape') {
-                    e.stopPropagation();
-                    setSuggestOpen(false);
-                  }
-                }}
-                onBlur={() => setTimeout(() => setSuggestOpen(false), 120)}
-                role="combobox"
-                aria-expanded={suggestOpen && suggestions.length > 0}
-                aria-controls="map-suggestions"
-                aria-autocomplete="list"
-                aria-activedescendant={suggestAt >= 0 ? `map-suggestion-${suggestAt}` : undefined}
-                placeholder={webMode ? 'Search your introductions…' : 'Reach a person or company…'}
-                className="pl-8 w-full @[40rem]:w-72 pointer-coarse:h-11 pointer-coarse:text-[16px] rounded-full"
-                data-testid="reach-input"
-              />
-              {suggestOpen && suggestions.length > 0 && (
-                <div
-                  id="map-suggestions"
-                  role="listbox"
-                  aria-label="Suggestions"
-                  className="pop-in absolute z-30 left-0 right-0 mt-1.5 rounded-[14px] border border-line bg-canvas p-1.5 shadow-[0_16px_40px_-12px_rgba(0,0,0,0.18)]"
-                  data-testid="map-suggestions"
-                >
-                  {suggestions.map((c, i) => {
-                    const p = c.kind === 'person' ? byId.get(c.id) : undefined;
-                    return (
-                      <div
-                        key={`${c.kind}-${c.id}`}
-                        role="option"
-                        tabIndex={-1}
-                        id={`map-suggestion-${i}`}
-                        aria-selected={i === suggestAt}
-                        // mousedown, so the pick lands before the box loses focus and closes the list
-                        onMouseDown={(e) => {
-                          e.preventDefault();
-                          pickSuggestion(c);
-                        }}
-                        onMouseEnter={() => setSuggestAt(i)}
-                        className={cx(
-                          'w-full h-11 px-2 rounded-[10px] flex items-center gap-2.5 text-left transition-colors cursor-pointer',
-                          i === suggestAt ? 'bg-canvas-2' : 'hover:bg-canvas-2',
-                        )}
-                        data-testid="map-suggestion"
-                      >
-                        {c.kind === 'person' ? (
-                          <Avatar name={c.label} src={p?.photoUrl} id={c.id} size={26} />
-                        ) : (
-                          <span className="w-[26px] h-[26px] rounded-full border border-line bg-canvas-2 inline-flex items-center justify-center text-ink-2">
-                            <Building2 size={13} />
-                          </span>
-                        )}
-                        <span className="min-w-0 flex-1">
-                          <span className="block text-[13.5px] font-medium truncate">{c.label}</span>
-                          {c.sub && <span className="block text-[12px] text-ink-3 truncate">{c.sub}</span>}
-                        </span>
-                        <span className="label-mono !text-[10px] shrink-0">
-                          {c.kind === 'person' ? 'Person' : 'Company'}
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </form>
-          )}
           {reachMode && (
             <Button variant="ghost" size="sm" className={TAP} onClick={exitReach}>
               <X size={14} /> Exit reach
@@ -1066,20 +971,27 @@ export function MapPage() {
           className="hidden @4xl:flex"
         />
         <aside
-          ref={panelRef}
           // keyed on what the panel shows, so its cards cascade in again when the target changes
-          key={`${reachParam ?? ''}|${target?.id ?? ''}|${company?.label ?? ''}|${webFocus?.label ?? ''}|${webMode}`}
+          key={`${reachParam === '1' ? '' : (reachParam ?? '')}|${target?.id ?? ''}|${company?.label ?? ''}|${webFocus?.label ?? ''}|${webMode}`}
           className="stagger min-w-0 min-h-[168px] border-t @4xl:border-t-0 @4xl:border-l border-line bg-canvas @4xl:overflow-y-auto scroll-thin p-4 space-y-3"
           data-testid="map-panel"
         >
-          {reachMode && sideBySide && user && (
+          {user && (
+            // the one search on the map, where the student acts: people and companies in their network as they type,
+            // people on LinkedIn once they pause; in the introductions view, the people in the web
             <ReachSearch
-              shake={!!missed && missed.q === query.trim()}
+              shake={missed && missed.q === query.trim() ? missed.n : 0}
               user={user}
               query={query}
               onQuery={(q) => {
                 setQuery(q);
                 clearMiss();
+                if (webMode) {
+                  if (!q) setWebFocus(undefined);
+                  return;
+                }
+                // a search goes on in Reach, where its results have room
+                if (q.trim() && !reachMode) setParams({ reach: '1' });
               }}
               network={suggestions}
               byId={peopleById}
@@ -1087,17 +999,14 @@ export function MapPage() {
               onPickLinkedIn={(f) => void chooseLinkedIn(f)}
               onSubmit={(q) => void runSearch(q)}
               compact={!!(target || companyFocus || choices)}
+              placeholder={webMode ? 'Search your introductions' : 'Paste a job link, or a person or company'}
+              hint={reachMode ? undefined : null}
+              linkedIn={!webMode}
+              autoFocus={reachMode}
             />
           )}
           {!reachMode && !webMode && (
             <>
-              <Button
-                variant="primary"
-                className={cx('w-full', TAP)}
-                onClick={() => setParams({ reach: '1' })}
-              >
-                Find a path to someone
-              </Button>
               {targetGroups && (
                 <Card padded>
                   <div className="font-medium text-[13px] mb-2">Target companies</div>
@@ -1291,28 +1200,11 @@ export function MapPage() {
                             </Chip>
                           )}
                           {/* the route's strength out of 100: the chance the intro happens, every hop counted */}
-                          {isColdDirect(p) ? (
-                            <Chip className="h-5" title={ROUTE_SCORE_WHY} data-testid="reach-path-score">
-                              Cold tie · {routeScore(p)}
-                            </Chip>
-                          ) : p.weak ? (
-                            <Chip
-                              className="h-5"
-                              title={`${p.reason ?? ''} ${ROUTE_SCORE_WHY}`.trim()}
-                              data-testid="reach-path-weak"
-                            >
-                              Weaker route · {routeScore(p)}
-                            </Chip>
-                          ) : (
-                            <Chip
-                              className="h-5"
-                              tone={p.band === 'strong' ? 'good' : p.band === 'possible' ? 'warn' : 'neutral'}
-                              title={ROUTE_SCORE_WHY}
-                              data-testid="reach-path-score"
-                            >
-                              {REACH_BAND_LABELS[p.band]} · {routeScore(p)}
-                            </Chip>
-                          )}
+                          <RouteBadge
+                            path={p}
+                            className="h-5"
+                            testId={p.weak && !isColdDirect(p) ? 'reach-path-weak' : 'reach-path-score'}
+                          />
                         </span>
                       </div>
                       <ol className="mt-2 space-y-1.5 text-[13px]">
@@ -1516,7 +1408,18 @@ export function MapPage() {
               )}
             </>
           )}
-          {companyFocus && !company && (
+          {job?.state === 'reading' && (
+            <p className="text-[13px] text-ink-3" data-testid="job-plan-reading" aria-busy="true">
+              Reading the posting and finding who can get you in…
+            </p>
+          )}
+          {job?.state === 'error' && (
+            <p className="text-[13px] text-ink-2" data-testid="job-plan-error">
+              {job.message}
+            </p>
+          )}
+          {job?.state === 'plan' && jobPlan && <TargetPlanCard plan={jobPlan} />}
+          {companyFocus && !company && !job && (
             <>
               <div className="font-medium">{companyFocus.label}</div>
               <p className="text-[13px] text-ink-3" data-testid="company-loading" aria-busy="true">
@@ -1619,6 +1522,17 @@ export function MapPage() {
                     ))}
                   </ul>
                 </div>
+              )}
+              {user && (
+                <Button
+                  variant="primary"
+                  size="sm"
+                  className={TAP}
+                  onClick={() => void openJob(company.org?.name ?? company.label)}
+                  data-testid="company-plan"
+                >
+                  Plan my way in
+                </Button>
               )}
               {company.org && (
                 <Link

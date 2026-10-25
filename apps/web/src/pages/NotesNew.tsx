@@ -474,7 +474,8 @@ export function NotesNew() {
             {(source === 'wispr_capture' || source === 'granola_email') && (
               <span className="basis-full text-[12px] text-ink-3">
                 {source === 'wispr_capture'
-                  ? 'Orbit reads it as dictation, without punctuation.'
+                  ? // plan 23 §4.5: the reading is the same as for typed notes, so the line no longer claims otherwise
+                    'Paste it as you said it. Orbit reads it the same way as a typed note.'
                   : 'Paste the summary your notetaker app wrote.'}
               </span>
             )}

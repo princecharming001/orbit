@@ -1,3 +1,4 @@
+import { postgrestPostingCache } from '../_shared/postings.ts';
 import {
   defaultOrigins,
   makeHandler,
@@ -53,11 +54,13 @@ const [
 ]);
 
 // enrichment (plan 17 E): optional web and people-data keys; each one left out keeps its step switched off
-const [exaKey, firecrawlKey, apolloKey, pdlKey] = await Promise.all([
+const [exaKey, firecrawlKey, apolloKey, pdlKey, anthropicKey] = await Promise.all([
   providerSecret('EXA_API_KEY'),
   providerSecret('FIRECRAWL_API_KEY'),
   providerSecret('APOLLO_API_KEY'),
   providerSecret('PDL_API_KEY'),
+  // job postings (plan 23 §4.1) are read by a small model with Orbit's own key
+  providerSecret('ORBIT_ANTHROPIC_API_KEY'),
 ]);
 
 const num = (name: string, fallback: number) => {
@@ -95,6 +98,11 @@ Deno.serve(
       pdlKey,
     },
     sendsPerDay: num('ORBIT_LINKEDIN_SENDS_PER_DAY', 25),
+    postings: {
+      anthropicKey,
+      cache: url && serviceKey ? postgrestPostingCache(url, serviceKey) : undefined,
+      perDay: num('ORBIT_POSTINGS_PER_DAY', 10),
+    },
     // LinkedIn reads per Unipile account per day, one ledger per kind (plan 21 §6; ceilings per caller in connectors.ts)
     ledger: {
       profile: num('ORBIT_LINKEDIN_PROFILE_READS_PER_DAY', 100),

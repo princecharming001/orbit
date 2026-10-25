@@ -38,6 +38,7 @@ import { deleteAllData, exportAllData, exportFilename } from '../engine/account'
 import { type Allowance, readAllowance, researchSpend } from '../engine/deepResearch';
 import { demoResetPrompt, loadDemo } from '../engine/demo';
 import { connectAndSyncGoogle, disconnectGoogleAccount, markGoogleNeedsReauth } from '../engine/integrations';
+import { askLine, checkIntroNote, introNoteBase, saveIntroNote } from '../engine/introNote';
 import { setMorningBrief } from '../engine/morning';
 import { saveOwnWords } from '../engine/ownWords';
 import { saveResume } from '../engine/resume';
@@ -166,7 +167,12 @@ export function SettingsPage() {
           ))}
         </nav>
         <div className="min-w-0">
-          {section === 'profile' && <Profile />}
+          {section === 'profile' && (
+            <>
+              <Profile />
+              <IntroNoteSection />
+            </>
+          )}
           {section === 'goals' && <Goals />}
           {section === 'integrations' && <Integrations />}
           {section === 'style' && <StyleCoach />}
@@ -428,6 +434,62 @@ function Profile() {
               ))}
           </optgroup>
         </Select>
+      </div>
+    </Section>
+  );
+}
+
+/**
+ * "Your three lines" (plan 23 §4.3): the note an introducer can forward, about the student in the third person. Every
+ * intro ask reuses it, with a last line written for that ask. Empty goes back to the version Orbit writes.
+ */
+function IntroNoteSection() {
+  const user = useSession().user!;
+  const base = useLiveQuery(() => introNoteBase(user), [user.id]);
+  const [text, setText] = useState<string>();
+  useEffect(() => {
+    if (base && text === undefined) setText(base.text);
+  }, [base]);
+  const state = useAutosave(
+    text ?? '',
+    (v) => (base && v !== base.text ? saveIntroNote(user.id, v) : Promise.resolve()),
+    text !== undefined,
+  );
+  const problems = text ? checkIntroNote(text, user) : [];
+  const example = text
+    ? askLine(user, { firstName: 'Priya', title: 'Software Engineer', org: 'Stripe' })
+    : '';
+  return (
+    <Section>
+      <div id="intro-note" className="scroll-mt-20">
+        <div className="flex items-center gap-2">
+          <Label htmlFor="intro-note-input">Your three lines</Label>
+          <span className="ml-auto">
+            <SaveState state={state} />
+          </span>
+        </div>
+        <p className="text-[12.5px] text-ink-3 mb-2">
+          The note someone can forward when you ask them for an intro: who you are and what makes you worth 15
+          minutes, about you, with your name. Each ask adds one last line about why that person.
+        </p>
+        <Textarea
+          id="intro-note-input"
+          value={text ?? ''}
+          onChange={(e) => setText(e.target.value)}
+          rows={3}
+          className="w-full"
+          data-testid="settings-intro-note"
+        />
+        {problems.length > 0 && (
+          <p className="text-[12.5px] text-warn mt-1" data-testid="settings-intro-note-problem">
+            {problems[0]}
+          </p>
+        )}
+        {example && (
+          <p className="text-[12.5px] text-ink-3 mt-1.5">
+            Asking about Priya at Stripe, the last line would read: {example}
+          </p>
+        )}
       </div>
     </Section>
   );

@@ -14,6 +14,7 @@ import {
 } from '../engine/brief';
 import { markPrepOpened } from '../engine/drafts';
 import { markActionItemDone } from '../engine/facts';
+import { answerHeldMeeting } from '../engine/fathom';
 import { answerIntroductionQuestion } from '../engine/introductions';
 import { stageNoLabel } from '../engine/morning';
 import { decideMerge, mergeEvidence } from '../engine/people';
@@ -320,6 +321,16 @@ export function SuggestionCard({
                 )}
                 {/* the clamp sits on the text, not the padded button, so no half line shows under it */}
                 <span className="line-clamp-2">{withGaps(draft.bodyFinal ?? draft.bodyDraft)}</span>
+                {/* an intro ask's second text: the note the introducer can forward (plan 23 §4.3) */}
+                {draft.kind === 'intro_request' && draft.forwardNote && (
+                  <span
+                    className="block mt-1.5 pt-1.5 border-t border-dashed border-line"
+                    data-testid="draft-preview-note"
+                  >
+                    <span className="label-mono block mb-0.5">The note {first} can forward</span>
+                    <span className="line-clamp-2">{draft.forwardNote}</span>
+                  </span>
+                )}
               </button>
               {coldStart ? (
                 // the same rule as Discover: someone known only from LinkedIn gets a warm-up first
@@ -522,7 +533,24 @@ export function SuggestionCard({
               </Button>
             </div>
           )}
-          {s.kind === 'confirm_note_match' && (
+          {s.kind === 'confirm_note_match' && !!s.payload.held && user && (
+            // plan 23 §4.5: a recording of people Orbit cannot tie to a chat waits for the student's word
+            <div className="mt-3 flex gap-2" data-testid="held-meeting">
+              <Button
+                variant="primary"
+                size="sm"
+                disabled={busy}
+                onClick={() => void answerHeldMeeting(user, s.id, true)}
+                data-testid="held-meeting-yes"
+              >
+                Yes, file it
+              </Button>
+              <Button size="sm" disabled={busy} onClick={() => void answerHeldMeeting(user, s.id, false)}>
+                No
+              </Button>
+            </div>
+          )}
+          {s.kind === 'confirm_note_match' && !s.payload.held && (
             <div className="mt-3 flex gap-2">
               <Button variant="primary" onClick={() => nav(`/notes/new?note=${s.payload.noteId as string}`)}>
                 Pick the person

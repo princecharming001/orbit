@@ -26,10 +26,12 @@ import type {
   StageEvent,
   Suggestion,
   TargetCompany,
+  TargetPlan,
   Touchpoint,
   User,
   UserSettings,
 } from '@orbit/core';
+import { normalizeCompany } from '@orbit/core';
 import Dexie, { type EntityTable } from 'dexie';
 import type { ChatAction, ChatConversation, ChatMessage } from '../chat/types';
 
@@ -296,6 +298,7 @@ export class OrbitDB extends Dexie {
   researchRuns!: EntityTable<ResearchRun, 'id'>;
   pairNotes!: EntityTable<PairNote, 'id'>;
   engagement!: EntityTable<EngagementRow, 'id'>;
+  targetPlans!: EntityTable<TargetPlan, 'id'>;
 
   constructor(name = 'orbit') {
     super(name);
@@ -389,6 +392,24 @@ export class OrbitDB extends Dexie {
             delete g.freeText;
           }),
       );
+    // plan 23: the plan Orbit makes from a job posting, one per target company and role; and every target tied to its
+    // organization, so the company page and the map match it by id (targets added before this matched by name only)
+    this.version(9)
+      .stores({
+        targetPlans: 'id, userId, targetCompanyId',
+      })
+      .upgrade(async (tx) => {
+        const orgs = await tx.table<Organization>('organizations').toArray();
+        const byName = new Map(orgs.map((o) => [o.nameNormalized, o.id]));
+        await tx
+          .table<TargetCompany>('targetCompanies')
+          .toCollection()
+          .modify((t) => {
+            if (t.organizationId) return;
+            const id = byName.get(normalizeCompany(t.nameRaw));
+            if (id) t.organizationId = id;
+          });
+      });
   }
 }
 

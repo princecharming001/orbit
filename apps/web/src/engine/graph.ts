@@ -22,6 +22,7 @@ import {
   DIRECT_TIE_SCORE,
   describePairHop,
   describeUserTie,
+  functionOf,
   HOP_WEIGHTS,
   hasHistoryWith,
   hopBand,
@@ -42,6 +43,7 @@ import {
   rankCompanyTargets,
   rankWarmPaths,
   responsePrior,
+  seniorityClass,
   toReachPath,
   USER_NODE,
   type WeightedGraph,
@@ -576,7 +578,91 @@ export interface CompanyReach {
   /** alumni among `direct` (same people; the map shows them as a badge rather than a second list) */
   alumni: { person: Person; strength: number }[];
   twoHop: { target: Person; path: ReachPath }[];
+  /**
+   * Plan 23 §4.2: everyone there now in one list, each with their team, whether they are an alum, and the way in as
+   * the Map shows it (a direct tie's score, the best warm route, or cold), sorted by team and then by route score.
+   */
+  people: CompanyPerson[];
 }
+
+/** The teams a company page groups people by: a function from the title, Leadership for C-level, Other for the rest. */
+export type CompanyTeam =
+  | 'engineering'
+  | 'product'
+  | 'design'
+  | 'data'
+  | 'research'
+  | 'sales'
+  | 'marketing'
+  | 'finance'
+  | 'operations'
+  | 'recruiting'
+  | 'legal'
+  | 'consulting'
+  | 'leadership'
+  | 'other';
+
+export const COMPANY_TEAM_LABELS: Record<CompanyTeam, string> = {
+  engineering: 'Engineering',
+  product: 'Product',
+  design: 'Design',
+  data: 'Data',
+  research: 'Research',
+  sales: 'Sales',
+  marketing: 'Marketing',
+  finance: 'Finance',
+  operations: 'Operations',
+  recruiting: 'Recruiting',
+  legal: 'Legal',
+  consulting: 'Consulting',
+  leadership: 'Leadership',
+  other: 'Other',
+};
+
+/** Recruiters are named first: "Technical Recruiter, Engineering" is recruiting, whatever team it serves. */
+const RECRUITING = /\b(recruit\w*|talent acquisition|talent partner|university relations|campus)\b/i;
+
+/** Which team a title puts someone on (plan 23 §4.2). */
+export function teamOf(title: string | undefined): CompanyTeam {
+  if (seniorityClass(title) === 2) return 'leadership';
+  if (RECRUITING.test(title ?? '')) return 'recruiting';
+  return (functionOf(title) as CompanyTeam | undefined) ?? 'other';
+}
+
+/** The team a title names after its comma: "Product Manager, Payments" is on Payments. */
+export function teamNameOf(title: string | undefined): string | undefined {
+  const [, ...rest] = (title ?? '').split(/\s*,\s*/);
+  const t = rest.join(', ').trim();
+  return t && t.length <= 40 ? t : undefined;
+}
+
+export interface CompanyRoute {
+  /** direct: the student knows them (or has a faint tie and no warmer way); warm: through someone; cold: no way yet */
+  kind: 'direct' | 'warm' | 'cold';
+  path?: WarmReachPath;
+  /** 0..1, as the Map's badge shows it out of 100; 0 when cold */
+  score: number;
+  band?: ReachPath['band'];
+  /** the route in the Map's words: "via Kenji (your tie · 52)", "You know Dana directly · your tie · 68" */
+  line: string;
+  /** the first person on a warm route, who is asked for the intro */
+  via?: { id: string; name: string };
+}
+
+export interface CompanyPerson {
+  person: Person;
+  team: CompanyTeam;
+  /** what their title says after the comma, when it names a team */
+  teamName?: string;
+  seniority?: ReturnType<typeof seniorityClass>;
+  alum: boolean;
+  route: CompanyRoute;
+  /** the one button on the row: Write to (direct), Ask {first hop} (warm), Warm up (cold, on LinkedIn), Save (cold) */
+  action: 'write' | 'ask' | 'warm_up' | 'save';
+}
+
+/** How many people past the ones the student knows get a full route; the rest are ranked by the quick estimate. */
+export const COMPANY_ROUTED = 30;
 
 const YEAR = 365 * 86_400_000;
 
@@ -784,5 +870,117 @@ export async function reachCompany(
   }
   twoHop.sort((a, b) => b.path.score - a.path.score);
   const alumni = direct.filter((d) => d.person.isAlumni);
-  return { org, direct, saved, former, alumni, twoHop: twoHop.slice(0, 3) };
+  return {
+    org,
+    direct,
+    saved,
+    former,
+    alumni,
+    twoHop: twoHop.slice(0, 3),
+    people: companyPeople(
+      g,
+      [...direct, ...saved].map((d) => d.person),
+    ),
+  };
+}
+
+/** The tie words the Map's route card uses for the student's own tie: "warm tie · 48". */
+function tieWordsOf(p: Person): string {
+  const s = Math.round(userTieWeight(p) * 100);
+  return `${s >= DIRECT_TIE_SCORE ? 'your' : 'a faint'} tie · ${s}`;
+}
+
+/**
+ * Everyone at a company with the way in, as the Map would show it for each: someone the student knows gets the
+ * direct route and its score; anyone else the best route Reach finds through people the student knows (the
+ * COMPANY_ROUTED most reachable of them, at a big company); with none, cold. Sorted by team (Other last), then route
+ * score, alumni first within a tie.
+ */
+export function companyPeople(g: WeightedGraph, here: Person[]): CompanyPerson[] {
+  const tieOf = (p: Person) => Math.round((g.adj.get(USER_NODE)?.get(p.id)?.weight ?? 0) * 100);
+  const known = here.filter((p) => tieOf(p) >= DIRECT_TIE_SCORE);
+  const knownIds = new Set(known.map((p) => p.id));
+  const rest = here.filter((p) => !knownIds.has(p.id));
+  // a big company: full routes for the ones the network reaches best by the quick estimate (one search for all)
+  const routed = new Set(
+    (rest.length > COMPANY_ROUTED
+      ? [...rest]
+          .sort((a, b) => bestPathStrength(g, b.id) - bestPathStrength(g, a.id))
+          .slice(0, COMPANY_ROUTED)
+      : rest
+    ).map((p) => p.id),
+  );
+  const first = (id: string) => {
+    const p = contexts.get(g)?.people.get(id);
+    return p?.firstName || p?.displayName || 'someone';
+  };
+  const out: CompanyPerson[] = here.map((person) => {
+    const title = person.currentTitle;
+    let route: CompanyRoute;
+    if (knownIds.has(person.id)) {
+      const direct = toReachPath(g, [USER_NODE, person.id]) as WarmReachPath;
+      route = {
+        kind: 'direct',
+        path: direct,
+        score: direct.score,
+        band: direct.band,
+        line: `You know ${person.firstName || person.displayName} directly · ${tieWordsOf(person)}`,
+      };
+    } else {
+      const best = routed.has(person.id) ? reachPersonIn(g, person.id, 1)[0] : undefined;
+      if (best && best.hops.length > 1) {
+        const via = best.hops[0]!.toId;
+        const viaPerson = contexts.get(g)?.people.get(via);
+        route = {
+          kind: 'warm',
+          path: best,
+          score: best.score,
+          band: best.band,
+          via: { id: via, name: first(via) },
+          line: `via ${first(via)}${viaPerson ? ` (${tieWordsOf(viaPerson)})` : ''}${
+            best.hops.length > 2
+              ? `, then ${best.hops
+                  .slice(1, -1)
+                  .map((h) => first(h.toId))
+                  .join(', then ')}`
+              : ''
+          }`,
+        };
+      } else if (best) {
+        route = {
+          kind: 'direct',
+          path: best,
+          score: best.score,
+          band: best.band,
+          line: `You know ${person.firstName || person.displayName} only slightly · ${tieWordsOf(person)}`,
+        };
+      } else route = { kind: 'cold', score: 0, line: 'No one you know knows them yet' };
+    }
+    const action: CompanyPerson['action'] =
+      route.kind === 'warm'
+        ? 'ask'
+        : route.kind === 'direct'
+          ? 'write'
+          : person.linkedinSlug
+            ? 'warm_up'
+            : 'save';
+    return {
+      person,
+      team: teamOf(title),
+      teamName: teamNameOf(title),
+      seniority: seniorityClass(title),
+      alum: !!person.isAlumni,
+      route,
+      action,
+    };
+  });
+  const order = Object.keys(COMPANY_TEAM_LABELS) as CompanyTeam[];
+  const rank = (t: CompanyTeam) => (t === 'other' ? 99 : order.indexOf(t));
+  return out.sort(
+    (a, b) =>
+      rank(a.team) - rank(b.team) ||
+      b.route.score - a.route.score ||
+      Number(b.alum) - Number(a.alum) ||
+      a.person.displayName.localeCompare(b.person.displayName),
+  );
 }

@@ -263,6 +263,15 @@ export interface UserSettings {
   morningBrief?: boolean;
   /** the local day (YYYY-MM-DD) the debrief was last opened or closed, so it shows once a day */
   morningSeenOn?: string;
+  /**
+   * The note an introducer can forward (plan 23 §4.3): who the student is and the one thing that makes them worth 15
+   * minutes, in the third person. Every intro ask reuses it, with a last line written for that ask.
+   */
+  introNote?: { text: string; editedAt: string };
+  /** kinds of message the student handed to Orbit to send on its own, after earning it (plan 23 §4.9) */
+  autoKinds?: MessageKind[];
+  /** the local Sunday (YYYY-MM-DD) whose weekly review the student last opened or closed (plan 23 §4.8) */
+  weekReviewSeenOn?: string;
 }
 
 /** What a goal is for (plan 16 §2.1); it changes the register, the ask and the routing rules. */
@@ -354,6 +363,75 @@ export interface TargetCompany {
   statusChangedAt?: string;
   deadline?: string;
   notes?: string;
+  /** the role the student is going for there, as the posting names it ("Software Engineer Intern") (plan 23 §4.1) */
+  role?: string;
+  /** the team the posting names ("Payments") */
+  team?: string;
+  /** the job posting the student pasted */
+  postingUrl?: string;
+  /** when Orbit last read the posting */
+  postingSeenAt?: string;
+}
+
+/** What Orbit read from a job posting (plan 23 §4.1): the fixed shape the posting route returns. */
+export interface PostingInfo {
+  company: string;
+  role: string;
+  team?: string;
+  location?: string;
+  level?: string;
+  /** YYYY-MM-DD */
+  deadline?: string;
+  requisitionId?: string;
+  /** names the page gives for who recruits and who manages, as written */
+  namesOnPage?: { recruiters: string[]; managers: string[] };
+  url?: string;
+}
+
+/** One person in a target plan, with why they are in it, the way in, and when. */
+export interface TargetPlanStep {
+  personId: ID;
+  /** recruiter: recruits for the posting; team: on the team; manager: leads it; alum: went to the student's school */
+  role: 'recruiter' | 'team' | 'manager' | 'alum';
+  /** "recruits for this posting", "knows the team", "the hiring manager" */
+  roleText: string;
+  route: {
+    kind: 'direct' | 'warm' | 'cold';
+    /** who is asked for the intro on a warm route */
+    viaId?: ID;
+    /** 0..1, as the badge shows it out of 100 */
+    score: number;
+    band?: 'strong' | 'possible' | 'long_shot';
+    /** the route in the Map's words */
+    line: string;
+    hops?: ReachHop[];
+  };
+  /** today; on a day (a warm ask two days on); after someone else replies, or by `at` when nobody has */
+  when: { kind: 'today' | 'on' | 'after_reply'; at: string; afterPersonId?: ID };
+  /** what gets drafted: a first message, an intro ask with the note to forward, or a warm-up first */
+  draft: 'outreach' | 'intro_request' | 'warm_up';
+  /** proposed: nothing drafted yet; drafted: a card waits in Drafts; held: waits for a reply; done: sent or started */
+  status: 'proposed' | 'drafted' | 'held' | 'done';
+  suggestionId?: ID;
+  /** a person found on LinkedIn for the plan, not yet in Orbit: added only when the student picks them */
+  found?: { id: string; name: string; headline?: string; pictureUrl?: string; slug?: string };
+}
+
+/** The plan for one posting at one target company (plan 23 §4.1), kept in this browser. */
+export interface TargetPlan {
+  id: ID;
+  userId: ID;
+  targetCompanyId: ID;
+  builtAt: string;
+  posting: PostingInfo;
+  steps: TargetPlanStep[];
+  /** people already in the student's pipeline there, never redrafted: "already in your pipeline · replied Thu" */
+  inPipeline: { personId: ID; line: string }[];
+  /** how many more people the student can reach there (the company page lists them) */
+  more: number;
+  /** the network does not touch the company: the three are LinkedIn finds, cold, warm up first */
+  cold?: boolean;
+  suggestionIds: ID[];
 }
 
 export interface ResumeFacet {
@@ -829,6 +907,11 @@ export interface OutboundMessage {
   holdUntil?: string;
   /** when the draft's words were last written: a draft that says "yesterday" is rewritten the next day */
   draftedAt?: string;
+  /**
+   * An intro ask's note for the introducer to forward (plan 23 §4.3), kept beside the ask: by email it goes in the
+   * same message under a rule; on LinkedIn it becomes its own message the student sends with a tap.
+   */
+  forwardNote?: string;
   createdAt: string;
 }
 

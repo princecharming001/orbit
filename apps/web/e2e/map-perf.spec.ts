@@ -201,3 +201,75 @@ test.describe('Map frame times', () => {
     await run(page, 2000, 40, testInfo);
   });
 });
+
+/** Plan 23 §4.2: the company page holds up at a big company in a big network. */
+test.describe('Company page', () => {
+  test.setTimeout(300_000);
+
+  test('2,000 people: a company with hundreds of them renders in under 1.5 s', async ({ page }) => {
+    await loadDemo(page, { clock: false });
+    await expect
+      .poll(
+        () =>
+          page.evaluate(async () => {
+            const db = (
+              window as unknown as { __orbitDb: { briefs: { toArray(): Promise<{ kind: string }[]> } } }
+            ).__orbitDb;
+            return (await db.briefs.toArray()).some((b) => b.kind === 'daily');
+          }),
+        { timeout: 60_000 },
+      )
+      .toBe(true);
+    await injectPeople(page, 2000 - (await peopleOnMap(page)));
+    // injectPeople puts the biggest share of its people at Google
+    const orgId = await page.evaluate(async () => {
+      const db = (
+        window as unknown as {
+          __orbitDb: {
+            organizations: {
+              toArray(): Promise<{ id: string; nameNormalized: string }[]>;
+              put(o: unknown): Promise<unknown>;
+            };
+          };
+        }
+      ).__orbitDb;
+      const had = (await db.organizations.toArray()).find((o) => o.nameNormalized === 'google');
+      if (had) return had.id;
+      await db.organizations.put({
+        id: 'org_e2e_google',
+        name: 'Google',
+        nameNormalized: 'google',
+        domains: [],
+      });
+      return 'org_e2e_google';
+    });
+    await page.goto('people');
+    await expect(page.getByRole('heading', { name: 'People', level: 1 })).toBeVisible();
+    const times: number[] = [];
+    for (let i = 0; i < 3; i++) {
+      await page.goto('people');
+      await expect(page.getByRole('heading', { name: 'People', level: 1 })).toBeVisible();
+      const t0 = await page.evaluate((id) => {
+        const at = performance.now();
+        window.history.pushState({}, '', `${location.pathname.replace(/people$/, '')}companies/${id}`);
+        window.dispatchEvent(new PopStateEvent('popstate'));
+        return at;
+      }, orgId);
+      await page.waitForFunction(
+        () => document.querySelectorAll('[data-testid="company-person"]').length > 0,
+        null,
+        {
+          polling: 'raf',
+          timeout: 30_000,
+        },
+      );
+      times.push((await page.evaluate(() => performance.now())) - t0);
+    }
+    const rows = await page.getByTestId('company-person').count();
+    console.log(
+      `company page, 2,000 people: ${times.map((t) => t.toFixed(0)).join(', ')} ms, ${rows} rows drawn`,
+    );
+    expect(rows).toBeLessThanOrEqual(40);
+    expect(Math.min(...times)).toBeLessThan(1500);
+  });
+});

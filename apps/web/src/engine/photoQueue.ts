@@ -15,6 +15,7 @@ import { mockLinkedInProfile, usesMockConnectors } from '../integrations/connect
 import { type EnrichOutcome, type LinkedInPhoto, linkedInPhoto } from '../integrations/enrichmentProxy';
 import { isServerUser } from '../integrations/orbitApi';
 import { unipileConfigured } from '../integrations/unipile';
+import { endActivity, startActivity } from './activity';
 import { linkedInPaused, pauseLinkedIn, readBudget } from './enrichment/store';
 import { liveLinkedInAccount } from './linkedinLive';
 import { brokenPhoto, onScreenRank, subscribePhotoSignals } from './photoSignals';
@@ -204,6 +205,9 @@ export function startPhotoQueue(user: Pick<User, 'id'>): () => void {
       busy = true;
       const r = await refreshOnePhoto(user).catch(() => ({ step: 'off' as const }));
       busy = false;
+      // the status line says photos are coming while the queue asks, and nothing once it rests
+      if (r.step === 'asked') startActivity('photos', 'Fetching profile photos', { quiet: true });
+      else if (r.step !== 'wait') endActivity('photos');
       wait = r.step === 'asked' || r.step === 'wait' ? GAP_MS : r.step === 'idle' ? 60_000 : 10 * 60_000;
     }
     if (!stopped) schedule(wait);
@@ -215,6 +219,7 @@ export function startPhotoQueue(user: Pick<User, 'id'>): () => void {
   schedule(3000);
   return () => {
     stopped = true;
+    endActivity('photos');
     unsubscribe();
     if (timer) clearTimeout(timer);
   };

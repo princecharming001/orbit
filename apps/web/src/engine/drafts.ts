@@ -10,6 +10,7 @@ import type {
 import { composeKindFor, newId } from '@orbit/core';
 import { db } from '../db/schema';
 import { draftForSuggestion, draftMessage, needsWarmUp, startWarmUpOrOutreach, unsentDraftOf } from './brief';
+import { type AskPosting, introNoteBase, noteForAsk } from './introNote';
 import { currentResumeFacets, sharesOrgNow } from './resume';
 
 // ---------- the student's edits ----------
@@ -198,7 +199,16 @@ export async function requestIntro(
   user: User,
   connectorId: string,
   targetId: string,
-  opts: { path?: Pick<ReachPath, 'score'> & Partial<Pick<ReachPath, 'hops'>>; now?: Date } = {},
+  opts: {
+    path?: Pick<ReachPath, 'score'> & Partial<Pick<ReachPath, 'hops'>>;
+    now?: Date;
+    /** the posting the ask is for (a target plan): the ask says why this person, the note names the role */
+    posting?: AskPosting;
+    /** why this person, in the student's words for the ask: "Priya recruits for the Payments team I'm applying to" */
+    why?: string;
+    /** the plan that asked, kept on the card */
+    targetCompanyId?: string;
+  } = {},
 ): Promise<{ suggestion: Suggestion; draft?: OutboundMessage; existed: boolean } | undefined> {
   const [connector, target] = await Promise.all([db.people.get(connectorId), db.people.get(targetId)]);
   if (!connector || !target) return undefined;
@@ -223,7 +233,11 @@ export async function requestIntro(
         title: target.currentTitle,
         org: target.currentOrganizationRaw,
         why: target.currentOrganizationRaw ? `their work at ${target.currentOrganizationRaw}` : undefined,
+        // plan 23 §4.3: the note to forward is its own text under the ask
+        noteBelow: true,
+        ...(opts.why ? { whyLine: opts.why } : {}),
       },
+      ...(opts.targetCompanyId ? { targetCompanyId: opts.targetCompanyId } : {}),
       channel: connector.primaryEmail ? 'gmail' : 'linkedin',
       // plan 21 §8: the route as it was weighed when the student asked, for learning from how intros turn out
       ...(opts.path?.hops
@@ -250,6 +264,21 @@ export async function requestIntro(
   };
   await db.suggestions.add(s);
   const draft = await draftForSuggestion(user, s, now);
+  if (draft) {
+    // the note the introducer can forward: the student's saved lines, and a last line for this ask
+    const base = await introNoteBase(user, now);
+    draft.forwardNote = noteForAsk(
+      base.text,
+      user,
+      {
+        firstName: target.firstName || target.displayName,
+        title: target.currentTitle,
+        org: target.currentOrganizationRaw,
+      },
+      opts.posting,
+    );
+    await db.outbound.update(draft.id, { forwardNote: draft.forwardNote });
+  }
   return { suggestion: s, draft, existed: false };
 }
 

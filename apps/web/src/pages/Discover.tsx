@@ -84,7 +84,9 @@ function DiscoverFeed({ tabs }: { tabs?: ReactNode }) {
   const [busy, setBusy] = useState(false);
   // the network list is brought up to date each time the page opens, so someone just added shows up without a Refresh
   const [updating, setUpdating] = useState(true);
-  const [q, setQ] = useState('');
+  const [params] = useSearchParams();
+  // a company page's "Find people there" opens Discover searching for the company
+  const [q, setQ] = useState(() => params.get('q') ?? '');
   const [acting, setActing] = useState<string>();
   // people acted on or dismissed here leave the page at once: the feed is rebuilt from the database, which can lag a
   // few seconds behind while a LinkedIn sync is writing people

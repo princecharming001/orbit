@@ -558,7 +558,7 @@ export async function findReferrerFor(
 }
 
 /** One concrete thing the student has done, from the resume: the strongest project or experience line. */
-function credibilityLine(
+export function credibilityLine(
   facets: { kind: string; text: string; title?: string; organizationName?: string }[],
 ): string | undefined {
   const score = (t: string) =>
@@ -981,7 +981,8 @@ export async function buildDraftContext(
     targetCompany: tc
       ? {
           name: tc.nameRaw,
-          roleLabel: roleInput?.roleLabel ?? goals?.targetRoles[0],
+          // the role a pasted posting named (plan 23 §4.1), else the first role the student is going for
+          roleLabel: roleInput?.roleLabel ?? tc.role ?? goals?.targetRoles[0],
           applied: tc.status === 'applied' || tc.status === 'interviewing',
           link: postingLink,
         }

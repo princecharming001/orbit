@@ -18,6 +18,7 @@ import { db, type EngagementPost, type EngagementRow } from '../db/schema';
 import { usesMockConnectors } from '../integrations/connectorsMock';
 import { linkedInProfile } from '../integrations/enrichmentProxy';
 import { type EngagementWant, linkedInEngagement, unipileConfigured } from '../integrations/unipile';
+import { countActivity, endActivity, startActivity } from './activity';
 import { liveLinkedInAccount } from './linkedinLive';
 
 const DAY = 86_400_000;
@@ -196,6 +197,35 @@ async function runCheck(
   const top = mutuals.filter((m) => !!m.linkedinMemberId && m.id !== target.id).slice(0, MUTUALS_READ);
   const everyone = [tm, ...top.map((m) => m.linkedinMemberId!)];
   setState(everyone, 'queued');
+  // the status line: whose LinkedIn activity is being read, for a route
+  const first = async (id: string) => {
+    const p = await db.people.get(id);
+    return p?.firstName || p?.displayName;
+  };
+  const named = top.length === 1 ? await first(top[0]!.id) : undefined;
+  const activityId = `hops:${target.id}`;
+  startActivity(
+    activityId,
+    named ? `Reading ${named}'s posts for the route` : 'Reading LinkedIn posts for the routes',
+  );
+  try {
+    return await readRound(user, target, top, everyone, reader, now, out);
+  } finally {
+    endActivity(activityId);
+    void countActivity(user.id, 'posts', out.calls, now).catch(() => undefined);
+  }
+}
+
+async function readRound(
+  user: Pick<User, 'id'>,
+  target: Pick<Person, 'id' | 'linkedinMemberId' | 'linkedinFollowers'>,
+  top: Pick<Person, 'id' | 'linkedinMemberId' | 'linkedinFollowers'>[],
+  everyone: string[],
+  reader: HopReader,
+  now: Date,
+  out: CheckResult,
+): Promise<CheckResult> {
+  const tm = target.linkedinMemberId!;
 
   /** one proxy call; false stops the round (the ledger ran out) */
   const step = async <T>(

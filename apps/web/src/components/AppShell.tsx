@@ -1,6 +1,7 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import {
   Archive,
+  CalendarClock,
   Compass,
   Ellipsis,
   Inbox,
@@ -28,6 +29,7 @@ import { dailyMaintenance } from '../engine/sync';
 import { draftLists, startedDrafts } from '../engine/today';
 import { useSession } from '../state/session';
 import { Avatar, calendarDaysBetween, cx, modKeyLabel } from '../ui';
+import { ActivityLine } from './ActivityLine';
 import { useTrackPlace } from './BackLink';
 import { CommandPalette } from './CommandPalette';
 import { DemoBanner } from './DemoBanner';
@@ -35,6 +37,7 @@ import { LinkedInAutoSync } from './LinkedInAutoSync';
 import { LinkedInProgressBanner } from './LinkedInProgressBanner';
 import { MeetingNotesAutoSync } from './MeetingNotesAutoSync';
 import { MorningBrief } from './MorningBrief';
+import { NotesWatch } from './NotesWatch';
 import { OutboxScheduler } from './OutboxScheduler';
 import { ReplyWatch } from './ReplyWatch';
 import { useLogOut } from './useLogOut';
@@ -43,6 +46,8 @@ import { useLogOut } from './useLogOut';
 const NAV_TOP = [
   { to: '/people', label: 'People', icon: Users },
   { to: '/inbox', label: 'Drafts', icon: Inbox },
+  // plan 23 §4.4: the page a student opens at 2:50 pm, one tap from anywhere
+  { to: '/chats', label: 'Chats', icon: CalendarClock },
 ];
 const NAV_MORE = [
   { to: '/map', label: 'Map', icon: MapIcon },
@@ -50,11 +55,12 @@ const NAV_MORE = [
 ];
 const PHONE_TABS = [
   { to: '/', label: 'Chat', icon: MessageSquare },
-  ...NAV_TOP,
+  ...NAV_TOP.filter((n) => n.to !== '/chats'),
   { to: '/map', label: 'Map', icon: MapIcon },
 ];
 /** The phone's More sheet: what does not fit in the tab bar. */
 const PHONE_MORE = [
+  { to: '/chats', label: 'Chats', icon: CalendarClock },
   { to: '/discover', label: 'Discover', icon: Compass },
   { to: '/notes/new', label: 'Add note', icon: NotebookPen },
   { to: '/settings', label: 'Settings', icon: Settings },
@@ -111,6 +117,25 @@ export function AppShell() {
       );
     }, [userId]) ?? 0;
   const logOut = useLogOut();
+  // today's chats still ahead: the Chats badge
+  const chatsToday =
+    useLiveQuery(async () => {
+      if (!userId) return 0;
+      const now = new Date();
+      const end = new Date(now);
+      end.setHours(23, 59, 59, 999);
+      return db.events
+        .where('startAt')
+        .between(new Date(now.getTime() - 4 * 3_600_000).toISOString(), end.toISOString(), true, true)
+        .filter(
+          (e) =>
+            e.userId === userId &&
+            e.status !== 'cancelled' &&
+            (!!e.isCoffeeChat || !!e.chatId) &&
+            Date.parse(e.endAt) > now.getTime(),
+        )
+        .count();
+    }, [userId]) ?? 0;
   const gmail =
     useLiveQuery(
       async () =>
@@ -169,6 +194,20 @@ export function AppShell() {
       {pending}
     </span>
   );
+  const chatsBadge = chatsToday > 0 && (
+    <span
+      className={cx(
+        'tabular font-medium inline-flex items-center justify-center rounded-full',
+        expanded
+          ? 'ml-auto text-[11px] min-w-[22px] h-[20px] px-1.5 bg-canvas-2 text-ink-2 border border-line'
+          : 'absolute top-1 right-1 text-[10px] min-w-[16px] h-[16px] px-1 bg-ink text-white',
+      )}
+      title={`${chatsToday} chat${chatsToday === 1 ? '' : 's'} today`}
+      data-testid="chats-badge"
+    >
+      {chatsToday}
+    </span>
+  );
   const itemClass = (active: boolean) =>
     cx(
       'relative rounded-[10px] flex items-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/20 transition-colors duration-150',
@@ -212,6 +251,7 @@ export function AppShell() {
     <div className="h-full flex">
       <OutboxScheduler />
       <ReplyWatch />
+      <NotesWatch />
       <LinkedInAutoSync />
       <MeetingNotesAutoSync />
       <LinkedInProgressBanner />
@@ -252,13 +292,20 @@ export function AppShell() {
           {expanded && <div className="h-2" aria-hidden />}
           {railButton('New chat', SquarePen, newChat, 'new-chat')}
           {NAV_TOP.map(({ to, label, icon }) =>
-            railLink(to, label, icon, label === 'Drafts' ? badge : undefined),
+            railLink(
+              to,
+              label,
+              icon,
+              label === 'Drafts' ? badge : label === 'Chats' ? chatsBadge : undefined,
+            ),
           )}
           <div className="my-2 h-px bg-line mx-2.5" role="separator" />
           {NAV_MORE.map(({ to, label, icon }) => railLink(to, label, icon))}
         </nav>
         {expanded && <Recent chat={chat} />}
         <div className={cx('mt-auto pb-3 pt-2 flex flex-col gap-0.5', !expanded && 'items-center')}>
+          {/* what Orbit is doing, in one quiet line above the account row (plan 23 §4.7) */}
+          <ActivityLine compact={!expanded} className={expanded ? 'mb-1' : undefined} />
           {railButton(
             `Search (${modKeyLabel() === 'Ctrl' ? 'Ctrl' : 'Command'} K)`,
             Search,
@@ -361,6 +408,7 @@ export function AppShell() {
                   <X size={16} />
                 </button>
               </div>
+              <ActivityLine below className="px-0.5 pb-1" />
               {PHONE_MORE.map(({ to, label, icon: Icon }) => (
                 <NavLink
                   key={to}

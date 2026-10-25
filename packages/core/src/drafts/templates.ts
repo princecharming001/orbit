@@ -226,6 +226,13 @@ export interface DraftContext {
     why?: string;
     /** the recipient offered this intro earlier; the message follows up on the offer instead of asking cold */
     offered?: boolean;
+    /**
+     * the note to forward goes under the ask as its own text (plan 23 §4.3), so the ask says only why this person
+     * and stops at four lines
+     */
+    noteBelow?: boolean;
+    /** why this person, said once: "Priya recruits for the Payments team I'm applying to" */
+    whyLine?: string;
   };
   chat?: {
     completedAt?: string;
@@ -2971,6 +2978,11 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
         ? `Thanks again for talking with me${since ? ` ${since}` : ''}. One small ask: would you be comfortable introducing me to ${t.name}${desc}?`
         : `Small ask. Would you be comfortable introducing me to ${t.name}${desc}?`;
       body = `${G}\n\n${lead}${link} If so, here's a short note you could forward:\n\n${blurb}\n\nAnd if it's not a good fit to ask, no worries at all.\n\n${S}`;
+      if (t.noteBelow) {
+        // four lines at most: the ask, why this person, what the two share, and the out; the note follows on its own
+        const why = t.whyLine ? ` ${t.whyLine.replace(/\.?$/, '.')}` : '';
+        body = `${G}\n\n${lead}${why}${link} If you think ${tFirst} would be open to it, there's a short note below you could forward.\n\nNo worries at all if not.\n\n${S}`;
+      }
       claims.push({ text: `target: ${t.name}`, kind: 'logistics' });
       subject = threaded ? undefined : `Small ask: intro to ${t.name}?`;
       if (t.offered) {

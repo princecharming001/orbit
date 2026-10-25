@@ -38,6 +38,7 @@
  */
 
 import { clientIp, defaultOrigins } from '../_shared/origins.ts';
+import { type PostingDeps, readPosting } from '../_shared/postings.ts';
 import {
   companyIntros,
   createVillage,
@@ -102,6 +103,14 @@ export interface ConnectorDeps {
   links?: LinkStore;
   /** this function's public address, for Unipile's notify_url */
   publicUrl?: string;
+  /** job postings (plan 23 §4.1): the model key, the shared cache, and how many reads a visitor gets a day */
+  postings?: PostingDeps & { perDay?: number };
+}
+
+/** Today's bucket for posting reads, per visitor: a fetch and a small model call each. */
+export function postingBucket(visitor: string, now: Date, perDay: number): Bucket {
+  const b = sendBucket(`visitor:${visitor}`, now, perDay);
+  return { ...b, key: b.key.replace('connectors:send:', 'connectors:postings:') };
 }
 
 /** Which account each hosted sign-in produced (by the reference Orbit gave the sign-in link). */
@@ -405,11 +414,14 @@ export function makeHandler(deps: ConnectorDeps): (req: Request) => Promise<Resp
 
     const isVillage = path === '/paths';
     const isEnrich = ENRICH_ROUTES.has(path);
-    if (!isVillage && !isEnrich && !UNIPILE_ROUTES.has(path)) return json(404, { error: 'no such route' }, h);
+    const isPosting = path === '/posting';
+    if (!isVillage && !isEnrich && !isPosting && !UNIPILE_ROUTES.has(path))
+      return json(404, { error: 'no such route' }, h);
     if (path === '/providers') return json(200, providerStatus(deps), h);
     if (isVillage && (!deps.villageKey || !deps.villageBase || !deps.villageUser?.email))
       return unconfigured(h);
-    if (!isVillage && !isEnrich && (!deps.unipileKey || !deps.unipileBase)) return unconfigured(h);
+    if (!isVillage && !isEnrich && !isPosting && (!deps.unipileKey || !deps.unipileBase))
+      return unconfigured(h);
 
     // only calls that would reach a provider count against the visitor's limits
     const visitor = (await sha256(`${deps.salt ?? 'orbit'}:${clientIp(req)}`)).slice(0, 32);
@@ -437,6 +449,24 @@ export function makeHandler(deps: ConnectorDeps): (req: Request) => Promise<Resp
     const spend = <K extends LedgerKind>(kind: K, caller: LedgerCaller<K>, units = 1) =>
       spendLedger(take, totals, kind, caller, accountId, now(), units);
     if (isEnrich) return enrichmentRoute(deps, path, body, { h, doFetch, take, now, visitor, spend });
+    if (isPosting) {
+      // plan 23 §4.1: a job posting read once and cached for everyone; only a fetch counts against the visitor's day
+      const p = deps.postings ?? {};
+      const answer = await readPosting(
+        { url: text(body.url, 2000), text: text(body.text, 20_000) },
+        { ...p, fetch: p.fetch ?? doFetch },
+        {
+          take: async () => {
+            try {
+              return (await take([postingBucket(visitor, now(), p.perDay ?? 10)])).allowed;
+            } catch {
+              return false;
+            }
+          },
+        },
+      );
+      return json(200, answer, h);
+    }
     if (ACCOUNT_ROUTES.has(path) && !(await tokenValid(accountId, body.token, deps.signingKey)))
       return json(403, { error: 'this LinkedIn account is not linked to this browser' }, h);
     if (path === '/send') {

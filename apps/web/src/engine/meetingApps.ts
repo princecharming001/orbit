@@ -16,6 +16,7 @@ import { newId } from '@orbit/core';
 import { db, type IntegrationAccount } from '../db/schema';
 import { usesMockConnectors } from '../integrations/connectorsMock';
 import { type FathomMeeting, mcpCall, notesAppsAvailable } from '../integrations/notesApps';
+import { endActivity, startActivity } from './activity';
 import { appAuth, signInToApp } from './appSignIn';
 import { demoMeetings, importMeetings, meetingSeen } from './fathom';
 import { isMeetingAppOn, keepOnlyMeetingApp } from './meetingAppSwitch';
@@ -446,7 +447,20 @@ async function saveRow(
 export async function syncMeetingApp(
   user: User,
   app: MeetingApp,
-  opts: { now?: Date; signal?: AbortSignal } = {},
+  opts: { now?: Date; signal?: AbortSignal; since?: string } = {},
+): Promise<MeetingAppResult> {
+  startActivity(`notes:${app}`, `Checking ${MEETING_APP_META[app].name} for notes`);
+  try {
+    return await syncMeetingAppOnce(user, app, opts);
+  } finally {
+    endActivity(`notes:${app}`);
+  }
+}
+
+async function syncMeetingAppOnce(
+  user: User,
+  app: MeetingApp,
+  opts: { now?: Date; signal?: AbortSignal; since?: string },
 ): Promise<MeetingAppResult> {
   const now = opts.now ?? new Date();
   const meta = MEETING_APP_META[app];
@@ -457,7 +471,8 @@ export async function syncMeetingApp(
   let meetings: FathomMeeting[];
   if (row.externalAccountId === 'demo') meetings = await demoMeetings(user);
   else {
-    const since = new Date(state.since ?? now.getTime() - meta.backfillDays * 86_400_000);
+    // the notes check after a chat asks from the meeting's start only
+    const since = new Date(opts.since ?? state.since ?? now.getTime() - meta.backfillDays * 86_400_000);
     // a pasted key is used as it is; a sign-in is renewed when it is about to run out
     const auth = app === 'fireflies' ? row.accessToken : await appAuth(app, row).catch(() => undefined);
     const token = typeof auth === 'string' ? auth : auth?.accessToken;
@@ -489,7 +504,11 @@ export async function syncMeetingApp(
     lastSyncedAt: now.toISOString(),
     // the next import starts a little before the newest meeting, so one finished late is not missed
     syncState: {
-      since: newest ? new Date(Date.parse(newest) - 86_400_000).toISOString() : state.since,
+      since: opts.since
+        ? state.since
+        : newest
+          ? new Date(Date.parse(newest) - 86_400_000).toISOString()
+          : state.since,
       meetings: (state.meetings ?? 0) + imported,
     },
   });
@@ -523,7 +542,9 @@ export async function connectMeetingApp(
     );
     return firstSync(user, app, now);
   }
-  if (!notesAppsAvailable())
+  // Fireflies answers the browser directly (its API allows any origin, checked live 2026-10-25), so a pasted key needs
+  // no Orbit server; the apps that sign in go through orbit-notes
+  if (meta.connect !== 'key' && !notesAppsAvailable())
     return { ok: false, reason: 'unavailable', message: `This copy of Orbit cannot reach ${meta.name} yet.` };
   if (meta.connect === 'key') {
     const key = apiKey.trim();
@@ -589,7 +610,8 @@ export async function meetingAppStatus(user: Pick<User, 'id'>, app: MeetingApp):
   const row = await meetingAppAccount(user.id, app);
   const on = isMeetingAppOn(row);
   return {
-    available: meetingAppAvailable(user),
+    // a pasted key (Fireflies) reaches the app straight from the browser; sign-ins need orbit-notes
+    available: MEETING_APP_META[app].connect === 'key' || meetingAppAvailable(user),
     connected: on,
     needsKey: !!row && row.status === 'needs_reauth',
     meetings: Number((row?.syncState as { meetings?: number } | undefined)?.meetings ?? 0),

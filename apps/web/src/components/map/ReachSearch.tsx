@@ -1,6 +1,6 @@
 import type { Person, User } from '@orbit/core';
 import { Building2, Search } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { ReachCandidate } from '../../engine/graph';
 import { type FoundView, linkedInSearchReady, searchLinkedInLive } from '../../engine/linkedinSearch';
@@ -76,6 +76,10 @@ export function ReachSearch({
   onSubmit,
   compact,
   shake,
+  placeholder = 'Search a person or company',
+  hint,
+  linkedIn: withLinkedIn = true,
+  autoFocus = true,
 }: {
   user: Pick<User, 'id'>;
   query: string;
@@ -87,20 +91,39 @@ export function ReachSearch({
   onSubmit: (q: string) => void;
   /** a route or a company is open below: the results only show while the student is typing */
   compact?: boolean;
-  /** the last search found no one: the box shakes once */
-  shake?: boolean;
+  /** the last search found no one: the box shakes once, and again for each search after it that finds no one */
+  shake?: number;
+  placeholder?: string;
+  /** the line under the empty box; null for none (the default names who the search reaches) */
+  hint?: ReactNode | null;
+  /** false: only the student's own network (the introductions view searches its people alone) */
+  linkedIn?: boolean;
+  /** false: the box waits to be clicked (the map's own page should not open on a phone's keyboard) */
+  autoFocus?: boolean;
 }) {
-  const li = useLinkedInResults(user.id, query);
+  const li = useLinkedInResults(
+    user.id,
+    withLinkedIn && !/^\s*(https?:\/\/|www\.)/i.test(query) ? query : '',
+  );
   const [open, setOpen] = useState(!compact);
   const [at, setAt] = useState(-1);
   const input = useRef<HTMLInputElement>(null);
+  const form = useRef<HTMLFormElement>(null);
+  // each miss replays the shake without remounting the box, so the caret stays in it
+  useEffect(() => {
+    const el = form.current;
+    if (!el || !shake) return;
+    el.classList.remove('shake-x');
+    el.getBoundingClientRect();
+    el.classList.add('shake-x');
+  }, [shake]);
   useEffect(() => {
     const el = input.current;
-    if (compact || !el) return;
+    if (compact || !autoFocus || !el) return;
     // typing that began in the top bar goes on here: the caret lands after what was typed
     el.focus();
     el.setSelectionRange(el.value.length, el.value.length);
-  }, [compact]);
+  }, [compact, autoFocus]);
   // someone the student already has is shown once, from their network
   const linkedIn = li.people.filter((f) => !f.knownPersonId);
   const rows: Row[] = useMemo(
@@ -119,7 +142,9 @@ export function ReachSearch({
     else onPickLinkedIn(r.f);
   };
   const q = query.trim();
-  const showList = open && q.length > 0;
+  // a pasted job link is read on Enter, not searched for as a name
+  const isLink = /^(https?:\/\/|www\.)/i.test(q);
+  const showList = open && q.length > 0 && !isLink;
   return (
     // pinned to the top of the panel, so it stays at hand while the routes below scroll
     <div
@@ -127,7 +152,8 @@ export function ReachSearch({
       data-testid="reach-search"
     >
       <form
-        className={cx('relative', shake && 'shake-x')}
+        ref={form}
+        className={cx('relative', !!shake && 'shake-x')}
         data-testid="reach-form"
         role="search"
         onSubmit={(e) => {
@@ -165,13 +191,21 @@ export function ReachSearch({
           aria-controls="map-suggestions"
           aria-autocomplete="list"
           aria-activedescendant={at >= 0 ? `map-suggestion-${at}` : undefined}
-          aria-label="Reach a person or company"
-          placeholder="Search a person or company"
+          aria-label={placeholder}
+          placeholder={placeholder}
           className="h-11 w-full rounded-full border border-line bg-canvas pl-10 pr-4 text-[14.5px] placeholder:text-ink-3 focus:border-[#bdbab5] focus:outline-none focus:ring-4 focus:ring-ink/[0.06]"
           data-testid="reach-input"
         />
       </form>
-      {!q && !compact && (
+      {isLink && (
+        <p className="px-1 text-[13px] text-ink-3" data-testid="reach-link-hint">
+          Press Enter, and Orbit reads the posting and plans your way in.
+        </p>
+      )}
+      {!q && !compact && hint !== undefined && hint !== null && (
+        <p className="px-1 text-[13px] text-ink-3">{hint}</p>
+      )}
+      {!q && !compact && hint === undefined && (
         <p className="px-1 text-[13px] text-ink-3">
           Anyone in your network, a company{li.ready ? ', or anyone on LinkedIn' : ''}.
           {!li.ready && (
