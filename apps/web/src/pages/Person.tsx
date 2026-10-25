@@ -34,6 +34,7 @@ import { PersonCompanyLogo } from '../components/CompanyLogo';
 import { DraftEditor, handoffWhere, OutboxStatus } from '../components/DraftEditor';
 import { MutualConnections } from '../components/MutualConnections';
 import { DossierCard } from '../components/people/DossierCard';
+import { LinkedInHistory } from '../components/people/LinkedInHistory';
 import { ResearchDebrief } from '../components/people/ResearchDebrief';
 import { STAGE_COLOR, StrengthDots } from '../components/people/shared';
 import { TieScoreCard } from '../components/people/TieScoreCard';
@@ -939,7 +940,8 @@ export function PersonPage() {
           )}
           {tab === 'facts' && (
             <div className="space-y-4">
-              {/* the research brief first: who they are, from the web and LinkedIn, with links */}
+              {/* who they are, straight from LinkedIn (everyone), then Deep research, a step further, from the web */}
+              <LinkedInHistory person={person} />
               <ResearchDebrief person={person} userId={user.id} />
               <div className="flex items-baseline justify-between gap-3 pt-2">
                 <h2 className="text-[13px] font-medium text-ink">What you've learned yourself</h2>

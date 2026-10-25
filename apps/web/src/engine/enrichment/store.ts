@@ -53,6 +53,8 @@ export interface EnrichmentRecord {
   fields: Partial<Record<EnrichField, Provenance>>;
   /** the last full profile read */
   profileAt?: string;
+  /** that read had the full experience and education sections, not the previews (the About work history) */
+  fullAt?: string;
   /** the last read LinkedIn held sections back on */
   throttledAt?: string;
   searchedAt?: string;

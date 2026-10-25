@@ -617,6 +617,36 @@ describe('logos and photos that expire', () => {
   });
 });
 
+describe('an opened page reads their whole work history', () => {
+  it('reads the full sections once when only previews were read, then not again', async () => {
+    await db.people.put(person({ id: 'fv', firstName: 'F', lastName: 'V', linkedinMemberId: 'm_fv' }));
+    await db.kv.put({
+      key: 'enrich:rec:fv',
+      value: { userId: user.id, personId: 'fv', fields: {}, profileAt: '2026-10-20T00:00:00Z' },
+    });
+    profiles.m_fv = {
+      body: profile({
+        experience: [
+          { title: 'Analyst', company: 'Evercore', current: true, start: '2025-07' },
+          { title: 'Intern', company: 'Lazard', start: '2024-06', end: '2024-08' },
+        ],
+      }),
+    };
+    // a background run leaves a recent preview read alone
+    await run({ only: ['fv'] });
+    expect(paths()).not.toContain('/profile');
+    await run({ only: ['fv'], reason: 'view' });
+    const call = calls.find((c) => c.path === '/profile')!;
+    expect(call.body.sections).toEqual(expect.arrayContaining(['experience', 'education']));
+    expect((await enrichmentRecord('fv'))!.fullAt).toBe(NOW.toISOString());
+    const affs = await db.affiliations.where('personId').equals('fv').toArray();
+    expect(affs.map((a) => a.nameRaw).sort()).toEqual(['Evercore', 'Lazard']);
+    calls = [];
+    await run({ only: ['fv'], reason: 'view' });
+    expect(paths()).not.toContain('/profile');
+  });
+});
+
 describe('education is the evidence for where someone studied', () => {
   it('turns the education section into affiliations that studiedAt reads', async () => {
     await db.people.put(

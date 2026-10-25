@@ -218,6 +218,12 @@ test.describe('Orbit demo flow', () => {
     await expect(page.getByText(/summary/i).first()).toBeVisible();
     await page.getByRole('tab', { name: /^about/i }).click();
     await expect(page.getByText(/from notes/i).first()).toBeVisible();
+    // their work history straight from LinkedIn, current role first, above Deep research
+    const history = page.getByTestId('linkedin-history');
+    await expect(history).toBeVisible();
+    await expect(history.getByTestId('linkedin-role').first()).toBeVisible();
+    await expect(history.getByTestId('linkedin-role').first()).toContainText(/Now/);
+    await expect(history).not.toHaveText(/[–—]/);
     await page.getByRole('tab', { name: /prep/i }).click();
     await expect(page.getByText(/questions to ask/i)).toBeVisible();
     await expect(page.getByText(/your goal for this chat/i)).toBeVisible();

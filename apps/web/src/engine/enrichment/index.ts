@@ -156,7 +156,9 @@ function needsOf(ctx: Ctx, p: Person, rec: EnrichmentRecord, hasChat: boolean): 
   const n = new Set<Need>();
   const li = !!ctx.linkedin && !ctx.linkedinStopped;
   if (hasLinkedIn(p)) {
-    if (li && age(rec.profileAt, ctx.now) > PROFILE_EVERY_MS) n.add('profile');
+    // an opened page shows their whole work history: one read with the full sections if only previews were read
+    const wantsFull = ctx.reason === 'view' && !rec.fullAt;
+    if (li && (age(rec.profileAt, ctx.now) > PROFILE_EVERY_MS || wantsFull)) n.add('profile');
     else if (li && isLinkedInPhoto(p.photoUrl) && linkedInImageExpired(p.photoUrl, ctx.now))
       n.add('photo_refresh');
   } else {
@@ -228,9 +230,12 @@ async function readProfile(
   return { profile: r.value };
 }
 
-/** Full sections for people who matter now; the lighter previews (enough for the current role) for everyone else. */
+/**
+ * Full sections for people who matter now and for anyone whose page the student opened (About shows their whole work
+ * history); the lighter previews (enough for the current role) for everyone else.
+ */
 const sectionsFor = (ctx: Ctx, personId: string) =>
-  (ctx.tiers.get(personId) ?? 3) <= 2 ? FULL_SECTIONS : PREVIEW_SECTIONS;
+  ctx.reason === 'view' || (ctx.tiers.get(personId) ?? 3) <= 2 ? FULL_SECTIONS : PREVIEW_SECTIONS;
 
 /** Step 2: their own LinkedIn profile, by their LinkedIn id. */
 async function profileStep(
@@ -253,6 +258,8 @@ async function profileStep(
     alias: ctx.alias,
   });
   if (sections.length) settleThrottle(ctx, rec, r.profile);
+  if (sections === FULL_SECTIONS && !r.profile.throttled.some((t) => t.startsWith('experience')))
+    rec.fullAt = ctx.now.toISOString();
   const stop = r.profile.throttled.length
     ? await stopIfLimited(
         ctx,
