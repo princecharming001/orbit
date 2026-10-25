@@ -223,3 +223,37 @@ export async function briefWritten(page: Page) {
     )
     .toBe(true);
 }
+
+/**
+ * Short labels (a name, a title, a status line) cut off or spilling out of their card. Inside every element matching
+ * `cards`, any element holding text of at most `maxChars` characters counts when its text is wider than its own box
+ * (clipped, with or without an ellipsis) or reaches past the card's right edge. A long sentence shortened on purpose
+ * (a subject line, a preview) is longer than that and is left alone. Gives "card: text" for each one found.
+ */
+export async function clippedLabels(page: Page, cards: string, maxChars = 40): Promise<string[]> {
+  return page.evaluate(
+    ({ cards, maxChars }) => {
+      const found: string[] = [];
+      for (const card of document.querySelectorAll<HTMLElement>(cards)) {
+        const box = card.getBoundingClientRect();
+        if (!box.width || !box.height) continue;
+        for (const el of card.querySelectorAll<HTMLElement>('*')) {
+          const own = [...el.childNodes]
+            .filter((n) => n.nodeType === Node.TEXT_NODE)
+            .map((n) => n.textContent ?? '')
+            .join('')
+            .trim();
+          if (!own) continue;
+          const text = (el.textContent ?? '').trim();
+          if (text.length > maxChars) continue;
+          const r = el.getBoundingClientRect();
+          if (!r.width) continue;
+          if (el.scrollWidth > el.clientWidth + 1 || r.right > box.right + 1)
+            found.push(`${card.dataset.testid ?? card.tagName}: ${text}`);
+        }
+      }
+      return found;
+    },
+    { cards, maxChars },
+  );
+}

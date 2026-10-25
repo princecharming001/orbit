@@ -158,11 +158,12 @@ export function PipelineBoard({
               <div
                 key={stage}
                 // an empty stage takes less room, so the stages that hold someone fit on screen
-                // a stage with people grows to share the board's width, so a wide screen shows every stage at once
+                // a stage with people grows to share the board's width, so a wide screen shows every stage at once;
+                // never narrower than a card's name and foot line need (the board scrolls sideways instead)
                 className={cx(
                   'w-full',
                   items.length
-                    ? '@3xl:flex-1 @3xl:min-w-[172px] @3xl:max-w-[320px]'
+                    ? '@3xl:flex-1 @3xl:min-w-[224px] @3xl:max-w-[320px]'
                     : '@3xl:w-[108px] @3xl:shrink-0',
                 )}
                 data-stage={stage}
@@ -289,11 +290,13 @@ function BoardCard({
     >
       <div className="flex items-center gap-2">
         <Avatar name={person.displayName} src={person.photoUrl} id={person.id} size={28} />
-        <div className="min-w-0 flex-1 pr-6">
+        {/* room for the corner menu on the name's line only; the title line below runs to the edge */}
+        <div className="min-w-0 flex-1">
           {/* The name link stretches over the whole card, so the card is one tab stop and opens on Enter. */}
           <Link
             to={`/people/${person.id}`}
-            className="block text-[13.5px] font-medium truncate focus:outline-none after:absolute after:inset-0 after:content-['']"
+            // a long name takes a second line rather than being cut to a first name and a letter
+            className="block pr-6 text-[13.5px] font-medium leading-snug line-clamp-2 break-words focus:outline-none after:absolute after:inset-0 after:content-['']"
           >
             {person.displayName}
           </Link>
@@ -303,8 +306,10 @@ function BoardCard({
               className="text-[12px] text-ink-3"
               title={[person.currentTitle, person.currentOrganizationRaw].filter(Boolean).join(' · ')}
             >
-              <LogoText person={person} size={13}>
-                {person.currentTitle ?? person.currentOrganizationRaw}
+              <LogoText person={person} size={13} wrap>
+                <span className="line-clamp-2 break-words">
+                  {person.currentTitle ?? person.currentOrganizationRaw}
+                </span>
               </LogoText>
             </div>
           )}
@@ -511,8 +516,10 @@ function CardWhen({
     );
   if (wentQuiet(chat))
     return (
-      <span className="whitespace-nowrap">
-        You wrote {relDate(chat.lastOutboundAt)} <span className="text-warn">· quiet</span>
+      // the two parts wrap as wholes on a narrow card, never clipped mid-word
+      <span>
+        <span className="whitespace-nowrap">You wrote {relDate(chat.lastOutboundAt)}</span>{' '}
+        <span className="whitespace-nowrap text-warn">· quiet</span>
       </span>
     );
   return <span className="whitespace-nowrap">{daysLabel(chat.stageEnteredAt)} in stage</span>;
