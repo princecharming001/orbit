@@ -254,8 +254,8 @@ async function mutualsFor(
     return [];
   }
   const key = await cacheKey('unipile', {
-    // v2: lists saved before 2026-10-25 came from a search LinkedIn did not filter
-    op: 'mutuals2',
+    // v3: lists saved before 2026-10-25 were never checked against LinkedIn's shared-connections count
+    op: 'mutuals3',
     accountId: input.unipileAccountId,
     memberId: t.memberId,
   });

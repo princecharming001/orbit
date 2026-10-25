@@ -44,6 +44,8 @@ function villageAndUnipile() {
     if (c.url === 'https://api.village.do/v2/people/paths') return jsonRes(200, villagePerson);
     if (c.url === 'https://api.village.do/v2/companies/paths') return jsonRes(200, villageCompany);
     if (c.url.startsWith(`${UNIPILE}/api/v1/linkedin/search`)) return jsonRes(200, mutuals);
+    if (c.url.startsWith(`${UNIPILE}/api/v1/users/ACoAADanaLee?`))
+      return jsonRes(200, { provider_id: 'ACoAADanaLee', shared_connections_count: 2 });
     return undefined;
   });
 }
@@ -134,8 +136,9 @@ describe('warm paths (§4)', () => {
     for (const v of village) expect(v.confidence).toBeCloseTo(0.7);
     expect(village.find((v) => other(v) === sam)!.weight).toBeCloseTo(0.82);
     expect(r.body.paths.map((p) => p.firstHopId)).toEqual(expect.arrayContaining([sam, mia]));
+    // Village token + paths, the target's profile (LinkedIn's shared count) and the filtered search
     const firstCalls = net.calls.length;
-    expect(firstCalls).toBe(3);
+    expect(firstCalls).toBe(4);
     // the second request inside 30 days asks nobody upstream
     const r2 = await call<Found>('/paths/find', token, { target: { personId: dana } });
     expect(net.calls.length).toBe(firstCalls);

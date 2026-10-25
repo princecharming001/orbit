@@ -221,8 +221,9 @@ export async function linkedInConnections(
 interface MutualResponse {
   mutuals?: { name?: string; headline?: string; url?: string; member_id?: string; picture_url?: string }[];
   count?: number;
-  /** LinkedIn said it applied the "Connections of" filter; without it the list is not mutual connections */
+  /** the list matched what LinkedIn says the two share; without that it is not shown as mutual connections */
   verified?: boolean;
+  reason?: string;
 }
 
 /** Who the student knows who is connected to a target LinkedIn member. */

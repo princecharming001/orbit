@@ -28,7 +28,7 @@
       "api": "classic",
       "category": "people",
       "network_distance": [1],
-      "connections_of": "ACoAADanaLee"
+      "connections_of": ["ACoAADanaLee"]
     }
   },
   "paging": { "start": 0, "page_count": 2, "total_count": 2 },

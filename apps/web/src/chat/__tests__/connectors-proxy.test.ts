@@ -90,6 +90,11 @@ function harness(over: Partial<ConnectorDeps> = {}, upstreamOver?: Upstream) {
         }),
         { status: 200 },
       );
+    // a plain profile read: LinkedIn says how many connections the student shares with that member
+    if (/\/api\/v1\/users\/(?!relations|me\b|invite)[^/?]+\?account_id=/.test(url))
+      return new Response(JSON.stringify({ provider_id: 'ACoT', shared_connections_count: 1 }), {
+        status: 200,
+      });
     if (url.includes('/linkedin/search'))
       // LinkedIn says which filters it applied (config.params), as Unipile's answers do
       return new Response(
@@ -579,42 +584,103 @@ describe('orbit-connectors proxy', () => {
     expect(capped.upstream).toHaveLength(2);
   });
 
-  it('asks LinkedIn for mutual connections: the 1st degree, "Connections of" one member id (not a list)', async () => {
+  it('asks LinkedIn for mutual connections: the target profile for the shared count, then the 1st degree filtered by "Connections of"', async () => {
     const { handler, upstream } = harness();
     const r = (await (
       await handler(post('/mutuals', { accountId: 'a1', token: TOKEN.a1, targetMemberId: 'ACoT' }))
-    ).json()) as { verified: boolean; mutuals: { name: string }[] };
-    expect(upstream[0]!.body).toEqual({
+    ).json()) as { verified: boolean; count: number; mutuals: { name: string }[] };
+    expect(upstream[0]!.url).toBe('https://api1.unipile.com:443/api/v1/users/ACoT?account_id=a1');
+    expect(upstream[1]!.body).toEqual({
       api: 'classic',
       category: 'people',
       network_distance: [1],
-      connections_of: 'ACoT',
+      connections_of: ['ACoT'],
     });
-    expect(r).toMatchObject({ verified: true, mutuals: [{ name: 'Mia Chen' }] });
+    expect(r).toMatchObject({ verified: true, count: 1, mutuals: [{ name: 'Mia Chen' }] });
+  });
+
+  it('claims nothing when LinkedIn gives no shared count, and searches nothing when it says zero', async () => {
+    const profile = (body: Record<string, unknown>) => (url: string) =>
+      url.includes('/api/v1/users/ACoT?')
+        ? new Response(JSON.stringify(body), { status: 200 })
+        : new Response('{}', { status: 404 });
+    const none = harness({}, profile({ provider_id: 'ACoT' }));
+    expect(
+      await (
+        await none.handler(post('/mutuals', { accountId: 'a1', token: TOKEN.a1, targetMemberId: 'ACoT' }))
+      ).json(),
+    ).toEqual({ mutuals: [], verified: false, reason: 'no_shared_count' });
+    const zero = harness({}, profile({ provider_id: 'ACoT', shared_connections_count: 0 }));
+    expect(
+      await (
+        await zero.handler(post('/mutuals', { accountId: 'a1', token: TOKEN.a1, targetMemberId: 'ACoT' }))
+      ).json(),
+    ).toEqual({ mutuals: [], verified: true, count: 0 });
+    expect(zero.upstream).toHaveLength(1);
+  });
+
+  it("a search far bigger than the shared count is the student's own connections, never shown as mutual ones", async () => {
+    const { handler } = harness({}, (url, init) =>
+      url.includes('/api/v1/users/ACoT?')
+        ? new Response(JSON.stringify({ provider_id: 'ACoT', shared_connections_count: 3 }), { status: 200 })
+        : new Response(
+            JSON.stringify({
+              items: [{ name: 'Hem Baid', member_id: 'm_hem', network_distance: 'DISTANCE_1' }],
+              config: { params: JSON.parse((init?.body as string) || '{}') },
+              paging: { total_count: 1512 },
+            }),
+            { status: 200 },
+          ),
+    );
+    const r = await (
+      await handler(post('/mutuals', { accountId: 'a1', token: TOKEN.a1, targetMemberId: 'ACoT' }))
+    ).json();
+    expect(r).toEqual({ mutuals: [], verified: false, reason: 'unfiltered', count: 3 });
+  });
+
+  it('a 502 carries what Unipile said, so a refusal can be read from the logs', async () => {
+    const { handler } = harness({}, (url) =>
+      url.includes('/api/v1/users/ACoT?')
+        ? new Response(JSON.stringify({ provider_id: 'ACoT', shared_connections_count: 3 }), { status: 200 })
+        : new Response(JSON.stringify({ type: 'errors/invalid_parameters', detail: 'connections_of' }), {
+            status: 400,
+          }),
+    );
+    const res = await handler(post('/mutuals', { accountId: 'a1', token: TOKEN.a1, targetMemberId: 'ACoT' }));
+    expect(res.status).toBe(502);
+    expect(((await res.json()) as { error: string }).error).toBe(
+      'unipile 400: {"type":"errors/invalid_parameters","detail":"connections_of"}',
+    );
   });
 
   it('an answer LinkedIn did not filter by "Connections of" is never passed off as mutual connections', async () => {
     // LinkedIn dropped the filter: the student's own connections came back, and the search says so
     const { handler } = harness({}, (url) =>
-      url.includes('/linkedin/search')
-        ? new Response(
-            JSON.stringify({
-              items: [{ name: 'Hem Baid', member_id: 'm_hem', network_distance: 'DISTANCE_1' }],
-              config: { params: { api: 'classic', category: 'people', network_distance: [1] } },
-            }),
-            { status: 200 },
-          )
-        : new Response('{}', { status: 404 }),
+      url.includes('/api/v1/users/ACoT?')
+        ? new Response(JSON.stringify({ provider_id: 'ACoT', shared_connections_count: 3 }), { status: 200 })
+        : url.includes('/linkedin/search')
+          ? new Response(
+              JSON.stringify({
+                items: [{ name: 'Hem Baid', member_id: 'm_hem', network_distance: 'DISTANCE_1' }],
+                config: { params: { api: 'classic', category: 'people', network_distance: [1] } },
+              }),
+              { status: 200 },
+            )
+          : new Response('{}', { status: 404 }),
     );
     const r = (await (
       await handler(post('/mutuals', { accountId: 'a1', token: TOKEN.a1, targetMemberId: 'ACoT' }))
     ).json()) as { verified: boolean; mutuals: unknown[] };
-    expect(r).toEqual({ mutuals: [], verified: false });
+    expect(r).toEqual({ mutuals: [], verified: false, reason: 'filter_dropped' });
   });
 
   it('reads every page of mutual connections, and leaves out the target and anyone not 1st degree', async () => {
     let page = 0;
     const { handler, upstream } = harness({}, (url, init) => {
+      if (url.includes('/api/v1/users/ACoT?'))
+        return new Response(JSON.stringify({ provider_id: 'ACoT', shared_connections_count: 2 }), {
+          status: 200,
+        });
       if (!url.includes('/linkedin/search')) return new Response('{}', { status: 404 });
       page++;
       const params = JSON.parse(init.body as string);
@@ -642,9 +708,10 @@ describe('orbit-connectors proxy', () => {
       await handler(post('/mutuals', { accountId: 'a1', token: TOKEN.a1, targetMemberId: 'ACoT' }))
     ).json()) as { verified: boolean; count: number; mutuals: { name: string }[] };
     expect(r.verified).toBe(true);
+    expect(r.count).toBe(2);
     expect(r.mutuals.map((m) => m.name)).toEqual(['Mia Chen', 'Ben Ortiz']);
-    expect(upstream).toHaveLength(2);
-    expect(upstream[1]!.url).toContain('cursor=next');
+    expect(upstream).toHaveLength(3);
+    expect(upstream[2]!.url).toContain('cursor=next');
   });
 
   it('reads the inbox: 1:1 messages with who they are with, leaving out events, hidden ones and group chats', async () => {

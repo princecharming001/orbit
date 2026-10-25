@@ -757,16 +757,55 @@ async function unipileMe(deps: ConnectorDeps, body: Record<string, unknown>, doF
 /** LinkedIn gives 10 people per page of a classic search: this many pages of mutual connections are read. */
 export const MUTUALS_MAX_PAGES = 5;
 
+/** Unipile's answer when it refused, as a bounded error the proxy's 502 body and logs can show (never the key). */
+async function upstreamError(res: Response): Promise<Error> {
+  let detail = '';
+  try {
+    detail = (await res.text()).replace(/\s+/g, ' ').trim().slice(0, 200);
+  } catch {
+    detail = '';
+  }
+  return new Error(`unipile ${res.status}${detail ? `: ${detail}` : ''}`);
+}
+
+/**
+ * How many connections the student shares with a LinkedIn member, as LinkedIn states it on that member's profile
+ * (`shared_connections_count`; the plain profile, no sections, is the lightest read). Undefined when LinkedIn did not
+ * say: not found, throttled, refused, or a profile without the field.
+ */
+async function sharedConnectionCount(
+  deps: ConnectorDeps,
+  accountId: string,
+  target: string,
+  doFetch: typeof fetch,
+): Promise<number | undefined> {
+  const q = new URLSearchParams({ account_id: accountId });
+  const res = await doFetch(`${deps.unipileBase}/api/v1/users/${encodeURIComponent(target)}?${q}`, {
+    headers: uHeaders(deps),
+  });
+  if (!res.ok) {
+    if (res.status >= 500) throw await upstreamError(res);
+    return undefined;
+  }
+  const p = (await res.json()) as { shared_connections_count?: unknown };
+  const n = p.shared_connections_count;
+  return typeof n === 'number' && Number.isFinite(n) && n >= 0 ? n : undefined;
+}
+
 /**
  * The student's 1st-degree connections who are also connected to the target: LinkedIn's "Connections of" filter
- * (`connections_of`, one member id, not a list) on a search of the student's own connections. LinkedIn drops a filter
- * it does not accept and answers with an unfiltered search instead, which would pass the student's own connections
- * off as the target's; so an answer is only used when it says the filter was applied.
+ * (`connections_of`, a list of member ids) on a search of the student's own connections. Unipile echoes the filters
+ * it parsed (`config.params`) but not whether LinkedIn honoured them, so the answer is held against the target's
+ * profile: LinkedIn says there how many connections the two share, and a search that finds far more than that is the
+ * student's own connections, not people who know the target. Without LinkedIn's count nothing is claimed.
  */
 async function unipileMutuals(deps: ConnectorDeps, body: Record<string, unknown>, doFetch: typeof fetch) {
   const accountId = String(body.accountId ?? '');
   const target = String(body.targetMemberId ?? '').trim();
-  if (!target) return { mutuals: [], verified: false };
+  if (!target) return { mutuals: [], verified: false, reason: 'no_target' };
+  const shared = await sharedConnectionCount(deps, accountId, target, doFetch);
+  if (shared === undefined) return { mutuals: [], verified: false, reason: 'no_shared_count' };
+  if (shared === 0) return { mutuals: [], verified: true, count: 0 };
   const mutuals: Record<string, unknown>[] = [];
   let cursor: string | undefined;
   let total: number | undefined;
@@ -780,25 +819,29 @@ async function unipileMutuals(deps: ConnectorDeps, body: Record<string, unknown>
         api: 'classic',
         category: 'people',
         network_distance: [1],
-        connections_of: target,
+        connections_of: [target],
       }),
     });
-    if (!res.ok) throw new Error(`unipile ${res.status}`);
+    if (!res.ok) throw await upstreamError(res);
     const b = (await res.json()) as {
       items?: Record<string, unknown>[];
       cursor?: string | null;
       paging?: { total_count?: number };
       config?: { params?: Record<string, unknown> };
     };
-    // the filter must come back in what LinkedIn says it searched: without it, these are not mutual connections
+    // the filter must be in what Unipile searched for, and the result must be about the size LinkedIn says
     const applied = b.config?.params?.connections_of;
     const kept = Array.isArray(applied)
       ? applied.map(String)
       : applied === undefined
         ? []
         : [String(applied)];
-    if (!kept.includes(target)) return { mutuals: [], verified: false };
+    if (!kept.includes(target)) return { mutuals: [], verified: false, reason: 'filter_dropped' };
     if (typeof b.paging?.total_count === 'number') total = b.paging.total_count;
+    if (page === 0)
+      console.log(`mutuals: shared=${shared} total=${total ?? '?'} page=${(b.items ?? []).length}`);
+    if (total !== undefined && total > shared * 1.5 + 5)
+      return { mutuals: [], verified: false, reason: 'unfiltered', count: shared };
     for (const m of b.items ?? []) {
       // never the target themself, and only people the student is connected to
       const id = m.member_id ?? m.id;
@@ -807,11 +850,11 @@ async function unipileMutuals(deps: ConnectorDeps, body: Record<string, unknown>
       mutuals.push(m);
     }
     cursor = typeof b.cursor === 'string' && b.cursor ? b.cursor : undefined;
-    if (!cursor || !(b.items ?? []).length) break;
+    if (!cursor || !(b.items ?? []).length || mutuals.length >= shared) break;
   }
   return {
     verified: true,
-    count: total ?? mutuals.length,
+    count: shared,
     mutuals: mutuals.map((m) => ({
       name: m.name ?? `${m.first_name ?? ''} ${m.last_name ?? ''}`.trim(),
       headline: m.headline,

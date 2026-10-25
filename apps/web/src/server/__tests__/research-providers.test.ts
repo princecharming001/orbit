@@ -187,39 +187,65 @@ describe('Unipile research', () => {
     expect(calls[1]!.url).toBe(`${base}/api/v1/users/ACoA1/posts?account_id=acc&limit=10`);
   });
 
-  it('searches mutuals with classic people, distance [1] and connections_of as one member id', async () => {
-    const { fetch, calls } = fakeFetch(() =>
-      json({
-        object: 'LinkedinSearch',
-        items: [
-          { type: 'PEOPLE', id: 'ACoM', name: 'Mia Chen', network_distance: 'DISTANCE_1' },
-          { type: 'PEOPLE', id: 'ACoT', name: 'The Target', network_distance: 'DISTANCE_2' },
-          { type: 'PEOPLE', id: 'ACoX', name: 'Not Connected', network_distance: 'DISTANCE_2' },
-        ],
-        config: { params: { api: 'classic', category: 'people', connections_of: 'ACoT' } },
-        cursor: null,
-      }),
+  const profileOf = (shared: number | undefined) =>
+    json({ provider_id: 'ACoT', shared_connections_count: shared });
+
+  it('searches mutuals with classic people, distance [1] and connections_of [member], sized by the shared count', async () => {
+    const { fetch, calls } = fakeFetch((c) =>
+      c.url.includes('/api/v1/users/ACoT?')
+        ? profileOf(2)
+        : json({
+            object: 'LinkedinSearch',
+            items: [
+              { type: 'PEOPLE', id: 'ACoM', name: 'Mia Chen', network_distance: 'DISTANCE_1' },
+              { type: 'PEOPLE', id: 'ACoT', name: 'The Target', network_distance: 'DISTANCE_2' },
+              { type: 'PEOPLE', id: 'ACoX', name: 'Not Connected', network_distance: 'DISTANCE_2' },
+            ],
+            config: { params: { api: 'classic', category: 'people', connections_of: ['ACoT'] } },
+            paging: { total_count: 2 },
+            cursor: null,
+          }),
     );
     const r = await createUnipileResearch({ fetch, apiKey: 'uk', baseUrl: base }).mutuals('acc', 'ACoT');
     expect(r.ok && r.value.map((x) => x.name)).toEqual(['Mia Chen']);
-    expect(calls[0]).toMatchObject({
+    expect(calls[0]!.url).toBe(`${base}/api/v1/users/ACoT?account_id=acc&notify=false`);
+    expect(calls[1]).toMatchObject({
       url: `${base}/api/v1/linkedin/search?account_id=acc&limit=10`,
       method: 'POST',
-      body: { api: 'classic', category: 'people', network_distance: [1], connections_of: 'ACoT' },
+      body: { api: 'classic', category: 'people', network_distance: [1], connections_of: ['ACoT'] },
     });
   });
 
-  it("refuses a mutuals answer LinkedIn did not filter (it would be the student's own connections)", async () => {
-    const { fetch } = fakeFetch(() =>
-      json({
-        object: 'LinkedinSearch',
-        items: [{ type: 'PEOPLE', id: 'ACoM', name: 'Mia Chen', network_distance: 'DISTANCE_1' }],
-        config: { params: { api: 'classic', category: 'people', network_distance: [1] } },
-        cursor: null,
-      }),
+  it('refuses a mutuals answer LinkedIn did not filter: far more people than the two share', async () => {
+    const { fetch } = fakeFetch((c) =>
+      c.url.includes('/api/v1/users/ACoT?')
+        ? profileOf(2)
+        : json({
+            object: 'LinkedinSearch',
+            items: [{ type: 'PEOPLE', id: 'ACoM', name: 'Mia Chen', network_distance: 'DISTANCE_1' }],
+            config: { params: { api: 'classic', category: 'people', connections_of: ['ACoT'] } },
+            paging: { total_count: 1480 },
+            cursor: null,
+          }),
     );
     const r = await createUnipileResearch({ fetch, apiKey: 'uk', baseUrl: base }).mutuals('acc', 'ACoT');
     expect(r).toMatchObject({ ok: false, kind: 'invalid' });
+  });
+
+  it('claims no mutuals when LinkedIn gives no shared count, and searches nothing when it says zero', async () => {
+    const none = fakeFetch((c) => (c.url.includes('/api/v1/users/ACoT?') ? profileOf(undefined) : json({})));
+    const r = await createUnipileResearch({ fetch: none.fetch, apiKey: 'uk', baseUrl: base }).mutuals(
+      'acc',
+      'ACoT',
+    );
+    expect(r).toMatchObject({ ok: false, kind: 'invalid' });
+    const zero = fakeFetch((c) => (c.url.includes('/api/v1/users/ACoT?') ? profileOf(0) : json({})));
+    const z = await createUnipileResearch({ fetch: zero.fetch, apiKey: 'uk', baseUrl: base }).mutuals(
+      'acc',
+      'ACoT',
+    );
+    expect(z).toEqual({ ok: true, value: [] });
+    expect(zero.calls).toHaveLength(1);
   });
 
   it('normalizes search items, distances, URLs and the Sales Navigator flag', () => {

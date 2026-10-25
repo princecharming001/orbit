@@ -7,8 +7,9 @@
  * - `GET /api/v1/users/{identifier}/posts?account_id=&limit=` → `{object: "PostList", items: [{id, social_id,
  *   share_url, text, date, parsed_datetime, reaction_counter, comment_counter, ...}], cursor}`.
  * - `POST /api/v1/linkedin/search?account_id=&limit=&cursor=`, body by `api` + `category`. Classic people:
- *   `keywords`, `network_distance: number[]` (1|2|3), `connections_of: string` (ONE member id; LinkedIn silently drops a filter
- *   it does not accept, e.g. an array, and `config.params` in the answer echoes the filters it applied), and `company` / `past_company` /
+ *   `keywords`, `network_distance: number[]` (1|2|3), `connections_of: string[]` (member ids; `config.params` in the answer echoes
+ *   what Unipile parsed, not what LinkedIn honoured, so a mutuals search is checked against the target profile's
+ *   `shared_connections_count`), and `company` / `past_company` /
  *   `school` / `location` / `industry` as LinkedIn **ids** (from `GET /api/v1/linkedin/search/parameters?type=&
  *   keywords=`). Sales Navigator people take `{include, exclude}` filters, plain-text company/role allowed. Classic
  *   pages hold at most 10 results; Sales Navigator up to 100. Response `{object: "LinkedinSearch", items: [{type:
@@ -39,6 +40,7 @@ export const unipileProfileSchema = z.looseObject({
   summary: z.string().nullish(),
   location: z.string().nullish(),
   network_distance: z.string().nullish(),
+  shared_connections_count: z.number().nullish(),
   websites: z.array(z.string()).nullish(),
   work_experience: z
     .array(
@@ -122,7 +124,7 @@ export interface ClassicPeopleSearch {
   category: 'people';
   keywords?: string;
   network_distance?: (1 | 2 | 3)[];
-  connections_of?: string;
+  connections_of?: string[];
   company?: string[];
   past_company?: string[];
   school?: string[];
@@ -201,7 +203,7 @@ export function createUnipileResearch(opts: ProviderOptions): UnipileResearch {
       if (!configured) return notConfigured();
       const q = query({
         account_id: accountId,
-        linkedin_sections: (o.sections ?? DOSSIER_SECTIONS).join(','),
+        linkedin_sections: (o.sections ?? DOSSIER_SECTIONS).join(',') || undefined,
         linkedin_api: o.linkedinApi,
         notify: 'false',
       });
@@ -259,19 +261,32 @@ export function createUnipileResearch(opts: ProviderOptions): UnipileResearch {
     },
     async mutuals(accountId, memberId, o = {}) {
       if (!configured) return notConfigured();
+      // LinkedIn states on the target's profile how many connections the two share; the search must agree with it
+      const prof = await api.profile(accountId, memberId, { sections: [] });
+      if (!prof.ok) return prof;
+      const shared = prof.value.shared_connections_count;
+      if (typeof shared !== 'number')
+        return {
+          ok: false,
+          kind: 'invalid',
+          provider: 'unipile',
+          message: 'unipile: LinkedIn did not say how many connections are shared',
+        };
+      if (shared === 0) return { ok: true, value: [] };
       const items: UnipileSearchItem[] = [];
       let cursor: string | undefined;
       for (let page = 0; page < (o.maxPages ?? 1); page++) {
         const r = await api.searchPeople(
           accountId,
-          { api: 'classic', category: 'people', network_distance: [1], connections_of: memberId },
+          { api: 'classic', category: 'people', network_distance: [1], connections_of: [memberId] },
           { cursor },
         );
         if (!r.ok) return page === 0 ? r : { ok: true, value: items };
-        // an answer without the filter is the student's own connections, not people who know the target
+        // an answer without the filter, or far bigger than the shared count, is the student's own connections
         const applied = r.value.config?.params?.connections_of;
         const kept = Array.isArray(applied) ? applied.map(String) : applied == null ? [] : [String(applied)];
-        if (!kept.includes(memberId)) {
+        const total = r.value.paging?.total_count;
+        if (!kept.includes(memberId) || (typeof total === 'number' && total > shared * 1.5 + 5)) {
           return {
             ok: false,
             kind: 'invalid',
@@ -286,7 +301,7 @@ export function createUnipileResearch(opts: ProviderOptions): UnipileResearch {
           items.push(it);
         }
         cursor = r.value.cursor ?? undefined;
-        if (!cursor) break;
+        if (!cursor || items.length >= shared) break;
       }
       return { ok: true, value: items };
     },

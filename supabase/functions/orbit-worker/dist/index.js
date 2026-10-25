@@ -763,6 +763,7 @@ var unipileProfileSchema = z.looseObject({
   summary: z.string().nullish(),
   location: z.string().nullish(),
   network_distance: z.string().nullish(),
+  shared_connections_count: z.number().nullish(),
   websites: z.array(z.string()).nullish(),
   work_experience: z.array(
     z.looseObject({
@@ -836,7 +837,7 @@ function createUnipileResearch(opts) {
       if (!configured) return notConfigured();
       const q = query({
         account_id: accountId,
-        linkedin_sections: (o.sections ?? DOSSIER_SECTIONS).join(","),
+        linkedin_sections: (o.sections ?? DOSSIER_SECTIONS).join(",") || void 0,
         linkedin_api: o.linkedinApi,
         notify: "false"
       });
@@ -894,18 +895,30 @@ function createUnipileResearch(opts) {
     },
     async mutuals(accountId, memberId, o = {}) {
       if (!configured) return notConfigured();
+      const prof = await api.profile(accountId, memberId, { sections: [] });
+      if (!prof.ok) return prof;
+      const shared = prof.value.shared_connections_count;
+      if (typeof shared !== "number")
+        return {
+          ok: false,
+          kind: "invalid",
+          provider: "unipile",
+          message: "unipile: LinkedIn did not say how many connections are shared"
+        };
+      if (shared === 0) return { ok: true, value: [] };
       const items = [];
       let cursor;
       for (let page2 = 0; page2 < (o.maxPages ?? 1); page2++) {
         const r = await api.searchPeople(
           accountId,
-          { api: "classic", category: "people", network_distance: [1], connections_of: memberId },
+          { api: "classic", category: "people", network_distance: [1], connections_of: [memberId] },
           { cursor }
         );
         if (!r.ok) return page2 === 0 ? r : { ok: true, value: items };
         const applied = r.value.config?.params?.connections_of;
         const kept = Array.isArray(applied) ? applied.map(String) : applied == null ? [] : [String(applied)];
-        if (!kept.includes(memberId)) {
+        const total = r.value.paging?.total_count;
+        if (!kept.includes(memberId) || typeof total === "number" && total > shared * 1.5 + 5) {
           return {
             ok: false,
             kind: "invalid",
@@ -920,7 +933,7 @@ function createUnipileResearch(opts) {
           items.push(it);
         }
         cursor = r.value.cursor ?? void 0;
-        if (!cursor) break;
+        if (!cursor || items.length >= shared) break;
       }
       return { ok: true, value: items };
     }

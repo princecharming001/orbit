@@ -26,6 +26,8 @@ function setup() {
   const time = manualClock();
   const net = fakeFetch((c: Call) => {
     if (c.url.includes('/linkedin/search?')) return json(mutualsFixture);
+    if (c.url.includes('/api/v1/users/ACoAADanaLee?'))
+      return json({ provider_id: 'ACoAADanaLee', shared_connections_count: 2 });
     if (c.url.endsWith('/v2/auth/tokens')) return json(villageToken);
     if (c.url.endsWith('/v2/people/paths')) return json(villagePeople);
     if (c.url.endsWith('/v2/companies/paths')) return json(villageCompany);
@@ -99,7 +101,7 @@ describe('external path candidates (§4.2 acceptance 4)', () => {
       api: 'classic',
       category: 'people',
       network_distance: [1],
-      connections_of: 'ACoAADanaLee',
+      connections_of: ['ACoAADanaLee'],
     });
     expect(s.net.calls.find((c) => c.url.endsWith('/v2/people/paths'))!.body).toEqual({
       linkedin_url: 'https://www.linkedin.com/in/dana-lee',

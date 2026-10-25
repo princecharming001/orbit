@@ -846,10 +846,35 @@ async function unipileMe(deps, body, doFetch) {
   };
 }
 var MUTUALS_MAX_PAGES = 5;
+async function upstreamError(res) {
+  let detail = "";
+  try {
+    detail = (await res.text()).replace(/\s+/g, " ").trim().slice(0, 200);
+  } catch {
+    detail = "";
+  }
+  return new Error(`unipile ${res.status}${detail ? `: ${detail}` : ""}`);
+}
+async function sharedConnectionCount(deps, accountId, target, doFetch) {
+  const q = new URLSearchParams({ account_id: accountId });
+  const res = await doFetch(`${deps.unipileBase}/api/v1/users/${encodeURIComponent(target)}?${q}`, {
+    headers: uHeaders(deps)
+  });
+  if (!res.ok) {
+    if (res.status >= 500) throw await upstreamError(res);
+    return void 0;
+  }
+  const p = await res.json();
+  const n = p.shared_connections_count;
+  return typeof n === "number" && Number.isFinite(n) && n >= 0 ? n : void 0;
+}
 async function unipileMutuals(deps, body, doFetch) {
   const accountId = String(body.accountId ?? "");
   const target = String(body.targetMemberId ?? "").trim();
-  if (!target) return { mutuals: [], verified: false };
+  if (!target) return { mutuals: [], verified: false, reason: "no_target" };
+  const shared = await sharedConnectionCount(deps, accountId, target, doFetch);
+  if (shared === void 0) return { mutuals: [], verified: false, reason: "no_shared_count" };
+  if (shared === 0) return { mutuals: [], verified: true, count: 0 };
   const mutuals = [];
   let cursor;
   let total;
@@ -863,15 +888,19 @@ async function unipileMutuals(deps, body, doFetch) {
         api: "classic",
         category: "people",
         network_distance: [1],
-        connections_of: target
+        connections_of: [target]
       })
     });
-    if (!res.ok) throw new Error(`unipile ${res.status}`);
+    if (!res.ok) throw await upstreamError(res);
     const b = await res.json();
     const applied = b.config?.params?.connections_of;
     const kept = Array.isArray(applied) ? applied.map(String) : applied === void 0 ? [] : [String(applied)];
-    if (!kept.includes(target)) return { mutuals: [], verified: false };
+    if (!kept.includes(target)) return { mutuals: [], verified: false, reason: "filter_dropped" };
     if (typeof b.paging?.total_count === "number") total = b.paging.total_count;
+    if (page === 0)
+      console.log(`mutuals: shared=${shared} total=${total ?? "?"} page=${(b.items ?? []).length}`);
+    if (total !== void 0 && total > shared * 1.5 + 5)
+      return { mutuals: [], verified: false, reason: "unfiltered", count: shared };
     for (const m of b.items ?? []) {
       const id = m.member_id ?? m.id;
       if (id === target) continue;
@@ -879,11 +908,11 @@ async function unipileMutuals(deps, body, doFetch) {
       mutuals.push(m);
     }
     cursor = typeof b.cursor === "string" && b.cursor ? b.cursor : void 0;
-    if (!cursor || !(b.items ?? []).length) break;
+    if (!cursor || !(b.items ?? []).length || mutuals.length >= shared) break;
   }
   return {
     verified: true,
-    count: total ?? mutuals.length,
+    count: shared,
     mutuals: mutuals.map((m) => ({
       name: m.name ?? `${m.first_name ?? ""} ${m.last_name ?? ""}`.trim(),
       headline: m.headline,

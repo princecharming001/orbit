@@ -554,8 +554,8 @@ export type MutualsResult =
     };
 
 /** LinkedIn's answer for a target, kept a day in db.kv under this prefix (plus user and person ids). */
-// v2: answers saved before 2026-10-25 came from a search LinkedIn did not filter (the student's own connections)
-export const MUTUALS_KV = 'mutuals2:';
+// v3: answers saved before 2026-10-25 were never checked against LinkedIn's shared-connections count
+export const MUTUALS_KV = 'mutuals3:';
 
 /**
  * Who the student knows who also knows this person, from LinkedIn (live, through Unipile) or, for the sample
