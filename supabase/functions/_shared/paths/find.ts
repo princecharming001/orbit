@@ -5,6 +5,7 @@
  * user and its nodes) and the names of its nodes.
  */
 import {
+  pairKeyOf,
   type RoutePerson,
   rankCompanyTargets,
   rankWarmPaths,
@@ -31,6 +32,7 @@ import {
   type PersonRef,
   type TieRow,
 } from './externalCandidates';
+import { enqueueHopEvidence, hopEvidenceFresh, linkedinAccountOf } from './hopJob';
 
 const DAY = 86_400_000;
 
@@ -48,6 +50,8 @@ export interface UserGraph {
   selfId: string | null;
   people: Map<string, GraphPerson>;
   pairs: Map<string, TiePair>;
+  /** pairs the student said do not really know each other (plan 21 §3.5), keyed `${a}|${b}` with a < b */
+  blocked: Set<string>;
 }
 
 const TIE_KIND_SET = new Set<string>(TIE_KINDS);
@@ -162,7 +166,10 @@ export async function loadGraph(db: Db, userId: string, now: Date): Promise<User
       lastSeenAt: iso(t.last_seen_at) ?? undefined,
     });
   }
-  return { selfId, people, pairs: combineTies(ties, now) };
+  const blockedRows = await db.sql<{ a_person_id: string; b_person_id: string }>`
+    select a_person_id, b_person_id from orbit.blocked_pairs where user_id = ${userId}::uuid`;
+  const blocked = new Set(blockedRows.map((b) => pairKeyOf(b.a_person_id, b.b_person_id)));
+  return { selfId, people, pairs: combineTies(ties, now), blocked };
 }
 
 /** A local person for a LinkedIn member, URL or slug, or a unique exact name; null when unknown. */
@@ -245,9 +252,7 @@ export async function upsertTies(db: Db, ties: TieRow[]): Promise<void> {
 }
 
 async function externalFor(s: Services, userId: string, target: ExternalTarget): Promise<ExternalResult> {
-  const [acct] = await s.db.sql<{ external_account_id: string | null }>`
-    select external_account_id from orbit.integration_accounts
-     where user_id = ${userId}::uuid and provider = 'linkedin' and status = 'active'`;
+  const accountId = await linkedinAccountOf(s.db, userId);
   const [u] = await s.db.sql<{ email: string }>`select email from orbit.users where id = ${userId}::uuid`;
   return gatherExternalCandidates(
     {
@@ -261,7 +266,7 @@ async function externalFor(s: Services, userId: string, target: ExternalTarget):
     {
       userId,
       target,
-      unipileAccountId: acct?.external_account_id ?? undefined,
+      unipileAccountId: accountId,
       villageUser: u ? { externalUserId: userId, email: u.email } : undefined,
     },
   );
@@ -353,7 +358,14 @@ export async function findPaths(
         title: p.title,
         pReply: p.score > 0 ? responsePrior(personLike(p), user) : undefined,
       }));
-    const chosen = rankCompanyTargets({ targets, goal: goalKind, people: g.people, pairs: g.pairs, now });
+    const chosen = rankCompanyTargets({
+      targets,
+      goal: goalKind,
+      people: g.people,
+      pairs: g.pairs,
+      blockedPairs: g.blocked,
+      now,
+    });
     const paths: PathsFindResponse['paths'] = [];
     for (const x of chosen)
       paths.push({ ...x.path, id: await pathId(userId, x.path.nodes), names: namesOf(g, x.path.nodes) });
@@ -397,7 +409,8 @@ export async function findPaths(
     name: target.displayName,
     company: target.org,
   });
-  if (ext.ties.length) {
+  const learned = await learnMemberIds(db, userId, ext);
+  if (ext.ties.length || learned) {
     await upsertTies(db, ext.ties);
     g = await loadGraph(db, userId, now);
   }
@@ -412,18 +425,106 @@ export async function findPaths(
     goal: goalKind,
     people: g.people,
     pairs: g.pairs,
+    blockedPairs: g.blocked,
     now,
   });
   const paths: PathsFindResponse['paths'] = [];
   for (const p of r.paths as WarmPath[])
     paths.push({ ...p, id: await pathId(userId, p.nodes), names: namesOf(g, p.nodes) });
+  const hopEvidence = r.direct ? undefined : await queueHopEvidence(s, userId, g, targetId, r.paths, ext);
   return {
     paths,
     ...(r.fallback ? { fallback: r.fallback } : {}),
     ...(r.direct ? { direct: { personId: targetId, ...r.direct } } : {}),
     sources: sourcesOf(ext),
     unconfigured: ext.unconfigured,
+    ...(hopEvidence ? { hopEvidence } : {}),
   };
+}
+
+/**
+ * Keep the member id LinkedIn's mutuals search gave for a person found by the same LinkedIn profile address (never
+ * by name: names never bind, plan 17): hop evidence matches by member id only (plan 21 §6). Returns how many were new.
+ */
+async function learnMemberIds(db: Db, userId: string, ext: ExternalResult): Promise<number> {
+  let n = 0;
+  for (const c of ext.candidates) {
+    const slug = linkedInSlugOf(c.linkedinUrl);
+    if (c.source !== 'linkedin_mutual' || !c.personId || !c.memberId || !slug) continue;
+    const rows = await db.sql`
+      update orbit.people set linkedin_member_id = ${c.memberId}
+       where id = ${c.personId}::uuid and user_id = ${userId}::uuid and linkedin_member_id is null
+         and lower(linkedin_slug) = ${slug}
+         and not exists (select 1 from orbit.people q where q.user_id = ${userId}::uuid
+                          and q.linkedin_member_id = ${c.memberId} and q.id <> ${c.personId}::uuid)
+         and not exists (select 1 from orbit.person_identities i where i.user_id = ${userId}::uuid
+                          and i.kind = 'linkedin_member' and i.value_norm = ${c.memberId}
+                          and i.person_id <> ${c.personId}::uuid)
+      returning 1`;
+    if (!rows.length) continue;
+    n++;
+    await db.sql`
+      insert into orbit.person_identities (user_id, person_id, kind, value_norm, value_raw, source)
+      values (${userId}::uuid, ${c.personId}::uuid, 'linkedin_member', ${c.memberId}, ${c.memberId}, 'unipile')
+      on conflict (user_id, kind, value_norm) do nothing`;
+  }
+  return n;
+}
+
+/**
+ * The target's LinkedIn mutuals with member ids, best first: the introducers of the ranked routes in order, then the
+ * other mutuals by the student's tie score. Blocked pairs are left out (nothing to weigh).
+ */
+export function mutualsToWeigh(
+  g: UserGraph,
+  targetId: string,
+  paths: Pick<WarmPath, 'nodes'>[],
+  candidateIds: string[],
+): string[] {
+  const ids = new Set<string>();
+  for (const id of candidateIds) ids.add(id);
+  for (const p of g.pairs.values()) {
+    if (!p.kinds.includes('linkedin_mutual')) continue;
+    if (p.aId === targetId) ids.add(p.bId);
+    else if (p.bId === targetId) ids.add(p.aId);
+  }
+  const ok = (id: string) =>
+    id !== targetId && !!g.people.get(id)?.memberId && !g.blocked.has(pairKeyOf(id, targetId));
+  const out: string[] = [];
+  for (const p of paths) {
+    const before = p.nodes[p.nodes.length - 2];
+    if (before && ids.has(before) && ok(before) && !out.includes(before)) out.push(before);
+  }
+  const rest = [...ids]
+    .filter((id) => ok(id) && !out.includes(id))
+    .sort((a, b) => (g.people.get(b)?.score ?? 0) - (g.people.get(a)?.score ?? 0) || a.localeCompare(b));
+  return [...out, ...rest];
+}
+
+/**
+ * Queue the hop_evidence job for a person target (plan 21 §4: only when the student opens a target, never on a timer)
+ * when it has mutuals with member ids and its evidence is not fresh; 'queued' tells the app hop words may still change.
+ */
+async function queueHopEvidence(
+  s: Services,
+  userId: string,
+  g: UserGraph,
+  targetId: string,
+  paths: Pick<WarmPath, 'nodes'>[],
+  ext: ExternalResult,
+): Promise<PathsFindResponse['hopEvidence']> {
+  const target = g.people.get(targetId);
+  if (!target?.memberId || !s.unipile.configured) return undefined;
+  const accountId = await linkedinAccountOf(s.db, userId);
+  if (!accountId) return undefined;
+  const fromSearch = ext.candidates
+    .filter((c) => c.source === 'linkedin_mutual' && c.personId)
+    .map((c) => c.personId!);
+  const mutuals = mutualsToWeigh(g, targetId, paths, fromSearch);
+  if (!mutuals.length) return undefined;
+  if (await hopEvidenceFresh(sqlCache(s.db, s.now), userId, accountId, target.memberId)) return 'checked';
+  await enqueueHopEvidence(s, userId, targetId, mutuals);
+  return 'queued';
 }
 
 function sourcesOf(ext: ExternalResult): string[] {
@@ -449,6 +550,7 @@ export function bestReach(
     goal,
     people: g.people,
     pairs: g.pairs,
+    blockedPairs: g.blocked,
     now,
     limit: 1,
   });

@@ -197,6 +197,12 @@ export interface PathsFindResponse {
   /** sources consulted: 'graph', 'linkedin_mutual', 'village' */
   sources: string[];
   unconfigured: string[];
+  /**
+   * Plan 21: how the hops into a person target were weighed. 'queued': the LinkedIn evidence is being read in the
+   * background (hop words may change on the next find; the order only then); 'checked': read within the last 30 days.
+   * Absent when there is nothing to read (no LinkedIn, no mutuals with member ids).
+   */
+  hopEvidence?: 'queued' | 'checked';
 }
 /** POST /intros/ask: drafts the intro request and the forwardable blurb (never sends) */
 export interface IntroAskRequest {
@@ -209,6 +215,34 @@ export interface IntroAskRequest {
 export interface IntroAskResponse {
   introRequestId: string;
   draftIds: string[];
+}
+
+/**
+ * What the path looked like when the intro was asked for (plan 21 §8), stored on orbit.intro_requests.hop_features:
+ * P and every hop's p, evidence kind and band, for the fit over outcomes.
+ */
+export interface IntroHopFeatures {
+  p: number;
+  hops: { fromId: string; toId: string; p: number; kind: string; band?: string }[];
+}
+
+/**
+ * The student's corrections on a hop (plan 21 §3.5), both people theirs:
+ *   POST /pairs/block    "they don't really know each other": the pair is never a hop until unblocked
+ *   POST /pairs/unblock
+ *   POST /pairs/close    "they're close": a student_says_close tie (and any block lifted)
+ *   POST /pairs/unclose  the tie removed
+ */
+export interface PairCorrectionRequest {
+  aPersonId: string;
+  bPersonId: string;
+}
+export interface PairCorrectionResponse {
+  /** the pair, a < b */
+  aPersonId: string;
+  bPersonId: string;
+  blocked: boolean;
+  close: boolean;
 }
 
 // ---- drafts, replies, calendar (P5) --------------------------------------------------------------------------------
