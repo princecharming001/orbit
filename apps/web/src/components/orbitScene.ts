@@ -51,6 +51,8 @@ import { STAGE_COLOR } from './people/shared';
 // Tsenta's palette: a deep green accent on warm neutrals
 const ACCENT = '#0f3d2e';
 const ACCENT_RGB = '15,61,46';
+/** the route beam's light: a brighter green between the accent and the app's mint */
+const BEAM_GLOW = '#3fb68b';
 const RING = '#ebe9e6';
 const LABEL = '#857f77';
 const INK = '#0a0a0a';
@@ -116,8 +118,10 @@ export const TIMING = {
   turnMax: 950,
   turnBackMax: 1150,
   retract: 260,
-  cometPeriod: 2500,
-  cometTravel: 1100,
+  /** the route's beam: its trip takes beamBase + beamPerHop for each hop, then it rests before the next one */
+  beamBase: 650,
+  beamPerHop: 420,
+  beamRest: 1150,
   radarTurn: 1200,
   /** the radar shows for at least this long, so a route found at once still reads as "searching" first */
   radarMin: 480,
@@ -445,6 +449,7 @@ export class OrbitScene {
   private you: Pt = { x: 0, y: 0 };
   private scratchA: Pt = { x: 0, y: 0 };
   private scratchB: Pt = { x: 0, y: 0 };
+  private scratchC: Pt = { x: 0, y: 0 };
   private routePts: Pt[] = [];
   private chipXY: [number, number, number, number] = [0, 0, 0, 0];
   private routeCs: Pt[] = [];
@@ -2291,8 +2296,9 @@ export class OrbitScene {
     }
     if (this.path.ids.length > 1 && !this.reduced) {
       const begin = this.cometBegin();
-      const k = Math.max(0, Math.ceil((now - begin) / TIMING.cometPeriod));
-      next = Math.min(next, begin + k * TIMING.cometPeriod);
+      const period = this.beamPeriod();
+      const k = Math.max(0, Math.ceil((now - begin) / period));
+      next = Math.min(next, begin + k * period);
     }
     if (this.web && this.webPath.length && !this.reduced) {
       const period = TIMING.webLight + TIMING.webLightRest;
@@ -2325,13 +2331,23 @@ export class OrbitScene {
     return this.hopAt(this.path.ids.length - 1) + 300;
   }
 
-  /** The comet's trip along the route, 0..1, or -1 while it rests between trips. */
+  /** How long the beam takes to travel the route: longer routes travel longer, at an even pace. */
+  private beamTravel(): number {
+    return TIMING.beamBase + TIMING.beamPerHop * Math.max(1, this.path.ids.length - 1);
+  }
+
+  private beamPeriod(): number {
+    return this.beamTravel() + TIMING.beamRest;
+  }
+
+  /** The beam's trip along the route, 0..1, or -1 while it rests between trips. */
   private cometT(now: number): number {
     if (this.reduced) return -1;
     const begin = this.cometBegin();
     if (now < begin) return -1;
-    const t = (now - begin) % TIMING.cometPeriod;
-    return t < TIMING.cometTravel ? t / TIMING.cometTravel : -1;
+    const t = (now - begin) % this.beamPeriod();
+    const travel = this.beamTravel();
+    return t < travel ? t / travel : -1;
   }
 
   private advance(now: number, dt: number): void {
@@ -2856,50 +2872,74 @@ export class OrbitScene {
     return true;
   }
 
+  /**
+   * A route's hops, drawn out to `upto` (hops, fractional). Each hop is a soft halo under a fine line; while a hop draws
+   * its leading edge is brighter (the line is being laid), and a light chevron past the middle says which way it goes.
+   * The beam (drawComet) travels the finished route.
+   */
   private drawHops(ctx: CanvasRenderingContext2D, ids: string[], upto: number, alpha: number): void {
     if (upto <= 0 || alpha <= 0 || !this.routeCurve(ids)) return;
     const pts = this.routePts;
     const cs = this.routeCs;
     const B = this.scratchB;
+    const C = this.scratchC;
     ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
     ctx.strokeStyle = ACCENT;
-    ctx.fillStyle = ACCENT;
     for (let k = 0; k < pts.length - 1; k++) {
       const p = clamp01(upto - k);
       if (p <= 0) break;
       const a = pts[k]!;
       const b = pts[k + 1]!;
       const A = cs[k]!;
-      const e = this.reduced ? 1 : easing.inOutSine(p);
-      ctx.globalAlpha = 0.16 * alpha;
-      ctx.lineWidth = 7;
+      const e = this.reduced ? 1 : easing.outCubic(p);
+      // a wide, faint halo, then the line itself
+      ctx.globalAlpha = 0.07 * alpha;
+      ctx.lineWidth = 9;
       ctx.beginPath();
       quadPartial(ctx, a.x, a.y, A.x, A.y, b.x, b.y, e);
       ctx.stroke();
-      ctx.globalAlpha = alpha;
-      ctx.lineWidth = 2.2;
+      ctx.globalAlpha = 0.5 * alpha;
+      ctx.lineWidth = 1.8;
       ctx.beginPath();
       quadPartial(ctx, a.x, a.y, A.x, A.y, b.x, b.y, e);
       ctx.stroke();
-      // a small arrowhead halfway along says which way the hop goes, once the line has passed it
+      // the leading edge while the hop is being laid: a short bright stretch that fades back into the line
+      if (e < 1) {
+        const steps = 8;
+        for (let j = 0; j < steps; j++) {
+          const t0 = Math.max(0, e - 0.22 * (1 - j / steps));
+          const t1 = Math.max(0, e - 0.22 * (1 - (j + 1) / steps));
+          if (t1 <= t0) continue;
+          quadPoint(B, a.x, a.y, A.x, A.y, b.x, b.y, t0);
+          quadPoint(C, a.x, a.y, A.x, A.y, b.x, b.y, t1);
+          ctx.globalAlpha = alpha * (0.5 + 0.5 * ((j + 1) / steps));
+          ctx.lineWidth = 1.8 + 1.2 * ((j + 1) / steps);
+          ctx.beginPath();
+          ctx.moveTo(B.x, B.y);
+          ctx.lineTo(C.x, C.y);
+          ctx.stroke();
+        }
+      }
+      // a light open chevron past the middle, once the line has passed it
       if (e < 0.62) continue;
-      quadPoint(B, a.x, a.y, A.x, A.y, b.x, b.y, 0.55);
-      // the curve's direction at that point
-      const tx = 0.9 * (A.x - a.x) + 1.1 * (b.x - A.x);
-      const ty = 0.9 * (A.y - a.y) + 1.1 * (b.y - A.y);
+      quadPoint(B, a.x, a.y, A.x, A.y, b.x, b.y, 0.56);
+      const tx = 0.88 * (A.x - a.x) + 1.12 * (b.x - A.x);
+      const ty = 0.88 * (A.y - a.y) + 1.12 * (b.y - A.y);
       const tl = Math.hypot(tx, ty);
       if (tl < 1) continue;
       const ux = tx / tl;
       const uy = ty / tl;
-      ctx.globalAlpha = alpha * clamp01((e - 0.62) / 0.2);
+      ctx.globalAlpha = alpha * 0.75 * clamp01((e - 0.62) / 0.2);
+      ctx.lineWidth = 1.6;
       ctx.beginPath();
-      ctx.moveTo(B.x + ux * 5, B.y + uy * 5);
-      ctx.lineTo(B.x - ux * 4 - uy * 4.5, B.y - uy * 4 + ux * 4.5);
-      ctx.lineTo(B.x - ux * 4 + uy * 4.5, B.y - uy * 4 - ux * 4.5);
-      ctx.closePath();
-      ctx.fill();
+      ctx.moveTo(B.x - ux * 3.5 - uy * 4, B.y - uy * 3.5 + ux * 4);
+      ctx.lineTo(B.x + ux * 2.5, B.y + uy * 2.5);
+      ctx.lineTo(B.x - ux * 3.5 + uy * 4, B.y - uy * 3.5 - ux * 4);
+      ctx.stroke();
     }
     ctx.lineCap = 'butt';
+    ctx.lineJoin = 'miter';
   }
 
   private drawPath(ctx: CanvasRenderingContext2D, now: number): void {
@@ -2912,40 +2952,89 @@ export class OrbitScene {
     ctx.globalAlpha = 1;
   }
 
-  /** A small comet travels the route (You, then each connector, then the target) to show its direction. */
+  /** The point at `u` hops along the route (fractional), from this frame's curve (routeCurve must have run). */
+  private routeAt(out: Pt, u: number): Pt {
+    const pts = this.routePts;
+    const cs = this.routeCs;
+    const hops = pts.length - 1;
+    const i = Math.max(0, Math.min(hops - 1, Math.floor(u)));
+    const a = pts[i]!;
+    const b = pts[i + 1]!;
+    const A = cs[i]!;
+    return quadPoint(out, a.x, a.y, A.x, A.y, b.x, b.y, Math.max(0, Math.min(1, u - i)));
+  }
+
+  /**
+   * A beam travels the route (You, then each connector, then the target) to show its direction: a continuous stretch
+   * of light that brightens and thickens toward a soft glowing head, and a ring that opens round each person as it
+   * reaches them. It eases in and out, fades at the ends, and rests between trips.
+   */
   private drawComet(ctx: CanvasRenderingContext2D, now: number): void {
     const k = this.cometT(now);
     const ids = this.path.ids;
     if (k < 0 || ids.length < 2) return;
     if (!this.routeCurve(ids)) return;
-    const pts = this.routePts;
-    const cs = this.routeCs;
     const hops = ids.length - 1;
-    const head = easing.inOutSine(k) * hops;
+    const head = easing.inOutCubic(k) * hops;
+    const len = Math.min(0.65, 0.3 * hops + 0.2);
+    const fade = clamp01(k / 0.08) * clamp01((1 - k) / 0.12);
     const B = this.scratchB;
-    const out = k > 0.85 ? (1 - k) / 0.15 : 1;
-    for (let j = 9; j >= 0; j--) {
-      const u = head - j * 0.035 * hops;
-      if (u < 0) continue;
-      const i = Math.min(hops - 1, Math.floor(u));
-      const a = pts[i]!;
-      const b = pts[i + 1]!;
-      const A = cs[i]!;
-      quadPoint(B, a.x, a.y, A.x, A.y, b.x, b.y, u - i);
-      const fade = (1 - j / 10) * out;
-      if (j === 0) {
-        ctx.globalAlpha = 0.28 * fade;
-        ctx.fillStyle = ACCENT;
+    const C = this.scratchC;
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = ACCENT;
+    // the beam: short segments from its tail to its head, each brighter and wider, a green light round a dark core
+    const steps = 24;
+    for (const pass of [0, 1] as const) {
+      ctx.strokeStyle = pass === 0 ? BEAM_GLOW : ACCENT;
+      for (let j = 0; j < steps; j++) {
+        const u0 = head - len * (1 - j / steps);
+        const u1 = head - len * (1 - (j + 1) / steps);
+        if (u1 <= 0) continue;
+        this.routeAt(B, Math.max(0, u0));
+        this.routeAt(C, u1);
+        const w = (j + 1) / steps;
+        ctx.globalAlpha = fade * (pass === 0 ? 0.22 * w : w ** 1.5);
+        ctx.lineWidth = pass === 0 ? 3 + 9 * w : 1.6 + 2.2 * w;
         ctx.beginPath();
-        ctx.arc(B.x, B.y, 8, 0, TAU);
-        ctx.fill();
+        ctx.moveTo(B.x, B.y);
+        ctx.lineTo(C.x, C.y);
+        ctx.stroke();
       }
-      ctx.globalAlpha = (j === 0 ? 1 : 0.5) * fade;
-      ctx.fillStyle = j === 0 ? '#ffffff' : ACCENT;
-      ctx.beginPath();
-      ctx.arc(B.x, B.y, j === 0 ? 3.2 : Math.max(0.6, 3 - j * 0.22), 0, TAU);
-      ctx.fill();
     }
+    ctx.strokeStyle = BEAM_GLOW;
+    // a ring opens round each person the beam reaches
+    for (let i = 1; i <= hops; i++) {
+      const since = head - i;
+      if (since < 0 || since > 0.55) continue;
+      const s = since / 0.55;
+      const v = this.routePts[i] as Pt & { pr?: number };
+      const r0 = (v.pr ?? 8) + 3;
+      ctx.globalAlpha = fade * 0.6 * (1 - s) * (1 - s);
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.arc(v.x, v.y, r0 + 12 * easing.outCubic(s), 0, TAU);
+      ctx.stroke();
+    }
+    // the head: a soft green glow round a bright core
+    this.routeAt(B, head);
+    ctx.fillStyle = BEAM_GLOW;
+    ctx.globalAlpha = fade * 0.16;
+    ctx.beginPath();
+    ctx.arc(B.x, B.y, 14, 0, TAU);
+    ctx.fill();
+    ctx.globalAlpha = fade * 0.32;
+    ctx.beginPath();
+    ctx.arc(B.x, B.y, 7, 0, TAU);
+    ctx.fill();
+    ctx.globalAlpha = fade;
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(B.x, B.y, 3, 0, TAU);
+    ctx.fill();
+    ctx.strokeStyle = ACCENT;
+    ctx.lineWidth = 1.4;
+    ctx.stroke();
+    ctx.lineCap = 'butt';
     ctx.globalAlpha = 1;
   }
 

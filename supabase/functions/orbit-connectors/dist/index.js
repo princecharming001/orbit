@@ -369,7 +369,7 @@ var DEFAULT_LEDGER = { profile: 100, posts: 100, search: 100 };
 var LEDGER_CEILINGS = {
   profile: { route: 1, photo: 0.8, enrich: 0.7 },
   posts: { engagement: 1, activity: 0.85 },
-  search: { mutuals: 1, discover: 0.8 }
+  search: { mutuals: 1, discover: 0.8, logos: 0.6 }
 };
 function ledgerLimit(kind, caller, total) {
   const share = LEDGER_CEILINGS[kind][caller] ?? 0;
@@ -1621,6 +1621,14 @@ async function enrichmentRoute(deps, path, body, ctx) {
       return json(503, { error: "unavailable right now" }, h);
     }
     if (!within) return json(200, LEDGER_LIMIT, h);
+    if (kind === "company" && !text(body.identifier, 200) && text(body.name, 160)) {
+      try {
+        within = await ctx.spend("search", "logos");
+      } catch {
+        return json(503, { error: "unavailable right now" }, h);
+      }
+      if (!within) return json(200, LEDGER_LIMIT, h);
+    }
   }
   try {
     if (kind === "profile") return json(200, await unipileProfile(deps, body, doFetch), h);
@@ -1789,9 +1797,35 @@ async function unipilePhoto(deps, body, doFetch) {
     }
   };
 }
+function companyNameKey(name) {
+  return String(name ?? "").toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/&/g, " and ").replace(/[^a-z0-9]+/g, " ").replace(/\b(the|inc|incorporated|llc|ltd|limited|corp|corporation|co|company|gmbh|plc|sa|ag|bv|lp|llp)\b/g, " ").replace(/\s+/g, " ").trim();
+}
+async function companyByName(deps, accountId, name, doFetch) {
+  const q = new URLSearchParams({ account_id: accountId, limit: "10" });
+  const res = await doFetch(`${deps.unipileBase}/api/v1/linkedin/search?${q}`, {
+    method: "POST",
+    headers: uHeaders(deps),
+    body: JSON.stringify({ api: "classic", category: "companies", keywords: name })
+  });
+  if (res.status === 429)
+    return { ok: false, reason: "throttled", message: "LinkedIn asked Orbit to slow down. It carries on later." };
+  if (res.status >= 400 && res.status < 500) return { ok: false, reason: "refused", message: await unipileError(res) };
+  if (!res.ok) throw new Error(`unipile ${res.status}`);
+  const items = (await res.json()).items ?? [];
+  const key = companyNameKey(name);
+  const same = items.filter((c) => companyNameKey(c.name) === key && (typeof c.id === "string" || typeof c.id === "number"));
+  if (same.length === 1) return { id: String(same[0].id) };
+  return same.length ? { ok: false, reason: "ambiguous", message: "LinkedIn has more than one company of that name." } : { ok: false, reason: "not_found", message: "LinkedIn could not find that company." };
+}
 async function unipileCompany(deps, body, doFetch) {
   const accountId = String(body.accountId ?? "");
-  const identifier = text(body.identifier, 200);
+  let identifier = text(body.identifier, 200);
+  const byName = !identifier ? text(body.name, 160) : void 0;
+  if (byName) {
+    const found = await companyByName(deps, accountId, byName, doFetch);
+    if (!("id" in found)) return found;
+    identifier = found.id;
+  }
   if (!identifier) return { ok: false, reason: "bad_request", message: "Say which company to read." };
   const q = new URLSearchParams({ account_id: accountId });
   const res = await doFetch(

@@ -11625,13 +11625,10 @@ function rankWarmPaths(input) {
   const now = input.now ?? /* @__PURE__ */ new Date();
   const target = input.people.get(input.targetId);
   const tName = input.target?.name ?? target?.name ?? "them";
-  if (target && target.score >= DIRECT_TIE_SCORE) {
+  const direct = target && target.score >= DIRECT_TIE_SCORE ? (() => {
     const band = TIE_BAND_LABELS[tieBand(target.score)];
-    return {
-      paths: [],
-      direct: { score: target.score, band, text: `You know ${tName} (${band} · ${target.score})` }
-    };
-  }
+    return { score: target.score, band, text: `You know ${tName} (${band} · ${target.score})` };
+  })() : void 0;
   const blocked = input.blockedPairs;
   const candidates = (input.candidates ?? []).filter(
     (c) => !blocked?.has(pk(c.introducerId, input.targetId))
@@ -11693,7 +11690,7 @@ function rankWarmPaths(input) {
   }
   for (const f of found)
     if (viaMutual(f.nodes) && (f.p <= MIN_PATH_P || rg.lifted.has(f.firstHopId))) f.weak = true;
-  if (target && target.score > 0 && input.target?.pReply !== void 0) {
+  if (!direct && target && target.score > 0 && input.target?.pReply !== void 0) {
     const p = Math.max(0, Math.min(1, input.target.pReply));
     found.push({
       nodes: [USER_NODE, input.targetId],
@@ -11707,7 +11704,7 @@ function rankWarmPaths(input) {
     (a, b) => b.p - a.p || a.nodes.length - b.nodes.length || a.nodes.join(">").localeCompare(b.nodes.join(">"))
   );
   const viable = found.filter((f) => f.p > MIN_PATH_P || viaMutual(f.nodes));
-  if (!viable.length) return { paths: [], fallback: "cold" };
+  if (!viable.length) return direct ? { paths: [], direct } : { paths: [], fallback: "cold" };
   const firstHops = new Set(viable.map((f) => f.firstHopId));
   const otherWays = firstHops.size - 1;
   const chosen = [];
@@ -11724,6 +11721,7 @@ function rankWarmPaths(input) {
   }
   const nameOf2 = (id) => id === input.targetId ? tName : input.people.get(id)?.name ?? "someone";
   return {
+    ...direct ? { direct } : {},
     paths: chosen.map((f) => ({
       ...f,
       hops: f.hops.map(
