@@ -413,6 +413,10 @@ export function threadActions(engine: ChatEngine) {
         conversation: s.conversation?.id === conversationId ? { ...s.conversation, title } : s.conversation,
       }));
     },
+    async pin(conversationId: string, pinned: boolean) {
+      await engine.pinConversation(conversationId, pinned);
+      set((s) => ({ historyVersion: s.historyVersion + 1 }));
+    },
     async archive(conversationId: string) {
       await engine.archiveConversation(conversationId);
       if (state.conversation?.id === conversationId) this.newChat();

@@ -24,6 +24,7 @@
 import type { OutboundMessage, Person, Suggestion } from '@orbit/core';
 import { db } from '../../db/schema';
 import { SETUP_CHIPS } from '../agent/setupChips';
+import { byPinThenActivity } from '../agent/store';
 import type {
   ChatAction,
   ChatConversation,
@@ -292,7 +293,7 @@ export function createFakeChatEngine(opts: { mode?: 'llm' | 'router'; delay?: nu
     async listConversations() {
       return [...conversations.values()]
         .filter((c) => !temporary.has(c.id) && !c.archivedAt && (messages.get(c.id)?.length ?? 0) > 0)
-        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+        .sort(byPinThenActivity);
     },
     async loadConversation(id) {
       const conversation = conversations.get(id);
@@ -308,6 +309,11 @@ export function createFakeChatEngine(opts: { mode?: 'llm' | 'router'; delay?: nu
       log('archiveConversation', id);
       const c = conversations.get(id);
       if (c) c.archivedAt = now();
+    },
+    async pinConversation(id, pinned) {
+      log('pinConversation', id, pinned);
+      const c = conversations.get(id);
+      if (c && !temporary.has(id)) c.pinnedAt = pinned ? now() : undefined;
     },
     async send(conversationId, text, onEvent, signal) {
       log('send', conversationId, text);

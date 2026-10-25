@@ -23,6 +23,16 @@ export interface AppendInput {
 }
 
 /** The untrusted-content nonce of a conversation: derived from its random id, so it is stable without a column. */
+/** Pinned first (oldest pin first, so a new pin goes under the ones already there), then newest activity first. */
+export function byPinThenActivity(
+  a: Pick<ChatConversation, 'pinnedAt' | 'updatedAt'>,
+  b: Pick<ChatConversation, 'pinnedAt' | 'updatedAt'>,
+): number {
+  if (a.pinnedAt && b.pinnedAt) return a.pinnedAt.localeCompare(b.pinnedAt);
+  if (a.pinnedAt || b.pinnedAt) return a.pinnedAt ? -1 : 1;
+  return b.updatedAt.localeCompare(a.updatedAt);
+}
+
 export function conversationNonce(conversationId: string): string {
   const body = conversationId.slice(conversationId.indexOf('_') + 1);
   const hex = body.replace(/[^0-9a-f]/gi, '').toLowerCase();
@@ -79,10 +89,21 @@ export class ChatStore {
     return this.temporary.get(id)?.conversation ?? (await outside(() => db.chatConversations.get(id)));
   }
 
-  /** Saved conversations that are not archived, newest activity first. Temporary ones are not listed. */
+  /**
+   * Saved conversations that are not archived: the pinned ones first, in the order they were pinned, then the rest by
+   * newest activity. Temporary ones are not listed.
+   */
   async listConversations(userId: string): Promise<ChatConversation[]> {
     const rows = await outside(() => db.chatConversations.where('userId').equals(userId).toArray());
-    return rows.filter((c) => !c.archivedAt).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    return rows.filter((c) => !c.archivedAt).sort(byPinThenActivity);
+  }
+
+  /** Pin a saved conversation to the top of Recent, or unpin it. A temporary chat is never kept, so never pinned. */
+  async pinConversation(id: string, pinned: boolean, now = new Date()): Promise<void> {
+    if (this.temporary.has(id)) return;
+    await outside(() =>
+      db.chatConversations.update(id, { pinnedAt: pinned ? now.toISOString() : undefined }),
+    );
   }
 
   async renameConversation(id: string, title: string): Promise<void> {

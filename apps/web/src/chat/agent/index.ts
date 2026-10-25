@@ -284,6 +284,7 @@ export function createChatEngine(deps: ChatEngineDeps): ChatEngine {
     },
     renameConversation: (id, title) => store.renameConversation(id, title),
     archiveConversation: (id) => store.archiveConversation(id, clock()),
+    pinConversation: (id, pinned) => store.pinConversation(id, pinned, clock()),
 
     async send(conversationId, text, onEvent, signal) {
       const conversation = await conversationFor(conversationId, onEvent);

@@ -127,6 +127,8 @@ export interface ChatConversation {
   createdAt: string;
   updatedAt: string;
   archivedAt?: string;
+  /** pinned to the top of Recent in the sidebar, when */
+  pinnedAt?: string;
 }
 
 /** A stored turn. `content` holds the whole API content block array for assistant turns (thinking, tool_use,
@@ -204,6 +206,8 @@ export interface ChatEngine {
   ): Promise<{ conversation: ChatConversation; messages: ChatMessage[]; actions: ChatAction[] }>;
   renameConversation(id: string, title: string): Promise<void>;
   archiveConversation(id: string): Promise<void>;
+  /** pin a saved conversation to the top of Recent, or unpin it */
+  pinConversation(id: string, pinned: boolean): Promise<void>;
   /** one student turn; events stream to the UI; resolves when the turn ends (done or error event already emitted) */
   send(
     conversationId: string,

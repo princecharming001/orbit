@@ -6,7 +6,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { Logo } from '../components/AppShell';
 import { TrustedBy } from '../components/landing/TrustedBy';
 import { db } from '../db/schema';
-import { createLocalUser, leaveDemoForOwnSetup } from '../engine/account';
+import { createLocalUser, leaveDemoForOwnSetup, savedProfiles } from '../engine/account';
 import { DEMO_USER_ID, demoResetPrompt, loadDemo } from '../engine/demo';
 import { startGoogleSignIn } from '../integrations/orbitApi';
 import { envGoogleClientId } from '../integrations/prefs';
@@ -94,7 +94,9 @@ export function Landing() {
         )}
       </Button>
     );
-  // a build with Orbit accounts: someone who has one signs in with Google and lands in their own Orbit
+  // a build with Orbit accounts: someone who has one signs in with Google and lands in their own Orbit. Without
+  // accounts, someone who logged out gets back to the profile saved in this browser (never a second, empty one).
+  const saved = useLiveQuery(() => savedProfiles(DEMO_USER_ID), []);
   const logIn =
     account.mode && !account.signedIn ? (
       <Button
@@ -103,6 +105,10 @@ export function Landing() {
         disabled={!!busy}
         data-testid="landing-login"
       >
+        Log in
+      </Button>
+    ) : !account.mode && (!userId || isDemo) && saved?.length ? (
+      <Button variant="ghost" onClick={() => nav('/login')} disabled={!!busy} data-testid="landing-login">
         Log in
       </Button>
     ) : null;

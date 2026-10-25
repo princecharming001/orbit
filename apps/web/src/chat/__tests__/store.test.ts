@@ -34,6 +34,28 @@ describe('conversations', () => {
     expect((await store.getConversation(a.id))?.model).toBe('m');
   });
 
+  it('lists pinned conversations first, in the order they were pinned, and unpinning puts one back by activity', async () => {
+    const at = (h: number) => new Date(`2026-10-12T${String(h).padStart(2, '0')}:00:00Z`);
+    const a = await store.createConversation({ userId: 'u1', model: 'm', temporary: false, now: at(9) });
+    const b = await store.createConversation({ userId: 'u1', model: 'm', temporary: false, now: at(10) });
+    const c = await store.createConversation({ userId: 'u1', model: 'm', temporary: false, now: at(11) });
+    const ids = async () => (await store.listConversations('u1')).map((x) => x.id);
+    expect(await ids()).toEqual([c.id, b.id, a.id]);
+    await store.pinConversation(a.id, true, at(12));
+    await store.pinConversation(b.id, true, at(13));
+    expect(await ids()).toEqual([a.id, b.id, c.id]);
+    // new activity on an unpinned chat never moves it above a pinned one
+    await store.append(c.id, { role: 'user', content: 'hi' }, at(14));
+    expect(await ids()).toEqual([a.id, b.id, c.id]);
+    await store.pinConversation(a.id, false);
+    expect(await ids()).toEqual([b.id, c.id, a.id]);
+    expect((await store.getConversation(a.id))?.pinnedAt).toBeUndefined();
+    // a temporary chat is never kept, so never pinned
+    const t = await store.createConversation({ userId: 'u1', model: 'm', temporary: true });
+    await store.pinConversation(t.id, true);
+    expect((await store.getConversation(t.id))?.pinnedAt).toBeUndefined();
+  });
+
   it('keeps a temporary conversation in memory only, with its actions, and never lists it', async () => {
     const t = await store.createConversation({ userId: 'u1', model: 'm', temporary: true });
     expect(store.isTemporary(t.id)).toBe(true);

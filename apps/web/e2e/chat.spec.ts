@@ -133,7 +133,11 @@ test.describe('Chat home', () => {
     await expect.poll(async () => (await rail.boundingBox())!.width).toBe(64);
     await expect(rail.getByRole('button', { name: 'Expand sidebar' })).toBeVisible();
     await expect(rail.getByRole('link', { name: /^people$/i })).toHaveAttribute('data-tip', 'People');
-    await expect(rail.getByRole('link', { name: 'Alex Rivera' })).toBeVisible();
+    // the student's avatar opens the account menu (profile and settings, Log out)
+    await expect(rail.getByRole('button', { name: 'Alex Rivera' })).toHaveAttribute(
+      'data-tip',
+      'Alex Rivera',
+    );
     expect(
       (await rail.getByRole('link', { name: /^people$/i }).boundingBox())!.height,
     ).toBeGreaterThanOrEqual(44);
@@ -378,6 +382,17 @@ test.describe('Chat home', () => {
     expect(
       (await calls(page)).some((c) => c.method === 'renameConversation' && c.args[1] === 'Pipeline check'),
     ).toBe(true);
+    // pin: "Pipeline check" moves above today's chats under Pinned, and unpinning puts it back
+    await today.getByTestId('recent-item').last().hover();
+    await today.getByTestId('recent-pin').last().click();
+    const pinned = page.getByTestId('recent-pinned');
+    await expect(pinned.getByTestId('recent-item')).toHaveText(['Pipeline check']);
+    await expect(today.getByTestId('recent-item')).toHaveText(['who went quiet']);
+    expect((await calls(page)).some((c) => c.method === 'pinConversation' && c.args[1] === true)).toBe(true);
+    await pinned.getByTestId('recent-item').hover();
+    await pinned.getByTestId('recent-unpin').click();
+    await expect(pinned).toHaveCount(0);
+    await expect(today.getByTestId('recent-item')).toHaveCount(2);
     // archive
     await today.getByTestId('recent-item').first().hover();
     await today.getByTestId('recent-archive').first().click();

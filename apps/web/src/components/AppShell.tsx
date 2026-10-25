@@ -4,11 +4,14 @@ import {
   Compass,
   Ellipsis,
   Inbox,
+  LogOut,
   Map as MapIcon,
   MessageSquare,
   NotebookPen,
   PanelLeft,
   Pencil,
+  Pin,
+  PinOff,
   Search,
   Settings,
   SquarePen,
@@ -34,6 +37,7 @@ import { MeetingNotesAutoSync } from './MeetingNotesAutoSync';
 import { MorningBrief } from './MorningBrief';
 import { OutboxScheduler } from './OutboxScheduler';
 import { ReplyWatch } from './ReplyWatch';
+import { useLogOut } from './useLogOut';
 
 // the chat is home (New chat and the logo open it); People holds the board and the list, Drafts what waits to be sent
 const NAV_TOP = [
@@ -106,6 +110,7 @@ export function AppShell() {
         outbound.filter((o) => o.status === 'handed_off').length
       );
     }, [userId]) ?? 0;
+  const logOut = useLogOut();
   const gmail =
     useLiveQuery(
       async () =>
@@ -261,32 +266,7 @@ export function AppShell() {
             'rail-search',
           )}
           {railLink('/settings', 'Settings', Settings)}
-          {user &&
-            (expanded ? (
-              // the student at the foot of the sidebar: a quiet row, so the pages above stay the focus
-              <NavLink
-                to="/settings/profile"
-                className="mt-2 px-2.5 h-12 rounded-[10px] text-ink flex items-center gap-2.5 text-[13px] hover:bg-canvas-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-                data-testid="account-row"
-              >
-                <Avatar name={user.fullName} src={user.avatarUrl} id={user.id} size={30} />
-                <div className="min-w-0">
-                  <div className="font-medium truncate">{user.fullName}</div>
-                  <div className="text-[12px] text-ink-3 truncate">
-                    {gmail ? 'Gmail connected' : 'Local data'}
-                  </div>
-                </div>
-              </NavLink>
-            ) : (
-              <NavLink
-                to="/settings/profile"
-                className="tip mt-1 w-11 h-11 rounded-full inline-flex items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-                aria-label={user.fullName}
-                data-tip={user.fullName}
-              >
-                <Avatar name={user.fullName} src={user.avatarUrl} id={user.id} size={30} />
-              </NavLink>
-            ))}
+          {user && <AccountMenu user={user} gmail={gmail} expanded={expanded} />}
         </div>
       </aside>
       <div className="flex-1 min-w-0 flex flex-col">
@@ -400,9 +380,14 @@ export function AppShell() {
                 <div className="mt-1 px-3 h-12 flex items-center gap-2.5 text-[13px] border-t border-line-2">
                   <Avatar name={user.fullName} src={user.avatarUrl} id={user.id} size={28} />
                   <span className="truncate">{user.fullName}</span>
-                  <span className="ml-auto text-ink-3 text-[12px]">
-                    {gmail ? 'Gmail connected' : 'Local data'}
-                  </span>
+                  <button
+                    type="button"
+                    onClick={() => void logOut()}
+                    className="ml-auto h-8 px-3 rounded-full inline-flex items-center gap-1.5 text-[13px] text-ink-2 hover:bg-canvas-2 hover:text-ink"
+                    data-testid="drawer-log-out"
+                  >
+                    <LogOut size={14} aria-hidden /> Log out
+                  </button>
                 </div>
               )}
             </div>
@@ -461,7 +446,100 @@ export function AppShell() {
   );
 }
 
-/** Recent conversations in the expanded sidebar, newest first, grouped by day, with rename and archive. */
+/**
+ * The student at the foot of the sidebar: a quiet row (an avatar alone when the sidebar is narrow) that opens a small
+ * menu above it, with their profile and settings, and Log out.
+ */
+function AccountMenu({
+  user,
+  gmail,
+  expanded,
+}: {
+  user: { id: string; fullName: string; avatarUrl?: string };
+  gmail: boolean;
+  expanded: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const logOut = useLogOut();
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: PointerEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const esc = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
+    window.addEventListener('pointerdown', away);
+    window.addEventListener('keydown', esc);
+    return () => {
+      window.removeEventListener('pointerdown', away);
+      window.removeEventListener('keydown', esc);
+    };
+  }, [open]);
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        className={cx(
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 transition-colors',
+          expanded
+            ? 'mt-2 w-full px-2.5 h-12 rounded-[10px] text-ink flex items-center gap-2.5 text-[13px] text-left hover:bg-canvas-2'
+            : 'tip mt-1 w-11 h-11 rounded-full inline-flex items-center justify-center',
+          open && expanded && 'bg-canvas-2',
+        )}
+        aria-label={expanded ? undefined : user.fullName}
+        data-tip={expanded ? undefined : user.fullName}
+        data-testid="account-row"
+      >
+        <Avatar name={user.fullName} src={user.avatarUrl} id={user.id} size={30} />
+        {expanded && (
+          <div className="min-w-0">
+            <div className="font-medium truncate">{user.fullName}</div>
+            <div className="text-[12px] text-ink-3 truncate">{gmail ? 'Gmail connected' : 'Local data'}</div>
+          </div>
+        )}
+      </button>
+      {open && (
+        <div
+          role="menu"
+          className={cx(
+            'pop-in absolute z-50 bottom-full mb-1.5 w-56 rounded-[12px] border border-line bg-canvas p-1.5 shadow-[var(--shadow-card)]',
+            expanded ? 'left-0' : 'left-0',
+          )}
+          data-testid="account-menu"
+        >
+          <NavLink
+            to="/settings/profile"
+            role="menuitem"
+            onClick={() => setOpen(false)}
+            className="h-9 px-2.5 rounded-[8px] flex items-center gap-2 text-[13.5px] text-ink-2 hover:bg-canvas-2 hover:text-ink"
+          >
+            <Settings size={15} aria-hidden /> Profile and settings
+          </NavLink>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              void logOut();
+            }}
+            className="w-full h-9 px-2.5 rounded-[8px] flex items-center gap-2 text-[13.5px] text-ink-2 hover:bg-canvas-2 hover:text-ink"
+            data-testid="log-out"
+          >
+            <LogOut size={15} aria-hidden /> Log out
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Recent conversations in the expanded sidebar: the pinned ones on top, then the rest newest first, grouped by day,
+ * each with pin, rename and archive.
+ */
 function Recent({ chat }: { chat: ReturnType<typeof threadActions> }) {
   const engine = useChatEngine();
   const thread = useThread();
@@ -480,12 +558,17 @@ function Recent({ chat }: { chat: ReturnType<typeof threadActions> }) {
   }, [engine, thread.historyVersion]);
   const groups = useMemo(() => {
     const now = new Date();
-    const g: Record<'Today' | 'Yesterday' | 'Earlier', ChatConversation[]> = {
+    const g: Record<'Pinned' | 'Today' | 'Yesterday' | 'Earlier', ChatConversation[]> = {
+      Pinned: [],
       Today: [],
       Yesterday: [],
       Earlier: [],
     };
     for (const c of items) {
+      if (c.pinnedAt) {
+        g.Pinned.push(c);
+        continue;
+      }
       const d = calendarDaysBetween(new Date(c.updatedAt), now);
       g[d <= 0 ? 'Today' : d === 1 ? 'Yesterday' : 'Earlier'].push(c);
     }
@@ -533,7 +616,7 @@ function Recent({ chat }: { chat: ReturnType<typeof threadActions> }) {
                           type="button"
                           onClick={() => open(c.id)}
                           className={cx(
-                            'w-full h-8 px-2.5 pr-16 rounded-[10px] text-left text-[13.5px] text-ink-2 truncate hover:bg-[#f5f4f2] hover:text-ink transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/20',
+                            'w-full h-8 px-2.5 pr-24 rounded-[10px] text-left text-[13.5px] text-ink-2 truncate hover:bg-[#f5f4f2] hover:text-ink transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/20',
                             thread.conversation?.id === c.id && 'bg-[#f0efed] text-ink font-medium',
                           )}
                           data-testid="recent-item"
@@ -541,6 +624,16 @@ function Recent({ chat }: { chat: ReturnType<typeof threadActions> }) {
                           {c.title}
                         </button>
                         <span className="absolute right-1 top-1 flex gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100">
+                          <button
+                            type="button"
+                            className="w-7 h-7 rounded-md inline-flex items-center justify-center text-ink-3 hover:bg-white hover:text-ink"
+                            aria-label={c.pinnedAt ? `Unpin ${c.title}` : `Pin ${c.title}`}
+                            title={c.pinnedAt ? 'Unpin' : 'Pin to the top'}
+                            onClick={() => chat.pin(c.id, !c.pinnedAt)}
+                            data-testid={c.pinnedAt ? 'recent-unpin' : 'recent-pin'}
+                          >
+                            {c.pinnedAt ? <PinOff size={13} aria-hidden /> : <Pin size={13} aria-hidden />}
+                          </button>
                           <button
                             type="button"
                             className="w-7 h-7 rounded-md inline-flex items-center justify-center text-ink-3 hover:bg-white hover:text-ink"

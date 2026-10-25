@@ -105,3 +105,16 @@ export async function deleteAllData(): Promise<void> {
   await wipeDatabase();
   await db.kv.delete(CURRENT_USER_KEY);
 }
+
+/**
+ * The Orbit profiles saved in this browser, for Log in: everyone who got as far as giving a name, newest first. The
+ * demo is not one (the landing page has its own button for it).
+ */
+export async function savedProfiles(demoUserId: string): Promise<User[]> {
+  const users = await db.users.toArray();
+  return users
+    .filter((u) => u.id !== demoUserId && !!(u.fullName.trim() || u.email.trim()))
+    .sort((a, b) =>
+      (b.onboardingCompletedAt ?? b.createdAt).localeCompare(a.onboardingCompletedAt ?? a.createdAt),
+    );
+}

@@ -11,6 +11,7 @@ import { CompanyPage } from './pages/Company';
 import { Discover } from './pages/Discover';
 import { InboxPage } from './pages/Inbox';
 import { Landing } from './pages/Landing';
+import { LogInPage } from './pages/LogIn';
 import { MapPage } from './pages/MapPage';
 import { NotesNew } from './pages/NotesNew';
 import { Onboarding, onboardingPath } from './pages/Onboarding';
@@ -68,6 +69,8 @@ export function App({ chatEngine }: { chatEngine?: ChatEngine }) {
             <Routes>
               {/* the landing page stays reachable for someone signed in (a bookmark, the demo's way back) */}
               <Route path="/welcome" element={<Landing />} />
+              {/* Log in: Google with Orbit accounts, the profiles saved in this browser without them */}
+              <Route path="/login" element={<LogInPage />} />
               {/* public: anyone can ask Orbit never to research them (docs/plan/20 §5) */}
               <Route path="/remove-me" element={<RemoveMePage />} />
               {/* Google sign-in comes back here in account mode (orbit-api redirects with #code or #error) */}
