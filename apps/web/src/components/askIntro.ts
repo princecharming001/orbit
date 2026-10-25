@@ -1,4 +1,4 @@
-import type { User } from '@orbit/core';
+import type { ReachPath, User } from '@orbit/core';
 import { useNavigate } from 'react-router-dom';
 import { db } from '../db/schema';
 import { requestIntro } from '../engine/drafts';
@@ -11,9 +11,9 @@ import { useToast } from '../ui';
 export function useAskIntro(user: User | null | undefined) {
   const nav = useNavigate();
   const toast = useToast();
-  return async (connectorId: string, targetId: string, score: number) => {
+  return async (connectorId: string, targetId: string, score: number, hops?: ReachPath['hops']) => {
     if (!user) return;
-    const r = await requestIntro(user, connectorId, targetId, { path: { score } });
+    const r = await requestIntro(user, connectorId, targetId, { path: { score, hops } });
     if (!r) {
       toast.push({ text: `Orbit couldn't find one of them to draft the intro request.`, tone: 'bad' });
       return;

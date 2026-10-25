@@ -1,4 +1,4 @@
-import type { IntroWeb, OrbitNode, Person, ReachPath } from '@orbit/core';
+import type { ExternalCandidate, IntroWeb, OrbitNode, Person, ReachPath } from '@orbit/core';
 import {
   buildIntroWeb,
   combinedPairWeights,
@@ -18,6 +18,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAskIntro } from '../components/askIntro';
 import { CompanyLogo, LogoText } from '../components/CompanyLogo';
 import { MapPersonCard } from '../components/map/MapPersonCard';
+import { PairNoteMenu } from '../components/map/PairNoteMenu';
 import { ReachMutuals } from '../components/map/ReachMutuals';
 import { ReachSearch } from '../components/map/ReachSearch';
 import { type CardPlace, OrbitMap, useCoarsePointer } from '../components/OrbitMap';
@@ -33,6 +34,7 @@ import {
   type CompanyReach,
   isColdDirect,
   isUnambiguous,
+  mutualStandings,
   type ReachCandidate,
   rankReachTargets,
   reachCandidates,
@@ -42,7 +44,9 @@ import {
   WARMER_ROUTES_WHY,
   type WarmReachPath,
 } from '../engine/graph';
+import { checkHops, checkState, hopEvidenceVersion, subscribeHopEvidence } from '../engine/hopEvidence';
 import { addLinkedInFound, type FoundView } from '../engine/linkedinSearch';
+import { subscribePairNotes } from '../engine/pairNotes';
 import { maintenanceRunning, watchMaintenance } from '../engine/sync';
 import { useSession } from '../state/session';
 import { useShowReasoning } from '../state/showReasoning';
@@ -76,6 +80,14 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? o
 /** Someone the search can offer: a person with a real name, not hidden. */
 const named = (p: Person) => p.isHuman && !p.hiddenAt && hasRealName(p);
 
+/** How well two people on a route know each other, in the route card's words (plan 21 §3.7). */
+const HOP_WORDS = {
+  close: 'close',
+  know: 'know each other',
+  connected: 'connected',
+  unclear: 'unclear',
+} as const;
+
 export function MapPage() {
   const { userId, user } = useSession();
   // why a route goes through someone: hidden unless the student turned explanations on
@@ -100,6 +112,12 @@ export function MapPage() {
   const [filter, setFilter] = useState<Filter>('all');
   // undefined while routes are being computed, so the panel never claims "no route" before it knows
   const [paths, setPaths] = useState<WarmReachPath[] | undefined>([]);
+  // plan 21: routes re-ranked by evidence that landed while the student was reading; applied when they say so
+  const [pendingPaths, setPendingPaths] = useState<WarmReachPath[]>();
+  // the LinkedIn mutuals and Village introducers the current routes were ranked with, for re-ranking on new evidence
+  const candidatesRef = useRef<ExternalCandidate[]>([]);
+  // re-render when a LinkedIn read starts or ends, for the hops' "Checking…"
+  useSyncExternalStore(subscribeHopEvidence, hopEvidenceVersion, hopEvidenceVersion);
   const [choices, setChoices] = useState<ReachCandidate[]>();
   const [pathIdx, setPathIdx] = useState(0);
   // the company the map is turned to: set the moment the student asks, from what the map already knows
@@ -477,7 +495,9 @@ export function MapPage() {
       setCompany(undefined);
       setChoices(undefined);
       setPaths(undefined);
+      setPendingPaths(undefined);
       setPathIdx(0);
+      candidatesRef.current = [];
       // Orbit's own routes show at once; LinkedIn mutuals and Village introducers join them when they answer. With no
       // route of its own, the panel keeps saying it is looking rather than "No route found" before they have.
       const { g } = await buildReachGraph(userId);
@@ -485,12 +505,59 @@ export function MapPage() {
       const local = reachPersonIn(g, p.id);
       if (local.length) setPaths(local);
       const extra = await reachCandidates(userId, p.id);
-      if (!cancelled) setPaths(extra.length ? reachPersonIn(g, p.id, 3, extra) : local);
+      if (cancelled) return;
+      candidatesRef.current = extra;
+      setPaths(extra.length ? reachPersonIn(g, p.id, 3, extra) : local);
+      // plan 21: now that the student opened them, read how well the target's mutuals know them, best-first
+      const mutualIds = extra.filter((c) => c.kind === 'linkedin_mutual').map((c) => c.introducerId);
+      if (!user || !p.linkedinMemberId || !mutualIds.length) return;
+      const standing = mutualStandings(g, p.id, mutualIds);
+      const ranked = [...mutualIds].sort(
+        (a, b) =>
+          (standing.get(b)?.ask ?? 0) * (standing.get(b)?.know ?? 0) -
+          (standing.get(a)?.ask ?? 0) * (standing.get(a)?.know ?? 0),
+      );
+      const people = (await db.people.bulkGet(ranked)).filter((x): x is Person => !!x);
+      if (!cancelled) void checkHops(user, p, people);
     })();
     return () => {
       cancelled = true;
     };
   }, [reachParam, userId]);
+  // plan 21: new evidence (a LinkedIn read landing) updates the hop words in place; a changed order waits behind
+  // "Order changed" so routes never move under the student's hand. What the student says about a pair applies at once.
+  useEffect(() => {
+    if (!userId || !target) return;
+    const id = target.id;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let live = true;
+    const order = (ps: WarmReachPath[]) => ps.map((r) => r.hops.map((h) => h.toId).join('>')).join('|');
+    const recompute = async (theirs: boolean) => {
+      const { g } = await buildReachGraph(userId);
+      if (!live) return;
+      const next = reachPersonIn(g, id, 3, candidatesRef.current);
+      setPaths((cur) => {
+        if (!cur || theirs || order(cur) === order(next)) {
+          setPendingPaths(undefined);
+          return next;
+        }
+        setPendingPaths(next);
+        const same = new Map(next.map((r) => [r.hops.map((h) => h.toId).join('>'), r]));
+        return cur.map((r) => same.get(r.hops.map((h) => h.toId).join('>')) ?? r);
+      });
+    };
+    const offEvidence = subscribeHopEvidence(() => {
+      clearTimeout(timer);
+      timer = setTimeout(() => void recompute(false), 1500);
+    });
+    const offNotes = subscribePairNotes(() => void recompute(true));
+    return () => {
+      live = false;
+      clearTimeout(timer);
+      offEvidence();
+      offNotes();
+    };
+  }, [userId, target?.id]);
   const openCompany = async (orgIdOrName: string, label: string) => {
     if (!userId) return;
     const req = ++viewReq.current;
@@ -643,7 +710,7 @@ export function MapPage() {
   }, [webMode]);
   const askIntro = async (path: ReachPath) => {
     if (!target) return;
-    await askIntroVia(path.hops[0]!.toId, target.id, path.score);
+    await askIntroVia(path.hops[0]!.toId, target.id, path.score, path.hops);
   };
   // the same intro request for a warm intro path from Village, which names who introduces and to whom
   const askIntroVia = useAskIntro(user);
@@ -1157,6 +1224,22 @@ export function MapPage() {
                   Finding routes through your network…
                 </p>
               )}
+              {pendingPaths && (
+                <button
+                  type="button"
+                  className="inline-flex"
+                  onClick={() => {
+                    setPaths(pendingPaths);
+                    setPendingPaths(undefined);
+                    setPathIdx(0);
+                  }}
+                  data-testid="reach-order-changed"
+                >
+                  <Chip className="h-6" tone="warn">
+                    Order changed · refresh
+                  </Chip>
+                </button>
+              )}
               {paths?.length === 0 && (
                 <p className="text-[13px] text-ink-3">
                   No route found through your network yet. Import more connections or start a warm-up.
@@ -1211,13 +1294,32 @@ export function MapPage() {
                       <ol className="mt-2 space-y-1.5 text-[13px]">
                         {p.hops.map((h, k) => {
                           const to = byId.get(h.toId);
+                          const from = byId.get(h.fromId);
+                          // plan 21: past the student's own tie, how well the two know each other, and whether
+                          // Orbit is still reading LinkedIn for it
+                          const reading = [from?.linkedinMemberId, to?.linkedinMemberId].some((m) => {
+                            const st = checkState(m);
+                            return st === 'queued' || st === 'reading';
+                          });
                           return (
-                            <li key={k} className="flex items-start gap-2">
+                            <li key={k} className="flex items-start gap-2" data-testid="reach-hop">
                               <span className="text-ink-3 tabular w-4">{k + 1}.</span>
                               <span>
                                 <span className="font-medium" title={h.text}>
                                   {to?.displayName ?? '…'}
                                 </span>
+                                {k > 0 && h.band && (
+                                  <span className="text-ink-3" data-testid="reach-hop-band">
+                                    {' · '}
+                                    {HOP_WORDS[h.band]}
+                                    {h.fading ? ', quiet lately' : ''}
+                                  </span>
+                                )}
+                                {k > 0 && reading && (
+                                  <span className="text-ink-3" data-testid="reach-hop-checking">
+                                    {' · '}Checking…
+                                  </span>
+                                )}
                                 {reasons && (
                                   <>
                                     <br />
@@ -1238,6 +1340,21 @@ export function MapPage() {
                       )}
                     </button>
                     {/* each route carries its own next step */}
+                    {user && selected && p.hops.length > 1 && (
+                      <div className="px-3 pb-1.5 space-y-1">
+                        {p.hops.slice(1).map((h) => (
+                          <PairNoteMenu
+                            key={`${h.fromId}>${h.toId}`}
+                            userId={user.id}
+                            aId={h.fromId}
+                            bId={h.toId}
+                            aName={byId.get(h.fromId)?.firstName ?? 'They'}
+                            bName={byId.get(h.toId)?.firstName ?? 'them'}
+                            className="block"
+                          />
+                        ))}
+                      </div>
+                    )}
                     <div className="px-3 pb-3">
                       {p.hops.length > 1 ? (
                         <Button

@@ -519,9 +519,13 @@ test.describe('Map reach through LinkedIn mutuals (plan 17 §C)', () => {
     const rows = panel.getByTestId('reach-mutual');
     await expect(rows.first()).toBeVisible();
     expect(await rows.count()).toBeGreaterThan(1);
+    // plan 21: the best way in first — how close the student is to them and how well they know Kenji — so a row
+    // never puts someone who knows Kenji less well above someone who knows him better
     const closeness = await panel.getByTestId('reach-mutual-closeness').allInnerTexts();
-    const scores = closeness.map((t) => Number(/· (\d+)/.exec(t)?.[1] ?? -1));
-    expect(scores).toEqual([...scores].sort((a, b) => b - a));
+    const KNOW = ['unclear', 'connected', 'knows them', 'close'];
+    const bands = closeness.map((t) => KNOW.indexOf(/· (unclear|connected|knows them|close)$/.exec(t)?.[1] ?? ''));
+    expect(bands.every((b) => b >= 0)).toBe(true);
+    expect(bands).toEqual([...bands].sort((a, b) => b - a));
     // where the list came from is an explanation: hidden unless the student turned explanations on
     await expect(panel).not.toContainText('Sample connections from the demo.');
     await panel.scrollIntoViewIfNeeded();
@@ -533,6 +537,23 @@ test.describe('Map reach through LinkedIn mutuals (plan 17 §C)', () => {
       });
       await page.screenshot({ path: process.env.REACH_SHOT });
     }
+    // plan 21: each row says how close the student is to them and how well they know Kenji
+    await expect(panel.getByTestId('reach-mutual-closeness').first()).toContainText(/^You: .+ · \d+ · /);
+    // the student's word on a hop: "they don't really know each other" takes that route away, everywhere, until undone
+    const firstVia = await route.getByTestId('reach-path-action').innerText();
+    await route.click();
+    await route.getByTestId('pair-note-open').first().click();
+    await route.getByTestId('pair-note-blocked').first().click();
+    await expect(page.getByTestId('reach-path').first().getByTestId('reach-path-action')).not.toHaveText(firstVia, {
+      timeout: 15_000,
+    });
+    await expect(panel.getByTestId('reach-mutuals-blocked')).toContainText(/1 hidden: you said they don’t really know Kenji/);
+    await panel.getByTestId('reach-mutuals-blocked').getByRole('button').first().click();
+    await panel.getByTestId('pair-note-undo').click();
+    await expect(page.getByTestId('reach-path').first().getByTestId('reach-path-action')).toHaveText(firstVia, {
+      timeout: 15_000,
+    });
+    await expect(panel.getByTestId('reach-mutuals-blocked')).toHaveCount(0);
     // asking one of them goes through the same intro draft as a route
     await rows.first().getByTestId('reach-mutual-ask').click();
     await expect(page.getByTestId('toasts')).toContainText(/for an intro to/);

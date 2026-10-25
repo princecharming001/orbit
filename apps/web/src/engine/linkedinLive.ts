@@ -495,6 +495,8 @@ export async function disconnectLinkedInLive(
     externalAccountId: undefined,
     lastError: undefined,
   });
+  // plan 21 §7: other people's LinkedIn activity read to weigh routes goes with the connection
+  await db.engagement.where('userId').equals(user.id).delete();
   return { ok: true, unlinkedAtUnipile: unlinked };
 }
 

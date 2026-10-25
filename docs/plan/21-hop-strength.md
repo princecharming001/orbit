@@ -1,6 +1,6 @@
 # 21 · Every hop counts: how well each person on a route knows the next
 
-Status: plan (2026-10-25), reviewed twice (a research pass on how Village, The Swarm, Connect The Dots, Affinity,
+Status: built (2026-10-25; see "What building it changed" at the end). Reviewed twice (a research pass on how Village, The Swarm, Connect The Dots, Affinity,
 Homie, Via and the tie-strength literature do this, then an adversarial review of the draft; both folded in).
 Owner: Orbit. Scope: both modes; the model lives in packages/core, the LinkedIn reads in orbit-connectors (browser)
 and `_shared/providers/unipileResearch.ts` (account mode). Builds on plan 16 §4 (route ranking) and plan 17 §B/§C/§E
@@ -84,7 +84,7 @@ versus only *strengthen* one. `p_ask` (the first hop) does not change.
 | `student_says_close` (new) | 0.8 | 0.9 | yes | none | when, from the hop menu |
 | `web_comention` (phase 3, optional) | 0.4 | 0.6 | no | 2 years | the page where a Deep research brief (plan 20) on one of them named the other |
 | `linkedin_mutual` (existing) | 0.3 (unchanged; **no downgrade for silence**, §3.4) | 0.95 | yes | none | as today |
-| `same_current_company` (existing) | by employer size: < 50 people 0.7 (c 0.8); 50–500 0.45 (c 0.5); over 500 as today | | as today | | adds the size bucket |
+| `same_current_company` (existing) | by employer size: < 50 people 0.7 (c 0.8); 51–500 0.45 (c 0.45, so not routable alone); over 500 as today | | as today | | adds the size bucket |
 | `co_tenure` (existing) | as today, confidence sharpened in §3.6 | | yes | as today | |
 
 "Creates a route" = member of `ROUTABLE_TIE_KINDS` or counted in `isRoutable`'s confidence rule. The support-only
@@ -101,8 +101,8 @@ Over the engagement Orbit has read between A and B, either direction, with the p
 
 ```
 E = Σ_items  kind_weight × popularity(post author) × recency(post date) × volume(actor)
-kind_weight:   author's reply to the other's comment 1.5 · comment 1.0 · repost 1.0 · mention 1.2 (÷ tags) ·
-               reaction 0.1
+kind_weight:   author's reply to the other's comment 1.5 · comment 1.0 · repost 1.0 · reaction 0.1
+               (mentions are their own kind, `linkedin_mention`, not part of E)
 popularity:    audience = max(2000, followers of the post's author)
                reactions: 2000 / audience        comments, replies, reposts: sqrt(2000 / audience)
                followers unknown: 0.25 (conservative), and the hop's band may not rise until known
@@ -113,8 +113,20 @@ volume:        a reaction from someone whose reactions page holds ≥ 60 items c
 reaction-only E is capped at 1 (likes alone never make more than w 0.21 before the one-way cap)
 reciprocal = both people have at least one comment, reply or repost on the other's posts (reactions do not count)
 
-w = min(cap, 0.75 · (1 − e^(−E/3)))   with cap = 0.25 one-way, 0.5 reciprocal
+w_pair   = reciprocal ? min(0.5, 0.75 · (1 − e^(−E/3))) : 0          (the pair as a whole)
+w_by[X]  = min(0.25, 0.75 · (1 − e^(−E_X/3)))                       (X's own acts alone)
+hop A → B (A introduces the student to B):  p_know = noisy-OR(pair, w_by[B] · 0.9)   when not reciprocal
 ```
+
+**Direction (found by the simulation, §11).** One-way engagement says something only in one direction: B reacting
+to and commenting on A's posts means B knows A, so A's intro to B lands; A doing that to B's posts is what fans do.
+So one-way engagement counts toward a hop only when the person being introduced did the engaging (for the last hop:
+the target engaging with the mutual), never when the introducer did. The routing graph gets a directed edge each way
+when the two directions differ. A mutual's comments on the target's posts are still shown to the student ("has left
+3 comments on Arlan's posts"); they add nothing to the score. With the first draft's rule (one-way counted both ways,
+capped at 0.25) the simulation ranked routes slightly *worse* than today (rank correlation 0.35 vs 0.36): fans were
+lifted as much as colleagues. A sweep of the one-way cap (0.25, 0.15, 0.1, 0.05, 0) improved monotonically to 0.48 at
+0 for the introducer's side; the directional rule keeps that and adds the target's side.
 
 Why (sources in §9): a comment is a deliberate written act and predicts tie strength far better than a like, which the
 literature finds is not among the top predictors at all; a like among thousands is noise; recency weighs most; a
@@ -132,16 +144,17 @@ Worked values (popularity 1, recent, no volume discount), before the mutual is c
 | 6 reactions | 0.6 | 0.14 |
 | 20 reactions (capped at E = 1) | 1 | 0.21 |
 | 1 comment | 1 | 0.21 |
-| 3 comments, one way | 3 | 0.47 → **0.25** (one-way cap) |
+| 3 comments, one way | 3 | 0.47 → **0.25** (one-way cap; counts only if the target wrote them) |
 | 1 comment + the author's reply | 2.5 | 0.42 (reciprocal cap 0.5 not reached) |
 | 3 comments each way | 6 | 0.65 → **0.5** (reciprocal cap) |
 | 6 reactions on a 30,000-follower person | 0.04 | 0.01 |
 | 3 comments on a 30,000-follower person (×0.26) | 0.77 | 0.17 |
 | 3 comments on a 100,000-follower person (×0.14) | 0.42 | 0.10 |
 
-Combined with the base `linkedin_mutual` (0.3 × 0.95 = 0.285) by noisy-OR (engagement c 0.9): 3 one-way comments
-→ **0.45**; 1 comment + the author's reply → 0.55; 3 comments each way → **0.61**; 6 reactions → 0.37; anything on a
-100k-follower person → ≤ 0.35. A recommendation alone → 0.86; an email exchange → 0.69.
+Combined with the base `linkedin_mutual` (0.3 × 0.95 = 0.285) by noisy-OR (engagement c 0.9): the target commenting
+3 times on the mutual's posts → **0.45**; the mutual commenting 3 times on the target's → **0.285** (unchanged); 1
+comment + the author's reply → 0.55; 3 comments each way → **0.61**. A recommendation alone → 0.81 when new (0.85 ×
+0.95, then a 5-year half-life); an email exchange → 0.69.
 
 ### 3.4 Absence of evidence counts for nothing
 
@@ -263,12 +276,13 @@ chip or on the next open — never under the student's hand.
 
 ## 6. Budget, caching, pacing, coverage (what decides whether this works in real life)
 
-- **One LinkedIn ledger per account, hard ceiling 100 non-messaging reads a day** (Unipile's guidance; the downside
-  of a restriction on a student's personal account during a job search is asymmetric, so no "at your own risk" 150).
-  Today's per-route caps (sync, inbox, 40 searches, 80 profiles, 300 photos, 12 post reads) already sum past 100 and
-  are replaced by priorities within the one ledger: connection sync > reply reader > route evidence for a target the
-  student is looking at > enrichment > photos. Keyed by the Unipile account id (browser and server share it). Settings
-  shows the one number.
+- **LinkedIn ledgers per account and per kind of read, ~100 a day each** (Unipile's guidance is per action: ~100
+  profile visits, ~100 of each other read such as posts, ~1,000 search rows; implementation read the guidance more
+  closely than the first draft, which had one ledger of 100 for everything). Within each ledger, callers have
+  priority ceilings, so lower priorities stop first: profiles — route reads 100, photos 80, enrichment 70; posts —
+  route evidence 100, the student's own post activity 85; searches — mutuals 100, Discover 80. Keyed by the Unipile
+  account id (browser and server share it). Settings shows the day's use. The downside of a restriction on a
+  student's personal account during a job search is asymmetric, so nothing goes above Unipile's numbers.
 - Engagement gets what is left after sync and the reply reader — on a normal day 40–60 calls, i.e. **two or three
   fresh targets fully checked a day**, the rest partially (target side first), everything the student looked at this
   month already cached (30 days per person). No prefetch, no timers (§4).
@@ -366,16 +380,18 @@ Core (`packages/core/src/__tests__/route.test.ts`, `ties.test.ts`; fixtures pinn
 1. **The weakest hop decides, when the evidence is real.** Goal `advice` (floor 20). Student→Noah (65)→Arlan with a
    plain connection (0.285) ranks below Student→Jai (40)→Arlan where Jai and Arlan commented on each other's posts
    this year (0.61): P = 0.646 × 0.285 = 0.184 against 0.401 × 0.61 = 0.243. Both shown; Noah's hop reads "connected
-   on LinkedIn", Jai's "both commented on each other's posts".
-2. **Fandom does not.** The same Jai with 3 *one-way* comments (0.45): 0.401 × 0.45 = 0.179 < 0.184; Noah stays
-   first and Jai's hop still says "has commented on 3 of Arlan's posts".
+   on LinkedIn", Jai's "…and trades comments with Arlan on LinkedIn".
+2. **Fandom does not.** The same Jai with 3 comments on Arlan's posts and none back: the hop stays 0.285 (P 0.114);
+   Noah stays first and Jai's hop still says "has left 3 comments on Arlan’s posts". The reverse — Arlan commenting
+   on Jai's posts — lifts the hop to 0.45.
 3. **Popularity.** 6 reactions on a 100,000-follower target move p_know by < 0.01; on a 1,000-follower target by
    ≥ 0.08. Unknown followers (0.25) never lift a hop's band.
 4. **Recency, on E.** Items older than 24 months contribute 0.35 of a fresh item's E.
 5. **Caps.** 20 reactions → w 0.21; 10 one-way comments → 0.25; 10 comments each way → 0.5.
 6. **A four-person path** with hops 1.0 · 0.285 · 0.285 ranks below a three-person path with 0.6 · 0.285 by a margin
    > 0.05, and its reason text names the weak hop.
-7. **Recommendation** between A and B makes the hop ≥ 0.8 with one tie; a 2015 recommendation decays to ≈ 0.19.
+7. **Recommendation** between A and B makes the hop "close" on its own (0.81 when new); a 2015 recommendation decays
+   to ≈ 0.18.
 8. **Corrections.** A blocked pair removes the route and survives `inferTies`/`combineTies`; "they're close" lifts a
    plain connection to "close".
 9. **Support-only kinds never create a route**: engagement or common contacts on a pair with no routable kind leave
@@ -418,3 +434,22 @@ founder would call a guess.
 4. **Phase 4:** outcome logging, `HOP_WEIGHTS` in one place, the fit when data exists.
 
 Merge order 1 → 2 → 3 → 4, full unit + e2e after each; connectors deploy before the app that calls the new route.
+
+
+## What building it changed (2026-10-25)
+
+- **One-way engagement is directional** (§3.3). The simulation showed the first draft's rule made rankings worse than
+  today's; the directional rule makes them clearly better and never meaningfully worse. Measured on 200 seeded
+  synthetic networks (5–30 mutuals each, 20% colleagues / 50% acquaintances / 30% fans, sparse evidence as assumed in
+  `packages/core/src/__tests__/hop-sim.test.ts`): mean rank correlation with the true chance of an intro 0.48 vs 0.36
+  for today's ranking; +0.12 where real evidence exists; no fan ahead of a colleague with real evidence whom the
+  student knows better. These rates are assumptions to recalibrate from a real account once reads accumulate.
+- **Ledgers per kind of read** (§6), matching Unipile's per-action guidance.
+- **Mid-size employers** (51–500) give "same current company" c 0.45, below the routable bar of 0.5: being at the same
+  300-person company is not on its own a reason to ask one to introduce the other.
+- **Mentions** are only their own kind, not also part of E (no double count).
+- **Recommendations** decay from the middle of their year, so even a new one is a little under 0.81: "close" either way.
+- **Learning loop** (§8): routes are kept on each intro ask; outcomes (intro made, agreed, declined, three weeks of
+  silence) are read from mail; `fitHopModel` refuses below 200 outcomes, so nothing changes a score until then.
+- **Not built:** LinkedIn common contacts and web co-mentions (§4.4, both optional and budget-bound), and the
+  real-account sparsity measurement (needs the founder's account and a few weeks of reads).

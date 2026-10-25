@@ -8,15 +8,18 @@
 import type { Person, User } from '@orbit/core';
 import { TIE_BAND_LABELS, tieBand } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { type ReactNode, useEffect, useMemo, useState } from 'react';
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { db } from '../../db/schema';
 import { targetMutuals } from '../../engine/externalRoutes';
-import { userTieWeight } from '../../engine/graph';
+import { buildReachGraph, type MutualStanding, mutualStandings, userTieWeight } from '../../engine/graph';
+import { subscribeHopEvidence } from '../../engine/hopEvidence';
 import type { MutualsResult, MutualView } from '../../engine/linkedinLive';
+import { subscribePairNotes } from '../../engine/pairNotes';
 import { isServerUser } from '../../integrations/orbitApi';
 import { useShowReasoning } from '../../state/showReasoning';
 import { Avatar, Button, cx, LinkedInMark } from '../../ui';
+import { PairNoteMenu } from './PairNoteMenu';
 
 const SHOWN = 5;
 const TAP = 'pointer-coarse:min-h-11';
@@ -50,6 +53,52 @@ interface Row {
   person?: Person;
   /** the student's tie to them, 0–100; -1 for someone not in Orbit */
   score: number;
+  /** plan 21: how good a way in they are, from both halves of the hop */
+  standing?: MutualStanding;
+}
+
+const KNOW_WORDS = {
+  close: 'close',
+  know: 'knows them',
+  connected: 'connected',
+  unclear: 'unclear',
+} as const;
+
+/**
+ * Each mutual's standing (plan 21 §3.7): how close the student is to them and how well they know the target, from
+ * the same graph the routes rank on. Recomputed when LinkedIn reads land or the student says something about a pair.
+ * `notes` counts the student's own changes, so the list re-sorts for those and keeps its order otherwise.
+ */
+function useStandings(
+  userId: string,
+  targetId: string,
+  ids: string[],
+): { standing?: Map<string, MutualStanding>; notes: number } {
+  const [state, setState] = useState<{ standing?: Map<string, MutualStanding>; notes: number }>({ notes: 0 });
+  const key = ids.join('|');
+  useEffect(() => {
+    if (!ids.length) return;
+    let live = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const run = async (theirs: boolean) => {
+      const { g } = await buildReachGraph(userId);
+      if (live)
+        setState((s) => ({ standing: mutualStandings(g, targetId, ids), notes: s.notes + (theirs ? 1 : 0) }));
+    };
+    void run(false);
+    const offE = subscribeHopEvidence(() => {
+      clearTimeout(timer);
+      timer = setTimeout(() => void run(false), 1500);
+    });
+    const offN = subscribePairNotes(() => void run(true));
+    return () => {
+      live = false;
+      clearTimeout(timer);
+      offE();
+      offN();
+    };
+  }, [userId, targetId, key]);
+  return state;
 }
 
 export function ReachMutuals({
@@ -74,15 +123,34 @@ export function ReachMutuals({
     [ids.join('|')],
   );
   const first = target.firstName || target.displayName;
-  const rows: Row[] = useMemo(() => {
-    const out = (result?.mutuals ?? []).map((m): Row => {
+  const { standing, notes } = useStandings(user.id, target.id, ids);
+  // the order is set when the list (or the student's word on a pair) changes; LinkedIn reads that land while the
+  // student reads it update the words, and the order on the next open, so rows never jump under their hand
+  const order = useRef<{ key: string; ids: string[] }>({ key: '', ids: [] });
+  const [showBlocked, setShowBlocked] = useState(false);
+  const { rows, blocked } = useMemo(() => {
+    const all = (result?.mutuals ?? []).map((m): Row => {
       const person = m.personId ? known?.get(m.personId) : undefined;
       // a mutual is one of the student's LinkedIn connections, so at least that close
       const score = person ? Math.max(Math.round(userTieWeight(person) * 100), 12) : -1;
-      return { m, person, score };
+      return { m, person, score, standing: person ? standing?.get(person.id) : undefined };
     });
-    return out.sort((a, b) => b.score - a.score || a.m.name.localeCompare(b.m.name));
-  }, [result, known]);
+    const rowKey = (r: Row) => `${r.m.name}:${r.m.memberId ?? r.m.personId ?? ''}`;
+    const value = (r: Row) => (r.standing ? r.standing.ask * r.standing.know : -1);
+    const stamp = `${all.map(rowKey).join('|')}#${notes}#${standing ? 1 : 0}`;
+    if (order.current.key !== stamp) {
+      const sorted = [...all].sort(
+        (a, b) => value(b) - value(a) || b.score - a.score || a.m.name.localeCompare(b.m.name),
+      );
+      order.current = { key: stamp, ids: sorted.map(rowKey) };
+    }
+    const pos = new Map(order.current.ids.map((k, i) => [k, i]));
+    const sorted = [...all].sort((a, b) => (pos.get(rowKey(a)) ?? 0) - (pos.get(rowKey(b)) ?? 0));
+    return {
+      rows: sorted.filter((r) => !r.standing?.blocked),
+      blocked: sorted.filter((r) => r.standing?.blocked),
+    };
+  }, [result, known, standing, notes]);
 
   const heading = (
     <div className="text-[12px] uppercase tracking-wide text-ink-3 mb-1.5">
@@ -141,7 +209,7 @@ export function ReachMutuals({
       </button>,
     );
   }
-  if (!rows.length)
+  if (!rows.length && !blocked.length)
     return note(
       result.source === 'demo'
         ? `No one in the sample network knows ${first}.`
@@ -152,7 +220,7 @@ export function ReachMutuals({
     <div data-testid="reach-mutuals">
       {heading}
       <ul className="space-y-2">
-        {(all ? rows : rows.slice(0, SHOWN)).map(({ m, person, score }) => {
+        {(all ? rows : rows.slice(0, SHOWN)).map(({ m, person, score, standing }) => {
           const name = person?.displayName ?? m.name;
           const mFirst = person?.firstName || name.split(' ')[0] || name;
           const url = m.url ?? person?.linkedinUrl;
@@ -176,11 +244,30 @@ export function ReachMutuals({
                 </div>
                 <div
                   className="text-[12px] text-ink-3 truncate"
-                  title="How close you are to them"
+                  title={`How close you are to them, and how well they know ${first}`}
                   data-testid="reach-mutual-closeness"
                 >
-                  {person ? `${TIE_BAND_LABELS[tieBand(score)]} tie · ${score}` : 'Not in your Orbit yet'}
+                  {person
+                    ? `You: ${TIE_BAND_LABELS[tieBand(score)].toLowerCase()} · ${score}${
+                        standing ? ` · ${KNOW_WORDS[standing.band]}` : ''
+                      }`
+                    : 'Not in your Orbit yet'}
                 </div>
+                {person && standing && reasons && (
+                  <div className="text-[12px] text-ink-3" data-testid="reach-mutual-evidence">
+                    {mFirst} {standing.phrase}
+                  </div>
+                )}
+                {person && (
+                  <PairNoteMenu
+                    userId={user.id}
+                    aId={person.id}
+                    bId={target.id}
+                    aName={mFirst}
+                    bName={first}
+                    className="block"
+                  />
+                )}
               </div>
               {person && (
                 <Button
@@ -207,10 +294,40 @@ export function ReachMutuals({
           {all ? 'Show fewer' : `Show all ${rows.length}`}
         </button>
       )}
+      {blocked.length > 0 && (
+        <div className="mt-1.5 text-[12px] text-ink-3" data-testid="reach-mutuals-blocked">
+          <button
+            type="button"
+            className={cx('underline underline-offset-4 hover:text-ink', TAP)}
+            onClick={() => setShowBlocked((v) => !v)}
+          >
+            {showBlocked ? 'Hide' : `${blocked.length} hidden: you said they don’t really know ${first}`}
+          </button>
+          {showBlocked && (
+            <ul className="mt-1 space-y-1">
+              {blocked.map(({ m, person }) =>
+                person ? (
+                  <li key={person.id}>
+                    <PairNoteMenu
+                      userId={user.id}
+                      aId={person.id}
+                      bId={target.id}
+                      aName={person.firstName || person.displayName}
+                      bName={first}
+                    />
+                  </li>
+                ) : (
+                  <li key={m.name}>{m.name}</li>
+                ),
+              )}
+            </ul>
+          )}
+        </div>
+      )}
       {reasons && (
         <p className="mt-1.5 text-[12px] text-ink-3">
-          {result.source === 'demo' ? 'Sample connections from the demo.' : 'From your LinkedIn.'} Closest to
-          you first.
+          {result.source === 'demo' ? 'Sample connections from the demo.' : 'From your LinkedIn.'} Best way in
+          first: how close you are to them, and how well they know {first}.
         </p>
       )}
     </div>

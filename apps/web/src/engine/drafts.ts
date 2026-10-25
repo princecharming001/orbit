@@ -198,7 +198,7 @@ export async function requestIntro(
   user: User,
   connectorId: string,
   targetId: string,
-  opts: { path?: Pick<ReachPath, 'score'>; now?: Date } = {},
+  opts: { path?: Pick<ReachPath, 'score'> & Partial<Pick<ReachPath, 'hops'>>; now?: Date } = {},
 ): Promise<{ suggestion: Suggestion; draft?: OutboundMessage; existed: boolean } | undefined> {
   const [connector, target] = await Promise.all([db.people.get(connectorId), db.people.get(targetId)]);
   if (!connector || !target) return undefined;
@@ -225,6 +225,22 @@ export async function requestIntro(
         why: target.currentOrganizationRaw ? `their work at ${target.currentOrganizationRaw}` : undefined,
       },
       channel: connector.primaryEmail ? 'gmail' : 'linkedin',
+      // plan 21 §8: the route as it was weighed when the student asked, for learning from how intros turn out
+      ...(opts.path?.hops
+        ? {
+            path: {
+              score: opts.path.score,
+              at: now.toISOString(),
+              hops: opts.path.hops.map((h) => ({
+                fromId: h.fromId,
+                toId: h.toId,
+                p: Math.round(h.weight * 1000) / 1000,
+                kind: h.type,
+                ...(h.band ? { band: h.band } : {}),
+              })),
+            },
+          }
+        : {}),
     },
     status: 'pending',
     dedupeKey,

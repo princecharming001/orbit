@@ -1105,8 +1105,9 @@ describe('orbit-connectors proxy', () => {
   });
 
   it('stops an account at its daily post reads', async () => {
-    // a posts ledger of 1: /posts/activity may use round(85%) of it, one unit per call
-    const { handler } = harness({ ledger: { posts: 1 } }, (url) =>
+    // /posts/activity may make up to 8 LinkedIn reads a call and spends 8 units; a posts ledger of 10 lets it use
+    // round(85%) = 8, so one call
+    const { handler } = harness({ ledger: { posts: 10 } }, (url) =>
       url.includes('/users/me')
         ? new Response(JSON.stringify({ provider_id: 'ACoME' }))
         : new Response(JSON.stringify({ items: [], cursor: null })),
@@ -1390,16 +1391,17 @@ describe('orbit-connectors proxy', () => {
           url.includes('/users/me')
             ? new Response(JSON.stringify({ provider_id: 'ACoME' }))
             : new Response(JSON.stringify({ items: [], cursor: null })),
-        { ledger: { posts: 4 } },
+        { ledger: { posts: 20 } },
       );
       const activity = () => handler(post('/posts/activity', { accountId: 'a1', token: TOKEN.a1 }));
-      // round(85% of 4) = 3 calls of /posts/activity
-      for (let i = 0; i < 3; i++) expect(await (await activity()).json()).toMatchObject({ ok: true });
+      // round(85% of 20) = 17 units: two calls of /posts/activity at 8 units each
+      for (let i = 0; i < 2; i++) expect(await (await activity()).json()).toMatchObject({ ok: true });
       const before = upstream.length;
       expect(await (await activity()).json()).toEqual({ ok: false, reason: 'limit', message: LIMIT_MSG });
       expect(upstream).toHaveLength(before);
-      // engagement for a target the student opened still has the last unit
-      expect(await (await read({ memberId: 'ACoB', want: 'posts' })).json()).toMatchObject({ ok: true });
+      // engagement for a target the student opened still has the last four units
+      for (let i = 0; i < 4; i++)
+        expect(await (await read({ memberId: 'ACoB', want: 'posts' })).json()).toMatchObject({ ok: true });
       expect(await (await read({ memberId: 'ACoB', want: 'posts' })).json()).toMatchObject({
         reason: 'limit',
       });

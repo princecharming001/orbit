@@ -22,7 +22,7 @@ import { freshPhoto, isGravatarPhoto, isLinkedInPhoto, linkedInImageExpired } fr
 
 /** Calls a minute, evenly spaced. */
 export const PHOTOS_PER_MINUTE = 4;
-export const PHOTOS_PER_DAY = 150;
+export const PHOTOS_PER_DAY = 80;
 /** A person asked about (found or not) is not asked about again sooner than this. */
 export const PHOTO_RETRY_MS = 7 * 86_400_000;
 const GAP_MS = 60_000 / PHOTOS_PER_MINUTE;

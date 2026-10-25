@@ -11,15 +11,46 @@ import {
   disconnectLinkedInLive,
   LIVE_SOON,
   linkedInLiveStatus,
+  liveLinkedInAccount,
   syncLinkedInLive,
 } from '../engine/linkedinLive';
 import { setWarmIntros, villageAvailable, villageOffered } from '../engine/warmIntros';
 import { usesMockConnectors } from '../integrations/connectorsMock';
 import { subscribePrefs } from '../integrations/prefs';
+import { type LinkedInLedger, linkedInLedger, unipileConfigured } from '../integrations/unipile';
 import { checkVillage, subscribeVillageHealth, villageHealth } from '../integrations/village';
 import { Button, Modal, relDate, Spinner, Switch, useToast } from '../ui';
 import { EnrichmentStatusLine } from './EnrichmentStatus';
 import { AppMark, IntegrationRow, RowStatus } from './IntegrationRow';
+
+/**
+ * How much of today's LinkedIn reads Orbit has used for this account (plan 21 §6): profiles, posts and searches each
+ * have about 100 a day, and checking how well people know each other stops before Orbit risks the account.
+ */
+function LinkedInReadsLine({ user }: { user: User }) {
+  const [ledger, setLedger] = useState<LinkedInLedger>();
+  useEffect(() => {
+    if (usesMockConnectors(user.id) || !unipileConfigured()) return;
+    let live = true;
+    void (async () => {
+      const row = await liveLinkedInAccount(user.id);
+      if (!row?.externalAccountId || !row.accessToken) return;
+      const r = await linkedInLedger(row.externalAccountId, { token: row.accessToken });
+      if (live && r.ok) setLedger(r.value);
+    })();
+    return () => {
+      live = false;
+    };
+  }, [user.id]);
+  if (!ledger) return null;
+  const part = (label: string, u: { used: number; limit: number }) => `${label} ${u.used} of ${u.limit}`;
+  return (
+    <p className="text-[12.5px] text-ink-3" data-testid="settings-linkedin-reads">
+      LinkedIn reads today: {part('profiles', ledger.profile)} · {part('posts', ledger.posts)} ·{' '}
+      {part('searches', ledger.search)}. Orbit stops for the day before LinkedIn would mind.
+    </p>
+  );
+}
 
 export function LinkedInLiveCard({ user }: { user: User }) {
   const toast = useToast();
@@ -131,6 +162,7 @@ export function LinkedInLiveCard({ user }: { user: User }) {
         }
       >
         {status.connected && <EnrichmentStatusLine user={user} />}
+        {status.connected && <LinkedInReadsLine user={user} />}
         {soon && (
           <p className="text-[12.5px] text-ink-2" role="status" data-testid="settings-linkedin-live-soon">
             {LIVE_SOON}

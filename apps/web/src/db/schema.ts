@@ -111,6 +111,58 @@ export interface PersonIdentityRow {
 }
 
 /** An introduction asked for (orbit.intro_requests), kept so the chat can say what came of it. */
+/**
+ * What the student said about two people (plan 21 §3.5): they don't really know each other (`blocked`: never a hop
+ * until undone) or they're close. One row per pair and kind; aId < bId.
+ */
+export interface PairNote {
+  /** `${userId}:${aId}|${bId}:${kind}` */
+  id: string;
+  userId: string;
+  aId: string;
+  bId: string;
+  kind: 'blocked' | 'close';
+  at: string;
+}
+
+/** One post of someone's, as Orbit keeps it for plan 21: no text, only what it says about who engages with whom. */
+export interface EngagementPost {
+  id: string;
+  at?: string;
+  /** the member id of the person whose post this one reposts */
+  repostOf?: string;
+  /** member ids of the people it mentions */
+  mentions: string[];
+  /** how many people it tagged in all */
+  tagged: number;
+}
+
+/**
+ * What LinkedIn showed of one person's public activity (plan 21 §4), kept 30 days and dropped when LinkedIn is
+ * disconnected: their recent posts, the posts they reacted to and commented on (with the post's author where LinkedIn
+ * gives it), and who commented under their latest posts. Ids, dates and counts only: never anyone's words.
+ */
+export interface EngagementRow {
+  /** `${userId}:${memberId}` */
+  id: string;
+  userId: string;
+  memberId: string;
+  /** when each part was read (profileAt: their profile, for followers and recommendations) */
+  profileAt?: string;
+  postsAt?: string;
+  reactionsAt?: string;
+  commentsAt?: string;
+  threadsAt?: string;
+  posts?: EngagementPost[];
+  /** posts (or comments) they reacted to, with that post's author */
+  reactions?: { postId: string; authorId: string }[];
+  comments?: { id: string; postId: string; at?: string; threadId?: string }[];
+  /** top-level comments under their own posts, by post id */
+  threads?: Record<string, { id: string; commenterId: string; at?: string }[]>;
+  /** LinkedIn would not show this person's activity (a locked or private profile) */
+  unavailableAt?: string;
+}
+
 export interface IntroRequestRow {
   id: string;
   userId: string;
@@ -242,6 +294,8 @@ export class OrbitDB extends Dexie {
   textThreads!: EntityTable<TextThread, 'id'>;
   memories!: EntityTable<LocalMemory, 'id'>;
   researchRuns!: EntityTable<ResearchRun, 'id'>;
+  pairNotes!: EntityTable<PairNote, 'id'>;
+  engagement!: EntityTable<EngagementRow, 'id'>;
 
   constructor(name = 'orbit') {
     super(name);
@@ -314,6 +368,11 @@ export class OrbitDB extends Dexie {
     this.version(6).stores({
       researchRuns: 'id, userId, personId, month, createdAt',
       facts: 'id, userId, personId, type, [sourceTable+sourceId]',
+    });
+    // plan 21: what the student said about two people, and the LinkedIn activity Orbit read to weigh each hop
+    this.version(7).stores({
+      pairNotes: 'id, userId, kind',
+      engagement: 'id, userId, memberId',
     });
   }
 }

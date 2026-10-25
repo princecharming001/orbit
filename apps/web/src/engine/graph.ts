@@ -9,6 +9,7 @@ import type {
   ReachPath,
   RoutePerson,
   TargetCompany,
+  Tie,
   TiePair,
   User,
   WarmPath,
@@ -21,14 +22,23 @@ import {
   DIRECT_TIE_SCORE,
   describePairHop,
   describeUserTie,
+  HOP_WEIGHTS,
   hasHistoryWith,
+  hopBand,
   inferEdges,
   kShortestPaths,
   MEDIUM_TIE,
+  MUTUAL_MIN_SCORE,
   makeGraph,
+  mergeTies,
   normalizeCompany,
   type PathTable,
+  pAsk,
+  pairEvidenceTies,
+  pairKeyOf,
+  pairPhrase,
   pairsFromEdges,
+  pKnowDirected,
   rankCompanyTargets,
   rankWarmPaths,
   responsePrior,
@@ -37,6 +47,8 @@ import {
   type WeightedGraph,
 } from '@orbit/core';
 import { db } from '../db/schema';
+import { storedEvidence } from './hopEvidence';
+import { pairNotesFor } from './pairNotes';
 
 /** The normalised company key for a person: their organization's normalised name, else their raw company. */
 function companyKey(
@@ -142,7 +154,26 @@ export async function buildReachGraph(
       .filter((o) => o.kind === 'intro_request')
       .toArray(),
   ]);
-  return reachGraphFrom(people, edges, now, { user, chats, introAsks: asks });
+  return reachGraphFrom(people, edges, now, {
+    user,
+    chats,
+    introAsks: asks,
+    evidence: await evidenceTies(userId, people, now),
+  });
+}
+
+/** Plan 21's pair evidence for the reach graph: stored LinkedIn activity and what the student said about pairs. */
+async function evidenceTies(
+  userId: string,
+  people: Person[],
+  now: Date,
+): Promise<{ ties: Tie[]; blocked: ReadonlySet<string> }> {
+  const [evidence, notes] = await Promise.all([storedEvidence(userId, people, now), pairNotesFor(userId)]);
+  const ids = new Set(people.filter((p) => p.isHuman && !p.hiddenAt).map((p) => p.id));
+  return {
+    ties: pairEvidenceTies({ userId, people: ids, now, ...evidence, studentSays: notes.close }),
+    blocked: notes.blocked,
+  };
 }
 
 /** Lowest weight for a LinkedIn connection with no other history: accepted, so not a stranger, but no more. */
@@ -157,6 +188,8 @@ interface ReachContext {
   people: Map<string, Person>;
   routePeople: Map<string, RoutePerson>;
   pairs: Map<string, TiePair>;
+  /** pairs the student said do not really know each other (plan 21 §3.5) */
+  blocked: ReadonlySet<string>;
   user?: Pick<User, 'school' | 'majors' | 'graduationYear'>;
   now: Date;
 }
@@ -213,6 +246,8 @@ export function reachGraphFrom(
     user?: Pick<User, 'school' | 'majors' | 'graduationYear'>;
     chats?: CoffeeChat[];
     introAsks?: { personId: string; createdAt: string }[];
+    /** plan 21: LinkedIn activity, recommendations and the student's word between contacts, and blocked pairs */
+    evidence?: { ties: Tie[]; blocked: ReadonlySet<string> };
   } = {},
 ): { g: WeightedGraph; people: Map<string, Person>; edges: Edge[] } {
   const g = makeGraph();
@@ -237,7 +272,8 @@ export function reachGraphFrom(
   contexts.set(g, {
     people: map,
     routePeople: routePeopleFrom(map, known, now, extra),
-    pairs: pairsFromEdges(known),
+    pairs: mergeTies(pairsFromEdges(known, now), extra.evidence?.ties ?? [], now),
+    blocked: extra.evidence?.blocked ?? new Set(),
     user: extra.user,
     now,
   });
@@ -304,6 +340,70 @@ export async function reachCandidates(
   }
 }
 
+/** How a LinkedIn mutual stands as a way to the target (plan 21 §3.7): both halves, and the product they sort by. */
+export interface MutualStanding {
+  /** the chance the student's ask to them works out */
+  ask: number;
+  /** how well they know the target */
+  know: number;
+  band: ReturnType<typeof hopBand>;
+  /** what the evidence between them and the target says, after their first name */
+  phrase: string;
+  /** the student said they do not really know the target */
+  blocked: boolean;
+}
+
+/**
+ * For "People who know {target}": each mutual's standing, from the same pairs and the same numbers the routes use, so
+ * the list and the routes never disagree. A mutual is a LinkedIn connection of the target's, so its pair with the
+ * target carries the connection whatever else is known.
+ */
+export function mutualStandings(
+  g: WeightedGraph,
+  targetId: string,
+  personIds: string[],
+): Map<string, MutualStanding> {
+  const out = new Map<string, MutualStanding>();
+  const ctx = contexts.get(g);
+  if (!ctx) return out;
+  const tName = ctx.people.get(targetId)?.firstName || ctx.people.get(targetId)?.displayName || 'them';
+  for (const id of personIds) {
+    if (id === targetId) continue;
+    const key = pairKeyOf(id, targetId);
+    const [a, b] = key.split('|') as [string, string];
+    const base = ctx.pairs.get(key);
+    const pair = base?.kinds.includes('linkedin_mutual')
+      ? base
+      : mergeTies(
+          base ? new Map([[key, base]]) : new Map(),
+          [
+            {
+              id: `${key}|linkedin_mutual`,
+              userId: '',
+              aId: a,
+              bId: b,
+              kind: 'linkedin_mutual',
+              weight: HOP_WEIGHTS.mutual,
+              confidence: 0.95,
+              evidence: { source: 'unipile' },
+            },
+          ],
+          ctx.now,
+        ).get(key)!;
+    const rp = ctx.routePeople.get(id);
+    // how well the target knows them: the target's own engagement counts, theirs toward the target does not
+    const know = pKnowDirected(pair, id, targetId);
+    out.set(id, {
+      ask: pAsk({ ...(rp ?? { score: 0 }), score: Math.max(rp?.score ?? 0, MUTUAL_MIN_SCORE) }),
+      know,
+      band: hopBand(know),
+      phrase: pairPhrase(id, pair, tName, ctx.now),
+      blocked: ctx.blocked.has(key),
+    });
+  }
+  return out;
+}
+
 /** v2 bands in the v1 words: high is a strong route, medium possible, low a long shot. */
 const BAND: Record<WarmPath['band'], ReachPath['band']> = {
   high: 'strong',
@@ -332,6 +432,17 @@ function toV2ReachPath(g: WeightedGraph, w: WarmPath, ctx?: ReachContext): WarmR
   const hops: ReachHop[] = w.hops.map((h, i) => {
     const e = g.adj.get(h.fromId)?.get(h.toId);
     let text = e?.text ?? '';
+    // plan 21: past the student's own tie, a hop says what the evidence on it says, and how well the two know each other
+    if (i > 0 && h.phrase)
+      return {
+        fromId: h.fromId,
+        toId: h.toId,
+        weight: h.p,
+        type: h.kind === 'strength' ? 'strength' : h.kind,
+        text: `${first(h.fromId)} ${h.phrase}`,
+        ...(h.band ? { band: h.band } : {}),
+        ...(h.fading ? { fading: true } : {}),
+      };
     if (EXTERNAL.has(h.kind))
       text =
         h.kind === 'linkedin_mutual'
@@ -393,6 +504,7 @@ export function reachPersonIn(
     people,
     pairs: ctx.pairs,
     candidates,
+    blockedPairs: ctx.blocked,
     now: ctx.now,
     limit: Math.max(k, 5),
   });

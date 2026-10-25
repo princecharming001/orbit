@@ -28,7 +28,7 @@
  * result rows). Within a ledger each kind of caller may fill it only up to its own ceiling, so what matters most is
  * never starved by what matters less (LEDGER_CEILINGS): a profile read for a route the student is looking at (the
  * target in /mutuals, /profile with purpose "route") up to 100%, /photo 80%, enrichment /profile and /company 70%;
- * /engagement 100% and /posts/activity 85% (one unit per call); /mutuals pages 100% and Discover's /search 80%.
+ * /engagement 100% and /posts/activity 85% (one unit per LinkedIn read); /mutuals pages 100% and Discover's /search 80%.
  * /ledger reports the day's use without counting anything. Sends keep their own bucket.
  *
  * A route whose provider key is not set returns 503 with x-orbit-connector: unconfigured, so the app shows the
@@ -230,8 +230,9 @@ export const LEDGER_LIMIT = {
 class StoreDown extends Error {}
 
 /**
- * Spend one unit of a ledger for a caller: true when it was within that caller's ceiling. A store that can peek is
- * asked first, so a refused low-priority read never adds to the count the higher-priority readers share.
+ * Spend `units` of a ledger for a caller (one per LinkedIn read the call may make): true when they fit within that
+ * caller's ceiling. A store that can peek is asked first, so a refused low-priority read never adds to the count the
+ * higher-priority readers share.
  */
 async function spendLedger<K extends LedgerKind>(
   take: Take,
@@ -240,14 +241,16 @@ async function spendLedger<K extends LedgerKind>(
   caller: LedgerCaller<K>,
   accountId: string,
   now: Date,
+  units = 1,
 ): Promise<boolean> {
   const b = ledgerBucket(kind, accountId, now, ledgerLimit(kind, caller, totals[kind]));
   try {
     if (take.peek) {
       const [used = 0] = await take.peek([b.key]);
-      if (used >= b.limit) return false;
+      if (used + units > b.limit) return false;
     }
-    return (await take([b])).allowed;
+    for (let i = 0; i < units; i++) if (!(await take([b])).allowed) return false;
+    return true;
   } catch {
     throw new StoreDown('counter store unavailable');
   }
@@ -429,8 +432,8 @@ export function makeHandler(deps: ConnectorDeps): (req: Request) => Promise<Resp
 
     const totals: LedgerTotals = { ...DEFAULT_LEDGER, ...deps.ledger };
     const accountId = String(body.accountId ?? '');
-    const spend = <K extends LedgerKind>(kind: K, caller: LedgerCaller<K>) =>
-      spendLedger(take, totals, kind, caller, accountId, now());
+    const spend = <K extends LedgerKind>(kind: K, caller: LedgerCaller<K>, units = 1) =>
+      spendLedger(take, totals, kind, caller, accountId, now(), units);
     if (isEnrich) return enrichmentRoute(deps, path, body, { h, doFetch, take, now, visitor, spend });
     if (ACCOUNT_ROUTES.has(path) && !(await tokenValid(accountId, body.token, deps.signingKey)))
       return json(403, { error: 'this LinkedIn account is not linked to this browser' }, h);
@@ -459,12 +462,13 @@ export function makeHandler(deps: ConnectorDeps): (req: Request) => Promise<Resp
       if ('message' in parsed) return json(200, parsed, h);
       engagement = parsed;
     }
-    // the reads that come out of a ledger, one unit per call (/mutuals spends its own, per upstream read)
+    // the reads that come out of a ledger: one unit per LinkedIn read (/posts/activity may make up to
+    // POSTS_UPSTREAM_PER_CALL in one call, so it spends that many; /mutuals spends its own, per upstream read)
     const ledgerSpend =
       path === '/search'
         ? () => spend('search', 'discover')
         : path === '/posts/activity'
-          ? () => spend('posts', 'activity')
+          ? () => spend('posts', 'activity', POSTS_UPSTREAM_PER_CALL)
           : path === '/engagement'
             ? () => spend('posts', 'engagement')
             : undefined;
