@@ -99,7 +99,10 @@ beforeEach(async () => {
     '/relations': { body: RELATIONS },
     '/disconnect': { body: { ok: true } },
     '/mutuals': {
-      body: { mutuals: [{ name: 'Sana Ahmed', member_id: 'm_sana' }, { name: 'Stranger Person' }] },
+      body: {
+        verified: true,
+        mutuals: [{ name: 'Sana Ahmed', member_id: 'm_sana' }, { name: 'Stranger Person' }],
+      },
     },
   };
   vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {

@@ -149,6 +149,7 @@ describe('a second-degree person found on LinkedIn', () => {
     };
     routes['/mutuals'] = {
       body: {
+        verified: true,
         mutuals: [
           { name: 'Mia Chen', member_id: 'm_mia', url: 'https://www.linkedin.com/in/mia-chen' },
           // Ben has no member id in Orbit: matched by his profile name
@@ -210,7 +211,10 @@ describe('a second-degree person found on LinkedIn', () => {
       },
     };
     routes['/mutuals'] = ({ targetMemberId }) => ({
-      body: { mutuals: targetMemberId === 'm_sara' ? [{ name: 'Mia Chen', member_id: 'm_mia' }] : [] },
+      body: {
+        verified: true,
+        mutuals: targetMemberId === 'm_sara' ? [{ name: 'Mia Chen', member_id: 'm_mia' }] : [],
+      },
     });
     const paths = await reachPerson(user.id, sara.id);
     expect(searchCalls()[0]!.body).toMatchObject({ keywords: 'Sara Lee', distance: [1, 2, 3] });
@@ -239,6 +243,7 @@ describe('a second-degree person found on LinkedIn', () => {
     await db.people.put(ceo);
     routes['/mutuals'] = {
       body: {
+        verified: true,
         mutuals: [
           { name: 'Mia Chen', member_id: 'm_mia' },
           { name: 'Ben Ortiz', member_id: 'm_ben' },
@@ -337,7 +342,7 @@ describe('LinkedIn not connected', () => {
     await db.people.put(kenji);
     routes['/mutuals'] = { status: 500, body: {} };
     expect(await targetMutuals(user, kenji)).toMatchObject({ ok: false, reason: 'error' });
-    routes['/mutuals'] = { body: { mutuals: [{ name: 'Mia Chen', member_id: 'm_mia' }] } };
+    routes['/mutuals'] = { body: { verified: true, mutuals: [{ name: 'Mia Chen', member_id: 'm_mia' }] } };
     const r = await targetMutuals(user, kenji);
     expect(r.ok && r.mutuals.map((m) => m.personId)).toEqual([MIA.id]);
   });

@@ -965,7 +965,8 @@ var unipileSearchItemSchema = z.looseObject({
 var unipileSearchSchema = z.looseObject({
   items: z.array(unipileSearchItemSchema).default([]),
   cursor: z.string().nullish(),
-  paging: z.looseObject({ total_count: z.number().nullish() }).nullish()
+  paging: z.looseObject({ total_count: z.number().nullish() }).nullish(),
+  config: z.looseObject({ params: z.record(z.string(), z.unknown()).nullish() }).nullish()
 });
 var unipileSearchParamsSchema = z.looseObject({
   items: z.array(z.looseObject({ id: z.union([z.string(), z.number()]), title: z.string().nullish() })).default([])
@@ -1045,11 +1046,26 @@ function createUnipileResearch(opts) {
       for (let page2 = 0; page2 < (o.maxPages ?? 1); page2++) {
         const r = await api.searchPeople(
           accountId,
-          { api: "classic", category: "people", network_distance: [1], connections_of: [memberId] },
+          { api: "classic", category: "people", network_distance: [1], connections_of: memberId },
           { cursor }
         );
         if (!r.ok) return page2 === 0 ? r : { ok: true, value: items };
-        items.push(...r.value.items);
+        const applied = r.value.config?.params?.connections_of;
+        const kept = Array.isArray(applied) ? applied.map(String) : applied == null ? [] : [String(applied)];
+        if (!kept.includes(memberId)) {
+          return {
+            ok: false,
+            kind: "invalid",
+            provider: "unipile",
+            message: "unipile: LinkedIn did not apply the mutual-connections filter"
+          };
+        }
+        for (const it of r.value.items) {
+          const id = it.id ?? it.provider_id ?? it.member_id;
+          if (id === memberId) continue;
+          if (it.network_distance && it.network_distance !== "DISTANCE_1") continue;
+          items.push(it);
+        }
         cursor = r.value.cursor ?? void 0;
         if (!cursor) break;
       }
@@ -8186,7 +8202,8 @@ async function mutualsFor(deps, input, out) {
     return [];
   }
   const key = await cacheKey("unipile", {
-    op: "mutuals",
+    // v2: lists saved before 2026-10-25 came from a search LinkedIn did not filter
+    op: "mutuals2",
     accountId: input.unipileAccountId,
     memberId: t.memberId
   });

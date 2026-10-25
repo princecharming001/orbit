@@ -77,7 +77,7 @@ type Upstream = (url: string, init: RequestInit) => Response | Promise<Response>
 
 function harness(over: Partial<ConnectorDeps> = {}, upstreamOver?: Upstream) {
   const upstream: { url: string; method: string; body: unknown }[] = [];
-  const answer: Upstream = (url) => {
+  const answer: Upstream = (url, init) => {
     if (url.includes('/hosted/accounts/link'))
       return new Response(JSON.stringify({ object: 'HostedAuthURL', url: 'https://unipile/login' }), {
         status: 201,
@@ -91,9 +91,14 @@ function harness(over: Partial<ConnectorDeps> = {}, upstreamOver?: Upstream) {
         { status: 200 },
       );
     if (url.includes('/linkedin/search'))
-      return new Response(JSON.stringify({ items: [{ name: 'Mia Chen', member_id: 'm2' }] }), {
-        status: 200,
-      });
+      // LinkedIn says which filters it applied (config.params), as Unipile's answers do
+      return new Response(
+        JSON.stringify({
+          items: [{ name: 'Mia Chen', member_id: 'm2' }],
+          config: { params: JSON.parse((init?.body as string) || '{}') },
+        }),
+        { status: 200 },
+      );
     if (url.includes('/api/v1/accounts?'))
       return new Response(
         JSON.stringify({
@@ -574,15 +579,72 @@ describe('orbit-connectors proxy', () => {
     expect(capped.upstream).toHaveLength(2);
   });
 
-  it('asks LinkedIn for mutual connections with numeric distances and the target in a list', async () => {
+  it('asks LinkedIn for mutual connections: the 1st degree, "Connections of" one member id (not a list)', async () => {
     const { handler, upstream } = harness();
-    await handler(post('/mutuals', { accountId: 'a1', token: TOKEN.a1, targetMemberId: 'ACoT' }));
+    const r = (await (
+      await handler(post('/mutuals', { accountId: 'a1', token: TOKEN.a1, targetMemberId: 'ACoT' }))
+    ).json()) as { verified: boolean; mutuals: { name: string }[] };
     expect(upstream[0]!.body).toEqual({
       api: 'classic',
       category: 'people',
       network_distance: [1],
-      connections_of: ['ACoT'],
+      connections_of: 'ACoT',
     });
+    expect(r).toMatchObject({ verified: true, mutuals: [{ name: 'Mia Chen' }] });
+  });
+
+  it('an answer LinkedIn did not filter by "Connections of" is never passed off as mutual connections', async () => {
+    // LinkedIn dropped the filter: the student's own connections came back, and the search says so
+    const { handler } = harness({}, (url) =>
+      url.includes('/linkedin/search')
+        ? new Response(
+            JSON.stringify({
+              items: [{ name: 'Hem Baid', member_id: 'm_hem', network_distance: 'DISTANCE_1' }],
+              config: { params: { api: 'classic', category: 'people', network_distance: [1] } },
+            }),
+            { status: 200 },
+          )
+        : new Response('{}', { status: 404 }),
+    );
+    const r = (await (
+      await handler(post('/mutuals', { accountId: 'a1', token: TOKEN.a1, targetMemberId: 'ACoT' }))
+    ).json()) as { verified: boolean; mutuals: unknown[] };
+    expect(r).toEqual({ mutuals: [], verified: false });
+  });
+
+  it('reads every page of mutual connections, and leaves out the target and anyone not 1st degree', async () => {
+    let page = 0;
+    const { handler, upstream } = harness({}, (url, init) => {
+      if (!url.includes('/linkedin/search')) return new Response('{}', { status: 404 });
+      page++;
+      const params = JSON.parse(init.body as string);
+      const items =
+        page === 1
+          ? [
+              { name: 'Mia Chen', member_id: 'm_mia', network_distance: 'DISTANCE_1' },
+              { name: 'The Target', member_id: 'ACoT', network_distance: 'DISTANCE_1' },
+            ]
+          : [
+              { name: 'Ben Ortiz', member_id: 'm_ben', network_distance: 'DISTANCE_1' },
+              { name: 'Far Away', member_id: 'm_far', network_distance: 'DISTANCE_2' },
+            ];
+      return new Response(
+        JSON.stringify({
+          items,
+          config: { params },
+          paging: { total_count: 2 },
+          cursor: page === 1 ? 'next' : null,
+        }),
+        { status: 200 },
+      );
+    });
+    const r = (await (
+      await handler(post('/mutuals', { accountId: 'a1', token: TOKEN.a1, targetMemberId: 'ACoT' }))
+    ).json()) as { verified: boolean; count: number; mutuals: { name: string }[] };
+    expect(r.verified).toBe(true);
+    expect(r.mutuals.map((m) => m.name)).toEqual(['Mia Chen', 'Ben Ortiz']);
+    expect(upstream).toHaveLength(2);
+    expect(upstream[1]!.url).toContain('cursor=next');
   });
 
   it('reads the inbox: 1:1 messages with who they are with, leaving out events, hidden ones and group chats', async () => {

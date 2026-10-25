@@ -221,6 +221,8 @@ export async function linkedInConnections(
 interface MutualResponse {
   mutuals?: { name?: string; headline?: string; url?: string; member_id?: string; picture_url?: string }[];
   count?: number;
+  /** LinkedIn said it applied the "Connections of" filter; without it the list is not mutual connections */
+  verified?: boolean;
 }
 
 /** Who the student knows who is connected to a target LinkedIn member. */
@@ -231,6 +233,13 @@ export async function mutualConnections(
 ): Promise<ConnectorOutcome<Mutual[]>> {
   const r = await call<MutualResponse>('/mutuals', { accountId, token: opts.token, targetMemberId }, opts);
   if (!r.ok) return r;
+  // an answer LinkedIn did not filter is the student's own connections, never shown as someone else's
+  if (r.value.verified !== true)
+    return {
+      ok: false,
+      reason: 'error',
+      message: "LinkedIn didn't confirm who you both know, so Orbit isn't guessing. Try again later.",
+    };
   return {
     ok: true,
     value: (r.value.mutuals ?? [])

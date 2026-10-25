@@ -187,11 +187,16 @@ describe('Unipile research', () => {
     expect(calls[1]!.url).toBe(`${base}/api/v1/users/ACoA1/posts?account_id=acc&limit=10`);
   });
 
-  it('searches mutuals with classic people, distance [1] and connections_of [member]', async () => {
+  it('searches mutuals with classic people, distance [1] and connections_of as one member id', async () => {
     const { fetch, calls } = fakeFetch(() =>
       json({
         object: 'LinkedinSearch',
-        items: [{ type: 'PEOPLE', id: 'ACoM', name: 'Mia Chen' }],
+        items: [
+          { type: 'PEOPLE', id: 'ACoM', name: 'Mia Chen', network_distance: 'DISTANCE_1' },
+          { type: 'PEOPLE', id: 'ACoT', name: 'The Target', network_distance: 'DISTANCE_2' },
+          { type: 'PEOPLE', id: 'ACoX', name: 'Not Connected', network_distance: 'DISTANCE_2' },
+        ],
+        config: { params: { api: 'classic', category: 'people', connections_of: 'ACoT' } },
         cursor: null,
       }),
     );
@@ -200,8 +205,21 @@ describe('Unipile research', () => {
     expect(calls[0]).toMatchObject({
       url: `${base}/api/v1/linkedin/search?account_id=acc&limit=10`,
       method: 'POST',
-      body: { api: 'classic', category: 'people', network_distance: [1], connections_of: ['ACoT'] },
+      body: { api: 'classic', category: 'people', network_distance: [1], connections_of: 'ACoT' },
     });
+  });
+
+  it("refuses a mutuals answer LinkedIn did not filter (it would be the student's own connections)", async () => {
+    const { fetch } = fakeFetch(() =>
+      json({
+        object: 'LinkedinSearch',
+        items: [{ type: 'PEOPLE', id: 'ACoM', name: 'Mia Chen', network_distance: 'DISTANCE_1' }],
+        config: { params: { api: 'classic', category: 'people', network_distance: [1] } },
+        cursor: null,
+      }),
+    );
+    const r = await createUnipileResearch({ fetch, apiKey: 'uk', baseUrl: base }).mutuals('acc', 'ACoT');
+    expect(r).toMatchObject({ ok: false, kind: 'invalid' });
   });
 
   it('normalizes search items, distances, URLs and the Sales Navigator flag', () => {

@@ -99,7 +99,7 @@ describe('external path candidates (§4.2 acceptance 4)', () => {
       api: 'classic',
       category: 'people',
       network_distance: [1],
-      connections_of: ['ACoAADanaLee'],
+      connections_of: 'ACoAADanaLee',
     });
     expect(s.net.calls.find((c) => c.url.endsWith('/v2/people/paths'))!.body).toEqual({
       linkedin_url: 'https://www.linkedin.com/in/dana-lee',

@@ -845,26 +845,46 @@ async function unipileMe(deps, body, doFetch) {
     picture
   };
 }
+var MUTUALS_MAX_PAGES = 5;
 async function unipileMutuals(deps, body, doFetch) {
   const accountId = String(body.accountId ?? "");
-  const target = String(body.targetMemberId ?? "");
-  const res = await doFetch(
-    `${deps.unipileBase}/api/v1/linkedin/search?account_id=${encodeURIComponent(accountId)}`,
-    {
+  const target = String(body.targetMemberId ?? "").trim();
+  if (!target) return { mutuals: [], verified: false };
+  const mutuals = [];
+  let cursor;
+  let total;
+  for (let page = 0; page < MUTUALS_MAX_PAGES; page++) {
+    const q = new URLSearchParams({ account_id: accountId });
+    if (cursor) q.set("cursor", cursor);
+    const res = await doFetch(`${deps.unipileBase}/api/v1/linkedin/search?${q}`, {
       method: "POST",
       headers: uHeaders(deps),
       body: JSON.stringify({
         api: "classic",
         category: "people",
         network_distance: [1],
-        connections_of: [target]
+        connections_of: target
       })
+    });
+    if (!res.ok) throw new Error(`unipile ${res.status}`);
+    const b = await res.json();
+    const applied = b.config?.params?.connections_of;
+    const kept = Array.isArray(applied) ? applied.map(String) : applied === void 0 ? [] : [String(applied)];
+    if (!kept.includes(target)) return { mutuals: [], verified: false };
+    if (typeof b.paging?.total_count === "number") total = b.paging.total_count;
+    for (const m of b.items ?? []) {
+      const id = m.member_id ?? m.id;
+      if (id === target) continue;
+      if (typeof m.network_distance === "string" && m.network_distance !== "DISTANCE_1") continue;
+      mutuals.push(m);
     }
-  );
-  if (!res.ok) throw new Error(`unipile ${res.status}`);
-  const b = await res.json();
+    cursor = typeof b.cursor === "string" && b.cursor ? b.cursor : void 0;
+    if (!cursor || !(b.items ?? []).length) break;
+  }
   return {
-    mutuals: (b.items ?? []).map((m) => ({
+    verified: true,
+    count: total ?? mutuals.length,
+    mutuals: mutuals.map((m) => ({
       name: m.name ?? `${m.first_name ?? ""} ${m.last_name ?? ""}`.trim(),
       headline: m.headline,
       url: m.public_profile_url ?? m.profile_url,

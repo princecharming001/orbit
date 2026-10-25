@@ -174,7 +174,12 @@ describe('Unipile (live LinkedIn) adapter', () => {
   it('returns mutual connections, and a typed failure when off or erroring', async () => {
     setUnipileUrlForTests(BASE);
     const { fn } = stub({
-      '/mutuals': { body: { mutuals: [{ name: 'Mia Chen', headline: 'PM at Stripe', member_id: 'm_mia' }] } },
+      '/mutuals': {
+        body: {
+          verified: true,
+          mutuals: [{ name: 'Mia Chen', headline: 'PM at Stripe', member_id: 'm_mia' }],
+        },
+      },
     });
     expect(await mutualConnections('acc_1', 'm_target', { fetch: fn })).toEqual({
       ok: true,

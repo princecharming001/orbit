@@ -7,7 +7,8 @@
  * - `GET /api/v1/users/{identifier}/posts?account_id=&limit=` → `{object: "PostList", items: [{id, social_id,
  *   share_url, text, date, parsed_datetime, reaction_counter, comment_counter, ...}], cursor}`.
  * - `POST /api/v1/linkedin/search?account_id=&limit=&cursor=`, body by `api` + `category`. Classic people:
- *   `keywords`, `network_distance: number[]` (1|2|3), `connections_of: string[]`, and `company` / `past_company` /
+ *   `keywords`, `network_distance: number[]` (1|2|3), `connections_of: string` (ONE member id; LinkedIn silently drops a filter
+ *   it does not accept, e.g. an array, and `config.params` in the answer echoes the filters it applied), and `company` / `past_company` /
  *   `school` / `location` / `industry` as LinkedIn **ids** (from `GET /api/v1/linkedin/search/parameters?type=&
  *   keywords=`). Sales Navigator people take `{include, exclude}` filters, plain-text company/role allowed. Classic
  *   pages hold at most 10 results; Sales Navigator up to 100. Response `{object: "LinkedinSearch", items: [{type:
@@ -105,6 +106,7 @@ export const unipileSearchSchema = z.looseObject({
   items: z.array(unipileSearchItemSchema).default([]),
   cursor: z.string().nullish(),
   paging: z.looseObject({ total_count: z.number().nullish() }).nullish(),
+  config: z.looseObject({ params: z.record(z.string(), z.unknown()).nullish() }).nullish(),
 });
 
 export const unipileSearchParamsSchema = z.looseObject({
@@ -120,7 +122,7 @@ export interface ClassicPeopleSearch {
   category: 'people';
   keywords?: string;
   network_distance?: (1 | 2 | 3)[];
-  connections_of?: string[];
+  connections_of?: string;
   company?: string[];
   past_company?: string[];
   school?: string[];
@@ -262,11 +264,27 @@ export function createUnipileResearch(opts: ProviderOptions): UnipileResearch {
       for (let page = 0; page < (o.maxPages ?? 1); page++) {
         const r = await api.searchPeople(
           accountId,
-          { api: 'classic', category: 'people', network_distance: [1], connections_of: [memberId] },
+          { api: 'classic', category: 'people', network_distance: [1], connections_of: memberId },
           { cursor },
         );
         if (!r.ok) return page === 0 ? r : { ok: true, value: items };
-        items.push(...r.value.items);
+        // an answer without the filter is the student's own connections, not people who know the target
+        const applied = r.value.config?.params?.connections_of;
+        const kept = Array.isArray(applied) ? applied.map(String) : applied == null ? [] : [String(applied)];
+        if (!kept.includes(memberId)) {
+          return {
+            ok: false,
+            kind: 'invalid',
+            provider: 'unipile',
+            message: 'unipile: LinkedIn did not apply the mutual-connections filter',
+          };
+        }
+        for (const it of r.value.items) {
+          const id = it.id ?? it.provider_id ?? it.member_id;
+          if (id === memberId) continue;
+          if (it.network_distance && it.network_distance !== 'DISTANCE_1') continue;
+          items.push(it);
+        }
         cursor = r.value.cursor ?? undefined;
         if (!cursor) break;
       }

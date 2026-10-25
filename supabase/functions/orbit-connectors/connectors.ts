@@ -754,27 +754,65 @@ async function unipileMe(deps: ConnectorDeps, body: Record<string, unknown>, doF
   };
 }
 
+/** LinkedIn gives 10 people per page of a classic search: this many pages of mutual connections are read. */
+export const MUTUALS_MAX_PAGES = 5;
+
+/**
+ * The student's 1st-degree connections who are also connected to the target: LinkedIn's "Connections of" filter
+ * (`connections_of`, one member id, not a list) on a search of the student's own connections. LinkedIn drops a filter
+ * it does not accept and answers with an unfiltered search instead, which would pass the student's own connections
+ * off as the target's; so an answer is only used when it says the filter was applied.
+ */
 async function unipileMutuals(deps: ConnectorDeps, body: Record<string, unknown>, doFetch: typeof fetch) {
   const accountId = String(body.accountId ?? '');
-  const target = String(body.targetMemberId ?? '');
-  // LinkedIn search for the student's 1st-degree connections who are connected to the target
-  const res = await doFetch(
-    `${deps.unipileBase}/api/v1/linkedin/search?account_id=${encodeURIComponent(accountId)}`,
-    {
+  const target = String(body.targetMemberId ?? '').trim();
+  if (!target) return { mutuals: [], verified: false };
+  const mutuals: Record<string, unknown>[] = [];
+  let cursor: string | undefined;
+  let total: number | undefined;
+  for (let page = 0; page < MUTUALS_MAX_PAGES; page++) {
+    const q = new URLSearchParams({ account_id: accountId });
+    if (cursor) q.set('cursor', cursor);
+    const res = await doFetch(`${deps.unipileBase}/api/v1/linkedin/search?${q}`, {
       method: 'POST',
       headers: uHeaders(deps),
       body: JSON.stringify({
         api: 'classic',
         category: 'people',
         network_distance: [1],
-        connections_of: [target],
+        connections_of: target,
       }),
-    },
-  );
-  if (!res.ok) throw new Error(`unipile ${res.status}`);
-  const b = (await res.json()) as { items?: Record<string, unknown>[] };
+    });
+    if (!res.ok) throw new Error(`unipile ${res.status}`);
+    const b = (await res.json()) as {
+      items?: Record<string, unknown>[];
+      cursor?: string | null;
+      paging?: { total_count?: number };
+      config?: { params?: Record<string, unknown> };
+    };
+    // the filter must come back in what LinkedIn says it searched: without it, these are not mutual connections
+    const applied = b.config?.params?.connections_of;
+    const kept = Array.isArray(applied)
+      ? applied.map(String)
+      : applied === undefined
+        ? []
+        : [String(applied)];
+    if (!kept.includes(target)) return { mutuals: [], verified: false };
+    if (typeof b.paging?.total_count === 'number') total = b.paging.total_count;
+    for (const m of b.items ?? []) {
+      // never the target themself, and only people the student is connected to
+      const id = m.member_id ?? m.id;
+      if (id === target) continue;
+      if (typeof m.network_distance === 'string' && m.network_distance !== 'DISTANCE_1') continue;
+      mutuals.push(m);
+    }
+    cursor = typeof b.cursor === 'string' && b.cursor ? b.cursor : undefined;
+    if (!cursor || !(b.items ?? []).length) break;
+  }
   return {
-    mutuals: (b.items ?? []).map((m) => ({
+    verified: true,
+    count: total ?? mutuals.length,
+    mutuals: mutuals.map((m) => ({
       name: m.name ?? `${m.first_name ?? ''} ${m.last_name ?? ''}`.trim(),
       headline: m.headline,
       url: m.public_profile_url ?? m.profile_url,
