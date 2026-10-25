@@ -1105,7 +1105,8 @@ describe('orbit-connectors proxy', () => {
   });
 
   it('stops an account at its daily post reads', async () => {
-    const { handler } = harness({ postReadsPerDay: 1 }, (url) =>
+    // a posts ledger of 1: /posts/activity may use round(85%) of it, one unit per call
+    const { handler } = harness({ ledger: { posts: 1 } }, (url) =>
       url.includes('/users/me')
         ? new Response(JSON.stringify({ provider_id: 'ACoME' }))
         : new Response(JSON.stringify({ items: [], cursor: null })),
@@ -1120,6 +1121,455 @@ describe('orbit-connectors proxy', () => {
     ).toMatchObject({
       ok: false,
       reason: 'limit',
+    });
+  });
+
+  describe('third-party engagement (/engagement)', () => {
+    const AT = new Date('2026-10-20T12:00:00Z');
+    const LIMIT_MSG = 'Orbit has read as much from LinkedIn as it allows today. It carries on tomorrow.';
+    /** A harness whose waits return at once but are recorded, in order with the upstream calls. */
+    const paced = (answer: Upstream, over: Partial<ConnectorDeps> = {}, random = 0) => {
+      const events: string[] = [];
+      const waits: number[] = [];
+      const h = harness(
+        {
+          now: () => AT,
+          take: memoryTake(() => AT.getTime()),
+          sleep: async (ms) => {
+            waits.push(ms);
+            events.push('sleep');
+          },
+          random: () => random,
+          ...over,
+        },
+        (url, init) => {
+          events.push('fetch');
+          return answer(url, init);
+        },
+      );
+      const read = (body: Record<string, unknown>) =>
+        h.handler(post('/engagement', { accountId: 'a1', token: TOKEN.a1, ...body }));
+      return { ...h, read, waits, events };
+    };
+    const ok = (body: unknown) => () => new Response(JSON.stringify(body), { status: 200 });
+
+    it("maps a person's posts in one upstream call: activity ids, counters, reposts, and whom they mention", async () => {
+      const { read, upstream, waits, events } = paced(
+        ok({
+          items: [
+            {
+              id: '7250000000000000001',
+              social_id: 'urn:li:activity:7250000000000000001',
+              parsed_datetime: '2026-10-01T09:00:00.000Z',
+              text: 'Thrilled to share a SECRET_POST_TEXT announcement',
+              reaction_counter: 42,
+              comment_counter: '3',
+              is_repost: false,
+              author: { id: 'ACoB' },
+              mentions: [
+                { name: 'Ana Ruiz', profile_urn: 'urn:li:fsd_profile:ACoAna' },
+                { name: 'Sam Ortiz', provider_id: 'ACoSam' },
+                { name: 'Only A Link', url: 'https://www.linkedin.com/in/only-a-link' },
+                { name: 'Stripe', type: 'COMPANY', id: 'urn:li:fsd_company:1' },
+              ],
+            },
+            {
+              id: '7250000000000000002',
+              social_id: 'urn:li:activity:7250000000000000002',
+              date: '2w',
+              reaction_counter: 0,
+              is_repost: true,
+              repost_content: { author: { id: 'ACoOrig' } },
+            },
+            { text: 'no id at all' },
+          ],
+          cursor: 'next-posts',
+        }),
+      );
+      const res = await read({ memberId: 'ACoB', want: 'posts', cursor: 'prev' });
+      expect(res.status).toBe(200);
+      const raw = await res.text();
+      expect(raw).not.toContain('SECRET_POST_TEXT');
+      expect(JSON.parse(raw)).toEqual({
+        ok: true,
+        want: 'posts',
+        items: [
+          {
+            id: '7250000000000000001',
+            socialId: 'urn:li:activity:7250000000000000001',
+            at: '2026-10-01T09:00:00.000Z',
+            reactions: 42,
+            comments: 3,
+            mentions: ['ACoAna', 'ACoSam'],
+            tagged: 3,
+          },
+          {
+            id: '7250000000000000002',
+            socialId: 'urn:li:activity:7250000000000000002',
+            at: '2026-10-06T12:00:00.000Z',
+            reactions: 0,
+            comments: 0,
+            repostOf: 'ACoOrig',
+            mentions: [],
+            tagged: 0,
+          },
+        ],
+        cursor: 'next-posts',
+      });
+      expect(upstream).toHaveLength(1);
+      const url = new URL(upstream[0]!.url);
+      expect(url.pathname).toBe('/api/v1/users/ACoB/posts');
+      expect(Object.fromEntries(url.searchParams)).toEqual({ account_id: 'a1', limit: '20', cursor: 'prev' });
+      // one random wait, before the call
+      expect(events).toEqual(['sleep', 'fetch']);
+      expect(waits).toEqual([400]);
+    });
+
+    it('spaces each call by 400 to 1,500 ms at random', async () => {
+      const top = paced(ok({ items: [] }), {}, 0.99999999);
+      await top.read({ memberId: 'ACoB', want: 'reactions' });
+      expect(top.waits).toEqual([1500]);
+      const mid = paced(ok({ items: [] }), {}, 0.5);
+      await mid.read({ memberId: 'ACoB', want: 'comments' });
+      expect(mid.waits[0]).toBeGreaterThanOrEqual(400);
+      expect(mid.waits[0]).toBeLessThanOrEqual(1500);
+    });
+
+    it('maps reactions to the post and its author, leaving out companies', async () => {
+      const { read, upstream } = paced(
+        ok({
+          items: [
+            {
+              value: 'LIKE',
+              post_id: 'urn:li:activity:7250000000000000001',
+              author: { id: 'ACoB', type: 'PERSON' },
+            },
+            {
+              value: 'PRAISE',
+              post_id: '7250000000000000009',
+              comment_id: '7250000000000000777',
+              author: { id: 'ACoC', name: 'Cy' },
+            },
+            { value: 'LIKE', post_id: '7250000000000000010', author: { id: 'C1', type: 'COMPANY' } },
+            { value: 'LIKE', author: { id: 'ACoD' } },
+          ],
+          cursor: 'r2',
+        }),
+      );
+      expect(await (await read({ memberId: 'ACoA', want: 'reactions' })).json()).toEqual({
+        ok: true,
+        want: 'reactions',
+        items: [
+          { postId: '7250000000000000001', authorId: 'ACoB', onComment: false },
+          { postId: '7250000000000000009', authorId: 'ACoC', onComment: true },
+        ],
+        cursor: 'r2',
+      });
+      const url = new URL(upstream[0]!.url);
+      expect(url.pathname).toBe('/api/v1/users/ACoA/reactions');
+      expect(url.searchParams.get('limit')).toBe('100');
+      expect(url.searchParams.has('cursor')).toBe(false);
+    });
+
+    it("maps a person's comments to post ids and dates, never their text", async () => {
+      const { read, upstream } = paced(
+        ok({
+          items: [
+            {
+              id: 'c1',
+              post_id: '7250000000000000001',
+              post_urn: 'urn:li:activity:7250000000000000001',
+              date: '2026-10-10T08:00:00.000Z',
+              text: 'SECRET_COMMENT_TEXT congrats!',
+              author_details: { id: 'ACoA' },
+            },
+            { id: 'c2', post_id: '7250000000000000003', thread_id: 'c0', date: '3d', text: 'reply' },
+            { id: 'c3', text: 'no post' },
+          ],
+          cursor: null,
+        }),
+      );
+      const raw = await (await read({ memberId: 'ACoA', want: 'comments' })).text();
+      expect(raw).not.toContain('SECRET_COMMENT_TEXT');
+      expect(raw).not.toContain('reply');
+      expect(JSON.parse(raw)).toEqual({
+        ok: true,
+        want: 'comments',
+        items: [
+          { id: 'c1', postId: '7250000000000000001', at: '2026-10-10T08:00:00.000Z' },
+          { id: 'c2', postId: '7250000000000000003', at: '2026-10-17T12:00:00.000Z', threadId: 'c0' },
+        ],
+        cursor: null,
+      });
+      expect(new URL(upstream[0]!.url).pathname).toBe('/api/v1/users/ACoA/comments');
+    });
+
+    it("reads one post's comment thread by its activity URN: who commented and when, never what", async () => {
+      const { read, upstream } = paced(
+        ok({
+          items: [
+            {
+              id: 'k1',
+              author_details: { id: 'ACoA' },
+              date: '1w',
+              text: 'SECRET_THREAD_TEXT',
+              reply_counter: 1,
+            },
+            { id: 'k2', author: { id: 'ACoB', name: 'Bea' }, date: '2026-10-19T10:00:00Z' },
+            { id: 'k3', author: { id: 'C9', type: 'COMPANY' } },
+            { id: 'k4', text: 'nobody' },
+          ],
+          paging: { cursor: 't2' },
+        }),
+      );
+      const raw = await (
+        await read({ memberId: 'ACoB', want: 'thread', postId: '7250000000000000001' })
+      ).text();
+      expect(raw).not.toContain('SECRET_THREAD_TEXT');
+      expect(JSON.parse(raw)).toEqual({
+        ok: true,
+        want: 'thread',
+        items: [
+          { id: 'k1', commenterId: 'ACoA', at: '2026-10-13T12:00:00.000Z' },
+          { id: 'k2', commenterId: 'ACoB', at: '2026-10-19T10:00:00.000Z' },
+        ],
+        cursor: 't2',
+      });
+      const url = new URL(upstream[0]!.url);
+      expect(decodeURIComponent(url.pathname)).toBe(
+        '/api/v1/posts/urn:li:activity:7250000000000000001/comments',
+      );
+      expect(url.searchParams.get('limit')).toBe('50');
+    });
+
+    it("says LinkedIn wouldn't show the activity on a 404 or 422, and a 502 with Unipile's words otherwise", async () => {
+      for (const status of [404, 422]) {
+        const { read } = paced(() => new Response(JSON.stringify({ title: 'nope' }), { status }));
+        const res = await read({ memberId: 'ACoB', want: 'posts' });
+        expect(res.status).toBe(200);
+        expect(await res.json()).toEqual({
+          ok: false,
+          reason: 'unavailable',
+          message: "LinkedIn wouldn't show this person's activity.",
+        });
+      }
+      const long = 'x'.repeat(500);
+      const { read } = paced(() => new Response(JSON.stringify({ detail: long }), { status: 500 }));
+      const res = await read({ memberId: 'ACoB', want: 'posts' });
+      expect(res.status).toBe(502);
+      const { error } = (await res.json()) as { error: string };
+      expect(error).toBe(`unipile 500: ${`{"detail":"${long}`.slice(0, 200)}`);
+      expect(error).not.toContain('u-key');
+    });
+
+    it('needs the token and a well-formed ask, and spends nothing on a bad one', async () => {
+      const { handler, read, upstream } = paced(ok({ items: [] }), { ledger: { posts: 1 } });
+      expect(
+        (await handler(post('/engagement', { accountId: 'a1', memberId: 'ACoB', want: 'posts' }))).status,
+      ).toBe(403);
+      for (const bad of [
+        { memberId: 'ACoB', want: 'everything' },
+        { want: 'posts' },
+        { memberId: 'ACoB', want: 'thread' },
+      ])
+        expect(await (await read(bad)).json()).toMatchObject({ ok: false, reason: 'bad_request' });
+      expect(upstream).toHaveLength(0);
+      // the one unit of the day is still there
+      expect(await (await read({ memberId: 'ACoB', want: 'posts' })).json()).toMatchObject({ ok: true });
+      expect(await (await read({ memberId: 'ACoB', want: 'posts' })).json()).toEqual({
+        ok: false,
+        reason: 'limit',
+        message: LIMIT_MSG,
+      });
+      expect(upstream).toHaveLength(1);
+    });
+
+    it('shares the posts ledger with /posts/activity, which stops first (85%)', async () => {
+      const { handler, read, upstream } = paced(
+        (url) =>
+          url.includes('/users/me')
+            ? new Response(JSON.stringify({ provider_id: 'ACoME' }))
+            : new Response(JSON.stringify({ items: [], cursor: null })),
+        { ledger: { posts: 4 } },
+      );
+      const activity = () => handler(post('/posts/activity', { accountId: 'a1', token: TOKEN.a1 }));
+      // round(85% of 4) = 3 calls of /posts/activity
+      for (let i = 0; i < 3; i++) expect(await (await activity()).json()).toMatchObject({ ok: true });
+      const before = upstream.length;
+      expect(await (await activity()).json()).toEqual({ ok: false, reason: 'limit', message: LIMIT_MSG });
+      expect(upstream).toHaveLength(before);
+      // engagement for a target the student opened still has the last unit
+      expect(await (await read({ memberId: 'ACoB', want: 'posts' })).json()).toMatchObject({ ok: true });
+      expect(await (await read({ memberId: 'ACoB', want: 'posts' })).json()).toMatchObject({
+        reason: 'limit',
+      });
+    });
+  });
+
+  describe('LinkedIn ledgers', () => {
+    const AT = new Date('2026-10-20T12:00:00Z');
+    const ledger = (handler: (r: Request) => Promise<Response>) =>
+      handler(post('/ledger', { accountId: 'a1', token: TOKEN.a1 })).then((r) => r.json());
+    /** Mutual connections over two pages of one person each. */
+    const twoPages: Upstream = (url, init) => {
+      if (url.includes('/api/v1/users/ACoT?'))
+        return new Response(JSON.stringify({ provider_id: 'ACoT', shared_connections_count: 2 }));
+      const params = JSON.parse((init.body as string) || '{}');
+      const second = url.includes('cursor=p2');
+      return new Response(
+        JSON.stringify({
+          items: [{ name: second ? 'Ben Ortiz' : 'Mia Chen', member_id: second ? 'm_ben' : 'm_mia' }],
+          config: { params },
+          paging: { total_count: 2 },
+          cursor: second ? null : 'p2',
+        }),
+      );
+    };
+    const mutuals = (handler: (r: Request) => Promise<Response>) =>
+      handler(post('/mutuals', { accountId: 'a1', token: TOKEN.a1, targetMemberId: 'ACoT' })).then((r) =>
+        r.json(),
+      );
+
+    it("reports each ledger's use today without counting, and needs the token", async () => {
+      const { handler, upstream } = harness(
+        { now: () => AT, take: memoryTake(() => AT.getTime()), ledger: { search: 50 } },
+        twoPages,
+      );
+      const empty = {
+        ok: true,
+        day: '2026-10-20',
+        profile: { used: 0, limit: 100 },
+        posts: { used: 0, limit: 100 },
+        search: { used: 0, limit: 50 },
+      };
+      expect(await ledger(handler)).toEqual(empty);
+      expect(await ledger(handler)).toEqual(empty);
+      expect((await handler(post('/ledger', { accountId: 'a1' }))).status).toBe(403);
+      expect(upstream).toHaveLength(0);
+      // /mutuals: one profile read for the shared count, one search unit per page
+      const r = (await mutuals(handler)) as { verified: boolean; mutuals: { name: string }[] };
+      expect(r.verified).toBe(true);
+      expect(r.mutuals.map((m) => m.name)).toEqual(['Mia Chen', 'Ben Ortiz']);
+      expect(upstream).toHaveLength(3);
+      expect(await ledger(handler)).toEqual({
+        ...empty,
+        profile: { used: 1, limit: 100 },
+        search: { used: 2, limit: 50 },
+      });
+    });
+
+    it('answers 503 for the report when the counter store cannot be read without counting', async () => {
+      const { handler } = harness({ take: async () => ({ allowed: true }) });
+      expect((await handler(post('/ledger', { accountId: 'a1', token: TOKEN.a1 }))).status).toBe(503);
+    });
+
+    it('keeps what /mutuals read when the search ledger runs out between pages, and refuses before the first', async () => {
+      const one = harness(
+        { now: () => AT, take: memoryTake(() => AT.getTime()), ledger: { search: 1 } },
+        twoPages,
+      );
+      expect(await mutuals(one.handler)).toMatchObject({
+        verified: true,
+        count: 2,
+        limited: true,
+        mutuals: [{ name: 'Mia Chen' }],
+      });
+      expect(one.upstream).toHaveLength(2);
+      expect(await mutuals(one.handler)).toEqual({
+        ok: false,
+        reason: 'limit',
+        message: 'Orbit has read as much from LinkedIn as it allows today. It carries on tomorrow.',
+      });
+    });
+
+    it('stops Discover at 80% of the search ledger while mutual connections can still page', async () => {
+      const { handler } = harness(
+        { now: () => AT, take: memoryTake(() => AT.getTime()), ledger: { search: 5 } },
+        (url, init) =>
+          url.includes('/api/v1/users/ACoT?') || !url.includes('/linkedin/search/parameters')
+            ? twoPages(url, init)
+            : new Response('{}', { status: 404 }),
+      );
+      const search = () => handler(post('/search', { accountId: 'a1', token: TOKEN.a1, keywords: 'pm' }));
+      for (let i = 0; i < 4; i++) expect(await (await search()).json()).toMatchObject({ ok: true });
+      expect(await (await search()).json()).toMatchObject({ ok: false, reason: 'limit' });
+      expect(await mutuals(handler)).toMatchObject({
+        verified: true,
+        limited: true,
+        mutuals: [{ name: 'Mia Chen' }],
+      });
+      expect(await ledger(handler)).toMatchObject({ search: { used: 5, limit: 5 } });
+    });
+
+    it('refuses /mutuals before reading anything once route profile reads are spent, but not photos at 80%', async () => {
+      const { handler, upstream } = harness(
+        { now: () => AT, take: memoryTake(() => AT.getTime()), ledger: { profile: 5 } },
+        (url, init) =>
+          url.includes('/api/v1/users/x?')
+            ? new Response(JSON.stringify({ provider_id: 'x' }))
+            : twoPages(url, init),
+      );
+      const photo = () => handler(post('/photo', { accountId: 'a1', token: TOKEN.a1, identifier: 'x' }));
+      for (let i = 0; i < 4; i++) expect(await (await photo()).json()).toMatchObject({ ok: true });
+      // photos stop at round(80% of 5) = 4, the route read still gets the fifth
+      expect(await (await photo()).json()).toMatchObject({ ok: false, reason: 'limit' });
+      expect(await mutuals(handler)).toMatchObject({ verified: true });
+      const before = upstream.length;
+      expect(await mutuals(handler)).toMatchObject({ ok: false, reason: 'limit' });
+      expect(upstream).toHaveLength(before);
+    });
+
+    it('fails closed with a 503 when the counter store is down mid-way through /mutuals', async () => {
+      let calls = 0;
+      const { handler } = harness(
+        {
+          take: async () => {
+            calls++;
+            // the visitor buckets pass; the ledger cannot be counted
+            if (calls > 1) throw new Error('db down');
+            return { allowed: true };
+          },
+        },
+        twoPages,
+      );
+      const res = await handler(
+        post('/mutuals', { accountId: 'a1', token: TOKEN.a1, targetMemberId: 'ACoT' }),
+      );
+      expect(res.status).toBe(503);
+    });
+
+    it('peeks at the counters table without counting, ignoring expired counts', async () => {
+      const calls: string[] = [];
+      const take = postgrestTake(
+        'https://db.test',
+        'svc',
+        (async (url: string) => {
+          calls.push(url);
+          return new Response(
+            JSON.stringify([
+              {
+                bucket: 'connectors:li:profile:2026-10-20:a1',
+                count: 31,
+                expires_at: '2026-10-21T00:00:00Z',
+              },
+              { bucket: 'connectors:li:posts:2026-10-20:a1', count: 9, expires_at: '2026-10-19T00:00:00Z' },
+            ]),
+          );
+        }) as unknown as typeof fetch,
+        () => AT.getTime(),
+      );
+      expect(
+        await take.peek!([
+          'connectors:li:profile:2026-10-20:a1',
+          'connectors:li:posts:2026-10-20:a1',
+          'connectors:li:search:2026-10-20:a1',
+        ]),
+      ).toEqual([31, 0, 0]);
+      const url = new URL(calls[0]!);
+      expect(url.pathname).toBe('/rest/v1/orbit_proxy_counters');
+      expect(url.searchParams.get('bucket')).toBe(
+        'in.("connectors:li:profile:2026-10-20:a1","connectors:li:posts:2026-10-20:a1","connectors:li:search:2026-10-20:a1")',
+      );
     });
   });
 
@@ -1208,7 +1658,7 @@ describe('orbit-connectors proxy', () => {
   it('asks for something to search for, and stops an account at its daily searches', async () => {
     const at = new Date('2026-10-16T09:00:00Z');
     const { handler, upstream } = harness(
-      { searchesPerDay: 1, now: () => at, take: memoryTake(() => at.getTime()) },
+      { ledger: { search: 1 }, now: () => at, take: memoryTake(() => at.getTime()) },
       () => new Response(JSON.stringify({ items: [], cursor: null })),
     );
     const search = (body: Record<string, unknown>) =>

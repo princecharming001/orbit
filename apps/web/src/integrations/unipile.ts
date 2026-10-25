@@ -14,6 +14,7 @@
  */
 import {
   automationOverride,
+  type ConnectorFailureReason,
   type ConnectorOutcome,
   connectorFailure,
   isUnconfigured,
@@ -223,7 +224,10 @@ interface MutualResponse {
   count?: number;
   /** the list matched what LinkedIn says the two share; without that it is not shown as mutual connections */
   verified?: boolean;
+  /** false with reason "limit" when today's LinkedIn reads are spent */
+  ok?: boolean;
   reason?: string;
+  message?: string;
 }
 
 /** Who the student knows who is connected to a target LinkedIn member. */
@@ -234,6 +238,13 @@ export async function mutualConnections(
 ): Promise<ConnectorOutcome<Mutual[]>> {
   const r = await call<MutualResponse>('/mutuals', { accountId, token: opts.token, targetMemberId }, opts);
   if (!r.ok) return r;
+  // today's LinkedIn reads are spent: said as such (the status searches use), not as LinkedIn failing
+  if (r.value.ok === false && r.value.reason === 'limit')
+    return connectorFailure(
+      'error',
+      r.value.message ?? 'Orbit has read as much from LinkedIn as it allows today.',
+      SEARCH_LIMIT_STATUS,
+    );
   // an answer LinkedIn did not filter is the student's own connections, never shown as someone else's
   if (r.value.verified !== true)
     return {
@@ -595,6 +606,219 @@ export async function linkedInPostActivity(
       ownDone: !!r.value.ownDone,
       olderPosts: r.value.olderPosts,
       cursor: r.value.cursor ?? null,
+    },
+  };
+}
+
+/** What one /engagement call reads about a person (plan 21): one upstream page each. */
+export type EngagementWant = 'posts' | 'reactions' | 'comments' | 'thread';
+
+/** One of a person's posts: when, how much engagement it drew, what it reposts, and whom it mentions. */
+export interface EngagementPost {
+  /** the activity number when LinkedIn gives one, so reactions and comments on it match */
+  id: string;
+  socialId?: string;
+  at?: string;
+  reactions: number;
+  comments: number;
+  /** the member id of the original author, for a repost */
+  repostOf?: string;
+  /** member ids of the people it mentions (those LinkedIn gave an id for) */
+  mentions: string[];
+  /** how many people it tags in all */
+  tagged: number;
+}
+
+/** A post (or a comment on it) the person reacted to, and who wrote that post. LinkedIn gives no date. */
+export interface EngagementReaction {
+  postId: string;
+  authorId: string;
+  onComment: boolean;
+}
+
+/** A comment the person wrote: on which post, and when. Never its text. */
+export interface EngagementComment {
+  id: string;
+  postId: string;
+  at?: string;
+  /** the comment it replies to, for a reply */
+  threadId?: string;
+}
+
+/** A comment under one post: who wrote it, and when. Never its text. */
+export interface EngagementThreadComment {
+  id: string;
+  commenterId: string;
+  at?: string;
+}
+
+export interface EngagementItems {
+  posts: EngagementPost;
+  reactions: EngagementReaction;
+  comments: EngagementComment;
+  thread: EngagementThreadComment;
+}
+
+export interface EngagementPage<W extends EngagementWant = EngagementWant> {
+  want: W;
+  items: EngagementItems[W][];
+  /** the next page of the same read, or null at the end */
+  cursor: string | null;
+}
+
+/**
+ * An engagement read's outcome: `limit` when today's LinkedIn reads are spent (it carries on tomorrow),
+ * `unavailable` when LinkedIn would not show this person's activity, else the usual connector failures.
+ */
+export type EngagementOutcome<T> =
+  | { ok: true; value: T }
+  | {
+      ok: false;
+      reason: 'limit' | 'unavailable' | 'bad_request' | ConnectorFailureReason;
+      message: string;
+      status?: number;
+    };
+
+const str = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
+const nonNegative = (v: unknown) =>
+  typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0;
+
+function engagementItem<W extends EngagementWant>(want: W, raw: unknown): EngagementItems[W] | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const r = raw as Record<string, unknown>;
+  const at = str(r.at) && !Number.isNaN(Date.parse(String(r.at))) ? String(r.at) : undefined;
+  let out: EngagementItems[EngagementWant] | undefined;
+  if (want === 'posts') {
+    out = str(r.id)
+      ? {
+          id: String(r.id),
+          ...(str(r.socialId) ? { socialId: String(r.socialId) } : {}),
+          ...(at ? { at } : {}),
+          reactions: nonNegative(r.reactions),
+          comments: nonNegative(r.comments),
+          ...(str(r.repostOf) ? { repostOf: String(r.repostOf) } : {}),
+          mentions: (Array.isArray(r.mentions) ? r.mentions : []).filter((m): m is string => !!str(m)),
+          tagged: nonNegative(r.tagged),
+        }
+      : undefined;
+  } else if (want === 'reactions') {
+    out =
+      str(r.postId) && str(r.authorId)
+        ? { postId: String(r.postId), authorId: String(r.authorId), onComment: r.onComment === true }
+        : undefined;
+  } else if (want === 'comments') {
+    out =
+      str(r.id) && str(r.postId)
+        ? {
+            id: String(r.id),
+            postId: String(r.postId),
+            ...(at ? { at } : {}),
+            ...(str(r.threadId) ? { threadId: String(r.threadId) } : {}),
+          }
+        : undefined;
+  } else {
+    out =
+      str(r.id) && str(r.commenterId)
+        ? { id: String(r.id), commenterId: String(r.commenterId), ...(at ? { at } : {}) }
+        : undefined;
+  }
+  return out as EngagementItems[W] | undefined;
+}
+
+/**
+ * One page of a person's public LinkedIn activity (orbit-connectors /engagement): their posts, what they reacted to,
+ * their comments, or the comments under one of their posts (`thread`, which needs `postId`). Each call is one
+ * LinkedIn read out of the day's posts ledger; pass `cursor` back for the next page.
+ */
+export async function linkedInEngagement<W extends EngagementWant>(
+  accountId: string,
+  q: { memberId: string; want: W; postId?: string; cursor?: string },
+  opts: CallOpts = {},
+): Promise<EngagementOutcome<EngagementPage<W>>> {
+  const r = await call<{
+    ok?: boolean;
+    reason?: string;
+    message?: string;
+    want?: string;
+    items?: unknown[];
+    cursor?: string | null;
+  }>(
+    '/engagement',
+    {
+      accountId,
+      token: opts.token,
+      memberId: q.memberId,
+      want: q.want,
+      ...(q.postId ? { postId: q.postId } : {}),
+      ...(q.cursor ? { cursor: q.cursor } : {}),
+    },
+    // the server waits up to 1.5 s before LinkedIn is asked
+    { timeoutMs: 30_000, ...opts },
+  );
+  if (!r.ok) return r;
+  if (r.value.ok === false) {
+    const reason = r.value.reason;
+    return {
+      ok: false,
+      reason: reason === 'limit' || reason === 'unavailable' || reason === 'bad_request' ? reason : 'error',
+      message: r.value.message ?? "LinkedIn didn't answer.",
+    };
+  }
+  if (r.value.want !== undefined && r.value.want !== q.want)
+    return connectorFailure('error', 'LinkedIn answered a different question.');
+  return {
+    ok: true,
+    value: {
+      want: q.want,
+      items: (Array.isArray(r.value.items) ? r.value.items : [])
+        .map((x) => engagementItem(q.want, x))
+        .filter((x): x is EngagementItems[W] => !!x),
+      cursor: str(r.value.cursor) ?? null,
+    },
+  };
+}
+
+/** One LinkedIn ledger's use today. */
+export interface LedgerUse {
+  used: number;
+  limit: number;
+}
+
+/** Today's LinkedIn reads for the account, per ledger (Settings: "LinkedIn reads today: 31 of 100"). */
+export interface LinkedInLedger {
+  /** the UTC day the counts are for (YYYY-MM-DD) */
+  day: string;
+  profile: LedgerUse;
+  posts: LedgerUse;
+  search: LedgerUse;
+}
+
+/** How much of today's LinkedIn reads the account has used, without using any. */
+export async function linkedInLedger(
+  accountId: string,
+  opts: CallOpts = {},
+): Promise<ConnectorOutcome<LinkedInLedger>> {
+  const r = await call<
+    Partial<Record<'profile' | 'posts' | 'search', Partial<LedgerUse>>> & {
+      ok?: boolean;
+      day?: string;
+      message?: string;
+    }
+  >('/ledger', { accountId, token: opts.token }, opts);
+  if (!r.ok) return r;
+  if (r.value.ok === false || !r.value.day)
+    return connectorFailure('error', r.value.message ?? "LinkedIn's reads could not be counted.");
+  const use = (u: Partial<LedgerUse> | undefined): LedgerUse => ({
+    used: nonNegative(u?.used),
+    limit: nonNegative(u?.limit),
+  });
+  return {
+    ok: true,
+    value: {
+      day: r.value.day,
+      profile: use(r.value.profile),
+      posts: use(r.value.posts),
+      search: use(r.value.search),
     },
   };
 }

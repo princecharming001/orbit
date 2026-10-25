@@ -6,7 +6,7 @@
  *
  * Routes (POST, JSON):
  *   /connect/start, /connect/status, /relations, /mutuals, /disconnect, /send,
- *   /inbox, /search, /me, /chats/history, /posts/activity                      -> Unipile
+ *   /inbox, /search, /me, /chats/history, /posts/activity, /engagement, /ledger -> Unipile
  *   /paths                                                                     -> Village
  *   /profile, /company, /photo (Unipile), /web (Exa), /providers   -> enrichment (plan 17 E, block at the end)
  *
@@ -15,11 +15,22 @@
  * send as them. /send sends one message the student approved: a direct message to a connection, or a connection
  * request with a note to anyone else, at most ORBIT_LINKEDIN_SENDS_PER_DAY (25) per account per day. /inbox reads
  * the account's recent LinkedIn messages (so replies reach the pipeline on their own) and /search runs a LinkedIn
- * people search beyond the student's own network, at most ORBIT_LINKEDIN_SEARCHES_PER_DAY (40) per account per day.
- * /chats/history reads the student's 1:1 LinkedIn chats (full history, or since a checkpoint) and /posts/activity the
- * comments and reactions on their recent posts and their own comments on others' posts, at most
- * ORBIT_LINKEDIN_POST_READS_PER_DAY (12) calls per account per day (LinkedIn counts those reads). Both page with a
- * signed cursor of their own until it comes back null, so nothing is skipped silently.
+ * people search beyond the student's own network. /chats/history reads the student's 1:1 LinkedIn chats (full
+ * history, or since a checkpoint) and /posts/activity the comments and reactions on their recent posts and their own
+ * comments on others' posts. Both page with a signed cursor of their own until it comes back null, so nothing is
+ * skipped silently. /engagement (plan 21) reads one page of a third party's public activity per call: their posts,
+ * the posts and comments they reacted to, their comments, or the comments under one post, ids and dates only (never
+ * comment text), each upstream call spaced by a random 400-1,500 ms.
+ *
+ * LinkedIn reads other than messaging come out of three ledgers per Unipile account per day (plan 21 §6), Unipile's
+ * per-action guidance: `profile` (ORBIT_LINKEDIN_PROFILE_READS_PER_DAY, 100), `posts`
+ * (ORBIT_LINKEDIN_POST_READS_PER_DAY, 100) and `search` (ORBIT_LINKEDIN_SEARCH_CALLS_PER_DAY, 100 calls, about 1,000
+ * result rows). Within a ledger each kind of caller may fill it only up to its own ceiling, so what matters most is
+ * never starved by what matters less (LEDGER_CEILINGS): a profile read for a route the student is looking at (the
+ * target in /mutuals, /profile with purpose "route") up to 100%, /photo 80%, enrichment /profile and /company 70%;
+ * /engagement 100% and /posts/activity 85% (one unit per call); /mutuals pages 100% and Discover's /search 80%.
+ * /ledger reports the day's use without counting anything. Sends keep their own bucket.
+ *
  * A route whose provider key is not set returns 503 with x-orbit-connector: unconfigured, so the app shows the
  * CSV fallback (or its own graph) instead. Pasting the key as a function secret turns it on with no redeploy of
  * the app. The exact upstream request and response mapping lives in the adapter functions, so a live test with real
@@ -51,7 +62,11 @@ export interface Bucket {
   expires: string;
 }
 /** Increment every bucket and say whether all stayed within their limits (the same store orbit-claude uses). */
-export type Take = (buckets: Bucket[]) => Promise<{ allowed: boolean; over?: string }>;
+export interface Take {
+  (buckets: Bucket[]): Promise<{ allowed: boolean; over?: string }>;
+  /** how far each key has been counted, without counting it (0 for one never taken or expired) */
+  peek?: (keys: string[]) => Promise<number[]>;
+}
 
 export interface ConnectorDeps {
   unipileKey: string | undefined;
@@ -77,10 +92,12 @@ export interface ConnectorDeps {
   signingKey?: string;
   /** LinkedIn messages and requests one account may send per day */
   sendsPerDay?: number;
-  /** LinkedIn people searches one account may run per day (LinkedIn throttles heavy searching) */
-  searchesPerDay?: number;
-  /** /posts/activity calls one account may make per day (each reads a few posts' comments and reactions) */
-  postReadsPerDay?: number;
+  /** each LinkedIn ledger's daily total per account (DEFAULT_LEDGER for any left out) */
+  ledger?: Partial<LedgerTotals>;
+  /** waits between paced upstream calls (tests pass one that returns at once) */
+  sleep?: (ms: number) => Promise<void>;
+  /** 0 <= x < 1, for the random spacing (tests pin it) */
+  random?: () => number;
   /** where Unipile reports the account a hosted sign-in produced; without it only the older account-list match runs */
   links?: LinkStore;
   /** this function's public address, for Unipile's notify_url */
@@ -171,16 +188,69 @@ export function sendBucket(accountId: string, now: Date, perDay: number): Bucket
   return { key: `connectors:send:${day}:${accountId}`, limit: perDay, expires: end.toISOString() };
 }
 
-/** The per-account LinkedIn search bucket for today. */
-export function searchBucket(accountId: string, now: Date, perDay: number): Bucket {
-  const b = sendBucket(accountId, now, perDay);
-  return { ...b, key: b.key.replace('connectors:send:', 'connectors:search:') };
+/** The three LinkedIn ledgers: profile reads, post reads, and search calls (plan 21 §6). */
+export type LedgerKind = 'profile' | 'posts' | 'search';
+export type LedgerTotals = Record<LedgerKind, number>;
+/** Unipile's guidance per account per day: ~100 profile reads, ~100 of each other read, ~1,000 search rows. */
+export const DEFAULT_LEDGER: LedgerTotals = { profile: 100, posts: 100, search: 100 };
+
+/**
+ * How far into a ledger each kind of caller may go, as a share of the day's total. The same ledger key is taken with
+ * a lower limit for what matters less, so once enrichment has spent 70 profile reads it stops, while a route the
+ * student is looking at can still read up to the full 100.
+ */
+export const LEDGER_CEILINGS = {
+  profile: { route: 1, photo: 0.8, enrich: 0.7 },
+  posts: { engagement: 1, activity: 0.85 },
+  search: { mutuals: 1, discover: 0.8 },
+} as const;
+
+export type LedgerCaller<K extends LedgerKind = LedgerKind> = keyof (typeof LEDGER_CEILINGS)[K];
+
+/** What a caller may fill a ledger to today. */
+export function ledgerLimit<K extends LedgerKind>(kind: K, caller: LedgerCaller<K>, total: number): number {
+  const share = (LEDGER_CEILINGS[kind] as Record<string, number>)[caller as string] ?? 0;
+  return Math.max(0, Math.round(total * share));
 }
 
-/** The per-account bucket for reading post comments and reactions today. */
-export function postReadsBucket(accountId: string, now: Date, perDay: number): Bucket {
-  const b = sendBucket(accountId, now, perDay);
-  return { ...b, key: b.key.replace('connectors:send:', 'connectors:posts:') };
+/** A ledger's bucket for today, per Unipile account (browser and server modes share the key). */
+export function ledgerBucket(kind: LedgerKind, accountId: string, now: Date, limit: number): Bucket {
+  const b = sendBucket(accountId, now, limit);
+  return { ...b, key: b.key.replace('connectors:send:', `connectors:li:${kind}:`) };
+}
+
+/** The answer when a ledger refuses a read. */
+export const LEDGER_LIMIT = {
+  ok: false,
+  reason: 'limit',
+  message: 'Orbit has read as much from LinkedIn as it allows today. It carries on tomorrow.',
+} as const;
+
+/** The counter store could not be reached: the read is refused (503), never made uncounted. */
+class StoreDown extends Error {}
+
+/**
+ * Spend one unit of a ledger for a caller: true when it was within that caller's ceiling. A store that can peek is
+ * asked first, so a refused low-priority read never adds to the count the higher-priority readers share.
+ */
+async function spendLedger<K extends LedgerKind>(
+  take: Take,
+  totals: LedgerTotals,
+  kind: K,
+  caller: LedgerCaller<K>,
+  accountId: string,
+  now: Date,
+): Promise<boolean> {
+  const b = ledgerBucket(kind, accountId, now, ledgerLimit(kind, caller, totals[kind]));
+  try {
+    if (take.peek) {
+      const [used = 0] = await take.peek([b.key]);
+      if (used >= b.limit) return false;
+    }
+    return (await take([b])).allowed;
+  } catch {
+    throw new StoreDown('counter store unavailable');
+  }
 }
 
 /** LinkedIn caps a connection-request note at this many characters. */
@@ -235,9 +305,12 @@ export function buckets(visitor: string, now: Date, limits: Limits): Bucket[] {
  */
 export function memoryTake(clock: () => number = Date.now): Take {
   const counts = new Map<string, { n: number; expires: number }>();
-  return async (bs) => {
+  const sweep = () => {
     const now = clock();
     for (const [k, v] of counts) if (v.expires < now) counts.delete(k);
+  };
+  const take: Take = async (bs) => {
+    sweep();
     for (const b of bs) {
       const c = counts.get(b.key) ?? { n: 0, expires: Date.parse(b.expires) };
       c.n++;
@@ -246,6 +319,11 @@ export function memoryTake(clock: () => number = Date.now): Take {
     }
     return { allowed: true };
   };
+  take.peek = async (keys) => {
+    sweep();
+    return keys.map((k) => counts.get(k)?.n ?? 0);
+  };
+  return take;
 }
 
 const UNIPILE_ROUTES = new Set([
@@ -260,6 +338,8 @@ const UNIPILE_ROUTES = new Set([
   '/me',
   '/chats/history',
   '/posts/activity',
+  '/engagement',
+  '/ledger',
 ]);
 /** Routes that act on a connected account, so need its token. */
 const ACCOUNT_ROUTES = new Set([
@@ -272,6 +352,8 @@ const ACCOUNT_ROUTES = new Set([
   '/me',
   '/chats/history',
   '/posts/activity',
+  '/engagement',
+  '/ledger',
 ]);
 
 export function makeHandler(deps: ConnectorDeps): (req: Request) => Promise<Response> {
@@ -345,16 +427,17 @@ export function makeHandler(deps: ConnectorDeps): (req: Request) => Promise<Resp
       );
     }
 
-    if (isEnrich) return enrichmentRoute(deps, path, body, { h, doFetch, take, now, visitor });
-    if (
-      ACCOUNT_ROUTES.has(path) &&
-      !(await tokenValid(String(body.accountId ?? ''), body.token, deps.signingKey))
-    )
+    const totals: LedgerTotals = { ...DEFAULT_LEDGER, ...deps.ledger };
+    const accountId = String(body.accountId ?? '');
+    const spend = <K extends LedgerKind>(kind: K, caller: LedgerCaller<K>) =>
+      spendLedger(take, totals, kind, caller, accountId, now());
+    if (isEnrich) return enrichmentRoute(deps, path, body, { h, doFetch, take, now, visitor, spend });
+    if (ACCOUNT_ROUTES.has(path) && !(await tokenValid(accountId, body.token, deps.signingKey)))
       return json(403, { error: 'this LinkedIn account is not linked to this browser' }, h);
     if (path === '/send') {
       let sendVerdict: { allowed: boolean };
       try {
-        sendVerdict = await take([sendBucket(String(body.accountId), now(), deps.sendsPerDay ?? 25)]);
+        sendVerdict = await take([sendBucket(accountId, now(), deps.sendsPerDay ?? 25)]);
       } catch {
         return json(503, { error: 'unavailable right now' }, h);
       }
@@ -369,44 +452,30 @@ export function makeHandler(deps: ConnectorDeps): (req: Request) => Promise<Resp
           h,
         );
     }
-    if (path === '/search') {
-      let searchVerdict: { allowed: boolean };
-      try {
-        searchVerdict = await take([searchBucket(String(body.accountId), now(), deps.searchesPerDay ?? 40)]);
-      } catch {
-        return json(503, { error: 'unavailable right now' }, h);
-      }
-      if (!searchVerdict.allowed)
-        return json(
-          200,
-          {
-            ok: false,
-            reason: 'limit',
-            message: 'You have run as many LinkedIn searches as Orbit allows today. Try again tomorrow.',
-          },
-          h,
-        );
+    if (path === '/ledger') return ledgerReport(take, totals, accountId, now(), h);
+    let engagement: EngagementRequest | undefined;
+    if (path === '/engagement') {
+      const parsed = engagementRequest(body);
+      if ('message' in parsed) return json(200, parsed, h);
+      engagement = parsed;
     }
-
-    if (path === '/posts/activity') {
-      let postsVerdict: { allowed: boolean };
+    // the reads that come out of a ledger, one unit per call (/mutuals spends its own, per upstream read)
+    const ledgerSpend =
+      path === '/search'
+        ? () => spend('search', 'discover')
+        : path === '/posts/activity'
+          ? () => spend('posts', 'activity')
+          : path === '/engagement'
+            ? () => spend('posts', 'engagement')
+            : undefined;
+    if (ledgerSpend) {
+      let within: boolean;
       try {
-        postsVerdict = await take([
-          postReadsBucket(String(body.accountId), now(), deps.postReadsPerDay ?? 12),
-        ]);
+        within = await ledgerSpend();
       } catch {
         return json(503, { error: 'unavailable right now' }, h);
       }
-      if (!postsVerdict.allowed)
-        return json(
-          200,
-          {
-            ok: false,
-            reason: 'limit',
-            message: 'Orbit has read as many LinkedIn posts as it allows today. It reads the rest tomorrow.',
-          },
-          h,
-        );
+      if (!within) return json(200, LEDGER_LIMIT, h);
     }
 
     try {
@@ -422,15 +491,21 @@ export function makeHandler(deps: ConnectorDeps): (req: Request) => Promise<Resp
       }
       if (path === '/send') return json(200, await unipileSend(deps, body, doFetch), h);
       if (path === '/relations') return json(200, await unipileRelations(deps, body, doFetch), h);
-      if (path === '/mutuals') return json(200, await unipileMutuals(deps, body, doFetch), h);
+      if (path === '/mutuals') return json(200, await unipileMutuals(deps, body, doFetch, spend), h);
       if (path === '/inbox') return json(200, await unipileInbox(deps, body, doFetch), h);
       if (path === '/search') return json(200, await unipileSearch(deps, body, doFetch), h);
       if (path === '/me') return json(200, await unipileMe(deps, body, doFetch), h);
       if (path === '/chats/history') return json(200, await unipileChatHistory(deps, body, doFetch), h);
       if (path === '/posts/activity')
         return json(200, await unipilePostActivity(deps, body, doFetch, now()), h);
+      if (engagement) {
+        const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+        await sleep(jitterMs(deps.random ?? Math.random));
+        return json(200, await unipileEngagement(deps, accountId, engagement, doFetch, now()), h);
+      }
       return json(200, await unipileDisconnect(deps, body, doFetch), h);
     } catch (e) {
+      if (e instanceof StoreDown) return json(503, { error: 'unavailable right now' }, h);
       return json(502, { error: e instanceof Error ? e.message : 'upstream error' }, h);
     }
   };
@@ -799,17 +874,31 @@ async function sharedConnectionCount(
  * profile: LinkedIn says there how many connections the two share, and a search that finds far more than that is the
  * student's own connections, not people who know the target. Without LinkedIn's count nothing is claimed.
  */
-async function unipileMutuals(deps: ConnectorDeps, body: Record<string, unknown>, doFetch: typeof fetch) {
+async function unipileMutuals(
+  deps: ConnectorDeps,
+  body: Record<string, unknown>,
+  doFetch: typeof fetch,
+  spend: <K extends LedgerKind>(kind: K, caller: LedgerCaller<K>) => Promise<boolean>,
+) {
   const accountId = String(body.accountId ?? '');
   const target = String(body.targetMemberId ?? '').trim();
   if (!target) return { mutuals: [], verified: false, reason: 'no_target' };
+  // the target's profile is a route read (the highest profile ceiling); each search page is one search-ledger unit
+  if (!(await spend('profile', 'route'))) return LEDGER_LIMIT;
   const shared = await sharedConnectionCount(deps, accountId, target, doFetch);
   if (shared === undefined) return { mutuals: [], verified: false, reason: 'no_shared_count' };
   if (shared === 0) return { mutuals: [], verified: true, count: 0 };
   const mutuals: Record<string, unknown>[] = [];
   let cursor: string | undefined;
   let total: number | undefined;
+  let limited = false;
   for (let page = 0; page < MUTUALS_MAX_PAGES; page++) {
+    if (!(await spend('search', 'mutuals'))) {
+      if (page === 0) return LEDGER_LIMIT;
+      // what was read so far stands; the rest waits for tomorrow's allowance
+      limited = true;
+      break;
+    }
     const q = new URLSearchParams({ account_id: accountId });
     if (cursor) q.set('cursor', cursor);
     const res = await doFetch(`${deps.unipileBase}/api/v1/linkedin/search?${q}`, {
@@ -855,6 +944,7 @@ async function unipileMutuals(deps: ConnectorDeps, body: Record<string, unknown>
   return {
     verified: true,
     count: shared,
+    ...(limited ? { limited: true } : {}),
     mutuals: mutuals.map((m) => ({
       name: m.name ?? `${m.first_name ?? ''} ${m.last_name ?? ''}`.trim(),
       headline: m.headline,
@@ -1411,6 +1501,200 @@ async function unipilePostActivity(
   };
 }
 
+// ---- Third-party engagement (plan 21): one upstream page per call, ids and dates only ---------------------------
+
+export type EngagementWant = 'posts' | 'reactions' | 'comments' | 'thread';
+const ENGAGEMENT_WANTS = new Set<EngagementWant>(['posts', 'reactions', 'comments', 'thread']);
+/** Page sizes per kind of read. */
+export const ENGAGEMENT_LIMITS: Record<EngagementWant, number> = {
+  posts: 20,
+  reactions: 100,
+  comments: 100,
+  thread: 50,
+};
+/** The random wait before each paced upstream call, in milliseconds. */
+export const JITTER_MIN_MS = 400;
+export const JITTER_MAX_MS = 1500;
+
+export function jitterMs(random: () => number): number {
+  const r = Math.min(Math.max(random(), 0), 0.999999);
+  return JITTER_MIN_MS + Math.floor(r * (JITTER_MAX_MS - JITTER_MIN_MS + 1));
+}
+
+interface EngagementRequest {
+  want: EngagementWant;
+  memberId?: string;
+  postId?: string;
+  cursor?: string;
+}
+
+/** The request /engagement was sent, or why it cannot be read (answered before anything is counted). */
+function engagementRequest(
+  body: Record<string, unknown>,
+): EngagementRequest | { ok: false; reason: 'bad_request'; message: string } {
+  const bad = (message: string) => ({ ok: false as const, reason: 'bad_request' as const, message });
+  const want = String(body.want ?? '') as EngagementWant;
+  if (!ENGAGEMENT_WANTS.has(want)) return bad('Say what to read: posts, reactions, comments or thread.');
+  const memberId = text(body.memberId, 200);
+  const postId = text(body.postId, 200);
+  const cursor = text(body.cursor, 2000);
+  if (want === 'thread' ? !postId : !memberId)
+    return bad(want === 'thread' ? 'Say which post to read.' : 'Say whose activity to read.');
+  return { want, memberId, postId, cursor };
+}
+
+/** The post id a thread read asks Unipile for: a bare activity number becomes its URN (the post's social id). */
+function threadPostId(v: string): string {
+  return /^\d+$/.test(v) ? `urn:li:activity:${v}` : v;
+}
+
+/** A LinkedIn member id from a mention: an id field, or the last part of a profile URN; never a slug or a URL. */
+function mentionMemberId(m: Record<string, unknown>): string | undefined {
+  for (const k of ['provider_id', 'profile_id', 'member_id', 'id', 'urn', 'profile_urn', 'entity_urn']) {
+    const v = m[k];
+    if (typeof v !== 'string' || !v.trim()) continue;
+    const t = v.trim();
+    if (/^https?:|\//.test(t)) continue;
+    const urn = /^urn:li:(?:fsd_profile|fs_miniProfile|member|person|profile):([^,()\s]+)$/.exec(t);
+    if (urn) return urn[1];
+    if (t.startsWith('urn:')) continue;
+    if (/^[A-Za-z0-9_-]{6,}$/.test(t)) return t;
+  }
+  return undefined;
+}
+
+const isCompany = (a: Record<string, unknown>) =>
+  a.is_company === true || /^(COMPANY|ORGANIZATION)$/i.test(String(a.type ?? ''));
+
+/**
+ * One page of a person's public LinkedIn activity, in exactly one upstream call:
+ *   posts      GET /users/{member}/posts      -> their posts with counters, what they repost, whom they mention
+ *   reactions  GET /users/{member}/reactions  -> the posts (or comments) they reacted to, with that post's author
+ *   comments   GET /users/{member}/comments   -> the posts they commented on, and when
+ *   thread     GET /posts/{post}/comments     -> who commented on one post, and when
+ * Post ids are normalised as /posts/activity does (an activity URN becomes its number) so the pages match each
+ * other. No comment text ever comes back. LinkedIn refusing the person (404, 422) is `unavailable`, not an error.
+ */
+async function unipileEngagement(
+  deps: ConnectorDeps,
+  accountId: string,
+  r: EngagementRequest,
+  doFetch: typeof fetch,
+  now: Date,
+) {
+  const q = new URLSearchParams({ account_id: accountId, limit: String(ENGAGEMENT_LIMITS[r.want]) });
+  if (r.cursor) q.set('cursor', r.cursor);
+  const path =
+    r.want === 'thread'
+      ? `/api/v1/posts/${encodeURIComponent(threadPostId(r.postId!))}/comments`
+      : `/api/v1/users/${encodeURIComponent(r.memberId!)}/${r.want}`;
+  const res = await doFetch(`${deps.unipileBase}${path}?${q}`, { headers: uHeaders(deps) });
+  if (res.status === 404 || res.status === 422)
+    return { ok: false, reason: 'unavailable', message: "LinkedIn wouldn't show this person's activity." };
+  if (!res.ok) throw await upstreamError(res);
+  const b = (await res.json()) as {
+    items?: unknown[];
+    cursor?: string | null;
+    paging?: { cursor?: string | null };
+  };
+  const cursor = [b.cursor, b.paging?.cursor].find((x): x is string => typeof x === 'string' && !!x) ?? null;
+  const rows = (Array.isArray(b.items) ? b.items : []).filter(
+    (x): x is Record<string, unknown> => !!x && typeof x === 'object' && !Array.isArray(x),
+  );
+  const id = (v: unknown) =>
+    typeof v === 'string' && v.trim() ? v.trim() : typeof v === 'number' ? String(v) : undefined;
+  const obj = (v: unknown) =>
+    v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+  const count = (v: unknown) => {
+    const n = Number(v ?? 0);
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+  };
+
+  if (r.want === 'posts') {
+    const items = rows.flatMap((p) => {
+      const socialId = id(p.social_id);
+      const own = id(p.id);
+      const postId =
+        socialId && /^urn:li:activity:\d+$/.test(socialId) ? postLookupId(socialId) : (own ?? socialId);
+      if (!postId) return [];
+      const people = (Array.isArray(p.mentions) ? p.mentions : [])
+        .map(obj)
+        .filter((m) => Object.keys(m).length && !isCompany(m));
+      const mentions = [...new Set(people.map(mentionMemberId).filter((x): x is string => !!x))];
+      const repostOf = p.is_repost === true ? id(obj(obj(p.repost_content).author).id) : undefined;
+      const at = postDate(p.parsed_datetime, now) ?? postDate(p.date, now);
+      return [
+        {
+          id: postLookupId(postId),
+          ...(socialId ? { socialId } : {}),
+          ...(at ? { at } : {}),
+          reactions: count(p.reaction_counter),
+          comments: count(p.comment_counter),
+          ...(repostOf ? { repostOf } : {}),
+          mentions,
+          tagged: people.length,
+        },
+      ];
+    });
+    return { ok: true, want: 'posts', items, cursor };
+  }
+  if (r.want === 'reactions') {
+    const items = rows.flatMap((x) => {
+      const postId = id(x.post_id);
+      const author = obj(x.author);
+      const authorId = id(author.id);
+      if (!postId || !authorId || isCompany(author)) return [];
+      return [{ postId: postLookupId(postId), authorId, onComment: !!id(x.comment_id) }];
+    });
+    return { ok: true, want: 'reactions', items, cursor };
+  }
+  if (r.want === 'comments') {
+    const items = rows.flatMap((c) => {
+      const cid = id(c.id);
+      const post = id(c.post_urn) ?? id(c.post_id);
+      if (!cid || !post) return [];
+      const at = postDate(c.date, now);
+      const threadId = id(c.thread_id);
+      return [
+        { id: cid, postId: postLookupId(post), ...(at ? { at } : {}), ...(threadId ? { threadId } : {}) },
+      ];
+    });
+    return { ok: true, want: 'comments', items, cursor };
+  }
+  const items = rows.flatMap((c) => {
+    const cid = id(c.id);
+    const who = Object.keys(obj(c.author_details)).length ? obj(c.author_details) : obj(c.author);
+    const commenterId = id(who.id) ?? id(who.provider_id);
+    if (!cid || !commenterId || isCompany(who)) return [];
+    const at = postDate(c.date, now);
+    return [{ id: cid, commenterId, ...(at ? { at } : {}) }];
+  });
+  return { ok: true, want: 'thread', items, cursor };
+}
+
+/** Today's use of each LinkedIn ledger for one account, counted by nothing (for Settings). */
+async function ledgerReport(
+  take: Take,
+  totals: LedgerTotals,
+  accountId: string,
+  now: Date,
+  h: Record<string, string>,
+): Promise<Response> {
+  if (!take.peek) return json(503, { error: 'unavailable right now' }, h);
+  const kinds: LedgerKind[] = ['profile', 'posts', 'search'];
+  let used: number[];
+  try {
+    used = await take.peek(kinds.map((k) => ledgerBucket(k, accountId, now, totals[k]).key));
+  } catch {
+    return json(503, { error: 'unavailable right now' }, h);
+  }
+  const out: Record<string, unknown> = { ok: true, day: now.toISOString().slice(0, 10) };
+  kinds.forEach((k, i) => {
+    out[k] = { used: Math.min(Math.max(used[i] ?? 0, 0), totals[k]), limit: totals[k] };
+  });
+  return json(200, out, h);
+}
+
 /** The first LinkedIn search-parameter id for a name ("Goldman Sachs" -> its company id), if LinkedIn knows it. */
 async function searchParameterId(
   deps: ConnectorDeps,
@@ -1534,14 +1818,11 @@ async function unipileSearch(deps: ConnectorDeps, body: Record<string, unknown>,
 //     website, industry[]}
 // Payloads back to the browser are trimmed to what Orbit keeps.
 
-/** What enrichment needs from the deployment: daily budgets, and the optional web and people-data keys. */
+/**
+ * What enrichment needs from the deployment: the web budget and the optional web and people-data keys. Its LinkedIn
+ * reads come out of the profile ledger (ConnectorDeps.ledger).
+ */
 export interface EnrichmentDeps {
-  /** full profile reads per LinkedIn account per day (LinkedIn notices heavy profile viewing) */
-  profilesPerDay?: number;
-  /** company page reads per LinkedIn account per day */
-  companiesPerDay?: number;
-  /** photo link reads (the plain profile, no sections) per LinkedIn account per day */
-  photosPerDay?: number;
   /** web lookups per visitor per day */
   webPerDay?: number;
   /** Exa (search plus page text); without it /web answers "unconfigured" */
@@ -1583,15 +1864,10 @@ export function providerStatus(deps: ConnectorDeps) {
   };
 }
 
-/** Today's bucket for one kind of enrichment call, per LinkedIn account (or per visitor, for web lookups). */
-export function enrichBucket(
-  kind: 'profile' | 'company' | 'photo' | 'web',
-  who: string,
-  now: Date,
-  perDay: number,
-): Bucket {
-  const b = sendBucket(who, now, perDay);
-  return { ...b, key: b.key.replace('connectors:send:', `connectors:${kind}:`) };
+/** Today's bucket for web lookups, per visitor (LinkedIn reads use the ledgers instead). */
+export function webBucket(visitor: string, now: Date, perDay: number): Bucket {
+  const b = sendBucket(`visitor:${visitor}`, now, perDay);
+  return { ...b, key: b.key.replace('connectors:send:', 'connectors:web:') };
 }
 
 async function enrichmentRoute(
@@ -1604,6 +1880,7 @@ async function enrichmentRoute(
     take: Take;
     now: () => Date;
     visitor: string;
+    spend: <K extends LedgerKind>(kind: K, caller: LedgerCaller<K>) => Promise<boolean>;
   },
 ): Promise<Response> {
   const { h, doFetch, take, now } = ctx;
@@ -1612,41 +1889,37 @@ async function enrichmentRoute(
     path === '/profile' ? 'profile' : path === '/company' ? 'company' : path === '/photo' ? 'photo' : 'web';
   if (kind === 'web') {
     if (!e.exaKey) return unconfigured(h);
+    let verdict: { allowed: boolean };
+    try {
+      verdict = await take([webBucket(ctx.visitor, now(), e.webPerDay ?? 30)]);
+    } catch {
+      return json(503, { error: 'unavailable right now' }, h);
+    }
+    if (!verdict.allowed)
+      return json(
+        200,
+        {
+          ok: false,
+          reason: 'limit',
+          message: 'Orbit has looked up as many people on the web as it allows today.',
+        },
+        h,
+      );
   } else {
     if (!deps.unipileKey || !deps.unipileBase) return unconfigured(h);
     if (!(await tokenValid(String(body.accountId ?? ''), body.token, deps.signingKey)))
       return json(403, { error: 'this LinkedIn account is not linked to this browser' }, h);
+    // a profile read for a route the student is looking at may use the whole ledger; photos and enrichment less
+    const caller =
+      kind === 'photo' ? 'photo' : kind === 'profile' && body.purpose === 'route' ? 'route' : 'enrich';
+    let within: boolean;
+    try {
+      within = await ctx.spend('profile', caller);
+    } catch {
+      return json(503, { error: 'unavailable right now' }, h);
+    }
+    if (!within) return json(200, LEDGER_LIMIT, h);
   }
-  const perDay =
-    kind === 'profile'
-      ? (e.profilesPerDay ?? 80)
-      : kind === 'company'
-        ? (e.companiesPerDay ?? 80)
-        : kind === 'photo'
-          ? (e.photosPerDay ?? 300)
-          : (e.webPerDay ?? 30);
-  const who = kind === 'web' ? `visitor:${ctx.visitor}` : String(body.accountId);
-  let verdict: { allowed: boolean };
-  try {
-    verdict = await take([enrichBucket(kind, who, now(), perDay)]);
-  } catch {
-    return json(503, { error: 'unavailable right now' }, h);
-  }
-  if (!verdict.allowed)
-    return json(
-      200,
-      {
-        ok: false,
-        reason: 'limit',
-        message:
-          kind === 'web'
-            ? 'Orbit has looked up as many people on the web as it allows today.'
-            : kind === 'photo'
-              ? 'Orbit has fetched as many LinkedIn photos as it allows today. It carries on tomorrow.'
-              : 'Orbit has read as many LinkedIn profiles as it allows today. It carries on tomorrow.',
-      },
-      h,
-    );
   try {
     if (kind === 'profile') return json(200, await unipileProfile(deps, body, doFetch), h);
     if (kind === 'company') return json(200, await unipileCompany(deps, body, doFetch), h);
@@ -1685,8 +1958,61 @@ export function companySlugFromUrl(url: unknown): string | undefined {
   return slug && !/^\d+$/.test(slug) ? slug : undefined;
 }
 
+/** A recommendation's caption is cut to this many characters; its text is never kept. */
+export const RECOMMENDATION_CAPTION_MAX = 80;
+
+export interface ProfileRecommendation {
+  direction: 'received' | 'given';
+  /** the other person's LinkedIn member id */
+  actorId: string;
+  actorName?: string;
+  year?: number;
+  caption?: string;
+}
+
+/**
+ * The recommendations on a profile, read tolerantly: `recommendations.received/given`, or separate
+ * `recommendations_received` / `recommendations_given` lists. Who wrote or received each one and when, never the text.
+ */
+export function mapRecommendations(p: Record<string, unknown>): ProfileRecommendation[] {
+  const nested = (p.recommendations ?? {}) as Record<string, unknown>;
+  const lists: [ProfileRecommendation['direction'], unknown][] = [
+    ['received', Array.isArray(nested.received) ? nested.received : p.recommendations_received],
+    ['given', Array.isArray(nested.given) ? nested.given : p.recommendations_given],
+  ];
+  const out: ProfileRecommendation[] = [];
+  for (const [direction, list] of lists) {
+    for (const r of Array.isArray(list) ? list : []) {
+      if (!r || typeof r !== 'object') continue;
+      const rec = r as Record<string, unknown>;
+      const actor = (rec.actor && typeof rec.actor === 'object' ? rec.actor : {}) as Record<string, unknown>;
+      const actorId = text(actor.provider_id, 200) ?? text(actor.id, 200);
+      if (!actorId) continue;
+      const name = [text(actor.first_name, 80), text(actor.last_name, 80)].filter(Boolean).join(' ');
+      const caption = text(rec.caption, RECOMMENDATION_CAPTION_MAX);
+      // LinkedIn's caption reads like "June 12, 2023, Ana managed Noah directly": the year is the one date it gives
+      const year = Number(/\b(19[5-9]\d|20\d\d)\b/.exec(caption ?? '')?.[1] ?? rec.year ?? Number.NaN);
+      out.push({
+        direction,
+        actorId,
+        ...(name ? { actorName: name } : {}),
+        ...(Number.isInteger(year) && year > 1950 ? { year } : {}),
+        ...(caption ? { caption } : {}),
+      });
+      if (out.length >= 100) return out;
+    }
+  }
+  return out;
+}
+
 /** One LinkedIn profile, trimmed to what Orbit keeps: identity, current and past positions, schools, contact. */
-export function mapProfile(p: Record<string, unknown>) {
+export function mapProfile(p: Record<string, unknown>, opts: { recommendations?: boolean } = {}) {
+  const num = (v: unknown) => {
+    const n = typeof v === 'string' ? Number(v.replace(/[,+\s]/g, '')) : Number(v);
+    return v !== null && v !== undefined && v !== '' && Number.isFinite(n) && n >= 0
+      ? Math.floor(n)
+      : undefined;
+  };
   const str = (v: unknown, max = 200) => text(v, max);
   const degree = String(p.network_distance ?? '');
   const distance = /FIRST|DISTANCE_1/.test(degree)
@@ -1746,6 +2072,9 @@ export function mapProfile(p: Record<string, unknown>) {
       .filter((x) => x.school),
     contact: emails.length || phones.length ? { emails, phones } : undefined,
     throttled: strings(p.throttled_sections, 12),
+    followerCount: num(p.follower_count),
+    connectionsCount: num(p.connections_count),
+    recommendations: opts.recommendations ? mapRecommendations(p) : undefined,
   };
 }
 
@@ -1760,6 +2089,9 @@ async function unipileProfile(deps: ConnectorDeps, body: Record<string, unknown>
   const sections = (Array.isArray(body.sections) ? body.sections : [])
     .map(String)
     .filter((x) => PROFILE_SECTIONS.has(x));
+  const recommendations = body.recommendations === true;
+  // both sections: who recommended them and whom they recommended (mapped tolerantly, the text never kept)
+  if (recommendations) sections.push('recommendations_received', 'recommendations_given');
   const q = new URLSearchParams({ account_id: accountId });
   if (sections.length) q.set('linkedin_sections', [...new Set(sections)].join(','));
   const res = await doFetch(`${deps.unipileBase}/api/v1/users/${encodeURIComponent(identifier)}?${q}`, {
@@ -1767,7 +2099,10 @@ async function unipileProfile(deps: ConnectorDeps, body: Record<string, unknown>
   });
   const failed = await profileFailure(res);
   if (failed) return failed;
-  return { ok: true, profile: mapProfile((await res.json()) as Record<string, unknown>) };
+  return {
+    ok: true,
+    profile: mapProfile((await res.json()) as Record<string, unknown>, { recommendations }),
+  };
 }
 
 /** Why a profile read brought nothing back, as a reason the app knows; undefined when it succeeded. */
@@ -1946,15 +2281,21 @@ async function villagePaths(village: Village, user: VillageUser, body: Record<st
  * The request counters over PostgREST with the service role key: the same orbit_proxy_take function orbit-claude
  * uses (supabase/migrations/20261012_orbit_claude_proxy.sql), with keys prefixed `connectors:`.
  */
-export function postgrestTake(url: string, serviceKey: string, doFetch: typeof fetch = fetch): Take {
-  return async (bs) => {
+export function postgrestTake(
+  url: string,
+  serviceKey: string,
+  doFetch: typeof fetch = fetch,
+  clock: () => number = Date.now,
+): Take {
+  const headers = {
+    'content-type': 'application/json',
+    apikey: serviceKey,
+    Authorization: `Bearer ${serviceKey}`,
+  };
+  const take: Take = async (bs) => {
     const r = await doFetch(`${url}/rest/v1/rpc/orbit_proxy_take`, {
       method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        apikey: serviceKey,
-        Authorization: `Bearer ${serviceKey}`,
-      },
+      headers,
       body: JSON.stringify({
         p_buckets: bs.map((b) => b.key),
         p_limits: bs.map((b) => b.limit),
@@ -1967,4 +2308,21 @@ export function postgrestTake(url: string, serviceKey: string, doFetch: typeof f
     if (!row) throw new Error('counter store returned nothing');
     return { allowed: row.allowed, over: row.over_bucket ?? undefined };
   };
+  // the counters table itself, read with the same key: a count that has expired is a count of nothing
+  take.peek = async (keys) => {
+    if (!keys.length) return [];
+    const list = keys.map((k) => `"${k.replace(/["\\]/g, '')}"`).join(',');
+    const r = await doFetch(
+      `${url}/rest/v1/orbit_proxy_counters?select=bucket,count,expires_at&bucket=in.(${encodeURIComponent(list)})`,
+      { headers },
+    );
+    if (!r.ok) throw new Error(`counter store ${r.status}`);
+    const rows = (await r.json()) as { bucket: string; count: number; expires_at: string }[];
+    const now = clock();
+    const live = new Map(
+      rows.filter((x) => Date.parse(x.expires_at) >= now).map((x) => [x.bucket, Number(x.count) || 0]),
+    );
+    return keys.map((k) => live.get(k) ?? 0);
+  };
+  return take;
 }

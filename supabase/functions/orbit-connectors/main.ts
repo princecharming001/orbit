@@ -88,9 +88,6 @@ Deno.serve(
     links: url && serviceKey ? postgrestLinks(url, serviceKey) : memoryLinks(),
     publicUrl: url ? `${url}/functions/v1/orbit-connectors` : undefined,
     enrichment: {
-      profilesPerDay: num('ORBIT_LINKEDIN_PROFILES_PER_DAY', 80),
-      companiesPerDay: num('ORBIT_LINKEDIN_COMPANIES_PER_DAY', 80),
-      photosPerDay: num('ORBIT_LINKEDIN_PHOTOS_PER_DAY', 300),
       webPerDay: num('ORBIT_WEB_LOOKUPS_PER_DAY', 30),
       exaKey,
       firecrawlKey,
@@ -98,7 +95,12 @@ Deno.serve(
       pdlKey,
     },
     sendsPerDay: num('ORBIT_LINKEDIN_SENDS_PER_DAY', 25),
-    searchesPerDay: num('ORBIT_LINKEDIN_SEARCHES_PER_DAY', 40),
+    // LinkedIn reads per Unipile account per day, one ledger per kind (plan 21 §6; ceilings per caller in connectors.ts)
+    ledger: {
+      profile: num('ORBIT_LINKEDIN_PROFILE_READS_PER_DAY', 100),
+      posts: num('ORBIT_LINKEDIN_POST_READS_PER_DAY', 100),
+      search: num('ORBIT_LINKEDIN_SEARCH_CALLS_PER_DAY', 100),
+    },
     limits: {
       perMinute: num('ORBIT_CONNECTORS_PER_MINUTE', 120),
       perDay: num('ORBIT_CONNECTORS_PER_DAY', 3000),
