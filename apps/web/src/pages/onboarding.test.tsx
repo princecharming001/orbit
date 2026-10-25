@@ -8,7 +8,16 @@ import { createLocalUser } from '../engine/account';
 import type { LiveConnectResult } from '../engine/linkedinLive';
 import { SessionProvider } from '../state/session';
 import { Onboarding } from './Onboarding';
-import { resolveStep, STEP, stepPath, stepStatuses, visibleSteps } from './onboardingSteps';
+import {
+  QUESTION_STEPS,
+  resolveStep,
+  STEP,
+  stepAddress,
+  stepFromAddress,
+  stepPath,
+  stepStatuses,
+  visibleSteps,
+} from './onboardingSteps';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 // each step scrolls to its top; jsdom has no scrolling
@@ -29,9 +38,31 @@ vi.mock('../engine/linkedinLive', () => ({
 
 describe('setup steps', () => {
   it('shows Gmail only when Google sign-in is set up', () => {
-    expect(visibleSteps(true)).toEqual([1, 2, 3, 4, 5, 6]);
-    expect(visibleSteps(false)).toEqual([1, 2, 3, 4, 6]);
+    expect(visibleSteps(true)).toEqual([1, 2, 3, ...QUESTION_STEPS, 4, 5, 6]);
+    expect(visibleSteps(false)).toEqual([1, 2, 3, ...QUESTION_STEPS, 4, 6]);
     expect(visibleSteps(false)).not.toContain(STEP.gmail);
+    expect(visibleSteps(false, true)).toEqual([1, 2, 3, ...QUESTION_STEPS, 4, 5.5, 6]);
+  });
+
+  it('puts the five written questions between Goals and LinkedIn, at word addresses', () => {
+    expect(QUESTION_STEPS).toEqual([STEP.aim, STEP.story, STEP.people, STEP.style, STEP.job]);
+    expect(QUESTION_STEPS.map(stepAddress)).toEqual(['aim', 'story', 'people', 'style', 'job']);
+    for (const s of QUESTION_STEPS) {
+      expect(s).toBeGreaterThan(STEP.goals);
+      expect(s).toBeLessThan(STEP.linkedin);
+      expect(stepFromAddress(stepAddress(s))).toBe(s);
+    }
+    // the numbered addresses are as before
+    expect(stepAddress(STEP.welcome)).toBe('0');
+    expect(stepAddress(STEP.rate)).toBe('4.5');
+    expect(stepFromAddress('4.5')).toBe(STEP.rate);
+    expect(stepFromAddress('2')).toBe(STEP.goals);
+    expect(stepFromAddress(undefined)).toBe(STEP.welcome);
+    expect(stepFromAddress('nope')).toBeNaN();
+    // Goals is followed by the first question; someone stored past Goals in the older setup is not sent back
+    expect(resolveStep(3.1, false)).toBe(STEP.aim);
+    expect(resolveStep(4, false)).toBe(STEP.linkedin);
+    expect(stepPath(3.2, false)).toBe('/onboarding/aim');
   });
 
   it('opens a new profile on Welcome, at /onboarding/0', () => {
@@ -62,7 +93,7 @@ describe('setup steps', () => {
 
   it('never moves a stored step backwards', () => {
     for (const google of [true, false])
-      for (let s = 1; s <= 11; s++) {
+      for (const s of [1, 2, 3, 3.2, 3.5, 3.9, 4, 5, 5.5, 6, 7, 8, 9, 10, 11]) {
         const r = resolveStep(s, google);
         expect(visibleSteps(google)).toContain(r);
         if (s <= STEP.ready) expect(r).toBeGreaterThanOrEqual(s);
@@ -71,15 +102,20 @@ describe('setup steps', () => {
 
   it('marks an optional step passed without doing it as skipped, never done', () => {
     const steps = visibleSteps(false);
-    expect(stepStatuses(steps, STEP.ready, { [STEP.linkedin]: false })).toEqual([
+    expect(stepStatuses(steps, STEP.ready, { [STEP.aim]: true, [STEP.linkedin]: false })).toEqual([
+      'done',
       'done',
       'done',
       'done',
       'skipped',
+      'skipped',
+      'skipped',
+      'skipped',
+      'skipped',
       'current',
     ]);
-    expect(stepStatuses(steps, STEP.ready, { [STEP.linkedin]: true })[3]).toBe('done');
-    expect(stepStatuses(steps, STEP.you, {})).toEqual(['done', 'current', 'todo', 'todo', 'todo']);
+    expect(stepStatuses(steps, STEP.ready, { [STEP.linkedin]: true })[8]).toBe('done');
+    expect(stepStatuses(steps, STEP.you, {}).slice(0, 4)).toEqual(['done', 'current', 'todo', 'todo']);
   });
 });
 
@@ -179,6 +215,63 @@ describe('setup addresses', () => {
     const { q, done } = await renderSetup('/onboarding/4', 5);
     expect(q('ob-ready')).not.toBeNull();
     expect(q('ob-ready-gmail')).toBeNull();
+    done();
+  });
+});
+
+/** Types into a field the way a person does, so React sees the change. */
+function type(el: HTMLTextAreaElement | HTMLInputElement, value: string) {
+  const proto =
+    el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  Object.getOwnPropertyDescriptor(proto, 'value')!.set!.call(el, value);
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+describe('the written questions (plan 24)', () => {
+  beforeEach(async () => {
+    await Promise.all(db.tables.map((t) => t.clear()));
+  });
+
+  it('saves what is written on Continue and opens the next question', async () => {
+    const { q, done } = await renderSetup('/onboarding/aim', STEP.aim);
+    expect(q('ob-q')?.dataset.step).toBe('aim');
+    expect(q('ob-eyebrow')?.textContent).toBe('In your words · 1 of 5');
+    await act(async () =>
+      type(q('ob-q-aim') as HTMLTextAreaElement, '  Product roles at fintech startups.  '),
+    );
+    await act(async () => q('ob-q-next')!.click());
+    await settle();
+    expect(q('ob-q')?.dataset.step).toBe('story');
+    const [g] = await db.goals.toArray();
+    expect(g?.aim).toBe('Product roles at fintech startups.');
+    expect(g?.success).toBeUndefined();
+    done();
+  });
+
+  it('changes nothing on Skip', async () => {
+    const { q, done } = await renderSetup('/onboarding/story', STEP.story);
+    await act(async () => type(q('ob-q-story') as HTMLTextAreaElement, 'I am a junior.'));
+    await act(async () => q('ob-q-skip')!.click());
+    await settle();
+    expect(q('ob-q')?.dataset.step).toBe('people');
+    expect((await db.goals.toArray())[0]?.story).toBeUndefined();
+    done();
+  });
+
+  it('tells the posting link from the words in the job box', async () => {
+    const { host, q, done } = await renderSetup('/onboarding/job', STEP.job);
+    await act(async () =>
+      type(q('ob-q-job') as HTMLInputElement, 'Stripe, PM intern https://jobs.lever.co/stripe/123'),
+    );
+    expect(q('ob-job-preview')?.textContent).toMatch(/Stripe, PM intern.*jobs\.lever\.co\/stripe/);
+    await act(async () => q('ob-q-next')!.click());
+    await settle();
+    expect((await db.goals.toArray())[0]?.currentJob).toEqual({
+      url: 'https://jobs.lever.co/stripe/123',
+      text: 'Stripe, PM intern',
+    });
+    // the next step is LinkedIn
+    expect(host.querySelector('h1')?.textContent).toMatch(/LinkedIn/);
     done();
   });
 });

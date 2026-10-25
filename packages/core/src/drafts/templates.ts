@@ -162,6 +162,14 @@ export interface DraftContext {
     targetFunctions: string[];
     oneLiner?: string; // explicit override of the "a junior at Cornell studying CS" clause
     credibility?: string; // one concrete artifact: "built a campus marketplace used by 800 students"
+    /** the student's story in two lines, in their words (plan 24): how a message may introduce them */
+    story?: string;
+    /** what they are going for and why, in their words */
+    aim?: string;
+    /** what they are good at or proud of, in their words */
+    proudOf?: string;
+    /** what a message must never do, in their words: a hard rule (see neverDoChecks) */
+    neverDo?: string;
     schedulingLink?: string;
     timezone: string;
     pastOrgs?: string[]; // from the resume: employers/orgs the student has been at

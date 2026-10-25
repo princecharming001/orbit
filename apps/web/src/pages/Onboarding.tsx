@@ -1,13 +1,48 @@
-import type { GoalKind } from '@orbit/core';
-import { FUNCTION_LABELS, GOAL_KINDS, yearLabel } from '@orbit/core';
+import type { GoalKind, OwnWordsKey, User } from '@orbit/core';
+import {
+  answeredCount,
+  CURRENT_JOB_MAX,
+  currentJobInput,
+  currentJobLabel,
+  FUNCTION_LABELS,
+  GOAL_KINDS,
+  OWN_WORDS_MAX,
+  OWN_WORDS_QUESTIONS,
+  OWN_WORDS_TOTAL,
+  ownWordsOf,
+  parseCurrentJob,
+  schoolShort,
+  yearLabel,
+} from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Check, Linkedin, Mail, Minus, Star, Upload, X } from 'lucide-react';
-import { type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react';
+import {
+  Briefcase,
+  Check,
+  Linkedin,
+  Link as LinkIcon,
+  Mail,
+  Minus,
+  Plus,
+  Star,
+  Upload,
+  X,
+} from 'lucide-react';
+import {
+  type CSSProperties,
+  type FormEvent,
+  type KeyboardEvent,
+  type ReactNode,
+  type RefObject,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 import { Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { Logo } from '../components/AppShell';
 import { ImportProgress } from '../components/account/ImportProgress';
 import { RatePeople } from '../components/account/RatePeople';
 import {
+  ObBack,
   ObHeader,
   ObInput,
   ObLabel,
@@ -16,6 +51,7 @@ import {
   ObQuiet,
   ObSecondary,
   ObSelect,
+  ObTextArea,
   OnboardingLayout,
 } from '../components/onboarding/OnboardingLayout';
 import { WeeklyTargetSlider } from '../components/WeeklyTargetSlider';
@@ -27,6 +63,7 @@ import { archiveGoal, GOAL_KIND_LABELS, GOAL_KIND_TITLES, listGoals, saveGoal } 
 import { connectAndSyncGoogle } from '../engine/integrations';
 import { connectionsText, importLinkedInExport } from '../engine/linkedin';
 import { connectLinkedInLive, liveLinkedInAvailable } from '../engine/linkedinLive';
+import { type OwnWordsPatch, saveOwnWords } from '../engine/ownWords';
 import { saveResume } from '../engine/resume';
 import { pullNow } from '../engine/serverSync';
 import {
@@ -46,9 +83,12 @@ import { cx, Spinner } from '../ui';
 import { Suggest } from '../ui/Suggest';
 import {
   OPTIONAL_STEPS,
+  QUESTION_STEPS,
   resolveStep,
   STEP,
   STEP_TITLES,
+  stepAddress,
+  stepFromAddress,
   stepPath,
   stepStatuses,
   visibleSteps,
@@ -70,7 +110,7 @@ function isLinkedIn(provider: string): boolean {
 
 export function Onboarding() {
   const { step: stepParam } = useParams();
-  const step = Number(stepParam ?? 0) + 1;
+  const step = stepFromAddress(stepParam);
   const nav = useNavigate();
   const location = useLocation();
   const { user } = useSession();
@@ -82,7 +122,13 @@ export function Onboarding() {
     if (!user) return {};
     const ints = await db.integrations.where('userId').equals(user.id).toArray();
     const rated = await db.tieLabels.where('userId').equals(user.id).count();
+    const w = ownWordsOf(await db.goals.get(user.id));
     return {
+      [STEP.aim]: !!(w.aim || w.success),
+      [STEP.story]: !!(w.story || w.proudOf),
+      [STEP.people]: !!w.wantToMeet,
+      [STEP.style]: !!(w.networkingHard || w.neverDo),
+      [STEP.job]: !!w.currentJob,
       [STEP.linkedin]: ints.some((i) => isLinkedIn(i.provider)),
       [STEP.gmail]: ints.some((i) => i.provider === 'google'),
       [STEP.rate]: rated > 0,
@@ -108,21 +154,24 @@ export function Onboarding() {
     const internal = (location.state as { fromStep?: number } | null)?.fromStep !== undefined;
     let target = resolveStep(step, google, signedIn);
     if (!internal && target > furthest) target = furthest;
-    if (target !== step) return <Navigate to={`/onboarding/${target - 1}`} replace />;
+    if (target !== step) return <Navigate to={`/onboarding/${stepAddress(target)}`} replace />;
   }
   const after = (s: number) => STEPS.find((x) => x > s) ?? STEP.ready;
   const before = (s: number) => [...STEPS].reverse().find((x) => x < s) ?? STEP.welcome;
   const go = async (next: number) => {
     await setOnboardingStep(user.id, next);
-    nav(`/onboarding/${next - 1}`, { state: { fromStep: step } });
+    nav(`/onboarding/${stepAddress(next)}`, { state: { fromStep: step } });
   };
   // Back is the browser's Back when the step before is where the student came from, so the browser's own Back
   // button afterwards keeps going back instead of returning to the step just left
   const back = (to: number) => {
     if ((location.state as { fromStep?: number } | null)?.fromStep === to) nav(-1);
-    else nav(`/onboarding/${to - 1}`, { replace: true, state: { fromStep: step } });
+    else nav(`/onboarding/${stepAddress(to)}`, { replace: true, state: { fromStep: step } });
   };
-  const jump = (to: number) => nav(`/onboarding/${to - 1}`, { state: { fromStep: step } });
+  const jump = (to: number) => nav(`/onboarding/${stepAddress(to)}`, { state: { fromStep: step } });
+  // a step reached from a later one (Back, or an Add on Ready) slides in from the left
+  const from = (location.state as { fromStep?: number } | null)?.fromStep;
+  const direction = from !== undefined && from > step ? 'back' : 'forward';
   const finish = async () => {
     // account mode: the first brief is built from what the server has read so far
     if (signedIn) await pullNow(user.id).catch(() => undefined);
@@ -139,6 +188,10 @@ export function Onboarding() {
   else if (step === STEP.you) body = <StepYou onNext={() => go(after(STEP.you))} />;
   else if (step === STEP.goals)
     body = <StepGoals onNext={() => go(after(STEP.goals))} onBack={() => back(before(STEP.goals))} />;
+  else if (QUESTION_STEPS.includes(step))
+    body = (
+      <StepWords step={step} onNext={() => go(after(step))} onBack={() => back(before(step))} user={user} />
+    );
   else if (step === STEP.linkedin)
     body = <StepLinkedIn signedIn={signedIn} onNext={() => go(after(STEP.linkedin))} />;
   else if (step === STEP.gmail) body = <StepGmail onNext={() => go(after(STEP.gmail))} />;
@@ -158,8 +211,9 @@ export function Onboarding() {
       index={idx}
       optional={OPTIONAL_STEPS.has(step)}
       stepKey={step}
-      // Goals saves what is on screen before it goes back, so it brings its own Back
-      onBack={step === STEP.goals ? undefined : onBack}
+      direction={direction}
+      // Goals and the written questions save what is on screen before they go back, so they bring their own Back
+      onBack={step === STEP.goals || QUESTION_STEPS.includes(step) ? undefined : onBack}
     >
       {signedIn && step !== STEP.welcome && step !== STEP.ready ? (
         <ImportProgress firstName={user.firstName} />
@@ -171,28 +225,7 @@ export function Onboarding() {
 
 /** The back arrow for a step that must save before it leaves (the layout's arrow, with the step's own action). */
 function BackArrow({ onClick }: { onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-label="Back"
-      title="Back"
-      className="-ml-1 mb-5 inline-flex h-8 px-3 gap-1.5 items-center justify-center rounded-full border border-line bg-canvas text-[13px] text-ink-2 shadow-[var(--shadow-pill)] hover:text-ink transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/20"
-    >
-      <svg
-        width="14"
-        height="14"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        aria-hidden
-      >
-        <path d="m12 19-7-7 7-7M19 12H5" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
-      Back
-    </button>
-  );
+  return <ObBack onClick={onClick} />;
 }
 
 /** Says what is missing while the button above it is disabled. */
@@ -269,7 +302,7 @@ function StepWelcome({
           <p className="mt-4 text-[13px] text-ink-3">
             {signedIn
               ? 'Signed in with Google. A few questions and you are in.'
-              : 'Takes about two minutes. Everything stays in this browser.'}
+              : 'Takes about three minutes. Everything stays in this browser.'}
           </p>
         </>
       )}
@@ -776,6 +809,400 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
   );
 }
 
+/** What each written step asks (plan 24): a title, a line under it and at most two questions. */
+const WORD_STEPS: Record<number, { title: string; subtitle: string; keys: OwnWordsKey[] }> = {
+  [STEP.aim]: {
+    title: 'Start with your why',
+    subtitle: 'A sentence or two is plenty. Orbit reads this before it suggests anyone or writes anything.',
+    keys: ['aim', 'success'],
+  },
+  [STEP.story]: {
+    title: 'How would you introduce yourself?',
+    subtitle: "Write it the way you'd say it on a call. It shapes your first messages and your prep.",
+    keys: ['story', 'proudOf'],
+  },
+  [STEP.people]: {
+    title: 'Who do you want to meet?',
+    subtitle: 'Roles, teams, schools or companies. Tap a starter or write your own.',
+    keys: ['wantToMeet'],
+  },
+  [STEP.style]: {
+    title: 'How should Orbit help?',
+    subtitle: "So every message sounds like you, and never like something you'd cringe at.",
+    keys: ['networkingHard', 'neverDo'],
+  },
+};
+
+/** "Engineers", "PMs": the people of each kind of work, for the starters under "Who do you want to meet?". */
+const FUNCTION_PEOPLE: Record<string, string> = {
+  swe: 'Engineers',
+  pm: 'PMs',
+  ib: 'Bankers a year or two in',
+  finance: 'People in finance',
+  consulting: 'Consultants',
+  vc: 'Investors',
+  design: 'Designers',
+  data: 'Data scientists',
+  marketing: 'Marketers',
+  research: 'Researchers',
+  ops: 'People in operations',
+};
+
+const HARD_STARTERS = [
+  'Cold messages feel awkward',
+  "I don't know who to ask",
+  'Following up without being annoying',
+  'Finding the time',
+];
+
+/** Starter phrases for a question, or none. */
+function startersFor(key: OwnWordsKey, fns: string[], school: string): string[] {
+  if (key === 'networkingHard') return HARD_STARTERS;
+  if (key !== 'wantToMeet') return [];
+  const short = schoolShort(school);
+  return [
+    short ? `${short} alumni` : 'Alumni from my school',
+    'People a year or two in',
+    ...fns.map((f) => FUNCTION_PEOPLE[f]).filter((x): x is string => !!x),
+    'Recruiters',
+    'Founders',
+  ].filter((x, i, all) => all.indexOf(x) === i);
+}
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** Whether an answer already has a starter phrase in it. */
+function hasStarter(value: string, phrase: string): boolean {
+  return new RegExp(`(^|[^\\p{L}])${escapeRe(phrase)}($|[^\\p{L}])`, 'iu').test(value);
+}
+
+/** A starter added to an answer: after a comma, or as the answer when there is none yet. */
+function withStarter(value: string, phrase: string): string {
+  const base = value.trimEnd();
+  if (!base) return phrase;
+  const lowerable = /^[A-Z][a-z]/.test(phrase) && !/^[A-Z][a-z]+ alumni$/.test(phrase);
+  const p = lowerable ? `${phrase.charAt(0).toLowerCase()}${phrase.slice(1)}` : phrase;
+  return /[.;:!?]$/.test(base) ? `${base} ${phrase}` : `${base.replace(/,$/, '')}, ${p}`;
+}
+
+/** A starter taken back out of an answer, with the comma that joined it. */
+function withoutStarter(value: string, phrase: string): string {
+  return value
+    .replace(new RegExp(`(,\\s*)?${escapeRe(phrase)}`, 'i'), '')
+    .replace(/^\s*,\s*/, '')
+    .replace(/\s+,/g, ',')
+    .trim();
+}
+
+/** Tap-to-add phrases under a question: each adds itself to the answer, and tapped again takes itself out. */
+function Starters({
+  items,
+  value,
+  onChange,
+  label,
+  testId,
+}: {
+  items: string[];
+  value: string;
+  onChange: (v: string) => void;
+  label: string;
+  testId: string;
+}) {
+  return (
+    <div className="mt-2.5 flex flex-wrap gap-1.5" role="group" aria-label={label}>
+      {items.map((t) => {
+        const on = hasStarter(value, t);
+        return (
+          <button
+            key={t}
+            type="button"
+            aria-pressed={on}
+            onClick={() => onChange(on ? withoutStarter(value, t) : withStarter(value, t))}
+            className={cx(
+              'inline-flex h-8 items-center gap-1 rounded-full border px-3 text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ink/15',
+              on
+                ? 'chip-on border-ink bg-ink text-white'
+                : 'border-line bg-white text-ink-2 hover:border-[#d4d2ce] hover:text-ink',
+            )}
+            data-testid={testId}
+          >
+            {on ? <Check size={12} aria-hidden /> : <Plus size={12} aria-hidden />}
+            {t}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** "In your words · 2 of 5" over each written question. */
+function wordsEyebrow(step: number): string {
+  return `In your words · ${QUESTION_STEPS.indexOf(step) + 1} of ${QUESTION_STEPS.length}`;
+}
+
+/** Continue on Cmd or Ctrl and Enter, from any field of a written step. */
+function submitOnModEnter(e: KeyboardEvent<HTMLFormElement>) {
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+    e.preventDefault();
+    e.currentTarget.requestSubmit();
+  }
+}
+
+/** On a computer, the first field is ready to type in once the title has settled; a phone keeps its keyboard down. */
+function useFocusFirst(ref: RefObject<HTMLTextAreaElement | HTMLInputElement | null>, ready: boolean) {
+  useEffect(() => {
+    if (!ready || typeof window.matchMedia !== 'function') return;
+    if (!window.matchMedia('(pointer: fine)').matches) return;
+    const t = window.setTimeout(() => ref.current?.focus({ preventScroll: true }), 450);
+    return () => window.clearTimeout(t);
+  }, [ready, ref]);
+}
+
+/** A written step: two questions at most, each optional, saved on Continue and on Back; Skip changes nothing. */
+function StepWords(props: { step: number; user: User; onNext: () => void; onBack: () => void }) {
+  return props.step === STEP.job ? <StepJob {...props} /> : <StepQuestions {...props} />;
+}
+
+function StepQuestions({
+  step,
+  user,
+  onNext,
+  onBack,
+}: {
+  step: number;
+  user: User;
+  onNext: () => void;
+  onBack: () => void;
+}) {
+  const spec = WORD_STEPS[step]!;
+  // null once read and absent; undefined only while loading
+  const goals = useLiveQuery(async () => (await db.goals.get(user.id)) ?? null, [user.id]);
+  const [f, setF] = useState<Partial<Record<OwnWordsKey, string>>>({});
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const first = useRef<HTMLTextAreaElement>(null);
+  const loaded = useRef(false);
+  useEffect(() => {
+    // filled once from what is stored, so a save never resets what is being typed
+    if (goals === undefined || loaded.current) return;
+    loaded.current = true;
+    const w = ownWordsOf(goals);
+    setF(Object.fromEntries(spec.keys.map((k) => [k, w[k] ?? ''])));
+  }, [goals, spec.keys]);
+  useFocusFirst(first, goals !== undefined);
+  const persist = async () => {
+    const patch: OwnWordsPatch = {};
+    for (const k of spec.keys) if (f[k] !== undefined) patch[k] = f[k];
+    await saveOwnWords(user, patch);
+  };
+  const save = async (e?: FormEvent) => {
+    e?.preventDefault();
+    if (busy) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      await persist();
+      onNext();
+    } catch (err) {
+      setError(String((err as Error).message ?? err));
+      setBusy(false);
+    }
+  };
+  const fns = goals?.targetFunctions ?? [];
+  return (
+    <form
+      onSubmit={save}
+      onKeyDown={submitOnModEnter}
+      noValidate
+      data-testid="ob-q"
+      data-step={stepAddress(step)}
+    >
+      <BackArrow
+        onClick={async () => {
+          await persist().catch(() => undefined);
+          onBack();
+        }}
+      />
+      <ObHeader eyebrow={wordsEyebrow(step)} title={spec.title} subtitle={spec.subtitle} />
+      <div className="space-y-7">
+        {spec.keys.map((k, i) => {
+          const q = OWN_WORDS_QUESTIONS[k];
+          const starters = startersFor(k, fns, user.school);
+          return (
+            <div key={k} className="ob-rise" style={{ '--d': `${300 + i * 90}ms` } as CSSProperties}>
+              {/* one question on a screen: the title already asks it */}
+              <label
+                htmlFor={`ob-q-${k}`}
+                className={cx(
+                  'mb-2 block text-[14px] font-medium text-ink',
+                  spec.keys.length === 1 && 'sr-only',
+                )}
+              >
+                {q.label}
+              </label>
+              <ObTextArea
+                id={`ob-q-${k}`}
+                ref={i === 0 ? first : undefined}
+                value={f[k] ?? ''}
+                onChange={(e) => setF((cur) => ({ ...cur, [k]: e.target.value }))}
+                placeholder={q.placeholder}
+                maxLength={OWN_WORDS_MAX}
+                aria-describedby={`ob-q-${k}-uses`}
+                data-testid={`ob-q-${k}`}
+              />
+              {starters.length ? (
+                <Starters
+                  items={starters}
+                  value={f[k] ?? ''}
+                  onChange={(v) => setF((cur) => ({ ...cur, [k]: v }))}
+                  label={`Starters for: ${q.label}`}
+                  testId={`ob-starter-${k}`}
+                />
+              ) : null}
+              <p id={`ob-q-${k}-uses`} className="mt-2 text-[12.5px] leading-[1.45] text-ink-3">
+                {q.uses}
+              </p>
+            </div>
+          );
+        })}
+      </div>
+      <div
+        className="ob-rise mt-9 space-y-3"
+        style={{ '--d': `${380 + spec.keys.length * 90}ms` } as CSSProperties}
+      >
+        <ObPrimary type="submit" disabled={busy} data-testid="ob-q-next">
+          Continue
+        </ObPrimary>
+        <ObQuiet onClick={onNext} data-testid="ob-q-skip">
+          Skip
+        </ObQuiet>
+      </div>
+      {error && (
+        <p className="mt-3 text-[13px] text-bad text-center" role="alert">
+          {error}
+        </p>
+      )}
+    </form>
+  );
+}
+
+/** "Going for something right now?": a posting's link, a company and role, or both, in one box (plan 23 reads it). */
+function StepJob({
+  step,
+  user,
+  onNext,
+  onBack,
+}: {
+  step: number;
+  user: User;
+  onNext: () => void;
+  onBack: () => void;
+}) {
+  const goals = useLiveQuery(async () => (await db.goals.get(user.id)) ?? null, [user.id]);
+  const [v, setV] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const input = useRef<HTMLInputElement>(null);
+  const loaded = useRef(false);
+  useEffect(() => {
+    if (goals === undefined || loaded.current) return;
+    loaded.current = true;
+    setV(currentJobInput(goals?.currentJob));
+  }, [goals]);
+  useFocusFirst(input, goals !== undefined);
+  const job = parseCurrentJob(v);
+  const persist = () => saveOwnWords(user, { currentJob: job });
+  const save = async (e?: FormEvent) => {
+    e?.preventDefault();
+    if (busy) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      await persist();
+      onNext();
+    } catch (err) {
+      setError(String((err as Error).message ?? err));
+      setBusy(false);
+    }
+  };
+  const host = job?.url ? currentJobLabel({ url: job.url }) : undefined;
+  return (
+    <form onSubmit={save} noValidate data-testid="ob-q" data-step={stepAddress(step)}>
+      <BackArrow
+        onClick={async () => {
+          await persist().catch(() => undefined);
+          onBack();
+        }}
+      />
+      <ObHeader
+        eyebrow={wordsEyebrow(step)}
+        title="Going for something right now?"
+        subtitle="Paste the link or the company. Orbit keeps it in mind as you go."
+      />
+      <div className="ob-rise" style={{ '--d': '300ms' } as CSSProperties}>
+        <ObLabel htmlFor="ob-q-job" hint="Optional">
+          A job
+        </ObLabel>
+        <div className="relative">
+          <Briefcase
+            size={16}
+            className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-ink-3"
+            aria-hidden
+          />
+          <ObInput
+            id="ob-q-job"
+            ref={input}
+            value={v}
+            onChange={(e) => setV(e.target.value)}
+            placeholder="A posting link, or Stripe, PM intern"
+            maxLength={CURRENT_JOB_MAX * 2}
+            className="pl-10"
+            autoComplete="off"
+            data-testid="ob-q-job"
+          />
+        </div>
+        {job ? (
+          <div
+            className="pop-in mt-3 flex items-start gap-3 rounded-[12px] border border-line bg-white px-4 py-3 shadow-[var(--shadow-card)]"
+            data-testid="ob-job-preview"
+          >
+            <span className="mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-canvas-2 text-ink-2">
+              {job.url ? <LinkIcon size={14} aria-hidden /> : <Briefcase size={14} aria-hidden />}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-[14px] font-medium text-ink">{job.text ?? host}</span>
+              <span className="block truncate text-[12.5px] text-ink-3">
+                {job.url
+                  ? job.text
+                    ? host
+                    : 'The posting, saved as a link'
+                  : 'Add the posting link too, if you have it'}
+              </span>
+            </span>
+          </div>
+        ) : (
+          <p className="mt-2 text-[12.5px] leading-[1.45] text-ink-3">
+            A link from a job board, or just the company and the role.
+          </p>
+        )}
+      </div>
+      <div className="ob-rise mt-9 space-y-3" style={{ '--d': '420ms' } as CSSProperties}>
+        <ObPrimary type="submit" disabled={busy} data-testid="ob-q-next">
+          Continue
+        </ObPrimary>
+        <ObQuiet onClick={onNext} data-testid="ob-q-skip">
+          Skip
+        </ObQuiet>
+      </div>
+      {error && (
+        <p className="mt-3 text-[13px] text-bad text-center" role="alert">
+          {error}
+        </p>
+      )}
+    </form>
+  );
+}
+
 function StepLinkedIn({ onNext, signedIn }: { onNext: () => void; signedIn?: boolean }) {
   const user = useSession().user!;
   // once the live sign-in says it is not switched on, the step stops offering it: no button that can only fail
@@ -1128,6 +1555,13 @@ function StepRate({ onNext }: { onNext: () => void }) {
   );
 }
 
+/** The start of what the student is going for, in quotes, for the Ready summary. */
+function aimSnippet(aim: string | undefined): string | undefined {
+  const t = aim?.replace(/\s+/g, ' ').trim();
+  if (!t) return undefined;
+  return `\u201c${t.length > 44 ? `${t.slice(0, 43).trimEnd()}\u2026` : t}\u201d`;
+}
+
 function StepReady({
   google,
   account,
@@ -1161,6 +1595,7 @@ function StepReady({
   // other goals than recruiting, by name ("Fundraising, Sales")
   const otherKinds = (info?.kinds ?? []).filter((k) => k !== 'recruiting').map((k) => GOAL_KIND_LABELS[k]);
   const goalWords = [...fns, ...otherKinds];
+  const words = answeredCount(info?.goals);
   const rows: { key: string; title: string; detail: string; ok: boolean; step: number }[] = [
     {
       key: 'you',
@@ -1184,6 +1619,17 @@ function StepReady({
         .join(' · '),
       ok: goalWords.length > 0,
       step: STEP.goals,
+    },
+    {
+      key: 'words',
+      title: 'In your words',
+      detail: words
+        ? [aimSnippet(info?.goals?.aim), `${words} of ${OWN_WORDS_TOTAL} answered`]
+            .filter(Boolean)
+            .join(' · ')
+        : 'Skipped for now',
+      ok: words > 0,
+      step: STEP.aim,
     },
     {
       key: 'linkedin',
@@ -1230,7 +1676,7 @@ function StepReady({
         }
       />
       <ObPanel>
-        <ul className="divide-y divide-[#eef0f3]">
+        <ul className="stagger divide-y divide-[#eef0f3]">
           {rows.map((r) => (
             <li
               key={r.key}
@@ -1256,7 +1702,7 @@ function StepReady({
                   onClick={() => onJump(r.step)}
                   className="shrink-0 rounded-md px-2 py-1 text-[13px] font-medium text-ink-2 hover:text-ink hover:bg-black/[0.04]"
                 >
-                  {r.key === 'goals' ? 'Add' : 'Connect'}
+                  {r.key === 'goals' || r.key === 'words' ? 'Add' : 'Connect'}
                 </button>
               )}
             </li>

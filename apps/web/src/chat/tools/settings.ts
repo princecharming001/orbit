@@ -1,9 +1,17 @@
 /** Settings writes: targets, recommendations, profile and goals, limits, Claude, resume lines, setup steps. */
 import type { TargetCompany } from '@orbit/core';
-import { FUNCTION_CODES, FUNCTION_LABELS, functionCodeFor, TARGET_STATUS_LABELS } from '@orbit/core';
+import {
+  FUNCTION_CODES,
+  FUNCTION_LABELS,
+  functionCodeFor,
+  OWN_WORDS_KEYS,
+  parseCurrentJob,
+  TARGET_STATUS_LABELS,
+} from '@orbit/core';
 import { db } from '../../db/schema';
 import { finishOnboarding, ONBOARDING_DONE_STEP, setOnboardingStep } from '../../engine/account';
 import { recommendationsRefresh } from '../../engine/brief';
+import { type OwnWordsPatch, saveOwnWords } from '../../engine/ownWords';
 import {
   dismissRecommendation,
   RECOMMENDATION_DISMISS_REASONS,
@@ -38,6 +46,7 @@ import {
   updatePrefs,
   writePrefs,
 } from '../../integrations/prefs';
+import { stepAddress } from '../../pages/onboardingSteps';
 import { z } from '../../zod';
 import { type AnyTool, defineTool, ok, personRef, plural, toModel } from './_shared';
 
@@ -234,7 +243,7 @@ export const updateSettings = defineTool({
   name: 'update_settings',
   kind: 'write',
   description:
-    "Call this only when the student asks to change their profile (name, email, school, graduation year, degree, majors, city, LinkedIn, timezone), their goals (recruiting cycle, functions, roles, industries, locations, free text, ambition), their writing style (warm, direct or formal; learn from sent mail; forget the learned style), their scheduling link or brief time, to show or hide Orbit's reasoning (the grey notes under its answers), or to close a first-run hint. Sending limits and Claude settings are update_limits, set_llm_feature and set_claude_key. Give only the fields that change.",
+    "Call this only when the student asks to change their profile (name, email, school, graduation year, degree, majors, city, LinkedIn, timezone), their goals (recruiting cycle, functions, roles, industries, locations, ambition, and their answers in their own words: what they are going for, what a win looks like, their story, what they are proud of, who they want to meet, what is hard about networking, what Orbit must never do, a job they are going for now), their writing style (warm, direct or formal; learn from sent mail; forget the learned style), their scheduling link or brief time, to show or hide Orbit's reasoning (the grey notes under its answers), or to close a first-run hint. Sending limits and Claude settings are update_limits, set_llm_feature and set_claude_key. Give only the fields that change.",
   input: z.object({
     section: z.enum(SECTIONS).describe('Which section the fields belong to.'),
     fullName: z.string().optional().describe('profile'),
@@ -257,7 +266,28 @@ export const updateSettings = defineTool({
     targetRoles: z.array(z.string()).optional().describe('goals'),
     targetIndustries: z.array(z.string()).optional().describe('goals'),
     targetLocations: z.array(z.string()).optional().describe('goals'),
-    freeText: z.string().optional().describe('goals: anything else that matters.'),
+    aim: z
+      .string()
+      .optional()
+      .describe('goals: what they are going for, and why, in their words; empty clears.'),
+    success: z.string().optional().describe('goals: what would make this cycle a win, and by when.'),
+    story: z
+      .string()
+      .optional()
+      .describe('goals: their story in two lines, as they would introduce themselves.'),
+    proudOf: z.string().optional().describe('goals: what they are good at or proud of.'),
+    wantToMeet: z.string().optional().describe('goals: who they most want to meet.'),
+    networkingHard: z
+      .string()
+      .optional()
+      .describe('goals: what is hard about networking for them right now.'),
+    neverDo: z.string().optional().describe('goals: what Orbit must never do, in their words.'),
+    currentJob: z
+      .string()
+      .optional()
+      .describe(
+        'goals: a job they are going for now: the posting link, the company and role, or both; empty clears.',
+      ),
     ambition: z
       .union([z.literal(1), z.literal(2), z.literal(3)])
       .optional()
@@ -344,7 +374,7 @@ export const updateSettings = defineTool({
       case 'goals': {
         const functions = input.targetFunctions?.map((f) => functionCodeFor(f) ?? f.trim()).filter(Boolean);
         const unknown = functions?.filter((f) => !FUNCTION_CODES.includes(f));
-        const goals = await saveGoals(
+        await saveGoals(
           userId,
           {
             cycleLabel: input.cycleLabel,
@@ -352,11 +382,15 @@ export const updateSettings = defineTool({
             targetRoles: input.targetRoles,
             targetIndustries: input.targetIndustries,
             targetLocations: input.targetLocations,
-            freeText: input.freeText,
             ambition: input.ambition,
           },
           { applyAmbition: input.ambition !== undefined },
         );
+        // their own words go through saveOwnWords, which also tells the server and the recruiting goal
+        const words: OwnWordsPatch = {};
+        for (const k of OWN_WORDS_KEYS) if (input[k] !== undefined) words[k] = input[k];
+        if (input.currentJob !== undefined) words.currentJob = parseCurrentJob(input.currentJob);
+        const goals = await saveOwnWords(ctx.user, words);
         const out = {
           goals: { ...goals, functions: goals.targetFunctions.map((f) => FUNCTION_LABELS[f] ?? f) },
           unknownFunctions: unknown,
@@ -669,7 +703,7 @@ export const advanceOnboarding = defineTool({
   name: 'advance_onboarding',
   kind: 'write',
   description:
-    'Call this only during setup, when the student asks to go to the next step, skip a step, or finish setup ("I am done, take me to the chat"). Finishing builds the recommendations and the welcome brief. The setup steps are 1 welcome, 2 about you, 3 goals, 4 LinkedIn, 5 Gmail (only when Google sign-in is set up), 6 ready; the profile and goals themselves are saved with update_settings, and the resume, tone and other details are set later in Settings.',
+    'Call this only during setup, when the student asks to go to the next step, skip a step, or finish setup ("I am done, take me to the chat"). Finishing builds the recommendations and the welcome brief. The setup steps are 1 welcome, 2 about you, 3 goals (then five short written questions in their own words, all optional), 4 LinkedIn, 5 Gmail (only when Google sign-in is set up), 6 ready; the profile, goals and written answers themselves are saved with update_settings, and the resume, tone and other details are set later in Settings.',
   input: z.object({
     step: z
       .number()
@@ -699,7 +733,7 @@ export const advanceOnboarding = defineTool({
     }
     if (!input.step) throw new Error('Say which step, or finish.');
     const step = await setOnboardingStep(ctx.user.id, input.step);
-    const out = { step, href: `/onboarding/${Math.max(0, (step ?? input.step) - 1)}` };
+    const out = { step, href: `/onboarding/${stepAddress(Math.max(1, step ?? input.step))}` };
     return ok('settings', out, out, `Setup is on step ${step}.`, out.href);
   },
   toModel,

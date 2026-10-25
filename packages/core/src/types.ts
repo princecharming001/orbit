@@ -320,8 +320,27 @@ export interface RecruitingGoals {
   targetFunctions: string[];
   targetIndustries: string[];
   targetLocations: string[];
-  freeText?: string;
   ambition: 1 | 2 | 3;
+  // ---- in the student's own words (plan 24): each optional, trimmed, never an empty string ----
+  /** what they are going for, and why ("Product roles at fintech startups, because ...") */
+  aim?: string;
+  /** what would make this cycle a win, and by when */
+  success?: string;
+  /** their story in two lines, as they would say it in an intro (prep's 30-second intro opens with it) */
+  story?: string;
+  /** what they are good at or proud of */
+  proudOf?: string;
+  /** who they most want to meet, in their words (Discover and recommendations read it) */
+  wantToMeet?: string;
+  /** what is hard about networking for them today: the tone Orbit takes with them */
+  networkingHard?: string;
+  /** what Orbit must never do ("Never mention my GPA. No exclamation marks.") */
+  neverDo?: string;
+  /**
+   * A job the student is going for right now, as they gave it in setup or Settings: the posting's link, the company
+   * or role in their words, or both. Plan 24 asks for it; plan 23 reads it to build a plan for that job.
+   */
+  currentJob?: { url?: string; text?: string };
 }
 
 export interface TargetCompany {

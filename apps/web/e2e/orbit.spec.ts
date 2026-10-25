@@ -1,6 +1,6 @@
 import { deflateRawSync } from 'node:zlib';
 import { expect, type Page, type TestInfo, test } from '@playwright/test';
-import { briefWritten, clippedLabels, injectPeople, prepDeckTo } from './helpers';
+import { briefWritten, clippedLabels, injectPeople, prepDeckTo, skipQuestions } from './helpers';
 
 async function prep(page: Page) {
   // The demo is laid out on business days relative to "now" (a Monday chat is not "tomorrow" on a Friday), so pin
@@ -749,6 +749,42 @@ test.describe('Manual onboarding', () => {
       'true',
     );
     await page.getByRole('button', { name: /^continue$/i }).click();
+    // the written questions (plan 24): each optional, two at most on a screen, saved on Continue
+    await expect(page).toHaveURL(/\/onboarding\/aim$/);
+    await expect(page.getByTestId('ob-eyebrow')).toHaveText(/in your words · 1 of 5/i);
+    await expect(page.getByTestId('ob-progress')).toHaveText(/step 4 of 10 · optional/i);
+    await expect(page.getByRole('heading', { name: 'Start with your why' })).toBeVisible();
+    await page
+      .getByTestId('ob-q-aim')
+      .fill('Product roles at design tool companies, because I love building for makers.');
+    await page.getByRole('button', { name: /^continue$/i }).click();
+    await expect(page).toHaveURL(/\/onboarding\/story$/);
+    await page
+      .getByTestId('ob-q-story')
+      .fill(
+        "I'm a junior at Michigan studying information science. I built a Figma plugin 2,000 designers use.",
+      );
+    await page.getByRole('button', { name: /^continue$/i }).click();
+    // who to meet: a starter taps itself into the answer, and out again
+    await expect(page).toHaveURL(/\/onboarding\/people$/);
+    const pms = page.getByTestId('ob-starter-wantToMeet').filter({ hasText: /^PMs$/ });
+    await pms.click();
+    await expect(page.getByTestId('ob-q-wantToMeet')).toHaveValue('PMs');
+    await page.getByTestId('ob-starter-wantToMeet').filter({ hasText: 'Michigan alumni' }).click();
+    await expect(page.getByTestId('ob-q-wantToMeet')).toHaveValue('PMs, Michigan alumni');
+    await expect(pms).toHaveAttribute('aria-pressed', 'true');
+    await page.getByRole('button', { name: /^continue$/i }).click();
+    await expect(page).toHaveURL(/\/onboarding\/style$/);
+    await page.getByTestId('ob-q-neverDo').fill('No exclamation marks.');
+    await page.getByRole('button', { name: /^continue$/i }).click();
+    // a job: the posting's link and the words are told apart
+    await expect(page).toHaveURL(/\/onboarding\/job$/);
+    await page
+      .getByTestId('ob-q-job')
+      .fill('Figma, Product Management Intern https://boards.greenhouse.io/figma/jobs/123');
+    await expect(page.getByTestId('ob-job-preview')).toContainText('Figma, Product Management Intern');
+    await expect(page.getByTestId('ob-job-preview')).toContainText('boards.greenhouse.io/figma');
+    await page.getByRole('button', { name: /^continue$/i }).click();
     // LinkedIn (no Gmail step: Google sign-in is not set up on this build): upload a tiny CSV
     await expect(page).toHaveURL(/\/onboarding\/3$/);
     // live LinkedIn is not switched on in this build, so there is no button that could only fail
@@ -765,6 +801,7 @@ test.describe('Manual onboarding', () => {
     await expect(page.getByTestId('ob-ready-linkedin')).toHaveAttribute('data-status', 'done');
     await expect(page.getByTestId('ob-ready-linkedin')).toContainText(/2 connections imported/);
     await expect(page.getByTestId('ob-ready-goals')).toContainText(/Product management · 1 target company/);
+    await expect(page.getByTestId('ob-ready-words')).toContainText('5 of 8 answered');
     await expect(page.getByTestId('ob-ready-gmail')).toHaveCount(0);
     await page.getByRole('button', { name: /open orbit/i }).click();
     // setup ends on the chat home
@@ -776,6 +813,15 @@ test.describe('Manual onboarding', () => {
     await expect(page.getByRole('link', { name: /priya patel/i })).toBeVisible();
     await page.goto('discover');
     await expect(page.getByTestId('rec-card').first()).toBeVisible();
+    // every written answer is in Settings, under Goals, to edit later
+    await page.goto('settings/goals');
+    await expect(page.getByTestId('goals-story')).toHaveValue(/Figma plugin 2,000 designers use/);
+    await expect(page.getByTestId('goals-wantToMeet')).toHaveValue('PMs, Michigan alumni');
+    await expect(page.getByTestId('goals-neverDo')).toHaveValue('No exclamation marks.');
+    await expect(page.getByTestId('goals-currentJob')).toHaveValue(
+      'Figma, Product Management Intern https://boards.greenhouse.io/figma/jobs/123',
+    );
+    await expect(page.getByTestId('goals-success')).toHaveValue('');
     // Coming back to the landing page never offers to wipe this profile, not even while it is being read.
     for (const state of await landingHeaderStates(page)) expect(state).toBe('Open Orbit');
     // signed in, the home route is the chat, not the landing page
@@ -1247,13 +1293,13 @@ test.describe('Setup without Google', () => {
       .getByRole('button', { name: /^get started/i })
       .first()
       .click();
-    // without Google sign-in there are five steps: Welcome, You, Goals, LinkedIn, Ready
-    await expect(page.getByTestId('ob-progress')).toHaveText(/step 1 of 5/i);
+    // without Google sign-in there are ten steps: Welcome, You, Goals, five written questions, LinkedIn, Ready
+    await expect(page.getByTestId('ob-progress')).toHaveText(/step 1 of 10/i);
     await page
       .getByTestId('ob-welcome')
       .getByRole('button', { name: /get started/i })
       .click();
-    await expect(page.getByTestId('ob-progress')).toHaveText(/step 2 of 5/i);
+    await expect(page.getByTestId('ob-progress')).toHaveText(/step 2 of 10/i);
     await expect(page.getByTestId('ob-step-1')).toHaveAttribute('data-status', 'done');
     // Continue says what is missing while it is disabled
     await expect(page.getByRole('button', { name: /^continue$/i })).toBeDisabled();
@@ -1283,14 +1329,18 @@ test.describe('Setup without Google', () => {
     await expect(page.getByTestId('ob-pace-value')).toHaveText('350 a week');
     await expect(page.getByRole('button', { name: /remove evercore/i })).toBeVisible();
     await page.getByRole('button', { name: /^continue$/i }).click();
+    await skipQuestions(page);
     // without a Google sign-in set up on this build there is no Gmail step that could only say "not available"
     await expect(page.getByTestId('ob-google-unavailable')).toHaveCount(0);
     await expect(page.getByRole('heading', { name: /linkedin/i })).toBeVisible();
-    await expect(page.getByTestId('ob-progress')).toHaveText(/step 4 of 5 · optional/i);
+    await expect(page.getByTestId('ob-progress')).toHaveText(/step 9 of 10 · optional/i);
     await expect(page.getByTestId('ob-step-3')).toHaveAttribute('data-status', 'done');
-    await expect(page.getByTestId('ob-step-4')).toHaveAttribute('data-status', 'current');
-    await page.getByTestId('ob-skip').click(); // linkedin
+    // a written question passed with nothing written is skipped, not done
     await expect(page.getByTestId('ob-step-4')).toHaveAttribute('data-status', 'skipped');
+    await expect(page.getByTestId('ob-step-9')).toHaveAttribute('data-status', 'current');
+    await page.getByTestId('ob-skip').click(); // linkedin
+    await expect(page.getByTestId('ob-step-9')).toHaveAttribute('data-status', 'skipped');
+    await expect(page.getByTestId('ob-ready-words')).toHaveAttribute('data-status', 'skipped');
     await expect(page.getByTestId('ob-ready-linkedin')).toHaveAttribute('data-status', 'skipped');
     await expect(page.getByTestId('ob-ready-goals')).toContainText(/Consulting · 1 target company/);
     await page.getByRole('button', { name: /open orbit/i }).click();
@@ -1331,6 +1381,7 @@ test.describe('Setup without Google', () => {
     await page.getByTestId('ob-fn-ib').click();
     await page.getByTestId('ob-company').fill('Goldman Sachs');
     await page.getByRole('button', { name: /^continue$/i }).click();
+    await skipQuestions(page);
     // LinkedIn (no Gmail step on this build)
     await expect(page.getByRole('heading', { name: /linkedin/i })).toBeVisible();
     await page.getByTestId('ob-skip').click();
@@ -1418,6 +1469,7 @@ async function newStudent(page: Page) {
   await page.getByTestId('ob-company').fill('Goldman Sachs');
   await page.getByRole('button', { name: /^add$/i }).click();
   await page.getByRole('button', { name: /^continue$/i }).click();
+  await skipQuestions(page);
   await page.getByTestId('ob-skip').click(); // linkedin
   await page.getByRole('button', { name: /open orbit/i }).click();
   await expect(page.getByTestId('greeting')).toContainText(/Hey Sam/, { timeout: 30_000 });
@@ -1894,13 +1946,14 @@ test.describe('Usability round 5: one draft, kept edits, saved settings, chats t
     await expect(page.getByRole('button', { name: /^remove evercore$/i })).toBeVisible();
     await expect(page.getByRole('button', { name: /^remove lazard$/i })).toBeVisible();
     await page.getByRole('button', { name: /^continue$/i }).click();
-    await expect(page).toHaveURL(/\/onboarding\/3$/);
+    await expect(page).toHaveURL(/\/onboarding\/aim$/);
     await page.getByRole('button', { name: /^back$/i }).click();
     await expect(page).toHaveURL(/\/onboarding\/2$/);
     await page.goBack();
     await expect(page).toHaveURL(/\/onboarding\/1$/);
     await page.getByRole('button', { name: /^continue$/i }).click();
     await page.getByRole('button', { name: /^continue$/i }).click();
+    await skipQuestions(page);
     const csv =
       'First Name,Last Name,URL,Email Address,Company,Position,Connected On\nPriya,Patel,https://www.linkedin.com/in/priya-patel-lz,,Lazard,Analyst,12 Mar 2025\nMarcus,Bell,https://www.linkedin.com/in/marcus-bell-ev,marcus.bell@gmail.com,Evercore,Analyst,03 Jan 2024\n';
     await page.getByTestId('ob-linkedin').setInputFiles({
@@ -1911,7 +1964,7 @@ test.describe('Usability round 5: one draft, kept edits, saved settings, chats t
     await expect(page.getByText(/2 people added/i)).toBeVisible();
     // leaving the step and coming back still shows the import
     await page.getByRole('button', { name: /^back$/i }).click();
-    await expect(page).toHaveURL(/\/onboarding\/2$/);
+    await expect(page).toHaveURL(/\/onboarding\/job$/);
     await page.getByRole('button', { name: /^continue$/i }).click();
     await expect(page.getByTestId('ob-linkedin-done')).toContainText(/2 connections imported/i);
     await expect(page.getByTestId('ob-skip')).toHaveCount(0);
@@ -2043,8 +2096,8 @@ test.describe('Usability round 5 on a phone', () => {
       .click();
     const progress = page.getByTestId('ob-progress');
     await expect(progress).toBeVisible();
-    await expect(progress).toContainText('1 of 5');
-    await expect(page.getByTestId('ob-step-5')).toBeVisible();
+    await expect(progress).toContainText('1 of 10');
+    await expect(page.getByTestId('ob-progress-bar')).toBeVisible();
     await fits();
     await page
       .getByTestId('ob-welcome')
@@ -2058,7 +2111,12 @@ test.describe('Usability round 5 on a phone', () => {
     await page.getByRole('button', { name: /^add$/i }).click();
     await fits();
     await page.getByRole('button', { name: /^continue$/i }).click();
-    await expect(progress).toContainText(/4 of 5 · optional/i);
+    // the written questions are optional, with a Skip, and fit too
+    await expect(progress).toContainText(/4 of 10 · optional/i);
+    await expect(page.getByTestId('ob-q-skip')).toBeVisible();
+    await fits();
+    await skipQuestions(page);
+    await expect(progress).toContainText(/9 of 10 · optional/i);
     await expect(page.getByTestId('ob-skip')).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   });

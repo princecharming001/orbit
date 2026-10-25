@@ -20,6 +20,7 @@ import {
   MAX_WORDS,
   MESSAGE_KIND_LABELS,
   normalizeCompany,
+  ownWordsOf,
   promiseText,
   REACH_BAND_LABELS,
   RELATIONSHIP_LABELS,
@@ -81,6 +82,7 @@ import {
   todaysLlmUsage,
 } from '../../integrations/prefs';
 import { sharedClaudeAvailable } from '../../integrations/shared-claude';
+import { stepAddress } from '../../pages/onboardingSteps';
 import { z } from '../../zod';
 import type { ResultEnvelope, ToolContext } from '../types';
 import {
@@ -1668,8 +1670,9 @@ export const getSettings = defineTool({
             targetRoles: goals.targetRoles,
             targetIndustries: goals.targetIndustries,
             targetLocations: goals.targetLocations,
-            freeText: goals.freeText,
             ambition: goals.ambition,
+            // their answers in their own words (plan 24): what they are going for, their story, their rules
+            ...ownWordsOf(goals),
             href: '/settings/goals',
           }
         : undefined;
@@ -1783,7 +1786,9 @@ export const getSettings = defineTool({
       out.onboarding = {
         step: user.onboardingStep,
         completed: !!user.onboardingCompletedAt,
-        href: user.onboardingCompletedAt ? '/' : `/onboarding/${Math.max(1, user.onboardingStep - 1)}`,
+        href: user.onboardingCompletedAt
+          ? '/'
+          : `/onboarding/${stepAddress(Math.max(2, user.onboardingStep))}`,
       };
     out.isDemo = userId === DEMO_USER_ID;
     const summary = section === 'all' ? 'Your settings, by section.' : `Your ${section} settings.`;

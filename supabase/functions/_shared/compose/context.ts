@@ -5,6 +5,7 @@
  * (pgvector cosine on messages.embedding; outbound, ≥ 25 words, never to the same recipient, names replaced by
  * [name]).
  */
+import { type OwnWords, ownWordsLines } from '@orbit/core/ownWords';
 import { defaultStyleCard } from '@orbit/core/style/card';
 import { stripQuotedReply } from '@orbit/core/text/email';
 import type { StyleCard } from '@orbit/core/types';
@@ -113,16 +114,24 @@ export async function buildUserContext(db: Db, u: UserRow): Promise<string> {
   ] as const)
     if (typeof s[k] === 'string' && (s[k] as string).trim())
       lines.push(`${label}: ${(s[k] as string).trim()}`);
+  // the student's own words about their goals from setup (plan 24): their never rule first
+  if (s.about && typeof s.about === 'object') lines.push(...ownWordsLines(s.about as OwnWords, 300));
 
-  const goals = await db.sql<{ kind: string; title: string; description: string | null; targets: unknown }>`
-    select kind, title, description, targets from orbit.goals
+  const goals = await db.sql<{
+    kind: string;
+    title: string;
+    description: string | null;
+    success_metric: string | null;
+    targets: unknown;
+  }>`
+    select kind, title, description, success_metric, targets from orbit.goals
      where user_id = ${u.id}::uuid and status = 'active' and deleted_at is null
      order by priority, created_at limit 5`;
   for (const g of goals) {
     const t = (g.targets ?? {}) as Record<string, string[]>;
     const targets = [...(t.organizations ?? []), ...(t.roles ?? [])].slice(0, 6).join(', ');
     lines.push(
-      `Goal (${g.kind}): ${g.title}${g.description ? `. ${g.description}` : ''}${targets ? ` (targets: ${targets})` : ''}`,
+      `Goal (${g.kind}): ${g.title}${g.description ? `. ${g.description}` : ''}${g.success_metric ? `. A win: ${g.success_metric}` : ''}${targets ? ` (targets: ${targets})` : ''}`,
     );
   }
 

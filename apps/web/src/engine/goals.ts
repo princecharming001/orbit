@@ -4,7 +4,15 @@
  * browser's `userGoals` table. The v1 recruiting details (functions, pace, cycle) stay in the `goals` row.
  */
 import type { ChatTurn, Goal, GoalKind, ProposedGoal, RecruitingGoals, User } from '@orbit/core';
-import { functionCodeFor, functionsIn, GOAL_KINDS, industriesIn, locationsIn, newId } from '@orbit/core';
+import {
+  functionCodeFor,
+  functionsIn,
+  GOAL_KINDS,
+  industriesIn,
+  locationsIn,
+  newId,
+  ownWordsOf,
+} from '@orbit/core';
 import { db } from '../db/schema';
 import { type ApiFailure, callApi, isAccountMode, isServerUser, isSignedIn } from '../integrations/orbitApi';
 import { writeFromServer } from './serverSync';
@@ -202,7 +210,7 @@ export async function mergeRecruitingRow(userId: string, t: RecruitingTargets): 
     targetFunctions: functions.list,
     targetIndustries: industries.list,
     targetLocations: locations.list,
-    freeText: cur?.freeText,
+    ...ownWordsOf(cur),
     ambition: cur?.ambition ?? 2,
   };
   const changed =

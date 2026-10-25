@@ -3,11 +3,13 @@
  *   POST /settings/autonomy {level, goalId?}  → the user's autonomy level, or one goal's override
  *   POST /settings/pause {until}              → users.settings.quiet_until (null resumes)
  *   POST /settings/profile {postalAddress?, schedulingLink?, timezone?, onboardingCompletedAt?, school?, degree?,
- *                          majors?, graduationYear?, currentCity?}
+ *                          majors?, graduationYear?, currentCity?, about?}
  *        → users.settings.postal_address / scheduling_link (null or '' removes), users.timezone,
  *          users.onboarding.completed_at (set once setup is finished; never cleared), and the student's profile:
- *          users.school, degree, majors, grad_year, current_city (null or '' clears)
+ *          users.school, degree, majors, grad_year, current_city (null or '' clears), and the student's own words
+ *          about their goals (plan 24) as users.settings.about (the whole set replaces the stored one; null clears)
  */
+import { cleanAnswer, cleanCurrentJob, OWN_WORDS_KEYS, type OwnWords } from '@orbit/core/ownWords';
 import type { ProfileSettingsResponse } from '@orbit/core/server/api';
 import { badRequest, HttpError, json } from '../../_shared/http.ts';
 import { validZone } from '../../_shared/zones.ts';
@@ -58,6 +60,8 @@ async function pause(ctx: Ctx): Promise<Response> {
 export const POSTAL_ADDRESS_MAX = 500;
 export const SCHEDULING_LINK_MAX = 500;
 export const PROFILE_TEXT_MAX = 200;
+/** One written answer as sent (plan 24); the browser keeps 600 after cleaning, so this only refuses a misuse. */
+export const ABOUT_TEXT_MAX = 2000;
 
 /** A setting to keep, to remove (null), or to leave alone (undefined). */
 function optText(b: Record<string, unknown>, key: string): string | null | undefined {
@@ -66,6 +70,39 @@ function optText(b: Record<string, unknown>, key: string): string | null | undef
   if (v === null) return null;
   if (typeof v !== 'string') throw badRequest(`${key} must be text or null`);
   return v.trim() || null;
+}
+
+/**
+ * The student's own words (plan 24) as kept: only the known answers, each text and at most OWN_WORDS_MAX characters
+ * (longer is refused, not cut), a job as a link and a note; null clears, undefined leaves them alone.
+ */
+export function aboutFrom(b: Record<string, unknown>): OwnWords | null | undefined {
+  const v = b.about;
+  if (v === undefined) return undefined;
+  if (v === null) return null;
+  if (typeof v !== 'object' || Array.isArray(v)) throw badRequest('about must be an object or null');
+  const o = v as Record<string, unknown>;
+  const out: OwnWords = {};
+  for (const k of OWN_WORDS_KEYS) {
+    const x = o[k];
+    if (x === undefined || x === null) continue;
+    if (typeof x !== 'string') throw badRequest(`about.${k} must be text`);
+    if (x.length > ABOUT_TEXT_MAX) throw badRequest(`about.${k} is at most ${ABOUT_TEXT_MAX} characters`);
+    const t = cleanAnswer(x);
+    if (t) out[k] = t;
+  }
+  if (o.currentJob !== undefined && o.currentJob !== null) {
+    if (typeof o.currentJob !== 'object') throw badRequest('about.currentJob must be {url?, text?}');
+    const j = o.currentJob as Record<string, unknown>;
+    if (
+      (j.url !== undefined && typeof j.url !== 'string') ||
+      (j.text !== undefined && typeof j.text !== 'string')
+    )
+      throw badRequest('about.currentJob must be {url?, text?}');
+    const job = cleanCurrentJob(j);
+    if (job) out.currentJob = job;
+  }
+  return Object.keys(out).length ? out : null;
 }
 
 /** Time zones by IANA name (America/New_York, UTC), known to this runtime; offsets and abbreviations are refused. */
@@ -135,11 +172,13 @@ async function profile(ctx: Ctx): Promise<Response> {
       throw badRequest('onboardingCompletedAt must be an ISO time');
     done = t.toISOString();
   }
+  const about = aboutFrom(b);
   const userId = ctx.userId!;
   // the keys given are replaced (or removed when null); the rest of settings is kept
-  const given: Record<string, string | null> = {};
+  const given: Record<string, string | OwnWords | null> = {};
   if (postal !== undefined) given.postal_address = postal;
   if (link !== undefined) given.scheduling_link = link;
+  if (about !== undefined) given.about = about;
   const keep = Object.fromEntries(Object.entries(given).filter(([, v]) => v !== null));
   const [after] = await ctx.db.sql<{
     settings: Record<string, unknown>;
@@ -194,6 +233,7 @@ async function profile(ctx: Ctx): Promise<Response> {
     majors: after.majors ?? [],
     graduationYear: after.grad_year,
     currentCity: after.current_city,
+    about: (after.settings?.about as OwnWords | undefined) ?? null,
   };
   return json(200, out);
 }

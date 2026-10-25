@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { buildUserContext, loadUserRow } from '../../functions/_shared/compose/context.ts';
 import { embeddable, keywordScore } from '../../functions/_shared/memory/memory.ts';
 import {
   addPerson,
@@ -319,6 +320,51 @@ describe('settings/profile (§14.3)', () => {
       select onboarding from orbit.users where id = ${userId}::uuid`;
     expect(u!.onboarding).toMatchObject({ completed_at: at });
     expect((await call('/settings/profile', token, { onboardingCompletedAt: 'soon' })).status).toBe(400);
+  });
+
+  it("keeps the student's own words about their goals (plan 24) for the server's drafts", async () => {
+    const call = api(t, fakeNet(), { env: {} });
+    const { userId, token } = await signedInUser(t, { settings: { quiet_until: '2026-12-01' } });
+    const r = await call<{ about: Record<string, unknown> | null }>('/settings/profile', token, {
+      about: {
+        aim: '  Product roles at fintech startups.  ',
+        neverDo: 'Never mention my GPA.',
+        story: '',
+        unknown: 'dropped',
+        currentJob: { url: 'https://jobs.lever.co/stripe/123', text: 'Stripe, PM intern' },
+      },
+    });
+    expect(r.status).toBe(200);
+    const about = {
+      aim: 'Product roles at fintech startups.',
+      neverDo: 'Never mention my GPA.',
+      currentJob: { url: 'https://jobs.lever.co/stripe/123', text: 'Stripe, PM intern' },
+    };
+    expect(r.body.about).toEqual(about);
+    const [u] = await t.db.sql<{ settings: Record<string, unknown> }>`
+      select settings from orbit.users where id = ${userId}::uuid`;
+    expect(u!.settings).toEqual({ quiet_until: '2026-12-01', about });
+    // the server's drafts read them, the never rule first
+    const ctx = await buildUserContext(t.db, await loadUserRow(t.db, userId));
+    expect(ctx).toContain('Never (their own rule, always follow it): Never mention my GPA.');
+    expect(ctx).toContain('Going for: Product roles at fintech startups.');
+    expect(ctx).toContain('Going for this job now: Stripe, PM intern, https://jobs.lever.co/stripe/123');
+    // left out keeps them; null clears them
+    await call('/settings/profile', token, { timezone: 'America/Detroit' });
+    expect((await call<{ about: unknown }>('/settings/profile', token, {})).body.about).toEqual(about);
+    await call('/settings/profile', token, { about: null });
+    const [after] = await t.db.sql<{ settings: Record<string, unknown> }>`
+      select settings from orbit.users where id = ${userId}::uuid`;
+    expect(after!.settings).toEqual({ quiet_until: '2026-12-01' });
+    for (const bad of [
+      { about: 'PM' },
+      { about: [] },
+      { about: { aim: 42 } },
+      { about: { aim: 'x'.repeat(2001) } },
+      { about: { currentJob: 'Stripe' } },
+      { about: { currentJob: { url: 7 } } },
+    ])
+      expect((await call('/settings/profile', token, bad)).status, JSON.stringify(bad)).toBe(400);
   });
 
   it('keeps the postal address, the scheduling link and the time zone, and validates each', async () => {

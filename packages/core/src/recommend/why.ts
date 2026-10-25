@@ -296,6 +296,7 @@ const CODE: Record<string, { kind: WhyKind; strength: number; anchor?: 'goal' | 
   target_company: { kind: 'goal', strength: 85, anchor: 'goal' },
   role_industry: { kind: 'goal', strength: 84, anchor: 'goal' },
   function_match: { kind: 'goal', strength: 62 },
+  want_to_meet: { kind: 'goal', strength: 80, anchor: 'goal' },
   shared_org_now: { kind: 'past_employer', strength: 82, anchor: 'goal' },
   shared_org: { kind: 'past_employer', strength: 75, anchor: 'goal' },
   mutuals: { kind: 'mutuals', strength: 35 },
@@ -331,6 +332,9 @@ export function whyFromReasons(
   if (alumniTarget) said.add('target_company').add('alumni');
   if (has('alumni_field')) said.add('function_match').add('alumni');
   if (has('role_industry')) said.add('function_match').add('industry');
+  // "PM at Plaid, who you said you want to meet" already says the role
+  if (reasons.some((r) => r.code === 'want_to_meet' && r.text !== 'Who you said you want to meet'))
+    said.add('function_match');
   for (const r of reasons) {
     const c0 = CODE[r.code];
     if (!c0 || (r.code === 'search' && opts.filler === false)) continue;

@@ -277,6 +277,7 @@ const TEXT_CODES = new Set([
   'exclamations',
   'long_sentences',
   'i_heavy',
+  'never_do',
 ]);
 /** Issues that only warn when the student wrote the text: their own link, a longer note, style. */
 const SOFT_FOR_EDITS = new Set([
@@ -334,6 +335,8 @@ function issueText(code: string, detail: string, person: Person): string {
       return `${detail}. Split them so they are easy to skim.`;
     case 'i_heavy':
       return `${detail}. Lead with them, not you.`;
+    case 'never_do':
+      return `This breaks your own rule: "${detail}". Change it before sending, or edit the rule in Settings.`;
     default:
       return detail;
   }
@@ -390,7 +393,7 @@ export async function reviewDraft(
 ): Promise<DraftIssue[]> {
   const person = await db.people.get(msg.personId);
   if (!person) return [];
-  const settings = await db.settings.get(user.id);
+  const [settings, goals] = await Promise.all([db.settings.get(user.id), db.goals.get(user.id)]);
   const threaded = !!msg.externalThreadId || !!(await threadForMessage(msg));
   const opts = {
     kind: msg.kind,
@@ -402,6 +405,8 @@ export async function reviewDraft(
     recipientFirstName: person.firstName,
     recipientFullName: person.displayName,
     channel: msg.channel,
+    // the student's own never rules (plan 24): a warning, never a block
+    neverDo: goals?.neverDo,
   };
   const check = (b: string, s?: string) =>
     validateDraft(

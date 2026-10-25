@@ -111,6 +111,7 @@ export function heldRole(p: Pick<Person, 'currentTitle' | 'headline'>): string |
 /** A reason code that is enough on its own to suggest someone from the network (see quality.worthSuggesting). */
 const GOAL_ANCHORS = new Set([
   'target_company',
+  'want_to_meet',
   'alumni_field',
   'role_industry',
   'shared_org',
@@ -218,7 +219,8 @@ export function recommendPeople(inp: RecommendInput): Recommendation[] {
       kw < 0.48 &&
       !shared &&
       !p.isAlumni &&
-      like < 0.75
+      like < 0.75 &&
+      scored.parts.want < 0.6
     )
       continue;
     // a little for what their work shares with the student's resume
@@ -256,9 +258,13 @@ export function recommendPeople(inp: RecommendInput): Recommendation[] {
           text: `${role}${where}, in ${ind}, an industry on your list`,
         });
     }
+    // who the student said they most want to meet (plan 24)
+    const wanted = scored.reasons.find((r) => r.code === 'want_to_meet');
+    if (wanted) reasons.push(wanted);
     if (p.isAlumni) reasons.push({ code: 'alumni', text: `${inp.user.school} alum` });
     if (tc) reasons.push({ code: 'target_company', text: `${tc.nameRaw} is on your target list` });
-    if (fnKey && role)
+    // "PM at Plaid, who you said you want to meet" already says the role
+    if (fnKey && role && !wanted?.text.includes(role))
       reasons.push({ code: 'function_match', text: `${role}${where}, the role you're targeting` });
     const replied = scored.reasons.find((r) => r.code === 'like_replied');
     if (replied) reasons.push(replied);

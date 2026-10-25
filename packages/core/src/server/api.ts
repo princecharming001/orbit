@@ -9,6 +9,7 @@
 
 import type { ReplyClass } from '../email/replyClass';
 import type { WarmPath } from '../graph/route';
+import type { OwnWords } from '../ownWords';
 import type { TieBand } from '../scoring/tieScore';
 import type { Dossier, Goal, GoalKind, MessageKind } from '../types';
 
@@ -415,6 +416,12 @@ export interface ProfileSettingsRequest {
   majors?: string[];
   graduationYear?: number | null;
   currentCity?: string | null;
+  /**
+   * the student's own words about their goals (plan 24: aim, success, story, proudOf, wantToMeet, networkingHard,
+   * neverDo, currentJob), kept in users.settings.about for the server's drafts; the whole set replaces the stored
+   * one, and null clears it
+   */
+  about?: OwnWords | null;
 }
 export interface ProfileSettingsResponse {
   postalAddress: string | null;
@@ -425,6 +432,7 @@ export interface ProfileSettingsResponse {
   majors?: string[];
   graduationYear?: number | null;
   currentCity?: string | null;
+  about?: OwnWords | null;
 }
 
 export interface DueItem {

@@ -11,6 +11,7 @@ import type {
   User,
 } from '@orbit/core';
 import {
+  cleanAnswer,
   expandShorthand,
   financeFirmKind,
   functionPhrase,
@@ -433,9 +434,25 @@ export interface PrepPlan {
   followUps: string[];
 }
 
+/**
+ * The student's story as the start of a spoken intro: as written when it already starts "I'm" or "My name", after
+ * "I'm Alex," when it reads as a description ("a junior at Cornell who ..."), after "I'm Alex." otherwise. Ends with
+ * a full stop; nothing written gives undefined.
+ */
+export function storyIntro(story: string | undefined, firstName: string): string | undefined {
+  const t = cleanAnswer(story)?.replace(/\s+/g, ' ');
+  if (!t) return undefined;
+  const body = /[.!?]$/.test(t) ? t : `${t}.`;
+  if (/^(i'm|i am|i’m|my name|hi|hey|hello)\b/i.test(body)) return body;
+  if (!firstName) return `${body.charAt(0).toUpperCase()}${body.slice(1)}`;
+  if (/^(a|an|the)\s/i.test(body) || /^[a-z]/.test(body))
+    return `I'm ${firstName}, ${body.charAt(0).toLowerCase()}${body.slice(1)}`;
+  return `I'm ${firstName}. ${body}`;
+}
+
 export function buildPrep(args: {
   user: Pick<User, 'firstName' | 'school' | 'graduationYear' | 'degree' | 'majors' | 'timezone'>;
-  goals?: Pick<RecruitingGoals, 'cycleLabel' | 'targetFunctions'>;
+  goals?: Pick<RecruitingGoals, 'cycleLabel' | 'targetFunctions' | 'story'>;
   person: Person;
   facts: Pick<PersonFact, 'type' | 'text'>[];
   chats: Pick<CoffeeChat, 'stage' | 'completedAt'>[];
@@ -513,11 +530,17 @@ export function buildPrep(args: {
   const project = args.resumeFacets.find((f) => f.kind === 'project' && f.title);
   let intro: string | undefined;
   let introMissing: string | undefined;
-  if (user.firstName && user.school) {
-    const bits = [
-      `I'm ${user.firstName}, ${withArticle(year)} at ${user.school}${major ? ` studying ${major}` : ''}.`,
-    ];
-    if (exp) {
+  // the story the student wrote in setup (plan 24) opens the intro, in their words
+  const story = storyIntro(goals?.story, user.firstName);
+  if (user.firstName && (user.school || story)) {
+    const bits = story
+      ? [story]
+      : [
+          `I'm ${user.firstName}, ${withArticle(year)} at ${user.school}${major ? ` studying ${major}` : ''}.`,
+        ];
+    if (story) {
+      // their story already says who they are and what they have done
+    } else if (exp) {
       const current = !exp.endDate || /present|now/i.test(exp.endDate);
       const org = exp.organizationName!;
       // a student club is not an employer: "Treasurer of the Michigan Investment Club", "an analyst in the ..."
@@ -535,8 +558,10 @@ export function buildPrep(args: {
       bits.push(`${current ? (club ? "I'm" : "Right now I'm") : 'Most recently I was'} ${role}.`);
     } else if (project) bits.push(`Lately I've been working on ${project.title}.`);
     const missing: string[] = [];
-    if (!exp && !project)
-      missing.push('Add your resume in Settings so Orbit can add one line about your experience.');
+    if (!story && !exp && !project)
+      missing.push(
+        'Add your resume, or your story in two lines under Goals in Settings, so your intro says what you have done.',
+      );
     if (myFn)
       bits.push(
         `I'm recruiting for ${myFn} roles${cycle ? ` (${cycle})` : ''}, and I'd love to hear how you got where you are.`,

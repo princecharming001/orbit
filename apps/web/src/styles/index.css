@@ -357,6 +357,92 @@ body {
     animation: none;
   }
 }
+/* setup (plan 24): a step slides in from the side it comes from and fades; its title reveals word by word, each
+   word rising out of a soft blur; what follows rises in after; the progress fill eases forward */
+@keyframes ob-in-next {
+  from {
+    opacity: 0;
+    transform: translateX(28px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes ob-in-prev {
+  from {
+    opacity: 0;
+    transform: translateX(-28px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.ob-in-next {
+  animation: ob-in-next 0.42s var(--ease-out-expo) both;
+}
+.ob-in-prev {
+  animation: ob-in-prev 0.42s var(--ease-out-expo) both;
+}
+@keyframes word-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.3em);
+    filter: blur(3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+    filter: none;
+  }
+}
+.reveal-words > span {
+  display: inline-block;
+  animation: word-in 0.55s var(--ease-out-expo) both;
+  animation-delay: calc(var(--d, 0ms) + 60ms + var(--i, 0) * 40ms);
+}
+@keyframes ob-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.ob-rise {
+  animation: ob-rise 0.5s var(--ease-out-expo) both;
+  animation-delay: var(--d, 0ms);
+}
+.ob-progress-fill {
+  transition: width 0.7s var(--ease-out-expo);
+}
+/* a starter phrase tapped into an answer settles in */
+@keyframes chip-on {
+  from {
+    transform: scale(0.97);
+  }
+  to {
+    transform: none;
+  }
+}
+.chip-on {
+  animation: chip-on 0.2s var(--ease-out-expo) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ob-in-next,
+  .ob-in-prev,
+  .reveal-words > span,
+  .ob-rise,
+  .chip-on {
+    animation: none;
+  }
+  .ob-progress-fill {
+    transition: none;
+  }
+}
 /* a menu or list that opens under a field: grows from its top edge */
 @keyframes pop-in {
   from {

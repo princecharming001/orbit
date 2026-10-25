@@ -1,5 +1,5 @@
 import type { ChatStage, Suggestion } from '@orbit/core';
-import { STAGE_LABELS, todayKey } from '@orbit/core';
+import { CHAT_LINE_ORDER, ownWordsLines, STAGE_LABELS, todayKey } from '@orbit/core';
 import { db } from '../../db/schema';
 import { DEMO_USER_ID } from '../../engine/demo';
 import { activeGoals, goalLine } from '../../engine/goals';
@@ -98,6 +98,8 @@ function cardLine(s: Suggestion, names: Map<string, string>): string {
 /** How long the snapshot waits for memory before it goes without it (the turn should not stall on the server). */
 const REMEMBERED_TIMEOUT_MS = 2500;
 const REMEMBERED_MAX_CHARS = 1200;
+/** The student's own words take at most this many characters of the snapshot. */
+const OWN_WORDS_SNAPSHOT_MAX = 600;
 
 export async function buildSnapshot(
   userId: string,
@@ -156,6 +158,12 @@ export async function buildSnapshot(
         ...goals.targetIndustries.slice(0, 3),
       ].filter(Boolean)
     : [];
+
+  // what the student wrote in setup (plan 24), their never rule first, so a long set loses the least important end
+  const words = goals ? ownWordsLines(goals, 140, CHAT_LINE_ORDER).join(' | ').replace(/[—–]/g, ',') : '';
+  const wordsLine = words
+    ? `In their words (shape suggestions and tone by it): ${words.length > OWN_WORDS_SNAPSHOT_MAX ? `${words.slice(0, OWN_WORDS_SNAPSHOT_MAX - 1).trimEnd()}…` : words}`
+    : '';
 
   const counts = new Map<ChatStage, number>();
   for (const c of chats) if (!c.archivedAt) counts.set(c.stage, (counts.get(c.stage) ?? 0) + 1);
@@ -249,6 +257,7 @@ export async function buildSnapshot(
   const resumeLine = await resumeOffer;
   const lines = [
     `Student: ${student}.${goalBits.length ? ` Goals: ${goalBits.join(', ')}.` : ''}`,
+    ...(wordsLine ? [wordsLine] : []),
     `Active goals (ids): ${goalsV3.length ? goalsV3.map((g) => `${g.id} ${goalLine(g)}`).join('; ') : 'none tracked'}.`,
     ...(offered ? [offered] : []),
     ...(resumeLine ? [resumeLine] : []),

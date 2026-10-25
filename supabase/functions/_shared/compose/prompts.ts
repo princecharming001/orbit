@@ -7,7 +7,7 @@
 import type { ComposedMessage, GoalKind, MessageKind } from '@orbit/core/types';
 import { z } from 'zod/v4';
 
-export const PROMPT_VERSION = 'compose-v2.0';
+export const PROMPT_VERSION = 'compose-v2.1';
 
 export const composeSchema = z.object({
   subject: z.string().nullable(),
@@ -76,6 +76,7 @@ export function composeSystem(p: SystemParams): string {
     '- No flattery adjectives (amazing, incredible, inspiring), no "I hope this finds you well", no "quick question", no em-dashes, no exclamation marks unless the voice card uses them.',
     '- Plain words, short sentences (reading grade ≤ 7).',
     '- Match <voice> for greeting, sign-off, contractions and sentence length. Borrow rhythm from <examples>, never their content.',
+    '- <user_context> may carry the user\'s own words: a "Never" line is their rule and always wins; "Their story" is how they introduce themselves, so draw on it rather than a generic line.',
   ];
   if (p.kind === 'forwardable_blurb' && p.blurb)
     lines.push(

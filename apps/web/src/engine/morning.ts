@@ -17,7 +17,7 @@ import type {
   User,
   UserSettings,
 } from '@orbit/core';
-import { cardReason, STAGE_LABELS, warmUpProgress } from '@orbit/core';
+import { cardReason, cleanAnswer, STAGE_LABELS, warmUpProgress } from '@orbit/core';
 import { db } from '../db/schema';
 import { isMessageSuggestion } from './brief';
 import { type PersonSnapshot, restorePerson, snapshotPerson } from './send';
@@ -77,6 +77,8 @@ export interface MorningDeck {
   moves: MorningMove[];
   /** people the student has in Orbit (an empty account gets a different first line) */
   peopleCount: number;
+  /** what a win looks like this cycle, in the student's own words from setup (plan 24) */
+  goal?: string;
 }
 
 function partOfDay(now: Date): string {
@@ -163,7 +165,7 @@ export async function morningDeck(
   user: Pick<User, 'id' | 'firstName' | 'timezone'>,
   now = new Date(),
 ): Promise<MorningDeck> {
-  const [settings, suggestions, outbound, chats, people, briefs, events, recs] = await Promise.all([
+  const [settings, suggestions, outbound, chats, people, briefs, events, recs, goals] = await Promise.all([
     db.settings.get(user.id),
     db.suggestions.where('userId').equals(user.id).toArray(),
     db.outbound.where('userId').equals(user.id).toArray(),
@@ -176,6 +178,7 @@ export async function morningDeck(
       .equals(user.id)
       .filter((r) => r.status === 'new')
       .toArray(),
+    db.goals.get(user.id),
   ]);
   const byId = new Map(people.map((p) => [p.id, p]));
   const visible = (id?: string) => !id || (byId.has(id) && !byId.get(id)!.hiddenAt);
@@ -335,7 +338,15 @@ export async function morningDeck(
     moreInDrafts,
     moves: moves.slice(0, MORNING_MAX_MOVES),
     peopleCount,
+    ...(goalLine(goals?.success) ? { goal: goalLine(goals?.success) } : {}),
   };
+}
+
+/** The student's win for the cycle on one line, at most 160 characters. */
+function goalLine(success: string | undefined): string | undefined {
+  const t = cleanAnswer(success)?.replace(/\s+/g, ' ');
+  if (!t) return undefined;
+  return t.length > 160 ? `${t.slice(0, 159).trimEnd()}…` : t;
 }
 
 // ---------- what each decision offers ----------

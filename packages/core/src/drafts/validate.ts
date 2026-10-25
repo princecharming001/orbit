@@ -1,4 +1,5 @@
 import type { MessageKind, PersonFact } from '../types';
+import { brokenNeverRules } from './neverDo';
 import type { DraftOutput } from './templates';
 import {
   BANNED_PHRASES,
@@ -35,7 +36,8 @@ export interface ValidationIssue {
     | 'unsupported_detail'
     | 'ignores_ask'
     | 'needs_input'
-    | 'attach_resume';
+    | 'attach_resume'
+    | 'never_do';
   detail: string;
   blocking: boolean;
 }
@@ -57,6 +59,8 @@ export interface ValidateOptions {
   context?: string;
   /** what the other person asked the student in their last message; a reply must not ignore them */
   asks?: string[];
+  /** the student's own never rules (plan 24); a message that visibly breaks one is flagged */
+  neverDo?: string;
 }
 
 const NEED_DETAIL: Record<string, string> = {
@@ -240,6 +244,8 @@ export function validateDraft(
     !(opts.recipientFullName && body.includes(opts.recipientFullName))
   )
     issues.push({ code: 'missing_name', detail: opts.recipientFirstName, blocking: true });
+  for (const rule of brokenNeverRules(body, opts.neverDo))
+    issues.push({ code: 'never_do', detail: rule, blocking: false });
   if (/\b(ignore (all )?(previous|prior) instructions|system prompt)\b/i.test(body))
     issues.push({ code: 'injection', detail: 'instruction-like text', blocking: true });
   if (

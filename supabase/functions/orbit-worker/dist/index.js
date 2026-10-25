@@ -2016,6 +2016,79 @@ function stageTimer(chat, person, settings, now) {
   });
 }
 
+// packages/core/src/drafts/neverDo.ts
+var NEGATION = /\b(never|don'?t|do not|dont|avoid|no|not|stop|without)\b/i;
+var VAGUE = /* @__PURE__ */ new Set([
+  "it",
+  "that",
+  "this",
+  "anything",
+  "things",
+  "stuff",
+  "them",
+  "me",
+  "him",
+  "her",
+  "anyone",
+  "people",
+  "too much"
+]);
+var escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function hasPhrase(body, phrase) {
+  const norm2 = (s) => s.replace(/[‘’]/g, "'").replace(/[“”]/g, '"');
+  const re = new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRe(norm2(phrase))}($|[^\\p{L}\\p{N}])`, "iu");
+  return re.test(norm2(body));
+}
+function clauses(text) {
+  return text.split(
+    /[\n.;!?]+|,\s*(?:and\s+)?(?=(?:never|don'?t|do not|no|avoid)\b)|\s+and\s+(?=(?:never|don'?t|do not|no|avoid)\b)/i
+  ).map((c) => c.trim()).filter((c) => c.length > 1);
+}
+function mentionTarget(clause2) {
+  const m = /\b(?:never|don'?t|do not|dont|avoid)\s+(?:ever\s+)?(?:mention(?:ing)?|say(?:ing)?|bring(?:ing)? up|talk(?:ing)? about|reference|referencing|include|including|write|use|using|call me)\s+(.+)$/i.exec(
+    clause2
+  );
+  if (!m) return void 0;
+  const words3 = m[1].replace(/^["'‘“]+|["'’”]+$/g, "").replace(/\b(in|to|on|with|when|unless|because|anywhere|ever|at all|please)\b.*$/i, "").replace(/^(my|the|that|about|any|a|an|our)\s+/i, "").trim().split(/\s+/).slice(0, 4);
+  const phrase = words3.join(" ").trim();
+  if (phrase.length < 2 || VAGUE.has(phrase.toLowerCase())) return void 0;
+  return phrase;
+}
+function sentence(c) {
+  const t = c.trim();
+  return `${t.charAt(0).toUpperCase()}${t.slice(1)}`;
+}
+function neverDoChecks(text) {
+  if (!text?.trim()) return [];
+  const out = [];
+  const add2 = (rule, breaks) => out.push({ rule, breaks });
+  for (const raw of clauses(text)) {
+    const c = raw.toLowerCase();
+    if (!NEGATION.test(c)) continue;
+    const rule = sentence(raw);
+    for (const q of raw.matchAll(/["“]([^"”]{2,60})["”]|(?:^|\s)'([^']{2,60})'(?=\s|$|[,.])/g)) {
+      const phrase = (q[1] ?? q[2]).trim();
+      if (phrase) add2(rule, (b) => hasPhrase(b, phrase));
+    }
+    if (/exclamation/.test(c)) add2(rule, (b) => /!/.test(b));
+    if (/\bemoji/.test(c)) add2(rule, (b) => /\p{Extended_Pictographic}/u.test(b));
+    if (/\breferr/.test(c) && /\b(ask|asking|request|requesting|mention|for)\b/.test(c))
+      add2(rule, (b) => /\breferr(al|als|ed|ing)?\b|\brefer me\b/i.test(b));
+    if (/\b(gpa|grades?)\b/.test(c)) add2(rule, (b) => /\bgpa\b|\bgrade point\b/i.test(b));
+    const target = mentionTarget(raw);
+    if (target && !/\b(gpa|grades?|referrals?|exclamation|emojis?)\b/i.test(target))
+      add2(rule, (b) => hasPhrase(b, target));
+  }
+  return out;
+}
+function brokenNeverRules(body, neverDo) {
+  return [
+    ...new Set(
+      neverDoChecks(neverDo).filter((c) => c.breaks(body)).map((c) => c.rule)
+    )
+  ];
+}
+
 // packages/core/src/email/when.ts
 var ZONE_ABBR = {
   ET: "America/New_York",
@@ -4244,6 +4317,8 @@ function validateDraft(d, opts) {
       issues.push({ code: "ungrounded_claim", detail: c.text, blocking: true });
   if (opts.recipientFirstName && !body.includes(opts.recipientFirstName) && !(opts.recipientFullName && body.includes(opts.recipientFullName)))
     issues.push({ code: "missing_name", detail: opts.recipientFirstName, blocking: true });
+  for (const rule of brokenNeverRules(body, opts.neverDo))
+    issues.push({ code: "never_do", detail: rule, blocking: false });
   if (/\b(ignore (all )?(previous|prior) instructions|system prompt)\b/i.test(body))
     issues.push({ code: "injection", detail: "instruction-like text", blocking: true });
   if (["outreach", "thank_you", "nurture", "congratulate"].includes(opts.kind) && !d.claims.some(
@@ -5481,6 +5556,90 @@ async function moveChat(db2, userId, chatId, to, reason2, now, actor = "system")
     values (${userId}::uuid, ${chatId}::uuid, ${c.stage}, ${to}, 'applied', ${actor}, ${reason2}, ${now}::timestamptz)`;
 }
 
+// packages/core/src/ownWords.ts
+var OWN_WORDS_KEYS = [
+  "aim",
+  "success",
+  "story",
+  "proudOf",
+  "wantToMeet",
+  "networkingHard",
+  "neverDo"
+];
+var OWN_WORDS_MAX = 600;
+var CURRENT_JOB_MAX = 500;
+function cleanAnswer(v, max = OWN_WORDS_MAX) {
+  if (typeof v !== "string") return void 0;
+  const t = v.replace(/\r\n?/g, "\n").replace(/[ \t]+/g, " ").replace(/ *\n */g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  return t ? t.slice(0, max).trim() : void 0;
+}
+function cleanJobUrl(v) {
+  if (typeof v !== "string") return void 0;
+  let u2 = v.trim().replace(/[.,;:!?]+$/, "");
+  if (!u2) return void 0;
+  if (/^www\./i.test(u2)) u2 = `https://${u2}`;
+  try {
+    const parsed2 = new URL(u2);
+    if (parsed2.protocol !== "https:" && parsed2.protocol !== "http:") return void 0;
+    if (!parsed2.hostname.includes(".")) return void 0;
+    return u2.slice(0, CURRENT_JOB_MAX);
+  } catch {
+    return void 0;
+  }
+}
+function cleanCurrentJob(v) {
+  if (!v || typeof v !== "object") return void 0;
+  const o = v;
+  const url = cleanJobUrl(o.url);
+  const text = cleanAnswer(o.text, CURRENT_JOB_MAX);
+  if (!url && !text) return void 0;
+  return { ...url ? { url } : {}, ...text ? { text } : {} };
+}
+function ownWordsOf(g) {
+  const out = {};
+  if (!g) return out;
+  for (const k of OWN_WORDS_KEYS) {
+    const v = cleanAnswer(g[k]);
+    if (v) out[k] = v;
+  }
+  const job = cleanCurrentJob(g.currentJob);
+  if (job) out.currentJob = job;
+  return out;
+}
+var OWN_WORDS_TOTAL = OWN_WORDS_KEYS.length + 1;
+var LINE_ORDER = [
+  "aim",
+  "success",
+  "story",
+  "proudOf",
+  "wantToMeet",
+  "networkingHard"
+];
+var LINE_LABELS = {
+  aim: "Going for",
+  success: "A good cycle looks like",
+  story: "Their story",
+  proudOf: "Good at or proud of",
+  wantToMeet: "Wants to meet",
+  networkingHard: "Finds hard about networking (set your tone by it)",
+  neverDo: "Never (their own rule, always follow it)"
+};
+function clip(s, max) {
+  const one = s.replace(/\s+/g, " ").trim();
+  return one.length > max ? `${one.slice(0, max - 1).trimEnd()}…` : one;
+}
+function ownWordsLines(g, max = 240, order = LINE_ORDER) {
+  const w = ownWordsOf(g);
+  const lines = [];
+  for (const k of ["neverDo", ...order.filter((x) => x !== "neverDo")])
+    if (w[k]) lines.push(`${LINE_LABELS[k]}: ${clip(w[k], max)}`);
+  if (w.currentJob) {
+    const job = [w.currentJob.text, w.currentJob.url].filter(Boolean).join(", ");
+    lines.push(`Going for this job now: ${clip(job, max)}`);
+  }
+  return lines;
+}
+
 // supabase/functions/_shared/compose/context.ts
 var USER_CONTEXT_MAX_CHARS = 4800;
 async function loadUserRow(db2, userId) {
@@ -5528,15 +5687,16 @@ async function buildUserContext(db2, u2) {
   ])
     if (typeof s[k] === "string" && s[k].trim())
       lines.push(`${label}: ${s[k].trim()}`);
+  if (s.about && typeof s.about === "object") lines.push(...ownWordsLines(s.about, 300));
   const goals = await db2.sql`
-    select kind, title, description, targets from orbit.goals
+    select kind, title, description, success_metric, targets from orbit.goals
      where user_id = ${u2.id}::uuid and status = 'active' and deleted_at is null
      order by priority, created_at limit 5`;
   for (const g of goals) {
     const t = g.targets ?? {};
     const targets = [...t.organizations ?? [], ...t.roles ?? []].slice(0, 6).join(", ");
     lines.push(
-      `Goal (${g.kind}): ${g.title}${g.description ? `. ${g.description}` : ""}${targets ? ` (targets: ${targets})` : ""}`
+      `Goal (${g.kind}): ${g.title}${g.description ? `. ${g.description}` : ""}${g.success_metric ? `. A win: ${g.success_metric}` : ""}${targets ? ` (targets: ${targets})` : ""}`
     );
   }
   const [resume] = await db2.sql`
@@ -5601,7 +5761,7 @@ function voiceText(c) {
     c.notes ? `notes: ${c.notes}` : ""
   ].filter(Boolean).join("\n");
 }
-var escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+var escapeRe2 = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 async function exemplars(s, userId, personId, situation, opts = {}) {
   let q = null;
   try {
@@ -5635,7 +5795,7 @@ async function exemplars(s, userId, personId, situation, opts = {}) {
   ].sort((a, b) => b.length - a.length);
   return rows.map((r) => {
     let text = stripQuotedReply(r.body_text).trim().slice(0, 1200);
-    for (const w of words3) text = text.replace(new RegExp(`\\b${escapeRe(w)}\\b`, "g"), "[name]");
+    for (const w of words3) text = text.replace(new RegExp(`\\b${escapeRe2(w)}\\b`, "g"), "[name]");
     return text.replace(/^(hi|hey|hello|dear)\s+[A-Z][a-z]+/i, (m) => `${m.split(/\s+/)[0]} [name]`);
   });
 }
@@ -5698,7 +5858,7 @@ function recipientText(p) {
 
 // supabase/functions/_shared/compose/prompts.ts
 import { z as z2 } from "npm:zod@3.25.76/v4";
-var PROMPT_VERSION = "compose-v2.0";
+var PROMPT_VERSION = "compose-v2.1";
 var composeSchema = z2.object({
   subject: z2.string().nullable(),
   body: z2.string(),
@@ -5746,7 +5906,8 @@ function composeSystem(p) {
     "- Never claim familiarity, shared history or a mutual connection that isn't in the inputs.",
     '- No flattery adjectives (amazing, incredible, inspiring), no "I hope this finds you well", no "quick question", no em-dashes, no exclamation marks unless the voice card uses them.',
     "- Plain words, short sentences (reading grade ≤ 7).",
-    "- Match <voice> for greeting, sign-off, contractions and sentence length. Borrow rhythm from <examples>, never their content."
+    "- Match <voice> for greeting, sign-off, contractions and sentence length. Borrow rhythm from <examples>, never their content.",
+    `- <user_context> may carry the user's own words: a "Never" line is their rule and always wins; "Their story" is how they introduce themselves, so draw on it rather than a generic line.`
   ];
   if (p.kind === "forwardable_blurb" && p.blurb)
     lines.push(
@@ -7096,16 +7257,16 @@ var NICKNAMES2 = [
   ["william", "will", "bill", "billy", "liam"],
   ["zachary", "zach", "zack"]
 ];
-var escapeRe2 = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-function hasPhrase(text, phrase) {
+var escapeRe3 = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function hasPhrase2(text, phrase) {
   const p = norm(phrase);
   if (!p) return false;
-  return new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRe2(p)}($|[^\\p{L}\\p{N}])`, "u").test(text);
+  return new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRe3(p)}($|[^\\p{L}\\p{N}])`, "u").test(text);
 }
 function hasExact(raw, phrase) {
   const p = phrase.trim();
   if (!p) return false;
-  return new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRe2(p)}($|[^\\p{L}\\p{N}])`, "u").test(raw);
+  return new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRe3(p)}($|[^\\p{L}\\p{N}])`, "u").test(raw);
 }
 function companyAliases(name) {
   const k = normOrg(name);
@@ -7127,7 +7288,7 @@ function placesOf(raw, phrase, exact) {
   const hay = exact ? raw : raw.toLowerCase();
   const out = [];
   if (!p) return out;
-  const re = new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRe2(p)}(?=$|[^\\p{L}\\p{N}])`, "gu");
+  const re = new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRe3(p)}(?=$|[^\\p{L}\\p{N}])`, "gu");
   for (let m = re.exec(hay); m; m = re.exec(hay)) out.push(m.index + m[1].length);
   return out;
 }
@@ -7153,7 +7314,7 @@ function mentionsSchool(raw, aliases) {
   return aliases.some((a) => {
     const n = norm(a);
     if (COMMON_WORD_SCHOOLS.has(n) || n.length <= 4) return hasExact(raw, a);
-    return hasPhrase(t, n);
+    return hasPhrase2(t, n);
   });
 }
 function givenNames(first) {
@@ -7223,7 +7384,7 @@ function hostOf(url) {
 function employerInTitle(title, card) {
   if (!title) return void 0;
   const t = title.replace(/\s*[|·]\s*(linkedin|crunchbase|twitter|x)\b.*$/i, "");
-  if (!card.names.some((n) => hasPhrase(norm(t), n))) return void 0;
+  if (!card.names.some((n) => hasPhrase2(norm(t), n))) return void 0;
   const m = /\b(?:at|@)\s+([A-Z][\w&.'-]*(?:\s+[A-Z][\w&.'-]*){0,3})/.exec(t);
   return m?.[1]?.trim();
 }
@@ -7234,7 +7395,7 @@ function scorePage(page2, card) {
   const linkedinCopy = isLinkedInCopy(page2.url);
   const blocked = isBlockedSource(page2.url);
   const signals = [];
-  if (card.names.some((n) => hasPhrase(text, n))) signals.push("name");
+  if (card.names.some((n) => hasPhrase2(text, n))) signals.push("name");
   if (card.employers.some((e) => mentionsOrg(raw, e.aliases))) signals.push("employer");
   if (card.schools.some((s) => mentionsSchool(raw, s.aliases))) signals.push("school");
   if (card.slug && text.includes(`linkedin.com/in/${card.slug}`)) signals.push("slug");
@@ -7243,7 +7404,7 @@ function scorePage(page2, card) {
   const compactHost = host.replace(/[^a-z0-9]/g, "");
   if (card.last.length >= 3 && card.names.some((n) => compactHost.startsWith(n.replace(/[^a-z0-9]/g, ""))) && host.split(".").length <= 3)
     signals.push("personal_site");
-  if (card.city && hasPhrase(text, card.city)) signals.push("city");
+  if (card.city && hasPhrase2(text, card.city)) signals.push("city");
   const inTitle = employerInTitle(page2.title, card);
   const conflict = inTitle && !card.employers.some((e) => mentionsOrg(inTitle, e.aliases)) && !card.schools.some((s) => mentionsSchool(inTitle, s.aliases)) ? inTitle : void 0;
   const named = signals.includes("name");
@@ -10759,6 +10920,35 @@ function tokenJaccard(a, b) {
   return inter / (A.size + B.size - inter);
 }
 
+// packages/core/src/recommend/wantToMeet.ts
+var ROLES = [
+  [/\b(co-?)?founders?\b/, "Founder"],
+  [/\brecruit(er|ers|ing)\b|\btalent (team|acquisition)\b/, "Recruiter"],
+  [/\b(pms|pm|apms?|product managers?|product people|product folks)\b/, "Product Manager"],
+  [/\b(software )?engineers?\b|\bswes?\b|\bdevelopers?\b/, "Software Engineer"],
+  [/\bdesigners?\b/, "Product Designer"],
+  [/\bdata scientists?\b/, "Data Scientist"],
+  [/\b(investment )?bankers?\b|\bib analysts?\b/, "Investment Banking Analyst"],
+  [/\bconsultants?\b/, "Consultant"],
+  [/\b(vcs?|venture capitalists?|investors?)\b/, "Investor"],
+  [/\btraders?\b/, "Trader"],
+  [/\bresearchers?\b|\bresearch scientists?\b/, "Research Scientist"],
+  [/\bmarketers?\b|\bmarketing (people|folks|managers?)\b/, "Marketing Manager"],
+  [/\banalysts?\b/, "Analyst"],
+  [/\bassociates?\b/, "Associate"],
+  [/\bpartners?\b/, "Partner"]
+];
+var ROLE_RE = new Map(ROLES.map(([re, title]) => [title, re]));
+var STOP = new Set(
+  `about above after again alumni also anyone anything area areas around because been being best better between both
+  career careers company companies could currently doing each early especially even ever every everyone field fields
+  folks from have help hope into just know learn like love maybe meet meeting more most much people person really
+  role roles same school some someone something space than that their them then there these they thing things this
+  those through want wants were what when where which while who whom with work working works would year years your
+  ahead team teams there here other others well folks firm firms industry industries kind kinds type types start
+  started starting someday likely talk talking chat chats coffee least ideally anybody`.split(/\s+/).filter(Boolean)
+);
+
 // packages/core/src/recommend/score.ts
 function responsePrior(p, user) {
   let z4 = -0.4;
@@ -12386,7 +12576,7 @@ function mergeCandidates(cands) {
   }
   return groups;
 }
-var STOP = /* @__PURE__ */ new Set([
+var STOP2 = /* @__PURE__ */ new Set([
   "the",
   "and",
   "for",
@@ -12418,7 +12608,7 @@ function keywordFit(goal, c) {
   if (criteria.length === 0) return { fit: 0.5, reasons: [] };
   const text = candidateText(c);
   const matched = criteria.filter((cr) => {
-    const ws = norm(cr).split(/[^a-z0-9+#]+/).filter((w) => w.length >= 3 && !STOP.has(w));
+    const ws = norm(cr).split(/[^a-z0-9+#]+/).filter((w) => w.length >= 3 && !STOP2.has(w));
     if (ws.length === 0) return false;
     const hits2 = ws.filter((w) => text.includes(w)).length;
     return hits2 >= Math.ceil(ws.length / 2);
@@ -16607,11 +16797,11 @@ var STRONG = 3;
 var GENERIC = 2;
 var THRESHOLD = 2;
 var fold3 = (s) => s.normalize("NFD").replace(/\p{M}/gu, "").replace(/[‘’]/g, "'");
-var escapeRe3 = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+var escapeRe4 = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 var wordRe = (alt, flags) => new RegExp(`(?<![\\p{L}\\p{N}'])(?:${alt})(?![\\p{L}\\p{N}])`, `${flags}u`);
 var sentencesOf2 = (text) => text.split(/(?<!\b(?:Co|Inc|Ltd|Corp|Dr|Prof|Mr|Ms|Mrs|Jr|Sr|St|vs|etc|e\.g|i\.e))(?<=[.!?])\s+|\n+/).map((s) => s.trim()).filter(Boolean);
 var CLAUSE_SPLIT = /\s*(?:[,;:()]|\s-{1,2}\s|[–—]+)\s*/;
-var clausesOf = (sentence) => sentence.split(CLAUSE_SPLIT).filter((c) => c.trim());
+var clausesOf = (sentence2) => sentence2.split(CLAUSE_SPLIT).filter((c) => c.trim());
 var DESC = "(?:(?:my|our|his|her|their)\\s+)?(?:(?:old|former|good|dear|great|close|wonderful)\\s+)?(?:(?:friend|colleague|teammate|coworker|co-worker|advisor|adviser|mentor|manager|boss|partner|classmate|roommate|cofounder|co-founder|student)\\s+)?(?:(?:professor|prof\\.?|dr\\.?|mr\\.?|ms\\.?|mrs\\.?)\\s+)?";
 var MODAL = "(?:should|must|need\\s+to|have\\s+to|ought\\s+to|gotta|have\\s+got\\s+to|'ve\\s+got\\s+to|will\\s+want\\s+to|'ll\\s+want\\s+to|might\\s+want\\s+to|may\\s+want\\s+to|really\\s+should|definitely\\s+should|would\\s+enjoy|'d\\s+enjoy|will\\s+enjoy|'ll\\s+enjoy|'ll\\s+love|will\\s+love)(?:\\s+(?:really|definitely|absolutely|totally|honestly|probably|also))?";
 var CC_STATE = "(?:cc'?d|cc'?ed|cced|copied|on\\s+cc|in\\s+cc|on\\s+(?:this|the)\\s+(?:thread|email|chain)|added(?:\\s+here)?|included|looped\\s+in|on\\s+here|reading\\s+along(?:\\s+on\\s+cc)?)";
@@ -16912,14 +17102,14 @@ function readIntroduction(msg, people, userEmails, ctx = {}) {
   }
   const isCandidateWord = (w) => candidates.some((c) => c.name.toLowerCase() === w.toLowerCase());
   const students = (ctx.studentNames ?? []).map((n) => fold3(n.trim())).filter((n) => n.length >= 2).sort((a, b) => b.length - a.length);
-  const studentAlt = students.length ? students.map(escapeRe3).join("|") : void 0;
+  const studentAlt = students.length ? students.map(escapeRe4).join("|") : void 0;
   const isStudentWord = (w) => !!studentAlt && new RegExp(`^(?:${studentAlt})$`, "i").test(w);
   const namesStudent = (text) => !!studentAlt && wordRe(studentAlt, "i").test(text);
   const byTitle = (text) => candidates.reduce((t, c) => {
     const last = fold3(c.person.lastName?.trim() ?? "");
     return last.length < 2 ? t : t.replace(
       new RegExp(
-        `\\b(?:professor|prof\\.?|dr\\.?|mr\\.?|ms\\.?|mrs\\.?)\\s+${escapeRe3(last)}\\b`,
+        `\\b(?:professor|prof\\.?|dr\\.?|mr\\.?|ms\\.?|mrs\\.?)\\s+${escapeRe4(last)}\\b`,
         "gi"
       ),
       c.name
@@ -16929,11 +17119,11 @@ function readIntroduction(msg, people, userEmails, ctx = {}) {
   const caseless = !/[A-Z]/.test(body.replace(/\bI\b/g, "").replace(/\n[^\n]*$/, ""));
   const lowerOnly = new Set(
     candidates.filter(
-      (c) => !COMMON_WORD_NAMES.has(c.name.toLowerCase()) && !wordRe(escapeRe3(c.name), "").test(fold3(msg.bodyText ?? "")) && wordRe(escapeRe3(c.name.toLowerCase()), "").test(fold3(msg.bodyText ?? ""))
+      (c) => !COMMON_WORD_NAMES.has(c.name.toLowerCase()) && !wordRe(escapeRe4(c.name), "").test(fold3(msg.bodyText ?? "")) && wordRe(escapeRe4(c.name.toLowerCase()), "").test(fold3(msg.bodyText ?? ""))
     ).map((c) => c.person.id)
   );
   const mentions = (text, c, anyCase) => {
-    const re = wordRe(escapeRe3(c.name), anyCase || lowerOnly.has(c.person.id) ? "gi" : "g");
+    const re = wordRe(escapeRe4(c.name), anyCase || lowerOnly.has(c.person.id) ? "gi" : "g");
     const found = [];
     for (let m = re.exec(text); m; m = re.exec(text)) found.push(m.index);
     return found;
@@ -16985,17 +17175,17 @@ function readIntroduction(msg, people, userEmails, ctx = {}) {
   const tellsAbout = /* @__PURE__ */ new Set();
   const described = /* @__PURE__ */ new Set();
   let namedBefore = [];
-  for (const sentence of sentencesOf2(body)) {
-    const clauses = clausesOf(sentence);
+  for (const sentence2 of sentencesOf2(body)) {
+    const clauses2 = clausesOf(sentence2);
     const starts = [];
-    clauses.reduce((from2, cl) => {
-      const at = Math.max(from2, sentence.indexOf(cl, from2));
+    clauses2.reduce((from2, cl) => {
+      const at = Math.max(from2, sentence2.indexOf(cl, from2));
       starts.push(at);
       return at + cl.length;
     }, 0);
-    const lowerSentence = sentence.toLowerCase();
+    const lowerSentence = sentence2.toLowerCase();
     adminSentence = ADMIN_PURPOSE.test(lowerSentence);
-    const kinds = clauses.map((cl) => {
+    const kinds = clauses2.map((cl) => {
       const l = cl.toLowerCase();
       if (BCC.test(l)) return "bcc";
       if (OFFER_QUESTION.test(l) || OFFER_UNNAMED.test(l)) return "offer";
@@ -17010,18 +17200,18 @@ function readIntroduction(msg, people, userEmails, ctx = {}) {
       c.thanked = true;
       if (introThanks) c.introThanked = true;
     };
-    const loose = clauses.map(
+    const loose = clauses2.map(
       (cl) => new RegExp(
         `\\b${THANKS}\\b|^\\s*(?:of\\s+course|absolutely|sure\\s+thing|with\\s+pleasure|my\\s+pleasure|happy\\s+to\\s+help|glad\\s+to\\s+help|anything\\s+for\\s+you|happy\\s+to|glad\\s+to)\\s*[!.]*\\s*$|\\b(?:ofc|of\\s+course|legend)\\b|\\b(?:you(?:'re|\\s+are)|ur|u\\s+r)\\s+(?:too\\s+kind|so\\s+kind|the\\s+best|a\\s+(?:gem|star|legend))|\\byou\\s+rock\\b|\\b(?:that(?:'s|\\s+is)|how)\\s+(?:very\\s+|so\\s+)?kind\\b|^\\s*(?:so|very|too|how)\\s+kind\\s+of\\s+you\\b|\\bcheers\\s+for\\b|\\bmuch\\s+obliged\\b`
       ).test(cl.toLowerCase())
     );
-    const vocative = clauses.map((cl) => {
+    const vocative = clauses2.map((cl) => {
       const words3 = cl.replace(/[!.?]+/g, " ").split(/\s+/).filter(Boolean);
       return words3.length > 0 && words3.length <= 5 && words3.every((w) => GREETING_WORDS.has(w.toLowerCase()) || isStudentWord(w) || isCandidateWord(w)) && words3.some((w) => isStudentWord(w) || isCandidateWord(w));
     });
     let aimed = false;
     let introducing = false;
-    clauses.forEach((cl, i) => {
+    clauses2.forEach((cl, i) => {
       if (kinds[i] !== "plain") return;
       const l = cl.toLowerCase();
       if (GENERIC_CUES.some((re) => re.test(l)) || studentDesc?.test(cl)) introducing = genericCue = true;
@@ -17046,7 +17236,7 @@ function readIntroduction(msg, people, userEmails, ctx = {}) {
     if (aimed) introducing = genericCue = true;
     const addressed = [];
     for (const c of candidates) {
-      clauses.forEach((cl, i) => {
+      clauses2.forEach((cl, i) => {
         const at = mentions(cl, c, caseless || kinds[i] !== "plain" || vocative[i]);
         if (!at.length) return;
         if (loose[i] || vocative[i] && loose.some(Boolean)) c.looseThanked = true;
@@ -17062,7 +17252,7 @@ function readIntroduction(msg, people, userEmails, ctx = {}) {
         if (vocative[i]) {
           addressed.push(c);
           spokenTo.add(c.person.id);
-          const rest = sentence.slice(starts[i] + cl.length).replace(/^[\s,:;\u2013\u2014-]+/, "");
+          const rest = sentence2.slice(starts[i] + cl.length).replace(/^[\s,:;\u2013\u2014-]+/, "");
           if (studentAlt && new RegExp(
             `^(?:${studentAlt})(?:\\s*\\([^)]*\\))?\\s+(?:is|'s|(?:has|had)\\s+(?:been|built|done|worked|written|published|interned|spent|led|run|shipped|started|a|an|some|lots|real|great|strong)|was|wants|would|built|asked|just|recently|did|loves|reached|graduated|studies|interned|spent|made|wrote|hopes|plans|ran|led|won)\\b`,
             "i"
@@ -17086,19 +17276,19 @@ function readIntroduction(msg, people, userEmails, ctx = {}) {
         }
         if (aimed) mark(c, STRONG);
       });
-      const n = escapeRe3(c.name.toLowerCase());
+      const n = escapeRe4(c.name.toLowerCase());
       if (new RegExp(
         `\\b${n}\\s*,?\\s*\\(?\\s*(?:my|our)\\s+(?:ea|assistant|executive\\s+assistant|chief\\s+of\\s+staff|scheduler|coordinator)\\b|\\b(?:my|our)\\s+(?:ea|assistant|executive\\s+assistant|chief\\s+of\\s+staff|scheduler)\\s+${n}\\b|\\b${n}\\b[^.]{0,30}\\bwho\\s+(?:manages|runs|handles|keeps)\\s+my\\s+(?:calendar|schedule|diary)`
       ).test(lowerSentence))
         c.scheduler = true;
     }
-    if (kinds.includes("bare") && !namesStudent(sentence)) bareThanks = true;
-    if (clauses.some((cl, i) => vocative[i] && kinds[i] === "plain" && namesStudent(cl)))
+    if (kinds.includes("bare") && !namesStudent(sentence2)) bareThanks = true;
+    if (clauses2.some((cl, i) => vocative[i] && kinds[i] === "plain" && namesStudent(cl)))
       studentAddressed = true;
-    const namedHere = candidates.filter((c) => !c.thanked && mentions(sentence, c, caseless).length);
+    const namedHere = candidates.filter((c) => !c.thanked && mentions(sentence2, c, caseless).length);
     const named = namedHere.length ? namedHere : namedBefore;
-    if (namedHere.length || !/^\s*(?:he|she|they)\b/i.test(sentence)) namedBefore = namedHere;
-    if (named.length === 1 && !addressed.includes(named[0]) && clauses.some(
+    if (namedHere.length || !/^\s*(?:he|she|they)\b/i.test(sentence2)) namedBefore = namedHere;
+    if (named.length === 1 && !addressed.includes(named[0]) && clauses2.some(
       (cl, i) => kinds[i] === "plain" && /\b(?:(?:asked|told)\s+(?:him|her|them)\s+to\s+(?:jump\s+in|chime\s+in|weigh\s+in|help|join|reach\s+out|get\s+in\s+touch)|(?:loop(?:s|ed|ing)?|bring(?:s|ing)?|brought|pull(?:s|ed|ing)?)\s+(?:him|her|them)\s+in(?!\s+on\b)|(?:loop(?:s|ed|ing)?\s+in|cc(?:'?(?:ed|d|ing))?|cc-ing|add(?:s|ed|ing)?|copy(?:ing)?|copied)\s+(?:him|her|them)\b(?!\s+to\s+(?:the|this|our|my|your|a)\s+(?!thread|email|chain|conversation|note)[\p{L}]))/u.test(
         cl.toLowerCase()
       )
@@ -17107,12 +17297,12 @@ function readIntroduction(msg, people, userEmails, ctx = {}) {
       mark(named[0], STRONG);
       if (SCHEDULER_ROLE2.test(lowerSentence)) named[0].scheduler = true;
     }
-    const strongHere = candidates.filter((c) => c.strong && mentions(sentence, c, caseless).length);
-    const namedNow = candidates.filter((c) => !c.thanked && mentions(sentence, c, caseless).length);
+    const strongHere = candidates.filter((c) => c.strong && mentions(sentence2, c, caseless).length);
+    const namedNow = candidates.filter((c) => !c.thanked && mentions(sentence2, c, caseless).length);
     for (const c of namedNow) {
       if (c.strong) continue;
-      const listed = clauses.some(
-        (cl, i) => kinds[i] === "plain" && new RegExp(`^\\s*(?:and|&)\\s+${escapeRe3(c.name)}\\b`, caseless ? "i" : "").test(cl)
+      const listed = clauses2.some(
+        (cl, i) => kinds[i] === "plain" && new RegExp(`^\\s*(?:and|&)\\s+${escapeRe4(c.name)}\\b`, caseless ? "i" : "").test(cl)
       );
       if (listed && strongHere.length) {
         mark(c, STRONG);
@@ -17124,14 +17314,14 @@ function readIntroduction(msg, people, userEmails, ctx = {}) {
       introducing = true;
     }
     if (kinds.some((k) => THANKING.has(k)) && !introducing) for (const c of addressed) thank(c);
-    if (vocative.every(Boolean) && namesStudent(sentence)) {
+    if (vocative.every(Boolean) && namesStudent(sentence2)) {
       for (const c of addressed)
         if (!c.thanked) {
           mark(c, STRONG);
           genericCue = true;
         }
     }
-    if (kinds.includes("thanks") && !candidates.some((c) => mentions(sentence, c, true).length) && !namesStudent(sentence))
+    if (kinds.includes("thanks") && !candidates.some((c) => mentions(sentence2, c, true).length) && !namesStudent(sentence2))
       unnamedThanks = true;
   }
   adminSentence = false;
@@ -17173,9 +17363,9 @@ function readIntroduction(msg, people, userEmails, ctx = {}) {
   if (inbound && !isReplySubject && others <= 2 && !ARRANGES_MEETING.test(body.toLowerCase()) && !workSplit)
     for (const c of candidates) {
       if (c.thanked || c.looseThanked || c.scheduler || !mentioned.has(c.person.id)) continue;
-      const counter = notPresenting(escapeRe3(c.name.toLowerCase()));
+      const counter = notPresenting(escapeRe4(c.name.toLowerCase()));
       const where = sentencesOf2(body).filter((x) => mentions(x, c, caseless).length);
-      const role = roleDescribed(escapeRe3(c.name));
+      const role = roleDescribed(escapeRe4(c.name));
       if (where.length && !where.some((x) => counter.test(x.toLowerCase())) && where.some((x) => role.test(caseless ? x.replace(/^./, (ch) => ch.toUpperCase()) : x)))
         mark(c, GENERIC);
     }
@@ -17216,8 +17406,8 @@ function readIntroduction(msg, people, userEmails, ctx = {}) {
       };
       add2(1, "named");
       if (!isReplySubject) add2(1, "a new thread");
-      const role = roleDescribed(escapeRe3(c.name));
-      const n = escapeRe3(c.name.toLowerCase());
+      const role = roleDescribed(escapeRe4(c.name));
+      const n = escapeRe4(c.name.toLowerCase());
       if (where.some((x) => role.test(caseless ? x.replace(/^./, (ch) => ch.toUpperCase()) : x)) || where.some((x) => new RegExp(`\\b${n}\\b[^.!?]{0,40}?\\b${POSSIBLE_ROLE}`, "iu").test(x)) || next.some((x) => new RegExp(`^\\s*(?:he|she|they)\\b[^.!?]{0,30}?\\b${POSSIBLE_ROLE}`, "iu").test(x)))
         add2(1, "says who they are");
       if ([...where, ...after].some((x) => POSSIBLE_TALK.test(x.toLowerCase()))) add2(1, "someone to talk to");

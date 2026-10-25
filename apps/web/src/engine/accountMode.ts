@@ -3,7 +3,8 @@
  * account's id, so every row the server sends (keyed by that user) belongs to it; signing out keeps the data on this
  * device and stops syncing; deleting the account removes it on the server and here.
  */
-import type { User, UserSettings } from '@orbit/core';
+import type { RecruitingGoals, User, UserSettings } from '@orbit/core';
+import { ownWordsOf } from '@orbit/core';
 import { getCurrentUserId, setCurrentUserId } from '../db/repo';
 import { db } from '../db/schema';
 import {
@@ -16,6 +17,7 @@ import {
 } from '../integrations/orbitApi';
 import { createLocalUser, deleteAllData, ONBOARDING_DONE_STEP } from './account';
 import { resetSyncState } from './serverSync';
+import { saveGoals } from './settings';
 
 /** The step setup goes to after Google: You, with the name and email Google gave already filled in. */
 export const AFTER_GOOGLE_STEP = 2;
@@ -84,6 +86,10 @@ export async function adoptAccountUser(a: AccountUser, now = new Date()): Promis
     fromServer.schedulingLink = a.settings.scheduling_link;
   if (local && Object.keys(fromServer).length)
     await db.settings.update(user.id, fromServer as Partial<UserSettings>);
+  // the student's own words from setup (plan 24), on a device that has none yet
+  const about = ownWordsOf(a.settings?.about as Partial<RecruitingGoals> | undefined);
+  if (Object.keys(about).length && !Object.keys(ownWordsOf(await db.goals.get(user.id))).length)
+    await saveGoals(user.id, about);
   await setCurrentUserId(user.id);
   return user;
 }

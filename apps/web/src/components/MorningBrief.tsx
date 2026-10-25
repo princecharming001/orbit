@@ -479,6 +479,14 @@ function Overview({ deck, onLeave }: { deck: MorningDeck; onLeave: (to?: string)
       <p className="text-[14px] text-ink-2 mt-2" data-testid="morning-headline">
         {deck.headline}
       </p>
+      {deck.goal ? (
+        <p className="mt-3 text-[13px] leading-[1.5] text-ink-2" data-testid="morning-goal">
+          <span className="font-mono text-[10.5px] uppercase tracking-[0.08em] text-ink-3 mr-2">
+            Working toward
+          </span>
+          {deck.goal}
+        </p>
+      ) : null}
       <div className="grid grid-cols-2 gap-2 mt-5">
         <Stat
           label="First messages this week"

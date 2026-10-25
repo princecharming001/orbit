@@ -1,5 +1,13 @@
-import type { TargetCompany, RecruitingGoals as UserGoals } from '@orbit/core';
-import { TARGET_STATUS_LABELS, yearLabel } from '@orbit/core';
+import type { OwnWordsKey, TargetCompany, RecruitingGoals as UserGoals } from '@orbit/core';
+import {
+  currentJobInput,
+  OWN_WORDS_MAX,
+  OWN_WORDS_QUESTIONS,
+  ownWordsOf,
+  parseCurrentJob,
+  TARGET_STATUS_LABELS,
+  yearLabel,
+} from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Check, Download, FileText, Trash2 } from 'lucide-react';
 import { type ReactNode, useEffect, useRef, useState } from 'react';
@@ -31,6 +39,7 @@ import { type Allowance, readAllowance, researchSpend } from '../engine/deepRese
 import { demoResetPrompt, loadDemo } from '../engine/demo';
 import { connectAndSyncGoogle, disconnectGoogleAccount, markGoogleNeedsReauth } from '../engine/integrations';
 import { setMorningBrief } from '../engine/morning';
+import { saveOwnWords } from '../engine/ownWords';
 import { saveResume } from '../engine/resume';
 import { googleStatus, refreshSyncStatus, subscribeSyncStatus, syncStatusNow } from '../engine/serverSync';
 import {
@@ -478,7 +487,6 @@ function GoalsForm({ goals, tcs }: { goals: UserGoals; tcs: TargetCompany[] }) {
     targetFunctions: goals.targetFunctions,
     targetIndustries: goals.targetIndustries.join(', '),
     targetLocations: goals.targetLocations.join(', '),
-    freeText: goals.freeText ?? '',
   }));
   const [company, setCompany] = useState('');
   const toast = useToast();
@@ -508,7 +516,6 @@ function GoalsForm({ goals, tcs }: { goals: UserGoals; tcs: TargetCompany[] }) {
       targetFunctions: v.targetFunctions,
       targetIndustries: split(v.targetIndustries),
       targetLocations: split(v.targetLocations),
-      freeText: v.freeText,
     }),
   );
   return (
@@ -586,18 +593,8 @@ function GoalsForm({ goals, tcs }: { goals: UserGoals; tcs: TargetCompany[] }) {
             placeholder="e.g. New York City, Remote"
           />
         </div>
-        <div className="@[40rem]:col-span-2">
-          <Label htmlFor="goals-free" hint="what matters to you in a team or a firm">
-            Anything else?
-          </Label>
-          <Textarea
-            id="goals-free"
-            rows={2}
-            value={f.freeText}
-            onChange={(e) => setF({ ...f, freeText: e.target.value })}
-          />
-        </div>
       </Section>
+      <OwnWordsSection goals={goals} />
       <Section>
         <Label>Target companies</Label>
         <div className="flex gap-2 mb-3">
@@ -683,6 +680,82 @@ function GoalsForm({ goals, tcs }: { goals: UserGoals; tcs: TargetCompany[] }) {
         </ul>
       </Section>
     </div>
+  );
+}
+
+/** The order the written answers are shown in Settings: the same questions as setup (plan 24). */
+const OWN_WORDS_ORDER: OwnWordsKey[] = [
+  'aim',
+  'success',
+  'story',
+  'proudOf',
+  'wantToMeet',
+  'networkingHard',
+  'neverDo',
+];
+
+/**
+ * Your goals, in your own words (plan 24): every written answer from setup, editable here, saved as it is typed. In
+ * account mode a change also goes to the server, like the profile.
+ */
+function OwnWordsSection({ goals }: { goals: UserGoals }) {
+  const user = useSession().user!;
+  const [f, setF] = useState(() => {
+    const w = ownWordsOf(goals);
+    return {
+      ...Object.fromEntries(OWN_WORDS_ORDER.map((k) => [k, w[k] ?? ''])),
+      currentJob: currentJobInput(w.currentJob),
+    } as Record<OwnWordsKey | 'currentJob', string>;
+  });
+  const state = useAutosave(f, (v) =>
+    saveOwnWords(user, {
+      ...Object.fromEntries(OWN_WORDS_ORDER.map((k) => [k, v[k]])),
+      currentJob: parseCurrentJob(v.currentJob),
+    }),
+  );
+  return (
+    <Section className="space-y-5" data-testid="settings-own-words">
+      <div>
+        <h2 className="text-[15px] font-medium">Your goals</h2>
+        <p className="mt-1 text-[13px] text-ink-3">
+          In your own words, from setup. Orbit reads these before it suggests anyone or writes anything. Leave
+          any of them empty.
+        </p>
+        <div className="mt-2">
+          <SaveState state={state} />
+        </div>
+      </div>
+      {OWN_WORDS_ORDER.map((k) => {
+        const q = OWN_WORDS_QUESTIONS[k];
+        return (
+          <div key={k}>
+            <Label htmlFor={`goals-${k}`}>{q.label}</Label>
+            <Textarea
+              id={`goals-${k}`}
+              rows={2}
+              value={f[k]}
+              maxLength={OWN_WORDS_MAX}
+              placeholder={q.placeholder}
+              onChange={(e) => setF((cur) => ({ ...cur, [k]: e.target.value }))}
+              data-testid={`goals-${k}`}
+            />
+            <p className="mt-1 text-[12px] text-ink-3">{q.uses}</p>
+          </div>
+        );
+      })}
+      <div>
+        <Label htmlFor="goals-currentJob" hint="a posting link, the company, or both">
+          A job you're going for now
+        </Label>
+        <Input
+          id="goals-currentJob"
+          value={f.currentJob}
+          placeholder="https://jobs.lever.co/acme/123, or Stripe, PM intern"
+          onChange={(e) => setF((cur) => ({ ...cur, currentJob: e.target.value }))}
+          data-testid="goals-currentJob"
+        />
+      </div>
+    </Section>
   );
 }
 
@@ -1364,9 +1437,20 @@ function DemoResetCard() {
 }
 
 /** A settings section without a box: a hairline between sections and room around the content. */
-function Section({ children, className }: { children: ReactNode; className?: string }) {
+function Section({
+  children,
+  className,
+  'data-testid': testId,
+}: {
+  children: ReactNode;
+  className?: string;
+  'data-testid'?: string;
+}) {
   return (
-    <section className={cx('py-6 border-b border-line-2 last:border-b-0 first:pt-0', className)}>
+    <section
+      className={cx('py-6 border-b border-line-2 last:border-b-0 first:pt-0', className)}
+      data-testid={testId}
+    >
       {children}
     </section>
   );

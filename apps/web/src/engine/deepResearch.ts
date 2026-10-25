@@ -232,6 +232,8 @@ async function studentFor(user: User) {
     `${user.fullName}${user.school ? `, ${user.school}` : ''}${user.graduationYear ? ` ${user.graduationYear}` : ''}`,
     user.majors?.length ? `studying ${user.majors.join(' and ')}` : '',
     goals?.targetRoles?.length ? `looking for ${goals.targetRoles.slice(0, 3).join(', ')}` : '',
+    // what they are going for, in their words (plan 24), so the research looks for what matters to them
+    goals?.aim ? `going for, in their words: ${goals.aim.replace(/\s+/g, ' ').slice(0, 240)}` : '',
   ]
     .filter(Boolean)
     .join('; ');

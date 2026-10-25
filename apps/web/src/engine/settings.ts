@@ -1,4 +1,5 @@
 import type { ProfileSettingsRequest, RecruitingGoals, TargetCompany, User, UserSettings } from '@orbit/core';
+import { cleanAnswer, cleanCurrentJob, OWN_WORDS_KEYS, ownWordsOf } from '@orbit/core';
 import { db } from '../db/schema';
 import { callApi, isServerUser } from '../integrations/orbitApi';
 import { learnStyle } from './style';
@@ -114,8 +115,9 @@ export const AMBITION_WEEKLY_TARGET: Record<1 | 2 | 3, number> = { 1: 2, 2: 4, 3
 export type GoalsPatch = Partial<Omit<RecruitingGoals, 'userId'>>;
 
 /**
- * Save goals (Settings autosave, the setup step, the chat). Fields not given keep their stored value. With
- * `applyAmbition` the weekly first-message target follows the ambition, as the setup step does.
+ * Save goals (Settings autosave, the setup step, the chat). Fields not given keep their stored value; a written
+ * answer given as '' (or a job with neither link nor note) is cleared. With `applyAmbition` the weekly first-message
+ * target follows the ambition, as the setup step does.
  */
 export async function saveGoals(
   userId: string,
@@ -123,6 +125,9 @@ export async function saveGoals(
   opts: { applyAmbition?: boolean } = {},
 ): Promise<RecruitingGoals> {
   const cur = await db.goals.get(userId);
+  const words = ownWordsOf(cur);
+  for (const k of OWN_WORDS_KEYS) if (k in patch) words[k] = cleanAnswer(patch[k]);
+  if ('currentJob' in patch) words.currentJob = cleanCurrentJob(patch.currentJob);
   const goals: RecruitingGoals = {
     userId,
     cycleLabel: (patch.cycleLabel ?? cur?.cycleLabel ?? '').trim() || 'This cycle',
@@ -130,8 +135,9 @@ export async function saveGoals(
     targetFunctions: patch.targetFunctions ?? cur?.targetFunctions ?? [],
     targetIndustries: patch.targetIndustries ?? cur?.targetIndustries ?? [],
     targetLocations: patch.targetLocations ?? cur?.targetLocations ?? [],
-    freeText: patch.freeText ?? cur?.freeText,
     ambition: patch.ambition ?? cur?.ambition ?? 2,
+    // only the answers there are: an unset one is not kept as an empty key
+    ...Object.fromEntries(Object.entries(words).filter(([, v]) => v !== undefined)),
   };
   await db.goals.put(goals);
   if (opts.applyAmbition)

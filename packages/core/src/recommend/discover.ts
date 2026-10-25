@@ -27,6 +27,7 @@ import {
   titleSimilarity,
   titleStatus,
 } from './title';
+import { parseWantToMeet, type WantToMeet, wantFit, wantsAnything } from './wantToMeet';
 
 /** Someone the student wrote to (or started writing to): what kind of person they reach out to. */
 export interface OutreachExample {
@@ -59,6 +60,8 @@ export interface DiscoverProfile {
   pastOrgs: { name: string; key: string; title?: string; current: boolean }[];
   outreach: OutreachExample[];
   dismissed: DismissSignal[];
+  /** who the student said they most want to meet (plan 24), read for roles, levels, alumni and topic words */
+  wantToMeet?: WantToMeet;
 }
 
 const uniqBy = <T>(xs: T[], key: (x: T) => string): T[] => {
@@ -76,7 +79,10 @@ const placeName = (s: string | undefined) => (s ?? '').split(',')[0]!.trim();
 export function buildDiscoverProfile(inp: {
   user: { school?: string; currentCity?: string; homeCity?: string };
   goals?: Partial<
-    Pick<RecruitingGoals, 'targetRoles' | 'targetFunctions' | 'targetIndustries' | 'targetLocations'>
+    Pick<
+      RecruitingGoals,
+      'targetRoles' | 'targetFunctions' | 'targetIndustries' | 'targetLocations' | 'wantToMeet'
+    >
   >;
   targetCompanies: Pick<TargetCompany, 'nameRaw' | 'priority' | 'status'>[];
   resumeFacets: Pick<
@@ -121,6 +127,9 @@ export function buildDiscoverProfile(inp: {
     ),
     outreach: inp.outreach ?? [],
     dismissed: inp.dismissed ?? [],
+    ...(g.wantToMeet && wantsAnything(parseWantToMeet(g.wantToMeet))
+      ? { wantToMeet: parseWantToMeet(g.wantToMeet) }
+      : {}),
   };
 }
 
@@ -136,6 +145,7 @@ export type DiscoverQueryKind =
   | 'past_org'
   | 'role_in_place'
   | 'industry_role'
+  | 'want_to_meet'
   | 'alumni';
 
 /** One LinkedIn people search: filters as the proxy's /search takes them, a weight, and why it finds good people. */
@@ -255,6 +265,30 @@ export function discoverQueries(profile: DiscoverProfile, max = 24): DiscoverQue
         why: `${title} in ${location}`,
       });
   }
+  // who the student said they most want to meet: the roles they named (alumni of their school when they said so), or
+  // their topic words in those roles
+  const want = profile.wantToMeet;
+  if (want) {
+    const words = want.words.slice(0, 2).join(' ') || undefined;
+    for (const [i, title] of want.titles.slice(0, 2).entries())
+      add({
+        kind: 'want_to_meet',
+        title,
+        school: want.alumni ? school : undefined,
+        keywords: words,
+        weight: 0.85 - i * 0.05,
+        why: 'Who you said you want to meet',
+      });
+    if (!want.titles.length && (want.alumni || words))
+      add({
+        kind: 'want_to_meet',
+        title: roles[0],
+        school: want.alumni ? school : undefined,
+        keywords: words,
+        weight: 0.7,
+        why: 'Who you said you want to meet',
+      });
+  }
   const { titles, companies } = outreachClusters(profile);
   for (const t of titles.slice(0, 2))
     add({
@@ -368,6 +402,8 @@ export interface DiscoverScore {
     company: number;
     place: number;
     school: number;
+    /** how well they are who the student said they want to meet (plan 24) */
+    want: number;
     penalty: number;
   };
   seniority?: TitleLevel;
@@ -494,8 +530,15 @@ export function scoreDiscoverCandidate(c: DiscoverCandidate, profile: DiscoverPr
   const place = targetPlace ? 1 : placeMatch(c.location, profile.homeLocations) ? 0.5 : 0;
   const school = c.schoolEvidence && profile.school ? 1 : 0;
   const penalty = dismissPenalty(c, profile.dismissed);
+  // the people the student said they want to meet weigh on top of the rest (only for someone in a role now)
+  const wanted = wantFit(
+    { title: c.title, company: c.company, headline: c.headline, alum: !!school },
+    profile.wantToMeet,
+  );
+  const want = inRole || status === 'incoming' ? wanted.score : 0;
   const fit = clamp01(
-    (0.34 * role + 0.14 * like + 0.14 * level + 0.22 * company + 0.06 * place + 0.1 * school) * penalty,
+    (0.34 * role + 0.14 * like + 0.14 * level + 0.22 * company + 0.06 * place + 0.1 * school + 0.16 * want) *
+      penalty,
   );
   // ---- reach ----
   const answers = seniority ? LEVEL_ANSWERS[seniority] : 0.7;
@@ -540,7 +583,7 @@ export function scoreDiscoverCandidate(c: DiscoverCandidate, profile: DiscoverPr
       likeReplied: !!likeEx?.replied && like >= 0.75,
     });
   const score = rankScore({ match: fit, reach, odds });
-  const goalLink = (inRole && role >= 0.5) || company > 0 || !!school || like >= 0.75;
+  const goalLink = (inRole && role >= 0.5) || company > 0 || !!school || like >= 0.75 || want >= 0.6;
 
   // ---- reasons, strongest first; each one the data proves ----
   const reasons: DiscoverReason[] = [];
@@ -557,6 +600,13 @@ export function scoreDiscoverCandidate(c: DiscoverCandidate, profile: DiscoverPr
     say('alumni_field', `${profile.school} alum, now ${article(c.title!)} ${c.title}${where}`);
   if (!priority && roleHeld && industryOfWork && c.company)
     say('role_industry', `${c.title}${where}, in ${industryOfWork}, an industry on your list`);
+  if (want >= 0.6)
+    say(
+      'want_to_meet',
+      wanted.roleHit && c.title
+        ? `${c.title}${where}, who you said you want to meet`
+        : 'Who you said you want to meet',
+    );
   if (pastOrg && c.company) {
     const r = sharedOrgReason(pastOrg, c.company);
     say(r.code, r.text);
@@ -590,6 +640,7 @@ export function scoreDiscoverCandidate(c: DiscoverCandidate, profile: DiscoverPr
       company: round(company),
       place,
       school,
+      want: round(want),
       penalty: round(penalty),
     },
     seniority,
@@ -606,6 +657,7 @@ const REASON_ORDER = [
   'alumni_target',
   'target_company',
   'alumni_field',
+  'want_to_meet',
   'role_industry',
   'shared_org',
   'warm',

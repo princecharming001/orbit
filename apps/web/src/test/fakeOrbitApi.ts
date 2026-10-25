@@ -54,7 +54,13 @@ export interface FakeState {
   autonomy: { level: number; goalId?: string }[];
   pausedUntil: string | null | undefined;
   /** what /settings/profile keeps (users.settings and users.timezone on the server) */
-  profile: { postalAddress: string | null; schedulingLink: string | null; timezone: string };
+  profile: {
+    postalAddress: string | null;
+    schedulingLink: string | null;
+    timezone: string;
+    /** the student's own words (plan 24), as users.settings.about keeps them */
+    about?: Record<string, unknown> | null;
+  };
   /** what the next /memory/extract finds (each added like /memory/add) */
   extractable: { text: string; kind: MemoryKind }[];
   /** what /goals/infer proposes */
@@ -552,6 +558,9 @@ export function createFakeOrbitApi(
         if ('postalAddress' in body) state.profile.postalAddress = text(body.postalAddress);
         if ('schedulingLink' in body) state.profile.schedulingLink = text(link);
         if (typeof body.timezone === 'string') state.profile.timezone = body.timezone;
+        if ('about' in body)
+          state.profile.about =
+            body.about && typeof body.about === 'object' ? (body.about as Record<string, unknown>) : null;
         return json(200, state.profile);
       }
       case '/cadence/due':

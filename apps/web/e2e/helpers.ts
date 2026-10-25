@@ -277,3 +277,14 @@ export async function prepDeckTo(page: Page, kind: string) {
   await expect(deck).toHaveAttribute('data-step', kind);
   return deck;
 }
+
+/** Setup's written questions (plan 24), in order, by their addresses. */
+export const QUESTION_ADDRESSES = ['aim', 'story', 'people', 'style', 'job'] as const;
+
+/** Skips setup's five written questions, from the step after Goals to LinkedIn. */
+export async function skipQuestions(page: Page) {
+  for (const step of QUESTION_ADDRESSES) {
+    await expect(page.locator(`[data-testid="ob-q"][data-step="${step}"]`)).toBeVisible();
+    await page.getByTestId('ob-q-skip').click();
+  }
+}

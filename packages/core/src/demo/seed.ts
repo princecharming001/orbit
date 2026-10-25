@@ -591,6 +591,17 @@ export function buildDemoDataset(
     targetIndustries: ['Fintech', 'Software', 'AI'],
     targetLocations: ['New York', 'San Francisco', 'Remote'],
     ambition: 2,
+    // what the demo student wrote in setup (plan 24)
+    aim: 'Software engineering or product internships at payments and developer tool companies. Building the reconciliation service at Brex showed me I like working where money actually moves.',
+    success: `Real conversations with engineers at Stripe and Figma before applications open, and an offer I'm excited about by February.`,
+    story: `I'm a junior at ${schoolShort} studying computer science. I interned at Brex building a reconciliation service, and I built a campus marketplace that 800 students use.`,
+    proudOf:
+      'Shipping things people use. The marketplace started as a weekend project and now has 800 students on it.',
+    wantToMeet: `Engineers and PMs at payments companies, especially ${schoolShort} alumni a year or two in.`,
+    networkingHard:
+      'Cold messages feel awkward and I worry about bothering busy people. Keep it low pressure.',
+    neverDo: 'Never mention my GPA. Never write to two people at the same company on the same day.',
+    currentJob: { text: `Stripe, Software Engineering Intern, Summer ${fallYear + 1}` },
   };
   const organizations: Organization[] = DEMO_ORGS.map((o) => ({
     id: `org_${o.slug}`,

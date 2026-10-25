@@ -7,6 +7,7 @@ import type {
   OutboundMessage,
   Person,
   PersonFact,
+  RecruitingGoals,
   Suggestion,
   SuggestionKind,
   User,
@@ -27,6 +28,7 @@ import {
   newId,
   normalizeCompany,
   normalizeEmail,
+  ownWordsOf,
   proposeWindows,
   rankScore,
   resumeOneLiner,
@@ -585,6 +587,19 @@ function credibilityLine(
  * only as a short "a/an ..." clause (`resumeOneLiner`: no contact details), cut at its first comma so interests and
  * asides stay out, with the school's short name.
  */
+/** The answers a draft reads, in the student's own words (plan 24). */
+function pickWords(
+  goals: RecruitingGoals | undefined,
+): Pick<DraftContext['user'], 'story' | 'aim' | 'proudOf' | 'neverDo'> {
+  const w = ownWordsOf(goals);
+  return {
+    ...(w.story ? { story: w.story } : {}),
+    ...(w.aim ? { aim: w.aim } : {}),
+    ...(w.proudOf ? { proudOf: w.proudOf } : {}),
+    ...(w.neverDo ? { neverDo: w.neverDo } : {}),
+  };
+}
+
 function oneLinerFor(user: User, summary: string | undefined): string | undefined {
   if (user.school && user.graduationYear) return undefined;
   const clause = resumeOneLiner(summary)?.split(/,\s*/)[0]?.trim();
@@ -902,6 +917,8 @@ export async function buildDraftContext(
       targetFunctions: goals?.targetFunctions ?? [],
       oneLiner: oneLinerFor(user, summary),
       credibility: credibilityLine(resumeFacets),
+      // in their own words (plan 24): how to introduce them, what they are going for, their rules
+      ...pickWords(goals),
       schedulingLink: settings?.schedulingLink,
       timezone: user.timezone,
       pastOrgs,
@@ -1014,13 +1031,15 @@ async function materializeDraft(
     channel,
     context,
     asks: kind === 'schedule' || kind === 'reply' ? ctx.thread?.asksOfUser : undefined,
+    neverDo: ctx.user.neverDo,
   });
   if (hasLlm() && !template.needsInput.length) {
     const llm = await llmDraft(ctx, template).catch((e) => surfaceLlmFailure(user.id, e));
     if (llm) {
       const grounded = `${contextText(ctx)}\n${template.subject ?? ''}\n${template.body}\n${template.bodyShort ?? ''}`;
       const issues = validateDraft(llm, opts(grounded));
-      if (!isBlocked(issues)) {
+      // a model draft that breaks one of the student's own never rules is not used; the template is
+      if (!isBlocked(issues) && !issues.some((i) => i.code === 'never_do')) {
         out = { ...llm, needsInput: [], sector: template.sector, register: template.register };
         generatedBy = 'llm';
       }

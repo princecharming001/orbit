@@ -2855,6 +2855,79 @@ function stageTimer(chat, person2, settings, now) {
   });
 }
 
+// packages/core/src/drafts/neverDo.ts
+var NEGATION = /\b(never|don'?t|do not|dont|avoid|no|not|stop|without)\b/i;
+var VAGUE = /* @__PURE__ */ new Set([
+  "it",
+  "that",
+  "this",
+  "anything",
+  "things",
+  "stuff",
+  "them",
+  "me",
+  "him",
+  "her",
+  "anyone",
+  "people",
+  "too much"
+]);
+var escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function hasPhrase(body2, phrase) {
+  const norm2 = (s) => s.replace(/[‘’]/g, "'").replace(/[“”]/g, '"');
+  const re = new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRe(norm2(phrase))}($|[^\\p{L}\\p{N}])`, "iu");
+  return re.test(norm2(body2));
+}
+function clauses(text2) {
+  return text2.split(
+    /[\n.;!?]+|,\s*(?:and\s+)?(?=(?:never|don'?t|do not|no|avoid)\b)|\s+and\s+(?=(?:never|don'?t|do not|no|avoid)\b)/i
+  ).map((c) => c.trim()).filter((c) => c.length > 1);
+}
+function mentionTarget(clause2) {
+  const m = /\b(?:never|don'?t|do not|dont|avoid)\s+(?:ever\s+)?(?:mention(?:ing)?|say(?:ing)?|bring(?:ing)? up|talk(?:ing)? about|reference|referencing|include|including|write|use|using|call me)\s+(.+)$/i.exec(
+    clause2
+  );
+  if (!m) return void 0;
+  const words = m[1].replace(/^["'‘“]+|["'’”]+$/g, "").replace(/\b(in|to|on|with|when|unless|because|anywhere|ever|at all|please)\b.*$/i, "").replace(/^(my|the|that|about|any|a|an|our)\s+/i, "").trim().split(/\s+/).slice(0, 4);
+  const phrase = words.join(" ").trim();
+  if (phrase.length < 2 || VAGUE.has(phrase.toLowerCase())) return void 0;
+  return phrase;
+}
+function sentence(c) {
+  const t = c.trim();
+  return `${t.charAt(0).toUpperCase()}${t.slice(1)}`;
+}
+function neverDoChecks(text2) {
+  if (!text2?.trim()) return [];
+  const out = [];
+  const add4 = (rule, breaks) => out.push({ rule, breaks });
+  for (const raw of clauses(text2)) {
+    const c = raw.toLowerCase();
+    if (!NEGATION.test(c)) continue;
+    const rule = sentence(raw);
+    for (const q of raw.matchAll(/["“]([^"”]{2,60})["”]|(?:^|\s)'([^']{2,60})'(?=\s|$|[,.])/g)) {
+      const phrase = (q[1] ?? q[2]).trim();
+      if (phrase) add4(rule, (b) => hasPhrase(b, phrase));
+    }
+    if (/exclamation/.test(c)) add4(rule, (b) => /!/.test(b));
+    if (/\bemoji/.test(c)) add4(rule, (b) => /\p{Extended_Pictographic}/u.test(b));
+    if (/\breferr/.test(c) && /\b(ask|asking|request|requesting|mention|for)\b/.test(c))
+      add4(rule, (b) => /\breferr(al|als|ed|ing)?\b|\brefer me\b/i.test(b));
+    if (/\b(gpa|grades?)\b/.test(c)) add4(rule, (b) => /\bgpa\b|\bgrade point\b/i.test(b));
+    const target = mentionTarget(raw);
+    if (target && !/\b(gpa|grades?|referrals?|exclamation|emojis?)\b/i.test(target))
+      add4(rule, (b) => hasPhrase(b, target));
+  }
+  return out;
+}
+function brokenNeverRules(body2, neverDo) {
+  return [
+    ...new Set(
+      neverDoChecks(neverDo).filter((c) => c.breaks(body2)).map((c) => c.rule)
+    )
+  ];
+}
+
 // packages/core/src/email/when.ts
 var ZONE_ABBR = {
   ET: "America/New_York",
@@ -4190,6 +4263,8 @@ function validateDraft(d, opts) {
       issues.push({ code: "ungrounded_claim", detail: c.text, blocking: true });
   if (opts.recipientFirstName && !body2.includes(opts.recipientFirstName) && !(opts.recipientFullName && body2.includes(opts.recipientFullName)))
     issues.push({ code: "missing_name", detail: opts.recipientFirstName, blocking: true });
+  for (const rule of brokenNeverRules(body2, opts.neverDo))
+    issues.push({ code: "never_do", detail: rule, blocking: false });
   if (/\b(ignore (all )?(previous|prior) instructions|system prompt)\b/i.test(body2))
     issues.push({ code: "injection", detail: "instruction-like text", blocking: true });
   if (["outreach", "thank_you", "nurture", "congratulate"].includes(opts.kind) && !d.claims.some(
@@ -4974,6 +5049,90 @@ async function moveChat(db2, userId, chatId, to, reason, now, actor = "system") 
     values (${userId}::uuid, ${chatId}::uuid, ${c.stage}, ${to}, 'applied', ${actor}, ${reason}, ${now}::timestamptz)`;
 }
 
+// packages/core/src/ownWords.ts
+var OWN_WORDS_KEYS = [
+  "aim",
+  "success",
+  "story",
+  "proudOf",
+  "wantToMeet",
+  "networkingHard",
+  "neverDo"
+];
+var OWN_WORDS_MAX = 600;
+var CURRENT_JOB_MAX = 500;
+function cleanAnswer(v, max = OWN_WORDS_MAX) {
+  if (typeof v !== "string") return void 0;
+  const t = v.replace(/\r\n?/g, "\n").replace(/[ \t]+/g, " ").replace(/ *\n */g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  return t ? t.slice(0, max).trim() : void 0;
+}
+function cleanJobUrl(v) {
+  if (typeof v !== "string") return void 0;
+  let u2 = v.trim().replace(/[.,;:!?]+$/, "");
+  if (!u2) return void 0;
+  if (/^www\./i.test(u2)) u2 = `https://${u2}`;
+  try {
+    const parsed = new URL(u2);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return void 0;
+    if (!parsed.hostname.includes(".")) return void 0;
+    return u2.slice(0, CURRENT_JOB_MAX);
+  } catch {
+    return void 0;
+  }
+}
+function cleanCurrentJob(v) {
+  if (!v || typeof v !== "object") return void 0;
+  const o = v;
+  const url = cleanJobUrl(o.url);
+  const text2 = cleanAnswer(o.text, CURRENT_JOB_MAX);
+  if (!url && !text2) return void 0;
+  return { ...url ? { url } : {}, ...text2 ? { text: text2 } : {} };
+}
+function ownWordsOf(g) {
+  const out = {};
+  if (!g) return out;
+  for (const k of OWN_WORDS_KEYS) {
+    const v = cleanAnswer(g[k]);
+    if (v) out[k] = v;
+  }
+  const job = cleanCurrentJob(g.currentJob);
+  if (job) out.currentJob = job;
+  return out;
+}
+var OWN_WORDS_TOTAL = OWN_WORDS_KEYS.length + 1;
+var LINE_ORDER = [
+  "aim",
+  "success",
+  "story",
+  "proudOf",
+  "wantToMeet",
+  "networkingHard"
+];
+var LINE_LABELS = {
+  aim: "Going for",
+  success: "A good cycle looks like",
+  story: "Their story",
+  proudOf: "Good at or proud of",
+  wantToMeet: "Wants to meet",
+  networkingHard: "Finds hard about networking (set your tone by it)",
+  neverDo: "Never (their own rule, always follow it)"
+};
+function clip(s, max) {
+  const one = s.replace(/\s+/g, " ").trim();
+  return one.length > max ? `${one.slice(0, max - 1).trimEnd()}…` : one;
+}
+function ownWordsLines(g, max = 240, order = LINE_ORDER) {
+  const w = ownWordsOf(g);
+  const lines = [];
+  for (const k of ["neverDo", ...order.filter((x) => x !== "neverDo")])
+    if (w[k]) lines.push(`${LINE_LABELS[k]}: ${clip(w[k], max)}`);
+  if (w.currentJob) {
+    const job = [w.currentJob.text, w.currentJob.url].filter(Boolean).join(", ");
+    lines.push(`Going for this job now: ${clip(job, max)}`);
+  }
+  return lines;
+}
+
 // supabase/functions/_shared/compose/context.ts
 var USER_CONTEXT_MAX_CHARS = 4800;
 async function loadUserRow(db2, userId) {
@@ -5021,15 +5180,16 @@ async function buildUserContext(db2, u2) {
   ])
     if (typeof s[k] === "string" && s[k].trim())
       lines.push(`${label2}: ${s[k].trim()}`);
+  if (s.about && typeof s.about === "object") lines.push(...ownWordsLines(s.about, 300));
   const goals = await db2.sql`
-    select kind, title, description, targets from orbit.goals
+    select kind, title, description, success_metric, targets from orbit.goals
      where user_id = ${u2.id}::uuid and status = 'active' and deleted_at is null
      order by priority, created_at limit 5`;
   for (const g of goals) {
     const t = g.targets ?? {};
     const targets = [...t.organizations ?? [], ...t.roles ?? []].slice(0, 6).join(", ");
     lines.push(
-      `Goal (${g.kind}): ${g.title}${g.description ? `. ${g.description}` : ""}${targets ? ` (targets: ${targets})` : ""}`
+      `Goal (${g.kind}): ${g.title}${g.description ? `. ${g.description}` : ""}${g.success_metric ? `. A win: ${g.success_metric}` : ""}${targets ? ` (targets: ${targets})` : ""}`
     );
   }
   const [resume] = await db2.sql`
@@ -5094,7 +5254,7 @@ function voiceText(c) {
     c.notes ? `notes: ${c.notes}` : ""
   ].filter(Boolean).join("\n");
 }
-var escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+var escapeRe2 = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 async function exemplars(s, userId, personId, situation, opts = {}) {
   let q = null;
   try {
@@ -5128,7 +5288,7 @@ async function exemplars(s, userId, personId, situation, opts = {}) {
   ].sort((a, b) => b.length - a.length);
   return rows.map((r) => {
     let text2 = stripQuotedReply(r.body_text).trim().slice(0, 1200);
-    for (const w of words) text2 = text2.replace(new RegExp(`\\b${escapeRe(w)}\\b`, "g"), "[name]");
+    for (const w of words) text2 = text2.replace(new RegExp(`\\b${escapeRe2(w)}\\b`, "g"), "[name]");
     return text2.replace(/^(hi|hey|hello|dear)\s+[A-Z][a-z]+/i, (m) => `${m.split(/\s+/)[0]} [name]`);
   });
 }
@@ -5191,7 +5351,7 @@ function recipientText(p) {
 
 // supabase/functions/_shared/compose/prompts.ts
 import { z as z2 } from "npm:zod@3.25.76/v4";
-var PROMPT_VERSION = "compose-v2.0";
+var PROMPT_VERSION = "compose-v2.1";
 var composeSchema = z2.object({
   subject: z2.string().nullable(),
   body: z2.string(),
@@ -5239,7 +5399,8 @@ function composeSystem(p) {
     "- Never claim familiarity, shared history or a mutual connection that isn't in the inputs.",
     '- No flattery adjectives (amazing, incredible, inspiring), no "I hope this finds you well", no "quick question", no em-dashes, no exclamation marks unless the voice card uses them.',
     "- Plain words, short sentences (reading grade ≤ 7).",
-    "- Match <voice> for greeting, sign-off, contractions and sentence length. Borrow rhythm from <examples>, never their content."
+    "- Match <voice> for greeting, sign-off, contractions and sentence length. Borrow rhythm from <examples>, never their content.",
+    `- <user_context> may carry the user's own words: a "Never" line is their rule and always wins; "Their story" is how they introduce themselves, so draw on it rather than a generic line.`
   ];
   if (p.kind === "forwardable_blurb" && p.blurb)
     lines.push(
@@ -8616,6 +8777,35 @@ function rankCompanyTargets(input) {
   return chosen;
 }
 
+// packages/core/src/recommend/wantToMeet.ts
+var ROLES = [
+  [/\b(co-?)?founders?\b/, "Founder"],
+  [/\brecruit(er|ers|ing)\b|\btalent (team|acquisition)\b/, "Recruiter"],
+  [/\b(pms|pm|apms?|product managers?|product people|product folks)\b/, "Product Manager"],
+  [/\b(software )?engineers?\b|\bswes?\b|\bdevelopers?\b/, "Software Engineer"],
+  [/\bdesigners?\b/, "Product Designer"],
+  [/\bdata scientists?\b/, "Data Scientist"],
+  [/\b(investment )?bankers?\b|\bib analysts?\b/, "Investment Banking Analyst"],
+  [/\bconsultants?\b/, "Consultant"],
+  [/\b(vcs?|venture capitalists?|investors?)\b/, "Investor"],
+  [/\btraders?\b/, "Trader"],
+  [/\bresearchers?\b|\bresearch scientists?\b/, "Research Scientist"],
+  [/\bmarketers?\b|\bmarketing (people|folks|managers?)\b/, "Marketing Manager"],
+  [/\banalysts?\b/, "Analyst"],
+  [/\bassociates?\b/, "Associate"],
+  [/\bpartners?\b/, "Partner"]
+];
+var ROLE_RE = new Map(ROLES.map(([re, title]) => [title, re]));
+var STOP = new Set(
+  `about above after again alumni also anyone anything area areas around because been being best better between both
+  career careers company companies could currently doing each early especially even ever every everyone field fields
+  folks from have help hope into just know learn like love maybe meet meeting more most much people person really
+  role roles same school some someone something space than that their them then there these they thing things this
+  those through want wants were what when where which while who whom with work working works would year years your
+  ahead team teams there here other others well folks firm firms industry industries kind kinds type types start
+  started starting someday likely talk talking chat chats coffee least ideally anybody`.split(/\s+/).filter(Boolean)
+);
+
 // packages/core/src/recommend/score.ts
 function responsePrior(p, user) {
   let z6 = -0.4;
@@ -9938,12 +10128,38 @@ async function pause(ctx) {
 var POSTAL_ADDRESS_MAX = 500;
 var SCHEDULING_LINK_MAX = 500;
 var PROFILE_TEXT_MAX = 200;
+var ABOUT_TEXT_MAX = 2e3;
 function optText(b, key) {
   const v = b[key];
   if (v === void 0) return void 0;
   if (v === null) return null;
   if (typeof v !== "string") throw badRequest(`${key} must be text or null`);
   return v.trim() || null;
+}
+function aboutFrom(b) {
+  const v = b.about;
+  if (v === void 0) return void 0;
+  if (v === null) return null;
+  if (typeof v !== "object" || Array.isArray(v)) throw badRequest("about must be an object or null");
+  const o = v;
+  const out = {};
+  for (const k of OWN_WORDS_KEYS) {
+    const x = o[k];
+    if (x === void 0 || x === null) continue;
+    if (typeof x !== "string") throw badRequest(`about.${k} must be text`);
+    if (x.length > ABOUT_TEXT_MAX) throw badRequest(`about.${k} is at most ${ABOUT_TEXT_MAX} characters`);
+    const t = cleanAnswer(x);
+    if (t) out[k] = t;
+  }
+  if (o.currentJob !== void 0 && o.currentJob !== null) {
+    if (typeof o.currentJob !== "object") throw badRequest("about.currentJob must be {url?, text?}");
+    const j = o.currentJob;
+    if (j.url !== void 0 && typeof j.url !== "string" || j.text !== void 0 && typeof j.text !== "string")
+      throw badRequest("about.currentJob must be {url?, text?}");
+    const job = cleanCurrentJob(j);
+    if (job) out.currentJob = job;
+  }
+  return Object.keys(out).length ? out : null;
 }
 function ianaZone(tz) {
   return /^[A-Za-z][A-Za-z0-9_+-]*(?:\/[A-Za-z0-9_+-]+)*$/.test(tz) && tz.length <= 64 ? validZone(tz) : void 0;
@@ -9997,10 +10213,12 @@ async function profile(ctx) {
       throw badRequest("onboardingCompletedAt must be an ISO time");
     done2 = t.toISOString();
   }
+  const about = aboutFrom(b);
   const userId = ctx.userId;
   const given = {};
   if (postal !== void 0) given.postal_address = postal;
   if (link !== void 0) given.scheduling_link = link;
+  if (about !== void 0) given.about = about;
   const keep = Object.fromEntries(Object.entries(given).filter(([, v]) => v !== null));
   const [after] = await ctx.db.sql`
     update orbit.users
@@ -10042,7 +10260,8 @@ async function profile(ctx) {
     degree: after.degree,
     majors: after.majors ?? [],
     graduationYear: after.grad_year,
-    currentCity: after.current_city
+    currentCity: after.current_city,
+    about: after.settings?.about ?? null
   };
   return json(200, out);
 }
@@ -10541,7 +10760,7 @@ function mergeCandidates(cands) {
   }
   return groups;
 }
-var STOP = /* @__PURE__ */ new Set([
+var STOP2 = /* @__PURE__ */ new Set([
   "the",
   "and",
   "for",
@@ -10573,7 +10792,7 @@ function keywordFit(goal, c) {
   if (criteria.length === 0) return { fit: 0.5, reasons: [] };
   const text2 = candidateText(c);
   const matched = criteria.filter((cr) => {
-    const ws = norm(cr).split(/[^a-z0-9+#]+/).filter((w) => w.length >= 3 && !STOP.has(w));
+    const ws = norm(cr).split(/[^a-z0-9+#]+/).filter((w) => w.length >= 3 && !STOP2.has(w));
     if (ws.length === 0) return false;
     const hits = ws.filter((w) => text2.includes(w)).length;
     return hits >= Math.ceil(ws.length / 2);

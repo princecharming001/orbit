@@ -1,6 +1,6 @@
 import { expect, type Page, test } from '@playwright/test';
 import { createFakeOrbitApi, type FakeOrbitApi, fakeDossier } from '../src/test/fakeOrbitApi';
-import { prep } from './helpers';
+import { prep, QUESTION_ADDRESSES, skipQuestions } from './helpers';
 
 /**
  * Account mode (plan 16 §17, §19 P6) against a mocked orbit-api, on the same build as every other test.
@@ -143,6 +143,25 @@ test.describe('account mode (mocked orbit-api)', () => {
     await page.getByTestId('ob-goal-fundraising').click();
     await page.getByTestId('ob-fn-pm').click();
     await page.getByRole('button', { name: /^continue$/i }).click();
+    // the written questions: what Maya is going for goes to the server and onto her recruiting goal
+    await page
+      .getByTestId('ob-q-aim')
+      .fill('Product roles at climate startups, because I want my work to cut emissions.');
+    await page.getByTestId('ob-q-success').fill('Three PM conversations by December.');
+    await page.getByRole('button', { name: /^continue$/i }).click();
+    await expect
+      .poll(() => api.state.profile.about)
+      .toEqual({
+        aim: 'Product roles at climate startups, because I want my work to cut emissions.',
+        success: 'Three PM conversations by December.',
+      });
+    await expect
+      .poll(() => api.state.goals.find((g) => g.kind === 'recruiting')?.successMetric)
+      .toBe('Three PM conversations by December.');
+    for (const step of QUESTION_ADDRESSES.slice(1)) {
+      await expect(page.locator(`[data-testid="ob-q"][data-step="${step}"]`)).toBeVisible();
+      await page.getByTestId('ob-q-skip').click();
+    }
     // LinkedIn: the risk in one sentence before connecting live, the export next to it
     await expect(page.getByTestId('ob-linkedin-risk')).toContainText("LinkedIn's terms");
     await expect(page.getByTestId('ob-linkedin-upload')).toBeVisible();
@@ -198,6 +217,7 @@ test.describe('account mode (mocked orbit-api)', () => {
       await page.getByRole('button', { name: /^continue$/i }).click();
       await page.getByTestId('ob-fn-pm').click();
       await page.getByRole('button', { name: /^continue$/i }).click();
+      await skipQuestions(page);
       await page.getByTestId('ob-skip').click();
       await page.getByTestId('ob-skip').click();
       await page.getByRole('button', { name: /open orbit/i }).click();

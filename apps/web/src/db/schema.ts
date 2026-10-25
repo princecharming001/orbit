@@ -374,6 +374,21 @@ export class OrbitDB extends Dexie {
       pairNotes: 'id, userId, kind',
       engagement: 'id, userId, memberId',
     });
+    // plan 24: the goals' "Anything else?" (freeText) is retired; what was written there moves into what the student
+    // is going for (aim), after any aim already there
+    this.version(8)
+      .stores({})
+      .upgrade((tx) =>
+        tx
+          .table('goals')
+          .toCollection()
+          .modify((g: Record<string, unknown>) => {
+            const free = typeof g.freeText === 'string' ? g.freeText.trim() : '';
+            const aim = typeof g.aim === 'string' ? g.aim.trim() : '';
+            if (free) g.aim = aim ? `${aim}\n\n${free}` : free;
+            delete g.freeText;
+          }),
+      );
   }
 }
 
