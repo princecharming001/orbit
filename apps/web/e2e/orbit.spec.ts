@@ -523,7 +523,9 @@ test.describe('Map reach through LinkedIn mutuals (plan 17 §C)', () => {
     // never puts someone who knows Kenji less well above someone who knows him better
     const closeness = await panel.getByTestId('reach-mutual-closeness').allInnerTexts();
     const KNOW = ['unclear', 'connected', 'knows them', 'close'];
-    const bands = closeness.map((t) => KNOW.indexOf(/· (unclear|connected|knows them|close)$/.exec(t)?.[1] ?? ''));
+    const bands = closeness.map((t) =>
+      KNOW.indexOf(/· (unclear|connected|knows them|close)$/.exec(t)?.[1] ?? ''),
+    );
     expect(bands.every((b) => b >= 0)).toBe(true);
     expect(bands).toEqual([...bands].sort((a, b) => b - a));
     // where the list came from is an explanation: hidden unless the student turned explanations on
@@ -544,15 +546,23 @@ test.describe('Map reach through LinkedIn mutuals (plan 17 §C)', () => {
     await route.click();
     await route.getByTestId('pair-note-open').first().click();
     await route.getByTestId('pair-note-blocked').first().click();
-    await expect(page.getByTestId('reach-path').first().getByTestId('reach-path-action')).not.toHaveText(firstVia, {
-      timeout: 15_000,
-    });
-    await expect(panel.getByTestId('reach-mutuals-blocked')).toContainText(/1 hidden: you said they don’t really know Kenji/);
+    await expect(page.getByTestId('reach-path').first().getByTestId('reach-path-action')).not.toHaveText(
+      firstVia,
+      {
+        timeout: 15_000,
+      },
+    );
+    await expect(panel.getByTestId('reach-mutuals-blocked')).toContainText(
+      /1 hidden: you said they don’t really know Kenji/,
+    );
     await panel.getByTestId('reach-mutuals-blocked').getByRole('button').first().click();
     await panel.getByTestId('pair-note-undo').click();
-    await expect(page.getByTestId('reach-path').first().getByTestId('reach-path-action')).toHaveText(firstVia, {
-      timeout: 15_000,
-    });
+    await expect(page.getByTestId('reach-path').first().getByTestId('reach-path-action')).toHaveText(
+      firstVia,
+      {
+        timeout: 15_000,
+      },
+    );
     await expect(panel.getByTestId('reach-mutuals-blocked')).toHaveCount(0);
     // asking one of them goes through the same intro draft as a route
     await rows.first().getByTestId('reach-mutual-ask').click();

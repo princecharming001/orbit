@@ -9050,7 +9050,7 @@ function engagementScore(items, ctx = {}) {
   const w = reciprocal ? Math.min(popularityKnown ? W.reciprocalCap : W.oneWayCap, curve(E)) : 0;
   return { E, w, wBy, reciprocal, popularityKnown, counts, newestAt, firstAt, dated };
 }
-function pKnowDirected(pair, fromId, toId) {
+function pKnowDirected(pair, _fromId, toId) {
   let p = Math.max(0, Math.min(1, pair.weight));
   for (const t of pair.ties) {
     if (t.kind !== "linkedin_engagement") continue;

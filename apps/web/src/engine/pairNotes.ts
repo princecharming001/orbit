@@ -5,6 +5,7 @@
  */
 import { pairKeyOf } from '@orbit/core';
 import { db, type PairNote } from '../db/schema';
+import { callApi, isServerUser } from '../integrations/orbitApi';
 
 const ordered = (a: string, b: string): [string, string] => (a < b ? [a, b] : [b, a]);
 const noteId = (userId: string, a: string, b: string, kind: PairNote['kind']) => {
@@ -24,6 +25,21 @@ export function subscribePairNotes(fn: Listener): () => void {
 const changed = () => {
   for (const fn of listeners) fn();
 };
+
+/**
+ * In account mode the server ranks routes too (the chat, the morning brief), so it hears the student's word: the
+ * same correction through /pairs/*. This browser's note applies at once either way; a failed call is retried the next
+ * time the student changes that pair.
+ */
+function tellServer(
+  userId: string,
+  a: string,
+  b: string,
+  route: '/pairs/block' | '/pairs/unblock' | '/pairs/close' | '/pairs/unclose',
+) {
+  if (!isServerUser(userId)) return;
+  void callApi(route, { aPersonId: a, bPersonId: b }).catch(() => undefined);
+}
 
 /** Say a note about two people. Saying one kind takes the other back: a pair is not both close and strangers. */
 export async function setPairNote(
@@ -46,6 +62,7 @@ export async function setPairNote(
       at: now.toISOString(),
     });
   });
+  tellServer(userId, x, y, kind === 'blocked' ? '/pairs/block' : '/pairs/close');
   changed();
 }
 
@@ -57,6 +74,7 @@ export async function clearPairNote(
   kind: PairNote['kind'],
 ): Promise<void> {
   await db.pairNotes.delete(noteId(userId, a, b, kind));
+  tellServer(userId, a, b, kind === 'blocked' ? '/pairs/unblock' : '/pairs/unclose');
   changed();
 }
 

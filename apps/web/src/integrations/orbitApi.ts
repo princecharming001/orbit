@@ -42,6 +42,8 @@ import type {
   MemoryListResponse,
   MemorySearchRequest,
   MemorySearchResponse,
+  PairCorrectionRequest,
+  PairCorrectionResponse,
   PathsFindRequest,
   PathsFindResponse,
   PauseRequest,
@@ -189,6 +191,10 @@ export interface ApiRoutes {
   '/settings/pause': [PauseRequest, unknown];
   '/settings/profile': [ProfileSettingsRequest, ProfileSettingsResponse];
   '/cadence/due': [Record<string, never>, DueResponse];
+  '/pairs/block': [PairCorrectionRequest, PairCorrectionResponse];
+  '/pairs/unblock': [PairCorrectionRequest, PairCorrectionResponse];
+  '/pairs/close': [PairCorrectionRequest, PairCorrectionResponse];
+  '/pairs/unclose': [PairCorrectionRequest, PairCorrectionResponse];
 }
 export type ClientRoute = keyof ApiRoutes;
 

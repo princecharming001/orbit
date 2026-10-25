@@ -386,14 +386,15 @@ var LEDGER_LIMIT = {
 };
 var StoreDown = class extends Error {
 };
-async function spendLedger(take, totals, kind, caller, accountId, now) {
+async function spendLedger(take, totals, kind, caller, accountId, now, units = 1) {
   const b = ledgerBucket(kind, accountId, now, ledgerLimit(kind, caller, totals[kind]));
   try {
     if (take.peek) {
       const [used = 0] = await take.peek([b.key]);
-      if (used >= b.limit) return false;
+      if (used + units > b.limit) return false;
     }
-    return (await take([b])).allowed;
+    for (let i = 0; i < units; i++) if (!(await take([b])).allowed) return false;
+    return true;
   } catch {
     throw new StoreDown("counter store unavailable");
   }
@@ -552,7 +553,7 @@ function makeHandler(deps) {
     }
     const totals = { ...DEFAULT_LEDGER, ...deps.ledger };
     const accountId = String(body.accountId ?? "");
-    const spend = (kind, caller) => spendLedger(take, totals, kind, caller, accountId, now());
+    const spend = (kind, caller, units = 1) => spendLedger(take, totals, kind, caller, accountId, now(), units);
     if (isEnrich) return enrichmentRoute(deps, path, body, { h, doFetch, take, now, visitor, spend });
     if (ACCOUNT_ROUTES.has(path) && !await tokenValid(accountId, body.token, deps.signingKey))
       return json(403, { error: "this LinkedIn account is not linked to this browser" }, h);
@@ -581,7 +582,7 @@ function makeHandler(deps) {
       if ("message" in parsed) return json(200, parsed, h);
       engagement = parsed;
     }
-    const ledgerSpend = path === "/search" ? () => spend("search", "discover") : path === "/posts/activity" ? () => spend("posts", "activity") : path === "/engagement" ? () => spend("posts", "engagement") : void 0;
+    const ledgerSpend = path === "/search" ? () => spend("search", "discover") : path === "/posts/activity" ? () => spend("posts", "activity", POSTS_UPSTREAM_PER_CALL) : path === "/engagement" ? () => spend("posts", "engagement") : void 0;
     if (ledgerSpend) {
       let within;
       try {

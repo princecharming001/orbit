@@ -651,7 +651,7 @@ export function engagementScore(items: EngagementItem[], ctx: EngagementContext 
  * reacting to and commenting on a mutual's posts means the target knows them; a mutual doing that to the target's
  * posts is how fans look, so it adds nothing (it is still shown, as evidence).
  */
-export function pKnowDirected(pair: Pick<TiePair, 'weight' | 'ties'>, fromId: string, toId: string): number {
+export function pKnowDirected(pair: Pick<TiePair, 'weight' | 'ties'>, _fromId: string, toId: string): number {
   let p = Math.max(0, Math.min(1, pair.weight));
   for (const t of pair.ties) {
     if (t.kind !== 'linkedin_engagement') continue;
