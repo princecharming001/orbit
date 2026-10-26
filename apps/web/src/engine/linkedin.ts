@@ -1,6 +1,7 @@
 import type { LinkedInConnectionRow, Person, PersonField, PersonSource, User } from '@orbit/core';
 import {
   isRecruiter,
+  linkedInSlug,
   newId,
   normalizeCompany,
   parseConnectedOn,
@@ -34,6 +35,8 @@ async function importConnectionRows(
   user: User,
   rows: LinkedInConnectionRow[],
   onProgress?: (done: number, total: number) => void,
+  /** `finish: false` leaves closeness, the graph and duplicates to the caller (a live sync does them once) */
+  opts: { finish?: boolean } = {},
 ): Promise<{ imported: number; updated: number; personIds: string[] }> {
   const personIds: string[] = [];
   let imported = 0;
@@ -133,9 +136,11 @@ async function importConnectionRows(
     i++;
     if (i % 25 === 0) onProgress?.(i, rows.length);
   }
-  await recomputeAllStrengths(user.id);
-  await recomputeEdges(user.id);
-  await suggestDuplicateMerges(user.id);
+  if (opts.finish !== false) {
+    await recomputeAllStrengths(user.id);
+    await recomputeEdges(user.id);
+    await suggestDuplicateMerges(user.id);
+  }
   return { imported, updated, personIds };
 }
 
@@ -165,34 +170,94 @@ export async function importLiveConnections(
   // the headline and only fills a missing title or company (below), never overrides one, and never reads as a job
   // change; a title or company from their profile's experience (enrichment) or the student always wins.
   const headlines = kept.map((c) => (!c.company?.trim() && c.position?.trim()) || undefined);
-  const rows: LinkedInConnectionRow[] = kept.map((c, i) => ({
-    firstName: c.firstName.trim(),
-    lastName: c.lastName.trim(),
-    url: c.url?.trim() || undefined,
-    company: c.company?.trim() || undefined,
-    position: headlines[i] ? undefined : c.position?.trim() || undefined,
-    // LinkedIn's export uses "DD Mon YYYY"; Unipile gives ISO. Both read the same way.
-    connectedOn: parseConnectedOn(c.connectedOn),
-  }));
-  const r = await importConnectionRows(user, rows, onProgress);
+  // A sync after the first reads every connection again, but only the new and the changed go through the full
+  // import: each connection's company, position and headline as last imported are kept, and someone already in Orbit
+  // with the same three is passed over (their photo link and member id are still refreshed below). A first sync that
+  // was cut short picks up where it stopped instead of starting over.
+  const seenKey = `li:seen:${user.id}`;
+  const seen = ((await db.kv.get(seenKey))?.value as Record<string, string> | undefined) ?? {};
+  const keyOf = (c: (typeof kept)[number]) => c.memberId ?? linkedInSlug(c.url) ?? undefined;
+  const printOf = (c: (typeof kept)[number]) =>
+    [c.company?.trim() ?? '', c.position?.trim() ?? '', c.firstName.trim(), c.lastName.trim()].join('|');
+  const stored = new Map<string, string>();
+  await db.people
+    .where('userId')
+    .equals(user.id)
+    .each((p) => {
+      if (p.linkedinMemberId) stored.set(p.linkedinMemberId, p.id);
+      if (p.linkedinSlug) stored.set(p.linkedinSlug, p.id);
+    });
+  const known = kept.map((c) => {
+    const k = keyOf(c);
+    return k && seen[k] === printOf(c) ? stored.get(k) : undefined;
+  });
+  const fresh = kept.map((_, i) => i).filter((i) => !known[i]);
+  const rows: LinkedInConnectionRow[] = fresh
+    .map((i) => kept[i]!)
+    .map((c, j) => ({
+      firstName: c.firstName.trim(),
+      lastName: c.lastName.trim(),
+      url: c.url?.trim() || undefined,
+      company: c.company?.trim() || undefined,
+      position: headlines[fresh[j]!] ? undefined : c.position?.trim() || undefined,
+      // LinkedIn's export uses "DD Mon YYYY"; Unipile gives ISO. Both read the same way.
+      connectedOn: parseConnectedOn(c.connectedOn),
+    }));
+  // the rest of a person's live details (member id, photo link, headline) for one stretch of connections, and that
+  // stretch marked as imported
   const at = new Date().toISOString();
-  for (let i = 0; i < kept.length; i++) {
-    const { memberId, photoUrl } = kept[i]!;
-    const headline = headlines[i];
-    const id = r.personIds[i];
-    if ((!memberId && !photoUrl && !headline) || !id) continue;
-    const p = await db.people.get(id);
-    if (!p) continue;
-    const patch: Partial<typeof p> = {};
-    if (memberId && p.linkedinMemberId !== memberId) patch.linkedinMemberId = memberId;
-    // their LinkedIn photo (the map and every list show it); a newer link replaces an expiring one
-    const photo = freshPhoto(p.photoUrl, photoUrl);
-    if (photo !== p.photoUrl) patch.photoUrl = photo;
-    if (headline) Object.assign(patch, await roleFromLiveHeadline(p, headline));
-    if (Object.keys(patch).length) await db.people.update(id, { ...patch, updatedAt: at });
+  const finish = async (idx: number[], ids: (string | undefined)[]) => {
+    for (let n = 0; n < idx.length; n++) {
+      const i = idx[n]!;
+      const { memberId, photoUrl } = kept[i]!;
+      const headline = headlines[i];
+      const id = ids[n];
+      const k = keyOf(kept[i]!);
+      if (id && k) seen[k] = printOf(kept[i]!);
+      if ((!memberId && !photoUrl && !headline) || !id) continue;
+      const p = await db.people.get(id);
+      if (!p) continue;
+      const patch: Partial<typeof p> = {};
+      if (memberId && p.linkedinMemberId !== memberId) patch.linkedinMemberId = memberId;
+      // their LinkedIn photo (the map and every list show it); a newer link replaces an expiring one
+      const photo = freshPhoto(p.photoUrl, photoUrl);
+      if (photo !== p.photoUrl) patch.photoUrl = photo;
+      if (headline) Object.assign(patch, await roleFromLiveHeadline(p, headline));
+      if (Object.keys(patch).length) await db.people.update(id, { ...patch, updatedAt: at });
+    }
+    await db.kv.put({ key: seenKey, value: seen });
+  };
+  // the unchanged first, then the rest in stretches, each saved as it lands: a sync cut short (the tab closed)
+  // carries on from the last stretch next time
+  const same = kept.map((_, i) => i).filter((i) => known[i]);
+  await finish(
+    same,
+    same.map((i) => known[i]),
+  );
+  let imported = 0;
+  let updated = 0;
+  for (let from = 0; from < rows.length; from += LIVE_IMPORT_CHUNK) {
+    const part = await importConnectionRows(
+      user,
+      rows.slice(from, from + LIVE_IMPORT_CHUNK),
+      (done) => onProgress?.(from + done, rows.length),
+      { finish: false },
+    );
+    imported += part.imported;
+    updated += part.updated;
+    await finish(fresh.slice(from, from + LIVE_IMPORT_CHUNK), part.personIds);
   }
-  return { imported: r.imported, updated: r.updated, skipped: connections.length - kept.length };
+  // closeness, the graph and duplicate questions once, after everything new is in
+  if (rows.length) {
+    await recomputeAllStrengths(user.id);
+    await recomputeEdges(user.id);
+    await suggestDuplicateMerges(user.id);
+  }
+  return { imported, updated, skipped: connections.length - kept.length };
 }
+
+/** How many new or changed connections are imported (and saved as imported) at a time. */
+const LIVE_IMPORT_CHUNK = 300;
 
 /** Fields a written-to-the-student or profile source owns: a headline never overwrites them. */
 const ABOVE_HEADLINE = new Set<PersonSource>(['manual', 'enrichment', 'imessage', 'tracker_import', 'note']);

@@ -162,7 +162,7 @@ describe('nurture', () => {
       expect(d.body).toMatch(new RegExp(`Hope things are going well at ${org.replace('.', '\\.')}`));
     }
   });
-  it('a check-in with nothing to say is still a sentence to finish, with a line about them', () => {
+  it('a check-in with nothing to say is still ready to send, with a line about them', () => {
     const d = generateDraft(
       base(
         {
@@ -173,8 +173,8 @@ describe('nurture', () => {
         { org: 'Datadog' },
       ),
     );
-    expect(d.needsInput).toEqual(['update']);
-    expect(d.body).toMatch(/Quick update since we talked in August: \[one real update\]\./);
+    expect(d.needsInput).toEqual([]);
+    expect(d.body).toMatch(/Wanted to check in since we talked in August\./);
     expect(d.body).toMatch(/Hope the new role as a staff engineer is going well\./);
     expect(d.opening).toBe('');
   });
@@ -232,7 +232,9 @@ describe('referral ask', () => {
     const d = asked('offered to refer me once I have picked a team', {
       thread: { lastInboundBody: "Once you've picked a team, send me the posting and I'll put you in." },
     });
-    expect(d.needsInput).toContain('posting');
+    // no link on record yet: the note says it follows, so it is ready to send now
+    expect(d.needsInput).not.toContain('posting');
+    expect(d.body).toMatch(/I'll follow up with the team I picked and the link to the posting/);
     const withLink = asked('offered to refer me once I have picked a team', {
       thread: { lastInboundBody: "Once you've picked a team, send me the posting and I'll put you in." },
       targetCompany: {
@@ -254,11 +256,12 @@ describe('referral ask', () => {
     // their side of the firm does not hire for the student's target: the note is the check-in (panel round 3)
     expect(d.kind).toBe('nurture');
     expect(d.body).not.toMatch(/software engineering|refer|check-in fits better/i);
-    // a firm that does hire for it, with no role on record, asks the student which role
+    // a firm that does hire for it, with no role on record: "the internship", never a guessed role or a blank
     const fits = generateDraft(
       base({ kind: 'referral_ask', chat: { completedAt: '2026-04-23T15:00:00Z' } }, { isAlumni: false }),
     );
-    expect(fits.needsInput).toContain('role');
+    expect(fits.needsInput).not.toContain('role');
+    expect(fits.body).toMatch(/the internship at/);
   });
   it('an application already in is not "before I submit", and a friend is not reintroduced', () => {
     const d = generateDraft(
@@ -522,12 +525,14 @@ describe('closing loops', () => {
     expect(d.body).not.toMatch(/\bour coverage list|when the timing is right|anything I can do for you/);
     expect(theirWords('we hire in January for our desk')).toBe('you hire in January for your desk');
   });
-  it('empty shells still give the student a sentence to finish, and never feed the opening dedupe', () => {
+  it('notes with nothing on record are still whole, and never feed the opening dedupe', () => {
+    // no news on record: a check-in, not a congratulations on nothing named
     const c = generateDraft(base({ kind: 'congratulate' }));
-    expect(c.body).toMatch(/Congratulations on \[what you are congratulating Priya on/);
+    expect(c.body).toMatch(/I wanted to check in and see how things are going at \w+\./);
     expect(c.opening).toBe('');
+    // nobody named: the ask is who they would suggest
     const i = generateDraft(base({ kind: 'intro_request' }));
-    expect(i.body).toMatch(/Small ask\. I'm hoping to talk with \[/);
+    expect(i.body).toMatch(/Small ask\. Is there anyone at \w+ you'd suggest I talk to about/);
     expect(i.opening).toBe('');
   });
 });

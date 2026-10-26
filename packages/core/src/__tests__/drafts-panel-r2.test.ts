@@ -285,8 +285,10 @@ describe('honesty about state', () => {
         { title: 'Group Product Manager', org: 'Datadog' },
       ),
     );
-    expect(d.needsInput).toContain('role');
-    expect(d.body).not.toMatch(/product management internship|software engineering internship/);
+    // no role on record: "the internship", never a guessed function and never a blank to fill
+    expect(d.needsInput).not.toContain('role');
+    expect(d.body).toMatch(/the internship at Datadog/);
+    expect(d.body).not.toMatch(/\[|product management internship|software engineering internship/);
     const misfit = generateDraft(
       base(
         { kind: 'referral_ask', chat: { completedAt: ago(130) } },
@@ -672,11 +674,12 @@ describe('register and specificity', () => {
     expect(d.needsInput).toEqual([]);
     expect(d.body).toMatch(/I saw that you're now an engineering manager at Figma/);
   });
-  it('a mutual tie with no name is asked for, and named when given', () => {
+  it('a mutual tie with no name goes as written, and is named when given', () => {
     const line = 'You spoke with my roommate at a recruiting dinner last spring';
     const d = generateDraft(base({ facts: [fact('c', 'connection', line)] }));
-    expect(d.needsInput).toContain('mutual');
-    expect(d.body).toMatch(/my roommate, \[your roommate's name\], at a recruiting dinner/);
+    expect(d.needsInput).not.toContain('mutual');
+    expect(d.body).toMatch(/my roommate at a recruiting dinner/);
+    expect(d.body).not.toMatch(/\[/);
     const named = generateDraft(base({ facts: [fact('c', 'connection', line)], mutualName: 'Jordan Lee' }));
     expect(named.needsInput).not.toContain('mutual');
     expect(named.body).toMatch(/my roommate, Jordan Lee, at a recruiting dinner/);

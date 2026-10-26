@@ -27,7 +27,9 @@ const cronSecret = await resolveSecret(env, db, 'ORBIT_CRON_SECRET', 'orbit_cron
 async function storedClaudeKey(): Promise<string | undefined> {
   if (!db) return undefined;
   try {
-    const [r] = await db.sql<{ v: string | null }>`select public.orbit_secret('ORBIT_ANTHROPIC_API_KEY') as v`;
+    const [r] = await db.sql<{
+      v: string | null;
+    }>`select public.orbit_secret('ORBIT_ANTHROPIC_API_KEY') as v`;
     return r?.v || undefined;
   } catch {
     return undefined;

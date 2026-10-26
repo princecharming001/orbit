@@ -17,7 +17,13 @@ import type {
   User,
   UserSettings,
 } from '@orbit/core';
-import { cardReason, cleanAnswer, STAGE_LABELS, warmUpProgress } from '@orbit/core';
+import {
+  cardReason,
+  cleanAnswer,
+  differentLinkedInProfiles,
+  STAGE_LABELS,
+  warmUpProgress,
+} from '@orbit/core';
 import { db } from '../db/schema';
 import { isMessageSuggestion } from './brief';
 import { type PersonSnapshot, restorePerson, snapshotPerson } from './send';
@@ -72,6 +78,8 @@ export interface MorningDeck {
   stats: MorningStats;
   /** the decisions, most pressing first: a time today, then quick questions, then messages, then the rest */
   decisions: Suggestion[];
+  /** everyone the decisions show, by id, so a card has its people (and their photos) the moment it opens */
+  people: Record<string, Person>;
   /** cards for today that did not fit as decisions; Drafts holds them */
   moreInDrafts: number;
   moves: MorningMove[];
@@ -185,9 +193,17 @@ export async function morningDeck(
   const latest = briefs
     .filter((b) => b.kind === 'daily')
     .sort((a, b) => b.generatedAt.localeCompare(a.generatedAt))[0];
+  // two LinkedIn profiles are two people: a duplicate question about them is never asked
+  const twoProfiles = (s: Suggestion) => {
+    if (s.kind !== 'confirm_merge' || !s.personId) return false;
+    const a = byId.get(s.personId);
+    const b = byId.get(s.payload.otherPersonId as string);
+    return !!a && !!b && differentLinkedInProfiles(a, b);
+  };
   const live = suggestions.filter(
     (s) =>
       visible(s.personId) &&
+      !twoProfiles(s) &&
       (s.status === 'pending' ||
         (s.status === 'snoozed' && !!s.snoozedUntil && new Date(s.snoozedUntil) <= now)),
   );
@@ -204,6 +220,10 @@ export async function morningDeck(
     ...nonMessages.filter((s) => !QUESTIONS.has(s.kind) && !TIMELY.has(s.kind)),
   ].filter((s, i, all) => all.findIndex((x) => x.id === s.id) === i);
   const decisions = ordered.slice(0, MORNING_MAX_DECISIONS);
+  const deckPeople: Record<string, Person> = {};
+  for (const s of decisions)
+    for (const id of [s.personId, s.payload.otherPersonId, s.payload.introducerId])
+      if (typeof id === 'string' && byId.has(id)) deckPeople[id] = byId.get(id)!;
 
   const week = weekStats(outbound, chats, people, settings?.weeklyOutreachTarget ?? 4, now);
   const dayAgo = now.getTime() - 86_400_000;
@@ -228,11 +248,20 @@ export async function morningDeck(
 
   // what is worth doing today beyond the decisions: chats to prep, warm-up steps due, people to write to, Discover.
   // One line per person: someone already in a decision (or a line above) is not suggested again.
-  const taken = new Set(decisions.map((s) => s.personId).filter(Boolean) as string[]);
+  // the same person kept as two records (one LinkedIn profile, or one photo) is one line too
+  const taken = new Set<string>();
+  const marks = (id: string) => {
+    const p = byId.get(id);
+    return [id, p?.linkedinSlug && `li:${p.linkedinSlug}`, p?.photoUrl && `ph:${p.photoUrl}`].filter(
+      Boolean,
+    ) as string[];
+  };
+  for (const s of decisions) if (s.personId) for (const k of marks(s.personId)) taken.add(k);
   const moves: MorningMove[] = [];
   const add = (m: MorningMove) => {
-    if (taken.has(m.personId) || !visible(m.personId)) return;
-    taken.add(m.personId);
+    const keys = marks(m.personId);
+    if (keys.some((k) => taken.has(k)) || !visible(m.personId)) return;
+    for (const k of keys) taken.add(k);
     moves.push(m);
   };
   const chatById = new Map(chats.map((c) => [c.id, c]));
@@ -294,7 +323,7 @@ export async function morningDeck(
     });
   // Discover's best picks fill what is left, while the list is short
   const picks = recs
-    .filter((r) => visible(r.personId) && byId.has(r.personId) && !taken.has(r.personId))
+    .filter((r) => visible(r.personId) && byId.has(r.personId))
     .sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
   for (const r of picks) {
     if (moves.length >= MORNING_MAX_MOVES) break;
@@ -306,15 +335,14 @@ export async function morningDeck(
       id: `rec:${r.id}`,
       kind: 'reach_out',
       text: `Reach out to ${p.firstName}`,
-      sub:
-        reason?.text ??
-        ([p.currentTitle, p.currentOrganizationRaw].filter(Boolean).join(' at ') || undefined),
+      sub: reason?.text,
       href: `/people/${p.id}`,
       personId: p.id,
       recommendationId: r.id,
     });
   }
 
+  for (const m of moves) if (byId.has(m.personId)) deckPeople[m.personId] = byId.get(m.personId)!;
   const moreInDrafts = Math.max(0, ordered.length - decisions.length);
   const peopleCount = people.filter((p) => p.isHuman && !p.hiddenAt).length;
   return {
@@ -335,6 +363,7 @@ export async function morningDeck(
       replyRate: week.replyRate,
     },
     decisions,
+    people: deckPeople,
     moreInDrafts,
     moves: moves.slice(0, MORNING_MAX_MOVES),
     peopleCount,

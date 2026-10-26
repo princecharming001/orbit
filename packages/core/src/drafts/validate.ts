@@ -124,6 +124,23 @@ const PHRASE_CHECKS: { re: RegExp; anchor: RegExp; what: string }[] = [
   },
 ];
 
+/**
+ * A blank left for the student in a message: a bracketed prompt ("[Why them: ...]", "[ASK USER: ...]"), or what is
+ * left of one after a bracket was deleted by hand ("Why them: one line only true of ...", a stray "]" after a
+ * prompt). A message is only ever sent whole, so any of these blocks it.
+ */
+export function placeholderIn(body: string): string | undefined {
+  const bracketed = body.match(/\[[^\]]{3,}\]/);
+  if (bracketed) return bracketed[0];
+  const prompt = body.match(
+    /\b(?:Why them|ASK USER)\s*:[^.\n\]]*|\bone line only true of\b[^.\n\]]*|\blike how you found them\b[^.\n\]]*|\bwhat you are congratulating\b[^.\n\]]*|\brole you are applying for\b|\bone real update\b[^.\n\]]*/i,
+  );
+  if (prompt) return prompt[0].trim();
+  // half a bracket: an opening "[" with no close, or a close with no opening
+  const open = body.match(/\[[^\]\n]{3,}$/m) ?? body.match(/(?:^|[^\w\]])[^[\n]{3,}\](?!\()/m);
+  return open ? open[0].trim() : undefined;
+}
+
 /** Names, companies, posts, mutual connections and figures in `body` that are not in `context`. */
 export function unsupportedDetails(body: string, context: string): string[] {
   const ctx = context.toLowerCase();
@@ -196,8 +213,8 @@ export function validateDraft(
       detail: 'dash reads as machine-written; use a comma or a period',
       blocking: true,
     });
-  if (/\[[^\]]{3,}\]/.test(body))
-    issues.push({ code: 'placeholder', detail: body.match(/\[[^\]]{3,}\]/)![0], blocking: true });
+  const gap = placeholderIn(body);
+  if (gap) issues.push({ code: 'placeholder', detail: gap, blocking: true });
   for (const n of d.needsInput ?? []) {
     if (n === 'connection')
       issues.push({
@@ -257,7 +274,8 @@ export function validateDraft(
     issues.push({
       code: 'no_specific_line',
       detail: 'nothing in this message is only true of the recipient',
-      blocking: opts.kind === 'outreach',
+      // a nudge, never a hold: every draft is ready to send as written (a line about them is better, not required)
+      blocking: false,
     });
   // a recruiter gets a logistics question, which has no call length in it
   const logistics = d.claims.some((c) => c.kind === 'logistics' && c.text === 'logistics question');

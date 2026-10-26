@@ -293,9 +293,10 @@ test.describe('Research', () => {
     await chip.getByTestId('draft-research-swap').click();
     await expect(body).toHaveValue(/I liked how your team writes up every launch\./);
     await expect(body).not.toHaveValue(/shipping small changes/);
-    // after the last opener, the student writes their own line
+    // after the last opener, Orbit's own line without research: never a blank to fill
     await page.getByTestId('draft-research-swap').click();
-    await expect(body).toHaveValue(/\[Why them: one line only true of/);
+    await expect(body).not.toHaveValue(/\[/);
+    await expect(body).not.toHaveValue(/I liked how your team writes up every launch/);
     await expect(page.getByTestId('draft-research-chip')).toHaveCount(0);
   });
 

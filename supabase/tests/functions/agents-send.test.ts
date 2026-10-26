@@ -695,7 +695,7 @@ describe('replies (§8)', () => {
     expect(draft!.status).toBe('cancelled');
   });
 
-  it('§8.8 tests 4 and 5: unsubscribe sets do-not-contact and later composes fail; [ASK USER] cannot be approved', async () => {
+  it('§8.8 tests 4 and 5: unsubscribe sets do-not-contact and later composes fail; a blank cannot be approved', async () => {
     const net = fakeNet(google());
     const call = api(t, net, { env: {} });
     const { userId, token } = await signedInUser(t);
@@ -734,16 +734,22 @@ describe('replies (§8)', () => {
     });
     expect(reply.status).toBe(409);
 
-    // §8.8 test 5: a question with no model drafts [ASK USER: …], which blocks approval
+    // §8.8 test 5: a question with no model still drafts a whole reply (never a blank to fill); a draft that does
+    // hold a blank (a model's [ASK USER: …], or what is left of one) cannot be approved
     const q = await addPerson(t, userId, { name: 'Quentin Ames', email: 'q@example.com' });
     const qt = await addThread(t, userId, q, [
       { direction: 'out', at: iso(3 * DAY), body: 'Hi Quentin, could we talk?' },
       { direction: 'in', at: iso(DAY), body: 'What is your budget?', replyClass: 'question' },
     ]);
-    const qd = await call<{ draft: { id: string; needsInput: string[] } }>('/replies/draft', token, {
-      messageId: qt.messageIds[1],
-    });
-    expect(qd.body.draft.needsInput).toEqual(['your answer to their message']);
+    const qd = await call<{ draft: { id: string; body: string; needsInput: string[] } }>(
+      '/replies/draft',
+      token,
+      { messageId: qt.messageIds[1] },
+    );
+    expect(qd.body.draft.needsInput).toEqual([]);
+    expect(qd.body.draft.body).not.toMatch(/\[|\]/);
+    await t.db.sql`update orbit.drafts set body = body || ' [ASK USER: your budget]'
+                    where id = ${qd.body.draft.id}::uuid`;
     const ap = await call<{ error: { code: string } }>('/drafts/approve', token, {
       draftId: qd.body.draft.id,
     });

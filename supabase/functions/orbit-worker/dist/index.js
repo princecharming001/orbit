@@ -4223,6 +4223,16 @@ var PHRASE_CHECKS = [
     what: "an academic honor"
   }
 ];
+function placeholderIn(body) {
+  const bracketed = body.match(/\[[^\]]{3,}\]/);
+  if (bracketed) return bracketed[0];
+  const prompt = body.match(
+    /\b(?:Why them|ASK USER)\s*:[^.\n\]]*|\bone line only true of\b[^.\n\]]*|\blike how you found them\b[^.\n\]]*|\bwhat you are congratulating\b[^.\n\]]*|\brole you are applying for\b|\bone real update\b[^.\n\]]*/i
+  );
+  if (prompt) return prompt[0].trim();
+  const open = body.match(/\[[^\]\n]{3,}$/m) ?? body.match(/(?:^|[^\w\]])[^[\n]{3,}\](?!\()/m);
+  return open ? open[0].trim() : void 0;
+}
 function unsupportedDetails(body, context) {
   const ctx = context.toLowerCase();
   const has = (w) => {
@@ -4285,8 +4295,8 @@ function validateDraft(d, opts) {
       detail: "dash reads as machine-written; use a comma or a period",
       blocking: true
     });
-  if (/\[[^\]]{3,}\]/.test(body))
-    issues.push({ code: "placeholder", detail: body.match(/\[[^\]]{3,}\]/)[0], blocking: true });
+  const gap = placeholderIn(body);
+  if (gap) issues.push({ code: "placeholder", detail: gap, blocking: true });
   for (const n of d.needsInput ?? []) {
     if (n === "connection")
       issues.push({
@@ -4337,7 +4347,8 @@ function validateDraft(d, opts) {
     issues.push({
       code: "no_specific_line",
       detail: "nothing in this message is only true of the recipient",
-      blocking: opts.kind === "outreach"
+      // a nudge, never a hold: every draft is ready to send as written (a line about them is better, not required)
+      blocking: false
     });
   const logistics = d.claims.some((c) => c.kind === "logistics" && c.text === "logistics question");
   if (["outreach", "bump", "intro_request"].includes(opts.kind) && !logistics && !/\b(15|20|30|fifteen|twenty)[- ]?min/i.test(body) && !/\b(15|20)\b/.test(body))
@@ -5927,7 +5938,7 @@ function composeSystem(p) {
   if (p.kind === "reply")
     lines.push(
       "",
-      "Answer what they said. If they proposed times, accept one that is free (given in <free_slots>) or offer those. Keep it shorter than their message unless they asked questions. If a fact is needed that is not in the inputs, write [ASK USER: …] instead of guessing."
+      "Answer what they said. If they proposed times, accept one that is free (given in <free_slots>) or offer those. Keep it shorter than their message unless they asked questions. Never leave a blank, a bracket or a placeholder: the message must be ready to send as written. If a fact is needed that is not in the inputs, write around it (offer to cover it on a call, or ask them) instead of guessing it."
     );
   return lines.join("\n");
 }
@@ -6404,7 +6415,10 @@ ${me}`;
         middle = `Thanks for getting back to me. ${ask.text}
 
 ${p.slots.map((x) => `- ${x.label}`).join("\n")}`;
-      } else middle = "Thanks for getting back to me. [ASK USER: a few times that work for you this week]";
+      } else {
+        ask = { kind: "call", text: "What times work best for you over the next week or so?" };
+        middle = `Thanks for getting back to me. ${ask.text} I'm happy to work around your schedule.`;
+      }
       break;
     case "thanks":
     case "out_of_office":
@@ -6416,10 +6430,10 @@ ${p.slots.map((x) => `- ${x.label}`).join("\n")}`;
       middle = "Thanks for letting me know, I understand. I appreciate you taking the time to reply.";
       break;
     case "referral":
-      middle = "Thank you for pointing me in the right direction. [ASK USER: how you will reach out to them]";
+      middle = "Thank you for pointing me in the right direction. I'll reach out to them, and I'll let you know how it goes.";
       break;
     default:
-      middle = "Thanks for your note. [ASK USER: your answer to their message]";
+      middle = "Thanks for your note, I really appreciate it. Happy to go into more detail whenever works for you.";
   }
   return {
     id: "",
@@ -10643,7 +10657,8 @@ async function sendDraft(s, draftId) {
        where id = ${d.id}::uuid`;
   };
   if (askUserMarkers(`${d.subject ?? ""}
-${d.body}`).length) {
+${d.body}`).length || placeholderIn(`${d.subject ?? ""}
+${d.body}`)) {
     await settle("draft", { error: "needs_input" });
     return { status: "held", reason: "needs_input" };
   }

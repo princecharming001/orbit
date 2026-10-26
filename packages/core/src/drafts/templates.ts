@@ -950,16 +950,16 @@ const UNNAMED_MUTUAL =
 
 /**
  * A connection line that names a mutual tie without the person ("You spoke with my roommate at a dinner"): the name
- * goes in after the tie when the student gave it, or a bracket asks for it.
+ * goes in after the tie when the student gave it; without one the line goes as they wrote it (a draft is always
+ * ready to send, never a blank to fill).
  */
 function nameMutual(text: string, name: string | undefined): { text: string; missing: boolean } {
   const m = text.match(UNNAMED_MUTUAL);
-  if (!m) return { text, missing: false };
+  if (!m || !name?.trim()) return { text, missing: false };
   const at = m.index! + m[0].length;
-  const who = name?.trim() ? strip(name) : `[your ${m[1]}'s name]`;
   return {
-    text: `${text.slice(0, at)}, ${who},${text.slice(at)}`.replace(/,,/g, ','),
-    missing: !name?.trim(),
+    text: `${text.slice(0, at)}, ${strip(name)},${text.slice(at)}`.replace(/,,/g, ','),
+    missing: false,
   };
 }
 
@@ -1028,20 +1028,35 @@ export function headlineFocus(
  */
 function autoWhyThem(ctx: DraftContext): { text: string; claim: DraftClaim } | undefined {
   const p = ctx.person;
+  const text = suggestedWhyThem(p);
+  if (!text) return undefined;
+  return headlineFocus(p.headline, p.title, p.org?.trim())
+    ? { text, claim: { text: p.headline!, kind: 'about_person' } }
+    : { text, claim: { text: [p.title, p.org?.trim()].filter(Boolean).join(' at '), kind: 'about_person' } };
+}
+
+/**
+ * The "Why them" line Orbit can stand behind for someone, from their LinkedIn headline (what they say they work on)
+ * or else their company; undefined when it knows neither. The chat's editor offers it in the box, filled in.
+ */
+export function suggestedWhyThem(p: { headline?: string; title?: string; org?: string }): string | undefined {
   const org = p.org?.trim();
   const at = org ? ` at ${org}` : '';
   const focus = headlineFocus(p.headline, p.title, org);
   if (focus)
-    return {
-      text: focus.doing ? `I saw you're ${focus.phrase}${at}.` : `I saw you work on ${focus.phrase}${at}.`,
-      claim: { text: p.headline!, kind: 'about_person' },
-    };
-  if (org)
-    return {
-      text: `I came across your profile while looking at people at ${org}.`,
-      claim: { text: [p.title, org].filter(Boolean).join(' at '), kind: 'about_person' },
-    };
+    return focus.doing ? `I saw you're ${focus.phrase}${at}.` : `I saw you work on ${focus.phrase}${at}.`;
+  if (org) return `I came across your profile while looking at people at ${org}.`;
   return undefined;
+}
+
+/**
+ * The opening line when Orbit knows nothing only true of them (no headline, company, research or shared link): a
+ * plain true sentence, so the draft is ready to send as it is. A comment left during the warm-up is said.
+ */
+export function plainWhyThem(commented = false): string {
+  return commented
+    ? 'I left a comment on your recent post and wanted to say hello properly.'
+    : "I came across your profile and thought I'd introduce myself.";
 }
 
 /** A research opener as the sentence a first message opens with: one sentence, ending in a full stop. */
@@ -1593,8 +1608,14 @@ function firstSentence(body: string): string {
           /\s/.test(l),
       ) ?? '';
   const sentence = (first.match(/^[^.!?]*[.!?]/)?.[0] ?? first).trim();
-  return /\[|\]/.test(first) ? '' : sentence;
+  // a stock line Orbit writes when it knows nothing about them is not the student's opening: it never feeds the
+  // "do not open the same way twice" check, so the next draft that needs it is not held for repeating it
+  return /\[|\]/.test(first) || STOCK_OPENING.test(sentence) ? '' : sentence;
 }
+
+/** The stock lines that stand in for something only true of them (plainWhyThem and the plain check-ins). */
+const STOCK_OPENING =
+  /^(I came across your profile and thought I'd introduce myself|I left a comment on your recent post and wanted to say hello properly|I wanted to check in and see how things are going|Wanted to check in\b|Small ask\.)/;
 
 /** Cut a note to `max` characters at a sentence boundary (or, at worst, a word boundary). Never mid-word. */
 export function fitNote(text: string, max: number): string {
@@ -1948,10 +1969,6 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       // without a link the student gave, Orbit writes one from what it holds about them (their headline, their role)
       const auto = op || research ? undefined : autoWhyThem(ctx);
       if (auto) claims.push(auto.claim);
-      if (!op && !auto && !research) {
-        needsInput.push('connection');
-        claims.push({ text: 'connection missing', kind: 'logistics' });
-      }
       if (op?.missing) needsInput.push(op.missing);
       if (useRole && op)
         claims.push({ text: useRole.factText, factId: useRole.factId, kind: 'about_person' });
@@ -1964,13 +1981,7 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
           : `I'm ${me}, recruiting for ${lookingForPhrase(ctx)}${late ? '' : ' this cycle'}.`;
       const commented =
         !!ctx.chat?.commentedOnPost && !['warmup', 'post'].includes(ctx.connection?.kind ?? '');
-      const openText =
-        op?.text ??
-        research ??
-        auto?.text ??
-        (commented
-          ? `[What their post was about, e.g. "Read your post on ..." (you commented on it during the warm-up)]`
-          : `[${WHY_THEM}: one line only true of ${first}, like how you found them, what you share, or something of theirs you read]`);
+      const openText = op?.text ?? research ?? auto?.text ?? plainWhyThem(commented);
       claims.push(...(op?.claims ?? []));
       // a warm-up comment the student did not describe is still worth a clause next to another link
       const alsoCommented = op && commented ? 'I also left a comment on your recent post.' : '';
@@ -2059,9 +2070,7 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       if (threaded || introReply) subject = reSubject;
       // LinkedIn connection note (not yet connected) or message (connected)
       if (isLinkedIn) {
-        const short = op
-          ? shortConnection(ctx, c!)
-          : (research ?? auto?.text ?? `[${WHY_THEM}: one line only true of ${first}]`);
+        const short = op ? shortConnection(ctx, c!) : (research ?? auto?.text ?? plainWhyThem(commented));
         if (o && short.includes(o)) qq = thereFor(qq, o);
         // someone who already knows the student is not told their school and year again
         const known = !!c && (c.kind === 'met' || (c.kind === 'prior_thread' && friend) || !!c.introduced);
@@ -2412,10 +2421,13 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       }
       if (questions.length) {
         if (ctx.answer?.trim()) parts.push(answerLine(questions[0]!, ctx.answer));
-        else {
-          parts.push(`[Your answer to: ${questions.join('? ')}?]`);
-          needsInput.push('answer');
-        }
+        // Orbit never answers for the student: the question is taken up on the call, so the reply is whole as it is
+        else
+          parts.push(
+            questions.length > 1
+              ? 'Good questions, and happy to walk you through all of it when we talk.'
+              : 'Good question, and happy to walk you through it when we talk.',
+          );
       }
       if (!confirmed && !offeredTimes && wantsTimes) {
         parts.push(
@@ -2451,9 +2463,8 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
         line1 = takeawayLine(thanks, ctx.takeaway, P, seed);
         claims.push({ text: `takeaway: ${strip(ctx.takeaway)}`, kind: 'about_person' });
       } else {
-        // a thank-you with nothing they said in it is the generic note the playbook forbids: ask the student
-        needsInput.push('takeaway');
-        line1 = `${thanks}. [One thing ${first} said that stuck with you]`;
+        // nothing they said is on record (no notes from the call): a plain thank-you that claims nothing, ready to send
+        line1 = `${thanks}. I really appreciated you sharing how you got to where you are.`;
       }
       // an offer becomes the next step, never just a thank-you for it
       let line2 = '';
@@ -2577,7 +2588,6 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       const knewIt =
         !!meetingAt && !!na?.since && new Date(meetingAt).getTime() > new Date(na.since).getTime();
       const congrats = !!(na?.org && naTitle && !knewIt);
-      if (!update && !hook && !offer && !congrats) needsInput.push('update');
       const parts: string[] = [];
       if (congrats) {
         parts.push(
@@ -2596,7 +2606,11 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       else if (reopen)
         parts.push(
           `Thanks again for ${talked ? (topic ? 'talking with me' : 'making time') : 'your help'}${since ? ` ${since}` : ''}${introBy}${topicAbout}.${
-            update ? ` ${cap1(update)}.` : congrats || next ? '' : ' [One real update since then.]'
+            update
+              ? ` ${cap1(update)}.`
+              : congrats || next
+                ? ''
+                : ' I wanted to check in and see how things are going.'
           }`,
         );
       else if (update)
@@ -2604,28 +2618,22 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
           `Quick update${since ? ` since we talked ${since}${introBy}${topicAbout}` : ''}: ${update}.`,
         );
       else if (!hook && !offer && !congrats)
-        parts.push(
-          `Quick update${since ? ` since we talked ${since}` : ''}${introBy}${topicAbout}: [one real update${since ? '' : talked ? ` since you last spoke with ${first}` : ` to share with ${first}`}].`,
-        );
+        parts.push(`Wanted to check in${since ? ` since we talked ${since}` : ''}${introBy}${topicAbout}.`);
       // an open offer is taken up, not left in the notes, and then the note has one purpose: no line about their
       // team, no "No reply needed" after an ask
-      let aboutThem = !!topic || !!introBy || congrats;
       if (next) {
         parts.push(next.text);
         if (next.resume && !needsInput.includes('resume')) needsInput.push('resume');
         cite(offer);
-        aboutThem = true;
       } else if (hope) {
         // a wish about something they told the student ("I remember you wanted to move closer to the product side")
         parts.push(
           `I remember you ${theirWords(hope.c.text.replace(/^you /, ''))}, and I hope that's coming along.`,
         );
         cite(hope);
-        aboutThem = true;
       } else if (advice && !reopen) {
         parts.push(`Thanks again for ${pointPhrase(advice.c)}.`);
         cite(advice);
-        aboutThem = true;
       } else if (hook) {
         // one line about them, as a wish: "No reply needed" never follows a question. A note from after the
         // conversation is something the student saw, not something they said.
@@ -2641,23 +2649,15 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
         const saidThen = /\b(said|mentioned|told)\b/i.test(hook.fact.text);
         parts.push(`${saidThen ? 'You mentioned' : 'I saw that'} ${prop}. ${wish}`);
         cite(hook);
-        aboutThem = true;
       } else if (ctx.takeaway?.trim()) {
         parts.push(`Thanks again for ${takeawayPhrase(strip(ctx.takeaway), P)}.`);
         claims.push({ text: `takeaway: ${strip(ctx.takeaway)}`, kind: 'about_person' });
-        aboutThem = true;
       }
       // a reason to write again after months (their company is on the student's list) earns one small ask
       const ask =
         reopen && tc && !next && !isFriend(P)
           ? `Would you have ${minutes} minutes in the next couple of weeks to tell me what ${o ?? 'the team'} looks for in ${intern ? 'interns' : 'new grads'}? Happy to do it over email if that's easier.`
           : undefined;
-      // nothing in the note is only true of them: the student adds one thing from the conversation
-      // (an update the student wrote is theirs to send as it is)
-      if (!aboutThem && talked && !typed && !needsInput.includes('update')) {
-        needsInput.push('takeaway');
-        parts.push(`[One thing ${first} said when you talked, so the note is about them]`);
-      }
       const newRole = na?.title ? roleNoun(na.title) : undefined;
       if (!hook && !congrats && !next && !ask && na?.org && newRole && knewIt && !na.observed)
         parts.push(`Hope the new role as ${article(newRole)} ${newRole} is going well.`);
@@ -2723,9 +2723,9 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
         lead = `Just saw the news about ${what}. Congratulations.`;
       }
       if (!lead) {
-        needsInput.push('news');
-        body = `${G}\n\nCongratulations on [what you are congratulating ${first} on, e.g. a promotion or a launch].${org ? ` Hope things are going well at ${shortOrg(org)}.` : ''}\n\n${S}`;
-        subject = threaded ? undefined : 'Congratulations';
+        // no news on record: a congratulations on nothing named reads as a form letter, so it is a plain check-in
+        body = `${G}\n\nI wanted to check in and see how things are going${org ? ` at ${shortOrg(org)}` : ''}.\n\n${S}`;
+        subject = threaded ? undefined : 'Checking in';
         break;
       }
       claims.push({ text: `news: ${lead}`, kind: 'about_person' });
@@ -2788,11 +2788,10 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
     case 'referral_ask': {
       const tc = ctx.targetCompany;
       const company = tc?.name ?? org;
+      // no company on record to ask about: a referral ask cannot name one, so the note is the check-in
       if (!company) {
-        needsInput.push('role');
-        body = `${G}\n\n[The role and company you are applying to]\n\n${S}`;
-        subject = threaded ? undefined : 'A small ask';
-        break;
+        const out = generateDraft({ ...ctx, kind: 'nurture' });
+        return { ...out, kind: 'nurture' };
       }
       const co = shortOrg(company)!;
       const firm = firmKindOf({ title: P.title, org: company, industry: P.orgIndustry }, sector);
@@ -2818,13 +2817,15 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
         const out = generateDraft({ ...ctx, kind: 'nurture' });
         return { ...out, kind: 'nurture' };
       }
-      // no role on record: the student says which (Orbit never assumes one)
-      if (!label) needsInput.push('role');
+      // no role on record: "the internship" or "the open role", never a function Orbit would have to guess, never
+      // a blank
       const role = label
         ? /\b(role|internship|position|program|programme|req)$/i.test(label)
           ? label
           : `${label} role`
-        : '[role you are applying for]';
+        : isInternCycle(ctx.user.cycleLabel)
+          ? 'internship'
+          : 'open role';
       const req = tc?.reqId
         ? ` (req ${tc.reqId}${tc.link ? ', link below' : ''})`
         : tc?.link
@@ -2911,14 +2912,13 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
             offer?.fact.text ?? '',
           ));
       const wantsTeam = /\b(picked|chosen|choose|pick|decided on)\b[^.?!]{0,15}\bteam\b/i.test(said);
-      if (wantsPosting) needsInput.push('posting');
       // an offer is not hedged ("completely fine if not" to someone who offered reads as not having listened)
       const out = offer || introOffer ? '' : ' Completely fine if not.';
       // one sentence of fit, when there is one on record
       const fitLine = ctx.user.credibility
         ? ` Most relevant to the role, I ${softLower(strip(ctx.user.credibility))}.`
         : '';
-      body = `${G}\n\n${open} ${applyLine}${fitLine} ${askLine}${out}${wantsPosting ? `\n\n[${wantsTeam ? 'the team you picked, and the ' : ''}link to the posting]` : ''}\n\n${S}`;
+      body = `${G}\n\n${open} ${applyLine}${fitLine} ${askLine}${out}${wantsPosting ? `\n\nI'll follow up with ${wantsTeam ? 'the team I picked and ' : ''}the link to the posting as soon as it's up.` : ''}\n\n${S}`;
       subject = !label
         ? `${co}, a small ask`
         : applied
@@ -2930,8 +2930,8 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
     case 'intro_request': {
       const t = ctx.target;
       if (!t?.name) {
-        needsInput.push('target');
-        body = `${G}\n\nSmall ask. I'm hoping to talk with [who you would like ${first} to introduce you to, and what you'd like to learn from them]. If you'd be comfortable making a short intro, I can send a two-line note you could forward.\n\nAnd if it's not a good fit to ask, no worries at all.\n\n${S}`;
+        // nobody named yet: the ask is who they would suggest, so the note is whole without a name
+        body = `${G}\n\nSmall ask. Is there anyone ${org ? `at ${shortOrg(org)} ` : ''}you'd suggest I talk to about ${fnLabel}? If someone comes to mind and you'd be comfortable making a short intro, I can send a two-line note you could forward.\n\nAnd if it's not a good fit to ask, no worries at all.\n\n${S}`;
         subject = threaded ? undefined : 'A small ask';
         break;
       }
@@ -3003,8 +3003,7 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       // non-event is not reported ("I've followed up"), and the student promises one report, once
       let text: string;
       if (rb?.outcome === 'spoke') {
-        if (!line) needsInput.push('takeaway');
-        text = `Thanks again for connecting me with ${tFirst}. We spoke ${rb?.when ?? 'last week'}, and ${line ? lowerFirstWord(line) : `[one thing ${tFirst} said that was useful]`}. Really appreciate you making it happen, and I'll keep you posted on how recruiting goes.`;
+        text = `Thanks again for connecting me with ${tFirst}. We spoke ${rb?.when ?? 'last week'}, and ${line ? lowerFirstWord(line) : 'it was really helpful'}. Really appreciate you making it happen, and I'll keep you posted on how recruiting goes.`;
       } else if (rb?.outcome === 'declined')
         text = `Thanks again for connecting me with ${tFirst}. The timing didn't work out on ${tFirst}'s end this cycle, which is completely fair. I really appreciate you making the intro, and I'll keep you posted on how recruiting goes.`;
       else

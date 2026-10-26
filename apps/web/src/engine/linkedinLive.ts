@@ -126,7 +126,11 @@ export function subscribeLinkedInProgress(fn: () => void): () => void {
   progressListeners.add(fn);
   return () => progressListeners.delete(fn);
 }
+/** While a quiet background refresh runs, the progress card stays away (a failure is still on the account row). */
+let quietSync = false;
+
 function setProgress(p: Omit<LinkedInProgress, 'at'> | undefined): void {
+  if (quietSync && p) return;
   progress = p && { ...p, at: Date.now() };
   for (const fn of progressListeners) fn();
 }
@@ -391,16 +395,29 @@ function closeQuietly(win: Window | null) {
  * Pull the student's connections again and upsert them (nobody is doubled; job changes are noticed). Writes the
  * row's status and syncState, and refreshes recommendations and the brief, like an export upload does.
  */
-export async function syncLinkedInLive(
-  user: User,
-  opts: {
-    onProgress?: (count: number) => void;
-    signal?: AbortSignal;
-    now?: Date;
-    /** only the newest connections, up to the first one already stored (the daily sync between full pulls) */
-    newest?: boolean;
-  } = {},
-): Promise<LiveSyncResult> {
+type SyncOptions = {
+  onProgress?: (count: number) => void;
+  signal?: AbortSignal;
+  now?: Date;
+  /** only the newest connections, up to the first one already stored (the daily sync between full pulls) */
+  newest?: boolean;
+  /** a background refresh after the first full sync: no progress card (the status line still says it) */
+  quiet?: boolean;
+};
+
+/** The sync running for each student: a second ask while one runs (the app opening twice over) joins it. */
+const syncing = new Map<string, Promise<LiveSyncResult>>();
+
+export function syncLinkedInLive(user: User, opts: SyncOptions = {}): Promise<LiveSyncResult> {
+  const running = syncing.get(user.id);
+  if (running) return running;
+  const job = syncLinkedInLiveRun(user, opts).finally(() => syncing.delete(user.id));
+  syncing.set(user.id, job);
+  return job;
+}
+
+async function syncLinkedInLiveRun(user: User, opts: SyncOptions): Promise<LiveSyncResult> {
+  quietSync = !!opts.quiet;
   startActivity('linkedin-sync', 'Reading your LinkedIn');
   try {
     const r = await syncLinkedInLiveOnce(user, {
@@ -422,6 +439,7 @@ export async function syncLinkedInLive(
     if (row) await db.integrations.update(row.id, { lastError: message });
     return { ok: false, reason: 'error', message };
   } finally {
+    quietSync = false;
     endActivity('linkedin-sync');
   }
 }
@@ -626,7 +644,8 @@ export async function autoSyncLinkedInLive(
   const row = await liveLinkedInAccount(user.id);
   const fullAt = (row?.syncState as { fullAt?: string } | undefined)?.fullAt;
   const newest = !!fullAt && now.getTime() - Date.parse(fullAt) < FULL_SYNC_AFTER_MS;
-  return syncLinkedInLive(user, { now, newest });
+  // after the first full sync, the daily and weekly refreshes run in the background without the progress card
+  return syncLinkedInLive(user, { now, newest, quiet: !!fullAt });
 }
 
 /** A mutual connection, with the Orbit person it is when Orbit knows them. */

@@ -1,4 +1,4 @@
-import type { OutboundMessage, Suggestion, User } from '@orbit/core';
+import type { OutboundMessage, Person, Suggestion, User } from '@orbit/core';
 import { STAGE_LABELS } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import {
@@ -18,6 +18,7 @@ import { db } from '../db/schema';
 import { ensureDrafts, markWarmUpAction, needsWarmUp, startWarmUpOrOutreach } from '../engine/brief';
 import { quotedMessageFor, wroteWhen } from '../engine/conversation';
 import { composeDraft, markPrepOpened } from '../engine/drafts';
+import { runEnrichment } from '../engine/enrichment';
 import { markActionItemDone } from '../engine/facts';
 import { answerIntroductionQuestion } from '../engine/introductions';
 import {
@@ -36,6 +37,7 @@ import {
   undoDecision,
 } from '../engine/morning';
 import { decideMerge } from '../engine/people';
+import { photoWanted } from '../engine/photoSignals';
 import { currentResumeFacets, sharesOrgNow } from '../engine/resume';
 import { snoozeSuggestion } from '../engine/send';
 import { decideProposedStage } from '../engine/stages';
@@ -148,6 +150,28 @@ export function MorningBrief() {
       setMode('pill');
     });
   }, [ready, user]);
+
+  // everyone in the deck, first card first: their photo links are refreshed before their card comes up, and the
+  // people to write to whose role Orbit does not know yet are looked up, so each line can say what they do
+  useEffect(() => {
+    if (!deck || !user || mode === 'hidden') return;
+    const ids = [
+      ...new Set([
+        ...deck.decisions.flatMap((s) => [s.personId, s.payload.otherPersonId, s.payload.introducerId]),
+        ...deck.moves.map((m) => m.personId),
+      ]),
+    ].filter((id): id is string => typeof id === 'string');
+    // the photo queue takes the most recent first, so the first card is asked for last
+    const release = [...ids].reverse().map((id) => photoWanted(id));
+    const unknown = deck.moves
+      .map((m) => deck.people[m.personId])
+      .filter((p): p is Person => !!p && !p.currentTitle && !p.currentOrganizationRaw && !p.headline)
+      .map((p) => p.id);
+    if (unknown.length) void runEnrichment(user, { only: unknown, reason: 'view' }).catch(() => undefined);
+    return () => {
+      for (const r of release) r();
+    };
+  }, [deck, user, mode]);
 
   // once a day, after the brief time: checked on load and every few minutes while the app is open
   useEffect(() => {
@@ -344,6 +368,7 @@ export function MorningBrief() {
               user={user}
               index={slide.n}
               total={deck.decisions.length}
+              known={deck.people}
               result={result}
               onResolve={(o, text, undo, advance = true) => {
                 record(slide.s, o, text, undo);
@@ -593,6 +618,7 @@ function Decision({
   user,
   index,
   total,
+  known,
   result,
   onResolve,
   onUnresolve,
@@ -602,6 +628,8 @@ function Decision({
   user: User;
   index: number;
   total: number;
+  /** the deck's copy of the people on the card, shown until the live read comes back */
+  known: Record<string, Person>;
   result?: Result;
   /** the decision is made: how, the sentence for the footer, how to take it back; `advance` false stays here */
   onResolve: (o: MorningOutcome, text?: string, undo?: () => Promise<void>, advance?: boolean) => void;
@@ -615,15 +643,24 @@ function Decision({
   const [composing, setComposing] = useState(false);
   const [askMerge, setAskMerge] = useState(false);
   const [openedLinkedIn, setOpenedLinkedIn] = useState(false);
-  const person = useLiveQuery(() => (s.personId ? db.people.get(s.personId) : undefined), [s.personId]);
+  const person = useLiveQuery(
+    () => (s.personId ? db.people.get(s.personId) : undefined),
+    [s.personId],
+    s.personId ? known[s.personId] : undefined,
+  );
   // the second record of a possible duplicate, so both can be seen before deciding
   const otherId = s.kind === 'confirm_merge' ? (s.payload.otherPersonId as string | undefined) : undefined;
-  const other = useLiveQuery(() => (otherId ? db.people.get(otherId) : undefined), [otherId]);
+  const other = useLiveQuery(
+    () => (otherId ? db.people.get(otherId) : undefined),
+    [otherId],
+    otherId ? known[otherId] : undefined,
+  );
   const introducerId =
     s.kind === 'confirm_intro' ? (s.payload.introducerId as string | undefined) : undefined;
   const introducer = useLiveQuery(
     () => (introducerId ? db.people.get(introducerId) : undefined),
     [introducerId],
+    introducerId ? known[introducerId] : undefined,
   );
   // the card as it is now: a draft written in the deck is on it, not on the deck's copy
   const live = useLiveQuery(() => db.suggestions.get(s.id), [s.id]);
@@ -971,9 +1008,23 @@ function Decision({
 }
 
 /** One line under "Worth doing today", done right there: a warm-up step, a first message, or prep (its own page). */
-function MoveRow({ m, user, onLeave }: { m: MorningMove; user: User; onLeave: (to?: string) => void }) {
+function MoveRow({
+  m,
+  user,
+  known,
+  onLeave,
+}: {
+  m: MorningMove;
+  user: User;
+  known?: Person;
+  onLeave: (to?: string) => void;
+}) {
   const toast = useToast();
-  const person = useLiveQuery(() => db.people.get(m.personId), [m.personId]);
+  const person = useLiveQuery(() => db.people.get(m.personId), [m.personId], known);
+  // what they do, so a line about someone new says who they are
+  const role = person
+    ? [person.currentTitle, person.currentOrganizationRaw].filter(Boolean).join(' at ') || person.headline
+    : undefined;
   const [busy, setBusy] = useState(false);
   const [phase, setPhase] = useState<'idle' | 'choice' | 'composing' | 'done'>('idle');
   const [doneText, setDoneText] = useState('');
@@ -991,6 +1042,9 @@ function MoveRow({ m, user, onLeave }: { m: MorningMove; user: User; onLeave: (t
   };
   const write = (opts: { confirmed?: boolean; skipWarmUp?: boolean } = {}) =>
     act(async () => {
+      // someone whose LinkedIn Orbit has not read yet: a few seconds for it, so the draft opens on what they do
+      // rather than asking the student why them
+      if (!role) await roleWithin(user, m.personId, 6000);
       const r = await composeDraft(user, m.personId, 'outreach', opts);
       if (r.kind === 'warmup_choice') setPhase('choice');
       else if (r.kind === 'warmup_started') {
@@ -1091,6 +1145,11 @@ function MoveRow({ m, user, onLeave }: { m: MorningMove; user: User; onLeave: (t
               m.text
             )}
           </span>
+          {role && (
+            <span className="block text-[12.5px] text-ink-2 truncate" data-testid="morning-move-role">
+              {role}
+            </span>
+          )}
           {m.sub && <span className="block text-[12px] text-ink-3 truncate">{m.sub}</span>}
         </span>
         {phase === 'done' ? (
@@ -1160,6 +1219,17 @@ function MoveRow({ m, user, onLeave }: { m: MorningMove; user: User; onLeave: (t
   );
 }
 
+/**
+ * Give a LinkedIn read of someone up to `ms` before drafting to them, so the draft can say what they do. Nothing to
+ * wait for (no LinkedIn connected, the sample student, a read already under way) returns at once.
+ */
+async function roleWithin(user: User, personId: string, ms: number): Promise<void> {
+  await Promise.race([
+    runEnrichment(user, { only: [personId], reason: 'view' }).catch(() => undefined),
+    new Promise((r) => setTimeout(r, ms)),
+  ]);
+}
+
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 function Moves({ deck, user, onLeave }: { deck: MorningDeck; user: User; onLeave: (to?: string) => void }) {
@@ -1169,7 +1239,7 @@ function Moves({ deck, user, onLeave }: { deck: MorningDeck; user: User; onLeave
       <p className="text-[13px] text-ink-2 mt-1">Each one is done right here. Prep opens its own page.</p>
       <ul className="mt-2 divide-y divide-line-2">
         {deck.moves.map((m) => (
-          <MoveRow key={m.id} m={m} user={user} onLeave={onLeave} />
+          <MoveRow key={m.id} m={m} user={user} known={deck.people[m.personId]} onLeave={onLeave} />
         ))}
       </ul>
     </div>

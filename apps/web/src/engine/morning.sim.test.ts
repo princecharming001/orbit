@@ -6,6 +6,7 @@
  * deck, the words match the data, and the last slide adds up.
  */
 import type { Suggestion } from '@orbit/core';
+import { differentLinkedInProfiles } from '@orbit/core';
 import { describe, expect, it } from 'vitest';
 import { type Built, build, KINDS, localDate, readAccount, rng, specs } from '../test/morningAccounts';
 import { isMessageSuggestion, needsWarmUp } from './brief';
@@ -38,6 +39,12 @@ function expectedCards(b: Built): Suggestion[] {
   const inFlight = new Set(b.outbound.filter((o) => IN_FLIGHT.has(o.status)).map((o) => o.id));
   return b.suggestions.filter((s) => {
     if (!visible(s.personId) || !stillTrue(s, b.now)) return false;
+    // two LinkedIn profiles are two people: a duplicate question about them is never asked
+    if (s.kind === 'confirm_merge') {
+      const a = people.get(s.personId!);
+      const o = people.get(s.payload.otherPersonId as string);
+      if (a && o && differentLinkedInProfiles(a, o)) return false;
+    }
     const inBrief = !!b.brief?.suggestionIds.includes(s.id);
     if (!inBrief && s.deferred) return false;
     if (isMessageSuggestion(s.kind))

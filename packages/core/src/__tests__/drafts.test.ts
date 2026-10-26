@@ -204,10 +204,12 @@ describe('outreach', () => {
     expect(r.d.body).toMatch(/I saw you're building multiplayer editing at Figma\./);
     expect(r.blocking, JSON.stringify(r.issues)).toEqual([]);
   });
-  it('with nothing known about them the missing line is named "Why them", and only then', () => {
+  it('with nothing known about them the draft is still whole: a plain true opening, no gap', () => {
     const r = check(base({ person: { ...base().person, isAlumni: false, org: undefined } }));
-    expect(r.d.body).toMatch(/\[Why them: one line only true of /);
-    expect(r.d.needsInput).toContain('connection');
+    expect(r.d.body).toMatch(/I came across your profile and thought I'd introduce myself\./);
+    expect(r.d.body).not.toMatch(/\[/);
+    expect(r.d.needsInput).toEqual([]);
+    expect(r.blocking, JSON.stringify(r.issues)).toEqual([]);
   });
   it('alumni outreach passes every check and reads as a person', () => {
     const r = check(base());
@@ -572,9 +574,10 @@ describe('other kinds', () => {
     expect(t.body).toMatch(/\?/);
     expect(t.claims.filter((c) => c.factId).length).toBe(2);
   });
-  it('nurture without a hook or update is gated; with a hook it asks about it and needs no reply', () => {
+  it('nurture without a hook or update is a plain check-in; with a hook it asks about it and needs no reply', () => {
     const gated = generateDraft(base({ kind: 'nurture', facts: [] }));
-    expect(gated.needsInput).toContain('update');
+    expect(gated.needsInput).toEqual([]);
+    expect(gated.body).not.toMatch(/\[/);
     const n = generateDraft(
       base({ kind: 'nurture', facts: [FACTS[2]!], chat: { completedAt: '2026-08-10T00:00:00Z' } }),
     );
@@ -796,8 +799,9 @@ describe('audit round 1 regressions', () => {
       base({ kind: 'reply', thread: { asksOfUser: ['What area of PM are you most interested in?'] } }),
     );
     expect(q.body).not.toMatch(/send that over today/);
-    expect(q.body).toMatch(/\[Your answer to: What area of PM are you most interested in\?\]/);
-    expect(q.needsInput).toEqual(['answer']);
+    // never answered for them, never a blank: the question is taken up on the call
+    expect(q.body).toMatch(/Good question, and happy to walk you through it when we talk\./);
+    expect(q.needsInput).toEqual([]);
     expect(q.body).toMatch(/^Hi Priya,\n\n.+\n\nThanks,\nAlex$/s); // paragraphs survive
     const a = generateDraft(
       base({
@@ -895,9 +899,9 @@ describe('audit round 1 regressions', () => {
   });
 
   it('nurture needs a real update or a hook; offers are never "how did that go" (DQ-08)', () => {
-    expect(generateDraft(base({ kind: 'nurture', facts: [] })).needsInput).toEqual(['update']);
+    expect(generateDraft(base({ kind: 'nurture', facts: [] })).needsInput).toEqual([]);
     const offerOnly = generateDraft(base({ kind: 'nurture', facts: [NOTE_FACTS[1]!] }));
-    expect(offerOnly.needsInput).toEqual(['update']);
+    expect(offerOnly.needsInput).toEqual([]);
     expect(offerOnly.body).not.toMatch(/offered/);
     const noAdvice = generateDraft(
       base({ kind: 'nurture', facts: [], update: 'I had a first round at Ramp last week' }),
@@ -1007,9 +1011,10 @@ describe('audit round 1 regressions', () => {
     expect(alum.bodyShort).not.toMatch(/fellow Cornell University|Cornell University/i);
   });
 
-  it('intro request needs a target and names them; the blurb has no self-praise (DQ-11)', () => {
+  it('intro request asks who they suggest without a target, and names one given; the blurb has no self-praise (DQ-11)', () => {
     const none = generateDraft(base({ kind: 'intro_request' }));
-    expect(none.needsInput).toEqual(['target']);
+    expect(none.needsInput).toEqual([]);
+    expect(none.body).toMatch(/Is there anyone at Figma you'd suggest I talk to/);
     expect(none.body).not.toMatch(/\bthem thinks|reach someone/);
     const i = generateDraft(
       base({
@@ -1070,9 +1075,9 @@ describe('audit round 1 regressions', () => {
     expect(senior.body).toMatch(/Best regards,\nAlex Rivera\nCornell '28$/);
   });
 
-  it('congratulate needs the news; with a job change on record it names it (DQ-13)', () => {
+  it('congratulate without news is a check-in; with a job change on record it names it (DQ-13)', () => {
     const none = generateDraft(base({ kind: 'congratulate' }));
-    expect(none.needsInput).toEqual(['news']);
+    expect(none.needsInput).toEqual([]);
     expect(none.body).not.toMatch(/new role|the news/);
     const typed = generateDraft(base({ kind: 'congratulate', news: 'your promotion to senior PM' }));
     expect(typed.body).toMatch(
@@ -1108,9 +1113,11 @@ describe('audit round 1 regressions', () => {
   });
 
   it('referral ask: needs a company, mentions a conversation only if there was one, handles another company (DQ-16)', () => {
+    // no company on record to ask about: the check-in, ready to send
     const none = generateDraft(base({ kind: 'referral_ask', person: { ...base().person, org: undefined } }));
-    expect(none.needsInput).toEqual(['role']);
-    expect(none.body).not.toMatch(/your company/);
+    expect(none.kind).toBe('nurture');
+    expect(none.needsInput).toEqual([]);
+    expect(none.body).not.toMatch(/your company|\[/);
     const cold = generateDraft(
       base({ kind: 'referral_ask', targetCompany: { name: 'Figma', roleLabel: 'PM Intern' } }),
     );
@@ -1196,12 +1203,12 @@ describe('audit round 1, expert gaps (EG, SND, UI-10)', () => {
     });
     const d = generateDraft(ctx);
     expect(d.body).toMatch(/resume/);
-    expect(d.needsInput).toEqual(['resume', 'answer']);
-    expect(d.body).toMatch(/\[Your answer to: let me know which teams you're most interested in\?\]/);
+    expect(d.needsInput).toEqual(['resume']);
+    expect(d.body).toMatch(/happy to walk you through it when we talk/);
     expect(d.body).toMatch(/Thursday, Oct 8 at 10am or Monday, Oct 12 at 2pm \(EDT\)/);
-    // resume answer, then the student's answer, then the times
-    expect(d.body.indexOf('resume')).toBeLessThan(d.body.indexOf('[Your answer'));
-    expect(d.body.indexOf('[Your answer')).toBeLessThan(d.body.indexOf('Thursday'));
+    // resume answer, then the line taking up their question, then the times
+    expect(d.body.indexOf('resume')).toBeLessThan(d.body.indexOf('walk you through'));
+    expect(d.body.indexOf('walk you through')).toBeLessThan(d.body.indexOf('Thursday'));
     const answered = generateDraft({ ...ctx, answer: 'Payments infrastructure first, then developer tools' });
     expect(answered.needsInput).toEqual(['resume']);
     // the student's answer with a lead-in, not a bare fragment (drafts panel round 2)
@@ -1311,9 +1318,10 @@ describe('audit round 1, expert gaps (EG, SND, UI-10)', () => {
     }
   });
 
-  it("a thank-you with no notes asks for one thing they said; it keeps the student's promise (EG-15, UI-10)", () => {
+  it("a thank-you with no notes is still whole and claims nothing they said; it keeps the student's promise (EG-15, UI-10)", () => {
     const none = generateDraft(base({ kind: 'thank_you', chat: { meetingAt: '2026-10-05T19:00:00Z' } }));
-    expect(none.needsInput).toEqual(['takeaway']);
+    expect(none.needsInput).toEqual([]);
+    expect(none.body).not.toMatch(/\[/);
     expect(none.body).not.toMatch(/much clearer picture|really useful/);
     const typed = generateDraft(
       base({
@@ -1371,7 +1379,9 @@ describe('audit round 1, expert gaps (EG, SND, UI-10)', () => {
     expect(details).toMatch(/post or article/);
     expect(details).toMatch(/academic honor/);
     expect(details).toMatch(/4\.0/);
-    expect(issues.some((i) => i.code === 'no_specific_line' && i.blocking)).toBe(true);
+    // nothing only true of them is a nudge (every draft is sendable); the made-up claims are what hold it
+    expect(issues.some((i) => i.code === 'no_specific_line' && !i.blocking)).toBe(true);
+    expect(isBlocked(issues)).toBe(true);
   });
 
   it('LinkedIn notes aim for 200 characters, never cut mid-word, recruiters included (SND-08, EG-20)', () => {
@@ -1867,8 +1877,10 @@ describe('usability round 5', () => {
     expect(long.bodyShort).toMatch(/Cornell junior here/);
     expect(long.bodyShort!.length).toBeLessThanOrEqual(200);
   });
-  it('the "Why them" gap is found in a draft, and a typed line drops into it as a sentence', () => {
-    const d = generateDraft(base({ person: { ...base().person, isAlumni: false, org: undefined } }));
+  it('a "Why them" gap from an older draft is found, and a typed line drops into it as a sentence', () => {
+    const d = {
+      body: 'Hi Priya,\n\n[Why them: one line only true of Priya] I am a junior.\n\nThanks,\nAlex',
+    };
     expect(WHY_THEM_GAP.test(d.body)).toBe(true);
     expect(d.body.replace(WHY_THEM_GAP, whyThemSentence('read your post on staffing'))).toMatch(
       /I read your post on staffing\./,

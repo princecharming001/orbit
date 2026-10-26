@@ -1649,19 +1649,15 @@ test.describe("Never losing the student's work, and honest hand-offs", () => {
     await expect(box).toHaveValue(/Glad to/);
   });
 
-  test('Copy text stays off while the "Why them" line is missing (only when Orbit knows nothing about them)', async ({
-    page,
-  }) => {
+  test('a draft to someone Orbit knows nothing about is ready to send as written', async ({ page }) => {
     await newStudent(page);
     await addByHand(page, 'Priya Shah', '', { email: 'priya.shah@gs.com' });
     await page.getByTestId('person-write').click();
-    await expect(page.getByLabel('Message body')).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByTestId('draft-copy')).toBeDisabled();
-    await page.getByTestId('draft-input-connection').fill('Your talk at the Michigan finance club last week');
-    await page.getByTestId('draft-redraft').click();
-    await expect(page.getByLabel('Message body')).toHaveValue(
-      /I'm writing because of your talk at the Michigan finance club last week\./,
-    );
+    const box = page.getByLabel('Message body');
+    await expect(box).toBeVisible({ timeout: 15_000 });
+    // never a bracket or a box asking for a line: the draft goes as it is
+    await expect(box).not.toHaveValue(/\[|\]/);
+    await expect(page.getByTestId('draft-needs-input')).toHaveCount(0);
     await expect(page.getByTestId('draft-copy')).toBeEnabled();
   });
 
@@ -1798,11 +1794,11 @@ test.describe('Usability round 5: one draft, kept edits, saved settings, chats t
     await expect(page.getByTestId('drafts-started')).toHaveCount(0);
   });
 
-  test('the "Why them" line drops into an edited message, and a rewrite asks first and can be undone', async ({
+  test('a blank left in a message by hand, even with its brackets deleted, keeps the send buttons off', async ({
     page,
   }) => {
     await newStudent(page);
-    // nothing known about him but his name: the one case Orbit asks for the line
+    // nothing known about him but his name: the draft is still whole
     await addByHand(page, 'Marcus Lee', '', {
       linkedin: 'https://www.linkedin.com/in/marcus-lee-gs',
     });
@@ -1810,32 +1806,14 @@ test.describe('Usability round 5: one draft, kept edits, saved settings, chats t
     await page.getByTestId('warmup-skip').click();
     const box = page.getByLabel('Message body');
     await expect(box).toBeVisible({ timeout: 15_000 });
-    const needs = page.getByTestId('draft-needs-input');
-    await expect(needs).toContainText(/send buttons stay off until you add it/i);
-    await expect(needs).not.toContainText(/will not send/i);
-    const suggested = await box.inputValue();
-    // the student rewrote the whole note: redrafting asks before it replaces their words
-    await box.fill('Hi Marcus, my own words entirely. Alex');
-    await page.getByTestId('draft-input-connection').fill('We both rowed crew at Michigan');
-    await page.getByTestId('draft-redraft').click();
-    await expect(page.getByTestId('draft-redraft-confirm')).toBeVisible();
-    await page.getByRole('button', { name: /^keep my text$/i }).click();
-    await expect(box).toHaveValue('Hi Marcus, my own words entirely. Alex');
-    // with the bracketed gap still there, the line goes into it and the rest of their text stays
-    await box.fill(`${suggested} MYEDIT`);
-    await expect(page.getByTestId('draft-redraft')).toHaveText(/add to my message/i);
-    await page.getByTestId('draft-redraft').click();
-    await expect(box).toHaveValue(/We both rowed crew at Michigan\./);
-    await expect(box).toHaveValue(/MYEDIT$/);
-    await expect(box).not.toHaveValue(/\[Why them/);
-    // the ask itself is the one the draft had
-    const ask = suggested.split(']')[1]!.split('?')[0]!.trim();
-    expect((await box.inputValue()).includes(ask)).toBe(true);
-    await page
-      .getByTestId('toasts')
-      .getByRole('button', { name: /^undo$/i })
-      .click();
-    await expect(box).toHaveValue(/\[Why them.*MYEDIT$/);
+    await expect(box).not.toHaveValue(/\[|\]/);
+    await expect(page.getByTestId('draft-needs-input')).toHaveCount(0);
+    await expect(page.getByTestId('draft-copy')).toBeEnabled();
+    // what is left of a prompt after its opening bracket was deleted never goes out
+    await box.fill(
+      'Hi Marcus, Why them: one line only true of Marcus, like how you found them] Would you have 15 minutes? Alex',
+    );
+    await expect(page.getByTestId('draft-copy')).toBeDisabled();
   });
 
   test('Profile and Goals save as they are typed, and survive leaving the page and a reload', async ({

@@ -657,7 +657,10 @@ function replyTemplate(
       if (p.slots.length) {
         ask = { kind: 'call', text: 'Would any of these times work for you?' };
         middle = `Thanks for getting back to me. ${ask.text}\n\n${p.slots.map((x) => `- ${x.label}`).join('\n')}`;
-      } else middle = 'Thanks for getting back to me. [ASK USER: a few times that work for you this week]';
+      } else {
+        ask = { kind: 'call', text: 'What times work best for you over the next week or so?' };
+        middle = `Thanks for getting back to me. ${ask.text} I'm happy to work around your schedule.`;
+      }
       break;
     case 'thanks':
     case 'out_of_office':
@@ -669,10 +672,12 @@ function replyTemplate(
       middle = 'Thanks for letting me know, I understand. I appreciate you taking the time to reply.';
       break;
     case 'referral':
-      middle = 'Thank you for pointing me in the right direction. [ASK USER: how you will reach out to them]';
+      middle =
+        "Thank you for pointing me in the right direction. I'll reach out to them, and I'll let you know how it goes.";
       break;
     default:
-      middle = 'Thanks for your note. [ASK USER: your answer to their message]';
+      middle =
+        'Thanks for your note, I really appreciate it. Happy to go into more detail whenever works for you.';
   }
   return {
     id: '',

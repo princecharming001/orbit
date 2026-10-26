@@ -4,7 +4,10 @@ import {
   LINKEDIN_NOTE_TARGET,
   MAX_WORDS,
   MESSAGE_KIND_LABELS,
+  placeholderIn,
+  plainWhyThem,
   researchLine,
+  suggestedWhyThem,
   WHY_THEM,
   WHY_THEM_GAP,
   wordsIn,
@@ -303,11 +306,33 @@ export function DraftEditor({
   const isLinkedIn = draft.channel === 'linkedin';
   const connectionNote = isConnectionNote(draft, person ?? undefined, chats ?? []);
   const needs = (draft.needsInput ?? []).filter((n): n is PromptNeed => n !== 'post' && n !== 'resume');
+  // the line Orbit can stand behind (from their LinkedIn headline, else their company), already in the box
+  const whyThem =
+    needs.includes('connection') && person
+      ? suggestedWhyThem({
+          headline: person.headline,
+          title: person.currentTitle,
+          org: person.currentOrganizationRaw,
+        })
+      : undefined;
+  // the opening line Orbit writes without research: their headline or company, else the plain one
+  const ownLine =
+    suggestedWhyThem({
+      headline: person?.headline,
+      title: person?.currentTitle,
+      org: person?.currentOrganizationRaw,
+    }) ?? plainWhyThem();
+  const prefilled = useRef(false);
+  useEffect(() => {
+    if (!whyThem || prefilled.current) return;
+    prefilled.current = true;
+    setInputs((v) => (v.connection ? v : { ...v, connection: whyThem }));
+  }, [whyThem]);
   // the message says the resume is attached: Orbit cannot attach files, so the student does it in their mail app
   const attachResume =
     (draft.needsInput ?? []).includes('resume') && !isLinkedIn && /\battached\b/i.test(body);
   const [attached, setAttached] = useState(false);
-  const hasPlaceholder = /\[[^\]]{3,}\]/.test(body);
+  const hasPlaceholder = !!placeholderIn(body);
   const missingLine =
     (needs.length > 0 && (hasPlaceholder || !edited)) || issues.some((i) => i.blocking) || !!notAllowed;
   const blocked = missingLine || (attachResume && (!!direct || !attached));
@@ -627,13 +652,13 @@ export function DraftEditor({
                 </div>
               </div>
             ) : (
-              <p className="text-[12px] text-ink-3" data-testid={`draft-input-hint-${needs[0]}`}>
-                {edited && !hasPlaceholder
-                  ? 'You wrote it in yourself, so it can go. Or add it here and Orbit fits it in.'
-                  : needs.length === 1
-                    ? `${COMPACT_PROMPT[needs[0]!].hint} Or edit the bracketed line.`
+              (needs.length > 1 || (edited && !hasPlaceholder)) && (
+                <p className="text-[12px] text-ink-3 mt-1.5" data-testid={`draft-input-hint-${needs[0]}`}>
+                  {edited && !hasPlaceholder
+                    ? 'You wrote it in yourself, so it can go. Or add it here and Orbit fits it in.'
                     : 'Only you can give these. Or edit the bracketed lines below.'}
-              </p>
+                </p>
+              )
             )}
           </div>
         )}
@@ -690,7 +715,7 @@ export function DraftEditor({
           className="resize-none !text-[13.5px] !leading-[1.5] !py-1.5"
           aria-label="Message body"
         />
-        <ResearchChip personId={draft.personId} body={body} setBody={setBody} firstName={first} />
+        <ResearchChip personId={draft.personId} body={body} setBody={setBody} fallback={ownLine} />
         <ForwardNote draft={draft} introducer={first} />
         <div className="mt-1.5 flex items-center gap-x-2 gap-y-1.5 flex-wrap text-[12px] text-ink-3">
           <span className="flex items-center gap-2 min-w-0 mr-auto">
@@ -901,7 +926,7 @@ export function DraftEditor({
         className="resize-none overflow-hidden"
         aria-label="Message body"
       />
-      <ResearchChip personId={draft.personId} body={body} setBody={setBody} firstName={first} />
+      <ResearchChip personId={draft.personId} body={body} setBody={setBody} fallback={ownLine} />
       <ForwardNote draft={draft} introducer={first} />
       <div className="mt-2 flex items-center gap-3 text-[12px] text-ink-3 flex-wrap">
         {wc > max && (
@@ -1327,12 +1352,13 @@ function ResearchChip({
   personId,
   body,
   setBody,
-  firstName,
+  fallback,
 }: {
   personId: string;
   body: string;
   setBody: (b: string) => void;
-  firstName: string;
+  /** the opening line without research: from their headline or company, else the plain one */
+  fallback: string;
 }) {
   const openers = useLiveQuery(() => researchOpeners(personId), [personId]) ?? [];
   const lines = openers.map((o) => researchLine(o.text) ?? o.text);
@@ -1340,8 +1366,8 @@ function ResearchChip({
   if (i < 0) return null;
   const o = openers[i]!;
   const next = i + 1 < openers.length ? lines[i + 1]! : undefined;
-  const swap = () =>
-    setBody(body.replace(lines[i]!, next ?? `[${WHY_THEM}: one line only true of ${firstName}]`));
+  // after the last opener, the line Orbit can stand behind without research (never a blank to fill)
+  const swap = () => setBody(body.replace(lines[i]!, next ?? fallback));
   return (
     <div
       className="mt-1.5 flex flex-wrap items-center gap-2 text-[12px] text-ink-3"

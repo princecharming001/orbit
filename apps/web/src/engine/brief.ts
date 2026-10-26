@@ -18,6 +18,7 @@ import {
   cleanName,
   contextText,
   defaultStyleCard,
+  differentLinkedInProfiles,
   earliestFor,
   generateCandidates,
   generateDraft,
@@ -29,6 +30,7 @@ import {
   normalizeCompany,
   normalizeEmail,
   ownWordsOf,
+  placeholderIn,
   proposeWindows,
   rankScore,
   resumeOneLiner,
@@ -1457,19 +1459,22 @@ export async function regenerateDraft(
 }
 
 /**
- * Drafts saved by older versions with the bracketed "Why them" gap are redrafted, so Orbit writes that line itself
- * from where they work or what their headline says. A draft the student edited keeps their words: only a copy of the
- * suggested text with the gap still in it is replaced. A redraft that still needs the line is left as it was.
+ * Drafts saved by older versions with a blank for the student (a bracketed "Why them" or any other gap, or a line
+ * Orbit asked for) are redrafted whole, so every draft is ready to send as it is. A draft the student edited keeps
+ * their words unless a blank is still in them (a message with a blank can never go, so it is written again). A
+ * redraft that would still have a blank is left as it was.
  */
 export async function fillWhyThemGaps(user: User, now = new Date()): Promise<number> {
+  const asks = (d: OutboundMessage) => (d.needsInput ?? []).some((n) => n !== 'resume' && n !== 'post');
   const gapped = await db.outbound
     .where('userId')
     .equals(user.id)
     .filter(
       (d) =>
         d.status === 'draft' &&
-        WHY_THEM_GAP.test(d.bodyDraft) &&
-        (d.bodyFinal === undefined || d.bodyFinal === d.bodyDraft),
+        (d.bodyFinal === undefined || d.bodyFinal === d.bodyDraft
+          ? !!placeholderIn(d.bodyDraft) || asks(d)
+          : !!placeholderIn(d.bodyFinal)),
     )
     .toArray();
   let changed = 0;
@@ -1488,7 +1493,7 @@ export async function fillWhyThemGaps(user: User, now = new Date()): Promise<num
       chat,
       now,
     );
-    if (out.needsInput.includes('connection')) continue;
+    if (placeholderIn(out.body) || out.needsInput.some((n) => n !== 'resume' && n !== 'post')) continue;
     await db.outbound.update(d.id, {
       subject: d.externalThreadId ? d.subject : (out.subject ?? d.subject),
       bodyDraft: bodyFor(out, d.channel as 'gmail' | 'linkedin', d.kind, !!person.linkedinConnectedOn),
@@ -1727,6 +1732,13 @@ async function addConfirmationCards(userId: string, now: Date): Promise<void> {
   for (const m of merges) {
     const [a, b] = await Promise.all([db.people.get(m.personAId), db.people.get(m.personBId)]);
     if (!a || !b) continue;
+    // two LinkedIn profiles are two people: a pair asked before both profiles were known is never asked
+    if (differentLinkedInProfiles(a, b)) {
+      await db.merges.update(m.id, { status: 'stale' });
+      const shown = await db.suggestions.where('dedupeKey').equals(`merge:${m.id}`).toArray();
+      await retireSuggestions(shown, 'different_linkedin_profiles', now);
+      continue;
+    }
     // a guess with little behind it (different first names, no shared address) waits behind "can wait"; it does not
     // take one of the few spots in the brief
     const lower = (x?: string) => (x ?? '').trim().toLowerCase();

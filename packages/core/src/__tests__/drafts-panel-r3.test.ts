@@ -626,10 +626,12 @@ describe('check-ins have one purpose', () => {
     expect(d.body).toMatch(
       /Thanks again for talking with me in August after Sofia's intro about choosing between Postgres and Elasticsearch\./,
     );
-    expect(d.needsInput).toContain('update');
-    expect(d.body).not.toMatch(/I'm recruiting for/);
+    // no update on record: a plain check-in, ready to send ("recruiting this cycle" is still no update)
+    expect(d.needsInput).toEqual([]);
+    expect(d.body).toMatch(/I wanted to check in and see how things are going\./);
+    expect(d.body).not.toMatch(/I'm recruiting for|\[/);
   });
-  it('a check-in with nothing only true of them asks the student for one thing from the conversation', () => {
+  it('a check-in with nothing only true of them is still ready to send, and uses a takeaway when given', () => {
     const d = generateDraft(
       base({
         kind: 'nurture',
@@ -637,7 +639,8 @@ describe('check-ins have one purpose', () => {
         targetCompany: { name: 'Linear', roleLabel: 'Software Engineering Intern' },
       }),
     );
-    expect(d.needsInput).toContain('takeaway');
+    expect(d.needsInput).toEqual([]);
+    expect(d.body).not.toMatch(/\[/);
     const filled = generateDraft(
       base({
         kind: 'nurture',
@@ -668,7 +671,7 @@ describe('check-ins have one purpose', () => {
 });
 
 describe('closing loops honestly', () => {
-  it('a report-back promises once, never reports a non-event as an action, and asks for one thing from the call', () => {
+  it('a report-back promises once, never reports a non-event as an action, and is whole without notes', () => {
     const noReply = generateDraft(
       base({ kind: 'report_back', reportBack: { targetName: 'Lucas Fischer', outcome: 'no_reply' } }),
     );
@@ -680,8 +683,8 @@ describe('closing loops honestly', () => {
         reportBack: { targetName: 'Lucas Fischer', outcome: 'spoke', when: 'on Tuesday' },
       }),
     );
-    expect(spoke.needsInput).toEqual(['takeaway']);
-    expect(spoke.body).toMatch(/We spoke on Tuesday, and \[one thing Lucas said/);
+    expect(spoke.needsInput).toEqual([]);
+    expect(spoke.body).toMatch(/We spoke on Tuesday, and it was really helpful\./);
   });
   it('a last bump restates the ask with the cheapest way to answer, and never "I promise" or "leave you be"', () => {
     for (const relationshipType of ['friend', 'alumni', 'unknown'])

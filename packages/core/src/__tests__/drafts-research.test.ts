@@ -70,7 +70,7 @@ describe('the research opener in a first message (docs/plan/20 §6)', () => {
     expect(`${d.bodyShort ?? ''} ${d.body}`).toContain(OPENER);
   });
 
-  it('a human link (a shared school) still leads; without an opener the student is asked for the line', () => {
+  it('a human link (a shared school) still leads; without an opener the draft is still whole', () => {
     const alum = generateDraft(
       stranger({
         researchOpener: OPENER,
@@ -81,7 +81,8 @@ describe('the research opener in a first message (docs/plan/20 §6)', () => {
     const none = generateDraft(
       stranger({ person: { ...stranger().person, headline: undefined, org: undefined } }),
     );
-    expect(none.body).toMatch(WHY_THEM_GAP);
+    expect(none.body).not.toMatch(WHY_THEM_GAP);
+    expect(none.body).toMatch(/I came across your profile and thought I'd introduce myself\./);
   });
 
   it('is one sentence, ended, and never a bracketed prompt', () => {

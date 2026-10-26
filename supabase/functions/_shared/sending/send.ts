@@ -12,6 +12,7 @@
  * audit log records it. A 429 or 5xx hands it back as approved for the queue to retry.
  */
 import { FIRST_TOUCH_KINDS } from '@orbit/core/drafts/compose';
+import { placeholderIn } from '@orbit/core/drafts/validate';
 import { cancelIfReplied } from '@orbit/core/pipeline/cadence';
 import { checkSend, messageHash, type SafetyViolation } from '@orbit/core/safety/rules';
 import type { DraftApproveRequest, ServerDraft } from '@orbit/core/server/api';
@@ -88,9 +89,15 @@ export async function approveDraft(
   if (d.status === 'sending' || d.status === 'sent') return toServerDraft(d);
   if (!['draft', 'approved', 'scheduled', 'failed'].includes(d.status))
     throw new HttpError(409, 'not_approvable', `a ${d.status} draft cannot be approved`);
-  const needs = askUserMarkers(`${d.subject ?? ''}\n${d.body}`);
-  if (needs.length)
-    throw new HttpError(409, 'needs_input', `fill in what the draft asks for first: ${needs.join('; ')}`);
+  const text = `${d.subject ?? ''}\n${d.body}`;
+  const needs = askUserMarkers(text);
+  const gap = needs.length ? undefined : placeholderIn(text);
+  if (needs.length || gap)
+    throw new HttpError(
+      409,
+      'needs_input',
+      `fill in what the draft asks for first: ${needs.length ? needs.join('; ') : gap}`,
+    );
   const [p] = await db.sql<{ do_not_contact: boolean; timezone: string | null }>`
     select do_not_contact, timezone from orbit.people where id = ${d.person_id}::uuid`;
   if (p?.do_not_contact) throw new HttpError(409, 'do_not_contact', 'they asked not to be contacted');
@@ -224,8 +231,11 @@ export async function sendDraft(s: Services, draftId: string): Promise<SendResul
        where id = ${d.id}::uuid`;
   };
 
-  // [ASK USER: …] never goes out
-  if (askUserMarkers(`${d.subject ?? ''}\n${d.body}`).length) {
+  // [ASK USER: …], or any other blank left for the user (one with its brackets deleted too), never goes out
+  if (
+    askUserMarkers(`${d.subject ?? ''}\n${d.body}`).length ||
+    placeholderIn(`${d.subject ?? ''}\n${d.body}`)
+  ) {
     await settle('draft', { error: 'needs_input' });
     return { status: 'held', reason: 'needs_input' };
   }
