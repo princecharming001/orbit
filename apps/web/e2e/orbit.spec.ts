@@ -1853,9 +1853,16 @@ test.describe('Usability round 5: one draft, kept edits, saved settings, chats t
     await page.goto('settings/goals');
     await expect(page.getByText('What kind of work')).toBeVisible();
     await page.locator('#goals-locations').fill('Chicago');
-    await expect(page.getByTestId('autosave')).toContainText(/save as you make them/i);
+    await expect(page.getByTestId('autosave').first()).toContainText(/save as you make them/i);
+    // the demo student's own words from setup are there to edit, and save the same way
+    await expect(page.getByTestId('goals-neverDo')).toHaveValue(/Never mention my GPA/);
+    await page.getByTestId('goals-success').fill('Three chats at Stripe by November.');
+    await expect(page.getByTestId('settings-own-words').getByTestId('autosave')).toContainText(
+      /save as you make them/i,
+    );
     await page.reload();
     await expect(page.locator('#goals-locations')).toHaveValue('Chicago');
+    await expect(page.getByTestId('goals-success')).toHaveValue('Three chats at Stripe by November.');
     // without Google, nothing here talks about reading email
     await page.goto('settings/privacy');
     await expect(page.getByRole('main')).not.toContainText(/Google/);
@@ -2079,6 +2086,14 @@ test.describe('Usability round 5 on a phone', () => {
   }) => {
     await prep(page);
     const fits = async () => {
+      // measured once the step has slid into place
+      await page.waitForFunction(() =>
+        document
+          .getAnimations()
+          .every(
+            (a) => a.playState !== 'running' || a.effect?.getTiming().iterations === Number.POSITIVE_INFINITY,
+          ),
+      );
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
       const button = await page
         .getByRole('button', { name: /^(get started|continue)$/i })

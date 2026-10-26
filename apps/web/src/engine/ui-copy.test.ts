@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { db } from '../db/schema';
 import { briefSummaryText, needsWarmUp, refreshPersonSummary, startWarmUpOrOutreach } from './brief';
 import { DEMO_USER_ID, demoResetPrompt } from './demo';
-import { buildPrep, CLOSING_QUESTION, personSummary, sayWhen, withArticle } from './prep';
+import { buildPrep, CLOSING_QUESTION, personSummary, sayWhen, storyIntro, withArticle } from './prep';
 import { timeAgo } from './send';
 import { addTargetCompany, isDuplicateTarget } from './targets';
 
@@ -210,6 +210,25 @@ describe('prep (EG-13)', () => {
     for (const plan of [swe, banker, recruiter])
       for (const t of [plan.goal, plan.ask, plan.intro ?? '', ...plan.questions, ...plan.logisticsTips])
         expect(t).not.toMatch(BANNED);
+  });
+  it('opens the intro with the story the student wrote in setup (plan 24)', () => {
+    const story = "I'm a junior at Michigan studying CS. I built a campus marketplace 800 students use";
+    const p = buildPrep({
+      ...base,
+      goals: { ...base.goals, story },
+      person: person({ currentTitle: 'Software Engineer', currentOrganizationRaw: 'Stripe' }),
+    });
+    expect(p.intro).toMatch(
+      /^I'm a junior at Michigan studying CS\. I built a campus marketplace 800 students use\. /,
+    );
+    expect(p.intro).toMatch(/recruiting for software engineering roles/);
+    expect(p.intro).not.toMatch(/Ford/);
+    expect(p.introMissing).toBeUndefined();
+    expect(storyIntro('a junior who builds tools for food banks', 'Sam')).toBe(
+      "I'm Sam, a junior who builds tools for food banks.",
+    );
+    expect(storyIntro('Junior at Michigan.', 'Sam')).toBe("I'm Sam. Junior at Michigan.");
+    expect(storyIntro('   ', 'Sam')).toBeUndefined();
   });
   it('asks the student for missing facts instead of inventing an intro line', () => {
     const p = buildPrep({ ...base, resumeFacets: [], person: person() });

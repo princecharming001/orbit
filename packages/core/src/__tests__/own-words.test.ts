@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { brokenNeverRules, neverDoChecks } from '../drafts/neverDo';
+import { validateDraft } from '../drafts/validate';
 import {
   answeredCount,
   cleanAnswer,
@@ -73,6 +74,16 @@ describe('the never rules', () => {
     expect(neverDoChecks('Never sound desperate')).toEqual([]);
     expect(neverDoChecks('Never write to two people at the same company on the same day')).toEqual([]);
     expect(neverDoChecks(undefined)).toEqual([]);
+  });
+});
+
+describe('a draft held to the never rules', () => {
+  it('warns, without blocking, when a message breaks one', () => {
+    const opts = { kind: 'outreach' as const, facts: [], allowedUrls: [], recipientFirstName: 'Maya' };
+    const body = 'Hi Maya! My GPA is 3.9 and I would love 15 minutes.';
+    const issues = validateDraft({ body, claims: [] }, { ...opts, neverDo: 'Never mention my GPA.' });
+    expect(issues).toContainEqual({ code: 'never_do', detail: 'Never mention my GPA', blocking: false });
+    expect(validateDraft({ body, claims: [] }, opts).some((i) => i.code === 'never_do')).toBe(false);
   });
 });
 
