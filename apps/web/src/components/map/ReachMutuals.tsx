@@ -80,8 +80,22 @@ function useStandings(
 ): { standing?: Map<string, MutualStanding>; notes: number } {
   const [state, setState] = useState<{ standing?: Map<string, MutualStanding>; notes: number }>({ notes: 0 });
   const key = ids.join('|');
-  // the student's closeness to a mutual changing (a reply read, plan 27) re-ranks the list too
+  // the student's closeness to a mutual changing (a reply read, plan 27) re-ranks the list too: only a change after
+  // the first value, so the first ranking is never restarted
   const closeness = useClosenessKey(ids);
+  const rerun = useRef<(() => void) | undefined>(undefined);
+  const lastCloseness = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (closeness === undefined) return;
+    const same = (a?: string, b?: string) => a?.split('#')[0] === b?.split('#')[0];
+    if (
+      lastCloseness.current !== undefined &&
+      same(lastCloseness.current, closeness) &&
+      lastCloseness.current !== closeness
+    )
+      rerun.current?.();
+    lastCloseness.current = closeness;
+  }, [closeness]);
   useEffect(() => {
     if (!ids.length) return;
     let live = true;
@@ -92,6 +106,7 @@ function useStandings(
         setState((s) => ({ standing: mutualStandings(g, targetId, ids), notes: s.notes + (theirs ? 1 : 0) }));
     };
     void run(false);
+    rerun.current = () => void run(false);
     const offE = subscribeHopEvidence(() => {
       clearTimeout(timer);
       timer = setTimeout(() => void run(false), 1500);
@@ -99,11 +114,12 @@ function useStandings(
     const offN = subscribePairNotes(() => void run(true));
     return () => {
       live = false;
+      rerun.current = undefined;
       clearTimeout(timer);
       offE();
       offN();
     };
-  }, [userId, targetId, key, closeness]);
+  }, [userId, targetId, key]);
   return state;
 }
 

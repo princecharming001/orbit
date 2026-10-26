@@ -129,30 +129,29 @@ async function rapportByPerson(
   touchpoints: Touchpoint[],
   only?: string,
 ): Promise<Map<string, TieRapport[]>> {
-  const [user, settings, messages, threads, texts] = await Promise.all([
+  const out = new Map<string, TieRapport[]>();
+  const settings = await db.settings.get(userId);
+  if (settings?.readReplyTone === false) return out;
+  const [user, messages, texts] = await Promise.all([
     db.users.get(userId),
-    db.settings.get(userId),
-    only
-      ? db.messages.where('fromPersonId').equals(only).toArray()
-      : db.messages
-          .where('userId')
-          .equals(userId)
-          .filter((m) => !!m.fromPersonId)
-          .toArray(),
-    db.threads.where('userId').equals(userId).toArray(),
+    (only ? db.messages.where('fromPersonId').equals(only) : db.messages.where('userId').equals(userId))
+      .filter((m) => !!m.fromPersonId && m.direction === 'inbound' && !!m.extraction?.rapport)
+      .toArray(),
     only
       ? db.textThreads.where('personId').equals(only).toArray()
       : db.textThreads.where('userId').equals(userId).toArray(),
   ]);
-  const out = new Map<string, TieRapport[]>();
-  if (settings?.readReplyTone === false) return out;
+  // only the threads behind these replies, for their size
+  const threads = await db.threads.bulkGet([...new Set(messages.map((m) => m.threadId))]);
   const sources = new Map<string, RapportSource[]>();
   const add = (pid: string, r: RapportSource) => {
     const arr = sources.get(pid) ?? [];
     arr.push(r);
     sources.set(pid, arr);
   };
-  const participants = new Map(threads.map((t) => [t.id, Math.max(2, t.participantPersonIds.length + 1)]));
+  const participants = new Map(
+    threads.filter((t) => !!t).map((t) => [t!.id, Math.max(2, t!.participantPersonIds.length + 1)]),
+  );
   for (const m of messages) {
     if (!m.fromPersonId || m.direction !== 'inbound' || !m.extraction?.rapport) continue;
     add(m.fromPersonId, {
