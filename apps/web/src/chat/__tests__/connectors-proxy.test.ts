@@ -8,6 +8,7 @@ import {
   makeHandler,
   mapRelation,
   memoryLinks,
+  memorySharedReads,
   memoryTake,
   postDate,
   postgrestTake,
@@ -1183,6 +1184,34 @@ describe('orbit-connectors proxy', () => {
       return { ...h, read, waits, events };
     };
     const ok = (body: unknown) => () => new Response(JSON.stringify(body), { status: 200 });
+
+    it("shares the first page of someone's public activity for a day: one account reads it, the rest get that copy", async () => {
+      const { handler, upstream, events } = paced(
+        ok({
+          items: [{ id: '7250000000000000009', parsed_datetime: '2026-10-19T09:00:00.000Z' }],
+          cursor: 'c2',
+        }),
+        { shared: memorySharedReads(), ledger: { posts: 1 } },
+      );
+      const read = (accountId: string, body: Record<string, unknown>) =>
+        handler(post('/engagement', { accountId, token: TOKEN[accountId], ...body })).then((r) => r.json());
+      const first = await read('a1', { want: 'posts', memberId: 'ACoRecruiter' });
+      expect(first).toMatchObject({ ok: true, want: 'posts', cursor: 'c2' });
+      expect(first.shared).toBeUndefined();
+      // another student's account: the same posts, no LinkedIn read, no wait and no read spent (its ledger is 1)
+      const second = await read('acc_1', { want: 'posts', memberId: 'ACoRecruiter' });
+      expect(second).toMatchObject({ ok: true, shared: true, cursor: null });
+      expect(second.items).toEqual(first.items);
+      expect(upstream).toHaveLength(1);
+      expect(events.filter((e) => e === 'fetch')).toHaveLength(1);
+      expect((await read('acc_1', { want: 'reactions', memberId: 'ACoRecruiter' })).ok).toBe(true);
+      expect(upstream).toHaveLength(2);
+      // a later page is the account's own (a cursor is tied to the account that made it)
+      expect(await read('a1', { want: 'posts', memberId: 'ACoRecruiter', cursor: 'c2' })).toMatchObject({
+        ok: false,
+        reason: 'limit',
+      });
+    });
 
     it("maps a person's posts in one upstream call: activity ids, counters, reposts, and whom they mention", async () => {
       const { read, upstream, waits, events } = paced(

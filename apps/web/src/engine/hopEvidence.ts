@@ -76,6 +76,8 @@ export async function liveHopReader(user: Pick<User, 'id'>): Promise<HopReader |
         token,
         recommendations: true,
         purpose: 'route',
+        // followers and recommendations are what anyone sees: a copy another student read today will do
+        shared: true,
       });
       if (!r.ok) return failed(r.reason, r.message);
       return {

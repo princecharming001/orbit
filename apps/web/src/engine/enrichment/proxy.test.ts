@@ -5,6 +5,7 @@ import {
   defaultOrigins,
   makeHandler,
   mapProfile,
+  memorySharedReads,
   memoryTake,
 } from '../../../../../supabase/functions/orbit-connectors/connectors';
 
@@ -16,6 +17,7 @@ const ORIGIN = 'https://princecharming001.github.io';
 const BASE = 'https://proxy.test/functions/v1/orbit-connectors';
 const SIGNING = 'test-signing-key-not-a-real-one';
 const TOKEN = await accountToken('a1', SIGNING);
+const TOKEN_B = await accountToken('b2', SIGNING);
 const licdn = (n: string) => `https://media.licdn.com/dms/image/v2/${n}?e=1900000000&v=beta&t=x`;
 
 /** A LinkedIn profile as Unipile returns it (fields per its API reference and unipile-node-sdk's types). */
@@ -207,6 +209,67 @@ describe('enrichment routes of the connector proxy', () => {
     expect((await handler(post('/profile', { accountId: 'a1', token: TOKEN, identifier: 'x' }))).status).toBe(
       502,
     );
+  });
+
+  it('shares what anyone would see of a profile for a day: one account reads, the others get that copy', async () => {
+    const at = new Date('2026-10-26T09:00:00Z');
+    const { handler, upstream } = harness({
+      shared: memorySharedReads(),
+      ledger: { profile: 1 },
+      now: () => at,
+      take: memoryTake(() => at.getTime()),
+    });
+    const read = (accountId: string, token: string, extra: Record<string, unknown> = {}) =>
+      handler(
+        post('/profile', {
+          accountId,
+          token,
+          identifier: 'ACoAAA123',
+          sections: ['experience', 'education'],
+          ...extra,
+        }),
+      ).then((r) => r.json());
+    // the first student's own read: theirs in full, contact details and distance included
+    const first = await read('a1', TOKEN, { public: true });
+    expect(first.shared).toBeUndefined();
+    expect(first.profile).toMatchObject({ distance: 1, contact: { emails: ['omar@berkeley.edu'] } });
+    expect(upstream).toHaveLength(1);
+    // another student who only needs what anyone sees gets that copy: no LinkedIn read, no read spent, and never
+    // the first student's view (contact details, distance)
+    const second = await read('b2', TOKEN_B, { public: true });
+    expect(second).toMatchObject({ ok: true, shared: true });
+    expect(second.profile.experience[0]).toMatchObject({ company: 'Enactus Berkeley' });
+    expect(second.profile.contact).toBeUndefined();
+    expect(second.profile.distance).toBeUndefined();
+    expect(upstream).toHaveLength(1);
+    expect(await read('b2', TOKEN_B, { public: true })).toMatchObject({ ok: true, shared: true });
+    // the same student asking for their own view (a connection: contact details) reads from their account
+    const own = await read('b2', TOKEN_B);
+    expect(own.shared).toBeUndefined();
+    expect(upstream).toHaveLength(2);
+    // other sections are another read
+    expect((await read('a1', TOKEN, { public: true, sections: ['about'] })).ok).toBe(false);
+  });
+
+  it('never shares a read LinkedIn held sections back on', async () => {
+    const shared = memorySharedReads();
+    const { handler, upstream } = harness(
+      { shared },
+      () => new Response(JSON.stringify({ ...UNIPILE_PROFILE, throttled_sections: ['experience'] })),
+    );
+    const read = (accountId: string, token: string) =>
+      handler(
+        post('/profile', {
+          accountId,
+          token,
+          identifier: 'ACoAAA123',
+          sections: ['experience'],
+          public: true,
+        }),
+      ).then((r) => r.json());
+    await read('a1', TOKEN);
+    expect((await read('b2', TOKEN_B)).shared).toBeUndefined();
+    expect(upstream).toHaveLength(2);
   });
 
   it('needs the account token, and stops an account at its daily profile reads', async () => {

@@ -105,6 +105,93 @@ export interface ConnectorDeps {
   publicUrl?: string;
   /** job postings (plan 23 §4.1): the model key, the shared cache, and how many reads a visitor gets a day */
   postings?: PostingDeps & { perDay?: number };
+  /** public LinkedIn reads shared across students for a day (SharedReads); without it every read is the account's */
+  shared?: SharedReads;
+}
+
+/**
+ * Public LinkedIn reads kept a day and shared across students (supabase/migrations/20261027_orbit_linkedin_shared.sql).
+ * When many students look at the same person, one account reads them and the rest get that copy: LinkedIn never sees
+ * a crowd of accounts opening one profile, and nobody spends a read twice. Only what anyone would see is kept
+ * (publicProfile drops contact details and network distance); keys are hashes.
+ */
+export interface SharedReads {
+  get(key: string): Promise<Record<string, unknown> | undefined>;
+  put(key: string, value: Record<string, unknown>): Promise<void>;
+}
+
+export function memorySharedReads(): SharedReads {
+  const m = new Map<string, Record<string, unknown>>();
+  return {
+    get: async (k) => m.get(k),
+    put: async (k, v) => {
+      m.set(k, v);
+    },
+  };
+}
+
+/** The shared reads over PostgREST: two service-role-only functions over orbit_private.linkedin_shared. */
+export function postgrestSharedReads(
+  url: string,
+  serviceKey: string,
+  doFetch: typeof fetch = fetch,
+): SharedReads {
+  const headers = {
+    'content-type': 'application/json',
+    apikey: serviceKey,
+    Authorization: `Bearer ${serviceKey}`,
+  };
+  return {
+    get: async (key) => {
+      const r = await doFetch(`${url}/rest/v1/rpc/orbit_linkedin_shared_get`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ p_key: key }),
+      });
+      if (!r.ok) return undefined;
+      return ((await r.json()) as Record<string, unknown> | null) ?? undefined;
+    },
+    put: async (key, value) => {
+      await doFetch(`${url}/rest/v1/rpc/orbit_linkedin_shared_put`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ p_key: key, p_value: value }),
+      });
+    },
+  };
+}
+
+/** A shared read, or nothing when the store is missing or down (a miss: the account reads it as before). */
+async function sharedGet(deps: ConnectorDeps, key: string): Promise<Record<string, unknown> | undefined> {
+  if (!deps.shared) return undefined;
+  return deps.shared.get(key).catch(() => undefined);
+}
+async function sharedPut(deps: ConnectorDeps, key: string, value: Record<string, unknown>): Promise<void> {
+  if (!deps.shared) return;
+  await deps.shared.put(key, value).catch(() => undefined);
+}
+
+/** The shared key for one profile read: who (as written), which sections, and whether recommendations were read. */
+export async function profileShareKey(body: Record<string, unknown>): Promise<string | undefined> {
+  const identifier = text(body.identifier, 200)?.toLowerCase();
+  if (!identifier) return undefined;
+  const sections = (Array.isArray(body.sections) ? body.sections : [])
+    .map(String)
+    .filter((x) => PROFILE_SECTIONS.has(x))
+    .sort();
+  return `p1:${await sha256(`${identifier}|${[...new Set(sections)].join(',')}|${body.recommendations === true}`)}`;
+}
+
+/** The shared key for the first page of someone's public activity (pages after it are the account's own). */
+export async function engagementShareKey(r: EngagementRequest): Promise<string | undefined> {
+  if (r.cursor) return undefined;
+  return `e1:${await sha256(`${r.want}|${(r.want === 'thread' ? r.postId : r.memberId) ?? ''}`)}`;
+}
+
+/** What anyone on LinkedIn would see of a profile: never contact details or how far they are from the reader. */
+export function publicProfile(p: Record<string, unknown>): Record<string, unknown> {
+  const { distance: _d, contact: _c, ...rest } = p;
+  return rest;
 }
 
 /** Today's bucket for posting reads, per visitor: a fetch and a small model call each. */
@@ -493,6 +580,10 @@ export function makeHandler(deps: ConnectorDeps): (req: Request) => Promise<Resp
       const parsed = engagementRequest(body);
       if ('message' in parsed) return json(200, parsed, h);
       engagement = parsed;
+      // someone another student's account read today: their copy, with no read and no ledger spent
+      const key = await engagementShareKey(parsed);
+      const hit = key ? await sharedGet(deps, key) : undefined;
+      if (hit) return json(200, { ...hit, cursor: null, shared: true }, h);
     }
     // the reads that come out of a ledger: one unit per LinkedIn read (/posts/activity may make up to
     // POSTS_UPSTREAM_PER_CALL in one call, so it spends that many; /mutuals spends its own, per upstream read)
@@ -538,7 +629,10 @@ export function makeHandler(deps: ConnectorDeps): (req: Request) => Promise<Resp
       if (engagement) {
         const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
         await sleep(jitterMs(deps.random ?? Math.random));
-        return json(200, await unipileEngagement(deps, accountId, engagement, doFetch, now()), h);
+        const read = await unipileEngagement(deps, accountId, engagement, doFetch, now());
+        const key = read.ok ? await engagementShareKey(engagement) : undefined;
+        if (key) await sharedPut(deps, key, { ...read, cursor: null });
+        return json(200, read, h);
       }
       return json(200, await unipileDisconnect(deps, body, doFetch), h);
     } catch (e) {
@@ -1965,6 +2059,12 @@ async function enrichmentRoute(
     if (!deps.unipileKey || !deps.unipileBase) return unconfigured(h);
     if (!(await tokenValid(String(body.accountId ?? ''), body.token, deps.signingKey)))
       return json(403, { error: 'this LinkedIn account is not linked to this browser' }, h);
+    // a read that only needs what anyone would see (`public`): another student's account may have read it today
+    if (kind === 'profile' && body.public === true) {
+      const key = await profileShareKey(body);
+      const hit = key ? await sharedGet(deps, key) : undefined;
+      if (hit) return json(200, { ok: true, profile: hit, shared: true }, h);
+    }
     // a profile read for a route the student is looking at may use the whole ledger; photos and enrichment less
     const caller =
       kind === 'photo' ? 'photo' : kind === 'profile' && body.purpose === 'route' ? 'route' : 'enrich';
@@ -1986,7 +2086,16 @@ async function enrichmentRoute(
     }
   }
   try {
-    if (kind === 'profile') return json(200, await unipileProfile(deps, body, doFetch), h);
+    if (kind === 'profile') {
+      const read = await unipileProfile(deps, body, doFetch);
+      // every full read refreshes the shared copy, with only what anyone would see; a read LinkedIn held sections
+      // back on is this account's alone
+      if (read.ok && 'profile' in read && read.profile && !read.profile.throttled.length) {
+        const key = await profileShareKey(body);
+        if (key) await sharedPut(deps, key, publicProfile(read.profile as Record<string, unknown>));
+      }
+      return json(200, read, h);
+    }
     if (kind === 'company') return json(200, await unipileCompany(deps, body, doFetch), h);
     if (kind === 'photo') return json(200, await unipilePhoto(deps, body, doFetch), h);
     return json(200, await exaSearch(e, body, doFetch), h);

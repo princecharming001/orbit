@@ -5,6 +5,7 @@ import {
   memoryLinks,
   memoryTake,
   postgrestLinks,
+  postgrestSharedReads,
   postgrestTake,
 } from './connectors.ts';
 
@@ -98,6 +99,8 @@ Deno.serve(
       pdlKey,
     },
     sendsPerDay: num('ORBIT_LINKEDIN_SENDS_PER_DAY', 25),
+    // public LinkedIn reads shared across students for a day (orbit_private.linkedin_shared)
+    shared: url && serviceKey ? postgrestSharedReads(url, serviceKey) : undefined,
     postings: {
       anthropicKey,
       cache: url && serviceKey ? postgrestPostingCache(url, serviceKey) : undefined,

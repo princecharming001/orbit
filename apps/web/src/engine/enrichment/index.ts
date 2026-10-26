@@ -219,12 +219,13 @@ async function readProfile(
   ctx: Ctx,
   identifier: string,
   sections: string[],
+  opts: { shared?: boolean } = {},
 ): Promise<{ profile?: LinkedInProfile; stop?: string; notFound?: boolean }> {
   const kind = await profileKind(ctx);
   if (!kind || !ctx.linkedin) return {};
   await ctx.pause();
   await spend(ctx.user.id, kind, ctx.now);
-  const r = await ctx.linkedin.profile(identifier, sections);
+  const r = await ctx.linkedin.profile(identifier, sections, opts);
   if (!r.ok)
     return { stop: await stopIfLimited(ctx, r.reason, r.message), notFound: r.reason === 'not_found' };
   ctx.out.profiles++;
@@ -249,7 +250,9 @@ async function profileStep(
   if (!identifier) return {};
   // only the photo has expired: the plain profile (no sections) carries a fresh link
   const sections = needs.has('profile') ? sectionsFor(ctx, p.id) : [];
-  const r = await readProfile(ctx, identifier, sections);
+  // someone the student is not connected to shows everyone the same profile (no contact details): another student's
+  // read from today will do, so LinkedIn never sees many accounts open the same person
+  const r = await readProfile(ctx, identifier, sections, { shared: !p.linkedinConnectedOn });
   if (r.notFound) rec.profileAt = ctx.now.toISOString();
   if (!r.profile) return { stop: r.stop };
   const applied = await applyLinkedInProfile(ctx.user, p.id, r.profile, {

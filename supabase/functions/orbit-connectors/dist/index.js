@@ -647,6 +647,53 @@ function companyIntros(r) {
 
 // supabase/functions/orbit-connectors/connectors.ts
 var DEFAULT_LIMITS = { perMinute: 120, perDay: 3e3 };
+function postgrestSharedReads(url2, serviceKey2, doFetch = fetch) {
+  const headers = {
+    "content-type": "application/json",
+    apikey: serviceKey2,
+    Authorization: `Bearer ${serviceKey2}`
+  };
+  return {
+    get: async (key) => {
+      const r = await doFetch(`${url2}/rest/v1/rpc/orbit_linkedin_shared_get`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ p_key: key })
+      });
+      if (!r.ok) return void 0;
+      return await r.json() ?? void 0;
+    },
+    put: async (key, value) => {
+      await doFetch(`${url2}/rest/v1/rpc/orbit_linkedin_shared_put`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ p_key: key, p_value: value })
+      });
+    }
+  };
+}
+async function sharedGet(deps, key) {
+  if (!deps.shared) return void 0;
+  return deps.shared.get(key).catch(() => void 0);
+}
+async function sharedPut(deps, key, value) {
+  if (!deps.shared) return;
+  await deps.shared.put(key, value).catch(() => void 0);
+}
+async function profileShareKey(body) {
+  const identifier = text(body.identifier, 200)?.toLowerCase();
+  if (!identifier) return void 0;
+  const sections = (Array.isArray(body.sections) ? body.sections : []).map(String).filter((x) => PROFILE_SECTIONS.has(x)).sort();
+  return `p1:${await sha256(`${identifier}|${[...new Set(sections)].join(",")}|${body.recommendations === true}`)}`;
+}
+async function engagementShareKey(r) {
+  if (r.cursor) return void 0;
+  return `e1:${await sha256(`${r.want}|${(r.want === "thread" ? r.postId : r.memberId) ?? ""}`)}`;
+}
+function publicProfile(p) {
+  const { distance: _d, contact: _c, ...rest } = p;
+  return rest;
+}
 function postingBucket(visitor, now, perDay) {
   const b = sendBucket(`visitor:${visitor}`, now, perDay);
   return { ...b, key: b.key.replace("connectors:send:", "connectors:postings:") };
@@ -951,6 +998,9 @@ function makeHandler(deps) {
       const parsed = engagementRequest(body);
       if ("message" in parsed) return json(200, parsed, h);
       engagement = parsed;
+      const key = await engagementShareKey(parsed);
+      const hit = key ? await sharedGet(deps, key) : void 0;
+      if (hit) return json(200, { ...hit, cursor: null, shared: true }, h);
     }
     const ledgerSpend = path === "/search" ? () => spend("search", "discover") : path === "/posts/activity" ? () => spend("posts", "activity", POSTS_UPSTREAM_PER_CALL) : path === "/engagement" ? () => spend("posts", "engagement") : void 0;
     if (ledgerSpend) {
@@ -985,7 +1035,10 @@ function makeHandler(deps) {
       if (engagement) {
         const sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
         await sleep(jitterMs(deps.random ?? Math.random));
-        return json(200, await unipileEngagement(deps, accountId, engagement, doFetch, now()), h);
+        const read = await unipileEngagement(deps, accountId, engagement, doFetch, now());
+        const key = read.ok ? await engagementShareKey(engagement) : void 0;
+        if (key) await sharedPut(deps, key, { ...read, cursor: null });
+        return json(200, read, h);
       }
       return json(200, await unipileDisconnect(deps, body, doFetch), h);
     } catch (e) {
@@ -1993,6 +2046,11 @@ async function enrichmentRoute(deps, path, body, ctx) {
     if (!deps.unipileKey || !deps.unipileBase) return unconfigured2(h);
     if (!await tokenValid(String(body.accountId ?? ""), body.token, deps.signingKey))
       return json(403, { error: "this LinkedIn account is not linked to this browser" }, h);
+    if (kind === "profile" && body.public === true) {
+      const key = await profileShareKey(body);
+      const hit = key ? await sharedGet(deps, key) : void 0;
+      if (hit) return json(200, { ok: true, profile: hit, shared: true }, h);
+    }
     const caller = kind === "photo" ? "photo" : kind === "profile" && body.purpose === "route" ? "route" : "enrich";
     let within;
     try {
@@ -2011,7 +2069,14 @@ async function enrichmentRoute(deps, path, body, ctx) {
     }
   }
   try {
-    if (kind === "profile") return json(200, await unipileProfile(deps, body, doFetch), h);
+    if (kind === "profile") {
+      const read = await unipileProfile(deps, body, doFetch);
+      if (read.ok && "profile" in read && read.profile && !read.profile.throttled.length) {
+        const key = await profileShareKey(body);
+        if (key) await sharedPut(deps, key, publicProfile(read.profile));
+      }
+      return json(200, read, h);
+    }
     if (kind === "company") return json(200, await unipileCompany(deps, body, doFetch), h);
     if (kind === "photo") return json(200, await unipilePhoto(deps, body, doFetch), h);
     return json(200, await exaSearch(e, body, doFetch), h);
@@ -2429,6 +2494,8 @@ Deno.serve(
       pdlKey
     },
     sendsPerDay: num("ORBIT_LINKEDIN_SENDS_PER_DAY", 25),
+    // public LinkedIn reads shared across students for a day (orbit_private.linkedin_shared)
+    shared: url && serviceKey ? postgrestSharedReads(url, serviceKey) : void 0,
     postings: {
       anthropicKey,
       cache: url && serviceKey ? postgrestPostingCache(url, serviceKey) : void 0,
