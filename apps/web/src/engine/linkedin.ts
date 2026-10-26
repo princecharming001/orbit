@@ -235,7 +235,8 @@ export async function importLiveConnections(
     same.map((i) => known[i]),
   );
   let imported = 0;
-  let updated = 0;
+  // the unchanged are still in sync: they count as updated, as a full import would have counted them
+  let updated = same.length;
   for (let from = 0; from < rows.length; from += LIVE_IMPORT_CHUNK) {
     const part = await importConnectionRows(
       user,

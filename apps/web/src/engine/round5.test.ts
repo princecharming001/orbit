@@ -55,7 +55,8 @@ describe('usability round 5 (engine)', () => {
     }))!;
     const s = await startWarmUpOrOutreach(user, r.person.id, 'linkedin', 'manual', { skipWarmUp: true });
     const d = s.draft!;
-    const mine = `${d.bodyDraft} MYEDIT`;
+    // a draft saved by an older version, with the bracketed gap still in the student's edited text
+    const mine = `Hi Cara,\n\n[Why them: one line only true of Cara] I'm a junior at Cornell. MYEDIT`;
     await db.outbound.update(d.id, { bodyFinal: mine });
     const out = await regenerateDraft(user, d.id, { connection: 'We both rowed crew at Michigan' }, NOW, {
       mine,

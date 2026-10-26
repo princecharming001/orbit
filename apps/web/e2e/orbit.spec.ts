@@ -1123,7 +1123,14 @@ test.describe('First-run guidance and plain next steps', () => {
         });
       const people = await all<{ id: string; userId: string; firstName: string }>('people');
       const priyas = people.filter((p) => p.firstName === 'Priya').slice(0, 2);
-      const tx = idb.transaction('merges', 'readwrite');
+      // two LinkedIn profiles are never asked about: the second record is one with no profile of its own
+      const tx = idb.transaction(['merges', 'people'], 'readwrite');
+      tx.objectStore('people').put({
+        ...priyas[1]!,
+        linkedinUrl: undefined,
+        linkedinSlug: undefined,
+        linkedinMemberId: undefined,
+      });
       tx.objectStore('merges').put({
         id: 'mrg-e2e',
         userId: priyas[0]!.userId,
@@ -1798,12 +1805,9 @@ test.describe('Usability round 5: one draft, kept edits, saved settings, chats t
     page,
   }) => {
     await newStudent(page);
-    // nothing known about him but his name: the draft is still whole
-    await addByHand(page, 'Marcus Lee', '', {
-      linkedin: 'https://www.linkedin.com/in/marcus-lee-gs',
-    });
+    // nothing known about him but his name and address: the draft is still whole
+    await addByHand(page, 'Marcus Lee', '', { email: 'marcus.lee@example.com' });
     await page.getByTestId('person-write').click();
-    await page.getByTestId('warmup-skip').click();
     const box = page.getByLabel('Message body');
     await expect(box).toBeVisible({ timeout: 15_000 });
     await expect(box).not.toHaveValue(/\[|\]/);

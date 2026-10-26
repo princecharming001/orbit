@@ -294,9 +294,9 @@ describe('drafting against the demo data', () => {
       : (await draftForSuggestion(user, s))!;
     expect(d.personId).toBe(referrer!.id);
     expect(d.bodyDraft).toMatch(new RegExp(`Thanks again for connecting me with ${target!.firstName}\\.`));
-    // the introducer enjoys hearing one thing from the conversation, so the student is asked for it (panel round 3)
-    expect(d.bodyDraft).toMatch(/We spoke yesterday, and \[one thing/);
-    expect(d.needsInput).toContain('takeaway');
+    // ready to send as it is; a line from the conversation, when the student gives one, replaces the plain one
+    expect(d.bodyDraft).toMatch(/We spoke yesterday, and it was really helpful\./);
+    expect(d.needsInput ?? []).not.toContain('takeaway');
     const filled = (await regenerateDraft(user, d.id, {
       takeaway: 'he walked me through how his team runs interviews',
     }))!;
@@ -329,15 +329,17 @@ describe('drafting against the demo data', () => {
     for (const d of [ty, n]) expect((await validateStored(d)).filter((i) => i.blocking)).toEqual([]);
   });
 
-  it('a question in the thread is never answered for the student; congratulate and intro ask for what is missing', async () => {
+  it('a question in the thread is never answered for the student; congratulate and intro are whole and take what is given', async () => {
     const lena = (await people((p) => p.displayName === 'Lena Novak'))[0]!;
     const c = await draftMessage(user, lena.id, 'congratulate', 'gmail');
-    expect(c.needsInput).toEqual(['news']);
+    expect(c.needsInput).toBeUndefined();
+    expect(c.bodyDraft).not.toMatch(/\[/);
     const c2 = (await regenerateDraft(user, c.id, { news: 'your promotion to team lead' }))!;
     expect(c2.needsInput).toBeUndefined();
     expect(c2.bodyDraft).toMatch(/Just saw the news about your promotion to team lead/);
     const i = await draftMessage(user, lena.id, 'intro_request', 'gmail');
-    expect(i.needsInput).toEqual(['target']);
+    expect(i.needsInput).toBeUndefined();
+    expect(i.bodyDraft).toMatch(/you'd suggest I talk to/);
     const i2 = (await regenerateDraft(user, i.id, { target: 'Lucas Fischer, Engineering Manager at Ramp' }))!;
     // a colleague at their own firm needs no title or firm (panel round 3)
     expect(i2.bodyDraft).toMatch(/introducing me to Lucas Fischer\?/);
@@ -491,7 +493,8 @@ describe('drafting against the demo data', () => {
     const d = await draftMessage(user, p.id, 'schedule', 'gmail', chat.id);
     expect(d.externalThreadId).toBe(`ext-${thId}`);
     expect(d.bodyDraft).toMatch(/resume/);
-    expect(d.needsInput).toEqual(['resume', 'answer']);
+    expect(d.needsInput).toEqual(['resume']);
+    expect(d.bodyDraft).not.toMatch(/\[/);
     const re = (await regenerateDraft(user, d.id, { answer: SAMPLE_INPUTS.answer }))!;
     expect(re.bodyDraft).toMatch(/As for teams, mostly payments infrastructure/);
     expect(re.bodyDraft).toMatch(/Would either of these work for a quick call\?/);
@@ -522,7 +525,8 @@ describe('drafting against the demo data', () => {
     const p = (await people((x) => !!x.primaryEmail && !chatted.has(x.id) && !x.hiddenAt))[2]!;
     await newChat(p.id, { stage: 'completed', completedAt: new Date(Date.now() - 3_600_000).toISOString() });
     const bare = await draftMessage(user, p.id, 'thank_you', 'gmail');
-    expect(bare.needsInput).toEqual(['takeaway']);
+    expect(bare.needsInput).toBeUndefined();
+    expect(bare.bodyDraft).not.toMatch(/\[/);
     const re = (await regenerateDraft(user, bare.id, { takeaway: SAMPLE_INPUTS.takeaway }))!;
     expect(re.needsInput).toBeUndefined();
     expect(re.bodyDraft).toMatch(/your advice to lead every interview answer with one project story/i);
@@ -539,7 +543,8 @@ describe('drafting against the demo data', () => {
     await evaluateImmediateSuggestions(user.id, { chatId: chat.id, personId: p.id });
     const s = (await db.suggestions.where('dedupeKey').equals(`thank:${chat.id}`).first())!;
     const before = (await db.outbound.get(s.outboundMessageId!))!;
-    expect(before.needsInput).toEqual(['takeaway']);
+    expect(before.needsInput).toBeUndefined();
+    expect(before.bodyDraft).not.toMatch(/practicing system design/);
     await ingestNote(user, {
       text: `Coffee with ${p.displayName}. They recommended practicing system design with a friend before onsites.`,
       source: 'manual',
@@ -605,7 +610,9 @@ describe('drafting against the demo data', () => {
     expect(afterA.length).toBe(beforeA.length);
     expect(afterA.filter((x) => x.isCurrent).every((x) => !x.endDate)).toBe(true);
     const ca = await draftMessage(user, a.id, 'congratulate', 'gmail');
-    expect(ca.needsInput).toEqual(['news']);
+    // no news: a plain check-in, never a congratulations on nothing
+    expect(ca.needsInput).toBeUndefined();
+    expect(ca.bodyDraft).not.toMatch(/congratulat/i);
     // a new title at the same company is a new role, not a move, and its start date is not assumed
     const cb = await draftMessage(user, b.id, 'congratulate', 'gmail');
     expect(cb.needsInput).toBeUndefined();
@@ -684,11 +691,11 @@ describe('drafts review, round 2 (web)', () => {
 
   it('a posting link the student pastes goes into the referral ask', async () => {
     const maya = (await people((p) => p.displayName === 'Maya Chen'))[0]!;
-    // Maya wrote "send me the posting": the ask goes out with it, or the student is asked for it
+    // Maya wrote "send me the posting": the ask goes out with it, or says it follows
     const d = await draftMessage(user, maya.id, 'referral_ask', 'gmail');
-    // the posting (with the team she made the condition), and the resume to attach (drafts panel round 2)
-    expect(d.needsInput).toEqual(['resume', 'posting']);
-    expect(d.bodyDraft).toMatch(/\[the team you picked, and the link to the posting\]/);
+    // the resume to attach (drafts panel round 2); the posting is promised, never a blank
+    expect(d.needsInput).toEqual(['resume']);
+    expect(d.bodyDraft).toMatch(/I'll follow up with the team I picked and the link to the posting/);
     const re = (await regenerateDraft(user, d.id, {
       posting: 'https://stripe.com/jobs/listing/intern/123',
     }))!;
