@@ -19390,6 +19390,16 @@ var log = makeLogger(salt);
 var runtime = typeof EdgeRuntime !== "undefined" ? EdgeRuntime : void 0;
 var db = dbUrl ? connectDb(dbUrl, 2) : void 0;
 var cronSecret = await resolveSecret(env, db, "ORBIT_CRON_SECRET", "orbit_cron_secret");
+async function storedClaudeKey() {
+  if (!db) return void 0;
+  try {
+    const [r] = await db.sql`select public.orbit_secret('ORBIT_ANTHROPIC_API_KEY') as v`;
+    return r?.v || void 0;
+  } catch {
+    return void 0;
+  }
+}
+var claudeKey = env("ORBIT_ANTHROPIC_API_KEY") ?? await storedClaudeKey();
 var googleId = env("ORBIT_GOOGLE_CLIENT_ID");
 var googleSecret = env("ORBIT_GOOGLE_CLIENT_SECRET");
 var handlerDeps = {
@@ -19399,7 +19409,7 @@ var handlerDeps = {
   ) : void 0,
   gmailTopic: env("GMAIL_PUBSUB_TOPIC"),
   unipile: { apiKey: env("UNIPILE_API_KEY"), baseUrl: env("UNIPILE_BASE_URL") },
-  claude: makeClaude({ apiKey: env("ORBIT_ANTHROPIC_API_KEY"), db })
+  claude: makeClaude({ apiKey: claudeKey, db })
 };
 var handlers = defaultHandlers({ ...handlerDeps, agents: { env: agentEnvFrom(env) } });
 Deno.serve(

@@ -21,6 +21,20 @@ const runtime = typeof EdgeRuntime !== 'undefined' ? EdgeRuntime : undefined;
 const db = dbUrl ? connectDb(dbUrl, 2) : undefined;
 const cronSecret = await resolveSecret(env, db, 'ORBIT_CRON_SECRET', 'orbit_cron_secret');
 
+// Claude for the reply jobs (classify.message and its rapport reading, rapport.backfill; Haiku, low effort): the
+// function secret when set, else the key Orbit's chat proxy reads from orbit_private.secrets. Only these jobs get it:
+// drafting and research keep their own key (agentEnvFrom). Spend goes through the per-user ledger and caps.
+async function storedClaudeKey(): Promise<string | undefined> {
+  if (!db) return undefined;
+  try {
+    const [r] = await db.sql<{ v: string | null }>`select public.orbit_secret('ORBIT_ANTHROPIC_API_KEY') as v`;
+    return r?.v || undefined;
+  } catch {
+    return undefined;
+  }
+}
+const claudeKey = env('ORBIT_ANTHROPIC_API_KEY') ?? (await storedClaudeKey());
+
 // the ingestion handlers: a provider whose secrets are missing ends its jobs as skipped
 const googleId = env('ORBIT_GOOGLE_CLIENT_ID');
 const googleSecret = env('ORBIT_GOOGLE_CLIENT_SECRET');
@@ -34,7 +48,7 @@ const handlerDeps: HandlerDeps = {
       : undefined,
   gmailTopic: env('GMAIL_PUBSUB_TOPIC'),
   unipile: { apiKey: env('UNIPILE_API_KEY'), baseUrl: env('UNIPILE_BASE_URL') },
-  claude: makeClaude({ apiKey: env('ORBIT_ANTHROPIC_API_KEY'), db }),
+  claude: makeClaude({ apiKey: claudeKey, db }),
 };
 const handlers = defaultHandlers({ ...handlerDeps, agents: { env: agentEnvFrom(env) } });
 
