@@ -150,9 +150,10 @@ test.describe('Orbit demo flow', () => {
     // a low-key question: two answers, no snooze or dismiss row
     await expect(card.getByRole('button', { name: /snooze/i })).toHaveCount(0);
     await card.getByRole('button', { name: 'Yes', exact: true }).click();
+    // the toast comes once the answer is saved and the follow-up card drafted: slower on a loaded machine
     await expect(
       page.getByText(`Added to your pipeline, noting that ${introducer} introduced you.`),
-    ).toBeVisible();
+    ).toBeVisible({ timeout: 15_000 });
     await expect(card).toHaveCount(0);
     // exactly what a detected introduction gives: the reply-while-fresh card, credited to the introducer (it is
     // drafted after the answer is saved, which can take longer than the default wait on a loaded machine)

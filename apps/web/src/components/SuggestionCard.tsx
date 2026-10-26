@@ -288,9 +288,10 @@ export function SuggestionCard({
       toast.push({ text: 'Select the comment and copy it.', tone: 'neutral' });
     }
   };
-  // the person or the draft is still loading: a placeholder, never a card with its name and message missing
-  if ((s.personId && personRow === undefined) || (s.outboundMessageId && draftRow === undefined))
-    return <CardSkeleton />;
+  // the person or the draft is still loading: the card keeps its place from the first frame (lists never jump), with
+  // soft placeholders where the face, the name and the draft will be, never a card with them simply missing
+  const loadingPerson = !!s.personId && personRow === undefined;
+  const loadingDraft = !!s.outboundMessageId && draftRow === undefined;
   return (
     <div
       className={cx(
@@ -306,6 +307,8 @@ export function SuggestionCard({
           <Link to={`/people/${person.id}`} className="shrink-0">
             <Avatar name={person.displayName} src={person.photoUrl} id={person.id} size={40} />
           </Link>
+        ) : loadingPerson ? (
+          <span className="skeleton w-10 h-10 rounded-full shrink-0" aria-hidden />
         ) : (
           <span className="w-10 h-10 rounded-full bg-accent-soft inline-flex items-center justify-center text-accent shrink-0">
             <Sparkles size={16} />
@@ -322,8 +325,10 @@ export function SuggestionCard({
             {person && !onPersonPage && (person.currentTitle || person.currentOrganizationRaw) && (
               <RoleLine title={person.currentTitle} company={person.currentOrganizationRaw} person={person} />
             )}
+            {loadingPerson && !onPersonPage && <span className="skeleton h-3.5 w-36" aria-hidden />}
           </div>
           <p className="text-[13.5px] text-ink-2 mt-1">{s.reasonText}</p>
+          {loadingDraft && <DraftComing />}
           {draft && inFlight && (
             <div className="mt-3">
               <OutboxStatus draft={draft} />
@@ -824,33 +829,11 @@ function useOther(id?: string): Person | undefined {
   return useLiveQuery(() => (id ? db.people.get(id) : undefined), [id]) ?? undefined;
 }
 
-/** A card still loading: the shape of a card, softly sweeping, so nothing half-drawn shows. */
-function CardSkeleton() {
-  return (
-    <div
-      className="rounded-[var(--radius-card)] border border-line bg-canvas p-4"
-      role="status"
-      aria-busy="true"
-      aria-label="Loading"
-      data-testid="card-skeleton"
-    >
-      <div className="flex items-start gap-3">
-        <span className="skeleton w-9 h-9 rounded-full shrink-0" />
-        <div className="flex-1 min-w-0 space-y-2 pt-1">
-          <span className="skeleton block h-3.5 w-2/5" />
-          <span className="skeleton block h-3 w-4/5" />
-        </div>
-      </div>
-      <span className="skeleton block mt-4 h-16 w-full rounded-lg" />
-    </div>
-  );
-}
-
-/** The draft is being written: says so, with lines where the message will be. */
-function DraftComing({ first }: { first: string }) {
+/** The draft is being written (or still loading): says so when writing, with lines where the message will be. */
+function DraftComing({ first }: { first?: string }) {
   return (
     <div className="mt-3 rounded-lg bg-canvas-2 px-3 py-3" aria-busy="true" data-testid="draft-coming">
-      <p className="text-[13px] shimmer">Writing your draft to {first}…</p>
+      {first && <p className="text-[13px] shimmer">Writing your draft to {first}…</p>}
       <div className="mt-2.5 space-y-1.5" aria-hidden>
         <span className="skeleton block h-2.5 w-full" />
         <span className="skeleton block h-2.5 w-11/12" />
