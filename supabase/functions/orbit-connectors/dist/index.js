@@ -1930,6 +1930,16 @@ async function searchParameterId(deps, accountId, type, keywords, doFetch) {
   return id === void 0 || id === null || id === "" ? void 0 : String(id);
 }
 var text = (v, max = 120) => typeof v === "string" && v.trim() ? v.trim().slice(0, max) : void 0;
+function currentPositions(raw) {
+  if (!Array.isArray(raw)) return void 0;
+  const out = raw.filter((x) => !!x && typeof x === "object").map((x) => ({
+    company: text(x.company, 160) ?? "",
+    companyId: x.company_id == null ? void 0 : text(String(x.company_id), 60),
+    logoUrl: licdn(x.logo),
+    role: text(x.role, 200)
+  })).filter((x) => x.company).slice(0, 3);
+  return out.length ? out : void 0;
+}
 async function unipileSearch(deps, body, doFetch) {
   const accountId = String(body.accountId ?? "");
   const keywords = [text(body.keywords, 200)];
@@ -1963,7 +1973,8 @@ async function unipileSearch(deps, body, doFetch) {
   const kw = keywords.filter(Boolean).join(" ");
   if (kw) search.keywords = kw;
   if (Object.keys(advanced).length) search.advanced_keywords = advanced;
-  if (!kw && !Object.keys(advanced).length && !search.company && !search.school && !search.location)
+  const sweep = body.sweep === true && distance.length === 1 && distance[0] === 1;
+  if (!sweep && !kw && !Object.keys(advanced).length && !search.company && !search.school && !search.location)
     return {
       ok: false,
       reason: "bad_request",
@@ -1998,7 +2009,10 @@ async function unipileSearch(deps, body, doFetch) {
         (n) => typeof n === "number" && Number.isFinite(n) && n >= 0
       ),
       // LinkedIn's own photo link (it expires after a few weeks, so it is for showing, not keeping)
-      pictureUrl: [p.profile_picture_url, p.profile_picture_url_large].map((u) => text(u, 1e3)).find((u) => !!u && isLinkedInImage(u))
+      pictureUrl: [p.profile_picture_url, p.profile_picture_url_large].map((u) => text(u, 1e3)).find((u) => !!u && isLinkedInImage(u)),
+      // where they work now, when LinkedIn says (their company's id and logo come with it): a search page names
+      // ten people's employers for one call, where a profile read names one
+      positions: currentPositions(p.current_positions)
     })),
     cursor: b.cursor ?? null,
     total: typeof b.paging?.total_count === "number" ? b.paging.total_count : void 0

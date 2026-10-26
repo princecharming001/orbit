@@ -1898,6 +1898,24 @@ const text = (v: unknown, max = 120) =>
  * school and location by name (each turned into LinkedIn's id first; a name LinkedIn does not know becomes a
  * keyword instead). By default it looks past the student's own connections (2nd and 3rd degree).
  */
+/** A search result's current positions, trimmed to what Orbit keeps: the company, its LinkedIn id and logo, the role. */
+export function currentPositions(
+  raw: unknown,
+): { company: string; companyId?: string; logoUrl?: string; role?: string }[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out = raw
+    .filter((x): x is Record<string, unknown> => !!x && typeof x === 'object')
+    .map((x) => ({
+      company: text(x.company, 160) ?? '',
+      companyId: x.company_id == null ? undefined : text(String(x.company_id), 60),
+      logoUrl: licdn(x.logo),
+      role: text(x.role, 200),
+    }))
+    .filter((x) => x.company)
+    .slice(0, 3);
+  return out.length ? out : undefined;
+}
+
 async function unipileSearch(deps: ConnectorDeps, body: Record<string, unknown>, doFetch: typeof fetch) {
   const accountId = String(body.accountId ?? '');
   const keywords = [text(body.keywords, 200)];
@@ -1933,7 +1951,9 @@ async function unipileSearch(deps: ConnectorDeps, body: Record<string, unknown>,
   const kw = keywords.filter(Boolean).join(' ');
   if (kw) search.keywords = kw;
   if (Object.keys(advanced).length) search.advanced_keywords = advanced;
-  if (!kw && !Object.keys(advanced).length && !search.company && !search.school && !search.location)
+  // a sweep of the student's own connections (distance 1 alone) needs no keywords: it pages through who they know
+  const sweep = body.sweep === true && distance.length === 1 && distance[0] === 1;
+  if (!sweep && !kw && !Object.keys(advanced).length && !search.company && !search.school && !search.location)
     return {
       ok: false,
       reason: 'bad_request',
@@ -1977,6 +1997,9 @@ async function unipileSearch(deps: ConnectorDeps, body: Record<string, unknown>,
         pictureUrl: [p.profile_picture_url, p.profile_picture_url_large]
           .map((u) => text(u, 1000))
           .find((u): u is string => !!u && isLinkedInImage(u)),
+        // where they work now, when LinkedIn says (their company's id and logo come with it): a search page names
+        // ten people's employers for one call, where a profile read names one
+        positions: currentPositions(p.current_positions),
       })),
     cursor: b.cursor ?? null,
     total: typeof b.paging?.total_count === 'number' ? b.paging.total_count : undefined,
