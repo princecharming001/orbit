@@ -365,7 +365,7 @@ export function Landing() {
                 ],
                 [
                   'What happens to my LinkedIn data?',
-                  'You upload your LinkedIn export or connect your account. Your connections are kept in your browser and only used to find people worth meeting.',
+                  'You connect your LinkedIn account. Your connections are kept in your browser and only used to find people worth meeting.',
                 ],
                 [
                   'Can I look around before connecting anything?',
@@ -592,7 +592,7 @@ function Feature({
   );
 }
 
-/** The four steps, from a LinkedIn export to a booked call, each with a small piece of the product. */
+/** The four steps, from LinkedIn to a booked call, each with a small piece of the product. */
 function HowItWorks({ google }: { google: boolean }) {
   const sources = google ? ['LinkedIn', 'Gmail', 'Calendar'] : ['LinkedIn', 'Your notes'];
   const steps: { title: string; text: string; visual: ReactNode }[] = [
@@ -664,7 +664,7 @@ function HowItWorks({ google }: { google: boolean }) {
           <div>
             <p className="label-mono">How it works</p>
             <h2 className="display text-balance mt-3 text-[32px] md:text-[44px] max-w-[560px]">
-              From a LinkedIn export to a booked call.
+              From LinkedIn to a booked call.
             </h2>
           </div>
           <p className="text-[15px] md:text-[16px] leading-[1.6] text-ink-3 max-w-[480px]">
