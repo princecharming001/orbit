@@ -355,7 +355,10 @@ function DiscoverFeed({ tabs }: { tabs?: ReactNode }) {
   const goodOnly = params.get('good') === '1';
   const metricOf = (c: DiscoverCard) => (sortBy === 'best' ? c.metrics.score : c.metrics[sortBy]);
   const sorted = sortBy === 'best' ? allFeed : [...allFeed].sort((a, b) => metricOf(b) - metricOf(a));
-  const feed = goodOnly ? sorted.filter((c) => metricOf(c) > GOOD_OR_BETTER) : sorted;
+  // compared as the card shows it (a whole percent), so a card reading 60 never passes "better than 60"
+  const feed = goodOnly
+    ? sorted.filter((c) => Math.round(metricOf(c) * 100) > Math.round(GOOD_OR_BETTER * 100))
+    : sorted;
   const setFilter = (key: 'by' | 'good', value: string | undefined) => {
     const next = new URLSearchParams(params);
     if (value) next.set(key, value);
