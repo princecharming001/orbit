@@ -1187,6 +1187,8 @@ async function finalizeSent(
         editAfter: edited ? msg.bodyFinal : undefined,
       } as never),
     );
+    // plan 23 §4.9: ten untouched approvals of a kind earn the offer to send that kind on its own
+    if (!msg.autoSent) await step(() => import('./trust').then((m) => m.raiseTrustCards(user, now)));
   }
   await step(() =>
     audit(user.id, 'message.sent', {

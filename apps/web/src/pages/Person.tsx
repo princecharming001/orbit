@@ -26,6 +26,7 @@ import { PersonCompanyLogo } from '../components/CompanyLogo';
 import { DraftEditor, handoffWhere, OutboxStatus } from '../components/DraftEditor';
 import { MutualConnections } from '../components/MutualConnections';
 import { DossierCard } from '../components/people/DossierCard';
+import { InPlanChip } from '../components/people/InPlanChip';
 import { LinkedInHistory } from '../components/people/LinkedInHistory';
 import { PrepButton, prepIsDue } from '../components/people/PrepButton';
 import { PrepDeck } from '../components/people/PrepDeck';
@@ -473,6 +474,7 @@ export function PersonPage() {
               <span className="min-w-0" data-testid="person-position">
                 {positionLine(person)}
               </span>
+              {user && <InPlanChip userId={user.id} personId={person.id} />}
             </p>
             <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px] text-ink-3">
               {person.location && <span>{person.location}</span>}

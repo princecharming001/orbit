@@ -1,3 +1,4 @@
+export * from './compose/window';
 export * from './demo/seed';
 export * from './drafts/coach';
 export * from './drafts/compose';
@@ -62,6 +63,7 @@ export * from './scoring/tieScore';
 export * from './server/api';
 export * from './server/mappers';
 export * from './style/card';
+export { isBusinessDayKey, usHolidayName, usHolidays } from './suggestions/calendar';
 export * from './suggestions/rules';
 export * from './text/companyDomain';
 export * from './text/email';

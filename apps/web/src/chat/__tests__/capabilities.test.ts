@@ -7,8 +7,9 @@ const DASHES = /[—–]/;
 describe('capability manifest', () => {
   it('lists every inventory id once, with an area, a title, a kind and three utterances', () => {
     // the 184 of the capability inventory plus the networking agent's 22 (plan 16, and plan 20's research), autopilot, and small talk (plan 19)
-    expect(CAPABILITIES).toHaveLength(208);
-    expect(CAPABILITY_IDS.size).toBe(208);
+    // plus plan 23's job plan and chats
+    expect(CAPABILITIES).toHaveLength(212);
+    expect(CAPABILITY_IDS.size).toBe(212);
     for (const c of CAPABILITIES) {
       expect(c.id).toMatch(/^[a-z0-9_]+$/);
       expect(c.area.length).toBeGreaterThan(0);
@@ -56,7 +57,8 @@ describe('registry coverage', () => {
     expect(names.length).toBeGreaterThanOrEqual(45);
     // 69 before plan 16's networking agent added 20, then schedule_sends and create_drafts, then plan 20's
     // research_left (show_research took research_person's place: the chat reads briefs, it never starts one)
-    expect(names.length).toBe(92);
+    // plan 23: plan_for_posting, list_upcoming_chats and week_review
+    expect(names.length).toBe(95);
     expect(names.length).toBeLessThanOrEqual(95);
     expect(registry.size).toBe(names.length);
     const counts = toolCountByKind();

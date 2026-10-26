@@ -193,7 +193,11 @@ export function planPicks(input: PlanInput): Picks {
     if (input.exclude?.has(c.person.id)) continue;
     free.push(c);
   }
+  // a strong tie of the student's own comes first (a warm route never outranks it), then whoever is on the
+  // posting's team, then the best route, an alum ahead in a tie
+  const strong = (c: CompanyPerson) => (c.route.kind === 'direct' && c.route.score >= 0.6 ? 1 : 0);
   const rank = (a: CompanyPerson, b: CompanyPerson) =>
+    strong(b) - strong(a) ||
     teamFit(b, posting) - teamFit(a, posting) ||
     b.route.score - a.route.score ||
     Number(b.alum) - Number(a.alum) ||
@@ -202,6 +206,7 @@ export function planPicks(input: PlanInput): Picks {
     (list ?? []).some((n) => sameName(n, c.person.displayName));
   const chosen: { c: CompanyPerson; role: TargetPlanStep['role'] }[] = [];
   const taken = new Set<string>();
+  const usedVia = new Set<string>();
   const missing: TargetPlanStep['role'][] = [];
   for (const role of ['recruiter', 'team', 'manager'] as const) {
     // a name the posting itself gives wins its role
@@ -217,21 +222,25 @@ export function planPicks(input: PlanInput): Picks {
           !taken.has(c.person.id) && (roleOf(c, posting, input.fitRole).includes(role) || named(c, list)),
       )
       .sort((a, b) => Number(named(b, list)) - Number(named(a, list)) || rank(a, b));
-    const pick = cands[0];
+    // one introducer is not asked for three intros at once: someone else's route first, when there is one
+    const pick = cands.find((c) => !c.route.via || !usedVia.has(c.route.via.id)) ?? cands[0];
     if (!pick) {
       missing.push(role);
       continue;
     }
     taken.add(pick.person.id);
+    if (pick.route.via) usedVia.add(pick.route.via.id);
     chosen.push({ c: pick, role });
   }
   // a role nobody fills: the best remaining way in takes the slot, alumni first, under what they are
   for (const _ of missing) {
-    const pick = free
+    const rest = free
       .filter((c) => !taken.has(c.person.id) && c.route.kind !== 'cold')
-      .sort((a, b) => Number(b.alum) - Number(a.alum) || rank(a, b))[0];
+      .sort((a, b) => Number(b.alum) - Number(a.alum) || rank(a, b));
+    const pick = rest.find((c) => !c.route.via || !usedVia.has(c.route.via.id)) ?? rest[0];
     if (!pick) break;
     taken.add(pick.person.id);
+    if (pick.route.via) usedVia.add(pick.route.via.id);
     const r = roleOf(pick, posting, input.fitRole);
     chosen.push({ c: pick, role: pick.alum ? 'alum' : (r[0] ?? 'team') });
   }

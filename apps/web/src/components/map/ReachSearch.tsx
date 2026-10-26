@@ -148,7 +148,11 @@ export function ReachSearch({
   return (
     // pinned to the top of the panel, so it stays at hand while the routes below scroll
     <div
-      className="sticky -top-4 z-10 -mx-4 -mt-4 space-y-3 bg-canvas px-4 pt-4 pb-2"
+      className={cx(
+        'sticky -top-4 z-10 -mx-4 -mt-4 space-y-3 bg-canvas px-4 pt-4 pb-2',
+        // on a phone, with a route or a company open below, the routes come first: Exit reach brings the search back
+        compact && '@max-4xl:hidden',
+      )}
       data-testid="reach-search"
     >
       <form

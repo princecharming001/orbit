@@ -15,6 +15,7 @@ import { copyText } from '../../../components/approve';
 import { CompanyLogo, LogoText } from '../../../components/CompanyLogo';
 import { DraftEditor, OutboxStatus } from '../../../components/DraftEditor';
 import { KIND_LABEL, SuggestionCard } from '../../../components/SuggestionCard';
+import { TargetPlanCard } from '../../../components/TargetPlanCard';
 import { db } from '../../../db/schema';
 import { useShowReasoning } from '../../../state/showReasoning';
 import { Avatar, Button, Chip, cx, LinkedInMark, relDate } from '../../../ui';
@@ -148,6 +149,8 @@ function Envelope({ env, block, actions }: { env: ResultEnvelope; block: ToolBlo
       return <ImportCard env={env} actions={actions} />;
     case 'prep':
       return <PrepCard env={env} />;
+    case 'plan':
+      return <PlanResult env={env} />;
     case 'list':
       return <ListCard env={env} block={block} actions={actions} />;
     case 'needs_confirmation':
@@ -164,6 +167,14 @@ function Envelope({ env, block, actions }: { env: ResultEnvelope; block: ToolBlo
     default:
       return <Summary env={env} />;
   }
+}
+
+/** The plan from a posting, the same card the Map and the company page show, read live so drafting updates it. */
+function PlanResult({ env }: { env: ResultEnvelope }) {
+  const id = (env.data as { ui?: { planId?: string } } | undefined)?.ui?.planId;
+  const plan = useLiveQuery(() => (id ? db.targetPlans.get(id) : undefined), [id]);
+  if (!plan) return <Summary env={env} />;
+  return <TargetPlanCard plan={plan} />;
 }
 
 /** The envelope's own words, when the data is not something the UI can draw. */

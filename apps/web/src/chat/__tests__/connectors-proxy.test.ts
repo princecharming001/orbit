@@ -11,6 +11,7 @@ import {
   memoryTake,
   postDate,
   postgrestTake,
+  type Take,
 } from '../../../../../supabase/functions/orbit-connectors/connectors';
 
 const ORIGIN = 'https://princecharming001.github.io';
@@ -1819,6 +1820,200 @@ describe('orbit-connectors proxy', () => {
     expect(calls[0]).toMatchObject({
       url: 'https://db.test/rest/v1/rpc/orbit_proxy_take',
       body: { p_buckets: ['connectors:min:x'], p_limits: [2] },
+    });
+  });
+});
+
+// ---- job postings (plan 23 §4.1) ----------------------------------------------------------------------------------
+
+describe('orbit-connectors /posting', () => {
+  const ld = (o: Record<string, unknown>) =>
+    `<html><head><title>x</title><script type="application/ld+json">${JSON.stringify({ '@context': 'https://schema.org', '@type': 'JobPosting', ...o })}</script></head><body><h1>${String(o.title)}</h1><p>Join the Payments team. Recruiter: Priya Raman.</p></body></html>`;
+  const PAGES: Record<string, string> = {
+    'https://boards.greenhouse.io/stripe/jobs/1': ld({
+      title: 'Software Engineer Intern',
+      hiringOrganization: { '@type': 'Organization', name: 'Stripe' },
+      jobLocation: { '@type': 'Place', address: { addressLocality: 'San Francisco', addressRegion: 'CA' } },
+      validThrough: '2026-11-30T00:00:00Z',
+    }),
+    'https://jobs.lever.co/ramp/2': ld({
+      title: 'Data Engineer, New Grad',
+      hiringOrganization: 'Ramp',
+      jobLocationType: 'TELECOMMUTE',
+    }),
+    'https://jobs.ashbyhq.com/notion/3': ld({
+      title: 'Product Manager Intern',
+      hiringOrganization: { name: 'Notion' },
+      identifier: { '@type': 'PropertyValue', value: 'R-1234' },
+    }),
+    'https://figma.wd5.myworkdayjobs.com/en-US/Careers/job/4': ld({
+      title: 'Designer Intern',
+      hiringOrganization: { name: 'Figma' },
+    }),
+    'https://www.linkedin.com/jobs/view/5':
+      '<html><title>Analyst | Evercore | LinkedIn</title><body>Evercore is hiring an Analyst in New York.</body></html>',
+    'https://careers.example.com/role/6':
+      '<html><title>Careers</title><body>Backend Engineer, Billing. Acme Corp. Austin, TX. Hiring manager: Sam Ortiz.</body></html>',
+    'https://blog.example.com/post/7': '<html><title>Our offsite</title><body>We went hiking.</body></html>',
+  };
+  function postings(model?: (text: string) => Record<string, unknown>, perDay = 3) {
+    const calls = { page: 0, model: 0 };
+    const store = new Map<string, number>();
+    const take: Take = async (bs) => {
+      for (const b of bs) store.set(b.key, (store.get(b.key) ?? 0) + 1);
+      return { allowed: bs.every((b) => (store.get(b.key) ?? 0) <= b.limit) };
+    };
+    const cache = new Map<string, unknown>();
+    const handler = makeHandler({
+      unipileKey: undefined,
+      unipileBase: undefined,
+      villageKey: undefined,
+      villageBase: undefined,
+      origins: defaultOrigins,
+      take,
+      postings: {
+        anthropicKey: model ? 'model-key' : undefined,
+        perDay,
+        cache: {
+          get: async (k) => cache.get(k) as never,
+          put: async (k, _u, v) => {
+            cache.set(k, v);
+          },
+        },
+      },
+      fetch: (async (url: string, init: RequestInit = {}) => {
+        if (url === 'https://api.anthropic.com/v1/messages') {
+          calls.model++;
+          const body = JSON.parse(String(init.body)) as { messages: { content: string }[]; model: string };
+          expect(body.model).toBe('claude-haiku-5-5');
+          return new Response(
+            JSON.stringify({
+              content: [{ type: 'tool_use', name: 'posting', input: model!(body.messages[0]!.content) }],
+            }),
+            { status: 200 },
+          );
+        }
+        calls.page++;
+        if (url.includes('down.example.com')) throw new Error('connect ECONNREFUSED');
+        const html = PAGES[url.split(/[?#]/)[0]!];
+        return html
+          ? new Response(html, { status: 200, headers: { 'content-type': 'text/html' } })
+          : new Response('nope', { status: 404 });
+      }) as typeof fetch,
+    });
+    const post = async (body: unknown, origin = ORIGIN) =>
+      handler(
+        new Request(`${BASE}/posting`, {
+          method: 'POST',
+          headers: { origin, 'content-type': 'application/json', 'x-forwarded-for': '1.2.3.4' },
+          body: JSON.stringify(body),
+        }),
+      );
+    return { post, calls };
+  }
+  const model = (text: string) =>
+    /Evercore/.test(text)
+      ? { kind: 'posting', company: 'Evercore', role: 'Analyst', location: 'New York, NY' }
+      : /Acme/.test(text)
+        ? {
+            kind: 'posting',
+            company: 'Acme Corp',
+            role: 'Backend Engineer',
+            team: 'Billing',
+            managers: ['Sam Ortiz'],
+          }
+        : /Payments team/.test(text)
+          ? {
+              kind: 'posting',
+              company: 'Stripe',
+              role: 'Software Engineer Intern',
+              team: 'Payments',
+              recruiters: ['Priya Raman'],
+            }
+          : { kind: 'not_a_posting' };
+
+  it('reads Greenhouse, Lever, Ashby and Workday from their JobPosting data, with no model needed', async () => {
+    const { post } = postings();
+    const g = await (await post({ url: 'https://boards.greenhouse.io/stripe/jobs/1?gh_src=abc' })).json();
+    expect(g).toMatchObject({
+      ok: true,
+      source: 'jsonld',
+      posting: {
+        company: 'Stripe',
+        role: 'Software Engineer Intern',
+        location: 'San Francisco, CA',
+        deadline: '2026-11-30',
+      },
+    });
+    expect(await (await post({ url: 'https://jobs.lever.co/ramp/2' })).json()).toMatchObject({
+      posting: { company: 'Ramp', role: 'Data Engineer, New Grad', location: 'Remote' },
+    });
+    expect(await (await post({ url: 'https://jobs.ashbyhq.com/notion/3' })).json()).toMatchObject({
+      posting: { company: 'Notion', requisitionId: 'R-1234' },
+    });
+  });
+
+  it('LinkedIn Jobs, a careers page, and a blog post through the model; the model fills team and names', async () => {
+    const { post, calls } = postings(model, 10);
+    expect(await (await post({ url: 'https://www.linkedin.com/jobs/view/5' })).json()).toMatchObject({
+      ok: true,
+      source: 'model',
+      posting: { company: 'Evercore', role: 'Analyst' },
+    });
+    expect(await (await post({ url: 'https://careers.example.com/role/6' })).json()).toMatchObject({
+      posting: { company: 'Acme Corp', team: 'Billing', namesOnPage: { managers: ['Sam Ortiz'] } },
+    });
+    expect(await (await post({ url: 'https://blog.example.com/post/7' })).json()).toMatchObject({
+      ok: false,
+      reason: 'not_a_posting',
+      message: "That page doesn't look like a job posting. Try the company name.",
+    });
+    // structured data first, the model only for what it leaves out
+    const before = calls.model;
+    expect(await (await post({ url: 'https://boards.greenhouse.io/stripe/jobs/1' })).json()).toMatchObject({
+      posting: { team: 'Payments', namesOnPage: { recruiters: ['Priya Raman'] } },
+    });
+    expect(calls.model).toBe(before + 1);
+  });
+
+  it('a second read of the same posting is a cache hit: no fetch, nothing counted', async () => {
+    const { post, calls } = postings();
+    await post({ url: 'https://boards.greenhouse.io/stripe/jobs/1' });
+    const pages = calls.page;
+    const again = await (await post({ url: 'https://boards.greenhouse.io/stripe/jobs/1#apply' })).json();
+    expect(again).toMatchObject({ ok: true, cached: true });
+    expect(calls.page).toBe(pages);
+  });
+
+  it('spends the visitor day: three reads, then a clear answer', async () => {
+    const { post } = postings();
+    for (const u of [
+      'https://jobs.lever.co/ramp/2',
+      'https://jobs.ashbyhq.com/notion/3',
+      'https://figma.wd5.myworkdayjobs.com/en-US/Careers/job/4',
+    ])
+      expect((await (await post({ url: u })).json()).ok).toBe(true);
+    expect(await (await post({ url: 'https://boards.greenhouse.io/stripe/jobs/1' })).json()).toMatchObject({
+      ok: false,
+      reason: 'limit',
+    });
+  });
+
+  it('an unreachable page or a private address is a clean answer, never a 500; a wrong origin is refused', async () => {
+    const { post } = postings(model);
+    const down = await post({ url: 'https://down.example.com/job/1' });
+    expect(down.status).toBe(200);
+    expect(await down.json()).toMatchObject({ ok: false, reason: 'unreachable' });
+    for (const u of ['http://localhost:54321/x', 'http://169.254.169.254/latest', 'file:///etc/passwd'])
+      expect(await (await post({ url: u })).json()).toMatchObject({ ok: false, reason: 'bad_request' });
+    expect(
+      (await post({ url: 'https://boards.greenhouse.io/stripe/jobs/1' }, 'https://evil.example')).status,
+    ).toBe(403);
+    // with no model key, a page without structured data says it is not set up
+    const { post: bare } = postings();
+    expect(await (await bare({ url: 'https://www.linkedin.com/jobs/view/5' })).json()).toMatchObject({
+      ok: false,
+      reason: 'unconfigured',
     });
   });
 });

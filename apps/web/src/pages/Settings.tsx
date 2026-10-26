@@ -37,6 +37,7 @@ import { db } from '../db/schema';
 import { deleteAllData, exportAllData, exportFilename } from '../engine/account';
 import { type Allowance, readAllowance, researchSpend } from '../engine/deepResearch';
 import { demoResetPrompt, loadDemo } from '../engine/demo';
+import { useFlag } from '../engine/flags';
 import { connectAndSyncGoogle, disconnectGoogleAccount, markGoogleNeedsReauth } from '../engine/integrations';
 import { askLine, checkIntroNote, introNoteBase, saveIntroNote } from '../engine/introNote';
 import { setMorningBrief } from '../engine/morning';
@@ -57,6 +58,7 @@ import {
   updateProfile,
 } from '../engine/settings';
 import { addTargetCompanies } from '../engine/targets';
+import { approvalStreaks, LADDER_KINDS, LADDER_WORDS, OFFER_AT, setAutoKind } from '../engine/trust';
 import { fmtFailureTime, MODEL } from '../integrations/anthropic';
 import { currentGoogleToken, googleClientId } from '../integrations/google';
 import { isAccountMode, isServerUser, startGoogleSignIn } from '../integrations/orbitApi';
@@ -464,8 +466,8 @@ function IntroNoteSection() {
       <div id="intro-note" className="scroll-mt-20">
         <div className="flex items-center gap-2">
           <Label htmlFor="intro-note-input">Your three lines</Label>
-          <span className="ml-auto">
-            <SaveState state={state} />
+          <span className="ml-auto text-[12px] text-ink-3" aria-live="polite" data-testid="intro-note-saved">
+            {state === 'saving' ? 'Saving…' : state === 'saved' ? 'Saved' : ''}
           </span>
         </div>
         <p className="text-[12.5px] text-ink-3 mb-2">
@@ -1218,6 +1220,58 @@ function StyleCoach() {
   return <OutreachCoach user={user} />;
 }
 
+/**
+ * The trust ladder as it stands (plan 23 §4.9): each kind Orbit may send on its own, earned by approvals without an
+ * edit, with a switch; and what it never sends on its own.
+ */
+function TrustLadder() {
+  const user = useSession().user!;
+  const on = useFlag('trustLadder');
+  const settings = useLiveQuery(() => db.settings.get(user.id), [user.id]);
+  const streaks = useLiveQuery(() => approvalStreaks(user.id), [user.id]);
+  if (!on || !settings || !streaks) return null;
+  const auto = new Set(settings.autoKinds ?? []);
+  return (
+    <section className="space-y-2" data-testid="settings-ladder">
+      <h2 className="text-[13px] font-medium text-ink">What Orbit sends on its own</h2>
+      <p className="text-[12.5px] text-ink-3">
+        After you approve {OFFER_AT} of a kind without changing a word, Orbit offers to send that kind itself,
+        by email, in their morning. You see each one after it goes, and can undo it for a minute.
+      </p>
+      <ul className="divide-y divide-line-2">
+        {LADDER_KINDS.map((k) => {
+          const w = LADDER_WORDS[k];
+          const mine = auto.has(k);
+          return (
+            <li
+              key={k}
+              className="py-2 flex items-center gap-3 text-[13.5px]"
+              data-testid="settings-ladder-row"
+            >
+              <span className="font-medium w-40 shrink-0">{w.title}</span>
+              <span className="flex-1 text-ink-3" data-testid="settings-ladder-state">
+                {mine
+                  ? 'Orbit sends'
+                  : streaks[k].unedited >= OFFER_AT
+                    ? 'earned, asks you'
+                    : `${Math.min(streaks[k].unedited, OFFER_AT)} of ${OFFER_AT} approved`}
+              </span>
+              <Switch
+                checked={mine}
+                onChange={(v: boolean) => void setAutoKind(user.id, k, v)}
+                label={`Orbit sends ${w.many} on its own`}
+              />
+            </li>
+          );
+        })}
+      </ul>
+      <p className="text-[12.5px] text-ink-3" data-testid="settings-ladder-never">
+        Never on its own: first messages, intro asks, anything on LinkedIn.
+      </p>
+    </section>
+  );
+}
+
 function Limits() {
   const user = useSession().user!;
   const settings = useLiveQuery(() => db.settings.get(user.id), [user.id]);
@@ -1230,6 +1284,7 @@ function Limits() {
   };
   return (
     <div className="space-y-4">
+      <TrustLadder />
       <section className="grid @[40rem]:grid-cols-2 gap-4 items-start">
         <div className="@[40rem]:col-span-2 flex items-baseline justify-between -mb-1">
           <h2 className="text-[13px] font-medium text-ink">First messages a week</h2>

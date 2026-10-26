@@ -26,6 +26,7 @@ export const SUGGESTION_KIND_LABELS: Record<
   confirm_merge: { label: 'Possible duplicate', tone: 'neutral' },
   confirm_note_match: { label: 'Match note', tone: 'neutral' },
   confirm_intro: { label: 'Introduction?', tone: 'neutral' },
+  trust_offer: { label: 'Send on its own?', tone: 'accent' },
 };
 
 /**

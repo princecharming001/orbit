@@ -1,5 +1,6 @@
 import type { ChatStage, MessageKind } from '@orbit/core';
 import { mayHoldFacts } from '@orbit/core';
+import { isJobLink, linkIn, saysApplying } from '../../integrations/postings';
 import type { ChoiceOption, ToolSpec } from '../types';
 import { type MatchablePerson, resolvePerson } from './people-match';
 import { followUp, resolveReferences } from './routerFollowUp';
@@ -397,6 +398,37 @@ function routeInner(raw: string, ctx: RouterContext): RouterIntent {
       };
     return { kind: 'tool', tool, input: parsed.data as Record<string, unknown>, lead };
   };
+  // plan 23 §4.1: a job link, or "I'm applying to Stripe", is the plan for that posting
+  {
+    // read from what was typed: the cleanup below the greeting never touches a link
+    const link = linkIn(raw);
+    if (
+      link &&
+      (isJobLink(link) || /\b(job|posting|role|position|opening|apply|applying)\b/i.test(lower)) &&
+      has('plan_for_posting')
+    )
+      return viaTool('plan_for_posting', { url: link }, undefined, 'plan for a posting');
+    if (saysApplying(raw) && has('plan_for_posting')) {
+      const what = raw.replace(/^.*?\b(?:applying|apply)\s+(?:to|at|for)\s+/i, '').trim();
+      if (what) return viaTool('plan_for_posting', { text: what }, undefined, 'plan for a posting');
+    }
+    // plan 23 §4.4: the week's chats
+    if (
+      /\b(upcoming|next|this week'?s?|today'?s?)\s+(coffee\s+)?chats\b|\bmy coffee chats\b|\bwho am i (meeting|talking to)\b|\bchats? (coming up|this week|today)\b/i.test(
+        lower,
+      ) &&
+      has('list_upcoming_chats')
+    )
+      return viaTool('list_upcoming_chats', {}, undefined, 'list your chats');
+    // plan 23 §4.8: the week in review
+    if (
+      /\bhow (did|was) my week\b|\b(weekly|week'?s?) (review|recap)\b|\bwhat moved this week\b/i.test(
+        lower,
+      ) &&
+      has('week_review')
+    )
+      return viaTool('week_review', {}, undefined, 'review your week');
+  }
   // "her", "them" or "the top 3" are never a name (a prefix match would find "Herrera"): with nothing shown before,
   // they mean nobody yet, and the reply asks who
   const person = (name: string): { person?: MatchablePerson; candidates: MatchablePerson[] } => {

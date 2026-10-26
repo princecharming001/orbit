@@ -2,6 +2,7 @@ import { ArrowDown, CircleDashed } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ActivityLine } from '../../components/ActivityLine';
+import { CurrentJobPlan } from '../../components/CurrentJobPlan';
 import { NextChatLine } from '../../components/NextChatLine';
 import { useSession } from '../../state/session';
 import { cx } from '../../ui';
@@ -123,6 +124,8 @@ export function ChatHome() {
             </p>
           )}
           <NextChatLine />
+          {/* plan 23 §4.1: the job pasted while setting up, planned once the network is in */}
+          <CurrentJobPlan networkIn={status.ready && !status.empty && status.linkedin} />
           {/* on a phone the status line has no sidebar: it sits here, quietly (plan 23 §4.7) */}
           <div className="md:hidden flex justify-center -mt-2 mb-3">
             <ActivityLine below className="max-w-[320px]" />

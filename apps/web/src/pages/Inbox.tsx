@@ -10,7 +10,9 @@ import { PersonCompanyLogo } from '../components/CompanyLogo';
 import { DraftEditor, OutboxStatus } from '../components/DraftEditor';
 import { DraftsSplit } from '../components/DraftsSplit';
 import { RepliesChecked } from '../components/RepliesChecked';
+import { SentForYou } from '../components/SentForYou';
 import { KIND_LABEL, SuggestionCard } from '../components/SuggestionCard';
+import { openWeekReview } from '../components/WeekReview';
 import { db } from '../db/schema';
 import { cancelScheduled } from '../engine/autopilot';
 import { ensureDrafts, generateBrief, isMessageSuggestion, revalidatePending } from '../engine/brief';
@@ -77,6 +79,23 @@ export function InboxPage() {
   const split = width >= 1100;
   const sideBySide = split ? width >= 1300 : width >= 896;
   const [params] = useSearchParams();
+  // the week's review, from Sunday evening until the next one (and the notification's link opens it)
+  const lastReview = useLiveQuery(
+    async () =>
+      userId
+        ? (
+            await db.briefs
+              .where('userId')
+              .equals(userId)
+              .filter((b) => b.kind === 'recap' && Date.now() - Date.parse(b.generatedAt) < 8 * 86_400_000)
+              .toArray()
+          ).length > 0
+        : false,
+    [userId],
+  );
+  useEffect(() => {
+    if (params.get('review') === '1') openWeekReview();
+  }, [params]);
   // a link that points at one card (a warm-up just started, a board's next step): show it and outline it
   const focusCard = params.get('card') ?? undefined;
   const focusPerson = params.get('person') ?? undefined;
@@ -253,16 +272,24 @@ export function InboxPage() {
         actions={
           // with nobody in Orbit yet there is nothing to refresh
           visiblePeople > 0 && (
-            <Button
-              onClick={refresh}
-              disabled={busy}
-              title="Rebuild today's cards from your latest email, calendar and notes"
-              aria-label="Refresh"
-              className="px-2.5 @[40rem]:px-3.5"
-              data-testid="drafts-refresh"
-            >
-              <RefreshCw size={14} className={busy ? 'animate-spin' : ''} /> <span>Refresh</span>
-            </Button>
+            <span className="inline-flex items-center gap-2">
+              {lastReview && (
+                // plan 23 §4.8: the review stays a tap away until the next one
+                <Button variant="ghost" onClick={openWeekReview} data-testid="drafts-last-review">
+                  Last week's review
+                </Button>
+              )}
+              <Button
+                onClick={refresh}
+                disabled={busy}
+                title="Rebuild today's cards from your latest email, calendar and notes"
+                aria-label="Refresh"
+                className="px-2.5 @[40rem]:px-3.5"
+                data-testid="drafts-refresh"
+              >
+                <RefreshCw size={14} className={busy ? 'animate-spin' : ''} /> <span>Refresh</span>
+              </Button>
+            </span>
           )
         }
       />
@@ -504,6 +531,7 @@ export function InboxPage() {
         </div>
         <div className="space-y-4 min-w-0">
           <ComingUp events={events} warming={warming} byId={byId} now={now} />
+          <SentForYou />
           {quiet.length > 0 && user && (
             <Card data-testid="drafts-quiet">
               <div className="font-medium">Waiting on a reply</div>
@@ -589,10 +617,7 @@ function ComingUp({
               <li key={e.id} className="flex items-center gap-2.5">
                 {p && <Avatar name={p.displayName} src={p.photoUrl} id={p.id} size={28} />}
                 <div className="min-w-0 flex-1">
-                  <Link
-                    to={p ? `/people/${p.id}?tab=facts&prep=1` : '#'}
-                    className="block text-[13.5px] font-medium truncate hover:underline"
-                  >
+                  <Link to="/chats" className="block text-[13.5px] font-medium truncate hover:underline">
                     {p?.displayName ?? e.title}
                   </Link>
                   <div className="text-[12px] text-ink-3 truncate">
@@ -632,6 +657,16 @@ function ComingUp({
           );
         })}
       </ul>
+      {/* plan 23 §4.4: the week's chats, with Join, Prep and what came back, live in Chats */}
+      {events.length > 0 && (
+        <Link
+          to="/chats"
+          className="mt-3 inline-block text-[12.5px] text-ink-3 underline underline-offset-2 hover:text-ink"
+          data-testid="coming-up-chats"
+        >
+          Open your chats
+        </Link>
+      )}
     </Card>
   );
 }

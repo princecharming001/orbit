@@ -7,6 +7,7 @@ import { useAskIntro } from '../components/askIntro';
 import { CompanyLogo } from '../components/CompanyLogo';
 import { RouteBadge } from '../components/map/RouteBadge';
 import { PersonRow } from '../components/PersonRow';
+import { TargetPlanCard } from '../components/TargetPlanCard';
 import { db } from '../db/schema';
 import { startWarmUpOrOutreach } from '../engine/brief';
 import {
@@ -17,7 +18,7 @@ import {
   reachCompany,
 } from '../engine/graph';
 import { setTargetStatus } from '../engine/settings';
-import { addTargetCompany } from '../engine/targets';
+import { planForPosting } from '../engine/targetPlan';
 import { useSession } from '../state/session';
 import { Button, Card, cx, NotFound, PageHeader, Spinner, useToast } from '../ui';
 
@@ -56,6 +57,16 @@ export function CompanyPage() {
     [userId, org?.id],
   );
   const [reach, setReach] = useState<CompanyReach>();
+  // the plan for this target, newest first (plan 23 §4.1)
+  const plan = useLiveQuery(
+    async () =>
+      tc
+        ? (await db.targetPlans.where('targetCompanyId').equals(tc.id).toArray()).sort((a, b) =>
+            b.builtAt.localeCompare(a.builtAt),
+          )[0]
+        : undefined,
+    [tc?.id],
+  );
   const [filter, setFilter] = useState<Filter>('all');
   useEffect(() => {
     if (userId && org) reachCompany(userId, org.id).then(setReach);
@@ -76,10 +87,11 @@ export function CompanyPage() {
       />
     );
   const setAsTarget = async () => {
-    if (!userId) return;
-    const r = await addTargetCompany(userId, org.name);
+    if (!user) return;
+    // the target and its plan at once (plan 23 §4.2): who to write to there, and when
+    await planForPosting(user, { company: org.name, role: '' });
     toast.push({
-      text: r === 'duplicate' ? `${org.name} is already a target.` : `${org.name} is a target now.`,
+      text: `${org.name} is a target now. Your plan is at the bottom of the page.`,
       tone: 'good',
     });
   };
@@ -133,6 +145,29 @@ export function CompanyPage() {
           setFilter={setFilter}
           onAct={(c) => void act(c)}
         />
+      )}
+      {tc && !plan && user && reach && (
+        <div className="mt-6">
+          <Button
+            onClick={() =>
+              void planForPosting(user, {
+                company: org.name,
+                role: tc.role ?? '',
+                team: tc.team,
+                url: tc.postingUrl,
+              })
+            }
+            data-testid="company-make-plan"
+          >
+            Plan my way in
+          </Button>
+        </div>
+      )}
+      {plan && (
+        <section className="mt-6" data-testid="company-plan-card">
+          <h2 className="label-mono mb-2">Suggested plan</h2>
+          <TargetPlanCard plan={plan} />
+        </section>
       )}
     </div>
   );

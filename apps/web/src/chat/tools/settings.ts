@@ -477,7 +477,7 @@ export const updateLimitsTool = defineTool({
   name: 'update_limits',
   kind: 'risky',
   description:
-    "Call this only when the student asks to change how much Orbit lets them write: first messages a week (1 to 350), hours between messages to the same person, emails per day (1 to 50), LinkedIn messages per day (1 to 30), follow-ups when no reply (0 to 2), warm-ups on or off and their length in working days (2 to 10), or the daily Claude request and token caps. These change what can go out, so they need the student's approval.",
+    "Call this only when the student asks to change how much Orbit lets them write, or which kinds Orbit may send on its own (bumps, thank-yous, scheduling replies): first messages a week (1 to 350), hours between messages to the same person, emails per day (1 to 50), LinkedIn messages per day (1 to 30), follow-ups when no reply (0 to 2), warm-ups on or off and their length in working days (2 to 10), or the daily Claude request and token caps. These change what can go out, so they need the student's approval.",
   input: z.object({
     weeklyOutreachTarget: z.number().int().optional().describe('First messages a week, 1 to 350.'),
     perPersonCooldownHours: z
@@ -492,6 +492,12 @@ export const updateLimitsTool = defineTool({
     warmUpDays: z.number().int().optional().describe('Warm-up length in working days (2 to 10).'),
     llmDailyRequestCap: z.number().int().min(0).optional().describe('Claude requests per day.'),
     llmDailyTokenCap: z.number().int().min(0).optional().describe('Claude tokens per day.'),
+    autoKinds: z
+      .array(z.enum(['bump', 'thank_you', 'schedule']))
+      .optional()
+      .describe(
+        'The kinds Orbit may send on its own by email, in their morning with a minute to undo (plan 23 trust ladder): the whole list, [] for none. Never first messages, intro asks or LinkedIn.',
+      ),
   }),
   capabilities: [
     'limits_weekly_target',
@@ -501,6 +507,7 @@ export const updateLimitsTool = defineTool({
     'limits_warmup_toggle',
     'limits_warmup_days',
     'claude_caps_set',
+    'trust_ladder',
   ],
   progress: 'Saving your limits',
   async summarizeIntent(input) {
@@ -513,10 +520,16 @@ export const updateLimitsTool = defineTool({
     };
   },
   async execute(input, ctx) {
-    const { llmDailyRequestCap, llmDailyTokenCap, ...limits } = input;
+    const { llmDailyRequestCap, llmDailyTokenCap, autoKinds, ...limits } = input;
     const given = Object.entries(limits).filter(([, v]) => v !== undefined);
-    if (!given.length && llmDailyRequestCap === undefined && llmDailyTokenCap === undefined)
+    if (
+      !given.length &&
+      llmDailyRequestCap === undefined &&
+      llmDailyTokenCap === undefined &&
+      autoKinds === undefined
+    )
       throw new Error('Say which limit to change.');
+    if (autoKinds) await db.settings.update(ctx.user.id, { autoKinds: [...new Set(autoKinds)] });
     const settings = given.length
       ? await updateLimits(ctx.user.id, limits)
       : await db.settings.get(ctx.user.id);

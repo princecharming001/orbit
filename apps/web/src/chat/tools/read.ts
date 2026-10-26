@@ -36,6 +36,7 @@ import { db } from '../../db/schema';
 import { DEMO_USER_ID } from '../../engine/demo';
 import { lastInboundOf, liveChatOf, nextMessageKind } from '../../engine/drafts';
 import {
+  COMPANY_TEAM_LABELS,
   type CompanyReach,
   isColdDirect,
   isUnambiguous,
@@ -1185,7 +1186,7 @@ export const findRoutes = defineTool({
   name: 'find_routes',
   kind: 'read',
   description:
-    'Call this when the student asks how to reach someone, who could introduce them to a person, for a warm intro to a person or a company, who they know at a company, which former employees of a company are in their network, or wants a company page. Give a personId for routes to a person (each route names the first hop to ask for an intro) or a company name for the people there now, former employees and two-hop routes. Both include warm intro paths from Village when the student has it (warmth in a word, and the hops). A query that is not a clear person or company returns candidates to choose from. With an Orbit account, routes to a person are ranked by the chance the intro happens (likely, possible, long shot), each with a reason and a pathId for ask_for_intro.',
+    'Call this when the student asks how to reach someone, who could introduce them to a person, for a warm intro to a person or a company, who they know at a company, which former employees of a company are in their network, or wants a company page. Give a personId for routes to a person (each route names the first hop to ask for an intro) or a company name for the people there now, former employees and two-hop routes. Both include warm intro paths from Village when the student has it (warmth in a word, and the hops). A query that is not a clear person or company returns candidates to choose from. With an Orbit account, routes to a person are ranked by the chance the intro happens (likely, possible, long shot), each with a reason and a pathId for ask_for_intro. A company answer also lists the five best ways in with their team, route and score, and links the company page with everyone by team.',
   input: z.object({
     personId: z.string().optional().describe('Routes to this person (from search_people).'),
     personIds: z
@@ -1296,6 +1297,23 @@ export const findRoutes = defineTool({
         target: personRef(t.target),
         route: pathView(t.path, all, ctx),
       })),
+      // plan 23 §4.2: the five best ways in, by team, as the company page lists them (the page has the rest)
+      bestWaysIn: [...reach.people]
+        .sort((a, b) => b.route.score - a.route.score)
+        .slice(0, 5)
+        .map((c) => ({
+          ...personRef(c.person),
+          team: COMPANY_TEAM_LABELS[c.team],
+          route: c.route.kind,
+          score: Math.round(c.route.score * 100),
+          how: c.route.line,
+        })),
+      teams: Object.fromEntries(
+        [...new Set(reach.people.map((c) => c.team))].map((t) => [
+          COMPANY_TEAM_LABELS[t],
+          reach.people.filter((c) => c.team === t).length,
+        ]),
+      ),
     };
     const summary = `${name}: ${reach.direct.length ? `${plural(reach.direct.length, 'person', 'people')} you know there now` : 'nobody you know there now'}, ${plural(reach.former.length, 'former employee')} you know${reach.saved.length ? `; ${plural(reach.saved.length, 'person', 'people')} there saved to contact (${reach.saved.map((s) => s.person.displayName).join(', ')}), not someone you know yet` : ''}${reach.twoHop.length ? `, ${plural(reach.twoHop.length, 'route')} through someone closer` : ''}.${warmIntroLine(warmIntros)}`;
     return ok(

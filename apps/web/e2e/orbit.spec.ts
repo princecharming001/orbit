@@ -437,8 +437,9 @@ async function checkMap(page: Page, info: TestInfo, name: string) {
   expect(box.x).toBeGreaterThanOrEqual(0);
   expect(box.x + box.width).toBeLessThanOrEqual(vp.width + 1);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(vp.width);
-  // the side panel (legend and the path finder) is reachable at every width
-  const finder = page.getByRole('button', { name: /find a path to someone/i });
+  // the side panel (legend and the path finder, now the one search field where the button was) is reachable at
+  // every width
+  const finder = page.getByTestId('reach-input');
   await finder.scrollIntoViewIfNeeded();
   await expect(finder).toBeInViewport();
   const fb = (await finder.boundingBox())!;

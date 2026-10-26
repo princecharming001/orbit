@@ -152,7 +152,9 @@ export type SuggestionKind =
   | 'confirm_merge'
   | 'confirm_note_match'
   /** "Did Lena introduce you to Sam?": a group email the introduction cues could not call (see possibleIntroduction) */
-  | 'confirm_intro';
+  | 'confirm_intro'
+  /** "Want Orbit to send bumps on its own?": earned by ten approvals of one kind without an edit (plan 23 §4.9) */
+  | 'trust_offer';
 export type SuggestionStatus =
   | 'pending'
   | 'approved'
@@ -504,6 +506,8 @@ export interface Person {
   currentOrganizationId?: ID;
   currentOrganizationRaw?: string;
   location?: string;
+  /** their IANA time zone, from where they are (plan 23 §4.9: what Orbit sends on its own goes in their morning) */
+  timezone?: string;
   photoUrl?: string;
   school?: string;
   isAlumni?: boolean;
@@ -907,6 +911,8 @@ export interface OutboundMessage {
   holdUntil?: string;
   /** when the draft's words were last written: a draft that says "yesterday" is rewritten the next day */
   draftedAt?: string;
+  /** Orbit sent it on its own, a kind the student handed over (plan 23 §4.9): shown under Sent for you */
+  autoSent?: boolean;
   /**
    * An intro ask's note for the introducer to forward (plan 23 §4.3), kept beside the ask: by email it goes in the
    * same message under a rule; on LinkedIn it becomes its own message the student sends with a tap.

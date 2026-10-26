@@ -22,6 +22,7 @@ import { currentResumeFacets, sharesOrgNow } from '../engine/resume';
 import { dismissSuggestion, restoreSuggestion, snoozeSuggestion } from '../engine/send';
 import { applyStage, decideProposedStage } from '../engine/stages';
 import { SUGGESTION_KIND_LABELS } from '../engine/today';
+import { answerTrustOffer, LADDER_WORDS, type LadderKind } from '../engine/trust';
 import { useSession } from '../state/session';
 import { Avatar, Button, Chip, cx, useToast } from '../ui';
 import { runApproval } from './approve';
@@ -547,6 +548,30 @@ export function SuggestionCard({
               </Button>
               <Button size="sm" disabled={busy} onClick={() => void answerHeldMeeting(user, s.id, false)}>
                 No
+              </Button>
+            </div>
+          )}
+          {s.kind === 'trust_offer' && user && (
+            // plan 23 §4.9: earned by ten untouched approvals; the answer is per kind
+            <div className="mt-3 flex flex-wrap gap-2" data-testid="trust-offer">
+              <Button
+                variant="primary"
+                size="sm"
+                disabled={busy}
+                onClick={() => void answerTrustOffer(user, s, true)}
+                data-testid="trust-offer-yes"
+              >
+                {s.payload.recheck
+                  ? 'Keep'
+                  : `Yes, send ${LADDER_WORDS[s.payload.messageKind as LadderKind]?.many ?? 'them'}`}
+              </Button>
+              <Button
+                size="sm"
+                disabled={busy}
+                onClick={() => void answerTrustOffer(user, s, false)}
+                data-testid="trust-offer-no"
+              >
+                {s.payload.recheck ? 'Ask me again' : 'Keep asking me'}
               </Button>
             </div>
           )}

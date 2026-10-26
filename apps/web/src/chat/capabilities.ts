@@ -1117,9 +1117,49 @@ export const CAPABILITIES: readonly Capability[] = [
   {
     id: 'map_find_path_button',
     area: 'Map and Reach',
-    title: 'Find a path to someone',
+    title: 'Find a path to someone from the search on the Map',
     kind: 'read',
     utterances: ['find a path to someone', 'open reach on the map', 'who can introduce me to someone'],
+  },
+  {
+    id: 'job_plan',
+    area: 'Map and Reach',
+    title: 'Paste a job link and get the plan: three people, the way in and the day',
+    kind: 'write',
+    utterances: [
+      'here is a posting https://boards.greenhouse.io/stripe/jobs/1',
+      "I'm applying to Stripe",
+      'plan my way into the Software Engineer Intern role at Ramp',
+    ],
+  },
+  {
+    id: 'trust_ladder',
+    area: 'Settings',
+    title: 'Let Orbit send bumps, thank-yous or scheduling replies on its own',
+    kind: 'risky',
+    utterances: [
+      'send my bumps on your own',
+      'stop sending thank-yous for me',
+      'what can Orbit send by itself',
+    ],
+  },
+  {
+    id: 'week_review',
+    area: 'Today',
+    title: 'The weekly review: your week, who moved, what waits, next week',
+    kind: 'read',
+    utterances: ['how did my week go', 'show my weekly review', 'what moved this week'],
+  },
+  {
+    id: 'chats_upcoming',
+    area: 'Pipeline',
+    title: 'Your chats this week, and what came back from the last ones',
+    kind: 'read',
+    utterances: [
+      'who am I meeting this week',
+      'my chats today',
+      'did the notes from my chat with Dana come in',
+    ],
   },
   {
     id: 'map_intro_web',

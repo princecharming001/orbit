@@ -260,3 +260,25 @@ function datePhrase(rest: string, sentAt: Date, tz: string | undefined, extra: n
 /** Out-of-office wording, for replies that arrive without an auto-reply header. */
 export const OUT_OF_OFFICE =
   /\b(out of (the )?office|on (vacation|leave|pto|parental leave)|away (from (the )?office )?until|auto(-| )?reply|automatic reply|limited access to (my )?email)\b/i;
+
+/** The name of a US federal holiday (observed date) or the day after Thanksgiving, for the weekly review's words. */
+export function usHolidayName(key: string): string | undefined {
+  const year = Number(key.slice(0, 4));
+  if (!usHolidays(year).has(key)) return undefined;
+  const thanksgiving = nthWeekday(year, 11, 4, 4);
+  const names: [string, string][] = [
+    [observed(year, 1, 1), "New Year's Day"],
+    [keyOf(year, 1, nthWeekday(year, 1, 1, 3)), 'Martin Luther King Jr. Day'],
+    [keyOf(year, 2, nthWeekday(year, 2, 1, 3)), "Presidents' Day"],
+    [keyOf(year, 5, nthWeekday(year, 5, 1, -1)), 'Memorial Day'],
+    [observed(year, 6, 19), 'Juneteenth'],
+    [observed(year, 7, 4), 'Independence Day'],
+    [keyOf(year, 9, nthWeekday(year, 9, 1, 1)), 'Labor Day'],
+    [keyOf(year, 10, nthWeekday(year, 10, 1, 2)), "Indigenous Peoples' Day"],
+    [observed(year, 11, 11), 'Veterans Day'],
+    [keyOf(year, 11, thanksgiving), 'Thanksgiving'],
+    [keyOf(year, 11, thanksgiving + 1), 'the day after Thanksgiving'],
+    [observed(year, 12, 25), 'Christmas'],
+  ];
+  return names.find(([k]) => k === key)?.[1];
+}

@@ -72,7 +72,7 @@ test.describe('the company page', () => {
     await page.goto(`companies/${orgId}`);
     await expect(page.getByTestId('company-set-target')).toBeVisible();
     await page.getByTestId('company-set-target').click();
-    const target = page.getByTestId('company-target');
+    const target = page.getByTestId('company-page').getByTestId('company-target');
     await expect(target).toBeVisible();
     await expect(target.getByRole('button', { name: 'Researching' })).toHaveAttribute('aria-pressed', 'true');
     await target.getByRole('button', { name: 'Applied' }).click();

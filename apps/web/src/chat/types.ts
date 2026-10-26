@@ -28,6 +28,8 @@ export type ResultKind =
   | 'settings'
   | 'import'
   | 'prep'
+  /** a plan from a job posting (plan 23 §4.1): data `{ planId }`, drawn live from the stored plan */
+  | 'plan'
   /** tap-to-answer pills under a message: data `{ options: { label: string; message: string }[] }` */
   | 'choices'
   /** an inline setup widget (connect Google, import LinkedIn, add a Claude key, upload a resume): data `{ what: SetupWhat }` */

@@ -174,6 +174,8 @@ async function checkOnce(
         () => undefined,
       );
   }
+  // plan 23 §4.6: a reply a plan was waiting on ("after Dana replies") releases the next step's draft
+  await import('./targetPlan').then((m) => m.releaseHeldSteps(user, now)).catch(() => undefined);
   await db.kv.put({ key: replyCheckKey(user.id), value: state });
   return state;
 }

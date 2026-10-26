@@ -243,6 +243,8 @@ export async function dailyMaintenance(user: User, now = new Date()): Promise<vo
   // marked as running before the first await, so a page that mounts with the app already knows to wait
   maintenanceChanged(1);
   try {
+    // plan 23 §4.9: an offer the student earned is raised when the app opens too, not only after a send
+    await import('./trust').then((m) => m.raiseTrustCards(user, now)).catch(() => undefined);
     const today = now.toISOString().slice(0, 10);
     const existing = await db.briefs
       .where('userId')

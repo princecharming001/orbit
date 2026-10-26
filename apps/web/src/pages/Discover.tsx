@@ -16,6 +16,7 @@ import {
 import { CardSkeleton, ScoreLegend } from '../components/discover/parts';
 import { LinkedInImportButton } from '../components/LinkedInImport';
 import { StrengthDots } from '../components/people/shared';
+import { TargetPlanCard } from '../components/TargetPlanCard';
 import { db } from '../db/schema';
 import { recommendationsRefresh, startWarmUpOrOutreach } from '../engine/brief';
 import {
@@ -36,7 +37,9 @@ import {
   saveRecommendation,
   unsaveRecommendation,
 } from '../engine/recommend';
+import { planFromInput } from '../engine/targetPlan';
 import { isServerUser } from '../integrations/orbitApi';
+import { isJobLink, linkIn } from '../integrations/postings';
 import { useSession } from '../state/session';
 import { Avatar, Button, EmptyState, Input, PageHeader, Tabs, useToast } from '../ui';
 
@@ -87,6 +90,22 @@ function DiscoverFeed({ tabs }: { tabs?: ReactNode }) {
   const [params] = useSearchParams();
   // a company page's "Find people there" opens Discover searching for the company
   const [q, setQ] = useState(() => params.get('q') ?? '');
+  const [job, setJob] = useState<
+    { state: 'reading' } | { state: 'plan'; id: string } | { state: 'error'; message: string }
+  >();
+  const jobPlan = useLiveQuery(
+    () => (job?.state === 'plan' ? db.targetPlans.get(job.id) : undefined),
+    [job?.state === 'plan' ? job.id : ''],
+  );
+  const openJob = async (text: string) => {
+    if (!user) return;
+    setJob({ state: 'reading' });
+    const r = await planFromInput(user, text).catch(() => ({
+      ok: false as const,
+      message: "Orbit couldn't build a plan just now.",
+    }));
+    setJob(r.ok ? { state: 'plan', id: r.plan.id } : { state: 'error', message: r.message });
+  };
   const [acting, setActing] = useState<string>();
   // people acted on or dismissed here leave the page at once: the feed is rebuilt from the database, which can lag a
   // few seconds behind while a LinkedIn sync is writing people
@@ -348,9 +367,14 @@ function DiscoverFeed({ tabs }: { tabs?: ReactNode }) {
         <Input
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="Search your network"
-          aria-label="Search your network"
+          onKeyDown={(e) => {
+            // plan 23 §4.1: a job link pasted here becomes the plan
+            if (e.key === 'Enter' && linkIn(q) && isJobLink(q)) void openJob(q);
+          }}
+          placeholder="Search your network, or paste a job link"
+          aria-label="Search your network, or paste a job link"
           className="w-full @[40rem]:w-80"
+          data-testid="discover-search"
         />
         {humans > 1 && (
           <Link
@@ -361,6 +385,13 @@ function DiscoverFeed({ tabs }: { tabs?: ReactNode }) {
           </Link>
         )}
       </div>
+      {job?.state === 'reading' && (
+        <p className="mb-4 text-[13px] text-ink-3" aria-busy="true">
+          Reading the posting and finding who can get you in…
+        </p>
+      )}
+      {job?.state === 'error' && <p className="mb-4 text-[13px] text-ink-2">{job.message}</p>}
+      {jobPlan && <TargetPlanCard plan={jobPlan} className="mb-6" />}
       {searchHits.length > 0 && (
         <div className="mb-6 border border-line rounded-[var(--radius-card)] divide-y divide-line">
           {searchHits.map((p) => (

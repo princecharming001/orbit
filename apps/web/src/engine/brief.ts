@@ -1160,6 +1160,13 @@ export async function draftForSuggestion(
   };
   await db.outbound.add(msg);
   await db.suggestions.update(s.id, { outboundMessageId: msg.id });
+  // plan 23 §4.9: a kind the student handed over goes out on its own, in the recipient's morning, with a minute to undo
+  if (DRAFT_KIND[s.kind] && msg.channel === 'gmail') {
+    const r = await import('./trust')
+      .then((m) => m.maybeAutoSend(user, s, now, msg.id))
+      .catch(() => undefined);
+    if (r?.sent) return (await db.outbound.get(msg.id)) ?? msg;
+  }
   return msg;
 }
 
@@ -1704,6 +1711,7 @@ const BRIEF_LABELS: Record<SuggestionKind, (n: number) => string> = {
   confirm_merge: (n) => `${n} possible duplicate${n > 1 ? 's' : ''}`,
   confirm_note_match: (n) => `${n} note${n > 1 ? 's' : ''} to match`,
   confirm_intro: (n) => `${n} intro${n > 1 ? 's' : ''} to confirm`,
+  trust_offer: (n) => `${n} offer${n > 1 ? 's' : ''} to send on its own`,
 };
 
 /** The one-line summary at the top of Today. It always names a real next step, never "all good" on an empty network. */
@@ -1719,6 +1727,8 @@ export function briefSummaryText(counts: Map<string, number>, upcoming: number, 
 }
 
 export async function generateBrief(user: User, kind: Brief['kind'], now = new Date()): Promise<Brief> {
+  // plan 23 §4.8: the weekly recap is the week's review, kept as a brief
+  if (kind === 'recap') return (await import('./weekReview')).storeWeekReview(user, now);
   const briefDate = todayKey(now, user.timezone);
   const existing = await db.briefs
     .where('[userId+kind+briefDate]')
