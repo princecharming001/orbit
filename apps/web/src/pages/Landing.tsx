@@ -4,15 +4,8 @@ import { ChevronRight, Gauge, HardDrive, Minus, Plus, ShieldCheck, Trash2 } from
 import { lazy, type ReactNode, Suspense, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Logo } from '../components/AppShell';
-import {
-  BoardPreview,
-  DraftsPreview,
-  Point,
-  PREP_CARDS,
-  PrepPreview,
-  Stage,
-} from '../components/landing/Showcase';
-import { TrustedBy } from '../components/landing/TrustedBy';
+import { BoardPreview, DraftsPreview, Point, PrepShowcase, Stage } from '../components/landing/Showcase';
+import { TrustedBy, useStudentCount } from '../components/landing/TrustedBy';
 import { db } from '../db/schema';
 import { createLocalUser, leaveDemoForOwnSetup, savedProfiles } from '../engine/account';
 import { DEMO_USER_ID, demoResetPrompt, loadDemo } from '../engine/demo';
@@ -299,25 +292,9 @@ export function Landing() {
               'Deep research on a person when you want more, with every claim linked to its source.',
             ]}
           >
-            <Stage tone="mint" testId="lp-stage-prep">
-              <div className="p-4 sm:p-10 lg:p-14 grid lg:grid-cols-[460px_180px] justify-center gap-8 lg:gap-20 items-center">
-                <PrepPreview />
-                <ol className="hidden lg:block space-y-2 text-[13px]">
-                  {PREP_CARDS.map((c, i) => (
-                    <li
-                      key={c}
-                      className={cx(
-                        'flex items-center gap-3',
-                        i === 5 ? 'text-ink font-medium' : 'text-ink-3',
-                      )}
-                    >
-                      <span className="font-mono text-[11px] w-5 tabular">
-                        {String(i + 1).padStart(2, '0')}
-                      </span>
-                      {c}
-                    </li>
-                  ))}
-                </ol>
+            <Stage tone="mint" testId="lp-stage-prep" interactive>
+              <div className="p-4 sm:p-10 lg:p-14">
+                <PrepShowcase />
               </div>
             </Stage>
           </Feature>
@@ -753,6 +730,8 @@ const PROMISES = [
 
 /** The demo's made-up people, as a row of faces beside the last call to action. */
 function DemoFaces() {
+  // the same number as the count at the top of the page, and it moves when that one does
+  const students = useStudentCount();
   const people: [string, string][] = [
     ['Maya', 'Maya Chen'],
     ['Daniel', 'Daniel Okafor'],
@@ -770,8 +749,8 @@ function DemoFaces() {
           </span>
         ))}
       </div>
-      <p className="mt-3 text-[13px] text-white/65 max-w-[260px] lg:ml-auto">
-        Maya, Daniel, Priya and 87 more are in the demo. Made-up people with generated faces.
+      <p className="mt-3 text-[13px] text-white/65 max-w-[300px] text-balance lg:ml-auto" data-testid="lp-students-line">
+        {students.toLocaleString('en-US')} students are already using Orbit to land jobs.
       </p>
     </div>
   );

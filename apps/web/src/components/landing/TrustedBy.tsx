@@ -269,3 +269,28 @@ export function TrustedBy() {
     </div>
   );
 }
+
+/**
+ * The student count as a plain number for anywhere else on the page: the same schedule as the count above, so the
+ * two always agree, and it moves when the next students arrive while the page is open.
+ */
+export function useStudentCount(): number {
+  const [count, setCount] = useState(() => studentCount().count);
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout>;
+    const schedule = () => {
+      const { nextAt } = studentCount();
+      if (!nextAt) return;
+      timer = setTimeout(
+        () => {
+          setCount(studentCount().count);
+          schedule();
+        },
+        Math.min(Math.max(0, nextAt - Date.now()) + 50, 86_400_000),
+      );
+    };
+    schedule();
+    return () => clearTimeout(timer);
+  }, []);
+  return count;
+}
