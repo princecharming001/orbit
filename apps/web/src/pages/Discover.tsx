@@ -13,7 +13,7 @@ import {
   type NetworkHandlers,
   SuggestedRow,
 } from '../components/discover/cards';
-import { CardSkeleton, ScoreLegend } from '../components/discover/parts';
+import { CardSkeleton, FeedFilters, type FeedSort, GOOD_OR_BETTER } from '../components/discover/parts';
 import { LinkedInImportButton } from '../components/LinkedInImport';
 import { StrengthDots } from '../components/people/shared';
 import { TargetPlanCard } from '../components/TargetPlanCard';
@@ -87,7 +87,7 @@ function DiscoverFeed({ tabs }: { tabs?: ReactNode }) {
   const [busy, setBusy] = useState(false);
   // the network list is brought up to date each time the page opens, so someone just added shows up without a Refresh
   const [updating, setUpdating] = useState(true);
-  const [params] = useSearchParams();
+  const [params, setParams] = useSearchParams();
   // a company page's "Find people there" opens Discover searching for the company
   const [q, setQ] = useState(() => params.get('q') ?? '');
   const [job, setJob] = useState<
@@ -347,7 +347,21 @@ function DiscoverFeed({ tabs }: { tabs?: ReactNode }) {
         ? 'Everyone in your network who fits your goals already has a chat with you on the People board. Connect LinkedIn to find people beyond it.'
         : 'Nobody in your network matches your goals yet. Add people at your target companies or connect LinkedIn.';
   const shownHere = (c: DiscoverCard) => c.kind !== 'found' || !goneHere.has(c.entry.memberId);
-  const feed: DiscoverCard[] = (view?.feed ?? []).filter(shownHere);
+  const allFeed: DiscoverCard[] = (view?.feed ?? []).filter(shownHere);
+  // the filter bar: sort by the overall score or one meter, and keep only Good or better on it (kept in the address)
+  const sortParam = params.get('by');
+  const sortBy: FeedSort =
+    sortParam === 'match' || sortParam === 'reach' || sortParam === 'odds' ? sortParam : 'best';
+  const goodOnly = params.get('good') === '1';
+  const metricOf = (c: DiscoverCard) => (sortBy === 'best' ? c.metrics.score : c.metrics[sortBy]);
+  const sorted = sortBy === 'best' ? allFeed : [...allFeed].sort((a, b) => metricOf(b) - metricOf(a));
+  const feed = goodOnly ? sorted.filter((c) => metricOf(c) > GOOD_OR_BETTER) : sorted;
+  const setFilter = (key: 'by' | 'good', value: string | undefined) => {
+    const next = new URLSearchParams(params);
+    if (value) next.set(key, value);
+    else next.delete(key);
+    setParams(next, { replace: true });
+  };
   const suggestions = (view?.suggestions ?? []).filter(shownHere);
   const nothing = !!view && !feed.length && !suggestions.length;
   const server = isServerUser(user.id);
@@ -457,7 +471,26 @@ function DiscoverFeed({ tabs }: { tabs?: ReactNode }) {
           <h2 id="discover-feed-h" className="sr-only">
             People to meet
           </h2>
-          <ScoreLegend />
+          <FeedFilters
+            sort={sortBy}
+            goodOnly={goodOnly}
+            shown={feed.length}
+            total={allFeed.length}
+            onSort={(s) => setFilter('by', s === 'best' ? undefined : s)}
+            onGoodOnly={(on) => setFilter('good', on ? '1' : undefined)}
+          />
+          {goodOnly && !feed.length && allFeed.length > 0 && (
+            <p className="mb-3 text-[13px] text-ink-2" data-testid="discover-filter-empty">
+              Nobody here is Good or better on that yet.{' '}
+              <button
+                type="button"
+                className="underline underline-offset-4 hover:text-ink"
+                onClick={() => setFilter('good', undefined)}
+              >
+                Show everyone
+              </button>
+            </p>
+          )}
           <div
             role="feed"
             aria-busy={loading}

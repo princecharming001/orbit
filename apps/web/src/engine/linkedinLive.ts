@@ -604,6 +604,43 @@ export type MutualsResult =
 export const MUTUALS_KV = 'mutuals3:';
 
 /**
+ * How long Orbit waits for LinkedIn's mutuals answer. It is several reads in a row on the server (their profile for
+ * the shared count, then a page or more of "connections of" search), so it can take well over the 20 seconds a single
+ * read is given; the server finishes either way, and a browser that gave up early only threw the answer away.
+ */
+export const MUTUALS_TIMEOUT_MS = 90_000;
+let mutualsTimeoutMs = MUTUALS_TIMEOUT_MS;
+export function setMutualsTimeoutForTests(ms: number | undefined): void {
+  mutualsTimeoutMs = ms ?? MUTUALS_TIMEOUT_MS;
+}
+
+/** The same target asked for twice at once (the Map and the Person page): one LinkedIn read, shared. */
+const mutualsInFlight = new Map<string, ReturnType<typeof mutualConnections>>();
+
+/** LinkedIn's mutuals for a target: one read in flight per target, waited for long enough, retried once on a timeout. */
+async function askMutualsOnce(
+  accountId: string,
+  memberId: string,
+  token: string | undefined,
+): ReturnType<typeof mutualConnections> {
+  const key = `${accountId}|${memberId}`;
+  const running = mutualsInFlight.get(key);
+  if (running) return running;
+  const job = (async () => {
+    const ask = () => mutualConnections(accountId, memberId, { token, timeoutMs: mutualsTimeoutMs });
+    const first = await ask();
+    // a slow LinkedIn is usually quick the second time (its own cache is warm): one quiet retry before saying so
+    return !first.ok && first.reason === 'timeout' ? ask() : first;
+  })();
+  mutualsInFlight.set(key, job);
+  try {
+    return await job;
+  } finally {
+    mutualsInFlight.delete(key);
+  }
+}
+
+/**
  * Who the student knows who also knows this person, from LinkedIn (live, through Unipile) or, for the sample
  * student, from the demo's own people. LinkedIn's answer is kept for the day per target (and member id), so the Map,
  * the Person page and the chat ask once; who each mutual is in Orbit is matched again on every read.
@@ -649,10 +686,8 @@ export async function mutualsFor(
     | undefined;
   if (kept?.day === day && kept.memberId === person.linkedinMemberId && kept.mutuals)
     return { ok: true, source: 'linkedin', mutuals: kept.mutuals.map(resolve) };
-  const r = await mutualConnections(row.externalAccountId!, person.linkedinMemberId, {
-    token: row.accessToken,
-    signal: opts.signal,
-  });
+  // not tied to this caller's signal: another panel may be waiting on the same read, and the answer is kept a day
+  const r = await askMutualsOnce(row.externalAccountId!, person.linkedinMemberId, row.accessToken);
   if (!r.ok)
     return {
       ok: false,

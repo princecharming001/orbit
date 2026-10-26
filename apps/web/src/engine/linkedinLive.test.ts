@@ -13,9 +13,11 @@ import {
   linkedInProgress,
   liveLinkedInAccount,
   liveLinkedInAvailable,
+  MUTUALS_TIMEOUT_MS,
   mutualsFor,
   resumeLinkedInConnect,
   setLivePollForTests,
+  setMutualsTimeoutForTests,
   subscribeLinkedInProgress,
   syncLinkedInLive,
 } from './linkedinLive';
@@ -379,6 +381,35 @@ describe('syncing, disconnecting and the daily re-sync', () => {
 });
 
 describe('mutual connections', () => {
+  it('waits long enough for the several reads behind it, retries a timeout once, and shares one read', async () => {
+    expect(MUTUALS_TIMEOUT_MS).toBeGreaterThanOrEqual(60_000);
+    await connectLinkedInLive(user);
+    const daniel = (await people()).find((p) => p.firstName === 'Daniel')!;
+    setMutualsTimeoutForTests(60);
+    try {
+      let asked = 0;
+      const answer = { verified: true, mutuals: [{ name: 'Sana Ahmed', member_id: 'm_sana' }] };
+      vi.stubGlobal('fetch', (url: string, init: RequestInit) => {
+        if (!url.endsWith('/mutuals')) return Promise.resolve(new Response('{}', { status: 404 }));
+        asked++;
+        // the first read takes longer than Orbit waits; the retry answers at once
+        if (asked === 1)
+          return new Promise<Response>((_, reject) =>
+            init.signal?.addEventListener('abort', () => reject(new Error('aborted'))),
+          );
+        return Promise.resolve(new Response(JSON.stringify(answer), { status: 200 }));
+      });
+      // the Map and the Person page asking at once: one read between them
+      const [ra, rb] = await Promise.all([mutualsFor(user, daniel), mutualsFor(user, daniel)]);
+      expect(ra).toMatchObject({ ok: true, source: 'linkedin' });
+      expect(rb).toMatchObject({ ok: true, source: 'linkedin' });
+      expect(ra.mutuals.map((m) => m.name)).toEqual(['Sana Ahmed']);
+      expect(asked).toBe(2);
+    } finally {
+      setMutualsTimeoutForTests(undefined);
+    }
+  });
+
   it('needs a live connection and the member id from it, then names who Orbit knows', async () => {
     const outsider = {
       id: 'px',
