@@ -59,7 +59,8 @@ export function classifyHandlers(
           kind: 'score.user',
           userId,
           payload: { reason: 'rapport_backfill' },
-          dedupeKey: `score.user:${userId}:rapport_backfill`,
+          // one rescore per backfill run: a later run (new readings) must not be taken for this one
+          dedupeKey: `score.user:${userId}:rapport_backfill:${job.msgId}`,
         });
     },
   };
