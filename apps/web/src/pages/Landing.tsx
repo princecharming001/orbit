@@ -749,7 +749,10 @@ function DemoFaces() {
           </span>
         ))}
       </div>
-      <p className="mt-3 text-[13px] text-white/65 max-w-[300px] text-balance lg:ml-auto" data-testid="lp-students-line">
+      <p
+        className="mt-3 text-[13px] text-white/65 max-w-[300px] text-balance lg:ml-auto"
+        data-testid="lp-students-line"
+      >
         {students.toLocaleString('en-US')} students are already using Orbit to land jobs.
       </p>
     </div>
