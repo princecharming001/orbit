@@ -165,6 +165,8 @@ export const CAP_EXPECT: Record<string, Expect> = Object.fromEntries([
   also('limits_weekly_target', ['update_limits', 'get_settings']),
   also('limits_cooldown', ['update_limits', 'get_settings']),
   also('limits_daily_caps', ['update_limits', 'get_settings']),
+  // plan 23: what Orbit sends on its own is read in Settings, Limits; changing it needs the student's approval there
+  also('trust_ladder', ['get_settings']),
   also('limits_scheduling_link', ['update_settings']),
   also('account_sign_out', [], ANSWER),
   also('settings_section_nav', ['open_page', 'get_settings']),

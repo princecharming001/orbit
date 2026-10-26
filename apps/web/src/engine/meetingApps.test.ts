@@ -150,6 +150,39 @@ describe('picking one meeting app', () => {
       accessToken: 'gra_access_token_1',
       oauth: { refreshToken: 'r1', expiresAt: '2099-01-01T00:00:00Z', clientId: 'cli_1' },
     });
+    // plan 23 §4.5: a recording is filed as a chat when someone on it is a person the student has a chat with (a
+    // recording of strangers asks first: notesLoop.test.ts)
+    await db.people.put({
+      id: 'p_jane_t',
+      userId: user.id,
+      displayName: 'Jane Smith',
+      firstName: 'Jane',
+      lastName: 'Smith',
+      nameNormalized: 'jane smith',
+      primaryEmail: 'jane@stripe.com',
+      emails: ['jane@stripe.com'],
+      relationshipType: 'unknown',
+      strength: 0.3,
+      interactionCount: 1,
+      sources: ['gmail'],
+      isHuman: true,
+      tags: [],
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+    });
+    await db.chats.put({
+      id: 'c_jane_t',
+      userId: user.id,
+      personId: 'p_jane_t',
+      stage: 'scheduled',
+      stageEnteredAt: now.toISOString(),
+      source: 'manual',
+      goalTags: [],
+      bumpCount: 0,
+      priority: 2,
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+    });
     const bodies: { server: string; accessToken: string; calls: { name: string; arguments: unknown }[] }[] =
       [];
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {

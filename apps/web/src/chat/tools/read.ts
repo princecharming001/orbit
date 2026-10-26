@@ -1726,6 +1726,8 @@ export const getSettings = defineTool({
             schedulingLink: settings.schedulingLink,
             briefTimeLocal: settings.briefTimeLocal,
             dismissedHints: settings.dismissedHints ?? [],
+            // plan 23 §4.9: the kinds Orbit sends on its own; never first messages, intro asks or LinkedIn
+            sendsOnItsOwn: settings.autoKinds ?? [],
             href: '/settings/limits',
           }
         : undefined;

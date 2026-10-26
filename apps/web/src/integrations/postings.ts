@@ -29,6 +29,28 @@ export function isJobLink(text: string): boolean {
   );
 }
 
+/** A link on a job board or a careers page: the router reads it as a posting without being told. */
+export function isJobBoardLink(url: string): boolean {
+  return /(greenhouse\.io|lever\.co|ashbyhq\.com|myworkdayjobs\.com|workday|smartrecruiters\.com|jobvite\.com|icims\.com|linkedin\.com\/jobs|\/jobs?\/|\/careers?\/|gh_jid=|\/positions?\/|\/openings?\/)/i.test(
+    url,
+  );
+}
+
+/**
+ * What a job board's address says when the page cannot be read: Greenhouse, Lever and Ashby put the company in the
+ * path (/stripe/jobs/123). The role is left empty: it is not in the address.
+ */
+export function postingFromUrl(url: string): PostingInfo | undefined {
+  const m = /(?:greenhouse\.io|lever\.co|ashbyhq\.com)\/([a-z0-9-]+)/i.exec(url);
+  if (!m || /^(embed|jobs?)$/i.test(m[1]!)) return undefined;
+  return {
+    company: m[1]!.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+    role: '',
+    namesOnPage: { recruiters: [], managers: [] },
+    url,
+  };
+}
+
 /** The first link in a message ("here's a posting https://…"). */
 export function linkIn(text: string): string | undefined {
   const m = /(https?:\/\/[^\s<>"')]+|www\.[^\s<>"')]+)/i.exec(text);
@@ -117,8 +139,11 @@ export async function readPosting(
   const r = await unipileProxyCall<
     PostingRead | { ok: true; posting: PostingInfo; source: 'jsonld' | 'model' | 'text' }
   >('/posting', { url: input.url, text: input.text }, { fetch: opts.fetch, timeoutMs: 30_000 });
+  if (r.ok && (r.value.ok || !input.url)) return r.value;
+  // the page could not be read: a job board's address still names the company, and a typed line still makes a target
+  const fromUrl = input.url ? postingFromUrl(input.url) : undefined;
+  if (fromUrl) return { ok: true, posting: fromUrl, source: 'typed' };
   if (r.ok) return r.value;
-  // the proxy is out of reach: a typed line still makes a target
   const typed = input.text ? postingFromText(input.text) : undefined;
   if (typed) return { ok: true, posting: typed, source: 'typed' };
   return {

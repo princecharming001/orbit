@@ -1,6 +1,6 @@
 import type { ChatStage, MessageKind } from '@orbit/core';
 import { mayHoldFacts } from '@orbit/core';
-import { isJobLink, linkIn, saysApplying } from '../../integrations/postings';
+import { isJobBoardLink, linkIn, saysApplying } from '../../integrations/postings';
 import type { ChoiceOption, ToolSpec } from '../types';
 import { type MatchablePerson, resolvePerson } from './people-match';
 import { followUp, resolveReferences } from './routerFollowUp';
@@ -402,19 +402,42 @@ function routeInner(raw: string, ctx: RouterContext): RouterIntent {
   {
     // read from what was typed: the cleanup below the greeting never touches a link
     const link = linkIn(raw);
+    const scheduling = /\b(calendly|cal\.com|scheduling|booking|book a time|my link)\b/i.test(raw);
+    const drafting = /\b(re-?draft|draft|message|email|write|reply|note)\b/i.test(raw);
     if (
       link &&
-      (isJobLink(link) || /\b(job|posting|role|position|opening|apply|applying)\b/i.test(lower)) &&
+      !scheduling &&
+      (isJobBoardLink(link) || /\b(job|posting|role|position|opening|apply|applying)\b/i.test(lower)) &&
       has('plan_for_posting')
     )
       return viaTool('plan_for_posting', { url: link }, undefined, 'plan for a posting');
-    if (saysApplying(raw) && has('plan_for_posting')) {
-      const what = raw.replace(/^.*?\b(?:applying|apply)\s+(?:to|at|for)\s+/i, '').trim();
+    const way = /\bplan my way in(?:to)?\s+(?:the\s+)?(.+)$/i.exec(raw.trim());
+    if (way && has('plan_for_posting'))
+      return viaTool(
+        'plan_for_posting',
+        { text: way[1]!.replace(/[.?!]+$/, '').replace(/\s+role\b/i, '') },
+        undefined,
+        'plan for a posting',
+      );
+    if (saysApplying(raw) && !drafting && has('plan_for_posting')) {
+      const what = raw
+        .replace(/^.*?\b(?:applying|apply)\s+(?:to|at|for)\s+/i, '')
+        .replace(/[.?!]+$/, '')
+        .trim();
       if (what) return viaTool('plan_for_posting', { text: what }, undefined, 'plan for a posting');
     }
+    // plan 23 §4.9: what Orbit sends on its own lives in Settings, Limits
+    if (
+      (/\b(bumps?|thank-?yous?|scheduling repl(?:y|ies))\b/i.test(lower) &&
+        /\b(on (your|its) own|by (yourself|itself)|for me)\b/i.test(lower) &&
+        /\bsend/i.test(lower)) ||
+      /\bwhat (can|does|will) orbit send (by|on) (itself|its own)\b/i.test(lower)
+    )
+      if (has('get_settings'))
+        return viaTool('get_settings', { section: 'limits' }, undefined, 'read your settings');
     // plan 23 §4.4: the week's chats
     if (
-      /\b(upcoming|next|this week'?s?|today'?s?)\s+(coffee\s+)?chats\b|\bmy coffee chats\b|\bwho am i (meeting|talking to)\b|\bchats? (coming up|this week|today)\b/i.test(
+      /\b(upcoming|next|this week'?s?|today'?s?)\s+(coffee\s+)?chats\b|\bmy coffee chats\b|\bwho am i (meeting|talking to)\b|\bchats? (coming up|this week|today)\b|\b(did|have) the notes from my (chat|call|meeting)\b/i.test(
         lower,
       ) &&
       has('list_upcoming_chats')

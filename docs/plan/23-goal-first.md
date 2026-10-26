@@ -1,6 +1,6 @@
 # 23. Goal first: Orbit tells you what to do next
 
-Status: proposed. Nothing in this plan is built yet. Amends 07 (the brief gains a weekly recap and auto-sent cards),
+Status: built on 2026-10-25 (see "What building it changed" at the end). Amends 07 (the brief gains a weekly recap and auto-sent cards),
 16 §8 (autonomy is offered by kind, from the student's own approvals, not set as a level), 18 (the reply check gains
 a sibling: the notes check after a meeting) and 22 (the deck shell carries the weekly review too). Verified against the
 code on 2026-10-25; every "today" claim below names the file.
@@ -582,3 +582,76 @@ agreed first. Phase B's two pieces can run as two. Phase C is one.
 A LinkedIn browser extension; push notifications; a Kanban redesign of People; email forwarding for notes; Otter,
 Zoom or Meet transcripts; any change to how ties or routes are scored (21 stands); any change to Deep research (20
 stands); the server-side autonomy level 2 for replies beyond the kinds the ladder names.
+
+## What building it changed
+
+Built on 2026-10-25, all of it except onboarding's A job step (the onboarding redesign, plan 24, asks for the job and
+stores it as `goals.currentJob`; the plan reads it) and Replies (§4.6, the One inbox session). What the build found
+and decided, piece by piece:
+
+- **The Map's one field.** The founder asked for the search where the green button was, and no search at the top.
+  So the Map has one field in the side panel, "Paste a job link, or a person or company": people and companies as
+  the student types, LinkedIn people when they pause, and a pasted link becomes the plan on Enter. There is no
+  separate "Find a path to a person": the field is that. On a phone, with a route or a company open, the field folds
+  away so the routes stay on screen; Exit reach brings it back.
+- **The status line** keeps photos and logos off the line: they trickle all afternoon (a photo every few seconds), so
+  the line would never read "Up to date". They are listed in the popover as quiet work. A problem (LinkedIn signed
+  out) outranks work in progress on the line, since it is the one thing that needs the student.
+- **Route badges** read "Direct · 68" for a tie of the student's own, on the Map too, so the company page and the Map
+  show the same words. Warm routes keep "Strong route · 74"; a faint tie is still "Cold tie · 12".
+- **The company page** routes the 30 people the network reaches best (by the quick path estimate) when a company has
+  more, and the list draws 40 rows at a time as it scrolls. At 2,000 people the page renders in about 0.4 to 0.9 s.
+  The team comes from the title's function; recruiters are found before the function (a "Technical Recruiter" is
+  recruiting, not engineering).
+- **The intro note** is a field on the ask's draft (`forwardNote`) rather than a second draft from the start: a
+  second draft row would show up as an unsent draft everywhere drafts are counted. By email the approved bytes are
+  the ask, a rule (`----`) and the note, one message. On LinkedIn the ask goes alone and the note becomes its own
+  `forwardable_blurb` draft, sent with "Send the note to Kenji" (it never waits out the cooldown). The never-write
+  check is the research function's own (`_shared/research/guards.ts`). The student's lines live in Settings, You, as
+  "Your three lines".
+- **Chats** link Prep to the deck (`?tab=facts&prep=1`). Drafts' Coming up keeps the names (the e2e and the student
+  both read them there) and links each one, and "Open your chats", to the page.
+- **The notes check** asks the notetaker from the meeting's start without moving the regular import's place. The
+  matching guard holds a recording of people Orbit cannot tie to a chat on a card ("Was your 2 pm meeting with Priya
+  and Sam a networking chat?"): yes files it as a chat, no files it with nobody, and it is never asked twice.
+  Fireflies' API answers any origin (checked live), so a pasted Fireflies key works without orbit-notes; its address
+  joined the page's connect-src. The Dictated button's line no longer claims a different reading: the extractor reads
+  dictation the same way as typed notes. The Wispr mapping is still the guess it was: pinning it needs a recorded
+  real response (live check below).
+- **The posting read** tries the page's schema.org JobPosting data first (Greenhouse, Lever, Ashby and Workday
+  publish it), and asks the model (claude-haiku-5-5, one forced tool call) only for what it leaves out or when there
+  is none. The cache is `orbit_private.posting_cache`, reached through two service-role functions. The ledger is a
+  visitor bucket, 10 reads a day (`ORBIT_POSTINGS_PER_DAY`); a cache hit counts nothing. Redirects are followed by
+  hand and each address is checked, so the route never reads a private address.
+- **The plan's picks** put a strong tie of the student's own (direct, 60 or more) ahead of anyone on the posting's
+  team, and spread intro asks across introducers (one person is not asked for three intros at once). With a company
+  and no role, the role the student is going for (goals) tells who is on the team. "The hiring manager" and "recruits
+  for this posting" are said only when the posting names that person; otherwise "leads the team" and "recruits at
+  Stripe". The held step (the person who leads it) is drafted by the reply check when the reply it waits on arrives,
+  or on its day. Plans are kept in Dexie v9 (plan 24 took v8).
+- **The weekly review** opens by itself only once per visit and never over another deck; Drafts keeps "Last week's
+  review" for eight days. A week with a holiday names the earliest one.
+- **The trust ladder** follows the level-2 rules literally: a tie score of 40 or more, five a day, the recipient's
+  morning window. That holds back most bumps (people who have not answered are rarely at 40), which is the safe
+  side; the card waits for the student as before. The window is now in `packages/core/compose/window.ts`; the
+  server's copy stays where it is (moving it would change orbit-api's bundle for no change in behavior) and a test
+  holds the two to the same answers. `set_auto_kinds` is `update_limits`' `autoKinds` (the tool list has room for 95).
+  An undo of something Orbit sent is counted in `trust:undone:` for the watch in §6.5.
+- **Chat tools**: `plan_for_posting`, `list_upcoming_chats` and `week_review` are new; `company_reach` is
+  `find_routes`' company answer, which now lists the five best ways in by team. The router sends a job link, "I'm
+  applying to Stripe", "my coffee chats this week" and "how did my week go" to them.
+- **Flags** are `flag:<piece>` rows in db.kv, on unless a row says false, plus an `OFF` set in `engine/flags.ts` for
+  the one-commit switch.
+
+### Live check (founder, once)
+
+Not done in the build; each needs a real account:
+
+1. A live Greenhouse link with LinkedIn connected: the three are real people at that company, and Settings' search
+   budget line shows the spend.
+2. Fathom (key and sign-in), Granola, Wispr Flow and Fireflies each connected to a test Orbit, one short recorded
+   call with a second account: within 15 minutes the note, facts, stage and thank-you appear and the Chats row
+   updates. Record each app's response shape and latency, and pin Wispr's mapping to a recorded response.
+3. One real intro ask by Gmail (the rule and the note arrive as one message) and one on LinkedIn (the note as a
+   second message).
+4. A week of the status line; a real week of bumps on the ladder, and the undo rate.
