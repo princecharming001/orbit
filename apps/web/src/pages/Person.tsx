@@ -23,6 +23,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { runApproval } from '../components/approve';
 import { BackLink } from '../components/BackLink';
 import { PersonCompanyLogo } from '../components/CompanyLogo';
+import { Conversation } from '../components/Conversation';
 import { DraftEditor, handoffWhere, OutboxStatus } from '../components/DraftEditor';
 import { MutualConnections } from '../components/MutualConnections';
 import { DossierCard } from '../components/people/DossierCard';
@@ -38,7 +39,8 @@ import { SuggestionCard } from '../components/SuggestionCard';
 import { db } from '../db/schema';
 import { isMessageSuggestion, refreshPersonSummary } from '../engine/brief';
 import { calendarInvitesAvailable, canInviteFor, sendCalendarInvite } from '../engine/calendarInvite';
-import { composeDraft, discardDraft as discardDraftRow, restoreDraft } from '../engine/drafts';
+import { conversationWith } from '../engine/conversation';
+import { composeDraft, discardDraft as discardDraftRow, lastInboundOf, restoreDraft } from '../engine/drafts';
 import { enrichOnView } from '../engine/enrichment';
 import {
   addFact,
@@ -111,7 +113,9 @@ export function PersonPage() {
   // Prep is a deck over About now (docs/plan/22): an old link to the Prep tab opens it there
   const rawTab = params.get('tab');
   const tab =
-    (rawTab === 'prep' ? 'facts' : (rawTab as 'timeline' | 'facts' | 'connections' | null)) ?? 'timeline';
+    (rawTab === 'prep'
+      ? 'facts'
+      : (rawTab as 'timeline' | 'conversation' | 'facts' | 'connections' | null)) ?? 'timeline';
   const prepOpen = params.get('prep') === '1' || rawTab === 'prep';
   const nav = useNavigate();
   const toast = useToast();
@@ -249,21 +253,17 @@ export function PersonPage() {
         .toArray();
     }, [user?.id]) ?? [];
   const chat = chats.find((c) => !['archived'].includes(c.stage)) ?? chats[0];
-  // their last message on the chat's thread: "Write to" answers it only when it waits on an answer
-  const lastInbound = useLiveQuery(async () => {
-    if (!chat?.threadId) return null;
-    const msgs = await db.messages.where('threadId').equals(chat.threadId).sortBy('sentAt');
-    const m = [...msgs].reverse().find((x) => x.direction === 'inbound');
-    return m
-      ? {
-          lastInboundAt: m.sentAt,
-          lastInboundBody: m.bodyText,
-          lastSignal: m.signal,
-          asksOfUser: m.extraction?.asksOfUser,
-          proposedTimes: m.extraction?.proposedTimes,
-        }
-      : null;
-  }, [chat?.threadId, chat?.lastInboundAt]);
+  // how many messages the Conversation tab holds (plan 22)
+  const messageCount =
+    useLiveQuery(
+      async () => (user && id ? (await conversationWith(user.id, id)).length : 0),
+      [user?.id, id, chat?.lastInboundAt, chat?.lastOutboundAt],
+    ) ?? 0;
+  // their last message, on the chat's email thread or on LinkedIn: "Write to" answers it only when it waits on an answer
+  const lastInbound = useLiveQuery(
+    async () => (await lastInboundOf(chat)) ?? null,
+    [chat?.id, chat?.threadId, chat?.lastInboundAt],
+  );
   // the summary is rewritten when something newer than it happened (a message sent, a note, a fact typed in), so it
   // never says "you haven't been in touch" after the first email went out
   const newestActivity = [...tps.map((t) => t.occurredAt), ...facts.map((f) => f.createdAt)]
@@ -909,6 +909,7 @@ export function PersonPage() {
             onChange={(v) => setParams({ tab: v })}
             items={[
               { value: 'timeline', label: 'Timeline', count: timeline.length },
+              { value: 'conversation', label: 'Conversation', count: messageCount || undefined },
               { value: 'facts', label: 'About', count: facts.length || undefined },
               { value: 'connections', label: 'Who they know', count: neighbours.filter(Boolean).length },
             ]}
@@ -950,6 +951,7 @@ export function PersonPage() {
               ))}
             </ol>
           )}
+          {tab === 'conversation' && <Conversation person={person} />}
           {tab === 'facts' && (
             <div className="space-y-4">
               {/* who they are, straight from LinkedIn (everyone), then Deep research, a step further, from the web */}

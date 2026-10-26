@@ -199,8 +199,9 @@ describe('the reply check moves cards on its own', () => {
       ['outreach_sent', 'replied', 'system', 'inbound_signal:reply_positive'],
     ]);
     const ev = (await db.stageEvents.where('chatId').equals('c_maya').first())!;
-    expect(ev.evidenceRefTable).toBe('linkedin_messages');
-    expect(ev.evidenceRefId).toBe('m2');
+    // the reply as Orbit keeps it (plan 22), so the card can quote it
+    expect(ev.evidenceRefTable).toBe('messages');
+    expect((await db.messages.get(ev.evidenceRefId!))?.externalMessageId).toBe('linkedin:m2');
     // the record the board's line reads
     expect(await lastReplyCheck(user.id)).toMatchObject({
       checkedAt: NOW.toISOString(),

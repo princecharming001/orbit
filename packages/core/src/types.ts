@@ -620,10 +620,16 @@ export interface TieScoreSummary {
   mutuals?: { name: string; score: number }[];
 }
 
+/** Where a stored conversation happened: Gmail (the default, when unset) or a LinkedIn 1:1 chat (plan 22). */
+export type ConversationChannel = 'gmail' | 'linkedin';
+
 export interface EmailThread {
   id: ID;
   userId: ID;
+  /** Gmail's thread id, or `linkedin:<chat id>` for a LinkedIn chat */
   externalThreadId: string;
+  /** unset is Gmail */
+  channel?: ConversationChannel;
   subject?: string;
   snippet?: string;
   firstMessageAt?: string;
@@ -659,7 +665,10 @@ export interface EmailMessage {
   id: ID;
   userId: ID;
   threadId: ID;
+  /** Gmail's message id, or `linkedin:<message id>` */
   externalMessageId: string;
+  /** unset is Gmail */
+  channel?: ConversationChannel;
   direction: EmailDirection;
   fromEmail: string;
   fromName?: string;

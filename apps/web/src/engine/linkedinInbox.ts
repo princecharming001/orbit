@@ -20,6 +20,7 @@ import { usesMockConnectors } from '../integrations/connectorsMock';
 import { isServerUser } from '../integrations/orbitApi';
 import { type LinkedInInboxMessage, linkedInInbox, unipileConfigured } from '../integrations/unipile';
 import { evaluateImmediateSuggestions } from './brief';
+import { storeLinkedInChat } from './conversation';
 import { liveChatOf } from './drafts';
 import { recordDmTouches } from './linkedinActivity';
 import { LIVE_SOON, liveLinkedInAccount } from './linkedinLive';
@@ -53,7 +54,7 @@ const time = (at: string | undefined) => (at ? Date.parse(at) : Number.NaN);
  * (its server holds LinkedIn) or the sample student (whose LinkedIn is a mock).
  */
 export async function syncLinkedInReplies(
-  user: Pick<User, 'id' | 'timezone'>,
+  user: Pick<User, 'id' | 'timezone'> & { email?: string },
   opts: { now?: Date; fetch?: typeof fetch } = {},
 ): Promise<ReplySyncResult> {
   const now = opts.now ?? new Date();
@@ -85,6 +86,10 @@ export async function syncLinkedInReplies(
   return { ok: true, replies: recorded.length, people: recorded };
 }
 
+/** The stored row of a LinkedIn message read before. */
+const storedId = async (messageId: string) =>
+  (await db.messages.where('externalMessageId').equals(`linkedin:${messageId}`).first())?.id;
+
 /** Orbit itself sent this chat a LinkedIn message before `at` (not a hand-off the student sent). */
 async function orbitSentOnLinkedIn(chat: CoffeeChat, at: string): Promise<boolean> {
   const sent = await db.outbound
@@ -109,7 +114,7 @@ async function orbitSentOnLinkedIn(chat: CoffeeChat, at: string): Promise<boolea
  * replied.
  */
 export async function recordLinkedInMessages(
-  user: Pick<User, 'id' | 'timezone'>,
+  user: Pick<User, 'id' | 'timezone'> & { email?: string },
   messages: LinkedInInboxMessage[],
   now = new Date(),
 ): Promise<string[]> {
@@ -139,6 +144,15 @@ export async function recordLinkedInMessages(
       )
     )
       await recomputePersonStrength(person.id, now);
+    // and kept, so Orbit shows and answers what they wrote (plan 22)
+    const { added } = await storeLinkedInChat(
+      user,
+      person,
+      msgs[0]!.chatId,
+      sorted.map((m) => ({ id: m.id, at: m.at!, out: m.fromMe, text: m.text })),
+      now,
+    );
+    const rowOf = new Map(added.map((m) => [m.externalMessageId, m.id]));
     const chat = await liveChatOf(person.id);
     if (!chat || chat.stage === 'archived') continue;
     const at = now.toISOString();
@@ -178,7 +192,11 @@ export async function recordLinkedInMessages(
       timeZone: user.timezone,
       awaitingAnswer: true,
     });
-    const evidence = { table: 'linkedin_messages', id: reply.id, at: replyAt };
+    // the stored message when there is one, so the card can quote it
+    const stored = rowOf.get(`linkedin:${reply.id}`) ?? (await storedId(reply.id));
+    const evidence = stored
+      ? { table: 'messages', id: stored, at: replyAt }
+      : { table: 'linkedin_messages', id: reply.id, at: replyAt };
     // a first reply moves the chat by itself when Orbit knows the ask went out on LinkedIn: it sent the outreach
     // there, or it read the student's own message to this person in this same inbox before the reply came. A
     // LinkedIn message answering an ask that went out some other way (by email) is proposed for the student to
@@ -210,7 +228,7 @@ export async function recordLinkedInMessages(
         'reply_received',
         `${person.firstName} replied on LinkedIn`,
         reply.text.slice(0, 120),
-        `/people/${person.id}`,
+        `/people/${person.id}?tab=conversation`,
       );
     await evaluateImmediateSuggestions(user.id, { chatId: chat.id, personId: person.id }, now).catch(
       () => undefined,

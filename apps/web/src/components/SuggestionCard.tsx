@@ -12,6 +12,7 @@ import {
   needsWarmUp,
   startWarmUpOrOutreach,
 } from '../engine/brief';
+import { quotedMessageFor, wroteWhen } from '../engine/conversation';
 import { markPrepOpened } from '../engine/drafts';
 import { markActionItemDone } from '../engine/facts';
 import { answerHeldMeeting } from '../engine/fathom';
@@ -80,19 +81,11 @@ export function SuggestionCard({
     ) ?? false;
   const other = useOther(s.payload.otherPersonId as string | undefined);
   const introducer = useOther(s.payload.introducerId as string | undefined);
-  // what made Orbit think the stage changed: the message it read, when there is one
-  const evidence = useLiveQuery(async () => {
-    // "Did Mateo introduce you to Felix?" shows the email that made Orbit ask
-    if (s.kind === 'confirm_intro' && typeof s.payload.messageId === 'string') {
-      const m = await db.messages.get(s.payload.messageId);
-      return m ? { text: m.bodyText.replace(/\s+/g, ' ').trim(), at: m.sentAt } : undefined;
-    }
-    if (s.kind !== 'confirm_stage') return undefined;
-    const e = await db.stageEvents.get(s.payload.stageEventId as string);
-    if (e?.evidenceRefTable !== 'messages' || !e.evidenceRefId) return undefined;
-    const m = await db.messages.get(e.evidenceRefId);
-    return m ? { text: m.bodyText.replace(/\s+/g, ' ').trim(), at: m.sentAt } : undefined;
-  }, [s.kind, s.payload.stageEventId]);
+  // the message the card is about: the reply it answers, or what made Orbit think the stage changed (plan 22)
+  const evidence = useLiveQuery(
+    () => quotedMessageFor(s),
+    [s.kind, s.payload.stageEventId, s.payload.messageId, s.payload.inReplyTo],
+  );
   const warmAction = chat?.warmUp?.actions.find((a) => a.id === (s.payload.actionId as string));
   const comment = useMemo(
     () =>
@@ -485,13 +478,7 @@ export function SuggestionCard({
                   data-testid="stage-evidence"
                 >
                   <span className="text-ink-3">
-                    {first} wrote{' '}
-                    {new Date(evidence.at).toLocaleDateString('en-US', {
-                      weekday: 'short',
-                      month: 'short',
-                      day: 'numeric',
-                    })}
-                    :{' '}
+                    {first} {wroteWhen(evidence)}:{' '}
                   </span>
                   <span className="line-clamp-2">“{evidence.text}”</span>
                 </blockquote>
@@ -503,6 +490,17 @@ export function SuggestionCard({
                 <Button onClick={() => confirmStage(false)}>{stageNoLabel(toStage, first)}</Button>
               </div>
             </>
+          )}
+          {s.kind !== 'confirm_stage' && s.kind !== 'confirm_intro' && evidence && (
+            <blockquote
+              className="mt-2 rounded-lg bg-canvas-2 px-3 py-2 text-[13px] text-ink-2"
+              data-testid="reply-quote"
+            >
+              <span className="text-ink-3">
+                {first} {wroteWhen(evidence)}:{' '}
+              </span>
+              <span className="line-clamp-3">“{evidence.text}”</span>
+            </blockquote>
           )}
           {s.kind === 'confirm_merge' && person && other && (
             <MergeChoice a={person} b={other} asking={mergeAsk} onAsk={setMergeAsk} onDecide={confirmMerge} />

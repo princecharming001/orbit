@@ -33,6 +33,7 @@ import {
   wordsIn,
 } from '@orbit/core';
 import { db } from '../../db/schema';
+import { conversationWith } from '../../engine/conversation';
 import { DEMO_USER_ID } from '../../engine/demo';
 import { lastInboundOf, liveChatOf, nextMessageKind } from '../../engine/drafts';
 import {
@@ -604,20 +605,29 @@ export const searchPeople = defineTool({
 
 // ---------- get_person ----------
 
-const PERSON_SECTIONS = ['facts', 'timeline', 'prep', 'drafts', 'connections', 'notes', 'promises'] as const;
+const PERSON_SECTIONS = [
+  'facts',
+  'timeline',
+  'conversation',
+  'prep',
+  'drafts',
+  'connections',
+  'notes',
+  'promises',
+] as const;
 
 export const getPerson = defineTool({
   name: 'get_person',
   kind: 'read',
   description:
-    'Call this when the student asks about one person: who they are, what Orbit knows about them, when they last talked, their chat stage and booked time, their drafts, who they know, their warm-up, their promises, or prep for a chat with them (goal, ask, questions, logistics, a 30 second intro, and with prep what their research brief says they did lately and its openers). Needs a personId from search_people. Choose the sections you need; facts and prep are the most useful for writing.',
+    'Call this when the student asks about one person: who they are, what Orbit knows about them, when they last talked, their chat stage and booked time, what they wrote and what the student wrote back (conversation: the latest email and LinkedIn messages, for "what did she say?"), their drafts, who they know, their warm-up, their promises, or prep for a chat with them (goal, ask, questions, logistics, a 30 second intro, and with prep what their research brief says they did lately and its openers). Needs a personId from search_people. Choose the sections you need; facts and prep are the most useful for writing.',
   input: z.object({
     personId: z.string().describe('The person id (from search_people).'),
     include: z
       .array(z.enum(PERSON_SECTIONS))
       .optional()
       .describe(
-        'Sections to include: facts, timeline, prep, drafts, connections (who they know), notes, promises. Default: facts and drafts.',
+        'Sections to include: facts, timeline, conversation (the latest messages both ways, email and LinkedIn), prep, drafts, connections (who they know), notes, promises. Default: facts and drafts.',
       ),
   }),
   capabilities: [
@@ -743,6 +753,19 @@ export const getPerson = defineTool({
         .map((t) => ({ ...t, when: fmtWhen(t.at, ctx) }));
       out.timeline = tl;
     }
+    // the messages themselves, every channel Orbit reads (plan 22); texts stay counts only, never what was said
+    if (want.has('conversation'))
+      out.conversation = (await conversationWith(ctx.user.id, person.id))
+        .filter((m) => m.channel !== 'text')
+        .slice(-12)
+        .map((m) => ({
+          from: m.out ? 'student' : person.firstName,
+          channel: m.channel === 'linkedin' ? 'LinkedIn' : 'email',
+          when: fmtWhen(m.at, ctx),
+          subject: m.subject ? wrapped(ctx, 'email', m.subject, 160) : undefined,
+          text: wrapped(ctx, m.channel === 'linkedin' ? 'linkedin_message' : 'email', m.text, 800),
+          sending: m.pending || undefined,
+        }));
     if (want.has('drafts'))
       out.drafts = drafts
         .filter((d) => d.status !== 'cancelled')

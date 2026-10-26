@@ -504,6 +504,12 @@ export interface DemoDataset {
   /** where each relationship should stand once mail, calendar and notes are replayed through the pipeline */
   chats: CoffeeChat[];
   notes: MeetingNote[];
+  /** 1:1 LinkedIn messages, kept as Orbit keeps those it reads live (plan 22) */
+  linkedinChats: {
+    personId: string;
+    chatId: string;
+    messages: { id: string; at: string; out: boolean; text: string }[];
+  }[];
 }
 
 export function buildDemoDataset(
@@ -1166,6 +1172,7 @@ export function buildDemoDataset(
   const calendarChanges: DemoCalendarChange[] = [];
   const chats: CoffeeChat[] = [];
   const notes: MeetingNote[] = [];
+  const linkedinChats: DemoDataset['linkedinChats'] = [];
   let mid = 0;
   type Turn = {
     dir: 'in' | 'out';
@@ -1888,6 +1895,26 @@ export function buildDemoDataset(
         signal: 'reply_neutral',
       },
     ]);
+    // they connected on LinkedIn the day after the chat, and said a word there too
+    const linked = businessDay(S, 1, 19);
+    linkedinChats.push({
+      personId: rhea.id,
+      chatId: 'li_chat_rhea',
+      messages: [
+        {
+          id: 'li_rhea_1',
+          at: addMinutes(linked, 5).toISOString(),
+          out: true,
+          text: `Thanks again for yesterday, Rhea. Staying on Postgres for now, I'll tell you how it holds up.`,
+        },
+        {
+          id: 'li_rhea_2',
+          at: addMinutes(linked, 70).toISOString(),
+          out: false,
+          text: `Glad it helped! Send me the marketplace when it's live, I'd love to try the search.`,
+        },
+      ],
+    });
     const ev = addEvent(rhea, {
       id: 'ev_spring',
       title: `${meFirst} / Rhea`,
@@ -2658,5 +2685,6 @@ export function buildDemoDataset(
     calendarChanges,
     chats,
     notes,
+    linkedinChats,
   };
 }

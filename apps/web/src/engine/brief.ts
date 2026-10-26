@@ -50,6 +50,7 @@ import {
 import { addTouchpoint, feedback, notify, recomputeAllStrengths } from '../db/repo';
 import { db } from '../db/schema';
 import { describeLlmFailure, hasLlm, llmDraft, llmSummary, toLlmError } from '../integrations/anthropic';
+import { latestReply, linkedInRepliesByPerson, newer } from './conversation';
 import { researchOpeners } from './deepResearch';
 import { goalRegisterDraft } from './goalDrafts';
 import { bestPathStrength, buildReachGraph, reachPersonIn } from './graph';
@@ -134,15 +135,17 @@ async function ruleInput(userId: string, now: Date, scope?: { chatId?: string; p
     : scope?.personId
       ? allChats.filter((c) => c.personId === scope.personId)
       : allChats;
+  // a chat's last reply: on its email thread, or on LinkedIn, whichever is newer (plan 22)
   const lastInboundByChat = new Map<string, EmailMessage>();
+  const onLinkedIn = await linkedInRepliesByPerson(userId);
   for (const c of chats) {
-    if (!c.threadId) continue;
-    const msgs = await db.messages.where('threadId').equals(c.threadId).toArray();
+    const msgs = c.threadId ? await db.messages.where('threadId').equals(c.threadId).toArray() : [];
     const last = msgs
       // an auto-reply or an out-of-office note is not the person answering
       .filter((m) => m.direction === 'inbound' && !m.isAutomated && m.signal !== 'out_of_office')
       .sort((a, b) => b.sentAt.localeCompare(a.sentAt))[0];
-    if (last) lastInboundByChat.set(c.id, last);
+    const either = newer(last, onLinkedIn.get(c.personId));
+    if (either) lastInboundByChat.set(c.id, either);
   }
   const factsByPerson = new Map<string, PersonFact[]>();
   for (const f of facts) {
@@ -647,12 +650,17 @@ export async function buildDraftContext(
   // a report-back is addressed to the referrer; the chat on the suggestion is the target's chat
   const chat = kind === 'report_back' ? undefined : chatFound;
   let thread: DraftContext['thread'];
+  // their newest answer on any channel: a LinkedIn reply newer than the email thread is what the draft answers
+  const reply = chat ? await latestReply(chat) : undefined;
   if (chat?.threadId) {
     const [msgs, th] = await Promise.all([
       db.messages.where('threadId').equals(chat.threadId).sortBy('sentAt'),
       db.threads.get(chat.threadId),
     ]);
-    const lastIn = [...msgs].reverse().find((m) => m.direction === 'inbound');
+    const lastIn = newer(
+      [...msgs].reverse().find((m) => m.direction === 'inbound'),
+      reply?.channel === 'linkedin' ? reply : undefined,
+    );
     const firstOut = msgs.find((m) => m.direction === 'outbound');
     thread = {
       lastInboundBody: lastIn?.bodyText,
@@ -667,7 +675,16 @@ export async function buildDraftContext(
         !!th?.externalThreadId,
       subject: th?.subject,
     };
-  } else if (chat?.firstOutreachAt) thread = { firstOutboundAt: chat.firstOutreachAt };
+  } else if (reply)
+    thread = {
+      lastInboundBody: reply.bodyText,
+      lastInboundAt: reply.sentAt,
+      firstOutboundAt: chat?.firstOutreachAt,
+      asksOfUser: reply.extraction?.asksOfUser,
+      proposedTimes: reply.extraction?.proposedTimes.map((t) => ({ startIso: t.startIso, raw: t.raw })),
+      lastSignal: reply.signal,
+    };
+  else if (chat?.firstOutreachAt) thread = { firstOutboundAt: chat.firstOutreachAt };
   // outreach to someone the student has already emailed with picks that exchange back up (and its thread, when the
   // last message is recent enough to reply to) instead of introducing the student as a stranger
   let history: DraftContext['history'];
@@ -686,6 +703,8 @@ export async function buildDraftContext(
       // them, a club list) the introducer's note is not something they wrote, and a CC is not a conversation
       .filter((m) => {
         if (m.isAutomated) return false;
+        // a LinkedIn chat is one to one: every message in it passed between them
+        if (m.channel === 'linkedin') return true;
         // addresses on stored messages are already normalised
         const theirs = (e: string) => person.emails.includes(e);
         const others = [...m.toEmails, ...m.ccEmails].filter((e) => !theirs(e) && e !== mine);
@@ -697,8 +716,10 @@ export async function buildDraftContext(
       .sort((a, b) => a.sentAt.localeCompare(b.sentAt));
     const last = msgs.at(-1);
     if (last) {
-      const lastThread = theirThreads.find((t) => t.id === last.threadId);
-      const recent = now.getTime() - new Date(last.sentAt).getTime() <= 180 * DAY;
+      // the thread to pick back up is an email one (a LinkedIn chat has no email thread to reply in)
+      const lastEmail = msgs.filter((m) => m.channel !== 'linkedin').at(-1);
+      const lastThread = lastEmail && theirThreads.find((t) => t.id === lastEmail.threadId);
+      const recent = !!lastEmail && now.getTime() - new Date(lastEmail.sentAt).getTime() <= 180 * DAY;
       history = {
         lastAt: last.sentAt,
         lastInbound: last.direction === 'inbound',
@@ -1056,7 +1077,7 @@ async function materializeDraft(
 async function threadFor(
   kind: MessageKind,
   chat: CoffeeChat | undefined,
-  ctx: DraftContext,
+  ctx: Pick<DraftContext, 'thread' | 'history'>,
 ): Promise<{ externalThreadId?: string; inReplyTo?: string }> {
   const threadId = NEW_THREAD_KINDS.has(kind)
     ? kind === 'outreach' && ctx.thread?.inThread
@@ -1115,8 +1136,13 @@ export async function draftForSuggestion(
   if (!asked || !s.personId) return undefined;
   const person = await db.people.get(s.personId);
   if (!person) return undefined;
-  const asked0Channel: 'gmail' | 'linkedin' =
-    (s.payload.channel as 'gmail' | 'linkedin' | undefined) ?? (person.primaryEmail ? 'gmail' : 'linkedin');
+  // an answer to a LinkedIn message goes back on LinkedIn, where they wrote
+  const answering = s.payload.inReplyTo ? await db.messages.get(s.payload.inReplyTo as string) : undefined;
+  const onLinkedIn = answering?.channel === 'linkedin';
+  const asked0Channel: 'gmail' | 'linkedin' = onLinkedIn
+    ? 'linkedin'
+    : ((s.payload.channel as 'gmail' | 'linkedin' | undefined) ??
+      (person.primaryEmail ? 'gmail' : 'linkedin'));
   const { out, generatedBy, ctx } = await materializeDraft(
     user,
     person,
@@ -1130,9 +1156,9 @@ export async function draftForSuggestion(
   // the kind the thread called for (a bump to someone who answered is the scheduling reply), and the channel (an
   // introduction made by email is answered on it)
   const kind = out.kind ?? asked;
-  const channel = writtenChannel(out, asked0Channel, person);
+  const channel = onLinkedIn ? 'linkedin' : writtenChannel(out, asked0Channel, person);
   const chat = s.chatId && kind !== 'report_back' ? await db.chats.get(s.chatId) : undefined;
-  const { externalThreadId, inReplyTo } = await threadFor(kind, chat, ctx);
+  const { externalThreadId, inReplyTo } = channel === 'linkedin' ? {} : await threadFor(kind, chat, ctx);
   const msg: OutboundMessage = {
     id: newId('out'),
     userId: user.id,
@@ -1168,6 +1194,63 @@ export async function draftForSuggestion(
     if (r?.sent) return (await db.outbound.get(msg.id)) ?? msg;
   }
   return msg;
+}
+
+/**
+ * A message the student typed themselves in a person's Conversation tab (plan 22): a draft of kind `reply` in their
+ * chat, threaded like any reply (an email answers the chat's thread), with the student's words as they are. It goes
+ * out through the usual approval (undo window, hand-off when Orbit cannot send it itself).
+ */
+export async function draftTypedMessage(
+  user: User,
+  personId: string,
+  channel: 'gmail' | 'linkedin',
+  body: string,
+  now = new Date(),
+): Promise<OutboundMessage | undefined> {
+  const person = await db.people.get(personId);
+  if (!person || person.userId !== user.id) return undefined;
+  const chat = (await db.chats.where('personId').equals(personId).toArray()).find(
+    (c) => c.stage !== 'archived',
+  );
+  const where = channel === 'gmail' ? await threadFor('reply', chat, {}) : {};
+  // email with no thread to answer: a subject from their last email with the student, else a plain one
+  const subject =
+    channel === 'gmail' && !where.externalThreadId
+      ? ((await lastSubjectWith(user.id, personId)) ?? `Following up`)
+      : undefined;
+  const msg: OutboundMessage = {
+    id: newId('out'),
+    userId: user.id,
+    personId,
+    chatId: chat?.id,
+    channel,
+    kind: 'reply',
+    externalThreadId: where.externalThreadId,
+    inReplyToMessageId: where.inReplyTo,
+    toEmail: person.primaryEmail,
+    toLinkedinUrl: person.linkedinUrl,
+    subject,
+    bodyDraft: body,
+    status: 'draft',
+    generatedBy: 'template',
+    createdAt: now.toISOString(),
+  };
+  await db.outbound.add(msg);
+  return msg;
+}
+
+async function lastSubjectWith(userId: string, personId: string): Promise<string | undefined> {
+  const threads = await db.threads
+    .where('userId')
+    .equals(userId)
+    .filter(
+      (t) => t.channel !== 'linkedin' && !!t.subject && (t.participantPersonIds ?? []).includes(personId),
+    )
+    .toArray();
+  const last = threads.sort((a, b) => (b.lastMessageAt ?? '').localeCompare(a.lastMessageAt ?? ''))[0]
+    ?.subject;
+  return last ? `Re: ${last.replace(/^\s*(re|fwd?)\s*:\s*/i, '')}` : undefined;
 }
 
 export async function draftMessage(

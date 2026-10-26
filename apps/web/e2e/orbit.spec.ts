@@ -1883,7 +1883,7 @@ test.describe('Usability round 5: one draft, kept edits, saved settings, chats t
     await expect(
       page
         .getByTestId('suggestion-schedule_propose')
-        .filter({ hasText: /Jonah replied\. Orbit cannot see what they wrote/ }),
+        .filter({ hasText: /You marked Jonah as replied\. If they asked something/ }),
     ).toBeVisible();
     // Scheduled with the time left for later: the card and the page ask for it
     await page.goto('people');
@@ -2037,7 +2037,7 @@ test.describe('Usability round 5: chats Orbit cannot see, and notes in shorthand
     await expect(page.getByTestId('drafts-quiet')).toHaveCount(0);
     const card = page
       .getByTestId('suggestion-schedule_propose')
-      .filter({ hasText: /Aisha replied\. Orbit cannot see what they wrote/ });
+      .filter({ hasText: /You marked Aisha as replied\. If they asked something/ });
     await expect(card).toBeVisible();
     await expect(card).toContainText('Find a time');
     await card.getByTestId('draft-review').click();
@@ -3218,5 +3218,38 @@ test.describe('LinkedIn profiles fill in people (plan 17 E)', () => {
     await expect(logo).toHaveAttribute('src', /logos\/stripe\.png$/);
     // their schools come from the profile's education section
     await expect(page.getByText('University of Michigan').first()).toBeVisible();
+  });
+});
+
+test.describe('One inbox (plan 22)', () => {
+  test("a person's Conversation tab shows email and LinkedIn together and answers from Orbit", async ({
+    page,
+  }) => {
+    test.setTimeout(150_000);
+    await loadDemo(page);
+    await page.goto('people?view=list');
+    await page.getByTestId('people-row').filter({ hasText: 'Rhea Iyer' }).getByRole('link').first().click();
+    await expect(page.getByRole('heading', { name: 'Rhea Iyer', level: 1 })).toBeVisible();
+    await page.getByRole('tab', { name: /Conversation/ }).click();
+    await expect(page).toHaveURL(/tab=conversation/);
+    const conv = page.getByTestId('conversation');
+    const messages = conv.getByTestId('conversation-message');
+    // the spring email thread and the LinkedIn note after it, in one place
+    await expect(messages.filter({ hasText: 'Postgres or Elasticsearch' }).first()).toBeVisible();
+    await expect(
+      messages.filter({ hasText: "Send me the marketplace when it's live" }).first(),
+    ).toHaveAttribute('data-channel', 'linkedin');
+    // only LinkedIn: the two messages there
+    await conv.getByTestId('conversation-filter-linkedin').click();
+    await expect(messages).toHaveCount(2);
+    await conv.getByTestId('conversation-filter-all').click();
+    // answer without leaving Orbit, on the channel picked
+    await expect(conv.getByTestId('conversation-channel-gmail')).toBeVisible();
+    await conv
+      .getByTestId('conversation-input')
+      .fill('Hi Rhea, the marketplace is live: search held up fine.');
+    await conv.getByTestId('conversation-send').click();
+    await expect(conv.getByTestId('conversation-error')).toHaveCount(0);
+    await expect(conv.getByTestId('conversation-input')).toHaveValue('', { timeout: 15_000 });
   });
 });

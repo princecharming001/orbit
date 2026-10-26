@@ -4,6 +4,7 @@ import { recomputeAllStrengths, setCurrentUserId } from '../db/repo';
 import { db, wipeDatabase } from '../db/schema';
 import { generateBrief, recommendationsRefresh, refreshPersonSummary } from './brief';
 import { DEMO_STUDENT_FACE, withDemoFaces } from './demoFaces';
+import { storeLinkedInChat } from './conversation';
 import { recomputeEdges } from './graph';
 import { ingestEmails, ingestEvents, type RawEmail, type RawEvent } from './ingest';
 import { ingestNote } from './notes';
@@ -231,6 +232,12 @@ export async function loadDemo(
   const replayed = await db.suggestions.where('userId').equals(user.id).toArray();
   await db.outbound.bulkDelete(replayed.map((s) => s.outboundMessageId).filter((id): id is string => !!id));
   await db.suggestions.bulkDelete(replayed.map((s) => s.id));
+
+  // the LinkedIn messages Orbit would have read live, on the people's Conversation tabs (plan 22)
+  for (const c of ds.linkedinChats) {
+    const person = ds.people.find((p) => p.id === c.personId);
+    if (person) await storeLinkedInChat(user, person, c.chatId, c.messages, now);
+  }
 
   log('Drawing the sample network');
   await recomputeAllStrengths(user.id, now);

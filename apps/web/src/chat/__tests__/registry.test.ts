@@ -92,7 +92,7 @@ describe('every tool parses and executes its example input against the demo', ()
       search_people: { query: ids.person.firstName },
       get_person: {
         personId: ids.person.id,
-        include: ['facts', 'timeline', 'prep', 'drafts', 'connections', 'notes', 'promises'],
+        include: ['facts', 'timeline', 'conversation', 'prep', 'drafts', 'connections', 'notes', 'promises'],
       },
       list_drafts: { list: 'all' },
       get_draft: { draftId: ids.draft.id },

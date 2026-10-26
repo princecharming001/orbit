@@ -16,6 +16,7 @@ import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom';
 import { db } from '../db/schema';
 import { ensureDrafts, markWarmUpAction, needsWarmUp, startWarmUpOrOutreach } from '../engine/brief';
+import { quotedMessageFor, wroteWhen } from '../engine/conversation';
 import { composeDraft, markPrepOpened } from '../engine/drafts';
 import { markActionItemDone } from '../engine/facts';
 import { answerIntroductionQuestion } from '../engine/introductions';
@@ -522,19 +523,12 @@ function Overview({ deck, onLeave }: { deck: MorningDeck; onLeave: (to?: string)
   );
 }
 
-/** What made Orbit ask: the email behind a stage question or an introduction, when there is one. */
+/** The message a card is about: the reply it answers, the email behind a stage question or an introduction. */
 function useEvidence(s: Suggestion) {
-  return useLiveQuery(async () => {
-    if (s.kind === 'confirm_intro' && typeof s.payload.messageId === 'string') {
-      const m = await db.messages.get(s.payload.messageId);
-      return m ? { text: m.bodyText.replace(/\s+/g, ' ').trim(), at: m.sentAt } : undefined;
-    }
-    if (s.kind !== 'confirm_stage' || typeof s.payload.stageEventId !== 'string') return undefined;
-    const e = await db.stageEvents.get(s.payload.stageEventId);
-    if (e?.evidenceRefTable !== 'messages' || !e.evidenceRefId) return undefined;
-    const m = await db.messages.get(e.evidenceRefId);
-    return m ? { text: m.bodyText.replace(/\s+/g, ' ').trim(), at: m.sentAt } : undefined;
-  }, [s.kind, s.payload.stageEventId, s.payload.messageId]);
+  return useLiveQuery(
+    () => quotedMessageFor(s),
+    [s.kind, s.payload.stageEventId, s.payload.messageId, s.payload.inReplyTo],
+  );
 }
 
 const shortDay = (iso: string) =>
@@ -827,7 +821,7 @@ function Decision({
           <span className="text-ink-3">
             {s.kind === 'confirm_intro'
               ? `${introducer?.firstName ?? 'They'} wrote to you both ${shortDay(evidence.at)}: `
-              : `${first} wrote ${shortDay(evidence.at)}: `}
+              : `${first} ${wroteWhen(evidence)}: `}
           </span>
           <span className="line-clamp-3">“{evidence.text}”</span>
         </blockquote>

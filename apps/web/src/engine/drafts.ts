@@ -11,6 +11,7 @@ import { composeKindFor, newId } from '@orbit/core';
 import { db } from '../db/schema';
 import { draftForSuggestion, draftMessage, needsWarmUp, startWarmUpOrOutreach, unsentDraftOf } from './brief';
 import { type AskPosting, introNoteBase, noteForAsk } from './introNote';
+import { latestReply, newer } from './conversation';
 import { currentResumeFacets, sharesOrgNow } from './resume';
 
 // ---------- the student's edits ----------
@@ -110,9 +111,16 @@ export async function markPrepOpened(suggestionId: string, now = new Date()): Pr
 
 /** The chat's thread, as the kind picker reads it: their last message and what it asked. */
 export async function lastInboundOf(chat: CoffeeChat | undefined) {
-  if (!chat?.threadId) return undefined;
-  const msgs = await db.messages.where('threadId').equals(chat.threadId).sortBy('sentAt');
-  const m = [...msgs].reverse().find((x) => x.direction === 'inbound');
+  if (!chat) return undefined;
+  const msgs = chat.threadId
+    ? await db.messages.where('threadId').equals(chat.threadId).sortBy('sentAt')
+    : [];
+  // a LinkedIn reply newer than the email thread is their last message (plan 22)
+  const reply = await latestReply(chat);
+  const m = newer(
+    [...msgs].reverse().find((x) => x.direction === 'inbound'),
+    reply?.channel === 'linkedin' ? reply : undefined,
+  );
   return m
     ? {
         lastInboundAt: m.sentAt,

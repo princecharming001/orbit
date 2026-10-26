@@ -29,6 +29,7 @@ import {
   linkedInPostActivity,
   unipileConfigured,
 } from '../integrations/unipile';
+import { storeLinkedInChat } from './conversation';
 import { LIVE_SOON, liveLinkedInAccount } from './linkedinLive';
 
 /** Proxy calls per run for the chat history (each reads up to ~24 pages); the rest continues on the next run. */
@@ -183,7 +184,7 @@ async function peopleByMember(userId: string): Promise<Map<string, Person>> {
  * `posts: true`.
  */
 export async function syncLinkedInActivity(
-  user: Pick<User, 'id'>,
+  user: Pick<User, 'id'> & { timezone?: string; email?: string },
   opts: {
     now?: Date;
     fetch?: typeof fetch;
@@ -224,7 +225,10 @@ export async function syncLinkedInActivity(
     for (const chat of r.value.chats) {
       messages += chat.messages.length;
       const person = byMember.get(chat.memberId);
-      if (person && (await recordDmTouches(user.id, person, chat.messages))) touched.add(person.id);
+      if (!person) continue;
+      if (await recordDmTouches(user.id, person, chat.messages)) touched.add(person.id);
+      // the messages themselves, for the person's Conversation tab and the cards (plan 22)
+      await storeLinkedInChat(user, person, chat.chatId, chat.messages, now);
     }
     latest = later(latest, r.value.latest);
     cursor = r.value.cursor ?? undefined;

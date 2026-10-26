@@ -341,8 +341,9 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
         confidence: 0.8,
       });
     }
-    // the student moved the card to Replied themselves (an answer Orbit cannot see: no Gmail, or a LinkedIn reply):
-    // the next step is theirs, to write back and suggest a time, so Today says so instead of "nothing needs you"
+    // the student moved the card to Replied themselves with nothing Orbit can read (no Gmail, LinkedIn not connected
+    // live, a call or a text): the next step is theirs, to write back and suggest a time, so Today says so instead of
+    // "nothing needs you"
     const movedByStudent =
       chat.stage === 'replied' &&
       !awaitingReply &&
@@ -360,7 +361,7 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
         personId: chat.personId,
         chatId: chat.id,
         dedupeKey: `sched:${chat.id}:moved:${chat.stageEnteredAt}`,
-        reasonText: `${person.firstName} replied. Orbit cannot see what they wrote: if they asked something, answer it, then suggest a time to talk`,
+        reasonText: `You marked ${person.firstName} as replied. If they asked something, answer it, then suggest a time to talk`,
         signals: { movedByStudent: true },
         payload: { windows: inp.freeSlotsIso.slice(0, 2) },
         urgency: 0.85,
