@@ -452,6 +452,21 @@ export function Landing() {
                 </a>
               </li>
               <li>
+                {/* static pages (public/privacy, public/terms), so Google and anyone else can read them */}
+                <a
+                  className="hover:text-ink transition-colors"
+                  href={`${import.meta.env.BASE_URL}privacy/`}
+                  data-testid="landing-privacy-policy"
+                >
+                  Privacy policy
+                </a>
+              </li>
+              <li>
+                <a className="hover:text-ink transition-colors" href={`${import.meta.env.BASE_URL}terms/`}>
+                  Terms of service
+                </a>
+              </li>
+              <li>
                 <Link
                   className="hover:text-ink transition-colors"
                   to="/remove-me"
