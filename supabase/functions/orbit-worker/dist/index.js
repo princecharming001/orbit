@@ -264,9 +264,18 @@ function wrapPostgres(sql, inTx) {
     }
   };
 }
+var pgTypes = {
+  json: {
+    to: 114,
+    from: [114, 3802],
+    serialize: (x) => typeof x === "string" ? x : JSON.stringify(x),
+    parse: (x) => JSON.parse(x)
+  }
+};
 function connectDb(url, max = 4) {
   const sql = postgres(url, {
     prepare: false,
+    types: pgTypes,
     max,
     idle_timeout: 20,
     connect_timeout: 10,

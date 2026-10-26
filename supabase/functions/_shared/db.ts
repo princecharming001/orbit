@@ -69,10 +69,25 @@ function wrapPostgres(sql: PgSql, inTx: boolean): Db {
   };
 }
 
+/**
+ * `toParam` already sends JSON as text. postgres.js learns from the server that a `${x}::jsonb` parameter is jsonb and
+ * runs its own JSON.stringify on it, which stored every object as a JSON string (queue messages without a kind,
+ * attendee lists that are not arrays, sync state that grew into an array). Text passes through as it is.
+ */
+export const pgTypes = {
+  json: {
+    to: 114,
+    from: [114, 3802],
+    serialize: (x: unknown) => (typeof x === 'string' ? x : JSON.stringify(x)),
+    parse: (x: string) => JSON.parse(x),
+  },
+};
+
 /** The production database: one small pool per function instance. */
 export function connectDb(url: string, max = 4): Db {
   const sql = postgres(url, {
     prepare: false,
+    types: pgTypes,
     max,
     idle_timeout: 20,
     connect_timeout: 10,

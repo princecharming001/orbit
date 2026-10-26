@@ -15,7 +15,7 @@ import {
   sha256Bytes,
   timingSafeEqual,
 } from '../../functions/_shared/crypto.ts';
-import { toParam, toText } from '../../functions/_shared/db.ts';
+import { pgTypes, toParam, toText } from '../../functions/_shared/db.ts';
 import {
   authUrl,
   exchangeCode,
@@ -105,6 +105,13 @@ describe('db helpers', () => {
     expect(toParam(new Date('2026-01-01T00:00:00Z'))).toBe('2026-01-01T00:00:00.000Z');
     expect(toParam(undefined)).toBeNull();
     expect(toParam(5)).toBe(5);
+  });
+
+  it('sends JSON text to Postgres once, not encoded a second time', () => {
+    const text = toParam({ kind: 'score.user', userId: 'u' });
+    expect(pgTypes.json.serialize(text)).toBe('{"kind":"score.user","userId":"u"}');
+    expect(pgTypes.json.serialize({ a: 1 })).toBe('{"a":1}');
+    expect(pgTypes.json.from).toEqual([114, 3802]);
   });
 
   it('round-trips awkward text arrays through Postgres', async () => {
