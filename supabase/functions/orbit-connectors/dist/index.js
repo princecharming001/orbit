@@ -1014,8 +1014,11 @@ function makeHandler(deps) {
     }
     try {
       if (isVillage) return json(200, await villagePaths(village, deps.villageUser, body), h);
+      const reconnect = text(body.reconnectAccountId, 200);
+      if (reconnect && !await tokenValid(reconnect, body.token, deps.signingKey))
+        return json(403, { error: "this LinkedIn account is not linked to this browser" }, h);
       if (path === "/connect/start")
-        return json(200, await unipileConnectStart(deps, doFetch, deps.newRef ?? newRef), h);
+        return json(200, await unipileConnectStart(deps, doFetch, deps.newRef ?? newRef, reconnect), h);
       if (path === "/connect/status") {
         const st = await unipileConnectStatus(deps, body, doFetch);
         if (st.status === "connected" && st.accountId && deps.signingKey)
@@ -1058,14 +1061,15 @@ async function notifyUrl(deps, ref) {
   const sig = await accountToken(`link:${ref}`, deps.signingKey);
   return `${deps.publicUrl}/connect/notify?ref=${encodeURIComponent(ref)}&sig=${encodeURIComponent(sig)}`;
 }
-async function unipileConnectStart(deps, doFetch, makeRef) {
+async function unipileConnectStart(deps, doFetch, makeRef, reconnect) {
   const ref = makeRef();
   const notify_url = await notifyUrl(deps, ref);
   const res = await doFetch(`${deps.unipileBase}/api/v1/hosted/accounts/link`, {
     method: "POST",
     headers: uHeaders(deps),
     body: JSON.stringify({
-      type: "create",
+      type: reconnect ? "reconnect" : "create",
+      ...reconnect ? { reconnect_account: reconnect } : {},
       providers: ["LINKEDIN"],
       api_url: deps.unipileBase,
       expiresOn: new Date(Date.now() + 60 * 6e4).toISOString(),
@@ -1083,6 +1087,15 @@ var FAILED_SOURCE = /* @__PURE__ */ new Set(["ERROR", "CREDENTIALS", "PERMISSION
 async function unipileConnectStatus(deps, body, doFetch) {
   const ref = String(body.ref ?? "");
   if (!ref) return { status: "error", message: "No connection was started." };
+  const reconnect = text(body.reconnectAccountId, 200);
+  if (reconnect) {
+    const one = await doFetch(`${deps.unipileBase}/api/v1/accounts/${encodeURIComponent(reconnect)}`, {
+      headers: uHeaders(deps)
+    });
+    if (one.ok) return accountState(await one.json(), reconnect);
+    if (one.status !== 404) throw new Error(`unipile ${one.status}`);
+    return { status: "error", message: "LinkedIn no longer has that account. Connect it again." };
+  }
   const linked = await deps.links?.get(ref).catch(() => void 0);
   if (linked) {
     const one = await doFetch(`${deps.unipileBase}/api/v1/accounts/${encodeURIComponent(linked)}`, {
@@ -1247,7 +1260,7 @@ async function unipileRelations(deps, body, doFetch) {
   const accountId = String(body.accountId ?? "");
   const cursor = body.cursor ? `&cursor=${encodeURIComponent(String(body.cursor))}` : "";
   const res = await doFetch(
-    `${deps.unipileBase}/api/v1/users/relations?account_id=${encodeURIComponent(accountId)}&limit=200${cursor}`,
+    `${deps.unipileBase}/api/v1/users/relations?account_id=${encodeURIComponent(accountId)}&limit=1000${cursor}`,
     { headers: uHeaders(deps) }
   );
   if (!res.ok) throw new Error(`unipile ${res.status}`);
@@ -2343,15 +2356,22 @@ async function villagePaths(village, user, body) {
   const linkedinUrl = typeof body.linkedin_url === "string" ? body.linkedin_url.trim() : "";
   const company = typeof body.company === "string" ? body.company.trim() : "";
   const domain = typeof body.domain === "string" && body.domain.trim() ? body.domain.trim() : company && looksLikeDomain(company) ? company : "";
+  const refused = (r) => r.kind === "http" ? { paths: [], reason: r.status === 401 ? "unauthorized" : "error", message: r.message } : void 0;
   let intros;
   if (linkedinUrl) {
     const r = await village.personPaths(user, { linkedin_url: linkedinUrl });
-    if (!r.ok) throw new Error(r.message);
+    if (!r.ok)
+      return refused(r) ?? (() => {
+        throw new Error(r.message);
+      })();
     intros = personIntros(r.value);
   } else if (domain) {
     const clean = domain.replace(/^https?:\/\//i, "").replace(/^www\./i, "").replace(/\/.*$/, "").toLowerCase();
     const r = await village.companyPaths(user, { domain: clean, limit: 25 });
-    if (!r.ok) throw new Error(r.message);
+    if (!r.ok)
+      return refused(r) ?? (() => {
+        throw new Error(r.message);
+      })();
     intros = companyIntros(r.value);
   } else return { paths: [] };
   const fallbackTarget = typeof body.name === "string" && body.name ? body.name : company;

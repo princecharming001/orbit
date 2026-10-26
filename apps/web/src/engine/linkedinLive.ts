@@ -217,7 +217,13 @@ export async function connectLinkedInLive(
   if (usesMockConnectors(user.id)) accountId = MOCK_ACCOUNT_ID;
   else {
     if (!unipileConfigured()) return { ok: false, reason: 'unconfigured', message: LIVE_SOON };
-    const start = await startLinkedInConnect({ signal: opts.signal });
+    // an account LinkedIn signed out is signed in again, not replaced: Unipile bills per account
+    const prior = await liveLinkedInAccount(user.id);
+    const reconnect =
+      prior && prior.status !== 'revoked' && prior.externalAccountId && prior.accessToken
+        ? { reconnectAccountId: prior.externalAccountId, token: prior.accessToken }
+        : {};
+    const start = await startLinkedInConnect({ signal: opts.signal, ...reconnect });
     if (!start.ok)
       return start.reason === 'unconfigured'
         ? { ok: false, reason: 'unconfigured', message: LIVE_SOON }
@@ -235,15 +241,22 @@ export async function connectLinkedInLive(
     savePending(user.id, start.value.ref);
     setProgress({ phase: 'signin' });
     for (let i = 0; i < poll.tries && !accountId; i++) {
-      await sleep(poll.everyMs, opts.signal);
+      // every two seconds for the first half minute, then every ten: the sign-in takes a while once the window closes
+      await sleep(i < 15 ? poll.everyMs : poll.everyMs * 5, opts.signal);
       if (opts.signal?.aborted) break;
       // the window closed: LinkedIn may still be waiting on the student's approval in its app, and Unipile reports
       // the new account a little after its success page closes, so Orbit keeps waiting
       if (win.closed && progress?.phase === 'signin') setProgress({ phase: 'finishing' });
-      const st = await linkedInConnectStatus(start.value.ref, { signal: opts.signal });
+      const st = await linkedInConnectStatus(start.value.ref, { signal: opts.signal, ...reconnect });
       if (st.ok && st.value.status === 'connected' && st.value.accountId) {
         accountId = st.value.accountId;
-        accessToken = st.value.token;
+        accessToken =
+          st.value.token ?? (accountId === prior?.externalAccountId ? prior?.accessToken : undefined);
+        // a new account after all (the reconnect could not be used): the old one is not left behind, billed
+        if (prior?.externalAccountId && prior.externalAccountId !== accountId && prior.accessToken)
+          void disconnectLinkedInAccount(prior.externalAccountId, { token: prior.accessToken }).catch(
+            () => false,
+          );
       } else if (st.ok && st.value.status === 'error') {
         closeQuietly(win);
         return failed(user.id, st.value.message ?? 'LinkedIn sign-in did not finish.');

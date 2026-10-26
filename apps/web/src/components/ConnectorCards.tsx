@@ -19,7 +19,7 @@ import { setWarmIntros, villageAvailable, villageOffered } from '../engine/warmI
 import { usesMockConnectors } from '../integrations/connectorsMock';
 import { subscribePrefs } from '../integrations/prefs';
 import { type LinkedInLedger, linkedInLedger, unipileConfigured } from '../integrations/unipile';
-import { checkVillage, subscribeVillageHealth, villageHealth } from '../integrations/village';
+import { checkVillage, subscribeVillageHealth, villageHealth, villageRefused } from '../integrations/village';
 import { Button, Modal, relDate, Spinner, Switch, useToast } from '../ui';
 import { EnrichmentStatusLine } from './EnrichmentStatus';
 import { AppMark, IntegrationRow, RowStatus } from './IntegrationRow';
@@ -243,15 +243,18 @@ export function WarmIntrosCard({ user }: { user: User }) {
     if (on && !mock) void checkVillage();
   }, [on, mock]);
   const notSetUp = on && !mock && villageHealth() === 'unconfigured';
+  const refused = on && !mock && villageRefused();
   return (
     <IntegrationRow
       testId="settings-warm-intros"
       mark={<AppMark logo="village.do">V</AppMark>}
       name="Warm intros (Village)"
       status={
-        <RowStatus tone={on && !notSetUp ? 'good' : 'muted'} testId="settings-warm-intros-status">
+        <RowStatus tone={on && !notSetUp && !refused ? 'good' : 'muted'} testId="settings-warm-intros-status">
           {notSetUp ? (
             "Village isn't set up"
+          ) : refused ? (
+            "Village isn't accepting Orbit's key"
           ) : on ? (
             <>
               <Check size={12} /> On
@@ -268,7 +271,9 @@ export function WarmIntrosCard({ user }: { user: User }) {
             ? 'On for the demo, with sample paths.'
             : notSetUp
               ? "Orbit's server has no Village key yet, so there are no intro paths from it. Your own routes still work."
-              : 'Intro paths from Village; it sees the names you look up'
+              : refused
+                ? 'Village refused the key on its last lookup, so Orbit stops asking it until tomorrow. Your own routes still work.'
+                : 'Intro paths from Village; it sees the names you look up'
       }
       actions={
         offered ? (

@@ -406,7 +406,7 @@ async function runParse<T extends z.ZodTypeAny>(
   try {
     reserveRequest();
     const res = await c.messages.parse({
-      model: own ? (opts.model ?? MODEL) : MODEL,
+      model: opts.model ?? MODEL,
       max_tokens: maxTokens,
       system: `${system}\n\n${untrustedRule(tag)}`,
       messages: [{ role: 'user', content: buildUser(wrap) }],

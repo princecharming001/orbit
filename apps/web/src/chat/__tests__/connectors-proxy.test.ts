@@ -247,6 +247,37 @@ describe('orbit-connectors proxy', () => {
     });
   });
 
+  it('reconnects a signed-out account instead of creating a second one, for the browser holding its token', async () => {
+    const { handler, upstream } = harness({}, (url) =>
+      url.includes('/hosted/accounts/link')
+        ? new Response(JSON.stringify({ object: 'HostedAuthURL', url: 'https://unipile/login' }), {
+            status: 201,
+          })
+        : url.includes('/api/v1/accounts/a1')
+          ? new Response(JSON.stringify({ id: 'a1', name: 'old', sources: [{ status: 'OK' }] }))
+          : new Response('{}', { status: 404 }),
+    );
+    // another browser's token cannot reconnect this account
+    expect(
+      (await handler(post('/connect/start', { reconnectAccountId: 'a1', token: TOKEN.acc_1 }))).status,
+    ).toBe(403);
+    expect(upstream).toHaveLength(0);
+    const r = await handler(post('/connect/start', { reconnectAccountId: 'a1', token: TOKEN.a1 }));
+    expect(r.status).toBe(200);
+    expect(upstream[0]!.body).toMatchObject({
+      type: 'reconnect',
+      reconnect_account: 'a1',
+      providers: ['LINKEDIN'],
+    });
+    // its state says when the sign-in is through: the same id, a fresh token
+    expect(
+      await (
+        await handler(post('/connect/status', { ref: 'ref1', reconnectAccountId: 'a1', token: TOKEN.a1 }))
+      ).json(),
+    ).toEqual({ status: 'connected', accountId: 'a1', token: TOKEN.a1 });
+    expect(upstream.at(-1)!.url).toContain('/api/v1/accounts/a1');
+  });
+
   it('maps the connect status: connected, pending, failed sign-ins as error', async () => {
     const ok = harness();
     expect(await (await ok.handler(post('/connect/status', { ref: 'ref1' }))).json()).toEqual({
@@ -482,13 +513,31 @@ describe('orbit-connectors proxy', () => {
     expect(upstream.length).toBe(before);
   });
 
-  it('answers 502 when Village fails, and treats a 404 as no paths', async () => {
+  it('says when Village refuses or fails (no 502 to wait on), treats a 404 as no paths, and a dead network as 502', async () => {
+    // Village answering with an error is an answer: no paths, with the reason, so the browser can act on it
     const fails = harness({}, (url) =>
       url.endsWith('/auth/tokens')
         ? new Response(JSON.stringify({ data: { token: 't' } }))
         : new Response('{}', { status: 400 }),
     );
-    expect((await fails.handler(post('/paths', DANA))).status).toBe(502);
+    const failed = await fails.handler(post('/paths', DANA));
+    expect(failed.status).toBe(200);
+    expect(await failed.json()).toMatchObject({ paths: [], reason: 'error' });
+    // the key refused (401, after one token refresh): 'unauthorized', which pauses Village in the browser for a day
+    const refused = harness({}, (url) =>
+      url.endsWith('/auth/tokens')
+        ? new Response(JSON.stringify({ data: { token: 't' } }))
+        : new Response('{}', { status: 401 }),
+    );
+    expect(await (await refused.handler(post('/paths', DANA))).json()).toMatchObject({
+      paths: [],
+      reason: 'unauthorized',
+    });
+    const dead = harness({}, (url) => {
+      if (url.endsWith('/auth/tokens')) return new Response(JSON.stringify({ data: { token: 't' } }));
+      throw new Error('network down');
+    });
+    expect((await dead.handler(post('/paths', DANA))).status).toBe(502);
     const none = harness({}, (url) =>
       url.endsWith('/auth/tokens')
         ? new Response(JSON.stringify({ data: { token: 't' } }))

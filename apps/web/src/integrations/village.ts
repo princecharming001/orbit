@@ -36,6 +36,15 @@ export function setVillageUrlForTests(url: string | null | undefined): void {
 export type VillageHealth = 'ready' | 'unconfigured' | 'error';
 
 let health: VillageHealth | undefined;
+/** Village refused Orbit's key: nothing is asked of it again until then (a day), on any page. */
+let refusedUntil = 0;
+const REFUSED_PAUSE_MS = 24 * 60 * 60_000;
+export function villageRefused(now = Date.now()): boolean {
+  return refusedUntil > now;
+}
+export function setVillageRefusedForTests(until: number | undefined): void {
+  refusedUntil = until ?? 0;
+}
 let checked: { at: number; p: Promise<VillageHealth> } | undefined;
 const listeners = new Set<() => void>();
 
@@ -127,6 +136,9 @@ export interface VillagePath {
 }
 
 interface VillageResponse {
+  /** the server's word for a refusal ('unauthorized': Village refused the key) or a failure ('error') */
+  reason?: string;
+  message?: string;
   paths?: {
     introducer?: { name?: string; headline?: string; linkedin_url?: string };
     warmth?: number;
@@ -150,6 +162,7 @@ export async function villageLookup(
     return connectorFailure('unconfigured', VILLAGE_NOT_SET_UP, 503);
   }
   if (!target.name && !target.company) return { ok: true, value: [] };
+  if (villageRefused()) return { ok: true, value: [] };
   const doFetch = opts.fetch ?? fetch;
   const ctrl = new AbortController();
   let timedOut = false;
@@ -178,8 +191,17 @@ export async function villageLookup(
       setHealth('error');
       return connectorFailure('error', `Village did not answer (${res.status}).`, res.status);
     }
-    setHealth('ready');
     const body = (await res.json()) as VillageResponse;
+    if (body.reason === 'unauthorized') {
+      refusedUntil = Date.now() + REFUSED_PAUSE_MS;
+      setHealth('error');
+      return connectorFailure('error', "Village isn't accepting Orbit's key right now.", 401);
+    }
+    if (body.reason === 'error') {
+      setHealth('error');
+      return connectorFailure('error', body.message ?? 'Village could not answer.', 502);
+    }
+    setHealth('ready');
     const paths = (body.paths ?? [])
       .filter((p) => p.introducer?.name)
       .map((p) => ({

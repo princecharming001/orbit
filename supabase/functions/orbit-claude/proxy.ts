@@ -28,6 +28,8 @@ export { clientIp, defaultOrigins };
 
 export const UPSTREAM = 'https://api.anthropic.com/v1/messages';
 export const ALLOWED_MODELS = new Set(['claude-opus-5-5']);
+/** The light model the background reads (memory, resume) may use; the chat itself never does. */
+export const LIGHT_MODELS = new Set(['claude-haiku-5-5']);
 export const ALLOWED_FALLBACKS = new Set(['claude-opus-5']);
 export const ALLOWED_BETAS = new Set([
   'compact-2026-01-12',
@@ -132,7 +134,8 @@ export function rejectBody(body: unknown): string | undefined {
   if (!body || typeof body !== 'object' || Array.isArray(body))
     return 'The request body must be a JSON object.';
   const b = body as Record<string, unknown>;
-  if (typeof b.model !== 'string' || !ALLOWED_MODELS.has(b.model)) return 'That model is not available here.';
+  if (typeof b.model !== 'string' || !(ALLOWED_MODELS.has(b.model) || LIGHT_MODELS.has(b.model)))
+    return 'That model is not available here.';
   if (typeof b.max_tokens !== 'number' || b.max_tokens < 1 || b.max_tokens > MAX_TOKENS)
     return `max_tokens must be between 1 and ${MAX_TOKENS}.`;
   if (!Array.isArray(b.messages) || b.messages.length === 0) return 'messages must be a non-empty array.';
@@ -163,9 +166,9 @@ export function callOf(req: Request): CallType | undefined {
 
 /** Why a memory or resume read may not be forwarded (on top of rejectBody), or undefined when it may. */
 export function rejectCall(call: CallType, body: unknown, bytes: number): string | undefined {
-  if (call === 'chat') return undefined;
-  const limit = CALL_LIMITS[call];
   const b = body as Record<string, unknown>;
+  if (call === 'chat') return LIGHT_MODELS.has(String(b.model)) ? 'The chat runs on Opus here.' : undefined;
+  const limit = CALL_LIMITS[call];
   if (bytes > limit.maxBytes) return `A ${call} request is at most ${limit.maxBytes} bytes.`;
   if (typeof b.max_tokens !== 'number' || b.max_tokens > limit.maxTokens)
     return `max_tokens for a ${call} request is at most ${limit.maxTokens}.`;

@@ -123,9 +123,13 @@ export { call as unipileProxyCall };
  * Gives the URL to open and an opaque reference to poll for the account to become ready.
  */
 export async function startLinkedInConnect(
-  opts: CallOpts = {},
+  opts: CallOpts & { reconnectAccountId?: string } = {},
 ): Promise<ConnectorOutcome<{ url: string; ref: string }>> {
-  const r = await call<{ url?: string; ref?: string }>('/connect/start', {}, opts);
+  // a reconnect signs the student's existing account in again (Unipile bills per account) with its token as proof
+  const body = opts.reconnectAccountId
+    ? { reconnectAccountId: opts.reconnectAccountId, token: opts.token }
+    : {};
+  const r = await call<{ url?: string; ref?: string }>('/connect/start', body, opts);
   if (!r.ok) return r;
   if (!r.value.url || !r.value.ref)
     return connectorFailure('error', 'Could not start the LinkedIn connection.');
@@ -143,9 +147,12 @@ export interface ConnectStatus {
 /** Whether a started connection has finished signing in, and the account id once it has. */
 export async function linkedInConnectStatus(
   ref: string,
-  opts: CallOpts = {},
+  opts: CallOpts & { reconnectAccountId?: string } = {},
 ): Promise<ConnectorOutcome<ConnectStatus>> {
-  const r = await call<ConnectStatus>('/connect/status', { ref }, opts);
+  const body = opts.reconnectAccountId
+    ? { ref, reconnectAccountId: opts.reconnectAccountId, token: opts.token }
+    : { ref };
+  const r = await call<ConnectStatus>('/connect/status', body, opts);
   if (!r.ok) return r;
   const status = r.value.status;
   return {
@@ -184,7 +191,7 @@ export function connectedDay(v: string | number | undefined): string | undefined
   return Number.isNaN(t) ? undefined : new Date(t).toISOString().slice(0, 10);
 }
 
-/** At most this many pages (200 connections each) per sync: a runaway cursor never loops for ever. */
+/** At most this many pages (1,000 connections each) per sync: a runaway cursor never loops for ever. */
 const MAX_PAGES = 200;
 
 /** Pull every connection for a connected account, mapped to the CSV import shape. Pages until done. */

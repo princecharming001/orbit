@@ -176,6 +176,40 @@ describe('connecting LinkedIn live', () => {
     expect(st).toMatchObject({ available: true, connected: true, status: 'active', rows: 2, stale: false });
   });
 
+  it('an account LinkedIn signed out is signed in again, never replaced; a new one after all retires the old', async () => {
+    routes['/connect/status'] = { body: { status: 'connected', accountId: 'acc_1', token: 'tok_1' } };
+    expect(await connectLinkedInLive(user)).toMatchObject({ ok: true });
+    await db.integrations.update((await liveLinkedInAccount(user.id))!.id, {
+      status: 'error',
+      lastError: 'signed out',
+    });
+    calls = [];
+    expect(await connectLinkedInLive(user)).toMatchObject({ ok: true });
+    // the wizard reconnected acc_1 (its token as proof), and its state was read by id
+    expect(calls.find((c) => c.path === '/connect/start')!.body).toEqual({
+      reconnectAccountId: 'acc_1',
+      token: 'tok_1',
+    });
+    expect(calls.find((c) => c.path === '/connect/status')!.body).toMatchObject({
+      reconnectAccountId: 'acc_1',
+      token: 'tok_1',
+    });
+    expect(calls.some((c) => c.path === '/disconnect')).toBe(false);
+    expect(await liveLinkedInAccount(user.id)).toMatchObject({
+      externalAccountId: 'acc_1',
+      status: 'active',
+    });
+    // Unipile made a new account anyway: the old one is deleted so it is not billed on
+    routes['/connect/status'] = { body: { status: 'connected', accountId: 'acc_2', token: 'tok_2' } };
+    calls = [];
+    expect(await connectLinkedInLive(user)).toMatchObject({ ok: true });
+    expect(calls.find((c) => c.path === '/disconnect')!.body).toEqual({ accountId: 'acc_1', token: 'tok_1' });
+    expect(await liveLinkedInAccount(user.id)).toMatchObject({
+      externalAccountId: 'acc_2',
+      accessToken: 'tok_2',
+    });
+  });
+
   it('a sign-in LinkedIn finishes after its window closed still connects, and the progress says each step', async () => {
     let polls = 0;
     const connected = routes['/connect/status'];

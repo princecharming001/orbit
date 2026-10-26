@@ -13,7 +13,14 @@ import {
   startLinkedInConnect,
   unipileConfigured,
 } from './unipile';
-import { setVillageUrlForTests, villageConfigured, villageLookup, villagePaths } from './village';
+import {
+  setVillageRefusedForTests,
+  setVillageUrlForTests,
+  villageConfigured,
+  villageLookup,
+  villagePaths,
+  villageRefused,
+} from './village';
 
 const BASE = 'https://proxy.test/functions/v1/orbit-connectors';
 
@@ -418,6 +425,22 @@ describe('Village (warm intros) adapter', () => {
     expect(villageConfigured()).toBe(false);
     setVillageUrlForTests(BASE);
     expect(villageConfigured()).toBe(true);
+  });
+
+  it('a refused key pauses Village for the day: the next lookup asks nothing, and Settings can say so', async () => {
+    setVillageUrlForTests(BASE);
+    setVillageRefusedForTests(undefined);
+    const { fn, calls } = stub({ '/paths': { body: { paths: [], reason: 'unauthorized' } } });
+    const r = await villageLookup({ name: 'Dana Lee', company: 'Stripe' }, { fetch: fn });
+    expect(r).toMatchObject({ ok: false, reason: 'error', status: 401 });
+    expect(villageRefused()).toBe(true);
+    expect(await villageLookup({ name: 'Dana Lee', company: 'Stripe' }, { fetch: fn })).toEqual({
+      ok: true,
+      value: [],
+    });
+    expect(calls).toHaveLength(1);
+    expect(villageRefused(Date.now() + 25 * 60 * 60_000)).toBe(false);
+    setVillageRefusedForTests(undefined);
   });
 
   it('returns warm paths sorted by warmth, mapped from the api shape', async () => {

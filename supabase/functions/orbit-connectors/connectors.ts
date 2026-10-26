@@ -609,8 +609,12 @@ export function makeHandler(deps: ConnectorDeps): (req: Request) => Promise<Resp
 
     try {
       if (isVillage) return json(200, await villagePaths(village, deps.villageUser!, body), h);
+      // a reconnect names the student's existing account; only the browser holding its token may ask for it
+      const reconnect = text(body.reconnectAccountId, 200);
+      if (reconnect && !(await tokenValid(reconnect, body.token, deps.signingKey)))
+        return json(403, { error: 'this LinkedIn account is not linked to this browser' }, h);
       if (path === '/connect/start')
-        return json(200, await unipileConnectStart(deps, doFetch, deps.newRef ?? newRef), h);
+        return json(200, await unipileConnectStart(deps, doFetch, deps.newRef ?? newRef, reconnect), h);
       if (path === '/connect/status') {
         const st = await unipileConnectStatus(deps, body, doFetch);
         // the browser that finished signing in gets the token its later calls must carry
@@ -665,14 +669,25 @@ async function notifyUrl(deps: ConnectorDeps, ref: string): Promise<string | und
   return `${deps.publicUrl}/connect/notify?ref=${encodeURIComponent(ref)}&sig=${encodeURIComponent(sig)}`;
 }
 
-async function unipileConnectStart(deps: ConnectorDeps, doFetch: typeof fetch, makeRef: () => string) {
+/**
+ * Start a hosted sign-in. With `reconnect` (the student's existing account id, its token checked by the handler) the
+ * wizard signs that same account in again instead of creating a second one: Unipile bills per account, and a
+ * CREDENTIALS account left behind would be billed until deleted.
+ */
+async function unipileConnectStart(
+  deps: ConnectorDeps,
+  doFetch: typeof fetch,
+  makeRef: () => string,
+  reconnect?: string,
+) {
   const ref = makeRef();
   const notify_url = await notifyUrl(deps, ref);
   const res = await doFetch(`${deps.unipileBase}/api/v1/hosted/accounts/link`, {
     method: 'POST',
     headers: uHeaders(deps),
     body: JSON.stringify({
-      type: 'create',
+      type: reconnect ? 'reconnect' : 'create',
+      ...(reconnect ? { reconnect_account: reconnect } : {}),
       providers: ['LINKEDIN'],
       api_url: deps.unipileBase,
       expiresOn: new Date(Date.now() + 60 * 60_000).toISOString(),
@@ -700,6 +715,16 @@ async function unipileConnectStatus(
 ): Promise<ConnectStatus> {
   const ref = String(body.ref ?? '');
   if (!ref) return { status: 'error', message: 'No connection was started.' };
+  // a reconnect keeps the account's id: its own state says when the sign-in is through (the handler checked the token)
+  const reconnect = text(body.reconnectAccountId, 200);
+  if (reconnect) {
+    const one = await doFetch(`${deps.unipileBase}/api/v1/accounts/${encodeURIComponent(reconnect)}`, {
+      headers: uHeaders(deps),
+    });
+    if (one.ok) return accountState((await one.json()) as UnipileAccount, reconnect);
+    if (one.status !== 404) throw new Error(`unipile ${one.status}`);
+    return { status: 'error', message: 'LinkedIn no longer has that account. Connect it again.' };
+  }
   // the account Unipile reported for this sign-in (notify_url): read its state directly
   const linked = await deps.links?.get(ref).catch(() => undefined);
   if (linked) {
@@ -907,7 +932,7 @@ async function unipileRelations(deps: ConnectorDeps, body: Record<string, unknow
   const accountId = String(body.accountId ?? '');
   const cursor = body.cursor ? `&cursor=${encodeURIComponent(String(body.cursor))}` : '';
   const res = await doFetch(
-    `${deps.unipileBase}/api/v1/users/relations?account_id=${encodeURIComponent(accountId)}&limit=200${cursor}`,
+    `${deps.unipileBase}/api/v1/users/relations?account_id=${encodeURIComponent(accountId)}&limit=1000${cursor}`,
     { headers: uHeaders(deps) },
   );
   if (!res.ok) throw new Error(`unipile ${res.status}`);
@@ -2475,10 +2500,22 @@ async function villagePaths(village: Village, user: VillageUser, body: Record<st
       : company && looksLikeDomain(company)
         ? company
         : '';
+  // Village refusing the key (401) or failing is an answer, not a crash: the browser pauses Village for the day on
+  // 'unauthorized' instead of asking again on every route, and nothing waits on a 502
+  const refused = (r: { ok: false; kind?: string; status?: number; message: string }) =>
+    r.kind === 'http'
+      ? { paths: [], reason: r.status === 401 ? 'unauthorized' : 'error', message: r.message }
+      : undefined;
   let intros: VillageIntro[];
   if (linkedinUrl) {
     const r = await village.personPaths(user, { linkedin_url: linkedinUrl });
-    if (!r.ok) throw new Error(r.message);
+    if (!r.ok)
+      return (
+        refused(r) ??
+        (() => {
+          throw new Error(r.message);
+        })()
+      );
     intros = personIntros(r.value);
   } else if (domain) {
     const clean = domain
@@ -2487,7 +2524,13 @@ async function villagePaths(village: Village, user: VillageUser, body: Record<st
       .replace(/\/.*$/, '')
       .toLowerCase();
     const r = await village.companyPaths(user, { domain: clean, limit: 25 });
-    if (!r.ok) throw new Error(r.message);
+    if (!r.ok)
+      return (
+        refused(r) ??
+        (() => {
+          throw new Error(r.message);
+        })()
+      );
     intros = companyIntros(r.value);
   } else return { paths: [] };
   const fallbackTarget = typeof body.name === 'string' && body.name ? body.name : company;

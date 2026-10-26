@@ -150,6 +150,17 @@ describe('the proxy: memory and resume reads', () => {
     expect(callOf(new Request(BASE))).toBe('chat');
   });
 
+  it('a memory or resume read may use the light model; the chat never may', async () => {
+    const { post, upstream } = harness({ answer: { memories: [] } });
+    const light = read('memory', { model: 'claude-haiku-5-5' });
+    expect((await post(light, { 'x-orbit-call': 'memory' })).status).toBe(200);
+    expect(upstream[0]!.body.model).toBe('claude-haiku-5-5');
+    // the chat is Opus here, whatever the browser asks for
+    const chat = await post({ ...read('memory', { model: 'claude-haiku-5-5' }), output_config: undefined });
+    expect(chat.status).toBe(400);
+    expect(upstream).toHaveLength(1);
+  });
+
   it('answers a used-up resume count with x-orbit-limit "call", which does not pause the chat', async () => {
     const { post, upstream } = harness({
       take: async (bs) => {
