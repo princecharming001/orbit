@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { useMemo } from 'react';
+import { Suspense, useMemo } from 'react';
 import {
   createPath,
   UNSAFE_LocationContext as LocationContext,
@@ -13,14 +13,17 @@ import {
 } from 'react-router-dom';
 import { InPanel } from '../../components/BackLink';
 import { LegacyRedirect } from '../../legacyRoutes';
-import { CompanyPage } from '../../pages/Company';
-import { Discover } from '../../pages/Discover';
-import { InboxPage } from '../../pages/Inbox';
-import { MapPage } from '../../pages/MapPage';
-import { NotesNew } from '../../pages/NotesNew';
-import { People } from '../../pages/People';
-import { PersonPage } from '../../pages/Person';
-import { SettingsPage } from '../../pages/Settings';
+import {
+  CompanyPage,
+  Discover,
+  InboxPage,
+  MapPage,
+  NotesNew,
+  PageLoading,
+  People,
+  PersonPage,
+  SettingsPage,
+} from '../../pages/lazyPages';
 import { panelAnchorHref } from './routes';
 
 /**
@@ -92,20 +95,22 @@ export function PanelRouter({
 /** The pages the panel can show: the same ones the app routes to. */
 export function PanelRoutes() {
   return (
-    <Routes>
-      <Route path="/today" element={<LegacyRedirect />} />
-      <Route path="/pipeline" element={<LegacyRedirect />} />
-      <Route path="/people" element={<People />} />
-      <Route path="/people/:id" element={<PersonPage />} />
-      <Route path="/companies/:id" element={<CompanyPage />} />
-      <Route path="/map" element={<MapPage />} />
-      <Route path="/discover" element={<Discover />} />
-      <Route path="/inbox" element={<InboxPage />} />
-      <Route path="/drafts" element={<Navigate to="/inbox" replace />} />
-      <Route path="/notes/new" element={<NotesNew />} />
-      <Route path="/settings" element={<SettingsPage />} />
-      <Route path="/settings/:section" element={<SettingsPage />} />
-      <Route path="*" element={<Navigate to="/people" replace />} />
-    </Routes>
+    <Suspense fallback={<PageLoading />}>
+      <Routes>
+        <Route path="/today" element={<LegacyRedirect />} />
+        <Route path="/pipeline" element={<LegacyRedirect />} />
+        <Route path="/people" element={<People />} />
+        <Route path="/people/:id" element={<PersonPage />} />
+        <Route path="/companies/:id" element={<CompanyPage />} />
+        <Route path="/map" element={<MapPage />} />
+        <Route path="/discover" element={<Discover />} />
+        <Route path="/inbox" element={<InboxPage />} />
+        <Route path="/drafts" element={<Navigate to="/inbox" replace />} />
+        <Route path="/notes/new" element={<NotesNew />} />
+        <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/settings/:section" element={<SettingsPage />} />
+        <Route path="*" element={<Navigate to="/people" replace />} />
+      </Routes>
+    </Suspense>
   );
 }

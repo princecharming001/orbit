@@ -9,7 +9,7 @@ import { adoptAccountUser } from '../engine/accountMode';
 import { completeSignIn, isAccountMode, startGoogleSignIn } from '../integrations/orbitApi';
 import { useSession } from '../state/session';
 import { Spinner } from '../ui';
-import { onboardingPath } from './Onboarding';
+import { onboardingPath } from './onboardingPath';
 
 /**
  * Where Google sign-in comes back (plan 16 §12.3): orbit-api redirects to /auth/done#code=… (or #error=…). The code is

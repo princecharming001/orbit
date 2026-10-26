@@ -156,12 +156,17 @@ export function MorningBrief() {
     const g = globalThis as { __ORBIT_MORNING__?: unknown };
     const automated = typeof navigator !== 'undefined' && navigator.webdriver && g.__ORBIT_MORNING__ !== 'on';
     if (automated) return;
+    // nothing to show while the tab is hidden: checked again as soon as it is shown
     const check = () => {
-      if (morningDue(settings, new Date())) void open();
+      if (!document.hidden && morningDue(settings, new Date())) void open();
     };
     check();
     const t = setInterval(check, 5 * 60_000);
-    return () => clearInterval(t);
+    document.addEventListener('visibilitychange', check);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener('visibilitychange', check);
+    };
   }, [ready, mode, settings, open]);
 
   // Settings or the palette ask for it: a deck waiting as a pill comes back where it was, otherwise a fresh one

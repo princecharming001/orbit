@@ -15,7 +15,7 @@ import { envGoogleClientId } from '../integrations/prefs';
 import { useAccount } from '../state/account';
 import { useSession } from '../state/session';
 import { Avatar, Button, Chip, cx, Spinner } from '../ui';
-import { onboardingPath } from './Onboarding';
+import { onboardingPath } from './onboardingPath';
 
 // the interactive map draws on a canvas with the app's map engine: loaded after the page itself
 const NetworkDemo = lazy(() => import('../components/landing/NetworkDemo'));

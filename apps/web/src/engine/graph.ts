@@ -48,7 +48,7 @@ import {
   USER_NODE,
   type WeightedGraph,
 } from '@orbit/core';
-import { db } from '../db/schema';
+import { db, writeStamp } from '../db/schema';
 import { storedEvidence } from './hopEvidence';
 import { pairNotesFor } from './pairNotes';
 
@@ -135,16 +135,71 @@ export async function updateEdgesFor(userId: string, personIds: string[]): Promi
     events,
   }).filter(touches);
   await db.transaction('rw', db.edges, async () => {
-    await db.edges.where('userId').equals(userId).filter(touches).delete();
+    const touched = [...ids];
+    await db.edges
+      .where('personAId')
+      .anyOf(touched)
+      .or('personBId')
+      .anyOf(touched)
+      .filter((e) => e.userId === userId)
+      .delete();
     await db.edges.bulkPut(edges.map((e) => ({ ...e, id: `${userId}:${e.id}` })));
   });
   return edges.length;
 }
 
-export async function buildReachGraph(
-  userId: string,
-  now: Date = new Date(),
-): Promise<{ g: WeightedGraph; people: Map<string, Person>; edges: Edge[] }> {
+type ReachGraph = { g: WeightedGraph; people: Map<string, Person>; edges: Edge[] };
+
+/** Every table the reach graph reads: a write to any of them builds it again. */
+const REACH_TABLES = ['people', 'edges', 'users', 'chats', 'outbound', 'pairNotes', 'engagement'] as const;
+/** A graph built for "now" serves later asks for "now" this long, while none of its tables changed. */
+export const REACH_GRAPH_REUSE_MS = 60_000;
+
+interface ReachBuild {
+  stamp: string;
+  /** the time it was built for; `asked` when the caller named it, so only that same time reuses it */
+  at: number;
+  asked: boolean;
+  graph: Promise<ReachGraph>;
+}
+const reachBuilds = new Map<string, ReachBuild>();
+
+/**
+ * The student's reach graph, built once and shared: the Map, the Person page, the brief and the chat all ask for it,
+ * often at the same time. It is built again when any table it reads is written to, and an ask for a time of the
+ * caller's own reuses only a graph built for that same time. Callers only read it.
+ */
+export function buildReachGraph(userId: string, now?: Date): Promise<ReachGraph> {
+  const stamp = writeStamp(REACH_TABLES);
+  const at = (now ?? new Date()).getTime();
+  const prev = reachBuilds.get(userId);
+  if (
+    prev &&
+    prev.stamp === stamp &&
+    (now
+      ? prev.asked && prev.at === at
+      : !prev.asked && at - prev.at >= 0 && at - prev.at < REACH_GRAPH_REUSE_MS)
+  )
+    return prev.graph;
+  const build: ReachBuild = { stamp, at, asked: !!now, graph: buildReachGraphNow(userId, new Date(at)) };
+  reachBuilds.set(userId, build);
+  // a write while it was being read: the graph answers this ask, but is not kept for the next one
+  build.graph.then(
+    () => {
+      if (writeStamp(REACH_TABLES) !== stamp && reachBuilds.get(userId) === build) reachBuilds.delete(userId);
+    },
+    () => {
+      if (reachBuilds.get(userId) === build) reachBuilds.delete(userId);
+    },
+  );
+  return build.graph;
+}
+
+export function resetReachGraphForTests(): void {
+  reachBuilds.clear();
+}
+
+async function buildReachGraphNow(userId: string, now: Date): Promise<ReachGraph> {
   const [people, edges, user, chats, asks] = await Promise.all([
     db.people.where('userId').equals(userId).toArray(),
     db.edges.where('userId').equals(userId).toArray(),

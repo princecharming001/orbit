@@ -13,6 +13,7 @@ import {
   reachGraphFrom,
   reachPerson,
   reachPersonIn,
+  resetReachGraphForTests,
   targetCompanyMatcher,
 } from './graph';
 import { ingestEmails, type RawEmail } from './ingest';
@@ -223,6 +224,38 @@ describe('with the demo network', () => {
       }
     }
     expect(checked).toBeGreaterThan(0);
+  });
+
+  it('builds the reach graph once, shares it, and builds again after a write', async () => {
+    const shape = (r: Awaited<ReturnType<typeof buildReachGraph>>) => ({
+      adj: [...r.g.adj].map(([k, m]) => [k, [...m]]),
+      people: [...r.people.keys()],
+      edges: r.edges.map((e) => e.id),
+    });
+    resetReachGraphForTests();
+    const a = buildReachGraph(user.id, NOW);
+    const b = buildReachGraph(user.id, NOW);
+    expect(b).toBe(a);
+    const cached = await a;
+    expect(await buildReachGraph(user.id, NOW)).toBe(cached);
+    // the same as a graph built from scratch
+    resetReachGraphForTests();
+    const fresh = await buildReachGraph(user.id, NOW);
+    expect(fresh).not.toBe(cached);
+    expect(shape(fresh)).toEqual(shape(cached));
+    // a write to a table it reads builds it again, the same as from scratch
+    const p = [...fresh.people.values()].find((x) => x.isHuman && !x.hiddenAt && x.strength > 0.2)!;
+    await db.people.update(p.id, { strength: 0.01 });
+    const after = await buildReachGraph(user.id, NOW);
+    expect(after).not.toBe(fresh);
+    expect(after.people.get(p.id)!.strength).toBe(0.01);
+    resetReachGraphForTests();
+    const rebuilt = await buildReachGraph(user.id, NOW);
+    expect(shape(rebuilt)).toEqual(shape(after));
+    // a write to a table it does not read keeps it
+    await db.kv.put({ key: 'graph-test', value: 1 });
+    expect(await buildReachGraph(user.id, NOW)).toBe(rebuilt);
+    await db.people.update(p.id, { strength: p.strength });
   });
 
   it('every multi-hop route explains each hop with both names (GRL-11)', async () => {

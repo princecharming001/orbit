@@ -458,7 +458,10 @@ function useSending(chatId: string): string | undefined {
   );
   useEffect(() => {
     if (!queued) return;
-    const t = setInterval(() => setNow(Date.now()), 1000);
+    // a countdown on screen: nothing to redraw while the tab is hidden
+    const t = setInterval(() => {
+      if (!document.hidden) setNow(Date.now());
+    }, 1000);
     return () => clearInterval(t);
   }, [queued]);
   if (!queued) return undefined;

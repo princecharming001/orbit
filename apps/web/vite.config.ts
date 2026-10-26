@@ -40,7 +40,23 @@ export default defineConfig(({ mode }) => ({
   base: process.env.ORBIT_BASE ?? (mode === 'production' ? '/orbit/' : '/'),
   plugins: [react(), tailwindcss(), stripCspInDev(), allowOrbitApi()],
   resolve: { alias: { '@': path.resolve(__dirname, 'src') } },
-  build: { target: 'es2022', sourcemap: false, chunkSizeWarningLimit: 1500 },
+  build: {
+    target: 'es2022',
+    sourcemap: false,
+    chunkSizeWarningLimit: 1500,
+    rollupOptions: {
+      output: {
+        // libraries that change rarely get chunks of their own, so a deploy leaves them cached
+        manualChunks: (id: string) => {
+          if (!id.includes('node_modules')) return undefined;
+          if (/[\\/]node_modules[\\/](react|react-dom|react-router|react-router-dom|scheduler)[\\/]/.test(id))
+            return 'react';
+          if (/[\\/]node_modules[\\/]dexie[\\/]/.test(id)) return 'dexie';
+          return undefined;
+        },
+      },
+    },
+  },
   test: {
     environment: 'jsdom',
     globals: true,

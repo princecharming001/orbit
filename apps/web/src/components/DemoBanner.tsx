@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { leaveDemoForOwnSetup } from '../engine/account';
 import { DEMO_USER_ID } from '../engine/demo';
-import { onboardingPath } from '../pages/Onboarding';
+import { onboardingPath } from '../pages/onboardingPath';
 import { useSession } from '../state/session';
 import { Button, Modal } from '../ui';
 

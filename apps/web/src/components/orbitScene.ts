@@ -447,6 +447,8 @@ export class OrbitScene {
   private images = new Map<string, HTMLImageElement>();
   /** photos decoded and ready to draw without a pause */
   private decoded = new WeakSet<HTMLImageElement>();
+  /** each photo shrunk once per size (a power of two in device pixels), by link: a sprite never shrinks a full photo */
+  private scaled = new Map<string, CanvasImageSource | 'pending'>();
   private destroyed = false;
   private you: Pt = { x: 0, y: 0 };
   private scratchA: Pt = { x: 0, y: 0 };
@@ -469,6 +471,9 @@ export class OrbitScene {
 
   destroy(): void {
     this.destroyed = true;
+    for (const s of this.scaled.values())
+      if (typeof ImageBitmap !== 'undefined' && s instanceof ImageBitmap) s.close();
+    this.scaled.clear();
     if (this.raf) cancelAnimationFrame(this.raf);
     if (this.timer) clearTimeout(this.timer);
     this.raf = 0;
@@ -3242,6 +3247,43 @@ export class OrbitScene {
     this.prebuildAt = -1;
   }
 
+  /**
+   * The photo at the next power of two at or above `px` device pixels across (squashed square, as the sprite draws
+   * it), so building a sprite draws a small copy instead of shrinking the full photo every time. Made once per size:
+   * off the main thread where createImageBitmap can resize (the full photo is drawn until it is ready), else on a
+   * canvas at once.
+   */
+  private scaledPhoto(photo: HTMLImageElement, px: number): CanvasImageSource {
+    const natural = Math.min(photo.naturalWidth, photo.naturalHeight);
+    const bucket = 2 ** Math.ceil(Math.log2(Math.max(16, px)));
+    if (!natural || bucket >= natural) return photo;
+    const key = `${photo.src}|${bucket}`;
+    const hit = this.scaled.get(key);
+    if (hit === 'pending') return photo;
+    if (hit) return hit;
+    if (typeof createImageBitmap === 'function') {
+      this.scaled.set(key, 'pending');
+      createImageBitmap(photo, { resizeWidth: bucket, resizeHeight: bucket, resizeQuality: 'high' }).then(
+        (b) => {
+          if (this.destroyed) b.close();
+          else this.scaled.set(key, b);
+        },
+        // a photo that cannot be resized is drawn whole, as before
+        () => this.scaled.set(key, photo),
+      );
+      return photo;
+    }
+    const c = document.createElement('canvas');
+    c.width = bucket;
+    c.height = bucket;
+    const g = c.getContext('2d');
+    if (!g) return photo;
+    g.imageSmoothingQuality = 'high';
+    g.drawImage(photo, 0, 0, bucket, bucket);
+    this.scaled.set(key, c);
+    return c;
+  }
+
   private imageFor(p: Person): HTMLImageElement | undefined {
     if (!p.photoUrl) return undefined;
     let img = this.images.get(p.id);
@@ -3301,7 +3343,7 @@ export class OrbitScene {
       g.closePath();
       g.clip();
       if (photo && this.decoded.has(photo)) {
-        g.drawImage(photo, cx - r, cx - r, r * 2, r * 2);
+        g.drawImage(this.scaledPhoto(photo, r * 2 * (px / css)), cx - r, cx - r, r * 2, r * 2);
         img = true;
       } else {
         g.fillStyle = `hsl(${v.hue} 30% 56%)`;

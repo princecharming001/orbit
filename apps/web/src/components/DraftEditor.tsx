@@ -1063,7 +1063,10 @@ export function OutboxStatus({
   const [working, setWorking] = useState(false);
   useEffect(() => {
     if (draft.status !== 'queued') return;
-    const t = setInterval(() => setNow(Date.now()), 1000);
+    // a countdown on screen: nothing to redraw while the tab is hidden
+    const t = setInterval(() => {
+      if (!document.hidden) setNow(Date.now());
+    }, 1000);
     return () => clearInterval(t);
   }, [draft.status]);
   if (!user) return null;

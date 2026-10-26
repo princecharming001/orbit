@@ -13,7 +13,7 @@ import { DEMO_USER_ID } from '../engine/demo';
 import { isAccountMode, startGoogleSignIn } from '../integrations/orbitApi';
 import { useSession } from '../state/session';
 import { Avatar, Button, Spinner } from '../ui';
-import { onboardingPath } from './Onboarding';
+import { onboardingPath } from './onboardingPath';
 
 export function LogInPage() {
   const { loading, userId, setUserId } = useSession();

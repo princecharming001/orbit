@@ -19,7 +19,7 @@ import {
   Users,
   X,
 } from 'lucide-react';
-import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { type ReactNode, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useChatEngine } from '../chat/engineContext';
 import type { ChatConversation } from '../chat/types';
@@ -27,6 +27,7 @@ import { threadActions, useThread } from '../chat/ui/threadStore';
 import { db } from '../db/schema';
 import { dailyMaintenance } from '../engine/sync';
 import { draftLists, startedDrafts } from '../engine/today';
+import { PageLoading } from '../pages/lazyPages';
 import { useSession } from '../state/session';
 import { Avatar, calendarDaysBetween, cx, modKeyLabel } from '../ui';
 import { ActivityLine } from './ActivityLine';
@@ -387,7 +388,9 @@ export function AppShell() {
                 fillsScreen && 'lg:h-full lg:flex lg:flex-col',
               )}
             >
-              <Outlet />
+              <Suspense fallback={<PageLoading />}>
+                <Outlet />
+              </Suspense>
             </div>
           )}
         </main>

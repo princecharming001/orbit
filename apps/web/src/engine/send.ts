@@ -850,9 +850,10 @@ export async function snapshotPerson(userId: string, personId: string): Promise<
   const chatIds = (rows.chats as CoffeeChat[]).map((c) => c.id);
   rows.stageEvents = chatIds.length ? await db.stageEvents.where('chatId').anyOf(chatIds).toArray() : [];
   rows.events = await db.events
-    .where('userId')
-    .equals(userId)
-    .filter((e) => e.attendeePersonIds.includes(personId))
+    .where('attendeePersonIds')
+    .equals(personId)
+    .distinct()
+    .filter((e) => e.userId === userId)
     .toArray();
   rows.people = [await db.people.get(personId)].filter(Boolean);
   return { personId, rows };

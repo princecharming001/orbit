@@ -1,3 +1,4 @@
+import { Suspense } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { ChatEngineProvider } from './chat/engineContext';
 import type { ChatEngine } from './chat/types';
@@ -7,19 +8,23 @@ import { AccountSync } from './components/account/AccountSync';
 import { LegacyRedirect } from './legacyRoutes';
 import { AuthApp } from './pages/AuthApp';
 import { AuthDone } from './pages/AuthDone';
-import { ChatsPage } from './pages/Chats';
-import { CompanyPage } from './pages/Company';
-import { Discover } from './pages/Discover';
-import { InboxPage } from './pages/Inbox';
-import { Landing } from './pages/Landing';
-import { LogInPage } from './pages/LogIn';
-import { MapPage } from './pages/MapPage';
-import { NotesNew } from './pages/NotesNew';
-import { Onboarding, onboardingPath } from './pages/Onboarding';
-import { People } from './pages/People';
-import { PersonPage } from './pages/Person';
-import { RemoveMePage } from './pages/RemoveMe';
-import { SettingsPage } from './pages/Settings';
+import {
+  ChatsPage,
+  CompanyPage,
+  Discover,
+  InboxPage,
+  Landing,
+  LogInPage,
+  MapPage,
+  NotesNew,
+  Onboarding,
+  PageLoading,
+  People,
+  PersonPage,
+  RemoveMePage,
+  SettingsPage,
+} from './pages/lazyPages';
+import { onboardingPath } from './pages/onboardingPath';
 import { SessionProvider, useSession } from './state/session';
 import { Spinner, ToastProvider } from './ui';
 
@@ -67,44 +72,46 @@ export function App({ chatEngine }: { chatEngine?: ChatEngine }) {
         <ChatEngineProvider engine={chatEngine}>
           <ToastProvider>
             <AccountSync />
-            <Routes>
-              {/* the landing page stays reachable for someone signed in (a bookmark, the demo's way back) */}
-              <Route path="/welcome" element={<Landing />} />
-              {/* Log in: Google with Orbit accounts, the profiles saved in this browser without them */}
-              <Route path="/login" element={<LogInPage />} />
-              {/* public: anyone can ask Orbit never to research them (docs/plan/20 §5) */}
-              <Route path="/remove-me" element={<RemoveMePage />} />
-              {/* Google sign-in comes back here in account mode (orbit-api redirects with #code or #error) */}
-              <Route path="/auth/done" element={<AuthDone />} />
-              <Route path="/auth/app" element={<AuthApp />} />
-              <Route
-                path="/onboarding/:step"
-                element={
-                  <Gate>
-                    <Onboarding />
-                  </Gate>
-                }
-              />
-              <Route element={<Home />}>
-                <Route index element={<ChatWithPanel />} />
-                {/* Today's cards are in Drafts and its brief in the chat; the Pipeline is the People board */}
-                <Route path="/today" element={<LegacyRedirect />} />
-                <Route path="/pipeline" element={<LegacyRedirect />} />
-                <Route path="/people" element={<People />} />
-                <Route path="/people/:id" element={<PersonPage />} />
-                <Route path="/companies/:id" element={<CompanyPage />} />
-                <Route path="/map" element={<MapPage />} />
-                <Route path="/discover" element={<Discover />} />
-                <Route path="/inbox" element={<InboxPage />} />
-                <Route path="/chats" element={<ChatsPage />} />
-                {/* the nav calls this page Drafts: a typed or bookmarked /drafts lands there too */}
-                <Route path="/drafts" element={<Navigate to="/inbox" replace />} />
-                <Route path="/notes/new" element={<NotesNew />} />
-                <Route path="/settings" element={<SettingsPage />} />
-                <Route path="/settings/:section" element={<SettingsPage />} />
-              </Route>
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>
+            <Suspense fallback={<PageLoading />}>
+              <Routes>
+                {/* the landing page stays reachable for someone signed in (a bookmark, the demo's way back) */}
+                <Route path="/welcome" element={<Landing />} />
+                {/* Log in: Google with Orbit accounts, the profiles saved in this browser without them */}
+                <Route path="/login" element={<LogInPage />} />
+                {/* public: anyone can ask Orbit never to research them (docs/plan/20 §5) */}
+                <Route path="/remove-me" element={<RemoveMePage />} />
+                {/* Google sign-in comes back here in account mode (orbit-api redirects with #code or #error) */}
+                <Route path="/auth/done" element={<AuthDone />} />
+                <Route path="/auth/app" element={<AuthApp />} />
+                <Route
+                  path="/onboarding/:step"
+                  element={
+                    <Gate>
+                      <Onboarding />
+                    </Gate>
+                  }
+                />
+                <Route element={<Home />}>
+                  <Route index element={<ChatWithPanel />} />
+                  {/* Today's cards are in Drafts and its brief in the chat; the Pipeline is the People board */}
+                  <Route path="/today" element={<LegacyRedirect />} />
+                  <Route path="/pipeline" element={<LegacyRedirect />} />
+                  <Route path="/people" element={<People />} />
+                  <Route path="/people/:id" element={<PersonPage />} />
+                  <Route path="/companies/:id" element={<CompanyPage />} />
+                  <Route path="/map" element={<MapPage />} />
+                  <Route path="/discover" element={<Discover />} />
+                  <Route path="/inbox" element={<InboxPage />} />
+                  <Route path="/chats" element={<ChatsPage />} />
+                  {/* the nav calls this page Drafts: a typed or bookmarked /drafts lands there too */}
+                  <Route path="/drafts" element={<Navigate to="/inbox" replace />} />
+                  <Route path="/notes/new" element={<NotesNew />} />
+                  <Route path="/settings" element={<SettingsPage />} />
+                  <Route path="/settings/:section" element={<SettingsPage />} />
+                </Route>
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+            </Suspense>
           </ToastProvider>
         </ChatEngineProvider>
       </SessionProvider>

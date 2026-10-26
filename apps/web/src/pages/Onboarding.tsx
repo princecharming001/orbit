@@ -75,7 +75,7 @@ import {
 } from '../engine/settings';
 import { addTargetCompanies } from '../engine/targets';
 import { googleClientId } from '../integrations/google';
-import { isSignedIn, startGoogleSignIn } from '../integrations/orbitApi';
+import { startGoogleSignIn } from '../integrations/orbitApi';
 import { envGoogleClientId } from '../integrations/prefs';
 import { useAccount } from '../state/account';
 import { useSession } from '../state/session';
@@ -89,15 +89,11 @@ import {
   STEP_TITLES,
   stepAddress,
   stepFromAddress,
-  stepPath,
   stepStatuses,
   visibleSteps,
 } from './onboardingSteps';
 
-/** The address of a stored onboarding step (Welcome, stored as 1, is /onboarding/0); see `onboardingSteps.ts`. */
-export function onboardingPath(step: number): string {
-  return stepPath(step, !!googleClientId(), isSignedIn());
-}
+export { onboardingPath } from './onboardingPath';
 
 /** A LinkedIn import of either kind: the export file, or the live connection once it exists. */
 function connectionsImported(n: number): string {

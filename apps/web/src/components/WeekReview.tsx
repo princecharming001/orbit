@@ -69,13 +69,19 @@ export function WeekReviewLauncher() {
     const g = globalThis as { __ORBIT_REVIEW__?: unknown };
     if (typeof navigator !== 'undefined' && navigator.webdriver && g.__ORBIT_REVIEW__ !== 'on') return;
     const check = () => {
+      // nothing to show while the tab is hidden: checked again as soon as it is shown
+      if (document.hidden) return;
       // never over another deck (the morning brief, prep): it waits its turn
       if (document.querySelector('[role="dialog"]')) return;
       if (weekReviewDue(settings, firstBrief ?? undefined, new Date(), user.timezone || 'UTC')) setOpen(true);
     };
     check();
     const t = setInterval(check, 5 * 60_000);
-    return () => clearInterval(t);
+    document.addEventListener('visibilitychange', check);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener('visibilitychange', check);
+    };
   }, [on, user?.id, settings?.weekReviewSeenOn, firstBrief, open]);
   if (!open || !user) return null;
   const close = () => {

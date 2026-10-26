@@ -252,6 +252,28 @@ export interface ResearchRun {
   createdAt: string;
 }
 
+/** Writes per table since the page loaded (this tab's and, through Dexie, other tabs'), for caches to check. */
+const tableWrites = new Map<string, number>();
+let wipes = 0;
+const noteWrite = (table: string) => tableWrites.set(table, (tableWrites.get(table) ?? 0) + 1);
+
+/** A number that changes whenever any of these tables is written to: equal stamps mean nothing changed between. */
+export function writeStamp(tables: readonly string[]): string {
+  return `${wipes}:${tables.map((t) => tableWrites.get(t) ?? 0).join(',')}`;
+}
+
+// another tab's writes (and this tab's, once committed) arrive as "idb://orbit/<table>/..." parts
+Dexie.on('storagemutated', (parts) => {
+  const seen = new Set<string>();
+  for (const key of Object.keys(parts)) {
+    const table = /^idb:\/\/[^/]+\/([^/]+)\//.exec(key)?.[1];
+    if (table && !seen.has(table)) {
+      seen.add(table);
+      noteWrite(table);
+    }
+  }
+});
+
 export class OrbitDB extends Dexie {
   users!: EntityTable<User, 'id'>;
   settings!: EntityTable<UserSettings, 'userId'>;
@@ -302,6 +324,27 @@ export class OrbitDB extends Dexie {
 
   constructor(name = 'orbit') {
     super(name);
+    // every write counts as it starts and again once it is done, so a read that overlapped it is never kept as fresh
+    this.use({
+      stack: 'dbcore',
+      name: 'writeStamp',
+      create: (down) => ({
+        ...down,
+        table: (tableName) => {
+          const t = down.table(tableName);
+          return {
+            ...t,
+            mutate: (req) => {
+              noteWrite(tableName);
+              return t.mutate(req).then((r) => {
+                noteWrite(tableName);
+                return r;
+              });
+            },
+          };
+        },
+      }),
+    });
     this.version(1).stores({
       users: 'id, email',
       settings: 'userId',
@@ -410,12 +453,18 @@ export class OrbitDB extends Dexie {
             if (id) t.organizationId = id;
           });
       });
+    // who was at each event, indexed, so one person's events are found without reading every event
+    this.version(10).stores({
+      events: 'id, userId, externalEventId, startAt, chatId, *attendeePersonIds',
+    });
   }
 }
 
 export const db = new OrbitDB();
 
 export async function wipeDatabase(): Promise<void> {
+  wipes++;
   await db.delete();
   await db.open();
+  wipes++;
 }
