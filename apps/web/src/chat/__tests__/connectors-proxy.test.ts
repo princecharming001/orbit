@@ -1913,7 +1913,13 @@ describe('orbit-connectors /posting', () => {
   }
   const model = (text: string) =>
     /Evercore/.test(text)
-      ? { kind: 'posting', company: 'Evercore', role: 'Analyst', location: 'New York, NY' }
+      ? {
+          kind: 'posting',
+          company: 'Evercore',
+          role: 'Analyst',
+          location: 'New York, NY',
+          level: '<UNKNOWN>',
+        }
       : /Acme/.test(text)
         ? {
             kind: 'posting',
@@ -1960,6 +1966,10 @@ describe('orbit-connectors /posting', () => {
       source: 'model',
       posting: { company: 'Evercore', role: 'Analyst' },
     });
+    // the model's "<UNKNOWN>" is no value (the cache answers the second read)
+    expect(
+      (await (await post({ url: 'https://www.linkedin.com/jobs/view/5' })).json()).posting.level,
+    ).toBeUndefined();
     expect(await (await post({ url: 'https://careers.example.com/role/6' })).json()).toMatchObject({
       posting: { company: 'Acme Corp', team: 'Billing', namesOnPage: { managers: ['Sam Ortiz'] } },
     });

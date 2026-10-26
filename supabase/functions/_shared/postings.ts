@@ -112,8 +112,15 @@ export function pageText(html: string): string {
     .trim();
 }
 
-const str = (v: unknown): string | undefined =>
-  typeof v === 'string' && v.trim() ? decodeEntities(v.trim()).replace(/\s+/g, ' ').slice(0, 200) : undefined;
+/** A model's way of saying it does not know ("<UNKNOWN>", "N/A", "not specified") is no value. */
+const NO_VALUE =
+  /^[<([]?\s*(unknown|n\/?a|none|null|not (stated|specified|listed|given|mentioned))\s*[>)\]]?\.?$/i;
+
+const str = (v: unknown): string | undefined => {
+  if (typeof v !== 'string' || !v.trim()) return undefined;
+  const t = decodeEntities(v.trim()).replace(/\s+/g, ' ').slice(0, 200);
+  return NO_VALUE.test(t) ? undefined : t;
+};
 
 /** schema.org JobPosting data on the page, when the board publishes it. */
 export function jsonLdPosting(html: string): Posting | undefined {
