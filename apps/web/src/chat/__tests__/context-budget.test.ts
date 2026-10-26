@@ -74,11 +74,8 @@ describe('the context of one turn, demo account', () => {
   it('measures the system block, the tools, the snapshot and typical tool results', async () => {
     const tools = apiTools();
     const base = await countTokens({ text: 'hi' });
-    const system = (await countTokens({ system: stableSystemText('0123456789abcdef'), text: 'hi' })) - base;
-    const toolList =
-      (await countTokens({ system: stableSystemText('0123456789abcdef'), tools, text: 'hi' })) -
-      base -
-      system;
+    const system = (await countTokens({ system: stableSystemText(), text: 'hi' })) - base;
+    const toolList = (await countTokens({ system: stableSystemText(), tools, text: 'hi' })) - base - system;
     note('tools offered to the model', tools.length);
     note('system block (tokens)', system);
     note('tool list (tokens)', toolList);

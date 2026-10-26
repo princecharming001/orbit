@@ -212,8 +212,8 @@ export function buildRunnerTools(
       strict: strict.has(spec.name),
     };
   });
-  // a cache breakpoint after the last tool: the tool list is the same in every conversation, while the system block
-  // carries the conversation's nonce, so without it every new conversation would write the tools to the cache again
+  // a cache breakpoint after the last tool as well as on the frozen system block: both are the same for every
+  // conversation of every student, so one warm entry serves them all; the conversation's own lines come after
   const last = built.at(-1);
   if (last) built[built.length - 1] = { ...last, cache_control: { type: 'ephemeral' } };
   return built;

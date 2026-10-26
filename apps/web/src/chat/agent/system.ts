@@ -2,17 +2,20 @@ import type Anthropic from '@anthropic-ai/sdk';
 import { makeWrap, untrustedRule } from '../../integrations/anthropic';
 
 /**
- * The stable system block. It is frozen for the life of a conversation: no date, no name, no counts, nothing that
- * changes between turns. Everything volatile goes into the snapshot appended to `messages` (snapshot.ts). The only
- * per-conversation value is the untrusted-content tag, which carries the conversation's nonce, so the block is
- * byte-identical on every request of that conversation and the cache breakpoint on it holds.
+ * The stable system block. It is frozen for everyone: no date, no name, no counts, nothing that changes between turns
+ * or between students. Everything volatile goes into the snapshot appended to `messages` (snapshot.ts). The one
+ * per-conversation value, the untrusted-content tag that carries the conversation's nonce, sits in a second, small
+ * system block after the cache breakpoint, so the tools and this block are byte-identical in every conversation of
+ * every student and one warm cache entry serves them all (docs/plan/26-cost-and-speed.md #1). Before version 12 the
+ * tag was in this block, and every new conversation wrote the whole prefix to the cache again.
  *
  * Bump STABLE_SYSTEM_VERSION when the text changes; a running conversation keeps the version it started on only in
  * the sense that its cache goes cold once, since the text is rebuilt from this file on every request.
  *
  * Version 11 gives the assistant a persona, Orbi, and a voice section written from docs/plan/19-orbi-persona.md.
+ * Version 12 moves the untrusted-content tag out of the block.
  */
-export const STABLE_SYSTEM_VERSION = 11;
+export const STABLE_SYSTEM_VERSION = 12;
 
 const ROLE = [
   'You are Orbi, the AI inside Orbit, a networking app for college students who are recruiting. Orbit is the product; you are who the student talks to. You help them do what Orbit was built for: find the right people, get warm intros, set up coffee chats, follow up, and stay in touch. The student meets alumni and professionals for coffee chats, asks for advice and referrals, and keeps in touch. Everything you can see or change lives in their browser: their people, pipeline of chats, drafts, notes, routes to companies and settings. You act through the tools and nothing else.',
@@ -154,9 +157,8 @@ export const VOICE_EXAMPLES: string[] = VOICE_RULES.split('\n')
   .filter((l) => l.startsWith('student: '))
   .map((l) => l.split(' / Orbi: ')[1]!);
 
-/** The frozen text for a conversation: the same string on every request, keyed by the conversation nonce. */
-export function stableSystemText(nonce: string): string {
-  const { tag } = makeWrap(nonce);
+/** The frozen text: the same string on every request of every conversation. */
+export function stableSystemText(): string {
   return [
     ROLE,
     PRODUCT_RULES,
@@ -169,14 +171,21 @@ export function stableSystemText(nonce: string): string {
     AUTONOMY_RULES,
     SAFETY_RULES,
     ENVELOPE_RULES,
-    `${untrustedRule(tag)} ${INSTRUCTIONS_RULE}`,
+    INSTRUCTIONS_RULE,
     COPY_RULES,
     VOICE_RULES,
     CONVERSATION_RULES,
   ].join('\n\n');
 }
 
-/** The `system` param: one block with the cache breakpoint, so tools and system are cached together. */
+/**
+ * The `system` param: the frozen block with the cache breakpoint (tools and this block cached together, for everyone),
+ * then the conversation's own untrusted-content rule, a few lines that are read fresh each time.
+ */
 export function systemBlocks(nonce: string): Anthropic.Beta.BetaTextBlockParam[] {
-  return [{ type: 'text', text: stableSystemText(nonce), cache_control: { type: 'ephemeral' } }];
+  const { tag } = makeWrap(nonce);
+  return [
+    { type: 'text', text: stableSystemText(), cache_control: { type: 'ephemeral' } },
+    { type: 'text', text: untrustedRule(tag) },
+  ];
 }
