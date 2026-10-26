@@ -33,6 +33,9 @@ import {
   FirstRunHint,
   PageHeader,
   relDate,
+  Skeleton,
+  SkeletonCards,
+  SkeletonRows,
   Tabs,
   useToast,
 } from '../ui';
@@ -111,25 +114,33 @@ export function InboxPage() {
     () => (userId ? db.briefs.where('userId').equals(userId).toArray() : []),
     [userId],
   );
-  const suggestions =
-    useLiveQuery(() => (userId ? db.suggestions.where('userId').equals(userId).toArray() : []), [userId]) ??
-    [];
-  const outbound =
-    useLiveQuery(
-      () =>
-        userId
-          ? db.outbound
-              .where('userId')
-              .equals(userId)
-              .filter((o) => o.status === 'sent' || o.status === 'draft' || IN_FLIGHT.includes(o.status))
-              .toArray()
-          : [],
-      [userId],
-    ) ?? [];
-  const people =
-    useLiveQuery(() => (userId ? db.people.where('userId').equals(userId).toArray() : []), [userId]) ?? [];
-  const chats =
-    useLiveQuery(() => (userId ? db.chats.where('userId').equals(userId).toArray() : []), [userId]) ?? [];
+  const suggestionsQ = useLiveQuery(
+    () => (userId ? db.suggestions.where('userId').equals(userId).toArray() : []),
+    [userId],
+  );
+  const suggestions = suggestionsQ ?? [];
+  const outboundQ = useLiveQuery(
+    () =>
+      userId
+        ? db.outbound
+            .where('userId')
+            .equals(userId)
+            .filter((o) => o.status === 'sent' || o.status === 'draft' || IN_FLIGHT.includes(o.status))
+            .toArray()
+        : [],
+    [userId],
+  );
+  const outbound = outboundQ ?? [];
+  const peopleQ = useLiveQuery(
+    () => (userId ? db.people.where('userId').equals(userId).toArray() : []),
+    [userId],
+  );
+  const people = peopleQ ?? [];
+  const chatsQ = useLiveQuery(
+    () => (userId ? db.chats.where('userId').equals(userId).toArray() : []),
+    [userId],
+  );
+  const chats = chatsQ ?? [];
   const events =
     useLiveQuery(
       () =>
@@ -260,6 +271,34 @@ export function InboxPage() {
   };
   const nothingToSend =
     !pending.length && !started.length && !handedOff.length && !toWrite.length && !otherCards.length;
+  // still reading: the page shows its shape (tabs and cards), never "No drafts right now"
+  if (suggestionsQ === undefined || outboundQ === undefined || peopleQ === undefined || chatsQ === undefined)
+    return (
+      <div ref={rootRef}>
+        <PageHeader title="Drafts" subtitle="What is worth doing today." />
+        <div
+          className={cx(
+            'grid gap-6 items-start',
+            sideBySide && (split ? 'grid-cols-[minmax(0,1fr)_280px]' : 'grid-cols-[minmax(0,1fr)_300px]'),
+          )}
+        >
+          <div className="min-w-0">
+            <div className="flex gap-5 border-b border-line pb-2.5 mb-4" aria-hidden>
+              {[56, 64, 48].map((w) => (
+                <Skeleton key={w} className="h-3" style={{ width: w }} />
+              ))}
+            </div>
+            <SkeletonCards count={3} testId="drafts-loading" />
+          </div>
+          {sideBySide && (
+            <Card>
+              <div className="font-medium mb-3">Coming up</div>
+              <SkeletonRows rows={2} avatar={28} />
+            </Card>
+          )}
+        </div>
+      </div>
+    );
   return (
     <div ref={rootRef}>
       <PageHeader

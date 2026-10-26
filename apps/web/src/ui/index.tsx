@@ -2,6 +2,7 @@ import { FUNCTION_LABELS, initials } from '@orbit/core';
 import { X } from 'lucide-react';
 import {
   type ButtonHTMLAttributes,
+  type CSSProperties,
   createContext,
   type InputHTMLAttributes,
   type ReactNode,
@@ -294,6 +295,160 @@ export function Spinner({ className }: { className?: string }) {
       role="status"
       aria-label="Loading"
     />
+  );
+}
+
+/** A block standing in for something still loading: a soft light sweeping across it (styles: `.skeleton`). */
+export function Skeleton({ className, style }: { className?: string; style?: CSSProperties }) {
+  return <span className={cx('skeleton block', className)} style={style} aria-hidden />;
+}
+
+/**
+ * What a list or a panel looks like while its data loads, so a moment of loading never reads as "nothing here". It
+ * fades in after a beat (`.loading-in`): a read that answers at once shows no flash at all.
+ */
+function Loading({
+  className,
+  testId,
+  children,
+}: {
+  className?: string;
+  testId?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      role="status"
+      aria-busy="true"
+      aria-label="Loading"
+      className={cx('loading-in', className)}
+      data-testid={testId ?? 'loading'}
+    >
+      {children}
+    </div>
+  );
+}
+
+// line lengths that look like real names and roles, in a fixed order so a list does not flicker between renders
+const NAME_W = ['42%', '55%', '36%', '48%', '60%', '40%', '52%', '45%'];
+const SUB_W = ['68%', '58%', '74%', '62%', '50%', '70%', '56%', '64%'];
+const TEXT_W = ['100%', '94%', '97%', '89%'];
+
+/** Rows of people, chats or messages still loading: an avatar and two lines each, fading toward the last. */
+export function SkeletonRows({
+  rows = 5,
+  avatar = 36,
+  divided,
+  className,
+  testId,
+}: {
+  rows?: number;
+  /** avatar size in px; 0 for rows without one */
+  avatar?: number;
+  /** a hairline between rows, as in a list */
+  divided?: boolean;
+  className?: string;
+  testId?: string;
+}) {
+  return (
+    <Loading className={cx(divided ? 'divide-y divide-line-2' : 'space-y-3.5', className)} testId={testId}>
+      {Array.from({ length: rows }, (_, i) => (
+        <div
+          key={i}
+          className={cx('flex items-center gap-3', divided && 'py-3')}
+          style={{ opacity: 1 - (i / rows) * 0.6 }}
+        >
+          {avatar > 0 && (
+            <Skeleton className="rounded-full shrink-0" style={{ width: avatar, height: avatar }} />
+          )}
+          <div className="flex-1 min-w-0 space-y-2">
+            <Skeleton className="h-3" style={{ width: NAME_W[i % NAME_W.length] }} />
+            <Skeleton className="h-2.5" style={{ width: SUB_W[i % SUB_W.length] }} />
+          </div>
+        </div>
+      ))}
+    </Loading>
+  );
+}
+
+/** Cards still loading (drafts, suggestions, panels): an avatar, a title, and a few lines of body each. */
+export function SkeletonCards({
+  count = 3,
+  className,
+  testId,
+}: {
+  count?: number;
+  className?: string;
+  testId?: string;
+}) {
+  return (
+    <Loading className={cx('space-y-3', className)} testId={testId}>
+      {Array.from({ length: count }, (_, i) => (
+        <div
+          key={i}
+          className="bg-canvas border border-line rounded-[var(--radius-card)] p-4"
+          style={{ opacity: 1 - (i / count) * 0.5 }}
+        >
+          <div className="flex items-start gap-3">
+            <Skeleton className="w-10 h-10 rounded-full shrink-0" />
+            <div className="flex-1 min-w-0 space-y-2 pt-1">
+              <Skeleton className="h-3" style={{ width: NAME_W[i % NAME_W.length] }} />
+              <Skeleton className="h-2.5 w-4/5" />
+            </div>
+          </div>
+          <div className="mt-4 space-y-1.5">
+            <Skeleton className="h-2.5 w-full" />
+            <Skeleton className="h-2.5 w-11/12" />
+            <Skeleton className="h-2.5 w-3/5" />
+          </div>
+        </div>
+      ))}
+    </Loading>
+  );
+}
+
+/** A paragraph or a few facts still loading. */
+export function SkeletonText({
+  lines = 3,
+  className,
+  testId,
+}: {
+  lines?: number;
+  className?: string;
+  testId?: string;
+}) {
+  return (
+    <Loading className={cx('space-y-2', className)} testId={testId}>
+      {Array.from({ length: lines }, (_, i) => (
+        <Skeleton
+          key={i}
+          className="h-2.5"
+          style={{ width: i === lines - 1 ? '60%' : TEXT_W[i % TEXT_W.length] }}
+        />
+      ))}
+    </Loading>
+  );
+}
+
+/** Numbers still loading (a row of stats): a small label and a figure each. */
+export function SkeletonStats({
+  count = 3,
+  className,
+  testId,
+}: {
+  count?: number;
+  className?: string;
+  testId?: string;
+}) {
+  return (
+    <Loading className={cx('grid gap-3', className)} testId={testId}>
+      {Array.from({ length: count }, (_, i) => (
+        <div key={i} className="space-y-2">
+          <Skeleton className="h-2.5 w-1/2" />
+          <Skeleton className="h-6 w-2/3" />
+        </div>
+      ))}
+    </Loading>
   );
 }
 

@@ -57,7 +57,22 @@ import { personSummary, toYou } from '../engine/prep';
 import { SUMMARY_RULES_AT } from '../engine/repair';
 import { isServerUser } from '../integrations/orbitApi';
 import { useSession } from '../state/session';
-import { Avatar, Button, Card, Chip, cx, Modal, NotFound, relDate, Select, Tabs, useToast } from '../ui';
+import {
+  Avatar,
+  Button,
+  Card,
+  Chip,
+  cx,
+  Modal,
+  NotFound,
+  relDate,
+  Select,
+  Skeleton,
+  SkeletonRows,
+  SkeletonText,
+  Tabs,
+  useToast,
+} from '../ui';
 
 /**
  * The line under their name: their current position as their own LinkedIn profile states it (the truth about where
@@ -122,20 +137,20 @@ export function PersonPage() {
   // null: looked it up and it is not there (merged, deleted, bad link); undefined: still loading.
   const person = useLiveQuery(async () => (id ? ((await db.people.get(id)) ?? null) : null), [id]);
   const chats = useLiveQuery(() => (id ? db.chats.where('personId').equals(id).toArray() : []), [id]) ?? [];
-  const tps =
-    useLiveQuery(() => (id ? db.touchpoints.where('personId').equals(id).toArray() : []), [id]) ?? [];
-  const facts =
-    useLiveQuery(
-      () =>
-        id
-          ? db.facts
-              .where('personId')
-              .equals(id)
-              .filter((f) => !f.deletedAt)
-              .toArray()
-          : [],
-      [id],
-    ) ?? [];
+  const tpsQ = useLiveQuery(() => (id ? db.touchpoints.where('personId').equals(id).toArray() : []), [id]);
+  const tps = tpsQ ?? [];
+  const factsQ = useLiveQuery(
+    () =>
+      id
+        ? db.facts
+            .where('personId')
+            .equals(id)
+            .filter((f) => !f.deletedAt)
+            .toArray()
+        : [],
+    [id],
+  );
+  const facts = factsQ ?? [];
   const items =
     useLiveQuery(() => (id ? db.actionItems.where('personId').equals(id).toArray() : []), [id]) ?? [];
   const drafts =
@@ -154,11 +169,11 @@ export function PersonPage() {
           : [],
       [id],
     ) ?? [];
-  const edges =
-    useLiveQuery(
-      () => (id ? db.edges.where('personAId').equals(id).or('personBId').equals(id).toArray() : []),
-      [id],
-    ) ?? [];
+  const edgesQ = useLiveQuery(
+    () => (id ? db.edges.where('personAId').equals(id).or('personBId').equals(id).toArray() : []),
+    [id],
+  );
+  const edges = edgesQ ?? [];
   const affs =
     useLiveQuery(() => (id ? db.affiliations.where('personId').equals(id).toArray() : []), [id]) ?? [];
   // a referral ask is offered only when something on record makes it fit: their offer to refer or pass the resume
@@ -193,11 +208,14 @@ export function PersonPage() {
     () => edges.map((e) => (e.personAId === id ? e.personBId : e.personAId)),
     [edges, id],
   );
-  const neighbours =
-    useLiveQuery(
-      () => (neighbourIds.length ? db.people.bulkGet(neighbourIds) : []),
-      [neighbourIds.join(',')],
-    ) ?? [];
+  const neighboursQ = useLiveQuery(
+    () => (neighbourIds.length ? db.people.bulkGet(neighbourIds) : []),
+    [neighbourIds.join(',')],
+  );
+  const neighbours = neighboursQ ?? [];
+  // the tabs' own reads: until they answer, a tab shows its shape, never "No interactions yet"
+  const tabsLoading =
+    tpsQ === undefined || factsQ === undefined || edgesQ === undefined || neighboursQ === undefined;
   const notes =
     useLiveQuery(
       () =>
@@ -316,7 +334,7 @@ export function PersonPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [person?.id, user?.id, wantDraft]);
-  if (!user || person === undefined) return null;
+  if (!user || person === undefined) return <PersonLoading />;
   if (person === null)
     return (
       <NotFound
@@ -908,10 +926,14 @@ export function PersonPage() {
             value={tab}
             onChange={(v) => setParams({ tab: v })}
             items={[
-              { value: 'timeline', label: 'Timeline', count: timeline.length },
+              { value: 'timeline', label: 'Timeline', count: tabsLoading ? undefined : timeline.length },
               { value: 'conversation', label: 'Messages', count: messageCount || undefined },
-              { value: 'facts', label: 'About', count: facts.length || undefined },
-              { value: 'connections', label: 'Who they know', count: neighbours.filter(Boolean).length },
+              { value: 'facts', label: 'About', count: (!tabsLoading && facts.length) || undefined },
+              {
+                value: 'connections',
+                label: 'Who they know',
+                count: tabsLoading ? undefined : neighbours.filter(Boolean).length,
+              },
             ]}
           />
           {tab === 'timeline' && (
@@ -931,7 +953,13 @@ export function PersonPage() {
                   Add a note
                 </Link>
               </li>
-              {timeline.length === 0 && <li className="pl-5 text-ink-3 text-[13px]">No interactions yet.</li>}
+              {tabsLoading ? (
+                <li className="pl-5">
+                  <SkeletonRows rows={4} avatar={0} testId="timeline-loading" />
+                </li>
+              ) : (
+                timeline.length === 0 && <li className="pl-5 text-ink-3 text-[13px]">No interactions yet.</li>
+              )}
               {timeline.slice(0, 100).map((t, i) => (
                 <li key={i} className="pl-5">
                   <span className="absolute -left-[9px] w-[18px] h-[18px] rounded-full bg-canvas border border-line text-[10px] inline-flex items-center justify-center text-ink-3">
@@ -971,7 +999,8 @@ export function PersonPage() {
                   </span>
                 )}
               </div>
-              {facts.length === 0 && (
+              {tabsLoading && <SkeletonText lines={4} testId="facts-loading" />}
+              {!tabsLoading && facts.length === 0 && (
                 <p className="text-ink-3 text-[12.5px] -mt-2" data-testid="facts-empty">
                   Nothing yet. Facts come in from your emails and meeting notes, or add one below.
                 </p>
@@ -1052,7 +1081,8 @@ export function PersonPage() {
           )}
           {tab === 'connections' && (
             <div className="space-y-2">
-              {neighbours.filter(Boolean).length === 0 && (
+              {tabsLoading && <SkeletonRows rows={4} avatar={28} testId="connections-loading" />}
+              {!tabsLoading && neighbours.filter(Boolean).length === 0 && (
                 <p className="text-ink-3 text-[13px]">
                   No inferred connections yet. These appear from shared employers, schools, threads and
                   meetings.
@@ -1334,5 +1364,50 @@ function TextsCard({ personId, firstName }: { personId: string; firstName: strin
         {t.inCount} from {firstName || 'them'}, {t.outCount} from you
       </p>
     </Card>
+  );
+}
+
+/** The person's page while their record loads: the header, the tabs and the side cards in outline. */
+function PersonLoading() {
+  return (
+    <div
+      className="loading-in"
+      role="status"
+      aria-busy="true"
+      aria-label="Loading"
+      data-testid="person-loading"
+    >
+      <Skeleton className="h-3 w-16 mb-5" />
+      <div className="flex items-center gap-4">
+        <Skeleton className="w-16 h-16 rounded-full shrink-0" />
+        <div className="flex-1 space-y-2.5">
+          <Skeleton className="h-5 w-48" />
+          <Skeleton className="h-3 w-64 max-w-full" />
+        </div>
+        <Skeleton className="h-9 w-28 rounded-full hidden sm:block" />
+      </div>
+      <div className="grid @4xl:grid-cols-[minmax(0,1fr)_320px] gap-6 items-start mt-8">
+        <div>
+          <div className="flex gap-5 border-b border-line pb-2.5 mb-5">
+            {[64, 70, 52, 92].map((w) => (
+              <Skeleton key={w} className="h-3" style={{ width: w }} />
+            ))}
+          </div>
+          <SkeletonRows rows={5} avatar={18} />
+        </div>
+        <div className="space-y-3">
+          {[0, 1].map((i) => (
+            <div
+              key={i}
+              className="rounded-[var(--radius-card)] border border-line bg-canvas p-4 space-y-2.5"
+            >
+              <Skeleton className="h-3 w-1/3" />
+              <Skeleton className="h-2.5 w-full" />
+              <Skeleton className="h-2.5 w-4/5" />
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
   );
 }

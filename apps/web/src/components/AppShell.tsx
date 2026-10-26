@@ -29,7 +29,7 @@ import { dailyMaintenance } from '../engine/sync';
 import { draftLists, startedDrafts } from '../engine/today';
 import { PageLoading } from '../pages/lazyPages';
 import { useSession } from '../state/session';
-import { Avatar, calendarDaysBetween, cx, modKeyLabel } from '../ui';
+import { Avatar, calendarDaysBetween, cx, modKeyLabel, Skeleton } from '../ui';
 import { ActivityLine } from './ActivityLine';
 import { useTrackPlace } from './BackLink';
 import { CommandPalette } from './CommandPalette';
@@ -597,7 +597,8 @@ function Recent({ chat }: { chat: ReturnType<typeof threadActions> }) {
   const engine = useChatEngine();
   const thread = useThread();
   const nav = useNavigate();
-  const [items, setItems] = useState<ChatConversation[]>([]);
+  // undefined until the first list arrives: the sidebar shows lines, never "No conversations yet", meanwhile
+  const [items, setItems] = useState<ChatConversation[]>();
   const [editing, setEditing] = useState<{ id: string; title: string } | undefined>();
   useEffect(() => {
     let live = true;
@@ -617,7 +618,7 @@ function Recent({ chat }: { chat: ReturnType<typeof threadActions> }) {
       Yesterday: [],
       Earlier: [],
     };
-    for (const c of items) {
+    for (const c of items ?? []) {
       if (c.pinnedAt) {
         g.Pinned.push(c);
         continue;
@@ -640,7 +641,14 @@ function Recent({ chat }: { chat: ReturnType<typeof threadActions> }) {
   return (
     <div className="mt-4 flex-1 min-h-0 overflow-y-auto scroll-thin -mx-1 px-1" data-testid="recent">
       <div className="label-mono px-2.5 mb-1">Recent</div>
-      {items.length === 0 && <p className="px-2.5 text-[12.5px] text-ink-3">No conversations yet.</p>}
+      {items === undefined && (
+        <div className="px-2.5 pt-1 space-y-2.5 loading-in" aria-hidden data-testid="recent-loading">
+          {['78%', '62%', '70%'].map((w) => (
+            <Skeleton key={w} className="h-2.5" style={{ width: w }} />
+          ))}
+        </div>
+      )}
+      {items?.length === 0 && <p className="px-2.5 text-[12.5px] text-ink-3">No conversations yet.</p>}
       {(Object.keys(groups) as (keyof typeof groups)[]).map(
         (k) =>
           groups[k].length > 0 && (

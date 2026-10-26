@@ -129,7 +129,7 @@ export function LinkedInLiveCard({ user }: { user: User }) {
         }
         line={
           status.available ? (
-            'Sync your connections and send the messages you approve'
+            'Your connections and messages'
           ) : (
             <span data-testid="settings-linkedin-live-unavailable">
               Not part of this version of Orbit yet. Upload your export instead.

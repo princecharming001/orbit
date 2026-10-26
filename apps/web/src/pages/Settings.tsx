@@ -21,7 +21,6 @@ import { openMorningBrief } from '../components/MorningBrief';
 import { CalcomRow, FathomRow, MeetingAppRow } from '../components/NotesAppRows';
 import { ResumeFacetList } from '../components/ResumeFacets';
 import { OutreachCoach } from '../components/settings/OutreachCoach';
-import { TextsRow } from '../components/TextsRow';
 import { WeeklyTargetSlider } from '../components/WeeklyTargetSlider';
 import { suggestCompanies } from '../data/companies';
 import {
@@ -60,7 +59,7 @@ import {
 } from '../engine/settings';
 import { addTargetCompanies } from '../engine/targets';
 import { approvalStreaks, LADDER_KINDS, LADDER_WORDS, OFFER_AT, setAutoKind } from '../engine/trust';
-import { fmtFailureTime, MODEL } from '../integrations/anthropic';
+import { fmtFailureTime } from '../integrations/anthropic';
 import { currentGoogleToken, googleClientId } from '../integrations/google';
 import { isAccountMode, isServerUser, startGoogleSignIn } from '../integrations/orbitApi';
 import {
@@ -81,6 +80,8 @@ import {
   PageHeader,
   relDate,
   Select,
+  Skeleton,
+  SkeletonRows,
   Spinner,
   Switch,
   Textarea,
@@ -536,9 +537,11 @@ const cycles = cycleOptions();
 
 function Goals() {
   const user = useSession().user!;
-  const goals = useLiveQuery(() => db.goals.get(user.id), [user.id]);
+  // null: no goals saved (nothing to edit); undefined: still reading
+  const goals = useLiveQuery(async () => (await db.goals.get(user.id)) ?? null, [user.id]);
   const tcs =
     useLiveQuery(() => db.targetCompanies.where('userId').equals(user.id).toArray(), [user.id]) ?? [];
+  if (goals === undefined) return <FormLoading fields={5} />;
   if (!goals) return null;
   return <GoalsForm goals={goals} tcs={tcs} />;
 }
@@ -883,8 +886,8 @@ function GoogleAccountRow() {
 function Integrations() {
   const user = useSession().user!;
   const toast = useToast();
-  const accounts =
-    useLiveQuery(() => db.integrations.where('userId').equals(user.id).toArray(), [user.id]) ?? [];
+  const accountsQ = useLiveQuery(() => db.integrations.where('userId').equals(user.id).toArray(), [user.id]);
+  const accounts = accountsQ ?? [];
   const google = accounts.find((a) => a.provider === 'google');
   const li = accounts.find((a) => a.provider === 'linkedin_csv');
   const resume = useLiveQuery(
@@ -925,6 +928,9 @@ function Integrations() {
   // an Orbit account connected Google at sign-in: the browser's own Google sign-in is not needed
   const viaAccount = isServerUser(user.id);
   const googleOffered = builtIn || !!google;
+  // until the accounts are read, a connected service would show as off: the rows show their shape instead
+  if (accountsQ === undefined)
+    return <SkeletonRows rows={6} avatar={36} divided testId="integrations-loading" />;
   return (
     <div>
       <RowGroup title="Your network">
@@ -1041,9 +1047,8 @@ function Integrations() {
           actions={<LinkedInImportButton label="Upload" testId="settings-linkedin" />}
         />
         <WarmIntrosCard user={user} />
-        <TextsRow user={user} />
       </RowGroup>
-      <RowGroup title="Meeting notes" hint="Pick the notetaker you use; Orbit imports from one at a time.">
+      <RowGroup title="Meeting notes">
         <FathomRow user={user} />
         <MeetingAppRow user={user} app="granola" />
         <MeetingAppRow user={user} app="fireflies" />
@@ -1071,7 +1076,6 @@ function Integrations() {
               )}
             </span>
           }
-          line="Finds shared backgrounds and describes you in first messages"
           actions={
             <label className="inline-flex rounded-full focus-within:ring-2 focus-within:ring-accent/40">
               <input
@@ -1140,12 +1144,10 @@ function ResearchCard() {
       mark={<AppMark>R</AppMark>}
       name="Deep research"
       status={<RowStatus>{left ? `${left.left} of ${left.limit} left this month` : 'Built in.'}</RowStatus>}
-      line="Looks a person up when you press Deep research on their About tab"
     >
       <p className="text-[12px] text-ink-3" data-testid="research-spend">
-        This month: {spend?.briefs ?? 0} {spend?.briefs === 1 ? 'person' : 'people'} researched, $
-        {(spend?.usd ?? 0).toFixed(2)}. Each brief is capped at $0.30, or $0.50 with Go deeper. Research has
-        its own allowance, apart from the chat's.
+        {spend?.briefs ?? 0} {spend?.briefs === 1 ? 'person' : 'people'} researched, $
+        {(spend?.usd ?? 0).toFixed(2)} this month
       </p>
     </IntegrationRow>
   );
@@ -1169,12 +1171,11 @@ function ClaudeCard() {
           <Check size={12} /> {keySaved ? 'Key saved.' : 'Built in.'}
         </RowStatus>
       }
-      line="Writes your drafts and runs the chat"
     >
       <div className="space-y-1">
         <p className="text-[12px] text-ink-3" data-testid="ai-chat-row">
-          {chatMode() === 'llm' ? `Claude, ${MODEL}` : 'Orbit commands only'} · today {usage.requests} of{' '}
-          {reqCap} requests
+          {chatMode() === 'llm' ? 'Drafts and chat' : 'Orbit commands only'} · {usage.requests} of {reqCap}{' '}
+          requests today
           {keySaved && (
             <>
               {' · '}
@@ -1192,10 +1193,7 @@ function ClaudeCard() {
         <label className="flex items-center justify-between gap-3 pt-1 text-[12.5px] text-ink-2">
           <span>
             Show Orbit's reasoning
-            <span className="block text-[12px] text-ink-3">
-              The grey lines that explain how Orbit got there: its notes in the chat, why a route goes through
-              someone, and where a list came from. Off, hovering a name still shows why.
-            </span>
+            <span className="block text-[12px] text-ink-3">The grey notes on how Orbit got somewhere</span>
           </span>
           <Switch
             checked={!!prefs.showReasoning}
@@ -1275,8 +1273,9 @@ function TrustLadder() {
 
 function Limits() {
   const user = useSession().user!;
-  const settings = useLiveQuery(() => db.settings.get(user.id), [user.id]);
+  const settings = useLiveQuery(async () => (await db.settings.get(user.id)) ?? null, [user.id]);
   const [savedAt, setSavedAt] = useState<number>();
+  if (settings === undefined) return <FormLoading fields={6} />;
   if (!settings) return null;
   const upd = async (p: Partial<typeof settings>) => {
     if ('schedulingLink' in p) await setSchedulingLink(user.id, p.schedulingLink);
@@ -1592,5 +1591,19 @@ function Section({
     >
       {children}
     </section>
+  );
+}
+
+/** A settings form while its saved values load: a label and a field per row, never a blank page. */
+function FormLoading({ fields }: { fields: number }) {
+  return (
+    <div className="space-y-5 max-w-xl loading-in" role="status" aria-busy="true" aria-label="Loading">
+      {Array.from({ length: fields }, (_, i) => (
+        <div key={i} className="space-y-2" style={{ opacity: 1 - (i / fields) * 0.5 }}>
+          <Skeleton className="h-3" style={{ width: ['28%', '36%', '22%', '32%', '26%', '30%'][i % 6] }} />
+          <Skeleton className="h-9 w-full rounded-[10px]" />
+        </div>
+      ))}
+    </div>
   );
 }

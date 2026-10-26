@@ -14,7 +14,7 @@ import { AddPersonButton } from '../components/AddPerson';
 import { LinkedInImportButton } from '../components/LinkedInImport';
 import { CompaniesView } from '../components/people/CompaniesView';
 import { PeopleList } from '../components/people/PeopleList';
-import { type ChatRow, PipelineBoard } from '../components/people/PipelineBoard';
+import { BoardSkeleton, type ChatRow, PipelineBoard } from '../components/people/PipelineBoard';
 import { QUIET_DAYS, STAGE_COLOR, useNarrow, wentQuiet } from '../components/people/shared';
 import { useChatMove } from '../components/people/useChatMove';
 import { type PeopleFilter, type PeopleView, peopleFilterOf, peopleViewOf } from '../components/people/view';
@@ -23,7 +23,17 @@ import { db } from '../db/schema';
 import { filterPeople, type PeopleSort } from '../engine/search';
 import { useHints } from '../state/hints';
 import { useSession } from '../state/session';
-import { Button, cx, EmptyState, FirstRunHint, Input, PageHeader, Select } from '../ui';
+import {
+  Button,
+  cx,
+  EmptyState,
+  FirstRunHint,
+  Input,
+  PageHeader,
+  Select,
+  Skeleton,
+  SkeletonRows,
+} from '../ui';
 
 const STAGE_ORDER = [...ACTIVE_STAGES, ...CLOSED_STAGES];
 /** How many people the list draws at once; "Show more" adds as many again. */
@@ -54,13 +64,18 @@ export function People() {
   const [sort, setSort] = useState<PeopleSort | 'stage'>('strength');
   const [limit, setLimit] = useState(PAGE);
   const hints = useHints();
-  const people =
-    useLiveQuery(() => (userId ? db.people.where('userId').equals(userId).toArray() : []), [userId]) ?? [];
+  const peopleQ = useLiveQuery(
+    () => (userId ? db.people.where('userId').equals(userId).toArray() : []),
+    [userId],
+  );
+  const people = peopleQ ?? [];
   const chatRows = useLiveQuery(
     () => (userId ? db.chats.where('userId').equals(userId).toArray() : []),
     [userId],
   );
   const chats = chatRows ?? [];
+  // still reading: the page shows its shape (rows or the board), never "No one here yet"
+  const loading = peopleQ === undefined || chatRows === undefined;
   // the board opens by default, but with no chat yet it would be empty: a plain /people then shows the list of
   // everyone, so a student who just imported their connections sees them. Derived, never written to the address, so
   // adding a first person (which moves on to their page) is never pulled back here.
@@ -222,7 +237,11 @@ export function People() {
   const quietNote = `Nobody has gone quiet: no one has been waiting more than ${QUIET_DAYS} days for a reply to your last message.`;
   return (
     <div ref={rootRef}>
-      <PageHeader title="People" subtitle={subtitle} actions={<AddPersonButton />} />
+      <PageHeader
+        title="People"
+        subtitle={loading ? <Skeleton className="h-3 w-40 mt-1" /> : subtitle}
+        actions={<AddPersonButton />}
+      />
       <FirstRunHint
         id="pipeline"
         title="Reading the board"
@@ -324,7 +343,13 @@ export function People() {
           </label>
         </div>
       </div>
-      {total === 0 && filter !== 'hidden' ? (
+      {loading ? (
+        view === 'list' ? (
+          <SkeletonRows rows={8} divided testId="people-loading" />
+        ) : (
+          <BoardSkeleton />
+        )
+      ) : total === 0 && filter !== 'hidden' ? (
         <div data-testid="people-empty-network">
           <EmptyState
             title="No one here yet"

@@ -9,7 +9,7 @@ import { Link } from 'react-router-dom';
 import { db } from '../db/schema';
 import { type MutualsResult, mutualsFor } from '../engine/linkedinLive';
 import { useShowReasoning } from '../state/showReasoning';
-import { Avatar, Card, LinkedInMark } from '../ui';
+import { Avatar, Card, LinkedInMark, SkeletonRows } from '../ui';
 
 const SHOWN = 6;
 
@@ -24,6 +24,8 @@ export function MutualConnections({ user, person }: { user: User; person: Person
   const reasons = useShowReasoning();
   const key = `${user.id}:${person.id}`;
   const [result, setResult] = useState<MutualsResult | undefined>(() => cache.get(key));
+  // LinkedIn's answer did not come (an error): the card stays away rather than loading for ever
+  const [failed, setFailed] = useState(false);
   const [all, setAll] = useState(false);
   // the photos Orbit keeps for the mutuals it knows, for when LinkedIn sent none
   const [photos, setPhotos] = useState<Map<string, string>>(new Map());
@@ -49,22 +51,32 @@ export function MutualConnections({ user, person }: { user: User; person: Person
       return;
     }
     setResult(undefined);
+    setFailed(false);
     setAll(false);
     const ctrl = new AbortController();
     let live = true;
     mutualsFor(user, person, { signal: ctrl.signal })
       .then((r) => {
-        if (!r.ok && r.reason === 'error') return;
+        if (!r.ok && r.reason === 'error') {
+          if (live) setFailed(true);
+          return;
+        }
         cache.set(key, r);
         if (live) setResult(r);
       })
-      .catch(() => undefined);
+      .catch(() => live && setFailed(true));
     return () => {
       live = false;
       ctrl.abort();
     };
   }, [key, user, person]);
-  if (!result) return null;
+  if (!result)
+    return failed ? null : (
+      <Card>
+        <div className="font-medium mb-3">Mutual connections</div>
+        <SkeletonRows rows={3} avatar={24} testId="person-mutuals-loading" />
+      </Card>
+    );
   const mutuals = result.mutuals;
   if (!mutuals.length)
     return (

@@ -1459,6 +1459,43 @@ export async function regenerateDraft(
 }
 
 /**
+ * Two LinkedIn profiles are two people: a "Possible duplicate" question about them, saved before both profiles were
+ * known (or by an older version), is closed and its pair is never asked about again. Runs as the app opens, so what is
+ * already in the student's lists is fixed too, not only what is made from now on. Returns how many were closed.
+ */
+export async function retireTwoProfileMerges(userId: string, now = new Date()): Promise<number> {
+  const open = await db.merges
+    .where('userId')
+    .equals(userId)
+    .filter((m) => m.status === 'pending')
+    .toArray();
+  let closed = 0;
+  for (const m of open) {
+    const [a, b] = await Promise.all([db.people.get(m.personAId), db.people.get(m.personBId)]);
+    if (!a || !b || !differentLinkedInProfiles(a, b)) continue;
+    await db.merges.update(m.id, { status: 'stale' });
+    closed++;
+  }
+  // a card can outlive its merge row (or point at one already closed): any open question about two profiles goes
+  const cards = await db.suggestions
+    .where('userId')
+    .equals(userId)
+    .filter((s) => s.kind === 'confirm_merge' && (s.status === 'pending' || s.status === 'snoozed'))
+    .toArray();
+  const stale: Suggestion[] = [];
+  for (const s of cards) {
+    const m = typeof s.payload.mergeId === 'string' ? await db.merges.get(s.payload.mergeId) : undefined;
+    const [a, b] = await Promise.all([
+      s.personId ? db.people.get(s.personId) : undefined,
+      db.people.get((s.payload.otherPersonId as string | undefined) ?? m?.personBId ?? ''),
+    ]);
+    if ((a && b && differentLinkedInProfiles(a, b)) || (m && m.status !== 'pending')) stale.push(s);
+  }
+  await retireSuggestions(stale, 'different_linkedin_profiles', now);
+  return closed + stale.length;
+}
+
+/**
  * Drafts saved by older versions with a blank for the student (a bracketed "Why them" or any other gap, or a line
  * Orbit asked for) are redrafted whole, so every draft is ready to send as it is. A draft the student edited keeps
  * their words unless a blank is still in them (a message with a blank can never go, so it is written again). A

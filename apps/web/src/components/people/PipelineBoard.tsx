@@ -6,7 +6,7 @@ import { type PointerEvent as ReactPointerEvent, useEffect, useRef, useState } f
 import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import { db } from '../../db/schema';
-import { Avatar, cx, relDate } from '../../ui';
+import { Avatar, cx, relDate, Skeleton } from '../../ui';
 import { LogoText } from '../CompanyLogo';
 import { chatTimeLabel } from '../ScheduleChat';
 import { KIND_LABEL } from '../SuggestionCard';
@@ -248,6 +248,48 @@ export function PipelineBoard({
           document.body,
         )}
     </>
+  );
+}
+
+/**
+ * The board while the chats load: the real stage columns with their names, and soft placeholder cards in the first
+ * few, so a moment of loading never reads as an empty pipeline.
+ */
+export function BoardSkeleton() {
+  const cards = [2, 2, 1, 1, 0, 0];
+  return (
+    <div
+      className="flex flex-col @3xl:flex-row gap-3 loading-in"
+      role="status"
+      aria-busy="true"
+      aria-label="Loading your chats"
+      data-testid="board-loading"
+    >
+      {ACTIVE_STAGES.map((stage, i) => (
+        <div key={stage} className="w-full @3xl:flex-1 @3xl:min-w-[200px] @3xl:max-w-[320px]">
+          <div className="flex items-center gap-2 mb-2 px-1">
+            <span className="w-2 h-2 rounded-full shrink-0" style={{ background: STAGE_COLOR[stage] }} />
+            <span className="text-[13px] font-medium whitespace-nowrap text-ink-3">
+              {STAGE_LABELS[stage]}
+            </span>
+          </div>
+          <div className="space-y-2 min-h-[80px] rounded-[12px] p-2 bg-canvas-2/70">
+            {Array.from({ length: cards[i] ?? 0 }, (_, j) => (
+              <div
+                key={j}
+                className="rounded-[10px] bg-canvas border border-line p-3 flex items-center gap-2.5"
+              >
+                <Skeleton className="w-7 h-7 rounded-full shrink-0" />
+                <div className="flex-1 space-y-1.5">
+                  <Skeleton className="h-2.5" style={{ width: j ? '50%' : '64%' }} />
+                  <Skeleton className="h-2 w-2/5" />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }
 

@@ -10,7 +10,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { draftTypedMessage } from '../engine/brief';
 import { type ConversationItem, conversationWith } from '../engine/conversation';
 import { useSession } from '../state/session';
-import { Button, cx, Textarea, useToast } from '../ui';
+import { Button, cx, Skeleton, Textarea, useToast } from '../ui';
 import { runApproval } from './approve';
 import { RepliesChecked } from './RepliesChecked';
 
@@ -61,7 +61,29 @@ export function Conversation({ person }: { person: Person }) {
   useEffect(() => {
     if (shown.length) end.current?.scrollIntoView?.({ block: 'nearest' });
   }, [shown.length]);
-  if (!user || !items) return null;
+  if (!user) return null;
+  // the messages are still being read: bubbles in outline, never an empty conversation
+  if (!items)
+    return (
+      <div
+        className="space-y-3 loading-in"
+        role="status"
+        aria-busy="true"
+        aria-label="Loading"
+        data-testid="conversation-loading"
+      >
+        {[
+          ['self-start', '62%'],
+          ['self-end', '48%'],
+          ['self-start', '70%'],
+          ['self-end', '40%'],
+        ].map(([side, w]) => (
+          <div key={w} className={cx('flex', side === 'self-end' ? 'justify-end' : 'justify-start')}>
+            <Skeleton className="h-10 rounded-[14px]" style={{ width: w }} />
+          </div>
+        ))}
+      </div>
+    );
 
   const send = async () => {
     const text = body.trim();

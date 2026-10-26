@@ -7,7 +7,6 @@ import type { User } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Check } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
 import { db } from '../db/schema';
 import { signInClients } from '../engine/appSignIn';
 import {
@@ -199,16 +198,9 @@ export function FathomRow({ user }: { user: User }) {
         ) : undefined
       }
       line={
-        status.available ? (
-          <>
-            Notes from your recorded meetings, filed on each person.{' '}
-            <Link to="/notes/new" className="underline underline-offset-2 hover:text-ink">
-              Or paste notes in Add note
-            </Link>
-          </>
-        ) : (
-          'Not part of this version of Orbit yet. Paste notes in Add note instead.'
-        )
+        status.available
+          ? undefined
+          : 'Not part of this version of Orbit yet. Paste notes in Add note instead.'
       }
       actions={
         !status.available ? undefined : (
@@ -298,12 +290,6 @@ export function FathomRow({ user }: { user: User }) {
   );
 }
 
-const SIGN_IN_HINT: Record<Exclude<MeetingApp, 'fireflies'>, string> = {
-  granola:
-    "Opens Granola's sign-in. Every plan works; on the free plan Granola shares the last 30 days of notes.",
-  wispr: "Opens Wispr Flow's sign-in. Needs Wispr Flow's Notetaker recording your calls.",
-};
-
 /** Granola, Fireflies or Wispr Flow: a meeting notetaker that is not Fathom. */
 export function MeetingAppRow({ user, app }: { user: User; app: MeetingApp }) {
   const toast = useToast();
@@ -349,7 +335,7 @@ export function MeetingAppRow({ user, app }: { user: User; app: MeetingApp }) {
       }
       line={
         status.available
-          ? 'Notes from your recorded meetings, filed on each person.'
+          ? undefined
           : 'Not part of this version of Orbit yet. Paste notes in Add note instead.'
       }
       actions={
@@ -390,9 +376,6 @@ export function MeetingAppRow({ user, app }: { user: User; app: MeetingApp }) {
         )
       }
     >
-      {meta.connect === 'sign_in' && status.available && !status.connected && !busy && (
-        <p className="text-[12px] text-ink-3">{SIGN_IN_HINT[app as Exclude<MeetingApp, 'fireflies'>]}</p>
-      )}
       {asking && !status.connected && (
         <KeyField
           id={`${app}-key`}
@@ -484,7 +467,7 @@ export function CalcomRow({ user }: { user: User }) {
       }
       line={
         status.available
-          ? 'The booking link your drafts offer when you propose times'
+          ? 'Your booking link, offered when drafts propose times'
           : 'Not part of this version of Orbit yet.'
       }
       actions={

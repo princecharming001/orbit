@@ -20,7 +20,7 @@ import {
 import { setTargetStatus } from '../engine/settings';
 import { planForPosting } from '../engine/targetPlan';
 import { useSession } from '../state/session';
-import { Button, Card, cx, NotFound, PageHeader, Spinner, useToast } from '../ui';
+import { Button, Card, cx, NotFound, PageHeader, Skeleton, SkeletonRows, useToast } from '../ui';
 
 /** Rows drawn at first and each time the list's end scrolls into view: a big company never draws everyone at once. */
 const PAGE = 40;
@@ -53,6 +53,8 @@ export function CompanyPage() {
                 (!!normalizeCompany(t.nameRaw) && normalizeCompany(t.nameRaw) === org.nameNormalized),
             )
             .first()
+            // null: not a target; undefined: still reading (the header waits instead of offering "Set as target")
+            .then((t) => t ?? null)
         : undefined,
     [userId, org?.id],
   );
@@ -61,9 +63,9 @@ export function CompanyPage() {
   const plan = useLiveQuery(
     async () =>
       tc
-        ? (await db.targetPlans.where('targetCompanyId').equals(tc.id).toArray()).sort((a, b) =>
+        ? ((await db.targetPlans.where('targetCompanyId').equals(tc.id).toArray()).sort((a, b) =>
             b.builtAt.localeCompare(a.builtAt),
-          )[0]
+          )[0] ?? null)
         : undefined,
     [tc?.id],
   );
@@ -73,8 +75,16 @@ export function CompanyPage() {
   }, [userId, org?.id]);
   if (org === undefined)
     return (
-      <div className="py-20 flex justify-center">
-        <Spinner />
+      <div
+        className="loading-in"
+        role="status"
+        aria-busy="true"
+        aria-label="Loading"
+        data-testid="company-loading"
+      >
+        <Skeleton className="h-6 w-48 mb-2" />
+        <Skeleton className="h-3 w-64 max-w-full mb-8" />
+        <SkeletonRows rows={6} divided />
       </div>
     );
   if (org === null)
@@ -126,7 +136,9 @@ export function CompanyPage() {
           .filter(Boolean)
           .join(' · ')}
         actions={
-          tc ? (
+          tc === undefined ? (
+            <Skeleton className="h-9 w-28 rounded-full" />
+          ) : tc ? (
             <TargetChips target={tc} />
           ) : (
             <Button variant="primary" onClick={setAsTarget} data-testid="company-set-target">
@@ -136,7 +148,7 @@ export function CompanyPage() {
         }
       />
       {!reach ? (
-        <Spinner />
+        <SkeletonRows rows={6} divided testId="company-reach-loading" />
       ) : (
         <CompanyBody
           name={org.name}
@@ -146,7 +158,7 @@ export function CompanyPage() {
           onAct={(c) => void act(c)}
         />
       )}
-      {tc && !plan && user && reach && (
+      {tc && plan === null && user && reach && (
         <div className="mt-6">
           <Button
             onClick={() =>
