@@ -445,6 +445,8 @@ export class OrbitScene {
   /** where the sprite pre-build has got to in `views` (-1: nothing waiting) */
   private prebuildAt = -1;
   private images = new Map<string, HTMLImageElement>();
+  /** photos decoded and ready to draw without a pause */
+  private decoded = new WeakSet<HTMLImageElement>();
   private destroyed = false;
   private you: Pt = { x: 0, y: 0 };
   private scratchA: Pt = { x: 0, y: 0 };
@@ -3218,7 +3220,7 @@ export class OrbitScene {
       v.spriteLabel === label &&
       want <= v.spriteD * 1.04 &&
       want >= v.spriteD * 0.55 &&
-      v.spriteImg === !!(photo?.complete && photo.naturalWidth)
+      v.spriteImg === !!(photo && this.decoded.has(photo))
     );
   }
 
@@ -3248,11 +3250,17 @@ export class OrbitScene {
       // no CORS request: LinkedIn's image server sends no CORS header, so an anonymous load fails every photo.
       // Drawing a cross-origin image only marks the canvas, which Orbit never reads back.
       img.referrerPolicy = 'no-referrer';
-      img.onload = () => {
+      const el = img;
+      const ready = () => {
+        this.decoded.add(el);
         this.dirty = true;
         this.wake();
       };
-      img.src = p.photoUrl;
+      el.src = p.photoUrl;
+      // decoded off the main thread before a sprite draws it: a crowd of photos arriving at once never stalls a frame
+      if (typeof el.decode === 'function')
+        el.decode().then(ready, () => el.complete && el.naturalWidth && ready());
+      else el.onload = ready;
       this.images.set(p.id, img);
     }
     return img;
@@ -3292,7 +3300,7 @@ export class OrbitScene {
       g.arc(cx, cx, r, 0, TAU);
       g.closePath();
       g.clip();
-      if (photo?.complete && photo.naturalWidth) {
+      if (photo && this.decoded.has(photo)) {
         g.drawImage(photo, cx - r, cx - r, r * 2, r * 2);
         img = true;
       } else {
