@@ -207,11 +207,15 @@ export function SuggestionCard({
   const answerIntro = async (yes: boolean) => {
     setBusy(true);
     try {
+      // the introducer by name even if their row had not loaded yet when the answer was given (a slow machine)
+      const who =
+        introducer ??
+        (s.payload.introducerId ? await db.people.get(s.payload.introducerId as string) : undefined);
       await answerIntroductionQuestion(user, s.payload.threadId as string, yes);
       toast.push(
         yes
           ? {
-              text: `Added to your pipeline, noting that ${introducer?.firstName ?? 'they'} introduced you.`,
+              text: `Added to your pipeline, noting that ${who?.firstName ?? 'they'} introduced you.`,
               tone: 'good',
             }
           : { text: 'Got it. Orbit will not ask about this thread again.' },
