@@ -43,19 +43,20 @@ test.describe('Landing page', () => {
     await expect(deck).not.toHaveText(/[–—]/);
   });
 
-  test('the line under the faces says the same number of students as the count at the top', async ({
+  test('the hero shows Live with the two columns and no student count; the faces line is a placeholder', async ({
     page,
   }) => {
     await prep(page);
     await page.goto('');
-    const count = page.getByTestId('trusted-count');
-    await count.scrollIntoViewIfNeeded();
-    const line = page.getByTestId('lp-students-line');
-    await line.scrollIntoViewIfNeeded();
-    const n = (await line.textContent())!.match(
-      /^([\d,]+) students are already using Orbit to land jobs\.$/,
-    )![1]!;
-    // the count at the top counts up to it the first time it is seen
-    await expect.poll(async () => (await count.textContent())?.replace(/\s/g, '')).toContain(n);
+    const hero = page.getByTestId('trusted-by');
+    await expect(hero).toContainText('Live');
+    await expect(hero.getByTestId('trusted-schools')).toBeVisible();
+    await expect(hero.getByTestId('trusted-companies')).toBeVisible();
+    await expect(page.getByTestId('trusted-count')).toHaveCount(0);
+    await expect(hero).not.toContainText(/\d{1,3},\d{3}\s+students/);
+    await page.getByTestId('lp-students-line').scrollIntoViewIfNeeded();
+    await expect(page.getByTestId('lp-students-line')).toHaveText(
+      'XXX students are already using Orbit to land jobs.',
+    );
   });
 });

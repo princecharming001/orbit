@@ -545,39 +545,10 @@ body {
     transform: translateY(-50%);
   }
 }
-.odometer-strip {
-  transition: transform 0.9s cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-.trusted-bump {
-  animation: trusted-bump 2.6s ease-out forwards;
-}
-@keyframes trusted-bump {
-  0% {
-    opacity: 0;
-    transform: translate(100%, 6px);
-  }
-  15% {
-    opacity: 1;
-    transform: translate(100%, 0);
-  }
-  75% {
-    opacity: 1;
-  }
-  100% {
-    opacity: 0;
-    transform: translate(100%, -8px);
-  }
-}
 @media (prefers-reduced-motion: reduce) {
   .trusted-climb,
-  .trusted-bump {
-    animation: none;
-  }
   .trusted-column {
     overflow-y: auto;
-  }
-  .odometer-strip {
-    transition: none;
   }
 }
 /* the status line's dot while Orbit works (plan 23 §4.7): a slow breath, still for anyone who asked for less motion */

@@ -5,7 +5,7 @@ import { lazy, type ReactNode, Suspense, useEffect, useRef, useState } from 'rea
 import { Link, useNavigate } from 'react-router-dom';
 import { Logo } from '../components/AppShell';
 import { BoardPreview, DraftsPreview, Point, PrepShowcase, Stage } from '../components/landing/Showcase';
-import { TrustedBy, useStudentCount } from '../components/landing/TrustedBy';
+import { TrustedBy } from '../components/landing/TrustedBy';
 import { db } from '../db/schema';
 import { createLocalUser, leaveDemoForOwnSetup, savedProfiles } from '../engine/account';
 import { DEMO_USER_ID, demoResetPrompt, loadDemo } from '../engine/demo';
@@ -697,36 +697,18 @@ function HowItWorks({ google }: { google: boolean }) {
       text: 'See who is worth a coffee chat and the warmest route to them, scored, through people you already know.',
       visual: (
         <StepPanel>
-          <div className="flex items-start justify-between text-center">
-            {[
-              { name: 'You', face: undefined },
-              { name: 'Maya', face: demoFace('Maya') },
-              { name: 'Priya', face: demoFace('Priya') },
-            ].map((n, i) => (
-              <div key={n.name} className="contents">
-                {i > 0 && (
-                  <div className="flex-1 pt-[13px] min-w-0">
-                    <div className="h-px bg-accent/50" />
-                    <div className="mt-1 text-[10px] text-ink-3 whitespace-nowrap">
-                      {i === 1 ? 'close' : 'coworkers'}
-                    </div>
-                  </div>
-                )}
-                <div className="flex flex-col items-center gap-1 shrink-0 w-9">
-                  {n.face ? (
-                    <Avatar name={n.name} src={n.face} size={28} />
-                  ) : (
-                    <span className="w-7 h-7 rounded-full bg-ink text-white inline-flex items-center justify-center text-[10px] font-medium">
-                      You
-                    </span>
-                  )}
-                  <span className="text-[11px] text-ink-2">{n.name}</span>
-                </div>
-              </div>
-            ))}
+          {/* one line: you, the person who can introduce you, them; the score under it */}
+          <div className="flex items-center justify-center gap-2">
+            <span className="w-8 h-8 rounded-full bg-ink text-white inline-flex items-center justify-center text-[10.5px] font-medium shrink-0">
+              You
+            </span>
+            <span className="w-7 h-px bg-ink-3/40" aria-hidden />
+            <Avatar name="Maya Chen" src={demoFace('Maya')} size={32} />
+            <span className="w-7 h-px bg-ink-3/40" aria-hidden />
+            <Avatar name="Priya Ahmed" src={demoFace('Priya')} size={32} />
           </div>
-          <div className="mt-2 flex items-center justify-between text-[11.5px]">
-            <span className="text-ink-3">Priya · Stripe</span>
+          <div className="mt-3 flex items-center justify-center gap-2 text-[12px]">
+            <span className="text-ink-3">Via Maya</span>
             <Chip tone="good" className="h-[20px] text-[11px]">
               Strong · 74
             </Chip>
@@ -854,8 +836,6 @@ const PROMISES = [
 
 /** The demo's made-up people, as a row of faces beside the last call to action. */
 function DemoFaces() {
-  // the same number as the count at the top of the page, and it moves when that one does
-  const students = useStudentCount();
   const people: [string, string][] = [
     ['Maya', 'Maya Chen'],
     ['Daniel', 'Daniel Okafor'],
@@ -877,7 +857,7 @@ function DemoFaces() {
         className="mt-3 text-[13px] text-white/65 max-w-[300px] text-balance lg:ml-auto"
         data-testid="lp-students-line"
       >
-        {students.toLocaleString('en-US')} students are already using Orbit to land jobs.
+        XXX students are already using Orbit to land jobs.
       </p>
     </div>
   );
