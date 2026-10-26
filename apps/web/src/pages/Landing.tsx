@@ -1,6 +1,6 @@
 import type { User } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { ChevronRight, Gauge, HardDrive, Minus, Plus, ShieldCheck, Trash2 } from 'lucide-react';
+import { Check, Gauge, HardDrive, Minus, Plus, ShieldCheck, Trash2 } from 'lucide-react';
 import { lazy, type ReactNode, Suspense, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Logo } from '../components/AppShell';
@@ -592,68 +592,177 @@ function Feature({
   );
 }
 
+/** LinkedIn, Gmail and Google Calendar as small app tiles, drawn inline (no image requests). */
+function LinkedInIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="w-[18px] h-[18px]" aria-hidden>
+      <rect width="24" height="24" rx="5" fill="#0A66C2" />
+      <path
+        fill="#fff"
+        d="M7.1 9.6h2.6V18H7.1zM8.4 5.6a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3zM11.3 9.6h2.5v1.2h.04c.35-.66 1.2-1.36 2.47-1.36 2.64 0 3.13 1.74 3.13 4V18h-2.6v-4.04c0-.96-.02-2.2-1.34-2.2-1.34 0-1.55 1.05-1.55 2.13V18h-2.6z"
+      />
+    </svg>
+  );
+}
+function GmailIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="w-[18px] h-[18px]" aria-hidden>
+      <path fill="#4285F4" d="M3.6 19.5h2.7v-6.6L2.4 10v8.1c0 .77.63 1.4 1.2 1.4z" />
+      <path fill="#34A853" d="M17.7 19.5h2.7c.57 0 1.2-.63 1.2-1.4V10l-3.9 2.9z" />
+      <path fill="#FBBC04" d="M17.7 7.1v5.8l3.9-2.9V8.4c0-1.6-1.8-2.5-3.1-1.6z" />
+      <path fill="#EA4335" d="M6.3 12.9V7.1L12 11.4l5.7-4.3v5.8L12 17.2z" />
+      <path fill="#C5221F" d="M2.4 8.4V10l3.9 2.9V7.1l-.8-.6C4.2 5.9 2.4 6.8 2.4 8.4z" />
+    </svg>
+  );
+}
+function CalendarIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="w-[18px] h-[18px]" aria-hidden>
+      <rect x="3" y="3" width="18" height="18" rx="3" fill="#fff" stroke="#DADCE0" />
+      <path fill="#4285F4" d="M3 6a3 3 0 0 1 3-3h12a3 3 0 0 1 3 3v2H3z" />
+      <text
+        x="12"
+        y="17.6"
+        textAnchor="middle"
+        fontSize="8.5"
+        fontWeight="700"
+        fill="#1A73E8"
+        fontFamily="Inter, sans-serif"
+      >
+        31
+      </text>
+    </svg>
+  );
+}
+
+/** The quiet panel each step's picture sits in, all the same height so the four line up. */
+function StepPanel({ children }: { children: ReactNode }) {
+  return (
+    <div className="w-full h-[124px] rounded-[12px] border border-line bg-canvas-2/50 p-3 flex flex-col justify-center">
+      {children}
+    </div>
+  );
+}
+
 /** The four steps, from LinkedIn to a booked call, each with a small piece of the product. */
 function HowItWorks({ google }: { google: boolean }) {
-  const sources = google ? ['LinkedIn', 'Gmail', 'Calendar'] : ['LinkedIn', 'Your notes'];
+  const sources: { name: string; icon: ReactNode }[] = google
+    ? [
+        { name: 'LinkedIn', icon: <LinkedInIcon /> },
+        { name: 'Gmail', icon: <GmailIcon /> },
+        { name: 'Calendar', icon: <CalendarIcon /> },
+      ]
+    : [{ name: 'LinkedIn', icon: <LinkedInIcon /> }];
   const steps: { title: string; text: string; visual: ReactNode }[] = [
     {
       title: 'Connect',
       text: google
-        ? 'Bring your LinkedIn connections, and Gmail and Calendar if you like. Orbit learns who you know and how well.'
-        : 'Bring your LinkedIn connections and notes. Orbit learns who you know and how well.',
+        ? 'Sign in to LinkedIn, and Gmail and Calendar if you like. Orbit learns who you know and how well.'
+        : 'Sign in to LinkedIn. Orbit learns who you know and how well.',
       visual: (
-        <div className="flex flex-wrap gap-1.5">
-          {sources.map((s) => (
-            <span
-              key={s}
-              className="h-7 px-2.5 rounded-full border border-line bg-canvas inline-flex items-center gap-1.5 text-[12px] text-ink-2"
-            >
-              <span className="w-1.5 h-1.5 rounded-full bg-good" />
-              {s}
-            </span>
-          ))}
-        </div>
+        <StepPanel>
+          <ul className="space-y-1.5">
+            {sources.map((s) => (
+              <li key={s.name} className="flex items-center gap-2.5 text-[12.5px]">
+                <span className="w-7 h-7 rounded-[8px] border border-line bg-white inline-flex items-center justify-center shrink-0">
+                  {s.icon}
+                </span>
+                <span className="flex-1 text-ink">{s.name}</span>
+                <span className="inline-flex items-center gap-1 text-[11.5px] text-good">
+                  <Check size={12} strokeWidth={2.5} aria-hidden /> Connected
+                </span>
+              </li>
+            ))}
+          </ul>
+        </StepPanel>
       ),
     },
     {
       title: 'Find the way in',
       text: 'See who is worth a coffee chat and the warmest route to them, scored, through people you already know.',
       visual: (
-        <div className="flex flex-wrap items-center gap-1.5 text-[12px]">
-          <span className="h-6 px-2 rounded-full bg-ink text-white inline-flex items-center text-[11px] font-medium">
-            You
-          </span>
-          <ChevronRight size={12} className="text-ink-3" />
-          <Avatar name="Maya Chen" src={demoFace('Maya')} size={22} />
-          <ChevronRight size={12} className="text-ink-3" />
-          <Avatar name="Priya Ahmed" src={demoFace('Priya')} size={22} />
-          <Chip tone="good" className="ml-1 h-[20px] text-[11px]">
-            Strong route · 45
-          </Chip>
-        </div>
+        <StepPanel>
+          <div className="flex items-start justify-between text-center">
+            {[
+              { name: 'You', face: undefined },
+              { name: 'Maya', face: demoFace('Maya') },
+              { name: 'Priya', face: demoFace('Priya') },
+            ].map((n, i) => (
+              <div key={n.name} className="contents">
+                {i > 0 && (
+                  <div className="flex-1 pt-[13px] min-w-0">
+                    <div className="h-px bg-accent/50" />
+                    <div className="mt-1 text-[10px] text-ink-3 whitespace-nowrap">
+                      {i === 1 ? 'close' : 'coworkers'}
+                    </div>
+                  </div>
+                )}
+                <div className="flex flex-col items-center gap-1 shrink-0 w-9">
+                  {n.face ? (
+                    <Avatar name={n.name} src={n.face} size={28} />
+                  ) : (
+                    <span className="w-7 h-7 rounded-full bg-ink text-white inline-flex items-center justify-center text-[10px] font-medium">
+                      You
+                    </span>
+                  )}
+                  <span className="text-[11px] text-ink-2">{n.name}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="mt-2 flex items-center justify-between text-[11.5px]">
+            <span className="text-ink-3">Priya · Stripe</span>
+            <Chip tone="good" className="h-[20px] text-[11px]">
+              Strong · 74
+            </Chip>
+          </div>
+        </StepPanel>
       ),
     },
     {
       title: 'Write and approve',
       text: 'Every message drafted in your voice from what you know. Nothing goes out until you approve it.',
       visual: (
-        <div className="flex items-center gap-2">
-          <span className="h-7 px-3 rounded-full bg-accent text-white inline-flex items-center text-[12px] font-medium">
-            Open email to Lena
-          </span>
-          <span className="text-[12px] text-ink-3">you send it</span>
-        </div>
+        <StepPanel>
+          <div className="flex items-center gap-2 text-[11.5px] text-ink-3">
+            <Avatar name="Lena Novak" src={demoFace('Lena')} size={18} />
+            To Lena Novak
+          </div>
+          <p className="mt-1.5 text-[12px] leading-[1.45] text-ink-2 line-clamp-2">
+            Thanks for Friday, and for the tip on telling one project story.
+          </p>
+          <div className="mt-2 flex justify-end gap-1.5">
+            <span className="h-6 px-2.5 rounded-full border border-line bg-canvas inline-flex items-center text-[11px] text-ink-2">
+              Edit
+            </span>
+            <span className="h-6 px-2.5 rounded-full bg-accent text-white inline-flex items-center text-[11px] font-medium">
+              Approve
+            </span>
+          </div>
+        </StepPanel>
       ),
     },
     {
       title: 'Prep and follow up',
       text: 'A prep deck before each call, the thank-you after it, and a nudge when a chat goes quiet.',
       visual: (
-        <div className="flex flex-wrap gap-1.5">
-          <Chip tone="accent">Open prep</Chip>
-          <Chip tone="good">Thank-you</Chip>
-          <Chip tone="warn">Follow-up</Chip>
-        </div>
+        <StepPanel>
+          <ol className="relative space-y-1.5 text-[12px]">
+            <span className="absolute left-[5px] top-2 bottom-2 w-px bg-line" aria-hidden />
+            {[
+              { when: 'Tue 1:55', what: 'Prep deck ready', tone: 'bg-accent' },
+              { when: 'Tue 2:00', what: 'Chat with Omar', tone: 'bg-ink' },
+              { when: 'Wed', what: 'Thank-you drafted', tone: 'bg-good' },
+              { when: 'Later', what: 'Check-in if quiet', tone: 'bg-warn' },
+            ].map((e) => (
+              <li key={e.what} className="relative flex items-center gap-2.5">
+                <span className={cx('w-[11px] h-[11px] rounded-full ring-2 ring-canvas shrink-0', e.tone)} />
+                <span className="w-[62px] shrink-0 text-ink-3 tabular">{e.when}</span>
+                <span className="text-ink truncate">{e.what}</span>
+              </li>
+            ))}
+          </ol>
+        </StepPanel>
       ),
     },
   ];
@@ -674,7 +783,7 @@ function HowItWorks({ google }: { google: boolean }) {
       </Reveal>
       <Reveal delay={80}>
         <ol
-          className="mt-10 grid sm:grid-cols-2 lg:grid-cols-4 rounded-[18px] border border-line bg-canvas overflow-hidden"
+          className="mt-10 grid sm:grid-cols-2 xl:grid-cols-4 rounded-[18px] border border-line bg-canvas overflow-hidden"
           data-testid="lp-steps"
         >
           {steps.map((s, i) => (
@@ -684,8 +793,8 @@ function HowItWorks({ google }: { google: boolean }) {
                 'p-5 md:p-6 flex flex-col gap-4 border-line',
                 i > 0 && 'border-t sm:border-t-0',
                 i % 2 === 1 && 'sm:border-l',
-                i >= 2 && 'sm:border-t lg:border-t-0',
-                i === 2 && 'lg:border-l',
+                i >= 2 && 'sm:border-t xl:border-t-0',
+                i === 2 && 'xl:border-l',
               )}
               data-testid="lp-step"
             >
@@ -696,7 +805,7 @@ function HowItWorks({ google }: { google: boolean }) {
                 <h3 className="text-[17px] font-medium tracking-[-0.01em]">{s.title}</h3>
                 <p className="mt-1.5 text-[14px] leading-[1.55] text-ink-3">{s.text}</p>
               </div>
-              <div className="mt-auto pt-2 min-h-8 flex items-end">{s.visual}</div>
+              <div className="mt-auto pt-2">{s.visual}</div>
             </li>
           ))}
         </ol>
