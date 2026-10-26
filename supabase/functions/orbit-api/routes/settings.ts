@@ -7,11 +7,13 @@
  *        → users.settings.postal_address / scheduling_link (null or '' removes), users.timezone,
  *          users.onboarding.completed_at (set once setup is finished; never cleared), and the student's profile:
  *          users.school, degree, majors, grad_year, current_city (null or '' clears), and the student's own words
- *          about their goals (plan 24) as users.settings.about (the whole set replaces the stored one; null clears)
+ *          about their goals (plan 24) as users.settings.about (the whole set replaces the stored one; null clears),
+ *          and readReplyTone (plan 27) as users.settings.read_reply_tone (false only; true removes it), which rescores
  */
 import { cleanAnswer, cleanCurrentJob, OWN_WORDS_KEYS, type OwnWords } from '@orbit/core/ownWords';
 import type { ProfileSettingsResponse } from '@orbit/core/server/api';
 import { badRequest, HttpError, json } from '../../_shared/http.ts';
+import { sqlQueue } from '../../_shared/queue.ts';
 import { validZone } from '../../_shared/zones.ts';
 import type { Ctx, Route } from '../api.ts';
 import { body, optUuid } from './body.ts';
@@ -173,12 +175,17 @@ async function profile(ctx: Ctx): Promise<Response> {
     done = t.toISOString();
   }
   const about = aboutFrom(b);
+  if (b.readReplyTone !== undefined && typeof b.readReplyTone !== 'boolean')
+    throw badRequest('readReplyTone must be true or false');
+  const tone = b.readReplyTone as boolean | undefined;
   const userId = ctx.userId!;
   // the keys given are replaced (or removed when null); the rest of settings is kept
-  const given: Record<string, string | OwnWords | null> = {};
+  const given: Record<string, string | OwnWords | boolean | null> = {};
   if (postal !== undefined) given.postal_address = postal;
   if (link !== undefined) given.scheduling_link = link;
   if (about !== undefined) given.about = about;
+  // on is the default, so only "off" is stored
+  if (tone !== undefined) given.read_reply_tone = tone ? null : false;
   const keep = Object.fromEntries(Object.entries(given).filter(([, v]) => v !== null));
   const [after] = await ctx.db.sql<{
     settings: Record<string, unknown>;
@@ -223,6 +230,14 @@ async function profile(ctx: Ctx): Promise<Response> {
     await ctx.db.sql`
       insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
       values (${userId}::uuid, 'user', 'settings.profile', 'users', ${userId}, ${{ fields: changed }}::jsonb)`;
+  // the tone reading on or off changes every score: rescore now rather than tonight
+  if (tone !== undefined)
+    await sqlQueue(ctx.db).enqueue({
+      kind: 'score.user',
+      userId,
+      payload: { reason: 'reply_tone' },
+      dedupeKey: `score.user:${userId}:reply_tone:${Date.now()}`,
+    });
   const str = (v: unknown) => (typeof v === 'string' && v ? v : null);
   const out: ProfileSettingsResponse = {
     postalAddress: str(after.settings?.postal_address),

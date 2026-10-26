@@ -8,7 +8,20 @@ import type {
   TieStrength,
   Touchpoint,
 } from '@orbit/core';
-import { knowEachOther, newId, pairsFromEdges, tieStrength, warmthValue } from '@orbit/core';
+import {
+  fitCalibration,
+  gatherRapport,
+  knowEachOther,
+  newId,
+  pairsFromEdges,
+  type RapportSource,
+  replyRapport,
+  type TieCalibration,
+  type TieHistory,
+  type TieRapport,
+  tieStrength,
+  warmthValue,
+} from '@orbit/core';
 import { isServerUser } from '../integrations/orbitApi';
 import { db } from './schema';
 
@@ -106,6 +119,86 @@ function noteWarmthByPerson(notes: MeetingNote[]): Map<string, number[]> {
   return out;
 }
 
+/**
+ * Reply readings for f16 (plan 27), per person: their Gmail and LinkedIn messages (the reading stored at ingest,
+ * replaced by the classifier's when it ran), comments on the student's posts, and texts (read here, lexically; they
+ * never leave this browser). Shared filter: their own words only, no machine mail, no groups larger than three.
+ */
+async function rapportByPerson(
+  userId: string,
+  touchpoints: Touchpoint[],
+  only?: string,
+): Promise<Map<string, TieRapport[]>> {
+  const [user, settings, messages, threads, texts] = await Promise.all([
+    db.users.get(userId),
+    db.settings.get(userId),
+    only
+      ? db.messages.where('fromPersonId').equals(only).toArray()
+      : db.messages
+          .where('userId')
+          .equals(userId)
+          .filter((m) => !!m.fromPersonId)
+          .toArray(),
+    db.threads.where('userId').equals(userId).toArray(),
+    only
+      ? db.textThreads.where('personId').equals(only).toArray()
+      : db.textThreads.where('userId').equals(userId).toArray(),
+  ]);
+  const out = new Map<string, TieRapport[]>();
+  if (settings?.readReplyTone === false) return out;
+  const sources = new Map<string, RapportSource[]>();
+  const add = (pid: string, r: RapportSource) => {
+    const arr = sources.get(pid) ?? [];
+    arr.push(r);
+    sources.set(pid, arr);
+  };
+  const participants = new Map(threads.map((t) => [t.id, Math.max(2, t.participantPersonIds.length + 1)]));
+  for (const m of messages) {
+    if (!m.fromPersonId || m.direction !== 'inbound' || !m.extraction?.rapport) continue;
+    add(m.fromPersonId, {
+      at: m.sentAt,
+      inbound: true,
+      automated: m.isAutomated,
+      participants: participants.get(m.threadId) ?? 2,
+      channel: m.channel === 'linkedin' ? 'linkedin' : 'email',
+      reading: m.extraction.rapport,
+      fromEmail: m.fromEmail,
+    });
+  }
+  for (const t of touchpoints)
+    if (t.kind === 'linkedin_comment_in' && t.rapport)
+      add(t.personId, {
+        at: t.occurredAt,
+        inbound: true,
+        automated: false,
+        participants: 2,
+        channel: 'comment',
+        reading: t.rapport,
+      });
+  const first = user?.firstName;
+  for (const th of texts)
+    for (const m of th.recent)
+      if (!m.fromMe && m.text.trim())
+        add(th.personId, {
+          at: m.at,
+          inbound: true,
+          automated: false,
+          participants: 2,
+          channel: 'text',
+          reading: replyRapport({ text: m.text, studentFirstName: first }),
+        });
+  for (const [pid, rows] of sources) out.set(pid, gatherRapport(rows));
+  return out;
+}
+
+/** The student's own closeness ratings, as tieStrength takes them. */
+async function labelsFor(userId: string): Promise<Map<string, TieHistory['label']>> {
+  const rows = await db.tieLabels.where('userId').equals(userId).toArray();
+  return new Map(rows.map((l) => [l.personId, { closeness: l.closeness, at: l.updatedAt }]));
+}
+
+const calibrationKey = (userId: string) => `tie-calibration:${userId}`;
+
 function tieFields(
   r: TieStrength,
 ): Pick<Person, 'strength' | 'strengthBreakdown' | 'tieScore' | 'tieBand' | 'tieExplanation'> {
@@ -130,7 +223,7 @@ export async function recomputePersonStrength(
   if (!person) return undefined;
   // account mode: orbit-api scores from the whole mailbox; this browser only holds a slice of it
   if (isServerUser(person.userId)) return person;
-  const [tps, affiliations, ctx, notes] = await Promise.all([
+  const [tps, affiliations, ctx, notes, label, calibration] = await Promise.all([
     db.touchpoints.where('personId').equals(personId).toArray(),
     db.affiliations.where('personId').equals(personId).toArray(),
     loadTieContext(person.userId),
@@ -139,7 +232,10 @@ export async function recomputePersonStrength(
       .equals(person.userId)
       .filter((n) => n.personIds.includes(personId))
       .toArray(),
+    db.tieLabels.get(personId),
+    db.kv.get(calibrationKey(person.userId)),
   ]);
+  const rapport = (await rapportByPerson(person.userId, tps, personId)).get(personId);
   const mutuals = person.strengthBreakdown?.tieScore?.mutuals ?? [];
   const r = tieStrength(
     {
@@ -150,8 +246,11 @@ export async function recomputePersonStrength(
       noteWarmth: noteWarmthByPerson(notes).get(personId) ?? [],
       mutualScores: mutuals.map((m) => m.score),
       mutualNames: mutuals.map((m) => m.name),
+      ...(label ? { label: { closeness: label.closeness, at: label.updatedAt } } : {}),
+      ...(rapport?.length ? { rapport } : {}),
     },
     now,
+    calibration?.value as TieCalibration | undefined,
   );
   const last = r.breakdown.lastInteractionAt;
   const fields = { ...tieFields(r), lastInteractionAt: last, interactionCount: tps.length };
@@ -199,12 +298,15 @@ export async function recomputeAllStrengths(userId: string, now = new Date()): P
     }
   }
   const warmth = noteWarmthByPerson(notes);
-  const updates = people.map((p) => {
+  const [rapport, labels] = await Promise.all([rapportByPerson(userId, tps), labelsFor(userId)]);
+  const score = (p: Person, calibration?: TieCalibration) => {
     const mutuals = [...(neighbours.get(p.id) ?? [])]
       .map((id) => byId.get(id))
       .filter((m): m is Person => !!m && m.isHuman && !m.hiddenAt && m.strength > 0)
       .map((m) => ({ name: m.firstName || m.displayName, score: Math.round(m.strength * 100) }));
-    const r = tieStrength(
+    const label = labels.get(p.id);
+    const readings = rapport.get(p.id);
+    return tieStrength(
       {
         person: p,
         touchpoints: byPerson.get(p.id) ?? [],
@@ -213,9 +315,22 @@ export async function recomputeAllStrengths(userId: string, now = new Date()): P
         noteWarmth: warmth.get(p.id) ?? [],
         mutualScores: mutuals.map((m) => m.score),
         mutualNames: mutuals.map((m) => m.name),
+        ...(label ? { label } : {}),
+        ...(readings?.length ? { rapport: readings } : {}),
       },
       now,
+      calibration,
     );
+  };
+  // the student's ratings calibrate everyone (§3.5): fit on the model's own z for the people they rated
+  const calibration = fitCalibration(
+    people
+      .filter((p) => labels.has(p.id))
+      .map((p) => ({ z: score(p).tie.z, closeness: labels.get(p.id)!.closeness })),
+  );
+  await db.kv.put({ key: calibrationKey(userId), value: calibration ?? null });
+  const updates = people.map((p) => {
+    const r = score(p, calibration);
     return {
       id: p.id,
       changes: {

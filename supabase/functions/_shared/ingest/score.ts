@@ -10,7 +10,8 @@
  *   intros        introduced_by ties P is on (P introduced the user, or was introduced to them)
  *   shared        same school, overlapping employer (the self person's employment), same city
  *   linkedin      a LinkedIn relation identity (its creation time is the connection date)
- *   warmth        note extractions' warmth and inbound messages' sentiment
+ *   warmth        note extractions' warmth
+ *   rapport       how warm their replies read (extraction.rapport, plan 27), unless the student turned it off
  *   structural    the previous scores of P's routable contacts
  *   label         the user's closeness rating, shown as its band midpoint until new contact
  * Family and partners are floored at 80 (§3.7). score.user also fits the per-user calibration from ≥ 8 labels.
@@ -19,6 +20,7 @@ import { ROUTABLE_TIE_KINDS } from '@orbit/core/graph/ties';
 import {
   CALIBRATION_MIN_LABELS,
   fitCalibration,
+  gatherRapport,
   scoreTie,
   sharedContext,
   TIE_WEIGHTS,
@@ -52,7 +54,8 @@ type MsgRow = {
   automated: boolean;
   from_addr: string | null;
   participant_count: number;
-  sentiment: string | null;
+  /** extraction.rapport: how warm their reply reads (plan 27) */
+  rapport: unknown;
 };
 
 export function readCalibration(settings: Record<string, unknown>): TieCalibration | undefined {
@@ -86,8 +89,11 @@ export async function loadHistories(
   const relationship = new Map<string, string | null>();
   if (!ids.length) return { people: [], histories, relationship };
 
-  const [user] = await db.sql<{ school: string | null; current_city: string | null }>`
-    select school, current_city from orbit.users where id = ${userId}::uuid`;
+  const [user] = await db.sql<{ school: string | null; current_city: string | null; tone: boolean | null }>`
+    select school, current_city, (settings ->> 'read_reply_tone')::boolean as tone
+      from orbit.users where id = ${userId}::uuid`;
+  // the student can turn the tone of replies off (plan 27): then f16 stays 0
+  const readTone = user?.tone !== false;
   const affRows = await db.sql<Record<string, unknown>>`
     select a.*, p.is_self from orbit.affiliations a join orbit.people p on p.id = a.person_id
      where a.user_id = ${userId}::uuid and (p.is_self or a.person_id = any(${ids}::uuid[]))`;
@@ -112,7 +118,7 @@ export async function loadHistories(
   const msgs = await db.sql<MsgRow>`
     select m.from_person_id, m.to_person_ids, m.direction, m.sent_at, m.provider, m.thread_id,
            m.is_automated or m.list_unsubscribe as automated, m.from_addr, t.participant_count,
-           m.extraction ->> 'sentiment' as sentiment
+           m.extraction -> 'rapport' as rapport
       from orbit.messages m join orbit.threads t on t.id = m.thread_id
      where m.user_id = ${userId}::uuid
        and ((m.direction = 'in' and m.from_person_id = any(${ids}::uuid[]))
@@ -205,12 +211,21 @@ export async function loadHistories(
     const messages = toTieMessages(msgsBy.get(person.id) ?? []);
     const intro = introsBy.get(person.id) ?? [];
     const mutual = mutualBy.get(person.id) ?? [];
-    const warmth = [
-      ...(warmthBy.get(person.id) ?? []),
-      ...(msgsBy.get(person.id) ?? [])
-        .filter((m) => m.direction === 'in' && m.sentiment)
-        .map((m) => warmthValue(m.sentiment as 'warm' | 'neutral' | 'cool')),
-    ];
+    // f13 is the student's notes only; their replies' tone is f16, read the same way as in the browser
+    const warmth = warmthBy.get(person.id) ?? [];
+    const rapport = readTone
+      ? gatherRapport(
+          (msgsBy.get(person.id) ?? []).map((m) => ({
+            at: iso(m.sent_at)!,
+            inbound: m.direction === 'in',
+            automated: !!m.automated,
+            participants: Math.max(2, Number(m.participant_count ?? 1) + 1),
+            channel: m.provider === 'linkedin' ? ('linkedin' as const) : ('email' as const),
+            reading: m.rapport,
+            fromEmail: m.from_addr ?? undefined,
+          })),
+        )
+      : [];
     histories.set(person.id, {
       name: person.firstName || undefined,
       messages,
@@ -229,6 +244,7 @@ export async function loadHistories(
       mutualScores: mutual.map((m) => m.score),
       mutualNames: mutual.map((m) => m.name),
       label: labels.get(person.id),
+      ...(rapport.length ? { rapport } : {}),
     });
   }
   return { people: people.map((p) => p.person), histories, relationship };

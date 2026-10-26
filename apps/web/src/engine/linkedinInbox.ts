@@ -54,7 +54,7 @@ const time = (at: string | undefined) => (at ? Date.parse(at) : Number.NaN);
  * (its server holds LinkedIn) or the sample student (whose LinkedIn is a mock).
  */
 export async function syncLinkedInReplies(
-  user: Pick<User, 'id' | 'timezone'> & { email?: string },
+  user: Pick<User, 'id' | 'timezone'> & { email?: string; firstName?: string },
   opts: { now?: Date; fetch?: typeof fetch } = {},
 ): Promise<ReplySyncResult> {
   const now = opts.now ?? new Date();
@@ -114,7 +114,7 @@ async function orbitSentOnLinkedIn(chat: CoffeeChat, at: string): Promise<boolea
  * replied.
  */
 export async function recordLinkedInMessages(
-  user: Pick<User, 'id' | 'timezone'> & { email?: string },
+  user: Pick<User, 'id' | 'timezone'> & { email?: string; firstName?: string },
   messages: LinkedInInboxMessage[],
   now = new Date(),
 ): Promise<string[]> {
@@ -136,15 +136,12 @@ export async function recordLinkedInMessages(
     if (!person) continue;
     const sorted = [...msgs].sort((a, b) => time(a.at) - time(b.at));
     // every message is part of their history with the student, whatever the chat says
-    if (
-      await recordDmTouches(
-        user.id,
-        person,
-        sorted.map((m) => ({ at: m.at!, out: m.fromMe, text: m.text })),
-      )
-    )
-      await recomputePersonStrength(person.id, now);
-    // and kept, so Orbit shows and answers what they wrote (plan 25)
+    const touched = await recordDmTouches(
+      user.id,
+      person,
+      sorted.map((m) => ({ at: m.at!, out: m.fromMe, text: m.text })),
+    );
+    // and kept, so Orbit shows and answers what they wrote (plan 25), with how warm each reads (plan 27)
     const { added } = await storeLinkedInChat(
       user,
       person,
@@ -152,6 +149,9 @@ export async function recordLinkedInMessages(
       sorted.map((m) => ({ id: m.id, at: m.at!, out: m.fromMe, text: m.text })),
       now,
     );
+    // rescored once both are stored, so the new messages' readings count
+    if (touched || added.some((m) => m.direction === 'inbound'))
+      await recomputePersonStrength(person.id, now);
     const rowOf = new Map(added.map((m) => [m.externalMessageId, m.id]));
     const chat = await liveChatOf(person.id);
     if (!chat || chat.stage === 'archived') continue;

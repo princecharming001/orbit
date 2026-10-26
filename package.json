@@ -19,5 +19,8 @@
     "postgres": "3.4.9",
     "typescript": "^5.7.0",
     "zod": "3.25.76"
+  },
+  "dependencies": {
+    "vader-sentiment": "1.1.3"
   }
 }

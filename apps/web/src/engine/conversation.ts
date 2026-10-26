@@ -13,6 +13,7 @@
 import type { CoffeeChat, EmailMessage, EmailThread, Person, Suggestion, User } from '@orbit/core';
 import { heuristicSignal, newId } from '@orbit/core';
 import { db } from '../db/schema';
+import { readReply } from './rapport';
 
 export const LINKEDIN_THREAD_PREFIX = 'linkedin:';
 
@@ -34,7 +35,7 @@ const AWAITING_ANSWER = new Set<CoffeeChat['stage']>(['outreach_sent', 'replied'
  * thread and the messages added (oldest first).
  */
 export async function storeLinkedInChat(
-  user: Pick<User, 'id'> & { timezone?: string; email?: string },
+  user: Pick<User, 'id'> & { timezone?: string; email?: string; firstName?: string },
   person: Pick<Person, 'id' | 'displayName' | 'firstName'>,
   chatId: string,
   messages: LinkedInMessageIn[],
@@ -74,8 +75,10 @@ export async function storeLinkedInChat(
   const sorted = [...messages]
     .filter((m) => Number.isFinite(time(m.at)) && m.text?.trim())
     .sort((a, b) => time(a.at) - time(b.at));
+  let lastOut: string | undefined;
   for (const m of sorted) {
     const ext = `${LINKEDIN_THREAD_PREFIX}${m.id}`;
+    if (m.out) lastOut = m.text;
     if (await db.messages.where('externalMessageId').equals(ext).first()) continue;
     const sentAt = new Date(time(m.at)).toISOString();
     const read = m.out
@@ -84,6 +87,8 @@ export async function storeLinkedInChat(
           timeZone: user.timezone,
           awaitingAnswer: !!chat && AWAITING_ANSWER.has(chat.stage),
         });
+    // how warm their message reads (plan 27); the classifier's reading replaces it when it runs
+    if (read) read.extraction.rapport = await readReply(m.text, user.firstName, lastOut);
     const row: EmailMessage = {
       id: newId('m'),
       userId: user.id,

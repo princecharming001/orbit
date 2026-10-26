@@ -30,7 +30,7 @@ describe('tie score anchors (§3.7)', () => {
       const s = scoreTie(a.history(NOW), NOW);
       expect(s.score).toBeGreaterThanOrEqual(a.range[0]);
       expect(s.score).toBeLessThanOrEqual(a.range[1]);
-      expect(s.modelVersion).toBe('tie-v1');
+      expect(s.modelVersion).toBe('tie-v2');
       expect(s.band).toBe(tieBand(s.score));
     });
 
@@ -48,7 +48,7 @@ describe('tie score anchors (§3.7)', () => {
     const fit = fitTieWeights(rows, {
       ridge: 0.1,
       rangePenalty: 10,
-      fixed: ['intros', 'structural', 'warmth', 'engagement'],
+      fixed: ['intros', 'structural', 'warmth', 'engagement', 'rapport'],
       bounds: {
         time: [0.2, Number.POSITIVE_INFINITY],
         recency: [0, Number.POSITIVE_INFINITY],

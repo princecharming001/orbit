@@ -31,6 +31,8 @@ export interface CleanupStats {
 
 export async function cleanUpGuesses(user: User, now = new Date()): Promise<CleanupStats | undefined> {
   if (user.id === DEMO_USER_ID) return undefined;
+  // plan 27: replies stored before reply readings existed get theirs, once
+  await import('./rapport').then((m) => m.backfillRapport(user, now)).catch(() => undefined);
   // its own once-only repair: false "they replied" moves and the touches they invented (plan 17 B)
   await repairFalseReplies(user, now).catch(() => undefined);
   const key = `cleanup:${CLEANUP_VERSION}:${user.id}`;

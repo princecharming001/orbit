@@ -23,6 +23,7 @@ import { PairNoteMenu } from '../components/map/PairNoteMenu';
 import { ReachMutuals } from '../components/map/ReachMutuals';
 import { ReachSearch } from '../components/map/ReachSearch';
 import { RouteBadge } from '../components/map/RouteBadge';
+import { useClosenessKey } from '../components/map/useCloseness';
 import { type CardPlace, OrbitMap, useCoarsePointer } from '../components/OrbitMap';
 import type { FocusSpec, WebSpec } from '../components/orbitScene';
 import { LINEAGE } from '../components/orbitScene';
@@ -124,6 +125,8 @@ export function MapPage() {
   const [pendingPaths, setPendingPaths] = useState<WarmReachPath[]>();
   // the LinkedIn mutuals and Village introducers the current routes were ranked with, for re-ranking on new evidence
   const candidatesRef = useRef<ExternalCandidate[]>([]);
+  /** re-rank the open routes after a short pause (new hop evidence, or someone on them rescored) */
+  const recomputeRoutes = useRef<(() => void) | undefined>(undefined);
   // re-render when a LinkedIn read starts or ends, for the hops' "Checking…"
   useSyncExternalStore(subscribeHopEvidence, hopEvidenceVersion, hopEvidenceVersion);
   const [choices, setChoices] = useState<ReachCandidate[]>();
@@ -541,18 +544,31 @@ export function MapPage() {
         return cur.map((r) => same.get(r.hops.map((h) => h.toId).join('>')) ?? r);
       });
     };
-    const offEvidence = subscribeHopEvidence(() => {
+    recomputeRoutes.current = () => {
       clearTimeout(timer);
       timer = setTimeout(() => void recompute(false), 1500);
-    });
+    };
+    const offEvidence = subscribeHopEvidence(() => recomputeRoutes.current?.());
     const offNotes = subscribePairNotes(() => void recompute(true));
     return () => {
       live = false;
       clearTimeout(timer);
+      recomputeRoutes.current = undefined;
       offEvidence();
       offNotes();
     };
   }, [userId, target?.id]);
+  // plan 27: someone on a route was rescored (a warm reply read): the routes re-rank like new evidence
+  const routePeople = useMemo(() => (paths ?? []).flatMap((r) => r.hops.map((h) => h.toId)), [paths]);
+  const routeCloseness = useClosenessKey(routePeople);
+  const lastCloseness = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (routeCloseness === undefined) return;
+    const ids = (s?: string) => s?.split('#')[0];
+    if (lastCloseness.current !== undefined && ids(lastCloseness.current) === ids(routeCloseness))
+      if (lastCloseness.current !== routeCloseness) recomputeRoutes.current?.();
+    lastCloseness.current = routeCloseness;
+  }, [routeCloseness]);
   const openCompany = async (orgIdOrName: string, label: string) => {
     if (!userId) return;
     const req = ++viewReq.current;

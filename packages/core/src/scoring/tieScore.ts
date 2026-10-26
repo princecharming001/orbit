@@ -9,6 +9,7 @@ import type {
   StrengthBreakdown,
   Touchpoint,
 } from '../types';
+import { asRapportReading, type RapportCue, type RapportReading } from './rapport';
 import { computeStrength } from './strength';
 
 /**
@@ -17,7 +18,7 @@ import { computeStrength } from './strength';
  * Pure: the browser (local mode) and the server jobs (account mode) run the same code.
  */
 
-export const TIE_MODEL_VERSION = 'tie-v1';
+export const TIE_MODEL_VERSION = 'tie-v2';
 
 const DAY = 86_400_000;
 const HOUR = 3_600_000;
@@ -41,6 +42,17 @@ export interface TieEngagement {
   at: string;
   /** comment_in / reaction_in: on the student's post; comment_out: the student's comment on theirs */
   kind: 'comment_in' | 'comment_out' | 'reaction_in';
+}
+
+/**
+ * One reading of how warm a reply from them was (plan 27, f16): an email or LinkedIn message they wrote to the
+ * student, a text, or a comment on the student's post. The caller leaves out automated mail, recruiting systems and
+ * group threads; readings are labels and numbers, never the words.
+ */
+export interface TieRapport {
+  at: string;
+  reading: RapportReading;
+  channel: 'email' | 'linkedin' | 'text' | 'comment';
 }
 
 export interface TieMeeting {
@@ -82,6 +94,8 @@ export interface TieHistory {
   label?: { closeness: number; at: string };
   /** comments and reactions on LinkedIn posts, either way: weak, capped attention (f15) */
   engagement?: TieEngagement[];
+  /** how warm their replies read (f16, plan 27) */
+  rapport?: TieRapport[];
 }
 
 export const TIE_FEATURES = [
@@ -100,6 +114,7 @@ export const TIE_FEATURES = [
   'warmth',
   'never',
   'engagement',
+  'rapport',
 ] as const;
 export type TieFeature = (typeof TIE_FEATURES)[number];
 export type TieFeatures = Record<TieFeature, number>;
@@ -136,6 +151,7 @@ export const TIE_WEIGHTS: TieWeights = {
   warmth: 0.5,
   never: -0.1,
   engagement: 0.5,
+  rapport: 0.6,
 };
 
 /** The plan's starting weights (§3.3): the prior the fit shrinks toward. */
@@ -157,6 +173,8 @@ export const TIE_START_WEIGHTS: TieWeights = {
   never: -0.3,
   // plan 17 B: comments and reactions lift a tie a little; at full engagement about as much as warm notes
   engagement: 0.5,
+  // plan 27: warm replies lift a tie a little, cold ones lower it; RAPPORT_MAX_POINTS caps either way
+  rapport: 0.6,
 };
 
 /**
@@ -181,7 +199,19 @@ export const TIE_BASELINE: TieFeatures = {
   never: 0.74,
   // the demo network had no post engagement when the baseline was taken
   engagement: 0,
+  // no replies is neutral: silence never lowers a tie
+  rapport: 0,
 };
+
+/** Reply rapport (f16) moves a score at most this many points either way (plan 27). */
+export const RAPPORT_MAX_POINTS = 8;
+/**
+ * Prior strength of f16's shrunk mean: readings weigh confidence × a 365-day half-life, and K = 3 of neutral
+ * pseudo-readings sit in the denominator, so one reply moves the feature about a quarter of the way.
+ */
+export const RAPPORT_PRIOR = 3;
+/** A request to stop counts this many times over: one such reply outweighs a few pleasant ones. */
+const RAPPORT_STOP_WEIGHT = 4;
 
 /** Unreciprocated cap (Kossinets & Watts): someone who never wrote back, met or was introduced stays Faint/Light. */
 export const UNRECIPROCATED_SCORE_CAP = 20;
@@ -243,6 +273,12 @@ export interface TieFacts {
   commentsIn: number;
   commentsOut: number;
   reactionsIn: number;
+  /** f16: the shrunk mean of reply readings, 0 without any */
+  rapport: number;
+  rapportReadings: number;
+  /** the cues seen most often across their replies, most frequent first */
+  rapportCues: RapportCue[];
+  askedToStop: boolean;
 }
 
 export interface TieScore {
@@ -418,6 +454,27 @@ export function computeTieFeatures(
     else reactionsIn++;
   }
   const engagement = Math.min(1, Math.log(1 + engaged) / Math.log(1 + ENGAGEMENT_SATURATION));
+  // f16: how warm their replies read, a decayed mean shrunk toward neutral
+  let rapportNum = 0;
+  let rapportDen = 0;
+  let rapportReadings = 0;
+  let askedToStop = false;
+  const cueCounts = new Map<RapportCue, number>();
+  for (const r of h.rapport ?? []) {
+    const x = when(r.at);
+    const score = r.reading?.score;
+    if (x === undefined || typeof score !== 'number' || !Number.isFinite(score)) continue;
+    const stop = r.reading.cues.includes('asked_to_stop');
+    if (stop) askedToStop = true;
+    const w =
+      Math.max(0, Math.min(1, r.reading.confidence ?? 0.6)) * decay(x) * (stop ? RAPPORT_STOP_WEIGHT : 1);
+    rapportNum += w * Math.max(-1, Math.min(1, score));
+    rapportDen += w;
+    rapportReadings++;
+    for (const c of r.reading.cues) cueCounts.set(c, (cueCounts.get(c) ?? 0) + 1);
+  }
+  const rapport = rapportReadings ? rapportNum / (RAPPORT_PRIOR + rapportDen) : 0;
+  const rapportCues = [...cueCounts.entries()].sort((a, b) => b[1] - a[1]).map(([c]) => c);
 
   const features: TieFeatures = {
     log_days_last: daysLast === undefined ? 0 : Math.log(1 + daysLast),
@@ -435,6 +492,7 @@ export function computeTieFeatures(
     warmth,
     never: never ? 1 : 0,
     engagement,
+    rapport,
   };
   const facts: TieFacts = {
     name: h.name,
@@ -456,6 +514,10 @@ export function computeTieFeatures(
     commentsIn,
     commentsOut,
     reactionsIn,
+    rapport,
+    rapportReadings,
+    rapportCues,
+    askedToStop,
   };
   return { features, facts };
 }
@@ -485,6 +547,11 @@ export function scoreTie(
   const { features, facts } = computeTieFeatures(history, now);
   const z = linearTie(features, weights);
   let score = scoreFromZ(z, calibration);
+  // reply rapport nudges: never more than RAPPORT_MAX_POINTS from the score without it
+  if (features.rapport !== 0) {
+    const without = scoreFromZ(z - weights.rapport * features.rapport, calibration);
+    score = Math.max(without - RAPPORT_MAX_POINTS, Math.min(without + RAPPORT_MAX_POINTS, score));
+  }
   let capped = false;
   // a meeting or an introduction is the other side engaging too: only a history of unanswered messages is capped
   if (
@@ -653,6 +720,16 @@ export function explainTie(
                 ? 'Reacted to one of your LinkedIn posts'
                 : `Reacted to ${facts.reactionsIn} of your LinkedIn posts`,
     });
+  if (facts.rapportReadings > 0 && facts.rapport !== 0)
+    topics.push({
+      value: c.rapport,
+      positive: facts.rapport > 0 ? rapportSentence(facts.rapportCues) : undefined,
+      negative: facts.askedToStop
+        ? 'They asked you not to contact them'
+        : facts.rapport < 0
+          ? 'Their replies sound distant'
+          : undefined,
+    });
   if (facts.warmth !== 0)
     topics.push({
       value: c.warmth,
@@ -672,6 +749,27 @@ export function explainTie(
   if (!explanation.length)
     explanation.push(facts.never ? "You haven't been in touch yet" : 'A light history so far');
   return { contributions: c, explanation };
+}
+
+/** What the warm cues read as in a sentence, in the order they are worth naming. */
+const CUE_PHRASES: Partial<Record<RapportCue, string>> = {
+  asks_about_you: "ask how you're doing",
+  offers_help: 'offer to help',
+  plans_together: 'suggest meeting up',
+  personal_news: 'share their own news',
+  congratulates: 'congratulate you',
+  glad_to_hear: 'sound glad to hear from you',
+  thoughtful: 'write thoughtful replies',
+};
+
+/** "Their replies are warm: they ask how you're doing and offer to help" from the cues seen most often. */
+export function rapportSentence(cues: RapportCue[]): string {
+  const phrases = cues
+    .map((c) => CUE_PHRASES[c])
+    .filter((p): p is string => !!p)
+    .slice(0, 2);
+  if (!phrases.length) return 'Their replies are warm';
+  return `Their replies are warm: they ${phrases.join(' and ')}`;
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -749,6 +847,8 @@ export interface TieHistoryInput {
   mutualScores?: number[];
   mutualNames?: string[];
   label?: TieHistory['label'];
+  /** reply readings (plan 27): their messages and comments, gathered by the caller */
+  rapport?: TieRapport[];
 }
 
 const yearOf = (iso?: string) => (iso ? Number(iso.slice(0, 4)) || undefined : undefined);
@@ -968,7 +1068,38 @@ export function buildTieHistory(input: TieHistoryInput): TieHistory {
     mutualNames: input.mutualNames,
     label: input.label,
     ...(engagement.length ? { engagement } : {}),
+    ...(input.rapport?.length ? { rapport: input.rapport } : {}),
   };
+}
+
+/** A stored message or comment that may carry a reply reading, as the browser or the server has it. */
+export interface RapportSource {
+  at: string;
+  /** they wrote it to the student */
+  inbound: boolean;
+  automated: boolean;
+  /** everyone on the thread, the student included; comments and DMs are 2 */
+  participants: number;
+  channel: TieRapport['channel'];
+  /** `extraction.rapport` or a touchpoint's `rapport`, as stored */
+  reading?: unknown;
+  /** sender address, for the recruiting-system check */
+  fromEmail?: string;
+}
+
+/**
+ * Reply readings for f16 from stored messages and comments, the same on both sides: their own words only (inbound),
+ * never machine mail, recruiting systems or threads larger than three people.
+ */
+export function gatherRapport(rows: RapportSource[]): TieRapport[] {
+  const out: TieRapport[] = [];
+  for (const r of rows) {
+    if (!r.inbound || r.automated || r.participants > 3) continue;
+    if (r.fromEmail && isAtsSender(r.fromEmail)) continue;
+    const reading = asRapportReading(r.reading);
+    if (reading) out.push({ at: r.at, reading, channel: r.channel });
+  }
+  return out;
 }
 
 /** Note warmth label → number for f13. */

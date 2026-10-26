@@ -176,7 +176,7 @@ describe('tie scores through score.person (§3.8)', () => {
     }>`
       select s.band, s.explanation, s.model_version, p.strength, p.last_interaction_at as last
         from orbit.tie_scores s join orbit.people p on p.id = s.person_id where s.person_id = ${p.id}::uuid`;
-    expect(row!.model_version).toBe('tie-v1');
+    expect(row!.model_version).toBe('tie-v2');
     expect(row!.explanation.length).toBeGreaterThan(0);
     expect(row!.strength).toBeCloseTo(s3 / 100, 2);
     expect(new Date(row!.last).toISOString()).toBe(at(NOW, 18));

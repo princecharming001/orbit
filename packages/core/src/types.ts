@@ -1,4 +1,5 @@
 // Domain types for Orbit. Mirrors docs/orbit/03-data-model.md, trimmed to what the client-side v1 stores.
+import type { RapportReading } from './scoring/rapport';
 export type ID = string;
 
 export type IntegrationProvider =
@@ -274,6 +275,8 @@ export interface UserSettings {
   autoKinds?: MessageKind[];
   /** the local Sunday (YYYY-MM-DD) whose weekly review the student last opened or closed (plan 23 §4.8) */
   weekReviewSeenOn?: string;
+  /** read the tone of replies for closeness (plan 27); on unless turned off */
+  readReplyTone?: boolean;
 }
 
 /** What a goal is for (plan 16 §2.1); it changes the register, the ask and the routing rules. */
@@ -593,6 +596,8 @@ export interface Touchpoint {
   refId: ID;
   summary?: string;
   weight: number;
+  /** on a comment on the student's post: how warm it reads (plan 27) */
+  rapport?: RapportReading;
 }
 
 export interface StrengthBreakdown {
@@ -713,6 +718,8 @@ export interface MessageExtraction {
   handoff?: boolean;
   /** on a decline: "hard" is a no; "soft" is a not now, a wrong person, or a bare "best of luck" to a pending ask */
   decline?: 'hard' | 'soft';
+  /** how warm the reply reads toward the student (plan 27): lexical at ingest, replaced by the classifier's reading */
+  rapport?: RapportReading;
 }
 
 export interface CalendarEvent {

@@ -4,6 +4,7 @@
     "@anthropic-ai/sdk/": "npm:@anthropic-ai/sdk@0.133.0/",
     "jose": "npm:jose@6.2.12",
     "postgres": "npm:postgres@3.4.9",
+    "vader-sentiment": "npm:vader-sentiment@1.1.3",
     "zod": "npm:zod@3.25.76",
     "zod/": "npm:zod@3.25.76/"
   }

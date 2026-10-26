@@ -1350,6 +1350,7 @@ var QUEUES = [
 var KIND_QUEUE = {
   "send.draft": "orbit_send",
   "classify.message": "orbit_classify",
+  "rapport.backfill": "orbit_classify",
   "sync.gmail.backfill": "orbit_sync",
   "sync.gmail.incremental": "orbit_sync",
   "sync.calendar": "orbit_sync",
@@ -2058,8 +2059,8 @@ function mentionTarget(clause2) {
     clause2
   );
   if (!m) return void 0;
-  const words3 = m[1].replace(/^["'‘“]+|["'’”]+$/g, "").replace(/\b(in|to|on|with|when|unless|because|anywhere|ever|at all|please)\b.*$/i, "").replace(/^(my|the|that|about|any|a|an|our)\s+/i, "").trim().split(/\s+/).slice(0, 4);
-  const phrase = words3.join(" ").trim();
+  const words4 = m[1].replace(/^["'‘“]+|["'’”]+$/g, "").replace(/\b(in|to|on|with|when|unless|because|anywhere|ever|at all|please)\b.*$/i, "").replace(/^(my|the|that|about|any|a|an|our)\s+/i, "").trim().split(/\s+/).slice(0, 4);
+  const phrase = words4.join(" ").trim();
   if (phrase.length < 2 || VAGUE.has(phrase.toLowerCase())) return void 0;
   return phrase;
 }
@@ -2741,15 +2742,15 @@ function sentenceIndexAt(text, pos) {
   return n;
 }
 function statedMessageZone(text) {
-  const z4 = "(ET|EST|EDT|CT|CST|CDT|MT|MST|MDT|PT|PST|PDT|GMT|UTC|BST|eastern|central|mountain|pacific)(?:\\s+(?:standard|daylight))?(?:\\s+time)?";
+  const z5 = "(ET|EST|EDT|CT|CST|CDT|MT|MST|MDT|PT|PST|PDT|GMT|UTC|BST|eastern|central|mountain|pacific)(?:\\s+(?:standard|daylight))?(?:\\s+time)?";
   const res = [
     new RegExp(
-      `\\b(?:all\\s+)?times?\\s+(?:(?:are|listed|below|above|here)\\s+)*(?:in\\s+)?${z4}(?![A-Za-z])`,
+      `\\b(?:all\\s+)?times?\\s+(?:(?:are|listed|below|above|here)\\s+)*(?:in\\s+)?${z5}(?![A-Za-z])`,
       "i"
     ),
-    new RegExp(`\\bi'?m\\s+(?:on|in|based\\s+in)\\s+${z4}(?![A-Za-z])`, "i"),
-    new RegExp(`\\b(?:on|in)\\s+${z4}\\s+time\\b`, "i"),
-    new RegExp(`\\((?:all\\s+)?(?:times?\\s+(?:in\\s+)?)?${z4}\\)`, "i")
+    new RegExp(`\\bi'?m\\s+(?:on|in|based\\s+in)\\s+${z5}(?![A-Za-z])`, "i"),
+    new RegExp(`\\b(?:on|in)\\s+${z5}\\s+time\\b`, "i"),
+    new RegExp(`\\((?:all\\s+)?(?:times?\\s+(?:in\\s+)?)?${z5}\\)`, "i")
   ];
   for (const re of res) {
     const m = re.exec(text);
@@ -4237,11 +4238,11 @@ function unsupportedDetails(body, context) {
     const sentenceStart = /(^|[.!?:;"]\s+|\n\s*|\(\s*)$/.test(before);
     const phrase = m[0].replace(/'s$/, "").replace(/[.'-]+$/, "");
     if (!phrase || has(phrase)) continue;
-    const words3 = phrase.split(/\s+/);
-    const unknown = words3.filter((w, i) => {
+    const words4 = phrase.split(/\s+/);
+    const unknown = words4.filter((w, i) => {
       const bare = w.replace(/'s$/, "").replace(/[.'-]+$/, "");
       if (!bare || COMMON_CAPS.has(bare.toLowerCase()) || has(bare)) return false;
-      if (i === 0 && sentenceStart && words3.length === 1 && /^[A-Z][a-z]+$/.test(bare)) return false;
+      if (i === 0 && sentenceStart && words4.length === 1 && /^[A-Z][a-z]+$/.test(bare)) return false;
       return true;
     });
     if (unknown.length) out.push(phrase);
@@ -4952,10 +4953,10 @@ function checkIntroAsk(d) {
   return d.kind === "intro_request" || d.kind === "forwardable_blurb" ? [approval("intro_ask_needs_approval", "asking a third party for an introduction is approved")] : [];
 }
 function checkCrossThread(d, ctx) {
-  const words3 = (s) => s.toLowerCase().match(/[a-z0-9']+/g) ?? [];
-  const body = ` ${words3(d.body).join(" ")} `;
+  const words4 = (s) => s.toLowerCase().match(/[a-z0-9']+/g) ?? [];
+  const body = ` ${words4(d.body).join(" ")} `;
   for (const t of ctx.otherThreads ?? []) {
-    const w = words3(t);
+    const w = words4(t);
     for (let i = 0; i + 8 <= w.length; i++) {
       const run = ` ${w.slice(i, i + 8).join(" ")} `;
       if (body.includes(run))
@@ -5228,14 +5229,14 @@ function prose(body) {
   );
   const text = lines.join(" ");
   const sentences3 = text.split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter((s) => /[A-Za-z]/.test(s));
-  const words3 = text.match(/[A-Za-z][A-Za-z'’-]*/g) ?? [];
-  return { words: words3, sentences: sentences3 };
+  const words4 = text.match(/[A-Za-z][A-Za-z'’-]*/g) ?? [];
+  return { words: words4, sentences: sentences3 };
 }
 function fleschKincaidGrade(body) {
-  const { words: words3, sentences: sentences3 } = prose(body);
-  if (!words3.length || !sentences3.length) return 0;
-  const syl = words3.reduce((s, w) => s + syllables(w), 0);
-  return 0.39 * (words3.length / sentences3.length) + 11.8 * (syl / words3.length) - 15.59;
+  const { words: words4, sentences: sentences3 } = prose(body);
+  if (!words4.length || !sentences3.length) return 0;
+  const syl = words4.reduce((s, w) => s + syllables(w), 0);
+  return 0.39 * (words4.length / sentences3.length) + 11.8 * (syl / words4.length) - 15.59;
 }
 var ASK_PHRASE = /\b(would you|could you|could we|can we|can you|are you open|open to|worth a (quick )?look|happy to (chat|talk|hop)|let me know if|would it be|do you have|are you up for|might you|would love (it )?if you)\b/i;
 function asksIn(body) {
@@ -5249,7 +5250,7 @@ function validateComposed(msg, ctx) {
   const block2 = (code, detail) => issues.push({ code, detail, blocking: true });
   const body = msg.body;
   const lower = body.toLowerCase();
-  const words3 = wordsIn(body);
+  const words4 = wordsIn(body);
   const grade = Math.round(fleschKincaidGrade(body) * 10) / 10;
   const v1 = validateDraft(
     {
@@ -5283,10 +5284,10 @@ function validateComposed(msg, ctx) {
         ctx.connectionNote ? "connection_note_too_long" : "linkedin_too_long",
         `${body.length} characters, at most ${max}`
       );
-    if (FIRST_TOUCH_KINDS.has(msg.kind) && words3 < 12) block2("words_out_of_range", `${words3} words`);
+    if (FIRST_TOUCH_KINDS.has(msg.kind) && words4 < 12) block2("words_out_of_range", `${words4} words`);
   } else {
     const [min, max] = wordRange(msg.kind, ctx.goal);
-    if (words3 < min || words3 > max) block2("words_out_of_range", `${words3} words, want ${min}–${max}`);
+    if (words4 < min || words4 > max) block2("words_out_of_range", `${words4} words, want ${min}–${max}`);
   }
   if (grade > READING_GRADE_MAX) block2("reading_grade", `grade ${grade}, want ${READING_GRADE_MAX} or lower`);
   const asks = asksIn(body);
@@ -5341,7 +5342,7 @@ ${body}`, ctx.inputs))
     seen.add(k);
     return true;
   });
-  return { ok: !deduped.some((i) => i.blocking), issues: deduped, words: words3, grade };
+  return { ok: !deduped.some((i) => i.blocking), issues: deduped, words: words4, grade };
 }
 
 // supabase/functions/_shared/rows.ts
@@ -5797,14 +5798,14 @@ async function exemplars(s, userId, personId, situation, opts = {}) {
   const names = ids.length ? await s.db.sql`
         select first_name, last_name, display_name from orbit.people
          where user_id = ${userId}::uuid and id = any(${ids}::uuid[])` : [];
-  const words3 = [
+  const words4 = [
     ...new Set(
       names.flatMap((n) => [n.display_name, n.first_name, n.last_name]).filter((x) => !!x?.trim())
     )
   ].sort((a, b) => b.length - a.length);
   return rows.map((r) => {
     let text = stripQuotedReply(r.body_text).trim().slice(0, 1200);
-    for (const w of words3) text = text.replace(new RegExp(`\\b${escapeRe2(w)}\\b`, "g"), "[name]");
+    for (const w of words4) text = text.replace(new RegExp(`\\b${escapeRe2(w)}\\b`, "g"), "[name]");
     return text.replace(/^(hi|hey|hello|dear)\s+[A-Z][a-z]+/i, (m) => `${m.split(/\s+/)[0]} [name]`);
   });
 }
@@ -10960,17 +10961,17 @@ var STOP = new Set(
 
 // packages/core/src/recommend/score.ts
 function responsePrior(p, user) {
-  let z4 = -0.4;
-  if (p.isAlumni) z4 += 0.8;
+  let z5 = -0.4;
+  if (p.isAlumni) z5 += 0.8;
   if (p.school && user.majors.some((m) => (p.headline ?? "").toLowerCase().includes(m.toLowerCase())))
-    z4 += 0.5;
+    z5 += 0.5;
   const title = (p.currentTitle ?? "").toLowerCase();
-  if (/\b(ceo|cfo|coo|cto|partner|managing director|md|founder|chief)\b/.test(title)) z4 -= 0.6;
-  else if (title) z4 += 0.3;
+  if (/\b(ceo|cfo|coo|cto|partner|managing director|md|founder|chief)\b/.test(title)) z5 -= 0.6;
+  else if (title) z5 += 0.3;
   if (p.lastInteractionAt && Date.now() - new Date(p.lastInteractionAt).getTime() < 180 * 864e5)
-    z4 += 0.3;
-  if (p.linkedinConnectedOn) z4 += 0.2;
-  return 1 / (1 + Math.exp(-z4));
+    z5 += 0.3;
+  if (p.linkedinConnectedOn) z5 += 0.2;
+  return 1 / (1 + Math.exp(-z5));
 }
 
 // packages/core/src/types.ts
@@ -10985,8 +10986,197 @@ var GOAL_KINDS = [
   "collaboration"
 ];
 
+// packages/core/src/scoring/rapport.ts
+var RAPPORT_VERSION = 1;
+var RAPPORT_CUES = [
+  "asks_about_you",
+  "offers_help",
+  "personal_news",
+  "plans_together",
+  "congratulates",
+  "glad_to_hear",
+  "casual",
+  "uses_your_name",
+  "thoughtful",
+  "formal",
+  "distant",
+  "asked_to_stop",
+  "hostile"
+];
+var WARM_CUES = {
+  asks_about_you: 0.35,
+  offers_help: 0.35,
+  personal_news: 0.3,
+  plans_together: 0.25,
+  congratulates: 0.25,
+  glad_to_hear: 0.2,
+  thoughtful: 0.2,
+  casual: 0.15,
+  uses_your_name: 0.1
+};
+var PATTERNS = [
+  [
+    "asks_about_you",
+    /\b(how (are|have) you|how'?s (it going|everything|life|school|the (semester|job|search|internship|program))|how (did|is|was) (your|the) [a-z]+|what (have|are) you been|what about you|how about you|hope (you'?re|you are|all is|everything|school|the semester|your)|how (are|is) (things|everything)|you doing)\b/i
+  ],
+  [
+    "offers_help",
+    /\b(happy to (help|chat|connect|introduce|intro|share|talk|hop on|look|review|refer|pass)|glad to (help|chat|connect|introduce)|(i'?d|i would) (be )?(love|happy|glad) to|i can (intro|introduce|connect you|put you in touch|send|share|refer|pass|ask|forward|look)|let me (intro|introduce|connect you|know if (i|there'?s anything))|feel free to (reach out|ping|text|call|email|send)|reach out (any ?time|whenever)|any ?time\b|my door is (always )?open|count on me)/i
+  ],
+  [
+    "personal_news",
+    /\b(i (just )?(got|started|moved|joined|became|bought|finished|graduated|launched)|we (just )?(had|moved|got|welcomed|bought)|(my|our) (wife|husband|partner|fianc[eé]e?|kids?|son|daughter|baby|dog|family|wedding|new (job|role|team|place|house))|i'?m (now|currently) (at|working|living|based))\b/i
+  ],
+  [
+    "plans_together",
+    /\b(let'?s (grab|get|meet|catch|chat|hop|find|do|set|plan)|catch up|next time (you|i|we)|when you'?re (in|back|around|free|next)|we should (grab|get|meet|catch|chat)|keep in touch|talk soon|see you (soon|then|there|next))\b/i
+  ],
+  [
+    "congratulates",
+    /\b(congrat(s|ulations)|so proud|proud of you|well[- ]deserved|huge news|amazing news|great news)\b/i
+  ],
+  [
+    "glad_to_hear",
+    /\b((great|so good|good|lovely|nice|fun) to (hear|see) from you|great to hear|so glad|really glad|excited|thrilled|delighted|made my day|love (this|that|to hear))\b/i
+  ],
+  [
+    "casual",
+    /(\b(haha+|hah|lol|lmao|omg|yeah|yep|yup|hey|heya|hiya|cheers|thx|ty|xx|xo|no worries|for sure|sounds fun)\b|:\)|:-\)|:D|\p{Extended_Pictographic})/iu
+  ],
+  [
+    "formal",
+    /(^\s*(dear|to whom)\b|\b(sincerely|kind regards|best regards|warm regards|respectfully|yours truly|regards,)\b|\b(we regret|please be advised|kindly note)\b)/im
+  ],
+  [
+    "distant",
+    /\b(not the (right|best) (person|contact)|wrong person|don'?t (really )?know you|who is this|how did you get (my|this)|i don'?t (do|take) (calls|coffee chats|informational)|i (don'?t|do not) have (the )?(time|bandwidth) for|not interested|unable to help|can'?t help you)\b/i
+  ],
+  [
+    "asked_to_stop",
+    /\b(stop (emailing|messaging|contacting|reaching out|writing)|(please )?(remove|unsubscribe) me|do not (contact|email|message) me|don'?t (contact|email|message) me|leave me alone)\b/i
+  ],
+  ["hostile", /\b(spam(ming)?|annoying|inappropriate|unprofessional|harass(ing|ment)?)\b/i]
+];
+var words3 = (text) => text.toLowerCase().match(/[a-z']+/g) ?? [];
+var FUNCTION_CLASSES = {
+  personal: new Set(
+    "i me my mine myself we us our ours ourselves you your yours yourself yourselves he him his she her hers they them their theirs".split(
+      " "
+    )
+  ),
+  impersonal: new Set(
+    "it its itself this that these those something anything everything nothing someone anyone".split(" ")
+  ),
+  articles: new Set("a an the".split(" ")),
+  prepositions: new Set(
+    "about above across after against along among around at before behind below beside between by during for from in inside into near of off on onto out over through to toward under until up upon with within without".split(
+      " "
+    )
+  ),
+  auxiliary: new Set(
+    "am is are was were be been being have has had do does did will would shall should can could may might must i'm you're we're they're it's i've you've we've i'd you'd i'll you'll we'll".split(
+      " "
+    )
+  ),
+  adverbs: new Set(
+    "very really just so too also then now here there even only quite rather almost always never often".split(
+      " "
+    )
+  ),
+  conjunctions: new Set(
+    "and but or so because if although though while whereas unless since nor yet".split(" ")
+  ),
+  negations: new Set(
+    "no not never none nobody nothing neither nor don't can't won't isn't aren't wasn't didn't doesn't".split(
+      " "
+    )
+  ),
+  quantifiers: new Set("all some many much more most few several any each every both lot lots".split(" "))
+};
+function styleMatch(a, b) {
+  const wa = words3(a);
+  const wb = words3(b);
+  if (wa.length < 15 || wb.length < 15) return void 0;
+  const share = (ws, set) => ws.filter((w) => set.has(w)).length / ws.length;
+  const parts = Object.values(FUNCTION_CLASSES).map((set) => {
+    const pa = share(wa, set);
+    const pb = share(wb, set);
+    return 1 - Math.abs(pa - pb) / (pa + pb + 1e-4);
+  });
+  return parts.reduce((s, x) => s + x, 0) / parts.length;
+}
+var clamp = (x, lo = -1, hi = 1) => Math.max(lo, Math.min(hi, x));
+function replyRapport(input) {
+  const text = input.text.trim();
+  const ws = words3(text);
+  const cues = /* @__PURE__ */ new Set();
+  for (const [cue, re] of PATTERNS) if (re.test(text)) cues.add(cue);
+  const name = input.studentFirstName?.trim();
+  if (name && name.length >= 2 && new RegExp(`\\b${name.replace(/[^\p{L}\p{N}' -]/gu, "")}\\b`, "iu").test(text))
+    cues.add("uses_your_name");
+  const theirs = input.answering ? words3(input.answering).length : 0;
+  if (ws.length >= 60 && ws.length >= Math.max(20, theirs)) cues.add("thoughtful");
+  if (cues.has("formal")) cues.delete("uses_your_name");
+  let sum = 0;
+  for (const c of cues) sum += WARM_CUES[c] ?? 0;
+  if (input.valence && ws.length >= 3) sum += 0.25 * clamp(input.valence(text));
+  if (cues.has("formal")) sum *= 0.5;
+  if (cues.has("distant")) sum -= 0.45;
+  if (cues.has("hostile")) sum -= 0.8;
+  const lsm = input.answering ? styleMatch(text, input.answering) : void 0;
+  if (lsm !== void 0) sum += 0.1 * clamp((lsm - 0.5) * 2);
+  let score = Math.tanh(sum);
+  if (cues.has("asked_to_stop")) score = -1;
+  const cueCount = [...cues].filter((c) => c !== "formal").length;
+  const base = ws.length < 4 ? 0.3 : ws.length < 15 ? 0.6 : 0.85;
+  const confidence = Math.max(base, cueCount ? 0.7 : 0);
+  return {
+    score: Math.round(clamp(score) * 1e3) / 1e3,
+    by: "lexical",
+    cues: RAPPORT_CUES.filter((c) => cues.has(c)),
+    confidence,
+    v: RAPPORT_VERSION
+  };
+}
+var FAMILIARITY = {
+  stranger: -0.05,
+  professional: 0,
+  friendly: 0.1,
+  friend: 0.2
+};
+function rapportFromLlm(r) {
+  const known = new Set(RAPPORT_CUES);
+  const cues = RAPPORT_CUES.filter((c) => (r.cues ?? []).includes(c) && known.has(c));
+  let score = clamp((Number(r.warmth) || 0) / 2) * 0.8 + (FAMILIARITY[r.familiarity] ?? 0) + clamp(r.effort, 0, 2) * 0.03;
+  if (cues.includes("asked_to_stop")) score = -1;
+  return {
+    score: Math.round(clamp(score) * 1e3) / 1e3,
+    by: "llm",
+    cues,
+    confidence: 0.9,
+    v: RAPPORT_VERSION
+  };
+}
+function asRapportReading(x) {
+  if (!x || typeof x !== "object") return void 0;
+  const r = x;
+  if (typeof r.score !== "number" || !Number.isFinite(r.score)) return void 0;
+  return {
+    score: clamp(r.score),
+    by: r.by === "llm" ? "llm" : "lexical",
+    cues: Array.isArray(r.cues) ? RAPPORT_CUES.filter((c) => r.cues.includes(c)) : [],
+    confidence: typeof r.confidence === "number" ? clamp(r.confidence, 0, 1) : 0.6,
+    v: RAPPORT_VERSION
+  };
+}
+var RAPPORT_LLM_GUIDE = `rapport: how the sender feels about the student, separate from their answer to the request.
+- warmth −2..2: 2 = clearly warm and personal (asks about the student, offers help or intros, shares their own news, suggests meeting up); 0 = neutral or businesslike, including short replies such as "ok" or "sounds good"; −2 = distant, annoyed, or asks not to be contacted. A polite decline that wishes the student well is warm, not cold.
+- familiarity: stranger, professional, friendly, or friend, from how they write to the student.
+- effort 0..2: 0 a one-liner, 1 a normal reply, 2 a long, thoughtful reply.
+- cues: any of ${RAPPORT_CUES.join(", ")} that apply.`;
+
 // packages/core/src/scoring/tieScore.ts
-var TIE_MODEL_VERSION = "tie-v1";
+var TIE_MODEL_VERSION = "tie-v2";
 var DAY9 = 864e5;
 var YEAR_DAYS = 365;
 var TIE_FEATURES = [
@@ -11004,7 +11194,8 @@ var TIE_FEATURES = [
   "linkedin",
   "warmth",
   "never",
-  "engagement"
+  "engagement",
+  "rapport"
 ];
 var TIE_WEIGHTS = {
   bias: -2.33,
@@ -11022,7 +11213,8 @@ var TIE_WEIGHTS = {
   linkedin: 0.84,
   warmth: 0.5,
   never: -0.1,
-  engagement: 0.5
+  engagement: 0.5,
+  rapport: 0.6
 };
 var TIE_BASELINE = {
   log_days_last: 5.27,
@@ -11040,8 +11232,13 @@ var TIE_BASELINE = {
   warmth: 0,
   never: 0.74,
   // the demo network had no post engagement when the baseline was taken
-  engagement: 0
+  engagement: 0,
+  // no replies is neutral: silence never lowers a tie
+  rapport: 0
 };
+var RAPPORT_MAX_POINTS = 8;
+var RAPPORT_PRIOR = 3;
+var RAPPORT_STOP_WEIGHT = 4;
 var UNRECIPROCATED_SCORE_CAP = 20;
 var TIE_BAND_LABELS = {
   faint: "Faint",
@@ -11172,6 +11369,25 @@ function computeTieFeatures(h, now = /* @__PURE__ */ new Date()) {
     else reactionsIn++;
   }
   const engagement = Math.min(1, Math.log(1 + engaged) / Math.log(1 + ENGAGEMENT_SATURATION));
+  let rapportNum = 0;
+  let rapportDen = 0;
+  let rapportReadings = 0;
+  let askedToStop = false;
+  const cueCounts = /* @__PURE__ */ new Map();
+  for (const r of h.rapport ?? []) {
+    const x = when3(r.at);
+    const score = r.reading?.score;
+    if (x === void 0 || typeof score !== "number" || !Number.isFinite(score)) continue;
+    const stop = r.reading.cues.includes("asked_to_stop");
+    if (stop) askedToStop = true;
+    const w = Math.max(0, Math.min(1, r.reading.confidence ?? 0.6)) * decay(x) * (stop ? RAPPORT_STOP_WEIGHT : 1);
+    rapportNum += w * Math.max(-1, Math.min(1, score));
+    rapportDen += w;
+    rapportReadings++;
+    for (const c of r.reading.cues) cueCounts.set(c, (cueCounts.get(c) ?? 0) + 1);
+  }
+  const rapport = rapportReadings ? rapportNum / (RAPPORT_PRIOR + rapportDen) : 0;
+  const rapportCues = [...cueCounts.entries()].sort((a, b) => b[1] - a[1]).map(([c]) => c);
   const features = {
     log_days_last: daysLast === void 0 ? 0 : Math.log(1 + daysLast),
     log_days_first: daysFirst === void 0 ? 0 : Math.log(1 + daysFirst),
@@ -11187,7 +11403,8 @@ function computeTieFeatures(h, now = /* @__PURE__ */ new Date()) {
     linkedin: h.linkedinConnected ? 1 : 0,
     warmth,
     never: never ? 1 : 0,
-    engagement
+    engagement,
+    rapport
   };
   const facts = {
     name: h.name,
@@ -11208,23 +11425,31 @@ function computeTieFeatures(h, now = /* @__PURE__ */ new Date()) {
     warmth,
     commentsIn,
     commentsOut,
-    reactionsIn
+    reactionsIn,
+    rapport,
+    rapportReadings,
+    rapportCues,
+    askedToStop
   };
   return { features, facts };
 }
 function linearTie(features, weights = TIE_WEIGHTS) {
-  let z4 = weights.bias;
-  for (const k of TIE_FEATURES) z4 += weights[k] * features[k];
-  return z4;
+  let z5 = weights.bias;
+  for (const k of TIE_FEATURES) z5 += weights[k] * features[k];
+  return z5;
 }
-function scoreFromZ(z4, calibration) {
-  const zz = calibration ? calibration.a * z4 + calibration.c : z4;
+function scoreFromZ(z5, calibration) {
+  const zz = calibration ? calibration.a * z5 + calibration.c : z5;
   return Math.round(100 * sigmoid(zz));
 }
 function scoreTie(history, now = /* @__PURE__ */ new Date(), weights = TIE_WEIGHTS, calibration) {
   const { features, facts } = computeTieFeatures(history, now);
-  const z4 = linearTie(features, weights);
-  let score = scoreFromZ(z4, calibration);
+  const z5 = linearTie(features, weights);
+  let score = scoreFromZ(z5, calibration);
+  if (features.rapport !== 0) {
+    const without = scoreFromZ(z5 - weights.rapport * features.rapport, calibration);
+    score = Math.max(without - RAPPORT_MAX_POINTS, Math.min(without + RAPPORT_MAX_POINTS, score));
+  }
   let capped = false;
   if (facts.inCount === 0 && facts.outCount > 0 && facts.meetings === 0 && !anyMeeting(history, now) && !history.intros) {
     if (score > UNRECIPROCATED_SCORE_CAP) {
@@ -11246,7 +11471,7 @@ function scoreTie(history, now = /* @__PURE__ */ new Date(), weights = TIE_WEIGH
   return {
     score,
     band: tieBand(score),
-    z: z4,
+    z: z5,
     features,
     contributions,
     explanation,
@@ -11331,6 +11556,12 @@ function explainTie(features, facts, weights = TIE_WEIGHTS) {
       value: c.engagement,
       positive: facts.commentsIn && facts.commentsOut ? "You comment on each other's LinkedIn posts" : facts.commentsIn ? `${plural(facts.commentsIn, "comment")} on your LinkedIn posts` : facts.commentsOut ? "You comment on their LinkedIn posts" : facts.reactionsIn === 1 ? "Reacted to one of your LinkedIn posts" : `Reacted to ${facts.reactionsIn} of your LinkedIn posts`
     });
+  if (facts.rapportReadings > 0 && facts.rapport !== 0)
+    topics.push({
+      value: c.rapport,
+      positive: facts.rapport > 0 ? rapportSentence(facts.rapportCues) : void 0,
+      negative: facts.askedToStop ? "They asked you not to contact them" : facts.rapport < 0 ? "Their replies sound distant" : void 0
+    });
   if (facts.warmth !== 0)
     topics.push({
       value: c.warmth,
@@ -11343,6 +11574,20 @@ function explainTie(features, facts, weights = TIE_WEIGHTS) {
   if (!explanation.length)
     explanation.push(facts.never ? "You haven't been in touch yet" : "A light history so far");
   return { contributions: c, explanation };
+}
+var CUE_PHRASES = {
+  asks_about_you: "ask how you're doing",
+  offers_help: "offer to help",
+  plans_together: "suggest meeting up",
+  personal_news: "share their own news",
+  congratulates: "congratulate you",
+  glad_to_hear: "sound glad to hear from you",
+  thoughtful: "write thoughtful replies"
+};
+function rapportSentence(cues) {
+  const phrases = cues.map((c) => CUE_PHRASES[c]).filter((p) => !!p).slice(0, 2);
+  if (!phrases.length) return "Their replies are warm";
+  return `Their replies are warm: they ${phrases.join(" and ")}`;
 }
 var CALIBRATION_MIN_LABELS = 8;
 var CALIBRATION_STEPS = 200;
@@ -11410,6 +11655,16 @@ function sharedContext(input) {
     overlapYears,
     city: sameCity ? person.location.split(",")[0].trim() : void 0
   };
+}
+function gatherRapport(rows) {
+  const out = [];
+  for (const r of rows) {
+    if (!r.inbound || r.automated || r.participants > 3) continue;
+    if (r.fromEmail && isAtsSender(r.fromEmail)) continue;
+    const reading = asRapportReading(r.reading);
+    if (reading) out.push({ at: r.at, reading, channel: r.channel });
+  }
+  return out;
 }
 function warmthValue(w) {
   return w === "warm" ? 1 : w === "cool" ? -1 : 0;
@@ -12169,7 +12424,7 @@ async function gather(calls, relax) {
 function plan(ctx) {
   const g = ctx.input.goal;
   const roles = g.roles ?? [];
-  const words3 = (...xs) => xs.filter((x) => x?.trim()).join(" ");
+  const words4 = (...xs) => xs.filter((x) => x?.trim()).join(" ");
   const exaPeople = (q, extra = {}) => (r) => exaCall(ctx, { query: q, category: "people", ...extra }, r, "person");
   switch (g.kind) {
     case "recruiting":
@@ -12184,15 +12439,15 @@ function plan(ctx) {
         (r) => apolloCall(ctx, r, {
           person_titles: roles.length ? roles : void 0,
           q_organization_domains_list: g.domains?.length ? g.domains : void 0,
-          q_keywords: g.domains?.length ? g.keywords?.join(" ") : words3(...g.orgs ?? [], ...g.keywords ?? [])
+          q_keywords: g.domains?.length ? g.keywords?.join(" ") : words4(...g.orgs ?? [], ...g.keywords ?? [])
         })
       ];
     case "fundraising":
       return [
         exaPeople(
-          words3(
+          words4(
             roles[0] ?? "partner",
-            `at a ${words3(g.stage) || "venture"} fund investing in`,
+            `at a ${words4(g.stage) || "venture"} fund investing in`,
             g.sector ?? g.keywords?.join(" ")
           ),
           {}
@@ -12200,7 +12455,7 @@ function plan(ctx) {
         (r) => exaCall(
           ctx,
           {
-            query: words3(g.stage, "venture fund investing in", g.sector ?? g.keywords?.join(" ")),
+            query: words4(g.stage, "venture fund investing in", g.sector ?? g.keywords?.join(" ")),
             category: "company"
           },
           r,
@@ -12208,7 +12463,7 @@ function plan(ctx) {
         ),
         (r) => apolloCall(ctx, r, {
           person_titles: ["Partner", "Principal", "General Partner", "Investor"],
-          q_keywords: words3(g.sector, g.stage, ...g.keywords ?? []) || void 0
+          q_keywords: words4(g.sector, g.stage, ...g.keywords ?? []) || void 0
         })
       ];
     case "sales":
@@ -12216,25 +12471,25 @@ function plan(ctx) {
         (r) => apolloCall(ctx, r, {
           person_titles: roles.length ? roles : void 0,
           organization_num_employees_ranges: g.employeeRanges,
-          q_keywords: words3(g.sector, ...g.keywords ?? []) || void 0,
+          q_keywords: words4(g.sector, ...g.keywords ?? []) || void 0,
           q_organization_domains_list: g.domains?.length ? g.domains : void 0
         })
       ];
     case "hiring": {
       const calls = [
         (r) => linkedInCall(ctx, r, {
-          keywords: words3(orJoin(roles), ...g.skills ?? []),
+          keywords: words4(orJoin(roles), ...g.skills ?? []),
           pastCompanies: g.pastCompanies,
           school: ctx.input.user.school,
           distance: [2, 3]
         }),
-        exaPeople(words3(roles[0], ...g.skills ?? []))
+        exaPeople(words4(roles[0], ...g.skills ?? []))
       ];
       if (roles.some((x) => /engineer|developer|programmer|software|ml|data scientist/i.test(x)))
         calls.push(
           (r) => exaCall(
             ctx,
-            { query: words3(roles[0], ...g.skills ?? []), includeDomains: ["github.com"] },
+            { query: words4(roles[0], ...g.skills ?? []), includeDomains: ["github.com"] },
             r,
             "person"
           )
@@ -12243,22 +12498,22 @@ function plan(ctx) {
     }
     case "cofounder":
       return [
-        exaPeople(words3(...g.skills ?? [], g.topic, "founder")),
-        (r) => linkedInCall(ctx, r, { keywords: words3(...g.skills ?? [], g.topic), distance: [2] })
+        exaPeople(words4(...g.skills ?? [], g.topic, "founder")),
+        (r) => linkedInCall(ctx, r, { keywords: words4(...g.skills ?? [], g.topic), distance: [2] })
       ];
     case "collaboration":
       return [
         (r) => scholarCall(ctx, r),
         (r) => exaCall(
           ctx,
-          { query: words3(g.topic, ...g.keywords ?? []), category: "publication" },
+          { query: words4(g.topic, ...g.keywords ?? []), category: "publication" },
           r,
           "person"
         )
       ];
     case "community":
       return [
-        (r) => linkedInCall(ctx, r, { keywords: words3(g.topic, ...g.keywords ?? []), distance: [1, 2] })
+        (r) => linkedInCall(ctx, r, { keywords: words4(g.topic, ...g.keywords ?? []), distance: [1, 2] })
       ];
   }
 }
@@ -15437,8 +15692,8 @@ function computeFeatures(inc, cand, ctx) {
   };
 }
 function scoreFeatures(f, w = RESOLVE_WEIGHTS) {
-  const z4 = w.bias + w.name_sim * f.name_sim + w.last_sim * f.last_sim + w.org_match * f.org_match + w.title_sim * f.title_sim + w.email_name_sim * f.email_name_sim + w.domain_org_match * f.domain_org_match + w.school_match * f.school_match + w.firstNameVariant * f.firstNameVariant;
-  return sigmoid3(z4);
+  const z5 = w.bias + w.name_sim * f.name_sim + w.last_sim * f.last_sim + w.org_match * f.org_match + w.title_sim * f.title_sim + w.email_name_sim * f.email_name_sim + w.domain_org_match * f.domain_org_match + w.school_match * f.school_match + w.firstNameVariant * f.firstNameVariant;
+  return sigmoid3(z5);
 }
 function addressOnlyScore(f) {
   if (f.email_name_sim >= 1 && f.domain_org_match >= 0.8) return 0.93;
@@ -16440,6 +16695,89 @@ ${lines.join("\n")}
   return { replyClass: cls, confidence, by };
 }
 
+// packages/core/src/scoring/vader.ts
+import vader from "npm:vader-sentiment@1.1.3";
+var vaderValence = (text) => vader.SentimentIntensityAnalyzer.polarity_scores(text).compound;
+
+// supabase/functions/_shared/ingest/rapport.ts
+import { z as z4 } from "npm:zod@3.25.76/v4";
+var RAPPORT_SYSTEM = `You read a message someone wrote to a student and judge ${RAPPORT_LLM_GUIDE}`;
+var RapportSchema = z4.object({
+  warmth: z4.number(),
+  familiarity: z4.enum(["stranger", "professional", "friendly", "friend"]),
+  effort: z4.number(),
+  cues: z4.array(z4.enum(RAPPORT_CUES))
+});
+var LLM_MIN_CHARS = 20;
+async function loadMessages(db2, userId, where) {
+  return db2.sql`
+    select m.id, m.thread_id, m.from_person_id, m.direction, m.is_automated, m.body_text, m.snippet, m.sent_at,
+           u.first_name, (u.settings ->> 'read_reply_tone')::boolean as tone
+      from orbit.messages m join orbit.users u on u.id = m.user_id
+     where m.user_id = ${userId}::uuid and m.direction = 'in' and not m.is_automated
+       and coalesce(m.body_text, m.snippet) is not null
+       and (${where.ids ?? null}::uuid[] is null or m.id = any(${where.ids ?? null}::uuid[]))
+       and (${where.since ?? null}::timestamptz is null
+            or (m.sent_at > ${where.since ?? null}::timestamptz and not (coalesce(m.extraction, '{}'::jsonb) ? 'rapport')))
+     order by m.sent_at desc
+     limit ${where.limit ?? 1e3}::int`;
+}
+async function answering(db2, m) {
+  const [row] = await db2.sql`
+    select body_text, snippet from orbit.messages
+     where thread_id = ${m.thread_id}::uuid and direction = 'out' and sent_at < ${m.sent_at}::timestamptz
+     order by sent_at desc limit 1`;
+  const t = row?.body_text ?? row?.snippet;
+  return t ? stripQuotedReply(t) : void 0;
+}
+async function readOne(db2, userId, m, claude, useLlm) {
+  const text = stripQuotedReply(m.body_text ?? m.snippet ?? "").trim();
+  const prior = await answering(db2, m);
+  let reading = replyRapport({
+    text,
+    studentFirstName: m.first_name ?? void 0,
+    answering: prior,
+    valence: vaderValence
+  });
+  if (useLlm && m.tone !== false && claude?.configured && text.length >= LLM_MIN_CHARS) {
+    const r = await claude.structured({
+      task: "classify",
+      system: RAPPORT_SYSTEM,
+      user: `${prior ? `<student>
+${prior.slice(0, 1500)}
+</student>
+` : ""}<reply>
+${text.slice(0, 3e3)}
+</reply>`,
+      schema: RapportSchema,
+      userId
+    });
+    if (r.ok) reading = rapportFromLlm(r.data);
+  }
+  await db2.sql`
+    update orbit.messages set extraction = coalesce(extraction, '{}'::jsonb) || jsonb_build_object('rapport', ${reading}::jsonb)
+     where id = ${m.id}::uuid`;
+  return reading;
+}
+async function readRapport(db2, userId, messageId, deps) {
+  const [m] = await loadMessages(db2, userId, { ids: [messageId], limit: 1 });
+  if (!m) return {};
+  const reading = await readOne(db2, userId, m, deps.claude, true);
+  return { personId: m.from_person_id ?? void 0, reading };
+}
+var RAPPORT_BACKFILL_DAYS = 365;
+var RAPPORT_BACKFILL_LLM = 60;
+async function backfillRapport(db2, userId, deps) {
+  const since = new Date(deps.now.getTime() - RAPPORT_BACKFILL_DAYS * 864e5).toISOString();
+  const rows = await loadMessages(db2, userId, { since, limit: 2e3 });
+  let n = 0;
+  for (const m of rows) {
+    await readOne(db2, userId, m, deps.claude, n < RAPPORT_BACKFILL_LLM);
+    n++;
+  }
+  return n;
+}
+
 // supabase/functions/_shared/replies/replies.ts
 async function draftReply(s, userId, messageId, actor = "user") {
   const m = await loadReplyMessage(s.db, userId, messageId);
@@ -16594,9 +16932,30 @@ function classifyHandlers(deps, agents = { env: {} }) {
       if (!id) return;
       const r = await classifyMessage(ctx.db, userId, id, { now: ctx.now(), claude: deps.claude });
       if (!r.replyClass) return;
+      const { personId } = await readRapport(ctx.db, userId, id, { claude: deps.claude });
+      if (personId)
+        await ctx.queue.enqueue({
+          kind: "score.person",
+          userId,
+          payload: { personIds: [personId] },
+          dedupeKey: `score.person:${userId}:rapport:${id}`
+        });
       await maybeAutoReply(ctx.db, userId, id, {
         services: makeServices(agents, { db: ctx.db, now: ctx.now, queue: ctx.queue })
       });
+    },
+    "rapport.backfill": async (job, ctx) => {
+      const userId = job.userId;
+      if (!userId) throw new JobSkipped("no_user");
+      await ctx.queue.setVt(job.queue, job.msgId, 600);
+      const n = await backfillRapport(ctx.db, userId, { claude: deps.claude, now: ctx.now() });
+      if (n)
+        await ctx.queue.enqueue({
+          kind: "score.user",
+          userId,
+          payload: { reason: "rapport_backfill" },
+          dedupeKey: `score.user:${userId}:rapport_backfill`
+        });
     }
   };
 }
@@ -17215,8 +17574,8 @@ function readIntroduction(msg, people, userEmails, ctx = {}) {
       ).test(cl.toLowerCase())
     );
     const vocative = clauses2.map((cl) => {
-      const words3 = cl.replace(/[!.?]+/g, " ").split(/\s+/).filter(Boolean);
-      return words3.length > 0 && words3.length <= 5 && words3.every((w) => GREETING_WORDS.has(w.toLowerCase()) || isStudentWord(w) || isCandidateWord(w)) && words3.some((w) => isStudentWord(w) || isCandidateWord(w));
+      const words4 = cl.replace(/[!.?]+/g, " ").split(/\s+/).filter(Boolean);
+      return words4.length > 0 && words4.length <= 5 && words4.every((w) => GREETING_WORDS.has(w.toLowerCase()) || isStudentWord(w) || isCandidateWord(w)) && words4.some((w) => isStudentWord(w) || isCandidateWord(w));
     });
     let aimed = false;
     let introducing = false;
@@ -18543,7 +18902,9 @@ async function loadHistories(db2, userId, now, personIds) {
   const relationship = /* @__PURE__ */ new Map();
   if (!ids.length) return { people: [], histories, relationship };
   const [user] = await db2.sql`
-    select school, current_city from orbit.users where id = ${userId}::uuid`;
+    select school, current_city, (settings ->> 'read_reply_tone')::boolean as tone
+      from orbit.users where id = ${userId}::uuid`;
+  const readTone = user?.tone !== false;
   const affRows = await db2.sql`
     select a.*, p.is_self from orbit.affiliations a join orbit.people p on p.id = a.person_id
      where a.user_id = ${userId}::uuid and (p.is_self or a.person_id = any(${ids}::uuid[]))`;
@@ -18567,7 +18928,7 @@ async function loadHistories(db2, userId, now, personIds) {
   const msgs = await db2.sql`
     select m.from_person_id, m.to_person_ids, m.direction, m.sent_at, m.provider, m.thread_id,
            m.is_automated or m.list_unsubscribe as automated, m.from_addr, t.participant_count,
-           m.extraction ->> 'sentiment' as sentiment
+           m.extraction -> 'rapport' as rapport
       from orbit.messages m join orbit.threads t on t.id = m.thread_id
      where m.user_id = ${userId}::uuid
        and ((m.direction = 'in' and m.from_person_id = any(${ids}::uuid[]))
@@ -18639,10 +19000,18 @@ async function loadHistories(db2, userId, now, personIds) {
     const messages = toTieMessages(msgsBy.get(person.id) ?? []);
     const intro2 = introsBy.get(person.id) ?? [];
     const mutual = mutualBy.get(person.id) ?? [];
-    const warmth = [
-      ...warmthBy.get(person.id) ?? [],
-      ...(msgsBy.get(person.id) ?? []).filter((m) => m.direction === "in" && m.sentiment).map((m) => warmthValue(m.sentiment))
-    ];
+    const warmth = warmthBy.get(person.id) ?? [];
+    const rapport = readTone ? gatherRapport(
+      (msgsBy.get(person.id) ?? []).map((m) => ({
+        at: iso3(m.sent_at),
+        inbound: m.direction === "in",
+        automated: !!m.automated,
+        participants: Math.max(2, Number(m.participant_count ?? 1) + 1),
+        channel: m.provider === "linkedin" ? "linkedin" : "email",
+        reading: m.rapport,
+        fromEmail: m.from_addr ?? void 0
+      }))
+    ) : [];
     histories.set(person.id, {
       name: person.firstName || void 0,
       messages,
@@ -18660,7 +19029,8 @@ async function loadHistories(db2, userId, now, personIds) {
       noteWarmth: warmth,
       mutualScores: mutual.map((m) => m.score),
       mutualNames: mutual.map((m) => m.name),
-      label: labels.get(person.id)
+      label: labels.get(person.id),
+      ...rapport.length ? { rapport } : {}
     });
   }
   return { people: people.map((p) => p.person), histories, relationship };

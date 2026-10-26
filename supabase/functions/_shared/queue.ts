@@ -19,6 +19,7 @@ export type QueueName = (typeof QUEUES)[number];
 export const KIND_QUEUE: Record<string, QueueName> = {
   'send.draft': 'orbit_send',
   'classify.message': 'orbit_classify',
+  'rapport.backfill': 'orbit_classify',
   'sync.gmail.backfill': 'orbit_sync',
   'sync.gmail.incremental': 'orbit_sync',
   'sync.calendar': 'orbit_sync',

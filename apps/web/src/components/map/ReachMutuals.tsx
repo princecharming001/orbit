@@ -20,6 +20,7 @@ import { isServerUser } from '../../integrations/orbitApi';
 import { useShowReasoning } from '../../state/showReasoning';
 import { Avatar, Button, cx, LinkedInMark } from '../../ui';
 import { PairNoteMenu } from './PairNoteMenu';
+import { useClosenessKey } from './useCloseness';
 
 const SHOWN = 5;
 const TAP = 'pointer-coarse:min-h-11';
@@ -79,6 +80,8 @@ function useStandings(
 ): { standing?: Map<string, MutualStanding>; notes: number } {
   const [state, setState] = useState<{ standing?: Map<string, MutualStanding>; notes: number }>({ notes: 0 });
   const key = ids.join('|');
+  // the student's closeness to a mutual changing (a reply read, plan 27) re-ranks the list too
+  const closeness = useClosenessKey(ids);
   useEffect(() => {
     if (!ids.length) return;
     let live = true;
@@ -100,7 +103,7 @@ function useStandings(
       offE();
       offN();
     };
-  }, [userId, targetId, key]);
+  }, [userId, targetId, key, closeness]);
   return state;
 }
 

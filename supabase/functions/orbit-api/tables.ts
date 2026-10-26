@@ -48,6 +48,12 @@ export const PULL_TABLES: PullTable[] = [
     key: 'id',
     cursor: 'updated_at',
     filter: "t.is_networking and coalesce(t.last_at, t.created_at) > now() - interval '180 days'",
+    // LinkedIn threads carry their channel, as the browser's own LinkedIn reader writes them
+    map: (r) => ({
+      ...r,
+      externalThreadId: r.externalId,
+      ...(r.provider === 'linkedin' ? { channel: 'linkedin' } : {}),
+    }),
   },
   {
     table: 'messages',
@@ -64,6 +70,7 @@ export const PULL_TABLES: PullTable[] = [
       toEmails: r.toAddrs ?? [],
       ccEmails: r.ccAddrs ?? [],
       bodyText: r.bodyText ?? '',
+      ...(r.provider === 'linkedin' ? { channel: 'linkedin' } : {}),
     }),
   },
   { table: 'calendar_events', key: 'id', cursor: 'updated_at' },

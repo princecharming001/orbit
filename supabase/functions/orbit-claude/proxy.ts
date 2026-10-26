@@ -41,12 +41,14 @@ export const MAX_TOKENS = 16_000;
 export const MAX_BODY_BYTES = 1_500_000;
 
 /** The kinds of call the proxy forwards: the chat, and two small structured reads. */
-export type CallType = 'chat' | 'memory' | 'resume';
-export const CALL_TYPES: readonly CallType[] = ['chat', 'memory', 'resume'];
+export type CallType = 'chat' | 'memory' | 'resume' | 'rapport';
+export const CALL_TYPES: readonly CallType[] = ['chat', 'memory', 'resume', 'rapport'];
 /** Per call type: the largest max_tokens and request body allowed (the chat keeps MAX_TOKENS and MAX_BODY_BYTES). */
 export const CALL_LIMITS: Record<Exclude<CallType, 'chat'>, { maxTokens: number; maxBytes: number }> = {
   memory: { maxTokens: 1024, maxBytes: 60_000 },
   resume: { maxTokens: 8192, maxBytes: 200_000 },
+  // how warm one reply reads (plan 27): the reply and the student's message it answers
+  rapport: { maxTokens: 300, maxBytes: 24_000 },
 };
 
 export interface Limits {
@@ -56,7 +58,11 @@ export interface Limits {
   /** each visitor's daily count for one kind of call, on top of perDay */
   perDayCall?: Partial<Record<Exclude<CallType, 'chat'>, number>>;
 }
-export const DEFAULT_CALL_PER_DAY: Record<Exclude<CallType, 'chat'>, number> = { memory: 200, resume: 5 };
+export const DEFAULT_CALL_PER_DAY: Record<Exclude<CallType, 'chat'>, number> = {
+  memory: 200,
+  resume: 5,
+  rapport: 150,
+};
 export const DEFAULT_LIMITS: Limits = {
   perMinute: 30,
   perDay: 250,
@@ -443,7 +449,7 @@ export function makeHandler(deps: ProxyDeps): (req: Request) => Promise<Response
         ? 'minute'
         : verdict.over?.includes(':global:')
           ? 'global'
-          : /^orbit:(?:memory|resume):/.test(verdict.over ?? '')
+          : /^orbit:(?:memory|resume|rapport):/.test(verdict.over ?? '')
             ? 'call'
             : 'day';
       const message =

@@ -182,6 +182,8 @@ async function checkOnce(
   }
   // plan 23 §4.6: a reply a plan was waiting on ("after Dana replies") releases the next step's draft
   await import('./targetPlan').then((m) => m.releaseHeldSteps(user, now)).catch(() => undefined);
+  // plan 27: new replies get the classifier's reading of their warmth in the background, then a rescore
+  if (local) void import('./rapport').then((m) => m.refineRapport(user.id, now)).catch(() => undefined);
   await db.kv.put({ key: replyCheckKey(user.id), value: state });
   return state;
 }

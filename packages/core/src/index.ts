@@ -57,6 +57,7 @@ export * from './resume/profile';
 export * from './resume/schools';
 export * from './safety/rules';
 export * from './scoring/known';
+export * from './scoring/rapport';
 export * from './scoring/strength';
 export * from './scoring/tieFit';
 export * from './scoring/tieScore';

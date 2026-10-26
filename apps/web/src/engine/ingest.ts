@@ -1,4 +1,12 @@
-import type { CalendarEvent, CoffeeChat, EmailMessage, EmailThread, Person, User } from '@orbit/core';
+import type {
+  CalendarEvent,
+  CoffeeChat,
+  EmailMessage,
+  EmailThread,
+  MessageExtraction,
+  Person,
+  User,
+} from '@orbit/core';
 import {
   addBusinessDays,
   answersOutreach,
@@ -27,6 +35,7 @@ import { llmEnabled, llmSignal, llmTriage } from '../integrations/anthropic';
 import { evaluateImmediateSuggestions, refreshPendingDrafts, surfaceLlmFailure } from './brief';
 import { processIntroductions } from './introductions';
 import { loadPeopleCache, suggestDuplicateMerges, upsertPerson } from './people';
+import { readReply } from './rapport';
 import { evaluateTrigger } from './stages';
 
 /** Threads with more people than this are group mail (clubs, lists, class threads) and carry no tie. */
@@ -375,6 +384,8 @@ export async function ingestEmails(
       }
       if (thread.isNetworking && small)
         await processNetworkingThread(user, thread, newMessages, all, useLlm, now);
+      // replies outside networking threads count toward closeness too (plan 27): a lexical reading each
+      else if (small) await readReplies(user, newMessages, all);
       for (const pid of thread.participantPersonIds) await recomputePersonStrength(pid, now);
     }
     done++;
@@ -429,6 +440,31 @@ async function retireSchedulingCards(
 const ACTIVE = (c: CoffeeChat) => !['declined', 'no_response', 'archived'].includes(c.stage);
 /** An intro older than this is history, not a to-do: no new chat is created for the person introduced. */
 const INTRO_CHAT_WINDOW_MS = 30 * 86_400_000;
+
+/** The student's message an inbound one answers: the last outbound before it in the thread. */
+function answeredBy(all: EmailMessage[], m: EmailMessage): EmailMessage | undefined {
+  return all.filter((x) => x.direction === 'outbound' && x.sentAt < m.sentAt).at(-1);
+}
+
+/** Lexical reply readings (plan 27) for their messages in a small thread Orbit does not classify. */
+async function readReplies(user: User, newMessages: EmailMessage[], all: EmailMessage[]): Promise<void> {
+  for (const m of newMessages) {
+    if (m.direction !== 'inbound' || m.isAutomated || !m.bodyText.trim() || m.extraction?.rapport) continue;
+    const rapport = await readReply(m.bodyText, user.firstName, answeredBy(all, m)?.bodyText);
+    m.extraction = {
+      ...(m.extraction ?? {
+        proposedTimes: [],
+        asksOfUser: [],
+        offers: [],
+        factsAboutSender: [],
+        sentiment: 'neutral',
+      }),
+      rapport,
+    };
+    await db.messages.update(m.id, { extraction: m.extraction });
+  }
+}
+
 /** Stages in which the student's ask is still waiting on the person's answer. */
 const AWAITING_ANSWER = new Set<CoffeeChat['stage']>(['outreach_sent', 'replied', 'no_response']);
 
@@ -566,7 +602,7 @@ async function processNetworkingThread(
     });
     const signal = sig?.signal ?? h.signal;
     const confidence = sig?.confidence ?? h.confidence;
-    const extraction = sig
+    const extraction: MessageExtraction = sig
       ? {
           proposedTimes: sig.proposedTimes,
           asksOfUser: sig.asksOfUser,
@@ -584,6 +620,10 @@ async function processNetworkingThread(
             : {}),
         }
       : h.extraction;
+    // how warm their reply reads (plan 27): the classifier's reading when it ran, else the lexical one
+    if (m.direction === 'inbound')
+      extraction.rapport =
+        sig?.rapport ?? (await readReply(m.bodyText, user.firstName, answeredBy(all, m)?.bodyText));
     await db.messages.update(m.id, {
       signal,
       signalConfidence: confidence,

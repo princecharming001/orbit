@@ -6,7 +6,8 @@
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./vader": "./src/scoring/vader.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
@@ -15,6 +16,7 @@
   },
   "dependencies": {
     "libphonenumber-js": "1.13.14",
+    "vader-sentiment": "1.1.3",
     "zod": "^3.24.0"
   },
   "devDependencies": {

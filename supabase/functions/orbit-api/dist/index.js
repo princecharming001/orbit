@@ -1511,6 +1511,7 @@ var QUEUES = [
 var KIND_QUEUE = {
   "send.draft": "orbit_send",
   "classify.message": "orbit_classify",
+  "rapport.backfill": "orbit_classify",
   "sync.gmail.backfill": "orbit_sync",
   "sync.gmail.incremental": "orbit_sync",
   "sync.calendar": "orbit_sync",
@@ -8143,6 +8144,63 @@ async function upsertTie(db2, userId, t, now) {
        or orbit.ties.last_seen_at is distinct from excluded.last_seen_at`;
 }
 
+// packages/core/src/scoring/rapport.ts
+var RAPPORT_CUES = [
+  "asks_about_you",
+  "offers_help",
+  "personal_news",
+  "plans_together",
+  "congratulates",
+  "glad_to_hear",
+  "casual",
+  "uses_your_name",
+  "thoughtful",
+  "formal",
+  "distant",
+  "asked_to_stop",
+  "hostile"
+];
+var FUNCTION_CLASSES = {
+  personal: new Set(
+    "i me my mine myself we us our ours ourselves you your yours yourself yourselves he him his she her hers they them their theirs".split(
+      " "
+    )
+  ),
+  impersonal: new Set(
+    "it its itself this that these those something anything everything nothing someone anyone".split(" ")
+  ),
+  articles: new Set("a an the".split(" ")),
+  prepositions: new Set(
+    "about above across after against along among around at before behind below beside between by during for from in inside into near of off on onto out over through to toward under until up upon with within without".split(
+      " "
+    )
+  ),
+  auxiliary: new Set(
+    "am is are was were be been being have has had do does did will would shall should can could may might must i'm you're we're they're it's i've you've we've i'd you'd i'll you'll we'll".split(
+      " "
+    )
+  ),
+  adverbs: new Set(
+    "very really just so too also then now here there even only quite rather almost always never often".split(
+      " "
+    )
+  ),
+  conjunctions: new Set(
+    "and but or so because if although though while whereas unless since nor yet".split(" ")
+  ),
+  negations: new Set(
+    "no not never none nobody nothing neither nor don't can't won't isn't aren't wasn't didn't doesn't".split(
+      " "
+    )
+  ),
+  quantifiers: new Set("all some many much more most few several any each every both lot lots".split(" "))
+};
+var RAPPORT_LLM_GUIDE = `rapport: how the sender feels about the student, separate from their answer to the request.
+- warmth −2..2: 2 = clearly warm and personal (asks about the student, offers help or intros, shares their own news, suggests meeting up); 0 = neutral or businesslike, including short replies such as "ok" or "sounds good"; −2 = distant, annoyed, or asks not to be contacted. A polite decline that wishes the student well is warm, not cold.
+- familiarity: stranger, professional, friendly, or friend, from how they write to the student.
+- effort 0..2: 0 a one-liner, 1 a normal reply, 2 a long, thoughtful reply.
+- cues: any of ${RAPPORT_CUES.join(", ")} that apply.`;
+
 // packages/core/src/scoring/tieScore.ts
 var TIE_BAND_LABELS = {
   faint: "Faint",
@@ -10223,11 +10281,15 @@ async function profile(ctx) {
     done2 = t.toISOString();
   }
   const about = aboutFrom(b);
+  if (b.readReplyTone !== void 0 && typeof b.readReplyTone !== "boolean")
+    throw badRequest("readReplyTone must be true or false");
+  const tone = b.readReplyTone;
   const userId = ctx.userId;
   const given = {};
   if (postal !== void 0) given.postal_address = postal;
   if (link !== void 0) given.scheduling_link = link;
   if (about !== void 0) given.about = about;
+  if (tone !== void 0) given.read_reply_tone = tone ? null : false;
   const keep = Object.fromEntries(Object.entries(given).filter(([, v]) => v !== null));
   const [after] = await ctx.db.sql`
     update orbit.users
@@ -10260,6 +10322,13 @@ async function profile(ctx) {
     await ctx.db.sql`
       insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
       values (${userId}::uuid, 'user', 'settings.profile', 'users', ${userId}, ${{ fields: changed }}::jsonb)`;
+  if (tone !== void 0)
+    await sqlQueue(ctx.db).enqueue({
+      kind: "score.user",
+      userId,
+      payload: { reason: "reply_tone" },
+      dedupeKey: `score.user:${userId}:reply_tone:${Date.now()}`
+    });
   const str3 = (v) => typeof v === "string" && v ? v : null;
   const out = {
     postalAddress: str3(after.settings?.postal_address),
@@ -12420,7 +12489,13 @@ var PULL_TABLES = [
     table: "threads",
     key: "id",
     cursor: "updated_at",
-    filter: "t.is_networking and coalesce(t.last_at, t.created_at) > now() - interval '180 days'"
+    filter: "t.is_networking and coalesce(t.last_at, t.created_at) > now() - interval '180 days'",
+    // LinkedIn threads carry their channel, as the browser's own LinkedIn reader writes them
+    map: (r) => ({
+      ...r,
+      externalThreadId: r.externalId,
+      ...r.provider === "linkedin" ? { channel: "linkedin" } : {}
+    })
   },
   {
     table: "messages",
@@ -12435,7 +12510,8 @@ var PULL_TABLES = [
       fromEmail: r.fromAddr ?? "",
       toEmails: r.toAddrs ?? [],
       ccEmails: r.ccAddrs ?? [],
-      bodyText: r.bodyText ?? ""
+      bodyText: r.bodyText ?? "",
+      ...r.provider === "linkedin" ? { channel: "linkedin" } : {}
     })
   },
   { table: "calendar_events", key: "id", cursor: "updated_at" },

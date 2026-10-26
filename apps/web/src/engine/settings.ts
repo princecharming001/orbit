@@ -1,5 +1,6 @@
 import type { ProfileSettingsRequest, RecruitingGoals, TargetCompany, User, UserSettings } from '@orbit/core';
 import { cleanAnswer, cleanCurrentJob, OWN_WORDS_KEYS, ownWordsOf } from '@orbit/core';
+import { recomputeAllStrengths } from '../db/repo';
 import { db } from '../db/schema';
 import { callApi, isServerUser } from '../integrations/orbitApi';
 import { learnStyle } from './style';
@@ -273,4 +274,14 @@ export async function forgetLearnedStyle(userId: string): Promise<boolean> {
   if (!had) return false;
   await db.styles.delete(userId);
   return true;
+}
+
+/**
+ * Read the tone of replies for closeness (plan 27), on unless turned off. Local mode rescores here; account mode
+ * tells the server, which rescores.
+ */
+export async function setReadReplyTone(userId: string, on: boolean): Promise<void> {
+  await db.settings.update(userId, { readReplyTone: on });
+  if (isServerUser(userId)) await pushProfileSettings(userId, { readReplyTone: on });
+  else await recomputeAllStrengths(userId);
 }

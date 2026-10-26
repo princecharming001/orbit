@@ -1,6 +1,20 @@
 # 27. Closeness that reads the replies
 
-Status: proposed 2026-10-26. Nothing built.
+Status: built 2026-10-26 with the recommended defaults (tone reading on, their warmth only, the 60-second account
+sync). Where it landed:
+
+- Core: `scoring/rapport.ts` (reading, LLM mapping, style matching), `scoring/vader.ts` (`@orbit/core/vader`),
+  f16 `rapport` in `scoring/tieScore.ts` (`RAPPORT_MAX_POINTS` 8, `RAPPORT_PRIOR` 3, model `tie-v2`), `gatherRapport`
+  shared by both sides; anchors R1 to R6 in `__tests__/rapport.test.ts`.
+- Browser: readings at Gmail ingest (networking and small non-networking threads), LinkedIn DMs and post comments,
+  texts read at scoring time; `engine/rapport.ts` (`refineRapport` after each reply check, `backfillRapport` once);
+  `db/repo.ts` gathers readings and now passes the student's ratings and calibration (bug 4); routes and mutual lists
+  re-rank on a closeness change (`components/map/useCloseness.ts`); Settings → Closeness switch.
+- Server: `_shared/ingest/rapport.ts` runs after classify.message and queues `score.person` after the reading (the
+  order fix); `rapport.backfill` job and migration `20261027_orbit_reply_rapport.sql`; loader reads
+  `extraction.rapport` (f13 is notes only); proxy call type `rapport`; `/settings/profile` `readReplyTone`.
+- Not done: server f15 (post engagement) stays 0, because comments on posts are read in the browser only; server
+  readings exist only for networking threads, the only ones whose text the server keeps.
 
 Today closeness (0 to 100, `packages/core/src/scoring/tieScore.ts`) is scored from the pattern of contact only. The one
 text signal is note warmth (f13, a three-value label from a keyword regex or an LLM, `notes/extract.ts:60-63`). Reply

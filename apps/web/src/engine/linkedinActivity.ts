@@ -31,6 +31,7 @@ import {
 } from '../integrations/unipile';
 import { storeLinkedInChat } from './conversation';
 import { LIVE_SOON, liveLinkedInAccount } from './linkedinLive';
+import { readReply } from './rapport';
 
 /** Proxy calls per run for the chat history (each reads up to ~24 pages); the rest continues on the next run. */
 export const DM_CALLS_PER_RUN = 12;
@@ -166,6 +167,8 @@ async function recordPostTouch(
           ? `You commented on ${name}'s post${item.text ? `: ${item.text}` : ''}`
           : `${name} reacted to your post`,
     weight: TOUCHPOINT_WEIGHTS[kind],
+    // how warm their comment reads (plan 27)
+    ...(item.kind === 'comment_in' && item.text?.trim() ? { rapport: await readReply(item.text) } : {}),
   });
   return true;
 }

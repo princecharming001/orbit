@@ -422,6 +422,8 @@ export interface ProfileSettingsRequest {
    * one, and null clears it
    */
   about?: OwnWords | null;
+  /** read the tone of replies for closeness (plan 27): false turns it off (users.settings.read_reply_tone) */
+  readReplyTone?: boolean;
 }
 export interface ProfileSettingsResponse {
   postalAddress: string | null;

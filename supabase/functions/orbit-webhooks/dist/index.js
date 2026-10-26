@@ -4734,6 +4734,7 @@ async function storeChat(db2, userId, self, chat, messages, now, ownIds) {
 var KIND_QUEUE = {
   "send.draft": "orbit_send",
   "classify.message": "orbit_classify",
+  "rapport.backfill": "orbit_classify",
   "sync.gmail.backfill": "orbit_sync",
   "sync.gmail.incremental": "orbit_sync",
   "sync.calendar": "orbit_sync",

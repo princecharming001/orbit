@@ -49,6 +49,7 @@ import {
   restoreTargetCompany,
   saveGoals,
   setBriefTime,
+  setReadReplyTone,
   setSchedulingLink,
   setTargetDeadline,
   setTargetPriority,
@@ -1409,6 +1410,27 @@ function Limits() {
             Show it now
           </Button>
         </div>
+      </section>
+      <section className="border-t border-line-2 pt-6" data-testid="settings-closeness">
+        <h2 className="text-[13px] font-medium text-ink mb-3">Closeness</h2>
+        <label className="flex items-start gap-2 text-[13.5px] max-w-md">
+          <input
+            type="checkbox"
+            className="mt-1"
+            checked={settings.readReplyTone !== false}
+            onChange={(e) =>
+              void setReadReplyTone(user.id, e.target.checked).then(() => setSavedAt(Date.now()))
+            }
+            data-testid="settings-reply-tone"
+          />
+          <span>
+            Read the tone of replies
+            <span className="block text-[12.5px] text-ink-3 mt-0.5">
+              Warm replies (asking about you, offering help) raise closeness a little; a request to stop
+              lowers it. Only you see it.
+            </span>
+          </span>
+        </label>
       </section>
     </div>
   );

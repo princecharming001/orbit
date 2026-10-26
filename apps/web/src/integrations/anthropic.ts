@@ -11,7 +11,17 @@ import type {
   StyleCard,
   TriageResult,
 } from '@orbit/core';
-import { fmtWindow, LINKEDIN_NOTE_MAX, LINKEDIN_NOTE_TARGET, MAX_WORDS, tzAbbr } from '@orbit/core';
+import {
+  fmtWindow,
+  LINKEDIN_NOTE_MAX,
+  LINKEDIN_NOTE_TARGET,
+  MAX_WORDS,
+  RAPPORT_CUES,
+  RAPPORT_LLM_GUIDE,
+  type RapportReading,
+  rapportFromLlm,
+  tzAbbr,
+} from '@orbit/core';
 // The SDK's zodOutputFormat helper is built on zod/v4 and cannot read zod v3 schemas.
 import { z } from '../zod';
 import { currentAccessToken } from './orbitApi';
@@ -62,8 +72,12 @@ function client(): LlmClient | undefined {
  * what the student said after a chat turn, and reading their resume. The proxy holds each to its own output limit and,
  * for resumes, its own daily count; both count against the student's daily limit like the chat.
  */
-export type SharedCall = 'memory' | 'resume';
-export const SHARED_CALL_MAX_TOKENS: Record<SharedCall, number> = { memory: 1024, resume: 8192 };
+export type SharedCall = 'memory' | 'resume' | 'rapport';
+export const SHARED_CALL_MAX_TOKENS: Record<SharedCall, number> = {
+  memory: 1024,
+  resume: 8192,
+  rapport: 300,
+};
 /** The placeholder key sent to Orbit's shared access; the server function swaps in the real one. */
 const SHARED_PLACEHOLDER = 'orbit-shared';
 
@@ -490,6 +504,8 @@ export async function llmSignal(
       offers: string[];
       facts: { type: string; text: string }[];
       sentiment: 'warm' | 'neutral' | 'cool';
+      /** how warm an inbound reply reads toward the student (plan 27) */
+      rapport?: RapportReading;
     }
   | undefined
 > {
@@ -521,10 +537,18 @@ export async function llmSignal(
       }),
     ),
     sentiment: z.enum(['warm', 'neutral', 'cool']),
+    rapport: z
+      .object({
+        warmth: z.number(),
+        familiarity: z.enum(['stranger', 'professional', 'friendly', 'friend']),
+        effort: z.number(),
+        cues: z.array(z.enum(RAPPORT_CUES)),
+      })
+      .nullable(),
   });
   const r = await runParse(
     'emailTriage',
-    `You read one message in a networking email thread between a student and a professional and label its signal. Resolve relative times ("Thursday at 2pm") to ISO 8601 using the student's timezone and the current date given. Extract concrete asks of the student, offers made to the student, and short facts about the sender.`,
+    `You read one message in a networking email thread between a student and a professional and label its signal. Resolve relative times ("Thursday at 2pm") to ISO 8601 using the student's timezone and the current date given. Extract concrete asks of the student, offers made to the student, and short facts about the sender. For an inbound message also give ${RAPPORT_LLM_GUIDE}\nFor an outbound message rapport is null.`,
     (wrap) =>
       `Timezone: ${tz}. Now: ${nowIso}. Direction: ${direction} (outbound = the student wrote it).\nRecent thread context:\n${wrap('thread', context.slice(0, 3000))}\nMessage to label:\n${wrap('email', body.slice(0, 4000))}`,
     schema,
@@ -545,7 +569,32 @@ export async function llmSignal(
     offers: r.offers,
     facts: r.facts_about_sender,
     sentiment: r.sentiment,
+    ...(direction === 'inbound' && r.rapport ? { rapport: rapportFromLlm(r.rapport) } : {}),
   };
+}
+
+/**
+ * How warm one reply reads toward the student (plan 27), for a reply the full classifier did not read: LinkedIn
+ * messages, mail outside networking threads, and everyone on Orbit's shared access. Haiku, one short message.
+ */
+export async function llmRapport(text: string, answering?: string): Promise<RapportReading | undefined> {
+  const schema = z.object({
+    warmth: z.number(),
+    familiarity: z.enum(['stranger', 'professional', 'friendly', 'friend']),
+    effort: z.number(),
+    cues: z.array(z.enum(RAPPORT_CUES)),
+  });
+  const r = await runParse(
+    'emailTriage',
+    `You read a message someone wrote to a student and judge ${RAPPORT_LLM_GUIDE}`,
+    (wrap) =>
+      `${answering ? `The student's message it answers:\n${wrap('student', answering.slice(0, 1500))}\n` : ''}Their message:\n${wrap('reply', text.slice(0, 3000))}`,
+    schema,
+    'low',
+    300,
+    { shared: 'rapport', quiet: true, model: LIGHT_MODEL },
+  );
+  return r ? rapportFromLlm(r) : undefined;
 }
 
 export async function llmNoteExtraction(
