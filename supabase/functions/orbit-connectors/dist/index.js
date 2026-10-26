@@ -849,6 +849,8 @@ async function companiesRoute(deps, body, ctx) {
     }
     looked++;
     const found = await companyByName(deps, accountId, name, ctx.doFetch);
+    if (body.debug === true && !("id" in found))
+      companies[`${name}:debug`] = found;
     if (!("id" in found)) {
       if (found.reason === "throttled") {
         stopped = "throttled";
@@ -2447,7 +2449,17 @@ async function companyByName(deps, accountId, name, doFetch) {
     (c) => companyNameKey(c.name) === key && (typeof c.id === "string" || typeof c.id === "number")
   );
   if (same.length === 1) return { id: String(same[0].id), item: same[0] };
-  return same.length ? { ok: false, reason: "ambiguous", message: "LinkedIn has more than one company of that name." } : { ok: false, reason: "not_found", message: "LinkedIn could not find that company." };
+  const followers = (c) => [c.followers_count, c.followerCount, c.followers].find((n) => typeof n === "number") ?? 0;
+  const ranked = [...same].sort((a, b) => followers(b) - followers(a));
+  if (ranked.length > 1 && followers(ranked[0]) >= 5e3 && followers(ranked[0]) >= 10 * followers(ranked[1]))
+    return { id: String(ranked[0].id), item: ranked[0] };
+  return same.length ? {
+    ok: false,
+    reason: "ambiguous",
+    message: "LinkedIn has more than one company of that name.",
+    // TEMP: which fields a company search result carries (for choosing between namesakes)
+    fields: same.slice(0, 3).map((c) => ({ keys: Object.keys(c), followers: followers(c), name: c.name }))
+  } : { ok: false, reason: "not_found", message: "LinkedIn could not find that company." };
 }
 async function unipileCompany(deps, body, doFetch) {
   const accountId = String(body.accountId ?? "");

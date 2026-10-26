@@ -451,6 +451,8 @@ async function companiesRoute(
     }
     looked++;
     const found = await companyByName(deps, accountId, name, ctx.doFetch);
+    if (body.debug === true && !('id' in found))
+      (companies as Record<string, unknown>)[`${name}:debug`] = found;
     if (!('id' in found)) {
       if (found.reason === 'throttled') {
         stopped = 'throttled';
@@ -2627,7 +2629,10 @@ async function companyByName(
   accountId: string,
   name: string,
   doFetch: typeof fetch,
-): Promise<{ id: string; item: Record<string, unknown> } | { ok: false; reason: string; message: string }> {
+): Promise<
+  | { id: string; item: Record<string, unknown> }
+  | { ok: false; reason: string; message: string; fields?: unknown }
+> {
   const q = new URLSearchParams({ account_id: accountId, limit: '10' });
   const res = await doFetch(`${deps.unipileBase}/api/v1/linkedin/search?${q}`, {
     method: 'POST',
@@ -2649,8 +2654,27 @@ async function companyByName(
     (c) => companyNameKey(c.name) === key && (typeof c.id === 'string' || typeof c.id === 'number'),
   );
   if (same.length === 1) return { id: String(same[0]!.id), item: same[0]! };
+  // several of the same name ("SpaceX" and its fan pages, a regional office): the real company when one has by far
+  // the most followers (ten times the next, and thousands of them); otherwise a namesake's logo is never taken
+  const followers = (c: Record<string, unknown>) =>
+    [c.followers_count, c.followerCount, c.followers].find((n): n is number => typeof n === 'number') ?? 0;
+  const ranked = [...same].sort((a, b) => followers(b) - followers(a));
+  if (
+    ranked.length > 1 &&
+    followers(ranked[0]!) >= 5000 &&
+    followers(ranked[0]!) >= 10 * followers(ranked[1]!)
+  )
+    return { id: String(ranked[0]!.id), item: ranked[0]! };
   return same.length
-    ? { ok: false, reason: 'ambiguous', message: 'LinkedIn has more than one company of that name.' }
+    ? {
+        ok: false,
+        reason: 'ambiguous',
+        message: 'LinkedIn has more than one company of that name.',
+        // TEMP: which fields a company search result carries (for choosing between namesakes)
+        fields: same
+          .slice(0, 3)
+          .map((c) => ({ keys: Object.keys(c), followers: followers(c), name: c.name })),
+      }
     : { ok: false, reason: 'not_found', message: 'LinkedIn could not find that company.' };
 }
 
