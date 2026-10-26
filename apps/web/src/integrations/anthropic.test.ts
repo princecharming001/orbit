@@ -223,6 +223,8 @@ describe('prompt injection hardening', () => {
     };
     await llmDraft(ctx, template as unknown as DraftOutput);
     const call = calls[0]!;
+    // drafting stays on the writing model
+    expect(call.params.model).toBe('claude-opus-5-5');
     const tag = call.system.match(/<(untrusted_[0-9a-f]{16})>/)?.[1] ?? 'missing';
     expect(call.user).not.toMatch(/trusted, from the student's own data/);
     const rc = call.user.indexOf(`<${tag} source="recipient_context">`);
@@ -319,6 +321,14 @@ describe('daily budget and failures', () => {
     await expect(p).rejects.toMatchObject({ reason: 'auth' });
     expect(readPrefs().lastLlmError?.reason).toBe('auth');
     expect(await testApiKey()).toEqual({ ok: false, error: 'Anthropic rejected this key.' });
+  });
+
+  it('classifies email on the light model', async () => {
+    writePrefs({ llmFeatures: { emailTriage: true } });
+    const calls: Call[] = [];
+    fakeClient(() => ({ parsed_output: NETWORKING }), calls);
+    await llmTriage('a', [{ fromEmail: 'a@b.com', direction: 'inbound', body: 'x' }], 'me@x.edu');
+    expect(calls[0]!.params.model).toBe('claude-haiku-5-5');
   });
 
   it('treats a refusal as a failure the caller falls back from', async () => {

@@ -29,6 +29,8 @@ import {
 import { pauseSharedClaude, sharedClaudeAvailable, sharedClaudeUrl, sharedClientId } from './shared-claude';
 
 export const MODEL = 'claude-opus-5-5';
+/** Background classification and extraction, the same model the server runs these jobs on. */
+export const LIGHT_MODEL = 'claude-haiku-5-5';
 
 /** A key is saved on this device. Whether a given feature may use it is `llmEnabled(feature)`. */
 export function hasLlm(): boolean {
@@ -374,8 +376,9 @@ async function runParse<T extends z.ZodTypeAny>(
   effort: 'low' | 'medium' | 'high',
   maxTokens: number,
   /** `shared`: without a key of their own, the call may go through Orbit's shared access; `quiet`: a failure is not
-   * shown in Settings (a background pass the student did not ask for) */
-  opts: { shared?: SharedCall; quiet?: boolean } = {},
+   * shown in Settings (a background pass the student did not ask for); `model`: the model on the student's own key
+   * (Orbit's shared access only serves the chat model) */
+  opts: { shared?: SharedCall; quiet?: boolean; model?: string } = {},
 ): Promise<z.infer<T> | undefined> {
   // Another tab may have removed the key, turned this feature off or used up today's budget.
   await refreshPrefs();
@@ -403,7 +406,7 @@ async function runParse<T extends z.ZodTypeAny>(
   try {
     reserveRequest();
     const res = await c.messages.parse({
-      model: MODEL,
+      model: own ? (opts.model ?? MODEL) : MODEL,
       max_tokens: maxTokens,
       system: `${system}\n\n${untrustedRule(tag)}`,
       messages: [{ role: 'user', content: buildUser(wrap) }],
@@ -460,6 +463,7 @@ export async function llmTriage(
     schema,
     'low',
     512,
+    { model: LIGHT_MODEL },
   );
   return r
     ? {
@@ -526,6 +530,7 @@ export async function llmSignal(
     schema,
     'low',
     1024,
+    { model: LIGHT_MODEL },
   );
   if (!r) return undefined;
   return {
@@ -757,6 +762,7 @@ export async function llmSummary(
     schema,
     'medium',
     1024,
+    { model: LIGHT_MODEL },
   );
   return r ? { summary: r.summary, talkingPoints: r.talking_points } : undefined;
 }
@@ -820,6 +826,7 @@ export async function llmStyleFeedback(
     schema,
     'low',
     512,
+    { model: LIGHT_MODEL },
   );
   return r
     ? {
@@ -902,7 +909,7 @@ export async function llmExtractMemories(
     schema,
     'low',
     1024,
-    { shared: 'memory', quiet: true },
+    { shared: 'memory', quiet: true, model: LIGHT_MODEL },
   );
 }
 
@@ -911,9 +918,9 @@ export async function testApiKey(): Promise<{ ok: boolean; error?: string }> {
   if (!c) return { ok: false, error: 'No key saved.' };
   try {
     await c.messages.create({
-      model: MODEL,
-      max_tokens: 16,
-      messages: [{ role: 'user', content: 'Reply with the single word: ok' }],
+      model: LIGHT_MODEL,
+      max_tokens: 1,
+      messages: [{ role: 'user', content: 'ok' }],
     });
     writePrefs({ lastLlmError: undefined });
     return { ok: true };
