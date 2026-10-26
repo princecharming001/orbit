@@ -789,7 +789,11 @@ test.describe('Map motion', () => {
     await expect(page.getByTestId('reach-cold-note')).toHaveCount(0);
     await page.goto('settings/integrations');
     await page.getByTestId('ai-reasoning-switch').click();
-    await openMap(page);
+    await expect(page.getByTestId('ai-reasoning-switch')).toHaveAttribute('aria-checked', 'true');
+    // back to the map inside the app: a page load can come before the switch is written to the browser's storage
+    await page.getByTestId('rail').getByRole('link', { name: 'Map' }).click();
+    await expect(mapCanvas(page)).toBeVisible();
+    await mapSettled(page);
     await search(page, 'Felix Garcia');
     await expect(routes.first()).toBeVisible({ timeout: 15_000 });
     // the best route goes through someone the student knows (ranked by the chance the introduction happens)

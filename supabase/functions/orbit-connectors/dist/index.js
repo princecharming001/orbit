@@ -38,7 +38,7 @@ function pageText(html) {
     html.replace(/<(script|style|noscript|svg|template)[\s\S]*?<\/\1>/gi, " ").replace(/<!--[\s\S]*?-->/g, " ").replace(/<(br|\/p|\/div|\/li|\/h\d|\/tr|\/section|\/article)\b[^>]*>/gi, "\n").replace(/<[^>]+>/g, " ")
   ).replace(/[ \t\f\v\r]+/g, " ").replace(/\n\s*/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
 }
-var NO_VALUE = /^[<(\[]?\s*(unknown|n\/?a|none|null|not (stated|specified|listed|given|mentioned))\s*[>)\]]?\.?$/i;
+var NO_VALUE = /^[<([]?\s*(unknown|n\/?a|none|null|not (stated|specified|listed|given|mentioned))\s*[>)\]]?\.?$/i;
 var str = (v) => {
   if (typeof v !== "string" || !v.trim()) return void 0;
   const t = decodeEntities(v.trim()).replace(/\s+/g, " ").slice(0, 200);

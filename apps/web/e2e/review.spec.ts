@@ -73,6 +73,16 @@ test.describe('the weekly review', () => {
     await expect(deck.getByTestId('week-review-next-week')).toContainText(/Next week: \d+ first messages?/);
     await deck.getByTestId('week-review-next').click();
     await expect(deck).toHaveCount(0);
+    // the week is kept as its recap brief once the review is put away
+    await expect
+      .poll(() =>
+        page.evaluate(async () =>
+          (await (window as unknown as Db).__orbitDb.briefs.toArray()).some(
+            (b) => (b as { kind?: string }).kind === 'recap',
+          ),
+        ),
+      )
+      .toBe(true);
     // it does not come back by itself this week, and Drafts keeps it a tap away
     await page.goto('');
     await expect(page.getByTestId('greeting')).toBeVisible();

@@ -76,17 +76,18 @@ test.describe('Chat home', () => {
     expect((await rail.boundingBox())!.width).toBe(248);
     for (const name of ['Collapse sidebar', 'New chat'])
       await expect(rail.getByRole('button', { name })).toBeVisible();
-    for (const name of ['People', 'Drafts', 'Map', 'Discover', 'Settings'])
+    for (const name of ['People', 'Drafts', 'Chats', 'Map', 'Discover', 'Settings'])
       await expect(rail.getByRole('link', { name: new RegExp(`^${name}`) })).toBeVisible();
     for (const name of ['Today', 'Pipeline'])
       await expect(rail.getByRole('link', { name: new RegExp(`^${name}`) })).toHaveCount(0);
     await expect(rail.getByTestId('account-row')).toContainText('Alex Rivera');
-    // in order: People and Drafts above the divider, Map and Discover under it
+    // in order: People, Drafts and Chats above the divider, Map and Discover under it
     const order = await rail
       .getByRole('navigation', { name: 'Main' })
       .getByRole('link')
       .evaluateAll((els) => els.map((e) => e.getAttribute('aria-label')));
-    expect(order).toEqual(['People', 'Drafts', 'Map', 'Discover']);
+    // plan 23 §4.4: Chats sits under Drafts
+    expect(order).toEqual(['People', 'Drafts', 'Chats', 'Map', 'Discover']);
     // the greeting, one line, with the first name
     const greeting = page.getByTestId('greeting');
     await expect(greeting).toHaveText(/^Hey Alex, what’s on your mind today\?$/);

@@ -216,6 +216,25 @@ export async function maybeAutoSend(
   now = new Date(),
   messageId = s.outboundMessageId,
 ): Promise<AutoSendOutcome> {
+  const r = await autoSendOnce(user, s, now, messageId);
+  // the last answer is kept for the ladder's watch (plan 23 §6.5): why a handed-over kind still waited, when it did
+  if (!(r.sent === false && (r.why === 'off' || r.why === 'kind not handed over'))) {
+    const key = `trust:last:${user.id}`;
+    const had = (await db.kv.get(key))?.value;
+    const row = { ...r, at: now.toISOString(), messageId };
+    await db.kv
+      .put({ key, value: [...(Array.isArray(had) ? had : []), row].slice(-10) })
+      .catch(() => undefined);
+  }
+  return r;
+}
+
+async function autoSendOnce(
+  user: User,
+  s: Suggestion,
+  now: Date,
+  messageId: string | undefined,
+): Promise<AutoSendOutcome> {
   const settings = await db.settings.get(user.id);
   if (!settings?.autoKinds?.length || !(await flagOn('trustLadder'))) return { sent: false, why: 'off' };
   const msg = messageId ? await db.outbound.get(messageId) : undefined;

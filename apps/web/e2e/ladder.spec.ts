@@ -62,8 +62,15 @@ test.describe('the trust ladder', () => {
       const db = (window as unknown as Db).__orbitDb;
       const people = await db.people.toArray();
       const withEmail = new Set(people.filter((p) => !!p.primaryEmail).map((p) => p.id));
+      // a card whose draft is a bump (a bump to someone who answered is written as the scheduling reply instead)
+      const drafts = new Map((await db.outbound.toArray()).map((o) => [o.id, o]));
       const s = (await db.suggestions.toArray()).find(
-        (x) => x.kind === 'follow_up_bump' && x.status === 'pending' && withEmail.has(x.personId as string),
+        (x) =>
+          x.kind === 'follow_up_bump' &&
+          x.status === 'pending' &&
+          withEmail.has(x.personId as string) &&
+          drafts.get(x.outboundMessageId as string)?.kind === 'bump' &&
+          drafts.get(x.outboundMessageId as string)?.channel === 'gmail',
       )!;
       if (s.outboundMessageId) await db.outbound.delete(s.outboundMessageId as string);
       await db.suggestions.update(s.id, { outboundMessageId: undefined });
@@ -71,7 +78,8 @@ test.describe('the trust ladder', () => {
       const p = (await db.people.toArray()).find((x) => x.id === s.personId)!;
       return p.firstName as string;
     });
-    await page.reload();
+    // no reload: Drafts sees the card without a draft and writes it at once (a reload would also recompute every
+    // tie score, and this one was set for the test)
     // the card's draft is written as Drafts opens (or with Draft a message): Orbit sends it on its own instead of waiting
     const sent = page.getByTestId('sent-for-you');
     const draftNow = page
@@ -80,7 +88,23 @@ test.describe('the trust ladder', () => {
       .getByTestId('draft-now');
     await expect(sent.or(draftNow).first()).toBeVisible({ timeout: 20_000 });
     if (!(await sent.isVisible())) await draftNow.click({ timeout: 3000 }).catch(() => undefined);
-    await expect(sent).toBeVisible({ timeout: 20_000 });
+    // why a handed-over bump waited, if it did: Orbit keeps its last answer
+    const why = () =>
+      page.evaluate(async () => {
+        const db = (
+          window as unknown as {
+            __orbitDb: { kv: { toArray(): Promise<{ key: string; value: unknown }[]> } };
+          }
+        ).__orbitDb;
+        return JSON.stringify(
+          (await db.kv.toArray()).find((r) => r.key.startsWith('trust:last:'))?.value ?? null,
+        );
+      });
+    await expect(sent, await why())
+      .toBeVisible({ timeout: 20_000 })
+      .catch(async (e) => {
+        throw new Error(`${String(e)}\nlast auto-send answer: ${await why()}`);
+      });
     const row = sent.getByTestId('sent-for-you-row').first();
     await expect(row).toContainText(name);
     await expect(row.getByTestId('sent-for-you-when')).toHaveText(/^(Sending in \d+ s|Goes .+ their time)$/);
