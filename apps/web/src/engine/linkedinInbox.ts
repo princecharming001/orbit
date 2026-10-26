@@ -144,7 +144,7 @@ export async function recordLinkedInMessages(
       )
     )
       await recomputePersonStrength(person.id, now);
-    // and kept, so Orbit shows and answers what they wrote (plan 22)
+    // and kept, so Orbit shows and answers what they wrote (plan 25)
     const { added } = await storeLinkedInChat(
       user,
       person,

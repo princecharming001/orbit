@@ -135,7 +135,7 @@ async function ruleInput(userId: string, now: Date, scope?: { chatId?: string; p
     : scope?.personId
       ? allChats.filter((c) => c.personId === scope.personId)
       : allChats;
-  // a chat's last reply: on its email thread, or on LinkedIn, whichever is newer (plan 22)
+  // a chat's last reply: on its email thread, or on LinkedIn, whichever is newer (plan 25)
   const lastInboundByChat = new Map<string, EmailMessage>();
   const onLinkedIn = await linkedInRepliesByPerson(userId);
   for (const c of chats) {
@@ -1222,7 +1222,7 @@ export async function draftForSuggestion(
 }
 
 /**
- * A message the student typed themselves in a person's Conversation tab (plan 22): a draft of kind `reply` in their
+ * A message the student typed themselves in a person's Messages tab (plan 25): a draft of kind `reply` in their
  * chat, threaded like any reply (an email answers the chat's thread), with the student's words as they are. It goes
  * out through the usual approval (undo window, hand-off when Orbit cannot send it itself).
  */

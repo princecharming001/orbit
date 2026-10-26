@@ -375,7 +375,7 @@ describe('enrichment routes of the connector proxy', () => {
 
   it('needs the account token for a photo too, and shares one profile ledger by priority', async () => {
     const at = new Date('2026-10-22T09:00:00Z');
-    // a ledger of 10: enrichment may fill it to 7, photos to 8, a route the student is looking at to all 10
+    // a ledger of 10: enrichment may fill it to 5, photos to 6, a route the student is looking at to all 10
     const { handler, upstream } = harness({
       ledger: { profile: 10 },
       now: () => at,
@@ -389,7 +389,7 @@ describe('enrichment routes of the connector proxy', () => {
     const company = () => handler(post('/company', { accountId: 'a1', token: TOKEN, identifier: '777' }));
     const route = () =>
       handler(post('/profile', { accountId: 'a1', token: TOKEN, identifier: 'x', purpose: 'route' }));
-    for (let i = 0; i < 6; i++) expect(await (await read()).json()).toMatchObject({ ok: true });
+    for (let i = 0; i < 4; i++) expect(await (await read()).json()).toMatchObject({ ok: true });
     expect(await (await company()).json()).toMatchObject({ ok: true });
     expect(await (await read()).json()).toEqual({
       ok: false,
@@ -401,8 +401,7 @@ describe('enrichment routes of the connector proxy', () => {
     expect(await (await photo()).json()).toMatchObject({ ok: true });
     expect(await (await photo()).json()).toMatchObject({ ok: false, reason: 'limit' });
     expect(await (await photo()).json()).toMatchObject({ ok: false, reason: 'limit' });
-    expect(await (await route()).json()).toMatchObject({ ok: true });
-    expect(await (await route()).json()).toMatchObject({ ok: true });
+    for (let i = 0; i < 4; i++) expect(await (await route()).json()).toMatchObject({ ok: true });
     expect(await (await route()).json()).toMatchObject({ ok: false, reason: 'limit' });
     expect(upstream).toHaveLength(10);
   });

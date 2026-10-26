@@ -3239,7 +3239,7 @@ test.describe('LinkedIn profiles fill in people (plan 17 E)', () => {
 });
 
 test.describe('One inbox (plan 22)', () => {
-  test("a person's Conversation tab shows email and LinkedIn together and answers from Orbit", async ({
+  test("a person's Messages tab shows email and LinkedIn together and answers from Orbit", async ({
     page,
   }) => {
     test.setTimeout(150_000);
@@ -3247,7 +3247,7 @@ test.describe('One inbox (plan 22)', () => {
     await page.goto('people?view=list');
     await page.getByTestId('people-row').filter({ hasText: 'Rhea Iyer' }).getByRole('link').first().click();
     await expect(page.getByRole('heading', { name: 'Rhea Iyer', level: 1 })).toBeVisible();
-    await page.getByRole('tab', { name: /Conversation/ }).click();
+    await page.getByRole('tab', { name: /^Messages/ }).click();
     await expect(page).toHaveURL(/tab=conversation/);
     const conv = page.getByTestId('conversation');
     const messages = conv.getByTestId('conversation-message');

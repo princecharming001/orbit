@@ -115,7 +115,7 @@ export async function lastInboundOf(chat: CoffeeChat | undefined) {
   const msgs = chat.threadId
     ? await db.messages.where('threadId').equals(chat.threadId).sortBy('sentAt')
     : [];
-  // a LinkedIn reply newer than the email thread is their last message (plan 22)
+  // a LinkedIn reply newer than the email thread is their last message (plan 25)
   const reply = await latestReply(chat);
   const m = newer(
     [...msgs].reverse().find((x) => x.direction === 'inbound'),

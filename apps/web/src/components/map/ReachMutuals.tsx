@@ -199,6 +199,8 @@ export function ReachMutuals({
         'reach-mutuals-no-profile',
       );
     if (result.reason === 'unconfigured') return note(result.message, 'reach-mutuals-unconfigured');
+    // today's reads are used up: when they come back, and no Try again that cannot work
+    if (result.reason === 'limit') return note(result.message, 'reach-mutuals-limit');
     return note(
       `${result.message} `,
       'reach-mutuals-error',

@@ -1,5 +1,5 @@
 /**
- * A person's Conversation tab (plan 22): every message with them, oldest first, whatever it went through (Gmail,
+ * A person's Messages tab (plan 25): every message with them, oldest first, whatever it went through (Gmail,
  * LinkedIn, the texts Orbit imported), each marked by channel, and a box at the bottom to answer on the channel picked
  * without leaving Orbit. "Check now" reads Gmail and LinkedIn this second.
  */

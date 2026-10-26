@@ -135,7 +135,7 @@ export const PREVIEW_SECTIONS = ['experience_preview', 'education_preview'];
 /**
  * A person's LinkedIn profile, by their member id or public profile name. `recommendations` also reads who
  * recommended them and whom they recommended; `purpose: 'route'` marks a read for a route the student is looking at,
- * which may use the whole day's profile reads (enrichment stops at 70% of them). `shared` says only what anyone on
+ * which may use the whole day's profile reads (enrichment stops at half of them). `shared` says only what anyone on
  * LinkedIn would see is needed, so a copy another student's account read today will do (no contact, no distance).
  */
 export async function linkedInProfile(

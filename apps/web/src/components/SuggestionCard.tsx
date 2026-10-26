@@ -76,8 +76,10 @@ export function SuggestionCard({
   );
   const person = personRow ?? undefined;
   const draft = draftRow ?? undefined;
-  // a message card with no draft yet writes its own at once (the one being read is never stuck behind the others)
+  // the card open in Drafts' reading pane writes its own draft at once, so it is never stuck behind the others (the
+  // Drafts page drafts the rest; cards elsewhere keep their Draft button)
   const autoDraft =
+    !!defaultOpen &&
     s.status === 'pending' &&
     !s.outboundMessageId &&
     s.kind !== 'new_outreach' &&
@@ -108,7 +110,7 @@ export function SuggestionCard({
     ) ?? false;
   const other = useOther(s.payload.otherPersonId as string | undefined);
   const introducer = useOther(s.payload.introducerId as string | undefined);
-  // the message the card is about: the reply it answers, or what made Orbit think the stage changed (plan 22)
+  // the message the card is about: the reply it answers, or what made Orbit think the stage changed (plan 25)
   const evidence = useLiveQuery(
     () => quotedMessageFor(s),
     [s.kind, s.payload.stageEventId, s.payload.messageId, s.payload.inReplyTo],

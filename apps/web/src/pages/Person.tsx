@@ -253,7 +253,7 @@ export function PersonPage() {
         .toArray();
     }, [user?.id]) ?? [];
   const chat = chats.find((c) => !['archived'].includes(c.stage)) ?? chats[0];
-  // how many messages the Conversation tab holds (plan 22)
+  // how many messages the Messages tab holds (plan 25)
   const messageCount =
     useLiveQuery(
       async () => (user && id ? (await conversationWith(user.id, id)).length : 0),
@@ -909,7 +909,7 @@ export function PersonPage() {
             onChange={(v) => setParams({ tab: v })}
             items={[
               { value: 'timeline', label: 'Timeline', count: timeline.length },
-              { value: 'conversation', label: 'Conversation', count: messageCount || undefined },
+              { value: 'conversation', label: 'Messages', count: messageCount || undefined },
               { value: 'facts', label: 'About', count: facts.length || undefined },
               { value: 'connections', label: 'Who they know', count: neighbours.filter(Boolean).length },
             ]}

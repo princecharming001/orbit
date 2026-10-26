@@ -330,7 +330,8 @@ export function Tabs<T extends string>({
             <span
               className={cx(
                 'ml-1 sm:ml-1.5 text-[12px] tabular',
-                value === it.value ? 'text-white/70' : 'text-ink-3',
+                // on a phone only the open tab shows its count, so the tabs keep to one row
+                value === it.value ? 'text-white/70' : 'text-ink-3 hidden sm:inline',
               )}
             >
               {it.count}

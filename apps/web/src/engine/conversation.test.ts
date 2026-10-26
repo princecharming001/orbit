@@ -120,7 +120,7 @@ const stranger = {
   counterpart: { providerId: 'ACo_x', name: 'Sam Recruiter' },
 };
 
-describe('one inbox (plan 22)', () => {
+describe('one inbox (plan 25)', () => {
   beforeEach(async () => {
     await wipeDatabase();
     setOrbitApiBaseForTests(null);

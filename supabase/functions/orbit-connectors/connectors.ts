@@ -27,8 +27,10 @@
  * (ORBIT_LINKEDIN_POST_READS_PER_DAY, 100) and `search` (ORBIT_LINKEDIN_SEARCH_CALLS_PER_DAY, 100 calls, about 1,000
  * result rows). Within a ledger each kind of caller may fill it only up to its own ceiling, so what matters most is
  * never starved by what matters less (LEDGER_CEILINGS): a profile read for a route the student is looking at (the
- * target in /mutuals, /profile with purpose "route") up to 100%, /photo 80%, enrichment /profile and /company 70%;
- * /engagement 100% and /posts/activity 85% (one unit per LinkedIn read); /mutuals pages 100% and Discover's /search 80%.
+ * target in /mutuals, /profile with purpose "route") up to 100%, /photo 60%, enrichment /profile and /company 50%;
+ * /engagement 100% and /posts/activity 85% (one unit per LinkedIn read); /mutuals pages 100% and Discover's /search 70%.
+ * Background work (enrichment, photos, Discover) stops early on purpose: at least 40 profile reads and 30 searches a day
+ * stay for what the student opens, so "who knows them" is never refused because the network was being filled in.
  * /ledger reports the day's use without counting anything. Sends keep their own bucket.
  *
  * A route whose provider key is not set returns 503 with x-orbit-connector: unconfigured, so the app shows the
@@ -292,13 +294,13 @@ export const DEFAULT_LEDGER: LedgerTotals = { profile: 100, posts: 100, search: 
 
 /**
  * How far into a ledger each kind of caller may go, as a share of the day's total. The same ledger key is taken with
- * a lower limit for what matters less, so once enrichment has spent 70 profile reads it stops, while a route the
+ * a lower limit for what matters less, so once enrichment has spent 50 profile reads it stops, while a route the
  * student is looking at can still read up to the full 100.
  */
 export const LEDGER_CEILINGS = {
-  profile: { route: 1, photo: 0.8, enrich: 0.7 },
+  profile: { route: 1, photo: 0.6, enrich: 0.5 },
   posts: { engagement: 1, activity: 0.85 },
-  search: { mutuals: 1, discover: 0.8, logos: 0.6 },
+  search: { mutuals: 1, discover: 0.7, logos: 0.5 },
 } as const;
 
 export type LedgerCaller<K extends LedgerKind = LedgerKind> = keyof (typeof LEDGER_CEILINGS)[K];

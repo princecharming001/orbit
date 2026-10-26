@@ -1,5 +1,5 @@
 /**
- * One conversation per person, whatever it went through (plan 22). LinkedIn 1:1 messages are kept as message rows
+ * One conversation per person, whatever it went through (plan 25). LinkedIn 1:1 messages are kept as message rows
  * like email: a thread per LinkedIn chat (`channel: 'linkedin'`, `linkedin:<chat id>`) and a row per message
  * (`linkedin:<message id>`), written idempotently by the reply reader (engine/linkedinInbox.ts) and the history reader
  * (engine/linkedinActivity.ts), only for people Orbit has (by member id). Inbound messages are read like email
@@ -8,7 +8,7 @@
  *
  * `latestReply` is the newest answer from someone across their chat's email thread and their LinkedIn chats, which
  * is what the cards and drafts answer; `conversationWith` is every message with them, Gmail, LinkedIn and the recent
- * iMessage texts, for the Conversation tab and the chat.
+ * iMessage texts, for the Messages tab and the chat.
  */
 import type { CoffeeChat, EmailMessage, EmailThread, Person, Suggestion, User } from '@orbit/core';
 import { heuristicSignal, newId } from '@orbit/core';

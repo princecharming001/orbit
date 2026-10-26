@@ -753,7 +753,7 @@ export const getPerson = defineTool({
         .map((t) => ({ ...t, when: fmtWhen(t.at, ctx) }));
       out.timeline = tl;
     }
-    // the messages themselves, every channel Orbit reads (plan 22); texts stay counts only, never what was said
+    // the messages themselves, every channel Orbit reads (plan 25); texts stay counts only, never what was said
     if (want.has('conversation'))
       out.conversation = (await conversationWith(ctx.user.id, person.id))
         .filter((m) => m.channel !== 'text')

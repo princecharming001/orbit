@@ -227,7 +227,7 @@ export async function syncLinkedInActivity(
       const person = byMember.get(chat.memberId);
       if (!person) continue;
       if (await recordDmTouches(user.id, person, chat.messages)) touched.add(person.id);
-      // the messages themselves, for the person's Conversation tab and the cards (plan 22)
+      // the messages themselves, for the person's Messages tab and the cards (plan 25)
       await storeLinkedInChat(user, person, chat.chatId, chat.messages, now);
     }
     latest = later(latest, r.value.latest);

@@ -762,9 +762,9 @@ function sendBucket(accountId, now, perDay) {
 }
 var DEFAULT_LEDGER = { profile: 100, posts: 100, search: 100 };
 var LEDGER_CEILINGS = {
-  profile: { route: 1, photo: 0.8, enrich: 0.7 },
+  profile: { route: 1, photo: 0.6, enrich: 0.5 },
   posts: { engagement: 1, activity: 0.85 },
-  search: { mutuals: 1, discover: 0.8, logos: 0.6 }
+  search: { mutuals: 1, discover: 0.7, logos: 0.5 }
 };
 function ledgerLimit(kind, caller, total) {
   const share = LEDGER_CEILINGS[kind][caller] ?? 0;

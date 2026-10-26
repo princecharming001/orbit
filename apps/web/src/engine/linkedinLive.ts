@@ -33,6 +33,7 @@ import {
   linkedInMe,
   type Mutual,
   mutualConnections,
+  SEARCH_LIMIT_STATUS,
   sendLinkedInMessage,
   startLinkedInConnect,
   unipileConfigured,
@@ -594,7 +595,7 @@ export type MutualsResult =
   | { ok: true; source: 'linkedin' | 'demo'; mutuals: MutualView[] }
   | {
       ok: false;
-      reason: 'not_connected' | 'no_member_id' | 'unconfigured' | 'error';
+      reason: 'not_connected' | 'no_member_id' | 'unconfigured' | 'limit' | 'error';
       message: string;
       mutuals: [];
     };
@@ -602,6 +603,17 @@ export type MutualsResult =
 /** LinkedIn's answer for a target, kept a day in db.kv under this prefix (plus user and person ids). */
 // v3: answers saved before 2026-10-25 were never checked against LinkedIn's shared-connections count
 export const MUTUALS_KV = 'mutuals3:';
+
+/**
+ * Today's LinkedIn reads are used up: when they come back, in the student's own time. The ledgers turn over at
+ * midnight UTC ("5:00 PM" on the US west coast, "tomorrow at 1:00 AM" in London in summer).
+ */
+export function readsBackAt(now: Date): string {
+  const back = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
+  const time = back.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  const sameDay = back.toDateString() === now.toDateString();
+  return `Orbit has used today's LinkedIn reads, to keep your account safe. It carries on ${sameDay ? 'at' : 'tomorrow at'} ${time}.`;
+}
 
 /**
  * How long Orbit waits for LinkedIn's mutuals answer. It is several reads in a row on the server (their profile for
@@ -688,6 +700,8 @@ export async function mutualsFor(
     return { ok: true, source: 'linkedin', mutuals: kept.mutuals.map(resolve) };
   // not tied to this caller's signal: another panel may be waiting on the same read, and the answer is kept a day
   const r = await askMutualsOnce(row.externalAccountId!, person.linkedinMemberId, row.accessToken);
+  if (!r.ok && r.status === SEARCH_LIMIT_STATUS)
+    return { ok: false, reason: 'limit', message: readsBackAt(opts.now ?? new Date()), mutuals: [] };
   if (!r.ok)
     return {
       ok: false,

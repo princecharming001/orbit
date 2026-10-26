@@ -1543,7 +1543,7 @@ describe('orbit-connectors proxy', () => {
       });
     });
 
-    it('stops Discover at 80% of the search ledger while mutual connections can still page', async () => {
+    it('stops Discover at 70% of the search ledger while mutual connections can still page', async () => {
       const { handler } = harness(
         { now: () => AT, take: memoryTake(() => AT.getTime()), ledger: { search: 5 } },
         (url, init) =>
@@ -1562,7 +1562,7 @@ describe('orbit-connectors proxy', () => {
       expect(await ledger(handler)).toMatchObject({ search: { used: 5, limit: 5 } });
     });
 
-    it('refuses /mutuals before reading anything once route profile reads are spent, but not photos at 80%', async () => {
+    it('refuses /mutuals before reading anything once route profile reads are spent, but not photos at 60%', async () => {
       const { handler, upstream } = harness(
         { now: () => AT, take: memoryTake(() => AT.getTime()), ledger: { profile: 5 } },
         (url, init) =>
@@ -1571,9 +1571,10 @@ describe('orbit-connectors proxy', () => {
             : twoPages(url, init),
       );
       const photo = () => handler(post('/photo', { accountId: 'a1', token: TOKEN.a1, identifier: 'x' }));
-      for (let i = 0; i < 4; i++) expect(await (await photo()).json()).toMatchObject({ ok: true });
-      // photos stop at round(80% of 5) = 4, the route read still gets the fifth
+      for (let i = 0; i < 3; i++) expect(await (await photo()).json()).toMatchObject({ ok: true });
+      // photos stop at round(60% of 5) = 3, the route reads still get the rest
       expect(await (await photo()).json()).toMatchObject({ ok: false, reason: 'limit' });
+      expect(await mutuals(handler)).toMatchObject({ verified: true });
       expect(await mutuals(handler)).toMatchObject({ verified: true });
       const before = upstream.length;
       expect(await mutuals(handler)).toMatchObject({ ok: false, reason: 'limit' });

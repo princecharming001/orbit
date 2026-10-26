@@ -15,6 +15,7 @@ import {
   liveLinkedInAvailable,
   MUTUALS_TIMEOUT_MS,
   mutualsFor,
+  readsBackAt,
   resumeLinkedInConnect,
   setLivePollForTests,
   setMutualsTimeoutForTests,
@@ -408,6 +409,24 @@ describe('mutual connections', () => {
     } finally {
       setMutualsTimeoutForTests(undefined);
     }
+  });
+
+  it("today's reads used up: says when they come back, as a limit, not an error to retry", async () => {
+    await connectLinkedInLive(user);
+    const daniel = (await people()).find((p) => p.firstName === 'Daniel')!;
+    routes['/mutuals'] = {
+      body: {
+        ok: false,
+        reason: 'limit',
+        message: 'Orbit has read as much from LinkedIn as it allows today.',
+      },
+    };
+    const r = await mutualsFor(user, daniel, { now: new Date('2026-10-26T20:00:00Z') });
+    expect(r).toMatchObject({ ok: false, reason: 'limit' });
+    expect(r.ok ? '' : r.message).toMatch(
+      /^Orbit has used today's LinkedIn reads, to keep your account safe\. It carries on (tomorrow )?at \d{1,2}:\d{2} [AP]M\.$/,
+    );
+    expect(readsBackAt(new Date('2026-10-26T20:00:00Z'))).not.toMatch(/[–—]/);
   });
 
   it('needs a live connection and the member id from it, then names who Orbit knows', async () => {
