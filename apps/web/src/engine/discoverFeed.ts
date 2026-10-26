@@ -6,8 +6,9 @@
  *
  * Nobody is added to Orbit until the student acts on a card (save, warm up, write, ask for an intro). People already
  * in Orbit (by LinkedIn member id, profile link, or name and company), the student themself, and people the student
- * turned down never come back. LinkedIn searches are rationed: Orbit's proxy allows 40 a day per account (chat and
- * the Map search too), and Discover uses at most DISCOVER_SEARCHES_PER_DAY of them; when either runs out the feed
+ * turned down never come back. LinkedIn searches are rationed: Orbit's proxy allows 100 search calls a day per
+ * account and lets Discover's searches fill at most 70 of them (orbit-connectors LEDGER_CEILINGS, shared with chat
+ * and the Map search), and Discover itself runs at most DISCOVER_SEARCHES_PER_DAY; when either runs out the feed
  * says "more tomorrow".
  */
 import type {
@@ -59,7 +60,7 @@ import {
 import { introducerIdFor, isColdRecommendation, loadDiscoverSignals, waitingOnThem } from './recommend';
 import { currentResumeFacets } from './resume';
 
-/** LinkedIn searches Discover may run per account per day (the proxy allows 40 for everything). */
+/** LinkedIn searches Discover may run per account per day, well inside the proxy's 70 for Discover (of 100). */
 export const DISCOVER_SEARCHES_PER_DAY = 15;
 /** One "load more" runs at most this many searches, and stops once it has this many new people. */
 const MAX_CALLS_PER_LOAD = 4;

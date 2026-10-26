@@ -12,6 +12,7 @@ import {
   photoOrder,
   refreshOnePhoto,
   resetPhotoQueueForTests,
+  setPhotoJitterForTests,
   wantsPhoto,
 } from './photoQueue';
 import { photoBroken, photoWanted, resetPhotoSignalsForTests } from './photoSignals';
@@ -63,6 +64,8 @@ beforeEach(async () => {
   setConnectorsMockForTests(false);
   setConnectorModeForTests('live');
   resetPhotoQueueForTests();
+  // the shortest gap; the random part has its own test
+  setPhotoJitterForTests(() => 0);
   resetPhotoSignalsForTests();
   calls = [];
   answers = {};
@@ -201,6 +204,34 @@ describe('the photo queue', () => {
     // a new day starts afresh
     expect((await refreshOnePhoto(user, { now: at(86_400_000) })).step).toBe('asked');
   }, 30_000);
+
+  it('spaces calls at random, never closer than the steady pace', async () => {
+    await db.people.bulkPut(
+      Array.from({ length: 3 }, (_, i) =>
+        person({ id: `p${i}`, firstName: 'P', lastName: `N${i}`, linkedinMemberId: `m${i}` }),
+      ),
+    );
+    setPhotoJitterForTests(() => 0.5);
+    expect((await refreshOnePhoto(user, { now: at(0) })).step).toBe('asked');
+    expect((await refreshOnePhoto(user, { now: at(1.5 * GAP - 1) })).step).toBe('wait');
+    expect((await refreshOnePhoto(user, { now: at(1.5 * GAP) })).step).toBe('asked');
+  });
+
+  it('leaves alone someone whose profile enrichment read in the last 45 days', async () => {
+    await db.people.bulkPut([
+      person({ id: 'p_read', firstName: 'Re', lastName: 'Ad', linkedinMemberId: 'm_read' }),
+      person({ id: 'p_stale', firstName: 'St', lastName: 'Ale', linkedinMemberId: 'm_stale' }),
+    ]);
+    const rec = (personId: string, profileAt: string) =>
+      db.kv.put({
+        key: `enrich:rec:${personId}`,
+        value: { userId: user.id, personId, fields: {}, profileAt },
+      });
+    await rec('p_read', new Date(at(0).getTime() - 44 * 86_400_000).toISOString());
+    await rec('p_stale', new Date(at(0).getTime() - 46 * 86_400_000).toISOString());
+    expect(await refreshOnePhoto(user, { now: at(0) })).toEqual({ step: 'asked', personId: 'p_stale' });
+    expect(await refreshOnePhoto(user, { now: at(GAP) })).toEqual({ step: 'idle' });
+  });
 
   it('fetches a fresh link for an expired LinkedIn photo, and clears a dead one LinkedIn no longer has', async () => {
     await db.people.bulkPut([

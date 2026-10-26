@@ -23,12 +23,19 @@ import { linkedInPaused, pauseLinkedIn, readBudget } from './enrichment/store';
 import { liveLinkedInAccount } from './linkedinLive';
 import { upsertOrganization } from './people';
 
-/** Calls a minute, evenly spaced (each is a LinkedIn search and a company page). */
+/** Calls a minute at most (each is a LinkedIn search and a company page): each gap is this share of a minute plus up
+ * to as much again, at random. */
 export const LOGOS_PER_MINUTE = 3;
 export const LOGOS_PER_DAY = 30;
 /** A company LinkedIn could not pin down is asked about again after this long. */
 export const LOGO_RETRY_MS = 14 * 86_400_000;
 const GAP_MS = 60_000 / LOGOS_PER_MINUTE;
+
+let jitter = () => Math.random();
+/** Unit-test hook: the random share of each gap (0 to 1). */
+export function setLogoJitterForTests(fn: (() => number) | undefined): void {
+  jitter = fn ?? (() => Math.random());
+}
 
 /** Company names shown without a LinkedIn logo, with when they were last shown. */
 const wanted = new Map<string, { name: string; at: number }>();
@@ -68,7 +75,7 @@ export async function companySourceFor(user: Pick<User, 'id'>): Promise<CompanyS
 type Tried = Record<string, string>;
 const triedKey = (userId: string) => `logos:tried:${userId}`;
 const dayKey = (userId: string) => `logos:day:${userId}`;
-const lastCall = new Map<string, number>();
+const nextCall = new Map<string, number>();
 
 export type LogoStep = 'asked' | 'idle' | 'wait' | 'paused' | 'off';
 
@@ -80,7 +87,7 @@ export async function fetchOneLogo(
   const now = opts.now ?? new Date();
   const source = opts.source ?? (await companySourceFor(user));
   if (!source) return { step: 'off' };
-  if (now.getTime() - (lastCall.get(user.id) ?? 0) < GAP_MS) return { step: 'wait' };
+  if (now.getTime() < (nextCall.get(user.id) ?? 0)) return { step: 'wait' };
   if (linkedInPaused(await readBudget(user.id, now), now)) return { step: 'paused' };
   const day = now.toISOString().slice(0, 10);
   const v = (await db.kv.get(dayKey(user.id)))?.value as { day?: string; used?: number } | undefined;
@@ -101,7 +108,7 @@ export async function fetchOneLogo(
   if (!next) return { step: 'idle' };
   const [key, { name }] = next;
   wanted.delete(key);
-  lastCall.set(user.id, now.getTime());
+  nextCall.set(user.id, now.getTime() + GAP_MS * (1 + jitter()));
   tried[key] = now.toISOString();
   await db.kv.put({ key: triedKey(user.id), value: tried });
   await db.kv.put({ key: dayKey(user.id), value: { day, used: used + 1 } });
@@ -135,7 +142,7 @@ export function setLogoQueueAutoRunForTests(on: boolean): void {
 
 export function resetLogoQueueForTests(): void {
   wanted.clear();
-  lastCall.clear();
+  nextCall.clear();
 }
 
 /** Run the queue while the app is open (a tick when a tile asks, every few seconds while names wait). */
@@ -158,13 +165,14 @@ export function startLogoQueue(user: Pick<User, 'id'>): () => void {
       busy = false;
       if (r.step === 'asked') startActivity('logos', 'Fetching company logos', { quiet: true });
       else if (r.step !== 'wait') endActivity('logos');
-      wait = r.step === 'asked' || r.step === 'wait' ? GAP_MS : r.step === 'idle' ? 60_000 : 10 * 60_000;
+      const gap = Math.max(500, (nextCall.get(user.id) ?? 0) - Date.now());
+      wait = r.step === 'asked' || r.step === 'wait' ? gap : r.step === 'idle' ? 60_000 : 10 * 60_000;
     }
     if (!stopped) schedule(wait);
   };
   const onWant = () => {
     if (stopped || busy) return;
-    schedule(Math.max(500, (lastCall.get(user.id) ?? 0) + GAP_MS - Date.now()));
+    schedule(Math.max(500, (nextCall.get(user.id) ?? 0) - Date.now()));
   };
   listeners.add(onWant);
   schedule(4000);

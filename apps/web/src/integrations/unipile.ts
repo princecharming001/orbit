@@ -190,18 +190,23 @@ const MAX_PAGES = 200;
 /** Pull every connection for a connected account, mapped to the CSV import shape. Pages until done. */
 export async function linkedInConnections(
   accountId: string,
-  opts: CallOpts & { onProgress?: (count: number) => void } = {},
+  opts: CallOpts & {
+    onProgress?: (count: number) => void;
+    /** a connection already stored: LinkedIn lists the newest first, so the pull ends with the page that has one */
+    known?: (c: LiveConnection) => boolean;
+  } = {},
 ): Promise<ConnectorOutcome<LiveConnection[]>> {
   const out: LiveConnection[] = [];
   let cursor: string | null | undefined;
   let pages = 0;
+  let reached = false;
   do {
     const r = await call<RelationsResponse>('/relations', { accountId, token: opts.token, cursor }, opts);
     if (!r.ok) return r;
     for (const it of r.value.items ?? []) {
       const name = `${it.first_name ?? ''} ${it.last_name ?? ''}`.trim();
       if (!name) continue;
-      out.push({
+      const c: LiveConnection = {
         firstName: it.first_name ?? name.split(' ')[0] ?? '',
         lastName: it.last_name ?? name.split(' ').slice(1).join(' '),
         position: it.position ?? it.headline,
@@ -210,12 +215,14 @@ export async function linkedInConnections(
         connectedOn: connectedDay(it.connected_at),
         memberId: it.member_id,
         photoUrl: it.picture_url,
-      });
+      };
+      out.push(c);
+      if (opts.known?.(c)) reached = true;
     }
     opts.onProgress?.(out.length);
     cursor = r.value.cursor ?? undefined;
     pages++;
-  } while (cursor && pages < MAX_PAGES);
+  } while (cursor && !reached && pages < MAX_PAGES);
   return { ok: true, value: out };
 }
 

@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { loadDemo, openDrafts } from './helpers';
 
 /**
- * Plan 18: cards move on their own. The reply check runs when the app opens, every few minutes and on "Check now";
+ * Plan 18: cards move on their own. The reply check runs when the app opens, about every ten minutes and on "Check now";
  * the board and Drafts say when it last ran. The sample student has no inbox to read, so the clock rules are what
  * can be seen here: a booked chat whose meeting ended is finished, with the thank-you ready in Drafts.
  */
@@ -95,8 +95,11 @@ test.describe('Automatic stages', () => {
     // (the words are refreshed every half minute)
     await page.clock.runFor(150_000);
     await expect(line).toContainText('Checked for replies 2 min ago');
-    // the timer checks again on its own a few minutes later, and nothing moves twice
-    await page.clock.runFor(90_000);
+    // the timer checks again on its own within 7 to 13 minutes, and nothing moves twice
+    for (let i = 0; i < 14; i++) {
+      await page.clock.runFor(60_000);
+      if (/Checked for replies (just now|1 min ago)/.test((await line.textContent()) ?? '')) break;
+    }
     await expect(line).toContainText(/Checked for replies (just now|1 min ago)/);
     await expect(page.getByTestId('chat-card-completed').filter({ hasText: name })).toHaveCount(1);
 

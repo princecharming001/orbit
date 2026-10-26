@@ -647,6 +647,26 @@ describe('an opened page reads their whole work history', () => {
   });
 });
 
+describe('one read serves the route evidence too', () => {
+  it('asks for recommendations with the sections and keeps followers and recommendations', async () => {
+    await db.people.put(person({ id: 'fr', firstName: 'F', lastName: 'R', linkedinMemberId: 'm_fr' }));
+    profiles.m_fr = {
+      body: profile({
+        followerCount: 812,
+        recommendations: [{ direction: 'received', actorId: 'm_x', actorName: 'X Y', year: 2024 }],
+      }),
+    };
+    await run({ only: ['fr'] });
+    const call = calls.find((c) => c.path === '/profile')!;
+    expect(call.body.recommendations).toBe(true);
+    const fr = (await db.people.get('fr'))!;
+    expect(fr.linkedinFollowers).toBe(812);
+    expect(fr.linkedinRecommendations).toEqual([
+      { direction: 'received', actorMemberId: 'm_x', actorName: 'X Y', year: 2024 },
+    ]);
+  });
+});
+
 describe('education is the evidence for where someone studied', () => {
   it('turns the education section into affiliations that studiedAt reads', async () => {
     await db.people.put(

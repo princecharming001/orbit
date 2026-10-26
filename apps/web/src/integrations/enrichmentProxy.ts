@@ -59,6 +59,17 @@ export interface LinkedInProfile {
   recommendations?: LinkedInRecommendation[];
 }
 
+/** Recommendations as a person keeps them (Person.linkedinRecommendations). */
+export function personRecommendations(list: LinkedInRecommendation[]) {
+  return list.map((x) => ({
+    direction: x.direction,
+    actorMemberId: x.actorId,
+    ...(x.actorName ? { actorName: x.actorName } : {}),
+    ...(x.year ? { year: x.year } : {}),
+    ...(x.caption ? { caption: x.caption } : {}),
+  }));
+}
+
 /** One LinkedIn recommendation on a profile: who and when, never what was written. */
 export interface LinkedInRecommendation {
   /** received: the other person recommended them; given: they recommended the other person */

@@ -3,7 +3,8 @@
  * most people outside the student's network, an export or a typed-in profile link gives none at all, and the links
  * LinkedIn does give expire after a few weeks. So everyone with a LinkedIn profile (a member id, a public name or a
  * link) and no working photo is asked about through the connector (/photo: the plain profile, no sections), people
- * on screen first, then the newest. A few calls a minute, a bounded number a day, each person at most once a week
+ * on screen first, then the newest, and no one whose profile enrichment read in the last 45 days (that read
+ * brought the photo). A few calls a minute at random spacing, a bounded number a day, each person at most once a week
  * whether it found one or not, and nothing while LinkedIn has asked Orbit to slow down (the pause enrichment keeps).
  * Someone without LinkedIn has nothing to fetch here: their Gravatar (engine/enrichment) or their initials stay.
  * The sample student's photos come from the mock connector.
@@ -16,17 +17,25 @@ import { type EnrichOutcome, type LinkedInPhoto, linkedInPhoto } from '../integr
 import { isServerUser } from '../integrations/orbitApi';
 import { unipileConfigured } from '../integrations/unipile';
 import { endActivity, startActivity } from './activity';
-import { linkedInPaused, pauseLinkedIn, readBudget } from './enrichment/store';
+import { allRecords, linkedInPaused, pauseLinkedIn, readBudget } from './enrichment/store';
 import { liveLinkedInAccount } from './linkedinLive';
 import { brokenPhoto, onScreenRank, subscribePhotoSignals } from './photoSignals';
 import { freshPhoto, isGravatarPhoto, isLinkedInPhoto, linkedInImageExpired } from './photos';
 
-/** Calls a minute, evenly spaced. */
+/** Calls a minute at most: each gap is this share of a minute plus up to as much again, at random. */
 export const PHOTOS_PER_MINUTE = 4;
-export const PHOTOS_PER_DAY = 80;
+export const PHOTOS_PER_DAY = 20;
 /** A person asked about (found or not) is not asked about again sooner than this. */
 export const PHOTO_RETRY_MS = 7 * 86_400_000;
+/** Someone whose profile enrichment read this recently already has the photo that read brought. */
+export const PROFILE_READ_FRESH_MS = 45 * 86_400_000;
 const GAP_MS = 60_000 / PHOTOS_PER_MINUTE;
+
+let jitter = () => Math.random();
+/** Unit-test hook: the random share of each gap (0 to 1). */
+export function setPhotoJitterForTests(fn: (() => number) | undefined): void {
+  jitter = fn ?? (() => Math.random());
+}
 
 type Identified = Pick<Person, 'linkedinMemberId' | 'linkedinSlug' | 'linkedinUrl'>;
 
@@ -99,8 +108,8 @@ async function readUsed(userId: string, day: string): Promise<number> {
   return v?.day === day ? (v.used ?? 0) : 0;
 }
 
-/** When the last call went out, per student: the spacing holds across ticks and across callers. */
-const lastCall = new Map<string, number>();
+/** When the next call may go out, per student: the spacing holds across ticks and across callers. */
+const nextCall = new Map<string, number>();
 
 /**
  * What one tick did: `asked` one person about, `idle` nobody is waiting, `wait` the last call was too recent,
@@ -116,18 +125,26 @@ export async function refreshOnePhoto(
   const now = opts.now ?? new Date();
   const source = opts.source ?? (await photoSourceFor(user));
   if (!source) return { step: 'off' };
-  if (now.getTime() - (lastCall.get(user.id) ?? 0) < GAP_MS) return { step: 'wait' };
+  if (now.getTime() < (nextCall.get(user.id) ?? 0)) return { step: 'wait' };
   if (linkedInPaused(await readBudget(user.id, now), now)) return { step: 'paused' };
   const day = now.toISOString().slice(0, 10);
   const used = await readUsed(user.id, day);
   if (used >= PHOTOS_PER_DAY) return { step: 'paused' };
   const tried = await readTried(user.id);
+  const records = await allRecords(user.id);
+  const readRecently = (id: string) => {
+    const at = records.get(id)?.profileAt;
+    return !!at && now.getTime() - Date.parse(at) < PROFILE_READ_FRESH_MS;
+  };
   const due = (await db.people.where('userId').equals(user.id).toArray()).filter(
-    (p) => wantsPhoto(p, now) && now.getTime() - Date.parse(tried[p.id] ?? '1970-01-01') > PHOTO_RETRY_MS,
+    (p) =>
+      wantsPhoto(p, now) &&
+      now.getTime() - Date.parse(tried[p.id] ?? '1970-01-01') > PHOTO_RETRY_MS &&
+      !readRecently(p.id),
   );
   const [p] = photoOrder(due, onScreenRank());
   if (!p) return { step: 'idle' };
-  lastCall.set(user.id, now.getTime());
+  nextCall.set(user.id, now.getTime() + GAP_MS * (1 + jitter()));
   tried[p.id] = now.toISOString();
   await db.kv.put({ key: triedKey(user.id), value: tried });
   await db.kv.put({ key: dayKey(user.id), value: { day, used: used + 1 } });
@@ -175,7 +192,7 @@ export function setPhotoQueueAutoRunForTests(on: boolean): void {
 }
 
 export function resetPhotoQueueForTests(): void {
-  lastCall.clear();
+  nextCall.clear();
 }
 
 /**
@@ -208,13 +225,14 @@ export function startPhotoQueue(user: Pick<User, 'id'>): () => void {
       // the status line says photos are coming while the queue asks, and nothing once it rests
       if (r.step === 'asked') startActivity('photos', 'Fetching profile photos', { quiet: true });
       else if (r.step !== 'wait') endActivity('photos');
-      wait = r.step === 'asked' || r.step === 'wait' ? GAP_MS : r.step === 'idle' ? 60_000 : 10 * 60_000;
+      const gap = Math.max(500, (nextCall.get(user.id) ?? 0) - Date.now());
+      wait = r.step === 'asked' || r.step === 'wait' ? gap : r.step === 'idle' ? 60_000 : 10 * 60_000;
     }
     if (!stopped) schedule(wait);
   };
   const unsubscribe = subscribePhotoSignals(() => {
     if (stopped || busy) return;
-    schedule(Math.max(500, (lastCall.get(user.id) ?? 0) + GAP_MS - Date.now()));
+    schedule(Math.max(500, (nextCall.get(user.id) ?? 0) - Date.now()));
   });
   schedule(3000);
   return () => {

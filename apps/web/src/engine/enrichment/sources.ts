@@ -25,11 +25,12 @@ import { liveLinkedInAccount } from '../linkedinLive';
 
 export interface LinkedInSource {
   kind: 'live' | 'mock';
-  /** `shared`: only what anyone would see is needed, so a copy another student's account read today will do */
+  /** `shared`: only what anyone would see is needed, so a copy another student's account read today will do;
+   * `recommendations`: also who recommended them, in the same read */
   profile(
     identifier: string,
     sections: string[],
-    opts?: { shared?: boolean },
+    opts?: { shared?: boolean; recommendations?: boolean },
   ): Promise<EnrichOutcome<LinkedInProfile>>;
   company(identifier: string): Promise<EnrichOutcome<LinkedInCompany>>;
   /** a people search by keywords across 1st, 2nd and 3rd degree */
@@ -48,7 +49,11 @@ export async function linkedInSourceFor(user: Pick<User, 'id'>): Promise<LinkedI
   return {
     kind: 'live',
     profile: (identifier, sections, opts) =>
-      linkedInProfile(accountId, identifier, sections, { token, shared: opts?.shared }),
+      linkedInProfile(accountId, identifier, sections, {
+        token,
+        shared: opts?.shared,
+        recommendations: opts?.recommendations,
+      }),
     company: (identifier) => linkedInCompany(accountId, identifier, { token }),
     search: async (keywords) => {
       const r = await unipileProxyCall<{

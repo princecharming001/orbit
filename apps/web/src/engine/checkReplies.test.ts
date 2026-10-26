@@ -8,11 +8,13 @@ import { setUnipileUrlForTests } from '../integrations/unipile';
 import { createLocalUser } from './account';
 import {
   autoCheckReplies,
+  CHECK_EVERY_MS,
   CHECK_ON_FOCUS_AFTER_MS,
   checkedAgo,
   checkingReplies,
   checkReplies,
   lastReplyCheck,
+  nextCheckDelay,
 } from './checkReplies';
 import { approveAndSend, confirmHandoff } from './send';
 import { MEETING_OVER_AFTER_MS } from './stages';
@@ -337,7 +339,14 @@ describe('the reply check moves cards on its own', () => {
     expect(await applied()).toHaveLength(1);
   });
 
-  it('the window coming back checks again only after a minute, and overlapping checks share one run', async () => {
+  it('times checks about ten minutes apart, give or take 30%', () => {
+    expect(CHECK_EVERY_MS).toBe(600_000);
+    expect(nextCheckDelay(0)).toBe(420_000);
+    expect(nextCheckDelay(0.5)).toBe(600_000);
+    expect(nextCheckDelay(0.999999)).toBeLessThanOrEqual(780_000);
+  });
+
+  it('the window coming back checks again only after five minutes, and overlapping checks share one run', async () => {
     await seedChat({});
     const first = await checkReplies(user, { now: NOW, reason: 'open' });
     expect(first.sources).toEqual([]);

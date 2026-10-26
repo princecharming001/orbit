@@ -57,6 +57,8 @@ export const LIVE_SOON = 'Live sync is switching on soon. Upload your export for
 
 /** A sync older than this is redone when the app opens. */
 export const AUTO_SYNC_AFTER_MS = 24 * 60 * 60 * 1000;
+/** Every connection is read again after this long (the daily syncs between read only the newest). */
+export const FULL_SYNC_AFTER_MS = 7 * AUTO_SYNC_AFTER_MS;
 
 /** Live connect is offered: the build has the proxy, or this is the sample student (mock connector). */
 export function liveLinkedInAvailable(user: User): boolean {
@@ -378,7 +380,13 @@ function closeQuietly(win: Window | null) {
  */
 export async function syncLinkedInLive(
   user: User,
-  opts: { onProgress?: (count: number) => void; signal?: AbortSignal; now?: Date } = {},
+  opts: {
+    onProgress?: (count: number) => void;
+    signal?: AbortSignal;
+    now?: Date;
+    /** only the newest connections, up to the first one already stored (the daily sync between full pulls) */
+    newest?: boolean;
+  } = {},
 ): Promise<LiveSyncResult> {
   startActivity('linkedin-sync', 'Reading your LinkedIn');
   try {
@@ -407,7 +415,7 @@ export async function syncLinkedInLive(
 
 async function syncLinkedInLiveOnce(
   user: User,
-  opts: { onProgress?: (count: number) => void; signal?: AbortSignal; now?: Date } = {},
+  opts: { onProgress?: (count: number) => void; signal?: AbortSignal; now?: Date; newest?: boolean } = {},
 ): Promise<LiveSyncResult> {
   const row = await liveLinkedInAccount(user.id);
   if (!isConnected(row))
@@ -425,6 +433,20 @@ async function syncLinkedInLiveOnce(
     return { ok: true, rows, added: 0, updated: 0, recommended: 0 };
   }
   let conns: LiveConnection[];
+  // the daily sync between full pulls reads the newest connections only, until one Orbit already has
+  const prevRows = Number((row.syncState as { rows?: number }).rows ?? 0);
+  const newest = !!opts.newest && prevRows > 0 && !usesMockConnectors(user.id);
+  let known: ((c: LiveConnection) => boolean) | undefined;
+  if (newest) {
+    const ids = new Set<string>();
+    await db.people
+      .where('userId')
+      .equals(user.id)
+      .each((p) => {
+        if (p.linkedinMemberId) ids.add(p.linkedinMemberId);
+      });
+    known = (c) => !!c.memberId && ids.has(c.memberId);
+  }
   setProgress({ phase: 'reading', count: 0 });
   const reading = (n: number) => {
     setProgress({ phase: 'reading', count: n });
@@ -438,6 +460,7 @@ async function syncLinkedInLiveOnce(
       token: row.accessToken,
       signal: opts.signal,
       onProgress: reading,
+      known,
     });
     // a student who connected before photos were kept gets theirs now
     // (in the background: the sync does not wait on it)
@@ -454,12 +477,13 @@ async function syncLinkedInLiveOnce(
   setProgress({ phase: 'analyzing', count: conns.length });
   const r = await importLiveConnections(user, conns, (done) => opts.onProgress?.(done));
   const at = (opts.now ?? new Date()).toISOString();
+  const total = newest ? prevRows + r.imported : conns.length;
   await db.integrations.update(row.id, {
     status: 'active',
     lastError: undefined,
     lastSyncedAt: at,
-    // the reply reader keeps its checkpoint on this row too
-    syncState: { ...row.syncState, rows: conns.length, lastSyncedAt: at },
+    // the reply reader keeps its checkpoint on this row too; `fullAt` is the last pull of every connection
+    syncState: { ...row.syncState, rows: total, lastSyncedAt: at, ...(newest ? {} : { fullAt: at }) },
   });
   let recommended = 0;
   if (r.imported + r.updated > 0) {
@@ -477,16 +501,16 @@ async function syncLinkedInLiveOnce(
   if (!usesMockConnectors(user.id)) {
     const a = await syncLinkedInActivity(user, {
       now: opts.now,
-      onProgress: (n) => setProgress({ phase: 'analyzing', count: conns.length, messages: n }),
+      onProgress: (n) => setProgress({ phase: 'analyzing', count: total, messages: n }),
     }).catch(() => undefined);
     if (a?.ok) messages = a.messages;
   }
   setProgress({
     phase: 'done',
-    count: conns.length,
-    message: `${conns.length} connections read${r.imported ? `, ${r.imported} new` : ''}${messages ? `, ${messages.toLocaleString('en-US')} messages` : ''}${recommended ? `, ${recommended} people worth meeting` : ''}.`,
+    count: total,
+    message: `${total} connections read${r.imported ? `, ${r.imported} new` : ''}${messages ? `, ${messages.toLocaleString('en-US')} messages` : ''}${recommended ? `, ${recommended} people worth meeting` : ''}.`,
   });
-  return { ok: true, rows: conns.length, added: r.imported, updated: r.updated, recommended };
+  return { ok: true, rows: total, added: r.imported, updated: r.updated, recommended };
 }
 
 /** Unlink LinkedIn: Unipile drops the account and Orbit stops syncing. Everyone already imported stays. */
@@ -576,14 +600,20 @@ export async function linkedInLiveStatus(user: User, now = new Date()): Promise<
   };
 }
 
-/** On app open: sync again when the last live sync is more than a day old. Does nothing otherwise. */
+/**
+ * On app open: sync again when the last live sync is more than a day old. Does nothing otherwise. Between full pulls
+ * (the first, a weekly one, and every Sync now) it reads only the newest connections.
+ */
 export async function autoSyncLinkedInLive(
   user: User,
   now = new Date(),
 ): Promise<LiveSyncResult | undefined> {
   const st = await linkedInLiveStatus(user, now);
   if (!st.connected || !st.stale) return undefined;
-  return syncLinkedInLive(user, { now });
+  const row = await liveLinkedInAccount(user.id);
+  const fullAt = (row?.syncState as { fullAt?: string } | undefined)?.fullAt;
+  const newest = !!fullAt && now.getTime() - Date.parse(fullAt) < FULL_SYNC_AFTER_MS;
+  return syncLinkedInLive(user, { now, newest });
 }
 
 /** A mutual connection, with the Orbit person it is when Orbit knows them. */

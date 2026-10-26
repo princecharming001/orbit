@@ -1543,7 +1543,7 @@ describe('orbit-connectors proxy', () => {
       });
     });
 
-    it('stops Discover at 70% of the search ledger while mutual connections can still page', async () => {
+    it('stops Discover at 70% of the search ledger (round(3.5) = 4 of 5) while mutual connections can still page', async () => {
       const { handler } = harness(
         { now: () => AT, take: memoryTake(() => AT.getTime()), ledger: { search: 5 } },
         (url, init) =>
@@ -1562,7 +1562,7 @@ describe('orbit-connectors proxy', () => {
       expect(await ledger(handler)).toMatchObject({ search: { used: 5, limit: 5 } });
     });
 
-    it('refuses /mutuals before reading anything once route profile reads are spent, but not photos at 60%', async () => {
+    it('keeps /mutuals reading after photos and route reads stop, and refuses it before reading once spent', async () => {
       const { handler, upstream } = harness(
         { now: () => AT, take: memoryTake(() => AT.getTime()), ledger: { profile: 5 } },
         (url, init) =>
@@ -1571,10 +1571,13 @@ describe('orbit-connectors proxy', () => {
             : twoPages(url, init),
       );
       const photo = () => handler(post('/photo', { accountId: 'a1', token: TOKEN.a1, identifier: 'x' }));
-      for (let i = 0; i < 3; i++) expect(await (await photo()).json()).toMatchObject({ ok: true });
-      // photos stop at round(60% of 5) = 3, the route reads still get the rest
+      const route = () =>
+        handler(post('/profile', { accountId: 'a1', token: TOKEN.a1, identifier: 'x', purpose: 'route' }));
+      for (let i = 0; i < 2; i++) expect(await (await photo()).json()).toMatchObject({ ok: true });
+      // photos stop at round(30% of 5) = 2, route reads at round(85% of 5) = 4, /mutuals still gets the fifth
       expect(await (await photo()).json()).toMatchObject({ ok: false, reason: 'limit' });
-      expect(await mutuals(handler)).toMatchObject({ verified: true });
+      for (let i = 0; i < 2; i++) expect(await (await route()).json()).toMatchObject({ ok: true });
+      expect(await (await route()).json()).toMatchObject({ ok: false, reason: 'limit' });
       expect(await mutuals(handler)).toMatchObject({ verified: true });
       const before = upstream.length;
       expect(await mutuals(handler)).toMatchObject({ ok: false, reason: 'limit' });

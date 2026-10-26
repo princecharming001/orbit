@@ -762,7 +762,7 @@ function sendBucket(accountId, now, perDay) {
 }
 var DEFAULT_LEDGER = { profile: 100, posts: 100, search: 100 };
 var LEDGER_CEILINGS = {
-  profile: { route: 1, photo: 0.6, enrich: 0.5 },
+  profile: { mutuals: 1, route: 0.85, enrich: 0.5, photo: 0.3 },
   posts: { engagement: 1, activity: 0.85 },
   search: { mutuals: 1, discover: 0.7, logos: 0.5 }
 };
@@ -1331,7 +1331,7 @@ async function unipileMutuals(deps, body, doFetch, spend) {
   const accountId = String(body.accountId ?? "");
   const target = String(body.targetMemberId ?? "").trim();
   if (!target) return { mutuals: [], verified: false, reason: "no_target" };
-  if (!await spend("profile", "route")) return LEDGER_LIMIT;
+  if (!await spend("profile", "mutuals")) return LEDGER_LIMIT;
   const shared = await sharedConnectionCount(deps, accountId, target, doFetch);
   if (shared === void 0) return { mutuals: [], verified: false, reason: "no_shared_count" };
   if (shared === 0) return { mutuals: [], verified: true, count: 0 };

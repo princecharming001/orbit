@@ -381,6 +381,34 @@ describe('syncing, disconnecting and the daily re-sync', () => {
   });
 });
 
+describe('the daily sync reads only the newest connections', () => {
+  it('stops at the first page with a stored connection, and reads everything weekly and on Sync now', async () => {
+    await connectLinkedInLive(user);
+    const row = (await liveLinkedInAccount(user.id))!;
+    const first = Date.parse(row.lastSyncedAt!);
+    const NEW = { first_name: 'Lena', last_name: 'Park', company: 'Stripe', member_id: 'm_lena' };
+    routes['/relations'] = () => {
+      const cursor = calls.filter((c) => c.path === '/relations').at(-1)!.body.cursor;
+      return cursor
+        ? { body: { items: [RELATIONS.items[1]], cursor: null } }
+        : { body: { items: [NEW, RELATIONS.items[0]], cursor: 'c2' } };
+    };
+    const pages = () => calls.filter((c) => c.path === '/relations').length;
+    let before = pages();
+    const day = (n: number) => new Date(first + n * 25 * 60 * 60_000);
+    expect(await autoSyncLinkedInLive(user, day(1))).toMatchObject({ ok: true, added: 1, rows: 3 });
+    expect(pages()).toBe(before + 1);
+    // a week after the last full pull, every page again
+    before = pages();
+    expect(await autoSyncLinkedInLive(user, day(7))).toMatchObject({ ok: true, rows: 3 });
+    expect(pages()).toBe(before + 2);
+    // Sync now always reads everything
+    before = pages();
+    expect(await syncLinkedInLive(user, { now: day(8) })).toMatchObject({ ok: true });
+    expect(pages()).toBe(before + 2);
+  });
+});
+
 describe('mutual connections', () => {
   it('waits long enough for the several reads behind it, retries a timeout once, and shares one read', async () => {
     expect(MUTUALS_TIMEOUT_MS).toBeGreaterThanOrEqual(60_000);

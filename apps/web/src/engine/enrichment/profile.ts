@@ -13,7 +13,11 @@
 import type { Affiliation, Person, PersonField, User } from '@orbit/core';
 import { linkedInSlug, newId, normalizeCompany, normalizeEmail, sameSchool } from '@orbit/core';
 import { db } from '../../db/schema';
-import type { LinkedInPosition, LinkedInProfile } from '../../integrations/enrichmentProxy';
+import {
+  type LinkedInPosition,
+  type LinkedInProfile,
+  personRecommendations,
+} from '../../integrations/enrichmentProxy';
 import { sameTitleKey } from '../linkedin';
 import { mayOverwrite, mergePeople, upsertOrganization } from '../people';
 import { freshPhoto } from '../photos';
@@ -219,6 +223,12 @@ export async function applyLinkedInProfile(
   }
   write('headline', profile.headline);
   write('location', profile.location);
+  // followers and recommendations, from a read that asked for them (the route's evidence then reads nothing more)
+  if (profile.recommendations) {
+    if (profile.followerCount !== undefined && profile.followerCount !== p.linkedinFollowers)
+      patch.linkedinFollowers = profile.followerCount;
+    patch.linkedinRecommendations = personRecommendations(profile.recommendations);
+  }
   if (rec && profile.headline)
     noteField(
       rec,

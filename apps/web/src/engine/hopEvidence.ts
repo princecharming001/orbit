@@ -6,7 +6,7 @@
  * mutual read for one target serves every other target they know):
  *  1. T's profile (followers, recommendations) — popularity must be known before any engagement counts;
  *  2. T's recent posts, the posts T reacted to (with their authors) and T's comments;
- *  3. for the top five mutuals, the posts they reacted to and their comments, plus their profile;
+ *  3. for the top two mutuals, the posts they reacted to and their comments, plus their profile;
  *  4. the comments under T's three latest posts (who commented, and which comments T answered).
  * One proxy call at a time; the proxy spaces LinkedIn calls at random and keeps the daily ledger, and a refusal
  * stops the round (what was read stays, and the rest says "not checked"). Nothing runs on a timer.
@@ -16,7 +16,7 @@
 import type { EngagementItem, PairEvidenceInput, Person, User } from '@orbit/core';
 import { db, type EngagementPost, type EngagementRow } from '../db/schema';
 import { usesMockConnectors } from '../integrations/connectorsMock';
-import { linkedInProfile } from '../integrations/enrichmentProxy';
+import { linkedInProfile, PREVIEW_SECTIONS, personRecommendations } from '../integrations/enrichmentProxy';
 import { type EngagementWant, linkedInEngagement, unipileConfigured } from '../integrations/unipile';
 import { countActivity, endActivity, startActivity } from './activity';
 import { liveLinkedInAccount } from './linkedinLive';
@@ -25,7 +25,7 @@ const DAY = 86_400_000;
 /** A part of someone's activity is read again after this long. */
 export const ENGAGEMENT_FRESH_MS = 30 * DAY;
 /** Mutuals whose own activity is read for one target (the rest are matched from the target's side only). */
-export const MUTUALS_READ = 5;
+export const MUTUALS_READ = 2;
 /** The target's latest posts whose comment threads are read. */
 export const THREADS_READ = 3;
 
@@ -72,7 +72,8 @@ export async function liveHopReader(user: Pick<User, 'id'>): Promise<HopReader |
       return { ok: true, value: { want, items: r.value.items } as EngagementPage };
     },
     async profile(memberId) {
-      const r = await linkedInProfile(accountId, memberId, [], {
+      // the same request enrichment makes (PREVIEW_SECTIONS with recommendations), so a copy of either serves both
+      const r = await linkedInProfile(accountId, memberId, PREVIEW_SECTIONS, {
         token,
         recommendations: true,
         purpose: 'route',
@@ -84,13 +85,7 @@ export async function liveHopReader(user: Pick<User, 'id'>): Promise<HopReader |
         ok: true,
         value: {
           followers: r.value.followerCount,
-          recommendations: (r.value.recommendations ?? []).map((x) => ({
-            direction: x.direction,
-            actorMemberId: x.actorId,
-            ...(x.actorName ? { actorName: x.actorName } : {}),
-            ...(x.year ? { year: x.year } : {}),
-            ...(x.caption ? { caption: x.caption } : {}),
-          })),
+          recommendations: personRecommendations(r.value.recommendations ?? []),
         },
       };
     },

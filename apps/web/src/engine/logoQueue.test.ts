@@ -12,6 +12,7 @@ import {
   LOGO_RETRY_MS,
   LOGOS_PER_DAY,
   resetLogoQueueForTests,
+  setLogoJitterForTests,
   wantCompanyLogo,
 } from './logoQueue';
 
@@ -44,6 +45,7 @@ function linkedIn(): CompanySource & { asked: string[] } {
 beforeEach(async () => {
   await wipeDatabase();
   resetLogoQueueForTests();
+  setLogoJitterForTests(() => 0);
 });
 
 describe('logo queue', () => {

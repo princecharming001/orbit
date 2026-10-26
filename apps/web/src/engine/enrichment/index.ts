@@ -225,7 +225,12 @@ async function readProfile(
   if (!kind || !ctx.linkedin) return {};
   await ctx.pause();
   await spend(ctx.user.id, kind, ctx.now);
-  const r = await ctx.linkedin.profile(identifier, sections, opts);
+  // a profile read also brings followers and recommendations, so the route's evidence (hopEvidence.ts) needs no read
+  // of its own, and asks in the same shape so another student's copy serves either
+  const r = await ctx.linkedin.profile(identifier, sections, {
+    ...opts,
+    ...(sections.length ? { recommendations: true } : {}),
+  });
   if (!r.ok)
     return { stop: await stopIfLimited(ctx, r.reason, r.message), notFound: r.reason === 'not_found' };
   ctx.out.profiles++;

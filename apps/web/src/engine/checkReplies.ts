@@ -1,5 +1,5 @@
 /**
- * The reply check (plan 18): while the app is open, Orbit reads the places a reply can arrive every few minutes and
+ * The reply check (plan 18): while the app is open, Orbit reads the places a reply can arrive every ten minutes or so and
  * when the window comes back, then runs the stage rules at once, so a card moves within minutes of the reply, the
  * booking or the meeting's end instead of at the next day's brief.
  *
@@ -24,10 +24,16 @@ import { syncLinkedInReplies } from './linkedinInbox';
 import { runTimedStageRules } from './stages';
 import { syncGoogle } from './sync';
 
-/** While the app is open, replies are checked this often. */
-export const CHECK_EVERY_MS = 3 * 60_000;
+/** While the app is open, replies are checked about this often (each wait is up to 30% shorter or longer, at random). */
+export const CHECK_EVERY_MS = 10 * 60_000;
+export const CHECK_JITTER = 0.3;
 /** The window coming back (focus, the tab shown again) checks again only when the last check is older than this. */
-export const CHECK_ON_FOCUS_AFTER_MS = 60_000;
+export const CHECK_ON_FOCUS_AFTER_MS = 5 * 60_000;
+
+/** The wait before the next timed check: CHECK_EVERY_MS give or take CHECK_JITTER. */
+export function nextCheckDelay(random = Math.random()): number {
+  return Math.round(CHECK_EVERY_MS * (1 - CHECK_JITTER + 2 * CHECK_JITTER * random));
+}
 /** db.kv key prefix (plus the user id) of the last check's record. */
 export const REPLY_CHECK_KV = 'replies-check:';
 
