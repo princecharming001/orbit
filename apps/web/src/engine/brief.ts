@@ -433,12 +433,37 @@ async function refreshFactDrafts(userId: string): Promise<void> {
   for (const s of pending) await refreshIfFactsNewer(userId, s);
 }
 
-/** Draft the message for cards that were kept without one (deferred), when the student opens them. */
+/** Cards whose draft is being written right now: a second ask for the same card waits for the first. */
+const drafting = new Map<string, Promise<void>>();
+
+/** True while a card's draft is being written (the card shows "Writing your draft" instead of nothing). */
+export function isDrafting(id: string): boolean {
+  return drafting.has(id);
+}
+
+/**
+ * Draft the message for cards that were kept without one (deferred), when the student opens them. One card is
+ * drafted once at a time: the Drafts page asks again each time a draft lands, and the card being read asks for its
+ * own at once, so without this two passes could write the same card's draft twice.
+ */
 export async function ensureDrafts(user: User, ids: string[], now = new Date()): Promise<void> {
   for (const id of ids) {
-    const s = await db.suggestions.get(id);
-    if (s && s.status === 'pending' && !s.outboundMessageId && DRAFT_KIND[s.kind])
-      await draftForSuggestion(user, s, now);
+    const running = drafting.get(id);
+    if (running) {
+      await running.catch(() => undefined);
+      continue;
+    }
+    const job = (async () => {
+      const s = await db.suggestions.get(id);
+      if (s && s.status === 'pending' && !s.outboundMessageId && DRAFT_KIND[s.kind])
+        await draftForSuggestion(user, s, now);
+    })();
+    drafting.set(id, job);
+    try {
+      await job;
+    } finally {
+      drafting.delete(id);
+    }
   }
 }
 

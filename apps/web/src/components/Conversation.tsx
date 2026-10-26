@@ -115,9 +115,14 @@ export function Conversation({ person }: { person: Person }) {
         <ol className="space-y-2.5" aria-label={`Messages with ${person.firstName}`}>
           {shown.map((m, i) => {
             // an email's subject when it starts a new email thread (a "Re:" or a LinkedIn message between is not one)
-            const prevMail = shown.slice(0, i).findLast((x) => x.channel === 'gmail');
+            const prevMail = shown
+              .slice(0, i)
+              .reverse()
+              .find((x) => x.channel === 'gmail');
             const newSubject =
-              m.channel === 'gmail' && !!m.subject && bareSubject(m.subject) !== bareSubject(prevMail?.subject);
+              m.channel === 'gmail' &&
+              !!m.subject &&
+              bareSubject(m.subject) !== bareSubject(prevMail?.subject);
             return (
               <li
                 key={m.id}

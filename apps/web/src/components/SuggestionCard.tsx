@@ -65,11 +65,38 @@ export function SuggestionCard({
   }, [highlight]);
   const [postClaim, setPostClaim] = useState('');
   const [ownExperience, setOwnExperience] = useState('');
-  const person = useLiveQuery(() => (s.personId ? db.people.get(s.personId) : undefined), [s.personId]);
-  const draft = useLiveQuery(
-    () => (s.outboundMessageId ? db.outbound.get(s.outboundMessageId) : undefined),
+  // null: looked and it is not there; undefined: still loading (the card waits rather than drawing half of itself)
+  const personRow = useLiveQuery(
+    async () => (s.personId ? ((await db.people.get(s.personId)) ?? null) : null),
+    [s.personId],
+  );
+  const draftRow = useLiveQuery(
+    async () => (s.outboundMessageId ? ((await db.outbound.get(s.outboundMessageId)) ?? null) : null),
     [s.outboundMessageId],
   );
+  const person = personRow ?? undefined;
+  const draft = draftRow ?? undefined;
+  // a message card with no draft yet writes its own at once (the one being read is never stuck behind the others)
+  const autoDraft =
+    s.status === 'pending' &&
+    !s.outboundMessageId &&
+    s.kind !== 'new_outreach' &&
+    isMessageSuggestion(s.kind);
+  const [drafting, setDrafting] = useState(() => autoDraft);
+  useEffect(() => {
+    if (!autoDraft || !user) {
+      setDrafting(false);
+      return;
+    }
+    let live = true;
+    setDrafting(true);
+    ensureDrafts(user, [s.id])
+      .catch(() => undefined)
+      .finally(() => live && setDrafting(false));
+    return () => {
+      live = false;
+    };
+  }, [autoDraft, user, s.id]);
   const chat = useLiveQuery(() => (s.chatId ? db.chats.get(s.chatId) : undefined), [s.chatId]);
   const sharedOrgNow =
     useLiveQuery(
@@ -259,6 +286,9 @@ export function SuggestionCard({
       toast.push({ text: 'Select the comment and copy it.', tone: 'neutral' });
     }
   };
+  // the person or the draft is still loading: a placeholder, never a card with its name and message missing
+  if ((s.personId && personRow === undefined) || (s.outboundMessageId && draftRow === undefined))
+    return <CardSkeleton />;
   return (
     <div
       className={cx(
@@ -587,7 +617,10 @@ export function SuggestionCard({
               </Button>
             </div>
           )}
-          {s.kind !== 'new_outreach' && isMessageSuggestion(s.kind) && !draft && person && (
+          {s.kind !== 'new_outreach' && isMessageSuggestion(s.kind) && !draft && person && drafting && (
+            <DraftComing first={person.firstName} />
+          )}
+          {s.kind !== 'new_outreach' && isMessageSuggestion(s.kind) && !draft && person && !drafting && (
             <div className="mt-3 flex gap-2">
               <Button variant="primary" onClick={draftNow} disabled={busy} data-testid="draft-now">
                 {busy ? 'Drafting…' : `Draft a message to ${person.firstName}`}
@@ -787,4 +820,40 @@ function MergeChoice({
 
 function useOther(id?: string): Person | undefined {
   return useLiveQuery(() => (id ? db.people.get(id) : undefined), [id]) ?? undefined;
+}
+
+/** A card still loading: the shape of a card, softly sweeping, so nothing half-drawn shows. */
+function CardSkeleton() {
+  return (
+    <div
+      className="rounded-[var(--radius-card)] border border-line bg-canvas p-4"
+      role="status"
+      aria-busy="true"
+      aria-label="Loading"
+      data-testid="card-skeleton"
+    >
+      <div className="flex items-start gap-3">
+        <span className="skeleton w-9 h-9 rounded-full shrink-0" />
+        <div className="flex-1 min-w-0 space-y-2 pt-1">
+          <span className="skeleton block h-3.5 w-2/5" />
+          <span className="skeleton block h-3 w-4/5" />
+        </div>
+      </div>
+      <span className="skeleton block mt-4 h-16 w-full rounded-lg" />
+    </div>
+  );
+}
+
+/** The draft is being written: says so, with lines where the message will be. */
+function DraftComing({ first }: { first: string }) {
+  return (
+    <div className="mt-3 rounded-lg bg-canvas-2 px-3 py-3" aria-busy="true" data-testid="draft-coming">
+      <p className="text-[13px] shimmer">Writing your draft to {first}…</p>
+      <div className="mt-2.5 space-y-1.5" aria-hidden>
+        <span className="skeleton block h-2.5 w-full" />
+        <span className="skeleton block h-2.5 w-11/12" />
+        <span className="skeleton block h-2.5 w-3/5" />
+      </div>
+    </div>
+  );
 }

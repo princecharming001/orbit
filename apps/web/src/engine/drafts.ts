@@ -10,8 +10,8 @@ import type {
 import { composeKindFor, newId } from '@orbit/core';
 import { db } from '../db/schema';
 import { draftForSuggestion, draftMessage, needsWarmUp, startWarmUpOrOutreach, unsentDraftOf } from './brief';
-import { type AskPosting, introNoteBase, noteForAsk } from './introNote';
 import { latestReply, newer } from './conversation';
+import { type AskPosting, introNoteBase, noteForAsk } from './introNote';
 import { currentResumeFacets, sharesOrgNow } from './resume';
 
 // ---------- the student's edits ----------

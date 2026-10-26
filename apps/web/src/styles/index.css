@@ -182,6 +182,13 @@ body {
     color: transparent;
     animation: shimmer 1.6s linear infinite;
   }
+  /* a block standing in for something still loading: a soft light sweeping across it */
+  .skeleton {
+    background: linear-gradient(90deg, #efede9 0%, #f8f7f4 50%, #efede9 100%);
+    background-size: 200% 100%;
+    border-radius: 6px;
+    animation: shimmer 1.4s linear infinite;
+  }
   @keyframes shimmer {
     from {
       background-position: 100% 0;
@@ -307,7 +314,8 @@ body {
   .panel-in,
   .sheet-in,
   .shake-x,
-  .shimmer {
+  .shimmer,
+  .skeleton {
     animation: none;
   }
   .shimmer {
