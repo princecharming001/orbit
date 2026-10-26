@@ -375,7 +375,10 @@ export function Landing() {
                   'Do I need an AI key?',
                   'No. Orbit comes with AI drafting to get you started, and you can add your own Claude key any time.',
                 ],
-                ['Is it free?', 'Yes, it is free to start.'],
+                [
+                  'Why would I use this when I have Claude?',
+                  'Claude starts every chat knowing nothing about you. Orbit reads your LinkedIn, and Gmail and Calendar if you connect them, so it knows who you actually know and how well. It finds the warmest way in to the person you want to meet, writes from your real history with them, and remembers every follow-up.',
+                ],
               ]}
             />
           </Reveal>
@@ -702,12 +705,12 @@ function HowItWorks({ google }: { google: boolean }) {
             <span className="w-8 h-8 rounded-full bg-ink text-white inline-flex items-center justify-center text-[10.5px] font-medium shrink-0">
               You
             </span>
-            <span className="w-7 h-px bg-ink-3/40" aria-hidden />
+            <span className="flow-line w-9" aria-hidden />
             <Avatar name="Maya Chen" src={demoFace('Maya')} size={32} />
-            <span className="w-7 h-px bg-ink-3/40" aria-hidden />
+            <span className="flow-line w-9" style={{ ['--flow-delay' as string]: '1.4s' }} aria-hidden />
             <Avatar name="Priya Ahmed" src={demoFace('Priya')} size={32} />
           </div>
-          <div className="mt-3 flex items-center justify-center gap-2 text-[12px]">
+          <div className="mt-5 flex items-center justify-center gap-2 text-[12px]">
             <span className="text-ink-3">Via Maya</span>
             <Chip tone="good" className="h-[20px] text-[11px]">
               Strong · 74

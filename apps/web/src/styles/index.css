@@ -327,6 +327,47 @@ body {
     transition: none;
   }
 }
+/* a route line on the landing page: a soft light travels along it, first one hop then the next, and never leaves
+   the line (the line clips it), so it never crosses the faces at either end */
+.flow-line {
+  position: relative;
+  height: 3px;
+  overflow: hidden;
+}
+.flow-line::before {
+  content: "";
+  position: absolute;
+  inset: 1px 0;
+  background: color-mix(in srgb, var(--color-ink-3) 30%, transparent);
+}
+.flow-line::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 14px;
+  height: 3px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, transparent, var(--color-good), transparent);
+  transform: translateX(-14px);
+  animation: flow-hop 2.8s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+  animation-delay: var(--flow-delay, 0s);
+}
+@keyframes flow-hop {
+  0% {
+    transform: translateX(-14px);
+  }
+  50%,
+  100% {
+    transform: translateX(var(--flow-length, 36px));
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .flow-line::after {
+    animation: none;
+    opacity: 0;
+  }
+}
 /* content that fades up the first time it scrolls into view (the landing page) */
 .reveal {
   opacity: 0;
