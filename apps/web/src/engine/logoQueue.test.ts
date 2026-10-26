@@ -1,16 +1,18 @@
 /**
- * Company logos straight from LinkedIn: a tile without one asks, the queue finds the company on LinkedIn by name and
- * keeps its id and logo on the organisation; LinkedIn's answer is the only source, at a bounded pace.
+ * Company logos straight from LinkedIn, for a whole network: tiles without one ask, the queue sends names in batches
+ * to Orbit's shared company list (which answers companies anyone found before for free), and keeps each company's id
+ * and logo on its organisation. LinkedIn's answer is the only source.
  */
 import type { User } from '@orbit/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { db, wipeDatabase } from '../db/schema';
-import type { LinkedInCompany } from '../integrations/enrichmentProxy';
+import type { CompanyAnswer } from '../integrations/enrichmentProxy';
 import {
   type CompanySource,
-  fetchOneLogo,
+  fetchLogos,
+  LOGO_BATCH,
+  LOGO_GAP_MS,
   LOGO_RETRY_MS,
-  LOGOS_PER_DAY,
   resetLogoQueueForTests,
   setLogoJitterForTests,
   wantCompanyLogo,
@@ -18,28 +20,64 @@ import {
 
 const NOW = new Date('2026-10-25T12:00:00Z');
 const user = { id: 'u1' } as User;
-const logo = (slug: string) =>
-  `https://media.licdn.com/dms/image/v2/${slug}/company-logo_200_200?e=2147483647&t=x`;
+const kept = (slug: string) => `https://store.test/company-logos/${slug}.png`;
 const later = (ms: number) => new Date(NOW.getTime() + ms);
 
-/** A LinkedIn that knows a few companies by name, and says a name it has twice of is ambiguous. */
-function linkedIn(): CompanySource & { asked: string[] } {
-  const asked: string[] = [];
-  const pages: Record<string, LinkedInCompany> = {
-    nozomio: { id: '9001', name: 'Nozomio', publicIdentifier: 'nozomio', logoUrl: logo('nozomio') },
-    'folk.app': { id: '9002', name: 'folk', publicIdentifier: 'folkapp', logoUrl: logo('folk') },
+/** The shared company list: a few companies it knows, one name LinkedIn has twice of. */
+function shared(
+  over: Partial<{ stopped: 'limit' | 'throttled' }> = {},
+): CompanySource & { calls: string[][] } {
+  const calls: string[][] = [];
+  const known: Record<string, CompanyAnswer> = {
+    nozomio: {
+      status: 'found',
+      companyId: '9001',
+      name: 'Nozomio',
+      publicIdentifier: 'nozomio',
+      logoUrl: kept('nozomio'),
+    },
+    'folk.app': {
+      status: 'found',
+      companyId: '9002',
+      name: 'folk',
+      publicIdentifier: 'folkapp',
+      logoUrl: kept('folk'),
+    },
+    stripe: {
+      status: 'found',
+      companyId: '2135371',
+      name: 'Stripe',
+      publicIdentifier: 'stripe',
+      logoUrl: kept('stripe'),
+    },
+    nova: { status: 'ambiguous' },
   };
   return {
-    asked,
-    async byName(name) {
-      asked.push(name);
-      const key = name.toLowerCase();
-      if (key === 'nova')
-        return { ok: false, reason: 'error', message: 'LinkedIn has more than one company of that name.' };
-      const page = pages[key];
-      return page ? { ok: true, value: page } : { ok: false, reason: 'not_found', message: 'none' };
+    calls,
+    async byNames(names) {
+      calls.push(names);
+      const companies: Record<string, CompanyAnswer> = {};
+      for (const n of names) companies[n] = known[n.toLowerCase()] ?? { status: 'not_found' };
+      return { ok: true, value: { companies, pending: 0, ...over } };
     },
   };
+}
+
+async function person(org: string, n = 1) {
+  for (let i = 0; i < n; i++)
+    await db.people.add({
+      id: `p_${org}_${i}`,
+      userId: user.id,
+      displayName: `Someone ${i}`,
+      firstName: 'Someone',
+      isHuman: true,
+      emails: [],
+      sources: ['linkedin_csv'],
+      currentOrganizationRaw: org,
+      strength: 0,
+      createdAt: NOW.toISOString(),
+      updatedAt: NOW.toISOString(),
+    } as never);
 }
 
 beforeEach(async () => {
@@ -49,64 +87,64 @@ beforeEach(async () => {
 });
 
 describe('logo queue', () => {
-  it('keeps the LinkedIn id, public name and logo of a company found by its name', async () => {
-    const li = linkedIn();
+  it('keeps the LinkedIn id, public name and a logo that does not expire for each company found', async () => {
+    const source = shared();
     wantCompanyLogo('Nozomio');
-    expect(await fetchOneLogo(user, { now: NOW, source: li })).toEqual({ step: 'asked', name: 'Nozomio' });
-    const [org] = await db.organizations.toArray();
-    expect(org).toMatchObject({
-      name: 'Nozomio',
-      linkedinCompanyId: '9001',
-      linkedinSlug: 'nozomio',
-      logoUrl: logo('nozomio'),
-    });
-    // nothing else waits
-    expect(await fetchOneLogo(user, { now: later(60_000), source: li })).toEqual({ step: 'idle' });
+    const r = await fetchLogos(user, { now: NOW, source });
+    expect(r.step).toBe('asked');
+    const org = (await db.organizations.toArray()).find((o) => o.name === 'Nozomio')!;
+    expect(org.linkedinCompanyId).toBe('9001');
+    expect(org.logoUrl).toBe(kept('nozomio'));
   });
 
-  it('asks the most recently shown company first, spaced out, and never one that already has a LinkedIn logo', async () => {
-    const li = linkedIn();
-    await db.organizations.put({
-      id: 'o_folk',
-      name: 'folk.app',
-      nameNormalized: 'folk app',
-      domains: [],
-      linkedinCompanyId: '9002',
-      logoUrl: logo('folk'),
-    });
-    wantCompanyLogo('folk.app');
-    wantCompanyLogo('Nova');
-    await new Promise((r) => setTimeout(r, 2));
+  it('sends what tiles asked for first, then the whole network by how many people work there, in one batch', async () => {
+    const source = shared();
+    await person('Stripe', 3);
+    await person('folk.app', 1);
+    await person('UC Berkeley', 9); // a school: its own site icon stands in
     wantCompanyLogo('Nozomio');
-    expect((await fetchOneLogo(user, { now: NOW, source: li })).name).toBe('Nozomio');
-    expect((await fetchOneLogo(user, { now: later(1000), source: li })).step).toBe('wait');
-    expect((await fetchOneLogo(user, { now: later(30_000), source: li })).name).toBe('Nova');
-    expect(li.asked).toEqual(['Nozomio', 'Nova']);
+    await fetchLogos(user, { now: NOW, source });
+    expect(source.calls).toEqual([['Nozomio', 'Stripe', 'folk.app']]);
+    // all three now have their logo: nothing is sent again
+    const again = await fetchLogos(user, { now: later(LOGO_GAP_MS + 1), source });
+    expect(again.step).toBe('idle');
   });
 
-  it('leaves a name LinkedIn cannot pin down to its initials, and asks again only after two weeks', async () => {
-    const li = linkedIn();
-    wantCompanyLogo('Nova');
-    await fetchOneLogo(user, { now: NOW, source: li });
-    expect(await db.organizations.count()).toBe(0);
-    wantCompanyLogo('Nova');
-    expect((await fetchOneLogo(user, { now: later(86_400_000), source: li })).step).toBe('idle');
-    expect((await fetchOneLogo(user, { now: later(LOGO_RETRY_MS + 1), source: li })).name).toBe('Nova');
+  it('sends at most one batch of names a call, and waits between calls', async () => {
+    const source = shared();
+    for (let i = 0; i < LOGO_BATCH + 10; i++) await person(`Company ${i}`);
+    await fetchLogos(user, { now: NOW, source });
+    expect(source.calls[0]).toHaveLength(LOGO_BATCH);
+    expect((await fetchLogos(user, { now: later(1000), source })).step).toBe('wait');
   });
 
-  it('stops for the day at its allowance, and when LinkedIn says the day’s reads are used', async () => {
-    const li = linkedIn();
-    await db.kv.put({ key: 'logos:day:u1', value: { day: '2026-10-25', used: LOGOS_PER_DAY } });
-    wantCompanyLogo('Nozomio');
-    expect((await fetchOneLogo(user, { now: NOW, source: li })).step).toBe('paused');
-    await db.kv.delete('logos:day:u1');
-    const limited: CompanySource = { byName: async () => ({ ok: false, reason: 'limit', message: 'limit' }) };
-    expect((await fetchOneLogo(user, { now: NOW, source: limited })).step).toBe('paused');
-    expect((await db.kv.get('logos:day:u1'))?.value).toEqual({ day: '2026-10-25', used: LOGOS_PER_DAY });
+  it('leaves a name LinkedIn cannot pin down to its initials, and sends it again only after two weeks', async () => {
+    const source = shared();
+    wantCompanyLogo('Nova');
+    await fetchLogos(user, { now: NOW, source });
+    expect((await db.organizations.toArray()).some((o) => o.logoUrl)).toBe(false);
+    wantCompanyLogo('Nova');
+    expect((await fetchLogos(user, { now: later(LOGO_GAP_MS * 3), source })).step).toBe('idle');
+    wantCompanyLogo('Nova');
+    await fetchLogos(user, { now: later(LOGO_RETRY_MS + 1), source });
+    expect(source.calls.at(-1)).toEqual(['Nova']);
+  });
+
+  it('slows down when the day’s company reads are used, and pauses when LinkedIn says so', async () => {
+    const tired = shared({ stopped: 'limit' });
+    wantCompanyLogo('Acme');
+    await fetchLogos(user, { now: NOW, source: tired });
+    wantCompanyLogo('Globex');
+    expect((await fetchLogos(user, { now: later(LOGO_GAP_MS * 2 + 1), source: tired })).step).toBe('wait');
+    const slow = shared({ stopped: 'throttled' });
+    wantCompanyLogo('Initech');
+    await fetchLogos(user, { now: later(31 * 60_000), source: slow });
+    wantCompanyLogo('Umbrella');
+    expect((await fetchLogos(user, { now: later(32 * 60_000), source: slow })).step).toBe('paused');
   });
 
   it('does nothing without a LinkedIn to ask', async () => {
     wantCompanyLogo('Nozomio');
-    expect(await fetchOneLogo(user, { now: NOW })).toEqual({ step: 'off' });
+    expect((await fetchLogos(user, { now: NOW })).step).toBe('off');
   });
 });

@@ -1551,6 +1551,7 @@ describe('orbit-connectors proxy', () => {
         profile: { used: 0, limit: 100 },
         posts: { used: 0, limit: 100 },
         search: { used: 0, limit: 50 },
+        company: { used: 0, limit: 150 },
       };
       expect(await ledger(handler)).toEqual(empty);
       expect(await ledger(handler)).toEqual(empty);

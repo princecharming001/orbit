@@ -109,6 +109,8 @@ export interface ConnectorDeps {
   postings?: PostingDeps & { perDay?: number };
   /** public LinkedIn reads shared across students for a day (SharedReads); without it every read is the account's */
   shared?: SharedReads;
+  /** LinkedIn companies found once and kept for every student, with their logos in Orbit's own storage */
+  companies?: CompanyCache;
 }
 
 /**
@@ -128,6 +130,98 @@ export function memorySharedReads(): SharedReads {
     get: async (k) => m.get(k),
     put: async (k, v) => {
       m.set(k, v);
+    },
+  };
+}
+
+/**
+ * A LinkedIn company as Orbit keeps it for every student: found once by its name (or not: `ambiguous` when LinkedIn
+ * has several of that name, `not_found` when none), with its logo copied into Orbit's storage, where it never
+ * expires (LinkedIn's own logo links stop working after a few weeks).
+ */
+export interface CompanyRow {
+  key: string;
+  status: 'found' | 'ambiguous' | 'not_found';
+  companyId?: string;
+  publicIdentifier?: string;
+  name?: string;
+  logoUrl?: string;
+  checkedAt: string;
+}
+
+export interface CompanyCache {
+  getMany(keys: string[]): Promise<Record<string, CompanyRow>>;
+  put(row: CompanyRow): Promise<void>;
+  /** keep a logo's bytes; answers the address it is served from */
+  storeLogo(companyId: string, bytes: ArrayBuffer, contentType: string): Promise<string | undefined>;
+}
+
+export function memoryCompanyCache(): CompanyCache & { rows: Map<string, CompanyRow> } {
+  const rows = new Map<string, CompanyRow>();
+  return {
+    rows,
+    getMany: async (keys) =>
+      Object.fromEntries(keys.flatMap((k) => (rows.has(k) ? [[k, rows.get(k)!]] : []))),
+    put: async (row) => {
+      rows.set(row.key, row);
+    },
+    storeLogo: async (id) => `https://logos.test/${id}.png`,
+  };
+}
+
+/** The company cache over PostgREST (orbit_private.linkedin_companies) and Supabase Storage (bucket company-logos). */
+export function postgrestCompanyCache(
+  url: string,
+  serviceKey: string,
+  doFetch: typeof fetch = fetch,
+): CompanyCache {
+  const auth = { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` };
+  const rpc = (fn: string, args: Record<string, unknown>) =>
+    doFetch(`${url}/rest/v1/rpc/${fn}`, {
+      method: 'POST',
+      headers: { ...auth, 'content-type': 'application/json' },
+      body: JSON.stringify(args),
+    });
+  return {
+    getMany: async (keys) => {
+      if (!keys.length) return {};
+      const r = await rpc('orbit_linkedin_companies_get', { p_keys: keys });
+      if (!r.ok) return {};
+      const rows = ((await r.json()) as Record<string, unknown>[] | null) ?? [];
+      return Object.fromEntries(
+        rows.map((x) => [
+          String(x.key),
+          {
+            key: String(x.key),
+            status: x.status as CompanyRow['status'],
+            companyId: (x.company_id as string | null) ?? undefined,
+            publicIdentifier: (x.public_identifier as string | null) ?? undefined,
+            name: (x.name as string | null) ?? undefined,
+            logoUrl: (x.logo_url as string | null) ?? undefined,
+            checkedAt: String(x.checked_at),
+          },
+        ]),
+      );
+    },
+    put: async (row) => {
+      await rpc('orbit_linkedin_companies_put', {
+        p_key: row.key,
+        p_status: row.status,
+        p_company_id: row.companyId ?? null,
+        p_public_identifier: row.publicIdentifier ?? null,
+        p_name: row.name ?? null,
+        p_logo_url: row.logoUrl ?? null,
+      });
+    },
+    storeLogo: async (companyId, bytes, contentType) => {
+      const ext = contentType.includes('png') ? 'png' : contentType.includes('webp') ? 'webp' : 'jpg';
+      const path = `${companyId.replace(/[^\w-]/g, '')}.${ext}`;
+      const r = await doFetch(`${url}/storage/v1/object/company-logos/${path}`, {
+        method: 'POST',
+        headers: { ...auth, 'content-type': contentType, 'x-upsert': 'true', 'cache-control': '31536000' },
+        body: bytes,
+      });
+      return r.ok ? `${url}/storage/v1/object/public/company-logos/${path}` : undefined;
     },
   };
 }
@@ -286,11 +380,140 @@ export function sendBucket(accountId: string, now: Date, perDay: number): Bucket
   return { key: `connectors:send:${day}:${accountId}`, limit: perDay, expires: end.toISOString() };
 }
 
-/** The three LinkedIn ledgers: profile reads, post reads, and search calls (plan 21 §6). */
-export type LedgerKind = 'profile' | 'posts' | 'search';
+/** A company found by its name is looked up again after this long when LinkedIn could not pin it down. */
+export const COMPANY_RETRY_MS = 30 * 86_400_000;
+/** New companies one call may look up on LinkedIn (the rest wait for the next call); cached ones are always free. */
+export const COMPANIES_PER_CALL = 8;
+/** The biggest logo kept (LinkedIn's are a few kilobytes). */
+const LOGO_MAX_BYTES = 300_000;
+
+/** What a student is told about one company: found (with its id and a logo that does not expire), or why not. */
+export interface CompanyAnswer {
+  status: CompanyRow['status'];
+  companyId?: string;
+  publicIdentifier?: string;
+  name?: string;
+  logoUrl?: string;
+}
+
+const answerOf = (r: CompanyRow): CompanyAnswer => ({
+  status: r.status,
+  companyId: r.companyId,
+  publicIdentifier: r.publicIdentifier,
+  name: r.name,
+  logoUrl: r.logoUrl,
+});
+
+/**
+ * Logos and LinkedIn ids for many companies at once (`names`, up to 60). Every company any student has found before is
+ * answered from the shared cache with no LinkedIn read; up to COMPANIES_PER_CALL new ones are looked up on LinkedIn
+ * (a company search, and its page when the search gives no logo), from the account's company ledger, and kept for
+ * everyone. LinkedIn's logo is copied into Orbit's storage, so it never expires. A name LinkedIn cannot pin down (none,
+ * or several of that name) is kept as such for a month, so nobody searches it again meanwhile.
+ */
+async function companiesRoute(
+  deps: ConnectorDeps,
+  body: Record<string, unknown>,
+  ctx: {
+    doFetch: typeof fetch;
+    spend: <K extends LedgerKind>(kind: K, caller: LedgerCaller<K>) => Promise<boolean>;
+    now: () => Date;
+  },
+): Promise<Record<string, unknown>> {
+  const accountId = String(body.accountId ?? '');
+  const names = (Array.isArray(body.names) ? body.names : [])
+    .map((n) => text(n, 160))
+    .filter((n): n is string => !!n)
+    .slice(0, 60);
+  const byKey = new Map<string, string>();
+  for (const n of names) {
+    const k = companyNameKey(n);
+    if (k && !byKey.has(k)) byKey.set(k, n);
+  }
+  const cache = deps.companies;
+  const rows = cache ? await cache.getMany([...byKey.keys()]).catch(() => ({})) : {};
+  const now = ctx.now();
+  const companies: Record<string, CompanyAnswer> = {};
+  const misses: [string, string][] = [];
+  for (const [key, name] of byKey) {
+    const r = (rows as Record<string, CompanyRow>)[key];
+    if (r && (r.status === 'found' || now.getTime() - Date.parse(r.checkedAt) < COMPANY_RETRY_MS))
+      companies[name] = answerOf(r);
+    else misses.push([key, name]);
+  }
+  const want = Math.min(Number(body.resolve ?? COMPANIES_PER_CALL) || 0, COMPANIES_PER_CALL);
+  let stopped: string | undefined;
+  let looked = 0;
+  for (const [key, name] of misses.slice(0, want)) {
+    if (!(await ctx.spend('company', 'logos'))) {
+      stopped = 'limit';
+      break;
+    }
+    looked++;
+    const found = await companyByName(deps, accountId, name, ctx.doFetch);
+    if (!('id' in found)) {
+      if (found.reason === 'throttled') {
+        stopped = 'throttled';
+        break;
+      }
+      if (found.reason !== 'ambiguous' && found.reason !== 'not_found') continue;
+      const row: CompanyRow = { key, status: found.reason, checkedAt: now.toISOString() };
+      await cache?.put(row).catch(() => undefined);
+      companies[name] = answerOf(row);
+      continue;
+    }
+    // the search usually names the company and may carry its logo; its page is read only when it does not
+    let logo = licdn(found.item.logo) ?? licdn(found.item.profile_picture_url);
+    let publicIdentifier = text(found.item.public_identifier, 160);
+    let display = text(found.item.name, 160);
+    if (!logo && (await ctx.spend('company', 'logos'))) {
+      const page = await unipileCompany(deps, { accountId, identifier: found.id }, ctx.doFetch).catch(
+        () => undefined,
+      );
+      if (page && 'company' in page && page.company) {
+        logo = page.company.logoUrl;
+        publicIdentifier = page.company.publicIdentifier ?? publicIdentifier;
+        display = page.company.name ?? display;
+      }
+    }
+    let kept: string | undefined;
+    if (logo && cache) {
+      try {
+        const res = await ctx.doFetch(logo);
+        const type = res.headers.get('content-type') ?? 'image/jpeg';
+        const bytes = await res.arrayBuffer();
+        if (res.ok && type.startsWith('image/') && bytes.byteLength && bytes.byteLength <= LOGO_MAX_BYTES)
+          kept = await cache.storeLogo(found.id, bytes, type);
+      } catch {
+        // the logo did not copy: the company is still kept, and its LinkedIn link is answered for now
+      }
+    }
+    const row: CompanyRow = {
+      key,
+      status: 'found',
+      companyId: found.id,
+      publicIdentifier,
+      name: display,
+      logoUrl: kept,
+      checkedAt: now.toISOString(),
+    };
+    if (kept) await cache?.put(row).catch(() => undefined);
+    companies[name] = { ...answerOf(row), logoUrl: kept ?? logo };
+  }
+  return {
+    ok: true,
+    companies,
+    // names still to look up on a later call (the caller asks again; cached answers never cost a read)
+    pending: Math.max(0, misses.length - looked),
+    ...(stopped ? { stopped } : {}),
+  };
+}
+
+/** The LinkedIn ledgers: profile reads, post reads, search calls (plan 21 §6), and company lookups for logos. */
+export type LedgerKind = 'profile' | 'posts' | 'search' | 'company';
 export type LedgerTotals = Record<LedgerKind, number>;
 /** Unipile's guidance per account per day: ~100 profile reads, ~100 of each other read, ~1,000 search rows. */
-export const DEFAULT_LEDGER: LedgerTotals = { profile: 100, posts: 100, search: 100 };
+export const DEFAULT_LEDGER: LedgerTotals = { profile: 100, posts: 100, search: 100, company: 150 };
 
 /**
  * How far into a ledger each kind of caller may go, as a share of the day's total. The same ledger key is taken with
@@ -301,6 +524,9 @@ export const LEDGER_CEILINGS = {
   profile: { mutuals: 1, route: 0.85, enrich: 0.5, photo: 0.3 },
   posts: { engagement: 1, activity: 0.85 },
   search: { mutuals: 1, discover: 0.7, logos: 0.5 },
+  // company pages and company searches for logos: a company page is not a profile view (nobody is told), so it has
+  // its own ledger instead of taking reads from people
+  company: { logos: 1 },
 } as const;
 
 export type LedgerCaller<K extends LedgerKind = LedgerKind> = keyof (typeof LEDGER_CEILINGS)[K];
@@ -428,6 +654,7 @@ export function memoryTake(clock: () => number = Date.now): Take {
 }
 
 const UNIPILE_ROUTES = new Set([
+  '/companies',
   '/connect/start',
   '/connect/status',
   '/relations',
@@ -445,6 +672,7 @@ const UNIPILE_ROUTES = new Set([
 ]);
 /** Routes that act on a connected account, so need its token. */
 const ACCOUNT_ROUTES = new Set([
+  '/companies',
   '/account',
   '/relations',
   '/mutuals',
@@ -577,6 +805,7 @@ export function makeHandler(deps: ConnectorDeps): (req: Request) => Promise<Resp
         );
     }
     if (path === '/ledger') return ledgerReport(take, totals, accountId, now(), h);
+    if (path === '/companies') return json(200, await companiesRoute(deps, body, { doFetch, spend, now }), h);
     let engagement: EngagementRequest | undefined;
     if (path === '/engagement') {
       const parsed = engagementRequest(body);
@@ -1858,7 +2087,7 @@ async function ledgerReport(
   h: Record<string, string>,
 ): Promise<Response> {
   if (!take.peek) return json(503, { error: 'unavailable right now' }, h);
-  const kinds: LedgerKind[] = ['profile', 'posts', 'search'];
+  const kinds: LedgerKind[] = ['profile', 'posts', 'search', 'company'];
   let used: number[];
   try {
     used = await take.peek(kinds.map((k) => ledgerBucket(k, accountId, now, totals[k]).key));
@@ -2398,7 +2627,7 @@ async function companyByName(
   accountId: string,
   name: string,
   doFetch: typeof fetch,
-): Promise<{ id: string } | { ok: false; reason: string; message: string }> {
+): Promise<{ id: string; item: Record<string, unknown> } | { ok: false; reason: string; message: string }> {
   const q = new URLSearchParams({ account_id: accountId, limit: '10' });
   const res = await doFetch(`${deps.unipileBase}/api/v1/linkedin/search?${q}`, {
     method: 'POST',
@@ -2419,7 +2648,7 @@ async function companyByName(
   const same = items.filter(
     (c) => companyNameKey(c.name) === key && (typeof c.id === 'string' || typeof c.id === 'number'),
   );
-  if (same.length === 1) return { id: String(same[0]!.id) };
+  if (same.length === 1) return { id: String(same[0]!.id), item: same[0]! };
   return same.length
     ? { ok: false, reason: 'ambiguous', message: 'LinkedIn has more than one company of that name.' }
     : { ok: false, reason: 'not_found', message: 'LinkedIn could not find that company.' };

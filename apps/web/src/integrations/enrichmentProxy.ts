@@ -237,6 +237,45 @@ export async function linkedInCompanyByName(
   return unwrap(r, 'company');
 }
 
+/** One company as Orbit's shared company list knows it (orbit-connectors /companies). */
+export interface CompanyAnswer {
+  status: 'found' | 'ambiguous' | 'not_found';
+  companyId?: string;
+  publicIdentifier?: string;
+  name?: string;
+  /** a logo that does not expire (kept in Orbit's storage), or for now LinkedIn's own link */
+  logoUrl?: string;
+}
+
+export interface CompaniesAnswer {
+  companies: Record<string, CompanyAnswer>;
+  /** names still to look up on a later call */
+  pending: number;
+  /** why the lookups stopped early: today's company reads are used, or LinkedIn asked Orbit to slow down */
+  stopped?: 'limit' | 'throttled';
+}
+
+/**
+ * Logos and LinkedIn ids for many companies at once. Companies any Orbit student has found before answer at once and
+ * cost no LinkedIn read; a few new ones are looked up per call, from the account's company allowance.
+ */
+export async function linkedInCompanies(
+  accountId: string,
+  names: string[],
+  opts: CallOpts = {},
+): Promise<EnrichOutcome<CompaniesAnswer>> {
+  const r = await unipileProxyCall<
+    { ok?: boolean; reason?: string; message?: string } & Partial<CompaniesAnswer>
+  >('/companies', { accountId, token: opts.token, names }, { timeoutMs: 60_000, ...opts });
+  if (!r.ok) return { ok: false, reason: r.reason, message: r.message };
+  if (r.value.ok === false || !r.value.companies)
+    return { ok: false, reason: 'refused', message: r.value.message ?? 'LinkedIn did not answer.' };
+  return {
+    ok: true,
+    value: { companies: r.value.companies, pending: r.value.pending ?? 0, stopped: r.value.stopped },
+  };
+}
+
 /** Web pages about a person (Exa), when Orbit's server has a key for it; `unconfigured` otherwise. */
 export async function webLookup(
   q: { name: string; company?: string; school?: string },

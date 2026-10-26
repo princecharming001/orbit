@@ -4,6 +4,7 @@ import {
   makeHandler,
   memoryLinks,
   memoryTake,
+  postgrestCompanyCache,
   postgrestLinks,
   postgrestSharedReads,
   postgrestTake,
@@ -101,6 +102,8 @@ Deno.serve(
     sendsPerDay: num('ORBIT_LINKEDIN_SENDS_PER_DAY', 25),
     // public LinkedIn reads shared across students for a day (orbit_private.linkedin_shared)
     shared: url && serviceKey ? postgrestSharedReads(url, serviceKey) : undefined,
+    // LinkedIn companies found once for every student, logos copied into storage (orbit_private.linkedin_companies)
+    companies: url && serviceKey ? postgrestCompanyCache(url, serviceKey) : undefined,
     postings: {
       anthropicKey,
       cache: url && serviceKey ? postgrestPostingCache(url, serviceKey) : undefined,
@@ -111,6 +114,7 @@ Deno.serve(
       profile: num('ORBIT_LINKEDIN_PROFILE_READS_PER_DAY', 100),
       posts: num('ORBIT_LINKEDIN_POST_READS_PER_DAY', 100),
       search: num('ORBIT_LINKEDIN_SEARCH_CALLS_PER_DAY', 100),
+      company: num('ORBIT_LINKEDIN_COMPANY_READS_PER_DAY', 150),
     },
     limits: {
       perMinute: num('ORBIT_CONNECTORS_PER_MINUTE', 120),

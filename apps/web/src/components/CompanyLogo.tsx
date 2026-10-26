@@ -67,16 +67,17 @@ export function CompanyLogo({
   // cheap (core caches by name), so it is computed each render rather than memoised on a list rebuilt by callers
   const known =
     domain ?? companyDomain(companyName, { domains: orgs?.flatMap((o) => o.domains ?? []), guess: false });
-  const school = !!companyName && looksLikeSchool(companyName);
+  const named = !!companyName && looksLikeSchool(companyName);
   // no LinkedIn logo yet: ask LinkedIn (engine/logoQueue), once the orgs are read and the tile is near the screen
   useEffect(() => {
     if (orgs && !own && companyName && inViewRef.current) wantCompanyLogo(companyName);
   });
-  // a school the short list does not know: the full school list, loaded only for names that read like a school
+  // a school the short list does not know: the full school list, also for short names that do not read like one
+  // ("sjsu", "UCSC"), once the tile is near the screen
   const [schoolDomain, setSchoolDomain] = useState<string>();
   useEffect(() => {
     setSchoolDomain(undefined);
-    if (known || !companyName || !school) return;
+    if (known || !companyName) return;
     let live = true;
     findSchoolDomain(companyName)
       .then((d) => live && setSchoolDomain(d))
@@ -86,6 +87,8 @@ export function CompanyLogo({
     };
   }, [known, companyName]);
   const d = known ?? schoolDomain;
+  // a school by its name, by the school list, or by its address: its own site icon stands in for a LinkedIn logo
+  const school = named || !!schoolDomain || (!!d && /\.edu$|\.ac\.[a-z]{2}$/.test(d));
   // the icon is looked for once the tile is near the screen
   const { ref, inView } = useInView({ triggerOnce: true, rootMargin: '200px', fallbackInView: true });
   inViewRef.current = inView;

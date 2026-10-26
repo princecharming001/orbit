@@ -647,6 +647,56 @@ function companyIntros(r) {
 
 // supabase/functions/orbit-connectors/connectors.ts
 var DEFAULT_LIMITS = { perMinute: 120, perDay: 3e3 };
+function postgrestCompanyCache(url2, serviceKey2, doFetch = fetch) {
+  const auth = { apikey: serviceKey2, Authorization: `Bearer ${serviceKey2}` };
+  const rpc = (fn, args) => doFetch(`${url2}/rest/v1/rpc/${fn}`, {
+    method: "POST",
+    headers: { ...auth, "content-type": "application/json" },
+    body: JSON.stringify(args)
+  });
+  return {
+    getMany: async (keys) => {
+      if (!keys.length) return {};
+      const r = await rpc("orbit_linkedin_companies_get", { p_keys: keys });
+      if (!r.ok) return {};
+      const rows = await r.json() ?? [];
+      return Object.fromEntries(
+        rows.map((x) => [
+          String(x.key),
+          {
+            key: String(x.key),
+            status: x.status,
+            companyId: x.company_id ?? void 0,
+            publicIdentifier: x.public_identifier ?? void 0,
+            name: x.name ?? void 0,
+            logoUrl: x.logo_url ?? void 0,
+            checkedAt: String(x.checked_at)
+          }
+        ])
+      );
+    },
+    put: async (row) => {
+      await rpc("orbit_linkedin_companies_put", {
+        p_key: row.key,
+        p_status: row.status,
+        p_company_id: row.companyId ?? null,
+        p_public_identifier: row.publicIdentifier ?? null,
+        p_name: row.name ?? null,
+        p_logo_url: row.logoUrl ?? null
+      });
+    },
+    storeLogo: async (companyId, bytes, contentType) => {
+      const ext = contentType.includes("png") ? "png" : contentType.includes("webp") ? "webp" : "jpg";
+      const path = `${companyId.replace(/[^\w-]/g, "")}.${ext}`;
+      const r = await doFetch(`${url2}/storage/v1/object/company-logos/${path}`, {
+        method: "POST",
+        headers: { ...auth, "content-type": contentType, "x-upsert": "true", "cache-control": "31536000" },
+        body: bytes
+      });
+      return r.ok ? `${url2}/storage/v1/object/public/company-logos/${path}` : void 0;
+    }
+  };
+}
 function postgrestSharedReads(url2, serviceKey2, doFetch = fetch) {
   const headers = {
     "content-type": "application/json",
@@ -760,11 +810,108 @@ function sendBucket(accountId, now, perDay) {
   end.setUTCDate(end.getUTCDate() + 1);
   return { key: `connectors:send:${day}:${accountId}`, limit: perDay, expires: end.toISOString() };
 }
-var DEFAULT_LEDGER = { profile: 100, posts: 100, search: 100 };
+var COMPANY_RETRY_MS = 30 * 864e5;
+var COMPANIES_PER_CALL = 8;
+var LOGO_MAX_BYTES = 3e5;
+var answerOf = (r) => ({
+  status: r.status,
+  companyId: r.companyId,
+  publicIdentifier: r.publicIdentifier,
+  name: r.name,
+  logoUrl: r.logoUrl
+});
+async function companiesRoute(deps, body, ctx) {
+  const accountId = String(body.accountId ?? "");
+  const names2 = (Array.isArray(body.names) ? body.names : []).map((n) => text(n, 160)).filter((n) => !!n).slice(0, 60);
+  const byKey = /* @__PURE__ */ new Map();
+  for (const n of names2) {
+    const k = companyNameKey(n);
+    if (k && !byKey.has(k)) byKey.set(k, n);
+  }
+  const cache = deps.companies;
+  const rows = cache ? await cache.getMany([...byKey.keys()]).catch(() => ({})) : {};
+  const now = ctx.now();
+  const companies = {};
+  const misses = [];
+  for (const [key, name] of byKey) {
+    const r = rows[key];
+    if (r && (r.status === "found" || now.getTime() - Date.parse(r.checkedAt) < COMPANY_RETRY_MS))
+      companies[name] = answerOf(r);
+    else misses.push([key, name]);
+  }
+  const want = Math.min(Number(body.resolve ?? COMPANIES_PER_CALL) || 0, COMPANIES_PER_CALL);
+  let stopped;
+  let looked = 0;
+  for (const [key, name] of misses.slice(0, want)) {
+    if (!await ctx.spend("company", "logos")) {
+      stopped = "limit";
+      break;
+    }
+    looked++;
+    const found = await companyByName(deps, accountId, name, ctx.doFetch);
+    if (!("id" in found)) {
+      if (found.reason === "throttled") {
+        stopped = "throttled";
+        break;
+      }
+      if (found.reason !== "ambiguous" && found.reason !== "not_found") continue;
+      const row2 = { key, status: found.reason, checkedAt: now.toISOString() };
+      await cache?.put(row2).catch(() => void 0);
+      companies[name] = answerOf(row2);
+      continue;
+    }
+    let logo = licdn(found.item.logo) ?? licdn(found.item.profile_picture_url);
+    let publicIdentifier = text(found.item.public_identifier, 160);
+    let display = text(found.item.name, 160);
+    if (!logo && await ctx.spend("company", "logos")) {
+      const page = await unipileCompany(deps, { accountId, identifier: found.id }, ctx.doFetch).catch(
+        () => void 0
+      );
+      if (page && "company" in page && page.company) {
+        logo = page.company.logoUrl;
+        publicIdentifier = page.company.publicIdentifier ?? publicIdentifier;
+        display = page.company.name ?? display;
+      }
+    }
+    let kept;
+    if (logo && cache) {
+      try {
+        const res = await ctx.doFetch(logo);
+        const type = res.headers.get("content-type") ?? "image/jpeg";
+        const bytes = await res.arrayBuffer();
+        if (res.ok && type.startsWith("image/") && bytes.byteLength && bytes.byteLength <= LOGO_MAX_BYTES)
+          kept = await cache.storeLogo(found.id, bytes, type);
+      } catch {
+      }
+    }
+    const row = {
+      key,
+      status: "found",
+      companyId: found.id,
+      publicIdentifier,
+      name: display,
+      logoUrl: kept,
+      checkedAt: now.toISOString()
+    };
+    if (kept) await cache?.put(row).catch(() => void 0);
+    companies[name] = { ...answerOf(row), logoUrl: kept ?? logo };
+  }
+  return {
+    ok: true,
+    companies,
+    // names still to look up on a later call (the caller asks again; cached answers never cost a read)
+    pending: Math.max(0, misses.length - looked),
+    ...stopped ? { stopped } : {}
+  };
+}
+var DEFAULT_LEDGER = { profile: 100, posts: 100, search: 100, company: 150 };
 var LEDGER_CEILINGS = {
   profile: { mutuals: 1, route: 0.85, enrich: 0.5, photo: 0.3 },
   posts: { engagement: 1, activity: 0.85 },
-  search: { mutuals: 1, discover: 0.7, logos: 0.5 }
+  search: { mutuals: 1, discover: 0.7, logos: 0.5 },
+  // company pages and company searches for logos: a company page is not a profile view (nobody is told), so it has
+  // its own ledger instead of taking reads from people
+  company: { logos: 1 }
 };
 function ledgerLimit(kind, caller, total) {
   const share = LEDGER_CEILINGS[kind][caller] ?? 0;
@@ -854,6 +1001,7 @@ function memoryTake(clock = Date.now) {
   return take;
 }
 var UNIPILE_ROUTES = /* @__PURE__ */ new Set([
+  "/companies",
   "/connect/start",
   "/connect/status",
   "/relations",
@@ -870,6 +1018,7 @@ var UNIPILE_ROUTES = /* @__PURE__ */ new Set([
   "/account"
 ]);
 var ACCOUNT_ROUTES = /* @__PURE__ */ new Set([
+  "/companies",
   "/account",
   "/relations",
   "/mutuals",
@@ -993,6 +1142,7 @@ function makeHandler(deps) {
         );
     }
     if (path === "/ledger") return ledgerReport(take, totals, accountId, now(), h);
+    if (path === "/companies") return json(200, await companiesRoute(deps, body, { doFetch, spend, now }), h);
     let engagement;
     if (path === "/engagement") {
       const parsed = engagementRequest(body);
@@ -1906,7 +2056,7 @@ async function unipileEngagement(deps, accountId, r, doFetch, now) {
 }
 async function ledgerReport(take, totals, accountId, now, h) {
   if (!take.peek) return json(503, { error: "unavailable right now" }, h);
-  const kinds = ["profile", "posts", "search"];
+  const kinds = ["profile", "posts", "search", "company"];
   let used;
   try {
     used = await take.peek(kinds.map((k) => ledgerBucket(k, accountId, now, totals[k]).key));
@@ -2296,7 +2446,7 @@ async function companyByName(deps, accountId, name, doFetch) {
   const same = items.filter(
     (c) => companyNameKey(c.name) === key && (typeof c.id === "string" || typeof c.id === "number")
   );
-  if (same.length === 1) return { id: String(same[0].id) };
+  if (same.length === 1) return { id: String(same[0].id), item: same[0] };
   return same.length ? { ok: false, reason: "ambiguous", message: "LinkedIn has more than one company of that name." } : { ok: false, reason: "not_found", message: "LinkedIn could not find that company." };
 }
 async function unipileCompany(deps, body, doFetch) {
@@ -2530,6 +2680,8 @@ Deno.serve(
     sendsPerDay: num("ORBIT_LINKEDIN_SENDS_PER_DAY", 25),
     // public LinkedIn reads shared across students for a day (orbit_private.linkedin_shared)
     shared: url && serviceKey ? postgrestSharedReads(url, serviceKey) : void 0,
+    // LinkedIn companies found once for every student, logos copied into storage (orbit_private.linkedin_companies)
+    companies: url && serviceKey ? postgrestCompanyCache(url, serviceKey) : void 0,
     postings: {
       anthropicKey,
       cache: url && serviceKey ? postgrestPostingCache(url, serviceKey) : void 0,
@@ -2539,7 +2691,8 @@ Deno.serve(
     ledger: {
       profile: num("ORBIT_LINKEDIN_PROFILE_READS_PER_DAY", 100),
       posts: num("ORBIT_LINKEDIN_POST_READS_PER_DAY", 100),
-      search: num("ORBIT_LINKEDIN_SEARCH_CALLS_PER_DAY", 100)
+      search: num("ORBIT_LINKEDIN_SEARCH_CALLS_PER_DAY", 100),
+      company: num("ORBIT_LINKEDIN_COMPANY_READS_PER_DAY", 150)
     },
     limits: {
       perMinute: num("ORBIT_CONNECTORS_PER_MINUTE", 120),

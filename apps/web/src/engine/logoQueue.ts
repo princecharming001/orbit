@@ -1,19 +1,23 @@
 /**
- * Company logos straight from LinkedIn (the student's rule: never a guessed one). A company tile that has no LinkedIn
- * logo yet asks for one (`wantCompanyLogo`); while the app is open, this queue looks each company up on LinkedIn by its
- * name, a few a minute and a bounded number a day, most recently shown first. LinkedIn's company search answers only
- * when exactly one company there has that name (two "Nova"s are two companies, so neither is taken); the company's
- * LinkedIn id, public name and logo are then kept on the organisation (enrichment/logos `adoptCompany`), and every
- * tile of that name shows it. A company LinkedIn cannot pin down is asked about again after two weeks; until then its
- * tile shows its initials. The sample student's companies come from the mock connector.
+ * Company logos straight from LinkedIn (the student's rule: never a guessed one), for a whole network. Orbit keeps one
+ * shared list of LinkedIn companies for every student (orbit-connectors /companies): a company any student's account
+ * has found before answers at once and costs no LinkedIn read, with its logo copied into Orbit's storage so it never
+ * expires. While the app is open this queue sends the names still without a LinkedIn logo in batches: the companies
+ * tiles on screen asked for first (`wantCompanyLogo`, most recent first), then every company in the student's
+ * network, the ones most people work at first. A few new companies are looked up per call, from the account's own
+ * company allowance (a company page is not a profile view, so it never takes reads from people). LinkedIn's company
+ * search answers only when exactly one company has the name (two "Nova"s are two companies, so neither is taken);
+ * the company's LinkedIn id, public name and logo are then kept on the organisation (enrichment/logos `adoptCompany`).
+ * Schools are left to their own site icons. The sample student's companies come from the mock connector.
  */
-import { normalizeCompany, type User } from '@orbit/core';
+import { looksLikeSchool, normalizeCompany, type User } from '@orbit/core';
 import { db } from '../db/schema';
 import { mockCompanyByName, usesMockConnectors } from '../integrations/connectorsMock';
 import {
+  type CompaniesAnswer,
+  type CompanyAnswer,
   type EnrichOutcome,
-  type LinkedInCompany,
-  linkedInCompanyByName,
+  linkedInCompanies,
 } from '../integrations/enrichmentProxy';
 import { isServerUser } from '../integrations/orbitApi';
 import { unipileConfigured } from '../integrations/unipile';
@@ -23,13 +27,12 @@ import { linkedInPaused, pauseLinkedIn, readBudget } from './enrichment/store';
 import { liveLinkedInAccount } from './linkedinLive';
 import { upsertOrganization } from './people';
 
-/** Calls a minute at most (each is a LinkedIn search and a company page): each gap is this share of a minute plus up
- * to as much again, at random. */
-export const LOGOS_PER_MINUTE = 3;
-export const LOGOS_PER_DAY = 30;
-/** A company LinkedIn could not pin down is asked about again after this long. */
+/** Names sent in one call (the shared list answers all of them; only new ones cost LinkedIn reads). */
+export const LOGO_BATCH = 60;
+/** The pause between calls while companies are still to be looked up: this, plus up to as much again at random. */
+export const LOGO_GAP_MS = 20_000;
+/** A company LinkedIn could not pin down is sent again after this long (the shared list keeps the answer meanwhile). */
 export const LOGO_RETRY_MS = 14 * 86_400_000;
-const GAP_MS = 60_000 / LOGOS_PER_MINUTE;
 
 let jitter = () => Math.random();
 /** Unit-test hook: the random share of each gap (0 to 1). */
@@ -50,9 +53,9 @@ export function wantCompanyLogo(name: string | undefined): void {
   if (!had) for (const fn of listeners) fn();
 }
 
-/** Where company pages come from: LinkedIn through the proxy, or the demo's mock connector. */
+/** Where company answers come from: Orbit's shared list through the proxy, or the demo's mock connector. */
 export interface CompanySource {
-  byName(name: string): Promise<EnrichOutcome<LinkedInCompany>>;
+  byNames(names: string[]): Promise<EnrichOutcome<CompaniesAnswer>>;
 }
 
 export async function companySourceFor(user: Pick<User, 'id'>): Promise<CompanySource | undefined> {
@@ -61,77 +64,131 @@ export async function companySourceFor(user: Pick<User, 'id'>): Promise<CompanyS
   if (!row || row.status === 'revoked' || !row.externalAccountId) return undefined;
   if (usesMockConnectors(user.id))
     return {
-      byName: async (name) => {
-        const c = await mockCompanyByName(name);
-        return c ? { ok: true, value: c } : { ok: false, reason: 'not_found', message: 'Not in the demo.' };
+      byNames: async (names) => {
+        const companies: Record<string, CompanyAnswer> = {};
+        for (const n of names) {
+          const c = await mockCompanyByName(n);
+          companies[n] = c
+            ? {
+                status: 'found',
+                companyId: c.id,
+                publicIdentifier: c.publicIdentifier,
+                name: c.name,
+                logoUrl: c.logoUrl,
+              }
+            : { status: 'not_found' };
+        }
+        return { ok: true, value: { companies, pending: 0 } };
       },
     };
   if (!unipileConfigured() || !row.accessToken) return undefined;
   const accountId = row.externalAccountId;
   const token = row.accessToken;
-  return { byName: (name) => linkedInCompanyByName(accountId, name, { token }) };
+  return { byNames: (names) => linkedInCompanies(accountId, names, { token }) };
 }
 
 type Tried = Record<string, string>;
 const triedKey = (userId: string) => `logos:tried:${userId}`;
-const dayKey = (userId: string) => `logos:day:${userId}`;
 const nextCall = new Map<string, number>();
 
 export type LogoStep = 'asked' | 'idle' | 'wait' | 'paused' | 'off';
 
-/** One tick: the most recently shown company still without a LinkedIn logo, when pace and allowance let it. */
-export async function fetchOneLogo(
+/**
+ * The names to send next: those tiles asked for (most recent first), then the companies people in the network work
+ * at, most people first. Never one that already has a LinkedIn logo, a school (its site icon stands in), or one
+ * LinkedIn could not pin down in the last two weeks.
+ */
+async function namesToSend(
+  userId: string,
+  tried: Tried,
+  now: Date,
+): Promise<{ key: string; name: string }[]> {
+  const orgs = await db.organizations.toArray();
+  const done = new Set(
+    orgs
+      .filter((o) => o.logoUrl && o.linkedinCompanyId)
+      .map((o) => o.nameNormalized || normalizeCompany(o.name)),
+  );
+  const fresh = (key: string) =>
+    !done.has(key) && now.getTime() - Date.parse(tried[key] ?? '1970-01-01') > LOGO_RETRY_MS;
+  const out: { key: string; name: string }[] = [];
+  const seen = new Set<string>();
+  const add = (key: string, name: string) => {
+    if (seen.has(key) || !fresh(key) || looksLikeSchool(name)) return;
+    seen.add(key);
+    out.push({ key, name });
+  };
+  for (const [key, { name }] of [...wanted.entries()].sort((a, b) => b[1].at - a[1].at)) add(key, name);
+  if (out.length < LOGO_BATCH) {
+    const count = new Map<string, { name: string; n: number }>();
+    await db.people
+      .where('userId')
+      .equals(userId)
+      .each((p) => {
+        if (p.hiddenAt || !p.currentOrganizationRaw) return;
+        const key = normalizeCompany(p.currentOrganizationRaw);
+        if (!key) return;
+        const c = count.get(key);
+        if (c) c.n++;
+        else count.set(key, { name: p.currentOrganizationRaw.trim(), n: 1 });
+      });
+    for (const [key, { name }] of [...count.entries()].sort((a, b) => b[1].n - a[1].n)) {
+      if (out.length >= LOGO_BATCH) break;
+      add(key, name);
+    }
+  }
+  return out.slice(0, LOGO_BATCH);
+}
+
+/**
+ * One call: the next batch of companies without a LinkedIn logo, answered from Orbit's shared list (free) and a few
+ * looked up on LinkedIn. Every found company's id, public name and logo go onto its organisation.
+ */
+export async function fetchLogos(
   user: Pick<User, 'id'>,
   opts: { now?: Date; source?: CompanySource } = {},
-): Promise<{ step: LogoStep; name?: string }> {
+): Promise<{ step: LogoStep; found?: number; pending?: number }> {
   const now = opts.now ?? new Date();
   const source = opts.source ?? (await companySourceFor(user));
   if (!source) return { step: 'off' };
   if (now.getTime() < (nextCall.get(user.id) ?? 0)) return { step: 'wait' };
   if (linkedInPaused(await readBudget(user.id, now), now)) return { step: 'paused' };
-  const day = now.toISOString().slice(0, 10);
-  const v = (await db.kv.get(dayKey(user.id)))?.value as { day?: string; used?: number } | undefined;
-  const used = v?.day === day ? (v.used ?? 0) : 0;
-  if (used >= LOGOS_PER_DAY) return { step: 'paused' };
   const tried = ((await db.kv.get(triedKey(user.id)))?.value as Tried | undefined) ?? {};
-  const orgs = await db.organizations.toArray();
-  const hasLogo = new Set(
-    orgs
-      .filter((o) => o.logoUrl && o.linkedinCompanyId)
-      .map((o) => o.nameNormalized || normalizeCompany(o.name)),
-  );
-  const next = [...wanted.entries()]
-    .filter(
-      ([key]) => !hasLogo.has(key) && now.getTime() - Date.parse(tried[key] ?? '1970-01-01') > LOGO_RETRY_MS,
-    )
-    .sort((a, b) => b[1].at - a[1].at)[0];
-  if (!next) return { step: 'idle' };
-  const [key, { name }] = next;
-  wanted.delete(key);
-  nextCall.set(user.id, now.getTime() + GAP_MS * (1 + jitter()));
-  tried[key] = now.toISOString();
-  await db.kv.put({ key: triedKey(user.id), value: tried });
-  await db.kv.put({ key: dayKey(user.id), value: { day, used: used + 1 } });
-  const r = await source.byName(name);
+  const batch = await namesToSend(user.id, tried, now);
+  if (!batch.length) return { step: 'idle' };
+  nextCall.set(user.id, now.getTime() + LOGO_GAP_MS * (1 + jitter()));
+  const r = await source.byNames(batch.map((b) => b.name));
   if (!r.ok) {
     if (r.reason === 'throttled') {
       await pauseLinkedIn(user.id, now, 'LinkedIn asked Orbit to slow down. It carries on tomorrow.');
-      return { step: 'paused', name };
+      return { step: 'paused' };
     }
-    if (r.reason === 'limit') {
-      await db.kv.put({ key: dayKey(user.id), value: { day, used: LOGOS_PER_DAY } });
-      return { step: 'paused', name };
-    }
-    return { step: 'asked', name };
+    return { step: 'asked', found: 0 };
   }
-  const org = await upsertOrganization(name);
-  if (org)
+  let found = 0;
+  for (const { key, name } of batch) {
+    const a = r.value.companies[name];
+    if (!a) continue;
+    wanted.delete(key);
+    if (a.status !== 'found' || !a.companyId) {
+      tried[key] = now.toISOString();
+      continue;
+    }
+    const org = await upsertOrganization(name);
+    if (!org) continue;
     await adoptCompany(
       org,
-      { companyId: r.value.id, companySlug: r.value.publicIdentifier, logoUrl: r.value.logoUrl },
+      { companyId: a.companyId, companySlug: a.publicIdentifier, logoUrl: a.logoUrl },
       now,
     );
-  return { step: 'asked', name };
+    if (a.logoUrl) found++;
+  }
+  await db.kv.put({ key: triedKey(user.id), value: tried });
+  // today's company reads are used: the shared list still answers, so the queue keeps going, only slower
+  if (r.value.stopped === 'limit') nextCall.set(user.id, now.getTime() + 30 * 60_000);
+  if (r.value.stopped === 'throttled')
+    await pauseLinkedIn(user.id, now, 'LinkedIn asked Orbit to slow down. It carries on tomorrow.');
+  return { step: 'asked', found, pending: r.value.pending };
 }
 
 let autoRun = import.meta.env.MODE !== 'test';
@@ -145,7 +202,7 @@ export function resetLogoQueueForTests(): void {
   nextCall.clear();
 }
 
-/** Run the queue while the app is open (a tick when a tile asks, every few seconds while names wait). */
+/** Run the queue while the app is open (a call when a tile asks, then every few seconds while names wait). */
 export function startLogoQueue(user: Pick<User, 'id'>): () => void {
   if (!autoRun || isServerUser(user.id)) return () => undefined;
   let stopped = false;
@@ -161,7 +218,7 @@ export function startLogoQueue(user: Pick<User, 'id'>): () => void {
     let wait = 60_000;
     if (typeof document === 'undefined' || document.visibilityState !== 'hidden') {
       busy = true;
-      const r = await fetchOneLogo(user).catch(() => ({ step: 'off' as const }));
+      const r = await fetchLogos(user).catch(() => ({ step: 'off' as const }));
       busy = false;
       if (r.step === 'asked') startActivity('logos', 'Fetching company logos', { quiet: true });
       else if (r.step !== 'wait') endActivity('logos');
