@@ -80,6 +80,17 @@ test.describe('the trust ladder', () => {
       if (s.outboundMessageId) await db.outbound.delete(s.outboundMessageId as string);
       await db.suggestions.update(s.id, { outboundMessageId: undefined });
       await db.people.update(s.personId as string, { tieScore: 60, location: 'Chicago, IL' });
+      // the score is set for this test: a recompute the app runs later on a slow machine does not take it back
+      (
+        db.people as unknown as {
+          hook: (
+            ev: 'updating',
+            fn: (mods: Record<string, unknown>, key: string) => Record<string, unknown> | undefined,
+          ) => void;
+        }
+      ).hook('updating', (mods, key) =>
+        key === s.personId && 'tieScore' in mods ? { tieScore: 60 } : undefined,
+      );
       const p = (await db.people.toArray()).find((x) => x.id === s.personId)!;
       return p.firstName as string;
     });
