@@ -57,6 +57,11 @@ test.describe('the trust ladder', () => {
     await expect(offer).toContainText("You've approved 10 bumps without changing a word.");
     await offer.getByTestId('trust-offer-yes').click();
     await expect(offer).toHaveCount(0);
+    // the app's own work after opening (the demo's LinkedIn sync recomputes every tie score) settles first, so the
+    // score set below for the test is not recomputed under it on a slow machine
+    await expect(page.getByTestId('activity-line')).toHaveAttribute('data-state', 'idle', {
+      timeout: 60_000,
+    });
     // a bump card whose draft is written now goes out on its own, in the recipient's morning
     const name = await page.evaluate(async () => {
       const db = (window as unknown as Db).__orbitDb;
