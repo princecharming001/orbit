@@ -121,7 +121,8 @@ export interface ConnectorDeps {
  */
 export interface SharedReads {
   get(key: string): Promise<Record<string, unknown> | undefined>;
-  put(key: string, value: Record<string, unknown>): Promise<void>;
+  /** kept `days` (1 by default): public activity changes daily, a profile's work history much more slowly */
+  put(key: string, value: Record<string, unknown>, days?: number): Promise<void>;
 }
 
 export function memorySharedReads(): SharedReads {
@@ -247,11 +248,11 @@ export function postgrestSharedReads(
       if (!r.ok) return undefined;
       return ((await r.json()) as Record<string, unknown> | null) ?? undefined;
     },
-    put: async (key, value) => {
+    put: async (key, value, days = 1) => {
       await doFetch(`${url}/rest/v1/rpc/orbit_linkedin_shared_put`, {
         method: 'POST',
         headers,
-        body: JSON.stringify({ p_key: key, p_value: value }),
+        body: JSON.stringify({ p_key: key, p_value: value, p_days: days }),
       });
     },
   };
@@ -262,9 +263,14 @@ async function sharedGet(deps: ConnectorDeps, key: string): Promise<Record<strin
   if (!deps.shared) return undefined;
   return deps.shared.get(key).catch(() => undefined);
 }
-async function sharedPut(deps: ConnectorDeps, key: string, value: Record<string, unknown>): Promise<void> {
+async function sharedPut(
+  deps: ConnectorDeps,
+  key: string,
+  value: Record<string, unknown>,
+  days?: number,
+): Promise<void> {
   if (!deps.shared) return;
-  await deps.shared.put(key, value).catch(() => undefined);
+  await deps.shared.put(key, value, days).catch(() => undefined);
 }
 
 /** The shared key for one profile read: who (as written), which sections, and whether recommendations were read. */
@@ -2439,7 +2445,9 @@ async function enrichmentRoute(
       // back on is this account's alone
       if (read.ok && 'profile' in read && read.profile && !read.profile.throttled.length) {
         const key = await profileShareKey(body);
-        if (key) await sharedPut(deps, key, publicProfile(read.profile as Record<string, unknown>));
+        // a month: someone's work history changes far more slowly than that, and Orbit reads a profile again only
+        // after 45 days anyway
+        if (key) await sharedPut(deps, key, publicProfile(read.profile as Record<string, unknown>), 30);
       }
       return json(200, read, h);
     }

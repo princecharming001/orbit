@@ -257,7 +257,11 @@ async function profileStep(
   const sections = needs.has('profile') ? sectionsFor(ctx, p.id) : [];
   // someone the student is not connected to shows everyone the same profile (no contact details): another student's
   // read from today will do, so LinkedIn never sees many accounts open the same person
-  const r = await readProfile(ctx, identifier, sections, { shared: !p.linkedinConnectedOn });
+  // the previews (who they work for now) are what anyone would see, connection or not: another student's read from
+  // this month will do; full reads of a connection come from this account, for what only a connection sees
+  const r = await readProfile(ctx, identifier, sections, {
+    shared: !p.linkedinConnectedOn || sections === PREVIEW_SECTIONS,
+  });
   if (r.notFound) rec.profileAt = ctx.now.toISOString();
   if (!r.profile) return { stop: r.stop };
   const applied = await applyLinkedInProfile(ctx.user, p.id, r.profile, {

@@ -713,11 +713,11 @@ function postgrestSharedReads(url2, serviceKey2, doFetch = fetch) {
       if (!r.ok) return void 0;
       return await r.json() ?? void 0;
     },
-    put: async (key, value) => {
+    put: async (key, value, days = 1) => {
       await doFetch(`${url2}/rest/v1/rpc/orbit_linkedin_shared_put`, {
         method: "POST",
         headers,
-        body: JSON.stringify({ p_key: key, p_value: value })
+        body: JSON.stringify({ p_key: key, p_value: value, p_days: days })
       });
     }
   };
@@ -726,9 +726,9 @@ async function sharedGet(deps, key) {
   if (!deps.shared) return void 0;
   return deps.shared.get(key).catch(() => void 0);
 }
-async function sharedPut(deps, key, value) {
+async function sharedPut(deps, key, value, days) {
   if (!deps.shared) return;
-  await deps.shared.put(key, value).catch(() => void 0);
+  await deps.shared.put(key, value, days).catch(() => void 0);
 }
 async function profileShareKey(body) {
   const identifier = text(body.identifier, 200)?.toLowerCase();
@@ -2287,7 +2287,7 @@ async function enrichmentRoute(deps, path, body, ctx) {
       const read = await unipileProfile(deps, body, doFetch);
       if (read.ok && "profile" in read && read.profile && !read.profile.throttled.length) {
         const key = await profileShareKey(body);
-        if (key) await sharedPut(deps, key, publicProfile(read.profile));
+        if (key) await sharedPut(deps, key, publicProfile(read.profile), 30);
       }
       return json(200, read, h);
     }
