@@ -1,14 +1,19 @@
 /**
  * A person's Messages tab (plan 25): every message with them, oldest first, whatever it went through (Gmail,
  * LinkedIn, the texts Orbit imported), each marked by channel, and a box at the bottom to answer on the channel picked
- * without leaving Orbit. "Check now" reads Gmail and LinkedIn this second.
+ * without leaving Orbit. "Check now" reads Gmail and LinkedIn this second. When Orbit has a message waiting on the
+ * student for them (a time to suggest, a thank-you, a follow-up), its draft fills that box, ready to edit and send,
+ * with Snooze and Dismiss beside it: the reply is written where the conversation is.
  */
-import type { Person } from '@orbit/core';
+import type { Person, Suggestion } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Send } from 'lucide-react';
+import { Send, Sparkles } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { draftTypedMessage } from '../engine/brief';
+import { db } from '../db/schema';
+import { draftTypedMessage, ensureDrafts, isMessageSuggestion } from '../engine/brief';
 import { type ConversationItem, conversationWith } from '../engine/conversation';
+import { dismissSuggestion, restoreSuggestion, snoozeSuggestion } from '../engine/send';
+import { SUGGESTION_KIND_LABELS } from '../engine/today';
 import { useSession } from '../state/session';
 import { Button, cx, Skeleton, Textarea, useToast } from '../ui';
 import { runApproval } from './approve';
@@ -20,6 +25,13 @@ const CHANNEL_NAME: Record<ConversationItem['channel'], string> = {
   linkedin: 'LinkedIn',
   text: 'Text',
 };
+
+/** Cards that are a reply in this conversation; a first message and a warm-up step keep their own card. */
+export const composesHere = (s: Pick<Suggestion, 'kind' | 'status'>) =>
+  (s.status === 'pending' || s.status === 'snoozed') &&
+  s.kind !== 'new_outreach' &&
+  s.kind !== 'warm_up_engage' &&
+  isMessageSuggestion(s.kind);
 
 const bareSubject = (s: string | undefined) => (s ?? '').replace(/^\s*((re|fwd?)\s*:\s*)+/i, '').trim();
 
@@ -51,9 +63,50 @@ export function Conversation({ person }: { person: Person }) {
     lastIn && canSend.includes(lastIn.channel as 'linkedin' | 'gmail')
       ? (lastIn.channel as 'linkedin' | 'gmail')
       : canSend[0];
+  // the newest message card waiting on the student for them, and its draft (written now if it has none yet)
+  const waiting = useLiveQuery(
+    async () =>
+      (
+        await db.suggestions
+          .where('personId')
+          .equals(person.id)
+          .filter((s) => s.status === 'pending' && composesHere(s))
+          .toArray()
+      ).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0] ?? null,
+    [person.id],
+  );
+  const suggested = useLiveQuery(
+    async () =>
+      waiting?.outboundMessageId ? ((await db.outbound.get(waiting.outboundMessageId)) ?? null) : null,
+    [waiting?.outboundMessageId],
+  );
+  const [drafting, setDrafting] = useState(false);
+  useEffect(() => {
+    if (!user || !waiting || waiting.outboundMessageId) return;
+    let live = true;
+    setDrafting(true);
+    ensureDrafts(user, [waiting.id])
+      .catch(() => undefined)
+      .finally(() => live && setDrafting(false));
+    return () => {
+      live = false;
+    };
+  }, [user, waiting?.id, waiting?.outboundMessageId]);
+  const usable = suggested && suggested.status === 'draft' ? suggested : undefined;
   const [picked, setPicked] = useState<'linkedin' | 'gmail' | undefined>();
-  const channel = picked ?? preferred;
+  const draftChannel =
+    usable && canSend.includes(usable.channel as 'linkedin' | 'gmail')
+      ? (usable.channel as 'linkedin' | 'gmail')
+      : undefined;
+  const channel = picked ?? draftChannel ?? preferred;
   const [body, setBody] = useState('');
+  // the draft fills the box once, when it arrives and the student has not typed anything of their own
+  const [filledFrom, setFilledFrom] = useState<string>();
+  useEffect(() => {
+    if (!usable || filledFrom === usable.id) return;
+    setFilledFrom(usable.id);
+    setBody((b) => (b.trim() ? b : (usable.bodyFinal ?? usable.bodyDraft)));
+  }, [usable?.id, usable?.bodyFinal, usable?.bodyDraft, filledFrom]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const end = useRef<HTMLDivElement>(null);
@@ -91,7 +144,11 @@ export function Conversation({ person }: { person: Person }) {
     setBusy(true);
     setError(undefined);
     try {
-      const draft = await draftTypedMessage(user, person.id, channel, text);
+      // Orbit's draft, edited or not, goes out as itself (the card it answers is then done); anything else as typed
+      const draft =
+        usable && usable.channel === channel
+          ? usable
+          : await draftTypedMessage(user, person.id, channel, text);
       if (!draft) return setError('Orbit could not find this person.');
       const err = await runApproval(user, draft, text, draft.subject, toast, person.firstName);
       if (err) setError(err);
@@ -184,11 +241,22 @@ export function Conversation({ person }: { person: Person }) {
           }}
           data-testid="conversation-reply"
         >
+          {waiting && (
+            <SuggestedLine
+              s={waiting}
+              userId={user.id}
+              onGone={() => {
+                // the draft leaves with its card; words the student changed stay in the box
+                const text = usable ? (usable.bodyFinal ?? usable.bodyDraft) : undefined;
+                if (text && body === text) setBody('');
+              }}
+            />
+          )}
           <Textarea
             value={body}
             onChange={(e) => setBody(e.target.value)}
-            rows={3}
-            placeholder={`Write to ${person.firstName}`}
+            rows={usable && body ? Math.min(10, Math.max(3, body.split('\n').length + 1)) : 3}
+            placeholder={drafting ? 'Orbit is writing a draft…' : `Write to ${person.firstName}`}
             aria-label={`Message to ${person.firstName}`}
             className="border-0 focus:ring-0 px-1"
             onKeyDown={(e) => {
@@ -240,6 +308,52 @@ export function Conversation({ person }: { person: Person }) {
           from here.
         </p>
       )}
+    </div>
+  );
+}
+
+/** What the draft in the box is for, with Snooze and Dismiss: the waiting card, folded into the composer. */
+function SuggestedLine({ s, userId, onGone }: { s: Suggestion; userId: string; onGone: () => void }) {
+  const toast = useToast();
+  const label = SUGGESTION_KIND_LABELS[s.kind]?.label ?? 'Suggested';
+  const snooze = async (days: number) => {
+    await snoozeSuggestion(userId, s, days);
+    onGone();
+    toast.push({
+      text: `Snoozed. It comes back in ${days === 7 ? 'a week' : `${days} day${days > 1 ? 's' : ''}`}.`,
+      action: { label: 'Undo', onClick: () => restoreSuggestion(s) },
+      ttl: 6000,
+    });
+  };
+  const dismiss = async () => {
+    await dismissSuggestion(userId, s, 'not_relevant');
+    onGone();
+    toast.push({
+      text: 'Draft removed.',
+      action: { label: 'Undo', onClick: () => restoreSuggestion(s) },
+      ttl: 6000,
+    });
+  };
+  const link = 'underline-offset-2 hover:text-ink hover:underline pointer-coarse:min-h-11';
+  return (
+    <div
+      className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-1 pb-1.5 text-[12px] text-ink-3"
+      data-testid="conversation-suggested"
+    >
+      <span className="inline-flex items-center gap-1.5">
+        <Sparkles size={12} aria-hidden className="text-accent" />
+        <span>
+          Orbit&apos;s draft: <span className="text-ink-2">{label}</span>
+        </span>
+      </span>
+      <span className="inline-flex items-center gap-2.5">
+        <button type="button" className={link} onClick={() => snooze(1)} data-testid="conversation-snooze">
+          Snooze a day
+        </button>
+        <button type="button" className={link} onClick={dismiss} data-testid="conversation-dismiss">
+          Dismiss
+        </button>
+      </span>
     </div>
   );
 }

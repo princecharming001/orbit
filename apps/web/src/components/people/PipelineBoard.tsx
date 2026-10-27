@@ -336,7 +336,7 @@ function BoardCard({
         <div className="min-w-0 flex-1">
           {/* The name link stretches over the whole card, so the card is one tab stop and opens on Enter. */}
           <Link
-            to={`/people/${person.id}`}
+            to={`/people/${person.id}?tab=conversation`}
             // a long name takes a second line rather than being cut to a first name and a letter
             className="block pr-6 text-[13.5px] font-medium leading-snug line-clamp-2 break-words focus:outline-none after:absolute after:inset-0 after:content-['']"
           >

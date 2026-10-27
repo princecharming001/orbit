@@ -40,6 +40,11 @@ interface RepliesState {
   repliesAfter?: string;
   /** when LinkedIn was last read for replies */
   repliesCheckedAt?: string;
+  /**
+   * when the reader first read back the whole lookback while keeping every message (plan 25): replies read before
+   * Orbit kept LinkedIn messages moved their chat but their words were never stored, so one read catches them up
+   */
+  repliesKeptAt?: string;
 }
 
 export type ReplySyncResult =
@@ -48,6 +53,8 @@ export type ReplySyncResult =
 
 const none: ReplySyncResult = { ok: true, replies: 0, people: [] };
 const time = (at: string | undefined) => (at ? Date.parse(at) : Number.NaN);
+/** the later of two times; a catch-up read never moves the checkpoint back */
+const later = (a: string | undefined, b: string | undefined) => (!a ? b : !b ? a : a > b ? a : b);
 
 /**
  * Read the student's LinkedIn messages since the last read and record the replies. Does nothing for an Orbit account
@@ -66,7 +73,12 @@ export async function syncLinkedInReplies(
     return { ok: false, reason: 'unconfigured', message: LIVE_SOON };
   const state = row.syncState as RepliesState;
   const last = time(state.repliesAfter);
-  const after = new Date(Number.isFinite(last) ? last - 60_000 : now.getTime() - FIRST_LOOKBACK_DAYS * DAY);
+  // once, the whole lookback again: what was read before messages were kept is stored now (nothing is recorded twice,
+  // and a reply the chat already knows moves nothing)
+  const catchUp = !state.repliesKeptAt;
+  const after = new Date(
+    Number.isFinite(last) && !catchUp ? last - 60_000 : now.getTime() - FIRST_LOOKBACK_DAYS * DAY,
+  );
   const r = await linkedInInbox(row.externalAccountId, after, { token: row.accessToken, fetch: opts.fetch });
   if (!r.ok)
     return { ok: false, reason: r.reason === 'unconfigured' ? 'unconfigured' : 'error', message: r.message };
@@ -78,9 +90,11 @@ export async function syncLinkedInReplies(
     // whose chat could not be found): the unread ones are older than those read, so the checkpoint stays where it
     // was and they are read next time (what was read is not recorded twice)
     repliesAfter: r.value.complete
-      ? (r.value.latest ?? state.repliesAfter ?? after.toISOString())
+      ? (later(r.value.latest, state.repliesAfter) ?? after.toISOString())
       : (state.repliesAfter ?? after.toISOString()),
     repliesCheckedAt: now.toISOString(),
+    // a catch-up cut short runs again next time
+    repliesKeptAt: state.repliesKeptAt ?? (r.value.complete ? now.toISOString() : undefined),
   };
   await db.integrations.update(row.id, { syncState: { ...(fresh?.syncState ?? row.syncState), ...next } });
   return { ok: true, replies: recorded.length, people: recorded };

@@ -178,6 +178,23 @@ export async function applyStage(
   } = {},
 ): Promise<'applied' | 'proposed' | 'rejected'> {
   const now = opts.now ?? new Date();
+  // read and write in one transaction: two callers deciding the same move at once (the timed rules and a calendar
+  // sync) are serialized, so the second sees the first's stage and records nothing
+  const status = await db.transaction('rw', db.chats, db.stageEvents, () =>
+    decideAndRecord(chat, to, actor, reason, opts, now),
+  );
+  if (status === 'applied') await settleAfterStageChange(chat, to, now, actor);
+  return status;
+}
+
+async function decideAndRecord(
+  chat: CoffeeChat,
+  to: ChatStage,
+  actor: Actor,
+  reason: string,
+  opts: { confidence?: number; evidenceTable?: string; evidenceId?: string; at?: Date | string },
+  now: Date,
+): Promise<'applied' | 'proposed' | 'rejected'> {
   // the stored row wins over a copy held across other work (two readers at once, the reply check and a sync): a
   // move Orbit decided from a stale copy is dropped, the student's move continues from where the chat really is
   const stored = await db.chats.get(chat.id);
@@ -230,7 +247,6 @@ export async function applyStage(
     if (to === 'archived') changes.archivedAt = at;
     await db.chats.update(chat.id, changes);
     Object.assign(chat, changes);
-    await settleAfterStageChange(chat, to, now, actor);
   }
   return status;
 }

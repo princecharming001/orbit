@@ -23,7 +23,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { runApproval } from '../components/approve';
 import { BackLink } from '../components/BackLink';
 import { PersonCompanyLogo } from '../components/CompanyLogo';
-import { Conversation } from '../components/Conversation';
+import { Conversation, composesHere } from '../components/Conversation';
 import { DraftEditor, handoffWhere, OutboxStatus } from '../components/DraftEditor';
 import { MutualConnections } from '../components/MutualConnections';
 import { DossierCard } from '../components/people/DossierCard';
@@ -130,10 +130,8 @@ export function PersonPage() {
   const [params, setParams] = useSearchParams();
   // Prep is a deck over About now (docs/plan/22): an old link to the Prep tab opens it there
   const rawTab = params.get('tab');
-  const tab =
-    (rawTab === 'prep'
-      ? 'facts'
-      : (rawTab as 'timeline' | 'conversation' | 'facts' | 'connections' | null)) ?? 'timeline';
+  const askedTab =
+    rawTab === 'prep' ? 'facts' : (rawTab as 'timeline' | 'conversation' | 'facts' | 'connections' | null);
   const prepOpen = params.get('prep') === '1' || rawTab === 'prep';
   const nav = useNavigate();
   const toast = useToast();
@@ -172,6 +170,8 @@ export function PersonPage() {
           : [],
       [id],
     ) ?? [];
+  // a reply Orbit drafted for them is written in Messages, so the page opens there while one waits
+  const tab = askedTab ?? (waiting.some(composesHere) ? 'conversation' : 'timeline');
   const edgesQ = useLiveQuery(
     () => (id ? db.edges.where('personAId').equals(id).or('personBId').equals(id).toArray() : []),
     [id],
@@ -801,7 +801,9 @@ export function PersonPage() {
         const handedOff = drafts.filter(
           (d) => d.status === 'handed_off' && d.id !== draft?.id && !cardDrafts.has(d.id),
         );
-        const cards = waiting.filter((w) => !draft || w.outboundMessageId !== draft.id);
+        // a reply Orbit drafted waits in the Messages tab's box, where the conversation is; only a first message or a
+        // warm-up step keeps a card up here
+        const cards = waiting.filter((w) => !composesHere(w) && (!draft || w.outboundMessageId !== draft.id));
         // drafts the student started here (Write to, the Map, Discover) and has not sent: they wait here and on Drafts
         const started = drafts
           .filter((d) => d.status === 'draft' && !d.suggestionId && d.id !== draft?.id)
