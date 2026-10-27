@@ -3053,7 +3053,17 @@ test.describe('Morning brief', () => {
         window as unknown as {
           __orbitDb: {
             people: {
-              toArray(): Promise<{ id: string; userId: string; linkedinUrl?: string }[]>;
+              toArray(): Promise<
+                {
+                  id: string;
+                  userId: string;
+                  linkedinUrl?: string;
+                  displayName: string;
+                  firstName: string;
+                  lastName?: string;
+                  currentOrganizationRaw?: string;
+                }[]
+              >;
               update(id: string, x: unknown): Promise<unknown>;
             };
             merges: { put(x: unknown): Promise<unknown> };
@@ -3063,11 +3073,16 @@ test.describe('Morning brief', () => {
       ).__orbitDb;
       const people = await db.people.toArray();
       const a = people.find((p) => p.linkedinUrl)!;
-      // the other record has no LinkedIn profile, so its name opens their page in Orbit
+      // the other record has no LinkedIn profile, so its name opens their page in Orbit; it has the same name and
+      // employer, a real duplicate (a guess with different names and employers is never asked, and is closed)
       const b = people.find((p) => p.id !== a.id)!;
       await db.people.update(b.id, {
         linkedinUrl: undefined,
         linkedinSlug: undefined,
+        displayName: a.displayName,
+        firstName: a.firstName,
+        lastName: a.lastName,
+        currentOrganizationRaw: a.currentOrganizationRaw,
       });
       const now = new Date().toISOString();
       await db.merges.put({
