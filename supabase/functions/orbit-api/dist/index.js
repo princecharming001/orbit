@@ -341,7 +341,10 @@ var TASKS = {
   extract_goal: { model: "claude-haiku-5-5", effort: "low", maxTokens: 1500 },
   judge: { model: "claude-sonnet-5-5", maxTokens: 2e3 },
   // high effort: against the writing model as the reference it agreed on 14 of 16 claims (low effort: 8 of 16), for $0.003
-  support: { model: "claude-haiku-5-5", effort: "high", maxTokens: 4e3 }
+  support: { model: "claude-haiku-5-5", effort: "high", maxTokens: 4e3 },
+  research_extract: { model: "claude-haiku-5-5", effort: "low", maxTokens: 2e3 },
+  // the brief reads compact facts, not raw pages: the mid model writes it for about a tenth of the writing model's price
+  research_brief: { model: "claude-sonnet-5-5", maxTokens: 8e3, flatNullable: true }
 };
 function makeClaude(deps) {
   const client = deps.apiKey ? deps.client ?? new Anthropic({ apiKey: deps.apiKey, fetch: deps.fetch, maxRetries: 2 }) : void 0;

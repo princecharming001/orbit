@@ -391,10 +391,14 @@ export function identityCard(p: IdentityInput): IdentityCard {
     employerNames.push({ name: n, current: e === current });
     if (employerNames.length >= 3) break;
   }
-  const schoolNames = [
+  // high schools too, after the rest: "Bhavya Mehta, Washington High School" on a club's page is how niche facts are tied
+  // to the right person; the minors rule (guards.ts, investigate.ts) decides what of those years may be said
+  const allSchools = [
     ...(p.profile?.education ?? []).map((e) => e.school?.trim() ?? ''),
     p.school?.trim() ?? '',
-  ].filter((s) => s && !/high school|secondary school/i.test(s));
+  ].filter(Boolean);
+  const isHigh = (s: string) => /high school|secondary school/i.test(s);
+  const schoolNames = [...allSchools.filter((s) => !isHigh(s)), ...allSchools.filter(isHigh)];
   const slug = slugOf(p.linkedinUrl) ?? p.profile?.publicIdentifier?.toLowerCase() ?? undefined;
   const employers = employerNames.slice(0, 3).map((e) => ({ ...e, aliases: companyAliases(e.name) }));
   return {
@@ -403,7 +407,7 @@ export function identityCard(p: IdentityInput): IdentityCard {
     last: norm(last),
     employers,
     schools: [...new Map(schoolNames.map((s) => [norm(s), s])).values()]
-      .slice(0, 4)
+      .slice(0, 5)
       .map((s) => ({ name: s, aliases: schoolAliases(s) })),
     city: cityOf(p.profile?.location ?? p.location),
     slug,

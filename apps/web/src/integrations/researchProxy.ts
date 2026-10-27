@@ -44,7 +44,7 @@ export interface ServerBrief {
   notes: string[];
   checked: boolean;
   strongPages: number;
-  provider?: 'exa' | 'claude';
+  provider?: 'exa' | 'claude' | 'investigate';
   costUsd: number;
 }
 
@@ -181,7 +181,7 @@ export function researchStatus(
   token: string | undefined,
   opts: { fetch?: typeof fetch } = {},
 ) {
-  return post<{ ok: true; allowance: Allowance; providers: { exa: boolean; claude: boolean } }>(
+  return post<{ ok: true; allowance: Allowance; providers: { exa: boolean; claude: boolean; parallel?: boolean; serper?: boolean } }>(
     '/status',
     { accountId, token },
     opts,

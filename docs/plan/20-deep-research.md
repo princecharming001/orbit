@@ -173,6 +173,37 @@ identity scoring picked, all fetched in one step) on Haiku 5.5 costs about $0.04
 (`web_search_20260209`, `web_fetch_20260209`, which Haiku 5.5 accepts). The gatherer only calls the tools and writes
 nothing; Opus 5.5 reads the fetched text and writes the brief. `ORBIT_RESEARCH_GATHER_MODEL` switches it.
 
+## The investigator loop (2026-10-27)
+
+Deep research used to run three searches, all tied to the person's current employer, read about ten pages and have the
+writing model read them raw: $0.12 a brief, and it missed the niche record (a student's DECA officer role and club pages
+were never searched for, and high schools were dropped from the identity card). With `PARALLEL_API_KEY` or
+`SERPER_API_KEY` set, a brief now runs the loop in `_shared/research/investigate.ts`:
+
+1. **Wide:** 12 to 16 searches from every anchor (each employer, each school including high school, the city) and the
+   kinds of pages niche facts live on (awards, officer roles, teams, hackathons, talks, their accounts via `site:`).
+   Plain queries go to Parallel in fast mode, five per request ($1 per 1,000 requests; the $5 monthly credit covers
+   5,000); queries with operators go to Serper, which is Google (about $1 per 1,000). Either does everything when the
+   other is missing, and Serper takes over when Parallel fails or runs out of credit.
+2. **Read:** pages are fetched straight from their sites (`pageText.ts`), for nothing; a page built in the browser keeps
+   the search excerpt that named them.
+3. **Extract and judge:** Haiku reads each page against who they are (roles, schools and their years, city) and says
+   whether it is them (yes, likely, no), the facts it states about them (each with a short exact quote), and leads worth
+   searching next. A page that only matches the name can be "likely" when everything fits; the writer may use it only
+   as likely. Sensitive categories are dropped; facts from someone's under-18 years are only achievements an
+   organization published (an award, an officer role, a team, a result), nothing personal.
+4. **Follow-ups:** the leads become new searches with their name (one round for the quick brief, up to three on Go
+   deeper), until nothing new turns up or time or money runs out.
+5. **Accounts:** usernames they published on their own pages, and a distinctive LinkedIn address (ten letters or more,
+   no digits), are checked on 15 work and hobby sites using Maigret's detection rules (`handles.ts`, MIT); each account
+   found is read and judged like any page. Never payment, dating or adult sites.
+6. **Write:** the brief is written on Sonnet from the extracted facts (`research_brief` in `claude.ts`), then the
+   support check runs as before.
+
+Searches, pages and readings share the 7-day cache, so Go deeper pays only for new rounds. A quick brief costs about
+$0.03 to $0.08 (searches about $0.01, reading free, extraction about $0.01, writing about $0.02 to $0.05). Without either
+key, research searches as before (Exa or Claude's web search), now also written on Sonnet.
+
 ## To go live
 1. Apply the migration `supabase/migrations/20261023_orbit_research.sql` (four service-role-only tables with RLS on,
    and the functions `orbit_research_use`, `orbit_research_refund`, `orbit_research_status`,

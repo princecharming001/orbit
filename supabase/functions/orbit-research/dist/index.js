@@ -179,6 +179,98 @@ function createExa(opts) {
   };
 }
 
+// supabase/functions/_shared/providers/webSearch.ts
+var PARALLEL_BASE = "https://api.parallel.ai";
+var SERPER_BASE = "https://google.serper.dev";
+var PARALLEL_SEARCH_USD = 1e-3;
+var SERPER_SEARCH_USD = 1e-3;
+var PARALLEL_QUERIES_PER_REQUEST = 5;
+var parallelResponse = z.looseObject({
+  results: z.array(
+    z.looseObject({
+      url: z.string(),
+      title: z.string().nullish(),
+      publish_date: z.string().nullish(),
+      excerpts: z.array(z.string()).nullish()
+    })
+  ).default([])
+});
+var serperResponse = z.looseObject({
+  organic: z.array(
+    z.looseObject({
+      link: z.string(),
+      title: z.string().nullish(),
+      snippet: z.string().nullish(),
+      date: z.string().nullish()
+    })
+  ).default([])
+});
+function createParallelSearch(opts) {
+  const base = trimBase(opts.baseUrl ?? PARALLEL_BASE);
+  return {
+    name: "parallel",
+    configured: !!opts.apiKey,
+    usdPerCall: PARALLEL_SEARCH_USD,
+    queriesPerCall: PARALLEL_QUERIES_PER_REQUEST,
+    async search(queries, objective) {
+      if (!opts.apiKey) return unconfigured("parallel");
+      const r = await requestJson(opts, {
+        provider: "parallel",
+        url: `${base}/v1/search`,
+        method: "POST",
+        headers: { "x-api-key": opts.apiKey },
+        body: {
+          objective,
+          search_queries: queries.slice(0, PARALLEL_QUERIES_PER_REQUEST),
+          mode: "fast",
+          max_chars_total: 12e3
+        },
+        schema: parallelResponse
+      });
+      if (!r.ok) return r;
+      return {
+        ok: true,
+        value: r.value.results.map((x) => ({
+          url: x.url,
+          title: x.title ?? void 0,
+          snippet: (x.excerpts ?? []).join(" … ").slice(0, 1500) || void 0,
+          published: x.publish_date ?? null
+        }))
+      };
+    }
+  };
+}
+function createSerperSearch(opts) {
+  const base = trimBase(opts.baseUrl ?? SERPER_BASE);
+  return {
+    name: "serper",
+    configured: !!opts.apiKey,
+    usdPerCall: SERPER_SEARCH_USD,
+    queriesPerCall: 1,
+    async search(queries) {
+      if (!opts.apiKey) return unconfigured("serper");
+      const r = await requestJson(opts, {
+        provider: "serper",
+        url: `${base}/search`,
+        method: "POST",
+        headers: { "X-API-KEY": opts.apiKey },
+        body: { q: queries[0] ?? "", num: 10, gl: "us", hl: "en" },
+        schema: serperResponse
+      });
+      if (!r.ok) return r;
+      return {
+        ok: true,
+        value: r.value.organic.map((x) => ({
+          url: x.link,
+          title: x.title ?? void 0,
+          snippet: x.snippet ?? void 0,
+          published: x.date ?? null
+        }))
+      };
+    }
+  };
+}
+
 // supabase/functions/_shared/prices.ts
 var PRICES = {
   "claude-opus-5-5": { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 },
@@ -1047,7 +1139,10 @@ var TASKS = {
   extract_goal: { model: "claude-haiku-5-5", effort: "low", maxTokens: 1500 },
   judge: { model: "claude-sonnet-5-5", maxTokens: 2e3 },
   // high effort: against the writing model as the reference it agreed on 14 of 16 claims (low effort: 8 of 16), for $0.003
-  support: { model: "claude-haiku-5-5", effort: "high", maxTokens: 4e3 }
+  support: { model: "claude-haiku-5-5", effort: "high", maxTokens: 4e3 },
+  research_extract: { model: "claude-haiku-5-5", effort: "low", maxTokens: 2e3 },
+  // the brief reads compact facts, not raw pages: the mid model writes it for about a tenth of the writing model's price
+  research_brief: { model: "claude-sonnet-5-5", maxTokens: 8e3, flatNullable: true }
 };
 function makeClaude(deps) {
   const client = deps.apiKey ? deps.client ?? new Anthropic({ apiKey: deps.apiKey, fetch: deps.fetch, maxRetries: 2 }) : void 0;
@@ -1432,10 +1527,12 @@ function identityCard(p) {
     employerNames.push({ name: n, current: e === current });
     if (employerNames.length >= 3) break;
   }
-  const schoolNames = [
+  const allSchools = [
     ...(p.profile?.education ?? []).map((e) => e.school?.trim() ?? ""),
     p.school?.trim() ?? ""
-  ].filter((s) => s && !/high school|secondary school/i.test(s));
+  ].filter(Boolean);
+  const isHigh = (s) => /high school|secondary school/i.test(s);
+  const schoolNames = [...allSchools.filter((s) => !isHigh(s)), ...allSchools.filter(isHigh)];
   const slug = slugOf(p.linkedinUrl) ?? p.profile?.publicIdentifier?.toLowerCase() ?? void 0;
   const employers = employerNames.slice(0, 3).map((e) => ({ ...e, aliases: companyAliases(e.name) }));
   return {
@@ -1443,7 +1540,7 @@ function identityCard(p) {
     names: [...names].filter((n) => n.includes(" ")),
     last: norm(last),
     employers,
-    schools: [...new Map(schoolNames.map((s) => [norm(s), s])).values()].slice(0, 4).map((s) => ({ name: s, aliases: schoolAliases(s) })),
+    schools: [...new Map(schoolNames.map((s) => [norm(s), s])).values()].slice(0, 5).map((s) => ({ name: s, aliases: schoolAliases(s) })),
     city: cityOf(p.profile?.location ?? p.location),
     slug,
     domains: workDomains(p.emails),
@@ -1496,12 +1593,13 @@ function aboutCompany(page, org) {
 }
 
 // supabase/functions/_shared/research/prompts.ts
-var PROMPT_VERSION = "dossier-v2";
+var PROMPT_VERSION = "dossier-v3";
 function dossierSystem(userFirstName, goalSentence) {
   return [
     `You write a research brief about one person for ${userFirstName}, who wants to ${goalSentence}.`,
     'Use only the sources provided, and write from what each source actually says: "joined" stays "joined", never "led". Every claim needs the id of the source it came from.',
     "If sources disagree or might be about a different person with the same name, leave the claim out.",
+    'A source whose title starts with "[likely them]" names someone with their name whose details all fit, but nothing ties it to them for certain: you may use it, saying so ("likely the same Dana who..."), never in an opener, and never for their current role.',
     'Never write, even if a source says it: age, ethnicity, religion, health, family or relationships, sexuality, politics or donations, where they live (a city is the finest you may say), salary or pay, their personality or "communication style", legal matters, immigration, or that they lost a job or took leave.',
     `"careful" is about their company only (recent layoffs, a reorganization, a product shut down, a hiring freeze), each item with its source ids; never anything about the person's own life. Leave it empty when there is nothing.`,
     '"company" is what is happening at their company that matters to the student (team news, launches, hiring), from company sources, each with its source ids. Leave it empty when there are no company sources.',
@@ -1688,7 +1786,7 @@ function carefulItems(c) {
   ).filter((x) => !!x);
 }
 var writeEstimateUsd = synthEstimateUsd;
-async function writeBrief(claude, prompt, allowed, budget) {
+async function writeBrief(claude, prompt, allowed, budget, task = "dossier") {
   let user = prompt.user;
   let first;
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -1703,7 +1801,7 @@ async function writeBrief(claude, prompt, allowed, budget) {
       budget.notes.push("synthesis skipped: cost cap");
       return { content: null, partial: true };
     }
-    const r = await claude.parse("dossier", dossierSchema, { system: prompt.system, user });
+    const r = await claude.parse(task, dossierSchema, { system: prompt.system, user });
     budget.spent += r.costUsd ?? 0;
     if (!r.ok) {
       if (first) {
@@ -1796,6 +1894,587 @@ function finish(d, history, noOutsideSources) {
     confidence: noOutsideSources ? "low" : d.confidence
   };
 }
+
+// supabase/functions/_shared/research/handles.ts
+var HANDLE_SITES = [
+  {
+    name: "GitHub",
+    url: "https://github.com/{u}",
+    probe: "https://api.github.com/users/{u}",
+    check: "status",
+    pattern: /^[a-zA-Z0-9](?:[a-zA-Z0-9]|-(?=[a-zA-Z0-9])){0,38}$/
+  },
+  {
+    name: "YouTube",
+    url: "https://www.youtube.com/@{u}/about",
+    check: "present",
+    strs: ["visitorData"],
+    headers: { "user-agent": "curl/8.6.0", accept: "*/*" },
+    pattern: /^[^/]+$/
+  },
+  { name: "Medium", url: "https://medium.com/@{u}", probe: "https://medium.com/feed/@{u}", check: "status" },
+  {
+    name: "Substack",
+    url: "https://substack.com/@{u}",
+    probe: "https://substack.com/api/v1/user/{u}/public_profile",
+    check: "status"
+  },
+  {
+    name: "Hugging Face",
+    url: "https://huggingface.co/{u}",
+    probe: "https://huggingface.co/api/users/{u}/overview",
+    check: "status"
+  },
+  { name: "Behance", url: "https://www.behance.net/{u}", check: "status", headers: { "user-agent": "Curl" } },
+  {
+    name: "Dribbble",
+    url: "https://dribbble.com/{u}",
+    check: "absent",
+    strs: ["Whoops, that page is gone."],
+    pattern: /^[a-zA-Z][a-zA-Z0-9_-]*$/
+  },
+  { name: "Linktree", url: "https://linktr.ee/{u}", check: "status" },
+  { name: "DEV", url: "https://dev.to/{u}", check: "status", pattern: /^[a-zA-Z][a-zA-Z0-9_-]*$/ },
+  {
+    name: "GitLab",
+    url: "https://gitlab.com/{u}",
+    probe: "https://gitlab.com/api/v4/users?username={u}",
+    check: "absent",
+    strs: ["[]"]
+  },
+  {
+    name: "Bluesky",
+    url: "https://bsky.app/profile/{u}.bsky.social",
+    probe: "https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile?actor={u}.bsky.social",
+    check: "present",
+    strs: ['"did"']
+  },
+  {
+    name: "Chess.com",
+    url: "https://www.chess.com/member/{u}",
+    probe: "https://api.chess.com/pub/player/{u}",
+    check: "present",
+    strs: ['"player_id":']
+  },
+  {
+    name: "Letterboxd",
+    url: "https://letterboxd.com/{u}",
+    check: "absent",
+    strs: ["Sorry, we can’t find the page you’ve requested."]
+  },
+  {
+    name: "CodePen",
+    url: "https://codepen.io/{u}",
+    check: "absent",
+    strs: ["I'm afraid you've found a page that doesn't exist on CodePen"]
+  },
+  {
+    name: "Speaker Deck",
+    url: "https://speakerdeck.com/{u}",
+    check: "absent",
+    strs: ["User Not Found"],
+    pattern: /^[^.]+$/
+  }
+];
+function distinctiveSlug(slug) {
+  const s = (slug ?? "").toLowerCase().trim();
+  return /^[a-z]{10,30}$/.test(s) ? s : void 0;
+}
+async function exists(site, handle, doFetch, timeoutMs) {
+  if (site.pattern && !site.pattern.test(handle)) return false;
+  const target = (site.probe ?? site.url).replaceAll("{u}", encodeURIComponent(handle));
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const r = await doFetch(target, {
+      redirect: "follow",
+      signal: ctrl.signal,
+      headers: { "user-agent": "Mozilla/5.0 (Orbit research)", ...site.headers ?? {} }
+    });
+    if (site.check === "status") return r.ok;
+    if (!r.ok && r.status !== 404) return false;
+    const body = (await r.text()).slice(0, 4e5);
+    if (site.check === "absent") return r.ok && !(site.strs ?? []).some((s) => body.includes(s));
+    return (site.strs ?? []).some((s) => body.includes(s));
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function findAccounts(handles, opts = {}) {
+  const doFetch = opts.fetch ?? fetch;
+  const sites = opts.sites ?? HANDLE_SITES;
+  const unique = [...new Set(handles.map((h) => h.trim()).filter((h) => h.length >= 3))].slice(0, 3);
+  const checks = unique.flatMap(
+    (handle) => sites.map(
+      async (site) => await exists(site, handle, doFetch, opts.timeoutMs ?? 6e3) ? { site: site.name, handle, url: site.url.replaceAll("{u}", encodeURIComponent(handle)) } : void 0
+    )
+  );
+  return (await Promise.all(checks)).filter((x) => !!x);
+}
+
+// supabase/functions/_shared/research/pageText.ts
+var PAGE_TEXT_CHARS = 9e3;
+var MAX_BYTES = 15e5;
+var UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36";
+var ENTITIES = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  nbsp: " ",
+  rsquo: "’",
+  lsquo: "‘",
+  rdquo: "”",
+  ldquo: "“",
+  mdash: "—",
+  ndash: "–",
+  hellip: "…"
+};
+function decodeEntities(s) {
+  return s.replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n))).replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(Number.parseInt(n, 16))).replace(/&([a-z]+);/gi, (m, n) => ENTITIES[n.toLowerCase()] ?? m);
+}
+function meta(html, key) {
+  const re = new RegExp(
+    `<meta[^>]+(?:name|property)=["']${key}["'][^>]*content=["']([^"']*)["']|<meta[^>]+content=["']([^"']*)["'][^>]*(?:name|property)=["']${key}["']`,
+    "i"
+  );
+  const m = re.exec(html);
+  const v = m?.[1] ?? m?.[2];
+  return v ? decodeEntities(v).trim() : void 0;
+}
+function htmlToText(html) {
+  const title = decodeEntities(/<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1] ?? "").trim() || void 0;
+  const description = meta(html, "og:description") ?? meta(html, "description");
+  const ogTitle = meta(html, "og:title");
+  const published = meta(html, "article:published_time") ?? meta(html, "og:published_time");
+  const body = html.replace(/<!--[\s\S]*?-->/g, " ").replace(/<(script|style|noscript|svg|template|iframe|head|nav|footer|form)\b[\s\S]*?<\/\1>/gi, " ").replace(/<br\s*\/?>/gi, "\n").replace(/<\/(p|div|li|h[1-6]|tr|section|article|header|blockquote|dd|dt)>/gi, "\n").replace(/<[^>]+>/g, " ");
+  const text = decodeEntities(body).split("\n").map((l) => l.replace(/[ \t\f\v ]+/g, " ").trim()).filter((l) => l.length > 1).join("\n").replace(/\n{3,}/g, "\n\n");
+  const head = [ogTitle && ogTitle !== title ? ogTitle : "", description ?? ""].filter(Boolean).join("\n");
+  return { title: title ?? ogTitle, text: [head, text].filter(Boolean).join("\n\n"), published };
+}
+var PROFILE_RES = [
+  /^https?:\/\/(?:www\.)?github\.com\/([A-Za-z0-9-]{1,39})\/?$/i,
+  /^https?:\/\/(?:www\.)?(?:x|twitter)\.com\/([A-Za-z0-9_]{1,15})\/?$/i,
+  /^https?:\/\/(?:www\.)?instagram\.com\/([A-Za-z0-9_.]{1,30})\/?$/i,
+  /^https?:\/\/(?:www\.)?youtube\.com\/@([A-Za-z0-9_.-]{3,30})\/?$/i,
+  /^https?:\/\/(?:www\.)?tiktok\.com\/@([A-Za-z0-9_.]{2,24})\/?$/i,
+  /^https?:\/\/(?:www\.)?threads\.(?:net|com)\/@([A-Za-z0-9_.]{1,30})\/?$/i,
+  /^https?:\/\/(?:www\.)?medium\.com\/@([A-Za-z0-9_.-]{1,30})\/?$/i,
+  /^https?:\/\/([a-z0-9-]{2,40})\.substack\.com\/?$/i,
+  /^https?:\/\/(?:www\.)?linktr\.ee\/([A-Za-z0-9_.]{2,30})\/?$/i,
+  /^https?:\/\/(?:www\.)?behance\.net\/([A-Za-z0-9_-]{2,30})\/?$/i,
+  /^https?:\/\/(?:www\.)?dribbble\.com\/([A-Za-z0-9_-]{2,30})\/?$/i,
+  /^https?:\/\/(?:www\.)?devpost\.com\/([A-Za-z0-9_-]{2,40})\/?$/i,
+  /^https?:\/\/(?:www\.)?huggingface\.co\/([A-Za-z0-9_-]{2,40})\/?$/i,
+  /^https?:\/\/bsky\.app\/profile\/([A-Za-z0-9_.-]{3,60})\/?$/i
+];
+var NOT_HANDLES = /* @__PURE__ */ new Set([
+  "about",
+  "explore",
+  "home",
+  "login",
+  "signup",
+  "search",
+  "settings",
+  "share",
+  "intent",
+  "features",
+  "pricing",
+  "topics",
+  "trending",
+  "sponsors",
+  "orgs",
+  "www",
+  "help",
+  "privacy",
+  "terms"
+]);
+function profileHandle(url2) {
+  for (const re of PROFILE_RES) {
+    const m = re.exec(url2.trim());
+    if (m?.[1] && !NOT_HANDLES.has(m[1].toLowerCase())) return m[1];
+  }
+  return void 0;
+}
+function profileLinks(html, base) {
+  const out = /* @__PURE__ */ new Set();
+  for (const m of html.matchAll(/href=["']([^"'#]+)["']/gi)) {
+    let u;
+    try {
+      u = new URL(decodeEntities(m[1]), base).toString();
+    } catch {
+      continue;
+    }
+    if (profileHandle(u)) out.add(u.replace(/\/+$/, ""));
+  }
+  return [...out].slice(0, 40);
+}
+async function fetchPage(url2, opts = {}) {
+  if (isBlockedSource(url2) || !/^https?:\/\//i.test(url2)) return void 0;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 6e3);
+  try {
+    const r = await (opts.fetch ?? fetch)(url2, {
+      redirect: "follow",
+      signal: ctrl.signal,
+      headers: { "user-agent": UA, accept: "text/html,application/xhtml+xml", "accept-language": "en-US,en" }
+    });
+    if (!r.ok) return void 0;
+    const type = r.headers.get("content-type") ?? "";
+    if (type && !/html|xml|text\/plain/i.test(type)) return void 0;
+    const raw = (await r.text()).slice(0, MAX_BYTES);
+    const finalUrl = r.url || url2;
+    if (/text\/plain/i.test(type))
+      return { url: finalUrl, text: raw.slice(0, PAGE_TEXT_CHARS), profiles: [], published: null };
+    const read = htmlToText(raw);
+    if (!read.text.trim()) return void 0;
+    return {
+      url: finalUrl,
+      title: read.title,
+      text: read.text.slice(0, PAGE_TEXT_CHARS),
+      profiles: profileLinks(raw, finalUrl),
+      published: read.published ?? null
+    };
+  } catch {
+    return void 0;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// supabase/functions/_shared/research/investigate.ts
+var EXTRACT_VERSION = "extract-v1";
+var WIDE_PAGES = 18;
+var FOLLOW_PAGES = 10;
+var LEADS_PER_ROUND = 6;
+var EXTRACT_CONCURRENCY = 8;
+var EXTRACT_ESTIMATE_USD = 12e-4;
+var quote = (s) => `"${s}"`;
+var hasOperator = (q2) => /\bsite:|\sOR\s/.test(q2);
+function widePlan(card, title) {
+  const name = quote(card.fullName);
+  const now = card.employers.find((e) => e.current) ?? card.employers[0];
+  const before = card.employers.filter((e) => e !== now).slice(0, 2);
+  const qs = [
+    name,
+    now ? `${name} ${now.name}` : void 0,
+    ...before.map((e) => `${name} ${e.name}`),
+    ...card.schools.slice(0, 4).map((s) => `${name} ${s.name}`),
+    card.city ? `${name} ${card.city}` : void 0,
+    `${name} award OR officer OR president OR captain OR team`,
+    `${name} hackathon OR project OR founder OR built`,
+    `${name} podcast OR interview OR talk OR speaker`,
+    card.schools[0] ? `${name} ${card.schools[0].name} club OR society OR chapter` : void 0,
+    `${name} site:instagram.com`,
+    `${name} site:youtube.com OR site:tiktok.com`,
+    `${name} site:github.com OR site:devpost.com`,
+    `${name} site:medium.com OR site:substack.com`,
+    title && now ? `${name} ${title}` : void 0
+  ];
+  return [...new Set(qs.filter((q2) => !!q2?.trim()))].slice(0, 16);
+}
+function followUps(card, leads, ran) {
+  const name = quote(card.fullName);
+  const out = [];
+  for (const lead of leads) {
+    const l = lead.replace(/["“”]/g, "").trim();
+    if (l.length < 3 || l.length > 60) continue;
+    if (card.names.some((n) => l.toLowerCase().includes(n))) continue;
+    const q2 = `${name} ${l}`;
+    const k = q2.toLowerCase();
+    if (ran.has(k) || out.some((x) => x.toLowerCase() === k)) continue;
+    out.push(q2);
+  }
+  return out.slice(0, LEADS_PER_ROUND);
+}
+var extractSchema = z.object({
+  match: z.enum(["yes", "likely", "no"]),
+  why: z.string(),
+  facts: z.array(z.object({ text: z.string(), date: z.string(), quote: z.string() })),
+  leads: z.array(z.string())
+});
+function extractSystem() {
+  return [
+    "You read one web page for a research tool and report what it says about one specific person, described in <person>.",
+    'match: "yes" when the page is clearly about this person: their name and something that ties it to them (a school, employer, team, city or link of theirs). "likely" when it names someone with their name and everything on it fits their timeline, places and field, but nothing ties it to them for certain. "no" when it is about someone else, contradicts their timeline, places or field, or does not mention them. why: one short sentence saying what decided it.',
+    'facts: up to 8 things the page says this person did, made, won, led, joined, wrote or said, each one sentence in plain words, with the date or year the page gives ("" when none) and a quote of at most 25 words copied exactly from the page that supports it. Only what the page itself states about this person; nothing about anyone else.',
+    "Never include, even when the page says it: age or birthday, ethnicity, religion, health, family members or relationships, sexuality, politics or donations, where they live (a city is the finest), phone numbers, email addresses, money or pay, grades, legal matters or immigration.",
+    "Anything from when they were under 18: keep only achievements an organization published about them (an award, an officer role, a team they were on, a competition result), nothing personal, and nothing from their own social accounts from that time.",
+    'leads: up to 5 short phrases (2 to 6 words) worth searching next together with their name: organizations, clubs, teams, programs, awards, competitions, projects, events or publications this page connects them to (for example "DECA", "National Society of High School Scholars"). Not their name, not generic words.',
+    'With match "no", leave facts and leads empty.'
+  ].join("\n");
+}
+function extractUser(input, page) {
+  return [
+    `<person>
+Name: ${input.card.fullName}
+${input.profile}
+</person>`,
+    `<page>
+url: ${page.url}
+${page.title ? `title: ${page.title}
+` : ""}${page.text}
+</page>`
+  ].join("\n");
+}
+function factsText(facts) {
+  return [
+    "What this page says about them:",
+    ...facts.map((f) => `- ${f.text}${f.date ? ` (${f.date})` : ""}${f.quote ? ` Quote: "${f.quote}"` : ""}`)
+  ].join("\n");
+}
+async function mapLimit(xs, n, f) {
+  const out = new Array(xs.length);
+  let i = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(n, xs.length) }, async () => {
+      while (i < xs.length) {
+        const k = i++;
+        out[k] = await f(xs[k]);
+      }
+    })
+  );
+  return out;
+}
+async function investigate(deps, input, opts) {
+  const { card } = input;
+  const out = {
+    pages: [],
+    costUsd: 0,
+    notes: [],
+    steps: [],
+    queries: [],
+    rounds: 0,
+    accounts: []
+  };
+  const left = () => opts.deadline - deps.clock();
+  const ran = /* @__PURE__ */ new Set();
+  const seen = /* @__PURE__ */ new Set();
+  const handles = /* @__PURE__ */ new Set();
+  const slug = distinctiveSlug(card.slug);
+  if (slug) handles.add(slug);
+  const objective = `Pages about ${card.fullName}${input.title ? `, ${input.title}` : ""}${card.employers[0] ? ` at ${card.employers[0].name}` : ""}${card.schools[0] ? `, ${card.schools[0].name}` : ""}: what they did, won, led, made or said.`;
+  const engines2 = deps.engines.filter((e) => e.configured);
+  const plain = engines2.find((e) => e.name === "parallel") ?? engines2[0];
+  const operator = engines2.find((e) => e.name === "serper") ?? engines2[0];
+  if (!plain || !operator) {
+    out.notes.push("no search engine is configured for the investigator loop");
+    return out;
+  }
+  const searchCall = async (engine, queries) => {
+    const key = await cacheKey(`${engine.name}:search`, {
+      q: queries,
+      o: engine.name === "parallel" ? objective : ""
+    });
+    const cached = await deps.cache.get(key);
+    if (cached) {
+      out.steps.push({ step: "search", provider: engine.name, costUsd: 0, ms: 0, n: cached.length });
+      return cached;
+    }
+    if (out.costUsd + engine.usdPerCall > opts.budgetUsd) {
+      out.notes.push("a search was skipped: cost cap");
+      return [];
+    }
+    const t0 = deps.clock();
+    let r = await engine.search(queries, objective);
+    out.costUsd += engine.usdPerCall;
+    if (!r.ok && engine !== operator && operator.configured) {
+      out.notes.push(`${engine.name} search failed (${r.message.slice(0, 80)}); used ${operator.name}`);
+      const hits2 = [];
+      for (const q2 of queries) {
+        const s = await operator.search([q2], objective);
+        out.costUsd += operator.usdPerCall;
+        if (s.ok) hits2.push(...s.value);
+      }
+      r = { ok: true, value: hits2 };
+    }
+    if (!r.ok) {
+      out.steps.push({
+        step: "search",
+        provider: engine.name,
+        costUsd: 0,
+        ms: deps.clock() - t0,
+        error: r.message
+      });
+      out.notes.push(`${engine.name} search failed (${r.message.slice(0, 80)})`);
+      return [];
+    }
+    const hits = r.value.filter((h) => !isBlockedSource(h.url));
+    out.steps.push({
+      step: "search",
+      provider: engine.name,
+      costUsd: engine.usdPerCall,
+      ms: deps.clock() - t0,
+      n: hits.length
+    });
+    await deps.cache.put(key, `${engine.name}:search`, hits, WEB_CACHE_MS);
+    return hits;
+  };
+  const search = async (queries) => {
+    for (const q2 of queries) ran.add(q2.toLowerCase());
+    out.queries.push(...queries);
+    const ops = queries.filter((q2) => hasOperator(q2) && operator.name === "serper");
+    const rest = queries.filter((q2) => !ops.includes(q2));
+    const calls = [];
+    for (let i = 0; i < rest.length; i += plain.queriesPerCall)
+      calls.push(searchCall(plain, rest.slice(i, i + plain.queriesPerCall)));
+    for (const q2 of ops) calls.push(searchCall(operator, [q2]));
+    return (await Promise.all(calls)).flat();
+  };
+  const read = async (hit) => {
+    const key = await cacheKey("page", { url: normalizeUrl(hit.url) });
+    const cached = await deps.cache.get(key);
+    if (cached?.text) return { ...cached, profiles: cached.profiles ?? [] };
+    const page = await fetchPage(hit.url, {
+      fetch: deps.fetch,
+      timeoutMs: Math.min(6e3, Math.max(1500, left() - 2e3))
+    });
+    if (page) {
+      await deps.cache.put(key, "page", page, WEB_CACHE_MS);
+      return page;
+    }
+    if (!hit.snippet) return void 0;
+    return {
+      url: hit.url,
+      title: hit.title,
+      text: hit.snippet,
+      profiles: [],
+      published: hit.published,
+      fromExcerpt: true
+    };
+  };
+  const extract = async (page) => {
+    const key = await cacheKey("extract", {
+      v: EXTRACT_VERSION,
+      url: normalizeUrl(page.url),
+      who: card.fullName,
+      slug: card.slug ?? ""
+    });
+    const cached = await deps.cache.get(key);
+    if (cached) return cached;
+    if (out.costUsd + EXTRACT_ESTIMATE_USD > opts.budgetUsd) return void 0;
+    if (left() < 4e3) return void 0;
+    const r = await deps.claude.parse("extract", extractSchema, {
+      system: extractSystem(),
+      user: extractUser(input, page),
+      timeoutMs: Math.min(25e3, left() - 1e3)
+    });
+    out.costUsd += r.costUsd ?? 0;
+    if (!r.ok) return void 0;
+    await deps.cache.put(key, "extract", r.value, WEB_CACHE_MS);
+    return r.value;
+  };
+  const take = async (hits, max) => {
+    const fresh = [];
+    for (const h of hits) {
+      const k = normalizeUrl(h.url);
+      if (seen.has(k) || isLinkedInCopy(h.url) || isBlockedSource(h.url)) continue;
+      const s = scorePage({ url: h.url, title: h.title, text: h.snippet }, card);
+      if (s.strength === "none" && h.snippet) continue;
+      seen.add(k);
+      fresh.push(h);
+    }
+    const ranked = fresh.map((h) => ({ h, n: scorePage({ url: h.url, title: h.title, text: h.snippet }, card).signals.length })).sort((a, b) => b.n - a.n).slice(0, max).map((x) => x.h);
+    const t0 = deps.clock();
+    const pages = (await Promise.all(
+      ranked.map(async (h) => {
+        const p = await read(h);
+        if (p && h.snippet && !p.fromExcerpt && scorePage(p, card).strength === "none")
+          return { ...p, text: `${h.snippet}
+
+${p.text}` };
+        return p;
+      })
+    )).filter((p) => !!p);
+    out.steps.push({ step: "read", provider: "direct", costUsd: 0, ms: deps.clock() - t0, n: pages.length });
+    const named = pages.filter((p) => scorePage(p, card).strength !== "none");
+    const t1 = deps.clock();
+    const spentBefore = out.costUsd;
+    const readings = await mapLimit(named, EXTRACT_CONCURRENCY, extract);
+    out.steps.push({
+      step: "extract",
+      provider: "claude-haiku-5-5",
+      costUsd: round4(out.costUsd - spentBefore),
+      ms: deps.clock() - t1,
+      n: readings.filter(Boolean).length
+    });
+    const leads2 = [];
+    named.forEach((p, i) => {
+      const x = readings[i];
+      if (!x || x.match === "no") return;
+      const strong = scorePage(p, card).strength === "strong";
+      const match = strong && x.match === "yes" ? "yes" : "likely";
+      const facts = x.facts.filter((f) => f.text.trim() && !sensitiveCategory(`${f.text} ${f.quote}`)).map((f) => ({
+        text: f.text.trim(),
+        date: f.date?.trim() || void 0,
+        quote: f.quote?.trim() || void 0
+      }));
+      if (!facts.length) return;
+      out.pages.push({
+        url: p.url,
+        title: p.title,
+        published: p.published ?? null,
+        match,
+        facts,
+        text: factsText(facts)
+      });
+      leads2.push(...x.leads);
+      if (match === "yes")
+        for (const l of p.profiles) {
+          const h = profileHandle(l);
+          if (h) handles.add(h);
+        }
+    });
+    return leads2;
+  };
+  const reserve = 3e3;
+  let leads = await take(await search(widePlan(card, input.title)), WIDE_PAGES);
+  if (handles.size && left() > 2e4) {
+    const t0 = deps.clock();
+    const found = await findAccounts([...handles], {
+      fetch: deps.fetch,
+      timeoutMs: Math.min(6e3, left() - 12e3)
+    });
+    out.accounts = found.map((a) => a.url);
+    out.steps.push({
+      step: "accounts",
+      provider: "maigret-sites",
+      costUsd: 0,
+      ms: deps.clock() - t0,
+      n: found.length
+    });
+    if (found.length)
+      leads.push(
+        ...await take(
+          found.map((a) => ({ url: a.url, title: `${a.site}: ${a.handle}` })),
+          FOLLOW_PAGES
+        )
+      );
+  }
+  for (let round2 = 1; round2 <= opts.rounds; round2++) {
+    if (left() < 18e3 + reserve) {
+      out.notes.push("follow-up searches stopped: out of time");
+      break;
+    }
+    if (out.costUsd >= opts.budgetUsd * 0.85) {
+      out.notes.push("follow-up searches stopped: cost cap");
+      break;
+    }
+    const next = followUps(card, leads, ran);
+    if (!next.length) break;
+    out.rounds = round2;
+    leads = await take(await search(next), FOLLOW_PAGES);
+  }
+  out.costUsd = round4(out.costUsd);
+  out.pages.sort(
+    (a, b) => a.match === b.match ? b.facts.length - a.facts.length : a.match === "yes" ? -1 : 1
+  );
+  return out;
+}
+var round4 = (x) => Math.round(x * 1e4) / 1e4;
 
 // supabase/functions/_shared/research/support.ts
 var LIST_SECTIONS = ["recently", "in_common", "openers", "highlights", "company", "careful"];
@@ -1915,7 +2594,8 @@ var QUICK_CAP_USD = 0.3;
 var BOTH_CAP_USD = 0.5;
 var QUICK_DEADLINE_MS = 85e3;
 var DEEPER_DEADLINE_MS = 12e4;
-var BRIEF_MODEL = "claude-opus-5-5";
+var BRIEF_MODEL = "claude-sonnet-5-5";
+var INVESTIGATE_PAGES = 20;
 var QUICK_PAGES = 8;
 var READ_PAGES = 10;
 var DEEPER_PAGES = 8;
@@ -2100,6 +2780,7 @@ async function runBrief(deps, req, limits) {
   }))
     return { status: "failed", error: "minor", costUsd: 0, notes, steps };
   const strong = [];
+  let found;
   const company = [];
   const allHits = [];
   const scoreInto = (pages, companyRound) => {
@@ -2115,47 +2796,77 @@ async function runBrief(deps, req, limits) {
     ({ h, s }) => s.strength === "strong" || !h.snippet && !s.blocked && !s.linkedinCopy || companyRound && !!person.org && aboutCompany({ url: h.url, title: h.title, text: h.snippet }, person.org)
   ).sort((a, b) => b.s.signals.length - a.s.signals.length).map(({ h }) => h.url);
   const select = selectFor(false);
-  const quick = quickPlan({ ...req, person }, card, t0);
-  const quickBudget = req.kind === "quick" ? limits.capUsd : limits.capUsd * 0.4;
   let provider;
-  const gatherMs = () => Math.max(0, Math.min(45e3, left() - WRITE_MIN_MS - 8e3));
-  const g1 = await gatherFrom(deps.web, quick, { budgetUsd: quickBudget, timeoutMs: gatherMs(), select });
-  spent += g1.costUsd;
-  provider = g1.provider;
-  notes.push(...g1.notes);
-  steps.push(...g1.steps.map((s) => ({ ...s, step: `quick:${s.step}` })));
-  allHits.push(...g1.hits, ...g1.pages);
-  scoreInto(g1.pages, false);
-  const who = pickIdentity(card, allHits);
-  if (who.kind === "ambiguous" && strong.length === 0 && !req.chosen) {
-    return {
-      status: "needs_disambiguation",
-      candidates: who.candidates,
-      costUsd: round4(spent),
-      notes,
-      steps
-    };
-  }
   let deeperMode;
-  if (req.kind === "deeper") {
-    const plan = deeperPlan({ ...req, person }, card, t0, strong.length, [...strong.map((p) => p.url)]);
-    deeperMode = plan.mode;
-    if (plan.queries.length === 0) notes.push("Go deeper had nothing more to search: no company on record");
-    else {
-      const companyRound = plan.mode === "company" || plan.queries.some((x) => x.id.startsWith("company"));
-      const g2 = await gatherFrom(deps.web, plan, {
-        budgetUsd: limits.capUsd - spent - writeEstimateUsd(3e4),
-        timeoutMs: gatherMs(),
-        select: selectFor(companyRound)
-      });
-      spent += g2.costUsd;
-      provider = provider ?? g2.provider;
-      notes.push(...g2.notes);
-      steps.push(...g2.steps.map((s) => ({ ...s, step: `deeper:${s.step}` })));
-      scoreInto(g2.pages, companyRound);
+  const engines2 = (deps.engines ?? []).filter((e) => e.configured);
+  if (engines2.length && deps.cache) {
+    const inv = await investigate(
+      { engines: engines2, claude: deps.claude, cache: deps.cache, fetch: deps.fetch, clock: deps.clock },
+      {
+        card,
+        profile: req.profile ? profileText(req.profile, card.fullName) : focusLine(card, person.title),
+        title: person.title
+      },
+      {
+        // Go deeper runs more follow-up rounds; the first rounds come back from the cache for nothing
+        rounds: req.kind === "quick" ? 1 : 3,
+        budgetUsd: limits.capUsd * 0.5,
+        deadline: limits.deadline - WRITE_MIN_MS - 12e3
+      }
+    );
+    spent += inv.costUsd;
+    provider = "investigate";
+    notes.push(...inv.notes);
+    steps.push(...inv.steps.map((s) => ({ ...s, step: `investigate:${s.step}` })));
+    found = inv.pages.slice(0, INVESTIGATE_PAGES);
+    if (req.kind === "deeper") deeperMode = "person";
+  } else {
+    const quick = quickPlan({ ...req, person }, card, t0);
+    const quickBudget = req.kind === "quick" ? limits.capUsd : limits.capUsd * 0.4;
+    const gatherMs = () => Math.max(0, Math.min(45e3, left() - WRITE_MIN_MS - 8e3));
+    const g1 = await gatherFrom(deps.web, quick, { budgetUsd: quickBudget, timeoutMs: gatherMs(), select });
+    spent += g1.costUsd;
+    provider = g1.provider;
+    notes.push(...g1.notes);
+    steps.push(...g1.steps.map((s) => ({ ...s, step: `quick:${s.step}` })));
+    allHits.push(...g1.hits, ...g1.pages);
+    scoreInto(g1.pages, false);
+    const who = pickIdentity(card, allHits);
+    if (who.kind === "ambiguous" && strong.length === 0 && !req.chosen) {
+      return {
+        status: "needs_disambiguation",
+        candidates: who.candidates,
+        costUsd: round42(spent),
+        notes,
+        steps
+      };
+    }
+    if (req.kind === "deeper") {
+      const plan = deeperPlan({ ...req, person }, card, t0, strong.length, [...strong.map((p) => p.url)]);
+      deeperMode = plan.mode;
+      if (plan.queries.length === 0) notes.push("Go deeper had nothing more to search: no company on record");
+      else {
+        const companyRound = plan.mode === "company" || plan.queries.some((x) => x.id.startsWith("company"));
+        const g2 = await gatherFrom(deps.web, plan, {
+          budgetUsd: limits.capUsd - spent - writeEstimateUsd(3e4),
+          timeoutMs: gatherMs(),
+          select: selectFor(companyRound)
+        });
+        spent += g2.costUsd;
+        provider = provider ?? g2.provider;
+        notes.push(...g2.notes);
+        steps.push(...g2.steps.map((s) => ({ ...s, step: `deeper:${s.step}` })));
+        scoreInto(g2.pages, companyRound);
+      }
     }
   }
-  const personPages = strong.slice(0, req.kind === "quick" ? QUICK_PAGES : QUICK_PAGES + DEEPER_PAGES);
+  const personPages = found ? found.map((p) => ({
+    url: p.url,
+    // the writer may use a likely page only as likely (prompts.ts)
+    title: `${p.match === "likely" ? "[likely them] " : ""}${p.title ?? ""}`.trim(),
+    published: p.published ?? null,
+    text: p.text
+  })) : strong.slice(0, req.kind === "quick" ? QUICK_PAGES : QUICK_PAGES + DEEPER_PAGES);
   const companyPages = company.slice(0, 6);
   const sources = [];
   let n = 0;
@@ -2234,12 +2945,13 @@ ${text}`);
       { parse: (task, schema, p) => deps.claude.parse(task, schema, { ...p, timeoutMs: left() - 6e3 }) },
       prompt,
       allowed,
-      budget
+      budget,
+      "brief"
     );
     steps.push({
       step: "write",
       provider: BRIEF_MODEL,
-      costUsd: round4(budget.spent - spent),
+      costUsd: round42(budget.spent - spent),
       ms: deps.clock() - tw
     });
     spent = budget.spent;
@@ -2271,7 +2983,7 @@ ${text}`);
     steps.push({
       step: "support",
       provider: "claude-haiku-5-5",
-      costUsd: round4(sc.costUsd),
+      costUsd: round42(sc.costUsd),
       ms: deps.clock() - ts,
       n: sc.removed
     });
@@ -2285,7 +2997,7 @@ ${text}`);
     status: partial ? "partial" : "ready",
     content: { ...content, ...deeperMode ? { deeper: deeperMode } : {} },
     sources: storedSources,
-    costUsd: round4(spent),
+    costUsd: round42(spent),
     model,
     promptVersion: PROMPT_VERSION,
     notes,
@@ -2305,7 +3017,7 @@ function markProfileOnly(d) {
     education: m(d.education)
   };
 }
-var round4 = (x) => Math.round(x * 1e4) / 1e4;
+var round42 = (x) => Math.round(x * 1e4) / 1e4;
 
 // supabase/functions/orbit-research/research.ts
 var DEFAULT_PER_MONTH = 15;
@@ -2451,7 +3163,7 @@ function claudeDepOf(claude) {
   return {
     async parse(task, schema, prompt) {
       const r = await claude.structured({
-        task: task === "support" ? "support" : task === "dossier" ? "dossier" : "fit",
+        task: task === "support" ? "support" : task === "dossier" ? "dossier" : task === "extract" ? "research_extract" : task === "brief" ? "research_brief" : "fit",
         system: prompt.system,
         user: prompt.user,
         schema,
@@ -2553,7 +3265,12 @@ function makeHandler(deps) {
     const account = (await sha256(`${salt}:acct:${accountId}`)).slice(0, 40);
     const month = monthOf(t);
     const key = await resolveKey(deps.anthropicKey);
-    const providers = { exa: !!deps.exa?.configured, claude: !!key };
+    const providers = {
+      exa: !!deps.exa?.configured,
+      claude: !!key,
+      parallel: !!deps.engines?.some((e) => e.name === "parallel" && e.configured),
+      serper: !!deps.engines?.some((e) => e.name === "serper" && e.configured)
+    };
     if (path === "/status") {
       try {
         const st = await deps.store.status(account, month);
@@ -2683,10 +3400,21 @@ function makeHandler(deps) {
     const deadlineMs = kind === "quick" ? deps.deadlines?.quick ?? QUICK_DEADLINE_MS : deps.deadlines?.deeper ?? DEEPER_DEADLINE_MS;
     let out;
     try {
-      out = await runBrief({ web, claude, clock: () => now().getTime() }, brief, {
-        capUsd: cap,
-        deadline: now().getTime() + deadlineMs
-      });
+      out = await runBrief(
+        {
+          web,
+          claude,
+          clock: () => now().getTime(),
+          engines: deps.engines,
+          cache: deps.cache,
+          fetch: doFetch
+        },
+        brief,
+        {
+          capUsd: cap,
+          deadline: now().getTime() + deadlineMs
+        }
+      );
     } catch (e) {
       const message = e instanceof Error ? e.message.slice(0, 200) : "error";
       if (use.counted) await deps.store.refund(account, month, person).catch(() => void 0);
@@ -2917,6 +3645,12 @@ async function providerSecret(name) {
   }
 }
 var exaKey = await providerSecret("EXA_API_KEY");
+var parallelKey = await providerSecret("PARALLEL_API_KEY");
+var serperKey = await providerSecret("SERPER_API_KEY");
+var engines = [
+  createParallelSearch({ fetch, apiKey: parallelKey, timeoutMs: 1e4, maxRetries: 1 }),
+  createSerperSearch({ fetch, apiKey: serperKey, timeoutMs: 1e4, maxRetries: 1 })
+].filter((e) => e.configured);
 Deno.serve(
   makeHandler({
     origins: defaultOrigins,
@@ -2929,6 +3663,7 @@ Deno.serve(
     // a function secret wins; otherwise the key kept in the project's private schema (as orbit-claude reads it)
     anthropicKey: Deno.env.get("ORBIT_ANTHROPIC_API_KEY") || (url && serviceKey ? postgrestSecret(url, serviceKey, "ORBIT_ANTHROPIC_API_KEY") : void 0),
     exa: exaKey ? createExa({ fetch, apiKey: exaKey, timeoutMs: 12e3, maxRetries: 1 }) : void 0,
+    engines,
     gatherModel: Deno.env.get("ORBIT_RESEARCH_GATHER_MODEL") || void 0,
     perMonth: num("ORBIT_RESEARCH_PER_MONTH", 15),
     usdPerDay: num("ORBIT_RESEARCH_USD_PER_DAY", 40),

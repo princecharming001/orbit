@@ -24,6 +24,10 @@ export type Task =
   | 'judge'
   /** deep research: does each claim of a brief say what its cited page says (docs/plan/20 §4) */
   | 'support'
+  /** deep research's investigator loop: is a page about them, what it says they did, what to search next */
+  | 'research_extract'
+  /** deep research: the brief, written from the facts the loop extracted */
+  | 'research_brief'
   /** earlier names of reply_classify, memory_extract and goal_infer, kept for callers that still use them */
   | 'classify'
   | 'extract_memory'
@@ -61,6 +65,9 @@ export const TASKS: Record<Task, TaskSetting> = {
   judge: { model: 'claude-sonnet-5-5', maxTokens: 2000 },
   // high effort: against the writing model as the reference it agreed on 14 of 16 claims (low effort: 8 of 16), for $0.003
   support: { model: 'claude-haiku-5-5', effort: 'high', maxTokens: 4000 },
+  research_extract: { model: 'claude-haiku-5-5', effort: 'low', maxTokens: 2000 },
+  // the brief reads compact facts, not raw pages: the mid model writes it for about a tenth of the writing model's price
+  research_brief: { model: 'claude-sonnet-5-5', maxTokens: 8000, flatNullable: true },
 };
 
 export { costUsd, PRICES, type Usage } from './prices.ts';

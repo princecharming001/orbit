@@ -122,7 +122,10 @@ var TASKS = {
   extract_goal: { model: "claude-haiku-5-5", effort: "low", maxTokens: 1500 },
   judge: { model: "claude-sonnet-5-5", maxTokens: 2e3 },
   // high effort: against the writing model as the reference it agreed on 14 of 16 claims (low effort: 8 of 16), for $0.003
-  support: { model: "claude-haiku-5-5", effort: "high", maxTokens: 4e3 }
+  support: { model: "claude-haiku-5-5", effort: "high", maxTokens: 4e3 },
+  research_extract: { model: "claude-haiku-5-5", effort: "low", maxTokens: 2e3 },
+  // the brief reads compact facts, not raw pages: the mid model writes it for about a tenth of the writing model's price
+  research_brief: { model: "claude-sonnet-5-5", maxTokens: 8e3, flatNullable: true }
 };
 function makeClaude(deps) {
   const client = deps.apiKey ? deps.client ?? new Anthropic({ apiKey: deps.apiKey, fetch: deps.fetch, maxRetries: 2 }) : void 0;
@@ -7381,10 +7384,12 @@ function identityCard(p) {
     employerNames.push({ name: n, current: e === current });
     if (employerNames.length >= 3) break;
   }
-  const schoolNames = [
+  const allSchools = [
     ...(p.profile?.education ?? []).map((e) => e.school?.trim() ?? ""),
     p.school?.trim() ?? ""
-  ].filter((s) => s && !/high school|secondary school/i.test(s));
+  ].filter(Boolean);
+  const isHigh = (s) => /high school|secondary school/i.test(s);
+  const schoolNames = [...allSchools.filter((s) => !isHigh(s)), ...allSchools.filter(isHigh)];
   const slug = slugOf(p.linkedinUrl) ?? p.profile?.publicIdentifier?.toLowerCase() ?? void 0;
   const employers = employerNames.slice(0, 3).map((e) => ({ ...e, aliases: companyAliases(e.name) }));
   return {
@@ -7392,7 +7397,7 @@ function identityCard(p) {
     names: [...names].filter((n) => n.includes(" ")),
     last: norm(last),
     employers,
-    schools: [...new Map(schoolNames.map((s) => [norm(s), s])).values()].slice(0, 4).map((s) => ({ name: s, aliases: schoolAliases(s) })),
+    schools: [...new Map(schoolNames.map((s) => [norm(s), s])).values()].slice(0, 5).map((s) => ({ name: s, aliases: schoolAliases(s) })),
     city: cityOf(p.profile?.location ?? p.location),
     slug,
     domains: workDomains(p.emails),
@@ -7441,12 +7446,13 @@ function scorePage(page2, card) {
 }
 
 // supabase/functions/_shared/research/prompts.ts
-var PROMPT_VERSION2 = "dossier-v2";
+var PROMPT_VERSION2 = "dossier-v3";
 function dossierSystem(userFirstName2, goalSentence2) {
   return [
     `You write a research brief about one person for ${userFirstName2}, who wants to ${goalSentence2}.`,
     'Use only the sources provided, and write from what each source actually says: "joined" stays "joined", never "led". Every claim needs the id of the source it came from.',
     "If sources disagree or might be about a different person with the same name, leave the claim out.",
+    'A source whose title starts with "[likely them]" names someone with their name whose details all fit, but nothing ties it to them for certain: you may use it, saying so ("likely the same Dana who..."), never in an opener, and never for their current role.',
     'Never write, even if a source says it: age, ethnicity, religion, health, family or relationships, sexuality, politics or donations, where they live (a city is the finest you may say), salary or pay, their personality or "communication style", legal matters, immigration, or that they lost a job or took leave.',
     `"careful" is about their company only (recent layoffs, a reorganization, a product shut down, a hiring freeze), each item with its source ids; never anything about the person's own life. Leave it empty when there is nothing.`,
     '"company" is what is happening at their company that matters to the student (team news, launches, hiring), from company sources, each with its source ids. Leave it empty when there are no company sources.',
@@ -7952,7 +7958,7 @@ function carefulItems(c) {
     } : void 0
   ).filter((x) => !!x);
 }
-async function writeBrief(claude, prompt, allowed, budget2) {
+async function writeBrief(claude, prompt, allowed, budget2, task = "dossier") {
   let user = prompt.user;
   let first;
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -7967,7 +7973,7 @@ async function writeBrief(claude, prompt, allowed, budget2) {
       budget2.notes.push("synthesis skipped: cost cap");
       return { content: null, partial: true };
     }
-    const r = await claude.parse("dossier", dossierSchema, { system: prompt.system, user });
+    const r = await claude.parse(task, dossierSchema, { system: prompt.system, user });
     budget2.spent += r.costUsd ?? 0;
     if (!r.ok) {
       if (first) {

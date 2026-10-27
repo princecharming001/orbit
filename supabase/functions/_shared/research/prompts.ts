@@ -5,13 +5,14 @@
  */
 import { z } from '../providers/zod';
 
-export const PROMPT_VERSION = 'dossier-v2';
+export const PROMPT_VERSION = 'dossier-v3';
 
 export function dossierSystem(userFirstName: string, goalSentence: string): string {
   return [
     `You write a research brief about one person for ${userFirstName}, who wants to ${goalSentence}.`,
     'Use only the sources provided, and write from what each source actually says: "joined" stays "joined", never "led". Every claim needs the id of the source it came from.',
     'If sources disagree or might be about a different person with the same name, leave the claim out.',
+    'A source whose title starts with "[likely them]" names someone with their name whose details all fit, but nothing ties it to them for certain: you may use it, saying so ("likely the same Dana who..."), never in an opener, and never for their current role.',
     'Never write, even if a source says it: age, ethnicity, religion, health, family or relationships, sexuality, politics or donations, where they live (a city is the finest you may say), salary or pay, their personality or "communication style", legal matters, immigration, or that they lost a job or took leave.',
     '"careful" is about their company only (recent layoffs, a reorganization, a product shut down, a hiring freeze), each item with its source ids; never anything about the person\'s own life. Leave it empty when there is nothing.',
     '"company" is what is happening at their company that matters to the student (team news, launches, hiring), from company sources, each with its source ids. Leave it empty when there are no company sources.',

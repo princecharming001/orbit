@@ -657,6 +657,8 @@ export async function writeBrief(
   prompt: { system: string; user: string },
   allowed: string[],
   budget: WriteBudget,
+  /** the live brief writes on the mid model ('brief'); the account-mode dossier on the writing model */
+  task: 'dossier' | 'brief' = 'dossier',
 ): Promise<{ content: DossierContent | null; partial: boolean }> {
   let user = prompt.user;
   let first: DossierContent | undefined;
@@ -672,7 +674,7 @@ export async function writeBrief(
       budget.notes.push('synthesis skipped: cost cap');
       return { content: null, partial: true };
     }
-    const r = await claude.parse('dossier', dossierSchema, { system: prompt.system, user });
+    const r = await claude.parse(task, dossierSchema, { system: prompt.system, user });
     budget.spent += r.costUsd ?? 0;
     if (!r.ok) {
       if (first) {

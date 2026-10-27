@@ -19,6 +19,7 @@
  * that would cross it is skipped and the brief is marked partial, with a note saying what was skipped and why.
  */
 
+import type { SearchEngine } from '../providers/webSearch';
 import type { ClaudeDep } from './deps';
 import {
   type CandidatePage,
@@ -31,6 +32,7 @@ import {
 } from './dossier';
 import { appearsMinor } from './guards';
 import { aboutCompany, type IdentityCard, identityCard, scorePage } from './identity';
+import { type FoundPage, investigate } from './investigate';
 import { type DossierContent, dossierSystem, dossierUser, PROMPT_VERSION } from './prompts';
 import { supportCheck } from './support';
 import {
@@ -38,6 +40,7 @@ import {
   type GatherStep,
   gatherFrom,
   normalizeUrl,
+  type SharedCache,
   type WebPage,
   type WebSource,
 } from './web';
@@ -46,7 +49,10 @@ export const QUICK_CAP_USD = 0.3;
 export const BOTH_CAP_USD = 0.5;
 export const QUICK_DEADLINE_MS = 85_000;
 export const DEEPER_DEADLINE_MS = 120_000;
-export const BRIEF_MODEL = 'claude-opus-5-5';
+/** the brief is written from compact sources on the mid model (claude.ts research_brief) */
+export const BRIEF_MODEL = 'claude-sonnet-5-5';
+/** pages the investigator loop may hand the writer: facts, not page text, so more fit */
+export const INVESTIGATE_PAGES = 20;
 /** pages read for the quick brief, and added by Go deeper */
 export const QUICK_PAGES = 8;
 /** search hits read (fetched) per round: a few more than are kept, since titles alone cannot tell namesakes apart */
@@ -100,6 +106,13 @@ export interface BriefRequest {
 export interface BriefDeps {
   /** in order of preference: Exa when configured, then Claude's web search */
   web: WebSource[];
+  /**
+   * The investigator loop's search engines (Parallel, Serper): with one configured, research runs the loop
+   * (investigate.ts) instead of the searches below; `cache` keeps its searches, pages and readings.
+   */
+  engines?: SearchEngine[];
+  cache?: SharedCache;
+  fetch?: typeof fetch;
   claude: ClaudeDep;
   clock: () => number;
 }
@@ -129,7 +142,7 @@ export type BriefOutcome =
       steps: BriefStep[];
       /** web pages surely about them (not LinkedIn), so Go deeper knows where to spend */
       strongPages: number;
-      provider?: 'exa' | 'claude';
+      provider?: 'exa' | 'claude' | 'investigate';
       checked: boolean;
       /** what the support check took out, for the live check only: never logged or sent on (it names the person) */
       debug?: { dropped: string[] };
@@ -389,8 +402,10 @@ export async function runBrief(
   )
     return { status: 'failed', error: 'minor', costUsd: 0, notes, steps };
 
-  // 2–3. the web, the quick round always (free from the cache on Go deeper), then the deeper round
+  // 2–3. the web: the investigator loop when a search engine is set up, else the quick round always (free from the
+  // cache on Go deeper), then the deeper round
   const strong: WebPage[] = [];
+  let found: FoundPage[] | undefined;
   const company: WebPage[] = [];
   const allHits: CandidatePage[] = [];
   const scoreInto = (pages: WebPage[], companyRound: boolean) => {
@@ -418,50 +433,82 @@ export async function runBrief(
       .sort((a, b) => b.s.signals.length - a.s.signals.length)
       .map(({ h }) => h.url);
   const select = selectFor(false);
-  const quick = quickPlan({ ...req, person }, card, t0);
-  const quickBudget = req.kind === 'quick' ? limits.capUsd : limits.capUsd * 0.4;
-  let provider: 'exa' | 'claude' | undefined;
-  const gatherMs = () => Math.max(0, Math.min(45_000, left() - WRITE_MIN_MS - 8_000));
-  const g1 = await gatherFrom(deps.web, quick, { budgetUsd: quickBudget, timeoutMs: gatherMs(), select });
-  spent += g1.costUsd;
-  provider = g1.provider;
-  notes.push(...g1.notes);
-  steps.push(...g1.steps.map((s) => ({ ...s, step: `quick:${s.step}` })));
-  allHits.push(...g1.hits, ...g1.pages);
-  scoreInto(g1.pages, false);
-
-  // "which one?": only when nothing ties the pages to the person the student means
-  const who = pickIdentity(card, allHits);
-  if (who.kind === 'ambiguous' && strong.length === 0 && !req.chosen) {
-    return {
-      status: 'needs_disambiguation',
-      candidates: who.candidates,
-      costUsd: round4(spent),
-      notes,
-      steps,
-    };
-  }
-
+  let provider: 'exa' | 'claude' | 'investigate' | undefined;
   let deeperMode: 'person' | 'company' | undefined;
-  if (req.kind === 'deeper') {
-    const plan = deeperPlan({ ...req, person }, card, t0, strong.length, [...strong.map((p) => p.url)]);
-    deeperMode = plan.mode;
-    if (plan.queries.length === 0) notes.push('Go deeper had nothing more to search: no company on record');
-    else {
-      const companyRound = plan.mode === 'company' || plan.queries.some((x) => x.id.startsWith('company'));
-      const g2 = await gatherFrom(deps.web, plan, {
-        budgetUsd: limits.capUsd - spent - writeEstimateUsd(30_000),
-        timeoutMs: gatherMs(),
-        select: selectFor(companyRound),
-      });
-      spent += g2.costUsd;
-      provider = provider ?? g2.provider;
-      notes.push(...g2.notes);
-      steps.push(...g2.steps.map((s) => ({ ...s, step: `deeper:${s.step}` })));
-      scoreInto(g2.pages, companyRound);
+  const engines = (deps.engines ?? []).filter((e) => e.configured);
+  if (engines.length && deps.cache) {
+    const inv = await investigate(
+      { engines, claude: deps.claude, cache: deps.cache, fetch: deps.fetch, clock: deps.clock },
+      {
+        card,
+        profile: req.profile ? profileText(req.profile, card.fullName) : focusLine(card, person.title),
+        title: person.title,
+      },
+      {
+        // Go deeper runs more follow-up rounds; the first rounds come back from the cache for nothing
+        rounds: req.kind === 'quick' ? 1 : 3,
+        budgetUsd: limits.capUsd * 0.5,
+        deadline: limits.deadline - WRITE_MIN_MS - 12_000,
+      },
+    );
+    spent += inv.costUsd;
+    provider = 'investigate';
+    notes.push(...inv.notes);
+    steps.push(...inv.steps.map((s) => ({ ...s, step: `investigate:${s.step}` })));
+    found = inv.pages.slice(0, INVESTIGATE_PAGES);
+    if (req.kind === 'deeper') deeperMode = 'person';
+  } else {
+    const quick = quickPlan({ ...req, person }, card, t0);
+    const quickBudget = req.kind === 'quick' ? limits.capUsd : limits.capUsd * 0.4;
+    const gatherMs = () => Math.max(0, Math.min(45_000, left() - WRITE_MIN_MS - 8_000));
+    const g1 = await gatherFrom(deps.web, quick, { budgetUsd: quickBudget, timeoutMs: gatherMs(), select });
+    spent += g1.costUsd;
+    provider = g1.provider;
+    notes.push(...g1.notes);
+    steps.push(...g1.steps.map((s) => ({ ...s, step: `quick:${s.step}` })));
+    allHits.push(...g1.hits, ...g1.pages);
+    scoreInto(g1.pages, false);
+
+    // "which one?": only when nothing ties the pages to the person the student means
+    const who = pickIdentity(card, allHits);
+    if (who.kind === 'ambiguous' && strong.length === 0 && !req.chosen) {
+      return {
+        status: 'needs_disambiguation',
+        candidates: who.candidates,
+        costUsd: round4(spent),
+        notes,
+        steps,
+      };
+    }
+
+    if (req.kind === 'deeper') {
+      const plan = deeperPlan({ ...req, person }, card, t0, strong.length, [...strong.map((p) => p.url)]);
+      deeperMode = plan.mode;
+      if (plan.queries.length === 0) notes.push('Go deeper had nothing more to search: no company on record');
+      else {
+        const companyRound = plan.mode === 'company' || plan.queries.some((x) => x.id.startsWith('company'));
+        const g2 = await gatherFrom(deps.web, plan, {
+          budgetUsd: limits.capUsd - spent - writeEstimateUsd(30_000),
+          timeoutMs: gatherMs(),
+          select: selectFor(companyRound),
+        });
+        spent += g2.costUsd;
+        provider = provider ?? g2.provider;
+        notes.push(...g2.notes);
+        steps.push(...g2.steps.map((s) => ({ ...s, step: `deeper:${s.step}` })));
+        scoreInto(g2.pages, companyRound);
+      }
     }
   }
-  const personPages = strong.slice(0, req.kind === 'quick' ? QUICK_PAGES : QUICK_PAGES + DEEPER_PAGES);
+  const personPages: WebPage[] = found
+    ? found.map((p) => ({
+        url: p.url,
+        // the writer may use a likely page only as likely (prompts.ts)
+        title: `${p.match === 'likely' ? '[likely them] ' : ''}${p.title ?? ''}`.trim(),
+        published: p.published ?? null,
+        text: p.text,
+      }))
+    : strong.slice(0, req.kind === 'quick' ? QUICK_PAGES : QUICK_PAGES + DEEPER_PAGES);
   const companyPages = company.slice(0, 6);
 
   // 4. numbered sources: the LinkedIn profile first, their posts, the web pages about them, then company pages
@@ -545,6 +592,7 @@ export async function runBrief(
       prompt,
       allowed,
       budget,
+      'brief',
     );
     steps.push({
       step: 'write',

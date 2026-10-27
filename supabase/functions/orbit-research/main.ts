@@ -1,4 +1,5 @@
 import { createExa } from '../_shared/providers/exa';
+import { createParallelSearch, createSerperSearch } from '../_shared/providers/webSearch';
 import { postgrestSharedCache } from '../_shared/research/web';
 import { postgrestSecret } from '../orbit-claude/proxy.ts';
 import { defaultOrigins, makeHandler, postgrestStore, postgrestTake } from './research.ts';
@@ -24,6 +25,14 @@ async function providerSecret(name: string): Promise<string | undefined> {
 
 // Exa is optional: with EXA_API_KEY set it does the searching; without it, Claude's own web search does
 const exaKey = await providerSecret('EXA_API_KEY');
+// the investigator loop: Parallel first (its free monthly credit), Serper (Google) for operator queries and when
+// Parallel is out of credit; with neither set, research searches the way it did before
+const parallelKey = await providerSecret('PARALLEL_API_KEY');
+const serperKey = await providerSecret('SERPER_API_KEY');
+const engines = [
+  createParallelSearch({ fetch, apiKey: parallelKey, timeoutMs: 10_000, maxRetries: 1 }),
+  createSerperSearch({ fetch, apiKey: serperKey, timeoutMs: 10_000, maxRetries: 1 }),
+].filter((e) => e.configured);
 
 // without the project's address and service key the function answers "unconfigured" (no signing key)
 Deno.serve(
@@ -40,6 +49,7 @@ Deno.serve(
       Deno.env.get('ORBIT_ANTHROPIC_API_KEY') ||
       (url && serviceKey ? postgrestSecret(url, serviceKey, 'ORBIT_ANTHROPIC_API_KEY') : undefined),
     exa: exaKey ? createExa({ fetch, apiKey: exaKey, timeoutMs: 12_000, maxRetries: 1 }) : undefined,
+    engines,
     gatherModel: Deno.env.get('ORBIT_RESEARCH_GATHER_MODEL') || undefined,
     perMonth: num('ORBIT_RESEARCH_PER_MONTH', 15),
     usdPerDay: num('ORBIT_RESEARCH_USD_PER_DAY', 40),

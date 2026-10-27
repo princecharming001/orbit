@@ -10,9 +10,10 @@ export type Clock = () => number;
 /**
  * Model routing is by task (§13.1): `dossier` → the writing model at medium effort, `sourcing_fit` → the fast model at
  * low effort, `support` (deep research's check that each claim says what its source says) → the fast model at high
- * effort.
+ * effort; `extract` (the investigator loop reading one page) → the fast model at low effort; `brief` (deep research's
+ * brief, from extracted facts) → the mid model.
  */
-export type ClaudeTask = 'dossier' | 'sourcing_fit' | 'support';
+export type ClaudeTask = 'dossier' | 'sourcing_fit' | 'support' | 'extract' | 'brief';
 
 export interface ClaudePrompt {
   /** the stable, versioned instruction block (cached by the helper) */

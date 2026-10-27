@@ -28,6 +28,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { makeClaude } from '../_shared/claude.ts';
 import { clientIp, defaultOrigins } from '../_shared/origins.ts';
 import type { Exa } from '../_shared/providers/exa';
+import type { SearchEngine } from '../_shared/providers/webSearch';
 import {
   BOTH_CAP_USD,
   type BriefOutcome,
@@ -94,6 +95,11 @@ export interface ResearchDeps {
   anthropicKey?: string | (() => Promise<string | undefined>);
   /** Exa, preferred for search when EXA_API_KEY is set */
   exa?: Exa;
+  /**
+   * The investigator loop's engines (PARALLEL_API_KEY, SERPER_API_KEY): with either set, research runs the loop
+   * (wide searches, pages read straight from their sites, the fast model's reading, follow-up rounds) instead of Exa
+   */
+  engines?: SearchEngine[];
   /** the model that runs Claude's web search and fetch */
   gatherModel?: string;
   /** different people one LinkedIn account may research a month */
@@ -315,7 +321,16 @@ function claudeDepOf(claude: ReturnType<typeof makeClaude>): ClaudeDep {
   return {
     async parse(task, schema, prompt) {
       const r = await claude.structured({
-        task: task === 'support' ? 'support' : task === 'dossier' ? 'dossier' : 'fit',
+        task:
+          task === 'support'
+            ? 'support'
+            : task === 'dossier'
+              ? 'dossier'
+              : task === 'extract'
+                ? 'research_extract'
+                : task === 'brief'
+                  ? 'research_brief'
+                  : 'fit',
         system: prompt.system,
         user: prompt.user,
         schema,
@@ -424,7 +439,12 @@ export function makeHandler(deps: ResearchDeps): (req: Request) => Promise<Respo
     const account = (await sha256(`${salt}:acct:${accountId}`)).slice(0, 40);
     const month = monthOf(t);
     const key = await resolveKey(deps.anthropicKey);
-    const providers = { exa: !!deps.exa?.configured, claude: !!key };
+    const providers = {
+      exa: !!deps.exa?.configured,
+      claude: !!key,
+      parallel: !!deps.engines?.some((e) => e.name === 'parallel' && e.configured),
+      serper: !!deps.engines?.some((e) => e.name === 'serper' && e.configured),
+    };
 
     if (path === '/status') {
       try {
@@ -566,10 +586,21 @@ export function makeHandler(deps: ResearchDeps): (req: Request) => Promise<Respo
         : (deps.deadlines?.deeper ?? DEEPER_DEADLINE_MS);
     let out: BriefOutcome;
     try {
-      out = await runBrief({ web, claude, clock: () => now().getTime() }, brief, {
-        capUsd: cap,
-        deadline: now().getTime() + deadlineMs,
-      });
+      out = await runBrief(
+        {
+          web,
+          claude,
+          clock: () => now().getTime(),
+          engines: deps.engines,
+          cache: deps.cache,
+          fetch: doFetch,
+        },
+        brief,
+        {
+          capUsd: cap,
+          deadline: now().getTime() + deadlineMs,
+        },
+      );
     } catch (e) {
       const message = e instanceof Error ? e.message.slice(0, 200) : 'error';
       if (use.counted) await deps.store.refund(account, month, person).catch(() => undefined);

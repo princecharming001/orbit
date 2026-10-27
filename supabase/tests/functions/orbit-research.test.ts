@@ -239,7 +239,7 @@ describe('orbit-research', () => {
     expect(s.net.calls).toHaveLength(0);
   });
 
-  it('writes a quick brief: the fast model searches and reads, the writing model writes and the fast model checks; one of 15 counted, cost logged', async () => {
+  it('writes a quick brief: the fast model searches and reads, the mid model writes and the fast model checks; one of 15 counted, cost logged', async () => {
     const s = await setup();
     const r = await s.post('/quick', body(s.token));
     expect(r.status).toBe(200);
@@ -266,13 +266,13 @@ describe('orbit-research', () => {
     expect(s.seen.models).toEqual([
       'claude-haiku-5-5',
       'claude-haiku-5-5',
-      'claude-opus-5-5',
+      'claude-sonnet-5-5',
       'claude-haiku-5-5',
     ]);
     // the fetch never asked for the blocked people-search page
     const fetchCall = s.net.calls.find((c) => (c.body as Req).tools?.[0]?.name === 'web_fetch')!;
     expect(user(fetchCall.body as Req)).not.toContain('spokeo');
-    expect(brief.costUsd).toBeGreaterThan(0.1);
+    expect(brief.costUsd).toBeGreaterThan(0.01);
     expect(brief.costUsd).toBeLessThanOrEqual(0.3);
     // the cost log has hashes and numbers only: no names, no brief
     expect(s.store.runs).toHaveLength(1);
@@ -363,7 +363,7 @@ describe('orbit-research', () => {
   });
 
   it('holds every student together to the daily dollar cap', async () => {
-    const s = await setup({ usdPerDay: 0.1 });
+    const s = await setup({ usdPerDay: 0.01 });
     await s.post('/quick', body(s.token));
     const r = await s.post(
       '/quick',
