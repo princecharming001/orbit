@@ -1293,8 +1293,10 @@ test.describe('First-run guidance and plain next steps', () => {
     await expect(page).toHaveURL(/\/people\//, { timeout: 15_000 });
     await expect(page.getByRole('heading', { name: 'Hannah Brooks' })).toBeVisible();
     await expect(page.getByTestId('toasts')).toContainText(/1 promise you made/);
-    // the thank-you is right on the page she lands on
-    await expect(page.getByTestId('person-waiting').getByTestId('suggestion-thank_you')).toBeVisible();
+    // the thank-you is drafted for her, one click away in Messages, from the page she lands on
+    await expect(page.getByTestId('person-reply-waiting')).toContainText('Thank-you');
+    await page.getByTestId('person-reply-open').click();
+    await expect(page.getByTestId('conversation-suggested')).toContainText('Thank-you');
   });
 
   test('the demo says it is demo data and leads to your own setup', async ({ page }) => {
@@ -3390,11 +3392,13 @@ test.describe('One inbox (plan 22)', () => {
     // no card above the tabs: the time to suggest waits in the box, ready to send, with Snooze and Dismiss
     await expect(page.getByTestId('person-waiting')).toHaveCount(0);
     const conv = page.getByTestId('conversation');
-    await expect(conv.getByTestId('conversation-suggested')).toContainText('Find a time');
+    await expect(conv.getByTestId('conversation-suggested')).toContainText("Orbit's draft");
     const box = conv.getByTestId('conversation-input');
-    await expect(box).toHaveValue(/Would either of these work/, { timeout: 30_000 });
-    // a person page opened without a tab lands there too while the reply waits
+    await expect(box).toHaveValue(/Omar/, { timeout: 30_000 });
+    // a person page opened another way shows one line pointing to the draft, and it opens Messages
     await page.goto(page.url().replace(/\?.*$/, ''));
+    await expect(page.getByTestId('person-reply-waiting')).toBeVisible();
+    await page.getByTestId('person-reply-open').click();
     await expect(page.getByRole('tab', { name: /^Messages/ })).toHaveAttribute('aria-selected', 'true');
     // sent as Orbit's draft: the card it answers is done and the box is empty
     await conv.getByTestId('conversation-send').click();

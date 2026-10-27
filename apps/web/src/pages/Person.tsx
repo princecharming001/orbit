@@ -55,6 +55,7 @@ import { hidePerson, setRelationshipType, unhidePerson } from '../engine/people'
 import { moveChatGuarded } from '../engine/pipeline';
 import { personSummary, toYou } from '../engine/prep';
 import { SUMMARY_RULES_AT } from '../engine/repair';
+import { SUGGESTION_KIND_LABELS } from '../engine/today';
 import { isServerUser } from '../integrations/orbitApi';
 import { useSession } from '../state/session';
 import {
@@ -170,8 +171,9 @@ export function PersonPage() {
           : [],
       [id],
     ) ?? [];
-  // a reply Orbit drafted for them is written in Messages, so the page opens there while one waits
-  const tab = askedTab ?? (waiting.some(composesHere) ? 'conversation' : 'timeline');
+  const tab = askedTab ?? 'timeline';
+  // a reply Orbit drafted for them waits in the Messages tab's box; elsewhere on the page one line points to it
+  const replyWaiting = waiting.find(composesHere);
   const edgesQ = useLiveQuery(
     () => (id ? db.edges.where('personAId').equals(id).or('personBId').equals(id).toArray() : []),
     [id],
@@ -857,6 +859,28 @@ export function PersonPage() {
           </div>
         );
       })()}
+      {replyWaiting && tab !== 'conversation' && (
+        <div
+          className="mb-4 flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-ink-2"
+          data-testid="person-reply-waiting"
+        >
+          <span>
+            Orbit drafted your next message to {person.firstName}
+            {SUGGESTION_KIND_LABELS[replyWaiting.kind]
+              ? `: ${SUGGESTION_KIND_LABELS[replyWaiting.kind].label}`
+              : ''}
+            .
+          </span>
+          <button
+            type="button"
+            className="underline underline-offset-2 hover:text-ink pointer-coarse:min-h-11"
+            onClick={() => setParams({ tab: 'conversation' })}
+            data-testid="person-reply-open"
+          >
+            Review it in Messages
+          </button>
+        </div>
+      )}
       {composing && draft && (
         <Card className="mb-5 border-accent/40">
           <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
