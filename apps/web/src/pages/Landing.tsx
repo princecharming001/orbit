@@ -483,6 +483,18 @@ export function Landing() {
         </div>
         <div className="max-w-[1280px] mx-auto px-5 md:px-12 pb-8 text-[13px] text-ink-3">
           © {new Date().getFullYear()} Orbit
+          {/* CC BY 2.0 asks for credit where the photo is used (public/people/LICENSE.md) */}
+          <span className="block mt-1 text-[11.5px]" data-testid="photo-credit">
+            Photo of Dario Amodei by the UK Prime Minister's Office,{' '}
+            <a
+              href="https://creativecommons.org/licenses/by/2.0/"
+              target="_blank"
+              rel="noreferrer noopener"
+              className="underline underline-offset-2 hover:text-ink"
+            >
+              CC BY 2.0
+            </a>
+          </span>
         </div>
       </footer>
     </div>
@@ -708,7 +720,11 @@ function HowItWorks({ google }: { google: boolean }) {
             <span className="flow-line w-9" aria-hidden />
             <Avatar name="Maya Chen" src={demoFace('Maya')} size={32} />
             <span className="flow-line w-9" style={{ ['--flow-delay' as string]: '1.4s' }} aria-hidden />
-            <Avatar name="Priya Ahmed" src={demoFace('Priya')} size={32} />
+            <Avatar
+              name="Dario Amodei"
+              src={`${import.meta.env.BASE_URL}people/dario-amodei.webp`}
+              size={32}
+            />
           </div>
           <div className="mt-5 flex items-center justify-center gap-2 text-[12px]">
             <span className="text-ink-3">Via Maya</span>
