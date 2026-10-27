@@ -33,7 +33,6 @@ export function LinkedInHistory({ person }: { person: Person }) {
   return (
     <section className="space-y-3" data-testid="linkedin-history">
       <div className="flex items-baseline justify-between gap-3">
-        <h2 className="text-[13px] font-medium text-ink">From LinkedIn</h2>
         <span className="text-[12px] text-ink-3" data-testid="linkedin-history-status">
           {reading
             ? `Reading ${first}'s LinkedIn…`

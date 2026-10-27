@@ -986,9 +986,6 @@ export function PersonPage() {
               {/* who they are, straight from LinkedIn (everyone), then Deep research, a step further, from the web */}
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1" data-testid="about-prep">
                 <PrepButton event={nextEvent} />
-                <span className="text-[12.5px] text-ink-3">
-                  Who they are, what you share, your intro and questions, one card at a time.
-                </span>
               </div>
               <LinkedInHistory person={person} />
               <ResearchDebrief person={person} userId={user.id} />
