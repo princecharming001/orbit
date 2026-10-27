@@ -181,11 +181,11 @@ export function researchStatus(
   token: string | undefined,
   opts: { fetch?: typeof fetch } = {},
 ) {
-  return post<{ ok: true; allowance: Allowance; providers: { exa: boolean; claude: boolean; parallel?: boolean; serper?: boolean } }>(
-    '/status',
-    { accountId, token },
-    opts,
-  );
+  return post<{
+    ok: true;
+    allowance: Allowance;
+    providers: { exa: boolean; claude: boolean; parallel?: boolean; serper?: boolean };
+  }>('/status', { accountId, token }, opts);
 }
 
 /** The public "remove me" page's request. */
