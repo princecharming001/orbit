@@ -631,7 +631,9 @@ async function makeContext(user: User, opts: RunOptions): Promise<Ctx | undefine
   const alias = await schoolAlias();
   const byDomain = await schoolsByDomain();
   const [min, max] =
-    opts.pauseMs ?? (linkedin?.kind === 'live' && opts.reason !== 'view' ? [1500, 4000] : [0, 0]);
+    // background reads spread out like a person browsing (20 to 60 s apart), never a burst LinkedIn would notice;
+    // a page the student just opened is read at once
+    opts.pauseMs ?? (linkedin?.kind === 'live' && opts.reason !== 'view' ? [20_000, 60_000] : [0, 0]);
   const { tiers, chats } = await priorityTiers(user.id);
   return {
     user,
